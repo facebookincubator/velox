@@ -20,7 +20,6 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
-#include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/memory/Memory.h"
@@ -51,28 +50,6 @@ void debugPrintTree(
   for (auto& input : expr->inputs()) {
     debugPrintTree(input, indent + 2, os);
   }
-}
-
-bool isTimezoneSensitiveDateTrunc(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  const auto dateTruncName =
-      CudfConfig::getInstance().functionNamePrefix + "date_trunc";
-  return expr->name() == dateTruncName &&
-      DateTruncFunction::isTimezoneSensitive(expr);
-}
-
-bool containsTimezoneSensitiveDateTrunc(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  if (isTimezoneSensitiveDateTrunc(expr)) {
-    return true;
-  }
-
-  for (const auto& input : expr->inputs()) {
-    if (containsTimezoneSensitiveDateTrunc(input)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 bool checkAddIdentityProjection(
@@ -151,18 +128,7 @@ bool canBeEvaluatedByCudf(
   const bool adjustTimestampToTimezone =
       queryConfig.adjustTimestampToTimezone();
 
-  for (const auto& e : exprSet->exprs()) {
-    if (adjustTimestampToTimezone && containsTimezoneSensitiveDateTrunc(e)) {
-      LOG_FALLBACK(
-          "date_trunc(timestamp) requires CPU evaluation when "
-          "adjust_timestamp_to_session_timezone is enabled");
-      return false;
-    }
-    if (!canBeEvaluatedByCudf(e)) {
-      return false;
-    }
-  }
-  return true;
+  return canBeEvaluatedByCudf(exprSet->exprs(), adjustTimestampToTimezone);
 }
 
 CudfFilterProject::CudfFilterProject(

@@ -41,6 +41,28 @@ namespace facebook::velox::cudf_velox::connector::hive {
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
 
+bool isCudfHiveDataSourceSupported(
+    const ConnectorTableHandlePtr& tableHandle,
+    const ConnectorQueryCtx* connectorQueryCtx) {
+  VELOX_CHECK_NOT_NULL(connectorQueryCtx);
+
+  auto hiveTableHandle =
+      std::dynamic_pointer_cast<const HiveTableHandle>(tableHandle);
+  if (!hiveTableHandle) {
+    return false;
+  }
+
+  const auto& remainingFilter = hiveTableHandle->remainingFilter();
+  if (!remainingFilter) {
+    return true;
+  }
+
+  auto exprSet =
+      connectorQueryCtx->expressionEvaluator()->compile(remainingFilter);
+  return facebook::velox::cudf_velox::canBeEvaluatedByCudf(
+      exprSet->exprs(), connectorQueryCtx->adjustTimestampToTimezone());
+}
+
 CudfHiveDataSource::CudfHiveDataSource(
     const RowTypePtr& outputType,
     const ConnectorTableHandlePtr& tableHandle,

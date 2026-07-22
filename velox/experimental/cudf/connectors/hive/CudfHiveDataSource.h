@@ -40,6 +40,13 @@ namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
 
+/// Returns whether the table handle's remaining filter can be evaluated by the
+/// cuDF data source under the connector query's semantic configuration.
+/// Returns false for non-Hive table handles.
+bool isCudfHiveDataSourceSupported(
+    const ConnectorTableHandlePtr& tableHandle,
+    const ConnectorQueryCtx* connectorQueryCtx);
+
 class CudfHiveDataSource : public DataSource, public NvtxHelper {
  public:
   CudfHiveDataSource(
