@@ -24,21 +24,22 @@
 /// Usage:
 ///   ./velox_cudf_join_fuzzer --steps 100 --v=1
 
-#include <folly/init/Init.h>
-#include <gflags/gflags.h>
+#include "velox/exec/fuzzer/JoinFuzzer.h"
+#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
-#include "velox/exec/fuzzer/JoinFuzzer.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
-#include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
+
+#include <folly/init/Init.h>
+#include <gflags/gflags.h>
 
 DEFINE_int64(
     seed,
