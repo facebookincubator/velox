@@ -1884,12 +1884,23 @@ void HashProbe::noMoreInputInternal() {
   const bool outputBuildRowsInParallel =
       canOutputBuildRowsInParallel_ && needLastProbe();
   const bool shouldBlock = canSpill() || outputBuildRowsInParallel;
+  bool released{false};
   if (!operatorCtx_->task()->allPeersFinished(
           planNodeId(),
           operatorCtx_->driver(),
           shouldBlock ? &future_ : nullptr,
           shouldBlock ? promises_ : promises,
-          peers)) {
+          peers,
+          &released)) {
+    // We participated in the barrier, so close() must not disarm it later.
+    barrierReached_ = true;
+    if (released) {
+      // Barrier was disarmed by a peer that closed without reaching it.
+      // Skip last-prober work and finish; build-side output coordination
+      // and probeFinished signaling are left to Task teardown.
+      setState(ProbeOperatorState::kFinish);
+      return;
+    }
     if (shouldBlock) {
       VELOX_CHECK(future_.valid());
       setState(ProbeOperatorState::kWaitForPeers);
@@ -1900,6 +1911,9 @@ void HashProbe::noMoreInputInternal() {
     return;
   }
 
+  // Last prober: we contributed to the barrier count, so close() must skip
+  // the disarm step that would otherwise poison the released flag.
+  barrierReached_ = true;
   VELOX_CHECK(promises.empty());
   lastProber_ = true;
   joinBridge_->resetUnclaimedRowContainerId();
@@ -2353,6 +2367,18 @@ void HashProbe::checkMaxSpillLevel(
 }
 
 void HashProbe::close() {
+  // Disarm the peer-synchronization barrier only if this operator never
+  // reached it (so its missing arrival would otherwise leave peers in
+  // kWaitForPeers forever). Operators that already participated in the
+  // barrier must not disarm it: doing so would set the released flag on a
+  // barrier that is either still actively counting peers or has already
+  // completed normally, causing future or concurrent allPeersFinished()
+  // callers to skip last-prober work (e.g. RIGHT/FULL outer-join
+  // build-side mismatch emission) and silently drop result rows.
+  if (!barrierReached_) {
+    operatorCtx_->task()->releasePeerBarrier(splitGroupId(), planNodeId());
+  }
+
   Operator::close();
 
   // Free up major memory usage.
