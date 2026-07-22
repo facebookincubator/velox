@@ -1264,12 +1264,8 @@ TEST_F(ParquetReaderTest, readVarbinaryFromFLBA) {
           ->valueAt(0));
 }
 
-// Skipping over FIXED_LEN_BYTE_ARRAY values must advance the decoder by a
-// constant multiple of the fixed width. flba_skip.parquet holds 40 rows of a
-// 4-byte fixed binary column whose value equals the row index (big-endian),
-// plus an int32 key. Filtering the key to the even rows forces the FLBA
-// decoder to skip the odd rows one value at a time. A skip that instead read
-// the value bytes as a length prefix would misalign or read out of bounds.
+// Regression test for skipping FIXED_LEN_BYTE_ARRAY values under a filter on a
+// sibling column. See flba_skip.parquet in examples/README.md for the fixture.
 TEST_F(ParquetReaderTest, fixedLenByteArraySkipWithFilter) {
   const std::string filename("flba_skip.parquet");
   const auto fileSchema = ROW({"key", "value"}, {INTEGER(), VARBINARY()});
