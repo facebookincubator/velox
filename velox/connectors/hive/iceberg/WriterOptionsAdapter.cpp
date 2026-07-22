@@ -69,8 +69,11 @@ class DwrfWriterOptionsAdapter : public WriterOptionsAdapter {
     // disabled per the Iceberg spec. Unlike Parquet, DWRF exposes
     // timestamp configuration as direct fields on dwrf::DwrfWriterOptions
     // rather than serdeParameters.
-    auto dwrfOptions = checkedPointerCast<dwrf::DwrfWriterOptions>(
+    auto dwrfOptions = std::dynamic_pointer_cast<dwrf::DwrfWriterOptions>(
         options.formatSpecificOptions);
+    if (dwrfOptions == nullptr) {
+      return;
+    }
     dwrfOptions->adjustTimestampToTimezone = false;
     dwrfOptions->sessionTimezone = nullptr;
   }
