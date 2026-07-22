@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/DecimalExpressionKernels.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/TimestampWithTimeZoneColumn.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/expression/NullMask.h"
 #include "velox/experimental/cudf/expression/TimezoneConversion.h"
@@ -1433,7 +1434,7 @@ std::unique_ptr<cudf::column> localForFieldExtraction(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   if (inputIsTswtz) {
-    return tswtzLocalMillisTimestamp(input, stream, mr);
+    return tswtzLocalWallClock(input, stream, mr);
   }
   return maybeConvertToSessionLocal(input, context, stream, mr);
 }
@@ -1464,7 +1465,7 @@ class ExtractComponentFunction : public CudfFunction {
       // because historical LMT offsets are not always a whole number of minutes
       // (this fixture reaches 1883 and 1919), so skipping it could shift a
       // second.
-      local = tswtzLocalMillisTimestamp(inputCol, stream, mr);
+      local = tswtzLocalWallClock(inputCol, stream, mr);
     } else if (
         // second and millisecond are sub-minute fields: every *modern* timezone
         // offset is a whole number of minutes, so they are unaffected by the
@@ -2504,7 +2505,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   // The TSWTZ entry was missing, so the whole extract family declined on a
   // TIMESTAMP WITH TIME ZONE argument -- the exact inverse of to_unixtime and
   // to_iso8601, which were TSWTZ-only. ExtractComponentFunction now unpacks a
-  // packed input via tswtzLocalMillisTimestamp.
+  // packed input via tswtzLocalWallClock.
   const std::vector<exec::FunctionSignaturePtr> timestampDateIntegerSignatures{
       FunctionSignatureBuilder()
           .returnType("integer")

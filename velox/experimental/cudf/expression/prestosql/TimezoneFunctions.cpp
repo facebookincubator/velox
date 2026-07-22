@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/TimestampWithTimeZoneColumn.h"
 #include "velox/experimental/cudf/expression/TimezoneConversion.h"
 #include "velox/experimental/cudf/expression/prestosql/TimezoneFunctions.h"
 
@@ -220,47 +221,8 @@ DistinctZones distinctZones(
     const cudf::column_view& packed,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  auto perRowKey = binaryOp(
-      packed,
-      int64Scalar(kTimezoneMask, stream),
-      cudf::binary_operator::BITWISE_AND,
-      int64Type(),
-      stream,
-      mr);
-
-  auto unique = cudf::distinct(
-      cudf::table_view{{perRowKey->view()}},
-      {0},
-      cudf::duplicate_keep_option::KEEP_ANY,
-      cudf::null_equality::EQUAL,
-      cudf::nan_equality::ALL_EQUAL,
-      stream,
-      mr);
-  auto uniqueKeys = unique->view().column(0);
-  auto uniqueValid = cudf::is_valid(uniqueKeys, stream, mr);
-  std::vector<int64_t> hostKeys(uniqueKeys.size());
-  std::vector<int8_t> hostValid(uniqueKeys.size());
-  CUDF_CUDA_TRY(cudaMemcpyAsync(
-      hostKeys.data(),
-      uniqueKeys.data<int64_t>(),
-      hostKeys.size() * sizeof(int64_t),
-      cudaMemcpyDeviceToHost,
-      stream.value()));
-  CUDF_CUDA_TRY(cudaMemcpyAsync(
-      hostValid.data(),
-      uniqueValid->view().data<int8_t>(),
-      hostValid.size() * sizeof(int8_t),
-      cudaMemcpyDeviceToHost,
-      stream.value()));
-  stream.synchronize();
-
-  std::vector<int16_t> keys;
-  keys.reserve(uniqueKeys.size());
-  for (cudf::size_type i = 0; i < uniqueKeys.size(); ++i) {
-    if (hostValid[i]) { // Skip the null zone key.
-      keys.push_back(static_cast<int16_t>(hostKeys[i]));
-    }
-  }
+  auto perRowKey = tswtzZoneKey(packed, stream, mr);
+  auto keys = tswtzDistinctZoneKeys(perRowKey->view(), stream, mr);
   return {std::move(perRowKey), std::move(keys)};
 }
 
@@ -273,31 +235,7 @@ std::unique_ptr<cudf::column> perRowOffsetSeconds(
     const cudf::column_view& packed,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  auto millis = unpackMillis(packed, stream, mr);
-  auto millisTs =
-      bitcastColumn(millis->view(), cudf::type_id::TIMESTAMP_MILLISECONDS);
-  auto zones = distinctZones(packed, stream, mr);
-
-  // Start all-null; fill each zone's rows. A null key matches no real key, so
-  // its rows keep the null default (CPU propagates null).
-  auto result = cudf::make_numeric_column(
-      int64Type(), packed.size(), cudf::mask_state::ALL_NULL, stream, mr);
-  for (const auto zoneKey : zones.keys) {
-    auto offsetDuration =
-        utcOffsetSeconds(millisTs, tz::getTimeZoneName(zoneKey), stream, mr);
-    auto offsetSeconds = std::make_unique<cudf::column>(
-        bitcastColumn(offsetDuration->view(), kInt64), stream, mr);
-    auto isThisZone = binaryOp(
-        zones.perRowKey->view(),
-        int64Scalar(zoneKey, stream),
-        cudf::binary_operator::EQUAL,
-        cudf::data_type{kBool8},
-        stream,
-        mr);
-    result = cudf::copy_if_else(
-        offsetSeconds->view(), result->view(), isThisZone->view(), stream, mr);
-  }
-  return result;
+  return tswtzOffsetSeconds(packed, stream, mr);
 }
 
 // Per-row zone *name* (STRING) for a packed column that may mix zone keys, for
@@ -492,27 +430,9 @@ LocalAndOffset localAndOffset(
     const cudf::column_view& packed,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  auto millis = unpackMillis(packed, stream, mr);
-  auto offsetSeconds = perRowOffsetSeconds(packed, stream, mr);
-  auto offsetMillis = binaryOp(
-      offsetSeconds->view(),
-      int64Scalar(1'000, stream),
-      cudf::binary_operator::MUL,
-      int64Type(),
-      stream,
-      mr);
-  auto localMillis = cudf::binary_operation(
-      millis->view(),
-      offsetMillis->view(),
-      cudf::binary_operator::ADD,
-      int64Type(),
-      stream,
-      mr);
-  auto localTs =
-      bitcastColumn(localMillis->view(), cudf::type_id::TIMESTAMP_MILLISECONDS);
   return {
-      std::make_unique<cudf::column>(localTs, stream, mr),
-      std::move(offsetSeconds)};
+      tswtzLocalWallClock(packed, stream, mr),
+      tswtzOffsetSeconds(packed, stream, mr)};
 }
 
 // Classifies the trailing Joda time-zone token so the caller can render it: an
@@ -2176,13 +2096,6 @@ bool parseDatetimeCanEvaluate(const core::TypedExprPtr& expr) {
 }
 
 } // namespace
-
-std::unique_ptr<cudf::column> tswtzLocalMillisTimestamp(
-    const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  return std::move(localAndOffset(packed, stream, mr).localMillis);
-}
 
 void registerTimezoneFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;

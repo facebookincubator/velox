@@ -30,19 +30,4 @@ namespace facebook::velox::cudf_velox {
 /// expression::optimize always constant folds them before an evaluator is
 /// chosen, and a GPU implementation could never be reached.
 void registerTimezoneFunctions(const std::string& prefix);
-
-/// The local wall clock a packed TIMESTAMP WITH TIME ZONE column denotes, as a
-/// TIMESTAMP_MILLISECONDS column: each row's instant shifted by that row's OWN
-/// zone offset, DST-aware, off the cached tzdb transition table.
-///
-/// Exported so the extract family in ExpressionEvaluator.cpp can accept a TSWTZ
-/// argument. Those functions already handle plain TIMESTAMP via
-/// maybeConvertToSessionLocal, which applies one session-wide zone; a packed
-/// TSWTZ column carries a different zone key per row, so it needs this instead.
-/// Null rows propagate.
-std::unique_ptr<cudf::column> tswtzLocalMillisTimestamp(
-    const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr);
-
 } // namespace facebook::velox::cudf_velox
