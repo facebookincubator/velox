@@ -194,6 +194,10 @@ function install_cuda {
     libnuma1
 }
 
+function install_avro {
+  install_avro_cpp
+}
+
 function install_s3 {
   install_aws_deps
 
@@ -223,6 +227,7 @@ function install_adapters {
   run_and_time install_gcs
   run_and_time install_abfs
   run_and_time install_hdfs
+  run_and_time install_avro
 }
 
 function install_faiss_deps {
