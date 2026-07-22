@@ -42,6 +42,7 @@ class DateDiffFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override;
 
@@ -132,6 +133,16 @@ class DateDiffFunction : public CudfFunction {
 
   std::string unit_;
   bool isDate_;
+  // True for day/week/month/quarter/year: units whose result depends on the
+  // *calendar* date/time-of-day of each operand, so - per Velox CPU's
+  // diffTimestamp(unit, ts1, ts2, timeZone) in DateTimeUtil.h - each operand
+  // must be converted to session-local wall-clock time before diffing.
+  // hour/minute/second/millisecond are deliberately excluded: CPU shifts
+  // both operands by the *same* offset for these units specifically to
+  // cancel out any DST difference, so the result always equals the raw UTC
+  // duration this class already computes; converting them would be a
+  // no-op at best and wasted work at worst. See eval().
+  bool isTimezoneSensitiveUnit_;
   std::unique_ptr<cudf::scalar> leftScalar_;
   std::unique_ptr<cudf::scalar> rightScalar_;
   bool leftIsConst_ = false;

@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
+#include "velox/experimental/cudf/expression/TimezoneConversion.h"
 #include "velox/experimental/cudf/expression/prestosql/DateDiffFunction.h"
 
 #include "velox/expression/ConstantExpr.h"
@@ -65,6 +66,12 @@ DateDiffFunction::DateDiffFunction(
       isDate_ ? "DATE" : "TIMESTAMP",
       unit_);
 
+  // kDateUnits happens to be exactly the set of units whose result depends
+  // on the calendar date/time-of-day of each operand (see the member
+  // comment in the header for why hour/minute/second/millisecond don't),
+  // so it doubles as the timezone-sensitivity check.
+  isTimezoneSensitiveUnit_ = kDateUnits.find(unit_) != kDateUnits.end();
+
   // Either date argument may be a constant (e.g. DATE '2025-03-01' or
   // CURRENT_DATE). Literals are excluded from inputColumns by the framework,
   // so we capture them here as cuDF scalars and pass them directly to
@@ -100,6 +107,7 @@ DateDiffFunction::DateDiffFunction(
 
 ColumnOrView DateDiffFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
+    cudf::size_type numRows,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
   // Resolve the two date/timestamp operands. Constants were captured at
@@ -118,6 +126,28 @@ ColumnOrView DateDiffFunction::eval(
     right.sc = rightScalar_.get();
   } else {
     right.col = asView(inputColumns[colIdx++]);
+  }
+
+  // day/week/month/quarter/year on TIMESTAMP need both operands converted to
+  // session-local wall-clock time before diffing, matching Velox CPU's
+  // diffTimestamp(unit, ts1, ts2, timeZone) (see the isTimezoneSensitiveUnit_
+  // comment in the header for why). Materializing scalars into columns here
+  // only happens in this (session-timezone-on) path; the common case below
+  // is untouched. The shifted columns are owned by leftLocalOwned/
+  // rightLocalOwned below so the views assigned into left/right stay valid
+  // for the rest of this call.
+  std::unique_ptr<cudf::column> leftLocalOwned, rightLocalOwned;
+  if (!isDate_ && isTimezoneSensitiveUnit_ &&
+      context_.appliesSessionTimezone()) {
+    std::unique_ptr<cudf::column> leftMaterialized, rightMaterialized;
+    auto leftCol = ensureColumn(left, numRows, leftMaterialized, stream, mr);
+    auto rightCol = ensureColumn(right, numRows, rightMaterialized, stream, mr);
+    leftLocalOwned =
+        toLocalTimestamp(leftCol, context_.sessionTimezone, stream, mr);
+    rightLocalOwned =
+        toLocalTimestamp(rightCol, context_.sessionTimezone, stream, mr);
+    left = Operand{leftLocalOwned->view(), nullptr};
+    right = Operand{rightLocalOwned->view(), nullptr};
   }
 
   if (unit_ == "day") {
