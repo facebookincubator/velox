@@ -769,6 +769,23 @@ VectorPtr CastExpr::applyDecimal(
   return castResult;
 }
 
+bool CastExpr::verifyToTimestampCast(
+    const TypePtr& fromType,
+    const TypePtr& toType) {
+  bool isSupported = fromType->kind() == TypeKind::VARCHAR &&
+      toType->equivalent(*TIMESTAMP_UTC());
+  if (isSupported) {
+    VELOX_USER_CHECK(
+        hooks_->supportsTimestampUtc(),
+        "Cast from {} to {} is not supported",
+        fromType->toString(),
+        toType->toString());
+  } else {
+    VELOX_DCHECK(toType->equivalent(*TIMESTAMP()));
+  }
+  return isSupported;
+}
+
 void CastExpr::applyPeeled(
     const SelectivityVector& rows,
     const BaseVector& input,
@@ -876,6 +893,9 @@ void CastExpr::applyPeeled(
           fromType->toString(),
           toType->toString());
       result = applyTimestampTimestampUtcCast<true>(rows, context, input);
+    } else if (fromType->kind() == TypeKind::VARCHAR) {
+      applyCastPrimitivesDispatch<TypeKind::TIMESTAMP>(
+          fromType, toType, rows, context, input, result);
     } else {
       VELOX_UNSUPPORTED(
           "Cast from {} to {} is not supported",
