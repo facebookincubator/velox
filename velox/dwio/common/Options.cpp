@@ -74,6 +74,10 @@ std::string formatConfigPrefix(FileFormat fmt, std::string_view separator) {
   return std::string(FileFormatName::toName(fmt)) + std::string(separator);
 }
 
+std::string formatSessionProperty(FileFormat fmt, std::string_view key) {
+  return formatConfigPrefix(fmt, "_") + std::string(key);
+}
+
 ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options) {
   ColumnReaderOptions columnReaderOptions;
   columnReaderOptions.columnMappingMode_ = options.columnMappingMode();
