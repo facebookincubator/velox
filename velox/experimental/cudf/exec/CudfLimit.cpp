@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
+#include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
@@ -27,6 +28,15 @@ CudfLimit::CudfLimit(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::LimitNode>& limitNode)
+    : CudfLimit(
+          operatorId,
+          driverCtx,
+          CudfPlanRewriter::translateForAdapterAs<CudfLimitNode>(limitNode)) {}
+
+CudfLimit::CudfLimit(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    std::shared_ptr<const CudfLimitNode> limitNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

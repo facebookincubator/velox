@@ -17,33 +17,32 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
+#include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <utility>
 
 namespace facebook::velox::cudf_velox {
-namespace {
-
-RowTypePtr getConcatOutputType(
-    const std::shared_ptr<const core::PlanNode>& planNode) {
-  VELOX_CHECK_EQ(
-      planNode->sources().size(),
-      1,
-      "CudfBatchConcat expects a single-source plan node");
-  return planNode->sources()[0]->outputType();
-}
-
-} // namespace
 
 CudfBatchConcat::CudfBatchConcat(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<const core::PlanNode> planNode)
+    : CudfBatchConcat(
+          operatorId,
+          driverCtx,
+          std::dynamic_pointer_cast<const CudfBatchConcatNode>(
+              CudfPlanRewriter::translateBatchConcatForAdapter(planNode))) {}
+
+CudfBatchConcat::CudfBatchConcat(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    std::shared_ptr<const CudfBatchConcatNode> planNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,
-          getConcatOutputType(planNode),
+          planNode->outputType(),
           planNode->id(),
           "CudfBatchConcat",
           nvtx3::rgb{211, 211, 211}, /* LightGrey */

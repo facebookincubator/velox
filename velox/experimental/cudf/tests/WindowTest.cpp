@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
@@ -47,6 +48,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using cudf_velox::test::rewriteToCudfPlan;
 
 namespace {
 
@@ -72,6 +74,25 @@ class CudfWindowTest : public testing::Test,
   void TearDown() override {
     cudf_velox::unregisterCudf();
   }
+
+  template <typename T>
+  bool containsPlanNode(const core::PlanNodePtr& plan) {
+    if (std::dynamic_pointer_cast<const T>(plan)) {
+      return true;
+    }
+    for (const auto& source : plan->sources()) {
+      if (containsPlanNode<T>(source)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void assertWindowFallback(const core::PlanNodePtr& plan) {
+    auto rewritten = cudf_velox::test::rewriteToCudfPlan(plan);
+    EXPECT_TRUE(containsPlanNode<core::WindowNode>(rewritten));
+    EXPECT_FALSE(containsPlanNode<cudf_velox::CudfWindowNode>(rewritten));
+  }
 };
 
 TEST_F(CudfWindowTest, rowNumberPartitionOrder) {
@@ -96,7 +117,7 @@ TEST_F(CudfWindowTest, rowNumberPartitionOrder) {
           makeFlatVector<int64_t>({1, 2, 3, 1, 2, 3}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, lagLead) {
@@ -130,7 +151,7 @@ TEST_F(CudfWindowTest, lagLead) {
           leadValues,
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, rankPartitionOrder) {
@@ -159,7 +180,7 @@ TEST_F(CudfWindowTest, rankPartitionOrder) {
           makeFlatVector<int64_t>({1, 2, 2, 4, 1, 1, 3}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, denseRankPartitionOrder) {
@@ -187,7 +208,7 @@ TEST_F(CudfWindowTest, denseRankPartitionOrder) {
           makeFlatVector<int64_t>({1, 2, 2, 3, 1, 1, 2}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, firstValueLastValue) {
@@ -218,7 +239,7 @@ TEST_F(CudfWindowTest, firstValueLastValue) {
           makeFlatVector<int64_t>({30, 30, 30, 200, 200}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, sumWindow) {
@@ -247,7 +268,7 @@ TEST_F(CudfWindowTest, sumWindow) {
           makeFlatVector<int64_t>({60, 60, 60, 300, 300}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, minMaxWindow) {
@@ -279,7 +300,7 @@ TEST_F(CudfWindowTest, minMaxWindow) {
           makeFlatVector<int64_t>({30, 30, 30, 200, 200}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, countWindow) {
@@ -308,7 +329,7 @@ TEST_F(CudfWindowTest, countWindow) {
           makeFlatVector<int64_t>({3, 3, 3, 2, 2}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, avgWindow) {
@@ -337,7 +358,7 @@ TEST_F(CudfWindowTest, avgWindow) {
           makeFlatVector<double>({10.0, 15.0, 20.0, 100.0, 150.0}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // Ports of checks from velox/exec/tests/WindowTest.cpp (CPU window tests).
@@ -408,7 +429,7 @@ TEST_F(CudfWindowTest, rowNumberGlobalOrderBy) {
           makeFlatVector<int64_t>({5, 2, 4, 1, 3}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, rankGlobalOrderBy) {
@@ -428,7 +449,7 @@ TEST_F(CudfWindowTest, rankGlobalOrderBy) {
           makeFlatVector<int64_t>({1, 1, 1, 4, 4}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, rowNumberMultiBatch) {
@@ -453,7 +474,7 @@ TEST_F(CudfWindowTest, rowNumberMultiBatch) {
           makeFlatVector<int64_t>({1, 2, 3, 1, 2, 3}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // Multi-column ORDER BY covered in follow-on PR (requires cuDF upgrade).
@@ -500,7 +521,7 @@ TEST_F(CudfWindowTest, DISABLED_multiFunctionPartitionOrder) {
           makeFlatVector<int64_t>({10, 30, 60, 100, 300}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, rankNaNRangeFrameBounds) {
@@ -552,7 +573,7 @@ TEST_F(CudfWindowTest, rankNaNRangeFrameBounds) {
   for (const auto& frame : makeFrames("rank()")) {
     auto plan =
         PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
-    AssertQueryBuilder(plan).assertResults(expected);
+    AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
   }
 }
 
@@ -619,7 +640,7 @@ TEST_F(CudfWindowTest, spill) {
               }),
       });
 
-  AssertQueryBuilder(plan)
+  AssertQueryBuilder(rewriteToCudfPlan(plan))
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
       .config(core::QueryConfig::kSpillEnabled, "true")
       .config(core::QueryConfig::kWindowSpillEnabled, "true")
@@ -654,7 +675,7 @@ TEST_F(CudfWindowTest, spillBatchReadTinyPartitions) {
           makeFlatVector<int64_t>(size, [](auto) { return 1; }),
       });
 
-  AssertQueryBuilder(plan)
+  AssertQueryBuilder(rewriteToCudfPlan(plan))
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
       .config(core::QueryConfig::kSpillEnabled, "true")
       .config(core::QueryConfig::kWindowSpillEnabled, "true")
@@ -691,7 +712,7 @@ TEST_F(CudfWindowTest, spillBatchReadHugePartitions) {
               size, [](auto row) { return row % partitionRows + 1; }),
       });
 
-  AssertQueryBuilder(plan)
+  AssertQueryBuilder(rewriteToCudfPlan(plan))
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
       .config(core::QueryConfig::kSpillEnabled, "true")
       .config(core::QueryConfig::kWindowSpillEnabled, "true")
@@ -724,7 +745,7 @@ TEST_F(CudfWindowTest, spillUnsupported) {
           makeFlatVector<int64_t>(size, [](auto row) { return row + 1; }),
       });
 
-  AssertQueryBuilder(plan)
+  AssertQueryBuilder(rewriteToCudfPlan(plan))
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
       .config(core::QueryConfig::kSpillEnabled, "true")
       .config(core::QueryConfig::kWindowSpillEnabled, "true")
@@ -750,7 +771,7 @@ TEST_F(CudfWindowTest, rowBasedStreamingWindowOOM) {
 
   auto expected =
       makeRowVector({makeConstant<int64_t>(size * (size - 1) / 2, 1)});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, prePartitionedSortBuild) {
@@ -784,7 +805,7 @@ TEST_F(CudfWindowTest, prePartitionedSortBuild) {
               }),
       });
 
-  AssertQueryBuilder(plan)
+  AssertQueryBuilder(rewriteToCudfPlan(plan))
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
       .config(core::QueryConfig::kWindowNumSubPartitions, "4")
       .assertResults(expected);
@@ -821,7 +842,7 @@ TEST_F(CudfWindowTest, prePartitionedSortBuildSkewed) {
               }),
       });
 
-  AssertQueryBuilder(plan)
+  AssertQueryBuilder(rewriteToCudfPlan(plan))
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
       .config(core::QueryConfig::kWindowNumSubPartitions, "16")
       .assertResults(expected);
@@ -860,7 +881,7 @@ TEST_F(CudfWindowTest, prePartitionedBuildWithSpill) {
               }),
       });
 
-  AssertQueryBuilder(plan)
+  AssertQueryBuilder(rewriteToCudfPlan(plan))
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
       .config(core::QueryConfig::kWindowNumSubPartitions, "4")
       .config(core::QueryConfig::kSpillEnabled, "true")
@@ -905,9 +926,7 @@ TEST_F(CudfWindowTest, negativeFrameArg) {
                 testData.fragmentStart,
                 testData.fragmentEnd)})
             .planNode();
-    VELOX_ASSERT_THROW(
-        AssertQueryBuilder(plan).copyResults(pool()),
-        "Replacement with cuDF operator failed");
+    assertWindowFallback(plan);
   }
 }
 
@@ -956,16 +975,14 @@ TEST_F(CudfWindowTest, NaNFrameBound) {
   for (const auto& frame : makeFrames("sum(c0)")) {
     auto plan =
         PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
-    VELOX_ASSERT_THROW(
-        AssertQueryBuilder(plan).copyResults(pool()),
-        "Replacement with cuDF operator failed");
+    assertWindowFallback(plan);
   }
 
   auto expected = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
   for (const auto& frame : makeFrames("rank()")) {
     auto plan =
         PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
-    AssertQueryBuilder(plan).assertResults(expected);
+    AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
   }
 }
 
@@ -1003,7 +1020,7 @@ TEST_F(CudfWindowTest, rankSinglePartition) {
           makeFlatVector<int64_t>({1, 2, 2, 3, 4}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // Tests rank functions with single-row partitions.
@@ -1037,7 +1054,7 @@ TEST_F(CudfWindowTest, rankSingleRowPartitions) {
           makeFlatVector<int64_t>({1, 1, 1, 1, 1}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // Tests rank functions with nulls in sort key.
@@ -1077,7 +1094,7 @@ TEST_F(CudfWindowTest, rankWithNulls) {
           makeFlatVector<int64_t>({1, 2, 3, 3, 1, 1, 2}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // =============================================================================
@@ -1112,7 +1129,7 @@ TEST_F(CudfWindowTest, lagLeadZeroOffset) {
           makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // Tests lag/lead with larger offset.
@@ -1146,7 +1163,7 @@ TEST_F(CudfWindowTest, lagLeadLargeOffset) {
               {40, 50, std::nullopt, std::nullopt, std::nullopt}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // Tests lag/lead with nulls in the value column.
@@ -1184,7 +1201,7 @@ TEST_F(CudfWindowTest, lagLeadWithNullValues) {
               {std::nullopt, 10, 30, 50, std::nullopt}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // Tests lag/lead with single-row partitions.
@@ -1225,7 +1242,7 @@ TEST_F(CudfWindowTest, lagLeadSingleRowPartitions) {
                std::nullopt}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // Tests lag/lead with small partitions (5 rows each).
@@ -1281,7 +1298,7 @@ TEST_F(CudfWindowTest, lagLeadSmallPartitions) {
           makeNullableFlatVector<int64_t>(expectedLead),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // Test count(*) counts all rows including those with nulls.
@@ -1313,7 +1330,7 @@ TEST_F(CudfWindowTest, countStarWithNulls) {
           makeFlatVector<int64_t>({3, 3, 3, 2, 2}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // Test count(col) excludes nulls.
@@ -1343,7 +1360,7 @@ TEST_F(CudfWindowTest, countColumnExcludesNulls) {
           makeFlatVector<int64_t>({2, 2, 2, 1, 1}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // Test rank()/dense_rank() without ORDER BY returns 1 for all rows.
@@ -1371,7 +1388,7 @@ TEST_F(CudfWindowTest, rankWithoutOrderBy) {
   // - rank() and dense_rank() return 1 for all rows (all tied)
   // Note: row_number order is non-deterministic without ORDER BY, so we just
   // check rank/dense_rank are all 1s.
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   // Verify rank and dense_rank are all 1s
   auto rankCol = result->childAt(3)->asFlatVector<int64_t>();
@@ -1410,7 +1427,7 @@ TEST_F(CudfWindowTest, rankGlobalWithoutOrderBy) {
           makeFlatVector<int64_t>({1, 1}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // RANGE frames peer-group by ORDER BY key value. With duplicate sort keys, rows
@@ -1443,7 +1460,7 @@ TEST_F(CudfWindowTest, sumRangeWithDuplicateSortKeys) {
           makeFlatVector<int64_t>({30, 30, 60}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // Test last_value respects the actual frame bounds.
@@ -1476,7 +1493,7 @@ TEST_F(CudfWindowTest, lastValueWithDefaultFrame) {
           makeFlatVector<int64_t>({1, 2, 3}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // Test first_value respects the actual frame bounds.
@@ -1502,7 +1519,7 @@ TEST_F(CudfWindowTest, firstValueWithDefaultFrame) {
           makeFlatVector<int64_t>({1, 1, 1}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // Test last_value with explicit ROWS UNBOUNDED frame.
@@ -1530,14 +1547,12 @@ TEST_F(CudfWindowTest, lastValueWithUnboundedFrame) {
           makeFlatVector<int64_t>({3, 3, 3}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
-// Test WindowAdapter::canRunOnGPU gating checks. This verifies that the
-// adapter correctly rejects unsupported window configurations and accepts
-// supported ones. With allowCpuFallback=false (set in SetUp), unsupported
-// configurations throw.
-TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
+// Verify that physical plan rewriting leaves unsupported windows on CPU and
+// translates supported windows to CudfWindowNode.
+TEST_F(CudfWindowTest, windowPlanRewriterGatingChecks) {
   auto data = makeRowVector(
       {"p", "v"},
       {
@@ -1546,24 +1561,18 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
       });
 
   // Unsupported: nth_value function
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(
-          PlanBuilder()
-              .values({data})
-              .window({"nth_value(v, 2) over (partition by p order by v)"})
-              .planNode())
-          .copyResults(pool()),
-      "Replacement with cuDF operator failed");
+  assertWindowFallback(
+      PlanBuilder()
+          .values({data})
+          .window({"nth_value(v, 2) over (partition by p order by v)"})
+          .planNode());
 
   // Unsupported: lag/lead with 3 arguments (default value)
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(
-          PlanBuilder()
-              .values({data})
-              .window({"lag(v, 1, 0) over (partition by p order by v)"})
-              .planNode())
-          .copyResults(pool()),
-      "Replacement with cuDF operator failed");
+  assertWindowFallback(
+      PlanBuilder()
+          .values({data})
+          .window({"lag(v, 1, 0) over (partition by p order by v)"})
+          .planNode());
 
   // Unsupported: lag/lead with non-constant offset
   auto dataWithOffset = makeRowVector(
@@ -1573,36 +1582,27 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
           makeFlatVector<int64_t>({10, 20, 30}),
           makeFlatVector<int64_t>({1, 2, 1}),
       });
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(
-          PlanBuilder()
-              .values({dataWithOffset})
-              .window({"lag(v, off) over (partition by p order by v)"})
-              .planNode())
-          .copyResults(pool()),
-      "Replacement with cuDF operator failed");
+  assertWindowFallback(
+      PlanBuilder()
+          .values({dataWithOffset})
+          .window({"lag(v, off) over (partition by p order by v)"})
+          .planNode());
 
   // Unsupported: RANGE frame with k PRECEDING
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(
-          PlanBuilder()
-              .values({data})
-              .window({"sum(v) over (partition by p order by v "
-                       "range between 5 preceding and current row)"})
-              .planNode())
-          .copyResults(pool()),
-      "Replacement with cuDF operator failed");
+  assertWindowFallback(
+      PlanBuilder()
+          .values({data})
+          .window({"sum(v) over (partition by p order by v "
+                   "range between 5 preceding and current row)"})
+          .planNode());
 
   // Unsupported: RANGE frame with k FOLLOWING
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(
-          PlanBuilder()
-              .values({data})
-              .window({"sum(v) over (partition by p order by v "
-                       "range between current row and 5 following)"})
-              .planNode())
-          .copyResults(pool()),
-      "Replacement with cuDF operator failed");
+  assertWindowFallback(
+      PlanBuilder()
+          .values({data})
+          .window({"sum(v) over (partition by p order by v "
+                   "range between current row and 5 following)"})
+          .planNode());
 
   // Unsupported: Non-constant frame bound (column reference)
   auto dataWithBound = makeRowVector(
@@ -1612,15 +1612,12 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
           makeFlatVector<int64_t>({10, 20, 30}),
           makeFlatVector<int64_t>({1, 2, 3}),
       });
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(
-          PlanBuilder()
-              .values({dataWithBound})
-              .window({"sum(v) over (partition by p order by v "
-                       "rows between bound preceding and current row)"})
-              .planNode())
-          .copyResults(pool()),
-      "Replacement with cuDF operator failed");
+  assertWindowFallback(
+      PlanBuilder()
+          .values({dataWithBound})
+          .window({"sum(v) over (partition by p order by v "
+                   "rows between bound preceding and current row)"})
+          .planNode());
 
   // Supported: RANGE UNBOUNDED PRECEDING to CURRENT ROW (peer groups by sort
   // key)
@@ -1638,7 +1635,7 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
           makeFlatVector<int64_t>({10, 20, 30}),
           makeFlatVector<int64_t>({10, 30, 60}),
       });
-  AssertQueryBuilder(plan1).assertResults(expected1);
+  AssertQueryBuilder(rewriteToCudfPlan(plan1)).assertResults(expected1);
 
   // Supported: RANGE UNBOUNDED PRECEDING to UNBOUNDED FOLLOWING
   auto plan2 =
@@ -1656,18 +1653,15 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
           makeFlatVector<int64_t>({10, 20, 30}),
           makeFlatVector<int64_t>({60, 60, 60}),
       });
-  AssertQueryBuilder(plan2).assertResults(expected2);
+  AssertQueryBuilder(rewriteToCudfPlan(plan2)).assertResults(expected2);
 
   // Unsupported: RANGE CURRENT ROW to UNBOUNDED FOLLOWING
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(
-          PlanBuilder()
-              .values({data})
-              .window({"sum(v) over (partition by p order by v "
-                       "range between current row and unbounded following)"})
-              .planNode())
-          .copyResults(pool()),
-      "Replacement with cuDF operator failed");
+  assertWindowFallback(
+      PlanBuilder()
+          .values({data})
+          .window({"sum(v) over (partition by p order by v "
+                   "range between current row and unbounded following)"})
+          .planNode());
 }
 
 TEST_F(CudfWindowTest, explicitRowsCurrentRowWithoutOrderByIsNotFullPartition) {
@@ -1693,7 +1687,7 @@ TEST_F(CudfWindowTest, explicitRowsCurrentRowWithoutOrderByIsNotFullPartition) {
           makeFlatVector<int64_t>({10, 30, 60}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, rowsFrameBoundsUseCudfWindowSizes) {
@@ -1718,7 +1712,7 @@ TEST_F(CudfWindowTest, rowsFrameBoundsUseCudfWindowSizes) {
             makeFlatVector<int64_t>({1, 2, 3}),
         });
 
-    AssertQueryBuilder(plan).assertResults(expected);
+    AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
   }
 
   {
@@ -1736,7 +1730,7 @@ TEST_F(CudfWindowTest, rowsFrameBoundsUseCudfWindowSizes) {
             makeFlatVector<int64_t>({1, 3, 5}),
         });
 
-    AssertQueryBuilder(plan).assertResults(expected);
+    AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
   }
 
   {
@@ -1754,7 +1748,7 @@ TEST_F(CudfWindowTest, rowsFrameBoundsUseCudfWindowSizes) {
             makeNullableFlatVector<int64_t>({2, 3, std::nullopt}),
         });
 
-    AssertQueryBuilder(plan).assertResults(expected);
+    AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
   }
 
   {
@@ -1772,7 +1766,7 @@ TEST_F(CudfWindowTest, rowsFrameBoundsUseCudfWindowSizes) {
             makeNullableFlatVector<int64_t>({std::nullopt, 1, 3}),
         });
 
-    AssertQueryBuilder(plan).assertResults(expected);
+    AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
   }
 }
 
@@ -1804,7 +1798,7 @@ TEST_F(CudfWindowTest, inputsSortedStreamingWindow) {
           makeFlatVector<int64_t>({10, 30, 30, 70}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, lagLeadIgnoreNullsFallsBack) {
@@ -1816,19 +1810,16 @@ TEST_F(CudfWindowTest, lagLeadIgnoreNullsFallsBack) {
           makeNullableFlatVector<int64_t>({10, std::nullopt, 20, 30}),
       });
 
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(
-          PlanBuilder()
-              .values({data})
-              .window({
-                  "lag(v, 1 IGNORE NULLS) over "
-                  "(partition by p order by ord) as lag_v",
-                  "lead(v, 1 IGNORE NULLS) over "
-                  "(partition by p order by ord) as lead_v",
-              })
-              .planNode())
-          .copyResults(pool()),
-      "Replacement with cuDF operator failed");
+  assertWindowFallback(
+      PlanBuilder()
+          .values({data})
+          .window({
+              "lag(v, 1 IGNORE NULLS) over "
+              "(partition by p order by ord) as lag_v",
+              "lead(v, 1 IGNORE NULLS) over "
+              "(partition by p order by ord) as lead_v",
+          })
+          .planNode());
 }
 
 TEST_F(CudfWindowTest, countStarOverZeroColumnInputPreservesLogicalRows) {
@@ -1853,7 +1844,7 @@ TEST_F(CudfWindowTest, countStarOverZeroColumnInputPreservesLogicalRows) {
           makeFlatVector<int64_t>({4, 4, 4, 4}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, rangeWithoutOrderByDoesNotDependOnFunctionCount) {
@@ -1877,7 +1868,7 @@ TEST_F(CudfWindowTest, rangeWithoutOrderByDoesNotDependOnFunctionCount) {
             makeFlatVector<int64_t>({60, 60, 60}),
         });
 
-    AssertQueryBuilder(plan).assertResults(expected);
+    AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
   }
 
   {
@@ -1899,7 +1890,7 @@ TEST_F(CudfWindowTest, rangeWithoutOrderByDoesNotDependOnFunctionCount) {
             makeFlatVector<int64_t>({3, 3, 3}),
         });
 
-    AssertQueryBuilder(plan).assertResults(expected);
+    AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
   }
 }
 
@@ -1932,7 +1923,7 @@ TEST_F(CudfWindowTest, emptyFrameCountReturnsZero) {
           makeFlatVector<int64_t>({0, 1, 0}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, globalIntegerSumUsesBigintAccumulator) {
@@ -1950,7 +1941,7 @@ TEST_F(CudfWindowTest, globalIntegerSumUsesBigintAccumulator) {
           makeFlatVector<int64_t>({2'147'483'648LL, 2'147'483'648LL}),
       });
 
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfWindowTest, unsupportedLeadLagArgumentsFallback) {
@@ -1972,11 +1963,8 @@ TEST_F(CudfWindowTest, unsupportedLeadLagArgumentsFallback) {
 
   for (const auto& expression : expressions) {
     SCOPED_TRACE(expression);
-    VELOX_ASSERT_THROW(
-        AssertQueryBuilder(
-            PlanBuilder().values({data}).window({expression}).planNode())
-            .copyResults(pool()),
-        "Replacement with cuDF operator failed");
+    assertWindowFallback(
+        PlanBuilder().values({data}).window({expression}).planNode());
   }
 }
 
@@ -1999,9 +1987,7 @@ TEST_F(CudfWindowTest, oversizedRowsBoundsFallback) {
     SCOPED_TRACE(expression);
     auto plan = PlanBuilder().values({data}).window({expression}).planNode();
 
-    VELOX_ASSERT_THROW(
-        AssertQueryBuilder(plan).copyResults(pool()),
-        "Replacement with cuDF operator failed");
+    assertWindowFallback(plan);
   }
 }
 
@@ -2011,9 +1997,7 @@ TEST_F(CudfWindowTest, unsupportedAggregateInputTypesFallback) {
     SCOPED_TRACE(expression);
     auto plan = PlanBuilder().values({data}).window({expression}).planNode();
 
-    VELOX_ASSERT_THROW(
-        AssertQueryBuilder(plan).copyResults(pool()),
-        "Replacement with cuDF operator failed");
+    assertWindowFallback(plan);
   };
 
   auto realData = makeRowVector(
@@ -2073,9 +2057,7 @@ TEST_F(CudfWindowTest, customComparisonWindowKeysFallback) {
                     })
                     .planNode();
 
-    VELOX_ASSERT_THROW(
-        AssertQueryBuilder(plan).copyResults(pool()),
-        "Replacement with cuDF operator failed");
+    assertWindowFallback(plan);
   }
 
   {
@@ -2086,9 +2068,7 @@ TEST_F(CudfWindowTest, customComparisonWindowKeysFallback) {
                     })
                     .planNode();
 
-    VELOX_ASSERT_THROW(
-        AssertQueryBuilder(plan).copyResults(pool()),
-        "Replacement with cuDF operator failed");
+    assertWindowFallback(plan);
   }
 }
 
@@ -2111,9 +2091,7 @@ TEST_F(CudfWindowTest, fullPartitionAverageFallsBackUntilOptimized) {
     SCOPED_TRACE(expression);
     auto plan = PlanBuilder().values({data}).window({expression}).planNode();
 
-    VELOX_ASSERT_THROW(
-        AssertQueryBuilder(plan).copyResults(pool()),
-        "Replacement with cuDF operator failed");
+    assertWindowFallback(plan);
   }
 }
 
@@ -2156,7 +2134,7 @@ TEST_F(CudfWindowTest, decimalSumWidensBeforeWindowAggregation) {
             makeFlatVector<int128_t>(expectedSums, DECIMAL(38, 0)),
         });
 
-    AssertQueryBuilder(plan).assertResults(expected);
+    AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
   };
 
   assertSum("sum(d) over () as s", fullSums);
@@ -2192,9 +2170,7 @@ TEST_F(CudfWindowTest, castInWindowArgFallsBack) {
     SCOPED_TRACE(expression);
     auto plan = PlanBuilder().values({data}).window({expression}).planNode();
 
-    VELOX_ASSERT_THROW(
-        AssertQueryBuilder(plan).copyResults(pool()),
-        "Replacement with cuDF operator failed");
+    assertWindowFallback(plan);
   }
 }
 

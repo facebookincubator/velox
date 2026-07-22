@@ -13,23 +13,49 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include "velox/experimental/cudf/exec/CudfPlanRewriter2.h"
+#include "velox/core/PlanNode.h"
+#include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::cudf_velox {
 
-/// Legacy adapter that forwards to CudfPlanRewriter2.
 class CudfPlanRewriter {
  public:
-  using ExecutionMode = CudfPlanRewriter2::ExecutionMode;
-  using Config = CudfPlanRewriter2::Config;
+  enum class ExecutionMode { kCpu, kGpu };
+
+  struct Config {
+    int gpuDriverCount = 4;
+    int cpuDriverCount = 32;
+    bool addLocalPartitionBoundaries = true;
+    std::shared_ptr<core::QueryCtx> queryCtx;
+  };
 
   static core::PlanNodePtr rewrite(
       const core::PlanNodePtr& root,
-      const Config& config) {
-    return CudfPlanRewriter2::rewrite(root, config);
+      const Config& config);
+
+  /// Transitional entry points for the legacy DriverAdapter path. These keep
+  /// CPU-to-cuDF PlanNode conversion centralized in the plan rewriter while
+  /// that path is still available.
+  static core::PlanNodePtr translateForAdapter(
+      const core::PlanNodePtr& node,
+      int gpuDriverCount = 4);
+
+  template <typename CudfNode>
+  static std::shared_ptr<const CudfNode> translateForAdapterAs(
+      const core::PlanNodePtr& node,
+      int gpuDriverCount = 4) {
+    auto translated = std::dynamic_pointer_cast<const CudfNode>(
+        translateForAdapter(node, gpuDriverCount));
+    VELOX_CHECK_NOT_NULL(translated);
+    return translated;
   }
+
+  static core::PlanNodePtr translateBatchConcatForAdapter(
+      const core::PlanNodePtr& node,
+      int gpuDriverCount = 4);
 };
 
 } // namespace facebook::velox::cudf_velox

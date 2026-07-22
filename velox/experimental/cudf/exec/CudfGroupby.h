@@ -54,7 +54,7 @@ struct GroupbyAggregator {
 
 // Factory functions for creating groupby aggregators from plan nodes.
 std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
-    core::AggregationNode const& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants);
@@ -76,6 +76,11 @@ class CudfGroupby : public CudfOperatorBase {
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::AggregationNode> const& aggregationNode);
+
+  CudfGroupby(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      std::shared_ptr<const CudfAggregationNode> aggregationNode);
 
   void initialize() override;
 
@@ -115,7 +120,7 @@ class CudfGroupby : public CudfOperatorBase {
   std::vector<column_index_t> groupingKeyOutputChannels_;
   std::vector<column_index_t> aggregationInputChannels_;
 
-  std::shared_ptr<const core::AggregationNode> aggregationNode_;
+  std::shared_ptr<const CudfAggregationNode> aggregationNode_;
   std::vector<std::unique_ptr<GroupbyAggregator>> aggregators_;
   std::vector<std::unique_ptr<GroupbyAggregator>> intermediateAggregators_;
   // Used for kSingle streaming: partial-step aggregators (raw -> intermediate)

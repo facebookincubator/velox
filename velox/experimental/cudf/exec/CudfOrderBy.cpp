@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
+#include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -28,6 +29,16 @@ CudfOrderBy::CudfOrderBy(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::OrderByNode>& orderByNode)
+    : CudfOrderBy(
+          operatorId,
+          driverCtx,
+          CudfPlanRewriter::translateForAdapterAs<CudfOrderByNode>(
+              orderByNode)) {}
+
+CudfOrderBy::CudfOrderBy(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    std::shared_ptr<const CudfOrderByNode> orderByNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

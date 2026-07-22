@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
+#include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -803,7 +804,7 @@ std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
 namespace facebook::velox::cudf_velox {
 
 std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
-    core::AggregationNode const& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants) {
@@ -884,6 +885,16 @@ CudfGroupby::CudfGroupby(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<core::AggregationNode const> const& aggregationNode)
+    : CudfGroupby(
+          operatorId,
+          driverCtx,
+          CudfPlanRewriter::translateForAdapterAs<CudfAggregationNode>(
+              aggregationNode)) {}
+
+CudfGroupby::CudfGroupby(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    std::shared_ptr<const CudfAggregationNode> aggregationNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

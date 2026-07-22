@@ -16,6 +16,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -26,6 +27,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using cudf_velox::test::rewriteToCudfPlan;
 
 class AdapterOperatorTest : public OperatorTestBase {
  protected:
@@ -41,7 +43,7 @@ class AdapterOperatorTest : public OperatorTestBase {
   }
 };
 
-TEST_F(AdapterOperatorTest, adapterStatsMergedIntoPlanNode) {
+TEST_F(AdapterOperatorTest, physicalOperatorsHaveDedicatedPlanNodeStats) {
   auto data = makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
 
   core::PlanNodeId projNodeId;
@@ -52,11 +54,13 @@ TEST_F(AdapterOperatorTest, adapterStatsMergedIntoPlanNode) {
                   .planNode();
 
   std::shared_ptr<exec::Task> task;
-  AssertQueryBuilder(plan).copyResults(pool(), task);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool(), task);
 
   auto stats = toPlanStats(task->taskStats());
   auto& projStats = stats.at(projNodeId);
 
-  EXPECT_TRUE(projStats.isMultiOperatorTypeNode());
-  EXPECT_TRUE(projStats.operatorStats.count("CudfToVelox"));
+  EXPECT_FALSE(projStats.isMultiOperatorTypeNode());
+  EXPECT_TRUE(projStats.operatorStats.count("CudfFilterProject"));
+  EXPECT_TRUE(
+      stats.at(projNodeId + "_to_velox").operatorStats.count("CudfToVelox"));
 }

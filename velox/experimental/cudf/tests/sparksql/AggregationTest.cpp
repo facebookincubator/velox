@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/exec/AggregationRegistry.h"
 #include "velox/experimental/cudf/exec/SparkAggregateFunctions.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -69,7 +70,7 @@ TEST_F(AggregationTest, sumReal) {
                   .finalAggregation()
                   .planNode();
   auto expected = makeRowVector({"c0"}, {makeConstant<double>(6.5028, 1)});
-  assertQuery(plan, expected);
+  assertQuery(cudf_velox::test::rewriteToCudfPlan(plan), expected);
 }
 
 } // namespace facebook::velox::exec::sparksql::test

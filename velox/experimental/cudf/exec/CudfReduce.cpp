@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
+#include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
@@ -723,7 +724,7 @@ std::unique_ptr<ReduceAggregator> createReduceAggregator(
 namespace facebook::velox::cudf_velox {
 
 std::vector<std::unique_ptr<ReduceAggregator>> toReduceAggregators(
-    core::AggregationNode const& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants) {
@@ -798,6 +799,16 @@ CudfReduce::CudfReduce(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<core::AggregationNode const> const& aggregationNode)
+    : CudfReduce(
+          operatorId,
+          driverCtx,
+          CudfPlanRewriter::translateForAdapterAs<CudfAggregationNode>(
+              aggregationNode)) {}
+
+CudfReduce::CudfReduce(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    std::shared_ptr<const CudfAggregationNode> aggregationNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

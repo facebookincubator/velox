@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -26,6 +27,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using cudf_velox::test::rewriteToCudfPlan;
 
 class CudfMarkDistinctTest : public HiveConnectorTestBase {
  protected:
@@ -53,7 +55,7 @@ TEST_F(CudfMarkDistinctTest, allDistinct) {
   auto plan =
       PlanBuilder().values({input}).markDistinct("m", {"c0"}).planNode();
 
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   assertEqualVectors(expected, result);
 }
 
@@ -72,7 +74,7 @@ TEST_F(CudfMarkDistinctTest, duplicateKeys) {
   auto plan =
       PlanBuilder().values({input}).markDistinct("m", {"c0"}).planNode();
 
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   assertEqualVectors(expected, result);
 }
 
@@ -90,7 +92,7 @@ TEST_F(CudfMarkDistinctTest, multiBatch) {
                   .markDistinct("m", {"c0"})
                   .planNode();
 
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   // Result should have 6 rows total; check markers
   ASSERT_EQ(6, result->size());
@@ -118,7 +120,7 @@ TEST_F(CudfMarkDistinctTest, bigintKey) {
   auto plan =
       PlanBuilder().values({input}).markDistinct("m", {"c0"}).planNode();
 
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   assertEqualVectors(expected, result);
 }
 
@@ -142,7 +144,7 @@ TEST_F(CudfMarkDistinctTest, compositeKey) {
   auto plan =
       PlanBuilder().values({input}).markDistinct("m", {"c0", "c1"}).planNode();
 
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   assertEqualVectors(expected, result);
 }
 
@@ -160,7 +162,7 @@ TEST_F(CudfMarkDistinctTest, allDistinctMatchesDuckDb) {
       PlanBuilder().values({input}).markDistinct("m", {"c0"}).planNode();
 
   // All keys are distinct, so all markers are true
-  assertQuery(plan, "SELECT c0, c1, true AS m FROM tmp");
+  assertQuery(rewriteToCudfPlan(plan), "SELECT c0, c1, true AS m FROM tmp");
 }
 
 // Test 7: Null handling in keys - nulls are treated as equal
@@ -179,7 +181,7 @@ TEST_F(CudfMarkDistinctTest, nullKeys) {
   auto plan =
       PlanBuilder().values({input}).markDistinct("m", {"c0"}).planNode();
 
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   assertEqualVectors(expected, result);
 }
 
@@ -198,7 +200,7 @@ TEST_F(CudfMarkDistinctTest, stringKeys) {
   auto plan =
       PlanBuilder().values({input}).markDistinct("m", {"c0"}).planNode();
 
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
   assertEqualVectors(expected, result);
 }
 
@@ -217,7 +219,7 @@ TEST_F(CudfMarkDistinctTest, threeBatches) {
                   .markDistinct("m", {"c0"})
                   .planNode();
 
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   ASSERT_EQ(7, result->size());
   auto markers = result->childAt(1)->asFlatVector<bool>();
@@ -243,7 +245,7 @@ TEST_F(CudfMarkDistinctTest, allDuplicates) {
                   .markDistinct("m", {"c0"})
                   .planNode();
 
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   ASSERT_EQ(7, result->size());
   auto markers = result->childAt(1)->asFlatVector<bool>();
@@ -268,7 +270,7 @@ TEST_F(CudfMarkDistinctTest, emptyBatch) {
                   .markDistinct("m", {"c0"})
                   .planNode();
 
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   // Result should have 4 rows (2 + 0 + 2)
   ASSERT_EQ(4, result->size());

@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/file/FileSystems.h"
@@ -27,6 +28,7 @@
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
+using cudf_velox::test::rewriteToCudfPlan;
 
 namespace {
 
@@ -82,6 +84,12 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
     execCtx_.reset();
     queryCtx_.reset();
     OperatorTestBase::TearDown();
+  }
+
+  std::shared_ptr<exec::Task> assertQuery(
+      const core::PlanNodePtr& plan,
+      const std::string& duckDbSql) {
+    return OperatorTestBase::assertQuery(rewriteToCudfPlan(plan), duckDbSql);
   }
 
   void assertUsesFunctionEvaluator(

@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
@@ -32,6 +33,11 @@ class CudfBatchConcat : public CudfOperatorBase {
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::PlanNode> planNode);
+
+  CudfBatchConcat(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      std::shared_ptr<const CudfBatchConcatNode> planNode);
 
   bool needsInput() const override {
     return !noMoreInput_ && outputQueue_.empty() &&

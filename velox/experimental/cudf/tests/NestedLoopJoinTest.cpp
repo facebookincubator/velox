@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -23,6 +24,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using cudf_velox::test::rewriteToCudfPlan;
 
 class CudfNestedLoopJoinTest : public HiveConnectorTestBase {
  protected:
@@ -34,6 +36,22 @@ class CudfNestedLoopJoinTest : public HiveConnectorTestBase {
   void TearDown() override {
     cudf_velox::unregisterCudf();
     HiveConnectorTestBase::TearDown();
+  }
+
+  std::shared_ptr<Task> assertQuery(
+      const core::PlanNodePtr& plan,
+      const std::string& duckDbSql) {
+    return HiveConnectorTestBase::assertQuery(
+        rewriteToCudfPlan(plan), duckDbSql);
+  }
+
+  std::shared_ptr<Task> assertQuery(
+      const CursorParameters& params,
+      const std::string& duckDbSql) {
+    auto cudfParams = params;
+    cudfParams.planNode =
+        rewriteToCudfPlan(params.planNode, params.maxDrivers, params.queryCtx);
+    return HiveConnectorTestBase::assertQuery(cudfParams, duckDbSql);
   }
 
   template <typename T>

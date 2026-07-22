@@ -52,6 +52,7 @@
 
 static const std::string kCudfAdapterName = "cuDF";
 static const std::string kCudfLocalPartitionAdapterName = "cuDF-LocalPartition";
+static const std::string kCudfDriverPrinterAdapterName = "cuDF-DriverPrinter";
 
 namespace facebook::velox::cudf_velox {
 
@@ -445,29 +446,33 @@ void registerCudf() {
     exec::DriverFactory::registerAdapter(cudfLocalPartitionAdapter);
   }
 
-  exec::DriverAdapter printer{
-      "cuDF-DriverPrinter",
-      {},
-      [](const exec::DriverFactory& /*factory*/, exec::Driver& driver) -> bool {
-        try {
-          auto* ctx = driver.driverCtx();
-          auto ops = driver.operators();
-          std::ostringstream oss;
-          oss << "DRIVER pipeline=" << ctx->pipelineId
-              << " driver=" << ctx->driverId << " operators=";
-          for (size_t i = 0; i < ops.size(); ++i) {
-            if (i) {
-              oss << " -> ";
+  if (CudfConfig::getInstance().debugEnabled) {
+    exec::DriverAdapter printer{
+        kCudfDriverPrinterAdapterName,
+        {},
+        [](const exec::DriverFactory& /*factory*/,
+           exec::Driver& driver) -> bool {
+          try {
+            auto* ctx = driver.driverCtx();
+            auto ops = driver.operators();
+            std::ostringstream oss;
+            oss << "DRIVER pipeline=" << ctx->pipelineId
+                << " driver=" << ctx->driverId << " operators=";
+            for (size_t i = 0; i < ops.size(); ++i) {
+              if (i) {
+                oss << " -> ";
+              }
+              oss << ops[i]->operatorType() << "[" << ops[i]->planNodeId()
+                  << "]";
             }
-            oss << ops[i]->operatorType() << "[" << ops[i]->planNodeId() << "]";
+            std::cout << oss.str() << std::endl;
+          } catch (...) {
           }
-          std::cout << oss.str() << std::endl;
-        } catch (...) {
-        }
-        // Allow other adapters to run. otherwise cudf driver adapter won't run
-        return false;
-      }};
-  exec::DriverFactory::registerAdapter(printer);
+          // Allow other adapters to run.
+          return false;
+        }};
+    exec::DriverFactory::registerAdapter(printer);
+  }
 
   if (CudfConfig::getInstance().astExpressionEnabled) {
     registerAstEvaluator(CudfConfig::getInstance().astExpressionPriority);
@@ -489,7 +494,8 @@ void unregisterCudf() {
           exec::DriverFactory::adapters.end(),
           [](const exec::DriverAdapter& adapter) {
             return adapter.label == kCudfAdapterName ||
-                adapter.label == kCudfLocalPartitionAdapterName;
+                adapter.label == kCudfLocalPartitionAdapterName ||
+                adapter.label == kCudfDriverPrinterAdapterName;
           }),
       exec::DriverFactory::adapters.end());
 

@@ -16,6 +16,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -24,6 +25,7 @@
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
+using cudf_velox::test::rewriteToCudfPlan;
 
 class TopNTest : public OperatorTestBase {
  public:
@@ -56,7 +58,7 @@ class TopNTest : public OperatorTestBase {
           PlanBuilder().values(input).topN({sql}, limit, false).planNode();
 
       assertQueryOrdered(
-          plan,
+          rewriteToCudfPlan(plan),
           fmt::format("SELECT * FROM tmp ORDER BY {} LIMIT {}", sql, limit),
           {keyIndex});
     }
@@ -80,7 +82,7 @@ class TopNTest : public OperatorTestBase {
                       .planNode();
 
       assertQueryOrdered(
-          plan,
+          rewriteToCudfPlan(plan),
           fmt::format(
               "SELECT * FROM tmp WHERE {} ORDER BY {} LIMIT 10", filter, sql),
           {keyIndex});
@@ -108,7 +110,7 @@ class TopNTest : public OperatorTestBase {
                         .planNode();
 
         assertQueryOrdered(
-            plan,
+            rewriteToCudfPlan(plan),
             fmt::format(
                 "SELECT * FROM tmp ORDER BY {}, {} LIMIT {}",
                 sql1,
@@ -282,7 +284,7 @@ TEST_F(TopNTest, numericTopNSynchronization) {
 
   // Force configuration to maximize chance of replicating a missing stream
   // sync.
-  AssertQueryBuilder(plan, duckDbQueryRunner_)
+  AssertQueryBuilder(rewriteToCudfPlan(plan), duckDbQueryRunner_)
       .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, batchSize)
       .config(cudf_velox::CudfConfig::kCudfTopNBatchSize, 1)
       .assertResults(

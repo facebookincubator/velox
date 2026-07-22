@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrecomputeInstruction.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -85,6 +86,11 @@ class CudfNestedLoopJoinBuild : public CudfOperatorBase {
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::NestedLoopJoinNode> joinNode);
 
+  CudfNestedLoopJoinBuild(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      std::shared_ptr<const CudfNestedLoopJoinNode> joinNode);
+
   bool needsInput() const override;
 
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
@@ -98,7 +104,7 @@ class CudfNestedLoopJoinBuild : public CudfOperatorBase {
   void doClose() override;
 
  private:
-  std::shared_ptr<const core::NestedLoopJoinNode> joinNode_;
+  std::shared_ptr<const CudfNestedLoopJoinNode> joinNode_;
   std::vector<CudfVectorPtr> inputs_;
   ContinueFuture future_{ContinueFuture::makeEmpty()};
 };
@@ -150,6 +156,11 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::NestedLoopJoinNode> joinNode);
+
+  CudfNestedLoopJoinProbe(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      std::shared_ptr<const CudfNestedLoopJoinNode> joinNode);
 
   void initialize() override;
 
@@ -213,7 +224,7 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
         joinType_ == core::JoinType::kFull;
   }
 
-  std::shared_ptr<const core::NestedLoopJoinNode> joinNode_;
+  std::shared_ptr<const CudfNestedLoopJoinNode> joinNode_;
   core::JoinType joinType_;
   std::optional<build_data_type> buildData_;
 

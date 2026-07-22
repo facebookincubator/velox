@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
@@ -35,6 +36,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
+using cudf_velox::test::rewriteToCudfPlan;
 
 namespace {
 
@@ -62,6 +64,21 @@ class CudfFilterProjectTest : public OperatorTestBase {
     cudf_velox::unregisterFunctions();
     cudf_velox::unregisterCudf();
     OperatorTestBase::TearDown();
+  }
+
+  using OperatorTestBase::assertQuery;
+
+  std::shared_ptr<Task> assertQuery(
+      const core::PlanNodePtr& plan,
+      const std::string& duckDbSql) {
+    return OperatorTestBase::assertQuery(rewriteToCudfPlan(plan), duckDbSql);
+  }
+
+  std::shared_ptr<Task> assertQuery(
+      const core::PlanNodePtr& plan,
+      const RowVectorPtr& expectedResults) {
+    return OperatorTestBase::assertQuery(
+        rewriteToCudfPlan(plan), expectedResults);
   }
 
   void testMultiplyOperation(const std::vector<RowVectorPtr>& input) {
@@ -585,38 +602,29 @@ class CudfFilterProjectTest : public OperatorTestBase {
     return DATE()->toDays(dateStr);
   }
 
-  RowVectorPtr runFilterPlan(
+  void assertFilterMatchesVelox(
       const std::vector<RowVectorPtr>& input,
       const std::string& filter,
-      const std::vector<std::string>& projections) {
+      const std::vector<std::string>& projections = {"event_id"}) {
     auto plan = PlanBuilder()
                     .values(input)
                     .filter(filter)
                     .project(projections)
                     .planNode();
-    return AssertQueryBuilder(plan).copyResults(pool());
-  }
-
-  void assertFilterMatchesVelox(
-      const std::vector<RowVectorPtr>& input,
-      const std::string& filter,
-      const std::vector<std::string>& projections = {"event_id"}) {
-    auto cudfResult = runFilterPlan(input, filter, projections);
+    auto cudfResult =
+        AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
     cudf_velox::unregisterCudf();
-    auto veloxResult = runFilterPlan(input, filter, projections);
+    auto veloxResult = AssertQueryBuilder(plan).copyResults(pool());
     cudf_velox::registerCudf();
     facebook::velox::test::assertEqualVectors(cudfResult, veloxResult);
   }
 
-  RowVectorPtr runPlan(const core::PlanNodePtr& plan) {
-    return AssertQueryBuilder(plan).copyResults(pool());
-  }
-
   void assertPlanMatchesVelox(const core::PlanNodePtr& plan) {
-    auto cudfResult = runPlan(plan);
+    auto cudfResult =
+        AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
     cudf_velox::unregisterCudf();
-    auto veloxResult = runPlan(plan);
+    auto veloxResult = AssertQueryBuilder(plan).copyResults(pool());
     cudf_velox::registerCudf();
     facebook::velox::test::assertEqualVectors(cudfResult, veloxResult);
   }
@@ -1189,7 +1197,7 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalRejectsSubDayInterval) {
                   .project({"plus(event_date, interval_val) AS result"})
                   .planNode();
   VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool()),
       "Cannot add hours, minutes, seconds or milliseconds to a date");
 }
 
@@ -1415,13 +1423,13 @@ TEST_F(CudfFilterProjectTest, round) {
                   .values({data})
                   .project({"round(c0, 2) as c1"})
                   .planNode();
-  AssertQueryBuilder(plan).assertResults(data);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(data);
   plan = PlanBuilder()
              .setParseOptions(options)
              .values({data})
              .project({"round(c0) as c1"})
              .planNode();
-  AssertQueryBuilder(plan).assertResults(data);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(data);
 
   plan = PlanBuilder()
              .setParseOptions(options)
@@ -1429,7 +1437,7 @@ TEST_F(CudfFilterProjectTest, round) {
              .project({"round(c0, -3) as c1"})
              .planNode();
   auto expected = makeRowVector({makeFlatVector<int64_t>({4000, 456789000})});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, roundDecimal) {
@@ -1458,7 +1466,7 @@ TEST_F(CudfFilterProjectTest, roundDecimal) {
                   .planNode();
   auto decimalExpected = makeRowVector(
       {makeFlatVector<int64_t>({412400, -456800}, DECIMAL(10, 4))});
-  AssertQueryBuilder(plan).assertResults(decimalExpected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(decimalExpected);
 
   // Round to 0 decimal places.
   // Expected values are 41.0 and -46.0 as DECIMAL(10, 0).
@@ -1469,7 +1477,7 @@ TEST_F(CudfFilterProjectTest, roundDecimal) {
              .planNode();
   decimalExpected =
       makeRowVector({makeFlatVector<int64_t>({41, -46}, DECIMAL(10, 0))});
-  AssertQueryBuilder(plan).assertResults(decimalExpected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(decimalExpected);
 
   // Round to -1 decimal places.
   // Expected values are 40.0 and -50.0 as DECIMAL(10, 4).
@@ -1480,7 +1488,7 @@ TEST_F(CudfFilterProjectTest, roundDecimal) {
              .planNode();
   decimalExpected = makeRowVector(
       {makeFlatVector<int64_t>({400000, -500000}, DECIMAL(10, 4))});
-  AssertQueryBuilder(plan).assertResults(decimalExpected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(decimalExpected);
 }
 
 TEST_F(CudfFilterProjectTest, simpleFilter) {
@@ -1743,7 +1751,7 @@ TEST_F(CudfFilterProjectTest, cardinality) {
                   .project({"cardinality(c0) AS result"})
                   .planNode();
   auto expected = makeRowVector({makeFlatVector<int64_t>({3, 2, 0})});
-  AssertQueryBuilder(plan).assertResults({expected});
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults({expected});
 }
 
 TEST_F(CudfFilterProjectTest, split) {
@@ -1755,7 +1763,8 @@ TEST_F(CudfFilterProjectTest, split) {
                   .values({data})
                   .project({"split(c0, 'hello', 2) AS result"})
                   .planNode();
-  auto splitResults = AssertQueryBuilder(plan).copyResults(pool());
+  auto splitResults =
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   auto calculatedSplitResults = makeRowVector({
       makeArrayVector<std::string>({
@@ -1776,7 +1785,8 @@ TEST_F(CudfFilterProjectTest, cardinalityAndSplitOneByOne) {
                        .values({data})
                        .project({"split(c0, 'hello', 2) AS c0"})
                        .planNode();
-  auto splitResults = AssertQueryBuilder(splitPlan).copyResults(pool());
+  auto splitResults =
+      AssertQueryBuilder(rewriteToCudfPlan(splitPlan)).copyResults(pool());
 
   auto calculatedSplitResults = makeRowVector({
       makeArrayVector<std::string>({
@@ -1793,7 +1803,8 @@ TEST_F(CudfFilterProjectTest, cardinalityAndSplitOneByOne) {
                              .project({"cardinality(c0) AS result"})
                              .planNode();
   auto expected = makeRowVector({makeFlatVector<int64_t>({2, 2, 2, 1})});
-  AssertQueryBuilder(cardinalityPlan).assertResults({expected});
+  AssertQueryBuilder(rewriteToCudfPlan(cardinalityPlan))
+      .assertResults({expected});
 }
 
 // TODO: Requires a fix for the expression evaluator to handle function nesting.
@@ -1806,7 +1817,7 @@ TEST_F(CudfFilterProjectTest, cardinalityAndSplitFused) {
                   .project({"cardinality(split(c0, 'hello', 2)) AS c0"})
                   .planNode();
   auto expected = makeRowVector({makeFlatVector<int64_t>({2, 2, 2, 1})});
-  AssertQueryBuilder(plan).assertResults({expected});
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults({expected});
 }
 
 TEST_F(CudfFilterProjectTest, negativeSubstr) {
@@ -1816,7 +1827,8 @@ TEST_F(CudfFilterProjectTest, negativeSubstr) {
   auto negativeSubstrPlan =
       PlanBuilder().values({data}).project({"substr(c0, -2) AS c0"}).planNode();
   auto negativeSubstrResults =
-      AssertQueryBuilder(negativeSubstrPlan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(negativeSubstrPlan))
+          .copyResults(pool());
 
   auto calculatedNegativeSubstrResults = makeRowVector({
       makeFlatVector<std::string>({
@@ -1837,7 +1849,8 @@ TEST_F(CudfFilterProjectTest, negativeSubstrWithLength) {
                                           .project({"substr(c0, -6, 3) AS c0"})
                                           .planNode();
   auto negativeSubstrWithLengthResults =
-      AssertQueryBuilder(negativeSubstrWithLengthPlan).copyResults(pool());
+      AssertQueryBuilder(rewriteToCudfPlan(negativeSubstrWithLengthPlan))
+          .copyResults(pool());
 
   auto calculatedNegativeSubstrWithLengthResults = makeRowVector({
       makeFlatVector<std::string>({
@@ -1858,7 +1871,8 @@ TEST_F(CudfFilterProjectTest, substrWithLength) {
                         .values({data})
                         .project({"substr(c0, 1, 3) AS c0"})
                         .planNode();
-  auto substrResults = AssertQueryBuilder(substrPlan).copyResults(pool());
+  auto substrResults =
+      AssertQueryBuilder(rewriteToCudfPlan(substrPlan)).copyResults(pool());
 
   auto calculatedSubstrResults = makeRowVector({
       makeFlatVector<std::string>({
@@ -2004,7 +2018,7 @@ TEST_F(CudfFilterProjectTest, switchExpr) {
           .project(
               {"CASE WHEN c0 > 0.0 THEN c0 / c1 ELSE cast(null as double) END AS result"})
           .planNode();
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   auto expected = makeRowVector({
       makeNullableFlatVector<double>(
@@ -2055,7 +2069,7 @@ TEST_F(CudfFilterProjectTest, greatestLeastAllLiterals) {
       makeFlatVector<double>({3.0}),
       makeFlatVector<double>({1.0}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, greatestLeastWithNulls) {
@@ -2401,7 +2415,7 @@ TEST_F(CudfFilterProjectTest, andAndAndExpr) {
           .project(
               {"(c0 > CAST(0.0 AS DECIMAL(17, 2))) AND (c1 > CAST(0.0 AS DECIMAL(17, 2))) AND (c2 > CAST(0.0 AS DECIMAL(17, 2))) AND (c3 > CAST(0.0 AS DECIMAL(17, 2))) AS result"})
           .planNode();
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   auto expected = makeRowVector({
       makeNullableFlatVector<bool>({true, false, false, false}),
@@ -2421,7 +2435,7 @@ TEST_F(CudfFilterProjectTest, andAndAndWithDecimalDivideBelowExpr) {
           .project(
               {"(CAST((c0 / CAST(3.0 AS DECIMAL(17,2))) AS DECIMAL(17, 2)) > CAST(0.0 AS DECIMAL(17, 2))) AND (c1 > CAST(0.0 AS DECIMAL(17, 2))) AND (c2 > CAST(0.0 AS DECIMAL(17, 2))) AND (c3 > CAST(0.0 AS DECIMAL(17, 2))) AS result"})
           .planNode();
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto result = AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool());
 
   auto expected = makeRowVector({
       makeNullableFlatVector<bool>({true, false, false, false}),
@@ -2443,7 +2457,7 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
                   .planNode();
   auto expected =
       makeRowVector({makeFlatVector<double>({3.0, 3.0, -2.0, 1.0, 101.0})});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 
   // round(double, 2)
   plan = PlanBuilder()
@@ -2453,7 +2467,7 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
              .planNode();
   expected =
       makeRowVector({makeFlatVector<double>({3.14, 2.72, -1.5, 0.5, 101.0})});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 
   // round(double, -1) — round to nearest 10
   data =
@@ -2465,7 +2479,7 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
              .planNode();
   expected =
       makeRowVector({makeFlatVector<double>({120.0, -990.0, 60.0, 10.0})});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 
   // round(double, -3) — round to nearest 1000
   data = makeRowVector({makeFlatVector<double>({4123.0, 456789098.0})});
@@ -2475,7 +2489,7 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
              .project({"round(c0, -3) as c1"})
              .planNode();
   expected = makeRowVector({makeFlatVector<double>({4000.0, 456789000.0})});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 
   // Large values
   data = makeRowVector({makeFlatVector<double>({1e15 + 0.5, -1e15 - 0.5})});
@@ -2485,7 +2499,7 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
              .project({"round(c0) as c1"})
              .planNode();
   expected = makeRowVector({makeFlatVector<double>({1e15 + 1.0, -1e15 - 1.0})});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 
   // Corner cases: IEEE-754 half-way values and representation artifacts.
   // The FLOAT64 round path JIT-compiles Velox CPU's round algorithm
@@ -2527,7 +2541,7 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
       3.0, 4.0,  -3.0, -4.0, 3.0,  0.0,  0.0, 1.0, 1.0,  0.0,
       1.0, -1.0, -2.0, -3.0, -2.0, -2.0, 0.0, 0.0, 1e15,
   })});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 
   plan = PlanBuilder()
              .setParseOptions(options)
@@ -2555,7 +2569,7 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
       0.0,
       999999999999999.5,
   })});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 } // namespace

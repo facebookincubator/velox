@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/AggregationRegistry.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/Operator.h"
@@ -71,7 +72,7 @@ struct ResolvedAggregateInfo {
 // Parse aggregate inputs from the aggregation node and resolve companion steps,
 // original names, and result types. Returns one entry per aggregate.
 std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
-    core::AggregationNode const& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants);
@@ -90,7 +91,7 @@ struct AggregationInputChannels {
 // stored in the parallel constants vector (nullptr when the aggregate uses a
 // column, non-null when it uses a constant).
 AggregationInputChannels buildAggregationInputChannels(
-    core::AggregationNode const& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     exec::OperatorCtx const& operatorCtx,
     RowTypePtr const& inputRowSchema,
     std::vector<column_index_t> const& groupingKeyInputChannels);
@@ -107,13 +108,13 @@ bool hasCompanionAggregates(
 // Compute the intermediate ROW type used for buffered results in kFinal/kSingle
 // streaming.  The key columns keep their original types but aggregate columns
 // are replaced with the corresponding intermediate types.
-RowTypePtr getBufferedResultType(core::AggregationNode const& aggregationNode);
+RowTypePtr getBufferedResultType(const CudfAggregationNode& aggregationNode);
 
 bool hasFinalAggs(
     std::vector<core::AggregationNode::Aggregate> const& aggregates);
 
 void setupGroupingKeyChannelProjections(
-    const core::AggregationNode& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     std::vector<column_index_t>& groupingKeyInputChannels,
     std::vector<column_index_t>& groupingKeyOutputChannels);
 

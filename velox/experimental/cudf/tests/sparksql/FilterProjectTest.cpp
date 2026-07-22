@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -35,6 +36,8 @@ using namespace facebook::velox;
 
 namespace facebook::velox::cudf_velox {
 namespace {
+
+using test::rewriteToCudfPlan;
 
 class CudfFilterProjectTest : public CudfFunctionBaseTest {
  protected:
@@ -143,7 +146,8 @@ TEST_F(CudfFilterProjectTest, hashWithSeed) {
                       .values({data})
                       .project({"hash_with_seed(42, c0) AS c1"})
                       .planNode();
-  auto hashResults = AssertQueryBuilder(hashPlan).copyResults(pool());
+  auto hashResults =
+      AssertQueryBuilder(rewriteToCudfPlan(hashPlan)).copyResults(pool());
 
   auto expected = makeRowVector({
       makeFlatVector<int32_t>({
@@ -171,7 +175,8 @@ TEST_F(CudfFilterProjectTest, DISABLED_hashWithSeedMultiColumns) {
                       .values({data})
                       .project({"hash_with_seed(42, c0, c1) AS c2"})
                       .planNode();
-  auto hashResults = AssertQueryBuilder(hashPlan).copyResults(pool());
+  auto hashResults =
+      AssertQueryBuilder(rewriteToCudfPlan(hashPlan)).copyResults(pool());
 
   auto expected = makeRowVector({
       makeFlatVector<int32_t>({
@@ -515,7 +520,7 @@ TEST_F(CudfFilterProjectTest, likeWithEscape) {
       makeNullableFlatVector<bool>(
           {true, false, true, false, std::nullopt, false}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, likeConstantPattern) {
@@ -533,7 +538,7 @@ TEST_F(CudfFilterProjectTest, likeConstantPattern) {
       makeNullableFlatVector<bool>(
           {true, false, std::nullopt, true, false, true, true}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, likeNullPattern) {
@@ -557,7 +562,7 @@ TEST_F(CudfFilterProjectTest, likeNullPattern) {
           std::nullopt,
       }),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, likeNullEscape) {
@@ -581,7 +586,7 @@ TEST_F(CudfFilterProjectTest, likeNullEscape) {
           std::nullopt,
       }),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, likeEmptyEscape) {
@@ -595,7 +600,7 @@ TEST_F(CudfFilterProjectTest, likeEmptyEscape) {
                   .planNode();
 
   VELOX_ASSERT_USER_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool()),
       "Escape string must be a single character");
 }
 
@@ -610,7 +615,7 @@ TEST_F(CudfFilterProjectTest, likeMultiCharacterEscape) {
                   .planNode();
 
   VELOX_ASSERT_USER_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool()),
       "Escape string must be a single character");
 }
 
@@ -625,7 +630,7 @@ TEST_F(CudfFilterProjectTest, likeInvalidEscapeUsage) {
                   .planNode();
 
   VELOX_ASSERT_USER_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool()),
       "Escape character must be followed by '%', '_' or the escape character itself");
 }
 
@@ -643,7 +648,7 @@ TEST_F(CudfFilterProjectTest, tryLikeInvalidEscapeUsage) {
   auto expected = makeRowVector({
       makeNullableFlatVector<bool>({std::nullopt, std::nullopt, std::nullopt}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, likeColumnPatternInvalidEscapeUsage) {
@@ -658,7 +663,7 @@ TEST_F(CudfFilterProjectTest, likeColumnPatternInvalidEscapeUsage) {
                   .planNode();
 
   VELOX_ASSERT_USER_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
+      AssertQueryBuilder(rewriteToCudfPlan(plan)).copyResults(pool()),
       "Escape character must be followed by '%', '_' or the escape character itself");
 }
 
@@ -679,7 +684,7 @@ TEST_F(CudfFilterProjectTest, likeColumnPattern) {
       makeNullableFlatVector<bool>(
           {true, true, std::nullopt, std::nullopt, true, false, true}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, likeColumnPatternWithoutPatternNulls) {
@@ -697,7 +702,7 @@ TEST_F(CudfFilterProjectTest, likeColumnPatternWithoutPatternNulls) {
   auto expected = makeRowVector({
       makeNullableFlatVector<bool>({true, std::nullopt, false, true}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, likeColumnPatternWithEscape) {
@@ -717,7 +722,7 @@ TEST_F(CudfFilterProjectTest, likeColumnPatternWithEscape) {
       makeNullableFlatVector<bool>(
           {true, false, std::nullopt, true, std::nullopt, true}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, likeColumnPatternWithEscapeAllNullPatterns) {
@@ -737,7 +742,7 @@ TEST_F(CudfFilterProjectTest, likeColumnPatternWithEscapeAllNullPatterns) {
       makeNullableFlatVector<bool>(
           {std::nullopt, std::nullopt, std::nullopt, std::nullopt}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, likeConstantInputColumnPattern) {
@@ -814,7 +819,7 @@ TEST_F(CudfFilterProjectTest, startswith) {
       makeNullableFlatVector<bool>(
           {true, false, std::nullopt, true, false, false, true}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, startswithNullPattern) {
@@ -839,7 +844,7 @@ TEST_F(CudfFilterProjectTest, startswithNullPattern) {
           std::nullopt,
       }),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, startswithEmptyPattern) {
@@ -857,7 +862,7 @@ TEST_F(CudfFilterProjectTest, startswithEmptyPattern) {
       makeNullableFlatVector<bool>(
           {true, true, std::nullopt, true, true, true, true}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, startswithColumnPattern) {
@@ -877,7 +882,7 @@ TEST_F(CudfFilterProjectTest, startswithColumnPattern) {
       makeNullableFlatVector<bool>(
           {true, false, std::nullopt, std::nullopt, true, false, false}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, startswithConstantInput) {
@@ -923,7 +928,7 @@ TEST_F(CudfFilterProjectTest, startswithColumnPatternNullInput) {
                   .planNode();
 
   auto expected = makeRowVector({makeNullableFlatVector<bool>({std::nullopt})});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, startswithColumnPatternNullPattern) {
@@ -938,7 +943,7 @@ TEST_F(CudfFilterProjectTest, startswithColumnPatternNullPattern) {
                   .planNode();
 
   auto expected = makeRowVector({makeNullableFlatVector<bool>({std::nullopt})});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, contains) {
@@ -956,7 +961,7 @@ TEST_F(CudfFilterProjectTest, contains) {
       makeNullableFlatVector<bool>(
           {true, true, std::nullopt, true, false, false, true}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, containsNullPattern) {
@@ -981,7 +986,7 @@ TEST_F(CudfFilterProjectTest, containsNullPattern) {
           std::nullopt,
       }),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, containsEmptyPattern) {
@@ -999,7 +1004,7 @@ TEST_F(CudfFilterProjectTest, containsEmptyPattern) {
       makeNullableFlatVector<bool>(
           {true, true, std::nullopt, true, true, true, true}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, containsColumnPattern) {
@@ -1019,7 +1024,7 @@ TEST_F(CudfFilterProjectTest, containsColumnPattern) {
       makeNullableFlatVector<bool>(
           {true, true, std::nullopt, std::nullopt, true, true, false}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, containsConstantInput) {
@@ -1065,7 +1070,7 @@ TEST_F(CudfFilterProjectTest, containsColumnPatternNullInput) {
                   .planNode();
 
   auto expected = makeRowVector({makeNullableFlatVector<bool>({std::nullopt})});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, containsColumnPatternNullPattern) {
@@ -1080,7 +1085,7 @@ TEST_F(CudfFilterProjectTest, containsColumnPatternNullPattern) {
                   .planNode();
 
   auto expected = makeRowVector({makeNullableFlatVector<bool>({std::nullopt})});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, endswith) {
@@ -1098,7 +1103,7 @@ TEST_F(CudfFilterProjectTest, endswith) {
       makeNullableFlatVector<bool>(
           {false, false, std::nullopt, true, false, false, false}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, endswithNullPattern) {
@@ -1123,7 +1128,7 @@ TEST_F(CudfFilterProjectTest, endswithNullPattern) {
           std::nullopt,
       }),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, endswithEmptyPattern) {
@@ -1141,7 +1146,7 @@ TEST_F(CudfFilterProjectTest, endswithEmptyPattern) {
       makeNullableFlatVector<bool>(
           {true, true, std::nullopt, true, true, true, true}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, endswithColumnPattern) {
@@ -1161,7 +1166,7 @@ TEST_F(CudfFilterProjectTest, endswithColumnPattern) {
       makeNullableFlatVector<bool>(
           {true, true, std::nullopt, std::nullopt, true, true, false}),
   });
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, endswithConstantInput) {
@@ -1207,7 +1212,7 @@ TEST_F(CudfFilterProjectTest, endswithColumnPatternNullInput) {
                   .planNode();
 
   auto expected = makeRowVector({makeNullableFlatVector<bool>({std::nullopt})});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, endswithColumnPatternNullPattern) {
@@ -1222,7 +1227,7 @@ TEST_F(CudfFilterProjectTest, endswithColumnPatternNullPattern) {
                   .planNode();
 
   auto expected = makeRowVector({makeNullableFlatVector<bool>({std::nullopt})});
-  AssertQueryBuilder(plan).assertResults(expected);
+  AssertQueryBuilder(rewriteToCudfPlan(plan)).assertResults(expected);
 }
 
 // Test unary math functions for Spark
