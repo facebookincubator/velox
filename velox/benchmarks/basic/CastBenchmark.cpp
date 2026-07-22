@@ -75,6 +75,13 @@ int main(int argc, char** argv) {
       },
       nullptr,
       DECIMAL(38, 16));
+  auto reinterpretLongDecimalInput = vectorMaker.flatVector<int128_t>(
+      vectorSize,
+      [&](auto j) {
+        return facebook::velox::HugeInt::build(j, 12345 * j + 6789);
+      },
+      nullptr,
+      DECIMAL(20, 4));
   auto largeRealInput = vectorMaker.flatVector<float>(
       vectorSize, [&](auto j) { return 12345678.0 * j; });
   auto smallRealInput = vectorMaker.flatVector<float>(
@@ -92,6 +99,24 @@ int main(int argc, char** argv) {
       [](auto row) { return fmt::format("2024-05-{:02d}", 1 + row % 30); });
   auto invalidDateStrings = vectorMaker.flatVector<std::string>(
       vectorSize, [](auto row) { return fmt::format("2024-05...{}", row); });
+  auto timeInput = vectorMaker.flatVector<int64_t>(
+      vectorSize, [](auto j) { return j % 86'400'000; }, nullptr, TIME());
+
+  benchmarkBuilder
+      .addBenchmarkSet(
+          "cast_reinterpret",
+          vectorMaker.rowVector(
+              {"short_decimal", "long_decimal", "time"},
+              {decimalInput, reinterpretLongDecimalInput, timeInput}))
+      .addExpression(
+          "cast_short_decimal_same_scale_widen_precision",
+          "cast(short_decimal as decimal(18,2))")
+      .addExpression(
+          "cast_long_decimal_same_scale_widen_precision",
+          "cast(long_decimal as decimal(30,4))")
+      .addExpression("cast_time_as_bigint", "cast(time as bigint)")
+      .withIterations(100)
+      .disableTesting();
 
   benchmarkBuilder
       .addBenchmarkSet(
