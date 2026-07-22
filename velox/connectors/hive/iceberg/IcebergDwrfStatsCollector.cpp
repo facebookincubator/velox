@@ -450,8 +450,11 @@ IcebergDataFileStatisticsPtr IcebergDwrfStatsCollector::aggregate(
 
 void IcebergDwrfStatsCollector::configureWriterOptions(
     dwio::common::WriterOptions& options) const {
-  auto dwrfOptions = checkedPointerCast<dwrf::DwrfWriterOptions>(
+  auto dwrfOptions = std::dynamic_pointer_cast<dwrf::DwrfWriterOptions>(
       options.formatSpecificOptions);
+  if (dwrfOptions == nullptr) {
+    return;
+  }
   dwrfOptions->schemaAttributes = buildDwrfSchemaAttributes(
       std::dynamic_pointer_cast<const RowType>(options.schema), inputColumns_);
 }
