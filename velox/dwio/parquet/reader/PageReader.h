@@ -301,8 +301,7 @@ class PageReader {
       nullsFromFastPath = dwio::common::useFastPath<Visitor, true>(visitor) &&
           (!this->type_->type()->isLongDecimal()) &&
           (this->type_->type()->isShortDecimal()
-               ? (isDictionary() ||
-                  type_->parquetType_ == thrift::Type::INT64)
+               ? (isDictionary() || type_->parquetType_ == thrift::Type::INT64)
                : true);
 
       if (isDictionary()) {
@@ -560,10 +559,11 @@ class PageReader {
   std::unique_ptr<DeltaByteArrayDecoder> deltaByteArrDecoder_;
   std::unique_ptr<DeltaLengthByteArrayDecoder> deltaLengthByteArrDecoder_;
   std::unique_ptr<RleBpDataDecoder> rleBooleanDecoder_;
+  // Add decoders for other encodings here.
 
-  /// Scratch buffer for BYTE_STREAM_SPLIT decoded data. Separate from
-  /// decompressedData_ to avoid overwriting the source when the page is
-  /// compressed.
+  // Scratch buffer for BYTE_STREAM_SPLIT decoded data. Separate from
+  // decompressedData_ to avoid overwriting the source when the page is
+  // compressed.
   BufferPtr bssDecodedData_;
 };
 

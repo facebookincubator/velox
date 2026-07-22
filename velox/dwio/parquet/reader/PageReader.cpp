@@ -903,7 +903,14 @@ void PageReader::makeDecoder() {
       // DirectDecoder to serve values through the standard visitor path.
       // Use a separate buffer since pageData_ may point into
       // decompressedData_ (for compressed pages).
-      auto numValues = encodedDataSize_ / parquetTypeBytes(parquetType);
+      const auto typeBytes = parquetTypeBytes(parquetType);
+      VELOX_CHECK_EQ(
+          encodedDataSize_ % typeBytes,
+          0,
+          "BYTE_STREAM_SPLIT page size {} is not a multiple of the type size {}",
+          encodedDataSize_,
+          typeBytes);
+      auto numValues = encodedDataSize_ / typeBytes;
       dwio::common::ensureCapacity<char>(
           bssDecodedData_, encodedDataSize_, &pool_);
       auto* dest =
@@ -924,7 +931,7 @@ void PageReader::makeDecoder() {
           std::make_unique<dwio::common::SeekableArrayInputStream>(
               bssDecodedData_->as<char>(), encodedDataSize_),
           false,
-          parquetTypeBytes(parquetType));
+          typeBytes);
       break;
     }
     case Encoding::DELTA_LENGTH_BYTE_ARRAY:
