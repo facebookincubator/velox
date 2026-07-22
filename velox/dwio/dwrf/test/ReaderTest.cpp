@@ -1515,6 +1515,121 @@ TEST_F(TestReader, testMismatchSchemaIncompatible) {
   }
 }
 
+namespace {
+// Writes 'fileData' (whose type is the physical file schema) to a DWRF file,
+// then opens it requesting 'tableSchema' with 'columnMappingMode' and reads all
+// columns back. Returns the reader (so the caller can inspect rowType()) and
+// the fully-read result vector. In ColumnMappingMode::kName the reader renames
+// the file columns to the table schema by position only when the file's
+// physical names are all Hive placeholders; otherwise it keeps the file's
+// physical names. In ColumnMappingMode::kPosition it always renames by
+// position.
+std::pair<std::unique_ptr<DwrfReader>, RowVectorPtr> readWithColumnMapping(
+    memory::MemoryPool& pool,
+    const RowVectorPtr& fileData,
+    const RowTypePtr& tableSchema,
+    dwio::common::ColumnMappingMode columnMappingMode) {
+  auto sink = std::make_unique<MemorySink>(
+      16 * 1024 * 1024, dwio::common::FileSink::Options{.pool = &pool});
+  auto* sinkPtr = sink.get();
+  // Writer owns sink. Keep the writer alive until the data is copied out,
+  // otherwise destroying the writer frees the sink and sinkPtr dangles.
+  auto writer = E2EWriterTestUtil::writeData(
+      std::move(sink),
+      asRowType(fileData->type()),
+      {fileData},
+      std::make_shared<dwrf::Config>());
+
+  dwio::common::ReaderOptions readerOpts(&pool);
+  readerOpts.setColumnMappingMode(columnMappingMode);
+  readerOpts.setFileSchema(tableSchema);
+  std::string data(sinkPtr->data(), sinkPtr->size());
+  auto reader = std::make_unique<DwrfReader>(
+      readerOpts,
+      std::make_unique<BufferedInput>(
+          std::make_shared<InMemoryReadFile>(std::move(data)),
+          readerOpts.memoryPool()));
+
+  // Read all columns using the reader's (possibly renamed) schema.
+  RowReaderOptions rowReaderOpts;
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr result;
+  rowReader->next(fileData->size(), result);
+  return {std::move(reader), std::dynamic_pointer_cast<RowVector>(result)};
+}
+} // namespace
+
+// File written by old Hive with placeholder names (_col0, _col1). In name-based
+// mapping the requested names (id, name) are absent from the file, so a plain
+// by-name read would find nothing. Because every physical name is a Hive
+// placeholder, the reader renames the file columns to the table schema by
+// position, and the data reads back under the requested names.
+TEST_F(TestReader, columnMappingPositionalFallbackForHivePlaceholders) {
+  auto fileData = makeRowVector(
+      {"_col0", "_col1"},
+      {makeFlatVector<int32_t>({7, 8}),
+       makeFlatVector<StringView>({"a", "b"})});
+  auto tableSchema = ROW({"id", "name"}, {INTEGER(), VARCHAR()});
+  auto [reader, result] = readWithColumnMapping(
+      *pool(), fileData, tableSchema, dwio::common::ColumnMappingMode::kName);
+
+  // File columns were renamed to the table schema by position.
+  EXPECT_TRUE(*reader->rowType() == *tableSchema);
+  ASSERT_TRUE(result != nullptr);
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>({7, 8}),
+       makeFlatVector<StringView>({"a", "b"})});
+  assertEqualVectors(expected, result);
+}
+
+// File has real physical names that do not match the requested names. In
+// name-based mapping (not all placeholders) the reader must NOT rename by
+// position; the file's physical names are preserved so a downstream by-name
+// match binds to the real columns.
+TEST_F(TestReader, columnMappingRealNamesMappedByName) {
+  auto fileData = makeRowVector(
+      {"uid", "label"},
+      {makeFlatVector<int32_t>({7, 8}),
+       makeFlatVector<StringView>({"a", "b"})});
+  auto tableSchema = ROW({"id", "name"}, {INTEGER(), VARCHAR()});
+  auto [reader, result] = readWithColumnMapping(
+      *pool(), fileData, tableSchema, dwio::common::ColumnMappingMode::kName);
+
+  // File columns are NOT renamed; the physical names are preserved.
+  EXPECT_EQ(reader->rowType()->nameOf(0), "uid");
+  EXPECT_EQ(reader->rowType()->nameOf(1), "label");
+  ASSERT_TRUE(result != nullptr);
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>({7, 8}),
+       makeFlatVector<StringView>({"a", "b"})});
+  assertEqualVectors(expected, result);
+}
+
+// File has real physical names but the caller requested position-based mapping
+// (e.g. Spark's orc.force.positional.evolution, expressed as kPosition). The
+// reader renames the file columns to the table schema by position, and the data
+// reads back under the requested names.
+TEST_F(TestReader, columnMappingRealNamesMappedByPosition) {
+  auto fileData = makeRowVector(
+      {"uid", "label"},
+      {makeFlatVector<int32_t>({7, 8}),
+       makeFlatVector<StringView>({"a", "b"})});
+  auto tableSchema = ROW({"id", "name"}, {INTEGER(), VARCHAR()});
+  auto [reader, result] = readWithColumnMapping(
+      *pool(),
+      fileData,
+      tableSchema,
+      dwio::common::ColumnMappingMode::kPosition);
+
+  // File columns were renamed to the table schema by position.
+  EXPECT_TRUE(*reader->rowType() == *tableSchema);
+  ASSERT_TRUE(result != nullptr);
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>({7, 8}),
+       makeFlatVector<StringView>({"a", "b"})});
+  assertEqualVectors(expected, result);
+}
+
 TEST_F(TestReader, fileColumnNamesReadAsLowerCase) {
   // upper.orc holds one columns (Bool_Val: BOOLEAN, b: BIGINT)
   dwio::common::ReaderOptions readerOpts{pool()};
