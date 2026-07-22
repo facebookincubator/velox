@@ -299,6 +299,28 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneUsesCudf) {
   ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
 }
 
+TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampWithTimeZoneUsesCudf) {
+  // date_trunc(timestamp with time zone) is evaluated on GPU (per-row embedded
+  // zone), so the plan runs on cuDF rather than falling back.
+  auto input = makeRowVector(
+      {"c0"},
+      {makeFlatVector<int64_t>(
+          {pack(1'736'971'261'123, tz::getTimeZoneID("America/Los_Angeles")),
+           pack(1'736'971'261'123, tz::getTimeZoneID("Asia/Kolkata"))},
+          TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"date_trunc('day', c0) AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
 TEST_F(ToCudfSelectionTest, prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
   auto input = makeRowVector(
       {"event_ts"},

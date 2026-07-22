@@ -47,6 +47,10 @@ class DateTruncFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const;
 
   functions::DateTimeUnit unit_{};
+  // True when the input is TIMESTAMP WITH TIME ZONE; eval then truncates on
+  // each row's embedded zone (per-row multi-zone), independent of the session
+  // zone.
+  bool isTimestampWithTimeZone_{false};
   std::unique_ptr<cudf::scalar> oneScalar_;
   std::unique_ptr<cudf::scalar> threeScalar_;
   std::unique_ptr<cudf::scalar> negOneScalar_;
