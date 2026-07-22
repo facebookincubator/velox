@@ -1,0 +1,16 @@
+base_sha=06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+os=Ubuntu 24.04.4 LTS
+wsl_version=2
+kernel=6.18.33.2-microsoft-standard-WSL2
+source_filesystem=ext4
+io_uring_disabled=0
+ulimit_n=10240
+cmake=3.30.4
+compiler=GCC 13.3.0
+openssl=3.0.13
+azure_storage_data_lake_sdk=12.8.0
+folly=v2026.01.05.00
+fizz=v2026.01.05.00
+node=22.23.1
+azurite=3.36.0
+liburing=not measured; not required by Stage 0 reference baseline

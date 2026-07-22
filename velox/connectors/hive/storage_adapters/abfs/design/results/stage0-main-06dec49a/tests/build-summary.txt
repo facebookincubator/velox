@@ -1,0 +1,30 @@
+base_sha=06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+common_flags=-DVELOX_ENABLE_ABFS=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_HIVE_CONNECTOR=ON -DVELOX_ENABLE_EXEC=ON -DVELOX_ENABLE_BENCHMARKS=ON -DVELOX_BUILD_TESTING=ON -DCMAKE_PREFIX_PATH=<dependency-prefix>
+
+Release configure:
+command=cmake -S . -B <release-build> -DCMAKE_BUILD_TYPE=Release <common_flags>
+exit_code=0
+elapsed_seconds=19.35
+
+Release benchmark target:
+command=cmake --build <release-build> --target velox_abfs_parquet_benchmark --parallel 4
+exit_code=0
+
+Release test targets:
+command=cmake --build <release-build> --target velox_abfs_test velox_abfs_registration_test velox_dwio_parquet_reader_test --parallel 4
+exit_code=0
+elapsed_seconds=173.542
+
+Debug configure:
+command=cmake -S . -B <debug-build> -G Ninja -DCMAKE_BUILD_TYPE=Debug <common_flags>
+exit_code=0
+elapsed_seconds=30.544
+
+Debug targets:
+command=cmake --build <debug-build> --target velox_abfs_test velox_abfs_registration_test velox_dwio_parquet_reader_test velox_abfs_parquet_benchmark --parallel 4
+exit_code=0
+elapsed_seconds=3918.536
+
+Non-fatal configure warnings:
+- CMake policy CMP0167 warning while resolving Boost.
+- Existing VELOX_GTEST_INCUDE_DIR parent-scope warning.

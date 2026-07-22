@@ -1,0 +1,68 @@
+Stage 2 C2 representative commands
+Date: 2026-07-20
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+
+Run all commands from the WSL ext4 repository root. Build-directory and
+compiler paths below are repository- or home-relative placeholders; the
+checkpoint does not retain machine-private absolute paths.
+
+Ordinary Debug
+cmake --build abfs-stage1-debug --target \
+  velox_abfs_stage1_transport_test velox_abfs_stage2_runtime_test -j2
+ctest --test-dir abfs-stage1-debug \
+  -R '^velox_abfs_stage1_transport_test$' --output-on-failure
+ctest --test-dir abfs-stage1-debug \
+  -R '^velox_abfs_stage2_runtime_test$' --output-on-failure
+
+ASAN configure essentials
+cmake -S . -B abfs-stage2-asan-clang20-debug -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_C_COMPILER='<clang-20>' \
+  -DCMAKE_CXX_COMPILER='<clang++-20>' \
+  -DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS='<clang-scan-deps-20>' \
+  -DCMAKE_PREFIX_PATH='<deps-install>' \
+  -DVELOX_BUILD_TESTING=ON -DVELOX_ENABLE_ABFS=ON \
+  -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_HDFS=OFF \
+  -DVELOX_ENABLE_S3=OFF -DVELOX_ENABLE_GCS=OFF \
+  -Dfolly_SOURCE=BUNDLED \
+  -DFOLLY_LIBRARY_SANITIZE_ADDRESS=OFF \
+  -DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS=OFF \
+  -DCMAKE_CXX_FLAGS='-O1 -fsanitize=address -fno-omit-frame-pointer' \
+  -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address -fno-omit-frame-pointer'
+
+After configure, set FOLLY_LIBRARY_SANITIZE_ADDRESS to 1 only in the generated
+bundled-Folly folly-config.h. Global flags already instrument Folly; the marker
+enables its sanitizer wrapper dispatch without adding Folly's unrelated UBSAN
+and integer sanitizer set. This is a build-tree correction, not a source edit.
+
+cmake --build abfs-stage2-asan-clang20-debug --target \
+  velox_abfs_stage1_transport_test velox_abfs_stage2_runtime_test -j2
+export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
+ctest --test-dir abfs-stage2-asan-clang20-debug \
+  -R '^velox_abfs_stage1_transport_test$' --output-on-failure
+ctest --test-dir abfs-stage2-asan-clang20-debug \
+  -R '^velox_abfs_stage2_runtime_test$' --output-on-failure
+
+TSAN configure essentials
+cmake -S . -B abfs-stage2-tsan-clang20-debug -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_C_COMPILER='<clang-20>' \
+  -DCMAKE_CXX_COMPILER='<clang++-20>' \
+  -DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS='<clang-scan-deps-20>' \
+  -DCMAKE_PREFIX_PATH='<deps-install>' \
+  -DVELOX_BUILD_TESTING=ON -DVELOX_ENABLE_ABFS=ON \
+  -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_HDFS=OFF \
+  -DVELOX_ENABLE_S3=OFF -DVELOX_ENABLE_GCS=OFF \
+  -Dfolly_SOURCE=BUNDLED \
+  -DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS=OFF \
+  -DCMAKE_CXX_FLAGS='-O1 -fsanitize=thread -fno-omit-frame-pointer' \
+  -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=thread -fno-omit-frame-pointer'
+cmake --build abfs-stage2-tsan-clang20-debug --target \
+  velox_abfs_stage1_transport_test velox_abfs_stage2_runtime_test -j4
+export TSAN_OPTIONS=halt_on_error=1:abort_on_error=1
+setarch x86_64 -R \
+  abfs-stage2-tsan-clang20-debug/velox/connectors/hive/storage_adapters/abfs/tests/velox_abfs_stage2_runtime_test
+setarch x86_64 -R \
+  abfs-stage2-tsan-clang20-debug/velox/connectors/hive/storage_adapters/abfs/tests/velox_abfs_stage1_transport_test
+
+Focused repeat filters are recorded in the ASAN and TSAN result summaries.

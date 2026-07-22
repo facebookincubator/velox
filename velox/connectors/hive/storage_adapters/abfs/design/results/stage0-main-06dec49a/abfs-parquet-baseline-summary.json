@@ -1,0 +1,59 @@
+{
+  "base_sha": "06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e",
+  "mode": "synchronous ABFS over local Azurite",
+  "fixture": {
+    "rows_per_copy": 48000,
+    "copies": 8,
+    "result_rows": 384000,
+    "row_groups": 4,
+    "file_size_bytes": 938794,
+    "fixture_checksum": "16009607394047081120",
+    "result_checksum_mod_2_64": "17396394710119339264"
+  },
+  "validation": {
+    "exit_code": 0,
+    "matrix_rows": 9,
+    "matrix_complete": true,
+    "checksum_valid": true,
+    "thread_samples_valid": true,
+    "storage_counters_positive": true,
+    "storage_operations_equal_derived_downloads": true,
+    "http_request_count_observed": "unavailable",
+    "stderr_bytes": 0
+  },
+  "statistics": [
+    {
+      "io_executor_threads": 1,
+      "wall_us": {"mean": 47316.67, "sample_sd": 7349.47, "min": 41327, "max": 55518, "cv_percent": 15.53},
+      "total_cpu_us": {"mean": 45521.67, "sample_sd": 12470.26, "min": 36057, "max": 59652, "cv_percent": 27.39},
+      "storage_read_bytes_each_round": 1199104,
+      "storage_read_operations": [5, 4, 4],
+      "peak_sampled_threads": 20,
+      "peak_sampled_rss_kb": 125448
+    },
+    {
+      "io_executor_threads": 2,
+      "wall_us": {"mean": 38819.33, "sample_sd": 2354.51, "min": 36367, "max": 41062, "cv_percent": 6.07},
+      "total_cpu_us": {"mean": 37137.33, "sample_sd": 3076.17, "min": 34467, "max": 40501, "cv_percent": 8.28},
+      "storage_read_bytes_each_round": 1199104,
+      "storage_read_operations": [4, 4, 4],
+      "peak_sampled_threads": 20,
+      "peak_sampled_rss_kb": 133496
+    },
+    {
+      "io_executor_threads": 8,
+      "wall_us": {"mean": 34506.0, "sample_sd": 2364.89, "min": 32668, "max": 37174, "cv_percent": 6.85},
+      "total_cpu_us": {"mean": 37949.67, "sample_sd": 2728.03, "min": 35761, "max": 41006, "cv_percent": 7.19},
+      "storage_read_bytes_each_round": 1199104,
+      "storage_read_operations": [5, 3, 4],
+      "peak_sampled_threads": 27,
+      "peak_sampled_rss_kb": 140260
+    }
+  ],
+  "limitations": [
+    "Local Azurite and WSL measurements are for reproducibility and relative comparison only.",
+    "The data path is the synchronous Azure SDK default transport.",
+    "Derived Blob range downloads are inferred from the current one-download-per-preadv code path, not observed on the HTTP wire.",
+    "This baseline does not demonstrate native async, fibers, or io_uring."
+  ]
+}

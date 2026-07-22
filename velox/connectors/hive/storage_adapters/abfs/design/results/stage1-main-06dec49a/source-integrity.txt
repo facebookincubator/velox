@@ -1,0 +1,24 @@
+Windows and WSL copies were byte-identical for every Stage 1 C++ source at final validation.
+Each file contained exactly one copyright block and one source unit.
+
+905c59f8237746faa099e6c5070184f1849e9d6a0305c47b293f05ffc86a8cdb  velox/connectors/hive/storage_adapters/abfs/AsyncChannelFactory.h
+6e05ce1ec4883b3049e555e4737349fada849a98c07f0a0138e74bc9b7bb8076  velox/connectors/hive/storage_adapters/abfs/HttpConnection.h
+d7e5cb340b7691186168d811352f12cdc6ce2b965848340ef49801b3a54f07fd  velox/connectors/hive/storage_adapters/abfs/EventSocketChannelFactory.h
+bc59b6bec806f17e7261c650227d49b850faa949968104aace6f81ad35a7a40b  velox/connectors/hive/storage_adapters/abfs/EventSocketChannelFactory.cpp
+883811bdf063f1694b1f4ef0b04ef82463c3d0bc130dcec8cefac6bc3043a236  velox/connectors/hive/storage_adapters/abfs/FollyHttpConnection.h
+e39ccb10c1864afa16fc16909d510066824d2fcb04eab6fea26c0aa36ccb6aca  velox/connectors/hive/storage_adapters/abfs/FollyHttpConnection.cpp
+cdf6af12ff3fdce212feff4ac0d15355e6b31f9804bf5261924b50b172cee61c  velox/connectors/hive/storage_adapters/abfs/FollyHttpTransport.h
+22c0d68481d7464acd5a18d4fbb2df177137b35740e34c7be0e2a43efb90be18  velox/connectors/hive/storage_adapters/abfs/FollyHttpTransport.cpp
+9b87e35d0a572ba70472bc419f315dbccb8fc9c827e88d7f25456c0de838e84a  velox/connectors/hive/storage_adapters/abfs/FollyResponseBodyStream.h
+e792bb2eea04c755fd7e8f3587febfffc8dc88a8df6e8c6631cfa5220e30f13a  velox/connectors/hive/storage_adapters/abfs/FollyResponseBodyStream.cpp
+0ef59e239bbd3d48800b70b0e2bb9d5737a80ae9699ee49c7a02aac8b3bb6386  velox/connectors/hive/storage_adapters/abfs/tests/FollyHttpTransportTest.cpp
+6e87cf3e9e64b1f64ab8f4f3453cfa0f6089216b2554dccb97ee121dde2ea25d  velox/connectors/hive/storage_adapters/abfs/tests/FollyHttpTransportC1Test.cpp
+
+Stage 0 benchmark CMake block LF-normalized SHA-256:
+7b4af22ec2ddc0dcb812dc9d59edceb48262f31b9594a8a4453e1e230ba50e0d
+
+TLS fixtures:
+- Deterministic test-only P-256 root and leaf certificates.
+- Normal leaf chain verification: PASS; SAN DNS:localhost; hostname localhost: PASS.
+- Negative leaf chain verification: PASS; SAN DNS:wrong-host.test; hostname localhost: FAIL as required.
+- Validity: 2026-07-20 through 2036-07-17.

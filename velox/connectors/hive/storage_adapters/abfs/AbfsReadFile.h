@@ -23,11 +23,15 @@ class ConfigBase;
 }
 
 namespace facebook::velox::filesystems {
+class AbfsAsyncRuntime;
+
 class AbfsReadFile final : public ReadFile {
  public:
   explicit AbfsReadFile(
       std::string_view path,
-      const config::ConfigBase& config);
+      const config::ConfigBase& config,
+      std::shared_ptr<AbfsAsyncRuntime> asyncRuntime = nullptr,
+      size_t maxAsyncConnectionsPerEndpoint = 32);
 
   void initialize(const FileOptions& options);
 
@@ -50,6 +54,15 @@ class AbfsReadFile final : public ReadFile {
   uint64_t preadv(
       folly::Range<const common::Region*> regions,
       folly::Range<folly::IOBuf*> iobufs,
+      const FileIoContext& context = {}) const final;
+
+  /// Returns true when the native ABFS fiber read path is available.
+  bool hasPreadvAsync() const final;
+
+  /// Submits one vectored read to the native ABFS fiber runtime.
+  folly::SemiFuture<uint64_t> preadvAsync(
+      uint64_t offset,
+      const std::vector<folly::Range<char*>>& buffers,
       const FileIoContext& context = {}) const final;
 
   uint64_t size() const final;

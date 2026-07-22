@@ -1,0 +1,79 @@
+Stage 0 raw preflight artifact (sanitized)
+Date: 2026-07-19
+Verdict: PASS
+
+Base:
+sha=06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+checkout=detached WSL ext4 current-main checkout
+downstream_pr=not required; not a gate
+
+Environment:
+os=Ubuntu 24.04.4 WSL2
+kernel=6.18.33.2-microsoft-standard-WSL2
+filesystem=ext4
+io_uring_disabled=0
+ulimit_n=10240
+cmake=3.30.4
+gcc=13.3.0
+openssl=3.0.13
+node=22.23.1
+azurite=3.36.0
+
+Dependencies:
+azure_storage_data_lake_sdk=12.8.0; package_config=user-owned ext4 dependency prefix
+folly=v2026.01.05.00
+fizz=v2026.01.05.00
+liburing=not measured; not needed for Stage0 reference baseline
+
+Commands (private roots sanitized):
+PATH=<user-local-bin>:/usr/local/bin:/usr/bin:/bin
+CMAKE_PREFIX_PATH=<dependency-prefix>
+release_configure=cmake -S <repository-root> -B <release-build> -DCMAKE_BUILD_TYPE=Release -DVELOX_ENABLE_ABFS=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_HIVE_CONNECTOR=ON -DVELOX_ENABLE_EXEC=ON -DVELOX_ENABLE_BENCHMARKS=ON -DVELOX_BUILD_TESTING=ON -DCMAKE_PREFIX_PATH=<dependency-prefix>; result=PASS; elapsed=19.35s
+release_benchmark_build=cmake --build <release-build> --target velox_abfs_parquet_benchmark --parallel 4; result=PASS
+release_test_build=cmake --build <release-build> --target velox_abfs_test velox_abfs_registration_test velox_dwio_parquet_reader_test --parallel 4; result=PASS; elapsed=173.542s
+release_ctest=env PATH=<user-local-bin>:/usr/local/bin:/usr/bin:/bin ctest --test-dir <release-build> --output-on-failure --timeout 1800 -R '^(velox_abfs_test|velox_abfs_registration_test|velox_dwio_parquet_reader_test)$'; result=PASS; elapsed=64.49s
+benchmark=env PATH=<user-local-bin>:/usr/local/bin:/usr/bin:/bin timeout --signal=TERM --kill-after=30s 900s <release-build>/velox/connectors/hive/storage_adapters/abfs/tests/velox_abfs_parquet_benchmark; result=PASS
+debug_configure=cmake -S <repository-root> -B <debug-build> -G Ninja -DCMAKE_BUILD_TYPE=Debug -DVELOX_ENABLE_ABFS=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_HIVE_CONNECTOR=ON -DVELOX_ENABLE_EXEC=ON -DVELOX_ENABLE_BENCHMARKS=ON -DVELOX_BUILD_TESTING=ON -DCMAKE_PREFIX_PATH=<dependency-prefix>; result=PASS; elapsed=30.544s
+debug_build=cmake --build <debug-build> --target velox_abfs_test velox_abfs_registration_test velox_dwio_parquet_reader_test velox_abfs_parquet_benchmark --parallel 4; result=PASS; elapsed=3918.536s
+debug_ctest=env PATH=<user-local-bin>:/usr/local/bin:/usr/bin:/bin ctest --test-dir <debug-build> --output-on-failure --timeout 1800 -R '^(velox_abfs_test|velox_abfs_registration_test|velox_dwio_parquet_reader_test)$'; result=PASS; elapsed=87.73s
+configure_warnings_nonfatal=CMP0167; existing VELOX_GTEST_INCUDE_DIR parent-scope warning
+
+Tests:
+release=3/3 passed; Parquet=6.17s; ABFS=57.69s; registration=0.07s; total=64.16s; outer=64.49s
+debug=3/3 passed; Parquet=29.26s; ABFS=58.02s; registration=0.07s; total=87.57s; outer=87.73s
+failures=0; skips=0
+
+Benchmark:
+fixture=id:BIGINT,payload:BIGINT; seed=1000000007; rows=48000; row_groups=4; file_bytes=938794; copies=8; result_rows=384000
+fixture_checksum=16009607394047081120
+result_checksum_mod_2_64=17396394710119339264
+controls=three sequential rounds; IO executor threads=1,2,8; query drivers=8; cold cache; preload disabled; file-handle cache disabled; synchronous Azure SDK default transport over local Azurite
+each_round=storageReadBytes=1199104; table_scan_input_bytes=7327744; raw_input=9592832; rows/checksum stable
+storage_ops=derived one-download-per-current-ABFS-preadv count; wire HTTP count=unavailable
+summary_1=wall 47316.67us SD 7349.47 min 41327 max 55518 CV 15.53%; CPU 45521.67us SD 12470.26 min 36057 max 59652 CV 27.39%; ops 5/4/4; peak_threads 20; peak_rss_kib 125448
+summary_2=wall 38819.33us SD 2354.51 min 36367 max 41062 CV 6.07%; CPU 37137.33us SD 3076.17 min 34467 max 40501 CV 8.28%; ops 4/4/4; peak_threads 20; peak_rss_kib 133496
+summary_8=wall 34506.0us SD 2364.89 min 32668 max 37174 CV 6.85%; CPU 37949.67us SD 2728.03 min 35761 max 41006 CV 7.19%; ops 5/3/4; peak_threads 27; peak_rss_kib 140260
+interpretation=local sync wall means improve with more executor threads; process threads rise; no native async/fiber/io_uring claim; WSL/Azurite is not production performance
+
+Raw artifacts (repository-relative):
+csv=velox/connectors/hive/storage_adapters/abfs/design/results/stage0-main-06dec49a/abfs-parquet-baseline.csv
+summary_json=velox/connectors/hive/storage_adapters/abfs/design/results/stage0-main-06dec49a/abfs-parquet-baseline-summary.json
+stderr=velox/connectors/hive/storage_adapters/abfs/design/results/stage0-main-06dec49a/abfs-parquet-baseline.stderr.txt (empty)
+run=velox/connectors/hive/storage_adapters/abfs/design/results/stage0-main-06dec49a/abfs-parquet-baseline-run.txt
+environment=velox/connectors/hive/storage_adapters/abfs/design/results/stage0-main-06dec49a/environment.txt
+build=velox/connectors/hive/storage_adapters/abfs/design/results/stage0-main-06dec49a/tests/build-summary.txt
+release_ctest=velox/connectors/hive/storage_adapters/abfs/design/results/stage0-main-06dec49a/tests/release-ctest.txt
+debug_ctest=velox/connectors/hive/storage_adapters/abfs/design/results/stage0-main-06dec49a/tests/debug-ctest.txt
+preflight=velox/connectors/hive/storage_adapters/abfs/design/preflight/stage-0-preflight.txt
+
+C0:
+clean_baseline_tests=PASS
+reproducible_current_main_without_downstream_pr=PASS
+repeatable_release_benchmark_and_input_identity=PASS
+three_round_variance_recorded=PASS
+sanitized_reproduction=PASS
+
+Unresolved risks:
+WSL/Azurite only; one-thread variance; derived request count; no async behavior in C0; native Linux/real Azure later; liburing/io_uring/Fizz compatibility later.
+
+Next entry: Stage 1 only. Read spec/report, keep the Stage 0 harness unchanged, prove the Azure fiber bridge over reference EventBase with the real synchronous SDK, use retries disabled only in the isolated spike, use a deterministic delayed HTTP/TLS server, and establish executable C1 criteria. Downstream reader integration is deferred and is not a Stage 1 gate.

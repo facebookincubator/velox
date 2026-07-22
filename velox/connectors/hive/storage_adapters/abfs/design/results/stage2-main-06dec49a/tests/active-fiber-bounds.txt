@@ -1,0 +1,60 @@
+Stage 2 active-request and fiber-stack bound evidence
+Date: 2026-07-20
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+Status: PASS (non-sanitized Debug build)
+
+Scope
+- AbfsAsyncRuntime.h
+- AbfsAsyncRuntime.cpp
+- tests/AbfsAsyncRuntimeTest.cpp
+
+Configuration
+- EventBase/FiberManager shards: 3
+- Global maximum active requests: 3
+- Global maximum inactive queued requests: 2
+- Configured stack size per request fiber: 131072 bytes
+- Folly stack sampling interval: every fiber
+
+Functional proof
+The test selects one endpoint key for each process-local runtime shard, blocks
+one admitted request on every shard, waits until all three fibers have started,
+then submits two inactive requests and one overload request. The snapshot shows
+exactly three active requests and two queued requests. The overload future is
+ready and fails. Releasing all active requests executes both queued requests.
+
+The runtime reports configured stack capacity separately from observed stack
+use. Configured peak capacity is peakActiveRequests * fiberStackBytes. Measured
+high-water use comes from Folly recordStackEvery sampling and
+FiberManager::stackHighWatermark(); it is not inferred from configuration.
+Folly disables this measurement under ASAN, where the metric remains zero.
+
+Focused output
+STAGE2_BOUND_METRICS shards=3 peak_active=3 max_queued=2 fiber_stack_bytes=131072 estimated_peak_fiber_stack_bytes=393216 measured_fiber_stack_high_watermark_bytes=4944
+
+The measured 4944-byte value is evidence from this Debug execution, not a
+production sizing recommendation or a claim that all workloads use the same
+stack depth. The configured 393216-byte value is capacity, not actual use.
+
+Overflow proof
+A configuration whose maxActiveRequests * fiberStackBytes cannot be represented
+by size_t is rejected during runtime construction.
+
+Commands
+cmake --build abfs-stage1-debug --target velox_abfs_stage2_runtime_test -j2
+abfs-stage1-debug/velox/connectors/hive/storage_adapters/abfs/tests/velox_abfs_stage2_runtime_test --gtest_filter=AbfsAsyncRuntimeTest.BoundsActiveAndQueuedRequestsAcrossShards:AbfsAsyncRuntimeTest.RejectsOverflowingFiberStackCapacity
+abfs-stage1-debug/velox/connectors/hive/storage_adapters/abfs/tests/velox_abfs_stage2_runtime_test --gtest_filter=AbfsAsyncRuntimeTest.BoundsActiveAndQueuedRequestsAcrossShards:AbfsAsyncRuntimeTest.RejectsOverflowingFiberStackCapacity --gtest_repeat=100 --gtest_break_on_failure --gtest_brief=1
+ctest --test-dir abfs-stage1-debug -R '^velox_abfs_stage2_runtime_test$' --output-on-failure
+ctest --test-dir abfs-stage1-debug -R '^velox_abfs_stage1_transport_test$' --output-on-failure
+
+Results
+- Focused active/fiber-bound and overflow tests: passed.
+- Focused tests, 100 in-process repetitions: 100 of 100 passed.
+- Complete Stage 2 runtime suite: passed.
+- Complete Stage 1 transport suite: passed.
+- clang-format 21.1.2 check: passed.
+- Git whitespace, LF endings, and editor diagnostics: clean.
+- Frozen Stage 0 benchmark block hash: unchanged.
+
+Sanitizer status
+This artifact contains no ASAN or TSAN claim. Separate sanitizer builds and
+C2 sanitizer evidence remain required.
