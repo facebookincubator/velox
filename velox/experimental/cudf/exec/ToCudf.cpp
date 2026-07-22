@@ -26,8 +26,8 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/PrestoAggregateFunctions.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
@@ -171,13 +171,13 @@ bool CompileState::compile(bool allowCpuFallback) {
       // operator's GPU replacement so the whole pipeline stays on CPU.
       auto prevPlanNode =
           getPlanNode(operators[operatorIndex - 1]->planNodeId());
-      if (prevPlanNode &&
-          isTypeSupportedByCudf(prevPlanNode->outputType())) {
-        replaceOp.push_back(std::make_unique<CudfFromVelox>(
-            id,
-            planNode->outputType(),
-            ctx,
-            planNode->id() + "-from-velox"));
+      if (prevPlanNode && isTypeSupportedByCudf(prevPlanNode->outputType())) {
+        replaceOp.push_back(
+            std::make_unique<CudfFromVelox>(
+                id,
+                planNode->outputType(),
+                ctx,
+                planNode->id() + "-from-velox"));
       } else {
         skipGpuReplacement = true;
       }
