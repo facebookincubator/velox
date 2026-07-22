@@ -165,6 +165,12 @@ jobs:
             rm -rf /tmp/build # cleanup to avoid issues with disk space
           fi
 
+      # TODO: Remove after the thrift-deps image includes CMake 4.3.2.
+      - name: Install Required CMake Version
+        run: |
+          UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force cmake@4.3.2
+          cmake --version
+
       - uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
