@@ -23,6 +23,7 @@
 #include <cudf/scalar/scalar.hpp>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace cudf {
@@ -31,7 +32,11 @@ class tree;
 }
 } // namespace cudf
 
-namespace facebook::velox::cudf_velox {
+namespace facebook::velox {
+namespace tz {
+class TimeZone;
+}
+namespace cudf_velox {
 
 // Convert subfield filters to cudf AST
 cudf::ast::expression const& createAstFromSubfieldFilter(
@@ -39,7 +44,9 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Filter& filter,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema);
+    const RowTypePtr& inputRowSchema,
+    std::optional<cudf::data_type> timestampType = std::nullopt,
+    const tz::TimeZone* sessionTimezone = nullptr);
 
 // Build a single AST expression representing logical AND of all filters in
 // 'subfieldFilters'. The resulting expression reference is owned by the passed
@@ -48,6 +55,9 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
     const common::SubfieldFilters& subfieldFilters,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema);
+    const RowTypePtr& inputRowSchema,
+    std::optional<cudf::data_type> timestampType = std::nullopt,
+    const tz::TimeZone* sessionTimezone = nullptr);
 
-} // namespace facebook::velox::cudf_velox
+} // namespace cudf_velox
+} // namespace facebook::velox
