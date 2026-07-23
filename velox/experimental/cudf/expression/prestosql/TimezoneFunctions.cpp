@@ -27,7 +27,6 @@
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
-#include <cuda_runtime_api.h>
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/copying.hpp>
@@ -53,6 +52,8 @@
 #include <cudf/unary.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/wrappers/durations.hpp>
+
+#include <cuda_runtime_api.h>
 
 #include <cctype>
 #include <limits>
@@ -397,8 +398,9 @@ LocalAndOffset localAndOffset(
       mr);
   auto localTs =
       bitcastColumn(localMillis->view(), cudf::type_id::TIMESTAMP_MILLISECONDS);
-  return {std::make_unique<cudf::column>(localTs, stream, mr),
-          std::move(offsetSeconds)};
+  return {
+      std::make_unique<cudf::column>(localTs, stream, mr),
+      std::move(offsetSeconds)};
 }
 
 // Classifies the trailing Joda time-zone token so the caller can render it: an
@@ -793,8 +795,8 @@ void checkOffsetMagnitudeInRange(
       hi, 840, "Invalid timezone offset in from_iso8601_timestamp (minutes)");
 }
 
-// True if any row of the boolean mask is set. An empty or all-null mask -> false
-// (so a batch of only SQL-NULL rows raises no error).
+// True if any row of the boolean mask is set. An empty or all-null mask ->
+// false (so a batch of only SQL-NULL rows raises no error).
 bool anyRowTrue(
     const cudf::column_view& mask,
     rmm::cuda_stream_view stream,
@@ -1136,8 +1138,8 @@ class ParseDatetimeFunction : public CudfFunction {
       hasOffset_ = true;
       // Trailing signed offset with an optional colon, matching both "-09:00"
       // and "-0900". Groups: 0 sign, 1 hours, 2 minutes.
-      offsetProgram_ = cudf::strings::regex_program::create(
-          "([+-])([0-9]{2}):?([0-9]{2})$");
+      offsetProgram_ =
+          cudf::strings::regex_program::create("([+-])([0-9]{2}):?([0-9]{2})$");
     } else if (trailing != TrailingZone::kNone) {
       VELOX_NYI("parse_datetime zone-name token is not supported on GPU");
     }
@@ -1213,15 +1215,16 @@ class FromIso8601Function : public CudfFunction {
     // Permissive ISO8601 (date-anchored). The year is required; month, day, the
     // time fields, the fractional seconds and the zone suffix are all optional,
     // and missing components default to the start of the period (matching CPU).
-    // A 'T' may appear with no time after it ("2021-01-01T", "2021T+14:00"); the
-    // date/time separator is a literal 'T' only, since CPU rejects a space.
+    // A 'T' may appear with no time after it ("2021-01-01T", "2021T+14:00");
+    // the date/time separator is a literal 'T' only, since CPU rejects a space.
     // Time-only inputs ("T11:38") carry no date; eval prefixes the epoch date
-    // "1970-01-01" to them before this program runs, so the single date-anchored
-    // program still covers them. The whole zone suffix is captured (group 7) to
-    // tell an absent suffix from an explicit "Z"; the sign is captured on its own
-    // (group 8) so a sub-hour offset like "-00:30" keeps it. Groups: 0 year, 1
-    // month, 2 day, 3 hour, 4 minute, 5 second, 6 fraction, 7 zone suffix, 8
-    // sign, 9 offset hours, 10 offset minutes. Batch-independent, so build once.
+    // "1970-01-01" to them before this program runs, so the single
+    // date-anchored program still covers them. The whole zone suffix is
+    // captured (group 7) to tell an absent suffix from an explicit "Z"; the
+    // sign is captured on its own (group 8) so a sub-hour offset like "-00:30"
+    // keeps it. Groups: 0 year, 1 month, 2 day, 3 hour, 4 minute, 5 second, 6
+    // fraction, 7 zone suffix, 8 sign, 9 offset hours, 10 offset minutes.
+    // Batch-independent, so build once.
     isoProgram_ = cudf::strings::regex_program::create(
         "^([0-9]{4})(?:-([0-9]{2}))?(?:-([0-9]{2}))?"
         "(?:T([0-9]{2})?(?::([0-9]{2}))?(?::([0-9]{2}))?)?"
@@ -1291,16 +1294,14 @@ class FromIso8601Function : public CudfFunction {
     // cudf's extract yields an empty string (not a null) for an optional group
     // that did not participate in an otherwise-matching row, so replace_nulls
     // alone leaves an absent month or day empty. to_timestamps then reads the
-    // empty numeric field as 0 and underflows, e.g. "2021" (no month/day) parses
-    // as 2020-11-30 instead of 2021-01-01. Month and day must default to "01",
-    // so replace an empty (or null) capture explicitly. The time fields default
-    // to 0, which an empty string already yields, so they keep replace_nulls.
+    // empty numeric field as 0 and underflows, e.g. "2021" (no month/day)
+    // parses as 2020-11-30 instead of 2021-01-01. Month and day must default to
+    // "01", so replace an empty (or null) capture explicitly. The time fields
+    // default to 0, which an empty string already yields, so they keep
+    // replace_nulls.
     auto orFirstOfPeriod = [&](int index) {
       auto filled = cudf::replace_nulls(
-          g.column(index),
-          cudf::string_scalar("01", true, stream),
-          stream,
-          mr);
+          g.column(index), cudf::string_scalar("01", true, stream), stream, mr);
       auto length = cudf::strings::count_characters(
           cudf::strings_column_view(filled->view()), stream, mr);
       auto isEmpty = cudf::binary_operation(
@@ -1335,13 +1336,14 @@ class FromIso8601Function : public CudfFunction {
         mr);
 
     // Match CPU exactly for every non-null row: parse it, or throw. Genuine
-    // SQL-NULL rows are excluded via is_valid, so they keep propagating as NULL.
-    // A non-null row falls into one of three buckets:
+    // SQL-NULL rows are excluded via is_valid, so they keep propagating as
+    // NULL. A non-null row falls into one of three buckets:
     //   - matches the in-range program (isoProgram_) and names a real calendar
     //     date -> parsed normally below;
     //   - matches neither program, or matches isoProgram_ but names a
     //     nonexistent date (month/day out of range) -> malformed, exactly as
-    //     CPU's fromTimestampWithTimezoneString / isValidDate -> VELOX_USER_FAIL;
+    //     CPU's fromTimestampWithTimezoneString / isValidDate ->
+    //     VELOX_USER_FAIL;
     //   - matches only the extreme-year program -> CPU-valid but beyond what
     //     to_timestamps (int16 %Y) can represent -> VELOX_NYI.
     // Malformed is checked first so a batch mixing malformed + extreme rows
@@ -1368,8 +1370,8 @@ class FromIso8601Function : public CudfFunction {
           cudf::data_type{kBool8},
           stream,
           mr);
-      auto unknown =
-          cudf::unary_operation(known->view(), cudf::unary_operator::NOT, stream, mr);
+      auto unknown = cudf::unary_operation(
+          known->view(), cudf::unary_operator::NOT, stream, mr);
       auto malformedShape = cudf::binary_operation(
           nonNull->view(),
           unknown->view(),
@@ -1380,12 +1382,13 @@ class FromIso8601Function : public CudfFunction {
 
       // cudf::strings::to_timestamps normalizes an out-of-range month or day
       // (month 13 -> next year, day 30 in Feb -> March) instead of failing, so
-      // "2021-13-45" matches isoProgram_ yet is not a real date. Parse the date,
-      // read month and day back, and require they equal the parsed input. Any
-      // normalization moves the value into a different month (a day underflow or
-      // overflow always crosses a month boundary), so comparing month and day
-      // catches every invalid combination, including a non-leap Feb 29. The
-      // 4-digit year is regex-bounded to [0000, 9999], so it always round-trips.
+      // "2021-13-45" matches isoProgram_ yet is not a real date. Parse the
+      // date, read month and day back, and require they equal the parsed input.
+      // Any normalization moves the value into a different month (a day
+      // underflow or overflow always crosses a month boundary), so comparing
+      // month and day catches every invalid combination, including a non-leap
+      // Feb 29. The 4-digit year is regex-bounded to [0000, 9999], so it always
+      // round-trips.
       const auto int16Type = cudf::data_type{cudf::type_id::INT16};
       auto dateTs = cudf::strings::to_timestamps(
           cudf::strings_column_view(ymd->view()),

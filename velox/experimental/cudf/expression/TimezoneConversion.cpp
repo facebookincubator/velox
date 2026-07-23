@@ -191,8 +191,8 @@ std::unique_ptr<cudf::table> buildForwardTable(
 // Builds the local-keyed inverse table [localInstant (TIMESTAMP_SECONDS),
 // offset (DURATION_SECONDS), gap (BOOL8)] from the zone's transitions. A
 // transition from prevOffset to curOffset at UTC instant `inst` shifts the wall
-// clock between inst+prevOffset and inst+curOffset. A forward shift (curOffset >
-// prevOffset, spring forward) makes that local range nonexistent, so it is
+// clock between inst+prevOffset and inst+curOffset. A forward shift (curOffset
+// > prevOffset, spring forward) makes that local range nonexistent, so it is
 // flagged as a gap; a backward shift (fall back) makes it ambiguous, and
 // keeping the pre-transition offset over the overlap matches toGMT's kEarliest
 // choice (so only the later local boundary needs a breakpoint). Synchronizes
