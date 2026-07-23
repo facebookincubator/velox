@@ -521,6 +521,12 @@ void PrestoSqlPlanNodeVisitor::visit(
         sql << ")";
       }
       break;
+    case core::JoinType::kRightAnti:
+      // Build-side mirror of kAnti; only the NOT EXISTS form exists.
+      sql << " FROM " << *buildTableName << " WHERE NOT EXISTS (SELECT * FROM "
+          << *probeTableName << " WHERE " << joinConditionAsSql(node);
+      sql << ")";
+      break;
     default:
       VELOX_UNREACHABLE(
           "Unknown join type: {}", static_cast<int>(node.joinType()));
