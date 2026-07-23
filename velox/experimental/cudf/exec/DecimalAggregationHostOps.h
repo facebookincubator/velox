@@ -19,6 +19,7 @@
 
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_view.hpp>
+#include <cudf/table/table.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 
@@ -38,6 +39,22 @@ namespace facebook::velox::cudf_velox {
 void validateIntermediateColumnType(cudf::column_view const& column);
 
 /**
+ * Casts a DECIMAL32 column up to DECIMAL64 (scale preserved). Allocates the
+ * casted column from the temporary memory resource into holder and returns its
+ * view. Lifetime stays valid only while holder is alive.
+ *
+ * @param inputCol DECIMAL32 input column.
+ * @param holder receives ownership of the casted column when inputCol is
+ *        DECIMAL32; unchanged otherwise.
+ * @param stream CUDA stream for device work.
+ * @return view of inputCol or of the column stored in holder.
+ */
+cudf::column_view castDecimal32InputToDecimal64(
+    cudf::column_view inputCol,
+    std::unique_ptr<cudf::column>& holder,
+    rmm::cuda_stream_view stream);
+
+/**
  * Casts a DECIMAL64 column up to DECIMAL128 (scale preserved) so a subsequent
  * SUM accumulates in 128 bits instead of wrapping. Allocates the casted column
  * from the temporary memory resource into holder and returns its view. Lifetime
@@ -53,6 +70,41 @@ cudf::column_view castDecimal64InputToDecimal128(
     cudf::column_view inputCol,
     std::unique_ptr<cudf::column>& holder,
     rmm::cuda_stream_view stream);
+
+/**
+ * Materializes dictionary-encoded fixed-point columns and casts them to the
+ * expected cuDF decimal type when the storage width differs (e.g. DECIMAL32 to
+ * DECIMAL64). Returns nullptr when the input column can be used as-is.
+ *
+ * @param inputCol input column.
+ * @param expectedType target cuDF type from veloxToCudfDataType.
+ * @param stream CUDA stream for device work.
+ * @param mr memory resource for allocated columns.
+ * @return casted column, or nullptr if inputCol already matches expectedType
+ *         or the types are not fixed-point decimals.
+ */
+std::unique_ptr<cudf::column> castDecimalColumnIfNeeded(
+    cudf::column_view inputCol,
+    cudf::data_type expectedType,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+/**
+ * Aligns each table column's cuDF decimal storage width to the Velox output
+ * schema. Preserves scale and only casts when the actual type differs from
+ * veloxToCudfDataType for the corresponding output column.
+ *
+ * @param table input table (may be moved from).
+ * @param outputType Velox row type describing expected column types.
+ * @param stream CUDA stream for device work.
+ * @param mr memory resource for allocated columns.
+ * @return table with decimal columns widened as needed.
+ */
+std::unique_ptr<cudf::table> alignTableColumnsToOutputType(
+    std::unique_ptr<cudf::table> table,
+    const RowTypePtr& outputType,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 /**
  * Ensures the partial-row count column is INT64, casting with the temporary

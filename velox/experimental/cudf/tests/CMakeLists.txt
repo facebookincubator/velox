@@ -115,6 +115,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_decimal_widening_test
+  SOURCES Main.cpp DecimalWideningTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_vector_test
   SOURCES Main.cpp CudfVectorTest.cpp
   LIBS velox_cudf_vector velox_vector_test_lib cudf::cudf

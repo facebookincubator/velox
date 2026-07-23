@@ -1136,8 +1136,11 @@ RowVectorPtr CudfWindow::doGetOutput() {
           : sortedView.column(*inputColIdx);
       if (baseName == "sum" &&
           func.functionCall->inputs()[0]->type()->isDecimal()) {
+        std::unique_ptr<cudf::column> castedDecimal32;
+        auto widened = castDecimal32InputToDecimal64(
+            inputCol, castedDecimal32, stream_);
         inputCol = castDecimal64InputToDecimal128(
-            inputCol, decimalSumInputOwners[funcIndex], stream_);
+            widened, decimalSumInputOwners[funcIndex], stream_);
       }
       const bool isFullPartition =
           isFullPartitionFrame(func, !sortKeyIndices_.empty());

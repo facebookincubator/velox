@@ -22,9 +22,25 @@
 
 #include "velox/common/base/Exceptions.h"
 
+#include <cudf/dictionary/dictionary_column_view.hpp>
+#include <cudf/dictionary/encode.hpp>
+#include <cudf/fixed_point/fixed_point.hpp>
+#include <cudf/table/table.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/traits.hpp>
 
 namespace facebook::velox::cudf_velox {
+
+namespace {
+
+cudf::data_type physicalColumnType(cudf::column_view column) {
+  if (cudf::is_dictionary(column.type())) {
+    return cudf::dictionary_column_view{column}.keys().type();
+  }
+  return column.type();
+}
+
+} // namespace
 
 void validateIntermediateColumnType(cudf::column_view const& column) {
   // fmt does not understand cudf::type_id enum class
@@ -34,6 +50,21 @@ void validateIntermediateColumnType(cudf::column_view const& column) {
       static_cast<int>(cudf::type_id::STRING),
       "Expected serialized decimal aggregation state: Velox VARBINARY represented as cuDF STRING (got type {})",
       colType);
+}
+
+cudf::column_view castDecimal32InputToDecimal64(
+    cudf::column_view inputCol,
+    std::unique_ptr<cudf::column>& holder,
+    rmm::cuda_stream_view stream) {
+  if (inputCol.type().id() != cudf::type_id::DECIMAL32) {
+    return inputCol;
+  }
+  holder = cudf::cast(
+      inputCol,
+      cudf::data_type{cudf::type_id::DECIMAL64, inputCol.type().scale()},
+      stream,
+      get_temp_mr());
+  return holder->view();
 }
 
 cudf::column_view castDecimal64InputToDecimal128(
@@ -49,6 +80,73 @@ cudf::column_view castDecimal64InputToDecimal128(
       stream,
       get_temp_mr());
   return holder->view();
+}
+
+std::unique_ptr<cudf::column> castDecimalColumnIfNeeded(
+    cudf::column_view inputCol,
+    cudf::data_type expectedType,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  cudf::column_view valueCol = inputCol;
+  std::unique_ptr<cudf::column> decoded;
+  if (cudf::is_dictionary(inputCol.type())) {
+    decoded = cudf::dictionary::decode(
+        cudf::dictionary_column_view{inputCol}, stream, mr);
+    valueCol = decoded->view();
+  }
+
+  if (valueCol.type() == expectedType) {
+    return decoded;
+  }
+  if (!cudf::is_fixed_point(valueCol.type()) &&
+      !cudf::is_fixed_point(expectedType)) {
+    return decoded;
+  }
+  return cudf::cast(valueCol, expectedType, stream, mr);
+}
+
+std::unique_ptr<cudf::table> alignTableColumnsToOutputType(
+    std::unique_ptr<cudf::table> table,
+    const RowTypePtr& outputType,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto columns = table->release();
+  const auto numColumns = columns.size();
+  const auto numOutputColumns =
+      std::min(numColumns, static_cast<size_t>(outputType->size()));
+
+  bool needsRebuild = false;
+  for (size_t i = 0; i < numOutputColumns; ++i) {
+    const auto columnView = columns[i]->view();
+    const auto expectedType = veloxToCudfDataType(outputType->childAt(i));
+    const auto actualType = physicalColumnType(columnView);
+    if (cudf::is_dictionary(columnView.type()) ||
+        (actualType != expectedType &&
+         (cudf::is_fixed_point(actualType) ||
+          cudf::is_fixed_point(expectedType)))) {
+      needsRebuild = true;
+      break;
+    }
+  }
+
+  if (!needsRebuild) {
+    return std::make_unique<cudf::table>(std::move(columns));
+  }
+
+  std::vector<std::unique_ptr<cudf::column>> alignedColumns;
+  alignedColumns.reserve(numColumns);
+  for (size_t i = 0; i < numColumns; ++i) {
+    if (i < numOutputColumns) {
+      const auto expectedType = veloxToCudfDataType(outputType->childAt(i));
+      if (auto casted = castDecimalColumnIfNeeded(
+              columns[i]->view(), expectedType, stream, mr)) {
+        alignedColumns.push_back(std::move(casted));
+        continue;
+      }
+    }
+    alignedColumns.push_back(std::move(columns[i]));
+  }
+  return std::make_unique<cudf::table>(std::move(alignedColumns));
 }
 
 std::unique_ptr<cudf::column> castCountColumnToInt64(
