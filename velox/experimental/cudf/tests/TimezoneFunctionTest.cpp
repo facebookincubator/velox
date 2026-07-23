@@ -269,7 +269,8 @@ TEST_F(TimezoneFunctionTest, timezoneMinuteMixedZones) {
   assertMatchesCpu("timezone_minute(c0)", input);
 }
 
-// Mixed zones plus a null row: the null must stay null through the per-row path.
+// Mixed zones plus a null row: the null must stay null through the per-row
+// path.
 TEST_F(TimezoneFunctionTest, timezoneHourMixedZonesWithNull) {
   auto input = makeRowVector({makeNullableFlatVector<int64_t>(
       {pack(1'609'466'400'000, tz::getTimeZoneID("America/Los_Angeles")),
@@ -436,14 +437,14 @@ TEST_F(TimezoneFunctionTest, fromUnixtimeWithHoursMinutes) {
   assertMatchesCpu("from_unixtime(c0, 7, 30)", doubleInput(1'609'466'400.0));
 }
 
-// Reproducer: from_unixtime(double, bigint, bigint) computes the fixed offset as
-// hours*60 + minutes. INT64_MAX hours overflows that int64 product. CPU
+// Reproducer: from_unixtime(double, bigint, bigint) computes the fixed offset
+// as hours*60 + minutes. INT64_MAX hours overflows that int64 product. CPU
 // (FromUnixtimeFunction) uses checkedMultiply/checkedPlus and throws; the GPU
-// registration multiplies unchecked, then casts to int32 -- on this platform the
-// UB wraps to -60, an in-range offset tz::getTimeZoneID happily accepts. Red
-// until the GPU mirrors CPU's checked arithmetic. compileExpression succeeds on
-// both (the CPU arithmetic error is a user error captured in initialize() and
-// re-thrown at eval); both throws carry "overflow".
+// registration multiplies unchecked, then casts to int32 -- on this platform
+// the UB wraps to -60, an in-range offset tz::getTimeZoneID happily accepts.
+// Red until the GPU mirrors CPU's checked arithmetic. compileExpression
+// succeeds on both (the CPU arithmetic error is a user error captured in
+// initialize() and re-thrown at eval); both throws carry "overflow".
 TEST_F(TimezoneFunctionTest, fromUnixtimeHoursMinutesOverflowRejectedLikeCpu) {
   auto input = doubleInput(0.0);
   auto exprSet = compileExpression(
@@ -515,8 +516,9 @@ TEST_F(TimezoneFunctionTest, parseDatetime) {
 // When the Joda format carries a colon offset token (ZZ), CPU folds the offset
 // into the UTC instant AND packs the parsed fixed-offset zone key, so
 // timezone_hour reports -9 and to_iso8601 prints -09:00. GPU currently packs
-// GMT (timezone_hour = 0, to_iso8601 = Z). Compare through projections that read
-// the zone key, since assertMatchesCpu on the TSWTZ value alone ignores it.
+// GMT (timezone_hour = 0, to_iso8601 = Z). Compare through projections that
+// read the zone key, since assertMatchesCpu on the TSWTZ value alone ignores
+// it.
 TEST_F(TimezoneFunctionTest, parseDatetimePreservesParsedOffset) {
   auto input = varcharInput("2021-01-01 02:00:00 -09:00");
   assertMatchesCpu(
@@ -721,7 +723,8 @@ TEST_F(TimezoneFunctionTest, fromIso8601MalformedThrowsLikeCpu) {
   auto input = varcharInput("not-a-timestamp");
   auto exprSet =
       compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
-  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 
@@ -731,7 +734,8 @@ TEST_F(TimezoneFunctionTest, fromIso8601SpaceSeparatorThrowsLikeCpu) {
   auto input = varcharInput("2021-01-02 11:38");
   auto exprSet =
       compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
-  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 
@@ -740,14 +744,16 @@ TEST_F(TimezoneFunctionTest, fromIso8601EmptyStringThrowsLikeCpu) {
   auto input = varcharInput("");
   auto exprSet =
       compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
-  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 TEST_F(TimezoneFunctionTest, fromIso8601BareTThrowsLikeCpu) {
   auto input = varcharInput("T");
   auto exprSet =
       compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
-  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 
@@ -760,14 +766,16 @@ TEST_F(TimezoneFunctionTest, fromIso8601InvalidMonthDayThrowsLikeCpu) {
   auto input = varcharInput("2021-13-45");
   auto exprSet =
       compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
-  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 TEST_F(TimezoneFunctionTest, fromIso8601InvalidFebruaryThrowsLikeCpu) {
   auto input = varcharInput("2021-02-30");
   auto exprSet =
       compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
-  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 
