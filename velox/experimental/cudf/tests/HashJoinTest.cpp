@@ -9480,4 +9480,56 @@ TEST_F(HashJoinTest, emptyBuildWithDebugEnabled) {
       .run();
 }
 
+// Verify that cuDF hash join works correctly with mixed grouped execution.
+// In mixed mode the build runs ungrouped while the probe runs in grouped
+// split groups.  CudfHashJoinBuild/CudfHashJoinProbe use custom join bridges
+// (getCustomJoinBridge), which requires DriverFactory::needsCustomJoinBridges()
+// to correctly include the bridge for the ungrouped factory and exclude it from
+// grouped factories.  Without this, the probe hangs waiting on an empty bridge.
+TEST_F(HashJoinTest, mixedGroupedExecution) {
+  auto vectors = makeVectors(probeType_, 4, 20);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId probeScanNodeId;
+  core::PlanNodeId buildScanNodeId;
+
+  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(probeType_)
+                  .capturePlanNodeId(probeScanNodeId)
+                  .project({"t_k1 as x"})
+                  .hashJoin(
+                      {"x"},
+                      {"y"},
+                      PlanBuilder(planNodeIdGenerator, pool_.get())
+                          .tableScan(probeType_)
+                          .capturePlanNodeId(buildScanNodeId)
+                          .project({"t_k1 as y"})
+                          .planNode(),
+                      "",
+                      {"x", "y"})
+                  .planNode();
+
+  constexpr int32_t numSplitGroups = 2;
+  std::vector<exec::Split> probeSplits;
+  for (int32_t i = 0; i < numSplitGroups; ++i) {
+    probeSplits.push_back(
+        exec::Split(makeHiveConnectorSplit(filePath->getPath()), i));
+  }
+
+  auto results =
+      AssertQueryBuilder(plan)
+          .splits(probeScanNodeId, std::move(probeSplits))
+          .splits(
+              buildScanNodeId, {makeHiveConnectorSplit(filePath->getPath())})
+          .executionStrategy(core::ExecutionStrategy::kGrouped)
+          .groupedExecutionLeafNodeIds({probeScanNodeId})
+          .numSplitGroups(numSplitGroups)
+          .numConcurrentSplitGroups(1)
+          .copyResults(pool_.get());
+
+  ASSERT_GT(results->size(), 0);
+}
+
 } // namespace

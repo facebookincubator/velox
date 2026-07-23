@@ -74,6 +74,32 @@ bool eagerFlush(const core::PlanNode& node) {
   return eagerFlush(*node.sources()[0]);
 }
 
+// Collects plan node IDs whose join bridges this factory must create.
+// In mixed execution mode some joins span ungrouped (build) and grouped (probe)
+// pipelines.  The bridges for those joins must be created by the ungrouped
+// factory and skipped by grouped factories.  'mixedNodeIds' identifies those
+// cross-mode joins; 'match' selects plan nodes that use the bridge type.
+template <typename MatchFn>
+std::vector<core::PlanNodeId> collectJoinBridgeNodeIds(
+    const std::vector<core::PlanNodePtr>& planNodes,
+    bool groupedExecution,
+    const folly::F14FastSet<core::PlanNodeId>& mixedNodeIds,
+    const MatchFn& match) {
+  std::vector<core::PlanNodeId> planNodeIds;
+  if (!groupedExecution && !mixedNodeIds.empty()) {
+    planNodeIds.insert(
+        planNodeIds.end(), mixedNodeIds.begin(), mixedNodeIds.end());
+  }
+  for (const auto& planNode : planNodes) {
+    if (match(planNode)) {
+      if (!groupedExecution || !mixedNodeIds.contains(planNode->id())) {
+        planNodeIds.emplace_back(planNode->id());
+      }
+    }
+  }
+  return planNodeIds;
+}
+
 } // namespace
 
 namespace detail {
@@ -434,42 +460,38 @@ void LocalPlanner::markMixedJoinBridges(
       continue;
     }
 
-    // See if we have any join nodes.
+    // If the build side of a join node belongs to an ungrouped factory, mark
+    // both factories so the bridge is created in the ungrouped pipeline and
+    // skipped in the grouped pipeline.
+    auto markIfMixed = [&](const core::PlanNodePtr& planNode,
+                           auto DriverFactory::* memberSet) {
+      auto& buildSourceNode = planNode->sources()[1];
+      for (auto& factoryOther : driverFactories) {
+        if (!factoryOther->groupedExecution &&
+            buildSourceNode->id() == factoryOther->outputNodeId()) {
+          (factoryOther.get()->*memberSet).emplace(planNode->id());
+          (factory.get()->*memberSet).emplace(planNode->id());
+          break;
+        }
+      }
+    };
+
     for (const auto& planNode : factory->planNodes) {
-      if (auto joinNode =
-              std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
-        // See if the build source (2nd) belongs to an ungrouped execution.
-        auto& buildSourceNode = planNode->sources()[1];
-        for (auto& factoryOther : driverFactories) {
-          if (!factoryOther->groupedExecution &&
-              buildSourceNode->id() == factoryOther->outputNodeId()) {
-            factoryOther->mixedExecutionModeHashJoinNodeIds.emplace(
-                planNode->id());
-            factory->mixedExecutionModeHashJoinNodeIds.emplace(planNode->id());
-            break;
-          }
-        }
-      } else if (
-          auto joinNode =
-              std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
-                  planNode)) {
-        // See if the build source (2nd) belongs to an ungrouped execution.
-        auto& buildSourceNode = planNode->sources()[1];
-        for (auto& factoryOther : driverFactories) {
-          if (!factoryOther->groupedExecution &&
-              buildSourceNode->id() == factoryOther->outputNodeId()) {
-            factoryOther->mixedExecutionModeNestedLoopJoinNodeIds.emplace(
-                planNode->id());
-            factory->mixedExecutionModeNestedLoopJoinNodeIds.emplace(
-                planNode->id());
-            break;
-          }
-        }
-      } else if (
-          auto spatialJoinNode =
-              std::dynamic_pointer_cast<const core::SpatialJoinNode>(
-                  planNode)) {
+      if (std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
+        markIfMixed(
+            planNode, &DriverFactory::mixedExecutionModeHashJoinNodeIds);
+      } else if (std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
+                     planNode)) {
+        markIfMixed(
+            planNode, &DriverFactory::mixedExecutionModeNestedLoopJoinNodeIds);
+      } else if (std::dynamic_pointer_cast<const core::SpatialJoinNode>(
+                     planNode)) {
         VELOX_FAIL("Spatial joins do not support grouped execution.");
+      } else if (
+          planNode->sources().size() > 1 &&
+          Operator::joinBridgeFromPlanNode(planNode)) {
+        markIfMixed(
+            planNode, &DriverFactory::mixedExecutionModeCustomJoinNodeIds);
       }
     }
   }
@@ -781,50 +803,26 @@ std::vector<std::unique_ptr<Operator>> DriverFactory::replaceOperators(
 }
 
 std::vector<core::PlanNodeId> DriverFactory::needsHashJoinBridges() const {
-  std::vector<core::PlanNodeId> planNodeIds;
-  // Ungrouped execution pipelines need to take care of cross-mode bridges.
-  if (!groupedExecution && !mixedExecutionModeHashJoinNodeIds.empty()) {
-    planNodeIds.insert(
-        planNodeIds.end(),
-        mixedExecutionModeHashJoinNodeIds.begin(),
-        mixedExecutionModeHashJoinNodeIds.end());
-  }
-  for (const auto& planNode : planNodes) {
-    if (auto joinNode =
-            std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
-      // Grouped execution pipelines should not create cross-mode bridges.
-      if (!groupedExecution ||
-          !mixedExecutionModeHashJoinNodeIds.contains(joinNode->id())) {
-        planNodeIds.emplace_back(joinNode->id());
-      }
-    }
-  }
-  return planNodeIds;
+  return collectJoinBridgeNodeIds(
+      planNodes,
+      groupedExecution,
+      mixedExecutionModeHashJoinNodeIds,
+      [](const core::PlanNodePtr& node) {
+        return std::dynamic_pointer_cast<const core::HashJoinNode>(node) !=
+            nullptr;
+      });
 }
 
 std::vector<core::PlanNodeId> DriverFactory::needsNestedLoopJoinBridges()
     const {
-  std::vector<core::PlanNodeId> planNodeIds;
-  // Ungrouped execution pipelines need to take care of cross-mode bridges.
-  if (!groupedExecution && !mixedExecutionModeNestedLoopJoinNodeIds.empty()) {
-    planNodeIds.insert(
-        planNodeIds.end(),
-        mixedExecutionModeNestedLoopJoinNodeIds.begin(),
-        mixedExecutionModeNestedLoopJoinNodeIds.end());
-  }
-  for (const auto& planNode : planNodes) {
-    if (auto joinNode =
-            std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
-                planNode)) {
-      // Grouped execution pipelines should not create cross-mode bridges.
-      if (!groupedExecution ||
-          !mixedExecutionModeNestedLoopJoinNodeIds.contains(joinNode->id())) {
-        planNodeIds.emplace_back(joinNode->id());
-      }
-    }
-  }
-
-  return planNodeIds;
+  return collectJoinBridgeNodeIds(
+      planNodes,
+      groupedExecution,
+      mixedExecutionModeNestedLoopJoinNodeIds,
+      [](const core::PlanNodePtr& node) {
+        return std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
+                   node) != nullptr;
+      });
 }
 
 std::vector<core::PlanNodeId> DriverFactory::needsSpatialJoinBridges() const {
@@ -853,6 +851,31 @@ std::vector<core::PlanNodeId> DriverFactory::needsIndexLookupJoinBridges()
     }
   }
   return planNodeIds;
+}
+
+std::vector<core::PlanNodeId> DriverFactory::needsCustomJoinBridges() const {
+  // Include all mixed-mode join IDs.  Driver adapters can replace built-in
+  // operators with ones that use custom bridges (e.g. cuDF replaces HashProbe
+  // with an operator that calls getCustomJoinBridge instead of
+  // getHashJoinBridge), so the plan node is still a HashJoinNode but the
+  // bridge lookup goes through customBridges.
+  folly::F14FastSet<core::PlanNodeId> mixedNodeIds;
+  mixedNodeIds.insert(
+      mixedExecutionModeHashJoinNodeIds.begin(),
+      mixedExecutionModeHashJoinNodeIds.end());
+  mixedNodeIds.insert(
+      mixedExecutionModeNestedLoopJoinNodeIds.begin(),
+      mixedExecutionModeNestedLoopJoinNodeIds.end());
+  mixedNodeIds.insert(
+      mixedExecutionModeCustomJoinNodeIds.begin(),
+      mixedExecutionModeCustomJoinNodeIds.end());
+  return collectJoinBridgeNodeIds(
+      planNodes,
+      groupedExecution,
+      mixedNodeIds,
+      [](const core::PlanNodePtr& node) {
+        return Operator::joinBridgeFromPlanNode(node) != nullptr;
+      });
 }
 
 // static

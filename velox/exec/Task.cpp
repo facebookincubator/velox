@@ -1488,7 +1488,7 @@ void Task::createSplitGroupStateLocked(uint32_t splitGroupId) {
         splitGroupId, factory->needsSpatialJoinBridges());
     addIndexLookupJoinBridgesLocked(
         splitGroupId, factory->needsIndexLookupJoinBridges());
-    addCustomJoinBridgesLocked(splitGroupId, factory->planNodes);
+    addCustomJoinBridgesLocked(splitGroupId, factory->needsCustomJoinBridges());
 
     core::PlanNodeId tableScanNodeId;
     if (queryCtx_->queryConfig().tableScanScaledProcessingEnabled() &&
@@ -2495,17 +2495,33 @@ void Task::addHashJoinBridgesLocked(
 
 void Task::addCustomJoinBridgesLocked(
     uint32_t splitGroupId,
-    const std::vector<core::PlanNodePtr>& planNodes) {
+    const std::vector<core::PlanNodeId>& planNodeIds) {
   auto& splitGroupState = splitGroupStates_[splitGroupId];
-  for (const auto& planNode : planNodes) {
-    if (auto joinBridge = Operator::joinBridgeFromPlanNode(planNode)) {
-      auto const inserted = splitGroupState.customBridges
-                                .emplace(planNode->id(), std::move(joinBridge))
-                                .second;
-      VELOX_CHECK(
-          inserted,
-          "Join bridge for node {} is already present",
-          planNode->id());
+  for (const auto& planNodeId : planNodeIds) {
+    // Unlike built-in bridges (hash, NLJ, etc.) custom bridges need the plan
+    // node to call Operator::joinBridgeFromPlanNode().  The node may belong to
+    // a different factory: in mixed execution mode the ungrouped build factory
+    // must create the bridge, but the plan node lives in the grouped probe
+    // factory.  Search all factories to find it.
+    auto findNode = [&]() -> core::PlanNodePtr {
+      for (const auto& factory : driverFactories_) {
+        for (const auto& planNode : factory->planNodes) {
+          if (planNode->id() == planNodeId) {
+            return planNode;
+          }
+        }
+      }
+      return nullptr;
+    };
+    auto planNode = findNode();
+    if (planNode) {
+      if (auto joinBridge = Operator::joinBridgeFromPlanNode(planNode)) {
+        auto const inserted = splitGroupState.customBridges
+                                  .emplace(planNodeId, std::move(joinBridge))
+                                  .second;
+        VELOX_CHECK(
+            inserted, "Join bridge for node {} is already present", planNodeId);
+      }
     }
   }
 }
