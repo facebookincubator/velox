@@ -139,6 +139,9 @@ bool CompileState::compile(bool allowCpuFallback) {
   int32_t operatorsOffset = 0;
   // When an operator's input types are unsupported by cuDF, all subsequent
   // operators in the pipeline must also stay on CPU.
+  // TODO: This is conservative — once set, it never resets, so a later
+  // operator whose inputs drop the unsupported column will still stay on CPU.
+  // A more precise version could resume GPU once types are supported again.
   bool skipGpuReplacement = false;
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
        ++operatorIndex) {

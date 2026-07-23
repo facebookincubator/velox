@@ -379,14 +379,17 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
     // while the other does not. This check prevents a bridge mismatch
     // where CudfHashJoinProbe waits for a CudfHashJoinBridge that
     // CudfHashJoinBuild never populates because it stayed on CPU.
-    for (const auto& source : joinPlanNode->sources()) {
-      if (!isTypeSupportedByCudf(source->outputType())) {
-        LOG_FALLBACK(
-            "HashJoin source has column types unsupported by cuDF, "
-            "PlanNode id: {}",
-            planNode->id());
-        return false;
-      }
+    if (std::any_of(
+            joinPlanNode->sources().begin(),
+            joinPlanNode->sources().end(),
+            [](const auto& source) {
+              return !isTypeSupportedByCudf(source->outputType());
+            })) {
+      LOG_FALLBACK(
+          "HashJoin source has column types unsupported by cuDF, "
+          "PlanNode id: {}",
+          planNode->id());
+      return false;
     }
 
     return true;
@@ -504,14 +507,17 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
 
     // Reject if any join source has types that cuDF cannot represent.
     // See comment in CudfHashJoinBaseAdapter::canRunOnGPU.
-    for (const auto& source : joinPlanNode->sources()) {
-      if (!isTypeSupportedByCudf(source->outputType())) {
-        LOG_FALLBACK(
-            "NestedLoopJoin source has column types unsupported by cuDF, "
-            "PlanNode id: {}",
-            planNode->id());
-        return false;
-      }
+    if (std::any_of(
+            joinPlanNode->sources().begin(),
+            joinPlanNode->sources().end(),
+            [](const auto& source) {
+              return !isTypeSupportedByCudf(source->outputType());
+            })) {
+      LOG_FALLBACK(
+          "NestedLoopJoin source has column types unsupported by cuDF, "
+          "PlanNode id: {}",
+          planNode->id());
+      return false;
     }
 
     return true;

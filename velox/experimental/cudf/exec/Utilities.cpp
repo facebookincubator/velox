@@ -109,29 +109,20 @@ std::unique_ptr<cudf::table> makeEmptyTable(TypePtr const& inputType) {
     auto const& childType = inputType->childAt(i);
     if (childType->kind() == TypeKind::ROW) {
       auto tbl = makeEmptyTable(childType);
-      auto structColumn = std::make_unique<cudf::column>(
-          cudf::data_type(cudf::type_id::STRUCT),
-          0,
-          rmm::device_buffer(),
-          rmm::device_buffer(),
-          0,
-          tbl->release());
-      emptyColumns.push_back(std::move(structColumn));
+      emptyColumns.push_back(
+          cudf::make_structs_column(
+              0, tbl->release(), 0, rmm::device_buffer()));
     } else if (childType->kind() == TypeKind::ARRAY) {
-      // LIST: single-element zeroed offsets + recursively empty child.
+      // LIST: empty offsets + recursively empty child.
       auto emptyChild = makeEmptyTable(ROW({"e"}, {childType->childAt(0)}));
       auto offsets = cudf::make_empty_column(cudf::type_id::INT32);
-      std::vector<std::unique_ptr<cudf::column>> listChildren;
-      listChildren.push_back(std::move(offsets));
-      listChildren.push_back(std::move(emptyChild->release()[0]));
-      auto listColumn = std::make_unique<cudf::column>(
-          cudf::data_type(cudf::type_id::LIST),
-          0,
-          rmm::device_buffer(),
-          rmm::device_buffer(),
-          0,
-          std::move(listChildren));
-      emptyColumns.push_back(std::move(listColumn));
+      emptyColumns.push_back(
+          cudf::make_lists_column(
+              0,
+              std::move(offsets),
+              std::move(emptyChild->release()[0]),
+              0,
+              rmm::device_buffer()));
     } else {
       auto emptyColumn =
           cudf::make_empty_column(cudf_velox::veloxToCudfDataType(childType));
