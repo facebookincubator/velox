@@ -331,6 +331,23 @@ Invalid examples
   SELECT cast('2012/10/23' as date); -- NULL // Invalid argument
   SELECT cast('2012.10.23' as date); -- NULL // Invalid argument
 
+From TIMESTAMP_UTC
+^^^^^^^^^^^^^^^^^^
+
+Casting a timestamp_utc to date extracts the date from the stored timestamp
+fields without applying the session timezone.
+
+Valid examples
+
+::
+
+  SELECT cast(TIMESTAMP_NTZ '2020-01-01 15:30:00' as date); -- 2020-01-01
+  SELECT cast(TIMESTAMP_NTZ '2020-01-01 00:00:00' as date); -- 2020-01-01
+
+Under session timezone ``America/Los_Angeles`` (UTC-8): ::
+
+  SELECT cast(TIMESTAMP_NTZ '2020-01-01 00:00:00' as date); -- 2020-01-01
+
 Cast to Decimal
 ---------------
 
@@ -550,3 +567,21 @@ Valid examples
   SELECT cast('2015-03-18 12:03:17.123' as timestamp_ntz); -- 2015-03-18 12:03:17.123
   SELECT cast('1970-01-01 00:00:00-08:00' as timestamp_ntz); -- 1970-01-01 00:00:00
   SELECT cast('2015-03-18T12:03:17Z' as timestamp_ntz); -- 2015-03-18 12:03:17
+
+From DATE
+^^^^^^^^^
+
+Casting a date to timestamp_utc returns midnight of the given date, not
+subject to the session timezone.
+
+Valid examples
+
+Under session timezone UTC: ::
+
+  SELECT cast(DATE '2020-01-01' as timestamp_ntz); -- 2020-01-01 00:00:00
+  SELECT cast(DATE '1970-01-01' as timestamp_ntz); -- 1970-01-01 00:00:00
+
+Under session timezone ``America/Los_Angeles`` (UTC-8): ::
+
+  SELECT cast(DATE '2020-01-01' as timestamp_ntz); -- 2020-01-01 00:00:00
+  SELECT cast(DATE '1970-01-01' as timestamp_ntz); -- 1970-01-01 00:00:00

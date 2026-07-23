@@ -85,14 +85,15 @@ VectorPtr CastExpr::castFromDate(
       return castResult;
     }
     case TypeKind::TIMESTAMP: {
-      VELOX_DCHECK(toType->equivalent(*TIMESTAMP()));
-      static const int64_t kMillisPerDay{86'400'000};
-      const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
+      const bool isUtc = toType->equivalent(*TIMESTAMP_UTC());
+      VELOX_DCHECK(isUtc || toType->equivalent(*TIMESTAMP()));
+      const auto* timeZone = isUtc
+          ? nullptr
+          : getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
       auto* resultFlatVector = castResult->as<FlatVector<Timestamp>>();
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        auto timestamp = Timestamp::fromMillis(
-            inputFlatVector->valueAt(row) * kMillisPerDay);
+        auto timestamp =
+            Timestamp::fromMillis(inputFlatVector->valueAt(row) * kMillisInDay);
         if (timeZone) {
           hooks_->castDateTimestampToGMT(timestamp, *timeZone);
         }
@@ -148,10 +149,12 @@ VectorPtr CastExpr::castToDate(
       return castResult;
     }
     case TypeKind::TIMESTAMP: {
-      VELOX_DCHECK(fromType->equivalent(*TIMESTAMP()));
+      const bool isUtc = fromType->equivalent(*TIMESTAMP_UTC());
+      VELOX_DCHECK(isUtc || fromType->equivalent(*TIMESTAMP()));
       auto* inputVector = input.as<SimpleVector<Timestamp>>();
-      const auto* timeZone =
-          getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
+      const auto* timeZone = isUtc
+          ? nullptr
+          : getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
         const auto days = util::toDate(inputVector->valueAt(row), timeZone);
         resultFlatVector->set(row, days);
@@ -162,6 +165,61 @@ VectorPtr CastExpr::castToDate(
       VELOX_UNSUPPORTED(
           "Cast from {} to DATE is not supported", fromType->toString());
   }
+}
+
+VectorPtr CastExpr::castToTimestampUTC(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType) {
+  VELOX_USER_CHECK(
+      hooks_->supportsTimestampUtc(),
+      "Cast from {} to {} is not supported",
+      fromType->toString(),
+      TIMESTAMP_UTC()->toString());
+  if (fromType->equivalent(*TIMESTAMP())) {
+    return applyTimestampTimestampUtcCast<true>(rows, context, input);
+  }
+  if (fromType->isDate()) {
+    return castFromDate(rows, input, context, TIMESTAMP_UTC());
+  }
+  if (fromType->kind() == TypeKind::VARCHAR) {
+    VectorPtr result;
+    applyCastPrimitivesDispatch<TypeKind::TIMESTAMP>(
+        fromType, TIMESTAMP_UTC(), rows, context, input, result);
+    return result;
+  }
+  VELOX_UNSUPPORTED(
+      "Cast from {} to {} is not supported",
+      fromType->toString(),
+      TIMESTAMP_UTC()->toString());
+}
+
+VectorPtr CastExpr::castFromTimestampUTC(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType) {
+  VELOX_USER_CHECK(
+      hooks_->supportsTimestampUtc(),
+      "Cast from {} to {} is not supported",
+      TIMESTAMP_UTC()->toString(),
+      toType->toString());
+  if (toType->equivalent(*TIMESTAMP())) {
+    return applyTimestampTimestampUtcCast<false>(rows, context, input);
+  }
+  if (toType->isDate()) {
+    return castToDate(rows, input, context, TIMESTAMP_UTC());
+  }
+  if (toType->kind() == TypeKind::VARCHAR ||
+      toType->kind() == TypeKind::VARBINARY) {
+    return applyTimestampToVarcharCast(
+        toType, rows, context, input, hooks_->timestampUtcToStringOptions());
+  }
+  VELOX_UNSUPPORTED(
+      "Cast from {} to {} is not supported",
+      TIMESTAMP_UTC()->toString(),
+      toType->toString());
 }
 
 VectorPtr CastExpr::castFromIntervalDayTime(
@@ -843,6 +901,10 @@ void CastExpr::applyPeeled(
     } else {
       applyCustomCast();
     }
+  } else if (toType->equivalent(*TIMESTAMP_UTC())) {
+    result = castToTimestampUTC(rows, input, context, fromType);
+  } else if (fromType->equivalent(*TIMESTAMP_UTC())) {
+    result = castFromTimestampUTC(rows, input, context, toType);
   } else if (fromType->isDate()) {
     result = castFromDate(rows, input, context, toType);
   } else if (toType->isDate()) {
@@ -884,47 +946,6 @@ void CastExpr::applyPeeled(
             context,
             fromType,
             toType);
-    }
-  } else if (toType->equivalent(*TIMESTAMP_UTC())) {
-    if (fromType->equivalent(*TIMESTAMP())) {
-      VELOX_USER_CHECK(
-          hooks_->supportsTimestampUtc(),
-          "Cast from {} to {} is not supported",
-          fromType->toString(),
-          toType->toString());
-      result = applyTimestampTimestampUtcCast<true>(rows, context, input);
-    } else if (fromType->kind() == TypeKind::VARCHAR) {
-      applyCastPrimitivesDispatch<TypeKind::TIMESTAMP>(
-          fromType, toType, rows, context, input, result);
-    } else {
-      VELOX_UNSUPPORTED(
-          "Cast from {} to {} is not supported",
-          fromType->toString(),
-          toType->toString());
-    }
-  } else if (fromType->equivalent(*TIMESTAMP_UTC())) {
-    if (toType->equivalent(*TIMESTAMP())) {
-      VELOX_USER_CHECK(
-          hooks_->supportsTimestampUtc(),
-          "Cast from {} to {} is not supported",
-          fromType->toString(),
-          toType->toString());
-      result = applyTimestampTimestampUtcCast<false>(rows, context, input);
-    } else if (
-        toType->kind() == TypeKind::VARCHAR ||
-        toType->kind() == TypeKind::VARBINARY) {
-      VELOX_USER_CHECK(
-          hooks_->supportsTimestampUtc(),
-          "Cast from {} to {} is not supported",
-          fromType->toString(),
-          toType->toString());
-      result = applyTimestampToVarcharCast(
-          toType, rows, context, input, hooks_->timestampUtcToStringOptions());
-    } else {
-      VELOX_UNSUPPORTED(
-          "Cast from {} to {} is not supported",
-          fromType->toString(),
-          toType->toString());
     }
   } else if (
       fromType->kind() == TypeKind::TIMESTAMP &&
