@@ -1049,4 +1049,118 @@ TEST_F(SubfieldFilterAstTest, EmptyMultiRangeThrows) {
       VeloxException);
 }
 
+// --- kNegatedBigintRange tests ---
+
+// The rejected-range behavior is identical across integer column types, so it
+// is parametrized over the C++ column type. The reject range [10, 20] and the
+// sample values all fit int8_t, so every instantiation shares the same data.
+template <typename T>
+class NegatedBigintRangeTypedTest : public SubfieldFilterAstTest {};
+
+using NegatedBigintRangeTypes =
+    ::testing::Types<int8_t, int16_t, int32_t, int64_t>;
+TYPED_TEST_SUITE(NegatedBigintRangeTypedTest, NegatedBigintRangeTypes);
+
+TYPED_TEST(NegatedBigintRangeTypedTest, rejectsRange) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, CppToType<TypeParam>::create()}});
+
+  // Reject values in [10, 20].
+  auto filter = std::make_unique<common::NegatedBigintRange>(
+      10, 20, /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  EXPECT_GT(tree.size(), 0UL);
+
+  auto values =
+      this->template makeFlatVector<TypeParam>({-1, 0, 9, 10, 15, 20, 21, 100});
+  auto vec = this->makeRowVector({columnName}, {values});
+
+  this->testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, NegatedBigintRangeSingleValue) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, BIGINT()}});
+
+  // Reject only the value 42.
+  auto filter = std::make_unique<common::NegatedBigintRange>(
+      42, 42, /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  EXPECT_GT(tree.size(), 0UL);
+
+  auto values = makeFlatVector<int64_t>({0, 41, 42, 43, 100});
+  auto vec = makeRowVector({columnName}, {values});
+
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, NegatedBigintRangeAtBounds) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, INTEGER()}});
+
+  // Reject all negative values and zero: [INT32_MIN, 0].
+  auto filter = std::make_unique<common::NegatedBigintRange>(
+      std::numeric_limits<int32_t>::min(), 0, /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  EXPECT_GT(tree.size(), 0UL);
+
+  auto values = makeFlatVector<int32_t>(
+      {std::numeric_limits<int32_t>::min(),
+       -1,
+       0,
+       1,
+       100,
+       std::numeric_limits<int32_t>::max()});
+  auto vec = makeRowVector({columnName}, {values});
+
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+// Null column values must be excluded and non-null rows must still match the
+// CPU filter, including through the negating NOT(...) wrapper.
+TEST_F(SubfieldFilterAstTest, NegatedBigintRangeWithNulls) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, BIGINT()}});
+
+  // Reject values in [10, 20].
+  auto filter = std::make_unique<common::NegatedBigintRange>(
+      10, 20, /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  EXPECT_GT(tree.size(), 0UL);
+
+  auto values = makeNullableFlatVector<int64_t>(
+      {-1, std::nullopt, 9, 10, 15, std::nullopt, 21, 100});
+  auto vec = makeRowVector({columnName}, {values});
+
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
 } // namespace
