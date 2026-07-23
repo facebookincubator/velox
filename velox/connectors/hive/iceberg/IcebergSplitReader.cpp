@@ -27,6 +27,7 @@
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/core/VectorUtil.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -577,13 +578,14 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
         // in the user's projection. Derive the flag from the column type
         // instead — Iceberg always uses days-since-epoch for DATE.
         const bool isDaysSinceEpoch = equalityColumnTypes[i]->isDate();
-        auto constant = newConstantFromString(
+        auto constant = core::newConstantFromString(
             equalityColumnTypes[i],
             partitionIt->second,
             connectorQueryCtx_->memoryPool(),
             fileConfig_->readTimestampPartitionValueAsLocalTime(
                 connectorQueryCtx_->sessionProperties()),
-            isDaysSinceEpoch);
+            isDaysSinceEpoch,
+            adjustTimestampToTimezone_ ? sessionTimezone_ : nullptr);
         fieldSpec->setConstantValue(constant);
         // Mirror Java's PARTITION_KEY column-type marking: this column's
         // value MUST come from the partition metadata, never from the file
@@ -886,12 +888,13 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
     if (auto iter = splitInfoColumns.find(fieldName);
         iter != splitInfoColumns.end()) {
       auto infoColumnType = readerOutputType_->findChild(fieldName);
-      auto constant = newConstantFromString(
+      auto constant = core::newConstantFromString(
           infoColumnType,
           iter->second,
           connectorQueryCtx_->memoryPool(),
           readTimestampAsLocalTime,
-          false);
+          false,
+          adjustTimestampToTimezone_ ? sessionTimezone_ : nullptr);
       childSpec->setConstantValue(constant);
     } else {
       auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
@@ -1018,12 +1021,13 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
                     columnType,
                     "Column '{}' not found in table schema",
                     fieldName);
-                auto constant = newConstantFromString(
+                auto constant = core::newConstantFromString(
                     columnType,
                     icebergColumnHandle->initialDefaultValue().value(),
                     connectorQueryCtx_->memoryPool(),
                     readTimestampAsLocalTime,
-                    false);
+                    false,
+                    adjustTimestampToTimezone_ ? sessionTimezone_ : nullptr);
                 childSpec->setConstantValue(constant);
                 hasDefaultValue = true;
                 break;

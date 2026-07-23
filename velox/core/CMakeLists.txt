@@ -27,11 +27,13 @@ velox_add_library(
   QueryCtx.cpp
   SimpleFunctionMetadata.cpp
   TableWriteTraits.cpp
+  VectorUtil.cpp
   HEADERS
   CoreTypeSystem.h
   Expressions.h
   FixedPointPlanNodes.h
   ITypedExpr.h
+  VectorUtil.h
   PlanConsistencyChecker.h
   PlanFragment.h
   PlanNode.h
