@@ -19,7 +19,9 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/expression/prestosql/DateAddFunction.h"
+#include "velox/experimental/cudf/expression/prestosql/DateDiffFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/DatePlusIntervalFunction.h"
+#include "velox/experimental/cudf/expression/prestosql/ToUnixtimeFunction.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/ConstantExpr.h"
@@ -99,6 +101,7 @@ class SubstrFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -182,6 +185,36 @@ void registerPrestoFunctions(const std::string& prefix) {
            .build()},
       true,
       DateTruncFunction::canEvaluate);
+
+  registerCudfFunction(
+      prefix + "date_diff",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<prestosql::DateDiffFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("bigint")
+           .constantArgumentType("varchar")
+           .argumentType("date")
+           .argumentType("date")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("bigint")
+           .constantArgumentType("varchar")
+           .argumentType("timestamp")
+           .argumentType("timestamp")
+           .build()});
+
+  registerCudfFunction(
+      prefix + "to_unixtime",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<prestosql::ToUnixtimeFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("timestamp")
+           .build()},
+      true,
+      prestosql::ToUnixtimeFunction::canEvaluate);
 }
 
 } // namespace facebook::velox::cudf_velox

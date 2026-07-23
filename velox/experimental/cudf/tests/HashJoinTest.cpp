@@ -437,6 +437,54 @@ TEST_P(MultiThreadedHashJoinTest, filter) {
       .run();
 }
 
+// A timezone-sensitive join filter must read the session-local wall clock, the
+// same way the CPU evaluates it. Both probe rows join their build key, so only
+// the filter hour(t_ts) = 18 decides which row survives. Under
+// America/Los_Angeles (UTC-8) the two instants land on opposite sides of the
+// predicate from their UTC values: 2021-01-01 02:00 UTC is the local 18:00 and
+// passes, while 2021-01-01 18:00 UTC is the local 10:00 and fails. Running the
+// same plan on GPU (cuDF registered) and CPU (cuDF unregistered) under the same
+// session timezone must therefore select the same probe row. Until the join
+// filter honors the session timezone the GPU keeps the UTC-18:00 row instead.
+TEST_F(HashJoinTest, joinFilterHonorsSessionTimezone) {
+  // 2021-01-01 18:00:00 UTC == 2021-01-01 10:00:00 America/Los_Angeles.
+  constexpr int64_t kUtc1800 = 1'609'524'000;
+  // 2021-01-01 02:00:00 UTC == 2020-12-31 18:00:00 America/Los_Angeles.
+  constexpr int64_t kLocal1800 = 1'609'466'400;
+
+  auto probe = makeRowVector(
+      {"t_k0", "t_ts"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeFlatVector<Timestamp>(
+           {Timestamp(kUtc1800, 0), Timestamp(kLocal1800, 0)}, TIMESTAMP())});
+  auto build = makeRowVector({"u_k0"}, {makeFlatVector<int64_t>({1, 2})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probe})
+          .hashJoin(
+              {"t_k0"},
+              {"u_k0"},
+              PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+              "hour(t_ts) = 18",
+              {"t_k0"})
+          .planNode();
+
+  auto run = [&]() {
+    return AssertQueryBuilder(plan)
+        .config(core::QueryConfig::kSessionTimezone, "America/Los_Angeles")
+        .config(core::QueryConfig::kAdjustTimestampToTimezone, "true")
+        .copyResults(pool());
+  };
+
+  auto gpu = run();
+  cudf_velox::unregisterCudf();
+  auto cpu = run();
+  cudf_velox::registerCudf();
+  facebook::velox::test::assertEqualVectors(cpu, gpu);
+}
+
 DEBUG_ONLY_TEST_P(MultiThreadedHashJoinTest, filterSpillOnFirstProbeInput) {
   auto spillDirectory = TempDirectoryPath::create();
   std::atomic_bool injectProbeSpillOnce{true};

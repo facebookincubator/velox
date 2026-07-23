@@ -194,7 +194,9 @@ TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
   ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
 }
 
-TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
+TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneUsesCudf) {
+  // date_trunc(timestamp) is timezone-aware on GPU, so it runs on cuDF even
+  // when adjust_timestamp_to_session_timezone is enabled.
   auto input = makeRowVector(
       {"event_ts"},
       {makeFlatVector<Timestamp>(
@@ -212,8 +214,8 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
       .config(QueryConfig::kAdjustTimestampToTimezone, "true")
       .countResults(task);
 
-  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
-  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
 }
 
 TEST_F(ToCudfSelectionTest, prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
@@ -242,7 +244,7 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
 
 TEST_F(
     ToCudfSelectionTest,
-    nestedPrestoDateTruncTimestampAdjustTimezoneFallsBack) {
+    nestedPrestoDateTruncTimestampAdjustTimezoneUsesCudf) {
   auto input = makeRowVector(
       {"event_ts"},
       {makeFlatVector<Timestamp>(
@@ -259,15 +261,17 @@ TEST_F(
   ASSERT_TRUE(wasCudfFilterProjectUsed(cudfTask));
   ASSERT_FALSE(wasDefaultFilterProjectUsed(cudfTask));
 
-  std::shared_ptr<Task> fallbackTask;
+  // A nested timezone-sensitive date_trunc(timestamp) also stays on cuDF under
+  // adjust_timestamp_to_session_timezone now that it is timezone-aware.
+  std::shared_ptr<Task> adjustTask;
   AssertQueryBuilder(plan)
       .config("cudf.enabled", true)
       .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
       .config(QueryConfig::kAdjustTimestampToTimezone, "true")
-      .countResults(fallbackTask);
+      .countResults(adjustTask);
 
-  ASSERT_FALSE(wasCudfFilterProjectUsed(fallbackTask));
-  ASSERT_TRUE(wasDefaultFilterProjectUsed(fallbackTask));
+  ASSERT_TRUE(wasCudfFilterProjectUsed(adjustTask));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(adjustTask));
 }
 
 TEST_F(ToCudfSelectionTest, prestoDateTruncDateAdjustTimezoneUsesCudf) {
@@ -281,6 +285,185 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncDateAdjustTimezoneUsesCudf) {
                   .values({input})
                   .project({"date_trunc('day', event_date) AS result"})
                   .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config("cudf.enabled", true)
+      .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
+      .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+      .countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(
+    ToCudfSelectionTest,
+    prestoDateDiffMonthTimestampAdjustTimezoneUsesCudf) {
+  // date_diff(..., TIMESTAMP, TIMESTAMP) for month/quarter/year needs to
+  // extract year/month/day components in session-local wall-clock time (see
+  // the isTimezoneSensitiveUnit_ comment on DateDiffFunction), which
+  // DateDiffFunction::eval() now does by converting both operands via
+  // toLocalTimestamp() before diffing, so this runs on GPU (no CPU
+  // fallback needed) and still matches Presto: Jan 2 06:15 IST to Feb 1
+  // 05:30 IST is within the same day-of-month bound, so both rows are 0
+  // months, not 1 (which the raw-UTC-instant answer would coincidentally
+  // also give here, but not in general - see the DST-crossing test below
+  // for a case where they diverge).
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP())});
+
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .project(
+              {"date_diff('month', event_ts, TIMESTAMP '2026-02-01 00:00:00') AS result"})
+          .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config("cudf.enabled", true)
+      .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
+      .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+      .countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+  AssertQueryBuilder(plan)
+      .config("cudf.enabled", true)
+      .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
+      .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+      .assertResults(makeRowVector({makeFlatVector<int64_t>({0, 0})}));
+}
+
+TEST_F(ToCudfSelectionTest, prestoDateDiffDayTimestampAdjustTimezoneUsesCudf) {
+  // day/week can, in general, disagree between the raw-UTC-instant
+  // computation and the session-timezone-correct one across a DST
+  // transition in the session timezone (see the DST-crossing test below);
+  // DateDiffFunction::eval() now converts both operands via
+  // toLocalTimestamp() unconditionally for these units, so it's always
+  // correct rather than only "correct except across DST", and always runs
+  // on GPU. Asia/Kolkata has no DST, so this case's answer happens to be
+  // the same either way (2 days), but it still proves the GPU path (not a
+  // CPU fallback) produced it.
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP())});
+
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .project(
+              {"date_diff('day', event_ts, TIMESTAMP '2026-01-05 00:00:00') AS result"})
+          .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config("cudf.enabled", true)
+      .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
+      .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+      .countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+  AssertQueryBuilder(plan)
+      .config("cudf.enabled", true)
+      .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
+      .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+      .assertResults(makeRowVector({makeFlatVector<int64_t>({2, 2})}));
+}
+
+TEST_F(ToCudfSelectionTest, prestoDateDiffSubDayAdjustTimezoneUsesCudf) {
+  // hour/minute/second/millisecond are provably timezone-independent for
+  // date_diff (unlike for date_trunc): CPU cancels the session-timezone
+  // offset out of the diff for these units (see DateTimeUtil.h), so cuDF's
+  // raw-duration computation always agrees with CPU and doesn't need to
+  // fall back.
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP())});
+
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .project(
+              {"date_diff('hour', event_ts, TIMESTAMP '2026-01-02 00:00:00') AS hourDiff",
+               "date_diff('minute', event_ts, TIMESTAMP '2026-01-02 00:00:00') AS minuteDiff"})
+          .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config("cudf.enabled", true)
+      .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
+      .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+      .countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(
+    ToCudfSelectionTest,
+    prestoDateDiffDayAcrossDstTransitionMatchesCpuOnGpu) {
+  // Concrete demonstration of why 'day' needs the local-timestamp
+  // conversion in DateDiffFunction::eval(): these two instants are 23.5 raw
+  // UTC hours apart (2026-03-07 12:00 EST to 2026-03-08 12:30 EDT, spanning
+  // America/New_York's 2026-03-08 spring-forward, which loses an hour at
+  // 02:00 local). Naive raw-UTC-instant arithmetic (kUsPerDay in
+  // diffBySubtraction) would truncate 23.5h to a day-diff of 0, but the
+  // session-timezone-correct (and Presto-correct) local wall-clock elapsed
+  // time is 24.5h, i.e. a day-diff of 1. eval() converts both operands via
+  // toLocalTimestamp() before reaching diffBySubtraction specifically to
+  // get this case right - and to get it right on GPU, not via a CPU
+  // fallback.
+  auto input = makeRowVector(
+      {"from_ts", "to_ts"},
+      {makeFlatVector<Timestamp>({Timestamp(1772902800, 0)}, TIMESTAMP()),
+       makeFlatVector<Timestamp>({Timestamp(1772987400, 0)}, TIMESTAMP())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"date_diff('day', from_ts, to_ts) AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config("cudf.enabled", true)
+      .config(QueryConfig::kSessionTimezone, "America/New_York")
+      .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+      .countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+  // The operator check above only proves cuDF ran; assertResults below
+  // proves it got the Presto-correct answer of 1, not the raw-UTC-
+  // arithmetic answer of 0.
+  AssertQueryBuilder(plan)
+      .config("cudf.enabled", true)
+      .config(QueryConfig::kSessionTimezone, "America/New_York")
+      .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+      .assertResults(makeRowVector({makeFlatVector<int64_t>({1})}));
+}
+
+TEST_F(ToCudfSelectionTest, prestoDateDiffDateAdjustTimezoneUsesCudf) {
+  // DATE has no time-of-day component, so date_diff on DATE operands is
+  // never timezone-sensitive and should keep running on cuDF.
+  auto input = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>(
+          {DATE()->toDays("2026-01-02"), DATE()->toDays("2026-01-03")},
+          DATE())});
+
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .project(
+              {"date_diff('month', event_date, DATE '2026-03-01') AS result"})
+          .planNode();
 
   std::shared_ptr<Task> task;
   AssertQueryBuilder(plan)

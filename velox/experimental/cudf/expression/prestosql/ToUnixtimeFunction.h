@@ -17,25 +17,28 @@
 
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
-namespace facebook::velox::cudf_velox::sparksql {
+namespace facebook::velox::cudf_velox::prestosql {
 
-/// Spark hash_with_seed(seed, ...). Computes murmurhash3_x86_32 over the
-/// remaining arguments using the constant non-negative integer seed.
-class HashFunction : public CudfFunction {
+/// Presto to_unixtime(timestamp) -> double.
+/// Returns seconds since epoch as a double. cuDF TIMESTAMP_MICROSECONDS
+/// are internally int64 us since epoch, so we reinterpret the underlying
+/// data as INT64 (zero-copy) and divide by 1e6 in a single binary operation.
+class ToUnixtimeFunction : public CudfFunction {
  public:
+  /// Rejects a constant timestamp argument so a to_unixtime call that
+  /// somehow reaches cuDF function selection without being constant-folded
+  /// falls back to CPU cleanly, instead of eval() indexing into an empty
+  /// inputColumns. See DateAddFunction::canEvaluate / DateTruncFunction::
+  /// canEvaluate for the same defensive pattern.
   static bool canEvaluate(const std::shared_ptr<velox::exec::Expr>& expr);
 
-  explicit HashFunction(const std::shared_ptr<velox::exec::Expr>& expr);
+  explicit ToUnixtimeFunction(const std::shared_ptr<velox::exec::Expr>& expr);
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
+      cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override;
-
- private:
-  // Constant non-negative seed extracted from the first argument.
-  uint32_t seedValue_;
 };
 
-} // namespace facebook::velox::cudf_velox::sparksql
+} // namespace facebook::velox::cudf_velox::prestosql

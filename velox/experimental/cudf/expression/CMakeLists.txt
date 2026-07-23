@@ -25,18 +25,22 @@ add_library(
   NullMask.cpp
   PrestoFunctions.cpp
   prestosql/DateAddFunction.cpp
+  prestosql/DateDiffFunction.cpp
   prestosql/DatePlusIntervalFunction.cpp
+  prestosql/TimezoneFunctions.cpp
+  prestosql/ToUnixtimeFunction.cpp
   SparkFunctions.cpp
   sparksql/DateAddFunction.cpp
   sparksql/HashFunction.cpp
   sparksql/SubStringFunction.cpp
   SubfieldFiltersToAst.cpp
+  TimezoneConversion.cpp
 )
 
 target_link_libraries(
   velox_cudf_expression
   PUBLIC cudf::cudf
-  PRIVATE arrow velox_common_base velox_cudf_vector velox_exception
+  PRIVATE arrow velox_common_base velox_cudf_vector velox_exception velox_presto_types
 )
 
 target_compile_options(velox_cudf_expression PRIVATE -Wno-missing-field-initializers)
