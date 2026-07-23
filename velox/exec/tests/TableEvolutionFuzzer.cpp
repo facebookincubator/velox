@@ -16,6 +16,7 @@
 
 #include "velox/exec/tests/TableEvolutionFuzzer.h"
 #include "velox/common/config/Config.h"
+#include "velox/common/config/Config.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -1062,6 +1063,13 @@ void TableEvolutionFuzzer::runQueryShape(
   RowTypePtr fullOutSchema = buildFlatmapAsStructSchema(
       rowType, globalMapColumnKeys, globallyConsistentColumnIndexVector);
 
+  // Draw the extra reader connector config once per shape, so both scan tasks
+  // read with identical reader options and the pushdown-vs-FilterNode oracle
+  // stays valid.
+  const std::unordered_map<std::string, std::string> readConfig =
+      config_.extraReadConfig ? config_.extraReadConfig(rng_)
+                              : std::unordered_map<std::string, std::string>{};
+
   std::vector<std::shared_ptr<TaskCursor>> scanTasks(2);
   // actual: TableScan -> Aggregation (allows pushdown)
   pushdownConfig.aggregationConfig = aggConfig;
@@ -1072,7 +1080,8 @@ void TableEvolutionFuzzer::runQueryShape(
       false,
       false, // insertProjectToBlockPushdown
       fullOutSchema,
-      outputColumnNames);
+      outputColumnNames,
+      readConfig);
 
   // expected: TableScan -> Project -> Aggregation (blocks pushdown)
   // Insert a Project node to prevent aggregation pushdown
@@ -1084,7 +1093,8 @@ void TableEvolutionFuzzer::runQueryShape(
       true,
       true, // insertProjectToBlockPushdown
       fullOutSchema,
-      outputColumnNames);
+      outputColumnNames,
+      readConfig);
 
   ScopedOOMInjector oomInjectorReadPath(
       [this]() -> bool { return folly::Random::oneIn(10, rng_); },
@@ -1539,7 +1549,8 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
     bool useFiltersAsNode,
     bool insertProjectToBlockPushdown,
     const RowTypePtr& fullOutSchema,
-    const std::vector<std::string>& outputColumnNames) {
+    const std::vector<std::string>& outputColumnNames,
+    const std::unordered_map<std::string, std::string>& readConfig) {
   // 'insertProjectToBlockPushdown' only takes effect on the reference plan,
   // where the Project below is what blocks aggregation pushdown; it is
   // meaningless (and never applied) on the pushdown plan. Enforce the pairing
@@ -1568,6 +1579,23 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
 
   CursorParameters params;
   params.serialExecution = true;
+
+  // Apply the driver-supplied reader config as connector session config under
+  // this fuzzer's connectorId. The serial task cursor requires a QueryCtx with
+  // no executor supplied, so construct one explicitly here only when there is
+  // config to apply; otherwise the cursor creates its own.
+  if (!readConfig.empty()) {
+    std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
+        connectorConfigs;
+    connectorConfigs.emplace(
+        connectorId(),
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>(readConfig)));
+    params.queryCtx = core::QueryCtx::create(
+        /*executor=*/nullptr,
+        core::QueryConfig{{}},
+        std::move(connectorConfigs));
+  }
 
   PlanBuilder builder;
   builder.filtersAsNode(useFiltersAsNode);
