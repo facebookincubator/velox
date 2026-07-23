@@ -23,6 +23,8 @@
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
+#include <string_view>
+
 namespace facebook::velox::exec {
 namespace test {
 class RowContainerTestHelper;
@@ -428,6 +430,10 @@ class RowContainer {
       const FlatVector<StringView>& vector,
       vector_size_t index,
       char* row);
+
+  /// Copies serialized row bytes produced by 'extractSerializedRows' into the
+  /// container.
+  void storeSerializedRow(std::string_view serialized, char* row);
 
   /// Copies the values at 'col' into 'result' (starting at 'resultOffset')
   /// for the 'numRows' rows pointed to by 'rows'. If a 'row' is null, sets
