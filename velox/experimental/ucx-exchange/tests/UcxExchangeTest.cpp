@@ -1420,7 +1420,7 @@ TEST_P(UcxExchangeTest, batchAccumulationTest) {
 
     // Pass custom threshold via QueryConfig.
     std::unordered_map<std::string, std::string> extraConfig{
-        {core::QueryConfig::kUcxPartitionedOutputBatchRows,
+        {cudf_velox::CudfConfig::kUcxPartitionedOutputBatchRows,
          std::to_string(customThreshold)}};
 
     auto srcTask = createPartitionedOutputTask(

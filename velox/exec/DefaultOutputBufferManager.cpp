@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/DefaultOutputBufferManager.h"
+#include "velox/core/PlanFragment.h"
+#include "velox/exec/OutputBufferManagerRegistryInternal.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -25,10 +27,18 @@ DefaultOutputBufferManager::getInstanceRef() {
 }
 
 // static
-const std::shared_ptr<DefaultOutputBufferManager>&
-DefaultOutputBufferManager::getInstanceRef(const Options& options) {
+const std::shared_ptr<DefaultOutputBufferManager>& DefaultOutputBufferManager::getInstanceRef(
+    const Options& options) {
   static const std::shared_ptr<DefaultOutputBufferManager> instance =
       std::make_shared<DefaultOutputBufferManager>(options);
+  const std::string httpTransport{core::TransportKind::kHttp};
+  if (!outputBufferManagers().find(httpTransport)) {
+    // The default HTTP manager is unconditionally available (null predicate).
+    outputBufferManagers().insert(
+        httpTransport,
+        std::make_shared<OutputBufferManagerEntry>(instance),
+        /*overwrite=*/true);
+  }
   return instance;
 }
 
@@ -178,6 +188,14 @@ std::string DefaultOutputBufferManager::toString() {
     out << "]";
     return out.str();
   });
+}
+
+std::string DefaultOutputBufferManager::toString(const std::string& taskId) {
+  auto buffer = getBufferIfExists(taskId);
+  if (buffer != nullptr) {
+    return buffer->toString();
+  }
+  return "";
 }
 
 double DefaultOutputBufferManager::getUtilization(const std::string& taskId) {

@@ -25,7 +25,8 @@
 #include <future>
 #include <memory>
 #include <tuple>
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
+#include "velox/common/EnumDefine.h"
 #include "velox/experimental/ucx-exchange/CommElement.h"
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
 #include "velox/experimental/ucx-exchange/PartitionKey.h"

@@ -215,7 +215,6 @@ PartitionedOutput::PartitionedOutput(
           planNode->inputType(),
           planNode->outputType(),
           planNode->outputType())),
-      bufferManager_(DefaultOutputBufferManager::getInstanceRef()),
       // NOTE: 'bufferReleaseFn_' holds a reference on the associated task to
       // prevent it from deleting while there are output buffers being accessed
       // out of the partitioned output buffer manager such as in Prestissimo,
@@ -244,6 +243,27 @@ PartitionedOutput::PartitionedOutput(
     VELOX_USER_CHECK(keyChannels_.empty());
     VELOX_USER_CHECK_NULL(partitionFunction_);
   }
+}
+
+void PartitionedOutput::initialize() {
+  Operator::initialize();
+  // Source the output buffer manager from the Task, which resolves it from the
+  // plan fragment's output transport type. Resolving here (not in the
+  // constructor) is required because driver adapters may replace this operator
+  // with a transport-specific one (e.g. UcxPartitionedOutput) after
+  // construction but before initialize(); a replaced-away operator is never
+  // initialized, so this validation only runs for the operator that survives.
+  auto manager = operatorCtx_->task()->outputBufferManager().lock();
+  VELOX_CHECK_NOT_NULL(
+      manager, "Task has no output buffer manager for partitioned output");
+  auto httpManager =
+      std::dynamic_pointer_cast<DefaultOutputBufferManager>(manager);
+  VELOX_CHECK_NOT_NULL(
+      httpManager,
+      "PartitionedOutput requires the default OutputBufferManager but the task "
+      "resolved an output buffer manager for a different transport; the "
+      "matching transport-specific output operator was not substituted");
+  bufferManager_ = std::move(httpManager);
 }
 
 void PartitionedOutput::initializeInput(RowVectorPtr input) {

@@ -32,7 +32,7 @@
 
 namespace facebook::velox::exec {
 
-class DefaultOutputBufferManager;
+class IOutputBufferManager;
 
 class HashJoinBridge;
 class IndexLookupJoinBridge;
@@ -165,6 +165,13 @@ class Task : public std::enable_shared_from_this<Task> {
   const trace::TraceCtx* traceCtx() const {
     return traceCtx_.get();
   }
+
+  /// Returns the output buffer manager selected for this task's partitioned
+  /// output, resolved in initializePartitionOutput() from the plan fragment's
+  /// output transport type. Returns an empty weak_ptr if the task has no
+  /// partitioned output. Held as a weak_ptr to break the reference cycle
+  /// through OutputBuffer::task_; callers must lock() and null-check.
+  std::weak_ptr<IOutputBufferManager> outputBufferManager() const;
 
   /// Returns ConsumerSupplier passed in the constructor.
   ConsumerSupplier consumerSupplier() const {
@@ -851,6 +858,14 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns true if all the splits have finished.
   bool testingAllSplitsFinished();
 
+  /// Test-only. Binds the output buffer manager directly, for tests that drive
+  /// OutputBufferManager::initializeTask() without going through Task::start()
+  /// and initializePartitionOutput().
+  void testingSetOutputBufferManager(
+      std::weak_ptr<IOutputBufferManager> manager) {
+    setOutputBufferManager(std::move(manager));
+  }
+
  private:
   // Hook of system-wide running task list.
   struct TaskListEntry {
@@ -899,6 +914,10 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Creates the output buffer in partitioned output buffer manager if needed.
   void initializePartitionOutput();
+
+  // Binds the output buffer manager resolved in initializePartitionOutput().
+  // Locks mutex_, so it must not be called while holding it.
+  void setOutputBufferManager(std::weak_ptr<IOutputBufferManager> manager);
 
   // Creates and starts drivers.
   void createAndStartDrivers(uint32_t concurrentSplitGroups);
@@ -1470,7 +1489,12 @@ class Task : public std::enable_shared_from_this<Task> {
   // ungrouped execution we use the [0] entry in this vector.
   std::unordered_map<uint32_t, SplitGroupState> splitGroupStates_;
 
-  std::weak_ptr<DefaultOutputBufferManager> bufferManager_;
+  // Output buffer manager that handles this task's partitioned output. Resolved
+  // in initializePartitionOutput() using the plan fragment's output transport
+  // type.
+  // Stored as weak_ptr to break the reference cycle through OutputBuffer::task_
+  // which holds a shared_ptr<Task>.
+  std::weak_ptr<IOutputBufferManager> bufferManager_;
 
   // Boolean indicating that we have already received no-more-output-buffers
   // message. Subsequent messages will be ignored.

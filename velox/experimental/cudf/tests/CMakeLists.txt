@@ -140,6 +140,18 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_exchange_adapter_selection_test
+  SOURCES Main.cpp ExchangeAdapterSelectionTest.cpp
+  LIBS
+    ${CUDF_TEST_DEFAULT_LIBS}
+    velox_ucx_exchange
+    velox_vector_fuzzer
+    velox_exec_test_lib
+    velox_test_util
+  TIMEOUT 3000
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_filter_project_test
   SOURCES Main.cpp FilterProjectTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_test_lib
