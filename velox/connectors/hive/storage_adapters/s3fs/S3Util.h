@@ -172,11 +172,10 @@ inline std::string getRequestID(
           getS3BackendService(error.GetResponseHeaders()),                                                                      \
           error.GetMessage(),                                                                                                   \
           getRequestID(error.GetResponseHeaders()));                                                                            \
-      if (IsRetryableHttpResponseCode(error.GetResponseCode())) {                                                               \
-        auto retryHint = fmt::format(                                                                                           \
+      if (IsRetryableHttpResponseCode(error.GetResponseCode()) || error.ShouldRetry()) {                                        \
+        errMsg.append(fmt::format(                                                                                              \
             " Request failed after retrying {} times. Try increasing the value of 'hive.s3.max-attempts'.",                     \
-            outcome.GetRetryCount());                                                                                           \
-        errMsg.append(retryHint);                                                                                               \
+            outcome.GetRetryCount()));                                                                                          \
       }                                                                                                                         \
       if (error.GetResponseCode() == Aws::Http::HttpResponseCode::NOT_FOUND) {                                                  \
         VELOX_FILE_NOT_FOUND_ERROR(errMsg);                                                                                     \
