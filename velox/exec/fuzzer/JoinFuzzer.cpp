@@ -17,10 +17,6 @@
 #include <boost/random/uniform_int_distribution.hpp>
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
-#include "velox/connectors/ConnectorRegistry.h"
-#include "velox/connectors/hive/HiveConnector.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
@@ -79,7 +75,8 @@ class JoinFuzzer {
  public:
   JoinFuzzer(
       size_t initialSeed,
-      std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner);
+      std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner,
+      const JoinFuzzerCapabilities& capabilities);
 
   void go();
 
@@ -116,6 +113,9 @@ class JoinFuzzer {
   // Returns a list of randomly generated join key types.
   std::vector<TypePtr> generateJoinKeyTypes(int32_t numKeys);
 
+  // Returns the scalar types to use for generating join keys and payloads.
+  const std::vector<TypePtr>& supportedScalarTypes() const;
+
   // Returns randomly generated probe input with upto 3 additional payload
   // columns.
   std::vector<RowVectorPtr> generateProbeInput(
@@ -150,6 +150,14 @@ class JoinFuzzer {
       const std::shared_ptr<JoinSource>& probeSource,
       const std::shared_ptr<JoinSource>& buildSource);
 
+  // Whether the executor supports the given join algorithm for the given join
+  // type. This checks executor-level capabilities only; Velox plan-node
+  // validity is checked separately by JoinMaker.
+  bool supportsAlgorithm(JoinAlgorithm algorithm, core::JoinType joinType)
+      const {
+    return capabilities_.supportsJoinAlgorithm(algorithm, joinType);
+  }
+
   int32_t randInt(int32_t min, int32_t max) {
     return boost::random::uniform_int_distribution<int32_t>(min, max)(rng_);
   }
@@ -172,6 +180,7 @@ class JoinFuzzer {
 
   VectorFuzzer vectorFuzzer_;
   std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner_;
+  JoinFuzzerCapabilities capabilities_;
 
   struct Stats {
     // The total number of iterations tested.
@@ -200,24 +209,11 @@ class JoinFuzzer {
 
 JoinFuzzer::JoinFuzzer(
     size_t initialSeed,
-    std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner)
+    std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner,
+    const JoinFuzzerCapabilities& capabilities)
     : vectorFuzzer_{getFuzzerOptions(), pool_.get()},
-      referenceQueryRunner_{std::move(referenceQueryRunner)} {
-  filesystems::registerLocalFileSystem();
-
-  // Make sure not to run out of open file descriptors.
-  std::unordered_map<std::string, std::string> hiveConfig = {
-      {connector::hive::HiveConfig::kNumCacheFileHandles, "1000"}};
-
-  connector::hive::HiveConnectorFactory factory;
-  auto hiveConnector = factory.newConnector(
-      test::kHiveConnectorId,
-      std::make_shared<config::ConfigBase>(std::move(hiveConfig)));
-  connector::ConnectorRegistry::global().insert(
-      hiveConnector->connectorId(), hiveConnector);
-  dwrf::registerDwrfReaderFactory();
-  dwrf::registerDwrfWriterFactory();
-
+      referenceQueryRunner_{std::move(referenceQueryRunner)},
+      capabilities_(capabilities) {
   seed(initialSeed);
 }
 
@@ -241,8 +237,23 @@ core::JoinType JoinFuzzer::pickJoinType() {
       core::JoinType::kLeftSemiProject,
       core::JoinType::kAnti};
 
-  const size_t idx = randInt(0, kJoinTypes.size() - 1);
-  return kJoinTypes[idx];
+  std::vector<core::JoinType> supported;
+  for (auto joinType : kJoinTypes) {
+    if (capabilities_.supportsJoinType(joinType)) {
+      supported.push_back(joinType);
+    }
+  }
+  VELOX_CHECK(!supported.empty(), "No join types supported by executor");
+
+  const size_t idx = randInt(0, supported.size() - 1);
+  return supported[idx];
+}
+
+const std::vector<TypePtr>& JoinFuzzer::supportedScalarTypes() const {
+  if (!capabilities_.supportedTypes.empty()) {
+    return capabilities_.supportedTypes;
+  }
+  return referenceQueryRunner_->supportedScalarTypes();
 }
 
 std::vector<TypePtr> JoinFuzzer::generateJoinKeyTypes(int32_t numKeys) {
@@ -250,8 +261,8 @@ std::vector<TypePtr> JoinFuzzer::generateJoinKeyTypes(int32_t numKeys) {
   types.reserve(numKeys);
   for (auto i = 0; i < numKeys; ++i) {
     // Pick random scalar type.
-    types.push_back(vectorFuzzer_.randType(
-        referenceQueryRunner_->supportedScalarTypes(), /*maxDepth=*/0));
+    types.push_back(
+        vectorFuzzer_.randType(supportedScalarTypes(), /*maxDepth=*/0));
   }
   return types;
 }
@@ -275,7 +286,7 @@ std::vector<RowVectorPtr> JoinFuzzer::generateProbeInput(
   for (auto i = 0; i < numPayload; ++i) {
     names.push_back(fmt::format("tp{}", i + keyNames.size()));
     types.push_back(vectorFuzzer_.randType(
-        referenceQueryRunner_->supportedScalarTypes(), /*maxDepth=*/2));
+        supportedScalarTypes(), capabilities_.payloadMaxDepth));
   }
 
   const auto inputType = ROW(std::move(names), std::move(types));
@@ -309,7 +320,7 @@ std::vector<RowVectorPtr> JoinFuzzer::generateBuildInput(
   for (auto i = 0; i < numPayload; ++i) {
     names.push_back(fmt::format("bp{}", i + buildKeys.size()));
     types.push_back(vectorFuzzer_.randType(
-        referenceQueryRunner_->supportedScalarTypes(), /*maxDepth=*/2));
+        supportedScalarTypes(), capabilities_.payloadMaxDepth));
   }
 
   const auto rowType = ROW(std::move(names), std::move(types));
@@ -404,19 +415,23 @@ RowVectorPtr JoinFuzzer::execute(
     spillPct = 10;
   }
 
+  const bool oomInjectionEnabled = FLAGS_enable_oom_injection &&
+      capabilities_.supports(PlanFeature::kOomInjection);
   test::ScopedOOMInjector oomInjector(
       []() -> bool { return folly::Random::oneIn(10); },
       10); // Check the condition every 10 ms.
-  if (FLAGS_enable_oom_injection) {
+  if (oomInjectionEnabled) {
     oomInjector.enable();
   }
 
+  const int maxDrivers =
+      capabilities_.supports(PlanFeature::kMultiDriverExecution) ? 2 : 1;
   TestScopedSpillInjection scopedSpillInjection(spillPct);
   RowVectorPtr result;
   try {
-    result = builder.maxDrivers(2).copyResults(pool_.get());
+    result = builder.maxDrivers(maxDrivers).copyResults(pool_.get());
   } catch (VeloxRuntimeError& e) {
-    if (FLAGS_enable_oom_injection &&
+    if (oomInjectionEnabled &&
         e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
         e.message() == test::ScopedOOMInjector::kErrorMessage) {
       // If we enabled OOM injection we expect the exception thrown by the
@@ -521,9 +536,12 @@ RowVectorPtr JoinFuzzer::testCrossProduct(
       joinMaker.makeNestedLoopJoin(inputType, JoinMaker::JoinOrder::NATURAL);
   const auto expected = execute(plan, /*injectSpill=*/false);
 
+  const bool oomInjectionEnabled = FLAGS_enable_oom_injection &&
+      capabilities_.supports(PlanFeature::kOomInjection);
+
   // If OOM injection is not enabled verify the results against Reference
   // query runner.
-  if (!FLAGS_enable_oom_injection) {
+  if (!oomInjectionEnabled) {
     if (auto referenceResult = computeReferenceResults(
             plan.plan, probeSource->batches(), buildSource->batches())) {
       VELOX_CHECK(
@@ -537,7 +555,8 @@ RowVectorPtr JoinFuzzer::testCrossProduct(
   }
 
   std::vector<JoinMaker::PlanWithSplits> altPlans;
-  if (joinMaker.supportsTableScan()) {
+  if (capabilities_.supports(PlanFeature::kTableScan) &&
+      joinMaker.supportsTableScan()) {
     altPlans.push_back(joinMaker.makeNestedLoopJoinWithTableScan(
         JoinMaker::JoinOrder::NATURAL));
   }
@@ -561,27 +580,32 @@ RowVectorPtr JoinFuzzer::testCrossProduct(
 void addPlansForInputType(
     const JoinMaker::InputType inputType,
     const JoinMaker& joinMaker,
+    const JoinFuzzerCapabilities& capabilities,
+    core::JoinType joinType,
     std::vector<JoinMaker::PlanWithSplits>& plans) {
-  plans.push_back(joinMaker.makeHashJoin(
-      inputType,
-      JoinMaker::PartitionStrategy::NONE,
-      JoinMaker::JoinOrder::NATURAL));
-  plans.push_back(joinMaker.makeHashJoin(
-      inputType,
-      JoinMaker::PartitionStrategy::ROUND_ROBIN,
-      JoinMaker::JoinOrder::NATURAL));
-  plans.push_back(joinMaker.makeHashJoin(
-      inputType,
-      JoinMaker::PartitionStrategy::HASH,
-      JoinMaker::JoinOrder::NATURAL));
-  if (joinMaker.supportsFlippingHashJoin()) {
+  if (capabilities.supportsJoinAlgorithm(JoinAlgorithm::kHash, joinType)) {
     plans.push_back(joinMaker.makeHashJoin(
         inputType,
         JoinMaker::PartitionStrategy::NONE,
-        JoinMaker::JoinOrder::FLIPPED));
+        JoinMaker::JoinOrder::NATURAL));
+    plans.push_back(joinMaker.makeHashJoin(
+        inputType,
+        JoinMaker::PartitionStrategy::ROUND_ROBIN,
+        JoinMaker::JoinOrder::NATURAL));
+    plans.push_back(joinMaker.makeHashJoin(
+        inputType,
+        JoinMaker::PartitionStrategy::HASH,
+        JoinMaker::JoinOrder::NATURAL));
+    if (joinMaker.supportsFlippingHashJoin()) {
+      plans.push_back(joinMaker.makeHashJoin(
+          inputType,
+          JoinMaker::PartitionStrategy::NONE,
+          JoinMaker::JoinOrder::FLIPPED));
+    }
   }
 
-  if (joinMaker.supportsMergeJoin()) {
+  if (capabilities.supportsJoinAlgorithm(JoinAlgorithm::kMerge, joinType) &&
+      joinMaker.supportsMergeJoin()) {
     plans.push_back(
         joinMaker.makeMergeJoin(inputType, JoinMaker::JoinOrder::NATURAL));
     if (joinMaker.supportsFlippingMergeJoin()) {
@@ -590,7 +614,9 @@ void addPlansForInputType(
     }
   }
 
-  if (joinMaker.supportsNestedLoopJoin()) {
+  if (capabilities.supportsJoinAlgorithm(
+          JoinAlgorithm::kNestedLoop, joinType) &&
+      joinMaker.supportsNestedLoopJoin()) {
     plans.push_back(
         joinMaker.makeNestedLoopJoin(inputType, JoinMaker::JoinOrder::NATURAL));
     if (joinMaker.supportsFlippingNestedLoopJoin()) {
@@ -601,27 +627,43 @@ void addPlansForInputType(
 }
 
 void JoinFuzzer::verify(core::JoinType joinType) {
-  const bool nullAware =
-      isNullAwareSupported(joinType) && vectorFuzzer_.coinToss(0.5);
+  const bool nullAware = isNullAwareSupported(joinType) &&
+      vectorFuzzer_.coinToss(0.5) &&
+      capabilities_.supportsNullAware(joinType, /*hasFilter=*/false);
 
   // Add boolean/integer join filter.
-  const bool withFilter = vectorFuzzer_.coinToss(FLAGS_filter_ratio);
+  const bool filterSupported = capabilities_.supportsFilter(joinType);
+  const bool withFilter =
+      filterSupported && vectorFuzzer_.coinToss(FLAGS_filter_ratio);
   // Null-aware joins allow only one join key.
   const int numKeys = nullAware ? (withFilter ? 0 : 1) : randInt(1, 5);
   std::vector<TypePtr> keyTypes = generateJoinKeyTypes(numKeys);
   std::string filter;
 
   if (withFilter) {
-    if (vectorFuzzer_.coinToss(0.5)) {
-      keyTypes.push_back(BOOLEAN());
-      filter = vectorFuzzer_.coinToss(0.5)
-          ? fmt::format("t{} = true", keyTypes.size() - 1)
-          : fmt::format("u{} = true", keyTypes.size() - 1);
+    // Check null-aware support with filter.
+    if (nullAware && !capabilities_.supportsNullAware(joinType, true)) {
+      // Fall through without filter if null-aware + filter is not supported.
     } else {
-      keyTypes.push_back(INTEGER());
-      filter = vectorFuzzer_.coinToss(0.5)
-          ? fmt::format("t{} % {} = 0", keyTypes.size() - 1, randInt(1, 9))
-          : fmt::format("u{} % {} = 0", keyTypes.size() - 1, randInt(1, 9));
+      if (vectorFuzzer_.coinToss(0.5)) {
+        keyTypes.push_back(BOOLEAN());
+        filter = vectorFuzzer_.coinToss(0.5)
+            ? fmt::format("t{} = true", keyTypes.size() - 1)
+            : fmt::format("u{} = true", keyTypes.size() - 1);
+      } else {
+        keyTypes.push_back(INTEGER());
+        filter = vectorFuzzer_.coinToss(0.5)
+            ? fmt::format("t{} % {} = 0", keyTypes.size() - 1, randInt(1, 9))
+            : fmt::format("u{} % {} = 0", keyTypes.size() - 1, randInt(1, 9));
+      }
+
+      // Check if the executor supports this specific filter expression.
+      if (!capabilities_.supportsFilterExpression(
+              JoinAlgorithm::kHash, joinType, filter)) {
+        filter.clear();
+        // Remove the extra key type added for the filter.
+        keyTypes.pop_back();
+      }
     }
   }
 
@@ -678,7 +720,8 @@ void JoinFuzzer::verify(core::JoinType joinType) {
 
   // Test cross product without filter with 10% chance. Avoid testing cross
   // product if input size is too large.
-  if ((core::isInnerJoin(joinType) || core::isLeftJoin(joinType) ||
+  if (supportsAlgorithm(JoinAlgorithm::kNestedLoop, joinType) &&
+      (core::isInnerJoin(joinType) || core::isLeftJoin(joinType) ||
        core::isFullJoin(joinType)) &&
       FLAGS_batch_size * FLAGS_num_batches <= 500) {
     if (vectorFuzzer_.coinToss(0.1)) {
@@ -698,9 +741,14 @@ void JoinFuzzer::verify(core::JoinType joinType) {
           JoinMaker::InputType::ENCODED,
           probeSource,
           buildSource);
-      auto flatResult = testCrossProduct(
-          crossJoinMaker, JoinMaker::InputType::FLAT, probeSource, buildSource);
-      test::assertEqualResults({result}, {flatResult});
+      if (capabilities_.supports(PlanFeature::kFlatInputVariants)) {
+        auto flatResult = testCrossProduct(
+            crossJoinMaker,
+            JoinMaker::InputType::FLAT,
+            probeSource,
+            buildSource);
+        test::assertEqualResults({result}, {flatResult});
+      }
     }
   }
 
@@ -736,9 +784,12 @@ void JoinFuzzer::verify(core::JoinType joinType) {
 
   const auto expected = execute(defaultPlan, /*injectSpill=*/false);
 
+  const bool oomInjectionEnabled = FLAGS_enable_oom_injection &&
+      capabilities_.supports(PlanFeature::kOomInjection);
+
   // If OOM injection is not enabled verify the results against Reference
   // query runner.
-  if (!FLAGS_enable_oom_injection) {
+  if (!oomInjectionEnabled) {
     if (auto referenceResult = computeReferenceResults(
             defaultPlan.plan, convertedProbeInput, convertedBuildInput)) {
       VELOX_CHECK(
@@ -755,47 +806,70 @@ void JoinFuzzer::verify(core::JoinType joinType) {
 
   std::vector<JoinMaker::PlanWithSplits> altPlans;
 
-  addPlansForInputType(JoinMaker::InputType::ENCODED, joinMaker, altPlans);
-  addPlansForInputType(JoinMaker::InputType::FLAT, joinMaker, altPlans);
+  addPlansForInputType(
+      JoinMaker::InputType::ENCODED,
+      joinMaker,
+      capabilities_,
+      joinType,
+      altPlans);
+  if (capabilities_.supports(PlanFeature::kFlatInputVariants)) {
+    addPlansForInputType(
+        JoinMaker::InputType::FLAT,
+        joinMaker,
+        capabilities_,
+        joinType,
+        altPlans);
+  }
 
-  if (joinMaker.supportsTableScan()) {
+  const bool tableScanEnabled =
+      capabilities_.supports(PlanFeature::kTableScan) &&
+      joinMaker.supportsTableScan();
+
+  if (tableScanEnabled) {
     const int32_t numGroups = randInt(1, probeSource->batches().size());
 
-    // Use ungrouped execution.
-    altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
-        std::nullopt, false, JoinMaker::JoinOrder::NATURAL));
-
-    // Use unmixed mode grouped execution.
-    altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
-        numGroups, false, JoinMaker::JoinOrder::NATURAL));
-
-    // Use mixed mode grouped execution.
-    if (!needRightSideJoin(joinType)) {
-      // Mixed grouped mode join does not support types that needs right side
-      // join.
-      altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
-          numGroups, true, JoinMaker::JoinOrder::NATURAL));
-    }
-
-    if (joinMaker.supportsFlippingHashJoin()) {
+    if (supportsAlgorithm(JoinAlgorithm::kHash, joinType)) {
       // Use ungrouped execution.
       altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
-          std::nullopt, false, JoinMaker::JoinOrder::FLIPPED));
+          std::nullopt, false, JoinMaker::JoinOrder::NATURAL));
 
-      // Use unmixed mode grouped execution.
-      altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
-          numGroups, false, JoinMaker::JoinOrder::FLIPPED));
-
-      // Use mixed mode grouped execution.
-      if (!needRightSideJoin(flipJoinType(joinType))) {
-        // Mixed grouped mode join does not support types that needs right side
-        // join.
+      if (capabilities_.supports(PlanFeature::kGroupedExecution)) {
+        // Use unmixed mode grouped execution.
         altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
-            numGroups, true, JoinMaker::JoinOrder::FLIPPED));
+            numGroups, false, JoinMaker::JoinOrder::NATURAL));
+
+        // Use mixed mode grouped execution.
+        if (!needRightSideJoin(joinType)) {
+          // Mixed grouped mode join does not support types that needs right
+          // side join.
+          altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
+              numGroups, true, JoinMaker::JoinOrder::NATURAL));
+        }
+      }
+
+      if (joinMaker.supportsFlippingHashJoin()) {
+        // Use ungrouped execution.
+        altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
+            std::nullopt, false, JoinMaker::JoinOrder::FLIPPED));
+
+        if (capabilities_.supports(PlanFeature::kGroupedExecution)) {
+          // Use unmixed mode grouped execution.
+          altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
+              numGroups, false, JoinMaker::JoinOrder::FLIPPED));
+
+          // Use mixed mode grouped execution.
+          if (!needRightSideJoin(flipJoinType(joinType))) {
+            // Mixed grouped mode join does not support types that needs right
+            // side join.
+            altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
+                numGroups, true, JoinMaker::JoinOrder::FLIPPED));
+          }
+        }
       }
     }
 
-    if (joinMaker.supportsMergeJoin()) {
+    if (supportsAlgorithm(JoinAlgorithm::kMerge, joinType) &&
+        joinMaker.supportsMergeJoin()) {
       altPlans.push_back(
           joinMaker.makeMergeJoinWithTableScan(JoinMaker::JoinOrder::NATURAL));
       if (joinMaker.supportsFlippingMergeJoin()) {
@@ -804,7 +878,8 @@ void JoinFuzzer::verify(core::JoinType joinType) {
       }
     }
 
-    if (joinMaker.supportsNestedLoopJoin()) {
+    if (supportsAlgorithm(JoinAlgorithm::kNestedLoop, joinType) &&
+        joinMaker.supportsNestedLoopJoin()) {
       altPlans.push_back(joinMaker.makeNestedLoopJoinWithTableScan(
           JoinMaker::JoinOrder::NATURAL));
       if (joinMaker.supportsFlippingNestedLoopJoin()) {
@@ -814,6 +889,9 @@ void JoinFuzzer::verify(core::JoinType joinType) {
     }
   }
 
+  const bool spillEnabled = FLAGS_enable_spill &&
+      capabilities_.supports(PlanFeature::kSpillInjection);
+
   for (auto i = 0; i < altPlans.size(); ++i) {
     LOG(INFO) << "Testing plan #" << i;
     auto actual = execute(altPlans[i], /*injectSpill=*/false);
@@ -822,11 +900,10 @@ void JoinFuzzer::verify(core::JoinType joinType) {
           test::assertEqualResults({expected}, {actual}),
           "Logically equivalent plans produced different results");
     } else {
-      VELOX_CHECK(
-          FLAGS_enable_oom_injection, "Got unexpected nullptr for results");
+      VELOX_CHECK(oomInjectionEnabled, "Got unexpected nullptr for results");
     }
 
-    if (FLAGS_enable_spill) {
+    if (spillEnabled) {
       // Spilling for right semi project doesn't work yet.
       if (auto hashJoin = std::dynamic_pointer_cast<const core::HashJoinNode>(
               altPlans[i].plan)) {
@@ -849,8 +926,7 @@ void JoinFuzzer::verify(core::JoinType joinType) {
           throw;
         }
       } else {
-        VELOX_CHECK(
-            FLAGS_enable_oom_injection, "Got unexpected nullptr for results");
+        VELOX_CHECK(oomInjectionEnabled, "Got unexpected nullptr for results");
       }
     }
   }
@@ -884,9 +960,33 @@ void JoinFuzzer::go() {
 
 } // namespace
 
+JoinFuzzerCapabilities cpuJoinCapabilities() {
+  JoinFuzzerCapabilities caps;
+  caps.supportsJoinType = [](core::JoinType) { return true; };
+  caps.supportsJoinAlgorithm = [](JoinAlgorithm, core::JoinType) {
+    return true;
+  };
+  caps.supportsFilter = [](core::JoinType) { return true; };
+  caps.supportsFilterExpression =
+      [](JoinAlgorithm, core::JoinType, const std::string&) { return true; };
+  caps.supportsNullAware = [](core::JoinType, bool) { return true; };
+  caps.supportedTypes = {}; // Empty means use referenceQueryRunner defaults.
+  caps.payloadMaxDepth = 2;
+  caps.planFeatures = {
+      PlanFeature::kSpillInjection,
+      PlanFeature::kOomInjection,
+      PlanFeature::kTableScan,
+      PlanFeature::kGroupedExecution,
+      PlanFeature::kFlatInputVariants,
+      PlanFeature::kMultiDriverExecution,
+  };
+  return caps;
+}
+
 void joinFuzzer(
     size_t seed,
-    std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner) {
-  JoinFuzzer(seed, std::move(referenceQueryRunner)).go();
+    std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner,
+    const JoinFuzzerCapabilities& capabilities) {
+  JoinFuzzer(seed, std::move(referenceQueryRunner), capabilities).go();
 }
 } // namespace facebook::velox::exec
