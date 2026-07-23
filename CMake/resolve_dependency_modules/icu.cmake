@@ -89,6 +89,7 @@ foreach(component ${icu_components})
     ICU::${component}
     PROPERTIES
       IMPORTED_LOCATION ${ICU_${component}_LIBRARY}
+      INTERFACE_INCLUDE_DIRECTORIES ${ICU_INCLUDE_DIRS}
       INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ${ICU_INCLUDE_DIRS}
   )
   target_link_libraries(ICU::ICU INTERFACE ICU::${component})
