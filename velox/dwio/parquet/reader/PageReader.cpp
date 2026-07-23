@@ -890,7 +890,8 @@ void PageReader::makeDecoder() {
       }
       break;
     case Encoding::DELTA_BYTE_ARRAY:
-      if (parquetType == thrift::Type::BYTE_ARRAY) {
+      if (parquetType == thrift::Type::BYTE_ARRAY ||
+          parquetType == thrift::Type::FIXED_LEN_BYTE_ARRAY) {
         if (!deltaByteArrDecoder_) {
           deltaByteArrDecoder_ = std::make_unique<DeltaByteArrayDecoder>();
         }
