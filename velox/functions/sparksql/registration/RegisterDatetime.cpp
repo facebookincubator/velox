@@ -18,6 +18,12 @@
 #include "velox/functions/sparksql/DateTimeFunctions.h"
 
 namespace facebook::velox::functions::sparksql {
+namespace {
+template <typename T>
+using MakeTimestampWithTimestamp = MakeTimestampFunction<T, Timestamp>;
+template <typename T>
+using MakeTimestampWithTimestampUtc = MakeTimestampFunction<T, TimestampUtc>;
+} // namespace
 
 void registerDatetimeFunctions(const std::string& prefix) {
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
@@ -105,7 +111,53 @@ void registerDatetimeFunctions(const std::string& prefix) {
       {prefix + "make_ym_interval"});
   registerFunction<MakeYMIntervalFunction, IntervalYearMonth, int32_t, int32_t>(
       {prefix + "make_ym_interval"});
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_make_timestamp, prefix + "make_timestamp");
+  {
+    // Seconds argument is decimal(precision, 6); precision is left free
+    // (any short-decimal precision is accepted), scale is pinned to 6.
+    std::vector<exec::SignatureVariable> secondsConstraints = {
+        exec::SignatureVariable(
+            S1::name(), "6", exec::ParameterType::kIntegerParameter),
+    };
+    registerFunction<
+        MakeTimestampWithTimestamp,
+        Timestamp,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        ShortDecimal<P1, S1>>({prefix + "make_timestamp"}, secondsConstraints);
+    registerFunction<
+        MakeTimestampWithTimestamp,
+        Timestamp,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        ShortDecimal<P1, S1>,
+        Varchar>({prefix + "make_timestamp"}, secondsConstraints);
+    registerFunction<
+        MakeTimestampWithTimestampUtc,
+        TimestampUtc,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        ShortDecimal<P1, S1>>(
+        {prefix + "make_timestamp_ntz"}, secondsConstraints);
+    registerFunction<
+        TryMakeTimestampNtzFunction,
+        TimestampUtc,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        ShortDecimal<P1, S1>>(
+        {prefix + "try_make_timestamp_ntz"}, secondsConstraints);
+  }
   registerFunction<TimestampToMicrosFunction, int64_t, Timestamp>(
       {prefix + "unix_micros"});
   registerUnaryIntegralWithTReturn<MicrosToTimestampFunction, Timestamp>(
