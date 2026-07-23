@@ -262,6 +262,11 @@ EXTERN int delete_segment;
  */
 
 /*
+ * helper macros
+ */
+#define SCALED_VAL(v) static_cast<decltype(v)>((v) * ctx->scale_factor)
+
+/*
  * defines which control the parts table
  */
 #define P_SIZE 126
@@ -305,7 +310,7 @@ EXTERN int delete_segment;
  */
 #define PS_SIZE 145
 #define PS_SKEY_MIN 0
-#define PS_SKEY_MAX ((ctx->tdefs[SUPP].base - 1) * ctx->scale_factor)
+#define PS_SKEY_MAX SCALED_VAL(ctx->tdefs[SUPP].base - 1)
 #define PS_SCST_MIN 100
 #define PS_SCST_MAX 100000
 #define PS_QTY_MIN 1
@@ -324,7 +329,7 @@ EXTERN int delete_segment;
  */
 #define O_SIZE 109
 #define O_CKEY_MIN 1
-#define O_CKEY_MAX (ctx->tdefs[CUST].base * ctx->scale_factor)
+#define O_CKEY_MAX SCALED_VAL(ctx->tdefs[CUST].base)
 #define O_ODATE_MIN STARTDATE
 #define O_ODATE_MAX (STARTDATE + TOTDATE - (L_SDTE_MAX + L_RDTE_MAX) - 1)
 #define O_CLRK_TAG "Clerk#"
@@ -344,7 +349,7 @@ EXTERN int delete_segment;
 #define L_DCNT_MIN 0
 #define L_DCNT_MAX 10
 #define L_PKEY_MIN 1
-#define L_PKEY_MAX (ctx->tdefs[PART].base * ctx->scale_factor)
+#define L_PKEY_MAX SCALED_VAL(ctx->tdefs[PART].base)
 #define L_SDTE_MIN 1
 #define L_SDTE_MAX 121
 #define L_CDTE_MIN 30
@@ -599,7 +604,7 @@ struct DBGenContext {
       {"region.tbl", "region table", NATIONS_MAX, NULL, NULL, NONE, 0},
   };
 
-  long scale_factor = 1;
+  double scale_factor = 1.0;
   long* permute = nullptr;
 };
 
