@@ -35,6 +35,12 @@ TEST_F(MapTopNValuesTest, emptyMap) {
       makeArrayVectorFromJson<int64_t>({
           "[]",
       }));
+
+  assertEqualVectors(
+      evaluate("map_top_n_values(c0, 3, (x,y) -> x)", input),
+      makeArrayVectorFromJson<int64_t>({
+          "[]",
+      }));
 }
 
 TEST_F(MapTopNValuesTest, basic) {
@@ -68,6 +74,9 @@ TEST_F(MapTopNValuesTest, basic) {
 
   assertEqualVectors(expected, result);
 
+  result = evaluate("map_top_n_values(c0, 3, (x,y) -> y)", data);
+  assertEqualVectors(expected, result);
+
   // n = 0. Expect empty maps.
   result = evaluate("map_top_n_values(c0, 0)", data);
 
@@ -85,9 +94,16 @@ TEST_F(MapTopNValuesTest, basic) {
 
   assertEqualVectors(expected, result);
 
+  result = evaluate("map_top_n_values(c0, 0, (x,y) -> y)", data);
+  assertEqualVectors(expected, result);
+
   // n is negative. Expect an error.
   VELOX_ASSERT_THROW(
       evaluate("map_top_n_values(c0, -1)", data),
+      "n must be greater than or equal to 0");
+
+  VELOX_ASSERT_THROW(
+      evaluate("map_top_n_values(c0, -1, (x,y) -> y)", data),
       "n must be greater than or equal to 0");
 }
 
@@ -100,6 +116,14 @@ TEST_F(MapTopNValuesTest, complexKeys) {
 
   assertEqualVectors(
       evaluate("map_top_n_values(c0, 1)", input),
+      makeArrayVectorFromJson<std::string>({
+          "[\"y\"]",
+          "[\"dw\"]",
+          "[\"dd\"]",
+      }));
+
+  assertEqualVectors(
+      evaluate("map_top_n_values(c0, 1, (x,y) -> y)", input),
       makeArrayVectorFromJson<std::string>({
           "[\"y\"]",
           "[\"dw\"]",
@@ -139,6 +163,17 @@ TEST_F(MapTopNValuesTest, floatingPointValues) {
   });
 
   assertEqualVectors(expected, result);
+
+  result = evaluate("map_top_n_values(c0, 3, (x,y) -> y)", data);
+  assertEqualVectors(expected, result);
+
+  result = evaluate("map_top_n_values(c0, 3, (x,y) -> x)", data);
+  expected = makeArrayVectorFromJson<double>({
+      "[2.0, 4.9, 1.2]",
+      "[2.0, 4.9, null]",
+  });
+
+  assertEqualVectors(expected, result);
 }
 
 TEST_F(MapTopNValuesTest, edgeCaseValues) {
@@ -159,6 +194,9 @@ TEST_F(MapTopNValuesTest, edgeCaseValues) {
   });
 
   assertEqualVectors(expected, result);
+
+  result = evaluate("map_top_n_values(c0, 2, (x,y) -> y)", data);
+  assertEqualVectors(expected, result);
 }
 
 TEST_F(MapTopNValuesTest, stringValuesWithSpecialChars) {
@@ -178,6 +216,53 @@ TEST_F(MapTopNValuesTest, stringValuesWithSpecialChars) {
   });
 
   assertEqualVectors(expected, result);
+
+  result = evaluate("map_top_n_values(c0, 2, (x,y) -> y)", data);
+  assertEqualVectors(expected, result);
 }
+
+TEST_F(MapTopNValuesTest, nullLambda) {
+  // Test that passing NULL as the lambda falls back to sorting by values
+  // (same as the 2-argument version).
+  RowVectorPtr input = makeRowVector({
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{1:30, 2:10, 3:50, 4:20, 5:40}",
+          "{1:30, 2:10, 3:50}",
+          "{1:30, 2:10}",
+      }),
+  });
+
+  assertEqualVectors(
+      evaluate("map_top_n_values(c0, 3, null)", input),
+      makeArrayVectorFromJson<int64_t>({
+          "[50, 40, 30]",
+          "[50, 30, 10]",
+          "[30, 10]",
+      }));
+
+  // Verify it matches the 2-argument version.
+  assertEqualVectors(
+      evaluate("map_top_n_values(c0, 3)", input),
+      evaluate("map_top_n_values(c0, 3, null)", input));
+}
+
+TEST_F(MapTopNValuesTest, lambdaErrorHandling) {
+  RowVectorPtr input = makeRowVector({
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{1:5, 2:10, 0:20}",
+      }),
+  });
+
+  // Lambda that divides by key - should error on key=0.
+  VELOX_ASSERT_THROW(
+      evaluate("map_top_n_values(c0, 2, (k,v) -> v / k)", input),
+      "division by zero");
+
+  // With TRY, the error row should return null.
+  assertEqualVectors(
+      evaluate("try(map_top_n_values(c0, 2, (k,v) -> v / k))", input),
+      makeNullableArrayVector<int64_t>({std::nullopt}));
+}
+
 } // namespace
 } // namespace facebook::velox::functions
