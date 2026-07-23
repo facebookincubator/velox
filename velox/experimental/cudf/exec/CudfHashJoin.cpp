@@ -739,10 +739,7 @@ void CudfHashJoinProbe::doNoMoreInput() {
   auto stream = cudfGlobalStreamPool().get_stream();
   // Using output_mr here to allow spilling queued up large tables
   auto tbl = getConcatenatedTable(
-      std::exchange(inputs_, {}),
-      joinNode_->sources()[1]->outputType(),
-      stream,
-      get_output_mr());
+      std::exchange(inputs_, {}), probeType_, stream, get_output_mr());
 
   VELOX_CHECK_NOT_NULL(tbl);
 
@@ -754,7 +751,7 @@ void CudfHashJoinProbe::doNoMoreInput() {
   // Store the concatenated table in input_
   input_ = std::make_shared<CudfVector>(
       operatorCtx_->pool(),
-      joinNode_->outputType(),
+      probeType_,
       tbl->num_rows(),
       std::move(tbl),
       stream);
