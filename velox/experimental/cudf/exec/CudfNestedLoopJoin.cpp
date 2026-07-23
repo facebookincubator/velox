@@ -39,7 +39,6 @@
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/search.hpp>
 #include <cudf/stream_compaction.hpp>
-#include <cudf/unary.hpp>
 
 namespace facebook::velox::cudf_velox {
 
@@ -708,23 +707,16 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::emitProbeMismatchRows(
           probeGatherView, stream, get_output_mr());
     }
   } else {
-    auto unmatchedMask = cudf::unary_operation(
-        probeMatchedFlags_->view(),
-        cudf::unary_operator::NOT,
-        stream,
-        get_temp_mr());
+    auto matchedMask = probeMatchedFlags_->view();
     if (!probeColumnIndicesToGather_.empty()) {
       auto probeGatherView = probeTableView.select(probeColumnIndicesToGather_);
-      unmatchedProbe = cudf::apply_boolean_mask(
-          probeGatherView, unmatchedMask->view(), stream, get_output_mr());
+      unmatchedProbe = cudf::apply_deletion_mask(
+          probeGatherView, matchedMask, stream, get_output_mr());
       numUnmatched = static_cast<cudf::size_type>(unmatchedProbe->num_rows());
     } else {
       // No probe columns in output — count unmatched rows from the mask.
-      auto countTable = cudf::apply_boolean_mask(
-          cudf::table_view{{unmatchedMask->view()}},
-          unmatchedMask->view(),
-          stream,
-          get_temp_mr());
+      auto countTable = cudf::apply_deletion_mask(
+          cudf::table_view{{matchedMask}}, matchedMask, stream, get_temp_mr());
       numUnmatched = static_cast<cudf::size_type>(countTable->num_rows());
     }
   }
@@ -770,29 +762,20 @@ RowVectorPtr CudfNestedLoopJoinProbe::emitBuildMismatchRows(
   auto& buildTable = buildData_.value();
   auto numOutputColumns = outputType_->size();
 
-  // Invert flags: unmatched = NOT(matched).
-  auto unmatchedMask = cudf::unary_operation(
-      buildMatchedFlags_->view(),
-      cudf::unary_operator::NOT,
-      stream,
-      get_temp_mr());
-
-  // Select unmatched build rows.
+  // Select unmatched build rows (deletion mask removes matched rows).
+  auto matchedMask = buildMatchedFlags_->view();
   cudf::size_type numUnmatched;
   std::unique_ptr<cudf::table> unmatchedBuild;
   if (!buildColumnIndicesToGather_.empty()) {
     auto buildGatherView =
         buildTable->view().select(buildColumnIndicesToGather_);
-    unmatchedBuild = cudf::apply_boolean_mask(
-        buildGatherView, unmatchedMask->view(), stream, get_output_mr());
+    unmatchedBuild = cudf::apply_deletion_mask(
+        buildGatherView, matchedMask, stream, get_output_mr());
     numUnmatched = static_cast<cudf::size_type>(unmatchedBuild->num_rows());
   } else {
     // No build columns in output — count unmatched rows from the mask.
-    auto countTable = cudf::apply_boolean_mask(
-        cudf::table_view{{unmatchedMask->view()}},
-        unmatchedMask->view(),
-        stream,
-        get_temp_mr());
+    auto countTable = cudf::apply_deletion_mask(
+        cudf::table_view{{matchedMask}}, matchedMask, stream, get_temp_mr());
     numUnmatched = static_cast<cudf::size_type>(countTable->num_rows());
   }
 
