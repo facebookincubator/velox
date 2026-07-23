@@ -209,6 +209,14 @@ void orderCudfVectorDeallocationsAfterStream(
     std::span<const rmm::cuda_stream_view> inputStreams,
     rmm::cuda_stream_view stream);
 
+/// Creates an all-null cuDF column of \p numRows for the given Velox \p type.
+/// Supports all types including nested LIST and STRUCT.
+std::unique_ptr<cudf::column> makeAllNullColumn(
+    const TypePtr& type,
+    cudf::size_type numRows,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
 /// Extract the base function name from a possibly-prefixed name.
 /// Handles both Presto-style "presto.default.lag" and simple "lag".
 std::string getBaseFunctionName(const std::string& fullName);

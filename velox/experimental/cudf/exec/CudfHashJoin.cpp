@@ -2149,12 +2149,8 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
         for (size_t li = 0; li < leftColumnOutputIndices_.size(); ++li) {
           auto outIdx = leftColumnOutputIndices_[li];
           auto probeChannel = leftColumnIndicesToGather_[li];
-          auto leftCudfDataType =
-              veloxToCudfDataType(probeType_->childAt(probeChannel));
-          auto nullScalar = cudf::make_default_constructed_scalar(
-              leftCudfDataType, stream, get_temp_mr());
-          outCols[outIdx] = cudf::make_column_from_scalar(
-              *nullScalar, m, stream, get_output_mr());
+          outCols[outIdx] = makeAllNullColumn(
+              probeType_->childAt(probeChannel), m, stream, get_output_mr());
         }
         // Right side - gather unmatched build columns if any
         if (!rightColumnIndicesToGather_.empty()) {

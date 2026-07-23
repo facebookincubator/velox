@@ -37,6 +37,7 @@
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/Validation.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/connectors/ConnectorRegistry.h"
@@ -371,6 +372,26 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
         return false;
       }
     }
+
+    // Reject if any join source has types that cuDF cannot represent.
+    // The probe and build pipelines are compiled independently by ToCudf,
+    // so one side may reject GPU execution (e.g. due to unsupported types)
+    // while the other does not. This check prevents a bridge mismatch
+    // where CudfHashJoinProbe waits for a CudfHashJoinBridge that
+    // CudfHashJoinBuild never populates because it stayed on CPU.
+    if (std::any_of(
+            joinPlanNode->sources().begin(),
+            joinPlanNode->sources().end(),
+            [](const auto& source) {
+              return !isTypeSupportedByCudf(source->outputType());
+            })) {
+      LOG_FALLBACK(
+          "HashJoin source has column types unsupported by cuDF, "
+          "PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
+
     return true;
   }
 };
@@ -483,6 +504,22 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
         return false;
       }
     }
+
+    // Reject if any join source has types that cuDF cannot represent.
+    // See comment in CudfHashJoinBaseAdapter::canRunOnGPU.
+    if (std::any_of(
+            joinPlanNode->sources().begin(),
+            joinPlanNode->sources().end(),
+            [](const auto& source) {
+              return !isTypeSupportedByCudf(source->outputType());
+            })) {
+      LOG_FALLBACK(
+          "NestedLoopJoin source has column types unsupported by cuDF, "
+          "PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
+
     return true;
   }
 };
