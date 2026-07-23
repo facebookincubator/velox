@@ -867,6 +867,25 @@ std::optional<size_t> DwrfRowReader::estimatedRowSize() const {
   return estimatedRowSize_;
 }
 
+namespace {
+// Returns true when every top-level field of the file's physical schema is a
+// Hive placeholder name (_col0, _col1, ...). Such files were written by old
+// Hive with no real column names in the footer, so they must be mapped to the
+// requested (table) schema by position rather than by name. An empty schema
+// returns false (nothing to map positionally).
+bool isAllHivePlaceholderNames(const std::shared_ptr<const RowType>& schema) {
+  if (schema == nullptr || schema->size() == 0) {
+    return false;
+  }
+  for (size_t i = 0; i < schema->size(); ++i) {
+    if (schema->nameOf(i).rfind("_col", 0) != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+} // namespace
+
 DwrfReader::DwrfReader(
     const ReaderOptions& options,
     std::unique_ptr<dwio::common::BufferedInput> input)
@@ -882,12 +901,19 @@ DwrfReader::DwrfReader(
   // code. So we rename column names in the file schema to match table schema.
   // We test the options to have 'fileSchema' (actually table schema) as most
   // of the unit tests fail to provide it.
+  //
+  // Even in name-based mapping, a file must be mapped by position when its
+  // physical schema is made entirely of Hive placeholder names (_col0, _col1,
+  // ...) written by old Hive with no real field names, so name-based matching
+  // would find nothing.
   const auto columnMappingMode =
       readerBase_->readerOptions().columnMappingMode();
   if (readerBase_->readerOptions().fileSchema() != nullptr) {
     if (columnMappingMode == dwio::common::ColumnMappingMode::kFieldId) {
       updateColumnNamesFromFieldIds();
-    } else if (columnMappingMode != dwio::common::ColumnMappingMode::kName) {
+    } else if (
+        columnMappingMode != dwio::common::ColumnMappingMode::kName ||
+        isAllHivePlaceholderNames(readerBase_->schema())) {
       updateColumnNamesFromTableSchema();
     }
   }

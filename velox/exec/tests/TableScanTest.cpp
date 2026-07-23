@@ -17,6 +17,7 @@
 #include <shared_mutex>
 
 #include <fmt/ranges.h>
+#include <folly/OperationCancelled.h>
 #include <folly/synchronization/Baton.h>
 #include <folly/synchronization/EventCount.h>
 #include <folly/synchronization/Latch.h>
@@ -6126,11 +6127,11 @@ DEBUG_ONLY_TEST_F(TableScanTest, cancellationToken) {
   std::thread queryThread([&]() {
     auto split = makeHiveConnectorSplit(
         filePath->getPath(), 0, fs::file_size(filePath->getPath()));
-    VELOX_ASSERT_THROW(
+    EXPECT_THROW(
         AssertQueryBuilder(tableScanNode(), duckDbQueryRunner_)
             .split(std::move(split))
             .assertResults("SELECT * FROM tmp"),
-        "Cancelled");
+        folly::OperationCancelled);
     waitForAllTasksToBeDeleted();
   });
 
