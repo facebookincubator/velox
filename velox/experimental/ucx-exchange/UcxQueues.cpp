@@ -235,6 +235,12 @@ void UcxOutputQueue::enqueue(
       totalRowsSent_ += numRows;
       totalPackedColumnsSent_++;
       success = true;
+    } else if (kind_ == core::PartitionedOutputNode::Kind::kArbitrary) {
+      VELOX_CHECK_EQ(destination, 0, "Arbitrary uses destination 0");
+      enqueueArbitraryOutputLocked(
+          std::move(sharedData), dataAvailableCallbacks);
+      updateStatsWithEnqueuedLocked(numBytes, numRows);
+      success = true;
     } else {
       VELOX_CHECK_LT(destination, queues_.size());
       success = enqueuePartitionedOutputLocked(
@@ -280,6 +286,13 @@ void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
     // queue can be nullptr here if the task has terminated and results
     // have been removed. In this case, no data is returned.
     if (queue) {
+      // For arbitrary mode, pull from the shared buffer if the destination
+      // queue is empty. This ensures demand-driven distribution.
+      if (kind_ == core::PartitionedOutputNode::Kind::kArbitrary &&
+          !arbitraryBuffer_.empty()) {
+        queue->enqueueBack(std::move(arbitraryBuffer_.front()));
+        arbitraryBuffer_.pop_front();
+      }
       // Capture weak_ptr instead of raw `this` to prevent use-after-free.
       // The callback fires outside the lock (from enqueue() or terminate()),
       // and concurrent removeTask() can destroy the UcxOutputQueue while
@@ -364,6 +377,24 @@ void UcxOutputQueue::checkIfDone(bool oneDriverFinished) {
               << " avgRowsPerChunk=" << avgRows
               << " totalBytes=" << totalBytesSent_;
     }
+    // For arbitrary, drain remaining shared pool to destination queues
+    // round-robin before sending end markers.
+    if (kind_ == core::PartitionedOutputNode::Kind::kArbitrary) {
+      int32_t bufferId = nextArbitraryLoadIndex_;
+      int32_t nullCount = 0;
+      while (!arbitraryBuffer_.empty()) {
+        auto* queue = queues_[bufferId].get();
+        if (queue != nullptr) {
+          queue->enqueueBack(std::move(arbitraryBuffer_.front()));
+          arbitraryBuffer_.pop_front();
+          nullCount = 0;
+        } else if (++nullCount >= queues_.size()) {
+          arbitraryBuffer_.clear();
+          break;
+        }
+        bufferId = (bufferId + 1) % queues_.size();
+      }
+    }
     for (auto& queue : queues_) {
       if (queue != nullptr) {
         queue->enqueueBack(nullptr);
@@ -411,6 +442,42 @@ void UcxOutputQueue::enqueueBroadcastOutputLocked(
   }
 }
 
+void UcxOutputQueue::enqueueArbitraryOutputLocked(
+    std::shared_ptr<cudf::packed_columns> data,
+    std::vector<UcxDataAvailable>& dataAvailableCbs) {
+  VELOX_DCHECK(dataAvailableCbs.empty());
+
+  arbitraryBuffer_.push_back(std::move(data));
+
+  // Distribute from the shared pool to destinations with waiting consumers,
+  // probing round-robin so no single destination starves.
+  int32_t bufferId = nextArbitraryLoadIndex_;
+  for (int32_t i = 0; i < queues_.size(); ++i) {
+    if (arbitraryBuffer_.empty()) {
+      break;
+    }
+    auto* queue = queues_[bufferId].get();
+    if (queue != nullptr) {
+      // getAndClearNotify returns the pending callback (if any) and clears
+      // it. When the destination queue is empty the returned data is null.
+      auto pending = queue->getAndClearNotify();
+      if (pending.callback) {
+        pending.data = std::move(arbitraryBuffer_.front());
+        arbitraryBuffer_.pop_front();
+        pending.remainingBytes.clear();
+        for (const auto& item : arbitraryBuffer_) {
+          if (item != nullptr) {
+            pending.remainingBytes.push_back(item->gpu_data->size());
+          }
+        }
+        dataAvailableCbs.push_back(std::move(pending));
+      }
+    }
+    bufferId = (bufferId + 1) % queues_.size();
+  }
+  nextArbitraryLoadIndex_ = bufferId;
+}
+
 bool UcxOutputQueue::isFinished() {
   std::lock_guard<std::mutex> l(mutex_);
   return isFinishedLocked();
@@ -419,6 +486,8 @@ bool UcxOutputQueue::isFinished() {
 bool UcxOutputQueue::isFinishedLocked() {
   // For broadcast, we can only be finished after receiving the no more
   // (destination) buffers signal, matching OutputBuffer::isFinishedLocked().
+  // For arbitrary, the coordinator lazily manages consumers and may never send
+  // noMoreBufferIds, so we only check that all queues have been consumed.
   if (kind_ == core::PartitionedOutputNode::Kind::kBroadcast &&
       !noMoreQueues_) {
     return false;
@@ -441,24 +510,25 @@ void UcxOutputQueue::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
     return;
   }
 
-  VELOX_CHECK_EQ(kind_, Kind::kBroadcast);
+  VELOX_CHECK(kind_ == Kind::kBroadcast || kind_ == Kind::kArbitrary);
   bool isFinished;
   {
     std::lock_guard<std::mutex> l(mutex_);
 
     if (numBuffers > queues_.size()) {
-      // Add new destination queues and backfill with broadcast data.
       int32_t numNewBuffers = numBuffers - queues_.size();
       queues_.reserve(numBuffers);
       for (int32_t i = 0; i < numNewBuffers; ++i) {
         auto buffer = std::make_unique<UcxDestinationQueue>();
-        for (const auto& data : dataToBroadcast_) {
-          buffer->enqueueBack(data);
-          // Account for backfilled data in queuedBytes_ so that dequeue
-          // decrements don't drive it negative.
-          queuedBytes_ += data->gpu_data->size();
-          queuedPackedColumns_++;
+        if (kind_ == Kind::kBroadcast) {
+          // Backfill new destinations with previously broadcast data.
+          for (const auto& data : dataToBroadcast_) {
+            buffer->enqueueBack(data);
+            queuedBytes_ += data->gpu_data->size();
+            queuedPackedColumns_++;
+          }
         }
+        // No backfill for arbitrary — new consumers only get future data.
         if (atEnd_) {
           buffer->enqueueBack(nullptr);
         }
@@ -529,6 +599,7 @@ void UcxOutputQueue::terminate() {
       LOG(WARNING) << "UcxOutputQueue::terminate() called while task "
                    << task_->taskId() << " is still running";
     }
+    arbitraryBuffer_.clear();
     // Fire all pending getData callbacks with nullptr to signal end-of-stream.
     // This handles the case where a producer task fails or is cancelled before
     // noMoreData() is called, preventing consumers from being orphaned.
