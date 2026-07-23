@@ -159,6 +159,8 @@ ParquetReaderFactory::createFormatOptions(
       ParquetConfig::footerSpeculativeIoSize(connectorConfig, session);
   options->allowInt32Narrowing =
       ParquetConfig::allowInt32Narrowing(connectorConfig, session);
+  options->nullStructIfAllFieldsMissing =
+      ParquetConfig::nullStructIfAllFieldsMissing(connectorConfig, session);
   options->footerMemoryTrackingThreshold =
       ParquetConfig::footerMemoryTrackingThreshold(connectorConfig, session);
   const auto useColumnNames =
@@ -207,6 +209,14 @@ class ReaderBase {
 
   const std::shared_ptr<const dwio::common::TypeWithId>& schemaWithId() {
     return schemaWithId_;
+  }
+
+  dwio::common::ColumnMappingMode columnMappingMode() const {
+    return parquetReaderOptions_.columnMappingMode;
+  }
+
+  bool nullStructIfAllFieldsMissing() const {
+    return parquetReaderOptions_.nullStructIfAllFieldsMissing;
   }
 
   bool isFileColumnNamesReadAsLowerCase() const {
@@ -1433,12 +1443,18 @@ class ParquetRowReader::Impl {
         options_.timestampPrecision());
     requestedType_ = options_.requestedType() ? options_.requestedType()
                                               : readerBase_->schema();
+    columnReaderOptions_ =
+        dwio::common::makeColumnReaderOptions(readerBase_->options());
+    columnReaderOptions_.columnMappingMode_ = readerBase_->columnMappingMode();
+    columnReaderOptions_.parquetNullStructIfAllFieldsMissing_ =
+        readerBase_->nullStructIfAllFieldsMissing();
     columnReader_ = ParquetColumnReader::build(
         columnReaderOptions_,
         requestedType_,
         readerBase_->schemaWithId(), // Id is schema id
         params,
-        *options_.scanSpec());
+        *options_.scanSpec(),
+        pool_);
     columnReader_->setIsTopLevel();
 
     filterRowGroups();
@@ -1448,9 +1464,6 @@ class ParquetRowReader::Impl {
       // table scan.
       advanceToNextRowGroup();
     }
-
-    columnReaderOptions_ =
-        dwio::common::makeColumnReaderOptions(readerBase_->options());
   }
 
   void filterRowGroups() {
