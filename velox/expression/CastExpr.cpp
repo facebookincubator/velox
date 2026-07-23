@@ -840,6 +840,7 @@ void CastExpr::applyPeeled(
         fromType->toString(),
         toType->toString());
   } else if (fromType->isTime()) {
+    VELOX_DCHECK(fromType->equivalent(*TIME()));
     result = castFromTime(rows, input, context, toType);
   } else if (toType->isTime()) {
     result = castToTime(rows, input, context, fromType, toType);

@@ -35,7 +35,7 @@ exec::ExprPtr makeSparkCastExpr(
     bool allowOverflow,
     const core::QueryConfig& config) {
   VELOX_USER_CHECK(
-      !type->isTime() || type->equivalent(*TIME_MICRO_UTC()),
+      !type->equivalent(*TIME()),
       "Spark only supports TIME_MICRO_UTC for time type casts, got {}",
       type->toString());
   return std::make_shared<SparkCastExpr>(

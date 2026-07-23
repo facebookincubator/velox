@@ -97,16 +97,13 @@ class VectorFuzzerTest : public testing::Test {
 
   void validateMaxSizes(VectorPtr vector, size_t maxSize);
 
+  template <typename TTimeType>
   void assertTimeValuesInRange(
       const SimpleVector<int64_t>* timeVector,
-      const TypePtr& timeType) {
+      const std::shared_ptr<const TTimeType>& timeType) {
     ASSERT_TRUE(timeType->isTime());
-    const int64_t minTime = timeType->equivalent(*TIME())
-        ? TIME()->getMin()
-        : TIME_MICRO_UTC()->getMin();
-    const int64_t maxTime = timeType->equivalent(*TIME())
-        ? TIME()->getMax()
-        : TIME_MICRO_UTC()->getMax();
+    const int64_t minTime = timeType->getMin();
+    const int64_t maxTime = timeType->getMax();
     for (size_t i = 0; i < timeVector->size(); ++i) {
       if (!timeVector->isNullAt(i)) {
         auto timeValue = timeVector->valueAt(i);
@@ -906,13 +903,9 @@ TEST_F(VectorFuzzerTest, time) {
   opts.vectorSize = vectorSize;
   VectorFuzzer fuzzer(opts, pool());
 
-  for (const auto& timeType : std::vector<TypePtr>{TIME(), TIME_MICRO_UTC()}) {
-    const int64_t minTime = timeType->equivalent(*TIME())
-        ? TIME()->getMin()
-        : TIME_MICRO_UTC()->getMin();
-    const int64_t maxTime = timeType->equivalent(*TIME())
-        ? TIME()->getMax()
-        : TIME_MICRO_UTC()->getMax();
+  auto testTimeType = [&](const auto& timeType) {
+    const int64_t minTime = timeType->getMin();
+    const int64_t maxTime = timeType->getMax();
 
     // Test flat TIME vector.
     auto timeVector = fuzzer.fuzzFlat(timeType);
@@ -920,7 +913,7 @@ TEST_F(VectorFuzzerTest, time) {
     ASSERT_TRUE(timeVector->type()->equivalent(*timeType));
     ASSERT_EQ(vectorSize, timeVector->size());
 
-    auto flatTimeVector = timeVector->as<FlatVector<int64_t>>();
+    auto flatTimeVector = timeVector->template as<FlatVector<int64_t>>();
     assertTimeValuesInRange(flatTimeVector, timeType);
 
     // Test constant TIME vector.
@@ -930,7 +923,7 @@ TEST_F(VectorFuzzerTest, time) {
     ASSERT_EQ(vectorSize, constTimeVector->size());
 
     // Verify constant TIME value is in valid range.
-    auto constVector = constTimeVector->as<ConstantVector<int64_t>>();
+    auto constVector = constTimeVector->template as<ConstantVector<int64_t>>();
     if (!constVector->isNullAt(0)) {
       auto timeValue = constVector->valueAt(0);
       ASSERT_GE(timeValue, minTime);
@@ -944,10 +937,14 @@ TEST_F(VectorFuzzerTest, time) {
     ASSERT_TRUE(dictTimeVector->type()->equivalent(*timeType));
 
     // Verify all TIME values in dictionary are in valid range.
-    auto dictVector = dictTimeVector->as<DictionaryVector<int64_t>>();
-    auto baseVector = dictVector->valueVector()->as<FlatVector<int64_t>>();
+    auto dictVector = dictTimeVector->template as<DictionaryVector<int64_t>>();
+    auto baseVector =
+        dictVector->valueVector()->template as<FlatVector<int64_t>>();
     assertTimeValuesInRange(baseVector, timeType);
-  }
+  };
+
+  testTimeType(TIME());
+  testTimeType(TIME_MICRO_UTC());
 }
 
 TEST_F(VectorFuzzerTest, assorted) {
