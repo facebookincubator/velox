@@ -34,6 +34,10 @@ exec::ExprPtr makeSparkCastExpr(
     bool isTryCast,
     bool allowOverflow,
     const core::QueryConfig& config) {
+  VELOX_USER_CHECK(
+      !type->equivalent(*TIME()),
+      "Spark only supports TIME_MICRO_UTC for time type casts, got {}",
+      type->toString());
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(input),
@@ -107,9 +111,11 @@ class SparkLegacyCastCallToSpecialForm : public exec::CastCallToSpecialForm {
 bool SparkCastCallToSpecialForm::isAnsiSupported(
     const TypePtr& fromType,
     const TypePtr& toType) {
+  // String to Boolean, Timestamp, Integer, Date, Decimal, or Time types support
+  // ANSI mode.
   if (fromType->isVarchar()) {
     if (toType->isBoolean() || toType->isTimestamp() || toType->isDate() ||
-        toType->isDecimal()) {
+        toType->isDecimal() || toType->isTime()) {
       return true;
     }
     if (isIntegralType(toType)) {
@@ -141,19 +147,19 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
       compiledChildren.size());
 
   const auto& fromType = compiledChildren[0]->type();
-
   // In Spark SQL (with ANSI mode off), both CAST and TRY_CAST behave like
   // Velox's try_cast, so we set 'isTryCast' to true when ANSI is disabled or
   // the specific cast operation doesn't support ANSI mode.
   const bool isTryCast = !SparkQueryConfig{config}.ansiEnabled() ||
       !isAnsiSupported(fromType, type);
 
-  return std::make_shared<SparkCastExpr>(
+  return makeSparkCastExpr(
       type,
       std::move(compiledChildren[0]),
       trackCpuUsage,
       isTryCast,
-      std::make_shared<SparkCastHooks>(config, isTryCast));
+      isTryCast,
+      config);
 }
 
 exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
@@ -167,12 +173,9 @@ exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
       "TRY_CAST statements expect exactly 1 argument, received {}.",
       compiledChildren.size());
 
-  return std::make_shared<SparkCastExpr>(
-      type,
-      std::move(compiledChildren[0]),
-      trackCpuUsage,
-      true,
-      std::make_shared<SparkCastHooks>(config, false));
+  // TRY_CAST always uses allowOverflow=false to return NULL on cast failures.
+  return makeSparkCastExpr(
+      type, std::move(compiledChildren[0]), trackCpuUsage, true, false, config);
 }
 
 void registerSparkCastModeSpecialForms() {

@@ -178,7 +178,8 @@ inline Timestamp rand(FuzzerGenerator& rng, DataSpec /*dataSpec*/) {
 
 int32_t randDate(FuzzerGenerator& rng);
 
-int32_t randTime(FuzzerGenerator& rng);
+int64_t randTime(FuzzerGenerator& rng);
+int64_t randTime(FuzzerGenerator& rng, const TypePtr& type);
 
 /// Generate random timezone offset using biased distribution
 /// 25% probability: picks from frequently used offsets

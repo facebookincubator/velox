@@ -41,9 +41,12 @@ bool parseNumber(const char* data, size_t size, size_t& pos, int32_t& result) {
   return true;
 }
 
-// Helper: Parse fractional seconds (milliseconds)
-Expected<int32_t>
-parseFractionalSeconds(const char* data, size_t size, size_t& pos) {
+// Helper: Parse fractional seconds scaled to requested precision.
+Expected<int32_t> parseFractionalSeconds(
+    const char* data,
+    size_t size,
+    size_t& pos,
+    int32_t fractionalPrecision) {
   if (pos >= size || data[pos] != '.') {
     return 0; // No fractional part
   }
@@ -56,7 +59,7 @@ parseFractionalSeconds(const char* data, size_t size, size_t& pos) {
             "Invalid time format: fractional seconds incomplete"));
   }
 
-  // Parse fractional seconds (milliseconds)
+  // Parse fractional seconds.
   int32_t fractionalPart = 0;
 
   const char* start = data + pos;
@@ -72,16 +75,21 @@ parseFractionalSeconds(const char* data, size_t size, size_t& pos) {
   size_t digitCount = parseResult.ptr - start;
   pos += digitCount;
 
-  // Check that we don't have more than 3 digits (millisecond precision)
-  if (digitCount > 3) {
+  if (digitCount > static_cast<size_t>(fractionalPrecision)) {
+    if (fractionalPrecision == 3) {
+      // Keep the legacy error text for millisecond TIME parsing.
+      return folly::makeUnexpected(
+          Status::UserError(
+              "Invalid time format: Microsecond precision not supported"));
+    }
     return folly::makeUnexpected(
         Status::UserError(
-            "Invalid time format: Microsecond precision not supported"));
+            "Invalid time format: precision {} not supported",
+            fractionalPrecision));
   }
 
-  // Convert to milliseconds by padding with zeros if needed
-  // e.g., .1 -> 100ms, .12 -> 120ms, .123 -> 123ms
-  for (size_t i = digitCount; i < 3; i++) {
+  // Convert to target precision by padding with zeros if needed.
+  for (size_t i = digitCount; i < fractionalPrecision; i++) {
     fractionalPart *= 10;
   }
 
@@ -123,8 +131,13 @@ Expected<int64_t> timeComponentsToMillis(const TimeComponents& components) {
   return result;
 }
 
-// Helper: Parse time components from string (H:m[:s[.SSS]])
-Expected<TimeComponents> parseTimeComponents(const char* buf, size_t len) {
+} // namespace
+
+Expected<TimeComponents> parseTimeComponents(
+    const char* buf,
+    size_t len,
+    bool requireSeconds,
+    int32_t fractionalPrecision) {
   TimeComponents components;
   size_t pos = 0;
 
@@ -147,24 +160,29 @@ Expected<TimeComponents> parseTimeComponents(const char* buf, size_t len) {
         Status::UserError("Invalid time format: failed to parse minute"));
   }
 
-  // Check if there's a second ':' for seconds (OPTIONAL)
+  // Parse seconds when present. If requireSeconds is true, reject inputs that
+  // do not have a seconds component.
   if (pos < len && buf[pos] == ':') {
     pos++; // Skip the ':'
 
-    // Parse second (optional, 1-2 digits)
+    // Parse second (1-2 digits).
     if (!parseNumber(buf, len, pos, components.second)) {
       return folly::makeUnexpected(
           Status::UserError("Invalid time format: failed to parse second"));
     }
 
     // Parse optional fractional seconds
-    auto millisResult = parseFractionalSeconds(buf, len, pos);
-    if (millisResult.hasError()) {
-      return folly::makeUnexpected(millisResult.error());
+    auto fractionResult =
+        parseFractionalSeconds(buf, len, pos, fractionalPrecision);
+    if (fractionResult.hasError()) {
+      return folly::makeUnexpected(fractionResult.error());
     }
-    components.millis = millisResult.value();
+    components.millis = fractionResult.value();
+  } else if (requireSeconds) {
+    return folly::makeUnexpected(
+        Status::UserError("Invalid time format: expected ':' after minute"));
   }
-  // If no second ':', seconds and millis remain at 0 (default)
+  // When seconds are optional and omitted, seconds and millis remain at 0.
 
   // Check for trailing characters
   if (pos < len) {
@@ -176,8 +194,6 @@ Expected<TimeComponents> parseTimeComponents(const char* buf, size_t len) {
 
   return components;
 }
-
-} // namespace
 
 Expected<int64_t> fromTimeString(const char* buf, size_t len) {
   auto componentsResult = parseTimeComponents(buf, len);
