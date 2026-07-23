@@ -47,7 +47,10 @@ in the presence of NULLs in the outer query or subquery. NOT IN semantics are
 implemented by the null aware anti join. NOT EXISTS semantics are implemented
 by the regular anti join.</p>
 <p>Velox provides regular anti join via <code class="docutils literal notranslate"><span class="pre">JoinType::kAnti</span></code> and null-aware anti
-join via <code class="docutils literal notranslate"><span class="pre">JoinType::kNullAwareAnti</span></code>.</p>
+join via <code class="docutils literal notranslate"><span class="pre">JoinType::kNullAwareAnti</span></code>. The build-side mirror, which returns
+build-side rows with no match on the probe side, is provided via
+<code class="docutils literal notranslate"><span class="pre">JoinType::kRightAnti</span></code> (regular NOT EXISTS semantic only; no null-aware
+variant).</p>
 <p>This article explains the differences in semantics between NOT IN and NOT EXISTS
 queries and discusses the implementation of these in the null aware and regular
 anti joins.</p>
