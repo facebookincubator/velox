@@ -33,9 +33,12 @@
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/reduction/approx_distinct_count.hpp>
+#include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/strings/strings_column_view.hpp>
+#include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
 #include <cudf/utilities/error.hpp>
 
@@ -58,8 +61,14 @@ using facebook::velox::cudf_velox::validateIntermediateColumnType;
         core::AggregationNode::Step step,                                      \
         uint32_t inputIndex,                                                   \
         VectorPtr constant,                                                    \
-        const TypePtr& resultType)                                             \
-        : ReduceAggregator(step, inputIndex, constant, resultType) {}          \
+        const TypePtr& resultType,                                             \
+        std::optional<uint32_t> maskIndex)                                     \
+        : ReduceAggregator(                                                    \
+              step,                                                            \
+              inputIndex,                                                      \
+              constant,                                                        \
+              resultType,                                                      \
+              maskIndex) {}                                                    \
                                                                                \
     std::unique_ptr<cudf::column> doReduce(                                    \
         cudf::table_view const& input,                                         \
@@ -70,12 +79,16 @@ using facebook::velox::cudf_velox::validateIntermediateColumnType;
       auto const aggRequest =                                                  \
           cudf::make_##name##_aggregation<cudf::reduce_aggregation>();         \
       auto const cudfOutputType = cudf_velox::veloxToCudfDataType(outputType); \
+      /* Mask only applies at raw input, where maskIndex is set; the           \
+         injected column owns the lifetime through cudf::reduce. cudf          \
+         reduce(SUM/MIN/MAX) over an all-null group yields a null              \
+         scalar -> NULL, matching Velox all-excluded semantics. */             \
+      auto const injected = cudf_velox::materializeMaskedColumn(               \
+          input, inputIndex, maskIndex, stream, get_temp_mr());                \
+      auto const reduceInput =                                                 \
+          injected ? injected->view() : input.column(inputIndex);              \
       auto const resultScalar = cudf::reduce(                                  \
-          input.column(inputIndex),                                            \
-          *aggRequest,                                                         \
-          cudfOutputType,                                                      \
-          stream,                                                              \
-          get_temp_mr());                                                      \
+          reduceInput, *aggRequest, cudfOutputType, stream, get_temp_mr());    \
       return cudf::make_column_from_scalar(*resultScalar, 1, stream, mr);      \
     }                                                                          \
   };
@@ -89,8 +102,9 @@ struct ReduceCountAggregator : ReduceAggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       CountInputKind inputKind,
-      const TypePtr& resultType)
-      : ReduceAggregator(step, inputIndex, nullptr, resultType),
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex)
+      : ReduceAggregator(step, inputIndex, nullptr, resultType, maskIndex),
         inputKind_(inputKind) {}
 
   std::unique_ptr<cudf::column> doReduce(
@@ -103,18 +117,34 @@ struct ReduceCountAggregator : ReduceAggregator {
       int64_t count;
       switch (inputKind_) {
         case CountInputKind::kNullConstant:
+          // count(<null constant>) is 0 regardless of any mask.
           count = 0;
           break;
         case CountInputKind::kCountAll:
-          count = input.num_columns() > 0 ? input.num_rows() : inputRowCount;
+          if (maskIndex.has_value()) {
+            // count(*) FILTER(WHERE m): mask-true rows = total minus the
+            // false/null rows that bools_to_mask reports as the null count.
+            auto const maskCol = input.column(*maskIndex);
+            auto const nullCount =
+                cudf::bools_to_mask(maskCol, stream, get_temp_mr()).second;
+            count = maskCol.size() - nullCount;
+          } else {
+            count = input.num_columns() > 0 ? input.num_rows() : inputRowCount;
+          }
           break;
         case CountInputKind::kColumn: {
           VELOX_CHECK_GT(
               input.num_columns(),
               0,
               "count(column) requires at least one input column");
-          auto inputCol = input.column(inputIndex);
-          count = inputCol.size() - inputCol.null_count();
+          // count(col) FILTER(WHERE m): null-inject col so validity =
+          // m && valid(col), then count valid entries. Without a mask, count
+          // the input column's valid entries directly.
+          auto const injected = cudf_velox::materializeMaskedColumn(
+              input, inputIndex, maskIndex, stream, get_temp_mr());
+          auto const countCol =
+              injected ? injected->view() : input.column(inputIndex);
+          count = countCol.size() - countCol.null_count();
           break;
         }
         default:
@@ -150,8 +180,9 @@ struct ReduceMeanAggregator : ReduceAggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       VectorPtr constant,
-      const TypePtr& resultType)
-      : ReduceAggregator(step, inputIndex, constant, resultType) {}
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex)
+      : ReduceAggregator(step, inputIndex, constant, resultType, maskIndex) {}
 
   std::unique_ptr<cudf::column> doReduce(
       cudf::table_view const& input,
@@ -159,6 +190,7 @@ struct ReduceMeanAggregator : ReduceAggregator {
       vector_size_t /* inputRowCount */,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) override {
+    VELOX_CHECK(!maskIndex.has_value(), "avg does not support masks");
     switch (step) {
       case core::AggregationNode::Step::kSingle: {
         auto const aggRequest =
@@ -421,8 +453,9 @@ struct ReduceDecimalSumAggregator : ReduceAggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       VectorPtr constant,
-      const TypePtr& resultType)
-      : ReduceAggregator(step, inputIndex, constant, resultType) {}
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex)
+      : ReduceAggregator(step, inputIndex, constant, resultType, maskIndex) {}
 
   std::unique_ptr<cudf::column> doReduce(
       cudf::table_view const& input,
@@ -430,7 +463,13 @@ struct ReduceDecimalSumAggregator : ReduceAggregator {
       vector_size_t /* inputRowCount */,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) override {
-    cudf::column_view inputCol = input.column(inputIndex);
+    // Mask applies only at raw-input steps (kSingle/kPartial), where maskIndex
+    // is set. Null-inject masked rows so cuDF's null-excluding sum and count
+    // honor the mask; the injected column owns the lifetime through doReduce.
+    auto const injected = cudf_velox::materializeMaskedColumn(
+        input, inputIndex, maskIndex, stream, get_temp_mr());
+    cudf::column_view inputCol =
+        injected ? injected->view() : input.column(inputIndex);
     switch (step) {
       case core::AggregationNode::Step::kSingle:
         return singleOrRawDecimalSumWithCast(inputCol, outputType, stream, mr);
@@ -454,7 +493,8 @@ struct ReduceDecimalAvgAggregator : ReduceAggregator {
       uint32_t inputIndex,
       VectorPtr constant,
       const TypePtr& resultType)
-      : ReduceAggregator(step, inputIndex, constant, resultType) {}
+      : ReduceAggregator(step, inputIndex, constant, resultType, std::nullopt) {
+  }
 
   std::unique_ptr<cudf::column> doReduce(
       cudf::table_view const& input,
@@ -462,6 +502,9 @@ struct ReduceDecimalAvgAggregator : ReduceAggregator {
       vector_size_t /* inputRowCount */,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) override {
+    // Decimal avg uses a dedicated path that does not honor masks; masked avg
+    // already falls back to CPU (see canReduceBeEvaluatedByCudf).
+    VELOX_CHECK(!maskIndex.has_value(), "decimal avg does not support masks");
     cudf::column_view inputCol = input.column(inputIndex);
     switch (step) {
       case core::AggregationNode::Step::kSingle:
@@ -491,9 +534,10 @@ struct ApproxDistinctAggregator : ReduceAggregator {
       uint32_t inputIndex,
       VectorPtr constant,
       const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex,
       std::int32_t precision = 11) // Default 11 matches Velox's 2.3% standard
                                    // error (2^11 = 2048 buckets)
-      : ReduceAggregator{step, inputIndex, constant, resultType},
+      : ReduceAggregator{step, inputIndex, constant, resultType, maskIndex},
         precision_{precision} {
     VELOX_CHECK(
         constant == nullptr,
@@ -506,6 +550,8 @@ struct ApproxDistinctAggregator : ReduceAggregator {
       vector_size_t /* inputRowCount */,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) override {
+    VELOX_CHECK(
+        !maskIndex.has_value(), "approx_distinct does not support masks");
     if (exec::isRawInput(step)) {
       return doPartialReduce(input, stream, mr);
     } else if (step == core::AggregationNode::Step::kIntermediate) {
@@ -689,30 +735,34 @@ std::unique_ptr<ReduceAggregator> createReduceAggregator(
   if (kind.rfind(prefix + "sum", 0) == 0) {
     if (p.isDecimalAggregate) {
       return std::make_unique<ReduceDecimalSumAggregator>(
-          p.companionStep, p.inputIndex, p.constant, p.resultType);
+          p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
     }
     return std::make_unique<ReduceSumAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else if (kind.rfind(prefix + "count", 0) == 0) {
     VELOX_CHECK(p.countInputKind.has_value());
     return std::make_unique<ReduceCountAggregator>(
-        p.companionStep, p.inputIndex, *p.countInputKind, p.resultType);
+        p.companionStep,
+        p.inputIndex,
+        *p.countInputKind,
+        p.resultType,
+        p.maskIndex);
   } else if (kind.rfind(prefix + "min", 0) == 0) {
     return std::make_unique<ReduceMinAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else if (kind.rfind(prefix + "max", 0) == 0) {
     return std::make_unique<ReduceMaxAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else if (kind.rfind(prefix + "avg", 0) == 0) {
     if (p.isDecimalAggregate) {
       return std::make_unique<ReduceDecimalAvgAggregator>(
           p.companionStep, p.inputIndex, p.constant, p.resultType);
     }
     return std::make_unique<ReduceMeanAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else if (kind.rfind(prefix + "approx_distinct", 0) == 0) {
     return std::make_unique<ApproxDistinctAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else {
     VELOX_NYI("Reduce aggregation not yet supported, kind: {}", kind);
   }
@@ -726,9 +776,10 @@ std::vector<std::unique_ptr<ReduceAggregator>> toReduceAggregators(
     core::AggregationNode const& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
-    std::vector<VectorPtr> const& constants) {
-  auto params =
-      resolveAggregateInfos(aggregationNode, step, outputType, constants);
+    std::vector<VectorPtr> const& constants,
+    std::vector<std::optional<uint32_t>> const& maskChannels) {
+  auto params = resolveAggregateInfos(
+      aggregationNode, step, outputType, constants, maskChannels);
 
   std::vector<std::unique_ptr<ReduceAggregator>> aggregators;
   aggregators.reserve(params.size());
@@ -771,9 +822,7 @@ bool canReduceBeEvaluatedByCudf(
       return false;
     }
 
-    // `mask` is NOT supported (in testing do not appear to be applied and
-    // return incorrect results )
-    if (aggregate.mask) {
+    if (!maskSupportedByCudf(aggregate, step)) {
       return false;
     }
 
@@ -830,7 +879,8 @@ void CudfReduce::initialize() {
       *aggregationNode_,
       aggregationNode_->step(),
       outputType_,
-      aggregationInput.constants);
+      aggregationInput.constants,
+      aggregationInput.maskChannels);
 
   aggregationNode_.reset();
 }

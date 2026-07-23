@@ -870,6 +870,102 @@ TEST_F(CudfDecimalTest, decimalSumGlobalSingle) {
       .assertResults("SELECT sum(d) AS s FROM tmp");
 }
 
+// Masked groupby sum: the mask null-injects raw input so cuDF sum excludes
+// masked rows. Group 3 is fully masked out -> NULL. Runs on GPU (fallback off).
+TEST_F(CudfDecimalTest, decimalSumMaskedGroupbySingle) {
+  auto input = makeRowVector(
+      {"k", "d", "m"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2, 2, 3}),
+          makeFlatVector<int64_t>(
+              {12345, -2500, 10000, 200, -300}, DECIMAL(12, 2)),
+          makeFlatVector<bool>({true, false, true, true, false}),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .singleAggregation({"k"}, {"sum(d) AS s"}, {"m"})
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT k, sum(d) FILTER (WHERE m) AS s FROM tmp GROUP BY k");
+}
+
+// Masked groupby sum across partial + final steps: the mask applies only at the
+// raw partial step and propagates through the serialized intermediate state.
+TEST_F(CudfDecimalTest, decimalSumMaskedPartialFinal) {
+  auto input = makeRowVector(
+      {"k", "d", "m"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2, 2, 3}),
+          makeFlatVector<int64_t>(
+              {12345, -2500, 10000, 200, -300}, DECIMAL(12, 2)),
+          makeFlatVector<bool>({true, false, true, true, false}),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"k"}, {"sum(d) AS s"}, {"m"})
+                  .finalAggregation()
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT k, sum(d) FILTER (WHERE m) AS s FROM tmp GROUP BY k");
+}
+
+// Masked global (reduce) sum, including a NULL mask entry which is excluded.
+TEST_F(CudfDecimalTest, decimalSumMaskedGlobalSingle) {
+  auto input = makeRowVector(
+      {"d", "m"},
+      {
+          makeFlatVector<int64_t>(
+              {12345, -2500, 10000, 200, -300}, DECIMAL(12, 2)),
+          makeNullableFlatVector<bool>({true, false, true, std::nullopt, true}),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .singleAggregation({}, {"sum(d) AS s"}, {"m"})
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT sum(d) FILTER (WHERE m) AS s FROM tmp");
+}
+
+// Masked global (reduce) sum where every row is masked out: the input reduces
+// to the empty set, so the result is NULL. Runs on GPU (fallback off).
+TEST_F(CudfDecimalTest, decimalSumMaskedGlobalAllMasked) {
+  auto input = makeRowVector(
+      {"d", "m"},
+      {
+          makeFlatVector<int64_t>(
+              {12345, -2500, 10000, 200, -300}, DECIMAL(12, 2)),
+          makeFlatVector<bool>({false, false, false, false, false}),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .singleAggregation({}, {"sum(d) AS s"}, {"m"})
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT sum(d) FILTER (WHERE m) AS s FROM tmp");
+}
+
 TEST_F(CudfDecimalTest, decimalSumGroupbySingleDecimal64Overflow) {
   // One group of 12 values of 9e17 (DECIMAL(18,0)) sums to 1.08e19, past 2^63.
   // sum(decimal(18,0)) -> decimal(38,0), computed in 128 bits, no wrap.
