@@ -7044,17 +7044,33 @@ TEST_F(TableScanTest, scanBatchCallback) {
   uint64_t totalRows{0};
   uint64_t callbackCount{0};
   std::string receivedTableName;
+  std::string receivedDbName;
   auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->setScanBatchCallback([&](const core::ScanBatchEvent& event) {
     totalRows += event.numRows;
     if (const auto* fileEvent =
             dynamic_cast<const connector::hive::FileScanBatchEvent*>(&event)) {
       receivedTableName = std::string(fileEvent->tableName);
+      receivedDbName = std::string(fileEvent->dbName);
     }
     ++callbackCount;
   });
 
-  auto plan = tableScanNode();
+  auto tableHandle = makeTableHandle(
+      /*subfieldFilters=*/{},
+      /*remainingFilter=*/nullptr,
+      "scan_callback_table",
+      rowType_,
+      /*indexColumns=*/std::vector<std::string>{},
+      /*storageParameters=*/std::unordered_map<std::string, std::string>{},
+      "scan_callback_db");
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(rowType_)
+                  .tableHandle(tableHandle)
+                  .assignments(allRegularColumns(rowType_))
+                  .endTableScan()
+                  .planNode();
   auto task = AssertQueryBuilder(plan)
                   .splits(makeHiveConnectorSplits({filePath}))
                   .queryCtx(queryCtx)
@@ -7062,7 +7078,8 @@ TEST_F(TableScanTest, scanBatchCallback) {
 
   EXPECT_GT(totalRows, 0);
   EXPECT_GT(callbackCount, 0);
-  EXPECT_FALSE(receivedTableName.empty());
+  EXPECT_EQ(receivedTableName, "scan_callback_table");
+  EXPECT_EQ(receivedDbName, "scan_callback_db");
 }
 
 TEST_F(TableScanTest, scanBatchCallbackPartitionKeys) {

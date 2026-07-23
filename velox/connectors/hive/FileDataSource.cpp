@@ -637,6 +637,7 @@ void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
   fileEvent.wallTimeMicros = event.wallTimeMicros;
   if (tableHandle_) {
     fileEvent.tableName = tableHandle_->name();
+    fileEvent.dbName = tableHandle_->dbName();
   }
   if (split_) {
     fileEvent.filePath = split_->filePath;
