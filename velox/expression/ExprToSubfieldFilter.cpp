@@ -318,6 +318,20 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeNotEqualFilter(
     return std::make_unique<common::AlwaysFalse>();
   }
 
+  const auto typeKind = value->typeKind();
+  switch (typeKind) {
+    case TypeKind::TINYINT:
+      return notEqual(singleValue<int8_t>(value));
+    case TypeKind::SMALLINT:
+      return notEqual(singleValue<int16_t>(value));
+    case TypeKind::INTEGER:
+      return notEqual(singleValue<int32_t>(value));
+    case TypeKind::BIGINT:
+      return notEqual(singleValue<int64_t>(value));
+    default:
+      break;
+  }
+
   auto lessThanFilter = makeLessThanFilter(valueExpr, evaluator);
   if (!lessThanFilter) {
     return nullptr;
@@ -326,26 +340,6 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeNotEqualFilter(
   auto greaterThanFilter = makeGreaterThanFilter(valueExpr, evaluator);
   if (!greaterThanFilter) {
     return nullptr;
-  }
-
-  const auto typeKind = value->typeKind();
-
-  if (typeKind == TypeKind::TINYINT || typeKind == TypeKind::SMALLINT ||
-      typeKind == TypeKind::INTEGER || typeKind == TypeKind::BIGINT) {
-    if (lessThanFilter->kind() == common::FilterKind::kAlwaysFalse) {
-      return greaterThanFilter;
-    }
-    if (greaterThanFilter->kind() == common::FilterKind::kAlwaysFalse) {
-      return lessThanFilter;
-    }
-    VELOX_CHECK(isBigintRange(lessThanFilter));
-    VELOX_CHECK(isBigintRange(greaterThanFilter));
-
-    std::vector<std::unique_ptr<common::BigintRange>> filters;
-    filters.emplace_back(asBigintRange(lessThanFilter));
-    filters.emplace_back(asBigintRange(greaterThanFilter));
-    return std::make_unique<common::BigintMultiRange>(
-        std::move(filters), false);
   }
 
   if (typeKind == TypeKind::HUGEINT) {
