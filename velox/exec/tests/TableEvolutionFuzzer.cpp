@@ -15,9 +15,11 @@
  */
 
 #include "velox/exec/tests/TableEvolutionFuzzer.h"
+#include "velox/common/config/Config.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/Cursor.h"
@@ -1305,6 +1307,17 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
   CursorParameters params;
   params.serialExecution = true;
   params.planNode = builder.planNode();
+  // A bucketed write opens one writer per bucket, and generated setups can
+  // reach 2^8 buckets -- past the Hive connector's default 128 open-writer cap.
+  // Raise the cap so high-bucket-count setups exercise bucket conversion
+  // instead of failing with "Exceeded open writer limit".
+  params.queryCtx = core::QueryCtx::create(
+      /*executor=*/nullptr,
+      core::QueryConfig{{}},
+      {{std::string(PlanBuilder::kHiveDefaultConnectorId),
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{
+                {"max_partitions_per_writers", "1024"}})}});
   return TaskCursor::create(params);
 }
 
