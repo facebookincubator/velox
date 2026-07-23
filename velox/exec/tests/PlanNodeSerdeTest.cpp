@@ -567,6 +567,20 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
              .planNode();
 
   testSerde(plan);
+
+  // Right anti join projects build-side columns only.
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({probe})
+             .hashJoin(
+                 {"t0"},
+                 {"u0"},
+                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 "",
+                 {"u1", "u2"},
+                 core::JoinType::kRightAnti)
+             .planNode();
+
+  testSerde(plan);
 }
 
 TEST_F(PlanNodeSerdeTest, topN) {
