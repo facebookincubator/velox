@@ -183,6 +183,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_local_merge_test
+  SOURCES Main.cpp LocalMergeTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_local_partition_test
   SOURCES Main.cpp LocalPartitionTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
