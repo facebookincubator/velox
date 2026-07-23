@@ -15,10 +15,12 @@
  */
 
 #include "velox/experimental/cudf/expression/CommonFunctions.h"
+#include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/expression/sparksql/DateAddFunction.h"
 #include "velox/experimental/cudf/expression/sparksql/HashFunction.h"
+#include "velox/experimental/cudf/expression/sparksql/SubStringFunction.h"
 
 #include "velox/expression/FunctionSignature.h"
 
@@ -44,6 +46,30 @@ void registerSparkArrayAccessFunctions(const std::string& prefix) {
 void registerSparkFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
+  const std::vector<exec::FunctionSignaturePtr> subStringSignatures{
+      FunctionSignatureBuilder()
+          .returnType("varchar")
+          .argumentType("varchar")
+          .argumentType("integer")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("varchar")
+          .argumentType("varchar")
+          .argumentType("integer")
+          .argumentType("integer")
+          .build()};
+  for (const auto& name : {prefix + "substr", prefix + "substring"}) {
+    // Route both spellings to the Spark implementation in cuDF. Presto
+    // substring is registered only when Presto functions are registered, so
+    // Spark runtimes do not need to override an existing candidate.
+    registerCudfFunction(
+        name,
+        [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+          return sparksql::makeSubStringFunction(expr);
+        },
+        subStringSignatures);
+  }
+
   registerCudfFunction(
       prefix + "hash_with_seed",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -53,7 +79,10 @@ void registerSparkFunctions(const std::string& prefix) {
            .returnType("bigint")
            .constantArgumentType("integer")
            .argumentType("any")
-           .build()});
+           .variableArity("any")
+           .build()},
+      true,
+      sparksql::HashFunction::canEvaluate);
 
   registerCudfFunction(
       prefix + "date_add",
@@ -75,6 +104,19 @@ void registerSparkFunctions(const std::string& prefix) {
            .argumentType("date")
            .constantArgumentType("integer")
            .build()});
+
+  registerCudfFunction(
+      prefix + "date_trunc",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<DateTruncFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("timestamp")
+           .constantArgumentType("varchar")
+           .argumentType("timestamp")
+           .build()},
+      true,
+      DateTruncFunction::canEvaluate);
 
   registerSparkArrayAccessFunctions(prefix);
 }

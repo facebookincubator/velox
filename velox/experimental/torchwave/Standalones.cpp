@@ -30,7 +30,19 @@ void runStandaloneShortcut(
 
   // Reads operand 'i' as a tensor from the frame.
   auto tensorAt = [&](size_t i) -> at::Tensor {
-    return frame.getIValue(args[i]->id()).toTensor();
+    const auto& iv = frame.getIValue(args[i]->id());
+    TORCH_CHECK(
+        iv.isTensor(),
+        "runStandaloneShortcut: shortcut ",
+        static_cast<int>(data.launch->standaloneShortcut),
+        " operand ",
+        i,
+        " value %",
+        args[i]->id(),
+        " is not a tensor (tag=",
+        static_cast<int>(iv.tag),
+        ")");
+    return iv.toTensor();
   };
   // Reads operand 'i' as an integer: a dynamic value (args[i] set) is read from
   // the frame; a constant comes from intArgs.
@@ -89,7 +101,15 @@ void runStandaloneShortcut(
       c10::List<at::Tensor> list;
       list.reserve(args.size());
       for (auto* value : args) {
-        list.push_back(frame.getIValue(value->id()).toTensor());
+        const auto& iv = frame.getIValue(value->id());
+        TORCH_CHECK(
+            iv.isTensor(),
+            "runStandaloneShortcut: kListPack element %",
+            value->id(),
+            " is not a tensor (tag=",
+            static_cast<int>(iv.tag),
+            ")");
+        list.push_back(iv.toTensor());
       }
       setOutput(c10::IValue(std::move(list)));
       break;

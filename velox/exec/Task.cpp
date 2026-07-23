@@ -27,6 +27,7 @@
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/IndexLookupJoinBridge.h"
@@ -36,7 +37,6 @@
 #include "velox/exec/OperatorTraceCtx.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SpatialJoinBuild.h"
 #include "velox/exec/TableScan.h"
@@ -439,7 +439,7 @@ Task::Task(
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(std::move(onError)),
       splitsStates_(buildSplitStates(planFragment_.planNode)),
-      bufferManager_(OutputBufferManager::getInstanceRef()) {
+      bufferManager_(DefaultOutputBufferManager::getInstanceRef()) {
   ++numCreatedTasks_;
   // Validate that any per-node transport type annotations refer to the right
   // kind of plan node before they are used to select exchange transports.
@@ -2164,13 +2164,27 @@ BlockingReason Task::getSplitOrFuture(
     const ConnectorSplitPreloadFunc& preload,
     exec::Split& split,
     ContinueFuture& future) {
-  std::lock_guard<std::timed_mutex> l(mutex_);
-  auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
-  auto* splitsStore = getOrCreateSplitsStoreLocked(splitsState, splitGroupId);
-  return splitsStore->nextSplit(
-             driverId, maxPreloadSplits, preload, split, future)
-      ? BlockingReason::kNotBlocked
-      : BlockingReason::kWaitForSplit;
+  EventCompletionNotifier stateChangeNotifier;
+  bool notBlocked{false};
+  {
+    std::lock_guard<std::timed_mutex> l(mutex_);
+    auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
+    auto* splitsStore = getOrCreateSplitsStoreLocked(splitsState, splitGroupId);
+    const auto numQueuedBefore = taskStats_.numQueuedTableScanSplits;
+    notBlocked = splitsStore->nextSplit(
+        driverId, maxPreloadSplits, preload, split, future);
+    // Wake status waiters when the scan split queue drains while more splits
+    // may still arrive, so a coordinator can refill before the task starves.
+    // Once noMoreSplits has been signaled there is nothing left to refill, so
+    // the drain carries no actionable signal and is skipped.
+    if (numQueuedBefore > 0 && taskStats_.numQueuedTableScanSplits == 0 &&
+        !splitsState.noMoreSplits) {
+      stateChangeNotifier.activate(std::move(stateChangePromises_));
+    }
+  }
+  stateChangeNotifier.notify();
+  return notBlocked ? BlockingReason::kNotBlocked
+                    : BlockingReason::kWaitForSplit;
 }
 
 bool Task::testingHasDriverWaitForSplit() const {
@@ -2328,7 +2342,7 @@ bool Task::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
   VELOX_CHECK_NOT_NULL(
       bufferManager,
       "Unable to initialize task. "
-      "OutputBufferManager was already destructed");
+      "DefaultOutputBufferManager was already destructed");
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     if (noMoreOutputBuffers_) {
@@ -3422,8 +3436,7 @@ Task::getScaleWriterPartitionBalancer(
   return it->second.scaleWriterPartitionBalancer;
 }
 
-const std::shared_ptr<LocalExchangeMemoryManager>&
-Task::getLocalExchangeMemoryManager(
+std::shared_ptr<LocalExchangeMemoryManager> Task::getLocalExchangeMemoryManager(
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId) {
   std::lock_guard<std::timed_mutex> l(mutex_);

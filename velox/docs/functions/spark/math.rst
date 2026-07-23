@@ -49,7 +49,9 @@ Mathematical Functions
 .. spark:function:: add(x, y) -> [same as x]
 
     Returns the result of adding x to y. The types of x and y must be the same.
-    Corresponds to sparks's operator ``+``.
+    For interval inputs (``interval day to second`` and
+    ``interval year to month``), overflow always throws an exception.
+    Corresponds to Spark's operator ``+``.
 
 .. spark:function:: add(x, y) -> decimal
 
@@ -81,7 +83,8 @@ Mathematical Functions
 .. function:: checked_add(x, y) -> [same as x]
 
     Returns the result of adding x to y. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to Spark's operator ``+`` with ``failOnError`` as true.
+    For integral and interval types, overflow results in an error. Corresponds
+    to Spark's operator ``+`` with ``failOnError`` as true.
 
 .. function:: checked_div(x, y) -> bigint
 
@@ -103,7 +106,8 @@ Mathematical Functions
 .. function:: checked_subtract(x, y) -> [same as x]
 
     Returns the result of subtracting y from x. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to Spark's operator ``-`` with ``failOnError`` as true.
+    For integral and interval types, overflow results in an error. Corresponds
+    to Spark's operator ``-`` with ``failOnError`` as true.
 
 .. spark:function:: cos(x) -> double
 
@@ -426,6 +430,8 @@ Mathematical Functions
 .. spark:function:: subtract(x, y) -> [same as x]
 
     Returns the result of subtracting y from x. The types of x and y must be the same.
+    For interval inputs (``interval day to second`` and
+    ``interval year to month``), overflow always throws an exception.
     Corresponds to Spark's operator ``-``.
 
 .. spark:function:: subtract(x, y) -> decimal
@@ -448,9 +454,13 @@ Mathematical Functions
 
     Returns the hyperbolic tangent of ``x``.
 
-.. spark:function:: unaryminus(x) -> [same as x]
+.. spark:function:: unaryminus(x) -> [same as x] (ANSI compliant)
 
-    Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
+    Returns the negative of ``x``. Corresponds to Spark's operator ``-``.
+    For integral inputs, negating the minimum value returns the same value when
+    Spark ANSI mode is disabled and throws an overflow exception when Spark
+    ANSI mode is enabled. For interval inputs (``interval day to second`` and
+    ``interval year to month``), overflow always throws an exception.
 
 .. spark:function:: unhex(x) -> varbinary
 

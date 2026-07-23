@@ -165,15 +165,40 @@ struct PModFloatFunction {
 template <typename T>
 struct UnaryMinusFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput a) {
-    if constexpr (std::is_integral_v<TInput>) {
-      // Avoid undefined integer overflow.
-      result = a == std::numeric_limits<TInput>::min() ? a : -a;
-    } else {
-      result = -a;
-    }
-    return true;
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const TInput* /*a*/) {
+    VELOX_DCHECK(!inputTypes.empty());
+    const auto& inputType = inputTypes.front();
+    // Spark's ANSI interval types always use exact arithmetic, independent of
+    // spark.sql.ansi.enabled.
+    failOnError_ = inputType->isIntervalDayTime() ||
+        inputType->isIntervalYearMonth() ||
+        SparkQueryConfig{config}.ansiEnabled();
   }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status call(TInput& result, const TInput a) {
+    if constexpr (std::is_integral_v<TInput>) {
+      if (FOLLY_UNLIKELY(a == std::numeric_limits<TInput>::min())) {
+        if (failOnError_) {
+          if (threadSkipErrorDetails()) {
+            return Status::UserError();
+          }
+          return Status::UserError("Arithmetic overflow: -({})", a);
+        }
+        // In non-ANSI mode, return the minimum value unchanged.
+        result = a;
+        return Status::OK();
+      }
+    }
+    result = -a;
+    return Status::OK();
+  }
+
+ private:
+  bool failOnError_ = false;
 };
 
 template <typename T>

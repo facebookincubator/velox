@@ -31,6 +31,8 @@
 #include <cudf/types.hpp>
 #include <cudf/utilities/default_stream.hpp>
 
+#include <optional>
+
 namespace facebook::velox::cudf_velox {
 
 template <typename T>
@@ -117,6 +119,20 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       auto nanos = isNull ? 0 : value.toNanos();
       auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
           CudfTimestampType{cudf::duration_ns{nanos}}, !isNull, stream, mr);
+      stream.synchronize();
+      return scalar;
+    } else if (unit == cudf::type_id::TIMESTAMP_MILLISECONDS) {
+      using CudfTimestampType = cudf::timestamp_ms;
+      auto millis = isNull ? 0 : value.toMillis();
+      auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
+          CudfTimestampType{cudf::duration_ms{millis}}, !isNull, stream, mr);
+      stream.synchronize();
+      return scalar;
+    } else if (unit == cudf::type_id::TIMESTAMP_SECONDS) {
+      using CudfTimestampType = cudf::timestamp_s;
+      auto seconds = isNull ? 0 : value.getSeconds();
+      auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
+          CudfTimestampType{cudf::duration_s{seconds}}, !isNull, stream, mr);
       stream.synchronize();
       return scalar;
     } else {
@@ -213,6 +229,19 @@ inline std::unique_ptr<cudf::scalar> makeScalarFromConstantExpr(
   auto constValue = constExpr->value();
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
       createCudfScalar, constValue->typeKind(), constValue, toType);
+}
+
+inline std::optional<StringView> constantVarcharValue(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr);
+  if (!constExpr || !expr->type()->isVarchar()) {
+    return std::nullopt;
+  }
+  auto value = constExpr->value();
+  if (value->isNullAt(0)) {
+    return std::nullopt;
+  }
+  return value->as<SimpleVector<StringView>>()->valueAt(0);
 }
 
 template <TypeKind kind>

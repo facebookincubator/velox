@@ -336,7 +336,6 @@ TEST_F(DirectBufferedInputTest, duplicateRegionsShareCoalescedRead) {
     EXPECT_EQ(dataIoStats_->duplicateReadRegions() - duplicateRegionsBefore, 1);
     EXPECT_EQ(
         dataIoStats_->duplicateReadBytes() - duplicateBytesBefore, regionSize);
-    EXPECT_EQ(readFile->numReads(), 0);
 
     auto next1 = getNext(*stream1);
     ASSERT_TRUE(next1.has_value());

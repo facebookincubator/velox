@@ -17,6 +17,7 @@
 #include "velox/exec/tests/TableEvolutionFuzzer.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/Cursor.h"
@@ -147,7 +148,7 @@ bool hasEmptyElement(const RowVectorPtr& data, int columnIndex) {
 TableEvolutionFuzzer::TableEvolutionFuzzer(const Config& config)
     : config_(config), vectorFuzzer_(makeVectorFuzzerOptions(), config.pool) {
   VELOX_CHECK_GT(config_.columnCount, 0);
-  VELOX_CHECK_GT(config_.evolutionCount, 1);
+  VELOX_CHECK_GT(config_.evolutionCount, 0);
 }
 
 const std::string& TableEvolutionFuzzer::connectorId() {
@@ -646,6 +647,116 @@ VectorPtr TableEvolutionFuzzer::liftToType(
   }
 }
 
+namespace {
+// Returns true when 'name' occurs in 'expr' as a complete identifier token
+// rather than as a substring of a longer identifier. Aggregate expressions look
+// like "func(name)" and column names are plain identifiers, so this avoids
+// false positives such as column "name_4" matching aggregate "min(name_42)".
+// Mirrors the word-boundary check in applyRemainingFilters.
+bool containsIdentifier(const std::string& expr, const std::string& name) {
+  const auto isIdentChar = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+  };
+  size_t pos = 0;
+  while ((pos = expr.find(name, pos)) != std::string::npos) {
+    const bool boundedLeft = pos == 0 || !isIdentChar(expr[pos - 1]);
+    const size_t end = pos + name.size();
+    const bool boundedRight = end >= expr.size() || !isIdentChar(expr[end]);
+    if (boundedLeft && boundedRight) {
+      return true;
+    }
+    pos += name.size();
+  }
+  return false;
+}
+} // namespace
+
+bool TableEvolutionFuzzer::isColumnUsedByAggregation(
+    const std::string& columnName,
+    const AggregationConfig& aggregationConfig) {
+  for (const auto& groupingKey : aggregationConfig.groupingKeys) {
+    if (groupingKey == columnName) {
+      return true;
+    }
+  }
+  for (const auto& aggregate : aggregationConfig.aggregates) {
+    if (containsIdentifier(aggregate, columnName)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+folly::F14FastSet<std::string> TableEvolutionFuzzer::selectFilterOnlyColumns(
+    const RowTypePtr& schema,
+    const std::unordered_set<std::string>& filteredColumns,
+    const std::vector<column_index_t>& bucketColumnIndices,
+    const std::vector<RowTypePtr>& perEvolutionSchemas,
+    const std::optional<AggregationConfig>& aggregationConfig,
+    FuzzerGenerator& rng) {
+  folly::F14FastSet<std::string> bucketColumnNames;
+  for (const auto bucketColumnIndex : bucketColumnIndices) {
+    bucketColumnNames.insert(schema->nameOf(bucketColumnIndex));
+  }
+  folly::F14FastSet<std::string> droppedColumns;
+  for (int i = 0; i < schema->size(); ++i) {
+    const auto& name = schema->nameOf(i);
+    if (filteredColumns.count(name) == 0) {
+      continue;
+    }
+    // Skip map columns: a filtered map column is read in flatmap-as-struct mode
+    // (buildFlatmapAsStructSchema swaps its type to a struct in the output
+    // schema) and its filter is a map key/value subfield filter. Dropping it
+    // filter-only makes the two oracle plans read it through divergent paths --
+    // the pushdown plan pushes the subfield filter onto the struct-read column,
+    // while the FilterNode plan realizes the filter as a node and then projects
+    // the column away -- so their results can disagree.
+    if (schema->childAt(i)->isMap()) {
+      continue;
+    }
+    if (bucketColumnNames.count(name) > 0) {
+      continue;
+    }
+    // Columns evolve positionally; index 'i' in the final schema corresponds to
+    // index 'i' in every earlier setup that has that position. Skip columns
+    // whose type differs across setups: the selective reader applies coercion
+    // for evolved columns differently when a column is filter-only versus also
+    // projected, which would make the pushdown-vs-FilterNode oracle diverge.
+    bool typeStableAcrossSetups = true;
+    for (const auto& evolutionSchema : perEvolutionSchemas) {
+      if (i >= evolutionSchema->size() ||
+          !evolutionSchema->childAt(i)->equivalent(*schema->childAt(i))) {
+        typeStableAcrossSetups = false;
+        break;
+      }
+    }
+    if (!typeStableAcrossSetups) {
+      continue;
+    }
+    if (aggregationConfig.has_value() &&
+        isColumnUsedByAggregation(name, *aggregationConfig)) {
+      continue;
+    }
+    if (folly::Random::oneIn(2, rng)) {
+      droppedColumns.insert(name);
+    }
+  }
+  return droppedColumns;
+}
+
+std::vector<std::string> TableEvolutionFuzzer::projectedColumnNames(
+    const RowTypePtr& schema,
+    const folly::F14FastSet<std::string>& droppedColumns) {
+  std::vector<std::string> outputColumnNames;
+  for (int i = 0; i < schema->size(); ++i) {
+    const auto& name = schema->nameOf(i);
+    if (droppedColumns.count(name) == 0) {
+      outputColumnNames.push_back(name);
+    }
+  }
+  return outputColumnNames;
+}
+
 void TableEvolutionFuzzer::run() {
   ScopedOOMInjector oomInjectorWritePath(
       [this]() -> bool { return folly::Random::oneIn(10, rng_); },
@@ -802,6 +913,35 @@ void TableEvolutionFuzzer::run() {
     }
   }
 
+  // Read a random subset of the filtered columns filter-only (drop them from
+  // the scan output while still filtering on them) to exercise the selective
+  // reader's filter-only column path.
+  std::vector<RowTypePtr> perEvolutionSchemas;
+  perEvolutionSchemas.reserve(testSetups.size());
+  for (const auto& setup : testSetups) {
+    perEvolutionSchemas.emplace_back(setup.schema);
+  }
+  const folly::F14FastSet<std::string> droppedColumns = selectFilterOnlyColumns(
+      rowType,
+      allFilteredColumns,
+      bucketColumnIndices,
+      perEvolutionSchemas,
+      aggConfig,
+      rng_);
+  if (!droppedColumns.empty()) {
+    VLOG(1) << "Dropping filter-only columns from scan output: ["
+            << folly::join(", ", droppedColumns) << "]";
+  }
+  const std::vector<std::string> outputColumnNames =
+      projectedColumnNames(rowType, droppedColumns);
+
+  // Decide the flatmap-as-struct read schema once and share it across both
+  // plans. buildFlatmapAsStructSchema draws an rng coin per compatible map
+  // column; computing it separately per plan could make the pushdown and
+  // FilterNode plans disagree on a column's read mode (MAP vs struct).
+  RowTypePtr fullOutSchema = buildFlatmapAsStructSchema(
+      rowType, globalMapColumnKeys, globallyConsistentColumnIndexVector);
+
   std::vector<std::shared_ptr<TaskCursor>> scanTasks(2);
   // actual: TableScan -> Aggregation (allows pushdown)
   pushdownConfig.aggregationConfig = aggConfig;
@@ -811,8 +951,8 @@ void TableEvolutionFuzzer::run() {
       pushdownConfig,
       false,
       false, // insertProjectToBlockPushdown
-      globalMapColumnKeys,
-      globallyConsistentColumnIndexVector);
+      fullOutSchema,
+      outputColumnNames);
 
   // expected: TableScan -> Project -> Aggregation (blocks pushdown)
   // Insert a Project node to prevent aggregation pushdown
@@ -823,8 +963,8 @@ void TableEvolutionFuzzer::run() {
       pushdownConfig,
       true,
       true, // insertProjectToBlockPushdown
-      globalMapColumnKeys,
-      globallyConsistentColumnIndexVector);
+      fullOutSchema,
+      outputColumnNames);
 
   ScopedOOMInjector oomInjectorReadPath(
       [this]() -> bool { return folly::Random::oneIn(10, rng_); },
@@ -1241,36 +1381,81 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
     const PushdownConfig& pushdownConfig,
     bool useFiltersAsNode,
     bool insertProjectToBlockPushdown,
-    const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
-        globalMapColumnKeys,
-    const std::vector<int>& globallyCompatibleFlatmapColumns) {
-  // Build schema for flatmap as struct reading
-  RowTypePtr newSchemaUsingStructReadingFlatMap = buildFlatmapAsStructSchema(
-      tableSchema, globalMapColumnKeys, globallyCompatibleFlatmapColumns);
+    const RowTypePtr& fullOutSchema,
+    const std::vector<std::string>& outputColumnNames) {
+  // 'insertProjectToBlockPushdown' only takes effect on the reference plan,
+  // where the Project below is what blocks aggregation pushdown; it is
+  // meaningless (and never applied) on the pushdown plan. Enforce the pairing
+  // so a caller that sets it without 'useFiltersAsNode' fails loudly instead of
+  // silently skipping the intended Project.
+  VELOX_CHECK(
+      !insertProjectToBlockPushdown || useFiltersAsNode,
+      "insertProjectToBlockPushdown requires useFiltersAsNode");
+  // Build the projected output schema by keeping only the columns named in
+  // 'outputColumnNames', preserving the order of 'fullOutSchema'. An empty
+  // 'outputColumnNames' means no pruning, i.e. project the full schema.
+  std::unordered_set<std::string> outputColumnNameSet(
+      outputColumnNames.begin(), outputColumnNames.end());
+  std::vector<std::string> projectedNames;
+  std::vector<TypePtr> projectedTypes;
+  for (uint32_t i = 0; i < fullOutSchema->size(); ++i) {
+    const auto& name = fullOutSchema->nameOf(i);
+    if (outputColumnNames.empty() || outputColumnNameSet.count(name) > 0) {
+      projectedNames.push_back(name);
+      projectedTypes.push_back(fullOutSchema->childAt(i));
+    }
+  }
+  RowTypePtr projectedSchema =
+      ROW(std::move(projectedNames), std::move(projectedTypes));
+  const bool isPruned = projectedSchema->size() < fullOutSchema->size();
 
   CursorParameters params;
   params.serialExecution = true;
 
-  auto builder = PlanBuilder()
-                     .filtersAsNode(useFiltersAsNode)
-                     .tableScanWithPushDown(
-                         newSchemaUsingStructReadingFlatMap, // Use struct
-                                                             // schema for
-                                                             // flatmap reading
-                         /*pushdownConfig=*/pushdownConfig,
-                         tableSchema, // Original schema as dataColumns
-                         {});
-
-  // If insertProjectToBlockPushdown is set, insert an identity Project node
-  // to prevent Driver::mayPushdownAggregation() from allowing pushdown
-  if (insertProjectToBlockPushdown &&
-      pushdownConfig.aggregationConfig.has_value()) {
-    // Create identity projection: simply pass through all columns
-    std::vector<std::string> projectExprs;
-    for (const auto& name : newSchemaUsingStructReadingFlatMap->names()) {
-      projectExprs.push_back(name);
+  PlanBuilder builder;
+  builder.filtersAsNode(useFiltersAsNode);
+  if (!useFiltersAsNode && isPruned) {
+    // Pushdown path with pruning: output only the projected columns while
+    // still reading every column so the dropped columns can be used for
+    // pushed-down filters. The assignments map covers all columns of the full
+    // output schema; the extra columns (not in 'projectedSchema') are read
+    // for filters but not output, exercising the filter-only-column path.
+    connector::ColumnHandleMap assignments;
+    for (uint32_t i = 0; i < fullOutSchema->size(); ++i) {
+      const auto& name = fullOutSchema->nameOf(i);
+      const auto& type = fullOutSchema->childAt(i);
+      assignments.emplace(
+          name,
+          std::make_shared<connector::hive::HiveColumnHandle>(
+              name,
+              connector::hive::FileColumnHandle::ColumnType::kRegular,
+              type,
+              type));
     }
-    builder.project(projectExprs);
+    builder.tableScanWithPushDown(
+        projectedSchema,
+        /*pushdownConfig=*/pushdownConfig,
+        tableSchema, // Original schema as dataColumns
+        assignments);
+  } else {
+    builder.tableScanWithPushDown(
+        fullOutSchema, // Use struct schema for flatmap reading
+        /*pushdownConfig=*/pushdownConfig,
+        tableSchema, // Original schema as dataColumns
+        {});
+  }
+
+  // Reference path: when filters are realized as a FilterNode, the filtered
+  // columns must be output by the scan so the FilterNode can reference them.
+  // Add a Project to drop the filter-only columns and emit the same projected
+  // schema as the pushdown path. Projecting also blocks aggregation pushdown,
+  // so the identity-project case for aggregation is preserved when not pruned.
+  if (useFiltersAsNode &&
+      (isPruned ||
+       (insertProjectToBlockPushdown &&
+        pushdownConfig.aggregationConfig.has_value()))) {
+    builder.project(
+        isPruned ? projectedSchema->names() : fullOutSchema->names());
   }
 
   // Add aggregation if enabled in pushdown config
