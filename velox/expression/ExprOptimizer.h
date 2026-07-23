@@ -13,8 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
+
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
+
+namespace facebook::velox::core {
+class ExpressionEvaluator;
+}
 
 namespace facebook::velox::expression {
 
@@ -27,19 +33,25 @@ using MakeFailExpr = std::function<core::TypedExprPtr(
     const std::string& errorMessage,
     const TypePtr& resultType)>;
 
-/// Optimizes expression through a combination of constant folding and rewrites;
-/// all possible subtrees of the expression are constant folded first in a
-/// bottom up manner, then the folded expression is rewritten. If an exception
-/// (i.e VeloxUserError) is encountered during constant folding of any subtree
-/// of the expression and the function `makeFailExpr` is provided, the failing
-/// subexpression is replaced by the result of applying `makeFailExpr`, allowing
-/// users to define custom logic for handling constant folding errors during
-/// expression optimization. When `makeFailExpr` is not provided, exceptions
-/// encountered while constant folding subexpressions are ignored and failing
-/// subexpressions are left unchanged in the expression tree.
+/// Optimizes an expression through a combination of constant folding and
+/// rewrites; all possible subtrees are constant folded bottom-up, then the
+/// folded expression is rewritten. Constant subtrees are folded with
+/// `exec::tryEvaluateConstantExpression` using `queryCtx` and `pool`. If a
+/// `VeloxUserError` is encountered while folding a subtree and `makeFailExpr`
+/// is provided, the failing subexpression is replaced by the result of applying
+/// `makeFailExpr`; otherwise exceptions are ignored and the subexpression is
+/// left unchanged.
 core::TypedExprPtr optimize(
     const core::TypedExprPtr& expr,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool,
+    const MakeFailExpr& makeFailExpr = nullptr);
+
+/// Variant of `optimize` that folds constant subtrees with `evaluator` (e.g.
+/// the ExpressionEvaluator a connector exposes for pushed down filters), for
+/// callers that have an ExpressionEvaluator but no QueryCtx.
+core::TypedExprPtr optimize(
+    const core::TypedExprPtr& expr,
+    core::ExpressionEvaluator* evaluator,
     const MakeFailExpr& makeFailExpr = nullptr);
 } // namespace facebook::velox::expression
