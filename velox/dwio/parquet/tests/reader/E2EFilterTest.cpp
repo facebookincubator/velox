@@ -860,7 +860,7 @@ TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
   auto rowType = ROW({"s"}, {VARCHAR()});
 
   auto writeAndGetStats = [&](const std::string& createdBy,
-                              RuntimeStatistics& stats) {
+                              RuntimeStats& stats) {
     commonOptions_.memoryPool = E2EFilterTestBase::rootPool_.get();
     options_.createdBy = createdBy;
     // Flush after every 5 rows to create separate row groups.
@@ -929,14 +929,14 @@ TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
   // has min="360手机助手" max="三星应用商店" which contains "360手机助手", so
   // it is read. Row group 2 has min="vivo预装" max="三星应用商店" which does
   // not contain "360手机助手" (it falls below memcmp min), so it is skipped.
-  RuntimeStatistics stats182;
+  RuntimeStats stats182;
   writeAndGetStats("parquet-mr version 1.8.2", stats182);
   EXPECT_EQ(stats182.skippedStrides, 1);
   EXPECT_EQ(stats182.processedStrides, 1);
 
   // parquet-mr 1.8.1: stats are untrusted (signed byte ordering bug), so no
   // row groups are skipped. Both row groups are scanned.
-  RuntimeStatistics stats181;
+  RuntimeStats stats181;
   writeAndGetStats("parquet-mr version 1.8.1", stats181);
   EXPECT_EQ(stats181.skippedStrides, 0);
   EXPECT_EQ(stats181.processedStrides, 2);

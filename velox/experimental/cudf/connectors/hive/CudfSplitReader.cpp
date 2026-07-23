@@ -97,8 +97,7 @@ CudfSplitReader::CudfSplitReader(
   baseReaderOpts_.setMetadataIoStats(ioStatistics_);
 }
 
-void CudfSplitReader::prepareSplit(
-    dwio::common::RuntimeStatistics& runtimeStats) {
+void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
   // Reset existing split and split readers, if any
   resetSplit();
 

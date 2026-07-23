@@ -29,6 +29,7 @@
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/common/Common.h"
+#include "velox/dwio/dwrf/common/DwrfRuntimeStats.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
@@ -2978,9 +2979,13 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   ASSERT_EQ(c0->encoding(), VectorEncoding::Simple::DICTIONARY);
   ASSERT_TRUE(c0->valueVector()->isFlatEncoding());
   ASSERT_EQ(c0->valueVector()->size(), dictionary.size());
-  dwio::common::RuntimeStatistics stats;
+  dwio::common::RuntimeStats stats;
   rowReader->updateRuntimeStats(stats);
-  ASSERT_EQ(stats.columnReaderStats.flattenStringDictionaryValues, 0);
+  const auto metricName =
+      std::string(DwrfRuntimeStats::kFlattenStringDictionaryValues);
+  ASSERT_FALSE(stats.columnStats.at(1)
+                   .at(FileFormat::DWRF)
+                   .columnMetrics.contains(metricName));
   spec->childByName("c0")->setFilter(
       std::make_unique<common::BytesValues>(
           std::vector<std::string>{"aaaaaaaaaaaaaaaaaaaa"}, false));
@@ -2989,9 +2994,17 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   ASSERT_EQ(rowReader->next(20, actual), 20);
   ASSERT_EQ(actual->size(), 1);
   ASSERT_TRUE(actual->as<RowVector>()->childAt(0)->isFlatEncoding());
-  stats = {};
+  stats = dwio::common::RuntimeStats();
   rowReader->updateRuntimeStats(stats);
-  ASSERT_EQ(stats.columnReaderStats.flattenStringDictionaryValues, 1);
+  ASSERT_TRUE(stats.columnStats.at(1)
+                  .at(FileFormat::DWRF)
+                  .columnMetrics.contains(metricName));
+  ASSERT_EQ(
+      stats.columnStats.at(1)
+          .at(FileFormat::DWRF)
+          .columnMetrics.at(metricName)
+          .sum,
+      1);
 }
 
 // A primitive subfield is missing in file, and result is not reused.

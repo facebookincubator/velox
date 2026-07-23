@@ -152,7 +152,7 @@ class ColumnReaderTestBase {
           fileTypeWithId,
           streams_,
           labels_,
-          columnReaderStatistics_,
+          splitStatistics_,
           scanSpec,
           FlatMapContext{});
       selectiveColumnReader_->setIsTopLevel();
@@ -233,7 +233,7 @@ class ColumnReaderTestBase {
 
  private:
   std::unique_ptr<common::ScanSpec> scanSpec_;
-  ColumnReaderStatistics columnReaderStatistics_;
+  SplitStats splitStatistics_{FileFormat::DWRF};
 };
 
 struct StringReaderTestParams {

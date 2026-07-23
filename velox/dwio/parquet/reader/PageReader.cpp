@@ -25,6 +25,7 @@
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/parquet/common/LevelConversion.h"
+#include "velox/dwio/parquet/common/ParquetRuntimeStats.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/vector/FlatVector.h"
 
@@ -122,7 +123,8 @@ PageHeader PageReader::readPageHeader() {
 
   updateBufferPointersAfterDeserialization(result);
 
-  stats_.pageLoadTimeNs.increment(result.readUs * 1'000);
+  stats_.accumulateStat(
+      ParquetRuntimeStats::kPageLoadTimeNsMetric, result.readNs);
   return pageHeader;
 }
 
@@ -138,9 +140,9 @@ void PageReader::updateBufferPointersAfterDeserialization(
 }
 
 const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
-  uint64_t readUs{0};
+  uint64_t readNs{0};
   {
-    MicrosecondWallTimer timer(&readUs);
+    NanosecondWallTimer timer(&readNs);
     if (bufferEnd_ == bufferStart_) {
       const void* buffer = nullptr;
       int32_t bufferSize = 0;
@@ -164,7 +166,7 @@ const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
         bufferStart_,
         bufferEnd_);
   }
-  stats_.pageLoadTimeNs.increment(readUs * 1'000);
+  stats_.accumulateStat(ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
   return copy->as<char>();
 }
 
@@ -491,9 +493,9 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       if (pageData_) {
         memcpy(dictionary_.values->asMutable<char>(), pageData_, numBytes);
       } else {
-        uint64_t readUs{0};
+        uint64_t readNs{0};
         {
-          MicrosecondWallTimer timer(&readUs);
+          NanosecondWallTimer timer(&readNs);
           dwio::common::readBytes(
               numBytes,
               inputStream_.get(),
@@ -501,7 +503,8 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
               bufferStart_,
               bufferEnd_);
         }
-        stats_.pageLoadTimeNs.increment(readUs * 1'000);
+        stats_.accumulateStat(
+            ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
       }
       if (type_->type()->isShortDecimal() &&
           parquetType == thrift::Type::INT32) {
@@ -531,9 +534,9 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       if (pageData_) {
         memcpy(dictionary_.values->asMutable<char>(), pageData_, numBytes);
       } else {
-        uint64_t readUs{0};
+        uint64_t readNs{0};
         {
-          MicrosecondWallTimer timer(&readUs);
+          NanosecondWallTimer timer(&readNs);
           dwio::common::readBytes(
               numBytes,
               inputStream_.get(),
@@ -541,7 +544,8 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
               bufferStart_,
               bufferEnd_);
         }
-        stats_.pageLoadTimeNs.increment(readUs * 1'000);
+        stats_.accumulateStat(
+            ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
       }
       // Expand the Parquet type length values to Velox type length.
       // We start from the end to allow in-place expansion.
@@ -568,13 +572,14 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       if (pageData_) {
         memcpy(strings, pageData_, numBytes);
       } else {
-        uint64_t readUs{0};
+        uint64_t readNs{0};
         {
-          MicrosecondWallTimer timer(&readUs);
+          NanosecondWallTimer timer(&readNs);
           dwio::common::readBytes(
               numBytes, inputStream_.get(), strings, bufferStart_, bufferEnd_);
         }
-        stats_.pageLoadTimeNs.increment(readUs * 1'000);
+        stats_.accumulateStat(
+            ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
       }
       auto header = strings;
       for (auto i = 0; i < dictionary_.numValues; ++i) {
@@ -597,9 +602,9 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       if (pageData_) {
         memcpy(data, pageData_, numParquetBytes);
       } else {
-        uint64_t readUs{0};
+        uint64_t readNs{0};
         {
-          MicrosecondWallTimer timer(&readUs);
+          NanosecondWallTimer timer(&readNs);
           dwio::common::readBytes(
               numParquetBytes,
               inputStream_.get(),
@@ -607,7 +612,8 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
               bufferStart_,
               bufferEnd_);
         }
-        stats_.pageLoadTimeNs.increment(readUs * 1'000);
+        stats_.accumulateStat(
+            ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
       }
       if (type_->type()->isShortDecimal()) {
         // Parquet decimal values have a fixed typeLength_ and are in big-endian

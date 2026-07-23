@@ -473,7 +473,12 @@ FileBasedDataSource
 These stats are reported by the file-based connector data source (Hive connector).
 Data stream IO stats use the stat names directly (e.g., ``storageReadBytes``).
 Metadata IO stats (footer, stripe groups, index) use a ``metadata.`` prefix
-(e.g., ``metadata.storageReadBytes``, ``metadata.ramReadBytes``).
+(e.g., ``metadata.storageReadBytes``, ``metadata.ramReadBytes``). Reader
+format-specific stats are prefixed with the file format name
+(e.g., ``dwrf.flattenStringDictionaryValues``). Column statistics are also
+reported per column using ``column_<nodeId>`` and the column type. For example,
+``parquet.pageLoadTimeNanos`` aggregates all Parquet columns, while
+``parquet.column_2.BIGINT.pageLoadTimeNanos`` identifies one column.
 
 .. list-table::
    :widths: 50 25 50
@@ -504,13 +509,6 @@ Metadata IO stats (footer, stripe groups, index) use a ``metadata.`` prefix
    * - numStripes
      -
      - The number of stripes read from the file.
-   * - flattenStringDictionaryValues
-     -
-     - The number of rows returned by the string dictionary reader that were
-       flattened instead of keeping dictionary encoding.
-   * - pageLoadTimeNs
-     - nanos
-     - The total time spent loading pages.
    * - numPrefetch
      -
      - The number of prefetch operations issued.
@@ -547,3 +545,28 @@ Metadata IO stats (footer, stripe groups, index) use a ``metadata.`` prefix
        coalescing. Measures data locality on disk — smaller gaps indicate
        co-accessed columns are physically adjacent in the file. Includes
        min and max per gap.
+   * - parquet.footerEstimatedBytes
+     - bytes
+     - The estimated memory used by the deserialized Parquet footer when
+       footer memory tracking is enabled.
+   * - | dwrf.flattenStringDictionaryValues
+       | dwrf.column_<nodeId>.<type>.flattenStringDictionaryValues
+     -
+     - The number of rows returned by the DWRF string dictionary reader that
+       were flattened instead of keeping dictionary encoding. Reported across
+       all columns and by column.
+   * - | parquet.pageLoadTimeNanos
+       | parquet.column_<nodeId>.<type>.pageLoadTimeNanos
+     - nanos
+     - The time spent loading Parquet pages. Reported across all columns and
+       by column.
+   * - | <format>.decompressCPUTimeNanos
+       | <format>.column_<nodeId>.<type>.decompressCPUTimeNanos
+     - nanos
+     - The CPU time spent decompressing column data. Reported across all
+       columns and by column.
+   * - | <format>.decodeCPUTimeNanos
+       | <format>.column_<nodeId>.<type>.decodeCPUTimeNanos
+     - nanos
+     - The CPU time spent decoding column data. Reported across all columns,
+       and by column.
