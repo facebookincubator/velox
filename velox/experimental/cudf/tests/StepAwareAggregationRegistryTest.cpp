@@ -551,4 +551,93 @@ TEST_F(
       getReduceAggregationRegistry().end());
 }
 
+TEST_F(StepAwareAggregationRegistryTest, aggregateSignatureMap) {
+  auto exportedMap = getCudfAggregationFunctionSignatureMap();
+  auto avgIt = exportedMap.find("avg");
+  ASSERT_NE(avgIt, exportedMap.end());
+  ASSERT_FALSE(avgIt->second.empty());
+
+  bool foundDoubleToRowIntermediate = false;
+  for (const auto& sig : avgIt->second) {
+    if (sig->argumentTypes().size() == 1 &&
+        sig->argumentTypes()[0].toString() == "double" &&
+        sig->returnType().toString() == "double" &&
+        sig->intermediateType().toString() == "row(double,bigint)") {
+      foundDoubleToRowIntermediate = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(foundDoubleToRowIntermediate);
+}
+
+TEST_F(
+    StepAwareAggregationRegistryTest,
+    aggregateSignatureMapDeterministicKeyMatching) {
+  using exec::FunctionSignatureBuilder;
+
+  const std::string functionName = "deterministic_pairing";
+
+  registerAggregationFunctionForStep(
+      getGroupbyAggregationRegistry(),
+      functionName,
+      core::AggregationNode::Step::kSingle,
+      {
+          FunctionSignatureBuilder()
+              .returnType("bigint")
+              .argumentType("integer")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("double")
+              .argumentType("double")
+              .build(),
+      });
+
+  // Reverse order + add an unmatched signature to verify we pair by key,
+  // not by vector position, and we do not silently truncate by index.
+  registerAggregationFunctionForStep(
+      getGroupbyAggregationRegistry(),
+      functionName,
+      core::AggregationNode::Step::kPartial,
+      {
+          FunctionSignatureBuilder()
+              .returnType("varbinary")
+              .argumentType("double")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("varchar")
+              .argumentType("integer")
+              .build(),
+          FunctionSignatureBuilder()
+              .returnType("boolean")
+              .argumentType("real")
+              .build(),
+      });
+
+  auto exportedMap = getCudfAggregationFunctionSignatureMap();
+  auto it = exportedMap.find(functionName);
+  ASSERT_NE(it, exportedMap.end());
+
+  const auto& aggregateSigs = it->second;
+  ASSERT_EQ(aggregateSigs.size(), 2);
+
+  bool matchedInteger = false;
+  bool matchedDouble = false;
+  for (const auto& sig : aggregateSigs) {
+    ASSERT_EQ(sig->argumentTypes().size(), 1);
+    const auto argType = sig->argumentTypes()[0].toString();
+    if (argType == "integer") {
+      EXPECT_EQ(sig->returnType().toString(), "bigint");
+      EXPECT_EQ(sig->intermediateType().toString(), "varchar");
+      matchedInteger = true;
+    } else if (argType == "double") {
+      EXPECT_EQ(sig->returnType().toString(), "double");
+      EXPECT_EQ(sig->intermediateType().toString(), "varbinary");
+      matchedDouble = true;
+    }
+  }
+
+  EXPECT_TRUE(matchedInteger);
+  EXPECT_TRUE(matchedDouble);
+}
+
 } // namespace facebook::velox::cudf_velox
