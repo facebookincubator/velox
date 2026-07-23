@@ -656,7 +656,7 @@ TEST_P(ExchangeClientTest, acknowledge) {
   }
 
   // one page is still in the buffer at this point
-  ASSERT_EQ(bufferManager_->getUtilization(sourceTaskId), 0.5);
+  ASSERT_EQ(bufferManager_->getUtilization(sourceTaskId).value_or(0), 0.5);
 
   auto pages = fetchPages(1, *client, 1);
   ASSERT_EQ(1, pages.size());
@@ -667,7 +667,8 @@ TEST_P(ExchangeClientTest, acknowledge) {
     bool outputBuffersEmpty;
     while (attempts > 0) {
       --attempts;
-      outputBuffersEmpty = bufferManager_->getUtilization(sourceTaskId) == 0;
+      outputBuffersEmpty =
+          bufferManager_->getUtilization(sourceTaskId).value_or(0) == 0;
       if (outputBuffersEmpty) {
         break;
       }

@@ -513,6 +513,7 @@ class TestShouldYieldOperator : public exec::Operator {
   RowVectorPtr input_;
   bool shouldYieldResult_{false};
 };
+
 } // namespace
 
 class TaskTest : public HiveConnectorTestBase {
@@ -1476,6 +1477,39 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
     // ignored.
     ASSERT_FALSE(task->updateOutputBuffers(15, true));
   }
+}
+
+TEST_F(TaskTest, taskStatsPreserveFinalOutputBufferStats) {
+  constexpr int32_t numBatches = 10;
+  std::vector<RowVectorPtr> dataBatches;
+  dataBatches.reserve(numBatches);
+  const int numRows = numBatches * 3;
+  for (int32_t i = 0; i < numBatches; ++i) {
+    dataBatches.push_back(makeRowVector({makeFlatVector<int64_t>({0, 1, 10})}));
+  }
+
+  auto plan =
+      PlanBuilder().values(dataBatches).partitionedOutput({}, 1).planNode();
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = core::QueryCtx::create(executor_.get());
+  auto cursor = TaskCursor::create(params);
+  Task* task = cursor->task().get();
+  while (cursor->moveNext()) {
+  }
+
+  task->requestCancel();
+  waitForTaskCompletion(task);
+
+  const auto taskStats = task->taskStats();
+  ASSERT_TRUE(taskStats.outputBufferStats.has_value());
+  const auto& outputStats = taskStats.outputBufferStats.value();
+  EXPECT_EQ(outputStats.kind, core::PartitionedOutputNode::Kind::kPartitioned);
+  EXPECT_EQ(outputStats.totalRowsSent, numRows);
+  EXPECT_GT(outputStats.totalPagesSent, 0);
+  EXPECT_GT(outputStats.bufferedBytes, 0);
+  EXPECT_EQ(outputStats.bufferedPages, outputStats.totalPagesSent);
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {

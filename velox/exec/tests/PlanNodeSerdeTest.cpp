@@ -460,6 +460,16 @@ TEST_F(PlanNodeSerdeTest, partitionedOutput) {
                .partitionedOutput({"c0"}, 50, {"c1", {"c2"}, "c0"}, serdeKind)
                .planNode();
     testSerde(plan);
+
+    // Round-trips a non-default transport annotation on the node.
+    plan = PlanBuilder()
+               .values({data_})
+               .partitionedOutputBroadcast(
+                   /*outputLayout=*/{},
+                   serdeKind,
+                   std::string{core::TransportKind::kUcx})
+               .planNode();
+    testSerde(plan);
   }
 }
 
@@ -564,6 +574,20 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
                  core::JoinType::kAnti,
                  /*nullAware=*/false,
                  /*nullAsValue=*/true)
+             .planNode();
+
+  testSerde(plan);
+
+  // Right anti join projects build-side columns only.
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({probe})
+             .hashJoin(
+                 {"t0"},
+                 {"u0"},
+                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 "",
+                 {"u1", "u2"},
+                 core::JoinType::kRightAnti)
              .planNode();
 
   testSerde(plan);
