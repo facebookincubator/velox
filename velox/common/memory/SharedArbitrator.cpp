@@ -194,6 +194,12 @@ bool SharedArbitrator::ExtraConfig::globalArbitrationWithoutSpill(
       kDefaultGlobalArbitrationWithoutSpill);
 }
 
+double SharedArbitrator::ExtraConfig::abortPriorityWeightPct(
+    const std::unordered_map<std::string, std::string>& configs) {
+  return getConfig<double>(
+      configs, kAbortPriorityWeightPct, kDefaultAbortPriorityWeightPct);
+}
+
 double SharedArbitrator::ExtraConfig::globalArbitrationAbortTimeRatio(
     const std::unordered_map<std::string, std::string>& configs) {
   return getConfig<double>(
@@ -230,6 +236,8 @@ SharedArbitrator::SharedArbitrator(const Config& config)
           ExtraConfig::globalArbitrationAbortTimeRatio(config.extraConfigs)),
       globalArbitrationWithoutSpill_(
           ExtraConfig::globalArbitrationWithoutSpill(config.extraConfigs)),
+      abortPriorityWeightPct_(
+          ExtraConfig::abortPriorityWeightPct(config.extraConfigs)),
       freeReservedCapacity_(reservedCapacity_),
       freeNonReservedCapacity_(capacity_ - freeReservedCapacity_) {
   VELOX_CHECK_EQ(kind_, config.kind);
@@ -592,46 +600,39 @@ SharedArbitrator::sortAndGroupSpillCandidates(
   return candidateGroups;
 }
 
+namespace {
+// Abort badness, higher = better victim. Uses currentCapacity (abort frees the
+// whole pool). A large priorityWeight degenerates to the legacy priority-first
+// order.
+__int128 abortBadnessScore(
+    const ArbitrationCandidate& candidate,
+    uint64_t priorityWeight) {
+  const auto* reclaimer = candidate.participant->pool()->reclaimer();
+  const int64_t priority = reclaimer == nullptr
+      ? std::numeric_limits<int32_t>::max()
+      : reclaimer->priority();
+  return static_cast<__int128>(candidate.currentCapacity) +
+      static_cast<__int128>(priority) * static_cast<__int128>(priorityWeight);
+}
+} // namespace
+
 // static
-std::vector<std::vector<ArbitrationCandidate>>
-SharedArbitrator::sortAndGroupAbortCandidates(
-    std::vector<ArbitrationCandidate>&& candidates) {
+std::vector<ArbitrationCandidate> SharedArbitrator::sortAbortCandidates(
+    std::vector<ArbitrationCandidate>&& candidates,
+    uint64_t priorityWeight) {
   std::sort(
       candidates.begin(),
       candidates.end(),
-      [](const ArbitrationCandidate& lhs, const ArbitrationCandidate& rhs) {
-        const auto* lhsReclaimer = lhs.participant->pool()->reclaimer();
-        const auto* rhsReclaimer = rhs.participant->pool()->reclaimer();
-        if (lhsReclaimer == nullptr || rhsReclaimer == nullptr) {
-          // Participants without reclaimer are treated as low priority, putting
-          // them in front.
-          return (lhsReclaimer == nullptr) > (rhsReclaimer == nullptr);
+      [priorityWeight](
+          const ArbitrationCandidate& lhs, const ArbitrationCandidate& rhs) {
+        const auto lhsScore = abortBadnessScore(lhs, priorityWeight);
+        const auto rhsScore = abortBadnessScore(rhs, priorityWeight);
+        if (lhsScore != rhsScore) {
+          return lhsScore > rhsScore;
         }
-        return lhsReclaimer->priority() > rhsReclaimer->priority();
+        return lhs.participant->id() > rhs.participant->id();
       });
-
-  std::vector<std::vector<ArbitrationCandidate>> candidateGroups;
-  std::optional<int32_t> prevPriority;
-  for (auto i = 0; i < candidates.size(); ++i) {
-    const auto* curReclaimer = candidates[i].participant->pool()->reclaimer();
-    const auto curPriority = curReclaimer == nullptr
-        ? std::nullopt
-        : std::optional(curReclaimer->priority());
-    if (i == 0) {
-      prevPriority = curPriority;
-      candidateGroups.emplace_back(
-          std::vector<ArbitrationCandidate>{std::move(candidates[i])});
-      continue;
-    }
-    if (curPriority != prevPriority) {
-      prevPriority = curPriority;
-      candidateGroups.emplace_back(
-          std::vector<ArbitrationCandidate>{std::move(candidates[i])});
-    } else {
-      candidateGroups.back().push_back(std::move(candidates[i]));
-    }
-  }
-  return candidateGroups;
+  return std::move(candidates);
 }
 
 std::optional<ArbitrationCandidate> SharedArbitrator::findAbortCandidate(
@@ -649,34 +650,15 @@ std::optional<ArbitrationCandidate> SharedArbitrator::findAbortCandidate(
     return std::nullopt;
   }
 
-  auto candidateGroups = sortAndGroupAbortCandidates(std::move(candidates));
+  const uint64_t priorityWeightBytes =
+      static_cast<uint64_t>(abortPriorityWeightPct_ * capacity_);
+  auto sorted = sortAbortCandidates(std::move(candidates), priorityWeightBytes);
 
-  for (auto& candidateGroup : candidateGroups) {
-    for (uint64_t capacityLimit : globalArbitrationAbortCapacityLimits_) {
-      int32_t candidateIdx{-1};
-      for (int32_t i = 0; i < candidateGroup.size(); ++i) {
-        if (candidateGroup[i].participant->aborted()) {
-          continue;
-        }
-        if (candidateGroup[i].currentCapacity < capacityLimit ||
-            candidateGroup[i].currentCapacity == 0) {
-          continue;
-        }
-        if (candidateIdx == -1) {
-          candidateIdx = i;
-          continue;
-        }
-        // With the same capacity size bucket, we favor the old participant to
-        // not to be killed, to let long running query proceed first.
-        if (candidateGroup[candidateIdx].participant->id() <
-            candidateGroup[i].participant->id()) {
-          candidateIdx = i;
-        }
-      }
-      if (candidateIdx != -1) {
-        return candidateGroup[candidateIdx];
-      }
+  for (auto& candidate : sorted) {
+    if (candidate.participant->aborted() || candidate.currentCapacity == 0) {
+      continue;
     }
+    return candidate;
   }
 
   if (!force) {
@@ -684,23 +666,8 @@ std::optional<ArbitrationCandidate> SharedArbitrator::findAbortCandidate(
     return std::nullopt;
   }
 
-  // Can't find an eligible abort candidate and then return the youngest
-  // candidate (which has the largest participant id) in the lowest priority
-  // bucket.
-  VELOX_CHECK(!candidateGroups.empty() && !candidateGroups[0].empty());
-  int32_t candidateIdx{0};
-  for (auto i = 0; i < candidateGroups[0].size(); ++i) {
-    if (candidateGroups[0][i].participant->id() >
-        candidateGroups[0][candidateIdx].participant->id()) {
-      candidateIdx = i;
-    }
-  }
-
-  VELOX_MEM_LOG(WARNING)
-      << "Can't find an eligible abort victim and force to abort the youngest "
-         "participant "
-      << candidateGroups[0][candidateIdx].participant->name();
-  return candidateGroups[0][candidateIdx];
+  VELOX_CHECK(!sorted.empty());
+  return sorted.front();
 }
 
 void SharedArbitrator::updateArbitrationRequestStats() {

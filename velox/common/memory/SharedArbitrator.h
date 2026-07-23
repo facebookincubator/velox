@@ -242,6 +242,16 @@ class SharedArbitrator : public memory::MemoryArbitrator {
     static bool globalArbitrationWithoutSpill(
         const std::unordered_map<std::string, std::string>& configs);
 
+    /// What one unit of priority difference is worth in the abort badness
+    /// score, as a fraction of total capacity (so sensitivity is consistent
+    /// across deployment sizes). Higher makes priority dominate; the default
+    /// 1.0 keeps the priority-dominant ordering.
+    static constexpr std::string_view kAbortPriorityWeightPct{
+        "abort-priority-weight-pct"};
+    static constexpr double kDefaultAbortPriorityWeightPct{1.0};
+    static double abortPriorityWeightPct(
+        const std::unordered_map<std::string, std::string>& configs);
+
     /// If true, do sanity check on the arbitrator state on destruction.
     ///
     /// TODO: deprecate this flag after all the existing memory leak use cases
@@ -506,11 +516,12 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   std::vector<std::vector<ArbitrationCandidate>> sortAndGroupSpillCandidates(
       std::vector<ArbitrationCandidate>&& candidates);
 
-  // Sorts 'candidates' based on participant's reclaimer priority in descending
-  // order, putting lower priority ones (with higher priority value) first, and
-  // high priority ones (with lower priority value) later.
-  static std::vector<std::vector<ArbitrationCandidate>>
-  sortAndGroupAbortCandidates(std::vector<ArbitrationCandidate>&& candidates);
+  /// Sorts 'candidates' by abort badness score (priority blended with capacity)
+  /// in descending order. Higher score = better victim. Tie-break: younger
+  /// participant (larger id) first.
+  static std::vector<ArbitrationCandidate> sortAbortCandidates(
+      std::vector<ArbitrationCandidate>&& candidates,
+      uint64_t priorityWeight);
 
   // Finds the participant victim to abort to free used memory based on the
   // participant's memory capacity and age. The function returns std::nullopt if
@@ -646,6 +657,7 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   const uint32_t globalArbitrationMemoryReclaimPct_;
   const double globalArbitrationAbortTimeRatio_;
   const bool globalArbitrationWithoutSpill_;
+  const double abortPriorityWeightPct_;
 
   // The executor used to reclaim memory from multiple participants in parallel
   // at the background for global arbitration or external memory reclamation.
