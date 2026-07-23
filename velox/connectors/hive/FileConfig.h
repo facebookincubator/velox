@@ -232,6 +232,14 @@ class FileConfig {
   // --- VELOX_HIVE_CONFIG_PROPERTY properties ---
 
   VELOX_HIVE_CONFIG_PROPERTY(
+      kMaxCoalescedDistanceSession,
+      "orc_max_merge_distance",
+      std::string,
+      "512kB",
+      "Maximum merge distance to combine read requests.")
+  static constexpr const char* kMaxCoalescedDistance = "max-coalesced-distance";
+
+  VELOX_HIVE_CONFIG_PROPERTY(
       kParallelUnitLoadCountSession,
       "parallel_unit_load_count",
       size_t,
@@ -273,6 +281,8 @@ class FileConfig {
   static std::string makeConnectorConfigPrefix(std::string_view connectorName) {
     return std::string(connectorName) + ".";
   }
+
+  int32_t maxCoalescedDistanceBytes(const config::ConfigBase* session) const;
 
   int32_t prefetchRowGroups() const;
 

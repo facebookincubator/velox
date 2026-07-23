@@ -58,6 +58,8 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_FALSE(hiveConfig.isFileColumnNamesReadAsLowerCase(emptySession.get()));
 
   ASSERT_EQ(hiveConfig.maxCoalescedBytes(emptySession.get()), 128 << 20);
+  ASSERT_EQ(
+      hiveConfig.maxCoalescedDistanceBytes(emptySession.get()), 512 << 10);
   ASSERT_FALSE(
       hiveConfig.readStatsBasedFilterReorderDisabled(emptySession.get()));
   ASSERT_EQ(hiveConfig.numCacheFileHandles(), 20'000);
@@ -91,6 +93,7 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kFileColumnNamesReadAsLowerCase, "true"},
       {HiveConfig::kAllowNullPartitionKeys, "false"},
       {HiveConfig::kMaxCoalescedBytes, "100"},
+      {HiveConfig::kMaxCoalescedDistance, "100kB"},
       {HiveConfig::kNumCacheFileHandles, "100"},
       {HiveConfig::kFileHandleExpirationDurationMs, "200"},
       {HiveConfig::kEnableFileHandleCache, "false"},
@@ -124,6 +127,8 @@ TEST(HiveConfigTest, overrideConfig) {
   ASSERT_TRUE(hiveConfig.isFileColumnNamesReadAsLowerCase(emptySession.get()));
   ASSERT_FALSE(hiveConfig.allowNullPartitionKeys(emptySession.get()));
   ASSERT_EQ(hiveConfig.maxCoalescedBytes(emptySession.get()), 100);
+  ASSERT_EQ(
+      hiveConfig.maxCoalescedDistanceBytes(emptySession.get()), 100 << 10);
   ASSERT_EQ(hiveConfig.numCacheFileHandles(), 100);
   ASSERT_EQ(hiveConfig.fileHandleExpirationDurationMs(), 200);
   ASSERT_FALSE(hiveConfig.isFileHandleCacheEnabled());
@@ -155,6 +160,7 @@ TEST(HiveConfigTest, overrideSession) {
       {HiveConfig::kFileColumnNamesReadAsLowerCaseSession, "true"},
       {HiveConfig::kSortWriterMaxOutputRowsSession, "20"},
       {HiveConfig::kSortWriterMaxOutputBytesSession, "20MB"},
+      {HiveConfig::kMaxCoalescedDistanceSession, "3MB"},
       {HiveConfig::kSortWriterFinishTimeSliceLimitMsSession, "300"},
       {HiveConfig::kPartitionPathAsLowerCaseSession, "false"},
       {HiveConfig::kAllowNullPartitionKeysSession, "false"},
@@ -183,6 +189,7 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_TRUE(hiveConfig.isFileColumnNamesReadAsLowerCase(session.get()));
 
   ASSERT_EQ(hiveConfig.maxCoalescedBytes(session.get()), 128 << 20);
+  ASSERT_EQ(hiveConfig.maxCoalescedDistanceBytes(session.get()), 3 << 20);
   ASSERT_EQ(hiveConfig.numCacheFileHandles(), 20'000);
   ASSERT_TRUE(hiveConfig.isFileHandleCacheEnabled());
   ASSERT_EQ(hiveConfig.sortWriterMaxOutputRows(session.get()), 20);

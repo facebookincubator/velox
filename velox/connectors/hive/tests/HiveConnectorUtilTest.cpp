@@ -23,8 +23,6 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/ReaderFactory.h"
-#include "velox/dwio/dwrf/common/Config.h"
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/expression/Expr.h"
@@ -215,16 +213,6 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
     EXPECT_EQ(readerOptions.columnMappingMode(), expectedMappingMode);
   };
 
-  auto checkOrcMaxCoalesceDistance = [&](int32_t expected) {
-    auto dwrfOptions = checkedPointerCast<dwrf::DwrfOptions>(
-        readerOptions.formatSpecificOptions());
-    EXPECT_EQ(dwrfOptions->maxCoalesceDistance(), expected);
-  };
-
-  auto hiveOrcConfigKey = [](std::string_view key) {
-    return fmt::format("{}{}", std::string("hive.orc."), key);
-  };
-
   // Default.
   performConfigure();
   EXPECT_EQ(readerOptions.fileFormat(), fileFormat);
@@ -236,10 +224,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
       hiveConfig->maxCoalescedBytes(&sessionProperties));
   EXPECT_EQ(
       readerOptions.maxCoalesceDistance(),
-      dwio::common::ReaderOptions::kDefaultCoalesceDistance);
-  checkOrcMaxCoalesceDistance(
-      dwrf::Config::maxCoalesceDistance(
-          *hiveConfig->config(), sessionProperties));
+      hiveConfig->maxCoalescedDistanceBytes(&sessionProperties));
   EXPECT_EQ(
       readerOptions.fileColumnNamesReadAsLowerCase(),
       hiveConfig->isFileColumnNamesReadAsLowerCase(&sessionProperties));
@@ -333,8 +318,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   std::unordered_map<std::string, std::string> customHiveConfigProps;
   customHiveConfigProps[hive::HiveConfig::kLoadQuantum] = "321";
   customHiveConfigProps[hive::HiveConfig::kMaxCoalescedBytes] = "129";
-  customHiveConfigProps[hiveOrcConfigKey(
-      dwrf::Config::kOrcMaxCoalesceDistance)] = "513KB";
+  customHiveConfigProps[hive::HiveConfig::kMaxCoalescedDistance] = "513KB";
   customHiveConfigProps[hive::HiveConfig::kFileColumnNamesReadAsLowerCase] =
       "true";
   customHiveConfigProps["hive.use-column-names"] = "true";
@@ -352,7 +336,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
       hiveConfig->maxCoalescedBytes(&sessionProperties));
   EXPECT_EQ(
       readerOptions.maxCoalesceDistance(),
-      dwio::common::ReaderOptions::kDefaultCoalesceDistance);
+      hiveConfig->maxCoalescedDistanceBytes(&sessionProperties));
   EXPECT_EQ(
       readerOptions.fileColumnNamesReadAsLowerCase(),
       hiveConfig->isFileColumnNamesReadAsLowerCase(&sessionProperties));
@@ -364,8 +348,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   performConfigure();
   EXPECT_EQ(
       readerOptions.maxCoalesceDistance(),
-      dwio::common::ReaderOptions::kDefaultCoalesceDistance);
-  checkOrcMaxCoalesceDistance(513 << 10);
+      hiveConfig->maxCoalescedDistanceBytes(&sessionProperties));
   checkColumnMappingMode();
   clearDynamicParameters(FileFormat::PARQUET);
   performConfigure();
