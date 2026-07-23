@@ -17,10 +17,13 @@
 
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/PartitionedBufferedState.h"
 
 #include <cudf/groupby.hpp>
 
 namespace facebook::velox::cudf_velox {
+
+class GroupbyBufferedStateOps;
 
 struct GroupbyAggregator {
   core::AggregationNode::Step step;
@@ -97,6 +100,8 @@ class CudfGroupby : public CudfOperatorBase {
   void doNoMoreInput() override;
 
  private:
+  friend class GroupbyBufferedStateOps;
+
   CudfVectorPtr doGroupByAggregation(
       cudf::table_view tableView,
       std::vector<column_index_t> const& groupByKeys,
@@ -105,7 +110,7 @@ class CudfGroupby : public CudfOperatorBase {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr);
 
-  CudfVectorPtr releaseAndResetBufferedResult();
+  void recordPartialFlushStats(const CudfVector& output);
 
   void computePartialGroupbyStreaming(CudfVectorPtr tbl);
   void computeFinalGroupbyStreaming(CudfVectorPtr tbl);
@@ -137,7 +142,8 @@ class CudfGroupby : public CudfOperatorBase {
   std::vector<CudfVectorPtr> inputs_;
   TypePtr inputType_;
   RowTypePtr bufferedResultType_;
-  CudfVectorPtr bufferedResult_;
+  std::unique_ptr<FlushableBufferedState> flushableBufferedState_;
+  std::unique_ptr<PartitionedBufferedState> partitionedBufferedState_;
 };
 
 } // namespace facebook::velox::cudf_velox

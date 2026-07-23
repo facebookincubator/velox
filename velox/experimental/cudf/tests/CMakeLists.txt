@@ -79,7 +79,7 @@ velox_add_cudf_test(
 
 velox_add_cudf_test(
   NAME velox_cudf_aggregation_test
-  SOURCES Main.cpp AggregationTest.cpp
+  SOURCES Main.cpp AggregationTest.cpp PartitionedBufferedStateTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer
 )
 

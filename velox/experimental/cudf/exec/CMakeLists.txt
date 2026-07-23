@@ -39,6 +39,7 @@ add_library(
   DecimalAggregationState.cpp
   GpuResources.cpp
   OperatorAdapters.cpp
+  PartitionedBufferedState.cpp
   PrestoAggregateFunctions.cpp
   SparkAggregateFunctions.cpp
   ToCudf.cpp
