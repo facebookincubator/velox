@@ -530,3 +530,23 @@ Valid examples
   -- 2020-01-01 00:00:00 UTC in America/Los_Angeles is local 2019-12-31 16:00:00.
   -- TIMESTAMP_UTC stores that local time as epoch 1577808000.
   SELECT cast(timestamp '2020-01-01 00:00:00' as timestamp_ntz); -- 2019-12-31 16:00:00
+
+From VARCHAR
+^^^^^^^^^^^^
+
+Casting a string to timestamp_utc parses the input as a local timestamp,
+not subject to session timezone adjustment.
+Any timezone suffix in the string is accepted but ignored — only the
+parsed timestamp is stored.
+Leading and trailing whitespace is stripped before parsing.
+
+Valid examples
+
+::
+
+  SELECT cast('1970-01-01' as timestamp_ntz); -- 1970-01-01 00:00:00
+  SELECT cast('2000-01-01 12:21:56' as timestamp_ntz); -- 2000-01-01 12:21:56
+  SELECT cast('2015-03-18T12:03:17' as timestamp_ntz); -- 2015-03-18 12:03:17
+  SELECT cast('2015-03-18 12:03:17.123' as timestamp_ntz); -- 2015-03-18 12:03:17.123
+  SELECT cast('1970-01-01 00:00:00-08:00' as timestamp_ntz); -- 1970-01-01 00:00:00
+  SELECT cast('2015-03-18T12:03:17Z' as timestamp_ntz); -- 2015-03-18 12:03:17
