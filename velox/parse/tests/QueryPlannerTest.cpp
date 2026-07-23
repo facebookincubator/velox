@@ -49,6 +49,20 @@ class QueryPlannerTest : public testing::Test {
     assertPlan(sql, {}, expectedPlan);
   }
 
+  void assertPlanContains(
+      const std::string& sql,
+      const std::unordered_map<std::string, std::vector<RowVectorPtr>>&
+          inMemoryTables,
+      const std::vector<std::string>& expectedSubstrings) {
+    SCOPED_TRACE(sql);
+    auto plan = parseQuery(sql, pool_.get(), inMemoryTables);
+    auto planString = plan->toString(false, true);
+    for (const auto& expectedSubstring : expectedSubstrings) {
+      ASSERT_NE(std::string::npos, planString.find(expectedSubstring))
+          << planString;
+    }
+  }
+
   RowVectorPtr makeEmptyRowVector(const RowTypePtr& rowType) {
     return std::make_shared<RowVector>(
         pool_.get(),
@@ -121,6 +135,49 @@ TEST_F(QueryPlannerTest, tableScan) {
       "    -- NestedLoopJoin[2]\n"
       "      -- Values[0]\n"
       "      -- Values[1]\n");
+}
+
+TEST_F(QueryPlannerTest, lateralJoin) {
+  const std::unordered_map<std::string, std::vector<RowVectorPtr>>
+      inMemoryTables = {
+          {"t",
+           {makeEmptyRowVector(
+               ROW({"a", "b"}, {BIGINT(), INTEGER()}))}},
+          {"u",
+           {makeEmptyRowVector(
+               ROW({"a", "b"}, {BIGINT(), INTEGER()}))}},
+      };
+
+  struct TestCase {
+    std::string sql;
+    std::vector<std::string> expectedSubstrings;
+  };
+
+  const std::vector<TestCase> testCases = {
+      {
+          "SELECT t.a, sub.b FROM t, "
+          "LATERAL (SELECT u.b FROM u WHERE u.a = t.a) sub",
+          {"-- Project", "-- NestedLoopJoin", "-- Filter", "-- Aggregation"}},
+      {
+          "SELECT t.a, sub.b FROM t "
+          "CROSS JOIN LATERAL (SELECT u.b FROM u WHERE u.a > t.a) sub",
+          {"-- Project", "-- NestedLoopJoin", "-- Filter", "-- Aggregation"}},
+      {
+          "SELECT t.a, sub.b FROM t "
+          "JOIN LATERAL (SELECT u.b FROM u WHERE u.a = t.a) sub "
+          "ON sub.b > 10",
+          {"-- Project", "-- NestedLoopJoin", "-- Filter", "-- Aggregation"}},
+      {
+          "SELECT t.a, sub.b FROM t "
+          "INNER JOIN LATERAL (SELECT u.b FROM u WHERE u.a = t.a) sub "
+          "ON true",
+          {"-- Project", "-- NestedLoopJoin", "-- Filter", "-- Aggregation"}},
+  };
+
+  for (const auto& testCase : testCases) {
+    assertPlanContains(
+        testCase.sql, inMemoryTables, testCase.expectedSubstrings);
+  }
 }
 
 TEST_F(QueryPlannerTest, customScalarFunctions) {
