@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 
 #include <velox/type/Filter.h>
@@ -154,6 +155,9 @@ class VectorHasher {
       hasRange_ = true;
       min_ = 0;
       max_ = 1;
+    } else if (typeKind_ == TypeKind::HUGEINT) {
+      // We do not support range based hashing for hugeint.
+      setRangeOverflow();
     }
   }
 
@@ -286,6 +290,7 @@ class VectorHasher {
 
   void resetStats() {
     uniqueValues_.clear();
+    uniqueHugeintValues_.clear();
     uniqueValuesStorage_.clear();
   }
 
@@ -335,6 +340,7 @@ class VectorHasher {
       case TypeKind::SMALLINT:
       case TypeKind::INTEGER:
       case TypeKind::BIGINT:
+      case TypeKind::HUGEINT:
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:
       case TypeKind::TIMESTAMP:
@@ -350,6 +356,9 @@ class VectorHasher {
 
   // true if no values have been added.
   bool empty() const {
+    if (typeKind_ == TypeKind::HUGEINT) {
+      return !hasHugeintRange_ && uniqueHugeintValues_.empty();
+    }
     return !hasRange_ && uniqueValues_.empty();
   }
 
@@ -422,7 +431,7 @@ class VectorHasher {
           result[i] = 0;
         }
       } else {
-        auto id = valueId<T>(valueAt<T>(groups[i], offset));
+        auto id = valueId(valueAt<T>(groups[i], offset));
         if (id == kUnmappable) {
           return false;
         }
@@ -480,6 +489,8 @@ class VectorHasher {
       }
     }
   }
+
+  void analyzeValue(int128_t value);
 
   template <typename T>
   bool tryMapToRangeSimd(
@@ -543,6 +554,8 @@ class VectorHasher {
     return unique.id();
   }
 
+  uint64_t valueId(int128_t value);
+
   template <typename T>
   uint64_t lookupValueId(T value) const {
     auto int64Value = toInt64(value);
@@ -560,6 +573,8 @@ class VectorHasher {
     return kUnmappable;
   }
 
+  uint64_t lookupValueId(int128_t value) const;
+
   void updateRange(int64_t value) {
     if (hasRange_) {
       if (value < min_) {
@@ -572,6 +587,8 @@ class VectorHasher {
       min_ = max_ = value;
     }
   }
+
+  void updateHugeintRange(int128_t value);
 
   void copyStringToLocal(const UniqueValue* unique);
 
@@ -625,6 +642,9 @@ class VectorHasher {
   // True if 'min_' and 'max_' are initialized.
   bool hasRange_ = false;
 
+  // True if 'minHugeint_' and 'maxHugeint_' are initialized.
+  bool hasHugeintRange_ = false;
+
   // True when range or distinct mapping is not possible or practical.
   bool rangeOverflow_ = false;
   bool distinctOverflow_ = false;
@@ -632,9 +652,17 @@ class VectorHasher {
   // Bounds of the range if 'isRange_' is true.
   int64_t min_ = 1;
   int64_t max_ = 0;
+
+  // Bounds of the hugeint range if 'isRange_' is true.
+  int128_t minHugeint_ = 1;
+  int128_t maxHugeint_ = 0;
+
   // Table for mapping distinct values to small ints.
   folly::F14FastSet<UniqueValue, UniqueValueHasher, UniqueValueComparer>
       uniqueValues_;
+
+  // Table for mapping distinct hugeint values to small ints.
+  folly::F14FastMap<int128_t, uint32_t> uniqueHugeintValues_;
 
   // Memory for unique string values.
   std::vector<std::string> uniqueValuesStorage_;
