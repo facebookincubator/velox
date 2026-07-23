@@ -50,6 +50,7 @@ velox_add_library(
   StructColumnReader.h
   TimeColumnReader.h
   TimestampColumnReader.h
+  UnknownColumnReader.h
 )
 
 velox_link_libraries(
