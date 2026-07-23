@@ -30,6 +30,7 @@ add_executable(
   MemoryCapExceededTest.cpp
   MemoryManagerTest.cpp
   MemoryPoolTest.cpp
+  MemoryTierTest.cpp
   MockSharedArbitratorTest.cpp
   RawVectorTest.cpp
   ScratchTest.cpp
