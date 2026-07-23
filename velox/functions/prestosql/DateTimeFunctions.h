@@ -1036,6 +1036,7 @@ struct MillisecondFunction : public TimestampWithTimezoneSupport<T> {
     result = timestamp.getNanos() / Timestamp::kNanosecondsInMillisecond;
   }
 
+
   FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Time>& time) {
     VELOX_USER_CHECK(
         time >= 0 && time < kMillisInDay,
@@ -1043,6 +1044,21 @@ struct MillisecondFunction : public TimestampWithTimezoneSupport<T> {
         time);
     auto time_duration = std::chrono::milliseconds(time);
     result = (time_duration % std::chrono::seconds(1)).count();
+  }
+};
+
+template <typename T>
+struct MillisecondTimeWithTimezoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimeWithTimezone>& timeWithTimezone) {
+    const auto millisUtc = util::unpackMillisUtc(*timeWithTimezone);
+    const auto encodedOffset = util::unpackZoneOffset(*timeWithTimezone);
+    const auto offsetMinutes = util::decodeTimezoneOffset(encodedOffset);
+    const auto localMillis = util::utcToLocalTime(millisUtc, offsetMinutes);
+    result = localMillis % kMillisInSecond;
   }
 };
 
