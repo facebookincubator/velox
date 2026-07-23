@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <fmt/format.h>
 #include <folly/Varint.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/GTestMacros.h"
@@ -342,7 +343,7 @@ template <bool isSigned>
       return writeVarint<1>(value, buffer);
   }
   DWIO_RAISE(
-      folly::sformat(
+      fmt::format(
           "Unexpected leading zeros {} for value {}", leadingZeros, value));
 }
 
