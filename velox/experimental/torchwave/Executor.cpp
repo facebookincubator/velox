@@ -825,7 +825,10 @@ void checkValueBeforeFree(
   std::optional<at::Tensor> actual = iv.isTensor()
       ? std::optional<at::Tensor>(iv.toTensor())
       : scalarLikeToTensor(iv);
-  if (!actual || !actual->defined() || actual->numel() == 0) {
+  // A shape-only (meta) tensor carries no data; comparing it would force a
+  // .cpu() copy that throws "Cannot copy out of meta tensor". Skip it.
+  if (!actual || !actual->defined() || actual->numel() == 0 ||
+      actual->is_meta()) {
     return;
   }
   const auto& refTensor = it->second.toTensor();
@@ -937,8 +940,12 @@ void WaveGraphExecutor::executeWave(
   if (!prevWaveGraph) {
     threadWaveGraph = &waveGraph;
   }
+  auto*& threadConfigOverride = torch::wave::waveConfigOverride();
+  auto* prevConfigOverride = threadConfigOverride;
+  threadConfigOverride = waveGraph.configOverride();
   SCOPE_EXIT {
     threadWaveGraph = prevWaveGraph;
+    threadConfigOverride = prevConfigOverride;
   };
 
   Timer w("top exec", WaveConfig::get().printTiming);

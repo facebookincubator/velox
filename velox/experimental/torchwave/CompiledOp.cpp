@@ -28,6 +28,7 @@
 #include <folly/ScopeGuard.h>
 #include <gflags/gflags.h>
 #include <algorithm>
+#include <atomic>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -1064,9 +1065,9 @@ LaunchData::LaunchData(
 CompositeKernel::CompositeKernel(
     std::vector<std::unique_ptr<ProjectOperation>>&& ops,
     std::vector<std::unique_ptr<KernelOperation>>&& kernelOps,
-    const std::unordered_set<std::string>& includes)
+    const std::unordered_set<std::string>& includes,
+    int32_t kernelId)
     : ops_(std::move(ops)), kernelOpStorage_(std::move(kernelOps)) {
-  auto kernelId = CompileCtx::nextKernelId();
   auto kernelName = "torchwave" + std::to_string(kernelId);
   auto entryPoint = "torch::wave::" + kernelName;
 
@@ -1211,8 +1212,12 @@ CompositeKernel::CompositeKernel(
 
   auto code = ss.str();
 
-  // Save to /tmp for debugging.
-  auto filePath = "/tmp/kernel" + std::to_string(kernelId) + ".cu";
+  // Save to /tmp for debugging. Kernel ids are per-construction (not globally
+  // unique), so append a process-wide ordinal to keep filenames distinct when
+  // several graphs compile concurrently.
+  static std::atomic<int64_t> debugDumpOrdinal{0};
+  auto filePath = "/tmp/kernel" + std::to_string(kernelId) + "_" +
+      std::to_string(debugDumpOrdinal++) + ".cu";
   {
     std::ofstream out(filePath);
     out << code;
@@ -1630,8 +1635,10 @@ void fillLaunchParams(
           i,
           " isNone ",
           ivalue.isNone());
-      bool isShapeOnly = i < launch.actualOutputDescs.size() &&
-          launch.actualOutputDescs[i].shapeOnly;
+      bool isShapeOnly = false;
+      if (i < launch.actualOutputDescs.size()) {
+        isShapeOnly = launch.actualOutputDescs[i].shapeOnly;
+      }
       if (isShapeOnly) {
         fillShapeOnlyTensorParam(ivalue.toTensor(), dest);
         launch.shapeOnlyTensorIndices.insert(launch.tensorsInFrame.size());
