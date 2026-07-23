@@ -58,9 +58,11 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
         [](std::shared_ptr<exec::Expr> expr) {
           return cudf_velox::ASTExpression::canEvaluate(expr);
         },
-        [](std::shared_ptr<exec::Expr> expr, const RowTypePtr& row) {
+        [](std::shared_ptr<exec::Expr> expr,
+           const RowTypePtr& row,
+           const cudf_velox::CudfDateTimeContext& context) {
           return std::make_shared<cudf_velox::ASTExpression>(
-              std::move(expr), row);
+              std::move(expr), row, context);
         },
         /*overwrite=*/true);
 
@@ -70,9 +72,11 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
         [](std::shared_ptr<exec::Expr> expr) {
           return cudf_velox::JitExpression::canEvaluate(expr);
         },
-        [](std::shared_ptr<exec::Expr> expr, const RowTypePtr& row) {
+        [](std::shared_ptr<exec::Expr> expr,
+           const RowTypePtr& row,
+           const cudf_velox::CudfDateTimeContext& context) {
           return std::make_shared<cudf_velox::JitExpression>(
-              std::move(expr), row);
+              std::move(expr), row, context);
         },
         /*overwrite=*/true);
   }
