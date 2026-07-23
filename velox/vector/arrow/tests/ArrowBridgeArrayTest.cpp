@@ -723,8 +723,7 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorLongerChildren) {
   const size_t rowVectorSize = 2;
   const size_t longerChildSize = 1024;
 
-  auto longerNullableChild =
-      vectorMaker_.flatVector<double>(longerChildSize);
+  auto longerNullableChild = vectorMaker_.flatVector<double>(longerChildSize);
   longerNullableChild->setNull(0, true);
   longerNullableChild->setNull(longerChildSize - 1, true);
   longerNullableChild->setNullCount(2);
