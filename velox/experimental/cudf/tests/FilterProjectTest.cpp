@@ -515,6 +515,39 @@ class CudfFilterProjectTest : public OperatorTestBase {
         "SELECT c0 IN (1, 2, 3) OR c1 IN (1.5, 2.5) OR c2 IN ('test1', 'test2') AS result FROM tmp");
   }
 
+  // Asserts that 'c0 IN <inListConstant>' evaluates to NULL on every input
+  // row. Built directly via TypedExpr because DuckDB cannot serve as the
+  // reference for either an in-list of `CAST(NULL AS INTEGER)` or a null
+  // array literal.
+  void assertInListYieldsAllNull(
+      const std::vector<RowVectorPtr>& input,
+      const VectorPtr& inListConstant) {
+    auto inListExpr = std::make_shared<core::ConstantTypedExpr>(inListConstant);
+    auto field = std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0");
+    auto inExpr = std::make_shared<core::CallTypedExpr>(
+        BOOLEAN(), std::vector<core::TypedExprPtr>{field, inListExpr}, "in");
+
+    auto plan = PlanBuilder(pool_.get())
+                    .values(input)
+                    .addNode([&](auto id, auto source) {
+                      return std::make_shared<core::ProjectNode>(
+                          id,
+                          std::vector<std::string>{"result"},
+                          std::vector<core::TypedExprPtr>{inExpr},
+                          source);
+                    })
+                    .planNode();
+
+    vector_size_t totalRows = 0;
+    for (const auto& batch : input) {
+      totalRows += batch->size();
+    }
+    auto expected = makeRowVector(
+        {"result"},
+        {BaseVector::createNullConstant(BOOLEAN(), totalRows, pool())});
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+
   void testStringLiteralExpansion(const std::vector<RowVectorPtr>& input) {
     // Test VARCHAR literal as standalone expression (needs special handling)
     auto plan = PlanBuilder()
@@ -1604,6 +1637,50 @@ TEST_F(CudfFilterProjectTest, mixedInOperation) {
   createDuckDbTable(vectors);
 
   testMixedInOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, nullOnlyInList) {
+  auto vectors = makeVectors(rowType_, 2, 1000);
+  auto elements = makeNullableFlatVector<int32_t>(
+      std::vector<std::optional<int32_t>>{std::nullopt});
+  auto inListConstant =
+      BaseVector::wrapInConstant(1, 0, makeArrayVector({0}, elements));
+  assertInListYieldsAllNull(vectors, inListConstant);
+}
+
+TEST_F(CudfFilterProjectTest, nullArrayInList) {
+  auto vectors = makeVectors(rowType_, 2, 1000);
+  assertInListYieldsAllNull(
+      vectors, BaseVector::createNullConstant(ARRAY(INTEGER()), 1, pool()));
+}
+
+TEST_F(CudfFilterProjectTest, nullInListDownstreamAggregation) {
+  auto vectors = makeVectors(rowType_, 2, 1000);
+
+  auto elements = makeNullableFlatVector<int32_t>(
+      std::vector<std::optional<int32_t>>{std::nullopt});
+  auto inListConstant =
+      BaseVector::wrapInConstant(1, 0, makeArrayVector({0}, elements));
+  auto inListExpr = std::make_shared<core::ConstantTypedExpr>(inListConstant);
+  auto field = std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0");
+  auto inExpr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(), std::vector<core::TypedExprPtr>{field, inListExpr}, "in");
+
+  auto plan = PlanBuilder(pool_.get())
+                  .values(vectors)
+                  .addNode([&](auto id, auto source) {
+                    return std::make_shared<core::ProjectNode>(
+                        id,
+                        std::vector<std::string>{"result"},
+                        std::vector<core::TypedExprPtr>{inExpr},
+                        source);
+                  })
+                  .singleAggregation({}, {"count(result)"})
+                  .planNode();
+
+  auto expected =
+      makeRowVector({"a0"}, {makeFlatVector<int64_t>(std::vector<int64_t>{0})});
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 TEST_F(CudfFilterProjectTest, round) {
