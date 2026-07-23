@@ -965,7 +965,8 @@ TypePtr ReaderBase::convertType(
                 }),
         kTypeMappingErrorFmtStr,
         "UNKNOWN",
-        requestedType->toString());
+        requestedType->toString(),
+        *schemaElement.name());
     return UNKNOWN();
   }
 
