@@ -869,9 +869,7 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilter) {
       .run();
 }
 
-TEST_P(
-    MultiThreadedHashJoinTest,
-    rightSemiJoinFilterWithAsymmetricSchemas) {
+TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithAsymmetricSchemas) {
   auto probeVectors = makeBatches(3, [&](int32_t batch) {
     return makeRowVector(
         {"t0", "t1", "t2"},
@@ -910,8 +908,7 @@ TEST_P(
 // build-shaped empty table, selecting the key column throws an out-of-range
 // error; a probe-shaped empty table has the column and the join returns empty.
 TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithEmptyProbe) {
-  auto probeType =
-      ROW({{"t0", BIGINT()}, {"t1", DOUBLE()}, {"t2", INTEGER()}});
+  auto probeType = ROW({{"t0", BIGINT()}, {"t1", DOUBLE()}, {"t2", INTEGER()}});
   auto buildVectors = makeBatches(2, [&](int32_t batch) {
     return makeRowVector(
         {"u0", "u1"},
