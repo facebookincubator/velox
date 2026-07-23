@@ -166,24 +166,26 @@ void TableWriter::addInput(RowVectorPtr input) {
     return;
   }
 
-  // Enforce NOT NULL constraints. Flat vectors use their nulls buffer; other
-  // encodings are decoded, since rawNulls() misses nulls behind dictionary or
-  // constant wrapping.
-  for (const auto& [channel, name] : notNullChannels_) {
-    const auto& column = input->childAt(channel);
-    bool hasNulls = false;
-    if (column->mayHaveNullsRecursive()) {
-      if (column->isFlatEncoding()) {
-        const auto* rawNulls = column->rawNulls();
-        hasNulls = rawNulls != nullptr &&
-            bits::countNulls(rawNulls, 0, input->size()) > 0;
-      } else {
-        DecodedVector decoded(*column, SelectivityVector(input->size()));
-        hasNulls = decoded.hasNulls();
+  // Flat vectors use rawNulls() directly; other encodings are decoded
+  // since rawNulls() misses nulls behind dictionary or constant wrapping.
+  if (!notNullChannels_.empty()) {
+    notNullRows_.resizeFill(input->size());
+    for (const auto& [channel, name] : notNullChannels_) {
+      const auto& column = input->childAt(channel);
+      bool hasNulls = false;
+      if (column->mayHaveNullsRecursive()) {
+        if (column->isFlatEncoding()) {
+          const auto* rawNulls = column->rawNulls();
+          hasNulls = rawNulls != nullptr &&
+              bits::countNulls(rawNulls, 0, input->size()) > 0;
+        } else {
+          notNullDecodedVector_.decode(*column, notNullRows_);
+          hasNulls = notNullDecodedVector_.hasNulls();
+        }
       }
-    }
-    if (hasNulls) {
-      VELOX_USER_FAIL("NULL value not allowed for NOT NULL column: {}", name);
+      if (hasNulls) {
+        VELOX_USER_FAIL("NULL value not allowed for NOT NULL column: {}", name);
+      }
     }
   }
 
