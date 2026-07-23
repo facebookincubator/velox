@@ -26,12 +26,18 @@
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <unordered_map>
 #include "velox/parse/TypeResolver.h"
 
 DEFINE_uint32(seed, 0, "");
 DEFINE_int32(table_evolution_fuzzer_duration_sec, 30, "");
 DEFINE_int32(column_count, 5, "");
 DEFINE_int32(evolution_count, 5, "");
+
+// Defined in TableEvolutionFuzzer.cpp; declared here for the flag-validation
+// test below.
+DECLARE_int32(batches_per_file);
+DECLARE_int64(batch_target_bytes);
 
 namespace facebook::velox::exec::test {
 
@@ -79,6 +85,27 @@ TEST(TableEvolutionFuzzerTest, constructorEvolutionCountBoundary) {
   EXPECT_THROW(
       { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool.get(), 0)); },
       VeloxException);
+}
+
+// The constructor validates the batch-shaping gflags: a non-positive
+// batches_per_file or batch_target_bytes must throw.
+TEST(TableEvolutionFuzzerTest, constructorRejectsNonPositiveBatchFlags) {
+  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
+
+  {
+    gflags::FlagSaver flagSaver;
+    FLAGS_batches_per_file = 0;
+    EXPECT_THROW(
+        { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool.get(), 1)); },
+        VeloxException);
+  }
+  {
+    gflags::FlagSaver flagSaver;
+    FLAGS_batch_target_bytes = 0;
+    EXPECT_THROW(
+        { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool.get(), 1)); },
+        VeloxException);
+  }
 }
 
 // Runs the fuzzer in no-evolution mode (evolutionCount == 1) for a small,
@@ -174,6 +201,119 @@ TEST(TableEvolutionFuzzerTest, selectFilterOnlyColumns) {
     everDroppedScalar |= dropped.count("c_scalar") > 0;
   }
   EXPECT_TRUE(everDroppedScalar);
+}
+// Runs the fuzzer in evolution mode (evolutionCount > 1) for a small, fixed
+// number of deterministic iterations, exercising the
+// multiple-batches-per-file write path together with schema evolution. Each
+// file holds batches_per_file independently fuzzed batches; the actual file and
+// the lifted expected file are written from the SAME batches, and the caller
+// merges the final setup's batches for filter generation, so this covers the
+// multi-batch write + liftToType + merge path across evolving schemas, which
+// the single-schema noEvolutionBoundedRun does not. The pushdown-vs-FilterNode
+// oracle inside run() is the assertion.
+TEST(TableEvolutionFuzzerTest, multiBatchEvolutionBoundedRun) {
+  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
+  TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool.get(), 3));
+  fuzzer.setSeed(20260629);
+  constexpr int kIterations = 4;
+  for (int i = 0; i < kIterations; ++i) {
+    LOG(INFO) << "multiBatchEvolutionBoundedRun iteration " << i
+              << ", seed=" << fuzzer.seed();
+    EXPECT_NO_THROW(fuzzer.run());
+    fuzzer.reSeed();
+  }
+}
+
+// Exercises the pure adaptive batch-size clamp: narrow rows (few bytes each)
+// saturate at the max row count, very wide rows floor at the min, and in the
+// unclamped band the row count is kTargetBatchBytes / bytesPerRow and is
+// monotonically non-increasing in bytesPerRow.
+TEST(TableEvolutionFuzzerTest, adaptiveVectorSizeClampsToByteTarget) {
+  using Fuzzer = TableEvolutionFuzzer;
+
+  // Narrow rows -> many rows, capped at the max. A sub-byte estimate is treated
+  // as 1 byte/row, so it also saturates at the cap.
+  EXPECT_EQ(
+      Fuzzer::adaptiveVectorSizeForBytesPerRow(1.0),
+      Fuzzer::kMaxAdaptiveVectorSize);
+  EXPECT_EQ(
+      Fuzzer::adaptiveVectorSizeForBytesPerRow(0.0),
+      Fuzzer::kMaxAdaptiveVectorSize);
+
+  // Very wide rows -> few rows, floored at the min.
+  EXPECT_EQ(
+      Fuzzer::adaptiveVectorSizeForBytesPerRow(Fuzzer::kTargetBatchBytes),
+      Fuzzer::kMinAdaptiveVectorSize);
+  EXPECT_EQ(
+      Fuzzer::adaptiveVectorSizeForBytesPerRow(1e12),
+      Fuzzer::kMinAdaptiveVectorSize);
+
+  // In the unclamped band, rows == kTargetBatchBytes / bytesPerRow.
+  constexpr double kBytesPerRow = 1024.0;
+  const int expected =
+      static_cast<int>(Fuzzer::kTargetBatchBytes / kBytesPerRow);
+  EXPECT_EQ(Fuzzer::adaptiveVectorSizeForBytesPerRow(kBytesPerRow), expected);
+  EXPECT_GT(expected, Fuzzer::kMinAdaptiveVectorSize);
+  EXPECT_LT(expected, Fuzzer::kMaxAdaptiveVectorSize);
+
+  // Monotonic non-increasing: wider rows never yield more rows.
+  EXPECT_GE(
+      Fuzzer::adaptiveVectorSizeForBytesPerRow(512.0),
+      Fuzzer::adaptiveVectorSizeForBytesPerRow(4096.0));
+}
+
+// The byte target (the batch_target_bytes gflag, passed as the second arg)
+// scales the per-batch row count: in the unclamped band the count is
+// targetBatchBytes / bytesPerRow, so doubling the target doubles the rows. The
+// one-arg form defaults to kTargetBatchBytes.
+TEST(TableEvolutionFuzzerTest, adaptiveVectorSizeScalesWithByteTarget) {
+  using Fuzzer = TableEvolutionFuzzer;
+  constexpr double kBytesPerRow = 512.0;
+
+  EXPECT_EQ(
+      Fuzzer::adaptiveVectorSizeForBytesPerRow(kBytesPerRow),
+      Fuzzer::adaptiveVectorSizeForBytesPerRow(
+          kBytesPerRow, Fuzzer::kTargetBatchBytes));
+
+  const int base =
+      Fuzzer::adaptiveVectorSizeForBytesPerRow(kBytesPerRow, 4LL << 20);
+  const int doubled =
+      Fuzzer::adaptiveVectorSizeForBytesPerRow(kBytesPerRow, 8LL << 20);
+
+  // Both land in the unclamped band, and the larger target yields exactly twice
+  // the rows.
+  EXPECT_GT(base, Fuzzer::kMinAdaptiveVectorSize);
+  EXPECT_LT(doubled, Fuzzer::kMaxAdaptiveVectorSize);
+  EXPECT_EQ(doubled, 2 * base);
+}
+
+// Verifies the extraReadConfig hook is invoked on the read path and that a
+// non-empty reader config exercises makeScanTask's QueryCtx connector-config
+// path while the scan still round-trips (the pushdown-vs-FilterNode oracle
+// holds). Asserts the hook fires at least once per run(). evolutionCount == 1
+// keeps it fast and deterministic.
+TEST(TableEvolutionFuzzerTest, extraReadConfigHookAppliedOncePerRun) {
+  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
+  auto config = makeDwrfConfig(pool.get(), 1);
+  int calls = 0;
+  config.extraReadConfig =
+      [&](FuzzerGenerator&) -> std::unordered_map<std::string, std::string> {
+    ++calls;
+    // An inert connector session key: the QueryCtx connector-config path must
+    // construct and the scan must still produce identical pushdown/reference
+    // results.
+    return {{"test.reader.key", "test.reader.value"}};
+  };
+  TableEvolutionFuzzer fuzzer(config);
+  fuzzer.setSeed(20260629);
+  constexpr int kIterations = 3;
+  for (int i = 0; i < kIterations; ++i) {
+    EXPECT_NO_THROW(fuzzer.run());
+    fuzzer.reSeed();
+  }
+  // Fires at least once per run() (once per query shape, each shared by both
+  // scan plans).
+  EXPECT_GE(calls, kIterations);
 }
 
 TEST(TableEvolutionFuzzerTest, run) {
