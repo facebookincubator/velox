@@ -16,9 +16,9 @@
 
 #pragma once
 
+#include <string>
 #include <string_view>
-
-#include <folly/container/F14Map.h>
+#include <unordered_map>
 
 #include "velox/common/base/Exceptions.h"
 
@@ -98,8 +98,8 @@ class StringIdMap {
   };
 
   mutable std::mutex mutex_;
-  folly::F14FastMap<std::string, uint64_t> stringToId_;
-  folly::F14FastMap<uint64_t, Entry> idToEntry_;
+  std::unordered_map<std::string, uint64_t> stringToId_;
+  std::unordered_map<uint64_t, Entry> idToEntry_;
   uint64_t lastId_{0};
   uint64_t pinnedSize_{0};
 };
