@@ -26,9 +26,47 @@
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/strings/utilities.hpp>
 
+#include <cuda_runtime_api.h>
+
 #include <limits>
 
 namespace facebook::velox::cudf_velox {
+namespace {
+
+int64_t readLastStringOffset(
+    cudf::column_view offsetsView,
+    cudf::size_type numRows,
+    rmm::cuda_stream_view stream) {
+  if (offsetsView.type().id() == cudf::type_id::INT32) {
+    int32_t last{};
+    auto status = cudaMemcpyAsync(
+        &last,
+        offsetsView.data<int32_t>() + numRows,
+        sizeof(int32_t),
+        cudaMemcpyDeviceToHost,
+        stream.value());
+    VELOX_CHECK_EQ(0, static_cast<int>(status));
+    stream.synchronize();
+    return last;
+  }
+  if (offsetsView.type().id() == cudf::type_id::INT64) {
+    int64_t last{};
+    auto status = cudaMemcpyAsync(
+        &last,
+        offsetsView.data<int64_t>() + numRows,
+        sizeof(int64_t),
+        cudaMemcpyDeviceToHost,
+        stream.value());
+    VELOX_CHECK_EQ(0, static_cast<int>(status));
+    stream.synchronize();
+    return last;
+  }
+  VELOX_FAIL(
+      "Decimal sum state requires INT32 or INT64 offsets (offset type is {})",
+      cudf::type_to_name(offsetsView.type()));
+}
+
+} // namespace
 
 DecimalSumStateColumns deserializeDecimalSumState(
     const cudf::column_view& stateCol,
@@ -80,16 +118,24 @@ DecimalSumStateColumns deserializeDecimalSumState(
 
   cudf::strings_column_view strings(stateCol);
 
+  auto offsetsView = strings.offsets();
   auto const payloadSize = strings.chars_size(stream);
   auto const expectedPayloadSize =
-      static_cast<int64_t>(numRows) * detail::kDecimalSumStateSize;
-  VELOX_CHECK(
-      payloadSize == expectedPayloadSize,
+      readLastStringOffset(offsetsView, numRows, stream);
+  VELOX_CHECK_EQ(
+      payloadSize,
+      expectedPayloadSize,
       "Decimal sum state requires payload size {} (got {})",
       expectedPayloadSize,
       payloadSize);
+  VELOX_CHECK_LE(
+      expectedPayloadSize,
+      static_cast<int64_t>(numRows) * detail::kDecimalSumStateSize,
+      "Decimal sum state payload size {} exceeds max {} for {} rows",
+      expectedPayloadSize,
+      static_cast<int64_t>(numRows) * detail::kDecimalSumStateSize,
+      numRows);
 
-  auto offsetsView = strings.offsets();
   auto charsPtr = reinterpret_cast<const uint8_t*>(strings.chars_begin(stream));
 
   auto sumCol = cudf::make_fixed_width_column(
@@ -110,11 +156,6 @@ DecimalSumStateColumns deserializeDecimalSumState(
 
   // numRows is guaranteed positive here
   auto const offsetsType = offsetsView.type().id();
-  VELOX_CHECK(
-      offsetsType == cudf::type_id::INT32 ||
-          offsetsType == cudf::type_id::INT64,
-      "Decimal sum state requires INT32 or INT64 offsets (offset type is {})",
-      cudf::type_to_name(offsetsView.type()));
   detail::unpackDecimalSumState(
       offsetsType, offsetsView, charsPtr, sumView, countView, numRows, stream);
 
