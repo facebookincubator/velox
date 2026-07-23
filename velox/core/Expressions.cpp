@@ -162,16 +162,19 @@ std::string ConstantTypedExpr::toString() const {
 
 namespace {
 
-bool equalsImpl(
+std::optional<bool> equalsImpl(
     const VectorPtr& vector,
     vector_size_t index,
-    const Variant& value);
+    const Variant& value,
+    CompareFlags::NullHandlingMode nullHandlingMode =
+        CompareFlags::NullHandlingMode::kNullAsValue);
 
 template <TypeKind Kind>
-bool equalsNoNulls(
+std::optional<bool> equalsNoNulls(
     const VectorPtr& vector,
     vector_size_t index,
-    const Variant& value) {
+    const Variant& value,
+    CompareFlags::NullHandlingMode /*nullHandlingMode*/) {
   using T = typename TypeTraits<Kind>::NativeType;
 
   const auto thisValue = vector->as<SimpleVector<T>>()->valueAt(index);
@@ -187,10 +190,11 @@ bool equalsNoNulls(
 }
 
 template <>
-bool equalsNoNulls<TypeKind::OPAQUE>(
+std::optional<bool> equalsNoNulls<TypeKind::OPAQUE>(
     const VectorPtr& vector,
     vector_size_t index,
-    const Variant& value) {
+    const Variant& value,
+    CompareFlags::NullHandlingMode /*nullHandlingMode*/) {
   using T = std::shared_ptr<void>;
   const auto thisValue = vector->as<SimpleVector<T>>()->valueAt(index);
   const auto& otherValue = value.value<TypeKind::OPAQUE>().obj;
@@ -205,10 +209,11 @@ bool equalsNoNulls<TypeKind::OPAQUE>(
 }
 
 template <>
-bool equalsNoNulls<TypeKind::ARRAY>(
+std::optional<bool> equalsNoNulls<TypeKind::ARRAY>(
     const VectorPtr& vector,
     vector_size_t index,
-    const Variant& value) {
+    const Variant& value,
+    CompareFlags::NullHandlingMode nullHandlingMode) {
   auto* wrappedVector = vector->wrappedVector();
   VELOX_CHECK_EQ(VectorEncoding::Simple::ARRAY, wrappedVector->encoding());
 
@@ -224,20 +229,30 @@ bool equalsNoNulls<TypeKind::ARRAY>(
     return false;
   }
 
+  bool indeterminate = false;
   for (auto i = 0; i < size; ++i) {
-    if (!equalsImpl(arrayVector->elements(), offset + i, arrayValue.at(i))) {
-      return false;
+    auto result = equalsImpl(
+        arrayVector->elements(),
+        offset + i,
+        arrayValue.at(i),
+        nullHandlingMode);
+    if (result.has_value()) {
+      if (!result.value()) {
+        return false;
+      }
+    } else {
+      indeterminate = true;
     }
   }
-
-  return true;
+  return indeterminate ? std::nullopt : std::make_optional(true);
 }
 
 template <>
-bool equalsNoNulls<TypeKind::MAP>(
+std::optional<bool> equalsNoNulls<TypeKind::MAP>(
     const VectorPtr& vector,
     vector_size_t index,
-    const Variant& value) {
+    const Variant& value,
+    CompareFlags::NullHandlingMode nullHandlingMode) {
   auto* wrappedVector = vector->wrappedVector();
   VELOX_CHECK_EQ(VectorEncoding::Simple::MAP, wrappedVector->encoding());
 
@@ -254,27 +269,41 @@ bool equalsNoNulls<TypeKind::MAP>(
 
   const auto sortedIndices = mapVector->sortedKeyIndices(index);
 
+  bool indeterminate = false;
   size_t i = 0;
   for (const auto& [key, value] : mapValue) {
-    if (!equalsImpl(mapVector->mapKeys(), sortedIndices[i], key)) {
-      return false;
+    auto keyResult = equalsImpl(
+        mapVector->mapKeys(), sortedIndices[i], key, nullHandlingMode);
+    if (keyResult.has_value()) {
+      if (!keyResult.value()) {
+        return false;
+      }
+    } else {
+      indeterminate = true;
     }
 
-    if (!equalsImpl(mapVector->mapValues(), sortedIndices[i], value)) {
-      return false;
+    auto valueResult = equalsImpl(
+        mapVector->mapValues(), sortedIndices[i], value, nullHandlingMode);
+    if (valueResult.has_value()) {
+      if (!valueResult.value()) {
+        return false;
+      }
+    } else {
+      indeterminate = true;
     }
 
     ++i;
   }
 
-  return true;
+  return indeterminate ? std::nullopt : std::make_optional(true);
 }
 
 template <>
-bool equalsNoNulls<TypeKind::ROW>(
+std::optional<bool> equalsNoNulls<TypeKind::ROW>(
     const VectorPtr& vector,
     vector_size_t index,
-    const Variant& value) {
+    const Variant& value,
+    CompareFlags::NullHandlingMode nullHandlingMode) {
   auto* wrappedVector = vector->wrappedVector();
   VELOX_CHECK_EQ(VectorEncoding::Simple::ROW, wrappedVector->encoding());
 
@@ -289,40 +318,56 @@ bool equalsNoNulls<TypeKind::ROW>(
     return false;
   }
 
+  bool indeterminate = false;
   for (auto i = 0; i < size; ++i) {
     if (rowVector->childAt(i) == nullptr) {
       return false;
     }
 
-    if (!equalsImpl(rowVector->childAt(i), index, rowValue.at(i))) {
-      return false;
+    auto result = equalsImpl(
+        rowVector->childAt(i), index, rowValue.at(i), nullHandlingMode);
+    if (result.has_value()) {
+      if (!result.value()) {
+        return false;
+      }
+    } else {
+      indeterminate = true;
     }
   }
 
-  return true;
+  return indeterminate ? std::nullopt : std::make_optional(true);
 }
 
-bool equalsImpl(
+std::optional<bool> equalsImpl(
     const VectorPtr& vector,
     vector_size_t index,
-    const Variant& value) {
-  static constexpr CompareFlags kEqualValueAtFlags =
-      CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
-
+    const Variant& value,
+    CompareFlags::NullHandlingMode nullHandlingMode) {
   bool thisNull = vector->isNullAt(index);
   bool otherNull = value.isNull();
 
   if (otherNull || thisNull) {
-    return BaseVector::compareNulls(thisNull, otherNull, kEqualValueAtFlags)
-               .value() == 0;
+    auto compareResult = BaseVector::compareNulls(
+        thisNull, otherNull, CompareFlags::equality(nullHandlingMode));
+    if (compareResult.has_value()) {
+      return compareResult.value() == 0;
+    }
+    return std::nullopt;
   }
 
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      equalsNoNulls, vector->typeKind(), vector, index, value);
+      equalsNoNulls,
+      vector->typeKind(),
+      vector,
+      index,
+      value,
+      nullHandlingMode);
 }
 } // namespace
 
-bool ConstantTypedExpr::equals(const ITypedExpr& other) const {
+std::optional<bool> ConstantTypedExpr::equals(
+    const ITypedExpr& other,
+    CompareFlags::NullHandlingMode nullHandlingMode) const {
   const auto* casted = dynamic_cast<const ConstantTypedExpr*>(&other);
   if (!casted) {
     return false;
@@ -334,15 +379,16 @@ bool ConstantTypedExpr::equals(const ITypedExpr& other) const {
 
   if (this->hasValueVector() != casted->hasValueVector()) {
     return this->hasValueVector()
-        ? equalsImpl(this->valueVector_, 0, casted->value_)
-        : equalsImpl(casted->valueVector_, 0, this->value_);
+        ? equalsImpl(this->valueVector_, 0, casted->value_, nullHandlingMode)
+        : equalsImpl(casted->valueVector_, 0, this->value_, nullHandlingMode);
   }
 
   if (this->hasValueVector()) {
-    return this->valueVector_->equalValueAt(casted->valueVector_.get(), 0, 0);
+    return this->valueVector_->equalValueAt(
+        casted->valueVector_.get(), 0, 0, nullHandlingMode);
   }
 
-  return this->value_ == casted->value_;
+  return this->value_.equals(casted->value_, nullHandlingMode);
 }
 
 namespace {
