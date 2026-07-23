@@ -498,7 +498,7 @@ TEST_P(MultiFragmentTest, distributedTableScan) {
 // When the tasks correspond to a MergeExchange are aborted, we expect
 // gracefully exiting of the task itself, and all relevant resources are cleaned
 // up. What happens is that the tasks are aborted; however, the MergeExchange
-// operator's DefaultExchangeClient's are never closed, so the Driver threads
+// operator's InMemoryExchangeClient's are never closed, so the Driver threads
 // are stuck in a tight request loop. This test ensures that after the Tasks
 // have successfully aborted, we're only left with the correct amount of
 // references to the Merge task.
@@ -2014,7 +2014,7 @@ class SlowOperatorTranslator : public Operator::PlanNodeTranslator {
 };
 
 TEST_P(MultiFragmentTest, exchangeDestruction) {
-  // This unit test tests the proper destruction of DefaultExchangeClient upon
+  // This unit test tests the proper destruction of InMemoryExchangeClient upon
   // task destruction.
   Operator::registerOperator(std::make_unique<SlowOperatorTranslator>());
 
@@ -2139,7 +2139,7 @@ class TestCustomExchange : public exec::Exchange {
       int32_t operatorId,
       DriverCtx* ctx,
       const std::shared_ptr<const TestCustomExchangeNode>& customExchangeNode,
-      std::shared_ptr<DefaultExchangeClient> exchangeClient)
+      std::shared_ptr<InMemoryExchangeClient> exchangeClient)
       : exec::Exchange(
             operatorId,
             ctx,
@@ -2161,7 +2161,7 @@ class TestCustomExchangeTranslator : public exec::Operator::PlanNodeTranslator {
       exec::DriverCtx* ctx,
       int32_t id,
       const core::PlanNodePtr& node,
-      std::shared_ptr<DefaultExchangeClient> exchangeClient) override {
+      std::shared_ptr<InMemoryExchangeClient> exchangeClient) override {
     if (auto customExchangeNode =
             std::dynamic_pointer_cast<const TestCustomExchangeNode>(node)) {
       return std::make_unique<TestCustomExchange>(
@@ -2745,7 +2745,7 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, maxBytes) {
   test(40 * kMB);
 }
 
-// Verifies that DefaultExchangeClient stats are populated even if task fails.
+// Verifies that InMemoryExchangeClient stats are populated even if task fails.
 DEBUG_ONLY_TEST_P(MultiFragmentTest, exchangeStatsOnFailure) {
   // Triggers a failure after fetching first 10 pages.
   std::atomic_uint64_t expectedReceivedPages{0};

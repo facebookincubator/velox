@@ -221,7 +221,7 @@ class MergeExchangeSource : public MergeSource {
       folly::Executor* executor)
       : mergeExchange_(mergeExchange),
         client_(
-            std::make_shared<DefaultExchangeClient>(
+            std::make_shared<InMemoryExchangeClient>(
                 mergeExchange->taskId(),
                 destination,
                 maxQueuedBytes,
@@ -309,7 +309,7 @@ class MergeExchangeSource : public MergeSource {
 
  private:
   MergeExchange* const mergeExchange_;
-  std::shared_ptr<DefaultExchangeClient> client_;
+  std::shared_ptr<InMemoryExchangeClient> client_;
   std::unique_ptr<ByteInputStream> inputStream_;
   std::unique_ptr<SerializedPageBase> currentPage_;
   bool atEnd_ = false;

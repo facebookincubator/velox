@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/DefaultExchangeClient.h"
+#include "velox/exec/InMemoryExchangeClient.h"
 #include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
 #include <atomic>
@@ -36,7 +36,7 @@ namespace {
 
 static constexpr int32_t kDefaultMinExchangeOutputBatchBytes{2 << 20}; // 2 MB.
 
-class DefaultExchangeClientTest
+class InMemoryExchangeClientTest
     : public testing::Test,
       public velox::test::VectorTestBase,
       public testing::WithParamInterface<std::string> {
@@ -112,7 +112,7 @@ class DefaultExchangeClientTest
   }
 
   std::vector<std::unique_ptr<SerializedPageBase>>
-  fetchPages(int consumerId, DefaultExchangeClient& client, int32_t numPages) {
+  fetchPages(int consumerId, InMemoryExchangeClient& client, int32_t numPages) {
     std::vector<std::unique_ptr<SerializedPageBase>> allPages;
     for (auto i = 0; i < numPages; ++i) {
       bool atEnd{false};
@@ -167,17 +167,17 @@ class DefaultExchangeClientTest
   std::shared_ptr<DefaultOutputBufferManager> bufferManager_;
 };
 
-TEST_P(DefaultExchangeClientTest, nonVeloxCreateExchangeSourceException) {
+TEST_P(InMemoryExchangeClientTest, nonVeloxCreateExchangeSourceException) {
   ExchangeSource::registerFactory(
       [](const auto& taskId, auto destination, auto queue, auto pool)
           -> std::shared_ptr<ExchangeSource> {
         throw std::runtime_error("Testing error");
       });
 
-  auto client = std::make_shared<DefaultExchangeClient>(
+  auto client = std::make_shared<InMemoryExchangeClient>(
       "t",
       1,
-      DefaultExchangeClient::kDefaultMaxQueuedBytes,
+      InMemoryExchangeClient::kDefaultMaxQueuedBytes,
       1,
       0,
       pool(),
@@ -196,7 +196,7 @@ TEST_P(DefaultExchangeClientTest, nonVeloxCreateExchangeSourceException) {
   client->close();
 }
 
-TEST_P(DefaultExchangeClientTest, stats) {
+TEST_P(InMemoryExchangeClientTest, stats) {
   auto data = {
       makeRowVector({makeFlatVector<int32_t>({1, 2, 3})}),
       makeRowVector({makeFlatVector<int32_t>({1, 2, 3, 4, 5})}),
@@ -209,10 +209,10 @@ TEST_P(DefaultExchangeClientTest, stats) {
   bufferManager_->initializeTask(
       task, core::PartitionedOutputNode::Kind::kPartitioned, 100, 16);
 
-  auto client = std::make_shared<DefaultExchangeClient>(
+  auto client = std::make_shared<InMemoryExchangeClient>(
       "t",
       17,
-      DefaultExchangeClient::kDefaultMaxQueuedBytes,
+      InMemoryExchangeClient::kDefaultMaxQueuedBytes,
       1,
       kDefaultMinExchangeOutputBatchBytes,
       pool(),
@@ -245,9 +245,9 @@ TEST_P(DefaultExchangeClientTest, stats) {
 }
 
 // Test scenario where fetching data from all sources at once would exceed queue
-// size. Verify that DefaultExchangeClient is fetching data only from a few
+// size. Verify that InMemoryExchangeClient is fetching data only from a few
 // sources at a time to avoid exceeding the limit.
-TEST_P(DefaultExchangeClientTest, flowControl) {
+TEST_P(InMemoryExchangeClientTest, flowControl) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>(10'000, [](auto row) { return row; }),
   });
@@ -257,7 +257,7 @@ TEST_P(DefaultExchangeClientTest, flowControl) {
   // Set limit at 3.5 pages
   // Set the minOutputBatchBytes to be 1024 since now the client
   // will request if bytes in queue + pendingBytes < minOutputBatchBytes
-  auto client = std::make_shared<DefaultExchangeClient>(
+  auto client = std::make_shared<InMemoryExchangeClient>(
       "flow.control", 17, page->size() * 3.5, 1, 1024, pool(), executor());
 
   // Make 10 tasks.
@@ -296,11 +296,11 @@ TEST_P(DefaultExchangeClientTest, flowControl) {
 // Test that small pages will block and we will keep
 // requesting from the queue if we do not have enough buffer
 // to fillout minOutputBatchBytes
-TEST_P(DefaultExchangeClientTest, smallPage) {
+TEST_P(InMemoryExchangeClientTest, smallPage) {
   const int64_t clientBufferSize = 1024;
   const int64_t minOutputBatchBytes = clientBufferSize;
   const int64_t maxOutputBatchBytes = clientBufferSize;
-  auto client = std::make_shared<DefaultExchangeClient>(
+  auto client = std::make_shared<InMemoryExchangeClient>(
       "local://test-acknowledge-client-task",
       maxOutputBatchBytes,
       clientBufferSize,
@@ -338,13 +338,13 @@ TEST_P(DefaultExchangeClientTest, smallPage) {
   client->close();
 }
 
-TEST_P(DefaultExchangeClientTest, largeSinglePage) {
+TEST_P(InMemoryExchangeClientTest, largeSinglePage) {
   auto data = {
       makeRowVector({makeFlatVector<int64_t>(10000, folly::identity)}),
       // second page is >1% of total payload size
       makeRowVector({makeFlatVector<int64_t>(150, folly::identity)}),
   };
-  auto client = std::make_shared<DefaultExchangeClient>(
+  auto client = std::make_shared<InMemoryExchangeClient>(
       "test",
       1,
       1000,
@@ -370,8 +370,8 @@ TEST_P(DefaultExchangeClientTest, largeSinglePage) {
   client->close();
 }
 
-TEST_P(DefaultExchangeClientTest, multiPageFetch) {
-  auto client = std::make_shared<DefaultExchangeClient>(
+TEST_P(InMemoryExchangeClientTest, multiPageFetch) {
+  auto client = std::make_shared<InMemoryExchangeClient>(
       "test",
       17,
       1 << 20,
@@ -428,9 +428,9 @@ TEST_P(DefaultExchangeClientTest, multiPageFetch) {
   client->close();
 }
 
-TEST_P(DefaultExchangeClientTest, sourceTimeout) {
+TEST_P(InMemoryExchangeClientTest, sourceTimeout) {
   constexpr int32_t kNumSources = 3;
-  auto client = std::make_shared<DefaultExchangeClient>(
+  auto client = std::make_shared<InMemoryExchangeClient>(
       "test",
       17,
       1 << 20,
@@ -514,10 +514,10 @@ TEST_P(DefaultExchangeClientTest, sourceTimeout) {
   client->close();
 }
 
-TEST_P(DefaultExchangeClientTest, callNextAfterClose) {
+TEST_P(InMemoryExchangeClientTest, callNextAfterClose) {
   constexpr int32_t kNumSources = 3;
   common::testutil::TestValue::enable();
-  auto client = std::make_shared<DefaultExchangeClient>(
+  auto client = std::make_shared<InMemoryExchangeClient>(
       "test",
       17,
       1 << 20,
@@ -566,7 +566,7 @@ TEST_P(DefaultExchangeClientTest, callNextAfterClose) {
   client->close();
 }
 
-TEST_P(DefaultExchangeClientTest, acknowledge) {
+TEST_P(InMemoryExchangeClientTest, acknowledge) {
   const int64_t pageSize = 1024;
   const int64_t clientBufferSize = pageSize;
   const int64_t serverBufferSize = 2 * pageSize;
@@ -583,7 +583,7 @@ TEST_P(DefaultExchangeClientTest, acknowledge) {
       task, core::PartitionedOutputNode::Kind::kPartitioned, 2, 1);
   // Set the minOutputBatchBytes to be 1024 since now the client
   // will request if bytes in queue + pendingBytes < minOutputBatchBytes
-  auto client = std::make_shared<DefaultExchangeClient>(
+  auto client = std::make_shared<InMemoryExchangeClient>(
       "local://test-acknowledge-client-task",
       1,
       clientBufferSize,
@@ -709,16 +709,16 @@ TEST_P(DefaultExchangeClientTest, acknowledge) {
   ASSERT_TRUE(atEnd);
 }
 
-TEST_P(DefaultExchangeClientTest, minOutputBatchBytesInitialBatches) {
+TEST_P(InMemoryExchangeClientTest, minOutputBatchBytesInitialBatches) {
   // Initial batches should not block to avoid impacting latency of small
   // exchanges
 
   const auto minOutputBatchBytes = 10000;
 
-  auto client = std::make_shared<DefaultExchangeClient>(
+  auto client = std::make_shared<InMemoryExchangeClient>(
       "test",
       17,
-      DefaultExchangeClient::kDefaultMaxQueuedBytes,
+      InMemoryExchangeClient::kDefaultMaxQueuedBytes,
       1,
       minOutputBatchBytes,
       pool(),
@@ -767,13 +767,13 @@ TEST_P(DefaultExchangeClientTest, minOutputBatchBytesInitialBatches) {
   client->close();
 }
 
-TEST_P(DefaultExchangeClientTest, minOutputBatchBytesZero) {
+TEST_P(InMemoryExchangeClientTest, minOutputBatchBytesZero) {
   // When minOutputBatchBytes is zero always unblock on the first page
 
-  auto client = std::make_shared<DefaultExchangeClient>(
+  auto client = std::make_shared<InMemoryExchangeClient>(
       "test",
       17,
-      DefaultExchangeClient::kDefaultMaxQueuedBytes,
+      InMemoryExchangeClient::kDefaultMaxQueuedBytes,
       10,
       0,
       pool(),
@@ -809,13 +809,13 @@ TEST_P(DefaultExchangeClientTest, minOutputBatchBytesZero) {
   client->close();
 }
 
-TEST_P(DefaultExchangeClientTest, minOutputBatchBytesSingleConsumer) {
+TEST_P(InMemoryExchangeClientTest, minOutputBatchBytesSingleConsumer) {
   const auto minOutputBatchBytes = 1000;
 
-  auto client = std::make_shared<DefaultExchangeClient>(
+  auto client = std::make_shared<InMemoryExchangeClient>(
       "test",
       17,
-      DefaultExchangeClient::kDefaultMaxQueuedBytes,
+      InMemoryExchangeClient::kDefaultMaxQueuedBytes,
       1,
       minOutputBatchBytes,
       pool(),
@@ -863,14 +863,14 @@ TEST_P(DefaultExchangeClientTest, minOutputBatchBytesSingleConsumer) {
   client->close();
 }
 
-TEST_P(DefaultExchangeClientTest, minOutputBatchBytesMultipleConsumers) {
+TEST_P(InMemoryExchangeClientTest, minOutputBatchBytesMultipleConsumers) {
   const auto minOutputBatchBytes = 1000;
   const int numConsumers = 3;
 
-  auto client = std::make_shared<DefaultExchangeClient>(
+  auto client = std::make_shared<InMemoryExchangeClient>(
       "test",
       17,
-      DefaultExchangeClient::kDefaultMaxQueuedBytes,
+      InMemoryExchangeClient::kDefaultMaxQueuedBytes,
       numConsumers,
       minOutputBatchBytes,
       pool(),
@@ -987,7 +987,7 @@ TEST_P(DefaultExchangeClientTest, minOutputBatchBytesMultipleConsumers) {
   client->close();
 }
 
-TEST_P(DefaultExchangeClientTest, skipRequestDataSizeWithSingleSource) {
+TEST_P(InMemoryExchangeClientTest, skipRequestDataSizeWithSingleSource) {
   // Test skipRequestDataSizeWithSingleSource flag behavior
 
   struct {
@@ -1005,7 +1005,7 @@ TEST_P(DefaultExchangeClientTest, skipRequestDataSizeWithSingleSource) {
   for (const auto& setting : testSettings) {
     SCOPED_TRACE(setting.debugString());
 
-    auto client = std::make_shared<DefaultExchangeClient>(
+    auto client = std::make_shared<InMemoryExchangeClient>(
         "test-" + setting.debugString(),
         17,
         1024,
@@ -1021,7 +1021,7 @@ TEST_P(DefaultExchangeClientTest, skipRequestDataSizeWithSingleSource) {
 }
 
 TEST_P(
-    DefaultExchangeClientTest,
+    InMemoryExchangeClientTest,
     skipRequestDataSizeNotTriggeredWithMultipleSources) {
   // Test that optimization is NOT triggered with multiple sources
 
@@ -1029,7 +1029,7 @@ TEST_P(
   auto page = test::toSerializedPage(data, serdeKind_, bufferManager_, pool());
 
   // Client with optimization ENABLED but multiple sources
-  auto client = std::make_shared<DefaultExchangeClient>(
+  auto client = std::make_shared<InMemoryExchangeClient>(
       "test-multi-source",
       17,
       page->size() * 10,
@@ -1088,7 +1088,7 @@ TEST_P(
 // the fetch until next() is called. This is useful for cached hash table
 // scenarios where waiter tasks may not need the data if the table is already
 // cached.
-TEST_P(DefaultExchangeClientTest, lazyFetching) {
+TEST_P(InMemoryExchangeClientTest, lazyFetching) {
   auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
 
   // Test with lazyFetching=false (default behavior).
@@ -1100,10 +1100,10 @@ TEST_P(DefaultExchangeClientTest, lazyFetching) {
     bufferManager_->initializeTask(
         task, core::PartitionedOutputNode::Kind::kPartitioned, 100, 16);
 
-    auto client = std::make_shared<DefaultExchangeClient>(
+    auto client = std::make_shared<InMemoryExchangeClient>(
         "t",
         17,
-        DefaultExchangeClient::kDefaultMaxQueuedBytes,
+        InMemoryExchangeClient::kDefaultMaxQueuedBytes,
         1,
         kDefaultMinExchangeOutputBatchBytes,
         pool(),
@@ -1134,10 +1134,10 @@ TEST_P(DefaultExchangeClientTest, lazyFetching) {
     bufferManager_->initializeTask(
         task, core::PartitionedOutputNode::Kind::kPartitioned, 100, 16);
 
-    auto client = std::make_shared<DefaultExchangeClient>(
+    auto client = std::make_shared<InMemoryExchangeClient>(
         "t",
         17,
-        DefaultExchangeClient::kDefaultMaxQueuedBytes,
+        InMemoryExchangeClient::kDefaultMaxQueuedBytes,
         1,
         kDefaultMinExchangeOutputBatchBytes,
         pool(),
@@ -1163,7 +1163,7 @@ TEST_P(DefaultExchangeClientTest, lazyFetching) {
 }
 
 // Test the new hasNoMoreSources() API
-TEST_P(DefaultExchangeClientTest, hasNoMoreSourcesApi) {
+TEST_P(InMemoryExchangeClientTest, hasNoMoreSourcesApi) {
   auto queue = std::make_shared<ExchangeQueue>(1, 0);
 
   // Initially, should return false
@@ -1176,8 +1176,8 @@ TEST_P(DefaultExchangeClientTest, hasNoMoreSourcesApi) {
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
-    DefaultExchangeClientTest,
-    DefaultExchangeClientTest,
+    InMemoryExchangeClientTest,
+    InMemoryExchangeClientTest,
     testing::Values("Presto", "CompactRow", "UnsafeRow"),
     [](const testing::TestParamInfo<std::string>& info) {
       return fmt::format("{}", info.param);

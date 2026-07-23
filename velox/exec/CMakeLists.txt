@@ -30,7 +30,7 @@ velox_add_library(
   Driver.cpp
   EnforceSingleRow.cpp
   Exchange.cpp
-  DefaultExchangeClient.cpp
+  InMemoryExchangeClient.cpp
   ExchangeQueue.cpp
   ExchangeSource.cpp
   SerializedPage.cpp
@@ -130,7 +130,7 @@ velox_add_library(
   EnforceDistinct.h
   EnforceSingleRow.h
   Exchange.h
-  DefaultExchangeClient.h
+  InMemoryExchangeClient.h
   ExchangeQueue.h
   ExchangeSource.h
   Expand.h

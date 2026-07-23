@@ -477,7 +477,7 @@ void LocalPlanner::markMixedJoinBridges(
 
 std::shared_ptr<Driver> DriverFactory::createDriver(
     std::unique_ptr<DriverCtx> ctx,
-    std::shared_ptr<DefaultExchangeClient> exchangeClient,
+    std::shared_ptr<InMemoryExchangeClient> exchangeClient,
     std::shared_ptr<PipelinePushdownFilters> filters,
     std::function<int(int pipelineId)> numDrivers) {
   auto driver = std::shared_ptr<Driver>(new Driver());

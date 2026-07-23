@@ -17,8 +17,8 @@
 
 #include <random>
 
-#include "velox/exec/DefaultExchangeClient.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
+#include "velox/exec/InMemoryExchangeClient.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -50,7 +50,7 @@ class Exchange : public SourceOperator {
       int32_t operatorId,
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::ExchangeNode>& exchangeNode,
-      std::shared_ptr<DefaultExchangeClient> exchangeClient,
+      std::shared_ptr<InMemoryExchangeClient> exchangeClient,
       std::string_view operatorType = OperatorType::kExchange);
 
   ~Exchange() override {
@@ -85,8 +85,8 @@ class Exchange : public SourceOperator {
   // exchangeClient_.
   void getSplits(ContinueFuture* future);
 
-  // Fetches runtime stats from DefaultExchangeClient and replaces these in this
-  // operator's stats.
+  // Fetches runtime stats from InMemoryExchangeClient and replaces these in
+  // this operator's stats.
   void recordExchangeClientStats();
 
   void recordInputStats(uint64_t rawInputBytes);
@@ -102,14 +102,14 @@ class Exchange : public SourceOperator {
   const std::unique_ptr<VectorSerde::Options> serdeOptions_;
 
   /// True if this operator is responsible for fetching splits from the Task
-  /// and passing these to DefaultExchangeClient.
+  /// and passing these to InMemoryExchangeClient.
   const bool processSplits_;
 
   const int driverId_;
 
   bool noMoreSplits_ = false;
 
-  std::shared_ptr<DefaultExchangeClient> exchangeClient_;
+  std::shared_ptr<InMemoryExchangeClient> exchangeClient_;
 
   // A future received from Task::getSplitOrFuture(). It will be complete when
   // there are more splits available or no-more-splits signal has arrived.

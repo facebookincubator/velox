@@ -22,13 +22,13 @@ namespace facebook::velox::exec {
 
 // Handle for a set of producers. This may be shared by multiple Exchanges, one
 // per consumer thread.
-class DefaultExchangeClient
-    : public std::enable_shared_from_this<DefaultExchangeClient> {
+class InMemoryExchangeClient
+    : public std::enable_shared_from_this<InMemoryExchangeClient> {
  public:
   static constexpr int32_t kDefaultMaxQueuedBytes = 32 << 20; // 32 MB.
   static constexpr std::chrono::milliseconds kRequestDataMaxWait{100};
 
-  DefaultExchangeClient(
+  InMemoryExchangeClient(
       std::string taskId,
       int destination,
       int64_t maxQueuedBytes,
@@ -74,7 +74,7 @@ class DefaultExchangeClient
         destination, 0, "Exchange client destination must not be negative");
   }
 
-  ~DefaultExchangeClient();
+  ~InMemoryExchangeClient();
 
   memory::MemoryPool* pool() const {
     return pool_;
@@ -92,7 +92,7 @@ class DefaultExchangeClient
   void close();
 
   // Returns runtime statistics aggregated across all of the exchange sources.
-  // DefaultExchangeClient is expected to report background CPU time by
+  // InMemoryExchangeClient is expected to report background CPU time by
   // including a runtime metric named Operator::kBackgroundCpuTimeNanos.
   folly::F14FastMap<std::string, RuntimeMetric> stats();
 
