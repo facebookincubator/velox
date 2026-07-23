@@ -76,6 +76,8 @@ void configureReaderOptions(
   readerOptions.setLoadQuantum(fileConfig->loadQuantum(sessionProperties));
   readerOptions.setMaxCoalesceBytes(
       fileConfig->maxCoalescedBytes(sessionProperties));
+  readerOptions.setMaxCoalesceDistance(
+      fileConfig->maxCoalescedDistanceBytes(sessionProperties));
   readerOptions.setFileColumnNamesReadAsLowerCase(
       fileConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
   readerOptions.setAllowEmptyFile(true);

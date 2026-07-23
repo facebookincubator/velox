@@ -34,6 +34,7 @@ TEST(FileConfigTest, defaultConfig) {
   EXPECT_FALSE(config.isFileColumnNamesReadAsLowerCase(emptySession.get()));
   EXPECT_FALSE(config.ignoreMissingFiles(emptySession.get()));
   EXPECT_EQ(config.maxCoalescedBytes(emptySession.get()), 128 << 20);
+  EXPECT_EQ(config.maxCoalescedDistanceBytes(emptySession.get()), 512 << 10);
   EXPECT_EQ(config.prefetchRowGroups(), 1);
   EXPECT_EQ(config.parallelUnitLoadCount(emptySession.get()), 0);
   EXPECT_EQ(config.loadQuantum(emptySession.get()), 8 << 20);
@@ -60,6 +61,7 @@ TEST(FileConfigTest, overrideConfig) {
   std::unordered_map<std::string, std::string> configFromFile = {
       {FileConfig::kFileColumnNamesReadAsLowerCase, "true"},
       {FileConfig::kMaxCoalescedBytes, "100"},
+      {FileConfig::kMaxCoalescedDistance, "100kB"},
       {FileConfig::kPrefetchRowGroups, "4"},
       {FileConfig::kLoadQuantum, std::to_string(4 << 20)},
       {FileConfig::kFilePreloadThreshold, std::to_string(16UL << 20)},
@@ -84,6 +86,7 @@ TEST(FileConfigTest, overrideConfig) {
 
   EXPECT_TRUE(config.isFileColumnNamesReadAsLowerCase(emptySession.get()));
   EXPECT_EQ(config.maxCoalescedBytes(emptySession.get()), 100);
+  EXPECT_EQ(config.maxCoalescedDistanceBytes(emptySession.get()), 100 << 10);
   EXPECT_EQ(config.prefetchRowGroups(), 4);
   EXPECT_EQ(config.loadQuantum(emptySession.get()), 4 << 20);
   EXPECT_EQ(config.filePreloadThreshold(), 16UL << 20);
@@ -125,6 +128,7 @@ TEST(FileConfigTest, overrideSession) {
   std::unordered_map<std::string, std::string> sessionOverride = {
       {FileConfig::kFileColumnNamesReadAsLowerCaseSession, "true"},
       {FileConfig::kIgnoreMissingFilesSession, "true"},
+      {FileConfig::kMaxCoalescedDistanceSession, "3MB"},
       {FileConfig::kLoadQuantumSession, std::to_string(4 << 20)},
       {FileConfig::kReadStatsBasedFilterReorderDisabledSession, "true"},
       {FileConfig::kPreserveFlatMapsInMemorySession, "true"},
@@ -145,6 +149,7 @@ TEST(FileConfigTest, overrideSession) {
 
   EXPECT_TRUE(config.isFileColumnNamesReadAsLowerCase(session.get()));
   EXPECT_TRUE(config.ignoreMissingFiles(session.get()));
+  EXPECT_EQ(config.maxCoalescedDistanceBytes(session.get()), 3 << 20);
   EXPECT_EQ(config.loadQuantum(session.get()), 4 << 20);
   EXPECT_TRUE(config.readStatsBasedFilterReorderDisabled(session.get()));
   EXPECT_TRUE(config.preserveFlatMapsInMemory(session.get()));
