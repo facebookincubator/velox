@@ -414,6 +414,7 @@ TEST_F(PlanNodeTest, partitionedOutputNode) {
         nullptr, // partitionFunctionSpec
         rowType_,
         serdeKind,
+        std::string(TransportKind::kInMemory),
         source);
     // Attempting to dereference the nullptr should fail.
     ASSERT_EQ(node.partitionFunctionSpecPtr(), nullptr);
@@ -433,6 +434,7 @@ TEST_F(PlanNodeTest, partitionedOutputNode) {
         partitionFunctionSpec,
         rowType_,
         serdeKind,
+        std::string(TransportKind::kInMemory),
         source);
     // We should be able to dereference the partition function spec.
     ASSERT_EQ(node.partitionFunctionSpecPtr(), partitionFunctionSpec);
@@ -452,6 +454,7 @@ TEST_F(PlanNodeTest, partitionedOutputNode) {
           partitionFunctionSpec,
           rowType_,
           serdeKind,
+          std::string(TransportKind::kInMemory),
           source),
       "");
 
@@ -467,6 +470,7 @@ TEST_F(PlanNodeTest, partitionedOutputNode) {
           partitionFunctionSpec,
           rowType_,
           serdeKind,
+          std::string(TransportKind::kInMemory),
           source),
       "Non-empty partitioning keys require more than one partition");
 
@@ -482,6 +486,7 @@ TEST_F(PlanNodeTest, partitionedOutputNode) {
           nullptr, // partitionFunctionSpec
           rowType_,
           serdeKind,
+          std::string(TransportKind::kInMemory),
           source),
       "Partition function spec must be specified when the number of destinations is more than 1.");
 
@@ -497,6 +502,7 @@ TEST_F(PlanNodeTest, partitionedOutputNode) {
           partitionFunctionSpec,
           rowType_,
           serdeKind,
+          std::string(TransportKind::kInMemory),
           source),
       "partitioning doesn't allow for partitioning keys");
 }
