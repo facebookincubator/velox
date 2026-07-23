@@ -618,6 +618,13 @@ class PlanBuilder {
       return *this;
     }
 
+    /// @param notNullColumnNames Columns that must not contain nulls.
+    TableWriterBuilder& notNullColumnNames(
+        std::vector<std::string> notNullColumnNames) {
+      notNullColumnNames_ = std::move(notNullColumnNames);
+      return *this;
+    }
+
     /// Stop the TableWriterBuilder.
     PlanBuilder& endTableWriter() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -651,6 +658,7 @@ class PlanBuilder {
     bool ensureFiles_{false};
     connector::CommitStrategy commitStrategy_{
         connector::CommitStrategy::kNoCommit};
+    std::optional<std::vector<std::string>> notNullColumnNames_;
   };
 
   /// Start a TableWriterBuilder.

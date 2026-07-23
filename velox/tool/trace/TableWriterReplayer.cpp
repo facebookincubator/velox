@@ -99,6 +99,7 @@ core::PlanNodePtr TableWriterReplayer::createPlanNode(
       tableWriterNode->hasPartitioningScheme(),
       TableWriteTraits::outputType(tableWriterNode->columnStatsSpec()),
       tableWriterNode->commitStrategy(),
-      source);
+      source,
+      tableWriterNode->notNullColumnNames());
 }
 } // namespace facebook::velox::tool::trace
