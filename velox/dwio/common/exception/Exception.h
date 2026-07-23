@@ -84,6 +84,31 @@ class LoggedException : public velox::VeloxException {
     logException();
   }
 
+  // Carries an explicit message template, kept distinct from the interpolated
+  // 'errorMessage' so VeloxException::messageTemplate() stays low-cardinality
+  // for error aggregation.
+  LoggedException(
+      const char* file,
+      size_t line,
+      const char* function,
+      const char* expression,
+      const std::string& errorMessage,
+      const std::string& errorSource,
+      const std::string& errorCode,
+      velox::CompileTimeStringLiteral messageTemplate)
+      : VeloxException(
+            file,
+            line,
+            function,
+            expression,
+            errorMessage,
+            errorSource,
+            errorCode,
+            /*isRetriable=*/false,
+            messageTemplate) {
+    logException();
+  }
+
  private:
   void logException() {
     auto logger = getExceptionLogger();
@@ -189,6 +214,29 @@ containing information about the file, line, and function where it happened.
       ::facebook::velox::error_code::kUnknown,                   \
       ##__VA_ARGS__)
 
+// Like DWIO_RAISE, but the first argument is an fmt format string and the rest
+// are interpolated into it. The format string, not the interpolated result,
+// becomes VeloxException::messageTemplate(), so identical failures aggregate
+// together regardless of their interpolated values.
+#define DWIO_RAISE_FMT(fmtString, ...)                               \
+  throw ::facebook::velox::dwio::common::exception::LoggedException( \
+      __FILE__,                                                      \
+      __LINE__,                                                      \
+      __FUNCTION__,                                                  \
+      "",                                                            \
+      ::facebook::velox::errorMessage(fmtString, ##__VA_ARGS__),     \
+      ::facebook::velox::error_source::kErrorSourceExternal,         \
+      ::facebook::velox::error_code::kUnknown,                       \
+      ::facebook::velox::CompileTimeStringLiteral(fmtString))
+
+// DWIO_ENSURE with a stable message template. See DWIO_RAISE_FMT.
+#define DWIO_ENSURE_FMT(expr, fmtString, ...)   \
+  do {                                          \
+    if (!(expr)) {                              \
+      DWIO_RAISE_FMT(fmtString, ##__VA_ARGS__); \
+    }                                           \
+  } while (0)
+
 #define DWIO_ENSURE_NOT_NULL(p, ...) \
   DWIO_ENSURE(p != nullptr, "[Null pointer]: ", ##__VA_ARGS__);
 
@@ -251,5 +299,61 @@ containing information about the file, line, and function where it happened.
       r,                               \
       "]: ",                           \
       ##__VA_ARGS__);
+
+// Template-stable counterparts of the constraint macros above. The compared
+// values are passed as fmt arguments, so 'messageTemplate()' stays constant
+// across failures instead of embedding the runtime values. 'fmtString' is a
+// format literal for extra context and may be "" when none is needed; any
+// following arguments interpolate into it.
+#define DWIO_ENSURE_NOT_NULL_FMT(p, fmtString, ...) \
+  DWIO_ENSURE_FMT((p) != nullptr, "[Null pointer]: " fmtString, ##__VA_ARGS__)
+
+#define DWIO_ENSURE_EQ_FMT(l, r, fmtString, ...)               \
+  DWIO_ENSURE_FMT(                                             \
+      (l) == (r),                                              \
+      "[Equality Constraint Violation: {} == {}]: " fmtString, \
+      (l),                                                     \
+      (r),                                                     \
+      ##__VA_ARGS__)
+
+#define DWIO_ENSURE_NE_FMT(l, r, fmtString, ...)               \
+  DWIO_ENSURE_FMT(                                             \
+      (l) != (r),                                              \
+      "[Equality Constraint Violation: {} != {}]: " fmtString, \
+      (l),                                                     \
+      (r),                                                     \
+      ##__VA_ARGS__)
+
+#define DWIO_ENSURE_LT_FMT(l, r, fmtString, ...)           \
+  DWIO_ENSURE_FMT(                                         \
+      (l) < (r),                                           \
+      "[Range Constraint Violation: {} < {}]: " fmtString, \
+      (l),                                                 \
+      (r),                                                 \
+      ##__VA_ARGS__)
+
+#define DWIO_ENSURE_LE_FMT(l, r, fmtString, ...)            \
+  DWIO_ENSURE_FMT(                                          \
+      (l) <= (r),                                           \
+      "[Range Constraint Violation: {} <= {}]: " fmtString, \
+      (l),                                                  \
+      (r),                                                  \
+      ##__VA_ARGS__)
+
+#define DWIO_ENSURE_GT_FMT(l, r, fmtString, ...)           \
+  DWIO_ENSURE_FMT(                                         \
+      (l) > (r),                                           \
+      "[Range Constraint Violation: {} > {}]: " fmtString, \
+      (l),                                                 \
+      (r),                                                 \
+      ##__VA_ARGS__)
+
+#define DWIO_ENSURE_GE_FMT(l, r, fmtString, ...)            \
+  DWIO_ENSURE_FMT(                                          \
+      (l) >= (r),                                           \
+      "[Range Constraint Violation: {} >= {}]: " fmtString, \
+      (l),                                                  \
+      (r),                                                  \
+      ##__VA_ARGS__)
 
 } // namespace facebook::velox::dwio

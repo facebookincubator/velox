@@ -17,6 +17,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/BackpressureTestNode.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
@@ -1004,6 +1005,67 @@ DEBUG_ONLY_TEST_F(NestedLoopJoinTest, longBatchDurationYield) {
   }
   ASSERT_LT(
       testSettings[0].numGetOutputCalls, testSettings[1].numGetOutputCalls);
+}
+
+// Reproduces the operator-neutral Driver-level bug where the TableScan reader
+// advances past a passthrough LazyVector that an intermediate operator still
+// holds unloaded, surfacing as "Loading LazyVector after the enclosing reader
+// has moved". Here the amplifying operator is a cross-product NestedLoopJoin:
+// it holds one probe batch and drains it over many chunked getOutput() calls
+// while needsInput() == false. A back-pressuring sink (see
+// BackpressureTestNode.h) forces the driver to race the scan ahead during that
+// drain, stranding the unloaded scan lazy that Project[1] forwarded. This test
+// passes once the Driver fix is in place.
+TEST_F(NestedLoopJoinTest, lazyVectorStaleUnderBackpressure) {
+  Operator::registerOperator(std::make_unique<BackpressureTranslator>());
+
+  // One large probe input -> one file -> one split whose reader yields many
+  // (10k-row) batches. t0 cycles through 100 distinct values; t1 is a unique
+  // row ordinal.
+  auto probeVector = makeRowVector(
+      {"t0", "t1"},
+      {makeFlatVector<int64_t>(90'000, [](auto i) { return i % 100; }),
+       makeFlatVector<int64_t>(90'000, [](auto i) { return i; })});
+  auto probeFile = TempFilePath::create();
+  writeToFile(probeFile->getPath(), {probeVector});
+
+  // Small build side: the cross product multiplies each 10k-row probe batch by
+  // these rows, so one probe batch yields many output chunks -> a long drain
+  // window during which the scan reader advances.
+  auto buildVector = makeRowVector(
+      {"u0"}, {makeFlatVector<int64_t>(std::vector<int64_t>{0, 1, 2, 3})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId scanNodeId;
+  // Project[1] loads t1 and forwards t0 as an unloaded scan LazyVector;
+  // Project[2] loads t0.
+  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(ROW({"t0", "t1"}, {BIGINT(), BIGINT()}))
+                  .captureScanNodeId(scanNodeId)
+                  .project({"t1 + 0 AS t1", "t0"})
+                  .project({"t0 + 0 AS t0", "t1"})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator, pool_.get())
+                          .values({buildVector})
+                          .planNode(),
+                      {"t0", "t1", "u0"},
+                      core::JoinType::kInner)
+                  .project({"t0 + 0 AS t0", "t1", "u0"})
+                  .project({"t0", "t1 + 0 AS t1", "u0"})
+                  .addNode([](const std::string& id, core::PlanNodePtr input) {
+                    return std::make_shared<BackpressureNode>(
+                        id, /*delayCycles=*/20, std::move(input));
+                  })
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan)
+                    .serialExecution(false)
+                    .splits(scanNodeId, makeHiveConnectorSplits({probeFile}))
+                    .copyResults(pool());
+  // Cross product of every probe row with every build row.
+  ASSERT_EQ(result->size(), probeVector->size() * buildVector->size());
+
+  Operator::unregisterAllOperators();
 }
 
 } // namespace
