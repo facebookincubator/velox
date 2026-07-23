@@ -145,7 +145,6 @@ void StatisticsBuilder::createTree(
     }
     default:
       DWIO_RAISE("Not supported type: ", kind);
-      break;
   }
 }
 
