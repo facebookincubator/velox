@@ -482,6 +482,12 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
             planNode->id());
         return false;
       }
+      // Note: a condition with a non-AST-representable sub-expression that
+      // spans both join sides (e.g. `probe.col LIKE build.pattern`) is still
+      // GPU-eligible: CudfNestedLoopJoinProbe evaluates it generally against
+      // the full probe x build cross product instead of building a single
+      // cuDF AST tree. See
+      // CudfNestedLoopJoinProbe::crossJoinConditionalIndices.
     }
     return true;
   }
