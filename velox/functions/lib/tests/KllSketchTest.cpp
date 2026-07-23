@@ -323,6 +323,25 @@ TEST_F(KllSketchTest, growCompacted) {
   }
 }
 
+TEST_F(KllSketchTest, mergeSparseSketchWithLargeK) {
+  constexpr uint32_t k = 326408;
+
+  auto input = KllSketch<int64_t>::fromRepeatedValue(11, 2, k, {}, 0);
+  KllSketch<int64_t> result(k, {}, 0);
+  result.merge(input);
+
+  EXPECT_LT(result.serializedByteSize(), 1024);
+
+  result.insert(13);
+  result.merge(KllSketch<int64_t>::fromRepeatedValue(17, 4, k, {}, 0));
+
+  EXPECT_EQ(result.totalCount(), 7);
+  EXPECT_LT(result.serializedByteSize(), 1024);
+  result.finish();
+  EXPECT_EQ(result.estimateQuantile(0), 11);
+  EXPECT_EQ(result.estimateQuantile(1), 17);
+}
+
 TEST_F(KllSketchTest, fromRepeatedValue) {
   constexpr int N = 1000;
   constexpr int kTotal = (1 + N) * N / 2;
