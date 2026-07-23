@@ -208,4 +208,15 @@ bool canBeEvaluatedByCudf(
     std::shared_ptr<velox::exec::Expr> expr,
     bool deep = true);
 
+/// Checks a group of compiled expressions for cuDF evaluator support and
+/// query-dependent semantic restrictions.
+///
+/// @param exprs Expressions to check.
+/// @param adjustTimestampToTimezone Whether timestamps are adjusted to the
+/// session timezone. Timezone-sensitive expressions that cuDF evaluates in UTC
+/// are rejected when this is true.
+bool canBeEvaluatedByCudf(
+    const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs,
+    bool adjustTimestampToTimezone);
+
 } // namespace facebook::velox::cudf_velox

@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
+#include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/DecimalExpressionKernels.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/NullMask.h"
@@ -2887,6 +2889,44 @@ bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
     }
   }
 
+  return true;
+}
+
+namespace {
+
+bool containsTimezoneSensitiveDateTrunc(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  const auto dateTruncName =
+      CudfConfig::getInstance().functionNamePrefix + "date_trunc";
+  if (expr->name() == dateTruncName &&
+      DateTruncFunction::isTimezoneSensitive(expr)) {
+    return true;
+  }
+
+  for (const auto& input : expr->inputs()) {
+    if (containsTimezoneSensitiveDateTrunc(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
+bool canBeEvaluatedByCudf(
+    const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs,
+    bool adjustTimestampToTimezone) {
+  for (const auto& expr : exprs) {
+    if (adjustTimestampToTimezone && containsTimezoneSensitiveDateTrunc(expr)) {
+      LOG_FALLBACK(
+          "date_trunc(timestamp) requires CPU evaluation when "
+          "adjust_timestamp_to_session_timezone is enabled");
+      return false;
+    }
+    if (!canBeEvaluatedByCudf(expr)) {
+      return false;
+    }
+  }
   return true;
 }
 
