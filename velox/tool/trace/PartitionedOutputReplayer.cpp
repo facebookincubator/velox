@@ -174,6 +174,7 @@ core::PlanNodePtr PartitionedOutputReplayer::createPlanNode(
       originalNode->partitionFunctionSpecPtr(),
       originalNode->outputType(),
       serdeKind_,
+      originalNode->transportKind(),
       source);
 }
 
