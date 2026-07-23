@@ -1050,10 +1050,18 @@ TEST_F(CudfDecimalTest, decimalDivideRounds) {
 }
 
 TEST_F(CudfDecimalTest, decimalDivideByZero) {
-  auto rowType = ROW({
-      {"a", DECIMAL(10, 2)},
-      {"b", DECIMAL(10, 2)},
-  });
+  auto assertCpuAndGpuDivideByZero = [&](const auto& plan) {
+    unregisterCudf();
+    VELOX_ASSERT_USER_THROW(
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool()),
+        "Division by zero");
+    registerCudf();
+    VELOX_ASSERT_USER_THROW(
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool()),
+        "Division by zero");
+  };
 
   auto input = makeRowVector(
       {"a", "b"},
@@ -1061,29 +1069,34 @@ TEST_F(CudfDecimalTest, decimalDivideByZero) {
           makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 2)),
           makeFlatVector<int64_t>({0, 50, 0}, DECIMAL(10, 2)),
       });
-
   std::vector<RowVectorPtr> vectors = {input};
 
-  auto plan = exec::test::PlanBuilder()
-                  .values(vectors)
-                  .project({"a / b AS div"})
-                  .planNode();
+  // Column / column with a zero divisor row.
+  auto columnColumnPlan = exec::test::PlanBuilder()
+                              .values(vectors)
+                              .project({"a / b AS div"})
+                              .planNode();
+  assertCpuAndGpuDivideByZero(columnColumnPlan);
 
-  auto result =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  auto colOnly = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 2))});
+  std::vector<RowVectorPtr> colVectors = {colOnly};
 
-  // Expect null for rows where b = 0, and the division result otherwise.
-  // Input values are stored as fixed-point: 100 = 1.00, 200 = 2.00, etc.
-  // Row 0: 1.00 / 0 = null
-  // Row 1: 2.00 / 0.50 = 4.00 (stored as 400 in DECIMAL(12,2))
-  // Row 2: 3.00 / 0 = null
-  auto expectedType = DECIMAL(12, 2);
-  auto expected = makeRowVector({
-      makeNullableFlatVector<int64_t>(
-          {std::nullopt, 400, std::nullopt}, expectedType),
-  });
+  // Column / zero scalar (rhs-scalar path).
+  auto columnScalarPlan =
+      exec::test::PlanBuilder()
+          .values(colVectors)
+          .project({"a / CAST('0.00' AS DECIMAL(10, 2)) AS div"})
+          .planNode();
+  assertCpuAndGpuDivideByZero(columnScalarPlan);
 
-  facebook::velox::test::assertEqualVectors(expected, result);
+  // Nonzero scalar / column containing a zero (lhs-scalar path).
+  auto scalarColumnPlan =
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project({"CAST('9.00' AS DECIMAL(10, 2)) / b AS div"})
+          .planNode();
+  assertCpuAndGpuDivideByZero(scalarColumnPlan);
 }
 
 TEST_F(CudfDecimalTest, decimalModulo) {
@@ -2107,6 +2120,53 @@ TEST_F(CudfDecimalTest, decimalMixedScaleOverflowCpuGpuParity) {
     EXPECT_EQ(cpuOverflow, gpuOverflow)
         << "CPU/GPU overflow mismatch for projection: " << c.projection;
   }
+}
+
+// Modulo by a zero divisor must fail fast with a distinct "Modulus by zero"
+// error, kept separate from the decimal-overflow status, matching Velox CPU.
+// Covers column and scalar divisors in both operand positions.
+TEST_F(CudfDecimalTest, decimalModuloByZero) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>({700, 100, 500}, DECIMAL(10, 2)),
+          makeFlatVector<int64_t>({300, 0, 200}, DECIMAL(10, 2)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+
+  // Column % column with a zero divisor row.
+  VELOX_ASSERT_THROW(
+      facebook::velox::exec::test::AssertQueryBuilder(
+          exec::test::PlanBuilder()
+              .values(vectors)
+              .project({"a % b AS result"})
+              .planNode())
+          .copyResults(pool()),
+      "Modulus by zero");
+
+  auto colOnly = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>({700, 100, 500}, DECIMAL(10, 2))});
+  std::vector<RowVectorPtr> colVectors = {colOnly};
+
+  // Column % zero scalar (rhs-scalar path).
+  VELOX_ASSERT_THROW(
+      facebook::velox::exec::test::AssertQueryBuilder(
+          exec::test::PlanBuilder()
+              .values(colVectors)
+              .project({"a % CAST('0.00' AS DECIMAL(10, 2)) AS result"})
+              .planNode())
+          .copyResults(pool()),
+      "Modulus by zero");
+
+  // Nonzero scalar % column containing a zero (lhs-scalar path).
+  VELOX_ASSERT_THROW(
+      facebook::velox::exec::test::AssertQueryBuilder(
+          exec::test::PlanBuilder()
+              .values(vectors)
+              .project({"CAST('9.00' AS DECIMAL(10, 2)) % b AS result"})
+              .planNode())
+          .copyResults(pool()),
+      "Modulus by zero");
 }
 
 } // namespace

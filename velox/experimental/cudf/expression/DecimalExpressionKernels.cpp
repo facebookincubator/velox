@@ -45,6 +45,28 @@ const char* decimalOverflowMessage(cudf::binary_operator op) {
   }
 }
 
+// Kept distinct from overflow so the GPU path reports the same fail-fast error
+// as Velox CPU for a zero divisor on DIV or MOD.
+const char* decimalDivisionByZeroMessage(cudf::binary_operator op) {
+  switch (op) {
+    case cudf::binary_operator::MOD:
+      return "Modulus by zero";
+    default:
+      return "Division by zero";
+  }
+}
+
+void checkDecimalBinaryOpStatus(
+    DecimalBinaryOpStatus status,
+    cudf::binary_operator op) {
+  if (status == DecimalBinaryOpStatus::kDivisionByZero) {
+    VELOX_USER_FAIL("{}", decimalDivisionByZeroMessage(op));
+  }
+  if (status == DecimalBinaryOpStatus::kOverflow) {
+    VELOX_USER_FAIL("{}", decimalOverflowMessage(op));
+  }
+}
+
 /// Column of \p outputType with \p size rows, all null (e.g. NULL scalar
 /// operand).
 std::unique_ptr<cudf::column> makeAllNullDecimalColumn(
@@ -94,11 +116,9 @@ std::unique_ptr<cudf::column> decimalBinaryOperation(
     int32_t outputPrecision,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  auto [result, didOverflow] = decimalBinaryOperationWithOverflow(
+  auto [result, status] = decimalBinaryOperationWithOverflow(
       lhs, rhs, op, outputType, outputPrecision, stream, mr);
-  if (didOverflow) {
-    VELOX_USER_FAIL("{}", decimalOverflowMessage(op));
-  }
+  checkDecimalBinaryOpStatus(status, op);
   return std::move(result);
 }
 
@@ -160,7 +180,7 @@ std::unique_ptr<cudf::column> decimalDivide(
       outputType, lhs.size(), cudf::mask_state::ALL_VALID, stream, mr);
 
   const __int128_t rescaleFactor = DecimalUtil::kPowersOfTen[aRescale];
-  VELOX_USER_CHECK(
+  checkDecimalBinaryOpStatus(
       detail::decimalDivideColumnColumn(
           inType,
           outType,
@@ -169,8 +189,7 @@ std::unique_ptr<cudf::column> decimalDivide(
           out->mutable_view(),
           rescaleFactor,
           stream),
-      "{}",
-      decimalOverflowMessage(cudf::binary_operator::DIV));
+      cudf::binary_operator::DIV);
 
   finalizeDivideOutputNullCount(*out, stream);
   return out;
@@ -206,7 +225,7 @@ std::unique_ptr<cudf::column> decimalDivide(
   const auto outType = outputType.id();
   checkDecimalDivideTypes(inType, outType);
 
-  VELOX_USER_CHECK(
+  checkDecimalBinaryOpStatus(
       detail::decimalDivideColumnScalar(
           inType,
           outType,
@@ -215,8 +234,7 @@ std::unique_ptr<cudf::column> decimalDivide(
           out->mutable_view(),
           DecimalUtil::kPowersOfTen[aRescale],
           stream),
-      "{}",
-      decimalOverflowMessage(cudf::binary_operator::DIV));
+      cudf::binary_operator::DIV);
 
   finalizeDivideOutputNullCount(*out, stream);
   return out;
@@ -253,7 +271,7 @@ std::unique_ptr<cudf::column> decimalDivide(
   checkDecimalDivideTypes(inType, outType);
 
   const __int128_t rescaleFactor = DecimalUtil::kPowersOfTen[aRescale];
-  VELOX_USER_CHECK(
+  checkDecimalBinaryOpStatus(
       detail::decimalDivideScalarColumn(
           inType,
           outType,
@@ -262,8 +280,7 @@ std::unique_ptr<cudf::column> decimalDivide(
           out->mutable_view(),
           rescaleFactor,
           stream),
-      "{}",
-      decimalOverflowMessage(cudf::binary_operator::DIV));
+      cudf::binary_operator::DIV);
 
   finalizeDivideOutputNullCount(*out, stream);
   return out;

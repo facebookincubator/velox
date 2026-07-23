@@ -30,8 +30,9 @@ namespace facebook::velox::cudf_velox {
 /**
  * @brief Element-wise decimal division of two columns.
  *
- * Runs the GPU divide into outputType. The kernel propagates input nulls and
- * nulls rows where the divisor is zero.
+ * Runs the GPU divide into outputType. The kernel propagates input nulls. A
+ * zero divisor fails the batch with "Division by zero"; arithmetic overflow
+ * fails with "Decimal overflow in divide".
  *
  * @param lhs Left-hand decimal operand column (DECIMAL64 or DECIMAL128).
  * @param rhs Right-hand decimal operand column (same type as lhs).
@@ -54,8 +55,8 @@ std::unique_ptr<cudf::column> decimalDivide(
  * @brief Element-wise decimal division of a column by a scalar.
  *
  * If the scalar is invalid, returns an all-null column of outputType;
- * otherwise the kernel propagates lhs nulls and nulls rows when dividing by
- * zero.
+ * otherwise the kernel propagates lhs nulls. A zero divisor fails the batch
+ * with "Division by zero".
  *
  * @param lhs Left-hand decimal operand column.
  * @param rhs Right-hand decimal operand scalar.
@@ -78,7 +79,7 @@ std::unique_ptr<cudf::column> decimalDivide(
  * @brief Element-wise decimal division of a scalar by a column.
  *
  * Invalid lhs yields all-null output; otherwise the kernel propagates rhs
- * nulls and nulls rows where the divisor is zero.
+ * nulls. A zero divisor fails the batch with "Division by zero".
  *
  * @param lhs Left-hand decimal operand scalar.
  * @param rhs Right-hand decimal operand column.

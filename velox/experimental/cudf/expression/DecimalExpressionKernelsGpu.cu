@@ -61,14 +61,38 @@ constexpr __int128_t kLongDecimalPowerOfTen38 = 1'000'000'000'000'000'000LL *
 constexpr __int128_t kLongDecimalMax = kLongDecimalPowerOfTen38 - 1;
 constexpr __int128_t kLongDecimalMin = -kLongDecimalPowerOfTen38 + 1;
 
-// Device threads cannot throw, so overflow is recorded in a single per-launch
+// Device threads cannot throw, so failures are recorded in a single per-launch
 // device flag that launchOverflowChecked reports back to the host. Presto /
-// Velox CPU decimal arithmetic is fail-fast (any overflow fails the whole
-// expression), so every overflowing row simply ORs into one shared flag and no
-// per-row (O(n)) overflow column is required. Shared by the divide and
-// ADD/SUB/MUL/MOD kernels.
+// Velox CPU decimal arithmetic is fail-fast (any failing row fails the whole
+// expression), so every failing row simply ORs its status bit into one shared
+// flag and no per-row (O(n)) status column is required. Shared by the divide
+// and ADD/SUB/MUL/MOD kernels.
+//
+// Distinct bits keep division-by-zero separate from overflow (matching
+// cudf::errc OVERFLOW=1 / DIVISION_BY_ZERO=2), letting the host raise the
+// matching error kind.
+constexpr int32_t kDecimalOverflowBit = 1;
+constexpr int32_t kDecimalDivByZeroBit = 2;
+
 __device__ inline void markDecimalOverflow(int32_t* overflowFlag) {
-  atomicOr(overflowFlag, 1);
+  atomicOr(overflowFlag, kDecimalOverflowBit);
+}
+
+__device__ inline void markDecimalDivByZero(int32_t* overflowFlag) {
+  atomicOr(overflowFlag, kDecimalDivByZeroBit);
+}
+
+// Maps the raw device overflowFlag bits to a DecimalBinaryOpStatus. Division by
+// zero takes precedence over overflow to match Velox CPU, which validates the
+// divisor before the arithmetic.
+DecimalBinaryOpStatus toDecimalBinaryOpStatus(int32_t overflowFlag) {
+  if (overflowFlag & kDecimalDivByZeroBit) {
+    return DecimalBinaryOpStatus::kDivisionByZero;
+  }
+  if (overflowFlag & kDecimalOverflowBit) {
+    return DecimalBinaryOpStatus::kOverflow;
+  }
+  return DecimalBinaryOpStatus::kOk;
 }
 
 // Extract absolute value in unsigned space. Signed negation of INT128_MIN is
@@ -172,7 +196,12 @@ struct DivideFunctor {
   int32_t* overflowFlag;
 
   __device__ void operator()(cudf::size_type idx) const {
-    if (lhs.is_null(idx) || rhs.is_null(idx) || rhs.element<InT>(idx) == 0) {
+    if (lhs.is_null(idx) || rhs.is_null(idx)) {
+      out.set_null(idx);
+      return;
+    }
+    if (rhs.element<InT>(idx) == 0) {
+      markDecimalDivByZero(overflowFlag);
       out.set_null(idx);
       return;
     }
@@ -193,7 +222,12 @@ struct DivideLhsScalarFunctor {
   int32_t* overflowFlag;
 
   __device__ void operator()(cudf::size_type idx) const {
-    if (rhs.is_null(idx) || rhs.element<InColT>(idx) == 0) {
+    if (rhs.is_null(idx)) {
+      out.set_null(idx);
+      return;
+    }
+    if (rhs.element<InColT>(idx) == 0) {
+      markDecimalDivByZero(overflowFlag);
       out.set_null(idx);
       return;
     }
@@ -211,7 +245,12 @@ struct DivideRhsScalarFunctor {
   int32_t* overflowFlag;
 
   __device__ void operator()(cudf::size_type idx) const {
-    if (lhs.is_null(idx) || rhsValue == 0) {
+    if (lhs.is_null(idx)) {
+      out.set_null(idx);
+      return;
+    }
+    if (rhsValue == 0) {
+      markDecimalDivByZero(overflowFlag);
       out.set_null(idx);
       return;
     }
@@ -220,24 +259,24 @@ struct DivideRhsScalarFunctor {
   }
 };
 
-// Runs buildOp(flag) across [0, size) rows behind a single per-launch overflow
-// flag and reports whether any row overflowed. Shared by the divide and
+// Runs buildOp(flag) across [0, size) rows behind a single per-launch
+// overflowFlag and reports the raw flag bits. Shared by the divide and
 // ADD/SUB/MUL/MOD kernels; buildOp receives the device flag pointer and returns
-// the per-row functor. Returns true if any row set the overflow flag.
+// the per-row functor. Returns the raw overflowFlag bits (kDecimal*Bit).
 template <typename BuildOp>
-bool launchOverflowChecked(
+int32_t launchOverflowChecked(
     cudf::size_type size,
     BuildOp buildOp,
     rmm::cuda_stream_view stream) {
   if (size == 0) {
-    return false;
+    return 0;
   }
   rmm::device_scalar<int32_t> overflowFlag{0, stream};
   auto op = buildOp(overflowFlag.data());
   cub::DeviceFor::ForEachN(
       cuda::counting_iterator<cudf::size_type>{0}, size, op, stream.value());
   CUDF_CUDA_TRY(cudaGetLastError());
-  return overflowFlag.value(stream) != 0;
+  return overflowFlag.value(stream);
 }
 
 } // namespace
@@ -259,24 +298,24 @@ struct divideColumnColumnKernel {
 
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
-  bool operator()() const {
+  DecimalBinaryOpStatus operator()() const {
     auto lhsDev = cudf::column_device_view::create(lhs, stream);
     auto rhsDev = cudf::column_device_view::create(rhs, stream);
     auto outDev = cudf::mutable_column_device_view::create(out, stream);
-    return !launchOverflowChecked(
+    return toDecimalBinaryOpStatus(launchOverflowChecked(
         lhs.size(),
         [&](int32_t* overflowFlag) {
           return DivideFunctor<InT, OutT>{
               *lhsDev, *rhsDev, *outDev, rescaleFactor, overflowFlag};
         },
-        stream);
+        stream));
   }
 
   template <typename InT, typename OutT>
     requires(!ValidDecimalDivideStorageTypes<InT, OutT>)
-  bool operator()() const {
+  DecimalBinaryOpStatus operator()() const {
     CUDF_FAIL("Invalid types for decimal divide");
-    return false;
+    return DecimalBinaryOpStatus::kOverflow;
   }
 };
 
@@ -289,23 +328,23 @@ struct divideColumnScalarKernel {
 
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
-  bool operator()() const {
+  DecimalBinaryOpStatus operator()() const {
     auto lhsDev = cudf::column_device_view::create(lhs, stream);
     auto outDev = cudf::mutable_column_device_view::create(out, stream);
-    return !launchOverflowChecked(
+    return toDecimalBinaryOpStatus(launchOverflowChecked(
         lhs.size(),
         [&](int32_t* overflowFlag) {
           return DivideRhsScalarFunctor<InT, OutT>{
               *lhsDev, rhsValue, *outDev, rescaleFactor, overflowFlag};
         },
-        stream);
+        stream));
   }
 
   template <typename InT, typename OutT>
     requires(!ValidDecimalDivideStorageTypes<InT, OutT>)
-  bool operator()() const {
+  DecimalBinaryOpStatus operator()() const {
     CUDF_FAIL("Invalid types for decimal divide");
-    return false;
+    return DecimalBinaryOpStatus::kOverflow;
   }
 };
 
@@ -318,27 +357,27 @@ struct divideScalarColumnKernel {
 
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
-  bool operator()() const {
+  DecimalBinaryOpStatus operator()() const {
     auto rhsDev = cudf::column_device_view::create(rhs, stream);
     auto outDev = cudf::mutable_column_device_view::create(out, stream);
-    return !launchOverflowChecked(
+    return toDecimalBinaryOpStatus(launchOverflowChecked(
         rhs.size(),
         [&](int32_t* overflowFlag) {
           return DivideLhsScalarFunctor<InT, OutT>{
               lhsValue, *rhsDev, *outDev, rescaleFactor, overflowFlag};
         },
-        stream);
+        stream));
   }
 
   template <typename InT, typename OutT>
     requires(!ValidDecimalDivideStorageTypes<InT, OutT>)
-  bool operator()() const {
+  DecimalBinaryOpStatus operator()() const {
     CUDF_FAIL("Invalid types for decimal divide");
-    return false;
+    return DecimalBinaryOpStatus::kOverflow;
   }
 };
 
-bool decimalDivideColumnColumn(
+DecimalBinaryOpStatus decimalDivideColumnColumn(
     cudf::type_id inType,
     cudf::type_id outType,
     const cudf::column_view& lhs,
@@ -352,7 +391,7 @@ bool decimalDivideColumnColumn(
       divideColumnColumnKernel{lhs, rhs, out, rescaleFactor, stream});
 }
 
-bool decimalDivideColumnScalar(
+DecimalBinaryOpStatus decimalDivideColumnScalar(
     cudf::type_id inType,
     cudf::type_id outType,
     const cudf::column_view& lhs,
@@ -366,7 +405,7 @@ bool decimalDivideColumnScalar(
       divideColumnScalarKernel{lhs, rhsValue, out, rescaleFactor, stream});
 }
 
-bool decimalDivideScalarColumn(
+DecimalBinaryOpStatus decimalDivideScalarColumn(
     cudf::type_id inType,
     cudf::type_id outType,
     __int128_t lhsValue,
@@ -397,10 +436,10 @@ __int128_t getDecimalScalarValue(
 
 // ---------------------------------------------------------------------------
 // Overflow-checked decimal binary-op kernels (ADD / SUB / MUL / MOD).
-// Division overflow is handled by the detail:: kernels above; this path covers
-// the remaining fixed-point arithmetic. Overflow is tracked with a single
-// device-side flag (atomicOr) to match the fail-fast semantics of Presto /
-// Velox CPU decimal arithmetic.
+// Decimal DIV uses the detail:: kernels above (including division-by-zero);
+// this path covers the remaining fixed-point arithmetic. Failures are tracked
+// with a single device-side overflowFlag (atomicOr) to match the fail-fast
+// semantics of Presto / Velox CPU decimal arithmetic.
 // ---------------------------------------------------------------------------
 namespace {
 
@@ -470,6 +509,16 @@ __device__ void evalDecimalBinaryRow(
     OutRep* out,
     int32_t idx,
     int32_t* overflowFlag) {
+  // Modulo by a zero divisor is a distinct error, checked before the operand
+  // rescale so it takes precedence over a later overflow (matching Velox CPU,
+  // which validates the divisor before rescaling). rhs is always the divisor
+  // for MOD across all operand orderings.
+  if (op == cudf::binary_operator::MOD && rhsDec.value() == Rep{0}) {
+    markDecimalDivByZero(overflowFlag);
+    out[idx] = OutRep{0};
+    return;
+  }
+
   // ADD/SUB/MOD require both operands at a common scale (the output scale).
   // cuDF's *_overflow operators reach that scale via fixed_point::rescaled,
   // whose widening multiply is unchecked and can silently overflow Rep for
@@ -493,7 +542,11 @@ __device__ void evalDecimalBinaryRow(
 
   auto opResult = applyCheckedBinOp<Rep>(op, lhsDec, rhsDec);
   if (!opResult.has_value()) {
-    markDecimalOverflow(overflowFlag);
+    if (opResult.error() == errc::DIVISION_BY_ZERO) {
+      markDecimalDivByZero(overflowFlag);
+    } else {
+      markDecimalOverflow(overflowFlag);
+    }
     out[idx] = OutRep{0};
     return;
   }
@@ -609,7 +662,7 @@ struct DecimalBinaryRhsScalarFunctor {
 };
 
 template <typename InRep, typename OutRep>
-bool launchDecimalBinaryColColKernel(
+int32_t launchDecimalBinaryColColKernel(
     cudf::column_view const& lhs,
     cudf::column_view const& rhs,
     cudf::mutable_column_view out,
@@ -640,7 +693,7 @@ bool launchDecimalBinaryColColKernel(
 }
 
 template <typename InRep, typename OutRep>
-bool launchDecimalBinaryRhsScalarKernel(
+int32_t launchDecimalBinaryRhsScalarKernel(
     cudf::column_view const& lhs,
     InRep rhsValue,
     numeric::scale_type rhsScale,
@@ -671,7 +724,7 @@ bool launchDecimalBinaryRhsScalarKernel(
 }
 
 template <typename InRep, typename OutRep>
-bool launchDecimalBinaryLhsScalarKernel(
+int32_t launchDecimalBinaryLhsScalarKernel(
     InRep lhsValue,
     numeric::scale_type lhsScale,
     cudf::column_view const& rhs,
@@ -720,7 +773,8 @@ std::unique_ptr<cudf::column> makeResultColumn(
 }
 
 template <typename InRep, typename OutRep>
-std::pair<std::unique_ptr<cudf::column>, bool> decimalBinaryOperationColColImpl(
+std::pair<std::unique_ptr<cudf::column>, int32_t>
+decimalBinaryOperationColColImpl(
     cudf::column_view const& lhs,
     cudf::column_view const& rhs,
     cudf::binary_operator op,
@@ -734,12 +788,12 @@ std::pair<std::unique_ptr<cudf::column>, bool> decimalBinaryOperationColColImpl(
   auto result = makeResultColumn(
       lhs.size(), outputType, std::move(nullMask), nullCount, stream, mr);
 
-  bool const didOverflow = launchDecimalBinaryColColKernel<InRep, OutRep>(
+  int32_t const statusFlag = launchDecimalBinaryColColKernel<InRep, OutRep>(
       lhs, rhs, result->mutable_view(), op, outputPrecision, stream);
-  return {std::move(result), didOverflow};
+  return {std::move(result), statusFlag};
 }
 
-std::pair<std::unique_ptr<cudf::column>, bool>
+std::pair<std::unique_ptr<cudf::column>, int32_t>
 dispatchDecimalBinaryOperationColCol(
     cudf::column_view const& lhs,
     cudf::column_view const& rhs,
@@ -774,7 +828,7 @@ InRep getTypedDecimalScalarValue(
 
 } // namespace
 
-std::pair<std::unique_ptr<cudf::column>, bool>
+std::pair<std::unique_ptr<cudf::column>, DecimalBinaryOpStatus>
 decimalBinaryOperationWithOverflow(
     const cudf::column_view& lhs,
     const cudf::column_view& rhs,
@@ -784,11 +838,12 @@ decimalBinaryOperationWithOverflow(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   validateDecimalBinaryOp(op);
-  return dispatchDecimalBinaryOperationColCol(
+  auto [result, statusFlag] = dispatchDecimalBinaryOperationColCol(
       lhs, rhs, op, outputType, outputPrecision, stream, mr);
+  return {std::move(result), toDecimalBinaryOpStatus(statusFlag)};
 }
 
-std::pair<std::unique_ptr<cudf::column>, bool>
+std::pair<std::unique_ptr<cudf::column>, DecimalBinaryOpStatus>
 decimalBinaryOperationWithOverflow(
     const cudf::column_view& lhs,
     const cudf::scalar& rhs,
@@ -801,7 +856,7 @@ decimalBinaryOperationWithOverflow(
   if (!rhs.is_valid(stream)) {
     auto result = cudf::make_fixed_width_column(
         outputType, lhs.size(), cudf::mask_state::ALL_NULL, stream, mr);
-    return {std::move(result), false};
+    return {std::move(result), DecimalBinaryOpStatus::kOk};
   }
   auto nullMask = cudf::copy_bitmask(lhs, stream, mr);
   auto result = makeResultColumn(
@@ -812,12 +867,12 @@ decimalBinaryOperationWithOverflow(
       stream,
       mr);
 
-  bool didOverflow = false;
+  int32_t statusFlag = 0;
   auto const rhsScale = numeric::scale_type{rhs.type().scale()};
   if (lhs.type().id() == cudf::type_id::DECIMAL64) {
     auto const rhsValue = getTypedDecimalScalarValue<int64_t>(rhs, stream);
     if (outputType.id() == cudf::type_id::DECIMAL64) {
-      didOverflow = launchDecimalBinaryRhsScalarKernel<int64_t, int64_t>(
+      statusFlag = launchDecimalBinaryRhsScalarKernel<int64_t, int64_t>(
           lhs,
           rhsValue,
           rhsScale,
@@ -826,7 +881,7 @@ decimalBinaryOperationWithOverflow(
           outputPrecision,
           stream);
     } else {
-      didOverflow = launchDecimalBinaryRhsScalarKernel<int64_t, __int128_t>(
+      statusFlag = launchDecimalBinaryRhsScalarKernel<int64_t, __int128_t>(
           lhs,
           rhsValue,
           rhsScale,
@@ -837,7 +892,7 @@ decimalBinaryOperationWithOverflow(
     }
   } else {
     auto const rhsValue = getTypedDecimalScalarValue<__int128_t>(rhs, stream);
-    didOverflow = launchDecimalBinaryRhsScalarKernel<__int128_t, __int128_t>(
+    statusFlag = launchDecimalBinaryRhsScalarKernel<__int128_t, __int128_t>(
         lhs,
         rhsValue,
         rhsScale,
@@ -846,10 +901,10 @@ decimalBinaryOperationWithOverflow(
         outputPrecision,
         stream);
   }
-  return {std::move(result), didOverflow};
+  return {std::move(result), toDecimalBinaryOpStatus(statusFlag)};
 }
 
-std::pair<std::unique_ptr<cudf::column>, bool>
+std::pair<std::unique_ptr<cudf::column>, DecimalBinaryOpStatus>
 decimalBinaryOperationWithOverflow(
     const cudf::scalar& lhs,
     const cudf::column_view& rhs,
@@ -862,7 +917,7 @@ decimalBinaryOperationWithOverflow(
   if (!lhs.is_valid(stream)) {
     auto result = cudf::make_fixed_width_column(
         outputType, rhs.size(), cudf::mask_state::ALL_NULL, stream, mr);
-    return {std::move(result), false};
+    return {std::move(result), DecimalBinaryOpStatus::kOk};
   }
   auto nullMask = cudf::copy_bitmask(rhs, stream, mr);
   auto result = makeResultColumn(
@@ -873,12 +928,12 @@ decimalBinaryOperationWithOverflow(
       stream,
       mr);
 
-  bool didOverflow = false;
+  int32_t statusFlag = 0;
   auto const lhsScale = numeric::scale_type{lhs.type().scale()};
   if (rhs.type().id() == cudf::type_id::DECIMAL64) {
     auto const lhsValue = getTypedDecimalScalarValue<int64_t>(lhs, stream);
     if (outputType.id() == cudf::type_id::DECIMAL64) {
-      didOverflow = launchDecimalBinaryLhsScalarKernel<int64_t, int64_t>(
+      statusFlag = launchDecimalBinaryLhsScalarKernel<int64_t, int64_t>(
           lhsValue,
           lhsScale,
           rhs,
@@ -887,7 +942,7 @@ decimalBinaryOperationWithOverflow(
           outputPrecision,
           stream);
     } else {
-      didOverflow = launchDecimalBinaryLhsScalarKernel<int64_t, __int128_t>(
+      statusFlag = launchDecimalBinaryLhsScalarKernel<int64_t, __int128_t>(
           lhsValue,
           lhsScale,
           rhs,
@@ -898,7 +953,7 @@ decimalBinaryOperationWithOverflow(
     }
   } else {
     auto const lhsValue = getTypedDecimalScalarValue<__int128_t>(lhs, stream);
-    didOverflow = launchDecimalBinaryLhsScalarKernel<__int128_t, __int128_t>(
+    statusFlag = launchDecimalBinaryLhsScalarKernel<__int128_t, __int128_t>(
         lhsValue,
         lhsScale,
         rhs,
@@ -907,7 +962,7 @@ decimalBinaryOperationWithOverflow(
         outputPrecision,
         stream);
   }
-  return {std::move(result), didOverflow};
+  return {std::move(result), toDecimalBinaryOpStatus(statusFlag)};
 }
 
 } // namespace facebook::velox::cudf_velox

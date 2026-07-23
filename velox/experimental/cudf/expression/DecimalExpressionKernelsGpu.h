@@ -29,11 +29,21 @@
 
 namespace facebook::velox::cudf_velox {
 
-// CUDA implementations that return {result, didOverflow}. Overflow is tracked
-// with a single device-side flag (set via atomicOr by any overflowing row),
-// matching the fail-fast semantics of Presto / Velox CPU decimal arithmetic;
-// no per-row (O(n)) overflow column is allocated.
-std::pair<std::unique_ptr<cudf::column>, bool>
+// Outcome of a checked decimal binary op. Division-by-zero (divide or modulo
+// with a zero divisor) is kept distinct from arithmetic overflow so the host
+// can raise the matching Velox/Presto CPU error (e.g. "Division by zero" /
+// "Modulus by zero" vs "Decimal overflow in ...").
+enum class DecimalBinaryOpStatus : int32_t {
+  kOk = 0,
+  kOverflow = 1,
+  kDivisionByZero = 2,
+};
+
+// CUDA implementations that return {result, status}. The status is tracked with
+// a single device-side flag (set via atomicOr by any failing row), matching the
+// fail-fast semantics of Presto / Velox CPU decimal arithmetic; no per-row
+// (O(n)) status column is allocated.
+std::pair<std::unique_ptr<cudf::column>, DecimalBinaryOpStatus>
 decimalBinaryOperationWithOverflow(
     const cudf::column_view& lhs,
     const cudf::column_view& rhs,
@@ -43,7 +53,7 @@ decimalBinaryOperationWithOverflow(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
-std::pair<std::unique_ptr<cudf::column>, bool>
+std::pair<std::unique_ptr<cudf::column>, DecimalBinaryOpStatus>
 decimalBinaryOperationWithOverflow(
     const cudf::column_view& lhs,
     const cudf::scalar& rhs,
@@ -53,7 +63,7 @@ decimalBinaryOperationWithOverflow(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
-std::pair<std::unique_ptr<cudf::column>, bool>
+std::pair<std::unique_ptr<cudf::column>, DecimalBinaryOpStatus>
 decimalBinaryOperationWithOverflow(
     const cudf::scalar& lhs,
     const cudf::column_view& rhs,
@@ -83,8 +93,8 @@ __int128_t getDecimalScalarValue(
  * @brief Dispatches a per-row device loop for fixed-point decimal division.
  *
  * Computes (lhs * rescaleFactor) / rhs with half-away-from-zero rounding on the
- * remainder, writing into out. Input nulls and zero divisors are written as
- * null in the output null mask.
+ * remainder, writing into out. Input nulls are written as null in the output
+ * null mask. A zero divisor sets the division-by-zero status bit.
  *
  * @param inType DECIMAL64 or DECIMAL128 input storage width selector.
  * @param outType DECIMAL64 or DECIMAL128 output storage width selector.
@@ -94,10 +104,9 @@ __int128_t getDecimalScalarValue(
  * @param rescaleFactor Fixed-point scale factor, typically
  * DecimalUtil::kPowersOfTen[aRescale] from the caller.
  * @param stream CUDA stream for kernel execution.
- * @return True on success; false if any row overflowed (caller should
- * VELOX_USER_FAIL).
+ * @return DecimalBinaryOpStatus: kOk, kOverflow, or kDivisionByZero.
  */
-bool decimalDivideColumnColumn(
+DecimalBinaryOpStatus decimalDivideColumnColumn(
     cudf::type_id inType,
     cudf::type_id outType,
     const cudf::column_view& lhs,
@@ -120,10 +129,9 @@ bool decimalDivideColumnColumn(
  * @param rescaleFactor Fixed-point scale factor, typically
  * DecimalUtil::kPowersOfTen[aRescale] from the caller.
  * @param stream CUDA stream for kernel execution.
- * @return True on success; false if any row overflowed (caller should
- * VELOX_USER_FAIL).
+ * @return DecimalBinaryOpStatus: kOk, kOverflow, or kDivisionByZero.
  */
-bool decimalDivideColumnScalar(
+DecimalBinaryOpStatus decimalDivideColumnScalar(
     cudf::type_id inType,
     cudf::type_id outType,
     const cudf::column_view& lhs,
@@ -146,10 +154,9 @@ bool decimalDivideColumnScalar(
  * @param rescaleFactor Fixed-point scale factor, typically
  * DecimalUtil::kPowersOfTen[aRescale] from the caller.
  * @param stream CUDA stream for kernel execution.
- * @return True on success; false if any row overflowed (caller should
- * VELOX_USER_FAIL).
+ * @return DecimalBinaryOpStatus: kOk, kOverflow, or kDivisionByZero.
  */
-bool decimalDivideScalarColumn(
+DecimalBinaryOpStatus decimalDivideScalarColumn(
     cudf::type_id inType,
     cudf::type_id outType,
     __int128_t lhsValue,
