@@ -35,9 +35,7 @@ RowTypePtr getConcatOutputType(
         "CudfBatchConcat expects a join plan node to have exactly 2 sources");
   } else {
     VELOX_CHECK_EQ(
-        numSources,
-        1,
-        "CudfBatchConcat expects a single-source plan node");
+        numSources, 1, "CudfBatchConcat expects a single-source plan node");
   }
   return planNode->sources()[0]->outputType();
 }

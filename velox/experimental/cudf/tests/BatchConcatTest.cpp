@@ -286,8 +286,8 @@ TEST_F(CudfBatchConcatTest, concatBeforeHashJoinProbe) {
   }
 
   // Build side: small dimension table.
-  auto buildVector = makeRowVector(
-      {"u_c0"}, {makeFlatVector<int64_t>({0, 1, 2})});
+  auto buildVector =
+      makeRowVector({"u_c0"}, {makeFlatVector<int64_t>({0, 1, 2})});
 
   createDuckDbTable("probe", probeVectors);
   createDuckDbTable("build", {buildVector});
@@ -295,20 +295,19 @@ TEST_F(CudfBatchConcatTest, concatBeforeHashJoinProbe) {
   auto generator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId joinNodeId;
 
-  auto plan =
-      PlanBuilder(generator)
-          .addNode([&](auto id, auto pool) {
-            return createFragmentedSource(probeVectors, generator);
-          })
-          .hashJoin(
-              {"c0"},
-              {"u_c0"},
-              PlanBuilder(generator).values({buildVector}).planNode(),
-              "",
-              {"c0", "c1"},
-              core::JoinType::kInner)
-          .capturePlanNodeId(joinNodeId)
-          .planNode();
+  auto plan = PlanBuilder(generator)
+                  .addNode([&](auto id, auto pool) {
+                    return createFragmentedSource(probeVectors, generator);
+                  })
+                  .hashJoin(
+                      {"c0"},
+                      {"u_c0"},
+                      PlanBuilder(generator).values({buildVector}).planNode(),
+                      "",
+                      {"c0", "c1"},
+                      core::JoinType::kInner)
+                  .capturePlanNodeId(joinNodeId)
+                  .planNode();
 
   auto task =
       AssertQueryBuilder(duckDbQueryRunner_)
