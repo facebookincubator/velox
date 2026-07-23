@@ -421,7 +421,10 @@ From integral types
 ^^^^^^^^^^^^^^^^^^^
 
 Casting integral value to timestamp type is allowed.
-The input value is treated as the number of seconds since the epoch (1970-01-01 00:00:00 UTC).
+The input value is treated as the number of seconds since the epoch
+(`1970-01-01 00:00:00 UTC`).
+
+
 Supported types are tinyint, smallint, integer and bigint.
 
 Valid example
@@ -430,14 +433,36 @@ Valid example
 
   SELECT cast(0 as timestamp); -- 1970-01-01 00:00:00
   SELECT cast(1727181032 as timestamp); -- 2024-09-24 12:30:32
+  SELECT cast(-1727181032 as timestamp); -- 1915-04-09 11:29:28
+
+Overflow examples
+
+::
+
   SELECT cast(9223372036855 as timestamp); -- 294247-01-10 04:00:54.775807
-  SELECT cast(-9223372036855 as timestamp); -- 290308-12-21 19:59:05.224192
+  SELECT cast(-9223372036855 as timestamp); -- -290308-12-21 19:59:05.224192
 
 From floating-point types
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
+*(ANSI compliant)*
+
 Casting from floating-point input to timestamp type is allowed.
-The input value is treated as the number of seconds since the epoch (1970-01-01 00:00:00 UTC) and converted to microseconds by truncating the fractional part.
+The input value is treated as the number of seconds since the epoch
+(`1970-01-01 00:00:00 UTC`) and converted to microseconds by truncating
+the fractional part.
+
+When ANSI mode is disabled:
+
+* overflow is allowed and the result is saturated to the minimum or maximum
+  representable timestamp
+* `NaN` and `Infinity` return NULL
+
+When ANSI mode is enabled:
+
+* overflow throws an error
+* malformed floating-point values such as `NaN` and `Infinity` throw an
+  error
 
 Valid examples
 
@@ -446,11 +471,21 @@ Valid examples
   SELECT cast(0.0 as timestamp); -- 1970-01-01 00:00:00
   SELECT cast(1727181032.0 as timestamp); -- 2024-09-24 12:30:32
   SELECT cast(-1727181032.0 as timestamp); -- 1915-04-09 11:29:28
-  SELECT cast(cast(9223372036855.999 as double) as timestamp); -- 294247-01-10 04:00:54.775807
-  SELECT cast(cast(-9223372036856.999 as double) as timestamp); -- -290308-12-21 19:59:05.224192
-  SELECT cast(cast(1.79769e+308 as double) as timestamp); -- 294247-01-10 04:00:54.775807
-  SELECT cast(cast('inf' as double) as timestamp); -- NULL
-  SELECT cast(cast('nan' as double) as timestamp); -- NULL
+
+Overflow examples
+
+::
+
+  SELECT cast(cast(9223372036855.999 as double) as timestamp); -- 294247-01-10 04:00:54.775807 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(cast(-9223372036856.999 as double) as timestamp); -- -290308-12-21 19:59:05.224192 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(cast(1.79769e+308 as double) as timestamp); -- 294247-01-10 04:00:54.775807 (ANSI OFF) / ERROR (ANSI ON)
+
+Malformed examples
+
+::
+
+  SELECT cast(cast('inf' as double) as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(cast('nan' as double) as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 From strings
 ^^^^^^^^^^^^
@@ -463,6 +498,28 @@ separators, fractional seconds, and leading or trailing spaces.
 
 Casting from invalid strings returns NULL when ANSI mode is disabled and throws
 an error when ANSI mode is enabled.
+
+Valid examples
+
+::
+
+  SELECT cast('1970-01-01' as timestamp); -- 1970-01-01 00:00:00
+  SELECT cast('2000-01-01 12:21:56' as timestamp); -- 2000-01-01 12:21:56
+  SELECT cast('2000-01-01T12:21:56' as timestamp); -- 2000-01-01 12:21:56
+  SELECT cast(' 2000-01-01 12:21:56 ' as timestamp); -- 2000-01-01 12:21:56
+  SELECT cast('2015-03-18 12:03:17.123' as timestamp); -- 2015-03-18 12:03:17.123
+
+Invalid examples
+
+::
+
+  SELECT cast('INVALID' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('2012-Oct-01' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+
+From strings
+^^^^^^^^^^^^
+
+*(ANSI compliant)*
 
 Valid examples
 
@@ -495,23 +552,6 @@ Valid examples
 
   SELECT cast(true as timestamp); -- 1970-01-01 00:00:00.000001
   SELECT cast(false as timestamp); -- 1970-01-01 00:00:00
-
-From TIMESTAMP_UTC
-^^^^^^^^^^^^^^^^^^
-
-Casting a TIMESTAMP_UTC to TIMESTAMP interprets the stored timestamp as a local
-timestamp in the session timezone and returns the corresponding UTC epoch. When
-the local timestamp falls in a DST spring-forward gap, Spark adjusts to the
-post-transition timestamp instead of throwing.
-
-Valid examples
-
-::
-
-  -- Stored epoch 1577808000 represents local 2019-12-31 16:00:00.
-  -- In America/Los_Angeles (UTC-8) that is 2020-01-01 00:00:00 UTC.
-  SELECT cast(TIMESTAMP_NTZ '2019-12-31 16:00:00' as timestamp); -- 2020-01-01 00:00:00
-
 Cast to TIMESTAMP UTC
 ---------------------
 
