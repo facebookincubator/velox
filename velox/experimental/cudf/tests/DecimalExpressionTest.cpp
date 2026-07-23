@@ -1643,6 +1643,10 @@ struct DecimalOverflowParam {
   std::vector<int128_t> aValues;
   std::vector<int128_t> bValues;
   std::string expectedMessage;
+  // Whether Velox CPU also fails on this case. Almost all overflow cases match
+  // CPU fail-fast semantics; the exception is INT128_MIN % -1, where the GPU
+  // mod_overflow path is stricter than the Velox CPU modulo (which returns 0).
+  bool cpuThrows{true};
 };
 
 class CudfDecimalOverflowTest
@@ -1665,8 +1669,23 @@ TEST_P(CudfDecimalOverflowTest, throwsOnOverflow) {
                   .project({param.op + " AS result"})
                   .planNode();
 
-  // cudf is registered in SetUp() and CPU fallback is disabled, so the
-  // expression is guaranteed to execute on the GPU.
+  // Velox CPU decimal arithmetic is fail-fast on overflow; the cuDF GPU path
+  // must match. Run the same expression on both engines and make the CPU/GPU
+  // success-vs-failure parity explicit, then assert the specific GPU error
+  // message. The exact overflow wording differs between the engines, so the CPU
+  // check only asserts that it fails (or succeeds, for the documented
+  // INT128_MIN % -1 divergence).
+  unregisterCudf();
+  if (param.cpuThrows) {
+    VELOX_ASSERT_THROW(
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool()),
+        "");
+  } else {
+    ASSERT_NO_THROW(facebook::velox::exec::test::AssertQueryBuilder(plan)
+                        .copyResults(pool()));
+  }
+  registerCudf();
   VELOX_ASSERT_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
       param.expectedMessage);
@@ -1755,7 +1774,9 @@ INSTANTIATE_TEST_SUITE_P(
             {1},
             "Decimal overflow in divide"},
         // mod_overflow checks division_overflow on raw values before computing
-        // the remainder; INT128_MIN / -1 overflows int128 division.
+        // the remainder; INT128_MIN / -1 overflows int128 division. This is a
+        // GPU-only overflow: Velox CPU modulo returns 0 for INT128_MIN % -1, so
+        // cpuThrows is false to document the divergence.
         DecimalOverflowParam{
             "modulo",
             "a % b",
@@ -1763,7 +1784,8 @@ INSTANTIATE_TEST_SUITE_P(
             DECIMAL(38, 0),
             {std::numeric_limits<int128_t>::min()},
             {-1},
-            "Decimal overflow in modulo"},
+            "Decimal overflow in modulo",
+            /*cpuThrows=*/false},
         // Mixed-scale ADD/SUB/MOD: the scale-0 operand is rescaled to the
         // output scale (10) before the kernel op, and 9e37 * 1e10 = 9e47
         // overflows int128. This exercises the overflow-checked pre-kernel
@@ -2124,8 +2146,22 @@ TEST_F(CudfDecimalTest, decimalMixedScaleOverflowCpuGpuParity) {
 
 // Modulo by a zero divisor must fail fast with a distinct "Modulus by zero"
 // error, kept separate from the decimal-overflow status, matching Velox CPU.
-// Covers column and scalar divisors in both operand positions.
+// Covers column and scalar divisors in both operand positions and asserts the
+// CPU and GPU paths raise the same error kind.
 TEST_F(CudfDecimalTest, decimalModuloByZero) {
+  auto assertCpuAndGpuThrow = [&](const auto& plan) {
+    unregisterCudf();
+    VELOX_ASSERT_USER_THROW(
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool()),
+        "Modulus by zero");
+    registerCudf();
+    VELOX_ASSERT_USER_THROW(
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool()),
+        "Modulus by zero");
+  };
+
   auto input = makeRowVector(
       {"a", "b"},
       {
@@ -2135,38 +2171,124 @@ TEST_F(CudfDecimalTest, decimalModuloByZero) {
   std::vector<RowVectorPtr> vectors = {input};
 
   // Column % column with a zero divisor row.
-  VELOX_ASSERT_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(vectors)
-              .project({"a % b AS result"})
-              .planNode())
-          .copyResults(pool()),
-      "Modulus by zero");
+  assertCpuAndGpuThrow(exec::test::PlanBuilder()
+                           .values(vectors)
+                           .project({"a % b AS result"})
+                           .planNode());
 
   auto colOnly = makeRowVector(
       {"a"}, {makeFlatVector<int64_t>({700, 100, 500}, DECIMAL(10, 2))});
   std::vector<RowVectorPtr> colVectors = {colOnly};
 
   // Column % zero scalar (rhs-scalar path).
-  VELOX_ASSERT_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(colVectors)
-              .project({"a % CAST('0.00' AS DECIMAL(10, 2)) AS result"})
-              .planNode())
-          .copyResults(pool()),
-      "Modulus by zero");
+  assertCpuAndGpuThrow(
+      exec::test::PlanBuilder()
+          .values(colVectors)
+          .project({"a % CAST('0.00' AS DECIMAL(10, 2)) AS result"})
+          .planNode());
 
   // Nonzero scalar % column containing a zero (lhs-scalar path).
+  assertCpuAndGpuThrow(
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project({"CAST('9.00' AS DECIMAL(10, 2)) % b AS result"})
+          .planNode());
+}
+
+// The overflow status is a single batch-wide device flag updated with atomicOr
+// by every failing row. A single-row input never exercises concurrent updates,
+// so this uses a multi-block input (> 1 thread block) with several overflowing
+// rows interleaved with non-overflowing and null rows, including an overflowing
+// row under a null mask. The batch must still fail fast, matching Velox CPU.
+TEST_F(CudfDecimalTest, decimalMultiRowOverflowFlag) {
+  constexpr int32_t kRows = 2048;
+  const auto big = 9 * DecimalUtil::kPowersOfTen[37];
+
+  // Most rows are small and safe; a scattered subset overflows (9e37 + 9e37
+  // wraps int128), and some overflowing rows are also null. If null rows were
+  // evaluated they would overflow too, guarding against nulls masking failures.
+  auto aValues = std::vector<int128_t>(kRows, int128_t{1});
+  auto bValues = std::vector<int128_t>(kRows, int128_t{1});
+  std::vector<bool> nulls(kRows, false);
+  for (int32_t i = 0; i < kRows; ++i) {
+    if (i % 128 == 0) {
+      aValues[i] = big;
+      bValues[i] = big;
+      // Mark a subset of the overflowing rows null.
+      nulls[i] = (i % 256 == 0);
+    }
+  }
+
+  auto a = makeFlatVector<int128_t>(
+      kRows,
+      [&](auto row) { return aValues[row]; },
+      [&](auto row) { return nulls[row]; },
+      DECIMAL(38, 0));
+  auto b = makeFlatVector<int128_t>(
+      kRows, [&](auto row) { return bValues[row]; }, nullptr, DECIMAL(38, 0));
+  auto input = makeRowVector({"a", "b"}, {a, b});
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a + b AS result"})
+                  .planNode();
+
+  // CPU and GPU must both fail fast on the batch.
+  unregisterCudf();
   VELOX_ASSERT_THROW(
-      facebook::velox::exec::test::AssertQueryBuilder(
-          exec::test::PlanBuilder()
-              .values(vectors)
-              .project({"CAST('9.00' AS DECIMAL(10, 2)) % b AS result"})
-              .planNode())
-          .copyResults(pool()),
-      "Modulus by zero");
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
+      "");
+  registerCudf();
+  VELOX_ASSERT_THROW(
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
+      "Decimal overflow in add");
+}
+
+// Isolates divide boundary rounding (ties round half away from zero, matching
+// DecimalUtil::divideWithRoundUp) for both decimal storage widths: DECIMAL64
+// (int64-backed) and DECIMAL128 (int128-backed). Verified against Velox CPU.
+TEST_F(CudfDecimalTest, decimalDivideBoundaryRoundingStorageWidths) {
+  // DECIMAL64 path: int64-backed inputs and output. Values chosen so the
+  // rescaled division lands exactly on a .5 tie in both signs, e.g.
+  // 1 / 2 = 0.5 -> rounds away from zero, and 3 / 2 = 1.5 -> 2 at scale 0.
+  auto d64 = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>({1, -1, 3, -3, 5}, DECIMAL(18, 0)),
+          makeFlatVector<int64_t>({2, 2, 2, 2, 2}, DECIMAL(18, 0)),
+      });
+
+  // DECIMAL128 path: int128-backed inputs and output, same tie structure at a
+  // large magnitude that only fits in 128 bits.
+  const auto bigOdd = 2 * DecimalUtil::kPowersOfTen[30] + 1; // ...001, odd
+  auto d128 = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int128_t>(
+              {bigOdd, -bigOdd, int128_t{1}, int128_t{-1}}, DECIMAL(38, 0)),
+          makeFlatVector<int128_t>(
+              {int128_t{2}, int128_t{2}, int128_t{2}, int128_t{2}},
+              DECIMAL(38, 0)),
+      });
+
+  for (const auto& input : {d64, d128}) {
+    std::vector<RowVectorPtr> vectors = {input};
+    auto plan = exec::test::PlanBuilder()
+                    .values(vectors)
+                    .project({"a / b AS result"})
+                    .planNode();
+
+    unregisterCudf();
+    auto cpuResult =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
+    registerCudf();
+    auto gpuResult =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
+    facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+  }
 }
 
 } // namespace
