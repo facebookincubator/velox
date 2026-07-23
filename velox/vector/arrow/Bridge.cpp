@@ -401,20 +401,22 @@ const char* exportArrowFormatStr(
     case TypeKind::DOUBLE:
       return "g"; // float64
     // We always map VARCHAR and VARBINARY to the "small" version (lower case
-    // format string), which uses 32 bit offsets.
+    // format string).
     case TypeKind::VARCHAR:
       if (options.exportToStringView) {
         return "vu";
       }
-      return "u"; // utf-8 string
+      return options.exportToLargeVarTypes ? "U" : "u"; // utf-8 string
     case TypeKind::VARBINARY:
       if (options.exportVarbinaryAsString) {
-        return "u"; // utf-8 string (binary payload)
+        return options.exportToLargeVarTypes
+            ? "U"
+            : "u"; // utf-8 string (binary payload)
       }
       if (options.exportToStringView) {
         return "vz";
       }
-      return "z"; // binary
+      return options.exportToLargeVarTypes ? "Z" : "z"; // binary
     case TypeKind::UNKNOWN:
       return "n"; // NullType
     case TypeKind::TIMESTAMP:
@@ -991,6 +993,7 @@ void exportViews(
   });
 }
 
+template <typename TOffsets = int32_t>
 void exportStrings(
     const FlatVector<StringView>& vec,
     const Selection& rows,
@@ -1006,10 +1009,10 @@ void exportStrings(
   });
   holder.setBuffer(2, AlignedBuffer::allocate<char>(bufSize, pool));
   char* rawBuffer = holder.getBufferAs<char>(2);
-  VELOX_CHECK_LT(bufSize, std::numeric_limits<int32_t>::max());
+  VELOX_CHECK_LT(bufSize, std::numeric_limits<TOffsets>::max());
   auto offsetLen = checkedPlus<size_t>(out.length, 1);
-  holder.setBuffer(1, AlignedBuffer::allocate<int32_t>(offsetLen, pool));
-  auto* rawOffsets = holder.getBufferAs<int32_t>(1);
+  holder.setBuffer(1, AlignedBuffer::allocate<TOffsets>(offsetLen, pool));
+  auto* rawOffsets = holder.getBufferAs<TOffsets>(1);
   *rawOffsets = 0;
   rows.apply([&](vector_size_t i) {
     auto newOffset = *rawOffsets;
@@ -1058,13 +1061,21 @@ void exportFlat(
             out,
             pool,
             holder);
-      } else
+      } else if (options.exportToLargeVarTypes) {
+        exportStrings<int64_t>(
+            *vec.asUnchecked<FlatVector<StringView>>(),
+            rows,
+            out,
+            pool,
+            holder);
+      } else {
         exportStrings(
             *vec.asUnchecked<FlatVector<StringView>>(),
             rows,
             out,
             pool,
             holder);
+      }
       break;
     default:
       VELOX_NYI(

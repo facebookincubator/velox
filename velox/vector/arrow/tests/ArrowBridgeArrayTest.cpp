@@ -49,7 +49,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
-  template <typename T>
+  template <typename T, typename TOffsets = int32_t>
   void testFlatVector(
       const std::vector<std::optional<T>>& inputData,
       const TypePtr& type = CppToType<T>::create()) {
@@ -57,7 +57,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     ArrowArray arrowArray;
     velox::exportToArrow(flatVector, arrowArray, pool_.get(), options_);
 
-    validateArray(inputData, arrowArray);
+    validateArray<T, TOffsets>(inputData, arrowArray);
 
     arrowArray.release(&arrowArray);
     EXPECT_EQ(nullptr, arrowArray.release);
@@ -135,7 +135,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
   // Helper functions for verification.
 
-  template <typename T>
+  template <typename T, typename TOffsets = int32_t>
   void validateArray(
       const std::vector<std::optional<T>>& inputData,
       const ArrowArray& arrowArray) {
@@ -155,7 +155,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
     // Validate array contents.
     if constexpr (isString) {
-      validateStringArray(inputData, arrowArray);
+      validateStringArray<T, TOffsets>(inputData, arrowArray);
     } else if constexpr (isUnknownType) {
       validateNullArray(arrowArray);
     } else {
@@ -206,7 +206,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     }
   }
 
-  template <typename T>
+  template <typename T, typename TOffsets = int32_t>
   void validateStringArray(
       const std::vector<std::optional<T>>& inputData,
       const ArrowArray& arrowArray) {
@@ -215,7 +215,8 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
     const uint64_t* nulls = static_cast<const uint64_t*>(arrowArray.buffers[0]);
     const char* values = static_cast<const char*>(arrowArray.buffers[2]);
-    const int32_t* offsets = static_cast<const int32_t*>(arrowArray.buffers[1]);
+    const TOffsets* offsets =
+        static_cast<const TOffsets*>(arrowArray.buffers[1]);
 
     EXPECT_NE(values, nullptr);
     EXPECT_NE(offsets, nullptr);
@@ -610,7 +611,7 @@ TEST_F(ArrowBridgeArrayExportTest, flatTime) {
 }
 
 TEST_F(ArrowBridgeArrayExportTest, flatString) {
-  testFlatVector<std::string>({
+  const std::vector<std::optional<std::string>> inputData = {
       "my string",
       "another slightly longer string",
       std::nullopt,
@@ -620,10 +621,19 @@ TEST_F(ArrowBridgeArrayExportTest, flatString) {
       "a",
       "another even longer string to ensure it's for sure not stored inline!!!",
       std::nullopt,
-  });
+  };
+
+  testFlatVector<std::string, int32_t>(inputData);
+
+  options_.exportToLargeVarTypes = true;
+  testFlatVector<std::string, int64_t>(inputData);
 
   // Empty vector.
-  testFlatVector<std::string>({});
+  options_.exportToLargeVarTypes = false;
+  testFlatVector<std::string, int32_t>({});
+
+  options_.exportToLargeVarTypes = true;
+  testFlatVector<std::string, int64_t>({});
 }
 
 TEST_F(ArrowBridgeArrayExportTest, rowVector) {
