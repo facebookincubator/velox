@@ -771,7 +771,7 @@ std::string CompileCtx::formatLeafAccess(
 std::string CompileCtx::buildElementwiseCall(
     const Metadata& meta,
     NodeCP node,
-    const KernelOperation& /*op*/,
+    const KernelOperation& op,
     const std::vector<std::string>& argTexts) {
   const auto& ew = *meta.elementwise;
   std::stringstream ss;
@@ -780,7 +780,7 @@ std::string CompileCtx::buildElementwiseCall(
       ? presentTemplateParams(meta, node)
       : std::string();
   if (!meta.typeTemplateParams.empty() || meta.hasDtypeTemplateParam ||
-      !ewPresenceParams.empty()) {
+      !meta.templateAttrs.empty() || !ewPresenceParams.empty()) {
     ss << "<";
     const auto& nodeInputs = node->inputs();
     bool firstTp = true;
@@ -795,9 +795,20 @@ std::string CompileCtx::buildElementwiseCall(
       if (!firstTp) {
         ss << ", ";
       }
+      firstTp = false;
       const auto* dtypeAttr = node->tryGetAttribute("dtype");
       TORCH_CHECK(dtypeAttr, node->target(), ": missing dtype attribute");
       ss << cudaTypeFromDtype(*dtypeAttr);
+    }
+    for (const auto& attrName : meta.templateAttrs) {
+      if (!firstTp) {
+        ss << ", ";
+      }
+      firstTp = false;
+      const auto* attr = node->tryGetAttribute(attrName);
+      TORCH_CHECK(
+          attr, node->target(), ": missing template attribute ", attrName);
+      ss << constantToString(attr->value);
     }
     if (!ewPresenceParams.empty()) {
       if (!firstTp) {
@@ -826,6 +837,17 @@ std::string CompileCtx::buildElementwiseCall(
     }
     first = false;
     ss << arg;
+  }
+  if (ew.hasOutputArg) {
+    TORCH_CHECK(
+        currentRootOutput_,
+        "hasOutputArg requires a root output; none set for ",
+        node->target());
+    if (!first) {
+      ss << ", ";
+    }
+    first = false;
+    ss << param(currentRootOutput_, op);
   }
   if (ew.hasBlockInfo) {
     if (!first) {
@@ -1079,6 +1101,10 @@ void CompileCtx::elementwiseExpr(
     const std::vector<ValueCP>& inputs,
     bool slowPath) {
   addInclude("velox/experimental/torchwave/Elementwise.cuh");
+  // 'value' is the subgraph root output the loop stores at 'idx'; record it so
+  // buildElementwiseCall can pass it to ops with hasOutputArg (e.g.
+  // index_select needs the enclosing expression's output shape).
+  currentRootOutput_ = value;
   std::unordered_set<ValueCP> inputSet(inputs.begin(), inputs.end());
   inputSet.erase(value);
   elementwiseExprImpl(value, resultName, inputSet, inputs, op, slowPath);

@@ -433,6 +433,10 @@ class HashJoinProbeAdapter : public CudfHashJoinBaseAdapter {
         std::dynamic_pointer_cast<const core::HashJoinNode>(planNode);
 
     std::vector<std::unique_ptr<exec::Operator>> result;
+    if (CudfConfig::getInstance().concatOptimizationEnabled) {
+      result.push_back(
+          std::make_unique<CudfBatchConcat>(operatorId, ctx, joinPlanNode));
+    }
     result.push_back(
         std::make_unique<CudfHashJoinProbe>(operatorId, ctx, joinPlanNode));
     return result;

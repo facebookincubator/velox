@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/Task.h"
+#include "folly/OperationCancelled.h"
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
@@ -1873,7 +1874,11 @@ class TaskPauseTest : public TaskTest {
       try {
         while (cursor_->moveNext()) {
         };
-      } catch (VeloxRuntimeError&) {
+      } catch (const VeloxRuntimeError&) {
+        // Task errored.
+      } catch (const folly::OperationCancelled&) {
+        // Task cancelled: requestCancel() now surfaces cooperative
+        // cancellation.
       }
     });
 

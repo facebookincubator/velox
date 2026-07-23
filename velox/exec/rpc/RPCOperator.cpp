@@ -133,6 +133,8 @@ bool RPCOperator::needsInput() const {
 
   // Check per-state backpressure.
   if (state_->isUnderBackpressure()) {
+    // NOTE: in BATCH mode this back-pressure is not paired with a blocking
+    // isBlocked() future -- see the TODO in isBlocked().
     return false;
   }
 
@@ -633,6 +635,18 @@ exec::BlockingReason RPCOperator::isBlocked(ContinueFuture* future) {
   } else {
     // BATCH mode
     if (!noMoreInput_ && !isDraining()) {
+      // TODO: back-pressure contract gap. needsInput() returns
+      // false under pending-batch back-pressure
+      // (state_->isUnderBackpressure()), but this mid-stream path polls without
+      // registering a waiter and returns kNotBlocked below even when no batch
+      // is ready -- i.e. "full but not blocked". The standard Velox contract
+      // (cf. PartitionedOutput / LocalPartition) signals fullness via
+      // isBlocked() returning a future. A driver that stops its upstream walk
+      // at a full operator (transitive back-pressure) can therefore busy-spin
+      // here until an in-flight batch completes instead of parking off-thread.
+      // Fix: when under back-pressure with no ready batch, return kWaitForRPC
+      // on the oldest pending batch (route through a promise-registering poll
+      // like tryPollBatchOrWait) rather than tryPollReady + kNotBlocked.
       auto readyBatch = state_->tryPollReady();
       if (readyBatch) {
         if (readyBatch->error.has_value()) {
@@ -756,6 +770,10 @@ void RPCOperator::recordErrorKind(velox::rpc::RPCErrorKind kind) {
     case velox::rpc::RPCErrorKind::kNone:
     case velox::rpc::RPCErrorKind::kNullInput:
     case velox::rpc::RPCErrorKind::kEmptyResponse:
+    // A rejected request is a permanent client-side error, not a congestion
+    // signal, so it is not counted among the overload kinds above (it is
+    // tracked separately via a dedicated invalid-request counter).
+    case velox::rpc::RPCErrorKind::kInvalidRequest:
       break;
   }
 }

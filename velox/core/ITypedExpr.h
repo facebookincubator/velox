@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <folly/container/F14Map.h>
+
 #include "velox/type/Type.h"
 
 namespace facebook::velox::core {
@@ -45,6 +47,22 @@ struct ITypedExprHasher {
 
 struct ITypedExprComparer {
   bool operator()(const ITypedExpr* lhs, const ITypedExpr* rhs) const;
+};
+
+/// State threaded through sharing-aware expression printing. Expressions form a
+/// DAG: a shared subexpression is one node reached from several parents.
+/// Printing such a DAG as a tree takes time and space exponential in its depth.
+/// With this context each shared subexpression is written out once, followed by
+/// an "as #N" label, and every later occurrence prints just "#N".
+struct ExprToStringContext {
+  /// Number of times each node is reached in the DAG rooted at the expression
+  /// being printed. A node reached more than once is shared.
+  folly::F14FastMap<const ITypedExpr*, uint32_t> refCounts;
+
+  /// Labels assigned to shared nodes that have already been printed in full.
+  folly::F14FastMap<const ITypedExpr*, uint32_t> labels;
+
+  uint32_t nextLabel{1};
 };
 
 /// Strongly-typed expression, e.g. literal, function call, etc.
@@ -128,6 +146,12 @@ class ITypedExpr : public ISerializable {
 
   virtual std::string toString() const = 0;
 
+  /// Appends this expression to 'out', reusing 'ctx' so that a shared
+  /// subexpression is printed once with an "as #N" label and every later
+  /// occurrence is printed as just "#N". This prints an expression DAG in
+  /// linear size, unlike toString() which expands it as a tree.
+  void appendWithSharing(std::string& out, ExprToStringContext& ctx) const;
+
   /// Returns a hash value for this expression node only, not including inputs.
   /// Implementations must use a stable hash like folly::hasher to ensure
   /// stable hashing across processes and builds.
@@ -152,6 +176,24 @@ class ITypedExpr : public ISerializable {
   static void registerSerDe();
 
  protected:
+  // Appends this node's own textual form to 'out', recursing into inputs via
+  // appendWithSharing so that sharing is preserved. The default prints the node
+  // via toString() and is used by leaves and by subclasses that do not opt into
+  // sharing-aware printing.
+  //
+  // Invariant: a subclass that recurses into inputs must EITHER leave both this
+  // and toString() at their defaults, OR override this AND make toString()
+  // return toStringWithSharing() - the two go together. Overriding only
+  // toString() to call toStringWithSharing() without also overriding this loops
+  // forever (the default appendToString() calls toString() calls
+  // toStringWithSharing() calls the default appendToString()).
+  virtual void appendToString(std::string& out, ExprToStringContext& ctx) const;
+
+  // Builds a fresh context and prints this expression sharing-aware. Recursive
+  // subclasses call this from toString(); see the invariant on
+  // appendToString().
+  std::string toStringWithSharing() const;
+
   folly::dynamic serializeBase(std::string_view name) const;
 
   std::vector<TypedExprPtr> rewriteInputsRecursive(

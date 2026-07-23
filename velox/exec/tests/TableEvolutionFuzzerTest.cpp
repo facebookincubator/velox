@@ -99,6 +99,83 @@ TEST(TableEvolutionFuzzerTest, noEvolutionBoundedRun) {
   }
 }
 
+// A column is "used by aggregation" if it is a grouping key or appears in an
+// aggregate expression.
+TEST(TableEvolutionFuzzerTest, isColumnUsedByAggregation) {
+  AggregationConfig aggConfig;
+  aggConfig.groupingKeys = {"g0", "g1"};
+  aggConfig.aggregates = {"sum(a0)", "max(a1)"};
+
+  EXPECT_TRUE(TableEvolutionFuzzer::isColumnUsedByAggregation("g0", aggConfig));
+  EXPECT_TRUE(TableEvolutionFuzzer::isColumnUsedByAggregation("g1", aggConfig));
+  EXPECT_TRUE(TableEvolutionFuzzer::isColumnUsedByAggregation("a0", aggConfig));
+  EXPECT_TRUE(TableEvolutionFuzzer::isColumnUsedByAggregation("a1", aggConfig));
+  EXPECT_FALSE(
+      TableEvolutionFuzzer::isColumnUsedByAggregation("c0", aggConfig));
+}
+
+// projectedColumnNames returns the schema's columns in order, minus the dropped
+// set; names not present in the schema are ignored.
+TEST(TableEvolutionFuzzerTest, projectedColumnNames) {
+  auto schema = ROW({{"c0", INTEGER()}, {"c1", BIGINT()}, {"c2", VARCHAR()}});
+
+  EXPECT_EQ(
+      TableEvolutionFuzzer::projectedColumnNames(schema, {"c1"}),
+      (std::vector<std::string>{"c0", "c2"}));
+  EXPECT_EQ(
+      TableEvolutionFuzzer::projectedColumnNames(schema, {}),
+      (std::vector<std::string>{"c0", "c1", "c2"}));
+  EXPECT_EQ(
+      TableEvolutionFuzzer::projectedColumnNames(schema, {"absent"}),
+      (std::vector<std::string>{"c0", "c1", "c2"}));
+}
+
+// Only a top-level, non-map, non-bucket, type-stable, non-aggregation filtered
+// column is eligible to be dropped filter-only; everything else is always
+// projected. Across many seeds the eligible column is sometimes dropped and the
+// ineligible ones never are.
+TEST(TableEvolutionFuzzerTest, selectFilterOnlyColumns) {
+  auto schema = ROW({
+      {"c_scalar", INTEGER()}, // eligible
+      {"c_map", MAP(VARCHAR(), INTEGER())}, // map -> excluded
+      {"c_bucket", INTEGER()}, // bucket column -> excluded
+      {"c_unstable", DOUBLE()}, // differs from an earlier setup -> excluded
+      {"c_agg", INTEGER()}, // used by the aggregation -> excluded
+      {"c_unfiltered", INTEGER()}, // not filtered -> excluded
+  });
+  // An earlier setup where c_unstable (positional index 3) was REAL.
+  auto earlierSetup = ROW({
+      {"c_scalar", INTEGER()},
+      {"c_map", MAP(VARCHAR(), INTEGER())},
+      {"c_bucket", INTEGER()},
+      {"c_unstable", REAL()},
+      {"c_agg", INTEGER()},
+      {"c_unfiltered", INTEGER()},
+  });
+  const std::unordered_set<std::string> filtered = {
+      "c_scalar", "c_map", "c_bucket", "c_unstable", "c_agg"};
+  const std::vector<column_index_t> bucketColumnIndices = {2}; // c_bucket
+  AggregationConfig aggConfig;
+  aggConfig.aggregates = {"sum(c_agg)"};
+
+  bool everDroppedScalar = false;
+  for (uint32_t seed = 0; seed < 50; ++seed) {
+    FuzzerGenerator rng(seed);
+    const auto dropped = TableEvolutionFuzzer::selectFilterOnlyColumns(
+        schema,
+        filtered,
+        bucketColumnIndices,
+        {schema, earlierSetup},
+        aggConfig,
+        rng);
+    for (const auto& name : dropped) {
+      EXPECT_EQ(name, "c_scalar") << "unexpectedly dropped: " << name;
+    }
+    everDroppedScalar |= dropped.count("c_scalar") > 0;
+  }
+  EXPECT_TRUE(everDroppedScalar);
+}
+
 TEST(TableEvolutionFuzzerTest, run) {
   auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
   exec::test::TableEvolutionFuzzer::Config config;
