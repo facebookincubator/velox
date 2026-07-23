@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/BloomFilter.h"
+#include "velox/functions/sparksql/BloomFilter.h"
 
-namespace facebook::velox {
+namespace facebook::velox::functions::sparksql {
 
 BloomFilterView::BloomFilterView(const char* serializedBloom) {
   common::InputByteStream stream(serializedBloom);
@@ -29,4 +29,4 @@ BloomFilterView::BloomFilterView(const char* serializedBloom) {
       reinterpret_cast<const uint64_t*>(serializedBloom + stream.offset());
 }
 
-} // namespace facebook::velox
+} // namespace facebook::velox::functions::sparksql

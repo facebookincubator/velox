@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/BloomFilter.h"
+#include "velox/functions/sparksql/BloomFilter.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
 #include <folly/Hash.h>
@@ -22,7 +22,7 @@
 #include <gtest/gtest.h>
 #include <unordered_set>
 
-using namespace facebook::velox;
+using namespace facebook::velox::functions::sparksql;
 
 class BloomFilterTest : public ::testing::Test {};
 
