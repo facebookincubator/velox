@@ -5232,4 +5232,185 @@ TEST_F(AggregationTest, barrierExecutionSpillEnabledAggregationUnsupported) {
           .copyResults(pool()),
       "Barrier drain is not supported for spilled hash aggregation");
 }
+
+namespace {
+
+// Minimal plan node + operator for a back-pressuring downstream. This mirrors
+// the helpers in RowNumberTest and StreamingAggregationTest, which are
+// regression tests for the same class of bug (an operator's needsInput() not
+// checking input_ == nullptr). The operator passes input through but refuses it
+// most of the time, keeping the upstream HashAggregation holding a buffered
+// batch. Before the needsInput() fix this made the Driver re-feed the
+// aggregation and overwrite its undrained input_, silently dropping rows.
+class BackpressureNode : public core::PlanNode {
+ public:
+  BackpressureNode(const core::PlanNodeId& id, core::PlanNodePtr input)
+      : PlanNode(id), sources_{std::move(input)} {}
+
+  const RowTypePtr& outputType() const override {
+    return sources_[0]->outputType();
+  }
+
+  const std::vector<core::PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  std::string_view name() const override {
+    return "Backpressure";
+  }
+
+ private:
+  void addDetails(std::stringstream& /* stream */) const override {}
+
+  std::vector<core::PlanNodePtr> sources_;
+};
+
+class BackpressureOperator : public Operator {
+ public:
+  BackpressureOperator(
+      DriverCtx* ctx,
+      int32_t id,
+      const std::shared_ptr<const BackpressureNode>& node)
+      : Operator(ctx, node->outputType(), id, node->id(), "Backpressure") {}
+
+  bool needsInput() const override {
+    if (noMoreInput_ || input_ != nullptr) {
+      return false;
+    }
+    // Accept input only every 4th poll. The rejected polls are when the Driver
+    // walks back upstream and would re-feed (and, before the fix, overwrite)
+    // the buffered batch held by the upstream aggregation.
+    return (++polls_ % 4) == 0;
+  }
+
+  void addInput(RowVectorPtr input) override {
+    input_ = std::move(input);
+  }
+
+  RowVectorPtr getOutput() override {
+    return std::move(input_);
+  }
+
+  BlockingReason isBlocked(ContinueFuture* /* future */) override {
+    return BlockingReason::kNotBlocked;
+  }
+
+  bool isFinished() override {
+    return noMoreInput_ && input_ == nullptr;
+  }
+
+ private:
+  mutable int32_t polls_{0};
+};
+
+class BackpressureNodeFactory : public Operator::PlanNodeTranslator {
+ public:
+  std::unique_ptr<Operator> toOperator(
+      DriverCtx* ctx,
+      int32_t id,
+      const core::PlanNodePtr& node) override {
+    if (auto bpNode = std::dynamic_pointer_cast<const BackpressureNode>(node)) {
+      return std::make_unique<BackpressureOperator>(ctx, id, bpNode);
+    }
+    return nullptr;
+  }
+
+  std::optional<uint32_t> maxDrivers(const core::PlanNodePtr& node) override {
+    if (std::dynamic_pointer_cast<const BackpressureNode>(node)) {
+      return 1;
+    }
+    return std::nullopt;
+  }
+};
+
+void registerBackpressureOperator() {
+  static const bool registered = [] {
+    Operator::registerOperator(std::make_unique<BackpressureNodeFactory>());
+    return true;
+  }();
+  (void)registered;
+}
+} // namespace
+
+// Regression test for the distinct-mode buffer: a partial distinct aggregation
+// stores the input batch in input_ whenever the batch produced new groups, and
+// emits those groups from the following getOutput(). Distinct output is
+// produced purely incrementally -- there is no final table scan when nothing
+// spilled -- so a batch whose input_ is overwritten before it is drained loses
+// its rows permanently. Every key is unique, so a correct run emits exactly one
+// row per input row.
+TEST_F(AggregationTest, distinctNoRowLossWithBackpressuringDownstream) {
+  registerBackpressureOperator();
+
+  const int32_t numBatches = 200;
+  const int32_t rowsPerBatch = 100;
+  const vector_size_t totalRows = numBatches * rowsPerBatch;
+  // One globally unique key per row, so a correct distinct aggregation emits
+  // exactly one row per input row.
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(numBatches);
+  for (int32_t i = 0; i < numBatches; ++i) {
+    batches.push_back(makeRowVector({makeFlatVector<int64_t>(
+        rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; })}));
+  }
+
+  auto plan =
+      PlanBuilder()
+          .values(batches)
+          .partialAggregation({"c0"}, {})
+          .addNode([](const std::string& id, core::PlanNodePtr input) {
+            return std::make_shared<BackpressureNode>(id, std::move(input));
+          })
+          .planNode();
+
+  // Single driver so the aggregation and the back-pressuring downstream share a
+  // pipeline.
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  EXPECT_EQ(result->size(), totalRows);
+}
+
+// Regression test for the abandoned-partial-aggregation buffer: once a partial
+// aggregation gives up (too little reduction at the memory ceiling), addInput()
+// stops aggregating and just parks the batch in input_ for getOutput() to pass
+// through via toIntermediate(). Capping both the partial and the extended
+// partial aggregation memory forces that state. Every key is unique, so the
+// aggregation is 1:1 both before and after it is abandoned, and a correct run
+// emits exactly one row per input row.
+TEST_F(
+    AggregationTest,
+    abandonedPartialAggNoRowLossWithBackpressuringDownstream) {
+  registerBackpressureOperator();
+
+  const int32_t numBatches = 200;
+  const int32_t rowsPerBatch = 100;
+  const vector_size_t totalRows = numBatches * rowsPerBatch;
+  // One globally unique key per row, so the aggregation is 1:1 both before and
+  // after it is abandoned and must emit exactly one row per input row.
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(numBatches);
+  for (int32_t i = 0; i < numBatches; ++i) {
+    batches.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(
+             rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; }),
+         makeFlatVector<int64_t>(
+             rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; })}));
+  }
+
+  auto plan =
+      PlanBuilder()
+          .values(batches)
+          .partialAggregation({"c0"}, {"sum(c1)"})
+          .addNode([](const std::string& id, core::PlanNodePtr input) {
+            return std::make_shared<BackpressureNode>(id, std::move(input));
+          })
+          .planNode();
+
+  auto result =
+      AssertQueryBuilder(plan)
+          .maxDrivers(1)
+          .config(QueryConfig::kMaxPartialAggregationMemory, "4096")
+          .config(QueryConfig::kMaxExtendedPartialAggregationMemory, "4096")
+          .copyResults(pool());
+  EXPECT_EQ(result->size(), totalRows);
+}
 } // namespace facebook::velox::exec::test
