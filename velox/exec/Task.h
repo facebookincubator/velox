@@ -24,6 +24,7 @@
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/MergeSource.h"
+#include "velox/exec/PartitionedOutputFactory.h"
 #include "velox/exec/ScaledScanController.h"
 #include "velox/exec/TaskStats.h"
 #include "velox/exec/TaskStructs.h"
@@ -32,7 +33,7 @@
 
 namespace facebook::velox::exec {
 
-class DefaultOutputBufferManager;
+class OutputBufferManager;
 
 class HashJoinBridge;
 class IndexLookupJoinBridge;
@@ -165,6 +166,11 @@ class Task : public std::enable_shared_from_this<Task> {
   const trace::TraceCtx* traceCtx() const {
     return traceCtx_.get();
   }
+
+  /// Returns the output buffer manager for the transport named on this task's
+  /// PartitionedOutputNode, or an empty weak_ptr if there is no partitioned
+  /// output. Lock() and null-check before use.
+  std::weak_ptr<OutputBufferManager> outputBufferManager() const;
 
   /// Returns ConsumerSupplier passed in the constructor.
   ConsumerSupplier consumerSupplier() const {
@@ -802,7 +808,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// folder could not be created.
   const std::string& getOrCreateSpillDirectory();
 
-  /// True if produces output via DefaultOutputBufferManager.
+  /// True if this task has a partitioned-output pipeline.
   bool hasPartitionedOutput() const {
     return numDriversInPartitionedOutput_ > 0;
   }
@@ -1471,7 +1477,18 @@ class Task : public std::enable_shared_from_this<Task> {
   // ungrouped execution we use the [0] entry in this vector.
   std::unordered_map<uint32_t, SplitGroupState> splitGroupStates_;
 
-  std::weak_ptr<DefaultOutputBufferManager> bufferManager_;
+  // Output buffer manager for this task's partitioned output -- the manager for
+  // the transport named on the PartitionedOutputNode. A weak_ptr to break the
+  // reference cycle through OutputBuffer::task_ (which holds a
+  // shared_ptr<Task>). Assigned once under mutex_ when the task starts; read
+  // directly by code already holding mutex_, or via outputBufferManager().
+  std::weak_ptr<OutputBufferManager> bufferManager_;
+
+  // Factory that builds the output operator for the resolved transport, paired
+  // with 'bufferManager_' from the same registry entry. Assigned alongside
+  // 'bufferManager_' under mutex_ and passed to createDriver(); empty if the
+  // task has no partitioned output.
+  PartitionedOutputFactory outputOperatorFactory_;
 
   // Boolean indicating that we have already received no-more-output-buffers
   // message. Subsequent messages will be ignored.

@@ -203,6 +203,25 @@ struct Tensor {
       status = kInited;
     }
   }
+
+  /// Ensures sizes[] hold this tensor's own-dims magic dividers, used by gather
+  /// device functions (__index_select, __repeat) that decompose a linear index
+  /// by this tensor's own dims. Unlike init(), it never takes the rank-1
+  /// contiguous fast path, so sizes[] is always populated. Grid-wide idempotent
+  /// via the status CAS, so it is safe for every thread to call. Callers must
+  /// keep such a tensor out of the broadcast init<true>() path, since both
+  /// share 'status' and would otherwise race for a single init.
+  __device__ void ensureIndexCalculator() {
+    synchronized([&]() {
+      contiguous = isContiguous();
+      initIndexCalculator();
+      uint32_t n = 1;
+      for (int i = 0; i < rank; ++i) {
+        n *= dims[i];
+      }
+      numEl = n;
+    });
+  }
 #endif
 };
 

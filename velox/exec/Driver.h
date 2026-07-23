@@ -31,6 +31,7 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/exec/BlockingReason.h"
+#include "velox/exec/PartitionedOutputFactory.h"
 #include "velox/exec/trace/TraceCtx.h"
 
 namespace facebook::velox::exec {
@@ -827,6 +828,7 @@ struct DriverFactory {
   std::shared_ptr<Driver> createDriver(
       std::unique_ptr<DriverCtx> ctx,
       std::shared_ptr<InMemoryExchangeClient> exchangeClient,
+      const PartitionedOutputFactory& outputOperatorFactory,
       std::shared_ptr<PipelinePushdownFilters> filters,
       std::function<int(int pipelineId)> numDrivers);
 

@@ -466,7 +466,8 @@ bool isHashProbeMemoryPool(const memory::MemoryPool& pool) {
 
 bool needRightSideJoin(core::JoinType joinType) {
   return isRightJoin(joinType) || isFullJoin(joinType) ||
-      isRightSemiFilterJoin(joinType) || isRightSemiProjectJoin(joinType);
+      isRightSemiFilterJoin(joinType) || isRightSemiProjectJoin(joinType) ||
+      isRightAntiJoin(joinType);
 }
 
 RowTypePtr hashJoinTableSpillType(

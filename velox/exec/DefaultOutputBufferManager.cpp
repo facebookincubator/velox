@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 #include "velox/exec/DefaultOutputBufferManager.h"
+#include "velox/core/PlanNode.h"
+#include "velox/exec/OutputTransportRegistry.h"
+#include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -30,6 +33,22 @@ DefaultOutputBufferManager::getInstanceRef(const Options& options) {
   static const std::shared_ptr<DefaultOutputBufferManager> instance =
       std::make_shared<DefaultOutputBufferManager>(options);
   return instance;
+}
+
+// static
+std::shared_ptr<OutputTransportEntry>
+DefaultOutputBufferManager::makeDefaultTransportEntry() {
+  return OutputTransportEntry::make<DefaultOutputBufferManager>(
+      getInstanceRef(),
+      [](int32_t operatorId,
+         DriverCtx* ctx,
+         const std::shared_ptr<const core::PartitionedOutputNode>& node,
+         bool eagerFlush,
+         const std::shared_ptr<DefaultOutputBufferManager>& manager)
+          -> std::unique_ptr<Operator> {
+        return std::make_unique<PartitionedOutput>(
+            operatorId, ctx, node, eagerFlush, manager);
+      });
 }
 
 std::shared_ptr<OutputBuffer> DefaultOutputBufferManager::getBuffer(
@@ -132,10 +151,10 @@ void DefaultOutputBufferManager::initializeTask(
 
 bool DefaultOutputBufferManager::updateOutputBuffers(
     const std::string& taskId,
-    int numBuffers,
+    int numDestinations,
     bool noMoreBuffers) {
   if (auto buffer = getBufferIfExists(taskId)) {
-    buffer->updateOutputBuffers(numBuffers, noMoreBuffers);
+    buffer->updateOutputBuffers(numDestinations, noMoreBuffers);
     return true;
   }
   return false;
@@ -180,23 +199,33 @@ std::string DefaultOutputBufferManager::toString() {
   });
 }
 
-double DefaultOutputBufferManager::getUtilization(const std::string& taskId) {
+std::string DefaultOutputBufferManager::toString(const std::string& taskId) {
+  auto buffer = getBufferIfExists(taskId);
+  if (buffer != nullptr) {
+    return buffer->toString();
+  }
+  return "";
+}
+
+std::optional<double> DefaultOutputBufferManager::getUtilization(
+    const std::string& taskId) {
   auto buffer = getBufferIfExists(taskId);
   if (buffer != nullptr) {
     return buffer->getUtilization();
   }
-  return 0;
+  return std::nullopt;
 }
 
-bool DefaultOutputBufferManager::isOverutilized(const std::string& taskId) {
+std::optional<bool> DefaultOutputBufferManager::isOverutilized(
+    const std::string& taskId) {
   auto buffer = getBufferIfExists(taskId);
   if (buffer != nullptr) {
     return buffer->isOverutilized();
   }
-  return false;
+  return std::nullopt;
 }
 
-std::optional<OutputBuffer::Stats> DefaultOutputBufferManager::stats(
+std::optional<OutputBufferStats> DefaultOutputBufferManager::stats(
     const std::string& taskId) {
   auto buffer = getBufferIfExists(taskId);
   if (buffer != nullptr) {

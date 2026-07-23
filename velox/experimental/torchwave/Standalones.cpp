@@ -16,6 +16,8 @@
 
 #include "velox/experimental/torchwave/Standalones.h"
 
+#include <optional>
+
 #include <ATen/ATen.h>
 
 #include "velox/experimental/torchwave/Registry.h"
@@ -45,10 +47,24 @@ void runStandaloneShortcut(
     return iv.toTensor();
   };
   // Reads operand 'i' as an integer: a dynamic value (args[i] set) is read from
-  // the frame; a constant comes from intArgs.
+  // the frame; a constant comes from intArgs. A dynamic bound may be a SymInt
+  // (a data-dependent size from item()/sym_size), which is not a plain Int
+  // IValue, so read it through the SymInt.
   auto intAt = [&](size_t i) -> int64_t {
-    return args[i] != nullptr ? frame.getIValue(args[i]->id()).toInt()
-                              : static_cast<int64_t>(intArgs[i]);
+    if (args[i] == nullptr) {
+      return static_cast<int64_t>(intArgs[i]);
+    }
+    const auto& iv = frame.getIValue(args[i]->id());
+    return iv.isSymInt() ? iv.toSymInt().guard_int(__FILE__, __LINE__)
+                         : iv.toInt();
+  };
+  // Reads an optional int operand for slice start/end: a None value (an omitted
+  // bound, e.g. from t[:end]) becomes nullopt; otherwise as intAt.
+  auto optIntAt = [&](size_t i) -> std::optional<int64_t> {
+    if (args[i] != nullptr && frame.getIValue(args[i]->id()).isNone()) {
+      return std::nullopt;
+    }
+    return intAt(i);
   };
   auto setOutput = [&](c10::IValue value) {
     frame.setIValue(data.actualOutputs[0], std::move(value));
@@ -68,9 +84,11 @@ void runStandaloneShortcut(
       break;
     }
     case StandaloneShortcut::kSlice: {
-      // (Tensor self, int dim, int? start, int? end, int step).
+      // (Tensor self, int dim, int? start, int? end, int step). start/end are
+      // optional (None) and may be data-dependent SymInts (e.g. t[:end] where
+      // end is a runtime value).
       auto self = tensorAt(0);
-      setOutput(at::slice(self, intAt(1), intAt(2), intAt(3), intAt(4)));
+      setOutput(at::slice(self, intAt(1), optIntAt(2), optIntAt(3), intAt(4)));
       break;
     }
     case StandaloneShortcut::kSelectInt: {

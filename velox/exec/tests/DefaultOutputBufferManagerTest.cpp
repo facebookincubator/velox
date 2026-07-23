@@ -157,7 +157,7 @@ class DefaultOutputBufferManagerTest : public testing::Test {
     return pageSize;
   }
 
-  OutputBuffer::Stats getStats(const std::string& taskId) {
+  OutputBufferStats getStats(const std::string& taskId) {
     const auto stats = bufferManager_->stats(taskId);
     EXPECT_TRUE(stats.has_value());
     return stats.value();
@@ -407,9 +407,10 @@ class DefaultOutputBufferManagerTest : public testing::Test {
   void verifyOutputBuffer(
       std::shared_ptr<Task> task,
       OutputBufferStatus outputBufferStatus) {
-    TaskStats finishStats = task->taskStats();
-    const auto utilization = finishStats.outputBufferUtilization;
-    const auto overutilized = finishStats.outputBufferOverutilized;
+    const auto utilization =
+        bufferManager_->getUtilization(task->taskId()).value_or(0);
+    const auto overutilized =
+        bufferManager_->isOverutilized(task->taskId()).value_or(false);
     if (outputBufferStatus == OutputBufferStatus::kInitiated ||
         outputBufferStatus == OutputBufferStatus::kFinished) {
       // zero utilization on a fresh new output buffer
@@ -1413,9 +1414,11 @@ TEST_P(AllDefaultOutputBufferManagerTest, outputBufferStats) {
   ASSERT_EQ(statsNoMoreBuffers.totalPagesSent, numPages);
   ASSERT_EQ(statsNoMoreBuffers.totalRowsSent, totalNumRows);
 
-  // Remove task and check stats.
+  // Remove task; observability methods report the task as gone via nullopt.
   bufferManager_->removeTask(taskId);
   ASSERT_FALSE(bufferManager_->stats(taskId).has_value());
+  ASSERT_FALSE(bufferManager_->getUtilization(taskId).has_value());
+  ASSERT_FALSE(bufferManager_->isOverutilized(taskId).has_value());
 }
 
 TEST_P(DefaultOutputBufferManagerWithDifferentSerdeKindsTest, outOfOrderAcks) {
