@@ -180,6 +180,15 @@ annotation, definition level, repetition level, and compression when useful.
 - Purpose: Tests reading FIXED_LEN_BYTE_ARRAY as VARBINARY and validates mixed
   primitive physical type handling.
 
+### `flba_dictionary_string_binary.parquet`
+
+- Metadata: Manually generated minimal Parquet file, 6 rows, 1 row group,
+  required columns `flba_utf8: FIXED_LEN_BYTE_ARRAY UTF8` and
+  `flba_binary: FIXED_LEN_BYTE_ARRAY`, both uncompressed and
+  dictionary-encoded.
+- Purpose: Reader-compatibility fixture for dictionary-encoded
+  FIXED_LEN_BYTE_ARRAY pages projected as Velox VARCHAR and VARBINARY.
+
 ### `uuid.parquet`
 
 - Metadata: `created_by=parquet-mr version 1.12.2`, 3 rows, 1 row group,
