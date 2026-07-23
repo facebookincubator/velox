@@ -1290,19 +1290,114 @@ class BigintValuesUsingBitmask final : public Filter {
   const int64_t max_;
 };
 
-class BigintValuesUsingBloomFilter final : public Filter {
+/// Backend for a Bloom filter. Implementations own the Bloom filter state and
+/// define how values are hashed before lookup or insertion.
+class BloomFilterBackend {
  public:
+  virtual ~BloomFilterBackend() = default;
+
+  /// Returns an independent copy of this backend.
+  virtual std::shared_ptr<BloomFilterBackend> clone() const = 0;
+
+  /// Returns the number of bytes used by the Bloom filter data.
+  virtual int64_t byteSize() const = 0;
+
+  /// Returns true if this backend has the same type and state as 'other'.
+  virtual bool testingEquals(const BloomFilterBackend& other) const = 0;
+
+  /// Returns true if 'value' may have been inserted. False guarantees that
+  /// 'value' was not inserted.
+  virtual bool mayContainInt64(int64_t value) const = 0;
+
+  /// Inserts 'value' into this backend.
+  virtual void insertInt64(int64_t value) = 0;
+};
+
+/// Split-block Bloom filter backend for integral values. blockIndex() and
+/// blocks() expose split-block-specific functionality and are intentionally
+/// not part of BloomFilterBackend.
+class SplitBlockBloomFilterBackend final : public BloomFilterBackend {
+ public:
+  /// Returns the number of blocks needed for 'capacity' values with a 1% false
+  /// positive probability.
   static int64_t numBlocks(int64_t capacity) {
     return SplitBlockBloomFilter::numBlocks(capacity, 0.01);
   }
 
-  BigintValuesUsingBloomFilter(int64_t capacity, bool nullAllowed)
+  /// Creates an empty backend sized for 'capacity' values.
+  explicit SplitBlockBloomFilterBackend(int64_t capacity)
+      : blocks_(numBlocks(capacity)), filter_(blocks_) {}
+
+  /// Creates a backend from previously populated blocks.
+  static std::shared_ptr<SplitBlockBloomFilterBackend> fromBlocks(
+      std::vector<SplitBlockBloomFilter::Block> blocks) {
+    return std::shared_ptr<SplitBlockBloomFilterBackend>(
+        new SplitBlockBloomFilterBackend(std::move(blocks)));
+  }
+
+  SplitBlockBloomFilterBackend(const SplitBlockBloomFilterBackend&) = delete;
+  SplitBlockBloomFilterBackend& operator=(const SplitBlockBloomFilterBackend&) =
+      delete;
+  SplitBlockBloomFilterBackend(SplitBlockBloomFilterBackend&&) = delete;
+  SplitBlockBloomFilterBackend& operator=(SplitBlockBloomFilterBackend&&) =
+      delete;
+
+  std::shared_ptr<BloomFilterBackend> clone() const override {
+    return fromBlocks(blocks_);
+  }
+
+  int64_t byteSize() const override {
+    return blocks_.size() * sizeof(SplitBlockBloomFilter::Block);
+  }
+
+  bool testingEquals(const BloomFilterBackend& other) const override;
+
+  bool mayContainInt64(int64_t value) const override {
+    return filter_.mayContain(hash(value));
+  }
+
+  void insertInt64(int64_t value) override {
+    filter_.insert(hash(value));
+  }
+
+  /// Returns the index of the block used to test or insert 'value'.
+  uint64_t blockIndex(int64_t value) const {
+    return filter_.blockIndex(hash(value));
+  }
+
+  /// Returns the blocks owned by this backend.
+  const std::vector<SplitBlockBloomFilter::Block>& blocks() const {
+    return blocks_;
+  }
+
+ private:
+  explicit SplitBlockBloomFilterBackend(
+      std::vector<SplitBlockBloomFilter::Block> blocks)
+      : blocks_(std::move(blocks)), filter_(blocks_) {}
+
+  static uint64_t hash(int64_t value) {
+    // Simple multiplication hash like the one in BigintValuesUsingHashTable
+    // does not distribute values evenly.  Maybe we need to reconsider the hash
+    // choice in BigintValuesUsingHashTable as well in the future.
+    return folly::hasher<int64_t>()(value);
+  }
+
+  std::vector<SplitBlockBloomFilter::Block> blocks_;
+  SplitBlockBloomFilter filter_;
+};
+
+class BigintValuesUsingBloomFilter final : public Filter {
+ public:
+  BigintValuesUsingBloomFilter(
+      std::shared_ptr<BloomFilterBackend> backend,
+      bool nullAllowed)
       : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBloomFilter),
-        blocks_(numBlocks(capacity)),
-        filter_(blocks_) {}
+        backend_(std::move(backend)) {
+    VELOX_CHECK_NOT_NULL(backend_);
+  }
 
   bool testInt64(int64_t value) const final {
-    return filter_.mayContain(hash(value));
+    return backend_->mayContainInt64(value);
   }
 
   xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t> x) const final {
@@ -1324,9 +1419,8 @@ class BigintValuesUsingBloomFilter final : public Filter {
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed) const override {
-    return std::unique_ptr<BigintValuesUsingBloomFilter>(
-        new BigintValuesUsingBloomFilter(
-            nullAllowed.value_or(nullAllowed_), blocks_));
+    return std::make_unique<BigintValuesUsingBloomFilter>(
+        backend_->clone(), nullAllowed.value_or(nullAllowed_));
   }
 
   folly::dynamic serialize() const override;
@@ -1338,35 +1432,15 @@ class BigintValuesUsingBloomFilter final : public Filter {
   std::unique_ptr<Filter> mergeWith(const Filter* other) const override;
 
   void insert(int64_t value) {
-    filter_.insert(hash(value));
+    backend_->insertInt64(value);
   }
 
-  uint64_t blockIndex(int64_t value) const {
-    return filter_.blockIndex(hash(value));
-  }
-
-  int64_t blocksByteSize() const {
-    return blocks_.size() * sizeof(SplitBlockBloomFilter::Block);
+  int64_t byteSize() const {
+    return backend_->byteSize();
   }
 
  private:
-  static uint64_t hash(int64_t value) {
-    // Simple multiplication hash like the one in BigintValuesUsingHashTable
-    // does not distribute values evenly.  Maybe we need to reconsider the hash
-    // choice in BigintValuesUsingHashTable as well in the future.
-    return folly::hasher<int64_t>()(value);
-  }
-
-  // Private constructor used by clone() and create().
-  BigintValuesUsingBloomFilter(
-      bool nullAllowed,
-      std::vector<SplitBlockBloomFilter::Block> blocks)
-      : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBloomFilter),
-        blocks_(std::move(blocks)),
-        filter_(blocks_) {}
-
-  std::vector<SplitBlockBloomFilter::Block> blocks_;
-  SplitBlockBloomFilter filter_;
+  std::shared_ptr<BloomFilterBackend> backend_;
 };
 
 // NOT IN-list filter for integral data types. Implemented as a hash table. Good
