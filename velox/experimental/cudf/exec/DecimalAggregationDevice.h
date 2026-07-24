@@ -82,6 +82,9 @@ void packDecimalSumState(
  * @param sumView output per-row DECIMAL128 sums.
  * @param countView output per-row counts.
  * @param numRows number of rows.
+ * @param nullMask device null-mask bitmap; null rows are skipped to avoid
+ *        out-of-bounds reads when Arrow compacts null payloads.  Pass nullptr
+ *        when no mask is present.
  * @param stream CUDA stream for the launch.
  */
 void unpackDecimalSumState(
@@ -91,6 +94,7 @@ void unpackDecimalSumState(
     cudf::mutable_column_view sumView,
     cudf::mutable_column_view countView,
     cudf::size_type numRows,
+    cudf::bitmask_type const* nullMask,
     rmm::cuda_stream_view stream);
 
 /**

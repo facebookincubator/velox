@@ -41,6 +41,15 @@ TEST_F(FromJsonTest, basicArray) {
   testFromJson(input, expected);
 }
 
+TEST_F(FromJsonTest, arrayOfRowWithScalarInput) {
+  auto input = makeFlatVector<std::string>(
+      {R"(746314092223)", R"(true)", R"("invalid")"});
+  const auto outputType = ARRAY(ROW({"text", "type"}, {VARCHAR(), VARCHAR()}));
+  auto expected =
+      BaseVector::createNullConstant(outputType, input->size(), pool());
+  testFromJson(input, expected);
+}
+
 TEST_F(FromJsonTest, basicMap) {
   auto expected = makeMapVector<std::string, int64_t>(
       {{{"a", 1}}, {{"b", 2}}, {{"c", 3}}, {{"3", 3}}});
