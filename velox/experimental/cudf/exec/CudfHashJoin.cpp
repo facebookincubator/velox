@@ -168,6 +168,13 @@ class ProbeMatchTracker {
     return getRetainedIndices(unmatchedMask->view(), stream, mr);
   }
 
+  // Returns indices of probe rows that matched in at least one build batch.
+  std::unique_ptr<cudf::column> getMatchedIndices(
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) {
+    return getRetainedIndices(matchCol_->view(), stream, mr);
+  }
+
  private:
   std::unique_ptr<cudf::column> matchCol_;
   std::unique_ptr<cudf::column> probeRowIndices_;
@@ -1445,6 +1452,11 @@ CudfHashJoinProbe::leftSemiFilterJoin(
   std::vector<JoinOutput> cudfOutputs;
 
   auto& rightTables = hashObject_.value().first;
+  auto numProbeRows = leftTableView.num_rows();
+
+  // Track which probe rows matched across all build chunks so that each
+  // probe row is emitted at most once (semi-join semantics).
+  ProbeMatchTracker probeTracker(numProbeRows, stream, get_temp_mr());
 
   for (auto i = 0; i < rightTables.size(); i++) {
     auto rightTableView = rightTables[i]->view();
@@ -1469,18 +1481,32 @@ CudfHashJoinProbe::leftSemiFilterJoin(
           leftTableView.select(leftKeyIndices_), stream, get_temp_mr());
     }
 
-    auto leftIndicesSpan =
-        cudf::device_span<cudf::size_type const>{*leftJoinIndices};
-    auto leftIndicesCol = cudf::column_view{leftIndicesSpan};
-    auto rightIndicesCol = cudf::empty_like(leftIndicesCol);
+    if (leftJoinIndices->size() > 0) {
+      auto leftIndicesSpan =
+          cudf::device_span<cudf::size_type const>{*leftJoinIndices};
+      auto leftIndicesCol = cudf::column_view{leftIndicesSpan};
+      probeTracker.update(leftIndicesCol, stream, get_temp_mr());
+    }
+  }
+
+  // Gather the deduplicated set of matched probe rows.
+  auto matchedIndices = probeTracker.getMatchedIndices(stream, get_temp_mr());
+
+  if (matchedIndices->size() > 0) {
+    auto matchedLeftCol = matchedIndices->view();
+    auto sentinelScalar = cudf::numeric_scalar<cudf::size_type>(
+        cudf::JoinNoMatch, true, stream, get_temp_mr());
+    auto matchedRightIndices = cudf::make_column_from_scalar(
+        sentinelScalar, matchedIndices->size(), stream, get_temp_mr());
 
     cudfOutputs.push_back(unfilteredOutput(
         leftTableView,
-        leftIndicesCol,
-        rightTableView,
-        rightIndicesCol->view(),
+        matchedLeftCol,
+        rightTables[0]->view(),
+        matchedRightIndices->view(),
         stream));
   }
+
   return cudfOutputs;
 }
 
@@ -2268,6 +2294,10 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
   for (auto& output : cudfOutputs) {
     zeroColumnOutputRows += output.numRows;
     cudfOutputTables.push_back(std::move(output.table));
+  }
+
+  if (cudfOutputTables.empty()) {
+    return nullptr;
   }
 
   auto cudfOutput =
