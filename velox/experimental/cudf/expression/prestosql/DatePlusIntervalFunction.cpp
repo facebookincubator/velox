@@ -75,6 +75,7 @@ DatePlusIntervalFunction::DatePlusIntervalFunction(
 
 ColumnOrView DatePlusIntervalFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
+    [[maybe_unused]] cudf::size_type numRows,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
   auto dateCol = asView(inputColumns[0]);

@@ -20,8 +20,9 @@ namespace facebook::velox::cudf_velox {
 
 JitExpression::JitExpression(
     std::shared_ptr<velox::exec::Expr> expr,
-    const RowTypePtr& inputRowSchema)
-    : expr_{expr, inputRowSchema} {}
+    const RowTypePtr& inputRowSchema,
+    const CudfDateTimeContext& context)
+    : expr_{expr, inputRowSchema, context} {}
 
 void JitExpression::close() {
   expr_.close();
@@ -86,8 +87,10 @@ void registerJitEvaluator(int priority) {
       [](std::shared_ptr<velox::exec::Expr> expr) {
         return JitExpression::canEvaluate(expr);
       },
-      [](std::shared_ptr<velox::exec::Expr> expr, const RowTypePtr& row) {
-        return std::make_shared<JitExpression>(std::move(expr), row);
+      [](std::shared_ptr<velox::exec::Expr> expr,
+         const RowTypePtr& row,
+         const CudfDateTimeContext& context) {
+        return std::make_shared<JitExpression>(std::move(expr), row, context);
       },
       /*overwrite=*/false);
 }

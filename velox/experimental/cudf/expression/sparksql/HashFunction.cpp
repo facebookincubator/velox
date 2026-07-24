@@ -63,6 +63,7 @@ HashFunction::HashFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
 
 ColumnOrView HashFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
+    [[maybe_unused]] cudf::size_type numRows,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
   VELOX_CHECK(!inputColumns.empty());
