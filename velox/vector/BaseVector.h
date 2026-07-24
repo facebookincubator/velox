@@ -348,7 +348,12 @@ class BaseVector {
         indices.begin(),
         indices.end(),
         [&](vector_size_t left, vector_size_t right) {
-          return compare(this, left, right, flags) < 0;
+          // An empty result (null encountered) sorts as less, matching the
+          // pre-C++20 std::optional relational semantics; dereferencing avoids
+          // libc++'s ambiguous optional<=> comparison.
+          const std::optional<int32_t> result =
+              compare(this, left, right, flags);
+          return !result.has_value() || result.value() < 0;
         });
   }
 
@@ -362,7 +367,12 @@ class BaseVector {
         indices.begin(),
         indices.end(),
         [&](vector_size_t left, vector_size_t right) {
-          return compare(this, mapping[left], mapping[right], flags) < 0;
+          // An empty result (null encountered) sorts as less, matching the
+          // pre-C++20 std::optional relational semantics; dereferencing avoids
+          // libc++'s ambiguous optional<=> comparison.
+          const std::optional<int32_t> result =
+              compare(this, mapping[left], mapping[right], flags);
+          return !result.has_value() || result.value() < 0;
         });
   }
 
