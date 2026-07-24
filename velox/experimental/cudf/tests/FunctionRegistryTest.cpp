@@ -15,10 +15,12 @@
  */
 
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/prestosql/TimezoneFunctions.h"
 
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/type/Type.h"
 
 #include <gtest/gtest.h>
 
@@ -41,6 +43,7 @@ class TagFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& /*inputColumns*/,
+      cudf::size_type /*numRows*/,
       rmm::cuda_stream_view /*stream*/,
       rmm::device_async_resource_ref /*mr*/) const override {
     VELOX_UNREACHABLE("TagFunction::eval should not be called in these tests");
@@ -109,6 +112,24 @@ TEST_F(FunctionRegistryTest, singleSignatureDispatch) {
   auto fn = createCudfFunction(name, expr);
   ASSERT_NE(fn, nullptr);
   EXPECT_EQ(tagOf(fn), "double");
+}
+
+// The timezone function signatures reference the TIMESTAMP WITH TIME ZONE
+// custom type, which lives in the prestosql type registry. The Presto worker
+// registers cuDF before the CPU prestosql functions, so that type is absent
+// when these signatures are built; registerTimezoneFunctions must register the
+// type itself rather than rely on registration order (otherwise
+// FunctionSignatureBuilder aborts with "Type doesn't exist: 'TIMESTAMP WITH
+// TIME ZONE'" at worker startup).
+TEST_F(FunctionRegistryTest, timezoneFunctionsRegisterTheirCustomType) {
+  // Reproduce a clean worker startup where the type has not been registered
+  // yet, independent of registration order within this binary.
+  unregisterCustomType("TIMESTAMP WITH TIME ZONE");
+  ASSERT_FALSE(hasType("TIMESTAMP WITH TIME ZONE"));
+
+  EXPECT_NO_THROW(registerTimezoneFunctions("regtest_tz_"));
+
+  EXPECT_TRUE(hasType("TIMESTAMP WITH TIME ZONE"));
 }
 
 // Two function registrations, same name collision with different signatures.

@@ -30,6 +30,10 @@
 #include <variant>
 #include <vector>
 
+namespace facebook::velox::core {
+class QueryConfig;
+}
+
 namespace facebook::velox::cudf_velox {
 
 // Holds either a non-owning cudf::column_view (zero-copy) or an owning
@@ -71,13 +75,56 @@ void checkAllTrue(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
+/// Carries query-scoped evaluation settings that individual GPU functions need
+/// but that are not part of the expression tree, most notably the session
+/// timezone. Populated from the QueryConfig at expression-creation time and
+/// attached to every CudfFunction so timezone-aware functions can match the CPU
+/// path. Defaults represent "no session timezone" (UTC/GMT), matching the CPU
+/// behavior when adjust_timestamp_to_session_timezone is off.
+struct CudfDateTimeContext {
+  /// Session timezone name (QueryConfig::sessionTimezone), e.g.
+  /// "America/Los_Angeles". Empty means none.
+  std::string sessionTimezone;
+  /// Whether timezone-less timestamp conversions honor the session timezone
+  /// (QueryConfig::adjustTimestampToTimezone).
+  bool adjustTimestampToTimezone{false};
+  /// Session start time in milliseconds since epoch
+  /// (QueryConfig::sessionStartTimeMs); used by now()/current_timestamp.
+  int64_t sessionStartTimeMs{0};
+
+  /// Returns true when extraction functions must convert the instant to the
+  /// session-local wall clock before reading a calendar field.
+  bool appliesSessionTimezone() const {
+    return adjustTimestampToTimezone && !sessionTimezone.empty();
+  }
+};
+
+/// Builds a CudfDateTimeContext from the query config, copying the session
+/// timezone, the adjust-to-session-timezone flag, and the session start time.
+/// Operators that construct cuDF expressions build the context here so the
+/// derivation lives in one place and timezone-aware functions match the CPU
+/// path.
+CudfDateTimeContext contextFromConfig(const core::QueryConfig& config);
+
 class CudfFunction {
  public:
   virtual ~CudfFunction() = default;
   virtual ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const = 0;
+
+  /// Attaches the query-scoped evaluation context. Called once after the
+  /// function is created. Functions that do not need it simply ignore context_.
+  void setContext(const CudfDateTimeContext& context) {
+    context_ = context;
+  }
+
+ protected:
+  // Query-scoped evaluation context (session timezone and start time), attached
+  // via setContext. Timezone-aware functions read it; others ignore it.
+  CudfDateTimeContext context_;
 };
 
 using CudfFunctionFactory = std::function<std::shared_ptr<CudfFunction>(
@@ -114,10 +161,12 @@ void registerCudfFunctions(
 
 /// Create a CudfFunction for the given name and expression.
 /// Returns nullptr if no registered function matches the expression's
-/// signature.
+/// signature. The context is attached to the created function so
+/// timezone-aware functions can read the session timezone.
 std::shared_ptr<CudfFunction> createCudfFunction(
     const std::string& name,
-    const std::shared_ptr<velox::exec::Expr>& expr);
+    const std::shared_ptr<velox::exec::Expr>& expr,
+    const CudfDateTimeContext& context = {});
 
 bool registerBuiltinFunctions(const std::string& prefix);
 
@@ -142,7 +191,8 @@ using CudfExpressionEvaluatorCanEvaluate =
 using CudfExpressionEvaluatorCreate =
     std::function<std::shared_ptr<CudfExpression>(
         std::shared_ptr<velox::exec::Expr> expr,
-        const RowTypePtr& inputRowSchema)>;
+        const RowTypePtr& inputRowSchema,
+        const CudfDateTimeContext& context)>;
 
 // Register a CudfExpression evaluator.
 // - name: unique identifier (e.g., "ast", "function", "my_custom").
@@ -161,7 +211,8 @@ class FunctionExpression : public CudfExpression {
  public:
   static std::shared_ptr<FunctionExpression> create(
       const std::shared_ptr<velox::exec::Expr>& expr,
-      const RowTypePtr& inputRowSchema);
+      const RowTypePtr& inputRowSchema,
+      const CudfDateTimeContext& context = {});
 
   // TODO (dm): A storage for keeping results in case this is a multiply
   // referenced subexpression (to do CSE)
@@ -196,7 +247,8 @@ class FunctionExpression : public CudfExpression {
 
 std::shared_ptr<CudfExpression> createCudfExpression(
     std::shared_ptr<velox::exec::Expr> expr,
-    const RowTypePtr& inputRowSchema);
+    const RowTypePtr& inputRowSchema,
+    const CudfDateTimeContext& context = {});
 
 /// Lightweight check if an expression tree is supported by any CUDF evaluator
 /// without initializing CudfExpression objects.

@@ -18,9 +18,7 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
-#include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
-#include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/memory/Memory.h"
@@ -51,28 +49,6 @@ void debugPrintTree(
   for (auto& input : expr->inputs()) {
     debugPrintTree(input, indent + 2, os);
   }
-}
-
-bool isTimezoneSensitiveDateTrunc(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  const auto dateTruncName =
-      CudfConfig::getInstance().functionNamePrefix + "date_trunc";
-  return expr->name() == dateTruncName &&
-      DateTruncFunction::isTimezoneSensitive(expr);
-}
-
-bool containsTimezoneSensitiveDateTrunc(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  if (isTimezoneSensitiveDateTrunc(expr)) {
-    return true;
-  }
-
-  for (const auto& input : expr->inputs()) {
-    if (containsTimezoneSensitiveDateTrunc(input)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 bool checkAddIdentityProjection(
@@ -145,19 +121,7 @@ bool canBeEvaluatedByCudf(
   std::unique_ptr<exec::ExprSet> exprSet = exec::makeExprSetFromFlag(
       std::move(exprsCopy), &precompileCtx, lazyDereference);
 
-  const core::QueryConfig defaultQueryConfig = core::QueryConfig({});
-  const core::QueryConfig& queryConfig =
-      queryCtx ? queryCtx->queryConfig() : defaultQueryConfig;
-  const bool adjustTimestampToTimezone =
-      queryConfig.adjustTimestampToTimezone();
-
   for (const auto& e : exprSet->exprs()) {
-    if (adjustTimestampToTimezone && containsTimezoneSensitiveDateTrunc(e)) {
-      LOG_FALLBACK(
-          "date_trunc(timestamp) requires CPU evaluation when "
-          "adjust_timestamp_to_session_timezone is enabled");
-      return false;
-    }
     if (!canBeEvaluatedByCudf(e)) {
       return false;
     }
@@ -233,6 +197,12 @@ void CudfFilterProject::initialize() {
   const auto inputType = project_ ? project_->sources()[0]->outputType()
                                   : filter_->sources()[0]->outputType();
 
+  // Capture the session timezone so timezone-aware GPU functions (date/time
+  // extraction, the TIMESTAMP WITH TIME ZONE family, temporal casts) match the
+  // CPU path.
+  const auto exprContext =
+      contextFromConfig(operatorCtx_->driverCtx()->queryConfig());
+
   // convert to AST
   if (CudfConfig::getInstance().debugEnabled) {
     int i = 0;
@@ -243,21 +213,22 @@ void CudfFilterProject::initialize() {
   }
   if (hasFilter_) {
     // First expr is Filter, rest are Project
-    filterEvaluator_ = createCudfExpression(expr->exprs()[0], inputType);
+    filterEvaluator_ =
+        createCudfExpression(expr->exprs()[0], inputType, exprContext);
     std::transform(
         expr->exprs().begin() + 1,
         expr->exprs().end(),
         std::back_inserter(projectEvaluators_),
-        [inputType](const auto& expr) {
-          return createCudfExpression(expr, inputType);
+        [&](const auto& expr) {
+          return createCudfExpression(expr, inputType, exprContext);
         });
   } else {
     std::transform(
         expr->exprs().begin(),
         expr->exprs().end(),
         std::back_inserter(projectEvaluators_),
-        [inputType](const auto& expr) {
-          return createCudfExpression(expr, inputType);
+        [&](const auto& expr) {
+          return createCudfExpression(expr, inputType, exprContext);
         });
   }
 
