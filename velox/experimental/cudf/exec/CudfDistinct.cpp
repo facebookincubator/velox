@@ -20,6 +20,7 @@
 
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/HashAggregation.h"
+#include "velox/exec/Task.h"
 
 #include <cudf/concatenate.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
@@ -193,7 +194,10 @@ RowVectorPtr CudfDistinct::doGetOutput() {
     return nullptr;
   }
 
-  if (inputs_.empty() && !noMoreInput_) {
+  if (inputs_.empty()) {
+    // Non-last drivers have their inputs moved away by the last driver during
+    // allPeersFinished coordination. Nothing left to process.
+    finished_ = true;
     return nullptr;
   }
 
@@ -217,9 +221,50 @@ RowVectorPtr CudfDistinct::doGetOutput() {
 
 void CudfDistinct::doNoMoreInput() {
   Operator::noMoreInput();
-  if (isPartialOutput_ && inputs_.empty()) {
-    finished_ = true;
+  if (isPartialOutput_) {
+    if (inputs_.empty()) {
+      finished_ = true;
+    }
+    return;
   }
+
+  // FINAL distinct: coordinate across peer drivers so that one driver
+  // collects all inputs and produces a single globally-distinct result.
+  std::vector<ContinuePromise> promises;
+  std::vector<std::shared_ptr<exec::Driver>> peers;
+
+  if (!operatorCtx_->task()->allPeersFinished(
+          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+    return; // Not the last driver — block until peer finishes
+  }
+
+  // Wake up peer drivers when we finish collecting data, even on exception.
+  SCOPE_EXIT {
+    peers.clear();
+    for (auto& promise : promises) {
+      promise.setValue();
+    }
+  };
+
+  // This driver was chosen to collect data from all peers.
+  for (auto& peer : peers) {
+    auto op = peer->findOperator(planNodeId());
+    auto* peerDistinct = dynamic_cast<CudfDistinct*>(op);
+    VELOX_CHECK_NOT_NULL(peerDistinct);
+    inputs_.insert(
+        inputs_.end(),
+        std::make_move_iterator(peerDistinct->inputs_.begin()),
+        std::make_move_iterator(peerDistinct->inputs_.end()));
+    peerDistinct->inputs_.clear();
+  }
+}
+
+exec::BlockingReason CudfDistinct::isBlocked(ContinueFuture* future) {
+  if (!future_.valid()) {
+    return exec::BlockingReason::kNotBlocked;
+  }
+  *future = std::move(future_);
+  return exec::BlockingReason::kWaitForAggregationPeers;
 }
 
 bool CudfDistinct::isFinished() {
