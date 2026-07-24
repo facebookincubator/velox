@@ -1609,3 +1609,21 @@ TEST_F(CudfNestedLoopJoinTest, crossJoinZeroColumnBuild) {
       makeRowVector({"p0"}, {makeFlatVector<int64_t>({4, 4, 4, 5, 5, 5})});
   AssertQueryBuilder(plan).assertResults(expected);
 }
+
+TEST_F(CudfNestedLoopJoinTest, crossJoinZeroColumnBuildAndOutput) {
+  auto probeData = makeRowVector({makeFlatVector<int64_t>({4, 5})});
+  auto buildData = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeData})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildData})
+                          .project({})
+                          .planNode(),
+                      {})
+                  .planNode();
+
+  AssertQueryBuilder(plan).assertResults(makeRowVector(ROW({}), 6));
+}

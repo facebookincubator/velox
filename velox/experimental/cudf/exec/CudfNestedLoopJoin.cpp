@@ -81,10 +81,10 @@ cudf::size_type zeroColumnBuildRows(const std::vector<CudfVectorPtr>& inputs) {
   return static_cast<cudf::size_type>(numRows);
 }
 
-// Fails if the cross-join output row count (probe_rows x build_rows) would
-// overflow cudf::size_type. The product is computed in int64 because both
-// factors are int32.
-void checkCrossJoinOutputFits(
+// Returns the cross-join output row count (probe_rows x build_rows), failing if
+// it would overflow cudf::size_type. The product is computed in int64 because
+// both factors are int32.
+cudf::size_type checkedCrossJoinOutputRows(
     cudf::size_type probeRows,
     cudf::size_type buildRows) {
   auto outputRows =
@@ -96,6 +96,7 @@ void checkCrossJoinOutputFits(
       probeRows,
       buildRows,
       outputRows);
+  return static_cast<cudf::size_type>(outputRows);
 }
 
 } // namespace
@@ -725,7 +726,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
   // Cross-join output is probe_rows x build_rows; fail fast if it overflows
   // cudf::size_type. buildRows is passed separately because a zero-column build
   // table reports num_rows() == 0.
-  checkCrossJoinOutputFits(probeTableView.num_rows(), buildRows);
+  checkedCrossJoinOutputRows(probeTableView.num_rows(), buildRows);
 
   if (buildView.num_columns() == 0) {
     return crossJoinZeroColumnBuild(probeTableView, buildRows, stream);
@@ -1031,6 +1032,28 @@ RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
 
   // Join probe against the single build table.
   if (!buildEmpty_) {
+    // A zero-column cudf table cannot carry its logical row count. For an
+    // unfiltered inner cross join, cardinality is probe rows x build rows.
+    // Filtered and outer joins require separate matched/mismatch accounting.
+    // TODO: Add zero-column output support for filtered and outer nested loop
+    // joins.
+    if (joinType_ == core::JoinType::kInner && !hasFilter_ &&
+        outputType_->size() == 0) {
+      auto outputRows = checkedCrossJoinOutputRows(
+          static_cast<cudf::size_type>(cudfInput->size()),
+          buildData_->rowCount);
+      input_.reset();
+      if (outputRows == 0) {
+        return nullptr;
+      }
+      return std::make_shared<CudfVector>(
+          operatorCtx_->pool(),
+          outputType_,
+          outputRows,
+          std::make_unique<cudf::table>(),
+          stream);
+    }
+
     auto result = joinWithBuildBatch(
         cudfInput->getTableView(),
         buildData_->table->view(),
