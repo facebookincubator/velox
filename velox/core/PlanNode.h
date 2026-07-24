@@ -4839,7 +4839,7 @@ class UnnestNode : public PlanNode {
       const PlanNodeId& id,
       std::vector<FieldAccessTypedExprPtr> replicateVariables,
       std::vector<FieldAccessTypedExprPtr> unnestVariables,
-      std::vector<std::string> unnestNames,
+      std::vector<std::optional<std::string>> unnestNames,
       std::optional<std::string> ordinalityName,
       std::optional<std::string> markerName,
       const PlanNodePtr& source);
@@ -4848,11 +4848,34 @@ class UnnestNode : public PlanNode {
       const PlanNodeId& id,
       std::vector<FieldAccessTypedExprPtr> replicateVariables,
       std::vector<FieldAccessTypedExprPtr> unnestVariables,
-      std::vector<std::string> unnestNames,
+      std::vector<std::optional<std::string>> unnestNames,
       std::optional<std::string> ordinalityName,
       std::optional<std::string> markerName,
       std::optional<bool> splitOutput,
       const PlanNodePtr& source);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Deprecated. Use the std::vector<std::optional<std::string>> overload.
+  UnnestNode(
+      const PlanNodeId& id,
+      std::vector<FieldAccessTypedExprPtr> replicateVariables,
+      std::vector<FieldAccessTypedExprPtr> unnestVariables,
+      std::vector<std::string> unnestNames,
+      std::optional<std::string> ordinalityName,
+      std::optional<std::string> markerName,
+      const PlanNodePtr& source)
+      : UnnestNode(
+            id,
+            std::move(replicateVariables),
+            std::move(unnestVariables),
+            std::vector<std::optional<std::string>>(
+                unnestNames.begin(),
+                unnestNames.end()),
+            std::move(ordinalityName),
+            std::move(markerName),
+            std::nullopt,
+            source) {}
+#endif
 
   class Builder {
    public:
@@ -4887,7 +4910,7 @@ class UnnestNode : public PlanNode {
       return *this;
     }
 
-    Builder& unnestNames(std::vector<std::string> unnestNames) {
+    Builder& unnestNames(std::vector<std::optional<std::string>> unnestNames) {
       unnestNames_ = std::move(unnestNames);
       return *this;
     }
@@ -4939,7 +4962,7 @@ class UnnestNode : public PlanNode {
     std::optional<PlanNodeId> id_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> replicateVariables_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> unnestVariables_;
-    std::optional<std::vector<std::string>> unnestNames_;
+    std::optional<std::vector<std::optional<std::string>>> unnestNames_;
     std::optional<std::string> ordinalityName_;
     std::optional<std::string> markerName_;
     std::optional<PlanNodePtr> source_;
@@ -4972,7 +4995,7 @@ class UnnestNode : public PlanNode {
     return unnestVariables_;
   }
 
-  const std::vector<std::string>& unnestNames() const {
+  const std::vector<std::optional<std::string>>& unnestNames() const {
     return unnestNames_;
   }
 
@@ -5009,7 +5032,7 @@ class UnnestNode : public PlanNode {
 
   const std::vector<FieldAccessTypedExprPtr> replicateVariables_;
   const std::vector<FieldAccessTypedExprPtr> unnestVariables_;
-  const std::vector<std::string> unnestNames_;
+  const std::vector<std::optional<std::string>> unnestNames_;
   const std::optional<std::string> ordinalityName_;
   const std::optional<std::string> markerName_;
   const std::optional<bool> splitOutput_;
