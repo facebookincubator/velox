@@ -567,6 +567,14 @@ class RowReaderOptions {
     nimblePreserveDictionaryEncoding_ = value;
   }
 
+  bool nimbleCompactDictionaryAcrossChunks() const {
+    return nimbleCompactDictionaryAcrossChunks_;
+  }
+
+  void setNimbleCompactDictionaryAcrossChunks(bool value) {
+    nimbleCompactDictionaryAcrossChunks_ = value;
+  }
+
   bool lazyColumnIo() const {
     return lazyColumnIo_;
   }
@@ -665,6 +673,9 @@ class RowReaderOptions {
   // Controls whether dictionary-encoded Nimble string columns return
   // DictionaryVector instead of FlatVector.
   bool nimblePreserveDictionaryEncoding_{false};
+  // Deduplicates dictionary entries when merging alphabets across chunks,
+  // reducing DictionaryVector memory at the cost of a dedup map lookup.
+  bool nimbleCompactDictionaryAcrossChunks_{false};
   // Defers I/O for projected columns without pushdown or remaining filters.
   bool lazyColumnIo_{false};
   folly::F14FastSet<std::string> remainingFilterColumns_;
