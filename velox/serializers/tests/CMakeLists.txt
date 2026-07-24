@@ -32,6 +32,23 @@ target_link_libraries(
   GTest::gmock
 )
 
+add_executable(velox_arrow_serializer_test ArrowSerializerTest.cpp)
+
+add_test(
+  NAME velox_arrow_serializer_test
+  COMMAND velox_arrow_serializer_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(
+  velox_arrow_serializer_test
+  velox_arrow_serializer
+  velox_gtest_utils
+  velox_vector_test_lib
+  GTest::gtest
+  GTest::gtest_main
+)
+
 # Split velox_serializer_test into individual test binaries for parallel
 # execution.
 set(
