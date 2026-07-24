@@ -2127,6 +2127,107 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinBatchedBuildWithFilter) {
       .run();
 }
 
+// Left semi filter join with multiple build batches. A probe key appears in
+// multiple build batches. Without deduplication, the semi-join would emit
+// the probe row once per matching build batch instead of exactly once.
+TEST_P(MultiThreadedHashJoinTest, leftSemiFilterJoinBatchedBuild) {
+  auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  auto savedMin = cudfConfig.batchSizeMinThreshold;
+  auto savedMax = cudfConfig.batchSizeMaxThreshold;
+  cudfConfig.batchSizeMinThreshold = 10;
+  cudfConfig.batchSizeMaxThreshold = 10;
+  SCOPE_EXIT {
+    cudfConfig.batchSizeMinThreshold = savedMin;
+    cudfConfig.batchSizeMaxThreshold = savedMax;
+  };
+
+  // Probe: keys [0..4] plus unmatched keys [100, 101].
+  std::vector<RowVectorPtr> probeVectors = {makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int32_t>({0, 1, 2, 3, 4, 100, 101}),
+          makeFlatVector<int32_t>({10, 11, 12, 13, 14, 15, 16}),
+      })};
+
+  // Build: 3 batches of 10 rows each. All three batches contain keys [0..9],
+  // so probe keys 0-4 match in every batch. Without the fix, each matching
+  // probe row would be emitted 3 times.
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(3, [&](int32_t batchIdx) {
+        return makeRowVector({
+            makeFlatVector<int32_t>(10, [](auto row) { return row; }),
+            makeFlatVector<int32_t>(
+                10, [batchIdx](auto row) { return batchIdx * 100 + row; }),
+        });
+      });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_c0", "c1 AS u_c1"})
+      .joinType(core::JoinType::kLeftSemiFilter)
+      .joinOutputLayout({"c0", "c1"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1 FROM t WHERE t.c0 IN (SELECT u.c0 FROM u)")
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "10")
+      .run();
+}
+
+// Left semi filter join with filter and multiple build batches. Probe keys
+// match in multiple build batches but only some pairs pass the filter.
+// Verifies that each probe row appears at most once regardless of how many
+// build batches contain a passing match.
+TEST_P(MultiThreadedHashJoinTest, leftSemiFilterJoinBatchedBuildWithFilter) {
+  auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  auto savedMin = cudfConfig.batchSizeMinThreshold;
+  auto savedMax = cudfConfig.batchSizeMaxThreshold;
+  cudfConfig.batchSizeMinThreshold = 10;
+  cudfConfig.batchSizeMaxThreshold = 10;
+  SCOPE_EXIT {
+    cudfConfig.batchSizeMinThreshold = savedMin;
+    cudfConfig.batchSizeMaxThreshold = savedMax;
+  };
+
+  // Probe: keys [0..7].
+  std::vector<RowVectorPtr> probeVectors = {makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int32_t>(8, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(8, [](auto row) { return row; }),
+      })};
+
+  // Build: 2 batches of 10 rows each. Both have keys [0..9].
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(2, [&](int32_t batchIdx) {
+        return makeRowVector({
+            makeFlatVector<int32_t>(10, [](auto row) { return row; }),
+            makeFlatVector<int32_t>(
+                10, [batchIdx](auto row) { return batchIdx * 10 + row; }),
+        });
+      });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_c0", "c1 AS u_c1"})
+      .joinType(core::JoinType::kLeftSemiFilter)
+      .joinFilter("c1 + u_c1 > 5")
+      .joinOutputLayout({"c0", "c1"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1 FROM t WHERE EXISTS "
+          "(SELECT 1 FROM u WHERE t.c0 = u.c0 AND t.c1 + u.c1 > 5)")
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "10")
+      .run();
+}
+
 TEST_P(MultiThreadedHashJoinTest, nullStatsWithEmptyBuild) {
   std::vector<RowVectorPtr> probeVectors =
       makeBatches(1, [&](int32_t /*unused*/) {
