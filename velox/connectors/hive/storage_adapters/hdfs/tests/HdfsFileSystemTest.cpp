@@ -16,17 +16,24 @@
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsFileSystem.h"
 #include <boost/format.hpp>
 #include <gmock/gmock-matchers.h>
+#include <algorithm>
 #include <atomic>
+#include <deque>
+#include <exception>
 #include <random>
 #include "gtest/gtest.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/io/IoStatistics.h"
+#include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/tests/HdfsMiniCluster.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/dwio/common/DirectBufferedInput.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/external/hdfs/ArrowHdfsInternal.h"
 
 #include <unistd.h>
@@ -46,9 +53,92 @@ static const std::string kViewfsDestinationPath =
     "viewfs://" + kDestinationPath;
 std::unordered_map<std::string, std::string> configurationValues;
 
+class QueuedExecutor final : public folly::Executor {
+ public:
+  void add(folly::Func func) override {
+    functions_.push_back(std::move(func));
+  }
+
+  size_t size() const {
+    return functions_.size();
+  }
+
+  std::exception_ptr runNext() {
+    VELOX_CHECK(!functions_.empty());
+    auto func = std::move(functions_.front());
+    functions_.pop_front();
+    try {
+      func();
+      return nullptr;
+    } catch (...) {
+      return std::current_exception();
+    }
+  }
+
+ private:
+  std::deque<folly::Func> functions_;
+};
+
+class PartialReadFailureFile final : public ReadFile {
+ public:
+  explicit PartialReadFailureFile(std::shared_ptr<ReadFile> delegate)
+      : delegate_(std::move(delegate)) {}
+
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buffer,
+      const FileIoContext& context) const override {
+    if (failNextRead_.exchange(false)) {
+      const auto partialLength = std::max<uint64_t>(1, length / 2);
+      delegate_->pread(offset, partialLength, buffer, context);
+      VELOX_FAIL("Injected failure after partial HDFS read");
+    }
+    return delegate_->pread(offset, length, buffer, context);
+  }
+
+  uint64_t size() const override {
+    return delegate_->size();
+  }
+
+  uint64_t memoryUsage() const override {
+    return delegate_->memoryUsage();
+  }
+
+  bool shouldCoalesce() const override {
+    return delegate_->shouldCoalesce();
+  }
+
+  std::string getName() const override {
+    return delegate_->getName();
+  }
+
+  uint64_t getNaturalReadSize() const override {
+    return delegate_->getNaturalReadSize();
+  }
+
+ private:
+  const std::shared_ptr<ReadFile> delegate_;
+  mutable std::atomic_bool failNextRead_{true};
+};
+
+std::string readAll(dwio::common::SeekableInputStream& stream) {
+  std::string result;
+  const void* buffer;
+  int32_t size;
+  while (stream.Next(&buffer, &size)) {
+    result.append(static_cast<const char*>(buffer), size);
+  }
+  return result;
+}
+
 class HdfsFileSystemTest : public testing::Test {
  public:
   static void SetUpTestSuite() {
+    if (!memory::MemoryManager::testInstance()) {
+      memory::MemoryManager::testingSetInstance(
+          memory::MemoryManager::Options{});
+    }
     filesystems::registerHdfsFileSystem();
     if (miniCluster == nullptr) {
       miniCluster = std::make_shared<filesystems::test::HdfsMiniCluster>();
@@ -222,6 +312,52 @@ TEST_F(HdfsFileSystemTest, read) {
       std::string(miniCluster->nameNodePort()));
   HdfsReadFile readFile(driver, hdfs, kDestinationPath);
   readData(&readFile);
+}
+
+TEST_F(HdfsFileSystemTest, cancelledCoalescedLoadFallsBackToSyncRead) {
+  filesystems::arrow::io::internal::LibHdfsShim* driver;
+  auto hdfs = connectHdfsDriver(
+      &driver,
+      std::string(miniCluster->host()),
+      std::string(miniCluster->nameNodePort()));
+  auto hdfsFile =
+      std::make_shared<HdfsReadFile>(driver, hdfs, kDestinationPath);
+  auto partialFailureFile = std::make_shared<PartialReadFailureFile>(hdfsFile);
+
+  constexpr int32_t kLoadQuantum = 8 << 20;
+  auto pool = memory::memoryManager()->addLeafPool();
+  dwio::common::ReaderOptions options(pool.get());
+  options.setLoadQuantum(kLoadQuantum);
+  auto tracker =
+      std::make_shared<cache::ScanTracker>("", nullptr, kLoadQuantum);
+  auto ioStatistics = std::make_shared<io::IoStatistics>();
+  options.setDataIoStats(ioStatistics);
+  auto ioStats = std::make_shared<facebook::velox::IoStats>();
+  QueuedExecutor executor;
+  dwio::common::DirectBufferedInput input(
+      partialFailureFile,
+      dwio::common::MetricsLog::voidLog(),
+      StringIdLease{},
+      tracker,
+      StringIdLease{},
+      ioStatistics,
+      ioStats,
+      &executor,
+      options);
+
+  auto first = input.enqueue({0, 5}, nullptr);
+  auto second = input.enqueue({5, 5}, nullptr);
+  input.load(dwio::common::LogType::FILE);
+  ASSERT_EQ(executor.size(), 1);
+
+  // The first HDFS pread writes part of the first region and then throws. The
+  // cancelled coalesced load must not publish that partially filled buffer.
+  ASSERT_NE(executor.runNext(), nullptr);
+
+  EXPECT_EQ(readAll(*first), "aaaaa");
+  EXPECT_EQ(readAll(*second), "bbbbb");
+  EXPECT_EQ(ioStatistics->read().count(), 2);
+  EXPECT_EQ(ioStatistics->read().sum(), 10);
 }
 
 TEST_F(HdfsFileSystemTest, rename) {
