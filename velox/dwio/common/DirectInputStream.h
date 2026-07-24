@@ -91,6 +91,21 @@ class DirectInputStream : public SeekableInputStream {
   // Contains the data if the range is too small for Allocation.
   std::string tinyData_;
 
+  // Borrowed arena slice plus a hold on the owning load, bundled so the pointer
+  // and keep-alive can never desync. Empty when not arena-backed.
+  struct ArenaBuffer {
+    const char* data{nullptr};
+    std::shared_ptr<void> hold;
+    explicit operator bool() const {
+      return data != nullptr;
+    }
+    void reset() {
+      data = nullptr;
+      hold.reset();
+    }
+  };
+  ArenaBuffer arena_;
+
   // Pointer to start of current run in 'entry->nonContiguousData()' or
   // 'entry->contiguousData()'.
   uint8_t* run_{nullptr};

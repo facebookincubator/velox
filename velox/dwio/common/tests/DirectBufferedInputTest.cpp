@@ -349,6 +349,309 @@ TEST_F(DirectBufferedInputTest, duplicateRegionsShareCoalescedRead) {
   }
 }
 
+// Arena path with a duplicate region: each region is read once and the
+// duplicate shares the source's arena slice.
+TEST_F(DirectBufferedInputTest, duplicateRegionsShareArenaRead) {
+  constexpr int32_t kContentSize = 4 << 20; // 4MB
+  std::string content;
+  content.resize(kContentSize);
+  for (int32_t i = 0; i < kContentSize; ++i) {
+    content[i] = static_cast<char>(i % 251);
+  }
+
+  // 32 regions just over a page each waste ~128KB total, over the arena floor.
+  constexpr int32_t kNumRegions = 32;
+  constexpr int32_t kRegionSize = 4'097;
+
+  auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setLoadQuantum(1 << 20);
+
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "arenaDup");
+  StringIdLease groupId(ids, "arenaDupGroup");
+
+  DirectBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      tracker_,
+      std::move(groupId),
+      dataIoStats_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  // Adjacent distinct regions, then a duplicate of region 0.
+  std::vector<std::unique_ptr<SeekableInputStream>> streams;
+  streams.reserve(kNumRegions);
+  for (int32_t k = 0; k < kNumRegions; ++k) {
+    streams.push_back(input.enqueue(
+        common::Region{static_cast<uint64_t>(k) * kRegionSize, kRegionSize},
+        nullptr));
+    ASSERT_NE(streams.back(), nullptr);
+  }
+  auto dupStream = input.enqueue(common::Region{0, kRegionSize}, nullptr);
+  ASSERT_NE(dupStream, nullptr);
+  // Second duplicate of region 0: a 3-chain exercising the intermediate
+  // duplicate (its predecessor is itself a duplicate).
+  auto dupStream2 = input.enqueue(common::Region{0, kRegionSize}, nullptr);
+  ASSERT_NE(dupStream2, nullptr);
+
+  input.load(LogType::TEST);
+  EXPECT_EQ(input.testingCoalescedLoads().size(), 1);
+
+  // Source and its duplicates return the same bytes, read once.
+  auto src = getNext(*streams[0]);
+  ASSERT_TRUE(src.has_value());
+  EXPECT_EQ(src.value(), content.substr(0, kRegionSize));
+  auto dup = getNext(*dupStream);
+  ASSERT_TRUE(dup.has_value());
+  EXPECT_EQ(dup.value(), content.substr(0, kRegionSize));
+  auto dup2 = getNext(*dupStream2);
+  ASSERT_TRUE(dup2.has_value());
+  EXPECT_EQ(dup2.value(), content.substr(0, kRegionSize));
+  // Only the distinct regions are read; duplicates add none.
+  EXPECT_EQ(readFile->numReads(), kNumRegions);
+
+  // A non-duplicate arena stream still reads its own bytes.
+  auto mid = getNext(*streams[5]);
+  ASSERT_TRUE(mid.has_value());
+  EXPECT_EQ(mid.value(), content.substr(5 * kRegionSize, kRegionSize));
+  EXPECT_EQ(readFile->numReads(), kNumRegions);
+}
+
+// An arena stream whose region exceeds loadQuantum reads the first quantum from
+// the arena and the rest into its own buffer, reproducing the region intact.
+TEST_F(DirectBufferedInputTest, arenaStreamCrossesQuantum) {
+  constexpr int32_t kContentSize = 4 << 20; // 4MB
+  std::string content;
+  content.resize(kContentSize);
+  for (int32_t i = 0; i < kContentSize; ++i) {
+    content[i] = static_cast<char>(i % 251);
+  }
+
+  // 32 non-tiny regions push baselineWaste over the 64KB floor -> useArena.
+  constexpr int32_t kNumSmall = 32;
+  constexpr int32_t kSmallSize = 4'097;
+  constexpr uint64_t kLoadQuantum = 1 << 20; // 1MB
+  const uint64_t bigOffset = static_cast<uint64_t>(kNumSmall) * kSmallSize;
+  constexpr uint64_t kBigSize = (1 << 20) + (512 << 10); // 1.5MB > quantum
+
+  auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setLoadQuantum(kLoadQuantum);
+
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "arenaQuantum");
+  StringIdLease groupId(ids, "arenaQuantumGroup");
+  DirectBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      tracker_,
+      std::move(groupId),
+      dataIoStats_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  std::vector<std::unique_ptr<SeekableInputStream>> streams;
+  streams.reserve(kNumSmall);
+  for (int32_t k = 0; k < kNumSmall; ++k) {
+    streams.push_back(input.enqueue(
+        common::Region{static_cast<uint64_t>(k) * kSmallSize, kSmallSize},
+        nullptr));
+  }
+  auto bigStream = input.enqueue(common::Region{bigOffset, kBigSize}, nullptr);
+  ASSERT_NE(bigStream, nullptr);
+
+  input.load(LogType::TEST);
+  ASSERT_EQ(input.testingCoalescedLoads().size(), 1);
+
+  // Read the whole region across the quantum boundary.
+  std::string got;
+  while (auto chunk = getNext(*bigStream)) {
+    got += chunk.value();
+  }
+  EXPECT_EQ(got, content.substr(bigOffset, kBigSize));
+}
+
+// In an arena load, a tiny request is still served from its own 'tinyData' and
+// a tiny duplicate gets its own copy.
+TEST_F(DirectBufferedInputTest, arenaLoadServesTinyAndDuplicates) {
+  constexpr int32_t kContentSize = 4 << 20; // 4MB
+  std::string content;
+  content.resize(kContentSize);
+  for (int32_t i = 0; i < kContentSize; ++i) {
+    content[i] = static_cast<char>(i % 251);
+  }
+
+  constexpr int32_t kNumSmall = 32;
+  constexpr int32_t kSmallSize = 4'097; // non-tiny, drives useArena
+  constexpr int32_t kTinyLen = 100; // <= kTinySize
+  const uint64_t tinyOffset = static_cast<uint64_t>(kNumSmall) * kSmallSize;
+
+  auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setLoadQuantum(1 << 20);
+
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "arenaTiny");
+  StringIdLease groupId(ids, "arenaTinyGroup");
+  DirectBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      tracker_,
+      std::move(groupId),
+      dataIoStats_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  std::vector<std::unique_ptr<SeekableInputStream>> streams;
+  streams.reserve(kNumSmall);
+  for (int32_t k = 0; k < kNumSmall; ++k) {
+    streams.push_back(input.enqueue(
+        common::Region{static_cast<uint64_t>(k) * kSmallSize, kSmallSize},
+        nullptr));
+  }
+  // A tiny region plus a tiny duplicate of it, inside the arena load.
+  auto tinyStream =
+      input.enqueue(common::Region{tinyOffset, kTinyLen}, nullptr);
+  auto tinyDupStream =
+      input.enqueue(common::Region{tinyOffset, kTinyLen}, nullptr);
+  ASSERT_NE(tinyStream, nullptr);
+  ASSERT_NE(tinyDupStream, nullptr);
+
+  input.load(LogType::TEST);
+  ASSERT_EQ(input.testingCoalescedLoads().size(), 1);
+
+  // Non-tiny request reads from the arena correctly.
+  auto big = getNext(*streams[7]);
+  ASSERT_TRUE(big.has_value());
+  EXPECT_EQ(big.value(), content.substr(7 * kSmallSize, kSmallSize));
+
+  // Tiny request and its duplicate both read the correct bytes from 'tinyData'.
+  auto tiny = getNext(*tinyStream);
+  ASSERT_TRUE(tiny.has_value());
+  EXPECT_EQ(tiny.value(), content.substr(tinyOffset, kTinyLen));
+  auto tinyDup = getNext(*tinyDupStream);
+  ASSERT_TRUE(tinyDup.has_value());
+  EXPECT_EQ(tinyDup.value(), content.substr(tinyOffset, kTinyLen));
+
+  // Each distinct region is read once; the tiny duplicate shares its read.
+  EXPECT_EQ(readFile->numReads(), kNumSmall + 1);
+}
+
+// 'useArena' engages only when per-request page padding would waste more than
+// the arena floor (kMinPages * kPageSize = 64KB). A 4097B region rounds to two
+// pages, wasting ~4095B; ~16 such regions reach the floor.
+TEST_F(DirectBufferedInputTest, useArenaThreshold) {
+  constexpr int32_t kContentSize = 4 << 20; // 4MB
+  std::string content;
+  content.resize(kContentSize);
+  for (int32_t i = 0; i < kContentSize; ++i) {
+    content[i] = static_cast<char>(i % 251);
+  }
+  constexpr int32_t kRegionSize = 4'097; // non-tiny; ~4095B padding each
+
+  auto firstRequestArenaBacked = [&](int32_t numRegions) {
+    auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
+    io::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    readerOptions.setLoadQuantum(1 << 20);
+    auto& ids = fileIds();
+    StringIdLease fileId(ids, fmt::format("arenaFloor{}", numRegions));
+    StringIdLease groupId(ids, fmt::format("arenaFloorGroup{}", numRegions));
+    DirectBufferedInput input(
+        readFile,
+        MetricsLog::voidLog(),
+        std::move(fileId),
+        tracker_,
+        std::move(groupId),
+        dataIoStats_,
+        nullptr,
+        executor_.get(),
+        readerOptions);
+    std::vector<std::unique_ptr<SeekableInputStream>> streams;
+    streams.reserve(numRegions);
+    for (int32_t k = 0; k < numRegions; ++k) {
+      streams.push_back(input.enqueue(
+          common::Region{static_cast<uint64_t>(k) * kRegionSize, kRegionSize},
+          nullptr));
+    }
+    input.load(LogType::TEST);
+    // Buffers are allocated on first access; touch a stream to force it.
+    EXPECT_TRUE(getNext(*streams[0]).has_value());
+    auto* load = dynamic_cast<DirectCoalescedLoad*>(
+        input.testingCoalescedLoads()[0].get());
+    EXPECT_NE(load, nullptr);
+    return load->requests()[0].buffer.arenaData != nullptr;
+  };
+
+  EXPECT_FALSE(firstRequestArenaBacked(10)); // ~41KB waste -> per-request
+  EXPECT_TRUE(firstRequestArenaBacked(32)); // ~131KB waste -> arena
+}
+
+// A wide group bump-packs its non-tiny buffers into one arena, costing far
+// fewer pool allocations than one per request.
+TEST_F(DirectBufferedInputTest, arenaReducesAllocations) {
+  constexpr int32_t kContentSize = 4 << 20; // 4MB
+  std::string content;
+  content.resize(kContentSize);
+  for (int32_t i = 0; i < kContentSize; ++i) {
+    content[i] = static_cast<char>(i % 251);
+  }
+  constexpr int32_t kNumRegions = 32; // > arena floor -> useArena
+  constexpr int32_t kRegionSize = 4'097;
+
+  auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setLoadQuantum(1 << 20);
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "arenaAllocs");
+  StringIdLease groupId(ids, "arenaAllocsGroup");
+  DirectBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      tracker_,
+      std::move(groupId),
+      dataIoStats_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  std::vector<std::unique_ptr<SeekableInputStream>> streams;
+  streams.reserve(kNumRegions);
+  for (int32_t k = 0; k < kNumRegions; ++k) {
+    streams.push_back(input.enqueue(
+        common::Region{static_cast<uint64_t>(k) * kRegionSize, kRegionSize},
+        nullptr));
+  }
+
+  const auto allocsBefore = pool_->stats().numAllocs;
+  input.load(LogType::TEST);
+  for (auto& stream : streams) {
+    EXPECT_TRUE(getNext(*stream).has_value());
+  }
+  const auto allocsDelta = pool_->stats().numAllocs - allocsBefore;
+  // 32 requests share one arena -> far fewer than one allocation each.
+  EXPECT_LT(allocsDelta, static_cast<uint64_t>(kNumRegions));
+}
+
 DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithBeforeLoading) {
   constexpr int32_t kContentSize = 4 << 20; // 4MB
   std::string content;
