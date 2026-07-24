@@ -31,6 +31,15 @@ struct IValue;
 
 namespace torch::wave {
 
+struct WaveConfig;
+
+/// Returns a mutable reference to the thread-local WaveConfig override pointer.
+/// While it is non-null, WaveConfig::get() returns the pointee instead of the
+/// global singleton, so wave graphs compiled and executed with different
+/// configs can run concurrently on different threads. Null on threads with no
+/// active override.
+WaveConfig*& waveConfigOverride();
+
 /// Process-wide configuration for wave graph execution (block size, tracing,
 /// grid hints).
 struct WaveConfig {
@@ -135,8 +144,14 @@ struct WaveConfig {
   // them until the whole graph finishes. Off by default.
   bool freeIntermediates{false};
 
-  /// Not thread-safe. All mutations must happen before concurrent reads.
+  /// Returns the active config: the thread-local override set by
+  /// waveConfigOverride() when non-null, otherwise the process-wide singleton.
+  /// The singleton is not thread-safe; all of its mutations must happen before
+  /// concurrent reads.
   FOLLY_EXPORT static WaveConfig& get() {
+    if (auto* configOverride = waveConfigOverride()) {
+      return *configOverride;
+    }
     static WaveConfig instance;
     return instance;
   }
