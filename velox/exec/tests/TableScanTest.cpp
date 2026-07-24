@@ -5918,6 +5918,100 @@ TEST_F(TableScanTest, bloomFilterPushdown) {
   }
 }
 
+// A table scan driver that blocks on-thread awaiting a split preload (or a
+// coalesced load) prepared on another thread must suspend itself, otherwise a
+// concurrent memory-arbitration reclaim can never pause the task and the query
+// dead-locks. Here the second split's read is blocked on the faulty file system
+// so a scan driver parks on the preload wait; the task must still be pausable.
+DEBUG_ONLY_TEST_F(TableScanTest, tableScanPausableWhileAwaitingSplitPreload) {
+  const size_t numFiles{2};
+  std::vector<std::shared_ptr<TempFilePath>> filePaths;
+  std::vector<RowVectorPtr> vectors;
+  for (auto i = 0; i < numFiles; ++i) {
+    auto batch = makeVectors(1, 1'000);
+    filePaths.emplace_back(TempFilePath::create(true));
+    writeToFile(filePaths.back()->tempFilePath(), batch);
+    vectors.push_back(batch[0]);
+  }
+  createDuckDbTable(vectors);
+
+  // Block the read of the second file so its background split preload never
+  // completes, parking a scan driver on the preload wait. 'secondReadBlocked'
+  // is set once that read is entered and stays blocked until the test releases
+  // it, so the scan driver's wait on this split is durable (not transient).
+  std::atomic_bool secondReadBlocked{false};
+  std::atomic_bool readResumeFlag{true};
+  folly::EventCount readResume;
+  auto faultyFs = faultyFileSystem();
+  std::atomic_bool blockOnce{true};
+  faultyFs->setFileInjectionHook([&](FaultFileOperation* op) {
+    if (op->path != filePaths.back()->getPath()) {
+      return;
+    }
+    if (!blockOnce.exchange(false)) {
+      return;
+    }
+    secondReadBlocked = true;
+    readResume.await([&]() { return !readResumeFlag.load(); });
+  });
+
+  // Fires on the driver thread when it parks on a split preload wait. Only act
+  // on the wait for the durably-blocked second split (after its read is
+  // entered); by this point driver suspension (if present) has already taken
+  // effect.
+  std::atomic_bool driverWaitingFlag{true};
+  folly::EventCount driverWaiting;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::AsyncSource::makeWait",
+      std::function<void(void*)>([&](void*) {
+        if (!secondReadBlocked.load()) {
+          return;
+        }
+        driverWaitingFlag = false;
+        driverWaiting.notifyAll();
+      }));
+
+  auto plan = tableScanNode();
+  const auto scanNodeId = plan->id();
+  std::shared_ptr<Task> task;
+  folly::Baton<> taskReady;
+  std::thread queryThread([&]() {
+    bool splitsAdded{false};
+    ::assertQuery(
+        plan,
+        [&](TaskCursor* cursor) {
+          if (splitsAdded) {
+            return;
+          }
+          splitsAdded = true;
+          task = cursor->task();
+          for (const auto& filePath : filePaths) {
+            cursor->task()->addSplit(
+                scanNodeId, makeHiveSplit(filePath->getPath()));
+          }
+          cursor->task()->noMoreSplits(scanNodeId);
+          cursor->setNoMoreSplits();
+          taskReady.post();
+        },
+        "SELECT * FROM tmp",
+        duckDbQueryRunner_);
+  });
+
+  taskReady.wait();
+  driverWaiting.await([&]() { return !driverWaitingFlag.load(); });
+
+  // The parked driver must have suspended so the task can pause. Without driver
+  // suspension for table scan, requestPause() never completes and this times
+  // out.
+  EXPECT_TRUE(task->requestPause().wait(std::chrono::seconds(60)));
+  Task::resume(task);
+
+  // Unblock the read and let the query run to completion.
+  readResumeFlag = false;
+  readResume.notifyAll();
+  queryThread.join();
+}
+
 // TODO: re-enable this test once we add back driver suspension support for
 // table scan.
 TEST_F(TableScanTest, DISABLED_memoryArbitrationWithSlowTableScan) {
