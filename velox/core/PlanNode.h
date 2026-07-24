@@ -3654,6 +3654,10 @@ class MergeJoinNode : public AbstractJoinNode {
     return true;
   }
 
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    return queryConfig.joinSpillEnabled();
+  }
+
   /// Returns true if the merge join supports this join type, otherwise false.
   static bool isSupported(JoinType joinType);
 

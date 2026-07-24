@@ -326,6 +326,74 @@ TEST_F(PlanFragmentTest, hashJoin) {
   }
 }
 
+TEST_F(PlanFragmentTest, mergeJoinCanSpill) {
+  const std::vector<FieldAccessTypedExprPtr> leftKeys{
+      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0")};
+  const std::vector<FieldAccessTypedExprPtr> rightKeys{
+      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "u0")};
+
+  const auto joinOutputType = ROW(
+      {"c0", "c1", "c2", "u0", "u1", "u2"},
+      {BIGINT(), BIGINT(), BIGINT(), BIGINT(), BIGINT(), BIGINT()});
+
+  const std::vector<JoinType> joinTypes{
+      JoinType::kInner,
+      JoinType::kLeft,
+      JoinType::kRight,
+      JoinType::kLeftSemiFilter,
+      JoinType::kRightSemiFilter,
+      JoinType::kAnti,
+      JoinType::kFull};
+
+  struct {
+    bool isSpillEnabled;
+    bool isJoinSpillEnabled;
+    bool expectedCanSpill;
+  } testSettings[] = {
+      {false, true, false},
+      {true, false, false},
+      {true, true, true},
+  };
+
+  for (const auto joinType : joinTypes) {
+    ASSERT_TRUE(MergeJoinNode::isSupported(joinType));
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(fmt::format(
+          "joinType:{} isSpillEnabled:{} isJoinSpillEnabled:{} expectedCanSpill:{}",
+          joinType,
+          testData.isSpillEnabled,
+          testData.isJoinSpillEnabled,
+          testData.expectedCanSpill));
+
+      const auto outputType = [&]() -> RowTypePtr {
+        if (isRightSemiFilterJoin(joinType)) {
+          return probeType_;
+        }
+        if (isLeftSemiFilterJoin(joinType) || isAntiJoin(joinType)) {
+          return rowType_;
+        }
+        return joinOutputType;
+      }();
+
+      const auto join = std::make_shared<MergeJoinNode>(
+          "mergeJoin",
+          joinType,
+          leftKeys,
+          rightKeys,
+          nullptr,
+          valueNode_,
+          probeValueNode_,
+          outputType);
+      auto queryCtx = getSpillQueryCtx(
+          testData.isSpillEnabled, true, testData.isJoinSpillEnabled, true);
+      const PlanFragment planFragment{join};
+      ASSERT_EQ(
+          planFragment.canSpill(queryCtx->queryConfig()),
+          testData.expectedCanSpill);
+    }
+  }
+}
+
 TEST_F(PlanFragmentTest, executionStrategyToString) {
   ASSERT_EQ(
       executionStrategyToString(core::ExecutionStrategy::kUngrouped),
