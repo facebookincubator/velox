@@ -274,15 +274,20 @@ void fillFrameFromUserInputs(
   }
 }
 
-// Removes aten._assert_async runtime data-validation nodes from the graph.
-// These guard real-data invariants (e.g. "num_candidates must be all True",
-// "labels must equal label presences") that random synthetic data does not
-// satisfy, so they fire spurious device-side asserts on a synthetic run. Their
-// outputs are unused, so removal is safe; mirrors nativert's RemoveDetach pass.
+// Removes runtime data-validation assert nodes from the graph. _assert_async
+// guards real-data invariants (e.g. "num_candidates must be all True") that
+// random synthetic data does not satisfy; _assert_scalar guards unbacked
+// symint ranges (e.g. "u0 >= 0") emitted by torch._check for data-dependent
+// sizes. Both are runtime no-ops for execution and their outputs are unused, so
+// removal is safe; mirrors nativert's RemoveDetach pass. The wave executor
+// cannot run _assert_scalar as a standalone (it aborts on the scalar IValue),
+// so stripping is required, not just an optimization.
 void stripDataAsserts(nativert::Graph& graph) {
   std::vector<nativert::Node*> toDrop;
   for (auto& node : graph.nodes()) {
-    if (node.target() == "torch.ops.aten._assert_async.msg") {
+    const auto& target = node.target();
+    if (target == "torch.ops.aten._assert_async.msg" ||
+        target == "torch.ops.aten._assert_scalar.default") {
       toDrop.push_back(&node);
     }
   }
@@ -1012,6 +1017,11 @@ void ExecutorTestBase::runTestWithFixture(
     const std::string& label) {
   displayName_ = label;
   auto displayName = label;
+
+  // Drop runtime data-validation asserts (e.g. _assert_scalar from torch._check
+  // on data-dependent sizes) so both the serial reference and the wave run use
+  // the same graph and the wave executor does not abort on a standalone assert.
+  stripDataAsserts(*fixture->model.graph);
 
   const int repeats = FLAGS_num_repeats;
 

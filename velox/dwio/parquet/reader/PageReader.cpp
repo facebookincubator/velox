@@ -18,7 +18,11 @@
 
 #include <snappy.h>
 #include <thrift/lib/cpp2/FieldRef.h>
+#include <zlib.h>
 #include <zstd.h>
+
+#include <folly/ScopeGuard.h>
+#include <folly/lang/Bits.h>
 
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
@@ -138,10 +142,12 @@ void PageReader::updateBufferPointersAfterDeserialization(
 }
 
 const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
-  uint64_t readUs{0};
-  {
-    MicrosecondWallTimer timer(&readUs);
-    if (bufferEnd_ == bufferStart_) {
+  if (bufferEnd_ == bufferStart_) {
+    // Refilling from the stream can perform real reads/load-position work, so
+    // time it and count it towards page-load time.
+    uint64_t readUs{0};
+    {
+      const MicrosecondWallTimer timer(&readUs);
       const void* buffer = nullptr;
       int32_t bufferSize = 0;
       if (!inputStream_->Next(&buffer, &bufferSize)) {
@@ -150,12 +156,19 @@ const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
       bufferStart_ = reinterpret_cast<const char*>(buffer);
       bufferEnd_ = bufferStart_ + bufferSize;
     }
-    // Fall through to the AlignedBuffer copy when the stream buffer does
-    // not have kPageReadPadding trailing bytes past 'size'.
-    if (bufferEnd_ - bufferStart_ >= size + kPageReadPadding) {
-      bufferStart_ += size;
-      return bufferStart_ - size;
-    }
+    stats_.pageLoadTimeNs.increment(readUs * 1'000);
+  }
+  // Zero-copy fast path: return directly from the stream buffer when it has
+  // enough data plus SIMD padding. This path performs no I/O, so it stays off
+  // the timer to avoid steady_clock::now() overhead on the hot path.
+  if (bufferEnd_ - bufferStart_ >= size + kPageReadPadding) {
+    bufferStart_ += size;
+    return bufferStart_ - size;
+  }
+  // Slow path: data spans stream buffer boundaries, must copy.
+  uint64_t readUs{0};
+  {
+    const MicrosecondWallTimer timer(&readUs);
     dwio::common::ensureCapacity<char>(copy, size, &pool_);
     dwio::common::readBytes(
         size,
@@ -202,9 +215,32 @@ const char* PageReader::decompressData(
       VELOX_CHECK_EQ(actualUncompressedSize, uncompressedSize);
       break;
     }
+    case common::CompressionKind::CompressionKind_GZIP: {
+      // Direct inflate using zlib, avoiding stream wrapper overhead. Parquet
+      // uses gzip wrapping (windowBits = 15 + 16 = 31).
+      z_stream stream{};
+      auto ret = inflateInit2(&stream, 15 + 16);
+      VELOX_CHECK_EQ(ret, Z_OK, "zlib inflateInit2 failed: {}", ret);
+      // Ensure zlib state is always released, even if a check below throws.
+      const auto inflateGuard = folly::makeGuard([&] { inflateEnd(&stream); });
+      // zlib's next_in is not const even though inflate only reads it.
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+      stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(pageData));
+      stream.avail_in = compressedSize;
+      stream.next_out = reinterpret_cast<Bytef*>(dest);
+      stream.avail_out = uncompressedSize;
+      ret = inflate(&stream, Z_FINISH);
+      VELOX_CHECK(
+          ret == Z_STREAM_END,
+          "GZIP decompression failed: {}",
+          stream.msg ? stream.msg : "unknown error");
+      VELOX_CHECK_EQ(stream.total_out, uncompressedSize);
+      break;
+    }
     default: {
-      // Fallback to stream-based decompression for other codecs (gzip, lz4,
-      // lzo).
+      // Fall back to stream-based decompression for the remaining codecs
+      // (LZ4 and LZO). Both may carry Hadoop framing with multiple blocks per
+      // page, which the shared decompressor handles correctly.
       std::unique_ptr<dwio::common::SeekableInputStream> inputStream =
           std::make_unique<dwio::common::SeekableArrayInputStream>(
               pageData, compressedSize, 0);
@@ -292,8 +328,21 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
     return;
   }
   pageData_ = readBytes(static_cast<int32_t>(compressedPageSize), pageBuffer_);
-  pageData_ =
-      decompressData(pageData_, compressedPageSize, uncompressedPageSize);
+  if (codec_ != common::CompressionKind::CompressionKind_NONE) {
+    pageData_ =
+        decompressData(pageData_, compressedPageSize, uncompressedPageSize);
+  } else {
+    // Without compression the page bytes are the data as-is. Bound the
+    // in-memory size by the bytes actually read so a corrupt page cannot make
+    // downstream reads run past the buffer. The old decompressData() path
+    // enforced this via SeekableInputStream::readFully.
+    VELOX_CHECK_LE(
+        uncompressedPageSize,
+        compressedPageSize,
+        "Uncompressed page size {} exceeds compressed page size {} for an uncompressed page (corrupt data page?)",
+        uncompressedPageSize,
+        compressedPageSize);
+  }
   auto pageEnd = pageData_ + uncompressedPageSize;
   auto remainingBytes = uncompressedPageSize;
   if (maxRepeat_ > 0) {
@@ -820,23 +869,41 @@ void PageReader::makeDecoder() {
   switch (encoding_) {
     case Encoding::RLE_DICTIONARY:
     case Encoding::PLAIN_DICTIONARY:
-      dictionaryIdDecoder_ = std::make_unique<RleBpDataDecoder>(
-          pageData_ + 1, pageData_ + encodedDataSize_, pageData_[0]);
+      if (dictionaryIdDecoder_) {
+        dictionaryIdDecoder_->reset(
+            pageData_ + 1, pageData_ + encodedDataSize_, pageData_[0]);
+      } else {
+        dictionaryIdDecoder_ = std::make_unique<RleBpDataDecoder>(
+            pageData_ + 1, pageData_ + encodedDataSize_, pageData_[0]);
+      }
       break;
     case Encoding::PLAIN:
       switch (parquetType) {
         case thrift::Type::BOOLEAN:
-          booleanDecoder_ = std::make_unique<BooleanDecoder>(
-              pageData_, pageData_ + encodedDataSize_);
+          if (booleanDecoder_) {
+            booleanDecoder_->reset(pageData_, pageData_ + encodedDataSize_);
+          } else {
+            booleanDecoder_ = std::make_unique<BooleanDecoder>(
+                pageData_, pageData_ + encodedDataSize_);
+          }
           break;
         case thrift::Type::BYTE_ARRAY:
-          stringDecoder_ = std::make_unique<StringDecoder>(
-              pageData_, pageData_ + encodedDataSize_);
+          if (stringDecoder_) {
+            stringDecoder_->reset(pageData_, pageData_ + encodedDataSize_);
+          } else {
+            stringDecoder_ = std::make_unique<StringDecoder>(
+                pageData_, pageData_ + encodedDataSize_);
+          }
           break;
         case thrift::Type::FIXED_LEN_BYTE_ARRAY:
           if (type_->type()->isVarbinary() || type_->type()->isVarchar()) {
-            stringDecoder_ = std::make_unique<StringDecoder>(
-                pageData_, pageData_ + encodedDataSize_, type_->typeLength_);
+            if (stringDecoder_) {
+              stringDecoder_->reset(
+                  pageData_, pageData_ + encodedDataSize_, type_->typeLength_);
+            } else {
+              stringDecoder_ = std::make_unique<StringDecoder>(
+                  pageData_, pageData_ + encodedDataSize_, type_->typeLength_);
+            }
           } else {
             directDecoder_ =
                 std::make_unique<dwio::common::DirectDecoder<true>>(

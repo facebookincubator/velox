@@ -589,21 +589,18 @@ KernelOperation::KernelOperation(
   // callNeedsBarrier orders the producer before the random-access read.
   std::unordered_set<NodeCP> ewVisited;
   if (!outputValues.empty() && isAllElementwise(sg.root, inputs_, ewVisited)) {
-    auto* meta = Registry::metadata(sg.root->target());
-    bool hasWholeTensor = false;
-    if (meta) {
-      for (size_t i = 0; i < meta->argumentMeta.size(); ++i) {
-        if (meta->argumentMeta[i].wholeTensor) {
-          hasWholeTensor = true;
-          break;
-        }
-      }
-    }
-    if (!hasWholeTensor) {
-      for (size_t i = 0; i < outputDescs_.size(); ++i) {
-        if (!outputDescs_[i].shapeOnly) {
-          outputDescs_[i].byLargestInput = true;
-        }
+    // Size each memory-backed output by its largest input, unless the output
+    // declares its own shape expression (reserveShape, e.g. index_select,
+    // slice_scatter, the factory ops), in which case that shape wins.
+    // collectElementwiseLeaves already drops wholeTensor operands from the size
+    // leaves, so an op that reads a wholeTensor but has no reserveShape -- e.g.
+    // searchsorted / bucketize / isin, whose output has the query's shape while
+    // the searched array is the wholeTensor -- is still sized correctly from
+    // its remaining inputs, even when the query is a fused register that a
+    // reserveShape could not read.
+    for (size_t i = 0; i < outputDescs_.size(); ++i) {
+      if (!outputDescs_[i].shapeOnly && !outputDescs_[i].reserveShape) {
+        outputDescs_[i].byLargestInput = true;
       }
     }
   }

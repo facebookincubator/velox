@@ -478,6 +478,7 @@ void LocalPlanner::markMixedJoinBridges(
 std::shared_ptr<Driver> DriverFactory::createDriver(
     std::unique_ptr<DriverCtx> ctx,
     std::shared_ptr<ExchangeClient> exchangeClient,
+    const PartitionedOutputFactory& outputOperatorFactory,
     std::shared_ptr<PipelinePushdownFilters> filters,
     std::function<int(int pipelineId)> numDrivers) {
   auto driver = std::shared_ptr<Driver>(new Driver());
@@ -560,9 +561,8 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto partitionedOutputNode =
             std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
                 planNode)) {
-      operators.push_back(
-          std::make_unique<PartitionedOutput>(
-              id, ctx.get(), partitionedOutputNode, eagerFlush(*planNode)));
+      operators.push_back(outputOperatorFactory(
+          id, ctx.get(), partitionedOutputNode, eagerFlush(*planNode)));
     } else if (
         auto joinNode =
             std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
