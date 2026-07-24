@@ -1472,7 +1472,20 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
     code_ << "  if (blockInfo.blockInOp == 0) {\n";
   }
   if (!subgraphs.empty()) {
-    generateElementwise(subgraphs, ewResultSpecs, callStmt, meta->hasBarrier);
+    // For a data-dependent scan op (masked_select / nonzero) whose size is set
+    // on device, pass its output so generateElementwise can zero the length for
+    // an empty input before a fused consumer reads it.
+    ValueCP shapeSetOnDeviceResult = nullptr;
+    if (meta && !meta->returnMeta.empty() &&
+        meta->returnMeta[0].shapeSetOnDevice && !node->outputs().empty()) {
+      shapeSetOnDeviceResult = node->outputs()[0];
+    }
+    generateElementwise(
+        subgraphs,
+        ewResultSpecs,
+        callStmt,
+        meta->hasBarrier,
+        shapeSetOnDeviceResult);
   }
   if (multiBlockSingleOp) {
     code_ << "  }\n";

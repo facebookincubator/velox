@@ -166,17 +166,23 @@ template <typename T>
 struct UnaryMinusFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
+      const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& config,
       const TInput* /*a*/) {
-    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+    VELOX_DCHECK(!inputTypes.empty());
+    const auto& inputType = inputTypes.front();
+    // Spark's ANSI interval types always use exact arithmetic, independent of
+    // spark.sql.ansi.enabled.
+    failOnError_ = inputType->isIntervalDayTime() ||
+        inputType->isIntervalYearMonth() ||
+        SparkQueryConfig{config}.ansiEnabled();
   }
 
   template <typename TInput>
   FOLLY_ALWAYS_INLINE Status call(TInput& result, const TInput a) {
     if constexpr (std::is_integral_v<TInput>) {
       if (FOLLY_UNLIKELY(a == std::numeric_limits<TInput>::min())) {
-        if (ansiEnabled_) {
+        if (failOnError_) {
           if (threadSkipErrorDetails()) {
             return Status::UserError();
           }
@@ -192,7 +198,7 @@ struct UnaryMinusFunction {
   }
 
  private:
-  bool ansiEnabled_ = false;
+  bool failOnError_ = false;
 };
 
 template <typename T>

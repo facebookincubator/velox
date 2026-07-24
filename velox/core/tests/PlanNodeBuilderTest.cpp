@@ -637,6 +637,7 @@ TEST_F(PlanNodeBuilderTest, partitionedOutputNode) {
                         .partitionFunctionSpec(partitionFunctionSpec)
                         .outputType(outputType)
                         .serdeKind(serdeKind)
+                        .transportKind(std::string{TransportKind::kInMemory})
                         .source(source_)
                         .build();
   verify(node);
