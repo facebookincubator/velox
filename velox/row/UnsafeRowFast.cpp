@@ -46,7 +46,7 @@ std::optional<int32_t> UnsafeRowFast::fixedRowSize(const RowTypePtr& rowType) {
   const size_t numFields = rowType->size();
   const size_t nullLength = alignBits(numFields);
 
-  return nullLength + numFields * kFieldWidth;
+  return static_cast<int32_t>(nullLength + numFields * kFieldWidth);
 }
 
 UnsafeRowFast::UnsafeRowFast(const RowVectorPtr& vector)
