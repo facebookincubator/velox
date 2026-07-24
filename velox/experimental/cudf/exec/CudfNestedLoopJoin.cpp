@@ -513,11 +513,19 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
 void CudfNestedLoopJoinProbe::syncBuildStream(
     rmm::cuda_stream_view probeStream) {
   if (buildStream_.has_value()) {
+    // joinWithBuildBatch() is called once per probe input batch, and each
+    // call gets a fresh stream from cudfGlobalStreamPool(). recordFrom()
+    // only needs to run once to mark "build data is ready" on buildStream_,
+    // but waitOn() must run for every probe stream that will read the build
+    // data, not just the first one - otherwise later batches can start
+    // reading before the build data is actually visible on their stream.
+    // See the record-once/wait-many pattern in Utilities.cpp's
+    // streamsWaitForStream.
     if (!cudaEvent_) {
       cudaEvent_ = std::make_unique<CudaEvent>();
+      cudaEvent_->recordFrom(buildStream_.value());
     }
-    cudaEvent_->recordFrom(buildStream_.value()).waitOn(probeStream);
-    buildStream_.reset();
+    cudaEvent_->waitOn(probeStream);
   }
 }
 
