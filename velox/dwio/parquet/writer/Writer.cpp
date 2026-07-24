@@ -467,10 +467,7 @@ void Writer::write(const VectorPtr& data) {
       data->type()->equivalent(*schema_),
       "The file schema type should be equal with the input rowvector type.");
 
-  VectorPtr exportData = data;
-  if (needFlatten(exportData)) {
-    BaseVector::flattenVector(exportData);
-  }
+  VectorPtr exportData = flattenIfNeeded(data);
 
   ArrowArray array;
   exportToArrow(exportData, array, generalPool_.get(), options_);
@@ -545,10 +542,6 @@ bool Writer::isCodecAvailable(common::CompressionKind compression) {
       getArrowParquetCompression(compression));
 }
 
-void Writer::newRowGroup(int32_t numRows) {
-  PARQUET_THROW_NOT_OK(arrowContext_->writer->newRowGroup(numRows));
-}
-
 std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
   std::unique_ptr<ParquetFileMetadata> parquetFileMetadata;
   if (arrowContext_->writer) {
@@ -585,20 +578,175 @@ void Writer::setMemoryReclaimers() {
   generalPool_->setReclaimer(exec::MemoryReclaimer::create());
 }
 
-bool Writer::needFlatten(const VectorPtr& data) const {
+namespace {
+
+// Returns true if 'vector' or any of its descendants is dictionary-encoded.
+// Used to detect dictionary encoding nested inside a top-level complex column
+// (ARRAY/MAP/ROW). Constant descendants are exported densely by the Arrow
+// bridge (flattenConstant=true) and therefore do not need to be checked here.
+bool hasDictionaryDescendant(const VectorPtr& vector) {
+  if (vector == nullptr) {
+    return false;
+  }
+  switch (vector->encoding()) {
+    case VectorEncoding::Simple::DICTIONARY:
+      return true;
+    case VectorEncoding::Simple::ROW: {
+      const auto* row = vector->asUnchecked<RowVector>();
+      for (const auto& child : row->children()) {
+        if (hasDictionaryDescendant(child)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    case VectorEncoding::Simple::ARRAY:
+      return hasDictionaryDescendant(
+          vector->asUnchecked<ArrayVector>()->elements());
+    case VectorEncoding::Simple::MAP: {
+      const auto* map = vector->asUnchecked<MapVector>();
+      return hasDictionaryDescendant(map->mapKeys()) ||
+          hasDictionaryDescendant(map->mapValues());
+    }
+    default:
+      return false;
+  }
+}
+
+// Returns true if a single top-level column requires flattening before Arrow
+// export.
+bool childNeedsFlatten(const VectorPtr& child) {
+  auto encoding = child->encoding();
+  if (encoding == VectorEncoding::Simple::DICTIONARY) {
+    auto* innerVector = child->valueVector().get();
+    if (innerVector != nullptr) {
+      // Flatten dictionary wrapping a complex (non-primitive) type. The Arrow
+      // Parquet writer only supports dictionary passthrough for binary-like
+      // scalar types, and updateFieldNameAndIdRecursive cannot traverse
+      // DictionaryType wrapping complex Arrow types.
+      if (!innerVector->type()->isPrimitiveType()) {
+        return true;
+      }
+      // Flatten nested wrapping (e.g., dictionary-of-dictionary,
+      // dictionary-of-constant). Only a dictionary directly wrapping a flat
+      // vector can be exported as an Arrow DictionaryArray.
+      if (!innerVector->isFlatEncoding()) {
+        return true;
+      }
+      // Only VARCHAR and VARBINARY benefit from dictionary passthrough in
+      // Parquet. Arrow's Parquet writer converts non-binary-like dictionary
+      // arrays back to dense anyway, and passing them through as dictionaries
+      // causes schema inconsistency across batches (the cached schema from the
+      // first batch may not match the encoding of subsequent batches).
+      auto typeKind = innerVector->typeKind();
+      if (typeKind != TypeKind::VARCHAR && typeKind != TypeKind::VARBINARY) {
+        return true;
+      }
+      // Arrow's Parquet writer does not support writing DictionaryArray when
+      // the dictionary values contain nulls. Flatten to avoid the
+      // "NotImplemented: Writing DictionaryArray with null encoded in
+      // dictionary type not yet supported" error.
+      if (innerVector->mayHaveNulls()) {
+        return true;
+      }
+    }
+  } else if (encoding == VectorEncoding::Simple::CONSTANT) {
+    // Flatten constant wrapping a non-flat inner vector
+    // (e.g., constant-of-dictionary).
+    if (child->valueVector() && !child->wrappedVector()->isFlatEncoding()) {
+      return true;
+    }
+  } else if (!child->type()->isPrimitiveType()) {
+    // A flat complex column (ARRAY/MAP/ROW) is not itself flattened, but the
+    // Velox-to-Arrow bridge exports dictionary-encoded descendants as Arrow
+    // DictionaryArrays (flattenDictionary=false). Dictionary passthrough is
+    // only safe for top-level scalar VARCHAR/VARBINARY columns, so flatten the
+    // whole column if any descendant is dictionary-encoded.
+    return hasDictionaryDescendant(child);
+  }
+  return false;
+}
+
+} // namespace
+
+VectorPtr Writer::flattenIfNeeded(const VectorPtr& data) const {
   auto rowVector = std::dynamic_pointer_cast<RowVector>(data);
   VELOX_CHECK_NOT_NULL(
       rowVector, "Arrow export expects a RowVector as input data.");
 
   const auto& children = rowVector->children();
-  return std::any_of(children.begin(), children.end(), [](const auto& child) {
-    bool isNestedWrapped =
-        (child->encoding() == VectorEncoding::Simple::DICTIONARY ||
-         child->encoding() == VectorEncoding::Simple::CONSTANT) &&
-        child->valueVector() && !child->wrappedVector()->isFlatEncoding();
-    bool isComplex = !child->isScalar();
-    return isNestedWrapped || isComplex;
-  });
+
+  // Decide per-column whether it must be flattened before Arrow export. A
+  // column is flattened when childNeedsFlatten() requires it, or when the
+  // cached schema from an earlier batch expects a non-dictionary type but the
+  // current column is dictionary-encoded (the encoding changed across batches).
+  std::vector<bool> needsFlatten(children.size(), false);
+  bool anyNeedsFlatten = false;
+  for (size_t i = 0; i < children.size(); ++i) {
+    bool flatten = childNeedsFlatten(children[i]);
+    // Schema consistency: if the schema is already cached and expects a
+    // non-dictionary type for this column, flatten any dictionary vector to
+    // avoid import errors from schema/data encoding mismatch across batches.
+    if (!flatten && arrowContext_->schema &&
+        children[i]->encoding() == VectorEncoding::Simple::DICTIONARY &&
+        arrowContext_->schema->field(i)->type()->id() !=
+            ::arrow::Type::DICTIONARY) {
+      flatten = true;
+    }
+    needsFlatten[i] = flatten;
+    anyNeedsFlatten |= flatten;
+  }
+
+  // Reconcile the cached schema with the encoding that will actually be
+  // exported. A column is exported as an Arrow DictionaryArray only when it is
+  // dictionary-encoded AND is not being flattened. For every column that will
+  // NOT be a dictionary but whose cached schema field is still DictionaryType,
+  // rewrite the cached field to the dictionary value type. This covers both a
+  // later batch arriving flat and a later batch arriving as a dictionary that
+  // must be flattened (e.g. dict values gained nulls). Without this,
+  // ImportRecordBatch() would receive flat buffers described by a dictionary
+  // schema (buffer-count mismatch: a dictionary field expects 2 buffers but
+  // flat string data produces 3).
+  if (arrowContext_->schema) {
+    for (size_t i = 0; i < children.size(); ++i) {
+      const bool exportsAsDictionary =
+          children[i]->encoding() == VectorEncoding::Simple::DICTIONARY &&
+          !needsFlatten[i];
+      if (!exportsAsDictionary &&
+          arrowContext_->schema->field(i)->type()->id() ==
+              ::arrow::Type::DICTIONARY) {
+        auto dictType = std::static_pointer_cast<::arrow::DictionaryType>(
+            arrowContext_->schema->field(i)->type());
+        arrowContext_->schema =
+            arrowContext_->schema
+                ->SetField(
+                    i,
+                    arrowContext_->schema->field(i)->WithType(
+                        dictType->value_type()))
+                .ValueOrDie();
+      }
+    }
+  }
+
+  if (!anyNeedsFlatten) {
+    return data;
+  }
+
+  // Selectively flatten only the columns that need it.
+  std::vector<VectorPtr> newChildren(children.size());
+  for (size_t i = 0; i < children.size(); ++i) {
+    newChildren[i] = children[i];
+    if (needsFlatten[i]) {
+      BaseVector::flattenVector(newChildren[i]);
+    }
+  }
+
+  return std::make_shared<RowVector>(
+      rowVector->pool(),
+      rowVector->type(),
+      rowVector->nulls(),
+      rowVector->size(),
+      std::move(newChildren));
 }
 
 std::unique_ptr<dwio::common::Writer> ParquetWriterFactory::createWriter(
