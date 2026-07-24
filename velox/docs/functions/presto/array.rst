@@ -252,6 +252,22 @@ Array Functions
         SELECT array_top_n(ARRAY [1, 100], 5); -- [100, 1]
         SELECT array_top_n(ARRAY ['a', 'zzz', 'zz', 'b', 'g', 'f'], 3); -- ['zzz', 'zz', 'g']
 
+.. function:: array_top_n(array(T), n, function(T, U)) -> array(T)
+    :noindex:
+
+    Returns the top ``n`` elements of the array sorted in descending order according to
+    values computed by the transform function ``function(T, U)``. The transform function
+    maps each element to a sorting key of orderable type ``U``; elements are sorted by
+    their keys in descending order. If ``n`` is larger than the size of the array, returns
+    all elements sorted by the transform key. If ``n`` is zero, returns an empty array.
+    A negative ``n`` is not allowed. Elements whose transform result is null are placed at
+    the end of the result. ::
+
+        SELECT array_top_n(ARRAY [1, 2, 3], 2, x -> x); -- [3, 2]
+        SELECT array_top_n(ARRAY [1, 2, 3], 2, x -> 0 - x); -- [1, 2] (ascending order via negation)
+        SELECT array_top_n(ARRAY [-5, 2, -3, 4], 2, x -> abs(x)); -- [-5, 4] (by absolute value)
+        SELECT array_top_n(ARRAY ['a', 'bbb', 'cc'], 2, x -> length(x)); -- ['bbb', 'cc'] (by length)
+
 .. function:: arrays_overlap(x, y) -> boolean
 
     Tests if arrays ``x`` and ``y`` have any non-null elements in common.
