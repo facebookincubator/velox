@@ -253,6 +253,7 @@ velox_add_cudf_test(
     velox_cudf_hive_connector
     velox_exec
     velox_exec_test_lib
+    velox_functions_spark
     velox_test_util
     fmt::fmt
 )

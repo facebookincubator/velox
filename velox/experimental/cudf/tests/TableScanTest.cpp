@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
@@ -40,6 +41,7 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/functions/sparksql/registration/Register.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
@@ -745,6 +747,51 @@ TEST_F(TableScanTest, remainingFilterExtraction) {
   ASSERT_NE(it, scanStats.customStats.end());
   EXPECT_EQ(it->second.sum, 0)
       << "Expected no remaining filter time when filter is fully extracted";
+}
+
+TEST_F(TableScanTest, dateFormatRemainingFilterUsesCpu) {
+  static const bool kRegistered = [] {
+    functions::sparksql::registerFunctions("spark_");
+    cudf_velox::registerSparkFunctions("spark_");
+    return true;
+  }();
+  ASSERT_TRUE(kRegistered);
+
+  auto rowType = ROW({"event_ts", "c1"}, {TIMESTAMP(), BIGINT()});
+  auto vector = makeRowVector(
+      {"event_ts", "c1"},
+      {makeFlatVector<Timestamp>({Timestamp(7'200, 0), Timestamp(43'200, 0)}),
+       makeFlatVector<int64_t>({1, 2})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vector);
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(assignments)
+                  .remainingFilter(
+                      "spark_date_format(event_ts, 'yyyyMMdd') = '19691231'")
+                  .endTableScan()
+                  .planNode();
+
+  // 1970-01-01 02:00 UTC belongs to the previous date in Los Angeles. A scan
+  // remaining filter must use CPU date_format to preserve that timezone.
+  auto result =
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kSessionTimezone, "America/Los_Angeles")
+          .config(core::QueryConfig::kAdjustTimestampToTimezone, "true")
+          .splits(makeCudfHiveConnectorSplits({filePath}))
+          .copyResults(pool_.get());
+  auto expected = makeRowVector(
+      {"event_ts", "c1"},
+      {makeFlatVector<Timestamp>({Timestamp(7'200, 0)}),
+       makeFlatVector<int64_t>({1})});
+  facebook::velox::test::assertEqualVectors(expected, result);
 }
 
 TEST_F(TableScanTest, decimalSubfieldFilter) {
