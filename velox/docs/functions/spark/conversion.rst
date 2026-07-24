@@ -406,6 +406,15 @@ allowed. Supported types are real and double.
 When ANSI mode is enabled, casting a value that overflows the target precision
 and scale or is not finite throws an error. Otherwise, such casts return NULL.
 
+.. note::
+
+    For non-finite inputs (NaN, Infinity, and -Infinity), this is not aligned
+    with Spark, which returns NULL even in ANSI mode. Since a decimal cannot
+    represent these values, throwing in ANSI mode follows ANSI semantics and is
+    consistent with how Velox handles overflow in this cast. Spark's NULL comes
+    from catching an internal error before its ANSI check, which we treat as an
+    implementation artifact.
+
 Valid examples
 
 ::
