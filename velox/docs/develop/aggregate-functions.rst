@@ -176,6 +176,16 @@ A simple aggregation function is implemented as a class as the following.
       resultType_ = resultType;
     }
 
+    // Optional. Defined only when the aggregation function needs to access constant arguments.
+    // This method is called once after the aggregation function is created, before any data
+    // is processed. Non-constant inputs have null entries in constantInputs.
+    void setConstantInputs(const std::vector<VectorPtr>& constantInputs) {
+      // Example: Extract a constant boolean flag from the second argument
+      if (constantInputs.size() >= 2 && constantInputs[1] != nullptr) {
+        ignoreNulls_ = constantInputs[1]->as<ConstantVector<bool>>()->valueAt(0);
+      }
+    }
+
     struct AccumulatorType { ... };
   };
 
@@ -192,6 +202,14 @@ accumulators or extracting values from accumulators. For example, if the
 aggregation function needs to get the result type or the raw input type of the
 aggregation function, these types can be defined as member variables in the
 aggregate class and initialized in the initialize() method.
+
+The author can also optionally define a `setConstantInputs()` method to access
+constant arguments at initialization time. This method is called once after the
+aggregation function is created, before any data is processed. The method receives
+a vector of constant input values, where non-constant inputs have null entries.
+This is useful for reading configuration flags or constant parameters that don't
+change during aggregation. For example, a function might use this to read a boolean
+flag that controls null handling behavior.
 
 The author can define an optional flag `default_null_behavior_` indicating
 whether the aggregation function has default-null behavior. This flag is true
@@ -452,13 +470,13 @@ null should be written to the final result vector.
 Limitations
 ^^^^^^^^^^^
 
-The simple aggregation function interface currently has two limitations.
+The simple aggregation function interface currently has one limitation:
+aggregation pushdown to table scan is not supported yet. We're planning to
+add this support.
 
-1. Optimizations on constant inputs is not supported. I.e., constant input
-   arguments are processed once per row in the same way as non-constant inputs.
-
-2. Aggregation pushdown to table scan is not supported yet. We're planning to
-   add this support.
+Note that constant input arguments can be accessed at initialization time via
+the optional `setConstantInputs()` method described above, so they don't need
+to be re-read on every row.
 
 Vector Function Interface
 -------------------------
