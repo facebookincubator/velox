@@ -17,13 +17,15 @@ from torch import nn, Tensor
 
 
 class SumTestPreproc(nn.Module):
-    """Sum reduction tests for different sizes, dtypes, and casting.
+    """Sum/max/min reduction tests for different sizes, dtypes, and casting.
 
     Inputs: float_1k, float_10k, float_100k (float32),
             int_1k, int_10k, int_100k (int64).
 
     Returns the zero-dim sum tensor for each size, plus cast sums
-    (int->float32, float->float64) on the 1K tensors.
+    (int->float32, float->float64) on the 1K tensors, then max and min at the
+    single-block (1K) and multi-block/cg (100K) sizes for both dtypes. max/min
+    keep the input dtype (no int->int64 promotion, unlike sum).
     """
 
     def forward(
@@ -34,22 +36,13 @@ class SumTestPreproc(nn.Module):
         int_1k: Tensor,
         int_10k: Tensor,
         int_100k: Tensor,
-    ) -> tuple[
-        Tensor,
-        Tensor,
-        Tensor,
-        Tensor,
-        Tensor,
-        Tensor,
-        Tensor,
-        Tensor,
-    ]:
+    ) -> tuple[Tensor, ...]:
         # Float sums at different sizes.
         fs1k = torch.sum(float_1k)
         fs10k = torch.sum(float_10k)
         fs100k = torch.sum(float_100k)
 
-        # Integer sums — PyTorch promotes to int64 when dtype=None.
+        # Integer sums - PyTorch promotes to int64 when dtype=None.
         is1k = torch.sum(int_1k)
         is10k = torch.sum(int_10k)
         is100k = torch.sum(int_100k)
@@ -57,6 +50,16 @@ class SumTestPreproc(nn.Module):
         # Cast sums on small tensors.
         cast_int_to_float = torch.sum(int_1k, dtype=torch.float32)
         cast_float_to_double = torch.sum(float_1k, dtype=torch.float64)
+
+        # Max/min at single-block (1K) and multi-block/cg (100K) sizes.
+        fmax1k = torch.max(float_1k)
+        fmax100k = torch.max(float_100k)
+        fmin1k = torch.min(float_1k)
+        fmin100k = torch.min(float_100k)
+        imax1k = torch.max(int_1k)
+        imax100k = torch.max(int_100k)
+        imin1k = torch.min(int_1k)
+        imin100k = torch.min(int_100k)
 
         return (
             fs1k,
@@ -67,4 +70,12 @@ class SumTestPreproc(nn.Module):
             is100k,
             cast_int_to_float,
             cast_float_to_double,
+            fmax1k,
+            fmax100k,
+            fmin1k,
+            fmin100k,
+            imax1k,
+            imax100k,
+            imin1k,
+            imin100k,
         )
