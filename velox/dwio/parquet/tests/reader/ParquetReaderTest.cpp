@@ -2140,3 +2140,37 @@ TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
 
   EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
 }
+
+TEST_F(ParquetReaderTest, byteStreamSplitFloat) {
+  // bss_float.parquet: 100 rows of REQUIRED float encoded with
+  // BYTE_STREAM_SPLIT, no compression, data page v1. The values were generated
+  // with numpy's default RNG (seed 42) and stored as float32.
+  auto schema = ROW({"float_val"}, {REAL()});
+  auto readerBundle = readerBuilder("bss_float.parquet", schema).build();
+  EXPECT_EQ(readerBundle.reader->numberOfRows().value(), 100ULL);
+
+  auto result = BaseVector::create(schema, 0, leafPool_.get());
+  EXPECT_TRUE(readerBundle.rowReader->next(100, result));
+  EXPECT_EQ(result->size(), 100);
+
+  auto* floatColumn = result->as<RowVector>()
+                          ->childAt(0)
+                          ->loadedVector()
+                          ->asFlatVector<float>();
+  ASSERT_TRUE(floatColumn != nullptr);
+  ASSERT_EQ(floatColumn->size(), 100);
+
+  // Spot-check decoded values across the page to confirm the split byte
+  // streams are reassembled in the correct order.
+  const std::vector<std::pair<vector_size_t, float>> expected = {
+      {0, 0.49671414494514465f},
+      {1, -0.13826429843902588f},
+      {2, 0.6476885676383972f},
+      {50, 0.32408398389816284f},
+      {74, -2.6197450160980225f},
+      {99, -0.23458713293075562f}};
+  for (const auto& [index, value] : expected) {
+    EXPECT_FALSE(floatColumn->isNullAt(index));
+    EXPECT_FLOAT_EQ(floatColumn->valueAt(index), value);
+  }
+}
