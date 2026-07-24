@@ -526,8 +526,7 @@ __device__ void evalDecimalBinaryRow(
   // detection so the conversion is covered by the same fail-fast path. MUL is
   // excluded: it adds operand scales and its product is rescaled to outScale
   // by the checkedRescale below.
-  if (op == cudf::binary_operator::ADD ||
-      op == cudf::binary_operator::SUB ||
+  if (op == cudf::binary_operator::ADD || op == cudf::binary_operator::SUB ||
       op == cudf::binary_operator::MOD) {
     auto lhsRescaled = checkedRescale<Rep>(lhsDec, outScale);
     auto rhsRescaled = checkedRescale<Rep>(rhsDec, outScale);
@@ -544,7 +543,8 @@ __device__ void evalDecimalBinaryRow(
   // a -1 divisor to match Velox CPU: cuDF's mod_overflow forms the quotient
   // a / b, and INT128_MIN / -1 overflows int128 (2^127 is unrepresentable), so
   // it would report a false overflow even though INT128_MIN % -1 == 0. The CPU
-  // path computes the remainder in unsigned magnitude space and never hits this.
+  // path computes the remainder in unsigned magnitude space and never hits
+  // this.
   if (op == cudf::binary_operator::MOD && rhsDec.value() == Rep{-1}) {
     out[idx] = OutRep{0};
     return;

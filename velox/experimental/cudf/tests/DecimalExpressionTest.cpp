@@ -2147,10 +2147,11 @@ TEST_F(CudfDecimalTest, decimalModuloByZero) {
   std::vector<RowVectorPtr> vectors = {input};
 
   // Column % column with a zero divisor row.
-  assertCpuAndGpuThrow(exec::test::PlanBuilder()
-                           .values(vectors)
-                           .project({"a % b AS result"})
-                           .planNode());
+  assertCpuAndGpuThrow(
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project({"a % b AS result"})
+          .planNode());
 
   auto colOnly = makeRowVector(
       {"a"}, {makeFlatVector<int64_t>({700, 100, 500}, DECIMAL(10, 2))});
@@ -2294,12 +2295,14 @@ TEST_F(CudfDecimalTest, decimalModuloByNegativeOneNoOverflow) {
       {"a", "b"},
       {
           makeFlatVector<int128_t>({int128Min, 700}, DECIMAL(38, 0)),
-          makeFlatVector<int128_t>({int128_t{-1}, int128_t{-1}}, DECIMAL(38, 0)),
+          makeFlatVector<int128_t>(
+              {int128_t{-1}, int128_t{-1}}, DECIMAL(38, 0)),
       });
-  assertCpuGpuEqual(exec::test::PlanBuilder()
-                        .values({colCol})
-                        .project({"a % b AS result"})
-                        .planNode());
+  assertCpuGpuEqual(
+      exec::test::PlanBuilder()
+          .values({colCol})
+          .project({"a % b AS result"})
+          .planNode());
 
   // Column % -1 scalar (rhs-scalar path).
   auto colOnly = makeRowVector(
