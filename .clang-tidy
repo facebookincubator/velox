@@ -1,70 +1,63 @@
-Checks: >
-  *,
-  -abseil-*,
-  -altera-struct-pack-align,
-  -altera-unroll-loops,
-  -android-*,
-  -boost-use-ranges,
-  -bugprone-easily-swappable-parameters,
-  -cert-err58-cpp,
-  -clang-analyzer-osx-*,
-  -cppcoreguidelines-avoid-c-arrays,
-  -cppcoreguidelines-avoid-const-or-ref-data-members,
-  -cppcoreguidelines-avoid-do-while,
-  -cppcoreguidelines-avoid-goto,
-  -cppcoreguidelines-avoid-magic-numbers,
-  -cppcoreguidelines-avoid-non-const-global-variables,
-  -cppcoreguidelines-non-private-member-variables-in-classes,
-  -cppcoreguidelines-owning-memory,
-  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
-  -cppcoreguidelines-pro-bounds-constant-array-index,
-  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
-  -cppcoreguidelines-pro-type-reinterpret-cast,
-  -cppcoreguidelines-pro-type-vararg,
-  -cppcoreguidelines-special-member-functions,
-  -fuchsia-*,
-  -google-*,
-  -hicpp-avoid-c-arrays,
-  -hicpp-avoid-goto,
-  -hicpp-deprecated-headers,
-  -hicpp-no-array-decay,
-  -hicpp-special-member-functions,
-  -hicpp-use-equals-default,
-  -hicpp-vararg,
-  -llvm-header-guard,
-  -llvm-include-order,
-  -llvm-qualified-auto,
-  -llvmlibc-*,
-  -misc-include-cleaner,
-  -misc-no-recursion,
-  -misc-non-private-member-variables-in-classes,
-  -misc-unused-parameters,
-  -modernize-avoid-c-arrays,
-  -modernize-deprecated-headers,
-  -modernize-use-designated-initializers,
-  -modernize-use-nodiscard,
-  -modernize-use-trailing-return-type,
-  -mpi-*,
-  -objc-*,
-  -openmp-*,
-  -performance-avoid-endl,
-  -performance-enum-size,
-  -readability-avoid-const-params-in-decls,
-  -readability-convert-member-functions-to-static,
-  -readability-function-cognitive-complexity,
-  -readability-identifier-length,
-  -readability-implicit-bool-conversion,
-  -readability-magic-numbers,
-  -readability-math-missing-parentheses,
-  -readability-qualified-auto,
-  -zircon-*,
+# Velox enables an explicit allowlist of clang-tidy checks rather than turning on
+# the full upstream set. The checks below are the ones that reliably catch real
+# bugs, performance problems, and style violations in this codebase. Checks that
+# are noisy, conflict with Velox's coding style, or flag patterns that are
+# intentional here are deliberately left out -- enabling everything produces far
+# more noise than signal.
+#
+# The clang static analyzer (clang-analyzer-*) is enabled by default, but it is
+# explicitly disabled here: it is slow to run and its findings are largely noise
+# for this codebase.
+#
+# readability-identifier-naming enforces the naming rules documented in
+# CODING_STYLE.md.
+#
+# Inherit checks from a parent .clang-tidy if one exists (there is none at the
+# repository root).
+InheritParentConfig: true
+Checks: '
+-clang-analyzer-*,
+bugprone-argument-comment,
+bugprone-sizeof-*,
+bugprone-use-after-move,
+clang-diagnostic-*,
+-clang-diagnostic-nrvo,
+-clang-diagnostic-missing-designated-field-initializers,
+cppcoreguidelines-narrowing-conversions,
+cppcoreguidelines-pro-type-member-init,
+cppcoreguidelines-special-member-functions,
+google-build-using-namespace,
+misc-definitions-in-headers,
+modernize-use-emplace,
+modernize-use-nullptr,
+modernize-use-using,
+performance-faster-string-find,
+performance-for-range-copy,
+performance-implicit-conversion-in-loop,
+performance-inefficient-algorithm,
+performance-inefficient-string-concatenation,
+performance-inefficient-vector-operation,
+performance-move-const-arg,
+performance-move-constructor-init,
+performance-no-automatic-move,
+performance-no-int-to-ptr,
+performance-noexcept-move-constructor,
+performance-trivially-destructible,
+performance-type-promotion-in-math-fn,
+performance-unnecessary-copy-initialization,
+performance-unnecessary-value-param,
+readability-braces-around-statements,
+readability-identifier-naming,
+readability-operators-representation,
+readability-redundant-string-init,
+'
 
 HeaderFilterRegex: '.*'
 
-WarningsAsErrors: ''
+WarningsAsErrors: 'bugprone-use-after-move'
 
 CheckOptions:
-  # Naming conventions as explicitly stated in CODING_STYLE.md
+  # Naming conventions as explicitly stated in CODING_STYLE.md.
   - key: readability-identifier-naming.ClassCase
     value: CamelCase
   - key: readability-identifier-naming.StructCase
@@ -100,10 +93,26 @@ CheckOptions:
   - key: readability-identifier-naming.EnumConstantPrefix
     value: k
 
-  # Use nullptr instead of NULL or 0
+  # Use nullptr instead of NULL or 0.
   - key: modernize-use-nullptr.NullMacros
     value: 'NULL'
 
-  # Prefer enum class over enum
+  # Tuning options for the checks enabled above.
+  - key: cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor
+    value: true
+  - key: cppcoreguidelines-special-member-functions.AllowImplicitlyDeletedCopyOrMove
+    value: 1
+  - key: modernize-use-using.IgnoreExternC
+    value: true
   - key: modernize-use-using.IgnoreUsingStdAllocator
     value: 1
+  - key: performance-move-const-arg.CheckTriviallyCopyableMove
+    value: false
+  - key: performance-unnecessary-value-param.AllowedTypes
+    value: '[Pp]ointer$;[Pp]tr$;[Rr]ef(erence)?$'
+  - key: performance-unnecessary-copy-initialization.AllowedTypes
+    value: '[Pp]ointer$;[Pp]tr$;[Rr]ef(erence)?$'
+  - key: readability-operators-representation.BinaryOperators
+    value: '&&;&=;&;|;~;!;!=;||;|=;^;^='
+  - key: readability-redundant-string-init.StringNames
+    value: '::std::basic_string'
