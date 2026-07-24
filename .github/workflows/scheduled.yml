@@ -129,7 +129,7 @@ jobs:
       # "Checkout Contender" / "Checkout Main" steps put their full
       # clones in different subdirectories (velox/, velox_main/) and
       # don't conflict.
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
           sparse-checkout: .github/scripts
@@ -206,7 +206,7 @@ jobs:
 
       - name: Checkout Main
         if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' && (github.event_name != 'pull_request' || steps.sig-paths.outputs.signatures == 'true') }}
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ steps.get-merge-base.outputs.head_main || 'main' }}
           path: velox_main
@@ -239,7 +239,7 @@ jobs:
           key: function-signatures-${{ steps.get-merge-base.outputs.head_main }}
 
       - name: Checkout Contender
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -562,7 +562,7 @@ jobs:
           name: fuzzer-scripts
 
       - name: Checkout Repo
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -929,7 +929,7 @@ jobs:
           name: fuzzer-scripts
 
       - name: Checkout Repo
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -1045,7 +1045,7 @@ jobs:
           name: fuzzer-scripts
 
       - name: Checkout Repo
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -1114,7 +1114,7 @@ jobs:
           name: fuzzer-scripts
 
       - name: Checkout Repo
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -1310,7 +1310,7 @@ jobs:
           name: fuzzer-scripts
 
       - name: Checkout Repo
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -1382,7 +1382,7 @@ jobs:
           name: fuzzer-scripts
 
       - name: Checkout Repo
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -1481,7 +1481,7 @@ jobs:
           name: fuzzer-scripts
 
       - name: Checkout Repo
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -1595,7 +1595,7 @@ jobs:
           name: fuzzer-scripts
 
       - name: Checkout Repo
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
@@ -1667,7 +1667,7 @@ jobs:
           name: fuzzer-scripts
 
       - name: Checkout Repo
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: velox
           ref: ${{ inputs.ref }}
