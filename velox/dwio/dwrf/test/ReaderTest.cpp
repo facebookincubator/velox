@@ -3269,6 +3269,52 @@ TEST_F(TestReader, mapAsStructAllEmpty) {
   assertEqualVectors(expected, batch);
 }
 
+// A map-as-struct read that projects only a small subset of the keys present in
+// the (regular) map on disk. The reader pushes an IN filter over the projected
+// keys onto the map key sub-reader so the element reader never decodes values
+// for unprojected keys. The output must be identical to decoding the whole map
+// and dropping unprojected keys afterward -- including rows that are missing a
+// projected key, rows whose keys are all unprojected, empty maps, and null
+// maps.
+TEST_F(TestReader, mapAsStructKeySubsetExtraction) {
+  auto row = makeRowVector({
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{1: 10, 2: 20, 3: 30, 4: 40, 5: 50}", // all keys present
+          "{2: 21, 4: 41}", // no projected key present
+          "{1: 12, 3: 32}", // both projected keys present
+          "{}", // empty map
+          "null", // null map
+      }),
+  });
+  auto [writer, reader] =
+      createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_);
+  // Project only keys "3" and "1"; keys 2, 4, 5 are unprojected and must be
+  // filtered out of the element decode.
+  auto outType = ROW({"c0"}, {ROW({"3", "1"}, BIGINT())});
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*outType);
+  spec->childByName("c0")->setFlatMapAsStruct(true);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr batch = BaseVector::create(outType, 0, pool());
+  ASSERT_EQ(rowReader->next(10, batch), 5);
+  // Rows missing a projected key and empty maps yield a non-null struct with
+  // null children; a null map yields a null struct row (setComplexNulls).
+  auto expected = makeRowVector({
+      makeRowVector(
+          {"3", "1"},
+          {
+              makeNullableFlatVector<int64_t>(
+                  {30, std::nullopt, 32, std::nullopt, std::nullopt}),
+              makeNullableFlatVector<int64_t>(
+                  {10, std::nullopt, 12, std::nullopt, std::nullopt}),
+          },
+          /*isNullAt=*/[](vector_size_t row) { return row == 4; }),
+  });
+  assertEqualVectors(expected, batch);
+}
+
 // Verify DwrfRowReader can be destroyed while ParallelUnitLoader async load()
 // are in progress. This regression test ensures that:
 // 1. ParallelUnitLoader destructor doesn't wait for async load() operations
