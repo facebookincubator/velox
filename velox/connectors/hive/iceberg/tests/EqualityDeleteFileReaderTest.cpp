@@ -19,6 +19,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -33,6 +34,33 @@ using namespace facebook::velox::exec::test;
 namespace {
 
 const std::string kIcebergConnectorId = "test-iceberg-eq-delete";
+
+parquet::ParquetFieldId makeField(const TypePtr& type, int32_t& nextFieldId) {
+  const auto fieldId = nextFieldId++;
+  std::vector<parquet::ParquetFieldId> children;
+  children.reserve(type->size());
+  for (size_t i = 0; i < type->size(); ++i) {
+    children.push_back(makeField(type->childAt(i), nextFieldId));
+  }
+  return {fieldId, std::move(children)};
+}
+
+connector::ColumnHandleMap makeAssignments(const RowTypePtr& rowType) {
+  connector::ColumnHandleMap assignments;
+  int32_t nextFieldId = 1;
+  for (size_t i = 0; i < rowType->size(); ++i) {
+    const auto& name = rowType->nameOf(i);
+    const auto& type = rowType->childAt(i);
+    assignments.emplace(
+        name,
+        std::make_shared<const IcebergColumnHandle>(
+            name,
+            FileColumnHandle::ColumnType::kRegular,
+            type,
+            makeField(type, nextFieldId)));
+  }
+  return assignments;
+}
 
 } // namespace
 
@@ -136,6 +164,7 @@ class EqualityDeleteFileReaderTest : public HiveConnectorTestBase {
         .startTableScan(kIcebergConnectorId)
         .outputType(outputType)
         .dataColumns(dataColumns)
+        .assignments(makeAssignments(dataColumns))
         .endTableScan()
         .planNode();
   }
@@ -606,6 +635,7 @@ TEST_F(EqualityDeleteFileReaderTest, equalityFilterOnlyColumnNotInProjection) {
                   .startTableScan(kIcebergConnectorId)
                   .outputType(outputType)
                   .dataColumns(tableType)
+                  .assignments(makeAssignments(tableType))
                   .subfieldFilter("id >= 3")
                   .endTableScan()
                   .planNode();
@@ -860,6 +890,63 @@ TEST_F(EqualityDeleteFileReaderTest, stringColumnDelete) {
       {
           makeFlatVector<std::string>({"alice", "charlie"}),
           makeFlatVector<int32_t>({25, 35}),
+      });
+
+  assertEqualResults({expected}, {result});
+}
+
+TEST_F(EqualityDeleteFileReaderTest, nestedPrimitiveColumnDelete) {
+  auto detailsType = ROW({"code", "label"}, {INTEGER(), VARCHAR()});
+  auto rowType = ROW({"id", "details"}, {BIGINT(), detailsType});
+
+  auto baseDetails = makeRowVector(
+      {"code", "label"},
+      {
+          makeNullableFlatVector<int32_t>({10, 20, 10, 40, std::nullopt, 60}),
+          makeFlatVector<std::string>({"a", "b", "c", "d", "e", "f"}),
+      },
+      [](vector_size_t row) { return row == 5; });
+  auto baseData = makeRowVector(
+      {"id", "details"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6}),
+          baseDetails,
+      });
+  auto dataFile = writeDataFile({baseData});
+
+  auto deleteDetails = makeRowVector(
+      {"code"},
+      {
+          makeNullableFlatVector<int32_t>({10, std::nullopt}),
+      },
+      [](vector_size_t row) { return row == 1; });
+  auto deleteData = makeRowVector(
+      {"details"},
+      {
+          deleteDetails,
+      });
+  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+
+  const IcebergDeleteFile icebergDeleteFile(
+      FileContent::kEqualityDeletes,
+      eqDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      2,
+      getFileSize(eqDeleteFile->getPath()),
+      /*equalityFieldIds=*/{3});
+
+  auto splits = makeSplits(dataFile->getPath(), {icebergDeleteFile});
+  auto plan = makeTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"id", "details"},
+      {
+          makeFlatVector<int64_t>({2, 4}),
+          makeRowVector(
+              {"code", "label"},
+              {makeFlatVector<int32_t>({20, 40}),
+               makeFlatVector<std::string>({"b", "d"})}),
       });
 
   assertEqualResults({expected}, {result});

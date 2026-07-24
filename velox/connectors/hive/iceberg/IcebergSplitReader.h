@@ -129,12 +129,14 @@ class IcebergSplitReader : public FileSplitReader {
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
 
-  // Resolves the equality field IDs of an equality-delete file to the
-  // corresponding column names and types in the table schema. In Iceberg,
-  // field IDs for top-level columns are assigned sequentially starting from
-  // 1, matching the column order in the table schema.
-  std::pair<std::vector<std::string>, std::vector<TypePtr>>
-  resolveEqualityColumns(const IcebergDeleteFile& deleteFile) const;
+  struct ResolvedEqualityFields {
+    RowTypePtr deleteFileSchema;
+    std::vector<EqualityDeleteFieldPath> fieldPaths;
+  };
+
+  // Resolves equality field IDs using Iceberg column metadata.
+  ResolvedEqualityFields resolveEqualityFields(
+      const IcebergDeleteFile& deleteFile) const;
 
   // Discovers equality-delete columns that are not in the user's projection
   // and augments 'scanSpec_' and 'readerOutputType_' so they are physically

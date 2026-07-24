@@ -98,6 +98,93 @@ bool shouldSkipBySequenceNumber(
                           : (deleteFileSeqNum < dataSeqNum);
 }
 
+std::optional<EqualityDeleteFieldPath> findEqualityField(
+    int32_t targetFieldId,
+    const TypePtr& type,
+    const dwio::common::ParquetFieldId& field,
+    EqualityDeleteFieldPath path) {
+  if (field.fieldId == targetFieldId) {
+    VELOX_CHECK(
+        type->isPrimitiveType() && !type->isReal() && !type->isDouble(),
+        "Invalid Iceberg equality field ID {}.",
+        targetFieldId);
+    return path;
+  }
+
+  if (!type->isRow()) {
+    return std::nullopt;
+  }
+
+  VELOX_CHECK_EQ(field.children.size(), type->size());
+  for (size_t i = 0; i < field.children.size(); ++i) {
+    auto childPath = path;
+    childPath.push_back(type->asRow().nameOf(i));
+    if (auto resolved = findEqualityField(
+            targetFieldId,
+            type->childAt(i),
+            field.children[i],
+            std::move(childPath))) {
+      return resolved;
+    }
+  }
+  return std::nullopt;
+}
+
+RowTypePtr projectEqualityFields(
+    const RowType& rowType,
+    const std::vector<EqualityDeleteFieldPath>& fieldPaths,
+    size_t depth = 0) {
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+
+  for (size_t i = 0; i < rowType.size(); ++i) {
+    const auto& name = rowType.nameOf(i);
+    std::vector<EqualityDeleteFieldPath> matchingPaths;
+    bool includeLeaf = false;
+    for (const auto& path : fieldPaths) {
+      if (path.size() > depth && path[depth] == name) {
+        matchingPaths.push_back(path);
+        includeLeaf = includeLeaf || path.size() == depth + 1;
+      }
+    }
+    if (matchingPaths.empty()) {
+      continue;
+    }
+
+    names.push_back(name);
+    const auto& childType = rowType.childAt(i);
+    if (includeLeaf) {
+      types.push_back(childType);
+    } else {
+      types.push_back(
+          projectEqualityFields(childType->asRow(), matchingPaths, depth + 1));
+    }
+  }
+  return ROW(std::move(names), std::move(types));
+}
+
+void addRequiredFields(
+    common::ScanSpec& scanSpec,
+    const Type& outputType,
+    const Type& requiredType) {
+  if (requiredType.isPrimitiveType()) {
+    return;
+  }
+
+  const auto& outputRowType = outputType.asRow();
+  const auto& requiredRowType = requiredType.asRow();
+  for (size_t i = 0; i < requiredRowType.size(); ++i) {
+    const auto& name = requiredRowType.nameOf(i);
+    const auto outputIndex = outputRowType.getChildIdx(name);
+    auto* childSpec =
+        scanSpec.addField(name, static_cast<column_index_t>(outputIndex));
+    addRequiredFields(
+        *childSpec,
+        *outputRowType.childAt(outputIndex),
+        *requiredRowType.childAt(i));
+  }
+}
+
 } // namespace
 
 IcebergSplitReader::IcebergSplitReader(
@@ -447,15 +534,14 @@ void IcebergSplitReader::prepareSplit(
           continue;
         }
 
-        auto [equalityColumnNames, equalityColumnTypes] =
-            resolveEqualityColumns(deleteFile);
+        auto resolvedFields = resolveEqualityFields(deleteFile);
 
-        if (!equalityColumnNames.empty()) {
+        if (!resolvedFields.fieldPaths.empty()) {
           equalityDeleteFileReaders_.push_back(
               std::make_unique<EqualityDeleteFileReader>(
                   deleteFile,
-                  equalityColumnNames,
-                  equalityColumnTypes,
+                  resolvedFields.deleteFileSchema,
+                  resolvedFields.fieldPaths,
                   fileSplit_->filePath,
                   fileHandleFactory_,
                   connectorQueryCtx_,
@@ -517,6 +603,7 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
   const auto& deleteFiles = icebergSplit_->deleteFiles;
   const auto& splitPartitionKeys = icebergSplit_->partitionKeys;
 
+  std::vector<EqualityDeleteFieldPath> allEqualityFieldPaths;
   for (const auto& deleteFile : deleteFiles) {
     if (deleteFile.content != FileContent::kEqualityDeletes ||
         deleteFile.recordCount == 0 || deleteFile.equalityFieldIds.empty()) {
@@ -529,73 +616,84 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
       continue;
     }
 
-    auto [equalityColumnNames, equalityColumnTypes] =
-        resolveEqualityColumns(deleteFile);
-    for (size_t i = 0; i < equalityColumnNames.size(); ++i) {
-      const auto& name = equalityColumnNames[i];
-      // Skip if this column was already added by a previous delete file.
-      if (std::find(
-              extraEqualityColumns.begin(), extraEqualityColumns.end(), name) !=
-          extraEqualityColumns.end()) {
-        continue;
-      }
-      auto* fieldSpec = scanSpec_->childByName(name);
-      const bool alreadyInOutput =
-          readerOutputType_->getChildIdxIfExists(name).has_value();
-      if (fieldSpec != nullptr && fieldSpec->projectOut() && alreadyInOutput) {
-        // Already projected by the user (or a previous augmentation) AND
-        // present in the output type by name. The equality-delete reader can
-        // probe it directly.
-        continue;
-      }
-      // Either no spec exists, or one exists but is filter-only, or the
-      // scan-spec child is projected but the column is missing from
-      // 'readerOutputType_'. In all cases ensure the column ends up in
-      // 'readerOutputType_' AND has a projected scan-spec child with a
-      // non-conflicting channel.
-      if (fieldSpec == nullptr) {
-        fieldSpec = scanSpec_->getOrCreateChild(name);
-      }
-      fieldSpec->setProjectOut(true);
-      fieldSpec->setChannel(
-          static_cast<column_index_t>(
-              readerOutputType_->size() + extraEqualityColumns.size()));
+    auto resolvedFields = resolveEqualityFields(deleteFile);
+    allEqualityFieldPaths.insert(
+        allEqualityFieldPaths.end(),
+        resolvedFields.fieldPaths.begin(),
+        resolvedFields.fieldPaths.end());
+  }
 
-      // For partition columns set the partition value directly as a constant
-      // on the scan-spec child. This is independent of whether the data file
-      // contains the partition column physically. With the constant set
-      // up-front, 'adaptColumns' does not need any special-case logic for
-      // augmented partition columns and the read does not depend on the
-      // writer's choice of including the partition column in the file.
-      auto partitionIt = splitPartitionKeys.find(name);
-      if (partitionIt != splitPartitionKeys.end()) {
-        // Iceberg encodes DATE partition values as the integer number of
-        // days since the Unix epoch (e.g. "19345"). The standard
-        // 'setPartitionValue' helper learns this from the planner-supplied
-        // ColumnHandle via 'isPartitionDateValueDaysSinceEpoch()', but no
-        // ColumnHandle is available here when the partition column is not
-        // in the user's projection. Derive the flag from the column type
-        // instead — Iceberg always uses days-since-epoch for DATE.
-        const bool isDaysSinceEpoch = equalityColumnTypes[i]->isDate();
-        auto constant = newConstantFromString(
-            equalityColumnTypes[i],
-            partitionIt->second,
-            connectorQueryCtx_->memoryPool(),
-            fileConfig_->readTimestampPartitionValueAsLocalTime(
-                connectorQueryCtx_->sessionProperties()),
-            isDaysSinceEpoch);
-        fieldSpec->setConstantValue(constant);
-        // Mirror Java's PARTITION_KEY column-type marking: this column's
-        // value MUST come from the partition metadata, never from the file
-        // body. Track it so 'adaptColumns' Branch 1 does not later wipe the
-        // constant when the file happens to also carry the column.
-        equalityAugmentedPartitionColumns_.insert(name);
-      }
+  if (allEqualityFieldPaths.empty()) {
+    return;
+  }
 
-      extraEqualityColumns.push_back(name);
-      extraNames.push_back(name);
-      extraTypes.push_back(equalityColumnTypes[i]);
+  const auto equalitySchema = projectEqualityFields(
+      *tableHandle_->dataColumns(), allEqualityFieldPaths);
+  for (size_t i = 0; i < equalitySchema->size(); ++i) {
+    const auto& name = equalitySchema->nameOf(i);
+    const auto& equalityColumnType = equalitySchema->childAt(i);
+    auto* fieldSpec = scanSpec_->childByName(name);
+    const bool alreadyInOutput =
+        readerOutputType_->getChildIdxIfExists(name).has_value();
+    if (fieldSpec != nullptr && fieldSpec->projectOut() && alreadyInOutput) {
+      // Already projected by the user (or a previous augmentation) AND
+      // present in the output type by name. The equality-delete reader can
+      // probe it directly.
+      const auto outputIndex = readerOutputType_->getChildIdx(name);
+      addRequiredFields(
+          *fieldSpec,
+          *readerOutputType_->childAt(outputIndex),
+          *equalityColumnType);
+      continue;
     }
+    // Either no spec exists, or one exists but is filter-only, or the
+    // scan-spec child is projected but the column is missing from
+    // 'readerOutputType_'. In all cases ensure the column ends up in
+    // 'readerOutputType_' AND has a projected scan-spec child with a
+    // non-conflicting channel.
+    if (fieldSpec == nullptr) {
+      fieldSpec = scanSpec_->getOrCreateChild(name);
+    }
+    fieldSpec->setProjectOut(true);
+    fieldSpec->setChannel(
+        static_cast<column_index_t>(
+            readerOutputType_->size() + extraEqualityColumns.size()));
+    addRequiredFields(*fieldSpec, *equalityColumnType, *equalityColumnType);
+
+    // For partition columns set the partition value directly as a constant
+    // on the scan-spec child. This is independent of whether the data file
+    // contains the partition column physically. With the constant set
+    // up-front, 'adaptColumns' does not need any special-case logic for
+    // augmented partition columns and the read does not depend on the
+    // writer's choice of including the partition column in the file.
+    auto partitionIt = splitPartitionKeys.find(name);
+    if (partitionIt != splitPartitionKeys.end()) {
+      // Iceberg encodes DATE partition values as the integer number of
+      // days since the Unix epoch (e.g. "19345"). The standard
+      // 'setPartitionValue' helper learns this from the planner-supplied
+      // ColumnHandle via 'isPartitionDateValueDaysSinceEpoch()', but no
+      // ColumnHandle is available here when the partition column is not
+      // in the user's projection. Derive the flag from the column type
+      // instead — Iceberg always uses days-since-epoch for DATE.
+      const bool isDaysSinceEpoch = equalityColumnType->isDate();
+      auto constant = newConstantFromString(
+          equalityColumnType,
+          partitionIt->second,
+          connectorQueryCtx_->memoryPool(),
+          fileConfig_->readTimestampPartitionValueAsLocalTime(
+              connectorQueryCtx_->sessionProperties()),
+          isDaysSinceEpoch);
+      fieldSpec->setConstantValue(constant);
+      // Mirror Java's PARTITION_KEY column-type marking: this column's
+      // value MUST come from the partition metadata, never from the file
+      // body. Track it so 'adaptColumns' Branch 1 does not later wipe the
+      // constant when the file happens to also carry the column.
+      equalityAugmentedPartitionColumns_.insert(name);
+    }
+
+    extraEqualityColumns.push_back(name);
+    extraNames.push_back(name);
+    extraTypes.push_back(equalityColumnType);
   }
 
   if (extraEqualityColumns.empty()) {
@@ -614,32 +712,54 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
   readerOutputType_ = ROW(std::move(names), std::move(types));
 }
 
-std::pair<std::vector<std::string>, std::vector<TypePtr>>
-IcebergSplitReader::resolveEqualityColumns(
+IcebergSplitReader::ResolvedEqualityFields
+IcebergSplitReader::resolveEqualityFields(
     const IcebergDeleteFile& deleteFile) const {
-  std::vector<std::string> equalityColumnNames;
-  std::vector<TypePtr> equalityColumnTypes;
-
   const auto& dataColumns = tableHandle_->dataColumns();
   VELOX_CHECK(
       dataColumns != nullptr,
       "Iceberg equality delete file '{}' cannot be processed because "
       "table data columns are not available in HiveTableHandle.",
       deleteFile.filePath);
-  for (const auto& eqFieldId : deleteFile.equalityFieldIds) {
-    // Field IDs are 1-based sequential for non-evolved schemas.
-    auto colIdx = static_cast<uint32_t>(eqFieldId - 1);
-    VELOX_CHECK_LT(
-        colIdx,
-        dataColumns->size(),
-        "Equality delete field ID {} out of range. This may indicate "
-        "schema evolution with non-sequential field IDs, which is "
-        "not yet supported.",
-        eqFieldId);
-    equalityColumnNames.push_back(dataColumns->nameOf(colIdx));
-    equalityColumnTypes.push_back(dataColumns->childAt(colIdx));
+
+  std::unordered_map<std::string, const IcebergColumnHandle*> handleByName;
+  if (columnHandles_ != nullptr) {
+    for (const auto& [outputName, handle] : *columnHandles_) {
+      if (auto* icebergHandle =
+              dynamic_cast<const IcebergColumnHandle*>(handle.get())) {
+        handleByName.emplace(icebergHandle->name(), icebergHandle);
+      }
+    }
   }
-  return {std::move(equalityColumnNames), std::move(equalityColumnTypes)};
+
+  std::vector<EqualityDeleteFieldPath> equalityFieldPaths;
+  equalityFieldPaths.reserve(deleteFile.equalityFieldIds.size());
+  for (const auto equalityFieldId : deleteFile.equalityFieldIds) {
+    std::optional<EqualityDeleteFieldPath> resolvedField;
+
+    for (size_t i = 0; i < dataColumns->size() && !resolvedField; ++i) {
+      const auto& name = dataColumns->nameOf(i);
+      const auto handleIt = handleByName.find(name);
+      if (handleIt == handleByName.end()) {
+        continue;
+      }
+      resolvedField = findEqualityField(
+          equalityFieldId,
+          dataColumns->childAt(i),
+          handleIt->second->field(),
+          {name});
+    }
+
+    VELOX_CHECK(
+        resolvedField.has_value(),
+        "Iceberg equality field ID {} is missing from the table schema.",
+        equalityFieldId);
+    equalityFieldPaths.push_back(std::move(*resolvedField));
+  }
+
+  return {
+      projectEqualityFields(*dataColumns, equalityFieldPaths),
+      std::move(equalityFieldPaths)};
 }
 
 uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
