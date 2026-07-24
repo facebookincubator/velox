@@ -38,6 +38,7 @@
 #include <cudf/filling.hpp>
 #include <cudf/join/conditional_join.hpp>
 #include <cudf/join/join.hpp>
+#include <cudf/reshape.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/search.hpp>
 #include <cudf/stream_compaction.hpp>
@@ -325,14 +326,7 @@ void CudfNestedLoopJoinProbe::initialize() {
       joinNode_->joinCondition(), operatorCtx_->execCtx()->queryCtx(), pool);
   VELOX_CHECK_NOT_NULL(optimizedCondition);
 
-  // If the condition has a sub-expression that isn't natively
-  // AST-representable and references columns from both sides (e.g.
-  // `probe.col LIKE build.pattern`), it can't be precomputed on either side
-  // before the join, so it can't be turned into a single cuDF AST tree at
-  // all. Evaluate the whole condition generally instead, against the full
-  // probe x build cross product (see crossJoinConditionalIndices), rather
-  // than driving cudf::conditional_inner_join /
-  // cudf::conditional_left_semi_join with an AST tree.
+  // See crossJoinConditionalIndices for why this can't be an AST tree.
   if (hasNonAstSubexprSpanningBothSides(
           optimizedCondition, probeType_, buildType_)) {
     useAstFilter_ = false;
@@ -612,12 +606,20 @@ std::pair<std::unique_ptr<cudf::column>, std::unique_ptr<cudf::column>>
 CudfNestedLoopJoinProbe::crossJoinConditionalIndices(
     cudf::table_view probeTableView,
     cudf::table_view buildView,
-    rmm::cuda_stream_view stream) {
+    rmm::cuda_stream_view stream,
+    bool needBuildIndices) {
   VELOX_NVTX_FUNC_RANGE();
   auto mr = get_temp_mr();
 
   const auto numProbeRows = probeTableView.num_rows();
   const auto numBuildRows = buildView.num_rows();
+  if (numProbeRows == 0 || numBuildRows == 0) {
+    return {
+        cudf::make_empty_column(cudf::type_to_id<cudf::size_type>()),
+        needBuildIndices
+            ? cudf::make_empty_column(cudf::type_to_id<cudf::size_type>())
+            : nullptr};
+  }
   const auto totalRows =
       static_cast<int64_t>(numProbeRows) * static_cast<int64_t>(numBuildRows);
   VELOX_CHECK_LE(
@@ -630,32 +632,21 @@ CudfNestedLoopJoinProbe::crossJoinConditionalIndices(
       totalRows);
 
   // probeIndices[i] = i / numBuildRows, buildIndices[i] = i % numBuildRows,
-  // for i in [0, numProbeRows * numBuildRows). This is the same probe-major
-  // row order cudf::cross_join uses, but materialized as explicit index
-  // columns (rather than gathered data) so the filtered result below can
-  // reuse the same contains()-based matched-flag logic that
-  // cudf::conditional_inner_join's index-pair output already uses in the
-  // caller.
-  const auto totalRowsAsSizeType = static_cast<cudf::size_type>(totalRows);
+  // for i in [0, numProbeRows * numBuildRows) - the same probe-major row
+  // order cudf::cross_join uses. repeat()/tile() build this directly (each
+  // probe index repeated numBuildRows times; the build range tiled
+  // numProbeRows times) rather than computing DIV/MOD over a
+  // totalRows-sized sequence.
   auto zero = cudf::numeric_scalar<cudf::size_type>(0, true, stream, mr);
   auto one = cudf::numeric_scalar<cudf::size_type>(1, true, stream, mr);
-  auto sequence = cudf::sequence(totalRowsAsSizeType, zero, one, stream, mr);
-  auto buildRowsScalar =
-      cudf::numeric_scalar<cudf::size_type>(numBuildRows, true, stream, mr);
-  auto probeIndices = cudf::binary_operation(
-      sequence->view(),
-      buildRowsScalar,
-      cudf::binary_operator::DIV,
-      cudf::data_type{cudf::type_to_id<cudf::size_type>()},
-      stream,
-      mr);
-  auto buildIndices = cudf::binary_operation(
-      sequence->view(),
-      buildRowsScalar,
-      cudf::binary_operator::MOD,
-      cudf::data_type{cudf::type_to_id<cudf::size_type>()},
-      stream,
-      mr);
+  auto probeRange = cudf::sequence(numProbeRows, zero, one, stream, mr);
+  auto buildRange = cudf::sequence(numBuildRows, zero, one, stream, mr);
+  auto probeIndicesTable = cudf::repeat(
+      cudf::table_view{{probeRange->view()}}, numBuildRows, stream, mr);
+  auto buildIndicesTable = cudf::tile(
+      cudf::table_view{{buildRange->view()}}, numProbeRows, stream, mr);
+  auto probeIndices = std::move(probeIndicesTable->release()[0]);
+  auto buildIndices = std::move(buildIndicesTable->release()[0]);
 
   auto gatheredProbe = cudf::gather(
       probeTableView,
@@ -691,12 +682,15 @@ CudfNestedLoopJoinProbe::crossJoinConditionalIndices(
 
   auto filteredProbeIndices = cudf::apply_boolean_mask(
       cudf::table_view{{probeIndices->view()}}, mask, stream, mr);
-  auto filteredBuildIndices = cudf::apply_boolean_mask(
-      cudf::table_view{{buildIndices->view()}}, mask, stream, mr);
-
   auto probeIndicesCols = filteredProbeIndices->release();
-  auto buildIndicesCols = filteredBuildIndices->release();
-  return {std::move(probeIndicesCols[0]), std::move(buildIndicesCols[0])};
+
+  std::unique_ptr<cudf::column> filteredBuildIndicesCol;
+  if (needBuildIndices) {
+    auto filteredBuildIndices = cudf::apply_boolean_mask(
+        cudf::table_view{{buildIndices->view()}}, mask, stream, mr);
+    filteredBuildIndicesCol = std::move(filteredBuildIndices->release()[0]);
+  }
+  return {std::move(probeIndicesCols[0]), std::move(filteredBuildIndicesCol)};
 }
 
 std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
@@ -1111,10 +1105,14 @@ RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
       } else {
         // Condition spans both sides with a non-AST sub-expression; a probe
         // row "matches" (for the semi-join match flag) if it appears at all
-        // among the filtered cross-product probe indices.
-        auto [probeIndicesForSemiJoin, buildIndicesForSemiJoin] =
+        // among the filtered cross-product probe indices. Build indices
+        // aren't needed here, so skip computing them.
+        auto [probeIndicesForSemiJoin, unusedBuildIndices] =
             crossJoinConditionalIndices(
-                probeTableView, buildData_.value()->view(), stream);
+                probeTableView,
+                buildData_.value()->view(),
+                stream,
+                /*needBuildIndices=*/false);
         matchedIndicesColumn = std::move(probeIndicesForSemiJoin);
         matchedIndicesSize = matchedIndicesColumn->size();
         matchedIndicesView = matchedIndicesColumn->view();

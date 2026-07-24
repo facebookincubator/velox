@@ -235,27 +235,20 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   // if buildStream_ was never fetched (e.g. build side never ran).
   void recordReadCompletion(rmm::cuda_stream_view probeStream);
 
-  /// Computes matching (probeIndex, buildIndex) pairs for a join condition
-  /// that has a sub-expression which isn't natively representable in cuDF
-  /// AST and references columns from both probe and build (e.g.
-  /// `probe.col LIKE build.pattern`). Such a condition can't be precomputed
-  /// on either side before the join, and can't be turned into a single
-  /// cuDF AST tree at all, so it can't drive cudf::conditional_inner_join /
-  /// cudf::conditional_left_semi_join the way an AST-representable
-  /// condition can (see useAstFilter_).
-  ///
-  /// Instead, this materializes the full probe x build cross product as
-  /// explicit row-index columns, evaluates the condition generally via
-  /// filterEvaluator_ against the gathered rows, and returns only the index
-  /// pairs where it's true - the same shape of result
-  /// cudf::conditional_inner_join would produce, so callers can feed it into
-  /// the same downstream gather/matched-flags logic used for the
-  /// AST-representable case.
+  /// Evaluates a join condition that isn't AST-representable (spans both
+  /// sides, e.g. `probe.col LIKE build.pattern`) by materializing the full
+  /// probe x build cross product as explicit row-index columns and running
+  /// filterEvaluator_ over the gathered rows. Returns the (probeIndex,
+  /// buildIndex) pairs where the condition holds, in the same shape as
+  /// cudf::conditional_inner_join's output. When `needBuildIndices` is
+  /// false, the returned build-index column is null; callers that only need
+  /// the matched probe rows (e.g. left semi project) can skip that work.
   std::pair<std::unique_ptr<cudf::column>, std::unique_ptr<cudf::column>>
   crossJoinConditionalIndices(
       cudf::table_view probeTableView,
       cudf::table_view buildView,
-      rmm::cuda_stream_view stream);
+      rmm::cuda_stream_view stream,
+      bool needBuildIndices = true);
 
   bool isLeftOrFullJoin() const {
     return joinType_ == core::JoinType::kLeft ||
