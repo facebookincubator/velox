@@ -68,7 +68,7 @@ void registerTimestampMinusInterval(const std::string& name) {
 }
 
 void registerFromUnixtime(const std::string& name) {
-  registerFunction<FromUnixtimeFunction, Timestamp, double>({name});
+  registerFunction<FromUnixtimeFunction, TimestampWithTimezone, double>({name});
   registerFunction<
       FromUnixtimeFunction,
       TimestampWithTimezone,
