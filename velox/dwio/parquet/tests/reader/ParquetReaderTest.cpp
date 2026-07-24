@@ -1682,6 +1682,53 @@ TEST_F(ParquetReaderTest, corruptFooterLengthWraps) {
       "is inconsistent with file length");
 }
 
+// Regression test for the BooleanDecoder dense fast path. A dense read whose
+// row count is not a multiple of 8 must preserve the unread bits of the
+// current byte so a subsequent read resumes at the correct bit. Reading a
+// plain-encoded boolean page in two dense chunks split at row 3 (a
+// non-multiple of 8) previously dropped the remaining 5 bits of the first
+// byte and misaligned every following value.
+TEST_F(ParquetReaderTest, booleanDenseReadSplitAcrossByte) {
+  const auto rowType = ROW({"b"}, {BOOLEAN()});
+  // 40 rows span 5 encoded bytes; the pattern is non-periodic over a byte so
+  // a misaligned resume produces observably wrong values.
+  constexpr int32_t kNumRows = 40;
+  auto values = makeFlatVector<bool>(
+      kNumRows, [](auto row) { return (row % 3) == 0 || (row % 7) == 0; });
+  auto data = makeRowVector({"b"}, {values});
+
+  auto* sink = write(data);
+  auto readerBundle = readerBuilder(*sink, rowType).build();
+  ASSERT_EQ(readerBundle.reader->numberOfRows(), kNumRows);
+
+  auto& rowReader = *readerBundle.rowReader;
+  auto result = BaseVector::create(rowType, 0, leafPool_.get());
+
+  // First dense chunk: 3 rows, ending mid first byte (non-multiple of 8).
+  ASSERT_EQ(rowReader.next(3, result), 3);
+  {
+    auto* flat = result->as<RowVector>()
+                     ->childAt(0)
+                     ->loadedVector()
+                     ->asFlatVector<bool>();
+    for (int32_t i = 0; i < 3; ++i) {
+      EXPECT_EQ(flat->valueAt(i), values->valueAt(i)) << "row " << i;
+    }
+  }
+
+  // Second dense chunk: the remaining rows must resume at row 3.
+  ASSERT_EQ(rowReader.next(kNumRows, result), kNumRows - 3);
+  {
+    auto* flat = result->as<RowVector>()
+                     ->childAt(0)
+                     ->loadedVector()
+                     ->asFlatVector<bool>();
+    for (int32_t i = 0; i < kNumRows - 3; ++i) {
+      EXPECT_EQ(flat->valueAt(i), values->valueAt(i + 3)) << "row " << (i + 3);
+    }
+  }
+}
+
 TEST_F(ParquetReaderTest, columnStatistics) {
   auto data = makeRowVector(
       {"a", "b", "c"},
