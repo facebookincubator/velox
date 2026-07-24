@@ -1129,15 +1129,18 @@ class ParseDatetimeFunction : public CudfFunction {
     strptime_ = jodaToStrftime(constStringArg(expr, 1), trailing);
     if (trailing == TrailingZone::kOffsetNoColon ||
         trailing == TrailingZone::kOffsetColon) {
-      // to_timestamps folds the %z offset into the UTC instant. The parsed
-      // offset is recovered per-row in eval so the packed zone key reflects it
-      // instead of GMT.
-      strptime_ += "%z";
       hasOffset_ = true;
-      // Trailing signed offset with an optional colon, matching both "-09:00"
-      // and "-0900". Groups: 0 sign, 1 hours, 2 minutes.
+      // The wall clock is parsed without "%z": cuDF's "%z" is fixed-width
+      // "+/-HHMM", so it drops the minutes of a colon offset ("+05:30" folds
+      // only "+05:00") and cannot read an hours-only offset ("+05"). Instead
+      // the trailing offset is recovered from this regex, subtracted from the
+      // wall clock in eval, and packed as the matching fixed-offset zone key.
+      // The minute component is optional, so "+05" reads as "+05:00" and both
+      // "-09:00" and "-0900" match; an absent match (a literal "Z" or a
+      // UTC/GMT alias) leaves the null groups that signedOffsetMinutes maps to
+      // offset 0 (GMT), matching CPU. Groups: 0 sign, 1 hours, 2 minutes.
       offsetProgram_ = cudf::strings::regex_program::create(
-          "([+-])([0-9]{2}):?([0-9]{2})$");
+          "([+-])([0-9]{2})(?::?([0-9]{2}))?$");
     } else if (trailing != TrailingZone::kNone) {
       VELOX_NYI("parse_datetime zone-name token is not supported on GPU");
     }
@@ -1163,26 +1166,48 @@ class ParseDatetimeFunction : public CudfFunction {
         strptime_,
         stream,
         mr);
-    auto millis = bitcastColumn(parsed->view(), kInt64);
-    auto shifted = binaryOp(
-        millis,
-        int64Scalar(kMillisShift, stream),
-        cudf::binary_operator::SHIFT_LEFT,
-        int64Type(),
-        stream,
-        mr);
+    auto wallMillis = bitcastColumn(parsed->view(), kInt64);
     if (!hasOffset_) {
+      // No zone token: the parsed wall clock is the UTC instant already.
       // pack(millis, GMT) == millis << 12.
-      return shifted;
+      return binaryOp(
+          wallMillis,
+          int64Scalar(kMillisShift, stream),
+          cudf::binary_operator::SHIFT_LEFT,
+          int64Type(),
+          stream,
+          mr);
     }
-    // Recover the per-row offset that to_timestamps folded into the instant and
-    // pack the matching fixed-offset zone key, so timezone_hour/to_iso8601
-    // reflect the parsed offset instead of GMT.
+    // Recover the trailing offset (parsed without "%z", so it is not yet folded
+    // into wallMillis) and convert to UTC: utcMillis = wallMillis -
+    // offsetMinutes * 60'000. Pack the matching fixed-offset zone key so
+    // timezone_hour/to_iso8601 reflect the parsed offset instead of GMT.
     auto groups = cudf::strings::extract(
         cudf::strings_column_view(input), *offsetProgram_, stream, mr);
     auto g = groups->view();
     auto offsetMinutes =
         signedOffsetMinutes(g.column(0), g.column(1), g.column(2), stream, mr);
+    auto offsetMillis = binaryOp(
+        offsetMinutes->view(),
+        int64Scalar(60'000, stream),
+        cudf::binary_operator::MUL,
+        int64Type(),
+        stream,
+        mr);
+    auto utcMillis = cudf::binary_operation(
+        wallMillis,
+        offsetMillis->view(),
+        cudf::binary_operator::SUB,
+        int64Type(),
+        stream,
+        mr);
+    auto shifted = binaryOp(
+        utcMillis->view(),
+        int64Scalar(kMillisShift, stream),
+        cudf::binary_operator::SHIFT_LEFT,
+        int64Type(),
+        stream,
+        mr);
     auto zoneId = zoneKeyFromOffsetMinutes(offsetMinutes->view(), stream, mr);
     return cudf::binary_operation(
         shifted->view(),

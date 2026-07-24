@@ -534,6 +534,68 @@ TEST_F(TimezoneFunctionTest, parseDatetimeNoColonOffset) {
       "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
 }
 
+// Reproducer for the colon-offset minute drop. cuDF's "%z" is fixed-width
+// "+/-HHMM": it reads the two hour digits, then the two minute digits at a fixed
+// position, so a colon (Joda ZZ, "+05:30") lands where a minute digit is
+// expected and only "+05:00" is folded into the UTC instant. The trailing-offset
+// regex still recovers "+05:30" for the zone key, leaving the instant 30 minutes
+// off from CPU. The existing -09:00/-0900 tests miss this because their minute
+// component is zero. Red until the colon offset is normalized (or the wall clock
+// is parsed without "%z" and the recovered offset subtracted).
+TEST_F(TimezoneFunctionTest, parseDatetimeColonOffsetWithMinutes) {
+  auto input = varcharInput("2026-01-02 00:45:00 +05:30");
+  assertMatchesCpu(
+      "to_unixtime(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss ZZ'))", input);
+  assertMatchesCpu(
+      "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss ZZ'))", input);
+}
+
+// Control for the fix above: the no-colon form "+/-HHMM" with a non-zero minute
+// component is what cuDF's "%z" parses correctly, so this should stay green.
+// Pairs the offset with the single-Z token; both -09:00 (ZZ) and -0900 (Z) are
+// accepted by CPU regardless of the token's Z-count.
+TEST_F(TimezoneFunctionTest, parseDatetimeNoColonOffsetWithMinutes) {
+  auto input = varcharInput("2026-01-02 00:45:00 -0930");
+  assertMatchesCpu(
+      "to_unixtime(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
+  assertMatchesCpu(
+      "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
+}
+
+// CPU's parseTimezoneOffset expands an hours-only offset "+05" to "+05:00".
+// cuDF's fixed-width "%z" expects five characters ("+/-HHMM") and the recovery
+// regex requires two minute digits, so the GPU cannot parse a three-character
+// offset. Red until the offset parsing accepts the hours-only form.
+TEST_F(TimezoneFunctionTest, parseDatetimeHoursOnlyOffset) {
+  auto input = varcharInput("2026-01-02 00:45:00 +05");
+  assertMatchesCpu(
+      "to_unixtime(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
+  assertMatchesCpu(
+      "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
+}
+
+// CPU accepts a literal "Z" for the numeric-offset token (Z/ZZ) and maps it to
+// GMT (offset 0). Confirms the fix keeps this form correct (the recovery regex
+// finds no signed offset, so signedOffsetMinutes yields offset 0 / GMT).
+TEST_F(TimezoneFunctionTest, parseDatetimeLiteralZUtc) {
+  auto input = varcharInput("2026-01-02 00:45:00 Z");
+  assertMatchesCpu(
+      "to_unixtime(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
+  assertMatchesCpu(
+      "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
+}
+
+// CPU also accepts UTC/UCT/GMT/GMT0 for the numeric-offset token (Z/ZZ), all
+// mapping to GMT. Confirms the fix keeps a named-UTC alias correct (again offset
+// 0 / GMT via the no-match path).
+TEST_F(TimezoneFunctionTest, parseDatetimeNamedUtcAlias) {
+  auto input = varcharInput("2026-01-02 00:45:00 GMT");
+  assertMatchesCpu(
+      "to_unixtime(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
+  assertMatchesCpu(
+      "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
+}
+
 TEST_F(TimezoneFunctionTest, fromIso8601Timestamp) {
   // from_iso8601_timestamp(varchar) -> timestamp with time zone.
   assertMatchesCpu(
