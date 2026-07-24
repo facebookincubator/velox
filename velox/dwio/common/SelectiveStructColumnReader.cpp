@@ -19,6 +19,25 @@
 #include "velox/dwio/common/ColumnLoader.h"
 
 namespace facebook::velox::dwio::common {
+
+namespace detail {
+#if XSIMD_WITH_AVX2
+// Maps a byte of inMap bits to 8 int32s so map sizes can be accumulated with
+// SIMD in readInMapDense.
+xsimd::batch<int32_t> bitsToInt32s[256];
+
+__attribute__((constructor)) void initBitsToInt32s() {
+  for (int i = 0; i < 256; ++i) {
+    int32_t data[8];
+    for (int j = 0; j < 8; ++j) {
+      data[j] = bits::isBitSet(&i, j);
+    }
+    bitsToInt32s[i] = xsimd::load_unaligned(data);
+  }
+}
+#endif
+} // namespace detail
+
 namespace {
 
 bool testFilterOnConstant(const velox::common::ScanSpec& spec) {
@@ -188,7 +207,118 @@ void setLazyField(
   }
 }
 
+// Copies a contiguous range of 'inMap' bits into 'columnBits' (when non-null)
+// and adds them into 'sizes' so that after iterating over every key's inMap
+// stream 'sizes' holds per-row map cardinalities.
+void readInMapDense(
+    const uint64_t* inMap,
+    vector_size_t size,
+    uint64_t* columnBits,
+    vector_size_t* sizes) {
+#if XSIMD_WITH_AVX2
+  if (columnBits) {
+    bits::copyBits(inMap, 0, columnBits, 0, size);
+  }
+  auto* inMapBytes = reinterpret_cast<const uint8_t*>(inMap);
+  int i = 0;
+  for (int end = size / 8; i < end; ++i) {
+    auto* data = sizes + i * 8;
+    (xsimd::load_unaligned(data) + detail::bitsToInt32s[inMapBytes[i]])
+        .store_unaligned(data);
+  }
+  i *= 8;
+  for (; i < size; ++i) {
+    if (bits::isBitSet(inMap, i)) {
+      ++sizes[i];
+    }
+  }
+#else
+  for (vector_size_t i = 0; i < size; ++i) {
+    if (bits::isBitSet(inMap, i)) {
+      if (columnBits) {
+        bits::setBit(columnBits, i);
+      }
+      ++sizes[i];
+    }
+  }
+#endif
+}
+
 } // namespace
+
+namespace detail {
+void accumulateFlatMapSizes(
+    const RowSet& rows,
+    const uint64_t* mapNulls,
+    const std::vector<const uint64_t*>& inMaps,
+    vector_size_t* sizes,
+    uint64_t* columnRowBits,
+    int columnBitsWords) {
+  std::fill(sizes, sizes + rows.size(), 0);
+  const bool dense = rows.back() == rows.size() - 1;
+  for (size_t k = 0; k < inMaps.size(); ++k) {
+    // A null inMap means the column has no presence stream, so fall back to the
+    // map nulls; a null fallback counts every row as present.
+    const auto* inMap = inMaps[k] ? inMaps[k] : mapNulls;
+    auto* columnBits =
+        columnRowBits ? columnRowBits + k * columnBitsWords : nullptr;
+    if (inMap) {
+      if (dense) {
+        readInMapDense(inMap, rows.size(), columnBits, sizes);
+      } else {
+        for (vector_size_t i = 0; i < rows.size(); ++i) {
+          if (bits::isBitSet(inMap, rows[i])) {
+            if (columnBits) {
+              bits::setBit(columnBits, i);
+            }
+            ++sizes[i];
+          }
+        }
+      }
+    } else {
+      if (columnBits) {
+        bits::fillBits(columnBits, 0, rows.size(), true);
+      }
+      for (vector_size_t i = 0; i < rows.size(); ++i) {
+        ++sizes[i];
+      }
+    }
+  }
+}
+} // namespace detail
+
+void makeFlatMapSizes(
+    memory::MemoryPool* pool,
+    const RowSet& rows,
+    const uint64_t* mapNulls,
+    const std::vector<const uint64_t*>& inMaps,
+    VectorPtr* result) {
+  FlatVector<int64_t>* flatResult = nullptr;
+  if (*result && (*result)->type()->isBigint()) {
+    flatResult = (*result)->asFlatVector<int64_t>();
+  }
+  if (!flatResult || !flatResult->values()) {
+    *result = std::make_shared<FlatVector<int64_t>>(
+        pool,
+        BIGINT(),
+        nullptr,
+        rows.size(),
+        AlignedBuffer::allocate<int64_t>(rows.size(), pool),
+        std::vector<BufferPtr>{});
+    flatResult = (*result)->asFlatVector<int64_t>();
+  } else {
+    flatResult->resize(rows.size());
+  }
+  std::vector<vector_size_t> sizes(rows.size());
+  detail::accumulateFlatMapSizes(
+      rows, mapNulls, inMaps, sizes.data(), /*columnRowBits=*/nullptr, 0);
+  auto* rawSizes = flatResult->mutableRawValues();
+  for (vector_size_t i = 0; i < rows.size(); ++i) {
+    // Null maps produce size 0; the caller applies the null flags separately.
+    rawSizes[i] =
+        (mapNulls && bits::isBitNull(mapNulls, rows[i])) ? 0 : sizes[i];
+  }
+}
 
 void SelectiveStructColumnReaderBase::filterRowGroups(
     uint64_t rowGroupSize,
@@ -691,25 +821,5 @@ void SelectiveStructColumnReaderBase::getValues(
 
   resultRow->invalidateContainsLazyNotLoaded();
 }
-
-namespace detail {
-
-#if XSIMD_WITH_AVX2
-
-xsimd::batch<int32_t> bitsToInt32s[256];
-
-__attribute__((constructor)) void initBitsToInt32s() {
-  for (int i = 0; i < 256; ++i) {
-    int32_t data[8];
-    for (int j = 0; j < 8; ++j) {
-      data[j] = bits::isBitSet(&i, j);
-    }
-    bitsToInt32s[i] = xsimd::load_unaligned(data);
-  }
-}
-
-#endif
-
-} // namespace detail
 
 } // namespace facebook::velox::dwio::common

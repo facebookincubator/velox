@@ -27,6 +27,7 @@
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FileSink.h"
+#include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
@@ -3598,6 +3599,441 @@ TEST_F(TestReader, extractionSizeResultVectorReuse) {
   for (int i = 0; i < sizes->size(); ++i) {
     ASSERT_EQ(sizes->valueAt(i), 2);
   }
+}
+
+namespace {
+// Replaces the materialized map with a fixed map produced by 'make', used to
+// exercise delta updates that change map cardinality.
+class ReplaceMapDeltaUpdater : public dwio::common::DeltaColumnUpdater {
+ public:
+  explicit ReplaceMapDeltaUpdater(std::function<VectorPtr(vector_size_t)> make)
+      : make_(std::move(make)) {}
+
+  void update(const RowSet& /*baseRows*/, VectorPtr& result) override {
+    result = make_(result->size());
+  }
+
+ private:
+  std::function<VectorPtr(vector_size_t)> make_;
+};
+
+// dwrf::Config that flat-map encodes column 0.
+std::shared_ptr<dwrf::Config> flatMapConfig() {
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0});
+  return config;
+}
+
+// Writes 'data' with column 0 flat-map encoded and returns the file bytes.
+std::string writeFlatMap(memory::MemoryPool* pool, const RowVectorPtr& data) {
+  auto sink =
+      std::make_unique<MemorySink>(1 << 20, FileSink::Options{.pool = pool});
+  auto* sinkPtr = sink.get();
+  auto writer = E2EWriterTestUtil::writeData(
+      std::move(sink),
+      asRowType(data->type()),
+      {data},
+      flatMapConfig(),
+      E2EWriterTestUtil::simpleFlushPolicyFactory(true));
+  return std::string(sinkPtr->data(), sinkPtr->size());
+}
+
+// Creates a DWRF reader over the in-memory 'fileData'.
+std::unique_ptr<DwrfReader> makeFlatMapReader(
+    memory::MemoryPool* pool,
+    const std::string& fileData) {
+  dwio::common::ReaderOptions readerOpts(pool);
+  readerOpts.setFileFormat(FileFormat::DWRF);
+  return DwrfReader::create(
+      std::make_unique<BufferedInput>(
+          std::make_shared<InMemoryReadFile>(fileData), *pool),
+      readerOpts);
+}
+
+// Builds a scan spec over 'schema' that reads 'colName' with the connector's
+// kSize extraction: ExtractionType::kSize plus a BIGINT-typed size transform.
+std::shared_ptr<common::ScanSpec> flatMapSizeSpec(
+    const RowTypePtr& schema,
+    const std::string& colName,
+    memory::MemoryPool* pool) {
+  using connector::hive::applyExtractionChain;
+  using connector::hive::configureExtractionScanSpec;
+  using connector::hive::ExtractionPathElement;
+  using connector::hive::ExtractionStep;
+  using connector::hive::NamedExtraction;
+
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*schema);
+  auto* fieldSpec = spec->childByName(colName);
+  std::vector<NamedExtraction> extractions = {
+      {colName,
+       {ExtractionPathElement::simple(ExtractionStep::kSize)},
+       BIGINT()}};
+  configureExtractionScanSpec(
+      schema->findChild(colName), extractions, *fieldSpec, pool);
+  fieldSpec->setTransform(
+      [chain = extractions[0].chain](
+          const VectorPtr& input, memory::MemoryPool* transformPool) {
+        return applyExtractionChain(input, chain, transformPool);
+      },
+      BIGINT());
+  return spec;
+}
+
+// Writes 'data' flat-map encoded, reads column 0 with kSize extraction and
+// returns the loaded child.
+VectorPtr readFlatMapSizeExtraction(
+    memory::MemoryPool* pool,
+    const RowVectorPtr& data,
+    bool preserveFlatMapsInMemory) {
+  auto schema = asRowType(data->type());
+  auto reader = makeFlatMapReader(pool, writeFlatMap(pool, data));
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(flatMapSizeSpec(schema, schema->nameOf(0), pool));
+  rowReaderOpts.setPreserveFlatMapsInMemory(preserveFlatMapsInMemory);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto result = BaseVector::create(schema, 0, pool);
+  EXPECT_EQ(rowReader->next(data->size(), result), data->size());
+  return BaseVector::loadedVectorShared(result->as<RowVector>()->childAt(0));
+}
+
+// Reads the whole 'fileData' with 'scanSpec' and returns raw bytes read, with
+// coalescing and preload disabled so per-stream reads are counted.
+uint64_t flatMapRawBytesRead(
+    memory::MemoryPool* pool,
+    const std::string& fileData,
+    const RowTypePtr& schema,
+    const std::shared_ptr<common::ScanSpec>& scanSpec) {
+  auto ioStats = std::make_shared<io::IoStatistics>();
+  auto input = std::make_unique<BufferedInput>(
+      std::make_shared<InMemoryReadFile>(fileData),
+      *pool,
+      MetricsLog::voidLog(),
+      ioStats.get(),
+      /*ioStats=*/nullptr,
+      /*maxMergeDistance=*/0);
+  dwio::common::ReaderOptions readerOpts(pool);
+  readerOpts.setDataIoStats(ioStats);
+  readerOpts.setMetadataIoStats(ioStats);
+  readerOpts.setFileFormat(FileFormat::DWRF);
+  readerOpts.setFilePreloadThreshold(0);
+  auto reader = DwrfReader::create(std::move(input), readerOpts);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto result = BaseVector::create(schema, 0, pool);
+  while (rowReader->next(10'000, result) > 0) {
+  }
+  return ioStats->rawBytesRead();
+}
+
+} // namespace
+
+TEST_F(TestReader, extractionSizeFlatMap) {
+  {
+    SCOPED_TRACE("empty, single, multiple, and sparse keys");
+    auto data = makeRowVector(
+        {"col"},
+        {makeFlatMapVector<int32_t, int64_t>({
+             {},
+             {{1, 10}},
+             {{1, 10}, {2, 20}, {3, 30}},
+             {{2, 20}},
+         })
+             ->toMapVector()});
+    auto sizes = readFlatMapSizeExtraction(
+        pool(), data, /*preserveFlatMapsInMemory=*/false);
+    ASSERT_TRUE(sizes->type()->isBigint());
+    assertEqualVectors(makeFlatVector<int64_t>({0, 1, 3, 1}), sizes);
+  }
+  {
+    SCOPED_TRACE("null map stays null; null value counts as an entry");
+    auto data = makeRowVector(
+        {"col"},
+        {makeNullableFlatMapVector<int32_t, int64_t>({
+             {{{1, 10}, {2, 20}}},
+             {std::nullopt},
+             {{{1, std::nullopt}}},
+         })
+             ->toMapVector()});
+    auto sizes = readFlatMapSizeExtraction(
+        pool(), data, /*preserveFlatMapsInMemory=*/false);
+    ASSERT_TRUE(sizes->type()->isBigint());
+    assertEqualVectors(
+        makeNullableFlatVector<int64_t>({2, std::nullopt, 1}), sizes);
+  }
+}
+
+TEST_F(TestReader, extractionSizeFlatMapPreserved) {
+  auto data = makeRowVector(
+      {"col"},
+      {makeNullableFlatMapVector<int32_t, int64_t>({
+           {{{1, 10}, {2, 20}, {3, 30}}},
+           {std::nullopt},
+           {{{2, std::nullopt}}},
+       })
+           ->toMapVector()});
+  auto sizes = readFlatMapSizeExtraction(
+      pool(), data, /*preserveFlatMapsInMemory=*/true);
+  ASSERT_TRUE(sizes->type()->isBigint());
+  assertEqualVectors(
+      makeNullableFlatVector<int64_t>({3, std::nullopt, 1}), sizes);
+}
+
+TEST_F(TestReader, extractionSizeFlatMapMultiBatch) {
+  // First batch has null maps, the second has none.  Verifies null flags,
+  // values, and that the FlatVector<int64_t> result is reused across batches.
+  std::vector<
+      std::optional<std::vector<std::pair<int32_t, std::optional<int64_t>>>>>
+      maps;
+  for (int i = 0; i < 100; ++i) {
+    if (i % 2 == 0) {
+      maps.push_back(std::nullopt);
+    } else {
+      maps.push_back({{{1, 10}, {2, 20}}});
+    }
+  }
+  for (int i = 0; i < 100; ++i) {
+    maps.push_back({{{1, 10}}});
+  }
+  auto data = makeRowVector(
+      {"col"},
+      {makeNullableFlatMapVector<int32_t, int64_t>(maps)->toMapVector()});
+  auto schema = asRowType(data->type());
+  auto reader = makeFlatMapReader(pool(), writeFlatMap(pool(), data));
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(flatMapSizeSpec(schema, "col", pool()));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  auto result = BaseVector::create(schema, 0, pool());
+  ASSERT_EQ(rowReader->next(100, result), 100);
+  auto* first = result->as<RowVector>()
+                    ->childAt(0)
+                    ->loadedVector()
+                    ->as<FlatVector<int64_t>>();
+  ASSERT_TRUE(first != nullptr);
+  for (int i = 0; i < 100; ++i) {
+    if (i % 2 == 0) {
+      EXPECT_TRUE(first->isNullAt(i)) << "row " << i;
+    } else {
+      ASSERT_FALSE(first->isNullAt(i));
+      EXPECT_EQ(first->valueAt(i), 2);
+    }
+  }
+  auto* firstBatch = first;
+
+  ASSERT_EQ(rowReader->next(100, result), 100);
+  auto* second = result->as<RowVector>()
+                     ->childAt(0)
+                     ->loadedVector()
+                     ->as<FlatVector<int64_t>>();
+  ASSERT_EQ(second, firstBatch)
+      << "size result should be reused across batches";
+  for (int i = 0; i < 100; ++i) {
+    ASSERT_FALSE(second->isNullAt(i)) << "row " << i;
+    EXPECT_EQ(second->valueAt(i), 1);
+  }
+}
+
+TEST_F(TestReader, extractionSizeFlatMapSparseRows) {
+  // A filter on a second column makes the flat map read a non-contiguous row
+  // set, exercising the sparse cardinality path.
+  constexpr int kNumRows = 200;
+  auto keys = makeFlatVector<int32_t>(kNumRows * 2, [](auto i) { return i % 2; });
+  auto values = makeFlatVector<int64_t>(kNumRows * 2, folly::identity);
+  std::vector<vector_size_t> offsets(kNumRows);
+  for (int i = 0; i < kNumRows; ++i) {
+    offsets[i] = i * 2;
+  }
+  auto data = makeRowVector(
+      {"col", "b"},
+      {makeMapVector(offsets, keys, values),
+       makeFlatVector<int32_t>(kNumRows, folly::identity)});
+  auto schema = asRowType(data->type());
+  auto reader = makeFlatMapReader(pool(), writeFlatMap(pool(), data));
+
+  auto spec = flatMapSizeSpec(schema, "col", pool());
+  std::vector<int64_t> evenRows;
+  for (int i = 0; i < kNumRows; i += 2) {
+    evenRows.push_back(i);
+  }
+  spec->childByName("b")->setFilter(
+      common::createBigintValues(evenRows, /*nullAllowed=*/false));
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  auto result = BaseVector::create(schema, 0, pool());
+  uint64_t total = 0;
+  while (rowReader->next(64, result) > 0) {
+    auto* sizes = result->as<RowVector>()
+                      ->childAt(0)
+                      ->loadedVector()
+                      ->as<FlatVector<int64_t>>();
+    ASSERT_TRUE(sizes != nullptr);
+    for (int i = 0; i < sizes->size(); ++i) {
+      ASSERT_EQ(sizes->valueAt(i), 2);
+    }
+    total += sizes->size();
+  }
+  EXPECT_EQ(total, kNumRows / 2);
+}
+
+TEST_F(TestReader, extractionSizeFlatMapSeek) {
+  // Reading a batch then seeking forward within the stripe drives
+  // FlatMapInMapReader::skip() (modeled on extractionMapKeySizeWithSeek).
+  constexpr int kNumRows = 100;
+  auto keys = makeFlatVector<int32_t>(kNumRows * 2, [](auto i) { return i % 2; });
+  auto values = makeFlatVector<int64_t>(kNumRows * 2, folly::identity);
+  std::vector<vector_size_t> offsets(kNumRows);
+  for (int i = 0; i < kNumRows; ++i) {
+    offsets[i] = i * 2;
+  }
+  auto data = makeRowVector({"col"}, {makeMapVector(offsets, keys, values)});
+  auto schema = asRowType(data->type());
+  auto reader = makeFlatMapReader(pool(), writeFlatMap(pool(), data));
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(flatMapSizeSpec(schema, "col", pool()));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  auto result = BaseVector::create(schema, 0, pool());
+  ASSERT_EQ(rowReader->next(20, result), 20);
+  auto* sizes = result->as<RowVector>()
+                    ->childAt(0)
+                    ->loadedVector()
+                    ->as<FlatVector<int64_t>>();
+  ASSERT_TRUE(sizes != nullptr);
+  for (int i = 0; i < sizes->size(); ++i) {
+    ASSERT_EQ(sizes->valueAt(i), 2);
+  }
+  ASSERT_NO_THROW(dynamic_cast<DwrfRowReader*>(rowReader.get())->seekToRow(50));
+}
+
+TEST_F(TestReader, extractionSizeFlatMapDeltaUpdate) {
+  // On-disk cardinalities are [1, 2].  A delta update replaces each map with a
+  // 3-entry map, so kSize reports 3: with a delta update the reader
+  // materializes and updates the full map before applying the size transform.
+  auto data = makeRowVector(
+      {"col"},
+      {makeFlatMapVector<int32_t, int64_t>({
+           {{1, 10}},
+           {{1, 10}, {2, 20}},
+       })
+           ->toMapVector()});
+  auto schema = asRowType(data->type());
+  auto reader = makeFlatMapReader(pool(), writeFlatMap(pool(), data));
+
+  auto spec = flatMapSizeSpec(schema, "col", pool());
+  ReplaceMapDeltaUpdater updater([&](vector_size_t numRows) -> VectorPtr {
+    std::vector<std::vector<std::pair<int32_t, std::optional<int64_t>>>> maps(
+        numRows, {{7, 1}, {8, 2}, {9, 3}});
+    return makeMapVector<int32_t, int64_t>(maps);
+  });
+  spec->childByName("col")->setDeltaUpdate(&updater);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  auto result = BaseVector::create(schema, 0, pool());
+  ASSERT_EQ(rowReader->next(10, result), 2);
+  auto sizes =
+      BaseVector::loadedVectorShared(result->as<RowVector>()->childAt(0));
+  ASSERT_TRUE(sizes->type()->isBigint());
+  assertEqualVectors(makeFlatVector<int64_t>({3, 3}), sizes);
+}
+
+TEST_F(TestReader, extractionSizeFlatMapAsStructNotDirectPath) {
+  // With flat-map-as-struct the direct size reader must not be selected (its
+  // getValues is unreachable): the column is read as the struct.
+  auto data = makeRowVector({
+      makeMapVector<int32_t, int64_t>({{{1, 4}, {2, 5}}, {{1, 6}, {3, 7}}}),
+  });
+  auto reader = makeFlatMapReader(pool(), writeFlatMap(pool(), data));
+
+  auto outType = ROW({"c0"}, {ROW({"3", "1"}, BIGINT())});
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*outType);
+  auto* c0Spec = spec->childByName("c0");
+  c0Spec->setFlatMapAsStruct(true);
+  c0Spec->setExtractionType(common::ScanSpec::ExtractionType::kSize);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  VectorPtr batch = BaseVector::create(outType, 0, pool());
+  ASSERT_EQ(rowReader->next(10, batch), 2);
+  auto expected = makeRowVector({makeRowVector(
+      {"3", "1"},
+      {
+          makeNullableFlatVector<int64_t>({std::nullopt, 7}),
+          makeFlatVector<int64_t>({4, 6}),
+      })});
+  assertEqualVectors(expected, batch);
+}
+
+TEST_F(TestReader, extractionSizeFlatMapSkipsValueStreams) {
+  // Null values make the flat-map value node emit IN_MAP, PRESENT, and DATA
+  // streams; kSize needs only IN_MAP, so it reads materially fewer bytes.
+  constexpr int kNumRows = 4000;
+  constexpr int kNumKeys = 4;
+  auto keys = makeFlatVector<int32_t>(
+      kNumRows * kNumKeys, [](auto i) { return i % kNumKeys; });
+  // Every third value is null.  This does not align with the key stride, so
+  // each key has both null and non-null values and therefore emits IN_MAP,
+  // PRESENT, and DATA streams.
+  auto values = makeFlatVector<int64_t>(
+      kNumRows * kNumKeys, folly::identity, nullEvery(3));
+  std::vector<vector_size_t> offsets(kNumRows);
+  for (int i = 0; i < kNumRows; ++i) {
+    offsets[i] = i * kNumKeys;
+  }
+  auto data = makeRowVector({"col"}, {makeMapVector(offsets, keys, values)});
+  auto schema = asRowType(data->type());
+  auto fileData = writeFlatMap(pool(), data);
+
+  // The flat-map value node (identified by its IN_MAP stream) also carries a
+  // PRESENT (value-null) and a DATA stream at the same node and sequence.
+  auto reader = makeFlatMapReader(pool(), fileData);
+  RowReaderOptions rowReaderOpts;
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto* dwrfRowReader = dynamic_cast<DwrfRowReader*>(rowReader.get());
+  std::set<std::tuple<uint32_t, uint32_t, proto::Stream_Kind>> perKeyStreams;
+  std::optional<uint32_t> valueNode;
+  std::optional<uint32_t> valueSequence;
+  bool preload = true;
+  for (uint32_t i = 0; i < reader->getNumberOfStripes(); ++i) {
+    auto stripeMetadata = dwrfRowReader->fetchStripe(i, preload);
+    auto& footer = *stripeMetadata->footer;
+    for (int j = 0; j < footer.streamsSize(); ++j) {
+      auto stream = footer.streamDwrf(j);
+      if (stream.sequence() == 0) {
+        continue;
+      }
+      perKeyStreams.emplace(stream.node(), stream.sequence(), stream.kind());
+      if (stream.kind() == proto::Stream_Kind_IN_MAP) {
+        valueNode = stream.node();
+        valueSequence = stream.sequence();
+      }
+    }
+  }
+  ASSERT_TRUE(valueNode.has_value());
+  ASSERT_TRUE(valueSequence.has_value());
+  EXPECT_TRUE(perKeyStreams.count(std::make_tuple(
+      *valueNode, *valueSequence, proto::Stream_Kind_IN_MAP)));
+  EXPECT_TRUE(perKeyStreams.count(std::make_tuple(
+      *valueNode, *valueSequence, proto::Stream_Kind_PRESENT)));
+  EXPECT_TRUE(perKeyStreams.count(std::make_tuple(
+      *valueNode, *valueSequence, proto::Stream_Kind_DATA)));
+
+  auto fullSpec = std::make_shared<common::ScanSpec>("<root>");
+  fullSpec->addAllChildFields(*schema);
+  auto fullBytes = flatMapRawBytesRead(pool(), fileData, schema, fullSpec);
+  auto extBytes = flatMapRawBytesRead(
+      pool(), fileData, schema, flatMapSizeSpec(schema, "col", pool()));
+  ASSERT_GT(fullBytes, 0);
+  ASSERT_LT(extBytes, fullBytes)
+      << "Extraction: " << extBytes << ", Full: " << fullBytes;
 }
 
 TEST_F(TestReader, extractionMapKeysMultipleBatches) {

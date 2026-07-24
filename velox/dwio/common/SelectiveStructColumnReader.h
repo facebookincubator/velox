@@ -26,6 +26,37 @@ class ColumnLoader;
 template <typename T, typename KeyNode, typename FormatData>
 class SelectiveFlatMapColumnReaderHelper;
 
+namespace detail {
+// Accumulates per-row flat map cardinalities from per-key presence bitmaps.
+// For each output row 'rows[i]', sums the keys whose 'inMaps[k]' bit is set (a
+// null 'inMaps[k]' falls back to 'mapNulls'; a null fallback counts the row as
+// present).  Uses the SIMD dense path when 'rows' is contiguous.  When
+// 'columnRowBits' is non-null it also records per-key presence into
+// 'columnRowBits[k * columnBitsWords ...]' for later value copying; kSize
+// passes nullptr.
+void accumulateFlatMapSizes(
+    const RowSet& rows,
+    const uint64_t* mapNulls,
+    const std::vector<const uint64_t*>& inMaps,
+    vector_size_t* sizes,
+    uint64_t* columnRowBits,
+    int columnBitsWords);
+} // namespace detail
+
+/// Builds a FlatVector<int64_t> of per-row flat map cardinalities from per-key
+/// presence bitmaps, reusing '*result' when it is already a BIGINT flat vector.
+/// 'inMaps[k]' is the inMap presence bitmap for key column k over the read
+/// range, or nullptr when every row of that column is present.  'mapNulls'
+/// marks null maps, which get size 0; the caller applies the null flags with
+/// setComplexNulls.  Kept format independent so non-DWRF readers (e.g. Nimble)
+/// can build 'inMaps' from their own presence encoding and reuse this.
+void makeFlatMapSizes(
+    memory::MemoryPool* pool,
+    const RowSet& rows,
+    const uint64_t* mapNulls,
+    const std::vector<const uint64_t*>& inMaps,
+    VectorPtr* result);
+
 class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
  public:
   void resetFilterCaches() override {
@@ -262,6 +293,10 @@ class SelectiveFlatMapColumnReaderHelper {
 
   void getValues(RowSet rows, VectorPtr* result);
 
+  // Produces per-row map cardinalities as a FlatVector<int64_t> for kSize
+  // extraction, without materializing keys or values.
+  void getSizes(RowSet rows, VectorPtr* result);
+
  private:
   MapVector& prepareResult(VectorPtr& result, vector_size_t size) {
     if (result && result->encoding() == VectorEncoding::Simple::MAP &&
@@ -274,12 +309,6 @@ class SelectiveFlatMapColumnReaderHelper {
     }
     return *result->asUnchecked<MapVector>();
   }
-
-  static void readInMapDense(
-      const uint64_t* inMap,
-      vector_size_t size,
-      uint64_t* columnBits,
-      vector_size_t* sizes);
 
   vector_size_t
   calculateOffsets(RowSet rows, vector_size_t* offsets, vector_size_t* sizes);
@@ -350,48 +379,6 @@ void SelectiveFlatMapColumnReaderHelper<T, KeyNode, FormatData>::read(
   reader_.readOffset_ = offset + rows.back() + 1;
 }
 
-namespace detail {
-#if XSIMD_WITH_AVX2
-// Convert 8 bits to 8 int32s.  Used to increase map sizes according to in-map
-// bits.
-extern xsimd::batch<int32_t> bitsToInt32s[256];
-#endif
-} // namespace detail
-
-// Optimized function to copy contiguous range of `inMap' bits into
-// `columnBits', and at same time increase values in `sizes' so that they will
-// contain map sizes after we iterate over all inMap streams.
-template <typename T, typename KeyNode, typename FormatData>
-void SelectiveFlatMapColumnReaderHelper<T, KeyNode, FormatData>::readInMapDense(
-    const uint64_t* inMap,
-    vector_size_t size,
-    uint64_t* columnBits,
-    vector_size_t* sizes) {
-#if XSIMD_WITH_AVX2
-  bits::copyBits(inMap, 0, columnBits, 0, size);
-  auto* inMapBytes = reinterpret_cast<const uint8_t*>(inMap);
-  int i = 0;
-  for (int end = size / 8; i < end; ++i) {
-    auto* data = sizes + i * 8;
-    (xsimd::load_unaligned(data) + detail::bitsToInt32s[inMapBytes[i]])
-        .store_unaligned(data);
-  }
-  i *= 8;
-  for (; i < size; ++i) {
-    if (bits::isBitSet(inMap, i)) {
-      ++sizes[i];
-    }
-  }
-#else
-  for (vector_size_t i = 0; i < size; ++i) {
-    if (bits::isBitSet(inMap, i)) {
-      bits::setBit(columnBits, i);
-      ++sizes[i];
-    }
-  }
-#endif
-}
-
 // Calculate the offsets and sizes of each map entry in the result.
 template <typename T, typename KeyNode, typename FormatData>
 vector_size_t
@@ -405,34 +392,14 @@ SelectiveFlatMapColumnReaderHelper<T, KeyNode, FormatData>::calculateOffsets(
   columnBitsWords_ = bits::nwords(rows.size());
   columnRowBits_.resize(columnBitsWords_ * reader_.children_.size());
   std::fill(columnRowBits_.begin(), columnRowBits_.end(), 0);
-  std::fill(sizes, sizes + rows.size(), 0);
-  const bool dense = rows.back() == rows.size() - 1;
+  std::vector<const uint64_t*> inMaps(reader_.children_.size());
   for (int k = 0; k < reader_.children_.size(); ++k) {
-    auto* inMap =
+    inMaps[k] =
         static_cast<const FormatData&>(reader_.children_[k]->formatData())
             .inMap();
-    if (!inMap) {
-      inMap = nulls;
-    }
-    auto* columnBits = columnRowBits_.data() + k * columnBitsWords_;
-    if (inMap) {
-      if (dense) {
-        readInMapDense(inMap, rows.size(), columnBits, sizes);
-      } else {
-        for (vector_size_t i = 0; i < rows.size(); ++i) {
-          if (bits::isBitSet(inMap, rows[i])) {
-            bits::setBit(columnBits, i);
-            ++sizes[i];
-          }
-        }
-      }
-    } else {
-      bits::fillBits(columnBits, 0, rows.size(), true);
-      for (vector_size_t i = 0; i < rows.size(); ++i) {
-        ++sizes[i];
-      }
-    }
   }
+  detail::accumulateFlatMapSizes(
+      rows, nulls, inMaps, sizes, columnRowBits_.data(), columnBitsWords_);
   vector_size_t numNestedRows = 0;
   for (vector_size_t i = 0; i < rows.size(); ++i) {
     if (!reader_.returnReaderNulls_ && nulls &&
@@ -591,6 +558,23 @@ void SelectiveFlatMapColumnReaderHelper<T, KeyNode, FormatData>::getValues(
   std::copy_backward(
       rawOffsets, rawOffsets + rows.size() - 1, rawOffsets + rows.size());
   rawOffsets[0] = 0;
+  reader_.setComplexNulls(rows, *result);
+}
+
+template <typename T, typename KeyNode, typename FormatData>
+void SelectiveFlatMapColumnReaderHelper<T, KeyNode, FormatData>::getSizes(
+    RowSet rows,
+    VectorPtr* result) {
+  std::vector<const uint64_t*> inMaps(reader_.children_.size());
+  for (int k = 0; k < reader_.children_.size(); ++k) {
+    inMaps[k] =
+        static_cast<const FormatData&>(reader_.children_[k]->formatData())
+            .inMap();
+  }
+  auto* mapNulls = reader_.nullsInReadRange_
+      ? reader_.nullsInReadRange_->as<uint64_t>()
+      : nullptr;
+  makeFlatMapSizes(reader_.pool_, rows, mapNulls, inMaps, result);
   reader_.setComplexNulls(rows, *result);
 }
 

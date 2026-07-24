@@ -66,6 +66,46 @@ struct KeyNode {
         inMap(std::move(inMap)) {}
 };
 
+// Whether kSize cardinalities can be produced directly from presence bits.
+// Requires that this reader is the one that materializes the size output: not
+// with a delta update (the full map must be updated then transformed) and not
+// as a struct (the flat-map-as-struct fallback goes through the transform).
+bool useDirectSizeExtraction(const common::ScanSpec& scanSpec) {
+  return scanSpec.extractionType() ==
+      common::ScanSpec::ExtractionType::kSize &&
+      !scanSpec.deltaUpdate() && !scanSpec.isFlatMapAsStruct();
+}
+
+// Reads only the value column's IN_MAP presence stream (and the row index used
+// for seeking).  Used for kSize extraction, where per-row cardinality is
+// derived from presence bits alone.  The DwrfData is built with inMapOnly,
+// which skips the value PRESENT (value-null) stream, and this reader never
+// builds a value data decoder, so neither the value PRESENT nor DATA streams
+// are enqueued or read.
+class FlatMapInMapReader : public dwio::common::SelectiveColumnReader {
+ public:
+  FlatMapInMapReader(
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
+      DwrfParams& params,
+      common::ScanSpec& scanSpec)
+      : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec) {}
+
+  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
+      override {
+    readNulls(offset, rows.back() + 1, incomingNulls);
+    readOffset_ = offset + rows.back() + 1;
+  }
+
+  void seekToRowGroup(int64_t index) override {
+    SelectiveColumnReader::seekToRowGroup(index);
+    formatData_->seekToRowGroup(index);
+  }
+
+  void getValues(const RowSet& /*rows*/, VectorPtr* /*result*/) override {
+    VELOX_UNREACHABLE("kSize flat map value reader does not produce values");
+  }
+};
+
 template <typename T>
 std::vector<KeyNode<T>> getKeyNodes(
     const dwio::common::ColumnReaderOptions& columnReaderOptions,
@@ -162,6 +202,7 @@ std::vector<KeyNode<T>> getKeyNodes(
             seqEk.forKind(proto::Stream_Kind_IN_MAP), labels.label(), true);
         VELOX_CHECK(inMap, "In map stream is required");
         auto inMapDecoder = createBooleanRleDecoder(std::move(inMap), seqEk);
+        const bool inMapOnly = useDirectSizeExtraction(scanSpec);
         DwrfParams childParams(
             stripe,
             labels,
@@ -169,13 +210,22 @@ std::vector<KeyNode<T>> getKeyNodes(
             FlatMapContext{
                 .sequence = sequence,
                 .inMapDecoder = inMapDecoder.get(),
-                .keySelectionCallback = nullptr});
-        auto reader = SelectiveDwrfReader::build(
-            columnReaderOptions,
-            requestedValueType,
-            dataValueType,
-            childParams,
-            *childSpec);
+                .keySelectionCallback = nullptr,
+                .inMapOnly = inMapOnly});
+        std::unique_ptr<dwio::common::SelectiveColumnReader> reader;
+        if (inMapOnly) {
+          // Only presence (inMap) is needed for cardinality; skip building the
+          // value reader so its data stream is never enqueued or read.
+          reader = std::make_unique<FlatMapInMapReader>(
+              dataValueType, childParams, *childSpec);
+        } else {
+          reader = SelectiveDwrfReader::build(
+              columnReaderOptions,
+              requestedValueType,
+              dataValueType,
+              childParams,
+              *childSpec);
+        }
         keyNodes.emplace_back(
             key, sequence, std::move(reader), std::move(inMapDecoder));
       });
@@ -268,7 +318,11 @@ class SelectiveFlatMapAsMapReader : public SelectiveStructColumnReaderBase {
   }
 
   void getValues(const RowSet& rows, VectorPtr* result) override {
-    flatMap_.getValues(rows, result);
+    if (useDirectSizeExtraction(*scanSpec_)) {
+      flatMap_.getSizes(rows, result);
+    } else {
+      flatMap_.getValues(rows, result);
+    }
   }
 
  private:

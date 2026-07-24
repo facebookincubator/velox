@@ -7246,6 +7246,51 @@ TEST_F(TableScanTest, extractionSize) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(TableScanTest, extractionSizeFlatMap) {
+  // Same as extractionSize, but the MAP column is flat-map encoded.  The
+  // flat-map reader must honor kSize and produce BIGINT cardinalities.
+  auto mapVector =
+      makeMapVector<int32_t, int64_t>({{{1, 10}, {2, 20}, {3, 30}}, {{1, 40}}});
+  auto vector = makeRowVector({"col"}, {mapVector});
+
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set<const std::vector<uint32_t>>(dwrf::Config::MAP_FLAT_COLS, {0});
+  auto file = TempFilePath::create();
+  auto writeSchema = ROW({"col"}, {MAP(INTEGER(), BIGINT())});
+  writeToFile(file->getPath(), {vector}, config, writeSchema);
+
+  auto hiveType = MAP(INTEGER(), BIGINT());
+  auto outputType = ROW({"col"}, {BIGINT()});
+  std::vector<NamedExtraction> extractions = {
+      {"col",
+       {ExtractionPathElement::simple(ExtractionStep::kSize)},
+       BIGINT()}};
+
+  auto handle = std::make_shared<HiveColumnHandle>(
+      "col",
+      HiveColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      hiveType,
+      std::vector<common::Subfield>{},
+      std::move(extractions));
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(outputType)
+                  .assignments({{"col", handle}})
+                  .endTableScan()
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan)
+                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .copyResults(pool_.get());
+
+  ASSERT_EQ(result->size(), 2);
+  auto expected = makeRowVector({"col"}, {makeFlatVector<int64_t>({3, 1})});
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
 TEST_F(TableScanTest, extractionMapKeyFilter) {
   // Write a MAP(VARCHAR, BIGINT) column with string keys, read with
   // MapKeyFilter extraction to keep only selected keys.
