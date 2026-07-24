@@ -56,6 +56,10 @@ if(${VELOX_ENABLE_TPCDS_CONNECTOR})
   add_subdirectory(tpcds/gen)
 endif()
 
+if(${VELOX_ENABLE_ADBC_CONNECTOR})
+  add_subdirectory(external/adbc)
+endif()
+
 add_subdirectory(functions) # depends on md5 (postgresql)
 add_subdirectory(connectors)
 
