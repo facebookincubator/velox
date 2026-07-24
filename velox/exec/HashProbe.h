@@ -189,6 +189,10 @@ class HashProbe : public Operator {
   // Returns the number of passing rows.
   vector_size_t evalFilter(vector_size_t numRows);
 
+  // Applies a deterministic probe-only join filter before expanding join
+  // results. Returns true if the filter was applied.
+  bool tryPreEvaluateProbeOnlyFilter();
+
   inline bool filterPassed(vector_size_t row) {
     return filterInputRows_.isValid(row) &&
         !decodedFilterResult_.isNullAt(row) &&
@@ -199,6 +203,9 @@ class HashProbe : public Operator {
   // gets destroyed in case its wrapping an unloaded vector which eventually
   // needs to be wrapped in fillOutput().
   RowVectorPtr createFilterInput(vector_size_t size);
+
+  // Creates filter input directly over the current probe input batch.
+  RowVectorPtr createProbeOnlyFilterInput(vector_size_t size);
 
   // Prepare filter row selectivity for null-aware join. 'numRows'
   // specifies the number of rows in 'filterInputRows_' to process. If
@@ -507,6 +514,10 @@ class HashProbe : public Operator {
 
   // Used to decode a probe side filter input column to check nulls.
   DecodedVector filterInputColumnDecodedVector_;
+
+  // True if 'filter_' has already been applied to 'lookup_->hits' for the
+  // current probe input batch.
+  bool probeOnlyFilterPreEvaluated_{false};
 
   // Rows that have null value in any probe side filter columns to skip the
   // null-propagating filter evaluation. The corresponding probe input rows can
