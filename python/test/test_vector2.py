@@ -25,12 +25,15 @@ from pyvelox.vector import restore_from_file
 
 class TestPyVeloxVector(unittest.TestCase):
     def test_vector_size(self):
+        # pyrefly: ignore [bad-argument-type]
         vector = to_velox(pyarrow.array([1, 2, 3, 4, 5, 6]))
+        # pyrefly: ignore [bad-argument-type]
         self.assertEqual(len(vector), 6)
         self.assertEqual(vector.size(), 6)
 
     def test_vector_nulls(self):
         data = [1, 2, None, 4, 5, 6, None, 9, 10]
+        # pyrefly: ignore [bad-argument-type]
         vector = to_velox(pyarrow.array(data))
         self.assertEqual(vector.null_count(), 2)
 
@@ -42,24 +45,29 @@ class TestPyVeloxVector(unittest.TestCase):
 
     def test_vector_compare(self):
         data = [1, 2, 3, 4, 5, 6, 7, 9, 10]
+        # pyrefly: ignore [bad-argument-type]
         vector1 = to_velox(pyarrow.array(data))
         vector2 = to_velox(to_arrow(vector1))
 
         # First compare each element.
         for i in range(len(data)):
+            # pyrefly: ignore [missing-attribute]
             self.assertEqual(vector1.compare(vector2, i, i), 0)
 
         # Then the entire objects at once (__eq__).
         self.assertEqual(vector1, vector2)
 
         # Failures.
+        # pyrefly: ignore [bad-argument-type]
         vector3 = to_velox(pyarrow.array([1, 2, 3, 4, 5]))
         self.assertNotEqual(vector1, vector3)
 
+        # pyrefly: ignore [bad-argument-type]
         vector4 = to_velox(pyarrow.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
         self.assertNotEqual(vector1, vector4)
 
     def test_vector_print(self):
+        # pyrefly: ignore [bad-argument-type]
         vector = to_velox(pyarrow.array([1, 2]))
 
         expected_header = "[FLAT BIGINT: 2 elements, no nulls]"
@@ -72,12 +80,14 @@ class TestPyVeloxVector(unittest.TestCase):
     def test_vector_complex(self):
         # Array/lists.
         data = [[1, 2, 3], [4, None, 6], None, [7]]
+        # pyrefly: ignore [bad-argument-type]
         vector = to_velox(pyarrow.array(data))
         self.assertEqual(str(vector), "[ARRAY ARRAY<BIGINT>: 4 elements, 1 nulls]")
 
         # Maps.
         data = [[{"key": "a", "value": 1}, {"key": "b", "value": 2}]]
         map_type = pyarrow.map_(pyarrow.string(), pyarrow.int32())
+        # pyrefly: ignore [bad-argument-type]
         vector = to_velox(pyarrow.array(data, type=map_type))
         self.assertEqual(
             str(vector), "[MAP MAP<VARCHAR,INTEGER>: 1 elements, no nulls]"
@@ -85,9 +95,11 @@ class TestPyVeloxVector(unittest.TestCase):
 
         # Row/structs.
         struct_type = pyarrow.struct(
+            # pyrefly: ignore [bad-argument-type]
             [("name", pyarrow.string()), ("age", pyarrow.int32())]
         )
         data = [{"name": "John", "age": 23}, {"name": "Mike", "age": 32}]
+        # pyrefly: ignore [bad-argument-type]
         vector = to_velox(pyarrow.array(data, type=struct_type))
         self.assertEqual(
             str(vector), "[ROW ROW<name:VARCHAR,age:INTEGER>: 2 elements, no nulls]"
@@ -103,12 +115,15 @@ class TestPyVeloxVector(unittest.TestCase):
 
     def test_vector_type(self):
         data = [1.9, 2.45]
+        # pyrefly: ignore [bad-argument-type]
         vector = to_velox(pyarrow.array(data))
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(vector.type(), DOUBLE())
 
     def test_vector_save_restore(self):
         input_vector = to_velox(
             pyarrow.StructArray.from_arrays(
+                # pyrefly: ignore [bad-argument-type]
                 [
                     pyarrow.array([1, 2, 3]),
                     pyarrow.array(["a", "b", "c"]),
