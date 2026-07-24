@@ -143,7 +143,8 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       std::unordered_map<std::string, ExistingDeletionVector>
           existingDeletionVectors = {},
       std::shared_ptr<const FileNameGenerator> fileNameGenerator =
-          std::make_shared<const IcebergFileNameGenerator>());
+          std::make_shared<const IcebergFileNameGenerator>(),
+      const std::vector<std::string>& insertedColumns = {});
 
   /// Returns the Iceberg partition specification that defines how the table
   /// is partitioned.
@@ -165,11 +166,20 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
     return existingDeletionVectors_;
   }
 
+  /// Returns the list of column names that were explicitly specified in the
+  /// INSERT statement. Empty if all columns are included or if the information
+  /// is not available. Used to distinguish between columns omitted from INSERT
+  /// (which should get write-defaults) vs columns explicitly set to NULL.
+  const std::vector<std::string>& insertedColumns() const {
+    return insertedColumns_;
+  }
+
  private:
   const IcebergPartitionSpecPtr partitionSpec_;
   const WriteKind writeKind_;
   const std::unordered_map<std::string, ExistingDeletionVector>
       existingDeletionVectors_;
+  const std::vector<std::string> insertedColumns_;
 };
 
 using IcebergInsertTableHandlePtr =
@@ -184,6 +194,12 @@ class IcebergDataSink : public HiveDataSink {
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       const IcebergConfigPtr& icebergConfig);
+
+  /// Overrides appendData to fill write-default values for columns that have
+  /// NULL values and a write-default specified. This ensures that when columns
+  /// are omitted from INSERT statements, they get their write-default values
+  /// instead of NULL.
+  void appendData(RowVectorPtr input) override;
 
   /// Generates Iceberg-specific commit messages for all writers containing
   /// metadata about written files. Creates a JSON object for each writer
