@@ -412,7 +412,7 @@ void HashProbe::pushdownDynamicFilters() {
                   filter.get());
           addRuntimeStat(
               std::string(HashProbe::kBloomFilterSize),
-              RuntimeCounter(bloomFilter->blocksByteSize()));
+              RuntimeCounter(bloomFilter->byteSize()));
         }
         dynamicFiltersProducedOnChannels_.insert(sourceChannel);
         for (auto* peer : findPeerOperators()) {
