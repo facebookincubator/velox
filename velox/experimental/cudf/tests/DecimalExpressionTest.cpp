@@ -1643,10 +1643,6 @@ struct DecimalOverflowParam {
   std::vector<int128_t> aValues;
   std::vector<int128_t> bValues;
   std::string expectedMessage;
-  // Whether Velox CPU also fails on this case. Almost all overflow cases match
-  // CPU fail-fast semantics; the exception is INT128_MIN % -1, where the GPU
-  // mod_overflow path is stricter than the Velox CPU modulo (which returns 0).
-  bool cpuThrows{true};
 };
 
 class CudfDecimalOverflowTest
@@ -1670,21 +1666,14 @@ TEST_P(CudfDecimalOverflowTest, throwsOnOverflow) {
                   .planNode();
 
   // Velox CPU decimal arithmetic is fail-fast on overflow; the cuDF GPU path
-  // must match. Run the same expression on both engines and make the CPU/GPU
-  // success-vs-failure parity explicit, then assert the specific GPU error
+  // must match. Run the same expression on both engines and require both to
+  // fail (parity of success/failure), then assert the specific GPU error
   // message. The exact overflow wording differs between the engines, so the CPU
-  // check only asserts that it fails (or succeeds, for the documented
-  // INT128_MIN % -1 divergence).
+  // check only asserts that it fails.
   unregisterCudf();
-  if (param.cpuThrows) {
-    VELOX_ASSERT_THROW(
-        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
-            pool()),
-        "");
-  } else {
-    ASSERT_NO_THROW(facebook::velox::exec::test::AssertQueryBuilder(plan)
-                        .copyResults(pool()));
-  }
+  VELOX_ASSERT_THROW(
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
+      "");
   registerCudf();
   VELOX_ASSERT_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
@@ -1773,19 +1762,6 @@ INSTANTIATE_TEST_SUITE_P(
             {15 * DecimalUtil::kPowersOfTen[35]},
             {1},
             "Decimal overflow in divide"},
-        // mod_overflow checks division_overflow on raw values before computing
-        // the remainder; INT128_MIN / -1 overflows int128 division. This is a
-        // GPU-only overflow: Velox CPU modulo returns 0 for INT128_MIN % -1, so
-        // cpuThrows is false to document the divergence.
-        DecimalOverflowParam{
-            "modulo",
-            "a % b",
-            DECIMAL(38, 0),
-            DECIMAL(38, 0),
-            {std::numeric_limits<int128_t>::min()},
-            {-1},
-            "Decimal overflow in modulo",
-            /*cpuThrows=*/false},
         // Mixed-scale ADD/SUB/MOD: the scale-0 operand is rescaled to the
         // output scale (10) before the kernel op, and 9e37 * 1e10 = 9e47
         // overflows int128. This exercises the overflow-checked pre-kernel
@@ -2289,6 +2265,50 @@ TEST_F(CudfDecimalTest, decimalDivideBoundaryRoundingStorageWidths) {
             pool());
     facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
   }
+}
+
+// INT128_MIN % -1 == 0 mathematically, but cuDF's mod_overflow forms the
+// quotient a / b and INT128_MIN / -1 overflows int128 (2^127 is not
+// representable). The kernel special-cases a -1 divisor so the GPU returns 0
+// like Velox CPU instead of a false overflow, and asserts CPU/GPU agree.
+// INT128_MIN (~1.70e38) exceeds the DECIMAL(38, 0) value range, so it can only
+// be injected via makeFlatVector, not a string cast; that limits coverage to
+// the column dividend paths (column % column and column % -1 scalar).
+TEST_F(CudfDecimalTest, decimalModuloByNegativeOneNoOverflow) {
+  const auto int128Min = std::numeric_limits<int128_t>::min();
+
+  auto assertCpuGpuEqual = [&](const auto& plan) {
+    unregisterCudf();
+    auto cpuResult =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
+    registerCudf();
+    auto gpuResult =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
+    facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+  };
+
+  // Column % column: INT128_MIN % -1 alongside a normal row.
+  auto colCol = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int128_t>({int128Min, 700}, DECIMAL(38, 0)),
+          makeFlatVector<int128_t>({int128_t{-1}, int128_t{-1}}, DECIMAL(38, 0)),
+      });
+  assertCpuGpuEqual(exec::test::PlanBuilder()
+                        .values({colCol})
+                        .project({"a % b AS result"})
+                        .planNode());
+
+  // Column % -1 scalar (rhs-scalar path).
+  auto colOnly = makeRowVector(
+      {"a"}, {makeFlatVector<int128_t>({int128Min}, DECIMAL(38, 0))});
+  assertCpuGpuEqual(
+      exec::test::PlanBuilder()
+          .values({colOnly})
+          .project({"a % CAST('-1' AS DECIMAL(38, 0)) AS result"})
+          .planNode());
 }
 
 } // namespace

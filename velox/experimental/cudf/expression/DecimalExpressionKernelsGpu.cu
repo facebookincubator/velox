@@ -540,6 +540,16 @@ __device__ void evalDecimalBinaryRow(
     rhsDec = rhsRescaled.value();
   }
 
+  // Modulo by a divisor of magnitude 1 always yields remainder 0. Special-case
+  // a -1 divisor to match Velox CPU: cuDF's mod_overflow forms the quotient
+  // a / b, and INT128_MIN / -1 overflows int128 (2^127 is unrepresentable), so
+  // it would report a false overflow even though INT128_MIN % -1 == 0. The CPU
+  // path computes the remainder in unsigned magnitude space and never hits this.
+  if (op == cudf::binary_operator::MOD && rhsDec.value() == Rep{-1}) {
+    out[idx] = OutRep{0};
+    return;
+  }
+
   auto opResult = applyCheckedBinOp<Rep>(op, lhsDec, rhsDec);
   if (!opResult.has_value()) {
     if (opResult.error() == errc::DIVISION_BY_ZERO) {
