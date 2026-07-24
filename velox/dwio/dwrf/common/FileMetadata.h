@@ -1640,8 +1640,8 @@ class FooterWriteWrapper : public ProtoWriteWrapperBase {
   }
 
   inline int stripesSize() const {
-    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
-    return dwrfPtr()->stripes_size();
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->stripes_size()
+                                        : orcPtr()->stripes_size();
   }
 
   inline proto::Encryption* mutableEncryption() {
@@ -1833,8 +1833,9 @@ class StreamWriteWrapper : public ProtoWriteWrapperBase {
       : ProtoWriteWrapperBase(DwrfFormat::kOrc, stream) {}
 
   void setOffset(uint64_t offset) {
-    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
-    dwrfPtr()->set_offset(offset);
+    if (format_ == DwrfFormat::kDwrf) {
+      dwrfPtr()->set_offset(offset);
+    }
   }
 
   void setKind(const StreamKind& kind) {
@@ -1854,18 +1855,21 @@ class StreamWriteWrapper : public ProtoWriteWrapperBase {
   }
 
   void setNode(uint32_t node) {
-    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
-    dwrfPtr()->set_node(node);
+    if (format_ == DwrfFormat::kDwrf) {
+      dwrfPtr()->set_node(node);
+    }
   }
 
   void setSequence(uint32_t sequence) {
-    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
-    dwrfPtr()->set_sequence(sequence);
+    if (format_ == DwrfFormat::kDwrf) {
+      dwrfPtr()->set_sequence(sequence);
+    }
   }
 
   void setUseVints(bool useVints) {
-    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
-    dwrfPtr()->set_usevints(useVints);
+    if (format_ == DwrfFormat::kDwrf) {
+      dwrfPtr()->set_usevints(useVints);
+    }
   }
 
  private:

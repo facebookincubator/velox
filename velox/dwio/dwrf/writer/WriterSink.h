@@ -39,11 +39,16 @@ class WriterSink {
   WriterSink(
       dwio::common::FileSink& sink,
       memory::MemoryPool& pool,
-      const Config& configs)
+      const Config& configs,
+      DwrfFormat format = DwrfFormat::kDwrf)
       : sink_{&sink},
         checksum_{
-            ChecksumFactory::create(configs.get(Config::CHECKSUM_ALGORITHM))},
-        cacheMode_{configs.get(Config::STRIPE_CACHE_MODE)},
+            format == DwrfFormat::kDwrf ? ChecksumFactory::create(configs.get(
+                                              Config::CHECKSUM_ALGORITHM))
+                                        : nullptr},
+        cacheMode_{
+            format == DwrfFormat::kDwrf ? configs.get(Config::STRIPE_CACHE_MODE)
+                                        : StripeCacheMode::NA},
         shouldBuffer_{!sink_->isBuffered()},
         maxCacheSize_{configs.get(Config::STRIPE_CACHE_SIZE)},
         mode_{Mode::None},

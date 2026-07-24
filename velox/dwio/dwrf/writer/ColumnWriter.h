@@ -81,9 +81,13 @@ class ColumnWriter {
       : id_{id}, sequence_{sequence}, context_{context} {}
 
   virtual void setEncoding(ColumnEncodingWriteWrapper& columnEncoding) const {
-    auto columnEncodingKind =
-        proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT;
-    columnEncoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+    if (columnEncoding.format() == DwrfFormat::kDwrf) {
+      auto kind = proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT;
+      columnEncoding.setKind(ColumnEncodingKindWrapper(&kind));
+    } else {
+      auto kind = proto::orc::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT;
+      columnEncoding.setKind(ColumnEncodingKindWrapper(&kind));
+    }
     columnEncoding.setDictionarySize(0);
     columnEncoding.setNode(id_);
     columnEncoding.setSequence(sequence_);
@@ -271,8 +275,9 @@ class BaseColumnWriter : public ColumnWriter {
   }
 
   virtual bool useDictionaryEncoding() const {
-    return (sequence_ == 0 ||
-            !context_.getConfig(Config::MAP_FLAT_DISABLE_DICT_ENCODING)) &&
+    return context_.format() == DwrfFormat::kDwrf &&
+        (sequence_ == 0 ||
+         !context_.getConfig(Config::MAP_FLAT_DISABLE_DICT_ENCODING)) &&
         !context_.isLowMemoryMode();
   }
 
