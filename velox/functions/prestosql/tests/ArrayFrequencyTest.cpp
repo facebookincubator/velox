@@ -103,4 +103,29 @@ TEST_F(ArrayFrequencyTest, varcharArrayWithoutNull) {
   testArrayFrequency(expected, array);
 }
 
+TEST_F(ArrayFrequencyTest, floatArrayWithNaN) {
+  auto array = makeNullableArrayVector<float>(
+      {{std::nanf(""), std::nanf(""), std::nanf("")},
+       {1.0f, std::nanf(""), 2.0f, 1.0f},
+       {std::nanf(""), 1.0f}});
+
+  auto expected = makeMapVector<float, int>(
+      {{{std::nanf(""), 3}},
+       {{1.0f, 2}, {std::nanf(""), 1}, {2.0f, 1}},
+       {{std::nanf(""), 1}, {1.0f, 1}}});
+
+  testArrayFrequency(expected, array);
+}
+
+TEST_F(ArrayFrequencyTest, doubleArrayWithNaN) {
+  auto array = makeNullableArrayVector<double>(
+      {{std::nan(""), std::nan(""), std::nan("")},
+       {1.0, std::nan(""), 2.0, 1.0}});
+
+  auto expected = makeMapVector<double, int>(
+      {{{std::nan(""), 3}}, {{1.0, 2}, {std::nan(""), 1}, {2.0, 1}}});
+
+  testArrayFrequency(expected, array);
+}
+
 } // namespace facebook::velox::functions::test
