@@ -546,6 +546,29 @@ TEST(FilterTest, bigintValuesUsingBitmask) {
   EXPECT_FALSE(filter->testInt64Range(1234, 2000, false));
 }
 
+TEST(FilterTest, bigintValuesAllDuplicates) {
+  auto filter = createBigintValues({7, 7}, false);
+  ASSERT_TRUE(dynamic_cast<BigintRange*>(filter.get()));
+  EXPECT_TRUE(filter->testInt64(7));
+  EXPECT_FALSE(filter->testInt64(6));
+  EXPECT_FALSE(filter->testInt64(8));
+  EXPECT_FALSE(filter->testNull());
+
+  filter = createBigintValues({42, 42, 42, 42, 42}, true);
+  ASSERT_TRUE(dynamic_cast<BigintRange*>(filter.get()));
+  EXPECT_TRUE(filter->testInt64(42));
+  EXPECT_FALSE(filter->testInt64(41));
+  EXPECT_FALSE(filter->testInt64(43));
+  EXPECT_TRUE(filter->testNull());
+
+  auto negated = createNegatedBigintValues({7, 7}, false);
+  ASSERT_TRUE(dynamic_cast<NegatedBigintRange*>(negated.get()));
+  EXPECT_FALSE(negated->testInt64(7));
+  EXPECT_TRUE(negated->testInt64(6));
+  EXPECT_TRUE(negated->testInt64(8));
+  EXPECT_FALSE(negated->testNull());
+}
+
 TEST(FilterTest, negatedBigintValuesUsingBitmask) {
   auto filter = createNegatedBigintValues({1, 6, 1000, 8, 9, 100, 10}, false);
   auto castedFilter =
