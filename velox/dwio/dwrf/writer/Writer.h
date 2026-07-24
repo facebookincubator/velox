@@ -38,7 +38,12 @@ namespace facebook::velox::dwrf {
 /// DWRF-specific file metadata wrapper. Currently a placeholder.
 class DwrfFileMetadata : public dwio::common::FileMetadata {};
 
-struct WriterOptions : public dwio::common::WriterOptions {
+struct DwrfWriterOptions : public dwio::common::FormatSpecificOptions {
+  DwrfWriterOptions() = default;
+
+  explicit DwrfWriterOptions(std::shared_ptr<const Config> config)
+      : config(std::move(config)) {}
+
   std::shared_ptr<const Config> config = std::make_shared<Config>();
   /// Changes the interface to stream list and encoding iter.
   std::function<std::unique_ptr<LayoutPlanner>(const dwio::common::TypeWithId&)>
@@ -60,16 +65,16 @@ struct WriterOptions : public dwio::common::WriterOptions {
   /// default, which keeps the footer wire format byte-identical.
   std::unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>
       schemaAttributes;
-
-  void processConfigs(
-      const config::ConfigBase& connectorConfig,
-      const config::ConfigBase& session) override;
 };
 
 class Writer : public dwio::common::Writer {
  public:
+  static std::shared_ptr<const Config> makeWriterConfig(
+      const dwio::common::WriterOptions& options,
+      const DwrfWriterOptions& dwrfOptions);
+
   Writer(
-      const WriterOptions& options,
+      const dwio::common::WriterOptions& options,
       std::unique_ptr<dwio::common::FileSink> sink,
       memory::MemoryPool& parentPool)
       : Writer{
@@ -83,12 +88,12 @@ class Writer : public dwio::common::Writer {
 
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
-      const WriterOptions& options,
+      const dwio::common::WriterOptions& options,
       std::shared_ptr<memory::MemoryPool> pool);
 
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
-      const WriterOptions& options);
+      const dwio::common::WriterOptions& options);
 
   ~Writer() override = default;
 

@@ -18,6 +18,7 @@
 
 #include <folly/ScopeGuard.h>
 
+#include "velox/common/Casts.h"
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Pointers.h"
 #include "velox/common/base/StatsReporter.h"
@@ -149,35 +150,95 @@ uint8_t orcWriterZSTDCompressionLevel(
       .value_or(kDefaultZstdCompressionLevel);
 }
 
+void addOrcWriterConfigs(
+    std::map<std::string, std::string>& configs,
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) {
+  configs.emplace(
+      dwrf::Config::STRIPE_SIZE.key,
+      std::to_string(orcWriterMaxStripeSize(connectorConfig, session)));
+
+  configs.emplace(
+      dwrf::Config::MAX_DICTIONARY_SIZE.key,
+      std::to_string(orcWriterMaxDictionaryMemory(connectorConfig, session)));
+
+  configs.emplace(
+      dwrf::Config::INTEGER_DICTIONARY_ENCODING_ENABLED.key,
+      std::to_string(isOrcWriterIntegerDictionaryEncodingEnabled(
+          connectorConfig, session)));
+  configs.emplace(
+      dwrf::Config::STRING_DICTIONARY_ENCODING_ENABLED.key,
+      std::to_string(isOrcWriterStringDictionaryEncodingEnabled(
+          connectorConfig, session)));
+
+  configs.emplace(
+      dwrf::Config::COMPRESSION_BLOCK_SIZE_MIN.key,
+      std::to_string(orcWriterMinCompressionSize(connectorConfig, session)));
+
+  configs.emplace(
+      dwrf::Config::LINEAR_STRIPE_SIZE_HEURISTICS.key,
+      std::to_string(
+          orcWriterLinearStripeSizeHeuristics(connectorConfig, session)));
+
+  configs.emplace(
+      dwrf::Config::ZLIB_COMPRESSION_LEVEL.key,
+      std::to_string(orcWriterZLIBCompressionLevel(connectorConfig, session)));
+
+  configs.emplace(
+      dwrf::Config::ZSTD_COMPRESSION_LEVEL.key,
+      std::to_string(orcWriterZSTDCompressionLevel(connectorConfig, session)));
+}
+
 #define NON_RECLAIMABLE_SECTION_CHECK() \
   VELOX_CHECK(nonReclaimableSection_ == nullptr || *nonReclaimableSection_);
 } // namespace
 
+std::shared_ptr<const Config> Writer::makeWriterConfig(
+    const dwio::common::WriterOptions& options,
+    const DwrfWriterOptions& dwrfOptions) {
+  std::map<std::string, std::string> configs = options.serdeParameters;
+  auto formatConfigs = dwrfOptions.config->toSerdeParams();
+  configs.merge(formatConfigs);
+
+  if (options.compressionKind.has_value()) {
+    configs.emplace(
+        dwrf::Config::COMPRESSION.key,
+        std::to_string(options.compressionKind.value()));
+  }
+
+  return dwrf::Config::fromMap(configs);
+}
+
 Writer::Writer(
     std::unique_ptr<dwio::common::FileSink> sink,
-    const WriterOptions& options,
+    const dwio::common::WriterOptions& options,
     std::shared_ptr<memory::MemoryPool> pool)
     : writerBase_(std::make_unique<WriterBase>(std::move(sink))),
       schema_{dwio::common::TypeWithId::create(options.schema)},
       spillConfig_{options.spillConfig},
       nonReclaimableSection_(options.nonReclaimableSection) {
+  DwrfWriterOptions defaultDwrfOptions;
+  const auto& formatOptions = options.formatSpecificOptions == nullptr
+      ? defaultDwrfOptions
+      : *checkedPointerCast<DwrfWriterOptions>(options.formatSpecificOptions);
+
   VELOX_CHECK(
       spillConfig_ == nullptr || nonReclaimableSection_ != nullptr,
       "nonReclaimableSection_ must be set if writer memory reclaim is enabled");
   auto handler =
-      (options.encryptionSpec ? encryption::EncryptionHandler::create(
-                                    schema_,
-                                    *options.encryptionSpec,
-                                    options.encrypterFactory.get())
-                              : nullptr);
+      (formatOptions.encryptionSpec ? encryption::EncryptionHandler::create(
+                                          schema_,
+                                          *formatOptions.encryptionSpec,
+                                          formatOptions.encrypterFactory.get())
+                                    : nullptr);
   writerBase_->initContext(
-      options.config,
+      makeWriterConfig(options, formatOptions),
       pool,
-      options.sessionTimezone,
-      options.adjustTimestampToTimezone,
+      formatOptions.sessionTimezone,
+      formatOptions.adjustTimestampToTimezone,
       std::move(handler),
-      options.memoryBudget);
-  writerBase_->setSchemaAttributes(options.schemaAttributes);
+      formatOptions.memoryBudget);
+  writerBase_->setSchemaAttributes(formatOptions.schemaAttributes);
   auto& context = writerBase_->getContext();
   VELOX_CHECK_EQ(
       context.getTotalMemoryUsage(),
@@ -195,23 +256,24 @@ Writer::Writer(
     castUniquePointer(options.flushPolicyFactory(), flushPolicy_);
   }
 
-  if (options.layoutPlannerFactory != nullptr) {
-    layoutPlanner_ = options.layoutPlannerFactory(*schema_);
+  if (formatOptions.layoutPlannerFactory != nullptr) {
+    layoutPlanner_ = formatOptions.layoutPlannerFactory(*schema_);
   } else {
     layoutPlanner_ = std::make_unique<LayoutPlanner>(*schema_);
   }
 
-  if (options.columnWriterFactory == nullptr) {
+  if (formatOptions.columnWriterFactory == nullptr) {
     writer_ = BaseColumnWriter::create(writerBase_->getContext(), *schema_);
   } else {
-    writer_ = options.columnWriterFactory(writerBase_->getContext(), *schema_);
+    writer_ =
+        formatOptions.columnWriterFactory(writerBase_->getContext(), *schema_);
   }
   setState(State::kRunning);
 }
 
 Writer::Writer(
     std::unique_ptr<dwio::common::FileSink> sink,
-    const WriterOptions& options)
+    const dwio::common::WriterOptions& options)
     : Writer{
           std::move(sink),
           options,
@@ -918,73 +980,23 @@ uint64_t Writer::MemoryReclaimer::reclaim(
 std::unique_ptr<dwio::common::Writer> DwrfWriterFactory::createWriter(
     std::unique_ptr<dwio::common::FileSink> sink,
     const std::shared_ptr<dwio::common::WriterOptions>& options) {
-  auto dwrfOptions = std::dynamic_pointer_cast<dwrf::WriterOptions>(options);
   VELOX_CHECK_NOT_NULL(
-      dwrfOptions, "DWRF writer factory expected a DWRF WriterOptions object.");
-  return std::make_unique<Writer>(std::move(sink), *dwrfOptions);
+      options, "DWRF writer factory expected a WriterOptions object.");
+  return std::make_unique<Writer>(std::move(sink), *options);
 }
 
 std::unique_ptr<dwio::common::WriterOptions>
 DwrfWriterFactory::createWriterOptions() {
-  return std::make_unique<dwrf::WriterOptions>();
+  return std::make_unique<dwio::common::WriterOptions>();
 }
 
 std::shared_ptr<dwio::common::FormatSpecificOptions>
 DwrfWriterFactory::createFormatOptions(
     const config::ConfigBase& connectorConfig,
     const config::ConfigBase& session) const {
-  return nullptr;
-}
-
-void WriterOptions::processConfigs(
-    const config::ConfigBase& connectorConfig,
-    const config::ConfigBase& session) {
-  auto dwrfWriterOptions = dynamic_cast<dwrf::WriterOptions*>(this);
-  VELOX_CHECK_NOT_NULL(
-      dwrfWriterOptions, "Expected a DWRF WriterOptions object.");
-
-  std::map<std::string, std::string> configs = serdeParameters;
-
-  if (compressionKind.has_value()) {
-    configs.emplace(
-        dwrf::Config::COMPRESSION.key, std::to_string(compressionKind.value()));
-  }
-
-  configs.emplace(
-      dwrf::Config::STRIPE_SIZE.key,
-      std::to_string(orcWriterMaxStripeSize(connectorConfig, session)));
-
-  configs.emplace(
-      dwrf::Config::MAX_DICTIONARY_SIZE.key,
-      std::to_string(orcWriterMaxDictionaryMemory(connectorConfig, session)));
-
-  configs.emplace(
-      dwrf::Config::INTEGER_DICTIONARY_ENCODING_ENABLED.key,
-      std::to_string(isOrcWriterIntegerDictionaryEncodingEnabled(
-          connectorConfig, session)));
-  configs.emplace(
-      dwrf::Config::STRING_DICTIONARY_ENCODING_ENABLED.key,
-      std::to_string(isOrcWriterStringDictionaryEncodingEnabled(
-          connectorConfig, session)));
-
-  configs.emplace(
-      dwrf::Config::COMPRESSION_BLOCK_SIZE_MIN.key,
-      std::to_string(orcWriterMinCompressionSize(connectorConfig, session)));
-
-  configs.emplace(
-      dwrf::Config::LINEAR_STRIPE_SIZE_HEURISTICS.key,
-      std::to_string(
-          orcWriterLinearStripeSizeHeuristics(connectorConfig, session)));
-
-  configs.emplace(
-      dwrf::Config::ZLIB_COMPRESSION_LEVEL.key,
-      std::to_string(orcWriterZLIBCompressionLevel(connectorConfig, session)));
-
-  configs.emplace(
-      dwrf::Config::ZSTD_COMPRESSION_LEVEL.key,
-      std::to_string(orcWriterZSTDCompressionLevel(connectorConfig, session)));
-
-  config = dwrf::Config::fromMap(configs);
+  std::map<std::string, std::string> configs;
+  addOrcWriterConfigs(configs, connectorConfig, session);
+  return std::make_shared<DwrfWriterOptions>(Config::fromMap(configs));
 }
 
 void registerDwrfWriterFactory() {

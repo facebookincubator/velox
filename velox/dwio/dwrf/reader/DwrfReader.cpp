@@ -25,6 +25,7 @@
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/StreamLabels.h"
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
@@ -890,8 +891,9 @@ DwrfReader::DwrfReader(
     const ReaderOptions& options,
     std::unique_ptr<dwio::common::BufferedInput> input)
     : readerBase_(std::make_unique<ReaderBase>(options, std::move(input))) {
+  const auto mappingMode = readerBase_->readerOptions().columnMappingMode();
   VELOX_CHECK_NE(
-      readerBase_->readerOptions().columnMappingMode(),
+      mappingMode,
       dwio::common::ColumnMappingMode::kParquetFieldId,
       "Parquet field ID column mapping is not supported by DWRF.");
 
@@ -906,13 +908,11 @@ DwrfReader::DwrfReader(
   // physical schema is made entirely of Hive placeholder names (_col0, _col1,
   // ...) written by old Hive with no real field names, so name-based matching
   // would find nothing.
-  const auto columnMappingMode =
-      readerBase_->readerOptions().columnMappingMode();
   if (readerBase_->readerOptions().fileSchema() != nullptr) {
-    if (columnMappingMode == dwio::common::ColumnMappingMode::kFieldId) {
+    if (mappingMode == dwio::common::ColumnMappingMode::kFieldId) {
       updateColumnNamesFromFieldIds();
     } else if (
-        columnMappingMode != dwio::common::ColumnMappingMode::kName ||
+        mappingMode != dwio::common::ColumnMappingMode::kName ||
         isAllHivePlaceholderNames(readerBase_->schema())) {
       updateColumnNamesFromTableSchema();
     }
@@ -1241,8 +1241,10 @@ uint64_t DwrfReader::getMemoryUse(
 
   // Do we need even more memory to read the footer or the metadata?
   const auto footerLength = readerBase.postScript().footerLength();
-  if (memoryBytes < footerLength + readerBase.footerSpeculativeIoSize()) {
-    memoryBytes = footerLength + readerBase.footerSpeculativeIoSize();
+  if (memoryBytes <
+      footerLength + readerBase.readerOptions().footerSpeculativeIoSize()) {
+    memoryBytes =
+        footerLength + readerBase.readerOptions().footerSpeculativeIoSize();
   }
 
   // Account for firstRowOfStripe.
@@ -1293,6 +1295,16 @@ std::unique_ptr<DwrfReader> DwrfReader::create(
     return nullptr;
   }
   return std::make_unique<DwrfReader>(options, std::move(input));
+}
+
+std::shared_ptr<dwio::common::FormatSpecificOptions>
+DwrfReaderFactory::createFormatOptions(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) const {
+  auto options = std::make_shared<DwrfOptions>();
+  options->setMaxCoalesceDistance(
+      Config::maxCoalesceDistance(connectorConfig, session));
+  return options;
 }
 
 void registerDwrfReaderFactory() {

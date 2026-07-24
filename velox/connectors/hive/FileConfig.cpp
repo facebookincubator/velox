@@ -26,12 +26,11 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
 #define VELOX_HIVE_CONFIG_REGISTER(constName) \
   config::registerConfigProperty<FileConfig::constName##Property>(properties)
 
-    VELOX_HIVE_CONFIG_REGISTER(kOrcUseColumnNamesSession);
     VELOX_HIVE_CONFIG_REGISTER(kReadTimestampPartitionValueAsLocalTimeSession);
     VELOX_HIVE_CONFIG_REGISTER(kPreserveFlatMapsInMemorySession);
     VELOX_HIVE_CONFIG_REGISTER(kReaderCollectColumnCpuMetricsSession);
-    VELOX_HIVE_CONFIG_REGISTER(kOrcFooterSpeculativeIoSizeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kNimbleFooterSpeculativeIoSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kUseColumnNamesSession);
+    VELOX_HIVE_CONFIG_REGISTER(kFooterSpeculativeIoSizeSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleStringDecoderZeroCopySession);
     VELOX_HIVE_CONFIG_REGISTER(kNimblePreserveDictionaryEncodingSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleLazyColumnIoSession);

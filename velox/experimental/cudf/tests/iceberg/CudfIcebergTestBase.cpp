@@ -127,8 +127,10 @@ void CudfIcebergTestBase::writeDeleteFile(
   } else {
     auto childPool =
         rootPool_->addAggregateChild("CudfIcebergTestBase.DwrfWriter");
-    velox::dwrf::WriterOptions options;
-    options.config = std::make_shared<facebook::velox::dwrf::Config>();
+    dwio::common::WriterOptions options;
+    options.formatSpecificOptions =
+        std::make_shared<facebook::velox::dwrf::DwrfWriterOptions>(
+            std::make_shared<facebook::velox::dwrf::Config>());
     options.schema = schema;
     options.memoryPool = childPool.get();
     writer = std::make_unique<velox::dwrf::Writer>(std::move(sink), options);

@@ -136,15 +136,15 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::DWRF);
     EXPECT_FALSE(readerOptions.fileColumnNamesReadAsLowerCase());
-    EXPECT_EQ(
-        readerOptions.columnMappingMode(),
-        dwio::common::ColumnMappingMode::kPosition);
   }
 
-  // Test with ORC format and useColumnNames enabled via session.
+  // Test with ORC format and reader-specific options enabled via session.
   {
     auto holder = makeConnectorQueryCtx(
-        {{hive::FileConfig::kOrcUseColumnNamesSession, "true"}});
+        {{hive::FileConfig::kUseColumnNamesSession, "true"},
+         {hive::FileConfig::kFooterSpeculativeIoSizeSession,
+          std::to_string(128UL << 10)},
+         {hive::FileConfig::kMaxCoalescedDistanceSession, "3MB"}});
     auto split = makeSplit(dwio::common::FileFormat::ORC);
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
@@ -161,6 +161,8 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     EXPECT_EQ(
         readerOptions.columnMappingMode(),
         dwio::common::ColumnMappingMode::kName);
+    EXPECT_EQ(readerOptions.maxCoalesceDistance(), 3 << 20);
+    EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 128UL << 10);
   }
 
   // Test format mismatch throws.

@@ -30,6 +30,8 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/core/PlanNode.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/HashAggregation.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -1125,11 +1127,15 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, runtimeStats) {
             // triggered flush.
             .connectorSessionProperty(
                 kHiveConnectorId,
-                dwrf::Config::kOrcWriterMaxStripeSizeSession,
+                dwio::common::formatSessionProperty(
+                    dwio::common::FileFormat::ORC,
+                    dwrf::Config::kOrcWriterMaxStripeSizeSession),
                 "1GB")
             .connectorSessionProperty(
                 kHiveConnectorId,
-                dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
+                dwio::common::formatSessionProperty(
+                    dwio::common::FileFormat::ORC,
+                    dwrf::Config::kOrcWriterMaxDictionaryMemorySession),
                 "1GB")
             .plan(std::move(writerPlan))
             .assertResults(fmt::format("SELECT {}", numRows));

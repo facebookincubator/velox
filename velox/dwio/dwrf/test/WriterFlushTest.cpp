@@ -25,7 +25,7 @@
 using namespace ::testing;
 using facebook::velox::dwrf::MemoryUsageCategory;
 using facebook::velox::dwrf::WriterContext;
-using facebook::velox::dwrf::WriterOptions;
+using WriterOptions = facebook::velox::dwio::common::WriterOptions;
 
 namespace {
 constexpr size_t kSizeKB = 1024;
@@ -374,7 +374,8 @@ class WriterFlushTestHelper {
       const std::shared_ptr<MockMemoryPool>& sinkPool,
       int64_t writerMemoryBudget) {
     WriterOptions options;
-    options.config = std::make_shared<Config>();
+    options.formatSpecificOptions =
+        std::make_shared<DwrfWriterOptions>(std::make_shared<Config>());
     options.schema = type::fbhive::HiveTypeParser().parse(
         "struct<int_val:int,string_val:string>");
     // A completely memory pressure based flush policy.

@@ -19,6 +19,7 @@
 #include <folly/container/F14Set.h>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -77,10 +78,15 @@ VELOX_DECLARE_ENUM_NAME(FileFormat);
 
 FileFormat toFileFormat(std::string_view s);
 
-/// Returns a format-scoped config prefix using the file format's canonical
-/// string token. For example, PARQUET with "." returns "parquet.", while
-/// PARQUET with "_" returns "parquet_".
+/// Returns a format-scoped config prefix. DWRF and ORC share the ORC config
+/// namespace. For example, DWRF with "." returns "orc.", while PARQUET with
+/// "_" returns "parquet_".
 std::string formatConfigPrefix(FileFormat fmt, std::string_view separator);
+
+/// Returns a format-scoped session property key. DWRF and ORC share the ORC
+/// session property namespace. For example, DWRF with "writer.stripe-max-size"
+/// returns "orc_writer.stripe-max-size".
+std::string formatSessionProperty(FileFormat fmt, std::string_view key);
 
 /// Controls how a reader maps the requested table schema to physical file
 /// columns.

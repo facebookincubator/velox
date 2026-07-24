@@ -640,11 +640,9 @@ std::shared_ptr<dwio::common::WriterOptions> HiveDataSink::createWriterOptions(
   options->adjustTimestampToTimezone =
       connectorQueryCtx_->adjustTimestampToTimezone();
   options->maxTargetFileSizeBytes = maxTargetFileBytes_;
+  auto formatScopedConfigs = makeFormatScopedConfigs(
+      *hiveConfig_, *connectorSessionProperties, writerFactory_->fileFormat());
   if (options->formatSpecificOptions == nullptr) {
-    auto formatScopedConfigs = makeFormatScopedConfigs(
-        *hiveConfig_,
-        *connectorSessionProperties,
-        writerFactory_->fileFormat());
     options->formatSpecificOptions = writerFactory_->createFormatOptions(
         formatScopedConfigs.connectorConfig,
         formatScopedConfigs.sessionProperties);

@@ -145,18 +145,20 @@ TEST(WriterOptionsAdapterTest, dwrfPostConfigsOverridesTimestampFields) {
   auto adapter = createWriterOptionsAdapter(dwio::common::FileFormat::DWRF);
   ASSERT_NE(adapter, nullptr);
 
-  dwrf::WriterOptions options;
-  options.adjustTimestampToTimezone = true;
-  options.sessionTimezone = tz::locateZone("America/Los_Angeles");
+  auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>();
+  dwrfOptions->adjustTimestampToTimezone = true;
+  dwrfOptions->sessionTimezone = tz::locateZone("America/Los_Angeles");
+  dwio::common::WriterOptions options;
+  options.formatSpecificOptions = dwrfOptions;
 
   adapter->applyPostConfigs(options);
 
-  EXPECT_FALSE(options.adjustTimestampToTimezone);
-  EXPECT_EQ(options.sessionTimezone, nullptr);
+  EXPECT_FALSE(dwrfOptions->adjustTimestampToTimezone);
+  EXPECT_EQ(dwrfOptions->sessionTimezone, nullptr);
 }
 
 // Verifies ORC routes through the same DwrfWriterOptionsAdapter as DWRF:
-// the post-config hook overrides the same dwrf::WriterOptions timestamp
+// the post-config hook overrides the same dwrf::DwrfWriterOptions timestamp
 // fields. This proves that the ORC dispatch is wired to the DWRF adapter
 // (the cross-engine convention — Meta's DWRF is an ORC implementation).
 TEST(WriterOptionsAdapterTest, orcRoutesToDwrfAdapter) {
@@ -165,14 +167,15 @@ TEST(WriterOptionsAdapterTest, orcRoutesToDwrfAdapter) {
 
   EXPECT_EQ(adapter->manifestFormatString(), "ORC");
 
-  dwrf::WriterOptions options;
-  options.adjustTimestampToTimezone = true;
-  options.sessionTimezone = tz::locateZone("America/Los_Angeles");
-
+  auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>();
+  dwrfOptions->adjustTimestampToTimezone = true;
+  dwrfOptions->sessionTimezone = tz::locateZone("America/Los_Angeles");
+  dwio::common::WriterOptions options;
+  options.formatSpecificOptions = dwrfOptions;
   adapter->applyPostConfigs(options);
 
-  EXPECT_FALSE(options.adjustTimestampToTimezone);
-  EXPECT_EQ(options.sessionTimezone, nullptr);
+  EXPECT_FALSE(dwrfOptions->adjustTimestampToTimezone);
+  EXPECT_EQ(dwrfOptions->sessionTimezone, nullptr);
 }
 
 // Verifies toManifestFormatString() throws for unsupported formats rather

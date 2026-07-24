@@ -38,8 +38,18 @@ class DwrfOptions : public dwio::common::FormatSpecificOptions {
     return columnReaderFactory_;
   }
 
+  void setMaxCoalesceDistance(int32_t distance) {
+    maxCoalesceDistance_ = distance;
+  }
+
+  int32_t maxCoalesceDistance() const {
+    return maxCoalesceDistance_;
+  }
+
  private:
   std::shared_ptr<ColumnReaderFactory> columnReaderFactory_;
+  int32_t maxCoalesceDistance_{
+      dwio::common::ReaderOptions::kDefaultCoalesceDistance};
 };
 
 class DwrfRowReader : public StrideIndexProvider,
@@ -377,6 +387,10 @@ class DwrfReaderFactory : public dwio::common::ReaderFactory {
       const dwio::common::ReaderOptions& options) override {
     return DwrfReader::create(std::move(input), options);
   }
+
+  std::shared_ptr<dwio::common::FormatSpecificOptions> createFormatOptions(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) const override;
 };
 
 } // namespace facebook::velox::dwrf
