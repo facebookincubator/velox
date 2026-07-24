@@ -326,7 +326,6 @@ void CudfNestedLoopJoinProbe::initialize() {
       joinNode_->joinCondition(), operatorCtx_->execCtx()->queryCtx(), pool);
   VELOX_CHECK_NOT_NULL(optimizedCondition);
 
-  // See crossJoinConditionalIndices for why this can't be an AST tree.
   if (hasNonAstSubexprSpanningBothSides(
           optimizedCondition, probeType_, buildType_)) {
     useAstFilter_ = false;
@@ -631,12 +630,8 @@ CudfNestedLoopJoinProbe::crossJoinConditionalIndices(
       numBuildRows,
       totalRows);
 
-  // probeIndices[i] = i / numBuildRows, buildIndices[i] = i % numBuildRows,
-  // for i in [0, numProbeRows * numBuildRows) - the same probe-major row
-  // order cudf::cross_join uses. repeat()/tile() build this directly (each
-  // probe index repeated numBuildRows times; the build range tiled
-  // numProbeRows times) rather than computing DIV/MOD over a
-  // totalRows-sized sequence.
+  // repeat() each probe index numBuildRows times, tile() the build range
+  // numProbeRows times, matching cudf::cross_join's probe-major row order.
   auto zero = cudf::numeric_scalar<cudf::size_type>(0, true, stream, mr);
   auto one = cudf::numeric_scalar<cudf::size_type>(1, true, stream, mr);
   auto probeRange = cudf::sequence(numProbeRows, zero, one, stream, mr);

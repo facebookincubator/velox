@@ -235,14 +235,12 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   // if buildStream_ was never fetched (e.g. build side never ran).
   void recordReadCompletion(rmm::cuda_stream_view probeStream);
 
-  /// Evaluates a join condition that isn't AST-representable (spans both
-  /// sides, e.g. `probe.col LIKE build.pattern`) by materializing the full
-  /// probe x build cross product as explicit row-index columns and running
-  /// filterEvaluator_ over the gathered rows. Returns the (probeIndex,
-  /// buildIndex) pairs where the condition holds, in the same shape as
-  /// cudf::conditional_inner_join's output. When `needBuildIndices` is
-  /// false, the returned build-index column is null; callers that only need
-  /// the matched probe rows (e.g. left semi project) can skip that work.
+  /// Evaluates a join condition that isn't AST-representable (e.g. `probe.col
+  /// LIKE build.pattern`) by materializing the probe x build cross product
+  /// and running filterEvaluator_ over it. Returns (probeIndex, buildIndex)
+  /// pairs where the condition holds, matching cudf::conditional_inner_join's
+  /// output shape. `needBuildIndices=false` skips building the build-index
+  /// column for callers that don't need it (e.g. left semi project).
   std::pair<std::unique_ptr<cudf::column>, std::unique_ptr<cudf::column>>
   crossJoinConditionalIndices(
       cudf::table_view probeTableView,
