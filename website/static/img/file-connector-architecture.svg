@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="640" viewBox="0 0 900 640" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#000"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="900" height="640" fill="#ffffff"/>
+
+  <!-- Layer 1: SQL -->
+  <rect x="230" y="30" width="440" height="70" rx="10" fill="#ffffff" stroke="#000" stroke-width="2"/>
+  <text x="450" y="60" text-anchor="middle" font-size="20" font-weight="bold" fill="#000">SQL / Dataframe API</text>
+  <text x="450" y="85" text-anchor="middle" font-size="14" fill="#000" font-family="monospace">SELECT * FROM parquet."/data/events.parquet"</text>
+
+  <line x1="450" y1="100" x2="450" y2="135" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Layer 2: FileConnector -->
+  <rect x="230" y="140" width="440" height="70" rx="10" fill="#ffffff" stroke="#000" stroke-width="2"/>
+  <text x="450" y="170" text-anchor="middle" font-size="20" font-weight="bold" fill="#000">FileConnector</text>
+  <text x="450" y="194" text-anchor="middle" font-size="14" fill="#000">path parsing · schema · splits · column-projected streaming</text>
+
+  <line x1="450" y1="210" x2="450" y2="245" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Layer 3: Handler Registry -->
+  <rect x="230" y="250" width="440" height="70" rx="10" fill="#ffffff" stroke="#000" stroke-width="2"/>
+  <text x="450" y="280" text-anchor="middle" font-size="20" font-weight="bold" fill="#000">Handler Registry</text>
+  <text x="450" y="304" text-anchor="middle" font-size="14" fill="#000" font-family="monospace">registerHandler("parquet", handler)</text>
+
+  <!-- fan-out arrows to handlers -->
+  <line x1="330" y1="320" x2="150" y2="365" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="410" y1="320" x2="355" y2="365" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="490" y1="320" x2="545" y2="365" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="570" y1="320" x2="750" y2="365" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Layer 4: Format DataSources (pluggable FileHandlers) -->
+  <text x="450" y="360" text-anchor="middle" font-size="13" fill="#000">pluggable FileHandlers (two methods each)</text>
+  <g font-size="15" fill="#000">
+    <rect x="60"  y="370" width="150" height="55" rx="8" fill="#ffffff" stroke="#000" stroke-width="1.8" stroke-dasharray="2 4"/>
+    <text x="135" y="403" text-anchor="middle" font-weight="bold">Parquet</text>
+    <rect x="280" y="370" width="150" height="55" rx="8" fill="#ffffff" stroke="#000" stroke-width="1.8" stroke-dasharray="2 4"/>
+    <text x="355" y="403" text-anchor="middle" font-weight="bold">Nimble</text>
+    <rect x="470" y="370" width="150" height="55" rx="8" fill="#ffffff" stroke="#000" stroke-width="1.8" stroke-dasharray="2 4"/>
+    <text x="545" y="403" text-anchor="middle" font-weight="bold">CSV</text>
+    <rect x="680" y="370" width="160" height="55" rx="8" fill="#ffffff" stroke="#000" stroke-width="1.8" stroke-dasharray="2 4"/>
+    <text x="760" y="403" text-anchor="middle" font-weight="bold">Tensor · Image</text>
+  </g>
+
+  <!-- arrows to storage -->
+  <line x1="135" y1="425" x2="300" y2="500" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="355" y1="425" x2="420" y2="500" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="545" y1="425" x2="480" y2="500" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="760" y1="425" x2="600" y2="500" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Layer 5: Storage -->
+  <rect x="230" y="505" width="440" height="70" rx="10" fill="#ffffff" stroke="#000" stroke-width="2"/>
+  <text x="450" y="548" text-anchor="middle" font-size="20" font-weight="bold" fill="#000">Storage</text>
+
+  <text x="450" y="612" text-anchor="middle" font-size="13" fill="#000">The core never interprets bytes; each format lives behind the FileHandler interface.</text>
+</svg>
