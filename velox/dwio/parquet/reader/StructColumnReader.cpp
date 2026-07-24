@@ -16,6 +16,8 @@
 
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 
+#include <folly/String.h>
+
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/RepeatedColumnReader.h"
@@ -48,9 +50,46 @@ StructColumnReader::StructColumnReader(
     if (!childSpecs[i]->readFromFile()) {
       continue;
     }
-    auto childFileType = fileType_->childByName(childSpec->fieldName());
-    auto childRequestedType =
-        requestedType_->asRow().findChild(childSpec->fieldName());
+    std::shared_ptr<const dwio::common::TypeWithId> childFileType;
+    TypePtr childRequestedType;
+    if (columnReaderOptions.useColumnNamesForColumnMapping_ &&
+        !columnReaderOptions.nameToFieldId_.empty()) {
+      std::string lookup = childSpec->fieldName();
+      folly::toLowerAscii(lookup);
+      auto it = columnReaderOptions.nameToFieldId_.find(lookup);
+      if (it != columnReaderOptions.nameToFieldId_.end()) {
+        for (const auto& child :
+             reinterpret_cast<const ParquetTypeWithId*>(fileType_.get())
+                 ->getChildren()) {
+          auto parquetChild =
+              reinterpret_cast<const ParquetTypeWithId*>(child.get());
+          if (parquetChild->fieldId().has_value() &&
+              parquetChild->fieldId().value() == it->second) {
+            childFileType = child;
+            break;
+          }
+        }
+        // Find the corresponding requested type using case-insensitive name
+        // matching, since the ScanSpec field name may differ in case from the
+        // requested schema's field names.
+        const auto& rowType = requestedType_->asRow();
+        for (uint32_t j = 0; j < rowType.size(); ++j) {
+          std::string rowFieldLower = rowType.nameOf(j);
+          folly::toLowerAscii(rowFieldLower);
+          if (rowFieldLower == lookup) {
+            childRequestedType = rowType.childAt(j);
+            break;
+          }
+        }
+      }
+    }
+    if (!childFileType) {
+      childFileType = fileType_->childByName(childSpec->fieldName());
+    }
+    if (!childRequestedType) {
+      childRequestedType =
+          requestedType_->asRow().findChild(childSpec->fieldName());
+    }
     addChild(
         ParquetColumnReader::build(
             columnReaderOptions,

@@ -22,6 +22,7 @@ set(
   IcebergDataFileStatistics.cpp
   IcebergDataSink.cpp
   IcebergDataSource.cpp
+  IcebergFieldIdUtils.cpp
   IcebergDeletionVectorSink.cpp
   IcebergDwrfStatsCollector.cpp
   IcebergMergeProcessor.cpp
@@ -55,6 +56,7 @@ velox_add_library(
   IcebergDataFileStatistics.h
   IcebergDataSink.h
   IcebergDataSource.h
+  IcebergFieldIdUtils.h
   IcebergDeleteFile.h
   IcebergDeletionVectorSink.h
   IcebergDwrfStatsCollector.h

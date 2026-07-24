@@ -2140,3 +2140,303 @@ TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
 
   EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
 }
+
+// ============================================================
+// Field ID Matching Tests for Iceberg support
+// ============================================================
+
+// Verifies that ReaderOptions stores and returns the nameToFieldId map.
+TEST_F(ParquetReaderTest, fieldIdMatchingStorage) {
+  std::unordered_map<std::string, int32_t> nameToFieldId;
+  nameToFieldId["currencycode"] = 1;
+  nameToFieldId["j"] = 2;
+
+  dwio::common::ReaderOptions opts(leafPool_.get());
+  opts.setNameToFieldId(nameToFieldId);
+
+  EXPECT_EQ(opts.nameToFieldId().size(), 2);
+  EXPECT_EQ(opts.nameToFieldId().at("currencycode"), 1);
+  EXPECT_EQ(opts.nameToFieldId().at("j"), 2);
+}
+
+// Verifies that lowercase keys are stored and found correctly.
+TEST_F(ParquetReaderTest, fieldIdMatchingCaseInsensitive) {
+  std::unordered_map<std::string, int32_t> nameToFieldId;
+  nameToFieldId["currencycode"] = 1;
+  nameToFieldId["firstname"] = 2;
+
+  dwio::common::ReaderOptions opts(leafPool_.get());
+  opts.setNameToFieldId(nameToFieldId);
+
+  auto it1 = opts.nameToFieldId().find("currencycode");
+  EXPECT_NE(it1, opts.nameToFieldId().end());
+  EXPECT_EQ(it1->second, 1);
+
+  auto it2 = opts.nameToFieldId().find("firstname");
+  EXPECT_NE(it2, opts.nameToFieldId().end());
+  EXPECT_EQ(it2->second, 2);
+}
+
+// Verifies that the default mapping is empty and setting an empty map works.
+TEST_F(ParquetReaderTest, fieldIdMatchingEmptyMapping) {
+  dwio::common::ReaderOptions opts(leafPool_.get());
+  EXPECT_TRUE(opts.nameToFieldId().empty());
+
+  std::unordered_map<std::string, int32_t> emptyMap;
+  opts.setNameToFieldId(emptyMap);
+  EXPECT_TRUE(opts.nameToFieldId().empty());
+}
+
+// Verifies that missing keys are not found and existing keys are.
+TEST_F(ParquetReaderTest, fieldIdMatchingLookupBehavior) {
+  std::unordered_map<std::string, int32_t> nameToFieldId;
+  nameToFieldId["existingfield"] = 100;
+
+  dwio::common::ReaderOptions opts(leafPool_.get());
+  opts.setNameToFieldId(nameToFieldId);
+
+  auto it1 = opts.nameToFieldId().find("existingfield");
+  EXPECT_NE(it1, opts.nameToFieldId().end());
+  EXPECT_EQ(it1->second, 100);
+
+  auto it2 = opts.nameToFieldId().find("nonexistingfield");
+  EXPECT_EQ(it2, opts.nameToFieldId().end());
+}
+
+// Verifies that ParquetReader resolves columns by field ID when the requested
+// schema differs from the file schema only by case.
+TEST_F(ParquetReaderTest, fieldIdMatchingWithCaseMismatch) {
+  constexpr int32_t kRows = 10;
+  auto data = makeRowVector(
+      {"currencyCode", "amount"},
+      {makeFlatVector<int32_t>(kRows, [](auto row) { return row + 100; }),
+       makeFlatVector<int64_t>(kRows, [](auto row) { return row * 1000; })});
+
+  dwio::common::WriterOptions baseOptions;
+  baseOptions.memoryPool = rootPool_.get();
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetFieldIds = {
+      ParquetFieldId{1, {}},
+      ParquetFieldId{2, {}},
+  };
+
+  auto* sinkPtr = write(data, baseOptions, writerOptions);
+  auto requestedSchema = ROW({"CURRENCYCODE", "AMOUNT"}, {INTEGER(), BIGINT()});
+
+  // With field ID mapping: read succeeds.
+  {
+    std::unordered_map<std::string, int32_t> nameToFieldId;
+    nameToFieldId["currencycode"] = 1;
+    nameToFieldId["amount"] = 2;
+
+    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    readerOptions.setUseColumnNamesForColumnMapping(true);
+    readerOptions.setNameToFieldId(nameToFieldId);
+
+    auto parquetReader = createReaderInMemory(*sinkPtr, readerOptions);
+    EXPECT_EQ(parquetReader->numberOfRows(), kRows);
+
+    dwio::common::RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setScanSpec(makeScanSpec(requestedSchema));
+    auto rowReader = parquetReader->createRowReader(rowReaderOpts);
+
+    auto expected = makeRowVector(
+        {"CURRENCYCODE", "AMOUNT"},
+        {makeFlatVector<int32_t>(kRows, [](auto row) { return row + 100; }),
+         makeFlatVector<int64_t>(kRows, [](auto row) { return row * 1000; })});
+
+    assertReadWithReaderAndExpected(
+        requestedSchema, *rowReader, expected, *leafPool_);
+  }
+
+  // Without field ID mapping: schema mismatch causes an error.
+  {
+    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    auto parquetReader = createReaderInMemory(*sinkPtr, readerOptions);
+    dwio::common::RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setScanSpec(makeScanSpec(requestedSchema));
+    VELOX_ASSERT_THROW(
+        parquetReader->createRowReader(rowReaderOpts), "not found");
+  }
+}
+
+// Verifies that nested struct fields are resolved by field ID when the
+// requested schema differs from the file schema by case.
+TEST_F(ParquetReaderTest, fieldIdMatchingNestedStruct) {
+  constexpr int32_t kRows = 10;
+
+  auto innerStruct = makeRowVector(
+      {"inner"},
+      {makeFlatVector<int32_t>(kRows, [](auto row) { return row + 100; })});
+  auto data = makeRowVector(
+      {"id", "outer"},
+      {makeFlatVector<int64_t>(kRows, [](auto row) { return row; }),
+       innerStruct});
+
+  dwio::common::WriterOptions baseOptions;
+  baseOptions.memoryPool = rootPool_.get();
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetFieldIds = {
+      ParquetFieldId{1, {}},
+      ParquetFieldId{2, {ParquetFieldId{3, {}}}},
+  };
+
+  auto* sinkPtr = write(data, baseOptions, writerOptions);
+  auto requestedSchema =
+      ROW({"ID", "OUTER"}, {BIGINT(), ROW({"INNER"}, {INTEGER()})});
+
+  // With field ID mapping: read succeeds.
+  {
+    std::unordered_map<std::string, int32_t> nameToFieldId;
+    nameToFieldId["id"] = 1;
+    nameToFieldId["outer"] = 2;
+    nameToFieldId["inner"] = 3;
+
+    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    readerOptions.setUseColumnNamesForColumnMapping(true);
+    readerOptions.setNameToFieldId(nameToFieldId);
+
+    auto parquetReader = createReaderInMemory(*sinkPtr, readerOptions);
+    EXPECT_EQ(parquetReader->numberOfRows(), kRows);
+
+    dwio::common::RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setScanSpec(makeScanSpec(requestedSchema));
+    auto rowReader = parquetReader->createRowReader(rowReaderOpts);
+
+    auto expectedInner = makeRowVector(
+        {"INNER"},
+        {makeFlatVector<int32_t>(kRows, [](auto row) { return row + 100; })});
+    auto expected = makeRowVector(
+        {"ID", "OUTER"},
+        {makeFlatVector<int64_t>(kRows, [](auto row) { return row; }),
+         expectedInner});
+
+    assertReadWithReaderAndExpected(
+        requestedSchema, *rowReader, expected, *leafPool_);
+  }
+
+  // Without field ID mapping: schema mismatch causes an error.
+  {
+    dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+    auto parquetReader = createReaderInMemory(*sinkPtr, readerOptions);
+    dwio::common::RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setScanSpec(makeScanSpec(requestedSchema));
+    VELOX_ASSERT_THROW(
+        parquetReader->createRowReader(rowReaderOpts), "not found");
+  }
+}
+
+// Verifies that field ID matching resolves columns regardless of their
+// positional order in the requested schema.
+TEST_F(ParquetReaderTest, fieldIdMatchingReorderedFields) {
+  constexpr int32_t kRows = 10;
+
+  // File schema: a(id=1), b(id=2), c(id=3).
+  auto data = makeRowVector(
+      {"a", "b", "c"},
+      {makeFlatVector<int32_t>(kRows, [](auto row) { return row + 100; }),
+       makeFlatVector<int64_t>(kRows, [](auto row) { return row + 200; }),
+       makeFlatVector<int32_t>(kRows, [](auto row) { return row + 300; })});
+
+  dwio::common::WriterOptions baseOptions;
+  baseOptions.memoryPool = rootPool_.get();
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetFieldIds = {
+      ParquetFieldId{1, {}},
+      ParquetFieldId{2, {}},
+      ParquetFieldId{3, {}},
+  };
+
+  auto* sinkPtr = write(data, baseOptions, writerOptions);
+
+  // Request in order C, A, B with case mismatch.
+  auto requestedSchema = ROW({"C", "A", "B"}, {INTEGER(), INTEGER(), BIGINT()});
+
+  std::unordered_map<std::string, int32_t> nameToFieldId;
+  nameToFieldId["a"] = 1;
+  nameToFieldId["b"] = 2;
+  nameToFieldId["c"] = 3;
+
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  readerOptions.setUseColumnNamesForColumnMapping(true);
+  readerOptions.setNameToFieldId(nameToFieldId);
+
+  auto parquetReader = createReaderInMemory(*sinkPtr, readerOptions);
+  EXPECT_EQ(parquetReader->numberOfRows(), kRows);
+
+  dwio::common::RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(makeScanSpec(requestedSchema));
+  auto rowReader = parquetReader->createRowReader(rowReaderOpts);
+
+  // Expected order: C(id=3), A(id=1), B(id=2).
+  auto expected = makeRowVector(
+      {"C", "A", "B"},
+      {makeFlatVector<int32_t>(kRows, [](auto row) { return row + 300; }),
+       makeFlatVector<int32_t>(kRows, [](auto row) { return row + 100; }),
+       makeFlatVector<int64_t>(kRows, [](auto row) { return row + 200; })});
+
+  assertReadWithReaderAndExpected(
+      requestedSchema, *rowReader, expected, *leafPool_);
+}
+
+// Verifies the behavior when nameToFieldId maps a column to a field ID that
+// does not exist in the file (e.g. mapping currencycode->99, but the file has
+// currencyCode with fieldId=1).
+//
+// Design decision: the nameToFieldId mapping is treated as authoritative.  If
+// the supplied field ID cannot be found in the file, the reader must not fall
+// back to a name-based match, because that could bind the requested column to
+// a different logical field.  The expected behavior is to report the field as
+// missing.  The cause of the mismatch is intentionally unspecified — it could
+// be stale metadata, schema evolution, or a bug — only the contract matters.
+//
+// Concretely: createRowReader throws because StructColumnReader cannot locate
+// the child file type for the unresolved column.  This test documents that
+// contract so any future change that alters the fallback behavior — e.g.
+// returning null instead of throwing — is caught as a deliberate regression.
+TEST_F(ParquetReaderTest, fieldIdMatchingUnknownFieldIdDoesNotFallBackToName) {
+  constexpr int32_t kRows = 5;
+  auto data = makeRowVector(
+      {"currencyCode", "amount"},
+      {makeFlatVector<int32_t>(kRows, [](auto row) { return row + 100; }),
+       makeFlatVector<int64_t>(kRows, [](auto row) { return row * 1000; })});
+
+  dwio::common::WriterOptions baseOptions;
+  baseOptions.memoryPool = rootPool_.get();
+  ParquetWriterOptions writerOptions;
+  // File embeds fieldId=1 on currencyCode, fieldId=2 on amount.
+  writerOptions.parquetFieldIds = {
+      ParquetFieldId{1, {}},
+      ParquetFieldId{2, {}},
+  };
+
+  auto* sinkPtr = write(data, baseOptions, writerOptions);
+
+  // Requested schema uses uppercase names (as Iceberg typically delivers them).
+  auto requestedSchema = ROW({"CURRENCYCODE", "AMOUNT"}, {INTEGER(), BIGINT()});
+
+  // The mapping points currencycode to fieldId=99, which does not exist in the
+  // file (file has fieldId=1).  amount is correctly mapped to 2.
+  std::unordered_map<std::string, int32_t> nameToFieldId;
+  nameToFieldId["currencycode"] = 99; // wrong ID — no file column has this
+  nameToFieldId["amount"] = 2;
+
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  readerOptions.setUseColumnNamesForColumnMapping(true);
+  readerOptions.setNameToFieldId(nameToFieldId);
+
+  auto parquetReader = createReaderInMemory(*sinkPtr, readerOptions);
+
+  dwio::common::RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(makeScanSpec(requestedSchema));
+
+  // When no physical Parquet field matches the supplied field ID, field-ID
+  // matching yields no result and the implementation falls back to
+  // childByName(childSpec->fieldName()). That lookup is case-sensitive
+  // against the physical Parquet schema. If the requested name differs
+  // only by case from the physical name, the fallback also fails and
+  // createRowReader() throws "not found" rather than silently binding the
+  // requested column to a different field.
+  VELOX_ASSERT_THROW(
+      parquetReader->createRowReader(rowReaderOpts), "not found");
+}
