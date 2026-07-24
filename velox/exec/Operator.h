@@ -132,13 +132,13 @@ class Operator : public BaseRuntimeStatWriter {
     virtual std::unique_ptr<Operator>
     toOperator(DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node);
 
-    /// An overloaded method that should be called when the operator needs an
-    /// ExchangeClient.
+    /// An overloaded method that should be called when the operator needs a
+    /// InMemoryExchangeClient.
     virtual std::unique_ptr<Operator> toOperator(
         DriverCtx* ctx,
         int32_t id,
         const core::PlanNodePtr& node,
-        std::shared_ptr<ExchangeClient> exchangeClient);
+        std::shared_ptr<InMemoryExchangeClient> exchangeClient);
 
     /// Translates plan node to join bridge. Returns nullptr if the plan node
     /// cannot be handled by this factory.
@@ -463,7 +463,7 @@ class Operator : public BaseRuntimeStatWriter {
       DriverCtx* ctx,
       int32_t id,
       const core::PlanNodePtr& planNode,
-      std::shared_ptr<ExchangeClient> exchangeClient = nullptr);
+      std::shared_ptr<InMemoryExchangeClient> exchangeClient = nullptr);
 
   /// Calls all the registered PlanNodeTranslators on 'planNode' and returns the
   /// result of the first one that returns non-nullptr or nullptr if all return

@@ -60,8 +60,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// @param planFragment Plan fragment.
   /// @param destination Partition number if task is expected to receive data
   /// for a particular partition from a set of upstream tasks participating in a
-  /// distributed execution. Used to initialize an ExchangeClient. Ignored if
-  /// plan fragment doesn't have an ExchangeNode.
+  /// distributed execution. Used to initialize a InMemoryExchangeClient.
+  /// Ignored if plan fragment doesn't have an ExchangeNode.
   /// @param queryCtx Query context containing MemoryPool and MemoryAllocator
   /// instances to use for memory allocations during execution, executor to
   /// schedule operators on, and session properties.
@@ -1055,8 +1055,9 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  /// Add remote split to ExchangeClient for the specified plan node. Used to
-  /// close remote sources that are added after the task completed early.
+  /// Add remote split to InMemoryExchangeClient for the specified plan node.
+  /// Used to close remote sources that are added after the task completed
+  /// early.
   void addRemoteSplit(
       const core::PlanNodeId& planNodeId,
       const exec::Split& split);
@@ -1181,19 +1182,19 @@ class Task : public std::enable_shared_from_this<Task> {
   // Get a shared reference to the exchange client with the specified exchange
   // plan node 'planNodeId'. The function returns null if there is no client
   // created for 'planNodeId' in 'exchangeClientByPlanNode_'.
-  std::shared_ptr<ExchangeClient> getExchangeClient(
+  std::shared_ptr<InMemoryExchangeClient> getExchangeClient(
       const core::PlanNodeId& planNodeId) const {
     std::lock_guard<std::timed_mutex> l(mutex_);
     return getExchangeClientLocked(planNodeId);
   }
 
-  std::shared_ptr<ExchangeClient> getExchangeClientLocked(
+  std::shared_ptr<InMemoryExchangeClient> getExchangeClientLocked(
       const core::PlanNodeId& planNodeId) const;
 
   // Get a shared reference to the exchange client with the specified
   // 'pipelineId'. The function returns null if there is no client created for
   // 'pipelineId' set in 'exchangeClients_'.
-  std::shared_ptr<ExchangeClient> getExchangeClientLocked(
+  std::shared_ptr<InMemoryExchangeClient> getExchangeClientLocked(
       int32_t pipelineId) const;
 
   // Builds the query trace config.
@@ -1301,11 +1302,11 @@ class Task : public std::enable_shared_from_this<Task> {
   // the exchange clients are also referenced by 'exchangeClientByPlanNode_'.
   // Hence, exchange clients can be indexed either by pipeline ID or by plan
   // node ID.
-  std::vector<std::shared_ptr<ExchangeClient>> exchangeClients_;
+  std::vector<std::shared_ptr<InMemoryExchangeClient>> exchangeClients_;
 
   // Exchange clients keyed by the corresponding Exchange plan node ID. Used to
   // process remaining remote splits after the task has completed early.
-  std::unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>
+  std::unordered_map<core::PlanNodeId, std::shared_ptr<InMemoryExchangeClient>>
       exchangeClientByPlanNode_;
 
   // Pool of unique row ids shared by all AssignUniqueId operators in this task.
@@ -1569,8 +1570,9 @@ class TaskListener {
       std::exception_ptr error,
       const TaskStats& stats,
       const core::PlanFragment& /*fragment*/,
-      const std::
-          unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>&
+      const std::unordered_map<
+          core::PlanNodeId,
+          std::shared_ptr<InMemoryExchangeClient>>&
       /*exchangeClientMap*/) {
     onTaskCompletion(taskUuid, taskId, state, error, stats);
   }
