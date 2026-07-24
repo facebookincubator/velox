@@ -357,6 +357,23 @@ TEST(TypeTest, dateToString) {
   EXPECT_EQ(DATE()->toString(-1855961014), "-5079479-05-03");
 }
 
+// Locks in the fast/slow boundary of DateType::toIso8601: the four-digit-year
+// fast path and the fallbacks for years outside [0, 9999].
+TEST(TypeTest, dateToStringFastPathBoundary) {
+  // Fast path: positive four-digit years, including the year-zero and
+  // year-9999 edges.
+  EXPECT_EQ(DateType::toIso8601(0), "1970-01-01");
+  EXPECT_EQ(DateType::toIso8601(-719528), "0000-01-01");
+  EXPECT_EQ(DateType::toIso8601(2932896), "9999-12-31");
+
+  // One day past 9999-12-31 needs five year digits, so it falls through to the
+  // general path.
+  EXPECT_EQ(DateType::toIso8601(2932897), "10000-01-01");
+
+  // Negative years take the general path with its leading sign.
+  EXPECT_EQ(DateType::toIso8601(-1855961014), "-5079479-05-03");
+}
+
 // Tests the generic Type::valueToString<T> template which routes to
 // type-specific formatting based on the type. Tests are grouped by physical
 // type and use the same raw values to illustrate the difference in output.

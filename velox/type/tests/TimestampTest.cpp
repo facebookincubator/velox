@@ -262,6 +262,80 @@ TEST(TimestampTest, toStringPrestoCastBehavior) {
       "-0001-11-29 19:33:20.000", Timestamp(-62170000000, 0).toString(options));
 }
 
+// Locks in the fast/slow seam of tsToStringView around the year-padding edge,
+// the predicates that disable the fast path, and the pre-epoch floor-division
+// branch.
+TEST(TimestampTest, toStringFastPathBoundary) {
+  TimestampToStringOptions options = {
+      .precision = TimestampToStringOptions::Precision::kMilliseconds,
+  };
+
+  // year == 999: the fast path emits exactly four year digits, so it only
+  // applies when zeroPaddingYear is set; otherwise the unpadded year falls
+  // through to the slow path.
+  const Timestamp year999 = Timestamp(-30627466200, 0);
+  options.zeroPaddingYear = true;
+  EXPECT_EQ("0999-06-15T10:30:00.000", year999.toString(options));
+  options.zeroPaddingYear = false;
+  EXPECT_EQ("999-06-15T10:30:00.000", year999.toString(options));
+
+  // year > 9999 with a leading positive sign disables the fast path.
+  const Timestamp year10000 = Timestamp(253402300800, 0);
+  options.leadingPositiveSign = true;
+  EXPECT_EQ("+10000-01-01T00:00:00.000", year10000.toString(options));
+  // year == 10000 is just outside the fast domain even without the sign.
+  options.leadingPositiveSign = false;
+  EXPECT_EQ("10000-01-01T00:00:00.000", year10000.toString(options));
+
+  // kTimeOnly always takes the slow path.
+  options.mode = TimestampToStringOptions::Mode::kTimeOnly;
+  EXPECT_EQ("10:30:00.000", Timestamp(37800, 0).toString(options));
+
+  // Pre-epoch seconds exercise the fast path's floor-division branch (rem < 0
+  // borrows a day).
+  EXPECT_EQ("1969-12-31T23:59:59.000000000", Timestamp(-1, 0).toString());
+}
+
+// Locks in appendFractionalNanos, now shared by the fast and slow paths, across
+// every (precision, skipTrailingZeros) combination plus the nanos == 0 case.
+TEST(TimestampTest, toStringFractionalNanos) {
+  using Precision = TimestampToStringOptions::Precision;
+  // 2024-01-02T03:04:05, a fast-path-eligible year, with a fraction that has
+  // trailing zeros at each precision.
+  const int64_t seconds = 1704164645;
+  const std::string base = "2024-01-02T03:04:05";
+
+  auto format = [&](uint64_t nanos,
+                    Precision precision,
+                    bool skipTrailingZeros) {
+    return Timestamp(seconds, nanos)
+        .toString(
+            {.precision = precision, .skipTrailingZeros = skipTrailingZeros});
+  };
+
+  const uint64_t nanos = 123'000'000;
+  EXPECT_EQ(base + ".123", format(nanos, Precision::kMilliseconds, false));
+  EXPECT_EQ(base + ".123", format(nanos, Precision::kMilliseconds, true));
+  EXPECT_EQ(base + ".123000", format(nanos, Precision::kMicroseconds, false));
+  EXPECT_EQ(base + ".123", format(nanos, Precision::kMicroseconds, true));
+  EXPECT_EQ(base + ".123000000", format(nanos, Precision::kNanoseconds, false));
+  EXPECT_EQ(base + ".123", format(nanos, Precision::kNanoseconds, true));
+
+  // skipTrailingZeros must also drop zeros within the millisecond field.
+  EXPECT_EQ(
+      base + ".100", format(100'000'000, Precision::kMilliseconds, false));
+  EXPECT_EQ(base + ".1", format(100'000'000, Precision::kMilliseconds, true));
+
+  // nanos == 0: keep the zero-filled fraction unless trailing zeros are
+  // skipped, in which case the fraction is omitted entirely.
+  EXPECT_EQ(base + ".000", format(0, Precision::kMilliseconds, false));
+  EXPECT_EQ(base + ".000000", format(0, Precision::kMicroseconds, false));
+  EXPECT_EQ(base + ".000000000", format(0, Precision::kNanoseconds, false));
+  EXPECT_EQ(base, format(0, Precision::kMilliseconds, true));
+  EXPECT_EQ(base, format(0, Precision::kMicroseconds, true));
+  EXPECT_EQ(base, format(0, Precision::kNanoseconds, true));
+}
+
 namespace {
 
 std::string toStringAlt(

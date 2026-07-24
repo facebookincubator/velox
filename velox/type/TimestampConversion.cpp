@@ -803,7 +803,66 @@ Expected<int64_t> daysSinceEpochFromDayOfYear(int32_t year, int32_t dayOfYear) {
       });
 }
 
+namespace {
+
+// Fast path for the dominant production shape: a strict 10-character
+// `YYYY-MM-DD` ASCII date with dash separators and zero-padded fields.
+// Produces the same answer as the general parser for every ParseMode
+// (no leading sign, no trailing whitespace/T, exactly one canonical
+// representation per logical date), so it can short-circuit before the
+// general parser's mode-specific branches and per-digit checked
+// arithmetic.
+//
+// Returns true and sets `daysSinceEpoch` on a successful match.
+// Returns false on any shape mismatch or invalid date — the caller
+// must then dispatch to the general parser so that the right error
+// message is produced.
+bool tryFastParseStrictIsoDate(
+    const char* str,
+    size_t len,
+    int32_t& daysSinceEpoch) {
+  if (len != 10 || str[4] != '-' || str[7] != '-') {
+    return false;
+  }
+  // Reject any non-digit byte by checking that all eight digits land
+  // in [0, 9] — fold the bound check into a single comparison via
+  // bitwise OR, so a non-digit byte (which underflows to a huge
+  // unsigned value) trips the same branch as an out-of-range digit.
+  const uint32_t yearThousands = static_cast<uint8_t>(str[0]) - '0';
+  const uint32_t yearHundreds = static_cast<uint8_t>(str[1]) - '0';
+  const uint32_t yearTens = static_cast<uint8_t>(str[2]) - '0';
+  const uint32_t yearOnes = static_cast<uint8_t>(str[3]) - '0';
+  const uint32_t monthTens = static_cast<uint8_t>(str[5]) - '0';
+  const uint32_t monthOnes = static_cast<uint8_t>(str[6]) - '0';
+  const uint32_t dayTens = static_cast<uint8_t>(str[8]) - '0';
+  const uint32_t dayOnes = static_cast<uint8_t>(str[9]) - '0';
+  if ((yearThousands | yearHundreds | yearTens | yearOnes | monthTens |
+       monthOnes | dayTens | dayOnes) > 9u) {
+    return false;
+  }
+  const int32_t year = static_cast<int32_t>(
+      yearThousands * 1000u + yearHundreds * 100u + yearTens * 10u + yearOnes);
+  const int32_t month = static_cast<int32_t>(monthTens * 10u + monthOnes);
+  const int32_t day = static_cast<int32_t>(dayTens * 10u + dayOnes);
+  // Year is always in [0, 9999], well inside the fast inverse domain
+  // (kYearMin, kYearMax), so daysSinceEpochFromDate takes its inline
+  // fast branch and the result fits in int32 with room to spare.
+  auto result = daysSinceEpochFromDate(year, month, day);
+  if (result.hasError()) {
+    return false;
+  }
+  daysSinceEpoch = static_cast<int32_t>(result.value());
+  return true;
+}
+
+} // namespace
+
 Expected<int32_t> fromDateString(const char* str, size_t len, ParseMode mode) {
+  int32_t fastDays;
+  if (tryFastParseStrictIsoDate(str, len, fastDays)) {
+    return fastDays;
+  }
+
   int64_t daysSinceEpoch;
   size_t pos = 0;
 
