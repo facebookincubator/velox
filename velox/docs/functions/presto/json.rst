@@ -196,6 +196,11 @@ JSON Functions
         SELECT json_parse('[1, 2, 3]'); -- JSON '[1,2,3]'
         SELECT json_parse('"abc"'); -- JSON '"abc"'
 
+    In the result, object keys are sorted and exact-duplicate keys are
+    collapsed, keeping the value of the last occurrence. Keys that become
+    equal only after decoding a control-character escape (for example
+    ``\n`` and its ``\uXXXX`` form) are not collapsed.
+
     .. _RFC 7159: https://datatracker.ietf.org/doc/html/rfc7159.html
 
 .. function:: json_size(json, value) -> bigint
