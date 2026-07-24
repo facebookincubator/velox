@@ -22,6 +22,10 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/memory/Memory.h"
 
+namespace facebook::velox {
+struct FileIoContext;
+} // namespace facebook::velox
+
 namespace facebook::velox::io {
 
 constexpr uint64_t DEFAULT_AUTO_PRELOAD_SIZE =
@@ -186,11 +190,29 @@ class ReaderOptions {
     return indexIoStats_;
   }
 
+  /// Returns the non-owning, caller-owned per-file IO context forwarded to
+  /// direct ReadFile calls (e.g. footer/metadata/index/stripe reads that
+  /// bypass BufferedInput). Null when unset.
+  const velox::FileIoContext* fileIoContext() const {
+    return fileIoContext_;
+  }
+
+  /// Stores a non-owning pointer to the per-file IO context. The caller
+  /// retains ownership and must keep the pointee alive for the lifetime of
+  /// any reader created from these options.
+  void setFileIoContext(const velox::FileIoContext* fileIoContext) {
+    fileIoContext_ = fileIoContext;
+  }
+
  protected:
   velox::memory::MemoryPool* pool_;
   std::shared_ptr<IoStatistics> dataIoStats_;
   std::shared_ptr<IoStatistics> metadataIoStats_;
   std::shared_ptr<IoStatistics> indexIoStats_;
+
+  // Non-owning pointer to the caller-owned per-file IO context. See
+  // setFileIoContext() for the lifetime contract.
+  const velox::FileIoContext* fileIoContext_{nullptr};
 
   std::shared_ptr<folly::Executor> ioExecutor_;
 
