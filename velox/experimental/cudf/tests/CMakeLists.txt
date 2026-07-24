@@ -288,6 +288,21 @@ velox_add_cudf_test(
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_window
 )
 
+# cuDF Join Fuzzer (CPU fallback enabled): unsupported operators fall back
+# to CPU transparently.
+add_executable(velox_cudf_join_fuzzer JoinFuzzer.cpp)
+set_target_properties(
+  velox_cudf_join_fuzzer
+  PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CUDF_TESTS_OUTPUT_DIR}
+)
+target_link_libraries(
+  velox_cudf_join_fuzzer
+  velox_join_fuzzer_lib
+  velox_cudf_exec
+  velox_functions_prestosql
+  velox_presto_serializer
+)
+
 add_subdirectory(iceberg)
 add_subdirectory(utils)
 
