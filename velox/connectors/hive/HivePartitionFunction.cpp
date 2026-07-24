@@ -17,128 +17,12 @@
 
 #include <utility>
 
+#include "velox/functions/lib/HiveHash.h"
+
 namespace facebook::velox::connector::hive {
 
 namespace {
-void mergeHash(bool mix, uint32_t oneHash, uint32_t& aggregateHash) {
-  aggregateHash = mix ? aggregateHash * 31 + oneHash : oneHash;
-}
-
-int32_t hashInt64(int64_t value) {
-  return ((*reinterpret_cast<uint64_t*>(&value)) >> 32) ^ value;
-}
-
-#if defined(__has_feature)
-#if __has_feature(__address_sanitizer__)
-__attribute__((no_sanitize("integer")))
-#endif
-#endif
-uint32_t hashBytes(StringView bytes, int32_t initialValue) {
-  uint32_t hash = initialValue;
-  auto* data = bytes.data();
-  for (auto i = 0; i < bytes.size(); ++i) {
-    hash = hash * 31 + *reinterpret_cast<const int8_t*>(data + i);
-  }
-  return hash;
-}
-
-int32_t hashTimestamp(const Timestamp& ts) {
-  return hashInt64((ts.getSeconds() << 30) | ts.getNanos());
-}
-
-template <TypeKind kind>
-inline uint32_t hashOne(typename TypeTraits<kind>::NativeType /* value */) {
-  VELOX_UNSUPPORTED(
-      "Hive partitioning function doesn't support {} type",
-      TypeTraits<kind>::name);
-  return 0; // Make compiler happy.
-}
-
-template <>
-inline uint32_t hashOne<TypeKind::BOOLEAN>(bool value) {
-  return value ? 1 : 0;
-}
-
-template <>
-inline uint32_t hashOne<TypeKind::TINYINT>(int8_t value) {
-  return static_cast<uint32_t>(value);
-}
-
-template <>
-inline uint32_t hashOne<TypeKind::SMALLINT>(int16_t value) {
-  return static_cast<uint32_t>(value);
-}
-
-template <>
-inline uint32_t hashOne<TypeKind::INTEGER>(int32_t value) {
-  return static_cast<uint32_t>(value);
-}
-
-template <>
-inline uint32_t hashOne<TypeKind::REAL>(float value) {
-  return static_cast<uint32_t>(*reinterpret_cast<const int32_t*>(&value));
-}
-
-template <>
-inline uint32_t hashOne<TypeKind::BIGINT>(int64_t value) {
-  return hashInt64(value);
-}
-
-template <>
-inline uint32_t hashOne<TypeKind::DOUBLE>(double value) {
-  return hashInt64(*reinterpret_cast<const int64_t*>(&value));
-}
-
-template <>
-inline uint32_t hashOne<TypeKind::VARCHAR>(StringView value) {
-  return hashBytes(value, 0);
-}
-
-template <>
-inline uint32_t hashOne<TypeKind::VARBINARY>(StringView value) {
-  return hashBytes(value, 0);
-}
-
-template <>
-inline uint32_t hashOne<TypeKind::TIMESTAMP>(Timestamp value) {
-  return hashTimestamp(value);
-}
-
-template <>
-inline uint32_t hashOne<TypeKind::UNKNOWN>(UnknownValue /*value*/) {
-  VELOX_FAIL("Unknown values cannot be non-NULL");
-}
-
-template <TypeKind kind>
-void hashPrimitive(
-    const DecodedVector& values,
-    const SelectivityVector& rows,
-    bool mix,
-    std::vector<uint32_t>& hashes) {
-  if (rows.isAllSelected()) {
-    // The compiler seems to be a little fickle with optimizations.
-    // Although rows.applyToSelected should do roughly the same thing, doing
-    // this here along with assigning rows.size() to a variable seems to help
-    // the compiler to inline hashOne showing a 50% performance improvement in
-    // benchmarks.
-    vector_size_t numRows = rows.size();
-    for (auto i = 0; i < numRows; ++i) {
-      const uint32_t hash = values.isNullAt(i)
-          ? 0
-          : hashOne<kind>(
-                values.valueAt<typename TypeTraits<kind>::NativeType>(i));
-      mergeHash(mix, hash, hashes[i]);
-    }
-  } else {
-    rows.applyToSelected([&](auto row) INLINE_LAMBDA {
-      const uint32_t hash = values.isNullAt(row)
-          ? 0
-          : hashOne<kind>(
-                values.valueAt<typename TypeTraits<kind>::NativeType>(row));
-      mergeHash(mix, hash, hashes[row]);
-    });
-  }
-}
+using facebook::velox::functions::HiveHash;
 
 void hashPrecomputed(
     uint32_t precomputedHash,
@@ -158,7 +42,7 @@ void HivePartitionFunction::hashTyped<TypeKind::BOOLEAN>(
     bool mix,
     std::vector<uint32_t>& hashes,
     size_t /* poolIndex */) {
-  hashPrimitive<TypeKind::BOOLEAN>(values, rows, mix, hashes);
+  HiveHash::hashPrimitive<TypeKind::BOOLEAN>(values, rows, mix, hashes);
 }
 
 template <>
@@ -168,7 +52,7 @@ void HivePartitionFunction::hashTyped<TypeKind::TINYINT>(
     bool mix,
     std::vector<uint32_t>& hashes,
     size_t /* poolIndex */) {
-  hashPrimitive<TypeKind::TINYINT>(values, rows, mix, hashes);
+  HiveHash::hashPrimitive<TypeKind::TINYINT>(values, rows, mix, hashes);
 }
 
 template <>
@@ -178,7 +62,7 @@ void HivePartitionFunction::hashTyped<TypeKind::SMALLINT>(
     bool mix,
     std::vector<uint32_t>& hashes,
     size_t /* poolIndex */) {
-  hashPrimitive<TypeKind::SMALLINT>(values, rows, mix, hashes);
+  HiveHash::hashPrimitive<TypeKind::SMALLINT>(values, rows, mix, hashes);
 }
 
 template <>
@@ -188,7 +72,7 @@ void HivePartitionFunction::hashTyped<TypeKind::INTEGER>(
     bool mix,
     std::vector<uint32_t>& hashes,
     size_t /* poolIndex */) {
-  hashPrimitive<TypeKind::INTEGER>(values, rows, mix, hashes);
+  HiveHash::hashPrimitive<TypeKind::INTEGER>(values, rows, mix, hashes);
 }
 
 template <>
@@ -198,7 +82,7 @@ void HivePartitionFunction::hashTyped<TypeKind::REAL>(
     bool mix,
     std::vector<uint32_t>& hashes,
     size_t /* poolIndex */) {
-  hashPrimitive<TypeKind::REAL>(values, rows, mix, hashes);
+  HiveHash::hashPrimitive<TypeKind::REAL>(values, rows, mix, hashes);
 }
 
 template <>
@@ -208,7 +92,7 @@ void HivePartitionFunction::hashTyped<TypeKind::BIGINT>(
     bool mix,
     std::vector<uint32_t>& hashes,
     size_t /* poolIndex */) {
-  hashPrimitive<TypeKind::BIGINT>(values, rows, mix, hashes);
+  HiveHash::hashPrimitive<TypeKind::BIGINT>(values, rows, mix, hashes);
 }
 
 template <>
@@ -218,7 +102,7 @@ void HivePartitionFunction::hashTyped<TypeKind::DOUBLE>(
     bool mix,
     std::vector<uint32_t>& hashes,
     size_t /* poolIndex */) {
-  hashPrimitive<TypeKind::DOUBLE>(values, rows, mix, hashes);
+  HiveHash::hashPrimitive<TypeKind::DOUBLE>(values, rows, mix, hashes);
 }
 
 template <>
@@ -228,7 +112,7 @@ void HivePartitionFunction::hashTyped<TypeKind::VARCHAR>(
     bool mix,
     std::vector<uint32_t>& hashes,
     size_t /* poolIndex */) {
-  hashPrimitive<TypeKind::VARCHAR>(values, rows, mix, hashes);
+  HiveHash::hashPrimitive<TypeKind::VARCHAR>(values, rows, mix, hashes);
 }
 
 template <>
@@ -238,7 +122,7 @@ void HivePartitionFunction::hashTyped<TypeKind::VARBINARY>(
     bool mix,
     std::vector<uint32_t>& hashes,
     size_t /* poolIndex */) {
-  hashPrimitive<TypeKind::VARBINARY>(values, rows, mix, hashes);
+  HiveHash::hashPrimitive<TypeKind::VARBINARY>(values, rows, mix, hashes);
 }
 
 template <>
@@ -248,7 +132,7 @@ void HivePartitionFunction::hashTyped<TypeKind::TIMESTAMP>(
     bool mix,
     std::vector<uint32_t>& hashes,
     size_t /* poolIndex */) {
-  hashPrimitive<TypeKind::TIMESTAMP>(values, rows, mix, hashes);
+  HiveHash::hashPrimitive<TypeKind::TIMESTAMP>(values, rows, mix, hashes);
 }
 
 template <>
@@ -258,7 +142,7 @@ void HivePartitionFunction::hashTyped<TypeKind::UNKNOWN>(
     bool mix,
     std::vector<uint32_t>& hashes,
     size_t /* poolIndex */) {
-  hashPrimitive<TypeKind::UNKNOWN>(values, rows, mix, hashes);
+  HiveHash::hashPrimitive<TypeKind::UNKNOWN>(values, rows, mix, hashes);
 }
 
 template <>
@@ -318,11 +202,11 @@ void HivePartitionFunction::hashTyped<TypeKind::ARRAY>(
       const auto length = arrayVector->sizeAt(index);
 
       for (size_t i = offset; i < offset + length; ++i) {
-        mergeHash(true, elementsHashes[i], hash);
+        HiveHash::mergeHash(true, elementsHashes[i], hash);
       }
     }
 
-    mergeHash(mix, hash, hashes[row]);
+    HiveHash::mergeHash(mix, hash, hashes[row]);
   });
 }
 
@@ -389,7 +273,7 @@ void HivePartitionFunction::hashTyped<TypeKind::MAP>(
       }
     }
 
-    mergeHash(mix, hash, hashes[row]);
+    HiveHash::mergeHash(mix, hash, hashes[row]);
   });
 }
 
@@ -429,7 +313,7 @@ void HivePartitionFunction::hashTyped<TypeKind::ROW>(
   }
 
   rows.applyToSelected([&](auto row) {
-    mergeHash(
+    HiveHash::mergeHash(
         mix,
         values.isNullAt(row) ? 0 : childHashes[values.index(row)],
         hashes[row]);
