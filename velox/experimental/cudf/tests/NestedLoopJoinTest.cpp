@@ -1624,13 +1624,12 @@ TEST_F(CudfNestedLoopJoinTest, buildStreamVisibleToAllProbeBatches) {
   constexpr int32_t kNumProbeBatches = 20;
   constexpr int32_t kProbeBatchSize = 500;
 
-  auto buildVectors = {
-      makeRowVector({sequence<int32_t>(kNumBuildRows)})};
+  auto buildVectors = {makeRowVector({sequence<int32_t>(kNumBuildRows)})};
 
   std::vector<RowVectorPtr> probeVectors;
   for (int32_t b = 0; b < kNumProbeBatches; ++b) {
-    probeVectors.push_back(
-        makeRowVector({sequence<int32_t>(kProbeBatchSize, b * kProbeBatchSize)}));
+    probeVectors.push_back(makeRowVector(
+        {sequence<int32_t>(kProbeBatchSize, b * kProbeBatchSize)}));
   }
 
   createDuckDbTable("t", probeVectors);
