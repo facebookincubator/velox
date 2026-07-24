@@ -18,6 +18,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 set(CMAKE_CXX_EXTENSIONS ON) # Big Int is an extension
 message(STATUS "CXX standard: ${CMAKE_CXX_STANDARD}")
 
+if(NOT DEFINED VCPKG_APPLOCAL_DEPS)
+  set(VCPKG_APPLOCAL_DEPS OFF)
+endif()
+# This must be set before project() enables the compiler. Non-MSVC toolchains
+# ignore CMAKE_MSVC_RUNTIME_LIBRARY.
+if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
+
 # The policy allows us to change options without caching.
 cmake_policy(SET CMP0077 NEW)
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
@@ -409,6 +418,11 @@ if(
           )
           AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 15
         )
+      OR
+        (
+          "${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC"
+          AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 19.30
+        )
     )
 )
   message(
@@ -417,24 +431,32 @@ if(
   )
 endif()
 
-execute_process(
-  COMMAND
-    bash -c
-    "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
-  OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
-  RESULT_VARIABLE COMMAND_STATUS
-)
+if(MSVC)
+  add_compile_definitions(
+    USE_VELOX_COMMON_BASE
+    HAS_UNCAUGHT_EXCEPTIONS
+    GLOG_NO_ABBREVIATED_SEVERITIES
+    NOMINMAX
+  )
+else()
+  execute_process(
+    COMMAND
+      bash -c
+      "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
+    OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
+    RESULT_VARIABLE COMMAND_STATUS
+  )
 
-if(COMMAND_STATUS EQUAL "1")
-  message(FATAL_ERROR "Unable to determine compiler flags!")
+  if(COMMAND_STATUS EQUAL "1")
+    message(FATAL_ERROR "Unable to determine compiler flags!")
+  endif()
+  message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
+
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_VELOX_COMMON_BASE")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAS_UNCAUGHT_EXCEPTIONS")
 endif()
-message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
-
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_VELOX_COMMON_BASE")
-
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAS_UNCAUGHT_EXCEPTIONS")
-if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64" AND NOT MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
 endif()
 
@@ -484,17 +506,18 @@ if(ENABLE_ALL_WARNINGS)
       string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=tautological-compare")
     endif()
   endif()
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(
+      KNOWN_WARNINGS
+      "-Wno-unused \
+         -Wno-unused-parameter \
+         -Wno-sign-compare \
+         -Wno-ignored-qualifiers \
+         ${KNOWN_COMPILER_SPECIFIC_WARNINGS}"
+    )
 
-  set(
-    KNOWN_WARNINGS
-    "-Wno-unused \
-       -Wno-unused-parameter \
-       -Wno-sign-compare \
-       -Wno-ignored-qualifiers \
-       ${KNOWN_COMPILER_SPECIFIC_WARNINGS}"
-  )
-
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
+  endif()
 endif()
 
 if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
@@ -567,9 +590,13 @@ if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
 endif()
 
 velox_set_source(ICU)
+set(VELOX_ICU_COMPONENTS data i18n io uc)
+if(NOT WIN32)
+  list(APPEND VELOX_ICU_COMPONENTS tu)
+endif()
 velox_resolve_dependency(
   ICU
-  COMPONENTS data i18n io uc tu
+  COMPONENTS ${VELOX_ICU_COMPONENTS}
 )
 
 set(
@@ -601,7 +628,11 @@ endif()
 
 velox_set_source(gflags)
 
-velox_resolve_dependency(gflags COMPONENTS ${VELOX_GFLAGS_TYPE})
+if(WIN32)
+  velox_resolve_dependency(gflags)
+else()
+  velox_resolve_dependency(gflags COMPONENTS ${VELOX_GFLAGS_TYPE})
+endif()
 
 if(NOT TARGET gflags::gflags)
   # This is a bit convoluted, but we want to be able to use gflags::gflags as a
@@ -788,6 +819,26 @@ if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
 endif()
 find_package(BISON 3.0.4 REQUIRED)
 find_package(FLEX 2.5.13 REQUIRED)
+if(WIN32 AND FLEX_FOUND AND (NOT FLEX_INCLUDE_DIRS OR FLEX_INCLUDE_DIR MATCHES "NOTFOUND"))
+  get_filename_component(_flex_bin_dir "${FLEX_EXECUTABLE}" DIRECTORY)
+  set(_flex_include_candidates
+    "${_flex_bin_dir}"
+    "${_flex_bin_dir}/.."
+    "${_flex_bin_dir}/../include"
+  )
+  if(_flex_bin_dir MATCHES "[\\/]Links$")
+    get_filename_component(_winget_root "${_flex_bin_dir}" DIRECTORY)
+    file(GLOB _winget_flex_dirs "${_winget_root}/Packages/WinFlexBison*")
+    list(APPEND _flex_include_candidates ${_winget_flex_dirs})
+  endif()
+  foreach(_flex_include_candidate IN LISTS _flex_include_candidates)
+    if(EXISTS "${_flex_include_candidate}/FlexLexer.h")
+      set(FLEX_INCLUDE_DIR "${_flex_include_candidate}" CACHE PATH "Flex include directory" FORCE)
+      set(FLEX_INCLUDE_DIRS "${_flex_include_candidate}")
+      break()
+    endif()
+  endforeach()
+endif()
 find_package(double-conversion 3.1.5 REQUIRED)
 
 include_directories(SYSTEM velox)
@@ -802,8 +853,10 @@ endif()
 velox_set_source(xsimd)
 velox_resolve_dependency(xsimd 10.0.0)
 
-velox_set_source(stemmer)
-velox_resolve_dependency(stemmer)
+if(VELOX_ENABLE_PRESTO_FUNCTIONS)
+  velox_set_source(stemmer)
+  velox_resolve_dependency(stemmer)
+endif()
 
 if(VELOX_BUILD_TESTING)
   set(BUILD_TESTING ON)
@@ -815,7 +868,11 @@ include_directories(.)
 # Adding this down here prevents warnings in dependencies from stopping the
 # build
 if("${TREAT_WARNINGS_AS_ERRORS}")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+  if(MSVC)
+    add_compile_options(/WX)
+  else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+  endif()
 endif()
 
 # Enable the ASAN and UBSAN sanitzers for Clang 20 and above.
