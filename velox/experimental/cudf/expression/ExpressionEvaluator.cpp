@@ -1456,6 +1456,120 @@ class UpperFunction : public CudfFunction {
   }
 };
 
+// Presto strpos(string, substring): 1-based character position of the first
+// occurrence of substring in string, or 0 when it is not present. Backed by
+// cudf::strings::find, which returns the 0-based character position (-1 when
+// not found); adding one reproduces Presto semantics for both the found and
+// not-found cases. Positions are character (code-point) based on both sides,
+// matching Presto. A constant substring uses the string_scalar overload (no
+// target column is materialised); a column substring uses the column overload.
+class StrposFunction : public CudfFunction {
+ public:
+  explicit StrposFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+    VELOX_CHECK_EQ(expr->inputs().size(), 2, "strpos expects exactly 2 inputs");
+
+    if (auto stringExpr =
+            std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0])) {
+      stringIsConstant_ = true;
+      stringIsNull_ = stringExpr->value()->isNullAt(0);
+      if (!stringIsNull_) {
+        string_ = stringExpr->value()->toString(0);
+      }
+    }
+
+    if (auto targetExpr =
+            std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1])) {
+      targetIsConstant_ = true;
+      targetIsNull_ = targetExpr->value()->isNullAt(0);
+      if (!targetIsNull_) {
+        target_ = targetExpr->value()->toString(0);
+      }
+    }
+
+    VELOX_CHECK(
+        !(stringIsConstant_ && targetIsConstant_),
+        "strpos with a constant string and substring is not supported by the "
+        "cuDF evaluator because there is no input column to derive the output "
+        "row count from");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK(
+        !inputColumns.empty(),
+        "strpos requires at least one non-literal input column");
+    // inputColumns holds only non-literal children, so the first entry
+    // determines the output row count even when the string argument is
+    // constant.
+    const auto outputRowCount = asView(inputColumns[0]).size();
+
+    // strpos(NULL, x) and strpos(x, NULL) are NULL for every row;
+    // cudf::strings::find has no null-operand overloads, so produce an all-null
+    // bigint column directly.
+    if ((stringIsConstant_ && stringIsNull_) ||
+        (targetIsConstant_ && targetIsNull_)) {
+      const auto nullPosition =
+          cudf::numeric_scalar<int64_t>(0, false, stream, mr);
+      return cudf::make_column_from_scalar(
+          nullPosition, outputRowCount, stream, mr);
+    }
+
+    size_t nextInput = 0;
+    std::unique_ptr<cudf::column> stringHolder;
+    cudf::column_view stringColumn;
+    if (stringIsConstant_) {
+      cudf::string_scalar stringScalar(string_, !stringIsNull_, stream, mr);
+      stringHolder = cudf::make_column_from_scalar(
+          stringScalar, outputRowCount, stream, mr);
+      stringColumn = stringHolder->view();
+    } else {
+      stringColumn = asView(inputColumns[nextInput++]);
+    }
+    const cudf::strings_column_view stringsView(stringColumn);
+
+    // 0-based character position of the first match, -1 when not found. Nulls
+    // in either operand propagate to a null result, matching Velox.
+    std::unique_ptr<cudf::column> found;
+    if (targetIsConstant_) {
+      cudf::string_scalar targetScalar(target_, true, stream, mr);
+      found = cudf::strings::find(stringsView, targetScalar, 0, -1, stream, mr);
+    } else {
+      const cudf::strings_column_view targetView(
+          asView(inputColumns[nextInput]));
+      found = cudf::strings::find(stringsView, targetView, 0, stream, mr);
+    }
+
+    // Shift to Presto's 1-based position (not-found -1 becomes 0) and widen to
+    // bigint in a single kernel. Adding a valid scalar preserves nulls, so null
+    // rows stay null.
+    const auto one = cudf::numeric_scalar<int32_t>(1, true, stream, mr);
+    return cudf::binary_operation(
+        found->view(),
+        one,
+        cudf::binary_operator::ADD,
+        cudf::data_type{cudf::type_id::INT64},
+        stream,
+        mr);
+  }
+
+ private:
+  // Set when the string argument is a constant; the value and its nullness are
+  // read once at construction.
+  bool stringIsConstant_{false};
+  bool stringIsNull_{false};
+  // Set when the substring argument is a constant; the value and its nullness
+  // are read once at construction.
+  bool targetIsConstant_{false};
+  bool targetIsNull_{false};
+  // Constant string / substring values, valid only when the corresponding
+  // *IsConstant_ flag is set and the value is not null.
+  std::string string_;
+  std::string target_;
+};
+
 class LikeFunction : public CudfFunction {
  public:
   explicit LikeFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -2373,6 +2487,17 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       },
       {FunctionSignatureBuilder()
            .returnType("varchar")
+           .argumentType("varchar")
+           .build()});
+
+  registerCudfFunction(
+      prefix + "strpos",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<StrposFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("bigint")
+           .argumentType("varchar")
            .argumentType("varchar")
            .build()});
 
