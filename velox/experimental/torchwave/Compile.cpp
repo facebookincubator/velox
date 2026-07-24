@@ -2205,7 +2205,10 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
     return nullptr;
   }
   auto compositeKernel = std::make_unique<CompositeKernel>(
-      std::move(opStorage_), std::move(kernelOpStorage_), includes_);
+      std::move(opStorage_),
+      std::move(kernelOpStorage_),
+      includes_,
+      nextKernelId());
   // Values whose last use is in this node (graph outputs already excluded);
   // WaveConfig::freeIntermediates releases their frame tensors after execute().
   std::vector<nativert::ValueId> lastUseIds;
