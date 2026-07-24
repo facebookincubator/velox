@@ -241,6 +241,19 @@ TEST_F(ExecutorTest, scatterTest) {
   }
 }
 
+// An integer gather g=base[gather_idx] (tw.index_elt_one) reused as an index in
+// two places, so it materializes in an earlier ProjectNode and both later uses
+// import it through a prim.ListPack. One use is a tw.index_put_elt_one fused
+// with a downstream elementwise, whose self clone and ListPack index element
+// come from earlier kernels. Regresses the elementwise leaf-collection gap
+// where such a cross-kernel value was dropped from the ElementExpr inputs (the
+// fused index_put self or ListPack index reached codegen with no param slot).
+TEST_F(ExecutorTest, indexListpackReuseTest) {
+  runTest(
+      "data/index_listpack_reuse_test.pt2",
+      "data/index_listpack_reuse_test_results.pt");
+}
+
 // logit (inverse sigmoid), with eps=None and with an eps clamp, as a fused
 // elementwise op.
 TEST_F(ExecutorTest, logitTest) {
