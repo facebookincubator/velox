@@ -30,18 +30,6 @@ inline void registerArraySplitIntoChunksFunctions(const std::string& prefix) {
 
 } // namespace
 void registerArraySplitIntoChunksFunctions(const std::string& prefix) {
-  registerArraySplitIntoChunksFunctions<int8_t>(prefix);
-  registerArraySplitIntoChunksFunctions<int16_t>(prefix);
-  registerArraySplitIntoChunksFunctions<int32_t>(prefix);
-  registerArraySplitIntoChunksFunctions<int64_t>(prefix);
-  registerArraySplitIntoChunksFunctions<int128_t>(prefix);
-  registerArraySplitIntoChunksFunctions<float>(prefix);
-  registerArraySplitIntoChunksFunctions<double>(prefix);
-  registerArraySplitIntoChunksFunctions<bool>(prefix);
-  registerArraySplitIntoChunksFunctions<Timestamp>(prefix);
-  registerArraySplitIntoChunksFunctions<Date>(prefix);
-  registerArraySplitIntoChunksFunctions<Varchar>(prefix);
-  registerArraySplitIntoChunksFunctions<Varbinary>(prefix);
   registerArraySplitIntoChunksFunctions<Generic<T1>>(prefix);
 }
 } // namespace facebook::velox::functions
