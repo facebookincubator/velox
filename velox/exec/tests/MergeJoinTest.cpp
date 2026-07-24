@@ -2532,6 +2532,125 @@ TEST_F(MergeJoinTest, dynamicOutputBatchSizingDisabledByDefault) {
   EXPECT_LE(outputBatchSizes.back(), preferredRows);
 }
 
+TEST_F(MergeJoinTest, fullOuterJoinWithoutDuplicateMatch) {
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int32_t>({1, 2, 3, 5, 6, std::nullopt}),
+          makeNullableFlatVector<double>(
+              {2.0, 1.0, 3.0, 1.0, 6.0, std::nullopt}),
+      });
+
+  auto right = makeRowVector(
+      {"c", "d"},
+      {
+          makeNullableFlatVector<int32_t>({0, 2, 3, 4, 5, 7, std::nullopt}),
+          makeNullableFlatVector<double>(
+              {0.0, 3.0, 2.0, 1.0, 3.0, 7.0, std::nullopt}),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto rightPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"a"},
+              {"c"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "b < d",
+              {"a", "b", "c", "d"},
+              core::JoinType::kFull)
+          .planNode();
+  AssertQueryBuilder(rightPlan, duckDbQueryRunner_)
+      .assertResults("SELECT * from t FULL OUTER JOIN u ON a = c AND b < d");
+}
+
+TEST_F(MergeJoinTest, fullOuterJoinWithDuplicateMatch) {
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int32_t>({1, 2, 2, 2, 3, 5, 6, std::nullopt}),
+          makeNullableFlatVector<double>(
+              {2.0, 100.0, 1.0, 1.0, 3.0, 1.0, 6.0, std::nullopt}),
+      });
+
+  auto right = makeRowVector(
+      {"c", "d"},
+      {
+          makeNullableFlatVector<int32_t>(
+              {0, 2, 2, 2, 2, 3, 4, 5, 7, std::nullopt}),
+          makeNullableFlatVector<double>(
+              {0.0, 3.0, -1.0, -1.0, 3.0, 2.0, 1.0, 3.0, 7.0, std::nullopt}),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto rightPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"a"},
+              {"c"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "b < d",
+              {"a", "b", "c", "d"},
+              core::JoinType::kFull)
+          .planNode();
+  AssertQueryBuilder(rightPlan, duckDbQueryRunner_)
+      .assertResults("SELECT * from t FULL OUTER JOIN u ON a = c AND b < d");
+}
+
+TEST_F(MergeJoinTest, fullOuterJoinRightRowIdCollisionAcrossBatches) {
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int32_t>({1, 2}),
+          makeFlatVector<int32_t>({5, 5}),
+      });
+
+  auto rightBatch1 = makeRowVector(
+      {"c", "d"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1}),
+          makeFlatVector<int32_t>({10, 10, 10, 10}),
+      });
+
+  auto rightBatch2 = makeRowVector(
+      {"c", "d"},
+      {
+          makeFlatVector<int32_t>({2, 2, 2, 2}),
+          makeFlatVector<int32_t>({0, 0, 0, 0}),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {rightBatch1, rightBatch2});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({left})
+                  .mergeJoin(
+                      {"a"},
+                      {"c"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({rightBatch1, rightBatch2})
+                          .planNode(),
+                      "b < d",
+                      {"a", "b", "c", "d"},
+                      core::JoinType::kFull)
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "32")
+      .assertResults("SELECT * from t FULL OUTER JOIN u ON a = c AND b < d");
+}
+
 TEST_F(MergeJoinTest, flatMapVectorInnerJoin) {
   auto left = makeRowVector(
       {"t_c0", "t_c1"},
