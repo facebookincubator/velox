@@ -81,7 +81,8 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
 
     case TypeKind::VARBINARY:
     case TypeKind::VARCHAR:
-      return std::make_unique<StringColumnReader>(fileType, params, scanSpec);
+      return std::make_unique<StringColumnReader>(
+          requestedType, fileType, params, scanSpec);
 
     case TypeKind::ARRAY: {
       VELOX_CHECK(requestedType->isArray(), "Requested type must be array");

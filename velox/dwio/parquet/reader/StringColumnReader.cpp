@@ -14,17 +14,22 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/parquet/reader/StringColumnReader.h"
+#define USE_UNSTABLE_GEOS_CPP_API 1
+#include <geos/io/WKBReader.h>
 
+#include "velox/common/geospatial/GeometrySerde.h"
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
+#include "velox/dwio/parquet/reader/StringColumnReader.h"
+#include "velox/functions/prestosql/types/GeometryType.h"
 
 namespace facebook::velox::parquet {
 
 StringColumnReader::StringColumnReader(
+    const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     ParquetParams& params,
     common::ScanSpec& scanSpec)
-    : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec) {}
+    : SelectiveColumnReader(requestedType, fileType, params, scanSpec) {}
 
 uint64_t StringColumnReader::skip(uint64_t numValues) {
   formatData_->skip(numValues);
@@ -46,17 +51,46 @@ void StringColumnReader::read(
 void StringColumnReader::getValues(const RowSet& rows, VectorPtr* result) {
   if (scanState_.dictionary.values) {
     auto dictionaryValues =
-        formatData_->as<ParquetData>().dictionaryValues(fileType_->type());
+        formatData_->as<ParquetData>().dictionaryValues(requestedType_);
     compactScalarValues<int32_t, int32_t>(rows, false);
 
     *result = std::make_shared<DictionaryVector<StringView>>(
         pool_, resultNulls(), numValues_, dictionaryValues, values_);
-    return;
+  } else {
+    rawStringBuffer_ = nullptr;
+    rawStringSize_ = 0;
+    rawStringUsed_ = 0;
+    getFlatValues<StringView, StringView>(rows, result, requestedType_);
   }
-  rawStringBuffer_ = nullptr;
-  rawStringSize_ = 0;
-  rawStringUsed_ = 0;
-  getFlatValues<StringView, StringView>(rows, result, fileType_->type());
+
+  if(isGeometryType(requestedType_) && !allNull_){
+    DecodedVector decoded{**result};
+    auto geometryResult = BaseVector::create<FlatVector<StringView>>(
+        requestedType_, (*result)->size(), pool_);
+    auto* flat = geometryResult->asFlatVector<StringView>();
+
+    geos::io::WKBReader wkbReader;
+    for (vector_size_t i = 0; i < flat->size(); ++i) {
+      if (decoded.isNullAt(i)) {
+        flat->setNull(i, true);
+        continue;
+      }
+      	
+      const auto& wkb = decoded.valueAt<StringView>(i);
+      std::unique_ptr<geos::geom::Geometry> geosGeometry;
+      try {
+        geosGeometry = wkbReader.read(
+            reinterpret_cast<const unsigned char*>(wkb.data()), wkb.size());
+      } catch (const std::exception& e) {
+        VELOX_USER_FAIL("Failed to parse well-known binary on column '{}': {}", scanSpec_->fieldName(), e.what());
+      }
+      std::string serialized;
+      common::geospatial::GeometrySerializer::serialize(*geosGeometry, serialized);
+      flat->set(i, StringView(serialized));
+    }
+
+    *result = geometryResult;
+  }
 }
 
 void StringColumnReader::dedictionarize() {
@@ -90,4 +124,5 @@ void StringColumnReader::dedictionarize() {
   scanState_.clear();
   formatData_->as<ParquetData>().clearDictionary();
 }
+
 } // namespace facebook::velox::parquet
