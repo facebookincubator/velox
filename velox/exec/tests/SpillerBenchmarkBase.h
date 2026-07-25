@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#pragma once
+
 #include <gflags/gflags.h>
 
 #include <folly/executors/IOThreadPoolExecutor.h>
@@ -45,6 +47,14 @@ class SpillerBenchmarkBase {
   SpillerBenchmarkBase() = default;
 
   virtual ~SpillerBenchmarkBase() = default;
+
+  /// Registers the vector serdes the spill path depends on: the global default
+  /// Presto serde and, critically, the *named* "Presto" serde that
+  /// SpillWriter/SpillReadFile look up via getNamedVectorSerde(). Both the
+  /// benchmark mains and the CI smoke test call this so the registration is
+  /// exercised in CI and a regression fails a test instead of a manual run.
+  /// Idempotent: safe to call more than once.
+  static void registerSerde();
 
   /// Sets up the test.
   virtual void setUp() = 0;
