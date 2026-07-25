@@ -1213,6 +1213,9 @@ void registerBuiltins() {
   MetadataBuilder("torch.ops.aten.__or__.Tensor")
       .elementwiseFunc("__bitwise_or")
       .registerOp();
+  MetadataBuilder("torch.ops.aten.__and__.Scalar")
+      .elementwiseFunc("__bitwise_and")
+      .registerOp();
 
   // Bitwise (Tensor, Scalar).
   MetadataBuilder("torch.ops.aten.bitwise_and.Scalar")
@@ -2932,6 +2935,25 @@ void registerBuiltins() {
           })
       .registerOp();
 
+  // split_with_sizes: splits self along a dim into chunks whose sizes are given
+  // by split_sizes. Each chunk is a view keeping self's rank (only the split
+  // dim's extent changes), so it is not necessarily contiguous.
+  MetadataBuilder("torch.ops.aten.split_with_sizes.default")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            int8_t rank = types.rank(inputAt(node, 0));
+            std::vector<ValueConstraint> constraints;
+            constraints.reserve(node->outputs().size());
+            for (size_t i = 0; i < node->outputs().size(); ++i) {
+              constraints.push_back({rank});
+            }
+            return constraints;
+          })
+      .registerOp();
+
   // Concat.
   // concat is an alias of cat with the identical (tensors, dim) signature.
   // Retarget it to aten.cat so it shares cat's full handling (size shortcut,
@@ -4261,6 +4283,21 @@ void registerBuiltins() {
           })
       .registerOp();
 
+  // squeeze.dim: removes one dim if it is size 1 (a no-op otherwise), so the
+  // output rank is data-dependent; leave it unknown. It is a view.
+  MetadataBuilder("torch.ops.aten.squeeze.dim")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .viewOfArg(0)
+      .metadataOnly()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            return {
+                {.rank = -1, .contiguous = types.contiguous(inputAt(node, 0))}};
+          })
+      .registerOp();
+
   // --- Reductions (eager standalone, fresh contiguous output) ---
 
   // any.dim / sum.dim_IntList / min.dim: rank drops by the reduced dims unless
@@ -4360,6 +4397,39 @@ void registerBuiltins() {
             return {{.rank = types.rank(inputAt(node, 0)), .contiguous = true}};
           })
       .registerOp();
+  // scatter_add: fresh copy of self with src values added at the indexed
+  // positions; output has self's shape.
+  MetadataBuilder("torch.ops.aten.scatter_add.default")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            return {{.rank = types.rank(inputAt(node, 0)), .contiguous = true}};
+          })
+      .registerOp();
+  // select_scatter: fresh copy of self with self.select(dim, index) replaced by
+  // src; output has self's shape.
+  MetadataBuilder("torch.ops.aten.select_scatter.default")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            return {{.rank = types.rank(inputAt(node, 0)), .contiguous = true}};
+          })
+      .registerOp();
+  // copy (functional): returns a tensor with self's shape holding src's values
+  // (src broadcast to self); output has self's rank.
+  MetadataBuilder("torch.ops.aten.copy.default")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            return {{.rank = types.rank(inputAt(node, 0)), .contiguous = true}};
+          })
+      .registerOp();
   // aten.bucketize.Tensor and aten.searchsorted.Tensor are registered earlier
   // with a maybeReplace that retargets them to the fused tw.bucketize /
   // tw.searchsorted (falling back to the standalone eager op for the
@@ -4367,6 +4437,18 @@ void registerBuiltins() {
   // registration, so they must not be re-registered as plain standalone here.
   // sort: (values, indices), both with self's shape.
   MetadataBuilder("torch.ops.aten.sort.default")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            ValueConstraint c{
+                .rank = types.rank(inputAt(node, 0)), .contiguous = true};
+            return {c, c};
+          })
+      .registerOp();
+  // sort.stable: same (values, indices) shapes as sort.default.
+  MetadataBuilder("torch.ops.aten.sort.stable")
       .sizeOrdinal({0})
       .isStandalone()
       .outputConstraints(
