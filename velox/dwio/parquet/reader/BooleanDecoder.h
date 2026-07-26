@@ -23,6 +23,11 @@
 
 namespace facebook::velox::parquet {
 
+/// Decode plain-encoded boolean columns from Parquet.
+///
+/// Parquet stores booleans as a packed bit stream in LSB-first order.
+/// The readWithVisitor fast path processes 8 booleans per byte when
+/// reading dense sequential values without nulls.
 class BooleanDecoder {
  public:
   BooleanDecoder(const char* start, const char* /*end*/)
@@ -69,6 +74,91 @@ class BooleanDecoder {
     int32_t toSkip;
     bool atEnd = false;
     const bool allowNulls = hasNulls && visitor.allowNulls();
+
+    // Fast path: dense reads without nulls. Process 8 booleans per byte
+    // by avoiding the per-bit readBoolean() branch overhead.
+    if constexpr (!hasNulls && Visitor::dense) {
+      for (;;) {
+        if (remainingBits_ == 0) {
+          // Process a full byte (8 booleans) at once.
+          auto byte = *reinterpret_cast<const uint8_t*>(bufferStart_);
+          bufferStart_++;
+          // Preserve the loaded byte so that, if the visitor reaches
+          // 'atEnd' part way through, a later readWithVisitor() call can
+          // resume at the correct bit. 'PageReader' keeps the decoder
+          // state between calls, so on every early return we must record
+          // how many bits of this byte are still unread in
+          // 'remainingBits_'.
+          reversedLastByte_ = byte;
+
+          // Unrolled: extract each bit and call visitor.process().
+          toSkip = visitor.process(static_cast<bool>(byte & 1), atEnd);
+          if (atEnd) {
+            remainingBits_ = 7;
+            return;
+          }
+          ++current;
+
+          toSkip = visitor.process(static_cast<bool>(byte & 2), atEnd);
+          if (atEnd) {
+            remainingBits_ = 6;
+            return;
+          }
+          ++current;
+
+          toSkip = visitor.process(static_cast<bool>(byte & 4), atEnd);
+          if (atEnd) {
+            remainingBits_ = 5;
+            return;
+          }
+          ++current;
+
+          toSkip = visitor.process(static_cast<bool>(byte & 8), atEnd);
+          if (atEnd) {
+            remainingBits_ = 4;
+            return;
+          }
+          ++current;
+
+          toSkip = visitor.process(static_cast<bool>(byte & 16), atEnd);
+          if (atEnd) {
+            remainingBits_ = 3;
+            return;
+          }
+          ++current;
+
+          toSkip = visitor.process(static_cast<bool>(byte & 32), atEnd);
+          if (atEnd) {
+            remainingBits_ = 2;
+            return;
+          }
+          ++current;
+
+          toSkip = visitor.process(static_cast<bool>(byte & 64), atEnd);
+          if (atEnd) {
+            remainingBits_ = 1;
+            return;
+          }
+          ++current;
+
+          toSkip = visitor.process(static_cast<bool>(byte & 128), atEnd);
+          if (atEnd) {
+            remainingBits_ = 0;
+            return;
+          }
+          ++current;
+        } else {
+          // Drain remaining bits from the previously loaded byte.
+          toSkip = visitor.process(readBoolean(), atEnd);
+          ++current;
+          if (atEnd) {
+            return;
+          }
+        }
+      }
+    }
+
+    // General path: handles nulls, sparse reads, and filters.
     for (;;) {
       if (hasNulls && allowNulls && bits::isBitNull(nulls, current)) {
         toSkip = visitor.processNull(atEnd);
