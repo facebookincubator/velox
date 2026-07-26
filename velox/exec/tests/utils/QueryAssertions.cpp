@@ -895,6 +895,11 @@ void DuckDbQueryRunner::createTable(
       for (int32_t column = 0; column < rowType.size(); column++) {
         auto columnVector = vector->childAt(column);
         auto type = rowType.childAt(column);
+        // Resolve lazy vectors before per-row access. duckValueAt casts
+        // the vector to SimpleVector which returns null for a LazyVector.
+        if (columnVector->isLazy()) {
+          columnVector = BaseVector::loadedVectorShared(columnVector);
+        }
         if (columnVector->isNullAt(row)) {
           appender.Append(nullptr);
         } else if (type->isArray()) {
