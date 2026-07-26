@@ -69,7 +69,6 @@ TEST_F(TreeOfLosersTest, nextWithEquals) {
     auto result = merge.nextWithEquals();
     if (result.first == nullptr) {
       FAIL() << "Merge ends too soon";
-      break;
     }
     auto number = result.first->current()->value();
     EXPECT_EQ(allNumbers[i], number);
@@ -95,7 +94,6 @@ TEST_F(TreeOfLosersTest, singleWithEquals) {
     auto result = merge.nextWithEquals();
     if (result.first == nullptr) {
       FAIL() << "Merge ends too soon";
-      break;
     }
     auto number = result.first->current()->value();
     EXPECT_EQ(allNumbers[i], number);
