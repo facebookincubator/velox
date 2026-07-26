@@ -2410,55 +2410,57 @@ TEST_F(SparkCastExprTestAnsiOn, doubleToDecimal) {
   testDoubleToDecimal();
 
   // Under ANSI ON, inputs that overflow the target precision/scale throw.
+  // The error message embeds the input value, whose float-to-string form is
+  // toolchain-dependent, so assert only the stable suffix.
   testThrow<double>(
       DOUBLE(),
       DECIMAL(10, 2),
       {9999999999999999999999.99},
-      "Cannot cast DOUBLE '1E22' to DECIMAL(10, 2). Result overflows.");
+      "to DECIMAL(10, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(10, 2),
       {static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1)},
-      "Cannot cast DOUBLE '9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "to DECIMAL(10, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(10, 2),
       {static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1)},
-      "Cannot cast DOUBLE '-9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "to DECIMAL(10, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(20, 2),
       {static_cast<double>(DecimalUtil::kLongDecimalMax)},
-      "Cannot cast DOUBLE '1E38' to DECIMAL(20, 2). Result overflows.");
+      "to DECIMAL(20, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(20, 2),
       {static_cast<double>(DecimalUtil::kLongDecimalMin)},
-      "Cannot cast DOUBLE '-1E38' to DECIMAL(20, 2). Result overflows.");
+      "to DECIMAL(20, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(38, 2),
       {std::numeric_limits<double>::max()},
-      "Cannot cast DOUBLE '1.7976931348623157E308' to DECIMAL(38, 2). Result overflows.");
+      "to DECIMAL(38, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(38, 2),
       {std::numeric_limits<double>::lowest()},
-      "Cannot cast DOUBLE '-1.7976931348623157E308' to DECIMAL(38, 2). Result overflows.");
+      "to DECIMAL(38, 2). Result overflows.");
 
   // Under ANSI ON, non-finite inputs throw.
   testThrow<double>(
       DOUBLE(),
       DECIMAL(38, 2),
       {INFINITY},
-      "Cannot cast DOUBLE 'Infinity' to DECIMAL(38, 2). The input value should be finite.");
+      "to DECIMAL(38, 2). The input value should be finite.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(38, 2),
       {NAN},
-      "Cannot cast DOUBLE 'NaN' to DECIMAL(38, 2). The input value should be finite.");
+      "to DECIMAL(38, 2). The input value should be finite.");
 }
 
 TEST_F(SparkCastExprTestAnsiOn, realToDecimal) {
@@ -2466,6 +2468,8 @@ TEST_F(SparkCastExprTestAnsiOn, realToDecimal) {
   testRealToDecimal();
 
   // Under ANSI ON, inputs that overflow the target precision/scale throw.
+  // The error message embeds the input value, whose float-to-string form is
+  // toolchain-dependent, so assert only the stable suffix.
   testThrow<float>(
       REAL(), DECIMAL(10, 2), {9999999999999999999999.99}, "Result overflows.");
   testThrow<float>(
@@ -2473,45 +2477,45 @@ TEST_F(SparkCastExprTestAnsiOn, realToDecimal) {
       DECIMAL(10, 2),
       {static_cast<float>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1)},
-      "Cannot cast REAL '9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "to DECIMAL(10, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(10, 2),
       {static_cast<float>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1)},
-      "Cannot cast REAL '-9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "to DECIMAL(10, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(20, 2),
       {static_cast<float>(DecimalUtil::kLongDecimalMax)},
-      "Cannot cast REAL '9.999999680285692E37' to DECIMAL(20, 2). Result overflows.");
+      "to DECIMAL(20, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(20, 2),
       {static_cast<float>(DecimalUtil::kLongDecimalMin)},
-      "Cannot cast REAL '-9.999999680285692E37' to DECIMAL(20, 2). Result overflows.");
+      "to DECIMAL(20, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(38, 2),
       {std::numeric_limits<float>::max()},
-      "Cannot cast REAL '3.4028234663852886E38' to DECIMAL(38, 2). Result overflows.");
+      "to DECIMAL(38, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(38, 2),
       {std::numeric_limits<float>::lowest()},
-      "Cannot cast REAL '-3.4028234663852886E38' to DECIMAL(38, 2). Result overflows.");
+      "to DECIMAL(38, 2). Result overflows.");
 
   // Under ANSI ON, non-finite inputs throw.
   testThrow<float>(
       REAL(),
       DECIMAL(38, 2),
       {INFINITY},
-      "Cannot cast REAL 'Infinity' to DECIMAL(38, 2). The input value should be finite.");
+      "to DECIMAL(38, 2). The input value should be finite.");
   testThrow<float>(
       REAL(),
       DECIMAL(38, 2),
       {NAN},
-      "Cannot cast REAL 'NaN' to DECIMAL(38, 2). The input value should be finite.");
+      "to DECIMAL(38, 2). The input value should be finite.");
 }
 
 TEST_F(SparkCastExprTestAnsiOff, varcharToDecimal) {
