@@ -32,6 +32,7 @@
 #include <duckdb/parser/expression/window_expression.hpp> // @manual
 #include <duckdb/parser/parser.hpp> // @manual
 #include <duckdb/parser/parser_options.hpp> // @manual
+#include <fmt/format.h>
 
 namespace facebook::velox::duckdb {
 
@@ -401,7 +402,7 @@ core::ExprPtr parseConjunctionExpr(
 
   if (conjExpr.children.size() < 2) {
     throw std::invalid_argument(
-        folly::sformat(
+        fmt::format(
             "Malformed conjunction expression "
             "(expected at least 2 input columns, got {}).",
             conjExpr.children.size()));

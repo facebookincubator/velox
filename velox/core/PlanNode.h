@@ -35,6 +35,22 @@ class PlanNodeVisitorContext;
 
 using PlanNodeId = std::string;
 
+/// Well-known transport identifiers for exchange between workers. A
+/// PartitionedOutputNode names the transport it sends its results over, and the
+/// runtime resolves the matching output buffer manager and operator from the
+/// registry. In-memory buffering is the default. Other applications may define
+/// additional identifiers without modifying this header.
+struct TransportKind {
+  /// In-memory output buffering (the default). How the buffered bytes are
+  /// delivered is decided by the layer above -- read locally, fetched over
+  /// HTTP, or written to a shuffle service.
+  static constexpr std::string_view kInMemory{"in-memory"};
+  /// UCX-based RDMA exchange for high-bandwidth GPU transfers between workers.
+  static constexpr std::string_view kUcx{"UCX"};
+  /// Deprecated source-compat alias for kInMemory; prefer kInMemory.
+  static constexpr std::string_view kHttp{kInMemory};
+};
+
 /// Generic representation of InsertTable
 struct InsertTableHandle {
  public:
@@ -2709,26 +2725,97 @@ class PartitionedOutputNode : public PlanNode {
       PartitionFunctionSpecPtr partitionFunctionSpec,
       RowTypePtr outputType,
       std::string serdeKind,
+      std::string transportKind,
       PlanNodePtr source);
+
+  // Backward-compatible ctor without an explicit transport; defaults to the
+  // in-memory transport. Prefer the ctor above.
+  PartitionedOutputNode(
+      const PlanNodeId& id,
+      Kind kind,
+      const std::vector<TypedExprPtr>& keys,
+      int numPartitions,
+      bool replicateNullsAndAny,
+      PartitionFunctionSpecPtr partitionFunctionSpec,
+      RowTypePtr outputType,
+      std::string serdeKind,
+      PlanNodePtr source)
+      : PartitionedOutputNode(
+            id,
+            kind,
+            keys,
+            numPartitions,
+            replicateNullsAndAny,
+            std::move(partitionFunctionSpec),
+            std::move(outputType),
+            std::move(serdeKind),
+            std::string{TransportKind::kInMemory},
+            std::move(source)) {}
 
   static std::shared_ptr<PartitionedOutputNode> broadcast(
       const PlanNodeId& id,
       int numPartitions,
       RowTypePtr outputType,
       std::string serdeKind,
+      std::string transportKind,
       PlanNodePtr source);
 
   static std::shared_ptr<PartitionedOutputNode> arbitrary(
       const PlanNodeId& id,
       RowTypePtr outputType,
       std::string serdeKind,
+      std::string transportKind,
       PlanNodePtr source);
 
   static std::shared_ptr<PartitionedOutputNode> single(
       const PlanNodeId& id,
       RowTypePtr outputType,
       std::string serdeKind,
+      std::string transportKind,
       PlanNodePtr source);
+
+  // Backward-compatible factory overloads without an explicit transport;
+  // default to the in-memory transport. Prefer the overloads above.
+  static std::shared_ptr<PartitionedOutputNode> broadcast(
+      const PlanNodeId& id,
+      int numPartitions,
+      RowTypePtr outputType,
+      std::string serdeKind,
+      PlanNodePtr source) {
+    return broadcast(
+        id,
+        numPartitions,
+        std::move(outputType),
+        std::move(serdeKind),
+        std::string{TransportKind::kInMemory},
+        std::move(source));
+  }
+
+  static std::shared_ptr<PartitionedOutputNode> arbitrary(
+      const PlanNodeId& id,
+      RowTypePtr outputType,
+      std::string serdeKind,
+      PlanNodePtr source) {
+    return arbitrary(
+        id,
+        std::move(outputType),
+        std::move(serdeKind),
+        std::string{TransportKind::kInMemory},
+        std::move(source));
+  }
+
+  static std::shared_ptr<PartitionedOutputNode> single(
+      const PlanNodeId& id,
+      RowTypePtr outputType,
+      std::string serdeKind,
+      PlanNodePtr source) {
+    return single(
+        id,
+        std::move(outputType),
+        std::move(serdeKind),
+        std::string{TransportKind::kInMemory},
+        std::move(source));
+  }
 
   class Builder {
    public:
@@ -2743,6 +2830,7 @@ class PartitionedOutputNode : public PlanNode {
       partitionFunctionSpec_ = other.partitionFunctionSpecPtr();
       outputType_ = other.outputType();
       serdeKind_ = other.serdeKind();
+      transportKind_ = other.transportKind();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
     }
@@ -2787,6 +2875,11 @@ class PartitionedOutputNode : public PlanNode {
       return *this;
     }
 
+    Builder& transportKind(std::string transportKind) {
+      transportKind_ = std::move(transportKind);
+      return *this;
+    }
+
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
       return *this;
@@ -2813,6 +2906,9 @@ class PartitionedOutputNode : public PlanNode {
       VELOX_USER_CHECK(
           serdeKind_.has_value(), "PartitionedOutputNode serdeKind is not set");
       VELOX_USER_CHECK(
+          transportKind_.has_value(),
+          "PartitionedOutputNode transportKind is not set");
+      VELOX_USER_CHECK(
           source_.has_value(), "PartitionedOutputNode source is not set");
 
       return std::make_shared<PartitionedOutputNode>(
@@ -2824,6 +2920,7 @@ class PartitionedOutputNode : public PlanNode {
           partitionFunctionSpec_.value(),
           outputType_.value(),
           serdeKind_.value(),
+          transportKind_.value(),
           source_.value());
     }
 
@@ -2836,6 +2933,7 @@ class PartitionedOutputNode : public PlanNode {
     std::optional<PartitionFunctionSpecPtr> partitionFunctionSpec_;
     std::optional<RowTypePtr> outputType_;
     std::optional<std::string> serdeKind_;
+    std::optional<std::string> transportKind_;
     std::optional<PlanNodePtr> source_;
   };
 
@@ -2882,6 +2980,11 @@ class PartitionedOutputNode : public PlanNode {
     return serdeKind_;
   }
 
+  /// Transport this node's output is sent over; see TransportKind.
+  const std::string& transportKind() const {
+    return transportKind_;
+  }
+
   /// Returns true if an arbitrary row and all rows with null keys must be
   /// replicated to all destinations. This is used to ensure correct results
   /// for anti-join which requires all nodes to know whether combined build
@@ -2917,6 +3020,7 @@ class PartitionedOutputNode : public PlanNode {
   const bool replicateNullsAndAny_;
   const PartitionFunctionSpecPtr partitionFunctionSpec_;
   const std::string serdeKind_;
+  const std::string transportKind_;
   const RowTypePtr outputType_;
 };
 
