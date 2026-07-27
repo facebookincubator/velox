@@ -157,10 +157,6 @@ void treeMemoryUsageVisitor(
   });
 }
 
-std::string capacityToString(int64_t capacity) {
-  return capacity == kMaxMemory ? "UNLIMITED" : succinctBytes(capacity);
-}
-
 #define DEBUG_RECORD_ALLOC(pool, ...)         \
   if (FOLLY_UNLIKELY(pool->debugEnabled())) { \
     pool->recordAllocDbg(__VA_ARGS__);        \

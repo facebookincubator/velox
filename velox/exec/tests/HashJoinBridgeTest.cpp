@@ -610,7 +610,8 @@ TEST(HashJoinBridgeTest, needRightSideJoin) {
   for (int i = 0; i < static_cast<int>(core::JoinType::kNumJoinTypes); ++i) {
     const core::JoinType joinType = static_cast<core::JoinType>(i);
     if (isRightJoin(joinType) || isFullJoin(joinType) ||
-        isRightSemiFilterJoin(joinType) || isRightSemiProjectJoin(joinType)) {
+        isRightSemiFilterJoin(joinType) || isRightSemiProjectJoin(joinType) ||
+        isRightAntiJoin(joinType)) {
       ASSERT_TRUE(needRightSideJoin(joinType));
     } else {
       ASSERT_FALSE(needRightSideJoin(joinType));

@@ -276,6 +276,49 @@ TEST_F(ParquetPageReaderTest, fixedLenByteArrayDictOverflow) {
   VELOX_ASSERT_THROW(pageReader->skip(1), "");
 }
 
+// Ensures the Snappy path validates the advertised uncompressed size against
+// the size embedded in the Snappy stream. A corrupt page whose declared
+// uncompressed_page_size is smaller than the embedded length must be rejected;
+// otherwise snappy::RawUncompress would write past the destination buffer. This
+// check must stay enabled in release builds, so the guard is a VELOX_CHECK
+// rather than a VELOX_DCHECK.
+TEST_F(ParquetPageReaderTest, snappyUncompressedSizeMismatch) {
+  constexpr int32_t kDeclaredUncompressedSize = 8;
+  // The page claims 10 values so that skip(1) reads and decompresses this page
+  // instead of skipping it.
+  constexpr int32_t kNumValues = 10;
+
+  // A minimal Snappy stream: a little-endian varint holding an uncompressed
+  // length of 300 (bytes 0xAC 0x02) followed by filler. GetUncompressedLength
+  // only parses the varint, so the filler content is irrelevant.
+  const std::string snappyData({'\xAC', '\x02', '\x00', '\x00'});
+  const auto kCompressedSize = static_cast<int32_t>(snappyData.size());
+
+  auto pageHeader = createDataPageV1Header(
+      kDeclaredUncompressedSize, kCompressedSize, kNumValues);
+  const std::string headerBytes = serializePageHeader(pageHeader);
+
+  std::string fullData = headerBytes + snappyData;
+
+  auto inputStream = std::make_unique<SeekableArrayInputStream>(
+      fullData.data(), fullData.size());
+
+  dwio::common::ColumnReaderStatistics stats;
+  auto pageReader = std::make_unique<PageReader>(
+      std::move(inputStream),
+      *leafPool_,
+      common::CompressionKind::CompressionKind_SNAPPY,
+      fullData.size(),
+      stats,
+      nullptr,
+      /*maxRepeat=*/0,
+      /*maxDefine=*/0);
+
+  // skip(1) triggers seekToPage() -> prepareDataPageV1() -> decompressData().
+  // The size check must fire before RawUncompress writes to the buffer.
+  VELOX_ASSERT_THROW(pageReader->skip(1), "300");
+}
+
 // Example test demonstrating proper FBThrift dictionary page creation.
 // This serves as a reference for converting any OSS-specific tests.
 TEST_F(ParquetPageReaderTest, dictionaryPageExample) {
@@ -382,6 +425,49 @@ TEST_F(ParquetPageReaderTest, corruptRepeatLengthV1) {
   // The bounds check should throw when repeatLength exceeds page size.
   VELOX_ASSERT_THROW(
       pageReader->skip(1), "Repetition level length 2147483632 exceeds");
+}
+
+// Test that the CompressionKind_NONE fast path in prepareDataPageV1 rejects a
+// page whose declared uncompressed_page_size exceeds the bytes actually read.
+// Without compression only compressed_page_size bytes are read, so downstream
+// reads that trust uncompressed_page_size would run past the buffer. The old
+// decompressData() path enforced this via SeekableInputStream::readFully.
+TEST_F(ParquetPageReaderTest, corruptUncompressedSizeNoneV1) {
+  // uncompressed_page_size (40) claims more data than compressed_page_size
+  // (20), which is impossible for an uncompressed page.
+  constexpr int32_t kUncompressedSize = 40;
+  constexpr int32_t kCompressedSize = 20;
+  auto pageHeader =
+      createDataPageV1Header(kUncompressedSize, kCompressedSize, 100);
+  const std::string headerBytes = serializePageHeader(pageHeader);
+
+  // Only compressed_page_size bytes of page data are present.
+  const std::string pageData(kCompressedSize, '\0');
+
+  // Combine header and page data.
+  std::string fullData = headerBytes + pageData;
+
+  // Create an input stream from the crafted data.
+  auto inputStream = std::make_unique<SeekableArrayInputStream>(
+      fullData.data(), fullData.size());
+
+  dwio::common::ColumnReaderStatistics stats;
+  // No compression, so the page data is used directly.
+  auto pageReader = std::make_unique<PageReader>(
+      std::move(inputStream),
+      *leafPool_,
+      common::CompressionKind::CompressionKind_NONE,
+      fullData.size(),
+      stats,
+      nullptr,
+      0,
+      0);
+
+  // Calling skip(1) triggers seekToPage() which calls prepareDataPageV1().
+  // The bounds check should throw before any downstream read past the buffer.
+  VELOX_ASSERT_THROW(
+      pageReader->skip(1),
+      "Uncompressed page size 40 exceeds compressed page size 20");
 }
 
 // Test that prepareDataPageV2 rejects pages where repetition + definition
