@@ -57,6 +57,7 @@ velox_add_library(
   TimestampConversion.h
   Tokenizer.h
   Tree.h
+  TwoDigitChars.h
   Type.h
   TypeCoercer.h
   TypeEncodingUtil.h

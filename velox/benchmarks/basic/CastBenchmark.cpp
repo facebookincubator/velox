@@ -92,6 +92,13 @@ int main(int argc, char** argv) {
       [](auto row) { return fmt::format("2024-05-{:02d}", 1 + row % 30); });
   auto invalidDateStrings = vectorMaker.flatVector<std::string>(
       vectorSize, [](auto row) { return fmt::format("2024-05...{}", row); });
+  // Spread inputs across ~150 years (1970..~2120) so the formatter
+  // exercises a realistic mix of years/months/days, not a single date.
+  auto dateInput = vectorMaker.flatVector<int32_t>(
+      vectorSize,
+      [](auto row) { return static_cast<int32_t>(row * 53); },
+      nullptr,
+      DATE());
 
   benchmarkBuilder
       .addBenchmarkSet(
@@ -107,6 +114,11 @@ int main(int argc, char** argv) {
       .addExpression(
           "tryexpr_cast_invalid_input", "try(cast (invalid_date as date))")
       .addExpression("cast_valid", "cast(valid_date as date)");
+
+  benchmarkBuilder
+      .addBenchmarkSet(
+          "cast_date_as_varchar", vectorMaker.rowVector({"d"}, {dateInput}))
+      .addExpression("cast_valid", "cast(d as varchar)");
 
   benchmarkBuilder
       .addBenchmarkSet(
