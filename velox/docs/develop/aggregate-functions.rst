@@ -474,10 +474,6 @@ The simple aggregation function interface currently has one limitation:
 aggregation pushdown to table scan is not supported yet. We're planning to
 add this support.
 
-Note that constant input arguments can be accessed at initialization time via
-the optional `setConstantInputs()` method described above, so they don't need
-to be re-read on every row.
-
 Vector Function Interface
 -------------------------
 
