@@ -74,7 +74,7 @@ else()
 endif()
 if(UCX_FOUND)
   message(STATUS "Found UCX: ${UCX_LIBRARY} (headers: ${UCX_INCLUDE_DIR}) -- ucxx will be fetched")
-  # ucxx commit b7faed1 from 2026-07-23 (release/0.50 branch)
+  # ucxx commit b7faed1 from 2026-07-23 (release/0.51 branch)
   set(VELOX_ucxx_VERSION 0.51)
   set(VELOX_ucxx_COMMIT b7faed1a2e8038f63676183cdb056c3b69daa15d)
   set(

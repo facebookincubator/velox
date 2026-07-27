@@ -1041,6 +1041,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::leftJoin(
                 rightIndicesCol,
                 tree_.back(),
                 cudf::join_kind::INNER_JOIN,
+                std::nullopt,
                 stream,
                 get_temp_mr());
 

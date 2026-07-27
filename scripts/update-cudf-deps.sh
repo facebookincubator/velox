@@ -158,8 +158,11 @@ get_ucxx_branch() {
 }
 
 update_dependency() {
-  local var=$1 commit=$2 date=$3 checksum=$4 version=$5
+  local var=$1 commit=$2 date=$3 checksum=$4 version=$5 source_ref=${6:-}
   sed -i "s/# ${var} commit [a-f0-9]* from [0-9-]*/# ${var} commit ${commit:0:7} from ${date}/" "$CMAKE_FILE"
+  if [[ $var == "ucxx" && -n $source_ref ]]; then
+    sed -Ei "s|# ucxx commit [a-f0-9]+ from [0-9-]+( \\([^)]* branch\\))?|# ucxx commit ${commit:0:7} from ${date} (${source_ref} branch)|" "$CMAKE_FILE"
+  fi
   sed -i "s/set(VELOX_${var}_COMMIT [a-f0-9]*)/set(VELOX_${var}_COMMIT ${commit})/" "$CMAKE_FILE"
 
   if [[ $var == "cudf" ]]; then
@@ -239,7 +242,9 @@ elif [[ $MODE == "--commit" ]]; then
 
   echo "Updating $CMAKE_FILE..."
   for dep in rapids_cmake rmm kvikio ucxx cudf; do
-    update_dependency "$dep" "${COMMITS[$dep]}" "${DATES[$dep]}" "${CHECKSUMS[$dep]}" "${VERSIONS[$dep]}"
+    source_ref=
+    [[ $dep == "ucxx" ]] && source_ref=main
+    update_dependency "$dep" "${COMMITS[$dep]}" "${DATES[$dep]}" "${CHECKSUMS[$dep]}" "${VERSIONS[$dep]}" "$source_ref"
   done
 
   echo "Done! Updated dependencies:"
@@ -281,7 +286,9 @@ elif [[ $MODE == "--branch" ]]; then
 
   echo "Updating $CMAKE_FILE..."
   for dep in rapids_cmake rmm kvikio ucxx cudf; do
-    update_dependency "$dep" "${COMMITS[$dep]}" "${DATES[$dep]}" "${CHECKSUMS[$dep]}" "${VERSIONS[$dep]}"
+    source_ref=
+    [[ $dep == "ucxx" ]] && source_ref=$UCXX_BRANCH
+    update_dependency "$dep" "${COMMITS[$dep]}" "${DATES[$dep]}" "${CHECKSUMS[$dep]}" "${VERSIONS[$dep]}" "$source_ref"
   done
 
   echo "Done! Updated dependencies:"
