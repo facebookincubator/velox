@@ -40,16 +40,53 @@ cudf::column_view castDecimal64InputToDecimal128(
     cudf::column_view inputCol,
     std::unique_ptr<cudf::column>& holder,
     rmm::cuda_stream_view stream) {
-  if (inputCol.type().id() != cudf::type_id::DECIMAL64) {
+  auto inputType = inputCol.type().id();
+  if (inputType == cudf::type_id::DECIMAL128) {
     return inputCol;
   }
-  holder = cudf::cast(
-      inputCol,
-      cudf::data_type{cudf::type_id::DECIMAL128, inputCol.type().scale()},
-      stream,
-      get_temp_mr());
-  return holder->view();
+  if (inputType == cudf::type_id::DECIMAL32) {
+    holder = cudf::cast(
+        inputCol,
+        cudf::data_type{cudf::type_id::DECIMAL64, inputCol.type().scale()},
+        stream,
+        get_temp_mr());
+    inputCol = holder->view();
+    inputType = inputCol.type().id();
+  }
+  if (inputType == cudf::type_id::DECIMAL64) {
+    holder = cudf::cast(
+        inputCol,
+        cudf::data_type{cudf::type_id::DECIMAL128, inputCol.type().scale()},
+        stream,
+        get_temp_mr());
+    return holder->view();
+  }
+  return inputCol;
 }
+
+namespace {
+
+std::unique_ptr<cudf::column> widenDecimalSumForSerialization(
+    std::unique_ptr<cudf::column> sum,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  const auto sumType = sum->type().id();
+  if (sumType == cudf::type_id::DECIMAL64 ||
+      sumType == cudf::type_id::DECIMAL128) {
+    return sum;
+  }
+  VELOX_CHECK(
+      sumType == cudf::type_id::DECIMAL32,
+      "Unsupported decimal sum column type (type is {})",
+      cudf::type_to_name(sum->type()));
+  return cudf::cast(
+      sum->view(),
+      cudf::data_type{cudf::type_id::DECIMAL64, sum->type().scale()},
+      stream,
+      mr);
+}
+
+} // namespace
 
 std::unique_ptr<cudf::column> castCountColumnToInt64(
     std::unique_ptr<cudf::column> count,
@@ -67,6 +104,7 @@ std::unique_ptr<cudf::column> serializeDecimalPartialOrIntermediateState(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   count = castCountColumnToInt64(std::move(count), stream);
+  sum = widenDecimalSumForSerialization(std::move(sum), stream, mr);
   return serializeDecimalSumState(sum->view(), count->view(), stream, mr);
 }
 

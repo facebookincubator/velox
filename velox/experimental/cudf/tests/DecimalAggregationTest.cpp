@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -154,6 +155,15 @@ std::unique_ptr<cudf::column> makeDecimalColumn(
   cudf::type_id typeId = std::is_same_v<T, int64_t> ? cudf::type_id::DECIMAL64
                                                     : cudf::type_id::DECIMAL128;
   cudf::data_type type{typeId, -scale};
+  return makeFixedWidthColumn(type, values, valid, stream);
+}
+
+std::unique_ptr<cudf::column> makeDecimal32Column(
+    const std::vector<int32_t>& values,
+    int32_t scale,
+    const std::vector<bool>* valid,
+    rmm::cuda_stream_view stream) {
+  cudf::data_type type{cudf::type_id::DECIMAL32, -scale};
   return makeFixedWidthColumn(type, values, valid, stream);
 }
 
@@ -1072,6 +1082,33 @@ TEST_F(CudfDecimalTest, decimalSumGlobalIntermediateVarbinaryAllNulls) {
   auto result =
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
   facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalSerializeSumStateDecimal32) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  std::vector<int32_t> sums = {100, -200, 300};
+  std::vector<int64_t> counts = {1, 2, 0};
+  std::vector<bool> sumValid = {true, false, true};
+  std::vector<bool> countValid = {true, true, true};
+
+  auto sumCol = makeDecimal32Column(sums, 2, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, &countValid, stream);
+  auto stateCol = serializeDecimalPartialOrIntermediateState(
+      std::move(sumCol), std::move(countCol), stream, mr);
+  auto sumAndCount = deserializeDecimalSumState(stateCol->view(), 2, stream);
+  auto stateMask = copyNullMask(stateCol->view(), stream);
+  auto sumMask = copyNullMask(sumAndCount.sum->view(), stream);
+  EXPECT_EQ(stateMask, sumMask);
+
+  auto outSum = copyColumnData<__int128_t>(sumAndCount.sum->view(), stream);
+  for (size_t i = 0; i < sums.size(); ++i) {
+    bool expectedValid = sumValid[i] && countValid[i] && counts[i] != 0;
+    EXPECT_EQ(isValidAt(sumMask, i), expectedValid);
+    if (expectedValid) {
+      EXPECT_EQ(outSum[i], static_cast<__int128_t>(sums[i]));
+    }
+  }
 }
 
 TEST_F(CudfDecimalTest, decimalDeserializeSumStateDecimal64) {

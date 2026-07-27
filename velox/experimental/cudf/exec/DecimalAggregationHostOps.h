@@ -38,14 +38,14 @@ namespace facebook::velox::cudf_velox {
 void validateIntermediateColumnType(cudf::column_view const& column);
 
 /**
- * Casts a DECIMAL64 column up to DECIMAL128 (scale preserved) so a subsequent
- * SUM accumulates in 128 bits instead of wrapping. Allocates the casted column
- * from the temporary memory resource into holder and returns its view. Lifetime
- * stays valid only while holder is alive.
+ * Widens DECIMAL32/DECIMAL64 input to DECIMAL128 (scale preserved) so a
+ * subsequent SUM accumulates in 128 bits instead of wrapping. Allocates the
+ * casted column from the temporary memory resource into holder and returns its
+ * view. Lifetime stays valid only while holder is alive.
  *
- * @param inputCol DECIMAL64 input column.
- * @param holder receives ownership of the casted column when inputCol is
- *        DECIMAL64; unchanged otherwise.
+ * @param inputCol DECIMAL32, DECIMAL64, or DECIMAL128 input column.
+ * @param holder receives ownership of the casted column when widening is
+ *        required; unchanged otherwise.
  * @param stream CUDA stream for device work.
  * @return view of inputCol or of the column stored in holder.
  */
@@ -73,7 +73,8 @@ std::unique_ptr<cudf::column> castCountColumnToInt64(
  * serializeDecimalSumState). Used when emitting or persisting partial /
  * intermediate decimal SUM state for the cuDF path.
  *
- * @param sum partial sum column (DECIMAL64 or DECIMAL128).
+ * @param sum partial sum column (DECIMAL32, DECIMAL64, or DECIMAL128).
+ *        DECIMAL32 is widened to DECIMAL64 before packing.
  * @param count partial-row count column.
  * @param stream CUDA stream for device work.
  * @param mr memory resource for allocated columns.
