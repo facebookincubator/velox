@@ -46,7 +46,7 @@ Expected<int32_t> parseFractionalSeconds(
     const char* data,
     size_t size,
     size_t& pos,
-    int32_t fractionalPrecision) {
+    TimePrecision fractionalPrecision) {
   if (pos >= size || data[pos] != '.') {
     return 0; // No fractional part
   }
@@ -75,22 +75,23 @@ Expected<int32_t> parseFractionalSeconds(
   size_t digitCount = parseResult.ptr - start;
   pos += digitCount;
 
-  if (digitCount > static_cast<size_t>(fractionalPrecision)) {
+  const auto precision = static_cast<size_t>(fractionalPrecision);
+  if (digitCount > precision) {
     return folly::makeUnexpected(
         Status::UserError(
             "Invalid time format: fractional precision exceeds {} digits",
-            fractionalPrecision));
+            precision));
   }
 
   // Convert to target precision by padding with zeros if needed.
-  for (size_t i = digitCount; i < fractionalPrecision; i++) {
+  for (size_t i = digitCount; i < precision; i++) {
     fractionalPart *= 10;
   }
 
   return fractionalPart;
 }
 
-// Helper: Validate time components
+// Helper: Validate time components for millisecond precision.
 Status validateTimeComponents(const TimeComponents& components) {
   if (components.hour < 0 || components.hour >= kHoursPerDay) {
     return Status::UserError("Invalid hour value: {}", components.hour);
@@ -101,6 +102,12 @@ Status validateTimeComponents(const TimeComponents& components) {
   if (components.second < 0 || components.second >= kSecsPerMinute) {
     return Status::UserError("Invalid second value: {}", components.second);
   }
+  if (components.fractionalPrecision != TimePrecision::kMilliseconds) {
+    return Status::UserError(
+        "Millisecond precision is required. Got: {}",
+        static_cast<int32_t>(components.fractionalPrecision));
+  }
+
   if (components.fractionalSecond < 0 ||
       components.fractionalSecond >= kMsecsPerSec) {
     return Status::UserError(
@@ -109,8 +116,16 @@ Status validateTimeComponents(const TimeComponents& components) {
   return Status::OK();
 }
 
-// Helper: Convert time components to milliseconds since midnight
+// Helper: Convert time components to milliseconds since midnight.
+// The input time must use millisecond precision.
 Expected<int64_t> timeComponentsToMillis(const TimeComponents& components) {
+  if (components.fractionalPrecision != TimePrecision::kMilliseconds) {
+    return folly::makeUnexpected(
+        Status::UserError(
+            "Millisecond precision is required. Got: {}",
+            static_cast<int32_t>(components.fractionalPrecision)));
+  }
+
   int64_t result = static_cast<int64_t>(components.hour) * kMillisInHour +
       static_cast<int64_t>(components.minute) * kMillisInMinute +
       static_cast<int64_t>(components.second) * kMillisInSecond +
@@ -132,8 +147,9 @@ Expected<TimeComponents> parseTimeComponents(
     const char* buf,
     size_t len,
     bool requireSeconds,
-    int32_t fractionalPrecision) {
+    TimePrecision fractionalPrecision) {
   TimeComponents components;
+  components.fractionalPrecision = fractionalPrecision;
   size_t pos = 0;
 
   // Parse hour (required, 1-2 digits)
@@ -192,7 +208,11 @@ Expected<TimeComponents> parseTimeComponents(
 }
 
 Expected<int64_t> fromTimeString(const char* buf, size_t len) {
-  auto componentsResult = parseTimeComponents(buf, len);
+  auto componentsResult = parseTimeComponents(
+      buf,
+      len,
+      /*requireSeconds=*/false,
+      TimePrecision::kMilliseconds);
   if (componentsResult.hasError()) {
     return folly::makeUnexpected(componentsResult.error());
   }
