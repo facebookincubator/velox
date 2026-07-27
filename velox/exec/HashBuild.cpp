@@ -255,8 +255,9 @@ void HashBuild::setupTable() {
   }
   auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   if (joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
-      joinNode_->isRightSemiProjectJoin()) {
-    // Do not ignore null keys.
+      joinNode_->isRightSemiProjectJoin() || joinNode_->isRightAntiJoin()) {
+    // Do not ignore null keys. kRightAnti must retain null keys: a null-keyed
+    // build row never matches and is always returned.
     table_ = HashTable<false>::createForJoin(
         std::move(keyHashers),
         dependentTypes,
@@ -472,8 +473,8 @@ void HashBuild::addInput(RowVectorPtr input) {
   }
 
   if (!isRightJoin(joinType_) && !isFullJoin(joinType_) &&
-      !isRightSemiProjectJoin(joinType_) && !nullAsValue_ &&
-      !isLeftNullAwareJoinWithFilter(joinNode_)) {
+      !isRightSemiProjectJoin(joinType_) && !isRightAntiJoin(joinType_) &&
+      !nullAsValue_ && !isLeftNullAwareJoinWithFilter(joinNode_)) {
     deselectRowsWithNulls(hashers, activeRows_);
     if (nullAware_ && !joinHasNullKeys_ &&
         activeRows_.countSelected() < input->size()) {

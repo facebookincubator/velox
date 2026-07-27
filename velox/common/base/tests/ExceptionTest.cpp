@@ -992,6 +992,141 @@ TEST(ExceptionTest, wrappedExceptionWithContext) {
   }
 }
 
+TEST(ExceptionTest, properties) {
+  using facebook::velox::ExceptionContextProperties;
+  using facebook::velox::ExpressionExceptionProperties;
+
+  auto makeProperties =
+      [](facebook::velox::VeloxException::Type /*exceptionType*/,
+         void* untypedArg)
+      -> std::shared_ptr<const ExceptionContextProperties> {
+    auto properties = std::make_shared<ExpressionExceptionProperties>();
+    properties->owner = static_cast<const char*>(untypedArg);
+    properties->functionName = "expr";
+    properties->expression = "expr(c0)";
+    return properties;
+  };
+
+  // No properties context: properties() is null.
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    EXPECT_EQ(ve.properties(), nullptr);
+  }
+
+  const char* outer = "outer-team";
+  facebook::velox::ExceptionContextSetter outerContext(
+      {.arg = (void*)outer, .propertiesFunc = makeProperties});
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    auto properties =
+        std::dynamic_pointer_cast<const ExpressionExceptionProperties>(
+            ve.properties());
+    ASSERT_NE(properties, nullptr);
+    EXPECT_EQ(properties->owner, "outer-team");
+    EXPECT_EQ(properties->functionName, "expr");
+    EXPECT_EQ(properties->expression, "expr(c0)");
+  }
+
+  // The inner-most context's properties win.
+  auto makeInnerProperties =
+      [](facebook::velox::VeloxException::Type /*exceptionType*/,
+         void* /*untypedArg*/)
+      -> std::shared_ptr<const ExceptionContextProperties> {
+    auto properties = std::make_shared<ExpressionExceptionProperties>();
+    properties->owner = "inner-team";
+    properties->functionName = "innerExpr";
+    properties->expression = "expr(c1)";
+    return properties;
+  };
+  facebook::velox::ExceptionContextSetter innerContext(
+      {.arg = nullptr, .propertiesFunc = makeInnerProperties});
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    auto properties =
+        std::dynamic_pointer_cast<const ExpressionExceptionProperties>(
+            ve.properties());
+    ASSERT_NE(properties, nullptr);
+    EXPECT_EQ(properties->owner, "inner-team");
+    EXPECT_EQ(properties->functionName, "innerExpr");
+    EXPECT_EQ(properties->expression, "expr(c1)");
+  }
+}
+
+// A propertiesFunc that itself throws must (1) not be re-invoked by the nested
+// VeloxException it throws (re-entrancy guard), and (2) not leave the context
+// suspended, so a later exception invokes it again.
+TEST(ExceptionTest, propertiesReentrancyAndRestore) {
+  int callCount = 0;
+  auto throwingProperties =
+      [](facebook::velox::VeloxException::Type /*exceptionType*/, void* arg)
+      -> std::shared_ptr<const facebook::velox::ExceptionContextProperties> {
+    ++(*static_cast<int*>(arg));
+    VELOX_FAIL("props boom");
+  };
+  facebook::velox::ExceptionContextSetter context(
+      {.arg = &callCount, .propertiesFunc = throwingProperties});
+
+  // propertiesFunc runs once and throws; the nested VeloxException from
+  // VELOX_FAIL must not re-invoke it, so callCount stays 1 (not infinite).
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    EXPECT_EQ(ve.properties(), nullptr);
+  }
+  EXPECT_EQ(callCount, 1);
+
+  // The context must not be left suspended: propertiesFunc runs again. With the
+  // pre-guard code this would stay 1 (the context stayed suspended).
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    EXPECT_EQ(ve.properties(), nullptr);
+  }
+  EXPECT_EQ(callCount, 2);
+}
+
+// Same guarantee for messageFunc: a throwing messageFunc falls back and does
+// not leave the context suspended, so a later exception invokes it again.
+TEST(ExceptionTest, messageReentrancyAndRestore) {
+  int callCount = 0;
+  auto throwingMessage =
+      [](facebook::velox::VeloxException::Type /*exceptionType*/,
+         void* arg) -> std::string {
+    ++(*static_cast<int*>(arg));
+    VELOX_FAIL("message boom");
+  };
+  facebook::velox::ExceptionContextSetter context(
+      {.messageFunc = throwingMessage, .arg = &callCount});
+
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    EXPECT_THAT(
+        ve.context(),
+        testing::HasSubstr("Failed to produce additional context."));
+  }
+  EXPECT_EQ(callCount, 1);
+
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    EXPECT_THAT(
+        ve.context(),
+        testing::HasSubstr("Failed to produce additional context."));
+  }
+  EXPECT_EQ(callCount, 2);
+}
+
 TEST(ExceptionTest, exceptionMacroInlining) {
   // Verify that the right formatting method is inlined when using _VELOX_THROW
   // macro. This test can be removed if fmt::vformat changes behavior and starts

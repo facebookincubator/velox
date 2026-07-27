@@ -461,6 +461,69 @@ TEST_F(ParquetWriterTest, compression) {
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
 }
 
+TEST_F(ParquetWriterTest, compressionRoundTripAcrossPages) {
+  // Writes multi-page data with every writable codec and verifies the values
+  // round-trip. Small data pages force many compressed pages per column, so the
+  // reader's per-codec decompression paths (the Snappy/ZSTD/GZIP direct paths
+  // and the LZ4 stream path with Hadoop framing) are exercised repeatedly and
+  // across page boundaries.
+  auto schema =
+      ROW({"c_int", "c_bigint", "c_double", "c_string"},
+          {INTEGER(), BIGINT(), DOUBLE(), VARCHAR()});
+  constexpr int64_t kRows = 20'000;
+
+  // Stable backing storage for the string column; makeFlatVector copies the
+  // bytes into the vector, but keeping storage alive avoids dangling views.
+  std::vector<std::string> stringStorage(kRows);
+  for (int64_t i = 0; i < kRows; ++i) {
+    stringStorage[i] = fmt::format("velox-parquet-value-{:08d}-padding", i);
+  }
+
+  const auto data = makeRowVector(
+      schema->names(),
+      {
+          makeFlatVector<int32_t>(kRows, [](auto row) { return row * 3 - 7; }),
+          makeFlatVector<int64_t>(
+              kRows, [](auto row) { return row * 1'000'003LL; }),
+          makeFlatVector<double>(
+              kRows, [](auto row) { return row * 0.25 - 3.5; }),
+          makeFlatVector<StringView>(
+              kRows, [&](auto row) { return StringView(stringStorage[row]); }),
+      });
+
+  for (const auto compression :
+       {CompressionKind::CompressionKind_NONE,
+        CompressionKind::CompressionKind_SNAPPY,
+        CompressionKind::CompressionKind_ZSTD,
+        CompressionKind::CompressionKind_GZIP,
+        CompressionKind::CompressionKind_LZ4,
+        CompressionKind::CompressionKind_LZ4_HADOOP}) {
+    if (!parquet::Writer::isCodecAvailable(compression)) {
+      continue;
+    }
+    SCOPED_TRACE(compressionKindToString(compression));
+
+    ParquetWriterOptions writerOptions;
+    // Small pages force multiple compressed data pages per column.
+    writerOptions.dataPageSize = 4 * 1024;
+    // Disable dictionary so string values take the PLAIN path and each page
+    // carries compressed value bytes.
+    writerOptions.enableDictionary = false;
+
+    dwio::common::WriterOptions options;
+    options.memoryPool = rootPool_.get();
+    options.compressionKind = compression;
+
+    auto* sinkPtr = write(data, options, writerOptions);
+
+    auto reader = createReaderInMemory(*sinkPtr);
+    ASSERT_EQ(reader->numberOfRows(), kRows);
+
+    auto rowReader = createRowReaderFromReader(*reader, schema);
+    assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
+  }
+}
+
 TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   constexpr int64_t kRows = 10'000;
   const auto data = makeSmallintTestData(kRows);

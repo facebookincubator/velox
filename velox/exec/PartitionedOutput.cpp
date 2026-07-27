@@ -196,7 +196,8 @@ PartitionedOutput::PartitionedOutput(
     int32_t operatorId,
     DriverCtx* ctx,
     const std::shared_ptr<const core::PartitionedOutputNode>& planNode,
-    bool eagerFlush)
+    bool eagerFlush,
+    const std::shared_ptr<DefaultOutputBufferManager>& manager)
     : Operator(
           ctx,
           planNode->outputType(),
@@ -215,7 +216,7 @@ PartitionedOutput::PartitionedOutput(
           planNode->inputType(),
           planNode->outputType(),
           planNode->outputType())),
-      bufferManager_(DefaultOutputBufferManager::getInstanceRef()),
+      bufferManager_(manager),
       // NOTE: 'bufferReleaseFn_' holds a reference on the associated task to
       // prevent it from deleting while there are output buffers being accessed
       // out of the partitioned output buffer manager such as in Prestissimo,
@@ -244,6 +245,8 @@ PartitionedOutput::PartitionedOutput(
     VELOX_USER_CHECK(keyChannels_.empty());
     VELOX_USER_CHECK_NULL(partitionFunction_);
   }
+  VELOX_CHECK_NOT_NULL(
+      manager, "PartitionedOutput requires an output buffer manager");
 }
 
 void PartitionedOutput::initializeInput(RowVectorPtr input) {

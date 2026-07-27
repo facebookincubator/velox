@@ -162,7 +162,7 @@ class MemoryManager {
     /// The string kind of memory arbitrator used in the memory manager.
     ///
     /// NOTE: the arbitrator will only be created if its kind is set explicitly.
-    /// Otherwise MemoryArbitrator::create returns a nullptr.
+    /// Otherwise MemoryArbitrator::create returns a NoopArbitrator.
     std::string arbitratorKind{};
 
     /// Provided by the query system to validate the state after a memory pool
