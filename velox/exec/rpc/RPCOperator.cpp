@@ -111,6 +111,11 @@ void RPCOperator::initialize() {
 
   tierKey_ = function_->tierKey();
 
+  // Size output vectors like every other operator, from config, instead of a
+  // hardcoded cap (see getOutput()).
+  outputBatchRows_ =
+      operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchRows();
+
   // Configure the process-global adaptive rate limiter from QueryConfig. This
   // is idempotent and cluster-default-driven; off by default (static cap).
   const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
@@ -466,7 +471,7 @@ RowVectorPtr RPCOperator::getOutput() {
 
     // Drain additional ready rows (non-blocking) for batched output.
     // This amortizes RowVector allocation across multiple completed rows.
-    state_->drainReadyRows(claimedRows_, 1'024);
+    state_->drainReadyRows(claimedRows_, outputBatchRows_);
 
     // Materialize responses, locations, and round-trip latencies once — reused
     // for the congestion signal and the output vector (no extra copy).

@@ -189,6 +189,37 @@ TEST_F(RPCOperatorTest, basicPerRow) {
   EXPECT_EQ(rows["third row"], "Response for: third row");
 }
 
+// PER_ROW output is sized from QueryConfig::preferredOutputBatchRows, not a
+// hardcoded cap: 50 rows with a cap of 10 must emit at least 5 output vectors.
+TEST_F(RPCOperatorTest, outputBatchSizeFromConfig) {
+  std::vector<std::string> storage(50);
+  std::vector<StringView> prompts;
+  prompts.reserve(storage.size());
+  for (size_t i = 0; i < storage.size(); ++i) {
+    storage[i] = fmt::format("row {}", i);
+    prompts.emplace_back(storage[i]);
+  }
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
+
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config(core::QueryConfig::kPreferredOutputBatchRows, "10")
+                    .copyResults(pool(), task);
+  EXPECT_EQ(result->size(), 50);
+
+  int64_t rpcOutputVectors = 0;
+  for (const auto& pipeline : task->taskStats().pipelineStats) {
+    for (const auto& op : pipeline.operatorStats) {
+      if (op.operatorType == "RPC") {
+        rpcOutputVectors += op.outputVectors;
+      }
+    }
+  }
+  // 50 rows capped at 10 per output vector => at least 5 vectors.
+  EXPECT_GE(rpcOutputVectors, 5);
+}
+
 /// Null input rows should produce null in the RPC result column.
 TEST_F(RPCOperatorTest, nullInput) {
   auto promptVector =
