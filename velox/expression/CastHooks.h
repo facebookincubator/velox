@@ -93,7 +93,6 @@ class CastHooks {
 
   /// Casts string to TIME. The accepted format and precision depend on the
   /// policy (e.g., Presto uses milliseconds; Spark uses microseconds).
-  /// 'timeString' has been processed by removeWhiteSpaces.
   /// @param timeString The time string to parse
   /// @param timeZone The timezone for conversion (can be nullptr)
   /// @param sessionStartTimeMs Session start time in milliseconds for DST

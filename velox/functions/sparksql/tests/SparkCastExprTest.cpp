@@ -1551,6 +1551,7 @@ TEST_F(SparkCastExprTestAnsiOn, stringToTime) {
   testInvalidString("24:00:00");
   testInvalidString("12:60:00");
   testInvalidString("12:30:60");
+  testInvalidString("12:30:45.1234567");
   testInvalidString("abc");
   testInvalidString("");
 }
@@ -1858,6 +1859,7 @@ TEST_F(SparkCastExprTestAnsiOff, stringToTime) {
        "12:60:00",
        "12:30:60",
        "12:30",
+       "12:30:45.1234567",
        "abc",
        ""},
       {0LL,
@@ -1869,6 +1871,7 @@ TEST_F(SparkCastExprTestAnsiOff, stringToTime) {
        std::nullopt,
        std::nullopt,
        45'000'000'000LL,
+       std::nullopt,
        std::nullopt,
        std::nullopt});
 }

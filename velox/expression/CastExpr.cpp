@@ -441,7 +441,7 @@ VectorPtr CastExpr::castToTime(
     }
     case TypeKind::TIMESTAMP: {
       VELOX_DCHECK(fromType->equivalent(*TIMESTAMP()));
-      // Only support TIMESTAMP -> TIME, not TIMESTAMP -> TIME_MICRO_UTC
+      // TIMESTAMP -> TIME is supported, but TIMESTAMP -> TIME_MICRO_UTC is not.
       VELOX_DCHECK(toType->equivalent(*TIME()));
       VectorPtr castResult;
       context.ensureWritable(rows, TIME(), castResult);
@@ -451,7 +451,7 @@ VectorPtr CastExpr::castToTime(
       auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
 
       // Cast from TIMESTAMP to TIME extracts the time-of-day component
-      // (milliseconds since midnight) from the timestamp
+      // (milliseconds since midnight) from the timestamp.
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
         const auto timestamp = inputVector->valueAt(row);
         // Extract time-of-day using std::chrono.

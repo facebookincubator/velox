@@ -97,13 +97,15 @@ class VectorFuzzerTest : public testing::Test {
 
   void validateMaxSizes(VectorPtr vector, size_t maxSize);
 
-  template <typename TTimeType>
   void assertTimeValuesInRange(
       const SimpleVector<int64_t>* timeVector,
-      const std::shared_ptr<const TTimeType>& timeType) {
+      const TypePtr& timeType) {
     ASSERT_TRUE(timeType->isTime());
-    const int64_t minTime = timeType->getMin();
-    const int64_t maxTime = timeType->getMax();
+    const bool isTimeMicroUtc = timeType->equivalent(*TIME_MICRO_UTC());
+    const int64_t minTime =
+        isTimeMicroUtc ? TIME_MICRO_UTC()->getMin() : TIME()->getMin();
+    const int64_t maxTime =
+        isTimeMicroUtc ? TIME_MICRO_UTC()->getMax() : TIME()->getMax();
     for (size_t i = 0; i < timeVector->size(); ++i) {
       if (!timeVector->isNullAt(i)) {
         auto timeValue = timeVector->valueAt(i);

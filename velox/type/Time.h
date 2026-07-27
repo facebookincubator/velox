@@ -33,7 +33,7 @@ struct TimeComponents {
   int32_t hour = 0;
   int32_t minute = 0;
   int32_t second = 0;
-  int32_t millis = 0;
+  int32_t fractionalSecond = 0;
 };
 
 /// Parse time components from a TIME string.
@@ -44,8 +44,9 @@ struct TimeComponents {
 /// @param fractionalPrecision Max fractional digits to accept (default: 3 for
 /// milliseconds).
 /// @return Parsed time components. The fractional part is scaled to
-/// fractionalPrecision and stored in TimeComponents::millis (milliseconds at
-/// the default precision of 3, microseconds when fractionalPrecision is 6).
+/// fractionalPrecision and stored in TimeComponents::fractionalSecond. The
+/// value is in milliseconds at the default precision of 3 and microseconds
+/// when fractionalPrecision is 6.
 Expected<TimeComponents> parseTimeComponents(
     const char* buf,
     size_t len,

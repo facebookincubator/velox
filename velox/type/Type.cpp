@@ -1794,9 +1794,7 @@ int64_t TimeMicroPrecisionUtcType::valueToTime(
       components.second >= 0 && components.second < util::kSecsPerMinute,
       "Invalid second value: {}",
       components.second);
-  // parseTimeComponents scales the fractional part to the requested
-  // precision, so with precision 6 TimeComponents::millis holds microseconds.
-  const int32_t micros = components.millis;
+  const int32_t micros = components.fractionalSecond;
   VELOX_USER_CHECK(
       micros >= 0 && micros < util::kMicrosPerSec,
       "Invalid microsecond value: {}",

@@ -34,10 +34,6 @@ exec::ExprPtr makeSparkCastExpr(
     bool isTryCast,
     bool allowOverflow,
     const core::QueryConfig& config) {
-  VELOX_USER_CHECK(
-      !type->equivalent(*TIME()),
-      "Spark only supports TIME_MICRO_UTC for time type casts, got {}",
-      type->toString());
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(input),
@@ -111,8 +107,6 @@ class SparkLegacyCastCallToSpecialForm : public exec::CastCallToSpecialForm {
 bool SparkCastCallToSpecialForm::isAnsiSupported(
     const TypePtr& fromType,
     const TypePtr& toType) {
-  // String to Boolean, Timestamp, Integer, Date, Decimal, or Time types support
-  // ANSI mode.
   if (fromType->isVarchar()) {
     if (toType->isBoolean() || toType->isTimestamp() || toType->isDate() ||
         toType->isDecimal() || toType->isTime()) {

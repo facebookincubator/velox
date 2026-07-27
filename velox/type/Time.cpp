@@ -76,15 +76,9 @@ Expected<int32_t> parseFractionalSeconds(
   pos += digitCount;
 
   if (digitCount > static_cast<size_t>(fractionalPrecision)) {
-    if (fractionalPrecision == 3) {
-      // Keep the legacy error text for millisecond TIME parsing.
-      return folly::makeUnexpected(
-          Status::UserError(
-              "Invalid time format: Microsecond precision not supported"));
-    }
     return folly::makeUnexpected(
         Status::UserError(
-            "Invalid time format: precision {} not supported",
+            "Invalid time format: fractional precision exceeds {} digits",
             fractionalPrecision));
   }
 
@@ -107,9 +101,10 @@ Status validateTimeComponents(const TimeComponents& components) {
   if (components.second < 0 || components.second >= kSecsPerMinute) {
     return Status::UserError("Invalid second value: {}", components.second);
   }
-  if (components.millis < 0 || components.millis >= kMsecsPerSec) {
+  if (components.fractionalSecond < 0 ||
+      components.fractionalSecond >= kMsecsPerSec) {
     return Status::UserError(
-        "Invalid millisecond value: {}", components.millis);
+        "Invalid millisecond value: {}", components.fractionalSecond);
   }
   return Status::OK();
 }
@@ -119,7 +114,7 @@ Expected<int64_t> timeComponentsToMillis(const TimeComponents& components) {
   int64_t result = static_cast<int64_t>(components.hour) * kMillisInHour +
       static_cast<int64_t>(components.minute) * kMillisInMinute +
       static_cast<int64_t>(components.second) * kMillisInSecond +
-      static_cast<int64_t>(components.millis);
+      static_cast<int64_t>(components.fractionalSecond);
 
   // Validate time range (0 to 86399999 ms in a day)
   if (result < 0 || result >= kMillisInDay) {
@@ -177,12 +172,13 @@ Expected<TimeComponents> parseTimeComponents(
     if (fractionResult.hasError()) {
       return folly::makeUnexpected(fractionResult.error());
     }
-    components.millis = fractionResult.value();
+    components.fractionalSecond = fractionResult.value();
   } else if (requireSeconds) {
     return folly::makeUnexpected(
         Status::UserError("Invalid time format: expected ':' after minute"));
   }
-  // When seconds are optional and omitted, seconds and millis remain at 0.
+  // When seconds are optional and omitted, seconds and the fractional second
+  // remain at 0.
 
   // Check for trailing characters
   if (pos < len) {
