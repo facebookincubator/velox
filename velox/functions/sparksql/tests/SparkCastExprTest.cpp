@@ -2004,10 +2004,12 @@ TEST_F(SparkCastExprTestAnsiOn, dateToTimestampTimezoneGap) {
 TEST_F(SparkCastExprTestAnsiOff, timestampToTimestampUtc) {
   // No session timezone: identity cast.
   testCast(
-      makeFlatVector<Timestamp>(
-          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP()),
-      makeFlatVector<Timestamp>(
-          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP_UTC()));
+      makeNullableFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123), std::nullopt},
+          TIMESTAMP()),
+      makeNullableFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123), std::nullopt},
+          TIMESTAMP_UTC()));
 
   // America/Los_Angeles (PST = UTC-8): 2020-01-01 00:00:00 UTC
   // → local 2019-12-31 16:00:00 → stored as epoch 1577808000.
@@ -2044,10 +2046,12 @@ TEST_F(SparkCastExprTestAnsiOn, timestampToTimestampUtc) {
 TEST_F(SparkCastExprTestAnsiOff, timestampUtcToTimestamp) {
   // No session timezone: identity cast.
   testCast(
-      makeFlatVector<Timestamp>(
-          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP_UTC()),
-      makeFlatVector<Timestamp>(
-          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP()));
+      makeNullableFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123), std::nullopt},
+          TIMESTAMP_UTC()),
+      makeNullableFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123), std::nullopt},
+          TIMESTAMP()));
 
   // America/Los_Angeles (PST = UTC-8): stored epoch 1577808000
   // → local 2019-12-31 16:00:00 → UTC 2020-01-01 00:00:00 = epoch 1577836800.
