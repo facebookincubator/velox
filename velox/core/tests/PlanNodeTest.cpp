@@ -607,13 +607,14 @@ TEST_F(PlanNodeTest, rpcNodeSerdePerRowMode) {
   auto rpcNode = std::make_shared<core::RPCNode>(
       "rpc-1",
       valuesNode,
-      "test_function",
-      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(
+          VARCHAR(),
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(
+                  VARCHAR(), "prompt")},
+          "test_function"),
       "response",
       ROW({"prompt", "response"}, {VARCHAR(), VARCHAR()}),
-      std::vector<std::string>{"prompt"},
-      std::vector<TypePtr>{VARCHAR()},
-      std::vector<VectorPtr>{nullptr},
       rpc::RPCStreamingMode::kPerRow,
       0);
 
@@ -633,10 +634,12 @@ TEST_F(PlanNodeTest, rpcNodeSerdePerRowMode) {
   EXPECT_EQ(copyRpc->streamingMode(), rpc::RPCStreamingMode::kPerRow);
   EXPECT_EQ(copyRpc->dispatchBatchSize(), 0);
   EXPECT_EQ(*copyRpc->rpcResultType(), *VARCHAR());
-  EXPECT_EQ(copyRpc->argumentColumns().size(), 1);
-  EXPECT_EQ(copyRpc->argumentColumns()[0], "prompt");
-  EXPECT_EQ(copyRpc->argumentTypes().size(), 1);
-  EXPECT_EQ(*copyRpc->argumentTypes()[0], *VARCHAR());
+  ASSERT_EQ(copyRpc->call()->inputs().size(), 1);
+  auto* field = dynamic_cast<const core::FieldAccessTypedExpr*>(
+      copyRpc->call()->inputs()[0].get());
+  ASSERT_NE(field, nullptr);
+  EXPECT_EQ(field->name(), "prompt");
+  EXPECT_EQ(*field->type(), *VARCHAR());
 }
 
 TEST_F(PlanNodeTest, rpcNodeSerdeBatchMode) {
@@ -654,13 +657,14 @@ TEST_F(PlanNodeTest, rpcNodeSerdeBatchMode) {
   auto rpcNode = std::make_shared<core::RPCNode>(
       "rpc-2",
       valuesNode,
-      "batch_function",
-      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(
+          VARCHAR(),
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "prompt"),
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "model")},
+          "batch_function"),
       "result",
       ROW({"prompt", "model", "result"}, {VARCHAR(), VARCHAR(), VARCHAR()}),
-      std::vector<std::string>{"prompt", "model"},
-      std::vector<TypePtr>{VARCHAR(), VARCHAR()},
-      std::vector<VectorPtr>{nullptr, nullptr},
       rpc::RPCStreamingMode::kBatch,
       50);
 
@@ -676,9 +680,15 @@ TEST_F(PlanNodeTest, rpcNodeSerdeBatchMode) {
   EXPECT_EQ(copyRpc->outputColumn(), "result");
   EXPECT_EQ(copyRpc->streamingMode(), rpc::RPCStreamingMode::kBatch);
   EXPECT_EQ(copyRpc->dispatchBatchSize(), 50);
-  EXPECT_EQ(copyRpc->argumentColumns().size(), 2);
-  EXPECT_EQ(copyRpc->argumentColumns()[0], "prompt");
-  EXPECT_EQ(copyRpc->argumentColumns()[1], "model");
+  ASSERT_EQ(copyRpc->call()->inputs().size(), 2);
+  auto* field0 = dynamic_cast<const core::FieldAccessTypedExpr*>(
+      copyRpc->call()->inputs()[0].get());
+  auto* field1 = dynamic_cast<const core::FieldAccessTypedExpr*>(
+      copyRpc->call()->inputs()[1].get());
+  ASSERT_NE(field0, nullptr);
+  ASSERT_NE(field1, nullptr);
+  EXPECT_EQ(field0->name(), "prompt");
+  EXPECT_EQ(field1->name(), "model");
 }
 
 TEST_F(PlanNodeTest, rpcNodeSerdeWithConstants) {
@@ -698,19 +708,30 @@ TEST_F(PlanNodeTest, rpcNodeSerdeWithConstants) {
   auto rpcNode = std::make_shared<core::RPCNode>(
       "rpc-3",
       valuesNode,
-      "test_function",
-      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(
+          VARCHAR(),
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "prompt"),
+              std::make_shared<core::ConstantTypedExpr>(modelConstant),
+              std::make_shared<core::ConstantTypedExpr>(systemPromptConstant)},
+          "test_function"),
       "response",
-      ROW({"prompt", "response"}, {VARCHAR(), VARCHAR()}),
-      std::vector<std::string>{"prompt", "model", "system_prompt"},
-      std::vector<TypePtr>{VARCHAR(), VARCHAR(), VARCHAR()},
-      std::vector<VectorPtr>{nullptr, modelConstant, systemPromptConstant});
+      ROW({"prompt", "response"}, {VARCHAR(), VARCHAR()}));
 
-  // Verify constants before serde.
-  ASSERT_EQ(rpcNode->constantInputs().size(), 3);
-  EXPECT_EQ(rpcNode->constantInputs()[0], nullptr);
-  EXPECT_NE(rpcNode->constantInputs()[1], nullptr);
-  EXPECT_NE(rpcNode->constantInputs()[2], nullptr);
+  // Verify the argument kinds before serde: one column, two constants.
+  ASSERT_EQ(rpcNode->call()->inputs().size(), 3);
+  EXPECT_NE(
+      dynamic_cast<const core::FieldAccessTypedExpr*>(
+          rpcNode->call()->inputs()[0].get()),
+      nullptr);
+  EXPECT_NE(
+      dynamic_cast<const core::ConstantTypedExpr*>(
+          rpcNode->call()->inputs()[1].get()),
+      nullptr);
+  EXPECT_NE(
+      dynamic_cast<const core::ConstantTypedExpr*>(
+          rpcNode->call()->inputs()[2].get()),
+      nullptr);
 
   // Serialize and deserialize.
   const auto serialized = rpcNode->serialize();
@@ -720,21 +741,27 @@ TEST_F(PlanNodeTest, rpcNodeSerdeWithConstants) {
   auto* copyRpc = dynamic_cast<const core::RPCNode*>(copy.get());
   ASSERT_NE(copyRpc, nullptr);
   EXPECT_EQ(copyRpc->functionName(), "test_function");
-  EXPECT_EQ(copyRpc->argumentColumns().size(), 3);
+  ASSERT_EQ(copyRpc->call()->inputs().size(), 3);
 
-  // Verify constants survive the round-trip.
-  ASSERT_EQ(copyRpc->constantInputs().size(), 3);
-  EXPECT_EQ(copyRpc->constantInputs()[0], nullptr);
-  ASSERT_NE(copyRpc->constantInputs()[1], nullptr);
-  ASSERT_NE(copyRpc->constantInputs()[2], nullptr);
+  // Verify the argument kinds survive the round-trip.
+  EXPECT_NE(
+      dynamic_cast<const core::FieldAccessTypedExpr*>(
+          copyRpc->call()->inputs()[0].get()),
+      nullptr);
+  auto* modelConst = dynamic_cast<const core::ConstantTypedExpr*>(
+      copyRpc->call()->inputs()[1].get());
+  auto* promptConst = dynamic_cast<const core::ConstantTypedExpr*>(
+      copyRpc->call()->inputs()[2].get());
+  ASSERT_NE(modelConst, nullptr);
+  ASSERT_NE(promptConst, nullptr);
 
-  // Verify constant values.
-  auto modelVec = copyRpc->constantInputs()[1];
+  // Verify constant values survive the round-trip.
+  auto modelVec = modelConst->toConstantVector(pool_.get());
   EXPECT_TRUE(modelVec->isConstantEncoding());
   EXPECT_EQ(
       modelVec->as<ConstantVector<StringView>>()->valueAt(0).str(), "llama3");
 
-  auto promptVec = copyRpc->constantInputs()[2];
+  auto promptVec = promptConst->toConstantVector(pool_.get());
   EXPECT_TRUE(promptVec->isConstantEncoding());
   EXPECT_EQ(
       promptVec->as<ConstantVector<StringView>>()->valueAt(0).str(),

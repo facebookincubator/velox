@@ -4387,6 +4387,73 @@ PlanNodePtr MixedUnionNode::create(const folly::dynamic& obj, void* context) {
 RPCNode::RPCNode(
     const PlanNodeId& id,
     PlanNodePtr source,
+    core::CallTypedExprPtr call,
+    std::string outputColumn,
+    RowTypePtr outputType,
+    rpc::RPCStreamingMode streamingMode,
+    int32_t dispatchBatchSize)
+    : PlanNode(id),
+      sources_{std::move(source)},
+      call_(std::move(call)),
+      outputColumn_(std::move(outputColumn)),
+      outputType_(std::move(outputType)),
+      streamingMode_(streamingMode),
+      dispatchBatchSize_(dispatchBatchSize) {
+  VELOX_CHECK_NOT_NULL(call_, "RPCNode call must not be null");
+  VELOX_CHECK(
+      outputType_->containsChild(outputColumn_),
+      "RPCNode outputType must contain the RPC result column: {}",
+      outputColumn_);
+  VELOX_CHECK(
+      *call_->type() == *outputType_->findChild(outputColumn_),
+      "RPCNode call result type ({}) must match the '{}' output column type ({})",
+      call_->type()->toString(),
+      outputColumn_,
+      outputType_->findChild(outputColumn_)->toString());
+}
+
+namespace {
+// Builds the RPC CallTypedExpr from the legacy flattened call fields. Each
+// argument becomes a FieldAccessTypedExpr on argumentColumns[i], except
+// positions with a non-null constantInputs[i], which become a ConstantTypedExpr
+// wrapping that constant vector. Mirrors the backward-compat deserialization
+// path in RPCNode::create().
+core::CallTypedExprPtr rpcCallFromLegacyFields(
+    std::string functionName,
+    TypePtr functionResultType,
+    const std::vector<std::string>& argumentColumns,
+    const std::vector<TypePtr>& argumentTypes,
+    const std::vector<VectorPtr>& constantInputs) {
+  VELOX_CHECK_EQ(
+      argumentColumns.size(),
+      argumentTypes.size(),
+      "RPCNode argumentColumns and argumentTypes must have the same size");
+  VELOX_CHECK_EQ(
+      argumentColumns.size(),
+      constantInputs.size(),
+      "RPCNode argumentColumns and constantInputs must have the same size");
+  std::vector<TypedExprPtr> callInputs;
+  callInputs.reserve(argumentColumns.size());
+  for (size_t i = 0; i < argumentColumns.size(); ++i) {
+    if (constantInputs[i] != nullptr) {
+      callInputs.push_back(
+          std::make_shared<ConstantTypedExpr>(constantInputs[i]));
+    } else {
+      callInputs.push_back(
+          std::make_shared<FieldAccessTypedExpr>(
+              argumentTypes[i], argumentColumns[i]));
+    }
+  }
+  return std::make_shared<CallTypedExpr>(
+      std::move(functionResultType),
+      std::move(callInputs),
+      std::move(functionName));
+}
+} // namespace
+
+RPCNode::RPCNode(
+    const PlanNodeId& id,
+    PlanNodePtr source,
     std::string functionName,
     TypePtr functionResultType,
     std::string outputColumn,
@@ -4396,33 +4463,57 @@ RPCNode::RPCNode(
     std::vector<VectorPtr> constantInputs,
     rpc::RPCStreamingMode streamingMode,
     int32_t dispatchBatchSize)
-    : PlanNode(id),
-      sources_{std::move(source)},
-      functionName_(std::move(functionName)),
-      resultType_(std::move(functionResultType)),
-      outputColumn_(std::move(outputColumn)),
-      outputType_(std::move(outputType)),
-      argumentColumns_(std::move(argumentColumns)),
-      argumentTypes_(std::move(argumentTypes)),
-      constantInputs_(std::move(constantInputs)),
-      streamingMode_(streamingMode),
-      dispatchBatchSize_(dispatchBatchSize) {
-  VELOX_CHECK_EQ(
-      argumentColumns_.size(),
-      argumentTypes_.size(),
-      "argumentColumns and argumentTypes must have the same size");
-  VELOX_CHECK_EQ(
-      argumentColumns_.size(),
-      constantInputs_.size(),
-      "argumentColumns and constantInputs must have the same size");
-  VELOX_CHECK(
-      outputType_->containsChild(outputColumn_),
-      "RPCNode outputType must contain the RPC result column: {}",
-      outputColumn_);
+    : RPCNode(
+          id,
+          std::move(source),
+          rpcCallFromLegacyFields(
+              std::move(functionName),
+              std::move(functionResultType),
+              argumentColumns,
+              argumentTypes,
+              constantInputs),
+          std::move(outputColumn),
+          std::move(outputType),
+          streamingMode,
+          dispatchBatchSize) {}
+
+std::vector<std::string> RPCNode::argumentColumns() const {
+  std::vector<std::string> columns;
+  columns.reserve(call_->inputs().size());
+  for (const auto& input : call_->inputs()) {
+    if (auto* field = dynamic_cast<const FieldAccessTypedExpr*>(input.get())) {
+      columns.push_back(field->name());
+    } else {
+      columns.emplace_back();
+    }
+  }
+  return columns;
+}
+
+std::vector<TypePtr> RPCNode::argumentTypes() const {
+  std::vector<TypePtr> types;
+  types.reserve(call_->inputs().size());
+  for (const auto& input : call_->inputs()) {
+    types.push_back(input->type());
+  }
+  return types;
+}
+
+std::vector<VectorPtr> RPCNode::constantInputs() const {
+  std::vector<VectorPtr> constants;
+  constants.reserve(call_->inputs().size());
+  for (const auto& input : call_->inputs()) {
+    if (auto* constant = dynamic_cast<const ConstantTypedExpr*>(input.get())) {
+      constants.push_back(constant->valueVector());
+    } else {
+      constants.push_back(nullptr);
+    }
+  }
+  return constants;
 }
 
 void RPCNode::addDetails(std::stringstream& stream) const {
-  stream << "function: " << functionName_ << ", outputColumn: " << outputColumn_
+  stream << "function: " << call_->name() << ", outputColumn: " << outputColumn_
          << ", streamingMode: "
          << (streamingMode_ == rpc::RPCStreamingMode::kBatch ? "BATCH"
                                                              : "PER_ROW");
@@ -4433,32 +4524,7 @@ void RPCNode::addDetails(std::stringstream& stream) const {
 
 folly::dynamic RPCNode::serialize() const {
   auto obj = PlanNode::serialize();
-  obj["functionName"] = functionName_;
-  obj["resultType"] = resultType_->serialize();
-
-  // Serialize argument columns (string names).
-  auto colsArray = folly::dynamic::array();
-  for (const auto& col : argumentColumns_) {
-    colsArray.push_back(col);
-  }
-  obj["argumentColumns"] = std::move(colsArray);
-
-  // Serialize argument types.
-  obj["argumentTypes"] = ISerializable::serialize(argumentTypes_);
-
-  // Serialize constant inputs as ConstantTypedExpr for round-trip fidelity.
-  auto constArray = folly::dynamic::array();
-  for (size_t i = 0; i < constantInputs_.size(); ++i) {
-    if (constantInputs_[i]) {
-      auto constExpr =
-          std::make_shared<core::ConstantTypedExpr>(constantInputs_[i]);
-      constArray.push_back(constExpr->serialize());
-    } else {
-      constArray.push_back(nullptr);
-    }
-  }
-  obj["constantInputs"] = std::move(constArray);
-
+  obj["call"] = call_->serialize();
   obj["outputColumn"] = outputColumn_;
   obj["outputType"] = outputType_->serialize();
   obj["streamingMode"] =
@@ -4470,39 +4536,61 @@ folly::dynamic RPCNode::serialize() const {
 // static
 PlanNodePtr RPCNode::create(const folly::dynamic& obj, void* context) {
   auto source = deserializeSingleSource(obj, context);
-  auto functionName = obj["functionName"].asString();
-  auto resultType = ISerializable::deserialize<Type>(obj["resultType"]);
+  auto outputColumn = obj["outputColumn"].asString();
 
-  // Deserialize argument columns.
-  std::vector<std::string> argumentColumns;
-  if (obj.count("argumentColumns")) {
-    for (const auto& col : obj["argumentColumns"]) {
-      argumentColumns.push_back(col.asString());
-    }
-  }
+  core::CallTypedExprPtr call;
+  if (obj.count("call")) {
+    call = std::dynamic_pointer_cast<const CallTypedExpr>(
+        ISerializable::deserialize<ITypedExpr>(obj["call"], context));
+    VELOX_CHECK_NOT_NULL(call, "RPCNode 'call' must be a CallTypedExpr");
+  } else {
+    // Backward compat: rebuild the call from the legacy flattened fields
+    // (functionName / resultType / argumentColumns / argumentTypes /
+    // constantInputs). Column arguments become FieldAccessTypedExpr; positions
+    // with a non-null legacy constantInput become ConstantTypedExpr.
+    auto functionName = obj["functionName"].asString();
+    auto resultType = ISerializable::deserialize<Type>(obj["resultType"]);
 
-  // Deserialize argument types.
-  auto argumentTypes =
-      ISerializable::deserialize<std::vector<Type>>(obj["argumentTypes"]);
-
-  // Deserialize constant inputs from ConstantTypedExpr.
-  std::vector<VectorPtr> constantInputs;
-  if (obj.count("constantInputs")) {
-    for (const auto& item : obj["constantInputs"]) {
-      if (item.isNull()) {
-        constantInputs.push_back(nullptr);
-      } else {
-        auto constExpr = std::dynamic_pointer_cast<const ConstantTypedExpr>(
-            ISerializable::deserialize<ITypedExpr>(item, context));
-        VELOX_CHECK_NOT_NULL(
-            constExpr, "Expected ConstantTypedExpr for constant input");
-        auto* pool = static_cast<memory::MemoryPool*>(context);
-        constantInputs.push_back(constExpr->toConstantVector(pool));
+    std::vector<std::string> argumentColumns;
+    if (obj.count("argumentColumns")) {
+      for (const auto& col : obj["argumentColumns"]) {
+        argumentColumns.push_back(col.asString());
       }
     }
-  }
+    auto argumentTypes =
+        ISerializable::deserialize<std::vector<Type>>(obj["argumentTypes"]);
 
-  auto outputColumn = obj["outputColumn"].asString();
+    std::vector<TypedExprPtr> callInputs;
+    callInputs.reserve(argumentColumns.size());
+    VELOX_CHECK_EQ(
+        argumentTypes.size(),
+        argumentColumns.size(),
+        "Legacy RPCNode argumentTypes and argumentColumns must have the same size");
+    for (size_t i = 0; i < argumentColumns.size(); ++i) {
+      callInputs.push_back(
+          std::make_shared<FieldAccessTypedExpr>(
+              argumentTypes[i], argumentColumns[i]));
+    }
+    if (obj.count("constantInputs")) {
+      VELOX_CHECK_EQ(
+          obj["constantInputs"].size(),
+          argumentColumns.size(),
+          "Legacy RPCNode constantInputs must match argumentColumns size");
+      size_t i = 0;
+      for (const auto& item : obj["constantInputs"]) {
+        if (!item.isNull() && i < callInputs.size()) {
+          auto constExpr = std::dynamic_pointer_cast<const ConstantTypedExpr>(
+              ISerializable::deserialize<ITypedExpr>(item, context));
+          VELOX_CHECK_NOT_NULL(
+              constExpr, "Expected ConstantTypedExpr for constant input");
+          callInputs[i] = constExpr;
+        }
+        ++i;
+      }
+    }
+    call = std::make_shared<CallTypedExpr>(
+        std::move(resultType), std::move(callInputs), std::move(functionName));
+  }
 
   // Deserialize explicit output type.
   RowTypePtr outputType;
@@ -4521,7 +4609,7 @@ PlanNodePtr RPCNode::create(const folly::dynamic& obj, void* context) {
       }
     }
     names.push_back(outputColumn);
-    types.push_back(resultType);
+    types.push_back(call->type());
     outputType = ROW(std::move(names), std::move(types));
   }
 
@@ -4533,13 +4621,9 @@ PlanNodePtr RPCNode::create(const folly::dynamic& obj, void* context) {
   return std::make_shared<RPCNode>(
       deserializePlanNodeId(obj),
       std::move(source),
-      std::move(functionName),
-      std::move(resultType),
+      std::move(call),
       std::move(outputColumn),
       std::move(outputType),
-      std::move(argumentColumns),
-      std::move(argumentTypes),
-      std::move(constantInputs),
       streamingMode,
       dispatchBatchSize);
 }

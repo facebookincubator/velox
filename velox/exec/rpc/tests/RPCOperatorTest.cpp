@@ -107,14 +107,14 @@ class RPCOperatorTest : public OperatorTestBase {
       int32_t dispatchBatchSize = 0) {
     auto sourceType = source->outputType();
 
-    std::vector<std::string> argCols;
-    std::vector<TypePtr> argTypes;
-    std::vector<VectorPtr> constantInputs;
+    std::vector<core::TypedExprPtr> callInputs;
     for (const auto& colName : argumentColumnNames) {
-      argCols.push_back(colName);
-      argTypes.push_back(sourceType->findChild(colName));
-      constantInputs.push_back(nullptr);
+      callInputs.push_back(
+          std::make_shared<core::FieldAccessTypedExpr>(
+              sourceType->findChild(colName), colName));
     }
+    auto call = std::make_shared<core::CallTypedExpr>(
+        VARCHAR(), std::move(callInputs), functionName);
 
     auto outputNames = sourceType->names();
     auto outputTypes = sourceType->children();
@@ -125,13 +125,9 @@ class RPCOperatorTest : public OperatorTestBase {
     return std::make_shared<core::RPCNode>(
         "rpc-0",
         source,
-        functionName,
-        VARCHAR(),
+        std::move(call),
         "__rpc_result",
         outputType,
-        argCols,
-        argTypes,
-        constantInputs,
         RPCStreamingMode::kBatch,
         dispatchBatchSize);
   }
@@ -143,14 +139,15 @@ class RPCOperatorTest : public OperatorTestBase {
       const std::vector<std::string>& argumentColumnNames) {
     auto sourceType = source->outputType();
 
-    std::vector<std::string> argCols;
-    std::vector<TypePtr> argTypes;
-    std::vector<VectorPtr> constantInputs;
+    std::vector<core::TypedExprPtr> callInputs;
     for (const auto& colName : argumentColumnNames) {
-      argCols.push_back(colName);
-      argTypes.push_back(sourceType->findChild(colName));
-      constantInputs.push_back(nullptr); // Variable, not constant.
+      // Variable (column) argument, not a constant.
+      callInputs.push_back(
+          std::make_shared<core::FieldAccessTypedExpr>(
+              sourceType->findChild(colName), colName));
     }
+    auto call = std::make_shared<core::CallTypedExpr>(
+        VARCHAR(), std::move(callInputs), "demo_rpc");
 
     // Output type = all source columns + RPC result column.
     auto outputNames = sourceType->names();
@@ -160,15 +157,7 @@ class RPCOperatorTest : public OperatorTestBase {
     auto outputType = ROW(std::move(outputNames), std::move(outputTypes));
 
     return std::make_shared<core::RPCNode>(
-        "rpc-0",
-        source,
-        "demo_rpc",
-        VARCHAR(),
-        "__rpc_result",
-        outputType,
-        argCols,
-        argTypes,
-        constantInputs);
+        "rpc-0", source, std::move(call), "__rpc_result", outputType);
   }
 };
 

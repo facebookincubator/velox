@@ -6437,17 +6437,21 @@ class PlanNodeVisitor {
 
 /// Plan node for async RPC execution (e.g., LLM inference, embeddings).
 ///
-/// Stores the function name, result type, argument columns, and streaming
-/// mode. The RPCNode does NOT evaluate argument expressions — a ProjectNode
-/// inserted before this node by the plan rewriter computes argument columns.
+/// Stores the RPC call (function name, result type, and argument expressions)
+/// and streaming mode. Each call argument is either a FieldAccessTypedExpr (an
+/// input column read from the source) or a ConstantTypedExpr (a literal). A
+/// ProjectNode inserted before this node by the plan rewriter computes any
+/// non-constant argument columns; the RPCNode does NOT evaluate argument
+/// expressions itself.
 ///
 /// Architecture:
 ///   SQL: SELECT rpc_function(col1, 'model_name') FROM table
 ///            |
 ///            v (Plan Rewriter)
-///     ProjectNode (__rpc_arg_0 = col1, __rpc_arg_1 = 'model_name')
+///     ProjectNode (__rpc_arg_0 = col1)
 ///           |
-///        RPCNode (argumentColumns = [__rpc_arg_0, __rpc_arg_1])
+///        RPCNode (call = rpc_function(
+///                     FieldAccess(__rpc_arg_0), Constant('model_name')))
 ///           |
 ///       source[0]
 ///           |
@@ -6456,23 +6460,39 @@ class RPCNode : public PlanNode {
  public:
   /// @param id Unique identifier for this plan node.
   /// @param source Data source (the only source).
-  /// @param functionName Name of the registered AsyncRPCFunction.
-  /// @param functionResultType Velox type of the RPC result column.
+  /// @param call The RPC call. Its name() is the registered AsyncRPCFunction,
+  ///        its type() is the Velox type of the RPC result column, and its
+  ///        inputs() are the call arguments in order. Each argument is either a
+  ///        FieldAccessTypedExpr (an input column read from the source at
+  ///        runtime) or a ConstantTypedExpr (a literal materialized by the
+  ///        operator). Their types are passed to
+  ///        AsyncRPCFunction::initialize().
   /// @param outputColumn Name of the output column for RPC responses.
   /// @param outputType Explicit output type. Must contain outputColumn
   ///        and any passthrough source columns needed by downstream.
   ///        Specified explicitly (like AbstractJoinNode) to support column
   ///        pruning.
-  /// @param argumentColumns Names of input columns containing pre-evaluated
-  ///        argument values. RPCOperator reads these columns in addInput().
-  /// @param argumentTypes Types of each argument (aligned with
-  ///        argumentColumns). Passed to AsyncRPCFunction::initialize().
-  /// @param constantInputs Constant argument values (aligned with
-  ///        argumentColumns). nullptr for non-constant args, single-element
-  ///        ConstantVectors for constant args. Passed to initialize().
   /// @param streamingMode The streaming mode for RPC execution.
   /// @param dispatchBatchSize For BATCH mode pipelining: fire callBatch()
   ///        every N rows during addInput() instead of collecting all rows.
+  RPCNode(
+      const PlanNodeId& id,
+      PlanNodePtr source,
+      core::CallTypedExprPtr call,
+      std::string outputColumn,
+      RowTypePtr outputType,
+      rpc::RPCStreamingMode streamingMode = rpc::RPCStreamingMode::kPerRow,
+      int32_t dispatchBatchSize = 0);
+
+  /// Legacy constructor. Prefer the CallTypedExpr constructor above.
+  ///
+  /// Accepts the flattened call fields and builds the CallTypedExpr internally:
+  /// each argument becomes a FieldAccessTypedExpr referencing
+  /// argumentColumns[i] (type argumentTypes[i]), except positions with a
+  /// non-null constantInputs[i], which become a ConstantTypedExpr wrapping that
+  /// constant vector. Retained so existing callers keep compiling during the
+  /// expand/migrate/contract migration (see the diff summary); removed once all
+  /// callers use the CallTypedExpr constructor.
   RPCNode(
       const PlanNodeId& id,
       PlanNodePtr source,
@@ -6490,28 +6510,31 @@ class RPCNode : public PlanNode {
     return sources_[0];
   }
 
+  /// The RPC call: function name, result type, and argument expressions.
+  const core::CallTypedExprPtr& call() const {
+    return call_;
+  }
+
   const std::string& functionName() const {
-    return functionName_;
+    return call_->name();
   }
 
   const TypePtr& rpcResultType() const {
-    return resultType_;
+    return call_->type();
   }
+
+  /// Legacy accessors over the folded call, each derived from call()->inputs().
+  /// Retained so pre-migration callers (e.g. the presto-cpp conversion test)
+  /// keep compiling; removed in the CONTRACT step once every caller uses
+  /// call()->inputs() directly. argumentColumns() yields the FieldAccess name
+  /// for column arguments and an empty string for constants; constantInputs()
+  /// yields the constant vector for constant arguments and nullptr for columns.
+  std::vector<std::string> argumentColumns() const;
+  std::vector<TypePtr> argumentTypes() const;
+  std::vector<VectorPtr> constantInputs() const;
 
   const std::string& outputColumn() const {
     return outputColumn_;
-  }
-
-  const std::vector<std::string>& argumentColumns() const {
-    return argumentColumns_;
-  }
-
-  const std::vector<TypePtr>& argumentTypes() const {
-    return argumentTypes_;
-  }
-
-  const std::vector<VectorPtr>& constantInputs() const {
-    return constantInputs_;
   }
 
   rpc::RPCStreamingMode streamingMode() const {
@@ -6542,13 +6565,9 @@ class RPCNode : public PlanNode {
   void addDetails(std::stringstream& stream) const override;
 
   std::vector<PlanNodePtr> sources_;
-  std::string functionName_;
-  TypePtr resultType_;
+  core::CallTypedExprPtr call_;
   std::string outputColumn_;
   RowTypePtr outputType_;
-  std::vector<std::string> argumentColumns_;
-  std::vector<TypePtr> argumentTypes_;
-  std::vector<VectorPtr> constantInputs_;
   rpc::RPCStreamingMode streamingMode_;
   int32_t dispatchBatchSize_{0};
 };
