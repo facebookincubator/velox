@@ -13,18 +13,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include "velox/experimental/cudf/expression/CommonFunctions.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
-
-#include <memory>
 
 namespace facebook::velox::cudf_velox {
 
-std::shared_ptr<CudfFunction> makeArrayAccessFunction(
+/// Selects the best cuDF evaluator for the given (already-optimized) expression
+/// and creates the corresponding CudfExpression.  Use for recursive evaluator
+/// hand-off, and for callers that have already optimized the expression because
+/// they also need the optimized tree (e.g. hash join's two-table AST checks and
+/// the data source's read-column collection).
+std::shared_ptr<CudfExpression> compile(
     const core::TypedExprPtr& expr,
-    ArrayAccessPolicy policy,
+    const RowTypePtr& inputRowSchema,
+    memory::MemoryPool* pool);
+
+/// Optimizes the expression (rewrites + constant folding through `queryCtx`)
+/// and compiles the result.  Use for top-level operator expressions that do not
+/// need the optimized tree separately.
+std::shared_ptr<CudfExpression> optimizeAndCompile(
+    const core::TypedExprPtr& expr,
+    const RowTypePtr& inputRowSchema,
+    core::QueryCtx* queryCtx,
     memory::MemoryPool* pool);
 
 } // namespace facebook::velox::cudf_velox

@@ -28,7 +28,7 @@ namespace facebook::velox::cudf_velox::sparksql {
 /// date).
 class DateAddFunction : public CudfFunction {
  public:
-  explicit DateAddFunction(const std::shared_ptr<velox::exec::Expr>& expr);
+  DateAddFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool);
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
