@@ -461,7 +461,7 @@ build impact analysis and selective builds.
   call.  This is particularly a problem for longer signatures with repeated
   types or constant arguments. For example, `phrobinicate(/*elements=*/{1, 2},
   /*startOffset=*/0, /*length=*/2)`
-* Use the /*argName=*/value format (note the lack of spaces). Clang-tidy
+* Use the `/*argName=*/value` format (note the lack of spaces). Clang-tidy
   supports checking the given argument name against the declaration when this
   format is used.
 
