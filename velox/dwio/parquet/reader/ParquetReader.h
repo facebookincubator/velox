@@ -42,6 +42,10 @@ class ReaderBase;
 /// Carries Parquet-specific options through the common reader interface.
 class ParquetReaderOptions : public dwio::common::FormatSpecificOptions {
  public:
+  /// Speculative tail-read size in bytes for reading Parquet footers.
+  uint64_t footerSpeculativeIoSize{
+      ParquetConfig::kFooterSpeculativeIoSizeSessionProperty::defaultValue};
+
   void setAllowInt32Narrowing(bool allow) {
     allowInt32Narrowing_ = allow;
   }

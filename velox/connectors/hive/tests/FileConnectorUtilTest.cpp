@@ -142,8 +142,7 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
   {
     auto holder = makeConnectorQueryCtx(
         {{hive::FileConfig::kUseColumnNamesSession, "true"},
-         {hive::FileConfig::kFooterSpeculativeIoSizeSession,
-          std::to_string(128UL << 10)},
+         {"orc_footer_speculative_io_size", std::to_string(128UL << 10)},
          {hive::FileConfig::kMaxCoalescedDistanceSession, "3MB"}});
     auto split = makeSplit(dwio::common::FileFormat::ORC);
     dwio::common::ReaderOptions readerOptions(pool_.get());

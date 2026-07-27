@@ -143,6 +143,7 @@ ParquetReaderOptions getParquetReaderOptions(
   }
 
   ParquetReaderOptions parquetOptions;
+  parquetOptions.footerSpeculativeIoSize = options.footerSpeculativeIoSize();
   return parquetOptions;
 }
 
@@ -153,6 +154,8 @@ ParquetReaderFactory::createFormatOptions(
     const config::ConfigBase& connectorConfig,
     const config::ConfigBase& session) const {
   auto options = std::make_shared<ParquetReaderOptions>();
+  options->footerSpeculativeIoSize =
+      ParquetConfig::footerSpeculativeIoSize(connectorConfig, session);
   options->setAllowInt32Narrowing(
       ParquetConfig::allowInt32Narrowing(connectorConfig, session));
   options->setFooterMemoryTrackingThreshold(
@@ -358,9 +361,10 @@ void ReaderBase::releaseThriftBytes(size_t bytes) {
 
 void ReaderBase::loadFileMetaData() {
   bool preloadFile = fileLength_ <=
-      std::max(filePreloadThreshold_, options_.footerSpeculativeIoSize());
+      std::max(filePreloadThreshold_,
+               parquetReaderOptions_.footerSpeculativeIoSize);
   uint64_t readSize =
-      preloadFile ? fileLength_ : options_.footerSpeculativeIoSize();
+      preloadFile ? fileLength_ : parquetReaderOptions_.footerSpeculativeIoSize;
 
   std::unique_ptr<dwio::common::SeekableInputStream> stream;
   if (preloadFile) {

@@ -32,6 +32,16 @@ namespace facebook::velox::parquet {
 class ParquetConfig {
  public:
   VELOX_FORMAT_CONFIG(
+      kFooterSpeculativeIoSizeSession,
+      kFooterSpeculativeIoSize,
+      footerSpeculativeIoSize,
+      "footer_speculative_io_size",
+      "footer-speculative-io-size",
+      uint64_t,
+      256UL << 10,
+      "Speculative tail-read size in bytes for Parquet files.")
+
+  VELOX_FORMAT_CONFIG(
       kAllowInt32NarrowingSession,
       kAllowInt32Narrowing,
       allowInt32Narrowing,
@@ -193,6 +203,8 @@ class ParquetConfig {
   static void registerProperties(
       std::vector<config::ConfigProperty>& properties,
       std::string_view sessionPrefix) {
+    dwio::common::registerFormatConfigProperty<
+        kFooterSpeculativeIoSizeSessionProperty>(properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<
         kAllowInt32NarrowingSessionProperty>(properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<

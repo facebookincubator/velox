@@ -26,6 +26,10 @@
 #include "velox/connectors/hive/FileTableHandle.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/dwrf/common/Config.h"
+#ifdef VELOX_ENABLE_PARQUET
+#include "velox/dwio/parquet/common/ParquetConfig.h"
+#endif
 
 namespace facebook::velox::connector::hive {
 
@@ -85,8 +89,6 @@ void configureReaderOptions(
       fileConfig->useColumnNames(sessionProperties)
           ? dwio::common::ColumnMappingMode::kName
           : dwio::common::ColumnMappingMode::kPosition);
-  readerOptions.setFooterSpeculativeIoSize(
-      fileConfig->footerSpeculativeIoSize(sessionProperties));
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());
@@ -117,6 +119,27 @@ void configureReaderOptions(
   readerOptions.setCacheIndex(
       fileConfig->cacheIndex(sessionProperties) && fileSplit->cacheable);
   readerOptions.setPinIndex(fileConfig->pinIndex(sessionProperties));
+
+  // Set footer speculative IO size based on file format.
+  switch (fileSplit->fileFormat) {
+    case dwio::common::FileFormat::DWRF:
+    case dwio::common::FileFormat::ORC:
+      readerOptions.setFooterSpeculativeIoSize(
+          fileConfig->orcFooterSpeculativeIoSize(sessionProperties));
+      break;
+    case dwio::common::FileFormat::PARQUET:
+      break;
+    case dwio::common::FileFormat::NIMBLE:
+      readerOptions.setFooterSpeculativeIoSize(
+          fileConfig->nimbleFooterSpeculativeIoSize(sessionProperties));
+      break;
+    default:
+      // Use ORC default for unknown formats.
+      readerOptions.setFooterSpeculativeIoSize(
+          fileConfig->orcFooterSpeculativeIoSize(sessionProperties));
+      break;
+  }
+
   if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
     VELOX_CHECK(
         readerOptions.fileFormat() == fileSplit->fileFormat,

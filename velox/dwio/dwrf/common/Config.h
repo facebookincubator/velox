@@ -84,6 +84,16 @@ class Config : public config::ConfigBase {
   static Entry<uint64_t> RAW_DATA_SIZE_PER_BATCH;
   static Entry<bool> MAP_STATISTICS;
 
+  VELOX_FORMAT_CONFIG(
+      kOrcFooterSpeculativeIoSizeSession,
+      kOrcFooterSpeculativeIoSize,
+      footerSpeculativeIoSize,
+      "footer_speculative_io_size",
+      "footer-speculative-io-size",
+      uint64_t,
+      256UL << 10,
+      "Speculative tail-read size in bytes for ORC files.")
+
   VELOX_FORMAT_CONFIG_PROPERTY(
       kOrcMaxCoalesceDistanceSession,
       kOrcMaxCoalesceDistance,
@@ -178,6 +188,8 @@ class Config : public config::ConfigBase {
   static void registerProperties(
       std::vector<config::ConfigProperty>& properties,
       std::string_view sessionPrefix) {
+    dwio::common::registerFormatConfigProperty<
+        kOrcFooterSpeculativeIoSizeSessionProperty>(properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<
         kOrcMaxCoalesceDistanceSessionProperty>(properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<

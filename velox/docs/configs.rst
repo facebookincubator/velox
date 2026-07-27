@@ -951,14 +951,6 @@ Common Options
        file formats. The connector property is scoped by connector ID, for
        example ``hive.use-column-names`` or ``iceberg.use-column-names``.
        Session: ``use_column_names``.
-   * - ``footer-speculative-io-size``
-     - integer
-     - 256KB
-     - Speculative tail-read size in bytes when opening columnar files. The
-       connector property is scoped by connector ID, for example
-       ``hive.footer-speculative-io-size`` or
-       ``iceberg.footer-speculative-io-size``.
-       Session: ``footer_speculative_io_size``.
 
 ORC Options (prefix ``hive.orc.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -972,6 +964,13 @@ ORC Options (prefix ``hive.orc.``)
      - Type
      - Default Value
      - Description
+   * - ``footer-speculative-io-size``
+     - integer
+     - 256KB
+     - Speculative tail-read size in bytes when opening ORC files. Controls how many bytes are read from the end
+       of the file to load the footer and nearby metadata in a single IO operation.
+       Set to 0 for adaptive mode. Configure as ``orc.footer-speculative-io-size``; do not prepend ``hive.``.
+       Session: ``orc_footer_speculative_io_size``.
    * - ``writer.stripe-max-size``
      - string
      - 64M
@@ -1022,6 +1021,12 @@ Parquet Options (prefix ``hive.parquet.``)
      - Type
      - Default Value
      - Description
+   * - ``footer-speculative-io-size``
+     - integer
+     - 256KB
+     - Speculative tail-read size in bytes when opening Parquet files. Controls how many bytes are read from the end
+       of the file to load the footer and nearby metadata in a single IO operation.
+       Set to 0 for adaptive mode. Session: ``parquet_footer_speculative_io_size``.
    * - ``allow-int32-narrowing``
      - bool
      - false
@@ -1123,6 +1128,13 @@ Nimble Options (prefix ``hive.nimble.``)
      - Type
      - Default Value
      - Description
+   * - ``footer-speculative-io-size``
+     - integer
+     - 8MB
+     - Speculative tail-read size in bytes when opening Nimble files. Controls how many bytes are read from the end
+       of the file to load the footer and nearby metadata in a single IO operation.
+       Set to 0 for adaptive mode. Configure as ``nimble.footer-speculative-io-size``; do not prepend ``hive.``.
+       Session: ``nimble_footer_speculative_io_size``.
    * - ``lazy-column-io``
      - boolean
      - false
