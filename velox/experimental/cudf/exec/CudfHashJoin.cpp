@@ -103,12 +103,12 @@ vector_size_t filteredOutputNumRows(
           ->value(stream));
 }
 
-// Selects whether getMaskedIndices keeps rows where the mask is true (MATCHES)
-// or where the mask is false (MISMATCHES).
-enum class MaskType { MATCHES, MISMATCHES };
+// Selects whether getMaskedIndices keeps rows where the mask is true (kMatched)
+// or where the mask is false (kUnmatched).
+enum class MaskType { kMatched, kUnmatched };
 
 // Returns row indices selected by mask as a column of size_type. When maskType
-// is MATCHES, indices where the mask is true are returned; when MISMATCHES,
+// is kMatched, indices where the mask is true are returned; when kUnmatched,
 // indices where the mask is false are returned.
 std::unique_ptr<cudf::column> getMaskedIndices(
     cudf::column_view mask,
@@ -122,7 +122,7 @@ std::unique_ptr<cudf::column> getMaskedIndices(
       stream,
       mr);
 
-  auto indicesTable = maskType == MaskType::MATCHES
+  auto indicesTable = maskType == MaskType::kMatched
       ? cudf::apply_boolean_mask(
             cudf::table_view{{seq->view()}}, mask, stream, mr)
       : cudf::apply_deletion_mask(
@@ -174,14 +174,14 @@ class ProbeMatchTracker {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) {
     return getMaskedIndices(
-        matchCol_->view(), MaskType::MISMATCHES, stream, mr);
+        matchCol_->view(), MaskType::kUnmatched, stream, mr);
   }
 
   // Returns indices of probe rows that matched in at least one build batch.
   std::unique_ptr<cudf::column> getMatchedIndices(
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) {
-    return getMaskedIndices(matchCol_->view(), MaskType::MATCHES, stream, mr);
+    return getMaskedIndices(matchCol_->view(), MaskType::kMatched, stream, mr);
   }
 
  private:
@@ -1876,7 +1876,7 @@ CudfHashJoinProbe::leftSemiProjectJoin(
         if (probeHasNulls) {
           auto nullProbeIndices = getMaskedIndices(
               probeKeyNullMask->view(),
-              MaskType::MATCHES,
+              MaskType::kMatched,
               stream,
               get_temp_mr());
           auto allBuildIndices = cudf::sequence(
@@ -1916,12 +1916,12 @@ CudfHashJoinProbe::leftSemiProjectJoin(
               get_temp_mr());
 
           auto typeAProbeIndices = getMaskedIndices(
-              typeAMask->view(), MaskType::MATCHES, stream, get_temp_mr());
+              typeAMask->view(), MaskType::kMatched, stream, get_temp_mr());
           auto buildKeyNullMask =
               createProbeKeyNullMask(buildKeyView, stream, get_temp_mr());
           auto nullBuildIndices = getMaskedIndices(
               buildKeyNullMask->view(),
-              MaskType::MATCHES,
+              MaskType::kMatched,
               stream,
               get_temp_mr());
 
