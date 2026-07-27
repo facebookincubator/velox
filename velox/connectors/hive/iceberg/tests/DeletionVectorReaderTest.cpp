@@ -263,7 +263,7 @@ TEST_F(DeletionVectorReaderTest, basicArrayContainer) {
   auto dvFile =
       makeDvDeleteFile(tempFile->getPath(), positions.size(), fileSize);
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
   EXPECT_FALSE(reader.noMoreData());
 
   auto bitmap = allocateBitmap(100);
@@ -284,7 +284,7 @@ TEST_F(DeletionVectorReaderTest, batchRangeFiltering) {
   auto dvFile =
       makeDvDeleteFile(tempFile->getPath(), positions.size(), fileSize);
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
   // First batch: rows 0-24 (should contain positions 10, 20).
   auto bitmap1 = allocateBitmap(25);
@@ -319,7 +319,7 @@ TEST_F(DeletionVectorReaderTest, splitOffset) {
       makeDvDeleteFile(tempFile->getPath(), positions.size(), fileSize);
 
   // Split starts at row 100.
-  DeletionVectorReader reader(dvFile, 100, pool_.get());
+  DeletionVectorReader reader(dvFile, 100, pool_.get(), nullptr);
 
   auto bitmap = allocateBitmap(20);
   reader.readDeletePositions(0, 20, bitmap);
@@ -342,7 +342,7 @@ TEST_F(DeletionVectorReaderTest, splitOffsetWithBaseReadOffset) {
       makeDvDeleteFile(tempFile->getPath(), positions.size(), fileSize);
 
   // Split starts at row 100.
-  DeletionVectorReader reader(dvFile, 100, pool_.get());
+  DeletionVectorReader reader(dvFile, 100, pool_.get(), nullptr);
 
   // First batch: baseReadOffset=100, so file positions [200, 300).
   // Positions 200, 210, 220 are all in range.
@@ -364,7 +364,7 @@ TEST_F(DeletionVectorReaderTest, noDeletesInRange) {
   auto dvFile =
       makeDvDeleteFile(tempFile->getPath(), positions.size(), fileSize);
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
   // Batch covers rows 0-99, no deletions in this range.
   auto bitmap = allocateBitmap(100);
@@ -389,7 +389,7 @@ TEST_F(DeletionVectorReaderTest, runContainers) {
   auto dvFile =
       makeDvDeleteFile(tempFile->getPath(), expected.size(), fileSize);
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
   auto bitmap = allocateBitmap(100);
   reader.readDeletePositions(0, 100, bitmap);
@@ -415,7 +415,7 @@ TEST_F(DeletionVectorReaderTest, runContainersWithOffsetHeader) {
   auto dvFile =
       makeDvDeleteFile(tempFile->getPath(), expected.size(), fileSize);
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
   const uint64_t numRows = 200'000;
   auto bitmap = allocateBitmap(numRows);
@@ -437,7 +437,7 @@ TEST_F(DeletionVectorReaderTest, largePositionsMultipleContainers) {
   auto dvFile =
       makeDvDeleteFile(tempFile->getPath(), positions.size(), fileSize);
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
   // Read a batch covering all positions.
   auto bitmap = allocateBitmap(66000);
@@ -463,7 +463,7 @@ TEST_F(DeletionVectorReaderTest, blobOffset) {
   auto dvFile = makeDvDeleteFile(
       tempFile->getPath(), positions.size(), fileSize, 64, bitmapData.size());
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
   auto bitmap = allocateBitmap(20);
   reader.readDeletePositions(0, 20, bitmap);
@@ -488,7 +488,7 @@ TEST_F(DeletionVectorReaderTest, constructorRejectsWrongContentType) {
       5);
 
   VELOX_ASSERT_THROW(
-      DeletionVectorReader(badFile, 0, pool_.get()),
+      DeletionVectorReader(badFile, 0, pool_.get(), nullptr),
       "Expected deletion vector file");
 }
 
@@ -507,7 +507,8 @@ TEST_F(DeletionVectorReaderTest, constructorRejectsEmptyDv) {
       5);
 
   VELOX_ASSERT_THROW(
-      DeletionVectorReader(emptyDv, 0, pool_.get()), "Empty deletion vector");
+      DeletionVectorReader(emptyDv, 0, pool_.get(), nullptr),
+      "Empty deletion vector");
 }
 
 TEST_F(DeletionVectorReaderTest, noMoreDataAfterAllConsumed) {
@@ -519,7 +520,7 @@ TEST_F(DeletionVectorReaderTest, noMoreDataAfterAllConsumed) {
   auto dvFile =
       makeDvDeleteFile(tempFile->getPath(), positions.size(), fileSize);
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
   EXPECT_FALSE(reader.noMoreData());
 
   auto bitmap = allocateBitmap(10);
@@ -543,7 +544,7 @@ TEST_F(DeletionVectorReaderTest, singlePosition) {
   auto dvFile =
       makeDvDeleteFile(tempFile->getPath(), positions.size(), fileSize);
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
   auto bitmap = allocateBitmap(100);
   reader.readDeletePositions(0, 100, bitmap);
@@ -566,7 +567,7 @@ TEST_F(DeletionVectorReaderTest, consecutivePositions) {
   auto dvFile =
       makeDvDeleteFile(tempFile->getPath(), positions.size(), fileSize);
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
   auto bitmap = allocateBitmap(100);
   reader.readDeletePositions(0, 100, bitmap);
@@ -587,7 +588,7 @@ TEST_F(DeletionVectorReaderTest, invalidBitmapTooSmall) {
 
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), 1, tinyData.size());
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
   auto bitmap = allocateBitmap(10);
   VELOX_ASSERT_THROW(reader.readDeletePositions(0, 10, bitmap), "too small");
@@ -604,7 +605,7 @@ TEST_F(DeletionVectorReaderTest, invalidBitmapBadCookie) {
 
   auto dvFile = makeDvDeleteFile(tempFile->getPath(), 1, badData.size());
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
   auto bitmap = allocateBitmap(10);
   VELOX_ASSERT_THROW(

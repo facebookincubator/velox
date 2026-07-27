@@ -15,132 +15,123 @@
  */
 #pragma once
 
-#include "velox/exec/OutputBuffer.h"
+#include <memory>
+#include <optional>
+#include <string>
+
+#include "velox/core/PlanNode.h"
+#include "velox/exec/OutputBufferStats.h"
 
 namespace facebook::velox::exec {
 
+class Task;
+
+/// Abstract interface for the output buffer that delivers a Task's partitioned
+/// output to downstream consumers. Implementations are registered in
+/// OutputTransportRegistry and resolved per query.
+///
+/// Model: a task has a single output buffer holding one destination buffer per
+/// downstream consumer -- 'numDestinations' of them. For kPartitioned output
+/// the destination count is fixed at initializeTask(); for broadcast and
+/// arbitrary output consumers register while the task runs, so the count grows
+/// via updateOutputBuffers(). 'numDrivers' is how many producing drivers feed
+/// the buffer.
+///
+/// Covers only the control plane (task lifecycle) and observability. The data
+/// plane (enqueue / fetch / acknowledge / delete) stays on the concrete
+/// managers because payloads are transport-specific -- serialized pages for the
+/// in-memory transport, GPU buffers for UCX -- and is driven by the matching
+/// output operator, not by Task.
+///
+/// Lifecycle: initializeTask() exactly once per task and before any other call
+/// for it, then updateOutputBuffers() / updateNumDrivers() and the
+/// observability methods while it runs, then removeTask() once at termination.
+/// The update and observability methods tolerate an unknown task (returning
+/// false / nullopt), so callers need not race teardown; only the producer must
+/// have initialized before it enqueues. Skipping removeTask() leaks the buffer
+/// -- and the Task it pins -- until the manager is destroyed.
+///
+/// Implementations must honor two contracts:
+///
+/// - Thread safety: a single instance serves many tasks at once, and each task
+///   drives it from all of its driver threads, so every method must be safe
+///   under concurrent calls, including concurrent calls for the same taskId.
+///
+/// - Lifetime: Task and the output operator hold only weak_ptrs and lock() per
+///   use, which breaks the Task <-> OutputBuffer ownership cycle. What keeps an
+///   instance alive is its OutputTransportRegistry entry -- or, for the
+///   built-in default, a process-wide singleton -- so an implementation must
+///   stay registered until every task it initialized has finished.
 class OutputBufferManager {
  public:
-  /// Options for shuffle. This is initialized once and affects both
-  /// PartitionedOutput and Exchange. This can be used for controlling
-  /// protocol version and other matters where shuffle sides should
-  /// agree.
-  struct Options {};
+  virtual ~OutputBufferManager() = default;
 
-  explicit OutputBufferManager(Options) {}
+  // Lifecycle.
 
-  void initializeTask(
+  /// Creates the task's output buffer. Must be called exactly once per task and
+  /// before any other method for it; a second call for the same task is an
+  /// error. 'kind' selects the buffer semantics; 'numDestinations' is the
+  /// initial destination-buffer count (fixed for kPartitioned, a starting point
+  /// updateOutputBuffers() grows for broadcast / arbitrary); 'numDrivers' is
+  /// the producing-driver count whose completion marks the output done (see
+  /// updateNumDrivers()).
+  virtual void initializeTask(
       std::shared_ptr<Task> task,
       core::PartitionedOutputNode::Kind kind,
       int numDestinations,
-      int numDrivers);
+      int numDrivers) = 0;
 
-  /// Updates the number of buffers. Returns true if the buffer exists for a
-  /// given taskId, else returns false.
-  bool updateOutputBuffers(
+  /// Publishes the destination-buffer count as consumers register, finalizing
+  /// it when 'noMoreBuffers' is true. Returns false if the task has no output
+  /// buffer. Contract:
+  ///  - kPartitioned: the count is fixed at initializeTask(); this only asserts
+  ///    'numDestinations' matches and requires 'noMoreBuffers' == true.
+  ///  - broadcast / arbitrary: 'numDestinations' is monotonically
+  ///    non-decreasing; a value <= the current count is ignored, not an error.
+  ///  - 'noMoreBuffers' is terminal: once set the count is frozen and adding
+  ///    destinations afterwards is an error.
+  virtual bool updateOutputBuffers(
       const std::string& taskId,
-      int numBuffers,
-      bool noMoreBuffers);
+      int numDestinations,
+      bool noMoreBuffers) = 0;
 
-  /// When we understand the final number of split groups (for grouped
-  /// execution only), we need to update the number of producing drivers here.
-  /// Returns true if the buffer exists for a given taskId, else returns false.
-  bool updateNumDrivers(const std::string& taskId, uint32_t newNumDrivers);
-
-  /// Adds data to the outgoing queue for 'destination'. 'data' must not be
-  /// nullptr. 'data' is always added but if the buffers are full the future is
-  /// set to a ContinueFuture that will be realized when there is space.
-  bool enqueue(
+  /// Sets the absolute number of producing drivers feeding this task's output
+  /// to 'newNumDrivers' (grouped execution learns the total only after all
+  /// split groups are seen). Returns false if the task has no output buffer.
+  /// This sets only the target count; how the manager learns a driver finished
+  /// and decides the output is complete is a data-plane detail of the
+  /// implementation, not part of this interface.
+  virtual bool updateNumDrivers(
       const std::string& taskId,
-      int destination,
-      std::unique_ptr<SerializedPageBase> data,
-      ContinueFuture* future);
+      uint32_t newNumDrivers) = 0;
 
-  void noMoreData(const std::string& taskId);
+  /// Releases the task's output buffer and the Task reference it holds. Call
+  /// once at termination; skipping it leaks the buffer until the manager is
+  /// destroyed.
+  virtual void removeTask(const std::string& taskId) = 0;
 
-  /// Returns true if noMoreData has been called and all the accumulated data
-  /// have been fetched and acknowledged.
-  bool isFinished(const std::string& taskId);
+  // Observability.
 
-  /// Removes data with sequence number < 'sequence' from the queue for
-  /// 'destination_'.
-  void
-  acknowledge(const std::string& taskId, int destination, int64_t sequence);
+  /// Stats for 'taskId', or nullopt if it has no output buffer.
+  /// OutputBufferStats is transport-neutral (bytes / rows / pages);
+  /// every transport maps its own accounting onto it.
+  virtual std::optional<OutputBufferStats> stats(const std::string& taskId) = 0;
 
-  void deleteResults(const std::string& taskId, int destination);
+  /// Output-buffer memory utilization as buffered bytes / capacity, where
+  /// capacity is the task's configured max output buffer size; nullopt if
+  /// 'taskId' is unknown or the transport has no bounded capacity.
+  /// Reported for observability; it does not gate producers by itself.
+  virtual std::optional<double> getUtilization(const std::string& taskId) = 0;
 
-  /// Adds up to 'maxBytes' bytes worth of data for 'destination' from 'taskId'.
-  /// The sequence number of the data must be >= 'sequence'. If there is no
-  /// buffer associated with the given taskId, returns false. If there is no
-  /// data, 'notify' will be registered and called when there is data or the
-  /// source is at end, the function returns true. If deleteResults was
-  /// previously called for the destination, 'notify' will be called immediately
-  /// with a list of pages containing a single "end of data" marker. Existing
-  /// data with a sequence number < sequence is deleted. The caller is expected
-  /// to increment the sequence number between calls by the number of items
-  /// received. In this way the next call implicitly acknowledges receipt of the
-  /// results from the previous. The acknowledge method is offered for an early
-  /// ack, so that the producer can continue before the consumer is done
-  /// processing the received data. If not null, 'activeCheck' is used to check
-  /// if data consumer is currently active or not. This only applies for
-  /// arbitrary output buffer for now.
-  bool getData(
-      const std::string& taskId,
-      int destination,
-      uint64_t maxBytes,
-      int64_t sequence,
-      DataAvailableCallback notify,
-      DataConsumerActiveCheckCallback activeCheck = nullptr);
+  /// Whether the output buffer is over-utilized: filled enough to risk soon
+  /// reaching capacity and back-pressuring its producers, though it is not
+  /// blocking them yet. The threshold is implementation-defined. nullopt if
+  /// 'taskId' is unknown. Consumed to drive dynamic consumer scaling, e.g.
+  /// adding TableWriter tasks.
+  virtual std::optional<bool> isOverutilized(const std::string& taskId) = 0;
 
-  void removeTask(const std::string& taskId);
-
-  static const std::shared_ptr<OutputBufferManager>& getInstanceRef();
-
-  static const std::shared_ptr<OutputBufferManager>& getInstanceRef(
-      const Options& options);
-
-  uint64_t numBuffers() const;
-
-  // Returns a new stream listener if a listener factory has been set.
-  std::unique_ptr<OutputStreamListener> newListener() const {
-    return listenerFactory_ ? listenerFactory_() : nullptr;
-  }
-
-  // Sets the stream listener factory. This allows custom processing of data
-  // for repartitioning, e.g. computing checksums.
-  void setListenerFactory(
-      std::function<std::unique_ptr<OutputStreamListener>()> factory) {
-    listenerFactory_ = factory;
-  }
-
-  std::string toString();
-
-  // Gets the memory utilization ratio for the output buffer from a task of
-  // taskId, if the task of this taskId is not found, return 0.
-  double getUtilization(const std::string& taskId);
-
-  // If the output buffer from a task of taskId is over-utilized and blocks its
-  // producers. When the task of this taskId is not found, return false.
-  bool isOverutilized(const std::string& taskId);
-
-  // Returns nullopt when the specified output buffer doesn't exist.
-  std::optional<OutputBuffer::Stats> stats(const std::string& taskId);
-
-  // Retrieves the set of buffers for a query if exists.
-  // Returns NULL if task not found.
-  std::shared_ptr<OutputBuffer> getBufferIfExists(const std::string& taskId);
-
- private:
-  // Retrieves the set of buffers for a query.
-  // Throws an exception if buffer doesn't exist.
-  std::shared_ptr<OutputBuffer> getBuffer(const std::string& taskId);
-
-  folly::Synchronized<
-      std::unordered_map<std::string, std::shared_ptr<OutputBuffer>>,
-      std::mutex>
-      buffers_;
-
-  std::function<std::unique_ptr<OutputStreamListener>()> listenerFactory_{
-      nullptr};
+  /// Human-readable dump of the task's output buffer state.
+  virtual std::string toString(const std::string& taskId) = 0;
 };
+
 } // namespace facebook::velox::exec

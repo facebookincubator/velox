@@ -40,6 +40,17 @@ void applyBitmapToMask(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref temp_mr);
 
+/// Counts the number of deleted rows (set to `true`) in the supplied deletion
+/// mask.
+/// @param deleteMask Deletion mask column (row is deleted iff `true`)
+/// @param stream CUDA stream to use
+/// @param temp_mr Memory resource for temporary allocations
+/// @return Number of deleted rows
+cudf::size_type countDeletedRows(
+    cudf::column_view const& deleteMask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref temp_mr);
+
 /// Scatters deletes to the deletion mask at positions indicated by `indices`
 /// (anti-join semantics).
 /// @param deleteMask Mutable view of deletion mask column

@@ -16,7 +16,9 @@
 #pragma once
 
 #include <vector>
+#include "velox/common/encode/Base64.h"
 #include "velox/expression/ComplexViewTypes.h"
+#include "velox/expression/VectorReaders.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
@@ -201,6 +203,28 @@ inline void toJson<TypeKind::VARCHAR>(
     std::string quotedString;
     folly::json::escapeString(std::string_view(value), quotedString, {});
     result.append(quotedString.substr(1, quotedString.size() - 2));
+  }
+}
+
+template <>
+inline void toJson<TypeKind::VARBINARY>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& /*options*/,
+    bool isMapKey) {
+  auto value = input.castTo<Varbinary>();
+  const auto encodedSize = encoding::Base64::calculateEncodedSize(value.size());
+  const auto originalSize = result.size();
+  const auto quoteSize = isMapKey ? 0 : 2;
+  result.resize(originalSize + quoteSize + encodedSize);
+
+  auto* output = result.data() + originalSize;
+  if (!isMapKey) {
+    *output++ = '\"';
+  }
+  encoding::Base64::encode(value.data(), value.size(), output);
+  if (!isMapKey) {
+    output[encodedSize] = '\"';
   }
 }
 

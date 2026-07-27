@@ -334,15 +334,31 @@ TEST_F(ArithmeticTest, UnaryMinus) {
   EXPECT_EQ(unaryminus<double>(6), -6);
 }
 
-TEST_F(ArithmeticTest, UnaryMinusOverflow) {
-  EXPECT_EQ(unaryminus<int8_t>(INT8_MIN), INT8_MIN);
-  EXPECT_EQ(unaryminus<int16_t>(INT16_MIN), INT16_MIN);
-  EXPECT_EQ(unaryminus<int32_t>(INT32_MIN), INT32_MIN);
-  EXPECT_EQ(unaryminus<int64_t>(INT64_MIN), INT64_MIN);
+TEST_F(ArithmeticTest, unaryMinusFloatEdgeCases) {
   EXPECT_EQ(unaryminus<float>(-kInf), kInf);
   EXPECT_TRUE(std::isnan(unaryminus<float>(kNan).value_or(0)));
   EXPECT_EQ(unaryminus<double>(-kInf), kInf);
   EXPECT_TRUE(std::isnan(unaryminus<double>(kNan).value_or(0)));
+}
+
+TEST_F(ArithmeticTest, unaryMinusAnsi) {
+  // Test unaryminus with ANSI off: negating MIN_VALUE returns MIN_VALUE.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"}});
+
+  EXPECT_EQ(unaryminus<int8_t>(INT8_MIN), INT8_MIN);
+  EXPECT_EQ(unaryminus<int16_t>(INT16_MIN), INT16_MIN);
+  EXPECT_EQ(unaryminus<int32_t>(INT32_MIN), INT32_MIN);
+  EXPECT_EQ(unaryminus<int64_t>(INT64_MIN), INT64_MIN);
+
+  // Test unaryminus with ANSI on: negating MIN_VALUE throws.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"}});
+
+  VELOX_ASSERT_THROW(unaryminus<int8_t>(INT8_MIN), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(unaryminus<int16_t>(INT16_MIN), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(unaryminus<int32_t>(INT32_MIN), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(unaryminus<int64_t>(INT64_MIN), "Arithmetic overflow");
 }
 
 TEST_F(ArithmeticTest, Divide) {

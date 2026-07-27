@@ -188,6 +188,56 @@ void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStatistics& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
+  // For NIMBLE splits, switch the reader to Iceberg field-id-based column
+  // resolution. The NIMBLE per-SchemaNode `attributes` slot carries
+  // `iceberg.id` keys stamped on the write path; the NIMBLE reader uses
+  // them to resolve projected columns under schema evolution (rename /
+  // reorder / add / drop). For other formats this branch is a no-op:
+  // each format-specific reader handles its own column mapping.
+  if (icebergSplit_->fileFormat == dwio::common::FileFormat::NIMBLE &&
+      columnHandles_ != nullptr) {
+    auto fileSchema = baseReaderOpts_.fileSchema();
+    if (fileSchema != nullptr && !fileSchema->names().empty()) {
+      // Build the requested field-id trees, one ParquetFieldId per requested
+      // file-schema column, in file-schema order. Each entry is the
+      // IcebergColumnHandle's field-id tree (per-input-column).
+      // Column handles are keyed by output alias; index them by physical name
+      // to mirror buildFieldIds() and support renamed columns.
+      std::unordered_map<std::string, const IcebergColumnHandle*> handleByName;
+      for (const auto& [outputName, handle] : *columnHandles_) {
+        if (auto* icebergHandle =
+                dynamic_cast<const IcebergColumnHandle*>(handle.get())) {
+          handleByName.emplace(icebergHandle->name(), icebergHandle);
+        }
+      }
+      std::vector<dwio::common::ParquetFieldId> fieldIds;
+      fieldIds.reserve(fileSchema->size());
+      bool allResolved = true;
+      for (size_t i = 0; i < fileSchema->size(); ++i) {
+        const auto& name = fileSchema->nameOf(static_cast<uint32_t>(i));
+        const auto it = handleByName.find(name);
+        if (it == handleByName.end()) {
+          allResolved = false;
+          break;
+        }
+        const auto icebergColumn = it->second;
+        if (icebergColumn == nullptr) {
+          allResolved = false;
+          break;
+        }
+        fieldIds.emplace_back(icebergColumn->field());
+      }
+      if (allResolved) {
+        baseReaderOpts_.setColumnMappingMode(
+            dwio::common::ColumnMappingMode::kFieldId);
+        baseReaderOpts_.setFieldIds(std::move(fieldIds));
+        // The NIMBLE reader resolves columns via the per-type "iceberg.id"
+        // attribute; supply the key here so the reader stays format-agnostic.
+        baseReaderOpts_.setFieldIdAttributeKey("iceberg.id");
+      }
+    }
+  }
+
   // Temporarily extend the file schema with projected row-lineage columns
   // (_row_id, _last_updated_sequence_number) so the reader allocates output
   // slots for them. Scoped to createReader() so getAdaptedRowType() sees the
@@ -444,7 +494,10 @@ void IcebergSplitReader::prepareSplit(
 
         deletionVectorReaders_.push_back(
             std::make_unique<DeletionVectorReader>(
-                deleteFile, splitOffset_, connectorQueryCtx_->memoryPool()));
+                deleteFile,
+                splitOffset_,
+                connectorQueryCtx_->memoryPool(),
+                fileConfig_->config()));
       }
     } else {
       VELOX_NYI(

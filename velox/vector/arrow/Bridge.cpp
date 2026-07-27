@@ -817,7 +817,8 @@ void exportValidityBitmap(
   }
 
   // Set null counts.
-  if (!rows.changed() && (vec.getNullCount() != std::nullopt)) {
+  if (!rows.changed() && rows.count() == vec.size() &&
+      vec.getNullCount() != std::nullopt) {
     out.null_count = *vec.getNullCount();
   } else {
     out.null_count = BaseVector::countNulls(nulls, rows.count());

@@ -81,7 +81,7 @@ line width, indentation and ordering (for includes, using directives and etc). 
   As much as possible, refrain from adding test methods, and test objects using
   their public APIs. Only use test methods in rare edge cases where this is not
   possible. For example, MemoryAllocator::testingSetFailureInjection() is used
-  to to inject various memory allocation failures to test error handling paths.
+  to inject various memory allocation failures to test error handling paths.
 * Use the **debug** prefix for query configs that are intended for debugging
   purposes only. These configs may enable expensive checks or disable selective
   code paths, and are not recommended for use in production environments. For

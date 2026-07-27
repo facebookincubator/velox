@@ -141,14 +141,9 @@ void CastExpr::applyCastKernel(
     FlatVector<typename TypeTraits<ToKind>::NativeType>* result) {
   bool wrapException = true;
   auto setError = [&](const std::string& details) INLINE_LAMBDA {
-    if (setNullInResultAtError()) {
-      setCastError(row, context, result, wrapException);
-      return;
-    }
-    const auto errorDetails = context.captureErrorDetails()
-        ? makeErrorMessage(*input, row, result->type(), details)
-        : std::string{};
-    setCastError(row, context, result, wrapException, errorDetails);
+    setCastError(row, context, result, wrapException, [&] {
+      return makeErrorMessage(*input, row, result->type(), details);
+    });
   };
 
   // If castResult has an error, set the error in context. Otherwise, set the
@@ -227,7 +222,10 @@ void CastExpr::applyCastKernel(
         }
       }
       if constexpr (ToKind == TypeKind::TIMESTAMP) {
-        const auto castResult = hooks_->castStringToTimestamp(inputRowValue);
+        const bool adjustTimezone =
+            !result->type()->equivalent(*TIMESTAMP_UTC());
+        const auto castResult =
+            hooks_->castStringToTimestamp(inputRowValue, adjustTimezone);
         setResultOrStatus(castResult, row);
         return;
       }
@@ -722,7 +720,7 @@ void CastExpr::applyCastPrimitivesDispatch(
   }
 
   if constexpr (ToKind == TypeKind::TIMESTAMP) {
-    VELOX_DCHECK(toType->equivalent(*TIMESTAMP()));
+    verifyToTimestampCast(fromType, toType);
   }
 
   if (isSupportedFastUpcast(fromType, toType)) {

@@ -842,3 +842,45 @@ TEST_F(BufferedInputTest, readGapTracking) {
     EXPECT_EQ(ioStats->readGap().max(), testCase.expectedGapMax);
   }
 }
+
+namespace {
+// Exposes BufferedInput's protected static adjustedReadPct() for testing
+// (no friend declaration needed).
+class AdjustedReadPctAccessor : public BufferedInput {
+ public:
+  using BufferedInput::adjustedReadPct;
+};
+} // namespace
+
+// A flat map's per-key value streams all share one trackingId, so reading a
+// single stripe records many references under that id. adjustedReadPct() must
+// exclude the whole current (not-yet-read) stripe -- not just the last
+// reference -- so a fully-read column scores ~100% (and is eligible for
+// prefetch) instead of roughly half.
+TEST(BufferedInputAdjustedReadPctTest, ExcludesWholeCurrentStripe) {
+  cache::ScanTracker tracker(
+      "test", /*unregisterer=*/nullptr, /*loadQuantum=*/1 << 20);
+  const cache::TrackingId id(1);
+  constexpr uint64_t kStreamBytes = 100;
+  constexpr int kKeysPerStripe = 5;
+
+  // Stripe 1: reference every per-key value stream under the shared id, then
+  // read all.
+  for (int i = 0; i < kKeysPerStripe; ++i) {
+    tracker.recordReference(id, kStreamBytes, /*fileId=*/0, /*groupId=*/0);
+  }
+  tracker.recordRead(
+      id, kStreamBytes * kKeysPerStripe, /*fileId=*/0, /*groupId=*/0);
+
+  // Stripe 2: reference every per-key value stream again (recorded, not yet
+  // read).
+  for (int i = 0; i < kKeysPerStripe; ++i) {
+    tracker.recordReference(id, kStreamBytes, /*fileId=*/0, /*groupId=*/0);
+  }
+
+  // referencedBytes = 1000, readBytes = 500, current-stripe references = 500.
+  //   Correct: 500 / (1000 - 500) = 100%.
+  //   Buggy (subtracts only the last reference): 500 / (1000 - 100) = 55%.
+  EXPECT_EQ(
+      AdjustedReadPctAccessor::adjustedReadPct(tracker.trackingData(id)), 100);
+}

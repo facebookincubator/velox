@@ -360,7 +360,7 @@ class AggregationTest : public HiveConnectorTestBase {
   }
 
   // Makes batches which reference rows in 'rows' via dictionary. The
-  // dictionary indices are given by 'order', wich has values with
+  // dictionary indices are given by 'order', which has values with
   // indices plus random bits so as to create randomly scattered,
   // sometimes repeated values.
   void makeBatches(

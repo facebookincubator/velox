@@ -1549,8 +1549,15 @@ PlanBuilder& PlanBuilder::partitionedOutput(
     const std::vector<std::string>& keys,
     int numPartitions,
     const std::vector<std::string>& outputLayout,
-    std::string serdeKind) {
-  return partitionedOutput(keys, numPartitions, false, outputLayout, serdeKind);
+    std::string serdeKind,
+    std::string transportKind) {
+  return partitionedOutput(
+      keys,
+      numPartitions,
+      false,
+      outputLayout,
+      std::move(serdeKind),
+      std::move(transportKind));
 }
 
 PlanBuilder& PlanBuilder::partitionedOutput(
@@ -1558,7 +1565,8 @@ PlanBuilder& PlanBuilder::partitionedOutput(
     int numPartitions,
     bool replicateNullsAndAny,
     const std::vector<std::string>& outputLayout,
-    std::string serdeKind) {
+    std::string serdeKind,
+    std::string transportKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
 
@@ -1569,7 +1577,8 @@ PlanBuilder& PlanBuilder::partitionedOutput(
       replicateNullsAndAny,
       createPartitionFunctionSpec(planNode_->outputType(), keyExprs, pool_),
       outputLayout,
-      serdeKind);
+      std::move(serdeKind),
+      std::move(transportKind));
 }
 
 PlanBuilder& PlanBuilder::partitionedOutput(
@@ -1578,7 +1587,8 @@ PlanBuilder& PlanBuilder::partitionedOutput(
     bool replicateNullsAndAny,
     core::PartitionFunctionSpecPtr partitionFunctionSpec,
     const std::vector<std::string>& outputLayout,
-    std::string serdeKind) {
+    std::string serdeKind,
+    std::string transportKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
   auto outputType = outputLayout.empty()
@@ -1592,7 +1602,8 @@ PlanBuilder& PlanBuilder::partitionedOutput(
       replicateNullsAndAny,
       std::move(partitionFunctionSpec),
       outputType,
-      serdeKind,
+      std::move(serdeKind),
+      std::move(transportKind),
       planNode_);
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
@@ -1600,28 +1611,39 @@ PlanBuilder& PlanBuilder::partitionedOutput(
 
 PlanBuilder& PlanBuilder::partitionedOutputBroadcast(
     const std::vector<std::string>& outputLayout,
-    std::string serdeKind) {
+    std::string serdeKind,
+    std::string transportKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
   auto outputType = outputLayout.empty()
       ? planNode_->outputType()
       : extract(planNode_->outputType(), outputLayout);
   planNode_ = core::PartitionedOutputNode::broadcast(
-      nextPlanNodeId(), 1, outputType, serdeKind, planNode_);
+      nextPlanNodeId(),
+      1,
+      outputType,
+      std::move(serdeKind),
+      std::move(transportKind),
+      planNode_);
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
 }
 
 PlanBuilder& PlanBuilder::partitionedOutputArbitrary(
     const std::vector<std::string>& outputLayout,
-    std::string serdeKind) {
+    std::string serdeKind,
+    std::string transportKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
   auto outputType = outputLayout.empty()
       ? planNode_->outputType()
       : extract(planNode_->outputType(), outputLayout);
   planNode_ = core::PartitionedOutputNode::arbitrary(
-      nextPlanNodeId(), outputType, serdeKind, planNode_);
+      nextPlanNodeId(),
+      outputType,
+      std::move(serdeKind),
+      std::move(transportKind),
+      planNode_);
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
 }

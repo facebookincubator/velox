@@ -1628,6 +1628,21 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
     return currentEncoder_->estimatedDataEncodedSize();
   }
 
+  int64_t estimatedBufferedDefLevelBytes() const override {
+    return definitionLevelsSink_.length();
+  }
+
+  int64_t estimatedBufferedRepLevelBytes() const override {
+    return repetitionLevelsSink_.length();
+  }
+
+  int64_t estimatedBufferedDictBytes() const override {
+    if (currentDictEncoder_) {
+      return currentDictEncoder_->dictEncodedSize();
+    }
+    return 0;
+  }
+
  protected:
   std::shared_ptr<Buffer> getValuesBuffer() override {
     return currentEncoder_->flushValues();

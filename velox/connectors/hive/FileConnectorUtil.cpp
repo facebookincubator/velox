@@ -116,6 +116,8 @@ void configureReaderOptions(
     readerOptions.setSelectiveNimbleReaderEnabled(
         connectorQueryCtx->selectiveNimbleReaderEnabled());
   }
+  readerOptions.setNimbleDirectBufferedInputEnabled(
+      fileConfig->nimbleDirectBufferedInputEnabled(sessionProperties));
   readerOptions.setCacheMetadata(
       fileConfig->cacheMetadata(sessionProperties) && fileSplit->cacheable);
   readerOptions.setPinMetadata(fileConfig->pinMetadata(sessionProperties));

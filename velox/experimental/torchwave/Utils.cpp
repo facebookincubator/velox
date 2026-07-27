@@ -939,6 +939,23 @@ void saveTensorList(
   out.write(data.data(), static_cast<std::streamsize>(data.size()));
 }
 
+void saveIValueList(
+    const std::vector<c10::IValue>& values,
+    const std::string& path) {
+  // A tuple (not a typed list) so pickling emits no element type tag: a
+  // heterogeneous List[Any] fails pickleLoadWithTypes, but a tuple unpickles
+  // generically and loadReferenceValues flattens it back to these elements.
+  std::vector<c10::IValue> elems;
+  elems.reserve(values.size());
+  for (const auto& v : values) {
+    elems.push_back(v.isTensor() ? c10::IValue(v.toTensor().cpu()) : v);
+  }
+  auto data = torch::jit::pickle_save(
+      c10::IValue(c10::ivalue::Tuple::create(std::move(elems))));
+  std::ofstream out(path, std::ios::binary);
+  out.write(data.data(), static_cast<std::streamsize>(data.size()));
+}
+
 std::vector<at::Tensor> loadTensorList(const std::string& path) {
   std::ifstream in(path, std::ios::binary | std::ios::ate);
   if (!in.good()) {
@@ -1126,58 +1143,64 @@ bool aliasSetsIntersect(const c10::AliasInfo& a, const c10::AliasInfo& b) {
 }
 } // namespace
 
+ValueCP schemaAliasedInput(NodeCP node, ValueCP output) {
+  // The c10 FunctionSchema tells whether an output aliases (shares storage
+  // with) an input: a view annotates both as the same alias set 'a'
+  // (Tensor(a) self -> Tensor(a)), an in-place op as 'a!' (Tensor(a!) self ->
+  // Tensor(a!)). Return the aliased input value, or nullptr if the output is
+  // fresh (its return has no alias set, or no input shares it).
+  const auto* schema = findFunctionSchema(node->target());
+  if (schema == nullptr) {
+    return nullptr;
+  }
+  const auto& outputs = node->outputs();
+  int32_t outIdx = -1;
+  for (size_t i = 0; i < outputs.size(); ++i) {
+    if (outputs[i] == output) {
+      outIdx = static_cast<int32_t>(i);
+      break;
+    }
+  }
+  if (outIdx < 0 || static_cast<size_t>(outIdx) >= schema->returns().size()) {
+    return nullptr;
+  }
+  const auto* outAlias = schema->returns()[outIdx].alias_info();
+  if (outAlias == nullptr) {
+    return nullptr;
+  }
+  const auto& args = schema->arguments();
+  const auto& inputs = node->inputs();
+  for (size_t j = 0; j < inputs.size() && j < args.size(); ++j) {
+    const auto* inAlias = args[j].alias_info();
+    if (inAlias != nullptr && aliasSetsIntersect(*inAlias, *outAlias)) {
+      return inputs[j].value;
+    }
+  }
+  return nullptr;
+}
+
 ValueCP viewStorageBase(ValueCP value) {
-  // Follow storage-aliasing edges from a value to its base. Two kinds of edge
-  // alias an output to an input: a view (output is a view of input 'viewOfArg')
-  // and an in-place op (the FunctionSchema gives the output and the mutated
-  // self the same alias set, e.g. add_/clamp_ Tensor(a!) -> Tensor(a!)). Both
-  // must be followed so that a, a.view(), and a.add_(...) all resolve to the
-  // same base. Bounded by the graph's acyclicity.
+  // Follow storage-aliasing edges from a value to its base. An output aliases
+  // an input when they share a c10 alias set -- a view (Tensor(a) self ->
+  // Tensor(a)) or an in-place op (Tensor(a!) self -> Tensor(a!)). Prefer the
+  // c10 schema (authoritative), and fall back to the torchwave viewOfArg
+  // metadata for tw.* ops that have no c10 alias annotations. Follow so that a,
+  // a.view(), and a.add_(...) all resolve to the same base; bounded by graph
+  // acyclicity.
   while (value != nullptr) {
     auto* producer = value->producer();
     if (producer == nullptr) {
       break;
     }
-    ValueCP next = nullptr;
+    ValueCP next = schemaAliasedInput(producer, value);
 
-    // 1. torchwave view metadata (static op property, no thread WaveGraph
-    // needed, so this works in GraphTool too).
-    const auto* meta = Registry::metadata(producer->target());
-    if (meta != nullptr && meta->viewOfArg.has_value()) {
-      auto ordinal = *meta->viewOfArg;
-      if (ordinal >= 0 &&
-          static_cast<size_t>(ordinal) < producer->inputs().size()) {
-        next = producer->inputs()[ordinal].value;
-      }
-    }
-
-    // 2. Schema alias: the output 'value' shares an alias set with an input.
     if (next == nullptr) {
-      const auto* schema = findFunctionSchema(producer->target());
-      if (schema != nullptr) {
-        const auto& outputs = producer->outputs();
-        int32_t outIdx = -1;
-        for (size_t i = 0; i < outputs.size(); ++i) {
-          if (outputs[i] == value) {
-            outIdx = static_cast<int32_t>(i);
-            break;
-          }
-        }
-        if (outIdx >= 0 &&
-            static_cast<size_t>(outIdx) < schema->returns().size()) {
-          const auto* outAlias = schema->returns()[outIdx].alias_info();
-          if (outAlias != nullptr) {
-            const auto& args = schema->arguments();
-            const auto& inputs = producer->inputs();
-            for (size_t j = 0; j < inputs.size() && j < args.size(); ++j) {
-              const auto* inAlias = args[j].alias_info();
-              if (inAlias != nullptr &&
-                  aliasSetsIntersect(*inAlias, *outAlias)) {
-                next = inputs[j].value;
-                break;
-              }
-            }
-          }
+      const auto* meta = Registry::metadata(producer->target());
+      if (meta != nullptr && meta->viewOfArg.has_value()) {
+        auto ordinal = *meta->viewOfArg;
+        if (ordinal >= 0 &&
+            static_cast<size_t>(ordinal) < producer->inputs().size()) {
+          next = producer->inputs()[ordinal].value;
         }
       }
     }
@@ -1294,11 +1317,14 @@ void traceFrameValues(
       continue;
     }
     const auto& iv = frame.getIValue(id);
-    if (iv.isNone()) {
-      continue;
-    }
     traceState.markTraced(id);
-    if (iv.isTensor()) {
+    if (iv.isNone()) {
+      // Print a marker rather than skipping: an unset/freed value is exactly
+      // what we want to see when tracing (e.g. a user input read as null on a
+      // second run of a reused frame).
+      std::cout << "  trace " << label << " %" << id << ": <none/unset>"
+                << std::endl;
+    } else if (iv.isTensor()) {
       std::cout << "  trace " << label << " %" << id << ": "
                 << tensorDebugString(iv.toTensor(), maxElements) << std::endl;
     } else {

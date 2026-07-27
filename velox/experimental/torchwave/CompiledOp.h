@@ -188,7 +188,8 @@ class CompositeKernel {
   CompositeKernel(
       std::vector<std::unique_ptr<ProjectOperation>>&& ops,
       std::vector<std::unique_ptr<KernelOperation>>&& kernelOps,
-      const std::unordered_set<std::string>& includes);
+      const std::unordered_set<std::string>& includes,
+      int32_t kernelId);
 
   /// Launches the kernel on the given stream.
   void launch(
@@ -322,6 +323,7 @@ class CompositeInvocation {
       std::vector<OpInvocation> ops,
       std::deque<c10::IValue> ivalueStorage,
       int32_t sequenceNumber,
+      std::vector<nativert::ValueId> lastUseIds,
       std::vector<Launch> prePassStandalones = {});
 
   /// Executes this composite invocation: allocates outputs, builds the grid,
@@ -382,6 +384,11 @@ class CompositeInvocation {
   std::vector<OpInvocation> ops_;
   std::deque<c10::IValue> ivalueStorage_;
   int32_t sequenceNumber_;
+
+  // Frame value ids whose last use across the graph is in this node (graph
+  // outputs excluded). When WaveConfig::freeIntermediates is set, their frame
+  // tensors are released at the end of execute().
+  std::vector<nativert::ValueId> lastUseIds_;
 
   // Standalone ops from the maxFusedNodes pre-pass.  Executed at the
   // start of execute() before any kernel step, so their outputs are

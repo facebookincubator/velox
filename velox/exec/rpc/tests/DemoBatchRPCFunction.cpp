@@ -22,8 +22,28 @@ namespace facebook::velox::exec::rpc {
 
 DemoBatchRPCFunction::DemoBatchRPCFunction(
     ResponseOrder order,
-    std::unordered_set<int32_t> failingRowIndices)
-    : responseOrder_(order), failingRowIndices_(std::move(failingRowIndices)) {}
+    std::unordered_set<int32_t> failingRowIndices,
+    bool failWholeBatch,
+    bool failOnError,
+    bool dropOneResponse)
+    : responseOrder_(order),
+      failingRowIndices_(std::move(failingRowIndices)),
+      failWholeBatch_(failWholeBatch),
+      failOnError_(failOnError),
+      dropOneResponse_(dropOneResponse) {}
+
+VectorPtr DemoBatchRPCFunction::buildOutput(
+    const std::vector<RPCResponse>& responses,
+    memory::MemoryPool* pool) const {
+  if (failOnError_) {
+    for (const auto& r : responses) {
+      if (r.hasError()) {
+        VELOX_USER_FAIL("RPC call failed for row");
+      }
+    }
+  }
+  return AsyncRPCFunction::buildOutput(responses, pool);
+}
 
 void DemoBatchRPCFunction::initialize(
     const core::QueryConfig& /*queryConfig*/,
@@ -76,6 +96,15 @@ folly::SemiFuture<std::vector<RPCResponse>> DemoBatchRPCFunction::flushBatch(
       pendingRows_.begin(), pendingRows_.begin() + flushCount);
   pendingRows_.erase(pendingRows_.begin(), pendingRows_.begin() + flushCount);
 
+  // Simulate an operator-level batch failure (e.g. an RPC/batch timeout): the
+  // whole flush future fails rather than returning per-row responses. Rows are
+  // still consumed above so pendingBatchSize() drains and noMoreInput()
+  // terminates.
+  if (failWholeBatch_) {
+    return folly::makeSemiFuture<std::vector<RPCResponse>>(
+        std::runtime_error("simulated batch timeout"));
+  }
+
   std::vector<RPCResponse> responses;
   responses.reserve(toFlush.size());
 
@@ -101,6 +130,12 @@ folly::SemiFuture<std::vector<RPCResponse>> DemoBatchRPCFunction::flushBatch(
 
   if (responseOrder_ == ResponseOrder::kReversed) {
     std::reverse(responses.begin(), responses.end());
+  }
+
+  // Simulate a function-contract violation: return fewer responses than rows.
+  // The operator's scatter must hard-fail on the count mismatch (not degrade).
+  if (dropOneResponse_ && !responses.empty()) {
+    responses.pop_back();
   }
 
   return folly::makeSemiFuture(std::move(responses));

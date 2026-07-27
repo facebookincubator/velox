@@ -20,7 +20,7 @@
 #include "velox/exec/ExchangeClient.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OperatorType.h"
-#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/SerializedPage.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/RowSerializer.h"
 

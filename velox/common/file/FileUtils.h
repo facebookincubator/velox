@@ -25,7 +25,7 @@
 namespace facebook::velox::file::utils {
 
 // Iterable class that produces pairs of iterators pointing to the beginning and
-// end of the segments that are coalesced from the the input range, according to
+// end of the segments that are coalesced from the input range, according to
 // the ShouldCoalesce condition
 template <typename RegionIter, typename ShouldCoalesce>
 class CoalesceRegions {

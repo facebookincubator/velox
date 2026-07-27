@@ -38,10 +38,13 @@ class ColumnChunkMetaDataPtr {
   /// Check the presence of the dictionary page offset in ColumnChunk metadata.
   bool hasDictionaryPageOffset() const;
 
-  /// Return the ColumnChunk statistics.
+  /// Return the ColumnChunk statistics. Timestamp columns require
+  /// convertedType and logicalType to produce min/max statistics.
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
       const TypePtr type,
-      int64_t numRows);
+      int64_t numRows,
+      std::optional<thrift::ConvertedType> convertedType = std::nullopt,
+      const std::optional<thrift::LogicalType>& logicalType = std::nullopt);
 
   /// Return the Column Metadata Statistics Min Value
   std::string getColumnMetadataStatsMinValue();
@@ -67,6 +70,12 @@ class ColumnChunkMetaDataPtr {
 
   /// Returns the list of encodings used for all pages in this column chunk.
   std::vector<thrift::Encoding> encodings() const;
+
+  /// Returns the column's physical path in the file schema as ordered segments,
+  /// e.g. {"tags", "list", "element"} or {"lookup", "key_value", "key"}. Unlike
+  /// the logical row type, this includes the synthetic repeated-group levels
+  /// ("list", "key_value") that Parquet inserts for arrays and maps.
+  std::vector<std::string> pathInSchema() const;
 
   /// Total byte size of all the compressed (and potentially encrypted)
   /// column data in this row group.

@@ -260,6 +260,43 @@ TEST_F(FunctionRegistryTest, canEvaluateMultipleSignatures) {
           makeCall(name, VARCHAR(), {VARCHAR(), VARCHAR()})));
 }
 
+// A spec-level `canEvaluate` callback is an extra filter after signature
+// matching. Test both complete rejection and fall-through to a later matching
+// registration.
+TEST_F(FunctionRegistryTest, canEvaluateCallbackFiltersSpec) {
+  auto reject = [](const std::shared_ptr<exec::Expr>&) { return false; };
+  auto sig = exec::FunctionSignatureBuilder()
+                 .returnType("double")
+                 .argumentType("double")
+                 .argumentType("double")
+                 .build();
+
+  const std::string rejectedOnly = "regtest_can_eval_callback_rejected";
+  registerCudfFunction(
+      rejectedOnly,
+      tagFactory("rejected"),
+      {sig},
+      /*overwrite=*/true,
+      reject);
+
+  auto rejectedExpr = makeCall(rejectedOnly, DOUBLE(), {DOUBLE(), DOUBLE()});
+  EXPECT_EQ(createCudfFunction(rejectedOnly, rejectedExpr), nullptr);
+  EXPECT_FALSE(FunctionExpression::canEvaluate(rejectedExpr));
+
+  const std::string fallback = "regtest_can_eval_callback_fallback";
+  registerCudfFunction(
+      fallback,
+      tagFactory("rejected"),
+      {sig},
+      /*overwrite=*/true,
+      reject);
+  registerCudfFunction(fallback, tagFactory("accepted"), {sig});
+
+  auto fallbackExpr = makeCall(fallback, DOUBLE(), {DOUBLE(), DOUBLE()});
+  EXPECT_EQ(tagOf(createCudfFunction(fallback, fallbackExpr)), "accepted");
+  EXPECT_TRUE(FunctionExpression::canEvaluate(fallbackExpr));
+}
+
 // `FieldReference` expression, no registry setup. Test that `canEvaluate`
 // returns true without consulting the function registry at all.
 TEST_F(FunctionRegistryTest, canEvaluateFieldReference) {

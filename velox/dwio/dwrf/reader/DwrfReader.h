@@ -85,7 +85,7 @@ class DwrfRowReader : public StrideIndexProvider,
 
   uint64_t skipRows(uint64_t numberOfRowsToSkip);
 
-  uint32_t currentStripe() const {
+  uint32_t currentStripe() const override {
     return currentStripe_;
   }
 

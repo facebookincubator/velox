@@ -228,6 +228,9 @@ class CallTypedExpr : public ITypedExpr {
 
   std::string toString() const override;
 
+  void appendToString(std::string& out, ExprToStringContext& ctx)
+      const override;
+
   size_t localHash() const override {
     static const size_t kBaseHash =
         folly::hasher<std::string_view>()("CallTypedExpr");
@@ -296,6 +299,9 @@ class FieldAccessTypedExpr : public ITypedExpr {
       const override;
 
   std::string toString() const override;
+
+  void appendToString(std::string& out, ExprToStringContext& ctx)
+      const override;
 
   size_t localHash() const override {
     static const size_t kBaseHash =
@@ -377,11 +383,18 @@ class DereferenceTypedExpr : public ITypedExpr {
   }
 
   std::string toString() const override {
+    return toStringWithSharing();
+  }
+
+  void appendToString(std::string& out, ExprToStringContext& ctx)
+      const override {
+    inputs()[0]->appendWithSharing(out, ctx);
     const auto& fieldName = name();
     if (fieldName.empty()) {
-      return fmt::format("{}[{}]", inputs()[0]->toString(), index_);
+      out += fmt::format("[{}]", index_);
+    } else {
+      out += fmt::format("[{}]", fieldName);
     }
-    return fmt::format("{}[{}]", inputs()[0]->toString(), fieldName);
   }
 
   size_t localHash() const override {
@@ -439,6 +452,9 @@ class ConcatTypedExpr : public ITypedExpr {
   }
 
   std::string toString() const override;
+
+  void appendToString(std::string& out, ExprToStringContext& ctx)
+      const override;
 
   size_t localHash() const override {
     static const size_t kBaseHash =
@@ -501,8 +517,13 @@ class LambdaTypedExpr : public ITypedExpr {
       const override;
 
   std::string toString() const override {
-    return fmt::format(
-        "lambda {} -> {}", signature_->toString(), body_->toString());
+    return toStringWithSharing();
+  }
+
+  void appendToString(std::string& out, ExprToStringContext& ctx)
+      const override {
+    out += fmt::format("lambda {} -> ", signature_->toString());
+    body_->appendWithSharing(out, ctx);
   }
 
   size_t localHash() const override {
@@ -570,6 +591,9 @@ class CastTypedExpr : public ITypedExpr {
 
   std::string toString() const override;
 
+  void appendToString(std::string& out, ExprToStringContext& ctx)
+      const override;
+
   size_t localHash() const override {
     static const size_t kBaseHash =
         folly::hasher<std::string_view>()("CastTypedExpr");
@@ -636,6 +660,9 @@ class NullIfTypedExpr : public ITypedExpr {
       const override;
 
   std::string toString() const override;
+
+  void appendToString(std::string& out, ExprToStringContext& ctx)
+      const override;
 
   size_t localHash() const override;
 

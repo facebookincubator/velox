@@ -33,6 +33,7 @@
 #include <torch/nativert/kernels/KernelFactory.h>
 #include "velox/experimental/torchwave/KernelOperation.h"
 #include "velox/experimental/torchwave/Registry.h"
+#include "velox/experimental/torchwave/WaveConfig.h"
 
 namespace facebook::velox::wave {
 class CompiledKernel;
@@ -118,6 +119,12 @@ struct ModelContext {
   std::unique_ptr<nativert::Graph> graph;
   std::shared_ptr<nativert::Weights> weights;
   nativert::ExecutorConfig config;
+
+  /// Optional per-graph WaveConfig. When set, it is moved into the WaveGraph at
+  /// construction and installed as the thread-local override during that
+  /// graph's compilation and execution, so graphs with different configs can
+  /// run concurrently. Null => use the global WaveConfig.
+  std::shared_ptr<WaveConfig> configOverride;
 
   /// Creates OpKernels for all nodes in the graph.
   std::vector<std::unique_ptr<nativert::OpKernel>> makeKernels() const {
@@ -292,9 +299,34 @@ class WaveGraph {
     return compileCtx_;
   }
 
+  /// Records that 'value' is consumed by more than one part of a multipart op
+  /// expansion (e.g. the shared input of cumsum_head and cumsum_final), so it
+  /// must not be released as a per-op freeable intermediate. Called by the
+  /// split / variant lowerings while generating the parts. The set lives here
+  /// (not on the transient CompileCtx) because it is consulted at execution
+  /// time, when LaunchData decides which kernel outputs are freeable.
+  void declareMultiplyReferencedInput(const nativert::Value* value);
+
+  bool isMultiUseInput(nativert::ValueId id) const {
+    return multiUseInputs_.count(id) != 0;
+  }
+
+  /// True if 'id' is a graph output value (or an element of a list-typed graph
+  /// output). Such values escape the graph and must never be released as a
+  /// per-op freeable intermediate.
+  bool isGraphOutput(nativert::ValueId id) const {
+    return graphOutputIds_.count(id) != 0;
+  }
+
   /// Returns the ModelContext, or nullptr if none was provided.
   ModelContext* modelContext() const {
     return modelContext_;
+  }
+
+  /// Returns this graph's WaveConfig override, or nullptr if it uses the global
+  /// config. Installed into waveConfigOverride() during execution.
+  WaveConfig* configOverride() const {
+    return configOverride_.get();
   }
 
   folly::F14FastMap<NodeCP, NodeInfo>& nodeInfos() {
@@ -376,8 +408,23 @@ class WaveGraph {
   // Retained for recreating OpKernels after graph mutations.
   ModelContext* modelContext_;
 
+  // Per-graph config override, moved from the ModelContext at construction and
+  // installed into the thread-local waveConfigOverride() during construction
+  // and execution. Null => this graph reads the global WaveConfig.
+  std::shared_ptr<WaveConfig> configOverride_;
+
   // Set during construction, cleared after.
   CompileCtx* compileCtx_{nullptr};
+
+  // Values consumed by more than one part of a multipart op expansion; they
+  // must never be freed as per-op intermediates. Populated at compile time via
+  // declareMultiplyReferencedInput, read at execution time by LaunchData.
+  std::unordered_set<nativert::ValueId> multiUseInputs_;
+
+  // Graph output value ids (plus elements of list-typed outputs). Escaping
+  // values that must never be freed as per-op intermediates. Populated at the
+  // start of compile, read at execution time by LaunchData.
+  std::unordered_set<nativert::ValueId> graphOutputIds_;
 
   // Alive during construction only. Retains visited set so multikernel
   // variant nodes reuse the main-graph pass.

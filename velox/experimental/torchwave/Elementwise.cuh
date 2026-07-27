@@ -162,6 +162,65 @@ __device__ inline double __pow(double a1, double a2) {
   return pow(a1, a2);
 }
 
+// aten.floor_divide / aten.div rounding_mode="floor": floor(a / b). Unlike
+// __floordiv (Python integer floordiv, always int64) the result keeps T, so
+// float // float stays float. Integer path floors toward negative infinity;
+// float/double overloads use floorf/floor. arithmeticPromotion makes both
+// operands share T, so the mixed-type case does not arise.
+template <typename T, typename T2 = T>
+__device__ inline T __floor_divide(T a1, T2 a2) {
+  int64_t a = static_cast<int64_t>(a1);
+  int64_t b = static_cast<int64_t>(a2);
+  int64_t q = a / b;
+  if ((a % b != 0) && ((a < 0) != (b < 0))) {
+    --q;
+  }
+  return static_cast<T>(q);
+}
+
+__device__ inline float __floor_divide(float a1, float a2) {
+  return floorf(a1 / a2);
+}
+
+__device__ inline double __floor_divide(double a1, double a2) {
+  return floor(a1 / a2);
+}
+
+// aten.div rounding_mode="trunc": truncate toward zero. Integer division in C++
+// already truncates; float/double overloads use truncf/trunc.
+template <typename T, typename T2 = T>
+__device__ inline T __div_trunc(T a1, T2 a2) {
+  return static_cast<T>(static_cast<int64_t>(a1) / static_cast<int64_t>(a2));
+}
+
+__device__ inline float __div_trunc(float a1, float a2) {
+  return truncf(a1 / a2);
+}
+
+__device__ inline double __div_trunc(double a1, double a2) {
+  return trunc(a1 / a2);
+}
+
+// Bitwise shifts (aten.__lshift__ / aten.__rshift__), integer operands. The
+// shift count may be a scalar (Scalar overloads) or a tensor (Tensor overload).
+template <typename T, typename T2 = T>
+__device__ inline T __lshift(T a1, T2 a2) {
+  return a1 << a2;
+}
+
+template <typename T, typename T2 = T>
+__device__ inline T __rshift(T a1, T2 a2) {
+  return a1 >> a2;
+}
+
+// aten.rsub: reversed subtraction, out = other - alpha * self. 'a1' is self
+// (the tensor operand), 'a2' is other, 'alpha' the scale, mirroring __sub's
+// signature so the same argument order works.
+template <typename T, typename T2, typename TAlpha>
+__device__ inline T __rsub(T a1, T2 a2, TAlpha alpha) {
+  return arithCast(a2) - arithCast(alpha) * arithCast(a1);
+}
+
 // Comparison.
 
 template <typename T, typename T2 = T>
@@ -632,6 +691,14 @@ __device__ inline T __one(U /*ignore*/) {
   return T(1);
 }
 
+// full / full_like / new_full: the fill value rides in as a scalar attribute
+// param, so the device function just returns it; the elementwise result
+// assignment casts it to the output type.
+template <typename T>
+__device__ inline T __full(T value) {
+  return value;
+}
+
 // Arange.
 
 template <typename T>
@@ -823,6 +890,19 @@ __index_elt_one(Tensor* source, int32_t idx0, BlockInfo& block) {
   return T();
 }
 
+// Like __index_elt_one but returns 'deflt' for an out-of-range index instead of
+// flagging an error. 'deflt' has its own template type U (a second type
+// template parameter after the source element type T) so a scalar constant of a
+// possibly different type is converted to the element type T on return.
+template <typename T, typename U>
+__device__ inline T
+__index_elt_one_default(Tensor* source, int32_t idx0, U deflt) {
+  if (idx0 >= 0 && idx0 < source->dims[0]) {
+    return storage<T>(source)[indexOffset(source, idx0)];
+  }
+  return static_cast<T>(deflt);
+}
+
 template <typename T>
 __device__ inline T
 __index_elt_two(Tensor* source, int32_t idx0, int32_t idx1, BlockInfo& block) {
@@ -914,6 +994,218 @@ __device__ void __indexgather(
       dst[i] = src[offset];
     }
   }
+}
+
+// Fused elementwise index_select along 'dim' (functional/out-of-place). The
+// enclosing elementwise loop iterates every element of the whole expression's
+// output 'out'; 'idx' is the logical row-major index of one output element. The
+// index_select result has 'source's shape with dimension 'dim' resized to the
+// index length; that result broadcasts to 'out'. Decompose idx into per-dim
+// coordinates using out's dims, right-align the result within out
+// ('dimOffset'), broadcast any size-1 result dimension to coordinate 0, replace
+// the coordinate along 'dim' with the selected index value, and read 'source'
+// at the resulting offset. This mirrors ATen's advanced-indexing kernel:
+//   offset = sum(coord[d] * source->strides[d], d != dim)
+//          + index[coord[dim]] * source->strides[dim]
+// (see ATen native/cuda/IndexKernel.cu). 'source' and 'index' are whole tensors
+// read at computed offsets (so they carry randomAccess and are materialized
+// before this op). An out-of-range index is reported like __index_elt_*.
+template <typename T, int32_t kDim>
+__device__ inline T __index_select(
+    uint32_t idx,
+    Tensor* source,
+    Tensor* index,
+    Tensor* out,
+    BlockInfo& block) {
+  int32_t dim = kDim < 0 ? kDim + source->rank : kDim;
+  // Decompose the logical output index into per-dim coordinates using the
+  // enclosing expression's output shape (innermost dim first). out->sizes[]
+  // hold out's own-dims magic dividers innermost-first (sizes[i] divides by
+  // out->dims[rank-1-i]); force-initialized in the block prologue.
+  int32_t coord[kMaxDims];
+  uint32_t rem = idx;
+  for (int i = 0; i < out->rank; ++i) {
+    unsigned int q, r;
+    out->sizes[i].divmod(rem, q, r);
+    coord[out->rank - 1 - i] = static_cast<int32_t>(r);
+    rem = q;
+  }
+  int32_t dimOffset = out->rank - source->rank;
+  // int64 offset (like ATen's IndexKernel) so coord*stride accumulation does
+  // not overflow for large tensors.
+  int64_t offset = 0;
+  int32_t pos = 0;
+  for (int d = 0; d < source->rank; ++d) {
+    int32_t oDimSize = d == dim ? index->dims[0] : source->dims[d];
+    int32_t c = oDimSize == 1 ? 0 : coord[d + dimOffset];
+    if (d == dim) {
+      pos = c;
+    } else {
+      offset += static_cast<int64_t>(c) * source->strides[d];
+    }
+  }
+  int64_t selected = index->elementType == kScalarTypeLong
+      ? storage<int64_t>(index)[pos * index->strides[0]]
+      : static_cast<int64_t>(storage<int32_t>(index)[pos * index->strides[0]]);
+  if (selected < 0) {
+    selected += source->dims[dim];
+  }
+  if (selected < 0 || selected >= source->dims[dim]) {
+    if (block.debugInfo) {
+      block.debugInfo->line = __LINE__;
+      block.debugInfo->extra[0] = dim;
+      block.debugInfo->extra[1] = selected;
+      SET_MSG(block.debugInfo, "Bad idx\0");
+    }
+    return T();
+  }
+  offset += selected * source->strides[dim];
+  return storage<T>(source)[offset];
+}
+
+// Fused elementwise repeat (aten.repeat): tiles 'self' along each dim. This is
+// the same fused gather as __index_select, but the source coordinate along each
+// dim comes from a MODULO of the output coordinate instead of an index tensor.
+// The enclosing elementwise loop iterates every element of the whole
+// expression's output 'out'; 'idx' is the logical row-major index of one output
+// element. repeat's output dim d is repeats[d] * (rank-aligned self dim), and
+// len(repeats) may exceed self's rank, prepending leading 1-dims that all map
+// to self index 0. Decompose idx into per-dim coordinates using out's dims
+// (innermost first), right-align self within out ('dimOffset'), reduce each
+// output coordinate modulo the corresponding self dim (leading prepended dims
+// fall outside [dimOffset, out->rank) and contribute nothing), and read 'self'
+// at the resulting offset. 'self' is a whole tensor read at computed offsets
+// (randomAccess, materialized before this op).
+template <typename T>
+__device__ inline T
+__repeat(uint32_t idx, Tensor* self, Tensor* out, BlockInfo& /*block*/) {
+  // Decompose the logical output index into per-dim coordinates using the
+  // enclosing expression's output shape (innermost dim first). out->sizes[]
+  // hold out's own-dims magic dividers innermost-first (sizes[i] divides by
+  // out->dims[rank-1-i]); force-initialized in the block prologue.
+  int32_t coord[kMaxDims];
+  uint32_t rem = idx;
+  for (int i = 0; i < out->rank; ++i) {
+    unsigned int q, r;
+    out->sizes[i].divmod(rem, q, r);
+    coord[out->rank - 1 - i] = static_cast<int32_t>(r);
+    rem = q;
+  }
+  int32_t dimOffset = out->rank - self->rank;
+  // int64 offset (like __index_select) so coord*stride accumulation does not
+  // overflow for large tensors.
+  int64_t offset = 0;
+  for (int d = 0; d < self->rank; ++d) {
+    // self->sizes[self->rank-1-d] holds the magic divider for self->dims[d]
+    // (own-dims magic stored innermost-first); force-initialized in the block
+    // prologue. Wrap (tile) the output coordinate modulo self's dim.
+    unsigned int c = self->sizes[self->rank - 1 - d].mod(
+        static_cast<unsigned int>(coord[d + dimOffset]));
+    offset += static_cast<int64_t>(c) * self->strides[d];
+  }
+  return storage<T>(self)[offset];
+}
+
+// Binary-search core shared by bucketize and searchsorted. Searches the sorted
+// run data[start], data[start + stride], ..., data[start + (n-1)*stride] for
+// 'val' and returns the insertion position relative to the run start, in the
+// range [0, n]. Matches ATen's lower_bound / upper_bound
+// (native/cuda/Bucketization.cu): right=false is lower_bound (the first index
+// whose value is >= val); right=true is upper_bound (the first index whose
+// value is > val). Both advance on a negated comparison, so any comparison
+// against NaN is false: a NaN query lands at 'n' (past the run) and NaN run
+// entries sort as the largest values, exactly as in ATen. arithCast keeps the
+// comparison in float for half / bfloat16 operands.
+template <typename T>
+__device__ inline int64_t __binary_search(
+    const T* data,
+    int64_t start,
+    int64_t n,
+    int64_t stride,
+    T val,
+    bool right) {
+  int64_t lo = 0;
+  int64_t hi = n;
+  while (lo < hi) {
+    int64_t mid = lo + ((hi - lo) >> 1);
+    T midVal = data[start + mid * stride];
+    bool advance = right ? !(arithCast(midVal) > arithCast(val))
+                         : !(arithCast(midVal) >= arithCast(val));
+    if (advance) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+// Output integer width of a search op, selected at compile time from the op's
+// out_int32 flag (0 -> int64, 1 -> int32). Passed as a template argument so the
+// int32 and int64 variants compile as distinct, correctly-typed kernels. The
+// variants share query/searched dtypes, so without a template difference the
+// kernel dedup (subgraphNodesMatch) would merge them and store the wrong width.
+// The flag is an int (not bool) because it is emitted as a template argument
+// and bool constants stringify to "True"/"False", which are not valid C++.
+template <int OutInt32>
+struct SearchOutType {
+  using type = int64_t;
+};
+template <>
+struct SearchOutType<1> {
+  using type = int32_t;
+};
+
+// aten.bucketize.Tensor: 'val' is one query element and 'boundaries' the 1-D
+// sorted bucket edges (a whole tensor read at random). Returns the bucket index
+// in the requested output width (int64, or int32 when out_int32).
+template <typename T, int OutInt32>
+__device__ inline typename SearchOutType<OutInt32>::type
+__bucketize(T val, Tensor* boundaries, bool right) {
+  int32_t last = boundaries->rank - 1;
+  return static_cast<typename SearchOutType<OutInt32>::type>(__binary_search<T>(
+      storage<T>(boundaries),
+      0,
+      boundaries->dims[last],
+      boundaries->strides[last],
+      val,
+      right));
+}
+
+// aten.searchsorted.Tensor: 'val' is one query element of 'self' and 'sorted'
+// the sorted sequence (a whole tensor read at random). A 1-D 'sorted' is
+// searched in full by every query. For an N-D 'sorted' the search is per row:
+// its leading rank-1 dims match 'self' (== the enclosing loop output 'out'), so
+// the query at output element 'idx' searches the 'sorted' row picked by idx's
+// leading coordinates. This mirrors ATen's start_bd = tid / idim_in * idim_bd
+// (native/cuda/Bucketization.cu), generalized to strided rows via 'out's
+// per-dim dividers (as in __index_select).
+template <typename T, int OutInt32>
+__device__ inline typename SearchOutType<OutInt32>::type
+__searchsorted(uint32_t idx, Tensor* sorted, T val, bool right, Tensor* out) {
+  int32_t sr = sorted->rank;
+  int64_t start = 0;
+  if (sr > 1) {
+    int32_t coord[kMaxDims];
+    uint32_t rem = idx;
+    for (int i = 0; i < out->rank; ++i) {
+      unsigned int q, r;
+      out->sizes[i].divmod(rem, q, r);
+      coord[out->rank - 1 - i] = static_cast<int32_t>(r);
+      rem = q;
+    }
+    int32_t dimOffset = out->rank - sr;
+    for (int d = 0; d < sr - 1; ++d) {
+      start += static_cast<int64_t>(coord[d + dimOffset]) * sorted->strides[d];
+    }
+  }
+  return static_cast<typename SearchOutType<OutInt32>::type>(__binary_search<T>(
+      storage<T>(sorted),
+      start,
+      sorted->dims[sr - 1],
+      sorted->strides[sr - 1],
+      val,
+      right));
 }
 
 } // namespace torch::wave

@@ -756,7 +756,7 @@ TEST_F(E2EWriterTest, FlatMapBackfill) {
     rows.push_back(b::row{b::pair{1, Random::rand64()}});
   }
 
-  // This row introduces new key, in the middle of a stride and and existing key
+  // This row introduces new key, in the middle of a stride and existing key
   // that wasn't used in this stride. The new key will trigger backfilling based
   // on previous stride rows. But since this is part of a bigger batch, spanning
   // the entire current stride, it will not trigger the partial stride backfill.

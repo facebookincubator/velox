@@ -17,9 +17,13 @@
 #pragma once
 
 #include <folly/Likely.h>
+#include <cstddef>
 #include <cstring>
+#include <string>
+#include <string_view>
 
 #include "velox/core/QueryConfig.h"
+#include "velox/expression/StringWriter.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/JsonUtil.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
@@ -166,6 +170,22 @@ class JsonPathNormalizer {
   State state_{State::kAfterDollar};
 };
 
+// Appends the raw JSON object/array slice `raw` to `out`, rewriting characters
+// in the Unicode supplementary planes (code points >= U+10000, encoded as
+// 4-byte UTF-8) into '\\uXXXX\\uXXXX' UTF-16 surrogate-pair escapes. All other
+// bytes (ASCII, 2-/3-byte BMP sequences, existing escapes) are appended
+// verbatim, in bulk runs. When `raw` has no supplementary-plane character it is
+// appended directly with no extra allocation.
+//
+// Spark's get_json_object re-serializes an object/array result through a
+// Jackson JsonGenerator, which escapes supplementary-plane characters as
+// surrogate-pair '\\u' escapes while leaving BMP characters (e.g. CJK) literal.
+// The raw simdjson slice keeps them literal, so this aligns Velox with Spark.
+// See https://github.com/facebookincubator/velox/issues/17923.
+void appendWithSupplementaryEscapes(
+    std::string_view raw,
+    exec::StringWriter& out);
+
 } // namespace detail
 
 /// Parses a JSON string and returns the value at the specified path.
@@ -247,10 +267,9 @@ struct GetJsonObjectFunction {
   bool extractStringResult(
       simdjson::simdjson_result<simdjson::ondemand::value> rawResult,
       out_type<Varchar>& result) {
-    std::stringstream ss;
     switch (rawResult.type()) {
       // For number and bool types, we need to explicitly get the value
-      // for specific types instead of using `ss << rawResult`. Thus, we
+      // for specific types instead of taking their raw token. Thus, we
       // can make simdjson's internal parsing position moved and then we
       // can check the validity of ending character.
       case simdjson::ondemand::json_type::number: {
@@ -299,8 +318,13 @@ struct GetJsonObjectFunction {
       // "$.my" will return an object type.
       case simdjson::ondemand::json_type::object:
       case simdjson::ondemand::json_type::array: {
-        ss << rawResult;
-        result.append(ss.str());
+        // simdjson returns the object/array as its raw input slice, verbatim
+        // (no unescaping) -- exactly what we want.
+        std::string_view raw;
+        if (rawResult.raw_json().get(raw)) {
+          return false;
+        }
+        detail::appendWithSupplementaryEscapes(raw, result);
         return true;
       }
       default:

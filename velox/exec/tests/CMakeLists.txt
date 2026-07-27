@@ -49,8 +49,9 @@ target_link_libraries(
 #   IndexLookupJoinTest 783s, MultiFragmentTest 599s,
 #   HashJoinTestExtra ~585s, SpillerTest 584s, HashJoinTest ~575s,
 #   TableWriterTest 225s, TableScanTest 189s, IndexLookupJoinTestExtra 188s,
-#   MergeJoinTest 111s, AggregationTest 105s, OutputBufferManagerTest 98s,
-#   ScaleWriterLocalPartitionTest 96s, OrderByTest 71s, TopNRowNumberTest 64s,
+#   MergeJoinTest 111s, AggregationTest 105s,
+#   DefaultOutputBufferManagerTest 98s, ScaleWriterLocalPartitionTest 96s,
+#   OrderByTest 71s, TopNRowNumberTest 64s,
 #   HashTableTest 60s, StreamingAggregationTest 58s, ExchangeClientTest 54s,
 #   RowNumberTest 42s.
 #
@@ -112,10 +113,10 @@ set(
   ProbeOperatorStateTest.cpp
   MarkDistinctTest.cpp
   MergeTest.cpp
-  # group5 (~445s): TableWriterTest 225 + OutputBufMgr 98
+  # group5 (~445s): TableWriterTest 225 + DefaultOutputBufMgr 98
   # + TopNRowNumber 64 + StreamingAgg 58
   TableWriterTest.cpp
-  OutputBufferManagerTest.cpp
+  DefaultOutputBufferManagerTest.cpp
   TopNRowNumberTest.cpp
   StreamingAggregationTest.cpp
   ContainerRowSerdeTest.cpp
@@ -221,6 +222,7 @@ add_executable(
   GroupedExecutionTest.cpp
   Main.cpp
   OperatorUtilsTest.cpp
+  OutputTransportTest.cpp
   PlanBuilderTest.cpp
   PrestoQueryRunnerTest.cpp
   QueryAssertionsTest.cpp
@@ -460,5 +462,19 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_link_libraries(velox_adaptive_prefetch_test GTest::gtest GTest::gtest_main)
+
+add_executable(velox_output_transport_registry_test OutputTransportRegistryTest.cpp)
+add_test(
+  NAME velox_output_transport_registry_test
+  COMMAND velox_output_transport_registry_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+  velox_output_transport_registry_test
+  velox_exec
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
+)
 
 velox_add_library(velox_aggregate_registry_util INTERFACE HEADERS AggregateRegistryTestUtil.h)

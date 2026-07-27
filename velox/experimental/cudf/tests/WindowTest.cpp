@@ -1,0 +1,2201 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/CudfWindow.h"
+#include "velox/experimental/cudf/exec/OperatorAdapters.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
+#include "velox/core/PlanNode.h"
+#include "velox/core/QueryConfig.h"
+#include "velox/exec/Driver.h"
+#include "velox/exec/Task.h"
+#include "velox/exec/Window.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
+#include "velox/parse/TypeResolver.h"
+#include "velox/serializers/PrestoSerializer.h"
+#include "velox/type/Type.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
+
+#include <fmt/format.h>
+#include <folly/String.h>
+#include <gtest/gtest.h>
+
+#include <limits>
+#include <sstream>
+
+using namespace facebook::velox;
+using namespace facebook::velox::exec;
+using namespace facebook::velox::exec::test;
+
+namespace {
+
+class CudfWindowTest : public testing::Test,
+                       public facebook::velox::test::VectorTestBase {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
+  void SetUp() override {
+    if (!isRegisteredVectorSerde()) {
+      serializer::presto::PrestoVectorSerde::registerVectorSerde();
+    }
+    functions::prestosql::registerAllScalarFunctions();
+    aggregate::prestosql::registerAllAggregateFunctions();
+    facebook::velox::window::prestosql::registerAllWindowFunctions();
+    parse::registerTypeResolver();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::registerCudf();
+  }
+
+  void TearDown() override {
+    cudf_velox::unregisterCudf();
+  }
+};
+
+TEST_F(CudfWindowTest, rowNumberPartitionOrder) {
+  auto data = makeRowVector(
+      {"id", "val"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 15, 25, 35}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"row_number() over (partition by id order by val)"})
+                  .orderBy({"id ASC NULLS LAST", "val ASC NULLS LAST"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"id", "val", "w0"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 15, 25, 35}),
+          makeFlatVector<int64_t>({1, 2, 3, 1, 2, 3}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, lagLead) {
+  auto data = makeRowVector(
+      {"id", "val"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({100, 200, 300, 10, 20}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "lag(val, 1) over (partition by id order by val) as lag_val",
+              "lead(val, 1) over (partition by id order by val) as lead_val",
+          })
+          .orderBy({"id ASC NULLS LAST", "val ASC NULLS LAST"}, false)
+          .planNode();
+
+  auto lagValues = makeNullableFlatVector<int64_t>(
+      {std::nullopt, 100, 200, std::nullopt, 10});
+  auto leadValues = makeNullableFlatVector<int64_t>(
+      {200, 300, std::nullopt, 20, std::nullopt});
+  auto expected = makeRowVector(
+      {"id", "val", "lag_val", "lead_val"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({100, 200, 300, 10, 20}),
+          lagValues,
+          leadValues,
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, rankPartitionOrder) {
+  // Ties: partition 1 has two rows with val=20.
+  auto data = makeRowVector(
+      {"id", "val"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 2, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 20, 30, 5, 5, 15}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"rank() over (partition by id order by val)"})
+                  .orderBy({"id ASC NULLS LAST", "val ASC NULLS LAST"}, false)
+                  .planNode();
+
+  // rank(): tied rows get the same rank, next rank skips.
+  // Partition 1 (10,20,20,30): 1,2,2,4
+  // Partition 2 (5,5,15): 1,1,3
+  auto expected = makeRowVector(
+      {"id", "val", "w0"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 2, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 20, 30, 5, 5, 15}),
+          makeFlatVector<int64_t>({1, 2, 2, 4, 1, 1, 3}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, denseRankPartitionOrder) {
+  auto data = makeRowVector(
+      {"id", "val"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 2, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 20, 30, 5, 5, 15}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"dense_rank() over (partition by id order by val)"})
+                  .orderBy({"id ASC NULLS LAST", "val ASC NULLS LAST"}, false)
+                  .planNode();
+
+  // dense_rank(): tied rows get the same rank, no gaps.
+  // Partition 1 (10,20,20,30): 1,2,2,3
+  // Partition 2 (5,5,15): 1,1,2
+  auto expected = makeRowVector(
+      {"id", "val", "w0"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 2, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 20, 30, 5, 5, 15}),
+          makeFlatVector<int64_t>({1, 2, 2, 3, 1, 1, 2}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, firstValueLastValue) {
+  auto data = makeRowVector(
+      {"id", "val"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "first_value(val) over (partition by id order by val) as fv",
+              "last_value(val) over (partition by id order by val "
+              "rows between unbounded preceding and unbounded following) as lv",
+          })
+          .orderBy({"id ASC NULLS LAST", "val ASC NULLS LAST"}, false)
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"id", "val", "fv", "lv"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+          makeFlatVector<int64_t>({10, 10, 10, 100, 100}),
+          makeFlatVector<int64_t>({30, 30, 30, 200, 200}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, sumWindow) {
+  auto data = makeRowVector(
+      {"id", "val"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "sum(val) over (partition by id "
+                      "rows between unbounded preceding and "
+                      "unbounded following) as total",
+                  })
+                  .orderBy({"id ASC NULLS LAST", "val ASC NULLS LAST"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"id", "val", "total"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+          makeFlatVector<int64_t>({60, 60, 60, 300, 300}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, minMaxWindow) {
+  auto data = makeRowVector(
+      {"id", "val"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "min(val) over (partition by id "
+              "rows between unbounded preceding and unbounded following) as mn",
+              "max(val) over (partition by id "
+              "rows between unbounded preceding and unbounded following) as mx",
+          })
+          .orderBy({"id ASC NULLS LAST", "val ASC NULLS LAST"}, false)
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"id", "val", "mn", "mx"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+          makeFlatVector<int64_t>({10, 10, 10, 100, 100}),
+          makeFlatVector<int64_t>({30, 30, 30, 200, 200}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, countWindow) {
+  auto data = makeRowVector(
+      {"id", "val"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "count(val) over (partition by id "
+              "rows between unbounded preceding and unbounded following) as cnt",
+          })
+          .orderBy({"id ASC NULLS LAST", "val ASC NULLS LAST"}, false)
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"id", "val", "cnt"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+          makeFlatVector<int64_t>({3, 3, 3, 2, 2}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, avgWindow) {
+  auto data = makeRowVector(
+      {"id", "val"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<double>({10.0, 20.0, 30.0, 100.0, 200.0}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "avg(val) over (partition by id order by val "
+              "rows between unbounded preceding and current row) as average",
+          })
+          .orderBy({"id ASC NULLS LAST", "val ASC NULLS LAST"}, false)
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"id", "val", "average"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<double>({10.0, 20.0, 30.0, 100.0, 200.0}),
+          makeFlatVector<double>({10.0, 15.0, 20.0, 100.0, 150.0}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Ports of checks from velox/exec/tests/WindowTest.cpp (CPU window tests).
+
+TEST_F(CudfWindowTest, duplicateOrOverlappingKeys) {
+  auto data = makeRowVector(
+      ROW({"a", "b", "c", "d", "e"},
+          {
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+          }),
+      10);
+
+  auto buildPlan = [&](const std::vector<std::string>& partitionKeys,
+                       const std::vector<std::string>& sortingKeys) {
+    std::ostringstream sql;
+    sql << "row_number() over (";
+    if (!partitionKeys.empty()) {
+      sql << " partition by ";
+      sql << folly::join(", ", partitionKeys);
+    }
+    if (!sortingKeys.empty()) {
+      sql << " order by ";
+      sql << folly::join(", ", sortingKeys);
+    }
+    sql << ")";
+
+    PlanBuilder().values({data}).window({sql.str()}).planNode();
+  };
+
+  VELOX_ASSERT_THROW(
+      buildPlan({"a", "a"}, {"b"}),
+      "Partitioning keys must be unique. Found duplicate key: a");
+
+  VELOX_ASSERT_THROW(
+      buildPlan({"a", "b"}, {"c", "d", "c"}),
+      "Sorting keys must be unique and not overlap with partitioning keys. Found duplicate key: c");
+
+  VELOX_ASSERT_THROW(
+      buildPlan({"a", "b"}, {"c", "b"}),
+      "Sorting keys must be unique and not overlap with partitioning keys. Found duplicate key: b");
+}
+
+TEST_F(CudfWindowTest, rowNumberGlobalOrderBy) {
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+          makeFlatVector<int16_t>({1, 1, 2, 2, 2}),
+          makeFlatVector<int32_t>({30, 10, 20, 5, 15}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"row_number() over (order by s)"})
+                  .orderBy({"s ASC NULLS LAST"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"d", "p", "s", "w0"},
+      {
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+          makeFlatVector<int16_t>({1, 1, 2, 2, 2}),
+          makeFlatVector<int32_t>({30, 10, 20, 5, 15}),
+          makeFlatVector<int64_t>({5, 2, 4, 1, 3}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, rankGlobalOrderBy) {
+  auto data = makeRowVector({"c1"}, {makeFlatVector<int64_t>({1, 1, 1, 2, 2})});
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({"rank() over (order by c1 rows unbounded preceding)"})
+          .orderBy({"c1 ASC NULLS LAST"}, false)
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"c1", "w0"},
+      {
+          makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({1, 1, 1, 4, 4}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, rowNumberMultiBatch) {
+  auto data = makeRowVector(
+      {"id", "val"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 15, 25, 35}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values(split(data, 3))
+                  .window({"row_number() over (partition by id order by val)"})
+                  .orderBy({"id ASC NULLS LAST", "val ASC NULLS LAST"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"id", "val", "w0"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 15, 25, 35}),
+          makeFlatVector<int64_t>({1, 2, 3, 1, 2, 3}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Multi-column ORDER BY covered in follow-on PR (requires cuDF upgrade).
+TEST_F(CudfWindowTest, DISABLED_multiFunctionPartitionOrder) {
+  // Same shape as valuesRowsStreamingWindowBuild (CPU) but non-streaming window
+  // and explicit expected vectors (no DuckDB runner).
+  auto data = makeRowVector(
+      {"c0", "c1", "c2", "c3", "c4"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int32_t>({1, 2, 3, 1, 2}),
+          makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int32_t>({0, 1, 2, 0, 1}),
+          makeFlatVector<int32_t>({10, 20, 30, 100, 200}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "rank() over (partition by c0, c2 order by c1, c3)",
+                      "dense_rank() over (partition by c0, c2 order by c1, c3)",
+                      "row_number() over (partition by c0, c2 order by c1, c3)",
+                      "sum(c4) over (partition by c0, c2 order by c1, c3)",
+                  })
+                  .orderBy(
+                      {"c0 ASC NULLS LAST",
+                       "c2 ASC NULLS LAST",
+                       "c1 ASC NULLS LAST",
+                       "c3 ASC NULLS LAST"},
+                      false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"c0", "c1", "c2", "c3", "c4", "w0", "w1", "w2", "w3"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int32_t>({1, 2, 3, 1, 2}),
+          makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int32_t>({0, 1, 2, 0, 1}),
+          makeFlatVector<int32_t>({10, 20, 30, 100, 200}),
+          makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
+          makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
+          makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
+          makeFlatVector<int64_t>({10, 30, 60, 100, 300}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, rankNaNRangeFrameBounds) {
+  // rank() ignores RANGE frame bounds; port of the rank() loop from
+  // WindowTest.NaNFrameBound (sum+RANGE is not mirrored here).
+  const auto kNan = std::numeric_limits<double>::quiet_NaN();
+  auto data = makeRowVector(
+      {"c0", "s0", "off0", "off1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+          makeFlatVector<double>({1.0, 2.0, 3.0, kNan}),
+          makeFlatVector<double>({0.1, 2.0, 1.9, kNan}),
+          makeFlatVector<double>({kNan, 2.0, kNan, kNan}),
+      });
+
+  const auto makeFrames = [](const std::string& call) {
+    std::vector<std::string> frames;
+
+    std::vector<std::string> orders{"asc", "desc"};
+    std::vector<std::string> bounds{"preceding", "following"};
+    for (const std::string& order : orders) {
+      for (const std::string& startBound : bounds) {
+        for (const std::string& endBound : bounds) {
+          if (startBound == "following" && endBound == "preceding") {
+            continue;
+          }
+          frames.push_back(
+              fmt::format(
+                  "{} over (order by s0 {} range between off0 {} and off1 {})",
+                  call,
+                  order,
+                  startBound,
+                  endBound));
+          frames.push_back(
+              fmt::format(
+                  "{} over (order by s0 {} range between off1 {} and off0 {})",
+                  call,
+                  order,
+                  startBound,
+                  endBound));
+        }
+      }
+    }
+    return frames;
+  };
+
+  auto expected =
+      makeRowVector({"w0"}, {makeFlatVector<int64_t>({1, 2, 3, 4})});
+  for (const auto& frame : makeFrames("rank()")) {
+    auto plan =
+        PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+}
+
+// =============================================================================
+// Tests ported from velox/exec/tests/WindowTest.cpp
+// =============================================================================
+
+namespace {
+
+int64_t rowNumberWithinPartitionAsc(
+    vector_size_t row,
+    vector_size_t size,
+    int numPartitions) {
+  return row / numPartitions + 1;
+}
+
+int64_t rowNumberWithinPartitionDesc(
+    vector_size_t row,
+    vector_size_t size,
+    int numPartitions) {
+  const auto partition = row % numPartitions;
+  int64_t rowNumber = 0;
+  for (int64_t r = partition; r < size; r += numPartitions) {
+    if (r >= row) {
+      ++rowNumber;
+    }
+  }
+  return rowNumber;
+}
+
+} // namespace
+
+// CudfWindow buffers all input; spill configs are ignored but results must
+// match CPU window semantics under the same split/batch settings.
+TEST_F(CudfWindowTest, spill) {
+  const vector_size_t size = 1'000;
+  const int numPartitions = 11;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .window({"row_number() over (partition by p order by s)"})
+                  .orderBy({"p ASC NULLS LAST", "s ASC NULLS LAST"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"d", "p", "s", "w0"},
+      {
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(
+              size,
+              [size, numPartitions](auto row) {
+                return rowNumberWithinPartitionAsc(row, size, numPartitions);
+              }),
+      });
+
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kSpillEnabled, "true")
+      .config(core::QueryConfig::kWindowSpillEnabled, "true")
+      .assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, spillBatchReadTinyPartitions) {
+  const vector_size_t size = 1'000;
+  const uint32_t partitionRows = 1;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row / partitionRows; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .window({"row_number() over (partition by p order by s)"})
+                  .orderBy({"p ASC NULLS LAST", "s ASC NULLS LAST"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"d", "p", "s", "w0"},
+      {
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row / partitionRows; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(size, [](auto) { return 1; }),
+      });
+
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kSpillEnabled, "true")
+      .config(core::QueryConfig::kWindowSpillEnabled, "true")
+      .config(core::QueryConfig::kWindowSpillMinReadBatchRows, "100")
+      .assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, spillBatchReadHugePartitions) {
+  const vector_size_t size = 1'000;
+  const uint32_t partitionRows = 200;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row / partitionRows; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .window({"row_number() over (partition by p order by s)"})
+                  .orderBy({"p ASC NULLS LAST", "s ASC NULLS LAST"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"d", "p", "s", "w0"},
+      {
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row / partitionRows; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(
+              size, [](auto row) { return row % partitionRows + 1; }),
+      });
+
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kSpillEnabled, "true")
+      .config(core::QueryConfig::kWindowSpillEnabled, "true")
+      .config(core::QueryConfig::kWindowSpillMinReadBatchRows, "100")
+      .assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, spillUnsupported) {
+  const vector_size_t size = 1'000;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int16_t>(size, [](auto row) { return row % 11; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .window({"row_number() over (order by s)"})
+                  .orderBy({"s ASC NULLS LAST"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"d", "p", "s", "w0"},
+      {
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int16_t>(size, [](auto row) { return row % 11; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(size, [](auto row) { return row + 1; }),
+      });
+
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kSpillEnabled, "true")
+      .config(core::QueryConfig::kWindowSpillEnabled, "true")
+      .assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, rowBasedStreamingWindowOOM) {
+  const vector_size_t size = 10'000;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int16_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .window({"row_number() over (partition by p order by s)"})
+                  .project({"d"})
+                  .singleAggregation({}, {"sum(d)"})
+                  .planNode();
+
+  auto expected =
+      makeRowVector({makeConstant<int64_t>(size * (size - 1) / 2, 1)});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, prePartitionedSortBuild) {
+  const vector_size_t size = 1'000;
+  const int numPartitions = 37;
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values(split(data, 10))
+          .window({"row_number() over (partition by p order by s desc)"})
+          .orderBy({"p ASC NULLS LAST", "s DESC NULLS LAST"}, false)
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"p", "s", "w0"},
+      {
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(
+              size,
+              [size, numPartitions](auto row) {
+                return rowNumberWithinPartitionDesc(row, size, numPartitions);
+              }),
+      });
+
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kWindowNumSubPartitions, "4")
+      .assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, prePartitionedSortBuildSkewed) {
+  const vector_size_t size = 1'000;
+  const int numPartitions = 4;
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values(split(data, 10))
+          .window({"row_number() over (partition by p order by s desc)"})
+          .orderBy({"p ASC NULLS LAST", "s DESC NULLS LAST"}, false)
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"p", "s", "w0"},
+      {
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(
+              size,
+              [size, numPartitions](auto row) {
+                return rowNumberWithinPartitionDesc(row, size, numPartitions);
+              }),
+      });
+
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kWindowNumSubPartitions, "16")
+      .assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, prePartitionedBuildWithSpill) {
+  const vector_size_t size = 1'000;
+  const int numPartitions = 37;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values(split(data, 10))
+          .window({"row_number() over (partition by p order by s desc)"})
+          .orderBy({"p ASC NULLS LAST", "s DESC NULLS LAST"}, false)
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"d", "p", "s", "w0"},
+      {
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(
+              size,
+              [size, numPartitions](auto row) {
+                return rowNumberWithinPartitionDesc(row, size, numPartitions);
+              }),
+      });
+
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kWindowNumSubPartitions, "4")
+      .config(core::QueryConfig::kSpillEnabled, "true")
+      .config(core::QueryConfig::kWindowSpillEnabled, "true")
+      .assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, negativeFrameArg) {
+  const vector_size_t size = 1'000;
+
+  auto sizeAt = [](vector_size_t row) { return row % 5; };
+  auto keyAt = [](vector_size_t row) { return row % 11; };
+  auto keys = makeArrayVector<float>(size, sizeAt, keyAt);
+  auto data = makeRowVector(
+      {"c0", "c1", "p0", "p1", "k0", "row_number"},
+      {
+          makeFlatVector<float>(size, [](auto row) { return row; }),
+          makeFlatVector<float>(size, [](auto row) { return row; }),
+          keys,
+          makeFlatVector<std::string>(
+              size, [](auto row) { return fmt::format("{}", row + 20); }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+      });
+
+  struct {
+    std::string fragmentStart;
+    std::string fragmentEnd;
+  } testSettings[] = {
+      {"k0", "-1"},
+      {"-1", "k0"},
+      {"-1", "-3"},
+  };
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(
+        fmt::format("{} / {}", testData.fragmentStart, testData.fragmentEnd));
+    auto plan =
+        PlanBuilder()
+            .values({data})
+            .window({fmt::format(
+                "sum(c0) over (partition by p0, p1 order by row_number ROWS between {} PRECEDING and {} FOLLOWING)",
+                testData.fragmentStart,
+                testData.fragmentEnd)})
+            .planNode();
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()),
+        "Replacement with cuDF operator failed");
+  }
+}
+
+TEST_F(CudfWindowTest, NaNFrameBound) {
+  const auto kNan = std::numeric_limits<double>::quiet_NaN();
+  auto data = makeRowVector(
+      {"c0", "s0", "off0", "off1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+          makeFlatVector<double>({1.0, 2.0, 3.0, kNan}),
+          makeFlatVector<double>({0.1, 2.0, 1.9, kNan}),
+          makeFlatVector<double>({kNan, 2.0, kNan, kNan}),
+      });
+
+  const auto makeFrames = [](const std::string& call) {
+    std::vector<std::string> frames;
+
+    std::vector<std::string> orders{"asc", "desc"};
+    std::vector<std::string> bounds{"preceding", "following"};
+    for (const std::string& order : orders) {
+      for (const std::string& startBound : bounds) {
+        for (const std::string& endBound : bounds) {
+          if (startBound == "following" && endBound == "preceding") {
+            continue;
+          }
+          frames.push_back(
+              fmt::format(
+                  "{} over (order by s0 {} range between off0 {} and off1 {})",
+                  call,
+                  order,
+                  startBound,
+                  endBound));
+          frames.push_back(
+              fmt::format(
+                  "{} over (order by s0 {} range between off1 {} and off0 {})",
+                  call,
+                  order,
+                  startBound,
+                  endBound));
+        }
+      }
+    }
+    return frames;
+  };
+
+  for (const auto& frame : makeFrames("sum(c0)")) {
+    auto plan =
+        PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()),
+        "Replacement with cuDF operator failed");
+  }
+
+  auto expected = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
+  for (const auto& frame : makeFrames("rank()")) {
+    auto plan =
+        PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+}
+
+// =============================================================================
+// Tests ported from velox/functions/prestosql/window/tests/RankTest.cpp
+// =============================================================================
+
+// Tests rank functions with all rows in a single partition.
+TEST_F(CudfWindowTest, rankSinglePartition) {
+  // All rows have the same partition key.
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 20, 30, 40}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "row_number() over (partition by p order by s) as rn",
+                      "rank() over (partition by p order by s) as r",
+                      "dense_rank() over (partition by p order by s) as dr",
+                  })
+                  .orderBy({"s ASC NULLS LAST"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"p", "s", "rn", "r", "dr"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 20, 30, 40}),
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({1, 2, 2, 4, 5}),
+          makeFlatVector<int64_t>({1, 2, 2, 3, 4}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Tests rank functions with single-row partitions.
+TEST_F(CudfWindowTest, rankSingleRowPartitions) {
+  // Each row is its own partition.
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({100, 200, 300, 400, 500}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "row_number() over (partition by p order by s) as rn",
+                      "rank() over (partition by p order by s) as r",
+                      "dense_rank() over (partition by p order by s) as dr",
+                  })
+                  .orderBy({"p ASC NULLS LAST"}, false)
+                  .planNode();
+
+  // Each partition has only one row, so all ranks are 1.
+  auto expected = makeRowVector(
+      {"p", "s", "rn", "r", "dr"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({100, 200, 300, 400, 500}),
+          makeFlatVector<int64_t>({1, 1, 1, 1, 1}),
+          makeFlatVector<int64_t>({1, 1, 1, 1, 1}),
+          makeFlatVector<int64_t>({1, 1, 1, 1, 1}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Tests rank functions with nulls in sort key.
+TEST_F(CudfWindowTest, rankWithNulls) {
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 2, 2, 2}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, 10, 20, 20, std::nullopt, std::nullopt, 30}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "row_number() over (partition by p order by s NULLS FIRST) as rn",
+              "rank() over (partition by p order by s NULLS FIRST) as r",
+              "dense_rank() over (partition by p order by s NULLS FIRST) as dr",
+          })
+          .orderBy({"p ASC NULLS LAST", "s ASC NULLS FIRST"}, false)
+          .planNode();
+
+  // With NULLS FIRST, null values come before non-null values.
+  // Partition 1: null, 10, 20, 20 -> row_number: 1,2,3,4; rank: 1,2,3,3;
+  //   dense_rank: 1,2,3,3
+  // Partition 2: null, null, 30 -> row_number: 1,2,3; rank: 1,1,3;
+  //   dense_rank: 1,1,2
+  auto expected = makeRowVector(
+      {"p", "s", "rn", "r", "dr"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 2, 2, 2}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, 10, 20, 20, std::nullopt, std::nullopt, 30}),
+          makeFlatVector<int64_t>({1, 2, 3, 4, 1, 2, 3}),
+          makeFlatVector<int64_t>({1, 2, 3, 3, 1, 1, 3}),
+          makeFlatVector<int64_t>({1, 2, 3, 3, 1, 1, 2}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// =============================================================================
+// Tests ported from velox/functions/prestosql/window/tests/LeadLagTest.cpp
+// =============================================================================
+
+// Tests lag/lead with zero offset.
+TEST_F(CudfWindowTest, lagLeadZeroOffset) {
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "lag(v, 0) over (partition by p order by v) as lag0",
+                      "lead(v, 0) over (partition by p order by v) as lead0",
+                  })
+                  .orderBy({"p ASC NULLS LAST", "v ASC NULLS LAST"}, false)
+                  .planNode();
+
+  // Zero offset means the current row's value.
+  auto expected = makeRowVector(
+      {"p", "v", "lag0", "lead0"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+          makeFlatVector<int64_t>({10, 20, 30, 100, 200}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Tests lag/lead with larger offset.
+TEST_F(CudfWindowTest, lagLeadLargeOffset) {
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "lag(v, 3) over (partition by p order by v) as lag3",
+                      "lead(v, 3) over (partition by p order by v) as lead3",
+                  })
+                  .orderBy({"v ASC NULLS LAST"}, false)
+                  .planNode();
+
+  // lag(3): first 3 rows are null, then 10, 20
+  // lead(3): last 3 rows are null, first 2 are 40, 50
+  auto expected = makeRowVector(
+      {"p", "v", "lag3", "lead3"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, std::nullopt, std::nullopt, 10, 20}),
+          makeNullableFlatVector<int64_t>(
+              {40, 50, std::nullopt, std::nullopt, std::nullopt}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Tests lag/lead with nulls in the value column.
+TEST_F(CudfWindowTest, lagLeadWithNullValues) {
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 1}),
+          makeNullableFlatVector<int64_t>(
+              {10, std::nullopt, 30, std::nullopt, 50}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "lag(v, 1) over (partition by p order by v NULLS FIRST) as lag1",
+              "lead(v, 1) over (partition by p order by v NULLS FIRST) as lead1",
+          })
+          .orderBy({"v ASC NULLS FIRST"}, false)
+          .planNode();
+
+  // With NULLS FIRST, order is: null, null, 10, 30, 50
+  // lag(1): null, null, null, 10, 30
+  // lead(1): null, 10, 30, 50, null
+  auto expected = makeRowVector(
+      {"p", "v", "lag1", "lead1"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 1}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, std::nullopt, 10, 30, 50}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, std::nullopt, std::nullopt, 10, 30}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, 10, 30, 50, std::nullopt}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Tests lag/lead with single-row partitions.
+TEST_F(CudfWindowTest, lagLeadSingleRowPartitions) {
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "lag(v, 1) over (partition by p order by v) as lag1",
+                      "lead(v, 1) over (partition by p order by v) as lead1",
+                  })
+                  .orderBy({"p ASC NULLS LAST"}, false)
+                  .planNode();
+
+  // Each partition has only one row, so lag and lead are always null.
+  auto expected = makeRowVector(
+      {"p", "v", "lag1", "lead1"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Tests lag/lead with small partitions (5 rows each).
+TEST_F(CudfWindowTest, lagLeadSmallPartitions) {
+  // Create data with small partitions.
+  std::vector<int32_t> partitions;
+  std::vector<int64_t> values;
+  for (int i = 0; i < 100; ++i) {
+    partitions.push_back(i / 5); // 5 rows per partition
+    values.push_back(i);
+  }
+
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>(partitions),
+          makeFlatVector<int64_t>(values),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "lag(v, 2) over (partition by p order by v) as lag2",
+                      "lead(v, 2) over (partition by p order by v) as lead2",
+                  })
+                  .orderBy({"p ASC NULLS LAST", "v ASC NULLS LAST"}, false)
+                  .planNode();
+
+  // Compute expected results.
+  std::vector<std::optional<int64_t>> expectedLag;
+  std::vector<std::optional<int64_t>> expectedLead;
+  for (int i = 0; i < 100; ++i) {
+    int posInPartition = i % 5;
+    int partitionStart = (i / 5) * 5;
+    if (posInPartition < 2) {
+      expectedLag.push_back(std::nullopt);
+    } else {
+      expectedLag.push_back(values[i - 2]);
+    }
+    if (posInPartition >= 3) {
+      expectedLead.push_back(std::nullopt);
+    } else {
+      expectedLead.push_back(values[i + 2]);
+    }
+  }
+
+  auto expected = makeRowVector(
+      {"p", "v", "lag2", "lead2"},
+      {
+          makeFlatVector<int32_t>(partitions),
+          makeFlatVector<int64_t>(values),
+          makeNullableFlatVector<int64_t>(expectedLag),
+          makeNullableFlatVector<int64_t>(expectedLead),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Test count(*) counts all rows including those with nulls.
+// Previously count(*) incorrectly used null_policy::EXCLUDE which would skip
+// nulls in the arbitrary column used for counting.
+TEST_F(CudfWindowTest, countStarWithNulls) {
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeNullableFlatVector<int64_t>(
+              {10, std::nullopt, 30, std::nullopt, 50}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"count(*) over (partition by p) as cnt"})
+                  .orderBy({"p ASC NULLS LAST", "v ASC NULLS FIRST"}, false)
+                  .planNode();
+
+  // count(*) should count all rows, including those where v is null.
+  // Partition 1 has 3 rows, partition 2 has 2 rows.
+  auto expected = makeRowVector(
+      {"p", "v", "cnt"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, 10, 30, std::nullopt, 50}),
+          makeFlatVector<int64_t>({3, 3, 3, 2, 2}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Test count(col) excludes nulls.
+TEST_F(CudfWindowTest, countColumnExcludesNulls) {
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeNullableFlatVector<int64_t>(
+              {10, std::nullopt, 30, std::nullopt, 50}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"count(v) over (partition by p) as cnt"})
+                  .orderBy({"p ASC NULLS LAST", "v ASC NULLS FIRST"}, false)
+                  .planNode();
+
+  // count(v) should exclude nulls.
+  // Partition 1 has 2 non-null values, partition 2 has 1 non-null value.
+  auto expected = makeRowVector(
+      {"p", "v", "cnt"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt, 10, 30, std::nullopt, 50}),
+          makeFlatVector<int64_t>({2, 2, 2, 1, 1}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Test rank()/dense_rank() without ORDER BY returns 1 for all rows.
+// Previously used column 0 for tie detection which was incorrect.
+TEST_F(CudfWindowTest, rankWithoutOrderBy) {
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int64_t>({30, 10, 20, 50, 40}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "row_number() over (partition by p) as rn",
+                      "rank() over (partition by p) as r",
+                      "dense_rank() over (partition by p) as dr",
+                  })
+                  .orderBy({"p ASC NULLS LAST", "v ASC NULLS LAST"}, false)
+                  .planNode();
+
+  // Without ORDER BY:
+  // - row_number() still assigns unique sequential numbers within partition
+  // - rank() and dense_rank() return 1 for all rows (all tied)
+  // Note: row_number order is non-deterministic without ORDER BY, so we just
+  // check rank/dense_rank are all 1s.
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  // Verify rank and dense_rank are all 1s
+  auto rankCol = result->childAt(3)->asFlatVector<int64_t>();
+  auto denseRankCol = result->childAt(4)->asFlatVector<int64_t>();
+  for (int i = 0; i < result->size(); ++i) {
+    EXPECT_EQ(rankCol->valueAt(i), 1) << "rank should be 1 at row " << i;
+    EXPECT_EQ(denseRankCol->valueAt(i), 1)
+        << "dense_rank should be 1 at row " << i;
+  }
+}
+
+// Test rank() OVER () - global window without partition or order by.
+// This addresses mattgara's comment: rank should return 1 for all rows.
+TEST_F(CudfWindowTest, rankGlobalWithoutOrderBy) {
+  auto data = makeRowVector(
+      {"x"},
+      {
+          makeFlatVector<int32_t>({2, 1}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({
+                      "rank() over () as r",
+                      "dense_rank() over () as dr",
+                  })
+                  .planNode();
+
+  // Without ORDER BY, all rows are considered tied, so rank and dense_rank
+  // should both return 1 for all rows.
+  auto expected = makeRowVector(
+      {"x", "r", "dr"},
+      {
+          makeFlatVector<int32_t>({2, 1}),
+          makeFlatVector<int64_t>({1, 1}),
+          makeFlatVector<int64_t>({1, 1}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// RANGE frames peer-group by ORDER BY key value. With duplicate sort keys, rows
+// in the same peer group share the same frame. Addresses mattgara's review
+// comment on PR #16892:
+//   sum(v) OVER (ORDER BY k RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+//   FROM (VALUES (1, 10), (1, 20), (2, 30)) AS t(k, v)
+// Expected: s = {30, 30, 60}, not {10, 30, 60} from ROWS semantics.
+TEST_F(CudfWindowTest, sumRangeWithDuplicateSortKeys) {
+  auto data = makeRowVector(
+      {"k", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({"sum(v) over (order by k "
+                   "range between unbounded preceding and current row) as s"})
+          .orderBy({"k ASC NULLS LAST"}, false)
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"k", "v", "s"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeFlatVector<int64_t>({30, 30, 60}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Test last_value respects the actual frame bounds.
+// Default frame with ORDER BY is RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT
+// ROW, which for last_value means returning the current row's value.
+// Previously hardcoded UNBOUNDED FOLLOWING which was incorrect.
+// Addresses mattgara's comment: with the bug, this would return {3,3,3}.
+TEST_F(CudfWindowTest, lastValueWithDefaultFrame) {
+  auto data = makeRowVector(
+      {"x"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"last_value(x) over (order by x) as lv"})
+                  .orderBy({"x ASC NULLS LAST"}, false)
+                  .planNode();
+
+  // With default frame (RANGE UNBOUNDED PRECEDING TO CURRENT ROW):
+  // Row 1 (x=1): frame is [1], last_value = 1
+  // Row 2 (x=2): frame is [1,2], last_value = 2
+  // Row 3 (x=3): frame is [1,2,3], last_value = 3
+  // The bug would have returned {3, 3, 3} by using UNBOUNDED FOLLOWING.
+  auto expected = makeRowVector(
+      {"x", "lv"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<int64_t>({1, 2, 3}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Test first_value respects the actual frame bounds.
+TEST_F(CudfWindowTest, firstValueWithDefaultFrame) {
+  auto data = makeRowVector(
+      {"v"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"first_value(v) over (order by v) as fv"})
+                  .orderBy({"v ASC NULLS LAST"}, false)
+                  .planNode();
+
+  // With default frame (RANGE UNBOUNDED PRECEDING TO CURRENT ROW):
+  // All rows have first_value = 1 (the first value in the frame)
+  auto expected = makeRowVector(
+      {"v", "fv"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<int64_t>({1, 1, 1}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Test last_value with explicit ROWS UNBOUNDED frame.
+TEST_F(CudfWindowTest, lastValueWithUnboundedFrame) {
+  auto data = makeRowVector(
+      {"v"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window(
+              {"last_value(v) over (order by v rows between unbounded preceding and unbounded following) as lv"})
+          .orderBy({"v ASC NULLS LAST"}, false)
+          .planNode();
+
+  // With UNBOUNDED PRECEDING TO UNBOUNDED FOLLOWING:
+  // All rows see the entire partition, so last_value = 3 for all.
+  auto expected = makeRowVector(
+      {"v", "lv"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<int64_t>({3, 3, 3}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Test WindowAdapter::canRunOnGPU gating checks. This verifies that the
+// adapter correctly rejects unsupported window configurations and accepts
+// supported ones. With allowCpuFallback=false (set in SetUp), unsupported
+// configurations throw.
+TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+      });
+
+  // Unsupported: nth_value function
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values({data})
+              .window({"nth_value(v, 2) over (partition by p order by v)"})
+              .planNode())
+          .copyResults(pool()),
+      "Replacement with cuDF operator failed");
+
+  // Unsupported: lag/lead with 3 arguments (default value)
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values({data})
+              .window({"lag(v, 1, 0) over (partition by p order by v)"})
+              .planNode())
+          .copyResults(pool()),
+      "Replacement with cuDF operator failed");
+
+  // Unsupported: lag/lead with non-constant offset
+  auto dataWithOffset = makeRowVector(
+      {"p", "v", "off"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeFlatVector<int64_t>({1, 2, 1}),
+      });
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values({dataWithOffset})
+              .window({"lag(v, off) over (partition by p order by v)"})
+              .planNode())
+          .copyResults(pool()),
+      "Replacement with cuDF operator failed");
+
+  // Unsupported: RANGE frame with k PRECEDING
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values({data})
+              .window({"sum(v) over (partition by p order by v "
+                       "range between 5 preceding and current row)"})
+              .planNode())
+          .copyResults(pool()),
+      "Replacement with cuDF operator failed");
+
+  // Unsupported: RANGE frame with k FOLLOWING
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values({data})
+              .window({"sum(v) over (partition by p order by v "
+                       "range between current row and 5 following)"})
+              .planNode())
+          .copyResults(pool()),
+      "Replacement with cuDF operator failed");
+
+  // Unsupported: Non-constant frame bound (column reference)
+  auto dataWithBound = makeRowVector(
+      {"p", "v", "bound"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeFlatVector<int64_t>({1, 2, 3}),
+      });
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values({dataWithBound})
+              .window({"sum(v) over (partition by p order by v "
+                       "rows between bound preceding and current row)"})
+              .planNode())
+          .copyResults(pool()),
+      "Replacement with cuDF operator failed");
+
+  // Supported: RANGE UNBOUNDED PRECEDING to CURRENT ROW (peer groups by sort
+  // key)
+  auto plan1 =
+      PlanBuilder()
+          .values({data})
+          .window({"sum(v) over (partition by p order by v "
+                   "range between unbounded preceding and current row)"})
+          .orderBy({"p ASC NULLS LAST", "v ASC NULLS LAST"}, false)
+          .planNode();
+  auto expected1 = makeRowVector(
+      {"p", "v", "w0"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeFlatVector<int64_t>({10, 30, 60}),
+      });
+  AssertQueryBuilder(plan1).assertResults(expected1);
+
+  // Supported: RANGE UNBOUNDED PRECEDING to UNBOUNDED FOLLOWING
+  auto plan2 =
+      PlanBuilder()
+          .values({data})
+          .window(
+              {"sum(v) over (partition by p order by v "
+               "range between unbounded preceding and unbounded following)"})
+          .orderBy({"p ASC NULLS LAST", "v ASC NULLS LAST"}, false)
+          .planNode();
+  auto expected2 = makeRowVector(
+      {"p", "v", "w0"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeFlatVector<int64_t>({60, 60, 60}),
+      });
+  AssertQueryBuilder(plan2).assertResults(expected2);
+
+  // Unsupported: RANGE CURRENT ROW to UNBOUNDED FOLLOWING
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values({data})
+              .window({"sum(v) over (partition by p order by v "
+                       "range between current row and unbounded following)"})
+              .planNode())
+          .copyResults(pool()),
+      "Replacement with cuDF operator failed");
+}
+
+TEST_F(CudfWindowTest, explicitRowsCurrentRowWithoutOrderByIsNotFullPartition) {
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({"sum(v) over (partition by p "
+                   "rows between unbounded preceding and current row) as s"})
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"p", "v", "s"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeFlatVector<int64_t>({10, 30, 60}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, rowsFrameBoundsUseCudfWindowSizes) {
+  auto data = makeRowVector(
+      {"v"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+      });
+
+  {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .window({"sum(v) over (order by v "
+                             "rows between current row and current row) as s"})
+                    .orderBy({"v ASC NULLS LAST"}, false)
+                    .planNode();
+
+    auto expected = makeRowVector(
+        {"v", "s"},
+        {
+            makeFlatVector<int64_t>({1, 2, 3}),
+            makeFlatVector<int64_t>({1, 2, 3}),
+        });
+
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+
+  {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .window({"sum(v) over (order by v "
+                             "rows between 1 preceding and current row) as s"})
+                    .orderBy({"v ASC NULLS LAST"}, false)
+                    .planNode();
+
+    auto expected = makeRowVector(
+        {"v", "s"},
+        {
+            makeFlatVector<int64_t>({1, 2, 3}),
+            makeFlatVector<int64_t>({1, 3, 5}),
+        });
+
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+
+  {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .window({"sum(v) over (order by v "
+                             "rows between 1 following and 1 following) as s"})
+                    .orderBy({"v ASC NULLS LAST"}, false)
+                    .planNode();
+
+    auto expected = makeRowVector(
+        {"v", "s"},
+        {
+            makeFlatVector<int64_t>({1, 2, 3}),
+            makeNullableFlatVector<int64_t>({2, 3, std::nullopt}),
+        });
+
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+
+  {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .window({"sum(v) over (order by v "
+                             "rows between 2 preceding and 1 preceding) as s"})
+                    .orderBy({"v ASC NULLS LAST"}, false)
+                    .planNode();
+
+    auto expected = makeRowVector(
+        {"v", "s"},
+        {
+            makeFlatVector<int64_t>({1, 2, 3}),
+            makeNullableFlatVector<int64_t>({std::nullopt, 1, 3}),
+        });
+
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+}
+
+TEST_F(CudfWindowTest, inputsSortedStreamingWindow) {
+  auto data = makeRowVector(
+      {"p", "ord", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2, 2}),
+          makeFlatVector<int32_t>({1, 2, 1, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 40}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values(split(data, 2))
+                  .streamingWindow({
+                      "row_number() over (partition by p order by ord) as rn",
+                      "sum(v) over (partition by p order by ord "
+                      "rows between unbounded preceding and current row) as s",
+                  })
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"p", "ord", "v", "rn", "s"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2, 2}),
+          makeFlatVector<int32_t>({1, 2, 1, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 40}),
+          makeFlatVector<int64_t>({1, 2, 1, 2}),
+          makeFlatVector<int64_t>({10, 30, 30, 70}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, lagLeadIgnoreNullsFallsBack) {
+  auto data = makeRowVector(
+      {"p", "ord", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1}),
+          makeFlatVector<int32_t>({1, 2, 3, 4}),
+          makeNullableFlatVector<int64_t>({10, std::nullopt, 20, 30}),
+      });
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values({data})
+              .window({
+                  "lag(v, 1 IGNORE NULLS) over "
+                  "(partition by p order by ord) as lag_v",
+                  "lead(v, 1 IGNORE NULLS) over "
+                  "(partition by p order by ord) as lead_v",
+              })
+              .planNode())
+          .copyResults(pool()),
+      "Replacement with cuDF operator failed");
+}
+
+TEST_F(CudfWindowTest, countStarOverZeroColumnInputPreservesLogicalRows) {
+  auto data = makeRowVector(
+      {"v"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({})
+                  .window({
+                      "count(*) over (rows between unbounded preceding "
+                      "and unbounded following) as cnt",
+                  })
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"cnt"},
+      {
+          makeFlatVector<int64_t>({4, 4, 4, 4}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, rangeWithoutOrderByDoesNotDependOnFunctionCount) {
+  auto data = makeRowVector(
+      {"v"},
+      {
+          makeFlatVector<int64_t>({10, 20, 30}),
+      });
+
+  {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .window({"sum(v) over (range between unbounded preceding "
+                             "and current row) as s"})
+                    .planNode();
+
+    auto expected = makeRowVector(
+        {"v", "s"},
+        {
+            makeFlatVector<int64_t>({10, 20, 30}),
+            makeFlatVector<int64_t>({60, 60, 60}),
+        });
+
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+
+  {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .window({
+                        "sum(v) over (range between unbounded preceding "
+                        "and current row) as s",
+                        "count(v) over (range between unbounded preceding "
+                        "and current row) as c",
+                    })
+                    .planNode();
+
+    auto expected = makeRowVector(
+        {"v", "s", "c"},
+        {
+            makeFlatVector<int64_t>({10, 20, 30}),
+            makeFlatVector<int64_t>({60, 60, 60}),
+            makeFlatVector<int64_t>({3, 3, 3}),
+        });
+
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+}
+
+TEST_F(CudfWindowTest, emptyFrameCountReturnsZero) {
+  auto data = makeRowVector(
+      {"ord", "v"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeNullableFlatVector<int64_t>({10, std::nullopt, 30}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({
+              "count(*) over (order by ord rows between 1 following and "
+              "1 following) as count_all",
+              "count(v) over (order by ord rows between 1 following and "
+              "1 following) as count_v",
+          })
+          .orderBy({"ord ASC NULLS LAST"}, false)
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"ord", "v", "count_all", "count_v"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeNullableFlatVector<int64_t>({10, std::nullopt, 30}),
+          makeFlatVector<int64_t>({1, 1, 0}),
+          makeFlatVector<int64_t>({0, 1, 0}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, globalIntegerSumUsesBigintAccumulator) {
+  auto data = makeRowVector(
+      {"v"},
+      {makeFlatVector<int32_t>({std::numeric_limits<int32_t>::max(), 1})});
+
+  auto plan =
+      PlanBuilder().values({data}).window({"sum(v) over () as s"}).planNode();
+
+  auto expected = makeRowVector(
+      {"v", "s"},
+      {
+          makeFlatVector<int32_t>({std::numeric_limits<int32_t>::max(), 1}),
+          makeFlatVector<int64_t>({2'147'483'648LL, 2'147'483'648LL}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, unsupportedLeadLagArgumentsFallback) {
+  auto data = makeRowVector(
+      {"ord", "v"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+      });
+
+  const std::vector<std::string> expressions = {
+      "lag('foo', 1) over (order by ord) as w",
+      "lead('foo', 1) over (order by ord) as w",
+      "lag(v, null::bigint) over (order by ord) as w",
+      "lead(v, null::bigint) over (order by ord) as w",
+      "lag(v, 4294967294) over (order by ord) as w",
+      "lead(v, 4294967294) over (order by ord) as w",
+  };
+
+  for (const auto& expression : expressions) {
+    SCOPED_TRACE(expression);
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(
+            PlanBuilder().values({data}).window({expression}).planNode())
+            .copyResults(pool()),
+        "Replacement with cuDF operator failed");
+  }
+}
+
+TEST_F(CudfWindowTest, oversizedRowsBoundsFallback) {
+  auto data = makeRowVector(
+      {"ord", "v"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+      });
+
+  const std::vector<std::string> expressions = {
+      "count(v) over (order by ord rows between "
+      "2147483647 preceding and current row) as c",
+      "count(v) over (order by ord rows between "
+      "current row and 2147483648 following) as c",
+  };
+
+  for (const auto& expression : expressions) {
+    SCOPED_TRACE(expression);
+    auto plan = PlanBuilder().values({data}).window({expression}).planNode();
+
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()),
+        "Replacement with cuDF operator failed");
+  }
+}
+
+TEST_F(CudfWindowTest, unsupportedAggregateInputTypesFallback) {
+  const auto assertFallback = [&](const RowVectorPtr& data,
+                                  const std::string& expression) {
+    SCOPED_TRACE(expression);
+    auto plan = PlanBuilder().values({data}).window({expression}).planNode();
+
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()),
+        "Replacement with cuDF operator failed");
+  };
+
+  auto realData = makeRowVector(
+      {"ord", "v"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeFlatVector<float>({16'777'216.0F, 1.0F, -16'777'216.0F}),
+      });
+  assertFallback(
+      realData,
+      "sum(v) over (order by ord rows between unbounded preceding "
+      "and current row) as s");
+
+  auto decimalData = makeRowVector(
+      {"ord", "d"},
+      {
+          makeFlatVector<int32_t>({1, 2}),
+          makeFlatVector<int64_t>({100, 101}, DECIMAL(3, 2)),
+      });
+  assertFallback(
+      decimalData,
+      "avg(d) over (order by ord rows between unbounded preceding "
+      "and current row) as a");
+
+  auto arrayData = makeRowVector(
+      {"ord", "v"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeArrayVector<int64_t>({{2}, {1, 3}, {1, 2}}),
+      });
+  assertFallback(
+      arrayData,
+      "min(v) over (order by ord rows between unbounded preceding "
+      "and current row) as v_min");
+  assertFallback(
+      arrayData,
+      "max(v) over (order by ord rows between unbounded preceding "
+      "and current row) as v_max");
+}
+
+TEST_F(CudfWindowTest, customComparisonWindowKeysFallback) {
+  const auto first = pack(12'345, 1);
+  const auto second = pack(12'345, 2);
+  auto data = makeRowVector(
+      {"id", "ts"},
+      {
+          makeFlatVector<int32_t>({1, 2}),
+          makeFlatVector<int64_t>({first, second}, TIMESTAMP_WITH_TIME_ZONE()),
+      });
+
+  {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .window({
+                        "rank() over (order by ts) as r",
+                        "dense_rank() over (order by ts) as dr",
+                    })
+                    .planNode();
+
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()),
+        "Replacement with cuDF operator failed");
+  }
+
+  {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .window({
+                        "count(*) over (partition by ts) as c",
+                    })
+                    .planNode();
+
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()),
+        "Replacement with cuDF operator failed");
+  }
+}
+
+TEST_F(CudfWindowTest, fullPartitionAverageFallsBackUntilOptimized) {
+  auto data = makeRowVector(
+      {"p", "ord", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+          makeFlatVector<int32_t>({1, 2, 3, 1, 2}),
+          makeNullableFlatVector<double>({10.0, std::nullopt, 30.0, 5.0, 15.0}),
+      });
+
+  const std::vector<std::string> expressions = {
+      "avg(v) over (partition by p) as a",
+      "avg(v) over (partition by p order by ord "
+      "rows between unbounded preceding and unbounded following) as a",
+  };
+
+  for (const auto& expression : expressions) {
+    SCOPED_TRACE(expression);
+    auto plan = PlanBuilder().values({data}).window({expression}).planNode();
+
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()),
+        "Replacement with cuDF operator failed");
+  }
+}
+
+TEST_F(CudfWindowTest, decimalSumWidensBeforeWindowAggregation) {
+  constexpr int32_t kNumRows = 12;
+  constexpr int64_t kBig = 900'000'000'000'000'000;
+
+  std::vector<int32_t> partitions(kNumRows, 1);
+  std::vector<int64_t> values(kNumRows, kBig);
+  std::vector<int128_t> fullSums(
+      kNumRows, static_cast<int128_t>(kBig) * kNumRows);
+  std::vector<int128_t> runningSums;
+  runningSums.reserve(kNumRows);
+  for (int32_t i = 0; i < kNumRows; ++i) {
+    runningSums.push_back(static_cast<int128_t>(kBig) * (i + 1));
+  }
+
+  auto data = makeRowVector(
+      {"p", "ord", "d"},
+      {
+          makeFlatVector<int32_t>(partitions),
+          makeFlatVector<int32_t>(kNumRows, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(values, DECIMAL(18, 0)),
+      });
+
+  const auto assertSum = [&](const std::string& expression,
+                             const std::vector<int128_t>& expectedSums) {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .window({expression})
+                    .orderBy({"ord ASC NULLS LAST"}, false)
+                    .planNode();
+
+    auto expected = makeRowVector(
+        {"p", "ord", "d", "s"},
+        {
+            makeFlatVector<int32_t>(partitions),
+            makeFlatVector<int32_t>(kNumRows, [](auto row) { return row; }),
+            makeFlatVector<int64_t>(values, DECIMAL(18, 0)),
+            makeFlatVector<int128_t>(expectedSums, DECIMAL(38, 0)),
+        });
+
+    AssertQueryBuilder(plan).assertResults(expected);
+  };
+
+  assertSum("sum(d) over () as s", fullSums);
+  assertSum("sum(d) over (partition by p) as s", fullSums);
+  assertSum(
+      "sum(d) over (partition by p order by ord "
+      "rows between unbounded preceding and current row) as s",
+      runningSums);
+}
+
+// A cast on a window function argument (e.g. sum(cast(v as bigint))) reaches
+// the WindowNode as a CastTypedExpr. The CPU Window operator rejects such
+// arguments outright, so CudfWindow must fall back instead of silently reading
+// the un-cast column and evaluating f(x) instead of f(cast(x)).
+TEST_F(CudfWindowTest, castInWindowArgFallsBack) {
+  auto data = makeRowVector(
+      {"ord", "v"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeFlatVector<int32_t>({10, 20, 30}),
+      });
+
+  const std::vector<std::string> expressions = {
+      "sum(cast(v as bigint)) over (order by ord "
+      "rows between unbounded preceding and current row) as w",
+      "max(cast(v as bigint)) over (order by ord "
+      "rows between unbounded preceding and current row) as w",
+      "lag(cast(v as bigint), 1) over (order by ord) as w",
+      "first_value(cast(v as bigint)) over (order by ord) as w",
+  };
+
+  for (const auto& expression : expressions) {
+    SCOPED_TRACE(expression);
+    auto plan = PlanBuilder().values({data}).window({expression}).planNode();
+
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()),
+        "Replacement with cuDF operator failed");
+  }
+}
+
+} // namespace

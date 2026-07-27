@@ -181,6 +181,53 @@ TEST_F(TextWriterTest, write) {
   EXPECT_EQ(result[2][9], "Y3Bw");
 }
 
+// The writer factory must translate the Hive serde 'field.delim' parameter on
+// WriterOptions into the writer's field separator, rather than defaulting to
+// \001.
+TEST_F(TextWriterTest, fieldDelim) {
+  auto schema = ROW({"c0", "c1", "c2"}, {INTEGER(), VARCHAR(), INTEGER()});
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3}),
+      makeFlatVector<StringView>({"a", "b", "c"}, VARCHAR()),
+      makeFlatVector<int32_t>({4, 5, 6}),
+  });
+
+  WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  writerOptions.schema = schema;
+  writerOptions.serdeParameters = {
+      {dwio::common::SerDeOptions::kFieldDelim, "|"}};
+
+  const auto tempPath = tempPath_->getPath();
+  const auto filename = "test_text_writer_serde.txt";
+  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto sink = std::make_unique<dwio::common::LocalFileSink>(
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
+
+  TextWriterFactory factory;
+  auto writer = factory.createWriter(
+      std::move(sink), std::make_shared<text::WriterOptions>(writerOptions));
+  writer->write(data);
+  writer->close();
+
+  const auto fileSystem = filesystems::getFileSystem(tempPath, nullptr);
+  const auto& file = fileSystem->openFileForRead(filePath.string());
+  BufferPtr charBuf = AlignedBuffer::allocate<char>(file->size(), pool());
+  auto rawCharBuf = charBuf->asMutable<char>();
+
+  // Parsing with '|' recovers the columns only if the file was written with it.
+  const auto serDeOptions = dwio::common::SerDeOptions('|');
+  auto result = parseTextFile(tempPath, filename, rawCharBuf, serDeOptions);
+
+  ASSERT_EQ(result.size(), 3);
+  ASSERT_EQ(result[0].size(), 3);
+  EXPECT_EQ(result[0][0], "1");
+  EXPECT_EQ(result[0][1], "a");
+  EXPECT_EQ(result[0][2], "4");
+  EXPECT_EQ(result[2][0], "3");
+  EXPECT_EQ(result[2][2], "6");
+}
+
 TEST_F(TextWriterTest, verifyWriteWithTextReader) {
   auto schema =
       ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"},

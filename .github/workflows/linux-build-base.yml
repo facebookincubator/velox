@@ -105,7 +105,7 @@ jobs:
     # check prevents errors when forks fast-forward their main branch.
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
-    container: ghcr.io/czentgr/czentgr-test:thrift-deps
+    container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
       run:
         shell: bash
@@ -129,7 +129,7 @@ jobs:
       failed-cases: ${{ steps.retry-tests.outputs.failed-cases }}
       failure-details: ${{ steps.retry-tests.outputs.failure-details }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -543,7 +543,7 @@ jobs:
         shell: bash
         working-directory: velox
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 2
           path: velox
@@ -584,7 +584,7 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           path: velox
           persist-credentials: false
@@ -632,12 +632,6 @@ jobs:
           glog_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
         run: |
-          # The container ships CMake 3.30.4. Bump to 3.31.1 so
-          # CMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY (added in 3.31)
-          # actually takes effect — without it ld --as-needed drops
-          # libxxhash.so before libthriftmetadata.a needs XXH3_64bits,
-          # breaking the velox_functions_remote_client_test link.
-          uv tool install --force cmake@3.31.1
           # Shared per-profile flag lists live in
           # .github/scripts/cmake-flags.sh — script handles
           # Clang-conditional flags internally via USE_CLANG.
@@ -775,7 +769,7 @@ jobs:
         shell: bash
         working-directory: velox
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 2
           path: velox
@@ -836,7 +830,6 @@ jobs:
           gRPC_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
         run: |
-          uv tool install --force cmake@3.31.1
           dnf install -y -q --setopt=install_weak_deps=False grpc-devel grpc-plugins
           # Shared per-profile flag lists live in
           # .github/scripts/cmake-flags.sh.
@@ -899,7 +892,7 @@ jobs:
     if: ${{ inputs.is-full-mode && github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
     container:
-      image: ghcr.io/czentgr/czentgr-test:thrift-deps
+      image: ghcr.io/facebookincubator/velox-dev:adapters
       volumes:
         - /usr:/host_usr
         - /opt:/host_opt
@@ -919,7 +912,7 @@ jobs:
       failed-cases: ${{ steps.tests.outputs.failed-cases }}
       failure-details: ${{ steps.tests.outputs.failure-details }}
     concurrency:
-      group: ${{ github.workflow }}-asan-ubsan-adapters-${{ github.event.pull_request.number }}
+      group: ${{ github.workflow }}-asan-ubsan-adapters-${{ github.head_ref || github.sha }}
       cancel-in-progress: true
     steps:
       - name: Free Disk Space
@@ -937,7 +930,7 @@ jobs:
           # Show after
           echo "New available disk space: " $(getAvailableSpace)
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 2
           persist-credentials: false

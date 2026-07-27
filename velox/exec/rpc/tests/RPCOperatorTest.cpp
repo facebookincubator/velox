@@ -22,6 +22,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/rpc/RPCPlanNodeTranslator.h"
 #include "velox/exec/rpc/RPCRateLimiter.h"
 #include "velox/exec/rpc/tests/DemoBatchRPCFunction.h"
@@ -54,6 +55,34 @@ class RPCOperatorTest : public OperatorTestBase {
           return std::make_shared<DemoBatchRPCFunction>(
               DemoBatchRPCFunction::ResponseOrder::kInOrder,
               std::unordered_set<int32_t>{1, 3});
+        });
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_whole_fail", []() {
+          return std::make_shared<DemoBatchRPCFunction>(
+              DemoBatchRPCFunction::ResponseOrder::kInOrder,
+              std::unordered_set<int32_t>{},
+              /*failWholeBatch=*/true);
+        });
+    // Whole-batch failure AND a fail-on-error policy (mimics
+    // meta_ai_on_error='fail'): the query must still hard-fail, not degrade.
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_whole_fail_strict", []() {
+          return std::make_shared<DemoBatchRPCFunction>(
+              DemoBatchRPCFunction::ResponseOrder::kInOrder,
+              std::unordered_set<int32_t>{},
+              /*failWholeBatch=*/true,
+              /*failOnError=*/true);
+        });
+    // Returns fewer responses than rows (function-contract violation): the
+    // operator's scatter must hard-fail on the count mismatch.
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_wrong_count", []() {
+          return std::make_shared<DemoBatchRPCFunction>(
+              DemoBatchRPCFunction::ResponseOrder::kInOrder,
+              std::unordered_set<int32_t>{},
+              /*failWholeBatch=*/false,
+              /*failOnError=*/false,
+              /*dropOneResponse=*/true);
         });
   }
 
@@ -339,6 +368,69 @@ TEST_F(RPCOperatorTest, batchPartialFailure) {
   EXPECT_FALSE(results->isNullAt(rowIndex["row4"]));
 }
 
+// Whole-batch failure (e.g. an operator-level batch/RPC timeout) should DEGRADE
+// to per-row errored responses (-> NULL under the return-null policy), NOT
+// hard-fail the entire query. This is the repro for the batch-timeout bug:
+// today RPCOperator::getOutput VELOX_FAILs on claimedBatch_->error, bypassing
+// the per-row error policy, so this test currently fails with "RPC batch
+// failed: simulated batch timeout". After routing the operator's deferError
+// through a per-row fan-out, all rows should come back NULL and the query
+// should complete.
+TEST_F(RPCOperatorTest, batchWholeBatchFailureDegradesToNull) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "demo_batch_rpc_whole_fail");
+
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 3);
+  auto* results = result->childAt(1)->asFlatVector<StringView>();
+  for (vector_size_t i = 0; i < result->size(); ++i) {
+    EXPECT_TRUE(results->isNullAt(i))
+        << "row " << i << " should degrade to NULL on whole-batch failure";
+  }
+}
+
+// With a fail-on-error policy (meta_ai_on_error='fail'), a whole-batch failure
+// must still HARD-FAIL the query — the degrade-to-per-row change must not
+// silently turn a 'fail' request into all-NULL. The per-row errors produced by
+// the operator flow to the function's buildOutput, which fails the query.
+TEST_F(RPCOperatorTest, batchWholeBatchFailureWithFailPolicyThrows) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "demo_batch_rpc_whole_fail_strict");
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()),
+      "RPC call failed for row");
+}
+
+// A function that returns fewer responses than rows violates the batch
+// contract. After moving deferError before deferValue, the scatter's
+// count-mismatch check must STILL hard-fail the query (not be swallowed and
+// degraded to NULL rows).
+TEST_F(RPCOperatorTest, batchWrongResponseCountHardFails) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "demo_batch_rpc_wrong_count");
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()),
+      "does not match row count");
+}
+
 // Null inputs in batch mode produce null results.
 TEST_F(RPCOperatorTest, batchNullInput) {
   auto input = makeRowVector(
@@ -421,10 +513,12 @@ TEST_F(RPCOperatorTest, batchPipelinedDispatch) {
   }
 }
 
-/// PER_ROW congestion path: responses classified as overload drive the
-/// operator's evaluateCongestion() -> onUnitError() wiring. Verifies the
-/// query still completes correctly through that path. The window adjustment
-/// itself is unit-tested in RPCStateTest / CongestionControllerTest; here we
+/// PER_ROW congestion path. On the function's overload verdict
+/// (evaluateCongestion -> kError) both AIMD controllers back off: the
+/// per-driver window (onUnitError) and the process-global rate limiter
+/// (onRateLimited); on kSuccess the window's latency gradient is fed. Verifies
+/// the query still completes correctly through that path. The controllers'
+/// adjustments are unit-tested in RPCStateTest / RPCRateLimiterTest; here we
 /// guard the operator-level materialization + signal plumbing against
 /// crashes/regressions.
 TEST_F(RPCOperatorTest, perRowCongestionPath) {

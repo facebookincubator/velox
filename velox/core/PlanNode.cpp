@@ -1410,6 +1410,21 @@ UnnestNode::UnnestNode(
     types.emplace_back(variable->type());
   }
 
+  // Validate that unnestNames provides exactly one name per array (element) and
+  // two per map (key and value) before indexing into it below.
+  size_t expectedUnnestNames{0};
+  for (const auto& variable : unnestVariables_) {
+    if (variable->type()->isArray()) {
+      ++expectedUnnestNames;
+    } else if (variable->type()->isMap()) {
+      expectedUnnestNames += 2;
+    }
+  }
+  VELOX_USER_CHECK_EQ(
+      unnestNames_.size(),
+      expectedUnnestNames,
+      "UnnestNode requires one name per array column and two per map column");
+
   int unnestIndex = 0;
   for (const auto& variable : unnestVariables_) {
     if (variable->type()->isArray()) {
@@ -1558,9 +1573,10 @@ void AbstractJoinNode::validate() const {
     VELOX_CHECK(!rightType->containsChild(name));
   }
 
-  // Output of right semi join cannot include columns from the left side.
-  bool outputMayIncludeLeftColumns =
-      !(isRightSemiFilterJoin() || isRightSemiProjectJoin());
+  // Output of right semi and right anti joins cannot include columns from the
+  // left side.
+  bool outputMayIncludeLeftColumns = !(
+      isRightSemiFilterJoin() || isRightSemiProjectJoin() || isRightAntiJoin());
 
   // Output of left semi and anti joins cannot include columns from the right
   // side.
@@ -1629,6 +1645,7 @@ const auto& joinTypeNames() {
       {JoinType::kAnti, "ANTI"},
       {JoinType::kCountingAnti, "COUNTING ANTI"},
       {JoinType::kCountingLeftSemiFilter, "COUNTING LEFT SEMI (FILTER)"},
+      {JoinType::kRightAnti, "RIGHT ANTI"},
   };
   return kNames;
 }
@@ -3422,6 +3439,7 @@ PartitionedOutputNode::PartitionedOutputNode(
     PartitionFunctionSpecPtr partitionFunctionSpec,
     RowTypePtr outputType,
     std::string serdeKind,
+    std::string transportKind,
     PlanNodePtr source)
     : PlanNode(id),
       kind_(kind),
@@ -3431,6 +3449,7 @@ PartitionedOutputNode::PartitionedOutputNode(
       replicateNullsAndAny_(replicateNullsAndAny),
       partitionFunctionSpec_(std::move(partitionFunctionSpec)),
       serdeKind_(std::move(serdeKind)),
+      transportKind_(std::move(transportKind)),
       outputType_(std::move(outputType)) {
   VELOX_USER_CHECK_GT(numPartitions_, 0);
   if (numPartitions_ == 1) {
@@ -3456,6 +3475,7 @@ std::shared_ptr<PartitionedOutputNode> PartitionedOutputNode::broadcast(
     int numPartitions,
     RowTypePtr outputType,
     std::string serdeKind,
+    std::string transportKind,
     PlanNodePtr source) {
   std::vector<TypedExprPtr> noKeys;
   return std::make_shared<PartitionedOutputNode>(
@@ -3467,6 +3487,7 @@ std::shared_ptr<PartitionedOutputNode> PartitionedOutputNode::broadcast(
       std::make_shared<GatherPartitionFunctionSpec>(),
       std::move(outputType),
       serdeKind,
+      std::move(transportKind),
       std::move(source));
 }
 
@@ -3475,6 +3496,7 @@ std::shared_ptr<PartitionedOutputNode> PartitionedOutputNode::arbitrary(
     const PlanNodeId& id,
     RowTypePtr outputType,
     std::string serdeKind,
+    std::string transportKind,
     PlanNodePtr source) {
   std::vector<TypedExprPtr> noKeys;
   return std::make_shared<PartitionedOutputNode>(
@@ -3486,6 +3508,7 @@ std::shared_ptr<PartitionedOutputNode> PartitionedOutputNode::arbitrary(
       std::make_shared<GatherPartitionFunctionSpec>(),
       std::move(outputType),
       serdeKind,
+      std::move(transportKind),
       std::move(source));
 }
 
@@ -3494,6 +3517,7 @@ std::shared_ptr<PartitionedOutputNode> PartitionedOutputNode::single(
     const PlanNodeId& id,
     RowTypePtr outputType,
     std::string serdeKind,
+    std::string transportKind,
     PlanNodePtr source) {
   std::vector<TypedExprPtr> noKeys;
   return std::make_shared<PartitionedOutputNode>(
@@ -3505,6 +3529,7 @@ std::shared_ptr<PartitionedOutputNode> PartitionedOutputNode::single(
       std::make_shared<GatherPartitionFunctionSpec>(),
       std::move(outputType),
       serdeKind,
+      std::move(transportKind),
       std::move(source));
 }
 
@@ -3566,6 +3591,7 @@ void PartitionedOutputNode::addDetails(std::stringstream& stream) const {
 
   stream << " ";
   addVectorSerdeKind(serdeKind_, stream);
+  stream << " " << transportKind_;
 }
 
 folly::dynamic PartitionedOutputNode::serialize() const {
@@ -3576,6 +3602,7 @@ folly::dynamic PartitionedOutputNode::serialize() const {
   obj["replicateNullsAndAny"] = replicateNullsAndAny_;
   obj["partitionFunctionSpec"] = partitionFunctionSpec_->serialize();
   obj["serdeKind"] = serdeKind_;
+  obj["transportKind"] = transportKind_;
   obj["outputType"] = outputType_->serialize();
   return obj;
 }
@@ -3600,6 +3627,8 @@ PlanNodePtr PartitionedOutputNode::create(
           obj["partitionFunctionSpec"], context),
       deserializeRowType(obj["outputType"]),
       obj["serdeKind"].asString(),
+      obj.getDefault("transportKind", std::string{TransportKind::kInMemory})
+          .asString(),
       deserializeSingleSource(obj, context));
 }
 

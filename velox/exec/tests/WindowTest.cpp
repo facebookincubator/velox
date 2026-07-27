@@ -377,6 +377,92 @@ DEBUG_ONLY_TEST_F(WindowTest, aggWindowResultMismatch) {
   ASSERT_TRUE(isStreamCreated.load());
 }
 
+DEBUG_ONLY_TEST_F(WindowTest, singlePartitionRowCountLimit) {
+  // A single window partition is limited to vector_size_t (int32) rows. Inject
+  // a count at the limit so the next row append would overflow, and verify the
+  // operator fails with a catchable user error rather than overflowing and
+  // aborting the process.
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"sum(c0) over (order by c0)"})
+                  .planNode();
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::window::SortWindowBuild::addDecodedInputRow",
+      std::function<void(vector_size_t*)>([](vector_size_t* numRows) {
+        *numRows = std::numeric_limits<vector_size_t>::max();
+      }));
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Window operator cannot process more than");
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, subPartitionedRowCountLimit) {
+  // The same limit applies to SubPartitionedSortWindowBuild, whose own counter
+  // aggregates all sub-partitions. Force sub-partitioning and inject a count at
+  // the limit; the next batch must fail cleanly rather than overflow.
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"sum(c0) over (order by c0)"})
+                  .planNode();
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::window::SubPartitionedSortWindowBuild::addInput",
+      std::function<void(vector_size_t*)>([](vector_size_t* numRows) {
+        *numRows = std::numeric_limits<vector_size_t>::max();
+      }));
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kWindowNumSubPartitions, "4")
+          .copyResults(pool()),
+      "Window operator cannot process more than");
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, operatorRowCountLimit) {
+  // The Window operator keeps its own vector_size_t (int32) row counter that
+  // feeds isFinished()/getOutput() accounting and bounds every per-build int32
+  // counter (e.g. RowsStreamingWindowBuild::pendingRowCount_). The guard runs
+  // before delegating to the build, so inject a count at the limit and verify
+  // the batch is rejected before it reaches the streaming build.
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+
+  // orderBy() + streamingWindow() selects RowsStreamingWindowBuild, the path
+  // where the operator counter is the only guard.
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"c0"}, false)
+                  .streamingWindow(
+                      {"rank() over (order by c0 rows unbounded preceding)"})
+                  .planNode();
+
+  std::atomic_bool isStreamCreated{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(window::RowsStreamingWindowBuild*)>(
+          [&](window::RowsStreamingWindowBuild*) {
+            isStreamCreated.store(true);
+          }));
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Window::addInput",
+      std::function<void(vector_size_t*)>([](vector_size_t* numRows) {
+        *numRows = std::numeric_limits<vector_size_t>::max();
+      }));
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Window operator cannot process more than");
+
+  // The guard must have fired on the rows-streaming path, not a sort build.
+  ASSERT_TRUE(isStreamCreated.load());
+}
+
 DEBUG_ONLY_TEST_F(WindowTest, rankRowStreamingWindowBuild) {
   auto data = makeRowVector(
       {"c1"},

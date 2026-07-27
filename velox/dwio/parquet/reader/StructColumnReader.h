@@ -66,7 +66,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   /// Nested struct readers all get null flags and lengths for
   /// contained repeated readers for each range of top level rows. At
   /// the end of a read() with filters in different members, some of
-  /// wich are structs themselves, different inner structs may be left
+  /// which are structs themselves, different inner structs may be left
   /// on different rows. Before receiving the next set of
   /// nulls/lengths, the contained complex readers need to be
   /// positioned at the end of the last set of nulls/lengths.

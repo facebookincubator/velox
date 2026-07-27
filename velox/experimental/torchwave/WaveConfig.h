@@ -31,6 +31,15 @@ struct IValue;
 
 namespace torch::wave {
 
+struct WaveConfig;
+
+/// Returns a mutable reference to the thread-local WaveConfig override pointer.
+/// While it is non-null, WaveConfig::get() returns the pointee instead of the
+/// global singleton, so wave graphs compiled and executed with different
+/// configs can run concurrently on different threads. Null on threads with no
+/// active override.
+WaveConfig*& waveConfigOverride();
+
 /// Process-wide configuration for wave graph execution (block size, tracing,
 /// grid hints).
 struct WaveConfig {
@@ -119,8 +128,30 @@ struct WaveConfig {
   // (turning copying ops into in-place ops). Off by default.
   bool enableReuse{false};
 
-  /// Not thread-safe. All mutations must happen before concurrent reads.
+  // Force a launch boundary after a multi-block (non-cooperative) scan so every
+  // cross-block consumer of its output reads a fully materialized buffer from a
+  // later stream-ordered launch, and fence a multi-block cat's shifted copies
+  // with a grid-wide opBarrier before an in-kernel consumer reads them.
+  // Without this, a fused cat consumer that reads a scan output (or a
+  // shift-by-offset cat element) cross-block within one kernel is ordered only
+  // by intra-block __syncthreads(), which is insufficient across
+  // non-co-resident blocks and produces stale reads.  On by default (a
+  // correctness fix); the race harness flips it off for the racy A/B arm.
+  bool scanOutputReturnBarrier{true};
+
+  // If true, release the frame tensors of each ProjectNode's last-use values
+  // right after that node's composite invocation executes, instead of keeping
+  // them until the whole graph finishes. Off by default.
+  bool freeIntermediates{false};
+
+  /// Returns the active config: the thread-local override set by
+  /// waveConfigOverride() when non-null, otherwise the process-wide singleton.
+  /// The singleton is not thread-safe; all of its mutations must happen before
+  /// concurrent reads.
   FOLLY_EXPORT static WaveConfig& get() {
+    if (auto* configOverride = waveConfigOverride()) {
+      return *configOverride;
+    }
     static WaveConfig instance;
     return instance;
   }

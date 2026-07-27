@@ -95,20 +95,13 @@ int32_t filterDictionaryRunSimd(
     } else {
       cache = simd::gather<int32_t, int32_t, 1>(base, indices);
     }
-#ifdef SVE_BITS
+    // The cache byte ends up in the high byte (bits 24-31) of each
+    // gathered int32.  Extract unknowns via bit 30 (kUnknown 0x40) and
+    // passed via the sign bit (kSuccess 0x80).
     auto unknowns = simd::toBitMask(
-        simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1) !=
-        xsimd::batch<uint32_t>(0));
-    auto passed = simd::toBitMask(
-        (simd::reinterpretBatch<uint32_t>(cache) & xsimd::batch<uint32_t>(1)) !=
-        xsimd::batch<uint32_t>(0));
-#else
-    auto unknowns = simd::toBitMask(
-        xsimd::batch_bool<int32_t>(
-            simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1)));
-    auto passed = simd::toBitMask(
-        xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
-#endif
+        (cache & xsimd::batch<int32_t>(kUnknown << 24)) !=
+        xsimd::batch<int32_t>(0));
+    auto passed = simd::toBitMask(cache < xsimd::batch<int32_t>(0));
     if (UNLIKELY(unknowns)) {
       uint16_t bits = unknowns;
       while (bits) {

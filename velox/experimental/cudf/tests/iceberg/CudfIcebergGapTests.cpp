@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/tests/iceberg/CudfDeletionVectorTestUtils.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfIcebergTestBase.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -345,6 +346,51 @@ TEST_F(CudfIcebergGapTests, hivePartitionWithEqualityDelete) {
   });
 
   assertEqualResults({expected}, {result});
+}
+
+TEST_F(CudfIcebergGapTests, equalityDeleteOnPartitionColumnNotSupported) {
+  auto tableType = ROW({"region", "c0"}, {VARCHAR(), BIGINT()});
+
+  auto baseData = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+  });
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), baseData);
+
+  auto eqDel = makeRowVector({makeFlatVector<std::string>({"APAC"})});
+  auto eqDelFile = TempFilePath::create();
+  writeDeleteFile(DeleteFileFormat::PARQUET, eqDelFile->getPath(), {eqDel});
+
+  IcebergDeleteFile eqDelete(
+      FileContent::kEqualityDeletes,
+      eqDelFile->getPath(),
+      dwio::common::FileFormat::PARQUET,
+      1,
+      getFileSize(eqDelFile->getPath()),
+      /*equalityFieldIds=*/{1});
+
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys = {
+      {"region", "APAC"},
+  };
+
+  auto splits =
+      makeIcebergSplits(dataFile->getPath(), {eqDelete}, partitionKeys);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(tableType)
+                  .dataColumns(tableType)
+                  .endTableScan()
+                  .planNode();
+
+  const auto runQuery = [&]() {
+    return AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  };
+  VELOX_ASSERT_THROW(
+      runQuery(),
+      "Equality deletes on partition columns or columns missing from the data "
+      "file are not yet supported: region");
 }
 
 // Schema evolution: file 1 has [c0, c1], file 2 has [c0, c1, c2].

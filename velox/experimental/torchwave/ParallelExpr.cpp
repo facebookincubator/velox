@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <ranges>
@@ -28,9 +29,11 @@
 
 #include <fmt/format.h>
 #include <folly/ScopeGuard.h>
+#include <folly/container/F14Map.h>
 
 #include "velox/experimental/torchwave/ParallelExpr.h"
 #include "velox/experimental/torchwave/Utils.h"
+#include "velox/experimental/torchwave/WaveConfig.h"
 
 namespace torch::wave {
 
@@ -451,6 +454,309 @@ ProjectNode* ParallelNodes::makeParallelProject(
   return result;
 }
 
+namespace {
+
+// True if 'v' is a list-typed value. getListElements() asserts on non-list
+// values, so callers must gate on this.
+bool isListValue(ValueCP v) {
+  switch (v->type().kind()) {
+    case nativert::Type::Kind::TensorList:
+    case nativert::Type::Kind::NestedTensorList:
+    case nativert::Type::Kind::OptionalTensorList:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Distinct boundary input values read by one top-level expr, stopping at the
+// layer boundary (same boundary rule as countBoundaryAccesses).
+void collectExprBoundaryInputs(
+    NodeCP exprRoot,
+    const std::unordered_set<NodeCP>& boundary,
+    std::unordered_set<ValueCP>& inputs) {
+  NodeSet visited;
+  std::vector<NodeCP> stack{exprRoot};
+  while (!stack.empty()) {
+    NodeCP n = stack.back();
+    stack.pop_back();
+    if (!visited.insert(n).second) {
+      continue;
+    }
+    for (const auto& in : n->inputs()) {
+      ValueCP v = in.value;
+      if (v == nullptr) {
+        continue;
+      }
+      NodeCP producer = v->producer();
+      if (producer == nullptr || boundary.count(producer) > 0) {
+        inputs.insert(v);
+      } else {
+        stack.push_back(producer);
+      }
+    }
+  }
+}
+
+// The layer's internal (non-boundary) nodes, in program order. Value ids are
+// assigned in creation order, so the first-output id sorts nodes into program
+// order; the alias analysis below depends on this so consumption is seen after
+// the corresponding production.
+std::vector<NodeCP> layerNodesInOrder(const ProjectNode* pn) {
+  const auto& boundary = pn->inputs();
+  NodeSet visited;
+  std::vector<NodeCP> stack;
+  for (auto* n : pn->nodes()) {
+    if (boundary.count(n) == 0) {
+      stack.push_back(n);
+    }
+  }
+  std::vector<NodeCP> result;
+  while (!stack.empty()) {
+    NodeCP n = stack.back();
+    stack.pop_back();
+    if (!visited.insert(n).second) {
+      continue;
+    }
+    result.push_back(n);
+    for (const auto& in : n->inputs()) {
+      ValueCP v = in.value;
+      if (v == nullptr) {
+        continue;
+      }
+      NodeCP producer = v->producer();
+      if (producer != nullptr && boundary.count(producer) == 0) {
+        stack.push_back(producer);
+      }
+    }
+  }
+  std::sort(result.begin(), result.end(), [](NodeCP a, NodeCP b) {
+    auto idOf = [](NodeCP e) {
+      return e->outputs().empty() ? 0 : e->outputs()[0]->id();
+    };
+    return idOf(a) < idOf(b);
+  });
+  return result;
+}
+
+} // namespace
+
+void ParallelNodes::computeLastUse(const nativert::Graph& graph) {
+  // Values that leave the graph must never be reused or released, so exclude
+  // them from the last-use sets even if no later layer reads them.
+  // Graph outputs (and elements of list-typed outputs) escape the graph and
+  // must never be freed -- nor may any value that shares their storage.
+  std::unordered_set<ValueCP> graphOutputs;
+  if (NodeCP outputNode = graph.outputNode()) {
+    std::function<void(ValueCP)> addOut = [&](ValueCP v) {
+      if (v == nullptr || !graphOutputs.insert(v).second) {
+        return;
+      }
+      if (isListValue(v)) {
+        for (auto* e : v->getListElements()) {
+          addOut(e);
+        }
+      }
+    };
+    for (const auto& output : outputNode->inputs()) {
+      addOut(output.value);
+    }
+  }
+
+  // User inputs, weights, and constants are externally managed frame values
+  // that must persist across runs (the frame is reused; they are refilled, not
+  // reproduced). They must never appear in a freeable list -- even if the
+  // optimized graph gives them a producer node. Exclude them explicitly.
+  std::unordered_set<ValueCP> frameInputs;
+  for (auto* v : graph.userInputs()) {
+    frameInputs.insert(v);
+  }
+  for (auto* v : graph.weightValues()) {
+    frameInputs.insert(v);
+  }
+
+  // Last use of EVERY assigned value -- not just the values returned by a
+  // layer's top-level exprs, but also the intra-layer intermediates of fused
+  // elementwise chains. Those intermediates are never separately allocated, so
+  // listing them as "freeable" costs nothing, but tracking them here (then
+  // extending lifetimes through list membership and storage aliasing below)
+  // frees a shared buffer only after its last reader, and makes the separate
+  // kernel-op intermediate free mechanism unnecessary. A value's raw last use
+  // is the highest project node that directly reads it; id() equals the index
+  // in projectNodes_.
+  std::unordered_map<NodeCP, int32_t> nodeToPn;
+  for (auto& pnPtr : projectNodes_) {
+    for (NodeCP n : layerNodesInOrder(pnPtr.get())) {
+      nodeToPn[n] = pnPtr->id();
+    }
+  }
+  folly::F14FastMap<ValueCP, int32_t> lastNode;
+  for (auto* value : graph.values()) {
+    if (value == nullptr) {
+      continue;
+    }
+    int32_t last = -1;
+    for (auto* user : value->users()) {
+      auto it = nodeToPn.find(user);
+      if (it != nodeToPn.end()) {
+        last = std::max(last, it->second);
+      }
+    }
+    if (last >= 0) {
+      lastNode[value] = last;
+    }
+  }
+
+  // Extend lifetimes through prim.ListPack membership: an element is read
+  // whenever the list containing it is read, so its last use is at least the
+  // list's -- recursively for lists of lists. Iterate to a fixpoint.
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (auto* value : graph.values()) {
+      if (value == nullptr || !isListValue(value)) {
+        continue;
+      }
+      auto lit = lastNode.find(value);
+      if (lit == lastNode.end()) {
+        continue;
+      }
+      int32_t listLast = lit->second;
+      for (auto* e : value->getListElements()) {
+        if (e == nullptr) {
+          continue;
+        }
+        auto& el = lastNode[e];
+        if (el < listLast) {
+          el = listLast;
+          changed = true;
+        }
+      }
+    }
+  }
+
+  // Extend lifetimes through storage aliasing: a view and its base share one
+  // buffer, so the buffer lives until the last read of ANY value in the storage
+  // group. Group by viewStorageBase and lift every member to the group's max
+  // last use. If any member is a graph output, the group's storage escapes and
+  // must never be freed.
+  folly::F14FastMap<ValueCP, ValueCP> baseOf;
+  folly::F14FastMap<ValueCP, int32_t> baseLast;
+  std::unordered_set<ValueCP> nonFreeableBase;
+  for (auto* v : graphOutputs) {
+    nonFreeableBase.insert(viewStorageBase(v));
+  }
+  for (const auto& [value, ln] : lastNode) {
+    ValueCP b = viewStorageBase(value);
+    baseOf[value] = b;
+    auto it = baseLast.find(b);
+    if (it == baseLast.end() || it->second < ln) {
+      baseLast[b] = ln;
+    }
+  }
+
+  // Assign each value to its storage group's last-use layer. Leaves -- graph
+  // inputs, weights, constants -- are externally managed and persist across
+  // runs, so they are never freed. A leaf is a value whose producer is not a
+  // graph computation node (it is null, or the graph input/constant node, which
+  // is not in nodeToPn). Leaves still contribute their last read to baseLast
+  // above so that views over them are freed at the right layer.
+  for (const auto& [value, ln] : lastNode) {
+    ValueCP b = baseOf[value];
+    bool isLeaf =
+        value->producer() == nullptr || nodeToPn.count(value->producer()) == 0;
+    if (graphOutputs.count(value) > 0 || nonFreeableBase.count(b) > 0 ||
+        isLeaf || frameInputs.count(value) > 0 || frameInputs.count(b) > 0) {
+      continue;
+    }
+    projectNodes_[baseLast[b]]->lastUse.insert(value);
+  }
+
+  // Distinct boundary inputs of each top-level expr (for the reusable-input
+  // third pass below).
+  std::vector<std::vector<std::unordered_set<ValueCP>>> exprInputs(
+      projectNodes_.size());
+  for (auto& pnPtr : projectNodes_) {
+    ProjectNode* pn = pnPtr.get();
+    auto& perExpr = exprInputs[pn->id()];
+    perExpr.resize(pn->nodes().size());
+    for (size_t i = 0; i < pn->nodes().size(); ++i) {
+      collectExprBoundaryInputs(pn->nodes()[i], pn->inputs(), perExpr[i]);
+    }
+  }
+
+  // Third pass: a (now alias-corrected) lastUse value that is a boundary input
+  // of exactly one top-level expr in its layer can be reused in place by that
+  // expr's kernel op.
+  for (auto& pnPtr : projectNodes_) {
+    ProjectNode* pn = pnPtr.get();
+    const auto& perExpr = exprInputs[pn->id()];
+    pn->reusableValues_.assign(pn->nodes().size(), {});
+    for (ValueCP v : pn->lastUse) {
+      int32_t onlyExpr = -1;
+      int32_t count = 0;
+      for (size_t i = 0; i < perExpr.size(); ++i) {
+        if (perExpr[i].count(v) > 0) {
+          ++count;
+          onlyExpr = static_cast<int32_t>(i);
+          if (count > 1) {
+            break;
+          }
+        }
+      }
+      if (count == 1) {
+        pn->reusableValues_[onlyExpr].push_back(v);
+      }
+    }
+  }
+
+  // Diagnostic (kFrame): validate the (alias-corrected) lastUse against
+  // viewStorageBase ground truth. A value freed in a layer whose storage is
+  // still read by a later layer -- directly or through any storage alias -- is
+  // a premature free. Reports which later use was missed so the alias tracking
+  // can be fixed.
+  if (WaveConfig::get().trace & WaveConfig::kFrame) {
+    auto userMaxNode = [&](ValueCP v) -> int32_t {
+      int32_t m = -1;
+      for (auto* u : v->users()) {
+        auto it = nodeToPn.find(u);
+        if (it != nodeToPn.end()) {
+          m = std::max(m, it->second);
+        }
+      }
+      return m;
+    };
+    // storage base -> latest layer that reads any value sharing that storage.
+    std::unordered_map<ValueCP, int32_t> baseTrueLast;
+    for (auto* v : graph.values()) {
+      if (v == nullptr) {
+        continue;
+      }
+      ValueCP b = viewStorageBase(v);
+      int32_t mu = userMaxNode(v);
+      auto it = baseTrueLast.find(b);
+      if (it == baseTrueLast.end() || it->second < mu) {
+        baseTrueLast[b] = mu;
+      }
+    }
+    for (auto& pnPtr : projectNodes_) {
+      ProjectNode* pn = pnPtr.get();
+      for (ValueCP v : pn->lastUse) {
+        ValueCP b = viewStorageBase(v);
+        auto it = baseTrueLast.find(b);
+        int32_t trueLast = it != baseTrueLast.end() ? it->second : -1;
+        if (trueLast > pn->id()) {
+          LOG(INFO) << "LASTUSE-TOO-EARLY %" << v->id() << " freed at node "
+                    << pn->id() << " but storage base %" << b->id()
+                    << " (producer "
+                    << (b->producer() ? b->producer()->target() : "<none>")
+                    << ") is read through node " << trueLast;
+        }
+      }
+    }
+  }
+}
+
 ProjectNode* ParallelNodes::makeParallelNodes(const nativert::Graph& graph) {
   // Side-effect analysis: extra ordering edges for in-place mutations. Computed
   // from the raw graph (gExtraArgs is still null here), then installed so the
@@ -531,6 +837,10 @@ ProjectNode* ParallelNodes::makeParallelNodes(const nativert::Graph& graph) {
     TORCH_CHECK(false, "makeParallelProject returned null");
   }
   current = project;
+
+  // All layers are now built in execution order; annotate each with its
+  // last-use / reusable-last-use values.
+  computeLastUse(graph);
 
   return current;
 }

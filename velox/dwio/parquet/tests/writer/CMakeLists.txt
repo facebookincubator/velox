@@ -54,3 +54,15 @@ target_link_libraries(
   GTest::gtest
   fmt::fmt
 )
+
+if(VELOX_ENABLE_BENCHMARKS)
+  add_executable(velox_dwio_parquet_writer_benchmark ParquetWriterBenchmark.cpp)
+  target_link_libraries(
+    velox_dwio_parquet_writer_benchmark
+    velox_dwio_parquet_writer
+    velox_vector_test_lib
+    velox_link_libs
+    Folly::follybenchmark
+    Folly::folly
+  )
+endif()

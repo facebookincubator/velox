@@ -16,7 +16,13 @@
 
 #include "velox/connectors/hive/iceberg/DeletionVectorReader.h"
 
+#include "velox/connectors/hive/iceberg/DeletionVectorFormat.h"
+
+#include <folly/hash/Checksum.h>
 #include <folly/lang/Bits.h>
+
+#include <cstring>
+#include <string_view>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
@@ -28,13 +34,60 @@ namespace {
 static constexpr uint32_t kSerialCookieNoRun = 12'346;
 static constexpr uint32_t kSerialCookie = 12'347;
 static constexpr uint32_t kRunContainersNoOffsetThreshold = 4;
+
+uint32_t readBigEndian32(const char* data) {
+  uint32_t value;
+  std::memcpy(&value, data, sizeof(value));
+  return folly::Endian::big(value);
+}
+
+// Unwraps the Iceberg deletion-vector-v1 blob frame
+// ([length: 4B BE][magic][bitmap][CRC-32: 4B BE]), validating the magic and
+// CRC-32, and returns a view of the inner roaring bitmap. If 'blob' is not
+// framed (legacy raw roaring bitmap), returns it unchanged.
+std::string_view unframeDeletionVector(const std::string& blob) {
+  constexpr size_t kLengthSize = kDeletionVectorLengthSize;
+  constexpr size_t kCrcSize = kDeletionVectorCrcSize;
+  constexpr size_t kHeaderSize = kLengthSize + kDeletionVectorMagicSize;
+  if (blob.size() < kHeaderSize ||
+      std::memcmp(
+          blob.data() + kLengthSize,
+          kDeletionVectorMagic,
+          kDeletionVectorMagicSize) != 0) {
+    return blob;
+  }
+
+  const uint32_t magicAndVectorLength = readBigEndian32(blob.data());
+  VELOX_CHECK_GE(
+      magicAndVectorLength,
+      kDeletionVectorMagicSize,
+      "Deletion-vector-v1 length too small: {}.",
+      magicAndVectorLength);
+  VELOX_CHECK_EQ(
+      blob.size(),
+      kLengthSize + magicAndVectorLength + kCrcSize,
+      "Deletion-vector-v1 blob size mismatch.");
+
+  const uint32_t storedCrc =
+      readBigEndian32(blob.data() + kLengthSize + magicAndVectorLength);
+  const uint32_t computedCrc = folly::crc32(
+      reinterpret_cast<const uint8_t*>(blob.data() + kLengthSize),
+      magicAndVectorLength);
+  VELOX_CHECK_EQ(storedCrc, computedCrc, "Deletion-vector-v1 CRC-32 mismatch.");
+
+  return std::string_view(blob).substr(
+      kHeaderSize, magicAndVectorLength - kDeletionVectorMagicSize);
+}
 } // namespace
 
 DeletionVectorReader::DeletionVectorReader(
     const IcebergDeleteFile& dvFile,
     uint64_t splitOffset,
-    memory::MemoryPool* /*pool*/)
-    : dvFile_(dvFile), splitOffset_(splitOffset) {
+    memory::MemoryPool* /*pool*/,
+    std::shared_ptr<const config::ConfigBase> connectorConfig)
+    : dvFile_(dvFile),
+      splitOffset_(splitOffset),
+      connectorConfig_(std::move(connectorConfig)) {
   VELOX_CHECK(
       dvFile_.content == FileContent::kDeletionVector,
       "Expected deletion vector file but got content type: {}",
@@ -84,8 +137,18 @@ void DeletionVectorReader::loadBitmap() {
     }
   }
 
-  auto fs = filesystems::getFileSystem(dvFile_.filePath, nullptr);
+  // Pass the connector config (e.g. hive.manifold.* credentials) so
+  // config-requiring filesystems like Manifold resolve a properly-configured
+  // client for the Puffin read. Passing nullptr here previously left the
+  // Manifold client unconfigured and segfaulted in openFileForRead.
+  auto fs = filesystems::getFileSystem(dvFile_.filePath, connectorConfig_);
+  VELOX_CHECK_NOT_NULL(
+      fs,
+      "No filesystem registered for deletion vector file: {}",
+      dvFile_.filePath);
   auto readFile = fs->openFileForRead(dvFile_.filePath);
+  VELOX_CHECK_NOT_NULL(
+      readFile, "Failed to open deletion vector file: {}", dvFile_.filePath);
 
   auto fileSize = readFile->size();
   VELOX_CHECK_LE(
@@ -105,16 +168,14 @@ void DeletionVectorReader::loadBitmap() {
   std::string blobData(blobLength, '\0');
   readFile->pread(blobOffset, blobLength, blobData.data());
 
-  // Detect format: 64-bit Roaring64Bitmap vs 32-bit RoaringBitmap.
-  // 64-bit format starts with [numGroups: uint64]. If the first 4 bytes
-  // match a 32-bit cookie (12346 or 12347), it's a legacy 32-bit bitmap.
-  // Otherwise, interpret as 64-bit format.
-  deserializeRoaring64Bitmap(blobData);
+  // Unwrap the Iceberg deletion-vector-v1 frame (validates magic + CRC-32),
+  // then parse the inner roaring bitmap. Legacy unframed blobs pass through.
+  deserializeRoaring64Bitmap(unframeDeletionVector(blobData));
 
   std::sort(deletedPositions_.begin(), deletedPositions_.end());
 }
 
-void DeletionVectorReader::deserializeRoaring64Bitmap(const std::string& data) {
+void DeletionVectorReader::deserializeRoaring64Bitmap(std::string_view data) {
   if (data.size() < 8) {
     VELOX_FAIL(
         "Deletion vector blob too small: {} bytes, expected at least 8.",
@@ -438,6 +499,11 @@ void DeletionVectorReader::readDeletePositions(
 
 bool DeletionVectorReader::noMoreData() const {
   return loaded_ && positionIndex_ >= deletedPositions_.size();
+}
+
+const std::vector<int64_t>& DeletionVectorReader::deletedPositions() {
+  loadBitmap();
+  return deletedPositions_;
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

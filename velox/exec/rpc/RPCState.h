@@ -145,10 +145,15 @@ class RPCState {
   /// (default 1.0). Both default to the controller's defaults so callers and
   /// OSS behavior are unchanged; the RPCOperator threads runtime-tunable values
   /// from QueryConfig.
+  /// @param maxWindow Ceiling for the congestion window (and, for PER_ROW, its
+  /// starting value). 0 keeps the per-mode built-in ceiling (PER_ROW 100, BATCH
+  /// 256). Raise it so a high-latency backend can run at high concurrency;
+  /// admission-controlled dispatch makes this ceiling bind.
   void setStreamingMode(
       RPCStreamingMode mode,
       int64_t minWindow = 1,
-      double stepCoef = 1.0);
+      double stepCoef = 1.0,
+      int64_t maxWindow = 0);
 
   /// Get the current streaming mode.
   RPCStreamingMode streamingMode() const;
@@ -273,6 +278,13 @@ class RPCState {
   /// Both modes: in-flight units (rows for PER_ROW, batches for BATCH) >=
   /// the congestion window limit.
   bool isUnderBackpressure();
+
+  /// Available dispatch headroom under the per-driver congestion window:
+  /// max(0, window.limit() - inFlight). Admission-controlled dispatch takes the
+  /// min of this and the process-global rate-limiter headroom to size each
+  /// drip chunk, so a whole-vector blast can no longer overrun the window.
+  /// Thread-safe.
+  int64_t dispatchHeadroom();
 
   /// Report that a completed unit showed backend overload (rate limit /
   /// timeout). Multiplicative-decrease (halving) of the congestion window.
