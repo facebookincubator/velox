@@ -1194,6 +1194,66 @@ TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
   EXPECT_EQ(fileMeta.numRowGroups(), 10);
   EXPECT_EQ(fileMeta.rowGroup(0).numRows(), 500);
 }
+
+TEST_F(
+    HiveDataSinkTest,
+    maxTargetFileSizeDoesNotAffectBucketedParquetRowGroups) {
+  connectorSessionProperties_->set(
+      HiveConfig::kParquetMaxTargetFileSizeSession, "8KB");
+  constexpr uint64_t kMaxTargetFileSizeBytes = 8 * 1024;
+
+  auto writeOptions = std::make_shared<dwio::common::WriterOptions>();
+  writeOptions->compressionKind = CompressionKind::CompressionKind_NONE;
+
+  auto rowType = ROW("payload", VARCHAR());
+
+  auto bucketProperty = std::make_shared<HiveBucketProperty>(
+      HiveBucketProperty::Kind::kHiveCompatible,
+      1,
+      std::vector<std::string>{"payload"},
+      std::vector<TypePtr>{VARCHAR()},
+      std::vector<std::shared_ptr<const HiveSortingColumn>>{});
+
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto dataSink = createDataSink(
+      rowType,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::PARQUET,
+      {},
+      bucketProperty,
+      writeOptions);
+
+  constexpr int32_t kNumRows = 500;
+  constexpr int32_t kNumBatches = 5;
+  const std::string payload(512, 'x');
+  auto batch = makeRowVector({makeFlatVector<std::string>(
+      kNumRows, [&](auto /*row*/) { return payload; })});
+
+  // About 2500 * 512B = 1.3MB is written here: far above the 8KB file-size
+  // target. Bucketed writes do not rotate, so row-group sizing must ignore the
+  // file-size target and keep all rows in one default-sized row group.
+  for (int i = 0; i < kNumBatches; ++i) {
+    dataSink->appendData(batch);
+  }
+  ASSERT_TRUE(dataSink->finish());
+  dataSink->close();
+
+  dwio::common::ReaderOptions readerOpts(pool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
+  const std::vector<std::string> filePaths =
+      listFiles(outputDirectory->getPath());
+  ASSERT_EQ(filePaths.size(), 1);
+
+  auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
+      std::make_shared<LocalReadFile>(filePaths[0]), readerOpts.memoryPool());
+  auto reader = std::make_unique<facebook::velox::parquet::ParquetReader>(
+      std::move(bufferedInput), readerOpts);
+  auto fileMeta = reader->fileMetaData();
+  EXPECT_GT(kNumRows * kNumBatches * payload.size(), kMaxTargetFileSizeBytes);
+  EXPECT_EQ(1, fileMeta.numRowGroups());
+  EXPECT_EQ(kNumRows * kNumBatches, fileMeta.rowGroup(0).numRows());
+}
 #endif
 
 TEST_F(HiveDataSinkTest, flushPolicyWithDWRF) {

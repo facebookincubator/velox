@@ -57,7 +57,7 @@ class ParquetFileMetadata : public dwio::common::FileMetadata {
 };
 
 /// Parquet writer enforces the row-count cap via Arrow, and this policy
-/// supplements it with a byte threshold. For Parquet,
+/// supplements it with a soft row-group byte target. For Parquet,
 /// - stripeSizeEstimate: the actual compressed bytes of current row group.
 /// - stripeRowCount: remains 0.
 /// Custom Parquet policies should derive from DefaultFlushPolicy to preserve
@@ -162,8 +162,13 @@ class Writer : public dwio::common::Writer {
  public:
   // Constructs a writer with output to 'sink'. 'options' carries common writer
   // options and Parquet-specific format options. For Parquet,
-  // 'options.flushPolicyFactory' must create a DefaultFlushPolicy (or a
-  // subclass); 'pool' is used for temporary memory. 'schema' specifies the
+  // 'options.flushPolicyFactory' is a programmatic C++ hook and must create a
+  // DefaultFlushPolicy (or a subclass). If not provided, the writer uses its
+  // built-in row-group limits: a soft 128MB byte target and a hard row-count
+  // cap of DefaultFlushPolicy::kDefaultRowsInGroup (~1M rows).
+  // 'options.maxTargetFileSizeBytes' is tracked independently so the writer
+  // can flush the current row group early and make file rotation visible to
+  // the caller. 'pool' is used for temporary memory. 'schema' specifies the
   // file's overall schema, and it is always non-null.
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
@@ -222,6 +227,7 @@ class Writer : public dwio::common::Writer {
   std::vector<ParquetFieldId> parquetFieldIds_;
 
   std::unique_ptr<DefaultFlushPolicy> flushPolicy_;
+  const uint64_t maxTargetFileSizeBytes_{0};
 
   const RowTypePtr schema_;
 
