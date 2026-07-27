@@ -18,8 +18,8 @@
 
 #include "velox/connectors/hive/iceberg/DeletionVectorFormat.h"
 
-#include <folly/hash/Checksum.h>
 #include <folly/lang/Bits.h>
+#include <zlib.h>
 
 #include <cstring>
 #include <string_view>
@@ -70,9 +70,14 @@ std::string_view unframeDeletionVector(const std::string& blob) {
 
   const uint32_t storedCrc =
       readBigEndian32(blob.data() + kLengthSize + magicAndVectorLength);
-  const uint32_t computedCrc = folly::crc32(
-      reinterpret_cast<const uint8_t*>(blob.data() + kLengthSize),
-      magicAndVectorLength);
+  // Iceberg stores the standard CRC-32 (java.util.zip.CRC32) over magic +
+  // bitmap. zlib's crc32 is that same finalized IEEE 802.3 CRC-32.
+  uLong crc = crc32(0L, Z_NULL, 0);
+  crc = crc32(
+      crc,
+      reinterpret_cast<const Bytef*>(blob.data() + kLengthSize),
+      static_cast<uInt>(magicAndVectorLength));
+  const auto computedCrc = static_cast<uint32_t>(crc);
   VELOX_CHECK_EQ(storedCrc, computedCrc, "Deletion-vector-v1 CRC-32 mismatch.");
 
   return std::string_view(blob).substr(
