@@ -121,13 +121,8 @@ class SysMemoryReclaimer : public memory::MemoryReclaimer {
     return false;
   }
 
-  /// Invoked by the memory arbitrator to abort memory 'pool' and the associated
-  /// query execution when encounters non-recoverable memory reclaim error or
-  /// fails to reclaim enough free capacity. The abort is a synchronous
-  /// operation and we expect most of used memory to be freed after the abort
-  /// completes. 'error' should be passed in as the direct cause of the
-  /// abortion. It will be propagated all the way to task level for accurate
-  /// error exposure.
+  // The system memory pool never participates in arbitration, so it is
+  // never aborted.
   void abort(MemoryPool* pool, const std::exception_ptr& error) override {
     VELOX_UNSUPPORTED("SysMemoryReclaimer::abort is not supported");
   }

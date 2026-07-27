@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
 #include <folly/Random.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -3762,7 +3763,7 @@ struct StringColumnWriterTestCase {
 
         for (size_t k = 0; k != sv->size(); ++k) {
           if (!sv->isNullAt(k)) {
-            EXPECT_EQ(sv->valueAt(k), resultSv->valueAt(k)) << folly::sformat(
+            EXPECT_EQ(sv->valueAt(k), resultSv->valueAt(k)) << fmt::format(
                 "Mismatch on {}-th element. \nExpected: {}\n Actual: {}",
                 k,
                 sv->valueAt(k).str(),

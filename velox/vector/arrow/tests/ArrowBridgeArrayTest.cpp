@@ -721,20 +721,28 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorLongerChildren) {
   // VectorMaker sets the RowVector size to the size of the first vector in the
   // list.
   const size_t rowVectorSize = 2;
+  const size_t longerChildSize = 1024;
+
+  auto longerNullableChild = vectorMaker_.flatVector<double>(longerChildSize);
+  longerNullableChild->setNull(0, true);
+  longerNullableChild->setNull(longerChildSize - 1, true);
+  longerNullableChild->setNullCount(2);
 
   auto vector = vectorMaker_.rowVector({
       vectorMaker_.flatVector<int64_t>(rowVectorSize),
-      vectorMaker_.flatVector<double>(1024),
+      longerNullableChild,
       vectorMaker_.arrayVector<int64_t>(128, identity, identity),
       vectorMaker_.mapVector<int64_t, int64_t>(
           64, identity, identity, identity),
   });
+  vector->setNull(rowVectorSize - 1, true);
+  vector->setNullCount(1);
 
   ArrowArray arrowArray;
   velox::exportToArrow(vector, arrowArray, pool_.get(), options_);
 
   EXPECT_EQ(vector->size(), arrowArray.length);
-  EXPECT_EQ(0, arrowArray.null_count);
+  EXPECT_EQ(1, arrowArray.null_count);
   EXPECT_EQ(0, arrowArray.offset);
   EXPECT_EQ(1, arrowArray.n_buffers);
   EXPECT_EQ(nullptr, arrowArray.dictionary);
@@ -746,6 +754,9 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorLongerChildren) {
   EXPECT_EQ(2, arrowArray.children[1]->length);
   EXPECT_EQ(2, arrowArray.children[2]->length);
   EXPECT_EQ(2, arrowArray.children[3]->length);
+  // Only row 0 is null in the exported range. The null at the end of the
+  // longer child must not be counted.
+  EXPECT_EQ(1, arrowArray.children[1]->null_count);
 
   arrowArray.release(&arrowArray);
   EXPECT_EQ(nullptr, arrowArray.release);
