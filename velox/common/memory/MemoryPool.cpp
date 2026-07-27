@@ -463,7 +463,10 @@ MemoryPoolImpl::MemoryPoolImpl(
       // The memory manager sets the capacity through grow() according to the
       // actually used memory arbitration policy.
       capacity_(parent_ != nullptr ? kMaxMemory : 0) {
-  VELOX_CHECK(options.threadSafe || isLeaf());
+  VELOX_CHECK(
+      options.threadSafe || isLeaf(),
+      "Only a leaf memory pool can be non-thread-safe: {}",
+      name_);
 }
 
 MemoryPoolImpl::~MemoryPoolImpl() {
