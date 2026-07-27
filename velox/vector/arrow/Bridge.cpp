@@ -22,6 +22,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/type/CalendarInterval.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DictionaryVector.h"
 #include "velox/vector/FlatVector.h"
@@ -417,6 +418,14 @@ const char* exportArrowFormatStr(
       return "z"; // binary
     case TypeKind::UNKNOWN:
       return "n"; // NullType
+    case TypeKind::HUGEINT:
+      // Decimal is handled by the isDecimal() check above; only
+      // CalendarInterval reaches here.
+      if (type->isCalendarInterval()) {
+        return "tin"; // Arrow month-day-nano interval
+      }
+      SAFE_VELOX_NYI(
+          "Unable to map HUGEINT type '{}' to ArrowSchema.", type->kind());
     case TypeKind::TIMESTAMP:
       return exportArrowFormatTimestampStr(type, options, formatBuffer);
     // Complex/nested types.
@@ -841,8 +850,10 @@ bool isFlatScalarZeroCopy(const TypePtr& type, const ArrowOptions& options) {
     return !type->isTimestamp() && !needsTimeConversion;
   }
   // Short decimal requires conversion.
+  // CalendarInterval stores microseconds but Arrow MonthDayNano uses
+  // nanoseconds in the third field.
   return !type->isShortDecimal() && !type->isTimestamp() &&
-      !needsTimeConversion;
+      !needsTimeConversion && !type->isCalendarInterval();
 }
 
 // Returns the size of a single element of a given `type` in the target arrow
@@ -895,6 +906,35 @@ void exportValues(
       type->kind() == TypeKind::BIGINT && type->isTime() &&
       type->equivalent(*TIME())) {
     gatherFromTimeBuffer(vec, rows, *values);
+  } else if (type->isCalendarInterval()) {
+    // Arrow MonthDayNano layout: months(int32), days(int32), nanos(int64).
+    // Velox CalendarInterval: months(int32), days(int32), microseconds(int64).
+    // Convert microseconds -> nanoseconds (x1000).
+    auto* rawOutput = values->asMutable<int128_t>();
+    auto* rawInput = vec.values()->as<int128_t>();
+    auto isNullAt = [&](vector_size_t i) {
+      if (parentNulls && bits::isBitNull(parentNulls, i)) {
+        return true;
+      }
+      return vec.isNullAt(i);
+    };
+    vector_size_t j = 0;
+    rows.apply([&](vector_size_t i) {
+      if (!isNullAt(i)) {
+        auto ci = CalendarInterval::unpack(rawInput[i]);
+        int64_t nanos;
+        if (ci.microseconds > std::numeric_limits<int64_t>::max() / 1000 ||
+            ci.microseconds < std::numeric_limits<int64_t>::min() / 1000) {
+          nanos = ci.microseconds > 0 ? std::numeric_limits<int64_t>::max()
+                                      : std::numeric_limits<int64_t>::min();
+        } else {
+          nanos = ci.microseconds * 1000;
+        }
+        rawOutput[j++] = CalendarInterval(ci.months, ci.days, nanos).pack();
+      } else {
+        rawOutput[j++] = 0;
+      }
+    });
   } else {
     gatherFromBuffer(*type, *vec.values(), rows, options, *values);
   }
@@ -1507,6 +1547,9 @@ TypePtr importFromArrowImpl(
       }
       if (format[1] == 'i' && format[2] == 'M') {
         return INTERVAL_YEAR_MONTH();
+      }
+      if (format[1] == 'i' && format[2] == 'n') {
+        return CALENDAR_INTERVAL();
       }
       break;
 
@@ -2450,6 +2493,25 @@ VectorPtr importFromArrowImpl(
         arrowArray.length,
         arrowArray.null_count,
         wrapInBufferView);
+  } else if (type->isCalendarInterval()) {
+    // Arrow MonthDayNano stores nanoseconds; Velox stores microseconds.
+    // Convert nanos → micros (÷1000).
+    VELOX_USER_CHECK_EQ(
+        arrowArray.n_buffers,
+        2,
+        "CalendarInterval expects two buffers as input.");
+    auto length = arrowArray.length;
+    auto output = AlignedBuffer::allocate<int128_t>(length, pool);
+    auto* rawOutput = output->asMutable<int128_t>();
+    auto* rawInput = static_cast<const int128_t*>(arrowArray.buffers[1]);
+    for (int64_t i = 0; i < length; ++i) {
+      auto ci = CalendarInterval::unpack(rawInput[i]);
+      // The third field is nanoseconds in Arrow; divide by 1000 for micros.
+      rawOutput[i] =
+          CalendarInterval(ci.months, ci.days, ci.microseconds / 1000).pack();
+    }
+    return std::make_shared<FlatVector<int128_t>>(
+        pool, type, nulls, length, std::move(output), std::vector<BufferPtr>{});
   } else if (type->isRow()) {
     // Row/structs.
     return createRowVector(

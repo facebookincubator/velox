@@ -42,7 +42,8 @@ velox_add_library(
   GetJsonObject.cpp
   Hash.cpp
   In.cpp
-  LeastGreatest.cpp
+  LeastGreatest.cpp  MakeInterval.cpp
+
   MakeTimestamp.cpp
   Map.cpp
   RegexFunctions.cpp

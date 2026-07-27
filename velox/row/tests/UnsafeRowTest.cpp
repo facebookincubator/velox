@@ -20,6 +20,7 @@
 #include <folly/init/Init.h>
 
 #include "velox/row/UnsafeRowFast.h"
+#include "velox/type/CalendarInterval.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -245,6 +246,28 @@ TEST_F(UnsafeRowTest, timestampUtc) {
   data->childAt(0)->setNull(1, true);
   data->childAt(0)->setNull(3, true);
 
+  testRoundTrip(data);
+}
+
+TEST_F(UnsafeRowTest, calendarInterval) {
+  // Test CalendarInterval serialization round-trip through UnsafeRow.
+  auto type = ROW({CALENDAR_INTERVAL()});
+  auto numRows = 5;
+  auto flatVector = BaseVector::create<FlatVector<int128_t>>(
+      CALENDAR_INTERVAL(), numRows, pool_.get());
+
+  // Row 0: 1 year 2 months, 5 days, 1 hour 30 min (5400000000 micros)
+  flatVector->set(0, CalendarInterval(14, 5, 5400000000L).pack());
+  // Row 1: zero interval
+  flatVector->set(1, CalendarInterval(0, 0, 0).pack());
+  // Row 2: null
+  flatVector->setNull(2, true);
+  // Row 3: negative values
+  flatVector->set(3, CalendarInterval(-3, -10, -7200000000L).pack());
+  // Row 4: large values
+  flatVector->set(4, CalendarInterval(120, 365, 86400000000L).pack());
+
+  auto data = makeRowVector({flatVector});
   testRoundTrip(data);
 }
 
