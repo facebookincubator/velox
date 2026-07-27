@@ -17,7 +17,7 @@ include_guard(GLOBAL)
 # 4.0 is the minimum version required by cudf
 cmake_minimum_required(VERSION 4.0)
 
-# rapids_cmake commit 9c0829e from 2026-07-23
+# rapids_cmake commit 9c0829e from 2026-07-23 (release/26.08 branch)
 set(VELOX_rapids_cmake_VERSION 26.08)
 set(VELOX_rapids_cmake_COMMIT 9c0829ec73702b3df8a5c2ec43f6aaabe5f1e5ec)
 set(
@@ -30,7 +30,7 @@ set(
 )
 velox_resolve_dependency_url(rapids_cmake)
 
-# rmm commit 1a39f9e from 2026-07-24
+# rmm commit 1a39f9e from 2026-07-24 (release/26.08 branch)
 set(VELOX_rmm_VERSION 26.08)
 set(VELOX_rmm_COMMIT 1a39f9e81c467b1a9522a4dcec8b5581ae165fef)
 set(
@@ -40,7 +40,7 @@ set(
 set(VELOX_rmm_SOURCE_URL "https://github.com/rapidsai/rmm/archive/${VELOX_rmm_COMMIT}.tar.gz")
 velox_resolve_dependency_url(rmm)
 
-# kvikio commit 93606c0 from 2026-07-23
+# kvikio commit 93606c0 from 2026-07-23 (release/26.08 branch)
 set(VELOX_kvikio_VERSION 26.08)
 set(VELOX_kvikio_COMMIT 93606c074f3d863a7052af25afae569f72cb3304)
 set(
@@ -53,7 +53,7 @@ set(
 )
 velox_resolve_dependency_url(kvikio)
 
-# cudf commit 5beaa59 from 2026-07-27 (release/26.08)
+# cudf commit 5beaa59 from 2026-07-27 (release/26.08 branch)
 set(VELOX_cudf_VERSION 26.08 CACHE STRING "cudf version")
 set(VELOX_cudf_COMMIT 5beaa5954688fcb12236ffb434e192ea2c77db30)
 set(
