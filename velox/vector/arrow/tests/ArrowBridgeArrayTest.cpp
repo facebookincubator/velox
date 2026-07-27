@@ -1284,6 +1284,25 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
       assertShortDecimalVectorContent(
           inputValues, output, arrowArray.null_count);
     } else if constexpr (
+        std::is_same_v<TInput, int32_t> && std::is_same_v<TOutput, int64_t>) {
+      if (format[0] == 'd') {
+        std::vector<std::optional<int64_t>> widenedValues;
+        widenedValues.reserve(inputValues.size());
+        for (const auto& value : inputValues) {
+          if (value.has_value()) {
+            widenedValues.emplace_back(static_cast<int64_t>(value.value()));
+          } else {
+            widenedValues.emplace_back(std::nullopt);
+          }
+        }
+        assertVectorContent(widenedValues, output, arrowArray.null_count);
+      } else if (format[0] == 't' && format[1] == 't') {
+        assertTimeVectorContent(
+            inputValues, output, arrowArray.null_count, format);
+      } else {
+        assertVectorContent(inputValues, output, arrowArray.null_count);
+      }
+    } else if constexpr (
         std::is_same_v<TOutput, int64_t> &&
         (std::is_same_v<TInput, int32_t> || std::is_same_v<TInput, int64_t>)) {
       // TIME: Arrow time32 (int32) or time64 (int64) to Velox TIME (int64
@@ -1404,6 +1423,16 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
 
     testArrowImport<int64_t, int128_t>(
         "d:5,2", {1, -1, 0, 12345, -12345, std::nullopt});
+    testArrowImport<int64_t, int32_t>(
+        "d:9,2,32",
+        {1,
+         -1,
+         0,
+         12345,
+         -12345,
+         std::numeric_limits<int32_t>::max(),
+         std::numeric_limits<int32_t>::min(),
+         std::nullopt});
     testArrowImport<int128_t, int128_t>(
         "d:36,2",
         {HugeInt::parse("20000000000000000"),
