@@ -25,6 +25,7 @@
 #endif
 
 #include <algorithm>
+#include <unordered_set>
 
 using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
@@ -35,6 +36,15 @@ bool hasProperty(
     const std::vector<config::ConfigProperty>& properties,
     const std::string& name) {
   return std::any_of(
+      properties.begin(), properties.end(), [&](const auto& property) {
+        return property.name == name;
+      });
+}
+
+size_t countProperty(
+    const std::vector<config::ConfigProperty>& properties,
+    const std::string& name) {
+  return std::count_if(
       properties.begin(), properties.end(), [&](const auto& property) {
         return property.name == name;
       });
@@ -316,4 +326,26 @@ TEST(HiveConfigTest, registeredOrcPropertiesUseSessionPrefix) {
       properties,
       orcSessionPrefix + std::string(HiveConfig::kUseColumnNamesSession)));
   EXPECT_FALSE(hasProperty(properties, "footer_speculative_io_size"));
+}
+
+TEST(HiveConfigTest, registeredPropertiesHaveUniqueNames) {
+  const auto& properties = HiveConfig::registeredProperties();
+  std::unordered_set<std::string> names;
+  for (const auto& property : properties) {
+    EXPECT_TRUE(names.insert(property.name).second)
+        << "Duplicate config property: " << property.name;
+  }
+
+  const auto orcSessionPrefix =
+      dwio::common::formatConfigPrefix(dwio::common::FileFormat::ORC, "_");
+  EXPECT_EQ(
+      countProperty(
+          properties,
+          orcSessionPrefix +
+              std::string(dwrf::Config::kOrcFooterSpeculativeIoSizeSession)),
+      1);
+  EXPECT_EQ(
+      countProperty(
+          properties, HiveConfig::kNimbleFooterSpeculativeIoSizeSession),
+      1);
 }
