@@ -27,6 +27,7 @@
 
 #include <folly/Executor.h>
 #include "velox/common/EnumDeclare.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/compression/Compression.h"
@@ -242,6 +243,19 @@ class FormatSpecificOptions {
   FormatSpecificOptions(FormatSpecificOptions&&) = default;
   FormatSpecificOptions& operator=(FormatSpecificOptions&&) = default;
   virtual ~FormatSpecificOptions() = default;
+
+  /// Merges format-scoped option overrides into this object.
+  ///
+  /// This is used when a caller supplies formatSpecificOptions and the
+  /// connector still needs to apply session or connector configs produced by
+  /// the format factory. Values in 'overrides' take precedence over matching
+  /// fields in this object. Implementations should overlay only the fields
+  /// owned by that format's config path, preserving other caller-provided
+  /// fields.
+  virtual void merge(const FormatSpecificOptions& overrides) {
+    VELOX_UNSUPPORTED(
+        "Merging format-specific options is not supported for these options.");
+  }
 };
 
 /// Options for creating a RowReader.

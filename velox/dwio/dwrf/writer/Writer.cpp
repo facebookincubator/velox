@@ -218,9 +218,16 @@ Writer::Writer(
       spillConfig_{options.spillConfig},
       nonReclaimableSection_(options.nonReclaimableSection) {
   DwrfWriterOptions defaultDwrfOptions;
-  const auto& formatOptions = options.formatSpecificOptions == nullptr
-      ? defaultDwrfOptions
-      : *checkedPointerCast<DwrfWriterOptions>(options.formatSpecificOptions);
+  const auto dwrfFormatOptions = options.formatSpecificOptions == nullptr
+      ? nullptr
+      : std::dynamic_pointer_cast<DwrfWriterOptions>(
+            options.formatSpecificOptions);
+  VELOX_CHECK(
+      options.formatSpecificOptions == nullptr || dwrfFormatOptions != nullptr,
+      "DWRF writer expected formatSpecificOptions to be DwrfWriterOptions, "
+      "but received a different FormatSpecificOptions type.");
+  const auto& formatOptions =
+      dwrfFormatOptions == nullptr ? defaultDwrfOptions : *dwrfFormatOptions;
 
   VELOX_CHECK(
       spillConfig_ == nullptr || nonReclaimableSection_ != nullptr,

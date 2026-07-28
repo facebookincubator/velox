@@ -44,6 +44,23 @@ struct DwrfWriterOptions : public dwio::common::FormatSpecificOptions {
   explicit DwrfWriterOptions(std::shared_ptr<const Config> config)
       : config(std::move(config)) {}
 
+  /// Overlays session or connector DWRF config values on top of this options
+  /// object while preserving caller-provided non-config fields.
+  void merge(const dwio::common::FormatSpecificOptions& overrides) override {
+    const auto* dwrfOverrides =
+        dynamic_cast<const DwrfWriterOptions*>(&overrides);
+    VELOX_CHECK_NOT_NULL(
+        dwrfOverrides,
+        "Cannot merge DWRF writer options with a different "
+        "FormatSpecificOptions type.");
+
+    auto mergedConfigs = config->toSerdeParams();
+    for (const auto& [key, value] : dwrfOverrides->config->toSerdeParams()) {
+      mergedConfigs[key] = value;
+    }
+    config = Config::fromMap(mergedConfigs);
+  }
+
   std::shared_ptr<const Config> config = std::make_shared<Config>();
   /// Changes the interface to stream list and encoding iter.
   std::function<std::unique_ptr<LayoutPlanner>(const dwio::common::TypeWithId&)>

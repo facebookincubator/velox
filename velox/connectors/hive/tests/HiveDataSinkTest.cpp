@@ -2107,6 +2107,67 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsWithMultipleWriters) {
       outputDirectory->getPath(), static_cast<uint32_t>(partitions.size()));
 }
 
+TEST_F(HiveDataSinkTest, sessionDwrfConfigsMergeIntoProvidedFormatOptions) {
+  connectorSessionProperties_->set(
+      dwio::common::formatSessionProperty(
+          dwio::common::FileFormat::DWRF,
+          dwrf::Config::kOrcWriterMaxStripeSizeSession),
+      "32MB");
+
+  auto writerOptions = std::make_shared<dwio::common::WriterOptions>();
+  auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>();
+  dwrfOptions->schemaAttributes[0] = {{"existing", "attribute"}};
+  writerOptions->formatSpecificOptions = dwrfOptions;
+
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto dataSink = createDataSink(
+      rowType_,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {},
+      nullptr,
+      writerOptions);
+
+  dataSink->appendData(createVectors(10, 1).front());
+
+  EXPECT_EQ(dwrfOptions->config->get(dwrf::Config::STRIPE_SIZE), 32UL << 20);
+  ASSERT_EQ(dwrfOptions->schemaAttributes.size(), 1);
+  EXPECT_EQ(
+      dwrfOptions->schemaAttributes.at(0),
+      (std::vector<std::pair<std::string, std::string>>{
+          {"existing", "attribute"}}));
+}
+
+#ifdef VELOX_ENABLE_PARQUET
+TEST_F(HiveDataSinkTest, sessionParquetConfigsMergeIntoProvidedFormatOptions) {
+  connectorSessionProperties_->set(
+      dwio::common::formatSessionProperty(
+          dwio::common::FileFormat::PARQUET,
+          parquet::ParquetConfig::kWriterBatchSizeSession),
+      "97");
+
+  auto writerOptions = std::make_shared<dwio::common::WriterOptions>();
+  auto parquetOptions = std::make_shared<parquet::ParquetWriterOptions>();
+  parquetOptions->batchSize = 11;
+  parquetOptions->bufferGrowRatio = 1.7;
+  writerOptions->formatSpecificOptions = parquetOptions;
+
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto dataSink = createDataSink(
+      rowType_,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::PARQUET,
+      {},
+      nullptr,
+      writerOptions);
+
+  dataSink->appendData(createVectors(10, 1).front());
+
+  EXPECT_EQ(parquetOptions->batchSize, 97);
+  EXPECT_EQ(parquetOptions->bufferGrowRatio, 1.7);
+}
+#endif
+
 DEBUG_ONLY_TEST_F(HiveDataSinkTest, perWriterMemoryPool) {
   const auto outputDirectory = TempDirectoryPath::create();
   auto writerOptions = std::make_shared<dwio::common::WriterOptions>();
