@@ -74,7 +74,8 @@ std::unique_ptr<velox::dwio::common::BufferedInput> maybePreloadInput(
           /*offset=*/0,
           velox::dwio::common::LogType::FILE);
   return std::make_unique<velox::dwio::common::BufferedInput>(
-      std::make_shared<velox::InMemoryReadFile>(std::move(buffer)),
+      std::make_shared<velox::InMemoryReadFile>(
+          std::string(buffer->as<char>(), fileSize)),
       options.memoryPool());
 }
 } // namespace
