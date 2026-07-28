@@ -178,6 +178,10 @@ void FileSplitReader::configureReaderOptions(
   baseReaderOpts_.setRandomSkip(std::move(randomSkip));
   baseReaderOpts_.setScanSpec(scanSpec_);
   baseReaderOpts_.setFileFormat(fileSplit_->fileFormat);
+  if (!nameToFieldId_.empty()) {
+    baseReaderOpts_.setUseColumnNamesForColumnMapping(true);
+    baseReaderOpts_.setNameToFieldId(nameToFieldId_);
+  }
 }
 
 void FileSplitReader::configureBaseReaderOptions() {

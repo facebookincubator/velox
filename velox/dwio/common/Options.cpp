@@ -74,6 +74,9 @@ std::string formatConfigPrefix(FileFormat fmt, std::string_view separator) {
 ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options) {
   ColumnReaderOptions columnReaderOptions;
   columnReaderOptions.columnMappingMode_ = options.columnMappingMode();
+  columnReaderOptions.useColumnNamesForColumnMapping_ =
+      options.useColumnNamesForColumnMapping();
+  columnReaderOptions.nameToFieldId_ = options.nameToFieldId();
   return columnReaderOptions;
 }
 

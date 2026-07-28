@@ -16,8 +16,13 @@
 
 #include "velox/connectors/hive/iceberg/IcebergDataSource.h"
 
+#include <folly/String.h>
+
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergFieldIdUtils.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -37,7 +42,36 @@ IcebergDataSource::IcebergDataSource(
           ioExecutor,
           connectorQueryCtx,
           hiveConfig),
-      columnHandles_(std::make_shared<ColumnHandleMap>(assignments)) {}
+      columnHandles_(std::make_shared<ColumnHandleMap>(assignments)) {
+  for (const auto& [name, columnHandle] : assignments) {
+    if (!columnHandle) {
+      continue;
+    }
+
+    auto icebergHandle =
+        std::dynamic_pointer_cast<const IcebergColumnHandle>(columnHandle);
+    if (!icebergHandle) {
+      continue;
+    }
+
+    std::string lowerName = icebergHandle->name();
+    folly::toLowerAscii(lowerName);
+    const auto& field = icebergHandle->field();
+    nameToFieldId_[lowerName] = field.fieldId;
+
+    const auto dataType = icebergHandle->dataType();
+    if (!dataType || field.children.empty()) {
+      continue;
+    }
+
+    auto rowType = asRowType(dataType);
+    if (!rowType) {
+      continue;
+    }
+
+    extractNestedFieldIds(field, rowType, nameToFieldId_);
+  }
+}
 
 std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
   prepareSplit();
@@ -57,6 +91,10 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
       ioExecutor_,
       scanSpec_,
       columnHandles_);
+
+  if (!nameToFieldId_.empty()) {
+    reader->setNameToFieldId(nameToFieldId_);
+  }
 
   return reader;
 }

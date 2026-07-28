@@ -50,7 +50,8 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
       bool isRepeated,
       int32_t precision = 0,
       int32_t scale = 0,
-      int32_t typeLength = 0)
+      int32_t typeLength = 0,
+      std::optional<int32_t> fieldId = std::nullopt)
       : TypeWithId(type, std::move(children), id, maxId, column),
         name_(name),
         parquetType_(parquetType),
@@ -62,7 +63,8 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
         isRepeated_(isRepeated),
         precision_(precision),
         scale_(scale),
-        typeLength_(typeLength) {}
+        typeLength_(typeLength),
+        fieldId_(fieldId) {}
 
   bool isLeaf() const {
     // Negative column ordinal means non-leaf column.
@@ -75,6 +77,10 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
 
   const ParquetTypeWithId* parquetParent() const {
     return reinterpret_cast<const ParquetTypeWithId*>(parent());
+  }
+
+  std::optional<int32_t> fieldId() const {
+    return fieldId_;
   }
 
   /// Fills 'info' and returns the mode for interpreting levels.
@@ -94,6 +100,7 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
   const int32_t precision_;
   const int32_t scale_;
   const int32_t typeLength_;
+  const std::optional<int32_t> fieldId_;
 
   // True if this is or has a non-repeated leaf.
   bool hasNonRepeatedLeaf() const;
