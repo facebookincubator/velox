@@ -944,6 +944,13 @@ Common Options
        decompression and decode CPU time metrics for each column, reported as runtime metrics in the format
        ``column_<nodeId>.<type>.decompressCPUTimeNanos`` and ``column_<nodeId>.<type>.decodeCPUTimeNanos``.
        Useful for performance analysis and identifying slow columns. Session: ``reader.collect_column_cpu_metrics``.
+   * - ``use-column-names``
+     - bool
+     - false
+     - Map table fields to file fields using names instead of indices for all
+       file formats. The connector property is scoped by connector ID, for
+       example ``hive.use-column-names`` or ``iceberg.use-column-names``.
+       Session: ``use_column_names``.
 
 ORC Options (prefix ``hive.orc.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -957,10 +964,6 @@ ORC Options (prefix ``hive.orc.``)
      - Type
      - Default Value
      - Description
-   * - ``use-column-names``
-     - bool
-     - false
-     - Map ORC table field names to file field names using names, not indices. Configure as ``orc.use-column-names``. Key ``hive.orc.use-column-names`` is also accepted. Session: ``orc_use_column_names``.
    * - ``footer-speculative-io-size``
      - integer
      - 256KB
@@ -1018,20 +1021,16 @@ Parquet Options (prefix ``hive.parquet.``)
      - Type
      - Default Value
      - Description
-   * - ``use-column-names``
-     - bool
-     - false
-     - Map Parquet table field names to file field names using names, not indices. Session: ``parquet_use_column_names``.
-   * - ``allow-int32-narrowing``
-     - bool
-     - false
-     - Allow reading INT32 Parquet columns as a narrower integer type. Session: ``parquet_allow_int32_narrowing``.
    * - ``footer-speculative-io-size``
      - integer
      - 256KB
      - Speculative tail-read size in bytes when opening Parquet files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode. Session: ``parquet_footer_speculative_io_size``.
+   * - ``allow-int32-narrowing``
+     - bool
+     - false
+     - Allow reading INT32 Parquet columns as a narrower integer type. Session: ``parquet_allow_int32_narrowing``.
    * - ``footer-memory-tracking-threshold``
      - integer
      - disabled (max uint64)
