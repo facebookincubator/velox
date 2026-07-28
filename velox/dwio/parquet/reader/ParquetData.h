@@ -37,11 +37,15 @@ class ParquetParams : public dwio::common::FormatParams {
       dwio::common::ColumnReaderStatistics& stats,
       const FileMetaDataPtr metaData,
       const tz::TimeZone* sessionTimezone,
-      TimestampPrecision timestampPrecision)
+      TimestampPrecision timestampPrecision,
+      dwio::common::BufferedInput* bufferedInput = nullptr,
+      bool dictionaryRowGroupSkippingEnabled = false)
       : FormatParams(pool, stats),
         metaData_(metaData),
         sessionTimezone_(sessionTimezone),
-        timestampPrecision_(timestampPrecision) {}
+        timestampPrecision_(timestampPrecision),
+        bufferedInput_(bufferedInput),
+        dictionaryRowGroupSkippingEnabled_(dictionaryRowGroupSkippingEnabled) {}
   std::unique_ptr<dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const common::ScanSpec& scanSpec) override;
@@ -54,6 +58,8 @@ class ParquetParams : public dwio::common::FormatParams {
   const FileMetaDataPtr metaData_;
   const tz::TimeZone* sessionTimezone_;
   const TimestampPrecision timestampPrecision_;
+  dwio::common::BufferedInput* bufferedInput_;
+  const bool dictionaryRowGroupSkippingEnabled_;
 };
 
 /// Format-specific data created for each leaf column of a Parquet rowgroup.
@@ -64,10 +70,14 @@ class ParquetData : public dwio::common::FormatData {
       const FileMetaDataPtr fileMetadataPtr,
       memory::MemoryPool& pool,
       dwio::common::ColumnReaderStatistics& stats,
-      const tz::TimeZone* sessionTimezone)
+      const tz::TimeZone* sessionTimezone,
+      dwio::common::BufferedInput* bufferedInput,
+      bool dictionaryRowGroupSkippingEnabled)
       : pool_(pool),
         type_(std::static_pointer_cast<const ParquetTypeWithId>(type)),
         fileMetaDataPtr_(fileMetadataPtr),
+        bufferedInput_(bufferedInput),
+        dictionaryRowGroupSkippingEnabled_(dictionaryRowGroupSkippingEnabled),
         maxDefine_(type_->maxDefine_),
         maxRepeat_(type_->maxRepeat_),
         rowsInRowGroup_(-1),
@@ -216,6 +226,31 @@ class ParquetData : public dwio::common::FormatData {
   /// stats in 'rowGroup'.
   bool rowGroupMatches(uint32_t rowGroupId, const common::Filter* filter);
 
+  // True if 'filter' can be evaluated against the column chunk's dictionary,
+  // i.e. every data page in the chunk is dictionary encoded.
+  bool isOnlyDictionaryEncodingPages(const ColumnChunkMetaDataPtr& columnChunk);
+
+  // Dictionary-based row group filtering. Tests the column chunk's dictionary
+  // values against 'filter' and returns false only when no dictionary value can
+  // pass, meaning the row group can be skipped.
+  bool testFilterAgainstDictionary(
+      uint32_t rowGroupId,
+      const common::Filter* filter,
+      const ColumnChunkMetaDataPtr& columnChunk);
+
+  // Reads the dictionary page of the row group's column chunk so its values can
+  // be tested against filters directly.
+  std::unique_ptr<dwio::common::DictionaryValues>
+  readDictionaryPageForFiltering(
+      uint32_t rowGroupId,
+      const ColumnChunkMetaDataPtr& columnChunk);
+
+  // Returns a stream over just the dictionary page region of the column chunk,
+  // or nullptr when there is no usable dictionary page.
+  std::unique_ptr<dwio::common::SeekableInputStream> getInputStream(
+      uint32_t rowGroupId,
+      const ColumnChunkMetaDataPtr& columnChunk);
+
  protected:
   memory::MemoryPool& pool_;
   std::shared_ptr<const ParquetTypeWithId> type_;
@@ -223,6 +258,14 @@ class ParquetData : public dwio::common::FormatData {
   // Streams for this column in each of 'rowGroups_'. Will be created on or
   // ahead of first use, not at construction.
   std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> streams_;
+
+  // BufferedInput used to read the dictionary page on demand during row group
+  // filtering. Owned by the reader, not by 'this'.
+  dwio::common::BufferedInput* bufferedInput_{nullptr};
+
+  // When true, row group filtering may read column-chunk dictionaries and skip
+  // row groups whose dictionary holds no value passing the filter.
+  bool dictionaryRowGroupSkippingEnabled_{false};
 
   const uint32_t maxDefine_;
   const uint32_t maxRepeat_;

@@ -496,6 +496,19 @@ std::vector<thrift::Encoding> ColumnChunkMetaDataPtr::encodings() const {
       thriftColumnChunkPtr(ptr_)->meta_data()->encodings());
 }
 
+bool ColumnChunkMetaDataPtr::hasEncodingStats() const {
+  return hasMetadata() &&
+      apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
+          ->encoding_stats()
+          .has_value();
+}
+
+std::vector<thrift::PageEncodingStats> ColumnChunkMetaDataPtr::encodingStats()
+    const {
+  return *apache::thrift::can_throw(
+      thriftColumnChunkPtr(ptr_)->meta_data()->encoding_stats());
+}
+
 std::vector<std::string> ColumnChunkMetaDataPtr::pathInSchema() const {
   return *apache::thrift::can_throw(
       thriftColumnChunkPtr(ptr_)->meta_data()->path_in_schema());

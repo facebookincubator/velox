@@ -89,6 +89,19 @@ class ParquetConfig {
       false,
       "Allow reading INT32 Parquet columns as a narrower integer type.")
 
+  VELOX_PARQUET_CONFIG(
+      kDictionaryRowGroupSkippingEnabledSession,
+      kDictionaryRowGroupSkippingEnabled,
+      dictionaryRowGroupSkippingEnabled,
+      "dictionary_row_group_skipping_enabled",
+      "dictionary-row-group-skipping-enabled",
+      bool,
+      false,
+      "Skip Parquet row groups whose column-chunk dictionary holds no value "
+      "passing the filter. Reads the dictionary page during filtering, which "
+      "is a blocking operation that can slow scans of wide columns on remote "
+      "storage.")
+
   static constexpr uint64_t kDefaultFooterMemoryTrackingThreshold =
       std::numeric_limits<uint64_t>::max();
   VELOX_PARQUET_CONFIG(
@@ -250,6 +263,8 @@ class ParquetConfig {
     registerProperty<kFooterSpeculativeIoSizeSessionProperty>(
         properties, sessionPrefix);
     registerProperty<kAllowInt32NarrowingSessionProperty>(
+        properties, sessionPrefix);
+    registerProperty<kDictionaryRowGroupSkippingEnabledSessionProperty>(
         properties, sessionPrefix);
     registerProperty<kFooterMemoryTrackingThresholdSessionProperty>(
         properties, sessionPrefix);

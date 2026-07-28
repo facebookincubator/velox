@@ -159,6 +159,9 @@ ParquetReaderFactory::createFormatOptions(
       ParquetConfig::footerSpeculativeIoSize(connectorConfig, session);
   options->allowInt32Narrowing =
       ParquetConfig::allowInt32Narrowing(connectorConfig, session);
+  options->dictionaryRowGroupSkippingEnabled =
+      ParquetConfig::dictionaryRowGroupSkippingEnabled(
+          connectorConfig, session);
   options->footerMemoryTrackingThreshold =
       ParquetConfig::footerMemoryTrackingThreshold(connectorConfig, session);
   const auto useColumnNames =
@@ -183,6 +186,10 @@ class ReaderBase {
 
   dwio::common::BufferedInput& bufferedInput() const {
     return *input_;
+  }
+
+  const ParquetReaderOptions& parquetReaderOptions() const {
+    return parquetReaderOptions_;
   }
 
   uint64_t fileLength() const {
@@ -1430,7 +1437,9 @@ class ParquetRowReader::Impl {
         columnReaderStats_,
         readerBase_->fileMetaData(),
         readerBase->sessionTimezone(),
-        options_.timestampPrecision());
+        options_.timestampPrecision(),
+        &readerBase_->bufferedInput(),
+        readerBase_->parquetReaderOptions().dictionaryRowGroupSkippingEnabled);
     requestedType_ = options_.requestedType() ? options_.requestedType()
                                               : readerBase_->schema();
     columnReader_ = ParquetColumnReader::build(

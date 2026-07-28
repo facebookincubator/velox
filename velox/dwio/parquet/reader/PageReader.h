@@ -140,6 +140,11 @@ class PageReader {
     dictionaryValues_.reset();
   }
 
+  // Access the loaded dictionary for filtering purposes.
+  const dwio::common::DictionaryValues& dictionary() const {
+    return dictionary_;
+  }
+
   bool isDeltaBinaryPacked() const {
     return encoding_ == thrift::Encoding::DELTA_BINARY_PACKED;
   }
@@ -161,6 +166,9 @@ class PageReader {
   const tz::TimeZone* sessionTimezone() const {
     return sessionTimezone_;
   }
+
+  // Prepares the dictionary from a dictionary page header.
+  void prepareDictionary(const thrift::PageHeader& pageHeader);
 
  private:
   // Indicates that we only want the repdefs for the next page. Used when
@@ -215,7 +223,6 @@ class PageReader {
 
   void prepareDataPageV1(const thrift::PageHeader& pageHeader, int64_t row);
   void prepareDataPageV2(const thrift::PageHeader& pageHeader, int64_t row);
-  void prepareDictionary(const thrift::PageHeader& pageHeader);
   void makeDecoder();
 
   // For a non-top level leaf, reads the defs and sets 'leafNulls_' and
