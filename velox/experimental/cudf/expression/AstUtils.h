@@ -227,12 +227,19 @@ static std::unique_ptr<cudf::scalar> createCudfScalar(
 inline std::unique_ptr<cudf::scalar> makeScalarFromConstantExpr(
     const core::TypedExprPtr& expr,
     memory::MemoryPool* pool,
-    std::optional<cudf::type_id> toType = std::nullopt) {
+    std::optional<cudf::type_id> toType = std::nullopt,
+    rmm::cuda_stream_view stream =
+        cudf::get_default_stream(cudf::allow_default_stream)) {
   auto constExpr =
       std::dynamic_pointer_cast<const core::ConstantTypedExpr>(expr);
   VELOX_CHECK_NOT_NULL(constExpr);
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      createCudfScalar, constExpr->type()->kind(), *constExpr, pool, toType);
+      createCudfScalar,
+      constExpr->type()->kind(),
+      *constExpr,
+      pool,
+      toType,
+      stream);
 }
 
 // Returns the constant VARCHAR value of expr, or nullopt if expr is not a

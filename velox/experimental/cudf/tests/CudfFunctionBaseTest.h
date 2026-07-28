@@ -21,7 +21,6 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
-#include "velox/expression/ExprOptimizer.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 #include <string>
