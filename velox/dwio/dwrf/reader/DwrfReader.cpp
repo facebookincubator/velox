@@ -747,6 +747,29 @@ std::optional<uint64_t> getStringOrBinaryColumnSize(
   return stats.getRawSize();
 }
 
+// A file whose physical top-level field names are ALL Hive placeholders
+// (_col0, _col1, ...) must be mapped by position even in name mode: such files
+// were written by older Hive without real field names, so the real names live
+// only in the metastore/table schema. Mirrors vanilla Spark's
+// OrcUtils.requestedColumnIds, which switches to positional mapping when
+// `orcFieldNames.forall(_.startsWith("_col"))`.
+bool isAllHivePlaceholderNames(const RowTypePtr& fileSchema) {
+  if (fileSchema == nullptr || fileSchema->size() == 0) {
+    // Empty schema (e.g. SPARK-8501 empty ORC footer): nothing to remap, keep
+    // name mode.
+    return false;
+  }
+  for (auto i = 0; i < fileSchema->size(); ++i) {
+    // Prefix match, equivalent to Java String.startsWith("_col"); like Spark,
+    // we do not require a trailing digit. Any single non-placeholder top-level
+    // name makes `forall` false, so we keep name mode.
+    if (fileSchema->nameOf(i).rfind("_col", 0) != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
@@ -914,6 +937,12 @@ DwrfReader::DwrfReader(
     } else if (
         columnMappingMode != dwio::common::ColumnMappingMode::kName ||
         isAllHivePlaceholderNames(readerBase_->schema())) {
+      updateColumnNamesFromTableSchema();
+    } else if (isAllHivePlaceholderNames(readerBase_->schema())) {
+      // Name mode, but the file carries only Hive placeholder names
+      // (_col0, ...). Real names exist only in the table schema, so map by
+      // position instead of by name -- otherwise every column would fail to
+      // match and read back as null. Matches vanilla Spark's per-file decision.
       updateColumnNamesFromTableSchema();
     }
   }
