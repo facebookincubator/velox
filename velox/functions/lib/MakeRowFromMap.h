@@ -114,6 +114,13 @@ struct MakeRowFromMapOptions {
 
   /// If true, duplicate keys are allowed and the last value is used.
   bool throwOnDuplicateKeys{true};
+
+  /// If true, each projected field is produced as a dictionary vector that
+  /// references the map's value vector directly instead of deep-copying the
+  /// projected values. Only applied when 'replaceNulls', 'allowTopLevelNulls',
+  /// and 'throwOnDuplicateKeys' are all false; otherwise the values are copied
+  /// as usual.
+  bool useDictionaryEncoding{false};
 };
 
 ///  A utility class for projecting specific keys from a vector of MAP type
@@ -143,6 +150,7 @@ class MakeRowFromMap {
       : replaceNulls_(options.replaceNulls),
         allowTopLevelNulls_(options.allowTopLevelNulls),
         throwOnDuplicateKeys_(options.throwOnDuplicateKeys),
+        useDictionaryEncoding_(options.useDictionaryEncoding),
         outputFieldNames_(options.outputFieldNames),
         inputKeyType_(options.keysToProject->type()) {
     VELOX_USER_CHECK_NOT_NULL(options.keysToProject);
@@ -213,6 +221,71 @@ class MakeRowFromMap {
     auto* offsets = mapBase->rawOffsets();
     auto* sizes = mapBase->rawSizes();
     auto outputSize = rows.end();
+
+    // Fast path: when values are neither null-replaced nor top-level-nullable
+    // and duplicate keys are tolerated, avoid deep-copying the projected
+    // values. Each output field is produced as a dictionary vector that
+    // references the map's value vector directly, with a per-field indices
+    // buffer pointing at the matching entry and a nulls buffer marking rows
+    // without a matching (non-null) value.
+    if (useDictionaryEncoding_ && !replaceNulls_ && !allowTopLevelNulls_ &&
+        !throwOnDuplicateKeys_) {
+      const auto numFields = keyToIndex_.size();
+      auto* valuesPool = mapBase->pool();
+      const auto& valuesVector =
+          BaseVector::loadedVectorShared(mapBase->mapValues());
+
+      std::vector<BufferPtr> indicesBuffers(numFields);
+      std::vector<BufferPtr> nullsBuffers(numFields);
+      std::vector<vector_size_t*> rawIndices(numFields);
+      std::vector<uint64_t*> rawFieldNulls(numFields);
+      for (size_t field = 0; field < numFields; ++field) {
+        indicesBuffers[field] = allocateIndices(outputSize, valuesPool);
+        nullsBuffers[field] =
+            allocateNulls(outputSize, valuesPool, bits::kNull);
+        rawIndices[field] = indicesBuffers[field]->asMutable<vector_size_t>();
+        rawFieldNulls[field] = nullsBuffers[field]->asMutable<uint64_t>();
+      }
+
+      rows.applyToSelected([&](vector_size_t row) {
+        if (decodedMap->isNullAt(row)) {
+          return;
+        }
+        auto decodedIndex = decodedMap->index(row);
+        auto offset = offsets[decodedIndex];
+        auto size = sizes[decodedIndex];
+        for (auto i = offset; i < offset + size; ++i) {
+          if (decodedKeys->isNullAt(i) || decodedValues->isNullAt(i)) {
+            continue;
+          }
+          auto it = keyToIndex_.find(decodedKeys->valueAt<KeyType>(i));
+          if (it == keyToIndex_.end()) {
+            continue;
+          }
+          auto index = it->second;
+          rawIndices[index][row] = i;
+          bits::clearNull(rawFieldNulls[index], row);
+        }
+      });
+
+      std::vector<VectorPtr> children;
+      children.reserve(numFields);
+      for (size_t field = 0; field < numFields; ++field) {
+        children.push_back(
+            BaseVector::wrapInDictionary(
+                std::move(nullsBuffers[field]),
+                std::move(indicesBuffers[field]),
+                outputSize,
+                valuesVector));
+      }
+
+      return std::make_shared<RowVector>(
+          vector.pool(),
+          ROW(outputFieldNames_, valueType),
+          nullptr,
+          outputSize,
+          std::move(children));
+    }
 
     std::vector<VectorPtr> children;
     children.reserve(keyToIndex_.size());
@@ -310,6 +383,7 @@ class MakeRowFromMap {
   const bool replaceNulls_{false};
   const bool allowTopLevelNulls_{false};
   const bool throwOnDuplicateKeys_{true};
+  const bool useDictionaryEncoding_{false};
   const std::vector<std::string> outputFieldNames_;
   const TypePtr inputKeyType_;
   folly::F14FastMap<KeyType, size_t> keyToIndex_;
