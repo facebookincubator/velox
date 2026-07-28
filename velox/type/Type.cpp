@@ -839,7 +839,7 @@ bool MapType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (!Type::hasSameTypeId(other)) {
+  if (!other.isMap()) {
     return false;
   }
   auto& otherMap = other.asMap();
