@@ -24,11 +24,21 @@ namespace {
 template <TypeKind T>
 class SchemaType {};
 
+template <TypeKind T>
+class OrcSchemaType {};
+
 #define CREATE_TYPE_TRAIT(Kind, SchemaKind)       \
   template <>                                     \
   struct SchemaType<TypeKind::Kind> {             \
     static constexpr proto::Type_Kind kind =      \
         proto::Type_Kind::Type_Kind_##SchemaKind; \
+  };
+
+#define CREATE_ORC_TYPE_TRAIT(Kind, SchemaKind)        \
+  template <>                                          \
+  struct OrcSchemaType<TypeKind::Kind> {               \
+    static constexpr proto::orc::Type_Kind kind =      \
+        proto::orc::Type_Kind::Type_Kind_##SchemaKind; \
   };
 
 CREATE_TYPE_TRAIT(BOOLEAN, BOOLEAN)
@@ -45,7 +55,22 @@ CREATE_TYPE_TRAIT(ARRAY, LIST)
 CREATE_TYPE_TRAIT(MAP, MAP)
 CREATE_TYPE_TRAIT(ROW, STRUCT)
 
+CREATE_ORC_TYPE_TRAIT(BOOLEAN, BOOLEAN)
+CREATE_ORC_TYPE_TRAIT(TINYINT, BYTE)
+CREATE_ORC_TYPE_TRAIT(SMALLINT, SHORT)
+CREATE_ORC_TYPE_TRAIT(INTEGER, INT)
+CREATE_ORC_TYPE_TRAIT(BIGINT, LONG)
+CREATE_ORC_TYPE_TRAIT(REAL, FLOAT)
+CREATE_ORC_TYPE_TRAIT(DOUBLE, DOUBLE)
+CREATE_ORC_TYPE_TRAIT(VARCHAR, STRING)
+CREATE_ORC_TYPE_TRAIT(VARBINARY, BINARY)
+CREATE_ORC_TYPE_TRAIT(TIMESTAMP, TIMESTAMP)
+CREATE_ORC_TYPE_TRAIT(ARRAY, LIST)
+CREATE_ORC_TYPE_TRAIT(MAP, MAP)
+CREATE_ORC_TYPE_TRAIT(ROW, STRUCT)
+
 #undef CREATE_TYPE_TRAIT
+#undef CREATE_ORC_TYPE_TRAIT
 
 } // namespace
 
@@ -60,10 +85,24 @@ void ProtoUtils::writeType(
     parent->addSubtypes(static_cast<int>(typeId));
   }
 
-  auto kind =
-      VELOX_STATIC_FIELD_DYNAMIC_DISPATCH(SchemaType, kind, type.kind());
-  auto typeKindWrapper = TypeKindWrapper(&kind);
-  self.setKind(typeKindWrapper);
+  if (footer.format() == DwrfFormat::kDwrf) {
+    auto kind =
+        VELOX_STATIC_FIELD_DYNAMIC_DISPATCH(SchemaType, kind, type.kind());
+    self.setKind(TypeKindWrapper(&kind));
+  } else if (type.isDecimal()) {
+    auto kind = proto::orc::Type_Kind::Type_Kind_DECIMAL;
+    self.setKind(TypeKindWrapper(&kind));
+    const auto [precision, scale] = getDecimalPrecisionScale(type);
+    self.setPrecision(precision);
+    self.setScale(scale);
+  } else if (type.isDate()) {
+    auto kind = proto::orc::Type_Kind::Type_Kind_DATE;
+    self.setKind(TypeKindWrapper(&kind));
+  } else {
+    auto kind =
+        VELOX_STATIC_FIELD_DYNAMIC_DISPATCH(OrcSchemaType, kind, type.kind());
+    self.setKind(TypeKindWrapper(&kind));
+  }
 
   // Stamp per-type attributes (e.g. Iceberg field ids) before recursing into
   // children. An empty result keeps the wire format byte-identical to the
