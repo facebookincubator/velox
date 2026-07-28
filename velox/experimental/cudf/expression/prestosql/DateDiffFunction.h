@@ -40,6 +40,13 @@ class DateDiffFunction : public CudfFunction {
  public:
   explicit DateDiffFunction(const std::shared_ptr<velox::exec::Expr>& expr);
 
+  /// Rejects forms cuDF can't evaluate: a null unit (the constructor
+  /// requires a non-null constant unit and would throw), and the
+  /// all-constant-operands form (eval() has no path for two scalar date/
+  /// timestamp operands - see DateDiffFunction::binaryOp). Matches the
+  /// canEvaluate pattern used by DateAddFunction/DateTruncFunction.
+  static bool canEvaluate(const std::shared_ptr<velox::exec::Expr>& expr);
+
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       cudf::size_type numRows,
@@ -86,14 +93,22 @@ class DateDiffFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const;
 
-  // Subtract two TIMESTAMP columns to get a DURATION, cast to INT64, then
-  // scale to the requested unit via truncating DIV. The duration output
-  // type matches the timestamp resolution (NANOSECONDS or MICROSECONDS)
-  // and the scale factor is adjusted accordingly.
+  // Floors both operands to millisecond precision (matching Velox CPU's
+  // Timestamp::toMillis(), which every diffTimestamp() call goes through
+  // before subtracting - see DateTimeUtil.h), subtracts them as
+  // DURATION_MILLISECONDS, casts to INT64, then scales to the requested
+  // unit via truncating DIV. Flooring each operand individually before
+  // subtracting (rather than subtracting at full nanosecond/microsecond
+  // precision and dividing afterward) is required for correctness, not
+  // just overflow-avoidance: the two orders of operations can disagree
+  // whenever a unit boundary falls strictly between the operands' non-ms
+  // components. Millisecond precision also keeps the subtraction itself
+  // far inside INT64 range for any representable Timestamp, unlike
+  // subtracting at nanosecond resolution.
   ColumnOrView diffTimestamp(
       const Operand& left,
       const Operand& right,
-      int64_t usPerUnit,
+      int64_t msPerUnit,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const;
 
@@ -101,6 +116,20 @@ class DateDiffFunction : public CudfFunction {
   static std::unique_ptr<cudf::column> extractComponentAsInt64(
       cudf::column_view col,
       cudf::datetime::datetime_component component,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
+  // Extracts the calendar year as INT64 without going through cuDF's
+  // extract_datetime_component(), which always returns INT16 (max 32767)
+  // regardless of component - silently wrapping for any date whose year
+  // falls outside that range, which Velox's DATE/TIMESTAMP (INT32
+  // days-since-epoch) can otherwise represent. Computes the year directly
+  // from the whole-day count via Howard Hinnant's civil_from_days
+  // algorithm (http://howardhinnant.github.io/date_algorithms.html),
+  // entirely in INT64 arithmetic, so it's correct across the full range a
+  // TIMESTAMP_DAYS column can represent.
+  static std::unique_ptr<cudf::column> extractYearAsInt64(
+      cudf::column_view daysCol,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr);
 

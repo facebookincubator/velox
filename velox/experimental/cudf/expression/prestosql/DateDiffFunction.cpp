@@ -31,6 +31,52 @@
 
 namespace facebook::velox::cudf_velox::prestosql {
 
+bool DateDiffFunction::canEvaluate(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  if (expr->inputs().size() != 3) {
+    return false;
+  }
+
+  // A null unit is admitted by the constructor's VELOX_CHECK_NOT_NULL as a
+  // hard failure, rather than falling back to CPU's default-null result -
+  // reject it here instead.
+  auto unitString = constantVarcharValue(expr->inputs()[0]);
+  if (!unitString.has_value()) {
+    return false;
+  }
+
+  // eval() has no path for two constant date/timestamp operands (see
+  // binaryOp's "Both date_diff operands are scalar" failure) - require at
+  // least one to be a non-constant column.
+  auto leftExpr =
+      std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[1]);
+  auto rightExpr =
+      std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[2]);
+  if (leftExpr && rightExpr) {
+    return false;
+  }
+
+  const bool isDate = expr->inputs()[1]->type()->isDate();
+  static const std::unordered_set<std::string> kDateUnits = {
+      "day", "week", "month", "quarter", "year"};
+  static const std::unordered_set<std::string> kTimestampUnits = {
+      "millisecond",
+      "second",
+      "minute",
+      "hour",
+      "day",
+      "week",
+      "month",
+      "quarter",
+      "year"};
+  std::string unit = unitString->str();
+  std::transform(unit.begin(), unit.end(), unit.begin(), [](unsigned char c) {
+    return std::tolower(c);
+  });
+  const auto& supportedUnits = isDate ? kDateUnits : kTimestampUnits;
+  return supportedUnits.find(unit) != supportedUnits.end();
+}
+
 DateDiffFunction::DateDiffFunction(
     const std::shared_ptr<velox::exec::Expr>& expr) {
   VELOX_CHECK_EQ(
@@ -169,18 +215,17 @@ ColumnOrView DateDiffFunction::eval(
   } else if (unit_ == "year") {
     return diffByComponent(left, right, /*isYear=*/true, stream, mr);
   } else if (!isDate_) {
-    static constexpr int64_t kUsPerMs = 1000LL;
-    static constexpr int64_t kUsPerSecond = 1000LL * 1000;
-    static constexpr int64_t kUsPerMinute = 60LL * kUsPerSecond;
-    static constexpr int64_t kUsPerHour = 60LL * kUsPerMinute;
+    static constexpr int64_t kMsPerSecond = 1000LL;
+    static constexpr int64_t kMsPerMinute = 60LL * kMsPerSecond;
+    static constexpr int64_t kMsPerHour = 60LL * kMsPerMinute;
     if (unit_ == "second") {
-      return diffTimestamp(left, right, kUsPerSecond, stream, mr);
+      return diffTimestamp(left, right, kMsPerSecond, stream, mr);
     } else if (unit_ == "millisecond") {
-      return diffTimestamp(left, right, kUsPerMs, stream, mr);
+      return diffTimestamp(left, right, 1, stream, mr);
     } else if (unit_ == "minute") {
-      return diffTimestamp(left, right, kUsPerMinute, stream, mr);
+      return diffTimestamp(left, right, kMsPerMinute, stream, mr);
     } else if (unit_ == "hour") {
-      return diffTimestamp(left, right, kUsPerHour, stream, mr);
+      return diffTimestamp(left, right, kMsPerHour, stream, mr);
     }
   }
   VELOX_USER_FAIL("Unsupported date_diff unit: {}", unit_);
@@ -231,78 +276,102 @@ ColumnOrView DateDiffFunction::diffBySubtraction(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
   if (isDate_) {
-    // DATE columns are TIMESTAMP_DAYS. cuDF can't cast timestamps to int
-    // directly - subtract to get DURATION_DAYS, then cast duration to INT.
-    auto duration = binaryOp(
-        right,
-        left,
+    // DATE columns are TIMESTAMP_DAYS, whose matching DURATION_DAYS is
+    // int32 - subtracting the day counts directly can overflow for dates
+    // near INT32_MIN/MAX days-since-epoch, which DATE (itself INT32
+    // days-since-epoch) can represent. Widen each operand to
+    // TIMESTAMP_SECONDS (int64) first - exact, since a whole day is always
+    // a whole number of seconds - so the subtraction itself can't overflow.
+    auto n = getSize(left, right);
+    std::unique_ptr<cudf::column> leftOwned, rightOwned;
+    auto leftCol = ensureColumn(left, n, leftOwned, stream, mr);
+    auto rightCol = ensureColumn(right, n, rightOwned, stream, mr);
+    auto secType = cudf::data_type(cudf::type_id::TIMESTAMP_SECONDS);
+    auto leftSec = cudf::cast(leftCol, secType, stream, mr);
+    auto rightSec = cudf::cast(rightCol, secType, stream, mr);
+    auto duration = cudf::binary_operation(
+        rightSec->view(),
+        leftSec->view(),
         cudf::binary_operator::SUB,
-        cudf::data_type(cudf::type_id::DURATION_DAYS),
+        cudf::data_type(cudf::type_id::DURATION_SECONDS),
         stream,
         mr);
-    auto diff = cudf::cast(
+    auto diffSeconds = cudf::cast(
         duration->view(), cudf::data_type(cudf::type_id::INT64), stream, mr);
-    if (divisor == 1) {
-      return diff;
-    }
-    auto div = cudf::numeric_scalar<int64_t>(divisor, true, stream, mr);
+    static constexpr int64_t kSecondsPerDay = 86400LL;
+    auto div = cudf::numeric_scalar<int64_t>(
+        divisor * kSecondsPerDay, true, stream, mr);
     // Use C-style truncating DIV (not FLOOR_DIV) to match Velox CPU's
     // sign-symmetric behavior: the unsigned magnitude is divided and the
     // sign is re-applied, which is equivalent to truncation toward zero
     // rather than flooring toward -infinity.
     return cudf::binary_operation(
-        diff->view(),
+        diffSeconds->view(),
         div,
         cudf::binary_operator::DIV,
         cudf::data_type(cudf::type_id::INT64),
         stream,
         mr);
   }
-  static constexpr int64_t kUsPerDay = 86400LL * 1000000LL;
-  return diffTimestamp(left, right, divisor * kUsPerDay, stream, mr);
+  static constexpr int64_t kMsPerDay = 86400LL * 1000LL;
+  return diffTimestamp(left, right, divisor * kMsPerDay, stream, mr);
 }
 
 ColumnOrView DateDiffFunction::diffTimestamp(
     const Operand& left,
     const Operand& right,
-    int64_t usPerUnit,
+    int64_t msPerUnit,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
-  // Determine the matching duration type for the timestamp resolution.
-  // Velox TIMESTAMP maps to TIMESTAMP_NANOSECONDS in cudf.
-  auto durationTypeId = cudf::type_id::DURATION_MICROSECONDS;
-  int64_t scaleFactor = usPerUnit;
-  if (left.col.has_value() &&
-      left.col->type().id() == cudf::type_id::TIMESTAMP_NANOSECONDS) {
-    durationTypeId = cudf::type_id::DURATION_NANOSECONDS;
-    scaleFactor = usPerUnit * 1000;
-  } else if (
-      right.col.has_value() &&
-      right.col->type().id() == cudf::type_id::TIMESTAMP_NANOSECONDS) {
-    durationTypeId = cudf::type_id::DURATION_NANOSECONDS;
-    scaleFactor = usPerUnit * 1000;
-  }
-  auto duration = binaryOp(
-      right,
-      left,
+  auto n = getSize(left, right);
+  std::unique_ptr<cudf::column> leftOwned, rightOwned;
+  auto leftCol = ensureColumn(left, n, leftOwned, stream, mr);
+  auto rightCol = ensureColumn(right, n, rightOwned, stream, mr);
+
+  // Floor each operand to millisecond precision - not just cast, since
+  // cudf::cast()'s rounding direction across timestamp resolutions is
+  // unspecified - before subtracting, matching Velox CPU's diffTimestamp()
+  // (DateTimeUtil.h), which converts both endpoints via Timestamp::
+  // toMillis() before taking the difference. Subtracting at full input
+  // resolution (e.g. nanoseconds) and dividing by msPerUnit afterward gives
+  // a different (wrong) answer whenever a millisecond boundary falls
+  // strictly between the operands' sub-millisecond components: e.g.
+  // Timestamp(0, 999'999) to Timestamp(0, 1'000'000) is a true 1ms diff,
+  // but subtracting first at nanosecond resolution and dividing by 1e6
+  // truncates 1ns/1e6 to 0. Flooring first also keeps the subtraction
+  // itself within a range that can't overflow INT64 - millisecond
+  // timestamps stay far inside INT64 for any representable Velox
+  // Timestamp, unlike subtracting at nanosecond resolution, which can
+  // overflow for endpoints many billions of seconds apart.
+  auto leftFloored = cudf::datetime::floor_datetimes(
+      leftCol, cudf::datetime::rounding_frequency::MILLISECOND, stream, mr);
+  auto rightFloored = cudf::datetime::floor_datetimes(
+      rightCol, cudf::datetime::rounding_frequency::MILLISECOND, stream, mr);
+  auto msType = cudf::data_type(cudf::type_id::TIMESTAMP_MILLISECONDS);
+  auto leftMs = cudf::cast(leftFloored->view(), msType, stream, mr);
+  auto rightMs = cudf::cast(rightFloored->view(), msType, stream, mr);
+
+  auto duration = cudf::binary_operation(
+      rightMs->view(),
+      leftMs->view(),
       cudf::binary_operator::SUB,
-      cudf::data_type(durationTypeId),
+      cudf::data_type(cudf::type_id::DURATION_MILLISECONDS),
       stream,
       mr);
-  auto diff = cudf::cast(
+  auto diffMs = cudf::cast(
       duration->view(), cudf::data_type(cudf::type_id::INT64), stream, mr);
-  if (scaleFactor > 1) {
-    auto div = cudf::numeric_scalar<int64_t>(scaleFactor, true, stream, mr);
-    // See diffBySubtraction() for why DIV (not FLOOR_DIV) is required.
-    return cudf::binary_operation(
-        diff->view(),
-        div,
-        cudf::binary_operator::DIV,
-        cudf::data_type(cudf::type_id::INT64),
-        stream,
-        mr);
+  if (msPerUnit == 1) {
+    return diffMs;
   }
-  return diff;
+  auto div = cudf::numeric_scalar<int64_t>(msPerUnit, true, stream, mr);
+  // See diffBySubtraction() for why DIV (not FLOOR_DIV) is required.
+  return cudf::binary_operation(
+      diffMs->view(),
+      div,
+      cudf::binary_operator::DIV,
+      cudf::data_type(cudf::type_id::INT64),
+      stream,
+      mr);
 }
 
 std::unique_ptr<cudf::column> DateDiffFunction::extractComponentAsInt64(
@@ -314,6 +383,114 @@ std::unique_ptr<cudf::column> DateDiffFunction::extractComponentAsInt64(
       cudf::datetime::extract_datetime_component(col, component, stream, mr);
   return cudf::cast(
       extracted->view(), cudf::data_type(cudf::type_id::INT64), stream, mr);
+}
+
+std::unique_ptr<cudf::column> DateDiffFunction::extractYearAsInt64(
+    cudf::column_view daysCol,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  VELOX_CHECK(
+      daysCol.type().id() == cudf::type_id::TIMESTAMP_DAYS,
+      "extractYearAsInt64 expects a TIMESTAMP_DAYS column, got type id {}",
+      static_cast<int>(daysCol.type().id()));
+  static_assert(
+      sizeof(cudf::timestamp_D) == sizeof(int32_t),
+      "timestamp_D must be int32-sized for zero-copy reinterpret");
+  cudf::column_view daysAsInt32(
+      cudf::data_type{cudf::type_id::INT32},
+      daysCol.size(),
+      daysCol.head(),
+      daysCol.null_mask(),
+      daysCol.null_count(),
+      daysCol.offset());
+
+  auto i64 = cudf::data_type(cudf::type_id::INT64);
+  auto boolType = cudf::data_type(cudf::type_id::BOOL8);
+  auto scalar = [&](int64_t v) {
+    return cudf::numeric_scalar<int64_t>(v, true, stream, mr);
+  };
+  auto sub = [&](cudf::column_view a, cudf::column_view b) {
+    return cudf::binary_operation(a, b, cudf::binary_operator::SUB, i64, stream, mr);
+  };
+  auto add = [&](cudf::column_view a, cudf::column_view b) {
+    return cudf::binary_operation(a, b, cudf::binary_operator::ADD, i64, stream, mr);
+  };
+  auto addS = [&](cudf::column_view a, int64_t b) {
+    return cudf::binary_operation(a, scalar(b), cudf::binary_operator::ADD, i64, stream, mr);
+  };
+  auto subS = [&](cudf::column_view a, int64_t b) {
+    return cudf::binary_operation(a, scalar(b), cudf::binary_operator::SUB, i64, stream, mr);
+  };
+  auto mulS = [&](cudf::column_view a, int64_t b) {
+    return cudf::binary_operation(a, scalar(b), cudf::binary_operator::MUL, i64, stream, mr);
+  };
+  auto divS = [&](cudf::column_view a, int64_t b) {
+    return cudf::binary_operation(a, scalar(b), cudf::binary_operator::DIV, i64, stream, mr);
+  };
+  auto ltS = [&](cudf::column_view a, int64_t b) {
+    return cudf::binary_operation(
+        a, scalar(b), cudf::binary_operator::LESS, boolType, stream, mr);
+  };
+  auto geS = [&](cudf::column_view a, int64_t b) {
+    return cudf::binary_operation(
+        a, scalar(b), cudf::binary_operator::GREATER_EQUAL, boolType, stream, mr);
+  };
+  auto leS = [&](cudf::column_view a, int64_t b) {
+    return cudf::binary_operation(
+        a, scalar(b), cudf::binary_operator::LESS_EQUAL, boolType, stream, mr);
+  };
+
+  // Howard Hinnant's civil_from_days, adapted to columnar INT64 arithmetic
+  // (http://howardhinnant.github.io/date_algorithms.html). Every
+  // intermediate below operates on INT64, unlike cuDF's
+  // extract_datetime_component() (always INT16), so this stays correct for
+  // any year a TIMESTAMP_DAYS/INT32 day count can represent.
+  auto z = cudf::cast(daysAsInt32, i64, stream, mr);
+  auto zShifted = addS(z->view(), 719468);
+
+  // era = (z >= 0 ? z : z - 146096) / 146097
+  auto zNonNegative = geS(zShifted->view(), 0);
+  auto zMinus146096 = subS(zShifted->view(), 146096);
+  auto eraNumerator = cudf::copy_if_else(
+      zShifted->view(), zMinus146096->view(), zNonNegative->view(), stream, mr);
+  auto era = divS(eraNumerator->view(), 146097);
+
+  // doe = zShifted - era * 146097, in [0, 146096].
+  auto doe = sub(zShifted->view(), mulS(era->view(), 146097)->view());
+
+  // yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365, in [0, 399].
+  auto yoeNum = sub(
+      add(doe->view(), divS(doe->view(), 36524)->view())->view(),
+      add(divS(doe->view(), 1460)->view(), divS(doe->view(), 146096)->view())
+          ->view());
+  auto yoe = divS(yoeNum->view(), 365);
+
+  // y = yoe + era * 400.
+  auto y = add(yoe->view(), mulS(era->view(), 400)->view());
+
+  // doy = doe - (365*yoe + yoe/4 - yoe/100), in [0, 365].
+  auto doy = sub(
+      doe->view(),
+      sub(add(mulS(yoe->view(), 365)->view(), divS(yoe->view(), 4)->view())
+              ->view(),
+          divS(yoe->view(), 100)->view())
+          ->view());
+
+  // mp = (5*doy + 2)/153, in [0, 11].
+  auto mp = divS(addS(mulS(doy->view(), 5)->view(), 2)->view(), 153);
+
+  // m = mp < 10 ? mp + 3 : mp - 9, in [1, 12].
+  auto m = cudf::copy_if_else(
+      addS(mp->view(), 3)->view(),
+      subS(mp->view(), 9)->view(),
+      ltS(mp->view(), 10)->view(),
+      stream,
+      mr);
+
+  // The algorithm's calendar year starts in March, so the true civil year
+  // is y + 1 for January/February (m <= 2) and y otherwise.
+  return cudf::copy_if_else(
+      addS(y->view(), 1)->view(), y->view(), leS(m->view(), 2)->view(), stream, mr);
 }
 
 std::unique_ptr<cudf::column> DateDiffFunction::timeOfDayMicros(
@@ -386,10 +563,30 @@ ColumnOrView DateDiffFunction::diffByComponent(
   auto sign = cudf::copy_if_else(
       *plusOneScalar_, *minusOneScalar_, leftLessEqual->view(), stream, mr);
 
-  auto y1 = extractComponentAsInt64(
-      loCol->view(), datetime_component::YEAR, stream, mr);
-  auto y2 = extractComponentAsInt64(
-      hiCol->view(), datetime_component::YEAR, stream, mr);
+  // YEAR is extracted via extractYearAsInt64() (not
+  // extractComponentAsInt64()) since cuDF's extract_datetime_component()
+  // always returns INT16, silently wrapping any year outside
+  // [-32768, 32767] - representable by DATE/TIMESTAMP's INT32
+  // days-since-epoch. Floor to DAY first for TIMESTAMP inputs (matching
+  // the calendar day extract_datetime_component() itself uses for
+  // MONTH/DAY below) since cudf::cast()'s rounding direction across
+  // timestamp resolutions is otherwise unspecified.
+  auto toDays = [&](cudf::column_view col) -> std::unique_ptr<cudf::column> {
+    if (col.type().id() == cudf::type_id::TIMESTAMP_DAYS) {
+      return std::make_unique<cudf::column>(col, stream, mr);
+    }
+    auto floored = cudf::datetime::floor_datetimes(
+        col, cudf::datetime::rounding_frequency::DAY, stream, mr);
+    return cudf::cast(
+        floored->view(),
+        cudf::data_type(cudf::type_id::TIMESTAMP_DAYS),
+        stream,
+        mr);
+  };
+  auto loDays = toDays(loCol->view());
+  auto hiDays = toDays(hiCol->view());
+  auto y1 = extractYearAsInt64(loDays->view(), stream, mr);
+  auto y2 = extractYearAsInt64(hiDays->view(), stream, mr);
   auto m1 = extractComponentAsInt64(
       loCol->view(), datetime_component::MONTH, stream, mr);
   auto m2 = extractComponentAsInt64(

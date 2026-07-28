@@ -18,7 +18,7 @@
 #include "velox/expression/ConstantExpr.h"
 
 #include <cudf/binaryop.hpp>
-#include <cudf/unary.hpp>
+#include <cudf/wrappers/timestamps.hpp>
 
 namespace facebook::velox::cudf_velox::prestosql {
 
@@ -45,23 +45,44 @@ ColumnOrView ToUnixtimeFunction::eval(
   VELOX_CHECK(!inputColumns.empty(), "to_unixtime expects a column input");
   auto inputCol = asView(inputColumns[0]);
 
-  // Cast to TIMESTAMP_MICROSECONDS if the input has a different resolution.
-  std::unique_ptr<cudf::column> castOwned;
-  if (inputCol.type().id() != cudf::type_id::TIMESTAMP_MICROSECONDS) {
-    castOwned = cudf::cast(
-        inputCol,
-        cudf::data_type(cudf::type_id::TIMESTAMP_MICROSECONDS),
-        stream,
-        mr);
-    inputCol = castOwned->view();
+  // Pick the divisor from the input's own resolution instead of casting to
+  // a fixed resolution (e.g. TIMESTAMP_MICROSECONDS) first: a cast ahead of
+  // the reinterpret below would silently drop any precision finer than
+  // that fixed resolution actually has - e.g. Timestamp(0, 999) (999ns) is
+  // 0 once cast to TIMESTAMP_MICROSECONDS, so to_unixtime would return 0
+  // instead of 0.000000999. The cuDF bridge can represent TIMESTAMP_
+  // NANOSECONDS (its default), so this precision is observable in
+  // practice, not just a theoretical concern.
+  double divisorValue;
+  switch (inputCol.type().id()) {
+    case cudf::type_id::TIMESTAMP_SECONDS:
+      divisorValue = 1.0;
+      break;
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+      divisorValue = 1000.0;
+      break;
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+      divisorValue = 1000000.0;
+      break;
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      divisorValue = 1000000000.0;
+      break;
+    default:
+      VELOX_USER_FAIL(
+          "to_unixtime: unsupported timestamp resolution on GPU (type id {})",
+          static_cast<int>(inputCol.type().id()));
   }
 
-  // TIMESTAMP_MICROSECONDS stores int64 microseconds since epoch.
-  // Reinterpret the underlying data as INT64 without copying.
+  // All four resolutions above store an int64 count since epoch. Reinterpret
+  // the underlying data as INT64 without copying.
   static_assert(
-      sizeof(cudf::timestamp_us) == sizeof(int64_t),
-      "timestamp_us must be int64-sized for zero-copy reinterpret");
-  cudf::column_view usView(
+      sizeof(cudf::timestamp_s) == sizeof(int64_t) &&
+          sizeof(cudf::timestamp_ms) == sizeof(int64_t) &&
+          sizeof(cudf::timestamp_us) == sizeof(int64_t) &&
+          sizeof(cudf::timestamp_ns) == sizeof(int64_t),
+      "every timestamp resolution handled above must be int64-sized for "
+      "zero-copy reinterpret");
+  cudf::column_view countView(
       cudf::data_type{cudf::type_id::INT64},
       inputCol.size(),
       inputCol.head(),
@@ -71,9 +92,9 @@ ColumnOrView ToUnixtimeFunction::eval(
 
   // Dividing INT64 by a FLOAT64 scalar with FLOAT64 output type produces
   // the correct floating-point result without truncation.
-  auto divisor = cudf::numeric_scalar<double>(1000000.0, true, stream, mr);
+  auto divisor = cudf::numeric_scalar<double>(divisorValue, true, stream, mr);
   return cudf::binary_operation(
-      usView,
+      countView,
       divisor,
       cudf::binary_operator::DIV,
       cudf::data_type(cudf::type_id::FLOAT64),

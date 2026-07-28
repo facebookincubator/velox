@@ -2540,6 +2540,77 @@ TEST_F(CudfSimpleFilterProjectTest, dateDiffSecondTimestamp) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
+// date_diff must floor each operand to millisecond precision before
+// subtracting, matching Velox CPU's Timestamp::toMillis()-based
+// diffTimestamp(). Subtracting at full (nanosecond) precision and dividing
+// afterward gives a different answer whenever a millisecond boundary falls
+// strictly between the operands' sub-millisecond components: here the true
+// diff is 1ms, but naive ns-subtraction (1ns) divided by 1e6 truncates to 0.
+TEST_F(
+    CudfSimpleFilterProjectTest,
+    dateDiffMillisecondRoundsOperandsBeforeSubtracting) {
+  auto input = makeRowVector({
+      makeFlatVector<Timestamp>({Timestamp(0, 999'999)}),
+      makeFlatVector<Timestamp>({Timestamp(0, 1'000'000)}),
+  });
+
+  assertExpressionMatchesCpu(
+      "date_diff('millisecond', c0, c1)", input, asRowType(input->type()));
+}
+
+// Two valid nanosecond timestamps can have a raw nanosecond difference that
+// overflows INT64 even though each endpoint is individually representable:
+// +/-9e9 seconds are +/-9e18 nanoseconds, but their difference is 1.8e19ns,
+// which overflows before any scaling. Flooring/casting each endpoint to
+// millisecond precision before subtracting (rather than subtracting at
+// nanosecond resolution) keeps the subtraction itself far inside INT64.
+TEST_F(
+    CudfSimpleFilterProjectTest,
+    dateDiffTimestampDoesNotOverflowBeforeScaling) {
+  auto input = makeRowVector({
+      makeFlatVector<Timestamp>({Timestamp(-9'000'000'000LL, 0)}),
+      makeFlatVector<Timestamp>({Timestamp(9'000'000'000LL, 0)}),
+  });
+
+  assertExpressionMatchesCpu(
+      "date_diff('second', c0, c1)", input, asRowType(input->type()));
+}
+
+// DURATION_DAYS (matching DATE's TIMESTAMP_DAYS) is INT32, so subtracting
+// day counts near INT32_MIN/MAX - both valid DATE values - can overflow
+// before widening to INT64. Separately, cuDF's extract_datetime_component()
+// always returns INT16 regardless of component, so a calendar year outside
+// [-32768, 32767] - again representable by DATE's INT32 days-since-epoch -
+// silently wraps before the existing code casts it to INT64.
+TEST_F(CudfSimpleFilterProjectTest, dateDiffDatePreservesVeloxRange) {
+  auto dayRangeInput = makeRowVector({
+      makeFlatVector<int32_t>({std::numeric_limits<int32_t>::min()}, DATE()),
+      makeFlatVector<int32_t>({std::numeric_limits<int32_t>::max()}, DATE()),
+  });
+
+  // Expected: 4'294'967'295 days.
+  assertExpressionMatchesCpu(
+      "date_diff('day', c0, c1)", dayRangeInput, asRowType(dayRangeInput->type()));
+
+  auto wideYearInput = makeRowVector({
+      makeFlatVector<int32_t>({0}, DATE()),
+      // DATE '40000-01-01'.
+      makeFlatVector<int32_t>({13'890'172}, DATE()),
+  });
+
+  // Expected: 40'000 - 1'970 = 38'030 years.
+  assertExpressionMatchesCpu(
+      "date_diff('year', c0, c1)", wideYearInput, asRowType(wideYearInput->type()));
+}
+
+TEST_F(CudfSimpleFilterProjectTest, toUnixtimePreservesNanoseconds) {
+  auto result = evaluateOnce<double, Timestamp>(
+      "to_unixtime(c0)", std::optional<Timestamp>(Timestamp(0, 999)));
+
+  ASSERT_TRUE(result.has_value());
+  EXPECT_DOUBLE_EQ(result.value(), 999.0 / 1'000'000'000.0);
+}
+
 TEST_F(CudfSimpleFilterProjectTest, toUnixtime) {
   auto result = evaluateOnce<double, Timestamp>(
       "to_unixtime(c0)", std::optional<Timestamp>(Timestamp(1738568700, 0)));

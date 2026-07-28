@@ -202,7 +202,9 @@ void registerPrestoFunctions(const std::string& prefix) {
            .constantArgumentType("varchar")
            .argumentType("timestamp")
            .argumentType("timestamp")
-           .build()});
+           .build()},
+      true,
+      prestosql::DateDiffFunction::canEvaluate);
 
   registerCudfFunction(
       prefix + "to_unixtime",

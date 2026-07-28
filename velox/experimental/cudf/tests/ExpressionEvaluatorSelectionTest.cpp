@@ -520,6 +520,26 @@ TEST_F(CudfExpressionSelectionTest, signatureTypeVariableSwitchIf) {
   ASSERT_TRUE(canBeEvaluatedByCudf(ok1, /*deep=*/true));
 }
 
+TEST_F(CudfExpressionSelectionTest, dateDiffRejectsUnsupportedConstantForms) {
+  // A null unit is admitted by DateDiffFunction's constructor as a hard
+  // VELOX_CHECK_NOT_NULL failure rather than falling back to CPU's
+  // default-null result - canEvaluate must reject it up front.
+  auto nullUnit = compileExecExpr(
+      "date_diff(cast(null as varchar), date, date)",
+      rowType_,
+      execCtx_.get());
+  EXPECT_FALSE(canBeEvaluatedByCudf(nullUnit, /*deep=*/true));
+
+  // eval() has no path for two constant date/timestamp operands - canEvaluate
+  // must reject that form too rather than reaching the "both operands are
+  // scalar" failure at runtime.
+  auto allConstant = compileExecExpr(
+      "date_diff('day', DATE '2020-01-01', DATE '2020-01-02')",
+      rowType_,
+      execCtx_.get());
+  EXPECT_FALSE(canBeEvaluatedByCudf(allConstant, /*deep=*/true));
+}
+
 TEST_F(CudfExpressionSelectionTest, DISABLED_castAndTryCast) {
   // TODO (dm): This is required for passing of castAndTryCast test but breaks
   // others. This is because ASTExpr agrees to support bad casts. remove after
