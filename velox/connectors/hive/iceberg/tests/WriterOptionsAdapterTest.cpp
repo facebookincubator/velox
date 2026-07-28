@@ -199,7 +199,7 @@ TEST(WriterOptionsAdapterTest, toManifestFormatStringThrowsForUnsupported) {
 // compatibility, and populated trees produce correct per-column attributes.
 // ---------------------------------------------------------------------------
 
-// Verifies an empty Iceberg field-id tree is a no-op: attributesByColumn
+// Verifies an empty Iceberg field-id tree is a no-op: schemaAttributes
 // stays empty after applyPostConfigs. This is the no-op upgrade path for
 // every existing NIMBLE writer call site -- the on-disk file is
 // byte-identical to pre-stack output.
@@ -212,12 +212,13 @@ TEST(WriterOptionsAdapterTest, nimbleApplyPostConfigsEmptyTreeIsNoOp) {
   options.schema = ROW({"a"}, {INTEGER()});
   adapter->applyPostConfigs(options);
 
-  EXPECT_TRUE(options.attributesByColumn.empty());
+  EXPECT_TRUE(options.schemaAttributes.empty());
 }
 
-// Verifies the NIMBLE adapter stamps `iceberg.id` onto top-level columns
-// in the dotted-path keyed map. The walk goes through the schema in
-// lockstep with the field-id tree, so each column gets the right id.
+// Verifies the NIMBLE adapter stamps `iceberg.id` onto top-level columns keyed
+// by pre-order node id. The walk goes through the schema in lockstep with the
+// field-id tree, so each column gets the right id (root row = 0; id = 1,
+// name = 2).
 TEST(WriterOptionsAdapterTest, nimbleApplyPostConfigsStampsTopLevelIcebergIds) {
   // Build a synthetic top-level wrapper with one child per column,
   // matching how IcebergDataSink constructs the tree.
@@ -236,9 +237,9 @@ TEST(WriterOptionsAdapterTest, nimbleApplyPostConfigsStampsTopLevelIcebergIds) {
 
   adapter->applyPostConfigs(options);
 
-  ASSERT_EQ(options.attributesByColumn.size(), 2u);
-  ASSERT_EQ(options.attributesByColumn.count("id"), 1u);
-  ASSERT_EQ(options.attributesByColumn.count("name"), 1u);
+  ASSERT_EQ(options.schemaAttributes.size(), 2u);
+  ASSERT_EQ(options.schemaAttributes.count(1), 1u);
+  ASSERT_EQ(options.schemaAttributes.count(2), 1u);
 
   const std::vector<std::pair<std::string, std::string>> kIdAttrs = {
       {"iceberg.id", "7"},
@@ -246,14 +247,12 @@ TEST(WriterOptionsAdapterTest, nimbleApplyPostConfigsStampsTopLevelIcebergIds) {
   const std::vector<std::pair<std::string, std::string>> kNameAttrs = {
       {"iceberg.id", "12"},
   };
-  EXPECT_EQ(options.attributesByColumn.at("id"), kIdAttrs);
-  EXPECT_EQ(options.attributesByColumn.at("name"), kNameAttrs);
+  EXPECT_EQ(options.schemaAttributes.at(1), kIdAttrs);
+  EXPECT_EQ(options.schemaAttributes.at(2), kNameAttrs);
 }
 
-// Verifies the NIMBLE adapter recurses into nested struct (RowType)
-// children, producing dotted-path keys like "user.name". Diff B's
-// writer-side resolveDottedPath supports this case directly. Array/Map
-// nested field-ids are deferred to a follow-up.
+// Verifies the NIMBLE adapter recurses into nested struct (RowType) children,
+// numbering them in pre-order (user = 1, name = 2, age = 3).
 TEST(WriterOptionsAdapterTest, nimbleApplyPostConfigsStampsNestedStructIds) {
   IcebergFieldId icebergFieldIds;
   // Top-level child 0 = column "user" (id 1) with two nested struct
@@ -277,7 +276,7 @@ TEST(WriterOptionsAdapterTest, nimbleApplyPostConfigsStampsNestedStructIds) {
   adapter->applyPostConfigs(options);
 
   // Parent struct + both leaves all annotated with their field-ids.
-  ASSERT_EQ(options.attributesByColumn.size(), 3u);
+  ASSERT_EQ(options.schemaAttributes.size(), 3u);
   const std::vector<std::pair<std::string, std::string>> kUserAttrs = {
       {"iceberg.id", "1"},
   };
@@ -287,9 +286,63 @@ TEST(WriterOptionsAdapterTest, nimbleApplyPostConfigsStampsNestedStructIds) {
   const std::vector<std::pair<std::string, std::string>> kAgeAttrs = {
       {"iceberg.id", "3"},
   };
-  EXPECT_EQ(options.attributesByColumn.at("user"), kUserAttrs);
-  EXPECT_EQ(options.attributesByColumn.at("user.name"), kNameAttrs);
-  EXPECT_EQ(options.attributesByColumn.at("user.age"), kAgeAttrs);
+  EXPECT_EQ(options.schemaAttributes.at(1), kUserAttrs);
+  EXPECT_EQ(options.schemaAttributes.at(2), kNameAttrs);
+  EXPECT_EQ(options.schemaAttributes.at(3), kAgeAttrs);
+}
+
+// Verifies the NIMBLE adapter recurses into ARRAY / MAP children, numbering
+// them in pre-order: tags = 1, element = 2, props = 3, key = 4, value = 5. The
+// field-id tree is walked in lockstep (array = 1 child, map = 2 children).
+TEST(WriterOptionsAdapterTest, nimbleApplyPostConfigsStampsCollectionIds) {
+  IcebergFieldId icebergFieldIds;
+  // Column 0 = "tags" list<int> (id 1) with element (id 2).
+  IcebergFieldId tagsField;
+  tagsField.fieldId = 1;
+  tagsField.children.emplace_back(
+      IcebergFieldId{/*fieldId*/ 2, /*children*/ {}});
+  icebergFieldIds.children.emplace_back(std::move(tagsField));
+  // Column 1 = "props" map<int,long> (id 3) with key (id 4) and value (id 5).
+  IcebergFieldId propsField;
+  propsField.fieldId = 3;
+  propsField.children.emplace_back(
+      IcebergFieldId{/*fieldId*/ 4, /*children*/ {}});
+  propsField.children.emplace_back(
+      IcebergFieldId{/*fieldId*/ 5, /*children*/ {}});
+  icebergFieldIds.children.emplace_back(std::move(propsField));
+
+  auto adapter = createWriterOptionsAdapter(
+      dwio::common::FileFormat::NIMBLE, std::move(icebergFieldIds));
+  ASSERT_NE(adapter, nullptr);
+
+  velox::nimble::NimbleWriterOptions options;
+  options.schema =
+      ROW({"tags", "props"}, {ARRAY(INTEGER()), MAP(INTEGER(), BIGINT())});
+
+  adapter->applyPostConfigs(options);
+
+  // Collection node + element / key / value all annotated.
+  ASSERT_EQ(options.schemaAttributes.size(), 5u);
+  const std::vector<std::pair<std::string, std::string>> kTagsAttrs = {
+      {"iceberg.id", "1"},
+  };
+  const std::vector<std::pair<std::string, std::string>> kElementAttrs = {
+      {"iceberg.id", "2"},
+  };
+  const std::vector<std::pair<std::string, std::string>> kPropsAttrs = {
+      {"iceberg.id", "3"},
+  };
+  const std::vector<std::pair<std::string, std::string>> kKeyAttrs = {
+      {"iceberg.id", "4"},
+  };
+  const std::vector<std::pair<std::string, std::string>> kValueAttrs = {
+      {"iceberg.id", "5"},
+  };
+  EXPECT_EQ(options.schemaAttributes.at(1), kTagsAttrs);
+  EXPECT_EQ(options.schemaAttributes.at(2), kElementAttrs);
+  EXPECT_EQ(options.schemaAttributes.at(3), kPropsAttrs);
+  EXPECT_EQ(options.schemaAttributes.at(4), kKeyAttrs);
+  EXPECT_EQ(options.schemaAttributes.at(5), kValueAttrs);
 }
 
 // Verifies the NIMBLE adapter stamps the Iceberg V3 type attributes carried
@@ -324,7 +377,7 @@ TEST(WriterOptionsAdapterTest, nimbleApplyPostConfigsStampsV3Attributes) {
       {"iceberg.binary-type", "UUID"},
       {"iceberg.length", "16"},
   };
-  EXPECT_EQ(options.attributesByColumn.at("u"), kExpected);
+  EXPECT_EQ(options.schemaAttributes.at(1), kExpected);
 }
 
 // Verifies V3 attributes are stamped only on the columns that supply them;
@@ -362,12 +415,12 @@ TEST(
   const std::vector<std::pair<std::string, std::string>> kPlainAttrs = {
       {"iceberg.id", "2"},
   };
-  EXPECT_EQ(options.attributesByColumn.at("a"), kRequiredAttrs);
-  EXPECT_EQ(options.attributesByColumn.at("b"), kPlainAttrs);
+  EXPECT_EQ(options.schemaAttributes.at(1), kRequiredAttrs);
+  EXPECT_EQ(options.schemaAttributes.at(2), kPlainAttrs);
 }
 
 // Verifies the V3 attribute tree is walked in lockstep with nested struct
-// children, so each leaf gets its own attributes at the right dotted path.
+// children, so each leaf gets its own attributes at the right node id.
 TEST(WriterOptionsAdapterTest, nimbleApplyPostConfigsStampsNestedStructV3) {
   IcebergFieldId icebergFieldIds;
   IcebergFieldId userField;
@@ -408,8 +461,8 @@ TEST(WriterOptionsAdapterTest, nimbleApplyPostConfigsStampsNestedStructV3) {
       {"iceberg.id", "3"},
       {"iceberg.timestamp-unit", "MICROS"},
   };
-  EXPECT_EQ(options.attributesByColumn.at("user.id"), kIdAttrs);
-  EXPECT_EQ(options.attributesByColumn.at("user.ts"), kTsAttrs);
+  EXPECT_EQ(options.schemaAttributes.at(2), kIdAttrs);
+  EXPECT_EQ(options.schemaAttributes.at(3), kTsAttrs);
 }
 
 // Defends against passing a non-NIMBLE WriterOptions to

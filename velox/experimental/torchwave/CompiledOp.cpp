@@ -28,6 +28,7 @@
 #include <folly/ScopeGuard.h>
 #include <gflags/gflags.h>
 #include <algorithm>
+#include <atomic>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -1064,9 +1065,9 @@ LaunchData::LaunchData(
 CompositeKernel::CompositeKernel(
     std::vector<std::unique_ptr<ProjectOperation>>&& ops,
     std::vector<std::unique_ptr<KernelOperation>>&& kernelOps,
-    const std::unordered_set<std::string>& includes)
+    const std::unordered_set<std::string>& includes,
+    int32_t kernelId)
     : ops_(std::move(ops)), kernelOpStorage_(std::move(kernelOps)) {
-  auto kernelId = CompileCtx::nextKernelId();
   auto kernelName = "torchwave" + std::to_string(kernelId);
   auto entryPoint = "torch::wave::" + kernelName;
 
@@ -1144,7 +1145,26 @@ CompositeKernel::CompositeKernel(
         }
       }
 
-      if (!paramOffs.empty()) {
+      // Gather-op tensors (index_select/repeat output and whole-tensor
+      // operands) need their own-dims index calculators, not the broadcast
+      // ones init<true>() would compute; both share Tensor::status, so keep
+      // these offsets out of the broadcast loop and force-init them separately.
+      const auto& ownDims = kop->ownDimsCalcOffsets();
+      std::vector<int32_t> normalParam, normalOutput, normalAlt, gatherParam;
+      std::unordered_set<int32_t> seenGather;
+      for (size_t i = 0; i < paramOffs.size(); ++i) {
+        if (ownDims.count(paramOffs[i])) {
+          if (seenGather.insert(paramOffs[i]).second) {
+            gatherParam.push_back(paramOffs[i]);
+          }
+        } else {
+          normalParam.push_back(paramOffs[i]);
+          normalOutput.push_back(outputOffs.at(i));
+          normalAlt.push_back(altOffs.at(i));
+        }
+      }
+
+      if (!normalParam.empty() || !gatherParam.empty()) {
         auto emitArray = [&](const char* name,
                              const std::vector<int32_t>& arr) {
           ss << "    static int32_t " << name << "[] = {";
@@ -1156,20 +1176,30 @@ CompositeKernel::CompositeKernel(
           }
           ss << "};\n";
         };
-        ss << "  {\n";
-        emitArray("paramOffsets", paramOffs);
-        emitArray("outputOffsets", outputOffs);
-        emitArray("altOffsets", altOffs);
-        ss << "    for (auto i = threadIdx.x; i < sizeof(paramOffsets) / sizeof(paramOffsets[0]); i += blockDim.x) {\n"
-           << "      if (altOffsets[i] != -1) {\n"
-           << "        copyTensorHead(param<Tensor>(blockInfo, paramOffsets[i]), param<Tensor>(blockInfo, altOffsets[i]));\n"
-           << "        param<Tensor>(blockInfo, altOffsets[i])->init<true>(param<Tensor>(blockInfo, outputOffsets[i]));\n"
-           << "      } else {\n"
-           << "        param<Tensor>(blockInfo, paramOffsets[i])->init<true>(outputOffsets[i] != paramOffsets[i] ? param<Tensor>(blockInfo, outputOffsets[i]) : nullptr);\n"
-           << "      }\n"
-           << "    }\n"
-           << "  }\n"
-           << "  __syncthreads();\n";
+        if (!normalParam.empty()) {
+          ss << "  {\n";
+          emitArray("paramOffsets", normalParam);
+          emitArray("outputOffsets", normalOutput);
+          emitArray("altOffsets", normalAlt);
+          ss << "    for (auto i = threadIdx.x; i < sizeof(paramOffsets) / sizeof(paramOffsets[0]); i += blockDim.x) {\n"
+             << "      if (altOffsets[i] != -1) {\n"
+             << "        copyTensorHead(param<Tensor>(blockInfo, paramOffsets[i]), param<Tensor>(blockInfo, altOffsets[i]));\n"
+             << "        param<Tensor>(blockInfo, altOffsets[i])->init<true>(param<Tensor>(blockInfo, outputOffsets[i]));\n"
+             << "      } else {\n"
+             << "        param<Tensor>(blockInfo, paramOffsets[i])->init<true>(outputOffsets[i] != paramOffsets[i] ? param<Tensor>(blockInfo, outputOffsets[i]) : nullptr);\n"
+             << "      }\n"
+             << "    }\n"
+             << "  }\n";
+        }
+        if (!gatherParam.empty()) {
+          ss << "  {\n";
+          emitArray("gatherOffsets", gatherParam);
+          ss << "    for (auto i = threadIdx.x; i < sizeof(gatherOffsets) / sizeof(gatherOffsets[0]); i += blockDim.x) {\n"
+             << "      param<Tensor>(blockInfo, gatherOffsets[i])->ensureIndexCalculator();\n"
+             << "    }\n"
+             << "  }\n";
+        }
+        ss << "  __syncthreads();\n";
       }
       ss << kop->code() << "      break;\n"
          << "    }\n";
@@ -1182,8 +1212,12 @@ CompositeKernel::CompositeKernel(
 
   auto code = ss.str();
 
-  // Save to /tmp for debugging.
-  auto filePath = "/tmp/kernel" + std::to_string(kernelId) + ".cu";
+  // Save to /tmp for debugging. Kernel ids are per-construction (not globally
+  // unique), so append a process-wide ordinal to keep filenames distinct when
+  // several graphs compile concurrently.
+  static std::atomic<int64_t> debugDumpOrdinal{0};
+  auto filePath = "/tmp/kernel" + std::to_string(kernelId) + "_" +
+      std::to_string(debugDumpOrdinal++) + ".cu";
   {
     std::ofstream out(filePath);
     out << code;
@@ -1601,8 +1635,10 @@ void fillLaunchParams(
           i,
           " isNone ",
           ivalue.isNone());
-      bool isShapeOnly = i < launch.actualOutputDescs.size() &&
-          launch.actualOutputDescs[i].shapeOnly;
+      bool isShapeOnly = false;
+      if (i < launch.actualOutputDescs.size()) {
+        isShapeOnly = launch.actualOutputDescs[i].shapeOnly;
+      }
       if (isShapeOnly) {
         fillShapeOnlyTensorParam(ivalue.toTensor(), dest);
         launch.shapeOnlyTensorIndices.insert(launch.tensorsInFrame.size());

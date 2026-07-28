@@ -1067,7 +1067,16 @@ Parquet Options (prefix ``hive.parquet.``)
      - Maximum target file size for Parquet writers. When a file exceeds this size during writing, the writer
        closes the current file and starts writing to a new file. Accepts human-readable values like
        "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
-       sorted writes. Session: ``parquet_writer_max_target_file_size``.
+       sorted writes.
+
+      Session: ``parquet_writer_max_target_file_size``.
+
+      Row-group sizing is independent of this setting and is not user-configurable: a row group is
+      flushed at a 128MB byte target or 1,048,576 rows, whichever comes first. The byte target is
+      soft - a row group may slightly exceed it, since the writer flushes only after buffered bytes
+      reach the target; the row count is a hard cap. When ``writer.max-target-file-size`` is set,
+      the writer may flush the current row group early so the accumulated file size is visible and
+      rotation can occur.
    * - ``writer.enable-dictionary``
      - bool
      - true
