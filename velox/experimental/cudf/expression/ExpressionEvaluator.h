@@ -206,13 +206,21 @@ std::shared_ptr<CudfExpression> createCudfExpression(
 bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr, bool deep = true);
 
 /// Plan-time GPU eligibility for a top-level operator expression, as invoked by
-/// the OperatorAdapters and the aggregation validators. Applies the
+/// the OperatorAdapters and the aggregation validators. Optimizes the
+/// expression (constant folding and rewrites) with `pool` so the check sees the
+/// same form the operator compiles at runtime; e.g. cast(<literal> as DECIMAL)
+/// folds to a plain decimal constant that the structural check accepts, rather
+/// than a live decimal-target cast that it would reject. Then applies the
 /// query-context-dependent timezone fallback (a timezone-sensitive date_trunc
-/// under adjust_timestamp_to_session_timezone must stay on CPU), then the
-/// structural canBeEvaluatedByCudf check. Does not optimize: the plan-time
-/// check has no operator pool, and the operators optimize with their own pool
-/// before compiling.
-bool canExprRunOnGpu(const core::TypedExprPtr& expr, core::QueryCtx* queryCtx);
+/// under adjust_timestamp_to_session_timezone must stay on CPU) and the
+/// structural canBeEvaluatedByCudf check on the optimized expression. When
+/// `queryCtx` or `pool` is null, skips optimization and checks `expr` directly.
+/// \param pool Leaf pool used for constant folding during optimization,
+///             typically the operator's own pool.
+bool canExprRunOnGpu(
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
 
 /// Return the best CudfExpressionEvaluatorEntry for the given expression,
 /// or nullptr if no evaluator can handle it.
