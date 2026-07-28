@@ -502,6 +502,7 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
   // since the build table is fixed for the lifetime of this probe operator).
   if (hasFilter_ && !rightPrecomputeInstructions_.empty() && !buildEmpty_) {
     auto precomputeStream = cudfGlobalStreamPool().get_stream();
+    waitForBuildReady(precomputeStream);
     auto buildColumnViews = tableViewToColumnViews(buildData_.value()->view());
     buildPrecomputed_ = precomputeSubexpressions(
         buildColumnViews,
@@ -770,6 +771,11 @@ RowVectorPtr CudfNestedLoopJoinProbe::emitBuildMismatchRows(
     finished_ = true;
     return nullptr;
   }
+  // doGetOutput() passes in a fresh stream from cudfGlobalStreamPool() for
+  // this call, so the build table must not be read on it until it's waited
+  // on the build-ready event - same reason joinWithBuildBatch() and the
+  // build-side precompute path both call this before touching buildData_.
+  waitForBuildReady(stream);
   auto& buildTable = buildData_.value();
   auto numOutputColumns = outputType_->size();
 
