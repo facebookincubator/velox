@@ -319,6 +319,27 @@ TEST_P(TableScanTest, basic) {
   ASSERT_TRUE(it != planStats.end());
 }
 
+TEST_P(TableScanTest, emptySplit) {
+  // A split that produces no rows must not end the scan. The remaining splits
+  // still have to be read.
+  auto type = ROW({"c0"}, {BIGINT()});
+  auto empty = makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{})});
+  auto makeBatch = [&](int64_t begin) {
+    return makeRowVector(
+        {makeFlatVector<int64_t>(1000, [&](auto row) { return begin + row; })});
+  };
+  // The stripe size of the mock table is the size of the first batch, so an
+  // empty first batch makes every batch a separate split.
+  vectors_ = {empty, makeBatch(0), empty, makeBatch(1000)};
+  auto splits = makeTable("test", vectors_);
+  ASSERT_EQ(4, splits.size());
+  createDuckDbTable({vectors_[1], vectors_[3]});
+
+  numDrivers_ = 1;
+  auto plan = tableScanNode(type);
+  assertQuery(plan, splits, "SELECT * FROM tmp");
+}
+
 TEST_P(TableScanTest, filter) {
   auto type =
       ROW({"c0", "c1", "c2", "c3"}, {BIGINT(), BIGINT(), BIGINT(), BIGINT()});
