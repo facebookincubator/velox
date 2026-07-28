@@ -116,6 +116,26 @@ class LambdaFlushPolicy : public DefaultFlushPolicy {
 };
 
 struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
+  /// Overlays session or connector Parquet config values on top of this options
+  /// object while preserving caller-provided non-config fields.
+  void merge(const dwio::common::FormatSpecificOptions& overrides) override {
+    const auto* parquetOverrides =
+        dynamic_cast<const ParquetWriterOptions*>(&overrides);
+    VELOX_CHECK_NOT_NULL(
+        parquetOverrides,
+        "Cannot merge Parquet writer options with a different "
+        "FormatSpecificOptions type.");
+
+    parquetWriteTimestampUnit = parquetOverrides->parquetWriteTimestampUnit;
+    enableDictionary = parquetOverrides->enableDictionary;
+    enableStoreDecimalAsInteger = parquetOverrides->enableStoreDecimalAsInteger;
+    dictionaryPageSizeLimit = parquetOverrides->dictionaryPageSizeLimit;
+    useParquetDataPageV2 = parquetOverrides->useParquetDataPageV2;
+    dataPageSize = parquetOverrides->dataPageSize;
+    batchSize = parquetOverrides->batchSize;
+    createdBy = parquetOverrides->createdBy;
+  }
+
   // Growth ratio passed to ArrowDataBufferSink. The default value is a
   // heuristic borrowed from
   // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
