@@ -60,7 +60,7 @@ set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
   1fc77d1ddf97ede67b783bbabacf69d658254be30b2859299f4255525443b1d3
 )
-set(VELOX_cudf_SOURCE_URL "https://github.com/mhaseeb123/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
+set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
 
 # Probe for a system UCX install. The variables are used only to gate ucxx
