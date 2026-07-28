@@ -159,6 +159,60 @@ void writeDecimal32ParquetFile(
           .build();
   cudf::io::write_parquet(options, stream);
 }
+
+void writeDecimal32AndInt64ParquetFile(
+    const std::string& filePath,
+    const RowTypePtr& rowType,
+    const std::vector<int32_t>& decimalValues,
+    int32_t decimalScale,
+    const std::vector<int64_t>& intValues,
+    rmm::cuda_stream_view stream) {
+  auto decimalCol = makeDecimal32Column(decimalValues, decimalScale, stream);
+  auto intCol = cudf::make_fixed_width_column(
+      cudf::data_type{cudf::type_id::INT64},
+      static_cast<cudf::size_type>(intValues.size()),
+      cudf::mask_state::UNALLOCATED,
+      stream);
+  copyHostToDeviceColumn(intCol->mutable_view(), intValues, stream);
+  std::vector<std::unique_ptr<cudf::column>> columns;
+  columns.push_back(std::move(decimalCol));
+  columns.push_back(std::move(intCol));
+  auto table = std::make_unique<cudf::table>(std::move(columns));
+
+  auto sinkInfo = cudf::io::sink_info(filePath);
+  auto tableInputMetadata = cudf::io::table_input_metadata(table->view());
+  for (int32_t i = 0; i < rowType->size(); ++i) {
+    tableInputMetadata.column_metadata[i].set_name(rowType->nameOf(i));
+  }
+  auto options =
+      cudf::io::parquet_writer_options::builder(sinkInfo, table->view())
+          .metadata(tableInputMetadata)
+          .build();
+  cudf::io::write_parquet(options, stream);
+}
+
+void writeSingleDecimal32ParquetFile(
+    const std::string& filePath,
+    const RowTypePtr& rowType,
+    const std::vector<int32_t>& decimalValues,
+    int32_t decimalScale,
+    rmm::cuda_stream_view stream) {
+  auto decimalCol = makeDecimal32Column(decimalValues, decimalScale, stream);
+  std::vector<std::unique_ptr<cudf::column>> columns;
+  columns.push_back(std::move(decimalCol));
+  auto table = std::make_unique<cudf::table>(std::move(columns));
+
+  auto sinkInfo = cudf::io::sink_info(filePath);
+  auto tableInputMetadata = cudf::io::table_input_metadata(table->view());
+  for (int32_t i = 0; i < rowType->size(); ++i) {
+    tableInputMetadata.column_metadata[i].set_name(rowType->nameOf(i));
+  }
+  auto options =
+      cudf::io::parquet_writer_options::builder(sinkInfo, table->view())
+          .metadata(tableInputMetadata)
+          .build();
+  cudf::io::write_parquet(options, stream);
+}
 } // namespace
 
 class TableScanTest : public virtual CudfHiveConnectorTestBase {
@@ -971,6 +1025,93 @@ TEST_F(TableScanTest, decimal32IfWithLiteral) {
       plan,
       {filePath},
       "SELECT IF(cond, CAST('5.00' AS DECIMAL(9, 2)), d) AS result FROM tmp");
+}
+
+// Native DECIMAL32 Parquet storage: subfield filter literals must match the
+// on-disk libcudf type from the Parquet footer (Commit 5), even though returned
+// scan columns are cast to DECIMAL64 by PR 17724.
+TEST_F(TableScanTest, decimal32SubfieldFilter) {
+  auto rowType = ROW({"c0", "c1"}, {DECIMAL(9, 2), BIGINT()});
+  auto filePath = TempFilePath::create();
+  auto stream = cudf::get_default_stream();
+  writeDecimal32AndInt64ParquetFile(
+      filePath->getPath(),
+      rowType,
+      {10000, -50000, -70000, -50000},
+      2,
+      {1, 2, 3, 4},
+      stream);
+
+  auto vectors = {makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int64_t>(
+              {10000, -50000, -70000, -50000}, DECIMAL(9, 2)),
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+      })};
+  createDuckDbTable(vectors);
+
+  common::SubfieldFilters subfieldFilters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "c0",
+              std::make_unique<common::BigintRange>(
+                  int64_t{-50000}, int64_t{-50000}, /*nullAllowed*/ false))
+          .build();
+
+  auto tableHandle = makeTableHandle(
+      "parquet_table", rowType, std::move(subfieldFilters), nullptr);
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .tableHandle(tableHandle)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  assertQuery(
+      plan,
+      {filePath},
+      "SELECT c0, c1 FROM tmp WHERE c0 = CAST('-500.00' AS DECIMAL(9, 2))");
+}
+
+// Remaining filters with decimal multiply must widen mismatched fixed-point
+// widths. Comparison uses DECIMAL(18, 4) to match the multiply result scale.
+TEST_F(TableScanTest, decimal32FilterWithMultiply) {
+  auto rowType = ROW({{"d", DECIMAL(9, 2)}});
+  auto filePath = TempFilePath::create();
+  auto stream = cudf::get_default_stream();
+  writeSingleDecimal32ParquetFile(
+      filePath->getPath(), rowType, {1000, 200, 5000}, 2, stream);
+
+  auto vectors = {makeRowVector(
+      {"d"},
+      {makeFlatVector<int64_t>({1000, 200, 5000}, DECIMAL(9, 2))})};
+  createDuckDbTable(vectors);
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .filter(
+                      "d * CAST(0.2 AS DECIMAL(9, 2)) > CAST(1.00 AS DECIMAL(18, 4))")
+                  .planNode();
+
+  assertQuery(
+      plan,
+      {filePath},
+      "SELECT d FROM tmp WHERE d * CAST(0.2 AS DECIMAL(9, 2)) > CAST(1.00 AS DECIMAL(18, 4))");
 }
 
 // Velox's parquet writer stores DECIMAL(7, 2) as INT32 when
