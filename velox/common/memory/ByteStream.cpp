@@ -17,6 +17,7 @@
 #include "velox/common/memory/ByteStream.h"
 
 #include <algorithm>
+#include <cstring>
 
 namespace facebook::velox {
 
@@ -138,8 +139,7 @@ void BufferInputStream::readBytes(uint8_t* bytes, int32_t size) {
   for (;;) {
     const int32_t availableBytes = current_->size - current_->position;
     const int32_t readBytes = std::min(availableBytes, size);
-    simd::memcpy(
-        bytes + offset, current_->buffer + current_->position, readBytes);
+    ::memcpy(bytes + offset, current_->buffer + current_->position, readBytes);
     offset += readBytes;
     size -= readBytes;
     current_->position += readBytes;
