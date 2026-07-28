@@ -1794,8 +1794,7 @@ int64_t TimeMicroPrecisionUtcType::valueToTime(
       components.second >= 0 && components.second < util::kSecsPerMinute,
       "Invalid second value: {}",
       components.second);
-  VELOX_DCHECK(
-      components.fractionalPrecision == TimePrecision::kMicroseconds);
+  VELOX_DCHECK(components.fractionalPrecision == TimePrecision::kMicroseconds);
   const int32_t micros = components.fractionalSecond;
   VELOX_USER_CHECK(
       micros >= 0 && micros < util::kMicrosPerSec,
