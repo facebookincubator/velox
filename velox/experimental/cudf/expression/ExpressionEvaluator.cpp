@@ -27,7 +27,6 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ExprConstants.h"
-#include "velox/expression/ExprOptimizer.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/type/DecimalUtil.h"
@@ -2747,12 +2746,15 @@ ColumnOrView FunctionExpression::eval(
     VELOX_CHECK(path.has_value() && !path->empty());
     auto columnView =
         inputColumnViews[inputRowSchema_->getChildIdx(path->front())];
-    // Walk nested struct fields using the extracted path.
+    // Walk nested struct fields using the extracted path. Use get_sliced_child
+    // rather than child() so a sliced struct column's offset is applied to the
+    // child; child() would return the unsliced child and misalign the rows.
     TypePtr current = inputRowSchema_->findChild(path->front());
     for (size_t i = 1; i < path->size(); ++i) {
       const auto& row = current->asRow();
       auto idx = row.getChildIdx(path->at(i));
-      columnView = columnView.child(idx);
+      columnView =
+          cudf::structs_column_view(columnView).get_sliced_child(idx, stream);
       current = row.childAt(idx);
     }
     return columnView;
@@ -2999,28 +3001,30 @@ bool containsTimezoneSensitiveDateTrunc(const core::TypedExprPtr& expr) {
   return false;
 }
 
-} // namespace
-
-bool canBeEvaluatedByCudf(
+// True if `expr` must fall back to CPU because it contains a timezone-sensitive
+// date_trunc while the session enables adjust_timestamp_to_session_timezone,
+// which cuDF cannot honor. False when `queryCtx` is null or the config is
+// disabled.
+bool requiresCpuForTimezone(
     const core::TypedExprPtr& expr,
-    core::QueryCtx* queryCtx,
-    bool deep) {
-  if (queryCtx == nullptr) {
-    return canBeEvaluatedByCudf(expr, deep);
+    core::QueryCtx* queryCtx) {
+  if (queryCtx == nullptr ||
+      !queryCtx->queryConfig().adjustTimestampToTimezone()) {
+    return false;
   }
-  // Optimize (constant fold and rewrite) so the support check sees the same
-  // form the cuDF operators compile. Folding evaluates constant subtrees and
-  // therefore needs a leaf pool; this transient one is scoped to the check.
-  auto pool = memory::memoryManager()->addLeafPool();
-  const auto optimized = expression::optimize(expr, queryCtx, pool.get());
-  if (queryCtx->queryConfig().adjustTimestampToTimezone() &&
-      containsTimezoneSensitiveDateTrunc(optimized)) {
+  if (containsTimezoneSensitiveDateTrunc(expr)) {
     LOG_FALLBACK(
         "date_trunc(timestamp) requires CPU evaluation when "
         "adjust_timestamp_to_session_timezone is enabled");
-    return false;
+    return true;
   }
-  return canBeEvaluatedByCudf(optimized, deep);
+  return false;
+}
+
+} // namespace
+
+bool canExprRunOnGpu(const core::TypedExprPtr& expr, core::QueryCtx* queryCtx) {
+  return !requiresCpuForTimezone(expr, queryCtx) && canBeEvaluatedByCudf(expr);
 }
 
 std::shared_ptr<CudfExpression> createCudfExpression(

@@ -784,7 +784,7 @@ bool canReduceBeEvaluatedByCudf(
     // Check input expressions can be evaluated by cuDF, expand the input first.
     for (const auto& input : aggregate.call->inputs()) {
       auto expandedInput = expandFieldReference(input, sourceNode);
-      if (!canBeEvaluatedByCudf(expandedInput)) {
+      if (!canExprRunOnGpu(expandedInput, queryCtx)) {
         return false;
       }
     }

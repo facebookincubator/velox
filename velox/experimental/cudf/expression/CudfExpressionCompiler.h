@@ -30,13 +30,4 @@ std::shared_ptr<CudfExpression> compile(
     const RowTypePtr& inputRowSchema,
     memory::MemoryPool* pool);
 
-/// Optimizes the expression (rewrites + constant folding through `queryCtx`)
-/// and compiles the result.  Use for top-level operator expressions that do not
-/// need the optimized tree separately.
-std::shared_ptr<CudfExpression> optimizeAndCompile(
-    const core::TypedExprPtr& expr,
-    const RowTypePtr& inputRowSchema,
-    core::QueryCtx* queryCtx,
-    memory::MemoryPool* pool);
-
 } // namespace facebook::velox::cudf_velox

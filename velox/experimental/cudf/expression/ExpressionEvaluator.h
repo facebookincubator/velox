@@ -193,18 +193,26 @@ std::shared_ptr<CudfExpression> createCudfExpression(
     const RowTypePtr& inputRowSchema,
     memory::MemoryPool* pool);
 
-/// Lightweight check if an expression tree is supported by any CUDF evaluator
-/// without initializing CudfExpression objects.
+/// Structural check that an expression tree is supported by some cuDF
+/// evaluator, without initializing CudfExpression objects. Depends only on the
+/// expression, not on any query context; use it for internal evaluator
+/// recursion and for AST-to-CudfFunction hand-off. This is not the
+/// operator-eligibility entry point: operators that gate replacement on the
+/// session config should call canExprRunOnGpu instead.
 /// \param expr Expression to check
 /// \param deep If true, recursively check all children in the expression tree;
 ///             if false, only check if the top-level operation is supported
 ///             (useful when delegating to subexpressions)
 bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr, bool deep = true);
 
-bool canBeEvaluatedByCudf(
-    const core::TypedExprPtr& expr,
-    core::QueryCtx* queryCtx,
-    bool deep = true);
+/// Plan-time GPU eligibility for a top-level operator expression, as invoked by
+/// the OperatorAdapters and the aggregation validators. Applies the
+/// query-context-dependent timezone fallback (a timezone-sensitive date_trunc
+/// under adjust_timestamp_to_session_timezone must stay on CPU), then the
+/// structural canBeEvaluatedByCudf check. Does not optimize: the plan-time
+/// check has no operator pool, and the operators optimize with their own pool
+/// before compiling.
+bool canExprRunOnGpu(const core::TypedExprPtr& expr, core::QueryCtx* queryCtx);
 
 /// Return the best CudfExpressionEvaluatorEntry for the given expression,
 /// or nullptr if no evaluator can handle it.

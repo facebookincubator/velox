@@ -129,7 +129,10 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // filter. Gates remaining-filter evaluation in next().
   core::TypedExprPtr optimizedRemainingFilter_;
 
-  std::shared_ptr<velox::cudf_velox::CudfExpression> cudfExpressionEvaluator_;
+  // Compiled cuDF evaluator for the remaining filter, applied post-read in
+  // next(). Null when there is no remaining filter.
+  std::shared_ptr<velox::cudf_velox::CudfExpression>
+      cudfRemainingFilterExpression_;
 
   std::atomic<uint64_t> totalRemainingFilterTime_{0};
 

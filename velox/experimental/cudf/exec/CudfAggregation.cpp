@@ -371,7 +371,7 @@ bool canGroupingKeysBeEvaluatedByCudf(
   // Check grouping key expressions (with expansion)
   for (const auto& groupingKey : groupingKeys) {
     auto expandedKey = expandFieldReference(groupingKey, sourceNode);
-    if (!canBeEvaluatedByCudf(expandedKey)) {
+    if (!canExprRunOnGpu(expandedKey, queryCtx)) {
       return false;
     }
   }

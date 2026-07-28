@@ -197,8 +197,7 @@ class FilterProjectAdapter : public OperatorAdapter {
 
     // Check filter separately
     if (filterNode) {
-      if (!canBeEvaluatedByCudf(
-              filterNode->filter(), ctx->task->queryCtx().get())) {
+      if (!canExprRunOnGpu(filterNode->filter(), ctx->task->queryCtx().get())) {
         LOG_FALLBACK(
             "FilterProject filter cannot be evaluated by cuDF, PlanNode id: {}",
             planNode->id());
@@ -209,7 +208,7 @@ class FilterProjectAdapter : public OperatorAdapter {
     // Check projects separately
     if (projectPlanNode) {
       for (const auto& projection : projectPlanNode->projections()) {
-        if (!canBeEvaluatedByCudf(projection, ctx->task->queryCtx().get())) {
+        if (!canExprRunOnGpu(projection, ctx->task->queryCtx().get())) {
           LOG_FALLBACK(
               "FilterProject projections cannot be evaluated by cuDF, PlanNode id: {}",
               planNode->id());
@@ -365,7 +364,7 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
     }
 
     if (joinPlanNode->filter()) {
-      if (!canBeEvaluatedByCudf(
+      if (!canExprRunOnGpu(
               joinPlanNode->filter(), ctx->task->queryCtx().get())) {
         LOG_FALLBACK(
             "HashJoin join filter cannot be evaluated by cuDF, PlanNode id: {}",
@@ -477,7 +476,7 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
 
     // Check if join condition can be evaluated on GPU
     if (joinPlanNode->joinCondition()) {
-      if (!canBeEvaluatedByCudf(
+      if (!canExprRunOnGpu(
               joinPlanNode->joinCondition(), ctx->task->queryCtx().get())) {
         LOG_FALLBACK(
             "NestedLoopJoin filter cannot be evaluated by cuDF, PlanNode id: {}",

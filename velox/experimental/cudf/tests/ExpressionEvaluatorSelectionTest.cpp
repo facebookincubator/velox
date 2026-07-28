@@ -630,27 +630,6 @@ TEST_F(CudfExpressionSelectionTest, compilerFunctionBoundaryInAst) {
   ASSERT_NE(result, nullptr);
 }
 
-TEST_F(CudfExpressionSelectionTest, optimizeAndCompile) {
-  // optimizeAndCompile folds constants and compiles in a single call. Covers a
-  // foldable expression and one that spans an evaluator boundary.
-  auto arrayType = ROW({
-      {"a", BIGINT()},
-      {"b", BIGINT()},
-      {"names", ARRAY(VARCHAR())},
-  });
-  auto foldable =
-      parseAndInferTypedExpr("a + (1 + 2)", arrayType, execCtx_.get());
-  ASSERT_NE(
-      optimizeAndCompile(foldable, arrayType, queryCtx_.get(), pool_.get()),
-      nullptr);
-
-  auto mixed = parseAndInferTypedExpr(
-      "a + b > cardinality(names)", arrayType, execCtx_.get());
-  ASSERT_NE(
-      optimizeAndCompile(mixed, arrayType, queryCtx_.get(), pool_.get()),
-      nullptr);
-}
-
 TEST_F(CudfExpressionSelectionTest, compilerOptimizesConstantExpr) {
   // expression::optimize folds constant subtrees; "a + (1 + 2)" optimizes to
   // "a + 3".

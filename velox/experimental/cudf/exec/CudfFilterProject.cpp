@@ -25,6 +25,7 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/core/Expressions.h"
+#include "velox/expression/ExprOptimizer.h"
 
 #include <cudf/aggregation.hpp>
 #include <cudf/reduction.hpp>
@@ -182,28 +183,28 @@ void CudfFilterProject::initialize() {
   }
   // Optimize (rewrites + constant folding) each expression before evaluator
   // selection so CudfFunctions never see scalar-only operand sets, then
-  // compile.
+  // compile. The operator pool owns the folded constants for the evaluator's
+  // lifetime.
   auto* const queryCtx = operatorCtx_->execCtx()->queryCtx();
   auto* const pool = operatorCtx_->pool();
+  const auto optimizeAndCompile = [inputType, queryCtx, pool](
+                                      const core::TypedExprPtr& expr) {
+    return compile(expression::optimize(expr, queryCtx, pool), inputType, pool);
+  };
   if (hasFilter_) {
     // First expr is Filter, rest are Project.
-    filterEvaluator_ =
-        optimizeAndCompile(allExprs.front(), inputType, queryCtx, pool);
+    filterEvaluator_ = optimizeAndCompile(allExprs.front());
     std::transform(
         allExprs.begin() + 1,
         allExprs.end(),
         std::back_inserter(projectEvaluators_),
-        [inputType, queryCtx, pool](const auto& expr) {
-          return optimizeAndCompile(expr, inputType, queryCtx, pool);
-        });
+        optimizeAndCompile);
   } else {
     std::transform(
         allExprs.begin(),
         allExprs.end(),
         std::back_inserter(projectEvaluators_),
-        [inputType, queryCtx, pool](const auto& expr) {
-          return optimizeAndCompile(expr, inputType, queryCtx, pool);
-        });
+        optimizeAndCompile);
   }
 
   filter_.reset();

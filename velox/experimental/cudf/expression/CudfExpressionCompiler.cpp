@@ -18,8 +18,6 @@
 #include "velox/experimental/cudf/expression/CudfExpressionCompiler.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 
-#include "velox/expression/ExprOptimizer.h"
-
 namespace facebook::velox::cudf_velox {
 
 std::shared_ptr<CudfExpression> compile(
@@ -30,15 +28,6 @@ std::shared_ptr<CudfExpression> compile(
   VELOX_CHECK_NOT_NULL(
       best, "No cuDF expression evaluator can handle: {}", expr->toString());
   return best->create(expr, inputRowSchema, pool);
-}
-
-std::shared_ptr<CudfExpression> optimizeAndCompile(
-    const core::TypedExprPtr& expr,
-    const RowTypePtr& inputRowSchema,
-    core::QueryCtx* queryCtx,
-    memory::MemoryPool* pool) {
-  return compile(
-      expression::optimize(expr, queryCtx, pool), inputRowSchema, pool);
 }
 
 } // namespace facebook::velox::cudf_velox

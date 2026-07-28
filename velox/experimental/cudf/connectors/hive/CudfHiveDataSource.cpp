@@ -137,7 +137,7 @@ CudfHiveDataSource::CudfHiveDataSource(
     // The filter is already optimized and constant folded above, so compile it
     // directly.
     auto const remainingFilterType = getTableRowType();
-    cudfExpressionEvaluator_ =
+    cudfRemainingFilterExpression_ =
         compile(optimizedRemainingFilter_, remainingFilterType, pool_);
   }
 
@@ -264,7 +264,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
       inputViews.push_back(col->view());
     }
     auto filterResult =
-        cudfExpressionEvaluator_->eval(inputViews, stream, get_temp_mr());
+        cudfRemainingFilterExpression_->eval(inputViews, stream, get_temp_mr());
     auto originalTable =
         std::make_unique<cudf::table>(std::move(cudfTableColumns));
     cudfTable = cudf::apply_boolean_mask(
