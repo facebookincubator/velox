@@ -173,6 +173,17 @@ Generic Configuration
        probe.  When set to 0, no Bloom filter will be generated.  To achieve
        optimal performance, this should not be too larger than the CPU cache
        size on the host.
+   * - bypass_hash_probe_bloom_filter_min_rows
+     - integer
+     - 0
+     - The number of probe rows used to decide whether to bypass the build-side
+       Bloom filter. When set to 0, local Bloom filter probing is disabled.
+   * - bypass_hash_probe_bloom_filter_min_pct
+     - integer
+     - 85
+     - Bypass the build-side Bloom filter if its acceptance percentage meets
+       or exceeds this value. When set to 0, the Bloom filter is bypassed
+       without sampling.
    * - debug.validate_output_from_operators
      - bool
      - false

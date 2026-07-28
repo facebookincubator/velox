@@ -890,6 +890,28 @@ class QueryConfig {
       0,
       "Maximum byte size of Bloom filter from hash probe. 0 disables.")
 
+  /// Number of probe rows used to decide whether to bypass the build-side
+  /// Bloom filter. 0 disables local Bloom filter probing.
+  VELOX_QUERY_CONFIG(
+      kBypassHashProbeBloomFilterMinRows,
+      bypassHashProbeBloomFilterMinRows,
+      "bypass_hash_probe_bloom_filter_min_rows",
+      int32_t,
+      0,
+      "Number of probe rows used to decide whether to bypass the build-side "
+      "Bloom filter. 0 disables local Bloom filter probing.")
+
+  /// Bypass the build-side Bloom filter if its acceptance percentage meets
+  /// or exceeds this value. 0 bypasses the Bloom filter without sampling.
+  VELOX_QUERY_CONFIG(
+      kBypassHashProbeBloomFilterMinPct,
+      bypassHashProbeBloomFilterMinPct,
+      "bypass_hash_probe_bloom_filter_min_pct",
+      int32_t,
+      85,
+      "Bypass the build-side Bloom filter if its acceptance percentage meets "
+      "or exceeds this value. 0 bypasses the Bloom filter without sampling.")
+
   /// The minimum number of table rows that can trigger the parallel hash join
   /// table build.
   VELOX_QUERY_CONFIG(
