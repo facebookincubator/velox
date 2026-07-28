@@ -1292,6 +1292,9 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
       if (format[0] == 't' && format[1] == 't') {
         assertTimeVectorContent(
             inputValues, output, arrowArray.null_count, format);
+      } else if (format[0] == 'd') {
+        assertShortDecimalVectorContent(
+            inputValues, output, arrowArray.null_count);
       } else {
         assertVectorContent(inputValues, output, arrowArray.null_count);
       }
@@ -1404,6 +1407,9 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
 
     testArrowImport<int64_t, int128_t>(
         "d:5,2", {1, -1, 0, 12345, -12345, std::nullopt});
+    testArrowImport<int64_t, int32_t>(
+        "d:9,2,32",
+        {1, -1, 0, 12345, -12345, 999999999, -999999999, std::nullopt});
     testArrowImport<int128_t, int128_t>(
         "d:36,2",
         {HugeInt::parse("20000000000000000"),
@@ -1631,10 +1637,11 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
   }
 
  private:
-  // Creates short decimals from int128 and asserts the content of actual vector
-  // with the expected values.
+  // Widens Arrow decimal values and asserts the content of the resulting Velox
+  // short-decimal vector.
+  template <typename T>
   void assertShortDecimalVectorContent(
-      const std::vector<std::optional<int128_t>>& expectedValues,
+      const std::vector<std::optional<T>>& expectedValues,
       const VectorPtr& actual,
       size_t nullCount) {
     std::vector<std::optional<int64_t>> decValues;

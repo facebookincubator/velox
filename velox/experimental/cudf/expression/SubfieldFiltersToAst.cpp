@@ -28,6 +28,19 @@
 
 namespace facebook::velox::cudf_velox {
 namespace {
+std::optional<cudf::type_id> subfieldDecimalType(const TypePtr& type) {
+  if (!type->isDecimal()) {
+    return std::nullopt;
+  }
+
+  const auto [precision, _] = getDecimalPrecisionScale(*type);
+  if (precision <= std::numeric_limits<int32_t>::digits10) {
+    return cudf::type_id::DECIMAL32;
+  }
+  return type->kind() == TypeKind::BIGINT ? cudf::type_id::DECIMAL64
+                                          : cudf::type_id::DECIMAL128;
+}
+
 std::pair<int128_t, int128_t> getInt128BoundsForType(const TypePtr& type) {
   if (type->isDecimal()) {
     const auto [precision, _] = getDecimalPrecisionScale(*type);
@@ -146,8 +159,11 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerRangeExpr(
 
     auto addLiteral = [&](ValueT value) -> const cudf::ast::expression& {
       variant veloxVariant = static_cast<NativeT>(value);
-      const auto& literal =
-          makeScalarAndLiteral<Kind>(columnTypePtr, veloxVariant, scalars);
+      const auto& literal = makeScalarAndLiteral<Kind>(
+          columnTypePtr,
+          veloxVariant,
+          scalars,
+          subfieldDecimalType(columnTypePtr));
       return tree.push(literal);
     };
 
@@ -230,8 +246,11 @@ const cudf::ast::expression& buildValuesListExpr(
   std::vector<const cudf::ast::expression*> exprVec;
   for (const auto& value : values) {
     variant veloxVariant = static_cast<ValueT>(value);
-    auto const& literal = tree.push(
-        makeScalarAndLiteral<Kind>(columnTypePtr, veloxVariant, scalars));
+    auto const& literal = tree.push(makeScalarAndLiteral<Kind>(
+        columnTypePtr,
+        veloxVariant,
+        scalars,
+        subfieldDecimalType(columnTypePtr)));
     auto const& equalExpr = tree.push(
         Operation{isNegated ? Op::NOT_EQUAL : Op::EQUAL, columnRef, literal});
     exprVec.push_back(&equalExpr);
@@ -308,8 +327,11 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
       }
 
       variant veloxVariant = static_cast<NativeT>(value);
-      const auto& literal =
-          makeScalarAndLiteral<Kind>(columnTypePtr, veloxVariant, scalars);
+      const auto& literal = makeScalarAndLiteral<Kind>(
+          columnTypePtr,
+          veloxVariant,
+          scalars,
+          subfieldDecimalType(columnTypePtr));
       auto const& cudfLiteral = tree.push(literal);
       auto const& equalExpr =
           tree.push(Operation{Op::EQUAL, columnRef, cudfLiteral});
