@@ -1199,6 +1199,14 @@ decompression and decode CPU time metrics for each column, reported as runtime m
 <code class="docutils literal notranslate"><span class="pre">column_&lt;nodeId&gt;.&lt;type&gt;.decompressCPUTimeNanos</span></code> and <code class="docutils literal notranslate"><span class="pre">column_&lt;nodeId&gt;.&lt;type&gt;.decodeCPUTimeNanos</span></code>.
 Useful for performance analysis and identifying slow columns. Session: <code class="docutils literal notranslate"><span class="pre">reader.collect_column_cpu_metrics</span></code>.</p></td>
 </tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">use-column-names</span></code></p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Map table fields to file fields using names instead of indices for all
+file formats. The connector property is scoped by connector ID, for
+example <code class="docutils literal notranslate"><span class="pre">hive.use-column-names</span></code> or <code class="docutils literal notranslate"><span class="pre">iceberg.use-column-names</span></code>.
+Session: <code class="docutils literal notranslate"><span class="pre">use_column_names</span></code>.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
@@ -1219,12 +1227,7 @@ Useful for performance analysis and identifying slow columns. Session: <code cla
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">use-column-names</span></code></p></td>
-<td><p>bool</p></td>
-<td><p>false</p></td>
-<td><p>Map ORC table field names to file field names using names, not indices. Configure as <code class="docutils literal notranslate"><span class="pre">orc.use-column-names</span></code>. Key <code class="docutils literal notranslate"><span class="pre">hive.orc.use-column-names</span></code> is also accepted. Session: <code class="docutils literal notranslate"><span class="pre">orc_use_column_names</span></code>.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">footer-speculative-io-size</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">footer-speculative-io-size</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>256KB</p></td>
 <td><p>Speculative tail-read size in bytes when opening ORC files. Controls how many bytes are read from the end
@@ -1232,34 +1235,34 @@ of the file to load the footer and nearby metadata in a single IO operation.
 Set to 0 for adaptive mode. Configure as <code class="docutils literal notranslate"><span class="pre">orc.footer-speculative-io-size</span></code>; do not prepend <code class="docutils literal notranslate"><span class="pre">hive.</span></code>.
 Session: <code class="docutils literal notranslate"><span class="pre">orc_footer_speculative_io_size</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.stripe-max-size</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.stripe-max-size</span></code></p></td>
 <td><p>string</p></td>
 <td><p>64M</p></td>
 <td><p>Maximum stripe size in orc writer. Session: <code class="docutils literal notranslate"><span class="pre">orc_optimized_writer_max_stripe_size</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.dictionary-max-memory</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.dictionary-max-memory</span></code></p></td>
 <td><p>string</p></td>
 <td><p>16M</p></td>
 <td><p>Maximum dictionary memory that can be used in orc writer. Session: <code class="docutils literal notranslate"><span class="pre">orc_optimized_writer_max_dictionary_memory</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.integer-dictionary-encoding-enabled</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.integer-dictionary-encoding-enabled</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Whether or not dictionary encoding of integer types should be used by the ORC writer.
 Session: <code class="docutils literal notranslate"><span class="pre">orc_optimized_writer_integer_dictionary_encoding_enabled</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.string-dictionary-encoding-enabled</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.string-dictionary-encoding-enabled</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Whether or not dictionary encoding of string types should be used by the ORC writer.
 Session: <code class="docutils literal notranslate"><span class="pre">orc_optimized_writer_string_dictionary_encoding_enabled</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.linear-stripe-size-heuristics</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.linear-stripe-size-heuristics</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Enables historical based stripe size estimation after compression. Session: <code class="docutils literal notranslate"><span class="pre">orc_writer_linear_stripe_size_heuristics</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.max-target-file-size</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.max-target-file-size</span></code></p></td>
 <td><p>capacity</p></td>
 <td><p>0B</p></td>
 <td><p>Maximum target file size for ORC writers. When a file exceeds this size during writing, the writer
@@ -1267,12 +1270,12 @@ closes the current file and starts writing to a new file. Accepts human-readable
 “1GB”. Zero means no limit (default). File rotation is not supported for bucketed tables or
 sorted writes. Session: <code class="docutils literal notranslate"><span class="pre">orc_writer_max_target_file_size</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.min-compression-size</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.min-compression-size</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>1024</p></td>
 <td><p>Minimal number of items in an encoded stream. Session: <code class="docutils literal notranslate"><span class="pre">orc_writer_min_compression_size</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.compression-level</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.compression-level</span></code></p></td>
 <td><p>tinyint</p></td>
 <td><p>3 for ZSTD and 4 for ZLIB</p></td>
 <td><p>The compression level to use with ZLIB and ZSTD. Session: <code class="docutils literal notranslate"><span class="pre">orc_optimized_writer_compression_level</span></code>.</p></td>
