@@ -55,13 +55,23 @@ class CudfNestedLoopJoinBridge : public exec::JoinBridge {
 
   std::optional<build_data_type> dataOrFuture(ContinueFuture* future);
 
-  void setBuildStream(rmm::cuda_stream_view buildStream);
+  // The build-ready event is created and recorded by the build side
+  // (CudfNestedLoopJoinBuild::doNoMoreInput()) immediately once the build
+  // table is materialized, on the same stream that did that work - not
+  // lazily by the probe side. Recording immediately (rather than whenever
+  // the first probe batch happens to call waitForBuildReady()) avoids a
+  // window where the build's stream could already have been recycled by
+  // cudfGlobalStreamPool() for unrelated work before anything captures its
+  // completion point. Every probe operator instance/batch just waits on
+  // this same already-recorded event - the same record-once/wait-many
+  // split used by CudfHashJoinBridge's buildReadyEvent_.
+  void setBuildReadyEvent(std::shared_ptr<CudaEvent> buildReadyEvent);
 
-  std::optional<rmm::cuda_stream_view> getBuildStream();
+  std::shared_ptr<CudaEvent> getBuildReadyEvent();
 
  private:
   std::optional<build_data_type> data_;
-  std::optional<rmm::cuda_stream_view> buildStream_;
+  std::shared_ptr<CudaEvent> buildReadyEvent_;
 };
 
 /// Accumulates build-side input for nested loop join.
@@ -200,8 +210,9 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   /// called by the last driver after merging flags from all peers.
   RowVectorPtr emitBuildMismatchRows(rmm::cuda_stream_view stream);
 
-  /// Ensures build-stream data is visible on the given probe stream.
-  void syncBuildStream(rmm::cuda_stream_view probeStream);
+  // Makes the given probe stream wait on the build-ready event before it
+  // reads build-side data. See buildReadyEvent_.
+  void waitForBuildReady(rmm::cuda_stream_view probeStream);
 
   bool isLeftOrFullJoin() const {
     return joinType_ == core::JoinType::kLeft ||
@@ -275,9 +286,11 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   // noMoreInput() to ensure GPU-side ordering before flag merge.
   std::optional<rmm::cuda_stream_view> lastProbeStream_;
 
-  // CUDA stream synchronization for build data visibility.
-  std::optional<rmm::cuda_stream_view> buildStream_;
-  std::unique_ptr<CudaEvent> cudaEvent_;
+  // Build-ready event, fetched once from the bridge in isBlocked() -
+  // already created and recorded by the build side, so waitForBuildReady()
+  // just needs to wait on it for every probe stream. See
+  // CudfNestedLoopJoinBridge::setBuildReadyEvent().
+  std::shared_ptr<CudaEvent> buildReadyEvent_;
 };
 
 /// Creates CUDF nested loop join operators and bridges.

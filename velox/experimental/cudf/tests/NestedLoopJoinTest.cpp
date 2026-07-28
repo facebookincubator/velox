@@ -1610,15 +1610,20 @@ TEST_F(CudfNestedLoopJoinTest, leftSemiProjectMultiDriver) {
       "WHERE t.c0 < u.c0) FROM t");
 }
 
-// Regression test for a race in CudfNestedLoopJoinProbe::syncBuildStream:
+// Regression test for a race in CudfNestedLoopJoinProbe::waitForBuildReady:
 // joinWithBuildBatch() grabs a fresh stream from cudfGlobalStreamPool() on
-// every call (once per probe batch), but syncBuildStream() used to only wait
-// on the *first* such stream before discarding the build-ready event,
-// leaving later batches free to read build-side data before it was actually
-// visible on their stream. Uses many probe batches against a build side
-// large enough to take measurable GPU time, repeated several times, to
-// exercise that ordering. Every probe value has exactly one match in the
-// build side, so any row lost to the race shows up as a row-count mismatch.
+// every call (once per probe batch), but this used to only wait on the
+// *first* such stream before discarding the build-ready event, leaving
+// later batches free to read build-side data before it was actually visible
+// on their stream. (The build-ready event is now created and recorded by
+// CudfNestedLoopJoinBuild itself, immediately when the build table is
+// materialized, rather than lazily by the probe - matching
+// CudfHashJoinProbe's waitForBuildReady()/buildReadyEvent_ pattern - so this
+// also guards against the event capturing a stale/recycled build stream.)
+// Uses many probe batches against a build side large enough to take
+// measurable GPU time, repeated several times, to exercise that ordering.
+// Every probe value has exactly one match in the build side, so any row
+// lost to the race shows up as a row-count mismatch.
 TEST_F(CudfNestedLoopJoinTest, buildStreamVisibleToAllProbeBatches) {
   constexpr int32_t kNumBuildRows = 50'000;
   constexpr int32_t kNumProbeBatches = 20;

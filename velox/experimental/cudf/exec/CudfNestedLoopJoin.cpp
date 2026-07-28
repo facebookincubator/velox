@@ -92,16 +92,15 @@ CudfNestedLoopJoinBridge::dataOrFuture(ContinueFuture* future) {
   return std::nullopt; // Probe will block on the future
 }
 
-void CudfNestedLoopJoinBridge::setBuildStream(
-    rmm::cuda_stream_view buildStream) {
+void CudfNestedLoopJoinBridge::setBuildReadyEvent(
+    std::shared_ptr<CudaEvent> buildReadyEvent) {
   std::lock_guard<std::mutex> l(mutex_);
-  buildStream_ = buildStream;
+  buildReadyEvent_ = std::move(buildReadyEvent);
 }
 
-std::optional<rmm::cuda_stream_view>
-CudfNestedLoopJoinBridge::getBuildStream() {
+std::shared_ptr<CudaEvent> CudfNestedLoopJoinBridge::getBuildReadyEvent() {
   std::lock_guard<std::mutex> l(mutex_);
-  return buildStream_;
+  return buildReadyEvent_;
 }
 
 // ============================================================================
@@ -197,14 +196,22 @@ void CudfNestedLoopJoinBuild::doNoMoreInput() {
       stream,
       get_output_mr());
 
+  // Record the build-ready event now, immediately after the build table
+  // is materialized on `stream` - not lazily on the probe side - so it
+  // captures this exact completion point before `stream` can be recycled
+  // by cudfGlobalStreamPool() for unrelated work. Every probe operator
+  // instance/batch just waits on this same event (see
+  // CudfNestedLoopJoinProbe::waitForBuildReady()); no further stream sync
+  // is required beyond that.
+  auto buildReadyEvent = std::make_shared<CudaEvent>(cudaEventDisableTiming);
+  buildReadyEvent->recordFrom(stream);
+
   // Transfer build data to bridge - this will unblock probe operators.
-  // No stream sync is required: the probe side uses syncBuildStream() via a
-  // CUDA event to ensure the build table is ready before reading it.
   auto joinBridge = operatorCtx_->task()->getCustomJoinBridge(
       operatorCtx_->driverCtx()->splitGroupId, planNodeId());
   auto bridge = std::dynamic_pointer_cast<CudfNestedLoopJoinBridge>(joinBridge);
 
-  bridge->setBuildStream(stream); // Pass stream for CUDA synchronization
+  bridge->setBuildReadyEvent(std::move(buildReadyEvent));
   bridge->setData(
       std::make_optional(
           std::shared_ptr<cudf::table>(std::move(table)))); // Wake probes
@@ -466,7 +473,7 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
     return exec::BlockingReason::kWaitForJoinBuild;
   }
 
-  buildStream_ = bridge->getBuildStream();
+  buildReadyEvent_ = bridge->getBuildReadyEvent();
 
   if (buildData_.value()->num_rows() == 0) {
     buildEmpty_ = true;
@@ -510,22 +517,18 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
   return exec::BlockingReason::kNotBlocked;
 }
 
-void CudfNestedLoopJoinProbe::syncBuildStream(
+void CudfNestedLoopJoinProbe::waitForBuildReady(
     rmm::cuda_stream_view probeStream) {
-  if (buildStream_.has_value()) {
+  if (buildReadyEvent_ != nullptr) {
     // joinWithBuildBatch() is called once per probe input batch, and each
-    // call gets a fresh stream from cudfGlobalStreamPool(). recordFrom()
-    // only needs to run once to mark "build data is ready" on buildStream_,
-    // but waitOn() must run for every probe stream that will read the build
-    // data, not just the first one - otherwise later batches can start
-    // reading before the build data is actually visible on their stream.
-    // See the record-once/wait-many pattern in Utilities.cpp's
-    // streamsWaitForStream.
-    if (!cudaEvent_) {
-      cudaEvent_ = std::make_unique<CudaEvent>();
-      cudaEvent_->recordFrom(buildStream_.value());
-    }
-    cudaEvent_->waitOn(probeStream);
+    // call gets a fresh stream from cudfGlobalStreamPool(). The event was
+    // already recorded once by the build side (see
+    // CudfNestedLoopJoinBuild::doNoMoreInput()); every probe stream that
+    // reads build-side data just needs to wait on it, not just the first
+    // one - otherwise later batches could start reading before the build
+    // data is actually visible on their stream. Matches
+    // CudfHashJoinProbe::waitForBuildReady().
+    buildReadyEvent_->waitOn(probeStream);
   }
 }
 
@@ -535,7 +538,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
     rmm::cuda_stream_view stream) {
   VELOX_NVTX_FUNC_RANGE();
 
-  syncBuildStream(stream);
+  waitForBuildReady(stream);
 
   auto numOutputColumns = outputType_->size();
 
