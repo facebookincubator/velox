@@ -27,6 +27,7 @@
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/Statistics.h"
+#include "velox/type/Filter.h"
 #include "velox/type/Type.h"
 
 #include <cudf/io/datasource.hpp>
@@ -38,6 +39,16 @@
 namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
+
+// Mutable state owned by CudfHiveDataSource; the split reader builds the AST
+// once per split after reading the Parquet schema.
+struct SubfieldFilterBuildState {
+  const common::SubfieldFilters* filters{nullptr};
+  cudf::ast::tree* tree{nullptr};
+  std::vector<std::unique_ptr<cudf::scalar>>* scalars{nullptr};
+  RowTypePtr rowType;
+  cudf::ast::expression const** expr{nullptr};
+};
 
 using CudfParquetReader = cudf::io::chunked_parquet_reader;
 using CudfParquetReaderPtr = std::unique_ptr<CudfParquetReader>;
@@ -61,7 +72,7 @@ class CudfSplitReader : public NvtxHelper {
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
       bool useExperimentalCudfReader,
-      cudf::ast::expression const* subfieldFilterExpr);
+      SubfieldFilterBuildState subfieldFilterBuildState = {});
 
   virtual ~CudfSplitReader() = default;
 
@@ -83,6 +94,9 @@ class CudfSplitReader : public NvtxHelper {
 
   // Return the subfield filter.
   virtual cudf::ast::expression const* subfieldFilter();
+
+  // Whether subfield filters were provided for this scan.
+  bool hasSubfieldFilters() const;
 
   // Determine the output memory resource for the cuDF reader.
   virtual rmm::device_async_resource_ref determineCudfMemoryResource();
@@ -127,6 +141,9 @@ class CudfSplitReader : public NvtxHelper {
   std::vector<cudf::io::parquet::FileMetaData> fileMetaData_;
 
  private:
+  // Build the subfield filter AST from the current split's Parquet schema.
+  void buildSubfieldFilterAst();
+
   // Setup the cuDF reader options
   void setupReaderOptions();
 
@@ -142,7 +159,7 @@ class CudfSplitReader : public NvtxHelper {
   bool useExperimentalCudfReader_;
 
   dwio::common::ReaderOptions baseReaderOpts_;
-  cudf::ast::expression const* subfieldFilterExpr_;
+  SubfieldFilterBuildState subfieldFilterBuildState_;
 
   struct TotalScanTimeCallbackData {
     uint64_t startTimeUs;

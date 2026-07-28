@@ -61,7 +61,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
       bool useExperimentalCudfReader,
-      cudf::ast::expression const* subfieldFilterExpr);
+      SubfieldFilterBuildState subfieldFilterBuildState);
 
   /// Override to setup delete file readers and column projection.
   /// @param runtimeStats Reference to the DataSource's runtime statistics,

@@ -93,7 +93,7 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     bool useExperimentalCudfReader,
-    cudf::ast::expression const* subfieldFilterExpr)
+    SubfieldFilterBuildState subfieldFilterBuildState)
     : CudfSplitReader(
           std::move(split),
           std::move(tableHandle),
@@ -106,7 +106,7 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
           ioStatistics,
           ioStats,
           useExperimentalCudfReader,
-          subfieldFilterExpr),
+          std::move(subfieldFilterBuildState)),
       icebergSplit_(std::move(icebergSplit)),
       hiveConfig_(hiveConfig) {}
 
@@ -144,7 +144,7 @@ void CudfIcebergSplitReader::prepareSplit(
 
   // Defer subfield filter when it cannot evaluate on the physical parquet
   // table, or when positional deletes are present.
-  deferSubfieldFilter_ = CudfSplitReader::subfieldFilter() != nullptr and
+  deferSubfieldFilter_ = hasSubfieldFilters() and
       (noColumnsToRead_ or injectedColumns_.size() or
        // TODO(mh): Drop positional/DV deferral when cudf PR #23077 merges.
        deletionVectorReader_ or positionalDeleteFileReaders_.size());

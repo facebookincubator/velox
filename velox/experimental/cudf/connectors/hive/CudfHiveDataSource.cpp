@@ -23,7 +23,6 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
-#include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/time/Timer.h"
@@ -119,13 +118,8 @@ CudfHiveDataSource::CudfHiveDataSource(
     // readColumnNames_
   }
 
-  // Build a combined AST for all subfield filters once. This is query-constant
-  // and doesn't depend on split-specific state.
-  if (!subfieldFilters_.empty()) {
-    auto const readerFilterType = getTableRowType();
-    subfieldFilterExpr_ = &createAstFromSubfieldFilters(
-        subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
-  }
+  // Subfield filter AST is built per split in CudfSplitReader after reading
+  // the Parquet schema so literal types match libcudf storage types.
 
   VELOX_CHECK_NOT_NULL(fileHandleFactory_, "No FileHandleFactory present");
 
@@ -152,7 +146,20 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       ioStatistics_,
       ioStats_,
       useExperimentalCudfReader_,
-      subfieldFilterExpr_);
+      makeSubfieldFilterBuildState());
+}
+
+SubfieldFilterBuildState CudfHiveDataSource::makeSubfieldFilterBuildState() {
+  if (subfieldFilters_.empty()) {
+    return {};
+  }
+  return SubfieldFilterBuildState{
+      .filters = &subfieldFilters_,
+      .tree = &subfieldTree_,
+      .scalars = &subfieldScalars_,
+      .rowType = getTableRowType(),
+      .expr = &subfieldFilterExpr_,
+  };
 }
 
 void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {

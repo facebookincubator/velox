@@ -19,10 +19,13 @@
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
+#include "velox/experimental/cudf/expression/ParquetSchemaUtils.h"
+
 #include <cudf/ast/expressions.hpp>
 #include <cudf/scalar/scalar.hpp>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace cudf {
@@ -39,7 +42,8 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Filter& filter,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema);
+    const RowTypePtr& inputRowSchema,
+    const ParquetColumnTypeMap* parquetColumnTypes = nullptr);
 
 // Build a single AST expression representing logical AND of all filters in
 // 'subfieldFilters'. The resulting expression reference is owned by the passed
@@ -48,6 +52,7 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
     const common::SubfieldFilters& subfieldFilters,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema);
+    const RowTypePtr& inputRowSchema,
+    const ParquetColumnTypeMap* parquetColumnTypes = nullptr);
 
 } // namespace facebook::velox::cudf_velox

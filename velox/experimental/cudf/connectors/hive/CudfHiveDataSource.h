@@ -111,6 +111,9 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Cached combined subfield filter expression owned by 'subfieldTree_'.
   cudf::ast::expression const* subfieldFilterExpr_{nullptr};
 
+  // Build state passed to CudfSplitReader for per-split AST construction.
+  SubfieldFilterBuildState makeSubfieldFilterBuildState();
+
  private:
   // Construct and cache a RowTypePtr for the table column names and types.
   const RowTypePtr getTableRowType();

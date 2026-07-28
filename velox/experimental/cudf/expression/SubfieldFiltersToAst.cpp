@@ -39,6 +39,20 @@ std::pair<int128_t, int128_t> getInt128BoundsForType(const TypePtr& type) {
       std::numeric_limits<int128_t>::max()};
 }
 
+template <TypeKind Kind>
+cudf::ast::literal makeSubfieldFilterLiteral(
+    const TypePtr& columnTypePtr,
+    const variant& veloxVariant,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    std::optional<cudf::data_type> parquetColumnType = std::nullopt) {
+  return makeScalarAndLiteral<Kind>(
+      columnTypePtr,
+      veloxVariant,
+      false,
+      scalars,
+      parquetColumnType);
+}
+
 template <
     typename RangeT,
     typename ScalarT,
@@ -116,7 +130,8 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerRangeExpr(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const cudf::ast::expression& columnRef,
-    const TypePtr& columnTypePtr) {
+    const TypePtr& columnTypePtr,
+    std::optional<cudf::data_type> parquetColumnType = std::nullopt) {
   using NativeT = typename TypeTraits<Kind>::NativeType;
 
   if constexpr (
@@ -146,8 +161,8 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerRangeExpr(
 
     auto addLiteral = [&](ValueT value) -> const cudf::ast::expression& {
       variant veloxVariant = static_cast<NativeT>(value);
-      const auto& literal =
-          makeScalarAndLiteral<Kind>(columnTypePtr, veloxVariant, scalars);
+      const auto& literal = makeSubfieldFilterLiteral<Kind>(
+          columnTypePtr, veloxVariant, scalars, parquetColumnType);
       return tree.push(literal);
     };
 
@@ -196,9 +211,10 @@ std::reference_wrapper<const cudf::ast::expression> buildBigintRangeExpr(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const cudf::ast::expression& columnRef,
-    const TypePtr& columnTypePtr) {
+    const TypePtr& columnTypePtr,
+    std::optional<cudf::data_type> parquetColumnType = std::nullopt) {
   return buildIntegerRangeExpr<Kind, common::BigintRange>(
-      filter, tree, scalars, columnRef, columnTypePtr);
+      filter, tree, scalars, columnRef, columnTypePtr, parquetColumnType);
 }
 
 std::reference_wrapper<const cudf::ast::expression> buildHugeintRangeExpr(
@@ -206,9 +222,10 @@ std::reference_wrapper<const cudf::ast::expression> buildHugeintRangeExpr(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const cudf::ast::expression& columnRef,
-    const TypePtr& columnTypePtr) {
+    const TypePtr& columnTypePtr,
+    std::optional<cudf::data_type> parquetColumnType = std::nullopt) {
   return buildIntegerRangeExpr<TypeKind::HUGEINT, common::HugeintRange>(
-      filter, tree, scalars, columnRef, columnTypePtr);
+      filter, tree, scalars, columnRef, columnTypePtr, parquetColumnType);
 }
 
 template <TypeKind Kind, typename FilterT, typename ValueT>
@@ -218,7 +235,8 @@ const cudf::ast::expression& buildValuesListExpr(
     const cudf::ast::expression& columnRef,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const TypePtr& columnTypePtr,
-    bool isNegated = false) {
+    bool isNegated = false,
+    std::optional<cudf::data_type> parquetColumnType = std::nullopt) {
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
 
@@ -230,8 +248,8 @@ const cudf::ast::expression& buildValuesListExpr(
   std::vector<const cudf::ast::expression*> exprVec;
   for (const auto& value : values) {
     variant veloxVariant = static_cast<ValueT>(value);
-    auto const& literal = tree.push(
-        makeScalarAndLiteral<Kind>(columnTypePtr, veloxVariant, scalars));
+    auto const& literal = tree.push(makeSubfieldFilterLiteral<Kind>(
+        columnTypePtr, veloxVariant, scalars, parquetColumnType));
     auto const& equalExpr = tree.push(
         Operation{isNegated ? Op::NOT_EQUAL : Op::EQUAL, columnRef, literal});
     exprVec.push_back(&equalExpr);
@@ -286,7 +304,8 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
     const cudf::ast::expression& columnRef,
     rmm::cuda_stream_view /*stream*/,
     rmm::device_async_resource_ref /*mr*/,
-    const TypePtr& columnTypePtr) {
+    const TypePtr& columnTypePtr,
+    std::optional<cudf::data_type> parquetColumnType = std::nullopt) {
   using NativeT = typename TypeTraits<Kind>::NativeType;
 
   if constexpr (std::is_integral_v<NativeT>) {
@@ -308,8 +327,8 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
       }
 
       variant veloxVariant = static_cast<NativeT>(value);
-      const auto& literal =
-          makeScalarAndLiteral<Kind>(columnTypePtr, veloxVariant, scalars);
+      const auto& literal = makeSubfieldFilterLiteral<Kind>(
+          columnTypePtr, veloxVariant, scalars, parquetColumnType);
       auto const& cudfLiteral = tree.push(literal);
       auto const& equalExpr =
           tree.push(Operation{Op::EQUAL, columnRef, cudfLiteral});
@@ -341,7 +360,8 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Filter& filter,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema) {
+    const RowTypePtr& inputRowSchema,
+    const ParquetColumnTypeMap* parquetColumnTypes) {
   // First, create column reference from subfield
   // For now, only support simple field references
   if (subfield.path().empty() ||
@@ -356,6 +376,12 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
 
   if (!inputRowSchema->containsChild(fieldName)) {
     VELOX_FAIL("Field '{}' not found in input schema", fieldName);
+  }
+
+  std::optional<cudf::data_type> parquetColumnType;
+  if (parquetColumnTypes != nullptr) {
+    parquetColumnType =
+        lookupParquetColumnType(*parquetColumnTypes, fieldName);
   }
 
   auto columnIndex = inputRowSchema->getChildIdx(fieldName);
@@ -377,14 +403,15 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
           tree,
           scalars,
           columnRef,
-          columnType);
+          columnType,
+          parquetColumnType);
       return result.get();
     }
 
     case common::FilterKind::kHugeintRange: {
       auto const& columnType = inputRowSchema->childAt(columnIndex);
-      auto const& expr =
-          buildHugeintRangeExpr(filter, tree, scalars, columnRef, columnType);
+      auto const& expr = buildHugeintRangeExpr(
+          filter, tree, scalars, columnRef, columnType, parquetColumnType);
       return expr.get();
     }
 
@@ -393,7 +420,14 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       return buildValuesListExpr<
           TypeKind::BIGINT,
           common::BigintValuesUsingHashTable,
-          int64_t>(filter, tree, columnRef, scalars, columnType);
+          int64_t>(
+          filter,
+          tree,
+          columnRef,
+          scalars,
+          columnType,
+          false,
+          parquetColumnType);
     }
 
     case common::FilterKind::kBigintValuesUsingBitmask: {
@@ -408,7 +442,8 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
           columnRef,
           stream,
           mr,
-          columnType);
+          columnType,
+          parquetColumnType);
       return result.get();
     }
 
@@ -417,7 +452,14 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       return buildValuesListExpr<
           TypeKind::HUGEINT,
           common::HugeintValuesUsingHashTable,
-          int128_t>(filter, tree, columnRef, scalars, columnType);
+          int128_t>(
+          filter,
+          tree,
+          columnRef,
+          scalars,
+          columnType,
+          false,
+          parquetColumnType);
     }
 
     case common::FilterKind::kBytesValues: {
@@ -495,7 +537,12 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       exprRefs.reserve(subFilters.size());
       for (const auto* subFilter : subFilters) {
         auto const& subExpr = createAstFromSubfieldFilter(
-            subfield, *subFilter, tree, scalars, inputRowSchema);
+            subfield,
+            *subFilter,
+            tree,
+            scalars,
+            inputRowSchema,
+            parquetColumnTypes);
         exprRefs.push_back(&subExpr);
       }
 
@@ -520,7 +567,8 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
     const common::SubfieldFilters& subfieldFilters,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema) {
+    const RowTypePtr& inputRowSchema,
+    const ParquetColumnTypeMap* parquetColumnTypes) {
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
 
@@ -532,7 +580,12 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
       continue;
     }
     auto const& expr = createAstFromSubfieldFilter(
-        subfield, *filterPtr, tree, scalars, inputRowSchema);
+        subfield,
+        *filterPtr,
+        tree,
+        scalars,
+        inputRowSchema,
+        parquetColumnTypes);
     exprRefs.push_back(&expr);
   }
 
