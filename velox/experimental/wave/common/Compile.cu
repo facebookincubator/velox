@@ -56,10 +56,12 @@ void nvrtcCheck(nvrtcResult result) {
 class CompiledModuleImpl : public CompiledModule {
  public:
   CompiledModuleImpl(
-      CUmodule module,
+      CUmodule cudaModule,
       std::vector<CUfunction> kernels,
       int64_t compileMs)
-      : module_(module), kernels_(std::move(kernels)), compileMs_(compileMs) {}
+      : module_(cudaModule),
+        kernels_(std::move(kernels)),
+        compileMs_(compileMs) {}
 
   ~CompiledModuleImpl() {
     auto result = cuModuleUnload(module_);
@@ -295,6 +297,7 @@ void ensureInit() {
     headers = program._impl->_config->sources;
     saveSystemHeaders(headers);
   }
+  headers.try_emplace("climits", "#include <cuda/std/climits>\n");
   initializeWaveHeaders(headers, "sample");
 
   for (auto& str : waveNvrtcFlags) {
@@ -467,9 +470,13 @@ std::shared_ptr<CompiledModule> CompiledModule::create(KernelSpec& spec) {
   uint32_t errorSize = sizeof(error);
   void* values[] = {info, &infoSize, error, &errorSize};
 
-  CUmodule module;
+  CUmodule cudaModule;
   auto loadResult = cuModuleLoadDataEx(
-      &module, code.data(), sizeof(values) / sizeof(void*), options, values);
+      &cudaModule,
+      code.data(),
+      sizeof(values) / sizeof(void*),
+      options,
+      values);
   if (loadResult != CUDA_SUCCESS) {
     LOG(ERROR) << "Load error " << errorSize << " " << infoSize;
     waveError(fmt::format("Error in load module: {} {}", info, error));
@@ -477,10 +484,10 @@ std::shared_ptr<CompiledModule> CompiledModule::create(KernelSpec& spec) {
   std::vector<CUfunction> funcs;
   for (auto& name : loweredNames) {
     funcs.emplace_back();
-    CU_CHECK(cuModuleGetFunction(&funcs.back(), module, name.c_str()));
+    CU_CHECK(cuModuleGetFunction(&funcs.back(), cudaModule, name.c_str()));
   }
   return std::make_shared<CompiledModuleImpl>(
-      module, std::move(funcs), elapsedMs);
+      cudaModule, std::move(funcs), elapsedMs);
 }
 
 // static
@@ -488,8 +495,8 @@ std::shared_ptr<CompiledModule> CompiledModule::fromCubin(
     const std::string& cubinPath,
     const KernelSpec& spec) {
   auto loadStart = std::chrono::steady_clock::now();
-  CUmodule module;
-  auto loadResult = cuModuleLoad(&module, cubinPath.c_str());
+  CUmodule cudaModule;
+  auto loadResult = cuModuleLoad(&cudaModule, cubinPath.c_str());
   if (loadResult != CUDA_SUCCESS) {
     const char* errStr;
     cuGetErrorString(loadResult, &errStr);
@@ -499,13 +506,13 @@ std::shared_ptr<CompiledModule> CompiledModule::fromCubin(
   std::vector<CUfunction> funcs;
   for (auto& name : spec.loweredNames) {
     funcs.emplace_back();
-    CU_CHECK(cuModuleGetFunction(&funcs.back(), module, name.c_str()));
+    CU_CHECK(cuModuleGetFunction(&funcs.back(), cudaModule, name.c_str()));
   }
   auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - loadStart)
                        .count();
   return std::make_shared<CompiledModuleImpl>(
-      module, std::move(funcs), elapsedMs);
+      cudaModule, std::move(funcs), elapsedMs);
 }
 
 void CompiledModuleImpl::launch(
