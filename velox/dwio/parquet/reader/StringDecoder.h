@@ -16,6 +16,12 @@
 
 #pragma once
 
+#include <cstdint>
+#include <string_view>
+
+#include "velox/common/base/Nulls.h"
+#include "velox/common/base/SimdUtil.h"
+
 namespace facebook::velox::parquet {
 
 class StringDecoder {
@@ -24,6 +30,13 @@ class StringDecoder {
       : bufferStart_(start),
         lastSafeWord_(end - simd::kPadding),
         fixedLength_(fixedLength) {}
+
+  /// Reset to decode from a new page buffer without reallocating.
+  void reset(const char* start, const char* end, int fixedLength = -1) {
+    bufferStart_ = start;
+    lastSafeWord_ = end - simd::kPadding;
+    fixedLength_ = fixedLength;
+  }
 
   void skip(uint64_t numValues) {
     skip<false>(numValues, 0, nullptr);
@@ -102,8 +115,8 @@ class StringDecoder {
   }
 
   const char* bufferStart_;
-  const char* const lastSafeWord_;
-  const int fixedLength_;
+  const char* lastSafeWord_;
+  int fixedLength_;
 };
 
 } // namespace facebook::velox::parquet

@@ -19,6 +19,7 @@
 #include <folly/container/F14Set.h>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -26,6 +27,7 @@
 
 #include <folly/Executor.h>
 #include "velox/common/EnumDeclare.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/compression/Compression.h"
@@ -77,10 +79,15 @@ VELOX_DECLARE_ENUM_NAME(FileFormat);
 
 FileFormat toFileFormat(std::string_view s);
 
-/// Returns a format-scoped config prefix using the file format's canonical
-/// string token. For example, PARQUET with "." returns "parquet.", while
-/// PARQUET with "_" returns "parquet_".
+/// Returns a format-scoped config prefix. DWRF and ORC share the ORC config
+/// namespace. For example, DWRF with "." returns "orc.", while PARQUET with
+/// "_" returns "parquet_".
 std::string formatConfigPrefix(FileFormat fmt, std::string_view separator);
+
+/// Returns a format-scoped session property key. DWRF and ORC share the ORC
+/// session property namespace. For example, DWRF with "writer.stripe-max-size"
+/// returns "orc_writer.stripe-max-size".
+std::string formatSessionProperty(FileFormat fmt, std::string_view key);
 
 /// Controls how a reader maps the requested table schema to physical file
 /// columns.
@@ -236,6 +243,19 @@ class FormatSpecificOptions {
   FormatSpecificOptions(FormatSpecificOptions&&) = default;
   FormatSpecificOptions& operator=(FormatSpecificOptions&&) = default;
   virtual ~FormatSpecificOptions() = default;
+
+  /// Merges format-scoped option overrides into this object.
+  ///
+  /// This is used when a caller supplies formatSpecificOptions and the
+  /// connector still needs to apply session or connector configs produced by
+  /// the format factory. Values in 'overrides' take precedence over matching
+  /// fields in this object. Implementations should overlay only the fields
+  /// owned by that format's config path, preserving other caller-provided
+  /// fields.
+  virtual void merge(const FormatSpecificOptions& overrides) {
+    VELOX_UNSUPPORTED(
+        "Merging format-specific options is not supported for these options.");
+  }
 };
 
 /// Options for creating a RowReader.

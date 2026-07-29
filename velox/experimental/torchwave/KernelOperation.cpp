@@ -620,7 +620,19 @@ std::vector<int32_t> KernelOperation::tensorParamOffsets() const {
 
 int32_t KernelOperation::paramOffset(ValueCP value) const {
   auto it = paramOffsets_.find(value);
-  TORCH_CHECK(it != paramOffsets_.end(), "Value not found in paramOffsets");
+  if (it == paramOffsets_.end()) {
+    const auto* producer = value->producer();
+    TORCH_CHECK(
+        false,
+        "Value not found in paramOffsets: value=",
+        value->name(),
+        " id=",
+        value->id(),
+        " kind=",
+        static_cast<int>(value->type().kind()),
+        " producer=",
+        producer ? std::string(producer->target()) : std::string("<none>"));
+  }
   return it->second;
 }
 

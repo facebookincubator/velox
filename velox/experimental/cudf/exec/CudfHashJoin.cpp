@@ -56,6 +56,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <optional>
 
 namespace facebook::velox::cudf_velox {
 
@@ -374,7 +375,8 @@ void CudfHashJoinBuild::doNoMoreInput() {
         (buildHashJoin) ? std::make_shared<cudf::hash_join>(
                               tbls[i]->view().select(buildKeyIndices),
                               cudf::null_equality::UNEQUAL,
-                              stream)
+                              stream,
+                              get_temp_mr())
                         : nullptr);
     if (buildHashJoin) {
       VELOX_CHECK_NOT_NULL(hashObjects.back());
@@ -739,10 +741,7 @@ void CudfHashJoinProbe::doNoMoreInput() {
   auto stream = cudfGlobalStreamPool().get_stream();
   // Using output_mr here to allow spilling queued up large tables
   auto tbl = getConcatenatedTable(
-      std::exchange(inputs_, {}),
-      joinNode_->sources()[1]->outputType(),
-      stream,
-      get_output_mr());
+      std::exchange(inputs_, {}), probeType_, stream, get_output_mr());
 
   VELOX_CHECK_NOT_NULL(tbl);
 
@@ -754,7 +753,7 @@ void CudfHashJoinProbe::doNoMoreInput() {
   // Store the concatenated table in input_
   input_ = std::make_shared<CudfVector>(
       operatorCtx_->pool(),
-      joinNode_->outputType(),
+      probeType_,
       tbl->num_rows(),
       std::move(tbl),
       stream);
@@ -878,6 +877,7 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::filteredOutputIndices(
           rightIndicesCol,
           tree_.back(),
           joinKind,
+          std::nullopt,
           stream,
           get_temp_mr());
 
@@ -1038,6 +1038,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::leftJoin(
                 rightIndicesCol,
                 tree_.back(),
                 cudf::join_kind::INNER_JOIN,
+                std::nullopt,
                 stream,
                 get_temp_mr());
 
@@ -1378,6 +1379,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
               rightIndicesCol,
               tree_.back(),
               cudf::join_kind::INNER_JOIN,
+              std::nullopt,
               stream,
               get_temp_mr());
 
@@ -1678,6 +1680,7 @@ CudfHashJoinProbe::leftSemiProjectJoin(
           rightIndicesSpan,
           tree_.back(),
           cudf::join_kind::INNER_JOIN,
+          std::nullopt,
           stream,
           get_temp_mr());
 
@@ -1775,6 +1778,7 @@ CudfHashJoinProbe::leftSemiProjectJoin(
               toSpan(syntheticRight->view()),
               tree_.back(),
               cudf::join_kind::INNER_JOIN,
+              std::nullopt,
               stream,
               get_temp_mr());
 
