@@ -246,7 +246,7 @@ std::pair<std::size_t, std::size_t> CudfIcebergSplitReader::rowRange(
       &startRow,
       rowIndex.begin<uint64_t>(),
       sizeof(uint64_t),
-      cudaMemcpyDeviceToHost,
+      cudaMemcpyDefault,
       stream_.value()));
 
   if (pushdownFilter() == nullptr) {
