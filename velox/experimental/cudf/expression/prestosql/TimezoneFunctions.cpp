@@ -1497,9 +1497,9 @@ class FromIso8601Function : public CudfFunction {
     // (".1" -> 100, ".12" -> 120, ".123456" -> 123). Missing -> 0.
     auto frac3 = cudf::strings::slice_strings(
         cudf::strings_column_view(g.column(6)),
-        cudf::numeric_scalar<cudf::size_type>(0, true, stream),
-        cudf::numeric_scalar<cudf::size_type>(3, true, stream),
-        cudf::numeric_scalar<cudf::size_type>(1, true, stream),
+        std::optional<cudf::size_type>{0},
+        std::optional<cudf::size_type>{3},
+        std::optional<cudf::size_type>{1},
         stream,
         mr);
     auto fracPadded = cudf::strings::pad(

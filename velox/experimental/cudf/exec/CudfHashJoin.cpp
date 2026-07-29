@@ -376,7 +376,8 @@ void CudfHashJoinBuild::doNoMoreInput() {
         (buildHashJoin) ? std::make_shared<cudf::hash_join>(
                               tbls[i]->view().select(buildKeyIndices),
                               cudf::null_equality::UNEQUAL,
-                              stream)
+                              stream,
+                              get_temp_mr())
                         : nullptr);
     if (buildHashJoin) {
       VELOX_CHECK_NOT_NULL(hashObjects.back());
@@ -886,6 +887,7 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::filteredOutputIndices(
           rightIndicesCol,
           tree_.back(),
           joinKind,
+          std::nullopt,
           stream,
           get_temp_mr());
 
@@ -1046,6 +1048,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::leftJoin(
                 rightIndicesCol,
                 tree_.back(),
                 cudf::join_kind::INNER_JOIN,
+                std::nullopt,
                 stream,
                 get_temp_mr());
 
@@ -1386,6 +1389,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
               rightIndicesCol,
               tree_.back(),
               cudf::join_kind::INNER_JOIN,
+              std::nullopt,
               stream,
               get_temp_mr());
 
@@ -1686,6 +1690,7 @@ CudfHashJoinProbe::leftSemiProjectJoin(
           rightIndicesSpan,
           tree_.back(),
           cudf::join_kind::INNER_JOIN,
+          std::nullopt,
           stream,
           get_temp_mr());
 
@@ -1783,6 +1788,7 @@ CudfHashJoinProbe::leftSemiProjectJoin(
               toSpan(syntheticRight->view()),
               tree_.back(),
               cudf::join_kind::INNER_JOIN,
+              std::nullopt,
               stream,
               get_temp_mr());
 
