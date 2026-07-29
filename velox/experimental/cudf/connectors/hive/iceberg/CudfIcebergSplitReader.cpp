@@ -259,7 +259,7 @@ std::pair<std::size_t, std::size_t> CudfIcebergSplitReader::rowRange(
       &endRow,
       rowIndex.end<uint64_t>() - 1,
       sizeof(uint64_t),
-      cudaMemcpyDeviceToHost,
+      cudaMemcpyDefault,
       stream_.value()));
   stream_.synchronize();
 
