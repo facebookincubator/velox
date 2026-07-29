@@ -200,6 +200,7 @@ DateAddFunction::DateAddFunction(
 
 ColumnOrView DateAddFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
+    [[maybe_unused]] cudf::size_type numRows,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
   // Walk the non-literal inputs in argument order. Constants were captured at

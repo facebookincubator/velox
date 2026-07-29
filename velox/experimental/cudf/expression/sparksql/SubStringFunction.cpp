@@ -93,6 +93,7 @@ class SubStringFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     VELOX_CHECK(
@@ -130,14 +131,18 @@ class SubStringFunction : public CudfFunction {
       // Spark's 1-based positive start has already been normalized to cuDF's
       // 0-based start, and Spark start zero maps to cuDF start zero.
       auto clampedLength = std::max<cudf::size_type>(0, length_);
-      const auto start = std::optional<cudf::size_type>{start_};
-      const auto end = hasLength_
-          ? std::optional<cudf::size_type>{saturatingAddNonNegative(
-                start_, clampedLength)}
-          : std::nullopt;
-      const auto step = std::optional<cudf::size_type>{1};
+      cudf::numeric_scalar<cudf::size_type> startScalar(
+          start_, true, stream, mr);
+      cudf::numeric_scalar<cudf::size_type> endScalar(
+          hasLength_
+              ? saturatingAddNonNegative(start_, clampedLength)
+              : 0,
+          hasLength_,
+          stream,
+          mr);
+      cudf::numeric_scalar<cudf::size_type> stepScalar(1, true, stream, mr);
       return cudf::strings::slice_strings(
-          inputColumn, start, end, step, stream, mr);
+          inputColumn, startScalar, endScalar, stepScalar, stream, mr);
     }
 
     cudf::column_view originalStartColumn;
