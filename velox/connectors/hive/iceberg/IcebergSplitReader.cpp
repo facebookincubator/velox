@@ -144,7 +144,7 @@ void IcebergSplitReader::configureBaseReaderOptions() {
     if (!fieldIds.empty()) {
       baseReaderOpts_.setColumnMappingMode(
           dwio::common::ColumnMappingMode::kParquetFieldId);
-      baseReaderOpts_.setParquetFieldIds(std::move(fieldIds));
+      baseReaderOpts_.setFieldIds(std::move(fieldIds));
     }
     return;
   }

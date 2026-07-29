@@ -164,7 +164,7 @@ TEST_F(ParquetReaderTest, parquetFieldIdColumnMapping) {
   auto readerOptions = makeDefaultReaderOptions();
   readerOptions.setFileSchema(outputType);
   readerOptions.setColumnMappingMode(ColumnMappingMode::kParquetFieldId);
-  readerOptions.setParquetFieldIds({
+  readerOptions.setFieldIds({
       ParquetFieldId{20, {}},
       ParquetFieldId{
           40,
@@ -218,7 +218,7 @@ TEST_F(ParquetReaderTest, parquetFieldIdColumnMapping) {
   projectedReaderOptions.setFileSchema(projectedOutputType);
   projectedReaderOptions.setColumnMappingMode(
       ColumnMappingMode::kParquetFieldId);
-  projectedReaderOptions.setParquetFieldIds({
+  projectedReaderOptions.setFieldIds({
       ParquetFieldId{40, {ParquetFieldId{41, {ParquetFieldId{43, {}}}}}},
       ParquetFieldId{
           50,

@@ -109,8 +109,8 @@ enum class ColumnMappingMode {
   /// reordered, deleted, or added back later with the same name but a different
   /// type.
   ///
-  /// The caller must provide ReaderOptions::parquetFieldIds() ordered to match
-  /// ReaderOptions::fileSchema() at every row-typed level. Each ParquetFieldId
+  /// The caller must provide ReaderOptions::fieldIds() ordered to match
+  /// ReaderOptions::fileSchema() at every row-typed level. Each field-id
   /// entry describes the table field ID for the corresponding requested column,
   /// and nested children describe field IDs below structs, arrays, and maps.
   ///
@@ -779,15 +779,6 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
-  /// Sets the requested schema field ids for
-  /// ColumnMappingMode::kParquetFieldId, one ParquetFieldId tree per top-level
-  /// column, aligned to fileSchema().
-  ReaderOptions& setParquetFieldIds(
-      std::vector<parquet::ParquetFieldId> fieldIds) {
-    parquetFieldIds_ = std::move(fieldIds);
-    return *this;
-  }
-
   ReaderOptions& setSessionTimezone(const tz::TimeZone* sessionTimezone) {
     sessionTimezone_ = sessionTimezone;
     return *this;
@@ -873,11 +864,6 @@ class ReaderOptions : public io::ReaderOptions {
 
   ColumnMappingMode columnMappingMode() const {
     return columnMappingMode_;
-  }
-
-  /// Returns ordered Parquet field IDs matching fileSchema() child order.
-  const std::vector<parquet::ParquetFieldId>& parquetFieldIds() const {
-    return parquetFieldIds_;
   }
 
   const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
@@ -1062,8 +1048,6 @@ class ReaderOptions : public io::ReaderOptions {
   bool fileColumnNamesReadAsLowerCase_{false};
   // Controls how physical file columns are matched to requested schema columns.
   ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
-  // Ordered field IDs, already aligned with fileSchema() child order.
-  std::vector<parquet::ParquetFieldId> parquetFieldIds_;
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const tz::TimeZone* sessionTimezone_{nullptr};

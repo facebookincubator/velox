@@ -503,7 +503,7 @@ void ReaderBase::initializeSchema() {
   uint32_t columnIdx = 0;
   uint32_t maxSchemaElementIdx = fileMetaData_->schema()->size() - 1;
   std::vector<std::string> columnNames;
-  const auto& fieldIds = options_.parquetFieldIds();
+  const auto& fieldIds = options_.fieldIds();
   ParquetFieldId rootFieldIds{-1, fieldIds};
   // Setting the parent schema index of the root("hive_schema") to be 0, which
   // is the root itself. This is ok because it's never required to check the
