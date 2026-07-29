@@ -134,6 +134,11 @@ WaveGraph*& waveGraph() {
   return threadWaveGraph;
 }
 
+WaveConfig*& waveConfigOverride() {
+  static thread_local WaveConfig* threadConfigOverride{nullptr};
+  return threadConfigOverride;
+}
+
 const Metadata* nodeMeta(NodeCP node) {
   auto* graph = waveGraph();
   TORCH_CHECK(graph, "No WaveGraph on this thread");
@@ -172,10 +177,15 @@ std::unique_ptr<WaveGraph> WaveGraph::optimizeOnly(
 }
 
 WaveGraph::WaveGraph(ModelContext* modelContext)
-    : graph_(modelContext->graph.get()), modelContext_(modelContext) {
+    : graph_(modelContext->graph.get()),
+      modelContext_(modelContext),
+      configOverride_(std::move(modelContext->configOverride)) {
   waveGraph() = this;
+  auto* prevConfigOverride = waveConfigOverride();
+  waveConfigOverride() = configOverride_.get();
   SCOPE_EXIT {
     waveGraph() = nullptr;
+    waveConfigOverride() = prevConfigOverride;
   };
 
   initValueTypes(*graph_, types_, metaStorage_);

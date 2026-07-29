@@ -24,6 +24,7 @@
 
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFile.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/MemoryArbitrator.h"
@@ -31,7 +32,9 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
@@ -199,6 +202,44 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
       ++iteration;
     }
     ASSERT_EQ(n, task->numFinishedDrivers());
+  }
+
+  void assertDecimalScanRoundTrip(
+      const RowVectorPtr& vector,
+      const RowTypePtr& rowType) {
+    auto filePath = TempFilePath::create();
+    auto fs = filesystems::getFileSystem(filePath->getPath(), {});
+    auto writeFile = fs->openFileForWrite(
+        filePath->getPath(),
+        {.shouldCreateParentDirectories = true,
+         .shouldThrowOnFileAlreadyExists = false});
+    auto sink = std::make_unique<dwio::common::WriteFileSink>(
+        std::move(writeFile), filePath->getPath());
+    auto writerPool =
+        rootPool_->addAggregateChild("TableScanTest.ParquetWriter");
+    dwio::common::WriterOptions options;
+    options.memoryPool = writerPool.get();
+    auto parquetOptions = std::make_shared<parquet::ParquetWriterOptions>();
+    parquetOptions->enableStoreDecimalAsInteger = true;
+    options.formatSpecificOptions = std::move(parquetOptions);
+    parquet::Writer writer(std::move(sink), options, writerPool, rowType);
+    writer.write(vector);
+    writer.close();
+    createDuckDbTable({vector});
+
+    auto assignments =
+        facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+            rowType);
+    auto plan = PlanBuilder(pool_.get())
+                    .startTableScan()
+                    .connectorId(kCudfHiveConnectorId)
+                    .outputType(rowType)
+                    .dataColumns(rowType)
+                    .assignments(assignments)
+                    .endTableScan()
+                    .planNode();
+
+    assertQuery(plan, {filePath}, "SELECT * FROM tmp");
   }
 
   RowTypePtr rowType_{
@@ -817,4 +858,73 @@ TEST_F(TableScanTest, decimalRemainingFilter) {
       plan,
       {filePath},
       "SELECT c0, c1 FROM tmp WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))");
+}
+
+// Velox's parquet writer stores DECIMAL(7, 2) as INT32 when
+// enableStoreDecimalAsInteger is true, and cuDF's reader maps INT32 decimals
+// to DECIMAL32. Velox short decimals are always DECIMAL64, so the scan output
+// must be cast from DECIMAL32 to DECIMAL64.
+TEST_F(TableScanTest, lowPrecisionDecimalScan) {
+  auto rowType = ROW({"d"}, {DECIMAL(7, 2)});
+  auto vector = makeRowVector(
+      {"d"},
+      {makeNullableFlatVector<int64_t>(
+          {12345, std::nullopt, -2500, 300}, DECIMAL(7, 2))});
+  assertDecimalScanRoundTrip(vector, rowType);
+}
+
+TEST_F(TableScanTest, lowPrecisionDecimalScanNoCast) {
+  auto rowType = ROW({"d"}, {DECIMAL(12, 4)});
+  auto vector = makeRowVector(
+      {"d"},
+      {makeNullableFlatVector<int64_t>(
+          {123456789, std::nullopt, -999999}, DECIMAL(12, 4))});
+  assertDecimalScanRoundTrip(vector, rowType);
+}
+
+TEST_F(TableScanTest, nestedDecimalScan) {
+  auto rowType = ROW({"s"}, {ROW({"x", "d"}, {INTEGER(), DECIMAL(7, 2)})});
+  auto vector = makeRowVector(
+      {"s"},
+      {makeRowVector(
+          {"x", "d"},
+          {makeNullableFlatVector<int32_t>({1, 2, std::nullopt}),
+           makeNullableFlatVector<int64_t>(
+               {100, std::nullopt, -200}, DECIMAL(7, 2))})});
+  assertDecimalScanRoundTrip(vector, rowType);
+}
+
+TEST_F(TableScanTest, arrayDecimalScan) {
+  auto rowType = ROW({"a"}, {ARRAY(DECIMAL(7, 2))});
+  auto elements = makeNullableFlatVector<int64_t>(
+      {100, 200, std::nullopt, 300}, DECIMAL(7, 2));
+  auto vector = makeRowVector({"a"}, {makeArrayVector({0, 2}, elements)});
+  assertDecimalScanRoundTrip(vector, rowType);
+}
+
+// Exercises the recursive cast through struct -> struct -> list nesting so a
+// decimal buried several levels deep is normalized. Schema:
+// struct<int, decimal, struct<int, list<decimal>>>.
+TEST_F(TableScanTest, multiLevelNestedDecimalScan) {
+  auto rowType =
+      ROW({"s"},
+          {ROW(
+              {"x", "d", "nested"},
+              {INTEGER(),
+               DECIMAL(7, 2),
+               ROW({"y", "a"}, {INTEGER(), ARRAY(DECIMAL(7, 2))})})});
+  auto listElements = makeNullableFlatVector<int64_t>(
+      {100, 200, std::nullopt, 300, 400}, DECIMAL(7, 2));
+  auto vector = makeRowVector(
+      {"s"},
+      {makeRowVector(
+          {"x", "d", "nested"},
+          {makeNullableFlatVector<int32_t>({1, 2, std::nullopt}),
+           makeNullableFlatVector<int64_t>(
+               {100, std::nullopt, -200}, DECIMAL(7, 2)),
+           makeRowVector(
+               {"y", "a"},
+               {makeNullableFlatVector<int32_t>({10, std::nullopt, 30}),
+                makeArrayVector({0, 2, 4}, listElements)})})});
+  assertDecimalScanRoundTrip(vector, rowType);
 }

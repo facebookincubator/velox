@@ -222,7 +222,10 @@ void CastExpr::applyCastKernel(
         }
       }
       if constexpr (ToKind == TypeKind::TIMESTAMP) {
-        const auto castResult = hooks_->castStringToTimestamp(inputRowValue);
+        const bool adjustTimezone =
+            !result->type()->equivalent(*TIMESTAMP_UTC());
+        const auto castResult =
+            hooks_->castStringToTimestamp(inputRowValue, adjustTimezone);
         setResultOrStatus(castResult, row);
         return;
       }
@@ -717,7 +720,7 @@ void CastExpr::applyCastPrimitivesDispatch(
   }
 
   if constexpr (ToKind == TypeKind::TIMESTAMP) {
-    VELOX_DCHECK(toType->equivalent(*TIMESTAMP()));
+    verifyToTimestampCast(fromType, toType);
   }
 
   if (isSupportedFastUpcast(fromType, toType)) {

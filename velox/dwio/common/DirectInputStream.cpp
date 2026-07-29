@@ -156,7 +156,12 @@ void DirectInputStream::loadSync() {
 }
 
 void DirectInputStream::loadPosition() {
-  VELOX_CHECK_LT(offsetInRegion_, region_.length);
+  VELOX_CHECK_LT(
+      offsetInRegion_,
+      region_.length,
+      "Reading past the end of {} in file {}",
+      region_.toString(),
+      fileNum_);
 
   // Fast path: serve from preloaded whole-file data.
   if (bufferedInput_->preloaded()) {

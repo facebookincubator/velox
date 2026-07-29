@@ -19,6 +19,7 @@
 #include <re2/re2.h>
 #include <filesystem>
 
+#include <folly/ScopeGuard.h>
 #include <folly/init/Init.h>
 #include <glog/logging.h>
 
@@ -28,9 +29,13 @@
 #include <torch/csrc/export/pt2_archive_constants.h>
 #include <torch/nativert/executor/Weights.h>
 
+#include <torch/nativert/graph/Graph.h>
+
 #include "velox/experimental/torchwave/CompiledOp.h"
 #include "velox/experimental/torchwave/Pt2Load.h"
 #include "velox/experimental/torchwave/Registry.h"
+#include "velox/experimental/torchwave/Utils.h"
+#include "velox/experimental/torchwave/WaveConfig.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
 #include "velox/experimental/torchwave/tests/CompiledPlan.h"
 
@@ -47,10 +52,62 @@ std::string getDataFilePath(
   return cwd + "/" + filePath;
 }
 
+torch::_export::ScalarType toExportScalarType(c10::ScalarType dtype) {
+  switch (dtype) {
+    case c10::ScalarType::Long:
+      return torch::_export::ScalarType::LONG;
+    case c10::ScalarType::Float:
+      return torch::_export::ScalarType::FLOAT;
+    case c10::ScalarType::Bool:
+      return torch::_export::ScalarType::BOOL;
+    default:
+      TORCH_CHECK(false, "unsupported dtype ", static_cast<int>(dtype));
+  }
+}
+
+torch::_export::TensorMeta makeTensorMeta(c10::ScalarType dtype, int64_t rank) {
+  torch::_export::TensorMeta meta;
+  meta.set_dtype(toExportScalarType(dtype));
+  meta.set_layout(torch::_export::Layout::Strided);
+  meta.set_requires_grad(false);
+  torch::_export::Device device;
+  device.set_type("cuda");
+  device.set_index(0);
+  meta.set_device(std::move(device));
+  torch::_export::SymInt zero;
+  zero.set_as_int(0);
+  meta.set_storage_offset(std::move(zero));
+  std::vector<torch::_export::SymInt> sizes;
+  sizes.reserve(rank);
+  for (int64_t i = 0; i < rank; ++i) {
+    torch::_export::SymInt dim;
+    dim.set_as_int(1);
+    sizes.push_back(std::move(dim));
+  }
+  meta.set_sizes(std::move(sizes));
+  return meta;
+}
+
 class CompileTest : public ::testing::Test {
  protected:
   static void SetUpTestSuite() {
     registerBuiltins();
+  }
+
+  // Builds a nativert graph from a text description, attaches 'meta', and
+  // compiles it into a WaveGraph (host-side compile only, no GPU).
+  std::unique_ptr<WaveGraph> compileGraphString(
+      const std::string& graphStr,
+      const std::unordered_map<std::string, torch::_export::TensorMeta>& meta) {
+    auto graph = nativert::stringToGraph(graphStr);
+    graph->setTensorValuesMeta(meta);
+    setGraphDevice(graph.get(), /*isCuda=*/true);
+    auto weights = std::make_shared<nativert::Weights>(graph.get());
+    auto modelContext = std::make_unique<ModelContext>();
+    modelContext->graph = std::move(graph);
+    modelContext->weights = std::move(weights);
+    modelContexts_.push_back(std::move(modelContext));
+    return std::make_unique<WaveGraph>(modelContexts_.back().get());
   }
 
   /// Loads a .pt2 model and compiles it into a WaveGraph.
@@ -327,6 +384,73 @@ TEST_F(CompileTest, planBarrier) {
 
   EXPECT_TRUE(multi.fuses({"tw.index_select", "aten.add.Tensor"}));
   EXPECT_TRUE(multi.barrierBetween("tw.index_select", "aten.add.Tensor"));
+}
+
+// A standalone op inside a cat that is the tensor repeated by
+// repeat_interleave. repeat_interleave lowers to
+// repeat_interleave_head(repeats) + repeat_interleave_final(input, prefix,
+// total); `total` is inputFromPreviousKernel(2), so placeKernels processes only
+// that input and skips the final's input[0] -- the whole cat subtree. The
+// standalone op inside the cat's elementwise element is therefore never
+// materialized as its own launch, yet the cat's border codegen walks into it
+// and calls fusedCode on a standalone op, which aborts.
+//
+// Regression test for the inputFromPreviousKernel placement gap.
+// repeat_interleave lowers to repeat_interleave_head(repeats) +
+// repeat_interleave_final(input, prefix, total); total is
+// inputFromPreviousKernel(2). placeKernels used to process only that ordering
+// input and skip the final's input[0] -- here a cat whose element reads a
+// standalone op -- so the standalone was never materialized as its own launch,
+// yet extractSubgraph still pulled it in as an interior node and codegen
+// aborted (the cat is incidental; the same gap reproduces with the standalone
+// directly on input[0]). placeKernels now places the ordering input's stage
+// first and then the remaining inputs, so the standalone is materialized.
+//
+// add.Tensor is re-registered as a schema-less standalone op, standing in for
+// an intrinsically-standalone op such as fbgemm.jagged_to_padded_dense_forward
+// in the ROO preproc graph; it stays registered, so this is a placement gap,
+// not a missing registration. Before the fix this aborted with "forArguments
+// requires functionSchema".
+TEST_F(CompileTest, standaloneInCatBorderTest) {
+  auto f = [] { return makeTensorMeta(c10::ScalarType::Float, 1); };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"a", f()},
+      {"b", f()},
+      {"c", f()},
+      {"repeats", makeTensorMeta(c10::ScalarType::Long, 1)},
+      {"s", f()},
+      {"e", f()},
+      {"o", f()},
+      {"r", f()}};
+  const char* graphStr = R"(graph(%a, %b, %c, %repeats):
+%s = torch.ops.aten.add.Tensor(self=%a, other=%b)
+%e = torch.ops.aten.mul.Tensor(self=%s, other=%c)
+%list[] = prim.ListPack(l0=%e)
+%o = torch.ops.aten.cat.default(tensors=%list, dim=0)
+%r = torch.ops.aten.repeat_interleave.self_Tensor(self=%o, repeats=%repeats)
+return(%r)
+)";
+
+  // Re-register add.Tensor as a schema-less standalone op for the test (it
+  // stays registered -- the failure is a placement gap, not a missing
+  // registration).
+  auto addMeta = Registry::unregister("torch.ops.aten.add.Tensor");
+  MetadataBuilder("torch.ops.aten.add.Tensor", MetadataBuilder::NoSchema{})
+      .isStandalone()
+      .argumentMeta({{.isRegister = false}, {.isRegister = false}})
+      .returnMeta({{.isRegister = false}})
+      .outputConstraints(
+          [](NodeCP, const ValueTypes&) -> std::vector<ValueConstraint> {
+            return {{.rank = 1, .contiguous = true}};
+          })
+      .registerOp();
+  auto restore = folly::makeGuard([&] {
+    Registry::unregister("torch.ops.aten.add.Tensor");
+    Registry::restoreRegistry("torch.ops.aten.add.Tensor", std::move(addMeta));
+  });
+
+  auto waveGraph = compileGraphString(graphStr, meta);
+  EXPECT_NE(waveGraph, nullptr);
 }
 
 } // namespace

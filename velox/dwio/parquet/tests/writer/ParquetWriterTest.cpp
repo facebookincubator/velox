@@ -109,6 +109,25 @@ class ParquetWriterTest : public ParquetTestBase {
 
   inline static const std::string kHiveConnectorId = "test-hive";
   dwio::common::ColumnReaderStatistics stats;
+
+  struct WriterWithSink {
+    std::unique_ptr<facebook::velox::parquet::Writer> writer;
+    MemorySink* sink;
+  };
+
+  WriterWithSink makeWriterWithSink(
+      const RowTypePtr& schema,
+      dwio::common::WriterOptions options,
+      const ParquetWriterOptions& writerOptions) {
+    auto sink = std::make_unique<MemorySink>(
+        200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
+    auto* sinkPtr = sink.get();
+    options.formatSpecificOptions =
+        std::make_shared<ParquetWriterOptions>(writerOptions);
+    auto writer = std::make_unique<facebook::velox::parquet::Writer>(
+        std::move(sink), options, schema);
+    return WriterWithSink{std::move(writer), sinkPtr};
+  }
 };
 
 class ArrowMemoryPool final : public ::arrow::MemoryPool {
@@ -461,6 +480,69 @@ TEST_F(ParquetWriterTest, compression) {
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
 }
 
+TEST_F(ParquetWriterTest, compressionRoundTripAcrossPages) {
+  // Writes multi-page data with every writable codec and verifies the values
+  // round-trip. Small data pages force many compressed pages per column, so the
+  // reader's per-codec decompression paths (the Snappy/ZSTD/GZIP direct paths
+  // and the LZ4 stream path with Hadoop framing) are exercised repeatedly and
+  // across page boundaries.
+  auto schema =
+      ROW({"c_int", "c_bigint", "c_double", "c_string"},
+          {INTEGER(), BIGINT(), DOUBLE(), VARCHAR()});
+  constexpr int64_t kRows = 20'000;
+
+  // Stable backing storage for the string column; makeFlatVector copies the
+  // bytes into the vector, but keeping storage alive avoids dangling views.
+  std::vector<std::string> stringStorage(kRows);
+  for (int64_t i = 0; i < kRows; ++i) {
+    stringStorage[i] = fmt::format("velox-parquet-value-{:08d}-padding", i);
+  }
+
+  const auto data = makeRowVector(
+      schema->names(),
+      {
+          makeFlatVector<int32_t>(kRows, [](auto row) { return row * 3 - 7; }),
+          makeFlatVector<int64_t>(
+              kRows, [](auto row) { return row * 1'000'003LL; }),
+          makeFlatVector<double>(
+              kRows, [](auto row) { return row * 0.25 - 3.5; }),
+          makeFlatVector<StringView>(
+              kRows, [&](auto row) { return StringView(stringStorage[row]); }),
+      });
+
+  for (const auto compression :
+       {CompressionKind::CompressionKind_NONE,
+        CompressionKind::CompressionKind_SNAPPY,
+        CompressionKind::CompressionKind_ZSTD,
+        CompressionKind::CompressionKind_GZIP,
+        CompressionKind::CompressionKind_LZ4,
+        CompressionKind::CompressionKind_LZ4_HADOOP}) {
+    if (!parquet::Writer::isCodecAvailable(compression)) {
+      continue;
+    }
+    SCOPED_TRACE(compressionKindToString(compression));
+
+    ParquetWriterOptions writerOptions;
+    // Small pages force multiple compressed data pages per column.
+    writerOptions.dataPageSize = 4 * 1024;
+    // Disable dictionary so string values take the PLAIN path and each page
+    // carries compressed value bytes.
+    writerOptions.enableDictionary = false;
+
+    dwio::common::WriterOptions options;
+    options.memoryPool = rootPool_.get();
+    options.compressionKind = compression;
+
+    auto* sinkPtr = write(data, options, writerOptions);
+
+    auto reader = createReaderInMemory(*sinkPtr);
+    ASSERT_EQ(reader->numberOfRows(), kRows);
+
+    auto rowReader = createRowReaderFromReader(*reader, schema);
+    assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
+  }
+}
+
 TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   constexpr int64_t kRows = 10'000;
   const auto data = makeSmallintTestData(kRows);
@@ -783,24 +865,18 @@ TEST_F(ParquetWriterTest, flushWhenStreamBuffersGrow) {
   };
 
   const auto schema = ROW({"c0"}, {BIGINT()});
-  auto sink = std::make_unique<MemorySink>(
-      200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
-  auto* sinkPtr = sink.get();
-  options.formatSpecificOptions =
-      std::make_shared<ParquetWriterOptions>(writerOptions);
-  auto writer = std::make_unique<facebook::velox::parquet::Writer>(
-      std::move(sink), options, schema);
+  auto writerWithSink = makeWriterWithSink(schema, options, writerOptions);
   const auto data = makeRowVector(
       {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
 
-  writer->write(data);
+  writerWithSink.writer->write(data);
 
   // Data should be flushed into the FileSink by acculumated closed row groups.
-  EXPECT_GT(sinkPtr->size(), 0);
+  EXPECT_GT(writerWithSink.sink->size(), 0);
 
-  writer->close();
+  writerWithSink.writer->close();
 
-  const auto reader = createReaderInMemory(*sinkPtr);
+  const auto reader = createReaderInMemory(*writerWithSink.sink);
   EXPECT_EQ(kNumRows, reader->numberOfRows());
   EXPECT_EQ(kNumRows, reader->fileMetaData().numRowGroups());
 }
@@ -832,6 +908,40 @@ TEST_F(ParquetWriterTest, flushRowGroupByBufferedSize) {
 
   testBatches(10, 1, 50);
   testBatches(20, 2, 100);
+}
+
+TEST_F(ParquetWriterTest, flushRowGroupByMaxTargetFileSize) {
+  constexpr int64_t kNumRows = 64;
+  constexpr uint64_t kMaxTargetFileSizeBytes = 8 * 1024;
+
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.compressionKind = CompressionKind::CompressionKind_NONE;
+  options.maxTargetFileSizeBytes = kMaxTargetFileSizeBytes;
+
+  const auto schema = ROW("payload", VARCHAR());
+  ParquetWriterOptions writerOptions;
+  writerOptions.enableDictionary = false;
+  auto writerWithSink = makeWriterWithSink(schema, options, writerOptions);
+
+  const std::string payload(512, 'x');
+  auto batch = makeRowVector({makeFlatVector<std::string>(
+      kNumRows, [&](auto /*row*/) { return payload; })});
+
+  // Verify that maxTargetFileSizeBytes, not the default 128MB row-group
+  // target, closes the current row group so callers can observe file size.
+  // Each batch is roughly 64 * 512B = 32KB: well above the 8KB file-size
+  // target, but far below the default row-group byte target.
+  writerWithSink.writer->write(batch);
+
+  EXPECT_GT(writerWithSink.sink->size(), kMaxTargetFileSizeBytes);
+
+  writerWithSink.writer->write(batch);
+  writerWithSink.writer->close();
+
+  const auto reader = createReaderInMemory(*writerWithSink.sink);
+  EXPECT_EQ(2 * kNumRows, reader->numberOfRows());
+  EXPECT_EQ(2, reader->fileMetaData().numRowGroups());
 }
 
 TEST_F(ParquetWriterTest, flushEmptyRowGroup) {
