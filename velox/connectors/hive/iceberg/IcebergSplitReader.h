@@ -195,6 +195,11 @@ class IcebergSplitReader : public FileSplitReader {
   // directly. row_position is computed in next() per row.
   std::optional<int32_t> targetTableSpecId_;
   std::optional<std::string> targetTablePartitionData_;
+  // Output channels whose Iceberg schema type is, or contains, GEOMETRY. Resolved once per split
+  // in prepareSplit() from 'readerOutputType_', which mirrors the Iceberg column assignments, so
+  // next() pays nothing for tables without a geometry column. The Iceberg connector is the sole
+  // owner of the WKB -> internal-geometry conversion; see IcebergGeometryConverter.h.
+  std::vector<column_index_t> geometryOutputChannels_;
   // Whether an implicit row-number column is needed for _row_id computation
   // (set when filters, random-skip, or positional deletes make output
   // positions non-contiguous).
