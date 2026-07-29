@@ -73,7 +73,7 @@ class IcebergReadTest : public test::IcebergTestBase {
         name,
         HiveColumnHandle::ColumnType::kRegular,
         type,
-        parquet::ParquetFieldId(fieldId),
+        parquet::ParquetFieldId{fieldId, {}},
         std::vector<common::Subfield>{},
         defaultValue);
   }
