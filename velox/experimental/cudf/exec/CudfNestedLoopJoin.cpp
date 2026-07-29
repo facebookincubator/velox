@@ -539,7 +539,8 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
     rmm::cuda_stream_view stream) {
   VELOX_NVTX_FUNC_RANGE();
 
-  waitForBuildReady(stream);
+  // Both call sites are in doGetOutput(), which already waits for the
+  // build-ready event on this same stream before calling in here.
 
   auto numOutputColumns = outputType_->size();
 
@@ -771,11 +772,8 @@ RowVectorPtr CudfNestedLoopJoinProbe::emitBuildMismatchRows(
     finished_ = true;
     return nullptr;
   }
-  // doGetOutput() passes in a fresh stream from cudfGlobalStreamPool() for
-  // this call, so the build table must not be read on it until it's waited
-  // on the build-ready event - same reason joinWithBuildBatch() and the
-  // build-side precompute path both call this before touching buildData_.
-  waitForBuildReady(stream);
+  // The caller in doGetOutput() already waits for the build-ready event on
+  // this stream before calling in here.
   auto& buildTable = buildData_.value();
   auto numOutputColumns = outputType_->size();
 
@@ -837,6 +835,9 @@ RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
         !buildMismatchEmitted_) {
       buildMismatchEmitted_ = true;
       auto stream = cudfGlobalStreamPool().get_stream();
+      // Fresh pool stream - must wait for the build-ready event before
+      // emitBuildMismatchRows() reads buildData_.
+      waitForBuildReady(stream);
       return emitBuildMismatchRows(stream);
     }
     if (noMoreInput_) {
@@ -850,6 +851,10 @@ RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
   VELOX_CHECK_NOT_NULL(cudfInput);
   auto stream = cudfInput->stream();
   lastProbeStream_ = stream;
+  // Wait once here for the rest of doGetOutput(): the LeftSemiProject path
+  // below and joinWithBuildBatch() further down both read buildData_ on
+  // this same stream.
+  waitForBuildReady(stream);
 
   // LeftSemiProject: emit all probe rows with a boolean match column.
   if (joinType_ == core::JoinType::kLeftSemiProject) {
