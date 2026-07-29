@@ -340,6 +340,32 @@ TEST_P(TableScanTest, emptySplit) {
   assertQuery(plan, splits, "SELECT * FROM tmp");
 }
 
+TEST_P(TableScanTest, shardedStaging) {
+  // A split with more than 'kParallelStagingBytes' of column data is copied to
+  // the staging buffer in parallel shards. Every column must arrive at its own
+  // offset in the buffer.
+  constexpr int32_t kNumColumns = 8;
+  constexpr int32_t kNumRows = 200'000;
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  std::vector<VectorPtr> children;
+  for (auto i = 0; i < kNumColumns; ++i) {
+    names.push_back(fmt::format("c{}", i));
+    types.push_back(BIGINT());
+    children.push_back(makeFlatVector<int64_t>(kNumRows, [i](auto row) {
+      return (row + 1) * (i + 1);
+    }));
+  }
+  auto type = ROW(std::vector<std::string>(names), std::move(types));
+  vectors_ = {makeRowVector(names, children)};
+  auto splits = makeTable("test", vectors_);
+  ASSERT_EQ(1, splits.size());
+  createDuckDbTable(vectors_);
+
+  numDrivers_ = 1;
+  assertQuery(tableScanNode(type), splits, "SELECT * FROM tmp");
+}
+
 TEST_P(TableScanTest, filter) {
   auto type =
       ROW({"c0", "c1", "c2", "c3"}, {BIGINT(), BIGINT(), BIGINT(), BIGINT()});
