@@ -31,6 +31,8 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+
 using namespace facebook::velox;
 using namespace facebook::velox::cudf_velox;
 using namespace facebook::velox::exec::test;
@@ -567,7 +569,7 @@ TEST_F(SubfieldFilterAstTest, DecimalRange) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, Decimal32Range) {
+TEST_F(SubfieldFilterAstTest, ShortDecimalUsesLogicalWidthByDefault) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, DECIMAL(7, 2)}});
   auto filter = std::make_unique<common::BigintRange>(
@@ -578,6 +580,111 @@ TEST_F(SubfieldFilterAstTest, Decimal32Range) {
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
   const auto& expr =
       createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+
+  ASSERT_EQ(scalars.size(), 2);
+  EXPECT_EQ(scalars[0]->type().id(), cudf::type_id::DECIMAL64);
+  EXPECT_EQ(scalars[1]->type().id(), cudf::type_id::DECIMAL64);
+
+  auto vec = makeTestVector(rowType, 100);
+  testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, DecimalPhysicalWidthRejectsOutOfRangeFilters) {
+  const std::string columnName = "c0";
+  const auto assertAlwaysFalse =
+      [&](const RowTypePtr& rowType,
+          const common::Filter& filter,
+          cudf::type_id physicalType) {
+        common::Subfield subfield(columnName);
+        cudf::ast::tree tree;
+        std::vector<std::unique_ptr<cudf::scalar>> scalars;
+        const SubfieldFilterDecimalTypes decimalTypes{
+            {columnName, physicalType}};
+        const auto& expr = createAstFromSubfieldFilter(
+            subfield, filter, tree, scalars, rowType, &decimalTypes);
+
+        EXPECT_TRUE(scalars.empty());
+        const auto* operation =
+            dynamic_cast<const cudf::ast::operation*>(&expr);
+        ASSERT_NE(operation, nullptr);
+        EXPECT_EQ(
+            operation->get_operator(), cudf::ast::ast_operator::NOT_EQUAL);
+      };
+
+  auto shortDecimal = ROW({{columnName, DECIMAL(12, 2)}});
+  assertAlwaysFalse(
+      shortDecimal,
+      common::BigintRange(
+          int64_t{3'000'000'000},
+          int64_t{3'000'000'000},
+          /*nullAllowed*/ false),
+      cudf::type_id::DECIMAL32);
+  assertAlwaysFalse(
+      shortDecimal,
+      common::BigintRange(
+          int64_t{3'000'000'000},
+          int64_t{4'000'000'000},
+          /*nullAllowed*/ false),
+      cudf::type_id::DECIMAL32);
+
+  const auto aboveInt64 =
+      static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1;
+  assertAlwaysFalse(
+      ROW({{columnName, DECIMAL(20, 0)}}),
+      common::HugeintRange(
+          aboveInt64, aboveInt64 + 1, /*nullAllowed*/ false),
+      cudf::type_id::DECIMAL64);
+}
+
+TEST_F(SubfieldFilterAstTest, DecimalInListSkipsOutOfPhysicalRangeValues) {
+  const std::string columnName = "c0";
+  const auto assertSinglePhysicalScalar =
+      [&](const RowTypePtr& rowType,
+          const common::Filter& filter,
+          cudf::type_id physicalType) {
+        common::Subfield subfield(columnName);
+        cudf::ast::tree tree;
+        std::vector<std::unique_ptr<cudf::scalar>> scalars;
+        const SubfieldFilterDecimalTypes decimalTypes{
+            {columnName, physicalType}};
+        createAstFromSubfieldFilter(
+            subfield, filter, tree, scalars, rowType, &decimalTypes);
+
+        ASSERT_EQ(scalars.size(), 1);
+        EXPECT_EQ(scalars.front()->type().id(), physicalType);
+      };
+
+  auto shortValues = common::createBigintValues(
+      {int64_t{-500}, int64_t{3'000'000'000}},
+      /*nullAllowed*/ false);
+  assertSinglePhysicalScalar(
+      ROW({{columnName, DECIMAL(12, 2)}}),
+      *shortValues,
+      cudf::type_id::DECIMAL32);
+
+  const auto aboveInt64 =
+      static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1;
+  auto longValues =
+      common::createHugeintValues({int128_t{123}, aboveInt64}, false);
+  assertSinglePhysicalScalar(
+      ROW({{columnName, DECIMAL(20, 0)}}),
+      *longValues,
+      cudf::type_id::DECIMAL64);
+}
+
+TEST_F(SubfieldFilterAstTest, Decimal32Range) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, DECIMAL(7, 2)}});
+  auto filter = std::make_unique<common::BigintRange>(
+      int64_t{99}, int64_t{149}, /*nullAllowed*/ false);
+
+  common::Subfield subfield(columnName);
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const SubfieldFilterDecimalTypes decimalTypes{
+      {columnName, cudf::type_id::DECIMAL32}};
+  const auto& expr = createAstFromSubfieldFilter(
+      subfield, *filter, tree, scalars, rowType, &decimalTypes);
 
   ASSERT_EQ(scalars.size(), 2);
   EXPECT_EQ(scalars[0]->type().id(), cudf::type_id::DECIMAL32);
@@ -624,8 +731,10 @@ TEST_F(SubfieldFilterAstTest, Decimal32SingleValue) {
   common::Subfield subfield(columnName);
   cudf::ast::tree tree;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
-  const auto& expr =
-      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+  const SubfieldFilterDecimalTypes decimalTypes{
+      {columnName, cudf::type_id::DECIMAL32}};
+  const auto& expr = createAstFromSubfieldFilter(
+      subfield, *filter, tree, scalars, rowType, &decimalTypes);
 
   ASSERT_EQ(scalars.size(), 1);
   EXPECT_EQ(scalars[0]->type().id(), cudf::type_id::DECIMAL32);

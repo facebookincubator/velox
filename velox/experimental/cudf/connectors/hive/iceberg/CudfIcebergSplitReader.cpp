@@ -188,8 +188,8 @@ void CudfIcebergSplitReader::resetSplit() {
   deleteMask_.reset();
 }
 
-cudf::ast::expression const* CudfIcebergSplitReader::subfieldFilter() {
-  return deferSubfieldFilter_ ? nullptr : CudfSplitReader::subfieldFilter();
+cudf::ast::expression const* CudfIcebergSplitReader::pushdownFilter() const {
+  return deferSubfieldFilter_ ? nullptr : CudfSplitReader::pushdownFilter();
 }
 
 rmm::device_async_resource_ref
@@ -313,7 +313,9 @@ CudfIcebergSplitReader::readNextChunk() {
 
   // Apply the deferred subfield filter.
   if (deferSubfieldFilter_) {
-    auto* filter = CudfSplitReader::subfieldFilter();
+    // The split filter matches file-backed physical widths and logical widths
+    // for injected columns, which is the layout assembled above.
+    auto* filter = CudfSplitReader::pushdownFilter();
     VELOX_CHECK_NOT_NULL(filter);
     auto filterMask = cudf::compute_column(
         cudfTable->view(), *filter, stream_, get_temp_mr());

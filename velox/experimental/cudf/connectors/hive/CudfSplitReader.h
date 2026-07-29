@@ -35,6 +35,9 @@
 #include <cudf/io/parquet_schema.hpp>
 #include <cudf/io/types.hpp>
 
+#include <functional>
+#include <utility>
+
 namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
@@ -65,6 +68,13 @@ class CudfSplitReader : public NvtxHelper {
 
   virtual ~CudfSplitReader() = default;
 
+  using PushdownFilterBuilder = std::function<cudf::ast::expression const*(
+      const cudf::io::parquet::FileMetaData&)>;
+
+  void setPushdownFilterBuilder(PushdownFilterBuilder builder) {
+    pushdownFilterBuilder_ = std::move(builder);
+  }
+
   /// Prepare the split: open cudf reader, set up data source and options.
   /// @param runtimeStats Reference to the DataSource's runtime statistics
   virtual void prepareSplit(dwio::common::RuntimeStatistics& runtimeStats);
@@ -81,8 +91,11 @@ class CudfSplitReader : public NvtxHelper {
   // Clear splitReaders and datasources after split has been fully processed.
   virtual void resetSplit();
 
-  // Return the subfield filter.
-  virtual cudf::ast::expression const* subfieldFilter();
+  // Return the logical subfield filter used after reading.
+  cudf::ast::expression const* subfieldFilter() const;
+
+  // Return the split-specific subfield filter used for Parquet pushdown.
+  virtual cudf::ast::expression const* pushdownFilter() const;
 
   // Determine the output memory resource for the cuDF reader.
   virtual rmm::device_async_resource_ref determineCudfMemoryResource();
@@ -143,6 +156,8 @@ class CudfSplitReader : public NvtxHelper {
 
   dwio::common::ReaderOptions baseReaderOpts_;
   cudf::ast::expression const* subfieldFilterExpr_;
+  cudf::ast::expression const* pushdownFilterExpr_;
+  PushdownFilterBuilder pushdownFilterBuilder_;
 
   struct TotalScanTimeCallbackData {
     uint64_t startTimeUs;

@@ -73,8 +73,8 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Override to also clear delete readers and column injection
   void resetSplit() override;
 
-  // Override to return the subfield filter when not deferred.
-  cudf::ast::expression const* subfieldFilter() override;
+  // Skip Parquet pushdown when the subfield filter must run after reading.
+  cudf::ast::expression const* pushdownFilter() const override;
 
   // Override to determine the memory resource to construct cuDF reader.
   rmm::device_async_resource_ref determineCudfMemoryResource() override;
