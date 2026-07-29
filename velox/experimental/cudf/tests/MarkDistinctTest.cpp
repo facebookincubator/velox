@@ -279,3 +279,40 @@ TEST_F(CudfMarkDistinctTest, emptyBatch) {
   EXPECT_FALSE(markers->valueAt(2)); // 2: duplicate
   EXPECT_TRUE(markers->valueAt(3)); // 3: first
 }
+
+// Send two overlapping batches, [0, 1] and [1, 2], through the same
+// MarkDistinct operator on different CUDA streams. The second batch must mark 1
+// as a duplicate and 2 as new, so filtering by the marker and counting returns
+// 3. This tests intent is to test stream synchronization.
+TEST_F(CudfMarkDistinctTest, persistentStateAcrossInputStreams) {
+  constexpr vector_size_t kBatchRows = 2;
+  constexpr int32_t kNumBatches = 2;
+  constexpr int64_t kNewKeysPerBatch = kBatchRows / 2;
+  constexpr int64_t kExpectedDistinct =
+      kBatchRows + (kNumBatches - 1) * kNewKeysPerBatch;
+
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(kNumBatches);
+  for (int32_t batch = 0; batch < kNumBatches; ++batch) {
+    batches.push_back(
+        makeRowVector({makeFlatVector<int64_t>(kBatchRows, [batch](auto row) {
+          return batch * kNewKeysPerBatch + row;
+        })}));
+  }
+
+  auto plan = PlanBuilder()
+                  .values(batches)
+                  .markDistinct("marker", {"c0"})
+                  .filter("marker")
+                  .singleAggregation({}, {"count(c0) AS distinct_count"})
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan)
+                    .config("velox.cudf.gpu_batch_size_rows", "2")
+                    .copyResults(pool());
+
+  ASSERT_EQ(1, result->size());
+  EXPECT_EQ(
+      kExpectedDistinct,
+      result->childAt(0)->asFlatVector<int64_t>()->valueAt(0));
+}

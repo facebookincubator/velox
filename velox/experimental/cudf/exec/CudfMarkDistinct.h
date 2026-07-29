@@ -26,6 +26,7 @@
 #include <cudf/types.hpp>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace facebook::velox::cudf_velox {
@@ -78,6 +79,9 @@ class CudfMarkDistinct : public CudfOperatorBase {
   /// new distinct keys. Only rebuilt when seenKeys_ grows (new keys found).
   /// Null until the first batch has been processed.
   std::unique_ptr<cudf::filtered_join> seenFilter_;
+
+  /// Stream on which the current seenKeys_ and seenFilter_ state was built.
+  std::optional<rmm::cuda_stream_view> seenStateStream_;
 };
 
 } // namespace facebook::velox::cudf_velox

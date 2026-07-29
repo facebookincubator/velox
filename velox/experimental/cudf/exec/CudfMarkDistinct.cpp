@@ -21,6 +21,7 @@
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
+#include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/utilities/error.hpp>
@@ -106,8 +107,14 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
         tempMr);
     seenFilter_ = std::make_unique<cudf::filtered_join>(
         seenKeys_->view(), cudf::null_equality::EQUAL, stream);
+    seenStateStream_ = stream;
 
   } else {
+    VELOX_CHECK(seenStateStream_.has_value());
+    const auto stateStream = seenStateStream_.value();
+    cudf::detail::join_streams(
+        std::vector<rmm::cuda_stream_view>{stateStream}, stream);
+
     // Subsequent batch: probe the persistent filter — no hash table rebuild.
 
     // Gather the unique keys from this batch.
@@ -121,6 +128,7 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
     // Anti-join against the persistent seenFilter_ to find new keys.
     auto newKeyLocalIndices =
         seenFilter_->anti_join(uniqueBatchKeys->view(), stream, tempMr);
+    std::unique_ptr<cudf::table> updatedSeenKeys;
 
     if (!newKeyLocalIndices->is_empty()) {
       // Map local indices back to original batch row indices via gather.
@@ -154,9 +162,19 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
       // concatenate-per-batch idiom.
       std::vector<cudf::table_view> seenPlusNew = {
           seenKeys_->view(), newKeys->view()};
-      seenKeys_ = cudf::concatenate(seenPlusNew, stream, tempMr);
+      updatedSeenKeys = cudf::concatenate(seenPlusNew, stream, tempMr);
+    }
+
+    // Make the old state stream wait until its last use on this stream before
+    // the old state can be destroyed or used by another input stream.
+    cudf::detail::join_streams(
+        std::vector<rmm::cuda_stream_view>{stream}, stateStream);
+
+    if (updatedSeenKeys) {
+      seenKeys_ = std::move(updatedSeenKeys);
       seenFilter_ = std::make_unique<cudf::filtered_join>(
           seenKeys_->view(), cudf::null_equality::EQUAL, stream);
+      seenStateStream_ = stream;
     }
   }
 
