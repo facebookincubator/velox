@@ -22,10 +22,13 @@
 #include <folly/lang/Bits.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/config/Config.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
+#include "velox/connectors/hive/iceberg/IcebergSessionCredentials.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/vector/DecodedVector.h"
@@ -188,6 +191,31 @@ void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStatistics& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
+  // Forward per-query delegated credentials into fileReadOps so delegated-auth
+  // filesystems authorize the read as the caller rather than the service
+  // identity. The session-property keys carrying the credentials are named by
+  // the connector's "hive.session-credential-keys" config; it is empty by
+  // default, so a stock deployment forwards nothing and the deployment-specific
+  // credential name stays out of the connector. Mirrors the write path
+  // (IcebergConnector::withSessionCredentials) via the shared
+  // 'sessionCredentials'. No-op for non-delegated reads.
+  const auto* sessionProperties = connectorQueryCtx_ != nullptr
+      ? connectorQueryCtx_->sessionProperties()
+      : nullptr;
+  const auto credentials = sessionCredentials(
+      fileConfig_ != nullptr ? fileConfig_->config().get() : nullptr,
+      sessionProperties);
+  // Only copy fileReadOps when there are credentials to fold in; the common
+  // (non-delegated) read path passes the original map through unchanged.
+  folly::F14FastMap<std::string, std::string> mergedFileReadOps;
+  if (!credentials.empty()) {
+    mergedFileReadOps = fileReadOps;
+    for (const auto& [key, value] : credentials) {
+      mergedFileReadOps[key] = value;
+    }
+  }
+  const auto& effectiveFileReadOps =
+      credentials.empty() ? fileReadOps : mergedFileReadOps;
   // For NIMBLE splits, switch the reader to Iceberg field-id-based column
   // resolution. The NIMBLE per-SchemaNode `attributes` slot carries
   // `iceberg.id` keys stamped on the write path; the NIMBLE reader uses
@@ -267,7 +295,7 @@ void IcebergSplitReader::prepareSplit(
         baseReaderOpts_.setFileSchema(ROW(std::move(names), std::move(types)));
       }
     }
-    createReader(fileReadOps);
+    createReader(effectiveFileReadOps);
   }
 
   if (emptySplit_) {
