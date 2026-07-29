@@ -172,11 +172,20 @@ std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
   // Column handles are keyed by output alias; index them by the underlying
   // data-column name so we can align to dataColumns() order.
   std::unordered_map<std::string, const IcebergColumnHandle*> handleByName;
-  for (const auto& [outputName, handle] : *columnHandles_) {
+  const auto addIcebergHandle = [&handleByName](const auto& handle) {
     if (auto* icebergHandle =
             dynamic_cast<const IcebergColumnHandle*>(handle.get())) {
       handleByName.emplace(icebergHandle->name(), icebergHandle);
     }
+  };
+  for (const auto& columnHandle : *columnHandles_) {
+    addIcebergHandle(columnHandle.second);
+  }
+  // Remaining filters can add columns to the reader output that are not
+  // projected by the table scan. Include those handles so filter-only columns
+  // are still matched by Iceberg field ID.
+  for (const auto& handle : tableHandle_->filterColumnHandles()) {
+    addIcebergHandle(handle);
   }
   if (handleByName.empty()) {
     return fieldIds;

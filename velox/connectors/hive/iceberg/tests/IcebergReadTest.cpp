@@ -460,6 +460,24 @@ TEST_F(IcebergReadTest, readParquetSchemaEvolutionByFieldId) {
         {readCase.expected});
   }
 
+  auto filterOnlyColumnPlan =
+      exec::test::PlanBuilder()
+          .startTableScan(test::kIcebergConnectorId)
+          .outputType(ROW({"id"}, {BIGINT()}))
+          .dataColumns(writeType)
+          .assignments(makeFieldIdAssignments({
+              {"id", "id", BIGINT(), makeFieldId(1)},
+          }))
+          .filterColumnHandles({
+              makeIcebergHandle("status", VARCHAR(), makeFieldId(3)),
+          })
+          .remainingFilter("status = 'old-b'")
+          .endTableScan()
+          .planNode();
+  exec::test::AssertQueryBuilder(filterOnlyColumnPlan)
+      .splits(createSplitsForDirectory(outputDirectory->getPath()))
+      .assertResults({makeRowVector({makeFlatVector<int64_t>({20})})});
+
   const auto addressWriteType = ROW({"city", "zip"}, {VARCHAR(), VARCHAR()});
   const auto profileWriteType =
       ROW({"name", "address"}, {VARCHAR(), addressWriteType});
