@@ -1,0 +1,100 @@
+---
+slug: file-connector
+title: "Everything is a File: A Pluggable SQL Interface for Universal File Inspection"
+date: 2026-07-10
+authors: [srsuryadev, mbasmanova, PingLiuPing]
+tags: [tech-blog]
+description: "An extensible Axiom connector that makes SQL the universal file inspector: query any file — Parquet, Nimble, CSV, tensors, images — by path alone, with no catalog, metastore, or registration."
+---
+
+We present an extensible connector for the [Axiom](https://github.com/facebookincubator/axiom) SQL engine that lets users query any file — Parquet, Nimble, CSV, tensors, images — by path alone. No catalog, no metastore, no registration. A minimal `FileHandler` interface encapsulates all format-specific logic; adding a new modality requires implementing two methods without touching the core. Synthetic `$`-suffixed metadata tables expose file internals as first-class SQL relations.
+
+<!-- truncate -->
+
+## Introduction
+
+Unix made one decision that shaped fifty years of systems design: everything is a file. Devices, pipes, and sockets are all accessed through `open`/`read`/`close`. [Plan 9](https://www.usenix.org/legacy/publications/compsystems/1995/sum_pike.pdf) pushed further, so that network connections and process state became files too. The payoff was composability: programs written for text files worked, unmodified, on device output and network streams.
+
+Modern data engineering has no equivalent for file inspection. A team working with Parquet, Nimble, tensors, and images needs four tools, four output formats, and four mental models. The tools do not compose. The outputs do not join. An operation as natural as "compare the compression of file A with the schema of file B" requires leaving SQL entirely.
+
+We restore the Unix principle at the data layer. Our connector makes SQL the universal file inspector: point a query at a path, get back rows. The design rests on three ideas:
+
+1. **Zero-registration addressing.** The filesystem path *is* the table name.
+2. **Handler-registry separation.** The core never interprets bytes; format logic lives behind a two-method interface.
+3. **Synthetic metadata tables.** File internals (row groups, encodings, statistics) are queryable relations.
+
+## Architecture
+
+<figure style={{textAlign: 'center'}}>
+  <img src="/img/file-connector-architecture.svg" alt="Layered architecture: SQL to FileConnector to Handler Registry to Format DataSources to Storage" width="100%" />
+</figure>
+
+*Figure 1. Layered architecture: SQL → FileConnector → Handler Registry → Format DataSources → Storage.*
+
+Separating high-level orchestration from file-specific storage details keeps the core engine lightweight, stable, and format-neutral. The real work happens in how format-specific logic is managed. Instead of overloading the core with custom code for every file type, we isolate that complexity behind the `FileHandler` interface. Each handler is a specialist that teaches the core how to read its format: how to pull out the schema, how to stream the data, and what metadata to expose.
+
+This gives a distinct advantage: support for a new file format can be added at any time without touching the core. The design also makes the connector a universal gateway. Because it is not tied to SQL, it works with any Axiom tool, from the SQL interface to the dataframe APIs. The result is efficient, schema-aware access to individual files or directories through streamable, column-projected reads and synthetic metadata inspection.
+
+**FileHandler interface.** Each file format implements a single abstract class. The interface is deliberately minimal — a schema, a stream, and optional metadata tables:
+
+```cpp
+class FileHandler {
+ public:
+  virtual ~FileHandler() = default;
+
+  // Returns the schema of the file (or directory) at 'path'.
+  virtual RowTypePtr schema(std::string_view path) = 0;
+
+  // Creates a streaming, column-projected reader for 'path'.
+  virtual std::unique_ptr<DataSource> createDataSource(
+      std::string_view path,
+      const RowTypePtr& outputType) = 0;
+
+  // Optional: synthetic metadata tables (e.g. $row_groups) for 'path'.
+  virtual std::vector<MetadataTable> metadataTables(std::string_view path) {
+    return {};
+  }
+};
+```
+
+Handlers register once at startup, guarded by `std::call_once`:
+
+```cpp
+registerHandler("parquet", std::make_shared<ParquetFileHandler>());
+```
+
+See the `FileHandler` interface in [FileHandler.h](https://github.com/facebookincubator/axiom/blob/main/axiom/connectors/file/FileHandler.h) for how to add a new format. Table names are file paths: a trailing `/` scans an entire folder as one dataset, and a `$` suffix opens a metadata view of the file. Because folder scans combine many files, per-file identifiers (such as row-group ids) reset for each file, so track the file identity when it matters.
+
+## Querying and Metadata
+
+**Reading row data.** Users interact with files directly through standard SQL by naming the format and path. There is no catalog to manage and no table to pre-register.
+
+```sql
+-- Read all rows from a Parquet file.
+SELECT * FROM parquet."/data/events.parquet";
+
+-- Project specific columns.
+SELECT user_id, ts FROM parquet."/data/events.parquet" LIMIT 100;
+```
+
+**Directory scans.** When the path points to a folder rather than a file, the connector treats the whole directory as one logical dataset — useful for partitioned data or logs spread across many objects. The engine aggregates every file of the given format into a single result set.
+
+```sql
+-- Scan an entire directory of Parquet files as one dataset.
+SELECT count(*) FROM parquet."/data/events/";
+```
+
+**Inspecting metadata.** Synthetic metadata tables expose the physical layout and internal statistics of a file. They are addressed by appending a `$`-suffixed name to the path, surfacing details that are normally hidden — handy for debugging performance and data distribution without a separate tool.
+
+```sql
+-- Inspect row groups of a Parquet file.
+SELECT * FROM parquet."/data/events.parquet$row_groups";
+```
+
+## Toward multi-modal inspection
+
+The `FileHandler` interface makes no assumption about byte layout — it asks only for a schema and a stream. That generality extends directly to non-tabular modalities such as tensors and images, so the same SQL surface can grow to inspect them. You can read more about the technical details in the [connector README](https://github.com/facebookincubator/axiom/blob/main/axiom/connectors/file/README.md).
+
+## Acknowledgements
+
+Thanks to <a href="https://github.com/mbasmanova">Masha Basmanova</a>, <a href="https://github.com/zzhao0">Zhenyuan Zhao</a>, <a href="https://github.com/pedroerp">Pedro Eugenio Rocha Pedreira</a>, Rohit Jain, Jimmy Lu, and <a href="https://github.com/xiaoxmeng">Xiaoxuan Meng</a> for brainstorming and discussion.

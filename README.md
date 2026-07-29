@@ -73,9 +73,9 @@ of available functions [can be found here.](https://facebookincubator.github.io/
 
 Recent blog posts ([all posts](https://velox-lib.io/blog)):
 
+- [Everything is a File: A Pluggable SQL Interface for Universal File Inspection](https://velox-lib.io/blog/file-connector) (2026-07-10)
 - [Making OpenZL Available in Nimble OSS](https://velox-lib.io/blog/openzl-in-nimble-oss) (2026-07-05)
 - [Why RIGHT SEMI JOIN Can Be Slower Than LEFT SEMI JOIN in Velox](https://velox-lib.io/blog/right-semi-join-performance) (2026-06-26)
-- [From copyBits to SIMD: Accelerating Parquet DELTA Decoding in Velox](https://velox-lib.io/blog/parquet-delta-decoding) (2026-06-17)
 
 ## Community
 
