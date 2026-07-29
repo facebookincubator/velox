@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
@@ -41,7 +42,8 @@ CudfMarkDistinct::CudfMarkDistinct(
           nvtx3::rgb{255, 165, 0}, // Orange
           NvtxMethodFlag::kAddInput | NvtxMethodFlag::kGetOutput,
           std::nullopt,
-          planNode) {
+          planNode),
+      cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   const auto& inputType = planNode->sources()[0]->outputType();
   for (const auto& key : planNode->distinctKeys()) {
     auto idx = inputType->getChildIdx(key->name());
@@ -112,8 +114,8 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
   } else {
     VELOX_CHECK(seenStateStream_.has_value());
     const auto stateStream = seenStateStream_.value();
-    cudf::detail::join_streams(
-        std::vector<rmm::cuda_stream_view>{stateStream}, stream);
+    const std::vector<rmm::cuda_stream_view> stateStreams{stateStream};
+    cudf::detail::join_streams(stateStreams, stream);
 
     // Subsequent batch: probe the persistent filter — no hash table rebuild.
 
@@ -128,7 +130,7 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
     // Anti-join against the persistent seenFilter_ to find new keys.
     auto newKeyLocalIndices =
         seenFilter_->anti_join(uniqueBatchKeys->view(), stream, tempMr);
-    std::unique_ptr<cudf::table> updatedSeenKeys;
+    std::unique_ptr<cudf::table> updatedSeenKeys{nullptr};
 
     if (!newKeyLocalIndices->is_empty()) {
       // Map local indices back to original batch row indices via gather.
@@ -167,8 +169,7 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
 
     // Make the old state stream wait until its last use on this stream before
     // the old state can be destroyed or used by another input stream.
-    cudf::detail::join_streams(
-        std::vector<rmm::cuda_stream_view>{stream}, stateStream);
+    streamsWaitForStream(*cudaEvent_, stateStreams, stream);
 
     if (updatedSeenKeys) {
       seenKeys_ = std::move(updatedSeenKeys);

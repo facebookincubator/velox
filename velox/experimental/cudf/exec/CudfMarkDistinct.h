@@ -31,6 +31,8 @@
 
 namespace facebook::velox::cudf_velox {
 
+class CudaEvent;
+
 /// GPU operator that marks first occurrences of distinct key combinations.
 ///
 /// For each input row, appends a boolean column indicating whether this is the
@@ -82,6 +84,9 @@ class CudfMarkDistinct : public CudfOperatorBase {
 
   /// Stream on which the current seenKeys_ and seenFilter_ state was built.
   std::optional<rmm::cuda_stream_view> seenStateStream_;
+
+  /// Reusable event for ordering state lifetime across input streams.
+  std::unique_ptr<CudaEvent> cudaEvent_;
 };
 
 } // namespace facebook::velox::cudf_velox
