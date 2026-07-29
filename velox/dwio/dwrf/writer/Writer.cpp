@@ -62,10 +62,9 @@ std::optional<uint64_t> orcWriterMaxStripeSize(
       dwrf::Config::kOrcWriterMaxStripeSizeSession,
       config,
       dwrf::Config::kOrcWriterMaxStripeSize);
-  return value.has_value()
-      ? std::optional<uint64_t>(
-            config::toCapacity(*value, config::CapacityUnit::BYTE))
-      : std::nullopt;
+  return value.has_value() ? std::optional<uint64_t>(config::toCapacity(
+                                 *value, config::CapacityUnit::BYTE))
+                           : std::nullopt;
 }
 
 std::optional<uint64_t> orcWriterMaxDictionaryMemory(
@@ -75,10 +74,9 @@ std::optional<uint64_t> orcWriterMaxDictionaryMemory(
       dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
       config,
       dwrf::Config::kOrcWriterMaxDictionaryMemory);
-  return value.has_value()
-      ? std::optional<uint64_t>(
-            config::toCapacity(*value, config::CapacityUnit::BYTE))
-      : std::nullopt;
+  return value.has_value() ? std::optional<uint64_t>(config::toCapacity(
+                                 *value, config::CapacityUnit::BYTE))
+                           : std::nullopt;
 }
 
 std::optional<bool> isOrcWriterIntegerDictionaryEncodingEnabled(
