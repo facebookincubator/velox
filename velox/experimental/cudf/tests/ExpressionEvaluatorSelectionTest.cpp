@@ -525,9 +525,7 @@ TEST_F(CudfExpressionSelectionTest, dateDiffRejectsUnsupportedConstantForms) {
   // VELOX_CHECK_NOT_NULL failure rather than falling back to CPU's
   // default-null result - canEvaluate must reject it up front.
   auto nullUnit = compileExecExpr(
-      "date_diff(cast(null as varchar), date, date)",
-      rowType_,
-      execCtx_.get());
+      "date_diff(cast(null as varchar), date, date)", rowType_, execCtx_.get());
   EXPECT_FALSE(canBeEvaluatedByCudf(nullUnit, /*deep=*/true));
 
   // eval() has no path for two constant date/timestamp operands - canEvaluate

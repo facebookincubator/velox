@@ -2590,7 +2590,9 @@ TEST_F(CudfSimpleFilterProjectTest, dateDiffDatePreservesVeloxRange) {
 
   // Expected: 4'294'967'295 days.
   assertExpressionMatchesCpu(
-      "date_diff('day', c0, c1)", dayRangeInput, asRowType(dayRangeInput->type()));
+      "date_diff('day', c0, c1)",
+      dayRangeInput,
+      asRowType(dayRangeInput->type()));
 
   auto wideYearInput = makeRowVector({
       makeFlatVector<int32_t>({0}, DATE()),
@@ -2600,7 +2602,9 @@ TEST_F(CudfSimpleFilterProjectTest, dateDiffDatePreservesVeloxRange) {
 
   // Expected: 40'000 - 1'970 = 38'030 years.
   assertExpressionMatchesCpu(
-      "date_diff('year', c0, c1)", wideYearInput, asRowType(wideYearInput->type()));
+      "date_diff('year', c0, c1)",
+      wideYearInput,
+      asRowType(wideYearInput->type()));
 }
 
 TEST_F(CudfSimpleFilterProjectTest, toUnixtimePreservesNanoseconds) {

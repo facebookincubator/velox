@@ -134,9 +134,7 @@ class SubStringFunction : public CudfFunction {
       cudf::numeric_scalar<cudf::size_type> startScalar(
           start_, true, stream, mr);
       cudf::numeric_scalar<cudf::size_type> endScalar(
-          hasLength_
-              ? saturatingAddNonNegative(start_, clampedLength)
-              : 0,
+          hasLength_ ? saturatingAddNonNegative(start_, clampedLength) : 0,
           hasLength_,
           stream,
           mr);

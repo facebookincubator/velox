@@ -1046,7 +1046,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::leftJoin(
                 rightIndicesCol,
                 tree_.back(),
                 cudf::join_kind::INNER_JOIN,
-                                stream,
+                stream,
                 get_temp_mr());
 
         if (filteredLeftJoinIndices->size() > 0) {
@@ -1386,7 +1386,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
               rightIndicesCol,
               tree_.back(),
               cudf::join_kind::INNER_JOIN,
-                            stream,
+              stream,
               get_temp_mr());
 
       if (filteredLeftJoinIndices->size() > 0) {
@@ -1686,7 +1686,7 @@ CudfHashJoinProbe::leftSemiProjectJoin(
           rightIndicesSpan,
           tree_.back(),
           cudf::join_kind::INNER_JOIN,
-                    stream,
+          stream,
           get_temp_mr());
 
       filteredLeftIndices = std::move(filteredLeft);
@@ -1783,7 +1783,7 @@ CudfHashJoinProbe::leftSemiProjectJoin(
               toSpan(syntheticRight->view()),
               tree_.back(),
               cudf::join_kind::INNER_JOIN,
-                            stream,
+              stream,
               get_temp_mr());
 
           if (filteredLeft->size() == 0) {

@@ -410,22 +410,28 @@ std::unique_ptr<cudf::column> DateDiffFunction::extractYearAsInt64(
     return cudf::numeric_scalar<int64_t>(v, true, stream, mr);
   };
   auto sub = [&](cudf::column_view a, cudf::column_view b) {
-    return cudf::binary_operation(a, b, cudf::binary_operator::SUB, i64, stream, mr);
+    return cudf::binary_operation(
+        a, b, cudf::binary_operator::SUB, i64, stream, mr);
   };
   auto add = [&](cudf::column_view a, cudf::column_view b) {
-    return cudf::binary_operation(a, b, cudf::binary_operator::ADD, i64, stream, mr);
+    return cudf::binary_operation(
+        a, b, cudf::binary_operator::ADD, i64, stream, mr);
   };
   auto addS = [&](cudf::column_view a, int64_t b) {
-    return cudf::binary_operation(a, scalar(b), cudf::binary_operator::ADD, i64, stream, mr);
+    return cudf::binary_operation(
+        a, scalar(b), cudf::binary_operator::ADD, i64, stream, mr);
   };
   auto subS = [&](cudf::column_view a, int64_t b) {
-    return cudf::binary_operation(a, scalar(b), cudf::binary_operator::SUB, i64, stream, mr);
+    return cudf::binary_operation(
+        a, scalar(b), cudf::binary_operator::SUB, i64, stream, mr);
   };
   auto mulS = [&](cudf::column_view a, int64_t b) {
-    return cudf::binary_operation(a, scalar(b), cudf::binary_operator::MUL, i64, stream, mr);
+    return cudf::binary_operation(
+        a, scalar(b), cudf::binary_operator::MUL, i64, stream, mr);
   };
   auto divS = [&](cudf::column_view a, int64_t b) {
-    return cudf::binary_operation(a, scalar(b), cudf::binary_operator::DIV, i64, stream, mr);
+    return cudf::binary_operation(
+        a, scalar(b), cudf::binary_operator::DIV, i64, stream, mr);
   };
   auto ltS = [&](cudf::column_view a, int64_t b) {
     return cudf::binary_operation(
@@ -433,7 +439,12 @@ std::unique_ptr<cudf::column> DateDiffFunction::extractYearAsInt64(
   };
   auto geS = [&](cudf::column_view a, int64_t b) {
     return cudf::binary_operation(
-        a, scalar(b), cudf::binary_operator::GREATER_EQUAL, boolType, stream, mr);
+        a,
+        scalar(b),
+        cudf::binary_operator::GREATER_EQUAL,
+        boolType,
+        stream,
+        mr);
   };
   auto leS = [&](cudf::column_view a, int64_t b) {
     return cudf::binary_operation(
@@ -469,12 +480,12 @@ std::unique_ptr<cudf::column> DateDiffFunction::extractYearAsInt64(
   auto y = add(yoe->view(), mulS(era->view(), 400)->view());
 
   // doy = doe - (365*yoe + yoe/4 - yoe/100), in [0, 365].
-  auto doy = sub(
-      doe->view(),
-      sub(add(mulS(yoe->view(), 365)->view(), divS(yoe->view(), 4)->view())
-              ->view(),
-          divS(yoe->view(), 100)->view())
-          ->view());
+  auto doy =
+      sub(doe->view(),
+          sub(add(mulS(yoe->view(), 365)->view(), divS(yoe->view(), 4)->view())
+                  ->view(),
+              divS(yoe->view(), 100)->view())
+              ->view());
 
   // mp = (5*doy + 2)/153, in [0, 11].
   auto mp = divS(addS(mulS(doy->view(), 5)->view(), 2)->view(), 153);
@@ -490,7 +501,11 @@ std::unique_ptr<cudf::column> DateDiffFunction::extractYearAsInt64(
   // The algorithm's calendar year starts in March, so the true civil year
   // is y + 1 for January/February (m <= 2) and y otherwise.
   return cudf::copy_if_else(
-      addS(y->view(), 1)->view(), y->view(), leS(m->view(), 2)->view(), stream, mr);
+      addS(y->view(), 1)->view(),
+      y->view(),
+      leS(m->view(), 2)->view(),
+      stream,
+      mr);
 }
 
 std::unique_ptr<cudf::column> DateDiffFunction::timeOfDayMicros(
