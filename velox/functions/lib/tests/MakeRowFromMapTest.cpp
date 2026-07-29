@@ -353,6 +353,64 @@ class MakeRowFroMapTest : public testing::Test, public test::VectorTestBase {
     }
   }
 
+  // Verifies the 'useDictionaryEncoding' fast path against the deep-copy slow
+  // path for the fast-path-eligible config (replaceNulls, allowTopLevelNulls
+  // and throwOnDuplicateKeys all false). Projects 'input' twice, once with
+  // useDictionaryEncoding=true and once with the default false, and asserts the
+  // two RowVectors are equal for every selectivity pattern. Also confirms the
+  // fast-path children are dictionary-encoded so the test cannot silently pass
+  // on the slow path.
+  void verifyDictionaryEncodingFastPath(const BaseVector& input) {
+    auto keysToProject = makeFlatVector<int64_t>({1, 2});
+    auto outputFieldNames = std::vector<std::string>{"key1", "key2"};
+    MakeRowFromMapOptions slowOptions{
+        .keysToProject = keysToProject,
+        .outputFieldNames = outputFieldNames,
+        .replaceNulls = false,
+        .allowTopLevelNulls = false,
+        .throwOnDuplicateKeys = false,
+        .useDictionaryEncoding = false};
+    MakeRowFromMapOptions fastOptions = slowOptions;
+    fastOptions.useDictionaryEncoding = true;
+
+    for (std::string selectedRowsStr :
+         {"all", "start", "end", "mid", "scattered"}) {
+      for (bool useEvalCtx : {false, true}) {
+        SCOPED_TRACE(
+            "Selected Rows: " + selectedRowsStr +
+            " useEvalCtx: " + std::to_string(useEvalCtx) +
+            " InputType: " + input.type()->toString() + " InputEncoding: " +
+            std::to_string(static_cast<int>(input.encoding())));
+        auto rows = createSelectivityVector(input.size(), selectedRowsStr);
+
+        VectorPtr slowResult;
+        VectorPtr fastResult;
+        if (useEvalCtx) {
+          exec::EvalCtx evalCtx(
+              execCtx_.get(), &dummyExprSet, dummyRowVector.get());
+          slowResult =
+              toRowVector<TypeKind::BIGINT>(input, slowOptions, rows, &evalCtx);
+          fastResult =
+              toRowVector<TypeKind::BIGINT>(input, fastOptions, rows, &evalCtx);
+        } else {
+          slowResult = toRowVector<TypeKind::BIGINT>(input, slowOptions, rows);
+          fastResult = toRowVector<TypeKind::BIGINT>(input, fastOptions, rows);
+        }
+
+        // The dictionary-wrapped output must be equivalent to the deep-copy
+        // output over the selected rows.
+        test::assertEqualVectors(slowResult, fastResult, rows);
+
+        // Ensure the fast path actually produced dictionary-encoded children.
+        auto* fastRow = fastResult->as<RowVector>();
+        ASSERT_NE(fastRow, nullptr);
+        for (const auto& child : fastRow->children()) {
+          ASSERT_EQ(child->encoding(), VectorEncoding::Simple::DICTIONARY);
+        }
+      }
+    }
+  }
+
   std::shared_ptr<core::QueryCtx> queryCtx_{velox::core::QueryCtx::create()};
   std::unique_ptr<core::ExecCtx> execCtx_{
       std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
@@ -594,6 +652,59 @@ TEST_F(MakeRowFroMapTest, duplicateKey) {
   options.throwOnDuplicateKeys = true;
   result = toRowVector<TypeKind::BIGINT>(*testCase, options, rows);
   test::assertEqualVectors(expected, result, rows);
+}
+
+TEST_F(MakeRowFroMapTest, dictionaryEncoding) {
+  EXPECT_EQ(NonPOD::alive, 0);
+  auto testCases = makeTestCases();
+  for (auto& testCase : testCases) {
+    verifyDictionaryEncodingFastPath(*testCase);
+  }
+  testCases.clear();
+  EXPECT_EQ(NonPOD::alive, 0);
+}
+
+TEST_F(MakeRowFroMapTest, dictionaryEncodingEncodedInputs) {
+  EXPECT_EQ(NonPOD::alive, 0);
+  auto testCases = makeTestCases();
+  auto reverseIndices = makeIndicesInReverse(testCases[0]->size());
+  auto reverseElementIndices =
+      makeIndicesInReverse(testCases[0]->mapKeys()->size());
+
+  // Wrap the top level map with a dictionary and a constant encoding.
+  for (auto& testCase : testCases) {
+    auto dictOnMap = BaseVector::wrapInDictionary(
+        nullptr, reverseIndices, testCase->size(), testCase);
+    verifyDictionaryEncodingFastPath(*dictOnMap);
+
+    auto constOnMap =
+        BaseVector::wrapInConstant(testCase->size(), 0, dictOnMap);
+    verifyDictionaryEncodingFastPath(*constOnMap);
+  }
+
+  // Wrap the keys and values with a dictionary encoding.
+  for (auto& testCase : testCases) {
+    auto elementsSizes = testCase->mapValues()->size();
+    auto dictKeys = BaseVector::wrapInDictionary(
+        nullptr, reverseElementIndices, elementsSizes, testCase->mapKeys());
+    auto dictValues = BaseVector::wrapInDictionary(
+        nullptr, reverseElementIndices, elementsSizes, testCase->mapValues());
+    testCase->setKeysAndValues(dictKeys, dictValues);
+    verifyDictionaryEncodingFastPath(*testCase);
+  }
+  testCases.clear();
+  EXPECT_EQ(NonPOD::alive, 0);
+}
+
+TEST_F(MakeRowFroMapTest, dictionaryEncodingDuplicateKeys) {
+  // makeTestCases() maps contain no duplicate keys, so exercise the fast
+  // path's last-value-wins branch explicitly and confirm it matches the
+  // deep-copy slow path.
+  auto testCase = makeMapVector<int64_t, int64_t>({
+      {{1, 1}, {2, 2}, {2, 3}},
+      {{1, 10}, {2, 20}, {3, 30}},
+  });
+  verifyDictionaryEncodingFastPath(*testCase);
 }
 
 class MakeRowFromMapDefaultsTest : public testing::Test,
