@@ -1279,15 +1279,17 @@ class GreatestLeastFunction : public CudfFunction {
 class SwitchFunction : public CudfFunction {
  public:
   SwitchFunction(const std::shared_ptr<velox::exec::Expr>& expr)
-      : resultType_(cudf_velox::veloxToCudfDataType(expr->type())) {
-    VELOX_CHECK_EQ(
-        expr->inputs().size(), 3, "case when expects exactly 3 inputs");
+      : resultType_(cudf_velox::veloxToCudfDataType(expr->type())),
+        hasElseClause_(expr->inputs().size() == 3) {
+    VELOX_CHECK(
+        expr->inputs().size() == 2 || expr->inputs().size() == 3,
+        "single-branch case when expects 2 or 3 inputs");
     VELOX_CHECK_EQ(
         expr->inputs()[0]->type()->kind(),
         TypeKind::BOOLEAN,
         "The switch condition result type should be boolean");
     VELOX_CHECK_NULL(
-        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr),
+        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]),
         "The condition should not be constant");
     if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
             expr->inputs()[1])) {
@@ -1295,11 +1297,13 @@ class SwitchFunction : public CudfFunction {
       left_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           createCudfScalar, constValue->typeKind(), constValue);
     }
-    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-            expr->inputs()[2])) {
-      auto constValue = constExpr->value();
-      right_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          createCudfScalar, constValue->typeKind(), constValue);
+    if (hasElseClause_) {
+      if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+              expr->inputs()[2])) {
+        auto constValue = constExpr->value();
+        right_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            createCudfScalar, constValue->typeKind(), constValue);
+      }
     }
   }
 
@@ -1314,9 +1318,16 @@ class SwitchFunction : public CudfFunction {
     std::unique_ptr<cudf::column> rightColumn;
     std::unique_ptr<cudf::scalar> leftScalar;
     std::unique_ptr<cudf::scalar> rightScalar;
+    std::unique_ptr<cudf::scalar> nullElseScalar;
     auto const condition = asView(inputColumns[0]);
+    auto const* rightInput = right_.get();
+    if (!hasElseClause_) {
+      nullElseScalar =
+          cudf::make_default_constructed_scalar(resultType_, stream, mr);
+      rightInput = nullElseScalar.get();
+    }
 
-    if (left_ == nullptr && right_ == nullptr) {
+    if (left_ == nullptr && rightInput == nullptr) {
       auto const left =
           columnWithType(inputColumns[1], resultType_, leftColumn, stream, mr);
       auto const right =
@@ -1326,9 +1337,9 @@ class SwitchFunction : public CudfFunction {
       auto const left =
           columnWithType(inputColumns[1], resultType_, leftColumn, stream, mr);
       auto const* right =
-          scalarWithType(*right_, resultType_, rightScalar, stream, mr);
+          scalarWithType(*rightInput, resultType_, rightScalar, stream, mr);
       return cudf::copy_if_else(left, *right, condition, stream, mr);
-    } else if (right_ == nullptr) {
+    } else if (rightInput == nullptr) {
       auto const* left =
           scalarWithType(*left_, resultType_, leftScalar, stream, mr);
       auto const right =
@@ -1339,12 +1350,13 @@ class SwitchFunction : public CudfFunction {
     auto const* left =
         scalarWithType(*left_, resultType_, leftScalar, stream, mr);
     auto const* right =
-        scalarWithType(*right_, resultType_, rightScalar, stream, mr);
+        scalarWithType(*rightInput, resultType_, rightScalar, stream, mr);
     return cudf::copy_if_else(*left, *right, condition, stream, mr);
   }
 
  private:
   const cudf::data_type resultType_;
+  const bool hasElseClause_;
   std::unique_ptr<cudf::scalar> left_;
   std::unique_ptr<cudf::scalar> right_;
 };
@@ -2600,8 +2612,19 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .returnType("T")
            .argumentType("boolean")
            .argumentType("T")
+           .build(),
+       FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("T")
+           .argumentType("boolean")
            .argumentType("T")
-           .build()});
+           .argumentType("T")
+           .build()},
+      /*overwrite=*/true,
+      [](const std::shared_ptr<velox::exec::Expr>& expr) {
+        return !std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+            expr->inputs()[0]);
+      });
 
   registerCudfFunctions(
       // No signatures required for cast and try_cast. They are special forms.

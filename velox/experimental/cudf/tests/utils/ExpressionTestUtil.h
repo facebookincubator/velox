@@ -40,9 +40,10 @@ inline std::shared_ptr<exec::Expr> compileExecExpr(
     const std::string& sql,
     const RowTypePtr& rowType,
     core::ExecCtx* execCtx,
-    const parse::ParseOptions& options = {}) {
+    const parse::ParseOptions& options = {},
+    bool enableConstantFolding = false) {
   auto typed = parseAndInferTypedExpr(sql, rowType, execCtx, options);
-  exec::ExprSet exprSet({typed}, execCtx, /*enableConstantFolding*/ false);
+  exec::ExprSet exprSet({typed}, execCtx, enableConstantFolding);
   return exprSet.expr(0);
 }
 

@@ -278,7 +278,11 @@ TEST_F(CudfDecimalTest, caseWhenNormalizesDecimal32Input) {
   auto queryCtx = core::QueryCtx::create();
   core::ExecCtx execCtx(pool(), queryCtx.get());
   auto expression = test_utils::compileExecExpr(
-      "CASE WHEN condition THEN sales_price ELSE NULL END", rowType, &execCtx);
+      "CASE WHEN condition THEN sales_price ELSE NULL END",
+      rowType,
+      &execCtx,
+      {},
+      /*enableConstantFolding=*/true);
   auto evaluator = createCudfExpression(expression, rowType);
 
   auto stream = cudf::get_default_stream();

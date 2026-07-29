@@ -516,8 +516,13 @@ TEST_F(CudfExpressionSelectionTest, signatureTypeVariableCoalesce) {
 
 TEST_F(CudfExpressionSelectionTest, signatureTypeVariableSwitchIf) {
   // OK: boolean + same type BIGINT
-  auto ok1 = compileExecExpr("if(true, a, b)", rowType_, execCtx_.get());
+  auto ok1 = compileExecExpr("if(a > 0, a, b)", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(ok1, /*deep=*/true));
+
+  // Constant conditions must be folded before cuDF expression selection.
+  auto constantCondition =
+      compileExecExpr("if(true, a, b)", rowType_, execCtx_.get());
+  ASSERT_FALSE(canBeEvaluatedByCudf(constantCondition, /*deep=*/true));
 }
 
 TEST_F(CudfExpressionSelectionTest, DISABLED_castAndTryCast) {
