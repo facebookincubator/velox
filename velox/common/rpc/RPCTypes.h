@@ -122,6 +122,34 @@ enum class RPCErrorKind {
   kInvalidRequest,
 };
 
+/// Declares what a transport/function supports, so the RPCOperator can DERIVE
+/// the dispatch strategy (per-row vs native batch vs async job) and
+/// flow-control bounds from backend capability instead of a user-set
+/// streaming_mode knob. Queried once after initialize(); assumed immutable for
+/// the query lifetime. NOTE: this immutability is an assumption, NOT enforced —
+/// the operator reads capabilities() once at initialize(), so a per-row
+/// inference_backend switch (resolved after initialize) would violate it.
+struct RPCClientCapabilities {
+  /// True if BATCH dispatch mode is feasible — the operator may accumulate rows
+  /// and flush via callBatch() without failing. Covers both a native
+  /// multi-input endpoint (batch_predict/batch_encode) and a client-side
+  /// fan-out inside callBatch(); it does NOT assert the wire is natively
+  /// batched. False means the operator must dispatch per row.
+  bool supportsBatchDispatch{false};
+
+  /// True if the backend is an asynchronous offline job (submit -> poll ->
+  /// fetch) needing a dedicated non-blocking controller rather than the
+  /// per-row / sync-batch dispatch paths.
+  bool isAsyncJob{false};
+
+  /// Server-side limit on requests per callBatch(); 0 = unlimited/unknown.
+  int32_t maxBatchRows{0};
+
+  /// Client-side accumulation guard (approx tokens) to bound memory and force
+  /// an early flush before OOM; 0 = no token-based bound.
+  int64_t maxBatchTokens{0};
+};
+
 /// Generic response structure from RPC calls.
 /// This is a minimal, domain-agnostic structure that works for any backend.
 struct RPCResponse {
