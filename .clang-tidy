@@ -57,6 +57,16 @@ HeaderFilterRegex: '.*'
 
 WarningsAsErrors: 'bugprone-use-after-move'
 
+# clang-tidy parses the GCC compile commands with its Clang frontend, which
+# emits -Wnullability-completeness on core headers when nullability qualifiers
+# leak into a translation unit. The GCC compile commands lack the
+# -Wno-nullability-completeness that CMakeLists.txt sets only for Clang builds,
+# so under -Werror the warning becomes an error. Disabling the check in Checks
+# only filters warning-level output, not an error, so pass the suppression as a
+# real compiler flag here.
+ExtraArgs:
+  - '-Wno-nullability-completeness'
+
 CheckOptions:
   # Naming conventions as explicitly stated in CODING_STYLE.md.
   - key: readability-identifier-naming.ClassCase
