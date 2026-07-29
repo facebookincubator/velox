@@ -64,6 +64,14 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
     return VARCHAR();
   }
 
+  // Declares native batch support so capability-driven dispatch (when the
+  // rpc.capabilities_dispatch config is on) derives BATCH for this function.
+  RPCClientCapabilities capabilities() const override {
+    RPCClientCapabilities caps;
+    caps.supportsBatchDispatch = true;
+    return caps;
+  }
+
   /// With failOnError=true, mimics the meta_ai_on_error='fail' policy: any
   /// errored response hard-fails the query (VELOX_USER_FAIL) instead of NULLing
   /// the row. Otherwise defers to the base (errors -> NULL).

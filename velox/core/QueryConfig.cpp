@@ -267,6 +267,9 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterDecreaseFactor);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMaxLimit);
 
+    // RPC capability-driven dispatch.
+    VELOX_REGISTER_QUERY_CONFIG(kRpcCapabilitiesDispatch);
+
 #undef VELOX_REGISTER_QUERY_CONFIG
 
     return properties;

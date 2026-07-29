@@ -1436,6 +1436,20 @@ class QueryConfig {
       "admission-controlled dispatch this ceiling now actually bounds in-flight "
       "rows, so it must be sized for the backend's healthy concurrency.")
 
+  /// Enables worker-side capability-driven RPC dispatch-mode derivation
+  /// (RPCOperator). The rollout gate for capability-driven dispatch.
+  VELOX_QUERY_CONFIG(
+      kRpcCapabilitiesDispatch,
+      rpcCapabilitiesDispatch,
+      "rpc.capabilities_dispatch",
+      bool,
+      false,
+      "When true, RPCOperator derives the dispatch mode (PER_ROW / BATCH) from "
+      "the RPC function's declared capabilities() after initialize(), instead "
+      "of the plan-time streaming mode. Off by default, in which case the "
+      "plan-time mode (resolved coordinator-side) stands. This is the rollout "
+      "gate for capability-driven dispatch.")
+
   /// Enables the adaptive per-tier RPC rate limiter (RPCRateLimiter).
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterAdaptiveEnabled,

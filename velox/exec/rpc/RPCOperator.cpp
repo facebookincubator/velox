@@ -87,10 +87,60 @@ void RPCOperator::initialize() {
     RPCRateLimiter::setMaxPending(tierKey_, rlMax);
   }
 
+  // Capability-driven dispatch (off by default). Once the function is
+  // initialized, its declared capabilities are known. Capability acts as a
+  // SAFETY GATE over the plan-time streaming mode — not a preference override.
+  // The plan-time mode already reflects the caller's explicit choice or the
+  // coordinator's AUTOMATIC/row-count decision, so:
+  //   - Downgrade an unsupported BATCH -> PER_ROW, so a batch mode never hits a
+  //     backend with no native batch endpoint (which would fail at flush).
+  //   - Never force BATCH over a PER_ROW choice — that is the caller's
+  //     latency-vs-throughput lever, which capability alone must not remove.
+  // Re-driving state_'s mode here — before any dispatch — is the single
+  // override point: addInput/getOutput/isBlocked/noMoreInput read
+  // state_->streamingMode().
+  if (queryConfig.rpcCapabilitiesDispatch()) {
+    const auto caps = function_->capabilities();
+    const auto planMode = state_->streamingMode();
+    // TODO: route caps.isAsyncJob to a dedicated async-job controller; until it
+    // exists, an async-job backend runs PER_ROW.
+    auto effectiveMode = planMode;
+    if (planMode == RPCStreamingMode::kBatch && !caps.supportsBatchDispatch) {
+      effectiveMode = RPCStreamingMode::kPerRow;
+    }
+    if (effectiveMode != planMode) {
+      state_->setStreamingMode(
+          effectiveMode,
+          queryConfig.rpcCongestionMinWindow(),
+          queryConfig.rpcCongestionStepCoef(),
+          queryConfig.rpcCongestionMaxWindow());
+    }
+    // When running BATCH, clamp the flush gate to the backend's server-side
+    // batch limit. maxBatchRows is an upper bound, not a preference: clamp
+    // rather than replace so a smaller caller-set dispatch batch size (a
+    // latency lever) is preserved. dispatchBatchSize_ == 0 means "no row cap"
+    // (token-only), so adopt the backend limit directly in that case.
+    if (effectiveMode == RPCStreamingMode::kBatch && caps.maxBatchRows > 0) {
+      const auto backendLimit = static_cast<int32_t>(caps.maxBatchRows);
+      dispatchBatchSize_ = dispatchBatchSize_ > 0
+          ? std::min(dispatchBatchSize_, backendLimit)
+          : backendLimit;
+    }
+    RPC_OP_VLOG(1) << "capability-driven dispatch for function '"
+                   << rpcNode_->functionName() << "': plan "
+                   << (planMode == RPCStreamingMode::kBatch ? "BATCH"
+                                                            : "PER_ROW")
+                   << " -> effective "
+                   << (effectiveMode == RPCStreamingMode::kBatch ? "BATCH"
+                                                                 : "PER_ROW")
+                   << " (supportsBatchDispatch=" << caps.supportsBatchDispatch
+                   << ", maxBatchRows=" << caps.maxBatchRows << ")";
+  }
+
   RPC_OP_VLOG(1) << "Created operator for function '"
                  << rpcNode_->functionName() << "', planNodeId=" << planNodeId()
                  << ", operatorId=" << operatorId() << ", streamingMode="
-                 << (rpcNode_->streamingMode() == RPCStreamingMode::kBatch
+                 << (state_->streamingMode() == RPCStreamingMode::kBatch
                          ? "BATCH"
                          : "PER_ROW");
 

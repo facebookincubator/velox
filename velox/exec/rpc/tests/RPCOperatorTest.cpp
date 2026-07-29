@@ -104,7 +104,8 @@ class RPCOperatorTest : public OperatorTestBase {
       const core::PlanNodePtr& source,
       const std::vector<std::string>& argumentColumnNames,
       const std::string& functionName = "demo_batch_rpc",
-      int32_t dispatchBatchSize = 0) {
+      int32_t dispatchBatchSize = 0,
+      RPCStreamingMode streamingMode = RPCStreamingMode::kBatch) {
     auto sourceType = source->outputType();
 
     std::vector<std::string> argCols;
@@ -132,7 +133,7 @@ class RPCOperatorTest : public OperatorTestBase {
         argCols,
         argTypes,
         constantInputs,
-        RPCStreamingMode::kBatch,
+        streamingMode,
         dispatchBatchSize);
   }
 
@@ -264,6 +265,71 @@ TEST_F(RPCOperatorTest, multipleColumns) {
   EXPECT_EQ(ids->valueAt(i2), 200);
   EXPECT_EQ(extras->valueAt(i2), 2.5);
   EXPECT_EQ(results->valueAt(i2).str(), "Response for: question two");
+}
+
+// ============================================================
+// Capability-driven dispatch — capability gates the plan-time mode
+// ============================================================
+
+// Safety gate: with rpc.capabilities_dispatch on, a BATCH plan node whose
+// function has no native batch (demo_rpc, supportsBatchDispatch=false) is
+// downgraded to PER_ROW, so a batch mode never hits a backend that cannot
+// batch. With the flag off, BATCH stands and hits demo_rpc's (unimplemented)
+// accumulateBatch — the query fails.
+TEST_F(RPCOperatorTest, capabilityDrivenDowngradesUnsupportedBatch) {
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({"hello", "world", "third"})});
+
+  // BATCH plan node, but demo_rpc has no native batch endpoint.
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_rpc");
+
+  // Flag off: BATCH stands -> demo_rpc can't accumulate -> fails.
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()), "accumulateBatch");
+
+  // Flag on: capability downgrades BATCH -> PER_ROW -> succeeds.
+  auto result = AssertQueryBuilder(plan)
+                    .config(core::QueryConfig::kRpcCapabilitiesDispatch, "true")
+                    .copyResults(pool());
+
+  ASSERT_EQ(result->size(), 3);
+  auto* prompts = result->childAt(0)->asFlatVector<StringView>();
+  auto* results = result->childAt(1)->asFlatVector<StringView>();
+  for (vector_size_t i = 0; i < result->size(); ++i) {
+    ASSERT_FALSE(results->isNullAt(i));
+    // demo_rpc's per-row path produces "Response for: <prompt>".
+    EXPECT_EQ(
+        results->valueAt(i).str(),
+        "Response for: " + prompts->valueAt(i).str());
+  }
+}
+
+// Respect a supported BATCH: a BATCH plan node on a batch-capable function
+// (demo_batch_rpc, supportsBatchDispatch=true) stays BATCH under the flag — the
+// gate never downgrades a mode the backend supports.
+TEST_F(RPCOperatorTest, capabilityDrivenKeepsSupportedBatch) {
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({"hello", "world", "batch"})});
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_batch_rpc");
+
+  auto result = AssertQueryBuilder(plan)
+                    .config(core::QueryConfig::kRpcCapabilitiesDispatch, "true")
+                    .copyResults(pool());
+
+  ASSERT_EQ(result->size(), 3);
+  auto* prompts = result->childAt(0)->asFlatVector<StringView>();
+  auto* results = result->childAt(1)->asFlatVector<StringView>();
+  std::map<std::string, std::string> rows;
+  for (vector_size_t i = 0; i < result->size(); ++i) {
+    rows[prompts->valueAt(i).str()] = results->valueAt(i).str();
+  }
+  // "Batch response for:" prefix is produced only by the batch path.
+  EXPECT_EQ(rows["hello"], "Batch response for: hello");
+  EXPECT_EQ(rows["world"], "Batch response for: world");
+  EXPECT_EQ(rows["batch"], "Batch response for: batch");
 }
 
 // ============================================================
