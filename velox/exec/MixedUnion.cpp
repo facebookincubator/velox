@@ -34,7 +34,9 @@ MixedUnion::MixedUnion(
       unionNode_(unionNode),
       maxOutputBatchRows_(outputBatchRows()),
       maxOutputBatchBytes_(
-          driverCtx->queryConfig().preferredOutputBatchBytes()) {}
+          driverCtx->queryConfig().preferredOutputBatchBytes()) {
+  stats_.wlock()->role = OperatorStats::Role::kNodeOutput;
+}
 
 BlockingReason MixedUnion::addMergeSources(ContinueFuture* /* future */) {
   if (sources_.empty()) {

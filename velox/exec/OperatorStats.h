@@ -128,6 +128,15 @@ struct OperatorStats {
   /// construction of the Operator where applicable.
   std::string operatorType;
 
+  /// How this operator contributes to its plan node's input/output totals when
+  /// the node maps to multiple operators:
+  /// kFull - counts for both input and output (default).
+  /// kNodeInput - counts for the node's input only.
+  /// kNodeOutput - counts for the node's output only.
+  /// kInternal - counts for neither.
+  enum class Role { kFull, kNodeInput, kNodeOutput, kInternal };
+  Role role{Role::kFull};
+
   /// Number of splits (or chunks of work). Split can be a part of data file to
   /// read.
   int64_t numSplits{0};

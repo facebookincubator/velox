@@ -270,7 +270,9 @@ LocalExchange::LocalExchange(
       queue_{operatorCtx_->task()->getLocalExchangeQueue(
           ctx->splitGroupId,
           planNodeId,
-          partition)} {}
+          partition)} {
+  stats_.wlock()->role = OperatorStats::Role::kNodeOutput;
+}
 
 BlockingReason LocalExchange::isBlocked(ContinueFuture* future) {
   if (blockingReason_ != BlockingReason::kNotBlocked) {
@@ -352,6 +354,7 @@ LocalPartition::LocalPartition(
               : ctx->queryConfig().maxLocalExchangePartitionBufferSize()},
       partitionBufferPreserveEncoding_{
           ctx->queryConfig().localExchangePartitionBufferPreserveEncoding()} {
+  stats_.wlock()->role = OperatorStats::Role::kNodeInput;
   VELOX_CHECK(numPartitions_ == 1 || partitionFunction_ != nullptr);
   for (auto& queue : queues_) {
     queue->addProducer();
