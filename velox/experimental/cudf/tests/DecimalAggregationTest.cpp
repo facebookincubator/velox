@@ -310,6 +310,34 @@ TEST_F(CudfDecimalTest, caseWhenNormalizesDecimal32Input) {
   EXPECT_FALSE(isValidAt(nullMask, 3));
 }
 
+TEST_F(CudfDecimalTest, betweenNormalizesDecimal32Input) {
+  auto rowType = ROW({"price"}, {DECIMAL(7, 2)});
+  auto queryCtx = core::QueryCtx::create();
+  core::ExecCtx execCtx(pool(), queryCtx.get());
+  auto expression = test_utils::compileExecExpr(
+      "price BETWEEN "
+      "CAST('0.99' AS DECIMAL(7, 2)) AND "
+      "CAST('1.49' AS DECIMAL(7, 2))",
+      rowType,
+      &execCtx,
+      {},
+      /*enableConstantFolding=*/true);
+  auto evaluator = createCudfExpression(expression, rowType);
+
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto price =
+      makeDecimalColumn<int32_t>({98, 99, 100, 149, 150}, 2, nullptr, stream);
+  std::vector<cudf::column_view> inputs{price->view()};
+
+  auto result = evaluator->eval(inputs, stream, mr);
+  auto resultView = asView(result);
+  EXPECT_EQ(resultView.type().id(), cudf::type_id::BOOL8);
+  EXPECT_EQ(
+      copyColumnData<int8_t>(resultView, stream),
+      (std::vector<int8_t>{0, 1, 1, 1, 0}));
+}
+
 TEST_F(CudfDecimalTest, multiplyNormalizesDecimal32Input) {
   auto rowType = ROW({"quantity", "sales_price"}, {INTEGER(), DECIMAL(7, 2)});
   auto queryCtx = core::QueryCtx::create();
@@ -359,7 +387,8 @@ TEST_F(CudfDecimalTest, divideUsesWidestDecimalStorage) {
 
   auto assertExpression = [&](const std::string& sql,
                               const std::vector<int64_t>& expected) {
-    auto expression = test_utils::compileExecExpr(sql, rowType, &execCtx);
+    auto expression = test_utils::compileExecExpr(
+        sql, rowType, &execCtx, {}, /*enableConstantFolding=*/true);
     auto evaluator = createCudfExpression(expression, rowType);
     auto result = evaluator->eval(inputs, stream, mr);
     auto resultView = asView(result);
@@ -397,7 +426,9 @@ TEST_F(CudfDecimalTest, coalesceNormalizesDecimal32Input) {
       "sales_price - "
       "coalesce(return_amount, CAST('0.00' AS DECIMAL(7, 2)))",
       rowType,
-      &execCtx);
+      &execCtx,
+      {},
+      /*enableConstantFolding=*/true);
   auto evaluator = createCudfExpression(expression, rowType);
 
   auto stream = cudf::get_default_stream();
@@ -430,7 +461,9 @@ TEST_F(CudfDecimalTest, coalescePreservesOwnedFirstInput) {
       "CAST(return_amount AS DECIMAL(12, 2)), "
       "CAST('0.00' AS DECIMAL(12, 2)))",
       rowType,
-      &execCtx);
+      &execCtx,
+      {},
+      /*enableConstantFolding=*/true);
   auto evaluator = createCudfExpression(expression, rowType);
 
   auto stream = cudf::get_default_stream();
