@@ -25,7 +25,6 @@ add_library(
   ArrayAccessFunctions.cpp
   AstExpression.cpp
   CommonFunctions.cpp
-  CudfExpressionCompiler.cpp
   DateTruncFunction.cpp
   DecimalExpressionKernels.cpp
   DecimalExpressionKernelsGpu.cu

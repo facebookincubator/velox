@@ -22,7 +22,6 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
-#include "velox/experimental/cudf/expression/CudfExpressionCompiler.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/common/testutil/TestValue.h"
@@ -568,7 +567,7 @@ void CudfHashJoinProbe::initialize() {
   // build, and the expression + input schema are stable for the lifetime of
   // the operator instance.
   std::vector<velox::RowTypePtr> filterRowTypes{probeType_, buildType_};
-  filterEvaluator_ = compile(
+  filterEvaluator_ = createCudfExpression(
       optimizedFilter,
       facebook::velox::type::concatRowTypes(filterRowTypes),
       pool);

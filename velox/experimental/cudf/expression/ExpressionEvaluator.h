@@ -185,25 +185,13 @@ class FunctionExpression : public CudfExpression {
 };
 
 /// Create a CudfExpression from a TypedExpr, selecting the best evaluator.
-/// Forwards to compile and does not apply expression-level
-/// optimization; callers that need optimization should run
-/// expression::optimize at the top-level entry point first.
+/// Does not apply expression-level optimization; callers that need
+/// optimization should run expression::optimize at the top-level entry point
+/// first.
 std::shared_ptr<CudfExpression> createCudfExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
     memory::MemoryPool* pool);
-
-/// Structural check that an expression tree is supported by some cuDF
-/// evaluator, without initializing CudfExpression objects. Depends only on the
-/// expression, not on any query context; use it for internal evaluator
-/// recursion and for AST-to-CudfFunction hand-off. This is not the
-/// operator-eligibility entry point: operators that gate replacement on the
-/// session config should call canExprRunOnGpu instead.
-/// \param expr Expression to check
-/// \param deep If true, recursively check all children in the expression tree;
-///             if false, only check if the top-level operation is supported
-///             (useful when delegating to subexpressions)
-bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr, bool deep = true);
 
 /// Plan-time GPU eligibility for a top-level operator expression, as invoked by
 /// the OperatorAdapters and the aggregation validators. Optimizes the
@@ -212,8 +200,8 @@ bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr, bool deep = true);
 /// folds to a plain decimal constant that the structural check accepts, rather
 /// than a live decimal-target cast that it would reject. Then applies the
 /// query-context-dependent timezone fallback (a timezone-sensitive date_trunc
-/// under adjust_timestamp_to_session_timezone must stay on CPU) and the
-/// structural canBeEvaluatedByCudf check on the optimized expression. When
+/// under adjust_timestamp_to_session_timezone must stay on CPU) and a
+/// structural support check on the optimized expression. When
 /// `queryCtx` or `pool` is null, skips optimization and checks `expr` directly.
 /// \param pool Leaf pool used for constant folding during optimization,
 ///             typically the operator's own pool.
@@ -222,27 +210,10 @@ bool canExprRunOnGpu(
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool);
 
-/// Return the best CudfExpressionEvaluatorEntry for the given expression,
-/// or nullptr if no evaluator can handle it.
-const CudfExpressionEvaluatorEntry* findBestEvaluator(
-    const core::TypedExprPtr& expr);
-
 /// Extract the full field path from a field access / dereference chain.
 /// Returns nullopt for non-field expressions.
 std::optional<std::vector<std::string>> extractFieldPath(
     const core::TypedExprPtr& expr);
-
-/// Return the root (top-level) field name, or nullopt.
-std::optional<std::string> rootFieldName(const core::TypedExprPtr& expr);
-
-/// True if the expression is a direct input field reference (possibly nested).
-bool isInputFieldReference(const core::TypedExprPtr& expr);
-
-/// Collect all top-level input field names referenced by an expression tree.
-void collectReferencedInputFields(
-    const core::TypedExprPtr& expr,
-    std::unordered_set<std::string>& fields,
-    const std::unordered_set<std::string>& lambdaInputs = {});
 
 /// Return the set of top-level input field names referenced by the expression.
 std::unordered_set<std::string> referencedInputFields(

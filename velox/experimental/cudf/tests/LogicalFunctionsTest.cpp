@@ -91,7 +91,7 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
       const std::string& expression) {
     auto expr = cudf_velox::test_utils::optimizeTypedExpr(
         expression, inputRowType, queryCtx_.get(), execCtx_.get());
-    ASSERT_TRUE(cudf_velox::canBeEvaluatedByCudf(expr, /*deep=*/false));
+    ASSERT_TRUE(cudf_velox::canExprRunOnGpu(expr, queryCtx_.get(), pool()));
     auto cudfExpr =
         cudf_velox::createCudfExpression(expr, inputRowType, pool());
     ASSERT_NE(

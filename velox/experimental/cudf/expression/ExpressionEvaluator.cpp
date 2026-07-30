@@ -16,7 +16,6 @@
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
-#include "velox/experimental/cudf/expression/CudfExpressionCompiler.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/DecimalExpressionKernels.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
@@ -242,6 +241,96 @@ static bool matchCallAgainstSignatures(
     return true;
   }
   return false;
+}
+
+std::optional<std::string> rootFieldName(const core::TypedExprPtr& expr) {
+  auto path = extractFieldPath(expr);
+  if (!path.has_value() || path->empty()) {
+    return std::nullopt;
+  }
+  return path->front();
+}
+
+bool isInputFieldReference(const core::TypedExprPtr& expr) {
+  return rootFieldName(expr).has_value();
+}
+
+void collectReferencedInputFields(
+    const core::TypedExprPtr& expr,
+    std::unordered_set<std::string>& fields,
+    const std::unordered_set<std::string>& lambdaInputs = {}) {
+  if (expr == nullptr) {
+    return;
+  }
+
+  if (auto root = rootFieldName(expr);
+      root.has_value() && !lambdaInputs.count(*root)) {
+    fields.insert(*root);
+  }
+
+  if (expr->isLambdaKind()) {
+    const auto* lambda = expr->asUnchecked<core::LambdaTypedExpr>();
+    auto scopedLambdaInputs = lambdaInputs;
+    for (const auto& name : lambda->signature()->names()) {
+      scopedLambdaInputs.insert(name);
+    }
+    collectReferencedInputFields(lambda->body(), fields, scopedLambdaInputs);
+    return;
+  }
+
+  for (const auto& input : expr->inputs()) {
+    collectReferencedInputFields(input, fields, lambdaInputs);
+  }
+}
+
+// Returns the highest-priority evaluator entry that can handle `expr`, or
+// nullptr when none can.
+const CudfExpressionEvaluatorEntry* findBestEvaluator(
+    const core::TypedExprPtr& expr) {
+  ensureBuiltinExpressionEvaluatorsRegistered();
+  const auto& registry = getCudfExpressionEvaluatorRegistry();
+
+  const CudfExpressionEvaluatorEntry* best = nullptr;
+  for (const auto& [name, entry] : registry) {
+    if (entry.canEvaluate && entry.canEvaluate(expr)) {
+      if (best == nullptr || entry.priority > best->priority) {
+        best = &entry;
+      }
+    }
+  }
+  return best;
+}
+
+// Recursive, context-free check that some cuDF evaluator supports every node in
+// the expression tree. canExprRunOnGpu wraps this with expression optimization
+// and the timezone fallback.
+bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr) {
+  ensureBuiltinExpressionEvaluatorsRegistered();
+
+  const auto& registry = getCudfExpressionEvaluatorRegistry();
+
+  bool supported = false;
+  for (const auto& [name, entry] : registry) {
+    if (entry.canEvaluate && entry.canEvaluate(expr)) {
+      supported = true;
+      break;
+    }
+  }
+  if (!supported) {
+    LOG_FALLBACK(expr->toString());
+    return false;
+  }
+
+  for (const auto& input : expr->inputs()) {
+    if (input->isConstantKind() || input->isInputKind()) {
+      continue;
+    }
+    if (!canBeEvaluatedByCudf(input)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 } // namespace
@@ -2907,98 +2996,11 @@ std::optional<std::vector<std::string>> extractFieldPath(
   return std::nullopt;
 }
 
-std::optional<std::string> rootFieldName(const core::TypedExprPtr& expr) {
-  auto path = extractFieldPath(expr);
-  if (!path.has_value() || path->empty()) {
-    return std::nullopt;
-  }
-  return path->front();
-}
-
-bool isInputFieldReference(const core::TypedExprPtr& expr) {
-  return rootFieldName(expr).has_value();
-}
-
-void collectReferencedInputFields(
-    const core::TypedExprPtr& expr,
-    std::unordered_set<std::string>& fields,
-    const std::unordered_set<std::string>& lambdaInputs) {
-  if (expr == nullptr) {
-    return;
-  }
-
-  if (auto root = rootFieldName(expr);
-      root.has_value() && !lambdaInputs.count(*root)) {
-    fields.insert(*root);
-  }
-
-  if (expr->isLambdaKind()) {
-    const auto* lambda = expr->asUnchecked<core::LambdaTypedExpr>();
-    auto scopedLambdaInputs = lambdaInputs;
-    for (const auto& name : lambda->signature()->names()) {
-      scopedLambdaInputs.insert(name);
-    }
-    collectReferencedInputFields(lambda->body(), fields, scopedLambdaInputs);
-    return;
-  }
-
-  for (const auto& input : expr->inputs()) {
-    collectReferencedInputFields(input, fields, lambdaInputs);
-  }
-}
-
 std::unordered_set<std::string> referencedInputFields(
     const core::TypedExprPtr& expr) {
   std::unordered_set<std::string> fields;
   collectReferencedInputFields(expr, fields);
   return fields;
-}
-
-const CudfExpressionEvaluatorEntry* findBestEvaluator(
-    const core::TypedExprPtr& expr) {
-  ensureBuiltinExpressionEvaluatorsRegistered();
-  const auto& registry = getCudfExpressionEvaluatorRegistry();
-
-  const CudfExpressionEvaluatorEntry* best = nullptr;
-  for (const auto& [name, entry] : registry) {
-    if (entry.canEvaluate && entry.canEvaluate(expr)) {
-      if (best == nullptr || entry.priority > best->priority) {
-        best = &entry;
-      }
-    }
-  }
-  return best;
-}
-
-bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr, bool deep) {
-  ensureBuiltinExpressionEvaluatorsRegistered();
-
-  const auto& registry = getCudfExpressionEvaluatorRegistry();
-
-  bool supported = false;
-  for (const auto& [name, entry] : registry) {
-    if (entry.canEvaluate && entry.canEvaluate(expr)) {
-      supported = true;
-      break;
-    }
-  }
-  if (!supported) {
-    LOG_FALLBACK(expr->toString());
-    return false;
-  }
-
-  if (deep) {
-    for (const auto& input : expr->inputs()) {
-      if (input->isConstantKind() || input->isInputKind()) {
-        continue;
-      }
-      if (!canBeEvaluatedByCudf(input, true)) {
-        return false;
-      }
-    }
-  }
-
-  return true;
 }
 
 namespace {
@@ -3065,7 +3067,10 @@ std::shared_ptr<CudfExpression> createCudfExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
     memory::MemoryPool* pool) {
-  return compile(expr, inputRowSchema, pool);
+  const auto* best = findBestEvaluator(expr);
+  VELOX_CHECK_NOT_NULL(
+      best, "No cuDF expression evaluator can handle: {}", expr->toString());
+  return best->create(expr, inputRowSchema, pool);
 }
 
 void unregisterFunctions() {

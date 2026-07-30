@@ -20,7 +20,7 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
-#include "velox/experimental/cudf/expression/CudfExpressionCompiler.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/memory/Memory.h"
@@ -187,10 +187,11 @@ void CudfFilterProject::initialize() {
   // lifetime.
   auto* const queryCtx = operatorCtx_->execCtx()->queryCtx();
   auto* const pool = operatorCtx_->pool();
-  const auto optimizeAndCompile = [inputType, queryCtx, pool](
-                                      const core::TypedExprPtr& expr) {
-    return compile(expression::optimize(expr, queryCtx, pool), inputType, pool);
-  };
+  const auto optimizeAndCompile =
+      [inputType, queryCtx, pool](const core::TypedExprPtr& expr) {
+        return createCudfExpression(
+            expression::optimize(expr, queryCtx, pool), inputType, pool);
+      };
   if (hasFilter_) {
     // First expr is Filter, rest are Project.
     filterEvaluator_ = optimizeAndCompile(allExprs.front());

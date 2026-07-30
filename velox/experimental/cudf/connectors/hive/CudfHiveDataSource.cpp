@@ -22,7 +22,6 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
-#include "velox/experimental/cudf/expression/CudfExpressionCompiler.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -137,8 +136,8 @@ CudfHiveDataSource::CudfHiveDataSource(
     // The filter is already optimized and constant folded above, so compile it
     // directly.
     auto const remainingFilterType = getTableRowType();
-    cudfRemainingFilterExpression_ =
-        compile(optimizedRemainingFilter_, remainingFilterType, pool_);
+    cudfRemainingFilterExpression_ = createCudfExpression(
+        optimizedRemainingFilter_, remainingFilterType, pool_);
   }
 
   // Build a combined AST for all subfield filters once. This is query-constant
