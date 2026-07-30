@@ -320,6 +320,16 @@ void CudfNestedLoopJoinProbe::initialize() {
 
 void CudfNestedLoopJoinProbe::doClose() {
   Operator::close();
+  // lastProbeStream_ covers every stream this instance used to read
+  // build-side state (see doGetOutput() and emitBuildMismatchRows()).
+  // Synchronize it before releasing that state below - otherwise, if this
+  // instance's last batch is still in flight when close() runs, the
+  // resulting stream-ordered free could race the read. The precompute path
+  // in isBlocked() already blocks on its own stream immediately after use,
+  // so it needs no extra handling here.
+  if (lastProbeStream_.has_value()) {
+    lastProbeStream_->synchronize();
+  }
   buildData_.reset();
   probeMatchedFlags_.reset();
   buildMatchedFlags_.reset();
@@ -836,7 +846,10 @@ RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
       buildMismatchEmitted_ = true;
       auto stream = cudfGlobalStreamPool().get_stream();
       // Fresh pool stream - must wait for the build-ready event before
-      // emitBuildMismatchRows() reads buildData_.
+      // emitBuildMismatchRows() reads buildData_. Also record it as
+      // lastProbeStream_ so doClose() waits for this read too before
+      // releasing buildData_/buildMatchedFlags_.
+      lastProbeStream_ = stream;
       waitForBuildReady(stream);
       return emitBuildMismatchRows(stream);
     }

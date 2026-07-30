@@ -282,8 +282,14 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   ContinueFuture peerFuture_{ContinueFuture::makeEmpty()};
   bool buildMismatchEmitted_{false};
 
-  // Last CUDA stream used for probing, needed for join_streams in
-  // noMoreInput() to ensure GPU-side ordering before flag merge.
+  // Last CUDA stream this instance used to touch build-side state
+  // (buildData_, buildPrecomputed_, buildMatchedFlags_, scalars_). Used for
+  // two distinct purposes: (1) join_streams in noMoreInput() to establish
+  // GPU-side ordering before the cross-peer flag merge, and (2)
+  // synchronizing in doClose() before releasing that same build-side state,
+  // so a stream-ordered free can't race a still-in-flight read from this
+  // instance. Every call site that reads build-side state on a stream must
+  // record it here - see doGetOutput() and emitBuildMismatchRows().
   std::optional<rmm::cuda_stream_view> lastProbeStream_;
 
   // Build-ready event, fetched once from the bridge in isBlocked() -
