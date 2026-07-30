@@ -26,6 +26,7 @@
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <unordered_map>
 #include "velox/parse/TypeResolver.h"
 
 DEFINE_uint32(seed, 0, "");
@@ -284,6 +285,35 @@ TEST(TableEvolutionFuzzerTest, adaptiveVectorSizeScalesWithByteTarget) {
   EXPECT_GT(base, Fuzzer::kMinAdaptiveVectorSize);
   EXPECT_LT(doubled, Fuzzer::kMaxAdaptiveVectorSize);
   EXPECT_EQ(doubled, 2 * base);
+}
+
+// Verifies the extraReadConfig hook is invoked on the read path and that a
+// non-empty reader config exercises makeScanTask's QueryCtx connector-config
+// path while the scan still round-trips (the pushdown-vs-FilterNode oracle
+// holds). Asserts the hook fires at least once per run(). evolutionCount == 1
+// keeps it fast and deterministic.
+TEST(TableEvolutionFuzzerTest, extraReadConfigHookAppliedOncePerRun) {
+  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
+  auto config = makeDwrfConfig(pool.get(), 1);
+  int calls = 0;
+  config.extraReadConfig =
+      [&](FuzzerGenerator&) -> std::unordered_map<std::string, std::string> {
+    ++calls;
+    // An inert connector session key: the QueryCtx connector-config path must
+    // construct and the scan must still produce identical pushdown/reference
+    // results.
+    return {{"test.reader.key", "test.reader.value"}};
+  };
+  TableEvolutionFuzzer fuzzer(config);
+  fuzzer.setSeed(20260629);
+  constexpr int kIterations = 3;
+  for (int i = 0; i < kIterations; ++i) {
+    EXPECT_NO_THROW(fuzzer.run());
+    fuzzer.reSeed();
+  }
+  // Fires at least once per run() (once per query shape, each shared by both
+  // scan plans).
+  EXPECT_GE(calls, kIterations);
 }
 
 TEST(TableEvolutionFuzzerTest, run) {

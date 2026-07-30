@@ -49,6 +49,15 @@ class TableEvolutionFuzzer {
         dwio::common::FileFormat,
         FuzzerGenerator&)>
         extraWriteSerdeParams;
+
+    // Optional. Returns extra connector session config to apply on the read
+    // path. Called once per run() with the fuzzer rng and applied to both scan
+    // tasks (test and reference), so a driver can exercise reader options,
+    // randomized yet reproducible from the seed. The core stays
+    // format-agnostic.
+    std::function<std::unordered_map<std::string, std::string>(
+        FuzzerGenerator&)>
+        extraReadConfig;
   };
 
   /// Per-batch raw-byte target and clamp bounds for adaptive batch sizing. A
@@ -185,7 +194,8 @@ class TableEvolutionFuzzer {
       bool useFiltersAsNode,
       bool insertProjectToBlockPushdown,
       const RowTypePtr& fullOutSchema,
-      const std::vector<std::string>& outputColumnNames);
+      const std::vector<std::string>& outputColumnNames,
+      const std::unordered_map<std::string, std::string>& readConfig = {});
 
   /// Builds schema for flatmap as struct reading by converting selected map
   /// columns to struct types.
