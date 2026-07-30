@@ -103,31 +103,15 @@ std::unique_ptr<cudf::table> concatenateTables(
   return cudf::concatenate(tableViews, stream, mr);
 }
 
-std::unique_ptr<cudf::table> makeEmptyTable(TypePtr const& inputType) {
+std::unique_ptr<cudf::table> makeEmptyTable(
+    const TypePtr& type,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
   std::vector<std::unique_ptr<cudf::column>> emptyColumns;
-  for (size_t i = 0; i < inputType->size(); ++i) {
-    auto const& childType = inputType->childAt(i);
-    if (childType->kind() == TypeKind::ROW) {
-      auto tbl = makeEmptyTable(childType);
-      emptyColumns.push_back(
-          cudf::make_structs_column(
-              0, tbl->release(), 0, rmm::device_buffer()));
-    } else if (childType->kind() == TypeKind::ARRAY) {
-      // LIST: empty offsets + recursively empty child.
-      auto emptyChild = makeEmptyTable(ROW({"e"}, {childType->childAt(0)}));
-      auto offsets = cudf::make_empty_column(cudf::type_id::INT32);
-      emptyColumns.push_back(
-          cudf::make_lists_column(
-              0,
-              std::move(offsets),
-              std::move(emptyChild->release()[0]),
-              0,
-              rmm::device_buffer()));
-    } else {
-      auto emptyColumn =
-          cudf::make_empty_column(cudf_velox::veloxToCudfDataType(childType));
-      emptyColumns.push_back(std::move(emptyColumn));
-    }
+  emptyColumns.reserve(type->size());
+  for (size_t i = 0; i < type->size(); ++i) {
+    emptyColumns.push_back(
+        makeAllNullColumn(type->childAt(i), 0, stream, mr));
   }
   return std::make_unique<cudf::table>(std::move(emptyColumns));
 }
@@ -139,7 +123,7 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
     rmm::device_async_resource_ref mr) {
   // Check for empty vector
   if (tables.size() == 0) {
-    return makeEmptyTable(tableType);
+    return makeEmptyTable(tableType, stream, mr);
   }
 
   auto inputStreams = std::vector<rmm::cuda_stream_view>();
@@ -175,7 +159,7 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
   std::vector<std::unique_ptr<cudf::table>> concatTables;
   // Check for empty vector
   if (tables.size() == 0) {
-    concatTables.push_back(makeEmptyTable(tableType));
+    concatTables.push_back(makeEmptyTable(tableType, stream, mr));
     return concatTables;
   }
 
@@ -272,7 +256,7 @@ std::vector<CudfVectorPtr> getConcatenatedCudfVectorsBatched(
             pool,
             tableType,
             checkedVectorSize(chunkRows),
-            makeEmptyTable(tableType),
+            makeEmptyTable(tableType, stream, mr),
             stream));
     remainingRows -= chunkRows;
   } while (remainingRows > 0);
