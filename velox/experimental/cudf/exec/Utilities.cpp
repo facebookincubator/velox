@@ -110,8 +110,7 @@ std::unique_ptr<cudf::table> makeEmptyTable(
   std::vector<std::unique_ptr<cudf::column>> emptyColumns;
   emptyColumns.reserve(type->size());
   for (size_t i = 0; i < type->size(); ++i) {
-    emptyColumns.push_back(
-        makeAllNullColumn(type->childAt(i), 0, stream, mr));
+    emptyColumns.push_back(makeAllNullColumn(type->childAt(i), 0, stream, mr));
   }
   return std::make_unique<cudf::table>(std::move(emptyColumns));
 }
