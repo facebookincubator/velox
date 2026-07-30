@@ -149,5 +149,38 @@ TEST_F(RandnTest, bigintSeed) {
   EXPECT_NE(randnBigint(1L), randnBigint(2L));
 }
 
+TEST_F(RandnTest, bigintSeedPartitionOverflow) {
+  // Seeding combines the seed with the partition id. At extreme seeds the
+  // combination wraps around (e.g. INT64_MAX + 1), which must be well defined
+  // and still yield finite, deterministic output.
+  auto randnBigint = [&](int64_t seed, int32_t partitionIndex) {
+    setSparkPartitionId(partitionIndex);
+    return evaluateOnce<double>(
+        fmt::format("randn(cast({} as bigint))", seed),
+        makeRowVector(ROW({}), 1));
+  };
+
+  constexpr int64_t kMax = std::numeric_limits<int64_t>::max();
+  constexpr int64_t kMin = std::numeric_limits<int64_t>::min();
+
+  for (int32_t partitionIndex : {1, 1'000'000}) {
+    auto maxResult = randnBigint(kMax, partitionIndex);
+    ASSERT_TRUE(maxResult.has_value());
+    EXPECT_TRUE(std::isfinite(maxResult.value()));
+    // Deterministic: same seed and partition id repeat exactly.
+    EXPECT_EQ(maxResult, randnBigint(kMax, partitionIndex));
+
+    auto minResult = randnBigint(kMin, partitionIndex);
+    ASSERT_TRUE(minResult.has_value());
+    EXPECT_TRUE(std::isfinite(minResult.value()));
+    EXPECT_EQ(minResult, randnBigint(kMin, partitionIndex));
+  }
+
+  // The partition id shifts the combined seed, so the same extreme seed on
+  // different partitions produces different output.
+  EXPECT_NE(randnBigint(kMax, 0), randnBigint(kMax, 1));
+  EXPECT_NE(randnBigint(kMin, 0), randnBigint(kMin, 1));
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

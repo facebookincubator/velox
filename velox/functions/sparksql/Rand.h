@@ -23,6 +23,17 @@
 
 namespace facebook::velox::functions::sparksql {
 
+namespace detail {
+// Combines the user seed with the Spark partition id using two's-complement
+// wraparound, matching Spark's Long + Int seeding and avoiding signed integer
+// overflow (undefined behavior) at extreme seed values such as INT64_MAX.
+FOLLY_ALWAYS_INLINE int64_t
+combineSeedWithPartitionId(int64_t seed, int32_t partitionId) {
+  return static_cast<int64_t>(
+      static_cast<uint64_t>(seed) + static_cast<uint64_t>(partitionId));
+}
+} // namespace detail
+
 /// Spark SQL rand([seed]) - Returns a random double in [0.0, 1.0).
 /// Uses XORShift algorithm for Spark-compatible reproducibility.
 /// Generator is initialized with (seed + sparkPartitionId) to match Spark's
@@ -43,7 +54,7 @@ struct RandFunction {
     const auto partitionId = SparkQueryConfig{config}.partitionId();
     // Use folly::Random to generate a random seed for unseeded rand().
     int64_t seed = folly::Random::rand64();
-    generator_.setSeed(seed + partitionId);
+    generator_.setSeed(detail::combineSeedWithPartitionId(seed, partitionId));
   }
 
   /// Initialize for seeded variant: rand(seed).
@@ -54,7 +65,7 @@ struct RandFunction {
       const TInput* seedInput) {
     const auto partitionId = SparkQueryConfig{config}.partitionId();
     int64_t seed = seedInput ? static_cast<int64_t>(*seedInput) : 0;
-    generator_.setSeed(seed + partitionId);
+    generator_.setSeed(detail::combineSeedWithPartitionId(seed, partitionId));
   }
 
   FOLLY_ALWAYS_INLINE void call(double& result) {
@@ -90,7 +101,7 @@ struct RandnFunction {
     const auto partitionId = SparkQueryConfig{config}.partitionId();
     // Use folly::Random to generate a random seed for unseeded randn().
     int64_t seed = folly::Random::rand64();
-    generator_.setSeed(seed + partitionId);
+    generator_.setSeed(detail::combineSeedWithPartitionId(seed, partitionId));
   }
 
   /// Initialize for seeded variant: randn(seed).
@@ -101,7 +112,7 @@ struct RandnFunction {
       const TInput* seedInput) {
     const auto partitionId = SparkQueryConfig{config}.partitionId();
     int64_t seed = seedInput ? static_cast<int64_t>(*seedInput) : 0;
-    generator_.setSeed(seed + partitionId);
+    generator_.setSeed(detail::combineSeedWithPartitionId(seed, partitionId));
   }
 
   FOLLY_ALWAYS_INLINE void call(double& result) {
