@@ -686,7 +686,7 @@ void CudfHashJoinProbe::doNoMoreInput() {
         if (peer.get() == operatorCtx_->driver()) {
           continue;
         }
-        auto op = peer->findOperator(planNodeId());
+        auto op = peer->findOperator(operatorCtx_->operatorId());
         auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
         if (probe != nullptr && probe->lastProbeStream_.has_value()) {
           inputStreams.push_back(probe->lastProbeStream_.value());
@@ -700,7 +700,7 @@ void CudfHashJoinProbe::doNoMoreInput() {
         if (peer.get() == operatorCtx_->driver()) {
           continue;
         }
-        auto op = peer->findOperator(planNodeId());
+        auto op = peer->findOperator(operatorCtx_->operatorId());
         auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
         if (probe == nullptr) {
           continue;
@@ -732,7 +732,7 @@ void CudfHashJoinProbe::doNoMoreInput() {
   // Handling RightSemiFilterJoin
   // Collect results from peers
   for (auto& peer : peers) {
-    auto op = peer->findOperator(planNodeId());
+    auto op = peer->findOperator(operatorCtx_->operatorId());
     auto* probe = dynamic_cast<CudfHashJoinProbe*>(op);
     VELOX_CHECK_NOT_NULL(probe);
     inputs_.insert(inputs_.end(), probe->inputs_.begin(), probe->inputs_.end());
