@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
 #include <folly/Random.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -1950,8 +1951,9 @@ std::unique_ptr<DwrfReader> getDwrfReader(
       2 * 1024 * 1024, dwio::common::FileSink::Options{.pool = &leafPool});
   auto sinkPtr = sink.get();
 
-  dwrf::WriterOptions options;
-  options.config = config;
+  dwio::common::WriterOptions options;
+  options.formatSpecificOptions =
+      std::make_shared<dwrf::DwrfWriterOptions>(config);
   options.schema = type;
   options.flushPolicyFactory = [&]() {
     return std::make_unique<LambdaFlushPolicy>([]() {
@@ -3762,7 +3764,7 @@ struct StringColumnWriterTestCase {
 
         for (size_t k = 0; k != sv->size(); ++k) {
           if (!sv->isNullAt(k)) {
-            EXPECT_EQ(sv->valueAt(k), resultSv->valueAt(k)) << folly::sformat(
+            EXPECT_EQ(sv->valueAt(k), resultSv->valueAt(k)) << fmt::format(
                 "Mismatch on {}-th element. \nExpected: {}\n Actual: {}",
                 k,
                 sv->valueAt(k).str(),

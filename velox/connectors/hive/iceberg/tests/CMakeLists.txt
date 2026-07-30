@@ -70,6 +70,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     IcebergConnectorTest.cpp
     IcebergInsertTest.cpp
     IcebergParquetStatsTest.cpp
+    IcebergSessionCredentialsE2ETest.cpp
     IcebergTestBase.cpp
     Main.cpp
     PartitionNameTest.cpp
@@ -101,6 +102,18 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_iceberg_splitreader
     velox_exec_test_lib
     velox_dwio_common_test_utils
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(velox_hive_iceberg_session_credentials_test IcebergSessionCredentialsTest.cpp)
+  add_test(velox_hive_iceberg_session_credentials_test velox_hive_iceberg_session_credentials_test)
+
+  target_link_libraries(
+    velox_hive_iceberg_session_credentials_test
+    velox_hive_iceberg_splitreader
+    velox_common_config
+    GTest::gmock
     GTest::gtest
     GTest::gtest_main
   )

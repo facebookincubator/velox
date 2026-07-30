@@ -188,7 +188,8 @@ class CompositeKernel {
   CompositeKernel(
       std::vector<std::unique_ptr<ProjectOperation>>&& ops,
       std::vector<std::unique_ptr<KernelOperation>>&& kernelOps,
-      const std::unordered_set<std::string>& includes);
+      const std::unordered_set<std::string>& includes,
+      int32_t kernelId);
 
   /// Launches the kernel on the given stream.
   void launch(

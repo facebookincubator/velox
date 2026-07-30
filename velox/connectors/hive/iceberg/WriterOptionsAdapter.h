@@ -58,7 +58,7 @@ class WriterOptionsAdapter {
 /// `icebergFieldIds` carries the per-input-column Iceberg field-id tree.
 /// Honored only by the NIMBLE adapter, which uses it to stamp
 /// `iceberg.id` (and other Iceberg V3 keys) onto each NIMBLE schema node
-/// via `VeloxWriterOptions::attributesByColumn`. Pass an empty
+/// via `VeloxWriterOptions::schemaAttributes`. Pass an empty
 /// `IcebergFieldId{}` for formats / call sites that have no field-id tree
 /// available (the NIMBLE adapter then produces files without
 /// `iceberg.id` attributes, the same wire shape as a pre-attributes

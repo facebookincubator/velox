@@ -1329,6 +1329,61 @@ TEST_F(CudfNestedLoopJoinTest, fullJoinMultiDriver) {
       "ON t.c0 < u.c0");
 }
 
+// Full join with output columns from only one side: exercises the mismatch
+// emission path when probeColumnIndicesToGather_ or
+// buildColumnIndicesToGather_ is empty. Previously, apply_boolean_mask on a
+// zero-column table returned 0 rows, silently dropping mismatch rows.
+TEST_F(CudfNestedLoopJoinTest, fullJoinOneSidedOutput) {
+  auto probeVectors = makeRowVector(
+      {"p0", "p1"},
+      {makeFlatVector<int32_t>({1, 2, 3}),
+       makeFlatVector<int32_t>({10, 20, 30})});
+  auto buildVectors = makeRowVector(
+      {"b0", "b1"},
+      {makeFlatVector<int32_t>({2, 4}), makeFlatVector<int32_t>({200, 400})});
+
+  createDuckDbTable("t", {probeVectors});
+  createDuckDbTable("u", {buildVectors});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  // Output only probe columns — build mismatch rows should still appear
+  // with null values for the probe columns.
+  auto probeOnlyPlan = PlanBuilder(planNodeIdGenerator)
+                           .values({probeVectors})
+                           .nestedLoopJoin(
+                               PlanBuilder(planNodeIdGenerator)
+                                   .values({buildVectors})
+                                   .planNode(),
+                               "p0 = b0",
+                               {"p0", "p1"},
+                               core::JoinType::kFull)
+                           .planNode();
+
+  assertQuery(
+      probeOnlyPlan,
+      "SELECT t.p0, t.p1 FROM t FULL OUTER JOIN u ON t.p0 = u.b0");
+
+  planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  // Output only build columns — probe mismatch rows should still appear
+  // with null values for the build columns.
+  auto buildOnlyPlan = PlanBuilder(planNodeIdGenerator)
+                           .values({probeVectors})
+                           .nestedLoopJoin(
+                               PlanBuilder(planNodeIdGenerator)
+                                   .values({buildVectors})
+                                   .planNode(),
+                               "p0 = b0",
+                               {"b0", "b1"},
+                               core::JoinType::kFull)
+                           .planNode();
+
+  assertQuery(
+      buildOnlyPlan,
+      "SELECT u.b0, u.b1 FROM t FULL OUTER JOIN u ON t.p0 = u.b0");
+}
+
 // --- LeftSemiProject join tests ---
 
 // LeftSemiProject with filter: probe rows + boolean match column.

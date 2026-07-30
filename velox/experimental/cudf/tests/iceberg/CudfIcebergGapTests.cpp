@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/tests/iceberg/CudfIcebergTestBase.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -31,6 +32,7 @@
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::connector::hive::iceberg;
 using facebook::velox::common::testutil::TempFilePath;
+using facebook::velox::connector::hive::HiveColumnHandle;
 using namespace facebook::velox::cudf_velox::iceberg::test;
 
 namespace facebook::velox::cudf_velox::exec::test {
@@ -925,6 +927,77 @@ TEST_F(CudfIcebergGapTests, deletionVectorPlusPositionalDelete) {
       makeFlatVector<int64_t>({2, 4, 5}),
   });
 
+  assertEqualResults({expected}, {result});
+}
+
+// Verifies deletion vectors, positional deletes, and equality deletes together.
+TEST_F(CudfIcebergGapTests, allDeleteMechanisms) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
+  auto dataFile = TempFilePath::create();
+  writeToFile(
+      dataFile->getPath(),
+      makeRowVector({
+          makeFlatVector<int64_t>({10, 20, 30, 40, 50, 60}),
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6}),
+      }));
+
+  auto bitmapData = serializeRoaringBitmapNoRun<int64_t>({0, 5});
+  auto dvFile = writeDvFile(bitmapData);
+  auto dvDelete = makeDvDeleteFile(
+      dvFile->getPath(), bitmapData.size(), 2, 0, {}, /*dataSequenceNumber=*/2);
+
+  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+  auto posDeleteFile = TempFilePath::create();
+  auto posDeleteData = makeRowVector(
+      {pathColumn->name, posColumn->name},
+      {
+          makeFlatVector<std::string>(
+              1, [&](vector_size_t) { return dataFile->getPath(); }),
+          makeFlatVector<int64_t>({2}),
+      });
+  writeDeleteFile(
+      DeleteFileFormat::DWRF, posDeleteFile->getPath(), {posDeleteData});
+  IcebergDeleteFile posDelete(
+      FileContent::kPositionalDeletes,
+      posDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      1,
+      getFileSize(posDeleteFile->getPath()),
+      /*equalityFieldIds=*/{},
+      /*lowerBounds=*/{},
+      /*upperBounds=*/{},
+      /*dataSequenceNumber=*/2);
+
+  auto equalityFile = TempFilePath::create();
+  writeDeleteFile(
+      DeleteFileFormat::PARQUET,
+      equalityFile->getPath(),
+      {makeRowVector({makeFlatVector<int64_t>({40})})});
+  IcebergDeleteFile equalityDelete(
+      FileContent::kEqualityDeletes,
+      equalityFile->getPath(),
+      dwio::common::FileFormat::PARQUET,
+      1,
+      getFileSize(equalityFile->getPath()),
+      /*equalityFieldIds=*/{1},
+      /*lowerBounds=*/{},
+      /*upperBounds=*/{},
+      /*dataSequenceNumber=*/3);
+
+  auto splits = makeIcebergSplits(
+      dataFile->getPath(),
+      {dvDelete, posDelete, equalityDelete},
+      {},
+      1,
+      /*dataSeq=*/1);
+  auto result = AssertQueryBuilder(makeTableScanPlan(rowType))
+                    .splits(splits)
+                    .copyResults(pool());
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({20, 50}),
+      makeFlatVector<int64_t>({2, 5}),
+  });
   assertEqualResults({expected}, {result});
 }
 
