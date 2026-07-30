@@ -55,7 +55,7 @@ class ParquetReaderTest : public ParquetTestBase {
   dwio::common::ReaderOptions makeThriftTrackingReaderOptions() {
     auto readerOptions = makeDefaultReaderOptions();
     auto parquetOptions = std::make_shared<ParquetReaderOptions>();
-    parquetOptions->footerMemoryTrackingThreshold = 1;
+    parquetOptions->setFooterMemoryTrackingThreshold(1);
     readerOptions.setFormatSpecificOptions(std::move(parquetOptions));
     return readerOptions;
   }
@@ -63,13 +63,10 @@ class ParquetReaderTest : public ParquetTestBase {
 
 TEST_F(ParquetReaderTest, createFormatOptions) {
   config::ConfigBase connectorConfig({
-      {std::string(ParquetConfig::kUseColumnNames), "true"},
-      {std::string(ParquetConfig::kFooterSpeculativeIoSize), "99"},
       {std::string(ParquetConfig::kAllowInt32Narrowing), "false"},
       {std::string(ParquetConfig::kFooterMemoryTrackingThreshold), "99"},
   });
   config::ConfigBase session({
-      {std::string(ParquetConfig::kFooterSpeculativeIoSizeSession), "2"},
       {std::string(ParquetConfig::kAllowInt32NarrowingSession), "true"},
       {std::string(ParquetConfig::kFooterMemoryTrackingThresholdSession), "1"},
   });
@@ -77,10 +74,8 @@ TEST_F(ParquetReaderTest, createFormatOptions) {
   ParquetReaderFactory factory;
   auto parquetOptions = checkedPointerCast<ParquetReaderOptions>(
       factory.createFormatOptions(connectorConfig, session));
-  EXPECT_EQ(parquetOptions->columnMappingMode, ColumnMappingMode::kName);
-  EXPECT_EQ(parquetOptions->footerSpeculativeIoSize, 2);
-  EXPECT_TRUE(parquetOptions->allowInt32Narrowing);
-  EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold, 1);
+  EXPECT_TRUE(parquetOptions->allowInt32Narrowing());
+  EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold(), 1);
 }
 
 TEST_F(ParquetReaderTest, parseSample) {

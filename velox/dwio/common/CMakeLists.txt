@@ -94,6 +94,7 @@ velox_add_library(
   FilterNode.h
   FlatMapHelper.h
   FlushPolicy.h
+  FormatConfig.h
   FormatData.h
   InputStream.h
   IntCodecCommon.h

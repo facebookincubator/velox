@@ -869,6 +869,69 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilter) {
       .run();
 }
 
+TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithAsymmetricSchemas) {
+  auto probeVectors = makeBatches(3, [&](int32_t batch) {
+    return makeRowVector(
+        {"t0", "t1", "t2"},
+        {makeFlatVector<int32_t>(
+             32, [batch](auto row) { return batch * 16 + row; }),
+         makeFlatVector<int64_t>(
+             32, [batch](auto row) { return batch * 1'000 + row; }),
+         makeFlatVector<double>(
+             32, [batch](auto row) { return batch + row / 10.0; })});
+  });
+  auto buildVectors = makeBatches(2, [&](int32_t batch) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {makeFlatVector<int32_t>(
+             32, [batch](auto row) { return batch * 24 + row; }),
+         makeFlatVector<int64_t>(
+             32, [batch](auto row) { return batch * 10'000 + row; })});
+  });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"t0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u0"})
+      .buildVectors(std::move(buildVectors))
+      .joinType(core::JoinType::kRightSemiFilter)
+      .joinOutputLayout({"u1"})
+      .referenceQuery("SELECT u.u1 FROM u WHERE u.u0 IN (SELECT t.t0 FROM t)")
+      .run();
+}
+
+// Regression test for #18124: an empty right-semi probe must be materialized
+// with the probe schema, not the build/output schema. The probe key sits at
+// ordinal 2, past the build side's column count (2). If doNoMoreInput builds a
+// build-shaped empty table, selecting the key column throws an out-of-range
+// error; a probe-shaped empty table has the column and the join returns empty.
+TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithEmptyProbe) {
+  auto probeType = ROW({{"t0", BIGINT()}, {"t1", DOUBLE()}, {"t2", INTEGER()}});
+  auto buildVectors = makeBatches(2, [&](int32_t batch) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {makeFlatVector<int32_t>(
+             32, [batch](auto row) { return batch * 32 + row; }),
+         makeFlatVector<int64_t>(
+             32, [batch](auto row) { return batch * 1'000 + row; })});
+  });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeType(probeType)
+      .probeVectors(0, 3)
+      .probeKeys({"t2"})
+      .buildKeys({"u0"})
+      .buildVectors(std::move(buildVectors))
+      .joinType(core::JoinType::kRightSemiFilter)
+      .joinOutputLayout({"u1"})
+      .referenceQuery("SELECT u.u1 FROM u WHERE u.u0 IN (SELECT t.t2 FROM t)")
+      .run();
+}
+
 TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithEmptyBuild) {
   const std::vector<bool> finishOnEmptys = {false, true};
   for (const auto finishOnEmpty : finishOnEmptys) {
