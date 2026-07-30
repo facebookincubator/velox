@@ -49,7 +49,7 @@ function install_fmt {
 
 function install_folly {
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/"${FB_OS_VERSION}".tar.gz folly
-  local FOLLY_FLAGS=(-DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON)
+  local FOLLY_FLAGS=(-DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
   # When folly is static, use static gflags to avoid dual gflags flag
   # registration when .so plugins are dlopen'd (both the binary and plugin
   # would register the same flags in a shared gflags registry).
