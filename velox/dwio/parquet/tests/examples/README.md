@@ -538,6 +538,31 @@ annotation, definition level, repetition level, and compression when useful.
 - Purpose: Legacy LIST fixture whose repeated `array` node has more than one
   child. Velox must interpret array elements as rows.
 
+### `parquet-thrift-compat.parquet`
+
+- Metadata: `created_by=parquet-mr (build 32c46643845ea8a705c35d4ec8fc654cc8ff816d)`,
+  10 rows, 1 row group, 25 leaf columns, Snappy, format version 1.0.
+  Primitive leaves include required scalar columns
+  `boolColumn: BOOLEAN`, `byteColumn: INT32`, `shortColumn: INT32`,
+  `intColumn: INT32`, `longColumn: INT64`, `doubleColumn: DOUBLE`,
+  `binaryColumn: BYTE_ARRAY String`, `stringColumn: BYTE_ARRAY String`, and
+  `enumColumn: BYTE_ARRAY Enum`; optional scalar counterparts are
+  `maybeBoolColumn`, `maybeByteColumn`, `maybeShortColumn`, `maybeIntColumn`,
+  `maybeLongColumn`, `maybeDoubleColumn`, `maybeBinaryColumn`,
+  `maybeStringColumn`, and `maybeEnumColumn`. Repeated
+  and nested leaves include `stringsColumn.stringsColumn_tuple` and `intSetColumn.intSetColumn_tuple`,
+  map leaves `intToStringColumn.map.key` and
+  `intToStringColumn.map.value`, plus complex nested map
+  leaves `complexColumn.map.key`,
+  `complexColumn.map.value.value_tuple.nestedIntsColumn.nestedIntsColumn_tuple`, and
+  `complexColumn.map.value.value_tuple.nestedStringColumn`.
+
+- Purpose: Thrift-compatibility fixture covering required and optional scalar
+  fields together with legacy LIST/SET/MAP-style tuple naming and deeply nested
+  map-of-struct-of-list shapes. Used to validate that Velox correctly reads
+  parquet-mr thrift-encoded schemas with mixed enum/string annotations and
+  multi-level repetition/definition semantics.
+
 ### `parse_empty_nested_list.parquet`
 
 - Metadata: `created_by=parquet-cpp-arrow version 19.0.1`, 1000 rows, 1 row
