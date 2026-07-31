@@ -989,15 +989,15 @@ class ReaderOptions : public io::ReaderOptions {
     preloadIndex_ = value;
   }
 
-  /// Whether to load and initialize the chunk index during file open.
-  /// When true, the chunk index section is preloaded and the structured
-  /// ChunkIndex object is created. Default true.
-  bool loadChunkIndex() const {
-    return loadChunkIndex_;
+  /// Whether to load and initialize the chunk stats during file open.
+  /// When true, the chunk stats section is preloaded and the structured
+  /// ChunkStats object is created. Default true.
+  bool loadChunkStats() const {
+    return loadChunkStats_;
   }
 
-  void setLoadChunkIndex(bool value) {
-    loadChunkIndex_ = value;
+  void setLoadChunkStats(bool value) {
+    loadChunkStats_ = value;
   }
 
   bool allowEmptyFile() const {
@@ -1060,7 +1060,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool cacheData_{true};
   bool loadClusterIndex_{false};
   bool preloadIndex_{false};
-  bool loadChunkIndex_{true};
+  bool loadChunkStats_{true};
   bool allowEmptyFile_{false};
   const FileHandle* fileHandle_{nullptr};
   cache::AsyncDataCache* cache_{nullptr};
