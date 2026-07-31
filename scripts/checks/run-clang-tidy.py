@@ -108,6 +108,16 @@ def tidy(args):
     fix = "--fix" if args.fix == "fix" else ""
     lines = f"'--line-filter={line_filter}'" if args.commit is not None else ""
 
+    # Suppress -Wnullability-completeness at the Clang frontend. clang-tidy
+    # parses the GCC build's compile commands, which omit the Clang-only
+    # -Wno-nullability-completeness set in CMakeLists.txt, so the frontend emits
+    # the diagnostic and -Werror turns it into an error on core headers such as
+    # StringView.h. This must be passed on the command line (--extra-arg): the
+    # same flag placed in .clang-tidy's ExtraArgs is mishandled by clang-tidy
+    # 18 for these compile commands ("no such file or directory:
+    # '-Wno-nullability-completeness'") and never takes effect.
+    extra_args = "--extra-arg=-Wno-nullability-completeness"
+
     ok = True
     build_path = args.p or os.getenv("BUILD_PATH")
     build_path_str = f"-p {build_path}" if build_path else ""
@@ -119,7 +129,7 @@ def tidy(args):
         return 0
 
     status, stdout, stderr = util.run(
-        f"xargs clang-tidy --format-style=file -header-filter='.*' --quiet {build_path_str} {fix} {lines}",
+        f"xargs clang-tidy --format-style=file -header-filter='.*' --quiet {extra_args} {build_path_str} {fix} {lines}",
         input=filtered_files,
     )
 
