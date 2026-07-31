@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfJoin.h"
+#include "velox/experimental/cudf/exec/CudfJoinBuild.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
@@ -97,28 +98,19 @@ class CudfHashJoinBridge : public exec::JoinBridge {
  * only one driver performs the final hash table construction. The constructed
  * hash tables are transferred to probe operators via CudfHashJoinBridge.
  */
-class CudfHashJoinBuild : public CudfOperatorBase {
+class CudfHashJoinBuild : public CudfJoinBuild {
  public:
   CudfHashJoinBuild(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::HashJoinNode> joinNode);
 
-  bool needsInput() const override;
-
-  exec::BlockingReason isBlocked(ContinueFuture* future) override;
-
-  bool isFinished() override;
-
  protected:
-  void doAddInput(RowVectorPtr input) override;
-  RowVectorPtr doGetOutput() override;
-  void doNoMoreInput() override;
+  void recordInputStats(const CudfVector& input) override;
+  void buildAndPublish(std::vector<CudfVectorPtr> inputs) override;
 
  private:
   std::shared_ptr<const core::HashJoinNode> joinNode_;
-  std::vector<CudfVectorPtr> inputs_;
-  ContinueFuture future_{ContinueFuture::makeEmpty()};
 };
 
 /**

@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfJoin.h"
+#include "velox/experimental/cudf/exec/CudfJoinBuild.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrecomputeInstruction.h"
@@ -57,7 +58,7 @@ class CudfNestedLoopJoinBridge : public exec::JoinBridge {
   std::optional<build_data_type> dataOrFuture(ContinueFuture* future);
 
   // The build-ready event is created and recorded by the build side
-  // (CudfNestedLoopJoinBuild::doNoMoreInput()) immediately once the build
+  // (CudfNestedLoopJoinBuild::buildAndPublish()) immediately once the build
   // table is materialized, on the same stream that did that work - not
   // lazily by the probe side. Recording immediately (rather than whenever
   // the first probe batch happens to call waitForBuildReady()) avoids a
@@ -101,29 +102,18 @@ class CudfNestedLoopJoinBridge : public exec::JoinBridge {
 ///
 /// Memory: All build-side data is kept in GPU memory until the join completes.
 /// For very large build sides, this could be memory-intensive.
-class CudfNestedLoopJoinBuild : public CudfOperatorBase {
+class CudfNestedLoopJoinBuild : public CudfJoinBuild {
  public:
   CudfNestedLoopJoinBuild(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::NestedLoopJoinNode> joinNode);
 
-  bool needsInput() const override;
-
-  exec::BlockingReason isBlocked(ContinueFuture* future) override;
-
-  bool isFinished() override;
-
  protected:
-  void doAddInput(RowVectorPtr input) override;
-  RowVectorPtr doGetOutput() override;
-  void doNoMoreInput() override;
-  void doClose() override;
+  void buildAndPublish(std::vector<CudfVectorPtr> inputs) override;
 
  private:
   std::shared_ptr<const core::NestedLoopJoinNode> joinNode_;
-  std::vector<CudfVectorPtr> inputs_;
-  ContinueFuture future_{ContinueFuture::makeEmpty()};
 };
 
 /// Performs nested loop join using cuDF APIs.

@@ -307,7 +307,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, transferBuildInputOwnershipFromSourceDrivers) {
   std::atomic_size_t sourceDriversWithRetainedInputs{0};
 
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::cudf_velox::CudfHashJoinBuild::doNoMoreInput::sourceDriverRetainedInputBatchesAfterTransfer",
+      "facebook::velox::cudf_velox::CudfJoinBuild::doNoMoreInput::sourceDriverRetainedInputBatchesAfterTransfer",
       std::function<void(size_t*)>([&](size_t* retainedInputBatches) {
         ++sourceDriversChecked;
         if (*retainedInputBatches != 0) {

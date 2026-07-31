@@ -24,7 +24,6 @@
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
-#include "velox/common/testutil/TestValue.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Task.h" // NOLINT(misc-unused-headers)
 #include "velox/type/TypeUtil.h"
@@ -244,93 +243,40 @@ CudfHashJoinBuild::CudfHashJoinBuild(
     exec::DriverCtx* driverCtx,
     std::shared_ptr<const core::HashJoinNode> joinNode)
     // TODO check outputType should be set or not?
-    : CudfOperatorBase(
+    : CudfJoinBuild(
           operatorId,
           driverCtx,
-          nullptr, // outputType
-          joinNode->id(),
+          joinNode,
           "CudfHashJoinBuild",
-          nvtx3::rgb{65, 105, 225}, // Royal Blue
-          NvtxMethodFlag::kAll,
-          std::nullopt, // spillConfig
-          joinNode),
+          NvtxMethodFlag::kAll),
       joinNode_(joinNode) {}
 
-void CudfHashJoinBuild::doAddInput(RowVectorPtr input) {
-  // Queue inputs, process all at once.
-  if (input->size() > 0) {
-    auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
-    VELOX_CHECK_NOT_NULL(cudfInput);
-    // Count nulls in join key columns
-    auto [_, null_count] = cudf::bitmask_and(
-        cudfInput->getTableView(), cudfInput->stream(), get_temp_mr());
-    {
-      // Update statistics for null keys in join operator.
-      auto lockedStats = stats_.wlock();
-      lockedStats->numNullKeys += null_count;
-    }
-    inputs_.push_back(std::move(cudfInput));
+void CudfHashJoinBuild::recordInputStats(const CudfVector& input) {
+  auto [_, nullCount] =
+      cudf::bitmask_and(input.getTableView(), input.stream(), get_temp_mr());
+  {
+    auto lockedStats = stats_.wlock();
+    lockedStats->numNullKeys += nullCount;
   }
 }
 
-bool CudfHashJoinBuild::needsInput() const {
-  return !noMoreInput_;
-}
-
-RowVectorPtr CudfHashJoinBuild::doGetOutput() {
-  return nullptr;
-}
-
-void CudfHashJoinBuild::doNoMoreInput() {
-  Operator::noMoreInput();
-  std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<exec::Driver>> peers;
-  // Only last driver collects all answers
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
-    return;
-  }
-  // Collect results from peers
-  for (auto& peer : peers) {
-    auto op = peer->findOperator(planNodeId());
-    auto* build = dynamic_cast<CudfHashJoinBuild*>(op);
-    VELOX_CHECK_NOT_NULL(build);
-    inputs_.insert(
-        inputs_.end(),
-        std::make_move_iterator(build->inputs_.begin()),
-        std::make_move_iterator(build->inputs_.end()));
-    build->inputs_.clear();
-    auto retainedInputBatches = build->inputs_.size();
-    common::testutil::TestValue::adjust(
-        "facebook::velox::cudf_velox::CudfHashJoinBuild::doNoMoreInput::sourceDriverRetainedInputBatchesAfterTransfer",
-        &retainedInputBatches);
-  }
-
-  SCOPE_EXIT {
-    // Realize the promises so that the other Drivers (which were not
-    // the last to finish) can continue from the barrier and finish.
-    peers.clear();
-    for (auto& promise : promises) {
-      promise.setValue();
-    }
-  };
-
+void CudfHashJoinBuild::buildAndPublish(std::vector<CudfVectorPtr> inputs) {
   if (CudfConfig::getInstance().debugEnabled) {
-    VLOG(1) << "CudfHashJoinBuild: build batches count: " << inputs_.size();
-    if (!inputs_.empty()) {
+    VLOG(1) << "CudfHashJoinBuild: build batches count: " << inputs.size();
+    if (!inputs.empty()) {
       VLOG(1) << "Build batches number of columns: "
-              << inputs_[0]->getTableView().num_columns();
+              << inputs[0]->getTableView().num_columns();
     }
-    for (auto i = 0; i < inputs_.size(); i++) {
+    for (auto i = 0; i < inputs.size(); i++) {
       VLOG(1) << "Build batch " << i
-              << ": number of rows: " << inputs_[i]->getTableView().num_rows();
+              << ": number of rows: " << inputs[i]->getTableView().num_rows();
     }
   }
 
   auto stream = cudfGlobalStreamPool().get_stream();
   // Using output_mr here to allow spilling queued up large tables
   auto tbls = getConcatenatedTableBatched(
-      std::exchange(inputs_, {}),
+      std::move(inputs),
       joinNode_->sources()[1]->outputType(),
       stream,
       get_output_mr());
@@ -404,18 +350,6 @@ void CudfHashJoinBuild::doNoMoreInput() {
   cudfHashJoinBridge->setHashTable(
       std::make_optional(
           std::make_pair(std::move(shared_tbls), std::move(hashObjects))));
-}
-
-exec::BlockingReason CudfHashJoinBuild::isBlocked(ContinueFuture* future) {
-  if (!future_.valid()) {
-    return exec::BlockingReason::kNotBlocked;
-  }
-  *future = std::move(future_);
-  return exec::BlockingReason::kWaitForJoinBuild;
-}
-
-bool CudfHashJoinBuild::isFinished() {
-  return !future_.valid() && noMoreInput_;
 }
 
 CudfHashJoinProbe::CudfHashJoinProbe(

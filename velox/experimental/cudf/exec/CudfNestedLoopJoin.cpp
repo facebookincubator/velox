@@ -102,76 +102,16 @@ CudfNestedLoopJoinBuild::CudfNestedLoopJoinBuild(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<const core::NestedLoopJoinNode> joinNode)
-    : CudfOperatorBase(
+    : CudfJoinBuild(
           operatorId,
           driverCtx,
-          nullptr,
-          joinNode->id(),
+          joinNode,
           "CudfNestedLoopJoinBuild",
-          nvtx3::rgb{65, 105, 225}, // Royal Blue
-          NvtxMethodFlag::kNoMoreInput,
-          std::nullopt,
-          joinNode),
+          NvtxMethodFlag::kNoMoreInput),
       joinNode_(joinNode) {}
 
-// Accumulates input batches in memory.
-// All batches are kept as CudfVectors (GPU memory) until join completes.
-void CudfNestedLoopJoinBuild::doAddInput(RowVectorPtr input) {
-  if (input->size() > 0) {
-    auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
-    VELOX_CHECK_NOT_NULL(cudfInput);
-    inputs_.push_back(std::move(cudfInput)); // Store in GPU memory
-  }
-}
-
-bool CudfNestedLoopJoinBuild::needsInput() const {
-  return !noMoreInput_;
-}
-
-RowVectorPtr CudfNestedLoopJoinBuild::doGetOutput() {
-  return nullptr;
-}
-
-// Called when upstream finishes. Coordinates with peer build operators
-// to transfer accumulated data to the bridge.
-//
-// Multi-driver coordination:
-// - Multiple build operators may run in parallel (one per driver)
-// - allPeersFinished() chooses ONE operator to collect and transfer data
-// - Other operators just return and mark themselves finished
-// - The chosen operator collects data from all peers and sets it on the bridge
-void CudfNestedLoopJoinBuild::doNoMoreInput() {
-  Operator::noMoreInput();
-
-  std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<exec::Driver>> peers;
-
-  // Synchronization point: only the LAST driver to finish will proceed
-  // Other drivers return here and will be woken when data transfer completes
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
-    return; // Not the last driver - just wait
-  }
-
-  // This driver was chosen to collect data from all peers
-  for (auto& peer : peers) {
-    auto op = peer->findOperator(planNodeId());
-    auto* build = dynamic_cast<CudfNestedLoopJoinBuild*>(op);
-    VELOX_CHECK_NOT_NULL(build);
-    inputs_.insert(
-        inputs_.end(),
-        std::make_move_iterator(build->inputs_.begin()),
-        std::make_move_iterator(build->inputs_.end()));
-  }
-
-  // Wake up peer build operators when we finish transferring data
-  SCOPE_EXIT {
-    peers.clear();
-    for (auto& promise : promises) {
-      promise.setValue(); // Unblock other build operators
-    }
-  };
-
+void CudfNestedLoopJoinBuild::buildAndPublish(
+    std::vector<CudfVectorPtr> inputs) {
   // Concatenate all input batches into a single cuDF table.
   // getConcatenatedTable throws if the total row count exceeds cudf::size_type
   // limits (~2.1B rows). We don't use getConcatenatedTableBatched here because
@@ -180,7 +120,7 @@ void CudfNestedLoopJoinBuild::doNoMoreInput() {
   // split.
   auto stream = cudfGlobalStreamPool().get_stream();
   auto table = getConcatenatedTable(
-      std::exchange(inputs_, {}),
+      std::move(inputs),
       joinNode_->sources()[1]->outputType(),
       stream,
       get_output_mr());
@@ -209,24 +149,6 @@ void CudfNestedLoopJoinBuild::doNoMoreInput() {
   bridge->setData(
       std::make_optional(
           std::shared_ptr<cudf::table>(std::move(table)))); // Wake probes
-}
-
-exec::BlockingReason CudfNestedLoopJoinBuild::isBlocked(
-    ContinueFuture* future) {
-  if (!future_.valid()) {
-    return exec::BlockingReason::kNotBlocked;
-  }
-  *future = std::move(future_);
-  return exec::BlockingReason::kWaitForJoinBuild;
-}
-
-bool CudfNestedLoopJoinBuild::isFinished() {
-  return !future_.valid() && noMoreInput_;
-}
-
-void CudfNestedLoopJoinBuild::doClose() {
-  inputs_.clear();
-  Operator::close();
 }
 
 // ============================================================================
@@ -508,7 +430,7 @@ void CudfNestedLoopJoinProbe::waitForBuildReady(
     // joinWithBuildBatch() is called once per probe input batch, and each
     // call gets a fresh stream from cudfGlobalStreamPool(). The event was
     // already recorded once by the build side (see
-    // CudfNestedLoopJoinBuild::doNoMoreInput()); every probe stream that
+    // CudfNestedLoopJoinBuild::buildAndPublish()); every probe stream that
     // reads build-side data just needs to wait on it, not just the first
     // one - otherwise later batches could start reading before the build
     // data is actually visible on their stream. Matches
@@ -521,7 +443,7 @@ void CudfNestedLoopJoinProbe::recordReadCompletion(
     rmm::cuda_stream_view probeStream) {
   if (buildStream_.has_value()) {
     // buildData_'s underlying device memory is allocated on buildStream_
-    // (see CudfNestedLoopJoinBuild::doNoMoreInput()), so its eventual free
+    // (see CudfNestedLoopJoinBuild::buildAndPublish()), so its eventual free
     // is stream-ordered there too, regardless of which probe instance's
     // reference-drop actually triggers it. Recording a completion event
     // from probeStream and waiting on it from buildStream_ chains a
@@ -610,7 +532,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
           get_temp_mr());
 
       // The build side is concatenated into a single table (see
-      // CudfNestedLoopJoinBuild::doNoMoreInput), so joinWithBuildBatch runs
+      // CudfNestedLoopJoinBuild::buildAndPublish), so joinWithBuildBatch runs
       // exactly once per probe input. probeMatchedFlags_ is the result of
       // this single contains() call; no cross-batch BITWISE_OR is needed.
       probeMatchedFlags_ = cudf::contains(
