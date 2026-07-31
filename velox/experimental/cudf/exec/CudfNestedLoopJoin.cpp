@@ -559,8 +559,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
         scalars_,
         probeType_,
         stream);
-    extendedProbeView =
-        makeExtendedTableView(probeTableView, leftPrecomputed);
+    extendedProbeView = makeExtendedTableView(probeTableView, leftPrecomputed);
   }
   // Use cached extended build view if build-side precompute was needed.
   const cudf::table_view& extendedBuildView =

@@ -37,14 +37,12 @@ CudfJoinOutputLayout::CudfJoinOutputLayout(
 
     const auto& outputName = outputType->nameOf(outputPosition);
     if (auto probeIndex = probeType->getChildIdxIfExists(outputName)) {
-      probeColumnIndices.push_back(
-          static_cast<cudf::size_type>(*probeIndex));
+      probeColumnIndices.push_back(static_cast<cudf::size_type>(*probeIndex));
       probeColumnOutputPositions.push_back(outputPosition);
       continue;
     }
     if (auto buildIndex = buildType->getChildIdxIfExists(outputName)) {
-      buildColumnIndices.push_back(
-          static_cast<cudf::size_type>(*buildIndex));
+      buildColumnIndices.push_back(static_cast<cudf::size_type>(*buildIndex));
       buildColumnOutputPositions.push_back(outputPosition);
       continue;
     }

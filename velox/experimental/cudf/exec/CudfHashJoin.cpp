@@ -760,14 +760,12 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::unfilteredOutput(
   auto leftCols = leftResult->release();
   auto rightCols = rightResult->release();
   joinedCols.resize(outputType_->names().size());
-  for (std::size_t i = 0;
-       i < outputLayout_.probeColumnOutputPositions.size();
+  for (std::size_t i = 0; i < outputLayout_.probeColumnOutputPositions.size();
        i++) {
     joinedCols[outputLayout_.probeColumnOutputPositions[i]] =
         std::move(leftCols[i]);
   }
-  for (std::size_t i = 0;
-       i < outputLayout_.buildColumnOutputPositions.size();
+  for (std::size_t i = 0; i < outputLayout_.buildColumnOutputPositions.size();
        i++) {
     joinedCols[outputLayout_.buildColumnOutputPositions[i]] =
         std::move(rightCols[i]);
@@ -825,14 +823,12 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::filteredOutput(
 
   auto filteredjoinedCols =
       std::vector<std::unique_ptr<cudf::column>>(outputType_->names().size());
-  for (std::size_t i = 0;
-       i < outputLayout_.probeColumnOutputPositions.size();
+  for (std::size_t i = 0; i < outputLayout_.probeColumnOutputPositions.size();
        i++) {
     filteredjoinedCols[outputLayout_.probeColumnOutputPositions[i]] =
         std::move(joinedCols[outputLayout_.probeColumnIndices[i]]);
   }
-  for (std::size_t i = 0;
-       i < outputLayout_.buildColumnOutputPositions.size();
+  for (std::size_t i = 0; i < outputLayout_.buildColumnOutputPositions.size();
        i++) {
     filteredjoinedCols[outputLayout_.buildColumnOutputPositions[i]] = std::move(
         joinedCols[leftColsSize + outputLayout_.buildColumnIndices[i]]);
