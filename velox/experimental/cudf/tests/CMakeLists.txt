@@ -108,6 +108,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_gpu_memory_tracker_test
+  SOURCES Main.cpp GpuMemoryTrackerTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} rmm::rmm
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_gpu_memory_plan_path_test
   SOURCES Main.cpp GpuMemoryPlanPathTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS}
