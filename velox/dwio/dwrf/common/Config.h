@@ -43,6 +43,7 @@ class Config : public config::ConfigBase {
   static Entry<uint64_t> COMPRESSION_BLOCK_SIZE_MIN;
   static Entry<float> COMPRESSION_BLOCK_SIZE_EXTEND_RATIO;
   static Entry<uint32_t> COMPRESSION_THRESHOLD;
+  static Entry<bool> VERIFY_COMPRESSION;
   static Entry<bool> CREATE_INDEX;
   static Entry<uint32_t> ROW_INDEX_STRIDE;
   static Entry<proto::ChecksumAlgorithm> CHECKSUM_ALGORITHM;
