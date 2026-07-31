@@ -69,9 +69,21 @@ class CudfNestedLoopJoinBridge : public exec::JoinBridge {
 
   std::shared_ptr<CudaEvent> getBuildReadyEvent();
 
+  // The stream the build side used to materialize buildData_ - the same
+  // stream setBuildReadyEvent()'s event was recorded from. Exposed so probe
+  // instances can make this stream wait on their own completion before
+  // returning from doGetOutput(), ensuring buildData_'s eventual
+  // stream-ordered free (enqueued on this same stream, since that's where
+  // it was allocated) can't race a still-in-flight probe read. See
+  // CudfNestedLoopJoinProbe::recordReadCompletion().
+  void setBuildStream(rmm::cuda_stream_view buildStream);
+
+  std::optional<rmm::cuda_stream_view> getBuildStream();
+
  private:
   std::optional<build_data_type> data_;
   std::shared_ptr<CudaEvent> buildReadyEvent_;
+  std::optional<rmm::cuda_stream_view> buildStream_;
 };
 
 /// Accumulates build-side input for nested loop join.
@@ -214,6 +226,15 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   // reads build-side data. See buildReadyEvent_.
   void waitForBuildReady(rmm::cuda_stream_view probeStream);
 
+  // Records completion of a read of build-side state on probeStream, and
+  // makes buildStream_ wait on it. Must be called after every read of
+  // buildData_/buildPrecomputed_/scalars_/buildMatchedFlags_, so that
+  // buildStream_ accumulates a wait for every probe batch's completion
+  // before buildData_'s eventual stream-ordered free (enqueued on
+  // buildStream_) can run - matching CudfHashJoinProbe's pattern. A no-op
+  // if buildStream_ was never fetched (e.g. build side never ran).
+  void recordReadCompletion(rmm::cuda_stream_view probeStream);
+
   bool isLeftOrFullJoin() const {
     return joinType_ == core::JoinType::kLeft ||
         joinType_ == core::JoinType::kFull;
@@ -282,14 +303,9 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   ContinueFuture peerFuture_{ContinueFuture::makeEmpty()};
   bool buildMismatchEmitted_{false};
 
-  // Last CUDA stream this instance used to touch build-side state
-  // (buildData_, buildPrecomputed_, buildMatchedFlags_, scalars_). Used for
-  // two distinct purposes: (1) join_streams in noMoreInput() to establish
-  // GPU-side ordering before the cross-peer flag merge, and (2)
-  // synchronizing in doClose() before releasing that same build-side state,
-  // so a stream-ordered free can't race a still-in-flight read from this
-  // instance. Every call site that reads build-side state on a stream must
-  // record it here - see doGetOutput() and emitBuildMismatchRows().
+  // Last CUDA stream used for probing, needed for join_streams in
+  // noMoreInput() to ensure GPU-side ordering before the cross-peer
+  // buildMatchedFlags_ merge (right/full join only).
   std::optional<rmm::cuda_stream_view> lastProbeStream_;
 
   // Build-ready event, fetched once from the bridge in isBlocked() -
@@ -297,6 +313,17 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   // just needs to wait on it for every probe stream. See
   // CudfNestedLoopJoinBridge::setBuildReadyEvent().
   std::shared_ptr<CudaEvent> buildReadyEvent_;
+
+  // The build side's own stream, fetched once from the bridge in
+  // isBlocked(). recordReadCompletion() makes this stream wait on every
+  // probe batch's completion, so buildData_'s eventual stream-ordered free
+  // (enqueued on this same stream) is correctly ordered after all reads -
+  // see CudfNestedLoopJoinBridge::setBuildStream().
+  std::optional<rmm::cuda_stream_view> buildStream_;
+  // Reused event for recordReadCompletion()'s record-then-wait pattern.
+  // Safe to reuse across calls since each call finishes using the current
+  // recording (via waitOn()) before the next call re-records it.
+  std::unique_ptr<CudaEvent> cudaEvent_;
 };
 
 /// Creates CUDF nested loop join operators and bridges.
