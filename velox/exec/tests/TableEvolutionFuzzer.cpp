@@ -956,6 +956,12 @@ void TableEvolutionFuzzer::runQueryShape(
         generatedRemainingFilters,
     const std::unordered_map<std::string, std::string>& columnNameMapping,
     folly::Executor& executor) {
+  readSessionProperties_ = config_.extraReadSessionProperties
+      ? config_.extraReadSessionProperties(rng_)
+      : std::pair<
+            std::unordered_map<std::string, std::string>,
+            std::unordered_map<std::string, std::string>>{};
+
   // Rebuild the scan splits per shape: makeScanTask moves them, and a fresh
   // bucket selection lets shapes exercise different buckets. This only
   // reconstructs Split objects from the existing write results; it does not
@@ -1072,7 +1078,8 @@ void TableEvolutionFuzzer::runQueryShape(
       false,
       false, // insertProjectToBlockPushdown
       fullOutSchema,
-      outputColumnNames);
+      outputColumnNames,
+      readSessionProperties_.first);
 
   // expected: TableScan -> Project -> Aggregation (blocks pushdown)
   // Insert a Project node to prevent aggregation pushdown
@@ -1084,7 +1091,8 @@ void TableEvolutionFuzzer::runQueryShape(
       true,
       true, // insertProjectToBlockPushdown
       fullOutSchema,
-      outputColumnNames);
+      outputColumnNames,
+      readSessionProperties_.second);
 
   ScopedOOMInjector oomInjectorReadPath(
       [this]() -> bool { return folly::Random::oneIn(10, rng_); },
@@ -1099,7 +1107,17 @@ void TableEvolutionFuzzer::runQueryShape(
   // Skip result verification when OOM injection is enabled
   if (!FLAGS_enable_oom_injection_write_path &&
       !FLAGS_enable_oom_injection_read_path) {
-    checkResultsEqual(scanResults[0], scanResults[1]);
+    try {
+      checkResultsEqual(scanResults[0], scanResults[1]);
+    } catch (const std::exception&) {
+      for (const auto& [key, value] : readSessionProperties_.first) {
+        LOG(ERROR) << "Pushdown scan property: " << key << "=" << value;
+      }
+      for (const auto& [key, value] : readSessionProperties_.second) {
+        LOG(ERROR) << "Reference scan property: " << key << "=" << value;
+      }
+      throw;
+    }
   }
 }
 
@@ -1539,7 +1557,8 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
     bool useFiltersAsNode,
     bool insertProjectToBlockPushdown,
     const RowTypePtr& fullOutSchema,
-    const std::vector<std::string>& outputColumnNames) {
+    const std::vector<std::string>& outputColumnNames,
+    const std::unordered_map<std::string, std::string>& readSessionProperties) {
   // 'insertProjectToBlockPushdown' only takes effect on the reference plan,
   // where the Project below is what blocks aggregation pushdown; it is
   // meaningless (and never applied) on the pushdown plan. Enforce the pairing
@@ -1623,6 +1642,13 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
   }
 
   params.planNode = builder.planNode();
+
+  if (!readSessionProperties.empty()) {
+    params.queryCtx = core::QueryCtx::create();
+    params.queryCtx->setConnectorSessionOverridesUnsafe(
+        connectorId(),
+        std::unordered_map<std::string, std::string>(readSessionProperties));
+  }
 
   auto cursor = TaskCursor::create(params);
   for (auto& split : splits) {

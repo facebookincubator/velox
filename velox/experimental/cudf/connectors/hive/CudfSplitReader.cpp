@@ -194,6 +194,19 @@ CudfSplitReader::CudfSplitReader(
   baseReaderOpts_.setMetadataIoStats(ioStatistics_);
 }
 
+void CudfSplitReader::setupReader() {
+  if (useExperimentalCudfReader_) {
+    createExperimentalReader();
+  } else {
+    createCudfReader();
+  }
+}
+
+void CudfSplitReader::prepareSplitInternal(
+    dwio::common::RuntimeStatistics& /*runtimeStats*/) {
+  setupReader();
+}
+
 void CudfSplitReader::prepareSplit(
     dwio::common::RuntimeStatistics& runtimeStats) {
   // Reset existing split and split readers, if any
@@ -202,12 +215,8 @@ void CudfSplitReader::prepareSplit(
   // Acquire a stream from the global stream pool
   stream_ = cudfGlobalStreamPool().get_stream();
 
-  // Create a cuDF split reader
-  if (useExperimentalCudfReader_) {
-    createExperimentalReader();
-  } else {
-    createCudfReader();
-  }
+  // Perform split-specific setup.
+  prepareSplitInternal(runtimeStats);
 
   // Update runtime stats
   runtimeStats.processedSplits++;
@@ -323,7 +332,11 @@ void CudfSplitReader::resetSplit() {
   fileMetaData_.clear();
 }
 
-cudf::ast::expression const* CudfSplitReader::subfieldFilter() {
+cudf::ast::expression const* CudfSplitReader::pushdownFilter() const {
+  return subfieldFilter();
+}
+
+cudf::ast::expression const* CudfSplitReader::subfieldFilter() const {
   return subfieldFilterExpr_;
 }
 
@@ -445,7 +458,7 @@ void CudfSplitReader::setupReaderOptions() {
     readerOptions_.set_num_bytes(split_->size());
   }
 
-  if (auto* filter = subfieldFilter(); filter != nullptr) {
+  if (auto* filter = pushdownFilter(); filter != nullptr) {
     readerOptions_.set_filter(*filter);
   }
 
@@ -453,9 +466,14 @@ void CudfSplitReader::setupReaderOptions() {
   if (readColumnNames_.size()) {
     readerOptions_.set_column_names(readColumnNames_);
   }
+
+  if (prependRowIndex_) {
+    readerOptions_.enable_prepend_row_index_column(true);
+  }
 }
 
-rmm::device_async_resource_ref CudfSplitReader::determineCudfMemoryResource() {
+rmm::device_async_resource_ref CudfSplitReader::determineCudfMemoryResource()
+    const {
   return get_output_mr();
 }
 
@@ -531,10 +549,6 @@ void CudfSplitReader::createExperimentalReader() {
 
   // Metadata ingested
   fileMetaData_.clear();
-}
-
-bool CudfSplitReader::useExperimentalCudfReader() const {
-  return useExperimentalCudfReader_;
 }
 
 void CudfSplitReader::totalScanTimeCalculator(void* userData) {
