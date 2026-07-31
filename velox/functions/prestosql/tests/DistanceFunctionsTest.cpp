@@ -138,8 +138,6 @@ TEST_F(DistanceFunctionsTest, dotProductArray) {
       dotProduct({1, 3}, {}), "Both array arguments must have identical sizes");
 }
 
-#ifdef VELOX_ENABLE_FAISS
-
 TEST_F(DistanceFunctionsTest, cosineSimilarityFloatArray) {
   const auto cosineSimilarity = [&](const std::vector<float>& left,
                                     const std::vector<float>& right) {
@@ -233,7 +231,6 @@ TEST_F(DistanceFunctionsTest, dotProductFloatArray) {
   VELOX_ASSERT_THROW(
       dotProduct({1, 3}, {}), "Both array arguments must have identical sizes");
 }
-#endif // VELOX_ENABLE_FAISS
 
 } // namespace
 } // namespace facebook::velox
