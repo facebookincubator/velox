@@ -1666,16 +1666,16 @@ TEST_P(CudfDecimalOverflowTest, throwsOnOverflow) {
                   .planNode();
 
   // Velox CPU decimal arithmetic is fail-fast on overflow; the cuDF GPU path
-  // must match. Run the same expression on both engines and require both to
-  // fail (parity of success/failure), then assert the specific GPU error
-  // message. The exact overflow wording differs between the engines, so the CPU
-  // check only asserts that it fails.
+  // must match. Both engines must raise a VeloxUserError naming an overflow
+  // (error-kind parity), and the GPU must use its specific wording. The CPU
+  // wording varies by path ("Decimal overflow. Value ...", "Decimal overflow:
+  // a * b", "integer overflow: a + b"), so only the shared substring is pinned.
   unregisterCudf();
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_USER_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
-      "");
+      "overflow");
   registerCudf();
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_USER_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
       param.expectedMessage);
 }
@@ -2213,11 +2213,11 @@ TEST_F(CudfDecimalTest, decimalMultiRowOverflowFlag) {
 
   // CPU and GPU must both fail fast on the batch.
   unregisterCudf();
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_USER_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
-      "");
+      "overflow");
   registerCudf();
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_USER_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
       "Decimal overflow in add");
 }
