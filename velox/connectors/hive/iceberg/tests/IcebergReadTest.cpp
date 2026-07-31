@@ -31,6 +31,7 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
+// Trivial edit to force clang-tidy to analyze this TU (CI validation only).
 namespace {
 
 using TempFilePath = common::testutil::TempFilePath;
