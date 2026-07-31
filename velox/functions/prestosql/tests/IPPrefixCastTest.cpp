@@ -183,4 +183,45 @@ TEST_F(IPPrefixTypeTest, castToVarchar) {
   EXPECT_THROW(castToVarchar("192.1.1.1"), VeloxUserError);
   EXPECT_THROW(castToVarchar("192.1.1.1/128"), VeloxUserError);
 }
+
+TEST_F(IPPrefixTypeTest, ipv6CastEncodingBug) {
+  // Regression for IPv6 CAST encoding bug where castToString used SimpleVector
+  // for child vectors, breaking constant and dictionary encodings.
+  auto ipv6Prefixes = makeFlatVector<std::string>({
+      "2607:f0d0:1000::/38",
+      "2001:db8::/32",
+      "2001:db8::/48",
+      "2804:431:b000::/38",
+      "::/0",
+      "2001:db8::ff00:42:8329/128",
+  });
+  auto rowVector = makeRowVector({ipv6Prefixes});
+  auto expected = evaluate("cast(c0 as ipprefix)", rowVector);
+  auto expectedAsVarchar =
+      evaluate("cast(cast(c0 as ipprefix) as varchar)", rowVector);
+
+  // Test that CAST VARCHAR -> IPPREFIX -> VARCHAR round-trips correctly
+  // even with dictionary and constant encodings.
+  auto typedExpr = makeTypedExpr(
+      "cast(cast(c0 as ipprefix) as varchar)", asRowType(rowVector->type()));
+  testEncodings(typedExpr, {ipv6Prefixes}, expectedAsVarchar);
+
+  // Test IPPREFIX -> VARCHAR directly with encodings.
+  // Need to create a row vector wrapping the IPPREFIX vector
+  auto ipPrefixRow = makeRowVector({expected});
+  auto typedExpr2 =
+      makeTypedExpr("cast(c0 as varchar)", asRowType(ipPrefixRow->type()));
+  auto flatVarcharResult = evaluate("cast(c0 as varchar)", ipPrefixRow);
+  testEncodings(typedExpr2, {expected}, flatVarcharResult);
+
+  // Test constant encoding explicitly: 2607:f0d0:1000::/38 should not become
+  // ::/38
+  auto constantInput = BaseVector::wrapInConstant(3, 0, ipv6Prefixes);
+  auto constantRow = makeRowVector({constantInput});
+  auto constResult =
+      evaluate("cast(cast(c0 as ipprefix) as varchar)", constantRow);
+  auto expectedConst = BaseVector::wrapInConstant(3, 0, expectedAsVarchar);
+  velox::test::assertEqualVectors(expectedConst, constResult);
+}
+
 } // namespace facebook::velox::functions::prestosql

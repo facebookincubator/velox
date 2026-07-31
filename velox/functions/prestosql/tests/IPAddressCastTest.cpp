@@ -145,6 +145,110 @@ TEST_F(IPAddressCastTest, castRoundTrip) {
   velox::test::assertEqualVectors(strings, stringsCopy);
   velox::test::assertEqualVectors(ipaddresses, ipaddressesCopy);
 }
+
+TEST_F(IPAddressCastTest, ipv6CastEncodingBug) {
+  // Regression for IPv6 CAST encoding bug where CAST from VARCHAR to
+  // IPADDRESS corrupted addresses like 2607:f0d0:1000::1 to ::1 for constant
+  // and dictionary encodings.
+  // Use canonical forms so round-trip expectation is exact.
+  auto ipv6Strings = makeFlatVector<std::string>({
+      "2607:f0d0:1000::1",
+      "2001:db8::1",
+      "2001:db8:85a3:1:1:8a2e:370:7334",
+      "::1",
+      "64:ff9b::17",
+  });
+  auto rowVector = makeRowVector({ipv6Strings});
+  // Flat evaluation gives canonical expected (same as input here)
+  auto expectedVarchar =
+      evaluate("cast(cast(c0 as ipaddress) as varchar)", rowVector);
+  // Prebuild encoded physical vectors for direct cast tests.
+  auto ipAddressVector = evaluate("cast(c0 as ipaddress)", rowVector);
+  auto varbinaryVector =
+      evaluate("cast(cast(c0 as ipaddress) as varbinary)", rowVector);
+
+  // Test cast VARCHAR -> IPADDRESS -> VARCHAR with encoded VARCHAR input.
+  // Covers castFromString.
+  {
+    auto typedExpr = makeTypedExpr(
+        "cast(cast(c0 as ipaddress) as varchar)", asRowType(rowVector->type()));
+    testEncodings(typedExpr, {ipv6Strings}, expectedVarchar);
+  }
+
+  // Test constant encoding explicitly for VARCHAR -> IPADDRESS -> VARCHAR.
+  {
+    auto constantInput = BaseVector::wrapInConstant(3, 0, ipv6Strings);
+    auto constantRow = makeRowVector({constantInput});
+    auto result =
+        evaluate("cast(cast(c0 as ipaddress) as varchar)", constantRow);
+    auto expectedConst = BaseVector::wrapInConstant(3, 0, expectedVarchar);
+    velox::test::assertEqualVectors(expectedConst, result);
+  }
+
+  // Test IPADDRESS -> VARCHAR with prebuilt encoded IPADDRESS input.
+  // Directly exercises castToString which previously used SimpleVector.
+  {
+    auto ipRow = makeRowVector({ipAddressVector});
+    auto flatResult = evaluate("cast(c0 as varchar)", ipRow);
+    auto typedExpr =
+        makeTypedExpr("cast(c0 as varchar)", asRowType(ipRow->type()));
+    testEncodings(typedExpr, {ipAddressVector}, flatResult);
+  }
+
+  // Test IPADDRESS -> VARBINARY with prebuilt encoded IPADDRESS input.
+  // Directly exercises castToVarbinary.
+  {
+    auto ipRow = makeRowVector({ipAddressVector});
+    auto flatResult = evaluate("cast(c0 as varbinary)", ipRow);
+    auto typedExpr =
+        makeTypedExpr("cast(c0 as varbinary)", asRowType(ipRow->type()));
+    testEncodings(typedExpr, {ipAddressVector}, flatResult);
+  }
+
+  // Test VARBINARY -> IPADDRESS with prebuilt encoded VARBINARY input.
+  // Directly exercises castFromVarbinary.
+  {
+    auto varbinaryRow = makeRowVector({varbinaryVector});
+    auto flatResult = evaluate("cast(c0 as ipaddress)", varbinaryRow);
+    auto typedExpr =
+        makeTypedExpr("cast(c0 as ipaddress)", asRowType(varbinaryRow->type()));
+    testEncodings(typedExpr, {varbinaryVector}, flatResult);
+  }
+
+  // Test VARBINARY -> IPADDRESS -> VARCHAR round-trip still works with
+  // encoded VARBINARY input.
+  {
+    auto varbinaryRow = makeRowVector({varbinaryVector});
+    auto flatResult =
+        evaluate("cast(cast(c0 as ipaddress) as varchar)", varbinaryRow);
+    auto typedExpr = makeTypedExpr(
+        "cast(cast(c0 as ipaddress) as varchar)",
+        asRowType(varbinaryRow->type()));
+    testEncodings(typedExpr, {varbinaryVector}, flatResult);
+  }
+
+  // Test IPPREFIX -> IPADDRESS with prebuilt encoded IPPREFIX input.
+  // Directly exercises castFromIPPrefix.
+  {
+    auto prefixStrings = makeFlatVector<std::string>({
+        "2607:f0d0:1000::/38",
+        "2001:db8::/32",
+        "2001:db8::/48",
+        "::/0",
+        "2001:db8::1/128",
+    });
+    auto prefixRowVarchar = makeRowVector({prefixStrings});
+    auto ipPrefixVector = evaluate("cast(c0 as ipprefix)", prefixRowVarchar);
+    auto ipPrefixRow = makeRowVector({ipPrefixVector});
+    auto flatResult =
+        evaluate("cast(cast(c0 as ipaddress) as varchar)", ipPrefixRow);
+    auto typedExpr = makeTypedExpr(
+        "cast(cast(c0 as ipaddress) as varchar)",
+        asRowType(ipPrefixRow->type()));
+    testEncodings(typedExpr, {ipPrefixVector}, flatResult);
+  }
+}
+
 } // namespace
 
 } // namespace facebook::velox::functions::prestosql

@@ -74,18 +74,21 @@ class IPPrefixCastOperator : public exec::CastOperator {
       const SelectivityVector& rows,
       BaseVector& result) {
     auto* flatResult = result.as<FlatVector<StringView>>();
-    auto rowVector = input.as<RowVector>();
-    const auto* ipaddr = rowVector->childAt(ipaddress::kIpRowIndex)
-                             ->as<SimpleVector<int128_t>>();
-    const auto* prefix = rowVector->childAt(ipaddress::kIpPrefixRowIndex)
-                             ->as<SimpleVector<int8_t>>();
+    DecodedVector decoded(input, rows);
+    auto* rowVector = decoded.base()->as<RowVector>();
+    DecodedVector ipAddrDecoded(*rowVector->childAt(ipaddress::kIpRowIndex));
+    DecodedVector prefixDecoded(
+        *rowVector->childAt(ipaddress::kIpPrefixRowIndex));
+
     context.applyToSelectedNoThrow(rows, [&](auto row) {
-      exec::StringWriter result(flatResult, row);
-      result.resize(IPPrefixType::kMaxStringSize);
-      auto str = IPPREFIX()->valueToString(
-          ipaddr->valueAt(row), prefix->valueAt(row), result.data());
-      result.resize(str.size());
-      result.finalize();
+      const auto index = decoded.index(row);
+      const auto ipAddr = ipAddrDecoded.valueAt<int128_t>(index);
+      const auto prefix = prefixDecoded.valueAt<int8_t>(index);
+      exec::StringWriter writer(flatResult, row);
+      writer.resize(IPPrefixType::kMaxStringSize);
+      auto str = IPPREFIX()->valueToString(ipAddr, prefix, writer.data());
+      writer.resize(str.size());
+      writer.finalize();
     });
   }
 

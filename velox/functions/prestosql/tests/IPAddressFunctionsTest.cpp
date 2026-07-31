@@ -298,6 +298,78 @@ TEST_F(IPAddressFunctionsTest, IPSubnetOfIPPrefix) {
   EXPECT_EQ(isSubnetOfIPPrefix("170.0.52.0/24", "170.0.52.0/22"), false);
 }
 
+TEST_F(IPAddressFunctionsTest, ipv6IsSubnetOfBug) {
+  // Regression for IPv6 CAST encoding bug where is_subnet_of returned false
+  // for column inputs. The CAST from VARCHAR used SimpleVector which broke
+  // constant and dictionary encodings, corrupting 2607:f0d0:1000::1 to ::1.
+  EXPECT_EQ(isSubnetOfIP("2607:f0d0:1000::/38", "2607:f0d0:1000::1"), true);
+  EXPECT_EQ(isSubnetOfIP("2001:db8::/32", "2001:db8::1"), true);
+  EXPECT_EQ(isSubnetOfIP("2001:db8::/48", "2001:db8::1"), true);
+  EXPECT_EQ(isSubnetOfIP("2804:431:b000::/38", "2804:431:b000::1"), true);
+  EXPECT_EQ(isSubnetOfIP("::/0", "2001:db8::1"), true);
+  EXPECT_EQ(isSubnetOfIP("2001:db8::/128", "2001:db8::1"), false);
+  EXPECT_EQ(isSubnetOfIP("2001:db8::/32", "2001:db9::1"), false);
+
+  // Test that constant and dictionary encodings are handled correctly.
+  auto prefixStrings = makeFlatVector<std::string>({
+      "2607:f0d0:1000::/38",
+      "2001:db8::/32",
+      "2001:db8::/48",
+      "2804:431:b000::/37",
+      "::/0",
+  });
+  auto ipStrings = makeFlatVector<std::string>({
+      "2607:f0d0:1000::1",
+      "2001:db8::1",
+      "2001:db8::1",
+      "2804:431:b000::1",
+      "2001:db8::1",
+  });
+  auto expected = makeFlatVector<bool>({true, true, true, true, true});
+
+  auto rowVector = makeRowVector({prefixStrings, ipStrings});
+  auto typedExpr = makeTypedExpr(
+      "is_subnet_of(cast(c0 as ipprefix), cast(c1 as ipaddress))",
+      asRowType(rowVector->type()));
+  testEncodings(typedExpr, {prefixStrings, ipStrings}, expected);
+
+  // Also test mixed constant: one arg constant, one flat (the VALUES repro
+  // where c is column but second arg is constant literal). This exercises the
+  // exact bug where CAST with constant encoding corrupted IPv6.
+  auto constantIp = BaseVector::wrapInConstant(5, 0, ipStrings);
+  auto mixedRow = makeRowVector({prefixStrings, constantIp});
+  auto typedExpr2 = makeTypedExpr(
+      "is_subnet_of(cast(c0 as ipprefix), cast(c1 as ipaddress))",
+      asRowType(mixedRow->type()));
+  // Compute expected for constant IP 2607:f0d0:1000::1 against varied prefixes.
+  auto uniformIp = makeFlatVector<std::string>({
+      "2607:f0d0:1000::1",
+      "2607:f0d0:1000::1",
+      "2607:f0d0:1000::1",
+      "2607:f0d0:1000::1",
+      "2607:f0d0:1000::1",
+  });
+  auto uniformRow = makeRowVector({prefixStrings, uniformIp});
+  auto expectedMixed = evaluate(
+      "is_subnet_of(cast(c0 as ipprefix), cast(c1 as ipaddress))", uniformRow);
+  testEncodings(typedExpr2, {prefixStrings, constantIp}, expectedMixed);
+
+  // Test uniform prefix with constant IP to ensure all true.
+  auto singlePrefix = makeFlatVector<std::string>({
+      "2607:f0d0:1000::/38",
+      "2607:f0d0:1000::/38",
+      "2607:f0d0:1000::/38",
+      "2607:f0d0:1000::/38",
+      "2607:f0d0:1000::/38",
+  });
+  auto mixedRow2 = makeRowVector({singlePrefix, constantIp});
+  auto expected2 = makeFlatVector<bool>({true, true, true, true, true});
+  auto typedExpr3 = makeTypedExpr(
+      "is_subnet_of(cast(c0 as ipprefix), cast(c1 as ipaddress))",
+      asRowType(mixedRow2->type()));
+  testEncodings(typedExpr3, {singlePrefix, constantIp}, expected2);
+}
+
 TEST_F(IPAddressFunctionsTest, IPPrefixCollapseTest) {
   auto makeIPPrefixFunc =
       [](const std::string& ipprefix) -> std::tuple<int128_t, int8_t> {

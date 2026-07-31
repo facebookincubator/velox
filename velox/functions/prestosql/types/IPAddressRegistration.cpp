@@ -77,11 +77,12 @@ class IPAddressCastOperator : public exec::CastOperator {
       const SelectivityVector& rows,
       BaseVector& result) {
     auto* flatResult = result.as<FlatVector<StringView>>();
-    const auto* ipaddresses = input.as<SimpleVector<int128_t>>();
+    DecodedVector decoded(input, rows);
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
+      const auto ipAddrVal = decoded.valueAt<int128_t>(row);
       exec::StringWriter result(flatResult, row);
-      result.append(IPADDRESS()->valueToString(ipaddresses->valueAt(row)));
+      result.append(IPADDRESS()->valueToString(ipAddrVal));
       result.finalize();
     });
   }
@@ -92,10 +93,10 @@ class IPAddressCastOperator : public exec::CastOperator {
       const SelectivityVector& rows,
       BaseVector& result) {
     auto* flatResult = result.as<FlatVector<int128_t>>();
-    const auto* ipAddressStrings = input.as<SimpleVector<StringView>>();
+    DecodedVector decoded(input, rows);
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
-      const auto ipAddressString = ipAddressStrings->valueAt(row);
+      const auto ipAddressString = decoded.valueAt<StringView>(row);
       // TODO: Remove explicit std::string_view cast.
       auto maybeIpAsInt128 = ipaddress::tryGetIPv6asInt128FromString(
           std::string_view(ipAddressString));
@@ -120,10 +121,10 @@ class IPAddressCastOperator : public exec::CastOperator {
       const SelectivityVector& rows,
       BaseVector& result) {
     auto* flatResult = result.as<FlatVector<StringView>>();
-    const auto* ipaddresses = input.as<SimpleVector<int128_t>>();
+    DecodedVector decoded(input, rows);
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
-      const auto intAddr = ipaddresses->valueAt(row);
+      const auto intAddr = decoded.valueAt<int128_t>(row);
       folly::ByteArray16 addrBytes;
       memcpy(&addrBytes, &intAddr, ipaddress::kIPAddressBytes);
       std::reverse(addrBytes.begin(), addrBytes.end());
@@ -167,12 +168,14 @@ class IPAddressCastOperator : public exec::CastOperator {
       const SelectivityVector& rows,
       BaseVector& result) {
     auto* flatResult = result.as<FlatVector<int128_t>>();
-    const auto* ipprefix = input.as<RowVector>();
-    const auto* ipaddr = ipprefix->childAt(ipaddress::kIpRowIndex)
-                             ->asChecked<SimpleVector<int128_t>>();
+    DecodedVector decoded(input, rows);
+    auto* rowVector = decoded.base()->as<RowVector>();
+    DecodedVector childDecoded(*rowVector->childAt(ipaddress::kIpRowIndex));
 
-    context.applyToSelectedNoThrow(
-        rows, [&](auto row) { flatResult->set(row, ipaddr->valueAt(row)); });
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
+      const auto index = decoded.index(row);
+      flatResult->set(row, childDecoded.valueAt<int128_t>(index));
+    });
   }
 
   static void castFromVarbinary(
@@ -181,12 +184,12 @@ class IPAddressCastOperator : public exec::CastOperator {
       const SelectivityVector& rows,
       BaseVector& result) {
     auto* flatResult = result.as<FlatVector<int128_t>>();
-    const auto* ipAddressBinaries = input.as<SimpleVector<StringView>>();
+    DecodedVector decoded(input, rows);
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       int128_t intAddr;
       folly::ByteArray16 addrBytes = {};
-      const auto ipAddressBinary = ipAddressBinaries->valueAt(row);
+      const auto ipAddressBinary = decoded.valueAt<StringView>(row);
 
       if (ipAddressBinary.size() == ipaddress::kIPV4AddressBytes) {
         addrBytes[ipaddress::kIPV4ToV6FFIndex] = 0xFF;
