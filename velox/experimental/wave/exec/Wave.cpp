@@ -1109,13 +1109,16 @@ void WaveStream::makeHashBuild(
   makeHashTable(state, inst.rowSize(), false);
 }
 
+#ifndef NDEBUG
 void checkOperand(Operand& op) {
   if (op.indexMask != 0 && op.indexMask != -1) {
     VELOX_FAIL("Corrupt operand in executable");
   }
 }
+#endif
 
 void WaveStream::checkExecutables() const {
+#ifndef NDEBUG
   for (auto& pair : operandToExecutable_) {
     bool found = false;
     for (auto& exe : executables_) {
@@ -1137,6 +1140,7 @@ void WaveStream::checkExecutables() const {
       }
     }
   }
+#endif
 }
 
 void WaveStream::throwIfError(std::function<void(const KernelError*)> action) {
