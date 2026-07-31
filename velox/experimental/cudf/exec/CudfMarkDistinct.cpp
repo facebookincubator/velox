@@ -172,9 +172,10 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
     streamsWaitForStream(*cudaEvent_, stateStreams, stream);
 
     if (updatedSeenKeys) {
+      auto updatedSeenFilter = std::make_unique<cudf::filtered_join>(
+          updatedSeenKeys->view(), cudf::null_equality::EQUAL, stream);
+      seenFilter_ = std::move(updatedSeenFilter);
       seenKeys_ = std::move(updatedSeenKeys);
-      seenFilter_ = std::make_unique<cudf::filtered_join>(
-          seenKeys_->view(), cudf::null_equality::EQUAL, stream);
       seenStateStream_ = stream;
     }
   }
