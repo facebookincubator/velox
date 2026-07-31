@@ -37,6 +37,7 @@ add_library(
   DecimalAggregationDevice.cu
   DecimalAggregationHostOps.cpp
   DecimalAggregationState.cpp
+  GpuMemoryNvtx.cpp
   GpuMemoryPlanPath.cpp
   GpuResources.cpp
   OperatorAdapters.cpp

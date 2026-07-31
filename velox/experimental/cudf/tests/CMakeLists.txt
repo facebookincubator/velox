@@ -114,6 +114,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_gpu_memory_nvtx_test
+  SOURCES Main.cpp GpuMemoryNvtxTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_decimal_aggregation_test
   SOURCES Main.cpp DecimalAggregationTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_test_lib
