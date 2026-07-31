@@ -112,6 +112,11 @@ velox_add_cudf_test(
   SOURCES Main.cpp CudfSplitReaderTest.cpp
   LIBS velox_cudf_exec_test_lib velox_cudf_hive_connector
 )
+velox_add_cudf_test(
+  NAME velox_cudf_gpu_memory_plan_path_test
+  SOURCES Main.cpp GpuMemoryPlanPathTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
+)
 
 velox_add_cudf_test(
   NAME velox_cudf_decimal_aggregation_test
