@@ -33,6 +33,7 @@
 #include <torch/nativert/kernels/KernelFactory.h>
 #include "velox/experimental/torchwave/KernelOperation.h"
 #include "velox/experimental/torchwave/Registry.h"
+#include "velox/experimental/torchwave/WaveConfig.h"
 
 namespace facebook::velox::wave {
 class CompiledKernel;
@@ -118,6 +119,12 @@ struct ModelContext {
   std::unique_ptr<nativert::Graph> graph;
   std::shared_ptr<nativert::Weights> weights;
   nativert::ExecutorConfig config;
+
+  /// Optional per-graph WaveConfig. When set, it is moved into the WaveGraph at
+  /// construction and installed as the thread-local override during that
+  /// graph's compilation and execution, so graphs with different configs can
+  /// run concurrently. Null => use the global WaveConfig.
+  std::shared_ptr<WaveConfig> configOverride;
 
   /// Creates OpKernels for all nodes in the graph.
   std::vector<std::unique_ptr<nativert::OpKernel>> makeKernels() const {
@@ -316,6 +323,12 @@ class WaveGraph {
     return modelContext_;
   }
 
+  /// Returns this graph's WaveConfig override, or nullptr if it uses the global
+  /// config. Installed into waveConfigOverride() during execution.
+  WaveConfig* configOverride() const {
+    return configOverride_.get();
+  }
+
   folly::F14FastMap<NodeCP, NodeInfo>& nodeInfos() {
     return nodeInfos_;
   }
@@ -394,6 +407,11 @@ class WaveGraph {
 
   // Retained for recreating OpKernels after graph mutations.
   ModelContext* modelContext_;
+
+  // Per-graph config override, moved from the ModelContext at construction and
+  // installed into the thread-local waveConfigOverride() during construction
+  // and execution. Null => this graph reads the global WaveConfig.
+  std::shared_ptr<WaveConfig> configOverride_;
 
   // Set during construction, cleared after.
   CompileCtx* compileCtx_{nullptr};
