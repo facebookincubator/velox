@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/exec/CudfJoin.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrecomputeInstruction.h"
@@ -259,12 +260,7 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   std::vector<PrecomputeInstruction> leftPrecomputeInstructions_;
   std::vector<PrecomputeInstruction> rightPrecomputeInstructions_;
 
-  // Output column mapping resolved by name from the output type.
-  // Handles arbitrary column ordering (e.g., {"b0", "p0"}).
-  std::vector<cudf::size_type> probeColumnIndicesToGather_;
-  std::vector<cudf::size_type> buildColumnIndicesToGather_;
-  std::vector<size_t> probeColumnOutputIndices_;
-  std::vector<size_t> buildColumnOutputIndices_;
+  CudfJoinOutputLayout outputLayout_;
 
   // Probe and build types (cached for null column creation in left joins).
   RowTypePtr probeType_;

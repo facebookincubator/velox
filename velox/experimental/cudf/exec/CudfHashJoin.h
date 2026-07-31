@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/exec/CudfJoin.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
@@ -211,14 +212,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   std::vector<cudf::size_type> leftKeyIndices_;
   /** @brief Column indices for join keys in right (build) table */
   std::vector<cudf::size_type> rightKeyIndices_;
-  /** @brief Column indices to gather from left table for output */
-  std::vector<cudf::size_type> leftColumnIndicesToGather_;
-  /** @brief Column indices to gather from right table for output */
-  std::vector<cudf::size_type> rightColumnIndicesToGather_;
-  /** @brief Output column positions for left table columns */
-  std::vector<size_t> leftColumnOutputIndices_;
-  /** @brief Output column positions for right table columns */
-  std::vector<size_t> rightColumnOutputIndices_;
+  CudfJoinOutputLayout outputLayout_;
   bool finished_{false};
 
   /// True if any build table has NULL values in join key columns.
