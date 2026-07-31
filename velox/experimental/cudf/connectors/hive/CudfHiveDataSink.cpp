@@ -129,7 +129,8 @@ CudfHiveDataSink::CudfHiveDataSink(
     const ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy,
     const std::shared_ptr<const CudfHiveConfig>& parquetConfig)
-    : inputType_(std::move(inputType)),
+    : NvtxHelper(nvtx3::rgb{64, 224, 208} /* Turquoise */),
+      inputType_(std::move(inputType)),
       insertTableHandle_(std::move(insertTableHandle)),
       connectorQueryCtx_(connectorQueryCtx),
       commitStrategy_(commitStrategy),
@@ -154,6 +155,7 @@ CudfHiveDataSink::CudfHiveDataSink(
 }
 
 void CudfHiveDataSink::appendData(RowVectorPtr input) {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   checkRunning();
 
   // Convert the input RowVectorPtr to cudf::table
@@ -384,6 +386,7 @@ void CudfHiveDataSink::checkStateTransition(State oldState, State newState) {
 }
 
 bool CudfHiveDataSink::finish() {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   VELOX_CHECK_NOT_NULL(writer_, "CudfHiveDataSink has no writer");
 
   setState(State::kFinishing);
@@ -391,6 +394,7 @@ bool CudfHiveDataSink::finish() {
 }
 
 std::vector<std::string> CudfHiveDataSink::close() {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   setState(State::kClosed);
   closeInternal();
 
