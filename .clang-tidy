@@ -64,7 +64,7 @@ WarningsAsErrors: 'bugprone-use-after-move'
 # so under -Werror the warning becomes an error. Disabling the check in Checks
 # only filters warning-level output, not an error, so pass the suppression as a
 # real compiler flag here.
-ExtraArgs:
+ExtraArgsBefore:
   - '-Wno-nullability-completeness'
 
 CheckOptions:
