@@ -148,6 +148,32 @@ class IcebergReadTest : public test::IcebergTestBase {
         .splits(createSplitsForDirectory(outputDirectory))
         .assertResults(expected);
   }
+
+  std::shared_ptr<test::TempDirectoryPath> writeParquetData(
+      const std::vector<RowVectorPtr>& data) {
+    fileFormat_ = dwio::common::FileFormat::PARQUET;
+    auto outputDirectory = test::TempDirectoryPath::create();
+    const auto dataSink =
+        createDataSinkAndAppendData(data, outputDirectory->getPath());
+    dataSink->close();
+    return outputDirectory;
+  }
+
+  struct FlatParquetFieldIdData {
+    RowTypePtr writeType;
+    std::shared_ptr<test::TempDirectoryPath> outputDirectory;
+  };
+
+  FlatParquetFieldIdData writeFlatParquetFieldIdData() {
+    const auto writeType =
+        ROW({"id", "flag", "status"}, {BIGINT(), BOOLEAN(), VARCHAR()});
+    const std::vector<RowVectorPtr> data{makeRowVector(
+        writeType->names(),
+        {makeFlatVector<int64_t>({10, 20, 30}),
+         makeFlatVector<bool>({true, false, true}),
+         makeFlatVector<std::string>({"old-a", "old-b", "old-c"})})};
+    return {writeType, writeParquetData(data)};
+  }
 #endif
 
   void assertDefaultValues(
@@ -349,23 +375,8 @@ TEST_F(IcebergReadTest, schemaEvolutionAddColumns) {
 }
 
 #ifdef VELOX_ENABLE_PARQUET
-TEST_F(IcebergReadTest, readParquetSchemaEvolutionByFieldId) {
-  fileFormat_ = dwio::common::FileFormat::PARQUET;
-
-  const auto writeType =
-      ROW({"id", "flag", "status"}, {BIGINT(), BOOLEAN(), VARCHAR()});
-  const std::vector<RowVectorPtr> data{makeRowVector(
-      writeType->names(),
-      {makeFlatVector<int64_t>({10, 20, 30}),
-       makeFlatVector<bool>({true, false, true}),
-       makeFlatVector<std::string>({"old-a", "old-b", "old-c"})})};
-  const auto outputDirectory = test::TempDirectoryPath::create();
-  {
-    const auto dataSink =
-        createDataSinkAndAppendData(data, outputDirectory->getPath());
-    dataSink->close();
-  }
-
+TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
+  const auto testData = writeFlatParquetFieldIdData();
   struct ReadCase {
     std::string name;
     RowTypePtr outputType;
@@ -453,18 +464,22 @@ TEST_F(IcebergReadTest, readParquetSchemaEvolutionByFieldId) {
   for (const auto& readCase : cases) {
     SCOPED_TRACE(readCase.name);
     assertParquetFieldIdRead(
-        outputDirectory->getPath(),
+        testData.outputDirectory->getPath(),
         readCase.outputType,
         readCase.scanSpecType,
         readCase.columns,
         {readCase.expected});
   }
+}
+
+TEST_F(IcebergReadTest, readParquetFilterOnlyColumnByFieldId) {
+  const auto testData = writeFlatParquetFieldIdData();
 
   auto filterOnlyColumnPlan =
       exec::test::PlanBuilder()
           .startTableScan(test::kIcebergConnectorId)
           .outputType(ROW({"id"}, {BIGINT()}))
-          .dataColumns(writeType)
+          .dataColumns(testData.writeType)
           .assignments(makeFieldIdAssignments({
               {"id", "id", BIGINT(), makeFieldId(1)},
           }))
@@ -475,9 +490,11 @@ TEST_F(IcebergReadTest, readParquetSchemaEvolutionByFieldId) {
           .endTableScan()
           .planNode();
   exec::test::AssertQueryBuilder(filterOnlyColumnPlan)
-      .splits(createSplitsForDirectory(outputDirectory->getPath()))
+      .splits(createSplitsForDirectory(testData.outputDirectory->getPath()))
       .assertResults({makeRowVector({makeFlatVector<int64_t>({20})})});
+}
 
+TEST_F(IcebergReadTest, readParquetNestedStructByFieldId) {
   const auto addressWriteType = ROW({"city", "zip"}, {VARCHAR(), VARCHAR()});
   const auto profileWriteType =
       ROW({"name", "address"}, {VARCHAR(), addressWriteType});
@@ -491,12 +508,7 @@ TEST_F(IcebergReadTest, readParquetSchemaEvolutionByFieldId) {
   const auto profileTableType = ROW({"profile"}, {profileWriteType});
   const std::vector<RowVectorPtr> profileData{
       makeRowVector(profileTableType->names(), {profileWriteData})};
-  const auto profileOutputDirectory = test::TempDirectoryPath::create();
-  {
-    const auto profileDataSink = createDataSinkAndAppendData(
-        profileData, profileOutputDirectory->getPath());
-    profileDataSink->close();
-  }
+  const auto profileOutputDirectory = writeParquetData(profileData);
   common::SubfieldFilters profileFilters;
   profileFilters.emplace(
       common::Subfield("profile.address.zip"),
@@ -528,7 +540,9 @@ TEST_F(IcebergReadTest, readParquetSchemaEvolutionByFieldId) {
       .assertResults({makeRowVector(
           {makeFlatVector<std::string>({"Ada", "Cy"}),
            makeFlatVector<std::string>({"New York", "New York"})})});
+}
 
+TEST_F(IcebergReadTest, readParquetArrayByFieldId) {
   const auto nestedWriteType =
       ROW({"items"}, {ARRAY(ROW({"name", "quantity"}, {VARCHAR(), BIGINT()}))});
   const auto nestedElements = makeRowVector(
@@ -537,12 +551,7 @@ TEST_F(IcebergReadTest, readParquetSchemaEvolutionByFieldId) {
        makeFlatVector<int64_t>({5, 7, 11})});
   const std::vector<RowVectorPtr> nestedData{makeRowVector(
       nestedWriteType->names(), {makeArrayVector({0, 2}, nestedElements)})};
-  const auto nestedOutputDirectory = test::TempDirectoryPath::create();
-  {
-    const auto nestedDataSink = createDataSinkAndAppendData(
-        nestedData, nestedOutputDirectory->getPath());
-    nestedDataSink->close();
-  }
+  const auto nestedOutputDirectory = writeParquetData(nestedData);
 
   const auto nestedReadType =
       ROW({"items"}, {ARRAY(ROW({"amount", "label"}, {BIGINT(), VARCHAR()}))});
@@ -554,17 +563,21 @@ TEST_F(IcebergReadTest, readParquetSchemaEvolutionByFieldId) {
       nestedReadType->names(),
       {makeArrayVector({0, 2}, nestedExpectedElements)});
 
-  assertParquetFieldIdRead(
-      nestedOutputDirectory->getPath(),
-      nestedReadType,
-      nestedReadType,
-      {
-          {"items",
-           "items",
-           nestedReadType->childAt(0),
-           makeFieldId(1, {makeFieldId(2, {makeFieldId(4), makeFieldId(3)})})},
-      },
-      {nestedExpected});
+  {
+    SCOPED_TRACE("full array element row");
+    assertParquetFieldIdRead(
+        nestedOutputDirectory->getPath(),
+        nestedReadType,
+        nestedReadType,
+        {
+            {"items",
+             "items",
+             nestedReadType->childAt(0),
+             makeFieldId(
+                 1, {makeFieldId(2, {makeFieldId(4), makeFieldId(3)})})},
+        },
+        {nestedExpected});
+  }
 
   const auto nestedProjectedReadType =
       ROW({"items"}, {ARRAY(ROW({"amount"}, {BIGINT()}))});
@@ -573,18 +586,23 @@ TEST_F(IcebergReadTest, readParquetSchemaEvolutionByFieldId) {
   auto nestedProjectedExpected = makeRowVector(
       nestedProjectedReadType->names(),
       {makeArrayVector({0, 2}, nestedProjectedElements)});
-  assertParquetFieldIdRead(
-      nestedOutputDirectory->getPath(),
-      nestedProjectedReadType,
-      nestedProjectedReadType,
-      {
-          {"items",
-           "items",
-           nestedProjectedReadType->childAt(0),
-           makeFieldId(1, {makeFieldId(2, {makeFieldId(4)})})},
-      },
-      {nestedProjectedExpected});
+  {
+    SCOPED_TRACE("projected array element row");
+    assertParquetFieldIdRead(
+        nestedOutputDirectory->getPath(),
+        nestedProjectedReadType,
+        nestedProjectedReadType,
+        {
+            {"items",
+             "items",
+             nestedProjectedReadType->childAt(0),
+             makeFieldId(1, {makeFieldId(2, {makeFieldId(4)})})},
+        },
+        {nestedProjectedExpected});
+  }
+}
 
+TEST_F(IcebergReadTest, readParquetMapByFieldId) {
   const auto mapValueWriteType = ROW({"name", "score"}, {VARCHAR(), BIGINT()});
   const auto mapWriteType =
       ROW({"attributes"}, {MAP(VARCHAR(), mapValueWriteType)});
@@ -598,12 +616,7 @@ TEST_F(IcebergReadTest, readParquetSchemaEvolutionByFieldId) {
           {0, 1},
           makeFlatVector<std::string>({"left", "right"}),
           mapValueElements)})};
-  const auto mapOutputDirectory = test::TempDirectoryPath::create();
-  {
-    const auto mapDataSink =
-        createDataSinkAndAppendData(mapData, mapOutputDirectory->getPath());
-    mapDataSink->close();
-  }
+  const auto mapOutputDirectory = writeParquetData(mapData);
 
   const auto mapValueReadType = ROW({"points", "label"}, {BIGINT(), VARCHAR()});
   const auto mapReadType =
@@ -619,20 +632,23 @@ TEST_F(IcebergReadTest, readParquetSchemaEvolutionByFieldId) {
           makeFlatVector<std::string>({"left", "right"}),
           mapExpectedValues)});
 
-  assertParquetFieldIdRead(
-      mapOutputDirectory->getPath(),
-      mapReadType,
-      mapReadType,
-      {
-          {"attributes",
-           "attributes",
-           mapReadType->childAt(0),
-           makeFieldId(
-               1,
-               {makeFieldId(2),
-                makeFieldId(3, {makeFieldId(5), makeFieldId(4)})})},
-      },
-      {mapExpected});
+  {
+    SCOPED_TRACE("full map value row");
+    assertParquetFieldIdRead(
+        mapOutputDirectory->getPath(),
+        mapReadType,
+        mapReadType,
+        {
+            {"attributes",
+             "attributes",
+             mapReadType->childAt(0),
+             makeFieldId(
+                 1,
+                 {makeFieldId(2),
+                  makeFieldId(3, {makeFieldId(5), makeFieldId(4)})})},
+        },
+        {mapExpected});
+  }
 
   const auto mapValueProjectedReadType = ROW({"points"}, {BIGINT()});
   const auto mapProjectedReadType =
@@ -645,17 +661,21 @@ TEST_F(IcebergReadTest, readParquetSchemaEvolutionByFieldId) {
           {0, 1},
           makeFlatVector<std::string>({"left", "right"}),
           mapProjectedExpectedValues)});
-  assertParquetFieldIdRead(
-      mapOutputDirectory->getPath(),
-      mapProjectedReadType,
-      mapProjectedReadType,
-      {
-          {"attributes",
-           "attributes",
-           mapProjectedReadType->childAt(0),
-           makeFieldId(1, {makeFieldId(2), makeFieldId(3, {makeFieldId(5)})})},
-      },
-      {mapProjectedExpected});
+  {
+    SCOPED_TRACE("projected map value row");
+    assertParquetFieldIdRead(
+        mapOutputDirectory->getPath(),
+        mapProjectedReadType,
+        mapProjectedReadType,
+        {
+            {"attributes",
+             "attributes",
+             mapProjectedReadType->childAt(0),
+             makeFieldId(
+                 1, {makeFieldId(2), makeFieldId(3, {makeFieldId(5)})})},
+        },
+        {mapProjectedExpected});
+  }
 }
 #endif
 

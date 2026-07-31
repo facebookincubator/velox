@@ -513,6 +513,35 @@ TEST_F(ParquetReaderTest, parseArrayOfRowHiveReservedKeywords) {
       "price");
 }
 
+TEST_F(ParquetReaderTest, parseArrayOfRowWithPositionMapping) {
+  // Covers kPosition when requested names differ from physical names for a
+  // legacy LIST layout. The LIST shape must still be inferred from the physical
+  // repeated-node names, not the requested positional names.
+  const auto itemType =
+      ROW({"renamed_name", "renamed_quantity", "renamed_price"},
+          {VARCHAR(), INTEGER(), DOUBLE()});
+  const auto outputType =
+      ROW({"renamed_id", "renamed_items"}, {INTEGER(), ARRAY(itemType)});
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(outputType);
+  readerOptions.setColumnMappingMode(ColumnMappingMode::kPosition);
+  auto readerBundle =
+      readerBuilder("array_of_row_hive_reserved_keywords.parquet", outputType)
+          .options(readerOptions)
+          .build();
+
+  EXPECT_EQ(readerBundle.reader->rowType()->toString(), outputType->toString());
+  auto type = readerBundle.reader->typeWithId();
+  ASSERT_EQ(type->size(), 2ULL);
+
+  auto items = type->childByName("renamed_items");
+  ASSERT_EQ(items->type()->kind(), TypeKind::ARRAY);
+  ASSERT_EQ(items->size(), 1ULL);
+  auto arrayElement = items->childAt(0);
+  EXPECT_EQ(arrayElement->type()->kind(), TypeKind::ROW);
+  EXPECT_EQ(arrayElement->type()->toString(), itemType->toString());
+}
+
 TEST_F(ParquetReaderTest, parseSampleRange1) {
   auto readerBundle =
       readerBuilder("sample.parquet", sampleSchema()).byteRange(0, 200).build();

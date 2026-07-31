@@ -16,7 +16,9 @@
 
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 
+#include <algorithm>
 #include <limits>
+#include <unordered_map>
 
 #include <thrift/lib/cpp2/FieldRef.h>
 
@@ -84,9 +86,12 @@ std::string schemaElementNameOrFieldId(
 
 // Consumes a physical Parquet schema subtree that is not selected by the
 // requested field IDs. Even though the node is skipped from the reader schema,
-// the traversal must still advance schemaIdx and leaf columnIdx, and keep
-// columnNames aligned with physical schema indexes for later lookups by
-// curSchemaIdx.
+// the traversal must still advance schemaIdx and leaf columnIdx.
+//
+// columnNames has one entry per physical schema node, in DFS order, indexed by
+// schemaIdx. This helper must push exactly one name for each physical node it
+// visits; otherwise getParquetColumnInfo() can later read the wrong name with
+// columnNames.at(curSchemaIdx).
 void skipParquetSchemaNode(
     const std::vector<thrift::SchemaElement>& schema,
     dwio::common::ColumnMappingMode mappingMode,
@@ -545,6 +550,10 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   VELOX_CHECK(fileMetaData_ != nullptr);
   VELOX_CHECK_LT(schemaIdx, fileMetaData_->schema()->size());
 
+  // columnNames has one entry per physical schema node, in DFS order, indexed
+  // by schemaIdx. Each branch in this function must either push exactly one
+  // name for the current physical node or rely on its parent to have already
+  // pushed that node's requested name before recursing.
   auto& schema = *fileMetaData_->schema();
   uint32_t curSchemaIdx = schemaIdx;
   auto& schemaElement = schema[curSchemaIdx];
@@ -600,6 +609,33 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
 
     std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>> children;
 
+    RowTypePtr requestedRowType = nullptr;
+    if (requestedType) {
+      if (requestedType->isRow()) {
+        requestedRowType =
+            std::dynamic_pointer_cast<const velox::RowType>(requestedType);
+      } else if (
+          requestedType->isArray() && isRepeated &&
+          requestedType->asArray().elementType()->isRow()) {
+        // Handle the case of unannotated array of structs (repeated group
+        // without LIST annotation).
+        requestedRowType = std::dynamic_pointer_cast<const velox::RowType>(
+            requestedType->asArray().elementType());
+      }
+    }
+
+    std::unordered_map<int32_t, uint32_t> requestedIndexByFieldId;
+    if (mappingMode == dwio::common::ColumnMappingMode::kParquetFieldId &&
+        requestedFieldIds != nullptr && requestedRowType != nullptr) {
+      const auto numFields = std::min(
+          requestedRowType->size(),
+          static_cast<uint32_t>(requestedFieldIds->children.size()));
+      for (uint32_t fieldIndex = 0; fieldIndex < numFields; ++fieldIndex) {
+        requestedIndexByFieldId.emplace(
+            requestedFieldIds->children[fieldIndex].fieldId, fieldIndex);
+      }
+    }
+
     auto curSchemaIdx = schemaIdx;
     for (int32_t i = 0; i < *schemaElement.num_children(); i++) {
       ++schemaIdx;
@@ -613,68 +649,42 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
       const ParquetFieldId* childRequestedFieldIds = nullptr;
       bool followChild = true;
 
-      {
-        RowTypePtr requestedRowType = nullptr;
-        if (requestedType) {
-          if (requestedType->isRow()) {
-            requestedRowType =
-                std::dynamic_pointer_cast<const velox::RowType>(requestedType);
-          } else if (
-              requestedType->isArray() && isRepeated &&
-              requestedType->asArray().elementType()->isRow()) {
-            // Handle the case of unannotated array of structs (repeated group
-            // without LIST annotation).
-            requestedRowType = std::dynamic_pointer_cast<const velox::RowType>(
-                requestedType->asArray().elementType());
+      if (requestedRowType) {
+        if (mappingMode == dwio::common::ColumnMappingMode::kName) {
+          auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
+          if (fileTypeIdx.has_value()) {
+            childRequestedType = requestedRowType->childAt(*fileTypeIdx);
           }
-        }
-
-        if (requestedRowType) {
-          if (mappingMode == dwio::common::ColumnMappingMode::kName) {
-            auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
-            if (fileTypeIdx.has_value()) {
-              childRequestedType = requestedRowType->childAt(*fileTypeIdx);
-            }
-          } else if (
-              mappingMode == dwio::common::ColumnMappingMode::kParquetFieldId) {
-            if (requestedFieldIds != nullptr) {
-              const auto fieldId = fieldIdOrMissing(schema[schemaIdx]);
-              std::optional<uint32_t> requestedIndex;
-              for (auto fieldIndex = 0; fieldIndex < requestedRowType->size() &&
-                   fieldIndex < requestedFieldIds->children.size();
-                   ++fieldIndex) {
-                if (requestedFieldIds->children[fieldIndex].fieldId ==
-                    fieldId) {
-                  requestedIndex = fieldIndex;
-                  break;
-                }
-              }
-              if (requestedIndex.has_value()) {
-                columnNames.push_back(
-                    requestedRowType->nameOf(*requestedIndex));
-                childRequestedType = requestedRowType->childAt(*requestedIndex);
-                childRequestedFieldIds =
-                    &requestedFieldIds->children[*requestedIndex];
-              } else {
-                followChild = false;
-              }
-            } else {
-              auto fileTypeIdx =
-                  requestedRowType->getChildIdxIfExists(childName);
-              if (fileTypeIdx.has_value()) {
-                childRequestedType = requestedRowType->childAt(*fileTypeIdx);
-              } else {
-                followChild = false;
-              }
-            }
-          } else {
-            // Handle schema evolution.
-            if (i < requestedRowType->size()) {
-              columnNames.push_back(requestedRowType->nameOf(i));
-              childRequestedType = requestedRowType->childAt(i);
+        } else if (
+            mappingMode == dwio::common::ColumnMappingMode::kParquetFieldId) {
+          if (requestedFieldIds != nullptr) {
+            const auto fieldId = fieldIdOrMissing(schema[schemaIdx]);
+            const auto requestedIndex = requestedIndexByFieldId.find(fieldId);
+            if (requestedIndex != requestedIndexByFieldId.end()) {
+              columnNames.push_back(
+                  requestedRowType->nameOf(requestedIndex->second));
+              childRequestedType =
+                  requestedRowType->childAt(requestedIndex->second);
+              childRequestedFieldIds =
+                  &requestedFieldIds->children[requestedIndex->second];
             } else {
               followChild = false;
             }
+          } else {
+            auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
+            if (fileTypeIdx.has_value()) {
+              childRequestedType = requestedRowType->childAt(*fileTypeIdx);
+            } else {
+              followChild = false;
+            }
+          }
+        } else {
+          // Handle schema evolution.
+          if (i < requestedRowType->size()) {
+            columnNames.push_back(requestedRowType->nameOf(i));
+            childRequestedType = requestedRowType->childAt(i);
+          } else {
+            followChild = false;
           }
         }
       }
