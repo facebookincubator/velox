@@ -48,7 +48,14 @@ class HashAggregation : public Operator {
   RowVectorPtr getOutput() override;
 
   bool needsInput() const override {
-    return !noMoreInput_ && !partialFull_;
+    // Guard on 'input_ == nullptr': HashAggregation buffers a single input
+    // batch in 'input_' -- after abandoning partial aggregation, and in
+    // distinct mode when the batch produces new groups -- and addInput()
+    // overwrites it. Without this guard, when a downstream operator applies
+    // backpressure, the Driver keeps feeding this operator and addInput()
+    // silently overwrites the undrained batch, dropping its rows. Mirrors the
+    // single-buffer pattern in RowNumber/HashProbe/MergeJoin.
+    return !noMoreInput_ && !partialFull_ && input_ == nullptr;
   }
 
   bool startDrain() override;
