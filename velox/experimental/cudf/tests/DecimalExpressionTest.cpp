@@ -2222,6 +2222,67 @@ TEST_F(CudfDecimalTest, decimalMultiRowOverflowFlag) {
       "Decimal overflow in add");
 }
 
+// Null-masked overflow must not fail the batch: only null rows hold the
+// overflowing value (complement of decimalMultiRowOverflowFlag). Build valid
+// vectors then setNull() so big stays under the null bit (isNullAt zeroes it).
+TEST_F(CudfDecimalTest, decimalNullRowOverflowNotFlagged) {
+  constexpr int32_t kRows = 2048;
+  const auto big = 9 * DecimalUtil::kPowersOfTen[37]; // ~9e37, near int128 max
+
+  // Rows that will be null; scattered across thread blocks. big + big overflows
+  // int128, so if these were evaluated the whole batch would fail.
+  auto isNullRow = [](int32_t row) { return row % 128 == 0; };
+
+  // Build fully valid vectors: the to-be-null rows hold the overflowing value,
+  // every other row holds a safe value (1).
+  auto a = makeFlatVector<int128_t>(
+      kRows,
+      [&](auto row) { return isNullRow(row) ? big : int128_t{1}; },
+      nullptr,
+      DECIMAL(38, 0));
+  auto b = makeFlatVector<int128_t>(
+      kRows,
+      [&](auto row) { return isNullRow(row) ? big : int128_t{1}; },
+      nullptr,
+      DECIMAL(38, 0));
+
+  // Hide the overflow: mark the target rows null on 'a' (keeps big underneath).
+  // The output null mask is validity(a) AND validity(b), so those rows are null
+  // and must be skipped before the add.
+  for (int32_t i = 0; i < kRows; ++i) {
+    if (isNullRow(i)) {
+      a->setNull(i, true);
+    }
+  }
+  auto input = makeRowVector({"a", "b"}, {a, b});
+
+  // Expected: null where suppressed, 1 + 1 = 2 (DECIMAL(38, 0)) elsewhere.
+  auto expected = makeRowVector(
+      {"result"},
+      {makeFlatVector<int128_t>(
+          kRows,
+          [&](auto /*row*/) { return int128_t{2}; },
+          [&](auto row) { return isNullRow(row); },
+          DECIMAL(38, 0))});
+
+  auto plan = exec::test::PlanBuilder()
+                  .values({input})
+                  .project({"a + b AS result"})
+                  .planNode();
+
+  // Both engines must SUCCEED (null rows excluded from overflow detection) and
+  // agree with the expected all-safe-plus-nulls result.
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  facebook::velox::test::assertEqualVectors(expected, cpuResult);
+  facebook::velox::test::assertEqualVectors(expected, gpuResult);
+}
+
 // Isolates divide boundary rounding (ties round half away from zero, matching
 // DecimalUtil::divideWithRoundUp) for both decimal storage widths: DECIMAL64
 // (int64-backed) and DECIMAL128 (int128-backed). Verified against Velox CPU.
