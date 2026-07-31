@@ -566,6 +566,38 @@ TEST_P(SortBufferTest, spill) {
   }
 }
 
+// Regression test for an addInput OOM. Enabling 'useListRowIndex' on
+// SortBuffer's RowContainer (Velox #15698) makes RowContainer::newRow() push
+// each row pointer into a pool-backed 'rowPointers_' vector as input is
+// accumulated. That vector grows by doubling reallocation, is not spillable,
+// and can OOM addInput on a large/skewed sort -- the sort cannot spill its way
+// out. SortBuffer never uses listRowsFast (noMoreInput() uses the scanning
+// listRows()), so the index must stay disabled. Guard the invariant directly:
+// no row-pointer index is built while accumulating input.
+TEST_P(SortBufferTest, noRowPointerIndexDuringInput) {
+  exec::SpillStats spillStats;
+  auto sortBuffer = std::make_unique<SortBuffer>(
+      inputType_,
+      sortColumnIndices_,
+      sortCompareFlags_,
+      pool_.get(),
+      &nonReclaimableSection_,
+      prefixSortConfig_,
+      /*spillConfig=*/nullptr,
+      &spillStats);
+
+  VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool_.get());
+  constexpr int kNumInputs = 10;
+  for (int i = 0; i < kNumInputs; ++i) {
+    sortBuffer->addInput(fuzzer.fuzzRow(inputType_));
+  }
+
+  // Rows accumulated, but the non-spillable row-pointer index must be empty:
+  // populating it here is what regresses addInput into an unspillable OOM.
+  EXPECT_EQ(sortBuffer->testingData()->numRows(), kNumInputs * 1024);
+  EXPECT_TRUE(sortBuffer->testingData()->testingRowPointers().empty());
+}
+
 DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringInput) {
   auto spillDirectory = TempDirectoryPath::create();
   const auto spillConfig = getSpillConfig(spillDirectory->getPath());

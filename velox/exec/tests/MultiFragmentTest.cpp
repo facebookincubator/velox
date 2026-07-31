@@ -821,16 +821,20 @@ TEST_P(MultiFragmentTest, partitionedOutput) {
   // Test dropping all columns.
   {
     auto leafTaskId = makeTaskId("leaf", 0);
-    auto leafPlan =
-        PlanBuilder()
-            .values(vectors_)
-            .addNode(
-                [](std::string nodeId,
-                   core::PlanNodePtr source) -> core::PlanNodePtr {
-                  return core::PartitionedOutputNode::broadcast(
-                      nodeId, 1, ROW({}), GetParam().serdeKind, source);
-                })
-            .planNode();
+    auto leafPlan = PlanBuilder()
+                        .values(vectors_)
+                        .addNode(
+                            [](std::string nodeId,
+                               core::PlanNodePtr source) -> core::PlanNodePtr {
+                              return core::PartitionedOutputNode::broadcast(
+                                  nodeId,
+                                  1,
+                                  ROW({}),
+                                  GetParam().serdeKind,
+                                  std::string{core::TransportKind::kInMemory},
+                                  source);
+                            })
+                        .planNode();
     auto leafTask = makeTask(leafTaskId, leafPlan, 0);
     leafTask->start(4);
     leafTask->updateOutputBuffers(1, true);

@@ -69,6 +69,13 @@ class SortBuffer {
 
   std::optional<uint64_t> estimateOutputRowSize() const;
 
+  /// Returns the row container that holds the accumulated input rows. Used only
+  /// for testing the RowContainer's construction (e.g. that the non-spillable
+  /// row-pointer index is not enabled).
+  const RowContainer* testingData() const {
+    return data_.get();
+  }
+
  private:
   // Ensures there is sufficient memory reserved to process 'input'.
   void ensureInputFits(const VectorPtr& input);

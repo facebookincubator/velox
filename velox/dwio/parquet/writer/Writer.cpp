@@ -107,6 +107,34 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
   int64_t bytesFlushed_ = 0;
 };
 
+void ParquetWriterOptions::merge(
+    const dwio::common::FormatSpecificOptions& overrides) {
+  const auto* parquetOverrides =
+      dynamic_cast<const ParquetWriterOptions*>(&overrides);
+  VELOX_CHECK_NOT_NULL(
+      parquetOverrides,
+      "Cannot merge Parquet writer options with a different "
+      "FormatSpecificOptions type.");
+
+  const auto mergeIfSet = [](auto& value, const auto& overrideValue) {
+    if (overrideValue.has_value()) {
+      value = overrideValue;
+    }
+  };
+  mergeIfSet(
+      parquetWriteTimestampUnit, parquetOverrides->parquetWriteTimestampUnit);
+  mergeIfSet(enableDictionary, parquetOverrides->enableDictionary);
+  mergeIfSet(
+      enableStoreDecimalAsInteger,
+      parquetOverrides->enableStoreDecimalAsInteger);
+  mergeIfSet(
+      dictionaryPageSizeLimit, parquetOverrides->dictionaryPageSizeLimit);
+  mergeIfSet(useParquetDataPageV2, parquetOverrides->useParquetDataPageV2);
+  mergeIfSet(dataPageSize, parquetOverrides->dataPageSize);
+  mergeIfSet(batchSize, parquetOverrides->batchSize);
+  mergeIfSet(createdBy, parquetOverrides->createdBy);
+}
+
 struct ArrowContext {
   std::unique_ptr<FileWriter> writer;
   std::shared_ptr<::arrow::Schema> schema;
@@ -384,6 +412,7 @@ Writer::Writer(
               *generalPool_,
               getFormatOptions(options).bufferGrowRatio)),
       arrowContext_(std::make_shared<ArrowContext>()),
+      maxTargetFileSizeBytes_(options.maxTargetFileSizeBytes),
       schema_(std::move(schema)) {
   const auto& parquetWriterOptions = getFormatOptions(options);
   validateSchemaRecursive(schema_, parquetWriterOptions.parquetFieldIds);
@@ -411,12 +440,6 @@ Writer::Writer(
 
   if (options.flushPolicyFactory) {
     castUniquePointer(options.flushPolicyFactory(), flushPolicy_);
-  } else if (options.maxTargetFileSizeBytes > 0) {
-    auto bytesInRowGroup = static_cast<int64_t>(std::min<uint64_t>(
-        DefaultFlushPolicy::kDefaultBytesInRowGroup,
-        options.maxTargetFileSizeBytes));
-    flushPolicy_ = std::make_unique<DefaultFlushPolicy>(
-        DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
   } else {
     flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
   }
@@ -457,6 +480,14 @@ dwio::common::StripeProgress getStripeProgress(int64_t bufferedBytes) {
   // Arrow Parquet FileWriter will new row group based on the row number, so
   // we only check buffered bytes to flush row group here.
   return dwio::common::StripeProgress{.stripeSizeEstimate = bufferedBytes};
+}
+
+bool stagedBytesReachTargetFileSize(
+    uint64_t maxTargetFileSizeBytes,
+    int64_t streamBytes,
+    int64_t currentRowGroupBytes) {
+  return maxTargetFileSizeBytes > 0 && currentRowGroupBytes > 0 &&
+      streamBytes + currentRowGroupBytes >= maxTargetFileSizeBytes;
 }
 
 /**
@@ -526,11 +557,17 @@ void Writer::write(const VectorPtr& data) {
 
   PARQUET_THROW_NOT_OK(arrowContext_->writer->writeRecordBatch(*recordBatch));
 
+  const auto currentRowGroupBytes =
+      arrowContext_->writer->currentRowGroupTotalBytes();
+  PARQUET_ASSIGN_OR_THROW(const auto streamBytes, stream_->Tell());
+
   // Flush as soon as the current write pushes the staged row group past the
-  // policy threshold. Otherwise callers that rotate files based on raw written
-  // bytes won't observe the row group until the next write.
-  if (flushPolicy_->shouldFlush(getStripeProgress(
-          arrowContext_->writer->currentRowGroupTotalBytes()))) {
+  // row-group target or the file-size target. Otherwise callers that rotate
+  // files based on raw written bytes won't observe the row group until the
+  // next write.
+  if (flushPolicy_->shouldFlush(getStripeProgress(currentRowGroupBytes)) ||
+      stagedBytesReachTargetFileSize(
+          maxTargetFileSizeBytes_, streamBytes, currentRowGroupBytes)) {
     flush();
   } else if (flushPolicy_->bytesInRowGroup() <= stream_->bufferedBytes()) {
     // Flush the sink separately so completed row groups don't keep accumulating
