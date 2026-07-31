@@ -25,8 +25,6 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/lib/TimeUtils.h"
-#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 #include <cudf/strings/convert/convert_datetime.hpp>
 
@@ -38,30 +36,6 @@
 
 namespace facebook::velox::cudf_velox {
 namespace {
-
-constexpr std::string_view kDateFormatName{"date_format"};
-
-bool isDateFormatCall(std::string_view functionName) {
-  return functionName.size() >= kDateFormatName.size() &&
-      functionName.compare(
-          functionName.size() - kDateFormatName.size(),
-          kDateFormatName.size(),
-          kDateFormatName) == 0;
-}
-
-bool containsDateFormatCall(const core::TypedExprPtr& expression) {
-  const auto call =
-      std::dynamic_pointer_cast<const core::CallTypedExpr>(expression);
-  if (call && isDateFormatCall(call->name())) {
-    return true;
-  }
-  for (const auto& input : expression->inputs()) {
-    if (containsDateFormatCall(input)) {
-      return true;
-    }
-  }
-  return false;
-}
 
 void registerSparkArrayAccessFunctions(const std::string& prefix) {
   // Spark get is 0 based and returns NULL for negative or out-of-bounds
@@ -235,30 +209,6 @@ class DateFormatFunction : public CudfFunction {
 };
 
 } // namespace
-
-bool containsSparkDateFormat(
-    const std::vector<core::TypedExprPtr>& expressions) {
-  for (const auto& expression : expressions) {
-    if (containsDateFormatCall(expression)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool requiresCpuSparkDateFormat(
-    const std::vector<core::TypedExprPtr>& expressions,
-    const core::QueryConfig& queryConfig) {
-  const bool usesLegacyFormatter =
-      functions::sparksql::SparkQueryConfig{queryConfig}.legacyDateFormatter();
-  const auto* sessionTimeZone =
-      facebook::velox::functions::getTimeZoneFromConfig(queryConfig);
-  if (!usesLegacyFormatter &&
-      (sessionTimeZone == nullptr || sessionTimeZone->id() == 0)) {
-    return false;
-  }
-  return containsSparkDateFormat(expressions);
-}
 
 void registerSparkFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;

@@ -132,9 +132,18 @@ class TableScanAdapter : public OperatorAdapter {
       LOG_FALLBACK(
           "TableScan connector is not CudfHiveConnector or CudfIcebergConnector, PlanNode id: {}",
           planNode->id());
+      return false;
     }
 
-    return canRunOnGPU;
+    if (!connector::hive::isCudfTableScanSupported(
+            tableScanNode->tableHandle())) {
+      LOG_FALLBACK(
+          "TableScan remaining filter requires CPU evaluation, PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
+
+    return true;
   }
 
   bool acceptsGpuInput() const override {

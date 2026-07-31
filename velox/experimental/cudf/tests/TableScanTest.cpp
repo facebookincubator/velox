@@ -33,6 +33,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
@@ -749,10 +750,11 @@ TEST_F(TableScanTest, remainingFilterExtraction) {
       << "Expected no remaining filter time when filter is fully extracted";
 }
 
-TEST_F(TableScanTest, dateFormatRemainingFilterUsesCpu) {
+TEST_F(TableScanTest, dateFormatRemainingFilterUsesCpuTableScan) {
   static const bool kRegistered = [] {
     functions::sparksql::registerFunctions("spark_");
     cudf_velox::registerSparkFunctions("spark_");
+    parquet::registerParquetReaderFactory();
     return true;
   }();
   ASSERT_TRUE(kRegistered);
@@ -780,18 +782,26 @@ TEST_F(TableScanTest, dateFormatRemainingFilterUsesCpu) {
                   .planNode();
 
   // 1970-01-01 02:00 UTC belongs to the previous date in Los Angeles. A scan
-  // remaining filter must use CPU date_format to preserve that timezone.
+  // with this remaining filter must stay on CPU to preserve that timezone
+  // without copying each batch from GPU to CPU and back.
+  std::shared_ptr<Task> task;
   auto result =
       AssertQueryBuilder(plan)
           .config(core::QueryConfig::kSessionTimezone, "America/Los_Angeles")
           .config(core::QueryConfig::kAdjustTimestampToTimezone, "true")
           .splits(makeCudfHiveConnectorSplits({filePath}))
-          .copyResults(pool_.get());
+          .copyResults(pool_.get(), task);
   auto expected = makeRowVector(
       {"event_ts", "c1"},
       {makeFlatVector<Timestamp>({Timestamp(7'200, 0)}),
        makeFlatVector<int64_t>({1})});
   facebook::velox::test::assertEqualVectors(expected, result);
+
+  for (const auto& pipelineStats : task->taskStats().pipelineStats) {
+    for (const auto& operatorStats : pipelineStats.operatorStats) {
+      EXPECT_NE(operatorStats.operatorType, "CudfToVelox");
+    }
+  }
 }
 
 TEST_F(TableScanTest, decimalSubfieldFilter) {

@@ -21,13 +21,14 @@
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
-#include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/memory/Memory.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
+#include "velox/functions/lib/TimeUtils.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 #include <cudf/aggregation.hpp>
 #include <cudf/reduction.hpp>
@@ -35,6 +36,7 @@
 #include <cudf/unary.hpp>
 
 #include <iostream>
+#include <string_view>
 #include <unordered_map>
 
 namespace facebook::velox::cudf_velox {
@@ -70,6 +72,48 @@ bool containsTimezoneSensitiveDateTrunc(
 
   for (const auto& input : expr->inputs()) {
     if (containsTimezoneSensitiveDateTrunc(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+constexpr std::string_view kDateFormatName{"date_format"};
+
+bool isSparkDateFormatCall(std::string_view functionName) {
+  return functionName.size() >= kDateFormatName.size() &&
+      functionName.compare(
+          functionName.size() - kDateFormatName.size(),
+          kDateFormatName.size(),
+          kDateFormatName) == 0;
+}
+
+bool containsSparkDateFormatCall(const core::TypedExprPtr& expression) {
+  const auto call =
+      std::dynamic_pointer_cast<const core::CallTypedExpr>(expression);
+  if (call && isSparkDateFormatCall(call->name())) {
+    return true;
+  }
+  for (const auto& input : expression->inputs()) {
+    if (containsSparkDateFormatCall(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool requiresCpuSparkDateFormat(
+    const std::vector<core::TypedExprPtr>& expressions,
+    const core::QueryConfig& queryConfig) {
+  const bool usesLegacyFormatter =
+      functions::sparksql::SparkQueryConfig{queryConfig}.legacyDateFormatter();
+  const auto* sessionTimeZone = functions::getTimeZoneFromConfig(queryConfig);
+  if (!usesLegacyFormatter &&
+      (sessionTimeZone == nullptr || sessionTimeZone->id() == 0)) {
+    return false;
+  }
+  for (const auto& expression : expressions) {
+    if (containsSparkDateFormatCall(expression)) {
       return true;
     }
   }
