@@ -2514,14 +2514,14 @@ void Task::addCustomJoinBridgesLocked(
       return nullptr;
     };
     auto planNode = findNode();
-    if (planNode) {
-      if (auto joinBridge = Operator::joinBridgeFromPlanNode(planNode)) {
-        auto const inserted = splitGroupState.customBridges
-                                  .emplace(planNodeId, std::move(joinBridge))
-                                  .second;
-        VELOX_CHECK(
-            inserted, "Join bridge for node {} is already present", planNodeId);
-      }
+    VELOX_CHECK_NOT_NULL(
+        planNode, "Plan node {} for custom join bridge not found", planNodeId);
+    if (auto joinBridge = Operator::joinBridgeFromPlanNode(planNode)) {
+      auto const inserted = splitGroupState.customBridges
+                                .emplace(planNodeId, std::move(joinBridge))
+                                .second;
+      VELOX_CHECK(
+          inserted, "Join bridge for node {} is already present", planNodeId);
     }
   }
 }

@@ -9107,10 +9107,8 @@ TEST_F(HashJoinTest, emptyBuildWithDebugEnabled) {
 
 // Verify that cuDF hash join works correctly with mixed grouped execution.
 // In mixed mode the build runs ungrouped while the probe runs in grouped
-// split groups.  CudfHashJoinBuild/CudfHashJoinProbe use custom join bridges
-// (getCustomJoinBridge), which requires DriverFactory::needsCustomJoinBridges()
-// to correctly include the bridge for the ungrouped factory and exclude it from
-// grouped factories.  Without this, the probe hangs waiting on an empty bridge.
+// split groups. Without correct cross-mode bridge handling, the probe hangs
+// waiting on an empty bridge.
 TEST_F(HashJoinTest, mixedGroupedExecution) {
   auto vectors = makeVectors(probeType_, 4, 20);
   auto filePath = TempFilePath::create();
@@ -9143,7 +9141,7 @@ TEST_F(HashJoinTest, mixedGroupedExecution) {
         exec::Split(makeHiveConnectorSplit(filePath->getPath()), i));
   }
 
-  auto results =
+  ASSERT_GT(
       AssertQueryBuilder(plan)
           .splits(probeScanNodeId, std::move(probeSplits))
           .splits(
@@ -9152,9 +9150,8 @@ TEST_F(HashJoinTest, mixedGroupedExecution) {
           .groupedExecutionLeafNodeIds({probeScanNodeId})
           .numSplitGroups(numSplitGroups)
           .numConcurrentSplitGroups(1)
-          .copyResults(pool_.get());
-
-  ASSERT_GT(results->size(), 0);
+          .countResults(),
+      0);
 }
 
 } // namespace
