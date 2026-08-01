@@ -20,15 +20,22 @@
 #include <nvtx3/nvToolsExtCounters.h>
 #include <nvtx3/nvToolsExtPayload.h>
 #include <nvtx3/nvToolsExtSemanticsCounters.h>
+#include <nvtx3/nvToolsExtSemanticsTime.h>
 
 #include <fmt/format.h>
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
+#include <ctime>
+#include <initializer_list>
 #include <limits>
 #include <mutex>
+#include <thread>
+#include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace facebook::velox::cudf_velox {
@@ -54,13 +61,32 @@ nvtxDomainHandle_t counterDomain() {
   return nullptr;
 }
 
+int64_t nowNanos() {
+  timespec now{};
+  clock_gettime(CLOCK_MONOTONIC_RAW, &now);
+  return now.tv_sec * 1'000'000'000LL + now.tv_nsec;
+}
+
+const nvtxSemanticsTime_t& timeSemantics() {
+  static const auto semantics = [] {
+    nvtxSemanticsTime_t result{};
+    result.header.structSize = sizeof(nvtxSemanticsTime_t);
+    result.header.semanticId = NVTX_SEMANTIC_ID_TIME_V1;
+    result.header.version = NVTX_TIME_SEMANTIC_VERSION;
+    result.header.next = nullptr;
+    result.timeDomainId = NVTX_TIMESTAMP_TYPE_CPU_CLOCK_GETTIME_MONOTONIC_RAW;
+    return result;
+  }();
+  return semantics;
+}
+
 const nvtxSemanticsCounter_t& byteCounterSemantics() {
   static const auto semantics = [] {
     nvtxSemanticsCounter_t result{};
     result.header.structSize = sizeof(nvtxSemanticsCounter_t);
     result.header.semanticId = NVTX_SEMANTIC_ID_COUNTERS_V1;
     result.header.version = NVTX_COUNTER_SEMANTIC_VERSION;
-    result.header.next = nullptr;
+    result.header.next = &timeSemantics().header;
     result.flags = NVTX_COUNTER_FLAG_LIMIT_MIN |
         NVTX_COUNTER_FLAG_VALUETYPE_ABSOLUTE |
         NVTX_COUNTER_FLAG_INTERPOLATION_UNTIL_NEXT;
@@ -101,15 +127,171 @@ int64_t clampToInt64(uint64_t bytes) {
       bytes, static_cast<uint64_t>(std::numeric_limits<int64_t>::max())));
 }
 
-/// NVTX timestamps the sample here, which is when the ledger recorded the
-/// transition.
-void sampleCounter(uint64_t counterId, uint64_t bytes) {
-  // The unattributed owner has no ancestor levels, so part of its set is
-  // legitimately unregistered.
+/// Nsight records immediate samples but renders their Velox timeline rows as
+/// zero; deferred batches of real chronological samples render correctly.
+struct BufferedSample {
+  uint64_t counterId;
+  int64_t value;
+  int64_t timestamp;
+};
+
+BufferedSample
+bufferedSample(uint64_t counterId, uint64_t bytes, int64_t timestamp) {
+  return {counterId, clampToInt64(bytes), timestamp};
+}
+
+struct CounterSeries {
+  std::vector<int64_t> values;
+  std::vector<int64_t> timestamps;
+};
+
+struct SubmissionState {
+  std::mutex mutex;
+  std::unordered_map<uint64_t, int64_t> lastTimestamps;
+};
+
+SubmissionState& submissionState() {
+  static auto* state = new SubmissionState;
+  return *state;
+}
+
+void submitSamples(std::vector<BufferedSample> samples) {
+  if (samples.empty()) {
+    return;
+  }
+  // Nsight's timeline renderer rejects overlapping or unsorted series, so
+  // merge every producer and enforce strict order across flushes.
+  std::sort(
+      samples.begin(), samples.end(), [](const auto& left, const auto& right) {
+        return std::tie(left.counterId, left.timestamp) <
+            std::tie(right.counterId, right.timestamp);
+      });
+  std::unordered_map<uint64_t, CounterSeries> grouped;
+  for (const auto& sample : samples) {
+    auto& series = grouped[sample.counterId];
+    auto& lastTimestamp = submissionState().lastTimestamps[sample.counterId];
+    const auto timestamp = lastTimestamp == 0
+        ? sample.timestamp
+        : std::max(sample.timestamp, lastTimestamp + 1);
+    series.values.push_back(sample.value);
+    series.timestamps.push_back(timestamp);
+    lastTimestamp = timestamp;
+  }
+  for (const auto& [counterId, series] : grouped) {
+    nvtxCounterBatch_t batch{};
+    batch.counterId = counterId;
+    batch.counters = series.values.data();
+    batch.countersSize = series.values.size() * sizeof(int64_t);
+    batch.flags = NVTX_BATCH_FLAG_TIME_SORTED;
+    batch.timestamps = series.timestamps.data();
+    batch.timestampsSize = series.timestamps.size() * sizeof(int64_t);
+    nvtxCounterBatchSubmit(counterDomain(), &batch);
+  }
+}
+
+class ThreadSampleBuffer;
+
+struct BufferRegistry {
+  std::mutex mutex;
+  std::unordered_set<ThreadSampleBuffer*> buffers;
+  std::vector<BufferedSample> retiredSamples;
+};
+
+BufferRegistry& bufferRegistry() {
+  static auto* registry = new BufferRegistry;
+  return *registry;
+}
+
+void flushAllThreadBuffers();
+
+/// A process-lifetime drain avoids teardown ordering and restart state. The
+/// short cadence keeps an idle driver's tail inside the active capture.
+void startSampleFlusher() {
+  static const bool started = [] {
+    std::thread([] {
+      while (true) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        flushAllThreadBuffers();
+      }
+    }).detach();
+    return true;
+  }();
+  static_cast<void>(started);
+}
+
+class ThreadSampleBuffer {
+ public:
+  ThreadSampleBuffer() {
+    auto& registry = bufferRegistry();
+    {
+      std::lock_guard<std::mutex> lock(registry.mutex);
+      registry.buffers.insert(this);
+    }
+    startSampleFlusher();
+  }
+
+  ~ThreadSampleBuffer() {
+    auto& registry = bufferRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.buffers.erase(this);
+    auto samples = drain();
+    registry.retiredSamples.insert(
+        registry.retiredSamples.end(), samples.begin(), samples.end());
+  }
+
+  void append(std::initializer_list<BufferedSample> samples) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& sample : samples) {
+      if (sample.counterId != NVTX_COUNTER_ID_NONE) {
+        samples_.push_back(sample);
+      }
+    }
+  }
+
+  std::vector<BufferedSample> drain() {
+    std::vector<BufferedSample> samples;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      samples.swap(samples_);
+    }
+    return samples;
+  }
+
+ private:
+  std::mutex mutex_;
+  std::vector<BufferedSample> samples_;
+};
+
+ThreadSampleBuffer& threadSampleBuffer() {
+  thread_local ThreadSampleBuffer buffer;
+  return buffer;
+}
+
+void flushAllThreadBuffers() {
+  auto& submission = submissionState();
+  std::lock_guard<std::mutex> submissionLock(submission.mutex);
+  auto& registry = bufferRegistry();
+  std::vector<BufferedSample> samples;
+  {
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    samples.swap(registry.retiredSamples);
+    for (auto* buffer : registry.buffers) {
+      auto buffered = buffer->drain();
+      samples.insert(samples.end(), buffered.begin(), buffered.end());
+    }
+  }
+  submitSamples(std::move(samples));
+}
+
+void sampleCounter(uint64_t counterId, uint64_t bytes, int64_t timestamp) {
   if (counterId == NVTX_COUNTER_ID_NONE) {
     return;
   }
-  nvtxCounterSampleInt64(counterDomain(), counterId, clampToInt64(bytes));
+  threadSampleBuffer().append({bufferedSample(counterId, bytes, timestamp)});
+}
+
+void sampleCounter(uint64_t counterId, uint64_t bytes) {
+  sampleCounter(counterId, bytes, nowNanos());
 }
 
 void emitMark(const std::string& text) {
@@ -431,12 +613,21 @@ void sampleGpuMemoryNvtxCounters(
     return;
   }
   try {
-    sampleCounter(counters.globalCounterId, update.globalCurrentBytes);
-    sampleCounter(counters.queryCounterId, update.queryCurrentBytes);
-    sampleCounter(counters.queryPeakCounterId, update.queryPeakBytes);
-    sampleCounter(counters.taskCounterId, update.taskCurrentBytes);
-    sampleCounter(counters.planNodeCounterId, update.planNodeCurrentBytes);
-    sampleCounter(counters.ownerCounterId, update.ownerCurrentBytes);
+    const auto timestamp = nowNanos();
+    threadSampleBuffer().append({
+        bufferedSample(
+            counters.globalCounterId, update.globalCurrentBytes, timestamp),
+        bufferedSample(
+            counters.queryCounterId, update.queryCurrentBytes, timestamp),
+        bufferedSample(
+            counters.queryPeakCounterId, update.queryPeakBytes, timestamp),
+        bufferedSample(
+            counters.taskCounterId, update.taskCurrentBytes, timestamp),
+        bufferedSample(
+            counters.planNodeCounterId, update.planNodeCurrentBytes, timestamp),
+        bufferedSample(
+            counters.ownerCounterId, update.ownerCurrentBytes, timestamp),
+    });
   } catch (...) {
     // Profiler diagnostics must never alter query execution.
   }
@@ -491,6 +682,7 @@ void resetGpuMemoryNvtxCounters() noexcept {
       return;
     }
     counterEpoch.fetch_add(1, std::memory_order_release);
+    flushAllThreadBuffers();
 
     for (const auto& [ownerId, counters] : state.owners) {
       sampleCounter(counters.ownerCounterId, 0);
@@ -506,6 +698,7 @@ void resetGpuMemoryNvtxCounters() noexcept {
       sampleCounter(entry.counterId, 0);
     }
     sampleCounter(state.globalCounterId, 0);
+    flushAllThreadBuffers();
 
     state.owners.clear();
     state.planNodeCounters.clear();
