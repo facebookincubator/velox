@@ -93,7 +93,8 @@ void CudfJoinBuild::doNoMoreInput() {
   };
 
   for (auto& peer : peers) {
-    auto* build = dynamic_cast<CudfJoinBuild*>(peer->findOperator(planNodeId()));
+    auto* build =
+        dynamic_cast<CudfJoinBuild*>(peer->findOperator(planNodeId()));
     VELOX_CHECK_NOT_NULL(build);
     VELOX_CHECK(
         typeid(*build) == typeid(*this),
