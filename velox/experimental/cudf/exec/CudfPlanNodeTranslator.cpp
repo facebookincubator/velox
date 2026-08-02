@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
@@ -33,31 +32,9 @@
 #include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
-#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::cudf_velox {
-namespace {
-
-bool isGpuTableScan(
-    const std::shared_ptr<const core::TableScanNode>& tableScan) {
-  if (!tableScan) {
-    return false;
-  }
-
-  const auto connectorId = tableScan->tableHandle()->connectorId();
-  auto connector =
-      facebook::velox::connector::ConnectorRegistry::tryGet(connectorId);
-  if (!connector) {
-    return false;
-  }
-
-  return dynamic_cast<
-             facebook::velox::cudf_velox::connector::hive::CudfHiveConnector*>(
-             connector.get()) != nullptr;
-}
-
-} // namespace
 
 std::unique_ptr<exec::Operator> CudfPlanNodeTranslator::toOperator(
     exec::DriverCtx* ctx,
@@ -199,13 +176,6 @@ std::optional<uint32_t> CudfPlanNodeTranslator::maxDrivers(
 
   if (auto window = std::dynamic_pointer_cast<const CudfWindowNode>(node)) {
     return window->preferredDriverCount();
-  }
-
-  if (auto tableScan =
-          std::dynamic_pointer_cast<const core::TableScanNode>(node)) {
-    if (isGpuTableScan(tableScan)) {
-      return 1;
-    }
   }
 
   return std::nullopt;

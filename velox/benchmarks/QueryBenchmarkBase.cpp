@@ -54,6 +54,11 @@ DEFINE_bool(
     "Include custom statistics along with execution statistics");
 DEFINE_bool(include_results, false, "Include results in the output");
 DEFINE_int32(num_drivers, 4, "Number of drivers");
+DEFINE_uint32(
+    table_scan_output_batch_rows_override,
+    0,
+    "If non-zero, override the number of rows produced by each TableScan "
+    "output batch");
 
 DEFINE_int32(num_splits_per_file, 10, "Number of splits per file");
 DEFINE_int32(
@@ -262,6 +267,11 @@ QueryBenchmarkBase::run(
       params.maxDrivers = FLAGS_num_drivers;
       params.planNode = tpchPlan.plan;
       params.queryConfigs = queryConfigs;
+      if (FLAGS_table_scan_output_batch_rows_override > 0) {
+        params.queryConfigs
+            [core::QueryConfig::kTableScanOutputBatchRowsOverride] =
+                std::to_string(FLAGS_table_scan_output_batch_rows_override);
+      }
       params.queryConfigs[core::QueryConfig::kMaxSplitPreloadPerDriver] =
           std::to_string(FLAGS_split_preload_per_driver);
       const int numSplitsPerFile = FLAGS_num_splits_per_file;
