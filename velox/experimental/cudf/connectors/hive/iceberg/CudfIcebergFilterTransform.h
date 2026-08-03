@@ -19,26 +19,48 @@
 #include <cudf/ast/expressions.hpp>
 
 #include <span>
+#include <utility>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
-/// @brief Filter over the columns the parquet reader projects, derived from a
-/// filter over the assembled table.
-struct TransformedFilter {
-  /// Owns the expression nodes created while transforming. Nodes may also point
-  /// into the input filter, which must outlive the transformed result.
-  cudf::ast::tree tree;
-
-  /// Root of the transformed filter, or nullptr when the transformed
+/// Filter over the columns the parquet reader projects, derived from a filter
+/// over the assembled table.
+///
+/// Move-only and immutable once constructed. Owns the expression nodes created
+/// while transforming. Those nodes may also point into the input filter, which
+/// must therefore outlive the transformed result.
+class TransformedFilter {
+ public:
+  /// @param nodes Expression nodes created while transforming.
+  /// @param expr Root of the transformed filter. Null when the transformed
   /// filter is always true.
-  const cudf::ast::expression* expr{nullptr};
+  /// @param referencesInjectedColumn Whether the input filter references
+  /// injected column(s).
+  TransformedFilter(
+      cudf::ast::tree nodes,
+      const cudf::ast::expression* expr,
+      bool referencesInjectedColumn)
+      : nodes_{std::move(nodes)},
+        expr_{expr},
+        referencesInjectedColumn_{referencesInjectedColumn} {}
 
-  /// Whether the input filter references an injected column
-  bool referencesInjectedColumn{false};
+  const cudf::ast::expression* expr() const {
+    return expr_;
+  }
+
+  bool referencesInjectedColumn() const {
+    return referencesInjectedColumn_;
+  }
+
+ private:
+  // Owns the expression nodes created while transforming.
+  cudf::ast::tree nodes_;
+  const cudf::ast::expression* expr_;
+  bool referencesInjectedColumn_;
 };
 
-/// @brief Transforms the input filter into a sub-filter over the columns
-/// actually projected by the parquet reader.
+/// Transforms the input filter into a sub-filter over the columns actually
+/// projected by the parquet reader.
 ///
 /// Transforms the filter by dropping predicates on injected columns and
 /// rebasing remaining column indices past the dropped columns.
@@ -51,6 +73,6 @@ struct TransformedFilter {
 /// parquet reader.
 TransformedFilter transformFilterForInjectedColumns(
     const cudf::ast::expression& filter,
-    const std::span<cudf::size_type const> sortedInjectedColumnIndices);
+    std::span<const cudf::size_type> sortedInjectedColumnIndices);
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

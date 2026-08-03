@@ -21,12 +21,33 @@
 
 #include <cudf/scalar/scalar.hpp>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
+#include <span>
+#include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 namespace {
+
+using testing::ElementsAre;
+
+// Returns the column indices referenced by the operands of 'operation', which
+// are all expected to be column references.
+std::vector<cudf::size_type> operandColumnIndices(
+    const cudf::ast::operation& operation) {
+  std::vector<cudf::size_type> indices;
+  for (const auto& operand : operation.get_operands()) {
+    const auto* column =
+        dynamic_cast<const cudf::ast::column_reference*>(&operand.get());
+    EXPECT_NE(column, nullptr);
+    if (column != nullptr) {
+      indices.push_back(column->get_column_index());
+    }
+  }
+  return indices;
+}
 
 TEST(CudfIcebergFilterTransformTest, logicalAnd) {
   cudf::ast::tree tree;
@@ -39,9 +60,9 @@ TEST(CudfIcebergFilterTransformTest, logicalAnd) {
   const auto result = transformFilterForInjectedColumns(
       expression, std::array<cudf::size_type, 1>{0});
 
-  EXPECT_TRUE(result.referencesInjectedColumn);
+  EXPECT_TRUE(result.referencesInjectedColumn());
   const auto* transformed =
-      dynamic_cast<const cudf::ast::column_reference*>(result.expr);
+      dynamic_cast<const cudf::ast::column_reference*>(result.expr());
   ASSERT_NE(transformed, nullptr);
   EXPECT_EQ(transformed->get_column_index(), 1);
 }
@@ -57,8 +78,8 @@ TEST(CudfIcebergFilterTransformTest, logicalOr) {
   const auto result = transformFilterForInjectedColumns(
       expression, std::array<cudf::size_type, 1>{0});
 
-  EXPECT_TRUE(result.referencesInjectedColumn);
-  EXPECT_EQ(result.expr, nullptr);
+  EXPECT_TRUE(result.referencesInjectedColumn());
+  EXPECT_EQ(result.expr(), nullptr);
 }
 
 TEST(CudfIcebergFilterTransformTest, negatedDroppedExpression) {
@@ -74,8 +95,8 @@ TEST(CudfIcebergFilterTransformTest, negatedDroppedExpression) {
   const auto result = transformFilterForInjectedColumns(
       expression, std::array<cudf::size_type, 1>{0});
 
-  EXPECT_TRUE(result.referencesInjectedColumn);
-  EXPECT_EQ(result.expr, nullptr);
+  EXPECT_TRUE(result.referencesInjectedColumn());
+  EXPECT_EQ(result.expr(), nullptr);
 }
 
 TEST(CudfIcebergFilterTransformTest, nestedLogicalAndRetainsOr) {
@@ -93,20 +114,12 @@ TEST(CudfIcebergFilterTransformTest, nestedLogicalAndRetainsOr) {
   const auto result = transformFilterForInjectedColumns(
       expression, std::array<cudf::size_type, 1>{0});
 
-  EXPECT_TRUE(result.referencesInjectedColumn);
+  EXPECT_TRUE(result.referencesInjectedColumn());
   const auto* transformed =
-      dynamic_cast<const cudf::ast::operation*>(result.expr);
+      dynamic_cast<const cudf::ast::operation*>(result.expr());
   ASSERT_NE(transformed, nullptr);
   EXPECT_EQ(transformed->get_operator(), cudf::ast::ast_operator::LOGICAL_OR);
-  const auto& operands = transformed->get_operands();
-  const auto* firstColumn =
-      dynamic_cast<const cudf::ast::column_reference*>(&operands[0].get());
-  const auto* secondColumn =
-      dynamic_cast<const cudf::ast::column_reference*>(&operands[1].get());
-  ASSERT_NE(firstColumn, nullptr);
-  ASSERT_NE(secondColumn, nullptr);
-  EXPECT_EQ(firstColumn->get_column_index(), 0);
-  EXPECT_EQ(secondColumn->get_column_index(), 1);
+  EXPECT_THAT(operandColumnIndices(*transformed), ElementsAre(0, 1));
 }
 
 TEST(CudfIcebergFilterTransformTest, droppedAndInsideOrIsPushed) {
@@ -124,20 +137,12 @@ TEST(CudfIcebergFilterTransformTest, droppedAndInsideOrIsPushed) {
   const auto result = transformFilterForInjectedColumns(
       expression, std::array<cudf::size_type, 1>{0});
 
-  EXPECT_TRUE(result.referencesInjectedColumn);
+  EXPECT_TRUE(result.referencesInjectedColumn());
   const auto* transformed =
-      dynamic_cast<const cudf::ast::operation*>(result.expr);
+      dynamic_cast<const cudf::ast::operation*>(result.expr());
   ASSERT_NE(transformed, nullptr);
   EXPECT_EQ(transformed->get_operator(), cudf::ast::ast_operator::LOGICAL_OR);
-  const auto& operands = transformed->get_operands();
-  const auto* firstColumn =
-      dynamic_cast<const cudf::ast::column_reference*>(&operands[0].get());
-  const auto* secondColumn =
-      dynamic_cast<const cudf::ast::column_reference*>(&operands[1].get());
-  ASSERT_NE(firstColumn, nullptr);
-  ASSERT_NE(secondColumn, nullptr);
-  EXPECT_EQ(firstColumn->get_column_index(), 0);
-  EXPECT_EQ(secondColumn->get_column_index(), 1);
+  EXPECT_THAT(operandColumnIndices(*transformed), ElementsAre(0, 1));
 }
 
 TEST(CudfIcebergFilterTransformTest, rebasesMultiplePhysicalColumns) {
@@ -151,19 +156,11 @@ TEST(CudfIcebergFilterTransformTest, rebasesMultiplePhysicalColumns) {
   const auto result = transformFilterForInjectedColumns(
       expression, std::array<cudf::size_type, 2>{0, 2});
 
-  EXPECT_FALSE(result.referencesInjectedColumn);
+  EXPECT_FALSE(result.referencesInjectedColumn());
   const auto* transformed =
-      dynamic_cast<const cudf::ast::operation*>(result.expr);
+      dynamic_cast<const cudf::ast::operation*>(result.expr());
   ASSERT_NE(transformed, nullptr);
-  const auto& operands = transformed->get_operands();
-  const auto* firstColumn =
-      dynamic_cast<const cudf::ast::column_reference*>(&operands[0].get());
-  const auto* secondColumn =
-      dynamic_cast<const cudf::ast::column_reference*>(&operands[1].get());
-  ASSERT_NE(firstColumn, nullptr);
-  ASSERT_NE(secondColumn, nullptr);
-  EXPECT_EQ(firstColumn->get_column_index(), 0);
-  EXPECT_EQ(secondColumn->get_column_index(), 1);
+  EXPECT_THAT(operandColumnIndices(*transformed), ElementsAre(0, 1));
 }
 
 TEST(CudfIcebergFilterTransformTest, negatedPhysicalExpressionIsPushed) {
@@ -179,9 +176,9 @@ TEST(CudfIcebergFilterTransformTest, negatedPhysicalExpressionIsPushed) {
   const auto result = transformFilterForInjectedColumns(
       expression, std::array<cudf::size_type, 1>{0});
 
-  EXPECT_FALSE(result.referencesInjectedColumn);
+  EXPECT_FALSE(result.referencesInjectedColumn());
   const auto* transformed =
-      dynamic_cast<const cudf::ast::operation*>(result.expr);
+      dynamic_cast<const cudf::ast::operation*>(result.expr());
   ASSERT_NE(transformed, nullptr);
   EXPECT_EQ(transformed->get_operator(), cudf::ast::ast_operator::NOT);
   const auto* transformedComparison = dynamic_cast<const cudf::ast::operation*>(
@@ -207,8 +204,8 @@ TEST(
   const auto result = transformFilterForInjectedColumns(
       expression, std::array<cudf::size_type, 1>{0});
 
-  EXPECT_TRUE(result.referencesInjectedColumn);
-  EXPECT_EQ(result.expr, nullptr);
+  EXPECT_TRUE(result.referencesInjectedColumn());
+  EXPECT_EQ(result.expr(), nullptr);
 }
 
 TEST(CudfIcebergFilterTransformTest, isNullOnInjectedColumnIsNotPushed) {
@@ -220,8 +217,8 @@ TEST(CudfIcebergFilterTransformTest, isNullOnInjectedColumnIsNotPushed) {
   const auto result = transformFilterForInjectedColumns(
       expression, std::array<cudf::size_type, 1>{1});
 
-  EXPECT_TRUE(result.referencesInjectedColumn);
-  EXPECT_EQ(result.expr, nullptr);
+  EXPECT_TRUE(result.referencesInjectedColumn());
+  EXPECT_EQ(result.expr(), nullptr);
 }
 
 TEST(CudfIcebergFilterTransformTest, rebasePhysicalColumn) {
@@ -231,9 +228,9 @@ TEST(CudfIcebergFilterTransformTest, rebasePhysicalColumn) {
   const auto result = transformFilterForInjectedColumns(
       expression, std::array<cudf::size_type, 1>{0});
 
-  EXPECT_FALSE(result.referencesInjectedColumn);
+  EXPECT_FALSE(result.referencesInjectedColumn());
   const auto* transformed =
-      dynamic_cast<const cudf::ast::column_reference*>(result.expr);
+      dynamic_cast<const cudf::ast::column_reference*>(result.expr());
   ASSERT_NE(transformed, nullptr);
   EXPECT_EQ(transformed->get_column_index(), 1);
 }
@@ -245,9 +242,30 @@ TEST(CudfIcebergFilterTransformTest, trailingInjectedColumnDoesNotRebase) {
   const auto result = transformFilterForInjectedColumns(
       expression, std::array<cudf::size_type, 1>{2});
 
-  EXPECT_FALSE(result.referencesInjectedColumn);
+  EXPECT_FALSE(result.referencesInjectedColumn());
   // Nothing changed, so the input expression is pushed as is.
-  EXPECT_EQ(result.expr, &expression);
+  EXPECT_EQ(result.expr(), &expression);
+}
+
+TEST(CudfIcebergFilterTransformTest, noInjectedColumnsPushesInputFilter) {
+  cudf::ast::tree tree;
+  const auto& expression = tree.push(cudf::ast::column_reference{2});
+
+  const auto result = transformFilterForInjectedColumns(
+      expression, std::span<const cudf::size_type>{});
+
+  EXPECT_FALSE(result.referencesInjectedColumn());
+  EXPECT_EQ(result.expr(), &expression);
+}
+
+TEST(CudfIcebergFilterTransformTest, unsortedInjectedColumnIndicesFail) {
+  cudf::ast::tree tree;
+  const auto& expression = tree.push(cudf::ast::column_reference{3});
+
+  VELOX_ASSERT_THROW(
+      (transformFilterForInjectedColumns(
+          expression, std::array<cudf::size_type, 2>{2, 0})),
+      "Injected column indices must be ascending and unique");
 }
 
 TEST(CudfIcebergFilterTransformTest, columnNameReferenceFails) {

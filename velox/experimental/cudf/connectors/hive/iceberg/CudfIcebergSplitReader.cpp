@@ -137,9 +137,8 @@ void CudfIcebergSplitReader::setupReader() {
 }
 
 cudf::ast::expression const* CudfIcebergSplitReader::pushdownFilter() const {
-  // Return pushdown filter or the original filter if it is not deferred.
   if (pushdownFilter_.has_value()) {
-    return pushdownFilter_->expr;
+    return pushdownFilter_->expr();
   }
   return deferSubfieldFilter_ ? nullptr : subfieldFilter();
 }
@@ -231,17 +230,12 @@ void CudfIcebergSplitReader::prepareSubfieldFilter() {
         static_cast<cudf::size_type>(column.outputIndex));
   }
 
-  // Compute the transformed filter
-  auto transformed =
+  // Compute the transformed filter to push, if any
+  pushdownFilter_ =
       transformFilterForInjectedColumns(*originalFilter, injectedColumnIndices);
 
   // Defer the original filter if it references an injected column.
-  deferSubfieldFilter_ = transformed.referencesInjectedColumn;
-
-  // Pushdown the transformed filter if available
-  if (transformed.expr != nullptr) {
-    pushdownFilter_ = std::move(transformed);
-  }
+  deferSubfieldFilter_ = pushdownFilter_->referencesInjectedColumn();
 }
 
 std::unique_ptr<cudf::column> CudfIcebergSplitReader::extractRowIndex(

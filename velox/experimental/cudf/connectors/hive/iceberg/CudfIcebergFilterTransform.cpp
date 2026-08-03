@@ -29,6 +29,18 @@ namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
 namespace {
 
+// Checks if the operator is a logical AND.
+bool isLogicalAnd(cudf::ast::ast_operator op) {
+  return op == cudf::ast::ast_operator::LOGICAL_AND or
+      op == cudf::ast::ast_operator::NULL_LOGICAL_AND;
+}
+
+// Checks if the operator is a logical OR.
+bool isLogicalOr(cudf::ast::ast_operator op) {
+  return op == cudf::ast::ast_operator::LOGICAL_OR or
+      op == cudf::ast::ast_operator::NULL_LOGICAL_OR;
+}
+
 // Drops the predicates that reference injected columns and rebases the
 // remaining column indices past them.
 class InjectedColumnFilterTransformer
@@ -36,38 +48,27 @@ class InjectedColumnFilterTransformer
  public:
   InjectedColumnFilterTransformer(
       const cudf::ast::expression& filter,
-      const std::span<cudf::size_type const> sortedInjectedColumnIndices)
+      std::span<const cudf::size_type> sortedInjectedColumnIndices)
       : injectedColumnIndices_(sortedInjectedColumnIndices) {
     filter.accept(*this);
-    transformedExpr_.expr = current_.expr;
   }
 
-  // Returns the transformed expression.
-  TransformedFilter transformedExpr() && {
-    return std::move(transformedExpr_);
+  // Returns the transformed filter, handing over the nodes created while
+  // transforming.
+  TransformedFilter transformedFilter() && {
+    return TransformedFilter{
+        std::move(nodes_), current_.expr, referencesInjectedColumn_};
   }
 
  private:
-  // Struct to hold the result a subexpression transformation.
+  // Struct to hold the result of a subexpression transformation.
   struct Transformed {
     // Transformed expr, nullptr when it evaluates to always true.
     const cudf::ast::expression* expr;
-    // Whether the transformed expr was relaxed (accept rows rejected by the
-    // input filter)
+    // Whether the transformed expr was relaxed, meaning it accepts rows the
+    // input filter rejects.
     bool wasRelaxed;
   };
-
-  // Checks if the operator is a logical AND.
-  bool isLogicalAnd(cudf::ast::ast_operator op) {
-    return op == cudf::ast::ast_operator::LOGICAL_AND or
-        op == cudf::ast::ast_operator::NULL_LOGICAL_AND;
-  }
-
-  // Checks if the operator is a logical OR.
-  bool isLogicalOr(cudf::ast::ast_operator op) {
-    return op == cudf::ast::ast_operator::LOGICAL_OR or
-        op == cudf::ast::ast_operator::NULL_LOGICAL_OR;
-  }
 
   std::reference_wrapper<const cudf::ast::expression> visit(
       const cudf::ast::literal& expr) override {
@@ -83,7 +84,7 @@ class InjectedColumnFilterTransformer
         injectedColumnIndices_.end(),
         columnIndex);
     if (iter != injectedColumnIndices_.end() and *iter == columnIndex) {
-      transformedExpr_.referencesInjectedColumn = true;
+      referencesInjectedColumn_ = true;
       current_ = {nullptr, true};
       return expr;
     }
@@ -95,7 +96,7 @@ class InjectedColumnFilterTransformer
       return expr;
     }
 
-    const auto& rebased = transformedExpr_.tree.push(
+    const auto& rebased = nodes_.push(
         cudf::ast::column_reference{
             columnIndex - numPrecedingInjectedColumns,
             expr.get_table_source()});
@@ -152,9 +153,8 @@ class InjectedColumnFilterTransformer
     }
 
     const auto& transformed = operands.size() == 1
-        ? transformedExpr_.tree.push(
-              cudf::ast::operation{op, *transformedOperands[0].expr})
-        : transformedExpr_.tree.push(
+        ? nodes_.push(cudf::ast::operation{op, *transformedOperands[0].expr})
+        : nodes_.push(
               cudf::ast::operation{
                   op,
                   *transformedOperands[0].expr,
@@ -164,12 +164,14 @@ class InjectedColumnFilterTransformer
   }
 
   std::reference_wrapper<const cudf::ast::expression> visit(
-      const cudf::ast::column_name_reference& expr) override {
+      const cudf::ast::column_name_reference& /*expr*/) override {
     VELOX_FAIL("Iceberg subfield filter must use column index references");
   }
 
-  const std::span<cudf::size_type const> injectedColumnIndices_;
-  TransformedFilter transformedExpr_;
+  // Owns the expression nodes created while transforming.
+  cudf::ast::tree nodes_;
+  const std::span<const cudf::size_type> injectedColumnIndices_;
+  bool referencesInjectedColumn_{false};
 
   // Result of the last visited subexpression. visit() returns a reference,
   // which cannot express a dropped subexpression, so its return value is unused
@@ -181,16 +183,15 @@ class InjectedColumnFilterTransformer
 
 TransformedFilter transformFilterForInjectedColumns(
     const cudf::ast::expression& filter,
-    const std::span<cudf::size_type const> sortedInjectedColumnIndices) {
+    std::span<const cudf::size_type> sortedInjectedColumnIndices) {
   // Nothing to drop or rebase, so return the input filter as is.
   if (sortedInjectedColumnIndices.empty()) {
-    TransformedFilter transformed;
-    transformed.expr = &filter;
-    return transformed;
+    return TransformedFilter{
+        cudf::ast::tree{}, &filter, /*referencesInjectedColumn=*/false};
   }
 
   // Ensure the injected column indices are ascending and unique.
-  VELOX_DCHECK(
+  VELOX_CHECK(
       std::adjacent_find(
           sortedInjectedColumnIndices.begin(),
           sortedInjectedColumnIndices.end(),
@@ -199,7 +200,7 @@ TransformedFilter transformFilterForInjectedColumns(
       "Injected column indices must be ascending and unique");
 
   return InjectedColumnFilterTransformer(filter, sortedInjectedColumnIndices)
-      .transformedExpr();
+      .transformedFilter();
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg
