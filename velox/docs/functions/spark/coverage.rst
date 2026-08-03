@@ -263,14 +263,14 @@ Here is a list of all scalar, aggregate, and window functions from Spark, with f
     :spark:func:`ceil`                         from_csv                                   mean                                       :spark:func:`shiftright`                   :spark:func:`width_bucket`
     ceiling                                    from_json                                  min                                        shiftrightunsigned                         window
     char                                       :spark:func:`from_unixtime`                min_by                                     :spark:func:`shuffle`                      xpath
-    char_length                                :spark:func:`from_utc_timestamp`           :spark:func:`minute`                       :spark:func:`sign`                         :spark:func:`xpath_boolean`
+    char_length                                :spark:func:`from_utc_timestamp`           :spark:func:`minute`                       :spark:func:`sign`                         xpath_boolean
     character_length                           :spark:func:`get_json_object`              mod                                        signum                                     xpath_double
     :spark:func:`chr`                          getbit                                     :spark:func:`monotonically_increasing_id`  sin                                        xpath_float
     coalesce                                   :spark:func:`greatest`                     :spark:func:`month`                        :spark:func:`sinh`                         xpath_int
     collect_list                               grouping                                   months_between                             :spark:func:`size`                         xpath_long
     collect_set                                grouping_id                                named_struct                               skewness                                   xpath_number
     :spark:func:`concat`                       :spark:func:`hash`                         nanvl                                      :spark:func:`slice`                        xpath_short
-    concat_ws                                  :spark:func:`hex`                          negative                                   smallint                                   :spark:func:`xpath_string`
+    concat_ws                                  :spark:func:`hex`                          negative                                   smallint                                   xpath_string
     :spark:func:`conv`                         :spark:func:`hour`                         :spark:func:`next_day`                     some                                       :spark:func:`xxhash64`
     corr                                       :spark:func:`hypot`                        :spark:func:`not`                          :spark:func:`sort_array`                   :spark:func:`year`
     :spark:func:`cos`                          if                                         now                                        :spark:func:`soundex`                      :spark:func:`zip_with`
