@@ -458,7 +458,6 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "map_keys",
     "map_values",
     "clamp", // Function clamp not registered
-    "current_date", // Non-deterministic
     "xxhash64_internal",
     "combine_hash_internal",
     "noisy_avg_gaussian", // Non-deterministic
@@ -483,10 +482,6 @@ std::unordered_set<std::string> skipFunctionsSOT = {
     "$internal$split_to_map",
     "$internal$canonicalize",
     "$internal$contains",
-    "current_time", // current_time cannot be called with parenthesis
-    "localtime", // localtime cannot be called with parenthesis:
-                 // https://github.com/facebookincubator/velox/issues/14937,
-    "localtimestamp", // localtimestamp cannot be called with parenthesis
     "jarowinkler_similarity", // https://github.com/facebookincubator/velox/issues/15736
     // Fuzzer and the underlying engine are confused about SetDigest functions
     // (since KHLL is a user defined type), and tries to pass a
