@@ -35,6 +35,9 @@
 #include <cudf/io/parquet_schema.hpp>
 #include <cudf/io/types.hpp>
 
+#include <functional>
+#include <utility>
+
 namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
@@ -64,6 +67,13 @@ class CudfSplitReader : public NvtxHelper {
       cudf::ast::expression const* subfieldFilterExpr);
 
   virtual ~CudfSplitReader() = default;
+
+  using PushdownFilterBuilder = std::function<cudf::ast::expression const*(
+      const cudf::io::parquet::FileMetaData&)>;
+
+  void setPushdownFilterBuilder(PushdownFilterBuilder builder) {
+    pushdownFilterBuilder_ = std::move(builder);
+  }
 
   /// Prepare the split: open cudf reader, set up data source and options.
   /// @param runtimeStats Reference to the DataSource's runtime statistics
@@ -100,9 +110,6 @@ class CudfSplitReader : public NvtxHelper {
 
   // Read file metadatas.
   void fileMetaDatas();
-
-  // Returns the original subfield filter.
-  cudf::ast::expression const* subfieldFilter() const;
 
   std::shared_ptr<CudfHiveConnectorSplit> split_;
   std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>
@@ -151,6 +158,8 @@ class CudfSplitReader : public NvtxHelper {
 
   dwio::common::ReaderOptions baseReaderOpts_;
   cudf::ast::expression const* subfieldFilterExpr_;
+  cudf::ast::expression const* pushdownFilterExpr_;
+  PushdownFilterBuilder pushdownFilterBuilder_;
 
   struct TotalScanTimeCallbackData {
     uint64_t startTimeUs;

@@ -73,7 +73,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Override to only setup cuDF reader if we have columns to read.
   void setupReader() override;
 
-  // Returns the filter to push down to the cuDF reader.
+  // Skip Parquet pushdown when the subfield filter must run after reading.
   cudf::ast::expression const* pushdownFilter() const override;
 
   // Override to determine the memory resource to construct cuDF reader.
@@ -222,7 +222,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Filter over the read columns pushed to cuDF reader. Empty when the original
   // filter was not transformed or has a `nullptr` root when nothing can be
   // pushed.
-  std::optional<TransformedFilter> pushdownFilter_;
+  std::optional<TransformedFilter> transformedPushdownFilter_;
 
   // Top-level column names and total row count from the file metadata
   std::unordered_set<std::string> fileColumnNames_;

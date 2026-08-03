@@ -123,7 +123,7 @@ void CudfIcebergSplitReader::resetSplit() {
   noColumnsToRead_ = false;
   syntheticTableProduced_ = false;
   deferSubfieldFilter_ = false;
-  pushdownFilter_.reset();
+  transformedPushdownFilter_.reset();
   baseReadOffset_ = 0;
   deleteBitmap_ = nullptr;
   deviceBitmap_.reset();
@@ -137,10 +137,10 @@ void CudfIcebergSplitReader::setupReader() {
 }
 
 cudf::ast::expression const* CudfIcebergSplitReader::pushdownFilter() const {
-  if (pushdownFilter_.has_value()) {
-    return pushdownFilter_->expr();
+  if (transformedPushdownFilter_.has_value()) {
+    return transformedPushdownFilter_->expr();
   }
-  return deferSubfieldFilter_ ? nullptr : subfieldFilter();
+  return deferSubfieldFilter_ ? nullptr : CudfSplitReader::pushdownFilter();
 }
 
 void CudfIcebergSplitReader::prepareSplitInternal(
@@ -206,7 +206,7 @@ bool CudfIcebergSplitReader::needPrependedRowIndex() const {
 }
 
 void CudfIcebergSplitReader::prepareSubfieldFilter() {
-  auto* originalFilter = CudfSplitReader::subfieldFilter();
+  auto* originalFilter = CudfSplitReader::pushdownFilter();
   if (originalFilter == nullptr) {
     return;
   }
@@ -231,11 +231,11 @@ void CudfIcebergSplitReader::prepareSubfieldFilter() {
   }
 
   // Compute the transformed filter to push, if any
-  pushdownFilter_ =
+  transformedPushdownFilter_ =
       transformFilterForInjectedColumns(*originalFilter, injectedColumnIndices);
 
   // Defer the original filter if it references an injected column.
-  deferSubfieldFilter_ = pushdownFilter_->referencesInjectedColumn();
+  deferSubfieldFilter_ = transformedPushdownFilter_->referencesInjectedColumn();
 }
 
 std::unique_ptr<cudf::column> CudfIcebergSplitReader::extractRowIndex(
@@ -433,7 +433,9 @@ CudfIcebergSplitReader::readNextChunk() {
 
   // Apply the deferred subfield filter.
   if (deferSubfieldFilter_) {
-    auto* filter = CudfSplitReader::subfieldFilter();
+    // The split filter matches file-backed physical widths and logical widths
+    // for injected columns, which is the layout assembled above.
+    auto* filter = CudfSplitReader::pushdownFilter();
     VELOX_CHECK_NOT_NULL(filter);
     auto filterMask = cudf::compute_column(
         cudfTable->view(), *filter, stream_, get_temp_mr());
