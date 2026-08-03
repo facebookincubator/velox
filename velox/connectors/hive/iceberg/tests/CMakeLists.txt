@@ -156,9 +156,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
       velox_dwio_parquet_reader
       velox_dwio_parquet_writer
     )
-  endif()
 
-  if(VELOX_ENABLE_PARQUET)
     target_link_libraries(
       velox_hive_iceberg_test
       velox_dwio_parquet_reader
