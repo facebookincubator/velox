@@ -153,6 +153,10 @@ class TableWriter : public Operator {
   // `mappedOutputType_`.
   void setTypeMappings(const core::TableWriteNodePtr& tableWriteNode);
 
+  // Throws a user error if 'input' has a null value in any of the
+  // 'notNullChannels_' columns.
+  void checkNotNullConstraints(const RowVectorPtr& input);
+
   std::string createTableCommitContext(bool lastOutput);
 
   void setConnectorMemoryReclaimer();

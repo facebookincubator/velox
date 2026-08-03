@@ -39,8 +39,7 @@ std::function<PlanNodePtr(std::string, PlanNodePtr)> addCudfTableWriter(
         false,
         TableWriteTraits::outputType(columnStatsSpec),
         commitStrategy,
-        std::move(source),
-        std::nullopt);
+        std::move(source));
   };
 }
 
@@ -93,8 +92,7 @@ std::function<PlanNodePtr(std::string, PlanNodePtr)> cudfTableWrite(
         false,
         TableWriteTraits::outputType(columnStatsSpec),
         facebook::velox::connector::CommitStrategy::kNoCommit,
-        std::move(source),
-        std::nullopt);
+        std::move(source));
   };
 }
 
