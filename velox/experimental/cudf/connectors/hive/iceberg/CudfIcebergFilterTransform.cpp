@@ -48,13 +48,13 @@ class InjectedColumnFilterTransformer
   }
 
  private:
-  // Transformed expression for CudfIcebergSplitReader. 'expr' is nullptr when
-  // the subexpression was dropped (all true). 'wasDropped' is set when the
-  // subexpression or anything below it was dropped, so the subexpression
-  // accepts rows that the input filter rejects.
+  // Struct to hold the result a subexpression transformation.
   struct Transformed {
+    // Transformed expr, nullptr when it evaluates to always true.
     const cudf::ast::expression* expr;
-    bool wasDropped;
+    // Whether the transformed expr was relaxed (accept rows rejected by the
+    // input filter)
+    bool wasRelaxed;
   };
 
   // Checks if the operator is a logical AND.
@@ -119,10 +119,10 @@ class InjectedColumnFilterTransformer
     }
 
     const auto op = expr.get_operator();
-    const auto wasDropped = std::any_of(
+    const auto wasRelaxed = std::any_of(
         transformedOperands.begin(),
         transformedOperands.end(),
-        [](const auto& operand) { return operand.wasDropped; });
+        [](const auto& operand) { return operand.wasRelaxed; });
 
     if (isLogicalAnd(op)) {
       VELOX_CHECK_EQ(
@@ -132,7 +132,7 @@ class InjectedColumnFilterTransformer
       const auto* lhs = transformedOperands[0].expr;
       const auto* rhs = transformedOperands[1].expr;
       if (lhs == nullptr or rhs == nullptr) {
-        current_ = {lhs == nullptr ? rhs : lhs, wasDropped};
+        current_ = {lhs == nullptr ? rhs : lhs, wasRelaxed};
         return current_.expr == nullptr ? expr : *current_.expr;
       }
     } else if (isLogicalOr(op)) {
@@ -144,7 +144,7 @@ class InjectedColumnFilterTransformer
         current_ = {nullptr, true};
         return expr;
       }
-    } else if (wasDropped) {
+    } else if (wasRelaxed) {
       // Any other operator, `NOT` in particular, can turn a relaxed operand
       // into a stricter predicate, so drop the whole subexpression.
       current_ = {nullptr, true};
@@ -159,7 +159,7 @@ class InjectedColumnFilterTransformer
                   op,
                   *transformedOperands[0].expr,
                   *transformedOperands[1].expr});
-    current_ = {&transformed, wasDropped};
+    current_ = {&transformed, wasRelaxed};
     return transformed;
   }
 
