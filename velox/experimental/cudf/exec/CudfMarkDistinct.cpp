@@ -56,6 +56,16 @@ void CudfMarkDistinct::doAddInput(RowVectorPtr input) {
   input_ = std::move(input);
 }
 
+void CudfMarkDistinct::doClose() {
+  // seenFilter_ references seenKeys_. State reads are ordered back onto
+  // seenStateStream_ in doGetOutput(), so stream-ordered destruction is safe.
+  seenFilter_.reset();
+  seenKeys_.reset();
+  seenStateStream_.reset();
+  cudaEvent_.reset();
+  Operator::close();
+}
+
 RowVectorPtr CudfMarkDistinct::doGetOutput() {
   if (input_ == nullptr) {
     return nullptr;
