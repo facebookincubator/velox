@@ -649,7 +649,7 @@ void CudfIcebergSplitReader::readPositionalDeleteBitmap(
       deviceBitmap_->data(),
       deleteBitmap_->as<uint8_t>(),
       numBitmaskBytes,
-      cudaMemcpyHostToDevice,
+      cudaMemcpyDefault,
       stream_.value()));
 }
 
