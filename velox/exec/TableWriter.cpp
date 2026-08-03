@@ -18,7 +18,6 @@
 
 #include <folly/container/F14Set.h>
 
-#include "velox/common/base/Nulls.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
@@ -103,10 +102,11 @@ void TableWriter::setTypeMappings(
   mappedOutputType_ = ROW(folly::copy(outputNames), std::move(outputTypes));
   mappedInputType_ = ROW(std::move(outputNames), std::move(inputTypes));
 
-  const auto& notNullNames = tableWriteNode->notNullColumnNames();
-  if (notNullNames.has_value()) {
+  const auto& notNullNames =
+      tableWriteNode->insertTableHandle()->notNullColumnNames();
+  if (!notNullNames.empty()) {
     const folly::F14FastSet<std::string> notNullSet(
-        notNullNames->begin(), notNullNames->end());
+        notNullNames.begin(), notNullNames.end());
     const auto& targetNames = tableWriteNode->columnNames();
     for (size_t i = 0; i < targetNames.size(); ++i) {
       if (notNullSet.count(targetNames[i]) > 0) {
@@ -161,32 +161,30 @@ bool TableWriter::finishDataSink() {
   return dataSink_->finish();
 }
 
+void TableWriter::checkNotNullConstraints(const RowVectorPtr& input) {
+  for (const auto& [channel, name] : notNullChannels_) {
+    const auto& column = input->childAt(channel);
+    if (!column->mayHaveNullsRecursive()) {
+      continue;
+    }
+    // Decode to catch nulls behind dictionary or constant wrapping, restricting
+    // the scan to the batch's rows. hasNulls() fast-paths identity (flat)
+    // mappings, so no separate flat branch is needed.
+    notNullRows_.resizeFill(input->size());
+    notNullDecodedVector_.decode(*column, notNullRows_);
+    if (notNullDecodedVector_.hasNulls()) {
+      VELOX_USER_FAIL("NULL value not allowed for NOT NULL column: {}", name);
+    }
+  }
+}
+
 void TableWriter::addInput(RowVectorPtr input) {
   if (input->size() == 0) {
     return;
   }
 
-  // Flat vectors use rawNulls() directly; other encodings are decoded
-  // since rawNulls() misses nulls behind dictionary or constant wrapping.
   if (!notNullChannels_.empty()) {
-    notNullRows_.resizeFill(input->size());
-    for (const auto& [channel, name] : notNullChannels_) {
-      const auto& column = input->childAt(channel);
-      bool hasNulls = false;
-      if (column->mayHaveNullsRecursive()) {
-        if (column->isFlatEncoding()) {
-          const auto* rawNulls = column->rawNulls();
-          hasNulls = rawNulls != nullptr &&
-              bits::countNulls(rawNulls, 0, input->size()) > 0;
-        } else {
-          notNullDecodedVector_.decode(*column, notNullRows_);
-          hasNulls = notNullDecodedVector_.hasNulls();
-        }
-      }
-      if (hasNulls) {
-        VELOX_USER_FAIL("NULL value not allowed for NOT NULL column: {}", name);
-      }
-    }
+    checkNotNullConstraints(input);
   }
 
   std::vector<VectorPtr> mappedChildren;

@@ -261,7 +261,7 @@ TEST_F(BasicTableWriterTest, notNullConstraintIgnoresNullsBeyondBatchSize) {
   ASSERT_EQ(batchSize, rowCount->valueAt(0));
 }
 
-TEST_F(BasicTableWriterTest, notNullConstraintNulloptAllowsNulls) {
+TEST_F(BasicTableWriterTest, notNullConstraintUnsetAllowsNulls) {
   const vector_size_t size = 20;
   auto data = makeRowVector(
       {"c0"},

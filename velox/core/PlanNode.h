@@ -57,9 +57,11 @@ struct InsertTableHandle {
   InsertTableHandle(
       const std::string& connectorId,
       const connector::ConnectorInsertTableHandlePtr&
-          connectorInsertTableHandle)
+          connectorInsertTableHandle,
+      std::vector<std::string> notNullColumnNames = {})
       : connectorId_(connectorId),
-        connectorInsertTableHandle_(connectorInsertTableHandle) {}
+        connectorInsertTableHandle_(connectorInsertTableHandle),
+        notNullColumnNames_(std::move(notNullColumnNames)) {}
 
   const std::string& connectorId() const {
     return connectorId_;
@@ -70,12 +72,20 @@ struct InsertTableHandle {
     return connectorInsertTableHandle_;
   }
 
+  /// Target columns that must not contain nulls; empty if unconstrained.
+  const std::vector<std::string>& notNullColumnNames() const {
+    return notNullColumnNames_;
+  }
+
  private:
   // Connector ID
   const std::string connectorId_;
 
   // Write request to a DataSink of that connector type
   const connector::ConnectorInsertTableHandlePtr connectorInsertTableHandle_;
+
+  // Target columns that must not contain nulls; empty if unconstrained.
+  const std::vector<std::string> notNullColumnNames_;
 };
 
 class SortOrder {
@@ -1556,7 +1566,9 @@ class TableWriteNode : public PlanNode {
   ///   - grouping keys must be a subset of 'columns' (partition columns).
   ///   - grouping keys must not contain duplicates.
   /// @param insertTableHandle Connector-specific handle identifying the
-  /// target table and write operation.
+  /// target table and write operation. If its notNullColumnNames() is set,
+  /// those 'columnNames' entries must not contain nulls; the operator throws
+  /// a user error otherwise.
   /// @param hasPartitioningScheme Whether a partitioning scheme is configured
   /// for shuffles. Controls which query config determines the number of
   /// writer operator instances: 'task_partitioned_writer_count' if true,
@@ -1566,8 +1578,6 @@ class TableWriteNode : public PlanNode {
   /// single-column BIGINT type with no columnStatsSpec.
   /// @param commitStrategy Commit strategy for the write operation.
   /// @param source Input plan node providing rows to write.
-  /// @param notNullColumnNames If set, 'columnNames' entries that must not
-  /// contain nulls; the operator throws a user error otherwise.
   TableWriteNode(
       const PlanNodeId& id,
       const RowTypePtr& columns,
@@ -1577,8 +1587,7 @@ class TableWriteNode : public PlanNode {
       bool hasPartitioningScheme,
       RowTypePtr outputType,
       connector::CommitStrategy commitStrategy,
-      const PlanNodePtr& source,
-      std::optional<std::vector<std::string>> notNullColumnNames);
+      const PlanNodePtr& source);
 
   class Builder {
    public:
@@ -1593,7 +1602,6 @@ class TableWriteNode : public PlanNode {
       hasPartitioningScheme_ = other.hasPartitioningScheme();
       outputType_ = other.outputType();
       commitStrategy_ = other.commitStrategy();
-      notNullColumnNames_ = other.notNullColumnNames();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
     }
@@ -1639,11 +1647,6 @@ class TableWriteNode : public PlanNode {
       return *this;
     }
 
-    Builder& notNullColumnNames(std::vector<std::string> notNullColumnNames) {
-      notNullColumnNames_ = std::move(notNullColumnNames);
-      return *this;
-    }
-
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
       return *this;
@@ -1677,8 +1680,7 @@ class TableWriteNode : public PlanNode {
           hasPartitioningScheme_.value(),
           outputType_.value(),
           commitStrategy_.value(),
-          source_.value(),
-          notNullColumnNames_);
+          source_.value());
     }
 
    private:
@@ -1690,7 +1692,6 @@ class TableWriteNode : public PlanNode {
     std::optional<bool> hasPartitioningScheme_;
     std::optional<RowTypePtr> outputType_;
     std::optional<connector::CommitStrategy> commitStrategy_;
-    std::optional<std::vector<std::string>> notNullColumnNames_;
     std::optional<PlanNodePtr> source_;
   };
 
@@ -1741,11 +1742,6 @@ class TableWriteNode : public PlanNode {
     return columnStatsSpec_;
   }
 
-  /// Columns that must not contain nulls, or std::nullopt if unconstrained.
-  const std::optional<std::vector<std::string>>& notNullColumnNames() const {
-    return notNullColumnNames_;
-  }
-
   bool requiresSingleThread() const override {
     return !insertTableHandle_->connectorInsertTableHandle()
                 ->supportsMultiThreading();
@@ -1774,8 +1770,6 @@ class TableWriteNode : public PlanNode {
   const bool hasPartitioningScheme_;
   const RowTypePtr outputType_;
   const connector::CommitStrategy commitStrategy_;
-  // NOT NULL column names, or std::nullopt if unconstrained.
-  const std::optional<std::vector<std::string>> notNullColumnNames_;
 };
 
 using TableWriteNodePtr = std::shared_ptr<const TableWriteNode>;
