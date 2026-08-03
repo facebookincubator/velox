@@ -53,7 +53,7 @@ jobs:
       diff-range: ${{ steps.changes.outputs.range }}
       merge-base-commit: ${{ steps.changes.outputs.merge_base_commit }}
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -105,7 +105,7 @@ jobs:
     # check prevents errors when forks fast-forward their main branch.
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
-    container: ghcr.io/czentgr/czentgr-test:thrift-deps
+    container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
       run:
         shell: bash
@@ -129,7 +129,7 @@ jobs:
       failed-cases: ${{ steps.retry-tests.outputs.failed-cases }}
       failure-details: ${{ steps.retry-tests.outputs.failure-details }}
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -390,7 +390,7 @@ jobs:
     runs-on: ubuntu-latest
     name: "BUILD: Linux release with adapters"
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/scripts
           persist-credentials: false
@@ -416,7 +416,7 @@ jobs:
     runs-on: ubuntu-latest
     name: "TEST: Linux release with adapters"
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/scripts
           persist-credentials: false
@@ -543,7 +543,7 @@ jobs:
         shell: bash
         working-directory: velox
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
           path: velox
@@ -584,7 +584,7 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
 
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: velox
           persist-credentials: false
@@ -599,7 +599,16 @@ jobs:
           install_fmt
           install_boost
           install_fast_float
-          install_folly
+          # Build folly (and its gflags) shared under Clang so it matches the
+          # shared libvelox.so. A static folly links gflags statically, which
+          # then collides with the shared gflags velox links
+          # (VELOX_GFLAGS_TYPE=shared), registering gflags' flags twice and
+          # aborting every test at startup.
+          if [[ "${USE_CLANG}" = "true" ]]; then
+            VELOX_BUILD_SHARED=ON install_folly
+          else
+            install_folly
+          fi
           install_fizz
           install_wangle
           install_mvfst
@@ -638,6 +647,11 @@ jobs:
           BUILD_PROFILE=ubuntu-debug USE_CLANG="${USE_CLANG}" source .github/scripts/cmake-flags.sh
           if [[ "${USE_CLANG}" = "true" ]]; then
              export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15;
+             # folly is now built shared (linking the system libgflags.so), so
+             # resolve gflags from SYSTEM here too. This keeps a single shared
+             # libgflags.so across folly, glog and velox instead of mixing a
+             # BUNDLED gflags into libvelox.so alongside the system one.
+             export gflags_SOURCE=SYSTEM;
           fi
           export EXTRA_CMAKE_FLAGS="${CMAKE_FLAGS[*]}"
           make debug 2>&1 | tee /tmp/build-output.log
@@ -703,7 +717,7 @@ jobs:
     runs-on: ubuntu-latest
     name: "BUILD: Ubuntu debug with system dependencies"
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/scripts
           persist-credentials: false
@@ -729,7 +743,7 @@ jobs:
     runs-on: ubuntu-latest
     name: "TEST: Ubuntu debug with system dependencies"
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/scripts
           persist-credentials: false
@@ -769,7 +783,7 @@ jobs:
         shell: bash
         working-directory: velox
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
           path: velox
@@ -892,7 +906,7 @@ jobs:
     if: ${{ inputs.is-full-mode && github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
     container:
-      image: ghcr.io/czentgr/czentgr-test:thrift-deps
+      image: ghcr.io/facebookincubator/velox-dev:adapters
       volumes:
         - /usr:/host_usr
         - /opt:/host_opt
@@ -930,7 +944,7 @@ jobs:
           # Show after
           echo "New available disk space: " $(getAvailableSpace)
 
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -1027,7 +1041,7 @@ jobs:
     runs-on: ubuntu-latest
     name: "BUILD: Linux sanitizers with system dependencies"
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/scripts
           persist-credentials: false
@@ -1053,7 +1067,7 @@ jobs:
     runs-on: ubuntu-latest
     name: "TEST: Linux sanitizers with system dependencies"
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/scripts
           persist-credentials: false

@@ -17,6 +17,7 @@
 #include <shared_mutex>
 
 #include <fmt/ranges.h>
+#include <folly/OperationCancelled.h>
 #include <folly/synchronization/Baton.h>
 #include <folly/synchronization/EventCount.h>
 #include <folly/synchronization/Latch.h>
@@ -39,6 +40,7 @@
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/Exchange.h"
@@ -1247,7 +1249,7 @@ TEST_F(TableScanTest, structMatchByName) {
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .connectorSessionProperty(
                 kHiveConnectorId,
-                connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                connector::hive::FileConfig::kUseColumnNamesSession,
                 "true")
             .split(makeHiveConnectorSplit(filePath))
             .assertResults(sql);
@@ -1355,7 +1357,7 @@ TEST_F(TableScanTest, structMatchByName) {
           AssertQueryBuilder(op)
               .connectorSessionProperty(
                   kHiveConnectorId,
-                  connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                  connector::hive::FileConfig::kUseColumnNamesSession,
                   "true")
               .split(split)
               .copyResults(pool());
@@ -1389,7 +1391,7 @@ TEST_F(TableScanTest, structMatchByName) {
     AssertQueryBuilder(op, duckDbQueryRunner_)
         .connectorSessionProperty(
             kHiveConnectorId,
-            connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+            connector::hive::FileConfig::kUseColumnNamesSession,
             "true")
         .connectorSessionProperty(
             kHiveConnectorId,
@@ -5096,7 +5098,7 @@ TEST_F(TableScanTest, readMissingFieldsInMap) {
   result = AssertQueryBuilder(op)
                .connectorSessionProperty(
                    kHiveConnectorId,
-                   connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                   connector::hive::FileConfig::kUseColumnNamesSession,
                    "true")
                .split(split)
                .copyResults(pool());
@@ -5358,7 +5360,7 @@ TEST_F(TableScanTest, readMissingFieldsWithMoreColumns) {
   result = AssertQueryBuilder(op)
                .connectorSessionProperty(
                    kHiveConnectorId,
-                   connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                   connector::hive::FileConfig::kUseColumnNamesSession,
                    "true")
                .split(split)
                .copyResults(pool());
@@ -6126,11 +6128,11 @@ DEBUG_ONLY_TEST_F(TableScanTest, cancellationToken) {
   std::thread queryThread([&]() {
     auto split = makeHiveConnectorSplit(
         filePath->getPath(), 0, fs::file_size(filePath->getPath()));
-    VELOX_ASSERT_THROW(
+    EXPECT_THROW(
         AssertQueryBuilder(tableScanNode(), duckDbQueryRunner_)
             .split(std::move(split))
             .assertResults("SELECT * FROM tmp"),
-        "Cancelled");
+        folly::OperationCancelled);
     waitForAllTasksToBeDeleted();
   });
 

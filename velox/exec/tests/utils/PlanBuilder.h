@@ -1256,14 +1256,16 @@ class PlanBuilder {
       int numPartitions,
       bool replicateNullsAndAny,
       const std::vector<std::string>& outputLayout = {},
-      std::string serdeKind = "Presto");
+      std::string serdeKind = "Presto",
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Same as above, but assumes 'replicateNullsAndAny' is false.
   PlanBuilder& partitionedOutput(
       const std::vector<std::string>& keys,
       int numPartitions,
       const std::vector<std::string>& outputLayout = {},
-      std::string serdeKind = "Presto");
+      std::string serdeKind = "Presto",
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Same as above, but allows to provide custom partition function.
   PlanBuilder& partitionedOutput(
@@ -1272,7 +1274,8 @@ class PlanBuilder {
       bool replicateNullsAndAny,
       core::PartitionFunctionSpecPtr partitionFunctionSpec,
       const std::vector<std::string>& outputLayout = {},
-      std::string serdeKind = "Presto");
+      std::string serdeKind = "Presto",
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Adds a PartitionedOutputNode to broadcast the input data.
   ///
@@ -1282,12 +1285,14 @@ class PlanBuilder {
   /// duplicated in the output.
   PlanBuilder& partitionedOutputBroadcast(
       const std::vector<std::string>& outputLayout = {},
-      std::string serdeKind = "Presto");
+      std::string serdeKind = "Presto",
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Adds a PartitionedOutputNode to put data into arbitrary buffer.
   PlanBuilder& partitionedOutputArbitrary(
       const std::vector<std::string>& outputLayout = {},
-      std::string serdeKind = "Presto");
+      std::string serdeKind = "Presto",
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Adds a LocalPartitionNode to hash-partition the input on the specified
   /// keys using exec::HashPartitionFunction. Number of partitions is determined

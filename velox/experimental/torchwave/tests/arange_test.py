@@ -23,10 +23,15 @@ class ArangeTestPreproc(nn.Module):
     Outputs:
         o1: arange(sym_size(masked_select(y, y % 10 < 8), dim=0))
         o2: arange(sym_size(y, dim=0))
+        o3: a dynamic-size arange consumed by an elementwise expression. The
+            arange length is a runtime scalar (the masked_select size), so a
+            kernel boundary lets the host allocate the result, and the arange
+            result dims drive the size of the fused elementwise expr.
     """
 
-    def forward(self, y: Tensor) -> tuple[Tensor, Tensor]:
+    def forward(self, y: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         x = torch.masked_select(y, y % 10 < 8)
         o1 = torch.arange(x.size(0), dtype=torch.long)
         o2 = torch.arange(y.size(0), dtype=torch.long)
-        return o1, o2
+        o3 = torch.arange(x.size(0), dtype=torch.long) * 2 + x
+        return o1, o2, o3

@@ -74,10 +74,11 @@ adapters | dep-graph)
   if [[ $BUILD_PROFILE == "adapters" ]]; then
     # WAVE / CUDF gate code under velox/experimental/, which the
     # planner short-circuits to full mode via FULL_BUILD_PREFIXES,
-    # so dep-graph doesn't need their targets. CUDF is GCC-only.
-    CMAKE_FLAGS+=(-DVELOX_ENABLE_WAVE=ON)
+    # so dep-graph doesn't need their targets. Both are CUDA (nvcc)
+    # builds and nvcc with a Clang host trips on fmt's _BitInt usage,
+    # so keep WAVE and CUDF GCC-only.
     if [[ ${USE_CLANG:-false} != "true" ]]; then
-      CMAKE_FLAGS+=(-DVELOX_ENABLE_CUDF=ON)
+      CMAKE_FLAGS+=(-DVELOX_ENABLE_WAVE=ON -DVELOX_ENABLE_CUDF=ON)
     fi
   fi
   ;;

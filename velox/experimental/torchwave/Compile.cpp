@@ -910,31 +910,41 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     }
   };
 
+  // Place the previous-kernel (ordering) input first, if any. Its producer is
+  // its own kernel stage, separated from this op by a kernel break; placing it
+  // first materializes any inputs it shares with this op (e.g. a scan head that
+  // reads the same data tensor as its final stage), so the loop below then
+  // finds those producers already placed. When the producer's isKernelBreak is
+  // false (e.g. a single-block scan head) it returns kFused and would be
+  // collected into this op's fusedInputs -- which the kFusedBreak path below
+  // discards -- so push it directly instead, otherwise this op reads a buffer
+  // its producer never wrote (an orphaned scan stage).
+  if (meta && meta->inputFromPreviousKernel.has_value()) {
+    auto* prevProducer =
+        node->inputs()[meta->inputFromPreviousKernel.value()].value->producer();
+    if (prevProducer && !placed_.count(prevProducer) &&
+        !(inputs_ && inputs_->count(prevProducer))) {
+      placeKernels(prevProducer, Context::kFused);
+      if (!placed_.count(prevProducer)) {
+        pushdownFused(prevProducer);
+      }
+    }
+  }
+
   for (auto i = 0; i < node->inputs().size(); ++i) {
-    bool isPrevKernel = meta && meta->inputFromPreviousKernel.has_value() &&
-        i == meta->inputFromPreviousKernel.value();
-    if (meta && meta->inputFromPreviousKernel.has_value() && !isPrevKernel) {
+    // The ordering input was placed above. Its non-ordering siblings still need
+    // their producers placed if the previous-kernel stage did not already
+    // materialize them (placeInput is a no-op for producers already placed).
+    // Skipping them entirely -- as this loop used to -- orphans a producer
+    // reachable only through this op, e.g. a standalone op feeding
+    // repeat_interleave's data input: placeKernels never materializes it, yet
+    // extractSubgraph still pulls it in as an interior node, so codegen aborts.
+    if (meta && meta->inputFromPreviousKernel.has_value() &&
+        i == meta->inputFromPreviousKernel.value()) {
       continue;
     }
     auto* inputValue = node->inputs()[i].value;
     auto* producer = inputValue->producer();
-    if (isPrevKernel) {
-      // The producer of an inputFromPreviousKernel argument is always its own
-      // kernel stage: there is a kernel break between it and this op.  Place
-      // its own inputs, then push it directly.  Otherwise, when the producer's
-      // isKernelBreak is false (e.g. a single-block scan head) it returns
-      // kFused and is collected into this op's fusedInputs -- which the
-      // kFusedBreak path below discards, leaving this op reading a buffer its
-      // producer never wrote (an orphaned scan stage).
-      if (producer && !placed_.count(producer) &&
-          !(inputs_ && inputs_->count(producer))) {
-        placeKernels(producer, Context::kFused);
-        if (!placed_.count(producer)) {
-          pushdownFused(producer);
-        }
-      }
-      continue;
-    }
     auto inputKind = inputValue->type().kind();
     bool isScalarSize = isSizeArg(node->inputs()[i].name, meta) &&
         inputKind != nativert::Type::Kind::Tensor &&
@@ -1472,7 +1482,20 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
     code_ << "  if (blockInfo.blockInOp == 0) {\n";
   }
   if (!subgraphs.empty()) {
-    generateElementwise(subgraphs, ewResultSpecs, callStmt, meta->hasBarrier);
+    // For a data-dependent scan op (masked_select / nonzero) whose size is set
+    // on device, pass its output so generateElementwise can zero the length for
+    // an empty input before a fused consumer reads it.
+    ValueCP shapeSetOnDeviceResult = nullptr;
+    if (meta && !meta->returnMeta.empty() &&
+        meta->returnMeta[0].shapeSetOnDevice && !node->outputs().empty()) {
+      shapeSetOnDeviceResult = node->outputs()[0];
+    }
+    generateElementwise(
+        subgraphs,
+        ewResultSpecs,
+        callStmt,
+        meta->hasBarrier,
+        shapeSetOnDeviceResult);
   }
   if (multiBlockSingleOp) {
     code_ << "  }\n";
@@ -2192,7 +2215,10 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
     return nullptr;
   }
   auto compositeKernel = std::make_unique<CompositeKernel>(
-      std::move(opStorage_), std::move(kernelOpStorage_), includes_);
+      std::move(opStorage_),
+      std::move(kernelOpStorage_),
+      includes_,
+      nextKernelId());
   // Values whose last use is in this node (graph outputs already excluded);
   // WaveConfig::freeIntermediates releases their frame tensors after execute().
   std::vector<nativert::ValueId> lastUseIds;
