@@ -470,7 +470,9 @@ TEST_F(PlanBuilderTest, insertTableHandleParameter) {
           connector::hive::LocationHandle::TableType::kNew));
 
   auto insertHandle = std::make_shared<core::InsertTableHandle>(
-      std::string(PlanBuilder::kHiveDefaultConnectorId), hiveHandle);
+      std::string(PlanBuilder::kHiveDefaultConnectorId),
+      hiveHandle,
+      std::nullopt);
   testInsertTableHandle(insertHandle);
 }
 

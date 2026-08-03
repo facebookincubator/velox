@@ -2395,7 +2395,8 @@ TEST_P(AllTableWriterTest, columnStatsDataTypes) {
                               rowType_->children(),
                               partitionedBy_,
                               nullptr,
-                              makeLocationHandle(outputDirectory->getPath()))),
+                              makeLocationHandle(outputDirectory->getPath())),
+                          std::nullopt),
                       false,
                       CommitStrategy::kNoCommit))
                   .planNode();
@@ -2479,7 +2480,8 @@ TEST_P(AllTableWriterTest, columnStats) {
                               rowType_->children(),
                               partitionedBy_,
                               bucketProperty_,
-                              makeLocationHandle(outputDirectory->getPath()))),
+                              makeLocationHandle(outputDirectory->getPath())),
+                          std::nullopt),
                       false,
                       commitStrategy_))
                   .planNode();
@@ -2573,7 +2575,8 @@ TEST_P(AllTableWriterTest, columnStatsWithTableWriteMerge) {
               rowType_->children(),
               partitionedBy_,
               bucketProperty_,
-              makeLocationHandle(outputDirectory->getPath()))),
+              makeLocationHandle(outputDirectory->getPath())),
+          std::nullopt),
       false,
       commitStrategy_));
 

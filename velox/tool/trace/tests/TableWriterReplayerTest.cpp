@@ -107,7 +107,8 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
             makeLocationHandle(
                 outputDirectoryPath, std::nullopt, outputTableType),
             fileFormat_,
-            compressionKind));
+            compressionKind),
+        std::nullopt);
   }
 
   // Returns a table insert plan node.
@@ -158,6 +159,12 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
           connector::CommitStrategy::kNoCommit,
       std::optional<std::vector<std::string>> notNullColumnNames =
           std::nullopt) {
+    const auto handle = notNullColumnNames.has_value()
+        ? std::make_shared<core::InsertTableHandle>(
+              insertHandle->connectorId(),
+              insertHandle->connectorInsertTableHandle(),
+              notNullColumnNames)
+        : insertHandle;
     return [=](core::PlanNodeId nodeId,
                core::PlanNodePtr source) -> core::PlanNodePtr {
       return std::make_shared<core::TableWriteNode>(
@@ -165,12 +172,11 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
           inputColumns,
           tableColumnNames,
           statsSpec,
-          insertHandle,
+          handle,
           hasPartitioningScheme,
           TableWriteTraits::outputType(statsSpec),
           commitStrategy,
-          source,
-          notNullColumnNames);
+          source);
     };
   }
 
@@ -427,7 +433,8 @@ TEST_F(TableWriterReplayerTest, serdeParametersPreserved) {
               connector::hive::LocationHandle::TableType::kNew),
           fileFormat_,
           std::nullopt,
-          serdeParams));
+          serdeParams),
+      std::nullopt);
 
   std::string traceNodeId;
   auto plan =
@@ -540,7 +547,8 @@ TEST_F(TableWriterReplayerTest, notNullConstraintPreserved) {
       .split(makeHiveConnectorSplit(sourceFilePath->getPath()))
       .copyResults(pool(), task);
 
-  // createPlanNode() forwards notNullColumnNames() verbatim from this node.
+  // createPlanNode() forwards insertTableHandle()->notNullColumnNames()
+  // verbatim from this node.
   const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
       traceRoot, task->queryCtx()->queryId(), task->taskId());
   const auto taskMetaReader =
@@ -553,8 +561,10 @@ TEST_F(TableWriterReplayerTest, notNullConstraintPreserved) {
   const auto* tableWriteNode =
       dynamic_cast<const core::TableWriteNode*>(replayNode);
   ASSERT_NE(tableWriteNode, nullptr);
-  ASSERT_TRUE(tableWriteNode->notNullColumnNames().has_value());
-  ASSERT_EQ(*tableWriteNode->notNullColumnNames(), notNullColumnNames);
+  const auto& tracedNotNullColumnNames =
+      tableWriteNode->insertTableHandle()->notNullColumnNames();
+  ASSERT_TRUE(tracedNotNullColumnNames.has_value());
+  ASSERT_EQ(*tracedNotNullColumnNames, notNullColumnNames);
 }
 
 TEST_F(TableWriterReplayerTest, partitionWrite) {

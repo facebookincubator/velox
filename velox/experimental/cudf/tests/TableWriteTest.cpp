@@ -373,7 +373,8 @@ class TableWriteTest : public CudfHiveConnectorTestBase {
             outputRowType->names(),
             outputRowType->children(),
             makeLocationHandle(outputDirectoryPath, outputTableType),
-            compressionKind));
+            compressionKind),
+        std::nullopt);
   }
 
   // Returns a table insert plan node.

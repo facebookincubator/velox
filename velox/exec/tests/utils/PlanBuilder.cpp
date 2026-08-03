@@ -455,8 +455,15 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
         options_,
         ensureFiles_);
 
-    insertHandle_ =
-        std::make_shared<core::InsertTableHandle>(connectorId_, hiveHandle);
+    insertHandle_ = std::make_shared<core::InsertTableHandle>(
+        connectorId_, hiveHandle, std::nullopt);
+  }
+
+  if (notNullColumnNames_.has_value()) {
+    insertHandle_ = std::make_shared<core::InsertTableHandle>(
+        insertHandle_->connectorId(),
+        insertHandle_->connectorInsertTableHandle(),
+        notNullColumnNames_);
   }
 
   std::optional<core::ColumnStatsSpec> columnStatsSpec;
@@ -485,8 +492,7 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
       false,
       TableWriteTraits::outputType(columnStatsSpec),
       commitStrategy_,
-      upstreamNode,
-      notNullColumnNames_);
+      upstreamNode);
   VELOX_CHECK(!writeNode->supportsBarrier());
   return writeNode;
 }

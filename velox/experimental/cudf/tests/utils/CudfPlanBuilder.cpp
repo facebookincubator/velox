@@ -39,8 +39,7 @@ std::function<PlanNodePtr(std::string, PlanNodePtr)> addCudfTableWriter(
         false,
         TableWriteTraits::outputType(columnStatsSpec),
         commitStrategy,
-        std::move(source),
-        std::nullopt);
+        std::move(source));
   };
 }
 
@@ -82,7 +81,7 @@ std::function<PlanNodePtr(std::string, PlanNodePtr)> cudfTableWrite(
         CudfHiveConnectorTestBase::makeCudfHiveInsertTableHandle(
             rowType->names(), rowType->children(), locationHandle, compression);
     auto insertHandle = std::make_shared<core::InsertTableHandle>(
-        std::string(connectorId), parquetHandle);
+        std::string(connectorId), parquetHandle, std::nullopt);
 
     return std::make_shared<core::TableWriteNode>(
         nodeId,
@@ -93,8 +92,7 @@ std::function<PlanNodePtr(std::string, PlanNodePtr)> cudfTableWrite(
         false,
         TableWriteTraits::outputType(columnStatsSpec),
         facebook::velox::connector::CommitStrategy::kNoCommit,
-        std::move(source),
-        std::nullopt);
+        std::move(source));
   };
 }
 

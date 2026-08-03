@@ -134,8 +134,7 @@ TableWriterTestBase::addTableWriter(
         hasPartitioningScheme,
         TableWriteTraits::outputType(columnStatsSpec),
         commitStrategy,
-        std::move(source),
-        std::nullopt);
+        std::move(source));
   };
 }
 
@@ -530,7 +529,8 @@ TableWriterTestBase::createInsertTableHandle(
           makeLocationHandle(
               outputDirectoryPath, std::nullopt, outputTableType),
           fileFormat_,
-          compressionKind));
+          compressionKind),
+      std::nullopt);
 }
 
 // Returns a table insert plan node.

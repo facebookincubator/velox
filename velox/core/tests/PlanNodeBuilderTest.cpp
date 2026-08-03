@@ -370,8 +370,8 @@ TEST_F(PlanNodeBuilderTest, tableWriteNode) {
       std::vector<std::string>{"sum(c0)"});
   const auto outputType = TableWriteTraits::outputType(statsSpec);
 
-  const auto insertTableHandle =
-      std::make_shared<InsertTableHandle>("connector_id", nullptr);
+  const auto insertTableHandle = std::make_shared<InsertTableHandle>(
+      "connector_id", nullptr, std::nullopt);
 
   const auto verify = [&](const std::shared_ptr<const TableWriteNode>& node) {
     EXPECT_EQ(node->id(), id);

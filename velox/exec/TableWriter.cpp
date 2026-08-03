@@ -103,7 +103,8 @@ void TableWriter::setTypeMappings(
   mappedOutputType_ = ROW(folly::copy(outputNames), std::move(outputTypes));
   mappedInputType_ = ROW(std::move(outputNames), std::move(inputTypes));
 
-  const auto& notNullNames = tableWriteNode->notNullColumnNames();
+  const auto& notNullNames =
+      tableWriteNode->insertTableHandle()->notNullColumnNames();
   if (notNullNames.has_value()) {
     const folly::F14FastSet<std::string> notNullSet(
         notNullNames->begin(), notNullNames->end());
