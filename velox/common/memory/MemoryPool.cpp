@@ -668,10 +668,11 @@ void* MemoryPoolImpl::allocateAligned(int64_t size, uint32_t alignment) {
     release(alignedSize);
     VELOX_MEM_ALLOC_ERROR(
         fmt::format(
-            "allocateAligned failed with {} aligned to {} from {}",
+            "allocateAligned failed with {} aligned to {} from {} {}",
             succinctBytes(size),
             alignment,
-            toString()));
+            toString(),
+            allocator_->getAndClearFailureMessage()));
   }
   return buffer;
 }
