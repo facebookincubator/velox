@@ -1329,6 +1329,61 @@ TEST_F(CudfNestedLoopJoinTest, fullJoinMultiDriver) {
       "ON t.c0 < u.c0");
 }
 
+// Full join with output columns from only one side: exercises the mismatch
+// emission path when probeColumnIndicesToGather_ or
+// buildColumnIndicesToGather_ is empty. Previously, apply_boolean_mask on a
+// zero-column table returned 0 rows, silently dropping mismatch rows.
+TEST_F(CudfNestedLoopJoinTest, fullJoinOneSidedOutput) {
+  auto probeVectors = makeRowVector(
+      {"p0", "p1"},
+      {makeFlatVector<int32_t>({1, 2, 3}),
+       makeFlatVector<int32_t>({10, 20, 30})});
+  auto buildVectors = makeRowVector(
+      {"b0", "b1"},
+      {makeFlatVector<int32_t>({2, 4}), makeFlatVector<int32_t>({200, 400})});
+
+  createDuckDbTable("t", {probeVectors});
+  createDuckDbTable("u", {buildVectors});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  // Output only probe columns — build mismatch rows should still appear
+  // with null values for the probe columns.
+  auto probeOnlyPlan = PlanBuilder(planNodeIdGenerator)
+                           .values({probeVectors})
+                           .nestedLoopJoin(
+                               PlanBuilder(planNodeIdGenerator)
+                                   .values({buildVectors})
+                                   .planNode(),
+                               "p0 = b0",
+                               {"p0", "p1"},
+                               core::JoinType::kFull)
+                           .planNode();
+
+  assertQuery(
+      probeOnlyPlan,
+      "SELECT t.p0, t.p1 FROM t FULL OUTER JOIN u ON t.p0 = u.b0");
+
+  planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  // Output only build columns — probe mismatch rows should still appear
+  // with null values for the build columns.
+  auto buildOnlyPlan = PlanBuilder(planNodeIdGenerator)
+                           .values({probeVectors})
+                           .nestedLoopJoin(
+                               PlanBuilder(planNodeIdGenerator)
+                                   .values({buildVectors})
+                                   .planNode(),
+                               "p0 = b0",
+                               {"b0", "b1"},
+                               core::JoinType::kFull)
+                           .planNode();
+
+  assertQuery(
+      buildOnlyPlan,
+      "SELECT u.b0, u.b1 FROM t FULL OUTER JOIN u ON t.p0 = u.b0");
+}
+
 // --- LeftSemiProject join tests ---
 
 // LeftSemiProject with filter: probe rows + boolean match column.
@@ -1553,6 +1608,54 @@ TEST_F(CudfNestedLoopJoinTest, leftSemiProjectMultiDriver) {
       "SELECT t.c0, EXISTS "
       "(SELECT 1 FROM UNNEST(ARRAY[3, 7, 3, 7]) AS u(c0) "
       "WHERE t.c0 < u.c0) FROM t");
+}
+
+// Regression test for a race in CudfNestedLoopJoinProbe::waitForBuildReady:
+// joinWithBuildBatch() grabs a fresh stream from cudfGlobalStreamPool() on
+// every call (once per probe batch), but this used to only wait on the
+// *first* such stream before discarding the build-ready event, leaving
+// later batches free to read build-side data before it was actually visible
+// on their stream. (The build-ready event is now created and recorded by
+// CudfNestedLoopJoinBuild itself, immediately when the build table is
+// materialized, rather than lazily by the probe - matching
+// CudfHashJoinProbe's waitForBuildReady()/buildReadyEvent_ pattern - so this
+// also guards against the event capturing a stale/recycled build stream.)
+// Uses many probe batches against a build side large enough to take
+// measurable GPU time, repeated several times, to exercise that ordering.
+// Every probe value has exactly one match in the build side, so any row
+// lost to the race shows up as a row-count mismatch.
+TEST_F(CudfNestedLoopJoinTest, buildStreamVisibleToAllProbeBatches) {
+  constexpr int32_t kNumBuildRows = 50'000;
+  constexpr int32_t kNumProbeBatches = 20;
+  constexpr int32_t kProbeBatchSize = 500;
+
+  auto buildVectors = {makeRowVector({sequence<int32_t>(kNumBuildRows)})};
+
+  std::vector<RowVectorPtr> probeVectors;
+  for (int32_t b = 0; b < kNumProbeBatches; ++b) {
+    probeVectors.push_back(makeRowVector(
+        {sequence<int32_t>(kProbeBatchSize, b * kProbeBatchSize)}));
+  }
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(probeVectors)
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(buildVectors)
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      "c0 = u_c0",
+                      {"c0", "u_c0"},
+                      core::JoinType::kInner)
+                  .planNode();
+
+  for (int i = 0; i < 15; ++i) {
+    assertQuery(plan, "SELECT t.c0, u.c0 FROM t, u WHERE t.c0 = u.c0");
+  }
 }
 
 // Test empty build always consumes probe input.

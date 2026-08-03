@@ -20,9 +20,9 @@
 
 #include <algorithm>
 
-#include <folly/hash/Checksum.h>
 #include <folly/json.h>
 #include <folly/lang/Bits.h>
+#include <zlib.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/common/DataBuffer.h"
@@ -81,9 +81,14 @@ std::string frameDeletionVector(const std::string& bitmap) {
   magicAndVector.append(kDeletionVectorMagic, kDeletionVectorMagicSize);
   magicAndVector.append(bitmap);
 
-  const uint32_t crc = folly::crc32(
-      reinterpret_cast<const uint8_t*>(magicAndVector.data()),
-      magicAndVector.size());
+  // Iceberg stores the standard CRC-32 (java.util.zip.CRC32) over magic +
+  // bitmap. zlib's crc32 is that same finalized IEEE 802.3 CRC-32.
+  uLong crcState = crc32(0L, Z_NULL, 0);
+  crcState = crc32(
+      crcState,
+      reinterpret_cast<const Bytef*>(magicAndVector.data()),
+      static_cast<uInt>(magicAndVector.size()));
+  const auto crc = static_cast<uint32_t>(crcState);
 
   std::string framed;
   framed.reserve(sizeof(uint32_t) + magicAndVector.size() + sizeof(uint32_t));

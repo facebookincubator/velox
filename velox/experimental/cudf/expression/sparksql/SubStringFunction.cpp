@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -129,16 +130,14 @@ class SubStringFunction : public CudfFunction {
       // Spark's 1-based positive start has already been normalized to cuDF's
       // 0-based start, and Spark start zero maps to cuDF start zero.
       auto clampedLength = std::max<cudf::size_type>(0, length_);
-      cudf::numeric_scalar<cudf::size_type> startScalar(
-          start_, true, stream, mr);
-      cudf::numeric_scalar<cudf::size_type> endScalar(
-          hasLength_ ? saturatingAddNonNegative(start_, clampedLength) : 0,
-          hasLength_,
-          stream,
-          mr);
-      cudf::numeric_scalar<cudf::size_type> stepScalar(1, true, stream, mr);
+      const auto start = std::optional<cudf::size_type>{start_};
+      const auto end = hasLength_
+          ? std::optional<cudf::size_type>{saturatingAddNonNegative(
+                start_, clampedLength)}
+          : std::nullopt;
+      const auto step = std::optional<cudf::size_type>{1};
       return cudf::strings::slice_strings(
-          inputColumn, startScalar, endScalar, stepScalar, stream, mr);
+          inputColumn, start, end, step, stream, mr);
     }
 
     cudf::column_view originalStartColumn;

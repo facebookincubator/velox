@@ -1839,6 +1839,14 @@ TEST_F(CastExprTest, decimalToDecimal) {
            72'000'000'000},
           DECIMAL(20, 11)));
 
+  // Reinterpret when scale is unchanged.
+  testCast(
+      shortFlat,
+      makeFlatVector<int64_t>({-3, -2, -1, 0, 55, 69, 72}, DECIMAL(18, 2)));
+  testCast(
+      longFlat,
+      makeFlatVector<int128_t>({-201, -109, 0, 105, 208}, DECIMAL(38, 2)));
+
   // short to long, scale down.
   testCast(
       makeFlatVector<int64_t>({-20'500, -190, 12'345, 19'999}, DECIMAL(6, 4)),
@@ -3172,106 +3180,11 @@ TEST_F(CastExprTest, timeToVarcharCast) {
 }
 
 TEST_F(CastExprTest, timeToBigintCast) {
-  {
-    // Test casting TIME to BIGINT
-
-    // Test various TIME values (milliseconds since midnight)
-    // 0 = 00:00:00.000
-    // 3661000 = 01:01:01.000
-    // 43200000 = 12:00:00.000 (noon)
-    // 86399999 = 23:59:59.999
-    auto timeVector =
-        makeFlatVector<int64_t>({0, 3661000, 43200000, 86399999}, TIME());
-
-    auto result = evaluate<FlatVector<int64_t>>(
-        "cast(c0 as bigint)", makeRowVector({timeVector}));
-
-    // Should return the same values since TIME is already stored as int64_t
-    // milliseconds
-    auto expected = makeFlatVector<int64_t>({0, 3661000, 43200000, 86399999});
-
-    assertEqualVectors(expected, result);
-  }
-
-  {
-    // Test casting TIME to BIGINT with nulls
-    auto timeVector = makeNullableFlatVector<int64_t>(
-        {0, std::nullopt, 43200000, std::nullopt}, TIME());
-
-    auto result = evaluate<FlatVector<int64_t>>(
-        "cast(c0 as bigint)", makeRowVector({timeVector}));
-
-    auto expected = makeNullableFlatVector<int64_t>(
-        {0, std::nullopt, 43200000, std::nullopt});
-
-    assertEqualVectors(expected, result);
-  }
-
-  {
-    // Test try_cast for TIME to BIGINT
-    auto timeVector = makeFlatVector<int64_t>({0, 43200000}, TIME());
-
-    auto result = evaluate<FlatVector<int64_t>>(
-        "try_cast(c0 as bigint)", makeRowVector({timeVector}));
-
-    auto expected = makeFlatVector<int64_t>({0, 43200000});
-
-    assertEqualVectors(expected, result);
-  }
-
-  {
-    // Test constant TIME vector cast to BIGINT (non-null)
-    // This tests the optimization path for constant vectors
-    auto constantTimeVector = BaseVector::wrapInConstant(
-        1000, 0, makeFlatVector<int64_t>({43200000}, TIME()));
-
-    auto result =
-        evaluate("cast(c0 as bigint)", makeRowVector({constantTimeVector}));
-
-    // Should return a constant vector with the same value
-    auto expected = BaseVector::wrapInConstant(
-        1000, 0, makeFlatVector<int64_t>({43200000}));
-
-    assertEqualVectors(expected, result);
-    // Verify the result is actually constant-encoded (optimization worked)
-    ASSERT_TRUE(result->isConstantEncoding());
-  }
-
-  {
-    // Test constant TIME vector cast to BIGINT (null)
-    // This tests the optimization path for null constant vectors
-    auto nullTimeVector = BaseVector::createNullConstant(TIME(), 500, pool());
-
-    auto result =
-        evaluate("cast(c0 as bigint)", makeRowVector({nullTimeVector}));
-
-    // Should return a null constant vector
-    auto expected = BaseVector::createNullConstant(BIGINT(), 500, pool());
-
-    assertEqualVectors(expected, result);
-    // Verify the result is actually constant-encoded (optimization worked)
-    ASSERT_TRUE(result->isConstantEncoding());
-    ASSERT_TRUE(result->isNullAt(0));
-  }
-
-  {
-    // Test constant TIME vector cast to BIGINT with different sizes
-    // This ensures the optimization correctly handles different vector sizes
-    for (auto size : {1, 10, 100, 1000}) {
-      auto constantTimeVector = BaseVector::wrapInConstant(
-          size, 0, makeFlatVector<int64_t>({86399999}, TIME()));
-
-      auto result =
-          evaluate("cast(c0 as bigint)", makeRowVector({constantTimeVector}));
-
-      auto expected = BaseVector::wrapInConstant(
-          size, 0, makeFlatVector<int64_t>({86399999}));
-
-      assertEqualVectors(expected, result);
-      ASSERT_TRUE(result->isConstantEncoding());
-      ASSERT_EQ(result->size(), size);
-    }
-  }
+  testCast<int64_t, int64_t>(
+      TIME(),
+      BIGINT(),
+      {0, 3'661'000, 43'200'000, 86'399'999, std::nullopt},
+      {0, 3'661'000, 43'200'000, 86'399'999, std::nullopt});
 }
 
 TEST_F(CastExprTest, varcharToTimeCast) {
