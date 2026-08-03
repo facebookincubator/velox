@@ -37,6 +37,9 @@ class HashProbe : public Operator {
   /// Number of local Bloom-filter tests that required a hash table lookup.
   static constexpr std::string_view kBloomFilterAcceptedRows =
       "bloomFilterAcceptedRows";
+  /// Number of times local Bloom filter probing was bypassed after sampling.
+  static constexpr std::string_view kBloomFilterBypassed =
+      "bloomFilterBypassed";
   /// Number of rows bypassed via dynamic filter replacement.
   static constexpr std::string_view kReplacedWithDynamicFilterRows =
       "replacedWithDynamicFilterRows";

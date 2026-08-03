@@ -510,6 +510,9 @@ void HashProbe::applyBloomFilterForJoinProbe() {
     if (bloomFilterSampledRows_ >= bypassBloomFilterMinRows_) {
       bypassBloomFilter_ = bloomFilterSampleAcceptedRows_ * 100 >=
           bloomFilterSampledRows_ * bypassBloomFilterMinPct_;
+      if (bypassBloomFilter_) {
+        addRuntimeStat(std::string(kBloomFilterBypassed), RuntimeCounter(1));
+      }
     }
   }
 

@@ -891,7 +891,8 @@ class QueryConfig {
       "Maximum byte size of Bloom filter from hash probe. 0 disables.")
 
   /// Number of probe rows used to decide whether to bypass the build-side
-  /// Bloom filter. 0 disables local Bloom filter probing.
+  /// Bloom filter for left joins and non-null-aware left semi-project and left
+  /// anti joins. 0 disables local Bloom filter probing.
   VELOX_QUERY_CONFIG(
       kBypassHashProbeBloomFilterMinRows,
       bypassHashProbeBloomFilterMinRows,
@@ -899,7 +900,8 @@ class QueryConfig {
       int32_t,
       0,
       "Number of probe rows used to decide whether to bypass the build-side "
-      "Bloom filter. 0 disables local Bloom filter probing.")
+      "Bloom filter for left joins and non-null-aware left semi-project and "
+      "left anti joins. 0 disables local Bloom filter probing.")
 
   /// Bypass the build-side Bloom filter if its acceptance percentage meets
   /// or exceeds this value. 0 bypasses the Bloom filter without sampling.

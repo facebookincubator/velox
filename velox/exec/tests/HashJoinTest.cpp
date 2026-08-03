@@ -2143,8 +2143,13 @@ TEST_P(HashJoinTest, bypassBloomFilterLocalProbe) {
               getOperatorRuntimeStats(
                   task, 1, std::string(HashProbe::kBloomFilterAcceptedRows))
                   .sum;
+          const auto bypassed =
+              getOperatorRuntimeStats(
+                  task, 1, std::string(HashProbe::kBloomFilterBypassed))
+                  .sum;
           EXPECT_EQ(100, testedRows);
           EXPECT_EQ(100, acceptedRows);
+          EXPECT_EQ(1, bypassed);
         })
         .run();
   }

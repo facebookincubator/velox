@@ -177,7 +177,8 @@ Generic Configuration
      - integer
      - 0
      - The number of probe rows used to decide whether to bypass the build-side
-       Bloom filter. When set to 0, local Bloom filter probing is disabled.
+       Bloom filter for left joins and non-null-aware left semi-project and left
+       anti joins. When set to 0, local Bloom filter probing is disabled.
    * - bypass_hash_probe_bloom_filter_min_pct
      - integer
      - 85
