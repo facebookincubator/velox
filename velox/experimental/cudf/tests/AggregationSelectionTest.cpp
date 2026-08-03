@@ -669,8 +669,8 @@ TEST_F(CudfAggregationSelectionTest, distinctAggregationsRejected) {
   ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
 }
 
-// Test `mask` clauses should be rejected
-TEST_F(CudfAggregationSelectionTest, filterMaskClausesRejected) {
+// Masked sum is supported at raw-input steps.
+TEST_F(CudfAggregationSelectionTest, maskedSumAccepted) {
   auto plan = PlanBuilder()
                   .values({makeRowVector({
                       makeFlatVector<int64_t>({1, 2, 3}),
@@ -684,24 +684,83 @@ TEST_F(CudfAggregationSelectionTest, filterMaskClausesRejected) {
                       core::AggregationNode::Step::kSingle,
                       false)
                   .planNode();
+  auto node = std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+  auto aggs = node->aggregates();
+  aggs[0].mask = std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c2");
+  auto masked =
+      core::AggregationNode::Builder(*node).aggregates(std::move(aggs)).build();
+  ASSERT_TRUE(canBeEvaluatedByCudf(*masked, queryCtx_.get()));
+}
 
-  auto aggregationNode =
-      std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+// Masked avg falls back to CPU (excluded in this PR).
+TEST_F(CudfAggregationSelectionTest, maskedAvgRejected) {
+  auto plan = PlanBuilder()
+                  .values({makeRowVector({
+                      makeFlatVector<int64_t>({1, 2, 3}),
+                      makeFlatVector<int64_t>({10, 20, 30}),
+                      makeFlatVector<bool>({true, false, true}),
+                  })})
+                  .aggregation(
+                      {"c0"},
+                      {"avg(c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .planNode();
+  auto node = std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+  auto aggs = node->aggregates();
+  aggs[0].mask = std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c2");
+  auto masked =
+      core::AggregationNode::Builder(*node).aggregates(std::move(aggs)).build();
+  ASSERT_FALSE(canBeEvaluatedByCudf(*masked, queryCtx_.get()));
+}
 
-  ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+// A non-boolean mask falls back to CPU.
+TEST_F(CudfAggregationSelectionTest, maskedNonBooleanRejected) {
+  auto plan = PlanBuilder()
+                  .values({makeRowVector({
+                      makeFlatVector<int64_t>({1, 2, 3}),
+                      makeFlatVector<int64_t>({10, 20, 30}),
+                  })})
+                  .aggregation(
+                      {"c0"},
+                      {"sum(c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .planNode();
+  auto node = std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+  auto aggs = node->aggregates();
+  aggs[0].mask = std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c1");
+  auto masked =
+      core::AggregationNode::Builder(*node).aggregates(std::move(aggs)).build();
+  ASSERT_FALSE(canBeEvaluatedByCudf(*masked, queryCtx_.get()));
+}
 
-  // Manually create a modified aggregation with a mask
-  auto modifiedAggregates = aggregationNode->aggregates();
-  ASSERT_FALSE(modifiedAggregates.empty());
-
-  modifiedAggregates[0].mask =
-      std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c2");
-
-  auto modifiedNode = core::AggregationNode::Builder(*aggregationNode)
-                          .aggregates(std::move(modifiedAggregates))
-                          .build();
-
-  ASSERT_FALSE(canBeEvaluatedByCudf(*modifiedNode, queryCtx_.get()));
+// Masked approx_distinct falls back: it is reduce-only and ignores the mask,
+// so the allowlist gate (sum/count/min/max only) must reject it.
+TEST_F(CudfAggregationSelectionTest, maskedApproxDistinctRejected) {
+  auto plan = PlanBuilder()
+                  .values({makeRowVector({
+                      makeFlatVector<int64_t>({1, 2, 3}),
+                      makeFlatVector<int64_t>({10, 20, 30}),
+                      makeFlatVector<bool>({true, false, true}),
+                  })})
+                  .aggregation(
+                      {},
+                      {"approx_distinct(c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .planNode();
+  auto node = std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+  // Unmasked approx_distinct is supported on the cuDF reduce path.
+  ASSERT_TRUE(canBeEvaluatedByCudf(*node, queryCtx_.get()));
+  auto aggs = node->aggregates();
+  aggs[0].mask = std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c2");
+  auto masked =
+      core::AggregationNode::Builder(*node).aggregates(std::move(aggs)).build();
+  ASSERT_FALSE(canBeEvaluatedByCudf(*masked, queryCtx_.get()));
 }
 
 // Test return type validation
