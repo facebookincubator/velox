@@ -1443,5 +1443,114 @@ TEST_F(IcebergReadTest, flatMapAsStruct) {
       .assertResults({expected});
 }
 
+TEST_F(IcebergReadTest, filterPushdownWithInitialDefaultInFilterColumnHandles) {
+  // Test's a scenario where filter on default value column is used in the query
+  // TABLE = [id int , country varchar(defaultValue='IN')]
+  // QUERY = SELECT id FROM table WHERE country = 'IN'
+  // When filter pushdown is enabled, column handle for 'country' is present
+  // only in filterColumnHandles_ of HiveTableHandle. adaptColumns was searching
+  // only in columnHandles_ for the default value, missing it and creating null
+  // vector.
+
+  // Old data file: only the 'id' column present.
+  std::vector<RowVectorPtr> dataVectors = {
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})};
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(dataFilePath->getPath(), dataVectors);
+
+  auto outputType = ROW({"id"}, {BIGINT()});
+
+  ColumnHandleMap assignments;
+  assignments["id"] = makeIcebergHandle("id", BIGINT(), 1);
+
+  // filterColumnHandles carries country WITH initialDefaultValue="IN".
+  std::vector<HiveColumnHandlePtr> filterHandles = {
+      makeIcebergHandle("country", VARCHAR(), 2, "IN")};
+
+  // Expected: all 3 rows (country filter passes via default constant).
+  std::vector<RowVectorPtr> allRowsIN = {
+      makeRowVector(outputType->names(), {makeFlatVector<int64_t>({1, 2, 3})})};
+
+  // Full schema used for subfieldFilter expression parsing (country must be
+  // reachable even though it is not in outputType).
+  auto fullSchema = ROW({"id", "country"}, {BIGINT(), VARCHAR()});
+
+  auto assertFilter =
+      [&](const std::string& subfieldFilter,
+          const std::vector<RowVectorPtr>& expected,
+          const std::vector<std::shared_ptr<ConnectorSplit>>& splits,
+          int32_t numSplitsSkipped = 0) {
+        auto plan = exec::test::PlanBuilder()
+                        .startTableScan()
+                        .connectorId(test::kIcebergConnectorId)
+                        .outputType(outputType)
+                        .dataColumns(fullSchema)
+                        .assignments(assignments)
+                        .filterColumnHandles(filterHandles)
+                        .subfieldFilter(subfieldFilter)
+                        .endTableScan()
+                        .planNode();
+        auto task =
+            exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(
+                expected);
+        ASSERT_EQ(
+            task->taskStats()
+                .pipelineStats[0]
+                .operatorStats[0]
+                .runtimeStats["skippedSplits"]
+                .sum,
+            numSplitsSkipped)
+            << "Unexpected skipped splits for filter: " << subfieldFilter;
+      };
+
+  // Bug scenario: country absent from file, assignments handle has no default.
+  // Without fix: adaptColumns finds no default → sets NULL → testFilters skips
+  //              file (NULL != 'IN') → 0 rows, numSplitsSkipped=1. WRONG.
+  // With fix:    adaptColumns finds default 'IN' in filterColumnHandles →
+  //              constant 'IN' → testFilters passes → 3 rows. CORRECT.
+  // Note: splits must be recreated for each assertFilter call — ConnectorSplit
+  // objects have their dataSource set during execution and cannot be reused.
+  assertFilter(
+      "country = 'IN'",
+      allRowsIN,
+      makeIcebergSplits(dataFilePath->getPath()),
+      /*numSplitsSkipped=*/0);
+
+  // Non-matching default: constant 'IN' != 'US' → file skipped regardless.
+  assertFilter(
+      "country = 'US'",
+      {},
+      makeIcebergSplits(dataFilePath->getPath()),
+      /*numSplitsSkipped=*/1);
+
+  // New file written AFTER ALTER TABLE: country physically present = 'US'.
+  // Output still only has {id} — country is filter-only.
+  std::vector<RowVectorPtr> newData = {makeRowVector(
+      {"id", "country"},
+      {makeFlatVector<int64_t>({4, 5}),
+       makeFlatVector<std::string>({"US", "US"})})};
+  auto newFilePath = TempFilePath::create();
+  writeToFile(newFilePath->getPath(), newData);
+
+  auto makeTwoSplits = [&]() {
+    auto s1 = makeIcebergSplits(dataFilePath->getPath());
+    auto s2 = makeIcebergSplits(newFilePath->getPath());
+    s1.insert(s1.end(), s2.begin(), s2.end());
+    return s1;
+  };
+
+  // country='IN': old file passes (constant 'IN'), new file skipped ('US').
+  // 1 split skipped, rows {1,2,3} from old file.
+  assertFilter(
+      "country = 'IN'", allRowsIN, makeTwoSplits(), /*numSplitsSkipped=*/1);
+
+  // country='US': old file skipped (constant 'IN'!='US'), new file passes.
+  // 1 split skipped, rows {4,5} from new file.
+  std::vector<RowVectorPtr> newRowsUS = {
+      makeRowVector(outputType->names(), {makeFlatVector<int64_t>({4, 5})})};
+  assertFilter(
+      "country = 'US'", newRowsUS, makeTwoSplits(), /*numSplitsSkipped=*/1);
+}
+
 } // namespace
 } // namespace facebook::velox::connector::hive::iceberg
