@@ -134,8 +134,7 @@ TableWriterTestBase::addTableWriter(
         hasPartitioningScheme,
         TableWriteTraits::outputType(columnStatsSpec),
         commitStrategy,
-        std::move(source),
-        std::nullopt);
+        std::move(source));
   };
 }
 

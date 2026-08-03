@@ -3078,8 +3078,7 @@ TableWriteNode::TableWriteNode(
     bool hasPartitioningScheme,
     RowTypePtr outputType,
     connector::CommitStrategy commitStrategy,
-    const PlanNodePtr& source,
-    std::optional<std::vector<std::string>> notNullColumnNames)
+    const PlanNodePtr& source)
     : PlanNode(id),
       sources_{source},
       columns_{columns},
@@ -3088,8 +3087,7 @@ TableWriteNode::TableWriteNode(
       insertTableHandle_(std::move(insertTableHandle)),
       hasPartitioningScheme_(hasPartitioningScheme),
       outputType_(std::move(outputType)),
-      commitStrategy_(commitStrategy),
-      notNullColumnNames_(std::move(notNullColumnNames)) {
+      commitStrategy_(commitStrategy) {
   VELOX_USER_CHECK_NOT_NULL(sources_[0]);
   VELOX_USER_CHECK_NOT_NULL(insertTableHandle_);
   VELOX_USER_CHECK_EQ(columns_->size(), columnNames_.size());
@@ -3099,10 +3097,11 @@ TableWriteNode::TableWriteNode(
         "Column not found in TableWrite input: {}",
         column);
   }
-  if (notNullColumnNames_.has_value()) {
+  const auto& notNullColumnNames = insertTableHandle_->notNullColumnNames();
+  if (!notNullColumnNames.empty()) {
     const folly::F14FastSet<std::string> columnNameSet(
         columnNames_.begin(), columnNames_.end());
-    for (const auto& name : notNullColumnNames_.value()) {
+    for (const auto& name : notNullColumnNames) {
       VELOX_USER_CHECK(
           columnNameSet.count(name) > 0,
           "NOT NULL column is not in the table schema: {}",
@@ -3164,9 +3163,10 @@ void TableWriteNode::addDetails(std::stringstream& stream) const {
     stream << ", ";
     addStatsSpecDetails(stream, columnStatsSpec_);
   }
-  if (notNullColumnNames_.has_value()) {
-    stream << ", notNullColumns: ["
-           << folly::join(", ", notNullColumnNames_.value()) << "]";
+  const auto& notNullColumnNames = insertTableHandle_->notNullColumnNames();
+  if (!notNullColumnNames.empty()) {
+    stream << ", notNullColumns: [" << folly::join(", ", notNullColumnNames)
+           << "]";
   }
 }
 
@@ -3243,9 +3243,9 @@ folly::dynamic TableWriteNode::serialize() const {
   obj["outputType"] = outputType_->serialize();
   obj["commitStrategy"] =
       std::string(connector::CommitStrategyName::toName(commitStrategy_));
-  if (notNullColumnNames_.has_value()) {
+  if (!insertTableHandle_->notNullColumnNames().empty()) {
     obj["notNullColumnNames"] =
-        ISerializable::serialize(notNullColumnNames_.value());
+        ISerializable::serialize(insertTableHandle_->notNullColumnNames());
   }
   return obj;
 }
@@ -3274,7 +3274,7 @@ PlanNodePtr TableWriteNode::create(const folly::dynamic& obj, void* context) {
   if (obj.count("columnStatsSpec") != 0) {
     columnStatsSpec = ColumnStatsSpec::create(obj["columnStatsSpec"], context);
   }
-  std::optional<std::vector<std::string>> notNullColumnNames;
+  std::vector<std::string> notNullColumnNames;
   if (obj.count("notNullColumnNames") != 0) {
     notNullColumnNames = ISerializable::deserialize<std::vector<std::string>>(
         obj["notNullColumnNames"]);
@@ -3285,12 +3285,13 @@ PlanNodePtr TableWriteNode::create(const folly::dynamic& obj, void* context) {
       columnNames,
       std::move(columnStatsSpec),
       std::make_shared<InsertTableHandle>(
-          connectorId, connectorInsertTableHandle),
+          connectorId,
+          connectorInsertTableHandle,
+          std::move(notNullColumnNames)),
       hasPartitioningScheme,
       outputType,
       commitStrategy,
-      deserializeSingleSource(obj, context),
-      std::move(notNullColumnNames));
+      deserializeSingleSource(obj, context));
 }
 
 TableWriteMergeNode::TableWriteMergeNode(

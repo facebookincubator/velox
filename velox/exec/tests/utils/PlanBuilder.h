@@ -658,7 +658,7 @@ class PlanBuilder {
     bool ensureFiles_{false};
     connector::CommitStrategy commitStrategy_{
         connector::CommitStrategy::kNoCommit};
-    std::optional<std::vector<std::string>> notNullColumnNames_;
+    std::vector<std::string> notNullColumnNames_;
   };
 
   /// Start a TableWriterBuilder.

@@ -78,7 +78,9 @@ std::shared_ptr<core::InsertTableHandle> createInsertTableHanlde(
     const core::TableWriteNode* node,
     std::string targetDir) {
   return std::make_shared<core::InsertTableHandle>(
-      connectorId, makeHiveInsertTableHandle(node, std::move(targetDir)));
+      connectorId,
+      makeHiveInsertTableHandle(node, std::move(targetDir)),
+      node->insertTableHandle()->notNullColumnNames());
 }
 } // namespace
 
@@ -99,7 +101,6 @@ core::PlanNodePtr TableWriterReplayer::createPlanNode(
       tableWriterNode->hasPartitioningScheme(),
       TableWriteTraits::outputType(tableWriterNode->columnStatsSpec()),
       tableWriterNode->commitStrategy(),
-      source,
-      tableWriterNode->notNullColumnNames());
+      source);
 }
 } // namespace facebook::velox::tool::trace
