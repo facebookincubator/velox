@@ -36,7 +36,7 @@ velox_add_cudf_test(
   SOURCES
     Main.cpp
     CudfIcebergReadTest.cpp
-    CudfIcebergExpressionTransformersTest.cpp
+    CudfIcebergFilterTransformTest.cpp
     CudfEqualityDeleteFileReaderTest.cpp
     CudfIcebergGapTests.cpp
   LIBS

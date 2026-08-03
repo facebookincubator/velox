@@ -137,8 +137,9 @@ void CudfIcebergSplitReader::setupReader() {
 }
 
 cudf::ast::expression const* CudfIcebergSplitReader::pushdownFilter() const {
-  if (pushdownFilter_) {
-    return pushdownFilter_->expression();
+  // Return pushdown filter or the original filter if it is not deferred.
+  if (pushdownFilter_.has_value()) {
+    return pushdownFilter_->expr;
   }
   return deferSubfieldFilter_ ? nullptr : subfieldFilter();
 }
@@ -207,15 +208,22 @@ bool CudfIcebergSplitReader::needPrependedRowIndex() const {
 
 void CudfIcebergSplitReader::prepareSubfieldFilter() {
   auto* originalFilter = CudfSplitReader::subfieldFilter();
-  if (originalFilter == nullptr or injectedColumns_.empty()) {
+  if (originalFilter == nullptr) {
     return;
   }
 
+  // Defer the original filter to the very end if there are no columns to read
   if (noColumnsToRead_) {
     deferSubfieldFilter_ = true;
     return;
   }
 
+  // No injected columns, push the original filter as is
+  if (injectedColumns_.empty()) {
+    return;
+  }
+
+  // Gather injected column indices
   std::vector<cudf::size_type> injectedColumnIndices;
   injectedColumnIndices.reserve(injectedColumns_.size());
   for (const auto& column : injectedColumns_) {
@@ -223,10 +231,15 @@ void CudfIcebergSplitReader::prepareSubfieldFilter() {
         static_cast<cudf::size_type>(column.outputIndex));
   }
 
-  auto transformed = std::make_unique<CudfIcebergExpressionTransformer>(
-      *originalFilter, std::move(injectedColumnIndices));
-  deferSubfieldFilter_ = transformed->referencesInjectedColumn();
-  if (transformed->changed() and transformed->expression() != nullptr) {
+  // Compute the transformed filter
+  auto transformed =
+      transformFilterForInjectedColumns(*originalFilter, injectedColumnIndices);
+
+  // Defer the original filter if it references an injected column.
+  deferSubfieldFilter_ = transformed.referencesInjectedColumn;
+
+  // Pushdown the transformed filter if available
+  if (transformed.expr != nullptr) {
     pushdownFilter_ = std::move(transformed);
   }
 }
