@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/core/PlanNode.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 
 #include <string>
@@ -36,6 +37,10 @@ using StepAwareAggregationRegistry = std::unordered_map<
 /// Runtime aggregation registries keyed by physical execution kind.
 StepAwareAggregationRegistry& getGroupbyAggregationRegistry();
 StepAwareAggregationRegistry& getReduceAggregationRegistry();
+
+/// Return aggregate function signatures exported from CUDF registries.
+/// Exhaustive expression metadata for AST/JIT evaluators is follow-up work.
+exec::AggregateFunctionSignatureMap getCudfAggregationFunctionSignatureMap();
 
 /// Shared registration helpers used to populate a target physical registry.
 bool registerAggregationFunctionForStep(
