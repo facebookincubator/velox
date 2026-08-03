@@ -216,7 +216,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   bool noColumnsToRead_{false};
   bool syntheticTableProduced_{false};
 
-  // Whether the original subfield filter is deferred to post table read.
+  // Whether the original pushdown filter is deferred to post table read.
   bool deferSubfieldFilter_{false};
 
   // Filter over the read columns pushed to cuDF reader. Empty when the original
