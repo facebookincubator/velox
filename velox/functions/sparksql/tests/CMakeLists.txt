@@ -90,6 +90,7 @@ add_executable(
   UpperLowerTest.cpp
   UuidTest.cpp
   VarcharTypeWriteSideCheckTest.cpp
+  XPathFunctionsTest.cpp
   XxHash64Test.cpp
 )
 velox_add_test_headers(velox_functions_spark_test JsonTestUtil.h)

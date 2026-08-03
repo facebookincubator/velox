@@ -671,6 +671,9 @@ endif()
 velox_set_source(simdjson)
 velox_resolve_dependency(simdjson 4.1.0)
 
+velox_set_source(LibXml2)
+velox_resolve_dependency(LibXml2)
+
 velox_set_source(FastFloat)
 velox_resolve_dependency(FastFloat)
 
