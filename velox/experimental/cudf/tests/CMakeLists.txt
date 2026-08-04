@@ -313,6 +313,23 @@ add_test(
 set_tests_properties(velox_cudf_gpu_types_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
 target_link_libraries(velox_cudf_gpu_types_test gtest gtest_main)
 
+# GPU SFI -- registration bookkeeping. Runs on the host: the launchers under
+# test are stand-ins that are never invoked, so what is exercised is that the
+# registry reproduces the parts of Velox's registration contract that dialect
+# separation depends on.
+add_executable(velox_cudf_gpu_function_registry_test GpuFunctionRegistryTest.cpp)
+add_test(
+  NAME velox_cudf_gpu_function_registry_test
+  COMMAND velox_cudf_gpu_function_registry_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(velox_cudf_gpu_function_registry_test
+                     PROPERTIES LABELS cuda_driver TIMEOUT 300)
+target_link_libraries(
+  velox_cudf_gpu_function_registry_test velox_cudf_gpu_function_bridge gtest
+  gtest_main
+)
+
 # GPU SFI foundation -- compile-only test that Velox SFI simple function
 # headers (Arithmetic.h, Bitwise.h, Comparisons.h) can be instantiated
 # under nvcc once the gpu_shadows/ include path precedes the Velox
