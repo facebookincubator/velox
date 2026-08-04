@@ -1343,6 +1343,35 @@ TEST_F(ParquetWriterTest, dictionaryPassthroughVarcharLowCardinality) {
   assertFlattenedRoundTrip(makeRowVector({dictVector}));
 }
 
+// Dictionary passthrough must not require the caller to supply an Arrow memory
+// pool. writeArrowDictionary() runs arrow::compute (Unique/Take) to compute
+// page statistics, and those kernels dereference the write context's pool. When
+// no pool is provided the writer must fall back to a valid default; otherwise a
+// null pool aborts in arrow/util/hashing.h ("Check failed: (pool) != nullptr").
+// Uses a low-cardinality dictionary so the writer keeps dictionary encoding
+// active and takes the passthrough path rather than falling back to dense.
+TEST_F(ParquetWriterTest, dictionaryPassthroughWithoutArrowMemoryPool) {
+  constexpr vector_size_t kSize = 10'000;
+  constexpr int kDictSize = 10;
+
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("val_{}", i);
+  }
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+  auto dictVector = makeDictionaryColumn(
+      kSize, dictionary, [](auto row) { return row % kDictSize; });
+
+  // Explicitly leave ParquetWriterOptions::arrowMemoryPool unset (nullptr).
+  ParquetWriterOptions writerOptions;
+  ASSERT_EQ(writerOptions.arrowMemoryPool, nullptr);
+
+  auto data = makeRowVector({dictVector});
+  auto expected = makeRowVector({flatten(dictVector)});
+  assertRoundTrip(data, expected, writerOptions);
+}
+
 // Verifies round-trip correctness with high-cardinality VARCHAR dictionary
 // (all unique values).  The Arrow Parquet writer may abandon dictionary
 // encoding and fall back to PLAIN.

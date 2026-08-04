@@ -453,6 +453,15 @@ Writer::Writer(
   setMemoryReclaimers();
   writeInt96AsTimestamp_ = parquetWriterOptions.writeInt96AsTimestamp;
   arrowMemoryPool_ = parquetWriterOptions.arrowMemoryPool;
+  // The Arrow memory pool is optional. When it is not provided, fall back to
+  // Arrow's default pool so the Arrow write path always has a valid allocator.
+  // Dictionary passthrough relies on arrow::compute (Unique/Take) while
+  // computing page statistics, and those kernels dereference the pool; a null
+  // pool aborts in arrow/util/hashing.h ("Check failed: (pool) != (nullptr)").
+  if (arrowMemoryPool_ == nullptr) {
+    arrowMemoryPool_ = std::shared_ptr<::arrow::MemoryPool>(
+        ::arrow::default_memory_pool(), [](::arrow::MemoryPool*) {});
+  }
   parquetFieldIds_ = parquetWriterOptions.parquetFieldIds;
 }
 
