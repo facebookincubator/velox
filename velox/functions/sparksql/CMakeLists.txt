@@ -72,6 +72,7 @@ velox_add_library(
   ConvertTimezone.h
   DateTimeFunctions.h
   DecimalArithmetic.h
+  DecimalArithmeticFunctions.h
   DecimalCeil.h
   DecimalUtil.h
   Factorial.h
