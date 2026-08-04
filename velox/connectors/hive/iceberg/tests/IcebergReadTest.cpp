@@ -391,9 +391,9 @@ TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
           ROW({"enabled", "id"}, {BOOLEAN(), BIGINT()}),
           ROW({"id", "flag", "status"}, {BIGINT(), BOOLEAN(), VARCHAR()}),
           {
-              {"id", "id", BIGINT(), makeFieldId(1)},
-              {"enabled", "flag", BOOLEAN(), makeFieldId(2)},
-              {"status", "status", VARCHAR(), makeFieldId(3)},
+              {"id", "id", BIGINT(), makeFieldId(1), {}},
+              {"enabled", "flag", BOOLEAN(), makeFieldId(2), {}},
+              {"status", "status", VARCHAR(), makeFieldId(3), {}},
           },
           makeRowVector(
               {"enabled", "id"},
@@ -407,10 +407,10 @@ TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
           ROW({"id", "flag", "status", "score"},
               {BIGINT(), BOOLEAN(), VARCHAR(), INTEGER()}),
           {
-              {"id", "id", BIGINT(), makeFieldId(1)},
-              {"flag", "flag", BOOLEAN(), makeFieldId(2)},
-              {"status", "status", VARCHAR(), makeFieldId(3)},
-              {"score", "score", INTEGER(), makeFieldId(4)},
+              {"id", "id", BIGINT(), makeFieldId(1), {}},
+              {"flag", "flag", BOOLEAN(), makeFieldId(2), {}},
+              {"status", "status", VARCHAR(), makeFieldId(3), {}},
+              {"score", "score", INTEGER(), makeFieldId(4), {}},
           },
           makeRowVector(
               {"id", "flag", "status", "score"},
@@ -425,8 +425,8 @@ TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
           ROW({"id", "status"}, {BIGINT(), VARCHAR()}),
           ROW({"id", "status"}, {BIGINT(), VARCHAR()}),
           {
-              {"id", "id", BIGINT(), makeFieldId(1)},
-              {"status", "status", VARCHAR(), makeFieldId(3)},
+              {"id", "id", BIGINT(), makeFieldId(1), {}},
+              {"status", "status", VARCHAR(), makeFieldId(3), {}},
           },
           makeRowVector(
               {"id", "status"},
@@ -438,7 +438,7 @@ TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
           ROW({"score"}, {INTEGER()}),
           ROW({"score"}, {INTEGER()}),
           {
-              {"score", "score", INTEGER(), makeFieldId(4)},
+              {"score", "score", INTEGER(), makeFieldId(4), {}},
           },
           makeRowVector(
               {"score"},
@@ -450,8 +450,8 @@ TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
           ROW({"id", "status"}, {BIGINT(), BOOLEAN()}),
           ROW({"id", "status"}, {BIGINT(), BOOLEAN()}),
           {
-              {"id", "id", BIGINT(), makeFieldId(1)},
-              {"status", "status", BOOLEAN(), makeFieldId(4)},
+              {"id", "id", BIGINT(), makeFieldId(1), {}},
+              {"status", "status", BOOLEAN(), makeFieldId(4), {}},
           },
           makeRowVector(
               {"id", "status"},
@@ -481,7 +481,7 @@ TEST_F(IcebergReadTest, readParquetFilterOnlyColumnByFieldId) {
           .outputType(ROW({"id"}, {BIGINT()}))
           .dataColumns(testData.writeType)
           .assignments(makeFieldIdAssignments({
-              {"id", "id", BIGINT(), makeFieldId(1)},
+              {"id", "id", BIGINT(), makeFieldId(1), {}},
           }))
           .filterColumnHandles({
               makeIcebergHandle("status", VARCHAR(), makeFieldId(3)),
@@ -573,8 +573,8 @@ TEST_F(IcebergReadTest, readParquetArrayByFieldId) {
             {"items",
              "items",
              nestedReadType->childAt(0),
-             makeFieldId(
-                 1, {makeFieldId(2, {makeFieldId(4), makeFieldId(3)})})},
+             makeFieldId(1, {makeFieldId(2, {makeFieldId(4), makeFieldId(3)})}),
+             {}},
         },
         {nestedExpected});
   }
@@ -596,7 +596,8 @@ TEST_F(IcebergReadTest, readParquetArrayByFieldId) {
             {"items",
              "items",
              nestedProjectedReadType->childAt(0),
-             makeFieldId(1, {makeFieldId(2, {makeFieldId(4)})})},
+             makeFieldId(1, {makeFieldId(2, {makeFieldId(4)})}),
+             {}},
         },
         {nestedProjectedExpected});
   }
@@ -645,7 +646,8 @@ TEST_F(IcebergReadTest, readParquetMapByFieldId) {
              makeFieldId(
                  1,
                  {makeFieldId(2),
-                  makeFieldId(3, {makeFieldId(5), makeFieldId(4)})})},
+                  makeFieldId(3, {makeFieldId(5), makeFieldId(4)})}),
+             {}},
         },
         {mapExpected});
   }
@@ -671,8 +673,8 @@ TEST_F(IcebergReadTest, readParquetMapByFieldId) {
             {"attributes",
              "attributes",
              mapProjectedReadType->childAt(0),
-             makeFieldId(
-                 1, {makeFieldId(2), makeFieldId(3, {makeFieldId(5)})})},
+             makeFieldId(1, {makeFieldId(2), makeFieldId(3, {makeFieldId(5)})}),
+             {}},
         },
         {mapProjectedExpected});
   }
