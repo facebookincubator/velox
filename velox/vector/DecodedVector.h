@@ -175,9 +175,15 @@ class DecodedVector {
     return indices_[idx];
   }
 
-  /// Returns a scalar value for the top-level row 'idx'.
+  /// Type of value returned depends on T. std::shared_ptr, the physical
+  /// representation of OPAQUE, is returned by const reference to avoid an
+  /// atomic refcount bump; every other type is returned by value.
   template <typename T>
-  T valueAt(vector_size_t idx) const {
+  using TValueAt = std::conditional_t<is_shared_ptr<T>::value, const T&, T>;
+
+  /// Returns the value for the top-level row 'idx'.
+  template <typename T>
+  TValueAt<T> valueAt(vector_size_t idx) const {
     return reinterpret_cast<const T*>(data_)[index(idx)];
   }
 
@@ -560,12 +566,12 @@ class DecodedVector {
 };
 
 template <>
-inline bool DecodedVector::valueAt(vector_size_t idx) const {
+inline bool DecodedVector::valueAt<bool>(vector_size_t idx) const {
   return bits::isBitSet(reinterpret_cast<const uint64_t*>(data_), index(idx));
 }
 
 template <>
-inline int128_t DecodedVector::valueAt(vector_size_t idx) const {
+inline int128_t DecodedVector::valueAt<int128_t>(vector_size_t idx) const {
   auto valuePosition =
       reinterpret_cast<const char*>(data_) + sizeof(int128_t) * index(idx);
   return HugeInt::deserialize(valuePosition);

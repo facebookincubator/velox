@@ -64,12 +64,50 @@ void RPCOperator::initialize() {
       "AsyncRPCFunctionRegistry::registerFunction() before query execution.",
       rpcNode_->functionName());
 
+  // Walk the RPC call's argument expressions once, in order, to build:
+  //  - argumentSources_: how addInput() sources each arg (column vs constant),
+  //  - inputTypes: each argument's Velox type,
+  //  - constantInputs: single-element constant vector for constant args and
+  //    nullptr for column args. This keeps AsyncRPCFunction::initialize()'s
+  //    interface unchanged (types + aligned constant values).
+  auto sourceType = rpcNode_->source()->outputType();
+  const auto& callInputs = rpcNode_->call()->inputs();
+  argumentSources_.reserve(callInputs.size());
+  std::vector<TypePtr> inputTypes;
+  std::vector<VectorPtr> constantInputs;
+  inputTypes.reserve(callInputs.size());
+  constantInputs.reserve(callInputs.size());
+  auto* pool = operatorCtx_->pool();
+  for (const auto& input : callInputs) {
+    inputTypes.push_back(input->type());
+    if (auto* field = input->asUnchecked<core::FieldAccessTypedExpr>()) {
+      const auto idx = sourceType->getChildIdx(field->name());
+      argumentSources_.push_back(
+          ArgumentSource{
+              .isConstant = false,
+              .sourceChannel = static_cast<column_index_t>(idx),
+          });
+      constantInputs.push_back(nullptr);
+    } else if (auto* constant = input->asUnchecked<core::ConstantTypedExpr>()) {
+      auto constantValue = constant->toConstantVector(pool);
+      constantInputs.push_back(constantValue);
+      argumentSources_.push_back(
+          ArgumentSource{
+              .isConstant = true,
+              .constantValue = std::move(constantValue),
+          });
+    } else {
+      VELOX_FAIL(
+          "RPC call argument must be a FieldAccessTypedExpr or "
+          "ConstantTypedExpr, got: {}",
+          input->toString());
+    }
+  }
+
   // Initialize the function with query config, argument types, and constants.
   // The function creates/caches its own transport and clients internally.
   function_->initialize(
-      operatorCtx_->driverCtx()->queryConfig(),
-      rpcNode_->argumentTypes(),
-      rpcNode_->constantInputs());
+      operatorCtx_->driverCtx()->queryConfig(), inputTypes, constantInputs);
 
   tierKey_ = function_->tierKey();
 
@@ -94,19 +132,11 @@ void RPCOperator::initialize() {
                          ? "BATCH"
                          : "PER_ROW");
 
-  // Precompute argument column indices for addInput().
-  const auto& argCols = rpcNode_->argumentColumns();
-  if (!argCols.empty()) {
-    auto sourceType = rpcNode_->source()->outputType();
-    argumentColumnIndices_.reserve(argCols.size());
-    for (const auto& colName : argCols) {
-      auto idx = sourceType->getChildIdx(colName);
-      argumentColumnIndices_.push_back(static_cast<column_index_t>(idx));
-    }
-    RPC_OP_VLOG(1) << "Initialized with " << argCols.size()
-                   << " argument columns";
+  if (!argumentSources_.empty()) {
+    RPC_OP_VLOG(1) << "Initialized with " << argumentSources_.size()
+                   << " call arguments";
   } else {
-    RPC_OP_VLOG(1) << "Initialized with no argument columns "
+    RPC_OP_VLOG(1) << "Initialized with no call arguments "
                    << "(fallback to all input columns)";
   }
 
@@ -152,12 +182,21 @@ void RPCOperator::addInput(RowVectorPtr input) {
 
   SelectivityVector rows(input->size());
 
-  // Read pre-computed argument columns by precomputed index.
+  // Build per-call arguments in call()->inputs() order: a column argument reads
+  // the source column; a constant argument wraps its single-element constant to
+  // the batch row count, so the function sees the same arg list (order + count)
+  // as it would for a column. Keeps null-input handling identical.
   std::vector<VectorPtr> args;
-  if (!argumentColumnIndices_.empty()) {
-    args.reserve(argumentColumnIndices_.size());
-    for (auto idx : argumentColumnIndices_) {
-      args.push_back(input->childAt(idx));
+  if (!argumentSources_.empty()) {
+    args.reserve(argumentSources_.size());
+    for (const auto& argSource : argumentSources_) {
+      if (argSource.isConstant) {
+        args.push_back(
+            BaseVector::wrapInConstant(
+                input->size(), 0, argSource.constantValue));
+      } else {
+        args.push_back(input->childAt(argSource.sourceChannel));
+      }
     }
   } else {
     // Fallback: use all input columns as arguments.
