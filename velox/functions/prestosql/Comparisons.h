@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <folly/CPortability.h>
+
 #include "velox/common/base/CompareFlags.h"
 #include "velox/functions/Macros.h"
 #include "velox/type/FloatingPointUtil.h"
@@ -85,7 +87,8 @@ struct EqFunction {
 
   // Used for primitive inputs.
   template <typename TInput>
-  void call(bool& out, const TInput& lhs, const TInput& rhs) {
+  FOLLY_ALWAYS_INLINE void
+  call(bool& out, const TInput& lhs, const TInput& rhs) {
     if constexpr (std::is_floating_point_v<TInput>) {
       out = util::floating_point::NaNAwareEquals<TInput>{}(lhs, rhs);
       return;
@@ -116,7 +119,8 @@ struct NeqFunction {
 
   // Used for primitive inputs.
   template <typename TInput>
-  void call(bool& out, const TInput& lhs, const TInput& rhs) {
+  FOLLY_ALWAYS_INLINE void
+  call(bool& out, const TInput& lhs, const TInput& rhs) {
     if constexpr (std::is_floating_point_v<TInput>) {
       out = !util::floating_point::NaNAwareEquals<TInput>{}(lhs, rhs);
       return;
