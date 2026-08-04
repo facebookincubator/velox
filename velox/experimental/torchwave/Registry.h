@@ -319,6 +319,39 @@ struct Metadata {
     return viewOfArg.has_value();
   }
 
+  // --- In-place-rewrite / scatter-writer metadata (for the functional ->
+  // in-place rewrite + clone-elision pass). Tensor operands are named by
+  // TENSOR-INPUT ordinal (as inputAt indexes -- constant scalars are dropped);
+  // constant scalars that nativert stores as attributes are named by attribute.
+
+  /// Tensor-input ordinal of the input a writing op overwrites in place (the
+  /// "self"/target). Set on scatter / index / masked / slice-scatter writers
+  /// (= 0). Marks the op as an in-place-rewrite candidate.
+  std::optional<int32_t> mutatesArg;
+
+  /// Tensor-input ordinal of the index / mask operand of a scatter/index op.
+  std::optional<int32_t> indicesArg;
+
+  /// Tensor-input ordinal of the source / values operand written into self
+  /// (unset when the written value is a scalar attribute, e.g. masked_fill).
+  std::optional<int32_t> valuesArg;
+
+  /// If true, the op reads all its tensor inputs at arbitrary strides
+  /// (elementwise, cat), so a producing clone of a strided input is elidable.
+  bool layoutAgnostic{false};
+
+  /// Attribute name of the `dim` argument for dim-wise scatter/index ops
+  /// (empty if none); the dim is a constant stored as an attribute.
+  std::string dimAttr;
+
+  /// Attribute name of the accumulate / scatter-reduce flag (empty if none).
+  /// When true on a node, an in-place FUSED write needs atomics.
+  std::string accumulateAttr;
+
+  /// Attribute name of a memory_format argument (empty if none). A clone that
+  /// sets it is a layout conversion and must not be elided.
+  std::string memoryFormatAttr;
+
   /// If set, the output rank is taken from the input at this ordinal. Takes
   /// precedence over outputConstraints and the elementwise default.
   std::optional<int32_t> rankArgument;
@@ -552,6 +585,13 @@ class MetadataBuilder {
   MetadataBuilder& costFunction(
       std::function<float(NodeCP, const Metadata&)> func);
   MetadataBuilder& viewOfArg(int32_t ordinal);
+  MetadataBuilder& mutatesArg(int32_t ordinal);
+  MetadataBuilder& indicesArg(int32_t ordinal);
+  MetadataBuilder& valuesArg(int32_t ordinal);
+  MetadataBuilder& layoutAgnostic(bool val = true);
+  MetadataBuilder& dimAttr(std::string name);
+  MetadataBuilder& accumulateAttr(std::string name);
+  MetadataBuilder& memoryFormatAttr(std::string name);
   MetadataBuilder& shapeAttr(std::string name);
   MetadataBuilder& ignoreAttrs(std::vector<std::string> attrs);
   MetadataBuilder& rankArgument(int32_t ordinal);

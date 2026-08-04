@@ -203,6 +203,33 @@ TEST_F(ExecutorTest, inPlaceTest) {
   runTest("data/in_place_test.pt2", "data/in_place_test_results.pt");
 }
 
+// The same graph with the reuse passes on, which is what reaches the
+// pre-partition clone elision in elideReadOnlyClones. Nothing else runs that
+// pass -- enableReuse is off by default -- so without this the whole-graph
+// clone work is untested.
+//
+// This graph is the adversarial case for the clone CSE step: 'd' and 'e' are
+// both a.clone() with the same (absent) memory_format, so they collide on the
+// CSE key, yet they are distinct snapshots -- 'a' is mutated by va.add_(b)
+// between them -- and both are returned. Merging them is wrong twice over: the
+// values differ (d == a0+3, e == a0+3+b), and redirecting a clone that feeds a
+// graph output leaves that output unproduced, because replaceAllUses rewires
+// users and the output node is not one of them.
+TEST_F(ExecutorTest, inPlaceCloneElisionTest) {
+  const bool savedReuse = WaveConfig::get().enableReuse;
+  const bool savedElide = WaveConfig::get().elideClones;
+  WaveConfig::get().enableReuse = true;
+  WaveConfig::get().elideClones = true;
+  SCOPE_EXIT {
+    WaveConfig::get().enableReuse = savedReuse;
+    WaveConfig::get().elideClones = savedElide;
+  };
+
+  // Merging the two collapses output 4 ('e') to a non-tensor, because the
+  // value its output slot names is left with a dead producer.
+  runTest("data/in_place_test.pt2", "data/in_place_test_results.pt");
+}
+
 // slice_scatter on 2-D tensors along dim 0 and dim 1 with a runtime (symint)
 // start, step > 1, lowered to a clone + fused in-place tw.slice_scatter_.
 TEST_F(ExecutorTest, scatterTest) {
@@ -1043,6 +1070,53 @@ TEST_F(ExecutorTest, shapeOnlyMetaReferenceFrame) {
   EXPECT_GT(lastRefTensorsChecked_, 0);
 
   std::remove(refPath.c_str());
+}
+
+// Reference-verify round trip on a graph whose clones the in-place pass elides.
+// An index_put_ chain lowers to a defensive clone before each in-place write.
+// The reference is saved from a run with reuse off, which keeps the clones, so
+// each clone's input still holds its pre-mutation value. With reuse on,
+// rewriteInPlace elides those clones and the writer mutates the input's buffer,
+// so the input now holds the post-mutation value. The divergence is intended:
+// verifyAgainstReference must skip elided clone inputs, or the run aborts with
+// a reference mismatch that is not a bug.
+TEST_F(ExecutorTest, elidedCloneInputReferenceFrame) {
+  auto pt2Path = getDataFilePath(dataDir(), "data/index_put_chain_test.pt2");
+  auto resultsPath =
+      getDataFilePath(dataDir(), "data/index_put_chain_test_results.pt");
+  auto expected = loadReferenceValues(resultsPath);
+
+  auto refPath = fmt::format(
+      "/tmp/torchwave_elided_clone_ref_{}.pt", static_cast<int>(getpid()));
+
+  const bool savedEnableReuse = WaveConfig::get().enableReuse;
+  SCOPE_EXIT {
+    FLAGS_reference_frame = "";
+    WaveConfig::get().saveReferenceFramePath = "";
+    WaveConfig::get().enableReuse = savedEnableReuse;
+    std::remove(refPath.c_str());
+  };
+
+  // Reference from a run with the clones intact.
+  auto fixture = ModelFixture::load(pt2Path);
+  ASSERT_NE(fixture, nullptr);
+  setGraphDevice(fixture->model.graph.get(), true);
+  WaveConfig::get().enableReuse = false;
+  WaveConfig::get().saveReferenceFramePath = refPath;
+  runWave(*fixture, expected);
+
+  // Verify the elided run, whose clone inputs are overwritten in place. Reload
+  // the fixture since makeModelContext moves the graph.
+  fixture = ModelFixture::load(pt2Path);
+  ASSERT_NE(fixture, nullptr);
+  setGraphDevice(fixture->model.graph.get(), true);
+  WaveConfig::get().enableReuse = true;
+  FLAGS_reference_frame = refPath;
+  runWave(*fixture, expected);
+
+  LOG(INFO) << "Reference frame: " << lastRefTensorsChecked_ << " tensors, "
+            << lastRefNodesChecked_ << " nodes checked";
+  EXPECT_GT(lastRefTensorsChecked_, 0);
 }
 
 TEST_F(ExecutorTest, custom) {
