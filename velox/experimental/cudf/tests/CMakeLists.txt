@@ -139,25 +139,14 @@ velox_add_cudf_test(
   TIMEOUT 3000
 )
 
-# Decimal arithmetic on the device. gpu_shadows/ must precede the Velox root,
-# and --diag-error=20011 fails the build on host-only calls from device code.
+# Decimal arithmetic on the device, compiled against the GPU shadows.
 velox_add_cudf_test(
   NAME velox_cudf_decimal_arithmetic_device_test
   SOURCES DecimalArithmeticDeviceTest.cu
   LIBS cudf::cudf Folly::folly
 )
 set_target_properties(velox_cudf_decimal_arithmetic_device_test PROPERTIES CUDA_STANDARD 20)
-target_include_directories(
-  velox_cudf_decimal_arithmetic_device_test
-  BEFORE
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
-)
-target_compile_options(
-  velox_cudf_decimal_arithmetic_device_test
-  PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
-    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
-)
+velox_cudf_use_gpu_shadows(velox_cudf_decimal_arithmetic_device_test)
 
 velox_add_cudf_test(
   NAME velox_cudf_enforce_single_row_test
@@ -364,17 +353,28 @@ velox_add_cudf_test(
 
 add_subdirectory(iceberg)
 
-# GPU SFI foundation -- exercises GpuExec resolver and GPU proxy types.
-# Host-only verification of POD layout, equality, and type mappings.
-add_executable(velox_cudf_gpu_types_test GpuTypesTest.cpp)
-add_test(
+# Host-only checks of the GpuExec type resolver, GpuTimestamp, and the BitUtil.h
+# shadow's countBits.
+velox_add_cudf_test(
   NAME velox_cudf_gpu_types_test
-  COMMAND velox_cudf_gpu_types_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  SOURCES GpuTypesTest.cpp
+  LIBS Folly::folly fmt::fmt
 )
-set_tests_properties(velox_cudf_gpu_types_test
-                     PROPERTIES LABELS cuda_driver TIMEOUT 300)
-target_link_libraries(velox_cudf_gpu_types_test gtest gtest_main)
+
+# Compile-only test that each mechanism a Velox simple function needs on the
+# device, the gpu_shadows/ headers and the VELOX_GPU_COMPATIBLE annotations,
+# generates device code under nvcc with gpu_shadows/ ahead of the Velox source
+# root.
+add_library(velox_cudf_gpu_shadow_compile_test OBJECT GpuShadowCompileTest.cu)
+# Whole-program device compilation, so that a call to a __device__ function
+# declared but defined nowhere fails to compile. Separable compilation would
+# defer it to a device link, which an object library never gets.
+set_target_properties(
+  velox_cudf_gpu_shadow_compile_test
+  PROPERTIES CUDA_STANDARD 20 CUDA_SEPARABLE_COMPILATION OFF
+)
+velox_cudf_use_gpu_shadows(velox_cudf_gpu_shadow_compile_test)
+target_link_libraries(velox_cudf_gpu_shadow_compile_test PRIVATE Folly::folly fmt::fmt)
 
 add_subdirectory(utils)
 
