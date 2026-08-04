@@ -2045,39 +2045,6 @@ TypePtr createType<TypeKind::OPAQUE>(std::vector<TypePtr>&& children);
 
 #undef VELOX_SCALAR_ACCESSOR
 
-template <typename T>
-struct SimpleTypeTrait {};
-
-template <>
-struct SimpleTypeTrait<int128_t> : public TypeTraits<TypeKind::HUGEINT> {};
-
-template <>
-struct SimpleTypeTrait<int64_t> : public TypeTraits<TypeKind::BIGINT> {};
-
-template <>
-struct SimpleTypeTrait<int32_t> : public TypeTraits<TypeKind::INTEGER> {};
-
-template <>
-struct SimpleTypeTrait<int16_t> : public TypeTraits<TypeKind::SMALLINT> {};
-
-template <>
-struct SimpleTypeTrait<int8_t> : public TypeTraits<TypeKind::TINYINT> {};
-
-template <>
-struct SimpleTypeTrait<float> : public TypeTraits<TypeKind::REAL> {};
-
-template <>
-struct SimpleTypeTrait<double> : public TypeTraits<TypeKind::DOUBLE> {};
-
-template <>
-struct SimpleTypeTrait<bool> : public TypeTraits<TypeKind::BOOLEAN> {};
-
-template <>
-struct SimpleTypeTrait<Timestamp> : public TypeTraits<TypeKind::TIMESTAMP> {};
-
-template <>
-struct SimpleTypeTrait<UnknownValue> : public TypeTraits<TypeKind::UNKNOWN> {};
-
 template <TypeKind KIND>
 static inline int32_t sizeOfTypeKindHelper() {
   return sizeof(typename TypeTraits<KIND>::NativeType);

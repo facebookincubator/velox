@@ -15,10 +15,11 @@
  */
 #pragma once
 
-/// TypeKind, the enumeration of Velox's logical types, and TypeTraits, the
-/// compile-time properties of each one. Together they are the type set that
-/// Type.h documents as "TypeKind"; the runtime Type hierarchy that maps onto
-/// them lives there. Type.h includes this header.
+/// The compile-time half of Velox's type system: TypeKind, the enumeration of
+/// the logical types; TypeTraits, the properties of each one; and SimpleTypeTrait,
+/// which maps a C++ type back to the kind it denotes. Together they are the type
+/// set that Type.h documents as "TypeKind"; the runtime Type hierarchy that maps
+/// onto them lives there. Type.h includes this header.
 
 #include <compare>
 #include <cstdint>
@@ -349,6 +350,44 @@ struct is_shared_ptr : public std::false_type {};
 
 template <typename T>
 struct is_shared_ptr<std::shared_ptr<T>> : public std::true_type {};
+
+/// Maps a C++ type used in a simple function signature to the TypeTraits of the
+/// logical type it denotes, which is how registration derives a signature from
+/// template arguments. Specializations for the signature tag types (Varchar,
+/// Map, Array, Row, ...) are in SimpleFunctionApi.h, which is where the tags
+/// themselves are declared.
+template <typename T>
+struct SimpleTypeTrait {};
+
+template <>
+struct SimpleTypeTrait<int128_t> : public TypeTraits<TypeKind::HUGEINT> {};
+
+template <>
+struct SimpleTypeTrait<int64_t> : public TypeTraits<TypeKind::BIGINT> {};
+
+template <>
+struct SimpleTypeTrait<int32_t> : public TypeTraits<TypeKind::INTEGER> {};
+
+template <>
+struct SimpleTypeTrait<int16_t> : public TypeTraits<TypeKind::SMALLINT> {};
+
+template <>
+struct SimpleTypeTrait<int8_t> : public TypeTraits<TypeKind::TINYINT> {};
+
+template <>
+struct SimpleTypeTrait<float> : public TypeTraits<TypeKind::REAL> {};
+
+template <>
+struct SimpleTypeTrait<double> : public TypeTraits<TypeKind::DOUBLE> {};
+
+template <>
+struct SimpleTypeTrait<bool> : public TypeTraits<TypeKind::BOOLEAN> {};
+
+template <>
+struct SimpleTypeTrait<Timestamp> : public TypeTraits<TypeKind::TIMESTAMP> {};
+
+template <>
+struct SimpleTypeTrait<UnknownValue> : public TypeTraits<TypeKind::UNKNOWN> {};
 
 template <TypeKind KIND>
 struct TypeFactory;
