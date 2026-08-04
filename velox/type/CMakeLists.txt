@@ -50,6 +50,7 @@ velox_add_library(
   HugeInt.h
   OpaqueCustomTypes.h
   SimpleFunctionApi.h
+  SimpleFunctionTags.h
   Subfield.h
   Time.h
   Timestamp.h

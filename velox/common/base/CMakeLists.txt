@@ -32,6 +32,7 @@ velox_add_library(
   AdmissionController.cpp
   BitUtil.cpp
   BloomFilter.cpp
+  CompareFlags.cpp
   Counters.cpp
   Fs.cpp
   PeriodicStatsReporter.cpp
