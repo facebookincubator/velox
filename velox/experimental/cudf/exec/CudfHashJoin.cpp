@@ -427,7 +427,7 @@ void CudfHashJoinBuild::doNoMoreInput() {
           std::make_pair(std::move(shared_tbls), std::move(hashObjects))));
 }
 
-exec::BlockingReason CudfHashJoinBuild::isBlocked(ContinueFuture* future) {
+exec::BlockingReason CudfHashJoinBuild::doIsBlocked(ContinueFuture* future) {
   if (!future_.valid()) {
     return exec::BlockingReason::kNotBlocked;
   }
@@ -549,9 +549,7 @@ void CudfHashJoinProbe::waitForBuildReady(rmm::cuda_stream_view stream) {
   }
 }
 
-void CudfHashJoinProbe::initialize() {
-  Operator::initialize();
-
+void CudfHashJoinProbe::doInitialize() {
   if (!joinNode_->filter()) {
     return;
   }
@@ -2337,7 +2335,7 @@ bool CudfHashJoinProbe::skipProbeOnEmptyBuild() const {
       isRightSemiProjectJoin(joinType);
 }
 
-exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
+exec::BlockingReason CudfHashJoinProbe::doIsBlocked(ContinueFuture* future) {
   if ((joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin() ||
        joinNode_->isFullJoin()) &&
       hashObject_.has_value()) {

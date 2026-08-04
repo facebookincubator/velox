@@ -44,10 +44,6 @@ class CudfAssignUniqueId : public CudfOperatorBase {
     return input_ == nullptr;
   }
 
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
-    return exec::BlockingReason::kNotBlocked;
-  }
-
   bool startDrain() override {
     // No need to drain for assignUniqueId operator.
     return false;

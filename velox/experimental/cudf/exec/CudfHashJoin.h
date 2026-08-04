@@ -105,7 +105,7 @@ class CudfHashJoinBuild : public CudfOperatorBase {
 
   bool needsInput() const override;
 
-  exec::BlockingReason isBlocked(ContinueFuture* future) override;
+  exec::BlockingReason doIsBlocked(ContinueFuture* future) override;
 
   bool isFinished() override;
 
@@ -140,13 +140,13 @@ class CudfHashJoinProbe : public CudfOperatorBase {
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::HashJoinNode> joinNode);
 
-  void initialize() override;
+  void doInitialize() override;
 
   bool needsInput() const override;
 
   bool skipProbeOnEmptyBuild() const;
 
-  exec::BlockingReason isBlocked(ContinueFuture* future) override;
+  exec::BlockingReason doIsBlocked(ContinueFuture* future) override;
 
   /// Returns true if the join type is supported by cudf hash join.
   /// Supported types:

@@ -19,6 +19,7 @@
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/exec/CudfMemoryResource.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
@@ -71,6 +72,9 @@ UcxPartitionedOutput::UcxPartitionedOutput(
       pipelineId_(ctx->pipelineId),
       driverId_(ctx->driverId),
       targetRowsPerChunk_(ctx->queryConfig().ucxPartitionedOutputBatchRows()) {
+  exchangeOutputMemoryResource_ =
+      cudfExchangeOutputMemoryResource(*ctx->task->queryCtx());
+
   this->initPartitionKeys(planNode);
   auto sources = planNode->sources();
   std::vector<std::string> inNames, outNames;
@@ -166,7 +170,7 @@ void UcxPartitionedOutput::flushPending() {
       }
     } else {
       auto packedCols = cudf::pack(
-          tableView, stream, cudf::get_current_device_resource_ref());
+          tableView, stream, exchangeOutputMemoryResource());
       stream.synchronize();
       auto packedColsPtr = std::make_unique<cudf::packed_columns>(
           std::move(packedCols.metadata), std::move(packedCols.gpu_data));
@@ -329,12 +333,18 @@ void UcxPartitionedOutput::equalPartition(
   splitAndEnqueue(tableView, offsets, stream);
 }
 
+rmm::device_async_resource_ref
+UcxPartitionedOutput::exchangeOutputMemoryResource() const {
+  return exchangeOutputMemoryResource_.value_or(
+      cudf::get_current_device_resource_ref());
+}
+
 void UcxPartitionedOutput::splitAndEnqueue(
     cudf::table_view tableView,
     std::vector<cudf::size_type> offsets,
     rmm::cuda_stream_view stream) {
   auto contiguousTables = cudf::contiguous_split(
-      tableView, offsets, stream, cudf::get_current_device_resource_ref());
+      tableView, offsets, stream, exchangeOutputMemoryResource());
 
   // Synchronize the stream to ensure CUDA operations complete before enqueuing.
   // UCXX/UCX is not stream-aware, so without syncing, data could be sent before
