@@ -1467,6 +1467,14 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
 
 using OpaqueTypePtr = std::shared_ptr<const OpaqueType>;
 
+/// Evaluates to true only for std::shared_ptr<T>, the physical value type
+/// stored in OPAQUE vectors.
+template <typename>
+struct is_shared_ptr : public std::false_type {};
+
+template <typename T>
+struct is_shared_ptr<std::shared_ptr<T>> : public std::true_type {};
+
 using IntegerType = ScalarType<TypeKind::INTEGER>;
 using BooleanType = ScalarType<TypeKind::BOOLEAN>;
 using TinyintType = ScalarType<TypeKind::TINYINT>;

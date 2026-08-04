@@ -372,7 +372,7 @@ jobs:
           tar -cvf "$CUDF_DIR/cudf-libs.tar" -C "$CUDF_DIR" cudf-libs
 
       - name: Upload cuDF Test Binaries
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ inputs.is-full-mode && ! inputs.use-clang && steps.changes.outputs.cudf && always() }}
         with:
           name: cudftestbinaries
@@ -403,7 +403,7 @@ jobs:
 
       - name: Upload failure artifact
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-failure-adapters-build
           path: /tmp/ci-failure/failure.json
@@ -433,7 +433,7 @@ jobs:
 
       - name: Upload failure artifact
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-failure-adapters-test
           path: /tmp/ci-failure/failure.json
@@ -467,7 +467,7 @@ jobs:
           nvidia-smi
 
       - name: Download cuDF Test Binaries
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: cudftestbinaries
 
@@ -730,7 +730,7 @@ jobs:
 
       - name: Upload failure artifact
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-failure-ubuntu-debug-build
           path: /tmp/ci-failure/failure.json
@@ -760,7 +760,7 @@ jobs:
 
       - name: Upload failure artifact
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-failure-ubuntu-debug-test
           path: /tmp/ci-failure/failure.json
@@ -889,7 +889,7 @@ jobs:
 
       - name: Upload failure comment artifact
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-failure-fedora-build
           path: /tmp/ci-failure/failure.json
@@ -1054,7 +1054,7 @@ jobs:
 
       - name: Upload failure artifact
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-failure-asan-ubsan-adapters-build
           path: /tmp/ci-failure/failure.json
@@ -1084,7 +1084,7 @@ jobs:
 
       - name: Upload failure artifact
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-failure-asan-ubsan-adapters-test
           path: /tmp/ci-failure/failure.json

@@ -20,23 +20,20 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
-#include "velox/experimental/cudf/expression/DateTruncFunction.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/memory/Memory.h"
-#include "velox/core/QueryCtx.h"
-#include "velox/expression/Expr.h"
-#include "velox/expression/FieldReference.h"
-#include "velox/functions/lib/TimeUtils.h"
-#include "velox/functions/sparksql/SparkQueryConfig.h"
+#include "velox/core/Expressions.h"
+#include "velox/expression/ExprOptimizer.h"
 
 #include <cudf/aggregation.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
 
+#include <algorithm>
 #include <iostream>
-#include <string_view>
 #include <unordered_map>
 
 namespace facebook::velox::cudf_velox {
@@ -44,80 +41,16 @@ namespace facebook::velox::cudf_velox {
 namespace {
 
 void debugPrintTree(
-    const std::shared_ptr<velox::exec::Expr>& expr,
+    const core::TypedExprPtr& expr,
     int indent = 0,
     std::ostream& os = std::cout) {
   if (indent == 0)
     os << "=== Expression Tree ===" << std::endl;
-  os << std::string(indent, ' ') << expr->name() << "("
-     << expr->type()->toString() << ")" << std::endl;
+  os << std::string(indent, ' ') << core::ExprKindName::toName(expr->kind())
+     << "(" << expr->type()->toString() << ")" << std::endl;
   for (auto& input : expr->inputs()) {
     debugPrintTree(input, indent + 2, os);
   }
-}
-
-bool isTimezoneSensitiveDateTrunc(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  const auto dateTruncName =
-      CudfConfig::getInstance().functionNamePrefix + "date_trunc";
-  return expr->name() == dateTruncName &&
-      DateTruncFunction::isTimezoneSensitive(expr);
-}
-
-bool containsTimezoneSensitiveDateTrunc(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  if (isTimezoneSensitiveDateTrunc(expr)) {
-    return true;
-  }
-
-  for (const auto& input : expr->inputs()) {
-    if (containsTimezoneSensitiveDateTrunc(input)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-constexpr std::string_view kDateFormatName{"date_format"};
-
-bool isSparkDateFormatCall(std::string_view functionName) {
-  return functionName.size() >= kDateFormatName.size() &&
-      functionName.compare(
-          functionName.size() - kDateFormatName.size(),
-          kDateFormatName.size(),
-          kDateFormatName) == 0;
-}
-
-bool containsSparkDateFormatCall(const core::TypedExprPtr& expression) {
-  const auto call =
-      std::dynamic_pointer_cast<const core::CallTypedExpr>(expression);
-  if (call && isSparkDateFormatCall(call->name())) {
-    return true;
-  }
-  for (const auto& input : expression->inputs()) {
-    if (containsSparkDateFormatCall(input)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool requiresCpuSparkDateFormat(
-    const std::vector<core::TypedExprPtr>& expressions,
-    const core::QueryConfig& queryConfig) {
-  const bool usesLegacyFormatter =
-      functions::sparksql::SparkQueryConfig{queryConfig}.legacyDateFormatter();
-  const auto* sessionTimeZone = functions::getTimeZoneFromConfig(queryConfig);
-  if (!usesLegacyFormatter &&
-      (sessionTimeZone == nullptr || sessionTimeZone->id() == 0)) {
-    return false;
-  }
-  for (const auto& expression : expressions) {
-    if (containsSparkDateFormatCall(expression)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 bool checkAddIdentityProjection(
@@ -173,47 +106,6 @@ std::vector<exec::OperatorStats> splitStats(
 }
 
 } // namespace
-
-bool canBeEvaluatedByCudf(
-    const std::vector<core::TypedExprPtr>& exprs,
-    core::QueryCtx* queryCtx) {
-  if (exprs.empty()) {
-    return true;
-  }
-  // Preserve formatter-mode and timezone semantics before selecting the GPU
-  // operator.
-  if (requiresCpuSparkDateFormat(exprs, queryCtx->queryConfig())) {
-    return false;
-  }
-
-  auto precompilePool =
-      memory::memoryManager()->addLeafPool("", /*threadSafe*/ false);
-  core::ExecCtx precompileCtx(precompilePool.get(), queryCtx);
-
-  bool lazyDereference = false;
-  std::vector<core::TypedExprPtr> exprsCopy = exprs;
-  std::unique_ptr<exec::ExprSet> exprSet = exec::makeExprSetFromFlag(
-      std::move(exprsCopy), &precompileCtx, lazyDereference);
-
-  const core::QueryConfig defaultQueryConfig = core::QueryConfig({});
-  const core::QueryConfig& queryConfig =
-      queryCtx ? queryCtx->queryConfig() : defaultQueryConfig;
-  const bool adjustTimestampToTimezone =
-      queryConfig.adjustTimestampToTimezone();
-
-  for (const auto& e : exprSet->exprs()) {
-    if (adjustTimestampToTimezone && containsTimezoneSensitiveDateTrunc(e)) {
-      LOG_FALLBACK(
-          "date_trunc(timestamp) requires CPU evaluation when "
-          "adjust_timestamp_to_session_timezone is enabled");
-      return false;
-    }
-    if (!canBeEvaluatedByCudf(e)) {
-      return false;
-    }
-  }
-  return true;
-}
 
 CudfFilterProject::CudfFilterProject(
     int32_t operatorId,
@@ -277,8 +169,6 @@ void CudfFilterProject::initialize() {
       (dynamic_cast<const core::LazyDereferenceNode*>(project_.get()) !=
        nullptr);
   VELOX_CHECK(!(lazyDereference && filter_));
-  auto expr = exec::makeExprSetFromFlag(
-      std::move(allExprs), operatorCtx_->execCtx(), lazyDereference);
 
   const auto inputType = project_ ? project_->sources()[0]->outputType()
                                   : filter_->sources()[0]->outputType();
@@ -286,29 +176,36 @@ void CudfFilterProject::initialize() {
   // convert to AST
   if (CudfConfig::getInstance().debugEnabled) {
     int i = 0;
-    for (const auto& expr : expr->exprs()) {
+    for (const auto& expr : allExprs) {
       LOG(INFO) << "expr[" << i++ << "] " << expr->toString();
       debugPrintTree(expr, 0, LOG(INFO));
     }
   }
+  // Optimize (rewrites + constant folding) each expression before evaluator
+  // selection so CudfFunctions never see scalar-only operand sets, then
+  // compile. The operator pool owns the folded constants for the evaluator's
+  // lifetime.
+  auto* const queryCtx = operatorCtx_->execCtx()->queryCtx();
+  auto* const pool = operatorCtx_->pool();
+  const auto optimizeAndCompile =
+      [inputType, queryCtx, pool](const core::TypedExprPtr& expr) {
+        return createCudfExpression(
+            expression::optimize(expr, queryCtx, pool), inputType, pool);
+      };
   if (hasFilter_) {
-    // First expr is Filter, rest are Project
-    filterEvaluator_ = createCudfExpression(expr->exprs()[0], inputType);
+    // First expr is Filter, rest are Project.
+    filterEvaluator_ = optimizeAndCompile(allExprs.front());
     std::transform(
-        expr->exprs().begin() + 1,
-        expr->exprs().end(),
+        allExprs.begin() + 1,
+        allExprs.end(),
         std::back_inserter(projectEvaluators_),
-        [inputType](const auto& expr) {
-          return createCudfExpression(expr, inputType);
-        });
+        optimizeAndCompile);
   } else {
     std::transform(
-        expr->exprs().begin(),
-        expr->exprs().end(),
+        allExprs.begin(),
+        allExprs.end(),
         std::back_inserter(projectEvaluators_),
-        [inputType](const auto& expr) {
-          return createCudfExpression(expr, inputType);
-        });
+        optimizeAndCompile);
   }
 
   filter_.reset();

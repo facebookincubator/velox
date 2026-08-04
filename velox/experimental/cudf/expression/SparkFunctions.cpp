@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/CommonFunctions.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
@@ -23,7 +24,6 @@
 #include "velox/experimental/cudf/expression/sparksql/SubStringFunction.h"
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FunctionSignature.h"
 
 #include <cudf/strings/convert/convert_datetime.hpp>
@@ -161,29 +161,26 @@ std::optional<std::string> sparkToCudfDateFormat(std::string_view sparkFormat) {
 // Extracts and translates a non-null constant format argument. For example,
 // date_format(c0, 'yyyy') produces "%Y".
 std::optional<std::string> getCudfSparkDateFormat(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  using velox::exec::ConstantExpr;
-
+    const core::TypedExprPtr& expr) {
   if (expr->inputs().size() != 2) {
     return std::nullopt;
   }
-  const auto formatExpr =
-      std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
-  if (!formatExpr || formatExpr->value()->isNullAt(0)) {
+  const auto format = constantVarcharValue(expr->inputs()[1]);
+  if (!format.has_value()) {
     return std::nullopt;
   }
-  return sparkToCudfDateFormat(formatExpr->value()->toString(0));
+  return sparkToCudfDateFormat(
+      std::string_view(format->data(), format->size()));
 }
 
-bool canEvaluateDateFormat(
-    const std::shared_ptr<velox::exec::Expr>& expression) {
+bool canEvaluateDateFormat(const core::TypedExprPtr& expression) {
   return getCudfSparkDateFormat(expression).has_value();
 }
 
 // Formats timestamps using the subset of Spark patterns supported by cuDF.
 class DateFormatFunction : public CudfFunction {
  public:
-  explicit DateFormatFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  explicit DateFormatFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "date_format expects exactly 2 inputs");
 
@@ -231,19 +228,23 @@ void registerSparkFunctions(const std::string& prefix) {
     // Spark runtimes do not need to override an existing candidate.
     registerCudfFunction(
         name,
-        [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-          return sparksql::makeSubStringFunction(expr);
+        [](const std::string&,
+           const core::TypedExprPtr& expr,
+           memory::MemoryPool* pool) {
+          return sparksql::makeSubStringFunction(expr, pool);
         },
         subStringSignatures);
   }
 
   registerCudfFunction(
       prefix + "hash_with_seed",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<sparksql::HashFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<sparksql::HashFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
-           .returnType("bigint")
+           .returnType("integer")
            .constantArgumentType("integer")
            .argumentType("any")
            .variableArity("any")
@@ -253,8 +254,10 @@ void registerSparkFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "date_add",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<sparksql::DateAddFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<sparksql::DateAddFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("date")
@@ -274,8 +277,10 @@ void registerSparkFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "date_trunc",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<DateTruncFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<DateTruncFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("timestamp")
@@ -287,7 +292,9 @@ void registerSparkFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "date_format",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
         return std::make_shared<DateFormatFunction>(expr);
       },
       {FunctionSignatureBuilder()
