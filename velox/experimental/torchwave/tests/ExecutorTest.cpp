@@ -814,6 +814,110 @@ TEST_F(ExecutorTest, repeatInterleaveTest) {
   WaveConfig::get().isCg = std::nullopt;
 }
 
+// Multi-dimensional and strided repeat_interleave along an explicit dim, plus
+// the dim=None (flatten) case. Programmatic graphs compared against eager
+// at::repeat_interleave. Covers 1/2/3-D inputs, each axis, extra size-1 dims
+// (the [1,N] "run a 1-D op under a fake batch dim" pattern), and a
+// non-contiguous (transposed) input. Per-element repeats (1-D counts); the
+// wave repeat_interleave gathers each output element from its source segment.
+TEST_F(ExecutorTest, repeatInterleaveMultiDimTest) {
+  auto resetConfig = folly::makeGuard([] {
+    WaveConfig::get().useSingleBlock = std::nullopt;
+    WaveConfig::get().isCg = std::nullopt;
+  });
+
+  // Runs repeat_interleave(self, repeats[, dim]) on the wave engine and checks
+  // it against eager. 'dimArg' is "" (dim=None flatten) or ", dim=N".
+  auto check = [&](const at::Tensor& self,
+                   const at::Tensor& repeats,
+                   const std::string& dimArg,
+                   std::optional<int64_t> dim,
+                   const char* label) {
+    std::string graphStr = std::string("graph(%x, %r):\n") +
+        "%o = torch.ops.aten.repeat_interleave.self_Tensor(self=%x, "
+        "repeats=%r" +
+        dimArg + ")\nreturn(%o)\n";
+    auto graph = nativert::stringToGraph(graphStr);
+    std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+    meta["x"] = makeTensorMeta(self.scalar_type(), self.dim());
+    meta["r"] = makeTensorMeta(repeats.scalar_type(), repeats.dim());
+    meta["o"] =
+        makeTensorMeta(self.scalar_type(), dim.has_value() ? self.dim() : 1);
+    auto outputs =
+        runWaveProgrammatic(std::move(graph), meta, {{self, repeats}});
+    ASSERT_EQ(outputs.size(), 1) << label;
+    auto reference = dim.has_value() ? at::repeat_interleave(self, repeats, dim)
+                                     : at::repeat_interleave(self, repeats);
+    EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+        << label << ": " << firstDifference(outputs[0], reference);
+  };
+
+  // Deterministic, varied per-segment counts in [1, 3].
+  auto counts = [](int64_t n) { return at::arange(n, at::kLong) % 3 + 1; };
+
+  WaveConfig::get().useSingleBlock = false;
+
+  // 1-D: dim=None (flatten) and explicit dim=0.
+  {
+    auto x = at::arange(64, at::kFloat);
+    check(x, counts(64), "", std::nullopt, "1d-flatten");
+    check(x, counts(64), ", dim=0", 0, "1d-dim0");
+  }
+  // 2-D flatten (dim=None) over a multi-row input -> 1-D output.
+  {
+    auto x = at::arange(3 * 8, at::kFloat).reshape({3, 8});
+    check(x, counts(3 * 8), "", std::nullopt, "2d-flatten");
+  }
+  // 2-D along each axis, all dims > 1 (primary validation).
+  {
+    auto x = at::arange(5 * 32, at::kFloat).reshape({5, 32});
+    check(x, counts(32), ", dim=1", 1, "2d-dim1");
+  }
+  {
+    auto x = at::arange(7 * 20, at::kFloat).reshape({7, 20});
+    check(x, counts(7), ", dim=0", 0, "2d-dim0");
+  }
+  // 3-D along the middle axis, all dims > 1.
+  {
+    auto x = at::arange(3 * 8 * 6, at::kFloat).reshape({3, 8, 6});
+    check(x, counts(8), ", dim=1", 1, "3d-dim1");
+  }
+  // Extra size-1 dims (the ROO [1,N] pattern and its trailing-1 mirror).
+  {
+    auto x = at::arange(48, at::kFloat).reshape({1, 48});
+    check(x, counts(48), ", dim=1", 1, "leading-1-dim1");
+  }
+  {
+    auto x = at::arange(40, at::kFloat).reshape({40, 1});
+    check(x, counts(40), ", dim=0", 0, "trailing-1-dim0");
+  }
+  // Non-contiguous (transposed) source: [6,10] -> [10,6] view, interleave dim1.
+  {
+    auto x = at::arange(6 * 10, at::kFloat).reshape({6, 10}).transpose(0, 1);
+    check(x, counts(6), ", dim=1", 1, "strided-dim1");
+  }
+
+  // Broadcast: a 0-D repeat count applies uniformly to every segment.
+  {
+    auto x2d = at::arange(5 * 12, at::kFloat).reshape({5, 12});
+    auto r3 = at::scalar_tensor(3, at::kLong); // 0-dim
+    check(x2d, r3, ", dim=1", 1, "bcast-2d-dim1");
+    check(x2d, r3, ", dim=0", 0, "bcast-2d-dim0");
+    check(x2d, r3, "", std::nullopt, "bcast-2d-flatten");
+    auto x1d = at::arange(30, at::kFloat);
+    check(x1d, at::scalar_tensor(2, at::kLong), ", dim=0", 0, "bcast-1d-dim0");
+  }
+
+  // The primary 2-D case across all three grid variants.
+  auto x2 = at::arange(5 * 32, at::kFloat).reshape({5, 32});
+  WaveConfig::get().useSingleBlock = true;
+  check(x2, counts(32), ", dim=1", 1, "2d-dim1-single-block");
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  check(x2, counts(32), ", dim=1", 1, "2d-dim1-cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
 TEST_F(ExecutorTest, repeatTest) {
   runTest("data/repeat_test.pt2", "data/repeat_test_results.pt");
 }
