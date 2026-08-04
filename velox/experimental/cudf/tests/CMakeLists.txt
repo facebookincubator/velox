@@ -315,17 +315,40 @@ velox_add_cudf_test(
 
 add_subdirectory(iceberg)
 
-# GPU SFI foundation -- exercises GpuExec resolver and GPU proxy types.
-# Host-only verification of POD layout, equality, and type mappings.
+# Host-only checks of the GpuExec type resolver and the GPU proxy types: POD
+# layout, equality, and type mappings.
 add_executable(velox_cudf_gpu_types_test GpuTypesTest.cpp)
 add_test(
   NAME velox_cudf_gpu_types_test
   COMMAND velox_cudf_gpu_types_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
-set_tests_properties(velox_cudf_gpu_types_test
-                     PROPERTIES LABELS cuda_driver TIMEOUT 300)
+set_tests_properties(velox_cudf_gpu_types_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
 target_link_libraries(velox_cudf_gpu_types_test gtest gtest_main)
+
+# Compile-only test that each mechanism a Velox simple function needs on the
+# device, the gpu_shadows/ headers and the VELOX_GPU_COMPATIBLE annotations,
+# generates device code under nvcc with gpu_shadows/ ahead of the Velox source
+# root.
+add_library(velox_cudf_gpu_shadow_compile_test OBJECT GpuShadowCompileTest.cu)
+set_target_properties(
+  velox_cudf_gpu_shadow_compile_test
+  PROPERTIES CUDA_STANDARD 20 CUDA_SEPARABLE_COMPILATION ON
+)
+target_include_directories(
+  velox_cudf_gpu_shadow_compile_test
+  BEFORE
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+# --diag-error=20011 makes calling a __host__ function from a __host__
+# __device__ one an error. nvcc otherwise only warns when the call sits in a
+# template instantiated for both, and the kernel computes garbage.
+target_compile_options(
+  velox_cudf_gpu_shadow_compile_test
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
+)
 
 add_subdirectory(utils)
 
