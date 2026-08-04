@@ -75,6 +75,11 @@ class CudfSplitReader : public NvtxHelper {
   /// invoked after the Parquet footer is read and before reader options are
   /// configured. The returned expression must remain alive while the split is
   /// being read.
+  ///
+  /// The builder must rebuild the filter from the table handle's subfield
+  /// filters, keeping one conjunct per subfield, since the Iceberg reader
+  /// decides predicates on injected columns by testing those subfield filters
+  /// against the constant the column is materialized with.
   void setPushdownFilterBuilder(PushdownFilterBuilder builder) {
     pushdownFilterBuilder_ = std::move(builder);
   }
