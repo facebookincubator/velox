@@ -21,6 +21,7 @@
 
 #include "velox/common/base/VeloxException.h"
 #include "velox/functions/lib/string/StringImpl.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
@@ -138,6 +139,10 @@ Expected<std::optional<Timestamp>> SparkCastHooks::castDoubleToTimestamp(
 
 Expected<Timestamp> SparkCastHooks::castBooleanToTimestamp(bool val) const {
   return Timestamp::fromMicrosNoError(val ? 1 : 0);
+}
+
+bool SparkCastHooks::decimalToFloatHighPrecisionCastEnabled() const {
+  return SparkQueryConfig{config_}.decimalToFloatHighPrecisionCastEnabled();
 }
 
 Expected<int32_t> SparkCastHooks::castStringToDate(

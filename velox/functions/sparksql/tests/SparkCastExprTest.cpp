@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <boost/multiprecision/cpp_dec_float.hpp>
 #include <folly/ScopeGuard.h>
 #include <cmath>
 #include "velox/core/Expressions.h"
@@ -1696,40 +1697,26 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     for (int scale = 0; scale <= 18; ++scale) {
       int64_t unscaledValue = 123456789123456789l;
       const int precision = 18;
-      auto rowSize =
-          facebook::velox::DecimalUtil::maxStringViewSize(precision, scale);
-      char buffer[rowSize];
-      memset(buffer, 0, rowSize);
-      auto size = facebook::velox::DecimalUtil::castToString<int64_t>(
-          unscaledValue, scale, rowSize, buffer);
-
-      T expect = util::Converter<SimpleTypeTrait<T>::typeKind>::tryCast(
-                     StringView(buffer, size))
-                     .value();
+      auto expect = boost::multiprecision::cpp_dec_float_50(unscaledValue);
+      expect /= boost::multiprecision::cpp_dec_float_50(
+          DecimalUtil::kPowersOfTen[scale]);
       testCast(
           makeNullableFlatVector<int64_t>(
               {unscaledValue}, DECIMAL(precision, scale)),
-          makeNullableFlatVector<T>({expect}));
+          makeNullableFlatVector<T>({expect.convert_to<T>()}));
     }
 
     for (int scale = 0; scale <= 38; ++scale) {
       int128_t unscaledValue =
           HugeInt::parse("12345678912345678912345678912345678912");
       const int precision = 38;
-      auto rowSize =
-          facebook::velox::DecimalUtil::maxStringViewSize(precision, scale);
-      char buffer[rowSize];
-      memset(buffer, 0, rowSize);
-      auto size = facebook::velox::DecimalUtil::castToString<int128_t>(
-          unscaledValue, scale, rowSize, buffer);
-
-      T expect = util::Converter<SimpleTypeTrait<T>::typeKind>::tryCast(
-                     StringView(buffer, size))
-                     .value();
+      auto expect = boost::multiprecision::cpp_dec_float_50(unscaledValue);
+      expect /= boost::multiprecision::cpp_dec_float_50(
+          DecimalUtil::kPowersOfTen[scale]);
       testCast(
           makeNullableFlatVector<int128_t>(
               {unscaledValue}, DECIMAL(precision, scale)),
-          makeNullableFlatVector<T>({expect}));
+          makeNullableFlatVector<T>({expect.convert_to<T>()}));
     }
   }
 };
@@ -1773,11 +1760,6 @@ TEST_F(SparkCastExprTest, legacyCastModeIgnoresSessionAnsiOn) {
   assertEqualVectors(expected, result);
 }
 
-TEST_F(SparkCastExprTest, decimalToFloat) {
-  testDecimalToFloatCasts<float>();
-  testDecimalToFloatCasts<double>();
-}
-
 // ============================================================================
 // ANSI ON Tests
 // ============================================================================
@@ -1812,6 +1794,20 @@ TEST_F(SparkCastExprTestAnsiOn, decimalToString) {
 
 TEST_F(SparkCastExprTestAnsiOn, decimalToIntegral) {
   testDecimalToIntegral();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, decimalToFloat) {
+  SCOPE_EXIT {
+    queryCtx_->testingOverrideConfigUnsafe({});
+  };
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+       {SparkQueryConfig::qualify(
+            SparkQueryConfig::kDecimalToFloatHighPrecisionCastEnabled),
+        "true"}});
+
+  testDecimalToFloatCasts<float>();
+  testDecimalToFloatCasts<double>();
 }
 
 TEST_F(SparkCastExprTestAnsiOn, floatToTimestamp) {
@@ -2322,6 +2318,20 @@ TEST_F(SparkCastExprTestAnsiOff, bigIntToBinary) {
 
 TEST_F(SparkCastExprTestAnsiOff, decimalToIntegral) {
   testDecimalToIntegral();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, decimalToFloat) {
+  SCOPE_EXIT {
+    queryCtx_->testingOverrideConfigUnsafe({});
+  };
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"},
+       {SparkQueryConfig::qualify(
+            SparkQueryConfig::kDecimalToFloatHighPrecisionCastEnabled),
+        "true"}});
+
+  testDecimalToFloatCasts<float>();
+  testDecimalToFloatCasts<double>();
 }
 
 TEST_F(SparkCastExprTestAnsiOff, decimalToString) {

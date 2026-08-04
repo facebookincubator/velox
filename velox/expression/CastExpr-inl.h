@@ -424,47 +424,70 @@ VectorPtr CastExpr::applyDecimalToFloatCast(
   auto resultBuffer = result->asUnchecked<FlatVector<To>>()->mutableRawValues();
   const auto precisionScale = getDecimalPrecisionScale(*fromType);
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
-  const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
+  const auto precision = precisionScale.first;
+  const auto scale = precisionScale.second;
 
-  if constexpr (ToKind == TypeKind::REAL) {
-    // Optimized path for float
-    applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-      const auto output =
-          util::Converter<TypeKind::DOUBLE>::tryCast(simpleInput->valueAt(row))
-              .thenOrThrow(folly::identity, [&](const Status& status) {
-                VELOX_USER_FAIL("{}", status.message());
-              });
-      resultBuffer[row] = output / scaleFactor;
-    });
-  } else {
-    // Cast decimal to string, then string to double
-    const auto scale = precisionScale.second;
-    auto rowSize = DecimalUtil::maxStringViewSize(precisionScale.first, scale);
-    char buffer[rowSize];
+  const auto tryFastPath = [&](vector_size_t row,
+                               FromNativeType unscaledValue) {
+    if (scale == 0) {
+      resultBuffer[row] = static_cast<To>(unscaledValue);
+      return true;
+    }
+    if (scale < DecimalUtil::kDoublePowersOfTenSize &&
+        DecimalUtil::absValue<FromNativeType>(unscaledValue) <
+            DecimalUtil::kDoubleMaxExact) {
+      const double output = static_cast<double>(unscaledValue) /
+          DecimalUtil::kDoublePowersOfTen[scale];
+      resultBuffer[row] = static_cast<To>(output);
+      return true;
+    }
+    return false;
+  };
 
+  const bool highPrecisionCastEnabled =
+      hooks_->decimalToFloatHighPrecisionCastEnabled();
+  if (highPrecisionCastEnabled) {
+    const auto rowSize = DecimalUtil::maxStringViewSize(precision, scale);
+    std::string buffer(rowSize, '\0');
     applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
       auto unscaledValue = simpleInput->valueAt(row);
 
-      if (scale == 0) {
-        resultBuffer[row] = static_cast<To>(unscaledValue);
-      } else if (
-          scale < DecimalUtil::kDoublePowersOfTenSize &&
-          DecimalUtil::absValue<FromNativeType>(unscaledValue) <
-              DecimalUtil::kDoubleMaxExact) {
+      if (!tryFastPath(row, unscaledValue)) {
+        std::memset(buffer.data(), 0, rowSize);
+        const auto size = DecimalUtil::castToString<FromNativeType>(
+            unscaledValue, scale, rowSize, buffer.data());
         resultBuffer[row] =
-            static_cast<To>(unscaledValue) / DecimalUtil::kPowersOfTen[scale];
-      } else {
-        memset(buffer, 0, rowSize);
-        auto size = DecimalUtil::castToString<FromNativeType>(
-            unscaledValue, scale, rowSize, buffer);
-        resultBuffer[row] =
-            util::Converter<ToKind>::tryCast(StringView(buffer, size))
+            util::Converter<ToKind>::tryCast(StringView(buffer.data(), size))
                 .thenOrThrow(folly::identity, [&](const Status& status) {
                   VELOX_USER_FAIL("{}", status.message());
                 });
       }
     });
+    return result;
   }
+
+  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+    auto unscaledValue = simpleInput->valueAt(row);
+    if (!tryFastPath(row, unscaledValue)) {
+      const double scaleFactor =
+          static_cast<double>(DecimalUtil::kPowersOfTen[scale]);
+      if constexpr (ToKind == TypeKind::REAL) {
+        const double output =
+            util::Converter<TypeKind::DOUBLE>::tryCast(unscaledValue)
+                .thenOrThrow(folly::identity, [&](const Status& status) {
+                  VELOX_USER_FAIL("{}", status.message());
+                });
+        resultBuffer[row] = static_cast<To>(output / scaleFactor);
+      } else {
+        const auto output =
+            util::Converter<ToKind>::tryCast(unscaledValue)
+                .thenOrThrow(folly::identity, [&](const Status& status) {
+                  VELOX_USER_FAIL("{}", status.message());
+                });
+        resultBuffer[row] = output / scaleFactor;
+      }
+    }
+  });
   return result;
 }
 
