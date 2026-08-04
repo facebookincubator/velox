@@ -71,6 +71,10 @@ class CudfSplitReader : public NvtxHelper {
   using PushdownFilterBuilder = std::function<cudf::ast::expression const*(
       const cudf::io::parquet::FileMetaData&)>;
 
+  /// Sets a builder for a split-specific pushdown filter. The builder is
+  /// invoked after the Parquet footer is read and before reader options are
+  /// configured. The returned expression must remain alive while the split is
+  /// being read.
   void setPushdownFilterBuilder(PushdownFilterBuilder builder) {
     pushdownFilterBuilder_ = std::move(builder);
   }
@@ -95,8 +99,13 @@ class CudfSplitReader : public NvtxHelper {
   // Setup the cuDF reader.
   virtual void setupReader();
 
-  // Return the filter to push down to the cuDF reader.
+  // Return the split-specific filter to push down to the cuDF reader.
   virtual cudf::ast::expression const* pushdownFilter() const;
+
+  // Return whether the pushdown filter was built for the current split.
+  bool hasSplitSpecificPushdownFilter() const {
+    return hasSplitSpecificPushdownFilter_;
+  }
 
   // Determine the output memory resource for the cuDF reader.
   virtual rmm::device_async_resource_ref determineCudfMemoryResource() const;
@@ -110,6 +119,9 @@ class CudfSplitReader : public NvtxHelper {
 
   // Read file metadatas.
   void fileMetaDatas();
+
+  // Return the logical subfield filter used after reading.
+  cudf::ast::expression const* subfieldFilter() const;
 
   std::shared_ptr<CudfHiveConnectorSplit> split_;
   std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>
@@ -160,6 +172,7 @@ class CudfSplitReader : public NvtxHelper {
   cudf::ast::expression const* subfieldFilterExpr_;
   cudf::ast::expression const* pushdownFilterExpr_;
   PushdownFilterBuilder pushdownFilterBuilder_;
+  bool hasSplitSpecificPushdownFilter_{false};
 
   struct TotalScanTimeCallbackData {
     uint64_t startTimeUs;

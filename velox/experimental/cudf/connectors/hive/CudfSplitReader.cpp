@@ -330,10 +330,16 @@ void CudfSplitReader::resetSplit() {
   hybridScanState_.reset();
   dataSource_.reset();
   fileMetaData_.clear();
+  pushdownFilterExpr_ = subfieldFilterExpr_;
+  hasSplitSpecificPushdownFilter_ = false;
 }
 
 cudf::ast::expression const* CudfSplitReader::pushdownFilter() const {
   return pushdownFilterExpr_;
+}
+
+cudf::ast::expression const* CudfSplitReader::subfieldFilter() const {
+  return subfieldFilterExpr_;
 }
 
 void CudfSplitReader::setupCudfDataSource() {
@@ -499,8 +505,9 @@ void CudfSplitReader::fileMetaDatas() {
     VELOX_CHECK_EQ(
         fileMetaData_.size(),
         1,
-        "Split-specific subfield filters require exactly one parquet metadata");
+        "Split-specific pushdown filters require exactly one Parquet metadata");
     pushdownFilterExpr_ = pushdownFilterBuilder_(fileMetaData_.front());
+    hasSplitSpecificPushdownFilter_ = true;
   }
 }
 
