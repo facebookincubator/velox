@@ -20,8 +20,14 @@
 #include <cmath>
 #include <vector>
 
+// The comparators below carry VELOX_GPU_COMPATIBLE, so this header is parsed
+// by nvcc. The F14 containers at the bottom are not GPU-compatible and folly's
+// F14 headers do not parse under nvcc, so both they and their only consumers
+// are excluded from device translation units.
+#ifndef __CUDACC__
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
+#endif
 
 #include "velox/common/base/Macros.h"
 
@@ -101,6 +107,7 @@ struct NaNAwareGreaterThanEqual {
   }
 };
 
+#ifndef __CUDACC__
 template <
     typename FLOAT,
     std::enable_if_t<std::is_floating_point<FLOAT>::value, bool> = true>
@@ -163,6 +170,7 @@ struct HashMapNaNAwareTypeTraits<double, Mapped, Alloc> {
       NaNAwareEquals<double>,
       Alloc>;
 };
+#endif // __CUDACC__
 } // namespace util::floating_point
 
 /// A static class that holds helper functions for DOUBLE type.

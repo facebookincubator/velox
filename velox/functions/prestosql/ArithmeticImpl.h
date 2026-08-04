@@ -23,8 +23,14 @@
 #include "folly/CPortability.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Macros.h"
-#include "velox/type/CppToType.h"
 #include "velox/type/FloatingPointUtil.h"
+
+// CppToType is only reached from abs()'s overflow message. It pulls in the
+// runtime type system, which nvcc cannot parse, so device translation units
+// build the message without the type name instead.
+#ifndef __CUDACC__
+#include "velox/type/CppToType.h"
+#endif
 
 namespace facebook::velox::functions {
 
@@ -164,8 +170,12 @@ template <typename T>
 VELOX_GPU_COMPATIBLE T abs(const T& arg) {
   if constexpr (std::is_integral_v<T>) {
     if (arg == std::numeric_limits<T>::min()) {
+#ifdef __CUDACC__
+      VELOX_USER_FAIL("Value {} is out of range for abs()", arg);
+#else
       VELOX_USER_FAIL(
           "Value {} is out of range for abs({})", arg, CppToType<T>::name);
+#endif
     }
   }
   T results = std::abs(arg);
