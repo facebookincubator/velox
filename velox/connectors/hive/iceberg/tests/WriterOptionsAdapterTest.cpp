@@ -18,7 +18,7 @@
 
 #include <gtest/gtest.h>
 #ifdef VELOX_ENABLE_NIMBLE
-#include "dwio/nimble/writer/fb/NimbleWriter.h"
+#include "dwio/nimble/writer/WriterFactory.h"
 #endif
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
@@ -197,9 +197,10 @@ TEST(WriterOptionsAdapterTest, toManifestFormatStringThrowsForUnsupported) {
 // type attributes onto Nimble writer options via the WriterOptionsAdapter.
 // The adapter converts the IcebergFieldId tree into dotted-path attributes
 // (e.g., "a.b" -> {"iceberg.id":"2", "iceberg.required":"true"}) that survive
-// through NimbleWriterFactory into the Nimble file schema. These tests ensure
-// the writer-side contract is preserved: empty trees are no-ops for backward
-// compatibility, and populated trees produce correct per-column attributes.
+// through the Nimble WriterFactory into the Nimble file schema. These tests
+// ensure the writer-side contract is preserved: empty trees are no-ops for
+// backward compatibility, and populated trees produce correct per-column
+// attributes.
 // ---------------------------------------------------------------------------
 
 // Verifies an empty Iceberg field-id tree is a no-op: schemaAttributes
