@@ -174,6 +174,13 @@ struct WaveConfig {
     static WaveConfig instance;
     return instance;
   }
+
+  /// Returns a compact, comma-separated list of the settings whose value
+  /// differs from its default (e.g. "trace=16, autoAdjustCost=true,
+  /// freeIntermediates=true"), or "defaults" when every field is at its
+  /// default. Used in the performance report so a run's active configuration is
+  /// self-documenting.
+  std::string toString() const;
 };
 
 } // namespace torch::wave

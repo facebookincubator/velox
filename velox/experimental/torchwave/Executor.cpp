@@ -1283,7 +1283,7 @@ void WaveGraphExecutor::adjustCosts(ExecutionState& state) {
     int32_t blockStart = 0;
     for (size_t li = 0; li < sv.kernels.size(); ++li) {
       int32_t nBlocks =
-          li < sv.numBlocksPerLaunch.size() ? sv.numBlocksPerLaunch[li] : 0;
+          li < sv.numBlocksPerLaunch.size() ? sv.numBlocksPerLaunch.at(li) : 0;
       for (int32_t b = 0; b < nBlocks; ++b) {
         auto idx = blockStart + b;
         if (idx < static_cast<int32_t>(debugBlocks.size())) {
@@ -1462,6 +1462,7 @@ std::string WaveGraphExecutor::makePerfReport(
         standaloneUs,
         interpUs);
   }
+  ss << "WaveConfig: " << WaveConfig::get().toString() << "\n";
 
   // Per-node, per-step report.
   // Group launches by sequenceNumber.
