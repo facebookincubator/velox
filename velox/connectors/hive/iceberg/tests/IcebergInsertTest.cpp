@@ -243,24 +243,65 @@ TEST_F(IcebergInsertTest, partitionMultiColumns) {
 }
 
 TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
-  setConnectorSessionProperty(
-      HiveConfig::kParquetMaxTargetFileSizeSession, "4KB");
+  constexpr int32_t kNumBatches = 10;
+  constexpr vector_size_t kRowsPerBatch = 100;
+  constexpr int32_t kPayloadSize = 96;
 
-  const auto outputPath = TempDirectoryPath::create()->getPath();
+  // Generate fixed-size, per-row-varying strings for predictable size
+  // accounting without relying on fuzzed VARCHAR lengths.
+  auto makePayload = [](int64_t value) {
+    std::string payload;
+    payload.reserve(kPayloadSize);
+    for (auto i = 0; i < kPayloadSize; ++i) {
+      payload.push_back(static_cast<char>('a' + ((value + i) % 26)));
+    }
+    return payload;
+  };
+
   const auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
-  const auto vectors = createTestData(rowType, 10, 1'000);
-  const auto dataSink = createDataSinkAndAppendData(vectors, outputPath);
-  const auto commitTasks = dataSink->close();
+  std::vector<RowVectorPtr> vectors;
+  vectors.reserve(kNumBatches);
+  for (int32_t batch = 0; batch < kNumBatches; ++batch) {
+    const auto batchOffset = batch * kRowsPerBatch;
+    vectors.push_back(makeRowVector(
+        rowType->names(),
+        {
+            makeFlatVector<int64_t>(
+                kRowsPerBatch,
+                [batchOffset](auto row) { return batchOffset + row; }),
+            makeFlatVector<std::string>(
+                kRowsPerBatch,
+                [&, batchOffset](auto row) {
+                  return makePayload(batchOffset + row);
+                }),
+        }));
+  }
 
-  ASSERT_EQ(listFiles(outputPath).size(), 5);
+  auto writeAndRead = [&](const std::string& maxTargetFileSize) {
+    setConnectorSessionProperty(
+        HiveConfig::kParquetMaxTargetFileSizeSession, maxTargetFileSize);
 
-  auto splits = createSplitsForDirectory(outputPath);
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(rowType)
-                  .endTableScan()
-                  .planNode();
-  exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
+    const auto outputDirectory = TempDirectoryPath::create();
+    const auto outputPath = outputDirectory->getPath();
+    const auto dataSink = createDataSinkAndAppendData(vectors, outputPath);
+    const auto commitTasks = dataSink->close();
+    const auto files = listFiles(outputPath);
+    EXPECT_EQ(files.size(), commitTasks.size());
+
+    auto splits = createSplitsForDirectory(outputPath);
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan()
+                    .connectorId(test::kIcebergConnectorId)
+                    .outputType(rowType)
+                    .endTableScan()
+                    .planNode();
+    exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
+
+    return files.size();
+  };
+
+  ASSERT_EQ(writeAndRead("1KB"), kNumBatches);
+  ASSERT_EQ(writeAndRead("10MB"), 1);
 }
 
 #endif

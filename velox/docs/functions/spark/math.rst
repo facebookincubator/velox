@@ -49,7 +49,9 @@ Mathematical Functions
 .. spark:function:: add(x, y) -> [same as x]
 
     Returns the result of adding x to y. The types of x and y must be the same.
-    Corresponds to sparks's operator ``+``.
+    For interval inputs (``interval day to second`` and
+    ``interval year to month``), overflow always throws an exception.
+    Corresponds to Spark's operator ``+``.
 
 .. spark:function:: add(x, y) -> decimal
 
@@ -81,7 +83,8 @@ Mathematical Functions
 .. function:: checked_add(x, y) -> [same as x]
 
     Returns the result of adding x to y. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to Spark's operator ``+`` with ``failOnError`` as true.
+    For integral and interval types, overflow results in an error. Corresponds
+    to Spark's operator ``+`` with ``failOnError`` as true.
 
 .. function:: checked_div(x, y) -> bigint
 
@@ -103,7 +106,8 @@ Mathematical Functions
 .. function:: checked_subtract(x, y) -> [same as x]
 
     Returns the result of subtracting y from x. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to Spark's operator ``-`` with ``failOnError`` as true.
+    For integral and interval types, overflow results in an error. Corresponds
+    to Spark's operator ``-`` with ``failOnError`` as true.
 
 .. spark:function:: cos(x) -> double
 
@@ -290,6 +294,10 @@ Mathematical Functions
     Returns true if x is Nan, or false otherwise. Returns false is x is NULL.
     Supported types are: REAL, DOUBLE.
 
+.. spark:function:: ln(x) -> double
+
+    Returns the natural logarithm of ``x``. Return null for zero and non-positive input.
+
 .. spark:function:: log(base, expr) -> double
 
     Returns the logarithm of ``expr`` with ``base``.
@@ -344,6 +352,10 @@ Mathematical Functions
 .. spark:function:: power(x, p) -> double
 
     Returns ``x`` raised to the power of ``p``.
+
+.. spark:function:: radians(x) -> double
+
+    Converts angle x in degrees to radians.
 
 .. spark:function:: rand() -> double
 
@@ -407,6 +419,10 @@ Mathematical Functions
     * 1.0 if the argument is +Infinity,
     * -1.0 if the argument is -Infinity.
 
+.. spark:function:: sin(x) -> double
+
+    Returns the sine of ``x``.
+
 .. spark:function:: sinh(x) -> double
 
     Returns hyperbolic sine of ``x``.
@@ -414,6 +430,8 @@ Mathematical Functions
 .. spark:function:: subtract(x, y) -> [same as x]
 
     Returns the result of subtracting y from x. The types of x and y must be the same.
+    For interval inputs (``interval day to second`` and
+    ``interval year to month``), overflow always throws an exception.
     Corresponds to Spark's operator ``-``.
 
 .. spark:function:: subtract(x, y) -> decimal
@@ -428,9 +446,21 @@ Mathematical Functions
         SELECT CAST(99999999999999999999999999999999.99998 as DECIMAL(38, 6)) - CAST(-0.00001 as DECIMAL(38, 5)); -- DECIMAL(38, 6) 99999999999999999999999999999999.999990
         SELECT CAST(-99999999999999999999999999999999990.0 as DECIMAL(38, 3)) - CAST(0.00001 as DECIMAL(38, 7)); -- DECIMAL(38, 6) NULL
 
-.. spark:function:: unaryminus(x) -> [same as x]
+.. spark:function:: tan(x) -> double
 
-    Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
+    Returns the tangent of ``x``.
+
+.. spark:function:: tanh(x) -> double
+
+    Returns the hyperbolic tangent of ``x``.
+
+.. spark:function:: unaryminus(x) -> [same as x] (ANSI compliant)
+
+    Returns the negative of ``x``. Corresponds to Spark's operator ``-``.
+    For integral inputs, negating the minimum value returns the same value when
+    Spark ANSI mode is disabled and throws an overflow exception when Spark
+    ANSI mode is enabled. For interval inputs (``interval day to second`` and
+    ``interval year to month``), overflow always throws an exception.
 
 .. spark:function:: unhex(x) -> varbinary
 

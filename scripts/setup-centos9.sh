@@ -61,7 +61,7 @@ function install_build_prerequisites {
     llvm ninja-build python3-pip python3-devel wget which
 
   install_uv
-  uv_install cmake@3.31.1
+  uv_install --force cmake@4.3.2
 
   if [[ ${USE_CLANG} != "false" ]]; then
     install_clang15
@@ -73,7 +73,7 @@ function install_velox_deps_from_dnf {
   dnf_install libevent-devel \
     openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
     libdwarf-devel elfutils-libelf-devel curl-devel libicu-devel bison flex \
-    libsodium-devel zlib-devel gtest-devel gmock-devel xxhash-devel numactl-devel
+    libsodium-devel zlib-devel gtest-devel gmock-devel xxhash-devel
 
   install_faiss_deps
 }
@@ -96,6 +96,10 @@ function install_gflags {
 
 function install_faiss_deps {
   dnf_install openblas-devel libomp
+}
+
+function install_cxl_deps {
+  dnf_install numactl-devel
 }
 
 function install_velox_deps {

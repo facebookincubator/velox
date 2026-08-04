@@ -41,8 +41,10 @@ class StreamingAggregation : public Operator {
 
   bool needsInput() const override {
     // We don't need input if the first group is ready to output which has mixed
-    // input sources across streaming input batches.
-    return !outputFirstGroup_;
+    // input sources across streaming input batches, nor while we are still
+    // holding an unconsumed input batch -- otherwise the next addInput() would
+    // overwrite (and silently drop) the pending input_.
+    return !outputFirstGroup_ && input_ == nullptr;
   }
 
   bool startDrain() override;

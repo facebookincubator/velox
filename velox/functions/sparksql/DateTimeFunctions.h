@@ -1123,7 +1123,7 @@ struct TimestampDiffFunction {
   std::optional<DateTimeUnit> unit_ = std::nullopt;
 };
 
-template <typename T>
+template <typename T, typename TTimestamp>
 struct TimestampAddFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -1133,7 +1133,7 @@ struct TimestampAddFunction {
       const core::QueryConfig& config,
       const arg_type<Varchar>* unitString,
       const TInput* /*value*/,
-      const arg_type<Timestamp>* /*timestamp*/) {
+      const arg_type<TTimestamp>* /*timestamp*/) {
     VELOX_USER_CHECK_NOT_NULL(unitString);
     std::string unitStr(*unitString);
     folly::toLowerAscii(unitStr);
@@ -1143,15 +1143,21 @@ struct TimestampAddFunction {
       unit_ = fromDateTimeUnitString(
           *unitString, /*throwIfInvalid=*/true, /*allowMicro=*/true);
     }
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    if constexpr (std::is_same_v<TTimestamp, TimestampUtc>) {
+      // TIMESTAMP UTC represents a timestamp in UTC, not subject to session
+      // timezone adjustment.
+      sessionTimeZone_ = nullptr;
+    } else {
+      sessionTimeZone_ = getTimeZoneFromConfig(config);
+    }
   }
 
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(
-      out_type<Timestamp>& result,
+      out_type<TTimestamp>& result,
       const arg_type<Varchar>& /*unitString*/,
       const TInput value,
-      const arg_type<Timestamp>& timestamp) {
+      const arg_type<TTimestamp>& timestamp) {
     const auto unit = unit_.value();
     result = addToTimestamp(unit, value, timestamp, sessionTimeZone_);
   }

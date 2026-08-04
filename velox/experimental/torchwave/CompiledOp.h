@@ -188,7 +188,8 @@ class CompositeKernel {
   CompositeKernel(
       std::vector<std::unique_ptr<ProjectOperation>>&& ops,
       std::vector<std::unique_ptr<KernelOperation>>&& kernelOps,
-      const std::unordered_set<std::string>& includes);
+      const std::unordered_set<std::string>& includes,
+      int32_t kernelId);
 
   /// Launches the kernel on the given stream.
   void launch(
@@ -322,16 +323,15 @@ class CompositeInvocation {
       std::vector<OpInvocation> ops,
       std::deque<c10::IValue> ivalueStorage,
       int32_t sequenceNumber,
-      std::vector<Launch> prePassStandalones = {});
+      std::vector<nativert::ValueId> lastUseIds,
+      std::vector<nativert::ValueId> reusableIds = {},
+      std::vector<Launch> prePassStandalones = {},
+      std::vector<std::pair<nativert::ValueId, int32_t>> elidedCloneInputs =
+          {});
 
   /// Executes this composite invocation: allocates outputs, builds the grid,
   /// copies params to pinned+device memory, and enqueues the H2D transfer.
   void execute(ExecutionState& state);
-
-  /// Runs pre-pass standalones that were skipped during execute() because
-  /// their inputs were None.  Called after all PNs have executed so that
-  /// cross-PN values are available.
-  void runDeferredStandalones(ExecutionState& state);
 
   std::string toString(Listing mode = kExprs, int32_t ordinal = 0) const;
 
@@ -388,14 +388,27 @@ class CompositeInvocation {
   std::deque<c10::IValue> ivalueStorage_;
   int32_t sequenceNumber_;
 
-  // Grid standalones skipped during execute() due to None inputs.
-  // Re-run by runDeferredStandalones() after all PNs execute.
-  std::vector<NodeCP> deferredStandalones_;
+  // Frame value ids whose last use across the graph is in this node (graph
+  // outputs excluded). When WaveConfig::freeIntermediates is set, their frame
+  // tensors are released at the end of execute().
+  std::vector<nativert::ValueId> lastUseIds_;
+
+  // Frame value ids whose buffer an elementwise output may reuse in place --
+  // reusable last-use boundary inputs and expr-local overwritable temps, from
+  // ProjectNode::reusableValues_/overwritableTemps_. Gated by
+  // WaveConfig::enableReuse.
+  folly::F14FastSet<nativert::ValueId> reusableIds_;
 
   // Standalone ops from the maxFusedNodes pre-pass.  Executed at the
   // start of execute() before any kernel step, so their outputs are
   // available for SizeExpr evaluation.
   std::vector<Launch> prePassStandalones_;
+
+  // Frame value ids that were the input of a clone the in-place pass elided in
+  // this node, paired with the number of clones elided for that value (from
+  // ProjectNode::elidedCloneCounts). Used to report the copying saved; read
+  // only when the kTiming trace bit is on.
+  std::vector<std::pair<nativert::ValueId, int32_t>> elidedCloneInputs_;
 };
 
 /// Represents a single ProjectNode in a stack of ProjectNodes. Contains a graph
@@ -408,9 +421,6 @@ class CompiledNode {
 
   /// Executes this node using the given execution state.
   void execute(ExecutionState& state);
-
-  /// Runs deferred standalone ops after all PNs have executed.
-  void runDeferredStandalones(ExecutionState& state);
 
   const CompositeInvocation* kernels() const {
     return kernels_.get();

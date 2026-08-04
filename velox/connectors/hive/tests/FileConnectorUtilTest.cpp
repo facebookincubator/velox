@@ -136,15 +136,14 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::DWRF);
     EXPECT_FALSE(readerOptions.fileColumnNamesReadAsLowerCase());
-    EXPECT_EQ(
-        readerOptions.columnMappingMode(),
-        dwio::common::ColumnMappingMode::kPosition);
   }
 
-  // Test with ORC format and useColumnNames enabled via session.
+  // Test with ORC format and reader-specific options enabled via session.
   {
     auto holder = makeConnectorQueryCtx(
-        {{hive::FileConfig::kOrcUseColumnNamesSession, "true"}});
+        {{hive::FileConfig::kUseColumnNamesSession, "true"},
+         {"orc_footer_speculative_io_size", std::to_string(128UL << 10)},
+         {hive::FileConfig::kMaxCoalescedDistanceSession, "3MB"}});
     auto split = makeSplit(dwio::common::FileFormat::ORC);
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
@@ -161,6 +160,8 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     EXPECT_EQ(
         readerOptions.columnMappingMode(),
         dwio::common::ColumnMappingMode::kName);
+    EXPECT_EQ(readerOptions.maxCoalesceDistance(), 3 << 20);
+    EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 128UL << 10);
   }
 
   // Test format mismatch throws.
@@ -316,6 +317,53 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptions) {
   EXPECT_EQ(rowReaderOptions.scanSpec(), scanSpec);
   EXPECT_EQ(rowReaderOptions.offset(), 0);
   EXPECT_EQ(rowReaderOptions.length(), std::numeric_limits<uint64_t>::max());
+}
+
+TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleDictVectorFlags) {
+  auto fileConfig = makeFileConfig();
+  auto split = makeSplit(dwio::common::FileFormat::NIMBLE);
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  // Both session flags enabled => both RowReaderOptions flags true.
+  {
+    auto holder = makeConnectorQueryCtx(
+        {{hive::FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
+         {hive::FileConfig::kNimblePreserveDictionaryEncodingSession, "true"}});
+    dwio::common::RowReaderOptions rowReaderOptions;
+    hive::configureRowReaderOptions(
+        /*tableParameters=*/{},
+        scanSpec,
+        /*metadataFilter=*/nullptr,
+        rowType,
+        split,
+        fileConfig,
+        holder.ctx->sessionProperties(),
+        /*ioExecutor=*/nullptr,
+        rowReaderOptions);
+
+    EXPECT_TRUE(rowReaderOptions.stringDecoderZeroCopy());
+    EXPECT_TRUE(rowReaderOptions.nimblePreserveDictionaryEncoding());
+  }
+
+  // Keys absent => both flags fall back to their default (false).
+  {
+    auto holder = makeConnectorQueryCtx();
+    dwio::common::RowReaderOptions rowReaderOptions;
+    hive::configureRowReaderOptions(
+        /*tableParameters=*/{},
+        scanSpec,
+        /*metadataFilter=*/nullptr,
+        rowType,
+        split,
+        fileConfig,
+        holder.ctx->sessionProperties(),
+        /*ioExecutor=*/nullptr,
+        rowReaderOptions);
+
+    EXPECT_FALSE(rowReaderOptions.stringDecoderZeroCopy());
+    EXPECT_FALSE(rowReaderOptions.nimblePreserveDictionaryEncoding());
+  }
 }
 
 TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSkipRows) {

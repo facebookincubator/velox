@@ -16,7 +16,13 @@
 
 #pragma once
 
+#include <type_traits>
+
+#include <folly/Expected.h>
+
+#include "velox/common/base/Status.h"
 #include "velox/expression/StringWriter.h"
+#include "velox/type/CppToType.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -38,12 +44,42 @@ class CastHooks {
  public:
   virtual ~CastHooks() = default;
 
+  /// Parses a string to a timestamp. When 'adjustTimezone' is true, applies
+  /// the session timezone to the parsed result. When false, the parsed
+  /// timestamp fields are stored as-is, not subject to session timezone
+  /// adjustment (used for TIMESTAMP UTC casts).
   virtual Expected<Timestamp> castStringToTimestamp(
-      const StringView& view) const = 0;
+      const StringView& view,
+      bool adjustTimezone) const = 0;
 
   virtual Expected<Timestamp> castIntToTimestamp(int64_t seconds) const = 0;
 
-  virtual Expected<int64_t> castTimestampToInt(Timestamp timestamp) const = 0;
+  virtual Expected<int64_t> castTimestampToBigint(
+      Timestamp timestamp) const = 0;
+
+  /// Returns the converted value as int64_t and reports overflow against the
+  /// target type 'To' as an error. setResultOrStatus then either throws (ANSI)
+  /// or sets NULL (try_cast) for the overflow case.
+  template <typename T>
+  Expected<int64_t> castTimestampToInt(Timestamp timestamp) const {
+    auto result = castTimestampToBigint(timestamp);
+    if (result.hasError()) {
+      return result;
+    }
+
+    const int64_t value = result.value();
+    if (value != static_cast<int64_t>(static_cast<T>(value))) {
+      return folly::makeUnexpected(
+          Status::UserError(
+              "The value {} of the type \"{}\" cannot be cast to \"{}\" due to an "
+              "overflow. Use `try_cast` to tolerate overflow and return NULL "
+              "instead.",
+              value,
+              TypeTraits<TypeKind::TIMESTAMP>::name,
+              CppToType<T>::name));
+    }
+    return value;
+  }
 
   virtual Expected<std::optional<Timestamp>> castDoubleToTimestamp(
       double seconds) const = 0;

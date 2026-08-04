@@ -17,6 +17,7 @@
 #pragma once
 
 #include <algorithm>
+#include "velox/common/base/Portability.h"
 #include "velox/common/memory/RawVector.h"
 #include "velox/common/process/ProcessBase.h"
 #include "velox/dwio/common/StreamUtil.h"
@@ -32,6 +33,108 @@ static bool applyFilter(TFilter& filter, T value);
 } // namespace facebook::velox
 
 namespace facebook::velox::dwio::common {
+
+// Per-dictionary-index verdict cached by the dictionary filter path. The byte
+// values are chosen so the SIMD kernel below tests them from the gathered
+// int32: bit 7 (kSuccess) is the sign bit and bit 6 (kUnknown) selects
+// unknowns.
+enum FilterResult { kUnknown = 0x40, kSuccess = 0x80, kFailure = 0 };
+
+/// SIMD dictionary-filter kernel shared by the DWRF framework
+/// StringDictionaryColumnVisitor and the Nimble dictionary filter path. Reads a
+/// run of materialized dictionary indices, consults the per-index 'filterCache'
+/// to skip indices already known to pass or fail, resolves cache-unknown
+/// indices by invoking 'testIndex' (which the kernel then records into
+/// 'filterCache' as kSuccess/kFailure), and compacts the passing entries. For
+/// each passing entry the corresponding 'rows' value is appended to
+/// 'filterHits'; unless 'kFilterOnly' is set, the passing dictionary index is
+/// also appended to 'values'. The caller supplies 'rows' already offset to the
+/// current position. Returns the updated number of output values.
+///
+/// Caller-side buffer contracts -- the kernel reads and writes a full SIMD
+/// width at the tail and gathers the cache through a misaligned load, none of
+/// which is bounds-checked:
+///  - 'input' and 'rows' must each have at least kWidth
+///    (= xsimd::batch<int32_t>::size) readable elements beyond 'numInput'.
+///  - 'filterHits', and unless 'kFilterOnly' also 'values', must have room for
+///    at least 'numValues' + 'numInput' + kWidth entries.
+///  - 'filterCache' must have >= 3 bytes of valid leading padding, because each
+///    verdict is gathered via 'filterCache + index - 3'. The Nimble and Velox
+///    callers satisfy this with raw_vector<uint8_t>, whose data() is offset by
+///    velox::simd::kPadding (>= 16).
+template <bool kFilterOnly, typename TestIndex>
+int32_t filterDictionaryRunSimd(
+    const int32_t* input,
+    int32_t numInput,
+    const int32_t* rows,
+    uint8_t* filterCache,
+    int32_t* filterHits,
+    int32_t* values,
+    int32_t numValues,
+    TestIndex&& testIndex) {
+  constexpr int32_t kWidth = xsimd::batch<int32_t>::size;
+  for (auto i = 0; i < numInput; i += kWidth) {
+    auto indices = xsimd::load_unaligned(input + i);
+    xsimd::batch<int32_t> cache;
+    // The gather reads each cache byte as the high byte of an int32 via a
+    // misaligned load at 'filterCache + index - 3', so for index 0 it touches
+    // up to 3 bytes before 'filterCache'. The param is a raw uint8_t*, so this
+    // is a caller contract: 'filterCache' must point into a buffer with >= 3
+    // bytes of valid leading padding. Both callers satisfy it with
+    // raw_vector<uint8_t> (Nimble's DictionaryState::filterCache and velox's
+    // ScanState::filterCache), whose data() is always offset by
+    // velox::simd::kPadding (>= 16). Mirrors the StringDictionaryColumnVisitor
+    // filterCache() - 3 idiom in ColumnVisitors.h.
+    auto base = reinterpret_cast<const int32_t*>(filterCache - 3);
+    if (i + kWidth > numInput) {
+      cache = simd::maskGather<int32_t, int32_t, 1>(
+          xsimd::broadcast<int32_t>(0),
+          simd::leadingMask<int32_t>(numInput - i),
+          base,
+          indices);
+    } else {
+      cache = simd::gather<int32_t, int32_t, 1>(base, indices);
+    }
+    // The cache byte ends up in the high byte (bits 24-31) of each
+    // gathered int32.  Extract unknowns via bit 30 (kUnknown 0x40) and
+    // passed via the sign bit (kSuccess 0x80).
+    auto unknowns = simd::toBitMask(
+        (cache & xsimd::batch<int32_t>(kUnknown << 24)) !=
+        xsimd::batch<int32_t>(0));
+    auto passed = simd::toBitMask(cache < xsimd::batch<int32_t>(0));
+    if (UNLIKELY(unknowns)) {
+      uint16_t bits = unknowns;
+      while (bits) {
+        int index = bits::getAndClearLastSetBit(bits);
+        int32_t value = input[i + index];
+        if (testIndex(value)) {
+          filterCache[value] = FilterResult::kSuccess;
+          passed |= 1 << index;
+        } else {
+          filterCache[value] = FilterResult::kFailure;
+        }
+      }
+    }
+    if (!passed) {
+      continue;
+    } else if (passed == (1 << kWidth) - 1) {
+      xsimd::load_unaligned(rows + i).store_unaligned(filterHits + numValues);
+      if (!kFilterOnly) {
+        indices.store_unaligned(values + numValues);
+      }
+      numValues += kWidth;
+    } else {
+      const int32_t numBits = __builtin_popcount(passed);
+      simd::filter(xsimd::load_unaligned(rows + i), passed)
+          .store_unaligned(filterHits + numValues);
+      if (!kFilterOnly) {
+        simd::filter(indices, passed).store_unaligned(values + numValues);
+      }
+      numValues += numBits;
+    }
+  }
+  return numValues;
+}
 
 inline int32_t firstNullIndex(const uint64_t* nulls, int32_t numRows) {
   int32_t first = -1;

@@ -37,8 +37,8 @@ namespace velox_iceberg = ::facebook::velox::connector::hive::iceberg;
 /// - Schema evolution with column adaptation (missing/added columns).
 ///
 /// The following features are not yet supported:
-/// - Identity partition columns are limited to VARCHAR, INTEGER, and BIGINT;
-///   other partition types (e.g. BOOLEAN, DATE, TIMESTAMP, DECIMAL, REAL,
+/// - Identity partition columns are limited to VARCHAR, INTEGER, BIGINT, DATE,
+///   and TIMESTAMP; other partition types (e.g. BOOLEAN, DECIMAL, REAL,
 ///   DOUBLE, VARBINARY) are not yet supported.
 /// - Iceberg-specific metadata columns.
 class CudfIcebergDataSource : public ::facebook::velox::cudf_velox::connector::

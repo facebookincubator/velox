@@ -136,6 +136,48 @@ TEST_F(MapTest, duplicateMapKey) {
       "Duplicate map key (20) was found.");
 }
 
+TEST_F(MapTest, duplicateMapKeyThreeOrMoreOccurrences) {
+  // Regression test for the case where the same key appears 3+ times in a
+  // single row under the LAST_WIN policy. The result size was computed by
+  // counting duplicate pairs (C(N,2)), while only N-1 occurrences are actually
+  // dropped, so the map was under-sized (0 for N=3, negative for N>=4), leading
+  // to an out-of-bounds write / crash. See fix in Map.cpp.
+  auto key = makeNullableFlatVector<int64_t>({7, 8});
+  auto value1 = makeNullableFlatVector<double>({1.0, 4.0});
+  auto value2 = makeNullableFlatVector<double>({2.0, 5.0});
+  auto value3 = makeNullableFlatVector<double>({3.0, 6.0});
+  auto value4 = makeNullableFlatVector<double>({3.5, 6.5});
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+
+  // Same key 3 times: keep the last value (LAST_WIN).
+  // map(k, v1, k, v2, k, v3) -> {k: v3}
+  const auto expectedThree =
+      makeMapVector<int64_t, double>({{{7, 3.0}}, {{8, 6.0}}});
+  testMap(
+      "map(c0, c1, c0, c2, c0, c3)",
+      {key, value1, value2, value3},
+      expectedThree);
+
+  // Same key 4 times: keep the last value.
+  // map(k, v1, k, v2, k, v3, k, v4) -> {k: v4}
+  const auto expectedFour =
+      makeMapVector<int64_t, double>({{{7, 3.5}}, {{8, 6.5}}});
+  testMap(
+      "map(c0, c1, c0, c2, c0, c3, c0, c4)",
+      {key, value1, value2, value3, value4},
+      expectedFour);
+
+  // EXCEPTION policy is unaffected: still fails on the duplicate key.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"}});
+  testMapFails(
+      "map(c0, c1, c0, c2, c0, c3)",
+      {key, value1, value2, value3},
+      "Duplicate map key (7) was found.");
+}
+
 TEST_F(MapTest, wide) {
   auto inputVector1 = makeNullableFlatVector<int64_t>({1, 2, 3});
   auto inputVector2 = makeNullableFlatVector<double>({4.0, 5.0, 6.0});

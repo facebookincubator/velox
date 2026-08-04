@@ -454,7 +454,7 @@ VELOX_DECLARE_ENUM_NAME(TypeParameterKind);
 struct TypeParameter {
   const TypeParameterKind kind;
 
-  /// Must be not not null when kind is kType. All other properties should be
+  /// Must be not null when kind is kType. All other properties should be
   /// null or unset (other than rowFieldName).
   const TypePtr type;
 
@@ -1466,6 +1466,14 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
 };
 
 using OpaqueTypePtr = std::shared_ptr<const OpaqueType>;
+
+/// Evaluates to true only for std::shared_ptr<T>, the physical value type
+/// stored in OPAQUE vectors.
+template <typename>
+struct is_shared_ptr : public std::false_type {};
+
+template <typename T>
+struct is_shared_ptr<std::shared_ptr<T>> : public std::true_type {};
 
 using IntegerType = ScalarType<TypeKind::INTEGER>;
 using BooleanType = ScalarType<TypeKind::BOOLEAN>;

@@ -30,13 +30,14 @@ class SparkCastHooks : public exec::CastHooks {
 
   // TODO: Spark hook allows more string patterns than Presto.
   Expected<Timestamp> castStringToTimestamp(
-      const StringView& view) const override;
+      const StringView& view,
+      bool adjustTimezone) const override;
 
   /// When casting integral value as timestamp, the input is treated as the
   /// number of seconds since the epoch (1970-01-01 00:00:00 UTC).
   Expected<Timestamp> castIntToTimestamp(int64_t seconds) const override;
 
-  Expected<int64_t> castTimestampToInt(Timestamp timestamp) const override;
+  Expected<int64_t> castTimestampToBigint(Timestamp timestamp) const override;
 
   /// When casting double as timestamp, the input is treated as
   /// the number of seconds since the epoch (1970-01-01 00:00:00 UTC).

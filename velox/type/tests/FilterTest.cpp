@@ -815,6 +815,16 @@ TEST(FilterTest, bigintOrWithBoundaryOverflow) {
   EXPECT_FALSE(filter->testInt64(50));
 }
 
+TEST(FilterTest, negatedBigintRangeMergeWithBoundaryOverflow) {
+  const int64_t kInt64Max = std::numeric_limits<int64_t>::max();
+  auto merged =
+      notBetween(-118, kInt64Max)->mergeWith(notBetween(284, 479).get());
+  ASSERT_EQ(merged->kind(), FilterKind::kNegatedBigintRange);
+  EXPECT_TRUE(merged->testInt64(-119));
+  EXPECT_FALSE(merged->testInt64(-118));
+  EXPECT_FALSE(merged->testInt64(kInt64Max));
+}
+
 TEST(FilterTest, boolValue) {
   auto boolValueTrue = boolEqual(true);
   EXPECT_TRUE(boolValueTrue->testBool(true));
@@ -1795,6 +1805,7 @@ TEST(FilterTest, mergeWithBigint) {
   filters.push_back(notIn({kInt64Min, kInt64Max}));
   filters.push_back(between(kInt64Min, 0));
   filters.push_back(between(0, kInt64Max));
+  filters.push_back(notBetween(-118, kInt64Max));
 
   for (const auto& left : filters) {
     for (const auto& right : filters) {

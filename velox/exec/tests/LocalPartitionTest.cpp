@@ -15,6 +15,7 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -263,6 +264,34 @@ TEST_P(LocalPartitionTestParametrized, partition) {
       queryBuilder.assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
 
   verifyExchangeSourceOperatorStats(task, 300, 6, 2);
+}
+
+TEST_F(LocalPartitionTest, planNodeStats) {
+  // A LocalPartition node is implemented by two operators sharing its plan node
+  // id: the LocalPartition producer and the LocalExchange consumer.
+  auto data = makeRowVector({makeFlatVector<int32_t>(100, folly::identity)});
+
+  auto plan = PlanBuilder().values({data}).localPartition({"c0"}).planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).maxDrivers(4).countResults(task);
+
+  auto planStats = toPlanStats(task->taskStats());
+  const auto& stats = planStats.at(plan->id());
+
+  // Two operators implement this one plan node.
+  ASSERT_EQ(stats.operatorStats.size(), 2);
+  const auto& partition = stats.operatorStatsFor(OperatorType::kLocalPartition);
+  EXPECT_EQ(partition.inputRows, 100);
+  EXPECT_EQ(partition.outputRows, 100);
+
+  const auto& exchange = stats.operatorStatsFor(OperatorType::kLocalExchange);
+  EXPECT_EQ(exchange.inputRows, 100);
+  EXPECT_EQ(exchange.outputRows, 100);
+
+  // Wrong: should be 100.
+  EXPECT_EQ(stats.inputRows, 200);
+  EXPECT_EQ(stats.outputRows, 200);
 }
 
 TEST_F(LocalPartitionTest, partitionBuffering) {

@@ -87,6 +87,16 @@ PlanNodeStats& PlanNodeStats::operator+=(const PlanNodeStats& another) {
   return *this;
 }
 
+const PlanNodeStats& PlanNodeStats::operatorStatsFor(
+    std::string_view operatorType) const {
+  auto it = operatorStats.find(std::string(operatorType));
+  VELOX_CHECK(
+      it != operatorStats.end(),
+      "No operator stats for operator type: {}",
+      operatorType);
+  return *it->second;
+}
+
 void PlanNodeStats::add(const OperatorStats& stats) {
   auto it = operatorStats.find(stats.operatorType);
   if (it != operatorStats.end()) {

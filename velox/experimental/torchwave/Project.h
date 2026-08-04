@@ -16,7 +16,9 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -68,6 +70,57 @@ class ProjectNode {
 
   void distinctFunctions(
       std::unordered_map<std::string, int32_t>& counts) const;
+
+  /// Values whose last access across all ProjectNodes happens in this node, so
+  /// their buffers may be released after this node executes. Graph outputs are
+  /// excluded (they escape the graph). Alias-corrected: a value kept alive by a
+  /// view or by membership in a prim.ListPack is not listed until its last
+  /// alias dies. Populated by ParallelNodes::computeLastUse.
+  std::unordered_set<ValueCP> lastUse;
+
+  /// For each top-level expr (parallel to nodes()), the lastUse values that are
+  /// a boundary input of only that expr in this layer. A kernel op for the expr
+  /// may reuse such a value's buffer in place, since nothing else reads it here
+  /// or later (directly or via any alias). Populated by
+  /// ParallelNodes::computeLastUse.
+  std::vector<std::vector<ValueCP>> reusableValues_;
+
+  /// True if 'value' is a reusable input of any expr in this node.
+  bool isReusableInput(ValueCP value) const {
+    for (const auto& perExpr : reusableValues_) {
+      if (std::find(perExpr.begin(), perExpr.end(), value) != perExpr.end()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// For each top-level expr (parallel to nodes()), the values produced and
+  /// consumed entirely within that expr: the producer is inside the expr
+  /// subgraph and every user -- directly or through any storage alias -- is
+  /// too, so the value never escapes to a sibling expr, a later layer, or a
+  /// graph output. Such a temporary owns its storage and may be overwritten in
+  /// place. Populated by ParallelNodes::computeLastUse.
+  std::vector<std::vector<ValueCP>> overwritableTemps_;
+
+  /// True if 'value' is an expr-local overwritable temp of any expr in this
+  /// node.
+  bool isOverwritableTemp(ValueCP value) const {
+    for (const auto& perExpr : overwritableTemps_) {
+      if (std::find(perExpr.begin(), perExpr.end(), value) != perExpr.end()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Number of clones elided in this node, keyed by the Value::id() of the
+  /// elided clone's input. The clone's own output is dead after the rewrite,
+  /// so the input identifies the buffer that was not copied; the count is the
+  /// number of copies of that buffer saved. Populated by
+  /// ParallelNodes::rewriteInPlace, and used at runtime to report the copying
+  /// the pass avoided. Ordered so listings are deterministic.
+  std::map<int32_t, int32_t> elidedCloneCounts;
 
  private:
   std::vector<NodeCP> nodes_;

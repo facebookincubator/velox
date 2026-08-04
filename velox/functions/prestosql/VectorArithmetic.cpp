@@ -49,7 +49,7 @@ namespace facebook::velox::exec {
 /// ruse before implementing dense or sparse vector loops which performs calls
 /// into the scalar level kernels for each data element in valid row range
 /// using applyToSelect functions. This function can be implemented in a fast
-/// and a slow path depending on the the decoding costs.
+/// and a slow path depending on the decoding costs.
 /// 3) Implement the type inference function
 /// 4) registering your functions using registerVectorFunction
 

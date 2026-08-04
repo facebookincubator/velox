@@ -145,6 +145,16 @@ class MmapAllocator : public MemoryAllocator {
       return unitSize_;
     }
 
+    // Start of the mmap'd region backing this size class.
+    uint8_t* address() const {
+      return address_;
+    }
+
+    // Byte size of the mmap'd region backing this size class.
+    size_t byteSize() const {
+      return byteSize_;
+    }
+
     // Allocates 'numPages' from 'this' and appends these to *out.
     // '*numUnmapped' is incremented by the number of pages that are not backed
     // by memory.
@@ -346,6 +356,9 @@ class MmapAllocator : public MemoryAllocator {
   // delegated to ManagedMmapArena. Otherwise, a system mmap call will be
   // issued for each such allocation.
   const bool useMmapArena_;
+
+  // See Options::onMap. Null if unset.
+  const std::function<void(void* address, size_t bytes)> onMap_;
 
   // Serializes moving capacity between size classes
   std::mutex sizeClassBalanceMutex_;

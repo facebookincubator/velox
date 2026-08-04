@@ -17,4 +17,10 @@
 #pragma once
 
 #define XXH_INLINE_ALL
+// Force memcpy-based reads. The default packed-struct method
+// (XXH_FORCE_MEMORY_ACCESS=1) auto-selected for GCC on ARM produces wrong
+// hashes at -O2 due to a strict-aliasing miscompilation.
+#if defined(__aarch64__) && !defined(XXH_FORCE_MEMORY_ACCESS)
+#define XXH_FORCE_MEMORY_ACCESS 0
+#endif
 #include <xxhash.h> // @manual=third-party//xxHash:xxhash

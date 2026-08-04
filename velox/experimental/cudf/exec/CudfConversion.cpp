@@ -153,6 +153,20 @@ RowVectorPtr CudfFromVelox::doGetOutput() {
   // Get a stream from the global stream pool
   auto stream = cudfGlobalStreamPool().get_stream();
 
+  // cuDF tables with zero columns cannot represent a row count, so we
+  // create a CudfVector directly with an empty table, preserving the
+  // logical row count. This mirrors the zero-column handling in
+  // CudfToVelox::doGetOutput().
+  if (input->childrenSize() == 0) {
+    auto emptyTable = std::make_unique<cudf::table>();
+    return std::make_shared<CudfVector>(
+        input->pool(),
+        outputType_,
+        input->size(),
+        std::move(emptyTable),
+        stream);
+  }
+
   // Convert RowVector to cudf table.  toCudfTable synchronizes the stream
   // internally before releasing Arrow host buffers, so no additional sync
   // is needed here.

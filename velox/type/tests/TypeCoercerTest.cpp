@@ -39,6 +39,59 @@ void testNoCoercion(const TypePtr& fromType, const TypePtr& toType) {
   ASSERT_FALSE(coercion.has_value());
 }
 
+// A ROW-backed custom type registered under a custom name that exposes no type
+// parameters.
+class RowBackedCustomType final : public RowType {
+  RowBackedCustomType() : RowType({"a", "b"}, {BIGINT(), TINYINT()}) {}
+
+ public:
+  static std::shared_ptr<const RowBackedCustomType> get() {
+    static const RowBackedCustomType kInstance;
+    return {std::shared_ptr<const RowBackedCustomType>{}, &kInstance};
+  }
+
+  bool equivalent(const Type& other) const override {
+    // Pointer comparison works since this type is a singleton.
+    return this == &other;
+  }
+
+  const char* name() const override {
+    return "ROW_BACKED_CUSTOM";
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  std::span<const TypeParameter> parameters() const override {
+    return {};
+  }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "Type";
+    obj["type"] = name();
+    return obj;
+  }
+};
+
+class RowBackedCustomTypeFactory : public CustomTypeFactory {
+ public:
+  TypePtr getType(const std::vector<TypeParameter>& parameters) const override {
+    VELOX_CHECK(parameters.empty());
+    return RowBackedCustomType::get();
+  }
+
+  exec::CastOperatorPtr getCastOperator() const override {
+    return nullptr;
+  }
+
+  AbstractInputGeneratorPtr getInputGenerator(
+      const InputGeneratorConfig& /*config*/) const override {
+    return nullptr;
+  }
+};
+
 TEST(TypeCoercerTest, basic) {
   testCoercion(TINYINT(), TINYINT());
   testCoercion(TINYINT(), BIGINT());
@@ -374,6 +427,28 @@ TEST(TypeCoercerTest, leastCommonSuperType) {
   ASSERT_TRUE(
       TypeCoercer::defaults().leastCommonSuperType(
           MAP(INTEGER(), REAL()), ROW({INTEGER(), REAL()})) == nullptr);
+}
+
+TEST(TypeCoercerTest, customType) {
+  registerCustomType(
+      "ROW_BACKED_CUSTOM",
+      std::make_unique<const RowBackedCustomTypeFactory>());
+
+  const auto customType = RowBackedCustomType::get();
+
+  // A custom type is opaque to structural coercion: its common super type with
+  // itself is itself.
+  VELOX_ASSERT_EQ_TYPES(
+      TypeCoercer::defaults().leastCommonSuperType(customType, customType),
+      customType);
+
+  // No common super type between a custom type and an unrelated type.
+  ASSERT_TRUE(
+      TypeCoercer::defaults().leastCommonSuperType(customType, BIGINT()) ==
+      nullptr);
+  ASSERT_TRUE(
+      TypeCoercer::defaults().leastCommonSuperType(
+          customType, ROW({"a", "b"}, {BIGINT(), TINYINT()})) == nullptr);
 }
 
 TEST(TypeCoercerTest, ctorRejectsDuplicateCostForSameSource) {

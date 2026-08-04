@@ -172,7 +172,11 @@ bool tensorMetaCompatible(
 bool isParamPresent(NodeCP node, std::string_view name) {
   for (const auto& input : node->inputs()) {
     if (input.name == name) {
-      return true;
+      // A None-typed input slot represents an absent optional argument (e.g.
+      // clamp(self, min=None, max=5)).  It must NOT count as present, otherwise
+      // the op selects the wrong presence template (e.g. __clamp<true, true>
+      // reading a None->0 min) and dedup merges it with present-arg ops.
+      return input.value->type().kind() != nativert::Type::Kind::None;
     }
   }
   const auto* attr = node->tryGetAttribute(std::string(name));
@@ -836,6 +840,26 @@ static bool isSizeArg(std::string_view inputName, const Metadata* meta) {
   return false;
 }
 
+// True if 'producer' is a non-elementwise op that computes (part of) its output
+// size on device (shapeSetOnDevice). Such an op cannot fuse into an elementwise
+// consumer whose shape depends on that size without a kernel boundary in
+// between: the elementwise loop bound would read the size before the producer's
+// kernel writes it, giving a wrong (too-long) result. The multi-kernel
+// masked_select_final reserves its size from a host scalar (shapeSetOnDevice is
+// false there), so it is not caught here and still fuses.
+static bool setsSizeOnDevice(NodeCP producer) {
+  const auto* meta = nodeMeta(producer);
+  if (!meta || meta->elementwise) {
+    return false;
+  }
+  for (const auto& ret : meta->returnMeta) {
+    if (ret.shapeSetOnDevice) {
+      return true;
+    }
+  }
+  return false;
+}
+
 Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
   if (node->target() == "prim.ListUnpack" && !node->inputs().empty()) {
     auto* inputValue = node->inputs()[0].value;
@@ -869,7 +893,16 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     }
     auto inputContext = placeKernels(producer, thisContext);
     if (inputContext == Context::kFused) {
-      if (isScalarSize) {
+      // A non-elementwise producer that sets its output size on device (e.g.
+      // masked_select's single-block/cg form) must not fuse into an elementwise
+      // consumer whose loop bound is that size: the elementwise would read the
+      // size before the producer's kernel writes it, giving a too-long result.
+      // Force a kernel boundary so the size is materialized first. The
+      // multi-kernel masked_select_final reserves its size from a host scalar
+      // (shapeSetOnDevice is false), so it still fuses with the elementwise.
+      bool consumerIsElementwise = meta && meta->elementwise != nullptr;
+      if (isScalarSize ||
+          (consumerIsElementwise && setsSizeOnDevice(producer))) {
         pushdownFused(producer);
       } else {
         fusedInputs.push_back(producer);
@@ -877,31 +910,41 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     }
   };
 
+  // Place the previous-kernel (ordering) input first, if any. Its producer is
+  // its own kernel stage, separated from this op by a kernel break; placing it
+  // first materializes any inputs it shares with this op (e.g. a scan head that
+  // reads the same data tensor as its final stage), so the loop below then
+  // finds those producers already placed. When the producer's isKernelBreak is
+  // false (e.g. a single-block scan head) it returns kFused and would be
+  // collected into this op's fusedInputs -- which the kFusedBreak path below
+  // discards -- so push it directly instead, otherwise this op reads a buffer
+  // its producer never wrote (an orphaned scan stage).
+  if (meta && meta->inputFromPreviousKernel.has_value()) {
+    auto* prevProducer =
+        node->inputs()[meta->inputFromPreviousKernel.value()].value->producer();
+    if (prevProducer && !placed_.count(prevProducer) &&
+        !(inputs_ && inputs_->count(prevProducer))) {
+      placeKernels(prevProducer, Context::kFused);
+      if (!placed_.count(prevProducer)) {
+        pushdownFused(prevProducer);
+      }
+    }
+  }
+
   for (auto i = 0; i < node->inputs().size(); ++i) {
-    bool isPrevKernel = meta && meta->inputFromPreviousKernel.has_value() &&
-        i == meta->inputFromPreviousKernel.value();
-    if (meta && meta->inputFromPreviousKernel.has_value() && !isPrevKernel) {
+    // The ordering input was placed above. Its non-ordering siblings still need
+    // their producers placed if the previous-kernel stage did not already
+    // materialize them (placeInput is a no-op for producers already placed).
+    // Skipping them entirely -- as this loop used to -- orphans a producer
+    // reachable only through this op, e.g. a standalone op feeding
+    // repeat_interleave's data input: placeKernels never materializes it, yet
+    // extractSubgraph still pulls it in as an interior node, so codegen aborts.
+    if (meta && meta->inputFromPreviousKernel.has_value() &&
+        i == meta->inputFromPreviousKernel.value()) {
       continue;
     }
     auto* inputValue = node->inputs()[i].value;
     auto* producer = inputValue->producer();
-    if (isPrevKernel) {
-      // The producer of an inputFromPreviousKernel argument is always its own
-      // kernel stage: there is a kernel break between it and this op.  Place
-      // its own inputs, then push it directly.  Otherwise, when the producer's
-      // isKernelBreak is false (e.g. a single-block scan head) it returns
-      // kFused and is collected into this op's fusedInputs -- which the
-      // kFusedBreak path below discards, leaving this op reading a buffer its
-      // producer never wrote (an orphaned scan stage).
-      if (producer && !placed_.count(producer) &&
-          !(inputs_ && inputs_->count(producer))) {
-        placeKernels(producer, Context::kFused);
-        if (!placed_.count(producer)) {
-          pushdownFused(producer);
-        }
-      }
-      continue;
-    }
     auto inputKind = inputValue->type().kind();
     bool isScalarSize = isSizeArg(node->inputs()[i].name, meta) &&
         inputKind != nativert::Type::Kind::Tensor &&
@@ -923,7 +966,10 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     pushdownStandalone(node);
     return thisContext;
   }
-  if (meta->isKernelBreak(isSingleBlock_, isCgGrid_)) {
+  if (meta->isKernelBreak(
+          isSingleBlock_,
+          isCgGrid_,
+          WaveConfig::get().scanOutputReturnBarrier)) {
     pushdownFused(node);
     return Context::kFusedBreak;
   }
@@ -1436,7 +1482,20 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
     code_ << "  if (blockInfo.blockInOp == 0) {\n";
   }
   if (!subgraphs.empty()) {
-    generateElementwise(subgraphs, ewResultSpecs, callStmt, meta->hasBarrier);
+    // For a data-dependent scan op (masked_select / nonzero) whose size is set
+    // on device, pass its output so generateElementwise can zero the length for
+    // an empty input before a fused consumer reads it.
+    ValueCP shapeSetOnDeviceResult = nullptr;
+    if (meta && !meta->returnMeta.empty() &&
+        meta->returnMeta[0].shapeSetOnDevice && !node->outputs().empty()) {
+      shapeSetOnDeviceResult = node->outputs()[0];
+    }
+    generateElementwise(
+        subgraphs,
+        ewResultSpecs,
+        callStmt,
+        meta->hasBarrier,
+        shapeSetOnDeviceResult);
   }
   if (multiBlockSingleOp) {
     code_ << "  }\n";
@@ -1560,7 +1619,6 @@ std::string presentTemplateParams(const Metadata& meta, NodeCP node) {
     return result;
   }
   const auto& schemaArgs = meta.functionSchema->arguments();
-  const auto& nodeInputs = node->inputs();
   for (size_t i = 0; i < schemaArgs.size(); ++i) {
     if (i >= meta.argumentMeta.size() ||
         !meta.argumentMeta[i].hasPresentTemplateParam) {
@@ -1569,21 +1627,9 @@ std::string presentTemplateParams(const Metadata& meta, NodeCP node) {
     if (!result.empty()) {
       result += ", ";
     }
-    bool present = false;
-    const auto& argName = schemaArgs[i].name();
-    for (const auto& input : nodeInputs) {
-      if (input.name == argName) {
-        present = true;
-        break;
-      }
-    }
-    if (!present) {
-      const auto* attr = node->tryGetAttribute(argName);
-      if (attr && !std::holds_alternative<nativert::None>(attr->value)) {
-        present = true;
-      }
-    }
-    result += present ? "true" : "false";
+    // Use the same presence rule as dedup (isParamPresent), which treats a
+    // None-typed input slot as absent.
+    result += isParamPresent(node, schemaArgs[i].name()) ? "true" : "false";
   }
   return result;
 }
@@ -1848,8 +1894,18 @@ void CompileCtx::emitCopy(
     const std::string& destOffsetExpr,
     const std::string& cudaTypeName) {
   auto& op = *generatingOp_;
-  code_ << "  __copy<" << cudaTypeName << ">(" << param(source, op) << ", "
-        << "storage<" << cudaTypeName << ">(" << param(dest, op) << ")";
+  auto srcTypeName = cudaType(source);
+  if (srcTypeName != cudaTypeName) {
+    // Mixed-dtype cat element (e.g. an int64 cumsum slice copied into a float
+    // cat output, where torch type-promotes the element): value-convert rather
+    // than bit-copy, which would reinterpret the source bytes.
+    code_ << "  __copyConvert<" << srcTypeName << ", " << cudaTypeName << ">("
+          << param(source, op) << ", "
+          << "storage<" << cudaTypeName << ">(" << param(dest, op) << ")";
+  } else {
+    code_ << "  __copy<" << cudaTypeName << ">(" << param(source, op) << ", "
+          << "storage<" << cudaTypeName << ">(" << param(dest, op) << ")";
+  }
   if (!destOffsetExpr.empty()) {
     code_ << " + " << destOffsetExpr;
   }
@@ -1876,16 +1932,13 @@ void CompileCtx::emitBarrier() {
 }
 
 bool CompileCtx::callNeedsBarrier(NodeCP node) {
-  auto* meta = nodeMeta(node);
-  if (!meta) {
-    return false;
-  }
-  const auto& inputs = node->inputs();
-  for (size_t i = 0; i < inputs.size() && i < meta->argumentMeta.size(); ++i) {
-    if (!meta->argumentMeta[i].randomAccess) {
-      continue;
-    }
-    auto* value = inputs[i].value;
+  // A call reads its inputs from memory, so if a producer ran earlier in this
+  // same kernel with no barrier since, that producer's writes from other blocks
+  // may not yet be visible. Barrier for any such unsynchronized intra-kernel
+  // producer, regardless of whether the input is flagged random access -- a
+  // sequential read of an in-flight tensor is just as unsafe.
+  for (const auto& input : node->inputs()) {
+    auto* value = input.value;
     auto* producer = value->producer();
     if (producer && generatingOp_->allNodes().count(producer) &&
         !preBarrierValues_.count(value)) {
@@ -2162,12 +2215,74 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
     return nullptr;
   }
   auto compositeKernel = std::make_unique<CompositeKernel>(
-      std::move(opStorage_), std::move(kernelOpStorage_), includes_);
+      std::move(opStorage_),
+      std::move(kernelOpStorage_),
+      includes_,
+      nextKernelId());
+  // Values whose last use is in this node (graph outputs already excluded);
+  // WaveConfig::freeIntermediates releases their frame tensors after execute().
+  std::vector<nativert::ValueId> lastUseIds;
+  lastUseIds.reserve(project.lastUse.size());
+  for (auto* value : project.lastUse) {
+    lastUseIds.push_back(value->id());
+  }
+  // Values whose buffer an elementwise op may reuse in place for its output:
+  // reusable last-use boundary inputs and expr-local overwritable temps. Only
+  // eligible when EVERY consumer is a pointwise op
+  // (Metadata::inPlaceIfLastUse): such ops read the operand at the identity
+  // index, so writing the output into its buffer is a per-element
+  // read-before-write and cannot clobber a value the kernel still needs. A
+  // non-pointwise consumer (broadcast/gather/view/scatter, which carry
+  // inPlaceIfLastUse=false) reads at other indices, where in-place reuse would
+  // corrupt results.
+  auto reuseSafe = [](ValueCP value) {
+    // Exactly one consumer: a forked value (>1 user) feeds several ops, each of
+    // which could reuse its buffer for its own output and clobber the others'
+    // reads. Require a single consumer so at most one output reuses the buffer.
+    if (value->users().size() != 1) {
+      return false;
+    }
+    for (auto* user : value->users()) {
+      const Metadata* m = Registry::metadata(user->target());
+      if (m == nullptr || !m->inPlaceIfLastUse) {
+        return false;
+      }
+    }
+    return true;
+  };
+  std::vector<nativert::ValueId> reusableIds;
+  for (const auto& perExpr : project.reusableValues_) {
+    for (auto* value : perExpr) {
+      if (reuseSafe(value)) {
+        reusableIds.push_back(value->id());
+      }
+    }
+  }
+  for (const auto& perExpr : project.overwritableTemps_) {
+    for (auto* value : perExpr) {
+      if (reuseSafe(value)) {
+        reusableIds.push_back(value->id());
+      }
+    }
+  }
+  // Inputs of the clones elided in this node, with the number of copies of
+  // each saved. Reported at runtime as the bytes not copied; also registered
+  // graph-wide so the reference-frame checks skip these deliberately
+  // overwritten buffers.
+  std::vector<std::pair<nativert::ValueId, int32_t>> elidedCloneInputs(
+      project.elidedCloneCounts.begin(), project.elidedCloneCounts.end());
+  for (const auto& [valueId, count] : elidedCloneInputs) {
+    waveGraph_.addElidedCloneInput(valueId);
+  }
   auto invocation = std::make_unique<CompositeInvocation>(
       std::move(compositeKernel),
       std::move(ops_),
       std::move(ivalueStorage_),
-      waveGraph_.nextCompositeInvocationId());
+      waveGraph_.nextCompositeInvocationId(),
+      std::move(lastUseIds),
+      std::move(reusableIds),
+      std::vector<Launch>{},
+      std::move(elidedCloneInputs));
   placed_.insert(nodes.begin(), nodes.end());
   return std::make_unique<CompiledNode>(std::move(invocation));
 }

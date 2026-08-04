@@ -15,6 +15,10 @@
  */
 
 #include "velox/exec/window/SortWindowBuild.h"
+
+#include <limits>
+
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Window.h"
 
@@ -85,6 +89,22 @@ void SortWindowBuild::addInput(RowVectorPtr input) {
 void SortWindowBuild::addDecodedInputRow(
     std::vector<DecodedVector>& decodedInputVectors,
     vector_size_t row) {
+  common::testutil::TestValue::adjust(
+      "facebook::velox::exec::window::SortWindowBuild::addDecodedInputRow",
+      &numRows_);
+
+  // sortPartitions() indexes every buffered row with a vector_size_t (int32),
+  // so a sort-based build cannot hold more than that many rows. Enforce the
+  // limit here, the one path every row append goes through (including
+  // SubPartitionedSortWindowBuild, which calls it directly), so numRows_ cannot
+  // overflow. Otherwise sortPartitions() would resize sortedRows_ to a huge
+  // size, throw std::length_error, and abort the whole process.
+  VELOX_USER_CHECK_LT(
+      numRows_,
+      std::numeric_limits<vector_size_t>::max(),
+      "Window operator cannot process more than {} rows",
+      std::numeric_limits<vector_size_t>::max());
+
   char* newRow = data_->newRow();
 
   for (auto col = 0; col < inputChannels_.size(); ++col) {

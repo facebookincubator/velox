@@ -403,6 +403,16 @@ TEST_F(ExprToSubfieldFilterTest, makeOrFilterBigint) {
     VELOX_ASSERT_FILTER(expected, makeOr(greaterThan(10), between(12, 100)));
     VELOX_ASSERT_FILTER(expected, makeOr(between(12, 100), greaterThan(10)));
   }
+
+  // a = X or a = X collapses to a = X.
+  {
+    const int64_t kInt64Max = std::numeric_limits<int64_t>::max();
+    VELOX_ASSERT_FILTER(
+        equal(kInt64Max), makeOr(equal(kInt64Max), equal(kInt64Max)));
+    VELOX_ASSERT_FILTER(equal(7), makeOr(equal(7), equal(7)));
+    VELOX_ASSERT_FILTER(
+        in({3, 5}), makeOr(equal(3), equal(5), equal(3), equal(5)));
+  }
 }
 
 TEST_F(ExprToSubfieldFilterTest, makeOrFilterDouble) {

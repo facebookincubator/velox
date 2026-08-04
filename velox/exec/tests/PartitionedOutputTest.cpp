@@ -86,8 +86,8 @@ class PartitionedOutputTest : public OperatorTestBase,
   }
 
  private:
-  const std::shared_ptr<OutputBufferManager> bufferManager_{
-      OutputBufferManager::getInstanceRef()};
+  const std::shared_ptr<DefaultOutputBufferManager> bufferManager_{
+      DefaultOutputBufferManager::getInstanceRef()};
 };
 
 TEST_P(PartitionedOutputTest, flush) {

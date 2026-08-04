@@ -128,17 +128,29 @@ void registerDatetimeFunctions(const std::string& prefix) {
       Timestamp,
       Timestamp>({prefix + "timestampdiff"});
   registerFunction<
-      TimestampAddFunction,
+      ParameterBinder<TimestampAddFunction, Timestamp>,
       Timestamp,
       Varchar,
       int32_t,
       Timestamp>({prefix + "timestampadd"});
   registerFunction<
-      TimestampAddFunction,
+      ParameterBinder<TimestampAddFunction, Timestamp>,
       Timestamp,
       Varchar,
       int64_t,
       Timestamp>({prefix + "timestampadd"});
+  registerFunction<
+      ParameterBinder<TimestampAddFunction, TimestampUtc>,
+      TimestampUtc,
+      Varchar,
+      int32_t,
+      TimestampUtc>({prefix + "timestampadd"});
+  registerFunction<
+      ParameterBinder<TimestampAddFunction, TimestampUtc>,
+      TimestampUtc,
+      Varchar,
+      int64_t,
+      TimestampUtc>({prefix + "timestampadd"});
   registerFunction<MonthsBetweenFunction, double, Timestamp, Timestamp, bool>(
       {prefix + "months_between"});
 }

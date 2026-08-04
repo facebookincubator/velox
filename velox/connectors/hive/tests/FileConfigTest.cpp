@@ -31,7 +31,6 @@ TEST(FileConfigTest, defaultConfig) {
   const auto emptySession = std::make_unique<config::ConfigBase>(
       std::unordered_map<std::string, std::string>());
 
-  EXPECT_FALSE(config.isOrcUseColumnNames(emptySession.get()));
   EXPECT_FALSE(config.isFileColumnNamesReadAsLowerCase(emptySession.get()));
   EXPECT_FALSE(config.ignoreMissingFiles(emptySession.get()));
   EXPECT_EQ(config.maxCoalescedBytes(emptySession.get()), 128 << 20);
@@ -51,7 +50,7 @@ TEST(FileConfigTest, defaultConfig) {
   EXPECT_FALSE(config.pinMetadata(emptySession.get()));
   EXPECT_FALSE(config.cacheIndex(emptySession.get()));
   EXPECT_FALSE(config.pinIndex(emptySession.get()));
-  EXPECT_EQ(config.orcFooterSpeculativeIoSize(emptySession.get()), 256UL << 10);
+  EXPECT_FALSE(config.useColumnNames(emptySession.get()));
   EXPECT_EQ(
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 8UL << 20);
   EXPECT_FALSE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
@@ -61,7 +60,6 @@ TEST(FileConfigTest, defaultConfig) {
 
 TEST(FileConfigTest, overrideConfig) {
   std::unordered_map<std::string, std::string> configFromFile = {
-      {FileConfig::kOrcUseColumnNames, "true"},
       {FileConfig::kFileColumnNamesReadAsLowerCase, "true"},
       {FileConfig::kMaxCoalescedBytes, "100"},
       {FileConfig::kMaxCoalescedDistance, "100kB"},
@@ -76,7 +74,7 @@ TEST(FileConfigTest, overrideConfig) {
       {FileConfig::kPinMetadata, "true"},
       {FileConfig::kCacheIndex, "true"},
       {FileConfig::kPinIndex, "true"},
-      {FileConfig::kOrcFooterSpeculativeIoSize, std::to_string(512UL << 10)},
+      {"hive.use-column-names", "true"},
       {FileConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)},
       {FileConfig::kNimbleStringDecoderZeroCopy, "true"},
       {FileConfig::kNimblePreserveDictionaryEncoding, "true"},
@@ -87,7 +85,6 @@ TEST(FileConfigTest, overrideConfig) {
   const auto emptySession = std::make_unique<config::ConfigBase>(
       std::unordered_map<std::string, std::string>());
 
-  EXPECT_TRUE(config.isOrcUseColumnNames(emptySession.get()));
   EXPECT_TRUE(config.isFileColumnNamesReadAsLowerCase(emptySession.get()));
   EXPECT_EQ(config.maxCoalescedBytes(emptySession.get()), 100);
   EXPECT_EQ(config.maxCoalescedDistanceBytes(emptySession.get()), 100 << 10);
@@ -102,12 +99,25 @@ TEST(FileConfigTest, overrideConfig) {
   EXPECT_TRUE(config.pinMetadata(emptySession.get()));
   EXPECT_TRUE(config.cacheIndex(emptySession.get()));
   EXPECT_TRUE(config.pinIndex(emptySession.get()));
-  EXPECT_EQ(config.orcFooterSpeculativeIoSize(emptySession.get()), 512UL << 10);
+  EXPECT_TRUE(config.useColumnNames(emptySession.get()));
   EXPECT_EQ(
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
   EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
   EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
   EXPECT_TRUE(config.nimbleLazyColumnIo(emptySession.get()));
+}
+
+TEST(FileConfigTest, connectorScopedReaderOptions) {
+  const auto emptySession = std::make_unique<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>());
+  FileConfig config(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {"iceberg.use-column-names", "true"},
+          }),
+      "iceberg.");
+
+  EXPECT_TRUE(config.useColumnNames(emptySession.get()));
 }
 
 TEST(FileConfigTest, overrideSession) {
@@ -116,7 +126,6 @@ TEST(FileConfigTest, overrideSession) {
           std::unordered_map<std::string, std::string>()),
       "hive.");
   std::unordered_map<std::string, std::string> sessionOverride = {
-      {FileConfig::kOrcUseColumnNamesSession, "true"},
       {FileConfig::kFileColumnNamesReadAsLowerCaseSession, "true"},
       {FileConfig::kIgnoreMissingFilesSession, "true"},
       {FileConfig::kMaxCoalescedDistanceSession, "3MB"},
@@ -129,8 +138,7 @@ TEST(FileConfigTest, overrideSession) {
       {FileConfig::kPinMetadataSession, "true"},
       {FileConfig::kCacheIndexSession, "true"},
       {FileConfig::kPinIndexSession, "true"},
-      {FileConfig::kOrcFooterSpeculativeIoSizeSession,
-       std::to_string(128UL << 10)},
+      {FileConfig::kUseColumnNamesSession, "true"},
       {FileConfig::kNimbleFooterSpeculativeIoSizeSession,
        std::to_string(2UL << 20)},
       {FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
@@ -140,7 +148,6 @@ TEST(FileConfigTest, overrideSession) {
   const auto session =
       std::make_unique<config::ConfigBase>(std::move(sessionOverride));
 
-  EXPECT_TRUE(config.isOrcUseColumnNames(session.get()));
   EXPECT_TRUE(config.isFileColumnNamesReadAsLowerCase(session.get()));
   EXPECT_TRUE(config.ignoreMissingFiles(session.get()));
   EXPECT_EQ(config.maxCoalescedDistanceBytes(session.get()), 3 << 20);
@@ -153,7 +160,7 @@ TEST(FileConfigTest, overrideSession) {
   EXPECT_TRUE(config.pinMetadata(session.get()));
   EXPECT_TRUE(config.cacheIndex(session.get()));
   EXPECT_TRUE(config.pinIndex(session.get()));
-  EXPECT_EQ(config.orcFooterSpeculativeIoSize(session.get()), 128UL << 10);
+  EXPECT_TRUE(config.useColumnNames(session.get()));
   EXPECT_EQ(config.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
   EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(session.get()));
   EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(session.get()));

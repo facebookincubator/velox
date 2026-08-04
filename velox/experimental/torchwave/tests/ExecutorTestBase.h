@@ -20,6 +20,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,8 @@
 
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/Pt2Load.h"
+#include "velox/experimental/torchwave/tests/CompiledPlan.h"
+#include "velox/experimental/torchwave/tests/DataGen.h"
 
 namespace torch::wave {
 
@@ -132,6 +135,16 @@ std::vector<c10::IValue> outputsToHost(
 /// time first. Each node is serialized as in Launch::toString.
 void standaloneReport(WaveGraphExecutor& executor);
 
+/// Copies 'reader's records into a fresh archive at 'outPath', dropping the
+/// data sections (data/weights, data/constants, data/sample_inputs) so the
+/// result carries only the graph serialization and archive metadata. Used by
+/// --save_model to write a small, data-free graph archive (a .pt2 for a .pt2
+/// source, or the sigmoid graph for a sigmoid source) that --run_synthetic
+/// loads and pairs with synthetic weights and inputs from the spec.
+void saveModelArchive(
+    caffe2::serialize::PyTorchStreamReader& reader,
+    const std::string& outPath);
+
 /// Base test fixture for running .pt2 models through serial and wave executors.
 class ExecutorTestBase : public ::testing::Test {
  protected:
@@ -189,15 +202,93 @@ class ExecutorTestBase : public ::testing::Test {
       const std::string& label = "");
 
   /// Executes a pre-filled frame node by node using the given kernels,
-  /// tracing values in trace_values. Returns the user outputs.
+  /// tracing values in trace_values. Returns the user outputs. When
+  /// 'captureRefOutputs' is true, deep-copies every node output to CPU into
+  /// capturedRefOutputs_ the instant it is produced (before nativert can free
+  /// it or an in-place op can overwrite it), so a reference frame saved from
+  /// those copies covers all intermediates.
   std::vector<c10::IValue> executeSerialWithTrace(
       const nativert::Graph& graph,
       nativert::ExecutionFrame& frame,
-      std::vector<std::unique_ptr<nativert::OpKernel>> nodeKernels);
+      std::vector<std::unique_ptr<nativert::OpKernel>> nodeKernels,
+      bool captureRefOutputs);
 
   virtual std::string dataDir() const {
     return "velox/experimental/torchwave/tests";
   }
+
+  /// Loads the graph archive for --run_synthetic. The base loads a standard
+  /// .pt2 (JSON). The meta harness overrides this to also accept a sigmoid
+  /// (thrift) archive.
+  virtual std::unique_ptr<ModelFixture> loadSyntheticFixture(
+      const std::string& pt2Path);
+
+  /// Subclass hook applied to both the reference and wave graphs in
+  /// runSynthetic, before device placement, so the two runs use the same
+  /// kernels. The meta harness overrides this to rewrite
+  /// fused_datafm_merge_and_dedup_by_reference to its _tw variant (the
+  /// reference and _tw dedup implementations differ, so comparing them directly
+  /// produces spurious mismatches). Default: no-op.
+  virtual void applySyntheticGraphRewrites(nativert::Graph& /*graph*/) {}
+
+  /// --save_model: writes 'path.spec' (a DatasetSpec analyzed from 'inputs' and
+  /// the fixture's weights) and 'path.pt2' (a copy of the source archive).
+  void saveSyntheticModel(
+      ModelFixture& fixture,
+      const std::vector<c10::IValue>& inputs,
+      const std::string& path);
+
+  /// --run_synthetic: loads 'path.pt2' and 'path.spec', generates synthetic
+  /// data, runs the nativert GPU reference to produce reference outputs (and a
+  /// reference frame), then runs wave on the same data and verifies it against
+  /// both. 'seed' is optional; when unset the spec's seed is used.
+  void runSynthetic(
+      const std::string& path,
+      std::optional<uint64_t> seed = std::nullopt);
+
+  /// Like runSynthetic, but sweeps every wave execution mode (auto /
+  /// cooperative / multi-block / single-block) with intermediate freeing off
+  /// and on. Runs the nativert-GPU reference once and reuses it for all
+  /// configs; compiles every config's executor in parallel (each under its own
+  /// WaveConfig override) and then executes them serially so only one config's
+  /// intermediates are resident at a time. A failure in one config is recorded
+  /// but does not stop the others.
+  void runSyntheticSweep(
+      const std::string& path,
+      std::optional<uint64_t> seed = std::nullopt);
+
+  /// Runs 'fixture' through the nativert serial executor on GPU with explicit
+  /// 'inputs' (not loadSampleInputs). Applies applySyntheticGraphRewrites, then
+  /// GPU placement (setGraphDevice / rewriteGpuIncompatibleOps /
+  /// insertCpuOnlyCopies) so the reference runs on the same device and kernels
+  /// as wave. The fixture's weights must already be GPU-resident. Returns the
+  /// host outputs and, if 'refFramePath' is non-empty, saves the post-run frame
+  /// there as a reference frame.
+  std::vector<c10::IValue> runNativertReferenceWithInputs(
+      ModelFixture& fixture,
+      std::vector<c10::IValue> inputs,
+      const std::string& refFramePath);
+
+  /// Runs 'fixture' through the wave executor with explicit 'inputs' and
+  /// verifies against 'expected'. If 'refFramePath' is non-empty it is loaded
+  /// as the reference frame so wave checks intermediates too.
+  void runWaveWithInputs(
+      ModelFixture& fixture,
+      std::vector<c10::IValue> inputs,
+      const std::vector<c10::IValue>& expected,
+      const std::string& refFramePath);
+
+  /// Executes an already-built wave executor on 'deviceInputs' and compares its
+  /// outputs against 'expected' (tensors only, non-fatal, counting mismatches),
+  /// prefixing log/failure messages with 'label'. 'haveRefFrame' controls the
+  /// reference-frame summary log. Shared by runWaveWithInputs and
+  /// runSyntheticSweep.
+  void executeAndCompareWave(
+      WaveGraphExecutor& waveExec,
+      const std::vector<c10::IValue>& deviceInputs,
+      const std::vector<c10::IValue>& expected,
+      const std::string& label,
+      bool haveRefFrame);
 
   /// Counters copied from WaveGraphExecutor after runWave.
   int64_t lastRefTensorsChecked_{0};
@@ -231,6 +322,19 @@ class ExecutorTestBase : public ::testing::Test {
       const std::vector<c10::IValue>& outputs,
       const std::vector<c10::IValue>& expected,
       const std::string& label);
+
+  /// A CompiledPlan per grid variant, for asserting how ops are placed into
+  /// kernels and steps and how that placement differs across modes.
+  struct ModePlans {
+    CompiledPlan multiKernel;
+    CompiledPlan singleBlock;
+    CompiledPlan cg;
+  };
+
+  /// Compiles 'pt2File' and returns a CompiledPlan for each grid variant. Only
+  /// the multi-kernel grid contains every op; the single-block and cg grids
+  /// hold only the ops that have such a variant (e.g. masked_select).
+  ModePlans compilePlans(const std::string& pt2File);
 };
 
 } // namespace torch::wave

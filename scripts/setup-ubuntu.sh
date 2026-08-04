@@ -90,7 +90,7 @@ function install_build_prerequisites {
     wget
 
   install_uv
-  uv_install cmake==3.30.4
+  uv_install --force cmake==4.3.2
 
   install_gcc11_if_needed
 
@@ -126,7 +126,6 @@ function install_velox_deps_from_apt {
     flex \
     libfl-dev \
     tzdata \
-    libnuma-dev \
     libxxhash-dev
 }
 
@@ -228,6 +227,10 @@ function install_adapters {
 
 function install_faiss_deps {
   ${SUDO} apt-get install -y libopenblas-dev libomp-dev
+}
+
+function install_cxl_deps {
+  ${SUDO} apt install -y libnuma-dev
 }
 
 function install_velox_deps {

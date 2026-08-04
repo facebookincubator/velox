@@ -91,7 +91,9 @@ function install_fbthrift {
   fi
   (
     cd "$DEPENDENCY_DIR"/fbthrift || exit 1
-    git apply "${VELOX_FBTHRIFT_CMAKE_PATCH}" || exit 1
+    # Skip applying the patch if it is already applied.
+    git apply --reverse --check "${VELOX_FBTHRIFT_CMAKE_PATCH}" 2>/dev/null ||
+      git apply "${VELOX_FBTHRIFT_CMAKE_PATCH}" || exit 1
   )
 
   # Apple Clang's libc++ no longer defines _LIBCPP_HAS_NO_ASAN (renamed to
@@ -168,6 +170,14 @@ function install_ranges_v3 {
 }
 
 function install_abseil {
+  # Abseil is a dependency of multiple libraries, so install_abseil can be
+  # invoked more than once per run. Build it only on the first call within a
+  # run.
+  if [ -n "${VELOX_ABSEIL_INSTALLED:-}" ]; then
+    echo "Abseil already installed in this run, skipping."
+    return 0
+  fi
+  VELOX_ABSEIL_INSTALLED=1
   wget_and_untar https://github.com/abseil/abseil-cpp/archive/refs/tags/"${ABSEIL_VERSION}".tar.gz abseil-cpp
   local OS
   OS=$(uname)
@@ -175,7 +185,10 @@ function install_abseil {
     ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
     (
       cd "${DEPENDENCY_DIR}/abseil-cpp" || exit 1
-      git apply $ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/absl/absl-macos.patch
+      PATCH_FILE="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/absl/absl-macos.patch"
+      # Skip applying the patch if it is already applied.
+      git apply --reverse --check "$PATCH_FILE" 2>/dev/null ||
+        git apply "$PATCH_FILE"
     )
   fi
   cmake_install_dir abseil-cpp \

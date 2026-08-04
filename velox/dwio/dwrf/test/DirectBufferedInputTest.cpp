@@ -146,7 +146,7 @@ class DirectBufferedInputTest : public testing::Test {
 };
 
 TEST_F(DirectBufferedInputTest, basic) {
-  // The small leading parts coalesce with the the 7M.  The 2M goes standalone.
+  // The small leading parts coalesce with the 7M.  The 2M goes standalone.
   // the last is read in 2 parts. This is because these are not yet densely
   // accessed and thus coalescing only works to load quantum of 8MB.
   testLoads(

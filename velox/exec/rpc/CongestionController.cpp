@@ -22,7 +22,11 @@
 namespace facebook::velox::exec::rpc {
 
 void CongestionController::onError() {
+  const auto prevEffective = effective_;
   effective_ = std::max<int64_t>(effective_ / 2, minWindow_);
+  if (effective_ < prevEffective) {
+    ++numShrinks_;
+  }
   // Drop the in-progress sample window so partial pre-overload samples don't
   // contaminate the next gradient computation. baselineRttNs_ is deliberately
   // preserved (not reset): it represents the unloaded RTT, and keeping it makes
@@ -71,7 +75,11 @@ void CongestionController::onSample(int64_t rttNs) {
       stepCoef_ * std::sqrt(static_cast<double>(effective_));
   const auto newWindow = static_cast<int64_t>(
       static_cast<double>(effective_) * gradient + headroom);
+  const auto prevEffective = effective_;
   effective_ = std::clamp(newWindow, minWindow_, maxWindow_);
+  if (effective_ < prevEffective) {
+    ++numShrinks_;
+  }
 
   // Track the baseline slowly toward the observed RTT so the controller settles
   // at the knee under sustained load instead of shrinking forever.

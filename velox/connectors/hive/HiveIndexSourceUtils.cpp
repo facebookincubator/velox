@@ -15,12 +15,19 @@
  */
 #include "velox/connectors/hive/HiveIndexSourceUtils.h"
 
+#include <cmath>
+#include <limits>
+
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::connector::hive {
 
 std::optional<variant> extractPointLookupValue(const common::Filter* filter) {
   VELOX_CHECK_NOT_NULL(filter);
+
+  if (filter->nullAllowed()) {
+    return std::nullopt;
+  }
 
   switch (filter->kind()) {
     case common::FilterKind::kBigintRange: {
@@ -75,8 +82,15 @@ std::optional<std::pair<variant, variant>> extractRangeBounds(
     const common::Filter* filter) {
   VELOX_CHECK_NOT_NULL(filter);
 
+  if (filter->nullAllowed()) {
+    return std::nullopt;
+  }
+
   switch (filter->kind()) {
     case common::FilterKind::kBigintRange: {
+      // BigintRange is always inclusive: exclusive comparisons are normalized
+      // into the bound value at filter construction (e.g. 'x > 1' becomes
+      // lower=2), so no exclusive-to-inclusive adjustment is needed here.
       const auto* range = filter->as<common::BigintRange>();
       return std::make_pair(variant(range->lower()), variant(range->upper()));
     }
@@ -85,14 +99,30 @@ std::optional<std::pair<variant, variant>> extractRangeBounds(
       if (range->lowerUnbounded() || range->upperUnbounded()) {
         return std::nullopt;
       }
-      return std::make_pair(variant(range->lower()), variant(range->upper()));
+      double lower = range->lower();
+      double upper = range->upper();
+      if (range->lowerExclusive()) {
+        lower = std::nextafter(lower, std::numeric_limits<double>::infinity());
+      }
+      if (range->upperExclusive()) {
+        upper = std::nextafter(upper, -std::numeric_limits<double>::infinity());
+      }
+      return std::make_pair(variant(lower), variant(upper));
     }
     case common::FilterKind::kFloatRange: {
       const auto* range = filter->as<common::FloatRange>();
       if (range->lowerUnbounded() || range->upperUnbounded()) {
         return std::nullopt;
       }
-      return std::make_pair(variant(range->lower()), variant(range->upper()));
+      double lower = range->lower();
+      double upper = range->upper();
+      if (range->lowerExclusive()) {
+        lower = std::nextafter(lower, std::numeric_limits<double>::infinity());
+      }
+      if (range->upperExclusive()) {
+        upper = std::nextafter(upper, -std::numeric_limits<double>::infinity());
+      }
+      return std::make_pair(variant(lower), variant(upper));
     }
     case common::FilterKind::kBytesRange: {
       const auto* range = filter->as<common::BytesRange>();

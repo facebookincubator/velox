@@ -39,7 +39,8 @@ PrestoCastHooks::PrestoCastHooks(const core::QueryConfig& config)
 }
 
 Expected<Timestamp> PrestoCastHooks::castStringToTimestamp(
-    const StringView& view) const {
+    const StringView& view,
+    bool /*adjustTimezone*/) const {
   const auto conversionResult = util::fromTimestampWithTimezoneString(
       view.data(),
       view.size(),
@@ -59,7 +60,7 @@ Expected<Timestamp> PrestoCastHooks::castIntToTimestamp(
       Status::UserError("Conversion to Timestamp is not supported"));
 }
 
-Expected<int64_t> PrestoCastHooks::castTimestampToInt(
+Expected<int64_t> PrestoCastHooks::castTimestampToBigint(
     Timestamp /*timestamp*/) const {
   return folly::makeUnexpected(
       Status::UserError("Conversion from Timestamp to Int is not supported"));

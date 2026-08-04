@@ -21,8 +21,20 @@
 
 namespace facebook::velox::exec {
 
+/// A sink Operator at the end of a pipeline that hands each input batch to a
+/// consumer callback instead of producing output for a downstream operator.
+/// Used both for a pipeline's final output (delivering the fragment result to
+/// its consumer) and to feed the source queues of LocalMerge / MixedUnion /
+/// MergeJoin from their producer pipelines.
 class CallbackSink : public Operator {
  public:
+  /// @param consumeCb Invoked with each input batch; its BlockingReason
+  /// controls back-pressure.
+  /// @param startedCb Optional, invoked once before the first input.
+  /// @param planNodeId Defaults to "N/A" because such a sink usually has no
+  /// plan node of its own. When the sink belongs to a node (e.g. it feeds that
+  /// node's merge source), pass the node's id so the sink's runtime stats
+  /// aggregate into that node and query tracing can associate it.
   CallbackSink(
       int32_t operatorId,
       DriverCtx* driverCtx,
@@ -40,6 +52,8 @@ class CallbackSink : public Operator {
 
   void addInput(RowVectorPtr input) override;
 
+  /// Always returns nullptr: a sink consumes its input via the callback and
+  /// produces no output for a downstream operator.
   RowVectorPtr getOutput() override;
 
   bool startDrain() override;

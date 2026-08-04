@@ -30,10 +30,13 @@ namespace facebook::velox::exec::rpc {
 ///   - In-order responses (default, happy path)
 ///   - Reversed responses (simulates backend returning out of order)
 ///   - Per-row failures (simulates partial batch failure)
+///   - Whole-batch failure (simulates an operator-level batch timeout / RPC
+///     error where the flush future itself fails, not individual rows)
 ///
 /// Returns "Batch response for: <prompt>" for each non-null, non-failing row.
 /// Null inputs produce RPCResponse{.error = "null_input"}.
 /// Failing rows produce RPCResponse{.error = "simulated_failure"}.
+/// With failWholeBatch=true, flushBatch() returns a FAILED future instead.
 class DemoBatchRPCFunction : public AsyncRPCFunction {
  public:
   enum class ResponseOrder {
@@ -43,7 +46,10 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
 
   explicit DemoBatchRPCFunction(
       ResponseOrder order = ResponseOrder::kInOrder,
-      std::unordered_set<int32_t> failingRowIndices = {});
+      std::unordered_set<int32_t> failingRowIndices = {},
+      bool failWholeBatch = false,
+      bool failOnError = false,
+      bool dropOneResponse = false);
 
   void initialize(
       const core::QueryConfig& queryConfig,
@@ -57,6 +63,13 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
   TypePtr resultType() const override {
     return VARCHAR();
   }
+
+  /// With failOnError=true, mimics the meta_ai_on_error='fail' policy: any
+  /// errored response hard-fails the query (VELOX_USER_FAIL) instead of NULLing
+  /// the row. Otherwise defers to the base (errors -> NULL).
+  VectorPtr buildOutput(
+      const std::vector<RPCResponse>& responses,
+      memory::MemoryPool* pool) const override;
 
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
   dispatchPerRow(
@@ -83,6 +96,9 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
   std::vector<PendingRow> pendingRows_;
   ResponseOrder responseOrder_;
   std::unordered_set<int32_t> failingRowIndices_;
+  bool failWholeBatch_{false};
+  bool failOnError_{false};
+  bool dropOneResponse_{false};
   int32_t totalAccumulatedCount_{0};
 };
 

@@ -26,6 +26,7 @@
 
 #include <c10/util/StringUtil.h>
 #include <folly/ScopeGuard.h>
+#include <functional>
 #include <sstream>
 
 #include "velox/experimental/wave/common/Cuda.h"
@@ -133,6 +134,11 @@ WaveGraph*& waveGraph() {
   return threadWaveGraph;
 }
 
+WaveConfig*& waveConfigOverride() {
+  static thread_local WaveConfig* threadConfigOverride{nullptr};
+  return threadConfigOverride;
+}
+
 const Metadata* nodeMeta(NodeCP node) {
   auto* graph = waveGraph();
   TORCH_CHECK(graph, "No WaveGraph on this thread");
@@ -171,10 +177,15 @@ std::unique_ptr<WaveGraph> WaveGraph::optimizeOnly(
 }
 
 WaveGraph::WaveGraph(ModelContext* modelContext)
-    : graph_(modelContext->graph.get()), modelContext_(modelContext) {
+    : graph_(modelContext->graph.get()),
+      modelContext_(modelContext),
+      configOverride_(std::move(modelContext->configOverride)) {
   waveGraph() = this;
+  auto* prevConfigOverride = waveConfigOverride();
+  waveConfigOverride() = configOverride_.get();
   SCOPE_EXIT {
     waveGraph() = nullptr;
+    waveConfigOverride() = prevConfigOverride;
   };
 
   initValueTypes(*graph_, types_, metaStorage_);
@@ -186,8 +197,55 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
   optimizer_ = std::make_unique<Optimizer>(*this);
   optimizer_->optimizeGraph(graph_);
   createdValueDtypes_.clear();
+
+  // Drop read-only clones before partitioning. This has to run after
+  // optimizeGraph, which is what creates most of them (a rewritten op's output
+  // is cloned once per consumer), and before makeParallelNodes, because those
+  // clones land in different ProjectNode layers and the post-partition
+  // rewriteInPlace only ever compares clones within one layer. A clone that
+  // survives fusion costs a copy and a barrier, so eliding is a win whenever
+  // it is safe. Gated on enableReuse with the rest of the reuse work.
+  if (WaveConfig::get().enableReuse && WaveConfig::get().elideClones) {
+    elideReadOnlyClones(*graph_, types_);
+  }
+
+  // Graph outputs (and, for list-typed outputs, their elements) escape the
+  // graph, so LaunchData must never release them as per-op intermediates.
+  graphOutputIds_.clear();
+  if (auto* outNode = graph_->outputNode()) {
+    std::function<void(ValueCP)> addOut = [&](ValueCP v) {
+      if (v == nullptr || !graphOutputIds_.insert(v->id()).second) {
+        return;
+      }
+      // A graph output that is a view keeps its base's storage live, so protect
+      // the storage base too -- freeing the base as a per-op intermediate would
+      // corrupt the surviving output.
+      if (auto* base = viewStorageBase(v); base != nullptr) {
+        graphOutputIds_.insert(base->id());
+      }
+      auto k = v->type().kind();
+      if (k == nativert::Type::Kind::TensorList ||
+          k == nativert::Type::Kind::NestedTensorList ||
+          k == nativert::Type::Kind::OptionalTensorList) {
+        for (auto* e : v->getListElements()) {
+          addOut(e);
+        }
+      }
+    };
+    for (const auto& in : outNode->inputs()) {
+      addOut(in.value);
+    }
+  }
+
   ParallelNodes parallelNodes;
   auto* lastProjectNode = parallelNodes.makeParallelNodes(*graph_);
+
+  // Optional post-partition pass: elide redundant clones so in-place writers
+  // (e.g. index_put_) mutate their original buffer. Gated on enableReuse; a
+  // no-op otherwise.
+  if (WaveConfig::get().enableReuse) {
+    parallelNodes.rewriteInPlace(*graph_, types_);
+  }
 
   CompileCtx ctx(*this);
   compileCtx_ = &ctx;
@@ -427,6 +485,16 @@ nativert::Value* WaveGraph::newListValue(
 
 bool WaveGraph::isCreatedValue(ValueCP value) const {
   return createdValueDtypes_.count(value->id()) > 0;
+}
+
+void WaveGraph::declareMultiplyReferencedInput(const nativert::Value* value) {
+  if (value != nullptr) {
+    multiUseInputs_.insert(value->id());
+    if (WaveConfig::get().trace & WaveConfig::kFrame) {
+      LOG(INFO) << "declareMultiplyReferencedInput %" << value->id() << " ("
+                << value->name() << ")";
+    }
+  }
 }
 
 nativert::Value* WaveGraph::duplicateValue(ValueCP original) {

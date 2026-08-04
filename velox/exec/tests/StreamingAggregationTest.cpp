@@ -21,6 +21,7 @@
 
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/BackpressureTestNode.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/SumNonPODAggregate.h"
@@ -1586,6 +1587,54 @@ DEBUG_ONLY_TEST_P(StreamingAggregationTest, singleAggregationCleansState) {
       << "TestValue callback was never invoked; createOutput may not have "
          "been called";
   EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
+}
+
+// Regression test: a StreamingAggregation feeding a back-pressuring downstream
+// must not drop rows. Before the fix, StreamingAggregation::needsInput() did
+// not check input_ == nullptr, so when the downstream returned
+// needsInput()=false the Driver re-fed the aggregation and addInput() overwrote
+// the undrained batch, silently dropping rows (seen in production with
+// streaming aggregations fed through async IndexLookupJoins). One distinct,
+// clustered key per row makes the aggregation a pass-through, so output rows
+// must equal input rows.
+TEST_P(StreamingAggregationTest, noRowLossWithBackpressuringDownstream) {
+  Operator::registerOperator(std::make_unique<BackpressureTranslator>());
+
+  // Many small batches so the Driver repeatedly feeds the aggregation while the
+  // downstream refuses input.
+  const int32_t numBatches = 200;
+  const int32_t rowsPerBatch = 100;
+  const vector_size_t totalRows = numBatches * rowsPerBatch;
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(numBatches);
+  for (int32_t i = 0; i < numBatches; ++i) {
+    // One distinct, globally-increasing (hence clustered) key per row, so a
+    // correct streaming aggregation emits exactly one group per input row.
+    batches.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(
+             rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; }),
+         makeFlatVector<int64_t>(
+             rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; })}));
+  }
+
+  auto plan = PlanBuilder()
+                  .values(batches)
+                  .streamingAggregation(
+                      {"c0"},
+                      {"arbitrary(c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .addNode([](const std::string& id, core::PlanNodePtr input) {
+                    return std::make_shared<BackpressureNode>(
+                        id, /*delayCycles=*/3, std::move(input));
+                  })
+                  .planNode();
+
+  // Single driver so the aggregation and the back-pressuring downstream share a
+  // pipeline.
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  EXPECT_EQ(result->size(), totalRows);
 }
 
 } // namespace

@@ -113,6 +113,13 @@ velox_link_libraries(
 velox_add_library(velox_status Status.cpp HEADERS Status.h)
 velox_link_libraries(velox_status PUBLIC fmt::fmt Folly::folly PRIVATE glog::glog)
 
+velox_add_library(velox_tracked_executor TrackedExecutor.cpp HEADERS TrackedExecutor.h)
+velox_link_libraries(
+  velox_tracked_executor
+  PUBLIC velox_common_base velox_exception Folly::folly fmt::fmt
+  PRIVATE velox_time
+)
+
 velox_add_library(velox_compare_flags INTERFACE HEADERS CompareFlags.h)
 
 velox_add_library(velox_macros INTERFACE HEADERS Macros.h)

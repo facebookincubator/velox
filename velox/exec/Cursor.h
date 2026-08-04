@@ -64,21 +64,21 @@ struct CursorParameters {
 
   /// Spilling directory, if not empty, then the task's spilling directory
   /// would be built from it.
-  std::string spillDirectory = "";
+  std::string spillDirectory{};
 
   /// Callback function to dynamically create or determine the spill directory
   /// path at runtime. If provided, this callback is invoked when spilling is
   /// needed and must return a valid directory path. This allows for dynamic
   /// spill directory creation or path resolution based on runtime conditions.
-  std::function<std::string()> spillDirectoryCallback = nullptr;
+  std::function<std::string()> spillDirectoryCallback{nullptr};
 
-  bool copyResult = true;
+  bool copyResult{true};
 
   /// If true, use serial execution mode. Use parallel execution mode
   /// otherwise.
-  bool serialExecution = false;
+  bool serialExecution{false};
 
-  bool barrierExecution = false;
+  bool barrierExecution{false};
 
   /// Per-task unique id used by AssignUniqueId operators. See
   /// core::PlanFragment::taskUniqueId.
@@ -126,9 +126,9 @@ struct CursorParameters {
 /// Example usage:
 /// @code
 ///
-///   auto cursor = TaskCursor:create({
+///   auto cursor = TaskCursor::create({
 ///     .planNode = node,
-///   );
+///   });
 ///
 ///   // Run through every output.
 ///   while (cursor->moveNext()) {
@@ -194,7 +194,7 @@ class TaskCursor {
   /// (unblocked) automatically. When empty (the default), stops at the next
   /// breakpoint regardless of plan node ID.
   ///
-  /// @return Returns false is the task is done producing output.
+  /// @return Returns false if the task is done producing output.
   virtual bool moveStep(const core::PlanNodeId& planId = "") = 0;
 
   /// Returns the vector the cursor is currently on.
@@ -248,8 +248,8 @@ class RowCursor {
   std::unique_ptr<TaskCursor> cursor_;
   std::vector<std::unique_ptr<DecodedVector>> decoded_;
   SelectivityVector allRows_;
-  vector_size_t currentRow_ = 0;
-  vector_size_t numRows_ = 0;
+  vector_size_t currentRow_{0};
+  vector_size_t numRows_{0};
 };
 
 /// Wait up to maxWaitMicros for all the task drivers to finish. The function

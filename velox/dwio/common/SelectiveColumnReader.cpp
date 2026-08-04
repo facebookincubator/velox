@@ -120,7 +120,7 @@ void SelectiveColumnReader::seekTo(int64_t offset, bool readsNullsOnly) {
   }
 }
 
-void SelectiveColumnReader::initReturnReaderNulls(const RowSet& rows) {
+void SelectiveColumnReader::setReturnNullsMode(const RowSet& rows) {
   if (useBulkPath() && !scanSpec_->hasFilter()) {
     anyNulls_ = nullsInReadRange_ != nullptr;
     const bool isDense = rows.back() == rows.size() - 1;
@@ -139,7 +139,7 @@ void SelectiveColumnReader::prepareNulls(
     return;
   }
 
-  initReturnReaderNulls(rows);
+  setReturnNullsMode(rows);
   if (returnReaderNulls_) {
     // No need for null flags if fast path.
     return;

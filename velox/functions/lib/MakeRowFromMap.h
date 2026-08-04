@@ -240,6 +240,9 @@ class MakeRowFromMap {
     std::vector<bool> visited(keyToIndex_.size());
     std::vector<std::vector<BaseVector::CopyRange>> copyRangesFromBase(
         keyToIndex_.size());
+    for (auto& ranges : copyRangesFromBase) {
+      ranges.reserve(rows.countSelected());
+    }
     rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
       std::fill(visited.begin(), visited.end(), false);
       if (!decodedMap->isNullAt(row)) {

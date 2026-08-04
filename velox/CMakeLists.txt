@@ -82,6 +82,10 @@ if(VELOX_ENABLE_TORCHWAVE)
   add_subdirectory(experimental/torchwave)
 endif()
 
+if(VELOX_ENABLE_CXL)
+  add_subdirectory(experimental/cxl)
+endif()
+
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tool)
 endif()

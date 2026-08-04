@@ -39,6 +39,7 @@ velox_add_library(
   DecimalCompare.cpp
   FilterFunction.cpp
   FormatNumber.cpp
+  GetJsonObject.cpp
   Hash.cpp
   In.cpp
   LeastGreatest.cpp

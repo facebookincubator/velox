@@ -332,7 +332,7 @@ struct NullableTerminalNode {
 // Be followed by at least one other node).
 //
 // Type parameters:
-//    |RangeSelector| - A strategy for determine the the range of the child
+//    |RangeSelector| - A strategy for determine the range of the child
 //    node. To process.
 //       This varies depending on the type of list (int32_t* offsets, int64_t*.
 //       Offsets of fixed.

@@ -97,7 +97,7 @@ class IExpr {
   /// Returns a copy of this expression with the given inputs.
   virtual ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const = 0;
 
-  /// Returns a copy of this expression with the the new alias added.
+  /// Returns a copy of this expression with the new alias added.
   ///
   /// The last alias added will win if called multiple times. Throws in case the
   /// subclass does not implement it.

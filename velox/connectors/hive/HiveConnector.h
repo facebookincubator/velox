@@ -129,7 +129,7 @@ class HivePartitionFunctionSpec : public core::PartitionFunctionSpec {
   /// a bucket to partition map based on the actual number of partitions with
   /// round-robin partitioning scheme to create the function instance. For
   /// instance, when we create the local partition node with hive bucket
-  /// function to support multiple table writer drivers, we don't know the the
+  /// function to support multiple table writer drivers, we don't know the
   /// actual number of table writer drivers until start the task.
   HivePartitionFunctionSpec(
       int numBuckets,

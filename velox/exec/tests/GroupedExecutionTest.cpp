@@ -20,7 +20,7 @@
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/exec/Cursor.h"
-#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -290,7 +290,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
 
   // 'Delete results' from output buffer triggers 'set all output consumed',
   // which should finish the task.
-  auto outputBufferManager = exec::OutputBufferManager::getInstanceRef();
+  auto outputBufferManager = exec::DefaultOutputBufferManager::getInstanceRef();
   outputBufferManager->deleteResults(task->taskId(), 0);
 
   // Task must be finished at this stage.
@@ -492,7 +492,8 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
         task->noMoreSplits(probeScanNodeId);
       }
 
-      auto outputBufferManager = exec::OutputBufferManager::getInstanceRef();
+      auto outputBufferManager =
+          exec::DefaultOutputBufferManager::getInstanceRef();
       outputBufferManager->deleteResults(task->taskId(), 0);
 
       waitForTaskCompletion(task.get());
@@ -737,7 +738,8 @@ DEBUG_ONLY_TEST_F(
 
     // 'Delete results' from output buffer triggers 'set all output consumed',
     // which should finish the task.
-    auto outputBufferManager = exec::OutputBufferManager::getInstanceRef();
+    auto outputBufferManager =
+        exec::DefaultOutputBufferManager::getInstanceRef();
     outputBufferManager->deleteResults(task->taskId(), 0);
 
     // Task must be finished at this stage.
@@ -871,7 +873,7 @@ DEBUG_ONLY_TEST_F(
 
   // 'Delete results' from output buffer triggers 'set all output consumed',
   // which should finish the task.
-  auto outputBufferManager = exec::OutputBufferManager::getInstanceRef();
+  auto outputBufferManager = exec::DefaultOutputBufferManager::getInstanceRef();
   outputBufferManager->deleteResults(task->taskId(), 0);
 
   // Task is at running state because the build side is lingering.
@@ -1030,7 +1032,8 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
 
     // 'Delete results' from output buffer triggers 'set all output consumed',
     // which should finish the task.
-    auto outputBufferManager = exec::OutputBufferManager::getInstanceRef();
+    auto outputBufferManager =
+        exec::DefaultOutputBufferManager::getInstanceRef();
     outputBufferManager->deleteResults(task->taskId(), 0);
 
     // Task must be finished at this stage.

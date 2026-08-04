@@ -15,7 +15,11 @@ vector can have random and potentially nested encodings.
 To ensure that evaluation engine and UDFs handle vector encodings correctly, the
 expression fuzzer evaluates each expression twice and asserts the results to be
 the same: using regular evaluation path and using simplified evaluation that
-flattens all input vectors before evaluating an expression.
+normalizes all input vectors -- flattening encodings, compacting array/map
+elements, and clearing garbage behind nulls -- before evaluating an expression.
+This also verifies that results depend only on logical input values, not on
+their physical layout, catching UDFs that read the raw elements buffer or
+otherwise ignore offsets/sizes.
 
 How to integrate
 ---------------------------------------

@@ -30,16 +30,28 @@ namespace facebook::velox::filesystems {
 
 #ifdef VELOX_ENABLE_ABFS
 
-folly::once_flag abfsInitiationFlag;
-
 std::shared_ptr<FileSystem> abfsFileSystemGenerator(
     std::shared_ptr<const config::ConfigBase> properties,
     std::string_view filePath) {
-  static std::shared_ptr<FileSystem> filesystem;
-  folly::call_once(abfsInitiationFlag, [&properties]() {
-    filesystem = std::make_shared<AbfsFileSystem>(properties);
-  });
-  return filesystem;
+  // Cache FileSystem instances per unique set of Azure account configurations
+  // to support multiple catalogs with different Azure storage accounts.
+  // Each catalog may have different account credentials and configurations.
+  static folly::Synchronized<
+      std::unordered_map<std::vector<CacheKey>, std::shared_ptr<FileSystem>>>
+      filesystemCache;
+
+  auto cacheKeys = extractCacheKeyFromConfig(*properties);
+
+  return filesystemCache.withWLock(
+      [&](auto& cache) -> std::shared_ptr<FileSystem> {
+        auto it = cache.find(cacheKeys);
+        if (it != cache.end()) {
+          return it->second;
+        }
+        auto filesystem = std::make_shared<AbfsFileSystem>(properties);
+        cache[cacheKeys] = filesystem;
+        return filesystem;
+      });
 }
 
 std::unique_ptr<velox::dwio::common::FileSink> abfsWriteFileSinkGenerator(
@@ -70,12 +82,15 @@ void registerAbfsFileSystem() {
 void registerAzureClientProvider(const config::ConfigBase& config) {
 #ifdef VELOX_ENABLE_ABFS
 
-  for (const auto& [accountName, authType] :
+  for (const auto& [accountNameWithSuffix, authType] :
        extractCacheKeyFromConfig(config)) {
     auto factory =
         AzureClientProviderFactories::getDefaultProviderFactory(authType);
 
     if (factory) {
+      // Extract just the account name (before first dot) for registration
+      auto accountName =
+          accountNameWithSuffix.substr(0, accountNameWithSuffix.find('.'));
       AzureClientProviderFactories::registerFactory(accountName, factory);
     } else {
       VELOX_USER_FAIL(

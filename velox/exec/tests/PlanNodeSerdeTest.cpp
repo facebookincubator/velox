@@ -15,6 +15,8 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/core/FixedPointPlanNodes.h"
+#include "velox/core/PlanNode.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -459,6 +461,16 @@ TEST_F(PlanNodeSerdeTest, partitionedOutput) {
                .partitionedOutput({"c0"}, 50, {"c1", {"c2"}, "c0"}, serdeKind)
                .planNode();
     testSerde(plan);
+
+    // Round-trips a non-default transport annotation on the node.
+    plan = PlanBuilder()
+               .values({data_})
+               .partitionedOutputBroadcast(
+                   /*outputLayout=*/{},
+                   serdeKind,
+                   std::string{core::TransportKind::kUcx})
+               .planNode();
+    testSerde(plan);
   }
 }
 
@@ -563,6 +575,20 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
                  core::JoinType::kAnti,
                  /*nullAware=*/false,
                  /*nullAsValue=*/true)
+             .planNode();
+
+  testSerde(plan);
+
+  // Right anti join projects build-side columns only.
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({probe})
+             .hashJoin(
+                 {"t0"},
+                 {"u0"},
+                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 "",
+                 {"u1", "u2"},
+                 core::JoinType::kRightAnti)
              .planNode();
 
   testSerde(plan);
@@ -1047,6 +1073,233 @@ TEST_F(PlanNodeSerdeTest, countingJoin) {
                     .planNode();
     testSerde(plan);
   }
+}
+
+// Fixed-point plan nodes.  Each named computation is one recognizable shape;
+// the same catalog drives PlanNodeToStringTest, and execution is covered by
+// FixedPointTest.  The simplest shape (Sequence) leads.
+
+TEST_F(PlanNodeSerdeTest, fixedPointSequence) {
+  // Shape (1): a fixed-count loop producing x = 1..10.  One append-mode vector
+  // state, a single body plan, and no convergence plan (bounded by
+  // maxIterations).
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto schema = ROW("x", BIGINT());
+  auto seed =
+      PlanBuilder(idGenerator)
+          .values({makeRowVector({"x"}, {makeFlatVector<int64_t>({1})})})
+          .planNode();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              core::VectorState("n", schema, /*append=*/true).initial(seed),
+              PlanBuilder(idGenerator)
+                  .stateSource("n", schema)
+                  .project({"x + 1 AS x"}),
+              core::ConvergenceConfig::withMaxIterations(9))
+          .planNode();
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, fixedPointFibonacci) {
+  // Shape (2): iterate Fibonacci until the latest value exceeds a bound.  A
+  // replace-mode vector state read in full each iteration, with a convergence
+  // plan -- the convergence-driven counterpart to the fixed-count sequence.
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto schema = ROW({"a", "b"}, BIGINT());
+  auto seed =
+      PlanBuilder(idGenerator)
+          .values({makeRowVector(
+              {"a", "b"},
+              {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({1})})})
+          .planNode();
+  auto convergence = PlanBuilder(idGenerator)
+                         .stateSource("fib", schema, /*delta=*/false)
+                         .project({"b > 100 AS converged"})
+                         .planNode();
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      core::VectorState("fib", schema).initial(seed),
+                      PlanBuilder(idGenerator)
+                          .stateSource("fib", schema, /*delta=*/false)
+                          .project({"b AS a", "a + b AS b"}),
+                      core::ConvergenceConfig::converging(convergence, 100))
+                  .planNode();
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, fixedPointThreeDegrees) {
+  // Shape (3): people within 3 degrees in the social graph, modeled as
+  // hash-table reuse -- a HashTable state (the graph) built once and probed via
+  // StateHashJoin each iteration, an append-mode frontier read as a delta, and
+  // empty-frontier convergence.  Keeps the structural round-trip assertions
+  // because toString() does not surface every serialized field.
+  auto people = ROW({"id", "depth"}, BIGINT());
+  auto edges = ROW({"src", "dst"}, BIGINT());
+  auto joinOutput = ROW({"id", "depth", "dst"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto me =
+      PlanBuilder(idGenerator)
+          .values({makeRowVector(
+              {"id", "depth"},
+              {makeFlatVector<int64_t>({1}), makeFlatVector<int64_t>({0})})})
+          .planNode();
+  auto graph = PlanBuilder(idGenerator)
+                   .values({makeRowVector(
+                       {"src", "dst"},
+                       {makeFlatVector<int64_t>({1, 2}),
+                        makeFlatVector<int64_t>({2, 3})})})
+                   .planNode();
+
+  // Body: read the frontier delta, probe the graph, append the next hop.
+  auto body = PlanBuilder(idGenerator)
+                  .stateSource("reach", people, /*delta=*/true)
+                  .stateHashJoin("graph", {"id"}, joinOutput)
+                  .project({"dst AS id", "depth + 1 AS depth"})
+                  .planNode();
+  // Converged once the last iteration appended no rows.
+  auto convergence = PlanBuilder(idGenerator)
+                         .stateSource("reach", people, /*delta=*/true)
+                         .singleAggregation({}, {"count(1)"})
+                         .project({"a0 = 0 AS converged"})
+                         .planNode();
+
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {core::HashTableState("graph", edges, {"src"}).initial(graph),
+               core::VectorState("reach", people, /*append=*/true).initial(me)},
+              {body},
+              core::ConvergenceConfig::converging(convergence, 3),
+              "reach")
+          .planNode();
+
+  testSerde(plan);
+
+  // toString() does not surface every field, so assert the structurally
+  // significant ones survive the round-trip directly.
+  const auto copy = velox::ISerializable::deserialize<core::PlanNode>(
+      plan->serialize(), pool());
+  const auto* fixedPoint =
+      dynamic_cast<const core::FixedPointNode*>(copy.get());
+  ASSERT_NE(fixedPoint, nullptr);
+  EXPECT_EQ(fixedPoint->outputStateEntry(), "reach");
+  ASSERT_EQ(fixedPoint->stateDeclarations().size(), 2);
+  ASSERT_NE(fixedPoint->convergenceConfig().plan, nullptr);
+
+  const auto& hashTableState =
+      dynamic_cast<const core::HashTableStateDeclaration&>(
+          *fixedPoint->stateDeclarations()[0]);
+  EXPECT_EQ(hashTableState.keyColumns(), std::vector<std::string>{"src"});
+
+  const auto& vectorState = dynamic_cast<const core::VectorStateDeclaration&>(
+      *fixedPoint->stateDeclarations()[1]);
+  EXPECT_TRUE(vectorState.append());
+  ASSERT_NE(vectorState.initialPlan(), nullptr);
+
+  // The body's StateHashJoin probe keys and StateSource delta flag survive.
+  ASSERT_EQ(fixedPoint->plans().size(), 1);
+  const auto* project =
+      dynamic_cast<const core::ProjectNode*>(fixedPoint->plans()[0].get());
+  ASSERT_NE(project, nullptr);
+  const auto* join =
+      dynamic_cast<const core::StateHashJoinNode*>(project->sources()[0].get());
+  ASSERT_NE(join, nullptr);
+  EXPECT_EQ(join->probeKeys(), std::vector<std::string>{"id"});
+  const auto* bodySource =
+      dynamic_cast<const core::StateSourceNode*>(join->sources()[0].get());
+  ASSERT_NE(bodySource, nullptr);
+  EXPECT_TRUE(bodySource->delta());
+}
+
+TEST_F(PlanNodeSerdeTest, fixedPointDistributed) {
+  // Shape (4): one worker of a sharded reachability fixed point -- a two-plan
+  // body that shuffles (PartitionedOutput -> Exchange).  The cross-worker
+  // (N-way) topology is the coordinator's split-wiring, exercised by
+  // FixedPointTest, not a serialized field of this node.
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto seed = PlanBuilder(idGenerator)
+                  .values({makeRowVector(
+                      {"key", "val"},
+                      {makeFlatVector<int64_t>({0, 1}),
+                       makeFlatVector<int64_t>({1, 1})})})
+                  .planNode();
+  auto producer = PlanBuilder(idGenerator)
+                      .stateSource("frontier", schema)
+                      .partitionedOutput({"key"}, 2)
+                      .planNode();
+  auto consumer = PlanBuilder(idGenerator)
+                      .exchange(schema, "Presto")
+                      .singleAggregation({"key"}, {"sum(val)"})
+                      .project({"key", "a0 AS val"})
+                      .planNode();
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      {core::VectorState("frontier", schema).initial(seed)},
+                      {producer, consumer},
+                      core::ConvergenceConfig::withMaxIterations(3),
+                      "frontier")
+                  .planNode();
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, rpcNode) {
+  auto source = PlanBuilder()
+                    .values({makeRowVector(
+                        {"prompt", "model"},
+                        {makeFlatVector<StringView>({"hello"}),
+                         makeFlatVector<StringView>({"llama"})})})
+                    .planNode();
+  const auto outputType =
+      ROW({"prompt", "model", "response"}, {VARCHAR(), VARCHAR(), VARCHAR()});
+
+  // PER_ROW, single column argument.
+  testSerde(
+      std::make_shared<core::RPCNode>(
+          "rpc-1",
+          source,
+          std::make_shared<core::CallTypedExpr>(
+              VARCHAR(),
+              "test_function",
+              std::make_shared<core::FieldAccessTypedExpr>(
+                  VARCHAR(), "prompt")),
+          "response",
+          outputType,
+          rpc::RPCStreamingMode::kPerRow,
+          0));
+
+  // BATCH with a dispatch batch size, two column arguments.
+  testSerde(
+      std::make_shared<core::RPCNode>(
+          "rpc-2",
+          source,
+          std::make_shared<core::CallTypedExpr>(
+              VARCHAR(),
+              "batch_function",
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "prompt"),
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "model")),
+          "response",
+          outputType,
+          rpc::RPCStreamingMode::kBatch,
+          50));
+
+  // Mixed column and constant arguments.
+  testSerde(
+      std::make_shared<core::RPCNode>(
+          "rpc-3",
+          source,
+          std::make_shared<core::CallTypedExpr>(
+              VARCHAR(),
+              "test_function",
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "prompt"),
+              std::make_shared<core::ConstantTypedExpr>(
+                  makeConstant("llama3", 1))),
+          "response",
+          outputType,
+          rpc::RPCStreamingMode::kPerRow,
+          0));
 }
 
 } // namespace facebook::velox::exec::test

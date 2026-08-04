@@ -797,7 +797,7 @@ TEST_F(VectorHasherTest, computeValueIdsBoolDictionary) {
   hasher->decode(*vector, allRows);
   auto ok = hasher->computeValueIds(allRows, result);
   ASSERT_TRUE(ok);
-  // A boolean counts as as a range of 3 and the extra margin has no effect.
+  // A boolean counts as a range of 3 and the extra margin has no effect.
   EXPECT_EQ(6, hasher->enableValueRange(2, 11));
 }
 
@@ -967,7 +967,7 @@ TEST_F(VectorHasherTest, endOfRange) {
   EXPECT_EQ(4, distinct);
   EXPECT_EQ(range, kIntRange + 2);
 
-  // Set the VectorHashers to encode inputs as offsets within the the range of
+  // Set the VectorHashers to encode inputs as offsets within the range of
   // each.
   auto multiplier1 = tinyHasher->enableValueRange(1, 50);
   auto multiplier2 = smallHasher->enableValueRange(multiplier1, 50);
@@ -1058,7 +1058,7 @@ TEST_F(VectorHasherTest, simdRange) {
   int64Hasher->decode(*int64Values, rows);
   int64Hasher->computeValueIds(rows, result);
 
-  // Set the VectorHashers to encode inputs as offsets within the the range of
+  // Set the VectorHashers to encode inputs as offsets within the range of
   // each.
   auto multiplier1 = smallHasher->enableValueRange(1, 0);
   auto multiplier2 = intHasher->enableValueRange(multiplier1, 0);

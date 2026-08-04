@@ -281,6 +281,11 @@ MetadataBuilder& MetadataBuilder::multiBlockReturnBarrier(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::scanOutputReturnBarrier(bool val) {
+  md_.scanOutputReturnBarrier = val;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::alwaysSingleBlock(bool val) {
   md_.alwaysSingleBlock = val;
   return *this;
@@ -318,6 +323,11 @@ MetadataBuilder& MetadataBuilder::inPlaceIfLastUse(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::sizeFromOutput(bool val) {
+  md_.sizeFromOutput = val;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::isStandalone(bool val) {
   md_.isStandalone_ = val;
   return *this;
@@ -352,6 +362,41 @@ MetadataBuilder& MetadataBuilder::costFunction(
 
 MetadataBuilder& MetadataBuilder::viewOfArg(int32_t ordinal) {
   md_.viewOfArg = ordinal;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::mutatesArg(int32_t ordinal) {
+  md_.mutatesArg = ordinal;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::indicesArg(int32_t ordinal) {
+  md_.indicesArg = ordinal;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::valuesArg(int32_t ordinal) {
+  md_.valuesArg = ordinal;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::layoutAgnostic(bool val) {
+  md_.layoutAgnostic = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::dimAttr(std::string name) {
+  md_.dimAttr = std::move(name);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::accumulateAttr(std::string name) {
+  md_.accumulateAttr = std::move(name);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::memoryFormatAttr(std::string name) {
+  md_.memoryFormatAttr = std::move(name);
   return *this;
 }
 
@@ -504,6 +549,11 @@ MetadataBuilder& MetadataBuilder::hasSizeArg(bool val) {
 
 MetadataBuilder& MetadataBuilder::hasBlockInfo(bool val) {
   ensureElementwise().hasBlockInfo = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::hasOutputArg(bool val) {
+  ensureElementwise().hasOutputArg = val;
   return *this;
 }
 
