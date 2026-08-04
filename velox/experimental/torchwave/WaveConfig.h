@@ -115,6 +115,13 @@ struct WaveConfig {
   // Enable device-side debug printfs. Emergency use only.
   bool kernelDebugOutput{false};
 
+  // Compile kernels with -lineinfo so compute-sanitizer can attribute a fault
+  // to a source line. Read once, from initialize(), because wave freezes its
+  // NVRTC flags on the first compile -- setting it later has no effect.
+  // Optimization stays on (unlike -G, which ptxas rejects at -O>0). It changes
+  // the kernel cache key, so the first run after enabling it recompiles.
+  bool kernelLineInfo{false};
+
   // Launch kernel once per block for debugging, waiting between launches.
   // Each kernel op runs as a standalone invocation so device-side errors
   // can be attributed to a single op.
@@ -167,6 +174,13 @@ struct WaveConfig {
     static WaveConfig instance;
     return instance;
   }
+
+  /// Returns a compact, comma-separated list of the settings whose value
+  /// differs from its default (e.g. "trace=16, autoAdjustCost=true,
+  /// freeIntermediates=true"), or "defaults" when every field is at its
+  /// default. Used in the performance report so a run's active configuration is
+  /// self-documenting.
+  std::string toString() const;
 };
 
 } // namespace torch::wave

@@ -441,8 +441,37 @@ nativert::Node* copyVariantNode(
           // Variant function created nodes directly in the variant graph.
           // Map all variant chain nodes to the original.
           mapVariantChain(variantRoot, node, valueMap, nodeMap);
+          // An original output can be produced by any node of the variant
+          // chain, not just variantRoot: a multi-stage expansion (e.g.
+          // masked_select_jagged -> head/scatter/lengths) yields the values
+          // list from the scatter stage and new_sizes from the lengths stage.
+          // Collect every chain-produced output (walking from variantRoot via
+          // producers, stopping at already-mapped external inputs, as
+          // mapVariantChain does) and match original outputs by id against all
+          // of them.
+          std::vector<nativert::Value*> chainOutputs;
+          {
+            std::unordered_set<NodeCP> seen;
+            std::function<void(NodeCP)> collect = [&](NodeCP chainNode) {
+              if (!seen.insert(chainNode).second) {
+                return;
+              }
+              for (const auto* out : chainNode->outputs()) {
+                chainOutputs.push_back(const_cast<nativert::Value*>(out));
+              }
+              for (const auto& input : chainNode->inputs()) {
+                if (valueMap.count(input.value)) {
+                  continue;
+                }
+                if (auto* producer = input.value->producer()) {
+                  collect(producer);
+                }
+              }
+            };
+            collect(variantRoot);
+          }
           for (auto* origOut : node->outputs()) {
-            for (auto* vrOut : variantRoot->outputs()) {
+            for (auto* vrOut : chainOutputs) {
               if (vrOut->id() == origOut->id()) {
                 valueMap[origOut] = vrOut;
                 if (origOut->type().kind() ==
@@ -860,6 +889,38 @@ static bool setsSizeOnDevice(NodeCP producer) {
   return false;
 }
 
+// True when the consumer described by 'consumerMeta' reads its input
+// 'inputIdx' from the memory output of an elementwise 'producer' that would
+// fuse into the consumer's kernel. Codegen orders
+// such an edge with an intra-kernel opBarrier (see callNeedsBarrier), which in
+// multi-kernel mode forces a cooperative, whole-grid-resident launch; ending
+// the producer's kernel avoids it. The read goes through memory when the input
+// is a whole tensor (argumentMeta wholeTensor) or the producer returns a
+// non-register (materialized) result. Only elementwise producers qualify:
+// non-elementwise ops already run standalone, and producers carrying
+// multiBlockReturnBarrier already end their own kernel via isKernelBreak.
+static bool readsFusedElementwiseProducerFromMemory(
+    int32_t inputIdx,
+    const Metadata* consumerMeta,
+    NodeCP producer,
+    const ValueTypes& types,
+    bool allStandalone) {
+  if (!producer) {
+    return false;
+  }
+  const auto* producerMeta = nodeMeta(producer);
+  if (!producerMeta || !producerMeta->elementwise ||
+      producerMeta->isStandalone(producer, types) || allStandalone) {
+    return false;
+  }
+  const bool wholeTensorArg = consumerMeta &&
+      static_cast<size_t>(inputIdx) < consumerMeta->argumentMeta.size() &&
+      consumerMeta->argumentMeta[inputIdx].wholeTensor;
+  const bool nonRegisterProducer = !producerMeta->returnMeta.empty() &&
+      !producerMeta->returnMeta[0].isRegister;
+  return wholeTensorArg || nonRegisterProducer;
+}
+
 Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
   if (node->target() == "prim.ListUnpack" && !node->inputs().empty()) {
     auto* inputValue = node->inputs()[0].value;
@@ -920,15 +981,9 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
   // discards -- so push it directly instead, otherwise this op reads a buffer
   // its producer never wrote (an orphaned scan stage).
   if (meta && meta->inputFromPreviousKernel.has_value()) {
-    auto* prevProducer =
-        node->inputs()[meta->inputFromPreviousKernel.value()].value->producer();
-    if (prevProducer && !placed_.count(prevProducer) &&
-        !(inputs_ && inputs_->count(prevProducer))) {
-      placeKernels(prevProducer, Context::kFused);
-      if (!placed_.count(prevProducer)) {
-        pushdownFused(prevProducer);
-      }
-    }
+    breakProducerIntoOwnKernel(
+        node->inputs()[meta->inputFromPreviousKernel.value()]
+            .value->producer());
   }
 
   for (auto i = 0; i < node->inputs().size(); ++i) {
@@ -945,6 +1000,18 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     }
     auto* inputValue = node->inputs()[i].value;
     auto* producer = inputValue->producer();
+    // In multi-kernel mode, a fused elementwise producer whose output this op
+    // reads from memory would be ordered by an intra-kernel opBarrier, which
+    // forces a cooperative (whole-grid-resident) launch. End the producer's
+    // kernel instead so its output is materialized by a prior stream-ordered
+    // launch; the launch boundary is the barrier. cg and single-block keep the
+    // in-kernel barrier on purpose.
+    if (thisContext == Context::kFused && !isCgGrid_ && !isSingleBlock_ &&
+        readsFusedElementwiseProducerFromMemory(
+            i, meta, producer, types_, allStandalone_)) {
+      breakProducerIntoOwnKernel(producer);
+      continue;
+    }
     auto inputKind = inputValue->type().kind();
     bool isScalarSize = isSizeArg(node->inputs()[i].name, meta) &&
         inputKind != nativert::Type::Kind::Tensor &&
@@ -1063,6 +1130,17 @@ void CompileCtx::pushdownFused(NodeCP node) {
   fillConstantIndices(sg, launch);
   placeKernelLaunch(std::move(launch));
   placed_.insert(node);
+}
+
+void CompileCtx::breakProducerIntoOwnKernel(NodeCP producer) {
+  if (!producer || placed_.count(producer) ||
+      (inputs_ && inputs_->count(producer))) {
+    return;
+  }
+  placeKernels(producer, Context::kFused);
+  if (!placed_.count(producer)) {
+    pushdownFused(producer);
+  }
 }
 
 std::unique_ptr<KernelOperation> CompileCtx::generateFused(const Subgraph& sg) {
@@ -1186,13 +1264,7 @@ void CompileCtx::generateElementwiseBorderImpl(
   // register scalar.
   auto isElementwiseProducer = [&](NodeCP producer) {
     auto* meta = nodeMeta(producer);
-    if (!meta || !meta->elementwise) {
-      return false;
-    }
-    if (!meta->returnMeta.empty() && !meta->returnMeta[0].isRegister) {
-      return false;
-    }
-    return true;
+    return meta && meta->elementwise && !meta->isElementwiseBorder();
   };
 
   for (size_t inputIdx = 0; inputIdx < node->inputs().size(); ++inputIdx) {
