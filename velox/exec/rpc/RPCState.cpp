@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <utility>
 
 #include <folly/executors/InlineExecutor.h>
 
@@ -41,6 +42,15 @@ int64_t steadyNowNs() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
+}
+
+// Wake blocked drivers by fulfilling their promises. Must run with no RPCState
+// lock held: setValue() may synchronously drive an inline continuation that
+// reacquires the driver/operator locks (see RPCState::takeWaitersLocked).
+void fulfillWaiters(std::vector<ContinuePromise>& waiters) {
+  for (auto& promise : waiters) {
+    promise.setValue();
+  }
 }
 } // namespace
 
@@ -191,26 +201,30 @@ void RPCState::completeRow(
     RowLocation location,
     RPCResponse response,
     int64_t rttNs) {
-  std::lock_guard<std::mutex> l(mutex_);
-  readyRows_.push_back(
-      ReadyRow{
-          .rowId = rowId,
-          .location = location,
-          .response = std::move(response),
-          .rttNs = rttNs});
-  inFlight_--;
+  std::vector<ContinuePromise> waiters;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    readyRows_.push_back(
+        ReadyRow{
+            .rowId = rowId,
+            .location = location,
+            .response = std::move(response),
+            .rttNs = rttNs});
+    inFlight_--;
 
-  if (rttNs > 0) {
-    rttMinNs_ = std::min(rttMinNs_, rttNs);
-    rttMaxNs_ = std::max(rttMaxNs_, rttNs);
-    ++numRttSamples_;
+    if (rttNs > 0) {
+      rttMinNs_ = std::min(rttMinNs_, rttNs);
+      rttMaxNs_ = std::max(rttMaxNs_, rttNs);
+      ++numRttSamples_;
+    }
+
+    RPC_STATE_VLOG(2) << "Row completed: rowId=" << rowId
+                      << ", readyRows=" << readyRows_.size()
+                      << ", inFlight=" << inFlight_;
+
+    waiters = takeWaitersLocked();
   }
-
-  RPC_STATE_VLOG(2) << "Row completed: rowId=" << rowId
-                    << ", readyRows=" << readyRows_.size()
-                    << ", inFlight=" << inFlight_;
-
-  notifyWaitersLocked();
+  fulfillWaiters(waiters);
 }
 
 RPCState::ClaimResult RPCState::tryClaimOrWait(
@@ -299,20 +313,24 @@ void RPCState::addPendingBatch(
             completionTimeNs->store(steadyNowNs(), std::memory_order_relaxed);
             RPC_STATE_VLOG(1)
                 << "Batch completed with " << responses.size() << " responses";
+            std::vector<ContinuePromise> waiters;
             {
               std::lock_guard<std::mutex> l(state->mutex_);
-              state->notifyWaitersLocked();
+              waiters = state->takeWaitersLocked();
             }
+            fulfillWaiters(waiters);
             return responses;
           })
           .thenError([state = selfPtr,
                       completionTimeNs](folly::exception_wrapper ew) {
             completionTimeNs->store(steadyNowNs(), std::memory_order_relaxed);
             RPC_STATE_LOG(ERROR) << "Batch failed: " << ew.what();
+            std::vector<ContinuePromise> waiters;
             {
               std::lock_guard<std::mutex> l(state->mutex_);
-              state->notifyWaitersLocked();
+              waiters = state->takeWaitersLocked();
             }
+            fulfillWaiters(waiters);
             return folly::makeSemiFuture<std::vector<RPCResponse>>(
                 std::move(ew));
           })
@@ -413,12 +431,16 @@ std::optional<RPCState::ReadyBatch> RPCState::tryPollReady() {
 // ===== Common =====
 
 void RPCState::setNoMoreInput() {
-  std::lock_guard<std::mutex> l(mutex_);
-  noMoreInput_ = true;
-  RPC_STATE_VLOG(1) << "setNoMoreInput: inFlight=" << inFlight_
-                    << ", pendingBatches=" << pendingBatches_.size()
-                    << ", readyRows=" << readyRows_.size();
-  notifyWaitersLocked();
+  std::vector<ContinuePromise> waiters;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    noMoreInput_ = true;
+    RPC_STATE_VLOG(1) << "setNoMoreInput: inFlight=" << inFlight_
+                      << ", pendingBatches=" << pendingBatches_.size()
+                      << ", readyRows=" << readyRows_.size();
+    waiters = takeWaitersLocked();
+  }
+  fulfillWaiters(waiters);
 }
 
 bool RPCState::isFinished() {
@@ -473,13 +495,10 @@ void RPCState::onUnitSamples(const std::vector<int64_t>& rttNsList) {
   }
 }
 
-void RPCState::notifyWaitersLocked() {
-  // Fulfill all promises to wake up blocked drivers.
-  // Called while mutex_ is held.
-  for (auto& promise : promises_) {
-    promise.setValue();
-  }
-  promises_.clear();
+std::vector<ContinuePromise> RPCState::takeWaitersLocked() {
+  // Hand the waiter promises back to the caller to fulfill after releasing
+  // mutex_. See the header for why setValue() must not run under mutex_.
+  return std::exchange(promises_, {});
 }
 
 RPCState::OperatorSnapshot RPCState::operatorSnapshot() const {
