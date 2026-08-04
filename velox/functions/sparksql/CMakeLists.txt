@@ -74,6 +74,7 @@ velox_add_library(
   DecimalArithmetic.h
   DecimalArithmeticFunctions.h
   DecimalCeil.h
+  DecimalCeilFunction.h
   DecimalUtil.h
   Factorial.h
   FormatNumber.h
