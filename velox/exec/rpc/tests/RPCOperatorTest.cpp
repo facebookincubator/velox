@@ -23,6 +23,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/rpc/RPCPlanNodeTranslator.h"
 #include "velox/exec/rpc/RPCRateLimiter.h"
 #include "velox/exec/rpc/tests/DemoBatchRPCFunction.h"
@@ -189,6 +190,26 @@ TEST_F(RPCOperatorTest, basicPerRow) {
   EXPECT_EQ(rows["hello world"], "Response for: hello world");
   EXPECT_EQ(rows["test prompt"], "Response for: test prompt");
   EXPECT_EQ(rows["third row"], "Response for: third row");
+}
+
+// kPerRow output is sized from QueryConfig::preferredOutputBatchRows: 50 rows
+// with a cap of 10 emit at least 5 output vectors.
+TEST_F(RPCOperatorTest, outputBatchSizeFromConfig) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<std::string>(50, [](auto row) {
+                      return fmt::format("row {}", row);
+                    })});
+  auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
+
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config(core::QueryConfig::kPreferredOutputBatchRows, "10")
+                    .copyResults(pool(), task);
+  EXPECT_EQ(result->size(), 50);
+
+  // 50 rows capped at 10 per output vector => at least 5 vectors.
+  const auto planStats = toPlanStats(task->taskStats());
+  EXPECT_GE(planStats.at(plan->id()).outputVectors, 5);
 }
 
 /// Null input rows should produce null in the RPC result column.
