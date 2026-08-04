@@ -17,8 +17,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <limits>
 #include <type_traits>
 #include "folly/CPortability.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/type/CppToType.h"
 #include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox::functions {
@@ -92,7 +96,7 @@ round(const TNum& number, const TDecimals& decimals = 0) {
 
 // This is used by Velox for floating points plus.
 template <typename T>
-T plus(const T a, const T b)
+FOLLY_ALWAYS_INLINE T plus(const T a, const T b)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
     __attribute__((__no_sanitize__("signed-integer-overflow")))
@@ -104,7 +108,7 @@ T plus(const T a, const T b)
 
 // This is used by Velox for floating points minus.
 template <typename T>
-T minus(const T a, const T b)
+FOLLY_ALWAYS_INLINE T minus(const T a, const T b)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
     __attribute__((__no_sanitize__("signed-integer-overflow")))
@@ -116,7 +120,7 @@ T minus(const T a, const T b)
 
 // This is used by Velox for floating points multiply.
 template <typename T>
-T multiply(const T a, const T b)
+FOLLY_ALWAYS_INLINE T multiply(const T a, const T b)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
     __attribute__((__no_sanitize__("signed-integer-overflow")))
@@ -128,7 +132,7 @@ T multiply(const T a, const T b)
 
 // This is used by Velox for floating points divide.
 template <typename T>
-T divide(const T& a, const T& b)
+FOLLY_ALWAYS_INLINE T divide(const T& a, const T& b)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
     __attribute__((__no_sanitize__("float-divide-by-zero")))
@@ -141,7 +145,7 @@ T divide(const T& a, const T& b)
 
 // This is used by Velox for floating points modulus.
 template <typename T>
-T modulus(const T a, const T b) {
+FOLLY_ALWAYS_INLINE T modulus(const T a, const T b) {
   if (b == 0) {
     // Match Presto semantics
     return std::numeric_limits<T>::quiet_NaN();
@@ -150,13 +154,13 @@ T modulus(const T a, const T b) {
 }
 
 template <typename T>
-T negate(const T& arg) {
+FOLLY_ALWAYS_INLINE T negate(const T& arg) {
   T results = std::negate<std::remove_cv_t<T>>()(arg);
   return results;
 }
 
 template <typename T>
-T abs(const T& arg) {
+FOLLY_ALWAYS_INLINE T abs(const T& arg) {
   if constexpr (std::is_integral_v<T>) {
     if (arg == std::numeric_limits<T>::min()) {
       VELOX_USER_FAIL(
@@ -168,13 +172,13 @@ T abs(const T& arg) {
 }
 
 template <typename T>
-T floor(const T& arg) {
+FOLLY_ALWAYS_INLINE T floor(const T& arg) {
   T results = std::floor(arg);
   return results;
 }
 
 template <typename T>
-T ceil(const T& arg) {
+FOLLY_ALWAYS_INLINE T ceil(const T& arg) {
   T results = std::ceil(arg);
   return results;
 }
