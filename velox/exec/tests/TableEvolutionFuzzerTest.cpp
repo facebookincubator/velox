@@ -286,6 +286,29 @@ TEST(TableEvolutionFuzzerTest, adaptiveVectorSizeScalesWithByteTarget) {
   EXPECT_EQ(doubled, 2 * base);
 }
 
+TEST(TableEvolutionFuzzerTest, extraReadSessionPropertiesApplied) {
+  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
+  auto config = makeDwrfConfig(pool.get(), 1);
+  int calls = 0;
+  config.extraReadSessionProperties =
+      [&](FuzzerGenerator&) -> std::pair<
+                                std::unordered_map<std::string, std::string>,
+                                std::unordered_map<std::string, std::string>> {
+    ++calls;
+    return {
+        {{"test.reader.key", "pushdown.value"}},
+        {{"test.reader.key", "reference.value"}}};
+  };
+  TableEvolutionFuzzer fuzzer(config);
+  fuzzer.setSeed(20260629);
+  constexpr int kIterations = 3;
+  for (int i = 0; i < kIterations; ++i) {
+    EXPECT_NO_THROW(fuzzer.run());
+    fuzzer.reSeed();
+  }
+  EXPECT_GE(calls, kIterations);
+}
+
 TEST(TableEvolutionFuzzerTest, run) {
   auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
   exec::test::TableEvolutionFuzzer::Config config;

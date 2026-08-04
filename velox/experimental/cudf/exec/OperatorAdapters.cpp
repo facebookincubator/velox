@@ -33,6 +33,7 @@
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
+#include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -40,6 +41,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include "velox/common/memory/Memory.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
@@ -59,6 +61,7 @@
 #include "velox/exec/TableScan.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/TopN.h"
+#include "velox/exec/TopNRowNumber.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/Window.h"
 
@@ -197,8 +200,8 @@ class FilterProjectAdapter : public OperatorAdapter {
 
     // Check filter separately
     if (filterNode) {
-      if (!canBeEvaluatedByCudf(
-              {filterNode->filter()}, ctx->task->queryCtx().get())) {
+      if (!canExprRunOnGpu(
+              filterNode->filter(), ctx->task->queryCtx().get(), op->pool())) {
         LOG_FALLBACK(
             "FilterProject filter cannot be evaluated by cuDF, PlanNode id: {}",
             planNode->id());
@@ -208,12 +211,14 @@ class FilterProjectAdapter : public OperatorAdapter {
 
     // Check projects separately
     if (projectPlanNode) {
-      if (!canBeEvaluatedByCudf(
-              projectPlanNode->projections(), ctx->task->queryCtx().get())) {
-        LOG_FALLBACK(
-            "FilterProject projections cannot be evaluated by cuDF, PlanNode id: {}",
-            planNode->id());
-        return false;
+      for (const auto& projection : projectPlanNode->projections()) {
+        if (!canExprRunOnGpu(
+                projection, ctx->task->queryCtx().get(), op->pool())) {
+          LOG_FALLBACK(
+              "FilterProject projections cannot be evaluated by cuDF, PlanNode id: {}",
+              planNode->id());
+          return false;
+        }
       }
     }
     return true;
@@ -275,8 +280,8 @@ class AggregationAdapter : public OperatorAdapter {
       return false;
     }
 
-    bool canEvaluate =
-        canBeEvaluatedByCudf(*aggregationPlanNode, ctx->task->queryCtx().get());
+    bool canEvaluate = canBeEvaluatedByCudf(
+        *aggregationPlanNode, ctx->task->queryCtx().get(), op->pool());
     if (!canEvaluate) {
       LOG_FALLBACK(
           "Aggregation aggregation cannot be evaluated by cuDF, PlanNode id: {}",
@@ -364,8 +369,10 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
     }
 
     if (joinPlanNode->filter()) {
-      if (!canBeEvaluatedByCudf(
-              {joinPlanNode->filter()}, ctx->task->queryCtx().get())) {
+      if (!canExprRunOnGpu(
+              joinPlanNode->filter(),
+              ctx->task->queryCtx().get(),
+              op->pool())) {
         LOG_FALLBACK(
             "HashJoin join filter cannot be evaluated by cuDF, PlanNode id: {}",
             planNode->id());
@@ -496,8 +503,10 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
 
     // Check if join condition can be evaluated on GPU
     if (joinPlanNode->joinCondition()) {
-      if (!canBeEvaluatedByCudf(
-              {joinPlanNode->joinCondition()}, ctx->task->queryCtx().get())) {
+      if (!canExprRunOnGpu(
+              joinPlanNode->joinCondition(),
+              ctx->task->queryCtx().get(),
+              op->pool())) {
         LOG_FALLBACK(
             "NestedLoopJoin filter cannot be evaluated by cuDF, PlanNode id: {}",
             planNode->id());
@@ -666,6 +675,50 @@ class TopNAdapter : public OperatorAdapter {
 
     std::vector<std::unique_ptr<exec::Operator>> result;
     result.push_back(std::make_unique<CudfTopN>(operatorId, ctx, topNPlanNode));
+    return result;
+  }
+};
+
+/// TopNRowNumberAdapter - Replaces with CudfTopNRowNumber
+class TopNRowNumberAdapter : public OperatorAdapter {
+ public:
+  TopNRowNumberAdapter() : OperatorAdapter("TopNRowNumber") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return dynamic_cast<const exec::TopNRowNumber*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* /*ctx*/) const override {
+    auto node =
+        std::dynamic_pointer_cast<const core::TopNRowNumberNode>(planNode);
+    if (!node) {
+      return false;
+    }
+    return node->rankFunction() ==
+        core::TopNRowNumberNode::RankFunction::kRowNumber;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    auto node =
+        std::dynamic_pointer_cast<const core::TopNRowNumberNode>(planNode);
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfTopNRowNumber>(operatorId, ctx, node));
     return result;
   }
 };
@@ -1122,6 +1175,7 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<NestedLoopJoinProbeAdapter>());
   registry.registerAdapter(std::make_unique<OrderByAdapter>());
   registry.registerAdapter(std::make_unique<TopNAdapter>());
+  registry.registerAdapter(std::make_unique<TopNRowNumberAdapter>());
   registry.registerAdapter(std::make_unique<LimitAdapter>());
   registry.registerAdapter(std::make_unique<LocalPartitionAdapter>());
   registry.registerAdapter(std::make_unique<LocalExchangeAdapter>());

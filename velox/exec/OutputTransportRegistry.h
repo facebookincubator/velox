@@ -39,13 +39,19 @@ namespace facebook::velox::exec {
 /// its matching output operator, keyed by transport id. Registering the two
 /// together ensures a transport's operator and manager cannot diverge. Build
 /// entries with make(), which binds the operator to this manager and rejects
-/// null halves; direct aggregate initialization is for tests passing real
-/// values.
+/// null halves; direct construction is for tests passing real values.
 struct OutputTransportEntry {
   std::shared_ptr<OutputBufferManager> manager;
 
   /// Builds this transport's output operator, binding 'manager'.
   PartitionedOutputFactory makeOutputOperator;
+
+  /// Constructs an entry from a manager and the operator builder bound to it.
+  OutputTransportEntry(
+      std::shared_ptr<OutputBufferManager> manager,
+      PartitionedOutputFactory makeOutputOperator)
+      : manager(std::move(manager)),
+        makeOutputOperator(std::move(makeOutputOperator)) {}
 
   /// Preferred way to build an entry: pairs 'manager' with an operator builder
   /// that receives that same manager, so the operator can't be wired to a
