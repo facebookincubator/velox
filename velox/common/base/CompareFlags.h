@@ -13,12 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <fmt/core.h>
-#include <optional>
-#include <sstream>
-#include <string>
-
 #pragma once
+
+#include <optional>
+#include <string>
 
 namespace facebook::velox {
 
@@ -159,17 +157,7 @@ struct CompareFlags {
         .equalsOnly = true, .nullHandlingMode = nullHandlingMode};
   }
 
-  static std::string nullHandlingModeToStr(NullHandlingMode mode) {
-    switch (mode) {
-      case CompareFlags::NullHandlingMode::kNullAsValue:
-        return "NullAsValue";
-      case CompareFlags::NullHandlingMode::kNullAsIndeterminate:
-        return "NullAsIndeterminate";
-      default:
-        return fmt::format(
-            "Unknown Null Handling mode {}", static_cast<int>(mode));
-    }
-  }
+  static std::string nullHandlingModeToStr(NullHandlingMode mode);
 
   /// Returns a copy of the flags with the ascending flag flipped.
   static CompareFlags reverseDirection(const CompareFlags& flags) {
@@ -178,14 +166,7 @@ struct CompareFlags {
     return result;
   }
 
-  std::string toString() const {
-    return fmt::format(
-        "[NullFirst[{}] Ascending[{}] EqualsOnly[{}] NullHandleMode[{}]]",
-        nullsFirst,
-        ascending,
-        equalsOnly,
-        nullHandlingModeToStr(nullHandlingMode));
-  }
+  std::string toString() const;
 };
 
 } // namespace facebook::velox
