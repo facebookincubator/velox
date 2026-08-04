@@ -137,7 +137,11 @@ void CudfIcebergSplitReader::setupReader() {
 }
 
 cudf::ast::expression const* CudfIcebergSplitReader::pushdownFilter() const {
-  if (transformedPushdownFilter_.has_value()) {
+  if (transformedPushdownFilter_) {
+    if (transformedPushdownFilter_->requiresSplitSpecificDecimalTypes() and
+        not hasSplitSpecificPushdownFilter()) {
+      return nullptr;
+    }
     return transformedPushdownFilter_->expr();
   }
   return deferSubfieldFilter_ ? nullptr : CudfSplitReader::pushdownFilter();
@@ -173,8 +177,8 @@ void CudfIcebergSplitReader::prepareSplitInternal(
   prependRowIndex_ = needPrependedRowIndex();
 
   if (deferSubfieldFilter_) {
-    VLOG(1)
-        << "Subfield filter is deferred to post table read due to missing column references.";
+    VLOG(1) << "Subfield filter is deferred to post table read due to injected "
+               "columns or unavailable split-specific decimal types.";
   }
 
   setupReader();
@@ -234,8 +238,12 @@ void CudfIcebergSplitReader::prepareSubfieldFilter() {
   transformedPushdownFilter_ =
       transformFilterForInjectedColumns(*originalFilter, injectedColumnIndices);
 
-  // Defer the original filter if it references an injected column.
-  deferSubfieldFilter_ = transformedPushdownFilter_->referencesInjectedColumn();
+  // Defer the logical filter if it references an injected column, or if a
+  // transformed decimal predicate has no split-specific physical expression.
+  deferSubfieldFilter_ =
+      transformedPushdownFilter_->referencesInjectedColumn() or
+      (transformedPushdownFilter_->requiresSplitSpecificDecimalTypes() and
+       not hasSplitSpecificPushdownFilter());
 }
 
 std::unique_ptr<cudf::column> CudfIcebergSplitReader::extractRowIndex(

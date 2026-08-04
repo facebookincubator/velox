@@ -36,13 +36,17 @@ class TransformedFilter {
   /// filter is always true.
   /// @param referencesInjectedColumn Whether the input filter references
   /// injected column(s).
+  /// @param requiresSplitSpecificDecimalTypes Whether the transformed filter
+  /// retains a decimal literal whose storage width must match the split.
   TransformedFilter(
       cudf::ast::tree nodes,
       const cudf::ast::expression* expr,
-      bool referencesInjectedColumn)
+      bool referencesInjectedColumn,
+      bool requiresSplitSpecificDecimalTypes)
       : nodes_{std::move(nodes)},
         expr_{expr},
-        referencesInjectedColumn_{referencesInjectedColumn} {}
+        referencesInjectedColumn_{referencesInjectedColumn},
+        requiresSplitSpecificDecimalTypes_{requiresSplitSpecificDecimalTypes} {}
 
   const cudf::ast::expression* expr() const {
     return expr_;
@@ -52,11 +56,16 @@ class TransformedFilter {
     return referencesInjectedColumn_;
   }
 
+  bool requiresSplitSpecificDecimalTypes() const {
+    return requiresSplitSpecificDecimalTypes_;
+  }
+
  private:
   // Owns the expression nodes created while transforming.
   cudf::ast::tree nodes_;
   const cudf::ast::expression* expr_;
   bool referencesInjectedColumn_;
+  bool requiresSplitSpecificDecimalTypes_;
 };
 
 /// Transforms the input filter into a sub-filter over the columns actually

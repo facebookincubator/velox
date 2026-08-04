@@ -19,6 +19,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
+#include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/scalar/scalar.hpp>
 
 #include <gmock/gmock.h>
@@ -190,6 +191,55 @@ TEST(CudfIcebergFilterTransformTest, negatedPhysicalExpressionIsPushed) {
       &transformedComparison->get_operands()[0].get());
   ASSERT_NE(column, nullptr);
   EXPECT_EQ(column->get_column_index(), 0);
+}
+
+TEST(
+    CudfIcebergFilterTransformTest,
+    retainedDecimalRequiresSplitSpecificTypes) {
+  cudf::ast::tree tree;
+  const auto& physical = tree.push(cudf::ast::column_reference{1});
+  cudf::fixed_point_scalar<numeric::decimal64> literalValue{
+      500, numeric::scale_type{-2}};
+  const auto& literal = tree.push(cudf::ast::literal{literalValue});
+  const auto& expression = tree.push(
+      cudf::ast::operation{cudf::ast::ast_operator::EQUAL, physical, literal});
+
+  const auto result = transformFilterForInjectedColumns(
+      expression, std::array<cudf::size_type, 1>{0});
+
+  EXPECT_FALSE(result.referencesInjectedColumn());
+  EXPECT_TRUE(result.requiresSplitSpecificDecimalTypes());
+}
+
+TEST(
+    CudfIcebergFilterTransformTest,
+    droppedDecimalDoesNotRequireSplitSpecificTypes) {
+  cudf::ast::tree tree;
+  const auto& injected = tree.push(cudf::ast::column_reference{0});
+  cudf::fixed_point_scalar<numeric::decimal64> decimalValue{
+      500, numeric::scale_type{-2}};
+  const auto& decimalLiteral = tree.push(cudf::ast::literal{decimalValue});
+  const auto& decimalComparison = tree.push(
+      cudf::ast::operation{
+          cudf::ast::ast_operator::EQUAL, injected, decimalLiteral});
+
+  const auto& physical = tree.push(cudf::ast::column_reference{1});
+  cudf::numeric_scalar<int32_t> integerValue{5};
+  const auto& integerLiteral = tree.push(cudf::ast::literal{integerValue});
+  const auto& integerComparison = tree.push(
+      cudf::ast::operation{
+          cudf::ast::ast_operator::EQUAL, physical, integerLiteral});
+  const auto& expression = tree.push(
+      cudf::ast::operation{
+          cudf::ast::ast_operator::LOGICAL_AND,
+          decimalComparison,
+          integerComparison});
+
+  const auto result = transformFilterForInjectedColumns(
+      expression, std::array<cudf::size_type, 1>{0});
+
+  EXPECT_TRUE(result.referencesInjectedColumn());
+  EXPECT_FALSE(result.requiresSplitSpecificDecimalTypes());
 }
 
 TEST(

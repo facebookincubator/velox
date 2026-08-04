@@ -342,6 +342,10 @@ cudf::ast::expression const* CudfSplitReader::subfieldFilter() const {
   return subfieldFilterExpr_;
 }
 
+bool CudfSplitReader::hasSplitSpecificPushdownFilter() const {
+  return hasSplitSpecificPushdownFilter_;
+}
+
 void CudfSplitReader::setupCudfDataSource() {
   if (dataSource_) {
     return;

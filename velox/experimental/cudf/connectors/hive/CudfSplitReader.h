@@ -102,11 +102,6 @@ class CudfSplitReader : public NvtxHelper {
   // Return the split-specific filter to push down to the cuDF reader.
   virtual cudf::ast::expression const* pushdownFilter() const;
 
-  // Return whether the pushdown filter was built for the current split.
-  bool hasSplitSpecificPushdownFilter() const {
-    return hasSplitSpecificPushdownFilter_;
-  }
-
   // Determine the output memory resource for the cuDF reader.
   virtual rmm::device_async_resource_ref determineCudfMemoryResource() const;
 
@@ -122,6 +117,9 @@ class CudfSplitReader : public NvtxHelper {
 
   // Return the logical subfield filter used after reading.
   cudf::ast::expression const* subfieldFilter() const;
+
+  // Return whether the pushdown filter was built for the current split.
+  bool hasSplitSpecificPushdownFilter() const;
 
   std::shared_ptr<CudfHiveConnectorSplit> split_;
   std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>
