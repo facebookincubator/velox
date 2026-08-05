@@ -201,15 +201,31 @@ std::string tensorToString(const Tensor& t) {
   return ss.str();
 }
 
-std::string dumpOpParams(const KernelOperation& op, uint8_t* paramBase) {
+std::string dumpOpParams(
+    const KernelOperation& op,
+    uint8_t* paramBase,
+    const OpInvocation* invocation) {
   std::stringstream ss;
   const auto& inputs = op.orderedInputs();
   auto numInputs = op.numInputs();
   for (size_t i = 0; i < inputs.size(); ++i) {
     auto offset = op.paramOffset(inputs[i]);
     bool isOutput = static_cast<int32_t>(i) >= numInputs;
+    // The generated code refers to operands by param offset (b0 = param(1040)).
+    // Print the formal and actual value ids alongside it so a dumped kernel
+    // line can be tied back to a graph value (the actual id is what
+    // --trace_values takes).
+    auto formalId = inputs[i]->id();
+    auto actualId = formalId;
+    if (invocation != nullptr) {
+      auto it = invocation->bindings().find(formalId);
+      if (it != invocation->bindings().end()) {
+        actualId = it->second;
+      }
+    }
     ss << "  " << (isOutput ? "output" : "input") << "[" << i
-       << "] offset=" << offset;
+       << "] offset=" << offset << " %" << formalId << " -> %" << actualId
+       << " (" << inputs[i]->name() << ")";
     if (inputs[i]->type().kind() == nativert::Type::Kind::Tensor) {
       auto* t = reinterpret_cast<Tensor*>(paramBase + offset);
       ss << " " << tensorToString(*t);
@@ -1157,15 +1173,21 @@ CompositeKernel::CompositeKernel(
       std::vector<int32_t> normalParam, normalOutput, normalAlt, gatherParam;
       std::unordered_set<int32_t> seenGather;
       for (size_t i = 0; i < paramOffs.size(); ++i) {
-        if (ownDims.count(paramOffs[i])) {
-          if (seenGather.insert(paramOffs[i]).second) {
-            gatherParam.push_back(paramOffs[i]);
-          }
-        } else {
-          normalParam.push_back(paramOffs[i]);
-          normalOutput.push_back(outputOffs.at(i));
-          normalAlt.push_back(altOffs.at(i));
+        bool isOwnDims = ownDims.count(paramOffs[i]) > 0;
+        if (isOwnDims && seenGather.insert(paramOffs[i]).second) {
+          gatherParam.push_back(paramOffs[i]);
         }
+        // An entry with an alt slot broadcast-inits that copy, not the primary,
+        // and the two do not share 'status', so an own-dims primary is no
+        // reason to skip it. Skipping left the alt Tensor at the host's
+        // kUninited zero fill -- null storage, and the expression reading
+        // through it faulted.
+        if (altOffs.at(i) == -1 && isOwnDims) {
+          continue;
+        }
+        normalParam.push_back(paramOffs[i]);
+        normalOutput.push_back(outputOffs.at(i));
+        normalAlt.push_back(altOffs.at(i));
       }
 
       if (!normalParam.empty() || !gatherParam.empty()) {
@@ -1747,6 +1769,18 @@ void allocateLaunchOutputs(
   const auto& actualOutputs = launch.actualOutputs;
   const auto& outputTypes = launch.actualOutputTypes;
 
+  // Outputs that another output aliases in place (its aliasSelfId). These are
+  // materialized whole-tensor bases -- e.g. the elementwise 'self' of a fused
+  // tw.select_scatter -- and must keep their own shape, not be resized to the
+  // op's largest elementwise input (which is the scatter 'src', smaller than
+  // 'self') by the largestId shortcut below.
+  folly::F14FastSet<nativert::ValueId> aliasSelfTargets;
+  for (const auto& desc : descs) {
+    if (desc.aliasSelfId) {
+      aliasSelfTargets.insert(*desc.aliasSelfId);
+    }
+  }
+
   // Shortcut: if largestId is set, resize tensor outputs to match it.
   if (largestId >= 0) {
     auto& largestIv = frame.getIValue(largestId);
@@ -1807,6 +1841,18 @@ void allocateLaunchOutputs(
         continue;
       }
       auto actualId = actualOutputs[i];
+      // A materialized whole-tensor base that a later output aliases in place
+      // (e.g. the elementwise 'self' of a fused tw.select_scatter) is sized by
+      // its own shape, not the op's largest elementwise input. Reserved here,
+      // ahead of the aliasing output, so that output inherits self's full shape
+      // via the alias() below.
+      if (aliasSelfTargets.count(actualId) &&
+          descs[i].sizeExpr.op != SizeShortcut::kNone) {
+        auto exprDims = descs[i].sizeExpr.dims(&frame);
+        std::vector<int64_t> ownDims(exprDims.begin(), exprDims.end());
+        ensureCudaTensor(frame, types, actualId, ownDims);
+        continue;
+      }
       if (descs[i].aliasSelfId) {
         auto& selfIv = frame.getIValue(*descs[i].aliasSelfId);
         if (selfIv.isTensor()) {
@@ -3133,7 +3179,8 @@ void CompositeInvocation::launch(
           auto* kernelOp = sv.kernels[launchIdx].launch->op;
           opText = kernelOp->toString(sv.kernels[launchIdx].invocation);
           auto* opParams = pinnedBase + sv.paramOffsets.at(launchIdx);
-          paramText = dumpOpParams(*kernelOp, opParams);
+          paramText = dumpOpParams(
+              *kernelOp, opParams, sv.kernels[launchIdx].invocation);
         }
         LOG(ERROR) << "debug_single_ops: block " << active << " opCode "
                    << opCode << " blockInOp " << pinnedBlocks[active].blockInOp

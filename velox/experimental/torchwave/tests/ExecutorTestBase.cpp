@@ -137,6 +137,11 @@ DEFINE_bool(
     false,
     "Enable device-side debug printfs. Emergency use only");
 DEFINE_bool(
+    kernel_line_info,
+    false,
+    "Compile kernels with -lineinfo so compute-sanitizer attributes faults to "
+    "source lines. Keeps -O3 (unlike --cuda_G); forces a kernel recompile");
+DEFINE_bool(
     debug_single_ops,
     false,
     "Launch kernel once per block for debugging, waiting after each launch");
@@ -659,6 +664,7 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().noElementwiseFastPath = FLAGS_no_elementwise_fast_path;
   WaveConfig::get().continueAfterMismatch = FLAGS_continue_after_mismatch;
   WaveConfig::get().kernelDebugOutput = FLAGS_kernel_debug_output;
+  WaveConfig::get().kernelLineInfo = FLAGS_kernel_line_info;
   WaveConfig::get().debugSingleOps = FLAGS_debug_single_ops;
   WaveConfig::get().autoAdjustCost = FLAGS_auto_adjust_cost;
   WaveConfig::get().enableReuse = FLAGS_enable_reuse;

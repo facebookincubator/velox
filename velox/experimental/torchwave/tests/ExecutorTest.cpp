@@ -281,6 +281,261 @@ TEST_F(ExecutorTest, indexListpackReuseTest) {
       "data/index_listpack_reuse_test_results.pt");
 }
 
+// Number of aten.clone.default nodes that still have a live user after the
+// optimizer has run on 'pt2File'. Clone-elision proof for the fused in-place
+// scatter tests: each builds a fresh executor because runTest consumes its own
+// fixture, and counts the clones the pass did not drop.
+int countLiveClonesAfterOpt(const std::string& pt2Path) {
+  auto fixture = ModelFixture::load(pt2Path);
+  EXPECT_NE(fixture, nullptr);
+  if (fixture == nullptr) {
+    return -1;
+  }
+  WaveGraphExecutor exec(fixture->makeModelContext());
+  int liveClones = 0;
+  for (const auto& node : exec.graph().nodes()) {
+    if (node.target() != "torch.ops.aten.clone.default") {
+      continue;
+    }
+    for (const auto* out : node.outputs()) {
+      if (out != nullptr && !out->users().empty()) {
+        ++liveClones;
+        break;
+      }
+    }
+  }
+  return liveClones;
+}
+
+// select_scatter as a fused in-place elementwise op along dim 0 and dim 1,
+// covering the in-place and copy scenarios. The aten.select_scatter rewrite
+// inserts clone(self) + the in-place tw.select_scatter; clone-elision (under
+// enableReuse) drops the clone when self is a dead intermediate. out0's base
+// (a0+a1) is dead, so its clone is elided and the write lands in base0's buffer
+// in place; out1's base (b0+b1) is also a graph output, so its clone is kept (a
+// defensive copy) and base1 is preserved. Verifies correctness for both dims
+// and asserts exactly one clone was elided (out0 in place, out1 copy).
+TEST_F(ExecutorTest, selectScatterTest) {
+  const bool savedReuse = WaveConfig::get().enableReuse;
+  WaveConfig::get().enableReuse = true;
+  SCOPE_EXIT {
+    WaveConfig::get().enableReuse = savedReuse;
+  };
+
+  // Correctness for both dims: out0 (in-place over the dead intermediate base0)
+  // and out1 (copy: base1 stays live as a graph output) must match eager, and
+  // the returned base1 must be preserved.
+  runTest(
+      "data/select_scatter_test.pt2", "data/select_scatter_test_results.pt");
+
+  // In-place proof: after optimization exactly one aten.clone survives --
+  // out1's defensive copy, kept because base1 is a graph output. out0's clone
+  // is elided because base0 is a dead intermediate, so its select_scatter
+  // writes base0 in place. Build a fresh executor to inspect its optimized
+  // graph (runTest consumed its own fixture).
+  int liveClones = countLiveClonesAfterOpt(
+      getDataFilePath(dataDir(), "data/select_scatter_test.pt2"));
+  EXPECT_EQ(liveClones, 1)
+      << "expected one surviving clone (out1 copy); out0's clone should be "
+         "elided so its select_scatter writes base0 in place";
+}
+
+// slice_scatter as a fused in-place elementwise op with an INTERMEDIATE base,
+// covering the in-place and copy scenarios (scatterTest only covers graph-input
+// bases, whose clone is always kept). out0's base (a0+a1) is a dead
+// intermediate, so its clone is elided and the write lands in base0's buffer in
+// place -- the elided-clone / intra-op-materialized-self path where the scatter
+// output must alias self at its full shape, not the (smaller) src shape. out1's
+// base (b0+b1) is also a graph output, so its clone is kept (a defensive copy).
+// Verifies correctness for both dims and asserts exactly one clone survived.
+TEST_F(ExecutorTest, sliceScatterInPlaceTest) {
+  const bool savedReuse = WaveConfig::get().enableReuse;
+  WaveConfig::get().enableReuse = true;
+  SCOPE_EXIT {
+    WaveConfig::get().enableReuse = savedReuse;
+  };
+
+  // Correctness for both dims: out0 (in-place over the dead intermediate base0)
+  // and out1 (copy: base1 stays live as a graph output) must match eager, and
+  // the returned base1 must be preserved.
+  runTest(
+      "data/slice_scatter_inplace_test.pt2",
+      "data/slice_scatter_inplace_test_results.pt");
+
+  // In-place proof: after optimization exactly one aten.clone survives --
+  // out1's defensive copy, kept because base1 is a graph output. out0's clone
+  // is elided because base0 is a dead intermediate, so its slice_scatter writes
+  // base0 in place. Build a fresh executor to inspect its optimized graph
+  // (runTest consumed its own fixture).
+  int liveClones = countLiveClonesAfterOpt(
+      getDataFilePath(dataDir(), "data/slice_scatter_inplace_test.pt2"));
+  EXPECT_EQ(liveClones, 1)
+      << "expected one surviving clone (out1 copy); out0's clone should be "
+         "elided so its slice_scatter writes base0 in place";
+}
+
+// scatter.src as a fused in-place elementwise op along dim 0 and dim 1. The
+// aten.scatter.src rewrite inserts clone(self) + the in-place tw.scatter, which
+// scatters each src element to the destination whose 'dim' coordinate is read
+// from the index tensor. The index is a permutation along 'dim', so the
+// parallel overwrite is deterministic and matches eager. Both bases are dead
+// intermediates with an independent src, so both clones are elided and each
+// scatter writes its base in place.
+TEST_F(ExecutorTest, scatterSrcTest) {
+  const bool savedReuse = WaveConfig::get().enableReuse;
+  WaveConfig::get().enableReuse = true;
+  SCOPE_EXIT {
+    WaveConfig::get().enableReuse = savedReuse;
+  };
+
+  runTest("data/scatter_src_test.pt2", "data/scatter_src_test_results.pt");
+
+  int liveClones = countLiveClonesAfterOpt(
+      getDataFilePath(dataDir(), "data/scatter_src_test.pt2"));
+  EXPECT_EQ(liveClones, 0)
+      << "both scatter.src bases are dead intermediates with independent src, "
+         "so both clones should be elided";
+}
+
+// scatter_add as a fused in-place elementwise op along dim 0 and dim 1,
+// accumulating with an atomic add so duplicate destination indices sum (the
+// parallel wave result matches eager). Covers clone-elision in both directions:
+// out0's base (aa0+aa1) is a dead intermediate with an independent src, so its
+// clone is elided and the accumulation lands in base0 in place; out1's src is
+// base1 itself (shares base1's storage), so its clone is KEPT -- accumulating
+// in place would read partially updated values. Asserts exactly one clone
+// survives.
+TEST_F(ExecutorTest, scatterAddTest) {
+  const bool savedReuse = WaveConfig::get().enableReuse;
+  WaveConfig::get().enableReuse = true;
+  SCOPE_EXIT {
+    WaveConfig::get().enableReuse = savedReuse;
+  };
+
+  runTest("data/scatter_add_test.pt2", "data/scatter_add_test_results.pt");
+
+  int liveClones = countLiveClonesAfterOpt(
+      getDataFilePath(dataDir(), "data/scatter_add_test.pt2"));
+  EXPECT_EQ(liveClones, 1)
+      << "expected one surviving clone: out1's clone kept because src shares a "
+         "base with self; out0's clone elided (dead base, independent src)";
+}
+
+// A fused tw.scatter_add accumulating [4096] src/index into a [256] tensor,
+// feeding an elementwise consumer whose operands are all [256]. Forced onto the
+// cooperative grid, where both land in one kernel op: multi-block ends the
+// producer's kernel (readsFusedElementwiseProducerFromMemory), so only cg keeps
+// the border inside a kernel and only cg can mis-size across it.
+//
+// Guards two defects that made the ROO preproc fault under --cg 1:
+//   (a) the size walk recursed through the elementwise border, sizing the
+//       consumer's output by the scatter's [4096] src/index instead of the
+//       materialized [256] output -- a 16x shape divergence, and the device
+//       loop (sized by the output) then read every [256] operand far past its
+//       end.
+//   (b) 'index' is read again by the gather limit[index] in a later expression
+//       of the same kernel op, which allocates an alt Tensor copy. Its own-dims
+//       primary (forced by the scatter) used to make the emitter drop that
+//       copy, leaving it at the host's zero fill -- the gather then read
+//       through null storage.
+// (b) faults on its own, so the output comparison catches it. (a) does not:
+// the gather reads only limit[0..255], which the over-long loop still computes
+// correctly, and the garbage tail is never consumed -- so the buffer's size is
+// asserted directly.
+TEST_F(ExecutorTest, scatterAddCgConsumerTest) {
+  const bool savedFree = WaveConfig::get().freeIntermediates;
+  auto resetConfig = folly::makeGuard([savedFree] {
+    WaveConfig::get().isCg = std::nullopt;
+    WaveConfig::get().useSingleBlock = std::nullopt;
+    WaveConfig::get().freeIntermediates = savedFree;
+  });
+  WaveConfig::get().useSingleBlock = false;
+  WaveConfig::get().isCg = true;
+  // Keep intermediates so the consumer's buffer can be inspected after the run.
+  WaveConfig::get().freeIntermediates = false;
+
+  auto pt2Path =
+      getDataFilePath(dataDir(), "data/scatter_add_cg_consumer_test.pt2");
+  auto resultsPath = getDataFilePath(
+      dataDir(), "data/scatter_add_cg_consumer_test_results.pt");
+  auto expected = loadReferenceValues(resultsPath);
+  ASSERT_FALSE(expected.empty());
+
+  auto fixture = ModelFixture::load(pt2Path);
+  ASSERT_NE(fixture, nullptr);
+  setGraphDevice(fixture->model.graph.get(), true);
+
+  WaveGraphExecutor exec(fixture->makeModelContext());
+  auto& graph = exec.graph();
+
+  // The consumer of the scatter's materialized output.
+  const nativert::Value* consumerOutput = nullptr;
+  for (const auto& node : graph.nodes()) {
+    if (node.target() == "torch.ops.aten.minimum.default") {
+      ASSERT_FALSE(node.outputs().empty());
+      consumerOutput = node.outputs()[0];
+      break;
+    }
+  }
+  ASSERT_NE(consumerOutput, nullptr) << "fixture must keep the minimum node";
+
+  auto frame = exec.getFrame();
+  ASSERT_NE(frame, nullptr);
+  auto inputs = loadSampleInputs(*fixture);
+  auto [deviceInputs, dataMovUs] = inputsToDevice(inputs);
+  fillWaveFrame(graph, *frame, deviceInputs);
+  auto outputs = exec.executeWithPrefilledFrame(*frame);
+
+  const auto& consumerValue = frame->getIValue(consumerOutput->id());
+  ASSERT_TRUE(consumerValue.isTensor());
+  EXPECT_EQ(consumerValue.toTensor().numel(), 256)
+      << "the consumer of a materialized elementwise border is sized by that "
+         "border's output, not by the scatter's 4096-element src/index";
+
+  auto hostOutputs = outputsToHost(outputs, "cg");
+  verifyOutputs(hostOutputs, expected, "cg");
+  exec.returnFrame(std::move(frame));
+}
+
+// Repro for the fused tw.slice_scatter dim=1 multi-row failure (ROO batch=768).
+// out0 scatters a contiguous src (control); out1 scatters a NON-CONTIGUOUS src
+// (a dim=1 view fed through clamp) into a dead-intermediate base -- the pattern
+// whose rows past the first came back as uninitialized garbage. 64 rows > 32
+// inner extent so a per-row failure shows. Both outputs compared against eager.
+TEST_F(ExecutorTest, sliceScatterDim1ViewTest) {
+  const bool savedReuse = WaveConfig::get().enableReuse;
+  WaveConfig::get().enableReuse = true;
+  SCOPE_EXIT {
+    WaveConfig::get().enableReuse = savedReuse;
+  };
+  runTest(
+      "data/slice_scatter_dim1_view_test.pt2",
+      "data/slice_scatter_dim1_view_test_results.pt");
+}
+
+// Column assignment out[:, c] = w[:, c], which functionalizes to
+// select_scatter(dim=1) inside slice_scatter(dim=0, start=0, end=2**63-1). The
+// open-ended slice's int64 sentinel end must reach the device function
+// unnarrowed: at 32 bits it reads as -1, the slice length collapses to 0 and
+// every element scatters onto row 0, leaving the output at its base value.
+// Every other slice_scatter fixture uses a small literal end, so only this one
+// covers the sentinel. Run with reuse both on and off: with reuse on the base
+// clone is elided and the scatter writes in place, with it off the scatter
+// writes a distinct clone, and the end sentinel has to hold in both.
+TEST_F(ExecutorTest, sliceScatterOpenEndTest) {
+  const bool savedReuse = WaveConfig::get().enableReuse;
+  SCOPE_EXIT {
+    WaveConfig::get().enableReuse = savedReuse;
+  };
+  for (const bool reuse : {true, false}) {
+    WaveConfig::get().enableReuse = reuse;
+    runTest(
+        "data/slice_scatter_open_end_test.pt2",
+        "data/slice_scatter_open_end_test_results.pt",
+        reuse ? "reuse" : "no-reuse");
+  }
+}
+
 // logit (inverse sigmoid), with eps=None and with an eps clamp, as a fused
 // elementwise op.
 TEST_F(ExecutorTest, logitTest) {
