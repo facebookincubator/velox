@@ -24,6 +24,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Task.h"
 #include "velox/exec/rpc/RPCPlanNodeTranslator.h"
 #include "velox/exec/rpc/RPCRateLimiter.h"
 #include "velox/exec/rpc/tests/DemoBatchRPCFunction.h"
@@ -36,6 +37,73 @@
 namespace facebook::velox::exec::rpc {
 
 using namespace facebook::velox::exec::test;
+
+// A batch function that always reports congestion (kError) on each drained
+// unit, so the operator deterministically exercises the AIMD backoff path.
+// Default capabilities (native batch, kNativeBatch) — the per-driver window IS
+// fed.
+class CongestingBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  using DemoBatchRPCFunction::DemoBatchRPCFunction;
+
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& /*responses*/) const override {
+    return CongestionSignal::kError;
+  }
+};
+
+// Same congestion behavior, but declares itself an async offline job
+// (kAsyncJob). The async-job bypass must skip the per-driver latency window
+// (its RTT is GPU-queue time) while the per-tier rate limiter still backs off.
+class AsyncCongestingBatchRPCFunction : public CongestingBatchRPCFunction {
+ public:
+  using CongestingBatchRPCFunction::CongestingBatchRPCFunction;
+
+  RpcCapability capabilities() const override {
+    return {
+        .supportedModes = {
+            RpcCapabilityMode::kPerRow, RpcCapabilityMode::kAsyncJob}};
+  }
+};
+
+// Declares a per-request byte budget (maxBatchBytes) and reports a fixed number
+// of rows that fit it, so the operator must chunk a large backlog to keep each
+// request under the cap. Records every flush's row count so the test can assert
+// no flush exceeds the budget-derived limit and no rows are lost.
+class ByteBudgetedBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  using DemoBatchRPCFunction::DemoBatchRPCFunction;
+
+  static constexpr int64_t kMaxBatchBytes = 3000;
+  static constexpr int32_t kRowsPerBudget = 3;
+
+  // Flush chunk sizes observed across a query. Cleared at the start of the
+  // test.
+  static std::vector<int32_t>& flushChunks() {
+    static std::vector<int32_t> chunks;
+    return chunks;
+  }
+
+  RpcCapability capabilities() const override {
+    return {
+        .supportedModes =
+            {RpcCapabilityMode::kPerRow, RpcCapabilityMode::kNativeBatch},
+        .maxBatchBytes = kMaxBatchBytes};
+  }
+
+  // Report a fixed prefix that "fits" the budget (>= 1), independent of the
+  // actual byte math — this test exercises the operator's clamp, not the
+  // function's estimator.
+  int32_t rowsWithinByteBudget(int64_t /*budgetBytes*/) const override {
+    return kRowsPerBudget;
+  }
+
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    flushChunks().push_back(maxRows);
+    return DemoBatchRPCFunction::flushBatch(maxRows);
+  }
+};
 
 class RPCOperatorTest : public OperatorTestBase {
  protected:
@@ -85,6 +153,20 @@ class RPCOperatorTest : public OperatorTestBase {
               /*failOnError=*/false,
               /*dropOneResponse=*/true);
         });
+    // Congestion (kError on every drain) to exercise AIMD backoff: one
+    // native-batch (per-driver window IS fed) and one async offline job (window
+    // bypassed; only the rate limiter backs off).
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_congesting",
+        []() { return std::make_shared<CongestingBatchRPCFunction>(); });
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_async_congesting",
+        []() { return std::make_shared<AsyncCongestingBatchRPCFunction>(); });
+    // Declares maxBatchBytes so the operator clamps each flush by the byte
+    // budget (see batchClampedByByteBudget).
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_byte_budgeted",
+        []() { return std::make_shared<ByteBudgetedBatchRPCFunction>(); });
   }
 
   static void TearDownTestCase() {
@@ -525,6 +607,47 @@ TEST_F(RPCOperatorTest, batchPipelinedDispatch) {
   }
 }
 
+// Byte-budget clamp: when the function declares maxBatchBytes, the operator
+// caps each flush to rowsWithinByteBudget() — chunking a backlog so no single
+// request exceeds the backend's per-request size cap (e.g. MetaGen's 5MB node
+// limit) while still emitting every row. Uses the flush-all path
+// (dispatchBatchSize=0), which noMoreInput() must also chunk.
+TEST_F(RPCOperatorTest, batchClampedByByteBudget) {
+  ByteBudgetedBatchRPCFunction::flushChunks().clear();
+
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeFlatVector<StringView>(
+          {"r0", "r1", "r2", "r3", "r4", "r5", "r6"})}); // 7 rows
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "demo_batch_rpc_byte_budgeted",
+      /*dispatchBatchSize=*/0);
+
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+
+  // No rows lost.
+  ASSERT_EQ(result->size(), 7);
+  auto* results = result->childAt(1)->asFlatVector<StringView>();
+  for (vector_size_t i = 0; i < result->size(); ++i) {
+    EXPECT_FALSE(results->isNullAt(i));
+  }
+
+  // Every flush stayed within the budget-derived cap, and together they cover
+  // all 7 rows (expected chunks [3, 3, 1]).
+  const auto& chunks = ByteBudgetedBatchRPCFunction::flushChunks();
+  ASSERT_FALSE(chunks.empty());
+  int32_t total = 0;
+  for (auto c : chunks) {
+    EXPECT_GE(c, 1);
+    EXPECT_LE(c, ByteBudgetedBatchRPCFunction::kRowsPerBudget);
+    total += c;
+  }
+  EXPECT_EQ(total, 7);
+}
+
 /// PER_ROW congestion path. On the function's overload verdict
 /// (evaluateCongestion -> kError) both AIMD controllers back off: the
 /// per-driver window (onUnitError) and the process-global rate limiter
@@ -557,6 +680,74 @@ TEST_F(RPCOperatorTest, perRowCongestionPath) {
   EXPECT_EQ(rows["OVERLOAD one"], "Response for: OVERLOAD one");
   EXPECT_EQ(rows["OVERLOAD two"], "Response for: OVERLOAD two");
   EXPECT_EQ(rows["normal three"], "Response for: normal three");
+}
+
+/// Async-job window bypass. A BATCH backend that declares kAsyncJob (e.g.
+/// MetaGen batch) has a job-completion RTT, not a latency signal, so the
+/// operator must NOT feed the per-driver latency-gradient window on its
+/// congestion verdict, while the per-tier rate limiter still backs off.
+/// Observed via rpcCongestionShrinks: a native-batch congesting function
+/// shrinks the window
+/// (> 0); the async-job one does not (0).
+TEST_F(RPCOperatorTest, asyncJobSkipsCongestionWindow) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+
+  auto congestionShrinks = [&](const std::string& functionName) -> int64_t {
+    auto plan = makeBatchRPCNode(
+        PlanBuilder().values({input}).planNode(), {"prompt"}, functionName);
+    std::shared_ptr<exec::Task> task;
+    AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
+    auto planStats = exec::toPlanStats(task->taskStats());
+    auto nodeIt = planStats.find(plan->id());
+    if (nodeIt == planStats.end()) {
+      return 0;
+    }
+    const auto& customStats = nodeIt->second.customStats;
+    // Mirrors RPCOperator::kRpcCongestionShrinks (string literal avoids a BUCK
+    // dep on the operator lib just for the constant).
+    auto statIt = customStats.find("rpcCongestionShrinks");
+    return statIt == customStats.end() ? 0 : statIt->second.sum;
+  };
+
+  // Native batch (kNativeBatch): the window is fed, so congestion shrinks it.
+  EXPECT_GT(congestionShrinks("demo_batch_rpc_congesting"), 0);
+  // Async job (kAsyncJob): the window is bypassed, so it never shrinks.
+  EXPECT_EQ(congestionShrinks("demo_batch_rpc_async_congesting"), 0);
+}
+
+// resolveDispatchMode maps the coordinator's coarse streaming mode to the one
+// concrete dispatch mode, clamped to what the backend actually supports.
+TEST(ResolveDispatchModeTest, clampsToCapability) {
+  using velox::rpc::resolveDispatchMode;
+  using velox::rpc::RpcCapability;
+  using velox::rpc::RpcCapabilityMode;
+  using velox::rpc::RPCStreamingMode;
+
+  const RpcCapability perRowOnly{
+      .supportedModes = {RpcCapabilityMode::kPerRow}};
+  const RpcCapability nativeBatch{
+      .supportedModes = {
+          RpcCapabilityMode::kPerRow, RpcCapabilityMode::kNativeBatch}};
+  const RpcCapability asyncJob{
+      .supportedModes = {
+          RpcCapabilityMode::kPerRow, RpcCapabilityMode::kAsyncJob}};
+
+  // PER_ROW is always kPerRow, regardless of capability.
+  EXPECT_EQ(
+      resolveDispatchMode(RPCStreamingMode::kPerRow, asyncJob),
+      RpcCapabilityMode::kPerRow);
+  // BATCH resolves to the backend's supported batch mode...
+  EXPECT_EQ(
+      resolveDispatchMode(RPCStreamingMode::kBatch, nativeBatch),
+      RpcCapabilityMode::kNativeBatch);
+  EXPECT_EQ(
+      resolveDispatchMode(RPCStreamingMode::kBatch, asyncJob),
+      RpcCapabilityMode::kAsyncJob);
+  // ...and clamps to per-row when the backend supports no batch mode.
+  EXPECT_EQ(
+      resolveDispatchMode(RPCStreamingMode::kBatch, perRowOnly),
+      RpcCapabilityMode::kPerRow);
 }
 
 } // namespace facebook::velox::exec::rpc

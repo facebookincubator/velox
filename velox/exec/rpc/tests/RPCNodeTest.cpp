@@ -53,6 +53,10 @@ class MockAsyncRPCFunction : public AsyncRPCFunction {
     return VARCHAR();
   }
 
+  RpcCapability capabilities() const override {
+    return {.supportedModes = {RpcCapabilityMode::kPerRow}};
+  }
+
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
   dispatchPerRow(
       const SelectivityVector& rows,

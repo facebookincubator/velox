@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <cstdint>
+#include <initializer_list>
 #include <map>
 #include <optional>
 #include <string>
@@ -121,6 +123,108 @@ enum class RPCErrorKind {
   /// fast rather than spending its retry budget.
   kInvalidRequest,
 };
+
+/// A dispatch strategy a backend/model can execute.
+enum class RpcCapabilityMode {
+  /// One RPC per row (synchronous). Every backend supports this.
+  kPerRow = 0,
+  /// Native multi-input batch RPC (synchronous): one request carries many rows
+  /// and returns one response.
+  kNativeBatch = 1,
+  /// Asynchronous offline job: submit -> poll -> fetch. Latency is queue/GPU
+  /// time, not congestion, so the operator bypasses the RTT window for it.
+  kAsyncJob = 2,
+  /// Number of dispatch modes; keep last. Bounds the RpcCapabilityModeSet
+  /// width.
+  kNumModes,
+};
+
+/// A set of RpcCapabilityMode values; kPerRow is always present.
+class RpcCapabilityModeSet {
+  static_assert(
+      static_cast<int>(RpcCapabilityMode::kNumModes) <= 32,
+      "RpcCapabilityMode outgrew the 32-bit set; widen bits_");
+
+ public:
+  constexpr RpcCapabilityModeSet() {
+    add(RpcCapabilityMode::kPerRow);
+  }
+  /* implicit */ constexpr RpcCapabilityModeSet(
+      std::initializer_list<RpcCapabilityMode> modes) {
+    add(RpcCapabilityMode::kPerRow);
+    for (auto mode : modes) {
+      add(mode);
+    }
+  }
+
+  constexpr void add(RpcCapabilityMode mode) {
+    bits_ |= bit(mode);
+  }
+  constexpr bool has(RpcCapabilityMode mode) const {
+    return (bits_ & bit(mode)) != 0;
+  }
+
+ private:
+  static constexpr uint32_t bit(RpcCapabilityMode mode) {
+    return 1u << static_cast<int>(mode);
+  }
+  uint32_t bits_{0};
+};
+
+/// What dispatch strategies a (backend, model) supports, plus flow-control
+/// bounds. kPerRow is always supported. Examples:
+///   - an async-job backend:   {supportedModes = {kPerRow, kAsyncJob}}
+///   - a native-batch backend: {supportedModes = {kPerRow, kNativeBatch}}
+///   - native-batch with cap:  {supportedModes = {kPerRow, kNativeBatch},
+///   maxBatchRows = 256}
+struct RpcCapability {
+  /// Dispatch modes this (backend, model) supports; kPerRow is always included.
+  RpcCapabilityModeSet supportedModes;
+
+  /// Server-side limit on requests per native-batch call; 0 =
+  /// unlimited/unknown.
+  int32_t maxBatchRows{0};
+
+  /// Client-side accumulation guard (approx tokens) to force an early batch
+  /// flush before buffered rows exhaust memory; 0 = no token-based bound.
+  int64_t maxBatchTokens{0};
+
+  /// Server-side hard limit on the serialized size of a single native-batch /
+  /// async request, in bytes; 0 = unlimited/unknown. When set, the operator
+  /// caps each flush so one request never exceeds it — some backends reject a
+  /// batch whose serialized size tops a fixed cap, and because a constant
+  /// argument (e.g. a system prompt) is serialized once per row, a
+  /// large-argument batch can blow that cap and lose every row in it. The bound
+  /// is enforced against a per-row byte estimate the function reports via
+  /// rowsWithinByteBudget().
+  int64_t maxBatchBytes{0};
+};
+
+/// Resolve the RPCNode's coarse streaming mode (PER_ROW/BATCH) to the one
+/// concrete dispatch mode the backend will execute, clamped to what it actually
+/// supports — the streaming mode is set without knowledge of backend
+/// capability, so a BATCH request can reach a backend that only does per-row.
+/// PER_ROW -> kPerRow; BATCH -> the backend's supported batch mode (kAsyncJob
+/// preferred over kNativeBatch), or kPerRow when it supports neither. The
+/// single place the coarse streaming mode and the backend's capability are
+/// reconciled, so callers key off one resolved RpcCapabilityMode.
+inline RpcCapabilityMode resolveDispatchMode(
+    RPCStreamingMode streamingMode,
+    const RpcCapability& capability) {
+  if (streamingMode == RPCStreamingMode::kPerRow) {
+    return RpcCapabilityMode::kPerRow;
+  }
+  // BATCH: clamp to a batch mode the backend actually supports (async offline
+  // job preferred over native batch); a backend that supports neither clamps to
+  // per-row, which is always supported.
+  if (capability.supportedModes.has(RpcCapabilityMode::kAsyncJob)) {
+    return RpcCapabilityMode::kAsyncJob;
+  }
+  if (capability.supportedModes.has(RpcCapabilityMode::kNativeBatch)) {
+    return RpcCapabilityMode::kNativeBatch;
+  }
+  return RpcCapabilityMode::kPerRow;
+}
 
 /// Generic response structure from RPC calls.
 /// This is a minimal, domain-agnostic structure that works for any backend.

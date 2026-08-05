@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -34,6 +35,9 @@ namespace facebook::velox::exec::rpc {
 
 // Import core RPC types from velox/common/rpc into this namespace so that
 // existing code in velox/expression/rpc can use them unqualified.
+using velox::rpc::RpcCapability;
+using velox::rpc::RpcCapabilityMode;
+using velox::rpc::RpcCapabilityModeSet;
 using velox::rpc::RPCRequest;
 using velox::rpc::RPCResponse;
 using velox::rpc::RPCStreamingMode;
@@ -96,6 +100,13 @@ class AsyncRPCFunction {
   virtual std::string tierKey() const {
     return "";
   }
+
+  /// The function's declared dispatch capability — the set of dispatch modes
+  /// (per-row / native-batch / async-job) it supports on the resolved backend,
+  /// plus flow-control bounds (see RpcCapability). kPerRow is always supported;
+  /// a function that may switch backends per row declares the conservative
+  /// (per-row) set until the backend is pinned.
+  virtual RpcCapability capabilities() const = 0;
 
   // ── PER_ROW mode ──────────────────────────────────────────────
 
@@ -167,6 +178,23 @@ class AsyncRPCFunction {
   /// when to flush.
   virtual int32_t pendingBatchSize() const {
     return 0;
+  }
+
+  /// Largest prefix of the currently-pending rows whose cumulative *estimated*
+  /// serialized size fits within budgetBytes. Called by the operator before a
+  /// flush when the function's capability declares maxBatchBytes > 0, so one
+  /// request never exceeds the backend's per-request size cap.
+  ///
+  /// MUST return at least 1 even when the first pending row alone exceeds the
+  /// budget: the caller needs to make progress, and the function fails that
+  /// oversized row loud inside flushBatch() rather than deadlocking the drain
+  /// loop. The estimate should be conservative (round up framing); the operator
+  /// pairs it with headroom in the declared budget. Rows are measured from the
+  /// front of the pending queue, matching flushBatch()'s flush order.
+  ///
+  /// Default: no limit (for functions that do not declare maxBatchBytes).
+  virtual int32_t rowsWithinByteBudget(int64_t /*budgetBytes*/) const {
+    return std::numeric_limits<int32_t>::max();
   }
 
   // ── Output ────────────────────────────────────────────────────

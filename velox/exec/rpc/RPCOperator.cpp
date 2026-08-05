@@ -116,6 +116,12 @@ void RPCOperator::initialize() {
   // Size output vectors from config; see getOutput().
   outputBatchRows_ = queryConfig.preferredOutputBatchRows();
 
+  // Resolve the one concrete dispatch mode this operator executes from the
+  // RPCNode's streaming mode + the function's declared capability; see the
+  // resolvedDispatchMode_ member.
+  resolvedDispatchMode_ = velox::rpc::resolveDispatchMode(
+      rpcNode_->streamingMode(), function_->capabilities());
+
   // Configure the process-global adaptive rate limiter from QueryConfig. This
   // is idempotent and cluster-default-driven; off by default (static cap).
   RPCRateLimiter::setAdaptiveConfig(
@@ -336,10 +342,21 @@ void RPCOperator::flushBatchRequests(int32_t maxRows) {
     return;
   }
 
-  // Determine how many rows to flush.
-  auto flushCount = maxRows > 0
-      ? std::min(static_cast<int32_t>(batchRowLocations_.size()), maxRows)
-      : static_cast<int32_t>(batchRowLocations_.size());
+  // Determine how many rows to flush. maxRows == 0 means "flush all pending".
+  const auto pending = static_cast<int32_t>(batchRowLocations_.size());
+  auto flushCount = maxRows > 0 ? std::min(pending, maxRows) : pending;
+
+  // Cap the flush by the backend's per-request byte limit so one request never
+  // exceeds it (a large constant per-row argument can otherwise blow the cap
+  // and lose every row in the batch). The clamp applies to the flush-all path
+  // too, so noMoreInput()/drain still chunk oversized backlogs.
+  // rowsWithinByteBudget() returns >= 1, so we always make progress; a lone
+  // oversized row is failed loud inside flushBatch().
+  const auto caps = function_->capabilities();
+  if (caps.maxBatchBytes > 0) {
+    flushCount = std::min(
+        flushCount, function_->rowsWithinByteBudget(caps.maxBatchBytes));
+  }
 
   RPC_OP_LOG(INFO) << "Flushing batch with " << flushCount << " of "
                    << function_->pendingBatchSize() << " accumulated rows";
@@ -353,7 +370,7 @@ void RPCOperator::flushBatchRequests(int32_t maxRows) {
       batchRowLocations_.begin(), batchRowLocations_.begin() + flushCount);
   batchRowIds_.erase(batchRowIds_.begin(), batchRowIds_.begin() + flushCount);
 
-  auto future = function_->flushBatch(maxRows);
+  auto future = function_->flushBatch(flushCount);
 
   // Count each flushBatch() as 1 pending unit in the rate limiter.
   auto token = std::make_shared<RPCRateLimiter::Token>(
@@ -559,12 +576,20 @@ RowVectorPtr RPCOperator::getOutput() {
     // the cap on overload and recovers on success.
     const auto signal = function_->evaluateCongestion(claimedBatch_->responses);
     if (signal == AsyncRPCFunction::CongestionSignal::kError) {
-      state_->onUnitError();
+      // An async job's RTT is GPU-queue time, not congestion, so skip the
+      // per-driver latency window; the per-tier rate limiter still backs off.
+      if (!isAsyncJob()) {
+        state_->onUnitError();
+      }
       RPCRateLimiter::onRateLimited(tierKey_);
     } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
       // Feed the measured round-trip latency to the gradient window so it
-      // learns the in-flight-batch sweet spot without a fixed ceiling.
-      state_->onUnitSample(claimedBatch_->rttNs);
+      // learns the in-flight-batch sweet spot without a fixed ceiling — but not
+      // for an async job, whose RTT is job-completion time, not a latency
+      // signal.
+      if (!isAsyncJob()) {
+        state_->onUnitSample(claimedBatch_->rttNs);
+      }
       // Successful rows in this batch drive AIMD recovery of the per-tier cap.
       RPCRateLimiter::onSuccess(tierKey_, numRows - batchErrors);
     }
