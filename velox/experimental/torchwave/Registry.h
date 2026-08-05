@@ -431,6 +431,20 @@ struct Metadata {
   /// attributes are skipped by forEachSortedAttribute.
   std::vector<std::string> templateAttrs;
 
+  /// Returns true if this elementwise op's result is materialized in memory
+  /// rather than kept in a register, i.e. the op writes a whole tensor as a
+  /// side effect (the fused in-place scatters, index_put_elt_*, masked_put_).
+  /// Such a producer cannot be inlined into a consuming elementwise
+  /// expression: codegen emits it as its own expression and the consumer reads
+  /// its output back from memory (see
+  /// CompileCtx::generateElementwiseBorderImpl). The size machinery must stop
+  /// at the same boundary -- the consumer is sized by the materialized output,
+  /// not by this op's operands.
+  bool isElementwiseBorder() const {
+    return elementwise != nullptr && !returnMeta.empty() &&
+        !returnMeta[0].isRegister;
+  }
+
   /// Returns true if any argument has isRegister set.
   bool hasRegisterInputs() const {
     for (const auto& am : argumentMeta) {

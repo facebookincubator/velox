@@ -41,6 +41,9 @@
 #include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/common/GpuArena.h"
 
+// Owned by velox/experimental/wave/common/Compile.cu; see initialize().
+DECLARE_bool(cuda_lineinfo);
+
 // Forward declaration of the CUDA runtime call used to synchronize the default
 // stream. This translation unit is built in a CPU-configured target without the
 // CUDA headers; the symbol resolves from the CUDA runtime linked into the final
@@ -173,6 +176,13 @@ void initialize() {
     return;
   }
   facebook::velox::wave::setDevice(device);
+  // Wave takes its NVRTC options from gflags, not from an API, and freezes
+  // them in ensureInit() on the first compile. So a WaveConfig knob that
+  // affects codegen has to be pushed into the gflag before that point, which
+  // is here -- CompiledKernel::initialize() below is what triggers ensureInit.
+  if (WaveConfig::get().kernelLineInfo) {
+    FLAGS_cuda_lineinfo = true;
+  }
   // Run the one-time NVRTC/system-header initialization here, on the
   // (main) thread that sets up the executor, unless it was already done
   // elsewhere. ensureInit() touches the filesystem and publishes the shared
