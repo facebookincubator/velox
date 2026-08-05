@@ -21,6 +21,7 @@
 #include "velox/exec/window/WindowBuild.h"
 
 #include <deque>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -39,9 +40,17 @@ class RowsStreamingWindowBuild : public WindowBuild {
       const std::shared_ptr<const core::WindowNode>& windowNode,
       velox::memory::MemoryPool* pool,
       const common::SpillConfig* spillConfig,
-      tsan_atomic<bool>* nonReclaimableSection);
+      tsan_atomic<bool>* nonReclaimableSection,
+      // Byte budget for input retained within a single not-yet-complete
+      // partition before 'needsInput()' asks the driver to drain. The Window
+      // operator passes 'preferredOutputBatchBytes'.
+      uint64_t maxRetainedBytes);
 
   void addInput(RowVectorPtr input) override;
+
+  std::optional<int64_t> estimateRowSize() override {
+    return estimatedRowSize_;
+  }
 
   void spill() override {
     VELOX_UNREACHABLE();
@@ -92,8 +101,43 @@ class RowsStreamingWindowBuild : public WindowBuild {
   // Loads only key columns needed to detect partition and peer boundaries.
   void loadBoundaryColumns(const RowVectorPtr& input) const;
 
+  // Returns the number of buffered input rows not yet consumed by output:
+  // rows pending in 'currentRanges_' plus unconsumed rows in
+  // 'windowPartitions_'. Widened to 64 bits because it sums row counts across
+  // partitions and so is not bounded by 'vector_size_t'.
+  int64_t numRetainedRows() const;
+
+  // Returns true for a ROWS-frame build whose retained (by-reference) input for
+  // the current not-yet-complete partition has reached 'maxRetainedBytes_'.
+  // Drives throttling in 'needsInput()', and in 'addInput()' the flush that
+  // makes the pending rows drainable, so the build never stops requesting
+  // input without leaving output to drain.
+  bool reachedRetainedBytesBudget() const;
+
+  // Recomputes 'maxPendingRows_' from the current row-size estimate. Called
+  // once per input rather than per row.
+  void updatePendingRowBudget();
+
+  // Returns true if some partition holds rows the window operator can emit.
+  // 'hasNextPartition()' is not sufficient for this: it also reports true for
+  // an incomplete partition holding no rows, which the operator turns into a
+  // null output.
+  bool hasRowsToDrain() const;
+
   // Sets to true if this window node has range frames.
   const bool hasRangeFrame_;
+
+  // Upper bound on the estimated bytes of input retained (by reference) for a
+  // single not-yet-complete partition before 'needsInput()' asks the driver to
+  // stop feeding and drain output. Bounds peak memory for large partitions.
+  const uint64_t maxRetainedBytes_;
+
+  // Largest per-batch average row size in bytes seen so far: the maximum over
+  // each input's 'estimateFlatSize() / size()'. Converts the retained row count
+  // into bytes. A maximum rather than a running average, so that a batch of
+  // wide rows is not masked by earlier narrow ones, which would leave the build
+  // accepting input well past the byte budget.
+  std::optional<int64_t> estimatedRowSize_;
 
   // Ranges of input rows buffered for the current partition.
   std::vector<RowRange> currentRanges_;
@@ -114,6 +158,14 @@ class RowsStreamingWindowBuild : public WindowBuild {
 
   // Number of rows accumulated since the last partial flush.
   vector_size_t pendingRowCount_{0};
+
+  // 'maxRetainedBytes_' expressed in rows at the current 'estimatedRowSize_',
+  // so the per-row check in 'addInput()' is an integer compare rather than a
+  // walk of 'windowPartitions_'. Valid there only because that flush also
+  // requires '!hasRowsToDrain()', i.e. every partition holds zero rows, which
+  // makes 'pendingRowCount_' the whole retained-row count. Left at the maximum
+  // for RANGE frames, which are never throttled on bytes.
+  vector_size_t maxPendingRows_{std::numeric_limits<vector_size_t>::max()};
 
   // The output gets next partition from the head of 'windowPartitions_' and
   // input adds to the next partition from the tail of 'windowPartitions_'.
