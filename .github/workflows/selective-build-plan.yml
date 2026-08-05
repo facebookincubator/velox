@@ -61,7 +61,7 @@ jobs:
   # Lightweight decision job. Runs the fast-detect path inline.
   # ============================================================
   decide-mode:
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     outputs:
       mode: ${{ steps.final.outputs.mode }}
       needs_slow_prepare: ${{ steps.final.outputs.needs_slow_prepare }}

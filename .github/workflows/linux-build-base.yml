@@ -46,7 +46,7 @@ jobs:
   get-changes:
     # Always runs — clang-tidy in the adapters job needs the changed-files
     # list and diff range in both selective and full modes.
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     outputs:
       run-clang-tidy: ${{ steps.changes.outputs.run_clang_tidy }}
       changed-files: ${{ steps.changes.outputs.files}}
@@ -387,7 +387,7 @@ jobs:
   adapters-build-status:
     if: always()
     needs: adapters
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "BUILD: Linux release with adapters"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -413,7 +413,7 @@ jobs:
   adapters-test-status:
     if: always()
     needs: adapters
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "TEST: Linux release with adapters"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -714,7 +714,7 @@ jobs:
     # didn't run.
     if: ${{ inputs.is-full-mode && always() }}
     needs: ubuntu-debug
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "BUILD: Ubuntu debug with system dependencies"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -740,7 +740,7 @@ jobs:
   ubuntu-debug-test-status:
     if: ${{ inputs.is-full-mode && always() }}
     needs: ubuntu-debug
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "TEST: Ubuntu debug with system dependencies"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -863,7 +863,7 @@ jobs:
   fedora-debug-build-status:
     if: ${{ inputs.is-full-mode && always() }}
     needs: fedora-debug
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "BUILD: Fedora debug"
     steps:
       - run: |
@@ -1038,7 +1038,7 @@ jobs:
   asan-ubsan-build-status:
     if: ${{ inputs.is-full-mode && always() }}
     needs: asan-ubsan-adapters
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "BUILD: Linux sanitizers with system dependencies"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1064,7 +1064,7 @@ jobs:
   asan-ubsan-test-status:
     if: ${{ inputs.is-full-mode && always() }}
     needs: asan-ubsan-adapters
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "TEST: Linux sanitizers with system dependencies"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

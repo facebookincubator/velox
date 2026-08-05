@@ -31,6 +31,21 @@
 
 namespace torch::wave {
 
+namespace {
+
+// Downstream references to an expr: the users of all of its output values.
+int32_t numUsers(NodeCP node) {
+  int32_t count = 0;
+  for (const auto* output : node->outputs()) {
+    if (output != nullptr) {
+      count += static_cast<int32_t>(output->users().size());
+    }
+  }
+  return count;
+}
+
+} // namespace
+
 std::string ProjectNode::toString(
     const nativert::Graph& graph,
     NodeSet& border,
@@ -52,7 +67,7 @@ std::string ProjectNode::toString(
   std::stringstream ss;
   ss << fmt::format("ProjectNode {}:\n", id_);
   for (int32_t i = 0; i < static_cast<int32_t>(nodes_.size()); ++i) {
-    ss << fmt::format("  {}.{}: ", id_, i);
+    ss << fmt::format("  {}.{}: ({}u) ", id_, i, numUsers(nodes_[i]));
     if (localBorder.count(nodes_[i])) {
       printer.printOutputIds(ss, nodes_[i]);
       ss << "\n";
@@ -77,6 +92,17 @@ std::string ProjectNode::toString(
     ss << "  May release ";
     for (size_t i = 0; i < releasable.size(); ++i) {
       ss << (i > 0 ? ", " : "") << "%" << releasable[i];
+    }
+    ss << "\n";
+  }
+  // Inputs of the clones the in-place pass elided here, each with the number of
+  // copies of that buffer saved.
+  if (!elidedCloneCounts.empty()) {
+    ss << "  Elided clones of ";
+    bool first = true;
+    for (const auto& [valueId, count] : elidedCloneCounts) {
+      ss << (first ? "" : ", ") << "%" << valueId << " x" << count;
+      first = false;
     }
     ss << "\n";
   }

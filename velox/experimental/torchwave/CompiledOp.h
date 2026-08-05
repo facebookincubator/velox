@@ -324,7 +324,10 @@ class CompositeInvocation {
       std::deque<c10::IValue> ivalueStorage,
       int32_t sequenceNumber,
       std::vector<nativert::ValueId> lastUseIds,
-      std::vector<Launch> prePassStandalones = {});
+      std::vector<nativert::ValueId> reusableIds = {},
+      std::vector<Launch> prePassStandalones = {},
+      std::vector<std::pair<nativert::ValueId, int32_t>> elidedCloneInputs =
+          {});
 
   /// Executes this composite invocation: allocates outputs, builds the grid,
   /// copies params to pinned+device memory, and enqueues the H2D transfer.
@@ -390,10 +393,22 @@ class CompositeInvocation {
   // tensors are released at the end of execute().
   std::vector<nativert::ValueId> lastUseIds_;
 
+  // Frame value ids whose buffer an elementwise output may reuse in place --
+  // reusable last-use boundary inputs and expr-local overwritable temps, from
+  // ProjectNode::reusableValues_/overwritableTemps_. Gated by
+  // WaveConfig::enableReuse.
+  folly::F14FastSet<nativert::ValueId> reusableIds_;
+
   // Standalone ops from the maxFusedNodes pre-pass.  Executed at the
   // start of execute() before any kernel step, so their outputs are
   // available for SizeExpr evaluation.
   std::vector<Launch> prePassStandalones_;
+
+  // Frame value ids that were the input of a clone the in-place pass elided in
+  // this node, paired with the number of clones elided for that value (from
+  // ProjectNode::elidedCloneCounts). Used to report the copying saved; read
+  // only when the kTiming trace bit is on.
+  std::vector<std::pair<nativert::ValueId, int32_t>> elidedCloneInputs_;
 };
 
 /// Represents a single ProjectNode in a stack of ProjectNodes. Contains a graph

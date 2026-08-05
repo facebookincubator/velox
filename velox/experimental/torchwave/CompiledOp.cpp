@@ -739,13 +739,17 @@ CompositeInvocation::CompositeInvocation(
     std::deque<c10::IValue> ivalueStorage,
     int32_t sequenceNumber,
     std::vector<nativert::ValueId> lastUseIds,
-    std::vector<Launch> prePassStandalones)
+    std::vector<nativert::ValueId> reusableIds,
+    std::vector<Launch> prePassStandalones,
+    std::vector<std::pair<nativert::ValueId, int32_t>> elidedCloneInputs)
     : kernel_(std::move(kernel)),
       ops_(std::move(ops)),
       ivalueStorage_(std::move(ivalueStorage)),
       sequenceNumber_(sequenceNumber),
       lastUseIds_(std::move(lastUseIds)),
-      prePassStandalones_(std::move(prePassStandalones)) {}
+      reusableIds_(reusableIds.begin(), reusableIds.end()),
+      prePassStandalones_(std::move(prePassStandalones)),
+      elidedCloneInputs_(std::move(elidedCloneInputs)) {}
 
 namespace {
 
@@ -1699,6 +1703,12 @@ void traceTensor(
             << traceIValue(c10::IValue(t)) << std::endl;
 }
 
+// Elementwise in-place reuse counters (per thread). Snapshotted per node in
+// CompositeInvocation::execute() under WaveConfig::kTiming. Each reuse turns an
+// elementwise output allocation into an in-place write over a reusable input.
+thread_local int64_t gElementwiseReuseCount = 0;
+thread_local int64_t gElementwiseReuseBytes = 0;
+
 void ensureCudaTensor(
     nativert::ExecutionFrame& frame,
     const ValueTypes& types,
@@ -1731,14 +1741,54 @@ void allocateLaunchOutputs(
     const ValueTypes& types,
     nativert::ValueId largestId,
     const folly::F14FastMap<NodeCP, nativert::OpKernel*>* kernelMap,
-    const IdToValueMap& idToValue) {
+    const IdToValueMap& idToValue,
+    const folly::F14FastSet<nativert::ValueId>& reusableIds) {
   const auto& descs = launch.actualOutputDescs;
   const auto& actualOutputs = launch.actualOutputs;
   const auto& outputTypes = launch.actualOutputTypes;
 
   // Shortcut: if largestId is set, resize tensor outputs to match it.
   if (largestId >= 0) {
-    auto dims = frame.getIValue(largestId).toTensor().sizes();
+    auto& largestIv = frame.getIValue(largestId);
+    auto dims = largestIv.toTensor().sizes();
+
+    // Elementwise in-place reuse: the largest input determines the output
+    // shape, so when it is flagged reusable/overwritable, contiguous, and
+    // CUDA-resident its buffer can back the output (write the result in place)
+    // instead of allocating a fresh tensor. Only apply when there is exactly
+    // one real tensor output, so overwriting largestId cannot clobber an input
+    // that another output still reads. Gated by WaveConfig::enableReuse.
+    int32_t tensorOutputs = 0;
+    for (size_t i = 0; i < descs.size(); ++i) {
+      if (i < outputTypes.size() &&
+          outputTypes[i] != nativert::Type::Kind::Tensor) {
+        continue;
+      }
+      if (descs[i].viewNode || descs[i].delegated || descs[i].aliasSelfId) {
+        continue;
+      }
+      ++tensorOutputs;
+    }
+    bool tryReuse = WaveConfig::get().enableReuse && tensorOutputs == 1 &&
+        largestIv.isTensor() && largestIv.toTensor().is_cuda() &&
+        largestIv.toTensor().is_contiguous() &&
+        reusableIds.count(largestId) > 0;
+    // Do not reuse largestId's buffer if any OTHER kernel input aliases its
+    // storage (e.g. a fused view/slice of it): writing the output in place
+    // would clobber that operand's reads and corrupt the result.
+    if (tryReuse) {
+      for (auto inId : launch.actualInputs) {
+        if (inId == largestId) {
+          continue;
+        }
+        auto& iv = frame.getIValue(inId);
+        if (iv.isTensor() && iv.toTensor().is_alias_of(largestIv.toTensor())) {
+          tryReuse = false;
+          break;
+        }
+      }
+    }
+
     for (size_t i = 0; i < descs.size(); ++i) {
       if (i < outputTypes.size() &&
           outputTypes[i] != nativert::Type::Kind::Tensor) {
@@ -1763,6 +1813,23 @@ void allocateLaunchOutputs(
           // In-place op output: a view sharing self's storage (see general
           // path below).
           frame.setIValue(actualId, selfIv.toTensor().alias());
+          continue;
+        }
+      }
+      if (tryReuse && actualId != largestId) {
+        auto* meta = types.types.at(actualId);
+        if (meta && meta->dtype() == largestIv.toTensor().scalar_type()) {
+          traceTensor(actualId, dims, "reuse");
+          if (WaveConfig::get().trace & WaveConfig::kTiming) {
+            std::cout << "  REUSE out=%" << actualId << " in=%" << largestId
+                      << std::endl;
+          }
+          gElementwiseReuseCount += 1;
+          gElementwiseReuseBytes +=
+              static_cast<int64_t>(largestIv.toTensor().nbytes());
+          // Share largestId's storage: the elementwise loop reads each element
+          // before writing the same index, so the in-place write is safe.
+          frame.setIValue(actualId, largestIv.toTensor());
           continue;
         }
       }
@@ -2073,7 +2140,8 @@ void CompositeInvocation::gatherLaunches(
             *state.valueTypes,
             largestId,
             state.kernelMap,
-            idToValue);
+            idToValue,
+            reusableIds_);
         // If any tensor input or output is None, skip this kernel
         // (set numElements=0 so makeGrid assigns 0 blocks).
         for (auto inputId : data.actualInputs) {
@@ -2210,6 +2278,14 @@ void verifyAgainstReference(
     }
     return scalarLikeToTensor(iv);
   };
+  // The input of an elided clone is written in place by the writer that used to
+  // read the clone, so its buffer holds the post-mutation value while the
+  // reference recorded the pre-mutation one. The divergence is intended, so
+  // exclude these values from every reference comparison below.
+  auto isElidedCloneInput = [&](nativert::ValueId id) {
+    return state.waveGraph != nullptr &&
+        state.waveGraph->isElidedCloneInput(id);
+  };
   int32_t numMismatches = 0;
   std::string passedIds;
   int32_t numPassed = 0;
@@ -2217,6 +2293,9 @@ void verifyAgainstReference(
     bool nodeChecked = false;
     for (size_t oi = 0; oi < data.actualOutputs.size(); ++oi) {
       auto actualId = data.actualOutputs[oi];
+      if (isElidedCloneInput(actualId)) {
+        continue;
+      }
       auto refIt = ref->find(actualId);
       if (refIt == ref->end()) {
         continue;
@@ -2292,6 +2371,9 @@ void verifyAgainstReference(
   if (WaveConfig::get().reverify) {
     for (const auto& data : launches) {
       for (auto actualId : data.actualOutputs) {
+        if (isElidedCloneInput(actualId)) {
+          continue;
+        }
         auto refIt = ref->find(actualId);
         if (refIt != ref->end() && refIt->second.isTensor()) {
           auto actualOpt = asTensor(frame.getIValue(actualId));
@@ -2309,6 +2391,9 @@ void verifyAgainstReference(
     // Check inputs of current launches for corruption.
     for (const auto& data : launches) {
       for (auto actualId : data.actualInputs) {
+        if (isElidedCloneInput(actualId)) {
+          continue;
+        }
         auto refIt = ref->find(actualId);
         if (refIt == ref->end() || !refIt->second.isTensor()) {
           continue;
@@ -2480,6 +2565,8 @@ void CompositeInvocation::processReturnData(
 void CompositeInvocation::execute(ExecutionState& state) {
   Timer ex("comp inv execute", WaveConfig::get().printTiming);
   auto& frame = *state.frame;
+  const int64_t reuseCount0 = gElementwiseReuseCount;
+  const int64_t reuseBytes0 = gElementwiseReuseBytes;
 
   if (WaveConfig::get().trace & (WaveConfig::kNodes | WaveConfig::kLaunches)) {
     std::cout << "==== Node " << sequenceNumber_ << std::endl;
@@ -2516,6 +2603,30 @@ void CompositeInvocation::execute(ExecutionState& state) {
   // are otherwise unordered, so a final default-stream sync is needed.
   bool ranStandalones = false;
 
+  // Copying saved by this node's elided clones. Each input is charged to the
+  // first step where it has a tensor; 'elidedCounted' keeps the later steps of
+  // this invocation from counting it again.
+  const bool countElidedClones =
+      (WaveConfig::get().trace & WaveConfig::kTiming) &&
+      !elidedCloneInputs_.empty();
+  std::vector<bool> elidedCounted(
+      countElidedClones ? elidedCloneInputs_.size() : 0, false);
+  auto addElidedCloneBytes = [&](StepVectors& sv) {
+    for (size_t i = 0; i < elidedCloneInputs_.size(); ++i) {
+      if (elidedCounted[i]) {
+        continue;
+      }
+      const auto& [valueId, numClones] = elidedCloneInputs_[i];
+      const auto& ivalue = frame.getIValue(valueId);
+      if (!ivalue.isTensor() || !ivalue.toTensor().defined()) {
+        continue;
+      }
+      const auto& tensor = ivalue.toTensor();
+      sv.elidedCloneBytes += tensor.numel() * tensor.element_size() * numClones;
+      elidedCounted[i] = true;
+    }
+  };
+
   int32_t blockSize;
   int32_t lastExecStep = -1;
   for (int32_t stepIdx = 0;; ++stepIdx) {
@@ -2532,9 +2643,11 @@ void CompositeInvocation::execute(ExecutionState& state) {
       }
     }
     // StepVectors are pooled and reused across executions; reset the
-    // accumulated ref-check time so it reflects only this run (other timing
-    // fields are overwritten with '=' at their measurement point).
+    // accumulated ref-check time and elided-clone bytes so they reflect only
+    // this run (other timing fields are overwritten with '=' at their
+    // measurement point).
     sv.refCheckUs = 0;
+    sv.elidedCloneBytes = 0;
     if (sv.gridChanged) {
       invalidateReusedState(
           state.stepVectors[sequenceNumber_],
@@ -2578,6 +2691,9 @@ void CompositeInvocation::execute(ExecutionState& state) {
       if (doTiming) {
         sv.standaloneUs = elapsed(tStandalone);
         sv.currentBytes = currentAllocatedBytes();
+      }
+      if (countElidedClones) {
+        addElidedCloneBytes(sv);
       }
       ranStandalones = true;
       state.launchDebugInfos.push_back(
@@ -2805,6 +2921,9 @@ void CompositeInvocation::execute(ExecutionState& state) {
         sv.noDtoH = (returnBegin < 0);
         sv.currentBytes = currentAllocatedBytes();
       }
+      if (countElidedClones) {
+        addElidedCloneBytes(sv);
+      }
     }
 
     // Trace outputs of kernel launches after execution.
@@ -2866,6 +2985,16 @@ void CompositeInvocation::execute(ExecutionState& state) {
     getStepVectors(state.stepVectors, sequenceNumber_, lastExecStep)
         .lastUseIds = lastUseIds_;
   }
+
+  // Per-node elementwise input-reuse summary (alongside the alloc traces
+  // above).
+  if ((WaveConfig::get().trace & WaveConfig::kTiming) &&
+      gElementwiseReuseCount > reuseCount0) {
+    std::cout << "  node " << sequenceNumber_ << " elementwise input reuse: "
+              << (gElementwiseReuseCount - reuseCount0) << " tensors, "
+              << (gElementwiseReuseBytes - reuseBytes0) / 1024
+              << " KB written in place" << std::endl;
+  }
 }
 
 void CompositeInvocation::launch(
@@ -2899,10 +3028,11 @@ void CompositeInvocation::launch(
   bool cooperative = false;
   if (sv.isCgGrid) {
     for (size_t ki = 0; ki < sv.kernels.size(); ++ki) {
-      const auto& kd = sv.kernels[ki];
+      const auto& kd = sv.kernels.at(ki);
       if (kd.launch && kd.launch->op &&
           !kd.launch->op->barrierCounters().empty() &&
-          ki < sv.numBlocksPerLaunch.size() && sv.numBlocksPerLaunch[ki] > 1) {
+          ki < sv.numBlocksPerLaunch.size() &&
+          sv.numBlocksPerLaunch.at(ki) > 1) {
         cooperative = true;
         break;
       }
@@ -2980,7 +3110,7 @@ void CompositeInvocation::launch(
             auto* kernelOp = sv.kernels[li].launch->op;
             for (auto offset : kernelOp->barrierCounters()) {
               int32_t zero = 0;
-              auto* dest = deviceBase + sv.paramOffsets[li] + offset;
+              auto* dest = deviceBase + sv.paramOffsets.at(li) + offset;
               stream->hostToDeviceAsync(dest, &zero, sizeof(zero));
             }
           }
