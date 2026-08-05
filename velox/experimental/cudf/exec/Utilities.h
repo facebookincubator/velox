@@ -58,6 +58,12 @@ namespace facebook::velox::cudf_velox {
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
+[[nodiscard]] std::unique_ptr<cudf::table> concatenateViews(
+    const std::vector<cudf::table_view>& tableViews,
+    const std::vector<rmm::cuda_stream_view>& inputStreams,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
 /**
  * @brief Concatenates multiple CUDF tables with automatic batching based on
  * size limits.
