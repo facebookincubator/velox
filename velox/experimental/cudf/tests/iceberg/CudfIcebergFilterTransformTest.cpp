@@ -297,15 +297,14 @@ TEST(CudfIcebergFilterTransformTest, trailingInjectedColumnDoesNotRebase) {
   EXPECT_EQ(result.expr, &expression);
 }
 
-TEST(CudfIcebergFilterTransformTest, noInjectedColumnsPushesInputFilter) {
+TEST(CudfIcebergFilterTransformTest, emptyInjectedColumnIndicesFail) {
   cudf::ast::tree tree;
   const auto& expression = tree.push(cudf::ast::column_reference{2});
 
-  const auto result = transformFilterForInjectedColumns(
-      expression, std::span<const cudf::size_type>{});
-
-  EXPECT_FALSE(result.referencesInjectedColumn);
-  EXPECT_EQ(result.expr, &expression);
+  VELOX_ASSERT_THROW(
+      (transformFilterForInjectedColumns(
+          expression, std::span<const cudf::size_type>{})),
+      "Injected column indices must be non-empty, ascending, and unique");
 }
 
 TEST(CudfIcebergFilterTransformTest, unsortedInjectedColumnIndicesFail) {
@@ -315,7 +314,7 @@ TEST(CudfIcebergFilterTransformTest, unsortedInjectedColumnIndicesFail) {
   VELOX_ASSERT_THROW(
       (transformFilterForInjectedColumns(
           expression, std::array<cudf::size_type, 2>{2, 0})),
-      "Injected column indices must be ascending and unique");
+      "Injected column indices must be non-empty, ascending, and unique");
 }
 
 TEST(CudfIcebergFilterTransformTest, columnNameReferenceFails) {

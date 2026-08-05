@@ -234,7 +234,7 @@ void CudfIcebergSplitReader::prepareSubfieldFilter() {
         static_cast<cudf::size_type>(column.outputIndex));
   }
 
-  // Compute the transformed filter to push, if any
+  // Compute the transformed filter to push
   transformedPushdownFilter_ =
       transformFilterForInjectedColumns(*originalFilter, injectedColumnIndices);
 

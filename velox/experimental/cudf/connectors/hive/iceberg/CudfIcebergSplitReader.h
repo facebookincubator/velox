@@ -219,9 +219,9 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Whether the original subfield filter is deferred to post table read.
   bool deferSubfieldFilter_{false};
 
-  // Filter over the read columns pushed to cuDF reader. Empty when the original
-  // filter was not transformed or has a `nullptr` root when nothing can be
-  // pushed.
+  // Filter over file-backed columns pushed to the Parquet reader. Empty when
+  // the original filter was not transformed or has a `nullptr` root when
+  // nothing can be pushed.
   std::optional<TransformedFilter> transformedPushdownFilter_;
 
   // Top-level column names and total row count from the file metadata

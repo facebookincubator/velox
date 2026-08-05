@@ -226,23 +226,15 @@ class InjectedColumnFilterTransformer
 TransformedFilter transformFilterForInjectedColumns(
     const cudf::ast::expression& filter,
     std::span<const cudf::size_type> sortedInjectedColumnIndices) {
-  // Nothing to drop or rebase, so return the input filter as is.
-  if (sortedInjectedColumnIndices.empty()) {
-    return TransformedFilter{
-        .nodes = cudf::ast::tree{},
-        .expr = &filter,
-        .referencesInjectedColumn = false,
-        .requiresSplitSpecificDecimalTypes = false};
-  }
-
-  // Ensure the injected column indices are ascending and unique.
+  // Ensure the injected column indices are non-empty, ascending, and unique.
   VELOX_CHECK(
-      std::adjacent_find(
-          sortedInjectedColumnIndices.begin(),
-          sortedInjectedColumnIndices.end(),
-          std::greater_equal<cudf::size_type>{}) ==
-          sortedInjectedColumnIndices.end(),
-      "Injected column indices must be ascending and unique");
+      not sortedInjectedColumnIndices.empty() and
+          std::adjacent_find(
+              sortedInjectedColumnIndices.begin(),
+              sortedInjectedColumnIndices.end(),
+              std::greater_equal<cudf::size_type>{}) ==
+              sortedInjectedColumnIndices.end(),
+      "Injected column indices to cuDF filter transformer must be non-empty, ascending, and unique");
 
   return InjectedColumnFilterTransformer(filter, sortedInjectedColumnIndices)
       .transformedFilter();
