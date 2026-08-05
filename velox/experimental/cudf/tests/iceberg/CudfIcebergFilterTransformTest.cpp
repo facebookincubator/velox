@@ -304,7 +304,7 @@ TEST(CudfIcebergFilterTransformTest, emptyInjectedColumnIndicesFail) {
   VELOX_ASSERT_THROW(
       (transformFilterForInjectedColumns(
           expression, std::span<const cudf::size_type>{})),
-      "Injected column indices must be non-empty, ascending, and unique");
+      "Injected column indices to cuDF filter transformer must be non-empty, ascending, and unique");
 }
 
 TEST(CudfIcebergFilterTransformTest, unsortedInjectedColumnIndicesFail) {
@@ -314,7 +314,7 @@ TEST(CudfIcebergFilterTransformTest, unsortedInjectedColumnIndicesFail) {
   VELOX_ASSERT_THROW(
       (transformFilterForInjectedColumns(
           expression, std::array<cudf::size_type, 2>{2, 0})),
-      "Injected column indices must be non-empty, ascending, and unique");
+      "Injected column indices to cuDF filter transformer must be non-empty, ascending, and unique");
 }
 
 TEST(CudfIcebergFilterTransformTest, columnNameReferenceFails) {
