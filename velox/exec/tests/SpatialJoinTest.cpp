@@ -59,10 +59,10 @@ class SpatialJoinTest : public OperatorTestBase {
   static constexpr std::string_view kPointV = "POINT (15 15)";
   static constexpr std::string_view kPointS = "POINT (18 18)";
   static constexpr std::string_view kPointQ = "POINT (28 28)";
-  static constexpr std::string_view kMultipointU = "MULTIPOINT (15 15)";
+  static constexpr std::string_view kMultipointU = "MULTIPOINT ((15 15))";
   static constexpr std::string_view kMultipointT =
-      "MULTIPOINT (14.5 14.5, 16 16)";
-  static constexpr std::string_view kMultipointR = "MULTIPOINT (15 15, 19 19)";
+      "MULTIPOINT ((14.5 14.5), (16 16))";
+  static constexpr std::string_view kMultipointR = "MULTIPOINT ((15 15), (19 19))";
 
  protected:
   void runTest(

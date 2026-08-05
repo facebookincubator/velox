@@ -26,7 +26,6 @@
 #include <geos/io/WKBReader.h>
 #include <geos/io/WKBWriter.h>
 #include <geos/io/WKTReader.h>
-#include <geos/io/WKTWriter.h>
 #include <geos/linearref/LengthIndexedLine.h>
 #include <geos/operation/distance/DistanceOp.h>
 #include <geos/simplify/TopologyPreservingSimplifier.h>
@@ -38,6 +37,7 @@
 #include "velox/common/geospatial/GeometrySerde.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/geospatial/GeometryUtils.h"
+#include "velox/functions/prestosql/geospatial/GeometryWktWriter.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/functions/prestosql/types/SphericalGeographyType.h"
@@ -94,9 +94,7 @@ struct StAsTextFunction {
 
     GEOS_TRY(
         {
-          geos::io::WKTWriter writer;
-          writer.setTrim(true);
-          result = writer.write(geosGeometry.get());
+          result = geospatial::writeWktPrestoCompatible(*geosGeometry);
         },
         "Failed to write WKT");
     return Status::OK();
@@ -115,9 +113,7 @@ struct SphericalAsTextFunction {
 
     GEOS_TRY(
         {
-          geos::io::WKTWriter writer;
-          writer.setTrim(true);
-          result = writer.write(geosGeometry.get());
+          result = geospatial::writeWktPrestoCompatible(*geosGeometry);
         },
         "Failed to write WKT");
     return Status::OK();

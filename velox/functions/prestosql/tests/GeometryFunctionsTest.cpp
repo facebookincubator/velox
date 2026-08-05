@@ -250,7 +250,7 @@ TEST_F(GeometryFunctionsTest, wktAndWkb) {
       "LINESTRING (0 0, 10 10)",
       "POLYGON ((0 0, 0 5, 5 5, 5 0, 0 0))",
       "POLYGON ((0 0, 0 5, 5 5, 5 0, 0 0), (1 1, 4 1, 4 4, 1 4, 1 1))",
-      "MULTIPOINT (1 2, 3 4)",
+      "MULTIPOINT ((1 2), (3 4))",
       "MULTILINESTRING ((0 0, 1 1), (2 2, 3 3))",
       "MULTIPOLYGON (((0 0, 0 1, 1 1, 1 0, 0 0)), ((2 2, 2 3, 3 3, 3 2, 2 2)))",
       "MULTIPOLYGON (((0 0, 0 4, 4 4, 4 0, 0 0), (1 1, 3 1, 3 3, 1 3, 1 1)), ((5 5, 5 7, 7 7, 7 5, 5 5)))",
@@ -316,6 +316,99 @@ TEST_F(GeometryFunctionsTest, wktAndWkb) {
   wktRoundTrip(
       "POLYGON ((73.3644 -53.0331, 73.3652 -53.0327, 73.3661 -53.0327, 73.3677 -53.0323, 73.3686 -53.0324, 73.3691 -53.0326, 73.3698 -53.0333, 73.3699 -53.0342, 73.3692 -53.0346, 73.3695 -53.0348, 73.3698 -53.0344, 73.3707 -53.0345, 73.3713 -53.034, 73.3718 -53.0339, 73.3722 -53.0329, 73.3713 -53.0323, 73.3711 -53.0319, 73.3701 -53.0311, 73.3685 -53.0305, 73.3666 -53.0302, 73.366 -53.0299, 73.3655 -53.03, 73.3653 -53.0304, 73.3646 -53.031, 73.3636 -53.0308, 73.363 -53.0311, 73.3629 -53.0313, 73.3627 -53.0316, 73.3619 -53.0315, 73.3611 -53.0318, 73.3611 -53.0322, 73.3606 -53.0327, 73.3601 -53.0326, 73.3603 -53.0316, 73.361 -53.0312, 73.3617 -53.0311, 73.362 -53.0308, 73.3625 -53.0307, 73.3646 -53.03, 73.3656 -53.0293, 73.3669 -53.0293, 73.3684 -53.0301, 73.3701 -53.0304, 73.3705 -53.0298, 73.3711 -53.0293, 73.3712 -53.029, 73.3717 -53.0287, 73.3717 -53.0284, 73.3722 -53.0278, 73.3722 -53.0271, 73.3721 -53.0268, 73.3718 -53.0267, 73.3719 -53.0263, 73.373 -53.0266, 73.3735 -53.0273, 73.3761 -53.0272, 73.3765 -53.0274, 73.377 -53.0272, 73.3781 -53.0272, 73.3792 -53.0267, 73.3798 -53.0266, 73.3801 -53.0264, 73.3806 -53.0263, 73.3808 -53.0257, 73.3811 -53.0256, 73.3815 -53.0257, 73.3815 -53.0275, 73.3818 -53.0277, 73.3817 -53.028, 73.382 -53.0282, 73.382 -53.0284, 73.3815 -53.0287, 73.3825 -53.0288, 73.3831 -53.0284, 73.3839 -53.0286, 73.3847 -53.0284, 73.3854 -53.0285, 73.3872 -53.028, 73.3879 -53.0276, 73.3887 -53.0275, 73.3892 -53.0272, 73.3897 -53.0272, 73.3908 -53.0265, 73.3912 -53.0265, 73.3915 -53.0263, 73.3919 -53.0265, 73.3918 -53.027, 73.3911 -53.0275, 73.3905 -53.0276, 73.3905 -53.0278, 73.3901 -53.0279, 73.3902 -53.0282, 73.3898 -53.0285, 73.3885 -53.0287, 73.3874 -53.0291, 73.3874 -53.0293, 73.3872 -53.0294, 73.3862 -53.0292, 73.3839 -53.0293, 73.3836 -53.0291, 73.3832 -53.0294, 73.3836 -53.0298, 73.3843 -53.0297, 73.3847 -53.0299, 73.3849 -53.0296, 73.3853 -53.0296, 73.3858 -53.0299, 73.3862 -53.0299, 73.3861 -53.0295, 73.3866 -53.0293, 73.3868 -53.0294, 73.3869 -53.0296, 73.3866 -53.0299, 73.3863 -53.0299, 73.3865 -53.03, 73.3874 -53.0298, 73.388 -53.0298, 73.3882 -53.0293, 73.3891 -53.0292, 73.3898 -53.0292, 73.39 -53.0291, 73.39 -53.0288, 73.3903 -53.0286, 73.3908 -53.0285, 73.391 -53.0281, 73.3914 -53.028, 73.3923 -53.0284, 73.3923 -53.0292, 73.3926 -53.0294, 73.3926 -53.0296, 73.3922 -53.0297, 73.3916 -53.0303, 73.3916 -53.0306, 73.392 -53.0309, 73.3936 -53.0309, 73.3941 -53.0307, 73.3946 -53.031, 73.3947 -53.0308, 73.3951 -53.0307, 73.3954 -53.0309, 73.3952 -53.0312, 73.3955 -53.0313, 73.3965 -53.0316, 73.3977 -53.0317, 73.3979 -53.0313, 73.3977 -53.0309, 73.3972 -53.0307, 73.3968 -53.0301, 73.3962 -53.0297, 73.396 -53.029, 73.3951 -53.029, 73.3947 -53.0286, 73.3933 -53.0282, 73.393 -53.028, 73.3929 -53.0276, 73.3922 -53.0271, 73.3923 -53.0265, 73.3921 -53.0261, 73.3923 -53.0259, 73.3923 -53.0253, 73.3928 -53.0249, 73.3931 -53.024, 73.393 -53.0235, 73.3933 -53.023, 73.3931 -53.0228, 73.3931 -53.0222, 73.3937 -53.0221, 73.3928 -53.0218, 73.3925 -53.021, 73.3917 -53.0203, 73.3909 -53.0198, 73.3906 -53.0197, 73.3897 -53.0201, 73.3894 -53.0202, 73.3892 -53.02, 73.3893 -53.0195, 73.3901 -53.0193, 73.3905 -53.019, 73.3913 -53.019, 73.3916 -53.0185, 73.3927 -53.0184, 73.3936 -53.0177, 73.3943 -53.0175, 73.3944 -53.017, 73.3952 -53.0161, 73.3956 -53.016, 73.396 -53.0155, 73.3967 -53.0151, 73.3971 -53.015, 73.3974 -53.0147, 73.3985 -53.0143, 73.3995 -53.0142, 73.4 -53.0143, 73.4002 -53.0147, 73.4006 -53.0147, 73.4008 -53.0145, 73.4007 -53.014, 73.4011 -53.0138, 73.402 -53.0136, 73.4031 -53.0137, 73.404 -53.0132, 73.4054 -53.0133, 73.4063 -53.0138, 73.4071 -53.0135, 73.4078 -53.0137, 73.4083 -53.0136, 73.4084 -53.0131, 73.4087 -53.0129, 73.4093 -53.0129, 73.4106 -53.0132, 73.4116 -53.0128, 73.4118 -53.0122, 73.4109 -53.0121, 73.4104 -53.0117, 73.4104 -53.0114, 73.4109 -53.0108, 73.4118 -53.0106, 73.4118 -53.0103, 73.4114 -53.01, 73.4116 -53.009, 73.412 -53.0087, 73.4129 -53.0089, 73.4131 -53.0086, 73.4134 -53.0083, 73.414 -53.0083, 73.4145 -53.0085, 73.4145 -53.0082, 73.4147 -53.008, 73.4154 -53.008, 73.4158 -53.0085, 73.4157 -53.009, 73.4154 -53.0092, 73.415 -53.0091, 73.4147 -53.0089, 73.4147 -53.009, 73.4155 -53.0095, 73.4156 -53.0112, 73.4158 -53.0114, 73.4159 -53.0122, 73.4167 -53.013, 73.4165 -53.0144, 73.4162 -53.0148, 73.4136 -53.0163, 73.4135 -53.0169, 73.413 -53.0169, 73.4126 -53.0168, 73.4117 -53.0173, 73.41 -53.0184, 73.4085 -53.0198, 73.4085 -53.0204, 73.4083 -53.0207, 73.4085 -53.0209, 73.4085 -53.0212, 73.4092 -53.0222, 73.4102 -53.0231, 73.4105 -53.0235, 73.4104 -53.0237, 73.4097 -53.024, 73.4091 -53.0247, 73.4095 -53.0247, 73.4095 -53.025, 73.4102 -53.025, 73.4101 -53.0253, 73.4097 -53.0254, 73.4098 -53.0259, 73.4103 -53.0263, 73.4106 -53.0263, 73.4102 -53.0256, 73.4103 -53.0251, 73.4109 -53.0251, 73.4112 -53.0247, 73.4123 -53.0248, 73.4131 -53.0254, 73.4137 -53.0255, 73.4142 -53.0258, 73.4149 -53.0258, 73.4152 -53.0263, 73.4162 -53.0262, 73.4164 -53.0265, 73.4169 -53.0264, 73.4173 -53.0267, 73.4186 -53.0268, 73.419 -53.0271, 73.42 -53.0274, 73.4208 -53.0274, 73.4222 -53.0279, 73.4224 -53.0283, 73.4222 -53.0284, 73.4207 -53.0286, 73.4202 -53.029, 73.4203 -53.0294, 73.4211 -53.0296, 73.4212 -53.0301, 73.4201 -53.0311, 73.4184 -53.0318, 73.4178 -53.0318, 73.4175 -53.0316, 73.4167 -53.0318, 73.4161 -53.0325, 73.4149 -53.0325, 73.4144 -53.033, 73.414 -53.0331, 73.4138 -53.0334, 73.414 -53.0336, 73.4148 -53.0334, 73.4151 -53.0336, 73.4146 -53.0353, 73.4153 -53.0362, 73.4152 -53.0377, 73.4155 -53.0379, 73.4155 -53.0382, 73.4153 -53.0401, 73.4134 -53.0412, 73.4109 -53.042, 73.4096 -53.044, 73.4101 -53.0462, 73.4117 -53.0477, 73.4122 -53.0485, 73.4119 -53.0493, 73.4101 -53.0511, 73.4101 -53.0517, 73.4107 -53.0523, 73.4103 -53.0535, 73.4132 -53.0569, 73.4154 -53.0579, 73.4161 -53.0579, 73.4163 -53.0583, 73.4171 -53.0587, 73.423 -53.0615, 73.4235 -53.0618, 73.4237 -53.0621, 73.4246 -53.062, 73.4258 -53.0624, 73.426 -53.0628, 73.4266 -53.0627, 73.427 -53.063, 73.427 -53.0632, 73.4267 -53.0635, 73.4276 -53.0631, 73.4281 -53.0631, 73.4287 -53.0637, 73.4294 -53.0637, 73.4297 -53.0638, 73.4299 -53.0642, 73.4291 -53.0646, 73.429 -53.0651, 73.4286 -53.0652, 73.4285 -53.0657, 73.428 -53.0661, 73.4274 -53.0659, 73.4274 -53.0654, 73.427 -53.0651, 73.4273 -53.0648, 73.4281 -53.0647, 73.4276 -53.0644, 73.4271 -53.0643, 73.427 -53.064, 73.4265 -53.0639, 73.4265 -53.0641, 73.4267 -53.0643, 73.4267 -53.0645, 73.4251 -53.0653, 73.4242 -53.0652, 73.4237 -53.0646, 73.4225 -53.0648, 73.4221 -53.0647, 73.4219 -53.0644, 73.4215 -53.0644, 73.4212 -53.0642, 73.4205 -53.0643, 73.4198 -53.0639, 73.4198 -53.0637, 73.4192 -53.0638, 73.4188 -53.0635, 73.4189 -53.0632, 73.4194 -53.0632, 73.4194 -53.0624, 73.4191 -53.0621, 73.4185 -53.0621, 73.4177 -53.0625, 73.4174 -53.0628, 73.4166 -53.0627, 73.4159 -53.0624, 73.4158 -53.0621, 73.4151 -53.0621, 73.4142 -53.0617, 73.4138 -53.0614, 73.4111 -53.0603, 73.4105 -53.0595, 73.4098 -53.0592, 73.4094 -53.0593, 73.4087 -53.0593, 73.4071 -53.0577, 73.4054 -53.0575, 73.4049 -53.057, 73.4039 -53.0567, 73.4024 -53.0554, 73.4011 -53.0552, 73.4005 -53.0549, 73.3994 -53.0553, 73.3976 -53.0553, 73.3972 -53.055, 73.3963 -53.0549, 73.3962 -53.055, 73.3964 -53.0552, 73.3964 -53.0556, 73.3955 -53.0562, 73.3946 -53.0562, 73.394 -53.0557, 73.3937 -53.0557, 73.3937 -53.0561, 73.3942 -53.0564, 73.3942 -53.0569, 73.3938 -53.0572, 73.3906 -53.0582, 73.3894 -53.0584, 73.3891 -53.0586, 73.3883 -53.0586, 73.3882 -53.0589, 73.3877 -53.0593, 73.3859 -53.0606, 73.3851 -53.0608, 73.3848 -53.0606, 73.3848 -53.0602, 73.385 -53.06, 73.385 -53.0596, 73.3848 -53.0594, 73.384 -53.0591, 73.3836 -53.0595, 73.3834 -53.0615, 73.384 -53.0616, 73.3842 -53.0618, 73.3842 -53.0624, 73.384 -53.0626, 73.3841 -53.0628, 73.3841 -53.0646, 73.384 -53.0648, 73.384 -53.0657, 73.3867 -53.0656, 73.3873 -53.0657, 73.3879 -53.0652, 73.389 -53.0655, 73.3891 -53.0661, 73.3886 -53.0665, 73.3884 -53.0668, 73.3885 -53.0674, 73.3888 -53.0676, 73.3888 -53.0679, 73.3884 -53.0683, 73.3893 -53.0687, 73.3893 -53.0695, 73.3888 -53.0697, 73.3888 -53.0702, 73.389 -53.0703, 73.3896 -53.0703, 73.3901 -53.07, 73.3906 -53.0701, 73.3908 -53.0702, 73.3908 -53.0708, 73.3915 -53.0708, 73.3919 -53.0712, 73.392 -53.0716, 73.3916 -53.0719, 73.3923 -53.0724, 73.3927 -53.0729, 73.3925 -53.0734, 73.3919 -53.0734, 73.3913 -53.0739, 73.3907 -53.074, 73.3904 -53.0744, 73.3893 -53.0748, 73.3885 -53.0748, 73.3883 -53.0753, 73.3872 -53.076, 73.3867 -53.076, 73.3861 -53.0768, 73.3855 -53.0771, 73.3855 -53.0773, 73.3863 -53.0779, 73.3863 -53.079, 73.386 -53.0795, 73.3853 -53.0796, 73.385 -53.0792, 73.3834 -53.0781, 73.3818 -53.0775, 73.3808 -53.0769, 73.3794 -53.0764, 73.3788 -53.0764, 73.3776 -53.0768, 73.3775 -53.0771, 73.3773 -53.0773, 73.3768 -53.0773, 73.3763 -53.0776, 73.3758 -53.0775, 73.3757 -53.0771, 73.3764 -53.0769, 73.3756 -53.0769, 73.3755 -53.0766, 73.3757 -53.0764, 73.3762 -53.0763, 73.3765 -53.0761, 73.3759 -53.0759, 73.3758 -53.0755, 73.375 -53.0751, 73.375 -53.0747, 73.3749 -53.0746, 73.3741 -53.0744, 73.3735 -53.0747, 73.3729 -53.0745, 73.3727 -53.0741, 73.3727 -53.0733, 73.3731 -53.073, 73.3736 -53.0729, 73.3733 -53.0726, 73.3721 -53.0726, 73.3718 -53.0724, 73.3708 -53.0723, 73.3689 -53.0732, 73.367 -53.0737, 73.3654 -53.0738, 73.3645 -53.0738, 73.3638 -53.0743, 73.3638 -53.0748, 73.3625 -53.075, 73.3622 -53.0755, 73.3617 -53.0755, 73.3615 -53.0753, 73.3615 -53.0748, 73.3616 -53.0745, 73.3624 -53.0739, 73.3631 -53.0738, 73.3632 -53.0733, 73.3635 -53.073, 73.3654 -53.0726, 73.368 -53.0724, 73.3689 -53.0718, 73.3723 -53.0711, 73.374 -53.07, 73.3754 -53.0682, 73.3773 -53.0674, 73.3787 -53.0661, 73.3798 -53.0648, 73.3806 -53.0633, 73.3812 -53.0626, 73.3814 -53.062, 73.3819 -53.0614, 73.3817 -53.0609, 73.3818 -53.0604, 73.3816 -53.0597, 73.3818 -53.0592, 73.3824 -53.0587, 73.3824 -53.0581, 73.3827 -53.0579, 73.382 -53.057, 73.3821 -53.0565, 73.3815 -53.0561, 73.3816 -53.0556, 73.3812 -53.0552, 73.3812 -53.0549, 73.3816 -53.0548, 73.3815 -53.0538, 73.3818 -53.0535, 73.3813 -53.0533, 73.3813 -53.0529, 73.3818 -53.0525, 73.3815 -53.0522, 73.3812 -53.0516, 73.3807 -53.052, 73.38 -53.0518, 73.3799 -53.0511, 73.3796 -53.0509, 73.3795 -53.0505, 73.3796 -53.0498, 73.3806 -53.0499, 73.3802 -53.0497, 73.3804 -53.049, 73.3802 -53.0487, 73.3803 -53.0483, 73.3799 -53.0478, 73.3795 -53.0476, 73.3795 -53.0465, 73.3801 -53.0462, 73.3794 -53.046, 73.3786 -53.0453, 73.3779 -53.0454, 73.3777 -53.0453, 73.3778 -53.0451, 73.3774 -53.0451, 73.3773 -53.0454, 73.3769 -53.0454, 73.3768 -53.0451, 73.3772 -53.045, 73.3772 -53.0447, 73.3775 -53.0443, 73.3763 -53.0437, 73.3759 -53.0429, 73.3746 -53.0425, 73.3732 -53.0424, 73.3725 -53.0421, 73.3722 -53.0421, 73.3721 -53.0424, 73.3709 -53.0425, 73.3707 -53.0429, 73.3714 -53.0435, 73.3714 -53.0437, 73.3707 -53.0441, 73.3694 -53.0446, 73.3686 -53.0445, 73.3681 -53.0442, 73.3674 -53.0441, 73.3665 -53.0437, 73.3657 -53.0431, 73.3651 -53.0418, 73.3651 -53.0415, 73.3656 -53.041, 73.3661 -53.0402, 73.3676 -53.0396, 73.3678 -53.0393, 73.3696 -53.0393, 73.3701 -53.0392, 73.3702 -53.0389, 73.3708 -53.0388, 73.371 -53.0384, 73.371 -53.0378, 73.3706 -53.0376, 73.3705 -53.0371, 73.3709 -53.0364, 73.3699 -53.0356, 73.3697 -53.0351, 73.3693 -53.0353, 73.3688 -53.0353, 73.3682 -53.0349, 73.3677 -53.0349, 73.3674 -53.0345, 73.3669 -53.0345, 73.3667 -53.0342, 73.3648 -53.0339, 73.3654 -53.0344, 73.3654 -53.0347, 73.3644 -53.0349, 73.3639 -53.0351, 73.3625 -53.0351, 73.3616 -53.0348, 73.3614 -53.0343, 73.361 -53.0342, 73.3607 -53.0336, 73.3607 -53.0332, 73.3613 -53.0326, 73.3622 -53.0322, 73.3625 -53.0319, 73.363 -53.0319, 73.3633 -53.0321, 73.3632 -53.0327, 73.3634 -53.0329, 73.3634 -53.0334, 73.3643 -53.0333, 73.3644 -53.0331), (73.3938 -53.0223, 73.3938 -53.0222, 73.3937 -53.0221, 73.3938 -53.0222, 73.3938 -53.0223), (73.4095 -53.0252, 73.4094 -53.0253, 73.4095 -53.0253, 73.4095 -53.0253, 73.4095 -53.0252), (73.4162 -53.0267, 73.4163 -53.0267, 73.4163 -53.0266, 73.4162 -53.0267, 73.4162 -53.0267), (73.4259 -53.0629, 73.4259 -53.0631, 73.4263 -53.0632, 73.426 -53.063, 73.4259 -53.0629), (73.3805 -53.0503, 73.3801 -53.0504, 73.3806 -53.0505, 73.3806 -53.0508, 73.3807 -53.0508, 73.3809 -53.0505, 73.3805 -53.0503), (73.3809 -53.0512, 73.3811 -53.0513, 73.3812 -53.0514, 73.3812 -53.0512, 73.3809 -53.0512), (73.3783 -53.045, 73.378 -53.0449, 73.3778 -53.045, 73.378 -53.045, 73.3783 -53.045), (73.3899 -53.0275, 73.39 -53.0274, 73.3899 -53.0274, 73.3899 -53.0275, 73.3899 -53.0275), (73.3962 -53.0287, 73.3965 -53.0286, 73.3965 -53.0284, 73.397 -53.0279, 73.3969 -53.0273, 73.3965 -53.0269, 73.3971 -53.0267, 73.3968 -53.0266, 73.3967 -53.0263, 73.3972 -53.0263, 73.3974 -53.0266, 73.3989 -53.0263, 73.3988 -53.0262, 73.3983 -53.0262, 73.3982 -53.026, 73.3993 -53.0255, 73.3989 -53.025, 73.3987 -53.0249, 73.3986 -53.0253, 73.3978 -53.0255, 73.3976 -53.0254, 73.3976 -53.0252, 73.398 -53.0251, 73.3981 -53.0248, 73.3985 -53.0248, 73.397 -53.0246, 73.3962 -53.0249, 73.3959 -53.0252, 73.396 -53.0265, 73.3957 -53.0267, 73.3953 -53.0267, 73.3938 -53.026, 73.3935 -53.0261, 73.3936 -53.0263, 73.3941 -53.0264, 73.394 -53.0266, 73.3936 -53.0266, 73.3938 -53.0268, 73.3939 -53.0274, 73.395 -53.028, 73.395 -53.0284, 73.3962 -53.0287), (73.3825 -53.0548, 73.3828 -53.0554, 73.3828 -53.0559, 73.3834 -53.0562, 73.3837 -53.0566, 73.384 -53.0567, 73.3845 -53.0565, 73.385 -53.056, 73.3864 -53.055, 73.3871 -53.055, 73.3877 -53.0547, 73.3883 -53.0546, 73.3877 -53.054, 73.3877 -53.0537, 73.3879 -53.0535, 73.3896 -53.0531, 73.3899 -53.0529, 73.3905 -53.0529, 73.3917 -53.0532, 73.3921 -53.0536, 73.3928 -53.0538, 73.3929 -53.0537, 73.393 -53.0534, 73.3936 -53.053, 73.3948 -53.0528, 73.396 -53.053, 73.3968 -53.0526, 73.3981 -53.0526, 73.3985 -53.0525, 73.3982 -53.0522, 73.3985 -53.0513, 73.399 -53.0511, 73.3997 -53.0504, 73.4012 -53.0503, 73.4019 -53.0505, 73.403 -53.0514, 73.403 -53.0525, 73.4029 -53.0527, 73.403 -53.0531, 73.4038 -53.0536, 73.4042 -53.0545, 73.4052 -53.0549, 73.4056 -53.0546, 73.4054 -53.0526, 73.4056 -53.0518, 73.4061 -53.0512, 73.406 -53.0508, 73.4057 -53.0505, 73.4058 -53.05, 73.4054 -53.0497, 73.4054 -53.0493, 73.4048 -53.0487, 73.4048 -53.0483, 73.405 -53.0479, 73.4054 -53.0478, 73.4055 -53.0473, 73.4058 -53.0469, 73.4058 -53.0466, 73.4045 -53.0457, 73.4045 -53.0454, 73.4047 -53.0451, 73.4047 -53.045, 73.4039 -53.045, 73.4036 -53.0453, 73.403 -53.0455, 73.402 -53.0454, 73.4015 -53.0445, 73.4015 -53.0437, 73.4016 -53.0434, 73.4022 -53.0433, 73.4018 -53.043, 73.4015 -53.0429, 73.4011 -53.0432, 73.401 -53.0435, 73.4004 -53.0441, 73.4006 -53.0444, 73.4006 -53.0448, 73.4004 -53.0451, 73.3999 -53.0452, 73.3996 -53.0455, 73.3986 -53.0457, 73.3983 -53.0461, 73.396 -53.0459, 73.3954 -53.0461, 73.3952 -53.0466, 73.3937 -53.047, 73.3932 -53.0478, 73.3924 -53.0481, 73.3926 -53.0484, 73.3926 -53.0487, 73.3923 -53.0491, 73.3918 -53.0493, 73.3915 -53.0496, 73.3907 -53.0499, 73.3902 -53.0502, 73.3892 -53.0504, 73.3884 -53.051, 73.3876 -53.051, 73.3864 -53.0516, 73.3855 -53.0516, 73.3848 -53.052, 73.3845 -53.0524, 73.3843 -53.053, 73.3831 -53.0538, 73.3829 -53.0545, 73.3825 -53.0548))");
 }
+
+// Presto's Java engine writes WKT with org.locationtech.jts.io.WKTWriter, which
+// parenthesizes each child of a MULTIPOINT: "MULTIPOINT ((0 0), (10 20))".
+// GEOS writes the children bare: "MULTIPOINT (0 0, 10 20)". Both are legal
+// WKT, but ST_AsText is a user-visible contract, so the two engines must not
+// disagree. These expectations were taken from JTS 1.20.0 itself, the writer
+// Presto Java uses.
+TEST_F(GeometryFunctionsTest, multiPointWktMatchesJava) {
+  const auto wktRoundTrip = [&](const std::optional<std::string>& wkt) {
+    return evaluateOnce<std::string>("ST_AsText(ST_GeometryFromText(c0))", wkt);
+  };
+
+  EXPECT_EQ(
+      "MULTIPOINT ((0 0), (10 20), (30 40))",
+      wktRoundTrip("MULTIPOINT ((0 0), (10 20), (30 40))"));
+  // The bare input form must normalize to the parenthesized output form,
+  // exactly as JTS does. This is the case the Iceberg geometry read path hit.
+  EXPECT_EQ(
+      "MULTIPOINT ((0 0), (10 20), (30 40))",
+      wktRoundTrip("MULTIPOINT ((0 0), (10 20), (30 40))"));
+
+  // A single child still gets its own parentheses.
+  EXPECT_EQ("MULTIPOINT ((0 0))", wktRoundTrip("MULTIPOINT ((0 0))"));
+  EXPECT_EQ("MULTIPOINT ((0 0))", wktRoundTrip("MULTIPOINT ((0 0))"));
+
+  // Negative and decimal coordinates.
+  EXPECT_EQ(
+      "MULTIPOINT ((-1.5 -2.25), (0.125 3.5))",
+      wktRoundTrip("MULTIPOINT ((-1.5 -2.25), (0.125 3.5))"));
+
+  // An empty MULTIPOINT has no parentheses at all.
+  EXPECT_EQ("MULTIPOINT EMPTY", wktRoundTrip("MULTIPOINT EMPTY"));
+
+  // Empty children do not survive the round trip: the internal geometry
+  // encoding drops them, so an empty child is never reached by the writer here.
+  // Java does exactly the same -- these expectations come from running Presto
+  // Java's own JtsGeometrySerde serialize/deserialize round trip. The writer
+  // itself does render a surviving empty child as a bare EMPTY rather than
+  // "(EMPTY)", which is what a GEOMETRYCOLLECTION child exercises below.
+  EXPECT_EQ("MULTIPOINT ((0 0))", wktRoundTrip("MULTIPOINT ((0 0), EMPTY)"));
+  EXPECT_EQ("MULTIPOINT EMPTY", wktRoundTrip("MULTIPOINT (EMPTY)"));
+  EXPECT_EQ("MULTIPOINT EMPTY", wktRoundTrip("MULTIPOINT (EMPTY, EMPTY)"));
+
+  // A MULTIPOINT nested in a collection is written the same way, at any depth.
+  EXPECT_EQ(
+      "GEOMETRYCOLLECTION (POINT (1 2), MULTIPOINT ((3 4), (5 6)))",
+      wktRoundTrip(
+          "GEOMETRYCOLLECTION (POINT (1 2), MULTIPOINT ((3 4), (5 6)))"));
+  EXPECT_EQ(
+      "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (MULTIPOINT ((1 1))))",
+      wktRoundTrip(
+          "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (MULTIPOINT ((1 1))))"));
+  EXPECT_EQ(
+      "GEOMETRYCOLLECTION (MULTIPOINT EMPTY)",
+      wktRoundTrip("GEOMETRYCOLLECTION (MULTIPOINT EMPTY)"));
+  EXPECT_EQ(
+      "GEOMETRYCOLLECTION (MULTIPOINT EMPTY, MULTIPOINT ((1 1)))",
+      wktRoundTrip(
+          "GEOMETRYCOLLECTION (MULTIPOINT EMPTY, MULTIPOINT ((1 1)))"));
+
+  // Every other geometry type keeps the form GEOS already produced.
+  EXPECT_EQ("POINT (1 2)", wktRoundTrip("POINT (1 2)"));
+  EXPECT_EQ("POINT EMPTY", wktRoundTrip("POINT EMPTY"));
+  EXPECT_EQ(
+      "LINESTRING (0 0, 1 1, 2 2)", wktRoundTrip("LINESTRING (0 0, 1 1, 2 2)"));
+  EXPECT_EQ(
+      "MULTILINESTRING ((0 0, 1 1), (2 2, 3 3))",
+      wktRoundTrip("MULTILINESTRING ((0 0, 1 1), (2 2, 3 3))"));
+  // Polygon rings come back in the orientation the internal encoding
+  // normalizes to, which is not necessarily the orientation of the input. That
+  // predates this change and matches Java, which normalizes identically.
+  EXPECT_EQ(
+      "POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0))",
+      wktRoundTrip("POLYGON ((0 0, 4 0, 4 4, 0 4, 0 0))"));
+  EXPECT_EQ(
+      "MULTIPOLYGON (((0 0, 1 1, 1 0, 0 0)))",
+      wktRoundTrip("MULTIPOLYGON (((0 0, 1 0, 1 1, 0 0)))"));
+  EXPECT_EQ(
+      "GEOMETRYCOLLECTION EMPTY", wktRoundTrip("GEOMETRYCOLLECTION EMPTY"));
+  EXPECT_EQ(
+      "GEOMETRYCOLLECTION (POINT EMPTY)",
+      wktRoundTrip("GEOMETRYCOLLECTION (POINT EMPTY)"));
+
+  // Changing the text must not change the bytes.
+  const auto toWkbHex = [&](const std::optional<std::string>& wkt) {
+    return evaluateOnce<std::string>(
+        "to_hex(ST_AsBinary(ST_GeometryFromText(c0)))", wkt);
+  };
+  EXPECT_EQ(
+      toWkbHex("MULTIPOINT ((0 0), (10 20), (30 40))"),
+      toWkbHex("MULTIPOINT ((0 0), (10 20), (30 40))"));
+}
+
 
 // Constructors and accessors
 
@@ -442,13 +535,13 @@ TEST_F(GeometryFunctionsTest, testStContains) {
   assertRelation("ST_Contains", std::nullopt, "POINT (25 25)", false);
   assertRelation("ST_Contains", "POINT (20 20)", "POINT (25 25)", false);
   assertRelation(
-      "ST_Contains", "MULTIPOINT (20 20, 25 25)", "POINT (25 25)", true);
+      "ST_Contains", "MULTIPOINT ((20 20), (25 25))", "POINT (25 25)", true);
   assertRelation(
       "ST_Contains", "LINESTRING (20 20, 30 30)", "POINT (25 25)", true);
   assertRelation(
       "ST_Contains",
       "LINESTRING (20 20, 30 30)",
-      "MULTIPOINT (25 25, 31 31)",
+      "MULTIPOINT ((25 25), (31 31))",
       false);
   assertRelation(
       "ST_Contains",
@@ -523,7 +616,7 @@ TEST_F(GeometryFunctionsTest, testStCrosses) {
   assertRelation(
       "ST_Crosses",
       "LINESTRING (20 20, 30 30)",
-      "MULTIPOINT (25 25, 31 31)",
+      "MULTIPOINT ((25 25), (31 31))",
       true);
   assertRelation(
       "ST_Crosses", "LINESTRING(0 0, 1 1)", "LINESTRING (1 0, 0 1)", true);
@@ -574,7 +667,7 @@ TEST_F(GeometryFunctionsTest, testStDisjoint) {
   assertRelation("ST_Disjoint", std::nullopt, "POINT (150 150)", true);
   assertRelation("ST_Disjoint", "POINT (50 100)", "POINT (150 150)", true);
   assertRelation(
-      "ST_Disjoint", "MULTIPOINT (50 100, 50 200)", "POINT (50 100)", false);
+      "ST_Disjoint", "MULTIPOINT ((50 100), (50 200))", "POINT (50 100)", false);
   assertRelation(
       "ST_Disjoint", "LINESTRING (0 0, 0 1)", "LINESTRING (1 1, 1 0)", true);
   assertRelation(
@@ -623,7 +716,7 @@ TEST_F(GeometryFunctionsTest, testStEquals) {
   assertRelation("ST_Equals", std::nullopt, "POINT (150 150)", false);
   assertRelation("ST_Equals", "POINT (50 100)", "POINT (150 150)", false);
   assertRelation(
-      "ST_Equals", "MULTIPOINT (50 100, 50 200)", "POINT (50 100)", false);
+      "ST_Equals", "MULTIPOINT ((50 100), (50 200))", "POINT (50 100)", false);
   assertRelation(
       "ST_Equals", "LINESTRING (0 0, 0 1)", "LINESTRING (1 1, 1 0)", false);
   assertRelation(
@@ -662,7 +755,7 @@ TEST_F(GeometryFunctionsTest, testStIntersects) {
   assertRelation("ST_Intersects", std::nullopt, "POINT (150 150)", false);
   assertRelation("ST_Intersects", "POINT (50 100)", "POINT (150 150)", false);
   assertRelation(
-      "ST_Intersects", "MULTIPOINT (50 100, 50 200)", "POINT (50 100)", true);
+      "ST_Intersects", "MULTIPOINT ((50 100), (50 200))", "POINT (50 100)", true);
   assertRelation(
       "ST_Intersects", "LINESTRING (0 0, 0 1)", "LINESTRING (1 1, 1 0)", false);
   assertRelation(
@@ -733,7 +826,7 @@ TEST_F(GeometryFunctionsTest, testStOverlaps) {
   assertRelation("ST_Overlaps", "POINT (50 100)", "POINT (150 150)", false);
   assertRelation("ST_Overlaps", "POINT (50 100)", "POINT (50 100)", false);
   assertRelation(
-      "ST_Overlaps", "MULTIPOINT (50 100, 50 200)", "POINT (50 100)", false);
+      "ST_Overlaps", "MULTIPOINT ((50 100), (50 200))", "POINT (50 100)", false);
   assertRelation(
       "ST_Overlaps", "LINESTRING (0 0, 0 1)", "LINESTRING (1 1, 1 0)", false);
   assertRelation(
@@ -811,7 +904,7 @@ TEST_F(GeometryFunctionsTest, testStTouches) {
   assertRelation("ST_Touches", std::nullopt, "POINT (150 150)", false);
   assertRelation("ST_Touches", "POINT (50 100)", "POINT (150 150)", false);
   assertRelation(
-      "ST_Touches", "MULTIPOINT (50 100, 50 200)", "POINT (50 100)", false);
+      "ST_Touches", "MULTIPOINT ((50 100), (50 200))", "POINT (50 100)", false);
   assertRelation(
       "ST_Touches",
       "LINESTRING (50 100, 50 200)",
@@ -888,7 +981,7 @@ TEST_F(GeometryFunctionsTest, testStWithin) {
   assertRelation("ST_Within", std::nullopt, "POINT (150 150)", false);
   assertRelation("ST_Within", "POINT (50 100)", "POINT (150 150)", false);
   assertRelation(
-      "ST_Within", "POINT (50 100)", "MULTIPOINT (50 100, 50 200)", true);
+      "ST_Within", "POINT (50 100)", "MULTIPOINT ((50 100), (50 200))", true);
   assertRelation(
       "ST_Within",
       "LINESTRING (50 100, 50 200)",
@@ -943,7 +1036,7 @@ TEST_F(GeometryFunctionsTest, testStDifference) {
       "ST_Difference", "POINT (50 100)", "POINT (150 150)", "POINT (50 100)");
   assertOverlay(
       "ST_Difference",
-      "MULTIPOINT (50 100, 50 200)",
+      "MULTIPOINT ((50 100), (50 200))",
       "POINT (50 100)",
       "POINT (50 200)");
   assertOverlay(
@@ -998,7 +1091,7 @@ TEST_F(GeometryFunctionsTest, testStIntersection) {
       "ST_Intersection", "POINT (50 100)", "POINT (150 150)", "POINT EMPTY");
   assertOverlay(
       "ST_Intersection",
-      "MULTIPOINT (50 100, 50 200)",
+      "MULTIPOINT ((50 100), (50 200))",
       "POINT (50 100)",
       "POINT (50 100)");
   assertOverlay(
@@ -1062,12 +1155,12 @@ TEST_F(GeometryFunctionsTest, testStSymDifference) {
       "ST_SymDifference",
       "POINT (50 100)",
       "POINT (50 150)",
-      "MULTIPOINT (50 100, 50 150)");
+      "MULTIPOINT ((50 100), (50 150))");
   assertOverlay(
       "ST_SymDifference",
-      "MULTIPOINT (50 100, 60 200)",
-      "MULTIPOINT (60 200, 70 150)",
-      "MULTIPOINT (50 100, 70 150)");
+      "MULTIPOINT ((50 100), (60 200))",
+      "MULTIPOINT ((60 200), (70 150))",
+      "MULTIPOINT ((50 100), (70 150))");
   assertOverlay(
       "ST_SymDifference",
       "LINESTRING (50 100, 50 200)",
@@ -1109,7 +1202,7 @@ TEST_F(GeometryFunctionsTest, testStUnion) {
       "GEOMETRYCOLLECTION EMPTY"};
   std::array<std::string_view, 7> simpleWkts = {
       "POINT (1 2)",
-      "MULTIPOINT (1 2, 3 4)",
+      "MULTIPOINT ((1 2), (3 4))",
       "LINESTRING (0 0, 2 2, 4 4)",
       "MULTILINESTRING ((0 0, 2 2, 4 4), (5 5, 7 7, 9 9))",
       "POLYGON ((0 1, 1 1, 1 0, 0 0, 0 1))",
@@ -1134,13 +1227,13 @@ TEST_F(GeometryFunctionsTest, testStUnion) {
   assertOverlay(
       "ST_Union",
       "POINT (1 2)",
-      "MULTIPOINT (1 2, 3 4)",
-      "MULTIPOINT (1 2, 3 4)");
+      "MULTIPOINT ((1 2), (3 4))",
+      "MULTIPOINT ((1 2), (3 4))");
   assertOverlay(
       "ST_Union",
-      "MULTIPOINT (1 2)",
-      "MULTIPOINT (1 2, 3 4)",
-      "MULTIPOINT (1 2, 3 4)");
+      "MULTIPOINT ((1 2))",
+      "MULTIPOINT ((1 2), (3 4))",
+      "MULTIPOINT ((1 2), (3 4))");
   assertOverlay(
       "ST_Union",
       "LINESTRING (0 1, 1 2)",
@@ -1170,9 +1263,9 @@ TEST_F(GeometryFunctionsTest, testStUnion) {
   // within union
   assertOverlay(
       "ST_Union",
-      "MULTIPOINT (20 20, 25 25)",
+      "MULTIPOINT ((20 20), (25 25))",
       "POINT (25 25)",
-      "MULTIPOINT (20 20, 25 25)");
+      "MULTIPOINT ((20 20), (25 25))");
   assertOverlay(
       "ST_Union",
       "LINESTRING (20 20, 30 30)",
@@ -1195,9 +1288,9 @@ TEST_F(GeometryFunctionsTest, testStUnion) {
       "MULTIPOLYGON (((2 2, 2 3, 2 4, 4 4, 4 2, 3 2, 2 2)), ((0 0, 0 2, 2 2, 2 0, 0 0)))");
   assertOverlay(
       "ST_Union",
-      "GEOMETRYCOLLECTION (POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0)), MULTIPOINT (20 20, 25 25))",
+      "GEOMETRYCOLLECTION (POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0)), MULTIPOINT ((20 20), (25 25)))",
       "GEOMETRYCOLLECTION (POLYGON ((1 1, 1 2, 2 2, 2 1, 1 1)), POINT (25 25))",
-      "GEOMETRYCOLLECTION (MULTIPOINT (20 20, 25 25), POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0)))");
+      "GEOMETRYCOLLECTION (MULTIPOINT ((20 20), (25 25)), POLYGON ((0 0, 0 4, 4 4, 4 0, 0 0)))");
 
   // overlap union
   assertOverlay(
@@ -1271,13 +1364,13 @@ TEST_F(GeometryFunctionsTest, testStIsSimpleValid) {
   // valid geometries
   assertStIsValidSimpleFunc("POINT (1.5 2.5)", true, true);
 
-  assertStIsValidSimpleFunc("MULTIPOINT (1 2, 3 4)", true, true);
-  assertStIsValidSimpleFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", true, true);
+  assertStIsValidSimpleFunc("MULTIPOINT ((1 2), (3 4))", true, true);
+  assertStIsValidSimpleFunc("MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", true, true);
   // Repeated point
   assertStIsValidSimpleFunc(
       "MULTIPOINT ((0 0), (0 1), (0 1), (1 1))", true, false);
   // Duplicate point
-  assertStIsValidSimpleFunc("MULTIPOINT (1 2, 2 4, 3 6, 1 2)", true, false);
+  assertStIsValidSimpleFunc("MULTIPOINT ((1 2), (2 4), (3 6), (1 2))", true, false);
 
   assertStIsValidSimpleFunc("LINESTRING (0 0, 1 2, 3 4)", true, true);
   // Geos/JTS considers LineStrings with repeated points valid/simple (it drops
@@ -1432,7 +1525,7 @@ TEST_F(GeometryFunctionsTest, testGeometryInvalidReason) {
       "LINESTRING (0 0, -1 0.5, 0 1, 1 1, 1 0, 0 1, 0 0)",
       "Non-simple LineString: Self-intersection at or near (0 1)");
   assertInvalidReason(
-      "MULTIPOINT (1 2, 2 4, 3 6, 1 2)",
+      "MULTIPOINT ((1 2), (2 4), (3 6), (1 2))",
       "Non-simple MultiPoint: Repeated point (1 2)");
   assertInvalidReason(
       "LINESTRING (0 0, 1 1, 1 0, 0 1)",
@@ -1447,7 +1540,7 @@ TEST_F(GeometryFunctionsTest, testGeometryInvalidReason) {
   assertInvalidReason("POINT (1 2)", std::nullopt);
   assertInvalidReason("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", std::nullopt);
   assertInvalidReason(
-      "GEOMETRYCOLLECTION (MULTIPOINT (1 0, 1 1, 0 1, 0 0))", std::nullopt);
+      "GEOMETRYCOLLECTION (MULTIPOINT ((1 0), (1 1), (0 1), (0 0)))", std::nullopt);
 }
 
 TEST_F(GeometryFunctionsTest, testSimplifyGeometry) {
@@ -1531,15 +1624,15 @@ TEST_F(GeometryFunctionsTest, testStBoundary) {
 
   testStBoundaryFunc("POINT (1 2)", "GEOMETRYCOLLECTION EMPTY");
   testStBoundaryFunc(
-      "MULTIPOINT (1 2, 2 4, 3 6, 4 8)", "GEOMETRYCOLLECTION EMPTY");
+      "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", "GEOMETRYCOLLECTION EMPTY");
   testStBoundaryFunc("LINESTRING EMPTY", "MULTIPOINT EMPTY");
-  testStBoundaryFunc("LINESTRING (8 4, 5 7)", "MULTIPOINT (8 4, 5 7)");
+  testStBoundaryFunc("LINESTRING (8 4, 5 7)", "MULTIPOINT ((8 4), (5 7))");
   testStBoundaryFunc(
       "LINESTRING (100 150, 50 60, 70 80, 160 170)",
-      "MULTIPOINT (100 150, 160 170)");
+      "MULTIPOINT ((100 150), (160 170))");
   testStBoundaryFunc(
       "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))",
-      "MULTIPOINT (1 1, 2 4, 4 4, 5 1)");
+      "MULTIPOINT ((1 1), (2 4), (4 4), (5 1))");
   testStBoundaryFunc(
       "POLYGON ((1 1, 4 1, 1 4, 1 1))", "LINESTRING (1 1, 1 4, 4 1, 1 1)");
   testStBoundaryFunc(
@@ -1552,7 +1645,7 @@ TEST_F(GeometryFunctionsTest, testStCentroid) {
       "ST_Centroid", "LINESTRING EMPTY", std::nullopt, true);
   assertResult<std::string>("ST_Centroid", "POINT (3 5)", "POINT (3 5)", true);
   assertResult<std::string>(
-      "ST_Centroid", "MULTIPOINT (1 2, 2 4, 3 6, 4 8)", "POINT (2.5 5)", true);
+      "ST_Centroid", "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", "POINT (2.5 5)", true);
   assertResult<std::string>(
       "ST_Centroid", "LINESTRING (1 1, 2 2, 3 3)", "POINT (2 2)", true);
   assertResult<std::string>(
@@ -1607,7 +1700,7 @@ TEST_F(GeometryFunctionsTest, testSTMin) {
   };
 
   assertPointMin("POINT (1.5 2.5)", 1.5, 2.5);
-  assertPointMin("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 1.0, 2.0);
+  assertPointMin("MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 1.0, 2.0);
   assertPointMin("LINESTRING (8 4, 5 7)", 5.0, 4.0);
   assertPointMin("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 1.0, 1.0);
   assertPointMin("POLYGON ((2 0, 2 1, 3 1, 2 0))", 2.0, 0.0);
@@ -1641,7 +1734,7 @@ TEST_F(GeometryFunctionsTest, testSTMax) {
   };
 
   assertPointMax("POINT (1.5 2.5)", 1.5, 2.5);
-  assertPointMax("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 4.0, 8.0);
+  assertPointMax("MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 4.0, 8.0);
   assertPointMax("LINESTRING (8 4, 5 7)", 8.0, 7.0);
   assertPointMax("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 5.0, 4.0);
   assertPointMax("POLYGON ((2 0, 2 1, 3 1, 2 0))", 3.0, 1.0);
@@ -1670,7 +1763,7 @@ TEST_F(GeometryFunctionsTest, testStGeometryType) {
   assertResult<std::string>(
       "ST_GeometryType", "MULTIPOINT EMPTY", "ST_MultiPoint");
   assertResult<std::string>(
-      "ST_GeometryType", "MULTIPOINT (1 2, 2 4, 3 6, 4 8)", "ST_MultiPoint");
+      "ST_GeometryType", "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", "ST_MultiPoint");
   assertResult<std::string>(
       "ST_GeometryType", "MULTILINESTRING EMPTY", "ST_MultiLineString");
   assertResult<std::string>(
@@ -1715,7 +1808,7 @@ TEST_F(GeometryFunctionsTest, testStDistance) {
   };
 
   testStDistanceFunc("POINT (50 100)", "POINT (150 150)", 111.80339887498948);
-  testStDistanceFunc("MULTIPOINT (50 100, 50 200)", "POINT (50 100)", 0.0);
+  testStDistanceFunc("MULTIPOINT ((50 100), (50 200))", "POINT (50 100)", 0.0);
   testStDistanceFunc(
       "LINESTRING (50 100, 50 200)",
       "LINESTRING (10 10, 20 20)",
@@ -1961,11 +2054,11 @@ TEST_F(GeometryFunctionsTest, testStGeometryN) {
   testStGeometryNFunc("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", -1, std::nullopt);
   testStGeometryNFunc("POLYGON EMPTY", 0, std::nullopt);
   testStGeometryNFunc("POLYGON EMPTY", 2, std::nullopt);
-  testStGeometryNFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 1, "POINT (1 2)");
-  testStGeometryNFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 2, "POINT (2 4)");
-  testStGeometryNFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 0, std::nullopt);
-  testStGeometryNFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 5, std::nullopt);
-  testStGeometryNFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", -1, std::nullopt);
+  testStGeometryNFunc("MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 1, "POINT (1 2)");
+  testStGeometryNFunc("MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 2, "POINT (2 4)");
+  testStGeometryNFunc("MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 0, std::nullopt);
+  testStGeometryNFunc("MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 5, std::nullopt);
+  testStGeometryNFunc("MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", -1, std::nullopt);
   testStGeometryNFunc(
       "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 1, "LINESTRING (1 1, 5 1)");
   testStGeometryNFunc(
@@ -2093,7 +2186,7 @@ TEST_F(GeometryFunctionsTest, testStNumGeometries) {
   assertResult<int32_t>(
       "ST_NumGeometries", "POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", 1);
   assertResult<int32_t>(
-      "ST_NumGeometries", "MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 4);
+      "ST_NumGeometries", "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 4);
   assertResult<int32_t>(
       "ST_NumGeometries", "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 2);
   assertResult<int32_t>(
@@ -2167,7 +2260,7 @@ TEST_F(GeometryFunctionsTest, testStConvexHull) {
       true);
   assertResult<std::string>(
       "ST_ConvexHull",
-      "MULTIPOINT (0 1, 1 2, 2 3, 3 4, 4 5, 5 6)",
+      "MULTIPOINT ((0 1), (1 2), (2 3), (3 4), (4 5), (5 6))",
       "LINESTRING (0 1, 5 6)",
       true);
   assertResult<std::string>(
@@ -2184,7 +2277,7 @@ TEST_F(GeometryFunctionsTest, testStConvexHull) {
       true);
   assertResult<std::string>(
       "ST_ConvexHull",
-      "MULTIPOINT (0 2, 1 0, 3 0, 4 0, 4 2, 2 2, 2 4)",
+      "MULTIPOINT ((0 2), (1 0), (3 0), (4 0), (4 2), (2 2), (2 4))",
       "POLYGON ((1 0, 0 2, 2 4, 4 2, 4 0, 1 0))",
       true);
   assertResult<std::string>(
@@ -2215,7 +2308,7 @@ TEST_F(GeometryFunctionsTest, testStConvexHull) {
       "POLYGON ((1 1, 1 4, 5 4, 5 1, 1 1))",
       true);
   assertResult<std::string>(
-      "ST_ConvexHull", "MULTIPOINT (0 2)", "POINT (0 2)", true);
+      "ST_ConvexHull", "MULTIPOINT ((0 2))", "POINT (0 2)", true);
   assertResult<std::string>(
       "ST_ConvexHull",
       "MULTIPOLYGON (((0 3, 3 6, 2 0, 0 3)))",
@@ -2363,7 +2456,7 @@ TEST_F(GeometryFunctionsTest, testStExteriorRing) {
 TEST_F(GeometryFunctionsTest, testStEnvelope) {
   assertResult<std::string>(
       "st_envelope",
-      "MULTIPOINT (1 2, 2 4, 3 6, 4 8)",
+      "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))",
       "POLYGON ((1 2, 1 8, 4 8, 4 2, 1 2))",
       true);
   assertResult<std::string>(
@@ -2461,8 +2554,8 @@ TEST_F(GeometryFunctionsTest, testStPoints) {
   testStPointsFunc("POINT (0 0)", {{"(0 0)"}});
   testStPointsFunc("POINT (0 1)", {{"(0 1)"}});
 
-  testStPointsFunc("MULTIPOINT (0 0)", {{"(0 0)"}});
-  testStPointsFunc("MULTIPOINT (0 0, 1 2)", {{"(0 0)", "(1 2)"}});
+  testStPointsFunc("MULTIPOINT ((0 0))", {{"(0 0)"}});
+  testStPointsFunc("MULTIPOINT ((0 0), (1 2))", {{"(0 0)", "(1 2)"}});
 
   testStPointsFunc(
       "MULTILINESTRING ((0 0, 1 1), (2 3, 3 2))",
@@ -2544,7 +2637,7 @@ TEST_F(GeometryFunctionsTest, testStEnvelopeAsPts) {
   };
 
   testStEnvelopeAsPtsFunc(
-      "MULTIPOINT (1 2, 2 4, 3 6, 4 8)", {{"(1 2)", "(4 8)"}});
+      "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", {{"(1 2)", "(4 8)"}});
   testStEnvelopeAsPtsFunc("LINESTRING (1 1, 2 2, 1 3)", {{"(1 1)", "(2 3)"}});
   testStEnvelopeAsPtsFunc("LINESTRING (8 4, 5 7)", {{"(5 4)", "(8 7)"}});
   testStEnvelopeAsPtsFunc(
@@ -2588,7 +2681,7 @@ TEST_F(GeometryFunctionsTest, testStNumPoints) {
   assertResult<int64_t>("ST_NumPoints", "GEOMETRYCOLLECTION EMPTY", 0);
 
   assertResult<int64_t>("ST_NumPoints", "POINT (1 2)", 1);
-  assertResult<int64_t>("ST_NumPoints", "MULTIPOINT (1 2, 2 4, 3 6, 4 8)", 4);
+  assertResult<int64_t>("ST_NumPoints", "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 4);
   assertResult<int64_t>("ST_NumPoints", "LINESTRING (8 4, 5 7)", 2);
   assertResult<int64_t>(
       "ST_NumPoints", "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 4);
@@ -2638,7 +2731,7 @@ TEST_F(GeometryFunctionsTest, testGeometryNearestPoints) {
   testGeometryNearestPointsFunc(
       "POINT (50 100)", "POINT (150 150)", {{"(50 100)", "(150 150)"}});
   testGeometryNearestPointsFunc(
-      "MULTIPOINT (50 100, 50 200)",
+      "MULTIPOINT ((50 100), (50 200))",
       "POINT (50 100)",
       {{"(50 100)", "(50 100)"}});
   testGeometryNearestPointsFunc(
@@ -2873,7 +2966,7 @@ TEST_F(GeometryFunctionsTest, testStGeometries) {
       "POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))",
       {{"POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))"}});
   testStGeometriesFunc(
-      "MULTIPOINT (1 2, 4 8, 16 32)",
+      "MULTIPOINT ((1 2), (4 8), (16 32))",
       {{"POINT (1 2)", "POINT (4 8)", "POINT (16 32)"}});
   testStGeometriesFunc(
       "MULTILINESTRING ((1 1, 2 2))", {{"LINESTRING (1 1, 2 2)"}});
@@ -2886,7 +2979,7 @@ TEST_F(GeometryFunctionsTest, testStGeometries) {
       {{"POINT (2 3)", "LINESTRING (2 3, 3 4)"}});
   testStGeometriesFunc(
       "GEOMETRYCOLLECTION(MULTIPOINT(0 0, 1 1), GEOMETRYCOLLECTION(MULTILINESTRING((2 2, 3 3))))",
-      {{"MULTIPOINT (0 0, 1 1)",
+      {{"MULTIPOINT ((0 0), (1 1))",
         "GEOMETRYCOLLECTION (MULTILINESTRING ((2 2, 3 3)))"}});
 
   std::optional<bool> emptyGeomReturnsNull = evaluateOnce<bool>(
@@ -2928,7 +3021,7 @@ TEST_F(GeometryFunctionsTest, testFlattenGeometryCollections) {
 
   testFlattenGeometryCollectionsFunc("POINT (1 5)", {{"POINT (1 5)"}});
   testFlattenGeometryCollectionsFunc(
-      "MULTIPOINT ((0 0), (1 1))", {{"MULTIPOINT (0 0, 1 1)"}});
+      "MULTIPOINT ((0 0), (1 1))", {{"MULTIPOINT ((0 0), (1 1))"}});
   testFlattenGeometryCollectionsFunc(
       "GEOMETRYCOLLECTION EMPTY",
       facebook::velox::common::testutil::optionalEmpty);
@@ -3146,7 +3239,7 @@ TEST_F(GeometryFunctionsTest, testGeometryToFromGeoJson) {
 
   // valid nonempty geometries should return as is.
   testGeometryToFromGeoJsonFunc("POINT (1 2)");
-  testGeometryToFromGeoJsonFunc("MULTIPOINT (1 2, 3 4)");
+  testGeometryToFromGeoJsonFunc("MULTIPOINT ((1 2), (3 4))");
   testGeometryToFromGeoJsonFunc("LINESTRING (0 0, 1 2, 3 4)");
   testGeometryToFromGeoJsonFunc("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))");
   testGeometryToFromGeoJsonFunc("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))");
@@ -3174,7 +3267,7 @@ TEST_F(GeometryFunctionsTest, testGeometryToFromGeoJson) {
       "GEOMETRYCOLLECTION (POINT EMPTY, POINT EMPTY)");
 
   // invalid geometries should return as is.
-  testGeometryToFromGeoJsonFunc("MULTIPOINT (0 0, 0 1, 1 1, 0 1)");
+  testGeometryToFromGeoJsonFunc("MULTIPOINT ((0 0), (0 1), (1 1), (0 1))");
   testGeometryToFromGeoJsonFunc("LINESTRING (0 0, 0 1, 0 1, 1 1, 1 0, 0 0)");
   testGeometryToFromGeoJsonFunc("LINESTRING (0 0, 1 1, 1 0, 0 1)");
 
@@ -3749,7 +3842,7 @@ TEST_F(GeometryFunctionsTest, testGeometryUnion) {
   testGeometryUnionFunc({{"POINT (1 1)", "POINT (1 1)"}}, "POINT (1 1)");
   testGeometryUnionFunc({{"POINT (1 1)"}}, "POINT (1 1)");
   testGeometryUnionFunc(
-      {{"POINT (1 2)", "POINT (3 4)"}}, "MULTIPOINT (1 2, 3 4)");
+      {{"POINT (1 2)", "POINT (3 4)"}}, "MULTIPOINT ((1 2), (3 4))");
 
   testGeometryUnionFunc({{"LINESTRING (0 0, 1 1)"}}, "LINESTRING (0 0, 1 1)");
 
@@ -3773,7 +3866,7 @@ TEST_F(GeometryFunctionsTest, testGeometryUnion) {
   testGeometryUnionFunc({{"POINT EMPTY", "POINT (1 2)"}}, "POINT (1 2)");
 
   testGeometryUnionFunc(
-      {{"POINT (1 2)", "POINT (3 4)"}}, "MULTIPOINT (1 2, 3 4)");
+      {{"POINT (1 2)", "POINT (3 4)"}}, "MULTIPOINT ((1 2), (3 4))");
 
   // Linestring test cases
   testGeometryUnionFunc(
@@ -4127,23 +4220,23 @@ TEST_F(GeometryFunctionsTest, testStMultiPoint) {
 
   // Happy cases
   testStMultiPointFunc(
-      {{"POINT (1 2)", "POINT (3 4)"}}, "MULTIPOINT (1 2, 3 4)");
+      {{"POINT (1 2)", "POINT (3 4)"}}, "MULTIPOINT ((1 2), (3 4))");
   testStMultiPointFunc(
       {{"POINT (1 2)", "POINT (3 4)", "POINT (5 6)"}},
-      "MULTIPOINT (1 2, 3 4, 5 6)");
+      "MULTIPOINT ((1 2), (3 4), (5 6))");
   testStMultiPointFunc(
       {{"POINT (1 2)", "POINT (3 4)", "POINT (5 6)", "POINT (7 8)"}},
-      "MULTIPOINT (1 2, 3 4, 5 6, 7 8)");
+      "MULTIPOINT ((1 2), (3 4), (5 6), (7 8))");
 
   // Duplicate points work
   testStMultiPointFunc(
-      {{"POINT (1 2)", "POINT (1 2)"}}, "MULTIPOINT (1 2, 1 2)");
+      {{"POINT (1 2)", "POINT (1 2)"}}, "MULTIPOINT ((1 2), (1 2))");
   testStMultiPointFunc(
       {{"POINT (1 2)", "POINT (3 4)", "POINT (1 2)"}},
-      "MULTIPOINT (1 2, 3 4, 1 2)");
+      "MULTIPOINT ((1 2), (3 4), (1 2))");
 
   // Single point
-  testStMultiPointFunc({{"POINT (1 2)"}}, "MULTIPOINT (1 2)");
+  testStMultiPointFunc({{"POINT (1 2)"}}, "MULTIPOINT ((1 2))");
 
   // Empty array
   testStMultiPointFunc(common::testutil::optionalEmpty, std::nullopt);
@@ -4212,7 +4305,7 @@ TEST_F(GeometryFunctionsTest, testToFromSphericalGeography) {
   testToFromSphericalGeographyFunc("POINT (180 90)");
   testToFromSphericalGeographyFunc("POINT (-180 -90)");
   testToFromSphericalGeographyFunc("POINT (1 2)");
-  testToFromSphericalGeographyFunc("MULTIPOINT (1 2, 3 4, 5 6, 7 8)");
+  testToFromSphericalGeographyFunc("MULTIPOINT ((1 2), (3 4), (5 6), (7 8))");
   testToFromSphericalGeographyFunc("POLYGON ((1 3, 1 4, 3 4, 3 3, 1 3))");
   testToFromSphericalGeographyFunc(
       "MULTIPOLYGON (((0 0, 0 2, 2 2, 2 0, 0 0)), ((3 0, 3 2, 5 2, 5 0, 3 0)), ((0 3, 0 5, 2 5, 2 3, 0 3)), ((3 3, 3 5, 5 5, 5 3, 3 3)))");
@@ -4261,23 +4354,23 @@ TEST_F(GeometryFunctionsTest, testStSphericalCentroid) {
   testStSphericalCentroidFunction("POINT (3 5)", "POINT (3 5)");
 
   // Single point in multipoint returns same point
-  testStSphericalCentroidFunction("MULTIPOINT (3 5)", "POINT (3 5)");
+  testStSphericalCentroidFunction("MULTIPOINT ((3 5))", "POINT (3 5)");
 
   // Two points on opposite sides of equator at same longitude
-  testStSphericalCentroidFunction("MULTIPOINT (0 -45, 0 45)", "POINT (0 0)");
+  testStSphericalCentroidFunction("MULTIPOINT ((0 -45), (0 45))", "POINT (0 0)");
 
   // Two points on equator at opposite longitudes
-  testStSphericalCentroidFunction("MULTIPOINT (45 0, -45 0)", "POINT (0 0)");
+  testStSphericalCentroidFunction("MULTIPOINT ((45 0), (-45 0))", "POINT (0 0)");
 
   // Two antipodal points on the equator (0, 0) and (-180, 0)
   // The result is arbitrary but GEOS calculates it as (-90 45)
-  testStSphericalCentroidFunction("MULTIPOINT (0 0, -180 0)", "POINT (-90 45)");
+  testStSphericalCentroidFunction("MULTIPOINT ((0 0), (-180 0))", "POINT (-90 45)");
 
   // Three points - the Java test expects (12.36780515862267, 0)
   // We'll check with some tolerance
   auto result = evaluateOnce<std::string>(
       "st_astext(to_geometry(st_centroid(to_spherical_geography(ST_GeometryFromText(c0)))))",
-      std::optional<std::string>("MULTIPOINT (0 -45, 0 45, 30 0)"));
+      std::optional<std::string>("MULTIPOINT ((0 -45), (0 45), (30 0))"));
   ASSERT_TRUE(result.has_value());
 
   // Parse the result to check longitude is approximately 12.3678
@@ -4286,7 +4379,7 @@ TEST_F(GeometryFunctionsTest, testStSphericalCentroid) {
 
   // Four symmetric points should give centroid at (0, 0)
   testStSphericalCentroidFunction(
-      "MULTIPOINT (0 -45, 0 45, 30 0, -30 0)", "POINT (0 0)");
+      "MULTIPOINT ((0 -45), (0 45), (30 0), (-30 0))", "POINT (0 0)");
 
   // Non-point/multipoint geometries should throw
   VELOX_ASSERT_USER_THROW(
@@ -4578,7 +4671,7 @@ TEST_F(GeometryFunctionsTest, testStSphericalArea) {
       testStSphericalAreaFunc("POINT (0 1)", std::nullopt),
       "ST_Area[SphericalGeography] only applies to Polygon or MultiPolygon. Input type is: Point");
   VELOX_ASSERT_USER_THROW(
-      testStSphericalAreaFunc("MULTIPOINT (1 2, 3 4)", std::nullopt),
+      testStSphericalAreaFunc("MULTIPOINT ((1 2), (3 4))", std::nullopt),
       "ST_Area[SphericalGeography] only applies to Polygon or MultiPolygon. Input type is: MultiPoint");
   VELOX_ASSERT_USER_THROW(
       testStSphericalAreaFunc("LINESTRING (1 2, 3 4)", std::nullopt),
