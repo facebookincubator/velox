@@ -4387,78 +4387,53 @@ PlanNodePtr MixedUnionNode::create(const folly::dynamic& obj, void* context) {
 RPCNode::RPCNode(
     const PlanNodeId& id,
     PlanNodePtr source,
-    std::string functionName,
-    TypePtr functionResultType,
+    core::CallTypedExprPtr call,
     std::string outputColumn,
     RowTypePtr outputType,
-    std::vector<std::string> argumentColumns,
-    std::vector<TypePtr> argumentTypes,
-    std::vector<VectorPtr> constantInputs,
     rpc::RPCStreamingMode streamingMode,
     int32_t dispatchBatchSize)
     : PlanNode(id),
       sources_{std::move(source)},
-      functionName_(std::move(functionName)),
-      resultType_(std::move(functionResultType)),
+      call_(std::move(call)),
       outputColumn_(std::move(outputColumn)),
       outputType_(std::move(outputType)),
-      argumentColumns_(std::move(argumentColumns)),
-      argumentTypes_(std::move(argumentTypes)),
-      constantInputs_(std::move(constantInputs)),
       streamingMode_(streamingMode),
       dispatchBatchSize_(dispatchBatchSize) {
-  VELOX_CHECK_EQ(
-      argumentColumns_.size(),
-      argumentTypes_.size(),
-      "argumentColumns and argumentTypes must have the same size");
-  VELOX_CHECK_EQ(
-      argumentColumns_.size(),
-      constantInputs_.size(),
-      "argumentColumns and constantInputs must have the same size");
+  VELOX_CHECK_NOT_NULL(call_, "RPCNode call must not be null");
   VELOX_CHECK(
       outputType_->containsChild(outputColumn_),
       "RPCNode outputType must contain the RPC result column: {}",
       outputColumn_);
+  VELOX_CHECK(
+      *call_->type() == *outputType_->findChild(outputColumn_),
+      "RPCNode call result type must match the output column type: {} vs {} for column {}",
+      call_->type()->toString(),
+      outputType_->findChild(outputColumn_)->toString(),
+      outputColumn_);
 }
 
 void RPCNode::addDetails(std::stringstream& stream) const {
-  stream << "function: " << functionName_ << ", outputColumn: " << outputColumn_
+  stream << "function: " << call_->name() << ", outputColumn: " << outputColumn_
          << ", streamingMode: "
          << (streamingMode_ == rpc::RPCStreamingMode::kBatch ? "BATCH"
                                                              : "PER_ROW");
   if (dispatchBatchSize_ > 0) {
     stream << ", dispatchBatchSize: " << dispatchBatchSize_;
   }
+  stream << ", args: [";
+  const auto& inputs = call_->inputs();
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    if (i > 0) {
+      stream << ", ";
+    }
+    stream << inputs[i]->toString();
+  }
+  stream << "]";
 }
 
 folly::dynamic RPCNode::serialize() const {
   auto obj = PlanNode::serialize();
-  obj["functionName"] = functionName_;
-  obj["resultType"] = resultType_->serialize();
-
-  // Serialize argument columns (string names).
-  auto colsArray = folly::dynamic::array();
-  for (const auto& col : argumentColumns_) {
-    colsArray.push_back(col);
-  }
-  obj["argumentColumns"] = std::move(colsArray);
-
-  // Serialize argument types.
-  obj["argumentTypes"] = ISerializable::serialize(argumentTypes_);
-
-  // Serialize constant inputs as ConstantTypedExpr for round-trip fidelity.
-  auto constArray = folly::dynamic::array();
-  for (size_t i = 0; i < constantInputs_.size(); ++i) {
-    if (constantInputs_[i]) {
-      auto constExpr =
-          std::make_shared<core::ConstantTypedExpr>(constantInputs_[i]);
-      constArray.push_back(constExpr->serialize());
-    } else {
-      constArray.push_back(nullptr);
-    }
-  }
-  obj["constantInputs"] = std::move(constArray);
-
+  obj["call"] = call_->serialize();
   obj["outputColumn"] = outputColumn_;
   obj["outputType"] = outputType_->serialize();
   obj["streamingMode"] =
@@ -4470,39 +4445,11 @@ folly::dynamic RPCNode::serialize() const {
 // static
 PlanNodePtr RPCNode::create(const folly::dynamic& obj, void* context) {
   auto source = deserializeSingleSource(obj, context);
-  auto functionName = obj["functionName"].asString();
-  auto resultType = ISerializable::deserialize<Type>(obj["resultType"]);
-
-  // Deserialize argument columns.
-  std::vector<std::string> argumentColumns;
-  if (obj.count("argumentColumns")) {
-    for (const auto& col : obj["argumentColumns"]) {
-      argumentColumns.push_back(col.asString());
-    }
-  }
-
-  // Deserialize argument types.
-  auto argumentTypes =
-      ISerializable::deserialize<std::vector<Type>>(obj["argumentTypes"]);
-
-  // Deserialize constant inputs from ConstantTypedExpr.
-  std::vector<VectorPtr> constantInputs;
-  if (obj.count("constantInputs")) {
-    for (const auto& item : obj["constantInputs"]) {
-      if (item.isNull()) {
-        constantInputs.push_back(nullptr);
-      } else {
-        auto constExpr = std::dynamic_pointer_cast<const ConstantTypedExpr>(
-            ISerializable::deserialize<ITypedExpr>(item, context));
-        VELOX_CHECK_NOT_NULL(
-            constExpr, "Expected ConstantTypedExpr for constant input");
-        auto* pool = static_cast<memory::MemoryPool*>(context);
-        constantInputs.push_back(constExpr->toConstantVector(pool));
-      }
-    }
-  }
-
   auto outputColumn = obj["outputColumn"].asString();
+
+  auto call = std::dynamic_pointer_cast<const CallTypedExpr>(
+      ISerializable::deserialize<ITypedExpr>(obj["call"], context));
+  VELOX_CHECK_NOT_NULL(call, "RPCNode 'call' must be a CallTypedExpr");
 
   // Deserialize explicit output type.
   RowTypePtr outputType;
@@ -4521,7 +4468,7 @@ PlanNodePtr RPCNode::create(const folly::dynamic& obj, void* context) {
       }
     }
     names.push_back(outputColumn);
-    types.push_back(resultType);
+    types.push_back(call->type());
     outputType = ROW(std::move(names), std::move(types));
   }
 
@@ -4533,13 +4480,9 @@ PlanNodePtr RPCNode::create(const folly::dynamic& obj, void* context) {
   return std::make_shared<RPCNode>(
       deserializePlanNodeId(obj),
       std::move(source),
-      std::move(functionName),
-      std::move(resultType),
+      std::move(call),
       std::move(outputColumn),
       std::move(outputType),
-      std::move(argumentColumns),
-      std::move(argumentTypes),
-      std::move(constantInputs),
       streamingMode,
       dispatchBatchSize);
 }

@@ -38,14 +38,14 @@ namespace facebook::velox::cudf_velox::prestosql {
 /// (month, quarter, year) extract components and compute differences.
 class DateDiffFunction : public CudfFunction {
  public:
-  explicit DateDiffFunction(const std::shared_ptr<velox::exec::Expr>& expr);
+  DateDiffFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool);
 
   /// Rejects forms cuDF can't evaluate: a null unit (the constructor
   /// requires a non-null constant unit and would throw), and the
   /// all-constant-operands form (eval() has no path for two scalar date/
   /// timestamp operands - see DateDiffFunction::binaryOp). Matches the
   /// canEvaluate pattern used by DateAddFunction/DateTruncFunction.
-  static bool canEvaluate(const std::shared_ptr<velox::exec::Expr>& expr);
+  static bool canEvaluate(const core::TypedExprPtr& expr);
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,

@@ -14,8 +14,14 @@
  * limitations under the License.
  */
 
+// This end-to-end test exercises the batch NimbleReader/NimbleWriter factories,
+// which live under dwio/nimble/.../fb/ and are internal-only (not shipped to
+// OSS). Guard the whole test so the OSS build (VELOX_ENABLE_NIMBLE off) does
+// not try to include the fb/ headers. Mirrors WriterOptionsAdapterTest.cpp.
+#ifdef VELOX_ENABLE_NIMBLE
+
 #include "dwio/nimble/velox/reader/fb/NimbleReader.h"
-#include "dwio/nimble/velox/writer/fb/NimbleWriter.h"
+#include "dwio/nimble/writer/fb/NimbleWriter.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
@@ -312,3 +318,5 @@ TEST_F(IcebergNimbleInsertTest, fieldIdRenameInsideArrayStruct) {
 
 } // namespace
 } // namespace facebook::velox::connector::hive::iceberg
+
+#endif // VELOX_ENABLE_NIMBLE

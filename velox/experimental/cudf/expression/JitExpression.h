@@ -31,9 +31,10 @@ class JitExpression : public CudfExpression {
   // Converts velox expressions to cudf::ast::tree, scalars and
   // precompute instructions and stores them
   JitExpression(
-      std::shared_ptr<velox::exec::Expr> expr,
+      const core::TypedExprPtr& expr,
       const RowTypePtr& inputRowSchema,
-      const CudfDateTimeContext& context);
+      memory::MemoryPool* pool,
+      const CudfDateTimeContext& context = {});
 
   // Evaluates the expression tree for the given input columns
   ColumnOrView eval(
@@ -46,7 +47,7 @@ class JitExpression : public CudfExpression {
 
   // Check if this specific operation (not its children) can be evaluated by
   // JitExpression
-  static bool canEvaluate(std::shared_ptr<velox::exec::Expr> expr);
+  static bool canEvaluate(const core::TypedExprPtr& expr);
 
  private:
   ASTExpression expr_;

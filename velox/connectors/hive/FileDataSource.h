@@ -33,10 +33,13 @@
 
 namespace facebook::velox::connector::hive {
 
-/// File-specific scan batch event with split metadata.
+/// File-specific scan batch event with split metadata. Non-owning fields are
+/// valid only for the duration of the scan batch callback.
 struct FileScanBatchEvent : public core::ScanBatchEvent {
   /// Table name from the connector table handle.
   std::string_view tableName;
+  /// Database / namespace name from the connector table handle.
+  std::string_view dbName;
   /// File path of the current split.
   std::string_view filePath;
   /// Non-owning pointer to the current split's partition keys.

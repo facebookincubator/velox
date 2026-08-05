@@ -18,7 +18,6 @@
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/TimezoneConversion.h"
 
-#include "velox/expression/ConstantExpr.h"
 #include "velox/functions/lib/TimeUtils.h"
 
 #include <cudf/binaryop.hpp>
@@ -53,12 +52,11 @@ cudf::data_type durationTypeForTimestamp(cudf::data_type timestampType) {
 
 } // namespace
 
-bool DateTruncFunction::canEvaluate(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+bool DateTruncFunction::canEvaluate(const core::TypedExprPtr& expr) {
   if (expr->inputs().size() != 2) {
     return false;
   }
-  if (std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[1])) {
+  if (expr->inputs()[1]->isConstantKind()) {
     return false;
   }
   auto unitString = constantVarcharValue(expr->inputs()[0]);
@@ -88,7 +86,8 @@ bool DateTruncFunction::canEvaluate(
 }
 
 DateTruncFunction::DateTruncFunction(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* /*pool*/) {
   VELOX_CHECK_EQ(
       expr->inputs().size(), 2, "date_trunc expects exactly 2 inputs");
   auto unitString = constantVarcharValue(expr->inputs()[0]);

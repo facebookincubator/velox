@@ -826,12 +826,20 @@ VectorPtr pushDictionaryToRowVectorLeavesImpl(
     }
     case VectorEncoding::Simple::ROW: {
       VELOX_CHECK_EQ(values->typeKind(), TypeKind::ROW);
+      // Re-index the struct's own nulls through the wrappers to align with the
+      // wrapped children. Needed whenever the struct has nulls (not only when a
+      // wrapper does), else a null-free dictionary leaves them misaligned.
       auto nulls = values->nulls();
-      for (auto& wrapper : wrappers) {
+      bool anyWrapperNulls = false;
+      for (const auto& wrapper : wrappers) {
         if (wrapper.encoded->nulls()) {
-          nulls = combineNulls(wrappers, size, values->rawNulls(), pool);
+          anyWrapperNulls = true;
           break;
         }
+      }
+      if (!wrappers.empty() &&
+          (values->rawNulls() != nullptr || anyWrapperNulls)) {
+        nulls = combineNulls(wrappers, size, values->rawNulls(), pool);
       }
       auto children = values->asUnchecked<RowVector>()->children();
       for (auto& child : children) {

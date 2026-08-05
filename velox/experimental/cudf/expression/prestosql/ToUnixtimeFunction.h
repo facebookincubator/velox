@@ -30,9 +30,9 @@ class ToUnixtimeFunction : public CudfFunction {
   /// falls back to CPU cleanly, instead of eval() indexing into an empty
   /// inputColumns. See DateAddFunction::canEvaluate / DateTruncFunction::
   /// canEvaluate for the same defensive pattern.
-  static bool canEvaluate(const std::shared_ptr<velox::exec::Expr>& expr);
+  static bool canEvaluate(const core::TypedExprPtr& expr);
 
-  explicit ToUnixtimeFunction(const std::shared_ptr<velox::exec::Expr>& expr);
+  ToUnixtimeFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool);
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,

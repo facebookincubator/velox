@@ -18,8 +18,6 @@
 #include "velox/experimental/cudf/expression/TimezoneConversion.h"
 #include "velox/experimental/cudf/expression/prestosql/DateDiffFunction.h"
 
-#include "velox/expression/ConstantExpr.h"
-
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/copying.hpp>
@@ -31,8 +29,7 @@
 
 namespace facebook::velox::cudf_velox::prestosql {
 
-bool DateDiffFunction::canEvaluate(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+bool DateDiffFunction::canEvaluate(const core::TypedExprPtr& expr) {
   if (expr->inputs().size() != 3) {
     return false;
   }
@@ -48,11 +45,8 @@ bool DateDiffFunction::canEvaluate(
   // eval() has no path for two constant date/timestamp operands (see
   // binaryOp's "Both date_diff operands are scalar" failure) - require at
   // least one to be a non-constant column.
-  auto leftExpr =
-      std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[1]);
-  auto rightExpr =
-      std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[2]);
-  if (leftExpr && rightExpr) {
+  if (expr->inputs()[1]->isConstantKind() &&
+      expr->inputs()[2]->isConstantKind()) {
     return false;
   }
 
@@ -78,14 +72,14 @@ bool DateDiffFunction::canEvaluate(
 }
 
 DateDiffFunction::DateDiffFunction(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
   VELOX_CHECK_EQ(
       expr->inputs().size(), 3, "date_diff expects exactly 3 inputs");
 
-  auto unitExpr =
-      std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]);
-  VELOX_CHECK_NOT_NULL(unitExpr, "date_diff unit must be a constant");
-  unit_ = unitExpr->value()->toString(0);
+  auto unitString = constantVarcharValue(expr->inputs()[0]);
+  VELOX_CHECK(unitString.has_value(), "date_diff unit must be a constant");
+  unit_ = unitString->str();
   std::transform(
       unit_.begin(), unit_.end(), unit_.begin(), [](unsigned char c) {
         return std::tolower(c);
@@ -123,14 +117,12 @@ DateDiffFunction::DateDiffFunction(
   // so we capture them here as cuDF scalars and pass them directly to
   // cudf::binary_operation's scalar overloads to avoid materializing
   // full columns on every eval() call.
-  if (auto c = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-          expr->inputs()[1])) {
-    leftScalar_ = makeScalarFromConstantExpr(c);
+  if (expr->inputs()[1]->isConstantKind()) {
+    leftScalar_ = makeScalarFromConstantExpr(expr->inputs()[1], pool);
     leftIsConst_ = true;
   }
-  if (auto c = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-          expr->inputs()[2])) {
-    rightScalar_ = makeScalarFromConstantExpr(c);
+  if (expr->inputs()[2]->isConstantKind()) {
+    rightScalar_ = makeScalarFromConstantExpr(expr->inputs()[2], pool);
     rightIsConst_ = true;
   }
 

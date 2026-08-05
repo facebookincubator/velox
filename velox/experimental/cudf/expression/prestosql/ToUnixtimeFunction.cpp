@@ -15,24 +15,21 @@
  */
 #include "velox/experimental/cudf/expression/prestosql/ToUnixtimeFunction.h"
 
-#include "velox/expression/ConstantExpr.h"
-
 #include <cudf/binaryop.hpp>
 #include <cudf/wrappers/timestamps.hpp>
 
 namespace facebook::velox::cudf_velox::prestosql {
 
-bool ToUnixtimeFunction::canEvaluate(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+bool ToUnixtimeFunction::canEvaluate(const core::TypedExprPtr& expr) {
   if (expr->inputs().size() != 1) {
     return false;
   }
-  return std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-             expr->inputs()[0]) == nullptr;
+  return !expr->inputs()[0]->isConstantKind();
 }
 
 ToUnixtimeFunction::ToUnixtimeFunction(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* /*pool*/) {
   VELOX_CHECK_EQ(
       expr->inputs().size(), 1, "to_unixtime expects exactly 1 input");
 }

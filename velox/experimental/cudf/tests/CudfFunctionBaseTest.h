@@ -16,8 +16,10 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
@@ -34,7 +36,10 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
     auto exprSet = compileExpression(expr, rowType);
     auto expected =
         functions::test::FunctionBaseTest::evaluate(*exprSet, input);
-    auto actual = evaluate(*exprSet, input);
+    // Build the typed expression directly from the SQL and the declared row
+    // type rather than reparsing exprSet's SQL, which loses information for
+    // computed-ROW dereferences and unnamed ROW fields.
+    auto actual = evaluate(makeTypedExpr(expr, rowType), input);
     facebook::velox::test::assertEqualVectors(expected, actual);
   }
 
@@ -42,32 +47,50 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
       exec::ExprSet& exprSet,
       const RowVectorPtr& input,
       const std::optional<SelectivityVector>& rows = std::nullopt) override {
-    exec::EvalCtx context(&execCtx_, &exprSet, input.get());
-
     VELOX_CHECK(!rows.has_value());
-    auto stream = cudf::get_default_stream();
+    // exec::Expr::toSql() cannot faithfully round-trip computed-ROW
+    // dereferences or unnamed ROW fields, so optimize and evaluate the typed
+    // expression directly instead.
+    return evaluate(
+        test_utils::optimizeTypedExpr(
+            exprSet.expr(0)->toSql(),
+            input->rowType(),
+            execCtx_.queryCtx(),
+            &execCtx_),
+        input);
+  }
+
+  // Optimizes and evaluates a typed expression on the GPU, returning the result
+  // column. Use this overload for expressions (e.g. dereferences of
+  // row_constructor) that cannot survive an exec::Expr SQL round-trip.
+  VectorPtr evaluate(
+      const core::TypedExprPtr& expr,
+      const RowVectorPtr& input) {
+    auto stream = cudfGlobalStreamPool().get_stream();
+    auto mr = get_output_mr();
     auto cudfTable = velox::cudf_velox::with_arrow::toCudfTable(
-        input, pool_.get(), stream, cudf::get_current_device_resource_ref());
+        input, pool_.get(), stream, mr);
+    auto optimized =
+        expression::optimize(expr, execCtx_.queryCtx(), execCtx_.pool());
     // Build the evaluation context from the query config exactly as
     // CudfFilterProject does, so a test can exercise timezone-aware functions
     // under a session timezone via queryCtx_->testingOverrideConfigUnsafe.
     const auto exprContext =
         contextFromConfig(execCtx_.queryCtx()->queryConfig());
     auto filterEvaluator = createCudfExpression(
-        {exprSet.exprs()[0]}, input->rowType(), exprContext);
+        optimized, input->rowType(), pool_.get(), exprContext);
     auto ownedColumns = cudfTable->release();
     std::vector<cudf::column_view> inputViews;
     inputViews.reserve(ownedColumns.size());
     for (auto& col : ownedColumns) {
       inputViews.push_back(col->view());
     }
-    auto filterColumn = filterEvaluator->eval(
-        inputViews, stream, cudf::get_current_device_resource_ref());
+    auto filterColumn = filterEvaluator->eval(inputViews, stream, mr);
     auto filterColumnView = asView(filterColumn);
     cudf::table_view resultTable({filterColumnView});
     // Preserve logical Velox output types, e.g. VARBINARY, when converting
     // the cuDF result back through Arrow.
-    auto outputType = ROW({"c0"}, {exprSet.exprs()[0]->type()});
+    auto outputType = ROW({"c0"}, {optimized->type()});
     auto result = velox::cudf_velox::with_arrow::toVeloxColumn(
         resultTable,
         pool_.get(),

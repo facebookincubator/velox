@@ -28,9 +28,9 @@ namespace facebook::velox::cudf_velox {
 /// only) and Presto (timestamp + date).
 class DateTruncFunction : public CudfFunction {
  public:
-  static bool canEvaluate(const std::shared_ptr<velox::exec::Expr>& expr);
+  static bool canEvaluate(const core::TypedExprPtr& expr);
 
-  explicit DateTruncFunction(const std::shared_ptr<velox::exec::Expr>& expr);
+  DateTruncFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool);
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,

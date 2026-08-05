@@ -107,6 +107,34 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
   int64_t bytesFlushed_ = 0;
 };
 
+void ParquetWriterOptions::merge(
+    const dwio::common::FormatSpecificOptions& overrides) {
+  const auto* parquetOverrides =
+      dynamic_cast<const ParquetWriterOptions*>(&overrides);
+  VELOX_CHECK_NOT_NULL(
+      parquetOverrides,
+      "Cannot merge Parquet writer options with a different "
+      "FormatSpecificOptions type.");
+
+  const auto mergeIfSet = [](auto& value, const auto& overrideValue) {
+    if (overrideValue.has_value()) {
+      value = overrideValue;
+    }
+  };
+  mergeIfSet(
+      parquetWriteTimestampUnit, parquetOverrides->parquetWriteTimestampUnit);
+  mergeIfSet(enableDictionary, parquetOverrides->enableDictionary);
+  mergeIfSet(
+      enableStoreDecimalAsInteger,
+      parquetOverrides->enableStoreDecimalAsInteger);
+  mergeIfSet(
+      dictionaryPageSizeLimit, parquetOverrides->dictionaryPageSizeLimit);
+  mergeIfSet(useParquetDataPageV2, parquetOverrides->useParquetDataPageV2);
+  mergeIfSet(dataPageSize, parquetOverrides->dataPageSize);
+  mergeIfSet(batchSize, parquetOverrides->batchSize);
+  mergeIfSet(createdBy, parquetOverrides->createdBy);
+}
+
 struct ArrowContext {
   std::unique_ptr<FileWriter> writer;
   std::shared_ptr<::arrow::Schema> schema;

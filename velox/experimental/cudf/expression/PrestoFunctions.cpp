@@ -24,9 +24,9 @@
 #include "velox/experimental/cudf/expression/prestosql/ToUnixtimeFunction.h"
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/SimpleVector.h"
 
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/strings/slice.hpp>
@@ -36,6 +36,19 @@
 
 namespace facebook::velox::cudf_velox {
 namespace {
+
+// Reads the scalar value of a constant expression, materialising the constant
+// vector via pool when the ConstantTypedExpr does not already hold one.
+template <typename T>
+T constantScalarValue(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
+  const auto* constExpr = expr->asUnchecked<core::ConstantTypedExpr>();
+  const auto vector = constExpr->hasValueVector()
+      ? constExpr->valueVector()
+      : constExpr->toConstantVector(pool);
+  return vector->template as<SimpleVector<T>>()->valueAt(0);
+}
 
 void registerPrestoArrayAccessFunctions(const std::string& prefix) {
   // Presto element_at is 1-based, allows negative indices from the end, and
@@ -65,18 +78,14 @@ void registerPrestoArrayAccessFunctions(const std::string& prefix) {
 
 class SubstrFunction : public CudfFunction {
  public:
-  explicit SubstrFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    using velox::exec::ConstantExpr;
-
+  SubstrFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
     VELOX_CHECK_GE(
         expr->inputs().size(), 2, "substr expects at least 2 inputs");
     VELOX_CHECK_LE(expr->inputs().size(), 3, "substr expects at most 3 inputs");
 
-    auto startExpr = std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
-    VELOX_CHECK_NOT_NULL(startExpr, "substr start must be a constant");
-
-    auto startValue =
-        startExpr->value()->as<SimpleVector<int64_t>>()->valueAt(0);
+    VELOX_CHECK(
+        expr->inputs()[1]->isConstantKind(), "substr start must be a constant");
+    auto startValue = constantScalarValue<int64_t>(expr->inputs()[1], pool);
     start_ = static_cast<cudf::size_type>(startValue);
     if (startValue >= 1) {
       // cuDF indexing starts at 0.
@@ -86,12 +95,10 @@ class SubstrFunction : public CudfFunction {
     }
 
     if (expr->inputs().size() > 2) {
-      auto lengthExpr =
-          std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[2]);
-      VELOX_CHECK_NOT_NULL(lengthExpr, "substr length must be a constant");
-
-      auto lengthValue =
-          lengthExpr->value()->as<SimpleVector<int64_t>>()->valueAt(0);
+      VELOX_CHECK(
+          expr->inputs()[2]->isConstantKind(),
+          "substr length must be a constant");
+      auto lengthValue = constantScalarValue<int64_t>(expr->inputs()[2], pool);
       // cuDF uses indices [begin, end).
       // Presto uses length as the length of the substring.
       // We compute the end as start + length.
@@ -128,8 +135,10 @@ void registerPrestoFunctions(const std::string& prefix) {
 
   registerCudfFunctions(
       {prefix + "substr", prefix + "substring"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<SubstrFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<SubstrFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("varchar")
@@ -145,8 +154,11 @@ void registerPrestoFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "plus",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<prestosql::DatePlusIntervalFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<prestosql::DatePlusIntervalFunction>(
+            expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("date")
@@ -156,8 +168,10 @@ void registerPrestoFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "date_add",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<prestosql::DateAddFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<prestosql::DateAddFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("date")
@@ -170,8 +184,10 @@ void registerPrestoFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "date_trunc",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<DateTruncFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<DateTruncFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("timestamp")
@@ -188,8 +204,10 @@ void registerPrestoFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "date_diff",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<prestosql::DateDiffFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<prestosql::DateDiffFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("bigint")
@@ -208,8 +226,10 @@ void registerPrestoFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "to_unixtime",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<prestosql::ToUnixtimeFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<prestosql::ToUnixtimeFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("double")

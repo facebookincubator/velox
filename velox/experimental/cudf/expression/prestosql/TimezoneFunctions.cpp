@@ -20,12 +20,11 @@
 
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
-#include "velox/expression/ConstantExpr.h"
-#include "velox/expression/Expr.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
+#include "velox/vector/SimpleVector.h"
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -62,8 +61,6 @@
 namespace facebook::velox::cudf_velox {
 namespace {
 
-using velox::exec::ConstantExpr;
-
 constexpr cudf::type_id kInt64 = cudf::type_id::INT64;
 constexpr cudf::type_id kBool8 = cudf::type_id::BOOL8;
 
@@ -71,26 +68,40 @@ cudf::data_type int64Type() {
   return cudf::data_type{kInt64};
 }
 
+// Materializes the constant argument at `index` into a value vector,
+// allocating from `pool` only when the ConstantTypedExpr does not already
+// hold one.
+VectorPtr constArgVector(
+    const core::TypedExprPtr& expr,
+    int32_t index,
+    memory::MemoryPool* pool) {
+  const auto& input = expr->inputs()[index];
+  VELOX_CHECK(
+      input->isConstantKind(),
+      "Expected a constant argument at index {}",
+      index);
+  const auto* constExpr = input->asUnchecked<core::ConstantTypedExpr>();
+  return constExpr->hasValueVector() ? constExpr->valueVector()
+                                      : constExpr->toConstantVector(pool);
+}
+
 // Reads a required constant string argument (e.g. a timezone name or format).
 std::string constStringArg(
-    const std::shared_ptr<velox::exec::Expr>& expr,
-    int32_t index) {
-  auto constant =
-      std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[index]);
-  VELOX_CHECK_NOT_NULL(
-      constant, "Expected a constant argument at index {}", index);
-  return constant->value()->toString(0);
+    const core::TypedExprPtr& expr,
+    int32_t index,
+    memory::MemoryPool* pool) {
+  auto vector = constArgVector(expr, index, pool);
+  VELOX_CHECK(!vector->isNullAt(0), "Expected a non-null constant argument");
+  return vector->as<SimpleVector<StringView>>()->valueAt(0).str();
 }
 
 // Reads a required constant integer argument (e.g. an hour/minute offset).
 int64_t constIntArg(
-    const std::shared_ptr<velox::exec::Expr>& expr,
-    int32_t index) {
-  auto constant =
-      std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[index]);
-  VELOX_CHECK_NOT_NULL(
-      constant, "Expected a constant argument at index {}", index);
-  return std::stoll(constant->value()->toString(0));
+    const core::TypedExprPtr& expr,
+    int32_t index,
+    memory::MemoryPool* pool) {
+  auto vector = constArgVector(expr, index, pool);
+  return vector->as<SimpleVector<int64_t>>()->valueAt(0);
 }
 
 // Reinterprets an 8-byte-wide column (timestamp/duration/int64) as another
@@ -515,7 +526,9 @@ std::string jodaToStrftime(const std::string& joda, TrailingZone& trailing) {
 // to_unixtime(timestamp with time zone) -> double.
 class ToUnixtimeFunction : public CudfFunction {
  public:
-  explicit ToUnixtimeFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  ToUnixtimeFunction(
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool* /*pool*/) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 1, "to_unixtime expects exactly 1 input");
   }
@@ -543,10 +556,10 @@ class ToUnixtimeFunction : public CudfFunction {
 // at_timezone(timestamp with time zone, varchar) -> timestamp with time zone.
 class AtTimezoneFunction : public CudfFunction {
  public:
-  explicit AtTimezoneFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  AtTimezoneFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "at_timezone expects exactly 2 inputs");
-    targetZoneId_ = tz::getTimeZoneID(constStringArg(expr, 1));
+    targetZoneId_ = tz::getTimeZoneID(constStringArg(expr, 1, pool));
   }
 
   ColumnOrView eval(
@@ -580,7 +593,8 @@ class AtTimezoneFunction : public CudfFunction {
 class TimezoneFieldFunction : public CudfFunction {
  public:
   TimezoneFieldFunction(
-      const std::shared_ptr<velox::exec::Expr>& expr,
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool* /*pool*/,
       bool minuteField)
       : minuteField_(minuteField) {
     VELOX_CHECK_EQ(
@@ -628,7 +642,7 @@ class TimezoneFieldFunction : public CudfFunction {
 // to_iso8601(timestamp with time zone) -> varchar.
 class ToIso8601Function : public CudfFunction {
  public:
-  explicit ToIso8601Function(const std::shared_ptr<velox::exec::Expr>& expr) {
+  ToIso8601Function(const core::TypedExprPtr& expr, memory::MemoryPool* /*pool*/) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 1, "to_iso8601 expects exactly 1 input");
   }
@@ -666,11 +680,12 @@ class ToIso8601Function : public CudfFunction {
 // format_datetime(timestamp with time zone, varchar) -> varchar.
 class FormatDatetimeFunction : public CudfFunction {
  public:
-  explicit FormatDatetimeFunction(
-      const std::shared_ptr<velox::exec::Expr>& expr) {
+  FormatDatetimeFunction(
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool* pool) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "format_datetime expects exactly 2 inputs");
-    strftime_ = jodaToStrftime(constStringArg(expr, 1), trailing_);
+    strftime_ = jodaToStrftime(constStringArg(expr, 1, pool), trailing_);
   }
 
   ColumnOrView eval(
@@ -1123,12 +1138,13 @@ class NowFunction : public CudfFunction {
 // parse_datetime(varchar, varchar) -> timestamp with time zone.
 class ParseDatetimeFunction : public CudfFunction {
  public:
-  explicit ParseDatetimeFunction(
-      const std::shared_ptr<velox::exec::Expr>& expr) {
+  ParseDatetimeFunction(
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool* pool) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "parse_datetime expects exactly 2 inputs");
     TrailingZone trailing = TrailingZone::kNone;
-    strptime_ = jodaToStrftime(constStringArg(expr, 1), trailing);
+    strptime_ = jodaToStrftime(constStringArg(expr, 1, pool), trailing);
     if (trailing == TrailingZone::kOffsetNoColon ||
         trailing == TrailingZone::kOffsetColon) {
       // to_timestamps folds the %z offset into the UTC instant. The parsed
@@ -1207,7 +1223,9 @@ class ParseDatetimeFunction : public CudfFunction {
 // from_iso8601_timestamp(varchar) -> timestamp with time zone.
 class FromIso8601Function : public CudfFunction {
  public:
-  explicit FromIso8601Function(const std::shared_ptr<velox::exec::Expr>& expr) {
+  FromIso8601Function(
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool* /*pool*/) {
     VELOX_CHECK_EQ(
         expr->inputs().size(),
         1,
@@ -1658,15 +1676,19 @@ void registerTimezoneFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "to_unixtime",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<ToUnixtimeFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<ToUnixtimeFunction>(expr, pool);
       },
       {twtzArgSignature("double")});
 
   registerCudfFunction(
       prefix + "at_timezone",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<AtTimezoneFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<AtTimezoneFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("timestamp with time zone")
@@ -1676,29 +1698,39 @@ void registerTimezoneFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "timezone_hour",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<TimezoneFieldFunction>(expr, /*minute=*/false);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<TimezoneFieldFunction>(
+            expr, pool, /*minute=*/false);
       },
       {twtzArgSignature("bigint")});
 
   registerCudfFunction(
       prefix + "timezone_minute",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<TimezoneFieldFunction>(expr, /*minute=*/true);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<TimezoneFieldFunction>(
+            expr, pool, /*minute=*/true);
       },
       {twtzArgSignature("bigint")});
 
   registerCudfFunction(
       prefix + "to_iso8601",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<ToIso8601Function>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<ToIso8601Function>(expr, pool);
       },
       {twtzArgSignature("varchar")});
 
   registerCudfFunction(
       prefix + "format_datetime",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<FormatDatetimeFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<FormatDatetimeFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("varchar")
@@ -1708,9 +1740,11 @@ void registerTimezoneFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "from_unixtime",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
         return std::make_shared<FromUnixtimeWithZoneFunction>(
-            tz::getTimeZoneID(constStringArg(expr, 1)),
+            tz::getTimeZoneID(constStringArg(expr, 1, pool)),
             FromUnixtimeRounding::kWhole);
       },
       {FunctionSignatureBuilder()
@@ -1721,14 +1755,16 @@ void registerTimezoneFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "from_unixtime",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
         // Compute hours*60 + minutes in int64 with overflow checks, mirroring
         // CPU FromUnixtimeFunction; tz::getTimeZoneID then bounds the result to
         // +/-840 minutes. Guards against a large hours value overflowing the
         // product and truncating into a bogus in-range offset.
         const auto offsetMinutes = checkedPlus(
-            checkedMultiply<int64_t>(constIntArg(expr, 1), 60),
-            constIntArg(expr, 2));
+            checkedMultiply<int64_t>(constIntArg(expr, 1, pool), 60),
+            constIntArg(expr, 2, pool));
         return std::make_shared<FromUnixtimeWithZoneFunction>(
             tz::getTimeZoneID(static_cast<int32_t>(offsetMinutes)),
             FromUnixtimeRounding::kFloorThenFraction);
@@ -1742,8 +1778,10 @@ void registerTimezoneFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "parse_datetime",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<ParseDatetimeFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<ParseDatetimeFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("timestamp with time zone")
@@ -1753,8 +1791,10 @@ void registerTimezoneFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "from_iso8601_timestamp",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<FromIso8601Function>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<FromIso8601Function>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("timestamp with time zone")
@@ -1765,7 +1805,9 @@ void registerTimezoneFunctions(const std::string& prefix) {
   // matches by name.
   registerCudfFunctions(
       {prefix + "now", prefix + "current_timestamp"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>&) {
+      [](const std::string&,
+         const core::TypedExprPtr&,
+         memory::MemoryPool* /*pool*/) {
         return std::make_shared<NowFunction>();
       },
       {});

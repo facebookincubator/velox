@@ -16,8 +16,8 @@
 #include "velox/experimental/cudf/expression/NullMask.h"
 #include "velox/experimental/cudf/expression/sparksql/SubStringFunction.h"
 
-#include "velox/expression/ConstantExpr.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/SimpleVector.h"
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -37,33 +37,40 @@
 namespace facebook::velox::cudf_velox::sparksql {
 namespace {
 
+// Materialises the value vector of a constant expression, using pool when the
+// ConstantTypedExpr does not already hold one.
+VectorPtr constantVector(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
+  const auto* constExpr = expr->asUnchecked<core::ConstantTypedExpr>();
+  return constExpr->hasValueVector() ? constExpr->valueVector()
+                                     : constExpr->toConstantVector(pool);
+}
+
 class SubStringFunction : public CudfFunction {
  public:
-  explicit SubStringFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    using velox::exec::ConstantExpr;
-
+  SubStringFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
     VELOX_CHECK_GE(
         expr->inputs().size(), 2, "substring expects at least 2 inputs");
     VELOX_CHECK_LE(
         expr->inputs().size(), 3, "substring expects at most 3 inputs");
 
-    if (auto inputExpr =
-            std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0])) {
+    if (expr->inputs()[0]->isConstantKind()) {
+      const auto inputVector = constantVector(expr->inputs()[0], pool);
       inputIsConstant_ = true;
-      inputIsNull_ = inputExpr->value()->isNullAt(0);
+      inputIsNull_ = inputVector->isNullAt(0);
       if (!inputIsNull_) {
-        input_ = inputExpr->value()->toString(0);
+        input_ = inputVector->toString(0);
         inputLength_ = utf8Length(input_);
       }
     }
 
-    if (auto startExpr =
-            std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1])) {
+    if (expr->inputs()[1]->isConstantKind()) {
+      const auto startVector = constantVector(expr->inputs()[1], pool);
       startIsConstant_ = true;
-      startIsNull_ = startExpr->value()->isNullAt(0);
+      startIsNull_ = startVector->isNullAt(0);
       if (!startIsNull_) {
-        rawStartValue_ =
-            startExpr->value()->as<SimpleVector<int32_t>>()->valueAt(0);
+        rawStartValue_ = startVector->as<SimpleVector<int32_t>>()->valueAt(0);
         if (rawStartValue_ > 0) {
           start_ = normalizePositiveStart(rawStartValue_);
         } else if (rawStartValue_ == 0) {
@@ -74,13 +81,13 @@ class SubStringFunction : public CudfFunction {
 
     hasLength_ = expr->inputs().size() == 3;
     if (hasLength_) {
-      if (auto lengthExpr =
-              std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[2])) {
+      if (expr->inputs()[2]->isConstantKind()) {
+        const auto lengthVector = constantVector(expr->inputs()[2], pool);
         lengthIsConstant_ = true;
-        lengthIsNull_ = lengthExpr->value()->isNullAt(0);
+        lengthIsNull_ = lengthVector->isNullAt(0);
         if (!lengthIsNull_) {
           length_ = static_cast<cudf::size_type>(
-              lengthExpr->value()->as<SimpleVector<int32_t>>()->valueAt(0));
+              lengthVector->as<SimpleVector<int32_t>>()->valueAt(0));
         }
       }
     }
@@ -540,8 +547,9 @@ class SubStringFunction : public CudfFunction {
 } // namespace
 
 std::shared_ptr<CudfFunction> makeSubStringFunction(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  return std::make_shared<SubStringFunction>(expr);
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
+  return std::make_shared<SubStringFunction>(expr, pool);
 }
 
 } // namespace facebook::velox::cudf_velox::sparksql
