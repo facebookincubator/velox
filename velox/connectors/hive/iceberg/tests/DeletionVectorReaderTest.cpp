@@ -16,9 +16,12 @@
 
 #include "velox/connectors/hive/iceberg/DeletionVectorReader.h"
 
+#include "velox/connectors/hive/iceberg/DeletionVectorFormat.h"
+
 #include <fstream>
 
 #include <gtest/gtest.h>
+#include <zlib.h>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -93,7 +96,50 @@ std::string serializeRoaringBitmapNoRun(const std::vector<int64_t>& positions) {
   return data;
 }
 
-// Serializes a roaring bitmap in the portable format with run containers
+// Concatenates the deletion-vector-v1 magic bytes with a serialized roaring
+// bitmap. The frame's length prefix and CRC-32 both cover these bytes.
+std::string magicAndVectorBytes(const std::string& bitmap) {
+  std::string bytes;
+  bytes.append(kDeletionVectorMagic, kDeletionVectorMagicSize);
+  bytes.append(bitmap);
+  return bytes;
+}
+
+// Wraps a serialized roaring bitmap in the Iceberg deletion-vector-v1 blob
+// frame: [length: 4B BE][magic D1 D3 39 64][bitmap][CRC-32: 4B BE], where the
+// length and CRC-32 cover magic + bitmap. 'crc' is the checksum stored in the
+// trailing 4 bytes; tests pass it explicitly so they can exercise both the
+// spec-compliant CRC and a deliberately wrong one.
+std::string frameDeletionVectorV1(const std::string& bitmap, uint32_t crc) {
+  const std::string magicAndVector = magicAndVectorBytes(bitmap);
+
+  auto appendBigEndian32 = [](std::string& out, uint32_t value) {
+    const char bytes[4] = {
+        static_cast<char>((value >> 24) & 0xFF),
+        static_cast<char>((value >> 16) & 0xFF),
+        static_cast<char>((value >> 8) & 0xFF),
+        static_cast<char>(value & 0xFF)};
+    out.append(bytes, sizeof(bytes));
+  };
+
+  std::string framed;
+  framed.reserve(sizeof(uint32_t) + magicAndVector.size() + sizeof(uint32_t));
+  appendBigEndian32(framed, static_cast<uint32_t>(magicAndVector.size()));
+  framed.append(magicAndVector);
+  appendBigEndian32(framed, crc);
+  return framed;
+}
+
+// Standard CRC-32 (IEEE 802.3, as computed by java.util.zip.CRC32 used by
+// Iceberg). zlib's crc32 is the reference implementation of that algorithm.
+uint32_t standardCrc32(const std::string& data) {
+  uLong crc = crc32(0L, Z_NULL, 0);
+  crc = crc32(
+      crc,
+      reinterpret_cast<const Bytef*>(data.data()),
+      static_cast<uInt>(data.size()));
+  return static_cast<uint32_t>(crc);
+}
 // (cookie = 12347). All containers are run-encoded.
 std::string serializeRoaringBitmapWithRuns(
     const std::vector<
@@ -272,6 +318,55 @@ TEST_F(DeletionVectorReaderTest, basicArrayContainer) {
   auto setBits = getSetBits(bitmap, 100);
   EXPECT_EQ(setBits, (std::vector<uint64_t>{0, 5, 10, 99}));
   EXPECT_TRUE(reader.noMoreData());
+}
+
+// Anchors standardCrc32() to the canonical CRC-32 test vector so the framed-DV
+// tests below assert against the true Iceberg (java.util.zip.CRC32) checksum,
+// not whatever the reader happens to compute.
+TEST_F(DeletionVectorReaderTest, standardCrc32TestVector) {
+  EXPECT_EQ(standardCrc32("123456789"), 0xCBF43926u);
+}
+
+// A deletion-vector-v1 blob written by Iceberg/Spark stores the standard
+// CRC-32 (java.util.zip.CRC32) over magic + bitmap. The reader must validate
+// against that same checksum and parse the inner bitmap.
+TEST_F(DeletionVectorReaderTest, framedBlobStandardCrc) {
+  std::vector<int64_t> positions = {0, 5, 10, 99};
+  const auto bitmap = serializeRoaringBitmapNoRun(positions);
+  const uint32_t crc = standardCrc32(magicAndVectorBytes(bitmap));
+  const auto framed = frameDeletionVectorV1(bitmap, crc);
+
+  auto tempFile = writeDvFile(framed);
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(), positions.size(), framed.size(), 0, framed.size());
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  auto bitmapBuffer = allocateBitmap(100);
+  reader.readDeletePositions(0, 100, bitmapBuffer);
+
+  auto setBits = getSetBits(bitmapBuffer, 100);
+  EXPECT_EQ(setBits, (std::vector<uint64_t>{0, 5, 10, 99}));
+}
+
+// A frame carrying the old un-inverted checksum (the standard CRC-32 without
+// the final one's-complement — the bug this test guards against) must be
+// rejected: it is not the CRC-32 Iceberg stores.
+TEST_F(DeletionVectorReaderTest, framedBlobRejectsUninvertedCrc) {
+  std::vector<int64_t> positions = {0, 5, 10, 99};
+  const auto bitmap = serializeRoaringBitmapNoRun(positions);
+  const auto magicAndVector = magicAndVectorBytes(bitmap);
+  const uint32_t uninvertedCrc = ~standardCrc32(magicAndVector);
+  const auto framed = frameDeletionVectorV1(bitmap, uninvertedCrc);
+
+  auto tempFile = writeDvFile(framed);
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(), positions.size(), framed.size(), 0, framed.size());
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  auto bitmapBuffer = allocateBitmap(100);
+  VELOX_ASSERT_THROW(
+      reader.readDeletePositions(0, 100, bitmapBuffer),
+      "Deletion-vector-v1 CRC-32 mismatch");
 }
 
 TEST_F(DeletionVectorReaderTest, batchRangeFiltering) {

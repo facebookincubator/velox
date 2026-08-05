@@ -1928,7 +1928,8 @@ std::unique_ptr<Filter> NegatedBigintRange::mergeWith(
         return other->mergeWith(this);
       }
       assert(this->lower() <= otherNegatedRange->lower());
-      if (this->upper() + 1 < otherNegatedRange->lower()) {
+      if (this->upper() < std::numeric_limits<int64_t>::max() &&
+          this->upper() + 1 < otherNegatedRange->lower()) {
         std::vector<std::unique_ptr<common::BigintRange>> outRanges;
         int64_t smallLower = this->lower();
         int64_t smallUpper = this->upper();

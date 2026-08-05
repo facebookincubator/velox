@@ -52,6 +52,7 @@ add_executable(
   HashTest.cpp
   InitcapTest.cpp
   InTest.cpp
+  IntervalArithmeticTest.cpp
   JsonArrayLengthTest.cpp
   JsonObjectKeysTest.cpp
   LeastGreatestTest.cpp

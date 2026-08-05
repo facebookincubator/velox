@@ -73,9 +73,9 @@ of available functions [can be found here.](https://facebookincubator.github.io/
 
 Recent blog posts ([all posts](https://velox-lib.io/blog)):
 
+- [Build Once, Probe Many: Hash Table Caching in Velox](https://velox-lib.io/blog/hash-table-caching) (2026-08-03)
+- [War of the Allocators](https://velox-lib.io/blog/war-of-the-allocators) (2026-07-27)
 - [Making OpenZL Available in Nimble OSS](https://velox-lib.io/blog/openzl-in-nimble-oss) (2026-07-05)
-- [Why RIGHT SEMI JOIN Can Be Slower Than LEFT SEMI JOIN in Velox](https://velox-lib.io/blog/right-semi-join-performance) (2026-06-26)
-- [From copyBits to SIMD: Accelerating Parquet DELTA Decoding in Velox](https://velox-lib.io/blog/parquet-delta-decoding) (2026-06-17)
 
 ## Community
 
@@ -248,9 +248,12 @@ disable grouping on Linux, pass `-DVELOX_ENABLE_GROUPED_TESTS=OFF` via
 
 Note that,
 * Velox requires a compiler at the minimum GCC 11.0 or Clang 15.0.
-* On x86 CPUs, Velox requires BMI, BMI2, and F16C, and uses AVX, AVX2,
-  and SSE where available.
-* On Arm CPUs, Velox uses Neon and Neon64 where available.
+* On x86 CPUs, Velox requires at least SSE4.2. By default, Velox builds for
+  `CPU_TARGET=avx` on AVX-capable hosts, which requires AVX, AVX2, FMA, F16C,
+  LZCNT, and BMI2. To build for the minimum x86 baseline, set
+  `CPU_TARGET=sse`.
+* On Arm CPUs, Velox supports Apple Silicon with `CPU_TARGET=arm64` and Linux
+  AArch64 with `CPU_TARGET=aarch64`.
 
 Build metrics for Velox are published at <https://facebookincubator.github.io/velox/bm-report/>
 

@@ -18,9 +18,8 @@
 
 #include <fstream>
 
-#include <folly/hash/Checksum.h>
-#include <folly/lang/Bits.h>
 #include <gtest/gtest.h>
+#include <zlib.h>
 
 #include <cstring>
 
@@ -343,9 +342,11 @@ TEST_F(DeletionVectorWriterTest, deletionVectorV1FrameLayout) {
   ASSERT_EQ(blob.size(), bitmap.size() + 12);
 
   auto readBigEndian = [](const char* p) {
-    uint32_t value;
-    std::memcpy(&value, p, sizeof(value));
-    return folly::Endian::big(value);
+    const auto* bytes = reinterpret_cast<const unsigned char*>(p);
+    return (static_cast<uint32_t>(bytes[0]) << 24) |
+        (static_cast<uint32_t>(bytes[1]) << 16) |
+        (static_cast<uint32_t>(bytes[2]) << 8) |
+        static_cast<uint32_t>(bytes[3]);
   };
 
   // [length: 4B BE] covers magic (4) + bitmap.
@@ -359,11 +360,17 @@ TEST_F(DeletionVectorWriterTest, deletionVectorV1FrameLayout) {
   // [bitmap] matches the writer's serialize() output.
   EXPECT_EQ(blob.substr(8, bitmap.size()), bitmap);
 
-  // [CRC-32: 4B BE] over magic + bitmap.
+  // [CRC-32: 4B BE] over magic + bitmap. Iceberg stores the standard CRC-32
+  // (java.util.zip.CRC32); zlib's crc32 is the reference implementation of that
+  // same IEEE 802.3 algorithm.
   const uint32_t storedCrc =
       readBigEndian(blob.data() + 4 + magicAndVectorLength);
-  const uint32_t expectedCrc = folly::crc32(
-      reinterpret_cast<const uint8_t*>(blob.data() + 4), magicAndVectorLength);
+  uLong crcState = crc32(0L, Z_NULL, 0);
+  crcState = crc32(
+      crcState,
+      reinterpret_cast<const Bytef*>(blob.data() + 4),
+      static_cast<uInt>(magicAndVectorLength));
+  const auto expectedCrc = static_cast<uint32_t>(crcState);
   EXPECT_EQ(storedCrc, expectedCrc);
 }
 

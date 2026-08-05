@@ -16,13 +16,13 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
@@ -36,6 +36,7 @@
 #include <cudf/copying.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/reduction.hpp>
+#include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
 
 namespace {
@@ -542,6 +543,22 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
             cudf_velox::veloxToCudfDataType(resultType),
             stream,
             mr);
+        // Null out groups where count == 0 (empty groups).
+        // SQL semantics require avg of an empty group to be NULL, but
+        // cudf's 0/0 division produces NaN.  We mask on count rather
+        // than using column_nans_to_nulls so that legitimate NaN
+        // results (from NaN inputs) are preserved.
+        cudf::numeric_scalar<int64_t> zero(0, true, stream, get_temp_mr());
+        auto validMask = cudf::binary_operation(
+            *count,
+            zero,
+            cudf::binary_operator::GREATER,
+            cudf::data_type{cudf::type_id::BOOL8},
+            stream,
+            get_temp_mr());
+        auto [mask, nullCount] =
+            cudf::bools_to_mask(*validMask, stream, get_temp_mr());
+        avg->set_null_mask(std::move(*mask), nullCount);
         return avg;
       }
       default:
@@ -812,7 +829,8 @@ bool canGroupbyAggregationBeEvaluatedByCudf(
 
 bool canGroupbyBeEvaluatedByCudf(
     const core::AggregationNode& aggregationNode,
-    core::QueryCtx* queryCtx) {
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool) {
   const core::PlanNode* sourceNode = aggregationNode.sources().empty()
       ? nullptr
       : aggregationNode.sources()[0].get();
@@ -847,8 +865,7 @@ bool canGroupbyBeEvaluatedByCudf(
     // Check input expressions can be evaluated by cuDF, expand the input first.
     for (const auto& input : aggregate.call->inputs()) {
       auto expandedInput = expandFieldReference(input, sourceNode);
-      std::vector<core::TypedExprPtr> exprs = {expandedInput};
-      if (!canBeEvaluatedByCudf(exprs, queryCtx)) {
+      if (!canExprRunOnGpu(expandedInput, queryCtx, pool)) {
         return false;
       }
     }
@@ -856,7 +873,7 @@ bool canGroupbyBeEvaluatedByCudf(
 
   // Check grouping key expressions
   if (!canGroupingKeysBeEvaluatedByCudf(
-          aggregationNode.groupingKeys(), sourceNode, queryCtx)) {
+          aggregationNode.groupingKeys(), sourceNode, queryCtx, pool)) {
     return false;
   }
 

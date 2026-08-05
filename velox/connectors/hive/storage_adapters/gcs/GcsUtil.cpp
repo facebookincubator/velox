@@ -18,21 +18,24 @@
 
 namespace facebook::velox {
 
-std::string getErrorStringFromGcsError(const google::cloud::StatusCode& code) {
+namespace {
+
+// Returns true for status codes treated as transient by the GCS retry policy.
+bool isRetryableGcsStatus(google::cloud::StatusCode code) {
   using ::google::cloud::StatusCode;
 
   switch (code) {
-    case StatusCode::kNotFound:
-      return "Resource not found";
-    case StatusCode::kPermissionDenied:
-      return "Access denied";
+    case StatusCode::kDeadlineExceeded:
+    case StatusCode::kInternal:
+    case StatusCode::kResourceExhausted:
     case StatusCode::kUnavailable:
-      return "Service unavailable";
-
+      return true;
     default:
-      return "Unknown error";
+      return false;
   }
 }
+
+} // namespace
 
 void checkGcsStatus(
     const google::cloud::Status outcome,
@@ -40,17 +43,23 @@ void checkGcsStatus(
     const std::string& bucket,
     const std::string& key) {
   if (!outcome.ok()) {
-    const auto errMsg = fmt::format(
-        "{} due to: Path:'{}', SDK Error Type:{}, GCS Status Code:{},  Message:'{}'",
+    auto errorMessage = fmt::format(
+        "{} due to: Path:'{}', GCS Status Code:{}, Error Domain:'{}', Error Reason:'{}', Message:'{}'",
         errorMsgPrefix,
         gcsURI(bucket, key),
+        google::cloud::StatusCodeToString(outcome.code()),
         outcome.error_info().domain(),
-        getErrorStringFromGcsError(outcome.code()),
+        outcome.error_info().reason(),
         outcome.message());
-    if (outcome.code() == google::cloud::StatusCode::kNotFound) {
-      VELOX_FILE_NOT_FOUND_ERROR(errMsg);
+    if (isRetryableGcsStatus(outcome.code())) {
+      errorMessage.append(
+          " This GCS error is transient. Consider increasing "
+          "'hive.gcs.max-retry-count' or 'hive.gcs.max-retry-time'.");
     }
-    VELOX_FAIL(errMsg);
+    if (outcome.code() == google::cloud::StatusCode::kNotFound) {
+      VELOX_FILE_NOT_FOUND_ERROR(errorMessage);
+    }
+    VELOX_FAIL(errorMessage);
   }
 }
 

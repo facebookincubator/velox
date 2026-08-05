@@ -53,6 +53,8 @@ Config::Entry<uint32_t> Config::COMPRESSION_THRESHOLD(
     "orc.compression.threshold",
     256);
 
+Config::Entry<bool> Config::VERIFY_COMPRESSION("orc.compression.verify", false);
+
 Config::Entry<bool> Config::CREATE_INDEX{"hive.exec.orc.create.index", true};
 
 Config::Entry<uint32_t> Config::ROW_INDEX_STRIDE{

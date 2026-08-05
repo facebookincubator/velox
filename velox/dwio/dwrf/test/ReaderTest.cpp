@@ -168,6 +168,17 @@ TEST_F(TestReader, testWriterVersions) {
       "future - 99", writerVersionToString(static_cast<WriterVersion>(99)));
 }
 
+TEST_F(TestReader, currentStripe) {
+  dwio::common::ReaderOptions readerOpts{pool()};
+  auto reader = DwrfReader::create(
+      createFileBufferedInput(getFMSmallFile(), readerOpts.memoryPool()),
+      readerOpts);
+  auto rowReader = reader->createRowReader();
+  VectorPtr batch;
+  ASSERT_GT(rowReader->next(1000, batch), 0);
+  EXPECT_LT(rowReader->currentStripe(), reader->getNumberOfStripes());
+}
+
 // This relies on schema and data inside of our fm_small and fm_large orc files,
 // and is not composeable with other schema/datas
 void verifyFlatMapReading(
@@ -1502,6 +1513,121 @@ TEST_F(TestReader, testMismatchSchemaIncompatible) {
     EXPECT_THROW(
         ColumnSelector cs(reqType, rowType), facebook::velox::VeloxUserError);
   }
+}
+
+namespace {
+// Writes 'fileData' (whose type is the physical file schema) to a DWRF file,
+// then opens it requesting 'tableSchema' with 'columnMappingMode' and reads all
+// columns back. Returns the reader (so the caller can inspect rowType()) and
+// the fully-read result vector. In ColumnMappingMode::kName the reader renames
+// the file columns to the table schema by position only when the file's
+// physical names are all Hive placeholders; otherwise it keeps the file's
+// physical names. In ColumnMappingMode::kPosition it always renames by
+// position.
+std::pair<std::unique_ptr<DwrfReader>, RowVectorPtr> readWithColumnMapping(
+    memory::MemoryPool& pool,
+    const RowVectorPtr& fileData,
+    const RowTypePtr& tableSchema,
+    dwio::common::ColumnMappingMode columnMappingMode) {
+  auto sink = std::make_unique<MemorySink>(
+      16 * 1024 * 1024, dwio::common::FileSink::Options{.pool = &pool});
+  auto* sinkPtr = sink.get();
+  // Writer owns sink. Keep the writer alive until the data is copied out,
+  // otherwise destroying the writer frees the sink and sinkPtr dangles.
+  auto writer = E2EWriterTestUtil::writeData(
+      std::move(sink),
+      asRowType(fileData->type()),
+      {fileData},
+      std::make_shared<dwrf::Config>());
+
+  dwio::common::ReaderOptions readerOpts(&pool);
+  readerOpts.setColumnMappingMode(columnMappingMode);
+  readerOpts.setFileSchema(tableSchema);
+  std::string data(sinkPtr->data(), sinkPtr->size());
+  auto reader = std::make_unique<DwrfReader>(
+      readerOpts,
+      std::make_unique<BufferedInput>(
+          std::make_shared<InMemoryReadFile>(std::move(data)),
+          readerOpts.memoryPool()));
+
+  // Read all columns using the reader's (possibly renamed) schema.
+  RowReaderOptions rowReaderOpts;
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr result;
+  rowReader->next(fileData->size(), result);
+  return {std::move(reader), std::dynamic_pointer_cast<RowVector>(result)};
+}
+} // namespace
+
+// File written by old Hive with placeholder names (_col0, _col1). In name-based
+// mapping the requested names (id, name) are absent from the file, so a plain
+// by-name read would find nothing. Because every physical name is a Hive
+// placeholder, the reader renames the file columns to the table schema by
+// position, and the data reads back under the requested names.
+TEST_F(TestReader, columnMappingPositionalFallbackForHivePlaceholders) {
+  auto fileData = makeRowVector(
+      {"_col0", "_col1"},
+      {makeFlatVector<int32_t>({7, 8}),
+       makeFlatVector<StringView>({"a", "b"})});
+  auto tableSchema = ROW({"id", "name"}, {INTEGER(), VARCHAR()});
+  auto [reader, result] = readWithColumnMapping(
+      *pool(), fileData, tableSchema, dwio::common::ColumnMappingMode::kName);
+
+  // File columns were renamed to the table schema by position.
+  EXPECT_TRUE(*reader->rowType() == *tableSchema);
+  ASSERT_TRUE(result != nullptr);
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>({7, 8}),
+       makeFlatVector<StringView>({"a", "b"})});
+  assertEqualVectors(expected, result);
+}
+
+// File has real physical names that do not match the requested names. In
+// name-based mapping (not all placeholders) the reader must NOT rename by
+// position; the file's physical names are preserved so a downstream by-name
+// match binds to the real columns.
+TEST_F(TestReader, columnMappingRealNamesMappedByName) {
+  auto fileData = makeRowVector(
+      {"uid", "label"},
+      {makeFlatVector<int32_t>({7, 8}),
+       makeFlatVector<StringView>({"a", "b"})});
+  auto tableSchema = ROW({"id", "name"}, {INTEGER(), VARCHAR()});
+  auto [reader, result] = readWithColumnMapping(
+      *pool(), fileData, tableSchema, dwio::common::ColumnMappingMode::kName);
+
+  // File columns are NOT renamed; the physical names are preserved.
+  EXPECT_EQ(reader->rowType()->nameOf(0), "uid");
+  EXPECT_EQ(reader->rowType()->nameOf(1), "label");
+  ASSERT_TRUE(result != nullptr);
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>({7, 8}),
+       makeFlatVector<StringView>({"a", "b"})});
+  assertEqualVectors(expected, result);
+}
+
+// File has real physical names but the caller requested position-based mapping
+// (e.g. Spark's orc.force.positional.evolution, expressed as kPosition). The
+// reader renames the file columns to the table schema by position, and the data
+// reads back under the requested names.
+TEST_F(TestReader, columnMappingRealNamesMappedByPosition) {
+  auto fileData = makeRowVector(
+      {"uid", "label"},
+      {makeFlatVector<int32_t>({7, 8}),
+       makeFlatVector<StringView>({"a", "b"})});
+  auto tableSchema = ROW({"id", "name"}, {INTEGER(), VARCHAR()});
+  auto [reader, result] = readWithColumnMapping(
+      *pool(),
+      fileData,
+      tableSchema,
+      dwio::common::ColumnMappingMode::kPosition);
+
+  // File columns were renamed to the table schema by position.
+  EXPECT_TRUE(*reader->rowType() == *tableSchema);
+  ASSERT_TRUE(result != nullptr);
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>({7, 8}),
+       makeFlatVector<StringView>({"a", "b"})});
+  assertEqualVectors(expected, result);
 }
 
 TEST_F(TestReader, fileColumnNamesReadAsLowerCase) {
@@ -3139,6 +3265,52 @@ TEST_F(TestReader, mapAsStructAllEmpty) {
   ASSERT_EQ(rowReader->next(10, batch), 2);
   auto expected = makeRowVector({
       makeRowVector({"1"}, {makeNullConstant(TypeKind::BIGINT, 2)}),
+  });
+  assertEqualVectors(expected, batch);
+}
+
+// A map-as-struct read that projects only a small subset of the keys present in
+// the (regular) map on disk. The reader pushes an IN filter over the projected
+// keys onto the map key sub-reader so the element reader never decodes values
+// for unprojected keys. The output must be identical to decoding the whole map
+// and dropping unprojected keys afterward -- including rows that are missing a
+// projected key, rows whose keys are all unprojected, empty maps, and null
+// maps.
+TEST_F(TestReader, mapAsStructKeySubsetExtraction) {
+  auto row = makeRowVector({
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{1: 10, 2: 20, 3: 30, 4: 40, 5: 50}", // all keys present
+          "{2: 21, 4: 41}", // no projected key present
+          "{1: 12, 3: 32}", // both projected keys present
+          "{}", // empty map
+          "null", // null map
+      }),
+  });
+  auto [writer, reader] =
+      createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_);
+  // Project only keys "3" and "1"; keys 2, 4, 5 are unprojected and must be
+  // filtered out of the element decode.
+  auto outType = ROW({"c0"}, {ROW({"3", "1"}, BIGINT())});
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*outType);
+  spec->childByName("c0")->setFlatMapAsStruct(true);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr batch = BaseVector::create(outType, 0, pool());
+  ASSERT_EQ(rowReader->next(10, batch), 5);
+  // Rows missing a projected key and empty maps yield a non-null struct with
+  // null children; a null map yields a null struct row (setComplexNulls).
+  auto expected = makeRowVector({
+      makeRowVector(
+          {"3", "1"},
+          {
+              makeNullableFlatVector<int64_t>(
+                  {30, std::nullopt, 32, std::nullopt, std::nullopt}),
+              makeNullableFlatVector<int64_t>(
+                  {10, std::nullopt, 12, std::nullopt, std::nullopt}),
+          },
+          /*isNullAt=*/[](vector_size_t row) { return row == 4; }),
   });
   assertEqualVectors(expected, batch);
 }
