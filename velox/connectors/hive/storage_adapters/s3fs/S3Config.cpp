@@ -24,18 +24,33 @@ namespace facebook::velox::filesystems {
 static constexpr size_t kMinimumMultipartMinPartSize = 5U << 20; // 5MB
 static constexpr size_t kMaximumMultipartMinPartSize = 5U << 30; // 5GB
 
+std::optional<std::string> S3Config::configValue(
+    const config::ConfigBase& config,
+    std::string_view configKey) {
+  if (auto value = config.get<std::string>(std::string(configKey))) {
+    return value;
+  }
+  // Fall back to the deprecated "hive.s3." prefix.
+  VELOX_DCHECK(
+      configKey.substr(0, std::string_view(kS3Prefix).size()) == kS3Prefix,
+      "S3 config key must be prefixed with '{}': {}",
+      kS3Prefix,
+      configKey);
+  const auto suffix = configKey.substr(std::string_view(kS3Prefix).size());
+  return config.get<std::string>(
+      fmt::format("{}{}", kS3DeprecatedPrefix, suffix));
+}
+
 std::string S3Config::cacheKey(
     std::string_view bucket,
     std::shared_ptr<const config::ConfigBase> config) {
-  auto bucketEndpoint = bucketConfigKey(Keys::kEndpoint, bucket);
-  if (config->valueExists(bucketEndpoint)) {
-    return fmt::format(
-        "{}-{}", config->get<std::string>(bucketEndpoint).value(), bucket);
+  if (auto bucketEndpoint =
+          configValue(*config, bucketConfigKey(Keys::kEndpoint, bucket))) {
+    return fmt::format("{}-{}", bucketEndpoint.value(), bucket);
   }
-  auto baseEndpoint = baseConfigKey(Keys::kEndpoint);
-  if (config->valueExists(baseEndpoint)) {
-    return fmt::format(
-        "{}-{}", config->get<std::string>(baseEndpoint).value(), bucket);
+  if (auto baseEndpoint =
+          configValue(*config, baseConfigKey(Keys::kEndpoint))) {
+    return fmt::format("{}-{}", baseEndpoint.value(), bucket);
   }
   return std::string(bucket);
 }
@@ -49,32 +64,22 @@ S3Config::S3Config(
        key++) {
     auto s3Key = static_cast<Keys>(key);
     auto value = S3Config::configTraits().find(s3Key)->second;
-    auto configSuffix = value.first;
     auto configDefault = value.second;
 
-    // Set bucket S3 config "hive.s3.bucket.*" if present.
-    std::stringstream bucketConfig;
-    bucketConfig << kS3BucketPrefix << bucket << "." << configSuffix;
-    auto configVal = static_cast<std::optional<std::string>>(
-        properties->get<std::string>(bucketConfig.str()));
-    if (configVal.has_value()) {
+    // Prefer the bucket-specific "s3.bucket.*" config, then the base "s3.*"
+    // config, then the default. Each lookup falls back to the deprecated
+    // "hive.s3." prefix when the canonical key is absent.
+    if (auto configVal =
+            configValue(*properties, bucketConfigKey(s3Key, bucket))) {
       config_[s3Key] = configVal.value();
+    } else if (auto baseVal = configValue(*properties, baseConfigKey(s3Key))) {
+      config_[s3Key] = baseVal.value();
     } else {
-      // Set base config "hive.s3.*" if present.
-      std::stringstream baseConfig;
-      baseConfig << kS3Prefix << configSuffix;
-      configVal = static_cast<std::optional<std::string>>(
-          properties->get<std::string>(baseConfig.str()));
-      if (configVal.has_value()) {
-        config_[s3Key] = configVal.value();
-      } else {
-        // Set the default value.
-        config_[s3Key] = configDefault;
-      }
+      config_[s3Key] = configDefault;
     }
   }
   payloadSigningPolicy_ =
-      properties->get<std::string>(kS3PayloadSigningPolicy, "Never");
+      configValue(*properties, kS3PayloadSigningPolicy).value_or("Never");
 
   VELOX_CHECK_GE(
       minPartSize(),
