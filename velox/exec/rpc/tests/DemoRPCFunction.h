@@ -55,6 +55,11 @@ class DemoAsyncRPCFunction : public AsyncRPCFunction {
     return VARCHAR();
   }
 
+  /// Per-row only; no batch path.
+  RpcCapability capabilities() const override {
+    return {.supportedModes = {RpcCapabilityMode::kPerRow}};
+  }
+
   /// Dispatch individual RPCs for each active row via MockRPCClient.
   /// Null-input rows get an immediate RPCResponse with error="null_input".
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
