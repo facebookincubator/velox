@@ -57,7 +57,9 @@ class InjectedColumnFilterTransformer
   // transforming.
   TransformedFilter transformedFilter() && {
     return TransformedFilter{
-        std::move(nodes_), current_.expr, referencesInjectedColumn_};
+        .nodes = std::move(nodes_),
+        .expr = current_.expr,
+        .referencesInjectedColumn = referencesInjectedColumn_};
   }
 
  private:
@@ -72,7 +74,7 @@ class InjectedColumnFilterTransformer
 
   std::reference_wrapper<const cudf::ast::expression> visit(
       const cudf::ast::literal& expr) override {
-    current_ = {&expr, false};
+    current_ = {.expr = &expr, .wasRelaxed = false};
     return expr;
   }
 
@@ -85,14 +87,14 @@ class InjectedColumnFilterTransformer
         columnIndex);
     if (iter != injectedColumnIndices_.end() and *iter == columnIndex) {
       referencesInjectedColumn_ = true;
-      current_ = {nullptr, true};
+      current_ = {.expr = nullptr, .wasRelaxed = true};
       return expr;
     }
 
     const auto numPrecedingInjectedColumns = static_cast<cudf::size_type>(
         std::distance(injectedColumnIndices_.begin(), iter));
     if (numPrecedingInjectedColumns == 0) {
-      current_ = {&expr, false};
+      current_ = {.expr = &expr, .wasRelaxed = false};
       return expr;
     }
 
@@ -100,7 +102,7 @@ class InjectedColumnFilterTransformer
         cudf::ast::column_reference{
             columnIndex - numPrecedingInjectedColumns,
             expr.get_table_source()});
-    current_ = {&rebased, false};
+    current_ = {.expr = &rebased, .wasRelaxed = false};
     return rebased;
   }
 
@@ -133,7 +135,8 @@ class InjectedColumnFilterTransformer
       const auto* lhs = transformedOperands[0].expr;
       const auto* rhs = transformedOperands[1].expr;
       if (lhs == nullptr or rhs == nullptr) {
-        current_ = {lhs == nullptr ? rhs : lhs, wasRelaxed};
+        current_ = {
+            .expr = lhs == nullptr ? rhs : lhs, .wasRelaxed = wasRelaxed};
         return current_.expr == nullptr ? expr : *current_.expr;
       }
     } else if (isLogicalOr(op)) {
@@ -142,13 +145,13 @@ class InjectedColumnFilterTransformer
       // A dropped disjunct is always true, and so is the disjunction.
       if (transformedOperands[0].expr == nullptr or
           transformedOperands[1].expr == nullptr) {
-        current_ = {nullptr, true};
+        current_ = {.expr = nullptr, .wasRelaxed = true};
         return expr;
       }
     } else if (wasRelaxed) {
       // Any other operator, `NOT` in particular, can turn a relaxed operand
       // into a stricter predicate, so drop the whole subexpression.
-      current_ = {nullptr, true};
+      current_ = {.expr = nullptr, .wasRelaxed = true};
       return expr;
     }
 
@@ -159,7 +162,7 @@ class InjectedColumnFilterTransformer
                   op,
                   *transformedOperands[0].expr,
                   *transformedOperands[1].expr});
-    current_ = {&transformed, wasRelaxed};
+    current_ = {.expr = &transformed, .wasRelaxed = wasRelaxed};
     return transformed;
   }
 
@@ -176,7 +179,7 @@ class InjectedColumnFilterTransformer
   // Result of the last visited subexpression. visit() returns a reference,
   // which cannot express a dropped subexpression, so its return value is unused
   // and results are carried here instead.
-  Transformed current_{nullptr, false};
+  Transformed current_{.expr = nullptr, .wasRelaxed = false};
 };
 
 } // namespace
@@ -187,7 +190,9 @@ TransformedFilter transformFilterForInjectedColumns(
   // Nothing to drop or rebase, so return the input filter as is.
   if (sortedInjectedColumnIndices.empty()) {
     return TransformedFilter{
-        cudf::ast::tree{}, &filter, /*referencesInjectedColumn=*/false};
+        .nodes = cudf::ast::tree{},
+        .expr = &filter,
+        .referencesInjectedColumn = false};
   }
 
   // Ensure the injected column indices are ascending and unique.
