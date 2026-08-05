@@ -678,18 +678,6 @@ exec::BlockingReason RPCOperator::isBlocked(ContinueFuture* future) {
   } else {
     // BATCH mode
     if (!noMoreInput_ && !isDraining()) {
-      // TODO: back-pressure contract gap. needsInput() returns
-      // false under pending-batch back-pressure
-      // (state_->isUnderBackpressure()), but this mid-stream path polls without
-      // registering a waiter and returns kNotBlocked below even when no batch
-      // is ready -- i.e. "full but not blocked". The standard Velox contract
-      // (cf. PartitionedOutput / LocalPartition) signals fullness via
-      // isBlocked() returning a future. A driver that stops its upstream walk
-      // at a full operator (transitive back-pressure) can therefore busy-spin
-      // here until an in-flight batch completes instead of parking off-thread.
-      // Fix: when under back-pressure with no ready batch, return kWaitForRPC
-      // on the oldest pending batch (route through a promise-registering poll
-      // like tryPollBatchOrWait) rather than tryPollReady + kNotBlocked.
       auto readyBatch = state_->tryPollReady();
       if (readyBatch) {
         if (readyBatch->error.has_value()) {
@@ -697,6 +685,39 @@ exec::BlockingReason RPCOperator::isBlocked(ContinueFuture* future) {
               << "Received batch with error: " << readyBatch->error.value();
         }
         claimedBatch_ = std::move(*readyBatch);
+        return exec::BlockingReason::kNotBlocked;
+      }
+      // No ready batch. Under back-pressure (in-flight batches at the window
+      // limit, so needsInput() returns false), PARK on an in-flight batch
+      // rather than returning kNotBlocked: otherwise a driver that halts its
+      // upstream walk at this full operator (transitive back-pressure) would
+      // busy-spin here until a batch completes, monopolizing its thread and
+      // starving co-scheduled queries. When not under back-pressure we can
+      // still accept input, so report not-blocked and let the driver call
+      // needsInput()/addInput(). tryPollBatchOrWait registers a waiter that a
+      // batch completion fulfills, so this cannot hang while batches are
+      // in-flight (guaranteed by isUnderBackpressure()).
+      if (state_->isUnderBackpressure()) {
+        ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
+        std::optional<RPCState::ReadyBatch> polledBatch;
+        switch (state_->tryPollBatchOrWait(&waitFuture, &polledBatch)) {
+          case RPCState::BatchPollResult::kGotBatch:
+            if (polledBatch->error.has_value()) {
+              RPC_OP_LOG(WARNING) << "Received batch with error: "
+                                  << polledBatch->error.value();
+            }
+            claimedBatch_ = std::move(*polledBatch);
+            return exec::BlockingReason::kNotBlocked;
+          case RPCState::BatchPollResult::kMustWait:
+            *future = std::move(waitFuture);
+            blockWaitStartNs_ = getCurrentTimeNano();
+            blockWaitIsBackpressure_ = false;
+            return exec::BlockingReason::kWaitForRPC;
+          case RPCState::BatchPollResult::kFinished:
+            // Not expected mid-stream (noMoreInput_ is false); fall through to
+            // not-blocked defensively.
+            break;
+        }
       }
       return exec::BlockingReason::kNotBlocked;
     }
