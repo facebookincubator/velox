@@ -15,8 +15,12 @@
  */
 #pragma once
 
+#include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::config {
@@ -26,12 +30,16 @@ class ConfigBase;
 namespace facebook::velox::filesystems {
 
 /// Build config required to initialize an S3FileSystem instance.
-/// All hive.s3 options can be set on a per-bucket basis.
-/// The bucket-specific option is set by replacing the hive.s3. prefix on an
-/// option with hive.s3.bucket.BUCKETNAME., where BUCKETNAME is the name of the
-/// bucket.
+/// Connectors can provide connector-scoped S3 config keys, such as hive.s3.*
+/// or iceberg.s3.*. S3Config normalizes these keys to the storage adapter
+/// config namespace, s3.*, before reading them.
+/// This provides aliases for the same effective S3 config keys; it does not
+/// choose between different connector-scoped values in a shared config object.
+/// All s3 options can be set on a per-bucket basis.
+/// The bucket-specific option is set by replacing the s3. prefix on an option
+/// with s3.bucket.BUCKETNAME., where BUCKETNAME is the name of the bucket.
 /// When connecting to a bucket, all options explicitly set will override the
-/// base hive.s3. values.
+/// base s3. values.
 /// These semantics are similar to the Apache Hadoop-Aws module.
 /// https://hadoop.apache.org/docs/current/hadoop-aws/tools/hadoop-aws/index.html
 class S3Config {
@@ -39,23 +47,23 @@ class S3Config {
   S3Config() = delete;
 
   /// S3 config prefix.
-  static constexpr const char* kS3Prefix = "hive.s3.";
+  static constexpr const char* kS3Prefix = "s3.";
 
   /// S3 bucket config prefix
-  static constexpr const char* kS3BucketPrefix = "hive.s3.bucket.";
+  static constexpr const char* kS3BucketPrefix = "s3.bucket.";
 
   /// Log granularity of AWS C++ SDK.
-  static constexpr const char* kS3LogLevel = "hive.s3.log-level";
+  static constexpr const char* kS3LogLevel = "s3.log-level";
 
   /// Payload signing policy.
   static constexpr const char* kS3PayloadSigningPolicy =
-      "hive.s3.payload-signing-policy";
+      "s3.payload-signing-policy";
 
   /// S3FileSystem default identity.
   static constexpr const char* kDefaultS3Identity = "s3-default-identity";
 
   /// Log location of AWS C++ SDK.
-  static constexpr const char* kS3LogLocation = "hive.s3.log-location";
+  static constexpr const char* kS3LogLocation = "s3.log-location";
 
   /// Keys to identify the config.
   enum class Keys {
@@ -125,6 +133,18 @@ class S3Config {
 
   S3Config(
       std::string_view bucket,
+      std::shared_ptr<const config::ConfigBase> config);
+
+  /// Normalizes connector-provided S3 aliases into the internal keys used by
+  /// the S3 adapter.
+  ///
+  /// Connectors expose S3 configs under connector namespaces, e.g. hive.s3.*
+  /// or iceberg.s3.*. S3Config reads connector-agnostic s3.* keys internally,
+  /// so this method copies each <connector>.s3.* alias to the corresponding
+  /// s3.* key in the returned config. If multiple aliases map to the same s3.*
+  /// key, their values must match because S3Config does not know which
+  /// connector is calling it.
+  static std::shared_ptr<const config::ConfigBase> normalizeConfig(
       std::shared_ptr<const config::ConfigBase> config);
 
   /// cacheKey is used as a key for the S3FileSystem instance map.

@@ -22,6 +22,15 @@
 
 namespace facebook::velox::filesystems {
 namespace {
+
+std::string hiveS3ConfigKey(S3Config::Keys key) {
+  return "hive." + S3Config::baseConfigKey(key);
+}
+
+std::string hiveS3BucketConfigKey(S3Config::Keys key, std::string_view bucket) {
+  return "hive." + S3Config::bucketConfigKey(key, bucket);
+}
+
 TEST(S3ConfigTest, defaultConfig) {
   auto config = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>());
@@ -44,21 +53,20 @@ TEST(S3ConfigTest, defaultConfig) {
 
 TEST(S3ConfigTest, overrideConfig) {
   std::unordered_map<std::string, std::string> configFromFile = {
-      {S3Config::baseConfigKey(S3Config::Keys::kPathStyleAccess), "true"},
-      {S3Config::baseConfigKey(S3Config::Keys::kSSLEnabled), "false"},
-      {S3Config::baseConfigKey(S3Config::Keys::kUseInstanceCredentials),
-       "true"},
+      {hiveS3ConfigKey(S3Config::Keys::kPathStyleAccess), "true"},
+      {hiveS3ConfigKey(S3Config::Keys::kSSLEnabled), "false"},
+      {hiveS3ConfigKey(S3Config::Keys::kUseInstanceCredentials), "true"},
       {"hive.s3.payload-signing-policy", "RequestDependent"},
-      {S3Config::baseConfigKey(S3Config::Keys::kEndpoint), "endpoint"},
-      {S3Config::baseConfigKey(S3Config::Keys::kEndpointRegion), "region"},
-      {S3Config::baseConfigKey(S3Config::Keys::kAccessKey), "access"},
-      {S3Config::baseConfigKey(S3Config::Keys::kSecretKey), "secret"},
-      {S3Config::baseConfigKey(S3Config::Keys::kIamRole), "iam"},
-      {S3Config::baseConfigKey(S3Config::Keys::kIamRoleSessionName), "velox"},
-      {S3Config::baseConfigKey(S3Config::Keys::kCredentialsProvider),
+      {hiveS3ConfigKey(S3Config::Keys::kEndpoint), "endpoint"},
+      {hiveS3ConfigKey(S3Config::Keys::kEndpointRegion), "region"},
+      {hiveS3ConfigKey(S3Config::Keys::kAccessKey), "access"},
+      {hiveS3ConfigKey(S3Config::Keys::kSecretKey), "secret"},
+      {hiveS3ConfigKey(S3Config::Keys::kIamRole), "iam"},
+      {hiveS3ConfigKey(S3Config::Keys::kIamRoleSessionName), "velox"},
+      {hiveS3ConfigKey(S3Config::Keys::kCredentialsProvider),
        "my-credentials-provider"},
-      {S3Config::baseConfigKey(S3Config::Keys::kIMDSEnabled), "false"},
-      {S3Config::baseConfigKey(S3Config::Keys::kMultipartMinPartSize), "20MB"}};
+      {hiveS3ConfigKey(S3Config::Keys::kIMDSEnabled), "false"},
+      {hiveS3ConfigKey(S3Config::Keys::kMultipartMinPartSize), "20MB"}};
   auto configBase =
       std::make_shared<config::ConfigBase>(std::move(configFromFile));
   auto s3Config = S3Config("bucket", configBase);
@@ -80,31 +88,79 @@ TEST(S3ConfigTest, overrideConfig) {
   ASSERT_EQ(s3Config.minPartSize(), 20971520);
 }
 
+TEST(S3ConfigTest, normalizeConnectorScopedConfig) {
+  std::string_view bucket = "bucket";
+  std::unordered_map<std::string, std::string> configFromFile = {
+      {"iceberg.s3.endpoint", "iceberg-endpoint"},
+      {"iceberg.s3.aws-access-key", "iceberg-access"},
+      {"iceberg.s3.min-part-size", "20MB"},
+      {"iceberg.s3.payload-signing-policy", "Always"},
+      {"iceberg.s3.bucket.bucket.endpoint", "bucket.s3-region.amazonaws.com"}};
+  auto scopedConfig =
+      std::make_shared<config::ConfigBase>(std::move(configFromFile));
+  auto configBase = S3Config::normalizeConfig(scopedConfig);
+  auto s3Config = S3Config(bucket, scopedConfig);
+
+  ASSERT_EQ(
+      configBase->get<std::string>(
+          S3Config::baseConfigKey(S3Config::Keys::kEndpoint)),
+      std::optional("iceberg-endpoint"));
+  ASSERT_EQ(s3Config.endpoint(), "bucket.s3-region.amazonaws.com");
+  // Inferred from the endpoint.
+  ASSERT_EQ(s3Config.endpointRegion(), "region");
+  ASSERT_EQ(s3Config.accessKey(), std::optional("iceberg-access"));
+  ASSERT_EQ(s3Config.payloadSigningPolicy(), "Always");
+  ASSERT_EQ(
+      S3Config::cacheKey(bucket, scopedConfig),
+      "bucket.s3-region.amazonaws.com-bucket");
+  ASSERT_EQ(s3Config.minPartSize(), 20971520);
+}
+
+TEST(S3ConfigTest, normalizeMixedConnectorScopedConfig) {
+  auto configBase = S3Config::normalizeConfig(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {"hive.s3.endpoint", "shared-endpoint"},
+              {"iceberg.s3.endpoint", "shared-endpoint"}}));
+  auto s3Config = S3Config("bucket", configBase);
+
+  ASSERT_EQ(s3Config.endpoint(), "shared-endpoint");
+
+  VELOX_ASSERT_THROW(
+      S3Config::normalizeConfig(
+          std::make_shared<config::ConfigBase>(
+              std::unordered_map<std::string, std::string>{
+                  {"hive.s3.endpoint", "hive-endpoint"},
+                  {"iceberg.s3.endpoint", "iceberg-endpoint"}})),
+      "Multiple connector-scoped S3 configs map to 's3.endpoint' with "
+      "different values. Pass a connector-specific config object to "
+      "disambiguate.");
+}
+
 TEST(S3ConfigTest, overrideBucketConfig) {
   std::string_view bucket = "bucket";
   std::unordered_map<std::string, std::string> bucketConfigFromFile = {
-      {S3Config::baseConfigKey(S3Config::Keys::kPathStyleAccess), "true"},
-      {S3Config::baseConfigKey(S3Config::Keys::kSSLEnabled), "false"},
-      {S3Config::baseConfigKey(S3Config::Keys::kUseInstanceCredentials),
-       "true"},
-      {S3Config::baseConfigKey(S3Config::Keys::kEndpoint), "endpoint"},
-      {S3Config::bucketConfigKey(S3Config::Keys::kEndpoint, bucket),
+      {hiveS3ConfigKey(S3Config::Keys::kPathStyleAccess), "true"},
+      {hiveS3ConfigKey(S3Config::Keys::kSSLEnabled), "false"},
+      {hiveS3ConfigKey(S3Config::Keys::kUseInstanceCredentials), "true"},
+      {hiveS3ConfigKey(S3Config::Keys::kEndpoint), "endpoint"},
+      {hiveS3BucketConfigKey(S3Config::Keys::kEndpoint, bucket),
        "bucket.s3-region.amazonaws.com"},
-      {S3Config::baseConfigKey(S3Config::Keys::kAccessKey), "access"},
-      {S3Config::bucketConfigKey(S3Config::Keys::kAccessKey, bucket),
+      {hiveS3ConfigKey(S3Config::Keys::kAccessKey), "access"},
+      {hiveS3BucketConfigKey(S3Config::Keys::kAccessKey, bucket),
        "bucket-access"},
       {"hive.s3.payload-signing-policy", "Always"},
-      {S3Config::baseConfigKey(S3Config::Keys::kSecretKey), "secret"},
-      {S3Config::bucketConfigKey(S3Config::Keys::kSecretKey, bucket),
+      {hiveS3ConfigKey(S3Config::Keys::kSecretKey), "secret"},
+      {hiveS3BucketConfigKey(S3Config::Keys::kSecretKey, bucket),
        "bucket-secret"},
-      {S3Config::baseConfigKey(S3Config::Keys::kIamRole), "iam"},
-      {S3Config::baseConfigKey(S3Config::Keys::kIamRoleSessionName), "velox"},
-      {S3Config::baseConfigKey(S3Config::Keys::kCredentialsProvider),
+      {hiveS3ConfigKey(S3Config::Keys::kIamRole), "iam"},
+      {hiveS3ConfigKey(S3Config::Keys::kIamRoleSessionName), "velox"},
+      {hiveS3ConfigKey(S3Config::Keys::kCredentialsProvider),
        "my-credentials-provider"},
-      {S3Config::bucketConfigKey(S3Config::Keys::kCredentialsProvider, bucket),
+      {hiveS3BucketConfigKey(S3Config::Keys::kCredentialsProvider, bucket),
        "override-credentials-provider"},
-      {S3Config::baseConfigKey(S3Config::Keys::kIMDSEnabled), "false"},
-      {S3Config::baseConfigKey(S3Config::Keys::kMultipartMinPartSize), "20MB"}};
+      {hiveS3ConfigKey(S3Config::Keys::kIMDSEnabled), "false"},
+      {hiveS3ConfigKey(S3Config::Keys::kMultipartMinPartSize), "20MB"}};
   auto configBase =
       std::make_shared<config::ConfigBase>(std::move(bucketConfigFromFile));
   auto s3Config = S3Config(bucket, configBase);
@@ -131,7 +187,7 @@ TEST(S3ConfigTest, overrideBucketConfig) {
 TEST(S3ConfigTest, minPartSizeValidation) {
   // Test that setting min-part-size below 5MB throws an error.
   std::unordered_map<std::string, std::string> configFromFile = {
-      {S3Config::baseConfigKey(S3Config::Keys::kMultipartMinPartSize), "4MB"}};
+      {hiveS3ConfigKey(S3Config::Keys::kMultipartMinPartSize), "4MB"}};
   auto configBase =
       std::make_shared<config::ConfigBase>(std::move(configFromFile));
 
@@ -140,7 +196,7 @@ TEST(S3ConfigTest, minPartSizeValidation) {
       "The min-part-size S3 configuration must exceed 5MB");
 
   configFromFile = {
-      {S3Config::baseConfigKey(S3Config::Keys::kMultipartMinPartSize), "10GB"}};
+      {hiveS3ConfigKey(S3Config::Keys::kMultipartMinPartSize), "10GB"}};
   configBase = std::make_shared<config::ConfigBase>(std::move(configFromFile));
   VELOX_ASSERT_THROW(
       S3Config("bucket", configBase),
@@ -151,7 +207,7 @@ TEST(S3ConfigTest, minPartSizeValidationBucketConfig) {
   // Test that setting bucket-specific min-part-size below 5MB throws an error.
   std::string_view bucket = "testbucket";
   std::unordered_map<std::string, std::string> configFromFile = {
-      {S3Config::bucketConfigKey(S3Config::Keys::kMultipartMinPartSize, bucket),
+      {hiveS3BucketConfigKey(S3Config::Keys::kMultipartMinPartSize, bucket),
        "3MB"}};
   auto configBase =
       std::make_shared<config::ConfigBase>(std::move(configFromFile));
@@ -161,7 +217,7 @@ TEST(S3ConfigTest, minPartSizeValidationBucketConfig) {
       "The min-part-size S3 configuration must exceed 5MB");
 
   configFromFile = {
-      {S3Config::bucketConfigKey(S3Config::Keys::kMultipartMinPartSize, bucket),
+      {hiveS3BucketConfigKey(S3Config::Keys::kMultipartMinPartSize, bucket),
        "10GB"}};
   configBase = std::make_shared<config::ConfigBase>(std::move(configFromFile));
 

@@ -32,14 +32,14 @@ using FileSystemMap = folly::Synchronized<
     std::unordered_map<std::string, std::shared_ptr<FileSystem>>>;
 
 /// Multiple S3 filesystems are supported.
-/// Key is the endpoint value specified in the config using hive.s3.endpoint.
+/// Key is the endpoint value specified in the config using s3.endpoint.
 /// If the endpoint is empty, it will default to AWS S3 Library.
 /// Different S3 buckets can be accessed with different client configurations.
 /// This allows for different endpoints, data read and write strategies.
-/// The bucket specific option is set by replacing the hive.s3. prefix on an
-/// option with hive.s3.bucket.BUCKETNAME., where BUCKETNAME is the name of the
+/// The bucket specific option is set by replacing the s3. prefix on an
+/// option with s3.bucket.BUCKETNAME., where BUCKETNAME is the name of the
 /// bucket. When connecting to a bucket, all options explicitly set will
-/// override the base hive.s3. values.
+/// override the base s3. values.
 
 FileSystemMap& fileSystems() {
   static FileSystemMap instances;
@@ -52,6 +52,7 @@ S3FileSystemFactory fileSystemFactory;
 std::shared_ptr<FileSystem> fileSystemGenerator(
     std::shared_ptr<const config::ConfigBase> properties,
     std::string_view s3Path) {
+  properties = S3Config::normalizeConfig(std::move(properties));
   std::string cacheKey, bucketName, key;
   getBucketAndKeyFromPath(getPath(s3Path), bucketName, key);
   if (!cacheKeyFunc) {
