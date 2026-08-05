@@ -127,6 +127,19 @@ class QueryConfig {
       false,
       "Adjust timezone-less timestamp conversions to session timezone.")
 
+  /// If true (default), functions that read a TIMESTAMP WITH TIME ZONE (field
+  /// extraction, formatting, and date arithmetic, including the interval +/-
+  /// operators) render each value in its own embedded zone (legacy behavior).
+  /// If false, they render the UTC instant in the session timezone, so equal
+  /// values produce equal results. Does not cover CAST yet.
+  VELOX_QUERY_CONFIG(
+      kLegacyTimestampWithTimezone,
+      legacyTimestampWithTimezone,
+      "legacy_timestamp_with_timezone",
+      bool,
+      true,
+      "Render TIMESTAMP WITH TIME ZONE values in each value's embedded zone (true) or the session timezone (false).")
+
   /// Whether to use the simplified expression evaluation path. False by
   /// default.
   VELOX_QUERY_CONFIG(
