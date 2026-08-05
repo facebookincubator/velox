@@ -34,12 +34,10 @@
 #include "velox/core/Metaprogramming.h"
 #include "velox/type/TypeKind.h"
 
-#include <cudf/column/column_device_view.cuh>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/detail/utilities/vector_factories.hpp>
-#include <cudf/null_mask.hpp>
-#include <cudf/table/table_view.hpp>
 #include <cudf/transform.hpp>
+#include <cudf/utilities/bit.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 #include <rmm/device_uvector.hpp>
 
@@ -201,29 +199,51 @@ struct GpuUDFHolder {
 
 namespace detail {
 
-/// Evaluates one row. `valid` is null when the caller derived output validity
-/// from the input masks, leaving the kernel only values to fill.
+/// Row-to-element mapping for one argument. A constant resolves to element 0
+/// for every row, which is the same indirection DecodedVector performs on the
+/// CPU side and the reason a literal argument needs no special case here.
+__device__ inline cudf::size_type
+argIndex(const GpuArgView& argument, cudf::size_type row) {
+  return argument.isConstant ? 0 : row + argument.offset;
+}
+
+__device__ inline bool argIsNull(
+    const GpuArgView& argument,
+    cudf::size_type row) {
+  return argument.nullMask != nullptr &&
+      !cudf::bit_is_set(argument.nullMask, argIndex(argument, row));
+}
+
+template <typename T>
+__device__ inline const T& argValue(
+    const GpuArgView& argument,
+    cudf::size_type row) {
+  return static_cast<const T*>(argument.data)[argIndex(argument, row)];
+}
+
+/// Evaluates one row. `valid` is null only when no argument can be null and the
+/// function cannot decline a row, in which case there is nothing to record.
 template <typename Holder, typename TOut, typename... TIn, std::size_t... I>
 __device__ void evaluateRow(
-    cudf::mutable_column_device_view& out,
+    TOut* out,
     bool* valid,
-    cudf::column_device_view const* inputs,
+    const GpuArgView* arguments,
     cudf::size_type row,
     std::index_sequence<I...>) {
   TOut result{};
 
   if constexpr (Holder::isDefaultNullBehavior) {
     // call() and callNullFree() are never shown a null.
-    if ((inputs[I].is_null(row) || ...)) {
+    if ((argIsNull(arguments[I], row) || ...)) {
       if (valid != nullptr) {
         valid[row] = false;
       }
       return;
     }
     bool const ok =
-        Holder::invoke(result, inputs[I].template element<TIn>(row)...);
+        Holder::invoke(result, argValue<TIn>(arguments[I], row)...);
     if (ok) {
-      out.template element<TOut>(row) = result;
+      out[row] = result;
     }
     if (valid != nullptr) {
       valid[row] = ok;
@@ -232,28 +252,30 @@ __device__ void evaluateRow(
     // callNullable() asked to see nulls, which arrive as null pointers.
     bool const ok = Holder::invokeNullable(
         result,
-        (inputs[I].is_null(row)
-             ? nullptr
-             : &inputs[I].template element<TIn>(row))...);
+        (argIsNull(arguments[I], row) ? nullptr
+                                      : &argValue<TIn>(arguments[I], row))...);
     if (ok) {
-      out.template element<TOut>(row) = result;
+      out[row] = result;
     }
-    valid[row] = ok;
+    if (valid != nullptr) {
+      valid[row] = ok;
+    }
   }
 }
 
 template <typename Holder, typename TOut, typename... TIn>
 __global__ void simpleFunctionKernel(
-    cudf::mutable_column_device_view out,
+    TOut* out,
     bool* valid,
-    cudf::column_device_view const* inputs) {
+    const GpuArgView* arguments,
+    cudf::size_type numRows) {
   auto const row = static_cast<cudf::size_type>(
       blockIdx.x * static_cast<unsigned>(blockDim.x) + threadIdx.x);
-  if (row >= out.size()) {
+  if (row >= numRows) {
     return;
   }
   evaluateRow<Holder, TOut, TIn...>(
-      out, valid, inputs, row, std::index_sequence_for<TIn...>{});
+      out, valid, arguments, row, std::index_sequence_for<TIn...>{});
 }
 
 } // namespace detail
@@ -266,60 +288,45 @@ struct GpuSimpleFunctionAdapter {
   using TOut = typename gpu::GpuExec::resolver<TReturn>::out_type;
 
   static std::unique_ptr<cudf::column> launch(
-      const std::vector<cudf::column_view>& inputs,
+      const std::vector<GpuArgView>& arguments,
+      cudf::size_type numRows,
       cudf::data_type outputType,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) {
-    auto const numRows = inputs.front().size();
-
     auto out = cudf::make_fixed_width_column(
         outputType, numRows, cudf::mask_state::UNALLOCATED, stream, mr);
     if (numRows == 0) {
       return out;
     }
 
-    // The device views own device-side child data, so they must outlive the
-    // launch; holding the owners here keeps them alive until the stream syncs.
-    using DeviceViewOwner =
-        decltype(cudf::column_device_view::create(inputs.front(), stream));
-    std::vector<DeviceViewOwner> owners;
-    std::vector<cudf::column_device_view> views;
-    owners.reserve(inputs.size());
-    views.reserve(inputs.size());
-    for (const auto& input : inputs) {
-      owners.push_back(cudf::column_device_view::create(input, stream));
-      views.push_back(*owners.back());
-    }
+    auto deviceArguments = cudf::detail::make_device_uvector_async(
+        arguments, stream, cudf::get_current_device_resource_ref());
 
-    auto deviceViews = cudf::detail::make_device_uvector_async(
-        views, stream, cudf::get_current_device_resource_ref());
+    // Validity only has to be recorded when something can produce a null: an
+    // argument that carries a mask, or a function that can decline a row.
+    auto const anyNullable = std::any_of(
+        arguments.begin(), arguments.end(), [](const GpuArgView& argument) {
+          return argument.nullMask != nullptr;
+        });
+    auto const needsValidity = anyNullable || !Holder::alwaysSucceeds;
 
-    auto outView = cudf::mutable_column_device_view::create(*out, stream);
+    rmm::device_uvector<bool> valid(
+        needsValidity ? numRows : 0, stream, cudf::get_current_device_resource_ref());
 
-    // A function that cannot decline a row inherits validity from its inputs,
-    // which cudf computes in one pass. Otherwise the kernel records validity
-    // per row and it is packed into a mask afterwards.
-    if constexpr (Holder::alwaysSucceeds) {
-      detail::simpleFunctionKernel<Holder, TOut, typename gpu::GpuExec::resolver<TArgs>::in_type...>
-          <<<detail::gridSize(numRows), detail::kBlockSize, 0, stream.value()>>>(
-              *outView, nullptr, deviceViews.data());
+    detail::simpleFunctionKernel<
+        Holder,
+        TOut,
+        typename gpu::GpuExec::resolver<TArgs>::in_type...>
+        <<<detail::gridSize(numRows),
+           detail::kBlockSize,
+           0,
+           stream.value()>>>(
+            out->mutable_view().template data<TOut>(),
+            needsValidity ? valid.data() : nullptr,
+            deviceArguments.data(),
+            numRows);
 
-      auto const anyNullable = std::any_of(
-          inputs.begin(), inputs.end(), [](const cudf::column_view& column) {
-            return column.nullable();
-          });
-      if (anyNullable) {
-        auto [mask, nullCount] =
-            cudf::bitmask_and(cudf::table_view{inputs}, stream, mr);
-        out->set_null_mask(std::move(mask), nullCount);
-      }
-      return out;
-    } else {
-      rmm::device_uvector<bool> valid(numRows, stream, mr);
-      detail::simpleFunctionKernel<Holder, TOut, typename gpu::GpuExec::resolver<TArgs>::in_type...>
-          <<<detail::gridSize(numRows), detail::kBlockSize, 0, stream.value()>>>(
-              *outView, valid.data(), deviceViews.data());
-
+    if (needsValidity) {
       auto validColumn = cudf::column_view(
           cudf::data_type{cudf::type_id::BOOL8},
           numRows,
@@ -328,8 +335,8 @@ struct GpuSimpleFunctionAdapter {
           0);
       auto [mask, nullCount] = cudf::bools_to_mask(validColumn, stream, mr);
       out->set_null_mask(std::move(*mask), nullCount);
-      return out;
     }
+    return out;
   }
 };
 
