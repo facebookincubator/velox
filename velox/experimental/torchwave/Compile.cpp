@@ -1186,13 +1186,7 @@ void CompileCtx::generateElementwiseBorderImpl(
   // register scalar.
   auto isElementwiseProducer = [&](NodeCP producer) {
     auto* meta = nodeMeta(producer);
-    if (!meta || !meta->elementwise) {
-      return false;
-    }
-    if (!meta->returnMeta.empty() && !meta->returnMeta[0].isRegister) {
-      return false;
-    }
-    return true;
+    return meta && meta->elementwise && !meta->isElementwiseBorder();
   };
 
   for (size_t inputIdx = 0; inputIdx < node->inputs().size(); ++inputIdx) {
