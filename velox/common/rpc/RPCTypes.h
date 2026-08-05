@@ -188,6 +188,16 @@ struct RpcCapability {
   /// Client-side accumulation guard (approx tokens) to force an early batch
   /// flush before buffered rows exhaust memory; 0 = no token-based bound.
   int64_t maxBatchTokens{0};
+
+  /// Server-side hard limit on the serialized size of a single native-batch /
+  /// async request, in bytes; 0 = unlimited/unknown. When set, the operator
+  /// caps each flush so one request never exceeds it — some backends reject a
+  /// batch whose serialized size tops a fixed cap, and because a constant
+  /// argument (e.g. a system prompt) is serialized once per row, a
+  /// large-argument batch can blow that cap and lose every row in it. The bound
+  /// is enforced against a per-row byte estimate the function reports via
+  /// rowsWithinByteBudget().
+  int64_t maxBatchBytes{0};
 };
 
 /// Resolve the RPCNode's coarse streaming mode (PER_ROW/BATCH) to the one

@@ -66,6 +66,45 @@ class AsyncCongestingBatchRPCFunction : public CongestingBatchRPCFunction {
   }
 };
 
+// Declares a per-request byte budget (maxBatchBytes) and reports a fixed number
+// of rows that fit it, so the operator must chunk a large backlog to keep each
+// request under the cap. Records every flush's row count so the test can assert
+// no flush exceeds the budget-derived limit and no rows are lost.
+class ByteBudgetedBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  using DemoBatchRPCFunction::DemoBatchRPCFunction;
+
+  static constexpr int64_t kMaxBatchBytes = 3000;
+  static constexpr int32_t kRowsPerBudget = 3;
+
+  // Flush chunk sizes observed across a query. Cleared at the start of the
+  // test.
+  static std::vector<int32_t>& flushChunks() {
+    static std::vector<int32_t> chunks;
+    return chunks;
+  }
+
+  RpcCapability capabilities() const override {
+    return {
+        .supportedModes =
+            {RpcCapabilityMode::kPerRow, RpcCapabilityMode::kNativeBatch},
+        .maxBatchBytes = kMaxBatchBytes};
+  }
+
+  // Report a fixed prefix that "fits" the budget (>= 1), independent of the
+  // actual byte math — this test exercises the operator's clamp, not the
+  // function's estimator.
+  int32_t rowsWithinByteBudget(int64_t /*budgetBytes*/) const override {
+    return kRowsPerBudget;
+  }
+
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    flushChunks().push_back(maxRows);
+    return DemoBatchRPCFunction::flushBatch(maxRows);
+  }
+};
+
 class RPCOperatorTest : public OperatorTestBase {
  protected:
   static void SetUpTestCase() {
@@ -123,6 +162,11 @@ class RPCOperatorTest : public OperatorTestBase {
     AsyncRPCFunctionRegistry::registerFunction(
         "demo_batch_rpc_async_congesting",
         []() { return std::make_shared<AsyncCongestingBatchRPCFunction>(); });
+    // Declares maxBatchBytes so the operator clamps each flush by the byte
+    // budget (see batchClampedByByteBudget).
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_byte_budgeted",
+        []() { return std::make_shared<ByteBudgetedBatchRPCFunction>(); });
   }
 
   static void TearDownTestCase() {
@@ -561,6 +605,47 @@ TEST_F(RPCOperatorTest, batchPipelinedDispatch) {
   for (vector_size_t i = 0; i < result->size(); ++i) {
     EXPECT_FALSE(results->isNullAt(i));
   }
+}
+
+// Byte-budget clamp: when the function declares maxBatchBytes, the operator
+// caps each flush to rowsWithinByteBudget() — chunking a backlog so no single
+// request exceeds the backend's per-request size cap (e.g. MetaGen's 5MB node
+// limit) while still emitting every row. Uses the flush-all path
+// (dispatchBatchSize=0), which noMoreInput() must also chunk.
+TEST_F(RPCOperatorTest, batchClampedByByteBudget) {
+  ByteBudgetedBatchRPCFunction::flushChunks().clear();
+
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeFlatVector<StringView>(
+          {"r0", "r1", "r2", "r3", "r4", "r5", "r6"})}); // 7 rows
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "demo_batch_rpc_byte_budgeted",
+      /*dispatchBatchSize=*/0);
+
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+
+  // No rows lost.
+  ASSERT_EQ(result->size(), 7);
+  auto* results = result->childAt(1)->asFlatVector<StringView>();
+  for (vector_size_t i = 0; i < result->size(); ++i) {
+    EXPECT_FALSE(results->isNullAt(i));
+  }
+
+  // Every flush stayed within the budget-derived cap, and together they cover
+  // all 7 rows (expected chunks [3, 3, 1]).
+  const auto& chunks = ByteBudgetedBatchRPCFunction::flushChunks();
+  ASSERT_FALSE(chunks.empty());
+  int32_t total = 0;
+  for (auto c : chunks) {
+    EXPECT_GE(c, 1);
+    EXPECT_LE(c, ByteBudgetedBatchRPCFunction::kRowsPerBudget);
+    total += c;
+  }
+  EXPECT_EQ(total, 7);
 }
 
 /// PER_ROW congestion path. On the function's overload verdict
