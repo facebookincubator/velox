@@ -190,6 +190,32 @@ struct RpcCapability {
   int64_t maxBatchTokens{0};
 };
 
+/// Resolve the RPCNode's coarse streaming mode (PER_ROW/BATCH) to the one
+/// concrete dispatch mode the backend will execute, clamped to what it actually
+/// supports — the streaming mode is set without knowledge of backend
+/// capability, so a BATCH request can reach a backend that only does per-row.
+/// PER_ROW -> kPerRow; BATCH -> the backend's supported batch mode (kAsyncJob
+/// preferred over kNativeBatch), or kPerRow when it supports neither. The
+/// single place the coarse streaming mode and the backend's capability are
+/// reconciled, so callers key off one resolved RpcCapabilityMode.
+inline RpcCapabilityMode resolveDispatchMode(
+    RPCStreamingMode streamingMode,
+    const RpcCapability& capability) {
+  if (streamingMode == RPCStreamingMode::kPerRow) {
+    return RpcCapabilityMode::kPerRow;
+  }
+  // BATCH: clamp to a batch mode the backend actually supports (async offline
+  // job preferred over native batch); a backend that supports neither clamps to
+  // per-row, which is always supported.
+  if (capability.supportedModes.has(RpcCapabilityMode::kAsyncJob)) {
+    return RpcCapabilityMode::kAsyncJob;
+  }
+  if (capability.supportedModes.has(RpcCapabilityMode::kNativeBatch)) {
+    return RpcCapabilityMode::kNativeBatch;
+  }
+  return RpcCapabilityMode::kPerRow;
+}
+
 /// Generic response structure from RPC calls.
 /// This is a minimal, domain-agnostic structure that works for any backend.
 struct RPCResponse {
