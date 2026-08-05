@@ -67,9 +67,7 @@ class CudfNestedLoopJoinCpuFallbackTest : public HiveConnectorTestBase {
   bool previousAllowCpuFallback_{false};
 };
 
-TEST_F(
-    CudfNestedLoopJoinCpuFallbackTest,
-    customComparisonConditionFallsBack) {
+TEST_F(CudfNestedLoopJoinCpuFallbackTest, customComparisonConditionFallsBack) {
   const auto customType =
       facebook::velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON();
   auto probe = makeRowVector(
@@ -88,8 +86,8 @@ TEST_F(
 
   std::shared_ptr<Task> task;
   auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
-  auto expected = makeRowVector(
-      {"p_key"}, {makeFlatVector<int64_t>({1, 257}, customType)});
+  auto expected =
+      makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 257}, customType)});
   facebook::velox::test::assertEqualVectors(expected, result);
 
   const auto operatorStats = toOperatorStats(task->taskStats());

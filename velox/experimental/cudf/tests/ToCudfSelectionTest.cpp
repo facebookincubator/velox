@@ -176,10 +176,7 @@ TEST_F(ToCudfSelectionTest, logicalTypesFallBackBeforeConversion) {
     SCOPED_TRACE(values->type()->toString());
     auto input = makeRowVector(
         {"id", "value"}, {makeFlatVector<int32_t>({1, -1}), values});
-    auto plan = PlanBuilder()
-                    .values({input})
-                    .filter("id > 0")
-                    .planNode();
+    auto plan = PlanBuilder().values({input}).filter("id > 0").planNode();
 
     std::shared_ptr<Task> task;
     auto result = AssertQueryBuilder(plan)

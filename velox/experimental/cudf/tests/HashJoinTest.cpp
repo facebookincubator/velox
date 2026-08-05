@@ -194,24 +194,21 @@ TEST_F(HashJoinTest, rightJoinNullPadsIntervalDayTime) {
       {"p_key", "p_interval"},
       {makeFlatVector<int64_t>({1}),
        makeFlatVector<int64_t>({86'400'000}, INTERVAL_DAY_TIME())});
-  auto build =
-      makeRowVector({"b_key"}, {makeFlatVector<int64_t>({2})});
+  auto build = makeRowVector({"b_key"}, {makeFlatVector<int64_t>({2})});
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(idGenerator)
-          .values({probe})
-          .hashJoin(
-              {"p_key"},
-              {"b_key"},
-              PlanBuilder(idGenerator).values({build}).planNode(),
-              "",
-              {"p_interval", "b_key"},
-              core::JoinType::kRight)
-          .planNode();
+  auto plan = PlanBuilder(idGenerator)
+                  .values({probe})
+                  .hashJoin(
+                      {"p_key"},
+                      {"b_key"},
+                      PlanBuilder(idGenerator).values({build}).planNode(),
+                      "",
+                      {"p_interval", "b_key"},
+                      core::JoinType::kRight)
+                  .planNode();
   auto expected = makeRowVector(
       {"p_interval", "b_key"},
-      {makeNullableFlatVector<int64_t>(
-           {std::nullopt}, INTERVAL_DAY_TIME()),
+      {makeNullableFlatVector<int64_t>({std::nullopt}, INTERVAL_DAY_TIME()),
        makeFlatVector<int64_t>({2})});
 
   AssertQueryBuilder(plan).assertResults(expected);
@@ -222,43 +219,35 @@ TEST_F(HashJoinTest, rightJoinNullPadsArrayOfVarbinary) {
       {"p_key", "payload"},
       {makeFlatVector<int64_t>({1}),
        makeArrayVector<StringView>({{"x"_sv}}, VARBINARY())});
-  auto build =
-      makeRowVector({"b_key"}, {makeFlatVector<int64_t>({2})});
+  auto build = makeRowVector({"b_key"}, {makeFlatVector<int64_t>({2})});
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(idGenerator)
-          .values({probe})
-          .hashJoin(
-              {"p_key"},
-              {"b_key"},
-              PlanBuilder(idGenerator).values({build}).planNode(),
-              "",
-              {"payload", "b_key"},
-              core::JoinType::kRight)
-          .planNode();
+  auto plan = PlanBuilder(idGenerator)
+                  .values({probe})
+                  .hashJoin(
+                      {"p_key"},
+                      {"b_key"},
+                      PlanBuilder(idGenerator).values({build}).planNode(),
+                      "",
+                      {"payload", "b_key"},
+                      core::JoinType::kRight)
+                  .planNode();
   auto expected = makeRowVector(
       {"payload", "b_key"},
-      {makeAllNullArrayVector(1, VARBINARY()),
-       makeFlatVector<int64_t>({2})});
+      {makeAllNullArrayVector(1, VARBINARY()), makeFlatVector<int64_t>({2})});
 
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
-TEST_F(
-    HashJoinCpuFallbackTest,
-    unsupportedTypeProjectedOutBeforeHashJoin) {
-  auto probe =
-      makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 2, 3})});
+TEST_F(HashJoinCpuFallbackTest, unsupportedTypeProjectedOutBeforeHashJoin) {
+  auto probe = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 2, 3})});
   auto build = makeRowVector(
       {"b_key", "marker"},
       {makeFlatVector<int64_t>({2, 3, 4}),
        makeMapVector<int64_t, int64_t>(
            {{{20, 200}}, {{30, 300}}, {{40, 400}}})});
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto buildSource = PlanBuilder(idGenerator)
-                         .values({build})
-                         .project({"b_key"})
-                         .planNode();
+  auto buildSource =
+      PlanBuilder(idGenerator).values({build}).project({"b_key"}).planNode();
   auto plan = PlanBuilder(idGenerator)
                   .values({probe})
                   .hashJoin(
@@ -272,8 +261,7 @@ TEST_F(
 
   std::shared_ptr<Task> task;
   auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
-  auto expected =
-      makeRowVector({"p_key"}, {makeFlatVector<int64_t>({2, 3})});
+  auto expected = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({2, 3})});
   facebook::velox::test::assertEqualVectors(expected, result);
 
   const auto operatorStats = toOperatorStats(task->taskStats());
@@ -307,8 +295,8 @@ TEST_F(HashJoinCpuFallbackTest, customComparisonJoinKeyFallsBack) {
 
   std::shared_ptr<Task> task;
   auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
-  auto expected = makeRowVector(
-      {"p_key"}, {makeFlatVector<int64_t>({1, 257}, customType)});
+  auto expected =
+      makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 257}, customType)});
   facebook::velox::test::assertEqualVectors(expected, result);
 
   const auto planStats = toPlanStats(task->taskStats());

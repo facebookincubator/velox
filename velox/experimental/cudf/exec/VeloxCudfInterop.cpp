@@ -213,8 +213,7 @@ void setArrowFormatBackToVarbinary(ArrowSchema* schema, const TypePtr& type) {
     }
     case TypeKind::ARRAY: {
       if (schema->n_children == 1) {
-        setArrowFormatBackToVarbinary(
-            schema->children[0], type->childAt(0));
+        setArrowFormatBackToVarbinary(schema->children[0], type->childAt(0));
       }
       break;
     }

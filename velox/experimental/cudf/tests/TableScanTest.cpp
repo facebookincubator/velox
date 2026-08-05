@@ -907,8 +907,7 @@ TEST_F(TableScanTest, unsupportedScanColumnProjectedOut) {
   auto result = AssertQueryBuilder(plan)
                     .split(makeCudfHiveConnectorSplit(filePath->getPath()))
                     .copyResults(pool(), task);
-  auto expected =
-      makeRowVector({"k"}, {makeFlatVector<int64_t>({1, 2})});
+  auto expected = makeRowVector({"k"}, {makeFlatVector<int64_t>({1, 2})});
   facebook::velox::test::assertEqualVectors(expected, result);
 
   const auto operatorStats = toOperatorStats(task->taskStats());
