@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/CudfMemoryArbitration.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
@@ -315,16 +316,25 @@ void registerCudf() {
   CUDF_FUNC_RANGE();
   cudaFree(nullptr); // Initialize CUDA context at startup
 
-  const std::string mrMode = CudfConfig::getInstance().memoryResource;
-  auto mr = cudf_velox::createMemoryResource(
-      mrMode, CudfConfig::getInstance().memoryPercent);
+  const auto& config = CudfConfig::getInstance();
+  VELOX_USER_CHECK_GE(config.memoryPercent, 1);
+  VELOX_USER_CHECK_LE(config.memoryPercent, 100);
+  size_t freeBytes{0};
+  size_t totalBytes{0};
+  CUDF_CUDA_TRY(cudaMemGetInfo(&freeBytes, &totalBytes));
+  const auto gpuCapacity = static_cast<int64_t>(
+      freeBytes * static_cast<uint64_t>(config.memoryPercent) / 100);
+  registerCudfMemoryResource(gpuCapacity);
+
+  const std::string mrMode = config.memoryResource;
+  auto mr = cudf_velox::createMemoryResource(mrMode, config.memoryPercent);
   cudf::set_current_device_resource(mr);
   mr_ = std::move(mr);
 
-  const auto& outputMrMode = CudfConfig::getInstance().outputMemoryResource;
+  const auto& outputMrMode = config.outputMemoryResource;
   if (!outputMrMode.empty() && outputMrMode != mrMode) {
-    output_mr_ = cudf_velox::createMemoryResource(
-        outputMrMode, CudfConfig::getInstance().memoryPercent);
+    output_mr_ =
+        cudf_velox::createMemoryResource(outputMrMode, config.memoryPercent);
   } else {
     output_mr_ = mr_;
   }
@@ -356,6 +366,7 @@ void unregisterCudf() {
            "are released";
   }
   output_mr_.reset();
+  unregisterCudfMemoryResource();
   mr_.reset();
   exec::DriverFactory::adapters.erase(
       std::remove_if(

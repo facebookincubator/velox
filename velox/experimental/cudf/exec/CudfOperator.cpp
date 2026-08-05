@@ -20,6 +20,7 @@
 
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/exec/Driver.h"
+#include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Task.h"
 
 #include <mutex>
@@ -98,6 +99,18 @@ CudfOperatorBase::CudfOperatorBase(
       *mr_, *output_mr_, gpuPool->shared_from_this(), std::move(resourceOwner));
   tempMemoryResource_ = resources.temp;
   outputMemoryResource_ = resources.output;
+}
+
+void CudfOperatorBase::maybeSetGpuMemoryReclaimer() {
+  auto* gpuPool = customPool(kCudfMemoryResourceTag);
+  if (gpuPool == nullptr || gpuPool->reclaimer() != nullptr) {
+    return;
+  }
+  auto* parent = gpuPool->parent();
+  if (parent == nullptr || parent->reclaimer() == nullptr) {
+    return;
+  }
+  gpuPool->setReclaimer(exec::MemoryReclaimer::create());
 }
 
 } // namespace facebook::velox::cudf_velox

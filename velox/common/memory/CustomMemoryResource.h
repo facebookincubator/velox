@@ -66,7 +66,8 @@ class CustomMemoryResource {
   }
 
   /// Returns a fresh reclaimer for a new pool by invoking the factory
-  /// supplied at construction.
+  /// supplied at construction. A factory may return nullptr to request the
+  /// execution layer's hierarchy-aware default reclaimer for that pool.
   std::unique_ptr<MemoryReclaimer> newReclaimer() const;
 
  private:

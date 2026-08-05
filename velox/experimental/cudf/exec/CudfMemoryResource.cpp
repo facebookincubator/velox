@@ -19,8 +19,11 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
+#include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/memory/SharedArbitrator.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/exec/MemoryReclaimer.h"
 
 #include <rmm/cuda_device.hpp>
 
@@ -113,6 +116,89 @@ CudfMemoryResource::CudfMemoryResource(
               std::move(upstream),
               std::move(pool),
               std::move(resourceOwner))) {}
+
+namespace {
+
+std::mutex registeredResourceMutex;
+std::shared_ptr<memory::CustomMemoryResource> registeredResource;
+bool ownsRegisteredResource{false};
+
+} // namespace
+
+std::shared_ptr<memory::CustomMemoryResource> createCudfCustomMemoryResource(
+    int64_t capacity) {
+  VELOX_USER_CHECK_GT(capacity, 0, "GPU memory capacity must be positive");
+
+  // GPU bytes are allocated by RMM and charged through
+  // reportExternalAllocation(). CustomMemoryResource still requires an
+  // allocator, but this one never backs the charged GPU allocations.
+  memory::MemoryAllocator::Options allocatorOptions;
+  allocatorOptions.capacity = capacity;
+  auto allocator = std::make_shared<memory::MallocAllocator>(allocatorOptions);
+
+  memory::MemoryArbitrator::Config arbitratorConfig{
+      .kind = "SHARED",
+      .capacity = capacity,
+      .arbitrationStateCheckCb = exec::memoryArbitrationStateCheck,
+      .extraConfigs = {
+          {std::string(
+               memory::SharedArbitrator::ExtraConfig::
+                   kMemoryPoolInitialCapacity),
+           "0B"},
+          {std::string(
+               memory::SharedArbitrator::ExtraConfig::
+                   kGlobalArbitrationEnabled),
+           "false"}}};
+  auto arbitrator =
+      std::make_shared<memory::SharedArbitrator>(arbitratorConfig);
+
+  return std::make_shared<memory::CustomMemoryResource>(
+      std::string{kCudfMemoryResourceTag},
+      std::move(allocator),
+      std::move(arbitrator),
+      []() { return std::unique_ptr<memory::MemoryReclaimer>{}; },
+      capacity);
+}
+
+std::shared_ptr<memory::CustomMemoryResource> registerCudfMemoryResource(
+    int64_t capacity) {
+  std::lock_guard<std::mutex> lock(registeredResourceMutex);
+  if (registeredResource != nullptr) {
+    return registeredResource;
+  }
+
+  auto& registry = memory::CustomMemoryResourceRegistry::global();
+  registeredResource = registry.find(std::string{kCudfMemoryResourceTag});
+  if (registeredResource != nullptr) {
+    ownsRegisteredResource = false;
+    return registeredResource;
+  }
+
+  registeredResource = createCudfCustomMemoryResource(capacity);
+  registry.insert(std::string{kCudfMemoryResourceTag}, registeredResource);
+  ownsRegisteredResource = true;
+  return registeredResource;
+}
+
+void unregisterCudfMemoryResource() {
+  std::lock_guard<std::mutex> lock(registeredResourceMutex);
+  if (registeredResource == nullptr) {
+    return;
+  }
+  auto& registry = memory::CustomMemoryResourceRegistry::global();
+  if (ownsRegisteredResource &&
+      registry.find(std::string{kCudfMemoryResourceTag}) ==
+          registeredResource) {
+    registry.erase(std::string{kCudfMemoryResourceTag});
+  }
+  registeredResource.reset();
+  ownsRegisteredResource = false;
+}
+
+std::shared_ptr<memory::CustomMemoryResource> cudfCustomMemoryResource() {
+  std::lock_guard<std::mutex> lock(registeredResourceMutex);
+  return registeredResource;
+}
 
 namespace {
 

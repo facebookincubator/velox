@@ -51,14 +51,18 @@ class CustomMemoryHierarchyTest : public testing::Test {
 
   std::shared_ptr<CustomMemoryResource> makeResource(
       const std::string& tag,
-      int64_t capacity = 1L << 30) {
+      int64_t capacity = 1L << 30,
+      bool deferReclaimerToExecution = false) {
     MemoryAllocator::Options options;
     options.capacity = capacity;
     return std::make_shared<CustomMemoryResource>(
         tag,
         std::make_shared<MallocAllocator>(options),
         MemoryArbitrator::create({}),
-        []() { return MemoryReclaimer::create(0); },
+        [deferReclaimerToExecution]() {
+          return deferReclaimerToExecution ? std::unique_ptr<MemoryReclaimer>{}
+                                           : MemoryReclaimer::create(0);
+        },
         capacity);
   }
 
@@ -134,6 +138,61 @@ class CustomMemoryHierarchyTest : public testing::Test {
   // Task<->Driver cycle and release their pools.
   std::vector<std::shared_ptr<exec::Task>> tasks_;
 };
+
+TEST_F(CustomMemoryHierarchyTest, builderMaterializesAndOwnsCustomResource) {
+  auto resource = makeResource(
+      "gpu", /*capacity=*/1L << 30, /*deferReclaimerToExecution=*/true);
+  std::weak_ptr<CustomMemoryResource> weakResource = resource;
+
+  auto queryCtx = core::QueryCtx::Builder()
+                      .queryId("builder-resource")
+                      .customMemoryResource(resource)
+                      .build();
+  auto root = queryCtx->customPool("gpu");
+  ASSERT_NE(root, nullptr);
+  EXPECT_EQ(root->arbitrator(), resource->arbitrator());
+  EXPECT_NE(root->reclaimer(), nullptr);
+
+  auto registry = queryCtx->registry<CustomMemoryResourceRegistry::Registry>(
+      kCustomMemoryResourceRegistryKey);
+  ASSERT_NE(registry, nullptr);
+  EXPECT_EQ(registry->find("gpu"), resource);
+
+  resource.reset();
+  EXPECT_FALSE(weakResource.expired());
+  root.reset();
+  queryCtx.reset();
+  registry.reset();
+  EXPECT_TRUE(weakResource.expired());
+}
+
+TEST_F(CustomMemoryHierarchyTest, deferredReclaimersUseExecutionHierarchy) {
+  auto resource = makeResource(
+      "gpu", /*capacity=*/1L << 30, /*deferReclaimerToExecution=*/true);
+  auto queryCtx = core::QueryCtx::Builder()
+                      .queryId("execution-reclaimers")
+                      .customMemoryResource(resource)
+                      .build();
+  auto task = makeTask("execution-reclaimers-task", queryCtx);
+
+  auto root = queryCtx->customPool("gpu");
+  ASSERT_NE(root, nullptr);
+  EXPECT_NE(root->reclaimer(), nullptr);
+
+  auto* taskPool = findChild(root.get(), "task.execution-reclaimers-task.gpu");
+  ASSERT_NE(taskPool, nullptr);
+  EXPECT_NE(taskPool->reclaimer(), nullptr);
+
+  auto* nodePool = task->getOrAddCustomNodePool("gpu", "n0");
+  ASSERT_NE(nodePool, nullptr);
+  EXPECT_NE(nodePool->reclaimer(), nullptr);
+
+  auto* leaf = task->addCustomOperatorPool(
+      "gpu", "n0", exec::kUngroupedGroupId, 0, 0, "Project");
+  ASSERT_NE(leaf, nullptr);
+  EXPECT_EQ(leaf->reclaimer(), nullptr)
+      << "Custom operator leaves are owned by the accelerator operator base";
+}
 
 // Task construction creates 'task.<id>.<tag>' aggregate under each
 // registered custom root.

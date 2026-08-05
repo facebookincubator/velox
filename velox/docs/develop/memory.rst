@@ -875,8 +875,9 @@ Custom Memory Resources
 *CustomMemoryResource* lets an extension expose memory tiers other than
 host DRAM (GPU device memory, CXL-attached memory, pinned host memory,
 NUMA-bound pools) side-by-side with the default CPU tier. A resource
-bundles a tag, an allocator, an arbitrator, and a factory that builds a
-per-query reclaimer. The constructor requires a non-empty tag and
+bundles a tag, an allocator, an arbitrator, and a factory that either builds a
+reclaimer for each pool or returns ``nullptr`` to use Velox's execution-aware
+default. The constructor requires a non-empty tag and
 non-null allocator, arbitrator, and reclaimerFactory; the resource is
 immutable once constructed:
 
@@ -926,25 +927,26 @@ global scope at process startup, after *initializeMemoryManager*:
       resource->tag(), resource);
 
 For each query that wants to use a registered resource, the caller looks
-the resource up by tag, materializes the per-resource root pool through
-*MemoryManager::addCustomRootPool*, and hands the pool to the *QueryCtx*
-via *Builder::customPool*:
+the resource up by tag and hands it to *QueryCtx::Builder*. The builder
+materializes the per-resource root pool and retains the resource in a
+query-scoped registry, so pools and extension-owned allocation wrappers can
+safely keep it alive after process-level unregistration:
 
 .. code-block:: c++
 
-  auto* manager = memory::memoryManager();
   auto resource =
       memory::CustomMemoryResourceRegistry::global().find("device");
   VELOX_USER_CHECK_NOT_NULL(resource, "Unknown resource tag: device");
-  auto devicePool = manager->addCustomRootPool("query.q0.device", resource);
   auto queryCtx = core::QueryCtx::Builder()
-                      .customPool("device", std::move(devicePool))
+                      .customMemoryResource(std::move(resource))
                       .queryId("q0")
                       .build();
 
-*addCustomRootPool* invokes *resource->newReclaimer()* to build the
-pool's reclaimer, uses *resource->maxCapacity()* as the pool capacity, and
-backs the pool with *resource->allocator()* and *resource->arbitrator()*.
+The builder calls *addCustomRootPool*, which invokes
+*resource->newReclaimer()*, uses *resource->maxCapacity()* as the pool
+capacity, and backs the pool with *resource->allocator()* and
+*resource->arbitrator()*. *Builder::customPool* remains available to callers
+that need to materialize or configure the root themselves.
 The root pool is exposed on *QueryCtx* keyed by tag:
 
 .. code-block:: c++
@@ -957,14 +959,19 @@ Per-Query Pool Hierarchy
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
 For every custom root pool registered on *QueryCtx* via
-*Builder::customPool*, *Task* builds a parallel ``task → node → operator``
-aggregate/leaf subtree beneath it that mirrors the default hierarchy.
-Aggregate children under a custom root are created at the same moment as
-their default counterparts. Reclaimers for these aggregates come
-from each resource's ``reclaimerFactory`` via
-*CustomMemoryResource::newReclaimer*, so capacity decisions and reclaim
-on a custom subtree are governed end-to-end by the resource's own
-arbitrator and reclaimer — separate from the default DRAM tier.
+*Builder::customMemoryResource* or *Builder::customPool*, *Task* builds a
+parallel ``task → node → operator`` aggregate/leaf subtree beneath it that
+mirrors the default hierarchy. Aggregate children under a custom root are
+created at the same moment as their default counterparts.
+
+The resource's ``reclaimerFactory`` is consulted first. When it returns a
+reclaimer, that resource-specific policy is preserved. When it returns
+``nullptr``, Velox installs its execution-aware query and task reclaimers plus
+generic aggregate traversal reclaimers. This gives the custom hierarchy the
+same Task pause/resume coordination as DRAM without requiring a resource to
+reimplement it. Operator leaves remain extension-owned: an accelerator base
+class installs its leaf reclaimer because only the extension knows whether and
+how that operator can release memory.
 
 Server OOM Prevention
 ---------------------

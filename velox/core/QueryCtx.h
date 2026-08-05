@@ -188,10 +188,21 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
         std::shared_ptr<memory::MemoryPool> pool) {
       VELOX_CHECK(!tag.empty(), "Custom pool tag is empty");
       VELOX_CHECK_NOT_NULL(pool, "Custom pool is null for tag: {}", tag);
+      VELOX_CHECK(
+          !customMemoryResources_.contains(tag),
+          "Duplicate custom memory resource tag: {}",
+          tag);
       auto [_, inserted] = customPools_.emplace(tag, std::move(pool));
       VELOX_CHECK(inserted, "Duplicate custom pool tag: {}", tag);
       return *this;
     }
+
+    /// Registers a custom memory resource for this query. build() creates a
+    /// per-query root pool from the resource, attaches it under
+    /// resource->tag(), and retains the resource in a query-scoped registry for
+    /// at least as long as the QueryCtx.
+    Builder& customMemoryResource(
+        std::shared_ptr<memory::CustomMemoryResource> resource);
 
     /// Adds a callback to be invoked when the QueryCtx is destroyed.
     /// Multiple callbacks can be added by calling this method multiple times.
@@ -224,6 +235,10 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     TraceCtxProvider traceCtxProvider_;
     std::unordered_map<std::string, std::shared_ptr<memory::MemoryPool>>
         customPools_;
+    std::unordered_map<
+        std::string,
+        std::shared_ptr<memory::CustomMemoryResource>>
+        customMemoryResources_;
   };
 
   /// Generates a unique memory pool name for a query.

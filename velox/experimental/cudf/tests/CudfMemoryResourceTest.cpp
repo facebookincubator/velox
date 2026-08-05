@@ -29,6 +29,7 @@
 #include <cudf/table/table.hpp>
 #include <cudf/utilities/error.hpp>
 
+#include <rmm/cuda_stream.hpp>
 #include <rmm/device_buffer.hpp>
 
 #include <folly/ScopeGuard.h>
@@ -37,6 +38,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <future>
 #include <memory>
 #include <new>
@@ -51,6 +53,8 @@ namespace {
 struct HostBackedResourceState {
   std::atomic<bool> failNextAllocation{false};
   std::atomic<bool> failNextCopy{false};
+  std::atomic<std::uintptr_t> allocationStream{0};
+  std::atomic<std::uintptr_t> deallocationStream{0};
 };
 
 /// Host-backed test resource satisfying the device-accessible resource
@@ -83,18 +87,18 @@ class HostBackedDeviceResource {
     ::operator delete(pointer, std::align_val_t(alignment));
   }
 
-  void* allocate(
-      cuda::stream_ref /*stream*/,
-      std::size_t bytes,
-      std::size_t alignment) {
+  void*
+  allocate(cuda::stream_ref stream, std::size_t bytes, std::size_t alignment) {
+    state_->allocationStream = reinterpret_cast<std::uintptr_t>(stream.get());
     return allocate_sync(bytes, alignment);
   }
 
   void deallocate(
-      cuda::stream_ref /*stream*/,
+      cuda::stream_ref stream,
       void* pointer,
       std::size_t bytes,
       std::size_t alignment) noexcept {
+    state_->deallocationStream = reinterpret_cast<std::uintptr_t>(stream.get());
     deallocate_sync(pointer, bytes, alignment);
   }
 
@@ -187,10 +191,12 @@ TEST_F(CudfMemoryResourceTest, ReportsAcrossThreadsAndRollsBackFailure) {
       rmm::device_async_resource_ref{reportingResource}};
 
   constexpr std::size_t kBytes = 256;
+  rmm::cuda_stream allocationStream;
+  rmm::cuda_stream deallocationStream;
   void* allocation = nullptr;
   std::thread allocateThread([&] {
     allocation = ownedResource.allocate(
-        rmm::cuda_stream_default, kBytes, alignof(std::max_align_t));
+        allocationStream.view().value(), kBytes, alignof(std::max_align_t));
   });
   allocateThread.join();
 
@@ -199,13 +205,20 @@ TEST_F(CudfMemoryResourceTest, ReportsAcrossThreadsAndRollsBackFailure) {
 
   std::thread deallocateThread([&] {
     ownedResource.deallocate(
-        rmm::cuda_stream_default,
+        deallocationStream.view().value(),
         allocation,
         kBytes,
         alignof(std::max_align_t));
   });
   deallocateThread.join();
   EXPECT_EQ(pool->usedBytes(), 0);
+  EXPECT_EQ(
+      state->allocationStream,
+      reinterpret_cast<std::uintptr_t>(allocationStream.view().value()));
+  EXPECT_EQ(
+      state->deallocationStream,
+      reinterpret_cast<std::uintptr_t>(deallocationStream.view().value()));
+  EXPECT_NE(state->allocationStream, state->deallocationStream);
 
   auto* synchronousAllocation =
       ownedResource.allocate_sync(kBytes, alignof(std::max_align_t));
@@ -290,6 +303,121 @@ TEST_F(CudfMemoryResourceTest, ReservationAndExternalAccountingCoexist) {
   EXPECT_EQ(pool->usedBytes(), 0);
   pool->release();
   EXPECT_EQ(pool->reservedBytes(), 0);
+}
+
+TEST_F(CudfMemoryResourceTest, SharedCapacityTransfersWithoutUsedReclaim) {
+  constexpr int64_t kCapacity = 32L << 20;
+  constexpr std::size_t kAllocation = 24L << 20;
+  constexpr std::size_t kRejectedAllocation = 16L << 20;
+
+  auto owner = createCudfCustomMemoryResource(kCapacity);
+  auto queryA = core::QueryCtx::Builder()
+                    .queryId("gpu-arbitration-a")
+                    .customMemoryResource(owner)
+                    .build();
+  auto queryB = core::QueryCtx::Builder()
+                    .queryId("gpu-arbitration-b")
+                    .customMemoryResource(owner)
+                    .build();
+  auto rootA = queryA->customPool(std::string{kCudfMemoryResourceTag});
+  auto rootB = queryB->customPool(std::string{kCudfMemoryResourceTag});
+  ASSERT_NE(rootA, nullptr);
+  ASSERT_NE(rootB, nullptr);
+  EXPECT_EQ(rootA->arbitrator(), rootB->arbitrator());
+  EXPECT_EQ(rootA->arbitrator(), owner->arbitrator());
+
+  auto poolA = rootA->addLeafChild("gpu-arbitration-a-leaf");
+  auto poolB = rootB->addLeafChild("gpu-arbitration-b-leaf");
+  auto stateA = std::make_shared<HostBackedResourceState>();
+  auto stateB = std::make_shared<HostBackedResourceState>();
+  CudfMemoryResource resourceA{makeTestUpstream(stateA), poolA, owner};
+  CudfMemoryResource resourceB{makeTestUpstream(stateB), poolB, owner};
+
+  auto* allocationA = resourceA.allocate(
+      rmm::cuda_stream_default, kAllocation, alignof(std::max_align_t));
+  EXPECT_EQ(poolA->usedBytes(), kAllocation);
+  EXPECT_GE(rootA->capacity(), kAllocation);
+  resourceA.deallocate(
+      rmm::cuda_stream_default,
+      allocationA,
+      kAllocation,
+      alignof(std::max_align_t));
+  EXPECT_EQ(poolA->usedBytes(), 0);
+
+  auto* allocationB = resourceB.allocate(
+      rmm::cuda_stream_default, kAllocation, alignof(std::max_align_t));
+  EXPECT_EQ(poolB->usedBytes(), kAllocation);
+  EXPECT_GE(rootB->capacity(), kAllocation);
+
+  EXPECT_THROW(
+      resourceA.allocate(
+          rmm::cuda_stream_default,
+          kRejectedAllocation,
+          alignof(std::max_align_t)),
+      VeloxRuntimeError);
+  EXPECT_EQ(poolA->usedBytes(), 0);
+
+  const auto stats = owner->arbitrator()->stats();
+  EXPECT_GT(stats.reclaimedFreeBytes, 0);
+  EXPECT_EQ(stats.reclaimedUsedBytes, 0);
+  EXPECT_GT(stats.numFailures, 0);
+
+  resourceB.deallocate(
+      rmm::cuda_stream_default,
+      allocationB,
+      kAllocation,
+      alignof(std::max_align_t));
+}
+
+TEST_F(CudfMemoryResourceTest, QueryRetainsRegisteredResourceAfterUnregister) {
+  constexpr int64_t kCapacity = 32L << 20;
+  unregisterCudfMemoryResource();
+  SCOPE_EXIT {
+    unregisterCudfMemoryResource();
+  };
+
+  auto resource = registerCudfMemoryResource(kCapacity);
+  std::weak_ptr<memory::CustomMemoryResource> weakResource = resource;
+  auto queryCtx = core::QueryCtx::Builder()
+                      .queryId("gpu-resource-lifetime")
+                      .customMemoryResource(resource)
+                      .build();
+
+  EXPECT_EQ(cudfCustomMemoryResource(), resource);
+  unregisterCudfMemoryResource();
+  EXPECT_EQ(cudfCustomMemoryResource(), nullptr);
+  EXPECT_EQ(
+      memory::CustomMemoryResourceRegistry::global().find(
+          std::string{kCudfMemoryResourceTag}),
+      nullptr);
+
+  resource.reset();
+  EXPECT_FALSE(weakResource.expired());
+  queryCtx.reset();
+  EXPECT_TRUE(weakResource.expired());
+}
+
+TEST_F(CudfMemoryResourceTest, ReusesApplicationOwnedRegisteredResource) {
+  constexpr int64_t kCapacity = 32L << 20;
+  unregisterCudfMemoryResource();
+  auto applicationResource = makeCustomResource(kCapacity);
+  auto& registry = memory::CustomMemoryResourceRegistry::global();
+  registry.insert(std::string{kCudfMemoryResourceTag}, applicationResource);
+  SCOPE_EXIT {
+    unregisterCudfMemoryResource();
+    if (registry.find(std::string{kCudfMemoryResourceTag}) ==
+        applicationResource) {
+      registry.erase(std::string{kCudfMemoryResourceTag});
+    }
+  };
+
+  EXPECT_EQ(registerCudfMemoryResource(kCapacity / 2), applicationResource);
+  EXPECT_EQ(cudfCustomMemoryResource(), applicationResource);
+
+  unregisterCudfMemoryResource();
+  EXPECT_EQ(cudfCustomMemoryResource(), nullptr);
+  EXPECT_EQ(
+      registry.find(std::string{kCudfMemoryResourceTag}), applicationResource);
 }
 
 TEST_F(CudfMemoryResourceTest, RegistryConstructionFailureIsRetryable) {

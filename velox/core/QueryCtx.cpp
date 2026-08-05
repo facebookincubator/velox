@@ -18,8 +18,23 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/config/Config.h"
+#include "velox/common/memory/CustomMemoryResource.h"
+#include "velox/common/memory/CustomMemoryResourceRegistry.h"
 
 namespace facebook::velox::core {
+
+QueryCtx::Builder& QueryCtx::Builder::customMemoryResource(
+    std::shared_ptr<memory::CustomMemoryResource> resource) {
+  VELOX_CHECK_NOT_NULL(resource, "Custom memory resource is null");
+  const auto& tag = resource->tag();
+  VELOX_CHECK(
+      !customPools_.contains(tag),
+      "Duplicate custom memory resource tag: {}",
+      tag);
+  auto [_, inserted] = customMemoryResources_.emplace(tag, std::move(resource));
+  VELOX_CHECK(inserted, "Duplicate custom memory resource tag: {}", tag);
+  return *this;
+}
 
 // static
 std::shared_ptr<QueryCtx> QueryCtx::create(
@@ -61,6 +76,18 @@ std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {
   }
   for (auto& [tag, pool] : customPools_) {
     queryCtx->addCustomPool(tag, std::move(pool));
+  }
+  if (!customMemoryResources_.empty()) {
+    auto registry = memory::CustomMemoryResourceRegistry::createRegistry();
+    const auto rootNamePrefix = QueryCtx::generatePoolName(queryCtx->queryId());
+    for (auto& [tag, resource] : customMemoryResources_) {
+      auto root = memory::memoryManager()->addCustomRootPool(
+          fmt::format("{}.{}", rootNamePrefix, tag), resource);
+      queryCtx->addCustomPool(tag, std::move(root));
+      registry->insert(tag, std::move(resource));
+    }
+    queryCtx->setRegistry<memory::CustomMemoryResourceRegistry::Registry>(
+        memory::kCustomMemoryResourceRegistryKey, std::move(registry));
   }
   return queryCtx;
 }
@@ -113,8 +140,12 @@ void QueryCtx::addCustomPool(
     std::shared_ptr<memory::MemoryPool> pool) {
   VELOX_CHECK(!tag.empty(), "Custom pool tag is empty");
   VELOX_CHECK_NOT_NULL(pool, "Custom pool is null for tag: {}", tag);
+  auto* poolPtr = pool.get();
   auto [_, inserted] = customPools_.emplace(tag, std::move(pool));
   VELOX_CHECK(inserted, "Duplicate custom pool tag: {}", tag);
+  if (poolPtr->reclaimer() == nullptr) {
+    poolPtr->setReclaimer(QueryCtx::MemoryReclaimer::create(this, poolPtr));
+  }
 }
 
 std::shared_ptr<memory::MemoryPool> QueryCtx::customPool(

@@ -122,6 +122,7 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
   void initialize() final {
     auto memoryResources = scopedMemoryResources();
     Operator::initialize();
+    maybeSetGpuMemoryReclaimer();
     doInitialize();
     checkCudaErrorInDebug();
   }
@@ -165,6 +166,7 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
     doClose();
     checkCudaErrorInDebug();
   }
+  void maybeSetGpuMemoryReclaimer();
 
  protected:
   [[nodiscard]] ScopedCudfMemoryResources scopedMemoryResources() const {

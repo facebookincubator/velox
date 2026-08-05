@@ -108,6 +108,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_operator_test
+  SOURCES Main.cpp CudfOperatorTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_memory_resource_test
   SOURCES Main.cpp CudfMemoryResourceTest.cpp
   LIBS velox_cudf_exec velox_memory

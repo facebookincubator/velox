@@ -74,8 +74,8 @@ struct CudfConfig {
   /// Possible values are (cuda, pool, async, arena, managed, managed_pool).
   std::string memoryResource{"async"};
 
-  /// The initial percent of GPU memory to allocate for pool or arena memory
-  /// resources.
+  /// Percent of currently free GPU memory used as the process GPU arbitration
+  /// budget and, for pool or arena resources, as their initial allocation.
   int32_t memoryPercent{50};
 
   /// Memory resource for output vectors. When set to a value different from
