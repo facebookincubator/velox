@@ -34,6 +34,7 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -103,6 +104,12 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
 
   static void SetUpTestCase() {
     CudfHiveConnectorTestBase::SetUpTestCase();
+    parquet::registerParquetReaderFactory();
+  }
+
+  static void TearDownTestCase() {
+    parquet::unregisterParquetReaderFactory();
+    CudfHiveConnectorTestBase::TearDownTestCase();
   }
 
   std::vector<RowVectorPtr> makeVectors(
@@ -859,6 +866,97 @@ TEST_F(TableScanTest, decimalRemainingFilter) {
       plan,
       {filePath},
       "SELECT c0, c1 FROM tmp WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))");
+}
+
+TEST_F(TableScanTest, unsupportedScanColumnProjectedOut) {
+  auto input = makeRowVector(
+      {"k", "m"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeMapVector<int64_t, int64_t>({{{10, 100}}, {{20, 200}}})});
+  auto rowType = asRowType(input->type());
+  auto filePath = TempFilePath::create();
+  auto fs = filesystems::getFileSystem(filePath->getPath(), {});
+  auto writeFile = fs->openFileForWrite(
+      filePath->getPath(),
+      {.shouldCreateParentDirectories = true,
+       .shouldThrowOnFileAlreadyExists = false});
+  auto sink = std::make_unique<dwio::common::WriteFileSink>(
+      std::move(writeFile), filePath->getPath());
+  auto writerPool =
+      rootPool_->addAggregateChild("TableScanTest.UnsupportedMapWriter");
+  dwio::common::WriterOptions options;
+  options.memoryPool = writerPool.get();
+  parquet::Writer writer(std::move(sink), options, writerPool, rowType);
+  writer.write(input);
+  writer.close();
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .project({"k"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .split(makeCudfHiveConnectorSplit(filePath->getPath()))
+                    .copyResults(pool(), task);
+  auto expected =
+      makeRowVector({"k"}, {makeFlatVector<int64_t>({1, 2})});
+  facebook::velox::test::assertEqualVectors(expected, result);
+
+  const auto operatorStats = toOperatorStats(task->taskStats());
+  EXPECT_EQ(operatorStats.count("CudfFilterProject"), 0);
+  EXPECT_EQ(operatorStats.count("FilterProject"), 1);
+}
+
+TEST_F(TableScanTest, unsupportedScanOutputFallsBack) {
+  auto input = makeRowVector(
+      {"k", "m"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeMapVector<int64_t, int64_t>({{{10, 100}}, {{20, 200}}})});
+  auto rowType = asRowType(input->type());
+  auto filePath = TempFilePath::create();
+  auto fs = filesystems::getFileSystem(filePath->getPath(), {});
+  auto writeFile = fs->openFileForWrite(
+      filePath->getPath(),
+      {.shouldCreateParentDirectories = true,
+       .shouldThrowOnFileAlreadyExists = false});
+  auto sink = std::make_unique<dwio::common::WriteFileSink>(
+      std::move(writeFile), filePath->getPath());
+  auto writerPool =
+      rootPool_->addAggregateChild("TableScanTest.UnsupportedMapOutputWriter");
+  dwio::common::WriterOptions options;
+  options.memoryPool = writerPool.get();
+  parquet::Writer writer(std::move(sink), options, writerPool, rowType);
+  writer.write(input);
+  writer.close();
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"k", "m"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeMapVector<int64_t, int64_t>({{{10, 100}}, {{20, 200}}})});
+  AssertQueryBuilder(plan)
+      .split(makeCudfHiveConnectorSplit(filePath->getPath()))
+      .assertResults(expected);
 }
 
 // Velox's parquet writer stores DECIMAL(7, 2) as INT32 when

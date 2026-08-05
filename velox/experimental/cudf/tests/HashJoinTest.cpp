@@ -35,6 +35,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
+#include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/VectorPrinter.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -68,6 +69,27 @@ class HashJoinTest : public HashJoinTestBase {
     cudf_velox::unregisterCudf();
     HashJoinTestBase::TearDown();
   }
+};
+
+class HashJoinCpuFallbackTest : public HashJoinTest {
+ protected:
+  void SetUp() override {
+    HashJoinTestBase::SetUp();
+    previousAllowCpuFallback_ =
+        cudf_velox::CudfConfig::getInstance().allowCpuFallback;
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
+    cudf_velox::registerCudf();
+  }
+
+  void TearDown() override {
+    cudf_velox::unregisterCudf();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback =
+        previousAllowCpuFallback_;
+    HashJoinTestBase::TearDown();
+  }
+
+ private:
+  bool previousAllowCpuFallback_{false};
 };
 
 class MultiThreadedHashJoinTest
@@ -165,6 +187,140 @@ TEST_F(HashJoinTest, countStarOverFullJoinWithZeroColumnOutput) {
 
   auto expected = makeRowVector({makeFlatVector<int64_t>({7})});
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(HashJoinTest, rightJoinNullPadsIntervalDayTime) {
+  auto probe = makeRowVector(
+      {"p_key", "p_interval"},
+      {makeFlatVector<int64_t>({1}),
+       makeFlatVector<int64_t>({86'400'000}, INTERVAL_DAY_TIME())});
+  auto build =
+      makeRowVector({"b_key"}, {makeFlatVector<int64_t>({2})});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .values({probe})
+          .hashJoin(
+              {"p_key"},
+              {"b_key"},
+              PlanBuilder(idGenerator).values({build}).planNode(),
+              "",
+              {"p_interval", "b_key"},
+              core::JoinType::kRight)
+          .planNode();
+  auto expected = makeRowVector(
+      {"p_interval", "b_key"},
+      {makeNullableFlatVector<int64_t>(
+           {std::nullopt}, INTERVAL_DAY_TIME()),
+       makeFlatVector<int64_t>({2})});
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(HashJoinTest, rightJoinNullPadsArrayOfVarbinary) {
+  auto probe = makeRowVector(
+      {"p_key", "payload"},
+      {makeFlatVector<int64_t>({1}),
+       makeArrayVector<StringView>({{"x"_sv}}, VARBINARY())});
+  auto build =
+      makeRowVector({"b_key"}, {makeFlatVector<int64_t>({2})});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .values({probe})
+          .hashJoin(
+              {"p_key"},
+              {"b_key"},
+              PlanBuilder(idGenerator).values({build}).planNode(),
+              "",
+              {"payload", "b_key"},
+              core::JoinType::kRight)
+          .planNode();
+  auto expected = makeRowVector(
+      {"payload", "b_key"},
+      {makeAllNullArrayVector(1, VARBINARY()),
+       makeFlatVector<int64_t>({2})});
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(
+    HashJoinCpuFallbackTest,
+    unsupportedTypeProjectedOutBeforeHashJoin) {
+  auto probe =
+      makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto build = makeRowVector(
+      {"b_key", "marker"},
+      {makeFlatVector<int64_t>({2, 3, 4}),
+       makeMapVector<int64_t, int64_t>(
+           {{{20, 200}}, {{30, 300}}, {{40, 400}}})});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto buildSource = PlanBuilder(idGenerator)
+                         .values({build})
+                         .project({"b_key"})
+                         .planNode();
+  auto plan = PlanBuilder(idGenerator)
+                  .values({probe})
+                  .hashJoin(
+                      {"p_key"},
+                      {"b_key"},
+                      buildSource,
+                      "",
+                      {"p_key"},
+                      core::JoinType::kInner)
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
+  auto expected =
+      makeRowVector({"p_key"}, {makeFlatVector<int64_t>({2, 3})});
+  facebook::velox::test::assertEqualVectors(expected, result);
+
+  const auto operatorStats = toOperatorStats(task->taskStats());
+  EXPECT_EQ(operatorStats.count("HashBuild"), 1);
+  EXPECT_EQ(operatorStats.count("HashProbe"), 1);
+  EXPECT_EQ(operatorStats.count("CudfHashJoinBuild"), 0);
+  EXPECT_EQ(operatorStats.count("CudfHashJoinProbe"), 0);
+}
+
+TEST_F(HashJoinCpuFallbackTest, customComparisonJoinKeyFallsBack) {
+  const auto customType =
+      facebook::velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON();
+  auto probe = makeRowVector(
+      {"p_key"}, {makeFlatVector<int64_t>({1, 257, 2}, customType)});
+  auto build =
+      makeRowVector({"b_key"}, {makeFlatVector<int64_t>({1}, customType)});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId projectNodeId;
+  auto plan = PlanBuilder(idGenerator)
+                  .values({probe})
+                  .project({"p_key"})
+                  .capturePlanNodeId(projectNodeId)
+                  .hashJoin(
+                      {"p_key"},
+                      {"b_key"},
+                      PlanBuilder(idGenerator).values({build}).planNode(),
+                      "",
+                      {"p_key"},
+                      core::JoinType::kInner)
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
+  auto expected = makeRowVector(
+      {"p_key"}, {makeFlatVector<int64_t>({1, 257}, customType)});
+  facebook::velox::test::assertEqualVectors(expected, result);
+
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& projectStats = planStats.at(projectNodeId).operatorStats;
+  EXPECT_EQ(projectStats.count("FilterProject"), 1);
+  EXPECT_EQ(projectStats.count("CudfFilterProject"), 0);
+
+  const auto operatorStats = toOperatorStats(task->taskStats());
+  EXPECT_EQ(operatorStats.count("HashBuild"), 1);
+  EXPECT_EQ(operatorStats.count("HashProbe"), 1);
+  EXPECT_EQ(operatorStats.count("CudfHashJoinBuild"), 0);
+  EXPECT_EQ(operatorStats.count("CudfHashJoinProbe"), 0);
 }
 
 TEST_P(MultiThreadedHashJoinTest, bigintArray) {

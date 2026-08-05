@@ -41,6 +41,9 @@
 namespace facebook::velox::cudf_velox {
 
 std::optional<cudf::data_type> tryVeloxToCudfDataType(const TypePtr& type) {
+  if (type->providesCustomComparison()) {
+    return std::nullopt;
+  }
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
       return cudf::data_type{cudf::type_id::BOOL8};
@@ -49,18 +52,16 @@ std::optional<cudf::data_type> tryVeloxToCudfDataType(const TypePtr& type) {
     case TypeKind::SMALLINT:
       return cudf::data_type{cudf::type_id::INT16};
     case TypeKind::INTEGER:
-      // TODO: handle interval types (durations?)
-      // if (type->isIntervalYearMonth()) {
-      //   return cudf::type_id::...;
-      // }
+      if (type->isIntervalYearMonth()) {
+        return std::nullopt;
+      }
       if (type->isDate()) {
         return cudf::data_type{cudf::type_id::TIMESTAMP_DAYS};
       }
       return cudf::data_type{cudf::type_id::INT32};
     case TypeKind::BIGINT:
-      // BIGINT is used for INT64, DECIMAL64, and INTERVAL_DAY_TIME
-      if (type->isIntervalDayTime()) {
-        return cudf::data_type{cudf::type_id::DURATION_MILLISECONDS};
+      if (type->isTime()) {
+        return std::nullopt;
       }
       if (type->isDecimal()) {
         auto const decimalType =
@@ -207,6 +208,13 @@ void setArrowFormatBackToVarbinary(ArrowSchema* schema, const TypePtr& type) {
       }
       for (size_t i = 0; i < type->size(); ++i) {
         setArrowFormatBackToVarbinary(schema->children[i], type->childAt(i));
+      }
+      break;
+    }
+    case TypeKind::ARRAY: {
+      if (schema->n_children == 1) {
+        setArrowFormatBackToVarbinary(
+            schema->children[0], type->childAt(0));
       }
       break;
     }
