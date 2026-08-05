@@ -395,26 +395,73 @@ RPCState::ReadyBatch RPCState::extractReadyBatchLocked(
 RPCState::BatchPollResult RPCState::tryPollBatchOrWait(
     ContinueFuture* future,
     std::optional<ReadyBatch>* readyBatch) {
-  std::lock_guard<std::mutex> l(mutex_);
+  // Any self-wake fulfillment (Step 3 below) runs AFTER releasing mutex_:
+  // setValue() may inline-drive a continuation that reacquires the
+  // driver/operator locks, so it must never run under mutex_ -- the lock-order
+  // inversion D113951677 fixed. This mirrors addPendingBatch, which drains
+  // waiters under the lock but fulfills them outside it.
+  std::optional<ContinuePromise> selfWake;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
 
-  // Step 1: Check for a ready batch (out-of-order: first ready wins).
-  for (auto it = pendingBatches_.begin(); it != pendingBatches_.end(); ++it) {
-    if (it->future.isReady()) {
-      *readyBatch = extractReadyBatchLocked(it);
-      return BatchPollResult::kGotBatch;
+    // Step 1: Check for a ready batch (out-of-order: first ready wins).
+    for (auto it = pendingBatches_.begin(); it != pendingBatches_.end(); ++it) {
+      if (it->future.isReady()) {
+        *readyBatch = extractReadyBatchLocked(it);
+        return BatchPollResult::kGotBatch;
+      }
+    }
+
+    // Step 2: Check finish condition.
+    if (noMoreInput_ && pendingBatches_.empty()) {
+      RPC_STATE_VLOG(1) << "tryPollBatchOrWait: finish condition met";
+      return BatchPollResult::kFinished;
+    }
+
+    // Step 3: Must wait. Register a waiter that a batch completion fulfills.
+    //
+    // Guard against the completion-drain race. A batch's completion callback
+    // stamps completionTimeNs before it drains the waiter list under mutex_
+    // (see addPendingBatch), and the batch future only becomes ready after that
+    // callback returns. So there is a window -- waiters drained, callback not
+    // yet returned -- in which Step 1 above sees future.isReady() == false even
+    // though the drain has already passed. A waiter registered in that window
+    // would be orphaned: the completing batch will never fulfill it, and at an
+    // in-flight window of 1 (the last batch) no later completion would either,
+    // parking the single-consumer driver for good.
+    //
+    // completionTimeNs != 0 on any pending batch is the reliable under-lock
+    // signal that a completion is in progress: the callback stamps it before
+    // taking mutex_ to drain, so the mutex we hold synchronizes-with that drain
+    // and an already-drained completion is always visible here. When set,
+    // self-fulfill the waiter (below, outside the lock) so the caller re-polls
+    // and claims the now/soon-ready batch instead of parking off a promise no
+    // completion will wake.
+    bool completionInProgress = false;
+    for (const auto& batch : pendingBatches_) {
+      if (batch.completionTimeNs->load(std::memory_order_acquire) != 0) {
+        completionInProgress = true;
+        break;
+      }
+    }
+    RPC_STATE_VLOG(2) << "tryPollBatchOrWait: must wait"
+                      << (completionInProgress
+                              ? " (self-woken: RPC completion racing)"
+                              : "");
+    promises_.emplace_back("RPCState::tryPollBatchOrWait");
+    *future = promises_.back().getSemiFuture();
+    if (completionInProgress) {
+      // Move the waiter out and drop it from the list so a later
+      // takeWaitersLocked cannot double-fulfill it; it is fulfilled below, once
+      // the lock is released.
+      selfWake = std::move(promises_.back());
+      promises_.pop_back();
     }
   }
 
-  // Step 2: Check finish condition.
-  if (noMoreInput_ && pendingBatches_.empty()) {
-    RPC_STATE_VLOG(1) << "tryPollBatchOrWait: finish condition met";
-    return BatchPollResult::kFinished;
+  if (selfWake.has_value()) {
+    selfWake->setValue();
   }
-
-  // Step 3: Must wait.
-  RPC_STATE_VLOG(2) << "tryPollBatchOrWait: must wait";
-  promises_.emplace_back("RPCState::tryPollBatchOrWait");
-  *future = promises_.back().getSemiFuture();
   return BatchPollResult::kMustWait;
 }
 
