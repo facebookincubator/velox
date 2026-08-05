@@ -16,7 +16,6 @@
 
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
-#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 

@@ -794,6 +794,10 @@ VectorPtr VectorFuzzer::normalizeMapKeys(
   auto rawOffsets = offsets->as<vector_size_t>();
   auto rawSizes = sizes->asMutable<vector_size_t>();
 
+  // Keys may be dictionary/constant/lazy encoded; decode so values can be read
+  // regardless of encoding.
+  DecodedVector decodedKeys(*keys);
+
   // Looks for duplicate key values.
   std::unordered_set<uint64_t> set;
   for (size_t i = 0; i < mapSize; ++i) {
@@ -807,7 +811,7 @@ VectorPtr VectorFuzzer::normalizeMapKeys(
 
     for (size_t j = 0; j < rawSizes[i]; ++j) {
       vector_size_t idx = rawOffsets[i] + j;
-      uint64_t hash = keys->hashValueAt(idx);
+      uint64_t hash = decodedKeys.base()->hashValueAt(decodedKeys.index(idx));
 
       // If we find the same hash (either same key value or hash colision), we
       // cut it short by reducing this element's map size. This should not

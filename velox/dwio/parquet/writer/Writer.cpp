@@ -81,6 +81,10 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
     return bytesFlushed_ + buffer_.size();
   }
 
+  int64_t bufferedBytes() const {
+    return buffer_.size();
+  }
+
   ::arrow::Status Close() override {
     ARROW_RETURN_NOT_OK(Flush());
     sink_->close();
@@ -103,14 +107,38 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
   int64_t bytesFlushed_ = 0;
 };
 
+void ParquetWriterOptions::merge(
+    const dwio::common::FormatSpecificOptions& overrides) {
+  const auto* parquetOverrides =
+      dynamic_cast<const ParquetWriterOptions*>(&overrides);
+  VELOX_CHECK_NOT_NULL(
+      parquetOverrides,
+      "Cannot merge Parquet writer options with a different "
+      "FormatSpecificOptions type.");
+
+  const auto mergeIfSet = [](auto& value, const auto& overrideValue) {
+    if (overrideValue.has_value()) {
+      value = overrideValue;
+    }
+  };
+  mergeIfSet(
+      parquetWriteTimestampUnit, parquetOverrides->parquetWriteTimestampUnit);
+  mergeIfSet(enableDictionary, parquetOverrides->enableDictionary);
+  mergeIfSet(
+      enableStoreDecimalAsInteger,
+      parquetOverrides->enableStoreDecimalAsInteger);
+  mergeIfSet(
+      dictionaryPageSizeLimit, parquetOverrides->dictionaryPageSizeLimit);
+  mergeIfSet(useParquetDataPageV2, parquetOverrides->useParquetDataPageV2);
+  mergeIfSet(dataPageSize, parquetOverrides->dataPageSize);
+  mergeIfSet(batchSize, parquetOverrides->batchSize);
+  mergeIfSet(createdBy, parquetOverrides->createdBy);
+}
+
 struct ArrowContext {
   std::unique_ptr<FileWriter> writer;
   std::shared_ptr<::arrow::Schema> schema;
   std::shared_ptr<WriterProperties> properties;
-  uint64_t stagingRows = 0;
-  int64_t stagingBytes = 0;
-  // columns, Arrays
-  std::vector<std::vector<std::shared_ptr<::arrow::Array>>> stagingChunks;
 };
 
 Compression::type getArrowParquetCompression(
@@ -124,6 +152,8 @@ Compression::type getArrowParquetCompression(
   } else if (compression == common::CompressionKind_NONE) {
     return Compression::UNCOMPRESSED;
   } else if (compression == common::CompressionKind_LZ4) {
+    return Compression::LZ4;
+  } else if (compression == common::CompressionKind_LZ4_HADOOP) {
     return Compression::LZ4_HADOOP;
   } else {
     VELOX_FAIL("Unsupported compression {}", compression);
@@ -382,6 +412,7 @@ Writer::Writer(
               *generalPool_,
               getFormatOptions(options).bufferGrowRatio)),
       arrowContext_(std::make_shared<ArrowContext>()),
+      maxTargetFileSizeBytes_(options.maxTargetFileSizeBytes),
       schema_(std::move(schema)) {
   const auto& parquetWriterOptions = getFormatOptions(options);
   validateSchemaRecursive(schema_, parquetWriterOptions.parquetFieldIds);
@@ -409,12 +440,6 @@ Writer::Writer(
 
   if (options.flushPolicyFactory) {
     castUniquePointer(options.flushPolicyFactory(), flushPolicy_);
-  } else if (options.maxTargetFileSizeBytes > 0) {
-    auto bytesInRowGroup = static_cast<int64_t>(std::min<uint64_t>(
-        DefaultFlushPolicy::kDefaultBytesInRowGroup,
-        options.maxTargetFileSizeBytes));
-    flushPolicy_ = std::make_unique<DefaultFlushPolicy>(
-        DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
   } else {
     flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
   }
@@ -445,61 +470,27 @@ Writer::Writer(
           std::move(schema)} {}
 
 void Writer::flush() {
-  if (arrowContext_->stagingRows > 0) {
-    if (!arrowContext_->writer) {
-      ArrowWriterProperties::Builder builder;
-      if (writeInt96AsTimestamp_) {
-        builder.enableDeprecatedInt96Timestamps();
-      }
-      auto arrowProperties = builder.build();
-      PARQUET_ASSIGN_OR_THROW(
-          arrowContext_->writer,
-          FileWriter::open(
-              *arrowContext_->schema.get(),
-              arrowMemoryPool_.get(),
-              stream_,
-              arrowContext_->properties,
-              arrowProperties));
-    }
-
-    auto fields = arrowContext_->schema->fields();
-    std::vector<std::shared_ptr<::arrow::ChunkedArray>> chunks;
-    for (int colIdx = 0; colIdx < fields.size(); colIdx++) {
-      auto dataType = fields.at(colIdx)->type();
-      auto chunk =
-          ::arrow::ChunkedArray::Make(
-              std::move(arrowContext_->stagingChunks.at(colIdx)), dataType)
-              .ValueOrDie();
-      chunks.push_back(chunk);
-    }
-    auto table = ::arrow::Table::Make(
-        arrowContext_->schema,
-        std::move(chunks),
-        static_cast<int64_t>(arrowContext_->stagingRows));
-    PARQUET_THROW_NOT_OK(arrowContext_->writer->writeTable(
-        *table, static_cast<int64_t>(flushPolicy_->rowsInRowGroup())));
-    PARQUET_THROW_NOT_OK(stream_->Flush());
-    for (auto& chunk : arrowContext_->stagingChunks) {
-      chunk.clear();
-    }
-    arrowContext_->stagingRows = 0;
-    arrowContext_->stagingBytes = 0;
+  if (arrowContext_->writer) {
+    PARQUET_THROW_NOT_OK(arrowContext_->writer->finishRowGroup());
   }
+  PARQUET_THROW_NOT_OK(stream_->Flush());
 }
 
-dwio::common::StripeProgress getStripeProgress(
-    uint64_t stagingRows,
-    int64_t stagingBytes) {
-  return dwio::common::StripeProgress{
-      .stripeRowCount = stagingRows, .stripeSizeEstimate = stagingBytes};
+dwio::common::StripeProgress getStripeProgress(int64_t bufferedBytes) {
+  // Arrow Parquet FileWriter will new row group based on the row number, so
+  // we only check buffered bytes to flush row group here.
+  return dwio::common::StripeProgress{.stripeSizeEstimate = bufferedBytes};
+}
+
+bool stagedBytesReachTargetFileSize(
+    uint64_t maxTargetFileSizeBytes,
+    int64_t streamBytes,
+    int64_t currentRowGroupBytes) {
+  return maxTargetFileSizeBytes > 0 && currentRowGroupBytes > 0 &&
+      streamBytes + currentRowGroupBytes >= maxTargetFileSizeBytes;
 }
 
 /**
- * This method would cache input `ColumnarBatch` to make the size of row group
- * big. It would flush when:
- * - the cached numRows bigger than `rowsInRowGroup_`
- * - the cached bytes bigger than `bytesInRowGroup_`
- *
  * This method assumes each input `ColumnarBatch` have same schema.
  */
 void Writer::write(const VectorPtr& data) {
@@ -537,11 +528,6 @@ void Writer::write(const VectorPtr& data) {
     }
 
     arrowContext_->schema = ::arrow::schema(newFields);
-    for (int colIdx = 0; colIdx < arrowContext_->schema->num_fields();
-         colIdx++) {
-      arrowContext_->stagingChunks.push_back(
-          std::vector<std::shared_ptr<::arrow::Array>>());
-    }
   }
 
   // Import the data array using the cached schema.
@@ -549,22 +535,45 @@ void Writer::write(const VectorPtr& data) {
       auto recordBatch,
       ::arrow::ImportRecordBatch(&array, arrowContext_->schema));
 
-  auto bytes = data->estimateFlatSize();
-  auto numRows = data->size();
-
-  for (int colIdx = 0; colIdx < recordBatch->num_columns(); colIdx++) {
-    arrowContext_->stagingChunks.at(colIdx).push_back(
-        recordBatch->column(colIdx));
+  if (recordBatch->num_rows() == 0) {
+    return;
   }
-  arrowContext_->stagingRows += numRows;
-  arrowContext_->stagingBytes += bytes;
+
+  if (!arrowContext_->writer) {
+    ArrowWriterProperties::Builder builder;
+    if (writeInt96AsTimestamp_) {
+      builder.enableDeprecatedInt96Timestamps();
+    }
+    auto arrowProperties = builder.build();
+    PARQUET_ASSIGN_OR_THROW(
+        arrowContext_->writer,
+        FileWriter::open(
+            *recordBatch->schema(),
+            arrowMemoryPool_.get(),
+            stream_,
+            arrowContext_->properties,
+            arrowProperties));
+  }
+
+  PARQUET_THROW_NOT_OK(arrowContext_->writer->writeRecordBatch(*recordBatch));
+
+  const auto currentRowGroupBytes =
+      arrowContext_->writer->currentRowGroupTotalBytes();
+  PARQUET_ASSIGN_OR_THROW(const auto streamBytes, stream_->Tell());
 
   // Flush as soon as the current write pushes the staged row group past the
-  // policy threshold. Otherwise callers that rotate files based on raw written
-  // bytes won't observe the row group until the next write.
-  if (flushPolicy_->shouldFlush(getStripeProgress(
-          arrowContext_->stagingRows, arrowContext_->stagingBytes))) {
+  // row-group target or the file-size target. Otherwise callers that rotate
+  // files based on raw written bytes won't observe the row group until the
+  // next write.
+  if (flushPolicy_->shouldFlush(getStripeProgress(currentRowGroupBytes)) ||
+      stagedBytesReachTargetFileSize(
+          maxTargetFileSizeBytes_, streamBytes, currentRowGroupBytes)) {
     flush();
+  } else if (flushPolicy_->bytesInRowGroup() <= stream_->bufferedBytes()) {
+    // Flush the sink separately so completed row groups don't keep accumulating
+    // in the stream buffer when Arrow keeps starting new row groups before the
+    // current one hits the byte threshold.
+    PARQUET_THROW_NOT_OK(stream_->Flush());
   }
 }
 
@@ -578,8 +587,6 @@ void Writer::newRowGroup(int32_t numRows) {
 }
 
 std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
-  flush();
-
   std::unique_ptr<ParquetFileMetadata> parquetFileMetadata;
   if (arrowContext_->writer) {
     PARQUET_THROW_NOT_OK(arrowContext_->writer->close());
@@ -589,8 +596,6 @@ std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
   }
 
   PARQUET_THROW_NOT_OK(stream_->Close());
-
-  arrowContext_->stagingChunks.clear();
 
   return parquetFileMetadata;
 }

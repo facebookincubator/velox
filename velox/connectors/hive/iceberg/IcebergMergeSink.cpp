@@ -98,6 +98,11 @@ IcebergInsertTableHandlePtr IcebergMergeSink::cloneHandleWithKind(
     icebergInputs.emplace_back(
         checkedPointerCast<const IcebergColumnHandle>(col));
   }
+  // Propagate the existing deletion-vector map so the kDeletionVector sub-sink
+  // seeds each new DV with the prior DV's positions on an UPDATE/MERGE that
+  // re-touches a data file already carrying a DV. The kData sub-sink ignores
+  // the map. Preserve the original file-name generator too (the default here
+  // would otherwise drop a custom generator).
   return std::make_shared<const IcebergInsertTableHandle>(
       std::move(icebergInputs),
       original.locationHandle(),
@@ -105,7 +110,9 @@ IcebergInsertTableHandlePtr IcebergMergeSink::cloneHandleWithKind(
       original.partitionSpec(),
       original.compressionKind(),
       original.serdeParameters(),
-      kind);
+      kind,
+      original.existingDeletionVectors(),
+      original.fileNameGenerator());
 }
 
 RowTypePtr IcebergMergeSink::projectDataInputType(

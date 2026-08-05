@@ -746,6 +746,36 @@ std::string onException(VeloxException::Type /*exceptionType*/, void* arg) {
   }
   return fmt::format("Owner: {}. Expression: {}", owner, expr->toString());
 }
+
+// Returns typed expression error context: the owner (if any), the function
+// name, and the expression.
+std::shared_ptr<const ExceptionContextProperties> makeExprExceptionProperties(
+    const Expr* expr) {
+  if (expr == nullptr) {
+    return nullptr;
+  }
+  auto properties = std::make_shared<ExpressionExceptionProperties>();
+  properties->owner = expr->vectorFunctionMetadata().owner;
+  properties->functionName = expr->name();
+  properties->expression = expr->toString();
+  return properties;
+}
+
+// Structured counterpart to onTopLevelException (arg is an
+// ExprExceptionContext).
+std::shared_ptr<const ExceptionContextProperties> onTopLevelExceptionProperties(
+    VeloxException::Type /*exceptionType*/,
+    void* arg) {
+  return makeExprExceptionProperties(
+      static_cast<ExprExceptionContext*>(arg)->expr());
+}
+
+// Structured counterpart to onException (arg is an Expr).
+std::shared_ptr<const ExceptionContextProperties> onExceptionProperties(
+    VeloxException::Type /*exceptionType*/,
+    void* arg) {
+  return makeExprExceptionProperties(static_cast<Expr*>(arg));
+}
 } // namespace
 
 void Expr::evalFlatNoNulls(
@@ -777,7 +807,9 @@ void Expr::evalFlatNoNullsImpl(
   ExceptionContextSetter exceptionContext(
       {.messageFunc = parentExprSet ? onTopLevelException : onException,
        .arg = parentExprSet ? (void*)&exprExceptionContext : this,
-       .isEssential = parentExprSet != nullptr});
+       .isEssential = parentExprSet != nullptr,
+       .propertiesFunc = parentExprSet ? onTopLevelExceptionProperties
+                                       : onExceptionProperties});
   auto releaseInputsGuard =
       folly::makeGuard([&]() { releaseInputValues(context); });
   if (!rows.hasSelections()) {
@@ -832,7 +864,9 @@ void Expr::eval(
   ExceptionContextSetter exceptionContext(
       {.messageFunc = parentExprSet ? onTopLevelException : onException,
        .arg = parentExprSet ? (void*)&exprExceptionContext : this,
-       .isEssential = parentExprSet != nullptr});
+       .isEssential = parentExprSet != nullptr,
+       .propertiesFunc = parentExprSet ? onTopLevelExceptionProperties
+                                       : onExceptionProperties});
 
   if (!rows.hasSelections()) {
     checkOrSetEmptyResult(type(), context.pool(), result);

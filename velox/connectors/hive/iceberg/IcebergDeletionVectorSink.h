@@ -91,8 +91,17 @@ class IcebergDeletionVectorSink : public DataSink {
   // Returns the accumulator for 'path', creating it on first use. Lookups are
   // O(1) via 'perFileIndex_'; new entries are appended to 'perFile_' so the
   // overall insertion order (and hence commit-message order) stays
-  // deterministic.
+  // deterministic. On first creation, if the insert handle carries an existing
+  // deletion vector for 'path', seeds the writer with its positions so the
+  // emitted DV is the union of old and newly-deleted positions.
   PerFileState& findOrCreatePerFile(const std::string& path);
+
+  // Reads the existing deletion vector for 'dataFile' (as described by the
+  // insert handle) and adds its positions to 'state.writer' exactly once.
+  // No-op when the handle has no existing DV for 'dataFile'.
+  void seedFromExistingDeletionVector(
+      PerFileState& state,
+      const std::string& dataFile);
 
   const RowTypePtr inputType_;
   const IcebergInsertTableHandlePtr insertTableHandle_;
@@ -117,6 +126,19 @@ class IcebergDeletionVectorSink : public DataSink {
 
   bool finished_{false};
   bool aborted_{false};
+
+  // True when the coordinator delivers the row-id as a synthesized
+  // ROW<file_path, pos, ...> column (Presto's getDeleteRowIdColumn for V3),
+  // possibly alongside other passthrough columns (e.g. a leading data/partition
+  // column). In that case appendData unwraps the ROW's first two fields. When
+  // false, the input is the legacy two flat (file_path, pos) columns produced
+  // by IcebergMergeSink::makeDeleteBatch.
+  bool rowIdAsStruct_{false};
+
+  // Index of the row-id ROW column in the input when 'rowIdAsStruct_' is true.
+  // The V3 DELETE plan may prepend other columns, so the ROW is not always at
+  // channel 0. Unused when 'rowIdAsStruct_' is false.
+  int32_t rowIdChannel_{0};
 
   // Cumulative stats for the Stats() accessor.
   uint64_t numWrittenBytes_{0};

@@ -63,6 +63,7 @@ class SortBufferTest : public OperatorTestBase,
   }
 
   void TearDown() override {
+    setThreadLocalRunTimeStatWriter(nullptr);
     pool_.reset();
     rootPool_.reset();
     OperatorTestBase::TearDown();
@@ -449,6 +450,96 @@ TEST_P(SortBufferTest, batchOutput) {
   }
 }
 
+namespace {
+// Covers the variable-width and complex extraction paths as well as the fixed
+// width one, so that releasing the accumulated rows is exercised against every
+// way a column can be materialized into the output.
+const RowTypePtr& releaseTestInputType() {
+  static const RowTypePtr type = ROW(
+      {{"c0", BIGINT()},
+       {"c1", INTEGER()},
+       {"c2", VARCHAR()},
+       {"c3", ARRAY(BIGINT())},
+       {"c4", MAP(INTEGER(), REAL())}});
+  return type;
+}
+
+const std::vector<column_index_t> kReleaseTestSortColumnIndices{1};
+const std::vector<CompareFlags> kReleaseTestSortCompareFlags{
+    {true, true, false, CompareFlags::NullHandlingMode::kNullAsValue}};
+} // namespace
+
+TEST_P(SortBufferTest, releaseAfterOutput) {
+  exec::SpillStats spillStats;
+  auto sortBuffer = std::make_unique<SortBuffer>(
+      releaseTestInputType(),
+      kReleaseTestSortColumnIndices,
+      kReleaseTestSortCompareFlags,
+      pool_.get(),
+      &nonReclaimableSection_,
+      prefixSortConfig_,
+      nullptr,
+      &spillStats);
+
+  VectorFuzzer fuzzer({.vectorSize = 1'024}, fuzzerPool_.get());
+  for (int i = 0; i < 64; ++i) {
+    sortBuffer->addInput(fuzzer.fuzzRow(releaseTestInputType()));
+  }
+  sortBuffer->noMoreInput();
+
+  const uint64_t usedBytesAfterInput = pool_->usedBytes();
+  ASSERT_GT(usedBytesAfterInput, 0);
+
+  while (sortBuffer->getOutput(1'024) != nullptr) {
+  }
+
+  // A driver only closes its operators once the last one finishes, so in a
+  // pipeline that fuses several sorts the accumulated rows have to be freed as
+  // soon as the last output batch is produced. Otherwise every upstream sort
+  // keeps its rows resident for the lifetime of the task.
+  ASSERT_LT(pool_->usedBytes(), usedBytesAfterInput / 10);
+}
+
+TEST_P(SortBufferTest, releaseAfterOutputKeepsOutputReadable) {
+  exec::SpillStats spillStats;
+  auto sortBuffer = std::make_unique<SortBuffer>(
+      releaseTestInputType(),
+      kReleaseTestSortColumnIndices,
+      kReleaseTestSortCompareFlags,
+      pool_.get(),
+      &nonReclaimableSection_,
+      prefixSortConfig_,
+      nullptr,
+      &spillStats);
+
+  VectorFuzzer fuzzer({.vectorSize = 256}, fuzzerPool_.get());
+  constexpr int32_t kNumInputVectors = 4;
+  for (int i = 0; i < kNumInputVectors; ++i) {
+    sortBuffer->addInput(fuzzer.fuzzRow(releaseTestInputType()));
+  }
+  sortBuffer->noMoreInput();
+
+  // A streaming window keeps the batches it was fed by reference long after the
+  // sort has handed out its last row, so releasing the rows must not invalidate
+  // anything reachable from the output.
+  std::vector<RowVectorPtr> outputs;
+  while (auto output = sortBuffer->getOutput(128)) {
+    outputs.push_back(std::move(output));
+  }
+
+  vector_size_t numOutputRows = 0;
+  for (const auto& output : outputs) {
+    output->validate({});
+    numOutputRows += output->size();
+    // Reading every value dereferences the string and complex payloads, so a
+    // stale reference into the freed row container is caught under ASAN.
+    for (vector_size_t row = 0; row < output->size(); ++row) {
+      output->toString(row);
+    }
+  }
+  ASSERT_EQ(numOutputRows, kNumInputVectors * 256);
+}
+
 TEST_P(SortBufferTest, spill) {
   struct {
     bool spillEnabled;
@@ -563,6 +654,38 @@ TEST_P(SortBufferTest, spill) {
     }
     stats_.clear();
   }
+}
+
+// Regression test for an addInput OOM. Enabling 'useListRowIndex' on
+// SortBuffer's RowContainer (Velox #15698) makes RowContainer::newRow() push
+// each row pointer into a pool-backed 'rowPointers_' vector as input is
+// accumulated. That vector grows by doubling reallocation, is not spillable,
+// and can OOM addInput on a large/skewed sort -- the sort cannot spill its way
+// out. SortBuffer never uses listRowsFast (noMoreInput() uses the scanning
+// listRows()), so the index must stay disabled. Guard the invariant directly:
+// no row-pointer index is built while accumulating input.
+TEST_P(SortBufferTest, noRowPointerIndexDuringInput) {
+  exec::SpillStats spillStats;
+  auto sortBuffer = std::make_unique<SortBuffer>(
+      inputType_,
+      sortColumnIndices_,
+      sortCompareFlags_,
+      pool_.get(),
+      &nonReclaimableSection_,
+      prefixSortConfig_,
+      /*spillConfig=*/nullptr,
+      &spillStats);
+
+  VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool_.get());
+  constexpr int kNumInputs = 10;
+  for (int i = 0; i < kNumInputs; ++i) {
+    sortBuffer->addInput(fuzzer.fuzzRow(inputType_));
+  }
+
+  // Rows accumulated, but the non-spillable row-pointer index must be empty:
+  // populating it here is what regresses addInput into an unspillable OOM.
+  EXPECT_EQ(sortBuffer->testingData()->numRows(), kNumInputs * 1024);
+  EXPECT_TRUE(sortBuffer->testingData()->testingRowPointers().empty());
 }
 
 DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringInput) {

@@ -16,9 +16,15 @@
 
 #pragma once
 
+#include <memory>
+#include <string_view>
 #include <vector>
 
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
+
+namespace facebook::velox::config {
+class ConfigBase;
+}
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -40,10 +46,14 @@ class DeletionVectorReader {
   ///        blob offset, and blob length.
   /// @param splitOffset File position of the first row in the split.
   /// @param pool Memory pool for internal allocations.
+  /// @param connectorConfig Connector configuration used to resolve the
+  ///        filesystem for the Puffin file (e.g. Manifold client credentials).
+  ///        Passing nullptr leaves config-requiring filesystems unconfigured.
   DeletionVectorReader(
       const IcebergDeleteFile& dvFile,
       uint64_t splitOffset,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      std::shared_ptr<const config::ConfigBase> connectorConfig);
 
   /// Reads deleted positions from the DV and sets corresponding bits in the
   /// deleteBitmap for the current batch range.
@@ -55,6 +65,11 @@ class DeletionVectorReader {
   /// Returns true when there is no more data.
   bool noMoreData() const;
 
+  /// Loads the deletion vector (if not already loaded) and returns the sorted,
+  /// absolute file-level deleted positions. Used to seed a DeletionVectorWriter
+  /// when replacing an existing DV with the union of old and new positions.
+  const std::vector<int64_t>& deletedPositions();
+
   static constexpr int32_t kDvOffsetFieldId = 100;
   static constexpr int32_t kDvLengthFieldId = 101;
 
@@ -62,7 +77,7 @@ class DeletionVectorReader {
   void loadBitmap();
 
   // Deserializes a 64-bit roaring bitmap (Roaring64Bitmap format).
-  void deserializeRoaring64Bitmap(const std::string& data);
+  void deserializeRoaring64Bitmap(std::string_view data);
 
   // Deserializes a 32-bit roaring bitmap from portable binary format.
   // Positions are offset by highBitsOffset (upper 32 bits for 64-bit mode,
@@ -77,6 +92,9 @@ class DeletionVectorReader {
 
   // Base offset of the split within the data file (for position mapping).
   const uint64_t splitOffset_;
+
+  // Connector configuration for resolving the Puffin file's filesystem.
+  const std::shared_ptr<const config::ConfigBase> connectorConfig_;
 
   // Sorted list of deleted row positions (absolute, file-level positions).
   std::vector<int64_t> deletedPositions_;

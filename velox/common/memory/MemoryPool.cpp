@@ -157,10 +157,6 @@ void treeMemoryUsageVisitor(
   });
 }
 
-std::string capacityToString(int64_t capacity) {
-  return capacity == kMaxMemory ? "UNLIMITED" : succinctBytes(capacity);
-}
-
 #define DEBUG_RECORD_ALLOC(pool, ...)         \
   if (FOLLY_UNLIKELY(pool->debugEnabled())) { \
     pool->recordAllocDbg(__VA_ARGS__);        \
@@ -672,10 +668,11 @@ void* MemoryPoolImpl::allocateAligned(int64_t size, uint32_t alignment) {
     release(alignedSize);
     VELOX_MEM_ALLOC_ERROR(
         fmt::format(
-            "allocateAligned failed with {} aligned to {} from {}",
+            "allocateAligned failed with {} aligned to {} from {} {}",
             succinctBytes(size),
             alignment,
-            toString()));
+            toString(),
+            allocator_->getAndClearFailureMessage()));
   }
   return buffer;
 }

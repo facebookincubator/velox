@@ -1194,6 +1194,66 @@ TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
   EXPECT_EQ(fileMeta.numRowGroups(), 10);
   EXPECT_EQ(fileMeta.rowGroup(0).numRows(), 500);
 }
+
+TEST_F(
+    HiveDataSinkTest,
+    maxTargetFileSizeDoesNotAffectBucketedParquetRowGroups) {
+  connectorSessionProperties_->set(
+      HiveConfig::kParquetMaxTargetFileSizeSession, "8KB");
+  constexpr uint64_t kMaxTargetFileSizeBytes = 8 * 1024;
+
+  auto writeOptions = std::make_shared<dwio::common::WriterOptions>();
+  writeOptions->compressionKind = CompressionKind::CompressionKind_NONE;
+
+  auto rowType = ROW("payload", VARCHAR());
+
+  auto bucketProperty = std::make_shared<HiveBucketProperty>(
+      HiveBucketProperty::Kind::kHiveCompatible,
+      1,
+      std::vector<std::string>{"payload"},
+      std::vector<TypePtr>{VARCHAR()},
+      std::vector<std::shared_ptr<const HiveSortingColumn>>{});
+
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto dataSink = createDataSink(
+      rowType,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::PARQUET,
+      {},
+      bucketProperty,
+      writeOptions);
+
+  constexpr int32_t kNumRows = 500;
+  constexpr int32_t kNumBatches = 5;
+  const std::string payload(512, 'x');
+  auto batch = makeRowVector({makeFlatVector<std::string>(
+      kNumRows, [&](auto /*row*/) { return payload; })});
+
+  // About 2500 * 512B = 1.3MB is written here: far above the 8KB file-size
+  // target. Bucketed writes do not rotate, so row-group sizing must ignore the
+  // file-size target and keep all rows in one default-sized row group.
+  for (int i = 0; i < kNumBatches; ++i) {
+    dataSink->appendData(batch);
+  }
+  ASSERT_TRUE(dataSink->finish());
+  dataSink->close();
+
+  dwio::common::ReaderOptions readerOpts(pool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
+  const std::vector<std::string> filePaths =
+      listFiles(outputDirectory->getPath());
+  ASSERT_EQ(filePaths.size(), 1);
+
+  auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
+      std::make_shared<LocalReadFile>(filePaths[0]), readerOpts.memoryPool());
+  auto reader = std::make_unique<facebook::velox::parquet::ParquetReader>(
+      std::move(bufferedInput), readerOpts);
+  auto fileMeta = reader->fileMetaData();
+  EXPECT_GT(kNumRows * kNumBatches * payload.size(), kMaxTargetFileSizeBytes);
+  EXPECT_EQ(1, fileMeta.numRowGroups());
+  EXPECT_EQ(kNumRows * kNumBatches, fileMeta.rowGroup(0).numRows());
+}
 #endif
 
 TEST_F(HiveDataSinkTest, flushPolicyWithDWRF) {
@@ -1202,7 +1262,7 @@ TEST_F(HiveDataSinkTest, flushPolicyWithDWRF) {
     return std::make_unique<dwrf::DefaultFlushPolicy>(1234, 0);
   };
 
-  auto writeOptions = std::make_shared<dwrf::WriterOptions>();
+  auto writeOptions = std::make_shared<dwio::common::WriterOptions>();
   writeOptions->flushPolicyFactory = flushPolicyFactory;
   auto dataSink = createDataSink(
       rowType_,
@@ -2019,7 +2079,7 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsWithMultipleWriters) {
 
   // Create shared writer options (this simulates the scenario where
   // insertTableHandle_->writerOptions() returns a shared object)
-  auto sharedWriterOptions = std::make_shared<dwrf::WriterOptions>();
+  auto sharedWriterOptions = std::make_shared<dwio::common::WriterOptions>();
 
   // Create a data sink with multiple writers (one for each bucket)
   auto dataSink = createDataSink(
@@ -2047,9 +2107,70 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsWithMultipleWriters) {
       outputDirectory->getPath(), static_cast<uint32_t>(partitions.size()));
 }
 
+TEST_F(HiveDataSinkTest, sessionDwrfConfigsMergeIntoProvidedFormatOptions) {
+  connectorSessionProperties_->set(
+      dwio::common::formatSessionProperty(
+          dwio::common::FileFormat::DWRF,
+          dwrf::Config::kOrcWriterMaxStripeSizeSession),
+      "32MB");
+
+  auto writerOptions = std::make_shared<dwio::common::WriterOptions>();
+  auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>();
+  dwrfOptions->schemaAttributes[0] = {{"existing", "attribute"}};
+  writerOptions->formatSpecificOptions = dwrfOptions;
+
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto dataSink = createDataSink(
+      rowType_,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {},
+      nullptr,
+      writerOptions);
+
+  dataSink->appendData(createVectors(10, 1).front());
+
+  EXPECT_EQ(dwrfOptions->config->get(dwrf::Config::STRIPE_SIZE), 32UL << 20);
+  ASSERT_EQ(dwrfOptions->schemaAttributes.size(), 1);
+  EXPECT_EQ(
+      dwrfOptions->schemaAttributes.at(0),
+      (std::vector<std::pair<std::string, std::string>>{
+          {"existing", "attribute"}}));
+}
+
+#ifdef VELOX_ENABLE_PARQUET
+TEST_F(HiveDataSinkTest, sessionParquetConfigsMergeIntoProvidedFormatOptions) {
+  connectorSessionProperties_->set(
+      dwio::common::formatSessionProperty(
+          dwio::common::FileFormat::PARQUET,
+          parquet::ParquetConfig::kWriterBatchSizeSession),
+      "97");
+
+  auto writerOptions = std::make_shared<dwio::common::WriterOptions>();
+  auto parquetOptions = std::make_shared<parquet::ParquetWriterOptions>();
+  parquetOptions->batchSize = 11;
+  parquetOptions->bufferGrowRatio = 1.7;
+  writerOptions->formatSpecificOptions = parquetOptions;
+
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto dataSink = createDataSink(
+      rowType_,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::PARQUET,
+      {},
+      nullptr,
+      writerOptions);
+
+  dataSink->appendData(createVectors(10, 1).front());
+
+  EXPECT_EQ(parquetOptions->batchSize, 97);
+  EXPECT_EQ(parquetOptions->bufferGrowRatio, 1.7);
+}
+#endif
+
 DEBUG_ONLY_TEST_F(HiveDataSinkTest, perWriterMemoryPool) {
   const auto outputDirectory = TempDirectoryPath::create();
-  auto writerOptions = std::make_shared<dwrf::WriterOptions>();
+  auto writerOptions = std::make_shared<dwio::common::WriterOptions>();
 
   const auto rowType = ROW({"c0", "p0"}, {BIGINT(), VARCHAR()});
   auto dataSink = createDataSink(

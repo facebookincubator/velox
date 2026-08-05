@@ -90,7 +90,7 @@ BinaryStreamReader::BinaryStreamReader(
       stripeReaderBase_{reader},
       stripeIndex_{0} {
   VELOX_CHECK(!reader->footer().hasEncryption(), "encryption not supported");
-  VELOX_CHECK(!columnIds.empty(), "Atleast one column expected to be read");
+  VELOX_CHECK(!columnIds.empty(), "At least one column expected to be read");
 }
 
 std::unique_ptr<BinaryStripeStreams> BinaryStreamReader::next() {

@@ -26,6 +26,10 @@
 #include "velox/connectors/hive/FileTableHandle.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/dwrf/common/Config.h"
+#ifdef VELOX_ENABLE_PARQUET
+#include "velox/dwio/parquet/common/ParquetConfig.h"
+#endif
 
 namespace facebook::velox::connector::hive {
 
@@ -38,12 +42,13 @@ FormatScopedConfigs makeFormatScopedConfigs(
       dwio::common::FileFormat::UNKNOWN,
       "Cannot build format-specific configs for unknown file format");
 
+  auto connectorConfig = fileConfig.config()->rawConfigsWithPrefix(
+      fmt::format(
+          "{}{}",
+          fileConfig.connectorConfigPrefix(),
+          dwio::common::formatConfigPrefix(fileFormat, ".")));
   return {
-      config::ConfigBase(fileConfig.config()->rawConfigsWithPrefix(
-          fmt::format(
-              "{}{}",
-              fileConfig.connectorConfigPrefix(),
-              dwio::common::formatConfigPrefix(fileFormat, ".")))),
+      config::ConfigBase(std::move(connectorConfig)),
       config::ConfigBase(sessionProperties.rawConfigsWithPrefix(
           dwio::common::formatConfigPrefix(fileFormat, "_")))};
 }
@@ -80,20 +85,10 @@ void configureReaderOptions(
   readerOptions.setFileColumnNamesReadAsLowerCase(
       fileConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
   readerOptions.setAllowEmptyFile(true);
-  auto columnMappingMode = dwio::common::ColumnMappingMode::kPosition;
-  switch (fileSplit->fileFormat) {
-    case dwio::common::FileFormat::DWRF:
-    case dwio::common::FileFormat::ORC: {
-      columnMappingMode = fileConfig->isOrcUseColumnNames(sessionProperties)
+  readerOptions.setColumnMappingMode(
+      fileConfig->useColumnNames(sessionProperties)
           ? dwio::common::ColumnMappingMode::kName
-          : dwio::common::ColumnMappingMode::kPosition;
-      break;
-    }
-    default:
-      columnMappingMode = dwio::common::ColumnMappingMode::kPosition;
-  }
-
-  readerOptions.setColumnMappingMode(columnMappingMode);
+          : dwio::common::ColumnMappingMode::kPosition);
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());
@@ -116,6 +111,8 @@ void configureReaderOptions(
     readerOptions.setSelectiveNimbleReaderEnabled(
         connectorQueryCtx->selectiveNimbleReaderEnabled());
   }
+  readerOptions.setNimbleDirectBufferedInputEnabled(
+      fileConfig->nimbleDirectBufferedInputEnabled(sessionProperties));
   readerOptions.setCacheMetadata(
       fileConfig->cacheMetadata(sessionProperties) && fileSplit->cacheable);
   readerOptions.setPinMetadata(fileConfig->pinMetadata(sessionProperties));

@@ -16,7 +16,11 @@
 
 #include "velox/connectors/hive/iceberg/WriterOptionsAdapter.h"
 
+#include "velox/common/Casts.h"
 #include "velox/common/base/Exceptions.h"
+#ifdef VELOX_ENABLE_NIMBLE
+#include "velox/connectors/hive/iceberg/fb/NimbleWriterOptionsAdapter.h"
+#endif
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/dwio/parquet/common/ParquetConfig.h"
 
@@ -63,9 +67,10 @@ class DwrfWriterOptionsAdapter : public WriterOptionsAdapter {
     // DWRF stores microsecond-precision timestamps natively, so no
     // precision conversion is required; only timezone adjustment must be
     // disabled per the Iceberg spec. Unlike Parquet, DWRF exposes
-    // timestamp configuration as direct fields on dwrf::WriterOptions
+    // timestamp configuration as direct fields on dwrf::DwrfWriterOptions
     // rather than serdeParameters.
-    auto* dwrfOptions = dynamic_cast<dwrf::WriterOptions*>(&options);
+    auto dwrfOptions = std::dynamic_pointer_cast<dwrf::DwrfWriterOptions>(
+        options.formatSpecificOptions);
     if (dwrfOptions == nullptr) {
       return;
     }
@@ -74,22 +79,12 @@ class DwrfWriterOptionsAdapter : public WriterOptionsAdapter {
   }
 };
 
-class NimbleWriterOptionsAdapter : public WriterOptionsAdapter {
- public:
-  // Reports NIMBLE files as ORC in the manifest so cross-engine readers
-  // (Presto coordinator, catalog) can interpret the commit message. The
-  // actual on-disk format is identified at read time via the file
-  // extension and on-disk magic bytes, not via this string.
-  std::string manifestFormatString() const override {
-    return std::string{kOrcManifestFormat};
-  }
-};
-
 } // namespace
 
 std::unique_ptr<WriterOptionsAdapter> createWriterOptionsAdapter(
-    dwio::common::FileFormat format) {
-  // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
+    dwio::common::FileFormat format,
+    IcebergFieldId icebergFieldIds,
+    IcebergFieldMetadata icebergMetadata) {
   switch (format) {
     case dwio::common::FileFormat::PARQUET:
       return std::make_unique<ParquetWriterOptionsAdapter>();
@@ -101,8 +96,11 @@ std::unique_ptr<WriterOptionsAdapter> createWriterOptionsAdapter(
       // with the Java planner (see FileFormat.DWRF.toIceberg() in
       // presto-facebook-iceberg).
       return std::make_unique<DwrfWriterOptionsAdapter>();
+#ifdef VELOX_ENABLE_NIMBLE
     case dwio::common::FileFormat::NIMBLE:
-      return std::make_unique<NimbleWriterOptionsAdapter>();
+      return createNimbleWriterOptionsAdapter(
+          std::move(icebergFieldIds), std::move(icebergMetadata));
+#endif
     default:
       return nullptr;
   }

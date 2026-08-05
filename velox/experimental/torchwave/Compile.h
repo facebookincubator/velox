@@ -157,7 +157,11 @@ class CompileCtx {
       const std::vector<Subgraph>& subgraphs,
       const std::vector<ResultSpec>& resultSpecs,
       const std::string& resultStmt = "",
-      bool fullBlockResult = false);
+      bool fullBlockResult = false,
+      // Output Value of a data-dependent scan op (masked_select / nonzero)
+      // whose size is written on device; its dims[0] is forced to 0 for an
+      // empty input (the element loop that would set it runs zero iterations).
+      ValueCP FOLLY_NULLABLE shapeSetOnDeviceResult = nullptr);
 
   /// Recurses through inputs of 'node', stopping at placed_ and inputs of
   /// generatingOp_'s subgraph. Calls fusedCode on non-elementwise ops with
@@ -204,8 +208,8 @@ class CompileCtx {
 
   void emitBarrier();
 
-  /// Returns true if 'node' has a randomAccess input whose value is
-  /// produced in generatingOp_ but not yet covered by a barrier.
+  /// Returns true if 'node' reads any input whose producer ran earlier in the
+  /// same kernel (generatingOp_) without an intervening barrier.
   bool callNeedsBarrier(NodeCP node);
 
   void addInclude(std::string_view header);
@@ -288,7 +292,12 @@ class CompileCtx {
 
   void placeKernelLaunch(Launch launch);
 
-  static int32_t nextKernelId();
+  /// Returns the next kernel id for this compilation. The counter is per
+  /// CompileCtx (one per WaveGraph construction), so kernel names are
+  /// deterministic per graph regardless of how many graphs compile
+  /// concurrently. This keeps NVRTC cache keys stable (warm-cache hits) and
+  /// makes parallel compilation of different configs well-defined.
+  int32_t nextKernelId();
 
   KernelOperation* generatingOp() const {
     return generatingOp_;
@@ -318,7 +327,11 @@ class CompileCtx {
   Subgraph variantSubgraph(const Subgraph& sg, VariantMode mode);
 
  private:
-  inline static std::atomic<int32_t> kernelCounter_{0};
+  // Per-CompileCtx (one per WaveGraph construction), not process-wide, so no
+  // atomicity is needed: concurrent compilations use distinct CompileCtx
+  // instances, keeping kernel ids deterministic per graph for NVRTC cache-key
+  // stability.
+  int32_t kernelCounter_{0};
 
   template <typename Func>
   bool allReachable(
@@ -427,6 +440,11 @@ class CompileCtx {
   std::unordered_set<ValueCP> memoryValues_;
 
   const ElementExpr* currentElementExpr_{nullptr};
+
+  // The subgraph root output of the elementwise expression currently being
+  // generated (the tensor the loop writes at 'idx'). Passed as the output
+  // argument to device functions whose ElementwiseOp has hasOutputArg set.
+  ValueCP currentRootOutput_{nullptr};
 
   // Maps each index in leafInputs/allInputs to its tensor-only bit position
   // in the isFastPath bitmask, or -1 for non-tensor inputs. A value of -1

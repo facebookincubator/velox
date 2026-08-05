@@ -55,6 +55,35 @@ int firstByteCharLength(const char* u_input) {
   return -1;
 }
 
+namespace {
+FOLLY_ALWAYS_INLINE char hexDigit(uint8_t c) {
+  VELOX_DCHECK_LT(c, 16);
+  return c < 10 ? c + '0' : c - 10 + 'A';
+}
+} // namespace
+
+void writeUtf16Escape(char16_t value, char*& out) {
+  *out++ = '\\';
+  *out++ = 'u';
+  *out++ = hexDigit((value >> 12) & 0x0F);
+  *out++ = hexDigit((value >> 8) & 0x0F);
+  *out++ = hexDigit((value >> 4) & 0x0F);
+  *out++ = hexDigit(value & 0x0F);
+}
+
+void encodeUtf16Hex(char32_t codePoint, char*& out) {
+  VELOX_DCHECK(codePoint <= 0x10FFFFu);
+  if (codePoint >= 0x10000u) {
+    // Supplementary plane: split into a UTF-16 surrogate pair.
+    const char32_t v = codePoint - 0x10000u;
+    writeUtf16Escape(
+        static_cast<char16_t>(0xD800u + ((v >> 10) & 0x3FFu)), out);
+    writeUtf16Escape(static_cast<char16_t>(0xDC00u + (v & 0x3FFu)), out);
+    return;
+  }
+  writeUtf16Escape(static_cast<char16_t>(codePoint), out);
+}
+
 int32_t
 tryGetUtf8CharLength(const char* input, int64_t size, int32_t& codePoint) {
   VELOX_DCHECK_NOT_NULL(input);

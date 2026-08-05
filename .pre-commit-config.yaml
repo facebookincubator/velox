@@ -66,6 +66,15 @@ repos:
         files: ^(README\.md|website/blog/.*)$
         pass_filenames: false
 
+      - id: check-workflow-images
+        name: check-workflow-images
+        description: >-
+          Workflow container images must use the official Velox namespace
+          (ghcr.io/facebookincubator/...), not personal or test images.
+        language: pygrep
+        files: ^\.github/workflows/.*\.yml$
+        entry: ^[ \t]*(?:container|image):[ \t]*["']?(?!\$\{\{)(?!ghcr\.io/facebookincubator/)\S
+
       - id: license-header
         name: license-header
         description: Add missing license headers.
@@ -135,7 +144,7 @@ repos:
         exclude: .*\.clang-(tidy|format)
 
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: v1.7.0
+    rev: v1.26.1
     hooks:
       - id: zizmor
 

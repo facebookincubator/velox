@@ -41,13 +41,32 @@ __device__ inline T* storage(const Tensor* tensor) {
   return reinterpret_cast<T*>(tensor->storage);
 }
 
+__device__ inline uint32_t
+complexIdx(bool fast, const Tensor* t, uint32_t idx) {
+  if (!fast) {
+    return t->indexToOffset(idx);
+  }
+  return idx;
+}
+
 template <typename T>
 __device__ inline T elementRef(Tensor* t, uint32_t idx, uint32_t size) {
-  return idx < size ? storage<T>(t)[idx] : T();
+  // Honor the tensor's stride so a non-contiguous view (e.g. a select-column
+  // reduced by a single-block reduction that reads its input in registers)
+  // reads the right element. complexIdx is a no-op (returns idx) for contiguous
+  // tensors, so this is free for the common case.
+  return idx < size ? storage<T>(t)[complexIdx(t->contiguous, t, idx)] : T();
 }
 
 template <typename T>
 __device__ void __copy(Tensor* source, T* dest, BlockInfo& block) {
+  // An empty (size-0) concat operand arrives as an undefined tensor with null
+  // storage, yet Tensor::init gives such a rank-0 operand numEl==1 (the empty
+  // product). Guard here so the loop below does not dereference null: an empty
+  // operand contributes no elements to the concatenation.
+  if (source->storage == nullptr) {
+    return;
+  }
   auto n = source->numEl;
   uint32_t start = block.blockInOp * blockDim.x + threadIdx.x;
   uint32_t stride = block.numBlocksInOp * blockDim.x;
@@ -63,6 +82,31 @@ __device__ void __copy(Tensor* source, T* dest, BlockInfo& block) {
   }
 }
 
+// Like __copy, but value-converts each element from SrcT to DstT (e.g. a cat of
+// mixed dtypes, where torch promotes an int64 element into a float output).
+template <typename SrcT, typename DstT>
+__device__ void __copyConvert(Tensor* source, DstT* dest, BlockInfo& block) {
+  // See __copy: an empty concat operand has null storage but init gives it
+  // numEl==1, so skip it here to avoid dereferencing null.
+  if (source->storage == nullptr) {
+    return;
+  }
+  auto n = source->numEl;
+  uint32_t start = block.blockInOp * blockDim.x + threadIdx.x;
+  uint32_t stride = block.numBlocksInOp * blockDim.x;
+  if (source->contiguous) {
+    auto* src = storage<SrcT>(source);
+    for (uint32_t i = start; i < n; i += stride) {
+      dest[i] = static_cast<DstT>(src[i]);
+    }
+  } else {
+    for (uint32_t i = start; i < n; i += stride) {
+      dest[i] =
+          static_cast<DstT>(storage<SrcT>(source)[source->indexToOffset(i)]);
+    }
+  }
+}
+
 __device__ inline void copyTensorHead(const Tensor* in, Tensor* out) {
   out->storage = in->storage;
   out->rank = in->rank;
@@ -70,14 +114,6 @@ __device__ inline void copyTensorHead(const Tensor* in, Tensor* out) {
     out->dims[i] = in->dims[i];
     out->strides[i] = in->strides[i];
   }
-}
-
-__device__ inline uint32_t
-complexIdx(bool fast, const Tensor* t, uint32_t idx) {
-  if (!fast) {
-    return t->indexToOffset(idx);
-  }
-  return idx;
 }
 
 struct Int32X32 {
@@ -176,6 +212,14 @@ __device__ inline void opBarrier(BlockInfo& info, int32_t counterOffset) {
     info.barrierClocks += clock64() - barrierStart;
   }
   __syncthreads();
+  // Acquire fence: the leading __threadfence() only provides the release side
+  // (a block's writes are visible before it signals arrival). Without a
+  // matching acquire on the consumer side, a block that has observed all
+  // producers arrive may still read stale, cached global memory written by the
+  // other blocks. 'volatile' only forces re-reading the counter, not the data
+  // the counter guards. Every thread must acquire here, so this fence is
+  // outside the threadIdx.x == 0 block.
+  __threadfence();
 }
 
 // Copies all elements from source to dest using grid-strided loop.

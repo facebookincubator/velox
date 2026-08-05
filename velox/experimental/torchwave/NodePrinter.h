@@ -26,6 +26,8 @@
 
 namespace torch::wave {
 
+class ProjectNode;
+
 /// Controls formatting, recursion depth, and name style for NodePrinter output.
 struct PrintOptions {
   // --- Value reference format ---
@@ -113,6 +115,11 @@ struct PrintOptions {
 
   /// If set, map formal value IDs to actual value IDs when printing.
   const FormalToActual* formalToActual = nullptr;
+
+  /// If set, operands that are a reusable input of this ProjectNode (a boundary
+  /// input of only one expr, dead after here directly and via alias) are
+  /// prefixed with '&' to flag that the value's buffer is mutable in place.
+  const ProjectNode* projectNode = nullptr;
 };
 
 /// Renders nativert graph nodes as human-readable expression strings.

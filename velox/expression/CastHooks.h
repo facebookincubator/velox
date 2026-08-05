@@ -44,8 +44,13 @@ class CastHooks {
  public:
   virtual ~CastHooks() = default;
 
+  /// Parses a string to a timestamp. When 'adjustTimezone' is true, applies
+  /// the session timezone to the parsed result. When false, the parsed
+  /// timestamp fields are stored as-is, not subject to session timezone
+  /// adjustment (used for TIMESTAMP UTC casts).
   virtual Expected<Timestamp> castStringToTimestamp(
-      const StringView& view) const = 0;
+      const StringView& view,
+      bool adjustTimezone) const = 0;
 
   virtual Expected<Timestamp> castIntToTimestamp(int64_t seconds) const = 0;
 

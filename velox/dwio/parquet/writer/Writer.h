@@ -56,6 +56,12 @@ class ParquetFileMetadata : public dwio::common::FileMetadata {
   std::shared_ptr<arrow::FileMetaData> metadata_;
 };
 
+/// Parquet writer enforces the row-count cap via Arrow, and this policy
+/// supplements it with a soft row-group byte target. For Parquet,
+/// - stripeSizeEstimate: the actual compressed bytes of current row group.
+/// - stripeRowCount: remains 0.
+/// Custom Parquet policies should derive from DefaultFlushPolicy to preserve
+/// this contract.
 class DefaultFlushPolicy : public dwio::common::FlushPolicy {
  public:
   DefaultFlushPolicy()
@@ -69,8 +75,7 @@ class DefaultFlushPolicy : public dwio::common::FlushPolicy {
 
   bool shouldFlush(
       const dwio::common::StripeProgress& stripeProgress) override {
-    return stripeProgress.stripeRowCount >= rowsInRowGroup_ ||
-        stripeProgress.stripeSizeEstimate >= bytesInRowGroup_;
+    return stripeProgress.stripeSizeEstimate >= bytesInRowGroup_;
   }
 
   void onClose() override {
@@ -111,6 +116,10 @@ class LambdaFlushPolicy : public DefaultFlushPolicy {
 };
 
 struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
+  /// Overlays session or connector Parquet config values on top of this options
+  /// object while preserving caller-provided non-config fields.
+  void merge(const dwio::common::FormatSpecificOptions& overrides) override;
+
   // Growth ratio passed to ArrowDataBufferSink. The default value is a
   // heuristic borrowed from
   // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
@@ -156,9 +165,15 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
 class Writer : public dwio::common::Writer {
  public:
   // Constructs a writer with output to 'sink'. 'options' carries common writer
-  // options and Parquet-specific format options. 'pool' is used for temporary
-  // memory. 'schema' specifies the file's overall schema, and it is always
-  // non-null.
+  // options and Parquet-specific format options. For Parquet,
+  // 'options.flushPolicyFactory' is a programmatic C++ hook and must create a
+  // DefaultFlushPolicy (or a subclass). If not provided, the writer uses its
+  // built-in row-group limits: a soft 128MB byte target and a hard row-count
+  // cap of DefaultFlushPolicy::kDefaultRowsInGroup (~1M rows).
+  // 'options.maxTargetFileSizeBytes' is tracked independently so the writer
+  // can flush the current row group early and make file rotation visible to
+  // the caller. 'pool' is used for temporary memory. 'schema' specifies the
+  // file's overall schema, and it is always non-null.
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
       const dwio::common::WriterOptions& options,
@@ -216,6 +231,7 @@ class Writer : public dwio::common::Writer {
   std::vector<ParquetFieldId> parquetFieldIds_;
 
   std::unique_ptr<DefaultFlushPolicy> flushPolicy_;
+  const uint64_t maxTargetFileSizeBytes_{0};
 
   const RowTypePtr schema_;
 

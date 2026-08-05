@@ -16,7 +16,9 @@
 
 #include "velox/exec/rpc/RPCState.h"
 
+#include <algorithm>
 #include <chrono>
+#include <utility>
 
 #include <folly/executors/InlineExecutor.h>
 
@@ -41,6 +43,15 @@ int64_t steadyNowNs() {
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
 }
+
+// Wake blocked drivers by fulfilling their promises. Must run with no RPCState
+// lock held: setValue() may synchronously drive an inline continuation that
+// reacquires the driver/operator locks (see RPCState::takeWaitersLocked).
+void fulfillWaiters(std::vector<ContinuePromise>& waiters) {
+  for (auto& promise : waiters) {
+    promise.setValue();
+  }
+}
 } // namespace
 
 // ===== Configuration =====
@@ -51,24 +62,31 @@ int64_t steadyNowNs() {
 void RPCState::setStreamingMode(
     RPCStreamingMode mode,
     int64_t minWindow,
-    double stepCoef) {
+    double stepCoef,
+    int64_t maxWindow) {
   streamingMode_ = mode;
   if (mode == RPCStreamingMode::kBatch) {
     // BATCH: the gradient window starts at 2 (the previously hand-tuned value)
     // and learns the in-flight-batch sweet spot from per-batch RTT, bounded
     // only by a large safety ceiling so it never leaves throughput on the
     // table.
+    const int64_t maxW = maxWindow > 0 ? maxWindow : kBatchMaxWindow;
     window_ = CongestionController{/*startWindow*/ 2,
-                                   /*maxWindow*/ kBatchMaxWindow,
+                                   /*maxWindow*/ maxW,
                                    minWindow,
                                    stepCoef};
   } else {
-    // PER_ROW: per-row parallelism is bounded by the transport thread pool, so
-    // the window starts non-binding at 100 (start == max). The same gradient
-    // learner still shrinks it under sustained overload and recovers it back
-    // toward 100; growth above 100 is unnecessary and capped off.
+    // PER_ROW: start == max. Default ceiling 100; a high-latency backend can
+    // raise it via rpc.congestion.max_window. Pinning start == max is
+    // deliberate: the window starts at the ceiling and can only SHRINK from
+    // there under overload. It must NOT ramp upward on its own, because a
+    // rate-limit (429) storm is LOW-latency — the latency gradient can't see
+    // it, so a probing-upward window would ramp straight into the storm. The
+    // gradient plus the per-driver onUnitError halve (fed kRateLimited/kTimeout
+    // by RPCOperator) shrink it under sustained overload.
+    const int64_t maxW = maxWindow > 0 ? maxWindow : 100;
     window_ = CongestionController{
-        /*startWindow*/ 100, /*maxWindow*/ 100, minWindow, stepCoef};
+        /*startWindow*/ maxW, /*maxWindow*/ maxW, minWindow, stepCoef};
   }
 }
 
@@ -183,26 +201,30 @@ void RPCState::completeRow(
     RowLocation location,
     RPCResponse response,
     int64_t rttNs) {
-  std::lock_guard<std::mutex> l(mutex_);
-  readyRows_.push_back(
-      ReadyRow{
-          .rowId = rowId,
-          .location = location,
-          .response = std::move(response),
-          .rttNs = rttNs});
-  inFlight_--;
+  std::vector<ContinuePromise> waiters;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    readyRows_.push_back(
+        ReadyRow{
+            .rowId = rowId,
+            .location = location,
+            .response = std::move(response),
+            .rttNs = rttNs});
+    inFlight_--;
 
-  if (rttNs > 0) {
-    rttMinNs_ = std::min(rttMinNs_, rttNs);
-    rttMaxNs_ = std::max(rttMaxNs_, rttNs);
-    ++numRttSamples_;
+    if (rttNs > 0) {
+      rttMinNs_ = std::min(rttMinNs_, rttNs);
+      rttMaxNs_ = std::max(rttMaxNs_, rttNs);
+      ++numRttSamples_;
+    }
+
+    RPC_STATE_VLOG(2) << "Row completed: rowId=" << rowId
+                      << ", readyRows=" << readyRows_.size()
+                      << ", inFlight=" << inFlight_;
+
+    waiters = takeWaitersLocked();
   }
-
-  RPC_STATE_VLOG(2) << "Row completed: rowId=" << rowId
-                    << ", readyRows=" << readyRows_.size()
-                    << ", inFlight=" << inFlight_;
-
-  notifyWaitersLocked();
+  fulfillWaiters(waiters);
 }
 
 RPCState::ClaimResult RPCState::tryClaimOrWait(
@@ -291,20 +313,24 @@ void RPCState::addPendingBatch(
             completionTimeNs->store(steadyNowNs(), std::memory_order_relaxed);
             RPC_STATE_VLOG(1)
                 << "Batch completed with " << responses.size() << " responses";
+            std::vector<ContinuePromise> waiters;
             {
               std::lock_guard<std::mutex> l(state->mutex_);
-              state->notifyWaitersLocked();
+              waiters = state->takeWaitersLocked();
             }
+            fulfillWaiters(waiters);
             return responses;
           })
           .thenError([state = selfPtr,
                       completionTimeNs](folly::exception_wrapper ew) {
             completionTimeNs->store(steadyNowNs(), std::memory_order_relaxed);
             RPC_STATE_LOG(ERROR) << "Batch failed: " << ew.what();
+            std::vector<ContinuePromise> waiters;
             {
               std::lock_guard<std::mutex> l(state->mutex_);
-              state->notifyWaitersLocked();
+              waiters = state->takeWaitersLocked();
             }
+            fulfillWaiters(waiters);
             return folly::makeSemiFuture<std::vector<RPCResponse>>(
                 std::move(ew));
           })
@@ -405,12 +431,16 @@ std::optional<RPCState::ReadyBatch> RPCState::tryPollReady() {
 // ===== Common =====
 
 void RPCState::setNoMoreInput() {
-  std::lock_guard<std::mutex> l(mutex_);
-  noMoreInput_ = true;
-  RPC_STATE_VLOG(1) << "setNoMoreInput: inFlight=" << inFlight_
-                    << ", pendingBatches=" << pendingBatches_.size()
-                    << ", readyRows=" << readyRows_.size();
-  notifyWaitersLocked();
+  std::vector<ContinuePromise> waiters;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    noMoreInput_ = true;
+    RPC_STATE_VLOG(1) << "setNoMoreInput: inFlight=" << inFlight_
+                      << ", pendingBatches=" << pendingBatches_.size()
+                      << ", readyRows=" << readyRows_.size();
+    waiters = takeWaitersLocked();
+  }
+  fulfillWaiters(waiters);
 }
 
 bool RPCState::isFinished() {
@@ -425,6 +455,11 @@ bool RPCState::isUnderBackpressure() {
   // Unified across modes: inFlight_ counts the active mode's units (rows for
   // PER_ROW, batches for BATCH) and window_ carries the gradient limit.
   return inFlight_ >= window_.limit();
+}
+
+int64_t RPCState::dispatchHeadroom() {
+  std::lock_guard<std::mutex> l(mutex_);
+  return std::max<int64_t>(0, window_.limit() - inFlight_);
 }
 
 void RPCState::onUnitError() {
@@ -460,13 +495,10 @@ void RPCState::onUnitSamples(const std::vector<int64_t>& rttNsList) {
   }
 }
 
-void RPCState::notifyWaitersLocked() {
-  // Fulfill all promises to wake up blocked drivers.
-  // Called while mutex_ is held.
-  for (auto& promise : promises_) {
-    promise.setValue();
-  }
-  promises_.clear();
+std::vector<ContinuePromise> RPCState::takeWaitersLocked() {
+  // Hand the waiter promises back to the caller to fulfill after releasing
+  // mutex_. See the header for why setValue() must not run under mutex_.
+  return std::exchange(promises_, {});
 }
 
 RPCState::OperatorSnapshot RPCState::operatorSnapshot() const {

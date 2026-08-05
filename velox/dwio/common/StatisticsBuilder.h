@@ -30,6 +30,7 @@ using common::ColumnStatistics;
 using common::DoubleColumnStatistics;
 using common::IntegerColumnStatistics;
 using common::StringColumnStatistics;
+using common::TimestampColumnStatistics;
 
 /// Options for creating StatisticsBuilder instances.
 struct StatisticsBuilderOptions {
@@ -328,6 +329,32 @@ class BinaryStatisticsBuilder : public virtual StatisticsBuilder,
  private:
   void init() {
     length_ = 0;
+  }
+};
+
+class TimestampStatisticsBuilder : public virtual StatisticsBuilder,
+                                   public TimestampColumnStatistics {
+ public:
+  explicit TimestampStatisticsBuilder(const StatisticsBuilderOptions& options)
+      : StatisticsBuilder{options} {
+    init();
+  }
+
+  ~TimestampStatisticsBuilder() override = default;
+
+  std::unique_ptr<ColumnStatistics> build() const override;
+
+  void merge(const ColumnStatistics& other, bool ignoreSize = false) override;
+
+  void reset() override {
+    StatisticsBuilder::reset();
+    init();
+  }
+
+ private:
+  void init() {
+    min_ = Timestamp::max();
+    max_ = Timestamp::min();
   }
 };
 

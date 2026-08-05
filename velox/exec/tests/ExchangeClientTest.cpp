@@ -19,7 +19,7 @@
 #include <atomic>
 #include <thread>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -62,7 +62,7 @@ class ExchangeClientTest : public testing::Test,
     if (!isRegisteredVectorSerde()) {
       velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
     }
-    bufferManager_ = OutputBufferManager::getInstanceRef();
+    bufferManager_ = DefaultOutputBufferManager::getInstanceRef();
 
     common::testutil::TestValue::enable();
   }
@@ -163,7 +163,7 @@ class ExchangeClientTest : public testing::Test,
 
   std::string serdeKind_;
   std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
-  std::shared_ptr<OutputBufferManager> bufferManager_;
+  std::shared_ptr<DefaultOutputBufferManager> bufferManager_;
 };
 
 TEST_P(ExchangeClientTest, nonVeloxCreateExchangeSourceException) {
@@ -656,7 +656,7 @@ TEST_P(ExchangeClientTest, acknowledge) {
   }
 
   // one page is still in the buffer at this point
-  ASSERT_EQ(bufferManager_->getUtilization(sourceTaskId), 0.5);
+  ASSERT_EQ(bufferManager_->getUtilization(sourceTaskId).value_or(0), 0.5);
 
   auto pages = fetchPages(1, *client, 1);
   ASSERT_EQ(1, pages.size());
@@ -667,7 +667,8 @@ TEST_P(ExchangeClientTest, acknowledge) {
     bool outputBuffersEmpty;
     while (attempts > 0) {
       --attempts;
-      outputBuffersEmpty = bufferManager_->getUtilization(sourceTaskId) == 0;
+      outputBuffersEmpty =
+          bufferManager_->getUtilization(sourceTaskId).value_or(0) == 0;
       if (outputBuffersEmpty) {
         break;
       }

@@ -59,7 +59,8 @@ struct InputBatchRef {
 ///
 /// Thread safety: All public methods are thread-safe. The mutex_ protects
 /// all mutable state. Completion callbacks from the RPC client's executor
-/// threads call notifyWaitersLocked() to wake the driver thread.
+/// threads take the waiter promises under the lock (takeWaitersLocked) and
+/// fulfill them after releasing it to wake the driver thread.
 ///
 /// Two streaming modes:
 /// - PER_ROW: Rows are emitted as they complete individually (out-of-order).
@@ -145,10 +146,15 @@ class RPCState {
   /// (default 1.0). Both default to the controller's defaults so callers and
   /// OSS behavior are unchanged; the RPCOperator threads runtime-tunable values
   /// from QueryConfig.
+  /// @param maxWindow Ceiling for the congestion window (and, for PER_ROW, its
+  /// starting value). 0 keeps the per-mode built-in ceiling (PER_ROW 100, BATCH
+  /// 256). Raise it so a high-latency backend can run at high concurrency;
+  /// admission-controlled dispatch makes this ceiling bind.
   void setStreamingMode(
       RPCStreamingMode mode,
       int64_t minWindow = 1,
-      double stepCoef = 1.0);
+      double stepCoef = 1.0,
+      int64_t maxWindow = 0);
 
   /// Get the current streaming mode.
   RPCStreamingMode streamingMode() const;
@@ -274,6 +280,13 @@ class RPCState {
   /// the congestion window limit.
   bool isUnderBackpressure();
 
+  /// Available dispatch headroom under the per-driver congestion window:
+  /// max(0, window.limit() - inFlight). Admission-controlled dispatch takes the
+  /// min of this and the process-global rate-limiter headroom to size each
+  /// drip chunk, so a whole-vector blast can no longer overrun the window.
+  /// Thread-safe.
+  int64_t dispatchHeadroom();
+
   /// Report that a completed unit showed backend overload (rate limit /
   /// timeout). Multiplicative-decrease (halving) of the congestion window.
   /// Thread-safe.
@@ -303,8 +316,14 @@ class RPCState {
       RPCResponse response,
       int64_t rttNs);
 
-  /// Fulfill all waiting promises and clear. Called under lock.
-  void notifyWaitersLocked();
+  // Extract the pending waiter promises and clear the queue, returning them
+  // so the caller can fulfill them AFTER releasing mutex_. Must be called with
+  // mutex_ held. Promises must not be fulfilled under mutex_: setValue() runs
+  // any inline future continuation synchronously (e.g. Driver::setResume ->
+  // Operator::recordBlockingTime, which takes the Operator stats lock), which
+  // would acquire that lock under mutex_ and invert lock order against the
+  // driver thread (a potential deadlock TSAN flags).
+  [[nodiscard]] std::vector<ContinuePromise> takeWaitersLocked();
 
   /// Extract the ready batch referenced by `it`: compute its round-trip
   /// latency, move out the responses (capturing any error), erase the entry,
