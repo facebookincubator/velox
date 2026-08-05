@@ -267,6 +267,55 @@ TEST_P(HashJoinTest, lazyVectorPartiallyLoadedInFilterFullJoin) {
       "SELECT t.c1, t.c2 FROM t FULL OUTER JOIN u ON t.c0 = u.c0 AND (c1 > 0 AND c2 > 0)");
 }
 
+TEST_P(HashJoinTest, probeOnlyFilterRightJoins) {
+  auto makeProbeVectors = [&]() {
+    return std::vector<RowVectorPtr>{makeRowVector({
+        makeFlatVector<int32_t>({1, 1, 2, 3, 5}),
+        makeFlatVector<int32_t>({10, -10, -20, 30, -50}),
+    })};
+  };
+  auto makeBuildVectors = [&]() {
+    return std::vector<RowVectorPtr>{makeRowVector({
+        makeFlatVector<int32_t>({1, 1, 2, 4}),
+        makeFlatVector<int32_t>({100, 101, 200, 400}),
+    })};
+  };
+
+  struct TestData {
+    core::JoinType joinType;
+    std::vector<std::string> outputLayout;
+    std::string referenceQuery;
+  };
+
+  const std::vector<TestData> testData = {
+      {core::JoinType::kRight,
+       {"c0", "c1", "u_c0", "u_c1"},
+       "SELECT t.c0, t.c1, u.c0, u.c1 FROM t RIGHT JOIN u ON t.c0 = u.c0 AND t.c1 > 0"},
+      {core::JoinType::kFull,
+       {"c0", "c1", "u_c0", "u_c1"},
+       "SELECT t.c0, t.c1, u.c0, u.c1 FROM t FULL OUTER JOIN u ON t.c0 = u.c0 AND t.c1 > 0"},
+      {core::JoinType::kRightSemiFilter,
+       {"u_c0", "u_c1"},
+       "SELECT u.c0, u.c1 FROM u WHERE EXISTS (SELECT * FROM t WHERE t.c0 = u.c0 AND t.c1 > 0)"},
+  };
+
+  for (const auto& data : testData) {
+    SCOPED_TRACE(data.referenceQuery);
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .probeKeys({"c0"})
+        .probeVectors(makeProbeVectors())
+        .buildKeys({"u_c0"})
+        .buildVectors(makeBuildVectors())
+        .buildProjections({"c0 AS u_c0", "c1 AS u_c1"})
+        .joinType(data.joinType)
+        .joinFilter("c1 > 0")
+        .joinOutputLayout(std::vector<std::string>(data.outputLayout))
+        .referenceQuery(data.referenceQuery)
+        .run();
+  }
+}
+
 TEST_P(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftSemiProject) {
   // Test the case where a filter loads a subset of the rows that will be output
   // from a column on the probe side.
