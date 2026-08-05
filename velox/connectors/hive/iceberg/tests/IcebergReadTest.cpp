@@ -104,7 +104,7 @@ class IcebergReadTest : public test::IcebergTestBase {
     std::string dataName;
     TypePtr type;
     parquet::ParquetFieldId fieldId;
-    std::vector<std::string> requiredSubfields;
+    std::vector<std::string> requiredSubfields{};
   };
 
   ColumnHandleMap makeFieldIdAssignments(

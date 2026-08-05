@@ -125,8 +125,14 @@ struct WaveConfig {
   bool autoAdjustCost{false};
 
   // If true, reuse a value's buffer in place when an op is its unique last use
-  // (turning copying ops into in-place ops). Off by default.
-  bool enableReuse{false};
+  // (turning copying ops into in-place ops), and drop clones that no consumer
+  // needs. On by default.
+  bool enableReuse{true};
+
+  // If true, run the pre-partition read-only clone elision pass. Only consulted
+  // when enableReuse is set; separated from it so the pass can be A/B'd against
+  // the post-partition in-place rewrite alone.
+  bool elideClones{true};
 
   // Force a launch boundary after a multi-block (non-cooperative) scan so every
   // cross-block consumer of its output reads a fully materialized buffer from a
@@ -143,6 +149,12 @@ struct WaveConfig {
   // right after that node's composite invocation executes, instead of keeping
   // them until the whole graph finishes. Off by default.
   bool freeIntermediates{false};
+
+  // If true, the graph optimizer assumes every producer-less value (model
+  // input, weight, or constant) is contiguous, so downstream passes may treat
+  // them as densely laid out. When on, executeWave verifies each such tensor is
+  // actually contiguous and throws otherwise. Off by default.
+  bool inputContiguous{false};
 
   /// Returns the active config: the thread-local override set by
   /// waveConfigOverride() when non-null, otherwise the process-wide singleton.

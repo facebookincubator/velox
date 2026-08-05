@@ -169,9 +169,20 @@ class RPCOperator : public exec::Operator {
   // Tier key for per-tier rate limiting (from function_->tierKey()).
   std::string tierKey_;
 
-  // Precomputed argument column indices for reading from input in addInput().
-  // Initialized in initialize() by looking up argumentColumns in source type.
-  std::vector<column_index_t> argumentColumnIndices_;
+  // Precomputed per-argument sources, in call()->inputs() order. Built once in
+  // initialize() by walking the RPC call's argument expressions. A
+  // FieldAccessTypedExpr argument resolves to a source column index
+  // (isConstant=false); a ConstantTypedExpr argument materializes a
+  // single-element constant vector (isConstant=true), which addInput() wraps to
+  // the batch row count so the function receives the same arg list as a column.
+  struct ArgumentSource {
+    bool isConstant;
+    // Valid when !isConstant: index of the argument column in the source type.
+    column_index_t sourceChannel{0};
+    // Valid when isConstant: single-element constant vector for the literal.
+    VectorPtr constantValue{};
+  };
+  std::vector<ArgumentSource> argumentSources_;
 
   // Collected row locations for current batch (BATCH mode).
   // Passed to addPendingBatch() when the batch is flushed.
@@ -206,6 +217,11 @@ class RPCOperator : public exec::Operator {
   // 0 = collect all rows, fire once in noMoreInput().
   // > 0 = fire flushBatch() every N rows during addInput().
   int32_t dispatchBatchSize_{0};
+
+  // Max rows per output vector, from QueryConfig::preferredOutputBatchRows (set
+  // in initialize()). The kPerRow path drains at most this many ready rows per
+  // getOutput() call.
+  int32_t outputBatchRows_{1'024};
 
   // Claimed rows/batch from isBlocked() for use in getOutput().
   // State is derived from these: if non-empty, we have output ready.
