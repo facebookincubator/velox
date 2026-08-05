@@ -49,12 +49,14 @@ namespace facebook::velox::exec::rpc {
 /// 5. noMoreInput(): In BATCH mode, flushes remaining accumulated rows.
 ///    Signals RPCState that no more rows will be dispatched.
 ///
-/// Supports two streaming modes:
-/// - PER_ROW: Rows emitted as individual RPCs complete (out-of-order).
-///   Lower tail latency for high-variance workloads (e.g., LLM inference).
-/// - BATCH: All rows in a batch complete before emitting. Lower overhead
-///   for uniform-latency workloads. Supports pipelined dispatch via
-///   dispatchBatchSize.
+/// The RPCNode carries a coarse streaming mode (PER_ROW/BATCH); initialize()
+/// resolves it against the function's capability into the concrete dispatch
+/// mode this operator runs (see resolvedDispatchMode_):
+/// - PER_ROW: one RPC per row, emitted as each completes (out-of-order); lowest
+///   tail latency for high-variance workloads (e.g., LLM inference).
+/// - BATCH: multi-row requests, emitted together — either a native batch
+///   (pipelined via dispatchBatchSize) or an async offline job (submit -> poll
+///   -> fetch, whose job/queue RTT bypasses the per-driver latency window).
 ///
 /// State is derived from data presence (no explicit state machine enum):
 /// - Has output: claimedRows_ non-empty or claimedBatch_ has value
@@ -222,6 +224,19 @@ class RPCOperator : public exec::Operator {
   // in initialize()). The kPerRow path drains at most this many ready rows per
   // getOutput() call.
   int32_t outputBatchRows_{1'024};
+
+  // The concrete dispatch mode this operator executes, resolved once in
+  // initialize() from the RPCNode's streaming mode + the function's
+  // declared capability (see resolveDispatchMode). Single source for
+  // mode-dependent behavior. kAsyncJob (an offline job: submit -> poll ->
+  // fetch) has job-completion / GPU-queue RTT rather than a congestion latency
+  // signal, so the BATCH completion path skips the per-driver latency-gradient
+  // window for it; the per-tier rate limiter still bounds concurrency.
+  RpcCapabilityMode resolvedDispatchMode_{RpcCapabilityMode::kPerRow};
+
+  bool isAsyncJob() const {
+    return resolvedDispatchMode_ == RpcCapabilityMode::kAsyncJob;
+  }
 
   // Claimed rows/batch from isBlocked() for use in getOutput().
   // State is derived from these: if non-empty, we have output ready.
