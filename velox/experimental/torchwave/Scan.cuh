@@ -719,9 +719,60 @@ __device__ void repeat_interleave_head(
   }
 }
 
-// repeat_interleave final stage: for each element i in self, writes self[i]
-// into output[prefix[i-1]..prefix[i]). prefix is the inclusive prefix sum of
-// the repeats tensor. T is the element type of input and output.
+// repeat_interleave head for a broadcast (0-dim / single-element) repeat count:
+// every source segment is repeated the same 'r' times, so the inclusive prefix
+// sums are simply (i+1)*r. 'prefix' is pre-sized by the host reserve to the
+// segment count (size(input, dim), or numEl(input) when flattening), so the
+// count is read from its length. 'input' is passed only so the host reserve can
+// size 'prefix'; it is unused on device. TRepeats is the repeats element type.
+template <int32_t kBlockSize, typename TRepeats>
+__device__ void repeat_interleave_bcast_head(
+    Tensor* repeats,
+    Tensor* /*input*/,
+    Tensor* prefix,
+    int32_t* total,
+    BlockInfo& block) {
+  const int32_t segments = static_cast<int32_t>(numEl(*prefix));
+  const int32_t r = static_cast<int32_t>(storage<TRepeats>(repeats)[0]);
+  int32_t* pfx = storage<int32_t>(prefix);
+  for (uint32_t i = block.blockInOp * blockDim.x + threadIdx.x;
+       i < static_cast<uint32_t>(segments);
+       i += block.numBlocksInOp * blockDim.x) {
+    pfx[i] = static_cast<int32_t>(i + 1) * r;
+  }
+  if (block.blockInOp == 0 && threadIdx.x == 0 && total) {
+    *total = segments * r;
+  }
+}
+
+// upper_bound over the inclusive prefix sums: the smallest segment index i with
+// prefix[i] > pos. Maps an output position 'pos' along the interleave axis back
+// to the source segment it was expanded from.
+__device__ inline int32_t
+repeatInterleaveSegment(const int32_t* prefix, int32_t nSeg, int32_t pos) {
+  int32_t lo = 0;
+  int32_t hi = nSeg;
+  while (lo < hi) {
+    int32_t mid = lo + ((hi - lo) >> 1);
+    if (prefix[mid] <= pos) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+// repeat_interleave final stage (gather): for each OUTPUT element, decompose
+// its linear index into per-dim coordinates using the output's magic dividers,
+// map the coordinate along the interleave axis back to its source segment via
+// an upper_bound on the inclusive prefix sums, keep every other coordinate, and
+// read the source element at the strided offset. Supports arbitrary rank
+// (<= kMaxDims) and non-contiguous inputs. The interleave axis is the single
+// axis whose size differs between input and output; a rank mismatch (output
+// rank 1, input rank > 1) is the dim=None flatten case, where the whole tensor
+// is one 1-D run. prefix is the inclusive prefix sum of the (per-segment)
+// repeats. T is the element type of input and output.
 template <int32_t kBlockSize, typename T>
 __device__ void repeat_interleave_final(
     Tensor* input,
@@ -729,27 +780,68 @@ __device__ void repeat_interleave_final(
     int32_t* /*total*/,
     Tensor* output,
     uint32_t& size,
-    uint32_t& rounded,
+    uint32_t& /*rounded*/,
     BlockInfo& block) {
+  const bool flatten = output->rank != input->rank;
   if (threadIdx.x == 0) {
-    size = numEl(*input);
-    rounded = roundUpPwr2(size, kBlockSize);
+    size = numEl(*output);
   }
   __syncthreads();
   T* in = storage<T>(input);
-  int32_t* pfx = storage<int32_t>(prefix);
+  const int32_t* pfx = storage<int32_t>(prefix);
   T* out = storage<T>(output);
-  auto outputSize = numEl(*output);
-  for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
-       idx += block.numBlocksInOp * blockDim.x) {
-    if (idx < size) {
-      int32_t start = idx == 0 ? 0 : pfx[idx - 1];
-      int32_t end = pfx[idx];
-      T val = in[idx];
-      for (int32_t j = start; j < end; ++j) {
-        assert(static_cast<uint32_t>(j) < outputSize);
-        out[j] = val;
+  // The interleave axis is the one axis whose size changed (non-flatten).
+  int32_t dim = 0;
+  if (!flatten) {
+    for (int d = 0; d < input->rank; ++d) {
+      if (output->dims[d] != input->dims[d]) {
+        dim = d;
+        break;
       }
+    }
+  }
+  const int32_t nSeg =
+      flatten ? static_cast<int32_t>(numEl(*input)) : input->dims[dim];
+  // Per-thread magic dividers to decompose a row-major linear index into
+  // per-dim coordinates (innermost dim first). Kept thread-local (rather than
+  // the tensor's shared sizes[]) so this standalone kernel needs no cross-block
+  // index-calculator init. Non-flatten decomposes the output index; flatten
+  // decomposes the flattened source index (to honor a strided source).
+  const Tensor* decomp = flatten ? input : output;
+  IntDivider div[kMaxDims];
+  for (int i = 0; i < decomp->rank; ++i) {
+    div[i].init(static_cast<unsigned int>(decomp->dims[decomp->rank - 1 - i]));
+  }
+  for (uint32_t lin = block.blockInOp * blockDim.x + threadIdx.x; lin < size;
+       lin += block.numBlocksInOp * blockDim.x) {
+    if (flatten) {
+      int32_t seg =
+          repeatInterleaveSegment(pfx, nSeg, static_cast<int32_t>(lin));
+      uint32_t rem = static_cast<uint32_t>(seg);
+      int64_t offset = 0;
+      for (int i = 0; i < input->rank; ++i) {
+        unsigned int q, r;
+        div[i].divmod(rem, q, r);
+        rem = q;
+        offset += static_cast<int64_t>(r) * input->strides[input->rank - 1 - i];
+      }
+      out[lin] = in[offset];
+    } else {
+      int32_t coord[kMaxDims];
+      uint32_t rem = lin;
+      for (int i = 0; i < output->rank; ++i) {
+        unsigned int q, r;
+        div[i].divmod(rem, q, r);
+        coord[output->rank - 1 - i] = static_cast<int32_t>(r);
+        rem = q;
+      }
+      int32_t seg = repeatInterleaveSegment(pfx, nSeg, coord[dim]);
+      int64_t offset = 0;
+      for (int d = 0; d < input->rank; ++d) {
+        int32_t c = (d == dim) ? seg : coord[d];
+        offset += static_cast<int64_t>(c) * input->strides[d];
+      }
+      out[lin] = in[offset];
     }
   }
 }

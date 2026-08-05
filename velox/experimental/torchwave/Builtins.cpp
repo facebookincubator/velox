@@ -4057,20 +4057,39 @@ void registerBuiltins() {
              ValueTypes& types,
              WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
             auto* graph = waveGraph.graph();
-            auto inputId = node->inputs()[0].value->id();
-            auto inputDtype = types.types[inputId]->dtype();
-            auto* headNode = graph->createNode(
-                "tw.repeat_interleave_head",
-                {{"repeats", node->inputs()[1].value}});
+            auto* input = node->inputs()[0].value;
+            auto* repeats = node->inputs()[1].value;
+            auto inputDtype = types.types[input->id()]->dtype();
+            // A 0-dim repeat count broadcasts to every segment; the broadcast
+            // head reads the segment count from its (host-sized) prefix, so it
+            // takes 'input' and the 'dim' attr. A 1-D repeats is per-segment.
+            nativert::Node* headNode = nullptr;
+            if (types.rank(repeats) == 0) {
+              headNode = graph->createNode(
+                  "tw.repeat_interleave_bcast_head",
+                  {{"repeats", repeats}, {"input", input}});
+              if (auto dimOpt = constIntArg(node, "dim")) {
+                headNode->addAttribute({"dim", *dimOpt});
+              }
+            } else {
+              headNode = graph->createNode(
+                  "tw.repeat_interleave_head", {{"repeats", repeats}});
+            }
             auto* prefixOutput = waveGraph.newTensorValue(
                 headNode, "repeat_prefix", c10::ScalarType::Int);
             auto* totalOutput = waveGraph.newScalarValue(
                 headNode, "repeat_total", c10::ScalarType::Int);
             auto* finalNode = graph->createNode(
                 "tw.repeat_interleave_final",
-                {{"input", node->inputs()[0].value},
+                {{"input", input},
                  {"prefix", prefixOutput},
                  {"total", totalOutput}});
+            // Propagate the interleave axis so the final's reserveShape and
+            // rank constraint reconstruct the full (multi-dim) output shape. A
+            // missing 'dim' (None) is the flatten-to-1D case.
+            if (auto dimOpt = constIntArg(node, "dim")) {
+              finalNode->addAttribute({"dim", *dimOpt});
+            }
             auto* resultOutput = waveGraph.newTensorValue(
                 finalNode, "repeat_result", inputDtype);
             return {{node->outputs()[0], resultOutput}};
@@ -4110,6 +4129,53 @@ void registerBuiltins() {
           })
       .registerOp();
 
+  auto repeatInterleaveBcastReserve =
+      [](NodeCP node,
+         nativert::ExecutionFrame& frame,
+         const FormalToActual& map,
+         NodeCP /*originalFormalNode*/,
+         const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
+    // prefix length = number of source segments = size(input, dim), or
+    // numEl(input) when flattening (dim=None).
+    auto inputTensor = paramTensor(node->inputs()[1].value, frame, map);
+    auto dimOpt = constIntArg(node, "dim");
+    if (!dimOpt.has_value()) {
+      return {{static_cast<Dim>(inputTensor.numel())}};
+    }
+    int64_t rank = inputTensor.dim();
+    int64_t dim = *dimOpt < 0 ? *dimOpt + rank : *dimOpt;
+    return {{static_cast<Dim>(inputTensor.size(dim))}};
+  };
+
+  // Broadcast (0-dim repeat count) head: prefix[i] = (i+1)*r, sized to the
+  // segment count. Reused for both dim-given and flatten (dim=None) cases.
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.repeat_interleave_bcast_head",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("repeats", c10::TensorType::get()),
+              c10::Argument("input", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("prefix", c10::TensorType::get()),
+              c10::Argument("total", c10::IntType::get())}))
+      .sizeOrdinal({0})
+      .hasBarrier()
+      .returnMeta(
+          {{.isRegister = false, .reserveShape = repeatInterleaveBcastReserve},
+           {.neededOnHost = true}})
+      .headerFile(kScanHeader)
+      .deviceFunc("repeat_interleave_bcast_head")
+      .typeTemplateParams({0})
+      .hasBlockSizeTemplateParam()
+      .multiBlockReturnBarrier()
+      .outputConstraints(
+          [](NodeCP /*node*/,
+             const ValueTypes& /*types*/) -> std::vector<ValueConstraint> {
+            return {{.rank = 1}, {}};
+          })
+      .registerOp();
+
   auto repeatInterleaveFinalReserve =
       [](NodeCP node,
          nativert::ExecutionFrame& frame,
@@ -4117,7 +4183,19 @@ void registerBuiltins() {
          NodeCP /*originalFormalNode*/,
          const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
     auto total = paramSymInt(node->inputs()[2].value, frame, map);
-    return {{static_cast<Dim>(total)}};
+    auto dimOpt = constIntArg(node, "dim");
+    if (!dimOpt.has_value()) {
+      // dim=None: repeat_interleave flattens to a 1-D output of 'total'
+      // elements.
+      return {{static_cast<Dim>(total)}};
+    }
+    auto inputTensor = paramTensor(node->inputs()[0].value, frame, map);
+    int64_t rank = inputTensor.dim();
+    int64_t dim = *dimOpt < 0 ? *dimOpt + rank : *dimOpt;
+    std::vector<Dim> shape(
+        inputTensor.sizes().begin(), inputTensor.sizes().end());
+    shape.at(dim) = static_cast<Dim>(total);
+    return {shape};
   };
 
   // tw.repeat_interleave_final: (Tensor, Tensor, int) -> Tensor
@@ -4142,7 +4220,18 @@ void registerBuiltins() {
       .hasBarrier()
       .hasBlockSizeTemplateParam()
       .multiBlockReturnBarrier()
-      .outputConstraints(rank1Constraint)
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            // dim=None flattens to rank 1; otherwise the output keeps the
+            // input's rank (only the interleave axis changes length).
+            if (!constIntArg(node, "dim").has_value()) {
+              return {{.rank = 1, .contiguity = Contiguity::kContiguous}};
+            }
+            return {
+                {.rank = types.rank(inputAt(node, 0)),
+                 .contiguity = Contiguity::kContiguous}};
+          })
       .registerOp();
 
   // Index-generating overload: given a 1-D counts tensor, returns a 1-D tensor
