@@ -138,11 +138,11 @@ void CudfIcebergSplitReader::setupReader() {
 
 cudf::ast::expression const* CudfIcebergSplitReader::pushdownFilter() const {
   if (transformedPushdownFilter_) {
-    if (transformedPushdownFilter_->requiresSplitSpecificDecimalTypes() and
+    if (transformedPushdownFilter_->requiresSplitSpecificDecimalTypes and
         not hasSplitSpecificPushdownFilter()) {
       return nullptr;
     }
-    return transformedPushdownFilter_->expr();
+    return transformedPushdownFilter_->expr;
   }
   return deferSubfieldFilter_ ? nullptr : CudfSplitReader::pushdownFilter();
 }
@@ -240,9 +240,8 @@ void CudfIcebergSplitReader::prepareSubfieldFilter() {
 
   // Defer the logical filter if it references an injected column, or if a
   // transformed decimal predicate has no split-specific physical expression.
-  deferSubfieldFilter_ =
-      transformedPushdownFilter_->referencesInjectedColumn() or
-      (transformedPushdownFilter_->requiresSplitSpecificDecimalTypes() and
+  deferSubfieldFilter_ = transformedPushdownFilter_->referencesInjectedColumn or
+      (transformedPushdownFilter_->requiresSplitSpecificDecimalTypes and
        not hasSplitSpecificPushdownFilter());
 }
 
@@ -441,9 +440,10 @@ CudfIcebergSplitReader::readNextChunk() {
 
   // Apply the deferred subfield filter.
   if (deferSubfieldFilter_) {
-    // The split filter matches file-backed physical widths and logical widths
-    // for injected columns, which is the layout assembled above.
-    auto* filter = CudfSplitReader::pushdownFilter();
+    // The logical filter matches the assembled table above. The pushdown
+    // expression may have been rebuilt against the split's physical decimal
+    // widths, so it must not be used here.
+    auto* filter = subfieldFilter();
     VELOX_CHECK_NOT_NULL(filter);
     auto filterMask = cudf::compute_column(
         cudfTable->view(), *filter, stream_, get_temp_mr());

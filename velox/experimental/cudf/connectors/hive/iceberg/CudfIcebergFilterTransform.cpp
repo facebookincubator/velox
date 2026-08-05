@@ -61,7 +61,8 @@ class InjectedColumnFilterTransformer
         .nodes = std::move(nodes_),
         .expr = current_.expr,
         .referencesInjectedColumn = referencesInjectedColumn_,
-        current_.requiresSplitSpecificDecimalTypes};
+        .requiresSplitSpecificDecimalTypes =
+            current_.requiresSplitSpecificDecimalTypes};
   }
 
  private:
@@ -155,8 +156,7 @@ class InjectedColumnFilterTransformer
             .expr = retained.expr,
             .wasRelaxed = wasRelaxed,
             .requiresSplitSpecificDecimalTypes =
-                retained.requiresSplitSpecificDecimalTypes,
-            retained.requiresSplitSpecificDecimalTypes};
+                retained.requiresSplitSpecificDecimalTypes};
         return current_.expr == nullptr ? expr : *current_.expr;
       }
     } else if (isLogicalOr(op)) {

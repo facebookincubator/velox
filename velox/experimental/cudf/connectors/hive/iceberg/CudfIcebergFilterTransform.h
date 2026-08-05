@@ -19,53 +19,29 @@
 #include <cudf/ast/expressions.hpp>
 
 #include <span>
-#include <utility>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
 /// Filter over the columns the parquet reader projects, derived from a filter
 /// over the assembled table.
 ///
-/// Move-only and immutable once constructed. Owns the expression nodes created
-/// while transforming. Those nodes may also point into the input filter, which
-/// must therefore outlive the transformed result.
-class TransformedFilter {
- public:
-  /// @param nodes Expression nodes created while transforming.
-  /// @param expr Root of the transformed filter. Null when the transformed
-  /// filter is always true.
-  /// @param referencesInjectedColumn Whether the input filter references
-  /// injected column(s).
-  /// @param requiresSplitSpecificDecimalTypes Whether the transformed filter
-  /// retains a decimal literal whose storage width must match the split.
-  TransformedFilter(
-      cudf::ast::tree nodes,
-      const cudf::ast::expression* expr,
-      bool referencesInjectedColumn,
-      bool requiresSplitSpecificDecimalTypes)
-      : nodes_{std::move(nodes)},
-        expr_{expr},
-        referencesInjectedColumn_{referencesInjectedColumn},
-        requiresSplitSpecificDecimalTypes_{requiresSplitSpecificDecimalTypes} {}
+/// Move-only. Owns the expression nodes created while transforming. Those nodes
+/// may also point into the input filter, which must therefore outlive the
+/// transformed result.
+struct TransformedFilter {
+  /// Expression nodes created while transforming.
+  cudf::ast::tree nodes;
 
-  const cudf::ast::expression* expr() const {
-    return expr_;
-  }
+  /// Root of the transformed filter. Null when the transformed filter is
+  /// always true.
+  const cudf::ast::expression* expr;
 
-  bool referencesInjectedColumn() const {
-    return referencesInjectedColumn_;
-  }
+  /// Whether the input filter references injected column(s).
+  bool referencesInjectedColumn;
 
-  bool requiresSplitSpecificDecimalTypes() const {
-    return requiresSplitSpecificDecimalTypes_;
-  }
-
- private:
-  // Owns the expression nodes created while transforming.
-  cudf::ast::tree nodes_;
-  const cudf::ast::expression* expr_;
-  bool referencesInjectedColumn_;
-  bool requiresSplitSpecificDecimalTypes_;
+  /// Whether the transformed filter retains a decimal literal whose storage
+  /// width must match the split.
+  bool requiresSplitSpecificDecimalTypes;
 };
 
 /// Transforms the input filter into a sub-filter over the columns actually
