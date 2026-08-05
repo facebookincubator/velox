@@ -104,6 +104,19 @@ struct CudfConfig {
   /// Priority of JIT expression.
   int jitExpressionPriority{101};
 
+  /// Enable Velox simple functions compiled to CUDA kernels.
+  bool gpuSfiExpressionEnabled{true};
+
+  /// Priority of the GPU simple-function evaluator.
+  ///
+  /// Defaults below AST deliberately. It covers far more of Velox than AST's
+  /// operator set and carries Velox's exact semantics, but it currently emits
+  /// one kernel per expression node where AST fuses a whole tree into one. Until
+  /// those nodes can be fused, outranking AST would trade a single kernel for
+  /// several. Raise this past astExpressionPriority to prefer Velox semantics
+  /// over AST's operator set where the two disagree.
+  int gpuSfiExpressionPriority{75};
+
   /// Whether to log a reason for falling back to Velox CPU execution.
   bool logFallback{true};
 

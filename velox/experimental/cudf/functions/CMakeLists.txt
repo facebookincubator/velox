@@ -64,10 +64,10 @@ target_link_libraries(
 # Keeping the two apart is what makes the boundary a build-level guarantee
 # rather than a convention.
 add_library(velox_cudf_gpu_function_bridge GpuFunctionRegistry.cpp
-                                           GpuFunctionBridge.cpp)
+                                           GpuSfiExpression.cpp)
 
 target_link_libraries(
   velox_cudf_gpu_function_bridge
   PUBLIC velox_cudf_gpu_simple_functions
-  PRIVATE cudf::cudf velox_cudf_expression
+  PRIVATE cudf::cudf velox_cudf_expression velox_cudf_expression_registry
 )

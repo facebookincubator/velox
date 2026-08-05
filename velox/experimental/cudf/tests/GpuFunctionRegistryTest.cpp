@@ -22,14 +22,14 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/experimental/cudf/functions/GpuFunctionBridge.h"
 #include "velox/experimental/cudf/functions/GpuFunctionRegistry.h"
 
 namespace facebook::velox::cudf_velox::gpu_sfi {
 namespace {
 
 std::unique_ptr<cudf::column> launcherA(
-    const std::vector<cudf::column_view>&,
+    const std::vector<GpuArgView>&,
+    cudf::size_type,
     cudf::data_type,
     rmm::cuda_stream_view,
     rmm::device_async_resource_ref) {
@@ -37,7 +37,8 @@ std::unique_ptr<cudf::column> launcherA(
 }
 
 std::unique_ptr<cudf::column> launcherB(
-    const std::vector<cudf::column_view>&,
+    const std::vector<GpuArgView>&,
+    cudf::size_type,
     cudf::data_type,
     rmm::cuda_stream_view,
     rmm::device_async_resource_ref) {

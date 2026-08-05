@@ -43,11 +43,32 @@
 
 namespace facebook::velox::cudf_velox::gpu_sfi {
 
-/// Evaluates one registered function over whole columns. Instantiated behind
-/// the shadow boundary, one per (function, argument types) combination, the way
+/// One argument as the kernel sees it.
+///
+/// Modelled on how Velox feeds a simple function: SimpleFunctionAdapter reads
+/// every argument through a DecodedVector, which maps a row to an index, so a
+/// constant argument resolves to index 0 for every row and the call() body
+/// never learns the difference. Carrying the same indirection here means a
+/// literal argument costs no materialization and, unlike the column-in
+/// column-out interface used elsewhere in this backend, needs no per-function
+/// branch to handle.
+struct GpuArgView {
+  /// Device pointer to the first element.
+  const void* data;
+  /// Null mask, or nullptr when the argument cannot be null.
+  const cudf::bitmask_type* nullMask;
+  /// Added to the row index before reading, mirroring column_view::offset().
+  cudf::size_type offset;
+  /// When true every row reads element 0.
+  bool isConstant;
+};
+
+/// Evaluates one registered function over a row range. Instantiated behind the
+/// shadow boundary, one per (function, argument types) combination, the way
 /// SimpleFunctionAdapterFactoryImpl is instantiated per UDFHolder.
 using GpuLaunchFn = std::unique_ptr<cudf::column> (*)(
-    const std::vector<cudf::column_view>& inputs,
+    const std::vector<GpuArgView>& arguments,
+    cudf::size_type numRows,
     cudf::data_type outputType,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
@@ -85,5 +106,10 @@ gpuFunctionRegistry();
 
 /// Test support: drops all registrations.
 void clearGpuFunctionRegistry();
+
+/// Registers the PrestoSQL simple functions compiled for GPU. Defined in a .cu
+/// translation unit; declared here so host code can call it without seeing
+/// anything behind the shadow boundary.
+void registerPrestoGpuFunctions(const std::string& prefix);
 
 } // namespace facebook::velox::cudf_velox::gpu_sfi
