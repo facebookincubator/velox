@@ -82,7 +82,7 @@ VectorPtr constArgVector(
       index);
   const auto* constExpr = input->asUnchecked<core::ConstantTypedExpr>();
   return constExpr->hasValueVector() ? constExpr->valueVector()
-                                      : constExpr->toConstantVector(pool);
+                                     : constExpr->toConstantVector(pool);
 }
 
 // Reads a required constant string argument (e.g. a timezone name or format).
@@ -642,7 +642,9 @@ class TimezoneFieldFunction : public CudfFunction {
 // to_iso8601(timestamp with time zone) -> varchar.
 class ToIso8601Function : public CudfFunction {
  public:
-  ToIso8601Function(const core::TypedExprPtr& expr, memory::MemoryPool* /*pool*/) {
+  ToIso8601Function(
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool* /*pool*/) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 1, "to_iso8601 expects exactly 1 input");
   }

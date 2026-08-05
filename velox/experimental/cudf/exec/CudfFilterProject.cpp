@@ -192,14 +192,14 @@ void CudfFilterProject::initialize() {
   // lifetime.
   auto* const queryCtx = operatorCtx_->execCtx()->queryCtx();
   auto* const pool = operatorCtx_->pool();
-  const auto optimizeAndCompile = [inputType, queryCtx, pool, exprContext](
-                                       const core::TypedExprPtr& expr) {
-    return createCudfExpression(
-        expression::optimize(expr, queryCtx, pool),
-        inputType,
-        pool,
-        exprContext);
-  };
+  const auto optimizeAndCompile =
+      [inputType, queryCtx, pool, exprContext](const core::TypedExprPtr& expr) {
+        return createCudfExpression(
+            expression::optimize(expr, queryCtx, pool),
+            inputType,
+            pool,
+            exprContext);
+      };
   if (hasFilter_) {
     // First expr is Filter, rest are Project.
     filterEvaluator_ = optimizeAndCompile(allExprs.front());

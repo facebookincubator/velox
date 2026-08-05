@@ -40,7 +40,6 @@ class QueryConfig;
 class QueryCtx;
 } // namespace facebook::velox::core
 
-
 namespace facebook::velox::cudf_velox {
 
 // Holds either a non-owning cudf::column_view (zero-copy) or an owning
