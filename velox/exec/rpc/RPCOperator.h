@@ -218,6 +218,11 @@ class RPCOperator : public exec::Operator {
   // > 0 = fire flushBatch() every N rows during addInput().
   int32_t dispatchBatchSize_{0};
 
+  // Max rows per output vector, from QueryConfig::preferredOutputBatchRows (set
+  // in initialize()). The kPerRow path drains at most this many ready rows per
+  // getOutput() call.
+  int32_t outputBatchRows_{1'024};
+
   // Claimed rows/batch from isBlocked() for use in getOutput().
   // State is derived from these: if non-empty, we have output ready.
   std::vector<RPCState::ReadyRow> claimedRows_;

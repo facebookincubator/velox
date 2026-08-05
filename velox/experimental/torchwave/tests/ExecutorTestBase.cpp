@@ -147,12 +147,20 @@ DEFINE_bool(
 
 DEFINE_bool(
     enable_reuse,
-    false,
+    true,
     "Reuse a value's buffer in place when an op is its unique last use (turn copying ops into in-place ops)");
+DEFINE_bool(
+    elide_clones,
+    true,
+    "With --enable_reuse, run the pre-partition read-only clone elision pass");
 DEFINE_bool(
     free_intermediates,
     false,
     "Release each ProjectNode's last-use value tensors right after its composite invocation executes, instead of at end-of-graph");
+DEFINE_bool(
+    input_contiguous,
+    false,
+    "Assume all model inputs, weights, and constants are contiguous in the graph optimizer; executeWave verifies and errors out if any is not contiguous");
 
 namespace torch::wave {
 
@@ -654,7 +662,9 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().debugSingleOps = FLAGS_debug_single_ops;
   WaveConfig::get().autoAdjustCost = FLAGS_auto_adjust_cost;
   WaveConfig::get().enableReuse = FLAGS_enable_reuse;
+  WaveConfig::get().elideClones = FLAGS_elide_clones;
   WaveConfig::get().freeIntermediates = FLAGS_free_intermediates;
+  WaveConfig::get().inputContiguous = FLAGS_input_contiguous;
   if (!FLAGS_print_options.empty()) {
     NodePrinter::setDefaults(
         NodePrinter::parsePrintOptions(FLAGS_print_options));

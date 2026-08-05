@@ -198,6 +198,17 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
   optimizer_->optimizeGraph(graph_);
   createdValueDtypes_.clear();
 
+  // Drop read-only clones before partitioning. This has to run after
+  // optimizeGraph, which is what creates most of them (a rewritten op's output
+  // is cloned once per consumer), and before makeParallelNodes, because those
+  // clones land in different ProjectNode layers and the post-partition
+  // rewriteInPlace only ever compares clones within one layer. A clone that
+  // survives fusion costs a copy and a barrier, so eliding is a win whenever
+  // it is safe. Gated on enableReuse with the rest of the reuse work.
+  if (WaveConfig::get().enableReuse && WaveConfig::get().elideClones) {
+    elideReadOnlyClones(*graph_, types_);
+  }
+
   // Graph outputs (and, for list-typed outputs, their elements) escape the
   // graph, so LaunchData must never release them as per-op intermediates.
   graphOutputIds_.clear();
@@ -228,6 +239,13 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
 
   ParallelNodes parallelNodes;
   auto* lastProjectNode = parallelNodes.makeParallelNodes(*graph_);
+
+  // Optional post-partition pass: elide redundant clones so in-place writers
+  // (e.g. index_put_) mutate their original buffer. Gated on enableReuse; a
+  // no-op otherwise.
+  if (WaveConfig::get().enableReuse) {
+    parallelNodes.rewriteInPlace(*graph_, types_);
+  }
 
   CompileCtx ctx(*this);
   compileCtx_ = &ctx;
