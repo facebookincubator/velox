@@ -32,7 +32,8 @@
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/expression/FieldReference.h"
+#include "velox/core/QueryCtx.h"
+#include "velox/expression/ExprOptimizer.h"
 
 #include <cudf/stream_compaction.hpp>
 
@@ -102,21 +103,41 @@ CudfHiveDataSource::CudfHiveDataSource(
       readColumnNames_.emplace_back(field.toString());
     }
   }
-  if (remainingFilter) {
-    remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
-    for (const auto& field : remainingFilterExprSet_->distinctFields()) {
-      // Add fields in the filter to the columns to read if not there
-      if (readColumnSet_.count(field->name()) == 0) {
-        readColumnSet_.emplace(field->name());
-        readColumnNames_.emplace_back(field->name());
+  // Optimize (rewrites + constant folding) the remaining filter before
+  // evaluator selection so CudfFunctions never see scalar-only operand sets.
+  // TODO: ConnectorQueryCtx does not expose the session QueryCtx, only an
+  // ExpressionEvaluator, so constant folding here runs against a transient
+  // QueryCtx with default query config rather than the session's. Passing the
+  // real session QueryCtx (e.g. by exposing it on ConnectorQueryCtx) should be
+  // figured out later. A local QueryCtx is required because
+  // expression::optimize constant-folds through exec::ExprSet, whose
+  // constructor dereferences the QueryCtx unconditionally; a null QueryCtx
+  // would crash.
+  auto optimizeQueryCtx = core::QueryCtx::create();
+  optimizedRemainingFilter_ = remainingFilter
+      ? expression::optimize(remainingFilter, optimizeQueryCtx.get(), pool_)
+      : nullptr;
+  if (optimizedRemainingFilter_) {
+    // Add fields referenced by the filter to the columns to read. Collect from
+    // the optimized expression since folding may drop branches and the columns
+    // they reference. Read-column order does not affect results: the data
+    // source projects its output to the requested output type.
+    for (const auto& name : referencedInputFields(optimizedRemainingFilter_)) {
+      if (readColumnSet_.count(name) == 0) {
+        readColumnSet_.emplace(name);
+        readColumnNames_.emplace_back(name);
       }
     }
 
+    // TODO: Prune struct columns to the subfields referenced by the remaining
+    // filter; currently the whole column is read even if only one field is
+    // used.
+
+    // The filter is already optimized and constant folded above, so compile it
+    // directly.
     auto const remainingFilterType = getTableRowType();
-    cudfExpressionEvaluator_ = velox::cudf_velox::createCudfExpression(
-        remainingFilterExprSet_->exprs()[0], remainingFilterType);
-    // TODO(kn): Get column names and subfields from remaining filter and add to
-    // readColumnNames_
+    cudfRemainingFilterExpression_ = createCudfExpression(
+        optimizedRemainingFilter_, remainingFilterType, pool_);
   }
 
   // Build a combined AST for all subfield filters once. This is query-constant
@@ -233,7 +254,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   auto stream = cudfSplitReader_->stream();
 
   uint64_t filterTimeUs{0};
-  if (remainingFilterExprSet_) {
+  if (optimizedRemainingFilter_) {
     MicrosecondWallTimer filterTimer(&filterTimeUs);
     auto cudfTableColumns = cudfTable->release();
     std::vector<cudf::column_view> inputViews;
@@ -242,7 +263,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
       inputViews.push_back(col->view());
     }
     auto filterResult =
-        cudfExpressionEvaluator_->eval(inputViews, stream, get_temp_mr());
+        cudfRemainingFilterExpression_->eval(inputViews, stream, get_temp_mr());
     auto originalTable =
         std::make_unique<cudf::table>(std::move(cudfTableColumns));
     cudfTable = cudf::apply_boolean_mask(
