@@ -511,6 +511,9 @@ void CudfSplitReader::fileMetaDatas() {
         1,
         "Split-specific pushdown filters require exactly one Parquet metadata");
     pushdownFilterExpr_ = pushdownFilterBuilder_(fileMetaData_.front());
+    VELOX_CHECK_NOT_NULL(
+        pushdownFilterExpr_,
+        "Split-specific pushdown filter builder must return an expression");
     hasSplitSpecificPushdownFilter_ = true;
   }
 }
