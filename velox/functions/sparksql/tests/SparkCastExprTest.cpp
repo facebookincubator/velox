@@ -1297,6 +1297,103 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             DECIMAL(20, 10)));
   }
 
+  void testDecimalToDecimal() {
+    // Short to short, scale up.
+    auto shortFlat =
+        makeFlatVector<int64_t>({-3, -2, -1, 0, 55, 69, 72}, DECIMAL(2, 2));
+    testCast(
+        shortFlat,
+        makeFlatVector<int64_t>(
+            {-300, -200, -100, 0, 5'500, 6'900, 7'200}, DECIMAL(4, 4)));
+
+    // Short to short, scale down.
+    testCast(
+        shortFlat,
+        makeFlatVector<int64_t>({0, 0, 0, 0, 6, 7, 7}, DECIMAL(4, 1)));
+
+    // Long to short, scale up.
+    auto longFlat =
+        makeFlatVector<int128_t>({-201, -109, 0, 105, 208}, DECIMAL(20, 2));
+    testCast(
+        longFlat,
+        makeFlatVector<int64_t>(
+            {-201'000, -109'000, 0, 105'000, 208'000}, DECIMAL(10, 5)));
+
+    // Long to short, scale down.
+    testCast(
+        longFlat,
+        makeFlatVector<int64_t>({-20, -11, 0, 11, 21}, DECIMAL(10, 1)));
+
+    // Long to long, scale up.
+    testCast(
+        longFlat,
+        makeFlatVector<int128_t>(
+            {-20'100'000'000,
+             -10'900'000'000,
+             0,
+             10'500'000'000,
+             20'800'000'000},
+            DECIMAL(20, 10)));
+
+    // Long to long, scale down.
+    testCast(
+        longFlat,
+        makeFlatVector<int128_t>({-20, -11, 0, 11, 21}, DECIMAL(20, 1)));
+
+    // Short to long, scale up.
+    testCast(
+        shortFlat,
+        makeFlatVector<int128_t>(
+            {-3'000'000'000,
+             -2'000'000'000,
+             -1'000'000'000,
+             0,
+             55'000'000'000,
+             69'000'000'000,
+             72'000'000'000},
+            DECIMAL(20, 11)));
+
+    // Reinterpret when scale is unchanged.
+    testCast(
+        shortFlat,
+        makeFlatVector<int64_t>({-3, -2, -1, 0, 55, 69, 72}, DECIMAL(18, 2)));
+    testCast(
+        longFlat,
+        makeFlatVector<int128_t>({-201, -109, 0, 105, 208}, DECIMAL(38, 2)));
+
+    // Short to long, scale down.
+    testCast(
+        makeFlatVector<int64_t>({-20'500, -190, 12'345, 19'999}, DECIMAL(6, 4)),
+        makeFlatVector<int128_t>({-21, 0, 12, 20}, DECIMAL(20, 1)));
+
+    // NULL input values are preserved.
+    testCast(
+        makeNullableFlatVector<int128_t>(
+            {-20'000, 10'000, std::nullopt}, DECIMAL(20, 3)),
+        makeNullableFlatVector<int64_t>(
+            {-200'000, 100'000, std::nullopt}, DECIMAL(6, 4)));
+
+    // Long to short with large values using try_cast.
+    testCast(
+        makeNullableFlatVector<int128_t>(
+            {HugeInt::build(-2, 200),
+             HugeInt::build(-1, 300),
+             HugeInt::build(0, 400),
+             HugeInt::build(1, 1),
+             HugeInt::build(10, 100),
+             std::nullopt},
+            DECIMAL(23, 8)),
+        makeNullableFlatVector<int64_t>(
+            {-368'934'881'474,
+             -184'467'440'737,
+             0,
+             184'467'440'737,
+             std::nullopt,
+             std::nullopt},
+            DECIMAL(12, 0)),
+        true);
+  }
+
   std::string zeros(uint32_t numZeros) {
     return std::string(numZeros, '0');
   }
@@ -2409,6 +2506,36 @@ TEST_F(SparkCastExprTestAnsiOn, integralToDecimal) {
   testOverflowThrow.operator()<int64_t>();
 }
 
+TEST_F(SparkCastExprTestAnsiOn, decimalToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testDecimalToDecimal();
+
+  // Under ANSI ON, values that overflow the target precision/scale throw.
+  auto testOverflowThrow = [&]() {
+    const auto longFlat = makeNullableFlatVector<int128_t>(
+        {-20'000, -1'000'000, 10'000, std::nullopt}, DECIMAL(20, 3));
+    const auto expectedShort = makeNullableFlatVector<int64_t>(
+        {-200'000, std::nullopt, 100'000, std::nullopt}, DECIMAL(6, 4));
+    VELOX_ASSERT_THROW(
+        testCast(longFlat, expectedShort),
+        "Cannot cast DECIMAL '-1000.000' to DECIMAL(6, 4)");
+
+    VELOX_ASSERT_THROW(
+        testCast(
+            makeNullableFlatVector<int128_t>(
+                {DecimalUtil::kLongDecimalMax}, DECIMAL(38, 0)),
+            makeNullableFlatVector<int128_t>({0}, DECIMAL(38, 1))),
+        "Cannot cast DECIMAL '99999999999999999999999999999999999999' to DECIMAL(38, 1)");
+    VELOX_ASSERT_THROW(
+        testCast(
+            makeNullableFlatVector<int128_t>(
+                {DecimalUtil::kLongDecimalMin}, DECIMAL(38, 0)),
+            makeNullableFlatVector<int128_t>({0}, DECIMAL(38, 1))),
+        "Cannot cast DECIMAL '-99999999999999999999999999999999999999' to DECIMAL(38, 1)");
+  };
+  testOverflowThrow();
+}
+
 TEST_F(SparkCastExprTestAnsiOn, doubleToDecimal) {
   // Regular cases produce the same results regardless of ANSI mode.
   testDoubleToDecimal();
@@ -2520,6 +2647,31 @@ TEST_F(SparkCastExprTestAnsiOn, realToDecimal) {
       DECIMAL(38, 2),
       {NAN},
       "to DECIMAL(38, 2). The input value should be finite.");
+}
+
+TEST_F(SparkCastExprTestAnsiOff, decimalToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testDecimalToDecimal();
+
+  // Under ANSI OFF, values that overflow the target precision/scale return
+  // NULL instead of throwing.
+  auto testOverflowNull = [&]() {
+    const auto longFlat = makeNullableFlatVector<int128_t>(
+        {-20'000, -1'000'000, 10'000, std::nullopt}, DECIMAL(20, 3));
+    const auto expectedShort = makeNullableFlatVector<int64_t>(
+        {-200'000, std::nullopt, 100'000, std::nullopt}, DECIMAL(6, 4));
+    testCast(longFlat, expectedShort);
+
+    testCast(
+        makeNullableFlatVector<int128_t>(
+            {DecimalUtil::kLongDecimalMax}, DECIMAL(38, 0)),
+        makeNullableFlatVector<int128_t>({std::nullopt}, DECIMAL(38, 1)));
+    testCast(
+        makeNullableFlatVector<int128_t>(
+            {DecimalUtil::kLongDecimalMin}, DECIMAL(38, 0)),
+        makeNullableFlatVector<int128_t>({std::nullopt}, DECIMAL(38, 1)));
+  };
+  testOverflowNull();
 }
 
 TEST_F(SparkCastExprTestAnsiOff, varcharToDecimal) {

@@ -126,6 +126,10 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
     return true;
   }
 
+  if (fromType->isDecimal() && toType->isDecimal()) {
+    return true;
+  }
+
   if ((fromType->isReal() || fromType->isDouble()) && toType->isDecimal()) {
     return true;
   }
