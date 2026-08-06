@@ -46,6 +46,11 @@ struct FileScanBatchEvent : public core::ScanBatchEvent {
   /// Null when partition keys are not available.
   const std::unordered_map<std::string, std::optional<std::string>>*
       partitionKeys{nullptr};
+  /// File format of the current split.
+  dwio::common::FileFormat fileFormat{dwio::common::FileFormat::UNKNOWN};
+  /// Bytes fetched from storage producing this batch, including any read
+  /// amplification from coalescing adjacent regions.
+  uint64_t storageReadBytes{0};
 };
 
 class FileConfig;
@@ -148,6 +153,10 @@ class FileDataSource : public DataSource {
   std::shared_ptr<io::IoStatistics> dataIoStats_;
   std::shared_ptr<io::IoStatistics> metadataIoStats_;
   std::shared_ptr<IoStats> ioStats_;
+
+  // Cumulative dataIoStats_->read().sum() as of the last scan batch event, so
+  // each event reports only the bytes read since the previous one.
+  uint64_t lastEventStorageReadBytes_{0};
 
   /// Column handles for the split info columns keyed on their column names.
   std::unordered_map<std::string, FileColumnHandlePtr> infoColumns_;
