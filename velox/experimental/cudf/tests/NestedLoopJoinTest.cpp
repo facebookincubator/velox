@@ -20,6 +20,8 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
+#include <fmt/format.h>
+
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -1698,3 +1700,99 @@ TEST_F(CudfNestedLoopJoinTest, emptyBuildConsumeInput) {
 // build as empty. Fixing this requires the bridge to carry row counts
 // separately. See CPU NestedLoopJoinTest::zeroColumnBuild for the expected
 // behavior.
+
+// With no equi-join keys, the LIKE condition becomes the entire join
+// condition and can't be represented as a single cuDF AST tree (the LIKE
+// value comes from the probe side, the pattern from the build side), so
+// this exercises crossJoinConditionalIndices() instead of
+// cudf::conditional_inner_join(). The operator-type assertion below matters
+// because this bug previously crashed the query entirely; without it, a
+// silent CPU fallback would also produce the correct result and this test
+// would pass without proving the GPU path works.
+TEST_F(CudfNestedLoopJoinTest, likeConditionSpanningBothSides) {
+  auto probe = makeRowVector(
+      {"t_val"},
+      {makeFlatVector<std::string>({"apple", "banana", "cherry", "date"})});
+  auto build = makeRowVector(
+      {"u_pattern"},
+      {makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probe})
+          .nestedLoopJoin(
+              PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+              "t_val LIKE u_pattern",
+              {"t_val", "u_pattern"})
+          .planNode();
+
+  // apple matches app%, banana matches ban%, cherry contains "err" so it
+  // matches %err%; date matches nothing.
+  auto expected = makeRowVector(
+      {makeFlatVector<std::string>({"apple", "banana", "cherry"}),
+       makeFlatVector<std::string>({"app%", "ban%", "%err%"})});
+  auto task = AssertQueryBuilder(plan).assertResults(expected);
+
+  bool sawCudfNestedLoopJoinProbe = false;
+  for (auto& pipeline : task->taskStats().pipelineStats) {
+    for (auto& op : pipeline.operatorStats) {
+      if (op.operatorType == "CudfNestedLoopJoinProbe") {
+        sawCudfNestedLoopJoinProbe = true;
+      }
+    }
+  }
+  ASSERT_TRUE(sawCudfNestedLoopJoinProbe);
+}
+
+// Same cross-side LIKE condition as above, but with an unmatched row on
+// each side (date matches no pattern; %xyz% matches no value), to exercise
+// crossJoinConditionalIndices() together with probeMatchedFlags_/
+// buildMatchedFlags_ mismatch-row emission for left, right, and full outer
+// joins.
+TEST_F(CudfNestedLoopJoinTest, likeConditionSpanningBothSidesOuterJoins) {
+  auto probe = makeRowVector(
+      {"t_val"},
+      {makeFlatVector<std::string>({"apple", "banana", "cherry", "date"})});
+  auto build = makeRowVector(
+      {"u_pattern"},
+      {makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+  createDuckDbTable("t", {probe});
+  createDuckDbTable("u", {build});
+
+  for (auto [joinType, sqlJoin] :
+       std::vector<std::pair<core::JoinType, std::string>>{
+           {core::JoinType::kLeft, "LEFT JOIN"},
+           {core::JoinType::kRight, "RIGHT JOIN"},
+           {core::JoinType::kFull, "FULL JOIN"}}) {
+    SCOPED_TRACE(sqlJoin);
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .values({probe})
+            .nestedLoopJoin(
+                PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                "t_val LIKE u_pattern",
+                {"t_val", "u_pattern"},
+                joinType)
+            .planNode();
+
+    auto task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .plan(plan)
+            .assertResults(
+                fmt::format(
+                    "SELECT t.t_val, u.u_pattern FROM t {} u ON t.t_val LIKE u.u_pattern",
+                    sqlJoin));
+
+    bool sawCudfNestedLoopJoinProbe = false;
+    for (auto& pipeline : task->taskStats().pipelineStats) {
+      for (auto& op : pipeline.operatorStats) {
+        if (op.operatorType == "CudfNestedLoopJoinProbe") {
+          sawCudfNestedLoopJoinProbe = true;
+        }
+      }
+    }
+    ASSERT_TRUE(sawCudfNestedLoopJoinProbe);
+  }
+}
