@@ -249,6 +249,20 @@ probe.  When set to 0, no Bloom filter will be generated.  To achieve
 optimal performance, this should not be too larger than the CPU cache
 size on the host.</p></td>
 </tr>
+<tr class="row-odd"><td><p>bypass_hash_probe_bloom_filter_min_rows</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>The number of probe rows used to decide whether to bypass the build-side
+Bloom filter for left joins and non-null-aware left semi-project and left
+anti joins. When set to 0, local Bloom filter probing is disabled.</p></td>
+</tr>
+<tr class="row-even"><td><p>bypass_hash_probe_bloom_filter_min_pct</p></td>
+<td><p>integer</p></td>
+<td><p>85</p></td>
+<td><p>Bypass the build-side Bloom filter if its acceptance percentage meets
+or exceeds this value. When set to 0, the Bloom filter is bypassed
+without sampling.</p></td>
+</tr>
 <tr class="row-odd"><td><p>debug.validate_output_from_operators</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
