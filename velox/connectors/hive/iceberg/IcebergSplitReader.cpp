@@ -1106,9 +1106,9 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
                 it->second->initialDefaultValue().value(),
                 connectorQueryCtx_->memoryPool(),
                 readTimestampAsLocalTime,
-                false));
+                true));
           } else {
-            // Fall back to NULL if no default value.
+            // Fall back to NULL if no default value
             VELOX_CHECK_NOT_NULL(
                 columnType, "Column '{}' not found in table schema", fieldName);
             childSpec->setConstantValue(

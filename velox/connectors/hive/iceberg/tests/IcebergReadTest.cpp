@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 
 #include <algorithm>
+#include <string>
 
 #include <folly/Singleton.h>
 #include <folly/lang/Bits.h>
@@ -183,16 +184,20 @@ class IcebergReadTest : public test::IcebergTestBase {
       const std::vector<RowVectorPtr>& data,
       const std::vector<RowVectorPtr>& expected,
       const std::unordered_map<std::string, std::string>& sessionProperties =
-          {}) {
+          {},
+      const std::optional<std::string>& filter = std::nullopt) {
     auto dataFilePath = TempFilePath::create();
     writeToFile(dataFilePath->getPath(), data);
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
-                    .outputType(outputType)
-                    .dataColumns(scanSpecType)
-                    .assignments(assignments)
-                    .endTableScan()
-                    .planNode();
+    auto planBuilder = exec::test::PlanBuilder()
+                           .startTableScan(test::kIcebergConnectorId)
+                           .outputType(outputType)
+                           .dataColumns(scanSpecType)
+                           .assignments(assignments)
+                           .endTableScan();
+    if (filter.has_value()) {
+      planBuilder.filter(*filter);
+    }
+    auto plan = planBuilder.planNode();
 
     exec::test::AssertQueryBuilder(plan)
         .connectorSessionProperties(
@@ -730,6 +735,12 @@ TEST_F(IcebergReadTest, fileValueOverridesDefault) {
 }
 
 TEST_F(IcebergReadTest, addColumnWithDefaultAllTypes) {
+  // Iceberg V3 initial-default values are encoded in the Iceberg-native binary
+  // representation serialised as decimal strings:
+  //   DATE      -> integer days since Unix epoch  (e.g. 19737 = 2024-01-15)
+  //   TIMESTAMP -> integer microseconds since Unix epoch
+  //                (e.g. 1705314600000000 = 2024-01-15 10:30:00 UTC)
+  // All other types use their natural string representations.
   auto newRowType =
       ROW({"c0",
            "tiny_val",
@@ -781,10 +792,12 @@ TEST_F(IcebergReadTest, addColumnWithDefaultAllTypes) {
       DECIMAL(38, 10),
       11,
       "123456789012345678901234567.8901234567");
-  assignments["date_val"] =
-      makeIcebergHandle("date_val", DATE(), 12, "2024-01-15");
-  assignments["timestamp_val"] = makeIcebergHandle(
-      "timestamp_val", TIMESTAMP(), 13, "2024-01-15 10:30:00");
+  // DATE default: 19737 days since 1970-01-01 == 2024-01-15.
+  assignments["date_val"] = makeIcebergHandle("date_val", DATE(), 12, "19737");
+  // TIMESTAMP default: 1705314600000000 microseconds since epoch
+  // == 2024-01-15 10:30:00 UTC.
+  assignments["timestamp_val"] =
+      makeIcebergHandle("timestamp_val", TIMESTAMP(), 13, "1705314600000000");
 
   std::vector<RowVectorPtr> expectedVectors = {makeRowVector(
       newRowType->names(),
@@ -817,6 +830,39 @@ TEST_F(IcebergReadTest, addColumnWithDefaultAllTypes) {
       dataVectors,
       expectedVectors,
       {{HiveConfig::kReadTimestampPartitionValueAsLocalTimeSession, "false"}});
+}
+
+TEST_F(IcebergReadTest, addColumnWithDefaultDateAndTimestampFilter) {
+  auto newRowType =
+      ROW({"c0", "date_val", "timestamp_val"}, {BIGINT(), DATE(), TIMESTAMP()});
+
+  std::vector<RowVectorPtr> dataVectors = {
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})};
+
+  ColumnHandleMap assignments;
+  assignments["c0"] = makeIcebergHandle("c0", BIGINT(), 1);
+  assignments["date_val"] = makeIcebergHandle("date_val", DATE(), 2, "19737");
+  assignments["timestamp_val"] =
+      makeIcebergHandle("timestamp_val", TIMESTAMP(), 3, "1705314600000000");
+
+  std::vector<RowVectorPtr> expectedVectors = {makeRowVector(
+      {"c0", "date_val", "timestamp_val"},
+      {dataVectors[0]->childAt(0),
+       makeFlatVector<int32_t>({19737, 19737, 19737}, DATE()),
+       makeFlatVector<Timestamp>(
+           {Timestamp(1705314600, 0),
+            Timestamp(1705314600, 0),
+            Timestamp(1705314600, 0)})})};
+
+  assertDefaultValues(
+      newRowType,
+      newRowType,
+      assignments,
+      dataVectors,
+      expectedVectors,
+      {{HiveConfig::kReadTimestampPartitionValueAsLocalTimeSession, "false"}},
+      "date_val = DATE '2024-01-15' AND "
+      "timestamp_val = TIMESTAMP '2024-01-15 10:30:00.000'");
 }
 
 TEST_F(IcebergReadTest, addColumnWithInvalidDefault) {
