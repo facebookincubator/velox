@@ -334,6 +334,26 @@ void registerSimpleFunctions(const std::string& prefix) {
       TimeWithTimezone,
       Varchar>({prefix + "at_timezone"});
 
+  registerFunction<
+      AtTimezoneV2ToTimestampFunction,
+      Timestamp,
+      TimestampWithTimezone,
+      Varchar>({prefix + "at_timezone_v2"});
+
+  registerFunction<
+      AtTimezoneV2ToTimestampWithTimezoneFunction,
+      TimestampWithTimezone,
+      Timestamp,
+      Varchar>({prefix + "at_timezone_v2"});
+
+  // TIME WITH TIME ZONE has no naive/zoned distinction, so at_timezone_v2
+  // deliberately reuses at_timezone's implementation.
+  registerFunction<
+      AtTimezoneTimeWithTimezoneFunction,
+      TimeWithTimezone,
+      TimeWithTimezone,
+      Varchar>({prefix + "at_timezone_v2"});
+
   registerFunction<ToMillisecondFunction, int64_t, IntervalDayTime>(
       {prefix + "to_milliseconds"});
 
