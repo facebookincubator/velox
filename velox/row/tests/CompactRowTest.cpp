@@ -103,6 +103,12 @@ class CompactRowTest : public ::testing::Test, public VectorTestBase {
 
       auto copy = CompactRow::deserialize(serialized, rowType, pool());
       assertEqualVectors(data, copy);
+
+      auto sequential = BaseVector::create<RowVector>(rowType, numRows, pool());
+      for (auto i = 0; i < numRows; ++i) {
+        CompactRow::deserializeInto(serialized[i], *sequential, i);
+      }
+      assertEqualVectors(data, sequential);
     }
     {
       // Test serialize by range.
@@ -391,6 +397,53 @@ TEST_F(CompactRowTest, string) {
   });
 
   testRoundTrip(data);
+}
+
+TEST_F(CompactRowTest, deserializeIntoProjectsAndOwnsStrings) {
+  const auto value = std::string(1'024, 'v');
+  const auto data = makeRowVector({
+      makeArrayVector<std::string>({{"dropped", "values"}}),
+      makeFlatVector<std::string>({value}),
+  });
+  const auto rowType = asRowType(data->type());
+  CompactRow compactRow{data};
+  std::string serialized(compactRow.rowSize(0), '\0');
+  ASSERT_EQ(compactRow.serialize(0, serialized.data()), serialized.size());
+
+  auto output = BaseVector::create<RowVector>(rowType, 1, pool());
+  output->childAt(0).reset();
+  CompactRow::deserializeInto(serialized, *output, 0);
+  serialized.assign(serialized.size(), 'x');
+
+  EXPECT_FALSE(output->childAt(0));
+  EXPECT_EQ(
+      output->childAt(1)->as<SimpleVector<StringView>>()->valueAt(0), value);
+}
+
+TEST_F(CompactRowTest, deserializeIntoValidatesDestination) {
+  const auto data = makeRowVector({makeFlatVector<int64_t>({42})});
+  const auto rowType = asRowType(data->type());
+  CompactRow compactRow{data};
+  std::string serialized(compactRow.rowSize(0), '\0');
+  ASSERT_EQ(compactRow.serialize(0, serialized.data()), serialized.size());
+
+  auto output = BaseVector::create<RowVector>(rowType, 1, pool());
+  EXPECT_ANY_THROW(CompactRow::deserializeInto(serialized, *output, -1));
+
+  output->childAt(0) = BaseVector::wrapInConstant(1, 0, output->childAt(0));
+  EXPECT_ANY_THROW(CompactRow::deserializeInto(serialized, *output, 0));
+
+  output = BaseVector::create<RowVector>(rowType, 1, pool());
+  const auto aliasedChild = output->childAt(0);
+  ASSERT_EQ(aliasedChild, output->childAt(0));
+  ASSERT_FALSE(output->isWritable());
+  EXPECT_ANY_THROW(CompactRow::deserializeInto(serialized, *output, 0));
+
+  output = BaseVector::create<RowVector>(rowType, 2, pool());
+  output->resize(1);
+  ASSERT_GT(output->childAt(0)->size(), output->size());
+  ASSERT_NO_THROW(CompactRow::deserializeInto(serialized, *output, 0));
+  EXPECT_EQ(output->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0), 42);
 }
 
 TEST_F(CompactRowTest, unknown) {

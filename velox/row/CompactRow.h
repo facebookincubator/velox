@@ -62,6 +62,15 @@ class CompactRow {
       const RowTypePtr& rowType,
       memory::MemoryPool* pool);
 
+  /// Deserializes one row into an existing slot of 'result'. The result must
+  /// have writable flat-like storage and its type must match the serialized
+  /// row. Null result children are treated as unprojected and skipped. The
+  /// serialized data is trusted and must contain a valid row.
+  static void deserializeInto(
+      std::string_view data,
+      RowVector& result,
+      vector_size_t resultIndex);
+
  private:
   explicit CompactRow(const VectorPtr& vector);
 

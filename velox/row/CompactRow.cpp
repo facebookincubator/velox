@@ -1214,6 +1214,255 @@ RowVectorPtr deserializeRows(
       pool, type, nulls, numRows, std::move(fields));
 }
 
+const char* deserializeValueInto(
+    const TypePtr& type,
+    bool isNull,
+    const char* data,
+    BaseVector* result,
+    vector_size_t resultIndex);
+
+void prepareResultForWrite(const TypePtr& type, BaseVector* result) {
+  if (result == nullptr) {
+    return;
+  }
+  VELOX_CHECK(
+      *result->type() == *type,
+      "Result type {} does not match value type {}",
+      result->type()->toString(),
+      type->toString());
+  result->resetDataDependentFlags(nullptr);
+
+  if (type->kind() == TypeKind::ROW) {
+    VELOX_CHECK_EQ(result->encoding(), VectorEncoding::Simple::ROW);
+    VELOX_CHECK(result->isWritable(), "Row result must be writable");
+    auto* row = result->asUnchecked<RowVector>();
+    VELOX_CHECK_EQ(row->childrenSize(), type->size());
+    for (column_index_t i = 0; i < type->size(); ++i) {
+      const auto& child = row->childAt(i);
+      if (child != nullptr) {
+        VELOX_CHECK_GE(child->size(), row->size());
+      }
+      prepareResultForWrite(type->childAt(i), child.get());
+    }
+    return;
+  }
+  if (type->kind() == TypeKind::ARRAY) {
+    VELOX_CHECK_EQ(result->encoding(), VectorEncoding::Simple::ARRAY);
+    VELOX_CHECK(result->isWritable(), "Array result must be writable");
+    auto* array = result->asUnchecked<ArrayVector>();
+    prepareResultForWrite(type->childAt(0), array->elements().get());
+    return;
+  }
+  if (type->kind() == TypeKind::MAP) {
+    VELOX_CHECK_EQ(result->encoding(), VectorEncoding::Simple::MAP);
+    VELOX_CHECK(result->isWritable(), "Map result must be writable");
+    auto* map = result->asUnchecked<MapVector>();
+    VELOX_CHECK_EQ(map->mapKeys()->size(), map->mapValues()->size());
+    prepareResultForWrite(type->childAt(0), map->mapKeys().get());
+    prepareResultForWrite(type->childAt(1), map->mapValues().get());
+    return;
+  }
+  VELOX_CHECK_EQ(result->encoding(), VectorEncoding::Simple::FLAT);
+  VELOX_CHECK(result->isWritable(), "Scalar result must be writable");
+}
+
+template <TypeKind Kind>
+const char* deserializeFixedWidthInto(
+    bool isNull,
+    const char* data,
+    BaseVector* result,
+    vector_size_t resultIndex) {
+  using T = typename TypeTraits<Kind>::NativeType;
+  if (result != nullptr) {
+    readFixedWidthValue<T>(
+        isNull, data, result->asUnchecked<FlatVector<T>>(), resultIndex);
+  }
+  return data + valueSize<T>();
+}
+
+struct DeserializedArray {
+  const char* end;
+  vector_size_t offset;
+  vector_size_t size;
+};
+
+DeserializedArray deserializeArrayElementsInto(
+    const TypePtr& elementType,
+    const char* data,
+    VectorPtr* elements) {
+  const auto size = static_cast<vector_size_t>(readInt32(data));
+  data += kSizeBytes;
+  const auto* rawNulls = readNulls(data);
+  data += bits::nbytes(size);
+
+  vector_size_t resultOffset = 0;
+  if (elements != nullptr) {
+    resultOffset = (*elements)->size();
+    (*elements)->resize(checkedPlus<vector_size_t>(resultOffset, size));
+  }
+
+  if (size == 0) {
+    return {.end = data, .offset = resultOffset, .size = size};
+  }
+
+  if (elementType->isFixedWidth() || elementType->kind() == TypeKind::VARCHAR ||
+      elementType->kind() == TypeKind::VARBINARY ||
+      elementType->kind() == TypeKind::UNKNOWN) {
+    for (vector_size_t i = 0; i < size; ++i) {
+      data = deserializeValueInto(
+          elementType,
+          bits::isBitSet(rawNulls, i),
+          data,
+          elements == nullptr ? nullptr : elements->get(),
+          resultOffset + i);
+    }
+    return {.end = data, .offset = resultOffset, .size = size};
+  }
+
+  const auto serializedSize = readInt32(data);
+  data += kSizeBytes;
+  const char* serializedBase = data;
+  for (vector_size_t i = 0; i < size; ++i) {
+    const auto isNull = bits::isBitSet(rawNulls, i);
+    const auto elementOffset =
+        isNull ? 0 : readInt32(serializedBase + i * kSizeBytes);
+    deserializeValueInto(
+        elementType,
+        isNull,
+        serializedBase + elementOffset,
+        elements == nullptr ? nullptr : elements->get(),
+        resultOffset + i);
+  }
+  return {
+      .end = serializedBase + serializedSize,
+      .offset = resultOffset,
+      .size = size,
+  };
+}
+
+const char* deserializeArrayInto(
+    const TypePtr& type,
+    const char* data,
+    BaseVector* result,
+    vector_size_t resultIndex) {
+  ArrayVector* array = nullptr;
+  VectorPtr* elements = nullptr;
+  if (result != nullptr) {
+    array = result->asUnchecked<ArrayVector>();
+    array->setNull(resultIndex, false);
+    elements = &array->elements();
+  }
+  const auto deserialized =
+      deserializeArrayElementsInto(type->childAt(0), data, elements);
+  if (array != nullptr) {
+    array->setOffsetAndSize(
+        resultIndex, deserialized.offset, deserialized.size);
+  }
+  return deserialized.end;
+}
+
+const char* deserializeMapInto(
+    const TypePtr& type,
+    const char* data,
+    BaseVector* result,
+    vector_size_t resultIndex) {
+  MapVector* map = nullptr;
+  VectorPtr* keys = nullptr;
+  VectorPtr* values = nullptr;
+  if (result != nullptr) {
+    map = result->asUnchecked<MapVector>();
+    map->setNull(resultIndex, false);
+    keys = &map->mapKeys();
+    values = &map->mapValues();
+  }
+  const auto deserializedKeys =
+      deserializeArrayElementsInto(type->childAt(0), data, keys);
+  const auto deserializedValues = deserializeArrayElementsInto(
+      type->childAt(1), deserializedKeys.end, values);
+  VELOX_CHECK_EQ(deserializedKeys.size, deserializedValues.size);
+  if (map != nullptr) {
+    VELOX_CHECK_EQ(deserializedKeys.offset, deserializedValues.offset);
+    map->setOffsetAndSize(
+        resultIndex, deserializedKeys.offset, deserializedKeys.size);
+  }
+  return deserializedValues.end;
+}
+
+const char* deserializeRowInto(
+    const TypePtr& type,
+    const char* data,
+    RowVector* result,
+    vector_size_t resultIndex) {
+  if (result != nullptr) {
+    result->setNull(resultIndex, false);
+  }
+  const auto* rawNulls = readNulls(data);
+  data += bits::nbytes(type->size());
+  for (column_index_t i = 0; i < type->size(); ++i) {
+    data = deserializeValueInto(
+        type->childAt(i),
+        bits::isBitSet(rawNulls, i),
+        data,
+        result == nullptr ? nullptr : result->childAt(i).get(),
+        resultIndex);
+  }
+  return data;
+}
+
+const char* deserializeValueInto(
+    const TypePtr& type,
+    bool isNull,
+    const char* data,
+    BaseVector* result,
+    vector_size_t resultIndex) {
+  if (type->kind() == TypeKind::UNKNOWN) {
+    if (result != nullptr) {
+      result->setNull(resultIndex, true);
+    }
+    return data;
+  }
+  if (type->isFixedWidth()) {
+    return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        deserializeFixedWidthInto,
+        type->kind(),
+        isNull,
+        data,
+        result,
+        resultIndex);
+  }
+  if (isNull) {
+    if (result != nullptr) {
+      result->setNull(resultIndex, true);
+    }
+    return data;
+  }
+  if (type->kind() == TypeKind::VARCHAR ||
+      type->kind() == TypeKind::VARBINARY) {
+    if (result != nullptr) {
+      result->setNull(resultIndex, false);
+      data += readString(
+          data, result->asUnchecked<FlatVector<StringView>>(), resultIndex);
+    } else {
+      data += kSizeBytes + readInt32(data);
+    }
+    return data;
+  }
+  if (type->kind() == TypeKind::ARRAY) {
+    return deserializeArrayInto(type, data, result, resultIndex);
+  }
+  if (type->kind() == TypeKind::MAP) {
+    return deserializeMapInto(type, data, result, resultIndex);
+  }
+  if (type->kind() == TypeKind::ROW) {
+    return deserializeRowInto(
+        type,
+        data,
+        result == nullptr ? nullptr : result->asUnchecked<RowVector>(),
+        resultIndex);
+  }
+  VELOX_UNREACHABLE("{}", type->toString());
+}
+
 } // namespace
 
 // static
@@ -1225,6 +1474,24 @@ RowVectorPtr CompactRow::deserialize(
   std::vector<size_t> offsets(numRows, 0);
 
   return deserializeRows(rowType, data, nullptr, offsets, pool);
+}
+
+// static
+void CompactRow::deserializeInto(
+    std::string_view data,
+    RowVector& result,
+    vector_size_t resultIndex) {
+  VELOX_CHECK_GE(resultIndex, 0);
+  VELOX_CHECK_LT(resultIndex, result.size());
+  const auto rowType = asRowType(result.type());
+  prepareResultForWrite(rowType, &result);
+  if (rowType->size() == 0) {
+    result.setNull(resultIndex, false);
+    return;
+  }
+  const auto* rawData = data.data();
+  VELOX_CHECK_NOT_NULL(rawData);
+  deserializeRowInto(rowType, rawData, &result, resultIndex);
 }
 
 } // namespace facebook::velox::row
