@@ -34,8 +34,6 @@ const std::unordered_set<std::string>& prestoSkippedFunctions() {
       // (since TDigest is a user defined type), and tries to pass a
       // VARBINARY (since TDigest's implementation uses an
       // alias to VARBINARY).
-      "value_at_quantile",
-      "values_at_quantiles",
       "merge_tdigest",
       "scale_tdigest",
       "quantiles_at_values",

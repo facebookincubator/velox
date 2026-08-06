@@ -615,7 +615,7 @@ jobs:
 
   presto-bias-fuzzer:
     name: Presto Bias Fuzzer
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:centos9
     needs: compile
     if: ${{ needs.compile.outputs.presto_bias  == 'true' }}
@@ -732,7 +732,7 @@ jobs:
 
   spark-bias-aggregate-fuzzer-run:
     name: Spark Bias Aggregate Fuzzer
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:spark-server
     needs: compile
     if: ${{ needs.compile.outputs.spark_aggregate_bias  == 'true' }}
@@ -794,7 +794,7 @@ jobs:
 
   spark-bias-fuzzer:
     name: Spark Bias Fuzzer
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:centos9
     needs: compile
     if: ${{ needs.compile.outputs.spark_bias  == 'true' }}
@@ -1358,7 +1358,7 @@ jobs:
   presto-java-only-bias-function-expression-fuzzer-run:
     name: Biased Expression Fuzzer with Only Added/Updated Functions and Presto as source of truth
     needs: compile
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
     if: ${{ needs.compile.outputs.presto_bias  == 'true' }}
@@ -1457,7 +1457,7 @@ jobs:
   presto-bias-java-aggregation-fuzzer-run:
     name: Biased Aggregation Fuzzer with Presto as source of truth
     needs: compile
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
     if: ${{ needs.compile.outputs.presto_aggregate_bias  == 'true' }}
