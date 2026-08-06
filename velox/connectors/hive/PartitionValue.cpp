@@ -43,6 +43,16 @@ Variant fromStringImpl(
     return Variant(days);
   }
 
+  if constexpr (kind == TypeKind::TIMESTAMP) {
+    // For Iceberg, timestamp partition values are stored as microseconds since
+    // the Unix epoch (not as a formatted timestamp string).
+    if (dateMode == PartitionValue::DateMode::kDaysSinceEpoch) {
+      auto micros = folly::to<int64_t>(value);
+      auto ts = Timestamp::fromMicros(micros);
+      return Variant(ts);
+    }
+  }
+
   if constexpr (
       std::is_same_v<NativeType, int64_t> ||
       std::is_same_v<NativeType, int128_t>) {
