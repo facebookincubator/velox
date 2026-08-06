@@ -65,6 +65,16 @@ class ParquetConfig {
       "estimates and reports the deserialized footer's heap footprint to "
       "the memory pool. Defaults to disabled (max uint64).")
 
+  VELOX_FORMAT_CONFIG(
+      kUseColumnNamesSession,
+      kUseColumnNames,
+      useColumnNames,
+      "use_column_names",
+      "use-column-names",
+      bool,
+      false,
+      "Map table fields to Parquet file fields using names, not indices.")
+
   VELOX_FORMAT_CONFIG_PROPERTY(
       kWriterTimestampUnitSession,
       kWriterTimestampUnit,
@@ -209,6 +219,8 @@ class ParquetConfig {
         kAllowInt32NarrowingSessionProperty>(properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<
         kFooterMemoryTrackingThresholdSessionProperty>(
+        properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<kUseColumnNamesSessionProperty>(
         properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<
         kWriterTimestampUnitSessionProperty>(properties, sessionPrefix);
