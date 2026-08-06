@@ -38,6 +38,10 @@ add_library(
   DecimalAggregationDevice.cu
   DecimalAggregationHostOps.cpp
   DecimalAggregationState.cpp
+  GpuMemoryLedger.cpp
+  GpuMemoryNvtx.cpp
+  GpuMemoryPlanPath.cpp
+  GpuMemoryTracker.cpp
   GpuResources.cpp
   OperatorAdapters.cpp
   PrestoAggregateFunctions.cpp

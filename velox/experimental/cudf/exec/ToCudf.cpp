@@ -23,6 +23,7 @@
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
+#include "velox/experimental/cudf/exec/GpuMemoryTracker.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/PrestoAggregateFunctions.h"
@@ -34,14 +35,13 @@
 #include "folly/Conv.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/TableScan.h"
 #include "velox/exec/Values.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
-#include <cuda.h>
-
-#include <iostream>
+#include <vector>
 
 static const std::string kCudfAdapterName = "cuDF";
 
@@ -255,16 +255,16 @@ bool CompileState::compile(bool allowCpuFallback) {
 
   if (debugEnabled) {
     // Print before/after together for easy comparison.
-    LOG(INFO) << "Operators " << "before adapting for cuDF"
-              << ": count [" << beforeOperators.size() << "]";
+    LOG(INFO) << "Operators " << "before adapting for cuDF" << ": count ["
+              << beforeOperators.size() << "]";
     for (const auto& [id, desc] : beforeOperators) {
       LOG(INFO) << "  Operator: ID " << id << ": " << desc;
     }
     LOG(INFO) << "allowCpuFallback = " << allowCpuFallback;
 
     operators = driver_.operators();
-    LOG(INFO) << "Operators " << "after adapting for cuDF"
-              << ": count [" << operators.size() << "]";
+    LOG(INFO) << "Operators " << "after adapting for cuDF" << ": count ["
+              << operators.size() << "]";
     for (const auto& op : operators) {
       LOG(INFO) << "  Operator: ID " << op->operatorId() << ": "
                 << op->toString();
@@ -280,14 +280,34 @@ struct CudfDriverAdapter {
 
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
+    const auto trackingEnabled =
+        CudfConfig::getInstance().memoryTrackingEnabled;
+    if (trackingEnabled) {
+      // This driver's operators are new, and may sit at addresses freed by a
+      // destroyed driver. Done before the early return below, because an
+      // operator that allocates on the GPU is not always one this adapter
+      // replaces: a TableWriter driving CudfHiveDataSink is neither a
+      // CudfOperatorBase nor a TableScan.
+      discardGpuMemoryOwnerCache();
+    }
     if (!driver.driverCtx()->queryConfig().get<bool>(
             CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled) &&
         allowCpuFallback_) {
       return false;
     }
     auto state = CompileState(factory, driver);
-    auto res = state.compile(allowCpuFallback_);
-    return res;
+    const auto replacementsMade = state.compile(allowCpuFallback_);
+    if (trackingEnabled) {
+      // Which operators get a counter row is only a display choice; an
+      // unregistered operator still allocates and is still attributed.
+      for (auto* op : driver.operators()) {
+        if (dynamic_cast<CudfOperatorBase*>(op) != nullptr ||
+            dynamic_cast<exec::TableScan*>(op) != nullptr) {
+          registerGpuMemoryOperator(op);
+        }
+      }
+    }
+    return replacementsMade;
   }
 
  private:
@@ -316,18 +336,23 @@ void registerCudf() {
   cudaFree(nullptr); // Initialize CUDA context at startup
 
   const std::string mrMode = CudfConfig::getInstance().memoryResource;
-  auto mr = cudf_velox::createMemoryResource(
+  auto mainMr = cudf_velox::createMemoryResource(
       mrMode, CudfConfig::getInstance().memoryPercent);
-  cudf::set_current_device_resource(mr);
-  mr_ = std::move(mr);
 
   const auto& outputMrMode = CudfConfig::getInstance().outputMemoryResource;
+  auto outputMr = mainMr;
   if (!outputMrMode.empty() && outputMrMode != mrMode) {
-    output_mr_ = cudf_velox::createMemoryResource(
+    outputMr = cudf_velox::createMemoryResource(
         outputMrMode, CudfConfig::getInstance().memoryPercent);
-  } else {
-    output_mr_ = mr_;
   }
+
+  installGpuMemoryTracking(mainMr, outputMr);
+  mr_ = std::move(mainMr);
+  output_mr_ = std::move(outputMr);
+  // RMM takes an owning copy, so it keeps this resource alive on its own and
+  // there is nothing to restore later: registerCudf() and unregisterCudf() run
+  // once at worker startup and shutdown.
+  cudf::set_current_device_resource(mr_.value());
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
@@ -351,6 +376,7 @@ void registerCudf() {
 void unregisterCudf() {
   output_mr_.reset();
   mr_.reset();
+  resetGpuMemoryTracking();
   exec::DriverFactory::adapters.erase(
       std::remove_if(
           exec::DriverFactory::adapters.begin(),
@@ -375,6 +401,9 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfDebugEnabled) != config.end()) {
     debugEnabled = folly::to<bool>(config[kCudfDebugEnabled]);
+  }
+  if (config.find(kCudfMemoryTrackingEnabled) != config.end()) {
+    memoryTrackingEnabled = folly::to<bool>(config[kCudfMemoryTrackingEnabled]);
   }
   if (config.find(kCudfMemoryResource) != config.end()) {
     memoryResource = config[kCudfMemoryResource];

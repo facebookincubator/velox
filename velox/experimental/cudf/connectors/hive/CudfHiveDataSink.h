@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/connectors/hive/WriterOptions.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 #include "velox/common/compression/Compression.h"
 #include "velox/connectors/Connector.h"
@@ -265,7 +266,7 @@ class CudfHiveInsertTableHandle : public ConnectorInsertTableHandle {
   const std::shared_ptr<dwio::common::WriterOptions> writerOptions_;
 };
 
-class CudfHiveDataSink : public DataSink {
+class CudfHiveDataSink : public DataSink, public NvtxHelper {
  public:
   /// The list of runtime stats reported by parquet data sink
   static constexpr const char* kEarlyFlushedRawBytes = "earlyFlushedRawBytes";

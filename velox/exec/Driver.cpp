@@ -342,6 +342,7 @@ void Driver::initializeOperators() {
   }
   operatorsInitialized_ = true;
   for (auto& op : operators_) {
+    RuntimeStatWriterScopeGuard statsWriterGuard(op.get());
     op->initialize();
   }
 }
@@ -929,6 +930,7 @@ void Driver::initializeOperatorStats(std::vector<OperatorStats>& stats) {
 void Driver::closeOperators() {
   // Close operators.
   for (auto& op : operators_) {
+    RuntimeStatWriterScopeGuard statsWriterGuard(op.get());
     op->close();
   }
 
