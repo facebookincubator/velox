@@ -514,14 +514,39 @@ framework is responsible for deterministic partitioning of the data and assignin
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="randn">
+<span class="sig-name descname"><span class="pre">randn</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#randn" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a random value from the standard normal distribution (mean 0.0 and
+standard deviation 1.0).</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">randn</span><span class="p">();</span> <span class="o">--</span> <span class="o">-</span><span class="mf">1.1750280342265669</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="id6">
+<span class="sig-name descname"><span class="pre">randn</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id6" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a random value from the standard normal distribution (mean 0.0 and
+standard deviation 1.0) using a seed formed by combining user-specified
+<code class="docutils literal notranslate"><span class="pre">seed</span></code> and the configuration <cite>spark.partition_id</cite>. The framework is
+responsible for deterministic partitioning of the data and assigning unique
+<cite>spark.partition_id</cite> to each thread (in a deterministic way).
+<code class="docutils literal notranslate"><span class="pre">seed</span></code> must be constant. NULL <code class="docutils literal notranslate"><span class="pre">seed</span></code> is identical to zero <code class="docutils literal notranslate"><span class="pre">seed</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">randn</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>    <span class="o">--</span> <span class="mf">1.6034991609278433</span>
+<span class="n">SELECT</span> <span class="n">randn</span><span class="p">(</span><span class="n">NULL</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.6034991609278433</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="random">
 <span class="sig-name descname"><span class="pre">random</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#random" title="Link to this definition">¶</a></dt>
 <dd><p>An alias for <code class="docutils literal notranslate"><span class="pre">rand()</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
-<dt class="sig sig-object spark" id="id6">
-<span class="sig-name descname"><span class="pre">random</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id6" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object spark" id="id7">
+<span class="sig-name descname"><span class="pre">random</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id7" title="Link to this definition">¶</a></dt>
 <dd><p>An alias for <code class="docutils literal notranslate"><span class="pre">rand(seed)</span></code>.</p>
 </dd></dl>
 
@@ -596,8 +621,8 @@ Corresponds to Spark’s operator <code class="docutils literal notranslate"><sp
 </dd></dl>
 
 <dl class="spark function">
-<dt class="sig sig-object spark" id="id7">
-<span class="sig-name descname"><span class="pre">subtract</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">decimal</span></span></span><a class="headerlink" href="#id7" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object spark" id="id8">
+<span class="sig-name descname"><span class="pre">subtract</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">decimal</span></span></span><a class="headerlink" href="#id8" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the result of subtracting <code class="docutils literal notranslate"><span class="pre">y</span></code> from <code class="docutils literal notranslate"><span class="pre">x</span></code>. Reuses the logic of add function for decimal type.
 Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">-</span></code>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="mf">1.1232100</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">7</span><span class="p">))</span> <span class="o">-</span> <span class="n">CAST</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">0</span><span class="p">));</span> <span class="o">--</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">6</span><span class="p">)</span> <span class="mf">0.123210</span>
@@ -731,8 +756,10 @@ Otherwise, the function will return NULL.</p>
 <li><a class="reference internal" href="#radians"><code class="docutils literal notranslate"><span class="pre">radians()</span></code></a></li>
 <li><a class="reference internal" href="#rand"><code class="docutils literal notranslate"><span class="pre">rand()</span></code></a></li>
 <li><a class="reference internal" href="#id5"><code class="docutils literal notranslate"><span class="pre">rand()</span></code></a></li>
+<li><a class="reference internal" href="#randn"><code class="docutils literal notranslate"><span class="pre">randn()</span></code></a></li>
+<li><a class="reference internal" href="#id6"><code class="docutils literal notranslate"><span class="pre">randn()</span></code></a></li>
 <li><a class="reference internal" href="#random"><code class="docutils literal notranslate"><span class="pre">random()</span></code></a></li>
-<li><a class="reference internal" href="#id6"><code class="docutils literal notranslate"><span class="pre">random()</span></code></a></li>
+<li><a class="reference internal" href="#id7"><code class="docutils literal notranslate"><span class="pre">random()</span></code></a></li>
 <li><a class="reference internal" href="#remainder"><code class="docutils literal notranslate"><span class="pre">remainder()</span></code></a></li>
 <li><a class="reference internal" href="#rint"><code class="docutils literal notranslate"><span class="pre">rint()</span></code></a></li>
 <li><a class="reference internal" href="#round"><code class="docutils literal notranslate"><span class="pre">round()</span></code></a></li>
@@ -741,7 +768,7 @@ Otherwise, the function will return NULL.</p>
 <li><a class="reference internal" href="#sin"><code class="docutils literal notranslate"><span class="pre">sin()</span></code></a></li>
 <li><a class="reference internal" href="#sinh"><code class="docutils literal notranslate"><span class="pre">sinh()</span></code></a></li>
 <li><a class="reference internal" href="#subtract"><code class="docutils literal notranslate"><span class="pre">subtract()</span></code></a></li>
-<li><a class="reference internal" href="#id7"><code class="docutils literal notranslate"><span class="pre">subtract()</span></code></a></li>
+<li><a class="reference internal" href="#id8"><code class="docutils literal notranslate"><span class="pre">subtract()</span></code></a></li>
 <li><a class="reference internal" href="#tan"><code class="docutils literal notranslate"><span class="pre">tan()</span></code></a></li>
 <li><a class="reference internal" href="#tanh"><code class="docutils literal notranslate"><span class="pre">tanh()</span></code></a></li>
 <li><a class="reference internal" href="#unaryminus"><code class="docutils literal notranslate"><span class="pre">unaryminus()</span></code></a></li>
