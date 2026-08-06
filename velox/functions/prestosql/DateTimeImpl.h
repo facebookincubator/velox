@@ -104,10 +104,13 @@ FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
   }
 }
 
+// Adds 'value' units to 'timestampWithTimezone'. Day and larger units are
+// computed in 'renderZone'. The result keeps the value's embedded zone id.
 FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
     int64_t timestampWithTimezone,
     const DateTimeUnit unit,
-    const int32_t value) {
+    const int32_t value,
+    const tz::TimeZone& renderZone) {
   {
     int64_t finalSysMs;
     if (unit < DateTimeUnit::kDay) {
@@ -120,25 +123,23 @@ FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
       // the day it moves forward is 23 hours long. Daylight savings time
       // doesn't affect time units less than a day, and will produce incorrect
       // results if we use local time.
-      const tz::TimeZone* timeZone =
-          tz::locateZone(unpackZoneKeyId(timestampWithTimezone));
       auto originalTimestamp = Timestamp::fromMillis(
-          timeZone
-              ->to_local(
+          renderZone
+              .to_local(
                   std::chrono::milliseconds(
                       unpackMillisUtc(timestampWithTimezone)))
               .count());
       auto updatedTimeStamp =
           addToTimestamp(originalTimestamp, unit, (int32_t)value);
       updatedTimeStamp = Timestamp(
-          timeZone
-              ->correct_nonexistent_time(
+          renderZone
+              .correct_nonexistent_time(
                   std::chrono::seconds(updatedTimeStamp.getSeconds()))
               .count(),
           updatedTimeStamp.getNanos());
       finalSysMs =
-          timeZone
-              ->to_sys(
+          renderZone
+              .to_sys(
                   std::chrono::milliseconds(updatedTimeStamp.toMillis()),
                   tz::TimeZone::TChoose::kEarliest)
               .count();
@@ -148,17 +149,13 @@ FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
   }
 }
 
+// Returns the difference in 'unit's between the two values. Day and larger
+// units are computed in 'renderZone'.
 FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
     const DateTimeUnit unit,
     const int64_t fromTimestampWithTimeZone,
-    const int64_t toTimestampWithTimeZone) {
-  auto fromTimeZoneId = unpackZoneKeyId(fromTimestampWithTimeZone);
-  auto toTimeZoneId = unpackZoneKeyId(toTimestampWithTimeZone);
-  VELOX_CHECK_EQ(
-      fromTimeZoneId,
-      toTimeZoneId,
-      "diffTimestampWithTimeZone must receive timestamps in the same time zone.");
-
+    const int64_t toTimestampWithTimeZone,
+    const tz::TimeZone& renderZone) {
   Timestamp fromTimestamp;
   Timestamp toTimestamp;
 
@@ -171,16 +168,15 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
     // the day it moves forward is 23 hours long. Daylight savings time
     // doesn't affect time units less than a day, and will produce incorrect
     // results if we use local time.
-    const tz::TimeZone* timeZone = tz::locateZone(fromTimeZoneId);
     fromTimestamp =
-        Timestamp::fromMillis(timeZone
-                                  ->to_local(
+        Timestamp::fromMillis(renderZone
+                                  .to_local(
                                       std::chrono::milliseconds(unpackMillisUtc(
                                           fromTimestampWithTimeZone)))
                                   .count());
     toTimestamp =
-        Timestamp::fromMillis(timeZone
-                                  ->to_local(
+        Timestamp::fromMillis(renderZone
+                                  .to_local(
                                       std::chrono::milliseconds(unpackMillisUtc(
                                           toTimestampWithTimeZone)))
                                   .count());
