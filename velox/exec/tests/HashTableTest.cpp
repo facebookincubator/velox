@@ -973,7 +973,12 @@ TEST_P(HashTableTest, listJoinResultsSize) {
         testParam.estimatedRowSize);
     iter.reset(lookup);
     auto numRows = table->listJoinResults(
-        iter, true, inputRows, outputRows, testParam.maxBytes);
+        iter,
+        true,
+        inputRows,
+        outputRows,
+        testParam.maxBytes,
+        /*allowReorder=*/false);
     ASSERT_EQ(numRows, testParam.expectedRows);
   }
 }

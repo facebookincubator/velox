@@ -1368,18 +1368,25 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
         }
       }
     } else {
+      // Reordering across probe rows is only enabled for anti join with
+      // filter, whose output rows (misses only, one per probe row) have no
+      // ordering contract. Other filter join types preserve per-probe-row
+      // adjacency.
+      const bool allowReorder = isAntiJoin(joinType_) && filter_ != nullptr;
       numOut = table_->listJoinResults(
           *resultIter_,
           joinIncludesMissesFromLeft(joinType_),
           folly::Range(mapping.data(), outputBatchSize),
           folly::Range(outputTableRows, outputBatchSize),
-          operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes());
+          operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes(),
+          allowReorder);
     }
 
     // We are done processing the input batch if there are no more joined rows
-    // to process and the NoMatchDetector isn't carrying forward a row that
-    // still needs to be written to the output.
-    if (!numOut && !noMatchDetector_.hasLastMissedRow()) {
+    // to process and no filter-join tracker is carrying forward rows that
+    // still need to be written to the output.
+    if (!numOut && !noMatchDetector_.hasLastMissedRow() &&
+        !antiJoinNoMatchDetector_.hasLastMissedRow()) {
       input_ = nullptr;
       return nullptr;
     }
@@ -1779,7 +1786,8 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
         }
       }
       if (resultIter_->atEnd()) {
-        noMatchDetector_.finish(addMiss);
+        const int32_t maxEmit = outputTableRowsCapacity_ - numPassed;
+        noMatchDetector_.finish(addMiss, maxEmit);
       }
       std::copy(
           tempOutputTableRows,
@@ -1803,7 +1811,8 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
         }
       }
       if (resultIter_->atEnd()) {
-        noMatchDetector_.finish(addMiss);
+        const int32_t maxEmit = outputTableRowsCapacity_ - numPassed;
+        noMatchDetector_.finish(addMiss, maxEmit);
       }
     }
   } else if (isLeftSemiFilterJoin(joinType_)) {
@@ -1882,16 +1891,17 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
       for (auto i = 0; i < numRows; ++i) {
         auto probeRow = rawOutputProbeRowMapping[i];
         bool passed = passedRows.isValid(probeRow);
-        noMatchDetector_.advance(probeRow, passed, addMiss);
+        antiJoinNoMatchDetector_.advance(probeRow, passed, addMiss);
       }
     } else {
       for (auto i = 0; i < numRows; ++i) {
         auto probeRow = rawOutputProbeRowMapping[i];
-        noMatchDetector_.advance(probeRow, filterPassed(i), addMiss);
+        antiJoinNoMatchDetector_.advance(probeRow, filterPassed(i), addMiss);
       }
     }
     if (resultIter_->atEnd()) {
-      noMatchDetector_.finish(addMiss);
+      const int32_t maxEmit = outputTableRowsCapacity_ - numPassed;
+      antiJoinNoMatchDetector_.finish(addMiss, maxEmit);
     }
   } else {
     for (auto i = 0; i < numRows; ++i) {

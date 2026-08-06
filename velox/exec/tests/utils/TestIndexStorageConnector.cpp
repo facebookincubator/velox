@@ -501,7 +501,8 @@ TestIndexSource::ResultIterator::syncLookup(vector_size_t size) {
         folly::Range(rawInputRowMapping_, size),
         folly::Range(rawOutputRowMapping_, size),
         // TODO: support max bytes output later.
-        /*maxBytes=*/std::numeric_limits<uint64_t>::max());
+        /*maxBytes=*/std::numeric_limits<uint64_t>::max(),
+        /*allowReorder=*/false);
     outputRowMapping_->setSize(numOut * sizeof(char*));
     inputRowMapping_->setSize(numOut * sizeof(vector_size_t));
 
