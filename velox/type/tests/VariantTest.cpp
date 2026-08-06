@@ -1104,6 +1104,18 @@ TEST(VariantSerializationTest, serialize) {
   testSerDe(Variant(Timestamp(1, 2)));
 }
 
+TEST(VariantSerializationTest, serializeHugeint) {
+  testSerDe(Variant(TypeKind::HUGEINT));
+  testSerDe(Variant(static_cast<int128_t>(0)));
+  testSerDe(Variant(static_cast<int128_t>(1234567)));
+  testSerDe(Variant(static_cast<int128_t>(-1234567)));
+
+  // Values whose upper 64 bits are non-zero.
+  testSerDe(Variant(HugeInt::build(0x2607f0d010000000, 1)));
+  testSerDe(Variant(std::numeric_limits<int128_t>::max()));
+  testSerDe(Variant(std::numeric_limits<int128_t>::min()));
+}
+
 TEST(VariantSerializationTest, serializeArrayTypes) {
   // Empty array.
   testSerDe(Variant::array({}));

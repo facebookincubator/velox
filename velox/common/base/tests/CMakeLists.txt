@@ -35,6 +35,7 @@ add_executable(
   StatsReporterTest.cpp
   StatusTest.cpp
   SuccinctPrinterTest.cpp
+  TrackedExecutorTest.cpp
 )
 velox_add_test_headers(velox_base_test GTestUtils.h)
 
@@ -48,6 +49,7 @@ target_link_libraries(
     velox_memory
     velox_time
     velox_status
+    velox_tracked_executor
     velox_exception
     velox_test_util
     Boost::filesystem

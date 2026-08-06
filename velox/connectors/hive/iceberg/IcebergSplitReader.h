@@ -65,9 +65,10 @@ class IcebergSplitReader : public FileSplitReader {
   void configureBaseReaderOptions() override;
 
   // Builds the requested-schema field-id trees, one per top-level column,
-  // aligned to tableHandle_->dataColumns(). Data columns without an Iceberg
-  // handle (e.g. unprojected) get a negative sentinel id that matches no
-  // physical field. Returns empty when no Iceberg handles are available.
+  // aligned to tableHandle_->dataColumns(). Projected and filter-only Iceberg
+  // handles provide field IDs. Data columns without an Iceberg handle get a
+  // negative sentinel id that matches no physical field. Returns empty when no
+  // Iceberg handles are available.
   std::vector<dwio::common::ParquetFieldId> buildFieldIds() const;
 
   /// Adapts the data file schema to match the table schema expected by the

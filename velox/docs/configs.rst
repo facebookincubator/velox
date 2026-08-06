@@ -173,6 +173,18 @@ Generic Configuration
        probe.  When set to 0, no Bloom filter will be generated.  To achieve
        optimal performance, this should not be too larger than the CPU cache
        size on the host.
+   * - bypass_hash_probe_bloom_filter_min_rows
+     - integer
+     - 0
+     - The number of probe rows used to decide whether to bypass the build-side
+       Bloom filter for left joins and non-null-aware left semi-project and left
+       anti joins. When set to 0, local Bloom filter probing is disabled.
+   * - bypass_hash_probe_bloom_filter_min_pct
+     - integer
+     - 85
+     - Bypass the build-side Bloom filter if its acceptance percentage meets
+       or exceeds this value. When set to 0, the Bloom filter is bypassed
+       without sampling.
    * - debug.validate_output_from_operators
      - bool
      - false
@@ -1068,14 +1080,14 @@ Parquet Options (prefix ``hive.parquet.``)
        "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
        sorted writes.
 
-      Session: ``parquet_writer_max_target_file_size``.
+       Session: ``parquet_writer_max_target_file_size``.
 
-      Row-group sizing is independent of this setting and is not user-configurable: a row group is
-      flushed at a 128MB byte target or 1,048,576 rows, whichever comes first. The byte target is
-      soft - a row group may slightly exceed it, since the writer flushes only after buffered bytes
-      reach the target; the row count is a hard cap. When ``writer.max-target-file-size`` is set,
-      the writer may flush the current row group early so the accumulated file size is visible and
-      rotation can occur.
+       Row-group sizing is independent of this setting and is not user-configurable: a row group is
+       flushed at a 128MB byte target or 1,048,576 rows, whichever comes first. The byte target is
+       soft - a row group may slightly exceed it, since the writer flushes only after buffered bytes
+       reach the target; the row count is a hard cap. When ``writer.max-target-file-size`` is set,
+       the writer may flush the current row group early so the accumulated file size is visible and
+       rotation can occur.
    * - ``writer.enable-dictionary``
      - bool
      - true
