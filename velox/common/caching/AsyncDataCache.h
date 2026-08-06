@@ -28,6 +28,7 @@
 #include "velox/common/base/CoalesceIo.h"
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SelectivityInfo.h"
+#include "velox/common/caching/EvictionPolicy.h"
 #include "velox/common/caching/FileGroupStats.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/caching/StringIdMap.h"
@@ -161,11 +162,16 @@ class AsyncDataCacheEntry {
   explicit AsyncDataCacheEntry(CacheShard* shard);
   ~AsyncDataCacheEntry();
 
-  /// Sets the key and allocates the entry's memory. Resets all other state.
-  /// The entry must be held exclusively and must hold no memory when calling
-  /// this. If 'contiguous' is true, allocates a single contiguous region
-  /// instead of a potentially non-contiguous Allocation.
-  void initialize(FileCacheKey key, bool contiguous = false);
+  /// Sets the cache key and the entry's slot index in the shard's entries
+  /// deque. Called under the owning shard's mutex before the
+  /// EvictionPolicy insert hook fires so policies can inspect both.
+  void setKeyLocked(RawFileCacheKey key, int32_t entryIndex);
+
+  /// Allocates the entry's memory. Preconditions: setKeyLocked() has been
+  /// called and size_ has been set. The entry must be held exclusively.
+  /// If 'contiguous' is true, allocates a single contiguous region instead
+  /// of a potentially non-contiguous Allocation.
+  void initialize(bool contiguous = false);
 
   memory::Allocation& nonContiguousData() {
     return nonContiguousData_;
@@ -224,6 +230,12 @@ class AsyncDataCacheEntry {
 
   int32_t size() const {
     return size_;
+  }
+
+  /// Position of this entry in shard_->entries_. Stable for the entry's
+  /// lifetime; set by setKeyLocked().
+  int32_t entryIndex() const {
+    return entryIndex_;
   }
 
   /// Returns the allocated capacity in bytes for this entry's data,
@@ -352,6 +364,7 @@ class AsyncDataCacheEntry {
 
   std::unique_ptr<folly::SharedPromise<bool>> promise_;
   int32_t size_{0};
+  int32_t entryIndex_{-1};
 
   // Setting this from 0 to 1 or to kExclusive requires owning shard_->mutex_.
   std::atomic<int32_t> numPins_{0};
@@ -621,8 +634,10 @@ class CacheShard {
  public:
   static constexpr uint64_t kMinBytesToEvict = 8UL << 20; // 8MB
 
-  CacheShard(AsyncDataCache* cache, double maxWriteRatio)
-      : cache_(cache), maxWriteRatio_(maxWriteRatio) {}
+  CacheShard(
+      AsyncDataCache* cache,
+      double maxWriteRatio,
+      EvictionPolicy* policy);
 
   /// See AsyncDataCache::findOrCreate. If 'contiguous' is true, the
   /// entry's data is allocated as a single contiguous region.
@@ -706,11 +721,6 @@ class CacheShard {
 
  private:
   static constexpr uint32_t kMaxFreeEntries = 1 << 10;
-  static constexpr int32_t kNoThreshold = std::numeric_limits<int32_t>::max();
-  static constexpr int32_t kMaxEvictionSamples = 10;
-  static constexpr int32_t kEvictionPercentile = 80;
-
-  void calibrateThresholdLocked();
 
   void removeEntryLocked(AsyncDataCacheEntry* entry);
 
@@ -720,8 +730,7 @@ class CacheShard {
   // already has the right amount of memory associated with it.
   std::unique_ptr<AsyncDataCacheEntry> getFreeEntryLocked();
 
-  CachePin
-  initEntry(RawFileCacheKey key, bool contiguous, AsyncDataCacheEntry* entry);
+  CachePin initEntry(bool contiguous, AsyncDataCacheEntry* entry);
 
   // Looks up 'key' in the cache under mutex_. 'size' is the minimum acceptable
   // entry size: pass 0 from find() to accept any size, or the required size
@@ -749,6 +758,8 @@ class CacheShard {
 
   AsyncDataCache* const cache_;
   const double maxWriteRatio_;
+  EvictionPolicy* const policy_;
+  std::unique_ptr<EvictionPolicyShardState> policyState_;
 
   mutable std::mutex mutex_;
   folly::F14FastMap<RawFileCacheKey, AsyncDataCacheEntry*> entryMap_;
@@ -764,8 +775,6 @@ class CacheShard {
   uint32_t clockHand_{0};
   // Number of gets since last stats sampling.
   uint32_t eventCounter_{0};
-  // Maximum retainable entry score(). Anything above this is evictable.
-  int32_t evictionThreshold_{kNoThreshold};
   // Cumulative count of cache hits.
   uint64_t numHit_{0};
   // Cumulative Sum of bytes in cache hits.
@@ -805,12 +814,7 @@ class AsyncDataCache : public memory::Cache {
         double _ssdSavableRatio = 0.125,
         int32_t _minSsdSavableBytes = 1 << 24,
         int32_t _numShards = kDefaultNumShards,
-        uint64_t _ssdFlushThresholdBytes = 0)
-        : maxWriteRatio(_maxWriteRatio),
-          ssdSavableRatio(_ssdSavableRatio),
-          minSsdSavableBytes(_minSsdSavableBytes),
-          numShards(_numShards),
-          ssdFlushThresholdBytes(_ssdFlushThresholdBytes) {}
+        uint64_t _ssdFlushThresholdBytes = 0);
 
     /// The max ratio of the number of in-memory cache entries being written to
     /// SSD cache over the total number of cache entries. This is to control SSD
@@ -844,18 +848,21 @@ class AsyncDataCache : public memory::Cache {
   AsyncDataCache(
       const Options& options,
       memory::MemoryAllocator* allocator,
-      std::unique_ptr<SsdCache> ssdCache = nullptr);
+      std::unique_ptr<SsdCache> ssdCache = nullptr,
+      std::unique_ptr<EvictionPolicy> evictionPolicy = nullptr);
 
   AsyncDataCache(
       memory::MemoryAllocator* allocator,
-      std::unique_ptr<SsdCache> ssdCache = nullptr);
+      std::unique_ptr<SsdCache> ssdCache = nullptr,
+      std::unique_ptr<EvictionPolicy> evictionPolicy = nullptr);
 
   ~AsyncDataCache() override;
 
   static std::shared_ptr<AsyncDataCache> create(
       memory::MemoryAllocator* allocator,
       std::unique_ptr<SsdCache> ssdCache = nullptr,
-      const AsyncDataCache::Options& = {});
+      const AsyncDataCache::Options& = {},
+      std::unique_ptr<EvictionPolicy> evictionPolicy = nullptr);
 
   static AsyncDataCache* getInstance();
 
@@ -1031,6 +1038,7 @@ class AsyncDataCache : public memory::Cache {
   const int32_t shardMask_;
   memory::MemoryAllocator* const allocator_;
   std::unique_ptr<SsdCache> ssdCache_;
+  const std::unique_ptr<EvictionPolicy> evictionPolicy_;
   std::vector<std::unique_ptr<CacheShard>> shards_;
   std::atomic<int32_t> shardCounter_{0};
   std::atomic<memory::MachinePageCount> cachedPages_{0};
