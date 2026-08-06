@@ -629,18 +629,28 @@ void FileDataSource::addDynamicFilter(
 }
 
 void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
+  // Bytes are read when the reader loads a stripe, which for small files is
+  // entirely inside addSplit() and for large ones is spread across next()
+  // calls. Reporting the delta since the previous event captures them either
+  // way; a window around a single next() would not.
+  const uint64_t totalStorageReadBytes = dataIoStats_->read().sum();
+  const uint64_t storageReadBytesDelta =
+      totalStorageReadBytes - lastEventStorageReadBytes_;
+  lastEventStorageReadBytes_ = totalStorageReadBytes;
   if (!scanBatchCallback_) {
     return;
   }
   FileScanBatchEvent fileEvent;
   fileEvent.numRows = event.numRows;
   fileEvent.wallTimeMicros = event.wallTimeMicros;
+  fileEvent.storageReadBytes = storageReadBytesDelta;
   if (tableHandle_) {
     fileEvent.tableName = tableHandle_->name();
     fileEvent.dbName = tableHandle_->dbName();
   }
   if (split_) {
     fileEvent.filePath = split_->filePath;
+    fileEvent.fileFormat = split_->fileFormat;
     if (!split_->partitionKeys.empty()) {
       fileEvent.partitionKeys = &split_->partitionKeys;
     }
