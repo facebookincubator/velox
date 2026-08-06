@@ -131,7 +131,8 @@ class QueryConfig {
   /// extraction, formatting, and date arithmetic, including the interval +/-
   /// operators) render each value in its own embedded zone (legacy behavior).
   /// If false, they render the UTC instant in the session timezone, so equal
-  /// values produce equal results. Does not cover CAST yet.
+  /// values produce equal results. Also covers CAST to VARCHAR, DATE, and TIME.
+  /// CAST to TIMESTAMP is governed by adjust_timestamp_to_session_timezone.
   VELOX_QUERY_CONFIG(
       kLegacyTimestampWithTimezone,
       legacyTimestampWithTimezone,

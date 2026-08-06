@@ -77,9 +77,10 @@ Generic Configuration
      - true
      - If true, functions that read a TIMESTAMP WITH TIME ZONE render each value in its own embedded timezone. If false,
        they render it in the session timezone, so values that compare equal produce equal results. Covers field
-       extraction, formatting, and date arithmetic, including the interval ``+`` and ``-`` operators. Of the interval
-       operators only ``INTERVAL YEAR TO MONTH`` is affected; ``INTERVAL DAY TO SECOND`` operates on milliseconds and
-       never consults a timezone.
+       extraction, formatting, and date arithmetic, including the interval ``+`` and ``-`` operators, plus ``CAST`` to
+       ``VARCHAR``, ``DATE``, and ``TIME``. Of the interval operators only ``INTERVAL YEAR TO MONTH`` is affected;
+       ``INTERVAL DAY TO SECOND`` operates on milliseconds and never consults a timezone. ``CAST`` to ``TIMESTAMP`` is
+       governed by ``adjust_timestamp_to_session_timezone`` instead.
    * - track_operator_cpu_usage
      - bool
      - true

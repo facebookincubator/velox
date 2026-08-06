@@ -35,6 +35,13 @@ const tz::TimeZone* getTimeZoneFromConfig(const core::QueryConfig& config) {
   return tz::locateZone(0); // GMT
 }
 
+// Returns the session zone for non-legacy rendering, nullptr under legacy
+// behavior. Resolving an invalid session timezone throws.
+const tz::TimeZone* renderZoneFromConfig(const core::QueryConfig& config) {
+  return config.legacyTimestampWithTimezone() ? nullptr
+                                              : getTimeZoneFromConfig(config);
+}
+
 // Helper function to calculate midnight in UTC for the given session start
 // time in the session timezone. This can be called once and reused for all
 // rows in a batch.
@@ -146,6 +153,10 @@ void castToString(
     exec::EvalCtx& context,
     const SelectivityVector& rows,
     BaseVector& result) {
+  const auto& config = context.execCtx()->queryCtx()->queryConfig();
+  const auto legacyTimestampWithTimezone = config.legacyTimestampWithTimezone();
+  const auto* sessionTimeZone = renderZoneFromConfig(config);
+
   auto* flatResult = result.as<FlatVector<StringView>>();
   const auto* timestamps = input.as<SimpleVector<int64_t>>();
 
@@ -160,8 +171,11 @@ void castToString(
     const auto timestampWithTimezone = timestamps->valueAt(row);
 
     const auto timestamp = unpackTimestampUtc(timestampWithTimezone);
-    const auto timeZoneId = unpackZoneKeyId(timestampWithTimezone);
-    const auto* timezonePtr = tz::locateZone(tz::getTimeZoneName(timeZoneId));
+    // Legacy renders in each value's embedded zone; otherwise the session zone.
+    const auto* timezonePtr = legacyTimestampWithTimezone
+        ? tz::locateZone(
+              tz::getTimeZoneName(unpackZoneKeyId(timestampWithTimezone)))
+        : sessionTimeZone;
 
     exec::StringWriter result(flatResult, row);
 
@@ -201,14 +215,21 @@ void castToDate(
     exec::EvalCtx& context,
     const SelectivityVector& rows,
     BaseVector& result) {
+  const auto& config = context.execCtx()->queryCtx()->queryConfig();
+  const auto legacyTimestampWithTimezone = config.legacyTimestampWithTimezone();
+  const auto* sessionTimeZone = renderZoneFromConfig(config);
+
   auto* flatResult = result.as<FlatVector<int32_t>>();
   const auto* timestampVector = input.as<SimpleVector<int64_t>>();
 
   context.applyToSelectedNoThrow(rows, [&](auto row) {
     auto timestampWithTimezone = timestampVector->valueAt(row);
     auto timestamp = unpackTimestampUtc(timestampWithTimezone);
-    timestamp.toTimezone(
-        *tz::locateZone(unpackZoneKeyId(timestampWithTimezone)));
+    // Legacy renders in each value's embedded zone; otherwise the session zone.
+    const auto* timeZone = legacyTimestampWithTimezone
+        ? tz::locateZone(unpackZoneKeyId(timestampWithTimezone))
+        : sessionTimeZone;
+    timestamp.toTimezone(*timeZone);
 
     const auto days = util::toDate(timestamp, nullptr);
     flatResult->set(row, days);
@@ -220,6 +241,10 @@ void castToTime(
     exec::EvalCtx& context,
     const SelectivityVector& rows,
     BaseVector& result) {
+  const auto& config = context.execCtx()->queryCtx()->queryConfig();
+  const auto legacyTimestampWithTimezone = config.legacyTimestampWithTimezone();
+  const auto* sessionTimeZone = renderZoneFromConfig(config);
+
   auto* flatResult = result.as<FlatVector<int64_t>>();
   const auto* timestampVector = input.as<SimpleVector<int64_t>>();
 
@@ -227,9 +252,11 @@ void castToTime(
     auto timestampWithTimezone = timestampVector->valueAt(row);
     auto timestamp = unpackTimestampUtc(timestampWithTimezone);
 
-    // Convert the UTC timestamp to the timezone of the timestamp
-    timestamp.toTimezone(
-        *tz::locateZone(unpackZoneKeyId(timestampWithTimezone)));
+    // Legacy renders in each value's embedded zone; otherwise the session zone.
+    const auto* timeZone = legacyTimestampWithTimezone
+        ? tz::locateZone(unpackZoneKeyId(timestampWithTimezone))
+        : sessionTimeZone;
+    timestamp.toTimezone(*timeZone);
 
     // Extract time-of-day using std::chrono. floor() rounds towards
     // negative infinity, so this correctly handles negative timestamps.
