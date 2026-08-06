@@ -17,10 +17,12 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
+#include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/utilities/error.hpp>
@@ -40,7 +42,8 @@ CudfMarkDistinct::CudfMarkDistinct(
           nvtx3::rgb{255, 165, 0}, // Orange
           NvtxMethodFlag::kAddInput | NvtxMethodFlag::kGetOutput,
           std::nullopt,
-          planNode) {
+          planNode),
+      cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   const auto& inputType = planNode->sources()[0]->outputType();
   for (const auto& key : planNode->distinctKeys()) {
     auto idx = inputType->getChildIdx(key->name());
@@ -51,6 +54,16 @@ CudfMarkDistinct::CudfMarkDistinct(
 void CudfMarkDistinct::doAddInput(RowVectorPtr input) {
   VELOX_CHECK_NULL(input_);
   input_ = std::move(input);
+}
+
+void CudfMarkDistinct::doClose() {
+  // seenFilter_ references seenKeys_. State reads are ordered back onto
+  // seenStateStream_ in doGetOutput(), so stream-ordered destruction is safe.
+  seenFilter_.reset();
+  seenKeys_.reset();
+  seenStateStream_.reset();
+  cudaEvent_.reset();
+  Operator::close();
 }
 
 RowVectorPtr CudfMarkDistinct::doGetOutput() {
@@ -106,8 +119,14 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
         tempMr);
     seenFilter_ = std::make_unique<cudf::filtered_join>(
         seenKeys_->view(), cudf::null_equality::EQUAL, stream);
+    seenStateStream_ = stream;
 
   } else {
+    VELOX_CHECK(seenStateStream_.has_value());
+    const auto stateStream = seenStateStream_.value();
+    const std::vector<rmm::cuda_stream_view> stateStreams{stateStream};
+    cudf::detail::join_streams(stateStreams, stream);
+
     // Subsequent batch: probe the persistent filter — no hash table rebuild.
 
     // Gather the unique keys from this batch.
@@ -121,6 +140,7 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
     // Anti-join against the persistent seenFilter_ to find new keys.
     auto newKeyLocalIndices =
         seenFilter_->anti_join(uniqueBatchKeys->view(), stream, tempMr);
+    std::unique_ptr<cudf::table> updatedSeenKeys{nullptr};
 
     if (!newKeyLocalIndices->is_empty()) {
       // Map local indices back to original batch row indices via gather.
@@ -154,9 +174,19 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
       // concatenate-per-batch idiom.
       std::vector<cudf::table_view> seenPlusNew = {
           seenKeys_->view(), newKeys->view()};
-      seenKeys_ = cudf::concatenate(seenPlusNew, stream, tempMr);
-      seenFilter_ = std::make_unique<cudf::filtered_join>(
-          seenKeys_->view(), cudf::null_equality::EQUAL, stream);
+      updatedSeenKeys = cudf::concatenate(seenPlusNew, stream, tempMr);
+    }
+
+    // Make the old state stream wait until its last use on this stream before
+    // the old state can be destroyed or used by another input stream.
+    streamsWaitForStream(*cudaEvent_, stateStreams, stream);
+
+    if (updatedSeenKeys) {
+      auto updatedSeenFilter = std::make_unique<cudf::filtered_join>(
+          updatedSeenKeys->view(), cudf::null_equality::EQUAL, stream);
+      seenFilter_ = std::move(updatedSeenFilter);
+      seenKeys_ = std::move(updatedSeenKeys);
+      seenStateStream_ = stream;
     }
   }
 
