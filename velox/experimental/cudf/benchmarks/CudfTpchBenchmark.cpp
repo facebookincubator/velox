@@ -19,15 +19,19 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/CudfMemoryArbitration.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
+#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
 #include <experimental/cudf/connectors/hive/CudfHiveConnector.h>
+
+#include <iostream>
 
 DECLARE_int64(max_coalesced_bytes);
 DECLARE_string(max_coalesced_distance_bytes);
@@ -146,8 +150,20 @@ CudfTpchBenchmark::listSplits(
 }
 
 void CudfTpchBenchmark::shutdown() {
+  if (auto resource = cudf_velox::cudfCustomMemoryResource()) {
+    std::cout << "cuDF GPU memory arbitration stats: "
+              << resource->arbitrator()->stats().toString() << std::endl;
+  }
   cudf_velox::unregisterCudf();
   TpchBenchmark::shutdown();
+}
+
+void CudfTpchBenchmark::configureCursorParameters(
+    CursorParameters& params) const {
+  auto resource = cudf_velox::cudfCustomMemoryResource();
+  VELOX_CHECK_NOT_NULL(
+      resource, "cuDF GPU memory resource is not registered");
+  params.customMemoryResources.push_back(std::move(resource));
 }
 
 int main(int argc, char** argv) {

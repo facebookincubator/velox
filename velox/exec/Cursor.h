@@ -20,6 +20,10 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/Task.h"
 
+namespace facebook::velox::memory {
+class CustomMemoryResource;
+}
+
 namespace facebook::velox::exec {
 
 /// Parameters for initializing a TaskCursor or RowCursor.
@@ -42,6 +46,11 @@ struct CursorParameters {
 
   /// Optional, created if not present.
   std::shared_ptr<core::QueryCtx> queryCtx{nullptr};
+
+  /// Custom memory resources to attach when the cursor creates its QueryCtx.
+  /// Must be empty when queryCtx is supplied by the caller.
+  std::vector<std::shared_ptr<memory::CustomMemoryResource>>
+      customMemoryResources{};
 
   uint64_t bufferedBytes{512 * 1024};
 

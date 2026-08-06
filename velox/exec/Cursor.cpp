@@ -238,21 +238,24 @@ class TaskCursorBase : public TaskCursor {
     taskId_ = fmt::format("test_cursor_{}", ++cursorId);
 
     if (params.queryCtx) {
+      VELOX_CHECK(
+          params.customMemoryResources.empty(),
+          "Custom memory resources cannot be specified with a caller-provided "
+          "QueryCtx");
       queryCtx_ = params.queryCtx;
     } else {
       // NOTE: the destructor of 'executor_' will wait for all the async task
       // activities to finish on TaskCursor destruction.
       executor_ = executor;
       static std::atomic<uint64_t> cursorQueryId{0};
-      queryCtx_ = core::QueryCtx::create(
-          executor_.get(),
-          core::QueryConfig({}),
-          std::
-              unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
-          cache::AsyncDataCache::getInstance(),
-          nullptr,
-          nullptr,
-          fmt::format("TaskCursorQuery_{}", cursorQueryId++));
+      core::QueryCtx::Builder queryCtxBuilder;
+      queryCtxBuilder.executor(executor_.get())
+          .asyncDataCache(cache::AsyncDataCache::getInstance())
+          .queryId(fmt::format("TaskCursorQuery_{}", cursorQueryId++));
+      for (const auto& resource : params.customMemoryResources) {
+        queryCtxBuilder.customMemoryResource(resource);
+      }
+      queryCtx_ = queryCtxBuilder.build();
     }
 
     // If query configs needs to be overwritten in queryCtx.

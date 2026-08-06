@@ -23,6 +23,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/exec/Cursor.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
@@ -164,6 +165,24 @@ TEST_F(CustomMemoryHierarchyTest, builderMaterializesAndOwnsCustomResource) {
   queryCtx.reset();
   registry.reset();
   EXPECT_TRUE(weakResource.expired());
+}
+
+TEST_F(CustomMemoryHierarchyTest, cursorMaterializesCustomMemoryResource) {
+  auto resource = makeResource("accelerator");
+  auto plan = makePlan();
+  exec::CursorParameters params;
+  params.planNode = plan.planNode;
+  params.serialExecution = true;
+  params.customMemoryResources.push_back(resource);
+
+  auto cursor = exec::TaskCursor::create(params);
+  auto queryRoot = cursor->task()->queryCtx()->customPool("accelerator");
+  ASSERT_NE(queryRoot, nullptr);
+  EXPECT_EQ(queryRoot->arbitrator(), resource->arbitrator());
+
+  cursor->start();
+  EXPECT_TRUE(cursor->moveNext());
+  EXPECT_FALSE(cursor->moveNext());
 }
 
 TEST_F(CustomMemoryHierarchyTest, deferredReclaimersUseExecutionHierarchy) {

@@ -41,6 +41,10 @@ class CudfTpchBenchmark : public TpchBenchmark {
       const facebook::velox::exec::test::TpchPlan& plan) override;
 
   void shutdown() override;
+
+ protected:
+  void configureCursorParameters(
+      facebook::velox::exec::CursorParameters& params) const override;
 };
 
 namespace facebook::velox::cudf_velox {

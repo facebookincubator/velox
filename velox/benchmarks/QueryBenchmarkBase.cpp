@@ -267,6 +267,7 @@ QueryBenchmarkBase::run(
       params.queryConfigs = queryConfigs;
       params.queryConfigs[core::QueryConfig::kMaxSplitPreloadPerDriver] =
           std::to_string(FLAGS_split_preload_per_driver);
+      configureCursorParameters(params);
       const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
       auto addSplits = [&](TaskCursor* taskCursor) {

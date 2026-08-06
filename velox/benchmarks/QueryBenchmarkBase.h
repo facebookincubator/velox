@@ -85,6 +85,11 @@ class QueryBenchmarkBase {
   virtual std::shared_ptr<config::ConfigBase> makeConnectorProperties();
 
  protected:
+  /// Allows specialized benchmarks to attach optional execution resources to
+  /// each cursor without replacing the common query-running loop.
+  virtual void configureCursorParameters(
+      exec::CursorParameters& /* params */) const {}
+
   std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
   std::unique_ptr<folly::IOThreadPoolExecutor> cacheExecutor_;
   std::shared_ptr<memory::MemoryAllocator> allocator_;
