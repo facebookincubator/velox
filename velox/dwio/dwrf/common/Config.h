@@ -104,6 +104,16 @@ class Config : public config::ConfigBase {
       "512kB",
       "Maximum merge distance to combine ORC read requests.")
 
+  VELOX_FORMAT_CONFIG(
+      kOrcUseColumnNamesSession,
+      kOrcUseColumnNames,
+      useColumnNames,
+      "use_column_names",
+      "use-column-names",
+      bool,
+      false,
+      "Map table fields to ORC file fields using names, not indices.")
+
   VELOX_FORMAT_CONFIG_PROPERTY(
       kOrcWriterMaxStripeSizeSession,
       kOrcWriterMaxStripeSize,
@@ -193,6 +203,8 @@ class Config : public config::ConfigBase {
         kOrcFooterSpeculativeIoSizeSessionProperty>(properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<
         kOrcMaxCoalesceDistanceSessionProperty>(properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<
+        kOrcUseColumnNamesSessionProperty>(properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<
         kOrcWriterMaxStripeSizeSessionProperty>(properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<

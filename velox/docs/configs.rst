@@ -956,13 +956,6 @@ Common Options
        decompression and decode CPU time metrics for each column, reported as runtime metrics in the format
        ``column_<nodeId>.<type>.decompressCPUTimeNanos`` and ``column_<nodeId>.<type>.decodeCPUTimeNanos``.
        Useful for performance analysis and identifying slow columns. Session: ``reader.collect_column_cpu_metrics``.
-   * - ``use-column-names``
-     - bool
-     - false
-     - Map table fields to file fields using names instead of indices for all
-       file formats. The connector property is scoped by connector ID, for
-       example ``hive.use-column-names`` or ``iceberg.use-column-names``.
-       Session: ``use_column_names``.
 
 ORC Options (prefix ``hive.orc.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -983,6 +976,11 @@ ORC Options (prefix ``hive.orc.``)
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode. Configure as ``orc.footer-speculative-io-size``; do not prepend ``hive.``.
        Session: ``orc_footer_speculative_io_size``.
+   * - ``use-column-names``
+     - bool
+     - false
+     - Map table fields to ORC or DWRF file fields using names instead of
+       indices. Session: ``orc_use_column_names``.
    * - ``writer.stripe-max-size``
      - string
      - 64M
@@ -1072,6 +1070,11 @@ Parquet Options (prefix ``hive.parquet.``)
        is destroyed. When tracking engages, the estimate is also surfaced
        per scan via the runtime stat ``parquet.footerEstimatedBytes`` so
        operators can compare it against actual pool usage. Session: ``parquet_footer_memory_tracking_threshold``.
+   * - ``use-column-names``
+     - bool
+     - false
+     - Map table fields to Parquet file fields using names instead of indices.
+       Session: ``parquet_use_column_names``.
    * - ``writer.max-target-file-size``
      - capacity
      - 0B

@@ -35,6 +35,7 @@
 #include "velox/dwio/dwrf/writer/Writer.h"
 
 #ifdef VELOX_ENABLE_PARQUET
+#include "velox/dwio/parquet/common/ParquetConfig.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #endif
@@ -207,8 +208,24 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   };
 
   auto checkColumnMappingMode = [&]() {
-    const auto expectedMappingMode =
-        hiveConfig->useColumnNames(&sessionProperties)
+    bool useColumnNames = false;
+    if (fileFormat == FileFormat::DWRF || fileFormat == FileFormat::ORC) {
+      auto formatScopedConfigs = hive::makeFormatScopedConfigs(
+          *hiveConfig, sessionProperties, fileFormat);
+      useColumnNames = dwrf::Config::useColumnNames(
+          formatScopedConfigs.connectorConfig,
+          formatScopedConfigs.sessionProperties);
+    }
+#ifdef VELOX_ENABLE_PARQUET
+    if (fileFormat == FileFormat::PARQUET) {
+      auto formatScopedConfigs = hive::makeFormatScopedConfigs(
+          *hiveConfig, sessionProperties, fileFormat);
+      useColumnNames = parquet::ParquetConfig::useColumnNames(
+          formatScopedConfigs.connectorConfig,
+          formatScopedConfigs.sessionProperties);
+    }
+#endif
+    const auto expectedMappingMode = useColumnNames
         ? dwio::common::ColumnMappingMode::kName
         : dwio::common::ColumnMappingMode::kPosition;
     EXPECT_EQ(readerOptions.columnMappingMode(), expectedMappingMode);
@@ -322,7 +339,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   customHiveConfigProps[hive::HiveConfig::kMaxCoalescedDistance] = "513KB";
   customHiveConfigProps[hive::HiveConfig::kFileColumnNamesReadAsLowerCase] =
       "true";
-  customHiveConfigProps["hive.use-column-names"] = "true";
+  customHiveConfigProps["hive.orc.use-column-names"] = "true";
   customHiveConfigProps[hive::HiveConfig::kFilePreloadThreshold] = "9999";
   customHiveConfigProps[hive::HiveConfig::kPrefetchRowGroups] = "10";
   customHiveConfigProps[hive::HiveConfig::kCacheMetadata] = "true";
