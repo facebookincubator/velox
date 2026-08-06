@@ -30,6 +30,7 @@
 #include "velox/experimental/torchwave/GraphView.h"
 #include "velox/experimental/torchwave/NodePrinter.h"
 #include "velox/experimental/torchwave/Pt2Load.h"
+#include "velox/experimental/torchwave/WaveConfig.h"
 
 DEFINE_string(pt2, "", "Path to a .pt2 file (open source torch.export format)");
 DEFINE_string(
@@ -57,6 +58,16 @@ DEFINE_string(
     "",
     "Comma-separated NodePrinter options: D<n>=maxDepth, L<n>=maxLength, "
     "S=shortNames, V=per-line values, NA=no attributes, VN=value names");
+DEFINE_bool(
+    enable_reuse,
+    true,
+    "With --optimize, run the in-place / clone-elision reuse pass so the "
+    "printed project nodes and function counts reflect it");
+DEFINE_bool(
+    contiguous_inputs,
+    false,
+    "With --optimize, assume model inputs, weights, and constants are "
+    "contiguous (WaveConfig::inputContiguous)");
 
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
@@ -65,6 +76,13 @@ int main(int argc, char** argv) {
   if (!FLAGS_print_options.empty()) {
     torch::wave::NodePrinter::setDefaults(
         torch::wave::NodePrinter::parsePrintOptions(FLAGS_print_options));
+  }
+
+  // With --optimize, the printed project nodes and function counts reflect the
+  // reuse pass (clone elision) and the input-contiguity assumption.
+  if (FLAGS_optimize) {
+    torch::wave::WaveConfig::get().enableReuse = FLAGS_enable_reuse;
+    torch::wave::WaveConfig::get().inputContiguous = FLAGS_contiguous_inputs;
   }
 
   if (!FLAGS_describe_pt.empty()) {
