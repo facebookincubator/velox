@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfEqualityDeleteFileReader.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConstantColumnFilter.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergFilterTransform.h"
 
 #include "velox/connectors/hive/HiveConfig.h"
@@ -29,6 +30,7 @@
 #include <list>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -190,6 +192,31 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   std::unique_ptr<cudf::scalar> makeInjectedScalar(
       const InjectedColumn& col) const;
 
+  // Whether a TIMESTAMP partition value is a local time to convert to GMT.
+  bool readTimestampAsLocalTime() const;
+
+  // Returns whether a pushed subfield filter rejects the constant value of a
+  // partition or info column, in which case the split holds no matching row.
+  // Reads no file data, so it can run before any IO.
+  bool splitRejectedByConstantColumns() const;
+
+  // Resolves the type of a projected or filter-only column, `nullptr` when the
+  // name belongs to neither.
+  TypePtr columnType(std::string_view name) const;
+
+  // Returns the pushed filter over the whole named column, `nullptr` when no
+  // filter was pushed for it or it was pushed on a subfield of it.
+  const common::Filter* wholeColumnFilter(std::string_view name) const;
+
+  // Folds the predicates the transform dropped against the constants their
+  // columns are materialized with, by testing the subfield filters they were
+  // built from.
+  //
+  // `kAlwaysTrue` means the pushed filter is exact for this split,
+  // `kAlwaysFalse` that the split holds no matching row, and `kUnknown` that at
+  // least one dropped predicate could not be decided.
+  ConstantFilterFold foldDroppedPredicates() const;
+
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
 
@@ -215,6 +242,9 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Whether every projected column is injected
   bool noColumnsToRead_{false};
   bool syntheticTableProduced_{false};
+
+  // Whether the split holds no matching row and is not read at all.
+  bool skipSplit_{false};
 
   // Whether the original subfield filter is deferred to post table read.
   bool deferSubfieldFilter_{false};
