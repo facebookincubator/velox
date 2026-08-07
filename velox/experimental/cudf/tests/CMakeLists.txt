@@ -301,6 +301,39 @@ velox_add_cudf_test(
 )
 
 add_subdirectory(iceberg)
+
+# GPU SFI foundation -- exercises GpuExec resolver and GPU proxy types.
+# Host-only verification of POD layout, equality, and type mappings.
+add_executable(velox_cudf_gpu_types_test GpuTypesTest.cpp)
+add_test(
+  NAME velox_cudf_gpu_types_test
+  COMMAND velox_cudf_gpu_types_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(velox_cudf_gpu_types_test PROPERTIES LABELS cuda_driver TIMEOUT 300)
+target_link_libraries(velox_cudf_gpu_types_test gtest gtest_main)
+
+# GPU SFI foundation -- compile-only test that Velox SFI simple function
+# headers (Arithmetic.h, Bitwise.h, Comparisons.h) can be instantiated
+# under nvcc once the gpu_shadows/ include path precedes the Velox
+# source root. The shadow include path MUST be added as `BEFORE PRIVATE`
+# directly on the target so it wins over the directory-level
+# `include_directories(.)` in the velox repo root.
+add_library(velox_cudf_gpu_shadow_compile_test OBJECT GpuShadowCompileTest.cu)
+set_target_properties(
+  velox_cudf_gpu_shadow_compile_test
+  PROPERTIES CUDA_STANDARD 20 CUDA_SEPARABLE_COMPILATION ON
+)
+target_include_directories(
+  velox_cudf_gpu_shadow_compile_test
+  BEFORE
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+target_compile_options(
+  velox_cudf_gpu_shadow_compile_test
+  PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+)
+
 add_subdirectory(utils)
 
 if(${VELOX_ENABLE_SPARK_FUNCTIONS})
