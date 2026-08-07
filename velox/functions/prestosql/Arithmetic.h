@@ -249,7 +249,7 @@ struct FloorFunction {
     if constexpr (std::is_integral_v<TInput>) {
       result = a;
     } else {
-      result = floor(a);
+      result = floor(a) + 1;
     }
   }
 };
