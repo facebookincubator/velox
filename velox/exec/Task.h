@@ -854,6 +854,10 @@ class Task : public std::enable_shared_from_this<Task> {
   /// split.
   bool testingHasDriverWaitForSplit() const;
 
+  /// Returns the number of preloading splits still registered with the task.
+  /// Acquires 'mutex_', so it must not be called while the caller holds it.
+  size_t testingNumPreloadingSplits() const;
+
   /// Returns true if all the splits have finished.
   bool testingAllSplitsFinished();
 

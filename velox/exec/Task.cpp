@@ -2181,8 +2181,18 @@ BlockingReason Task::getSplitOrFuture(
     auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
     auto* splitsStore = getOrCreateSplitsStoreLocked(splitsState, splitGroupId);
     const auto numQueuedBefore = taskStats_.numQueuedTableScanSplits;
+    // Stop arming new preloads once the task is no longer running. Otherwise a
+    // driver that is already on thread can register a split in
+    // 'preloadingSplits_' after Task::terminate() has detached it, leaving the
+    // data source unclosed. The split then keeps the task alive through the
+    // shared_ptr<Task> that TableScan::preload() captures into the AsyncSource,
+    // deferring task destruction until the queued IO job runs.
     notBlocked = splitsStore->nextSplit(
-        driverId, maxPreloadSplits, preload, split, future);
+        driverId,
+        isRunningLocked() ? maxPreloadSplits : 0,
+        preload,
+        split,
+        future);
     // Wake status waiters when the scan split queue drains while more splits
     // may still arrive, so a coordinator can refill before the task starves.
     // Once noMoreSplits has been signaled there is nothing left to refill, so
@@ -2207,6 +2217,11 @@ bool Task::testingHasDriverWaitForSplit() const {
     }
   }
   return false;
+}
+
+size_t Task::testingNumPreloadingSplits() const {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  return preloadingSplits_.size();
 }
 
 std::shared_ptr<ScaledScanController> Task::getScaledScanControllerLocked(
@@ -2681,6 +2696,8 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   EventCompletionNotifier stateChangeNotifier;
   std::vector<ContinuePromise> barrierPromises;
   std::vector<std::shared_ptr<ExchangeClient>> exchangeClients;
+  folly::F14FastSet<std::shared_ptr<connector::ConnectorSplit>>
+      preloadingSplits;
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     if (taskStats_.executionEndTimeMs == 0) {
@@ -2742,6 +2759,12 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       }
     }
     exchangeClients.swap(exchangeClients_);
+    // Detach the preloading splits while holding the lock. Driver threads
+    // mutate 'preloadingSplits_' under 'mutex_' from SplitsStore::getSplit(),
+    // so iterating the member outside the lock races with a rehash that frees
+    // the table storage. The data sources are closed below, outside the lock,
+    // because AsyncSource::close() can block on an in-flight prepare().
+    preloadingSplits.swap(preloadingSplits_);
 
     barrierPromises.swap(barrierFinishPromises_);
     // Clear the barrier flag to ensure underBarrier() returns false after task
@@ -2856,10 +2879,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     bridge->cancel();
   }
 
-  for (auto split : preloadingSplits_) {
+  for (const auto& split : preloadingSplits) {
     split->dataSource->close();
   }
-  preloadingSplits_.clear();
 
   for (auto& barrierPromise : barrierPromises) {
     barrierPromise.setValue();
