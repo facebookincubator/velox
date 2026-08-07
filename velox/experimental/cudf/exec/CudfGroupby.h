@@ -62,7 +62,8 @@ std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
 // Groupby-specific validation
 bool canGroupbyBeEvaluatedByCudf(
     const core::AggregationNode& aggregationNode,
-    core::QueryCtx* queryCtx);
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
 
 bool canGroupbyAggregationBeEvaluatedByCudf(
     const core::CallTypedExpr& call,

@@ -189,7 +189,8 @@ CudfSplitReader::CudfSplitReader(
       pool_(connectorQueryCtx->memoryPool()),
       useExperimentalCudfReader_(useExperimentalCudfReader),
       baseReaderOpts_(pool_),
-      subfieldFilterExpr_(subfieldFilterExpr) {
+      subfieldFilterExpr_(subfieldFilterExpr),
+      pushdownFilterExpr_(subfieldFilterExpr) {
   baseReaderOpts_.setDataIoStats(ioStatistics_);
   baseReaderOpts_.setMetadataIoStats(ioStatistics_);
 }
@@ -312,7 +313,6 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
         readerOptions_,
         stream_,
         output_mr);
-    // TODO: check remainingFilterExprSet_ flag here to choose mr
   });
 
   if (!exptSplitReader_->has_next_table_chunk()) {
@@ -330,14 +330,20 @@ void CudfSplitReader::resetSplit() {
   hybridScanState_.reset();
   dataSource_.reset();
   fileMetaData_.clear();
+  pushdownFilterExpr_ = subfieldFilterExpr_;
+  hasSplitSpecificPushdownFilter_ = false;
 }
 
 cudf::ast::expression const* CudfSplitReader::pushdownFilter() const {
-  return subfieldFilter();
+  return pushdownFilterExpr_;
 }
 
 cudf::ast::expression const* CudfSplitReader::subfieldFilter() const {
   return subfieldFilterExpr_;
+}
+
+bool CudfSplitReader::hasSplitSpecificPushdownFilter() const {
+  return hasSplitSpecificPushdownFilter_;
 }
 
 void CudfSplitReader::setupCudfDataSource() {
@@ -498,6 +504,18 @@ void CudfSplitReader::fileMetaDatas() {
       fileMetaData_.size(),
       1,
       "CudfSplitReader failed to read any parquet metadatas");
+
+  if (pushdownFilterBuilder_) {
+    VELOX_CHECK_EQ(
+        fileMetaData_.size(),
+        1,
+        "Split-specific pushdown filters require exactly one Parquet metadata");
+    pushdownFilterExpr_ = pushdownFilterBuilder_(fileMetaData_.front());
+    VELOX_CHECK_NOT_NULL(
+        pushdownFilterExpr_,
+        "Split-specific pushdown filter builder must return an expression");
+    hasSplitSpecificPushdownFilter_ = true;
+  }
 }
 
 void CudfSplitReader::createCudfReader() {

@@ -133,6 +133,13 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
     return hasDeletion_;
   }
 
+  // Reads physical flat-map value streams directly without interpreting the
+  // logical children in the scan spec.
+  void readFlatMapChildren(
+      int64_t offset,
+      const RowSet& rows,
+      const uint64_t* incomingNulls);
+
   // Returns true if the file doesn't have this child (in which case it will be
   // treated as null).
   bool isChildMissing(const velox::common::ScanSpec& childSpec) const;
@@ -314,40 +321,7 @@ void SelectiveFlatMapColumnReaderHelper<T, KeyNode, FormatData>::read(
     int64_t offset,
     RowSet rows,
     const uint64_t* incomingNulls) {
-  reader_.numReads_ = reader_.scanSpec_->newRead();
-  reader_.prepareRead<char>(offset, rows, incomingNulls);
-  VELOX_DCHECK(!reader_.hasDeletion());
-  auto activeRows = rows;
-  auto* mapNulls = reader_.nullsInReadRange_
-      ? reader_.nullsInReadRange_->as<uint64_t>()
-      : nullptr;
-  if (reader_.scanSpec_->filter()) {
-    auto kind = reader_.scanSpec_->filter()->kind();
-    VELOX_CHECK(
-        kind == velox::common::FilterKind::kIsNull ||
-        kind == velox::common::FilterKind::kIsNotNull);
-    reader_.filterNulls<int32_t>(
-        rows, kind == velox::common::FilterKind::kIsNull, false);
-    if (reader_.outputRows_.empty()) {
-      for (auto* child : reader_.children_) {
-        child->addParentNulls(offset, mapNulls, rows);
-      }
-      reader_.lazyVectorReadOffset_ = offset;
-      reader_.readOffset_ = offset + rows.back() + 1;
-      return;
-    }
-    activeRows = reader_.outputRows_;
-  }
-  // Separate the loop to be cache friendly.
-  for (auto* child : reader_.children_) {
-    reader_.advanceFieldReader(child, offset);
-  }
-  for (auto* child : reader_.children_) {
-    child->readWithTiming(offset, activeRows, mapNulls);
-    child->addParentNulls(offset, mapNulls, rows);
-  }
-  reader_.lazyVectorReadOffset_ = offset;
-  reader_.readOffset_ = offset + rows.back() + 1;
+  reader_.readFlatMapChildren(offset, rows, incomingNulls);
 }
 
 namespace detail {

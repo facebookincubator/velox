@@ -240,7 +240,7 @@ class MemoryManager {
   /// 'name'. If 'name' is missing, the memory manager generates a default name
   /// internally to ensure uniqueness. The leaf memory pool is created as the
   /// child of the memory manager's default root memory pool. If 'threadSafe' is
-  /// true, then we track its memory usage in a non-thread-safe mode to reduce
+  /// false, then we track its memory usage in a non-thread-safe mode to reduce
   /// its cpu cost.
   std::shared_ptr<MemoryPool> addLeafPool(
       const std::string& name = "",

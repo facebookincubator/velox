@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/JoinBridge.h"
-#include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 using namespace facebook::velox;
@@ -271,10 +272,10 @@ class CustomJoinBridgeTranslator : public Operator::PlanNodeTranslator {
 /// This test will show the CustomJoinBuild passing count of input rows to
 /// CustomJoinProbe via CustomJoinBridge, then probe will emit corresponding
 /// number of rows, like a Limit operator.
-class CustomJoinTest : public OperatorTestBase {
+class CustomJoinTest : public HiveConnectorTestBase {
  protected:
   void SetUp() override {
-    OperatorTestBase::SetUp();
+    HiveConnectorTestBase::SetUp();
     Operator::registerOperator(std::make_unique<CustomJoinBridgeTranslator>());
   }
 
@@ -340,4 +341,55 @@ TEST_F(CustomJoinTest, parallelism) {
       "(SELECT c0 FROM t LIMIT 90) "
       "UNION ALL (SELECT c0 FROM t LIMIT 90) "
       "UNION ALL (SELECT c0 FROM t LIMIT 90)");
+}
+
+/// Tests that custom join bridges work correctly with mixed grouped execution,
+/// where the build pipeline runs ungrouped and the probe pipeline runs in
+/// grouped split groups.
+TEST_F(CustomJoinTest, mixedGroupedExecution) {
+  auto rowType = ROW({"c0"}, {INTEGER()});
+  auto vectors = makeVectors(rowType, 4, 20);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId probeScanNodeId;
+  core::PlanNodeId buildScanNodeId;
+
+  auto buildNode = PlanBuilder(planNodeIdGenerator, pool_.get())
+                       .tableScan(rowType)
+                       .capturePlanNodeId(buildScanNodeId)
+                       .planNode();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator, pool_.get())
+          .tableScan(rowType)
+          .capturePlanNodeId(probeScanNodeId)
+          .addNode([&](const std::string& id, core::PlanNodePtr probeNode) {
+            return std::make_shared<CustomJoinNode>(
+                id, std::move(probeNode), std::move(buildNode));
+          })
+          .planNode();
+
+  // The build side reads 80 rows and posts that count to the bridge.
+  // Each split group's probe reads 80 rows and emits at most 80 (the build
+  // count).  With 2 split groups we expect 160 rows total.
+  constexpr int32_t numSplitGroups = 2;
+  std::vector<Split> probeSplits;
+  probeSplits.reserve(numSplitGroups);
+  for (int32_t i = 0; i < numSplitGroups; ++i) {
+    probeSplits.emplace_back(makeHiveConnectorSplit(filePath->getPath()), i);
+  }
+
+  auto numRows =
+      AssertQueryBuilder(plan)
+          .splits(probeScanNodeId, std::move(probeSplits))
+          .splits(
+              buildScanNodeId, {makeHiveConnectorSplit(filePath->getPath())})
+          .executionStrategy(core::ExecutionStrategy::kGrouped)
+          .groupedExecutionLeafNodeIds({probeScanNodeId})
+          .numSplitGroups(numSplitGroups)
+          .numConcurrentSplitGroups(1)
+          .countResults();
+
+  ASSERT_EQ(numRows, 160);
 }

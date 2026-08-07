@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfEqualityDeleteFileReader.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergFilterTransform.h"
 
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -72,7 +73,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Override to only setup cuDF reader if we have columns to read.
   void setupReader() override;
 
-  // Returns the filter to push down to the cuDF reader.
+  // Skip Parquet pushdown when the subfield filter must run after reading.
   cudf::ast::expression const* pushdownFilter() const override;
 
   // Override to determine the memory resource to construct cuDF reader.
@@ -108,6 +109,11 @@ class CudfIcebergSplitReader : public CudfSplitReader {
 
   // Returns whether cuDF must prepend absolute file row positions.
   bool needPrependedRowIndex() const;
+
+  // Decides whether the subfield filter is pushed into the data-file reader as
+  // is, pushed as a filter over the columns read from the data file, or
+  // deferred to post table read.
+  void prepareSubfieldFilter();
 
   // Removes and returns the prepended row-index column.
   std::unique_ptr<cudf::column> extractRowIndex(
@@ -210,8 +216,13 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   bool noColumnsToRead_{false};
   bool syntheticTableProduced_{false};
 
-  // Whether the subfield filter is deferred to post table read
+  // Whether the original subfield filter is deferred to post table read.
   bool deferSubfieldFilter_{false};
+
+  // Filter over file-backed columns pushed to the Parquet reader. Empty when
+  // the original filter was not transformed or has a `nullptr` root when
+  // nothing can be pushed.
+  std::optional<TransformedFilter> transformedPushdownFilter_;
 
   // Top-level column names and total row count from the file metadata
   std::unordered_set<std::string> fileColumnNames_;

@@ -589,6 +589,10 @@ void registerCatMetadata() {
       .sizeOrdinal({0})
       .sizeArgsList({true})
       .only1d()
+      // __copy has a non-contiguous branch (indexToOffset per element) and
+      // visits each element once, so a densifying clone of a cat operand only
+      // moves that addressing into the copy.
+      .layoutAgnostic()
       .outputConstraints(
           [](NodeCP node,
              const ValueTypes& types) -> std::vector<ValueConstraint> {
@@ -601,7 +605,9 @@ void registerCatMetadata() {
               return {};
             }
             // cat materializes a fresh, densely-laid-out output.
-            return {{.rank = types.rank(elements[0]), .contiguous = true}};
+            return {
+                {.rank = types.rank(elements[0]),
+                 .contiguity = Contiguity::kContiguous}};
           })
       .maybeReplace(catMaybeReplace)
       .setOutputs(catSetOutputs)

@@ -1186,13 +1186,7 @@ void CompileCtx::generateElementwiseBorderImpl(
   // register scalar.
   auto isElementwiseProducer = [&](NodeCP producer) {
     auto* meta = nodeMeta(producer);
-    if (!meta || !meta->elementwise) {
-      return false;
-    }
-    if (!meta->returnMeta.empty() && !meta->returnMeta[0].isRegister) {
-      return false;
-    }
-    return true;
+    return meta && meta->elementwise && !meta->isElementwiseBorder();
   };
 
   for (size_t inputIdx = 0; inputIdx < node->inputs().size(); ++inputIdx) {
@@ -2226,12 +2220,63 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
   for (auto* value : project.lastUse) {
     lastUseIds.push_back(value->id());
   }
+  // Values whose buffer an elementwise op may reuse in place for its output:
+  // reusable last-use boundary inputs and expr-local overwritable temps. Only
+  // eligible when EVERY consumer is a pointwise op
+  // (Metadata::inPlaceIfLastUse): such ops read the operand at the identity
+  // index, so writing the output into its buffer is a per-element
+  // read-before-write and cannot clobber a value the kernel still needs. A
+  // non-pointwise consumer (broadcast/gather/view/scatter, which carry
+  // inPlaceIfLastUse=false) reads at other indices, where in-place reuse would
+  // corrupt results.
+  auto reuseSafe = [](ValueCP value) {
+    // Exactly one consumer: a forked value (>1 user) feeds several ops, each of
+    // which could reuse its buffer for its own output and clobber the others'
+    // reads. Require a single consumer so at most one output reuses the buffer.
+    if (value->users().size() != 1) {
+      return false;
+    }
+    for (auto* user : value->users()) {
+      const Metadata* m = Registry::metadata(user->target());
+      if (m == nullptr || !m->inPlaceIfLastUse) {
+        return false;
+      }
+    }
+    return true;
+  };
+  std::vector<nativert::ValueId> reusableIds;
+  for (const auto& perExpr : project.reusableValues_) {
+    for (auto* value : perExpr) {
+      if (reuseSafe(value)) {
+        reusableIds.push_back(value->id());
+      }
+    }
+  }
+  for (const auto& perExpr : project.overwritableTemps_) {
+    for (auto* value : perExpr) {
+      if (reuseSafe(value)) {
+        reusableIds.push_back(value->id());
+      }
+    }
+  }
+  // Inputs of the clones elided in this node, with the number of copies of
+  // each saved. Reported at runtime as the bytes not copied; also registered
+  // graph-wide so the reference-frame checks skip these deliberately
+  // overwritten buffers.
+  std::vector<std::pair<nativert::ValueId, int32_t>> elidedCloneInputs(
+      project.elidedCloneCounts.begin(), project.elidedCloneCounts.end());
+  for (const auto& [valueId, count] : elidedCloneInputs) {
+    waveGraph_.addElidedCloneInput(valueId);
+  }
   auto invocation = std::make_unique<CompositeInvocation>(
       std::move(compositeKernel),
       std::move(ops_),
       std::move(ivalueStorage_),
       waveGraph_.nextCompositeInvocationId(),
-      std::move(lastUseIds));
+      std::move(lastUseIds),
+      std::move(reusableIds),
+      std::vector<Launch>{},
+      std::move(elidedCloneInputs));
   placed_.insert(nodes.begin(), nodes.end());
   return std::make_unique<CompiledNode>(std::move(invocation));
 }
