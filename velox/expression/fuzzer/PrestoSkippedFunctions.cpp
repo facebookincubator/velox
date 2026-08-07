@@ -30,17 +30,14 @@ const std::unordered_set<std::string>& prestoSkippedFunctions() {
       "width_bucket",
       // Varbinary output can't be compared exactly with Java.
       "merge_hll",
-      // Fuzzer and the underlying engine are confused about TDigest functions
-      // (since TDigest is a user defined type), and tries to pass a
-      // VARBINARY (since TDigest's implementation uses an
-      // alias to VARBINARY).
-      "merge_tdigest",
-      "scale_tdigest",
-      "quantiles_at_values",
+      // Bad input hits a VELOX_CHECK instead of a user error.
       "construct_tdigest",
-      "destructure_tdigest",
+      // Generated digests differ in compression, which merging rejects.
+      "merge_tdigest",
+      // Quantile bounds are generated independently, so the fuzzer produces
+      // lower > upper. The common path raises a user error and the simplified
+      // path does not, which the verifier treats as fatal.
       "trimmed_mean",
-      "winsorized_mean",
       // Fuzzer and the underlying engine are confused about SetDigest functions
       // (since KHLL is a user defined type), and tries to pass a
       // VARBINARY (since KHLL's implementation uses an
@@ -183,6 +180,7 @@ const std::unordered_set<std::string>& prestoSkippedFunctions() {
 const std::unordered_set<std::string>& prestoSkippedFunctionsSOT() {
   static const std::unordered_set<std::string> kSkippedFunctionsSOT = {
       "l2_norm", // Velox-only function, not available in Presto
+      "winsorized_mean", // Velox-only function, not available in Presto
       "t_cdf", // New function, not yet widely deployed in Presto instances
       "inverse_t_cdf", // New function, not yet widely deployed in Presto
                        // instances
