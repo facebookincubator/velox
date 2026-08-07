@@ -25,7 +25,6 @@ COPY scripts/setup-centos9.sh /
 COPY scripts/setup-fedora.sh /
 COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
 COPY CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch /
-COPY CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch /
 
 ARG VELOX_BUILD_SHARED=ON
 # Building libvelox.so requires folly and gflags to be built shared as well for now
@@ -41,8 +40,7 @@ ENV UV_TOOL_BIN_DIR=/usr/local/bin \
 
 # CMake 4.0 removed support for cmake minimums of <=3.5 and will fail builds, this overrides it
 ENV CMAKE_POLICY_VERSION_MINIMUM="3.5" \
-    VELOX_ARROW_CMAKE_PATCH="/cmake-compatibility.patch /arrow-testing-boost.patch" \
-    VELOX_FBTHRIFT_CMAKE_PATCH="/compactv1-protocol-refiller.patch"
+    VELOX_ARROW_CMAKE_PATCH="/cmake-compatibility.patch /arrow-testing-boost.patch"
 
 # Some CMake configs contain the hard coded prefix '/deps', we need to replace that with
 # the future location to avoid build errors in the base-image
