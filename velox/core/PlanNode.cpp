@@ -3440,6 +3440,7 @@ PartitionedOutputNode::PartitionedOutputNode(
     RowTypePtr outputType,
     std::string serdeKind,
     std::string transportKind,
+    std::string transportOptions,
     PlanNodePtr source)
     : PlanNode(id),
       kind_(kind),
@@ -3450,6 +3451,7 @@ PartitionedOutputNode::PartitionedOutputNode(
       partitionFunctionSpec_(std::move(partitionFunctionSpec)),
       serdeKind_(std::move(serdeKind)),
       transportKind_(std::move(transportKind)),
+      transportOptions_(std::move(transportOptions)),
       outputType_(std::move(outputType)) {
   VELOX_USER_CHECK_GT(numPartitions_, 0);
   if (numPartitions_ == 1) {
@@ -3603,6 +3605,7 @@ folly::dynamic PartitionedOutputNode::serialize() const {
   obj["partitionFunctionSpec"] = partitionFunctionSpec_->serialize();
   obj["serdeKind"] = serdeKind_;
   obj["transportKind"] = transportKind_;
+  obj["transportOptions"] = transportOptions_;
   obj["outputType"] = outputType_->serialize();
   return obj;
 }
@@ -3629,6 +3632,7 @@ PlanNodePtr PartitionedOutputNode::create(
       obj["serdeKind"].asString(),
       obj.getDefault("transportKind", std::string{TransportKind::kInMemory})
           .asString(),
+      obj.getDefault("transportOptions", "").asString(),
       deserializeSingleSource(obj, context));
 }
 
