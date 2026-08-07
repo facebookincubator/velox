@@ -73,6 +73,12 @@ getNamedVectorSerdeImpl() {
   return namedSerdes;
 }
 
+std::unordered_map<std::string, VectorSerdeFactory>&
+getVectorSerdeFactoryImpl() {
+  static std::unordered_map<std::string, VectorSerdeFactory> factories;
+  return factories;
+}
+
 } // namespace
 
 void IterativeVectorSerializer::append(const RowVectorPtr& vector) {
@@ -102,6 +108,8 @@ std::string VectorSerde::kindName(Kind kind) {
       return "CompactRow";
     case Kind::kUnsafeRow:
       return "UnsafeRow";
+    case Kind::kArrowIpc:
+      return "ArrowIpc";
   }
   VELOX_UNREACHABLE(
       fmt::format("Unknown vector serde kind: {}", static_cast<int32_t>(kind)));
@@ -111,7 +119,9 @@ VectorSerde::Kind VectorSerde::kindByName(const std::string& kindName) {
   static const std::unordered_map<std::string, Kind> kNameToKind = {
       {"Presto", Kind::kPresto},
       {"CompactRow", Kind::kCompactRow},
-      {"UnsafeRow", Kind::kUnsafeRow}};
+      {"UnsafeRow", Kind::kUnsafeRow},
+      {"ArrowIpc", Kind::kArrowIpc},
+  };
   const auto it = kNameToKind.find(kindName);
   VELOX_CHECK(
       it != kNameToKind.end(), "Unknown vector serde kind: {}", kindName);
@@ -147,34 +157,79 @@ bool isRegisteredVectorSerde() {
 
 /// Named serde helper functions.
 void registerNamedVectorSerde(
-    const std::string& kind,
+    const std::string& serdeName,
     std::unique_ptr<VectorSerde> serdeToRegister) {
   auto& namedSerdeMap = getNamedVectorSerdeImpl();
   VELOX_CHECK(
-      namedSerdeMap.find(kind) == namedSerdeMap.end(),
+      namedSerdeMap.find(serdeName) == namedSerdeMap.end(),
       "Vector serde '{}' is already registered.",
-      kind);
-  namedSerdeMap[kind] = std::move(serdeToRegister);
+      serdeName);
+  namedSerdeMap[serdeName] = std::move(serdeToRegister);
 }
 
-void deregisterNamedVectorSerde(const std::string& kind) {
+void deregisterNamedVectorSerde(const std::string& serdeName) {
   auto& namedSerdeMap = getNamedVectorSerdeImpl();
-  namedSerdeMap.erase(kind);
+  namedSerdeMap.erase(serdeName);
 }
 
-bool isRegisteredNamedVectorSerde(const std::string& kind) {
+bool isRegisteredNamedVectorSerde(const std::string& serdeName) {
   auto& namedSerdeMap = getNamedVectorSerdeImpl();
-  return namedSerdeMap.find(kind) != namedSerdeMap.end();
+  return namedSerdeMap.find(serdeName) != namedSerdeMap.end();
 }
 
-VectorSerde* getNamedVectorSerde(const std::string& kind) {
+VectorSerde* getNamedVectorSerde(const std::string& serdeName) {
   auto& namedSerdeMap = getNamedVectorSerdeImpl();
-  auto it = namedSerdeMap.find(kind);
+  auto it = namedSerdeMap.find(serdeName);
   VELOX_CHECK(
       it != namedSerdeMap.end(),
       "Named vector serde '{}' is not registered.",
-      kind);
+      serdeName);
   return it->second.get();
+}
+
+void registerVectorSerdeFactory(
+    const std::string& name,
+    VectorSerdeFactory factory) {
+  auto& factories = getVectorSerdeFactoryImpl();
+  VELOX_CHECK(
+      factories.find(name) == factories.end(),
+      "Vector serde factory is already registered: {}",
+      name);
+  factories[name] = std::move(factory);
+}
+
+bool isRegisteredVectorSerdeFactory(const std::string& name) {
+  auto& factories = getVectorSerdeFactoryImpl();
+  return factories.find(name) != factories.end();
+}
+
+std::unique_ptr<VectorSerde> createVectorSerde(const std::string& name) {
+  auto& factories = getVectorSerdeFactoryImpl();
+  auto it = factories.find(name);
+  VELOX_CHECK(
+      it != factories.end(),
+      "Vector serde factory is not registered: {}",
+      name);
+  return it->second();
+}
+
+void VectorSerde::deserialize(
+    const folly::IOBuf& source,
+    velox::memory::MemoryPool* pool,
+    RowTypePtr type,
+    RowVectorPtr* result,
+    const Options* options) {
+  std::vector<ByteRange> ranges;
+  ranges.reserve(4);
+  for (const auto& range : source) {
+    ranges.emplace_back(
+        ByteRange{
+            const_cast<uint8_t*>(range.data()),
+            static_cast<int32_t>(range.size()),
+            0});
+  }
+  auto byteStream = std::make_unique<BufferInputStream>(std::move(ranges));
+  deserialize(byteStream.get(), pool, type, result, options);
 }
 
 void VectorStreamGroup::createStreamTree(
@@ -318,26 +373,12 @@ RowVectorPtr IOBufToRowVector(
     const RowTypePtr& outputType,
     memory::MemoryPool& pool,
     VectorSerde* serde) {
-  std::vector<ByteRange> ranges;
-  ranges.reserve(4);
-
-  for (const auto& range : ioBuf) {
-    ranges.emplace_back(
-        ByteRange{
-            const_cast<uint8_t*>(range.data()),
-            static_cast<int32_t>(range.size()),
-            0});
-  }
-
-  auto byteStream = std::make_unique<BufferInputStream>(std::move(ranges));
-  RowVectorPtr outputVector;
-
-  // If not supplied, use the default one.
   if (serde == nullptr) {
     serde = getVectorSerde();
   }
-  serde->deserialize(
-      byteStream.get(), &pool, outputType, &outputVector, nullptr);
+
+  RowVectorPtr outputVector;
+  serde->deserialize(ioBuf, &pool, outputType, &outputVector, nullptr);
   return outputVector;
 }
 
@@ -365,7 +406,7 @@ folly::IOBuf rowVectorToIOBufBatch(
   IndexRange range{0, rangeEnd};
   Scratch scratch;
   serializer->serialize(rowVector, folly::Range(&range, 1), scratch, &stream);
-  return std::move(*stream.getIOBuf());
+  return *stream.getIOBuf();
 }
 
 } // namespace facebook::velox
