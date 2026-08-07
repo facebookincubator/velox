@@ -25,6 +25,7 @@
 namespace facebook::velox::dwio::common {
 
 class DirectBufferedInput;
+struct LoadedBuffer;
 
 /// An input stream over possibly coalesced loads. Created by
 /// DirectBufferedInput. Similar to CacheInputStream but does not use cache.
@@ -67,6 +68,16 @@ class DirectInputStream : public SeekableInputStream {
   // Synchronously sets 'data_' to cover loadedRegion_'.
   void loadSync();
 
+  // Adopts the buffers of a completed coalesced load, leaving exactly one
+  // representation live. 'load' is retained when the bytes are a borrowed slice
+  // of that load's shared allocation, so the slice outlives the load.
+  void setLoadedData(LoadedBuffer&& loaded, std::shared_ptr<void> load);
+
+  // True when at most one of the three buffer representations is live. The
+  // priority dispatch in loadPosition() picks the first live one, so a
+  // double-set would be silently masked rather than caught.
+  bool hasSingleLiveBuffer() const;
+
   DirectBufferedInput* const bufferedInput_;
   IoStatistics* const ioStats_;
   const std::shared_ptr<ReadFileInputStream> input_;
@@ -90,6 +101,24 @@ class DirectInputStream : public SeekableInputStream {
 
   // Contains the data if the range is too small for Allocation.
   std::string tinyData_;
+
+  // Borrowed slice of the load's shared allocation plus a hold on the owning
+  // load, bundled so the pointer and keep-alive can never desync. Empty when
+  // the buffer is not backed by the shared allocation.
+  struct SharedBuffer {
+    const char* dataPtr{nullptr};
+    std::shared_ptr<void> dataHolder;
+
+    explicit operator bool() const {
+      return dataPtr != nullptr;
+    }
+
+    void reset() {
+      dataPtr = nullptr;
+      dataHolder.reset();
+    }
+  };
+  SharedBuffer sharedBuffer_;
 
   // Pointer to start of current run in 'entry->nonContiguousData()' or
   // 'entry->contiguousData()'.
