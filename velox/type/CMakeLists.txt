@@ -24,7 +24,6 @@ velox_add_library(
   Conversions.cpp
   DecimalUtil.cpp
   Filter.cpp
-  FloatingPointUtil.cpp
   HugeInt.cpp
   StringView.cpp
   StringView.h
