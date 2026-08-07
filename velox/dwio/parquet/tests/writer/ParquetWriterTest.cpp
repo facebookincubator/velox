@@ -1372,6 +1372,43 @@ TEST_F(ParquetWriterTest, dictionaryPassthroughWithoutArrowMemoryPool) {
   assertRoundTrip(data, expected, writerOptions);
 }
 
+// Verifies round-trip correctness when the VARCHAR dictionary alphabet contains
+// duplicate values. Duplicates force the Arrow Parquet writer to abandon
+// dictionary encoding (numEntries() != dictionary->length()) and fall back to
+// PLAIN, but it still flushes a dictionary page first. The page must be sized
+// from the de-duplicated entries, otherwise the reader's exact-consumption
+// check in PageReader::prepareDictionary fails.
+TEST_F(ParquetWriterTest, dictionaryPassthroughVarcharDuplicateValues) {
+  constexpr vector_size_t kSize = 10'000;
+  constexpr int kDictSize = 12;
+
+  // Dictionary alphabet with intentional duplicates: several entries share the
+  // same string value, so numEntries() (distinct) < kDictSize (total).
+  const std::vector<std::string> dictStrings = {
+      "apple",
+      "apple",
+      "banana",
+      "cherry",
+      "cherry",
+      "cherry",
+      "date",
+      "elderberry",
+      "elderberry",
+      "fig",
+      "grape",
+      "grape",
+  };
+  ASSERT_EQ(dictStrings.size(), kDictSize);
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+  auto dictVector = makeDictionaryColumn(
+      kSize, dictionary, [](auto row) { return row % kDictSize; });
+  ASSERT_EQ(dictVector->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  assertFlattenedRoundTrip(makeRowVector({dictVector}));
+}
+
 // Verifies round-trip correctness with high-cardinality VARCHAR dictionary
 // (all unique values).  The Arrow Parquet writer may abandon dictionary
 // encoding and fall back to PLAIN.
