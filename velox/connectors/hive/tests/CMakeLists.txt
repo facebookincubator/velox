@@ -26,6 +26,7 @@ add_executable(
   HiveConnectorSerDeTest.cpp
   HivePartitionFunctionTest.cpp
   HivePartitionNameTest.cpp
+  HivePartitionValueTest.cpp
   HiveSplitTest.cpp
   PartitionIdGeneratorTest.cpp
   TableHandleTest.cpp

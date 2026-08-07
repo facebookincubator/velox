@@ -40,6 +40,7 @@ velox_add_library(
   HiveConnector.cpp
   HiveConnectorSplit.cpp
   HiveConnectorUtil.cpp
+  HivePartitionValue.cpp
   HiveDataSink.cpp
   HiveDataSource.cpp
   HiveIndexSource.cpp
@@ -68,6 +69,7 @@ velox_add_library(
   HiveConnector.h
   HiveConnectorSplit.h
   HiveConnectorUtil.h
+  HivePartitionValue.h
   HiveDataSink.h
   HiveDataSource.h
   HiveIndexSource.h
