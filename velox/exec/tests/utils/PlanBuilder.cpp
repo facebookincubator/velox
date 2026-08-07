@@ -2255,6 +2255,31 @@ PlanBuilder& PlanBuilder::unnest(
     const std::optional<std::string>& ordinalColumn,
     const std::optional<std::string>& markerName) {
   VELOX_CHECK_NOT_NULL(planNode_, "Unnest cannot be the source node");
+  std::vector<std::optional<std::string>> unnestNames;
+  for (const auto& name : unnestColumns) {
+    auto input = planNode_->outputType()->findChild(name);
+    if (input->isArray()) {
+      unnestNames.emplace_back(name + "_e");
+    } else if (input->isMap()) {
+      unnestNames.emplace_back(name + "_k");
+      unnestNames.emplace_back(name + "_v");
+    } else {
+      VELOX_NYI(
+          "Unsupported type of unnest variable. Expected ARRAY or MAP, but got {}.",
+          input->toString());
+    }
+  }
+  return unnest(
+      replicateColumns, unnestColumns, unnestNames, ordinalColumn, markerName);
+}
+
+PlanBuilder& PlanBuilder::unnest(
+    const std::vector<std::string>& replicateColumns,
+    const std::vector<std::string>& unnestColumns,
+    const std::vector<std::optional<std::string>>& unnestNames,
+    const std::optional<std::string>& ordinalColumn,
+    const std::optional<std::string>& markerName) {
+  VELOX_CHECK_NOT_NULL(planNode_, "Unnest cannot be the source node");
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>
       replicateFields;
   replicateFields.reserve(replicateColumns.size());
@@ -2266,21 +2291,6 @@ PlanBuilder& PlanBuilder::unnest(
   unnestFields.reserve(unnestColumns.size());
   for (const auto& name : unnestColumns) {
     unnestFields.emplace_back(field(name));
-  }
-
-  std::vector<std::string> unnestNames;
-  for (const auto& name : unnestColumns) {
-    auto input = planNode_->outputType()->findChild(name);
-    if (input->isArray()) {
-      unnestNames.push_back(name + "_e");
-    } else if (input->isMap()) {
-      unnestNames.push_back(name + "_k");
-      unnestNames.push_back(name + "_v");
-    } else {
-      VELOX_NYI(
-          "Unsupported type of unnest variable. Expected ARRAY or MAP, but got {}.",
-          input->toString());
-    }
   }
 
   planNode_ = std::make_shared<core::UnnestNode>(
