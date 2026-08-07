@@ -2116,8 +2116,7 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
       iter.numActiveCursors,
       0,
       "JoinResultIterator has reorder-mode state when entering serial path");
-  return listJoinResultsSerial(
-      iter, includeMisses, inputRows, hits, maxBytes);
+  return listJoinResultsSerial(iter, includeMisses, inputRows, hits, maxBytes);
 }
 
 template <bool ignoreNullKeys>
