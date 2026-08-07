@@ -130,6 +130,23 @@ makeRanges(size_t size, memory::Allocation& data, std::string& tinyData) {
 }
 } // namespace
 
+void DirectInputStream::setLoadedData(
+    LoadedBuffer&& loaded,
+    std::shared_ptr<void> load) {
+  loadedRegion_.length = loaded.requestBytes;
+  data_ = std::move(loaded.ownedData);
+  tinyData_ = std::move(loaded.tinyData);
+  if (loaded.sharedData != nullptr) {
+    sharedBuffer_ = {loaded.sharedData, std::move(load)};
+  }
+}
+
+bool DirectInputStream::hasSingleLiveBuffer() const {
+  return (static_cast<int>(sharedBuffer_.dataPtr != nullptr) +
+          static_cast<int>(data_.numPages() > 0) +
+          static_cast<int>(!tinyData_.empty())) <= 1;
+}
+
 void DirectInputStream::loadSync() {
   if (region_.length < DirectBufferedInput::kTinySize &&
       data_.numPages() == 0) {
@@ -186,7 +203,7 @@ void DirectInputStream::loadPosition() {
           waitFuture.wait();
         }
         loadedRegion_.offset = region_.offset;
-        loadedRegion_.length = load->getData(region_.offset, data_, tinyData_);
+        setLoadedData(load->getData(region_.offset), load);
       }
       ioStats_->queryThreadIoLatencyUs().increment(loadUs);
       // DirectCoalescedLoad always reads from remote storage, not SSD.
@@ -203,6 +220,9 @@ void DirectInputStream::loadPosition() {
       region_.offset + offsetInRegion_ < loadedRegion_.offset ||
       region_.offset + offsetInRegion_ >=
           loadedRegion_.offset + loadedRegion_.length) {
+    // Outside the loaded range: drop the shared buffer; loadSync() reloads
+    // below.
+    sharedBuffer_.reset();
     loadedRegion_.offset = region_.offset + offsetInRegion_;
     loadedRegion_.length = (offsetInRegion_ + loadQuantum_ <= region_.length)
         ? loadQuantum_
@@ -213,9 +233,18 @@ void DirectInputStream::loadPosition() {
     loadSync();
   }
 
+  VELOX_DCHECK(
+      hasSingleLiveBuffer(),
+      "DirectInputStream has multiple live buffer representations");
+
   const auto offsetInData =
       offsetInRegion_ - (loadedRegion_.offset - region_.offset);
-  if (data_.numPages() == 0) {
+  if (sharedBuffer_) {
+    run_ = reinterpret_cast<uint8_t*>(const_cast<char*>(sharedBuffer_.dataPtr));
+    runSize_ = static_cast<uint32_t>(loadedRegion_.length);
+    offsetInRun_ = static_cast<int>(offsetInData);
+    offsetOfRun_ = 0;
+  } else if (data_.numPages() == 0) {
     run_ = reinterpret_cast<uint8_t*>(tinyData_.data());
     runSize_ = tinyData_.size();
     offsetInRun_ = offsetInData;
