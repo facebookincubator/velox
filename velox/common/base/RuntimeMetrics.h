@@ -18,7 +18,12 @@
 
 #include <fmt/format.h>
 #include <folly/CppAttributes.h>
+#include <folly/Synchronized.h>
+#include <folly/container/F14Map.h>
+#include <folly/container/HeterogeneousAccess.h>
+#include <chrono>
 #include <limits>
+#include <string>
 #include <string_view>
 
 namespace facebook::velox {
@@ -92,6 +97,45 @@ class BaseRuntimeStatWriter {
   virtual void setRuntimeStat(
       std::string_view /* name */,
       const RuntimeMetric& /* metric */) {}
+
+  /// Adds a wall or cpu duration sample under 'name', tagged as nanoseconds.
+  void addTiming(std::string_view name, std::chrono::nanoseconds duration) {
+    addRuntimeStat(
+        name, RuntimeCounter(duration.count(), RuntimeCounter::Unit::kNanos));
+  }
+
+  /// Adds a unitless count sample under 'name'.
+  void addCount(std::string_view name, int64_t value) {
+    addRuntimeStat(name, RuntimeCounter(value));
+  }
+};
+
+/// Collects runtime metrics by name in a thread-safe map and exposes a
+/// snapshot.
+class RuntimeStatsCollector final : public BaseRuntimeStatWriter {
+ public:
+  /// Merges 'value' under 'name'. All samples under a name must share the same
+  /// unit; a mismatched unit throws.
+  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
+      override;
+
+  /// Replaces any existing metric under 'name' with 'metric'.
+  void setRuntimeStat(std::string_view name, const RuntimeMetric& metric)
+      override;
+
+  /// Returns a snapshot of the accumulated metrics.
+  folly::F14FastMap<std::string, RuntimeMetric> runtimeStats() const;
+
+ private:
+  // Per-name metrics; Synchronized because multiple threads record
+  // concurrently. Transparent hash/equal allow string_view lookup without
+  // allocating a key.
+  folly::Synchronized<folly::F14FastMap<
+      std::string,
+      RuntimeMetric,
+      folly::HeterogeneousAccessHash<std::string>,
+      folly::HeterogeneousAccessEqualTo<std::string>>>
+      runtimeStats_;
 };
 
 /// Setting a concrete runtime stats writer on the thread will ensure that any

@@ -101,6 +101,40 @@ std::string RuntimeMetric::toString() const {
   }
 }
 
+void RuntimeStatsCollector::addRuntimeStat(
+    std::string_view name,
+    const RuntimeCounter& value) {
+  runtimeStats_.withWLock([&](auto& stats) {
+    auto it = stats.find(name);
+    if (it == stats.end()) {
+      // Construct the std::string key only when inserting a new metric.
+      it = stats.try_emplace(std::string(name), value.unit).first;
+    } else {
+      VELOX_CHECK_EQ(
+          value.unit,
+          it->second.unit,
+          "Unit mismatch for runtime stat '{}'",
+          name);
+    }
+    it->second.addValue(value.value);
+  });
+}
+
+void RuntimeStatsCollector::setRuntimeStat(
+    std::string_view name,
+    const RuntimeMetric& metric) {
+  runtimeStats_.withWLock(
+      [&](auto& stats) { stats.insert_or_assign(std::string(name), metric); });
+}
+
+folly::F14FastMap<std::string, RuntimeMetric>
+RuntimeStatsCollector::runtimeStats() const {
+  return runtimeStats_.withRLock([](const auto& stats) {
+    return folly::F14FastMap<std::string, RuntimeMetric>(
+        stats.begin(), stats.end());
+  });
+}
+
 // Thread local runtime stat writers.
 static thread_local BaseRuntimeStatWriter* localRuntimeStatWriter;
 

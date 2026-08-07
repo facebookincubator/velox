@@ -17,6 +17,12 @@
 #include "velox/common/base/RuntimeMetrics.h"
 #include <gtest/gtest.h>
 
+#include <thread>
+#include <vector>
+
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/base/tests/GTestUtils.h"
+
 namespace facebook::velox {
 
 class RuntimeMetricsTest : public testing::Test {
@@ -174,6 +180,107 @@ TEST_F(SetThreadLocalRuntimeStatTest, noWriter) {
   RuntimeMetric metric(RuntimeCounter::Unit::kNanos);
   metric.addValue(42);
   setThreadLocalRuntimeStat("test.nowriter", metric);
+}
+
+TEST(RuntimeStatsCollectorTest, addAccumulatesSetReplaces) {
+  RuntimeStatsCollector collector;
+
+  collector.addRuntimeStat(
+      "wall", RuntimeCounter(10, RuntimeCounter::Unit::kNanos));
+  collector.addRuntimeStat(
+      "wall", RuntimeCounter(30, RuntimeCounter::Unit::kNanos));
+
+  RuntimeMetric preset(RuntimeCounter::Unit::kBytes);
+  preset.addValue(5);
+  preset.addValue(15);
+  collector.setRuntimeStat("bytes", preset);
+
+  auto stats = collector.runtimeStats();
+  ASSERT_EQ(stats.size(), 2);
+
+  const auto& wall = stats.at("wall");
+  EXPECT_EQ(wall.count, 2);
+  EXPECT_EQ(wall.sum, 40);
+  EXPECT_EQ(wall.min, 10);
+  EXPECT_EQ(wall.max, 30);
+  EXPECT_EQ(wall.unit, RuntimeCounter::Unit::kNanos);
+
+  const auto& bytes = stats.at("bytes");
+  EXPECT_EQ(bytes.count, 2);
+  EXPECT_EQ(bytes.sum, 20);
+  EXPECT_EQ(bytes.min, 5);
+  EXPECT_EQ(bytes.max, 15);
+  EXPECT_EQ(bytes.unit, RuntimeCounter::Unit::kBytes);
+
+  // setRuntimeStat replaces the whole metric, it does not merge.
+  RuntimeMetric replacement(RuntimeCounter::Unit::kBytes);
+  replacement.addValue(100);
+  collector.setRuntimeStat("bytes", replacement);
+  const auto after = collector.runtimeStats();
+  EXPECT_EQ(after.at("bytes").sum, 100);
+  EXPECT_EQ(after.at("bytes").count, 1);
+}
+
+TEST(RuntimeStatsCollectorTest, unitMismatchThrows) {
+  RuntimeStatsCollector collector;
+
+  collector.addRuntimeStat(
+      "m", RuntimeCounter(10, RuntimeCounter::Unit::kNanos));
+  // A later sample under the same name with a different unit is rejected.
+  VELOX_ASSERT_THROW(
+      collector.addRuntimeStat(
+          "m", RuntimeCounter(20, RuntimeCounter::Unit::kBytes)),
+      "Unit mismatch for runtime stat 'm'");
+
+  const auto stats = collector.runtimeStats();
+  const auto& m = stats.at("m");
+  EXPECT_EQ(m.unit, RuntimeCounter::Unit::kNanos);
+  EXPECT_EQ(m.count, 1);
+  EXPECT_EQ(m.sum, 10);
+}
+
+TEST(RuntimeStatsCollectorTest, concurrentAddIsThreadSafe) {
+  RuntimeStatsCollector collector;
+  constexpr int kThreads{8};
+  constexpr int kIterations{1'000};
+
+  std::vector<std::thread> threads;
+  threads.reserve(kThreads);
+  for (int i = 0; i < kThreads; ++i) {
+    threads.emplace_back([&collector] {
+      for (int j = 0; j < kIterations; ++j) {
+        collector.addRuntimeStat("c", RuntimeCounter(1));
+      }
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  const auto stats = collector.runtimeStats();
+  EXPECT_EQ(stats.at("c").count, kThreads * kIterations);
+  EXPECT_EQ(stats.at("c").sum, kThreads * kIterations);
+}
+
+TEST(RuntimeStatsCollectorTest, addTimingAndCountApplyUnits) {
+  RuntimeStatsCollector collector;
+
+  collector.addTiming("wall", std::chrono::nanoseconds(40));
+  collector.addTiming("wall", std::chrono::nanoseconds(60));
+  collector.addCount("splits", 3);
+
+  const auto stats = collector.runtimeStats();
+  ASSERT_EQ(stats.size(), 2);
+
+  const auto& wall = stats.at("wall");
+  EXPECT_EQ(wall.unit, RuntimeCounter::Unit::kNanos);
+  EXPECT_EQ(wall.count, 2);
+  EXPECT_EQ(wall.sum, 100);
+
+  const auto& splits = stats.at("splits");
+  EXPECT_EQ(splits.unit, RuntimeCounter::Unit::kNone);
+  EXPECT_EQ(splits.count, 1);
+  EXPECT_EQ(splits.sum, 3);
 }
 
 } // namespace facebook::velox
