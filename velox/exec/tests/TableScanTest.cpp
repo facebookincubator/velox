@@ -1825,6 +1825,95 @@ TEST_F(TableScanTest, preloadingSplitClose) {
   latch.wait();
 }
 
+TEST_F(TableScanTest, preloadingSplitsDetachedOnTerminate) {
+  auto filePaths = makeFilePaths(100);
+  auto vectors = makeVectors(100, 100);
+  for (int32_t i = 0; i < vectors.size(); i++) {
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+  }
+  createDuckDbTable(vectors);
+
+  auto* executors = ioExecutor_.get();
+  folly::Latch latch(executors->numThreads());
+  std::vector<folly::Baton<>> batons(executors->numThreads());
+  // Block every IO thread so preloaded splits never become ready and stay
+  // registered with the task until it terminates.
+  for (auto& baton : batons) {
+    executors->add([&]() {
+      baton.wait();
+      latch.count_down();
+    });
+  }
+
+  // Sampled where terminate() has released the task lock for the last time.
+  // Stays -1 if terminate() never ran.
+  std::atomic<int64_t> numPreloadingSplitsOnTerminate{-1};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::terminate",
+      std::function<void(Task*)>([&](Task* task) {
+        numPreloadingSplitsOnTerminate = task->testingNumPreloadingSplits();
+      }));
+
+  auto task = assertQuery(tableScanNode(), filePaths, "SELECT * FROM tmp", 2);
+  auto stats = getTableScanRuntimeStats(task);
+  // Verify that split preloading is enabled, otherwise the check below passes
+  // vacuously.
+  ASSERT_GT(stats.at("preloadedSplits").sum, 1);
+
+  // terminate() must detach 'preloadingSplits_' while holding the task lock.
+  // Driver threads insert into the same set under that lock from
+  // SplitsStore::getSplit(), so anything left here would be iterated unlocked
+  // and can be freed by a concurrent rehash.
+  EXPECT_EQ(numPreloadingSplitsOnTerminate.load(), 0);
+
+  task.reset();
+  // Clean blocking items in the IO thread pool.
+  for (auto& baton : batons) {
+    baton.post();
+  }
+  latch.wait();
+}
+
+TEST_F(TableScanTest, noSplitPreloadAfterTaskTerminated) {
+  auto filePaths = makeFilePaths(4);
+  auto vectors = makeVectors(4, 100);
+  for (int32_t i = 0; i < vectors.size(); i++) {
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+  }
+
+  CursorParameters params;
+  params.planNode = tableScanNode(ROW({}, {}));
+  auto cursor = TaskCursor::create(params);
+  const auto& task = cursor->task();
+  const auto scanNodeId = params.planNode->id();
+  for (const auto& filePath : filePaths) {
+    task->addSplit(scanNodeId, makeHiveSplit(filePath->getPath()));
+  }
+
+  task->requestCancel().wait();
+
+  // A driver that is already on thread can reach getSplitOrFuture() after
+  // terminate() has detached 'preloadingSplits_'. Preloading must not arm once
+  // the task has stopped running, otherwise the split is registered with
+  // nothing left to close its data source.
+  bool preloadCalled{false};
+  exec::Split split;
+  auto future = ContinueFuture::makeEmpty();
+  task->getSplitOrFuture(
+      /*driverId=*/0,
+      kUngroupedGroupId,
+      scanNodeId,
+      /*maxPreloadSplits=*/2,
+      [&](const std::shared_ptr<connector::ConnectorSplit>&) {
+        preloadCalled = true;
+      },
+      split,
+      future);
+
+  EXPECT_FALSE(preloadCalled);
+  EXPECT_EQ(task->testingNumPreloadingSplits(), 0);
+}
+
 TEST_F(TableScanTest, waitForSplit) {
   auto filePaths = makeFilePaths(10);
   auto vectors = makeVectors(10, 1'000);
