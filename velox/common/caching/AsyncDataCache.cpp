@@ -681,6 +681,7 @@ void CacheShard::updateStats(CacheStats& stats) {
     ++stats.numEntries;
     entry->updateDataStats(stats);
   }
+  stats.numLookup += eventCounter_;
   stats.numHit += numHit_;
   stats.hitBytes += hitBytes_;
   stats.numNew += numNew_;
@@ -777,6 +778,7 @@ bool CacheShard::removeFileEntries(
 
 CacheStats CacheStats::operator-(const CacheStats& other) const {
   CacheStats result;
+  result.numLookup = numLookup - other.numLookup;
   result.numHit = numHit - other.numHit;
   result.hitBytes = hitBytes - other.hitBytes;
   result.numNew = numNew - other.numNew;
