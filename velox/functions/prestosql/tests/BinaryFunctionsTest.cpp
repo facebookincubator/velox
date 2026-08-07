@@ -329,6 +329,44 @@ TEST_F(BinaryFunctionsTest, xxhash64WithSeed) {
   EXPECT_NE(hexToDec("26C7827D889F6DA3"), xxhash64WithSeed("hello", 1224));
 }
 
+TEST_F(BinaryFunctionsTest, xxhash128) {
+  const auto xxhash128 = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>(
+        "xxhash128(c0)", VARBINARY(), std::move(value));
+  };
+
+  // Expected values are the big-endian canonical XXH3-128 digests produced by
+  // an independent oracle (the python xxhash library, seed 0).
+  EXPECT_EQ(std::nullopt, xxhash128(std::nullopt));
+  EXPECT_EQ(hexToDec("99AA06D3014798D86001C324468D497F"), xxhash128(""));
+  EXPECT_EQ(hexToDec("B5E9C1AD071B3E7FC779CFAA5E523818"), xxhash128("hello"));
+  EXPECT_EQ(hexToDec("94372AC63DEA37F1AB9234526989923A"), xxhash128("hashme"));
+  EXPECT_EQ(hexToDec("7C7419479B8CDDC1C5856B4F436BE4D2"), xxhash128("ABC "));
+  EXPECT_EQ(
+      hexToDec("82D9F70AEB974C48565E705734E91277"), xxhash128("1234567890"));
+  EXPECT_EQ(
+      hexToDec("58C6C309BC8AFF4A9B9FF553A4AB0942"),
+      xxhash128("more_than_12_characters_string"));
+}
+
+TEST_F(BinaryFunctionsTest, xxhash128WithSeed) {
+  const auto xxhash128WithSeed = [&](std::optional<std::string> value,
+                                     std::optional<int64_t> seed) {
+    return evaluateOnce<std::string>(
+        "xxhash128(c0, c1)", {VARBINARY(), BIGINT()}, std::move(value), seed);
+  };
+
+  EXPECT_EQ(
+      hexToDec("B5E9C1AD071B3E7FC779CFAA5E523818"),
+      xxhash128WithSeed("hello", 0));
+  EXPECT_NE(
+      hexToDec("B5E9C1AD071B3E7FC779CFAA5E523818"),
+      xxhash128WithSeed("hello", 1));
+  EXPECT_EQ(
+      hexToDec("94372AC63DEA37F1AB9234526989923A"),
+      xxhash128WithSeed("hashme", 0));
+}
+
 TEST_F(BinaryFunctionsTest, fnv1_32) {
   const auto fnv1_32 = [&](std::optional<std::string> arg) {
     return evaluateOnce<int32_t>("fnv1_32(c0)", VARBINARY(), arg);

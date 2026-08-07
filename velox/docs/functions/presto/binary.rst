@@ -176,3 +176,13 @@ Binary Functions
    :noindex:
 
     Computes the xxhash64 hash of ``binary`` with ``bigint`` seed.
+
+.. function:: xxhash128(binary) -> varbinary
+
+    Computes the xxhash 128-bit hash of ``binary``, returned as the 16-byte
+    big-endian canonical representation.
+
+.. function:: xxhash128(binary, bigint) -> varbinary
+   :noindex:
+
+    Computes the xxhash 128-bit hash of ``binary`` with ``bigint`` seed.
