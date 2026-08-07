@@ -130,6 +130,30 @@ class IcebergSplitReader : public FileSplitReader {
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
 
+  // A column whose filters next() evaluates instead of the reader.
+  struct DeferredFilter {
+    // Scan-spec child holding the filters. Owned by 'scanSpec_'.
+    common::ScanSpec* scanSpec;
+    // Index of the column in the reader output.
+    column_index_t outputIndex;
+  };
+
+  // Turns off reader-side filtering on the columns synthesized by next() and
+  // records them in 'deferredFilters_'. '_row_id',
+  // '_last_updated_sequence_number' and '$target_table_row_id' get their
+  // values from firstRowId_/dataSequenceNumber_/the split metadata plus the
+  // file position, so filtering the values the reader sees, or pruning on
+  // their statistics, would drop the wrong rows. Called for every split
+  // because the scan spec is shared across the splits of a data source.
+  void deferFiltersOnSynthesizedColumns();
+
+  // Applies the filters 'deferFiltersOnSynthesizedColumns' deferred and
+  // removes the rows that fail from 'output', adjusting 'rowsScanned'.
+  void applyDeferredFilters(
+      VectorPtr& output,
+      uint64_t& rowsScanned,
+      memory::MemoryPool* pool);
+
   // Resolves the equality field IDs of an equality-delete file to the
   // corresponding column names and types in the table schema. In Iceberg,
   // field IDs for top-level columns are assigned sequentially starting from
@@ -195,6 +219,13 @@ class IcebergSplitReader : public FileSplitReader {
   // directly. row_position is computed in next() per row.
   std::optional<int32_t> targetTableSpecId_;
   std::optional<std::string> targetTablePartitionData_;
+  // Synthesized columns projected by the current split, filtered or not: a
+  // filter can still arrive through dynamic filter pushdown after the split
+  // starts.
+  std::vector<DeferredFilter> deferredFilters_;
+  // Rows of the current batch that pass 'deferredFilters_', as a bitmap.
+  // Retained across batches to avoid an allocation per batch.
+  BufferPtr passingRows_;
   // Whether an implicit row-number column is needed for _row_id computation
   // (set when filters, random-skip, or positional deletes make output
   // positions non-contiguous).

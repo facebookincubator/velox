@@ -69,6 +69,19 @@ class ScanSpec {
     filter_ = std::move(filter);
   }
 
+  /// Enables or disables filtering by this node and its descendants in the
+  /// readers, leaving the filters themselves in place. Use for columns whose
+  /// final values the reader does not produce, such as delta updated or
+  /// synthesized columns: a filter on the value the reader sees would give
+  /// the wrong answer. The caller must evaluate the filter itself once the
+  /// values are final, e.g. with applyFilter(), which ignores this state.
+  ///
+  /// Ancestors memoize hasFilter(), so the caller must call
+  /// resetCachedValues() on the root of the tree afterwards. Skipping it
+  /// leaves an ancestor reporting the stale answer, which silently drops a
+  /// filter that has just been enabled.
+  void enableFilterInSubTree(bool value);
+
   void setMaxArrayElementsCount(vector_size_t count) {
     maxArrayElementsCount_ = count;
   }
@@ -474,8 +487,6 @@ class ScanSpec {
 
  private:
   void reorder();
-
-  void enableFilterInSubTree(bool value);
 
   bool compareTimeToDropValue(
       const std::shared_ptr<ScanSpec>& x,

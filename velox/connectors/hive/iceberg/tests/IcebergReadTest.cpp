@@ -26,6 +26,8 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
+#include "velox/core/QueryConfig.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -55,6 +57,16 @@ class IcebergReadTest : public test::IcebergTestBase {
     std::optional<int64_t> dataSequenceNumber = std::nullopt;
     std::vector<int64_t> deletePositions;
     std::string subfieldFilter;
+    // Filter keyed directly by column name, bypassing subfieldFilter()'s SQL
+    // parser -- needed for '_row_id' / '_last_updated_sequence_number',
+    // which aren't in 'tableDataColumns' and can't be parsed as SQL. Rebuilt
+    // as a common::SubfieldFilters in assertRowLineage() since
+    // common::Subfield is move-only.
+    std::optional<std::pair<std::string, common::FilterPtr>> directFilter;
+    // Values deleted by an equality-delete file on 'c0'. The file is only
+    // written when this is non-empty.
+    std::vector<int64_t> equalityDeleteValues;
+    // Empty means the query is expected to return no rows.
     std::vector<RowVectorPtr> expectedVectors;
   };
 
@@ -287,6 +299,23 @@ class IcebergReadTest : public test::IcebergTestBase {
           0));
     }
 
+    std::shared_ptr<TempFilePath> equalityDeleteFilePath;
+    if (!tc.equalityDeleteValues.empty()) {
+      equalityDeleteFilePath = TempFilePath::create();
+      writeToFile(
+          equalityDeleteFilePath->getPath(),
+          {makeRowVector(
+              {"c0"}, {makeFlatVector<int64_t>(tc.equalityDeleteValues)})});
+      deleteFiles.push_back(IcebergDeleteFile(
+          FileContent::kEqualityDeletes,
+          equalityDeleteFilePath->getPath(),
+          fileFormat_,
+          static_cast<int64_t>(tc.equalityDeleteValues.size()),
+          this->getFileSize(equalityDeleteFilePath->getPath()),
+          // Field ID 1 is 'c0', the first column of the table schema.
+          /*equalityFieldIds=*/{1}));
+    }
+
     std::unordered_map<std::string, std::string> infoColumns;
     if (tc.firstRowId.has_value()) {
       infoColumns[IcebergMetadataColumn::kFirstRowIdInfoColumn] =
@@ -309,11 +338,21 @@ class IcebergReadTest : public test::IcebergTestBase {
     if (!tc.subfieldFilter.empty()) {
       tableScanBuilder.subfieldFilter(tc.subfieldFilter);
     }
+    if (tc.directFilter.has_value()) {
+      common::SubfieldFilters directFilters;
+      directFilters.emplace(
+          common::Subfield(tc.directFilter->first), tc.directFilter->second);
+      tableScanBuilder.subfieldFiltersMap(directFilters);
+    }
     auto plan = tableScanBuilder.endTableScan().planNode();
-    exec::test::AssertQueryBuilder(plan)
-        .splits({makeIcebergSplitWithInfoColumns(
-            dataFilePath->getPath(), infoColumns, deleteFiles)})
-        .assertResults(tc.expectedVectors);
+    exec::test::AssertQueryBuilder queryBuilder(plan);
+    queryBuilder.splits({makeIcebergSplitWithInfoColumns(
+        dataFilePath->getPath(), infoColumns, deleteFiles)});
+    if (tc.expectedVectors.empty()) {
+      queryBuilder.assertEmptyResults();
+    } else {
+      queryBuilder.assertResults(tc.expectedVectors);
+    }
   }
 };
 
@@ -1333,6 +1372,441 @@ TEST_F(IcebergReadTest, rowLineage) {
   });
 }
 
+// A predicate on '_row_id' or '_last_updated_sequence_number' must see the
+// synthesized value for that row, not the raw pre-synthesis value.
+TEST_F(IcebergReadTest, rowLineageFilterOnRowId) {
+  static const std::vector<std::string> kOutputNames = {
+      "c0", "_row_id", "_last_updated_sequence_number"};
+
+  // '_row_id' values 100-102 are all non-null, so "_row_id IS NOT NULL"
+  // keeps all three rows with their derived values.
+  assertRowLineage({
+      .values = {10, 20, 30},
+      .firstRowId = 100,
+      .dataSequenceNumber = 7,
+      .deletePositions = {},
+      .directFilter = {{"_row_id", std::make_shared<common::IsNotNull>()}},
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({10, 20, 30}),
+              makeFlatVector<int64_t>({100, 101, 102}),
+              makeFlatVector<int64_t>({7, 7, 7}),
+          })},
+  });
+}
+
+// A join key filter pushed down onto '_row_id' at run time must be evaluated
+// against the synthesized value too. The scan carries no filter on the column
+// when the split is prepared, so the deferral cannot be conditioned on one
+// being there.
+TEST_F(IcebergReadTest, rowLineageDynamicFilterOnRowId) {
+  // Stored _row_id {null, 555, null} with first_row_id 100 synthesizes
+  // {100, 555, 102}. The join key 102 belongs to a row whose stored value is
+  // null, so a filter run before synthesis matches nothing.
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(),
+      {makeRowVector(
+          {"c0", "_row_id", "_last_updated_sequence_number"},
+          {
+              makeFlatVector<int64_t>({10, 20, 30}),
+              makeNullableFlatVector<int64_t>(
+                  {std::nullopt, 555, std::nullopt}),
+              makeNullableFlatVector<int64_t>({std::nullopt, 3, std::nullopt}),
+          })});
+  std::unordered_map<std::string, std::string> infoColumns{
+      {IcebergMetadataColumn::kFirstRowIdInfoColumn, "100"},
+      {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId scanId;
+  auto plan = exec::test::PlanBuilder(planNodeIdGenerator)
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(ROW({"c0", "_row_id"}, {BIGINT(), BIGINT()}))
+                  .dataColumns(ROW({"c0"}, {BIGINT()}))
+                  .endTableScan()
+                  .capturePlanNodeId(scanId)
+                  .hashJoin(
+                      {"_row_id"},
+                      {"u0"},
+                      exec::test::PlanBuilder(planNodeIdGenerator)
+                          .values({makeRowVector(
+                              {"u0"}, {makeFlatVector<int64_t>({102})})})
+                          .planNode(),
+                      /*filter=*/"",
+                      {"c0", "_row_id"})
+                  .planNode();
+
+  auto task = exec::test::AssertQueryBuilder(plan)
+                  .split(
+                      scanId,
+                      makeIcebergSplitWithInfoColumns(
+                          dataFilePath->getPath(), infoColumns))
+                  .assertResults(makeRowVector(
+                      {"c0", "_row_id"},
+                      {
+                          makeFlatVector<int64_t>({30}),
+                          makeFlatVector<int64_t>({102}),
+                      }));
+
+  // The result above is also what the join alone would produce, so confirm
+  // the filter really reached the scan.
+  const auto planStats = exec::toPlanStats(task->taskStats());
+  EXPECT_FALSE(planStats.at(scanId).dynamicFilterStats.empty());
+}
+
+// Iceberg V3 materializes '_row_id' and '_last_updated_sequence_number' in
+// the data file for rows an UPDATE carried over, leaving them null only for
+// rows that inherit from the file's metadata. Filters must run against the
+// synthesized value either way: the stored one where it is non-null, the
+// inherited one elsewhere.
+TEST_F(IcebergReadTest, rowLineageFilterOnStoredValues) {
+  static const std::vector<std::string> kOutputNames = {
+      "c0", "_row_id", "_last_updated_sequence_number"};
+
+  // Stored _row_id {null, 555, null} with first_row_id 100 synthesizes
+  // {100, 555, 102}; stored sequence numbers {null, 3, null} with data
+  // sequence number 7 synthesize {7, 3, 7}.
+  const std::vector<std::optional<int64_t>> storedRowIds = {
+      std::nullopt, 555, std::nullopt};
+  const std::vector<std::optional<int64_t>> storedSequenceNumbers = {
+      std::nullopt, 3, std::nullopt};
+
+  // 1. Range on '_row_id' spanning an inherited and a stored value.
+  assertRowLineage({
+      .values = {10, 20, 30},
+      .storedRowIds = storedRowIds,
+      .storedSequenceNumbers = storedSequenceNumbers,
+      .firstRowId = 100,
+      .dataSequenceNumber = 7,
+      .deletePositions = {},
+      .directFilter =
+          {{"_row_id", std::make_shared<common::BigintRange>(102, 555, false)}},
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({20, 30}),
+              makeFlatVector<int64_t>({555, 102}),
+              makeFlatVector<int64_t>({3, 7}),
+          })},
+  });
+
+  // 2. Filter on '_last_updated_sequence_number' selecting the rows that
+  // inherit the file's data sequence number.
+  assertRowLineage({
+      .values = {10, 20, 30},
+      .storedRowIds = storedRowIds,
+      .storedSequenceNumbers = storedSequenceNumbers,
+      .firstRowId = 100,
+      .dataSequenceNumber = 7,
+      .deletePositions = {},
+      .directFilter =
+          {{"_last_updated_sequence_number",
+            std::make_shared<common::BigintRange>(7, 7, false)}},
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({10, 30}),
+              makeFlatVector<int64_t>({100, 102}),
+              makeFlatVector<int64_t>({7, 7}),
+          })},
+  });
+
+  // 3. Filter on '_last_updated_sequence_number' selecting the row that
+  // stores its own sequence number.
+  assertRowLineage({
+      .values = {10, 20, 30},
+      .storedRowIds = storedRowIds,
+      .storedSequenceNumbers = storedSequenceNumbers,
+      .firstRowId = 100,
+      .dataSequenceNumber = 7,
+      .deletePositions = {},
+      .directFilter =
+          {{"_last_updated_sequence_number",
+            std::make_shared<common::BigintRange>(3, 3, false)}},
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({20}),
+              makeFlatVector<int64_t>({555}),
+              makeFlatVector<int64_t>({3}),
+          })},
+  });
+}
+
+// Without first_row_id the lineage columns are null for every row and nothing
+// synthesizes a value later, so the row reader has to keep filtering them.
+TEST_F(IcebergReadTest, rowLineageFilterWithoutFirstRowId) {
+  assertRowLineage({
+      .values = {10, 20, 30},
+      .dataSequenceNumber = 7,
+      .deletePositions = {},
+      .directFilter = {{"_row_id", std::make_shared<common::IsNotNull>()}},
+      .expectedVectors = {},
+  });
+}
+
+// Splits of one data source share a scan spec, and only some of them
+// synthesize the lineage columns. Here the first split does and the second
+// does not, so the filter has to move back to the row reader for the second.
+TEST_F(IcebergReadTest, rowLineageFilterAcrossSplitsWithoutFirstRowId) {
+  static const std::vector<std::string> kOutputNames = {
+      "c0", "_row_id", "_last_updated_sequence_number"};
+
+  auto fileA = TempFilePath::create();
+  writeToFile(
+      fileA->getPath(),
+      {makeRowVector({makeFlatVector<int64_t>({10, 20, 30})})});
+  std::unordered_map<std::string, std::string> infoColumnsA{
+      {IcebergMetadataColumn::kFirstRowIdInfoColumn, "100"},
+      {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
+
+  // No first_row_id, so every _row_id in this split is null.
+  auto fileB = TempFilePath::create();
+  writeToFile(
+      fileB->getPath(),
+      {makeRowVector({makeFlatVector<int64_t>({40, 50, 60})})});
+  std::unordered_map<std::string, std::string> infoColumnsB{
+      {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "9"}};
+
+  const auto outputType =
+      ROW({"c0", "_row_id", "_last_updated_sequence_number"},
+          {BIGINT(), BIGINT(), BIGINT()});
+  common::SubfieldFilters directFilters;
+  directFilters.emplace(
+      common::Subfield("_row_id"), std::make_shared<common::IsNotNull>());
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(outputType)
+                  .dataColumns(ROW({"c0"}, {BIGINT()}))
+                  .subfieldFiltersMap(directFilters)
+                  .endTableScan()
+                  .planNode();
+
+  for (const auto* maxSplitPreload : {"0", "2"}) {
+    SCOPED_TRACE(fmt::format("maxSplitPreload: {}", maxSplitPreload));
+    exec::test::AssertQueryBuilder(plan)
+        .maxDrivers(1)
+        .config(core::QueryConfig::kMaxSplitPreloadPerDriver, maxSplitPreload)
+        .splits(
+            {makeIcebergSplitWithInfoColumns(fileA->getPath(), infoColumnsA),
+             makeIcebergSplitWithInfoColumns(fileB->getPath(), infoColumnsB)})
+        .assertResults({makeRowVector(
+            kOutputNames,
+            {
+                makeFlatVector<int64_t>({10, 20, 30}),
+                makeFlatVector<int64_t>({100, 101, 102}),
+                makeFlatVector<int64_t>({7, 7, 7}),
+            })});
+  }
+}
+
+// Positional deletes make the output-to-file-position mapping
+// non-contiguous, so '_row_id' is synthesized from the injected row-number
+// column. The filter must line up with the rows that survived the deletes.
+TEST_F(IcebergReadTest, rowLineageFilterWithPositionalDeletes) {
+  static const std::vector<std::string> kOutputNames = {
+      "c0", "_row_id", "_last_updated_sequence_number"};
+
+  // Deleting position 1 leaves _row_id {100, 102, 103}; the range then drops
+  // 103.
+  assertRowLineage({
+      .values = {10, 20, 30, 40},
+      .firstRowId = 100,
+      .dataSequenceNumber = 7,
+      .deletePositions = {1},
+      .directFilter =
+          {{"_row_id", std::make_shared<common::BigintRange>(100, 102, false)}},
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({10, 30}),
+              makeFlatVector<int64_t>({100, 102}),
+              makeFlatVector<int64_t>({7, 7}),
+          })},
+  });
+}
+
+TEST_F(IcebergReadTest, rowLineageFilterMatchesNoRows) {
+  assertRowLineage({
+      .values = {10, 20, 30},
+      .firstRowId = 100,
+      .dataSequenceNumber = 7,
+      .deletePositions = {},
+      .directFilter =
+          {{"_row_id",
+            std::make_shared<common::BigintRange>(1000, 2000, false)}},
+      .expectedVectors = {},
+  });
+}
+
+// The deferred filter and the equality deletes both compact the batch, in that
+// order. The filter runs first on all four rows, then the equality delete
+// removes one of the rows it kept.
+TEST_F(IcebergReadTest, rowLineageFilterWithEqualityDeletes) {
+  static const std::vector<std::string> kOutputNames = {
+      "c0", "_row_id", "_last_updated_sequence_number"};
+
+  // _row_id {100, 101, 102, 103}; the range drops 100 and the equality delete
+  // on c0 = 20 drops 101.
+  assertRowLineage({
+      .values = {10, 20, 30, 40},
+      .firstRowId = 100,
+      .dataSequenceNumber = 7,
+      .deletePositions = {},
+      .directFilter =
+          {{"_row_id", std::make_shared<common::BigintRange>(101, 103, false)}},
+      .equalityDeleteValues = {20},
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({30, 40}),
+              makeFlatVector<int64_t>({102, 103}),
+              makeFlatVector<int64_t>({7, 7}),
+          })},
+  });
+
+  // A filter that keeps nothing leaves the equality deletes to run on an empty
+  // batch.
+  assertRowLineage({
+      .values = {10, 20, 30, 40},
+      .firstRowId = 100,
+      .dataSequenceNumber = 7,
+      .deletePositions = {},
+      .directFilter =
+          {{"_row_id",
+            std::make_shared<common::BigintRange>(1000, 2000, false)}},
+      .equalityDeleteValues = {20},
+      .expectedVectors = {},
+  });
+}
+
+// A batch left with no surviving rows must not be reported as the end of the
+// split: the filter keeps only rows from the last of three output batches, so
+// stopping at the first empty batch would lose them.
+TEST_F(IcebergReadTest, rowLineageFilterKeepsScanningAfterEmptyBatch) {
+  constexpr vector_size_t kNumRows = 300;
+  constexpr vector_size_t kBatchSize = 100;
+  constexpr int64_t kFirstRowId = 1'000;
+
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(),
+      {makeRowVector({makeFlatVector<int64_t>(
+          kNumRows, [](vector_size_t row) { return row; })})});
+  std::unordered_map<std::string, std::string> infoColumns{
+      {IcebergMetadataColumn::kFirstRowIdInfoColumn,
+       std::to_string(kFirstRowId)},
+      {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
+
+  const auto outputType =
+      ROW({"c0", "_row_id", "_last_updated_sequence_number"},
+          {BIGINT(), BIGINT(), BIGINT()});
+  common::SubfieldFilters directFilters;
+  directFilters.emplace(
+      common::Subfield("_row_id"),
+      std::make_shared<common::BigintRange>(
+          kFirstRowId + 2 * kBatchSize, kFirstRowId + kNumRows - 1, false));
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(outputType)
+                  .dataColumns(ROW({"c0"}, {BIGINT()}))
+                  .subfieldFiltersMap(directFilters)
+                  .endTableScan()
+                  .planNode();
+
+  exec::test::AssertQueryBuilder(plan)
+      .maxDrivers(1)
+      .config(
+          core::QueryConfig::kPreferredOutputBatchRows,
+          std::to_string(kBatchSize))
+      .config(
+          core::QueryConfig::kMaxOutputBatchRows, std::to_string(kBatchSize))
+      .splits({makeIcebergSplitWithInfoColumns(
+          dataFilePath->getPath(), infoColumns)})
+      .assertResults({makeRowVector(
+          {"c0", "_row_id", "_last_updated_sequence_number"},
+          {
+              makeFlatVector<int64_t>(
+                  kBatchSize,
+                  [](vector_size_t row) { return 2 * kBatchSize + row; }),
+              makeFlatVector<int64_t>(
+                  kBatchSize,
+                  [](vector_size_t row) {
+                    return kFirstRowId + 2 * kBatchSize + row;
+                  }),
+              makeFlatVector<int64_t>(
+                  kBatchSize, [](vector_size_t /*row*/) { return 7; }),
+          })});
+}
+
+// A filter on '_row_id' must be enforced on every split, not just the first.
+// The range drops one row from each of two splits, so losing the filter on
+// either split changes the result. Runs with split preloading both disabled
+// (the DataSource reuses one ScanSpec across its splits) and enabled (each
+// split is prepared on its own DataSource, whose ScanSpec is then merged into
+// the operator's by ScanSpec::moveAdaptationFrom()).
+TEST_F(IcebergReadTest, rowLineageFilterAcrossMultipleSplits) {
+  static const std::vector<std::string> kOutputNames = {
+      "c0", "_row_id", "_last_updated_sequence_number"};
+
+  // First_row_id 100 -> _row_id {100, 101, 102}.
+  auto fileA = TempFilePath::create();
+  writeToFile(
+      fileA->getPath(),
+      {makeRowVector({makeFlatVector<int64_t>({10, 20, 30})})});
+  std::unordered_map<std::string, std::string> infoColumnsA{
+      {IcebergMetadataColumn::kFirstRowIdInfoColumn, "100"},
+      {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "7"}};
+
+  // First_row_id 200 -> _row_id {200, 201, 202}.
+  auto fileB = TempFilePath::create();
+  writeToFile(
+      fileB->getPath(),
+      {makeRowVector({makeFlatVector<int64_t>({40, 50, 60})})});
+  std::unordered_map<std::string, std::string> infoColumnsB{
+      {IcebergMetadataColumn::kFirstRowIdInfoColumn, "200"},
+      {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "9"}};
+
+  // [102, 200] keeps exactly one row from each split (_row_id 102 from A,
+  // _row_id 200 from B) and drops the rest (100, 101 from A; 201, 202 from
+  // B). If the filter is lost on split B, rows 201 and 202 leak into the
+  // result.
+  const auto outputType =
+      ROW({"c0", "_row_id", "_last_updated_sequence_number"},
+          {BIGINT(), BIGINT(), BIGINT()});
+  const auto tableDataColumns = ROW({"c0"}, {BIGINT()});
+  common::SubfieldFilters directFilters;
+  directFilters.emplace(
+      common::Subfield("_row_id"),
+      std::make_shared<common::BigintRange>(102, 200, false));
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(outputType)
+                  .dataColumns(tableDataColumns)
+                  .subfieldFiltersMap(directFilters)
+                  .endTableScan()
+                  .planNode();
+
+  for (const auto* maxSplitPreload : {"0", "2"}) {
+    SCOPED_TRACE(fmt::format("maxSplitPreload: {}", maxSplitPreload));
+    exec::test::AssertQueryBuilder(plan)
+        .maxDrivers(1)
+        .config(core::QueryConfig::kMaxSplitPreloadPerDriver, maxSplitPreload)
+        .splits(
+            {makeIcebergSplitWithInfoColumns(fileA->getPath(), infoColumnsA),
+             makeIcebergSplitWithInfoColumns(fileB->getPath(), infoColumnsB)})
+        .assertResults({makeRowVector(
+            kOutputNames,
+            {
+                makeFlatVector<int64_t>({30, 40}),
+                makeFlatVector<int64_t>({102, 200}),
+                makeFlatVector<int64_t>({7, 9}),
+            })});
+  }
+}
+
 // Tests Iceberg MERGE INTO row-id synthesis: the projection of the synthetic
 // $target_table_row_id ROW column produced at read time from the split's
 // infoColumns ($path, $spec_id, partition_data) plus the file row positions.
@@ -1372,21 +1846,37 @@ TEST_F(IcebergReadTest, targetTableRowIdSynthesis) {
               }),
       });
 
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(outputType)
-                  .dataColumns(ROW({"c0"}, {BIGINT()}))
-                  .endTableScan()
-                  .planNode();
-  exec::test::AssertQueryBuilder(plan)
-      .splits({makeIcebergSplitWithInfoColumns(
-          dataFilePath->getPath(),
-          {
-              {IcebergMetadataColumn::kSpecIdInfoColumn, "7"},
-              {IcebergMetadataColumn::kPartitionDataInfoColumn,
-               kPartitionDataJson},
-          })})
-      .assertResults({expected});
+  // Run once without a filter and once with a filter pushed onto the column.
+  // adaptColumns() installs a null placeholder constant for it, so a filter
+  // the reader evaluates would prune the whole split; it has to wait until
+  // next() has synthesized the values, which pass IS NOT NULL.
+  for (const auto& filter : std::vector<common::FilterPtr>{
+           nullptr, std::make_shared<common::IsNotNull>()}) {
+    SCOPED_TRACE(filter == nullptr ? "no filter" : "IS NOT NULL");
+    exec::test::PlanBuilder planBuilder;
+    auto& tableScanBuilder =
+        planBuilder.startTableScan(test::kIcebergConnectorId)
+            .outputType(outputType)
+            .dataColumns(ROW({"c0"}, {BIGINT()}));
+    if (filter != nullptr) {
+      common::SubfieldFilters filters;
+      filters.emplace(
+          common::Subfield(
+              std::string(IcebergMetadataColumn::kTargetTableRowIdColumnName)),
+          filter);
+      tableScanBuilder.subfieldFiltersMap(filters);
+    }
+    auto plan = tableScanBuilder.endTableScan().planNode();
+    exec::test::AssertQueryBuilder(plan)
+        .splits({makeIcebergSplitWithInfoColumns(
+            dataFilePath->getPath(),
+            {
+                {IcebergMetadataColumn::kSpecIdInfoColumn, "7"},
+                {IcebergMetadataColumn::kPartitionDataInfoColumn,
+                 kPartitionDataJson},
+            })})
+        .assertResults({expected});
+  }
 }
 
 TEST_F(IcebergReadTest, flatMapAsStruct) {

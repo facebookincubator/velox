@@ -76,6 +76,55 @@ void fillNullsWithInt64(
   }
 }
 
+// Replaces 'output' with a copy holding only the rows whose bit is unset in
+// 'deleteBitmap'. When every row is removed, the replacement is an empty
+// vector rather than 0 rows: 0 is the row reader's end-of-split sentinel, so
+// 'rowsScanned' is left unchanged in that case to signal "keep scanning"
+// instead.
+void compactByDeleteBitmap(
+    facebook::velox::VectorPtr& output,
+    const uint64_t* deleteBitmap,
+    facebook::velox::vector_size_t numRows,
+    uint64_t& rowsScanned,
+    facebook::velox::memory::MemoryPool* pool) {
+  using namespace facebook::velox;
+  // The common case is that nothing was deleted. Settle it with a vectorized
+  // pass instead of the bit-at-a-time loop below.
+  const auto numDeleted = bits::countBits(deleteBitmap, 0, numRows);
+  if (numDeleted == 0) {
+    return;
+  }
+
+  const vector_size_t numSurviving = numRows - numDeleted;
+  if (numSurviving == 0) {
+    output = BaseVector::create(output->type(), 0, pool);
+    return;
+  }
+
+  // Copy each run of surviving rows as a single range: a range predicate on a
+  // monotonic column like _row_id typically leaves one long run.
+  std::vector<BaseVector::CopyRange> ranges;
+  vector_size_t numCopied{0};
+  for (vector_size_t row = 0; row < numRows;) {
+    if (bits::isBitSet(deleteBitmap, row)) {
+      ++row;
+      continue;
+    }
+    const vector_size_t runBegin = row;
+    while (row < numRows && !bits::isBitSet(deleteBitmap, row)) {
+      ++row;
+    }
+    ranges.push_back({runBegin, numCopied, row - runBegin});
+    numCopied += row - runBegin;
+  }
+
+  auto newOutput = BaseVector::create(output->type(), numSurviving, pool);
+  newOutput->copyRanges(output.get(), ranges);
+  newOutput->resize(numSurviving);
+  output = newOutput;
+  rowsScanned = numSurviving;
+}
+
 } // namespace
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -400,6 +449,11 @@ void IcebergSplitReader::prepareSplit(
     }
   }
 
+  // Must run after the output indexes of the synthesized columns are resolved
+  // above, and before checkIfSplitIsEmpty() and the row reader configuration
+  // below observe the filters on those columns.
+  deferFiltersOnSynthesizedColumns();
+
   if (checkIfSplitIsEmpty(runtimeStats)) {
     VELOX_CHECK(emptySplit_);
     return;
@@ -550,6 +604,76 @@ void IcebergSplitReader::prepareSplit(
           static_cast<int>(deleteFile.content));
     }
   }
+}
+
+void IcebergSplitReader::deferFiltersOnSynthesizedColumns() {
+  deferredFilters_.clear();
+  const std::pair<const char*, std::optional<column_index_t>>
+      synthesizedColumns[] = {
+          {IcebergMetadataColumn::kRowIdColumnName, rowIdOutputIndex_},
+          {IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName,
+           lastUpdatedSeqNumOutputIndex_},
+          {IcebergMetadataColumn::kTargetTableRowIdColumnName,
+           targetTableRowIdOutputIndex_},
+      };
+
+  bool foundSynthesizedColumn{false};
+  for (const auto& [columnName, outputIndex] : synthesizedColumns) {
+    auto* childSpec = scanSpec_->childByName(columnName);
+    if (childSpec == nullptr) {
+      continue;
+    }
+    // A previous split may have deferred this column even though this one does
+    // not synthesize it, in which case the reader must filter it again.
+    childSpec->enableFilterInSubTree(!outputIndex.has_value());
+    foundSynthesizedColumn = true;
+    if (outputIndex.has_value()) {
+      deferredFilters_.push_back({childSpec, *outputIndex});
+    }
+  }
+  if (foundSynthesizedColumn) {
+    // hasFilter() is memoized and reads through the state just changed.
+    scanSpec_->resetCachedValues(false);
+  }
+}
+
+void IcebergSplitReader::applyDeferredFilters(
+    VectorPtr& output,
+    uint64_t& rowsScanned,
+    memory::MemoryPool* pool) {
+  auto* rowOutput = output->as<RowVector>();
+  VELOX_CHECK_NOT_NULL(
+      rowOutput, "Output must be a RowVector for deferred filters");
+  const auto numRows = rowOutput->size();
+  if (numRows == 0) {
+    return;
+  }
+
+  // A dynamic filter can arrive mid-split, so whether there is anything to
+  // apply is decided per batch. hasFilterApplicableToConstant() is the only
+  // accessor that reports filters hidden by enableFilterInSubTree().
+  const bool anyFilter = std::any_of(
+      deferredFilters_.begin(),
+      deferredFilters_.end(),
+      [](const DeferredFilter& deferred) {
+        return deferred.scanSpec->hasFilterApplicableToConstant();
+      });
+  if (!anyFilter) {
+    return;
+  }
+
+  // applyFilter() narrows a set of passing rows, so start with all rows in.
+  const auto numWords = bits::nwords(numRows);
+  dwio::common::ensureCapacity<uint64_t>(passingRows_, numWords, pool);
+  auto* rawPassingRows = passingRows_->asMutable<uint64_t>();
+  std::memset(rawPassingRows, 0xff, numWords * sizeof(uint64_t));
+  for (const auto& deferred : deferredFilters_) {
+    deferred.scanSpec->applyFilter(
+        *rowOutput->childAt(deferred.outputIndex), numRows, rawPassingRows);
+  }
+
+  bits::negate(rawPassingRows, numRows);
+  compactByDeleteBitmap(output, rawPassingRows, numRows, rowsScanned, pool);
 }
 
 void IcebergSplitReader::configureEqualityDeleteColumns() {
@@ -852,6 +976,12 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
     }
   }
 
+  // Evaluate the filters the row reader could not, now that the synthesized
+  // columns hold their final values.
+  if (rowsScanned > 0 && !deferredFilters_.empty()) {
+    applyDeferredFilters(output, rowsScanned, pool);
+  }
+
   // Apply equality deletes after reading base data. Unlike positional deletes
   // (which set bits before reading), equality deletes require the data values
   // to be available for comparison.
@@ -872,43 +1002,8 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
       reader->applyDeletes(outputRowVector, eqDeleteBitmap);
     }
 
-    // Count surviving rows and compact the output if any rows were deleted.
-    auto* eqBitmap = eqDeleteBitmap->as<uint8_t>();
-    vector_size_t numDeleted = 0;
-    for (vector_size_t i = 0; i < numRows; ++i) {
-      if (bits::isBitSet(eqBitmap, i)) {
-        ++numDeleted;
-      }
-    }
-
-    if (numDeleted > 0) {
-      vector_size_t numSurviving = numRows - numDeleted;
-      if (numSurviving == 0) {
-        // All rows in this batch were deleted by equality deletes. Do not
-        // return 0 here — that would be interpreted as end-of-split and
-        // prematurely stop scanning remaining rows in the data file.
-        // Instead, set output to an empty vector and return the original
-        // scanned count so the caller continues reading.
-        output = BaseVector::create(outputRowVector->type(), 0, pool);
-      } else {
-        // Build a list of surviving row ranges and use it to compact.
-        std::vector<BaseVector::CopyRange> ranges;
-        ranges.reserve(numSurviving);
-        vector_size_t targetIdx = 0;
-        for (vector_size_t i = 0; i < numRows; ++i) {
-          if (!bits::isBitSet(eqBitmap, i)) {
-            ranges.push_back({i, targetIdx++, 1});
-          }
-        }
-
-        auto newOutput =
-            BaseVector::create(outputRowVector->type(), numSurviving, pool);
-        newOutput->copyRanges(outputRowVector.get(), ranges);
-        newOutput->resize(numSurviving);
-        output = newOutput;
-        rowsScanned = numSurviving;
-      }
-    }
+    compactByDeleteBitmap(
+        output, eqDeleteBitmap->as<uint64_t>(), numRows, rowsScanned, pool);
 
     return rowsScanned;
   }
