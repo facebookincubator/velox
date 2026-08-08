@@ -309,7 +309,8 @@ void fixedWidthScan(
           if (isDense(&rows[rowIndex], numRowsInBuffer)) {
             std::memcpy(
                 rawValues + numValues,
-                buffer + rows[rowIndex] - rowOffset,
+                reinterpret_cast<const char*>(buffer) +
+                    (rows[rowIndex] - rowOffset) * sizeof(T),
                 sizeof(T) * numRowsInBuffer);
             numValues += numRowsInBuffer;
             return;
@@ -322,23 +323,21 @@ void fixedWidthScan(
             [&](int32_t rowIndex) {
               auto firstRow = rows[rowIndex];
               if (!hasFilter) {
+                auto* firstValue = reinterpret_cast<const char*>(buffer) +
+                    (firstRow - rowOffset) * sizeof(T);
                 if (hasHook) {
-                  hook.addValues(
-                      scatterRows + rowIndex,
-                      buffer + firstRow - rowOffset,
-                      kStep);
+                  T values[kStep];
+                  std::memcpy(values, firstValue, sizeof(T) * kStep);
+                  hook.addValues(scatterRows + rowIndex, values, kStep);
                 } else {
                   if (scatter) {
+                    T values[kStep];
+                    std::memcpy(values, firstValue, sizeof(T) * kStep);
                     scatterDense(
-                        buffer + firstRow - rowOffset,
-                        scatterRows + rowIndex,
-                        kStep,
-                        rawValues);
+                        values, scatterRows + rowIndex, kStep, rawValues);
                   } else {
                     FOLLY_BUILTIN_MEMCPY(
-                        rawValues + numValues,
-                        buffer + firstRow - rowOffset,
-                        sizeof(T) * kStep);
+                        rawValues + numValues, firstValue, sizeof(T) * kStep);
                   }
                 }
                 numValues += kStep;

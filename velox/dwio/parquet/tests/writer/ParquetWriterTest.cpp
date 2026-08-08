@@ -479,9 +479,8 @@ TEST_F(ParquetWriterTest, compression) {
   auto rowReader = createRowReaderFromReader(*reader, schema);
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
 }
-// TODO: Re-enable after fixing unaligned reads reported by UBSan.
-// https://github.com/facebookincubator/velox/issues/18329
-TEST_F(ParquetWriterTest, DISABLED_compressionRoundTripAcrossPages) {
+
+TEST_F(ParquetWriterTest, compressionRoundTripAcrossPages) {
   // Writes multi-page data with every writable codec and verifies the values
   // round-trip. Small data pages force many compressed pages per column, so the
   // reader's per-codec decompression paths (the Snappy/ZSTD/GZIP direct paths

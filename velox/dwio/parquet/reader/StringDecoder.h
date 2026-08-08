@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <string_view>
 
 #include "velox/common/base/Nulls.h"
@@ -100,7 +101,9 @@ class StringDecoder {
 
  private:
   int32_t lengthAt(const char* buffer) {
-    return *reinterpret_cast<const int32_t*>(buffer);
+    int32_t length;
+    std::memcpy(&length, buffer, sizeof(length));
+    return length;
   }
 
   std::string_view readString() {

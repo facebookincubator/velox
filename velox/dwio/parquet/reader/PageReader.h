@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <cstring>
+#include <type_traits>
+
 #include "velox/common/compression/Compression.h"
 #include "velox/dwio/common/BitConcatenation.h"
 #include "velox/dwio/common/DirectDecoder.h"
@@ -252,7 +255,9 @@ class PageReader {
 
   template <typename T>
   T readField(const char* FOLLY_NONNULL& ptr) {
-    T data = *reinterpret_cast<const T*>(ptr);
+    static_assert(std::is_trivially_copyable_v<T>);
+    T data;
+    std::memcpy(&data, ptr, sizeof(T));
     ptr += sizeof(T);
     return data;
   }
