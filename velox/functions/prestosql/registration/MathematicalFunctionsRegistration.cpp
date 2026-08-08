@@ -126,7 +126,6 @@ void registerMathFunctions(const std::string& prefix) {
       Array<double>>({prefix + "cosine_similarity"});
   registerFunction<DotProductArray, double, Array<double>, Array<double>>(
       {prefix + "dot_product"});
-#ifdef VELOX_ENABLE_FAISS
   registerFunction<
       CosineSimilarityFunctionFloatArray,
       float,
@@ -144,7 +143,6 @@ void registerMathFunctions(const std::string& prefix) {
       Array<double>>({prefix + "l2_squared"});
   registerFunction<DotProductFloatArray, float, Array<float>, Array<float>>(
       {prefix + "dot_product"});
-#endif
 }
 
 } // namespace
