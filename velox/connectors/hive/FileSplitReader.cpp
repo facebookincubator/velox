@@ -191,7 +191,7 @@ void FileSplitReader::configureBaseReaderOptions() {
 
 void FileSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStatistics& runtimeStats,
+    dwio::common::RuntimeStats& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   createReader(fileReadOps);
   if (emptySplit_) {
@@ -240,7 +240,7 @@ int64_t FileSplitReader::estimatedRowSize() const {
 }
 
 void FileSplitReader::updateRuntimeStats(
-    dwio::common::RuntimeStatistics& stats) const {
+    dwio::common::RuntimeStats& stats) const {
   if (baseRowReader_) {
     baseRowReader_->updateRuntimeStats(stats);
   }
@@ -340,7 +340,7 @@ RowTypePtr FileSplitReader::getAdaptedRowType() const {
 }
 
 bool FileSplitReader::filterOnStats(
-    dwio::common::RuntimeStatistics& runtimeStats) const {
+    dwio::common::RuntimeStats& runtimeStats) const {
   if (testFilters(
           scanSpec_.get(),
           baseReader_.get(),
@@ -358,7 +358,7 @@ bool FileSplitReader::filterOnStats(
 }
 
 bool FileSplitReader::checkIfSplitIsEmpty(
-    dwio::common::RuntimeStatistics& runtimeStats) {
+    dwio::common::RuntimeStats& runtimeStats) {
   // emptySplit_ may already be set if the data file is not found. In this case
   // we don't need to test further.
   if (emptySplit_) {
