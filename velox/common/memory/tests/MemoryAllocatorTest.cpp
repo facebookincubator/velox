@@ -16,6 +16,9 @@
 #include "velox/common/memory/MemoryAllocator.h"
 #include <thread>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/caching/FileIds.h"
+#include "velox/common/caching/SsdCache.h"
 #include "velox/common/memory/AllocationPool.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/MmapAllocator.h"
@@ -50,6 +53,181 @@ struct ProcessSize {
 static constexpr uint64_t kCapacityBytes = 1ULL << 30;
 static constexpr MachinePageCount kCapacityPages =
     (kCapacityBytes / AllocationTraits::kPageSize);
+
+// Exercises the extension points used by allocators with a runtime admission
+// capacity while keeping MmapAllocator's configured capacity unchanged.
+class TestingAdmissionCapacityMmapAllocator : public MmapAllocator {
+ public:
+  TestingAdmissionCapacityMmapAllocator(
+      const Options& options,
+      MachinePageCount admissionCapacity)
+      : MmapAllocator(options), admissionCapacity_(admissionCapacity) {}
+
+  void setAdmissionCapacity(MachinePageCount admissionCapacity) {
+    admissionCapacity_.store(admissionCapacity);
+  }
+
+ private:
+  bool allocateNonContiguousWithoutRetry(
+      const SizeMix& sizeMix,
+      Allocation& out) override {
+    return allocateNonContiguousWithCapacity(
+        sizeMix, out, admissionCapacity_.load());
+  }
+
+  bool allocateContiguousWithoutRetry(
+      MachinePageCount numPages,
+      Allocation* collateral,
+      ContiguousAllocation& allocation,
+      MachinePageCount maxPages) override {
+    return allocateContiguousWithCapacity(
+        numPages, collateral, allocation, maxPages, admissionCapacity_.load());
+  }
+
+  bool growContiguousWithoutRetry(
+      MachinePageCount increment,
+      ContiguousAllocation& allocation) override {
+    return growContiguousWithCapacity(
+        increment, allocation, admissionCapacity_.load());
+  }
+
+  std::atomic<MachinePageCount> admissionCapacity_;
+};
+
+TEST(DynamicMmapAllocatorTest, enforcesAdmissionCapacity) {
+  constexpr MachinePageCount kConfiguredCapacityPages = 64 * 256;
+  constexpr MachinePageCount kAdmissionCapacityPages = 8;
+  constexpr MachinePageCount kReducedCapacityPages = 4;
+  MemoryAllocator::Options options;
+  options.capacity = AllocationTraits::pageBytes(kConfiguredCapacityPages);
+  options.maxMallocBytes = 0;
+  TestingAdmissionCapacityMmapAllocator allocator(
+      options, kAdmissionCapacityPages);
+
+  EXPECT_EQ(
+      allocator.capacity(),
+      AllocationTraits::pageBytes(kConfiguredCapacityPages));
+
+  Allocation nonContiguous;
+  ASSERT_TRUE(
+      allocator.allocateNonContiguous(kAdmissionCapacityPages, nonContiguous));
+  Allocation extraNonContiguous;
+  EXPECT_FALSE(allocator.allocateNonContiguous(1, extraNonContiguous));
+  allocator.freeNonContiguous(nonContiguous);
+
+  ASSERT_TRUE(allocator.allocateNonContiguous(4, nonContiguous));
+  allocator.freeNonContiguous(nonContiguous);
+  ASSERT_TRUE(allocator.allocateNonContiguous(1, nonContiguous));
+  allocator.freeNonContiguous(nonContiguous);
+  ASSERT_GT(allocator.numMapped(), kReducedCapacityPages);
+
+  allocator.setAdmissionCapacity(kReducedCapacityPages);
+  ASSERT_TRUE(
+      allocator.allocateNonContiguous(kReducedCapacityPages, nonContiguous));
+  EXPECT_LE(allocator.numMapped(), kReducedCapacityPages);
+  allocator.freeNonContiguous(nonContiguous);
+
+  allocator.setAdmissionCapacity(kAdmissionCapacityPages);
+  ContiguousAllocation contiguous;
+  ASSERT_TRUE(allocator.allocateContiguous(
+      kAdmissionCapacityPages, nullptr, contiguous));
+  ContiguousAllocation extraContiguous;
+  EXPECT_FALSE(allocator.allocateContiguous(1, nullptr, extraContiguous));
+  allocator.freeContiguous(contiguous);
+
+  constexpr MachinePageCount kGrownCapacityPages = 12;
+  allocator.setAdmissionCapacity(kGrownCapacityPages);
+  ASSERT_TRUE(allocator.allocateContiguous(
+      kAdmissionCapacityPages,
+      nullptr,
+      contiguous,
+      nullptr,
+      kGrownCapacityPages + 1));
+  EXPECT_TRUE(allocator.growContiguous(
+      kGrownCapacityPages - kAdmissionCapacityPages, contiguous));
+  EXPECT_FALSE(allocator.growContiguous(1, contiguous));
+  allocator.freeContiguous(contiguous);
+}
+
+TEST(DynamicMmapAllocatorTest, allowsNoGrowthAboveReducedCapacity) {
+  constexpr MachinePageCount kConfiguredCapacityPages = 64 * 256;
+  constexpr MachinePageCount kInitialCapacityPages = 8;
+  constexpr MachinePageCount kReducedCapacityPages = 4;
+  MemoryAllocator::Options options;
+  options.capacity = AllocationTraits::pageBytes(kConfiguredCapacityPages);
+  options.maxMallocBytes = 0;
+  TestingAdmissionCapacityMmapAllocator allocator(
+      options, kInitialCapacityPages);
+
+  Allocation nonContiguous;
+  ASSERT_TRUE(
+      allocator.allocateNonContiguous(kInitialCapacityPages, nonContiguous));
+  allocator.setAdmissionCapacity(kReducedCapacityPages);
+  EXPECT_TRUE(
+      allocator.allocateNonContiguous(kInitialCapacityPages, nonContiguous));
+  allocator.freeNonContiguous(nonContiguous);
+
+  allocator.setAdmissionCapacity(kInitialCapacityPages);
+  ASSERT_TRUE(
+      allocator.allocateNonContiguous(kInitialCapacityPages, nonContiguous));
+  allocator.setAdmissionCapacity(kReducedCapacityPages);
+  ContiguousAllocation contiguous;
+  EXPECT_TRUE(allocator.allocateContiguous(
+      kInitialCapacityPages, &nonContiguous, contiguous));
+  EXPECT_TRUE(nonContiguous.empty());
+  allocator.freeContiguous(contiguous);
+}
+
+TEST(DynamicMmapAllocatorTest, rejectsCapacityAboveConfiguredCapacity) {
+  constexpr MachinePageCount kConfiguredCapacityPages = 64 * 256;
+  MemoryAllocator::Options options;
+  options.capacity = AllocationTraits::pageBytes(kConfiguredCapacityPages);
+  options.maxMallocBytes = 0;
+  TestingAdmissionCapacityMmapAllocator allocator(
+      options, kConfiguredCapacityPages + 1);
+
+  Allocation allocation;
+  EXPECT_THROW(
+      allocator.allocateNonContiguous(1, allocation), VeloxRuntimeError);
+  if (!allocation.empty()) {
+    allocator.freeNonContiguous(allocation);
+  }
+}
+
+TEST(DynamicMmapAllocatorTest, cacheEvictsAtAdmissionCapacity) {
+  constexpr MachinePageCount kConfiguredCapacityPages = 64 * 256;
+  constexpr MachinePageCount kInitialCapacityPages = 8;
+  constexpr MachinePageCount kReducedCapacityPages = 4;
+  constexpr uint64_t kEntryBytes =
+      kReducedCapacityPages * AllocationTraits::kPageSize;
+  MemoryAllocator::Options options;
+  options.capacity = AllocationTraits::pageBytes(kConfiguredCapacityPages);
+  options.maxMallocBytes = 0;
+  auto allocator = std::make_shared<TestingAdmissionCapacityMmapAllocator>(
+      options, kInitialCapacityPages);
+  auto dataCache = cache::AsyncDataCache::create(allocator.get());
+
+  {
+    StringIdLease file{
+        fileIds(), std::string_view{"dynamic_capacity_cache_test"}};
+    for (uint64_t i = 0; i < 2; ++i) {
+      auto pin = dataCache->findOrCreate(
+          cache::RawFileCacheKey{file.id(), i * kEntryBytes}, kEntryBytes);
+      ASSERT_FALSE(pin.empty());
+      pin.checkedEntry()->setExclusiveToShared();
+    }
+    ASSERT_EQ(dataCache->cachedPages(), kInitialCapacityPages);
+
+    allocator->setAdmissionCapacity(kReducedCapacityPages);
+    auto pin = dataCache->findOrCreate(
+        cache::RawFileCacheKey{file.id(), 2 * kEntryBytes}, kEntryBytes);
+    EXPECT_FALSE(pin.empty());
+    EXPECT_LE(dataCache->cachedPages(), kReducedCapacityPages);
+  }
+
+  dataCache->shutdown();
+  dataCache.reset();
+}
 
 class MemoryAllocatorTest : public testing::TestWithParam<int> {
  protected:
