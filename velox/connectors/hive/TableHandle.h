@@ -188,7 +188,10 @@ class HiveTableHandle : public FileTableHandle {
       const std::unordered_map<std::string, std::string>& tableParameters = {},
       std::vector<HiveColumnHandlePtr> filterColumnHandles = {},
       double sampleRate = 1.0,
-      std::string dbName = "");
+      std::string dbName = "",
+      bool isChangelogQuery = false,
+      const std::unordered_map<std::string, velox::connector::ColumnHandlePtr>&
+          dataColumnHandles = {});
 
   /// Legacy constructor without indexColumns parameter for backward
   /// compatibility.
@@ -259,6 +262,15 @@ class HiveTableHandle : public FileTableHandle {
     return dbName_;
   }
 
+  bool isChangelogQuery() const {
+    return isChangelogQuery_;
+  }
+
+  const std::unordered_map<std::string, velox::connector::ColumnHandlePtr>&
+  getDataColumnHandles() const {
+    return dataColumnHandles_;
+  }
+
   std::string toString() const override;
 
   folly::dynamic serialize() const override;
@@ -279,6 +291,13 @@ class HiveTableHandle : public FileTableHandle {
   const std::unordered_map<std::string, std::string> tableParameters_;
   const std::vector<HiveColumnHandlePtr> filterColumnHandles_;
   const std::string dbName_;
+  /// Set to true when querying a changelog metadata table.
+  const bool isChangelogQuery_{false};
+  /// Non-empty only when isChangelogQuery_ is true. Maps base data-table column
+  /// names to their column handles so the changelog source can pass them to the
+  /// base IcebergDataSource for column resolution.
+  const std::unordered_map<std::string, velox::connector::ColumnHandlePtr>
+      dataColumnHandles_;
 };
 
 using HiveTableHandlePtr = std::shared_ptr<const HiveTableHandle>;
