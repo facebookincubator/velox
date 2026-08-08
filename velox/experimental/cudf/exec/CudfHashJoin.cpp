@@ -195,6 +195,12 @@ class ProbeMatchTracker {
 
 void CudfHashJoinProbe::doClose() {
   Operator::close();
+  // Wait for this instance's last doGetOutput() read of filterEvaluator_/
+  // scalars_/tree_ to finish before releasing them below - otherwise the
+  // resulting stream-ordered free could race a still-in-flight read.
+  if (lastGetOutputStream_.has_value()) {
+    lastGetOutputStream_->synchronize();
+  }
   filterEvaluator_.reset();
   scalars_.clear();
   tree_ = {};
@@ -2167,6 +2173,9 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
         !finished_ && isLastDriver_) {
       auto& rightTables = hashObject_.value().first;
       auto stream = cudfGlobalStreamPool().get_stream();
+      // Fresh pool stream reading hashObject_/rightMatchedFlags_ - record it
+      // so doClose()/isFinished() wait for this read before releasing them.
+      lastGetOutputStream_ = stream;
       std::vector<std::unique_ptr<cudf::table>> toConcat;
       vector_size_t unmatchedRows = 0;
       for (size_t i = 0; i < rightTables.size(); ++i) {
@@ -2246,6 +2255,11 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input_);
   VELOX_CHECK_NOT_NULL(cudfInput);
   auto stream = cudfInput->stream();
+  // Record every doGetOutput() stream (unlike lastProbeStream_ below, which
+  // is right/full-join-only) so doClose()/isFinished() can wait for this
+  // read of hashObject_/scalars_/tree_/filterEvaluator_ before releasing
+  // them.
+  lastGetOutputStream_ = stream;
   waitForBuildReady(stream);
   // Use getTableView() to avoid expensive materialization for packed_table.
   // cudfInput is staying alive until the table view is no longer needed.
@@ -2468,8 +2482,16 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
 bool CudfHashJoinProbe::isFinished() {
   auto const isFinished = finished_ || (noMoreInput_ && input_ == nullptr);
 
-  // Release hashObject_ if finished
-  if (isFinished) {
+  // Release hashObject_ if finished. hashObject_'s tables/hash_join objects
+  // are shared (via shared_ptr) with the bridge and other probe instances,
+  // so this reset() may or may not be the one that actually triggers their
+  // destruction - but whichever instance's reset() is last must not race a
+  // read still in flight on its own last-used stream, so every instance
+  // waits for its own lastGetOutputStream_ before releasing its reference.
+  if (isFinished && hashObject_.has_value()) {
+    if (lastGetOutputStream_.has_value()) {
+      lastGetOutputStream_->synchronize();
+    }
     hashObject_.reset();
     buildReadyEvent_.reset();
     buildStream_.reset();

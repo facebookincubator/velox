@@ -102,8 +102,16 @@ RowVectorPtr CudfOrderBy::doGetOutput() {
 
 void CudfOrderBy::doClose() {
   Operator::close();
-  // Release stored inputs
-  // Release cudf memory resources
+  // inputs_ is already empty by this point (std::exchange'd away in
+  // doNoMoreInput()), so clearing it here is a no-op. outputTable_ is
+  // created (by cudf::sort_by_key, async on its own stream) in
+  // doNoMoreInput() and normally handed off via doGetOutput(), but if
+  // close() runs first - e.g. task cancellation before getOutput() is ever
+  // called - this reset() is the only reference drop, so the sort's async
+  // write could still be in flight. Wait for its creation stream first.
+  if (outputTable_) {
+    outputTable_->stream().synchronize();
+  }
   inputs_.clear();
   outputTable_.reset();
 }
