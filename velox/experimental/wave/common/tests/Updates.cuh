@@ -108,7 +108,7 @@ void __device__ testSumAtomicCoalesceShmem(TestingRow* rows, HashProbe* probe) {
   auto indices = keys[0];
   auto deltas = keys[1];
   auto base = probe->numRowsPerThread * blockDim.x * blockIdx.x;
-  int32_t lane = cub::LaneId();
+  int32_t lane = static_cast<int32_t>(cuda::ptx::get_sreg_laneid());
   int32_t end = base + probe->numRows[blockIdx.x];
   extern __shared__ char smem[];
 
@@ -148,7 +148,7 @@ void __device__ testSumAtomicCoalesceShfl(TestingRow* rows, HashProbe* probe) {
   auto indices = keys[0];
   auto deltas = keys[1];
   auto base = probe->numRowsPerThread * blockDim.x * blockIdx.x;
-  int32_t lane = cub::LaneId();
+  int32_t lane = static_cast<int32_t>(cuda::ptx::get_sreg_laneid());
   int32_t end = base + probe->numRows[blockIdx.x];
 
   for (auto count = base; count < end; count += blockDim.x) {
@@ -187,7 +187,7 @@ void __device__ testSumMtxCoalesce(TestingRow* rows, HashProbe* probe) {
   auto indices = keys[0];
   auto deltas = keys[1];
   auto base = probe->numRowsPerThread * blockDim.x * blockIdx.x;
-  int32_t lane = cub::LaneId();
+  int32_t lane = static_cast<int32_t>(cuda::ptx::get_sreg_laneid());
   int32_t end = base + probe->numRows[blockIdx.x];
 
   for (auto count = base; count < end; count += blockDim.x) {

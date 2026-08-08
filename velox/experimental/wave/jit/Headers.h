@@ -1417,7 +1417,7 @@ const char* velox_experimental_wave_exec_Accumulators_cuh =
     "  T finalSum;\n"
     "  if (threadIdx.x < kWarpThreads) {\n"
     "    finalSum = Reduce8().reduce(\n"
-    "        threadIdx.x < kWarpThreads ? warpSum[threadIdx.x] : 0,\n"
+    "        threadIdx.x < kNumWarps ? warpSum[threadIdx.x] : 0,\n"
     "        [](T x, T y) { return x + y; });\n"
     "    if (threadIdx.x == 0) {\n"
     "      if (anyAtAll) {\n"
