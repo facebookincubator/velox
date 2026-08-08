@@ -884,10 +884,20 @@ class VectorTestBase {
   velox::test::VectorMaker vectorMaker_{pool_.get()};
   std::unique_ptr<folly::Executor> executor_{
       std::make_unique<folly::CPUThreadPoolExecutor>(
+#ifdef _WIN32
+          // The vcpkg folly predates folly::available_concurrency(); the older
+          // folly::hardware_concurrency() is the closest equivalent on Windows.
+          folly::hardware_concurrency())};
+#else
           folly::available_concurrency())};
+#endif
   std::shared_ptr<folly::Executor> spillExecutor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
+#ifdef _WIN32
+          folly::hardware_concurrency())};
+#else
           folly::available_concurrency())};
+#endif
 };
 
 class TestRuntimeStatWriter : public BaseRuntimeStatWriter {

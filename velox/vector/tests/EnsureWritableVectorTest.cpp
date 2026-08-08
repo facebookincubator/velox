@@ -962,8 +962,8 @@ TEST_F(EnsureWritableVectorTest, booleanFlatVector) {
     auto another = vector->asFlatVector<bool>()->values();
 
     auto vectorPtr = vector.get();
-    ASSERT_NO_THROW(
-        BaseVector::ensureWritable(rows, BOOLEAN(), pool(), vector));
+    ASSERT_NO_THROW(BaseVector::ensureWritable(
+        rows, ::facebook::velox::BOOLEAN(), pool(), vector));
     ASSERT_EQ(vectorPtr, vector.get());
     ASSERT_NE(another->as<void>(), vector->valuesAsVoid());
   };
@@ -984,7 +984,7 @@ TEST_F(EnsureWritableVectorTest, booleanFlatVector) {
     // Create a FlatVector with a length smaller than the value buffer.
     VectorPtr vector = std::make_shared<FlatVector<bool>>(
         pool(),
-        BOOLEAN(),
+        ::facebook::velox::BOOLEAN(),
         nullptr,
         100,
         std::move(value),
