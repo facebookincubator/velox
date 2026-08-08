@@ -50,7 +50,7 @@ cpp_template = Template(
 #include <unordered_map>
 #include <vector>
 
-namespace facebook::velox::util {
+namespace facebook::velox::tz {
 
 const std::vector<std::pair<int16_t, std::string>>& getTimeZoneEntries() {
   static auto* tzDB = new std::vector<std::pair<int16_t, std::string>>([] {
@@ -64,7 +64,7 @@ $entries
   return *tzDB;
 }
 
-} // namespace facebook::velox::util\
+} // namespace facebook::velox::tz\
 """
 )
 
