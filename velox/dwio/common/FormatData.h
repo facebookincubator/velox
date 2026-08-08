@@ -36,6 +36,10 @@ class FormatData {
     return *static_cast<T*>(this);
   }
 
+  /// Loads any deferred input streams for this column before it is decoded.
+  /// The default is a no-op; formats that defer stream loading override it.
+  virtual void loadLazyInputStreams() {}
+
   /// Reads nulls if the format has nulls separate from the encoded
   /// data. If there are no nulls, 'nulls' is set to nullptr, else to
   /// a suitable sized and padded Buffer. 'incomingNulls' may be given
