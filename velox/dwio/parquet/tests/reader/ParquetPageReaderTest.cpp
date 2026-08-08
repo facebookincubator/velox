@@ -276,6 +276,81 @@ TEST_F(ParquetPageReaderTest, fixedLenByteArrayDictOverflow) {
   VELOX_ASSERT_THROW(pageReader->skip(1), "");
 }
 
+TEST_F(ParquetPageReaderTest, fixedLenByteArrayStringDict) {
+  constexpr int32_t kTypeLength = 5;
+  constexpr int32_t kDataPageSize = static_cast<int32_t>(sizeof(uint32_t));
+  const std::vector<std::string> expectedValues = {
+      "apple", std::string("b\0rry", kTypeLength), "cider"};
+
+  auto testDictionary = [&](const TypePtr& type,
+                            std::optional<thrift::ConvertedType> convertedType =
+                                std::nullopt) {
+    std::string dictPageData;
+    for (const auto& value : expectedValues) {
+      VELOX_CHECK_EQ(value.size(), static_cast<size_t>(kTypeLength));
+      dictPageData.append(value);
+    }
+
+    auto dictHeader = createDictionaryPageHeader(
+        static_cast<int32_t>(dictPageData.size()),
+        static_cast<int32_t>(dictPageData.size()),
+        static_cast<int32_t>(expectedValues.size()));
+    std::string dictHeaderBytes = serializePageHeader(dictHeader);
+
+    auto dataHeader = createDataPageV1Header(kDataPageSize, kDataPageSize, 1);
+    std::string dataHeaderBytes = serializePageHeader(dataHeader);
+    std::string dataPageData(kDataPageSize, '\0');
+
+    std::string fullData =
+        dictHeaderBytes + dictPageData + dataHeaderBytes + dataPageData;
+    auto inputStream = std::make_unique<SeekableArrayInputStream>(
+        fullData.data(), fullData.size());
+
+    auto fileType = std::make_shared<const ParquetTypeWithId>(
+        type,
+        std::vector<std::unique_ptr<dwio::common::TypeWithId>>{},
+        /*id=*/0,
+        /*maxId=*/0,
+        /*column=*/0,
+        "test_col",
+        thrift::Type::FIXED_LEN_BYTE_ARRAY,
+        std::nullopt,
+        convertedType,
+        /*maxRepeat=*/0,
+        /*maxDefine=*/0,
+        /*isOptional=*/false,
+        /*isRepeated=*/false,
+        /*precision=*/0,
+        /*scale=*/0,
+        /*typeLength=*/kTypeLength);
+
+    dwio::common::ColumnReaderStatistics stats;
+    auto pageReader = std::make_unique<PageReader>(
+        std::move(inputStream),
+        *leafPool_,
+        fileType,
+        common::CompressionKind::CompressionKind_NONE,
+        fullData.size(),
+        stats,
+        nullptr);
+
+    pageReader->skip(0);
+    auto dictionary =
+        pageReader->dictionaryValues(type)->as<FlatVector<StringView>>();
+    ASSERT_EQ(
+        dictionary->size(), static_cast<vector_size_t>(expectedValues.size()));
+    for (vector_size_t i = 0; i < dictionary->size(); ++i) {
+      auto value = dictionary->valueAt(i);
+      EXPECT_EQ(
+          std::string(value.data(), value.size()),
+          expectedValues.at(static_cast<size_t>(i)));
+    }
+  };
+
+  testDictionary(VARCHAR(), thrift::ConvertedType::UTF8);
+  testDictionary(VARBINARY());
+}
+
 // Ensures the Snappy path validates the advertised uncompressed size against
 // the size embedded in the Snappy stream. A corrupt page whose declared
 // uncompressed_page_size is smaller than the embedded length must be rejected;
