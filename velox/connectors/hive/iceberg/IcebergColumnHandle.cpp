@@ -34,7 +34,8 @@ IcebergColumnHandle::IcebergColumnHandle(
     std::vector<common::Subfield> requiredSubfields,
     std::optional<std::string> initialDefaultValue,
     IcebergFieldMetadata icebergMetadata,
-    std::function<void(VectorPtr&)> postProcessor)
+    std::function<void(VectorPtr&)> postProcessor,
+    std::optional<std::string> writeDefaultValue)
     : HiveColumnHandle(
           name,
           columnType,
@@ -46,7 +47,8 @@ IcebergColumnHandle::IcebergColumnHandle(
           std::move(postProcessor)),
       field_(std::move(icebergField)),
       initialDefaultValue_(std::move(initialDefaultValue)),
-      icebergMetadata_(std::move(icebergMetadata)) {}
+      icebergMetadata_(std::move(icebergMetadata)),
+      writeDefaultValue_(std::move(writeDefaultValue)) {}
 
 const parquet::ParquetFieldId& IcebergColumnHandle::field() const {
   return field_;
