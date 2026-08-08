@@ -578,6 +578,7 @@ set(
   context
   date_time
   filesystem
+  iostreams
   program_options
   regex
   thread
@@ -692,11 +693,17 @@ if(${VELOX_BUILD_TESTING})
 endif()
 
 if(VELOX_ENABLE_REMOTE_FUNCTIONS OR VELOX_ENABLE_PARQUET)
-  # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
-  # requires clients to explicitly install fizz and wangle.
-  find_package(fizz CONFIG REQUIRED)
-  find_package(wangle CONFIG REQUIRED)
-  find_package(FBThrift CONFIG REQUIRED)
+  velox_set_source(fizz)
+  velox_resolve_dependency(fizz CONFIG REQUIRED)
+
+  velox_set_source(wangle)
+  velox_resolve_dependency(wangle CONFIG REQUIRED)
+
+  velox_set_source(mvfst)
+  velox_resolve_dependency(mvfst CONFIG REQUIRED)
+
+  velox_set_source(FBThrift)
+  velox_resolve_dependency(FBThrift CONFIG REQUIRED)
 
   # Workaround for a missing edge in the system-installed FBThrift's
   # exported CMake graph. At the pinned FB_OS_VERSION, fbthrift's own
@@ -717,11 +724,22 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS OR VELOX_ENABLE_PARQUET)
   # against that fixed fbthrift release.
   if(TARGET FBThrift::thriftmetadata)
     find_library(VELOX_XXHASH_LIB xxhash REQUIRED)
-    set_property(
-      TARGET FBThrift::thriftmetadata
-      APPEND
-      PROPERTY INTERFACE_LINK_LIBRARIES "${VELOX_XXHASH_LIB}"
-    )
+    block()
+      set(fbthrift_thriftmetadata_target FBThrift::thriftmetadata)
+      get_target_property(
+        fbthrift_thriftmetadata_aliased_target
+        FBThrift::thriftmetadata
+        ALIASED_TARGET
+      )
+      if(fbthrift_thriftmetadata_aliased_target)
+        set(fbthrift_thriftmetadata_target "${fbthrift_thriftmetadata_aliased_target}")
+      endif()
+      set_property(
+        TARGET "${fbthrift_thriftmetadata_target}"
+        APPEND
+        PROPERTY INTERFACE_LINK_LIBRARIES "${VELOX_XXHASH_LIB}"
+      )
+    endblock()
   endif()
 endif()
 

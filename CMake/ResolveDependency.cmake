@@ -88,6 +88,42 @@ macro(velox_resolve_dependency dependency_name)
   list(POP_BACK CMAKE_MESSAGE_INDENT)
 endmacro()
 
+macro(velox_fetchcontent_makeavailable_without_install dependency_name)
+  FetchContent_GetProperties(${dependency_name} POPULATED __velox_fetchcontent_populated)
+  if(__velox_fetchcontent_populated)
+    message(
+      FATAL_ERROR
+      "FetchContent dependency ${dependency_name} is already populated; "
+      "install suppression cannot be guaranteed"
+    )
+  endif()
+
+  if(DEFINED CMAKE_SKIP_INSTALL_RULES)
+    set(__velox_cmake_skip_install_rules_was_defined TRUE)
+    set(__velox_cmake_skip_install_rules_value "${CMAKE_SKIP_INSTALL_RULES}")
+  else()
+    set(__velox_cmake_skip_install_rules_was_defined FALSE)
+  endif()
+
+  set(CMAKE_SKIP_INSTALL_RULES ON)
+  FetchContent_MakeAvailable(${dependency_name})
+  FetchContent_GetProperties(${dependency_name} BINARY_DIR __velox_fetchcontent_binary_dir)
+  if(NOT __velox_fetchcontent_binary_dir)
+    message(FATAL_ERROR "No binary directory found for FetchContent dependency ${dependency_name}")
+  endif()
+  file(WRITE "${__velox_fetchcontent_binary_dir}/cmake_install.cmake" "")
+
+  if(__velox_cmake_skip_install_rules_was_defined)
+    set(CMAKE_SKIP_INSTALL_RULES "${__velox_cmake_skip_install_rules_value}")
+  else()
+    unset(CMAKE_SKIP_INSTALL_RULES)
+  endif()
+  unset(__velox_cmake_skip_install_rules_value)
+  unset(__velox_cmake_skip_install_rules_was_defined)
+  unset(__velox_fetchcontent_binary_dir)
+  unset(__velox_fetchcontent_populated)
+endmacro()
+
 # By using a macro we don't need to propagate the value into the parent scope.
 macro(velox_set_source dependency_name)
   velox_set_with_default(
