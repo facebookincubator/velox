@@ -293,6 +293,14 @@ TEST_F(InteropTest, arrayOfStrings) {
   roundTrip(input);
 }
 
+TEST_F(InteropTest, arrayOfVarbinary) {
+  auto input = makeRowVector(
+      {"c0"},
+      {makeArrayVector<StringView>(
+          {{"hello"_sv, "world"_sv}, {}, {"foo"_sv}}, VARBINARY())});
+  roundTrip(input);
+}
+
 TEST_F(InteropTest, arrayOfDoubles) {
   auto input = makeRowVector(
       {"c0"},
@@ -449,6 +457,15 @@ TEST_F(InteropTest, constant) {
   auto child = makeConstant<int64_t>(10, 5);
   auto input = makeRowVector({child});
   roundTrip(input);
+}
+
+TEST_F(InteropTest, unsupportedLogicalTypes) {
+  EXPECT_FALSE(isTypeSupportedByCudf(INTERVAL_YEAR_MONTH()));
+  EXPECT_FALSE(isTypeSupportedByCudf(TIME()));
+  EXPECT_FALSE(isTypeSupportedByCudf(TIME_MICRO_UTC()));
+  EXPECT_TRUE(isTypeSupportedByCudf(INTERVAL_DAY_TIME()));
+  EXPECT_EQ(
+      veloxToCudfDataType(INTERVAL_DAY_TIME()).id(), cudf::type_id::INT64);
 }
 
 } // namespace

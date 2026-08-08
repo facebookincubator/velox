@@ -171,6 +171,36 @@ TEST_F(ToCudfSelectionTest, prestoDateAddVariableUnitFallsBack) {
   ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
 }
 
+TEST_F(ToCudfSelectionTest, logicalTypesFallBackBeforeConversion) {
+  auto testFallback = [&](const VectorPtr& values, const VectorPtr& expected) {
+    SCOPED_TRACE(values->type()->toString());
+    auto input = makeRowVector(
+        {"id", "value"}, {makeFlatVector<int32_t>({1, -1}), values});
+    auto plan = PlanBuilder().values({input}).filter("id > 0").planNode();
+
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(plan)
+                      .config("cudf.enabled", true)
+                      .copyResults(pool(), task);
+    facebook::velox::test::assertEqualVectors(
+        makeRowVector(
+            {"id", "value"}, {makeFlatVector<int32_t>({1}), expected}),
+        result);
+    EXPECT_FALSE(wasCudfFilterProjectUsed(task));
+    EXPECT_TRUE(wasDefaultFilterProjectUsed(task));
+  };
+
+  testFallback(
+      makeFlatVector<int32_t>({12, 24}, INTERVAL_YEAR_MONTH()),
+      makeFlatVector<int32_t>({12}, INTERVAL_YEAR_MONTH()));
+  testFallback(
+      makeFlatVector<int64_t>({1, 2}, TIME()),
+      makeFlatVector<int64_t>({1}, TIME()));
+  testFallback(
+      makeFlatVector<int64_t>({1, 2}, TIME_MICRO_UTC()),
+      makeFlatVector<int64_t>({1}, TIME_MICRO_UTC()));
+}
+
 TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
   auto input = makeRowVector(
       {"amount", "event_ts"},
