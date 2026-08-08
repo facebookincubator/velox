@@ -100,28 +100,39 @@ const PlanNodeStats& PlanNodeStats::operatorStatsFor(
 void PlanNodeStats::add(const OperatorStats& stats) {
   auto it = operatorStats.find(stats.operatorType);
   if (it != operatorStats.end()) {
-    it->second->addTotals(stats);
+    it->second->addTotals(stats, /*gateByRole=*/false);
   } else {
     auto opStats = std::make_unique<PlanNodeStats>();
-    opStats->addTotals(stats);
+    opStats->addTotals(stats, /*gateByRole=*/false);
     operatorStats.emplace(stats.operatorType, std::move(opStats));
   }
-  addTotals(stats);
+  addTotals(stats, /*gateByRole=*/true);
 }
 
-void PlanNodeStats::addTotals(const OperatorStats& stats) {
-  inputRows += stats.inputPositions;
-  inputBytes += stats.inputBytes;
-  inputVectors += stats.inputVectors;
+void PlanNodeStats::addTotals(const OperatorStats& stats, bool gateByRole) {
+  const bool countInput = !gateByRole ||
+      stats.role == OperatorStats::Role::kFull ||
+      stats.role == OperatorStats::Role::kNodeInput;
+  const bool countOutput = !gateByRole ||
+      stats.role == OperatorStats::Role::kFull ||
+      stats.role == OperatorStats::Role::kNodeOutput;
 
-  rawInputRows += stats.rawInputPositions;
-  rawInputBytes += stats.rawInputBytes;
+  if (countInput) {
+    inputRows += stats.inputPositions;
+    inputBytes += stats.inputBytes;
+    inputVectors += stats.inputVectors;
+
+    rawInputRows += stats.rawInputPositions;
+    rawInputBytes += stats.rawInputBytes;
+  }
 
   dynamicFilterStats.add(stats.dynamicFilterStats);
 
-  outputRows += stats.outputPositions;
-  outputBytes += stats.outputBytes;
-  outputVectors += stats.outputVectors;
+  if (countOutput) {
+    outputRows += stats.outputPositions;
+    outputBytes += stats.outputBytes;
+    outputVectors += stats.outputVectors;
+  }
 
   isBlockedTiming.add(stats.isBlockedTiming);
   addInputTiming.add(stats.addInputTiming);

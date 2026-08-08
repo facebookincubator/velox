@@ -31,4 +31,16 @@ TEST(PlanNodeStatsTest, exprStatsTotal) {
   EXPECT_EQ(total.expressionStats["foo"], stats.expressionStats["foo"]);
 }
 
+TEST(PlanNodeStatsTest, operatorStatsAddPreservesRole) {
+  OperatorStats source;
+  source.role = OperatorStats::Role::kNodeInput;
+
+  OperatorStats target;
+  target.add(source);
+  EXPECT_EQ(target.role, OperatorStats::Role::kNodeInput);
+
+  target.clear();
+  EXPECT_EQ(target.role, OperatorStats::Role::kNodeInput);
+}
+
 } // namespace facebook::velox::exec::test
