@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include <random>
+#include <cstring>
 
 namespace facebook::velox::test {
 namespace {
@@ -31,7 +32,8 @@ SplitBlockBloomFilter makeFilter(
     const Hasher& hasher,
     std::vector<SplitBlockBloomFilter::Block>& blocks) {
   blocks.resize(SplitBlockBloomFilter::numBlocks(values.size(), 0.01));
-  bzero(blocks.data(), blocks.size() * sizeof(SplitBlockBloomFilter::Block));
+  std::memset(
+      blocks.data(), 0, blocks.size() * sizeof(SplitBlockBloomFilter::Block));
   SplitBlockBloomFilter filter(blocks);
   for (auto& value : values) {
     filter.insert(hasher(value));
