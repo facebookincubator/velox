@@ -664,6 +664,8 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   bool isIntervalDayTime() const;
 
+  bool isCalendarInterval() const;
+
   bool isTime() const;
 
   bool isDate() const;
@@ -1609,6 +1611,62 @@ INTERVAL_YEAR_MONTH() {
 FOLLY_ALWAYS_INLINE bool Type::isIntervalYearMonth() const {
   // Pointer comparison works since this type is a singleton.
   return (this == INTERVAL_YEAR_MONTH().get());
+}
+
+/// Spark CalendarInterval: {months, days, microseconds} packed into int128_t.
+/// Backed by HUGEINT to avoid adding a new TypeKind.
+/// Layout matches Spark UnsafeRow: low 64 = months(low32)|days(high32),
+/// high 64 = microseconds.
+class CalendarIntervalType final : public HugeintType {
+  CalendarIntervalType() = default;
+
+ public:
+  static std::shared_ptr<const CalendarIntervalType> get() {
+    VELOX_CONSTEXPR_SINGLETON CalendarIntervalType kInstance;
+    return {std::shared_ptr<const CalendarIntervalType>{}, &kInstance};
+  }
+
+  const char* name() const override {
+    return "INTERVAL";
+  }
+
+  /// CalendarInterval is comparable (equality for grouping) but not orderable
+  /// because months and days are calendar units without fixed duration.
+  bool isOrderable() const override {
+    return false;
+  }
+
+  bool equivalent(const Type& other) const override {
+    // Pointer comparison works since this type is a singleton.
+    return this == &other;
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  std::string valueToString(int128_t value) const;
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "CalendarIntervalType";
+    obj["type"] = name();
+    return obj;
+  }
+
+  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
+    return CalendarIntervalType::get();
+  }
+};
+
+FOLLY_ALWAYS_INLINE std::shared_ptr<const CalendarIntervalType>
+CALENDAR_INTERVAL() {
+  return CalendarIntervalType::get();
+}
+
+FOLLY_ALWAYS_INLINE bool Type::isCalendarInterval() const {
+  // Pointer comparison works since this type is a singleton.
+  return (this == CALENDAR_INTERVAL().get());
 }
 
 /// Date is represented as the number of days since epoch start using int32_t.
