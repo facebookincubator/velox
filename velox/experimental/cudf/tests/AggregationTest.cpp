@@ -1809,4 +1809,65 @@ TEST_F(AggregationTest, zeroColumnThroughCudfFromVelox) {
       .assertResults("SELECT count(*) FROM tmp WHERE c0 > 0");
 }
 
+// FINAL distinct with multiple drivers receiving overlapping keys.
+// parallelizable=true on Values splits batches across drivers directly,
+// avoiding local exchange buffering issues. With maxDrivers=2 and 4 batches,
+// driver 0 gets batches {1,2,3,4,5} and {5,6,7,8,9}, driver 1 gets
+// {3,4,5,6,7} and {1,5,9,10,11} — keys 3,4,5 appear on both drivers.
+// Without allPeersFinished coordination in CudfDistinct, each driver
+// independently produces locally-distinct results and duplicate keys are
+// emitted.
+TEST_F(AggregationTest, distinctFinalMultiDriver) {
+  std::vector<RowVectorPtr> data = {
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5})}),
+      makeRowVector({makeFlatVector<int64_t>({3, 4, 5, 6, 7})}),
+      makeRowVector({makeFlatVector<int64_t>({5, 6, 7, 8, 9})}),
+      makeRowVector({makeFlatVector<int64_t>({1, 5, 9, 10, 11})}),
+  };
+  createDuckDbTable(data);
+
+  auto plan = PlanBuilder()
+                  .values(data, /*parallelizable=*/true)
+                  .singleAggregation({"c0"}, {})
+                  .planNode();
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .maxDrivers(2)
+      .plan(plan)
+      .assertResults("SELECT DISTINCT c0 FROM tmp");
+}
+
+// Same as above but with multiple grouping keys.
+TEST_F(AggregationTest, distinctFinalMultiDriverMultiKey) {
+  std::vector<RowVectorPtr> data = {
+      makeRowVector({
+          makeFlatVector<int64_t>({1, 1, 2, 2, 3}),
+          makeFlatVector<int32_t>({10, 20, 10, 20, 10}),
+      }),
+      makeRowVector({
+          makeFlatVector<int64_t>({2, 3, 3, 4, 4}),
+          makeFlatVector<int32_t>({20, 10, 30, 10, 20}),
+      }),
+      makeRowVector({
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int32_t>({10, 10, 10, 10, 10}),
+      }),
+      makeRowVector({
+          makeFlatVector<int64_t>({3, 5, 5, 1, 2}),
+          makeFlatVector<int32_t>({10, 10, 20, 20, 20}),
+      }),
+  };
+  createDuckDbTable(data);
+
+  auto plan = PlanBuilder()
+                  .values(data, /*parallelizable=*/true)
+                  .singleAggregation({"c0", "c1"}, {})
+                  .planNode();
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .maxDrivers(2)
+      .plan(plan)
+      .assertResults("SELECT DISTINCT c0, c1 FROM tmp");
+}
+
 } // namespace facebook::velox::exec::test

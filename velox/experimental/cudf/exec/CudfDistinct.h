@@ -33,9 +33,7 @@ class CudfDistinct : public CudfOperatorBase {
     return !noMoreInput_;
   }
 
-  exec::BlockingReason isBlocked(ContinueFuture* /* unused */) override {
-    return exec::BlockingReason::kNotBlocked;
-  }
+  exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
   bool isFinished() override;
 
@@ -66,6 +64,10 @@ class CudfDistinct : public CudfOperatorBase {
   int64_t numInputRows_ = 0;
 
   bool finished_ = false;
+
+  /// Future used to block non-last drivers during allPeersFinished
+  /// coordination in the FINAL aggregation step.
+  ContinueFuture future_{ContinueFuture::makeEmpty()};
 
   std::vector<CudfVectorPtr> inputs_;
   TypePtr inputType_;
