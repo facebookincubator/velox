@@ -15,21 +15,86 @@
  */
 #pragma once
 
+#include <cudf/binaryop.hpp>
+#include <cudf/column/column.hpp>
 #include <cudf/column/column_view.hpp>
+#include <cudf/scalar/scalar.hpp>
 #include <cudf/types.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 
 #include <cstdint>
+#include <memory>
+#include <utility>
 
-namespace facebook::velox::cudf_velox::detail {
+namespace facebook::velox::cudf_velox {
+
+// Outcome of a checked decimal binary op. Division-by-zero (divide or modulo
+// with a zero divisor) is kept distinct from arithmetic overflow so the host
+// can raise the matching Velox/Presto CPU error (e.g. "Division by zero" /
+// "Modulus by zero" vs "Decimal overflow in ...").
+enum class DecimalBinaryOpStatus : int32_t {
+  kOk = 0,
+  kOverflow = 1,
+  kDivisionByZero = 2,
+};
+
+// CUDA implementations that return {result, status}. The status is tracked with
+// a single device-side flag (set via atomicOr by any failing row), matching the
+// fail-fast semantics of Presto / Velox CPU decimal arithmetic; no per-row
+// (O(n)) status column is allocated.
+std::pair<std::unique_ptr<cudf::column>, DecimalBinaryOpStatus>
+decimalBinaryOperationWithOverflow(
+    const cudf::column_view& lhs,
+    const cudf::column_view& rhs,
+    cudf::binary_operator op,
+    cudf::data_type outputType,
+    int32_t outputPrecision,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+std::pair<std::unique_ptr<cudf::column>, DecimalBinaryOpStatus>
+decimalBinaryOperationWithOverflow(
+    const cudf::column_view& lhs,
+    const cudf::scalar& rhs,
+    cudf::binary_operator op,
+    cudf::data_type outputType,
+    int32_t outputPrecision,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+std::pair<std::unique_ptr<cudf::column>, DecimalBinaryOpStatus>
+decimalBinaryOperationWithOverflow(
+    const cudf::scalar& lhs,
+    const cudf::column_view& rhs,
+    cudf::binary_operator op,
+    cudf::data_type outputType,
+    int32_t outputPrecision,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+namespace detail {
+
+/**
+ * @brief Decodes a cuDF decimal scalar into a raw __int128_t payload.
+ *
+ * Shared by the divide (host) and binary-op (device-launch) paths so the
+ * DECIMAL64/DECIMAL128 scalar unpacking lives in exactly one place.
+ *
+ * @param s DECIMAL64 or DECIMAL128 fixed-point scalar.
+ * @param stream CUDA stream used to read the device-resident scalar value.
+ * @return The scalar's underlying integer representation as __int128_t.
+ */
+__int128_t getDecimalScalarValue(
+    const cudf::scalar& s,
+    rmm::cuda_stream_view stream);
 
 /**
  * @brief Dispatches a per-row device loop for fixed-point decimal division.
  *
  * Computes (lhs * rescaleFactor) / rhs with half-away-from-zero rounding on the
- * remainder, writing into out. Input nulls and zero divisors are written as
- * null in the output null mask.
+ * remainder, writing into out. Input nulls are written as null in the output
+ * null mask. A zero divisor sets the division-by-zero status bit.
  *
  * @param inType DECIMAL64 or DECIMAL128 input storage width selector.
  * @param outType DECIMAL64 or DECIMAL128 output storage width selector.
@@ -39,10 +104,9 @@ namespace facebook::velox::cudf_velox::detail {
  * @param rescaleFactor Fixed-point scale factor, typically
  * DecimalUtil::kPowersOfTen[aRescale] from the caller.
  * @param stream CUDA stream for kernel execution.
- * @return True on success; false if any row overflowed (caller should
- * VELOX_USER_FAIL).
+ * @return DecimalBinaryOpStatus: kOk, kOverflow, or kDivisionByZero.
  */
-bool decimalDivideColumnColumn(
+DecimalBinaryOpStatus decimalDivideColumnColumn(
     cudf::type_id inType,
     cudf::type_id outType,
     const cudf::column_view& lhs,
@@ -65,10 +129,9 @@ bool decimalDivideColumnColumn(
  * @param rescaleFactor Fixed-point scale factor, typically
  * DecimalUtil::kPowersOfTen[aRescale] from the caller.
  * @param stream CUDA stream for kernel execution.
- * @return True on success; false if any row overflowed (caller should
- * VELOX_USER_FAIL).
+ * @return DecimalBinaryOpStatus: kOk, kOverflow, or kDivisionByZero.
  */
-bool decimalDivideColumnScalar(
+DecimalBinaryOpStatus decimalDivideColumnScalar(
     cudf::type_id inType,
     cudf::type_id outType,
     const cudf::column_view& lhs,
@@ -91,10 +154,9 @@ bool decimalDivideColumnScalar(
  * @param rescaleFactor Fixed-point scale factor, typically
  * DecimalUtil::kPowersOfTen[aRescale] from the caller.
  * @param stream CUDA stream for kernel execution.
- * @return True on success; false if any row overflowed (caller should
- * VELOX_USER_FAIL).
+ * @return DecimalBinaryOpStatus: kOk, kOverflow, or kDivisionByZero.
  */
-bool decimalDivideScalarColumn(
+DecimalBinaryOpStatus decimalDivideScalarColumn(
     cudf::type_id inType,
     cudf::type_id outType,
     __int128_t lhsValue,
@@ -103,4 +165,5 @@ bool decimalDivideScalarColumn(
     __int128_t rescaleFactor,
     rmm::cuda_stream_view stream);
 
-} // namespace facebook::velox::cudf_velox::detail
+} // namespace detail
+} // namespace facebook::velox::cudf_velox
