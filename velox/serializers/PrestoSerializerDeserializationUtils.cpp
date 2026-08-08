@@ -1349,7 +1349,7 @@ void readColumns(
                 pool,
                 opts,
                 columnResult)) {
-          return;
+          continue;
         }
       }
       checkTypeEncoding(encoding, columnType);
