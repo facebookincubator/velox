@@ -333,8 +333,12 @@ uint32_t KllSketch<T, A, C>::insertPosition() {
               detail::computeTotalCapacity(k_, numLevels()) - items_.size();
           delta > 0) {
         // Level zero must be under-populated (otherwise `findLevelToCompact()`
-        // would return 0), just grow it.
-        shiftItems(delta);
+        // would return 0). Grow geometrically instead of materializing the
+        // entire theoretical capacity. This keeps sparse, compacted sketches
+        // small while preserving amortized linear growth.
+        const auto growth =
+            std::min<uint32_t>(delta, std::max<uint32_t>(items_.size(), 1));
+        shiftItems(growth);
         return --levels_[0];
       }
       // It is important to add the new top level right here. Be aware
@@ -679,16 +683,12 @@ void KllSketch<T, A, C>::mergeViews(
         randomBit_);
     VELOX_DCHECK_LE(result.finalNumLevels, ub);
     // Now we need to transfer the results back into "this" sketch.
-    items_.resize(result.finalCapacity);
-    const auto freeSpaceAtBottom = result.finalCapacity - result.finalNumItems;
-    std::move(
-        workbuf.data() + outlevels[0],
-        workbuf.data() + outlevels[0] + result.finalNumItems,
-        items_.data() + freeSpaceAtBottom);
+    VELOX_DCHECK_EQ(outlevels[0], 0);
+    workbuf.resize(result.finalNumItems);
+    items_.swap(workbuf);
     levels_.resize(result.finalNumLevels + 1);
-    const auto offset = freeSpaceAtBottom - outlevels[0];
     for (unsigned lvl = 0; lvl < levels_.size(); ++lvl) {
-      levels_[lvl] = outlevels[lvl] + offset;
+      levels_[lvl] = outlevels[lvl];
     }
   }
   n_ = newN;
