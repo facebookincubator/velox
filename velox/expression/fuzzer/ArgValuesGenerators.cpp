@@ -703,4 +703,37 @@ std::vector<core::TypedExprPtr> S2CellTokenArgValuesGenerator::generate(
   return inputExpressions;
 }
 
+std::vector<core::TypedExprPtr> ArrayLeastFrequentArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& /*options*/,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  VELOX_CHECK_GE(signature.args.size(), 1);
+  VELOX_CHECK_LE(signature.args.size(), 2);
+  populateInputTypesAndNames(signature, state);
+
+  std::vector<core::TypedExprPtr> inputExpressions{
+      signature.args.size(), nullptr};
+
+  // First argument (the array): use default field-reference generation.
+  state.customInputGenerators_.emplace_back(nullptr);
+  inputExpressions[0] = std::make_shared<core::FieldAccessTypedExpr>(
+      signature.args[0],
+      state
+          .inputRowNames_[state.inputRowNames_.size() - signature.args.size()]);
+
+  // Second argument (n): constrain to a small non-negative bigint so that
+  // nested array_least_frequent calls do not blow up Presto's JVM bytecode
+  // limit. The biased fuzzer otherwise picks arbitrary int64 values, which
+  // produce huge intermediate result types in the reference runner.
+  if (signature.args.size() == 2) {
+    state.customInputGenerators_.emplace_back(nullptr);
+    auto n = static_cast<int64_t>(rand<uint64_t>(rng, 0, 10));
+    inputExpressions[1] =
+        std::make_shared<core::ConstantTypedExpr>(BIGINT(), variant(n));
+  }
+
+  return inputExpressions;
+}
+
 } // namespace facebook::velox::fuzzer
