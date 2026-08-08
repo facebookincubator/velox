@@ -21,6 +21,7 @@ endif()
 
 add_subdirectory(iceberg)
 add_subdirectory(paimon)
+add_subdirectory(hudi)
 
 velox_add_library(
   velox_hive_connector
