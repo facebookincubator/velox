@@ -19,23 +19,86 @@
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 
+#include <map>
+
 namespace facebook::velox::filesystems {
 
 static constexpr size_t kMinimumMultipartMinPartSize = 5U << 20; // 5MB
 static constexpr size_t kMaximumMultipartMinPartSize = 5U << 30; // 5GB
 
+namespace {
+
+std::optional<std::string> normalizedS3ConfigKey(std::string_view key) {
+  if (key.rfind(S3Config::kS3Prefix, 0) == 0) {
+    return std::nullopt;
+  }
+
+  const auto pos = key.find(S3Config::kS3Prefix);
+  if (pos == std::string_view::npos || pos == 0 || key[pos - 1] != '.') {
+    return std::nullopt;
+  }
+
+  return std::string(key.substr(pos));
+}
+
+std::optional<std::string> getConfigValue(
+    const std::shared_ptr<const config::ConfigBase>& properties,
+    std::string_view configKey) {
+  return static_cast<std::optional<std::string>>(
+      properties->get<std::string>(std::string(configKey)));
+}
+
+} // namespace
+
+std::shared_ptr<const config::ConfigBase> S3Config::normalizeConfig(
+    std::shared_ptr<const config::ConfigBase> config) {
+  if (config == nullptr) {
+    return std::make_shared<config::ConfigBase>(
+        std::unordered_map<std::string, std::string>());
+  }
+
+  auto configs = config->rawConfigsCopy();
+  std::map<std::string, std::string> connectorScopedS3Configs;
+  for (const auto& [key, value] : config->rawConfigsCopy()) {
+    // Connector configs may use keys scoped by connector name, e.g.
+    // hive.s3.endpoint or iceberg.s3.bucket.my-bucket.endpoint. The S3 storage
+    // adapter consumes connector-agnostic keys under s3.*, so map them here.
+    auto normalizedKey = normalizedS3ConfigKey(key);
+    if (!normalizedKey.has_value()) {
+      continue;
+    }
+    auto [it, inserted] =
+        connectorScopedS3Configs.emplace(normalizedKey.value(), value);
+    VELOX_CHECK(
+        inserted || it->second == value,
+        "Multiple connector-scoped S3 configs map to '{}' with different "
+        "values. Pass a connector-specific config object to disambiguate.",
+        normalizedKey.value());
+  }
+  for (auto& [key, value] : connectorScopedS3Configs) {
+    configs.insert_or_assign(std::move(key), std::move(value));
+  }
+  return std::make_shared<config::ConfigBase>(std::move(configs));
+}
+
 std::string S3Config::cacheKey(
     std::string_view bucket,
     std::shared_ptr<const config::ConfigBase> config) {
+  auto normalizedConfig = normalizeConfig(std::move(config));
   auto bucketEndpoint = bucketConfigKey(Keys::kEndpoint, bucket);
-  if (config->valueExists(bucketEndpoint)) {
+  if (normalizedConfig->valueExists(bucketEndpoint)) {
     return fmt::format(
-        "{}-{}", config->get<std::string>(bucketEndpoint).value(), bucket);
+        "{}-{}",
+        normalizedConfig->get<std::string>(bucketEndpoint).value(),
+        bucket);
   }
+
   auto baseEndpoint = baseConfigKey(Keys::kEndpoint);
-  if (config->valueExists(baseEndpoint)) {
+  if (normalizedConfig->valueExists(baseEndpoint)) {
     return fmt::format(
-        "{}-{}", config->get<std::string>(baseEndpoint).value(), bucket);
+        "{}-{}",
+        normalizedConfig->get<std::string>(baseEndpoint).value(),
+        bucket);
   }
   return std::string(bucket);
 }
@@ -44,37 +107,32 @@ S3Config::S3Config(
     std::string_view bucket,
     const std::shared_ptr<const config::ConfigBase> properties)
     : bucket_(bucket) {
+  const auto normalizedProperties = normalizeConfig(properties);
   for (int key = static_cast<int>(Keys::kBegin);
        key < static_cast<int>(Keys::kEnd);
        key++) {
     auto s3Key = static_cast<Keys>(key);
     auto value = S3Config::configTraits().find(s3Key)->second;
-    auto configSuffix = value.first;
     auto configDefault = value.second;
 
-    // Set bucket S3 config "hive.s3.bucket.*" if present.
-    std::stringstream bucketConfig;
-    bucketConfig << kS3BucketPrefix << bucket << "." << configSuffix;
-    auto configVal = static_cast<std::optional<std::string>>(
-        properties->get<std::string>(bucketConfig.str()));
+    // Set bucket S3 config "s3.bucket.*" if present.
+    auto bucketConfig = bucketConfigKey(s3Key, bucket);
+    auto configVal = getConfigValue(normalizedProperties, bucketConfig);
     if (configVal.has_value()) {
       config_[s3Key] = configVal.value();
     } else {
-      // Set base config "hive.s3.*" if present.
-      std::stringstream baseConfig;
-      baseConfig << kS3Prefix << configSuffix;
-      configVal = static_cast<std::optional<std::string>>(
-          properties->get<std::string>(baseConfig.str()));
+      // Set base config "s3.*" if present.
+      auto baseConfig = baseConfigKey(s3Key);
+      configVal = getConfigValue(normalizedProperties, baseConfig);
       if (configVal.has_value()) {
         config_[s3Key] = configVal.value();
       } else {
-        // Set the default value.
         config_[s3Key] = configDefault;
       }
     }
   }
   payloadSigningPolicy_ =
-      properties->get<std::string>(kS3PayloadSigningPolicy, "Never");
+      normalizedProperties->get<std::string>(kS3PayloadSigningPolicy, "Never");
 
   VELOX_CHECK_GE(
       minPartSize(),

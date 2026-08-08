@@ -392,7 +392,7 @@ class S3FileSystem::Impl {
           VELOX_USER_CHECK_GE(
               maxAttempts.value(),
               0,
-              "Invalid configuration: specified 'hive.s3.max-attempts' value {} is < 0.",
+              "Invalid configuration: specified 's3.max-attempts' value {} is < 0.",
               maxAttempts.value());
           return std::make_shared<Aws::Client::StandardRetryStrategy>(
               maxAttempts.value());
@@ -405,7 +405,7 @@ class S3FileSystem::Impl {
           VELOX_USER_CHECK_GE(
               maxAttempts.value(),
               0,
-              "Invalid configuration: specified 'hive.s3.max-attempts' value {} is < 0.",
+              "Invalid configuration: specified 's3.max-attempts' value {} is < 0.",
               maxAttempts.value());
           return std::make_shared<Aws::Client::AdaptiveRetryStrategy>(
               maxAttempts.value());
@@ -418,7 +418,7 @@ class S3FileSystem::Impl {
           VELOX_USER_CHECK_GE(
               maxAttempts.value(),
               0,
-              "Invalid configuration: specified 'hive.s3.max-attempts' value {} is < 0.",
+              "Invalid configuration: specified 's3.max-attempts' value {} is < 0.",
               maxAttempts.value());
           return std::make_shared<Aws::Client::DefaultRetryStrategy>(
               maxAttempts.value());
@@ -460,8 +460,8 @@ class S3FileSystem::Impl {
 S3FileSystem::S3FileSystem(
     std::string_view bucketName,
     const std::shared_ptr<const config::ConfigBase> config)
-    : FileSystem(config) {
-  auto s3Config = std::make_shared<S3Config>(bucketName, config);
+    : FileSystem(S3Config::normalizeConfig(config)) {
+  auto s3Config = std::make_shared<S3Config>(bucketName, config_);
   impl_ = std::make_shared<Impl>(std::move(s3Config));
 }
 
