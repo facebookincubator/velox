@@ -1514,7 +1514,7 @@ uint64_t FloatColumnWriter<T>::write(
     const common::Ranges& ranges) {
   static_assert(folly::kIsLittleEndian, "not supported");
   auto& statsBuilder =
-      dynamic_cast<DoubleStatisticsBuilder&>(*indexStatsBuilder_);
+      static_cast<DoubleStatisticsBuilder&>(*indexStatsBuilder_);
 
   uint64_t nullCount = 0;
   if (slice->encoding() == VectorEncoding::Simple::FLAT) {
