@@ -162,6 +162,20 @@ class SparkQueryConfig {
       true,
       "If true, Spark collect_list() ignores nulls in the input.")
 
+  /// Style used to render binary values to strings. Mirrors Spark's
+  /// `spark.sql.binaryOutputStyle`. Valid values are "UTF-8", "BASIC",
+  /// "BASE64", "HEX", and "HEX_DISCRETE". An empty value defaults to
+  /// "HEX_DISCRETE", matching Spark's behavior when the config is unset.
+  VELOX_SPARK_CONFIG(
+      kBinaryOutputStyle,
+      binaryOutputStyle,
+      "binary_output_style",
+      std::string,
+      "",
+      "Style used to render binary values to strings: "
+      "UTF-8, BASIC, BASE64, HEX, or HEX_DISCRETE. "
+      "An empty value defaults to HEX_DISCRETE.")
+
   /// Returns all registered Spark config properties. Property names are
   /// unqualified (no "spark." prefix).
   static const std::vector<config::ConfigProperty>& registeredProperties();

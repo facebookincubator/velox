@@ -15,6 +15,7 @@
  */
 #include <string>
 
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -76,6 +77,54 @@ TEST_F(ToPrettyStringTest, binary) {
   EXPECT_EQ(toPrettyStringBinary("abcdef"), "[61 62 63 64 65 66]");
 
   EXPECT_EQ(toPrettyStringBinary("ABC."), "[41 42 43 2E]");
+}
+
+TEST_F(ToPrettyStringTest, binaryOutputStyle) {
+  auto withStyle = [&](const std::string& style,
+                       const std::optional<std::string>& input) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(SparkQueryConfig::kBinaryOutputStyle),
+         style},
+    });
+    return evaluateOnce<std::string>("to_pretty_string(c0)", VARBINARY(), input)
+        .value();
+  };
+
+  // HEX_DISCRETE matches the default behavior.
+  EXPECT_EQ(withStyle("HEX_DISCRETE", "12"), "[31 32]");
+  EXPECT_EQ(withStyle("HEX_DISCRETE", "ABC."), "[41 42 43 2E]");
+
+  // HEX produces a continuous uppercase hex string with no separators.
+  EXPECT_EQ(withStyle("HEX", "12"), "3132");
+  EXPECT_EQ(withStyle("HEX", "ABC."), "4142432E");
+  EXPECT_EQ(withStyle("HEX", "12346"), "3132333436");
+
+  // BASE64 uses Spark's no-padding variant.
+  EXPECT_EQ(withStyle("BASE64", "12"), "MTI");
+  EXPECT_EQ(withStyle("BASE64", "ABC."), "QUJDLg");
+  EXPECT_EQ(withStyle("BASE64", "12346"), "MTIzNDY");
+
+  // UTF-8 reinterprets the bytes as a UTF-8 string.
+  EXPECT_EQ(withStyle("UTF-8", "12"), "12");
+  EXPECT_EQ(withStyle("UTF-8", "ABC."), "ABC.");
+
+  // BASIC prints signed decimal byte values separated by ", ".
+  EXPECT_EQ(withStyle("BASIC", "12"), "[49, 50]");
+  EXPECT_EQ(withStyle("BASIC", "ABC."), "[65, 66, 67, 46]");
+  EXPECT_EQ(withStyle("BASIC", "12346"), "[49, 50, 51, 52, 54]");
+  // Bytes >= 0x80 are interpreted as signed (matches Spark's Byte).
+  EXPECT_EQ(withStyle("BASIC", std::string("\xFF", 1)), "[-1]");
+  EXPECT_EQ(withStyle("BASIC", std::string("\x80\x7F", 2)), "[-128, 127]");
+
+  // Empty input handles the bracketed and non-bracketed cases.
+  EXPECT_EQ(withStyle("HEX_DISCRETE", ""), "[]");
+  EXPECT_EQ(withStyle("HEX", ""), "");
+  EXPECT_EQ(withStyle("BASE64", ""), "");
+  EXPECT_EQ(withStyle("UTF-8", ""), "");
+  EXPECT_EQ(withStyle("BASIC", ""), "[]");
+
+  // Unsupported values raise a user error.
+  EXPECT_THROW(withStyle("INVALID", "12"), VeloxUserError);
 }
 
 TEST_F(ToPrettyStringTest, timestamp) {
