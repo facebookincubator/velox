@@ -282,6 +282,13 @@ class CompileCtx {
 
   void pushdownFused(NodeCP node);
 
+  /// Places 'producer' and its own inputs, then emits 'producer' as its own
+  /// kernel launch so a consumer reads its output as a materialized border
+  /// across a kernel boundary. Used where the whole of 'producer's output must
+  /// be visible before the consumer runs, but an in-kernel barrier (which
+  /// forces a cooperative, whole-grid-resident launch) is undesirable.
+  void breakProducerIntoOwnKernel(NodeCP producer);
+
   std::unique_ptr<KernelOperation> generateFused(const Subgraph& sg);
 
   void generateFusedInner(const Subgraph& sg);

@@ -364,6 +364,17 @@ TEST_F(CompileTest, planMatchers) {
   EXPECT_TRUE(multi.inLaterStep("tw.add_sizes", "tw.masked_select_head"));
   EXPECT_TRUE(multi.inLaterStep("tw.masked_select_final", "tw.add_sizes"));
 
+  // The cg plan for the SAME graph comes out different from the multi-kernel
+  // plan: cg fuses every stage into one cooperative kernel ordered by an
+  // intra-kernel barrier, whereas multi splits the stages across kernel
+  // boundaries with no barrier. Asserting both guards against the mode
+  // parameter silently ceasing to change the plan.
+  EXPECT_TRUE(multi.kernelBoundaryBetween(
+      "tw.masked_select_head", "tw.masked_select_final"));
+  auto cg = CompiledPlan::from(*graph, CompiledPlan::Mode::kCG);
+  EXPECT_TRUE(cg.fuses({"tw.masked_select_cg", "aten.add.Tensor"}));
+  EXPECT_TRUE(cg.barrierBetween("tw.masked_select_cg", "aten.add.Tensor"));
+
   // Single-block: the whole masked_select fuses into one kernel.
   auto single = CompiledPlan::from(*graph, CompiledPlan::Mode::kSingleBlock);
   EXPECT_TRUE(single.fuses(
@@ -389,18 +400,28 @@ TEST_F(CompileTest, planMatchers) {
       {"tw.masked_select_head", "aten.add.Tensor", "aten.lt.Scalar"}));
 }
 
-// tw.index_select is an all-elementwise op; an elementwise producer of its
-// source/index fuses INTO its kernel and is ordered by an intra-kernel barrier
-// (a barrier within one kernel, not a kernel boundary between two).
-TEST_F(CompileTest, planBarrier) {
+// tw.index_select reads its source and index as whole tensors (argumentMeta
+// wholeTensor). In multi-kernel mode an elementwise producer of a whole-tensor
+// input runs in its own earlier kernel: fusing it in would force an
+// intra-kernel opBarrier, which promotes the launch to cooperative (whole grid
+// resident). So the multi-kernel plan carries no barriers. (A downstream add
+// that merely consumes index_select's register output still fuses with it,
+// harmlessly and without a barrier -- which is why a name-based boundary
+// matcher cannot be used here.)
+TEST_F(CompileTest, planWholeTensorBoundary) {
   auto graph = loadAndCompile("data/index_select_test.pt2");
   ASSERT_NE(graph, nullptr);
 
   auto multi = CompiledPlan::from(*graph, CompiledPlan::Mode::kMultiKernel);
-  LOG(INFO) << multi.describe();
-
-  EXPECT_TRUE(multi.fuses({"tw.index_select", "aten.add.Tensor"}));
-  EXPECT_TRUE(multi.barrierBetween("tw.index_select", "aten.add.Tensor"));
+  int32_t numBarriers = 0;
+  for (const auto& node : multi.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        numBarriers += kernel.numBarriers;
+      }
+    }
+  }
+  EXPECT_EQ(numBarriers, 0) << multi.describe();
 }
 
 // A standalone op inside a cat that is the tensor repeated by
