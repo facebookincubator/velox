@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <array>
+
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/exec/OneWayStatusFlag.h"
@@ -189,6 +191,9 @@ class BaseHashTable {
   /// produce multiple batches of results. This is initialized from HashLookup,
   /// which is expected to stay constant while 'this' is being used.
   struct JoinResultIterator {
+    /// Number of chains walked concurrently in the multi-way walk path.
+    static constexpr int32_t kNumParallelChains = 8;
+
     JoinResultIterator(
         std::vector<vector_size_t>&& _varSizeListColumns,
         uint64_t _fixedSizeListColumnsSizeSum,
@@ -202,10 +207,11 @@ class BaseHashTable {
       hits = &lookup.hits;
       lastRowIndex = 0;
       nextHit = nullptr;
+      numActiveCursors = 0;
     }
 
     bool atEnd() const {
-      return !rows || lastRowIndex == rows->size();
+      return !rows || (lastRowIndex == rows->size() && numActiveCursors == 0);
     }
 
     /// The row size estimation of the projected output columns, if applicable.
@@ -221,6 +227,17 @@ class BaseHashTable {
 
     vector_size_t lastRowIndex{0};
     char* nextHit{nullptr};
+
+    /// Chain cursors for the multi-way walk path (used when allowReorder is
+    /// set on listJoinResults()). Each active cursor points to the current
+    /// row being walked in one of 'kNumParallelChains' concurrent chains.
+    std::array<char*, kNumParallelChains> cursors{};
+    /// Probe row index associated with each cursor slot. Aligned 1:1 with
+    /// 'cursors'.
+    std::array<vector_size_t, kNumParallelChains> cursorProbeRows{};
+    /// Number of active cursors, i.e. entries in [0, numActiveCursors) of
+    /// 'cursors' are valid. Zero outside the multi-way walk path.
+    int32_t numActiveCursors{0};
   };
 
   struct RowsIterator {
@@ -296,13 +313,17 @@ class BaseHashTable {
   /// without a match. 'includeMisses' is set to true when listing results for
   /// the LEFT join.
   /// The filling stops when the total size of currently listed rows exceeds
-  /// 'maxBytes'.
+  /// 'maxBytes'. If 'allowReorder' is true, output rows for different probe
+  /// rows may be interleaved (multi-way chain walking for memory-level
+  /// parallelism). Callers that require rows for the same probe row to be
+  /// adjacent (e.g. filter joins driving NoMatchDetector) must pass false.
   virtual int32_t listJoinResults(
       JoinResultIterator& iter,
       bool includeMisses,
       folly::Range<vector_size_t*> inputRows,
       folly::Range<char**> hits,
-      uint64_t maxBytes) = 0;
+      uint64_t maxBytes,
+      bool allowReorder) = 0;
 
   /// Returns rows with 'probed' flag unset. Used by the right/full join.
   virtual int32_t listNotProbedRows(
@@ -613,7 +634,8 @@ class HashTable : public BaseHashTable {
       bool includeMisses,
       folly::Range<vector_size_t*> inputRows,
       folly::Range<char**> hits,
-      uint64_t maxBytes) override;
+      uint64_t maxBytes,
+      bool allowReorder) override;
 
   int32_t listNotProbedRows(
       RowsIterator* iter,
@@ -913,6 +935,26 @@ class HashTable : public BaseHashTable {
   // Fast path for join results when there are no duplicates in the table and
   // only fixed size rows are to be extract.
   int32_t listJoinResultsFastPath(
+      JoinResultIterator& iter,
+      bool includeMisses,
+      folly::Range<vector_size_t*> inputRows,
+      folly::Range<char**> hits,
+      uint64_t maxBytes);
+
+  // Serial chain walk. Preserves same-probe-row output adjacency required by
+  // NoMatchDetector and other filter-join trackers.
+  int32_t listJoinResultsSerial(
+      JoinResultIterator& iter,
+      bool includeMisses,
+      folly::Range<vector_size_t*> inputRows,
+      folly::Range<char**> hits,
+      uint64_t maxBytes);
+
+  // Multi-way chain walk. Walks kNumParallelChains chains concurrently so K
+  // next-pointer loads can be in flight simultaneously, exploiting the CPU's
+  // memory-level parallelism. Reorders output across probe rows, so callers
+  // that require same-probe-row adjacency must not use this path.
+  int32_t listJoinResultsReorder(
       JoinResultIterator& iter,
       bool includeMisses,
       folly::Range<vector_size_t*> inputRows,

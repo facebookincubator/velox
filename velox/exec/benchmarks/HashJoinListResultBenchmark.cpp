@@ -44,13 +44,15 @@ struct HashTableBenchmarkParams {
       int64_t probeSize,
       const std::vector<std::pair<int32_t, int32_t>>&
           keyRepeatTimesDistribution,
-      bool runErase)
+      bool runErase,
+      bool allowReorder = false)
       : mode{mode},
         buildType{buildType},
         hashTableSize{hashTableSize},
         probeSize{probeSize},
         keyRepeatTimesDistribution{keyRepeatTimesDistribution},
-        runErase{runErase} {
+        runErase{runErase},
+        allowReorder{allowReorder} {
     int32_t distSum = 0;
     buildSize = 0;
     buildKeyRepeat.reserve(keyRepeatTimesDistribution.size());
@@ -93,6 +95,7 @@ struct HashTableBenchmarkParams {
     if (runErase) {
       title += ",withErase";
     }
+    title += allowReorder ? ",reorder" : ",serial";
   }
 
   // Expected mode.
@@ -112,6 +115,9 @@ struct HashTableBenchmarkParams {
   std::vector<std::pair<int32_t, int32_t>> keyRepeatTimesDistribution;
 
   bool runErase;
+
+  // Whether to enable multi-way chain walking in listJoinResults.
+  bool allowReorder{false};
 
   // Title for reporting
   std::string title;
@@ -474,7 +480,8 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
               false,
               mapping,
               folly::Range(outputTableRows.data(), outputTableRows.size()),
-              std::numeric_limits<uint64_t>::max());
+              std::numeric_limits<uint64_t>::max(),
+              params_.allowReorder);
         }
       }
       listJoinResultTime_ += listJoinResultClocks;
@@ -502,7 +509,8 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
         false,
         mapping,
         folly::Range(outputTableRows.data(), outputTableRows.size()),
-        std::numeric_limits<uint64_t>::max());
+        std::numeric_limits<uint64_t>::max(),
+        /*allowReorder=*/false);
     uint64_t eraseClocks{0};
     {
       ClockTimer timer(eraseClocks);
@@ -579,8 +587,16 @@ int main(int argc, char** argv) {
   for (auto withErase : {false, true}) {
     for (auto mode : hashModes) {
       for (auto& dist : keyRepeatDists) {
-        params.emplace_back(HashTableBenchmarkParams(
-            mode, onlyKeyType, hashTableSize, probeRowSize, dist, withErase));
+        for (auto allowReorder : {false, true}) {
+          params.emplace_back(HashTableBenchmarkParams(
+              mode,
+              onlyKeyType,
+              hashTableSize,
+              probeRowSize,
+              dist,
+              withErase,
+              allowReorder));
+        }
       }
     }
   }

@@ -15,7 +15,9 @@
  */
 #pragma once
 
+#include <limits>
 #include <string_view>
+#include <vector>
 
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashTable.h"
@@ -563,6 +565,63 @@ class HashProbe : public Operator {
   // with filter.
   SelectivityVector leftSemiProjectIsNull_;
 
+  // Reorder-tolerant variant of NoMatchDetector for anti join. Accepts
+  // (row, passed) tuples in any order; emits onMiss for every row that had at
+  // least one advance() call but no passing match. Suitable for anti join
+  // where per-probe-row output order is not part of the join contract.
+  class AntiJoinNoMatchDetector {
+   public:
+    template <typename TOnMiss>
+    void advance(vector_size_t row, bool passed, TOnMiss&& /*onMiss*/) {
+      if (row >= static_cast<vector_size_t>(states_.size())) {
+        states_.resize(row + 1, kUnseen);
+      }
+      auto& state = states_[row];
+      if (state == kUnseen) {
+        state = passed ? kPassed : kMissed;
+        seenRows_.push_back(row);
+      } else if (state == kMissed && passed) {
+        state = kPassed;
+      }
+    }
+
+    // Emits onMiss for rows that had no passing match. Emits up to 'maxEmit'
+    // rows per call; callers should invoke repeatedly until hasLastMissedRow()
+    // returns false.
+    template <typename TOnMiss>
+    void finish(
+        TOnMiss&& onMiss,
+        int32_t maxEmit = std::numeric_limits<int32_t>::max()) {
+      int32_t emitted = 0;
+      while (finishCursor_ < seenRows_.size()) {
+        if (emitted >= maxEmit) {
+          return;
+        }
+        const auto row = seenRows_[finishCursor_++];
+        if (states_[row] == kMissed) {
+          onMiss(row);
+          ++emitted;
+        }
+        states_[row] = kUnseen;
+      }
+      seenRows_.clear();
+      finishCursor_ = 0;
+    }
+
+    bool hasLastMissedRow() const {
+      return finishCursor_ < seenRows_.size();
+    }
+
+   private:
+    static constexpr int8_t kUnseen = 0;
+    static constexpr int8_t kMissed = 1;
+    static constexpr int8_t kPassed = 2;
+
+    std::vector<int8_t> states_;
+    std::vector<vector_size_t> seenRows_;
+    size_t finishCursor_{0};
+  };
+
   // Tracks probe side rows which had one or more matches on the build side, but
   // didn't pass the filter.
   class NoMatchDetector {
@@ -583,10 +642,19 @@ class HashProbe : public Operator {
       }
     }
 
-    // Invoked at the end of all output batches.
+    // Invoked at the end of all output batches. 'maxEmit' caps how many
+    // pending misses may be flushed in this call (this detector carries at
+    // most one, so the cap is effectively 0 or 1). If maxEmit == 0 and a
+    // pending miss exists, keep it so the caller can flush it in the next
+    // batch. Otherwise reset so the detector is ready for the next input.
     template <typename TOnMiss>
-    void finish(TOnMiss&& onMiss) {
+    void finish(
+        TOnMiss&& onMiss,
+        int32_t maxEmit = std::numeric_limits<int32_t>::max()) {
       if (hasLastMissedRow()) {
+        if (maxEmit <= 0) {
+          return;
+        }
         onMiss(currentRow_);
       }
       currentRow_ = -1;
@@ -688,9 +756,16 @@ class HashProbe : public Operator {
 
   RowContainerIterator lastProbeIterator_;
 
-  // For left and anti join with filter, tracks the probe side rows which had
-  // matches on the build side but didn't pass the filter.
+  // For left and full join with filter, tracks the probe side rows which had
+  // matches on the build side but didn't pass the filter. Requires
+  // same-probe-row output adjacency, so listJoinResults() must not reorder
+  // for these join types.
   NoMatchDetector noMatchDetector_;
+
+  // Reorder-tolerant miss detector for anti join with filter. Used instead
+  // of 'noMatchDetector_' so anti join can benefit from multi-way chain
+  // walking in listJoinResults().
+  AntiJoinNoMatchDetector antiJoinNoMatchDetector_;
 
   // For left semi join filter with extra filter, de-duplicates probe side rows
   // with multiple matches.

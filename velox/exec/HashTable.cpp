@@ -2087,7 +2087,8 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
     bool includeMisses,
     folly::Range<vector_size_t*> inputRows,
     folly::Range<char**> hits,
-    uint64_t maxBytes) {
+    uint64_t maxBytes,
+    bool allowReorder) {
   VELOX_CHECK_LE(inputRows.size(), hits.size());
 
   if (iter.estimatedRowSize.has_value() && !hasDuplicates_) {
@@ -2097,9 +2098,38 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
         iter, includeMisses, inputRows, hits, maxBytes);
   }
 
+  // Dispatch between serial and multi-way chain walk. The two paths are
+  // mutually exclusive; each maintains its own iterator state so a single
+  // 'iter' must not switch between modes mid-walk. The debug check below
+  // catches accidental toggling by callers. The reorder path also requires
+  // 'nextOffset_ > 0' (chains exist) — without a next-pointer field, its
+  // nextRow() reads would alias the row's key bytes. If the table has no
+  // chains, fall back to serial which handles that case explicitly.
+  if (allowReorder && nextOffset_) {
+    VELOX_DCHECK(
+        iter.nextHit == nullptr,
+        "JoinResultIterator has serial-mode state when entering reorder path");
+    return listJoinResultsReorder(
+        iter, includeMisses, inputRows, hits, maxBytes);
+  }
+  VELOX_DCHECK_EQ(
+      iter.numActiveCursors,
+      0,
+      "JoinResultIterator has reorder-mode state when entering serial path");
+  return listJoinResultsSerial(iter, includeMisses, inputRows, hits, maxBytes);
+}
+
+template <bool ignoreNullKeys>
+int32_t HashTable<ignoreNullKeys>::listJoinResultsSerial(
+    JoinResultIterator& iter,
+    bool includeMisses,
+    folly::Range<vector_size_t*> inputRows,
+    folly::Range<char**> hits,
+    uint64_t maxBytes) {
   size_t numOut = 0;
   auto maxOut = inputRows.size();
   uint64_t totalBytes{0};
+
   while (iter.lastRowIndex < iter.rows->size()) {
     if (!iter.nextHit) {
       const auto row = (*iter.rows)[iter.lastRowIndex];
@@ -2141,6 +2171,118 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
       if (numOut >= maxOut || totalBytes >= maxBytes) {
         return numOut;
       }
+    }
+  }
+  return numOut;
+}
+
+template <bool ignoreNullKeys>
+int32_t HashTable<ignoreNullKeys>::listJoinResultsReorder(
+    JoinResultIterator& iter,
+    bool includeMisses,
+    folly::Range<vector_size_t*> inputRows,
+    folly::Range<char**> hits,
+    uint64_t maxBytes) {
+  size_t numOut = 0;
+  auto maxOut = inputRows.size();
+  uint64_t totalBytes{0};
+
+  constexpr int32_t K = JoinResultIterator::kNumParallelChains;
+  const auto numProbeRows = iter.rows->size();
+  auto& cursors = iter.cursors;
+  auto& cursorProbeRows = iter.cursorProbeRows;
+  auto& numActive = iter.numActiveCursors;
+
+  // Fill 'slot' from the next available probe row that has a hit. Emits
+  // misses as it goes when includeMisses is set. Returns true if the slot
+  // was filled.
+  auto fillSlot = [&](int32_t slot) -> bool {
+    while (iter.lastRowIndex < numProbeRows) {
+      const auto row = (*iter.rows)[iter.lastRowIndex];
+      auto* hit = (*iter.hits)[row]; // NOLINT
+      ++iter.lastRowIndex;
+      if (hit) {
+        cursors[slot] = hit;
+        cursorProbeRows[slot] = row;
+        return true;
+      }
+      if (includeMisses) {
+        inputRows[numOut] = row; // NOLINT
+        hits[numOut] = nullptr;
+        ++numOut;
+        if (numOut >= maxOut) {
+          return false;
+        }
+      }
+    }
+    return false;
+  };
+
+  // Initial fill of cursors (only when resuming from empty state).
+  if (numActive == 0) {
+    for (int32_t slot = 0; slot < K; ++slot) {
+      if (!fillSlot(slot)) {
+        if (numOut >= maxOut) {
+          return numOut;
+        }
+        break;
+      }
+      ++numActive;
+    }
+  }
+
+  while (numActive > 0) {
+    // Issue prefetches for all active cursors' next-pointer fields so K DRAM
+    // reads can be in flight in parallel.
+    for (int32_t slot = 0; slot < numActive; ++slot) {
+      __builtin_prefetch(cursors[slot] + nextOffset_);
+    }
+
+    // For each active cursor, load next, emit current row, advance.
+    bool outputFull = false;
+    for (int32_t slot = 0; slot < numActive; ++slot) {
+      char* next = nextRow(cursors[slot]);
+      inputRows[numOut] = cursorProbeRows[slot]; // NOLINT
+      hits[numOut] = cursors[slot];
+      totalBytes += iter.estimatedRowSize.has_value()
+          ? iter.estimatedRowSize.value()
+          : (joinProjectedVarColumnsSize(
+                 iter.varSizeListColumns, cursors[slot]) +
+             iter.fixedSizeListColumnsSizeSum);
+      ++numOut;
+      cursors[slot] = next;
+      if (numOut >= maxOut || totalBytes >= maxBytes) {
+        outputFull = true;
+        break;
+      }
+    }
+
+    // Compact: remove nulls so active cursors stay in [0, numActive).
+    int32_t writeSlot = 0;
+    for (int32_t slot = 0; slot < numActive; ++slot) {
+      if (cursors[slot]) {
+        if (writeSlot != slot) {
+          cursors[writeSlot] = cursors[slot];
+          cursorProbeRows[writeSlot] = cursorProbeRows[slot];
+        }
+        ++writeSlot;
+      }
+    }
+    numActive = writeSlot;
+
+    if (outputFull) {
+      return numOut;
+    }
+
+    // Top up cursors from remaining probe rows.
+    while (numActive < K) {
+      if (!fillSlot(numActive)) {
+        if (numOut >= maxOut) {
+          return numOut;
+        }
+        break;
+      }
+      ++numActive;
     }
   }
   return numOut;
