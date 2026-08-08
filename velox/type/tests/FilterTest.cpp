@@ -32,6 +32,34 @@ namespace {
 using namespace facebook::velox::common;
 using namespace facebook::velox::exec;
 
+class TestBloomFilterBackend final : public BloomFilterBackend {
+ public:
+  std::shared_ptr<BloomFilterBackend> clone() const override {
+    return std::make_shared<TestBloomFilterBackend>(*this);
+  }
+
+  int64_t byteSize() const override {
+    return values_.size() * sizeof(int64_t);
+  }
+
+  bool testingEquals(const BloomFilterBackend& other) const override {
+    const auto* otherBackend =
+        dynamic_cast<const TestBloomFilterBackend*>(&other);
+    return otherBackend != nullptr && values_ == otherBackend->values_;
+  }
+
+  bool mayContainInt64(int64_t value) const override {
+    return values_.contains(value);
+  }
+
+  void insertInt64(int64_t value) override {
+    values_.insert(value);
+  }
+
+ private:
+  folly::F14FastSet<int64_t> values_;
+};
+
 TEST(FilterTest, alwaysFalse) {
   AlwaysFalse alwaysFalse;
   EXPECT_FALSE(alwaysFalse.testInt64(1));
@@ -662,7 +690,8 @@ TEST(FilterTest, negatedBigintValuesEdgeCases) {
 }
 
 TEST(FilterTest, bigintValuesUsingBloomFilter) {
-  BigintValuesUsingBloomFilter filter(10, false);
+  BigintValuesUsingBloomFilter filter(
+      std::make_shared<SplitBlockBloomFilterBackend>(10), false);
   folly::F14FastSet<int64_t> inserted;
   for (int64_t x : {2, 3, 5, 7, 11, 13, 17, 19}) {
     filter.insert(x);
@@ -689,8 +718,24 @@ TEST(FilterTest, bigintValuesUsingBloomFilter) {
   ASSERT_TRUE(nullAllowedClone->clone(false)->testingEquals(filter));
 }
 
+TEST(FilterTest, bigintValuesUsingCustomBloomFilterBackend) {
+  auto backend = std::make_shared<TestBloomFilterBackend>();
+  BigintValuesUsingBloomFilter filter(backend, false);
+
+  filter.insert(11);
+  EXPECT_TRUE(filter.testInt64(11));
+  EXPECT_FALSE(filter.testInt64(12));
+  EXPECT_EQ(filter.byteSize(), sizeof(int64_t));
+  EXPECT_TRUE(filter.clone(std::nullopt)->testingEquals(filter));
+
+  // Serde intentionally remains specific to SplitBlockBloomFilterBackend for
+  // compatibility with the existing serialized representation.
+  EXPECT_ANY_THROW(filter.serialize());
+}
+
 TEST(FilterTest, bigintValuesUsingBloomFilterMergeWith) {
-  BigintValuesUsingBloomFilter filter(4, false);
+  BigintValuesUsingBloomFilter filter(
+      std::make_shared<SplitBlockBloomFilterBackend>(4), false);
   for (int64_t x : {2, 3, 5, 7}) {
     filter.insert(x);
   }
