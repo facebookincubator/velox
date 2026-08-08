@@ -15,9 +15,14 @@
  */
 
 #include "velox/exec/TableWriter.h"
+
+#include <folly/container/F14Set.h>
+
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
+#include "velox/vector/DecodedVector.h"
+#include "velox/vector/SelectivityVector.h"
 
 namespace facebook::velox::exec {
 
@@ -96,6 +101,19 @@ void TableWriter::setTypeMappings(
 
   mappedOutputType_ = ROW(folly::copy(outputNames), std::move(outputTypes));
   mappedInputType_ = ROW(std::move(outputNames), std::move(inputTypes));
+
+  const auto& notNullNames =
+      tableWriteNode->insertTableHandle()->notNullColumnNames();
+  if (!notNullNames.empty()) {
+    const folly::F14FastSet<std::string> notNullSet(
+        notNullNames.begin(), notNullNames.end());
+    const auto& targetNames = tableWriteNode->columnNames();
+    for (size_t i = 0; i < targetNames.size(); ++i) {
+      if (notNullSet.count(targetNames[i]) > 0) {
+        notNullChannels_.emplace_back(inputMapping_[i], targetNames[i]);
+      }
+    }
+  }
 }
 
 void TableWriter::initialize() {
@@ -143,9 +161,30 @@ bool TableWriter::finishDataSink() {
   return dataSink_->finish();
 }
 
+void TableWriter::checkNotNullConstraints(const RowVectorPtr& input) {
+  for (const auto& [channel, name] : notNullChannels_) {
+    const auto& column = input->childAt(channel);
+    if (!column->mayHaveNullsRecursive()) {
+      continue;
+    }
+    // Decode to catch nulls behind dictionary or constant wrapping, restricting
+    // the scan to the batch's rows. hasNulls() fast-paths identity (flat)
+    // mappings, so no separate flat branch is needed.
+    notNullRows_.resizeFill(input->size());
+    notNullDecodedVector_.decode(*column, notNullRows_);
+    if (notNullDecodedVector_.hasNulls()) {
+      VELOX_USER_FAIL("NULL value not allowed for NOT NULL column: {}", name);
+    }
+  }
+}
+
 void TableWriter::addInput(RowVectorPtr input) {
   if (input->size() == 0) {
     return;
+  }
+
+  if (!notNullChannels_.empty()) {
+    checkNotNullConstraints(input);
   }
 
   std::vector<VectorPtr> mappedChildren;

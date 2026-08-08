@@ -3097,6 +3097,17 @@ TableWriteNode::TableWriteNode(
         "Column not found in TableWrite input: {}",
         column);
   }
+  const auto& notNullColumnNames = insertTableHandle_->notNullColumnNames();
+  if (!notNullColumnNames.empty()) {
+    const folly::F14FastSet<std::string> columnNameSet(
+        columnNames_.begin(), columnNames_.end());
+    for (const auto& name : notNullColumnNames) {
+      VELOX_USER_CHECK(
+          columnNameSet.count(name) > 0,
+          "NOT NULL column is not in the table schema: {}",
+          name);
+    }
+  }
   if (columnStatsSpec_.has_value()) {
     VELOX_USER_CHECK(
         columnStatsSpec_->aggregationStep == AggregationNode::Step::kSingle ||
@@ -3151,6 +3162,11 @@ void TableWriteNode::addDetails(std::stringstream& stream) const {
   if (columnStatsSpec_.has_value()) {
     stream << ", ";
     addStatsSpecDetails(stream, columnStatsSpec_);
+  }
+  const auto& notNullColumnNames = insertTableHandle_->notNullColumnNames();
+  if (!notNullColumnNames.empty()) {
+    stream << ", notNullColumns: [" << folly::join(", ", notNullColumnNames)
+           << "]";
   }
 }
 
@@ -3227,6 +3243,10 @@ folly::dynamic TableWriteNode::serialize() const {
   obj["outputType"] = outputType_->serialize();
   obj["commitStrategy"] =
       std::string(connector::CommitStrategyName::toName(commitStrategy_));
+  if (!insertTableHandle_->notNullColumnNames().empty()) {
+    obj["notNullColumnNames"] =
+        ISerializable::serialize(insertTableHandle_->notNullColumnNames());
+  }
   return obj;
 }
 
@@ -3254,13 +3274,20 @@ PlanNodePtr TableWriteNode::create(const folly::dynamic& obj, void* context) {
   if (obj.count("columnStatsSpec") != 0) {
     columnStatsSpec = ColumnStatsSpec::create(obj["columnStatsSpec"], context);
   }
+  std::vector<std::string> notNullColumnNames;
+  if (obj.count("notNullColumnNames") != 0) {
+    notNullColumnNames = ISerializable::deserialize<std::vector<std::string>>(
+        obj["notNullColumnNames"]);
+  }
   return std::make_shared<TableWriteNode>(
       id,
       columns,
       columnNames,
       std::move(columnStatsSpec),
       std::make_shared<InsertTableHandle>(
-          connectorId, connectorInsertTableHandle),
+          connectorId,
+          connectorInsertTableHandle,
+          std::move(notNullColumnNames)),
       hasPartitioningScheme,
       outputType,
       commitStrategy,

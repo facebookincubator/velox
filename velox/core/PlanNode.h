@@ -60,9 +60,11 @@ struct InsertTableHandle {
   InsertTableHandle(
       const std::string& connectorId,
       const connector::ConnectorInsertTableHandlePtr&
-          connectorInsertTableHandle)
+          connectorInsertTableHandle,
+      std::vector<std::string> notNullColumnNames = {})
       : connectorId_(connectorId),
-        connectorInsertTableHandle_(connectorInsertTableHandle) {}
+        connectorInsertTableHandle_(connectorInsertTableHandle),
+        notNullColumnNames_(std::move(notNullColumnNames)) {}
 
   const std::string& connectorId() const {
     return connectorId_;
@@ -73,12 +75,20 @@ struct InsertTableHandle {
     return connectorInsertTableHandle_;
   }
 
+  /// Target columns that must not contain nulls; empty if unconstrained.
+  const std::vector<std::string>& notNullColumnNames() const {
+    return notNullColumnNames_;
+  }
+
  private:
   // Connector ID
   const std::string connectorId_;
 
   // Write request to a DataSink of that connector type
   const connector::ConnectorInsertTableHandlePtr connectorInsertTableHandle_;
+
+  // Target columns that must not contain nulls; empty if unconstrained.
+  const std::vector<std::string> notNullColumnNames_;
 };
 
 class SortOrder {
@@ -1559,7 +1569,9 @@ class TableWriteNode : public PlanNode {
   ///   - grouping keys must be a subset of 'columns' (partition columns).
   ///   - grouping keys must not contain duplicates.
   /// @param insertTableHandle Connector-specific handle identifying the
-  /// target table and write operation.
+  /// target table and write operation. If its notNullColumnNames() is set,
+  /// those 'columnNames' entries must not contain nulls; the operator throws
+  /// a user error otherwise.
   /// @param hasPartitioningScheme Whether a partitioning scheme is configured
   /// for shuffles. Controls which query config determines the number of
   /// writer operator instances: 'task_partitioned_writer_count' if true,
