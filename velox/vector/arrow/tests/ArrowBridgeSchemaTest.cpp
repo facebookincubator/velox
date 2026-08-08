@@ -209,6 +209,8 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
 
   testScalarType(VARCHAR(), "u");
   testScalarType(VARBINARY(), "z");
+  testScalarType(VARCHAR(), "U", {.exportToLargeVarTypes = true});
+  testScalarType(VARBINARY(), "Z", {.exportToLargeVarTypes = true});
 
   testScalarType(VARCHAR(), "vu", {.exportToStringView = true});
   testScalarType(VARBINARY(), "vz", {.exportToStringView = true});
