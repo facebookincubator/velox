@@ -30,6 +30,7 @@ FMT_VERSION="11.2.0"
 BOOST_VERSION="boost-1.84.0"
 ARROW_VERSION="18.0.0"
 DUCKDB_VERSION="v0.8.1"
+DUCKDB_GIT_COMMIT_HASH="6536a77"
 PROTOBUF_VERSION="21.8"
 XSIMD_VERSION="10.0.0"
 SIMDJSON_VERSION="4.1.0"
@@ -60,3 +61,11 @@ AZURE_SDK_VERSION="12.8.0"
 MINIO_VERSION="2022-05-26T05-48-41Z"
 MINIO_BINARY_NAME="minio-2022-05-26"
 AWS_SDK_VERSION="1.11.654"
+
+# Source staging version overrides when building staging Docker images.
+# See .github/README.md for the staging workflow.
+_VERSIONS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "${VELOX_STAGING:-}" == "true" ]] && [[ -f "${_VERSIONS_DIR}/setup-staging-versions.sh" ]]; then
+  source "${_VERSIONS_DIR}/setup-staging-versions.sh"
+fi
+unset _VERSIONS_DIR
