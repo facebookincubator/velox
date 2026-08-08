@@ -1,0 +1,186 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Integration Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/integration.yml
+      - '**'
+  workflow_dispatch:
+
+env:
+  MVN_CMD: ./build/mvn -ntp
+  CCACHE_DIR: "${{ github.workspace }}/.ccache"
+
+jobs:
+
+  # ============================================================================
+  # Gluten Integration Jobs
+  # ============================================================================
+
+  gluten-cpp-build:
+    name: Gluten CPP Build
+    runs-on: ubuntu-22.04
+    env:
+      CCACHE_DIR: "${{ github.workspace }}/.ccache"
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Get Ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: '${{ env.CCACHE_DIR }}'
+          key: ccache-velox-gluten-${{github.sha}}
+          restore-keys: |
+            ccache-velox-gluten-
+
+      - name: Setup Gluten/Velox
+        run: |
+          git clone --depth 1 https://github.com/apache/incubator-gluten gluten
+          cd gluten && sed -i 's/ibm/ibm-xxx/gI' ep/build-velox/src/get-velox.sh && cd ..
+          git clone --depth 1 https://github.com/facebookincubator/velox velox_meta
+          cd velox_meta;
+          wget https://github.com/IBM/velox/pull/1661.patch && git apply 1661.patch;
+          wget https://github.com/IBM/velox/pull/29.patch && git apply 29.patch
+
+      - name: Build Gluten native libraries
+        run: |
+          docker pull apache/gluten:vcpkg-centos-7
+          docker run -v $GITHUB_WORKSPACE:/work -w /work apache/gluten:vcpkg-centos-7-gcc13 bash -c "
+            git config --global --add safe.directory /work
+            set -e
+            df -a
+            cd /work
+            git log -n 3
+            cd /work/gluten
+            git log -n 3
+            export CCACHE_DIR=/work/.ccache
+            export CCACHE_SLOPPINESS=file_macro,locale,time_macros
+            mkdir -p /work/.ccache
+            ccache -M 1G
+            ccache -sz
+            export NUM_THREADS=4
+            ./dev/builddeps-veloxbe.sh --enable_vcpkg=ON --build_arrow=OFF --build_tests=OFF --build_benchmarks=OFF \
+                           --build_examples=OFF --enable_s3=ON --enable_gcs=ON --enable_hdfs=ON --enable_abfs=ON \
+                           --enable_enhanced_features=OFF --velox_home=/work/velox_meta
+            pushd /work
+            git log -n 3
+            popd
+            ccache -s
+            mkdir -p /work/.m2/repository/org/apache/arrow/
+            cp -r /root/.m2/repository/org/apache/arrow/* /work/.m2/repository/org/apache/arrow/
+          "
+          
+      - name: "Save ccache"
+        if: always()
+        uses: actions/cache/save@v4
+        id: ccache
+        with:
+          path: '${{ env.CCACHE_DIR }}'
+          key: ccache-velox-gluten-${{github.sha}}
+          
+      - uses: actions/upload-artifact@v4
+        with:
+          name: velox-native-lib-centos-7-${{github.sha}}
+          path: ./gluten/cpp/build/releases/
+          if-no-files-found: error
+          
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arrow-jars-centos-7-${{github.sha}}
+          path: .m2/repository/org/apache/arrow/
+          if-no-files-found: error
+
+  # ============================================================================
+  # Presto Integration Jobs
+  # ============================================================================
+
+  presto-native-build:
+    name: Presto Native Build
+    runs-on: ubuntu-22.04
+    container:
+      image: prestodb/presto-native-dependency:0.297-202602271419-160459b8
+    env:
+      CMAKE_BUILD_OPTIONS: |
+        -B _build/release
+        -GNinja
+        -DTREAT_WARNINGS_AS_ERRORS=1
+        -DENABLE_ALL_WARNINGS=1
+        -DCMAKE_BUILD_TYPE=Release
+        -DPRESTO_ENABLE_TESTING=ON
+        -DPRESTO_ENABLE_REMOTE_FUNCTIONS=ON
+        -DPRESTO_ENABLE_JWT=ON
+        -DPRESTO_STATS_REPORTER_TYPE=PROMETHEUS
+        -DPRESTO_MEMORY_CHECKER_TYPE=LINUX_MEMORY_CHECKER
+        -DCMAKE_PREFIX_PATH=/usr/local
+        -DThrift_ROOT=/usr/local
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        -DMAX_LINK_JOBS=4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          
+      - name: Setup Git
+        run: |
+          git config --global --add safe.directory ${GITHUB_WORKSPACE}
+          
+      - name: Clone Presto
+        run: |
+          git clone --depth 1 https://github.com/prestodb/presto.git presto
+          cd presto/presto-native-execution
+          # Replace velox submodule with current repository
+          rm -rf velox
+          ln -s ${GITHUB_WORKSPACE} velox
+          
+      - name: Get Ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: '${{ env.CCACHE_DIR }}'
+          key: ccache-velox-presto-${{github.sha}}
+          restore-keys: |
+            ccache-velox-presto-
+            
+      - name: Zero ccache statistics
+        run: ccache -sz
+        
+      - name: Build Presto Native
+        run: |
+          source /opt/rh/gcc-toolset-12/enable
+          cd presto/presto-native-execution
+          
+          cmake $CMAKE_BUILD_OPTIONS
+          ninja -C _build/release -j 4
+          
+      - name: Ccache after build
+        run: ccache -s
+        
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: '${{ env.CCACHE_DIR }}'
+          key: ccache-velox-presto-${{github.sha}}
+          
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: presto-native-build-${{github.sha}}
+          path: presto/presto-native-execution/_build/release/presto_cpp/main/presto_server
+          if-no-files-found: error
