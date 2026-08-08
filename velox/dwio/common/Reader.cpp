@@ -149,9 +149,7 @@ RowReader::ProjectColumnsResult RowReader::projectColumnsWithSelection(
       rowTypes.push_back(
           children[i] ? children[i]->type() : rowType->childAt(i));
     }
-    rowType =
-        ROW(std::vector<std::string>(rowNames.begin(), rowNames.end()),
-            std::move(rowTypes));
+    rowType = ROW(std::move(rowNames), std::move(rowTypes));
   }
 
   auto output = std::make_shared<RowVector>(
