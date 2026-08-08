@@ -965,6 +965,42 @@ void PageReader::makeDecoder() {
         break;
       }
       [[fallthrough]];
+    case Encoding::BYTE_STREAM_SPLIT: {
+      // Decode the split byte streams into a flat buffer, then use
+      // DirectDecoder to serve values through the standard visitor path.
+      // Use a separate buffer since pageData_ may point into
+      // decompressedData_ (for compressed pages).
+      const auto typeBytes = parquetTypeBytes(parquetType);
+      VELOX_CHECK_EQ(
+          encodedDataSize_ % typeBytes,
+          0,
+          "BYTE_STREAM_SPLIT page size {} is not a multiple of the type size {}",
+          encodedDataSize_,
+          typeBytes);
+      auto numValues = encodedDataSize_ / typeBytes;
+      dwio::common::ensureCapacity<char>(
+          bssDecodedData_, encodedDataSize_, &pool_);
+      auto* dest =
+          reinterpret_cast<uint8_t*>(bssDecodedData_->asMutable<char>());
+      auto* src = reinterpret_cast<const uint8_t*>(pageData_);
+      switch (parquetType) {
+        case thrift::Type::FLOAT:
+          decodeByteStreamSplit<4>(src, numValues, dest);
+          break;
+        case thrift::Type::DOUBLE:
+          decodeByteStreamSplit<8>(src, numValues, dest);
+          break;
+        default:
+          VELOX_UNSUPPORTED(
+              "BYTE_STREAM_SPLIT encoding only supports FLOAT and DOUBLE");
+      }
+      directDecoder_ = std::make_unique<dwio::common::DirectDecoder<true>>(
+          std::make_unique<dwio::common::SeekableArrayInputStream>(
+              bssDecodedData_->as<char>(), encodedDataSize_),
+          false,
+          typeBytes);
+      break;
+    }
     case Encoding::DELTA_LENGTH_BYTE_ARRAY:
       if (parquetType == thrift::Type::BYTE_ARRAY) {
         if (!deltaLengthByteArrDecoder_) {

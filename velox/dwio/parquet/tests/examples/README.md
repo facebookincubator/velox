@@ -713,6 +713,15 @@ annotation, definition level, repetition level, and compression when useful.
 - Purpose: Tests DELTA_BYTE_ARRAY decoding. Expected strings are
   `axis, axle, babble, babyhood`.
 
+### `bss_float.parquet`
+
+- Metadata: `created_by=parquet-cpp-arrow`, 100 rows, 1 row group, required
+  column `float_val: FLOAT` encoded with BYTE_STREAM_SPLIT (encoding id 9),
+  data page v1, uncompressed.
+- Purpose: Tests BYTE_STREAM_SPLIT decoding for FLOAT columns. Values were
+  generated with numpy (seed 42) and stored as float32; the reader test spot
+  checks decoded values such as `float_val[0] = 0.49671414`.
+
 ### `parquet-251.parquet`
 
 - Metadata: `created_by=parquet-mr version 1.6.0`, 5 rows, 1 row group,
