@@ -21,9 +21,12 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/expression/NullMask.h"
+#include "velox/experimental/cudf/expression/TimezoneConversion.h"
+#include "velox/experimental/cudf/expression/prestosql/TimezoneFunctions.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/ExprOptimizer.h"
@@ -210,6 +213,18 @@ getCudfFunctionRegistry() {
   return registry;
 }
 
+} // namespace
+
+CudfDateTimeContext contextFromConfig(const core::QueryConfig& config) {
+  return CudfDateTimeContext{
+      config.sessionTimezone(),
+      config.adjustTimestampToTimezone(),
+      config.sessionStartTimeMs(),
+  };
+}
+
+namespace {
+
 static bool matchCallAgainstSignatures(
     const core::TypedExprPtr& call,
     const std::vector<exec::FunctionSignaturePtr>& sigs) {
@@ -375,6 +390,7 @@ class SplitFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -405,6 +421,7 @@ class CastFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -426,6 +443,7 @@ class CardinalityFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -441,6 +459,7 @@ class IsNullFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     VELOX_CHECK_EQ(inputColumns.size(), 1, "is_null expects 1 input");
@@ -456,6 +475,7 @@ class IsNotNullFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     VELOX_CHECK_EQ(inputColumns.size(), 1, "isnotnull expects 1 input");
@@ -491,6 +511,7 @@ class RoundFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -591,6 +612,7 @@ class BinaryFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto isComparisonOp = [](cudf::binary_operator op) {
@@ -903,6 +925,7 @@ class LogicalFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // If there are no input columns, the result is a scalar.
@@ -1011,6 +1034,7 @@ class UnaryFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::unary_operation(asView(inputColumns[0]), op_, stream, mr);
@@ -1042,6 +1066,7 @@ class BetweenFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // return (value >= min) && (value <= max)
@@ -1149,6 +1174,7 @@ class GreatestLeastFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // All inputs were constant -- return the pre-folded scalar as a column.
@@ -1203,6 +1229,7 @@ class SwitchFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     if (left_ == nullptr && right_ == nullptr) {
@@ -1254,6 +1281,7 @@ class CoalesceFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // Coalesce is practically a cudf::replace_nulls over multiple columns.
@@ -1292,6 +1320,35 @@ class CoalesceFunction : public CudfFunction {
   std::unique_ptr<cudf::scalar> literalScalar_;
 };
 
+// Returns true for timestamp types whose calendar fields depend on the session
+// timezone. DATE / TIMESTAMP_DAYS are timezone-naive on the CPU path and are
+// excluded.
+bool isSubDayTimestamp(cudf::data_type type) {
+  switch (type.id()) {
+    case cudf::type_id::TIMESTAMP_SECONDS:
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Converts a timestamp column to the session-local wall clock when the context
+// requests it, so a following extraction reads local fields like the CPU path.
+// Returns nullptr when no conversion applies; callers then use the input view.
+std::unique_ptr<cudf::column> maybeConvertToSessionLocal(
+    const cudf::column_view& input,
+    const CudfDateTimeContext& context,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (!context.appliesSessionTimezone() || !isSubDayTimestamp(input.type())) {
+    return nullptr;
+  }
+  return toLocalTimestamp(input, context.sessionTimezone, stream, mr);
+}
+
 class ExtractComponentFunction : public CudfFunction {
  public:
   ExtractComponentFunction(
@@ -1304,11 +1361,21 @@ class ExtractComponentFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
+    // second and millisecond are sub-minute fields: every timezone offset is a
+    // whole number of minutes, so they are unaffected by the session timezone.
+    // The CPU path extracts them without applying the timezone, so skip the
+    // conversion here to match.
+    std::unique_ptr<cudf::column> local;
+    if (component_ != cudf::datetime::datetime_component::SECOND &&
+        component_ != cudf::datetime::datetime_component::MILLISECOND) {
+      local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
+    }
     return cudf::datetime::extract_datetime_component(
-        inputCol, component_, stream, mr);
+        local ? local->view() : inputCol, component_, stream, mr);
   }
 
  private:
@@ -1337,10 +1404,13 @@ class QuarterFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::datetime::extract_quarter(inputCol, stream, mr);
+    auto local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
+    return cudf::datetime::extract_quarter(
+        local ? local->view() : inputCol, stream, mr);
   }
 };
 
@@ -1353,10 +1423,13 @@ class DayOfYearFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::datetime::day_of_year(inputCol, stream, mr);
+    auto local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
+    return cudf::datetime::day_of_year(
+        local ? local->view() : inputCol, stream, mr);
   }
 };
 
@@ -1369,11 +1442,17 @@ class WeekFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
+    auto local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
     auto weekStrings = cudf::strings::from_timestamps(
-        inputCol, "%V", cudf::strings_column_view{}, stream, mr);
+        local ? local->view() : inputCol,
+        "%V",
+        cudf::strings_column_view{},
+        stream,
+        mr);
     return cudf::strings::to_integers(
         cudf::strings_column_view(weekStrings->view()),
         cudf::data_type(cudf::type_id::INT32),
@@ -1393,11 +1472,17 @@ class YearOfWeekFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
+    auto local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
     auto yearStrings = cudf::strings::from_timestamps(
-        inputCol, "%G", cudf::strings_column_view{}, stream, mr);
+        local ? local->view() : inputCol,
+        "%G",
+        cudf::strings_column_view{},
+        stream,
+        mr);
     return cudf::strings::to_integers(
         cudf::strings_column_view(yearStrings->view()),
         cudf::data_type(cudf::type_id::INT32),
@@ -1415,6 +1500,7 @@ class LengthFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1431,6 +1517,7 @@ class LowerFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1447,6 +1534,7 @@ class UpperFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1510,6 +1598,7 @@ class LikeFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     size_t nextInput = 0;
@@ -1765,6 +1854,7 @@ class StringPatternPredicateFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     size_t nextInput = 0;
@@ -1908,6 +1998,7 @@ class ConcatFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // Validate sizes.
@@ -1987,6 +2078,7 @@ class RowConstructorFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     VELOX_CHECK(
@@ -2069,7 +2161,8 @@ void registerCudfFunctions(
 std::shared_ptr<CudfFunction> createCudfFunction(
     const std::string& name,
     const core::TypedExprPtr& expr,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const CudfDateTimeContext& context) {
   auto& registry = getCudfFunctionRegistry();
   auto it = registry.find(name);
   if (it == registry.end()) {
@@ -2085,7 +2178,11 @@ std::shared_ptr<CudfFunction> createCudfFunction(
     if (spec.canEvaluate && !spec.canEvaluate(expr)) {
       continue;
     }
-    return spec.factory(name, expr, pool);
+    auto function = spec.factory(name, expr, pool);
+    if (function) {
+      function->setContext(context);
+    }
+    return function;
   }
   return nullptr;
 }
@@ -2729,6 +2826,11 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .variableArity("decimal(p,s)")
            .build()});
 
+  // TIMESTAMP WITH TIME ZONE function family (from_unixtime, to_unixtime,
+  // at_timezone, timezone_hour/minute, to_iso8601, format_datetime,
+  // parse_datetime, from_iso8601_timestamp, now/current_timestamp).
+  registerTimezoneFunctions(prefix);
+
   // Note: Spark and Presto functions are now registered separately via
   // registerSparkFunctions() and registerPrestoFunctions()
   return true;
@@ -2755,13 +2857,14 @@ std::string exprRegistryName(const core::TypedExprPtr& expr) {
 std::shared_ptr<FunctionExpression> FunctionExpression::create(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const CudfDateTimeContext& context) {
   auto node = std::make_shared<FunctionExpression>();
   node->expr_ = expr;
   node->inputRowSchema_ = inputRowSchema;
 
   auto name = exprRegistryName(expr);
-  node->function_ = createCudfFunction(name, expr, pool);
+  node->function_ = createCudfFunction(name, expr, pool, context);
 
   // For nested field accesses on computed ROW values (e.g. dereferencing the
   // result of row_constructor), pre-resolve the child index inside the parent
@@ -2799,7 +2902,7 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
         // string ops).  Field references are handled as leaf
         // FunctionExpressions.
         node->subexpressions_.push_back(
-            createCudfExpression(input, inputRowSchema, pool));
+            createCudfExpression(input, inputRowSchema, pool, context));
       }
     }
   }
@@ -2896,7 +2999,16 @@ ColumnOrView FunctionExpression::eval(
       subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
     }
 
-    auto result = function_->eval(subexprResults, stream, mr);
+    // The batch row count, threaded to eval so a zero-argument function (e.g.
+    // now()) can size its constant output. Every argument and input column
+    // carries it; the GPU path always has at least one input column
+    // (zero-column projections fall back to CPU and empty batches short-circuit
+    // upstream).
+    const auto numRows = !subexprResults.empty()
+        ? asView(subexprResults.front()).size()
+        : (inputColumnViews.empty() ? 0 : inputColumnViews.front().size());
+
+    auto result = function_->eval(subexprResults, numRows, stream, mr);
     if (finalize) {
       const auto requestedType = cudf_velox::veloxToCudfDataType(expr_->type());
       auto resultView = asView(result);
@@ -3003,50 +3115,6 @@ std::unordered_set<std::string> referencedInputFields(
   return fields;
 }
 
-namespace {
-
-// True if the expression tree contains a timezone-sensitive date_trunc call.
-// date_trunc on a timestamp needs the session timezone when
-// adjust_timestamp_to_session_timezone is enabled, which cuDF cannot honor, so
-// such trees must stay on CPU.
-bool containsTimezoneSensitiveDateTrunc(const core::TypedExprPtr& expr) {
-  const auto dateTruncName =
-      CudfConfig::getInstance().functionNamePrefix + "date_trunc";
-  if (expr->kind() == core::ExprKind::kCall &&
-      exprRegistryName(expr) == dateTruncName &&
-      DateTruncFunction::isTimezoneSensitive(expr)) {
-    return true;
-  }
-  for (const auto& input : expr->inputs()) {
-    if (containsTimezoneSensitiveDateTrunc(input)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// True if `expr` must fall back to CPU because it contains a timezone-sensitive
-// date_trunc while the session enables adjust_timestamp_to_session_timezone,
-// which cuDF cannot honor. False when `queryCtx` is null or the config is
-// disabled.
-bool requiresCpuForTimezone(
-    const core::TypedExprPtr& expr,
-    core::QueryCtx* queryCtx) {
-  if (queryCtx == nullptr ||
-      !queryCtx->queryConfig().adjustTimestampToTimezone()) {
-    return false;
-  }
-  if (containsTimezoneSensitiveDateTrunc(expr)) {
-    LOG_FALLBACK(
-        "date_trunc(timestamp) requires CPU evaluation when "
-        "adjust_timestamp_to_session_timezone is enabled");
-    return true;
-  }
-  return false;
-}
-
-} // namespace
-
 bool canExprRunOnGpu(
     const core::TypedExprPtr& expr,
     core::QueryCtx* queryCtx,
@@ -3059,18 +3127,18 @@ bool canExprRunOnGpu(
   const core::TypedExprPtr checked = (queryCtx != nullptr && pool != nullptr)
       ? expression::optimize(expr, queryCtx, pool)
       : expr;
-  return !requiresCpuForTimezone(checked, queryCtx) &&
-      canBeEvaluatedByCudf(checked);
+  return canBeEvaluatedByCudf(checked);
 }
 
 std::shared_ptr<CudfExpression> createCudfExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const CudfDateTimeContext& context) {
   const auto* best = findBestEvaluator(expr);
   VELOX_CHECK_NOT_NULL(
       best, "No cuDF expression evaluator can handle: {}", expr->toString());
-  return best->create(expr, inputRowSchema, pool);
+  return best->create(expr, inputRowSchema, pool, context);
 }
 
 void unregisterFunctions() {

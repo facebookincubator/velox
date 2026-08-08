@@ -567,6 +567,33 @@ TEST_F(CudfExpressionSelectionTest, signatureTypeVariableSwitchIf) {
   ASSERT_TRUE(canExprRunOnGpu(ok1, queryCtx_.get(), pool_.get()));
 }
 
+TEST_F(CudfExpressionSelectionTest, dateDiffRejectsUnsupportedConstantForms) {
+  // A null unit is admitted by DateDiffFunction's constructor as a hard
+  // VELOX_CHECK_NOT_NULL failure rather than falling back to CPU's
+  // default-null result - canEvaluate must reject it up front.
+  auto nullUnit = optimizeTypedExpr(
+      "date_diff(cast(null as varchar), date, date)",
+      rowType_,
+      queryCtx_.get(),
+      execCtx_.get());
+  EXPECT_FALSE(canExprRunOnGpu(nullUnit, queryCtx_.get(), pool_.get()));
+
+  // eval() has no path for two constant date/timestamp operands (see the
+  // "both operands are scalar" failure in binaryOp()), so DateDiffFunction::
+  // canEvaluate() rejects that form defensively. In practice, though,
+  // expression::optimize() constant-folds an all-constant call like this one
+  // on CPU before it ever reaches GPU eligibility checks, so the result here
+  // is a plain ConstantTypedExpr rather than a date_diff CallTypedExpr - and
+  // constants are trivially GPU-runnable.
+  auto allConstant = optimizeTypedExpr(
+      "date_diff('day', DATE '2020-01-01', DATE '2020-01-02')",
+      rowType_,
+      queryCtx_.get(),
+      execCtx_.get());
+  ASSERT_TRUE(allConstant->isConstantKind());
+  EXPECT_TRUE(canExprRunOnGpu(allConstant, queryCtx_.get(), pool_.get()));
+}
+
 TEST_F(CudfExpressionSelectionTest, DISABLED_castAndTryCast) {
   // TODO (dm): This is required for passing of castAndTryCast test but breaks
   // others. This is because ASTExpr agrees to support bad casts. remove after
