@@ -1101,6 +1101,25 @@ TypePtr ReaderBase::convertType(
   const bool isRepeated = schemaElement.repetition_type() &&
       *schemaElement.repetition_type() == thrift::FieldRepetitionType::REPEATED;
   const bool allowNarrowing = parquetReaderOptions_.allowInt32Narrowing();
+
+  if (schemaElement.logicalType() &&
+      schemaElement.logicalType()->getType() ==
+          thrift::LogicalType::Type::UNKNOWN) {
+    VELOX_CHECK(
+        !requestedType ||
+            isCompatible(
+                requestedType,
+                isRepeated,
+                [](const TypePtr& type) {
+                  return type->kind() == TypeKind::UNKNOWN;
+                }),
+        kTypeMappingErrorFmtStr,
+        "UNKNOWN",
+        requestedType->toString(),
+        *schemaElement.name());
+    return UNKNOWN();
+  }
+
   if (schemaElement.converted_type()) {
     switch (*schemaElement.converted_type()) {
       case thrift::ConvertedType::INT_8:
@@ -1575,6 +1594,8 @@ class ParquetRowReader::Impl {
       return; // TODO
     }
     parquetStatsContext_ = ParquetStatsContext(readerBase_->version());
+    columnReaderOptions_ =
+        dwio::common::makeColumnReaderOptions(readerBase_->options());
     ParquetParams params(
         pool_,
         columnReaderStats_,
@@ -1598,9 +1619,6 @@ class ParquetRowReader::Impl {
       // table scan.
       advanceToNextRowGroup();
     }
-
-    columnReaderOptions_ =
-        dwio::common::makeColumnReaderOptions(readerBase_->options());
   }
 
   void filterRowGroups() {

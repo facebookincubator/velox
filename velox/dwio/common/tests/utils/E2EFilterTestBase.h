@@ -152,7 +152,7 @@ class E2EFilterTestBase : public testing::Test {
   static bool typeKindSupportsValueHook(TypeKind kind) {
     return kind != TypeKind::TIMESTAMP && kind != TypeKind::ARRAY &&
         kind != TypeKind::ROW && kind != TypeKind::MAP &&
-        kind != TypeKind::HUGEINT;
+        kind != TypeKind::HUGEINT && kind != TypeKind::UNKNOWN;
   }
 
   std::vector<RowVectorPtr> makeDataset(
