@@ -24,7 +24,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/IOUtils.h"
 
-namespace facebook::velox {
+namespace facebook::velox::functions::sparksql {
 
 /// BloomFilterBase provides static methods to test and set bits in a Bloom
 /// filter.
@@ -207,4 +207,4 @@ class BloomFilter : BloomFilterBase {
   std::vector<uint64_t, Allocator> bits_;
 };
 
-} // namespace facebook::velox
+} // namespace facebook::velox::functions::sparksql

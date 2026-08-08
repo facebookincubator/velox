@@ -30,6 +30,7 @@ add_executable(
   AssertNotNullTest.cpp
   AtLeastNNonNullsTest.cpp
   Base64Test.cpp
+  BloomFilterTest.cpp
   BitwiseTest.cpp
   CharTypeWriteSideCheckTest.cpp
   ComparisonsTest.cpp
