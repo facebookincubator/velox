@@ -121,6 +121,10 @@ int main(int argc, char** argv) {
           {"unscaled_value",
            std::make_shared<UnscaledValueArgTypesGenerator>()},
           {"make_timestamp",
+           std::make_shared<MakeTimestampArgTypesGenerator>()},
+          {"make_timestamp_ntz",
+           std::make_shared<MakeTimestampArgTypesGenerator>()},
+          {"try_make_timestamp_ntz",
            std::make_shared<MakeTimestampArgTypesGenerator>()}};
 
   std::shared_ptr<ReferenceQueryRunner> referenceQueryRunner{nullptr};
