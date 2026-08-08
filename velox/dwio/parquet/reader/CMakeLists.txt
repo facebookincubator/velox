@@ -62,4 +62,6 @@ velox_link_libraries(
   arrow
   Snappy::snappy
   zstd::zstd
+  velox_common_geospatial_serde
+  GEOS::geos
 )

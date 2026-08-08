@@ -23,6 +23,12 @@
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/common/geospatial/GeometrySerde.h"
+#include "velox/functions/prestosql/types/GeometryRegistration.h"
+#include "velox/functions/prestosql/types/GeometryType.h"
+#define USE_UNSTABLE_GEOS_CPP_API 1
+#include <geos/io/WKBWriter.h>
+#include <geos/io/WKTReader.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::common;
@@ -60,6 +66,126 @@ class ParquetReaderTest : public ParquetTestBase {
     return readerOptions;
   }
 };
+
+TEST_F(ParquetReaderTest, readGeometryParquet) {
+  const std::string filename("geometry.parquet");
+
+  geos::io::WKTReader wktReader;
+  geos::io::WKBWriter wkbWriter;
+
+  // Expected well-known strings for geometry objects
+  const std::vector<std::string> fileEntries = {
+    "POINT (10 20)",
+    "LINESTRING (0 0, 10 10, 20 20)",
+    "POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0))",
+    "MULTIPOINT ((0 0), (10 20), (30 40))",
+    "MULTILINESTRING ((0 0, 5 5), (10 10, 20 20))",
+    "MULTIPOLYGON (((0 0, 4 0, 4 4, 0 4, 0 0)), ((5 5, 9 5, 9 9, 5 9, 5 5)))"
+  };
+
+  // Read parquet file of geometry values
+  auto readerOptions = makeDefaultReaderOptions();
+  auto outputRowType = ROW("geom", GEOMETRY());
+
+  readerOptions.setFileSchema(outputRowType);
+  auto reader = createReader(filename, readerOptions);
+  EXPECT_EQ(reader->numberOfRows(), 6ULL);
+  auto rowType = reader->typeWithId();
+  EXPECT_EQ(rowType->type()->kind(), TypeKind::ROW);
+  EXPECT_EQ(rowType->size(), 1ULL);
+  EXPECT_EQ(rowType->childAt(0)->type()->kind(), TypeKind::VARBINARY);
+
+  auto rowReader = createRowReaderFromReader(*reader, outputRowType);
+
+  VectorPtr result = BaseVector::create(outputRowType, 0, &(*leafPool_));
+  rowReader->next(fileEntries.size(), result);
+
+  auto column = result->as<RowVector>()->childAt(0);
+
+  auto* flat = column->loadedVector()->asFlatVector<StringView>();
+
+  ASSERT_EQ(flat->size(), fileEntries.size());
+
+  // Verify read colum matches expected geometry values
+  for (int i = 0; i < static_cast<int>(fileEntries.size()); ++i) {
+    ASSERT_FALSE(flat->isNullAt(i)) << "unexpected null at row " << i;
+    auto deserialized =
+      common::geospatial::GeometryDeserializer::deserialize(flat->valueAt(i));
+    auto expected = wktReader.read(fileEntries[i]);
+    EXPECT_TRUE(expected->equals(deserialized.get()))
+        << "geometry mismatch at row " << i << ": " << fileEntries[i];
+  }
+}
+
+TEST_F(ParquetReaderTest, readGeometryTestDictionary) {
+  // Validates the read geometry case in StringColumnReader::getValues() for dictionary and non-dictionary pages
+  registerGeometryType();
+  geos::io::WKTReader wktReader;
+  geos::io::WKBWriter wkbWriter;
+
+  const std::vector<std::string> testsWKT = {
+    "POINT (1 2)",
+    "LINESTRING (0 0, 10 10, 20 20)",
+    "MULTILINESTRING ((0 0, 5 5), (10 10, 20 20))",
+    "MULTIPOINT ((0 0), (10 20), (30 40))",
+    "MULTIPOLYGON (((0 0, 4 0, 4 4, 0 4, 0 0)), ((5 5, 9 5, 9 9, 5 9, 5 5)))",
+    "POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0))"
+  };
+
+  std::vector<std::string> testsWKB;
+  testsWKB.reserve(testsWKT.size());
+
+  for(const auto& wkt : testsWKT){
+    std::ostringstream wkbStream;
+    wkbWriter.write(*wktReader.read(wkt), wkbStream);
+    testsWKB.push_back(wkbStream.str());
+  }
+
+  std::vector<StringView> testsStringView;
+
+  for(const auto& wkb : testsWKB){
+    testsStringView.emplace_back(StringView(wkb));
+  }
+
+  // Write a parquet file with the WKB bytes as VARBINARY
+  auto data = makeRowVector(
+      {"geom"},
+      {makeFlatVector<StringView>(testsStringView, VARBINARY())});
+
+  // Create lambda to call write and read test on both dictionary and non-dictionary pages
+  auto runTest = [&](bool useDictionary){
+    ParquetWriterOptions writerOptions;
+    writerOptions.enableDictionary = useDictionary;
+    auto* sink = write(data, writerOptions);
+
+    // Read back requesting GEOMETRY() as the output type
+    const auto readType = ROW({"geom"}, {GEOMETRY()});
+    auto readerBundle = readerBuilder(*sink, readType).build();
+    VectorPtr result = BaseVector::create(readType, 0, &(*leafPool_));
+
+    readerBundle.rowReader->next(testsWKT.size(), result);
+
+    auto column = result->as<RowVector>()->childAt(0);
+
+    auto* flat = column->loadedVector()->asFlatVector<StringView>();
+
+    ASSERT_EQ(flat->size(), testsWKT.size());
+
+    // Verify the output is valid ESRI-serialised geometry
+    for (int i = 0; i < static_cast<int>(testsWKT.size()); ++i) {
+      ASSERT_FALSE(flat->isNullAt(i)) << "unexpected null at row " << i;
+      auto deserialized =
+        common::geospatial::GeometryDeserializer::deserialize(flat->valueAt(i));
+      auto expected = wktReader.read(testsWKT[i]);
+      EXPECT_TRUE(expected->equals(deserialized.get()))
+        << "geometry mismatch at row " << i << ": " << testsWKT[i];
+    }
+  };
+  
+  // Call with and without useDictionary
+  runTest(true);
+  runTest(false);
+}
 
 TEST_F(ParquetReaderTest, createFormatOptions) {
   config::ConfigBase connectorConfig({
