@@ -221,6 +221,8 @@ ParquetReaderFactory::createFormatOptions(
       ParquetConfig::allowInt32Narrowing(connectorConfig, session));
   options->setFooterMemoryTrackingThreshold(
       ParquetConfig::footerMemoryTrackingThreshold(connectorConfig, session));
+  options->setNullStructIfAllFieldsMissing(
+      ParquetConfig::nullStructIfAllFieldsMissing(connectorConfig, session));
   return options;
 }
 
@@ -263,6 +265,10 @@ class ReaderBase {
 
   const std::shared_ptr<const dwio::common::TypeWithId>& schemaWithId() {
     return schemaWithId_;
+  }
+
+  bool nullStructIfAllFieldsMissing() const {
+    return parquetReaderOptions_.nullStructIfAllFieldsMissing();
   }
 
   bool isFileColumnNamesReadAsLowerCase() const {
@@ -1580,15 +1586,19 @@ class ParquetRowReader::Impl {
         columnReaderStats_,
         readerBase_->fileMetaData(),
         readerBase->sessionTimezone(),
-        options_.timestampPrecision());
+        options_.timestampPrecision(),
+        readerBase_->nullStructIfAllFieldsMissing());
     requestedType_ = options_.requestedType() ? options_.requestedType()
                                               : readerBase_->schema();
+    columnReaderOptions_ =
+        dwio::common::makeColumnReaderOptions(readerBase_->options());
     columnReader_ = ParquetColumnReader::build(
         columnReaderOptions_,
         requestedType_,
         readerBase_->schemaWithId(), // Id is schema id
         params,
-        *options_.scanSpec());
+        *options_.scanSpec(),
+        pool_);
     columnReader_->setIsTopLevel();
 
     filterRowGroups();
@@ -1598,9 +1608,6 @@ class ParquetRowReader::Impl {
       // table scan.
       advanceToNextRowGroup();
     }
-
-    columnReaderOptions_ =
-        dwio::common::makeColumnReaderOptions(readerBase_->options());
   }
 
   void filterRowGroups() {
