@@ -91,6 +91,38 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
     });
   }
 
+  static int64_t makeTimeWithTz(const std::string& timeStr) {
+    auto result =
+        util::fromTimeWithTimezoneString(timeStr.c_str(), timeStr.size());
+    VELOX_CHECK(
+        !result.hasError(), "Parse error: {}", result.error().message());
+    return result.value();
+  }
+
+  RowVectorPtr makeTimeWithTzAndIntervalRow(
+      int64_t timeWithTimezone,
+      int64_t interval) {
+    return makeRowVector({
+        makeNullableFlatVector<int64_t>(
+            {timeWithTimezone}, TIME_WITH_TIME_ZONE()),
+        makeNullableFlatVector<int64_t>({interval}, INTERVAL_DAY_TIME()),
+    });
+  }
+
+  RowVectorPtr makeTimeWithTzRow(int64_t time1, int64_t time2) {
+    return makeRowVector({
+        makeNullableFlatVector<int64_t>({time1}, TIME_WITH_TIME_ZONE()),
+        makeNullableFlatVector<int64_t>({time2}, TIME_WITH_TIME_ZONE()),
+    });
+  }
+
+  static void expectTimeWithTzEq(
+      std::optional<int64_t> result,
+      int64_t expected) {
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), expected);
+  }
+
  public:
   // Helper class to manipulate timestamp with timezone types in tests. Provided
   // only for convenience.
@@ -791,6 +823,21 @@ TEST_F(DateTimeFunctionsTest, hourTime) {
       VeloxUserError); // overflow case
 }
 
+TEST_F(DateTimeFunctionsTest, hourTimeWithTimezone) {
+  const auto hour = [&](std::optional<int64_t> timeWithTimezone) {
+    return evaluateOnce<int64_t>(
+        "hour(c0)", TIME_WITH_TIME_ZONE(), timeWithTimezone);
+  };
+
+  // null handling
+  EXPECT_EQ(std::nullopt, hour(std::nullopt));
+
+  EXPECT_EQ(0, hour(makeTimeWithTz("00:59:59.999+00:00")));
+  EXPECT_EQ(10, hour(makeTimeWithTz("10:30:00.000+05:30")));
+  EXPECT_EQ(14, hour(makeTimeWithTz("14:00:00.000-08:00")));
+  EXPECT_EQ(23, hour(makeTimeWithTz("23:59:59.999+00:00")));
+}
+
 TEST_F(DateTimeFunctionsTest, dayOfMonth) {
   const auto day = [&](std::optional<Timestamp> date) {
     return evaluateOnce<int64_t>("day_of_month(c0)", date);
@@ -1130,6 +1177,166 @@ TEST_F(DateTimeFunctionsTest, timestampWithTimeZonePlusIntervalDayTime) {
   EXPECT_EQ(
       "2024-11-03 01:30:00.000 America/Los_Angeles",
       test("2024-11-03 01:30 America/Los_Angeles", 1 * kMillisInHour));
+}
+
+TEST_F(DateTimeFunctionsTest, timeWithTimezoneIntervalDayTime) {
+  const auto testTimePlusIntervalCommutative =
+      [&](int64_t timeWithTimezone,
+          int64_t interval) -> std::optional<int64_t> {
+    auto result1 = evaluateOnce<int64_t>(
+        "plus(c0, c1)",
+        makeTimeWithTzAndIntervalRow(timeWithTimezone, interval));
+
+    auto result2 = evaluateOnce<int64_t>(
+        "plus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({interval}, INTERVAL_DAY_TIME()),
+            makeNullableFlatVector<int64_t>(
+                {timeWithTimezone}, TIME_WITH_TIME_ZONE()),
+        }));
+
+    EXPECT_EQ(result1, result2);
+    return result1;
+  };
+
+  const int64_t threeHours = 3 * util::kMillisInHour;
+  const int64_t ninetyMinutes = 90 * util::kMillisInMinute;
+  const int64_t twoHours = 2 * util::kMillisInHour;
+  const int64_t oneDay = util::kMillisInDay;
+
+  auto result1 = testTimePlusIntervalCommutative(
+      makeTimeWithTz("03:04:05.321+00:00"), threeHours);
+  expectTimeWithTzEq(result1, makeTimeWithTz("06:04:05.321+00:00"));
+
+  auto result2 = testTimePlusIntervalCommutative(
+      makeTimeWithTz("03:04:05.321+05:30"), ninetyMinutes);
+  expectTimeWithTzEq(result2, makeTimeWithTz("04:34:05.321+05:30"));
+
+  auto result3 = testTimePlusIntervalCommutative(
+      makeTimeWithTz("03:04:05.321-08:00"), -twoHours);
+  expectTimeWithTzEq(result3, makeTimeWithTz("01:04:05.321-08:00"));
+
+  auto result4 = testTimePlusIntervalCommutative(
+      makeTimeWithTz("12:30:45.123+00:00"), oneDay);
+  expectTimeWithTzEq(result4, makeTimeWithTz("12:30:45.123+00:00"));
+
+  // Negative-interval wrap: 01:00:00 + (-2h) wraps to 23:00:00.
+  auto result5 = testTimePlusIntervalCommutative(
+      makeTimeWithTz("01:00:00.000+05:30"), -twoHours);
+  expectTimeWithTzEq(result5, makeTimeWithTz("23:00:00.000+05:30"));
+
+  // Positive wrap past midnight: 23:00:00 + 2h wraps to 01:00:00.
+  auto result6 = testTimePlusIntervalCommutative(
+      makeTimeWithTz("23:00:00.000+00:00"), twoHours);
+  expectTimeWithTzEq(result6, makeTimeWithTz("01:00:00.000+00:00"));
+
+  // Null propagation.
+  auto nullResult = evaluateOnce<int64_t>(
+      "plus(c0, c1)",
+      makeRowVector({
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt}, TIME_WITH_TIME_ZONE()),
+          makeNullableFlatVector<int64_t>({threeHours}, INTERVAL_DAY_TIME()),
+      }));
+  EXPECT_EQ(std::nullopt, nullResult);
+}
+
+TEST_F(DateTimeFunctionsTest, timeWithTimezoneMinusIntervalDayTime) {
+  const auto timeMinusInterval =
+      [&](int64_t timeWithTimezone,
+          int64_t interval) -> std::optional<int64_t> {
+    return evaluateOnce<int64_t>(
+        "minus(c0, c1)",
+        makeTimeWithTzAndIntervalRow(timeWithTimezone, interval));
+  };
+
+  const int64_t twoHours = 2 * util::kMillisInHour;
+  const int64_t threeHours = 3 * util::kMillisInHour;
+
+  auto result1 =
+      timeMinusInterval(makeTimeWithTz("10:00:00.000+00:00"), twoHours);
+  expectTimeWithTzEq(result1, makeTimeWithTz("08:00:00.000+00:00"));
+
+  auto result2 =
+      timeMinusInterval(makeTimeWithTz("01:00:00.000+05:30"), threeHours);
+  expectTimeWithTzEq(result2, makeTimeWithTz("22:00:00.000+05:30"));
+
+  // Negative wrap: 01:00:00 - 2h wraps to 23:00:00.
+  auto result3 =
+      timeMinusInterval(makeTimeWithTz("01:00:00.000+00:00"), twoHours);
+  expectTimeWithTzEq(result3, makeTimeWithTz("23:00:00.000+00:00"));
+
+  // Null propagation.
+  auto nullResult = evaluateOnce<int64_t>(
+      "minus(c0, c1)",
+      makeRowVector({
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt}, TIME_WITH_TIME_ZONE()),
+          makeNullableFlatVector<int64_t>({twoHours}, INTERVAL_DAY_TIME()),
+      }));
+  EXPECT_EQ(std::nullopt, nullResult);
+}
+
+TEST_F(DateTimeFunctionsTest, timeWithTimezoneMinusTimeWithTimezone) {
+  const auto timeMinusTime = [&](int64_t time1,
+                                 int64_t time2) -> std::optional<int64_t> {
+    return evaluateOnce<int64_t>(
+        "minus(c0, c1)", makeTimeWithTzRow(time1, time2));
+  };
+
+  // Test basic subtraction: 10:00:00+00:00 - 08:00:00+00:00 = 2 hours
+  const int64_t time1 = makeTimeWithTz("10:00:00.000+00:00");
+  const int64_t time2 = makeTimeWithTz("08:00:00.000+00:00");
+  const int64_t twoHours = 2 * util::kMillisInHour;
+  EXPECT_EQ(twoHours, timeMinusTime(time1, time2));
+
+  // Test reverse (negative result): 08:00:00+00:00 - 10:00:00+00:00 = -2 hours
+  EXPECT_EQ(-twoHours, timeMinusTime(time2, time1));
+
+  // Test same time: 10:00:00+00:00 - 10:00:00+00:00 = 0
+  EXPECT_EQ(0, timeMinusTime(time1, time1));
+
+  // Test with millisecond precision
+  const int64_t time3 = makeTimeWithTz("12:30:45.123+00:00");
+  const int64_t time4 = makeTimeWithTz("06:04:05.321+00:00");
+  const int64_t expected =
+      (12 * util::kMillisInHour + 30 * util::kMillisInMinute +
+       45 * util::kMillisInSecond + 123) -
+      (6 * util::kMillisInHour + 4 * util::kMillisInMinute +
+       5 * util::kMillisInSecond + 321);
+  EXPECT_EQ(expected, timeMinusTime(time3, time4));
+
+  // Test with different timezones - should use UTC time for calculation
+  const int64_t time5 = makeTimeWithTz("10:00:00.000+05:30");
+  const int64_t time6 = makeTimeWithTz("08:00:00.000+00:00");
+  const int64_t threeAndHalfHours = -210 * util::kMillisInMinute;
+  EXPECT_EQ(threeAndHalfHours, timeMinusTime(time5, time6));
+
+  // Test midnight cases
+  const int64_t almostMidnight = makeTimeWithTz("23:59:59.999+00:00");
+  const int64_t midnight = makeTimeWithTz("00:00:00.000+00:00");
+  EXPECT_EQ(util::kMillisInDay - 1, timeMinusTime(almostMidnight, midnight));
+
+  // Test with same UTC time but different timezones
+  const int64_t time7 = makeTimeWithTz("00:00:00.000+00:00");
+  const int64_t time8 = makeTimeWithTz("01:00:00.000+01:00");
+  EXPECT_EQ(0, timeMinusTime(time7, time8));
+
+  // Test with NULL values
+  const auto timeMinusTimeWithNull =
+      [&](std::optional<int64_t> t1,
+          std::optional<int64_t> t2) -> std::optional<int64_t> {
+    return evaluateOnce<int64_t>(
+        "minus(c0, c1)",
+        makeRowVector({
+            makeNullableFlatVector<int64_t>({t1}, TIME_WITH_TIME_ZONE()),
+            makeNullableFlatVector<int64_t>({t2}, TIME_WITH_TIME_ZONE()),
+        }));
+  };
+
+  EXPECT_EQ(std::nullopt, timeMinusTimeWithNull(std::nullopt, std::nullopt));
+  EXPECT_EQ(std::nullopt, timeMinusTimeWithNull(time1, std::nullopt));
+  EXPECT_EQ(std::nullopt, timeMinusTimeWithNull(std::nullopt, time2));
 }
 
 TEST_F(DateTimeFunctionsTest, minusTimestamp) {
@@ -1933,6 +2140,37 @@ TEST_F(DateTimeFunctionsTest, minuteTime) {
   }
 }
 
+TEST_F(DateTimeFunctionsTest, minuteTimeWithTimezone) {
+  const auto minute = [&](std::optional<int64_t> timeWithTimezone) {
+    return evaluateOnce<int64_t>(
+        "minute(c0)", TIME_WITH_TIME_ZONE(), timeWithTimezone);
+  };
+
+  // null handling
+  EXPECT_EQ(std::nullopt, minute(std::nullopt));
+
+  // Test minute extraction from TIME WITH TIME ZONE
+  EXPECT_EQ(0, minute(makeTimeWithTz("00:00:00.000+00:00"))); // midnight
+  EXPECT_EQ(59, minute(makeTimeWithTz("23:59:59.999+00:00"))); // last minute
+
+  // Boundary values
+  EXPECT_EQ(
+      0, minute(makeTimeWithTz("00:00:59.999+00:00"))); // last sec of first min
+  EXPECT_EQ(
+      1,
+      minute(makeTimeWithTz("00:01:00.000+00:00"))); // first sec of second min
+  EXPECT_EQ(
+      59,
+      minute(makeTimeWithTz("00:59:59.999+00:00"))); // last sec of first hour
+  EXPECT_EQ(
+      0,
+      minute(makeTimeWithTz("01:00:00.000+00:00"))); // first sec of second hour
+
+  EXPECT_EQ(30, minute(makeTimeWithTz("10:30:00.000+05:30")));
+  EXPECT_EQ(0, minute(makeTimeWithTz("14:00:00.000-08:00")));
+  EXPECT_EQ(15, minute(makeTimeWithTz("00:15:30.123+00:00")));
+}
+
 TEST_F(DateTimeFunctionsTest, minuteTimeInvalidRange) {
   const auto minute = [&](int64_t time) {
     return evaluateOnce<int64_t>(
@@ -2057,6 +2295,21 @@ TEST_F(DateTimeFunctionsTest, secondTime) {
   EXPECT_THROW(
       second(std::numeric_limits<int64_t>::max()),
       VeloxUserError); // overflow case
+}
+
+TEST_F(DateTimeFunctionsTest, secondTimeWithTimezone) {
+  const auto second = [&](std::optional<int64_t> timeWithTimezone) {
+    return evaluateOnce<int64_t>(
+        "second(c0)", TIME_WITH_TIME_ZONE(), timeWithTimezone);
+  };
+
+  // null handling
+  EXPECT_EQ(std::nullopt, second(std::nullopt));
+
+  EXPECT_EQ(0, second(makeTimeWithTz("00:00:00.999+00:00")));
+  EXPECT_EQ(30, second(makeTimeWithTz("00:00:30.000+00:00")));
+  EXPECT_EQ(3, second(makeTimeWithTz("01:02:03.123+00:00")));
+  EXPECT_EQ(0, second(makeTimeWithTz("14:00:00.000-08:00")));
 }
 
 TEST_F(DateTimeFunctionsTest, millisecond) {
@@ -2215,6 +2468,20 @@ TEST_F(DateTimeFunctionsTest, millisecondTime) {
   auto expectedWithNulls = makeNullableFlatVector<int64_t>(
       {0, std::nullopt, 123, std::nullopt, 999});
   assertEqualVectors(expectedWithNulls, resultWithNulls);
+}
+
+TEST_F(DateTimeFunctionsTest, millisecondTimeWithTimezone) {
+  const auto millisecond = [&](std::optional<int64_t> timeWithTimezone) {
+    return evaluateOnce<int64_t>(
+        "millisecond(c0)", TIME_WITH_TIME_ZONE(), timeWithTimezone);
+  };
+
+  // Null handling.
+  EXPECT_EQ(std::nullopt, millisecond(std::nullopt));
+
+  EXPECT_EQ(123, millisecond(makeTimeWithTz("01:02:03.123+00:00")));
+  EXPECT_EQ(456, millisecond(makeTimeWithTz("12:00:00.456+05:30")));
+  EXPECT_EQ(789, millisecond(makeTimeWithTz("23:59:59.789-08:00")));
 }
 
 TEST_F(DateTimeFunctionsTest, extractFromIntervalDayTime) {
@@ -6331,8 +6598,6 @@ TEST_F(DateTimeFunctionsTest, atTimezoneTest) {
 }
 
 TEST_F(DateTimeFunctionsTest, atTimezoneTimeWithTimezoneTest) {
-  using namespace facebook::velox::util;
-
   const auto at_timezone = [&](std::optional<int64_t> timeWithTimezone,
                                std::optional<std::string> targetTimezone) {
     return evaluateOnce<int64_t>(
@@ -6340,15 +6605,6 @@ TEST_F(DateTimeFunctionsTest, atTimezoneTimeWithTimezoneTest) {
         {TIME_WITH_TIME_ZONE(), VARCHAR()},
         timeWithTimezone,
         targetTimezone);
-  };
-
-  // Helper to create TIME WITH TIME ZONE values
-  const auto makeTimeWithTz = [](const std::string& timeStr) -> int64_t {
-    auto result = fromTimeWithTimezoneString(timeStr.c_str(), timeStr.size());
-    if (result.hasError()) {
-      throw std::runtime_error("Parse error: " + result.error().message());
-    }
-    return result.value();
   };
 
   // Test 1: Change from +05:30 to +08:00
