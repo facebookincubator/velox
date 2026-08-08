@@ -20,6 +20,7 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/synchronization/Baton.h>
 #include <gtest/gtest.h>
+#include <atomic>
 #include <thread>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -47,6 +48,33 @@ std::optional<std::string> getNext(SeekableInputStream& input) {
     return std::nullopt;
   }
 }
+
+// Records enterArbitration()/leaveArbitration() so a test can verify that a
+// blocking coalesced load wait suspends the calling driver via the operator
+// pool's reclaimer.
+class CountingReclaimer : public MemoryReclaimer {
+ public:
+  CountingReclaimer() : MemoryReclaimer(0) {}
+
+  static std::unique_ptr<MemoryReclaimer> create() {
+    return std::make_unique<CountingReclaimer>();
+  }
+
+  void enterArbitration() override {
+    ++numEntered;
+    entered.post();
+  }
+
+  void leaveArbitration() noexcept override {
+    ++numLeft;
+  }
+
+  std::atomic_int32_t numEntered{0};
+  std::atomic_int32_t numLeft{0};
+  // Posted the first time enterArbitration() is called so a test can wait for
+  // the suspending wait to begin without polling.
+  folly::Baton<> entered;
+};
 
 class DirectBufferedInputTest : public testing::Test {
  protected:
@@ -561,6 +589,106 @@ DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithAfterLoading) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   }
+}
+
+DEBUG_ONLY_TEST_F(DirectBufferedInputTest, coalescedLoadWaitEntersArbitration) {
+  // When a stream needs data that a prefetch is still producing on another
+  // thread, the on-thread wait must suspend the calling driver via the operator
+  // pool's reclaimer, otherwise the task's thread count stays nonzero and a
+  // concurrent memory-arbitration reclaim dead-locks. This test has no real
+  // driver, so it installs a reclaimer that counts enterArbitration()/
+  // leaveArbitration() and asserts the wait invokes them once.
+  auto rootPool = memoryManager()->addRootPool(
+      "coalescedLoadWaitRoot", kMaxMemory, MemoryReclaimer::create());
+  auto leafReclaimer = CountingReclaimer::create();
+  auto* countingReclaimer =
+      static_cast<CountingReclaimer*>(leafReclaimer.get());
+  auto pool = rootPool->addLeafChild(
+      "coalescedLoadWaitLeaf", true, std::move(leafReclaimer));
+
+  constexpr int32_t kContentSize = 4 << 20; // 4MB
+  std::string content;
+  content.resize(kContentSize);
+  for (int32_t i = 0; i < kContentSize; ++i) {
+    content[i] = static_cast<char>('a' + (i % 26));
+  }
+  const uint64_t regionSize = DirectBufferedInput::kTinySize + 1000;
+  auto readFile = std::make_shared<InMemoryReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setLoadQuantum(1 << 20);
+
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "coalescedLoadWaitFile");
+  StringIdLease groupId(ids, "coalescedLoadWaitGroup");
+
+  DirectBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      tracker_,
+      std::move(groupId),
+      dataIoStats_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  // Block the prefetch after it enters the kLoading state so a concurrent
+  // reader parks on the wait future rather than loading inline.
+  folly::Baton<> loadStarted;
+  folly::Baton<> loadAllowed;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::cache::CoalescedLoad::loadOrFuture::loading",
+      std::function<void(const CoalescedLoad*)>(
+          [&](const CoalescedLoad* /*load*/) {
+            loadStarted.post();
+            loadAllowed.wait();
+          }));
+
+  auto stream1 = input.enqueue(common::Region{0, regionSize}, nullptr);
+  auto stream2 = input.enqueue(common::Region{regionSize, regionSize}, nullptr);
+  ASSERT_NE(stream1, nullptr);
+  ASSERT_NE(stream2, nullptr);
+
+  input.load(LogType::TEST);
+
+  // Wait until the prefetch is loading (and blocked on 'loadAllowed').
+  loadStarted.wait();
+
+  // Read on another thread; it parks in the coalesced load wait because the
+  // prefetch is still loading.
+  std::atomic_bool consumerDone{false};
+  std::optional<std::string> consumed;
+  std::thread consumer([&]() {
+    consumed = getNext(*stream1);
+    consumerDone = true;
+  });
+
+  // The reader must enter arbitration (suspend) before its wait returns. Wait
+  // for the reclaimer's baton; without the fix it is never posted and this
+  // times out.
+  ASSERT_TRUE(
+      countingReclaimer->entered.try_wait_for(std::chrono::seconds(30)));
+  EXPECT_EQ(countingReclaimer->numEntered.load(), 1);
+  EXPECT_FALSE(consumerDone.load());
+
+  // Unblock the prefetch; the reader's wait returns and it leaves arbitration.
+  loadAllowed.post();
+  consumer.join();
+
+  EXPECT_EQ(countingReclaimer->numLeft.load(), 1);
+  ASSERT_TRUE(consumed.has_value());
+  EXPECT_EQ(consumed.value(), content.substr(0, regionSize));
+
+  stream1.reset();
+  stream2.reset();
+  input.reset();
+  // Drain the prefetch executor so the background load fully unwinds and drops
+  // its reference to the coalesced load before the pool is checked/destroyed.
+  executor_->join();
+  EXPECT_EQ(pool->usedBytes(), 0);
 }
 
 TEST_F(DirectBufferedInputTest, preloadCalledTwice) {
