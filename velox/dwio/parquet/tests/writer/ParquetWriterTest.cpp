@@ -31,6 +31,7 @@
 #include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
+#include "velox/dwio/parquet/writer/arrow/PageIndex.h"
 #include "velox/dwio/parquet/writer/arrow/tests/ColumnReader.h"
 #include "velox/dwio/parquet/writer/arrow/tests/FileReader.h"
 #include "velox/exec/Cursor.h"
@@ -203,6 +204,7 @@ TEST_F(ParquetWriterTest, createFormatOptions) {
       {"hive.parquet.writer.enable-dictionary", "true"},
       {"hive.parquet.writer.page-size", "2KB"},
       {"hive.parquet.writer.created-by", "test-writer"},
+      {"hive.parquet.writer.enable-page-index", "true"},
       {"iceberg.parquet.writer.page-size", "4KB"},
   });
   config::ConfigBase session({
@@ -220,10 +222,23 @@ TEST_F(ParquetWriterTest, createFormatOptions) {
   ASSERT_TRUE(parquetOptions->dataPageSize.has_value());
   ASSERT_TRUE(parquetOptions->batchSize.has_value());
   ASSERT_TRUE(parquetOptions->createdBy.has_value());
+  ASSERT_TRUE(parquetOptions->enableWritePageIndex.has_value());
   EXPECT_FALSE(parquetOptions->enableDictionary.value());
   EXPECT_EQ(parquetOptions->dataPageSize.value(), 2 * 1024);
   EXPECT_EQ(parquetOptions->batchSize.value(), 97);
   EXPECT_EQ(parquetOptions->createdBy.value(), "test-writer");
+  EXPECT_TRUE(parquetOptions->enableWritePageIndex.value());
+
+  // When unset in both connector and session config, the option is left unset
+  // so the writer falls back to its default (page index off).
+  {
+    auto defaultOptions =
+        checkedPointerCast<ParquetWriterOptions>(factory.createFormatOptions(
+            config::ConfigBase{std::unordered_map<std::string, std::string>{}},
+            config::ConfigBase{
+                std::unordered_map<std::string, std::string>{}}));
+    EXPECT_FALSE(defaultOptions->enableWritePageIndex.has_value());
+  }
 
   config::ConfigBase icebergConnectorConfig(
       rawConnectorConfig.rawConfigsWithPrefix("iceberg.parquet."));
@@ -725,6 +740,77 @@ TEST_F(ParquetWriterTest, toggleDataPageVersion) {
   ASSERT_EQ(
       testDataPageVersion({}, sessionProperties),
       thrift::PageType::DATA_PAGE_V2);
+}
+
+TEST_F(ParquetWriterTest, writePageIndex) {
+  const int64_t kRows = 10'000;
+  const auto data = makeRowVector({
+      makeFlatVector<int32_t>(kRows, [](auto row) { return row; }),
+  });
+
+  // Writes 'data' with the page-index option set to 'enable', then returns
+  // whether the written column chunk carries a column index and an offset
+  // index.
+  const auto writeAndReadPageIndex =
+      [&](std::optional<bool> enable) -> std::pair<bool, bool> {
+    ParquetWriterOptions writerOptions;
+    writerOptions.enableWritePageIndex = enable;
+    auto* sinkPtr = write(data, writerOptions);
+    auto reader = createReaderInMemory(*sinkPtr);
+    const auto columnChunk = reader->fileMetaData().rowGroup(0).columnChunk(0);
+    return {columnChunk.hasColumnIndex(), columnChunk.hasOffsetIndex()};
+  };
+
+  // Unset leaves the page index off (default behavior).
+  EXPECT_EQ(writeAndReadPageIndex(std::nullopt), std::make_pair(false, false));
+  // Explicitly disabled leaves the page index off.
+  EXPECT_EQ(writeAndReadPageIndex(false), std::make_pair(false, false));
+  // Enabled writes both the column index and the offset index.
+  EXPECT_EQ(writeAndReadPageIndex(true), std::make_pair(true, true));
+}
+
+TEST_F(ParquetWriterTest, writePageIndexMultiplePages) {
+  // Writes enough rows with a small data page size that the single column chunk
+  // spans multiple data pages, then verifies the written page index describes
+  // one entry per data page rather than a single trivial entry.
+  const int64_t kRows = 50'000;
+  const auto data = makeRowVector({
+      makeFlatVector<int32_t>(kRows, [](auto row) { return row; }),
+  });
+
+  ParquetWriterOptions writerOptions;
+  writerOptions.enableWritePageIndex = true;
+  // Small data page size forces the column chunk to span many data pages.
+  writerOptions.dataPageSize = 4 * 1024;
+  auto* sinkPtr = write(data, writerOptions);
+
+  // The written column chunk carries both a column index and an offset index.
+  auto reader = createReaderInMemory(*sinkPtr);
+  const auto columnChunk = reader->fileMetaData().rowGroup(0).columnChunk(0);
+  ASSERT_TRUE(columnChunk.hasColumnIndex());
+  ASSERT_TRUE(columnChunk.hasOffsetIndex());
+
+  // Read the page index through the Arrow reader and confirm it describes more
+  // than one data page, with the offset index and column index page counts in
+  // agreement.
+  std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
+  auto arrowBufferReader = std::make_shared<::arrow::io::BufferReader>(
+      std::make_shared<::arrow::Buffer>(
+          reinterpret_cast<const uint8_t*>(sinkData.data()), sinkData.size()));
+  auto fileReader = parquetArrow::ParquetFileReader::open(arrowBufferReader);
+  auto pageIndexReader = fileReader->getPageIndexReader();
+  ASSERT_NE(pageIndexReader, nullptr);
+  auto rowGroupIndexReader = pageIndexReader->rowGroup(0);
+  ASSERT_NE(rowGroupIndexReader, nullptr);
+
+  auto offsetIndex = rowGroupIndexReader->getOffsetIndex(0);
+  ASSERT_NE(offsetIndex, nullptr);
+  auto columnIndex = rowGroupIndexReader->getColumnIndex(0);
+  ASSERT_NE(columnIndex, nullptr);
+
+  EXPECT_GT(offsetIndex->pageLocations().size(), 1);
+  EXPECT_EQ(
+      offsetIndex->pageLocations().size(), columnIndex->nullPages().size());
 }
 
 DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromWriterOptions) {
