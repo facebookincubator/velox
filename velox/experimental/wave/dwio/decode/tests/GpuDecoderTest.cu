@@ -737,6 +737,27 @@ class GpuDecoderTest : public ::testing::Test {
     }
   }
 
+  void testUnsupportedStep(DecodeStep step) {
+    DecodePrograms programs;
+    programs.programs.emplace_back();
+    programs.programs.back().push_back(std::make_unique<GpuDecode>());
+    programs.programs.back().front()->step = step;
+    auto stream = std::make_unique<Stream>();
+    LaunchParams params(*arena_);
+    // Velox's exception headers do not compile under nvcc, so match on
+    // std::exception rather than using VELOX_ASSERT_THROW.
+    auto expected = fmt::format(
+        "Wave GPU decode does not implement DecodeStep {}",
+        decodeStepName(step));
+    try {
+      launchDecode(programs, params, stream.get());
+      FAIL() << "Expected a throw for " << expected;
+    } catch (const std::exception& e) {
+      EXPECT_NE(std::string(e.what()).find(expected), std::string::npos)
+          << e.what();
+    }
+  }
+
  private:
   std::unique_ptr<GpuArena> arena_;
 
@@ -804,6 +825,16 @@ TEST_F(GpuDecoderTest, countBits) {
   testCountBits(20000, 512);
   testCountBits(30000, 1024);
   testCountBits(100000, 2048);
+}
+
+TEST_F(GpuDecoderTest, unsupportedStep) {
+  // A step the decode dispatch has no case for must be reported instead of
+  // leaving the output undecoded. kDictionary and kBitpack64 are declared in
+  // DecodeStep but not implemented, and kRleBool has a shared memory size but
+  // still no case in the dispatch.
+  testUnsupportedStep(DecodeStep::kDictionary);
+  testUnsupportedStep(DecodeStep::kBitpack64);
+  testUnsupportedStep(DecodeStep::kRleBool);
 }
 
 TEST_F(GpuDecoderTest, streamApi) {
