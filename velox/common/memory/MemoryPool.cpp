@@ -561,11 +561,7 @@ void* MemoryPoolImpl::allocate(
 
 void MemoryPoolImpl::reportExternalAllocation(int64_t size) {
   VELOX_CHECK_GT(size, 0, "reportExternalAllocation requires positive size");
-  if (FOLLY_UNLIKELY(kind_ != Kind::kLeaf)) {
-    VELOX_FAIL(
-        "Memory operation is only allowed on leaf memory pool: {}", toString());
-  }
-  ++numExternalAllocs_;
+  CHECK_AND_INC_MEM_OP_STATS(this, ExternalAllocs);
   reserve(size);
   cumulativeExternalBytes_ += size;
 }
@@ -712,11 +708,7 @@ bool MemoryPoolImpl::transferTo(MemoryPool* dest, void* buffer, uint64_t size) {
 
 void MemoryPoolImpl::reportExternalFree(int64_t size) {
   VELOX_CHECK_GT(size, 0, "reportExternalFree requires positive size");
-  if (FOLLY_UNLIKELY(kind_ != Kind::kLeaf)) {
-    VELOX_FAIL(
-        "Memory operation is only allowed on leaf memory pool: {}", toString());
-  }
-  ++numExternalFrees_;
+  CHECK_AND_INC_MEM_OP_STATS(this, ExternalFrees);
   release(size);
 }
 
