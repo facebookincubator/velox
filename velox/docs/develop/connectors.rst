@@ -122,6 +122,32 @@ This is the behavior when the proxy settings are enabled:
 5. Use . or \*. to indicate domain suffix matching, e.g. `.foobar.com` will
    match `test.foobar.com` or `foo.foobar.com`.
 
+S3 Storage adapter region
+*************************
+
+The region used to sign requests is resolved in this order:
+
+1. `hive.s3.endpoint.region`, if configured.
+2. The region named in the `hive.s3.endpoint` host, e.g.
+   `bucket.s3.us-west-2.amazonaws.com`.
+3. ``aws-global``, if the endpoint is an AWS one or no endpoint is configured.
+4. Otherwise the region is left unset and the AWS SDK resolves it from
+   `AWS_REGION`, the active profile, or IMDS.
+
+``aws-global`` signs as `us-east-1`, but unlike a literal region it lets the SDK
+re-sign for the region a `301 PermanentRedirect` names, so a bucket in another
+region succeeds rather than failing. The SDK does not cache the bucket region,
+so this costs a round trip per request. Configure `hive.s3.endpoint.region`
+when the region is known.
+
+Step 4 covers S3-compatible backends and DNS aliases fronting AWS, which are
+indistinguishable from each other by hostname. Set `hive.s3.endpoint.region` to
+``aws-global`` for an alias that needs cross-region access.
+
+Note that `hive.s3.aws-imds-enabled` does not participate in this: it only
+permits the SDK to query IMDS, and it defaults to true even where no IMDS
+exists. A region IMDS does return is the EC2 instance's, not the bucket's.
+
 HDFS Storage adapter
 ********************
 

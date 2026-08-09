@@ -30,7 +30,7 @@ TEST(S3ConfigTest, defaultConfig) {
   ASSERT_EQ(s3Config.useSSL(), true);
   ASSERT_EQ(s3Config.useInstanceCredentials(), false);
   ASSERT_EQ(s3Config.endpoint(), std::nullopt);
-  ASSERT_EQ(s3Config.endpointRegion(), std::nullopt);
+  ASSERT_EQ(s3Config.endpointRegion(), kS3AwsGlobalRegion);
   ASSERT_EQ(s3Config.accessKey(), std::nullopt);
   ASSERT_EQ(s3Config.secretKey(), std::nullopt);
   ASSERT_EQ(s3Config.iamRole(), std::nullopt);
@@ -40,6 +40,60 @@ TEST(S3ConfigTest, defaultConfig) {
   ASSERT_EQ(s3Config.bucket(), "");
   ASSERT_EQ(s3Config.useIMDS(), true);
   ASSERT_EQ(s3Config.minPartSize(), 10485760);
+}
+
+TEST(S3ConfigTest, endpointRegionDefaultsToAwsGlobal) {
+  auto configFor = [](std::unordered_map<std::string, std::string> values) {
+    return S3Config(
+        "", std::make_shared<config::ConfigBase>(std::move(values)));
+  };
+
+  // Neither endpoint nor region set: AWS is implied, since the S3-compatible
+  // backends all require an endpoint.
+  ASSERT_EQ(configFor({}).endpointRegion(), kS3AwsGlobalRegion);
+
+  // A configured region wins, with or without an endpoint.
+  ASSERT_EQ(
+      configFor({{S3Config::baseConfigKey(S3Config::Keys::kEndpointRegion),
+                  "us-west-2"}})
+          .endpointRegion(),
+      "us-west-2");
+  ASSERT_EQ(
+      configFor({{S3Config::baseConfigKey(S3Config::Keys::kEndpoint),
+                  "s3.us-east-1.amazonaws.com"},
+                 {S3Config::baseConfigKey(S3Config::Keys::kEndpointRegion),
+                  "us-west-2"}})
+          .endpointRegion(),
+      "us-west-2");
+
+  // Region inferred from an AWS endpoint host.
+  ASSERT_EQ(
+      configFor({{S3Config::baseConfigKey(S3Config::Keys::kEndpoint),
+                  "bucket.s3.us-west-2.amazonaws.com"}})
+          .endpointRegion(),
+      "us-west-2");
+
+  // An AWS endpoint host that names no region.
+  ASSERT_EQ(
+      configFor({{S3Config::baseConfigKey(S3Config::Keys::kEndpoint),
+                  "s3.amazonaws.com"}})
+          .endpointRegion(),
+      kS3AwsGlobalRegion);
+
+  // A DNS alias fronting AWS is indistinguishable from a non-AWS backend, so
+  // the SDK resolves the region. Configure the region explicitly for these.
+  ASSERT_EQ(
+      configFor({{S3Config::baseConfigKey(S3Config::Keys::kEndpoint),
+                  "my-alias.internal.example.com"}})
+          .endpointRegion(),
+      std::nullopt);
+
+  // Non-AWS backend.
+  ASSERT_EQ(
+      configFor({{S3Config::baseConfigKey(S3Config::Keys::kEndpoint),
+                  "10.0.0.1:9000"}})
+          .endpointRegion(),
+      std::nullopt);
 }
 
 TEST(S3ConfigTest, overrideConfig) {

@@ -25,6 +25,12 @@ class ConfigBase;
 
 namespace facebook::velox::filesystems {
 
+/// Region used for AWS when none is configured and none can be inferred from
+/// the endpoint. The SDK signs this as us-east-1, but unlike a literal region
+/// it also lets AWSClient::AttemptExhaustively re-sign for the region a 301
+/// PermanentRedirect names, instead of failing a cross-region request.
+inline constexpr const char* kS3AwsGlobalRegion = "aws-global";
+
 /// Build config required to initialize an S3FileSystem instance.
 /// All hive.s3 options can be set on a per-bucket basis.
 /// The bucket-specific option is set by replacing the hive.s3. prefix on an
@@ -155,7 +161,18 @@ class S3Config {
     return config_.find(Keys::kEndpoint)->second;
   }
 
-  /// The S3 storage endpoint region.
+  /// The region as explicitly configured via hive.s3.endpoint.region, with no
+  /// derivation from the endpoint. Callers that must distinguish an operator's
+  /// deliberate choice from a derived default use this rather than
+  /// endpointRegion().
+  std::optional<std::string> configuredEndpointRegion() const {
+    return config_.find(Keys::kEndpointRegion)->second;
+  }
+
+  /// The S3 storage endpoint region. Falls back to the region named in the
+  /// endpoint host, then, only when the endpoint is an AWS one, to
+  /// kS3AwsGlobalRegion. Returns nullopt for other endpoints so that the SDK
+  /// resolves the region from the environment, a profile, or IMDS as before.
   std::optional<std::string> endpointRegion() const;
 
   /// Access key to use.

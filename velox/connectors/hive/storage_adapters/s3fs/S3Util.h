@@ -194,6 +194,17 @@ std::string getHttpProxyEnvVar();
 std::string getHttpsProxyEnvVar();
 std::string getNoProxyEnvVar();
 
+// True if the endpoint host is an '.amazonaws.com' one. A DNS alias fronting
+// AWS is not recognized as such.
+// The endpoint may contain a trailing '/' that is handled.
+bool isAWSEndpoint(std::string_view endpoint);
+
+// Region to use for an endpoint when none is configured: the region named in
+// the endpoint host, else kS3AwsGlobalRegion when the endpoint is an AWS one or
+// is absent, else nullopt to leave the region to the SDK. An empty endpoint
+// counts as absent, which implies AWS.
+std::optional<std::string> defaultRegionForEndpoint(std::string_view endpoint);
+
 // Adopted from the AWS Java SDK
 // Endpoint can be 'service.[region].amazonaws.com' or
 // 'bucket.s3-[region].amazonaws.com' or bucket.s3.[region].amazonaws.com'
