@@ -232,6 +232,13 @@ void DeletionVectorReader::deserializeRoaring64Bitmap(std::string_view data) {
     highBits = folly::Endian::little(highBits);
     ptr += sizeof(uint32_t);
 
+    VELOX_CHECK_LE(
+        highBits,
+        kMaxRoaring64GroupKey,
+        "Roaring64Bitmap group key exceeds the maximum the Iceberg "
+        "deletion-vector format can represent: {}",
+        highBits);
+
     int64_t highBitsOffset = static_cast<int64_t>(highBits) << 32;
 
     // Deserialize the 32-bit bitmap for this group.

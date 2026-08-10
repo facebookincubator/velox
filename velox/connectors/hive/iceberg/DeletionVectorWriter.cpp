@@ -159,6 +159,12 @@ void serializeContainerData(
 
 void DeletionVectorWriter::addDeletedPosition(int64_t position) {
   VELOX_CHECK_GE(position, 0, "Deleted position must be non-negative.");
+  VELOX_CHECK_LE(
+      position,
+      kMaxPosition,
+      "Deleted position exceeds the maximum the Iceberg deletion-vector "
+      "format can represent: {}",
+      position);
   positions_.push_back(position);
 }
 

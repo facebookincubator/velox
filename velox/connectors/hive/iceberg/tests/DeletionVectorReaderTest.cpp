@@ -169,6 +169,128 @@ std::string wrapInRoaring64(
   return data;
 }
 
+// Serializes a roaring bitmap whose containers may each use a different
+// encoding, which none of the helpers above can express: the no-run helpers
+// pick array vs bitset purely by cardinality, and the run helper makes every
+// container run-encoded.
+//
+// Iceberg's own test suite carries an "all container types" case; this builds
+// an equivalent bitmap from scratch so the reader is exercised against array,
+// run, and bitset containers coexisting in one blob.
+struct ContainerSpec {
+  enum class Encoding { kArray, kRun, kBitset };
+
+  uint16_t key{0};
+  Encoding encoding{Encoding::kArray};
+  // Values within the container's 64K block, sorted. For kRun these are still
+  // the expanded values; the runs are derived from them.
+  std::vector<uint16_t> values;
+};
+
+// Collapses sorted values into (start, lengthMinus1) runs.
+std::vector<std::pair<uint16_t, uint16_t>> toRuns(
+    const std::vector<uint16_t>& values) {
+  std::vector<std::pair<uint16_t, uint16_t>> runs;
+  for (size_t i = 0; i < values.size();) {
+    size_t j = i;
+    while (j + 1 < values.size() && values[j + 1] == values[j] + 1) {
+      ++j;
+    }
+    runs.emplace_back(values[i], static_cast<uint16_t>(j - i));
+    i = j + 1;
+  }
+  return runs;
+}
+
+std::string serializeRoaringBitmapMixed(
+    const std::vector<ContainerSpec>& containers) {
+  constexpr uint32_t kSerialCookieWithRuns = 12'347;
+  constexpr uint32_t kRunContainersNoOffsetThreshold = 4;
+  constexpr size_t kBitmapContainerBytes = 8'192;
+
+  const auto numContainers = static_cast<uint32_t>(containers.size());
+  // This helper always emits the run-bearing cookie and a run bitmap, even
+  // when no container is actually run-encoded, so readers always take the
+  // "runs present" branch. The offset section must follow the same rule or the
+  // two sides disagree on the header size.
+  const bool hasRunContainers = true;
+
+  std::string data;
+  const uint32_t cookie = kSerialCookieWithRuns | ((numContainers - 1) << 16);
+  data.append(reinterpret_cast<const char*>(&cookie), 4);
+
+  // Run bitmap: bit i marks container i as run-encoded, LSB-first.
+  const uint32_t runBitmapBytes = (numContainers + 7) / 8;
+  std::vector<uint8_t> runBitmap(runBitmapBytes, 0);
+  for (uint32_t i = 0; i < numContainers; ++i) {
+    if (containers[i].encoding == ContainerSpec::Encoding::kRun) {
+      runBitmap[i / 8] |= static_cast<uint8_t>(1u << (i % 8));
+    }
+  }
+  data.append(reinterpret_cast<const char*>(runBitmap.data()), runBitmapBytes);
+
+  for (const auto& spec : containers) {
+    const auto cardMinus1 = static_cast<uint16_t>(spec.values.size() - 1);
+    data.append(reinterpret_cast<const char*>(&spec.key), 2);
+    data.append(reinterpret_cast<const char*>(&cardMinus1), 2);
+  }
+
+  const auto containerBytes = [&](const ContainerSpec& spec) -> uint32_t {
+    switch (spec.encoding) {
+      case ContainerSpec::Encoding::kArray:
+        return static_cast<uint32_t>(spec.values.size()) * 2;
+      case ContainerSpec::Encoding::kBitset:
+        return kBitmapContainerBytes;
+      case ContainerSpec::Encoding::kRun:
+        return 2 + 4 * static_cast<uint32_t>(toRuns(spec.values).size());
+    }
+    return 0;
+  };
+
+  // The offset section is omitted for run-bearing bitmaps below the threshold.
+  const bool hasOffsetSection =
+      !hasRunContainers || numContainers >= kRunContainersNoOffsetThreshold;
+  if (hasOffsetSection) {
+    uint32_t offset =
+        4 + runBitmapBytes + 4 * numContainers + 4 * numContainers;
+    for (const auto& spec : containers) {
+      data.append(reinterpret_cast<const char*>(&offset), 4);
+      offset += containerBytes(spec);
+    }
+  }
+
+  for (const auto& spec : containers) {
+    switch (spec.encoding) {
+      case ContainerSpec::Encoding::kArray:
+        for (auto value : spec.values) {
+          data.append(reinterpret_cast<const char*>(&value), 2);
+        }
+        break;
+      case ContainerSpec::Encoding::kRun: {
+        const auto runs = toRuns(spec.values);
+        const auto numRuns = static_cast<uint16_t>(runs.size());
+        data.append(reinterpret_cast<const char*>(&numRuns), 2);
+        for (auto [start, lengthMinus1] : runs) {
+          data.append(reinterpret_cast<const char*>(&start), 2);
+          data.append(reinterpret_cast<const char*>(&lengthMinus1), 2);
+        }
+        break;
+      }
+      case ContainerSpec::Encoding::kBitset: {
+        std::vector<uint64_t> words(1'024, 0);
+        for (auto value : spec.values) {
+          words[value / 64] |= (1ULL << (value % 64));
+        }
+        for (auto word : words) {
+          data.append(reinterpret_cast<const char*>(&word), 8);
+        }
+        break;
+      }
+    }
+  }
+  return data;
+}
+
 // Concatenates the deletion-vector-v1 magic bytes with a serialized roaring
 // bitmap. The frame's length prefix and CRC-32 both cover these bytes.
 std::string magicAndVectorBytes(const std::string& bitmap) {
@@ -1053,4 +1175,159 @@ TEST_F(DeletionVectorReaderTest, skipsPositionsBeforeRequestedRange) {
   reader.readDeletePositions(10, 50, bitmap);
 
   EXPECT_EQ(getSetBits(bitmap, 50), (std::vector<uint64_t>{40}));
+}
+
+// The roaring serialization format is defined as little-endian. Readers that
+// take a caller-configured buffer have to assert its byte order explicitly,
+// because a big-endian-configured buffer would silently decode garbage.
+//
+// There is no equivalent footgun here — the reader takes raw bytes and
+// applies an explicit folly::Endian::little conversion to every field, so the
+// interpretation is fixed regardless of caller or host. What is worth pinning
+// is the observable behavior that check exists to produce: bytes serialized
+// big-endian must be rejected, not silently misread.
+//
+// They are, though via a different guard than one might expect. The
+// byte-swapped cookie (0x3A300000) matches neither serial cookie, so the blob
+// is treated as the 64-bit format; the byte-swapped group count is then
+// absurd and trips the Roaring64 sanity limit. The assertion below pins that
+// whole chain, so a future change that loosens either the cookie check or the
+// group limit cannot start silently accepting byte-swapped input.
+TEST_F(DeletionVectorReaderTest, rejectsBigEndianSerializedBitmap) {
+  auto appendBigEndian32 = [](std::string& out, uint32_t value) {
+    const char bytes[4] = {
+        static_cast<char>((value >> 24) & 0xFF),
+        static_cast<char>((value >> 16) & 0xFF),
+        static_cast<char>((value >> 8) & 0xFF),
+        static_cast<char>(value & 0xFF)};
+    out.append(bytes, sizeof(bytes));
+  };
+
+  // The same empty 32-bit bitmap serializeRoaringBitmapNoRun({}) produces,
+  // but with both header words written big-endian.
+  std::string bigEndianBitmap;
+  appendBigEndian32(bigEndianBitmap, 12'346);
+  appendBigEndian32(bigEndianBitmap, 0);
+
+  auto tempFile = writeDvFile(bigEndianBitmap);
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(), 1, static_cast<uint64_t>(bigEndianBitmap.size()));
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  VELOX_ASSERT_THROW(
+      reader.deletedPositions(),
+      "Roaring64Bitmap group count exceeds sanity limit");
+}
+
+TEST_F(DeletionVectorReaderTest, enforcesRoaring64GroupKeyBound) {
+  // Iceberg caps the Roaring64 group key at 2147483646 because readers load it
+  // back as a signed 32-bit int. A key at or above 2^31 would shift into the
+  // sign bit of `key << 32` and surface as a negative row position.
+  // DeletionVectorWriter already refuses to produce such a blob; the reader
+  // must reject one written by anything else rather than emit garbage.
+  const auto readPositions = [&](uint32_t groupKey) {
+    auto bitmapData =
+        wrapInRoaring64({{groupKey, serializeRoaringBitmapNoRun({5})}});
+    auto tempFile = writeDvFile(bitmapData);
+    auto dvFile = makeDvDeleteFile(
+        tempFile->getPath(), 1, static_cast<uint64_t>(bitmapData.size()));
+    DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+    return reader.deletedPositions();
+  };
+
+  constexpr uint32_t kMaxGroupKey = 2'147'483'646;
+  EXPECT_EQ(
+      readPositions(kMaxGroupKey),
+      (std::vector<int64_t>{(int64_t{kMaxGroupKey} << 32) + 5}));
+
+  VELOX_ASSERT_THROW(
+      readPositions(kMaxGroupKey + 1),
+      "Roaring64Bitmap group key exceeds the maximum the Iceberg "
+      "deletion-vector format can represent");
+}
+
+// The scenarios below mirror the shapes Iceberg's own position-index tests
+// cover. The bitmaps are built here rather than taken from anywhere, so they
+// exercise the same encodings without depending on external fixtures.
+
+TEST_F(DeletionVectorReaderTest, smallAlternatingValues) {
+  // Sparse odd positions in a single array container — the simplest shape a
+  // real deletion vector takes.
+  const std::vector<int64_t> positions = {1, 3, 5, 7, 9};
+  auto bitmapData = serializeRoaringBitmapNoRun(positions);
+  auto tempFile = writeDvFile(bitmapData);
+
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(),
+      positions.size(),
+      static_cast<uint64_t>(bitmapData.size()));
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  EXPECT_EQ(reader.deletedPositions(), positions);
+}
+
+TEST_F(DeletionVectorReaderTest, smallAndLargeValuesPast31Bits) {
+  // Two array containers far apart, the second past 2^31. The container key
+  // there is 32767, so a reader that sign-extends the 16-bit key or the
+  // resulting offset lands on a negative position.
+  const std::vector<int64_t> positions = {
+      100, 101, 2'147'483'747, 2'147'483'748};
+  auto bitmapData = serializeRoaringBitmapNoRun(positions);
+  auto tempFile = writeDvFile(bitmapData);
+
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(),
+      positions.size(),
+      static_cast<uint64_t>(bitmapData.size()));
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  EXPECT_EQ(reader.deletedPositions(), positions);
+}
+
+TEST_F(DeletionVectorReaderTest, allContainerEncodingsInOneBitmap) {
+  // Array, run, and bitset containers coexisting in a single bitmap, wrapped
+  // in a second Roaring64 group. Each encoding advances the read cursor by a
+  // different rule, so the reader has to switch strategies three times and
+  // still land on the next group's header.
+  //
+  // Three containers with runs present also puts this below the threshold at
+  // which the offset section is written, exercising the no-offset path.
+  std::vector<uint16_t> denseValues;
+  denseValues.reserve(5'000);
+  for (uint16_t i = 0; i < 5'000; ++i) {
+    denseValues.push_back(static_cast<uint16_t>(i * 2));
+  }
+
+  const std::vector<ContainerSpec> lowGroup = {
+      {/*key=*/0, ContainerSpec::Encoding::kArray, {5, 7}},
+      {/*key=*/1, ContainerSpec::Encoding::kRun, {1, 2, 3, 4}},
+      {/*key=*/2, ContainerSpec::Encoding::kBitset, denseValues},
+  };
+  const std::vector<ContainerSpec> highGroup = {
+      {/*key=*/0, ContainerSpec::Encoding::kArray, {9}},
+  };
+
+  auto bitmapData = wrapInRoaring64(
+      {{0, serializeRoaringBitmapMixed(lowGroup)},
+       {1, serializeRoaringBitmapMixed(highGroup)}});
+  auto tempFile = writeDvFile(bitmapData);
+
+  constexpr int64_t kHighGroupBase = int64_t{1} << 32;
+  std::vector<int64_t> expected = {5, 7};
+  for (int64_t i = 1; i <= 4; ++i) {
+    expected.push_back(65'536 + i);
+  }
+  for (auto value : denseValues) {
+    expected.push_back(131'072 + value);
+  }
+  expected.push_back(kHighGroupBase + 9);
+  std::sort(expected.begin(), expected.end());
+
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(),
+      expected.size(),
+      static_cast<uint64_t>(bitmapData.size()));
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  EXPECT_EQ(reader.deletedPositions(), expected);
 }
