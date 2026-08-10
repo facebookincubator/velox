@@ -47,4 +47,14 @@ inline constexpr size_t kDeletionVectorCrcSize = 4;
 /// reader enforce this so neither can accept a blob the other would reject.
 inline constexpr uint32_t kMaxRoaring64GroupKey = 2'147'483'646;
 
+/// Puffin container format constants, shared by the deletion-vector writer
+/// (which emits the footer) and the reader (which parses it when the manifest
+/// carries no blob offset). Magic is "PFA1" and brackets both the file and the
+/// footer payload.
+inline constexpr char kPuffinMagic[] = {'\x50', '\x46', '\x41', '\x31'};
+inline constexpr size_t kPuffinMagicSize = 4;
+
+/// Blob type of an Iceberg V3 deletion vector inside a Puffin file.
+inline constexpr char kDeletionVectorBlobType[] = "deletion-vector-v1";
+
 } // namespace facebook::velox::connector::hive::iceberg

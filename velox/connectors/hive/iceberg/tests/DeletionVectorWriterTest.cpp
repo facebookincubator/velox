@@ -18,6 +18,8 @@
 
 #include <fstream>
 
+#include <folly/json.h>
+#include <folly/lang/Bits.h>
 #include <gtest/gtest.h>
 #include <zlib.h>
 
@@ -301,6 +303,105 @@ TEST_F(DeletionVectorWriterTest, fourOrMoreContainersWithOffsets) {
     positions.push_back(static_cast<int64_t>(i) * 65536 + 42);
   }
   verifyRoundTrip(positions, 5 * 65536 + 100);
+}
+
+// Decodes the Puffin footer of a file written by writePuffinFile and returns
+// the parsed footer JSON. Layout per the Puffin spec:
+//   Magic Blob... Footer
+//   Footer := Magic FooterPayload FooterPayloadSize Flags Magic
+// with FooterPayloadSize and Flags each a 4-byte little-endian value. The
+// trailer is located from the end of the file so nothing here depends on the
+// writer's own offset arithmetic.
+namespace {
+folly::dynamic readPuffinFooter(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  const std::string bytes(
+      (std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+
+  constexpr size_t kMagicSize = 4;
+  constexpr size_t kTrailerSize = kMagicSize + 4 + 4;
+  EXPECT_GE(bytes.size(), kMagicSize + kTrailerSize);
+  EXPECT_EQ(bytes.substr(0, kMagicSize), "PFA1") << "missing leading magic";
+  EXPECT_EQ(bytes.substr(bytes.size() - kMagicSize), "PFA1")
+      << "missing trailing magic";
+
+  const auto readLittleEndian32 = [&](size_t offset) {
+    uint32_t value;
+    std::memcpy(&value, bytes.data() + offset, sizeof(value));
+    return folly::Endian::little(value);
+  };
+
+  const size_t flagsOffset = bytes.size() - kMagicSize - 4;
+  const size_t sizeOffset = flagsOffset - 4;
+  EXPECT_EQ(readLittleEndian32(flagsOffset), 0u)
+      << "flags must be 0: an uncompressed footer payload is bit 0";
+
+  const uint32_t payloadSize = readLittleEndian32(sizeOffset);
+  const size_t payloadOffset = sizeOffset - payloadSize;
+  EXPECT_EQ(bytes.substr(payloadOffset - kMagicSize, kMagicSize), "PFA1")
+      << "footer payload must be preceded by magic";
+
+  return folly::parseJson(bytes.substr(payloadOffset, payloadSize));
+}
+} // namespace
+
+TEST_F(DeletionVectorWriterTest, puffinFooterIsSpecCompliant) {
+  // Nothing in our own read path parses the Puffin footer --
+  // DeletionVectorReader locates the blob from the manifest's contentOffset --
+  // so the footer is written blind. Other Iceberg engines do parse it, and
+  // FileMetadataParser.blobMetadataFromJson treats type, fields, snapshot-id,
+  // sequence-number, offset and length as required, reading fields as a list
+  // of integers. A footer that omits or mistypes any of them makes the whole
+  // deletion vector unreadable outside Velox.
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions({3, 7, 42, 100});
+  const auto blobData = writer.serialize();
+
+  auto tempDir = TempDirectoryPath::create();
+  const std::string puffinPath =
+      std::string(tempDir->getPath()) + "/footer.puffin";
+  auto sink = dwio::common::FileSink::create(
+      "file:" + puffinPath, {.pool = pool_.get()});
+  auto [blobOffset, blobLength] = writePuffinFile(
+      *sink,
+      *pool_,
+      blobData,
+      "/data/test-data-file.parquet",
+      /*cardinality=*/4);
+  sink->close();
+
+  const auto footer = readPuffinFooter(puffinPath);
+  ASSERT_TRUE(footer.isObject());
+  ASSERT_TRUE(footer["blobs"].isArray());
+  ASSERT_EQ(footer["blobs"].size(), 1);
+  const auto& blob = footer["blobs"][0];
+
+  EXPECT_EQ(blob["type"].asString(), "deletion-vector-v1");
+
+  // Iceberg's BaseDVFileWriter sets this to the single row-position metadata
+  // column ID, as a list of plain integers.
+  constexpr int64_t kRowPositionFieldId = 2'147'483'645;
+  ASSERT_TRUE(blob["fields"].isArray()) << "fields must be a list";
+  ASSERT_EQ(blob["fields"].size(), 1);
+  ASSERT_TRUE(blob["fields"][0].isInt())
+      << "fields entries must be integers, not objects";
+  EXPECT_EQ(blob["fields"][0].asInt(), kRowPositionFieldId);
+
+  // Required by the parser even though a freshly written DV has no snapshot
+  // assigned yet; Iceberg writes -1 for both.
+  ASSERT_TRUE(blob.count("snapshot-id")) << "snapshot-id is required";
+  ASSERT_TRUE(blob.count("sequence-number")) << "sequence-number is required";
+  EXPECT_EQ(blob["snapshot-id"].asInt(), -1);
+  EXPECT_EQ(blob["sequence-number"].asInt(), -1);
+
+  EXPECT_EQ(blob["offset"].asInt(), static_cast<int64_t>(blobOffset));
+  EXPECT_EQ(blob["length"].asInt(), static_cast<int64_t>(blobLength));
+
+  const auto& properties = blob["properties"];
+  EXPECT_EQ(
+      properties["referenced-data-file"].asString(),
+      "/data/test-data-file.parquet");
+  EXPECT_EQ(properties["cardinality"].asString(), "4");
 }
 
 TEST_F(DeletionVectorWriterTest, puffinFileRoundTrip) {

@@ -20,6 +20,8 @@
 
 #include <fstream>
 
+#include <folly/json.h>
+#include <folly/lang/Bits.h>
 #include <gtest/gtest.h>
 #include <zlib.h>
 
@@ -422,6 +424,87 @@ std::vector<uint64_t> expandRuns(
 }
 
 // Writes binary data to a temp file and returns the path.
+// Builds a Puffin file around 'blob'. Layout per the Puffin spec:
+//   Magic | blob | Magic | footerPayload | payloadSize(4B LE) | flags(4B LE)
+//   | Magic
+// Built by hand rather than via writePuffinFile so the tests can produce
+// footers a spec-compliant writer never would.
+constexpr std::string_view kPuffinMagic{"PFA1"};
+
+std::string wrapInPuffinFile(
+    const std::string& blob,
+    const folly::dynamic& footer,
+    uint32_t flags = 0) {
+  const auto appendLittleEndian32 = [](std::string& out, uint32_t value) {
+    const uint32_t little = folly::Endian::little(value);
+    out.append(reinterpret_cast<const char*>(&little), sizeof(little));
+  };
+
+  const std::string footerJson = folly::toJson(footer);
+  std::string file;
+  file.append(kPuffinMagic);
+  file.append(blob);
+  file.append(kPuffinMagic);
+  file.append(footerJson);
+  appendLittleEndian32(file, static_cast<uint32_t>(footerJson.size()));
+  appendLittleEndian32(file, flags);
+  file.append(kPuffinMagic);
+  return file;
+}
+
+// Builds a Puffin footer describing one deletion-vector-v1 blob.
+folly::dynamic makeDvBlobMeta(
+    uint64_t blobOffset,
+    uint64_t blobLength,
+    const std::string& referencedDataFile = "") {
+  folly::dynamic blobMeta =
+      folly::dynamic::object("type", "deletion-vector-v1")(
+          "fields", folly::dynamic::array(2'147'483'645));
+  blobMeta["snapshot-id"] = -1;
+  blobMeta["sequence-number"] = -1;
+  blobMeta["offset"] = blobOffset;
+  blobMeta["length"] = blobLength;
+  if (!referencedDataFile.empty()) {
+    blobMeta["properties"] =
+        folly::dynamic::object("referenced-data-file", referencedDataFile);
+  }
+  return blobMeta;
+}
+
+folly::dynamic makeDvFooter(
+    uint64_t blobOffset,
+    uint64_t blobLength,
+    const std::string& referencedDataFile = "") {
+  return folly::dynamic::object(
+      "blobs",
+      folly::dynamic::array(
+          makeDvBlobMeta(blobOffset, blobLength, referencedDataFile)));
+}
+
+// Creates a DV delete file that carries no blob location at all: no typed
+// contentOffset/contentLength and no legacy bounds map. The reader must fall
+// back to the Puffin footer.
+IcebergDeleteFile makeFooterLocatedDvFile(
+    const std::string& filePath,
+    uint64_t recordCount,
+    uint64_t fileSize,
+    const std::string& referencedDataFile = "") {
+  IcebergDeleteFile dvFile(
+      FileContent::kDeletionVector,
+      filePath,
+      dwio::common::FileFormat::DWRF,
+      recordCount,
+      fileSize,
+      /*equalityFieldIds=*/{},
+      /*lowerBounds=*/{},
+      /*upperBounds=*/{},
+      /*dataSequenceNumber=*/0,
+      /*contentOffset=*/0,
+      /*contentLength=*/0);
+  dvFile.referencedDataFile = referencedDataFile;
+  return dvFile;
+}
+
 std::shared_ptr<TempFilePath> writeDvFile(const std::string& bitmapData) {
   auto tempFile = TempFilePath::create();
   // Write directly via C++ streams since TempFilePath already creates the
@@ -923,6 +1006,168 @@ TEST_F(DeletionVectorReaderTest, blobOffset) {
   auto setBits = getSetBits(bitmap, 20);
   EXPECT_EQ(setBits, (std::vector<uint64_t>{3, 7, 11}));
   EXPECT_TRUE(reader.noMoreData());
+}
+
+TEST_F(DeletionVectorReaderTest, locatesBlobFromPuffinFooterWhenOffsetsAbsent) {
+  // With no typed contentOffset/contentLength and no legacy bounds map, the
+  // reader used to fall back to treating the whole file -- leading magic and
+  // footer included -- as the blob, which cannot parse. A Puffin file is
+  // self-describing, so its footer is the authoritative fallback.
+  const std::vector<int64_t> positions = {3, 7, 42, 100};
+  const auto blob = serializeRoaringBitmapNoRun(positions);
+  const auto file = wrapInPuffinFile(blob, makeDvFooter(4, blob.size()));
+  auto tempFile = writeDvFile(file);
+
+  auto dvFile = makeFooterLocatedDvFile(
+      tempFile->getPath(), positions.size(), file.size());
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  EXPECT_EQ(reader.deletedPositions(), positions);
+}
+
+TEST_F(DeletionVectorReaderTest, puffinFooterSelectsBlobByReferencedDataFile) {
+  // One Puffin file can hold vectors for several data files. The referenced
+  // data file, not blob order, decides which one applies to this split.
+  const std::vector<int64_t> wantedPositions = {5, 9};
+  const std::vector<int64_t> otherPositions = {1, 2, 3};
+  const auto otherBlob = serializeRoaringBitmapNoRun(otherPositions);
+  const auto wantedBlob = serializeRoaringBitmapNoRun(wantedPositions);
+
+  const uint64_t otherOffset = 4;
+  const uint64_t wantedOffset = otherOffset + otherBlob.size();
+  folly::dynamic footer = folly::dynamic::object(
+      "blobs",
+      folly::dynamic::array(
+          makeDvBlobMeta(otherOffset, otherBlob.size(), "/data/other.parquet"),
+          makeDvBlobMeta(
+              wantedOffset, wantedBlob.size(), "/data/wanted.parquet")));
+
+  const auto file = wrapInPuffinFile(otherBlob + wantedBlob, footer);
+  auto tempFile = writeDvFile(file);
+
+  auto dvFile = makeFooterLocatedDvFile(
+      tempFile->getPath(),
+      wantedPositions.size(),
+      file.size(),
+      "/data/wanted.parquet");
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  EXPECT_EQ(reader.deletedPositions(), wantedPositions);
+}
+
+TEST_F(DeletionVectorReaderTest, rejectsAmbiguousPuffinFileWithoutReference) {
+  // Two candidate vectors and nothing to choose between them: picking either
+  // would silently apply the wrong deletes to the scan.
+  const auto blob = serializeRoaringBitmapNoRun({1});
+  folly::dynamic footer = folly::dynamic::object(
+      "blobs",
+      folly::dynamic::array(
+          makeDvBlobMeta(4, blob.size()), makeDvBlobMeta(4, blob.size())));
+
+  const auto file = wrapInPuffinFile(blob, footer);
+  auto tempFile = writeDvFile(file);
+  auto dvFile = makeFooterLocatedDvFile(tempFile->getPath(), 1, file.size());
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  VELOX_ASSERT_THROW(
+      reader.deletedPositions(),
+      "Puffin file has multiple deletion vectors and no referenced data file");
+}
+
+TEST_F(DeletionVectorReaderTest, rejectsPuffinFooterWithNoMatchingBlob) {
+  const auto blob = serializeRoaringBitmapNoRun({1});
+  const auto file = wrapInPuffinFile(
+      blob, makeDvFooter(4, blob.size(), "/data/other.parquet"));
+  auto tempFile = writeDvFile(file);
+  auto dvFile = makeFooterLocatedDvFile(
+      tempFile->getPath(), 1, file.size(), "/data/wanted.parquet");
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  VELOX_ASSERT_THROW(
+      reader.deletedPositions(),
+      "Puffin footer has no deletion-vector blob for data file");
+}
+
+TEST_F(DeletionVectorReaderTest, rejectsPuffinFooterWithNoBlobs) {
+  // A structurally valid footer that declares no blobs at all. Iceberg allows
+  // an empty Puffin file; for a delete file it means there is nothing to read,
+  // which must be an error rather than an empty (silently no-op) vector.
+  const auto blob = serializeRoaringBitmapNoRun({1});
+  const auto file = wrapInPuffinFile(
+      blob, folly::dynamic::object("blobs", folly::dynamic::array()));
+  auto tempFile = writeDvFile(file);
+  auto dvFile = makeFooterLocatedDvFile(tempFile->getPath(), 1, file.size());
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  VELOX_ASSERT_THROW(
+      reader.deletedPositions(),
+      "Puffin footer has no deletion-vector blob for data file");
+}
+
+TEST_F(DeletionVectorReaderTest, rejectsPuffinFooterWithNegativeOffset) {
+  // JSON integers are signed, but the blob location is carried as uint64_t.
+  // A negative offset must be rejected where it is read, not allowed to wrap
+  // into a huge unsigned value and be reported as an absurd out-of-range read.
+  const auto blob = serializeRoaringBitmapNoRun({1});
+  auto footer = makeDvFooter(4, blob.size());
+  footer["blobs"][0]["offset"] = -8;
+  const auto file = wrapInPuffinFile(blob, footer);
+  auto tempFile = writeDvFile(file);
+  auto dvFile = makeFooterLocatedDvFile(tempFile->getPath(), 1, file.size());
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  VELOX_ASSERT_THROW(
+      reader.deletedPositions(), "Puffin blob metadata has a negative offset");
+}
+
+TEST_F(DeletionVectorReaderTest, rejectsPuffinFileWithoutTrailingMagic) {
+  const auto blob = serializeRoaringBitmapNoRun({1});
+  auto file = wrapInPuffinFile(blob, makeDvFooter(4, blob.size()));
+  file.replace(file.size() - 4, 4, "XXXX");
+
+  auto tempFile = writeDvFile(file);
+  auto dvFile = makeFooterLocatedDvFile(tempFile->getPath(), 1, file.size());
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  VELOX_ASSERT_THROW(
+      reader.deletedPositions(),
+      "Puffin file does not end with the expected magic");
+}
+
+TEST_F(DeletionVectorReaderTest, rejectsPuffinFooterPayloadSizeBeyondFile) {
+  // A payload size larger than the file would make the payload offset
+  // underflow into a huge unsigned read.
+  const auto blob = serializeRoaringBitmapNoRun({1});
+  auto file = wrapInPuffinFile(blob, makeDvFooter(4, blob.size()));
+  const uint32_t absurdSize = folly::Endian::little(uint32_t{1} << 30);
+  file.replace(
+      file.size() - 12,
+      4,
+      std::string(reinterpret_cast<const char*>(&absurdSize), 4));
+
+  auto tempFile = writeDvFile(file);
+  auto dvFile = makeFooterLocatedDvFile(tempFile->getPath(), 1, file.size());
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  VELOX_ASSERT_THROW(
+      reader.deletedPositions(),
+      "Puffin footer payload size 1073741824 does not fit");
+}
+
+TEST_F(DeletionVectorReaderTest, rejectsCompressedPuffinFooter) {
+  // Bit 0 of the flags marks a compressed footer payload. Deletion vectors are
+  // always uncompressed, so reject rather than hand zstd bytes to the parser.
+  const auto blob = serializeRoaringBitmapNoRun({1});
+  const auto file =
+      wrapInPuffinFile(blob, makeDvFooter(4, blob.size()), /*flags=*/1);
+
+  auto tempFile = writeDvFile(file);
+  auto dvFile = makeFooterLocatedDvFile(tempFile->getPath(), 1, file.size());
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  VELOX_ASSERT_THROW(
+      reader.deletedPositions(),
+      "Compressed Puffin footer payloads are not supported");
 }
 
 TEST_F(DeletionVectorReaderTest, constructorRejectsWrongContentType) {

@@ -40,15 +40,20 @@ constexpr size_t kBitmapContainerBytes = 8'192;
 constexpr size_t kBitmapContainerWords = 1'024;
 
 // Puffin file format constants (per Iceberg spec). Magic is "PFA1".
-constexpr char kPuffinMagic[] = {'\x50', '\x46', '\x41', '\x31'};
-constexpr size_t kPuffinMagicSize = 4;
 constexpr uint32_t kPuffinFooterFlags = 0;
 
 // Puffin blob metadata constants (per Iceberg V3 deletion vector spec).
-constexpr char kDeletionVectorBlobType[] = "deletion-vector-v1";
 constexpr char kCompressionCodecNone[] = "none";
-// Iceberg spec: source-field-id for whole-row deletes is INT_MAX - 1.
-constexpr int32_t kWholeRowDeleteFieldId = 2'147'483'646;
+// The blob's "fields" list names the row-position metadata column
+// (MetadataColumns.ROW_POSITION, INT_MAX - 2), matching Iceberg's own
+// BaseDVFileWriter. Note this is not the positional-delete file's "pos"
+// column (INT_MAX - 102), which IcebergMetadataColumns uses for a different
+// purpose.
+constexpr int32_t kRowPositionFieldId = 2'147'483'645;
+// A deletion vector is written before its snapshot is assigned, so Iceberg
+// records -1 for both. The fields are required by readers regardless.
+constexpr int64_t kUnassignedSnapshotId = -1;
+constexpr int64_t kUnassignedSequenceNumber = -1;
 
 void writeLittleEndian(std::string& out, uint16_t val) {
   val = folly::Endian::little(val);
@@ -263,11 +268,11 @@ std::pair<uint64_t, uint64_t> writePuffinFile(
   uint64_t blobOffset = kPuffinMagicSize;
   uint64_t blobLength = framedBlob.size();
 
-  folly::dynamic blobMeta = folly::dynamic::object(
-      "type", kDeletionVectorBlobType)(
-      "fields",
-      folly::dynamic::array(
-          folly::dynamic::object("source-field-id", kWholeRowDeleteFieldId)));
+  folly::dynamic blobMeta =
+      folly::dynamic::object("type", kDeletionVectorBlobType)(
+          "fields", folly::dynamic::array(kRowPositionFieldId));
+  blobMeta["snapshot-id"] = kUnassignedSnapshotId;
+  blobMeta["sequence-number"] = kUnassignedSequenceNumber;
   blobMeta["offset"] = blobOffset;
   blobMeta["length"] = blobLength;
   blobMeta["compression-codec"] = kCompressionCodecNone;
