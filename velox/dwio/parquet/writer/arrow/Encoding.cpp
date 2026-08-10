@@ -117,6 +117,16 @@ class EncoderImpl : virtual public Encoder {
     return pool_;
   }
 
+  int64_t reportUnencodedDataBytes() override {
+    if (descr_->physicalType() != Type::kByteArray) {
+      throw ParquetException(
+          "reportUnencodedDataBytes is only supported for BYTE_ARRAY");
+    }
+    const auto bytes = unencodedByteArrayDataBytes_;
+    unencodedByteArrayDataBytes_ = 0;
+    return bytes;
+  }
+
  protected:
   // For accessing type-specific metadata, like FIXED_LEN_BYTE_ARRAY.
   const ColumnDescriptor* descr_;
@@ -125,6 +135,9 @@ class EncoderImpl : virtual public Encoder {
 
   /// Type length from descr.
   int typeLength_;
+  /// Number of unencoded bytes written to the encoder. Used for ByteArray type
+  /// only.
+  int64_t unencodedByteArrayDataBytes_{0};
 };
 
 // ----------------------------------------------------------------------.
@@ -174,6 +187,7 @@ class PlainEncoder : public EncoderImpl, virtual public TypedEncoder<DType> {
     VELOX_DCHECK(length == 0 || data != nullptr, "Value ptr cannot be NULL");
     sink_.UnsafeAppend(&length, sizeof(uint32_t));
     sink_.UnsafeAppend(data, static_cast<int64_t>(length));
+    unencodedByteArrayDataBytes_ += length;
   }
 
   void put(const ByteArray& val) {
@@ -596,6 +610,20 @@ class DictEncoderImpl : public EncoderImpl, virtual public DictEncoder<DType> {
                 static_cast<int32_t>(values[i + position]);
           }
         });
+
+    // Track unencoded bytes based on dictionary value type.
+    if constexpr (std::is_same_v<DType, ByteArrayType>) {
+      // For ByteArray, need to look up actual lengths from dictionary
+      for (size_t idx = bufferPosition -
+               static_cast<size_t>(data.length() - data.null_count());
+           idx < bufferPosition;
+           ++idx) {
+        memoTable_.visitValue(
+            bufferedIndices_[idx], [&](std::string_view value) {
+              unencodedByteArrayDataBytes_ += value.length();
+            });
+      }
+    }
   }
 
   void putIndices(const ::arrow::Array& data) override {
@@ -763,6 +791,7 @@ inline void DictEncoderImpl<ByteArrayType>::putByteArray(
   PARQUET_THROW_NOT_OK(
       memoTable_.getOrInsert(ptr, length, onFound, onNotFound, &memoIndex));
   bufferedIndices_.push_back(memoIndex);
+  unencodedByteArrayDataBytes_ += length;
 }
 
 template <>
@@ -3031,6 +3060,7 @@ class DeltaLengthByteArrayEncoder : public EncoderImpl,
               }
               lengthEncoder_.put({static_cast<int32_t>(view.length())}, 1);
               PARQUET_THROW_NOT_OK(sink_.Append(view.data(), view.length()));
+              unencodedByteArrayDataBytes_ += view.size();
               return Status::OK();
             },
             []() { return Status::OK(); }));
@@ -3079,6 +3109,7 @@ void DeltaLengthByteArrayEncoder<DType>::put(const T* src, int numValues) {
   for (int idx = 0; idx < numValues; idx++) {
     sink_.UnsafeAppend(src[idx].ptr, src[idx].len);
   }
+  unencodedByteArrayDataBytes_ += totalIncrementSize;
 }
 
 template <typename DType>
@@ -3580,6 +3611,7 @@ class DeltaByteArrayEncoder : public EncoderImpl,
         // Convert to ByteArray, so it can be passed to the suffix_encoder_.
         const ByteArray suffix(suffixLength, suffixPtr);
         suffixes[j] = suffix;
+        unencodedByteArrayDataBytes_ += len;
       }
       suffixEncoder_.put(suffixes.data(), batchSize);
       prefixLengthEncoder_.put(prefixLengths.data(), batchSize);
@@ -3618,6 +3650,7 @@ class DeltaByteArrayEncoder : public EncoderImpl,
                   {static_cast<int32_t>(commonPrefixLength)}, 1);
 
               lastValueView = std::string_view(view.data(), view.size());
+              unencodedByteArrayDataBytes_ += len;
               const auto suffixLength =
                   static_cast<uint32_t>(len - commonPrefixLength);
               if (suffixLength == 0) {

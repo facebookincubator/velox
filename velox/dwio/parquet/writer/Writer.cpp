@@ -124,6 +124,7 @@ void ParquetWriterOptions::merge(
   mergeIfSet(
       parquetWriteTimestampUnit, parquetOverrides->parquetWriteTimestampUnit);
   mergeIfSet(enableDictionary, parquetOverrides->enableDictionary);
+  mergeIfSet(sizeStatisticsLevel, parquetOverrides->sizeStatisticsLevel);
   mergeIfSet(
       enableStoreDecimalAsInteger,
       parquetOverrides->enableStoreDecimalAsInteger);
@@ -241,6 +242,10 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   }
   if (parquetOptions.createdBy.has_value()) {
     properties = properties->createdBy(parquetOptions.createdBy.value());
+  }
+  if (parquetOptions.sizeStatisticsLevel.has_value()) {
+    properties = properties->setSizeStatisticsLevel(
+        parquetOptions.sizeStatisticsLevel.value());
   }
   return properties->build();
 }

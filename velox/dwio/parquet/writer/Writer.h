@@ -142,6 +142,7 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   std::optional<int64_t> dataPageSize;
   std::optional<int64_t> dictionaryPageSizeLimit;
   std::optional<bool> enableDictionary;
+  std::optional<arrow::SizeStatisticsLevel> sizeStatisticsLevel;
   /// Controls how DECIMAL values are stored by the Writer.
   /// - If unset, the Writer defaults to storing as integer (true),
   /// using INT32/INT64 for short DECIMAL precisions; higher precisions are

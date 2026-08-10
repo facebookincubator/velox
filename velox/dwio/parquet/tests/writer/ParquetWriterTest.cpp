@@ -17,7 +17,8 @@
 #include <arrow/io/memory.h>
 #include <arrow/type.h>
 #include <folly/init/Init.h>
-#include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
+#include <gmock/gmock.h>
+#include <thrift/lib/cpp2/protocol/Serializer.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
@@ -32,9 +33,10 @@
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/dwio/parquet/writer/arrow/PageIndex.h"
+#include "velox/dwio/parquet/writer/arrow/SizeStatistics.h"
 #include "velox/dwio/parquet/writer/arrow/tests/ColumnReader.h"
 #include "velox/dwio/parquet/writer/arrow/tests/FileReader.h"
-#include "velox/exec/Cursor.h"
+#include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
@@ -308,10 +310,14 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
         if (isFirstPage) {
           return readPageHeader(sinkPtr, 0);
         }
-        constexpr int64_t kFirstDataPageCompressedSize = 1291;
-        constexpr int64_t kFirstDataPageHeaderSize = 48;
+        const auto firstPageHeader = readPageHeader(sinkPtr, 0);
+        const auto firstPageHeaderSize =
+            apache::thrift::CompactSerializer::serialize<std::string>(
+                firstPageHeader)
+                .size();
         return readPageHeader(
-            sinkPtr, kFirstDataPageCompressedSize + kFirstDataPageHeaderSize);
+            sinkPtr,
+            firstPageHeaderSize + *firstPageHeader.compressed_page_size());
       };
 
   // Test default config (i.e., no explicit config)
@@ -978,6 +984,73 @@ TEST_F(ParquetWriterTest, writerMagic) {
 
   EXPECT_EQ("PAR1", std::string(fileData.data(), 4));
   EXPECT_EQ("PAR1", std::string(fileData.data() + fileData.size() - 4, 4));
+}
+
+TEST_F(ParquetWriterTest, sizeStatistics) {
+  const auto data =
+      makeRowVector({makeFlatVector<std::string>({"a", "bb", "ccc"})});
+
+  const auto verify =
+      [&](std::optional<parquetArrow::SizeStatisticsLevel> level,
+          bool expectSizeStatistics,
+          bool enableDictionary) {
+        SCOPED_TRACE(enableDictionary);
+        ParquetWriterOptions writerOptions;
+        writerOptions.enableDictionary = enableDictionary;
+        writerOptions.sizeStatisticsLevel = level;
+
+        const auto* sinkPtr = write(data, writerOptions);
+        std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
+        auto arrowBufferReader = std::make_shared<::arrow::io::BufferReader>(
+            std::make_shared<::arrow::Buffer>(
+                reinterpret_cast<const uint8_t*>(sinkData.data()),
+                sinkData.size()));
+        auto fileReader =
+            parquetArrow::ParquetFileReader::open(arrowBufferReader);
+
+        const auto columnChunk =
+            fileReader->metadata()->rowGroup(0)->columnChunk(0);
+        if (enableDictionary) {
+          EXPECT_THAT(
+              columnChunk->encodings(),
+              ::testing::Contains(parquetArrow::Encoding::kRleDictionary));
+        }
+
+        const auto sizeStatistics = columnChunk->sizeStatistics();
+        if (expectSizeStatistics) {
+          ASSERT_NE(sizeStatistics, nullptr);
+          ASSERT_TRUE(sizeStatistics->unencodedByteArrayDataBytes.has_value());
+          EXPECT_EQ(*sizeStatistics->unencodedByteArrayDataBytes, 6);
+        } else {
+          EXPECT_EQ(sizeStatistics, nullptr);
+        }
+
+        auto pageIndexReader = fileReader->getPageIndexReader();
+        ASSERT_NE(pageIndexReader, nullptr);
+        auto rowGroupIndexReader = pageIndexReader->rowGroup(0);
+        ASSERT_NE(rowGroupIndexReader, nullptr);
+        auto offsetIndex = rowGroupIndexReader->getOffsetIndex(0);
+        ASSERT_NE(offsetIndex, nullptr);
+        if (level == parquetArrow::SizeStatisticsLevel::PageAndColumnChunk ||
+            !level.has_value()) {
+          EXPECT_THAT(
+              offsetIndex->unencodedByteArrayDataBytes(),
+              ::testing::ElementsAre(6));
+        } else {
+          EXPECT_TRUE(offsetIndex->unencodedByteArrayDataBytes().empty());
+        }
+      };
+
+  for (const bool enableDictionary : {false, true}) {
+    verify(parquetArrow::SizeStatisticsLevel::None, false, enableDictionary);
+    verify(
+        parquetArrow::SizeStatisticsLevel::ColumnChunk, true, enableDictionary);
+    verify(
+        parquetArrow::SizeStatisticsLevel::PageAndColumnChunk,
+        true,
+        enableDictionary);
+    verify(std::nullopt, true, enableDictionary);
+  }
 }
 
 TEST_F(ParquetWriterTest, flushWhenStreamBuffersGrow) {
