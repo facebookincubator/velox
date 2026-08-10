@@ -16,7 +16,9 @@
 
 #include "HdfsReadFile.h"
 
+#include <algorithm>
 #include <chrono>
+#include <limits>
 #include <thread>
 
 #include "velox/external/hdfs/ArrowHdfsInternal.h"
@@ -43,6 +45,12 @@ struct HdfsFile {
       LOG(ERROR) << "Unable to close file, errno: " << errno;
     }
   }
+
+  // Owns a raw libhdfs handle, so it is not copyable or movable.
+  HdfsFile(const HdfsFile&) = delete;
+  HdfsFile& operator=(const HdfsFile&) = delete;
+  HdfsFile(HdfsFile&&) = delete;
+  HdfsFile& operator=(HdfsFile&&) = delete;
 
   void open(
       filesystems::arrow::io::internal::LibHdfsShim* driver,
@@ -89,7 +97,12 @@ struct HdfsFile {
   // The caller (preadInternal) decides whether a non-positive result is
   // retriable.
   int32_t read(char* pos, uint64_t length) const {
-    return driver_->Read(client_, handle_, pos, length);
+    // hdfsRead takes a signed tSize; cap the request so the unsigned length
+    // never narrows into a negative value. preadInternal loops on a short read,
+    // so servicing a large request in tSize-sized chunks is fine.
+    const auto chunk = static_cast<tSize>(std::min<uint64_t>(
+        length, static_cast<uint64_t>(std::numeric_limits<tSize>::max())));
+    return driver_->Read(client_, handle_, pos, chunk);
   }
 };
 

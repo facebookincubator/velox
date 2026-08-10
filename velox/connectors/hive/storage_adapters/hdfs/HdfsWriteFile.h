@@ -21,7 +21,7 @@
 namespace facebook::velox {
 
 namespace filesystems::arrow::io::internal {
-class LibHdfsShim;
+struct LibHdfsShim;
 }
 
 /// Implementation of hdfs write file. Nothing written to the file should be
