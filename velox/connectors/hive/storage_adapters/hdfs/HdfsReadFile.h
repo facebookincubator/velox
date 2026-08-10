@@ -20,7 +20,7 @@
 namespace facebook::velox {
 
 namespace filesystems::arrow::io::internal {
-class LibHdfsShim;
+struct LibHdfsShim;
 }
 
 /**
