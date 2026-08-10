@@ -19,9 +19,12 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/dwio/common/Writer.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -66,9 +69,37 @@ class EqualityDeleteFileReaderTest : public HiveConnectorTestBase {
 
   /// Writes a DWRF data file containing the given vectors.
   std::shared_ptr<common::testutil::TempFilePath> writeDataFile(
-      const std::vector<RowVectorPtr>& data) {
+      const std::vector<RowVectorPtr>& data,
+      const std::vector<int32_t>& fieldIds = {}) {
     auto file = common::testutil::TempFilePath::create();
-    writeToFile(file->getPath(), data);
+    if (fieldIds.empty()) {
+      writeToFile(file->getPath(), data);
+      return file;
+    }
+
+    VELOX_CHECK_EQ(data.front()->type()->size(), fieldIds.size());
+    dwio::common::WriterOptions options;
+    auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>();
+    for (uint32_t i = 0; i < fieldIds.size(); ++i) {
+      dwrfOptions->schemaAttributes[i + 1] = {
+          {"iceberg.id", std::to_string(fieldIds[i])}};
+    }
+    options.formatSpecificOptions = std::move(dwrfOptions);
+    options.schema = data.front()->type();
+    options.memoryPool = rootPool_.get();
+
+    auto fs = filesystems::getFileSystem(file->getPath(), {});
+    auto writeFile = fs->openFileForWrite(
+        file->getPath(),
+        {.shouldCreateParentDirectories = true,
+         .shouldThrowOnFileAlreadyExists = false});
+    auto sink = std::make_unique<dwio::common::WriteFileSink>(
+        std::move(writeFile), file->getPath());
+    dwrf::Writer writer{std::move(sink), options};
+    for (const auto& vector : data) {
+      writer.write(vector);
+    }
+    writer.close();
     return file;
   }
 
@@ -136,6 +167,51 @@ class EqualityDeleteFileReaderTest : public HiveConnectorTestBase {
         .startTableScan(kIcebergConnectorId)
         .outputType(outputType)
         .dataColumns(dataColumns)
+        .endTableScan()
+        .planNode();
+  }
+
+  /// Builds a table scan whose full table schema uses explicit Iceberg field
+  /// IDs. Only projected columns receive column handles, matching production
+  /// plans where equality-delete columns may be otherwise unreferenced.
+  core::PlanNodePtr makeTableScanPlan(
+      const RowTypePtr& outputType,
+      const RowTypePtr& dataColumns,
+      const std::vector<int32_t>& dataColumnFieldIds) {
+    VELOX_CHECK_EQ(dataColumns->size(), dataColumnFieldIds.size());
+
+    ColumnHandleMap assignments;
+    for (auto i = 0; i < outputType->size(); ++i) {
+      const auto& name = outputType->nameOf(i);
+      const auto dataColumnIndex = dataColumns->getChildIdx(name);
+      assignments.emplace(
+          name,
+          std::make_shared<IcebergColumnHandle>(
+              name,
+              FileColumnHandle::ColumnType::kRegular,
+              outputType->childAt(i),
+              parquet::ParquetFieldId{
+                  dataColumnFieldIds[dataColumnIndex], {}}));
+    }
+
+    auto tableHandle = std::make_shared<HiveTableHandle>(
+        kIcebergConnectorId,
+        "iceberg_table",
+        common::SubfieldFilters{},
+        /*remainingFilter=*/nullptr,
+        dataColumns,
+        /*indexColumns=*/std::vector<std::string>{},
+        /*tableParameters=*/std::unordered_map<std::string, std::string>{},
+        /*filterColumnHandles=*/std::vector<HiveColumnHandlePtr>{},
+        /*sampleRate=*/1.0,
+        /*dbName=*/"",
+        dataColumnFieldIds);
+
+    return PlanBuilder()
+        .startTableScan(kIcebergConnectorId)
+        .outputType(outputType)
+        .assignments(assignments)
+        .tableHandle(std::move(tableHandle))
         .endTableScan()
         .planNode();
   }
@@ -865,7 +941,94 @@ TEST_F(EqualityDeleteFileReaderTest, stringColumnDelete) {
   assertEqualResults({expected}, {result});
 }
 
-/// Verifies equality deletes on a non-first column (field ID 2).
+/// Verifies equality deletes after a field has been dropped, leaving sparse
+/// top-level field IDs.
+TEST_F(EqualityDeleteFileReaderTest, nonSequentialEqualityFieldId) {
+  auto tableType = ROW({"id", "category"}, {BIGINT(), VARCHAR()});
+  const std::vector<int32_t> fieldIds{1, 3};
+
+  auto baseData = makeRowVector(
+      {"id", "dropped", "category"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int32_t>({10, 20, 30, 40, 50}),
+          makeFlatVector<std::string>({"A", "B", "A", "C", "B"}),
+      });
+  auto dataFile = writeDataFile({baseData}, {1, 2, 3});
+
+  auto deleteData = makeRowVector(
+      {"category"},
+      {
+          makeFlatVector<std::string>({"B"}),
+      });
+  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+
+  IcebergDeleteFile icebergDeleteFile(
+      FileContent::kEqualityDeletes,
+      eqDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      1,
+      getFileSize(eqDeleteFile->getPath()),
+      /*equalityFieldIds=*/{3});
+
+  auto splits = makeSplits(dataFile->getPath(), {icebergDeleteFile});
+  auto plan = makeTableScanPlan(tableType, tableType, fieldIds);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"id", "category"},
+      {
+          makeFlatVector<int64_t>({1, 3, 4}),
+          makeFlatVector<std::string>({"A", "A", "C"}),
+      });
+  assertEqualResults({expected}, {result});
+}
+
+TEST_F(
+    EqualityDeleteFileReaderTest,
+    nonSequentialEqualityFieldIdNotInProjection) {
+  auto tableType = ROW({"id", "category"}, {BIGINT(), VARCHAR()});
+  auto outputType = ROW({"id"}, {BIGINT()});
+  const std::vector<int32_t> fieldIds{1, 3};
+
+  auto baseData = makeRowVector(
+      {"id", "dropped", "category"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int32_t>({10, 20, 30, 40, 50}),
+          makeFlatVector<std::string>({"A", "B", "A", "C", "B"}),
+      });
+  auto dataFile = writeDataFile({baseData}, {1, 2, 3});
+
+  auto deleteData = makeRowVector(
+      {"category"},
+      {
+          makeFlatVector<std::string>({"B"}),
+      });
+  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+
+  IcebergDeleteFile icebergDeleteFile(
+      FileContent::kEqualityDeletes,
+      eqDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      1,
+      getFileSize(eqDeleteFile->getPath()),
+      /*equalityFieldIds=*/{3});
+
+  auto splits = makeSplits(dataFile->getPath(), {icebergDeleteFile});
+  auto plan = makeTableScanPlan(outputType, tableType, fieldIds);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"id"},
+      {
+          makeFlatVector<int64_t>({1, 3, 4}),
+      });
+  assertEqualResults({expected}, {result});
+}
+
+/// Verifies the ordinal fallback on a non-first column when full-schema field
+/// IDs are unavailable.
 TEST_F(EqualityDeleteFileReaderTest, deleteOnSecondColumn) {
   auto rowType = ROW({"id", "category"}, {BIGINT(), VARCHAR()});
 

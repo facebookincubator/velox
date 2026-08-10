@@ -166,9 +166,16 @@ std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
     const {
   std::vector<dwio::common::ParquetFieldId> fieldIds;
   const auto& dataColumns = tableHandle_->dataColumns();
-  if (dataColumns == nullptr || columnHandles_ == nullptr) {
+  if (dataColumns == nullptr) {
     return fieldIds;
   }
+
+  const auto* hiveTableHandle =
+      dynamic_cast<const HiveTableHandle*>(tableHandle_.get());
+  const auto* dataColumnFieldIds = hiveTableHandle != nullptr
+      ? &hiveTableHandle->dataColumnFieldIds()
+      : nullptr;
+
   // Column handles are keyed by output alias; index them by the underlying
   // data-column name so we can align to dataColumns() order.
   std::unordered_map<std::string, const IcebergColumnHandle*> handleByName;
@@ -178,8 +185,10 @@ std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
       handleByName.emplace(icebergHandle->name(), icebergHandle);
     }
   };
-  for (const auto& columnHandle : *columnHandles_) {
-    addIcebergHandle(columnHandle.second);
+  if (columnHandles_ != nullptr) {
+    for (const auto& columnHandle : *columnHandles_) {
+      addIcebergHandle(columnHandle.second);
+    }
   }
   // Remaining filters can add columns to the reader output that are not
   // projected by the table scan. Include those handles so filter-only columns
@@ -187,7 +196,8 @@ std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
   for (const auto& handle : tableHandle_->filterColumnHandles()) {
     addIcebergHandle(handle);
   }
-  if (handleByName.empty()) {
+  if (handleByName.empty() &&
+      (dataColumnFieldIds == nullptr || dataColumnFieldIds->empty())) {
     return fieldIds;
   }
 
@@ -197,6 +207,9 @@ std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
     auto it = handleByName.find(dataColumns->nameOf(static_cast<uint32_t>(i)));
     if (it != handleByName.end()) {
       fieldIds.push_back(it->second->field());
+    } else if (dataColumnFieldIds != nullptr && !dataColumnFieldIds->empty()) {
+      fieldIds.push_back(
+          dwio::common::ParquetFieldId{dataColumnFieldIds->at(i), {}});
     } else {
       fieldIds.push_back(dwio::common::ParquetFieldId{sentinelFieldId--, {}});
     }
@@ -671,18 +684,35 @@ IcebergSplitReader::resolveEqualityColumns(
       "Iceberg equality delete file '{}' cannot be processed because "
       "table data columns are not available in HiveTableHandle.",
       deleteFile.filePath);
-  for (const auto& eqFieldId : deleteFile.equalityFieldIds) {
-    // Field IDs are 1-based sequential for non-evolved schemas.
-    auto colIdx = static_cast<uint32_t>(eqFieldId - 1);
+  std::unordered_map<int32_t, uint32_t> columnIndexByFieldId;
+  if (const auto* hiveTableHandle =
+          dynamic_cast<const HiveTableHandle*>(tableHandle_.get())) {
+    const auto& dataColumnFieldIds = hiveTableHandle->dataColumnFieldIds();
+    columnIndexByFieldId.reserve(dataColumnFieldIds.size());
+    for (uint32_t i = 0; i < dataColumnFieldIds.size(); ++i) {
+      columnIndexByFieldId.emplace(dataColumnFieldIds[i], i);
+    }
+  }
+
+  for (const auto& equalityFieldId : deleteFile.equalityFieldIds) {
+    VELOX_CHECK_GT(
+        equalityFieldId,
+        0,
+        "Equality delete field ID must be positive: {}",
+        equalityFieldId);
+    const auto fieldIdIt = columnIndexByFieldId.find(equalityFieldId);
+    // Older plans and tests may not carry full-schema field IDs. Preserve the
+    // legacy ordinal lookup when metadata is unavailable or incomplete.
+    const auto columnIndex = fieldIdIt != columnIndexByFieldId.end()
+        ? fieldIdIt->second
+        : static_cast<uint32_t>(equalityFieldId - 1);
     VELOX_CHECK_LT(
-        colIdx,
+        columnIndex,
         dataColumns->size(),
-        "Equality delete field ID {} out of range. This may indicate "
-        "schema evolution with non-sequential field IDs, which is "
-        "not yet supported.",
-        eqFieldId);
-    equalityColumnNames.push_back(dataColumns->nameOf(colIdx));
-    equalityColumnTypes.push_back(dataColumns->childAt(colIdx));
+        "Equality delete field ID cannot be resolved against table columns: {}",
+        equalityFieldId);
+    equalityColumnNames.push_back(dataColumns->nameOf(columnIndex));
+    equalityColumnTypes.push_back(dataColumns->childAt(columnIndex));
   }
   return {std::move(equalityColumnNames), std::move(equalityColumnTypes)};
 }
