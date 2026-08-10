@@ -132,7 +132,7 @@ class ConcatWs : public exec::VectorFunction {
       argMapping.push_back(i);
       if (!isConstantSeparator()) {
         // Cannot concat consecutive constant string args in advance.
-        constantStrings.push_back(std::nullopt);
+        constantStrings.emplace_back(std::nullopt);
         continue;
       }
       if (args[i] && args[i]->as<ConstantVector<StringView>>() &&
@@ -153,7 +153,7 @@ class ConcatWs : public exec::VectorFunction {
         constantStrings.emplace_back(out.str());
         i = j - 1;
       } else {
-        constantStrings.push_back(std::nullopt);
+        constantStrings.emplace_back(std::nullopt);
       }
     }
 
