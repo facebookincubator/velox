@@ -451,6 +451,11 @@ int32_t DirectCoalescedLoad::getData(
     int64_t offset,
     memory::Allocation& data,
     std::string& tinyData) {
+  // A failed read may have partially filled the request buffers. Only publish
+  // them after the complete coalesced load has succeeded.
+  if (state() != CoalescedLoad::State::kLoaded) {
+    return 0;
+  }
   auto it = std::lower_bound(
       requests_.begin(), requests_.end(), offset, [](auto& x, auto offset) {
         return x.region.offset < offset;

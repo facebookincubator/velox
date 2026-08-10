@@ -23,7 +23,7 @@ namespace facebook::velox::exec {
 
 /// Implements a Nested Loop Join (NLJ) between records from the probe (input_)
 /// and build (NestedLoopJoinBridge) sides. It supports inner, left, right and
-/// full outer joins.
+/// full outer joins, as well as left semi (filter and project) and anti joins.
 ///
 /// This class is generally useful to evaluate non-equi-joins (e.g. "k1 >= k2"),
 /// when join conditions may need to be evaluated against a full cross product
@@ -179,6 +179,14 @@ class NestedLoopJoinProbe : public Operator {
       vector_size_t buildRowCount,
       bool singleProbeRow);
 
+  // Skips the remaining build rows for the current probe row after an
+  // emit-once match (left semi filter/project) or an anti-join match. Shared
+  // by all three probe-only short-circuits.
+  void shortCircuitProbeRow(
+      vector_size_t filterResultRow,
+      vector_size_t buildRowCount,
+      bool singleProbeRow);
+
   // Generates the next batch of a cross product between probe and build. It
   // should be used as the entry point, and will internally delegate to one of
   // the three functions below.
@@ -271,7 +279,7 @@ class NestedLoopJoinProbe : public Operator {
 
   // Cross joins are translated into NLJ's without a join conditition.
   bool isCrossJoin() const {
-    return joinCondition_ == nullptr && !isLeftSemiProjectJoin(joinType_);
+    return joinCondition_ == nullptr && !isProbeOnlyJoin(joinType_);
   }
 
   // If build has a single vector, we can wrap probe and build batches into
@@ -292,13 +300,16 @@ class NestedLoopJoinProbe : public Operator {
     return isSingleBuildVector() && buildVectors_->front()->size() == 1;
   }
 
-  // Check if this is a LeftSemiProjectJoin with no join condition.
-  bool isLeftSemiProjectNoCondition() const {
-    return joinCondition_ == nullptr && isLeftSemiProjectJoin(joinType_);
+  // Check if this is a probe-only join (left semi filter/project, anti) with
+  // no join condition. Every probe row then trivially matches a non-empty
+  // build side.
+  bool isProbeOnlyNoCondition() const {
+    return joinCondition_ == nullptr && isProbeOnlyJoin(joinType_);
   }
 
-  // Handles LeftSemiProjectJoin with no join condition
-  void handleLeftSemiProjectNoCondition();
+  // Handles a probe-only join (left semi filter/project, anti) with no join
+  // condition.
+  void handleProbeOnlyNoCondition();
 
   // Wraps rows of 'data' that are not selected in 'matched' and projects
   // to the output according to 'projections'. 'nullProjections' is used to
