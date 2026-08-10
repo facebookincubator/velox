@@ -139,11 +139,14 @@ class IcebergSplitReader : public FileSplitReader {
 
   // Discovers equality-delete columns that are not in the user's projection
   // and augments 'scanSpec_' and 'readerOutputType_' so they are physically
-  // read and made available in the output RowVector. For partition columns
-  // the partition value is set as a constant on the scan-spec child so the
-  // augmentation works regardless of whether the data file physically
-  // contains the partition column. Augmented columns are appended at the end
-  // of 'readerOutputType_' so the upstream FileDataSource's positional
+  // read and made available in the output RowVector. When the split proves
+  // the column's Iceberg field ID belongs to an identity partition field
+  // (see 'HiveIcebergSplit::identityPartitionKeys'), the partition value is
+  // set as a constant on the scan-spec child so the augmentation works
+  // regardless of whether the data file physically contains the column;
+  // every other column, including one partitioned by a transform, is read
+  // from the file. Augmented columns are appended at the end of
+  // 'readerOutputType_' so the upstream FileDataSource's positional
   // projection naturally drops them from the operator output.
   void configureEqualityDeleteColumns();
 

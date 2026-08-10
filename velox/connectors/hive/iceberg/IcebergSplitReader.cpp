@@ -573,7 +573,7 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
   std::vector<std::string> extraNames;
   std::vector<TypePtr> extraTypes;
   const auto& deleteFiles = icebergSplit_->deleteFiles;
-  const auto& splitPartitionKeys = icebergSplit_->partitionKeys;
+  const auto& identityPartitionKeys = icebergSplit_->identityPartitionKeys;
 
   for (const auto& deleteFile : deleteFiles) {
     if (deleteFile.content != FileContent::kEqualityDeletes ||
@@ -619,14 +619,21 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
           static_cast<column_index_t>(
               readerOutputType_->size() + extraEqualityColumns.size()));
 
-      // For partition columns set the partition value directly as a constant
-      // on the scan-spec child. This is independent of whether the data file
-      // contains the partition column physically. With the constant set
-      // up-front, 'adaptColumns' does not need any special-case logic for
-      // augmented partition columns and the read does not depend on the
-      // writer's choice of including the partition column in the file.
-      auto partitionIt = splitPartitionKeys.find(name);
-      if (partitionIt != splitPartitionKeys.end()) {
+      // Substitute the partition value for the source column only when the
+      // Iceberg partition spec explicitly marks this equality field's source
+      // column as an identity partition field. Identity is the only transform
+      // whose stored partition value equals the source column value; a
+      // bucket, truncate, or temporal value is a transform result, and a
+      // 'void' value is always null while keeping the source column's name.
+      // Keying by the delete file's own Iceberg field ID (rather than by
+      // column name) also keeps this correct across column renames.
+      //
+      // Anything else -- a transformed field, a spec that could not be
+      // parsed, or a split with no identity metadata at all -- leaves no
+      // constant installed, so the column is read from the data file.
+      const auto identityIt =
+          identityPartitionKeys.find(deleteFile.equalityFieldIds[i]);
+      if (identityIt != identityPartitionKeys.end()) {
         // Iceberg encodes DATE partition values as the integer number of
         // days since the Unix epoch (e.g. "19345"). The standard
         // 'setPartitionValue' helper learns this from the planner-supplied
@@ -637,7 +644,7 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
         const bool isDaysSinceEpoch = equalityColumnTypes[i]->isDate();
         auto constant = newConstantFromString(
             equalityColumnTypes[i],
-            partitionIt->second,
+            identityIt->second,
             connectorQueryCtx_->memoryPool(),
             fileConfig_->readTimestampPartitionValueAsLocalTime(
                 connectorQueryCtx_->sessionProperties()),
