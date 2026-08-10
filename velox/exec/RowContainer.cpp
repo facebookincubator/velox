@@ -1291,7 +1291,7 @@ RowComparator::RowComparator(
         channel,
         kConstantChannel,
         "RowComparator doesn't allow constant comparison keys");
-    keyInfo_.push_back(std::make_pair(channel, sortingOrders[i]));
+    keyInfo_.emplace_back(channel, sortingOrders[i]);
   }
 }
 
