@@ -15,9 +15,22 @@
  */
 
 #include "HdfsReadFile.h"
+
+#include <chrono>
+#include <thread>
+
 #include "velox/external/hdfs/ArrowHdfsInternal.h"
 
 namespace facebook::velox {
+
+namespace {
+// Transient HDFS read failures (DataNode hiccups, dropped connections) surface
+// as a negative return from libhdfs3's hdfsRead. Retry a bounded number of
+// times with exponential backoff before giving up, instead of failing the whole
+// Spark task (and therefore the whole query) on the first transient error.
+constexpr int kMaxReadRetries = 3;
+constexpr int kReadRetryBaseDelayMs = 200;
+} // namespace
 
 struct HdfsFile {
   filesystems::arrow::io::internal::LibHdfsShim* driver_;
@@ -53,10 +66,30 @@ struct HdfsFile {
         driver_->GetLastExceptionRootCause());
   }
 
+  // Close the current handle (if any) and reopen the file. Used by
+  // preadInternal to recover a thread-local handle whose stream went bad after
+  // a transient read failure. file_ is a folly::ThreadLocal in the owning Impl,
+  // so each thread reopens its own handle; the shared HDFS client is untouched.
+  void reopen(const std::string& path) {
+    if (handle_) {
+      // Ignore the close result: the stream is already in a bad state and is
+      // being discarded regardless.
+      driver_->CloseFile(client_, handle_);
+      handle_ = nullptr;
+    }
+    handle_ = driver_->OpenFile(client_, path.data(), O_RDONLY, 0, 0, 0);
+    VELOX_CHECK_NOT_NULL(
+        handle_,
+        "Unable to reopen file {}. got error: {}",
+        path,
+        driver_->GetLastExceptionRootCause());
+  }
+
+  // Returns the raw libhdfs3 result, including non-positive values on failure.
+  // The caller (preadInternal) decides whether a non-positive result is
+  // retriable.
   int32_t read(char* pos, uint64_t length) const {
-    auto bytesRead = driver_->Read(client_, handle_, pos, length);
-    VELOX_CHECK(bytesRead >= 0, "Read failure in HDFSReadFile::preadInternal.");
-    return bytesRead;
+    return driver_->Read(client_, handle_, pos, length);
   }
 };
 
@@ -96,8 +129,40 @@ class HdfsReadFile::Impl {
     }
     file_->seek(offset);
     uint64_t totalBytesRead = 0;
+    int retries = 0;
     while (totalBytesRead < length) {
       auto bytesRead = file_->read(pos, length - totalBytesRead);
+      // checkFileReadParameters guarantees offset + length stays within the
+      // file, so we never legitimately hit EOF here. A non-positive result is
+      // therefore always a failure to make progress: a negative value is an
+      // explicit libhdfs3 error, and a zero means the read stalled without
+      // advancing. Both are treated as transient and retried; leaving the zero
+      // case out would spin this loop forever.
+      if (bytesRead <= 0) {
+        VELOX_CHECK_LT(
+            retries,
+            kMaxReadRetries,
+            "Read failure in HDFSReadFile::preadInternal after {} retries, "
+            "file: {}, offset: {}, length: {}, root cause: {}",
+            kMaxReadRetries,
+            filePath_,
+            offset,
+            length,
+            driver_->GetLastExceptionRootCause());
+        ++retries;
+        LOG(WARNING) << "Transient HDFS read failure on " << filePath_
+                     << " (offset=" << offset + totalBytesRead << ", retry "
+                     << retries << "/" << kMaxReadRetries << "), root cause: "
+                     << driver_->GetLastExceptionRootCause();
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(
+                kReadRetryBaseDelayMs * (1 << (retries - 1))));
+        // Rebuild the handle and reposition to the first unread byte; already
+        // read bytes are kept.
+        file_->reopen(filePath_);
+        file_->seek(offset + totalBytesRead);
+        continue;
+      }
       totalBytesRead += bytesRead;
       pos += bytesRead;
     }
