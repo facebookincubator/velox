@@ -40,6 +40,7 @@
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/Exchange.h"
@@ -1248,7 +1249,7 @@ TEST_F(TableScanTest, structMatchByName) {
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .connectorSessionProperty(
                 kHiveConnectorId,
-                connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                connector::hive::FileConfig::kUseColumnNamesSession,
                 "true")
             .split(makeHiveConnectorSplit(filePath))
             .assertResults(sql);
@@ -1356,7 +1357,7 @@ TEST_F(TableScanTest, structMatchByName) {
           AssertQueryBuilder(op)
               .connectorSessionProperty(
                   kHiveConnectorId,
-                  connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                  connector::hive::FileConfig::kUseColumnNamesSession,
                   "true")
               .split(split)
               .copyResults(pool());
@@ -1390,7 +1391,7 @@ TEST_F(TableScanTest, structMatchByName) {
     AssertQueryBuilder(op, duckDbQueryRunner_)
         .connectorSessionProperty(
             kHiveConnectorId,
-            connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+            connector::hive::FileConfig::kUseColumnNamesSession,
             "true")
         .connectorSessionProperty(
             kHiveConnectorId,
@@ -5097,7 +5098,7 @@ TEST_F(TableScanTest, readMissingFieldsInMap) {
   result = AssertQueryBuilder(op)
                .connectorSessionProperty(
                    kHiveConnectorId,
-                   connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                   connector::hive::FileConfig::kUseColumnNamesSession,
                    "true")
                .split(split)
                .copyResults(pool());
@@ -5359,7 +5360,7 @@ TEST_F(TableScanTest, readMissingFieldsWithMoreColumns) {
   result = AssertQueryBuilder(op)
                .connectorSessionProperty(
                    kHiveConnectorId,
-                   connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                   connector::hive::FileConfig::kUseColumnNamesSession,
                    "true")
                .split(split)
                .copyResults(pool());
@@ -7044,17 +7045,33 @@ TEST_F(TableScanTest, scanBatchCallback) {
   uint64_t totalRows{0};
   uint64_t callbackCount{0};
   std::string receivedTableName;
+  std::string receivedDbName;
   auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->setScanBatchCallback([&](const core::ScanBatchEvent& event) {
     totalRows += event.numRows;
     if (const auto* fileEvent =
             dynamic_cast<const connector::hive::FileScanBatchEvent*>(&event)) {
       receivedTableName = std::string(fileEvent->tableName);
+      receivedDbName = std::string(fileEvent->dbName);
     }
     ++callbackCount;
   });
 
-  auto plan = tableScanNode();
+  auto tableHandle = makeTableHandle(
+      /*subfieldFilters=*/{},
+      /*remainingFilter=*/nullptr,
+      "scan_callback_table",
+      rowType_,
+      /*indexColumns=*/std::vector<std::string>{},
+      /*storageParameters=*/std::unordered_map<std::string, std::string>{},
+      "scan_callback_db");
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(rowType_)
+                  .tableHandle(tableHandle)
+                  .assignments(allRegularColumns(rowType_))
+                  .endTableScan()
+                  .planNode();
   auto task = AssertQueryBuilder(plan)
                   .splits(makeHiveConnectorSplits({filePath}))
                   .queryCtx(queryCtx)
@@ -7062,7 +7079,8 @@ TEST_F(TableScanTest, scanBatchCallback) {
 
   EXPECT_GT(totalRows, 0);
   EXPECT_GT(callbackCount, 0);
-  EXPECT_FALSE(receivedTableName.empty());
+  EXPECT_EQ(receivedTableName, "scan_callback_table");
+  EXPECT_EQ(receivedDbName, "scan_callback_db");
 }
 
 TEST_F(TableScanTest, scanBatchCallbackPartitionKeys) {
@@ -7120,6 +7138,118 @@ TEST_F(TableScanTest, scanBatchCallbackNotSetIsNoOp) {
                     .splits(makeHiveConnectorSplits({filePath}))
                     .copyResults(pool_.get());
   EXPECT_GT(result->size(), 0);
+}
+
+TEST_F(TableScanTest, scanBatchCallbackStorageReadBytes) {
+  auto vectors = makeVectors(3, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  uint64_t summedEventBytes{0};
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->setScanBatchCallback([&](const core::ScanBatchEvent& event) {
+    const auto* fileEvent =
+        dynamic_cast<const connector::hive::FileScanBatchEvent*>(&event);
+    ASSERT_TRUE(fileEvent != nullptr);
+    summedEventBytes += fileEvent->storageReadBytes;
+  });
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(tableScanNode())
+                    .splits(makeHiveConnectorSplits({filePath}))
+                    .queryCtx(queryCtx)
+                    .copyResults(pool_.get(), task);
+  EXPECT_GT(result->size(), 0);
+
+  // Events report deltas of the same counter the operator publishes as
+  // storageReadBytes, so together they must account for all of it. Bytes are
+  // read when a stripe loads, which happens inside addSplit() for a file this
+  // small -- a delta measured only around next() would report zero here.
+  const auto operatorBytes =
+      getTableScanRuntimeStats(task).at("storageReadBytes").sum;
+  EXPECT_GT(operatorBytes, 0);
+  EXPECT_EQ(summedEventBytes, operatorBytes);
+}
+
+TEST_F(TableScanTest, scanBatchCallbackStorageReadBytesMultiStripe) {
+  // A stripe size well below the data size forces many stripes. Note this
+  // does not by itself spread reads across next() calls: at this scale the
+  // reader still loads every stripe during addSplit(), so the bytes arrive in
+  // a single event. Accumulation across next() calls remains uncovered.
+  auto vectors = makeVectors(20, 1'000);
+  auto writeConfig = std::make_shared<dwrf::Config>();
+  writeConfig->set<uint64_t>(dwrf::Config::STRIPE_SIZE, 1'024);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors, writeConfig);
+
+  uint64_t summedEventBytes{0};
+  int32_t eventsCarryingBytes{0};
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->setScanBatchCallback([&](const core::ScanBatchEvent& event) {
+    const auto* fileEvent =
+        dynamic_cast<const connector::hive::FileScanBatchEvent*>(&event);
+    ASSERT_TRUE(fileEvent != nullptr);
+    summedEventBytes += fileEvent->storageReadBytes;
+    if (fileEvent->storageReadBytes > 0) {
+      ++eventsCarryingBytes;
+    }
+  });
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(tableScanNode())
+                    .splits(makeHiveConnectorSplits({filePath}))
+                    .queryCtx(queryCtx)
+                    .copyResults(pool_.get(), task);
+  EXPECT_GT(result->size(), 0);
+
+  const auto stats = getTableScanRuntimeStats(task);
+  // Guards against the file collapsing to a single stripe, which would make
+  // this a duplicate of the test above.
+  ASSERT_GT(stats.at("numStripes").sum, 1);
+  const auto operatorBytes = stats.at("storageReadBytes").sum;
+  EXPECT_GT(operatorBytes, 0);
+  EXPECT_EQ(summedEventBytes, operatorBytes);
+  EXPECT_GT(eventsCarryingBytes, 0);
+  LOG(INFO) << "multiStripe: numStripes=" << stats.at("numStripes").sum
+            << " eventsCarryingBytes=" << eventsCarryingBytes
+            << " bytes=" << operatorBytes;
+}
+
+TEST_F(TableScanTest, scanBatchCallbackStorageReadBytesPreload) {
+  // Preloading prepares the next split on a separate data source, then hands
+  // it over via setFromDataSource(), which merges and swaps the io stats. The
+  // preloading source reads its split's bytes but never fires an event, so the
+  // adopting source must still report them.
+  auto filePaths = makeFilePaths(8);
+  auto vectors = makeVectors(8, 1'000);
+  for (int32_t i = 0; i < vectors.size(); ++i) {
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+  }
+
+  uint64_t summedEventBytes{0};
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->setScanBatchCallback([&](const core::ScanBatchEvent& event) {
+    const auto* fileEvent =
+        dynamic_cast<const connector::hive::FileScanBatchEvent*>(&event);
+    ASSERT_TRUE(fileEvent != nullptr);
+    summedEventBytes += fileEvent->storageReadBytes;
+  });
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(tableScanNode())
+                    .splits(makeHiveConnectorSplits(filePaths))
+                    .queryCtx(queryCtx)
+                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "4")
+                    .maxDrivers(1)
+                    .copyResults(pool_.get(), task);
+  EXPECT_GT(result->size(), 0);
+
+  const auto stats = getTableScanRuntimeStats(task);
+  // Without this the test would silently stop covering the handover path.
+  ASSERT_GT(stats.at("preloadedSplits").sum, 0);
+  const auto operatorBytes = stats.at("storageReadBytes").sum;
+  EXPECT_GT(operatorBytes, 0);
+  EXPECT_EQ(summedEventBytes, operatorBytes);
 }
 
 // --- Column extraction pushdown table scan tests ---

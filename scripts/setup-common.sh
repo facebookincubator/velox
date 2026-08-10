@@ -437,17 +437,15 @@ function install_hdfs_deps {
 }
 
 function install_uv {
+  export UV_TOOL_BIN_DIR="${UV_TOOL_BIN_DIR:-$INSTALL_PREFIX/bin}"
+  export UV_INSTALL_DIR=${UV_INSTALL_DIR:-"$UV_TOOL_BIN_DIR"}
   if command -v uv >/dev/null 2>&1; then
     echo "uv is already installed."
   else
     echo "Installing uv..."
-
-    export UV_TOOL_BIN_DIR="${UV_TOOL_BIN_DIR:-$INSTALL_PREFIX/bin}"
-    export UV_INSTALL_DIR=${UV_INSTALL_DIR:-"$UV_TOOL_BIN_DIR"}
-
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    uv tool update-shell
   fi
+  uv tool update-shell
 }
 
 function uv_install {

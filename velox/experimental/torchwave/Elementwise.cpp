@@ -45,21 +45,28 @@ void CompileCtx::collectSubgraphInputs(
       for (auto& listInput : producer->inputs()) {
         auto* lv = listInput.value;
         auto* lp = lv->producer();
-        if (sgInputs.count(lv) || (lp && placed_.count(lp))) {
+        if (sgInputs.count(lv) || !lp || placed_.count(lp)) {
           if (seen.insert(lv).second) {
             result.push_back(lv);
           }
-        } else if (lp) {
+        } else {
           collectSubgraphInputs(lp, sgInputs, seen, result);
         }
       }
       continue;
     }
-    if (sgInputs.count(value) || (producer && placed_.count(producer))) {
+    // A producerless value is always a leaf of the subgraph (a graph input or
+    // a formal boundary of the ProjectOperation's variant subgraph, e.g. an
+    // index gather materialized in an earlier kernel and imported here through
+    // a prim.ListPack). It has a kernel param slot, so it must appear in the
+    // ElementExpr inputs; extractSubgraphInputs already treats it this way.
+    // Without the !producer case it would be dropped, and elementwiseExprImpl
+    // (which sees it as terminal) would fail to find it in the inputs vector.
+    if (sgInputs.count(value) || !producer || placed_.count(producer)) {
       if (seen.insert(value).second) {
         result.push_back(value);
       }
-    } else if (producer) {
+    } else {
       collectSubgraphInputs(producer, sgInputs, seen, result);
     }
   }
@@ -171,13 +178,25 @@ void CompileCtx::generateElementwise(
   auto leafInputs = subgraphInputs(subgraphs);
 
   // Remove values whose producer is an elementwise op with non-register
-  // first return (e.g. index_put_elt_*). Their output is sized by the
-  // source tensor, not the elementwise loop.
+  // first return (e.g. index_put_elt_*) when the value is computed inline in
+  // this kernel: its output is sized by the source tensor, not the elementwise
+  // loop, and it is re-derived by walking its producer. A value that has a
+  // param slot in this kernel is different: it is backed by memory, either as a
+  // boundary input (materialized by an earlier kernel) or as a materialized
+  // output of an earlier sub-expression in this same kernel (e.g. an index_put
+  // result that a later __or__ then reads). Such a value must stay a leaf.
+  // Dropping it would leave it out of inputSet, making elementwiseExprImpl
+  // treat it as non-terminal and recurse into the already-placed producer --
+  // reaching values (an index_put self clone, or a ListPack index element from
+  // a previous kernel) that have no param slot in the enclosing sub-expression.
   leafInputs.erase(
       std::remove_if(
           leafInputs.begin(),
           leafInputs.end(),
-          [](ValueCP v) {
+          [&op](ValueCP v) {
+            if (op.hasParamSlot(v)) {
+              return false;
+            }
             auto* producer = v->producer();
             if (!producer) {
               return false;
@@ -754,7 +773,21 @@ std::string CompileCtx::formatLeafAccess(
     const KernelOperation& op,
     bool slowPath) {
   auto it = std::find(inputs.begin(), inputs.end(), value);
-  TORCH_CHECK(it != inputs.end(), "Input value not found in inputs vector");
+  if (it == inputs.end()) {
+    const auto* producer = value->producer();
+    const std::string producerTarget =
+        producer ? std::string(producer->target()) : "<none>";
+    TORCH_CHECK(
+        false,
+        "Input value not found in inputs vector: value=",
+        value->name(),
+        " id=",
+        value->id(),
+        " kind=",
+        static_cast<int>(value->type().kind()),
+        " producer=",
+        producerTarget);
+  }
   auto valueIdx = it - inputs.begin();
   auto varIt = elementwiseVarNames_.find(valueIdx);
   std::string base;
@@ -1058,6 +1091,28 @@ void CompileCtx::elementwiseExprImpl(
     firstValue = false;
   };
 
+  // Forces an own-dims index calculator on every terminal tensor leaf reachable
+  // through 'v'. A fused in-place scatter (tw.slice_scatter / select_scatter /
+  // scatter / scatter_add: hasOutputArg + a valuesArg written per element)
+  // sizes its elementwise loop by 'src' (the valuesArg), not by the op's output
+  // tensor
+  // (== self, which is excluded from sizing). So a non-contiguous src leaf's
+  // per-lane read must decompose 'idx' by the leaf's OWN dims (== src's shape),
+  // not broadcast against self's (larger) shape as the default prologue would.
+  // Marking the leaf routes it to ensureIndexCalculator() so the slow-path
+  // complexIdx() uses the src's real strides.
+  std::function<void(ValueCP)> forceSrcLeafOwnDims = [&](ValueCP v) {
+    if (isTerminal(v)) {
+      if (v->type().kind() == nativert::Type::Kind::Tensor) {
+        generatingOp_->addOwnDimsCalcOffset(op.paramOffset(v));
+      }
+      return;
+    }
+    for (const auto& input : v->producer()->inputs()) {
+      forceSrcLeafOwnDims(input.value);
+    }
+  };
+
   // Gather call args via forArguments for BOTH the generateCall and the default
   // path, so register args that arrive as constant ATTRIBUTES (not graph edges)
   // are emitted too.  The base's scalar support folds e.g. scalar_tensor's
@@ -1086,6 +1141,15 @@ void CompileCtx::elementwiseExprImpl(
           if (isWhole && meta->elementwise && meta->elementwise->hasOutputArg &&
               v->type().kind() == nativert::Type::Kind::Tensor) {
             generatingOp_->addOwnDimsCalcOffset(op.paramOffset(v));
+          }
+          // The register src of a fused in-place scatter (hasOutputArg +
+          // valuesArg) is read per element while the loop is sized by src, not
+          // by self; force own-dims calculators on its leaves so a
+          // non-contiguous src view is read at its real strides.
+          if (isReg && meta->valuesArg.has_value() && meta->elementwise &&
+              meta->elementwise->hasOutputArg &&
+              v->type().kind() == nativert::Type::Kind::Tensor) {
+            forceSrcLeafOwnDims(v);
           }
           processValue(v, isWhole, isReg);
         } else if (attr) {

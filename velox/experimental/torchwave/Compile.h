@@ -282,6 +282,13 @@ class CompileCtx {
 
   void pushdownFused(NodeCP node);
 
+  /// Places 'producer' and its own inputs, then emits 'producer' as its own
+  /// kernel launch so a consumer reads its output as a materialized border
+  /// across a kernel boundary. Used where the whole of 'producer's output must
+  /// be visible before the consumer runs, but an in-kernel barrier (which
+  /// forces a cooperative, whole-grid-resident launch) is undesirable.
+  void breakProducerIntoOwnKernel(NodeCP producer);
+
   std::unique_ptr<KernelOperation> generateFused(const Subgraph& sg);
 
   void generateFusedInner(const Subgraph& sg);
@@ -292,7 +299,12 @@ class CompileCtx {
 
   void placeKernelLaunch(Launch launch);
 
-  static int32_t nextKernelId();
+  /// Returns the next kernel id for this compilation. The counter is per
+  /// CompileCtx (one per WaveGraph construction), so kernel names are
+  /// deterministic per graph regardless of how many graphs compile
+  /// concurrently. This keeps NVRTC cache keys stable (warm-cache hits) and
+  /// makes parallel compilation of different configs well-defined.
+  int32_t nextKernelId();
 
   KernelOperation* generatingOp() const {
     return generatingOp_;
@@ -322,7 +334,11 @@ class CompileCtx {
   Subgraph variantSubgraph(const Subgraph& sg, VariantMode mode);
 
  private:
-  inline static std::atomic<int32_t> kernelCounter_{0};
+  // Per-CompileCtx (one per WaveGraph construction), not process-wide, so no
+  // atomicity is needed: concurrent compilations use distinct CompileCtx
+  // instances, keeping kernel ids deterministic per graph for NVRTC cache-key
+  // stability.
+  int32_t kernelCounter_{0};
 
   template <typename Func>
   bool allReachable(

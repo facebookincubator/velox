@@ -59,7 +59,8 @@ struct InputBatchRef {
 ///
 /// Thread safety: All public methods are thread-safe. The mutex_ protects
 /// all mutable state. Completion callbacks from the RPC client's executor
-/// threads call notifyWaitersLocked() to wake the driver thread.
+/// threads take the waiter promises under the lock (takeWaitersLocked) and
+/// fulfill them after releasing it to wake the driver thread.
 ///
 /// Two streaming modes:
 /// - PER_ROW: Rows are emitted as they complete individually (out-of-order).
@@ -315,8 +316,14 @@ class RPCState {
       RPCResponse response,
       int64_t rttNs);
 
-  /// Fulfill all waiting promises and clear. Called under lock.
-  void notifyWaitersLocked();
+  // Extract the pending waiter promises and clear the queue, returning them
+  // so the caller can fulfill them AFTER releasing mutex_. Must be called with
+  // mutex_ held. Promises must not be fulfilled under mutex_: setValue() runs
+  // any inline future continuation synchronously (e.g. Driver::setResume ->
+  // Operator::recordBlockingTime, which takes the Operator stats lock), which
+  // would acquire that lock under mutex_ and invert lock order against the
+  // driver thread (a potential deadlock TSAN flags).
+  [[nodiscard]] std::vector<ContinuePromise> takeWaitersLocked();
 
   /// Extract the ready batch referenced by `it`: compute its round-trip
   /// latency, move out the responses (capturing any error), erase the entry,

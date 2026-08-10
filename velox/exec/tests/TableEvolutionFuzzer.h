@@ -49,6 +49,16 @@ class TableEvolutionFuzzer {
         dwio::common::FileFormat,
         FuzzerGenerator&)>
         extraWriteSerdeParams;
+
+    /// Returns a pair of connector session property maps, one per scan task in
+    /// a query shape. The two maps may differ so that the pushdown and
+    /// reference scans exercise different read-side configs (e.g. dictionary
+    /// preservation on vs off), turning the existing result comparison into a
+    /// cross-config correctness check. Called once per query shape.
+    std::function<std::pair<
+        std::unordered_map<std::string, std::string>,
+        std::unordered_map<std::string, std::string>>(FuzzerGenerator&)>
+        extraReadSessionProperties;
   };
 
   /// Per-batch raw-byte target and clamp bounds for adaptive batch sizing. A
@@ -185,7 +195,9 @@ class TableEvolutionFuzzer {
       bool useFiltersAsNode,
       bool insertProjectToBlockPushdown,
       const RowTypePtr& fullOutSchema,
-      const std::vector<std::string>& outputColumnNames);
+      const std::vector<std::string>& outputColumnNames,
+      const std::unordered_map<std::string, std::string>&
+          readSessionProperties);
 
   /// Builds schema for flatmap as struct reading by converting selected map
   /// columns to struct types.
@@ -258,6 +270,13 @@ class TableEvolutionFuzzer {
   VectorFuzzer vectorFuzzer_;
   unsigned currentSeed_;
   FuzzerGenerator rng_;
+  /// Per-query-shape read-side connector session properties for the pushdown
+  /// scan (first) and the reference scan (second). Computed once per shape in
+  /// runQueryShape() and passed to makeScanTask(); logged on failure.
+  std::pair<
+      std::unordered_map<std::string, std::string>,
+      std::unordered_map<std::string, std::string>>
+      readSessionProperties_;
   int64_t sequenceNumber_ = 0;
 };
 

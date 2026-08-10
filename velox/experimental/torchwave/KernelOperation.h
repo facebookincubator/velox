@@ -266,6 +266,14 @@ class KernelOperation {
     return inputs_.count(value);
   }
 
+  /// True if 'value' has a parameter slot in this kernel, i.e. it is backed by
+  /// memory as a boundary input or a materialized output (including TensorList
+  /// elements). Such a value must be read from its slot rather than recomputed
+  /// inline during elementwise codegen.
+  bool hasParamSlot(ValueCP value) const {
+    return paramOffsets_.count(value) > 0;
+  }
+
   const std::vector<OutputDesc>& outputDescs() const {
     return outputDescs_;
   }

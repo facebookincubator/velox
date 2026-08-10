@@ -118,10 +118,12 @@ void setupGroupingKeyChannelProjections(
     std::vector<column_index_t>& groupingKeyOutputChannels);
 
 // Top-level validation: dispatches to groupby or reduce validation based on
-// whether the aggregation node is global.
+// whether the aggregation node is global. `pool` is used to optimize checked
+// expressions during eligibility, typically the operator's own pool.
 bool canBeEvaluatedByCudf(
     const core::AggregationNode& aggregationNode,
-    core::QueryCtx* queryCtx);
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
 
 // Utility functions shared by groupby and reduce validation.
 core::TypedExprPtr expandFieldReference(
@@ -131,7 +133,8 @@ core::TypedExprPtr expandFieldReference(
 bool canGroupingKeysBeEvaluatedByCudf(
     const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
     const core::PlanNode* sourceNode,
-    core::QueryCtx* queryCtx);
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
 
 bool matchTypedCallAgainstSignatures(
     const core::CallTypedExpr& call,

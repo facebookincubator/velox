@@ -111,6 +111,10 @@ void WriterContext::initBuffer() {
   if (compression_ != common::CompressionKind_NONE) {
     compressionBuffer_ = std::make_unique<dwio::common::DataBuffer<char>>(
         *generalPool_, compressionBlockSize_ + PAGE_HEADER_SIZE);
+    if (getConfig(Config::VERIFY_COMPRESSION)) {
+      decompressionBuffer_ = std::make_unique<dwio::common::DataBuffer<char>>(
+          *generalPool_, compressionBlockSize_ + PAGE_HEADER_SIZE);
+    }
   }
 }
 
@@ -171,6 +175,7 @@ int64_t WriterContext::releaseMemoryReservation() {
 
 void WriterContext::abort() {
   compressionBuffer_.reset();
+  decompressionBuffer_.reset();
   physicalSizeAggregators_.clear();
   streams_.clear();
   dictEncoders_.clear();
