@@ -418,23 +418,25 @@ void IcebergSplitReader::prepareSplit(
     return;
   }
 
-  // Inject a row-number column when filters, random-skip, or positional
+  // Inject a row-number column when filters, random-skip, or row-skipping
   // deletes make the output-to-file-position mapping non-contiguous.
   // Check split metadata rather than positionalDeleteFileReaders_ because
   // the row reader must be configured before delete files are opened. Both
   // _row_id and $target_table_row_id need accurate file-absolute positions,
-  // so request injection when either is projected.
-  const bool hasPositionalDeletes = std::any_of(
+  // so request injection when either is projected. Deletion vectors skip rows
+  // exactly like V2 positional deletes and must be counted here too.
+  const bool hasRowSkippingDeletes = std::any_of(
       icebergSplit_->deleteFiles.begin(),
       icebergSplit_->deleteFiles.end(),
       [](const IcebergDeleteFile& deleteFile) {
-        return deleteFile.content == FileContent::kPositionalDeletes &&
+        return (deleteFile.content == FileContent::kPositionalDeletes ||
+                deleteFile.content == FileContent::kDeletionVector) &&
             deleteFile.recordCount > 0;
       });
   useRowNumberColumn_ = (rowIdOutputIndex_.has_value() ||
                          targetTableRowIdOutputIndex_.has_value()) &&
       (scanSpec_->hasFilter() || baseReaderOpts_.randomSkip() != nullptr ||
-       hasPositionalDeletes);
+       hasRowSkippingDeletes);
   if (useRowNumberColumn_) {
     dwio::common::RowNumberColumnInfo rowNumInfo;
     rowNumInfo.insertPosition = readerOutputType_->size();

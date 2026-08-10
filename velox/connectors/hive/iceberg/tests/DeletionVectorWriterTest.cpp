@@ -401,3 +401,16 @@ TEST_F(DeletionVectorWriterTest, mixed32And64BitPositions) {
   };
   verifyRoundTrip(positions, 2'048);
 }
+
+/// Verifies that duplicate positions collapse in the cardinality reported for
+/// the DV blob. Seeding a writer from an existing deletion vector and then
+/// adding overlapping new deletes makes 'positions_' hold duplicates, so
+/// 'numPositions' overcounts and only 'numDistinctPositions' matches the
+/// cardinality Iceberg expects in the blob metadata.
+TEST_F(DeletionVectorWriterTest, numDistinctPositionsIgnoresDuplicates) {
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions({7, 3, 7, 1, 3, 3});
+
+  EXPECT_EQ(writer.numPositions(), 6);
+  EXPECT_EQ(writer.numDistinctPositions(), 3);
+}

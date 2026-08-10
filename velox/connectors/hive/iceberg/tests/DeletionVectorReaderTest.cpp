@@ -96,6 +96,79 @@ std::string serializeRoaringBitmapNoRun(const std::vector<int64_t>& positions) {
   return data;
 }
 
+// Serializes a roaring bitmap in the portable no-run format, encoding any
+// block whose cardinality exceeds 4096 as a 1024-word bitset container rather
+// than an array container. 'serializeRoaringBitmapNoRun' above always emits
+// array containers, so it cannot produce this encoding — which is the one
+// Iceberg and DeletionVectorWriter use for dense blocks.
+std::string serializeRoaringBitmapWithBitsetContainer(
+    const std::vector<int64_t>& positions) {
+  constexpr uint32_t kMaxArrayContainerCardinality = 4'096;
+  constexpr uint32_t kBitmapContainerBytes = 8'192;
+  constexpr uint32_t kCookie = 12'346;
+
+  std::map<uint16_t, std::vector<uint16_t>> containers;
+  for (auto position : positions) {
+    containers[static_cast<uint16_t>(position >> 16)].push_back(
+        static_cast<uint16_t>(position & 0xFFFF));
+  }
+  for (auto& [key, values] : containers) {
+    std::sort(values.begin(), values.end());
+  }
+
+  const auto numContainers = static_cast<uint32_t>(containers.size());
+  std::string data;
+  data.append(reinterpret_cast<const char*>(&kCookie), 4);
+  data.append(reinterpret_cast<const char*>(&numContainers), 4);
+
+  for (const auto& [key, values] : containers) {
+    const auto cardMinus1 = static_cast<uint16_t>(values.size() - 1);
+    data.append(reinterpret_cast<const char*>(&key), 2);
+    data.append(reinterpret_cast<const char*>(&cardMinus1), 2);
+  }
+
+  uint32_t offset = 4 + 4 + numContainers * 4 + numContainers * 4;
+  for (const auto& [key, values] : containers) {
+    data.append(reinterpret_cast<const char*>(&offset), 4);
+    offset += values.size() <= kMaxArrayContainerCardinality
+        ? static_cast<uint32_t>(values.size()) * 2
+        : kBitmapContainerBytes;
+  }
+
+  for (const auto& [key, values] : containers) {
+    if (values.size() <= kMaxArrayContainerCardinality) {
+      for (auto value : values) {
+        data.append(reinterpret_cast<const char*>(&value), 2);
+      }
+    } else {
+      std::vector<uint64_t> words(1'024, 0);
+      for (auto value : values) {
+        words[value / 64] |= (1ULL << (value % 64));
+      }
+      for (auto word : words) {
+        data.append(reinterpret_cast<const char*>(&word), 8);
+      }
+    }
+  }
+  return data;
+}
+
+// Wraps serialized 32-bit roaring bitmaps in the Roaring64 envelope:
+// [numGroups: uint64] then, per group, [highBits: uint32][32-bit bitmap].
+// Reaching group N+1 requires the reader to advance exactly past group N's
+// container data, so multi-group inputs exercise that skip arithmetic.
+std::string wrapInRoaring64(
+    const std::vector<std::pair<uint32_t, std::string>>& groups) {
+  std::string data;
+  const auto numGroups = static_cast<uint64_t>(groups.size());
+  data.append(reinterpret_cast<const char*>(&numGroups), 8);
+  for (const auto& [highBits, bitmap] : groups) {
+    data.append(reinterpret_cast<const char*>(&highBits), 4);
+    data.append(bitmap);
+  }
+  return data;
+}
+
 // Concatenates the deletion-vector-v1 magic bytes with a serialized roaring
 // bitmap. The frame's length prefix and CRC-32 both cover these bytes.
 std::string magicAndVectorBytes(const std::string& bitmap) {
@@ -263,6 +336,38 @@ IcebergDeleteFile makeDvDeleteFile(
       /*dataSequenceNumber=*/0,
       /*contentOffset=*/static_cast<int64_t>(blobOffset),
       /*contentLength=*/contentLength);
+}
+
+// Creates a DV delete file that locates its blob through the legacy
+// bounds-map encoding instead of the typed 'contentOffset'/'contentLength'
+// fields. Leaving 'contentLength' at 0 is what selects that fallback.
+IcebergDeleteFile makeLegacyBoundsDvFile(
+    const std::string& filePath,
+    uint64_t recordCount,
+    uint64_t fileSize,
+    const std::optional<std::string>& blobOffset,
+    const std::optional<std::string>& blobLength) {
+  std::unordered_map<int32_t, std::string> lowerBounds;
+  std::unordered_map<int32_t, std::string> upperBounds;
+  if (blobOffset.has_value()) {
+    lowerBounds[DeletionVectorReader::kDvOffsetFieldId] = *blobOffset;
+  }
+  if (blobLength.has_value()) {
+    upperBounds[DeletionVectorReader::kDvLengthFieldId] = *blobLength;
+  }
+
+  return IcebergDeleteFile(
+      FileContent::kDeletionVector,
+      filePath,
+      dwio::common::FileFormat::DWRF,
+      recordCount,
+      fileSize,
+      /*equalityFieldIds=*/{},
+      lowerBounds,
+      upperBounds,
+      /*dataSequenceNumber=*/0,
+      /*contentOffset=*/0,
+      /*contentLength=*/0);
 }
 
 // Extracts which bits are set in a bitmap buffer.
@@ -521,6 +626,136 @@ TEST_F(DeletionVectorReaderTest, runContainersWithOffsetHeader) {
   EXPECT_TRUE(reader.noMoreData());
 }
 
+TEST_F(DeletionVectorReaderTest, bitsetContainer) {
+  // 5000 deletes inside a single 64K block exceeds the 4096 array-container
+  // threshold, so the block is stored as a 1024-word bitset. The reader picks
+  // the container encoding from the cardinality, so this is the only shape
+  // that exercises its bitset branch.
+  std::vector<int64_t> positions;
+  positions.reserve(5'000);
+  for (int64_t i = 0; i < 5'000; ++i) {
+    positions.push_back(i * 2);
+  }
+
+  auto bitmapData = serializeRoaringBitmapWithBitsetContainer(positions);
+  auto tempFile = writeDvFile(bitmapData);
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(),
+      positions.size(),
+      static_cast<uint64_t>(bitmapData.size()));
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+
+  const uint64_t numRows = 10'000;
+  auto bitmap = allocateBitmap(numRows);
+  reader.readDeletePositions(0, numRows, bitmap);
+
+  std::vector<uint64_t> expected;
+  expected.reserve(positions.size());
+  for (auto position : positions) {
+    expected.push_back(static_cast<uint64_t>(position));
+  }
+  EXPECT_EQ(getSetBits(bitmap, numRows), expected);
+  EXPECT_TRUE(reader.noMoreData());
+}
+
+TEST_F(DeletionVectorReaderTest, bitsetContainerMixedWithArrayContainer) {
+  // A dense block followed by a sparse one. The reader must advance exactly
+  // 8192 bytes past the bitset before reading the array container, so a wrong
+  // stride here corrupts the second block rather than failing outright.
+  std::vector<int64_t> positions;
+  positions.reserve(4'100);
+  for (int64_t i = 0; i < 4'100; ++i) {
+    positions.push_back(i);
+  }
+  positions.push_back(65'536 + 7);
+  positions.push_back(65'536 + 9);
+
+  auto bitmapData = serializeRoaringBitmapWithBitsetContainer(positions);
+  auto tempFile = writeDvFile(bitmapData);
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(),
+      positions.size(),
+      static_cast<uint64_t>(bitmapData.size()));
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+
+  std::vector<int64_t> expected(positions.begin(), positions.end());
+  std::sort(expected.begin(), expected.end());
+  EXPECT_EQ(reader.deletedPositions(), expected);
+}
+
+TEST_F(DeletionVectorReaderTest, runContainersAcrossRoaring64Groups) {
+  // Run containers wrapped in a Roaring64 envelope. Existing run-container
+  // coverage uses the bare 32-bit format, which returns before the 64-bit
+  // group loop; only a multi-group input exercises the logic that skips past
+  // a run container to locate the next group's header.
+  const std::vector<
+      std::pair<uint16_t, std::vector<std::pair<uint16_t, uint16_t>>>>
+      lowGroupRuns = {{0, {{10, 4}, {100, 2}}}};
+  const std::vector<
+      std::pair<uint16_t, std::vector<std::pair<uint16_t, uint16_t>>>>
+      highGroupRuns = {{0, {{20, 1}}}};
+
+  auto bitmapData = wrapInRoaring64(
+      {{0, serializeRoaringBitmapWithRuns(lowGroupRuns)},
+       {1, serializeRoaringBitmapWithRuns(highGroupRuns)}});
+  auto tempFile = writeDvFile(bitmapData);
+
+  std::vector<int64_t> expected;
+  for (auto position : expandRuns(lowGroupRuns)) {
+    expected.push_back(static_cast<int64_t>(position));
+  }
+  // Group 1 positions live at highBits 1, i.e. offset 2^32.
+  constexpr int64_t kHighGroupBase = int64_t{1} << 32;
+  for (auto position : expandRuns(highGroupRuns)) {
+    expected.push_back(kHighGroupBase + static_cast<int64_t>(position));
+  }
+  std::sort(expected.begin(), expected.end());
+
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(),
+      expected.size(),
+      static_cast<uint64_t>(bitmapData.size()));
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  EXPECT_EQ(reader.deletedPositions(), expected);
+}
+
+TEST_F(
+    DeletionVectorReaderTest,
+    arrayAndBitsetContainersAcrossRoaring64Groups) {
+  // The multi-group skip arithmetic differs per container encoding: an array
+  // container advances by 2 bytes per value while a bitset always advances by
+  // a fixed 8192. Pair a sparse group with a dense one so both strides must be
+  // right for the second group's header to be found.
+  std::vector<int64_t> denseGroupPositions;
+  denseGroupPositions.reserve(4'200);
+  for (int64_t i = 0; i < 4'200; ++i) {
+    denseGroupPositions.push_back(i);
+  }
+
+  auto bitmapData = wrapInRoaring64(
+      {{0, serializeRoaringBitmapWithBitsetContainer({3, 11, 65'536 + 4})},
+       {1, serializeRoaringBitmapWithBitsetContainer(denseGroupPositions)}});
+  auto tempFile = writeDvFile(bitmapData);
+
+  constexpr int64_t kHighGroupBase = int64_t{1} << 32;
+  std::vector<int64_t> expected = {3, 11, 65'536 + 4};
+  for (auto position : denseGroupPositions) {
+    expected.push_back(kHighGroupBase + position);
+  }
+  std::sort(expected.begin(), expected.end());
+
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(),
+      expected.size(),
+      static_cast<uint64_t>(bitmapData.size()));
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  EXPECT_EQ(reader.deletedPositions(), expected);
+}
+
 TEST_F(DeletionVectorReaderTest, largePositionsMultipleContainers) {
   // Positions spanning two containers: one in container 0 (key=0), one in
   // container 1 (key=1, i.e. pos >= 65536).
@@ -706,4 +941,116 @@ TEST_F(DeletionVectorReaderTest, invalidBitmapBadCookie) {
   VELOX_ASSERT_THROW(
       reader.readDeletePositions(0, 10, bitmap),
       "Unknown roaring bitmap cookie");
+}
+
+TEST_F(DeletionVectorReaderTest, legacyBoundsMapLocatesBlob) {
+  // Callers that predate the typed contentOffset/contentLength fields encode
+  // the blob's location in the delete file's bounds maps instead. Prefix the
+  // bitmap with padding so a wrong offset cannot accidentally still parse.
+  const std::vector<int64_t> positions = {2, 9, 70'000};
+  const std::string padding(16, '\xAB');
+  auto bitmapData = serializeRoaringBitmapNoRun(positions);
+  auto tempFile = writeDvFile(padding + bitmapData);
+
+  auto dvFile = makeLegacyBoundsDvFile(
+      tempFile->getPath(),
+      positions.size(),
+      padding.size() + bitmapData.size(),
+      std::to_string(padding.size()),
+      std::to_string(bitmapData.size()));
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  EXPECT_EQ(reader.deletedPositions(), positions);
+}
+
+TEST_F(DeletionVectorReaderTest, legacyBoundsMapRejectsNonNumericOffset) {
+  auto bitmapData = serializeRoaringBitmapNoRun({1});
+  auto tempFile = writeDvFile(bitmapData);
+
+  auto dvFile = makeLegacyBoundsDvFile(
+      tempFile->getPath(),
+      1,
+      bitmapData.size(),
+      "not-a-number",
+      std::to_string(bitmapData.size()));
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  VELOX_ASSERT_THROW(
+      reader.deletedPositions(), "Failed to parse DV blob offset");
+}
+
+TEST_F(DeletionVectorReaderTest, legacyBoundsMapRejectsNonNumericLength) {
+  auto bitmapData = serializeRoaringBitmapNoRun({1});
+  auto tempFile = writeDvFile(bitmapData);
+
+  auto dvFile = makeLegacyBoundsDvFile(
+      tempFile->getPath(), 1, bitmapData.size(), "0", "not-a-number");
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  VELOX_ASSERT_THROW(
+      reader.deletedPositions(), "Failed to parse DV blob length");
+}
+
+TEST_F(DeletionVectorReaderTest, emptyBitmapYieldsNoDeletes) {
+  // A container-less bitmap is structurally valid but selects nothing. The
+  // reader must return an empty position list rather than misparse the
+  // header, and a subsequent read must leave the delete bitmap untouched.
+  auto bitmapData = serializeRoaringBitmapNoRun({});
+  auto tempFile = writeDvFile(bitmapData);
+
+  // recordCount must be positive to construct a reader at all, so this also
+  // covers metadata that disagrees with the blob's actual contents.
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(), 1, static_cast<uint64_t>(bitmapData.size()));
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  EXPECT_TRUE(reader.deletedPositions().empty());
+
+  auto bitmap = allocateBitmap(64);
+  reader.readDeletePositions(0, 64, bitmap);
+  EXPECT_TRUE(getSetBits(bitmap, 64).empty());
+}
+
+TEST_F(DeletionVectorReaderTest, emptyGroupInRoaring64IsSkipped) {
+  // A Roaring64 group carrying no containers contributes nothing, but the
+  // reader must still step over its header to reach the following group.
+  auto bitmapData = wrapInRoaring64(
+      {{0, serializeRoaringBitmapNoRun({})},
+       {1, serializeRoaringBitmapNoRun({6, 12})}});
+  auto tempFile = writeDvFile(bitmapData);
+
+  constexpr int64_t kHighGroupBase = int64_t{1} << 32;
+  const std::vector<int64_t> expected = {
+      kHighGroupBase + 6, kHighGroupBase + 12};
+
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(),
+      expected.size(),
+      static_cast<uint64_t>(bitmapData.size()));
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+  EXPECT_EQ(reader.deletedPositions(), expected);
+}
+
+TEST_F(DeletionVectorReaderTest, skipsPositionsBeforeRequestedRange) {
+  // Reading a batch that starts past earlier deletes must advance the cursor
+  // over them instead of mapping them into the batch-relative bitmap. This is
+  // the path a split beginning at a nonzero row offset takes.
+  const std::vector<int64_t> positions = {1, 50};
+  auto bitmapData = serializeRoaringBitmapNoRun(positions);
+  auto tempFile = writeDvFile(bitmapData);
+
+  auto dvFile = makeDvDeleteFile(
+      tempFile->getPath(),
+      positions.size(),
+      static_cast<uint64_t>(bitmapData.size()));
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+
+  // Batch covers absolute rows [10, 60): position 1 is behind it, 50 lands at
+  // batch-relative index 40.
+  auto bitmap = allocateBitmap(50);
+  reader.readDeletePositions(10, 50, bitmap);
+
+  EXPECT_EQ(getSetBits(bitmap, 50), (std::vector<uint64_t>{40}));
 }
