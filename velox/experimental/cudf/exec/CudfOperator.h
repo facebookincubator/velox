@@ -192,7 +192,27 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
     Operator::close();
   }
 
+  /// Returns whether this operator has device memory that can be reclaimed
+  /// from its cuDF custom memory pool and, if so, reports an estimate.
+  ///
+  /// This is intentionally separate from Operator::reclaimableBytes(). The
+  /// latter belongs to the operator's CPU pool, while this callback belongs to
+  /// the mirrored GPU leaf pool under the cuDF custom memory hierarchy.
+  virtual bool gpuReclaimableBytes(uint64_t& reclaimableBytes) const {
+    reclaimableBytes = 0;
+    return false;
+  }
+
+  /// Reclaims device memory owned by this operator. Implementations are
+  /// invoked only after the owning task has been paused. The cuDF memory
+  /// resources are scoped around the callback by the GPU pool reclaimer.
+  virtual void reclaimGpu(
+      uint64_t /*targetBytes*/,
+      memory::MemoryReclaimer::Stats& /*stats*/) {}
+
  private:
+  class GpuMemoryReclaimer;
+
   rmm::device_async_resource_ref tempMemoryResource() const {
     return tempMemoryResource_.has_value() ? *tempMemoryResource_
                                            : get_temp_mr();

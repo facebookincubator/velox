@@ -60,6 +60,108 @@ std::shared_ptr<CudfMemoryResourceRegistry> cudfMemoryResourceRegistry(
 
 } // namespace
 
+class CudfOperatorBase::GpuMemoryReclaimer final
+    : public exec::MemoryReclaimer {
+ public:
+  static std::unique_ptr<memory::MemoryReclaimer> create(
+      exec::DriverCtx* driverCtx,
+      CudfOperatorBase* op) {
+    VELOX_CHECK_NOT_NULL(driverCtx);
+    VELOX_CHECK_NOT_NULL(driverCtx->driver);
+    return std::unique_ptr<memory::MemoryReclaimer>(
+        new GpuMemoryReclaimer(driverCtx->driver->shared_from_this(), op));
+  }
+
+  bool reclaimableBytes(
+      const memory::MemoryPool& pool,
+      uint64_t& reclaimableBytes) const override {
+    reclaimableBytes = 0;
+    auto driver = ensureDriver();
+    if (FOLLY_UNLIKELY(driver == nullptr)) {
+      return false;
+    }
+
+    VELOX_CHECK(
+        std::addressof(pool) == op_->customPool(kCudfMemoryResourceTag),
+        "GPU reclaimer invoked for a pool other than its operator's cuDF pool");
+    return op_->gpuReclaimableBytes(reclaimableBytes);
+  }
+
+  uint64_t reclaim(
+      memory::MemoryPool* pool,
+      uint64_t targetBytes,
+      uint64_t /*maxWaitMs*/,
+      memory::MemoryReclaimer::Stats& stats) override {
+    auto driver = ensureDriver();
+    if (FOLLY_UNLIKELY(driver == nullptr)) {
+      return 0;
+    }
+
+    VELOX_CHECK_NOT_NULL(pool);
+    VELOX_CHECK(
+        pool == op_->customPool(kCudfMemoryResourceTag),
+        "GPU reclaimer invoked for a pool other than its operator's cuDF pool");
+
+    uint64_t reclaimableBytes{0};
+    if (!op_->gpuReclaimableBytes(reclaimableBytes) || reclaimableBytes == 0) {
+      return 0;
+    }
+
+    VELOX_CHECK(
+        !driver->state().isOnThread() || driver->state().suspended() ||
+            driver->state().isTerminated,
+        "driverOnThread {}, driverSuspended {} driverTerminated {} {}",
+        driver->state().isOnThread(),
+        driver->state().suspended(),
+        driver->state().isTerminated,
+        pool->name());
+    VELOX_CHECK(
+        driver->task()->pauseRequested(),
+        "GPU memory reclaim requires the owning task to be paused");
+
+    if (op_->nonReclaimableSection_) {
+      ++stats.numNonReclaimableAttempts;
+      return 0;
+    }
+
+    RuntimeStatWriterScopeGuard opStatsGuard(op_);
+
+    return memory::MemoryReclaimer::run(
+        [&]() {
+          int64_t reclaimedBytes{0};
+          {
+            memory::ScopedReclaimedBytesRecorder recorder(
+                pool, &reclaimedBytes);
+            auto memoryResources = op_->scopedMemoryResources();
+            op_->reclaimGpu(targetBytes, stats);
+            checkCudaErrorInDebug();
+          }
+          VELOX_CHECK_GE(
+              reclaimedBytes,
+              0,
+              "Unexpected GPU memory growth after reclaim from pool {}",
+              pool->name());
+          return reclaimedBytes;
+        },
+        stats);
+  }
+
+ private:
+  GpuMemoryReclaimer(
+      const std::shared_ptr<exec::Driver>& driver,
+      CudfOperatorBase* op)
+      : exec::MemoryReclaimer(0), driver_(driver), op_(op) {
+    VELOX_CHECK_NOT_NULL(op_);
+  }
+
+  std::shared_ptr<exec::Driver> ensureDriver() const {
+    return driver_.lock();
+  }
+
+  const std::weak_ptr<exec::Driver> driver_;
+  CudfOperatorBase* const op_;
+};
+
 CudfOperatorBase::CudfOperatorBase(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
@@ -110,7 +212,8 @@ void CudfOperatorBase::maybeSetGpuMemoryReclaimer() {
   if (parent == nullptr || parent->reclaimer() == nullptr) {
     return;
   }
-  gpuPool->setReclaimer(exec::MemoryReclaimer::create());
+  gpuPool->setReclaimer(
+      GpuMemoryReclaimer::create(operatorCtx()->driverCtx(), this));
 }
 
 } // namespace facebook::velox::cudf_velox

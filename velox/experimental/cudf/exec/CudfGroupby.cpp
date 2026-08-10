@@ -807,8 +807,20 @@ namespace facebook::velox::cudf_velox {
 
 namespace {
 
+void checkOwnedLeafChunk(const InputChunk& chunk) {
+  VELOX_CHECK(chunk.ownsFullTable());
+  VELOX_CHECK_NOT_NULL(chunk.owner);
+  VELOX_CHECK_NULL(chunk.tableOwner);
+  VELOX_CHECK_EQ(
+      chunk.owner.use_count(),
+      1,
+      "A persistent groupby leaf must be the sole owner of its CudfVector");
+}
+
 struct GroupbyLeafState final : public BufferedState {
-  explicit GroupbyLeafState(InputChunk chunk) : chunk(std::move(chunk)) {}
+  explicit GroupbyLeafState(InputChunk chunk) : chunk(std::move(chunk)) {
+    checkOwnedLeafChunk(this->chunk);
+  }
 
   InputChunk chunk;
 };
@@ -884,13 +896,22 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
   }
 
   std::unique_ptr<BufferedState> createLeaf(InputChunk input) override {
-    return std::make_unique<GroupbyLeafState>(std::move(input));
+    return std::make_unique<GroupbyLeafState>(
+        std::move(input).materialize(get_output_mr()));
+  }
+
+  std::unique_ptr<BufferedState> createLeafFromInputs(
+      InputChunk first,
+      InputChunk second) override {
+    return std::make_unique<GroupbyLeafState>(
+        mergeChunks(std::move(first), std::move(second)));
   }
 
   void addInputToLeaf(BufferedState& leaf, InputChunk input) override {
     auto& groupbyLeaf = asLeafState(leaf);
     groupbyLeaf.chunk =
         mergeChunks(std::move(groupbyLeaf.chunk), std::move(input));
+    checkOwnedLeafChunk(groupbyLeaf.chunk);
   }
 
   size_t leafRowCount(const BufferedState& leaf) const override {
@@ -899,7 +920,8 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
 
   uint64_t leafFlatSize(const BufferedState& leaf) const override {
     const auto& chunk = asLeafState(leaf).chunk;
-    return chunk.owner ? chunk.owner->estimateFlatSize() : 0;
+    checkOwnedLeafChunk(chunk);
+    return chunk.owner->estimateFlatSize();
   }
 
   std::vector<InputChunk> partitionInput(
@@ -944,19 +966,10 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
     return chunks;
   }
 
-  std::vector<std::unique_ptr<BufferedState>> repartitionLeaf(
+  std::vector<InputChunk> partitionLeaf(
       const BufferedState& leaf,
       const PartitionSpec& spec) override {
-    auto partitions = partitionInput(asLeafState(leaf).chunk, spec);
-
-    std::vector<std::unique_ptr<BufferedState>> leaves(spec.numPartitions);
-    for (int32_t i = 0; i < spec.numPartitions; ++i) {
-      if (!partitions[i].empty()) {
-        leaves[i] =
-            std::make_unique<GroupbyLeafState>(std::move(partitions[i]));
-      }
-    }
-    return leaves;
+    return partitionInput(asLeafState(leaf).chunk, spec);
   }
 
   CudfVectorPtr finalizeLeaf(std::unique_ptr<BufferedState> leaf) override {
@@ -998,7 +1011,9 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
         type,
         owner->getTableView(),
         owner->stream(),
-        std::move(owner)};
+        std::move(owner),
+        nullptr,
+        InputChunkStorage::kOwned};
   }
 
   InputChunk makeBorrowedChunk(
@@ -1006,7 +1021,13 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
       const TypePtr& type,
       cudf::table_view view) const {
     return InputChunk{
-        owner->pool(), type, view, owner->stream(), std::move(owner)};
+        owner->pool(),
+        type,
+        view,
+        owner->stream(),
+        std::move(owner),
+        nullptr,
+        InputChunkStorage::kBorrowed};
   }
 
   InputChunk makeBorrowedChunk(
@@ -1015,7 +1036,14 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
       cudf::table_view view,
       rmm::cuda_stream_view stream,
       std::shared_ptr<cudf::table> tableOwner) const {
-    return InputChunk{pool, type, view, stream, nullptr, std::move(tableOwner)};
+    return InputChunk{
+        pool,
+        type,
+        view,
+        stream,
+        nullptr,
+        std::move(tableOwner),
+        InputChunkStorage::kBorrowed};
   }
 
   InputChunk mergeChunks(InputChunk left, InputChunk right) const {
