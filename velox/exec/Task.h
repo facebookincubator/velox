@@ -60,8 +60,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// @param planFragment Plan fragment.
   /// @param destination Partition number if task is expected to receive data
   /// for a particular partition from a set of upstream tasks participating in a
-  /// distributed execution. Used to initialize a InMemoryExchangeClient.
-  /// Ignored if plan fragment doesn't have an ExchangeNode.
+  /// distributed execution. Used to initialize an ExchangeClient. Ignored if
+  /// plan fragment doesn't have an ExchangeNode.
   /// @param queryCtx Query context containing MemoryPool and MemoryAllocator
   /// instances to use for memory allocations during execution, executor to
   /// schedule operators on, and session properties.
