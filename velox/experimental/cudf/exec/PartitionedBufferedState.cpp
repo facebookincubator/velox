@@ -25,6 +25,25 @@ namespace {
 // Avoid spinning forever when a single partition key cannot be split.
 constexpr uint32_t kMaxSplitSeedAttempts = 4;
 
+bool referencesSameColumn(
+    const cudf::column_view& left,
+    const cudf::column_view& right) {
+  if (left.type() != right.type() || left.size() != right.size() ||
+      left.offset() != right.offset() ||
+      left.head<void>() != right.head<void>() ||
+      left.null_mask() != right.null_mask() ||
+      left.num_children() != right.num_children()) {
+    return false;
+  }
+
+  for (cudf::size_type i = 0; i < left.num_children(); ++i) {
+    if (!referencesSameColumn(left.child(i), right.child(i))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool nodeEmpty(const PartitionedBufferedState::Node& node) {
   if (node.isLeaf()) {
     return node.leafState == nullptr;
@@ -39,15 +58,13 @@ bool nodeEmpty(const PartitionedBufferedState::Node& node) {
 }
 
 size_t countNonEmptyChildren(
-    const std::vector<std::unique_ptr<BufferedState>>& storedPartitions,
-    const std::vector<InputChunk>& incomingPartitions,
-    const BufferedStateOps& ops) {
+    const std::vector<InputChunk>& storedPartitions,
+    const std::vector<InputChunk>& incomingPartitions) {
   VELOX_CHECK_EQ(storedPartitions.size(), incomingPartitions.size());
 
   size_t nonEmptyChildren = 0;
   for (size_t i = 0; i < incomingPartitions.size(); ++i) {
-    if ((storedPartitions[i] && ops.leafRowCount(*storedPartitions[i]) > 0) ||
-        !incomingPartitions[i].empty()) {
+    if (!storedPartitions[i].empty() || !incomingPartitions[i].empty()) {
       ++nonEmptyChildren;
     }
   }
@@ -56,11 +73,70 @@ size_t countNonEmptyChildren(
 
 struct SplitLeafAttempt {
   PartitionSpec spec;
-  std::vector<std::unique_ptr<BufferedState>> storedPartitions;
+  std::vector<InputChunk> storedPartitions;
   std::vector<InputChunk> incomingPartitions;
 };
 
 } // namespace
+
+bool InputChunk::ownsFullTable() const {
+  if (storage != InputChunkStorage::kOwned || owner == nullptr ||
+      tableOwner != nullptr) {
+    return false;
+  }
+
+  const auto ownerView = owner->getTableView();
+  if (view.num_rows() != ownerView.num_rows() ||
+      view.num_columns() != ownerView.num_columns()) {
+    return false;
+  }
+  for (cudf::size_type i = 0; i < view.num_columns(); ++i) {
+    if (!referencesSameColumn(view.column(i), ownerView.column(i))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+InputChunk InputChunk::materialize(rmm::device_async_resource_ref mr) && {
+  if (empty()) {
+    return InputChunk{};
+  }
+
+  if (storage == InputChunkStorage::kOwned) {
+    VELOX_CHECK(
+        ownsFullTable(),
+        "An owned InputChunk must reference its owner's complete table");
+    if (owner.use_count() == 1) {
+      return std::move(*this);
+    }
+  }
+
+  VELOX_CHECK_NOT_NULL(pool);
+  VELOX_CHECK_NOT_NULL(type);
+  VELOX_CHECK(
+      owner != nullptr || tableOwner != nullptr,
+      "A borrowed InputChunk must retain its source storage");
+
+  auto materializedTable = std::make_unique<cudf::table>(view, stream, mr);
+  auto materialized = std::make_shared<CudfVector>(
+      pool,
+      type,
+      materializedTable->num_rows(),
+      std::move(materializedTable),
+      stream);
+  auto result = InputChunk{
+      materialized->pool(),
+      type,
+      materialized->getTableView(),
+      materialized->stream(),
+      std::move(materialized),
+      nullptr,
+      InputChunkStorage::kOwned};
+  owner.reset();
+  tableOwner.reset();
+  return result;
+}
 
 PartitionedBufferedState::PartitionedBufferedState(
     std::unique_ptr<BufferedStateOps> ops,
@@ -152,11 +228,11 @@ void PartitionedBufferedState::splitLeafAndAddInput(
     for (uint32_t attempt = 1;; ++attempt) {
       auto spec = makePartitionSpec(totalRows);
       auto storedPartitions = node.leafState
-          ? ops_->repartitionLeaf(*node.leafState, spec)
-          : std::vector<std::unique_ptr<BufferedState>>(spec.numPartitions);
+          ? ops_->partitionLeaf(*node.leafState, spec)
+          : std::vector<InputChunk>(spec.numPartitions);
       auto incomingPartitions = partitionInput(bufferedInput, spec);
       const auto nonEmptyChildren =
-          countNonEmptyChildren(storedPartitions, incomingPartitions, *ops_);
+          countNonEmptyChildren(storedPartitions, incomingPartitions);
 
       if (nonEmptyChildren > 1) {
         // Found a partition spec that can split the leaf into more than one
@@ -192,14 +268,21 @@ void PartitionedBufferedState::splitLeafAndAddInput(
   }
 
   for (size_t i = 0; i < node.children.size(); ++i) {
-    if (splitAttempt.storedPartitions[i]) {
-      auto& child = *node.children[i];
-      child.leafRows = ops_->leafRowCount(*splitAttempt.storedPartitions[i]);
-      child.leafState = std::move(splitAttempt.storedPartitions[i]);
-      ensureLeafWithinLimit(child);
+    auto& child = *node.children[i];
+    auto& stored = splitAttempt.storedPartitions[i];
+    auto& incoming = splitAttempt.incomingPartitions[i];
+    if (!stored.empty() && !incoming.empty()) {
+      child.leafState =
+          ops_->createLeafFromInputs(std::move(stored), std::move(incoming));
+    } else if (!stored.empty()) {
+      child.leafState = ops_->createLeaf(std::move(stored));
+    } else if (!incoming.empty()) {
+      child.leafState = ops_->createLeaf(std::move(incoming));
     }
-    if (!splitAttempt.incomingPartitions[i].empty()) {
-      insert(*node.children[i], std::move(splitAttempt.incomingPartitions[i]));
+
+    if (child.leafState) {
+      child.leafRows = ops_->leafRowCount(*child.leafState);
+      ensureLeafWithinLimit(child);
     }
   }
 }

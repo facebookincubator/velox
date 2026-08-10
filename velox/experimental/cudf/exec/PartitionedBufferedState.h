@@ -34,6 +34,16 @@ struct PartitionSpec {
   uint32_t seed{cudf::DEFAULT_HASH_SEED};
 };
 
+enum class InputChunkStorage : uint8_t {
+  // The chunk is a view whose storage is retained by 'owner' or 'tableOwner'.
+  kBorrowed,
+
+  // 'owner' describes the complete table referenced by 'view'. The owner can
+  // still be shared temporarily while routing the chunk, but a persistent leaf
+  // must materialize if it is not the sole owner.
+  kOwned,
+};
+
 struct InputChunk {
   InputChunk() : stream(rmm::cuda_stream_default) {}
 
@@ -43,13 +53,20 @@ struct InputChunk {
       cudf::table_view view,
       rmm::cuda_stream_view stream,
       CudfVectorPtr owner,
-      std::shared_ptr<cudf::table> tableOwner = nullptr)
+      std::shared_ptr<cudf::table> tableOwner,
+      InputChunkStorage storage)
       : pool(pool),
         type(std::move(type)),
         view(view),
         stream(stream),
         owner(std::move(owner)),
-        tableOwner(std::move(tableOwner)) {}
+        tableOwner(std::move(tableOwner)),
+        storage(storage) {}
+
+  InputChunk(const InputChunk&) = delete;
+  InputChunk& operator=(const InputChunk&) = delete;
+  InputChunk(InputChunk&&) = default;
+  InputChunk& operator=(InputChunk&&) = default;
 
   memory::MemoryPool* pool{nullptr};
   TypePtr type;
@@ -57,6 +74,7 @@ struct InputChunk {
   rmm::cuda_stream_view stream;
   CudfVectorPtr owner;
   std::shared_ptr<cudf::table> tableOwner;
+  InputChunkStorage storage{InputChunkStorage::kBorrowed};
 
   size_t size() const {
     return static_cast<size_t>(view.num_rows());
@@ -65,6 +83,14 @@ struct InputChunk {
   bool empty() const {
     return size() == 0;
   }
+
+  // Returns true when 'view' is the complete table view of 'owner'.
+  bool ownsFullTable() const;
+
+  // Consumes this chunk and returns one backed by an independently owned
+  // CudfVector. Reuses an already complete, unique owner; otherwise copies the
+  // exact view through 'mr'.
+  InputChunk materialize(rmm::device_async_resource_ref mr) &&;
 };
 
 // Serve as the opaque base type for strategy-owned leaf state.
@@ -89,6 +115,18 @@ class BufferedStateOps {
   // Create a new leaf from the first chunk routed to it.
   virtual std::unique_ptr<BufferedState> createLeaf(InputChunk input) = 0;
 
+  // Create one leaf directly from two transient chunks routed to the same
+  // child. Strategies should override this when they can merge the chunks
+  // without first materializing either one. The default preserves the old
+  // create-then-add behavior.
+  virtual std::unique_ptr<BufferedState> createLeafFromInputs(
+      InputChunk first,
+      InputChunk second) {
+    auto leaf = createLeaf(std::move(first));
+    addInputToLeaf(*leaf, std::move(second));
+    return leaf;
+  }
+
   // Absorb one prepared chunk into an existing leaf.
   virtual void addInputToLeaf(BufferedState& leaf, InputChunk input) = 0;
 
@@ -106,10 +144,11 @@ class BufferedStateOps {
       const InputChunk& input,
       const PartitionSpec& spec) = 0;
 
-  // Split one overflowing leaf into child leaves according to `spec` and
-  // return one child state per partition. The leaf remains valid so PBS can
-  // retry with a different seed if partitioning makes no progress.
-  virtual std::vector<std::unique_ptr<BufferedState>> repartitionLeaf(
+  // Partition one overflowing leaf into transient child chunks according to
+  // `spec`. The leaf remains valid so PBS can retry with a different seed if
+  // partitioning makes no progress. After a successful attempt, PBS destroys
+  // the old leaf before turning these chunks into persistent child states.
+  virtual std::vector<InputChunk> partitionLeaf(
       const BufferedState& leaf,
       const PartitionSpec& spec) = 0;
 

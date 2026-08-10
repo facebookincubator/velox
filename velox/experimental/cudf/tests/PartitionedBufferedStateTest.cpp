@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/CudfMemoryResource.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/PartitionedBufferedState.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -21,6 +22,8 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/vector/tests/utils/VectorTestBase.h"
+
+#include <cudf/copying.hpp>
 
 #include <algorithm>
 #include <functional>
@@ -32,16 +35,43 @@ using namespace facebook::velox::test;
 namespace facebook::velox::cudf_velox {
 namespace {
 
+struct IdentityBufferedStateOpsStats {
+  const BufferedState* firstPartitionedLeaf{nullptr};
+  size_t originalLeafPartitionCalls{0};
+  bool oldLeafAliveOnRetries{true};
+  bool oldLeafDestroyed{false};
+  bool oldLeafDestroyedBeforeChildCreation{true};
+  size_t createLeafCallsAfterPartition{0};
+  size_t createLeafFromInputsCalls{0};
+  size_t addInputCallsAfterPartition{0};
+};
+
 struct TableLeafState final : public BufferedState {
-  explicit TableLeafState(InputChunk chunk) : chunk(std::move(chunk)) {}
+  TableLeafState(
+      InputChunk chunk,
+      std::shared_ptr<IdentityBufferedStateOpsStats> stats)
+      : chunk(std::move(chunk)), stats(std::move(stats)) {}
+
+  ~TableLeafState() override {
+    if (stats && stats->firstPartitionedLeaf == this) {
+      stats->oldLeafDestroyed = true;
+    }
+  }
 
   InputChunk chunk;
+  std::shared_ptr<IdentityBufferedStateOpsStats> stats;
 };
 
 class IdentityBufferedStateOps final : public BufferedStateOps {
  public:
-  IdentityBufferedStateOps(memory::MemoryPool* pool, RowTypePtr rowType)
-      : pool_(pool), rowType_(std::move(rowType)), keyIndices_{0} {}
+  IdentityBufferedStateOps(
+      memory::MemoryPool* pool,
+      RowTypePtr rowType,
+      std::shared_ptr<IdentityBufferedStateOpsStats> stats = nullptr)
+      : pool_(pool),
+        rowType_(std::move(rowType)),
+        keyIndices_{0},
+        stats_(std::move(stats)) {}
 
   InputChunk prepareInput(CudfVectorPtr rawInput) override {
     return makeOwnedChunk(std::move(rawInput));
@@ -54,10 +84,26 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   }
 
   std::unique_ptr<BufferedState> createLeaf(InputChunk input) override {
-    return std::make_unique<TableLeafState>(std::move(input));
+    recordChildCreation();
+    return std::make_unique<TableLeafState>(
+        std::move(input).materialize(get_output_mr()), stats_);
+  }
+
+  std::unique_ptr<BufferedState> createLeafFromInputs(
+      InputChunk first,
+      InputChunk second) override {
+    if (stats_ && stats_->firstPartitionedLeaf != nullptr) {
+      ++stats_->createLeafFromInputsCalls;
+      stats_->oldLeafDestroyedBeforeChildCreation &= stats_->oldLeafDestroyed;
+    }
+    return std::make_unique<TableLeafState>(
+        mergeChunks(std::move(first), std::move(second)), stats_);
   }
 
   void addInputToLeaf(BufferedState& leaf, InputChunk input) override {
+    if (stats_ && stats_->oldLeafDestroyed) {
+      ++stats_->addInputCallsAfterPartition;
+    }
     auto& tableLeaf = asLeaf(leaf);
     tableLeaf.chunk = mergeChunks(std::move(tableLeaf.chunk), std::move(input));
   }
@@ -91,24 +137,25 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
     return partitions;
   }
 
-  std::vector<std::unique_ptr<BufferedState>> repartitionLeaf(
+  std::vector<InputChunk> partitionLeaf(
       const BufferedState& leaf,
       const PartitionSpec& spec) override {
-    auto partitions = partitionInput(asLeaf(leaf).chunk, spec);
-
-    std::vector<std::unique_ptr<BufferedState>> leaves(spec.numPartitions);
-    for (int32_t i = 0; i < spec.numPartitions; ++i) {
-      if (!partitions[i].empty()) {
-        leaves[i] = std::make_unique<TableLeafState>(std::move(partitions[i]));
+    if (stats_ && !stats_->oldLeafDestroyed) {
+      if (stats_->firstPartitionedLeaf == nullptr) {
+        stats_->firstPartitionedLeaf = &leaf;
+      } else if (stats_->firstPartitionedLeaf != &leaf) {
+        stats_->oldLeafAliveOnRetries = false;
       }
+      stats_->oldLeafAliveOnRetries &= !stats_->oldLeafDestroyed;
+      ++stats_->originalLeafPartitionCalls;
     }
-    return leaves;
+    return partitionInput(asLeaf(leaf).chunk, spec);
   }
 
   CudfVectorPtr finalizeLeaf(std::unique_ptr<BufferedState> leaf) override {
     auto tableLeaf = std::unique_ptr<TableLeafState>(
         static_cast<TableLeafState*>(leaf.release()));
-    return tableLeaf->chunk.owner;
+    return std::move(tableLeaf->chunk.owner);
   }
 
   const std::vector<cudf::size_type>& keyIndices() const override {
@@ -128,6 +175,7 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   memory::MemoryPool* pool_;
   RowTypePtr rowType_;
   std::vector<cudf::size_type> keyIndices_;
+  std::shared_ptr<IdentityBufferedStateOpsStats> stats_;
 
   std::function<std::vector<int64_t>(const InputChunk&)> extractKeys_;
   std::function<InputChunk(const std::vector<int64_t>&)> makeChunk_;
@@ -141,13 +189,22 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
     return static_cast<const TableLeafState&>(leaf);
   }
 
+  void recordChildCreation() {
+    if (stats_ && stats_->firstPartitionedLeaf != nullptr) {
+      ++stats_->createLeafCallsAfterPartition;
+      stats_->oldLeafDestroyedBeforeChildCreation &= stats_->oldLeafDestroyed;
+    }
+  }
+
   InputChunk makeOwnedChunk(CudfVectorPtr owner) const {
     return InputChunk{
         owner->pool(),
         rowType_,
         owner->getTableView(),
         owner->stream(),
-        std::move(owner)};
+        std::move(owner),
+        nullptr,
+        InputChunkStorage::kOwned};
   }
 
   InputChunk mergeChunks(InputChunk left, InputChunk right) const {
@@ -209,7 +266,9 @@ class PartitionedBufferedStateTest : public ::testing::Test,
         rowType_,
         vector->getTableView(),
         vector->stream(),
-        std::move(vector)};
+        std::move(vector),
+        nullptr,
+        InputChunkStorage::kOwned};
   }
 
   std::vector<int64_t> toKeys(const InputChunk& input) {
@@ -234,7 +293,9 @@ class PartitionedBufferedStateTest : public ::testing::Test,
             rowType_,
             output->getTableView(),
             output->stream(),
-            output});
+            output,
+            nullptr,
+            InputChunkStorage::kOwned});
   }
 
   std::vector<std::vector<int64_t>> drainAll(PartitionedBufferedState& state) {
@@ -251,6 +312,74 @@ class PartitionedBufferedStateTest : public ::testing::Test,
 
   RowTypePtr rowType_{ROW({"c0"}, {BIGINT()})};
 };
+
+TEST_F(
+    PartitionedBufferedStateTest,
+    materializedSiblingViewsOwnIndependentAllocations) {
+  ASSERT_TRUE(output_mr_.has_value());
+  auto trackingRoot = memory::memoryManager()->addRootPool();
+  auto trackingPool = trackingRoot->addLeafChild("ownedGroupbyLeaves");
+  CudfMemoryResource reportingResource{*output_mr_, trackingPool};
+  auto reportingRef = rmm::device_async_resource_ref{reportingResource};
+  ScopedCudfMemoryResources scopedResources{reportingRef, reportingRef};
+
+  auto parentVector = makeCudfVector({1, 2, 3, 4});
+  auto stream = parentVector->stream();
+  auto parentOwner = std::shared_ptr<cudf::table>(parentVector->release());
+  parentVector.reset();
+  std::weak_ptr<cudf::table> parentWeak = parentOwner;
+
+  std::vector<cudf::size_type> splitPoints{2};
+  auto partitionViews = cudf::split(parentOwner->view(), splitPoints, stream);
+  ASSERT_EQ(partitionViews.size(), 2);
+
+  auto left = InputChunk{
+      pool_.get(),
+      rowType_,
+      partitionViews[0],
+      stream,
+      nullptr,
+      parentOwner,
+      InputChunkStorage::kBorrowed};
+  auto right = InputChunk{
+      pool_.get(),
+      rowType_,
+      partitionViews[1],
+      stream,
+      nullptr,
+      parentOwner,
+      InputChunkStorage::kBorrowed};
+  parentOwner.reset();
+
+  auto leftOwned = std::move(left).materialize(reportingRef);
+  auto rightOwned = std::move(right).materialize(reportingRef);
+  stream.synchronize();
+
+  EXPECT_TRUE(parentWeak.expired());
+  ASSERT_TRUE(leftOwned.ownsFullTable());
+  ASSERT_TRUE(rightOwned.ownsFullTable());
+  ASSERT_EQ(leftOwned.owner.use_count(), 1);
+  ASSERT_EQ(rightOwned.owner.use_count(), 1);
+  EXPECT_NE(
+      leftOwned.view.column(0).head<void>(),
+      rightOwned.view.column(0).head<void>());
+
+  const auto leftBytes = leftOwned.owner->estimateFlatSize();
+  const auto rightBytes = rightOwned.owner->estimateFlatSize();
+  ASSERT_GT(leftBytes, 0);
+  ASSERT_GT(rightBytes, 0);
+  EXPECT_EQ(trackingPool->usedBytes(), leftBytes + rightBytes);
+
+  leftOwned = InputChunk{};
+  stream.synchronize();
+  EXPECT_EQ(trackingPool->usedBytes(), rightBytes);
+  EXPECT_EQ(toKeys(rightOwned), (std::vector<int64_t>{3, 4}));
+  EXPECT_EQ(trackingPool->usedBytes(), rightBytes);
+
+  rightOwned = InputChunk{};
+  stream.synchronize();
+  EXPECT_EQ(trackingPool->usedBytes(), 0);
+}
 
 TEST_F(PartitionedBufferedStateTest, mergesLeafDirectlyBelowCap) {
   auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
@@ -289,6 +418,39 @@ TEST_F(PartitionedBufferedStateTest, topLevelSplitKeepsRoutingStable) {
   EXPECT_TRUE(state.empty());
 }
 
+TEST_F(
+    PartitionedBufferedStateTest,
+    successfulSplitReleasesOldLeafBeforeCreatingChildren) {
+  auto stats = std::make_shared<IdentityBufferedStateOpsStats>();
+  auto ops =
+      std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_, stats);
+  ops->setPartitioning(
+      [&](const InputChunk& input) { return toKeys(input); },
+      [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
+      [](int64_t key, uint32_t /* seed */, int32_t numPartitions) {
+        return static_cast<int32_t>(key % numPartitions);
+      });
+  PartitionedBufferedState state(std::move(ops), 3, 0);
+
+  state.addInput(makeCudfVector({0, 1}));
+  state.addInput(makeCudfVector({2, 3}));
+
+  EXPECT_EQ(stats->originalLeafPartitionCalls, 1);
+  EXPECT_TRUE(stats->oldLeafDestroyed);
+  EXPECT_TRUE(stats->oldLeafDestroyedBeforeChildCreation);
+  EXPECT_EQ(stats->createLeafFromInputsCalls, 2);
+  EXPECT_EQ(stats->createLeafCallsAfterPartition, 0);
+
+  state.addInput(makeCudfVector({4, 5}));
+  EXPECT_EQ(stats->addInputCallsAfterPartition, 2);
+  EXPECT_EQ(stats->createLeafCallsAfterPartition, 0);
+
+  EXPECT_EQ(
+      drainAll(state),
+      (std::vector<std::vector<int64_t>>{{0, 2, 4}, {1, 3, 5}}));
+  EXPECT_TRUE(state.empty());
+}
+
 TEST_F(PartitionedBufferedStateTest, overflowingChildSplitsAgain) {
   auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
   ops->setPartitioning(
@@ -311,7 +473,9 @@ TEST_F(PartitionedBufferedStateTest, overflowingChildSplitsAgain) {
 }
 
 TEST_F(PartitionedBufferedStateTest, noProgressSplitRetriesNewSeeds) {
-  auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
+  auto stats = std::make_shared<IdentityBufferedStateOpsStats>();
+  auto ops =
+      std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_, stats);
   std::vector<uint32_t> seeds;
   ops->setPartitioning(
       [&](const InputChunk& input) { return toKeys(input); },
@@ -330,6 +494,10 @@ TEST_F(PartitionedBufferedStateTest, noProgressSplitRetriesNewSeeds) {
   state.addInput(makeCudfVector({1, 2, 3}));
 
   EXPECT_EQ(seeds, (std::vector<uint32_t>{0, 1, 2}));
+  EXPECT_EQ(stats->originalLeafPartitionCalls, 3);
+  EXPECT_TRUE(stats->oldLeafAliveOnRetries);
+  EXPECT_TRUE(stats->oldLeafDestroyed);
+  EXPECT_TRUE(stats->oldLeafDestroyedBeforeChildCreation);
   EXPECT_EQ(drainAll(state), (std::vector<std::vector<int64_t>>{{1, 3}, {2}}));
   EXPECT_TRUE(state.empty());
 }
