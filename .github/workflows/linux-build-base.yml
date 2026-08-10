@@ -143,6 +143,7 @@ jobs:
         env:
           VELOX_BUILD_SHARED: "ON"
           VELOX_FBTHRIFT_CMAKE_PATCH: ${{ github.workspace }}/CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch
+          VELOX_OPENZL_CMAKE_PATCH: ${{ github.workspace }}/CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             echo "Removing previous AWS SDK and s2n installations to avoid conflicts..."
@@ -558,6 +559,7 @@ jobs:
         env:
           VELOX_BUILD_SHARED: "ON"
           VELOX_FBTHRIFT_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch
+          VELOX_OPENZL_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             # Overwrite old setup scripts with changed versions
@@ -798,6 +800,7 @@ jobs:
         env:
           VELOX_BUILD_SHARED: "ON"
           VELOX_FBTHRIFT_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch
+          VELOX_OPENZL_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             # Overwrite old setup scripts with changed versions

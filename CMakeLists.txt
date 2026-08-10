@@ -155,6 +155,7 @@ option(VELOX_ENABLE_GCS "Build GCS Connector" OFF)
 option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
+option(VELOX_ENABLE_NIMBLE "Enable Nimble support" OFF)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_GEO "Enable Geospatial support" ON)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
@@ -854,6 +855,43 @@ if(VELOX_ENABLE_GEO)
   list(PREPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/CMake/resolve_dependency_modules/s2geometry)
   velox_set_source(s2geometry)
   velox_resolve_dependency(s2geometry)
+endif()
+
+# Resolved last, after every other dependency. OpenZL vendors its own copy of
+# zstd, whose CMake defines an `uninstall` target. GEOS defines one too, but
+# without the `if(NOT TARGET uninstall)` guard that zstd has, so GEOS fails
+# outright if anything claimed the name first. Ordering Nimble after GEOS lets
+# GEOS win the race and zstd skip, which is the only arrangement in which a
+# BUNDLED build of both succeeds. Nothing between here and add_subdirectory()
+# needs these targets.
+if(VELOX_ENABLE_NIMBLE)
+  # Nimble is the only consumer of both, so they are resolved here rather than
+  # unconditionally. FlatBuffers supplies both the runtime library and the flatc
+  # code generator that turns Nimble's .fbs schemas into C++ headers. Nimble's
+  # third dependency, FSST, is vendored under velox/external/fsst instead.
+  velox_set_source(flatbuffers)
+  velox_resolve_dependency(flatbuffers)
+  # build_flatbuffers() only ships with FlatBuffers 22.9.4 and later, and a
+  # bundled build does not put the package's own modules on CMAKE_MODULE_PATH at
+  # all, so CMake/third-party/BuildFlatBuffers.cmake is used unconditionally to
+  # keep a single code path. It resolves flatc from FLATBUFFERS_FLATC_EXECUTABLE,
+  # the flatbuffers::flatc target or the flatc target, whichever the resolved
+  # package provides.
+  include(BuildFlatBuffers)
+
+  velox_set_source(openzl)
+  velox_resolve_dependency(openzl)
+  # A bundled build exposes the bare target names while find_package() exposes
+  # namespaced ones. Aliasing between them is not safe: a find_package() that
+  # reports the package as not found still leaves its imported OpenZL:: targets
+  # behind, so `if(NOT TARGET OpenZL::openzl_cpp)` would skip the alias and
+  # consumers would link the rejected system package. Select on the resolution
+  # mode instead, which is unambiguous.
+  if(openzl_SOURCE STREQUAL "SYSTEM")
+    set(VELOX_OPENZL_LIBRARIES OpenZL::openzl OpenZL::openzl_cpp)
+  else()
+    set(VELOX_OPENZL_LIBRARIES openzl openzl_cpp)
+  endif()
 endif()
 
 add_subdirectory(velox)
