@@ -76,6 +76,14 @@ To* checkedPointerCast(From* input) {
   return casted;
 }
 
+/// Checks that pointer is not null and returns it for expression contexts such
+/// as constructor initializer lists.
+template <typename T>
+T* checkedNotNull(T* pointer) {
+  VELOX_CHECK_NOT_NULL(pointer);
+  return pointer;
+}
+
 template <typename To, typename From>
 std::unique_ptr<To> staticUniquePointerCast(std::unique_ptr<From> input) {
   VELOX_CHECK_NOT_NULL(input.get());

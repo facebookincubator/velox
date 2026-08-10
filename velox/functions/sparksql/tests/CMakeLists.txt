@@ -68,6 +68,7 @@ add_executable(
   RaiseErrorTest.cpp
   RandStrTest.cpp
   RandTest.cpp
+  RandnTest.cpp
   ReadSidePaddingFunctionTest.cpp
   RegexFunctionsTest.cpp
   SequenceTest.cpp
