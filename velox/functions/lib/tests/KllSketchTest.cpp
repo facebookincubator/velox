@@ -324,7 +324,7 @@ TEST_F(KllSketchTest, growCompacted) {
 }
 
 TEST_F(KllSketchTest, mergeSparseSketchWithLargeK) {
-  constexpr uint32_t k = 326408;
+  constexpr uint32_t k = 326'408;
 
   auto input = KllSketch<int64_t>::fromRepeatedValue(11, 2, k, {}, 0);
   KllSketch<int64_t> result(k, {}, 0);

@@ -684,8 +684,11 @@ void KllSketch<T, A, C>::mergeViews(
     VELOX_DCHECK_LE(result.finalNumLevels, ub);
     // Now we need to transfer the results back into "this" sketch.
     VELOX_DCHECK_EQ(outlevels[0], 0);
-    workbuf.resize(result.finalNumItems);
-    items_.swap(workbuf);
+    std::vector<T, A> packed(
+        std::make_move_iterator(workbuf.begin()),
+        std::make_move_iterator(workbuf.begin() + result.finalNumItems),
+        allocator_);
+    items_.swap(packed);
     levels_.resize(result.finalNumLevels + 1);
     for (unsigned lvl = 0; lvl < levels_.size(); ++lvl) {
       levels_[lvl] = outlevels[lvl];
