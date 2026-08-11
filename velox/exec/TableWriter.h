@@ -153,8 +153,11 @@ class TableWriter : public Operator {
   // `mappedOutputType_`.
   void setTypeMappings(const core::TableWriteNodePtr& tableWriteNode);
 
-  // Throws a user error if 'input' has a null value in any of the
-  // 'notNullChannels_' columns.
+  // Fills 'notNullChannels_'. Must run after setTypeMappings(), which fills
+  // 'inputMapping_'.
+  void setNotNullChannels(const core::TableWriteNodePtr& tableWriteNode);
+
+  // Throws a user error if 'input' has a null in a NOT NULL column.
   void checkNotNullConstraints(const RowVectorPtr& input);
 
   std::string createTableCommitContext(bool lastOutput);
@@ -178,8 +181,8 @@ class TableWriter : public Operator {
   // Contains the mappings between input and output columns.
   std::vector<column_index_t> inputMapping_;
 
-  // (channel, target name) pairs enforced as NOT NULL; set in
-  // setTypeMappings().
+  // Input channels of the NOT NULL columns, each with the target column name
+  // to report in the error.
   std::vector<std::pair<column_index_t, std::string>> notNullChannels_;
 
   // Reused across addInput() calls to avoid reallocating per batch.

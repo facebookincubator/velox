@@ -22,6 +22,7 @@
 
 #include "folly/dynamic.h"
 #include "velox/common/base/Fs.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -96,7 +97,8 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
       const std::string& outputDirectoryPath,
       const std::vector<std::string>& partitionedBy,
       const std::shared_ptr<HiveBucketProperty> bucketProperty,
-      const std::optional<CompressionKind> compressionKind = {}) {
+      const std::optional<CompressionKind> compressionKind = {},
+      std::vector<std::string> notNullColumns = {}) {
     return std::make_shared<core::InsertTableHandle>(
         kHiveConnectorId,
         makeHiveInsertTableHandle(
@@ -107,7 +109,8 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
             makeLocationHandle(
                 outputDirectoryPath, std::nullopt, outputTableType),
             fileFormat_,
-            compressionKind));
+            compressionKind),
+        std::move(notNullColumns));
   }
 
   // Returns a table insert plan node.
@@ -155,14 +158,7 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
       const std::shared_ptr<core::InsertTableHandle>& insertHandle,
       bool hasPartitioningScheme,
       connector::CommitStrategy commitStrategy =
-          connector::CommitStrategy::kNoCommit,
-      std::vector<std::string> notNullColumnNames = {}) {
-    const auto handle = !notNullColumnNames.empty()
-        ? std::make_shared<core::InsertTableHandle>(
-              insertHandle->connectorId(),
-              insertHandle->connectorInsertTableHandle(),
-              notNullColumnNames)
-        : insertHandle;
+          connector::CommitStrategy::kNoCommit) {
     return [=](core::PlanNodeId nodeId,
                core::PlanNodePtr source) -> core::PlanNodePtr {
       return std::make_shared<core::TableWriteNode>(
@@ -170,7 +166,7 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
           inputColumns,
           tableColumnNames,
           statsSpec,
-          handle,
+          insertHandle,
           hasPartitioningScheme,
           TableWriteTraits::outputType(statsSpec),
           commitStrategy,
@@ -431,7 +427,8 @@ TEST_F(TableWriterReplayerTest, serdeParametersPreserved) {
               connector::hive::LocationHandle::TableType::kNew),
           fileFormat_,
           std::nullopt,
-          serdeParams));
+          serdeParams),
+      /*notNullColumns=*/std::vector<std::string>{});
 
   std::string traceNodeId;
   auto plan =
@@ -495,18 +492,24 @@ TEST_F(TableWriterReplayerTest, serdeParametersPreserved) {
   }
 }
 
+// Replay rebuilds the insert handle around a new target directory. The
+// constraint must survive that rebuild, so a trace whose input violates it
+// fails on replay too.
 TEST_F(TableWriterReplayerTest, notNullConstraintPreserved) {
   vector_size_t size = 1'000;
   auto data = makeRowVector({
       makeFlatVector<int32_t>(size, [](auto row) { return row; }),
-      makeFlatVector<int32_t>(size, [](auto row) { return row * 2; }),
+      makeFlatVector<int32_t>(
+          size, [](auto row) { return row * 2; }, nullEvery(7)),
   });
   auto sourceFilePath = TempFilePath::create();
   writeToFile(sourceFilePath->getPath(), data);
 
   auto rowType = asRowType(data->type());
   auto targetDirectoryPath = TempDirectoryPath::create();
-  const std::vector<std::string> notNullColumnNames = {"c1"};
+  const std::vector<std::string> notNullColumns = {"c1"};
+  constexpr std::string_view kErrorMessage =
+      "NULL value not allowed for NOT NULL column: c1";
 
   std::string traceNodeId;
   auto plan =
@@ -521,10 +524,10 @@ TEST_F(TableWriterReplayerTest, notNullConstraintPreserved) {
                   connector::hive::LocationHandle::TableType::kNew,
                   targetDirectoryPath->getPath(),
                   {},
-                  nullptr),
-              false,
-              connector::CommitStrategy::kNoCommit,
-              notNullColumnNames))
+                  nullptr,
+                  /*compressionKind=*/{},
+                  notNullColumns),
+              false))
           .capturePlanNodeId(traceNodeId)
           .project({TableWriteTraits::rowCountColumnName()})
           .singleAggregation(
@@ -534,33 +537,39 @@ TEST_F(TableWriterReplayerTest, notNullConstraintPreserved) {
 
   const auto testDir = TempDirectoryPath::create();
   const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
-  std::shared_ptr<Task> task;
-  AssertQueryBuilder(plan)
-      .config(core::QueryConfig::kQueryTraceEnabled, true)
-      .config(core::QueryConfig::kQueryTraceDir, traceRoot)
-      .config(core::QueryConfig::kQueryTraceMaxBytes, 100UL << 30)
-      .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
-      .config(core::QueryConfig::kQueryTraceNodeId, traceNodeId)
-      .split(makeHiveConnectorSplit(sourceFilePath->getPath()))
-      .copyResults(pool(), task);
+  std::string queryId;
+  std::string taskId;
+  // The input is traced before the operator sees it, so the failed query still
+  // leaves a replayable trace.
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kQueryTraceEnabled, true)
+          .config(core::QueryConfig::kQueryTraceDir, traceRoot)
+          .config(core::QueryConfig::kQueryTraceMaxBytes, 100UL << 30)
+          .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
+          .config(core::QueryConfig::kQueryTraceNodeId, traceNodeId)
+          .beforeTaskStart([&](Task& task) {
+            queryId = task.queryCtx()->queryId();
+            taskId = task.taskId();
+          })
+          .split(makeHiveConnectorSplit(sourceFilePath->getPath()))
+          .copyResults(pool()),
+      kErrorMessage);
 
-  // createPlanNode() forwards insertTableHandle()->notNullColumnNames()
-  // verbatim from this node.
-  const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
-      traceRoot, task->queryCtx()->queryId(), task->taskId());
-  const auto taskMetaReader =
-      exec::trace::TaskTraceMetadataReader(taskTraceDir, pool());
-  const auto queryPlan = taskMetaReader.queryPlan();
-  const auto* replayNode = core::PlanNode::findFirstNode(
-      queryPlan.get(),
-      [&](const auto* node) { return node->id() == traceNodeId; });
-  ASSERT_NE(replayNode, nullptr);
-  const auto* tableWriteNode =
-      dynamic_cast<const core::TableWriteNode*>(replayNode);
-  ASSERT_NE(tableWriteNode, nullptr);
-  const auto& tracedNotNullColumnNames =
-      tableWriteNode->insertTableHandle()->notNullColumnNames();
-  ASSERT_EQ(tracedNotNullColumnNames, notNullColumnNames);
+  const auto replayOutputDir = TempDirectoryPath::create();
+  VELOX_ASSERT_USER_THROW(
+      TableWriterReplayer(
+          traceRoot,
+          queryId,
+          taskId,
+          traceNodeId,
+          "TableWriter",
+          "",
+          0,
+          executor_.get(),
+          replayOutputDir->getPath())
+          .run(),
+      kErrorMessage);
 }
 
 TEST_F(TableWriterReplayerTest, partitionWrite) {

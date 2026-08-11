@@ -80,7 +80,7 @@ std::shared_ptr<core::InsertTableHandle> createInsertTableHanlde(
   return std::make_shared<core::InsertTableHandle>(
       connectorId,
       makeHiveInsertTableHandle(node, std::move(targetDir)),
-      node->insertTableHandle()->notNullColumnNames());
+      node->insertTableHandle()->notNullColumns());
 }
 } // namespace
 

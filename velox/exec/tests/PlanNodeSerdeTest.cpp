@@ -13,8 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <gmock/gmock.h>
-
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/core/FixedPointPlanNodes.h"
@@ -782,46 +780,15 @@ TEST_F(PlanNodeSerdeTest, write) {
   testSerde(plan);
 }
 
-TEST_F(PlanNodeSerdeTest, writeWithNotNullConstraints) {
+TEST_F(PlanNodeSerdeTest, writeWithNotNullColumns) {
   auto plan = PlanBuilder(pool_.get())
                   .values(data_)
-                  .tableWrite("targetDirectory")
+                  .startTableWriter()
+                  .outputDirectoryPath("targetDirectory")
+                  .notNullColumns({"c0", "c2"})
+                  .endTableWriter()
                   .planNode();
-
-  auto* writeNode = dynamic_cast<const core::TableWriteNode*>(plan.get());
-  ASSERT_NE(writeNode, nullptr);
-
-  auto insertHandleWithConstraints = std::make_shared<core::InsertTableHandle>(
-      writeNode->insertTableHandle()->connectorId(),
-      writeNode->insertTableHandle()->connectorInsertTableHandle(),
-      std::vector<std::string>{"c0", "c2"});
-  auto planWithConstraints = core::TableWriteNode::Builder(*writeNode)
-                                 .insertTableHandle(insertHandleWithConstraints)
-                                 .build();
-
-  EXPECT_THAT(
-      planWithConstraints->toString(true, true),
-      testing::HasSubstr("notNullColumns: [c0, c2]"));
-  EXPECT_THAT(
-      plan->toString(true, true),
-      testing::Not(testing::HasSubstr("notNullColumns")));
-
-  const auto serialized = planWithConstraints->serialize();
-  const auto copy =
-      velox::ISerializable::deserialize<core::PlanNode>(serialized, pool());
-  const auto* copyWrite = dynamic_cast<const core::TableWriteNode*>(copy.get());
-  ASSERT_NE(copyWrite, nullptr);
-  EXPECT_EQ(
-      copyWrite->insertTableHandle()->notNullColumnNames(),
-      (std::vector<std::string>{"c0", "c2"}));
-
-  const auto serializedNone = plan->serialize();
-  const auto copyNone =
-      velox::ISerializable::deserialize<core::PlanNode>(serializedNone, pool());
-  const auto* copyWriteNone =
-      dynamic_cast<const core::TableWriteNode*>(copyNone.get());
-  ASSERT_NE(copyWriteNone, nullptr);
-  EXPECT_TRUE(copyWriteNone->insertTableHandle()->notNullColumnNames().empty());
+  testSerde(plan);
 }
 
 TEST_F(PlanNodeSerdeTest, tableWriteMerge) {

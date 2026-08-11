@@ -529,7 +529,8 @@ TableWriterTestBase::createInsertTableHandle(
           makeLocationHandle(
               outputDirectoryPath, std::nullopt, outputTableType),
           fileFormat_,
-          compressionKind));
+          compressionKind),
+      /*notNullColumns=*/std::vector<std::string>{});
 }
 
 // Returns a table insert plan node.
