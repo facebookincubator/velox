@@ -3130,7 +3130,7 @@ void CompositeInvocation::launch(
       setOpCodes(deviceBlocks, 0, numBlocks, kDebugNoOp, stream);
 
       if (groupAndCooperative) {
-        auto* inv = sv.kernels[launchIdx].invocation;
+        auto* inv = sv.kernels.at(launchIdx).invocation;
         if (!launched.insert(reinterpret_cast<intptr_t>(inv)).second) {
           continue;
         }
