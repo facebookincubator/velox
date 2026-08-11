@@ -204,11 +204,6 @@ bool isCheckedDecimalArithmeticOp(cudf::binary_operator op) {
       op == cudf::binary_operator::DIV;
 }
 
-struct CudfExpressionEvaluatorEntry {
-  int priority;
-  CudfExpressionEvaluatorCanEvaluate canEvaluate;
-  CudfExpressionEvaluatorCreate create;
-};
 /// Materialise a ConstantTypedExpr to a VectorPtr.
 VectorPtr toConstantVector(
     const core::TypedExprPtr& expr,
