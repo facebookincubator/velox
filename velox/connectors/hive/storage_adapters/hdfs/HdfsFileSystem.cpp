@@ -31,9 +31,8 @@ class HdfsFileSystem::Impl {
       const config::ConfigBase* config,
       const HdfsServiceEndpoint& endpoint) {
     auto status = filesystems::arrow::io::internal::ConnectLibHdfs(&driver_);
-    if (!status.ok()) {
-      LOG(ERROR) << "ConnectLibHdfs failed due to: " << status.ToString();
-    }
+    VELOX_CHECK(
+        status.ok(), "Failed to connect to libhdfs: {}", status.ToString());
 
     // connect to HDFS with the builder object
     hdfsBuilder* builder = driver_->NewBuilder();
@@ -91,9 +90,9 @@ class HdfsFileSystem::Impl {
   }
 
  private:
-  hdfsFS hdfsClient_;
-  filesystems::arrow::io::internal::LibHdfsShim* driver_;
-  bool closed_ = false;
+  hdfsFS hdfsClient_{nullptr};
+  filesystems::arrow::io::internal::LibHdfsShim* driver_{nullptr};
+  bool closed_{false};
 };
 
 HdfsFileSystem::HdfsFileSystem(

@@ -22,10 +22,13 @@
 #include <folly/lang/Bits.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/config/Config.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
+#include "velox/connectors/hive/iceberg/IcebergSessionCredentials.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/vector/DecodedVector.h"
@@ -136,10 +139,18 @@ IcebergSplitReader::IcebergSplitReader(
 void IcebergSplitReader::configureBaseReaderOptions() {
   FileSplitReader::configureBaseReaderOptions();
   const auto fileFormat = fileSplit_->fileFormat;
+  if (fileFormat == dwio::common::FileFormat::PARQUET) {
+    auto fieldIds = buildFieldIds();
+    if (!fieldIds.empty()) {
+      baseReaderOpts_.setColumnMappingMode(
+          dwio::common::ColumnMappingMode::kParquetFieldId);
+      baseReaderOpts_.setFieldIds(std::move(fieldIds));
+    }
+    return;
+  }
+
   if (fileFormat != dwio::common::FileFormat::DWRF &&
       fileFormat != dwio::common::FileFormat::ORC) {
-    // Parquet resolves field ids from physical metadata, not from the
-    // attribute-based kFieldId path.
     return;
   }
   auto fieldIds = buildFieldIds();
@@ -161,11 +172,20 @@ std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
   // Column handles are keyed by output alias; index them by the underlying
   // data-column name so we can align to dataColumns() order.
   std::unordered_map<std::string, const IcebergColumnHandle*> handleByName;
-  for (const auto& [outputName, handle] : *columnHandles_) {
+  const auto addIcebergHandle = [&handleByName](const auto& handle) {
     if (auto* icebergHandle =
             dynamic_cast<const IcebergColumnHandle*>(handle.get())) {
       handleByName.emplace(icebergHandle->name(), icebergHandle);
     }
+  };
+  for (const auto& columnHandle : *columnHandles_) {
+    addIcebergHandle(columnHandle.second);
+  }
+  // Remaining filters can add columns to the reader output that are not
+  // projected by the table scan. Include those handles so filter-only columns
+  // are still matched by Iceberg field ID.
+  for (const auto& handle : tableHandle_->filterColumnHandles()) {
+    addIcebergHandle(handle);
   }
   if (handleByName.empty()) {
     return fieldIds;
@@ -188,6 +208,31 @@ void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStatistics& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
+  // Forward per-query delegated credentials into fileReadOps so delegated-auth
+  // filesystems authorize the read as the caller rather than the service
+  // identity. The session-property keys carrying the credentials are named by
+  // the connector's "hive.session-credential-keys" config; it is empty by
+  // default, so a stock deployment forwards nothing and the deployment-specific
+  // credential name stays out of the connector. Mirrors the write path
+  // (IcebergConnector::withSessionCredentials) via the shared
+  // 'sessionCredentials'. No-op for non-delegated reads.
+  const auto* sessionProperties = connectorQueryCtx_ != nullptr
+      ? connectorQueryCtx_->sessionProperties()
+      : nullptr;
+  const auto credentials = sessionCredentials(
+      fileConfig_ != nullptr ? fileConfig_->config().get() : nullptr,
+      sessionProperties);
+  // Only copy fileReadOps when there are credentials to fold in; the common
+  // (non-delegated) read path passes the original map through unchanged.
+  folly::F14FastMap<std::string, std::string> mergedFileReadOps;
+  if (!credentials.empty()) {
+    mergedFileReadOps = fileReadOps;
+    for (const auto& [key, value] : credentials) {
+      mergedFileReadOps[key] = value;
+    }
+  }
+  const auto& effectiveFileReadOps =
+      credentials.empty() ? fileReadOps : mergedFileReadOps;
   // For NIMBLE splits, switch the reader to Iceberg field-id-based column
   // resolution. The NIMBLE per-SchemaNode `attributes` slot carries
   // `iceberg.id` keys stamped on the write path; the NIMBLE reader uses
@@ -267,7 +312,7 @@ void IcebergSplitReader::prepareSplit(
         baseReaderOpts_.setFileSchema(ROW(std::move(names), std::move(types)));
       }
     }
-    createReader(fileReadOps);
+    createReader(effectiveFileReadOps);
   }
 
   if (emptySplit_) {

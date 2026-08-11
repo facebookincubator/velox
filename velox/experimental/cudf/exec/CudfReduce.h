@@ -61,7 +61,8 @@ std::vector<std::unique_ptr<ReduceAggregator>> toReduceAggregators(
 
 bool canReduceBeEvaluatedByCudf(
     const core::AggregationNode& aggregationNode,
-    core::QueryCtx* queryCtx);
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
 
 bool canReduceAggregationBeEvaluatedByCudf(
     const core::CallTypedExpr& call,

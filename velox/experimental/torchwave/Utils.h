@@ -85,6 +85,20 @@ class Pool {
 using StreamPool = Pool<facebook::velox::wave::Stream>;
 using EventPool = Pool<facebook::velox::wave::Event>;
 
+/// Returns an alias of 'base' with the given shape, strides and element
+/// offset, built straight from the TensorImpl. This is the primitive
+/// Tensor::narrow / slice / select all bottom out in (aten's
+/// as_strided_tensorimpl); reaching it through them costs two dispatcher
+/// round-trips plus autograd view bookkeeping, which is measurable when a view
+/// is rebuilt per launch. Wave buffers are inference-only, so the skipped view
+/// tracking is unused. The caller owns the argument conditioning and bounds
+/// checks the dispatched ops would have done.
+at::Tensor aliasTensor(
+    const at::Tensor& base,
+    c10::IntArrayRef sizes,
+    c10::IntArrayRef strides,
+    int64_t storageOffset);
+
 /// Parses a qualified op name (e.g. "torch.ops.aten.add.Tensor") and looks up
 /// its FunctionSchema from the dispatcher. Returns nullptr if not found.
 const c10::FunctionSchema* findFunctionSchema(std::string_view qualifiedName);

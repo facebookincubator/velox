@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
 #include <folly/Random.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -1305,6 +1306,62 @@ TEST_F(ColumnWriterTest, TestMapWriterNestedRow) {
   testMapWriterRowImpl<Row<int32_t, bool, StringView>>();
 }
 
+// With MAP_FLAT_COLS_STRUCT_KEYS the flat-map writer copies the struct keys
+// into stringKeys_ (reserved to MAP_FLAT_MAX_KEYS) in its constructor and
+// builds structKeys_ as StringViews into that buffer. writeRow() then calls
+// getValueWriter() per key, which for a non-inline (>12 char) key appends a
+// *second* copy into stringKeys_. Those extra copies push stringKeys_ past its
+// reserve(MAP_FLAT_MAX_KEYS) capacity, reallocating it mid-loop and dangling
+// the structKeys_ StringViews still being iterated -> heap-use-after-free (same
+// F14 dangling-key crash family as D96817300). Reproduces under ASAN.
+TEST_F(ColumnWriterTest, FlatMapStructKeysDanglingStringView) {
+  const auto rowType = ROW({{"c0", MAP(VARCHAR(), BIGINT())}});
+  const auto writerSchema = TypeWithId::create(rowType);
+  const auto mapColumn = writerSchema->childAt(0);
+
+  // 13-char keys: non-inline StringViews (>12 chars) whose backing std::string
+  // is still small-string-optimized (libstdc++ SSO capacity is 15). The
+  // StringView therefore points into the SSO buffer *inside* the vector
+  // element, so a stringKeys_ reallocation moves that buffer and dangles the
+  // view. (Keys >15 chars are heap-backed and would survive the realloc.) Count
+  // == MAP_FLAT_MAX_KEYS so the first getValueWriter() copy overflows
+  // stringKeys_'s reservation and reallocates it.
+  const size_t numKeys = 8;
+  std::vector<std::string> structKeys;
+  structKeys.reserve(numKeys);
+  for (size_t i = 0; i < numKeys; ++i) {
+    structKeys.push_back(fmt::format("flatmapkey_{:02d}", i)); // 13 chars
+  }
+
+  const auto config = std::make_shared<Config>();
+  config->set(Config::FLATTEN_MAP, true);
+  const std::vector<uint32_t> flatCols{mapColumn->column()};
+  config->set<const std::vector<uint32_t>>(Config::MAP_FLAT_COLS, flatCols);
+  const std::vector<std::vector<std::string>> structKeysCols{structKeys};
+  config->set<const std::vector<std::vector<std::string>>>(
+      Config::MAP_FLAT_COLS_STRUCT_KEYS, structKeysCols);
+  config->set<uint32_t>(
+      Config::MAP_FLAT_MAX_KEYS, static_cast<uint32_t>(numKeys));
+
+  WriterContext context{config, memory::memoryManager()->addRootPool()};
+  context.initBuffer();
+  const auto writer = BaseColumnWriter::create(context, *mapColumn);
+
+  // In struct-keys mode the MAP column is fed a RowVector whose children
+  // (BIGINT) correspond positionally to the struct keys.
+  VectorMaker vectorMaker{pool_.get()};
+  const vector_size_t numRows = 4;
+  std::vector<VectorPtr> children;
+  children.reserve(numKeys);
+  for (size_t i = 0; i < numKeys; ++i) {
+    children.push_back(vectorMaker.flatVector<int64_t>(
+        numRows, [](vector_size_t row) { return row; }));
+  }
+  const auto structInput = vectorMaker.rowVector(children);
+
+  writer->write(structInput, common::Ranges::of(0, numRows));
+}
+
 template <typename TKEY, typename TVALUE>
 void testMapWriter(
     MemoryPool& pool,
@@ -1950,8 +2007,9 @@ std::unique_ptr<DwrfReader> getDwrfReader(
       2 * 1024 * 1024, dwio::common::FileSink::Options{.pool = &leafPool});
   auto sinkPtr = sink.get();
 
-  dwrf::WriterOptions options;
-  options.config = config;
+  dwio::common::WriterOptions options;
+  options.formatSpecificOptions =
+      std::make_shared<dwrf::DwrfWriterOptions>(config);
   options.schema = type;
   options.flushPolicyFactory = [&]() {
     return std::make_unique<LambdaFlushPolicy>([]() {
@@ -3762,7 +3820,7 @@ struct StringColumnWriterTestCase {
 
         for (size_t k = 0; k != sv->size(); ++k) {
           if (!sv->isNullAt(k)) {
-            EXPECT_EQ(sv->valueAt(k), resultSv->valueAt(k)) << folly::sformat(
+            EXPECT_EQ(sv->valueAt(k), resultSv->valueAt(k)) << fmt::format(
                 "Mismatch on {}-th element. \nExpected: {}\n Actual: {}",
                 k,
                 sv->valueAt(k).str(),

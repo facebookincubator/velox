@@ -295,6 +295,8 @@ class CastExpr : public SpecialForm {
       const BaseVector& input,
       VectorPtr& result);
 
+  bool verifyToTimestampCast(const TypePtr& fromType, const TypePtr& toType);
+
   VectorPtr applyTimestampToVarcharCast(
       const TypePtr& toType,
       const SelectivityVector& rows,

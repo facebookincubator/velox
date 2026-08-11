@@ -365,6 +365,46 @@ MetadataBuilder& MetadataBuilder::viewOfArg(int32_t ordinal) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::mutatesArg(int32_t ordinal) {
+  md_.mutatesArg = ordinal;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::indicesArg(int32_t ordinal) {
+  md_.indicesArg = ordinal;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::valuesArg(int32_t ordinal) {
+  md_.valuesArg = ordinal;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::layoutAgnostic(bool val) {
+  md_.layoutAgnostic = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::dimAttr(std::string name) {
+  md_.dimAttr = std::move(name);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::normalizeDimAttr(bool val) {
+  md_.normalizeDimAttr = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::accumulateAttr(std::string name) {
+  md_.accumulateAttr = std::move(name);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::memoryFormatAttr(std::string name) {
+  md_.memoryFormatAttr = std::move(name);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::shapeAttr(std::string name) {
   md_.shapeAttr = std::move(name);
   return *this;

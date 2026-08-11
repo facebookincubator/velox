@@ -16,9 +16,9 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
-#include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/Expressions.h"
 #include "velox/exec/Aggregate.h"
@@ -428,7 +428,8 @@ bool canAggregationBeEvaluatedByRegistry(
 
 bool canBeEvaluatedByCudf(
     const core::AggregationNode& aggregationNode,
-    core::QueryCtx* queryCtx) {
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool) {
   const core::PlanNode* sourceNode = aggregationNode.sources().empty()
       ? nullptr
       : aggregationNode.sources()[0].get();
@@ -443,11 +444,11 @@ bool canBeEvaluatedByCudf(
 
   if (isDistinct) {
     return canGroupingKeysBeEvaluatedByCudf(
-        aggregationNode.groupingKeys(), sourceNode, queryCtx);
+        aggregationNode.groupingKeys(), sourceNode, queryCtx, pool);
   } else if (isGlobal) {
-    return canReduceBeEvaluatedByCudf(aggregationNode, queryCtx);
+    return canReduceBeEvaluatedByCudf(aggregationNode, queryCtx, pool);
   } else {
-    return canGroupbyBeEvaluatedByCudf(aggregationNode, queryCtx);
+    return canGroupbyBeEvaluatedByCudf(aggregationNode, queryCtx, pool);
   }
 }
 
@@ -478,12 +479,12 @@ core::TypedExprPtr expandFieldReference(
 bool canGroupingKeysBeEvaluatedByCudf(
     const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
     const core::PlanNode* sourceNode,
-    core::QueryCtx* queryCtx) {
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool) {
   // Check grouping key expressions (with expansion)
   for (const auto& groupingKey : groupingKeys) {
     auto expandedKey = expandFieldReference(groupingKey, sourceNode);
-    std::vector<core::TypedExprPtr> exprs = {expandedKey};
-    if (!canBeEvaluatedByCudf(exprs, queryCtx)) {
+    if (!canExprRunOnGpu(expandedKey, queryCtx, pool)) {
       return false;
     }
   }

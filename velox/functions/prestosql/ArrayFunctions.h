@@ -188,6 +188,7 @@ struct ArrayJoinFunction {
         inputTypes[0]->isArray(),
         "Array join's first parameter type has to be array");
     arrayElementType_ = inputTypes[0]->asArray().elementType();
+    isJsonElementType_ = isJsonType(arrayElementType_);
   }
 
   template <typename C>
@@ -252,11 +253,25 @@ struct ArrayJoinFunction {
       const arg_type<velox::Array<T>>& inputArray,
       const arg_type<velox::Varchar>& delim,
       std::optional<std::string> nullReplacement = std::nullopt) {
-    bool firstNonNull = true;
     if (inputArray.size() == 0) {
       return;
     }
 
+    // A single element is written without a delimiter, so for VARCHAR the
+    // result is the element verbatim and can be copied straight into the
+    // output, skipping the intermediate string that the conversion in
+    // writeValue() would build. JSON is excluded: its elements are unescaped.
+    if constexpr (std::is_same_v<T, Varchar>) {
+      if (inputArray.size() == 1 && !isJsonElementType_) {
+        const auto element = inputArray[0];
+        if (element.has_value()) {
+          result.append(element.value());
+          return;
+        }
+      }
+    }
+
+    bool firstNonNull{true};
     for (const auto& entry : inputArray) {
       if (entry.has_value()) {
         writeOutput(result, delim, entry.value(), firstNonNull);
@@ -286,6 +301,9 @@ struct ArrayJoinFunction {
  private:
   TimestampToStringOptions options_;
   TypePtr arrayElementType_;
+  // Whether the elements need JSON unescaping, which rules out returning them
+  // without a copy.
+  bool isJsonElementType_{false};
 };
 
 /// Function Signature: combinations(array(T), n) -> array(array(T))
