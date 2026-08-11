@@ -28,7 +28,7 @@ namespace facebook::velox::parquet::arrow {
 
 class ColumnDescriptor;
 class EncodedStatistics;
-class SizeStatistics;
+struct SizeStatistics;
 class FileMetaData;
 class InternalFileDecryptor;
 struct PageIndexLocation;
