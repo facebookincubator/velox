@@ -581,7 +581,7 @@ std::unique_ptr<exec::Aggregate> makeApproxMostFrequentAggregate(
   if constexpr (
       kKind == TypeKind::TINYINT || kKind == TypeKind::SMALLINT ||
       kKind == TypeKind::INTEGER || kKind == TypeKind::BIGINT ||
-      kKind == TypeKind::VARCHAR) {
+      kKind == TypeKind::VARCHAR || kKind == TypeKind::UNKNOWN) {
     return std::make_unique<
         ApproxMostFrequentAggregate<typename TypeTraits<kKind>::NativeType>>(
         resultType, compactionBytesThreshold, compactionUnusedMemoryRatio);
@@ -613,7 +613,8 @@ void registerApproxMostFrequentAggregate(
         "integer",
         "bigint",
         "varchar",
-        "json"}) {
+        "json",
+        "unknown"}) {
     signatures.push_back(
         exec::AggregateFunctionSignatureBuilder()
             .returnType(fmt::format("map({},bigint)", valueType))
@@ -636,7 +637,7 @@ void registerApproxMostFrequentAggregate(
         auto& valueType = exec::isPartialOutput(step)
             ? resultType->childAt(2)->childAt(0)
             : resultType->childAt(0);
-        return VELOX_DYNAMIC_TYPE_DISPATCH(
+        return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
             makeApproxMostFrequentAggregate,
             valueType->kind(),
             names.front(),

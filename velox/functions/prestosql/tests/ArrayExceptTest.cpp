@@ -496,3 +496,21 @@ TEST_F(ArrayExceptTest, timestampWithTimezone) {
       {pack(-2, 2), pack(4, 5)},
       {});
 }
+
+TEST_F(ArrayExceptTest, unknownType) {
+  auto emptyArray1 = makeArrayVector<UnknownValue>({{}});
+  auto emptyArray2 = makeArrayVector<UnknownValue>({{}});
+  auto result = evaluate(
+      "array_except(c0, c1)", makeRowVector({emptyArray1, emptyArray2}));
+  auto expected = makeArrayVector<UnknownValue>({{}});
+  assertEqualVectors(expected, result);
+
+  auto nullArray1 = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}});
+  auto nullArray2 = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}});
+  result =
+      evaluate("array_except(c0, c1)", makeRowVector({nullArray1, nullArray2}));
+  expected = makeArrayVector<UnknownValue>({{}});
+  assertEqualVectors(expected, result);
+}

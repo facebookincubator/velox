@@ -299,7 +299,7 @@ std::shared_ptr<exec::VectorFunction> create(
     return std::make_shared<ArrayDistinctFunction<ComplexType>>();
   }
 
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
       createTyped, elementType->kind(), inputArgs, elementType);
 }
 

@@ -166,7 +166,7 @@ class ComparisonSimdFunction : public exec::VectorFunction {
       return;
     }
 
-    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
         comparator.template applyComparison,
         args[0]->typeKind(),
         rows,
