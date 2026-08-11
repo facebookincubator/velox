@@ -55,6 +55,7 @@ struct HostBackedResourceState {
   std::atomic<bool> failNextCopy{false};
   std::atomic<std::uintptr_t> allocationStream{0};
   std::atomic<std::uintptr_t> deallocationStream{0};
+  std::atomic<int64_t> liveBytes{0};
 };
 
 /// Host-backed test resource satisfying the device-accessible resource
@@ -77,13 +78,16 @@ class HostBackedDeviceResource {
     if (state_->failNextAllocation.exchange(false)) {
       throw std::bad_alloc{};
     }
-    return ::operator new(bytes, std::align_val_t(alignment));
+    auto* allocation = ::operator new(bytes, std::align_val_t(alignment));
+    state_->liveBytes.fetch_add(bytes);
+    return allocation;
   }
 
   void deallocate_sync(
       void* pointer,
-      std::size_t /*bytes*/,
+      std::size_t bytes,
       std::size_t alignment) noexcept {
+    state_->liveBytes.fetch_sub(bytes);
     ::operator delete(pointer, std::align_val_t(alignment));
   }
 
@@ -516,6 +520,136 @@ TEST_F(CudfMemoryResourceTest, ScopedSelectionSupportsNesting) {
 
   EXPECT_EQ(get_temp_mr(), refA);
   EXPECT_EQ(get_output_mr(), refB);
+}
+
+TEST_F(
+    CudfMemoryResourceTest,
+    CurrentResourceRoutesOperationalAllocationsButNotOutputs) {
+  constexpr std::size_t kTempBytes = 256;
+  constexpr std::size_t kOutputBytes = 512;
+  constexpr auto kAlignment = alignof(std::max_align_t);
+
+  auto fallbackState = std::make_shared<HostBackedResourceState>();
+  auto fallbackResource = makeTestUpstream(fallbackState);
+  rmm::device_async_resource_ref fallbackRef{fallbackResource};
+  auto globalTemporaryResource =
+      createThreadLocalTemporaryMemoryResource(fallbackResource);
+  auto previousResource =
+      cudf::set_current_device_resource(globalTemporaryResource);
+  SCOPE_EXIT {
+    cudf::set_current_device_resource(std::move(previousResource));
+  };
+
+  auto root = memory::memoryManager()->addRootPool();
+  auto tempPool = root->addLeafChild("tlsTemp");
+  auto outputPool = root->addLeafChild("explicitOutput");
+  auto tempState = std::make_shared<HostBackedResourceState>();
+  auto outputState = std::make_shared<HostBackedResourceState>();
+  CudfMemoryResource tempResource{makeTestUpstream(tempState), tempPool};
+  CudfMemoryResource outputResource{makeTestUpstream(outputState), outputPool};
+  rmm::device_async_resource_ref tempRef{tempResource};
+  rmm::device_async_resource_ref outputRef{outputResource};
+
+  auto currentResource = cudf::get_current_device_resource_ref();
+  auto* fallbackAllocation =
+      currentResource.allocate_sync(kTempBytes, kAlignment);
+  EXPECT_EQ(fallbackState->liveBytes, kTempBytes);
+  EXPECT_EQ(tempPool->usedBytes(), 0);
+  currentResource.deallocate_sync(fallbackAllocation, kTempBytes, kAlignment);
+  EXPECT_EQ(fallbackState->liveBytes, 0);
+
+  // This is the path used by operators without a custom GPU pool. Their temp
+  // scope must use the underlying configured resource, not the process-wide
+  // dispatcher itself, to avoid recursive dispatch.
+  {
+    ScopedCudfMemoryResources untrackedScope{fallbackRef, outputRef};
+    auto* untrackedAllocation = currentResource.allocate(
+        rmm::cuda_stream_default, kTempBytes, kAlignment);
+    EXPECT_EQ(fallbackState->liveBytes, kTempBytes);
+    EXPECT_EQ(tempPool->usedBytes(), 0);
+    currentResource.deallocate(
+        rmm::cuda_stream_default, untrackedAllocation, kTempBytes, kAlignment);
+  }
+  EXPECT_EQ(fallbackState->liveBytes, 0);
+
+  void* tempAllocation = nullptr;
+  void* outputAllocation = nullptr;
+  {
+    ScopedCudfMemoryResources scope{tempRef, outputRef};
+    tempAllocation = currentResource.allocate(
+        rmm::cuda_stream_default, kTempBytes, kAlignment);
+    EXPECT_EQ(tempPool->usedBytes(), kTempBytes);
+    EXPECT_EQ(outputPool->usedBytes(), 0);
+    EXPECT_EQ(fallbackState->liveBytes, 0);
+
+    outputAllocation =
+        outputRef.allocate(rmm::cuda_stream_default, kOutputBytes, kAlignment);
+    EXPECT_EQ(tempPool->usedBytes(), kTempBytes);
+    EXPECT_EQ(outputPool->usedBytes(), kOutputBytes);
+  }
+
+  // The dispatcher remembers which non-owning temp resource allocated the
+  // pointer, so the deallocation does not depend on the current TLS scope.
+  EXPECT_EQ(tempPool->usedBytes(), kTempBytes);
+  currentResource.deallocate(
+      rmm::cuda_stream_default, tempAllocation, kTempBytes, kAlignment);
+  EXPECT_EQ(tempPool->usedBytes(), 0);
+
+  // Explicit output resources independently carry their accounting identity
+  // and can likewise be deallocated after the operational TLS scope has ended.
+  EXPECT_EQ(outputPool->usedBytes(), kOutputBytes);
+  outputRef.deallocate(
+      rmm::cuda_stream_default, outputAllocation, kOutputBytes, kAlignment);
+  EXPECT_EQ(outputPool->usedBytes(), 0);
+}
+
+TEST_F(CudfMemoryResourceTest, CurrentResourceUsesCallingThreadScope) {
+  constexpr std::size_t kBytes = 384;
+  constexpr auto kAlignment = alignof(std::max_align_t);
+
+  auto fallbackState = std::make_shared<HostBackedResourceState>();
+  auto globalTemporaryResource =
+      createThreadLocalTemporaryMemoryResource(makeTestUpstream(fallbackState));
+  rmm::device_async_resource_ref currentResource{globalTemporaryResource};
+
+  auto root = memory::memoryManager()->addRootPool();
+  auto mainPool = root->addLeafChild("mainThreadTemp");
+  auto childPool = root->addLeafChild("childThreadTemp");
+  auto mainState = std::make_shared<HostBackedResourceState>();
+  auto childState = std::make_shared<HostBackedResourceState>();
+  CudfMemoryResource mainResource{makeTestUpstream(mainState), mainPool};
+  CudfMemoryResource childResource{makeTestUpstream(childState), childPool};
+  rmm::device_async_resource_ref mainRef{mainResource};
+  rmm::device_async_resource_ref childRef{childResource};
+
+  std::promise<void*> childAllocation;
+  auto childAllocationFuture = childAllocation.get_future();
+  std::thread child([&] {
+    ScopedCudfMemoryResources childScope{childRef, childRef};
+    auto* allocation =
+        currentResource.allocate(rmm::cuda_stream_default, kBytes, kAlignment);
+    childAllocation.set_value(allocation);
+  });
+
+  auto* allocationFromChild = childAllocationFuture.get();
+  child.join();
+  {
+    ScopedCudfMemoryResources mainScope{mainRef, mainRef};
+    auto* allocation =
+        currentResource.allocate(rmm::cuda_stream_default, kBytes, kAlignment);
+    EXPECT_EQ(mainPool->usedBytes(), kBytes);
+    EXPECT_EQ(childPool->usedBytes(), kBytes);
+    EXPECT_EQ(fallbackState->liveBytes, 0);
+    currentResource.deallocate(
+        rmm::cuda_stream_default, allocation, kBytes, kAlignment);
+  }
+
+  EXPECT_EQ(mainPool->usedBytes(), 0);
+  EXPECT_EQ(childPool->usedBytes(), kBytes);
+  currentResource.deallocate(
+      rmm::cuda_stream_default, allocationFromChild, kBytes, kAlignment);
+  EXPECT_EQ(childPool->usedBytes(), 0);
+  EXPECT_EQ(fallbackState->liveBytes, 0);
 }
 
 TEST_F(CudfMemoryResourceTest, ScopedSelectionIsThreadLocal) {

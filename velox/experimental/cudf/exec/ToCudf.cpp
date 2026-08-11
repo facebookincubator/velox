@@ -328,7 +328,8 @@ void registerCudf() {
 
   const std::string mrMode = config.memoryResource;
   auto mr = cudf_velox::createMemoryResource(mrMode, config.memoryPercent);
-  cudf::set_current_device_resource(mr);
+  cudf::set_current_device_resource(
+      cudf_velox::createThreadLocalTemporaryMemoryResource(mr));
   mr_ = std::move(mr);
 
   const auto& outputMrMode = config.outputMemoryResource;

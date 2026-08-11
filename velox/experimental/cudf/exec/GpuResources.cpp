@@ -33,14 +33,141 @@
 
 #include <common/base/Exceptions.h>
 
+#include <cstddef>
 #include <cstdlib>
+#include <memory>
+#include <mutex>
 #include <string_view>
+#include <unordered_map>
+#include <utility>
 
 namespace facebook::velox::cudf_velox {
 namespace {
 
 thread_local std::optional<rmm::device_async_resource_ref> scopedTempMr;
 thread_local std::optional<rmm::device_async_resource_ref> scopedOutputMr;
+
+class ThreadLocalTemporaryMemoryResourceImpl {
+ public:
+  explicit ThreadLocalTemporaryMemoryResourceImpl(
+      cuda::mr::any_resource<cuda::mr::device_accessible> fallback)
+      : fallback_(std::move(fallback)) {}
+
+  void* allocate_sync(std::size_t bytes, std::size_t alignment) {
+    auto resource = currentResource();
+    auto* pointer = resource.allocate_sync(bytes, alignment);
+    try {
+      rememberAllocation(pointer, bytes, resource);
+    } catch (...) {
+      resource.deallocate_sync(pointer, bytes, alignment);
+      throw;
+    }
+    return pointer;
+  }
+
+  void deallocate_sync(
+      void* pointer,
+      std::size_t bytes,
+      std::size_t alignment) noexcept {
+    resourceForDeallocation(pointer, bytes)
+        .deallocate_sync(pointer, bytes, alignment);
+  }
+
+  void*
+  allocate(cuda::stream_ref stream, std::size_t bytes, std::size_t alignment) {
+    auto resource = currentResource();
+    auto* pointer = resource.allocate(stream, bytes, alignment);
+    try {
+      rememberAllocation(pointer, bytes, resource);
+    } catch (...) {
+      resource.deallocate(stream, pointer, bytes, alignment);
+      throw;
+    }
+    return pointer;
+  }
+
+  void deallocate(
+      cuda::stream_ref stream,
+      void* pointer,
+      std::size_t bytes,
+      std::size_t alignment) noexcept {
+    resourceForDeallocation(pointer, bytes)
+        .deallocate(stream, pointer, bytes, alignment);
+  }
+
+  bool operator==(
+      const ThreadLocalTemporaryMemoryResourceImpl& other) const noexcept {
+    return this == std::addressof(other);
+  }
+
+  bool operator!=(
+      const ThreadLocalTemporaryMemoryResourceImpl& other) const noexcept {
+    return !(*this == other);
+  }
+
+  friend void get_property(
+      const ThreadLocalTemporaryMemoryResourceImpl&,
+      cuda::mr::device_accessible) noexcept {}
+
+ private:
+  rmm::device_async_resource_ref currentResource() {
+    return scopedTempMr.has_value() ? *scopedTempMr
+                                    : rmm::device_async_resource_ref{fallback_};
+  }
+
+  void rememberAllocation(
+      void* pointer,
+      std::size_t bytes,
+      rmm::device_async_resource_ref resource) {
+    if (bytes == 0) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto inserted = allocations_.emplace(pointer, resource).second;
+    VELOX_CHECK(inserted, "Duplicate outstanding cuDF temporary allocation");
+  }
+
+  rmm::device_async_resource_ref resourceForDeallocation(
+      void* pointer,
+      std::size_t bytes) noexcept {
+    if (bytes == 0) {
+      return currentResource();
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = allocations_.find(pointer);
+    VELOX_CHECK(
+        it != allocations_.end(),
+        "Unknown cuDF temporary allocation during deallocation");
+    auto resource = it->second;
+    allocations_.erase(it);
+    return resource;
+  }
+
+  cuda::mr::any_resource<cuda::mr::device_accessible> fallback_;
+  std::mutex mutex_;
+  std::unordered_map<void*, rmm::device_async_resource_ref> allocations_;
+};
+
+class ThreadLocalTemporaryMemoryResource
+    : public cuda::mr::shared_resource<ThreadLocalTemporaryMemoryResourceImpl> {
+  using SharedBase =
+      cuda::mr::shared_resource<ThreadLocalTemporaryMemoryResourceImpl>;
+
+ public:
+  explicit ThreadLocalTemporaryMemoryResource(
+      cuda::mr::any_resource<cuda::mr::device_accessible> fallback)
+      : SharedBase(
+            cuda::mr::make_shared_resource<
+                ThreadLocalTemporaryMemoryResourceImpl>(std::move(fallback))) {}
+
+  friend void get_property(
+      const ThreadLocalTemporaryMemoryResource&,
+      cuda::mr::device_accessible) noexcept {}
+};
+
+static_assert(cuda::mr::resource_with<
+              ThreadLocalTemporaryMemoryResource,
+              cuda::mr::device_accessible>);
 
 } // namespace
 
@@ -105,6 +232,12 @@ rmm::device_async_resource_ref get_output_mr() {
     return *scopedOutputMr;
   }
   return rmm::device_async_resource_ref{output_mr_.value()};
+}
+
+cuda::mr::any_resource<cuda::mr::device_accessible>
+createThreadLocalTemporaryMemoryResource(
+    cuda::mr::any_resource<cuda::mr::device_accessible> fallback) {
+  return ThreadLocalTemporaryMemoryResource{std::move(fallback)};
 }
 
 ScopedCudfMemoryResources::ScopedCudfMemoryResources(
