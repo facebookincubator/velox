@@ -30,6 +30,7 @@ namespace {
 // as a negative return from libhdfs3's hdfsRead. Retry a bounded number of
 // times with exponential backoff before giving up, instead of failing the whole
 // Spark task (and therefore the whole query) on the first transient error.
+// Allows up to 4 total read attempts: one initial attempt and 3 retries.
 constexpr int kMaxReadRetries = 3;
 constexpr int kReadRetryBaseDelayMs = 200;
 } // namespace
