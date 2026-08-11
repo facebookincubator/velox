@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <typeinfo>
 
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
@@ -133,6 +134,14 @@ void ParquetWriterOptions::merge(
   mergeIfSet(dataPageSize, parquetOverrides->dataPageSize);
   mergeIfSet(batchSize, parquetOverrides->batchSize);
   mergeIfSet(createdBy, parquetOverrides->createdBy);
+}
+
+std::shared_ptr<dwio::common::FormatSpecificOptions>
+ParquetWriterOptions::clone() const {
+  VELOX_CHECK(
+      typeid(*this) == typeid(ParquetWriterOptions),
+      "ParquetWriterOptions subclass must override clone().");
+  return std::make_shared<ParquetWriterOptions>(*this);
 }
 
 struct ArrowContext {
