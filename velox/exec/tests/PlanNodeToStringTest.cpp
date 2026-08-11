@@ -1046,6 +1046,21 @@ TEST_F(PlanNodeToStringTest, tableWrite) {
         plan->toString(true, false));
   }
 
+  // TableWrite with NOT NULL columns.
+  {
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .startTableWriter()
+                    .outputDirectoryPath(outputDir->getPath())
+                    .notNullColumns({"c0", "c2"})
+                    .endTableWriter()
+                    .planNode();
+    ASSERT_EQ("-- TableWrite[1]\n", plan->toString());
+    ASSERT_EQ(
+        "-- TableWrite[1][test-hive, c0, c1, c2, notNullColumns: [c0, c2]] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY\n",
+        plan->toString(true, false));
+  }
+
   // TableWrite with stats (no grouping keys) and TableWriteMerge.
   {
     core::TableWriteNodePtr writeNode;

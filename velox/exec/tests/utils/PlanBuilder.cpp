@@ -464,12 +464,12 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
         storageParameters_);
 
     insertHandle_ = std::make_shared<core::InsertTableHandle>(
-        connectorId_, hiveHandle, notNullColumnNames_);
-  } else if (!notNullColumnNames_.empty()) {
+        connectorId_, hiveHandle, notNullColumns_);
+  } else if (!notNullColumns_.empty()) {
     insertHandle_ = std::make_shared<core::InsertTableHandle>(
         insertHandle_->connectorId(),
         insertHandle_->connectorInsertTableHandle(),
-        notNullColumnNames_);
+        notNullColumns_);
   }
 
   std::optional<core::ColumnStatsSpec> columnStatsSpec;

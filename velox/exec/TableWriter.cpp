@@ -21,8 +21,6 @@
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
-#include "velox/vector/DecodedVector.h"
-#include "velox/vector/SelectivityVector.h"
 
 namespace facebook::velox::exec {
 
@@ -77,6 +75,7 @@ TableWriter::TableWriter(
       connectorPool_,
       spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr);
   setTypeMappings(tableWriteNode);
+  setNotNullChannels(tableWriteNode);
 }
 
 void TableWriter::setTypeMappings(
@@ -101,17 +100,22 @@ void TableWriter::setTypeMappings(
 
   mappedOutputType_ = ROW(folly::copy(outputNames), std::move(outputTypes));
   mappedInputType_ = ROW(std::move(outputNames), std::move(inputTypes));
+}
 
-  const auto& notNullNames =
-      tableWriteNode->insertTableHandle()->notNullColumnNames();
-  if (!notNullNames.empty()) {
-    const folly::F14FastSet<std::string> notNullSet(
-        notNullNames.begin(), notNullNames.end());
-    const auto& targetNames = tableWriteNode->columnNames();
-    for (size_t i = 0; i < targetNames.size(); ++i) {
-      if (notNullSet.count(targetNames[i]) > 0) {
-        notNullChannels_.emplace_back(inputMapping_[i], targetNames[i]);
-      }
+void TableWriter::setNotNullChannels(
+    const core::TableWriteNodePtr& tableWriteNode) {
+  const auto& notNullColumns =
+      tableWriteNode->insertTableHandle()->notNullColumns();
+  if (notNullColumns.empty()) {
+    return;
+  }
+
+  const folly::F14FastSet<std::string> notNullColumnSet(
+      notNullColumns.begin(), notNullColumns.end());
+  const auto& targetNames = tableWriteNode->columnNames();
+  for (auto i = 0; i < targetNames.size(); ++i) {
+    if (notNullColumnSet.contains(targetNames[i])) {
+      notNullChannels_.emplace_back(inputMapping_[i], targetNames[i]);
     }
   }
 }
@@ -162,19 +166,29 @@ bool TableWriter::finishDataSink() {
 }
 
 void TableWriter::checkNotNullConstraints(const RowVectorPtr& input) {
+  if (notNullChannels_.empty()) {
+    return;
+  }
+
+  // Decoding catches nulls behind dictionary or constant wrapping. The scan is
+  // bounded to the batch's rows because a child may be longer than 'input'.
+  notNullRows_.resizeFill(input->size());
+
+  // A null row of 'input' is null in every column, and addInput() forwards it
+  // to the data sink as such, but the children do not reflect it. Every
+  // constrained column is violated, so report the first.
+  notNullDecodedVector_.decode(*input, notNullRows_);
+  VELOX_USER_CHECK(
+      !notNullDecodedVector_.hasNulls(),
+      "NULL value not allowed for NOT NULL column: {}",
+      notNullChannels_.front().second);
+
   for (const auto& [channel, name] : notNullChannels_) {
-    const auto& column = input->childAt(channel);
-    if (!column->mayHaveNullsRecursive()) {
-      continue;
-    }
-    // Decode to catch nulls behind dictionary or constant wrapping, restricting
-    // the scan to the batch's rows. hasNulls() fast-paths identity (flat)
-    // mappings, so no separate flat branch is needed.
-    notNullRows_.resizeFill(input->size());
-    notNullDecodedVector_.decode(*column, notNullRows_);
-    if (notNullDecodedVector_.hasNulls()) {
-      VELOX_USER_FAIL("NULL value not allowed for NOT NULL column: {}", name);
-    }
+    notNullDecodedVector_.decode(*input->childAt(channel), notNullRows_);
+    VELOX_USER_CHECK(
+        !notNullDecodedVector_.hasNulls(),
+        "NULL value not allowed for NOT NULL column: {}",
+        name);
   }
 }
 
@@ -183,9 +197,7 @@ void TableWriter::addInput(RowVectorPtr input) {
     return;
   }
 
-  if (!notNullChannels_.empty()) {
-    checkNotNullConstraints(input);
-  }
+  checkNotNullConstraints(input);
 
   std::vector<VectorPtr> mappedChildren;
   mappedChildren.reserve(inputMapping_.size());
