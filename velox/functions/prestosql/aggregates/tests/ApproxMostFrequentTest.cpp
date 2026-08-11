@@ -431,5 +431,28 @@ TEST_F(ApproxMostFrequentTestJson, basic) {
       {expected});
 }
 
+// Non-templated test for UNKNOWN type
+class ApproxMostFrequentUnknownTest : public AggregationTestBase {};
+
+TEST_F(ApproxMostFrequentUnknownTest, unknownType) {
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeNullableFlatVector<UnknownValue>({std::nullopt, std::nullopt}),
+  });
+  auto mapType = MAP(UNKNOWN(), BIGINT());
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      BaseVector::createNullConstant(mapType, 2, pool()),
+  });
+
+  testAggregations(
+      {data},
+      {"c0"},
+      {"approx_most_frequent(2, c1, 31)"},
+      {"c0", "a0"},
+      {expected});
+}
+
 } // namespace
+
 } // namespace facebook::velox::aggregate::test

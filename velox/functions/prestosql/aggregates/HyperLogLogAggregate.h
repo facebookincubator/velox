@@ -65,6 +65,16 @@ class HyperLogLogAggregate : public exec::Aggregate {
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
+    VELOX_CHECK(result);
+    // Handle UNKNOWN type - return NULL for all groups
+    if ((*result)->type()->isUnknown()) {
+      auto* flatResult = (*result)->asFlatVector<UnknownValue>();
+      flatResult->resize(numGroups);
+      BufferPtr& nulls = flatResult->mutableNulls(flatResult->size());
+      bits::fillBits(nulls->asMutable<uint64_t>(), 0, numGroups, bits::kNull);
+      return;
+    }
+
     if (hllAsFinalResult_) {
       extractAccumulators(groups, numGroups, result);
     } else {
