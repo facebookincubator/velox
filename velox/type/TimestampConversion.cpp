@@ -635,7 +635,20 @@ bool tryParseTimestampString(
   }
 
   // Try to parse a time field.
+  size_t preSeparatorPos = pos;
   parseTimeSeparator(buf, pos, parseMode);
+
+  // In Spark cast mode, when a 'T' separator is consumed, the time component
+  // must begin immediately with a digit. Spark only trims the outer input
+  // boundaries, not internal whitespace after 'T', so any of
+  // "2015-03-18T", "2015-03-18T ", "2015-03-18T 12:00:00", "2015-03-18TZ"
+  // is invalid. A space separator (e.g. "2015-03-18 12:00:00") is unaffected
+  // because Spark allows whitespace there. Presto/ISO/Legacy are unaffected.
+  if (parseMode == TimestampParseMode::kSparkCast && pos > preSeparatorPos &&
+      buf[preSeparatorPos] == 'T' &&
+      (pos >= len || !characterIsDigit(buf[pos]))) {
+    return false;
+  }
 
   size_t timePos = 0;
   if (!tryParseTimeString(

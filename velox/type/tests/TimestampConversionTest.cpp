@@ -339,6 +339,31 @@ TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
   VELOX_ASSERT_THROW(
       parseTimestamp("2000-01-01T 12:21:56", TimestampParseMode::kIso8601),
       parserError);
+  // In Spark cast mode a 'T' separator must be followed immediately by the
+  // time digits; anything else is invalid.
+  for (const auto& invalid :
+       {"2015-03-18T",
+        "2015-03-18T ",
+        "2015-03-18T\t",
+        "2015-03-18T\n",
+        "2015-03-18T 12:00:00",
+        "2015-03-18TZ",
+        "2015-03-18T+08:00"}) {
+    SCOPED_TRACE(invalid);
+    VELOX_ASSERT_THROW(
+        parseTimestamp(invalid, TimestampParseMode::kSparkCast), parserError);
+    VELOX_ASSERT_THROW(
+        parseTimestampWithTimezone(invalid, TimestampParseMode::kSparkCast),
+        parserError);
+  }
+  // A space separator is unaffected: Spark trims the input, so a trailing
+  // space is equivalent to a date-only string.
+  EXPECT_EQ(
+      Timestamp(1426636800, 0),
+      parseTimestamp("2015-03-18 ", TimestampParseMode::kSparkCast));
+  EXPECT_EQ(
+      Timestamp(1426680000, 0),
+      parseTimestamp("2015-03-18T12:00:00", TimestampParseMode::kSparkCast));
 
   // Parse timestamp with (broken) timezones.
   VELOX_ASSERT_THROW(
