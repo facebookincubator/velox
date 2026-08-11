@@ -93,6 +93,43 @@ struct InputChunk {
   InputChunk materialize(rmm::device_async_resource_ref mr) &&;
 };
 
+// Move-only host representation of an independently owned CudfVector.
+//
+// Device column buffers are copied independently into pinned host buffers, so
+// spilling does not require a same-sized device allocation to pack the table.
+// Pinned bytes are charged to 'hostPool'. spill() is transactional with
+// respect to host allocation failure: 'resident' remains a valid device vector
+// unless all D2H copies complete successfully.
+class SpilledCudfVector {
+ public:
+  ~SpilledCudfVector();
+
+  SpilledCudfVector(SpilledCudfVector&&) noexcept;
+  SpilledCudfVector& operator=(SpilledCudfVector&&) noexcept;
+
+  SpilledCudfVector(const SpilledCudfVector&) = delete;
+  SpilledCudfVector& operator=(const SpilledCudfVector&) = delete;
+
+  static SpilledCudfVector spill(
+      CudfVectorPtr& resident,
+      memory::MemoryPool* hostPool);
+
+  // Restores through 'mr' without consuming the host copy. The caller may
+  // release this object after restore() returns because H2D has completed.
+  CudfVectorPtr restore(rmm::device_async_resource_ref mr) const;
+
+  uint64_t deviceBytes() const;
+
+  uint64_t hostBytes() const;
+
+ private:
+  struct Impl;
+
+  explicit SpilledCudfVector(std::unique_ptr<Impl> impl);
+
+  std::unique_ptr<Impl> impl_;
+};
+
 // Serve as the opaque base type for strategy-owned leaf state.
 class BufferedState {
  public:
@@ -136,6 +173,22 @@ class BufferedStateOps {
   // Report the approximate flat size of this leaf state in bytes.
   // TODO (dm): This should be part of BufferedState
   virtual uint64_t leafFlatSize(const BufferedState& leaf) const = 0;
+
+  // Return independently reclaimable device bytes for a resident leaf. The
+  // default keeps non-spill-aware strategies out of GPU reclamation.
+  virtual uint64_t leafReclaimableBytes(const BufferedState& /*leaf*/) const {
+    return 0;
+  }
+
+  // Evict a resident leaf to non-device storage. Implementations must not
+  // release the resident state until the replacement is complete.
+  virtual void spillLeaf(BufferedState& /*leaf*/) {
+    VELOX_UNSUPPORTED("Buffered state does not support spilling");
+  }
+
+  // Make a spilled leaf resident before an operation reads or mutates it.
+  // The default is a no-op for strategies that never spill.
+  virtual void restoreLeaf(BufferedState& /*leaf*/) {}
 
   // Partition one prepared chunk according to an internal node's partition
   // spec and return one child chunk per partition. The input remains valid so
@@ -212,7 +265,29 @@ class PartitionedBufferedState {
 
   bool empty() const;
 
+  // Returns device bytes held by independently spillable resident leaves.
+  // A leaf currently being read or mutated is deliberately excluded.
+  uint64_t reclaimableBytes() const;
+
+  // Spills largest resident leaves first until at least 'targetBytes' have
+  // been selected. A zero target spills every eligible resident leaf.
+  // Returns the sum of the leaves' pre-spill device sizes.
+  uint64_t reclaim(uint64_t targetBytes);
+
  private:
+  class ActiveLeafGuard {
+   public:
+    ActiveLeafGuard(PartitionedBufferedState& owner, Node& node);
+    ~ActiveLeafGuard();
+
+    ActiveLeafGuard(const ActiveLeafGuard&) = delete;
+    ActiveLeafGuard& operator=(const ActiveLeafGuard&) = delete;
+
+   private:
+    PartitionedBufferedState& owner_;
+    Node* previous_;
+  };
+
   void insert(Node& node, InputChunk bufferedInput);
 
   void splitLeaf(Node& node);
@@ -229,10 +304,21 @@ class PartitionedBufferedState {
       const InputChunk& input,
       const PartitionSpec& spec);
 
+  void restoreLeaf(Node& node);
+
+  void collectReclaimableLeaves(
+      Node& node,
+      std::vector<std::pair<Node*, uint64_t>>& leaves) const;
+
   std::unique_ptr<BufferedStateOps> ops_;
   const size_t maxRowsPerLeaf_;
   std::unique_ptr<Node> root_;
   uint32_t nextHashSeed_;
+
+  // This is intentionally operator/PBS state, not thread-local state. Velox
+  // task pause guarantees prevent concurrent driver mutation during external
+  // reclaim; reentrant reclaim on the calling thread observes this guard.
+  Node* activeLeaf_{nullptr};
 };
 
 // Owns one active leaf for operators that may flush early instead of

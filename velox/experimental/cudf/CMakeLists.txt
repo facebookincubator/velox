@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+option(
+  VELOX_BUILD_CUDF_JOIN_SPILL_EXPERIMENTS
+  "Build experimental cuDF join spilling implementations and benchmark"
+  OFF)
+
 add_subdirectory(connectors)
 add_subdirectory(exec)
 add_subdirectory(expression)

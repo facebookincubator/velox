@@ -14,10 +14,18 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/PartitionedBufferedState.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
+#include <cudf/column/column.hpp>
+#include <cudf/utilities/error.hpp>
+
+#include <cuda/memory_pool>
+
+#include <algorithm>
 #include <limits>
+#include <utility>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -77,7 +85,363 @@ struct SplitLeafAttempt {
   std::vector<InputChunk> incomingPartitions;
 };
 
+class AccountedPinnedBuffer {
+ public:
+  AccountedPinnedBuffer() = default;
+
+  AccountedPinnedBuffer(size_t bytes, memory::MemoryPool* pool)
+      : pool_(pool), bytes_(bytes) {
+    if (bytes_ == 0) {
+      return;
+    }
+
+    VELOX_CHECK_NOT_NULL(pool_);
+    pool_->reportExternalAllocation(bytes_);
+    try {
+      data_ = resource().allocate_sync(bytes_);
+    } catch (...) {
+      pool_->reportExternalFree(bytes_);
+      pool_ = nullptr;
+      bytes_ = 0;
+      throw;
+    }
+  }
+
+  ~AccountedPinnedBuffer() {
+    reset();
+  }
+
+  AccountedPinnedBuffer(AccountedPinnedBuffer&& other) noexcept
+      : pool_(std::exchange(other.pool_, nullptr)),
+        data_(std::exchange(other.data_, nullptr)),
+        bytes_(std::exchange(other.bytes_, 0)) {}
+
+  AccountedPinnedBuffer& operator=(AccountedPinnedBuffer&& other) noexcept {
+    if (this != &other) {
+      reset();
+      pool_ = std::exchange(other.pool_, nullptr);
+      data_ = std::exchange(other.data_, nullptr);
+      bytes_ = std::exchange(other.bytes_, 0);
+    }
+    return *this;
+  }
+
+  AccountedPinnedBuffer(const AccountedPinnedBuffer&) = delete;
+  AccountedPinnedBuffer& operator=(const AccountedPinnedBuffer&) = delete;
+
+  void* data() {
+    return data_;
+  }
+
+  const void* data() const {
+    return data_;
+  }
+
+  size_t size() const {
+    return bytes_;
+  }
+
+ private:
+  static cuda::pinned_memory_pool_ref& resource() {
+    return cuda::pinned_default_memory_pool();
+  }
+
+  void reset() noexcept {
+    if (data_ == nullptr) {
+      return;
+    }
+    resource().deallocate_sync(data_, bytes_);
+    pool_->reportExternalFree(bytes_);
+    pool_ = nullptr;
+    data_ = nullptr;
+    bytes_ = 0;
+  }
+
+  memory::MemoryPool* pool_{nullptr};
+  void* data_{nullptr};
+  size_t bytes_{0};
+};
+
+struct SpilledColumnStorage;
+
+struct DeviceColumnStorage {
+  explicit DeviceColumnStorage(std::unique_ptr<cudf::column> column)
+      : type(column->type()),
+        size(column->size()),
+        nullCount(column->null_count()) {
+    auto contents = column->release();
+    data = std::move(*contents.data);
+    nullMask = std::move(*contents.null_mask);
+    children.reserve(contents.children.size());
+    for (auto& child : contents.children) {
+      children.emplace_back(std::move(child));
+    }
+  }
+
+  DeviceColumnStorage(
+      const SpilledColumnStorage& host,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
+  cudf::data_type type;
+  cudf::size_type size;
+  cudf::size_type nullCount;
+  rmm::device_buffer data;
+  rmm::device_buffer nullMask;
+  std::vector<DeviceColumnStorage> children;
+
+  uint64_t bytes() const {
+    uint64_t result = data.size() + nullMask.size();
+    for (const auto& child : children) {
+      result += child.bytes();
+    }
+    return result;
+  }
+
+  std::unique_ptr<cudf::column> releaseColumn() && {
+    std::vector<std::unique_ptr<cudf::column>> releasedChildren;
+    releasedChildren.reserve(children.size());
+    for (auto& child : children) {
+      releasedChildren.push_back(std::move(child).releaseColumn());
+    }
+    return std::make_unique<cudf::column>(
+        type,
+        size,
+        std::move(data),
+        std::move(nullMask),
+        nullCount,
+        std::move(releasedChildren));
+  }
+};
+
+struct SpilledColumnStorage {
+  SpilledColumnStorage(
+      const DeviceColumnStorage& device,
+      memory::MemoryPool* hostPool)
+      : type(device.type),
+        size(device.size),
+        nullCount(device.nullCount),
+        data(device.data.size(), hostPool),
+        nullMask(device.nullMask.size(), hostPool) {
+    children.reserve(device.children.size());
+    for (const auto& child : device.children) {
+      children.emplace_back(child, hostPool);
+    }
+  }
+
+  cudf::data_type type;
+  cudf::size_type size;
+  cudf::size_type nullCount;
+  AccountedPinnedBuffer data;
+  AccountedPinnedBuffer nullMask;
+  std::vector<SpilledColumnStorage> children;
+
+  uint64_t bytes() const {
+    uint64_t result = data.size() + nullMask.size();
+    for (const auto& child : children) {
+      result += child.bytes();
+    }
+    return result;
+  }
+
+  void copyFromDevice(
+      const DeviceColumnStorage& device,
+      rmm::cuda_stream_view stream) {
+    VELOX_CHECK_EQ(data.size(), device.data.size());
+    VELOX_CHECK_EQ(nullMask.size(), device.nullMask.size());
+    VELOX_CHECK_EQ(children.size(), device.children.size());
+    if (data.size() != 0) {
+      CUDF_CUDA_TRY(cudaMemcpyAsync(
+          data.data(),
+          device.data.data(),
+          data.size(),
+          cudaMemcpyDeviceToHost,
+          stream.value()));
+    }
+    if (nullMask.size() != 0) {
+      CUDF_CUDA_TRY(cudaMemcpyAsync(
+          nullMask.data(),
+          device.nullMask.data(),
+          nullMask.size(),
+          cudaMemcpyDeviceToHost,
+          stream.value()));
+    }
+    for (size_t i = 0; i < children.size(); ++i) {
+      children[i].copyFromDevice(device.children[i], stream);
+    }
+  }
+};
+
+DeviceColumnStorage::DeviceColumnStorage(
+    const SpilledColumnStorage& host,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr)
+    : type(host.type),
+      size(host.size),
+      nullCount(host.nullCount),
+      data(host.data.size(), stream, mr),
+      nullMask(host.nullMask.size(), stream, mr) {
+  children.reserve(host.children.size());
+  for (const auto& child : host.children) {
+    children.emplace_back(child, stream, mr);
+  }
+}
+
+void copyToDevice(
+    const SpilledColumnStorage& host,
+    DeviceColumnStorage& device,
+    rmm::cuda_stream_view stream) {
+  if (host.data.size() != 0) {
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        device.data.data(),
+        host.data.data(),
+        host.data.size(),
+        cudaMemcpyHostToDevice,
+        stream.value()));
+  }
+  if (host.nullMask.size() != 0) {
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        device.nullMask.data(),
+        host.nullMask.data(),
+        host.nullMask.size(),
+        cudaMemcpyHostToDevice,
+        stream.value()));
+  }
+  VELOX_CHECK_EQ(host.children.size(), device.children.size());
+  for (size_t i = 0; i < host.children.size(); ++i) {
+    copyToDevice(host.children[i], device.children[i], stream);
+  }
+}
+
 } // namespace
+
+struct SpilledCudfVector::Impl {
+  memory::MemoryPool* vectorPool;
+  TypePtr type;
+  vector_size_t numRows;
+  rmm::cuda_stream_view stream;
+  uint64_t deviceBytes;
+  std::vector<SpilledColumnStorage> columns;
+};
+
+SpilledCudfVector::SpilledCudfVector(std::unique_ptr<Impl> impl)
+    : impl_(std::move(impl)) {
+  VELOX_CHECK_NOT_NULL(impl_);
+}
+
+SpilledCudfVector::~SpilledCudfVector() = default;
+
+SpilledCudfVector::SpilledCudfVector(SpilledCudfVector&&) noexcept = default;
+
+SpilledCudfVector& SpilledCudfVector::operator=(SpilledCudfVector&&) noexcept =
+    default;
+
+SpilledCudfVector SpilledCudfVector::spill(
+    CudfVectorPtr& resident,
+    memory::MemoryPool* hostPool) {
+  VELOX_CHECK_NOT_NULL(resident);
+  VELOX_CHECK_NOT_NULL(hostPool);
+  VELOX_CHECK_EQ(
+      resident.use_count(),
+      1,
+      "Only an independently owned CudfVector can be spilled");
+
+  const auto vectorPool = resident->pool();
+  const auto type = resident->type();
+  const auto numRows = resident->size();
+  const auto stream = resident->stream();
+  VELOX_CHECK(
+      resident->rebindStream(stream),
+      "Spilling requires an independently owned cudf::table");
+
+  auto table = resident->release();
+  resident.reset();
+  auto releasedColumns = table->release();
+  std::vector<DeviceColumnStorage> deviceColumns;
+  deviceColumns.reserve(releasedColumns.size());
+  for (auto& column : releasedColumns) {
+    deviceColumns.emplace_back(std::move(column));
+  }
+
+  auto restoreResident = [&]() {
+    std::vector<std::unique_ptr<cudf::column>> columns;
+    columns.reserve(deviceColumns.size());
+    for (auto& column : deviceColumns) {
+      columns.push_back(std::move(column).releaseColumn());
+    }
+    auto restoredTable = std::make_unique<cudf::table>(std::move(columns));
+    resident = std::make_shared<CudfVector>(
+        vectorPool, type, numRows, std::move(restoredTable), stream);
+  };
+
+  auto impl =
+      std::make_unique<Impl>(Impl{vectorPool, type, numRows, stream, 0, {}});
+  try {
+    impl->columns.reserve(deviceColumns.size());
+    for (const auto& column : deviceColumns) {
+      impl->columns.emplace_back(column, hostPool);
+      impl->deviceBytes += column.bytes();
+    }
+    for (size_t i = 0; i < impl->columns.size(); ++i) {
+      impl->columns[i].copyFromDevice(deviceColumns[i], stream);
+    }
+    stream.synchronize();
+
+    deviceColumns.clear();
+    stream.synchronize();
+    return SpilledCudfVector(std::move(impl));
+  } catch (...) {
+    // D2H may have been queued before a CUDA failure. Keep any pinned
+    // destinations alive until the stream is no longer using them.
+    try {
+      stream.synchronize();
+    } catch (...) {
+    }
+    restoreResident();
+    throw;
+  }
+}
+
+CudfVectorPtr SpilledCudfVector::restore(
+    rmm::device_async_resource_ref mr) const {
+  VELOX_CHECK_NOT_NULL(impl_);
+  std::vector<DeviceColumnStorage> deviceColumns;
+  deviceColumns.reserve(impl_->columns.size());
+  for (const auto& column : impl_->columns) {
+    deviceColumns.emplace_back(column, impl_->stream, mr);
+  }
+  for (size_t i = 0; i < impl_->columns.size(); ++i) {
+    copyToDevice(impl_->columns[i], deviceColumns[i], impl_->stream);
+  }
+  impl_->stream.synchronize();
+
+  std::vector<std::unique_ptr<cudf::column>> columns;
+  columns.reserve(deviceColumns.size());
+  for (auto& column : deviceColumns) {
+    columns.push_back(std::move(column).releaseColumn());
+  }
+  auto table = std::make_unique<cudf::table>(std::move(columns));
+  return std::make_shared<CudfVector>(
+      impl_->vectorPool,
+      impl_->type,
+      impl_->numRows,
+      std::move(table),
+      impl_->stream);
+}
+
+uint64_t SpilledCudfVector::deviceBytes() const {
+  VELOX_CHECK_NOT_NULL(impl_);
+  return impl_->deviceBytes;
+}
+
+uint64_t SpilledCudfVector::hostBytes() const {
+  VELOX_CHECK_NOT_NULL(impl_);
+  uint64_t bytes = 0;
+  for (const auto& column : impl_->columns) {
+    bytes += column.bytes();
+  }
+  return bytes;
+}
 
 bool InputChunk::ownsFullTable() const {
   if (storage != InputChunkStorage::kOwned || owner == nullptr ||
@@ -150,6 +514,17 @@ PartitionedBufferedState::PartitionedBufferedState(
   VELOX_CHECK_GT(maxRowsPerLeaf_, 0);
 }
 
+PartitionedBufferedState::ActiveLeafGuard::ActiveLeafGuard(
+    PartitionedBufferedState& owner,
+    Node& node)
+    : owner_(owner), previous_(owner.activeLeaf_) {
+  owner_.activeLeaf_ = &node;
+}
+
+PartitionedBufferedState::ActiveLeafGuard::~ActiveLeafGuard() {
+  owner_.activeLeaf_ = previous_;
+}
+
 void PartitionedBufferedState::addInput(CudfVectorPtr rawInput) {
   if (!rawInput || rawInput->size() == 0) {
     return;
@@ -169,6 +544,61 @@ CudfVectorPtr PartitionedBufferedState::drainNextOutput() {
 
 bool PartitionedBufferedState::empty() const {
   return nodeEmpty(*root_);
+}
+
+uint64_t PartitionedBufferedState::reclaimableBytes() const {
+  std::vector<std::pair<Node*, uint64_t>> leaves;
+  collectReclaimableLeaves(*root_, leaves);
+  uint64_t bytes = 0;
+  for (const auto& [node, leafBytes] : leaves) {
+    if (std::numeric_limits<uint64_t>::max() - bytes < leafBytes) {
+      return std::numeric_limits<uint64_t>::max();
+    }
+    bytes += leafBytes;
+  }
+  return bytes;
+}
+
+uint64_t PartitionedBufferedState::reclaim(uint64_t targetBytes) {
+  std::vector<std::pair<Node*, uint64_t>> leaves;
+  collectReclaimableLeaves(*root_, leaves);
+  std::sort(
+      leaves.begin(), leaves.end(), [](const auto& left, const auto& right) {
+        return left.second > right.second;
+      });
+
+  uint64_t reclaimedBytes = 0;
+  for (const auto& [node, leafBytes] : leaves) {
+    if (targetBytes != 0 && reclaimedBytes >= targetBytes) {
+      break;
+    }
+    VELOX_CHECK_NOT_NULL(node->leafState);
+    ops_->spillLeaf(*node->leafState);
+    VELOX_CHECK_EQ(
+        ops_->leafReclaimableBytes(*node->leafState),
+        0,
+        "A spilled PBS leaf must not retain reclaimable device bytes");
+    reclaimedBytes += leafBytes;
+  }
+  return reclaimedBytes;
+}
+
+void PartitionedBufferedState::collectReclaimableLeaves(
+    Node& node,
+    std::vector<std::pair<Node*, uint64_t>>& leaves) const {
+  if (!node.isLeaf()) {
+    for (auto& child : node.children) {
+      collectReclaimableLeaves(*child, leaves);
+    }
+    return;
+  }
+
+  if (node.leafState && &node != activeLeaf_) {
+    const auto bytes = ops_->leafReclaimableBytes(*node.leafState);
+    if (bytes != 0) {
+      leaves.emplace_back(&node, bytes);
+    }
+  }
 }
 
 void PartitionedBufferedState::insert(Node& node, InputChunk bufferedInput) {
@@ -199,6 +629,8 @@ void PartitionedBufferedState::insert(Node& node, InputChunk bufferedInput) {
     return;
   }
 
+  ActiveLeafGuard activeLeaf(*this, node);
+  restoreLeaf(node);
   // If node is a leaf and not empty, check if the input can be added to the
   // leaf. If not, split the leaf and insert the input into the new subtree.
   const auto projectedRows =
@@ -222,6 +654,8 @@ void PartitionedBufferedState::splitLeafAndAddInput(
     InputChunk bufferedInput) {
   VELOX_CHECK(node.isLeaf());
   VELOX_CHECK(node.leafState || !bufferedInput.empty());
+  ActiveLeafGuard activeLeaf(*this, node);
+  restoreLeaf(node);
 
   const auto totalRows = node.leafRows + bufferedInput.size();
   auto splitAttempt = [&]() {
@@ -304,8 +738,11 @@ CudfVectorPtr PartitionedBufferedState::drainNextOutput(Node& node) {
     return nullptr;
   }
 
+  ActiveLeafGuard activeLeaf(*this, node);
+  restoreLeaf(node);
   node.leafRows = 0;
-  return ops_->finalizeLeaf(std::move(node.leafState));
+  auto leaf = std::move(node.leafState);
+  return ops_->finalizeLeaf(std::move(leaf));
 }
 
 PartitionSpec PartitionedBufferedState::makePartitionSpec(size_t totalRows) {
@@ -335,6 +772,12 @@ std::vector<InputChunk> PartitionedBufferedState::partitionInput(
     const PartitionSpec& spec) {
   return input.empty() ? std::vector<InputChunk>(spec.numPartitions)
                        : ops_->partitionInput(input, spec);
+}
+
+void PartitionedBufferedState::restoreLeaf(Node& node) {
+  if (node.leafState) {
+    ops_->restoreLeaf(*node.leafState);
+  }
 }
 
 FlushableBufferedState::FlushableBufferedState(

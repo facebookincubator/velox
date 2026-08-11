@@ -49,6 +49,15 @@ add_library(
   VeloxCudfInterop.cpp
 )
 
+if(VELOX_BUILD_CUDF_JOIN_SPILL_EXPERIMENTS)
+  target_sources(
+    velox_cudf_exec
+    PRIVATE
+      CudfPartitionedHashJoin.cpp
+      CudfPartitionedProbeSpillHashJoin.cpp
+      CudfPiecewiseSpillHashJoin.cpp)
+endif()
+
 target_link_libraries(
   velox_cudf_exec
   PUBLIC cudf::cudf nvtx3::nvtx3-cpp

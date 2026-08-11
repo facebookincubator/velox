@@ -148,7 +148,23 @@ std::shared_ptr<memory::CustomMemoryResource> createCudfCustomMemoryResource(
           {std::string(
                memory::SharedArbitrator::ExtraConfig::
                    kGlobalArbitrationEnabled),
-           "false"}}};
+           "true"},
+          {std::string(
+               memory::SharedArbitrator::ExtraConfig::
+                   kMemoryPoolMinReclaimBytes),
+           "1MB"},
+          {std::string(
+               memory::SharedArbitrator::ExtraConfig::
+                   kMemoryPoolMinReclaimPct),
+           "0"},
+          {std::string(
+               memory::SharedArbitrator::ExtraConfig::
+                   kMemoryPoolMinFreeCapacity),
+           "0B"},
+          {std::string(
+               memory::SharedArbitrator::ExtraConfig::
+                   kMemoryPoolMinFreeCapacityPct),
+           "0"}}};
   auto arbitrator =
       std::make_shared<memory::SharedArbitrator>(arbitratorConfig);
 

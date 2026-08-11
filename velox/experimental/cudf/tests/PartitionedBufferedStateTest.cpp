@@ -44,13 +44,20 @@ struct IdentityBufferedStateOpsStats {
   size_t createLeafCallsAfterPartition{0};
   size_t createLeafFromInputsCalls{0};
   size_t addInputCallsAfterPartition{0};
+  std::vector<size_t> spilledLeafRows;
+  std::vector<size_t> restoredLeafRows;
+  std::vector<const BufferedState*> spilledLeaves;
+  const BufferedState* activeLeafDuringCallback{nullptr};
+  uint64_t pinnedHostBytes{0};
 };
 
 struct TableLeafState final : public BufferedState {
   TableLeafState(
       InputChunk chunk,
       std::shared_ptr<IdentityBufferedStateOpsStats> stats)
-      : chunk(std::move(chunk)), stats(std::move(stats)) {}
+      : rowCount(chunk.size()),
+        chunk(std::move(chunk)),
+        stats(std::move(stats)) {}
 
   ~TableLeafState() override {
     if (stats && stats->firstPartitionedLeaf == this) {
@@ -58,7 +65,13 @@ struct TableLeafState final : public BufferedState {
     }
   }
 
+  bool isResident() const {
+    return chunk.owner != nullptr;
+  }
+
+  size_t rowCount;
   InputChunk chunk;
+  std::optional<SpilledCudfVector> spilled;
   std::shared_ptr<IdentityBufferedStateOpsStats> stats;
 };
 
@@ -80,7 +93,7 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   size_t estimatedMergedRowUpperBound(
       const BufferedState& leaf,
       const InputChunk& input) const override {
-    return asLeaf(leaf).chunk.size() + input.size();
+    return asLeaf(leaf).rowCount + input.size();
   }
 
   std::unique_ptr<BufferedState> createLeaf(InputChunk input) override {
@@ -101,20 +114,67 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   }
 
   void addInputToLeaf(BufferedState& leaf, InputChunk input) override {
+    if (leafOperationCallback_) {
+      leafOperationCallback_(leaf);
+    }
     if (stats_ && stats_->oldLeafDestroyed) {
       ++stats_->addInputCallsAfterPartition;
     }
     auto& tableLeaf = asLeaf(leaf);
     tableLeaf.chunk = mergeChunks(std::move(tableLeaf.chunk), std::move(input));
+    tableLeaf.rowCount = tableLeaf.chunk.size();
   }
 
   size_t leafRowCount(const BufferedState& leaf) const override {
-    return asLeaf(leaf).chunk.size();
+    return asLeaf(leaf).rowCount;
   }
 
   uint64_t leafFlatSize(const BufferedState& leaf) const override {
     const auto& chunk = asLeaf(leaf).chunk;
     return chunk.owner ? chunk.owner->estimateFlatSize() : 0;
+  }
+
+  uint64_t leafReclaimableBytes(const BufferedState& leaf) const override {
+    const auto& tableLeaf = asLeaf(leaf);
+    // Row count is a deterministic stand-in for bytes in PBS policy tests.
+    return spillingEnabled_ && tableLeaf.isResident() ? tableLeaf.rowCount : 0;
+  }
+
+  void spillLeaf(BufferedState& leaf) override {
+    auto& tableLeaf = asLeaf(leaf);
+    VELOX_CHECK(spillingEnabled_);
+    VELOX_CHECK(tableLeaf.isResident());
+    VELOX_CHECK(!tableLeaf.spilled.has_value());
+    try {
+      auto spilled = SpilledCudfVector::spill(tableLeaf.chunk.owner, pool_);
+      tableLeaf.chunk = InputChunk{};
+      tableLeaf.spilled.emplace(std::move(spilled));
+    } catch (...) {
+      if (tableLeaf.chunk.owner) {
+        tableLeaf.chunk.view = tableLeaf.chunk.owner->getTableView();
+        tableLeaf.chunk.stream = tableLeaf.chunk.owner->stream();
+      }
+      throw;
+    }
+    if (stats_) {
+      stats_->spilledLeafRows.push_back(tableLeaf.rowCount);
+      stats_->spilledLeaves.push_back(&leaf);
+      stats_->pinnedHostBytes += tableLeaf.spilled->hostBytes();
+    }
+  }
+
+  void restoreLeaf(BufferedState& leaf) override {
+    auto& tableLeaf = asLeaf(leaf);
+    if (tableLeaf.isResident()) {
+      return;
+    }
+    VELOX_CHECK(tableLeaf.spilled.has_value());
+    auto restored = tableLeaf.spilled->restore(get_output_mr());
+    tableLeaf.chunk = makeOwnedChunk(std::move(restored));
+    tableLeaf.spilled.reset();
+    if (stats_) {
+      stats_->restoredLeafRows.push_back(tableLeaf.rowCount);
+    }
   }
 
   std::vector<InputChunk> partitionInput(
@@ -171,6 +231,15 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
     partitionFn_ = std::move(partitionFn);
   }
 
+  void enableSpilling() {
+    spillingEnabled_ = true;
+  }
+
+  void setLeafOperationCallback(
+      std::function<void(const BufferedState&)> callback) {
+    leafOperationCallback_ = std::move(callback);
+  }
+
  private:
   memory::MemoryPool* pool_;
   RowTypePtr rowType_;
@@ -180,6 +249,9 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   std::function<std::vector<int64_t>(const InputChunk&)> extractKeys_;
   std::function<InputChunk(const std::vector<int64_t>&)> makeChunk_;
   std::function<int32_t(int64_t, uint32_t, int32_t)> partitionFn_;
+  std::function<void(const BufferedState&)> leafOperationCallback_;
+
+  bool spillingEnabled_{false};
 
   TableLeafState& asLeaf(BufferedState& leaf) const {
     return static_cast<TableLeafState&>(leaf);
@@ -249,14 +321,18 @@ class PartitionedBufferedStateTest : public ::testing::Test,
     unregisterCudf();
   }
 
-  CudfVectorPtr makeCudfVector(const std::vector<int64_t>& keys) {
-    auto row = makeRowVector({"c0"}, {makeFlatVector<int64_t>(keys)});
+  CudfVectorPtr makeCudfVectorFromRow(RowVectorPtr row) {
     auto stream = cudfGlobalStreamPool().get_stream();
     auto table =
         with_arrow::toCudfTable(row, pool_.get(), stream, get_output_mr());
     stream.synchronize();
     return std::make_shared<CudfVector>(
-        pool_.get(), rowType_, row->size(), std::move(table), stream);
+        pool_.get(), row->type(), row->size(), std::move(table), stream);
+  }
+
+  CudfVectorPtr makeCudfVector(const std::vector<int64_t>& keys) {
+    return makeCudfVectorFromRow(
+        makeRowVector({"c0"}, {makeFlatVector<int64_t>(keys)}));
   }
 
   InputChunk makeChunk(const std::vector<int64_t>& keys) {
@@ -381,6 +457,94 @@ TEST_F(
   EXPECT_EQ(trackingPool->usedBytes(), 0);
 }
 
+TEST_F(PartitionedBufferedStateTest, spilledCudfVectorTracksAndRestoresBytes) {
+  ASSERT_TRUE(output_mr_.has_value());
+  auto gpuRoot = memory::memoryManager()->addRootPool();
+  auto gpuPool = gpuRoot->addLeafChild("spilledCudfVectorGpu");
+  CudfMemoryResource reportingResource{*output_mr_, gpuPool};
+  auto reportingRef = rmm::device_async_resource_ref{reportingResource};
+  ScopedCudfMemoryResources scopedResources{reportingRef, reportingRef};
+
+  auto hostRoot = memory::memoryManager()->addRootPool();
+  auto hostPool = hostRoot->addLeafChild("spilledCudfVectorHost");
+  auto resident = makeCudfVector({1, 2, 3, 4});
+  auto stream = resident->stream();
+  const auto residentBytes = resident->estimateFlatSize();
+  ASSERT_GT(residentBytes, 0);
+  ASSERT_EQ(gpuPool->usedBytes(), residentBytes);
+  ASSERT_EQ(hostPool->usedBytes(), 0);
+
+  CudfVectorPtr restored;
+  {
+    auto spilled = SpilledCudfVector::spill(resident, hostPool.get());
+    EXPECT_EQ(resident, nullptr);
+    EXPECT_EQ(spilled.deviceBytes(), residentBytes);
+    EXPECT_EQ(spilled.hostBytes(), residentBytes);
+    EXPECT_EQ(gpuPool->usedBytes(), 0);
+    EXPECT_EQ(hostPool->usedBytes(), residentBytes);
+
+    restored = spilled.restore(reportingRef);
+    EXPECT_EQ(gpuPool->usedBytes(), residentBytes);
+    EXPECT_EQ(hostPool->usedBytes(), residentBytes);
+    EXPECT_EQ(toKeys(restored), (std::vector<int64_t>{1, 2, 3, 4}));
+  }
+
+  EXPECT_EQ(hostPool->usedBytes(), 0);
+  EXPECT_EQ(gpuPool->usedBytes(), residentBytes);
+  restored.reset();
+  stream.synchronize();
+  EXPECT_EQ(gpuPool->usedBytes(), 0);
+}
+
+TEST_F(
+    PartitionedBufferedStateTest,
+    spilledCudfVectorPreservesStringsAndNulls) {
+  ASSERT_TRUE(output_mr_.has_value());
+  auto gpuRoot = memory::memoryManager()->addRootPool();
+  auto gpuPool = gpuRoot->addLeafChild("spilledStringsGpu");
+  CudfMemoryResource reportingResource{*output_mr_, gpuPool};
+  auto reportingRef = rmm::device_async_resource_ref{reportingResource};
+  ScopedCudfMemoryResources scopedResources{reportingRef, reportingRef};
+
+  auto hostRoot = memory::memoryManager()->addRootPool();
+  auto hostPool = hostRoot->addLeafChild("spilledStringsHost");
+  auto expected = makeRowVector(
+      {"c0", "c1"},
+      {makeNullableFlatVector<int64_t>({1, std::nullopt, 3, 4}),
+       makeNullableFlatVector<std::string>(
+           {"one", "a longer value", std::nullopt, ""})});
+  auto resident = makeCudfVectorFromRow(expected);
+  auto stream = resident->stream();
+  const auto residentBytes = resident->estimateFlatSize();
+  ASSERT_GT(residentBytes, 0);
+  ASSERT_EQ(gpuPool->usedBytes(), residentBytes);
+
+  CudfVectorPtr restored;
+  {
+    auto spilled = SpilledCudfVector::spill(resident, hostPool.get());
+    EXPECT_EQ(spilled.deviceBytes(), residentBytes);
+    EXPECT_EQ(spilled.hostBytes(), residentBytes);
+    EXPECT_EQ(gpuPool->usedBytes(), 0);
+    EXPECT_EQ(hostPool->usedBytes(), residentBytes);
+    restored = spilled.restore(reportingRef);
+  }
+
+  EXPECT_EQ(hostPool->usedBytes(), 0);
+  ASSERT_NE(restored, nullptr);
+  auto actual = with_arrow::toVeloxColumn(
+      restored->getTableView(),
+      pool_.get(),
+      expected->type(),
+      restored->stream(),
+      reportingRef);
+  restored->stream().synchronize();
+  assertEqualVectors(expected, actual);
+
+  restored.reset();
+  stream.synchronize();
+  EXPECT_EQ(gpuPool->usedBytes(), 0);
+}
+
 TEST_F(PartitionedBufferedStateTest, mergesLeafDirectlyBelowCap) {
   auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
   ops->setPartitioning(
@@ -415,6 +579,73 @@ TEST_F(PartitionedBufferedStateTest, topLevelSplitKeepsRoutingStable) {
   EXPECT_EQ(
       drainAll(state),
       (std::vector<std::vector<int64_t>>{{0, 2, 4}, {1, 3, 5}}));
+  EXPECT_TRUE(state.empty());
+}
+
+TEST_F(
+    PartitionedBufferedStateTest,
+    reclaimsLargestLeavesFirstAndRestoresOnDrain) {
+  auto stats = std::make_shared<IdentityBufferedStateOpsStats>();
+  auto ops =
+      std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_, stats);
+  ops->enableSpilling();
+  ops->setPartitioning(
+      [&](const InputChunk& input) { return toKeys(input); },
+      [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
+      [](int64_t key, uint32_t /* seed */, int32_t numPartitions) {
+        return static_cast<int32_t>(key % numPartitions);
+      });
+  PartitionedBufferedState state(std::move(ops), 10, 0);
+
+  state.addInput(makeCudfVector({0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5}));
+  EXPECT_EQ(state.reclaimableBytes(), 11);
+
+  EXPECT_EQ(state.reclaim(1), 8);
+  ASSERT_EQ(stats->spilledLeafRows.size(), 1);
+  EXPECT_EQ(stats->spilledLeafRows[0], 8);
+  EXPECT_GT(stats->pinnedHostBytes, 0);
+  EXPECT_EQ(state.reclaimableBytes(), 3);
+
+  EXPECT_EQ(state.reclaim(0), 3);
+  EXPECT_EQ(stats->spilledLeafRows, (std::vector<size_t>{8, 3}));
+  EXPECT_EQ(state.reclaimableBytes(), 0);
+
+  EXPECT_EQ(
+      drainAll(state),
+      (std::vector<std::vector<int64_t>>{
+          {0, 2, 4, 6, 8, 10, 12, 14}, {1, 3, 5}}));
+  EXPECT_EQ(stats->restoredLeafRows, (std::vector<size_t>{8, 3}));
+  EXPECT_TRUE(state.empty());
+}
+
+TEST_F(PartitionedBufferedStateTest, reentrantReclaimExcludesTheActiveLeaf) {
+  auto stats = std::make_shared<IdentityBufferedStateOpsStats>();
+  auto ops =
+      std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_, stats);
+  auto* opsPtr = ops.get();
+  ops->enableSpilling();
+  ops->setPartitioning(
+      [&](const InputChunk& input) { return toKeys(input); },
+      [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
+      [](int64_t key, uint32_t /* seed */, int32_t numPartitions) {
+        return static_cast<int32_t>(key % numPartitions);
+      });
+  PartitionedBufferedState state(std::move(ops), 3, 0);
+  state.addInput(makeCudfVector({0, 1, 2, 3}));
+  ASSERT_EQ(state.reclaimableBytes(), 4);
+
+  opsPtr->setLeafOperationCallback([&](const BufferedState& activeLeaf) {
+    stats->activeLeafDuringCallback = &activeLeaf;
+    EXPECT_EQ(state.reclaimableBytes(), 2);
+    EXPECT_EQ(state.reclaim(0), 2);
+  });
+  state.addInput(makeCudfVector({4}));
+
+  ASSERT_EQ(stats->spilledLeaves.size(), 1);
+  EXPECT_NE(stats->spilledLeaves[0], stats->activeLeafDuringCallback);
+  EXPECT_EQ(state.reclaimableBytes(), 3);
+  EXPECT_EQ(
+      drainAll(state), (std::vector<std::vector<int64_t>>{{0, 2, 4}, {1, 3}}));
   EXPECT_TRUE(state.empty());
 }
 

@@ -119,7 +119,8 @@ class CudfOperatorBase::GpuMemoryReclaimer final
         driver->task()->pauseRequested(),
         "GPU memory reclaim requires the owning task to be paused");
 
-    if (op_->nonReclaimableSection_) {
+    if (op_->nonReclaimableSection_ &&
+        !op_->canReclaimGpuWhileNonReclaimable()) {
       ++stats.numNonReclaimableAttempts;
       return 0;
     }

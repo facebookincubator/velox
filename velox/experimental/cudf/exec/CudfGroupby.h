@@ -75,6 +75,18 @@ bool canGroupbyAggregationBeEvaluatedByCudf(
 
 class CudfGroupby : public CudfOperatorBase {
  public:
+  static constexpr std::string_view kSpilledBytes{
+      "cudfGroupbySpilledBytes"};
+  static constexpr std::string_view kSpilledRows{"cudfGroupbySpilledRows"};
+  static constexpr std::string_view kSpilledLeaves{
+      "cudfGroupbySpilledLeaves"};
+  static constexpr std::string_view kRestoredBytes{
+      "cudfGroupbyRestoredBytes"};
+  static constexpr std::string_view kRestoredRows{
+      "cudfGroupbyRestoredRows"};
+  static constexpr std::string_view kRestoredLeaves{
+      "cudfGroupbyRestoredLeaves"};
+
   CudfGroupby(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
@@ -94,6 +106,15 @@ class CudfGroupby : public CudfOperatorBase {
   RowVectorPtr doGetOutput() override;
 
   void doNoMoreInput() override;
+
+  bool gpuReclaimableBytes(uint64_t& reclaimableBytes) const override;
+
+  bool canReclaimGpuWhileNonReclaimable() const override {
+    return partitionedBufferedState_ != nullptr;
+  }
+
+  void reclaimGpu(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
+      override;
 
  private:
   friend class GroupbyBufferedStateOps;

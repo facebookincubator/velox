@@ -26,8 +26,8 @@ namespace facebook::velox::cudf_velox {
 inline constexpr std::string_view kCudfMemoryResourceTag{"gpu"};
 
 /// Creates the process GPU resource used to arbitrate capacity among query GPU
-/// roots. Used-memory reclaim is disabled; exhaustion transfers unused
-/// capacity between roots or fails the requesting allocation.
+/// roots. The SharedArbitrator first transfers unused capacity and then asks
+/// reclaimable query roots to spill used device memory.
 std::shared_ptr<memory::CustomMemoryResource> createCudfCustomMemoryResource(
     int64_t capacity);
 

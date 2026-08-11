@@ -203,6 +203,13 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
     return false;
   }
 
+  /// Returns whether reclaimGpu() can safely reclaim a disjoint subset of
+  /// this operator's GPU state while the current operator call is inside
+  /// Velox's non-reclaimable section. Operators must opt in explicitly.
+  virtual bool canReclaimGpuWhileNonReclaimable() const {
+    return false;
+  }
+
   /// Reclaims device memory owned by this operator. Implementations are
   /// invoked only after the owning task has been paused. The cuDF memory
   /// resources are scoped around the callback by the GPU pool reclaimer.
