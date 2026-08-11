@@ -18,7 +18,7 @@
 
 #include "velox/dwio/common/RowRanges.h"
 #include "velox/dwio/common/Statistics.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/type/Type.h"
 
 #include <folly/container/F14Map.h>

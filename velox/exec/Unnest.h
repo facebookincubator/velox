@@ -66,8 +66,8 @@ class Unnest : public Operator {
   //-----------------|----- end - 1
   //                 lastRowEnd
   // The size is end - start, the range is [start, end).
-  struct RowRange {
-    // Invokes a function on each row represented by the RowRange.
+  struct InclusiveRowRange {
+    // Invokes a function on each row represented by the InclusiveRowRange.
     // @param func The function to call for each row. 'row' is the current row
     // number in the '[start, start + size)' range, 'start' is the row number to
     // start processing, and 'size' is the number of rows to process..
@@ -105,16 +105,16 @@ class Unnest : public Operator {
 
   // Extract the range of rows to process.
   // @param size The size of input RowVector.
-  RowRange extractRowRange(vector_size_t inputSize) const;
+  InclusiveRowRange extractRowRange(vector_size_t inputSize) const;
 
   // Generate output for 'rowRange' represented rows.
   // @param rowRange Range of rows to process.
-  RowVectorPtr generateOutput(const RowRange& rowRange);
+  RowVectorPtr generateOutput(const InclusiveRowRange& rowRange);
 
   // Invoked by generateOutput function above to generate the repeated output
   // columns.
   void generateRepeatedColumns(
-      const RowRange& rowRange,
+      const InclusiveRowRange& rowRange,
       std::vector<VectorPtr>& outputs);
 
   struct UnnestChannelEncoding {
@@ -129,13 +129,13 @@ class Unnest : public Operator {
   // Array or Map.
   const UnnestChannelEncoding generateEncodingForChannel(
       column_index_t channel,
-      const RowRange& rowRange);
+      const InclusiveRowRange& rowRange);
 
   // Invoked by generateOutput for the ordinality column.
-  VectorPtr generateOrdinalityVector(const RowRange& rowRange);
+  VectorPtr generateOrdinalityVector(const InclusiveRowRange& rowRange);
 
   // Invoked by generateOutput for the marker column.
-  VectorPtr generateMarkerVector(const RowRange& rowRange);
+  VectorPtr generateMarkerVector(const InclusiveRowRange& rowRange);
 
   // Invoked when finish one input batch processing to reset the internal
   // execution state for the next batch.

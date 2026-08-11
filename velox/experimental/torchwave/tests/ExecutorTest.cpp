@@ -203,6 +203,33 @@ TEST_F(ExecutorTest, inPlaceTest) {
   runTest("data/in_place_test.pt2", "data/in_place_test_results.pt");
 }
 
+// The same graph with the reuse passes on, which is what reaches the
+// pre-partition clone elision in elideReadOnlyClones. Nothing else runs that
+// pass -- enableReuse is off by default -- so without this the whole-graph
+// clone work is untested.
+//
+// This graph is the adversarial case for the clone CSE step: 'd' and 'e' are
+// both a.clone() with the same (absent) memory_format, so they collide on the
+// CSE key, yet they are distinct snapshots -- 'a' is mutated by va.add_(b)
+// between them -- and both are returned. Merging them is wrong twice over: the
+// values differ (d == a0+3, e == a0+3+b), and redirecting a clone that feeds a
+// graph output leaves that output unproduced, because replaceAllUses rewires
+// users and the output node is not one of them.
+TEST_F(ExecutorTest, inPlaceCloneElisionTest) {
+  const bool savedReuse = WaveConfig::get().enableReuse;
+  const bool savedElide = WaveConfig::get().elideClones;
+  WaveConfig::get().enableReuse = true;
+  WaveConfig::get().elideClones = true;
+  SCOPE_EXIT {
+    WaveConfig::get().enableReuse = savedReuse;
+    WaveConfig::get().elideClones = savedElide;
+  };
+
+  // Merging the two collapses output 4 ('e') to a non-tensor, because the
+  // value its output slot names is left with a dead producer.
+  runTest("data/in_place_test.pt2", "data/in_place_test_results.pt");
+}
+
 // slice_scatter on 2-D tensors along dim 0 and dim 1 with a runtime (symint)
 // start, step > 1, lowered to a clone + fused in-place tw.slice_scatter_.
 TEST_F(ExecutorTest, scatterTest) {
@@ -241,10 +268,286 @@ TEST_F(ExecutorTest, scatterTest) {
   }
 }
 
+// An integer gather g=base[gather_idx] (tw.index_elt_one) reused as an index in
+// two places, so it materializes in an earlier ProjectNode and both later uses
+// import it through a prim.ListPack. One use is a tw.index_put_elt_one fused
+// with a downstream elementwise, whose self clone and ListPack index element
+// come from earlier kernels. Regresses the elementwise leaf-collection gap
+// where such a cross-kernel value was dropped from the ElementExpr inputs (the
+// fused index_put self or ListPack index reached codegen with no param slot).
+TEST_F(ExecutorTest, indexListpackReuseTest) {
+  runTest(
+      "data/index_listpack_reuse_test.pt2",
+      "data/index_listpack_reuse_test_results.pt");
+}
+
+// Number of aten.clone.default nodes that still have a live user after the
+// optimizer has run on 'pt2File'. Clone-elision proof for the fused in-place
+// scatter tests: each builds a fresh executor because runTest consumes its own
+// fixture, and counts the clones the pass did not drop.
+int countLiveClonesAfterOpt(const std::string& pt2Path) {
+  auto fixture = ModelFixture::load(pt2Path);
+  EXPECT_NE(fixture, nullptr);
+  if (fixture == nullptr) {
+    return -1;
+  }
+  WaveGraphExecutor exec(fixture->makeModelContext());
+  int liveClones = 0;
+  for (const auto& node : exec.graph().nodes()) {
+    if (node.target() != "torch.ops.aten.clone.default") {
+      continue;
+    }
+    for (const auto* out : node.outputs()) {
+      if (out != nullptr && !out->users().empty()) {
+        ++liveClones;
+        break;
+      }
+    }
+  }
+  return liveClones;
+}
+
+// select_scatter as a fused in-place elementwise op along dim 0 and dim 1,
+// covering the in-place and copy scenarios. The aten.select_scatter rewrite
+// inserts clone(self) + the in-place tw.select_scatter; clone-elision (under
+// enableReuse) drops the clone when self is a dead intermediate. out0's base
+// (a0+a1) is dead, so its clone is elided and the write lands in base0's buffer
+// in place; out1's base (b0+b1) is also a graph output, so its clone is kept (a
+// defensive copy) and base1 is preserved. Verifies correctness for both dims
+// and asserts exactly one clone was elided (out0 in place, out1 copy).
+TEST_F(ExecutorTest, selectScatterTest) {
+  const bool savedReuse = WaveConfig::get().enableReuse;
+  WaveConfig::get().enableReuse = true;
+  SCOPE_EXIT {
+    WaveConfig::get().enableReuse = savedReuse;
+  };
+
+  // Correctness for both dims: out0 (in-place over the dead intermediate base0)
+  // and out1 (copy: base1 stays live as a graph output) must match eager, and
+  // the returned base1 must be preserved.
+  runTest(
+      "data/select_scatter_test.pt2", "data/select_scatter_test_results.pt");
+
+  // In-place proof: after optimization exactly one aten.clone survives --
+  // out1's defensive copy, kept because base1 is a graph output. out0's clone
+  // is elided because base0 is a dead intermediate, so its select_scatter
+  // writes base0 in place. Build a fresh executor to inspect its optimized
+  // graph (runTest consumed its own fixture).
+  int liveClones = countLiveClonesAfterOpt(
+      getDataFilePath(dataDir(), "data/select_scatter_test.pt2"));
+  EXPECT_EQ(liveClones, 1)
+      << "expected one surviving clone (out1 copy); out0's clone should be "
+         "elided so its select_scatter writes base0 in place";
+}
+
+// slice_scatter as a fused in-place elementwise op with an INTERMEDIATE base,
+// covering the in-place and copy scenarios (scatterTest only covers graph-input
+// bases, whose clone is always kept). out0's base (a0+a1) is a dead
+// intermediate, so its clone is elided and the write lands in base0's buffer in
+// place -- the elided-clone / intra-op-materialized-self path where the scatter
+// output must alias self at its full shape, not the (smaller) src shape. out1's
+// base (b0+b1) is also a graph output, so its clone is kept (a defensive copy).
+// Verifies correctness for both dims and asserts exactly one clone survived.
+TEST_F(ExecutorTest, sliceScatterInPlaceTest) {
+  const bool savedReuse = WaveConfig::get().enableReuse;
+  WaveConfig::get().enableReuse = true;
+  SCOPE_EXIT {
+    WaveConfig::get().enableReuse = savedReuse;
+  };
+
+  // Correctness for both dims: out0 (in-place over the dead intermediate base0)
+  // and out1 (copy: base1 stays live as a graph output) must match eager, and
+  // the returned base1 must be preserved.
+  runTest(
+      "data/slice_scatter_inplace_test.pt2",
+      "data/slice_scatter_inplace_test_results.pt");
+
+  // In-place proof: after optimization exactly one aten.clone survives --
+  // out1's defensive copy, kept because base1 is a graph output. out0's clone
+  // is elided because base0 is a dead intermediate, so its slice_scatter writes
+  // base0 in place. Build a fresh executor to inspect its optimized graph
+  // (runTest consumed its own fixture).
+  int liveClones = countLiveClonesAfterOpt(
+      getDataFilePath(dataDir(), "data/slice_scatter_inplace_test.pt2"));
+  EXPECT_EQ(liveClones, 1)
+      << "expected one surviving clone (out1 copy); out0's clone should be "
+         "elided so its slice_scatter writes base0 in place";
+}
+
+// scatter.src as a fused in-place elementwise op along dim 0 and dim 1. The
+// aten.scatter.src rewrite inserts clone(self) + the in-place tw.scatter, which
+// scatters each src element to the destination whose 'dim' coordinate is read
+// from the index tensor. The index is a permutation along 'dim', so the
+// parallel overwrite is deterministic and matches eager. Both bases are dead
+// intermediates with an independent src, so both clones are elided and each
+// scatter writes its base in place.
+TEST_F(ExecutorTest, scatterSrcTest) {
+  const bool savedReuse = WaveConfig::get().enableReuse;
+  WaveConfig::get().enableReuse = true;
+  SCOPE_EXIT {
+    WaveConfig::get().enableReuse = savedReuse;
+  };
+
+  runTest("data/scatter_src_test.pt2", "data/scatter_src_test_results.pt");
+
+  int liveClones = countLiveClonesAfterOpt(
+      getDataFilePath(dataDir(), "data/scatter_src_test.pt2"));
+  EXPECT_EQ(liveClones, 0)
+      << "both scatter.src bases are dead intermediates with independent src, "
+         "so both clones should be elided";
+}
+
+// scatter_add as a fused in-place elementwise op along dim 0 and dim 1,
+// accumulating with an atomic add so duplicate destination indices sum (the
+// parallel wave result matches eager). Covers clone-elision in both directions:
+// out0's base (aa0+aa1) is a dead intermediate with an independent src, so its
+// clone is elided and the accumulation lands in base0 in place; out1's src is
+// base1 itself (shares base1's storage), so its clone is KEPT -- accumulating
+// in place would read partially updated values. Asserts exactly one clone
+// survives.
+TEST_F(ExecutorTest, scatterAddTest) {
+  const bool savedReuse = WaveConfig::get().enableReuse;
+  WaveConfig::get().enableReuse = true;
+  SCOPE_EXIT {
+    WaveConfig::get().enableReuse = savedReuse;
+  };
+
+  runTest("data/scatter_add_test.pt2", "data/scatter_add_test_results.pt");
+
+  int liveClones = countLiveClonesAfterOpt(
+      getDataFilePath(dataDir(), "data/scatter_add_test.pt2"));
+  EXPECT_EQ(liveClones, 1)
+      << "expected one surviving clone: out1's clone kept because src shares a "
+         "base with self; out0's clone elided (dead base, independent src)";
+}
+
+// A fused tw.scatter_add accumulating [4096] src/index into a [256] tensor,
+// feeding an elementwise consumer whose operands are all [256]. Forced onto the
+// cooperative grid, where both land in one kernel op: multi-block ends the
+// producer's kernel (readsFusedElementwiseProducerFromMemory), so only cg keeps
+// the border inside a kernel and only cg can mis-size across it.
+//
+// Guards two defects that made the ROO preproc fault under --cg 1:
+//   (a) the size walk recursed through the elementwise border, sizing the
+//       consumer's output by the scatter's [4096] src/index instead of the
+//       materialized [256] output -- a 16x shape divergence, and the device
+//       loop (sized by the output) then read every [256] operand far past its
+//       end.
+//   (b) 'index' is read again by the gather limit[index] in a later expression
+//       of the same kernel op, which allocates an alt Tensor copy. Its own-dims
+//       primary (forced by the scatter) used to make the emitter drop that
+//       copy, leaving it at the host's zero fill -- the gather then read
+//       through null storage.
+// (b) faults on its own, so the output comparison catches it. (a) does not:
+// the gather reads only limit[0..255], which the over-long loop still computes
+// correctly, and the garbage tail is never consumed -- so the buffer's size is
+// asserted directly.
+TEST_F(ExecutorTest, scatterAddCgConsumerTest) {
+  const bool savedFree = WaveConfig::get().freeIntermediates;
+  auto resetConfig = folly::makeGuard([savedFree] {
+    WaveConfig::get().isCg = std::nullopt;
+    WaveConfig::get().useSingleBlock = std::nullopt;
+    WaveConfig::get().freeIntermediates = savedFree;
+  });
+  WaveConfig::get().useSingleBlock = false;
+  WaveConfig::get().isCg = true;
+  // Keep intermediates so the consumer's buffer can be inspected after the run.
+  WaveConfig::get().freeIntermediates = false;
+
+  auto pt2Path =
+      getDataFilePath(dataDir(), "data/scatter_add_cg_consumer_test.pt2");
+  auto resultsPath = getDataFilePath(
+      dataDir(), "data/scatter_add_cg_consumer_test_results.pt");
+  auto expected = loadReferenceValues(resultsPath);
+  ASSERT_FALSE(expected.empty());
+
+  auto fixture = ModelFixture::load(pt2Path);
+  ASSERT_NE(fixture, nullptr);
+  setGraphDevice(fixture->model.graph.get(), true);
+
+  WaveGraphExecutor exec(fixture->makeModelContext());
+  auto& graph = exec.graph();
+
+  // The consumer of the scatter's materialized output.
+  const nativert::Value* consumerOutput = nullptr;
+  for (const auto& node : graph.nodes()) {
+    if (node.target() == "torch.ops.aten.minimum.default") {
+      ASSERT_FALSE(node.outputs().empty());
+      consumerOutput = node.outputs()[0];
+      break;
+    }
+  }
+  ASSERT_NE(consumerOutput, nullptr) << "fixture must keep the minimum node";
+
+  auto frame = exec.getFrame();
+  ASSERT_NE(frame, nullptr);
+  auto inputs = loadSampleInputs(*fixture);
+  auto [deviceInputs, dataMovUs] = inputsToDevice(inputs);
+  fillWaveFrame(graph, *frame, deviceInputs);
+  auto outputs = exec.executeWithPrefilledFrame(*frame);
+
+  const auto& consumerValue = frame->getIValue(consumerOutput->id());
+  ASSERT_TRUE(consumerValue.isTensor());
+  EXPECT_EQ(consumerValue.toTensor().numel(), 256)
+      << "the consumer of a materialized elementwise border is sized by that "
+         "border's output, not by the scatter's 4096-element src/index";
+
+  auto hostOutputs = outputsToHost(outputs, "cg");
+  verifyOutputs(hostOutputs, expected, "cg");
+  exec.returnFrame(std::move(frame));
+}
+
+// Repro for the fused tw.slice_scatter dim=1 multi-row failure (ROO batch=768).
+// out0 scatters a contiguous src (control); out1 scatters a NON-CONTIGUOUS src
+// (a dim=1 view fed through clamp) into a dead-intermediate base -- the pattern
+// whose rows past the first came back as uninitialized garbage. 64 rows > 32
+// inner extent so a per-row failure shows. Both outputs compared against eager.
+TEST_F(ExecutorTest, sliceScatterDim1ViewTest) {
+  const bool savedReuse = WaveConfig::get().enableReuse;
+  WaveConfig::get().enableReuse = true;
+  SCOPE_EXIT {
+    WaveConfig::get().enableReuse = savedReuse;
+  };
+  runTest(
+      "data/slice_scatter_dim1_view_test.pt2",
+      "data/slice_scatter_dim1_view_test_results.pt");
+}
+
+// Column assignment out[:, c] = w[:, c], which functionalizes to
+// select_scatter(dim=1) inside slice_scatter(dim=0, start=0, end=2**63-1). The
+// open-ended slice's int64 sentinel end must reach the device function
+// unnarrowed: at 32 bits it reads as -1, the slice length collapses to 0 and
+// every element scatters onto row 0, leaving the output at its base value.
+// Every other slice_scatter fixture uses a small literal end, so only this one
+// covers the sentinel. Run with reuse both on and off: with reuse on the base
+// clone is elided and the scatter writes in place, with it off the scatter
+// writes a distinct clone, and the end sentinel has to hold in both.
+TEST_F(ExecutorTest, sliceScatterOpenEndTest) {
+  const bool savedReuse = WaveConfig::get().enableReuse;
+  SCOPE_EXIT {
+    WaveConfig::get().enableReuse = savedReuse;
+  };
+  for (const bool reuse : {true, false}) {
+    WaveConfig::get().enableReuse = reuse;
+    runTest(
+        "data/slice_scatter_open_end_test.pt2",
+        "data/slice_scatter_open_end_test_results.pt",
+        reuse ? "reuse" : "no-reuse");
+  }
+}
+
 // logit (inverse sigmoid), with eps=None and with an eps clamp, as a fused
 // elementwise op.
 TEST_F(ExecutorTest, logitTest) {
   runTest("data/logit_test.pt2", "data/logit_test_results.pt");
+}
+
+// bucketize / searchsorted as fused elementwise binary searches: float and int
+// value dtypes, right=False/True, side="right", int32/int64 output, a bucketize
+// fused with a downstream add, and a 2-D (multi-row) searchsorted where each
+// query row searches the matching sorted row.
+TEST_F(ExecutorTest, searchOpsTest) {
+  runTest("data/search_ops_test.pt2", "data/search_ops_test_results.pt");
 }
 
 TEST_F(ExecutorTest, maskedSelectTest) {
@@ -269,6 +572,33 @@ TEST_F(ExecutorTest, maskedSelectTest) {
   WaveConfig::get().isCg = std::nullopt;
 }
 
+// masked_select over a dynamically-empty input: the graph slices data/flags to
+// [:end] where end is a runtime scalar, so the sliced tensors reserve the full
+// length but are empty at runtime (end=0). The output must be [0], not the
+// reserved capacity. Regression for all three modes leaving the output size
+// unset when the element loop runs zero iterations.
+TEST_F(ExecutorTest, maskedSelectEmptyTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/masked_select_empty_test.pt2",
+      "data/masked_select_empty_test_results.pt",
+      "multi-kernel");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/masked_select_empty_test.pt2",
+      "data/masked_select_empty_test_results.pt",
+      "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest(
+      "data/masked_select_empty_test.pt2",
+      "data/masked_select_empty_test_results.pt",
+      "cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
 TEST_F(ExecutorTest, sumTest) {
   WaveConfig::get().useSingleBlock = false;
   runTest("data/sum_test.pt2", "data/sum_test_results.pt", "multi-block");
@@ -279,6 +609,23 @@ TEST_F(ExecutorTest, sumTest) {
   WaveConfig::get().useSingleBlock = std::nullopt;
   WaveConfig::get().isCg = true;
   runTest("data/sum_test.pt2", "data/sum_test_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
+TEST_F(ExecutorTest, bincountTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/bincount_test.pt2", "data/bincount_test_results.pt", "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/bincount_test.pt2",
+      "data/bincount_test_results.pt",
+      "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest("data/bincount_test.pt2", "data/bincount_test_results.pt", "cg");
   WaveConfig::get().isCg = std::nullopt;
 }
 
@@ -467,6 +814,147 @@ TEST_F(ExecutorTest, repeatInterleaveTest) {
   WaveConfig::get().isCg = std::nullopt;
 }
 
+// Multi-dimensional and strided repeat_interleave along an explicit dim, plus
+// the dim=None (flatten) case. Programmatic graphs compared against eager
+// at::repeat_interleave. Covers 1/2/3-D inputs, each axis, extra size-1 dims
+// (the [1,N] "run a 1-D op under a fake batch dim" pattern), and a
+// non-contiguous (transposed) input. Per-element repeats (1-D counts); the
+// wave repeat_interleave gathers each output element from its source segment.
+TEST_F(ExecutorTest, repeatInterleaveMultiDimTest) {
+  auto resetConfig = folly::makeGuard([] {
+    WaveConfig::get().useSingleBlock = std::nullopt;
+    WaveConfig::get().isCg = std::nullopt;
+  });
+
+  // Runs repeat_interleave(self, repeats[, dim]) on the wave engine and checks
+  // it against eager. 'dimArg' is "" (dim=None flatten) or ", dim=N".
+  auto check = [&](const at::Tensor& self,
+                   const at::Tensor& repeats,
+                   const std::string& dimArg,
+                   std::optional<int64_t> dim,
+                   const char* label) {
+    std::string graphStr = std::string("graph(%x, %r):\n") +
+        "%o = torch.ops.aten.repeat_interleave.self_Tensor(self=%x, "
+        "repeats=%r" +
+        dimArg + ")\nreturn(%o)\n";
+    auto graph = nativert::stringToGraph(graphStr);
+    std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+    meta["x"] = makeTensorMeta(self.scalar_type(), self.dim());
+    meta["r"] = makeTensorMeta(repeats.scalar_type(), repeats.dim());
+    meta["o"] =
+        makeTensorMeta(self.scalar_type(), dim.has_value() ? self.dim() : 1);
+    auto outputs =
+        runWaveProgrammatic(std::move(graph), meta, {{self, repeats}});
+    ASSERT_EQ(outputs.size(), 1) << label;
+    auto reference = dim.has_value() ? at::repeat_interleave(self, repeats, dim)
+                                     : at::repeat_interleave(self, repeats);
+    EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+        << label << ": " << firstDifference(outputs[0], reference);
+  };
+
+  // Deterministic, varied per-segment counts in [1, 3].
+  auto counts = [](int64_t n) { return at::arange(n, at::kLong) % 3 + 1; };
+
+  WaveConfig::get().useSingleBlock = false;
+
+  // 1-D: dim=None (flatten) and explicit dim=0.
+  {
+    auto x = at::arange(64, at::kFloat);
+    check(x, counts(64), "", std::nullopt, "1d-flatten");
+    check(x, counts(64), ", dim=0", 0, "1d-dim0");
+  }
+  // 2-D flatten (dim=None) over a multi-row input -> 1-D output.
+  {
+    auto x = at::arange(3 * 8, at::kFloat).reshape({3, 8});
+    check(x, counts(3 * 8), "", std::nullopt, "2d-flatten");
+  }
+  // 2-D along each axis, all dims > 1 (primary validation).
+  {
+    auto x = at::arange(5 * 32, at::kFloat).reshape({5, 32});
+    check(x, counts(32), ", dim=1", 1, "2d-dim1");
+  }
+  {
+    auto x = at::arange(7 * 20, at::kFloat).reshape({7, 20});
+    check(x, counts(7), ", dim=0", 0, "2d-dim0");
+  }
+  // 3-D along the middle axis, all dims > 1.
+  {
+    auto x = at::arange(3 * 8 * 6, at::kFloat).reshape({3, 8, 6});
+    check(x, counts(8), ", dim=1", 1, "3d-dim1");
+  }
+  // Extra size-1 dims (the ROO [1,N] pattern and its trailing-1 mirror).
+  {
+    auto x = at::arange(48, at::kFloat).reshape({1, 48});
+    check(x, counts(48), ", dim=1", 1, "leading-1-dim1");
+  }
+  {
+    auto x = at::arange(40, at::kFloat).reshape({40, 1});
+    check(x, counts(40), ", dim=0", 0, "trailing-1-dim0");
+  }
+  // Non-contiguous (transposed) source: [6,10] -> [10,6] view, interleave dim1.
+  {
+    auto x = at::arange(6 * 10, at::kFloat).reshape({6, 10}).transpose(0, 1);
+    check(x, counts(6), ", dim=1", 1, "strided-dim1");
+  }
+
+  // Broadcast: a 0-D repeat count applies uniformly to every segment.
+  {
+    auto x2d = at::arange(5 * 12, at::kFloat).reshape({5, 12});
+    auto r3 = at::scalar_tensor(3, at::kLong); // 0-dim
+    check(x2d, r3, ", dim=1", 1, "bcast-2d-dim1");
+    check(x2d, r3, ", dim=0", 0, "bcast-2d-dim0");
+    check(x2d, r3, "", std::nullopt, "bcast-2d-flatten");
+    auto x1d = at::arange(30, at::kFloat);
+    check(x1d, at::scalar_tensor(2, at::kLong), ", dim=0", 0, "bcast-1d-dim0");
+  }
+
+  // Zero repeats. A segment with count 0 contributes nothing to the output, so
+  // the interleave axis can keep its original length (or shrink) while every
+  // other axis is unchanged -- the case where inferring the axis from the
+  // input/output shapes finds no difference and would silently fall back to
+  // axis 0. The kernel takes the axis from the host instead, so these must
+  // hold for a non-zero interleave axis.
+  {
+    // sum(repeats) == size(input, dim): output shape equals input shape.
+    auto x = at::arange(4 * 3, at::kFloat).reshape({4, 3});
+    auto sameLen = at::tensor({0, 2, 1}, at::kLong);
+    check(x, sameLen, ", dim=1", 1, "zero-repeat-same-length-dim1");
+    // All-ones is the other shape-preserving case (identity).
+    check(x, at::ones({3}, at::kLong), ", dim=1", 1, "identity-dim1");
+    // Leading zero, and a zero in the middle, with a changed output length.
+    check(x, at::tensor({0, 1, 2}, at::kLong), ", dim=1", 1, "zero-first-dim1");
+    check(
+        x, at::tensor({2, 0, 2}, at::kLong), ", dim=1", 1, "zero-middle-dim1");
+    // Same on axis 0 of a 3-D input, where a wrong axis is unambiguous.
+    auto x3 = at::arange(3 * 2 * 5, at::kFloat).reshape({3, 2, 5});
+    check(x3, at::tensor({1, 0, 2}, at::kLong), ", dim=0", 0, "zero-3d-dim0");
+    // All repeats zero: an empty output.
+    check(x, at::zeros({3}, at::kLong), ", dim=1", 1, "all-zero-dim1");
+    // Broadcast zero: every segment drops out.
+    check(x, at::scalar_tensor(0, at::kLong), ", dim=1", 1, "bcast-zero-dim1");
+    // Flatten with zeros.
+    check(
+        x,
+        at::tensor({2, 0, 1, 0, 3, 1, 0, 2, 1, 1, 0, 2}, at::kLong),
+        "",
+        std::nullopt,
+        "zero-flatten");
+  }
+
+  // The primary 2-D case across all three grid variants.
+  auto x2 = at::arange(5 * 32, at::kFloat).reshape({5, 32});
+  WaveConfig::get().useSingleBlock = true;
+  check(x2, counts(32), ", dim=1", 1, "2d-dim1-single-block");
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  check(x2, counts(32), ", dim=1", 1, "2d-dim1-cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
+TEST_F(ExecutorTest, repeatTest) {
+  runTest("data/repeat_test.pt2", "data/repeat_test_results.pt");
+}
+
 TEST_F(ExecutorTest, catTest) {
   WaveConfig::get().useSingleBlock = false;
   runTest("data/cat_test.pt2", "data/cat_test_results.pt", "multi-block");
@@ -478,6 +966,18 @@ TEST_F(ExecutorTest, catTest) {
   WaveConfig::get().isCg = true;
   runTest("data/cat_test.pt2", "data/cat_test_results.pt", "cg");
   WaveConfig::get().isCg = std::nullopt;
+
+  // Plan structure: a masked_select feeding the 1-D cat (o3 = cat([ms1, ms2,
+  // ms3])) fuses into the same kernel as the cat. In the cg and single-block
+  // grids the whole masked_select fuses with the cat; in the multi-kernel grid
+  // the masked_select is decomposed, and its final (compaction) step fuses into
+  // the cat.
+  auto plans = compilePlans("data/cat_test.pt2");
+  EXPECT_TRUE(plans.cg.fuses({"aten.cat.default", "tw.masked_select_cg"}));
+  EXPECT_TRUE(plans.singleBlock.fuses(
+      {"aten.cat.default", "aten.masked_select.default"}));
+  EXPECT_TRUE(
+      plans.multiKernel.fuses({"aten.cat.default", "tw.masked_select_final"}));
 }
 
 TEST_F(ExecutorTest, catTest2) {
@@ -490,6 +990,128 @@ TEST_F(ExecutorTest, catTest2) {
   WaveConfig::get().useSingleBlock = std::nullopt;
   WaveConfig::get().isCg = true;
   runTest("data/cat_test2.pt2", "data/cat_test2_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
+// Cats of 2-D and 3-D operands along every dimension. Only dim 0 leaves an
+// operand's region of the result contiguous; every other dim makes it a
+// strided band, written either through the host-made view the producing
+// expression fills or by __concatCopy for an operand the kernel only copies.
+TEST_F(ExecutorTest, catNdTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest("data/cat_nd_test.pt2", "data/cat_nd_test_results.pt", "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/cat_nd_test.pt2", "data/cat_nd_test_results.pt", "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest("data/cat_nd_test.pt2", "data/cat_nd_test_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
+
+  // The wider cats are fused rather than handed to the eager op, and an
+  // operand the graph computes lands in the cat's own kernel.
+  auto plans = compilePlans("data/cat_nd_test.pt2");
+  EXPECT_FALSE(plans.multiKernel.standalone("aten.cat.default"));
+  EXPECT_TRUE(plans.multiKernel.fuses({"aten.cat.default", "aten.add.Tensor"}));
+}
+
+// The same shapes joined along a new dimension instead of an existing one, up
+// to the rank-4 limit of the kernel tensor descriptor. Every stack operand
+// occupies a single position along the new dim, which is a strided slice
+// unless that dim is the outermost.
+TEST_F(ExecutorTest, stackNdTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/stack_nd_test.pt2", "data/stack_nd_test_results.pt", "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/stack_nd_test.pt2",
+      "data/stack_nd_test_results.pt",
+      "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest("data/stack_nd_test.pt2", "data/stack_nd_test_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
+
+  auto plans = compilePlans("data/stack_nd_test.pt2");
+  EXPECT_FALSE(plans.multiKernel.standalone("aten.stack.default"));
+  EXPECT_TRUE(
+      plans.multiKernel.fuses({"aten.stack.default", "aten.add.Tensor"}));
+}
+
+// A cat whose operand length is decided on device, at rank 1 and at rank 2.
+// The 1-D cat absorbs its masked_select: the same kernel patches the following
+// operands' view bases once the length is known. A wider cat cannot -- the
+// host allocates the result and hands each operand a strided view of it, which
+// needs every shape up front -- so its device-sized operand ends its kernel
+// first and the length is read back before the cat's launch.
+TEST_F(ExecutorTest, catDynamicNdTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/cat_dynamic_nd_test.pt2",
+      "data/cat_dynamic_nd_test_results.pt",
+      "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/cat_dynamic_nd_test.pt2",
+      "data/cat_dynamic_nd_test_results.pt",
+      "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest(
+      "data/cat_dynamic_nd_test.pt2",
+      "data/cat_dynamic_nd_test_results.pt",
+      "cg");
+  WaveConfig::get().isCg = std::nullopt;
+
+  auto plans = compilePlans("data/cat_dynamic_nd_test.pt2");
+  // Single-block is where the contrast shows: nothing else would end
+  // nonzero's kernel there (its multiBlockReturnBarrier does not apply), so
+  // the boundary before the 2-D cat is the concat's own operand pushdown,
+  // while the 1-D cat still fuses its masked_select.
+  EXPECT_TRUE(plans.singleBlock.fuses(
+      {"aten.cat.default", "aten.masked_select.default"}));
+  EXPECT_TRUE(plans.singleBlock.kernelBoundaryBetween(
+      "aten.cat.default", "aten.nonzero.default"));
+  EXPECT_TRUE(plans.singleBlock.inLaterStep(
+      "aten.cat.default", "aten.nonzero.default"));
+  EXPECT_TRUE(plans.cg.kernelBoundaryBetween(
+      "aten.cat.default", "aten.nonzero.default"));
+}
+
+// Composed masked_selects feeding an elementwise add:
+//   masked_select(masked_select(stuff, f1), f2) * 2 + masked_select(stuff,
+//   comp)
+// where f1 then f2 selects the same elements as comp, so both add operands have
+// equal length. A masked_select sets its length on device; fusing it into the
+// elementwise consumer (whose loop bound is that length) reads the length
+// before the masked_select kernel writes it, giving a too-long result -- unless
+// placeKernels puts a boundary between them (the fix).
+TEST_F(ExecutorTest, maskedSelectComposeTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/masked_select_compose_test.pt2",
+      "data/masked_select_compose_test_results.pt",
+      "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/masked_select_compose_test.pt2",
+      "data/masked_select_compose_test_results.pt",
+      "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest(
+      "data/masked_select_compose_test.pt2",
+      "data/masked_select_compose_test_results.pt",
+      "cg");
   WaveConfig::get().isCg = std::nullopt;
 }
 
@@ -530,6 +1152,22 @@ return(%o)
   auto b = at::arange(100000, at::kLong) + 7;
   EXPECT_NO_THROW(
       { runWaveProgrammatic(std::move(graph), meta, {{empty, a, b}}); });
+}
+
+// aten.cat and its aten.concat alias over the same pair of 2-D inputs on
+// dim 1, so the two must lower identically.
+TEST_F(ExecutorTest, cat2dTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest("data/cat_2d_test.pt2", "data/cat_2d_test_results.pt", "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/cat_2d_test.pt2", "data/cat_2d_test_results.pt", "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest("data/cat_2d_test.pt2", "data/cat_2d_test_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
 }
 
 TEST_F(ExecutorTest, cat2dViewTest) {
@@ -574,6 +1212,14 @@ TEST_F(ExecutorTest, cat2dReuseTest) {
 
 TEST_F(ExecutorTest, arangeTest) {
   runTest("data/arange_test.pt2", "data/arange_test_results.pt");
+}
+
+// Exercises _local_scalar_dense (Tensor.item()) feeding dynamic sizes: an
+// arange whose end is item(sum(lengths)), and a ones whose size dims are
+// item(lengths[i]). Validates that item() produces a scalar (fused like
+// aten.item), not a zero-dim tensor, so the fused arange/ones size correctly.
+TEST_F(ExecutorTest, dynamicShapeTest) {
+  runTest("data/dynamic_shape_test.pt2", "data/dynamic_shape_test_results.pt");
 }
 
 TEST_F(ExecutorTest, indexTest) {
@@ -731,6 +1377,114 @@ TEST_F(ExecutorTest, maskedPutTest) {
 
 TEST_F(ExecutorTest, indexGetTest) {
   runTest("data/index_get_test.pt2", "data/index_get_test_results.pt");
+
+  // Plan structure: advanced indexing that gives an index tensor for *every*
+  // source dim lowers to the fused tw.index_elt_{one,two} -- a 1-D-source
+  // gather (source_a[idx]) and a 2-D coordinate gather (matrix[row, col]); the
+  // latter also fuses its trailing arithmetic (matrix[row, col] * 2 + 1).
+  auto plans = compilePlans("data/index_get_test.pt2");
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.index_elt_one"}));
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.index_elt_two"}));
+  EXPECT_TRUE(plans.multiKernel.fuses(
+      {"tw.index_elt_two", "aten.mul.Scalar", "aten.add.Scalar"}));
+}
+
+// aten.index.Tensor over cat(var, factory): cat([var, zeros])[idx] -- two
+// operands, the second a constant-fill factory -- rewrites to the fused
+// tw.index_elt_one_default (default 0, an out-of-range index reads the default
+// instead of erroring). cat([var, var2, zeros])[idx] has three operands, so it
+// does not match the pattern and stays a plain index over the materialized cat.
+TEST_F(ExecutorTest, indexEltDefaultTest) {
+  runTest(
+      "data/index_elt_default_test.pt2",
+      "data/index_elt_default_test_results.pt");
+
+  auto plans = compilePlans("data/index_elt_default_test.pt2");
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.index_elt_one_default"}));
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.index_elt_one"}));
+}
+
+TEST_F(ExecutorTest, indexSelectTest) {
+  runTest("data/index_select_test.pt2", "data/index_select_test_results.pt");
+}
+
+// Advanced indexing (aten.index.Tensor): a single 1-D integer index selecting
+// one dimension is rewritten to the fused index_select; a separated multi-index
+// case (x[i, :, k]) falls back to the eager op.
+TEST_F(ExecutorTest, indexTensorTest) {
+  runTest("data/index_tensor_test.pt2", "data/index_tensor_test_results.pt");
+
+  // Prove the rewrite fired: corrupt one converted index per case out of range
+  // and confirm the device-side bounds check in __index_select reports the
+  // matching dimension. Only the fused index_select performs this check, so a
+  // "<dim> <badValue> Bad idx" error means x[sel] took the fused path (not the
+  // eager fallback). sel0/sel1/sel2 select dims 0/1/2 respectively.
+  constexpr int32_t kBadIndex = 999'999;
+  struct IndexErrorCase {
+    std::string indexInput;
+    int32_t expectedDim;
+  };
+  const std::vector<IndexErrorCase> indexErrorCases = {
+      {"sel0", 0},
+      {"sel1", 1},
+      {"sel2", 2},
+  };
+  for (const auto& errorCase : indexErrorCases) {
+    auto pt2Path = getDataFilePath(dataDir(), "data/index_tensor_test.pt2");
+    auto fixture = ModelFixture::load(pt2Path);
+    int32_t idxValueId = -1;
+    {
+      auto values = fixture->model.graph->userInputs();
+      auto names = fixture->model.graph->signature().userInputs();
+      for (size_t i = 0; i < values.size() && i < names.size(); ++i) {
+        if (names[i].find(errorCase.indexInput) != std::string::npos) {
+          idxValueId = values[i]->id();
+          break;
+        }
+      }
+    }
+    ASSERT_GE(idxValueId, 0) << "No " << errorCase.indexInput
+                             << " input found in index_tensor_test graph";
+    auto errors = runWaveExpectError(
+        *fixture, [idxValueId, kBadIndex](nativert::ExecutionFrame& frame) {
+          auto& iv = frame.getIValue(idxValueId);
+          if (iv.isTensor()) {
+            iv.toTensor().fill_(kBadIndex);
+          }
+        });
+    const std::string expected = std::to_string(errorCase.expectedDim) + " " +
+        std::to_string(kBadIndex) + " Bad idx";
+    EXPECT_NE(errors.find(expected), std::string::npos)
+        << "Case " << errorCase.indexInput << ": expected '" << expected
+        << "' in device errors, got:\n"
+        << errors;
+  }
+
+  // Plan structure: how aten.index.Tensor lowers, and how the placement of the
+  // bool-mask (masked_select) case differs across modes. Only the multi-kernel
+  // grid holds every op; the single-block and cg grids hold just the
+  // masked_select, which has those variants.
+  auto plans = compilePlans("data/index_tensor_test.pt2");
+
+  // Multi-kernel: a single-dim integer index (a=x[sel0], b=x[:,sel1],
+  // c=x[:,:,sel2]) fuses to tw.index_select. The separated-dim case
+  // (d=x[sep0,:,sep2]) cannot, so it stays the eager aten.index.Tensor behind a
+  // kernel boundary from the fused index_selects. The bool-mask case
+  // (e=x1d[mask]) becomes a multi-step masked_select: head -> add_sizes ->
+  // final.
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.index_select"}));
+  EXPECT_TRUE(plans.multiKernel.standalone("aten.index.Tensor"));
+  EXPECT_TRUE(plans.multiKernel.kernelBoundaryBetween(
+      "aten.index.Tensor", "tw.index_select"));
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.masked_select_head"}));
+  EXPECT_TRUE(plans.multiKernel.inLaterStep(
+      "tw.masked_select_final", "tw.masked_select_head"));
+
+  // Single-block: masked_select fuses into one kernel instead of decomposing.
+  EXPECT_TRUE(plans.singleBlock.fuses({"aten.masked_select.default"}));
+
+  // Cooperative grid: masked_select uses its dedicated cg variant.
+  EXPECT_TRUE(plans.cg.fuses({"tw.masked_select_cg"}));
 }
 
 TEST_F(ExecutorTest, dedupTest) {
@@ -816,6 +1570,53 @@ TEST_F(ExecutorTest, shapeOnlyMetaReferenceFrame) {
   EXPECT_GT(lastRefTensorsChecked_, 0);
 
   std::remove(refPath.c_str());
+}
+
+// Reference-verify round trip on a graph whose clones the in-place pass elides.
+// An index_put_ chain lowers to a defensive clone before each in-place write.
+// The reference is saved from a run with reuse off, which keeps the clones, so
+// each clone's input still holds its pre-mutation value. With reuse on,
+// rewriteInPlace elides those clones and the writer mutates the input's buffer,
+// so the input now holds the post-mutation value. The divergence is intended:
+// verifyAgainstReference must skip elided clone inputs, or the run aborts with
+// a reference mismatch that is not a bug.
+TEST_F(ExecutorTest, elidedCloneInputReferenceFrame) {
+  auto pt2Path = getDataFilePath(dataDir(), "data/index_put_chain_test.pt2");
+  auto resultsPath =
+      getDataFilePath(dataDir(), "data/index_put_chain_test_results.pt");
+  auto expected = loadReferenceValues(resultsPath);
+
+  auto refPath = fmt::format(
+      "/tmp/torchwave_elided_clone_ref_{}.pt", static_cast<int>(getpid()));
+
+  const bool savedEnableReuse = WaveConfig::get().enableReuse;
+  SCOPE_EXIT {
+    FLAGS_reference_frame = "";
+    WaveConfig::get().saveReferenceFramePath = "";
+    WaveConfig::get().enableReuse = savedEnableReuse;
+    std::remove(refPath.c_str());
+  };
+
+  // Reference from a run with the clones intact.
+  auto fixture = ModelFixture::load(pt2Path);
+  ASSERT_NE(fixture, nullptr);
+  setGraphDevice(fixture->model.graph.get(), true);
+  WaveConfig::get().enableReuse = false;
+  WaveConfig::get().saveReferenceFramePath = refPath;
+  runWave(*fixture, expected);
+
+  // Verify the elided run, whose clone inputs are overwritten in place. Reload
+  // the fixture since makeModelContext moves the graph.
+  fixture = ModelFixture::load(pt2Path);
+  ASSERT_NE(fixture, nullptr);
+  setGraphDevice(fixture->model.graph.get(), true);
+  WaveConfig::get().enableReuse = true;
+  FLAGS_reference_frame = refPath;
+  runWave(*fixture, expected);
+
+  LOG(INFO) << "Reference frame: " << lastRefTensorsChecked_ << " tensors, "
+            << lastRefNodesChecked_ << " nodes checked";
+  EXPECT_GT(lastRefTensorsChecked_, 0);
 }
 
 TEST_F(ExecutorTest, custom) {

@@ -24,21 +24,21 @@ namespace facebook::velox::dwio::common {
 
 /// Represents a closed interval of row indices [from_, to_].
 ///
-/// RowRange is used to describe a contiguous range of row indices, inclusive of
-/// both endpoints. It provides utility methods for counting the number of rows,
-/// checking relative positions between ranges, and computing unions and
-/// intersections.
+/// InclusiveRowRange is used to describe a contiguous range of row indices,
+/// inclusive of both endpoints. It provides utility methods for counting the
+/// number of rows, checking relative positions between ranges, and computing
+/// unions and intersections.
 ///
 /// Invariants:
 /// - from_ <= to_
 ///
 /// Example:
-///   RowRange r(10, 20); // Represents rows 10 through 20, inclusive.
-struct RowRange {
+///   InclusiveRowRange r(10, 20); // Represents rows 10 through 20, inclusive.
+struct InclusiveRowRange {
   uint64_t from_;
   uint64_t to_;
 
-  RowRange(uint64_t from, uint64_t to) : from_(from), to_(to) {
+  InclusiveRowRange(uint64_t from, uint64_t to) : from_(from), to_(to) {
     VELOX_CHECK_LE(from, to);
   }
 
@@ -46,17 +46,17 @@ struct RowRange {
     return to_ - from_ + 1;
   }
 
-  bool isBefore(const RowRange& other) const {
+  bool isBefore(const InclusiveRowRange& other) const {
     return to_ < other.from_;
   }
 
-  bool isAfter(const RowRange& other) const {
+  bool isAfter(const InclusiveRowRange& other) const {
     return from_ > other.to_;
   }
 
-  static std::optional<RowRange> tryUnion(
-      const RowRange& left,
-      const RowRange& right) {
+  static std::optional<InclusiveRowRange> tryUnion(
+      const InclusiveRowRange& left,
+      const InclusiveRowRange& right) {
     // Check if ranges are adjacent or overlapping.
     // Rewrite "a.to_ + 1 >= b.from_" as "b.from_ - a.to_ <= 1" to avoid
     // overflow when to_ == UINT64_MAX. Since from_ <= to_ for valid ranges,
@@ -65,26 +65,26 @@ struct RowRange {
     // If b.from_ < a.to_, ranges overlap, which is the case we want to capture.
     if (left.from_ <= right.from_) {
       if (right.from_ <= left.to_ || right.from_ - left.to_ <= 1) {
-        return RowRange(left.from_, std::max(left.to_, right.to_));
+        return InclusiveRowRange(left.from_, std::max(left.to_, right.to_));
       }
     } else {
       if (left.from_ <= right.to_ || left.from_ - right.to_ <= 1) {
-        return RowRange(right.from_, std::max(left.to_, right.to_));
+        return InclusiveRowRange(right.from_, std::max(left.to_, right.to_));
       }
     }
     return std::nullopt;
   }
 
-  static std::optional<RowRange> intersection(
-      const RowRange& left,
-      const RowRange& right) {
+  static std::optional<InclusiveRowRange> intersection(
+      const InclusiveRowRange& left,
+      const InclusiveRowRange& right) {
     if (left.from_ <= right.from_) {
       if (left.to_ >= right.from_) {
-        return RowRange(right.from_, std::min(left.to_, right.to_));
+        return InclusiveRowRange(right.from_, std::min(left.to_, right.to_));
       }
     } else {
       if (right.to_ >= left.from_) {
-        return RowRange(left.from_, std::min(left.to_, right.to_));
+        return InclusiveRowRange(left.from_, std::min(left.to_, right.to_));
       }
     }
     return std::nullopt;
@@ -92,10 +92,10 @@ struct RowRange {
 
   /// Difference of two RowRanges: left \ right.
   /// Returns at most two disjoint ranges.
-  static std::vector<RowRange> difference(
-      const RowRange& left,
-      const RowRange& right) {
-    std::vector<RowRange> result;
+  static std::vector<InclusiveRowRange> difference(
+      const InclusiveRowRange& left,
+      const InclusiveRowRange& right) {
+    std::vector<InclusiveRowRange> result;
     auto inter = intersection(left, right);
     if (!inter) {
       // No overlap, entire left remains.
@@ -126,7 +126,7 @@ class RowRanges {
  public:
   RowRanges() = default;
 
-  explicit RowRanges(const RowRange& range) {
+  explicit RowRanges(const InclusiveRowRange& range) {
     ranges_.push_back(range);
   }
 
@@ -137,7 +137,7 @@ class RowRanges {
     if (rowCount == 0) {
       return RowRanges();
     }
-    return RowRanges(RowRange(0, rowCount - 1));
+    return RowRanges(InclusiveRowRange(0, rowCount - 1));
   }
 
   /// Computes the complement of the given RowRanges within the range [0,
@@ -147,12 +147,12 @@ class RowRanges {
     int64_t cursor = 0;
     for (auto& r : src.getRanges()) {
       if (cursor < r.from_) {
-        result.add(RowRange(cursor, r.from_ - 1));
+        result.add(InclusiveRowRange(cursor, r.from_ - 1));
       }
       cursor = r.to_ + 1;
     }
     if (cursor < maxRow) {
-      result.add(RowRange(cursor, maxRow - 1));
+      result.add(InclusiveRowRange(cursor, maxRow - 1));
     }
     return result;
   }
@@ -187,14 +187,14 @@ class RowRanges {
     const auto& A = left.ranges_;
     const auto& B = right.ranges_;
     while (i < A.size() && j < B.size()) {
-      const RowRange& a = A[i];
-      const RowRange& b = B[j];
+      const InclusiveRowRange& a = A[i];
+      const InclusiveRowRange& b = B[j];
       if (a.isAfter(b)) {
         j++;
       } else if (b.isAfter(a)) {
         i++;
       } else {
-        auto inter = RowRange::intersection(a, b);
+        auto inter = InclusiveRowRange::intersection(a, b);
         if (inter.has_value()) {
           result.add(*inter);
         }
@@ -219,7 +219,7 @@ class RowRanges {
   }
 
   /// Add an interval to the end, and merge with the previous one if possible.
-  void add(const RowRange& range) {
+  void add(const InclusiveRowRange& range) {
     if (ranges_.empty()) {
       ranges_.push_back(range);
       return;
@@ -227,7 +227,7 @@ class RowRanges {
     auto& last = ranges_.back();
     // Try to merge: if overlapping or adjacent, extend the last interval;
     // otherwise, append directly.
-    if (auto m = RowRange::tryUnion(last, range)) {
+    if (auto m = InclusiveRowRange::tryUnion(last, range)) {
       last = *m;
     } else {
       VELOX_CHECK(last.isBefore(range));
@@ -255,7 +255,7 @@ class RowRanges {
         ranges_.begin(),
         ranges_.end(),
         from,
-        [](const RowRange& r, int64_t val) { return r.to_ < val; });
+        [](const InclusiveRowRange& r, int64_t val) { return r.to_ < val; });
     // Check if we found a range that overlaps with [from, to].
     return it != ranges_.end() && it->from_ <= to;
   }
@@ -273,23 +273,25 @@ class RowRanges {
     return os.str();
   }
 
-  const std::vector<RowRange>& getRanges() const {
+  const std::vector<InclusiveRowRange>& getRanges() const {
     return ranges_;
   }
 
-  /// Computes the intersection of this RowRanges with a single RowRange.
-  /// Returns std::optional<RowRange> of the intersected range if any overlap.
-  std::optional<RowRange> intersectOne(const RowRange& r) const {
+  /// Computes the intersection of this RowRanges with a single
+  /// InclusiveRowRange. Returns std::optional<InclusiveRowRange> of the
+  /// intersected range if any overlap.
+  std::optional<InclusiveRowRange> intersectOne(
+      const InclusiveRowRange& r) const {
     for (const auto& existing : ranges_) {
-      if (auto inter = RowRange::intersection(existing, r)) {
+      if (auto inter = InclusiveRowRange::intersection(existing, r)) {
         return inter;
       }
     }
     return std::nullopt;
   }
 
-  static std::pair<RowRange, bool> firstSplitByIntersection(
-      const RowRange& r,
+  static std::pair<InclusiveRowRange, bool> firstSplitByIntersection(
+      const InclusiveRowRange& r,
       const RowRanges& rs) {
     const auto& ranges = rs.getRanges();
     uint64_t cursor = r.from_;
@@ -305,15 +307,16 @@ class RowRanges {
 
       if (cursor < valid.from_) {
         // Non-overlapping prefix before the valid range.
-        return {RowRange(cursor, std::min(valid.from_ - 1, end)), false};
+        return {
+            InclusiveRowRange(cursor, std::min(valid.from_ - 1, end)), false};
       }
 
       // Overlapping segment.
-      return {RowRange(cursor, std::min(valid.to_, end)), true};
+      return {InclusiveRowRange(cursor, std::min(valid.to_, end)), true};
     }
 
     // No overlap at all.
-    return {RowRange(cursor, end), false};
+    return {InclusiveRowRange(cursor, end), false};
   }
 
   void updateAffectedPages(int64_t affectedPages) {
@@ -333,7 +336,7 @@ class RowRanges {
   }
 
  private:
-  std::vector<RowRange> ranges_;
+  std::vector<InclusiveRowRange> ranges_;
   int64_t affectedPages_{0}; // Number of pages affected by this RowRanges.
   int64_t coveredPages_{0}; // Number of pages covered by this RowRanges.
 };

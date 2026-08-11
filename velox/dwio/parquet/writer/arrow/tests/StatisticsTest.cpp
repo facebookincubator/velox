@@ -23,6 +23,7 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
+#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
 #include "velox/dwio/parquet/writer/arrow/StringTruncation.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
@@ -507,8 +508,13 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
     EXPECT_EQ(
         expectedStats->encodeMax(),
         columnChunk.getColumnMetadataStatsMaxValue());
-    auto columnStats =
-        columnChunk.getColumnStatistics(INTEGER(), rowGroup.numRows());
+    auto& parquetType = static_cast<const ParquetTypeWithId&>(
+        *reader->typeWithId()->childAt(0));
+    auto columnStats = columnChunk.getColumnStatistics(
+        parquetType.type(),
+        rowGroup.numRows(),
+        parquetType.convertedType_,
+        parquetType.logicalType_);
     EXPECT_EQ(numValues - nullCount, columnStats->getNumberOfValues());
   }
 };

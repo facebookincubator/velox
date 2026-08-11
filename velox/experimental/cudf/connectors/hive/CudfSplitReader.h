@@ -32,7 +32,11 @@
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/experimental/hybrid_scan.hpp>
 #include <cudf/io/parquet.hpp>
+#include <cudf/io/parquet_schema.hpp>
 #include <cudf/io/types.hpp>
+
+#include <functional>
+#include <utility>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -64,9 +68,20 @@ class CudfSplitReader : public NvtxHelper {
 
   virtual ~CudfSplitReader() = default;
 
+  using PushdownFilterBuilder = std::function<cudf::ast::expression const*(
+      const cudf::io::parquet::FileMetaData&)>;
+
+  /// Sets a builder for a split-specific pushdown filter. The builder is
+  /// invoked after the Parquet footer is read and before reader options are
+  /// configured. The returned expression must remain alive while the split is
+  /// being read.
+  void setPushdownFilterBuilder(PushdownFilterBuilder builder) {
+    pushdownFilterBuilder_ = std::move(builder);
+  }
+
   /// Prepare the split: open cudf reader, set up data source and options.
   /// @param runtimeStats Reference to the DataSource's runtime statistics
-  virtual void prepareSplit(dwio::common::RuntimeStatistics& runtimeStats);
+  void prepareSplit(dwio::common::RuntimeStatistics& runtimeStats);
 
   /// Read the next raw cudf table chunk. Returns nullopt when done.
   virtual std::optional<std::unique_ptr<cudf::table>> next(uint64_t size);
@@ -77,19 +92,34 @@ class CudfSplitReader : public NvtxHelper {
   }
 
  protected:
-  /// Create the chunked parquet reader.
-  virtual void createCudfReader(rmm::device_async_resource_ref output_mr);
+  // Performs split-specific setup after base reader state is reset.
+  virtual void prepareSplitInternal(
+      dwio::common::RuntimeStatistics& runtimeStats);
 
-  /// Setup the cuDF data source
+  // Setup the cuDF reader.
+  virtual void setupReader();
+
+  // Return the split-specific filter to push down to the cuDF reader.
+  virtual cudf::ast::expression const* pushdownFilter() const;
+
+  // Determine the output memory resource for the cuDF reader.
+  virtual rmm::device_async_resource_ref determineCudfMemoryResource() const;
+
+  // Read the next table chunk from the parquet reader (regular or hybrid).
+  // Returns nullopt when no more data.
+  virtual std::optional<std::unique_ptr<cudf::table>> readNextChunk();
+
+  // Setup the cuDF data source
   void setupCudfDataSource();
 
-  /// Clear splitReaders and datasources after split has been fully processed.
-  void resetSplit();
+  // Read file metadatas.
+  void fileMetaDatas();
 
-  /// Read the next raw chunk from the parquet reader (regular or hybrid).
-  /// Returns nullopt when no more data.
-  virtual std::optional<std::unique_ptr<cudf::table>> readNextChunk(
-      rmm::device_async_resource_ref output_mr);
+  // Return the logical subfield filter used after reading.
+  cudf::ast::expression const* subfieldFilter() const;
+
+  // Return whether the pushdown filter was built for the current split.
+  bool hasSplitSpecificPushdownFilter() const;
 
   std::shared_ptr<CudfHiveConnectorSplit> split_;
   std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>
@@ -104,20 +134,32 @@ class CudfSplitReader : public NvtxHelper {
   std::shared_ptr<io::IoStatistics> ioStatistics_;
   std::shared_ptr<IoStats> ioStats_;
 
-  std::shared_ptr<cudf::io::datasource> dataSource_;
   rmm::cuda_stream_view stream_;
 
+  // Parquet metadata(s) for the current split(s).
+  std::vector<cudf::io::parquet::FileMetaData> fileMetaData_;
+
+  // Whether to prepend a row index column to the output.
+  bool prependRowIndex_{false};
+
  private:
-  /// Setup the cuDF reader options
+  // Clear splitReaders and datasources after split has been fully processed.
+  void resetSplit();
+
+  // Setup the cuDF reader options
   void setupReaderOptions();
 
-  /// Create the experimental hybrid scan reader.
+  // Create the chunked parquet reader.
+  void createCudfReader();
+
+  // Create the experimental hybrid scan reader.
   void createExperimentalReader();
 
   std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
   memory::MemoryPool* pool_;
 
   // cuDF split reader stuff.
+  std::shared_ptr<cudf::io::datasource> dataSource_;
   cudf::io::parquet_reader_options readerOptions_;
   CudfParquetReaderPtr splitReader_;
   CudfHybridScanReaderPtr exptSplitReader_;
@@ -125,8 +167,10 @@ class CudfSplitReader : public NvtxHelper {
   bool useExperimentalCudfReader_;
 
   dwio::common::ReaderOptions baseReaderOpts_;
-
   cudf::ast::expression const* subfieldFilterExpr_;
+  cudf::ast::expression const* pushdownFilterExpr_;
+  PushdownFilterBuilder pushdownFilterBuilder_;
+  bool hasSplitSpecificPushdownFilter_{false};
 
   struct TotalScanTimeCallbackData {
     uint64_t startTimeUs;

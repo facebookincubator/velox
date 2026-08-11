@@ -131,7 +131,7 @@ class TestStream : public Stream {
   // Makes random lookup keys and increments, starting at 'startCount'
   // columns[0] is keys. 'powerOfTwo' is the next power of two from
   // 'keyRange'. If 'powerOfTwo' is 0 the key columns are set to
-  // zero. Otherwise the key column values are incremented by a a
+  // zero. Otherwise the key column values are incremented by a
   // delta + index of column where delta for element 0 is startCount &
   // (powerOfTwo - 1).
   void makeInput(

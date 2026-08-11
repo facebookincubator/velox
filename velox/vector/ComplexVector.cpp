@@ -590,6 +590,11 @@ void ArrayVectorBase::copyRangesImpl(
           }
         });
     outRanges.reserve(totalCount);
+    // Current run of consecutive source rows, appended to 'outRanges' only when
+    // the run breaks.  Deliberately a local, not 'outRanges.back()', so it
+    // stays register-resident in the hot loop; do not simplify back to
+    // '.back()'.
+    CopyRange run{};
     applyToEachRow(ranges, [&](auto targetIndex, auto sourceIndex) {
       if (source->isNullAt(sourceIndex)) {
         setNull(targetIndex, true);
@@ -605,12 +610,13 @@ void ArrayVectorBase::copyRangesImpl(
 
           // If we're copying two adjacent ranges, merge them.  This only
           // works if they're consecutive.
-          if (!outRanges.empty() &&
-              (outRanges.back().sourceIndex + outRanges.back().count ==
-               copyOffset)) {
-            outRanges.back().count += copySize;
+          if (run.count != 0 && run.sourceIndex + run.count == copyOffset) {
+            run.count += copySize;
           } else {
-            outRanges.push_back({copyOffset, childSize, copySize});
+            if (run.count != 0) {
+              outRanges.push_back(run);
+            }
+            run = {copyOffset, childSize, copySize};
           }
         }
 
@@ -619,6 +625,10 @@ void ArrayVectorBase::copyRangesImpl(
         childSize = checkedPlus<vector_size_t>(childSize, copySize);
       }
     });
+
+    if (run.count != 0) {
+      outRanges.push_back(run);
+    }
 
     targetValues->get()->resize(childSize);
     targetValues->get()->copyRanges(sourceValues, outRanges);
@@ -826,12 +836,20 @@ VectorPtr pushDictionaryToRowVectorLeavesImpl(
     }
     case VectorEncoding::Simple::ROW: {
       VELOX_CHECK_EQ(values->typeKind(), TypeKind::ROW);
+      // Re-index the struct's own nulls through the wrappers to align with the
+      // wrapped children. Needed whenever the struct has nulls (not only when a
+      // wrapper does), else a null-free dictionary leaves them misaligned.
       auto nulls = values->nulls();
-      for (auto& wrapper : wrappers) {
+      bool anyWrapperNulls = false;
+      for (const auto& wrapper : wrappers) {
         if (wrapper.encoded->nulls()) {
-          nulls = combineNulls(wrappers, size, values->rawNulls(), pool);
+          anyWrapperNulls = true;
           break;
         }
+      }
+      if (!wrappers.empty() &&
+          (values->rawNulls() != nullptr || anyWrapperNulls)) {
+        nulls = combineNulls(wrappers, size, values->rawNulls(), pool);
       }
       auto children = values->asUnchecked<RowVector>()->children();
       for (auto& child : children) {

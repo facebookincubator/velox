@@ -263,7 +263,7 @@ class SimpleVector : public BaseVector {
   /// the SelectivityVector to corresponding indexes in this vector. Then we
   /// return:
   /// 1. True if all specified rows after the translation are known to be ASCII.
-  /// 2. False if all specified rows after translation contain atleast one non
+  /// 2. False if all specified rows after translation contain at least one non
   ///    ASCII character.
   /// 3. std::nullopt if ASCII-ness is not known for even one of the translated
   /// rows. If rowMappings is null then we revert to indexes in the

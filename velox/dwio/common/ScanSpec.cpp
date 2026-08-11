@@ -340,6 +340,35 @@ bool testBoolFilter(
   return true;
 }
 
+bool testTimestampFilter(
+    const common::Filter* filter,
+    dwio::common::TimestampColumnStatistics* timestampStats,
+    bool mayHaveNull) {
+  if (!timestampStats) {
+    return true;
+  }
+
+  if (timestampStats->getMinimum().has_value() &&
+      timestampStats->getMaximum().has_value()) {
+    return filter->testTimestampRange(
+        timestampStats->getMinimum().value(),
+        timestampStats->getMaximum().value(),
+        mayHaveNull);
+  }
+
+  if (timestampStats->getMinimum().has_value()) {
+    return filter->testTimestampRange(
+        timestampStats->getMinimum().value(), Timestamp::max(), mayHaveNull);
+  }
+
+  if (timestampStats->getMaximum().has_value()) {
+    return filter->testTimestampRange(
+        Timestamp::min(), timestampStats->getMaximum().value(), mayHaveNull);
+  }
+
+  return true;
+}
+
 } // namespace
 
 bool testFilter(
@@ -383,6 +412,11 @@ bool testFilter(
       auto* intStats =
           dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats);
       return testIntFilter(filter, intStats, mayHaveNull);
+    }
+    case TypeKind::TIMESTAMP: {
+      auto* timestampStats =
+          dynamic_cast<dwio::common::TimestampColumnStatistics*>(stats);
+      return testTimestampFilter(filter, timestampStats, mayHaveNull);
     }
     case TypeKind::REAL:
     case TypeKind::DOUBLE: {

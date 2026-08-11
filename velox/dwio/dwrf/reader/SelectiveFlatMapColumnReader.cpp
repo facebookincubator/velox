@@ -116,12 +116,14 @@ std::vector<KeyNode<T>> getKeyNodes(
       break;
     }
     case FlatMapOutput::kFlatMap:
-      // Remove on filters on keys stream since it doesn't exist (it's common to
-      // filter out nulls).
+      // The keys filter is retained (not cleared) so requested keys prune which
+      // streams are read below. A null-only filter (commonly present on the
+      // keys stream) passes every key and therefore prunes nothing. The keys
+      // stream itself is never read; read() ignores this filter to avoid
+      // mistaking it for a struct-child filter.
       keysSpec = scanSpec.getOrCreateChild(common::ScanSpec::kMapKeysFieldName);
       valuesSpec =
           scanSpec.getOrCreateChild(common::ScanSpec::kMapValuesFieldName);
-      keysSpec->setFilter(nullptr);
       VELOX_CHECK(!valuesSpec->hasFilter());
       break;
   }
@@ -141,6 +143,10 @@ std::vector<KeyNode<T>> getKeyNodes(
         auto key = extractKey<T>(keyInfo);
         common::ScanSpec* childSpec;
         if (outputType == FlatMapOutput::kFlatMap) {
+          if (keysSpec->filter() &&
+              !common::applyFilter(*keysSpec->filter(), key.get())) {
+            return; // Subfield pruning.
+          }
           childSpec = scanSpec.getOrCreateChild(toString(key.get()));
           childSpec->setProjectOut(true);
           childSpec->setChannel(sequence - 1);
@@ -323,6 +329,11 @@ class SelectiveFlatMapReader
 
       rawKeys[i] = keyNodes_[i].key.get();
     }
+  }
+
+  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
+      override {
+    readFlatMapChildren(offset, rows, incomingNulls);
   }
 
   const BufferPtr& inMapBuffer(column_index_t childIndex) const override {

@@ -117,7 +117,7 @@ class VectorWindowPartition : public WindowPartition {
   void rebuildPrefixSums();
 
   // Retained input vector row ranges.
-  std::deque<RowRange> ranges_;
+  std::deque<InclusiveRowRange> ranges_;
 
   // Prefix sums of retained row counts by range.
   std::vector<vector_size_t> rangePrefixSums_{0};

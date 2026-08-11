@@ -108,6 +108,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_split_reader_test
+  SOURCES Main.cpp CudfSplitReaderTest.cpp
+  LIBS velox_cudf_exec_test_lib velox_cudf_hive_connector
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_decimal_aggregation_test
   SOURCES Main.cpp DecimalAggregationTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_test_lib
@@ -176,6 +182,13 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_logical_functions_test
+  SOURCES Main.cpp LogicalFunctionsTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_expression
+  TIMEOUT 3000
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_local_partition_test
   SOURCES Main.cpp LocalPartitionTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
@@ -191,6 +204,12 @@ velox_add_cudf_test(
   NAME velox_cudf_nested_loop_join_test
   SOURCES Main.cpp NestedLoopJoinTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS}
+)
+
+velox_add_cudf_test(
+  NAME velox_cudf_null_mask_test
+  SOURCES Main.cpp NullMaskTest.cpp
+  LIBS velox_cudf_expression cudf::cudf
 )
 
 velox_add_cudf_test(
@@ -266,6 +285,12 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_topn_test
   SOURCES Main.cpp TopNTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
+)
+
+velox_add_cudf_test(
+  NAME velox_cudf_topnrownumber_test
+  SOURCES Main.cpp TopNRowNumberTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
 )
 

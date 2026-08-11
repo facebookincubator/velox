@@ -75,7 +75,7 @@ void VectorWindowPartition::addRows(
     const RowVectorPtr& input,
     vector_size_t startRow,
     vector_size_t endRow) {
-  RowRange range{input, startRow, endRow};
+  InclusiveRowRange range{input, startRow, endRow};
   if (range.size() == 0) {
     return;
   }

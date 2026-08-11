@@ -1474,6 +1474,23 @@ bool MultiRange::testDoubleRange(double min, double max, bool hasNull) const {
   return false;
 }
 
+bool MultiRange::testTimestampRange(
+    const Timestamp& min,
+    const Timestamp& max,
+    bool hasNull) const {
+  if (hasNull && nullAllowed_) {
+    return true;
+  }
+
+  for (const auto& filter : filters_) {
+    if (filter->testTimestampRange(min, max, hasNull)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 std::unique_ptr<Filter> MultiRange::mergeWith(const Filter* other) const {
   switch (other->kind()) {
     // Rules of MultiRange with IsNull/IsNotNull
@@ -1911,7 +1928,8 @@ std::unique_ptr<Filter> NegatedBigintRange::mergeWith(
         return other->mergeWith(this);
       }
       assert(this->lower() <= otherNegatedRange->lower());
-      if (this->upper() + 1 < otherNegatedRange->lower()) {
+      if (this->upper() < std::numeric_limits<int64_t>::max() &&
+          this->upper() + 1 < otherNegatedRange->lower()) {
         std::vector<std::unique_ptr<common::BigintRange>> outRanges;
         int64_t smallLower = this->lower();
         int64_t smallUpper = this->upper();

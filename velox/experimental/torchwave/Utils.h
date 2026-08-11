@@ -85,6 +85,20 @@ class Pool {
 using StreamPool = Pool<facebook::velox::wave::Stream>;
 using EventPool = Pool<facebook::velox::wave::Event>;
 
+/// Returns an alias of 'base' with the given shape, strides and element
+/// offset, built straight from the TensorImpl. This is the primitive
+/// Tensor::narrow / slice / select all bottom out in (aten's
+/// as_strided_tensorimpl); reaching it through them costs two dispatcher
+/// round-trips plus autograd view bookkeeping, which is measurable when a view
+/// is rebuilt per launch. Wave buffers are inference-only, so the skipped view
+/// tracking is unused. The caller owns the argument conditioning and bounds
+/// checks the dispatched ops would have done.
+at::Tensor aliasTensor(
+    const at::Tensor& base,
+    c10::IntArrayRef sizes,
+    c10::IntArrayRef strides,
+    int64_t storageOffset);
+
 /// Parses a qualified op name (e.g. "torch.ops.aten.add.Tensor") and looks up
 /// its FunctionSchema from the dispatcher. Returns nullptr if not found.
 const c10::FunctionSchema* findFunctionSchema(std::string_view qualifiedName);
@@ -362,9 +376,16 @@ std::string standaloneToString(NodeCP node);
 /// 'value'. Falls back to checking for "_." in the target name.
 bool isInPlaceMutation(NodeCP node, ValueCP value);
 
-/// Resolves 'value' to its underlying storage base by following view chains
-/// (the viewOfArg metadata). Views-on-views collapse to the ultimate base; a
-/// value with no view producer is its own base.
+/// If 'output' (an output of 'node') aliases one of 'node's inputs per the c10
+/// FunctionSchema alias sets (a view Tensor(a) or an in-place op Tensor(a!)),
+/// returns that input value; nullptr if the output is fresh or there is no
+/// schema. Authoritative alias source, preferred over the viewOfArg metadata.
+ValueCP schemaAliasedInput(NodeCP node, ValueCP output);
+
+/// Resolves 'value' to its underlying storage base by following alias chains
+/// (c10 schema alias sets, falling back to the viewOfArg metadata). Views-on-
+/// views collapse to the ultimate base; a value with no aliasing producer is
+/// its own base.
 ValueCP viewStorageBase(ValueCP value);
 
 /// Returns the input values that 'node' mutates in place (writes their
@@ -461,6 +482,14 @@ void saveTensorList(
 /// Loads a list of tensors saved by saveTensorList. Returns an empty vector if
 /// the file does not exist.
 std::vector<at::Tensor> loadTensorList(const std::string& path);
+
+/// Saves a full list of output IValues to a .pt file (pickled list),
+/// preserving non-tensor entries (scalars, None) in place. Tensors are moved to
+/// CPU. Unlike saveTensorList (which drops non-tensors), this keeps positions
+/// so the file is loadable as a golden reference via loadReferenceValues.
+void saveIValueList(
+    const std::vector<c10::IValue>& values,
+    const std::string& path);
 
 /// Loads a reference frame from a .pt file into a map keyed by ValueId.
 std::unordered_map<int32_t, c10::IValue> loadReferenceFrame(

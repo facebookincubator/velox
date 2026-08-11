@@ -31,6 +31,15 @@ struct IValue;
 
 namespace torch::wave {
 
+struct WaveConfig;
+
+/// Returns a mutable reference to the thread-local WaveConfig override pointer.
+/// While it is non-null, WaveConfig::get() returns the pointee instead of the
+/// global singleton, so wave graphs compiled and executed with different
+/// configs can run concurrently on different threads. Null on threads with no
+/// active override.
+WaveConfig*& waveConfigOverride();
+
 /// Process-wide configuration for wave graph execution (block size, tracing,
 /// grid hints).
 struct WaveConfig {
@@ -106,6 +115,13 @@ struct WaveConfig {
   // Enable device-side debug printfs. Emergency use only.
   bool kernelDebugOutput{false};
 
+  // Compile kernels with -lineinfo so compute-sanitizer can attribute a fault
+  // to a source line. Read once, from initialize(), because wave freezes its
+  // NVRTC flags on the first compile -- setting it later has no effect.
+  // Optimization stays on (unlike -G, which ptxas rejects at -O>0). It changes
+  // the kernel cache key, so the first run after enabling it recompiles.
+  bool kernelLineInfo{false};
+
   // Launch kernel once per block for debugging, waiting between launches.
   // Each kernel op runs as a standalone invocation so device-side errors
   // can be attributed to a single op.
@@ -116,8 +132,14 @@ struct WaveConfig {
   bool autoAdjustCost{false};
 
   // If true, reuse a value's buffer in place when an op is its unique last use
-  // (turning copying ops into in-place ops). Off by default.
-  bool enableReuse{false};
+  // (turning copying ops into in-place ops), and drop clones that no consumer
+  // needs. On by default.
+  bool enableReuse{true};
+
+  // If true, run the pre-partition read-only clone elision pass. Only consulted
+  // when enableReuse is set; separated from it so the pass can be A/B'd against
+  // the post-partition in-place rewrite alone.
+  bool elideClones{true};
 
   // Force a launch boundary after a multi-block (non-cooperative) scan so every
   // cross-block consumer of its output reads a fully materialized buffer from a
@@ -130,8 +152,25 @@ struct WaveConfig {
   // correctness fix); the race harness flips it off for the racy A/B arm.
   bool scanOutputReturnBarrier{true};
 
-  /// Not thread-safe. All mutations must happen before concurrent reads.
+  // If true, release the frame tensors of each ProjectNode's last-use values
+  // right after that node's composite invocation executes, instead of keeping
+  // them until the whole graph finishes. Off by default.
+  bool freeIntermediates{false};
+
+  // If true, the graph optimizer assumes every producer-less value (model
+  // input, weight, or constant) is contiguous, so downstream passes may treat
+  // them as densely laid out. When on, executeWave verifies each such tensor is
+  // actually contiguous and throws otherwise. Off by default.
+  bool inputContiguous{false};
+
+  /// Returns the active config: the thread-local override set by
+  /// waveConfigOverride() when non-null, otherwise the process-wide singleton.
+  /// The singleton is not thread-safe; all of its mutations must happen before
+  /// concurrent reads.
   FOLLY_EXPORT static WaveConfig& get() {
+    if (auto* configOverride = waveConfigOverride()) {
+      return *configOverride;
+    }
     static WaveConfig instance;
     return instance;
   }

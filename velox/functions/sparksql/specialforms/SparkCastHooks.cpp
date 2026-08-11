@@ -39,13 +39,18 @@ TimestampToStringOptions SparkCastHooks::timestampUtcToStringOptions() const {
 }
 
 Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
-    const StringView& view) const {
+    const StringView& view,
+    bool adjustTimezone) const {
   auto conversionResult = util::fromTimestampWithTimezoneString(
       view.data(), view.size(), util::TimestampParseMode::kSparkCast);
   if (conversionResult.hasError()) {
     return folly::makeUnexpected(conversionResult.error());
   }
-
+  if (!adjustTimezone) {
+    // For TIMESTAMP UTC, ignore any timezone suffix and store the parsed
+    // timestamp fields as-is, not subject to session timezone adjustment.
+    return conversionResult.value().timestamp;
+  }
   auto sessionTimezone = config_.sessionTimezone().empty()
       ? nullptr
       : tz::locateZone(config_.sessionTimezone());

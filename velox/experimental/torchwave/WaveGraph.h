@@ -33,6 +33,7 @@
 #include <torch/nativert/kernels/KernelFactory.h>
 #include "velox/experimental/torchwave/KernelOperation.h"
 #include "velox/experimental/torchwave/Registry.h"
+#include "velox/experimental/torchwave/WaveConfig.h"
 
 namespace facebook::velox::wave {
 class CompiledKernel;
@@ -45,17 +46,39 @@ class CompileCtx;
 class Optimizer;
 struct ExecutionState;
 
+/// Compile-time knowledge of a value's memory layout.
+enum class Contiguity : int8_t {
+  /// Layout not known -- conservative default (treat as possibly strided).
+  kUnknown = 0,
+  /// Known row-major contiguous (dense, standard strides).
+  kContiguous = 1,
+  /// Known NOT contiguous -- a strided view (transpose, diagonal, expand,
+  /// step>1 or inner-dim slice, ...).
+  kNoncontiguous = 2,
+};
+
 /// Rank and layout constraints for a graph value, used during optimization.
 struct ValueConstraint {
   int8_t rank{-1};
-  /// True when the value is known at compile time to be row-major contiguous
-  /// (dense, standard strides). Defaults to false: a wrong `true` could let a
-  /// kernel read a strided tensor as dense and corrupt results, whereas a
-  /// conservative `false` only costs an unnecessary copy. Set true for ops that
-  /// always materialize a fresh dense output (elementwise, cumsum, masked
-  /// select, cat, clone, contiguous, factory ops, ...) and propagated by view
-  /// and reshape; computed per PyTorch semantics for slice/select.
-  bool contiguous{false};
+  /// 3-state layout knowledge. kUnknown (default) is conservative: a wrong
+  /// kContiguous could let a kernel read a strided tensor as dense and corrupt
+  /// results, whereas kUnknown only costs an unnecessary copy. Set kContiguous
+  /// for ops that always materialize a fresh dense output (elementwise, cumsum,
+  /// masked select, cat, clone, contiguous, factory ops, ...); set
+  /// kNoncontiguous for views known to be strided (transpose, diagonal,
+  /// expand); propagated by view/reshape; computed per PyTorch semantics for
+  /// slice/select.
+  Contiguity contiguity{Contiguity::kUnknown};
+  /// True when the value has a zero stride in some dim (expand/broadcast): it
+  /// has fewer physical than logical elements, so an in-place write into it is
+  /// ill-defined.
+  bool zeroStrides{false};
+  /// True when the value is externally owned / persistent -- a graph input,
+  /// weight, or constant (producer-less) -- so it is not a writable
+  /// intermediate.
+  bool externallyOwned{false};
+  /// True when the value is a graph output.
+  bool graphOutput{false};
 };
 
 /// Per-value tensor metadata and constraints for a WaveGraph.
@@ -74,13 +97,52 @@ struct ValueTypes {
   }
 
   /// Whether 'value' is known to be contiguous. Returns false (conservative)
-  /// for values with no tracked constraint.
+  /// for values with unknown layout or no tracked constraint.
   bool contiguous(ValueCP value) const {
+    return contiguity(value) == Contiguity::kContiguous;
+  }
+
+  /// Whether 'value' is known to be NOT contiguous (a strided view). Returns
+  /// false for unknown layout or no tracked constraint.
+  bool noncontiguous(ValueCP value) const {
+    return contiguity(value) == Contiguity::kNoncontiguous;
+  }
+
+  /// The 3-state layout knowledge for 'value' (kUnknown if untracked).
+  Contiguity contiguity(ValueCP value) const {
+    auto id = value->id();
+    if (id < 0 || static_cast<size_t>(id) >= constraints.size()) {
+      return Contiguity::kUnknown;
+    }
+    return constraints[id].contiguity;
+  }
+
+  /// Whether 'value' has a zero stride (expand/broadcast). False if untracked.
+  bool zeroStrides(ValueCP value) const {
     auto id = value->id();
     if (id < 0 || static_cast<size_t>(id) >= constraints.size()) {
       return false;
     }
-    return constraints[id].contiguous;
+    return constraints[id].zeroStrides;
+  }
+
+  /// Whether 'value' is externally owned (input/weight/constant). False if
+  /// untracked.
+  bool externallyOwned(ValueCP value) const {
+    auto id = value->id();
+    if (id < 0 || static_cast<size_t>(id) >= constraints.size()) {
+      return false;
+    }
+    return constraints[id].externallyOwned;
+  }
+
+  /// Whether 'value' is a graph output. False if untracked.
+  bool graphOutput(ValueCP value) const {
+    auto id = value->id();
+    if (id < 0 || static_cast<size_t>(id) >= constraints.size()) {
+      return false;
+    }
+    return constraints[id].graphOutput;
   }
 };
 
@@ -118,6 +180,12 @@ struct ModelContext {
   std::unique_ptr<nativert::Graph> graph;
   std::shared_ptr<nativert::Weights> weights;
   nativert::ExecutorConfig config;
+
+  /// Optional per-graph WaveConfig. When set, it is moved into the WaveGraph at
+  /// construction and installed as the thread-local override during that
+  /// graph's compilation and execution, so graphs with different configs can
+  /// run concurrently. Null => use the global WaveConfig.
+  std::shared_ptr<WaveConfig> configOverride;
 
   /// Creates OpKernels for all nodes in the graph.
   std::vector<std::unique_ptr<nativert::OpKernel>> makeKernels() const {
@@ -292,9 +360,48 @@ class WaveGraph {
     return compileCtx_;
   }
 
+  /// Records that 'value' is consumed by more than one part of a multipart op
+  /// expansion (e.g. the shared input of cumsum_head and cumsum_final), so it
+  /// must not be released as a per-op freeable intermediate. Called by the
+  /// split / variant lowerings while generating the parts. The set lives here
+  /// (not on the transient CompileCtx) because it is consulted at execution
+  /// time, when LaunchData decides which kernel outputs are freeable.
+  void declareMultiplyReferencedInput(const nativert::Value* value);
+
+  bool isMultiUseInput(nativert::ValueId id) const {
+    return multiUseInputs_.count(id) != 0;
+  }
+
+  /// True if 'id' is a graph output value (or an element of a list-typed graph
+  /// output). Such values escape the graph and must never be released as a
+  /// per-op freeable intermediate.
+  bool isGraphOutput(nativert::ValueId id) const {
+    return graphOutputIds_.count(id) != 0;
+  }
+
+  /// Records that 'id' was the input of a clone the in-place pass elided, so an
+  /// in-place writer now overwrites its buffer. Called at compile time from
+  /// each ProjectNode's elidedCloneCounts.
+  void addElidedCloneInput(nativert::ValueId id) {
+    elidedCloneInputIds_.insert(id);
+  }
+
+  /// True if 'id' is the input of an elided clone. Its buffer is deliberately
+  /// overwritten in place, so it no longer holds the value the reference frame
+  /// recorded for it and must not be compared against the reference.
+  bool isElidedCloneInput(nativert::ValueId id) const {
+    return elidedCloneInputIds_.count(id) != 0;
+  }
+
   /// Returns the ModelContext, or nullptr if none was provided.
   ModelContext* modelContext() const {
     return modelContext_;
+  }
+
+  /// Returns this graph's WaveConfig override, or nullptr if it uses the global
+  /// config. Installed into waveConfigOverride() during execution.
+  WaveConfig* configOverride() const {
+    return configOverride_.get();
   }
 
   folly::F14FastMap<NodeCP, NodeInfo>& nodeInfos() {
@@ -376,8 +483,28 @@ class WaveGraph {
   // Retained for recreating OpKernels after graph mutations.
   ModelContext* modelContext_;
 
+  // Per-graph config override, moved from the ModelContext at construction and
+  // installed into the thread-local waveConfigOverride() during construction
+  // and execution. Null => this graph reads the global WaveConfig.
+  std::shared_ptr<WaveConfig> configOverride_;
+
   // Set during construction, cleared after.
   CompileCtx* compileCtx_{nullptr};
+
+  // Values consumed by more than one part of a multipart op expansion; they
+  // must never be freed as per-op intermediates. Populated at compile time via
+  // declareMultiplyReferencedInput, read at execution time by LaunchData.
+  std::unordered_set<nativert::ValueId> multiUseInputs_;
+
+  // Graph output value ids (plus elements of list-typed outputs). Escaping
+  // values that must never be freed as per-op intermediates. Populated at the
+  // start of compile, read at execution time by LaunchData.
+  std::unordered_set<nativert::ValueId> graphOutputIds_;
+
+  // Inputs of the clones the in-place pass elided. Their buffers are written
+  // in place by the rewired writer, so they diverge from the reference frame by
+  // design. Populated at compile time, read by the reference-frame checks.
+  std::unordered_set<nativert::ValueId> elidedCloneInputIds_;
 
   // Alive during construction only. Retains visited set so multikernel
   // variant nodes reuse the main-graph pass.

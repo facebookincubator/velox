@@ -24,23 +24,27 @@ namespace {
 class RowRangesTest : public testing::Test {};
 
 TEST(RowRangesTest, rowRange) {
-  RowRange r(5, 10);
+  InclusiveRowRange r(5, 10);
   EXPECT_EQ(r.from_, 5);
   EXPECT_EQ(r.to_, 10);
   EXPECT_EQ(r.count(), 6); // 10 - 5 + 1
   EXPECT_EQ(r.toString(), "[5, 10]");
-  auto ru1 = RowRange::tryUnion(RowRange(1, 5), RowRange(6, 8));
+  auto ru1 = InclusiveRowRange::tryUnion(
+      InclusiveRowRange(1, 5), InclusiveRowRange(6, 8));
   EXPECT_TRUE(ru1.has_value());
   EXPECT_EQ(ru1->toString(), "[1, 8]");
 
-  auto ru2 = RowRange::tryUnion(RowRange(1, 5), RowRange(7, 8));
+  auto ru2 = InclusiveRowRange::tryUnion(
+      InclusiveRowRange(1, 5), InclusiveRowRange(7, 8));
   EXPECT_FALSE(ru2.has_value());
 
-  auto ri = RowRange::intersection(RowRange(2, 6), RowRange(4, 10));
+  auto ri = InclusiveRowRange::intersection(
+      InclusiveRowRange(2, 6), InclusiveRowRange(4, 10));
   EXPECT_TRUE(ri.has_value());
   EXPECT_EQ(ri->toString(), "[4, 6]");
 
-  auto ri2 = RowRange::intersection(RowRange(1, 3), RowRange(4, 5));
+  auto ri2 = InclusiveRowRange::intersection(
+      InclusiveRowRange(1, 3), InclusiveRowRange(4, 5));
   EXPECT_FALSE(ri2.has_value());
 }
 
@@ -55,52 +59,52 @@ TEST(RowRangesTest, createSingle) {
 }
 
 TEST(RowRangesTest, unionWith) {
-  RowRanges a(RowRange(113, 241));
-  RowRanges b(RowRange(221, 340));
+  RowRanges a(InclusiveRowRange(113, 241));
+  RowRanges b(InclusiveRowRange(221, 340));
   EXPECT_EQ(RowRanges::unionWith(a, b).toString(), "[[113, 340]]");
 
-  RowRanges c(RowRange(113, 230));
-  RowRanges d(RowRange(231, 340));
+  RowRanges c(InclusiveRowRange(113, 230));
+  RowRanges d(InclusiveRowRange(231, 340));
   EXPECT_EQ(RowRanges::unionWith(c, d).toString(), "[[113, 340]]");
 
-  RowRanges e(RowRange(113, 230));
-  RowRanges f(RowRange(232, 340));
+  RowRanges e(InclusiveRowRange(113, 230));
+  RowRanges f(InclusiveRowRange(232, 340));
   EXPECT_EQ(RowRanges::unionWith(e, f).toString(), "[[113, 230], [232, 340]]");
 
   RowRanges x;
-  x.add(RowRange(5, 8));
-  x.add(RowRange(10, 20));
-  x.add(RowRange(25, 30));
+  x.add(InclusiveRowRange(5, 8));
+  x.add(InclusiveRowRange(10, 20));
+  x.add(InclusiveRowRange(25, 30));
   EXPECT_EQ(x.toString(), "[[5, 8], [10, 20], [25, 30]]");
 
   RowRanges y;
-  y.add(RowRange(9, 18));
+  y.add(InclusiveRowRange(9, 18));
 
   EXPECT_EQ(RowRanges::unionWith(x, y).toString(), "[[5, 20], [25, 30]]");
 }
 
 TEST(RowRangesTest, intersection) {
-  RowRanges a(RowRange(113, 241));
-  RowRanges b(RowRange(221, 340));
+  RowRanges a(InclusiveRowRange(113, 241));
+  RowRanges b(InclusiveRowRange(221, 340));
   EXPECT_EQ(RowRanges::intersection(a, b).toString(), "[[221, 241]]");
 
-  RowRanges c(RowRange(113, 230));
-  RowRanges d(RowRange(231, 340));
+  RowRanges c(InclusiveRowRange(113, 230));
+  RowRanges d(InclusiveRowRange(231, 340));
   EXPECT_EQ(RowRanges::intersection(c, d).toString(), "[]");
 
   RowRanges x;
-  x.add(RowRange(0, 100));
-  x.add(RowRange(200, 300));
+  x.add(InclusiveRowRange(0, 100));
+  x.add(InclusiveRowRange(200, 300));
   RowRanges y;
-  y.add(RowRange(50, 250));
+  y.add(InclusiveRowRange(50, 250));
   EXPECT_EQ(
       RowRanges::intersection(x, y).toString(), "[[50, 100], [200, 250]]");
 }
 
 TEST(RowRangesTest, overlapAndCount) {
   RowRanges r;
-  r.add(RowRange(0, 4));
-  r.add(RowRange(10, 12));
+  r.add(InclusiveRowRange(0, 4));
+  r.add(InclusiveRowRange(10, 12));
   EXPECT_TRUE(r.isOverlapping(2, 3));
   EXPECT_TRUE(r.isOverlapping(3, 10));
   EXPECT_FALSE(r.isOverlapping(5, 9));
@@ -109,68 +113,68 @@ TEST(RowRangesTest, overlapAndCount) {
 }
 TEST(RowRangesTest, addAdjacentChains) {
   RowRanges r;
-  r.add(RowRange(0, 0));
+  r.add(InclusiveRowRange(0, 0));
   EXPECT_EQ(r.toString(), "[[0, 0]]");
-  r.add(RowRange(1, 1));
+  r.add(InclusiveRowRange(1, 1));
   EXPECT_EQ(r.toString(), "[[0, 1]]");
-  r.add(RowRange(2, 2));
+  r.add(InclusiveRowRange(2, 2));
   EXPECT_EQ(r.toString(), "[[0, 2]]");
   EXPECT_EQ(r.rowCount(), 3);
 }
 
 TEST(RowRangesTest, addNonAdjacent) {
   RowRanges r;
-  r.add(RowRange(5, 10));
-  r.add(RowRange(12, 15));
+  r.add(InclusiveRowRange(5, 10));
+  r.add(InclusiveRowRange(12, 15));
   EXPECT_EQ(r.toString(), "[[5, 10], [12, 15]]");
   EXPECT_EQ(r.rowCount(), (10 - 5 + 1) + (15 - 12 + 1));
 }
 
 TEST(RowRangesTest, unionChainedAdjacent) {
-  RowRanges a(RowRange(0, 3));
-  RowRanges b(RowRange(4, 7));
-  RowRanges c(RowRange(8, 10));
+  RowRanges a(InclusiveRowRange(0, 3));
+  RowRanges b(InclusiveRowRange(4, 7));
+  RowRanges c(InclusiveRowRange(8, 10));
   auto u = RowRanges::unionWith(RowRanges::unionWith(a, b), c);
   EXPECT_EQ(u.toString(), "[[0, 10]]");
 }
 
 TEST(RowRangesTest, unionInterleaved) {
   RowRanges a;
-  a.add(RowRange(0, 2));
-  a.add(RowRange(10, 12));
+  a.add(InclusiveRowRange(0, 2));
+  a.add(InclusiveRowRange(10, 12));
   RowRanges b;
-  b.add(RowRange(1, 11));
+  b.add(InclusiveRowRange(1, 11));
   auto u = RowRanges::unionWith(a, b);
   EXPECT_EQ(u.toString(), "[[0, 12]]");
 }
 
 TEST(RowRangesTest, intersectionTouchingEdge) {
-  RowRanges a(RowRange(100, 200));
-  RowRanges b(RowRange(200, 300));
+  RowRanges a(InclusiveRowRange(100, 200));
+  RowRanges b(InclusiveRowRange(200, 300));
   auto inter = RowRanges::intersection(a, b);
   EXPECT_EQ(inter.toString(), "[[200, 200]]");
   EXPECT_EQ(inter.rowCount(), 1);
 }
 
 TEST(RowRangesTest, intersectionSinglePoint) {
-  RowRanges a(RowRange(50, 50));
-  RowRanges b(RowRange(0, 100));
+  RowRanges a(InclusiveRowRange(50, 50));
+  RowRanges b(InclusiveRowRange(0, 100));
   auto inter = RowRanges::intersection(a, b);
   EXPECT_EQ(inter.toString(), "[[50, 50]]");
   EXPECT_EQ(inter.rowCount(), 1);
 }
 
 TEST(RowRangesTest, intersectionContainment) {
-  RowRanges a(RowRange(0, 100));
-  RowRanges b(RowRange(20, 30));
+  RowRanges a(InclusiveRowRange(0, 100));
+  RowRanges b(InclusiveRowRange(20, 30));
   EXPECT_EQ(RowRanges::intersection(a, b).toString(), "[[20, 30]]");
-  RowRanges c(RowRange(101, 110));
+  RowRanges c(InclusiveRowRange(101, 110));
   EXPECT_EQ(RowRanges::intersection(a, c).toString(), "[]");
 }
 
 TEST(RowRangesTest, overlapExactAndGap) {
   RowRanges r;
-  r.add(RowRange(100, 110));
+  r.add(InclusiveRowRange(100, 110));
   EXPECT_TRUE(r.isOverlapping(100, 110));
   EXPECT_TRUE(r.isOverlapping(102, 108));
   EXPECT_FALSE(r.isOverlapping(90, 99));
@@ -179,41 +183,41 @@ TEST(RowRangesTest, overlapExactAndGap) {
 
 TEST(RowRangesTest, overlapAcrossSegments) {
   RowRanges r;
-  r.add(RowRange(0, 10));
-  r.add(RowRange(20, 30));
+  r.add(InclusiveRowRange(0, 10));
+  r.add(InclusiveRowRange(20, 30));
   EXPECT_FALSE(r.isOverlapping(11, 19));
   EXPECT_TRUE(r.isOverlapping(5, 15));
   EXPECT_TRUE(r.isOverlapping(15, 25));
 }
 
 TEST(RowRangeTest, differenceNoOverlap) {
-  auto v = RowRange::difference({0, 5}, {10, 15});
+  auto v = InclusiveRowRange::difference({0, 5}, {10, 15});
   EXPECT_EQ(v.size(), 1);
   EXPECT_EQ(v[0].from_, 0);
   EXPECT_EQ(v[0].to_, 5);
 }
 
 TEST(RowRangeTest, differenceFullOverlap) {
-  auto v = RowRange::difference({0, 5}, {0, 5});
+  auto v = InclusiveRowRange::difference({0, 5}, {0, 5});
   EXPECT_TRUE(v.empty());
 }
 
 TEST(RowRangeTest, differenceOverlapStart) {
-  auto v = RowRange::difference({0, 5}, {0, 2});
+  auto v = InclusiveRowRange::difference({0, 5}, {0, 2});
   EXPECT_EQ(v.size(), 1);
   EXPECT_EQ(v[0].from_, 3);
   EXPECT_EQ(v[0].to_, 5);
 }
 
 TEST(RowRangeTest, differenceOverlapEnd) {
-  auto v = RowRange::difference({0, 5}, {3, 5});
+  auto v = InclusiveRowRange::difference({0, 5}, {3, 5});
   EXPECT_EQ(v.size(), 1);
   EXPECT_EQ(v[0].from_, 0);
   EXPECT_EQ(v[0].to_, 2);
 }
 
 TEST(RowRangeTest, differenceOverlapMiddle) {
-  auto v = RowRange::difference({0, 10}, {3, 7});
+  auto v = InclusiveRowRange::difference({0, 10}, {3, 7});
   EXPECT_EQ(v.size(), 2);
   EXPECT_EQ(v[0].from_, 0);
   EXPECT_EQ(v[0].to_, 2);
@@ -241,7 +245,7 @@ TEST(RowRangesTest, intersectOneNoOverlap) {
 
 TEST(RowRangesTest, noOverlapBefore) {
   RowRanges rs;
-  rs.add(RowRange(20, 30));
+  rs.add(InclusiveRowRange(20, 30));
 
   auto [chunk, overlap] = RowRanges::firstSplitByIntersection({10, 19}, rs);
   EXPECT_EQ(chunk.from_, 10);
@@ -251,7 +255,7 @@ TEST(RowRangesTest, noOverlapBefore) {
 
 TEST(RowRangesTest, noOverlapAfter) {
   RowRanges rs;
-  rs.add(RowRange(5, 10));
+  rs.add(InclusiveRowRange(5, 10));
 
   auto [chunk, overlap] = RowRanges::firstSplitByIntersection({15, 20}, rs);
   EXPECT_EQ(chunk.from_, 15);
@@ -261,7 +265,7 @@ TEST(RowRangesTest, noOverlapAfter) {
 
 TEST(RowRangesTest, overlapInMiddle) {
   RowRanges rs;
-  rs.add(RowRange(15, 18));
+  rs.add(InclusiveRowRange(15, 18));
 
   auto [chunk, overlap] = RowRanges::firstSplitByIntersection({12, 20}, rs);
   EXPECT_EQ(chunk.from_, 12);
@@ -271,7 +275,7 @@ TEST(RowRangesTest, overlapInMiddle) {
 
 TEST(RowRangesTest, overlapStartInsideValidRange) {
   RowRanges rs;
-  rs.add(RowRange(10, 20));
+  rs.add(InclusiveRowRange(10, 20));
 
   auto [chunk, overlap] = RowRanges::firstSplitByIntersection({15, 25}, rs);
   EXPECT_EQ(chunk.from_, 15);
@@ -281,7 +285,7 @@ TEST(RowRangesTest, overlapStartInsideValidRange) {
 
 TEST(RowRangesTest, overlapExact) {
   RowRanges rs;
-  rs.add(RowRange(10, 20));
+  rs.add(InclusiveRowRange(10, 20));
 
   auto [chunk, overlap] = RowRanges::firstSplitByIntersection({10, 20}, rs);
   EXPECT_EQ(chunk.from_, 10);
@@ -291,7 +295,7 @@ TEST(RowRangesTest, overlapExact) {
 
 TEST(RowRangesTest, overlapPartialEnd) {
   RowRanges rs;
-  rs.add(RowRange(15, 18));
+  rs.add(InclusiveRowRange(15, 18));
 
   auto [chunk, overlap] = RowRanges::firstSplitByIntersection({15, 25}, rs);
   EXPECT_EQ(chunk.from_, 15);
@@ -310,9 +314,9 @@ TEST(RowRangesTest, emptyRanges) {
 
 TEST(RowRangesTest, multipleValidRanges) {
   RowRanges rs;
-  rs.add(RowRange(8, 9));
-  rs.add(RowRange(12, 14));
-  rs.add(RowRange(20, 25));
+  rs.add(InclusiveRowRange(8, 9));
+  rs.add(InclusiveRowRange(12, 14));
+  rs.add(InclusiveRowRange(20, 25));
 
   auto [chunk, overlap] = RowRanges::firstSplitByIntersection({10, 22}, rs);
   EXPECT_EQ(chunk.from_, 10);
@@ -322,8 +326,8 @@ TEST(RowRangesTest, multipleValidRanges) {
 
 TEST(RowRangesTest, startInsideGap) {
   RowRanges rs;
-  rs.add(RowRange(5, 9));
-  rs.add(RowRange(15, 20));
+  rs.add(InclusiveRowRange(5, 9));
+  rs.add(InclusiveRowRange(15, 20));
 
   auto [chunk, overlap] = RowRanges::firstSplitByIntersection({12, 18}, rs);
   EXPECT_EQ(chunk.from_, 12);
@@ -333,7 +337,7 @@ TEST(RowRangesTest, startInsideGap) {
 
 TEST(RowRangesTest, exactBoundaryNonOverlap) {
   RowRanges rs;
-  rs.add(RowRange(10, 15));
+  rs.add(InclusiveRowRange(10, 15));
 
   auto [chunk, overlap] = RowRanges::firstSplitByIntersection({16, 20}, rs);
   EXPECT_EQ(chunk.from_, 16);
@@ -343,7 +347,7 @@ TEST(RowRangesTest, exactBoundaryNonOverlap) {
 
 TEST(RowRangesTest, exactBoundaryOverlap) {
   RowRanges rs;
-  rs.add(RowRange(10, 15));
+  rs.add(InclusiveRowRange(10, 15));
 
   auto [chunk, overlap] = RowRanges::firstSplitByIntersection({15, 18}, rs);
   EXPECT_EQ(chunk.from_, 15);
@@ -353,7 +357,7 @@ TEST(RowRangesTest, exactBoundaryOverlap) {
 
 TEST(RowRangesTest, onePointOverlap) {
   RowRanges rs;
-  rs.add(RowRange(8, 8));
+  rs.add(InclusiveRowRange(8, 8));
 
   auto [chunk, overlap] = RowRanges::firstSplitByIntersection({8, 10}, rs);
   EXPECT_EQ(chunk.from_, 8);
@@ -369,7 +373,7 @@ TEST(RowRangesTest, unionBothEmpty) {
 }
 
 TEST(RowRangesTest, unionOneEmpty) {
-  RowRanges a(RowRange(5, 10));
+  RowRanges a(InclusiveRowRange(5, 10));
   RowRanges b;
   auto u1 = RowRanges::unionWith(a, b);
   EXPECT_EQ(u1.toString(), "[[5, 10]]");
@@ -378,33 +382,33 @@ TEST(RowRangesTest, unionOneEmpty) {
 }
 
 TEST(RowRangesTest, unionDisjointNonAdjacent) {
-  RowRanges a(RowRange(0, 2));
-  RowRanges b(RowRange(5, 7));
+  RowRanges a(InclusiveRowRange(0, 2));
+  RowRanges b(InclusiveRowRange(5, 7));
   auto u = RowRanges::unionWith(a, b);
   EXPECT_EQ(u.toString(), "[[0, 2], [5, 7]]");
 }
 
 TEST(RowRangesTest, unionAdjacentRanges) {
-  RowRanges a(RowRange(0, 4));
-  RowRanges b(RowRange(5, 9));
+  RowRanges a(InclusiveRowRange(0, 4));
+  RowRanges b(InclusiveRowRange(5, 9));
   auto u = RowRanges::unionWith(a, b);
   EXPECT_EQ(u.toString(), "[[0, 9]]");
 }
 
 TEST(RowRangesTest, unionOverlappingRanges) {
-  RowRanges a(RowRange(0, 5));
-  RowRanges b(RowRange(3, 10));
+  RowRanges a(InclusiveRowRange(0, 5));
+  RowRanges b(InclusiveRowRange(3, 10));
   auto u = RowRanges::unionWith(a, b);
   EXPECT_EQ(u.toString(), "[[0, 10]]");
 }
 
 TEST(RowRangesTest, unionMultipleRanges) {
   RowRanges a;
-  a.add(RowRange(1, 2));
-  a.add(RowRange(5, 6));
+  a.add(InclusiveRowRange(1, 2));
+  a.add(InclusiveRowRange(5, 6));
   RowRanges b;
-  b.add(RowRange(2, 5));
-  b.add(RowRange(8, 9));
+  b.add(InclusiveRowRange(2, 5));
+  b.add(InclusiveRowRange(8, 9));
   auto u = RowRanges::unionWith(a, b);
   EXPECT_EQ(u.toString(), "[[1, 6], [8, 9]]");
 }
@@ -417,33 +421,33 @@ TEST(RowRangesTest, complementEmptySrcFullRange) {
 }
 
 TEST(RowRangesTest, complementFullSrcEmpty) {
-  RowRanges src(RowRange(0, 2));
+  RowRanges src(InclusiveRowRange(0, 2));
   auto c = RowRanges::complement(src, 3);
   EXPECT_EQ(c.toString(), "[]");
 }
 
 TEST(RowRangesTest, complementPrefix) {
-  RowRanges src(RowRange(0, 0));
+  RowRanges src(InclusiveRowRange(0, 0));
   auto c = RowRanges::complement(src, 5);
   EXPECT_EQ(c.toString(), "[[1, 4]]");
 }
 
 TEST(RowRangesTest, complementSuffix) {
-  RowRanges src(RowRange(3, 4));
+  RowRanges src(InclusiveRowRange(3, 4));
   auto c = RowRanges::complement(src, 5);
   EXPECT_EQ(c.toString(), "[[0, 2]]");
 }
 
 TEST(RowRangesTest, complementMiddle) {
-  RowRanges src(RowRange(2, 3));
+  RowRanges src(InclusiveRowRange(2, 3));
   auto c = RowRanges::complement(src, 6);
   EXPECT_EQ(c.toString(), "[[0, 1], [4, 5]]");
 }
 
 TEST(RowRangesTest, complementMultipleRanges) {
   RowRanges src;
-  src.add(RowRange(1, 2));
-  src.add(RowRange(5, 6));
+  src.add(InclusiveRowRange(1, 2));
+  src.add(InclusiveRowRange(5, 6));
   auto c = RowRanges::complement(src, 10);
   EXPECT_EQ(c.toString(), "[[0, 0], [3, 4], [7, 9]]");
 }
@@ -462,45 +466,45 @@ TEST(RowRangesTest, unionWithBothEmpty) {
 }
 
 TEST(RowRangesTest, unionWithOneEmpty) {
-  RowRanges a(RowRange(5, 10));
+  RowRanges a(InclusiveRowRange(5, 10));
   RowRanges b;
   a.unionWith(b);
   EXPECT_EQ(a.toString(), "[[5, 10]]");
 
   RowRanges c;
-  RowRanges d(RowRange(2, 4));
+  RowRanges d(InclusiveRowRange(2, 4));
   c.unionWith(d);
   EXPECT_EQ(c.toString(), "[[2, 4]]");
 }
 
 TEST(RowRangesTest, unionWithDisjointNonAdjacent) {
-  RowRanges a(RowRange(0, 2));
-  RowRanges b(RowRange(5, 7));
+  RowRanges a(InclusiveRowRange(0, 2));
+  RowRanges b(InclusiveRowRange(5, 7));
   a.unionWith(b);
   EXPECT_EQ(a.toString(), "[[0, 2], [5, 7]]");
 }
 
 TEST(RowRangesTest, unionWithAdjacentRanges) {
-  RowRanges a(RowRange(0, 4));
-  RowRanges b(RowRange(5, 9));
+  RowRanges a(InclusiveRowRange(0, 4));
+  RowRanges b(InclusiveRowRange(5, 9));
   a.unionWith(b);
   EXPECT_EQ(a.toString(), "[[0, 9]]");
 }
 
 TEST(RowRangesTest, unionWithOverlappingRanges) {
-  RowRanges a(RowRange(0, 5));
-  RowRanges b(RowRange(3, 10));
+  RowRanges a(InclusiveRowRange(0, 5));
+  RowRanges b(InclusiveRowRange(3, 10));
   a.unionWith(b);
   EXPECT_EQ(a.toString(), "[[0, 10]]");
 }
 
 TEST(RowRangesTest, unionWithMultipleRanges) {
   RowRanges a;
-  a.add(RowRange(1, 2));
-  a.add(RowRange(5, 6));
+  a.add(InclusiveRowRange(1, 2));
+  a.add(InclusiveRowRange(5, 6));
   RowRanges b;
-  b.add(RowRange(2, 5));
-  b.add(RowRange(8, 9));
+  b.add(InclusiveRowRange(2, 5));
+  b.add(InclusiveRowRange(8, 9));
   a.unionWith(b);
   EXPECT_EQ(a.toString(), "[[1, 6], [8, 9]]");
 }
@@ -514,33 +518,33 @@ TEST(RowRangesTest, intersectWithBothEmpty) {
 }
 
 TEST(RowRangesTest, intersectWithNoOverlap) {
-  RowRanges a(RowRange(0, 2));
-  RowRanges b(RowRange(5, 7));
+  RowRanges a(InclusiveRowRange(0, 2));
+  RowRanges b(InclusiveRowRange(5, 7));
   a.intersectWith(b);
   EXPECT_EQ(a.toString(), "[]");
 }
 
 TEST(RowRangesTest, intersectWithPartialOverlap) {
-  RowRanges a(RowRange(0, 5));
-  RowRanges b(RowRange(3, 10));
+  RowRanges a(InclusiveRowRange(0, 5));
+  RowRanges b(InclusiveRowRange(3, 10));
   a.intersectWith(b);
   EXPECT_EQ(a.toString(), "[[3, 5]]");
 }
 
 TEST(RowRangesTest, intersectWithCompleteOverlap) {
-  RowRanges a(RowRange(2, 8));
-  RowRanges b(RowRange(2, 8));
+  RowRanges a(InclusiveRowRange(2, 8));
+  RowRanges b(InclusiveRowRange(2, 8));
   a.intersectWith(b);
   EXPECT_EQ(a.toString(), "[[2, 8]]");
 }
 
 TEST(RowRangesTest, intersectWithMultipleIntervals) {
   RowRanges a;
-  a.add(RowRange(0, 3));
-  a.add(RowRange(5, 9));
+  a.add(InclusiveRowRange(0, 3));
+  a.add(InclusiveRowRange(5, 9));
   RowRanges b;
-  b.add(RowRange(2, 6));
-  b.add(RowRange(8, 10));
+  b.add(InclusiveRowRange(2, 6));
+  b.add(InclusiveRowRange(8, 10));
   a.intersectWith(b);
   EXPECT_EQ(a.toString(), "[[2, 3], [5, 6], [8, 9]]");
 }

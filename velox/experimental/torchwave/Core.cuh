@@ -41,9 +41,21 @@ __device__ inline T* storage(const Tensor* tensor) {
   return reinterpret_cast<T*>(tensor->storage);
 }
 
+__device__ inline uint32_t
+complexIdx(bool fast, const Tensor* t, uint32_t idx) {
+  if (!fast) {
+    return t->indexToOffset(idx);
+  }
+  return idx;
+}
+
 template <typename T>
 __device__ inline T elementRef(Tensor* t, uint32_t idx, uint32_t size) {
-  return idx < size ? storage<T>(t)[idx] : T();
+  // Honor the tensor's stride so a non-contiguous view (e.g. a select-column
+  // reduced by a single-block reduction that reads its input in registers)
+  // reads the right element. complexIdx is a no-op (returns idx) for contiguous
+  // tensors, so this is free for the common case.
+  return idx < size ? storage<T>(t)[complexIdx(t->contiguous, t, idx)] : T();
 }
 
 template <typename T>
@@ -95,6 +107,67 @@ __device__ void __copyConvert(Tensor* source, DstT* dest, BlockInfo& block) {
   }
 }
 
+// Copies 'source' into the slice of the concatenation output 'dest' that starts
+// at 'offset' along dimension 'dim'. For a cat, source and dest have the same
+// rank and the slice spans source->dims[dim] positions; for a stack (kStack),
+// source has one dim fewer and the slice is the single position 'offset'. The
+// slice is strided whenever 'dim' is not the outermost dimension, so each
+// element's destination offset is recomputed from dest's strides.
+template <typename SrcT, typename DstT, bool kStack>
+__device__ void __concatCopy(
+    Tensor* source,
+    Tensor* dest,
+    int32_t dim,
+    int64_t offset,
+    BlockInfo& block) {
+  // See __copy: an empty operand arrives as an undefined tensor with null
+  // storage, yet init gives it numEl == 1 (the empty product).
+  if (source->storage == nullptr) {
+    return;
+  }
+  // A zero-extent dimension has nothing to copy, and because init reports
+  // numEl == 1 for it (that same empty product) the loops below would still run
+  // one iteration and divide by the zero extent.
+  for (int d = 0; d < source->rank; ++d) {
+    if (source->dims[d] == 0) {
+      return;
+    }
+  }
+  // All of the index arithmetic is 64-bit. numEl exceeds 32 bits for a large
+  // concat, so a 32-bit loop counter would wrap and silently skip elements, and
+  // the per-element offsets accumulated from strides can pass INT32_MAX on a
+  // wide multi-dim output and land in the wrong slice.
+  const int64_t n = source->numEl;
+  const int64_t start = block.blockInOp * blockDim.x + threadIdx.x;
+  const int64_t stride = block.numBlocksInOp * blockDim.x;
+  auto* dst = storage<DstT>(dest) + offset * dest->strides[dim];
+  // Joining on the outermost dimension leaves the slice contiguous in a
+  // contiguous output, so the source's row-major order maps straight onto it.
+  if (dim == 0 && source->contiguous && dest->contiguous) {
+    const auto* src = storage<SrcT>(source);
+    for (int64_t i = start; i < n; i += stride) {
+      dst[i] = static_cast<DstT>(src[i]);
+    }
+    return;
+  }
+  // Plain div/mod rather than the Tensor::sizes[] magic dividers: those are
+  // only populated for tensors the block prologue index-initializes, and a
+  // rank-1 contiguous operand takes init's fast path, which leaves them unset.
+  for (int64_t i = start; i < n; i += stride) {
+    int64_t rest = i;
+    int64_t sourceOffset = 0;
+    int64_t destOffset = 0;
+    for (int d = source->rank - 1; d >= 0; --d) {
+      const int64_t extent = source->dims[d];
+      const int64_t coord = rest % extent;
+      rest /= extent;
+      sourceOffset += coord * source->strides[d];
+      destOffset += coord * dest->strides[kStack && d >= dim ? d + 1 : d];
+    }
+    dst[destOffset] = static_cast<DstT>(storage<SrcT>(source)[sourceOffset]);
+  }
+}
+
 __device__ inline void copyTensorHead(const Tensor* in, Tensor* out) {
   out->storage = in->storage;
   out->rank = in->rank;
@@ -102,14 +175,6 @@ __device__ inline void copyTensorHead(const Tensor* in, Tensor* out) {
     out->dims[i] = in->dims[i];
     out->strides[i] = in->strides[i];
   }
-}
-
-__device__ inline uint32_t
-complexIdx(bool fast, const Tensor* t, uint32_t idx) {
-  if (!fast) {
-    return t->indexToOffset(idx);
-  }
-  return idx;
 }
 
 struct Int32X32 {

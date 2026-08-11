@@ -94,8 +94,8 @@ TEST_F(ColumnPageIndexTest, updateSkippedPages) {
   ColumnPageIndex idx(std::move(ci), std::move(oi), 100);
 
   RowRanges ranges;
-  ranges.add(RowRange(10, 20)); // overlaps page0
-  ranges.add(RowRange(35, 65)); // overlaps page1
+  ranges.add(InclusiveRowRange(10, 20)); // overlaps page0
+  ranges.add(InclusiveRowRange(35, 65)); // overlaps page1
   idx.updateSkippedPages(ranges);
 
   EXPECT_FALSE(idx.isPageSkipped(0));

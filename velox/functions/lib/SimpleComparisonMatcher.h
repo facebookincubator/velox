@@ -63,7 +63,7 @@ class ComparisonMatcher : public Matcher {
   }
 
   /// Checks if the given name specifies a comparison expression. Can be
-  /// overriden to use different function names for Spark.
+  /// overridden to use different function names for Spark.
   virtual bool exprNameMatch(const std::string& name) {
     return name == prefix_ + "eq" || name == prefix_ + "lt" ||
         name == prefix_ + "gt";

@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -36,7 +37,8 @@ class IcebergColumnHandle : public HiveColumnHandle {
       parquet::ParquetFieldId icebergField,
       std::vector<common::Subfield> requiredSubfields = {},
       std::optional<std::string> initialDefaultValue = std::nullopt,
-      IcebergFieldMetadata icebergMetadata = {});
+      IcebergFieldMetadata icebergMetadata = {},
+      std::function<void(VectorPtr&)> postProcessor = {});
 
   const parquet::ParquetFieldId& field() const;
 
