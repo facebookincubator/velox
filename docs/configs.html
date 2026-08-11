@@ -1418,6 +1418,14 @@ Valid values are “V1” and “V2”. Session: <code class="docutils literal n
 When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.
 Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.enable_store_decimal_as_integer</span></code>.</p></td>
 </tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-page-index</span></code></p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Whether to write the Parquet page index (column index and offset index) when writing into
+Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
+index instead of the data page headers, letting readers skip pages that cannot match a filter.
+Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.enable_page_index</span></code>.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
