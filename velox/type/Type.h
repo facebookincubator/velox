@@ -2333,7 +2333,19 @@ std::string stringifyTruncatedElementList(
 
 } // namespace facebook::velox
 
+// std::hash specialization for UnknownValue is required so that
+// folly::F14FastMap<UnknownValue, ...> (used by IndexedPriorityQueue) compiles.
+// Without this, VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL would need explicit
+// UNKNOWN exclusions in every callsite.
 namespace std {
+template <>
+struct hash<::facebook::velox::UnknownValue> {
+  size_t operator()(
+      const ::facebook::velox::UnknownValue& /* value */) const noexcept {
+    return 0;
+  }
+};
+
 template <>
 struct hash<facebook::velox::Type> {
   size_t operator()(const facebook::velox::Type& type) const noexcept {

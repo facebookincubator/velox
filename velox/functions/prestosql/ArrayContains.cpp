@@ -251,7 +251,7 @@ class ArrayContainsFunction : public exec::VectorFunction {
           *flatResult,
           throwOnNestedNull_);
     } else {
-      VELOX_DYNAMIC_TYPE_DISPATCH(
+      VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
           applyTyped,
           searchVector->typeKind(),
           rows,

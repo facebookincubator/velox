@@ -944,5 +944,52 @@ TEST_F(SetAggTest, TimestampWithTimezone) {
       {data}, {"c1"}, {"set_agg(c0)"}, {"array_sort(a0)", "c1"}, {expected});
 }
 
+TEST_F(SetAggTest, unknownType) {
+  auto type = UNKNOWN();
+
+  auto data = makeRowVector({
+      makeAllNullFlatVector<UnknownValue>(10),
+  });
+
+  // set_agg includes NULL values in the result, matching Presto Java behavior
+  // Ref:
+  // presto/presto-main-base/src/test/java/com/facebook/presto/sql/query/TestFilteredAggregations.java:144
+  auto expected = makeRowVector({
+      makeNullableArrayVector(
+          std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}},
+          ARRAY(type)),
+  });
+
+  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+
+  data = makeRowVector({
+      makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2, 2, 3, 3, 3}),
+      makeAllNullFlatVector<UnknownValue>(10),
+  });
+
+  expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3}),
+      makeNullableArrayVector(
+          std::vector<std::vector<std::optional<UnknownValue>>>{
+              {std::nullopt}, {std::nullopt}, {std::nullopt}},
+          ARRAY(type)),
+  });
+
+  testAggregations(
+      {data}, {"c0"}, {"set_agg(c1)"}, {"c0", "array_sort(a0)"}, {expected});
+
+  data = makeRowVector({
+      makeNullableFlatVector<UnknownValue>(
+          {std::nullopt, std::nullopt, std::nullopt}),
+  });
+
+  expected = makeRowVector({
+      makeNullableArrayVector(
+          std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}},
+          ARRAY(type)),
+  });
+
+  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+}
 } // namespace
 } // namespace facebook::velox::aggregate::test

@@ -266,7 +266,7 @@ void registerSetAggAggregate(
         const TypeKind typeKind = inputType->kind();
 
         if (inputType->providesCustomComparison()) {
-          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
               creatSetAggAggregate, inputType->kind(), resultType);
         }
 
@@ -371,7 +371,7 @@ void registerCountDistinctAggregate(
         const TypeKind typeKind = inputType->kind();
 
         if (inputType->providesCustomComparison()) {
-          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
               createCountDistinctAggregate,
               inputType->kind(),
               resultType,
