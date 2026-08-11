@@ -1130,6 +1130,42 @@ TEST_P(PrestoSerializerTest, multiPage) {
   }
 }
 
+TEST_P(PrestoSerializerTest, appendDeserializeInvalidatesNullCount) {
+  const auto options = getParamSerdeOptions(nullptr);
+  RowVectorPtr result;
+  const auto deserializePage = [&](const RowVectorPtr& page,
+                                   vector_size_t resultOffset) {
+    std::ostringstream out;
+    serialize(page, &out, nullptr);
+    const auto serialized = out.str();
+    auto input = toByteStream(serialized);
+    serde_->deserialize(
+        input.get(),
+        pool_.get(),
+        asRowType(page->type()),
+        &result,
+        resultOffset,
+        &options);
+  };
+
+  // Overwrite a nullable result to establish a cached zero null count.
+  deserializePage(
+      makeRowVector({makeNullableFlatVector<int64_t>({0, std::nullopt})}), 0);
+  const auto first = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+  deserializePage(first, 0);
+  ASSERT_EQ(0, result->childAt(0)->getNullCount());
+
+  deserializePage(
+      makeRowVector({makeNullableFlatVector<int64_t>(
+          {3, std::nullopt, 4, std::nullopt, 5})}),
+      result->size());
+  EXPECT_FALSE(result->childAt(0)->getNullCount().has_value());
+
+  auto expected = makeRowVector({makeNullableFlatVector<int64_t>(
+      {1, 2, 3, std::nullopt, 4, std::nullopt, 5})});
+  assertEqualVectors(expected, result);
+}
+
 TEST_P(PrestoSerializerTest, timestampWithNanosecondPrecision) {
   // Verify that nanosecond precision is preserved when the right options are
   // passed to the serde.
