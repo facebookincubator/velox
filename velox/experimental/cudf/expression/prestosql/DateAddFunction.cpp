@@ -17,7 +17,6 @@
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/prestosql/DateAddFunction.h"
 
-#include "velox/expression/ConstantExpr.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/vector/ConstantVector.h"
 
@@ -148,18 +147,15 @@ std::unique_ptr<cudf::column> scaleToInt32(
 
 } // namespace
 
-bool DateAddFunction::canEvaluate(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+bool DateAddFunction::canEvaluate(const core::TypedExprPtr& expr) {
   if (expr->inputs().size() != 3 || !expr->type()->isDate() ||
       !expr->inputs()[2]->type()->isDate()) {
     return false;
   }
 
-  auto valueExpr =
-      std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[1]);
-  auto dateExpr =
-      std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[2]);
-  if (valueExpr && dateExpr) {
+  const bool valueIsConstant = expr->inputs()[1]->isConstantKind();
+  const bool dateIsConstant = expr->inputs()[2]->isConstantKind();
+  if (valueIsConstant && dateIsConstant) {
     return false;
   }
 
@@ -172,8 +168,8 @@ bool DateAddFunction::canEvaluate(
 }
 
 DateAddFunction::DateAddFunction(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  using velox::exec::ConstantExpr;
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
   VELOX_CHECK(
       canEvaluate(expr),
       "date_add expression cannot be evaluated by prestosql::DateAddFunction");
@@ -181,26 +177,27 @@ DateAddFunction::DateAddFunction(
   auto unitString = constantVarcharValue(expr->inputs()[0]);
   unit_ = *functions::getDateUnit(*unitString, true);
 
-  auto valueExpr = std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
-  valueIsLiteral_ = valueExpr != nullptr;
-  dateIsLiteral_ =
-      std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[2]) != nullptr;
+  valueIsLiteral_ = expr->inputs()[1]->isConstantKind();
+  dateIsLiteral_ = expr->inputs()[2]->isConstantKind();
 
   if (valueIsLiteral_) {
-    literalValueIsValid_ = !valueExpr->value()->isNullAt(0);
+    const auto* valueExpr =
+        expr->inputs()[1]->asUnchecked<core::ConstantTypedExpr>();
+    const auto valueVector = valueExpr->hasValueVector()
+        ? valueExpr->valueVector()
+        : valueExpr->toConstantVector(pool);
+    literalValueIsValid_ = !valueVector->isNullAt(0);
     if (literalValueIsValid_) {
-      literalValue_ =
-          valueExpr->value()->as<ConstantVector<int64_t>>()->value();
+      literalValue_ = valueVector->as<ConstantVector<int64_t>>()->value();
     }
   }
   if (dateIsLiteral_) {
-    literalDate_ = makeScalarFromConstantExpr(expr->inputs()[2]);
+    literalDate_ = makeScalarFromConstantExpr(expr->inputs()[2], pool);
   }
 }
 
 ColumnOrView DateAddFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
-    [[maybe_unused]] cudf::size_type numRows,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
   // Walk the non-literal inputs in argument order. Constants were captured at

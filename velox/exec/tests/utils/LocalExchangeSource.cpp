@@ -153,7 +153,15 @@ class LocalExchangeSource : public exec::ExchangeSource {
       }
     };
 
-    registerTimeout(self, resultCallback, maxWait);
+    if (!registerTimeout(self, resultCallback, maxWait)) {
+      // 'close()' already ran (e.g. the query was cancelled) before this
+      // request. Do not fetch: complete the request promise so the exchange
+      // client's continuation resolves and releases its reference to this
+      // source. Fetching here would re-register the source in 'timeouts_'
+      // after teardown, pinning its memory pool until the timeout fires.
+      checkSetRequestPromise();
+      return future;
+    }
 
     buffers->getData(
         remoteTaskId_, destination_, maxBytes, sequence_, resultCallback);
@@ -183,11 +191,15 @@ class LocalExchangeSource : public exec::ExchangeSource {
     checkSetRequestPromise();
 
     {
-      // Deregister any pending timeout. A source closed with an in-flight
-      // request (e.g. when its query is cancelled) would otherwise linger in
-      // the static 'timeouts_' map until atexit, where stop() destroys it after
-      // the MemoryManager is already gone -- a use-after-free on its pool.
+      // Mark closed and deregister any pending timeout under the same lock that
+      // registerTimeout() takes. Marking closed here makes a request() that
+      // races this close() (running on the exchange executor while the query is
+      // cancelled on another thread) observe the closed state and skip
+      // registering, rather than re-inserting the source into the static
+      // 'timeouts_' map after teardown -- which would pin its memory pool until
+      // the timeout fires and can outlive the MemoryManager.
       std::lock_guard<std::mutex> l(mutex_);
+      closed_ = true;
       timeouts_.erase(shared_from_this());
     }
 
@@ -242,15 +254,26 @@ class LocalExchangeSource : public exec::ExchangeSource {
       int64_t sequence,
       std::vector<int64_t> remainingBytes)>;
 
-  static void registerTimeout(
+  // Registers 'callback' to fire after 'maxWait' for this source. Returns false
+  // if the source has already been closed, in which case the caller must not
+  // fetch and must complete the request promise itself. The closed check and
+  // the insertion happen under the same lock that close() uses, so a request
+  // racing close() cannot re-insert the source into 'timeouts_' after teardown.
+  bool registerTimeout(
       const std::shared_ptr<ExchangeSource>& self,
       ResultCallback callback,
       std::chrono::microseconds maxWait) {
     std::lock_guard<std::mutex> l(mutex_);
     VELOX_CHECK(!stop_, "Local exchange source has stopped");
 
+    if (closed_) {
+      return false;
+    }
+
     if (timerThread_ == nullptr) {
-      timerThread_ = std::make_unique<std::thread>([&]() {
+      // The lambda references only static state, so it does not capture 'this'
+      // and safely outlives any single source on the detached timer thread.
+      timerThread_ = std::make_unique<std::thread>([]() {
         while (!stop_) {
           auto now = std::chrono::system_clock::now();
           ResultCallback callback = nullptr;
@@ -278,6 +301,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
     }
     timeouts_[self] =
         std::make_pair(callback, std::chrono::system_clock::now() + maxWait);
+    return true;
   }
 
   bool checkSetRequestPromise() {
@@ -308,6 +332,9 @@ class LocalExchangeSource : public exec::ExchangeSource {
   std::atomic<uint64_t> totalBytes_{0};
   VeloxPromise<Response> promise_{VeloxPromise<Response>::makeEmpty()};
   int32_t numRequests_{0};
+  // Set by close(), guarded by the static 'mutex_'. Once set, request() will
+  // not register a new timeout for this source.
+  bool closed_{false};
 };
 } // namespace
 

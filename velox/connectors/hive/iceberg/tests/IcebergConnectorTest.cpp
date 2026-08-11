@@ -18,7 +18,9 @@
 #include <gtest/gtest.h>
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -65,6 +67,38 @@ TEST_F(IcebergConnectorTest, connectorProperties) {
   ASSERT_TRUE(icebergConnector->canAddDynamicFilter());
   ASSERT_TRUE(icebergConnector->supportsSplitPreload());
   ASSERT_NE(icebergConnector->ioExecutor(), nullptr);
+}
+
+TEST_F(IcebergConnectorTest, columnHandleForwardsPostProcessor) {
+  auto called = std::make_shared<bool>(false);
+  std::function<void(VectorPtr&)> postProcessor = [called](VectorPtr&) {
+    *called = true;
+  };
+
+  IcebergColumnHandle handle(
+      "c0",
+      HiveColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      parquet::ParquetFieldId{1, {}},
+      /*requiredSubfields=*/{},
+      /*initialDefaultValue=*/std::nullopt,
+      /*icebergMetadata=*/{},
+      postProcessor);
+
+  ASSERT_TRUE(handle.postProcessor());
+  VectorPtr unused;
+  handle.postProcessor()(unused);
+  EXPECT_TRUE(*called);
+}
+
+TEST_F(IcebergConnectorTest, columnHandleDefaultsToNoPostProcessor) {
+  IcebergColumnHandle handle(
+      "c0",
+      HiveColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      parquet::ParquetFieldId{1, {}});
+
+  EXPECT_FALSE(handle.postProcessor());
 }
 
 } // namespace

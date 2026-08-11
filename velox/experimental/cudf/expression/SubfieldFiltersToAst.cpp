@@ -507,6 +507,29 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       return *result;
     }
 
+    case common::FilterKind::kNegatedBigintRange: {
+      auto* negRange = static_cast<const common::NegatedBigintRange*>(&filter);
+      const auto rejectedLower = negRange->lower();
+      const auto rejectedUpper = negRange->upper();
+
+      auto const& columnType = inputRowSchema->childAt(columnIndex);
+
+      // Build the inner range: column >= lower AND column <= upper.
+      // Then negate it: NOT(column >= lower AND column <= upper).
+      // This expresses "column is outside [lower, upper]".
+      common::BigintRange innerRange(
+          rejectedLower, rejectedUpper, !filter.testNull());
+      auto innerResult = VELOX_DYNAMIC_TYPE_DISPATCH(
+          buildBigintRangeExpr,
+          columnType->kind(),
+          innerRange,
+          tree,
+          scalars,
+          columnRef,
+          columnType);
+      return tree.push(Operation{Op::NOT, innerResult.get()});
+    }
+
     default:
       VELOX_NYI(
           "Filter type {} not yet supported for subfield filter conversion",

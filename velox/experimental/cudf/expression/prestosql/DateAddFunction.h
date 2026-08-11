@@ -36,13 +36,12 @@ class DateAddFunction : public CudfFunction {
   /// Returns true if expr matches the supported date_add shape: 3 inputs,
   /// DATE return type, DATE third argument, a constant unit string in the
   /// supported set, and not both value and date as constants.
-  static bool canEvaluate(const std::shared_ptr<velox::exec::Expr>& expr);
+  static bool canEvaluate(const core::TypedExprPtr& expr);
 
-  explicit DateAddFunction(const std::shared_ptr<velox::exec::Expr>& expr);
+  DateAddFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool);
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override;
 

@@ -16,8 +16,10 @@
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
+#include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/DecimalExpressionKernels.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/expression/NullMask.h"
 #include "velox/experimental/cudf/expression/TimezoneConversion.h"
 #include "velox/experimental/cudf/expression/prestosql/TimezoneFunctions.h"
@@ -26,9 +28,8 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/core/QueryCtx.h"
-#include "velox/expression/ConstantExpr.h"
-#include "velox/expression/EvalCtx.h"
-#include "velox/expression/FieldReference.h"
+#include "velox/expression/ExprConstants.h"
+#include "velox/expression/ExprOptimizer.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/type/DecimalUtil.h"
@@ -76,21 +77,9 @@
 #include <memory>
 
 namespace facebook::velox::cudf_velox {
-namespace {
 
-cudf::size_type resolveFieldReferenceIndex(
-    velox::exec::FieldReference& fieldExpr,
-    const RowTypePtr& parentRowType) {
-  auto pool = memory::memoryManager()->addLeafPool();
-  auto queryCtx = core::QueryCtx::create();
-  core::ExecCtx execCtx(pool.get(), queryCtx.get());
-  exec::ExprSet exprSet({}, &execCtx, /*enableConstantFolding=*/false);
-  auto row = RowVector::createEmpty(parentRowType, pool.get());
-  exec::EvalCtx evalCtx(&execCtx, &exprSet, row.get());
-  auto fieldIndex = fieldExpr.index(evalCtx);
-  VELOX_CHECK_GE(fieldIndex, 0);
-  return static_cast<cudf::size_type>(fieldIndex);
-}
+// Implementation details in anonymous namespace
+namespace {
 
 bool decimalScalarIsZero(
     const cudf::scalar& scalar,
@@ -202,42 +191,148 @@ std::unique_ptr<cudf::scalar> castDecimalScalar(
       mr);
 }
 
-struct CudfExpressionEvaluatorEntry {
-  int priority;
-  CudfExpressionEvaluatorCanEvaluate canEvaluate;
-  CudfExpressionEvaluatorCreate create;
-};
+/// Materialise a ConstantTypedExpr to a VectorPtr.
+VectorPtr toConstantVector(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
+  VELOX_CHECK(expr->isConstantKind());
+  const auto* c = expr->asUnchecked<core::ConstantTypedExpr>();
+  return c->hasValueVector() ? c->valueVector() : c->toConstantVector(pool);
+}
 
-static std::unordered_map<std::string, CudfExpressionEvaluatorEntry>&
-getCudfExpressionEvaluatorRegistry() {
-  static std::unordered_map<std::string, CudfExpressionEvaluatorEntry> registry;
+std::string constantToString(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
+  return toConstantVector(expr, pool)->toString(0);
+}
+
+std::unordered_map<std::string, std::vector<CudfFunctionSpec>>&
+getCudfFunctionRegistry() {
+  static std::unordered_map<std::string, std::vector<CudfFunctionSpec>>
+      registry;
   return registry;
 }
 
-static void ensureBuiltinExpressionEvaluatorsRegistered() {
-  static bool registered = false;
-  if (registered) {
+static bool matchCallAgainstSignatures(
+    const core::TypedExprPtr& call,
+    const std::vector<exec::FunctionSignaturePtr>& sigs) {
+  const auto n = call->inputs().size();
+  std::vector<TypePtr> argTypes;
+  argTypes.reserve(n);
+  for (const auto& in : call->inputs()) {
+    argTypes.push_back(in->type());
+  }
+  for (const auto& sig : sigs) {
+    exec::SignatureBinder binder(*sig, argTypes, TypeCoercer::defaults());
+    if (!binder.tryBind()) {
+      continue;
+    }
+    // binder does not confirm whether positional arguments are
+    // constants(scalars) as expected. we have to check manually
+    const auto& constArgs = sig->constantArguments();
+    const size_t fixed = std::min(constArgs.size(), n);
+    bool ok = true;
+    for (size_t i = 0; i < fixed; ++i) {
+      if (constArgs[i] && !call->inputs()[i]->isConstantKind()) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+std::optional<std::string> rootFieldName(const core::TypedExprPtr& expr) {
+  auto path = extractFieldPath(expr);
+  if (!path.has_value() || path->empty()) {
+    return std::nullopt;
+  }
+  return path->front();
+}
+
+bool isInputFieldReference(const core::TypedExprPtr& expr) {
+  return rootFieldName(expr).has_value();
+}
+
+void collectReferencedInputFields(
+    const core::TypedExprPtr& expr,
+    std::unordered_set<std::string>& fields,
+    const std::unordered_set<std::string>& lambdaInputs = {}) {
+  if (expr == nullptr) {
     return;
   }
 
-  // Default priority for function evaluator
-  const int kFunctionPriority = 50;
+  if (auto root = rootFieldName(expr);
+      root.has_value() && !lambdaInputs.count(*root)) {
+    fields.insert(*root);
+  }
 
-  // Function evaluator
-  registerCudfExpressionEvaluator(
-      "function",
-      kFunctionPriority,
-      [](std::shared_ptr<velox::exec::Expr> expr) {
-        return FunctionExpression::canEvaluate(std::move(expr));
-      },
-      [](std::shared_ptr<velox::exec::Expr> expr,
-         const RowTypePtr& row,
-         const CudfDateTimeContext& context) {
-        return FunctionExpression::create(std::move(expr), row, context);
-      },
-      /*overwrite=*/false);
+  if (expr->isLambdaKind()) {
+    const auto* lambda = expr->asUnchecked<core::LambdaTypedExpr>();
+    auto scopedLambdaInputs = lambdaInputs;
+    for (const auto& name : lambda->signature()->names()) {
+      scopedLambdaInputs.insert(name);
+    }
+    collectReferencedInputFields(lambda->body(), fields, scopedLambdaInputs);
+    return;
+  }
 
-  registered = true;
+  for (const auto& input : expr->inputs()) {
+    collectReferencedInputFields(input, fields, lambdaInputs);
+  }
+}
+
+// Returns the highest-priority evaluator entry that can handle `expr`, or
+// nullptr when none can.
+const CudfExpressionEvaluatorEntry* findBestEvaluator(
+    const core::TypedExprPtr& expr) {
+  ensureBuiltinExpressionEvaluatorsRegistered();
+  const auto& registry = getCudfExpressionEvaluatorRegistry();
+
+  const CudfExpressionEvaluatorEntry* best = nullptr;
+  for (const auto& [name, entry] : registry) {
+    if (entry.canEvaluate && entry.canEvaluate(expr)) {
+      if (best == nullptr || entry.priority > best->priority) {
+        best = &entry;
+      }
+    }
+  }
+  return best;
+}
+
+// Recursive, context-free check that some cuDF evaluator supports every node in
+// the expression tree. canExprRunOnGpu wraps this with expression optimization.
+bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr) {
+  ensureBuiltinExpressionEvaluatorsRegistered();
+
+  const auto& registry = getCudfExpressionEvaluatorRegistry();
+
+  bool supported = false;
+  for (const auto& [name, entry] : registry) {
+    if (entry.canEvaluate && entry.canEvaluate(expr)) {
+      supported = true;
+      break;
+    }
+  }
+  if (!supported) {
+    LOG_FALLBACK(expr->toString());
+    return false;
+  }
+
+  for (const auto& input : expr->inputs()) {
+    if (input->isConstantKind() || input->isInputKind()) {
+      continue;
+    }
+    if (!canBeEvaluatedByCudf(input)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 } // namespace
@@ -263,89 +358,24 @@ void checkAllTrue(
       result->is_valid(stream) && result->value(stream), "{}", userMessage);
 }
 
-bool registerCudfExpressionEvaluator(
-    const std::string& name,
-    int priority,
-    CudfExpressionEvaluatorCanEvaluate canEvaluate,
-    CudfExpressionEvaluatorCreate create,
-    bool overwrite) {
-  auto& registry = getCudfExpressionEvaluatorRegistry();
-  if (!overwrite && registry.find(name) != registry.end()) {
-    return false;
-  }
-  registry[name] = CudfExpressionEvaluatorEntry{
-      priority, std::move(canEvaluate), std::move(create)};
-  return true;
-}
-
-std::unordered_map<std::string, std::vector<CudfFunctionSpec>>&
-getCudfFunctionRegistry() {
-  static std::unordered_map<std::string, std::vector<CudfFunctionSpec>>
-      registry;
-  return registry;
-}
-
 CudfDateTimeContext contextFromConfig(const core::QueryConfig& config) {
   return CudfDateTimeContext{
       config.sessionTimezone(),
       config.adjustTimestampToTimezone(),
-      config.sessionStartTimeMs(),
   };
 }
 
-namespace {
-
-static bool matchCallAgainstSignatures(
-    const velox::exec::Expr& call,
-    const std::vector<exec::FunctionSignaturePtr>& sigs) {
-  const auto n = call.inputs().size();
-  std::vector<TypePtr> argTypes;
-  argTypes.reserve(n);
-  for (const auto& in : call.inputs()) {
-    argTypes.push_back(in->type());
-  }
-  for (const auto& sig : sigs) {
-    exec::SignatureBinder binder(*sig, argTypes, TypeCoercer::defaults());
-    if (!binder.tryBind()) {
-      continue;
-    }
-    // binder does not confirm whether positional arguments are
-    // constants(scalars) as expected. we have to check manually
-    const auto& constArgs = sig->constantArguments();
-    const size_t fixed = std::min(constArgs.size(), n);
-    bool ok = true;
-    for (size_t i = 0; i < fixed; ++i) {
-      if (constArgs[i] &&
-          !std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-              call.inputs()[i])) {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok) {
-      continue;
-    }
-    return true;
-  }
-  return false;
-}
-
-} // namespace
-
 class SplitFunction : public CudfFunction {
  public:
-  SplitFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    using velox::exec::ConstantExpr;
+  SplitFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
+    VELOX_CHECK(
+        expr->inputs()[1]->isConstantKind(),
+        "split delimiter must be a constant");
+    delimiter_ = constantToString(expr->inputs()[1], pool);
 
-    auto delimiterExpr =
-        std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
-    VELOX_CHECK_NOT_NULL(delimiterExpr, "split delimiter must be a constant");
-    delimiter_ = delimiterExpr->value()->toString(0);
-
-    auto limitExpr =
-        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[2]);
-    VELOX_CHECK_NOT_NULL(limitExpr, "split limit must be a constant");
-    maxSplitCount_ = std::stoll(limitExpr->value()->toString(0));
+    VELOX_CHECK(
+        expr->inputs()[2]->isConstantKind(), "split limit must be a constant");
+    maxSplitCount_ = std::stoll(constantToString(expr->inputs()[2], pool));
 
     // Presto specifies maxSplitCount as the maximum size of the returned array
     // while cuDF understands the parameter as how many splits can it perform.
@@ -354,7 +384,6 @@ class SplitFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -370,7 +399,7 @@ class SplitFunction : public CudfFunction {
 
 class CastFunction : public CudfFunction {
  public:
-  CastFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  CastFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(expr->inputs().size(), 1, "cast expects exactly 1 input");
 
     targetCudfType_ = cudf_velox::veloxToCudfDataType(expr->type());
@@ -385,7 +414,6 @@ class CastFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -398,7 +426,7 @@ class CastFunction : public CudfFunction {
 
 class CardinalityFunction : public CudfFunction {
  public:
-  CardinalityFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  CardinalityFunction(const core::TypedExprPtr& expr) {
     // Cardinality doesn't need any pre-computed scalars, just validates input
     // count
     VELOX_CHECK_EQ(
@@ -407,7 +435,6 @@ class CardinalityFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -417,13 +444,12 @@ class CardinalityFunction : public CudfFunction {
 
 class IsNullFunction : public CudfFunction {
  public:
-  explicit IsNullFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  explicit IsNullFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(expr->inputs().size(), 1, "is_null expects 1 input");
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     VELOX_CHECK_EQ(inputColumns.size(), 1, "is_null expects 1 input");
@@ -433,13 +459,12 @@ class IsNullFunction : public CudfFunction {
 
 class IsNotNullFunction : public CudfFunction {
  public:
-  explicit IsNotNullFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  explicit IsNotNullFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(expr->inputs().size(), 1, "isnotnull expects 1 input");
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     VELOX_CHECK_EQ(inputColumns.size(), 1, "isnotnull expects 1 input");
@@ -449,17 +474,19 @@ class IsNotNullFunction : public CudfFunction {
 
 class RoundFunction : public CudfFunction {
  public:
-  explicit RoundFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  RoundFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
     const auto argSize = expr->inputs().size();
     VELOX_CHECK(argSize >= 1 && argSize <= 2, "round expects 1 or 2 inputs");
-    VELOX_CHECK_NULL(
-        std::dynamic_pointer_cast<exec::ConstantExpr>(expr->inputs()[0]),
+    VELOX_CHECK(
+        !expr->inputs()[0]->isConstantKind(),
         "round expects first column is not literal");
     if (argSize == 2) {
-      auto scaleExpr =
-          std::dynamic_pointer_cast<exec::ConstantExpr>(expr->inputs()[1]);
-      VELOX_CHECK_NOT_NULL(scaleExpr, "round scale must be a constant");
-      scale_ = scaleExpr->value()->as<SimpleVector<int32_t>>()->valueAt(0);
+      VELOX_CHECK(
+          expr->inputs()[1]->isConstantKind(),
+          "round scale must be a constant");
+      scale_ = toConstantVector(expr->inputs()[1], pool)
+                   ->as<SimpleVector<int32_t>>()
+                   ->valueAt(0);
     }
     decimalsScalar_ = std::unique_ptr<cudf::numeric_scalar<int32_t>>(
         static_cast<cudf::numeric_scalar<int32_t>*>(
@@ -473,7 +500,6 @@ class RoundFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -555,22 +581,16 @@ __device__ void velox_round_double(
 class BinaryFunction : public CudfFunction {
  public:
   BinaryFunction(
-      const std::shared_ptr<velox::exec::Expr>& expr,
-      cudf::binary_operator op)
+      const core::TypedExprPtr& expr,
+      cudf::binary_operator op,
+      memory::MemoryPool* pool)
       : op_(op), type_(cudf_velox::veloxToCudfDataType(expr->type())) {
     VELOX_CHECK_EQ(
-        expr->inputs().size(), 2, "Binary function expects exactly 2 inputs");
-    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-            expr->inputs()[0])) {
-      auto constValue = constExpr->value();
-      left_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          createCudfScalar, constValue->typeKind(), constValue);
-    } else if (
-        auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-            expr->inputs()[1])) {
-      auto constValue = constExpr->value();
-      right_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          createCudfScalar, constValue->typeKind(), constValue);
+        expr->inputs().size(), 2, "binary function expects exactly 2 inputs");
+    if (expr->inputs()[0]->isConstantKind()) {
+      left_ = makeScalarFromConstantExpr(expr->inputs()[0], pool);
+    } else if (expr->inputs()[1]->isConstantKind()) {
+      right_ = makeScalarFromConstantExpr(expr->inputs()[1], pool);
     }
 
     VELOX_CHECK(
@@ -580,7 +600,6 @@ class BinaryFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto isComparisonOp = [](cudf::binary_operator op) {
@@ -856,21 +875,21 @@ class BinaryFunction : public CudfFunction {
 class LogicalFunction : public CudfFunction {
  public:
   LogicalFunction(
-      const std::shared_ptr<velox::exec::Expr>& expr,
-      cudf::binary_operator op)
+      const core::TypedExprPtr& expr,
+      cudf::binary_operator op,
+      memory::MemoryPool* pool)
       : op_(op) {
     VELOX_CHECK_GE(
         expr->inputs().size(), 2, "Logical function expects at least 2 inputs");
     literals_.reserve(expr->inputs().size());
     for (const auto& input : expr->inputs()) {
-      auto constExpr =
-          std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input);
-      if (constExpr) {
+      if (input->isConstantKind()) {
         VELOX_CHECK_EQ(
-            constExpr->value()->typeKind(),
+            input->type()->kind(),
             TypeKind::BOOLEAN,
             "Logical function only supports boolean literals");
-        auto boolConst = constExpr->value()->as<ConstantVector<bool>>();
+        auto boolConst =
+            toConstantVector(input, pool)->as<ConstantVector<bool>>();
         VELOX_CHECK_NOT_NULL(boolConst);
         if (!shortCircuitScalar_ && !boolConst->isNullAt(0)) {
           const bool v = boolConst->valueAt(0);
@@ -880,13 +899,11 @@ class LogicalFunction : public CudfFunction {
             // know what the final result must be, although it will still need
             // to be expanded to a column the same size as the input columns. No
             // need to continue capturing literals in that case.
-            shortCircuitScalar_ =
-                createCudfScalar<TypeKind::BOOLEAN>(constExpr->value());
+            shortCircuitScalar_ = makeScalarFromConstantExpr(input, pool);
             break;
           }
         }
-        literals_.push_back(
-            createCudfScalar<TypeKind::BOOLEAN>(constExpr->value()));
+        literals_.push_back(makeScalarFromConstantExpr(input, pool));
       } else {
         literals_.push_back(nullptr);
       }
@@ -895,7 +912,6 @@ class LogicalFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // If there are no input columns, the result is a scalar.
@@ -989,16 +1005,13 @@ class LogicalFunction : public CudfFunction {
 
 class UnaryFunction : public CudfFunction {
  public:
-  UnaryFunction(
-      const std::shared_ptr<velox::exec::Expr>& expr,
-      cudf::unary_operator op)
+  UnaryFunction(const core::TypedExprPtr& expr, cudf::unary_operator op)
       : op_(op) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 1, "Unary function expects exactly 1 input");
-    auto constExpr =
-        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]);
-    VELOX_CHECK_NULL(
-        constExpr, "Unary function on literal input is not supported");
+    VELOX_CHECK(
+        !expr->inputs()[0]->isConstantKind(),
+        "Unary function on literal input is not supported");
     // @TODO (seves 1/28/26)
     // binary functions require at least ONE input to be non-literal
     // do we need to support unary functions with ONLY a literal input?
@@ -1007,7 +1020,6 @@ class UnaryFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::unary_operation(asView(inputColumns[0]), op_, stream, mr);
@@ -1019,34 +1031,26 @@ class UnaryFunction : public CudfFunction {
 
 class BetweenFunction : public CudfFunction {
  public:
-  BetweenFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  BetweenFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
     // must have exactly three inputs: value, min, max
     VELOX_CHECK_EQ(
         expr->inputs().size(), 3, "Between function expects exactly 3 inputs");
     // value must not be a literal
-    auto constExpr =
-        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]);
-    VELOX_CHECK_NULL(
-        constExpr, "Between function with literal input is not supported");
-    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-            expr->inputs()[1])) {
+    VELOX_CHECK(
+        !expr->inputs()[0]->isConstantKind(),
+        "Between function with literal input is not supported");
+    if (expr->inputs()[1]->isConstantKind()) {
       // min is a literal
-      auto constValue = constExpr->value();
-      minLiteral_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          createCudfScalar, constValue->typeKind(), constValue);
+      minLiteral_ = makeScalarFromConstantExpr(expr->inputs()[1], pool);
     }
-    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-            expr->inputs()[2])) {
+    if (expr->inputs()[2]->isConstantKind()) {
       // max is a literal
-      auto constValue = constExpr->value();
-      maxLiteral_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          createCudfScalar, constValue->typeKind(), constValue);
+      maxLiteral_ = makeScalarFromConstantExpr(expr->inputs()[2], pool);
     }
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // return (value >= min) && (value <= max)
@@ -1120,8 +1124,9 @@ static VectorPtr foldConstantPair(
 class GreatestLeastFunction : public CudfFunction {
  public:
   GreatestLeastFunction(
-      const std::shared_ptr<velox::exec::Expr>& expr,
-      cudf::binary_operator op)
+      const core::TypedExprPtr& expr,
+      cudf::binary_operator op,
+      memory::MemoryPool* pool)
       : op_(op), type_(cudf_velox::veloxToCudfDataType(expr->type())) {
     VELOX_CHECK_GE(
         expr->inputs().size(),
@@ -1133,9 +1138,8 @@ class GreatestLeastFunction : public CudfFunction {
     std::vector<VectorPtr> constValues;
     size_t columnIndex = 0;
     for (const auto& input : expr->inputs()) {
-      if (auto constExpr =
-              std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input)) {
-        constValues.push_back(constExpr->value());
+      if (input->isConstantKind()) {
+        constValues.push_back(toConstantVector(input, pool));
       } else {
         order_.push_back(columnIndex++);
       }
@@ -1147,14 +1151,13 @@ class GreatestLeastFunction : public CudfFunction {
         winner = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
             foldConstantPair, winner->typeKind(), winner, constValues[i], op);
       }
-      foldedScalar_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          createCudfScalar, winner->typeKind(), winner);
+      foldedScalar_ = makeScalarFromConstantExpr(
+          std::make_shared<core::ConstantTypedExpr>(winner), pool);
     }
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // All inputs were constant -- return the pre-folded scalar as a column.
@@ -1190,33 +1193,25 @@ class GreatestLeastFunction : public CudfFunction {
 
 class SwitchFunction : public CudfFunction {
  public:
-  SwitchFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  SwitchFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 3, "case when expects exactly 3 inputs");
     VELOX_CHECK_EQ(
         expr->inputs()[0]->type()->kind(),
         TypeKind::BOOLEAN,
         "The switch condition result type should be boolean");
-    VELOX_CHECK_NULL(
-        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr),
-        "The condition should not be constant");
-    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-            expr->inputs()[1])) {
-      auto constValue = constExpr->value();
-      left_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          createCudfScalar, constValue->typeKind(), constValue);
+    VELOX_CHECK(
+        !expr->isConstantKind(), "The condition should not be constant");
+    if (expr->inputs()[1]->isConstantKind()) {
+      left_ = makeScalarFromConstantExpr(expr->inputs()[1], pool);
     }
-    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-            expr->inputs()[2])) {
-      auto constValue = constExpr->value();
-      right_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          createCudfScalar, constValue->typeKind(), constValue);
+    if (expr->inputs()[2]->isConstantKind()) {
+      right_ = makeScalarFromConstantExpr(expr->inputs()[2], pool);
     }
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     if (left_ == nullptr && right_ == nullptr) {
@@ -1249,32 +1244,18 @@ class SwitchFunction : public CudfFunction {
 
 class CoalesceFunction : public CudfFunction {
  public:
-  CoalesceFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    using velox::exec::ConstantExpr;
-
+  CoalesceFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
     // Storing the first literal that appears in inputs because we don't need to
     // process after that. This is the last fallback.
     numColumnsBeforeLiteral_ = expr->inputs().size();
     for (size_t i = 0; i < expr->inputs().size(); ++i) {
       const auto& input = expr->inputs()[i];
-      if (auto c =
-              std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input)) {
-        if (!c->value()->isNullAt(0)) {
-          literalScalar_ = makeScalarFromConstantExpr(c);
+      if (input->isConstantKind()) {
+        const auto* c = input->asUnchecked<core::ConstantTypedExpr>();
+        if (!c->isNull()) {
+          literalScalar_ = makeScalarFromConstantExpr(input, pool);
           numColumnsBeforeLiteral_ = i;
           break;
-        }
-      } else if (input->distinctFields().empty() && !input->inputs().empty()) {
-        // Handle constant expressions that weren't folded (e.g., cast of
-        // literal).
-        if (auto innerConst =
-                std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-                    input->inputs()[0])) {
-          if (!innerConst->value()->isNullAt(0)) {
-            literalScalar_ = makeScalarFromConstantExpr(innerConst);
-            numColumnsBeforeLiteral_ = i;
-            break;
-          }
         }
       }
     }
@@ -1282,7 +1263,6 @@ class CoalesceFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // Coalesce is practically a cudf::replace_nulls over multiple columns.
@@ -1353,7 +1333,7 @@ std::unique_ptr<cudf::column> maybeConvertToSessionLocal(
 class ExtractComponentFunction : public CudfFunction {
  public:
   ExtractComponentFunction(
-      const std::shared_ptr<velox::exec::Expr>& expr,
+      const core::TypedExprPtr& expr,
       cudf::datetime::datetime_component component)
       : component_(component) {
     VELOX_CHECK_EQ(
@@ -1362,7 +1342,6 @@ class ExtractComponentFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1390,21 +1369,21 @@ struct ExtractComponentFactory {
 
   std::shared_ptr<CudfFunction> operator()(
       const std::string&,
-      const std::shared_ptr<velox::exec::Expr>& expr) const {
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool*) const {
     return std::make_shared<ExtractComponentFunction>(expr, component);
   }
 };
 
 class QuarterFunction : public CudfFunction {
  public:
-  explicit QuarterFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  explicit QuarterFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 1, "quarter expects exactly 1 input column");
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1416,14 +1395,13 @@ class QuarterFunction : public CudfFunction {
 
 class DayOfYearFunction : public CudfFunction {
  public:
-  explicit DayOfYearFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  explicit DayOfYearFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 1, "day_of_year expects exactly 1 input column");
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1435,14 +1413,13 @@ class DayOfYearFunction : public CudfFunction {
 
 class WeekFunction : public CudfFunction {
  public:
-  explicit WeekFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  explicit WeekFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 1, "week expects exactly 1 input column");
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1463,7 +1440,7 @@ class WeekFunction : public CudfFunction {
 
 class YearOfWeekFunction : public CudfFunction {
  public:
-  explicit YearOfWeekFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  explicit YearOfWeekFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(
         expr->inputs().size(),
         1,
@@ -1472,7 +1449,6 @@ class YearOfWeekFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1493,14 +1469,13 @@ class YearOfWeekFunction : public CudfFunction {
 
 class LengthFunction : public CudfFunction {
  public:
-  explicit LengthFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  explicit LengthFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 1, "length expects exactly 1 input column");
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1510,14 +1485,13 @@ class LengthFunction : public CudfFunction {
 
 class LowerFunction : public CudfFunction {
  public:
-  explicit LowerFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  explicit LowerFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 1, "lower expects exactly 1 input column");
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1527,14 +1501,13 @@ class LowerFunction : public CudfFunction {
 
 class UpperFunction : public CudfFunction {
  public:
-  explicit UpperFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  explicit UpperFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 1, "upper expects exactly 1 input column");
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1544,27 +1517,26 @@ class UpperFunction : public CudfFunction {
 
 class LikeFunction : public CudfFunction {
  public:
-  explicit LikeFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    using velox::exec::ConstantExpr;
+  LikeFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
     VELOX_CHECK(
         expr->inputs().size() == 2 || expr->inputs().size() == 3,
         "like expects 2 or 3 inputs");
 
-    if (auto inputExpr =
-            std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0])) {
+    if (expr->inputs()[0]->isConstantKind()) {
       inputIsConstant_ = true;
-      inputIsNull_ = inputExpr->value()->isNullAt(0);
+      auto inputValue = toConstantVector(expr->inputs()[0], pool);
+      inputIsNull_ = inputValue->isNullAt(0);
       if (!inputIsNull_) {
-        input_ = inputExpr->value()->toString(0);
+        input_ = inputValue->toString(0);
       }
     }
 
-    if (auto patternExpr =
-            std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1])) {
+    if (expr->inputs()[1]->isConstantKind()) {
       patternIsConstant_ = true;
-      patternIsNull_ = patternExpr->value()->isNullAt(0);
+      auto patternValue = toConstantVector(expr->inputs()[1], pool);
+      patternIsNull_ = patternValue->isNullAt(0);
       if (!patternIsNull_) {
-        pattern_ = patternExpr->value()->toString(0);
+        pattern_ = patternValue->toString(0);
       }
     }
 
@@ -1575,13 +1547,14 @@ class LikeFunction : public CudfFunction {
         "count from");
 
     hasEscape_ = expr->inputs().size() == 3;
-    if (expr->inputs().size() == 3) {
-      auto escapeExpr =
-          std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[2]);
-      VELOX_CHECK_NOT_NULL(escapeExpr, "like escape must be a constant");
-      escapeIsNull_ = escapeExpr->value()->isNullAt(0);
+    if (hasEscape_) {
+      VELOX_CHECK(
+          expr->inputs()[2]->isConstantKind(),
+          "like escape must be a constant");
+      auto escapeValue = toConstantVector(expr->inputs()[2], pool);
+      escapeIsNull_ = escapeValue->isNullAt(0);
       if (!escapeIsNull_) {
-        escape_ = escapeExpr->value()->toString(0);
+        escape_ = escapeValue->toString(0);
         if (!patternIsConstant_ && escape_.size() == 1) {
           // Column-pattern LIKE ESCAPE reuses the same three legal escape
           // sequences for every batch, so cache those tiny helper columns once
@@ -1598,7 +1571,6 @@ class LikeFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     size_t nextInput = 0;
@@ -1819,28 +1791,28 @@ void LikeFunction::validatePatternColumn(
 
 class StringPatternPredicateFunction : public CudfFunction {
  public:
-  explicit StringPatternPredicateFunction(
-      const std::shared_ptr<velox::exec::Expr>& expr,
+  StringPatternPredicateFunction(
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool* pool,
       std::string_view functionName) {
-    using velox::exec::ConstantExpr;
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "{} expects 2 inputs", functionName);
 
-    if (auto inputExpr =
-            std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0])) {
+    if (expr->inputs()[0]->isConstantKind()) {
       inputIsConstant_ = true;
-      inputIsNull_ = inputExpr->value()->isNullAt(0);
+      auto inputValue = toConstantVector(expr->inputs()[0], pool);
+      inputIsNull_ = inputValue->isNullAt(0);
       if (!inputIsNull_) {
-        input_ = inputExpr->value()->toString(0);
+        input_ = inputValue->toString(0);
       }
     }
 
-    if (auto patternExpr =
-            std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1])) {
+    if (expr->inputs()[1]->isConstantKind()) {
       patternIsConstant_ = true;
-      patternIsNull_ = patternExpr->value()->isNullAt(0);
+      auto patternValue = toConstantVector(expr->inputs()[1], pool);
+      patternIsNull_ = patternValue->isNullAt(0);
       if (!patternIsNull_) {
-        pattern_ = patternExpr->value()->toString(0);
+        pattern_ = patternValue->toString(0);
       }
     }
 
@@ -1854,7 +1826,6 @@ class StringPatternPredicateFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     size_t nextInput = 0;
@@ -1915,8 +1886,8 @@ class StringPatternPredicateFunction : public CudfFunction {
 
 class StartswithFunction : public StringPatternPredicateFunction {
  public:
-  explicit StartswithFunction(const std::shared_ptr<velox::exec::Expr>& expr)
-      : StringPatternPredicateFunction(expr, "startswith") {}
+  StartswithFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool)
+      : StringPatternPredicateFunction(expr, pool, "startswith") {}
 
  protected:
   std::unique_ptr<cudf::column> evaluateMatch(
@@ -1938,8 +1909,8 @@ class StartswithFunction : public StringPatternPredicateFunction {
 
 class EndswithFunction : public StringPatternPredicateFunction {
  public:
-  explicit EndswithFunction(const std::shared_ptr<velox::exec::Expr>& expr)
-      : StringPatternPredicateFunction(expr, "endswith") {}
+  EndswithFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool)
+      : StringPatternPredicateFunction(expr, pool, "endswith") {}
 
  protected:
   std::unique_ptr<cudf::column> evaluateMatch(
@@ -1961,8 +1932,8 @@ class EndswithFunction : public StringPatternPredicateFunction {
 
 class ContainsFunction : public StringPatternPredicateFunction {
  public:
-  explicit ContainsFunction(const std::shared_ptr<velox::exec::Expr>& expr)
-      : StringPatternPredicateFunction(expr, "contains") {}
+  ContainsFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool)
+      : StringPatternPredicateFunction(expr, pool, "contains") {}
 
  protected:
   std::unique_ptr<cudf::column> evaluateMatch(
@@ -1984,23 +1955,20 @@ class ContainsFunction : public StringPatternPredicateFunction {
 
 class ConcatFunction : public CudfFunction {
  public:
-  explicit ConcatFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    using velox::exec::ConstantExpr;
+  ConcatFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
     numInputs_ = expr->inputs().size();
     VELOX_CHECK_GE(numInputs_, 2, "concat expects at least 2 inputs");
 
     // Scan inputs for literals and store strings in map by input index.
     for (size_t i = 0; i < numInputs_; ++i) {
-      if (auto constant =
-              std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[i])) {
-        inputIndexToLiteral_[i] = constant->value()->toString(0);
+      if (expr->inputs()[i]->isConstantKind()) {
+        inputIndexToLiteral_[i] = constantToString(expr->inputs()[i], pool);
       }
     }
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // Validate sizes.
@@ -2057,17 +2025,17 @@ class ConcatFunction : public CudfFunction {
 
 class RowConstructorFunction : public CudfFunction {
  public:
-  explicit RowConstructorFunction(
-      const std::shared_ptr<velox::exec::Expr>& expr) {
-    using velox::exec::ConstantExpr;
+  RowConstructorFunction(
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool* pool) {
     VELOX_CHECK_GE(
         expr->inputs().size(), 1, "row_constructor expects at least 1 input");
     numInputs_ = expr->inputs().size();
     bool hasNonLiteralInput = false;
     literals_.reserve(numInputs_);
     for (const auto& input : expr->inputs()) {
-      if (auto constant = std::dynamic_pointer_cast<ConstantExpr>(input)) {
-        literals_.push_back(makeScalarFromConstantExpr(constant));
+      if (input->isConstantKind()) {
+        literals_.push_back(makeScalarFromConstantExpr(input, pool));
       } else {
         hasNonLiteralInput = true;
         literals_.push_back(nullptr);
@@ -2080,7 +2048,6 @@ class RowConstructorFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     VELOX_CHECK(
@@ -2162,7 +2129,8 @@ void registerCudfFunctions(
 
 std::shared_ptr<CudfFunction> createCudfFunction(
     const std::string& name,
-    const std::shared_ptr<velox::exec::Expr>& expr,
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool,
     const CudfDateTimeContext& context) {
   auto& registry = getCudfFunctionRegistry();
   auto it = registry.find(name);
@@ -2173,13 +2141,13 @@ std::shared_ptr<CudfFunction> createCudfFunction(
     // Empty signatures matching must be allowed to handle
     // the special case of cast.
     if (!spec.signatures.empty() &&
-        !matchCallAgainstSignatures(*expr, spec.signatures)) {
+        !matchCallAgainstSignatures(expr, spec.signatures)) {
       continue;
     }
     if (spec.canEvaluate && !spec.canEvaluate(expr)) {
       continue;
     }
-    auto function = spec.factory(name, expr);
+    auto function = spec.factory(name, expr, pool);
     if (function) {
       function->setContext(context);
     }
@@ -2193,8 +2161,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "split",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<SplitFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<SplitFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("array(varchar)")
@@ -2214,7 +2184,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "cardinality",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
         return std::make_shared<CardinalityFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -2225,8 +2197,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   // Coalesce is special form and doesn't have a prefix in its name.
   registerCudfFunction(
       "coalesce",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<CoalesceFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<CoalesceFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .typeVariable("T")
@@ -2238,16 +2212,20 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   // row_constructor is a special form and doesn't have a prefix in its name.
   registerCudfFunction(
       "row_constructor",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<RowConstructorFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<RowConstructorFunction>(expr, pool);
       },
       {});
 
   registerCudfFunction(
       "and",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
         return std::make_shared<LogicalFunction>(
-            expr, cudf::binary_operator::NULL_LOGICAL_AND);
+            expr, cudf::binary_operator::NULL_LOGICAL_AND, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("boolean")
@@ -2257,9 +2235,11 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       "or",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
         return std::make_shared<LogicalFunction>(
-            expr, cudf::binary_operator::NULL_LOGICAL_OR);
+            expr, cudf::binary_operator::NULL_LOGICAL_OR, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("boolean")
@@ -2269,7 +2249,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       "not",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
         return std::make_shared<UnaryFunction>(expr, cudf::unary_operator::NOT);
       },
       {FunctionSignatureBuilder()
@@ -2279,7 +2261,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       "is_null",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
         return std::make_shared<IsNullFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -2290,7 +2274,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       "isnotnull",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
         return std::make_shared<IsNotNullFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -2301,8 +2287,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "round",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<RoundFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<RoundFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .integerVariable("p")
@@ -2395,28 +2383,34 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunctions(
       {prefix + "doy", prefix + "day_of_year"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
         return std::make_shared<DayOfYearFunction>(expr);
       },
       timestampDateIntegerSignatures);
 
   registerCudfFunctions(
       {prefix + "week", prefix + "week_of_year"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<WeekFunction>(expr);
-      },
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) { return std::make_shared<WeekFunction>(expr); },
       timestampDateIntegerSignatures);
 
   registerCudfFunction(
       prefix + "quarter",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
         return std::make_shared<QuarterFunction>(expr);
       },
       timestampDateIntegerSignatures);
 
   registerCudfFunctions(
       {prefix + "yow", prefix + "year_of_week"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
         return std::make_shared<YearOfWeekFunction>(expr);
       },
       timestampDateIntegerSignatures);
@@ -2443,7 +2437,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "length",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
         return std::make_shared<LengthFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -2453,9 +2449,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "lower",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<LowerFunction>(expr);
-      },
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) { return std::make_shared<LowerFunction>(expr); },
       {FunctionSignatureBuilder()
            .returnType("varchar")
            .argumentType("varchar")
@@ -2463,9 +2459,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "upper",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<UpperFunction>(expr);
-      },
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) { return std::make_shared<UpperFunction>(expr); },
       {FunctionSignatureBuilder()
            .returnType("varchar")
            .argumentType("varchar")
@@ -2473,8 +2469,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "like",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<LikeFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<LikeFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("boolean")
@@ -2490,8 +2488,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "startswith",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<StartswithFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<StartswithFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("boolean")
@@ -2501,8 +2501,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "endswith",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<EndswithFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<EndswithFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("boolean")
@@ -2512,8 +2514,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "contains",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<ContainsFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<ContainsFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("boolean")
@@ -2523,8 +2527,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "concat",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<ConcatFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<ConcatFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("varchar")
@@ -2535,8 +2541,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   // No prefix because switch and if are special form
   registerCudfFunctions(
       {"switch", "if"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<SwitchFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<SwitchFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .typeVariable("T")
@@ -2549,9 +2557,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   registerCudfFunctions(
       // No signatures required for cast and try_cast. They are special forms.
       {"try_cast", "cast"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<CastFunction>(expr);
-      },
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) { return std::make_shared<CastFunction>(expr); },
       {
           // Cast needs special handling dynamically using cudf.
       });
@@ -2580,8 +2588,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
         aliases,
         [op](
             const std::string&,
-            const std::shared_ptr<velox::exec::Expr>& expr) {
-          return std::make_shared<BinaryFunction>(expr, op);
+            const core::TypedExprPtr& expr,
+            memory::MemoryPool* pool) {
+          return std::make_shared<BinaryFunction>(expr, op, pool);
         },
         {FunctionSignatureBuilder()
              .returnType("double")
@@ -2640,8 +2649,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
         aliases,
         [op](
             const std::string&,
-            const std::shared_ptr<velox::exec::Expr>& expr) {
-          return std::make_shared<BinaryFunction>(expr, op);
+            const core::TypedExprPtr& expr,
+            memory::MemoryPool* pool) {
+          return std::make_shared<BinaryFunction>(expr, op, pool);
         },
         comparisonSignatures);
   };
@@ -2672,7 +2682,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
         aliases,
         [op](
             const std::string&,
-            const std::shared_ptr<velox::exec::Expr>& expr) {
+            const core::TypedExprPtr& expr,
+            memory::MemoryPool*) {
           return std::make_shared<UnaryFunction>(expr, op);
         },
         {FunctionSignatureBuilder()
@@ -2731,8 +2742,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "between",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<BetweenFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<BetweenFunction>(expr, pool);
       },
       betweenSignatures);
 
@@ -2742,9 +2755,11 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "greatest",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
         return std::make_shared<GreatestLeastFunction>(
-            expr, cudf::binary_operator::NULL_MAX);
+            expr, cudf::binary_operator::NULL_MAX, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("double")
@@ -2761,9 +2776,11 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "least",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
         return std::make_shared<GreatestLeastFunction>(
-            expr, cudf::binary_operator::NULL_MIN);
+            expr, cudf::binary_operator::NULL_MIN, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("double")
@@ -2780,7 +2797,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   // TIMESTAMP WITH TIME ZONE function family (from_unixtime, to_unixtime,
   // at_timezone, timezone_hour/minute, to_iso8601, format_datetime,
-  // parse_datetime, from_iso8601_timestamp, now/current_timestamp).
+  // parse_datetime, from_iso8601_timestamp).
   registerTimezoneFunctions(prefix);
 
   // Note: Spark and Presto functions are now registered separately via
@@ -2788,39 +2805,73 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   return true;
 }
 
-std::shared_ptr<FunctionExpression> FunctionExpression::create(
-    const std::shared_ptr<velox::exec::Expr>& expr,
-    const RowTypePtr& inputRowSchema,
-    const CudfDateTimeContext& context) {
-  using velox::exec::FieldReference;
+/// Return the registry key for an expression node.
+/// For calls: the function name. For casts: "cast"/"try_cast".
+/// For concat: "row_constructor". Otherwise: toString().
+std::string exprRegistryName(const core::TypedExprPtr& expr) {
+  switch (expr->kind()) {
+    case core::ExprKind::kCall:
+      return expr->asUnchecked<core::CallTypedExpr>()->name();
+    case core::ExprKind::kCast:
+      return expr->asUnchecked<core::CastTypedExpr>()->isTryCast()
+          ? expression::kTryCast
+          : expression::kCast;
+    case core::ExprKind::kConcat:
+      return expression::kRowConstructor;
+    default:
+      return expr->toString();
+  }
+}
 
+std::shared_ptr<FunctionExpression> FunctionExpression::create(
+    const core::TypedExprPtr& expr,
+    const RowTypePtr& inputRowSchema,
+    memory::MemoryPool* pool,
+    const CudfDateTimeContext& context) {
   auto node = std::make_shared<FunctionExpression>();
   node->expr_ = expr;
   node->inputRowSchema_ = inputRowSchema;
 
-  auto name = expr->name();
-  node->function_ = createCudfFunction(name, expr, context);
+  auto name = exprRegistryName(expr);
+  node->function_ = createCudfFunction(name, expr, pool, context);
 
-  if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
-    if (!fieldExpr->inputs().empty()) {
-      VELOX_CHECK_EQ(
-          fieldExpr->inputs().size(),
-          1,
-          "Nested field reference expects exactly one input");
-      auto parentRowType = asRowType(fieldExpr->inputs()[0]->type());
+  // For nested field accesses on computed ROW values (e.g. dereferencing the
+  // result of row_constructor), pre-resolve the child index inside the parent
+  // ROW so eval() can extract the right struct child without re-running the
+  // CPU FieldReference resolution.
+  const bool isFieldAccess = expr->isFieldAccessKind();
+  const bool isDereference = expr->isDereferenceKind();
+  if (isFieldAccess || isDereference) {
+    if (!expr->inputs().empty() && !expr->inputs()[0]->isInputKind()) {
+      const auto parentRowType = asRowType(expr->inputs()[0]->type());
       VELOX_CHECK_NOT_NULL(
           parentRowType,
-          "Nested FieldReference parent must be a ROW: {}",
+          "Nested field reference parent must be a ROW: {}",
           expr->toString());
-      node->fieldIndex_ = resolveFieldReferenceIndex(*fieldExpr, parentRowType);
+      if (isDereference) {
+        // Dereference carries the child index directly; resolving by name
+        // would be ambiguous for unnamed ROW fields (e.g. row_constructor).
+        node->fieldIndex_ = static_cast<int32_t>(
+            expr->asUnchecked<core::DereferenceTypedExpr>()->index());
+      } else {
+        node->fieldIndex_ = static_cast<int32_t>(parentRowType->getChildIdx(
+            expr->asUnchecked<core::FieldAccessTypedExpr>()->name()));
+      }
     }
   }
 
-  if (node->function_ || std::dynamic_pointer_cast<FieldReference>(expr)) {
+  if (node->function_ || isFieldAccess || isDereference) {
     for (const auto& input : expr->inputs()) {
-      if (!std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input)) {
+      // Constant inputs are inlined by the cuDF function, and an InputTypedExpr
+      // child marks an input-column field reference whose value eval() reads
+      // directly from the input columns; neither needs its own subexpression.
+      if (!input->isConstantKind() && !input->isInputKind()) {
+        // Each child selects its own best evaluator via
+        // createCudfExpression (e.g. AST for arithmetic, Function for
+        // string ops).  Field references are handled as leaf
+        // FunctionExpressions.
         node->subexpressions_.push_back(
-            createCudfExpression(input, inputRowSchema, context));
+            createCudfExpression(input, inputRowSchema, pool, context));
       }
     }
   }
@@ -2871,23 +2922,35 @@ ColumnOrView FunctionExpression::eval(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr,
     bool finalize) {
-  using velox::exec::FieldReference;
-
-  if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr_)) {
-    if (fieldExpr->inputs().empty()) {
-      auto columnIndex = inputRowSchema_->getChildIdx(fieldExpr->name());
-      return inputColumnViews[columnIndex];
+  // Top-level field access (or chain of field accesses on input columns) maps
+  // directly to a column_view zero-copy.
+  if (isInputFieldReference(expr_)) {
+    auto path = extractFieldPath(expr_);
+    VELOX_CHECK(path.has_value() && !path->empty());
+    auto columnView =
+        inputColumnViews[inputRowSchema_->getChildIdx(path->front())];
+    // Walk nested struct fields using the extracted path. Use get_sliced_child
+    // rather than child() so a sliced struct column's offset is applied to the
+    // child; child() would return the unsliced child and misalign the rows.
+    TypePtr current = inputRowSchema_->findChild(path->front());
+    for (size_t i = 1; i < path->size(); ++i) {
+      const auto& row = current->asRow();
+      auto idx = row.getChildIdx(path->at(i));
+      columnView =
+          cudf::structs_column_view(columnView).get_sliced_child(idx, stream);
+      current = row.childAt(idx);
     }
+    return columnView;
+  }
 
-    VELOX_CHECK_EQ(
-        fieldExpr->inputs().size(),
-        1,
-        "Nested field reference expects exactly one input");
+  // Nested field access on a computed ROW (e.g. dereference of
+  // row_constructor): evaluate the parent expression and extract the cached
+  // child index, propagating parent-struct nulls into the result.
+  if (expr_->isFieldAccessKind() || expr_->isDereferenceKind()) {
     VELOX_CHECK_EQ(
         subexpressions_.size(),
         1,
         "Nested field reference expects exactly one subexpression");
-
     auto parent = subexpressions_[0]->eval(inputColumnViews, stream, mr);
     VELOX_DCHECK_GE(fieldIndex_, 0);
     auto child = FunctionExpression::makeStructChildColumn(
@@ -2905,16 +2968,7 @@ ColumnOrView FunctionExpression::eval(
       subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
     }
 
-    // The batch row count, threaded to eval so a zero-argument function (e.g.
-    // now()) can size its constant output. Every argument and input column
-    // carries it; the GPU path always has at least one input column
-    // (zero-column projections fall back to CPU and empty batches short-circuit
-    // upstream).
-    const auto numRows = !subexprResults.empty()
-        ? asView(subexprResults.front()).size()
-        : (inputColumnViews.empty() ? 0 : inputColumnViews.front().size());
-
-    auto result = function_->eval(subexprResults, numRows, stream, mr);
+    auto result = function_->eval(subexprResults, stream, mr);
     if (finalize) {
       const auto requestedType = cudf_velox::veloxToCudfDataType(expr_->type());
       auto resultView = asView(result);
@@ -2926,7 +2980,8 @@ ColumnOrView FunctionExpression::eval(
   }
 
   VELOX_FAIL(
-      "Unsupported expression for recursive evaluation: " + expr_->name());
+      "Unsupported expression for recursive evaluation: " +
+      exprRegistryName(expr_));
 }
 
 void FunctionExpression::close() {
@@ -2934,15 +2989,23 @@ void FunctionExpression::close() {
   subexpressions_.clear();
 }
 
-bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
-  using velox::exec::FieldReference;
-
-  if (std::dynamic_pointer_cast<FieldReference>(expr)) {
+bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
+  if (isInputFieldReference(expr)) {
     return true;
   }
 
-  const auto& opName = expr->name();
-  if (opName == "cast" || opName == "try_cast") {
+  // Field access / dereference on a computed ROW value (e.g. dereferencing the
+  // result of row_constructor). The parent expression is validated separately
+  // by the recursive deep check; here we only confirm the shape so eval() can
+  // extract the struct child. Input-column references are handled above by
+  // isInputFieldReference.
+  if (expr->isFieldAccessKind() || expr->isDereferenceKind()) {
+    return !expr->inputs().empty() && !expr->inputs()[0]->isInputKind() &&
+        expr->inputs()[0]->type()->kind() == TypeKind::ROW;
+  }
+
+  const auto opName = exprRegistryName(expr);
+  if (expr->isCastKind()) {
     const auto& srcType =
         expr->inputs().empty() ? nullptr : expr->inputs()[0]->type();
     const auto& dstType = expr->type();
@@ -2955,13 +3018,13 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
   }
 
   auto& registry = getCudfFunctionRegistry();
-  auto it = registry.find(expr->name());
+  auto it = registry.find(opName);
   if (it == registry.end()) {
     return false;
   }
   for (const auto& spec : it->second) {
     if (!spec.signatures.empty() &&
-        !matchCallAgainstSignatures(*expr, spec.signatures)) {
+        !matchCallAgainstSignatures(expr, spec.signatures)) {
       continue;
     }
     if (spec.canEvaluate && !spec.canEvaluate(expr)) {
@@ -2972,55 +3035,70 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
   return false;
 }
 
-bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
-  ensureBuiltinExpressionEvaluatorsRegistered();
+std::optional<std::vector<std::string>> extractFieldPath(
+    const core::TypedExprPtr& expr) {
+  if (expr == nullptr) {
+    return std::nullopt;
+  }
 
-  const auto& registry = getCudfExpressionEvaluatorRegistry();
-
-  bool supported = false;
-  for (const auto& [name, entry] : registry) {
-    if (entry.canEvaluate && entry.canEvaluate(expr)) {
-      supported = true;
-      break;
+  if (expr->isFieldAccessKind()) {
+    const auto* field = expr->asUnchecked<core::FieldAccessTypedExpr>();
+    if (field->inputs().empty() || field->inputs()[0]->isInputKind()) {
+      return std::vector<std::string>{field->name()};
     }
-  }
-  if (!supported) {
-    LOG_FALLBACK(expr->toString());
-    return false;
-  }
 
-  if (deep) {
-    for (const auto& input : expr->inputs()) {
-      if (input->name() != "literal" && !canBeEvaluatedByCudf(input, true)) {
-        return false;
-      }
+    auto path = extractFieldPath(field->inputs()[0]);
+    if (!path.has_value()) {
+      return std::nullopt;
     }
+    path->push_back(field->name());
+    return path;
   }
 
-  return true;
+  if (expr->isDereferenceKind()) {
+    const auto* dereference = expr->asUnchecked<core::DereferenceTypedExpr>();
+    auto path = extractFieldPath(dereference->inputs()[0]);
+    if (!path.has_value()) {
+      return std::nullopt;
+    }
+    path->push_back(dereference->name());
+    return path;
+  }
+
+  return std::nullopt;
+}
+
+std::unordered_set<std::string> referencedInputFields(
+    const core::TypedExprPtr& expr) {
+  std::unordered_set<std::string> fields;
+  collectReferencedInputFields(expr, fields);
+  return fields;
+}
+
+bool canExprRunOnGpu(
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool) {
+  // Optimize (constant fold and rewrite) so the support check sees the same
+  // form the operator compiles: operators optimize with their own pool before
+  // compiling, folding e.g. cast(<literal> as DECIMAL) into a plain decimal
+  // constant. Checking the un-optimized tree would reject such folded-away
+  // casts that the operator never actually compiles.
+  const core::TypedExprPtr checked = (queryCtx != nullptr && pool != nullptr)
+      ? expression::optimize(expr, queryCtx, pool)
+      : expr;
+  return canBeEvaluatedByCudf(checked);
 }
 
 std::shared_ptr<CudfExpression> createCudfExpression(
-    std::shared_ptr<velox::exec::Expr> expr,
+    const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
+    memory::MemoryPool* pool,
     const CudfDateTimeContext& context) {
-  ensureBuiltinExpressionEvaluatorsRegistered();
-  const auto& registry = getCudfExpressionEvaluatorRegistry();
-
-  const CudfExpressionEvaluatorEntry* best = nullptr;
-  for (const auto& [name, entry] : registry) {
-    if (entry.canEvaluate && entry.canEvaluate(expr)) {
-      if (best == nullptr || entry.priority > best->priority) {
-        best = &entry;
-      }
-    }
-  }
-
-  if (best != nullptr) {
-    return best->create(expr, inputRowSchema, context);
-  }
-
-  return FunctionExpression::create(expr, inputRowSchema, context);
+  const auto* best = findBestEvaluator(expr);
+  VELOX_CHECK_NOT_NULL(
+      best, "No cuDF expression evaluator can handle: {}", expr->toString());
+  return best->create(expr, inputRowSchema, pool, context);
 }
 
 void unregisterFunctions() {

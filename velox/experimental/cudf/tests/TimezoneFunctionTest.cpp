@@ -151,20 +151,6 @@ class TimezoneFunctionTest : public cudf_velox::CudfFunctionBaseTest {
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
     });
   }
-
-  // Sets the session start time (consumed by now()/current_timestamp) and the
-  // session timezone, with adjust-to-session-timezone on, for subsequent
-  // evaluate() calls. testingOverrideConfigUnsafe replaces the whole config, so
-  // all three keys are set together.
-  void setSessionStartTimeAndTimeZone(
-      int64_t startTimeMs,
-      const std::string& zone) {
-    queryCtx_->testingOverrideConfigUnsafe({
-        {core::QueryConfig::kSessionStartTime, std::to_string(startTimeMs)},
-        {core::QueryConfig::kSessionTimezone, zone},
-        {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
-    });
-  }
 };
 
 // A TIMESTAMP WITH TIME ZONE column projected unchanged must round-trip through
@@ -269,7 +255,8 @@ TEST_F(TimezoneFunctionTest, timezoneMinuteMixedZones) {
   assertMatchesCpu("timezone_minute(c0)", input);
 }
 
-// Mixed zones plus a null row: the null must stay null through the per-row path.
+// Mixed zones plus a null row: the null must stay null through the per-row
+// path.
 TEST_F(TimezoneFunctionTest, timezoneHourMixedZonesWithNull) {
   auto input = makeRowVector({makeNullableFlatVector<int64_t>(
       {pack(1'609'466'400'000, tz::getTimeZoneID("America/Los_Angeles")),
@@ -436,14 +423,14 @@ TEST_F(TimezoneFunctionTest, fromUnixtimeWithHoursMinutes) {
   assertMatchesCpu("from_unixtime(c0, 7, 30)", doubleInput(1'609'466'400.0));
 }
 
-// Reproducer: from_unixtime(double, bigint, bigint) computes the fixed offset as
-// hours*60 + minutes. INT64_MAX hours overflows that int64 product. CPU
+// Reproducer: from_unixtime(double, bigint, bigint) computes the fixed offset
+// as hours*60 + minutes. INT64_MAX hours overflows that int64 product. CPU
 // (FromUnixtimeFunction) uses checkedMultiply/checkedPlus and throws; the GPU
-// registration multiplies unchecked, then casts to int32 -- on this platform the
-// UB wraps to -60, an in-range offset tz::getTimeZoneID happily accepts. Red
-// until the GPU mirrors CPU's checked arithmetic. compileExpression succeeds on
-// both (the CPU arithmetic error is a user error captured in initialize() and
-// re-thrown at eval); both throws carry "overflow".
+// registration multiplies unchecked, then casts to int32 -- on this platform
+// the UB wraps to -60, an in-range offset tz::getTimeZoneID happily accepts.
+// Red until the GPU mirrors CPU's checked arithmetic. compileExpression
+// succeeds on both (the CPU arithmetic error is a user error captured in
+// initialize() and re-thrown at eval); both throws carry "overflow".
 TEST_F(TimezoneFunctionTest, fromUnixtimeHoursMinutesOverflowRejectedLikeCpu) {
   auto input = doubleInput(0.0);
   auto exprSet = compileExpression(
@@ -515,8 +502,9 @@ TEST_F(TimezoneFunctionTest, parseDatetime) {
 // When the Joda format carries a colon offset token (ZZ), CPU folds the offset
 // into the UTC instant AND packs the parsed fixed-offset zone key, so
 // timezone_hour reports -9 and to_iso8601 prints -09:00. GPU currently packs
-// GMT (timezone_hour = 0, to_iso8601 = Z). Compare through projections that read
-// the zone key, since assertMatchesCpu on the TSWTZ value alone ignores it.
+// GMT (timezone_hour = 0, to_iso8601 = Z). Compare through projections that
+// read the zone key, since assertMatchesCpu on the TSWTZ value alone ignores
+// it.
 TEST_F(TimezoneFunctionTest, parseDatetimePreservesParsedOffset) {
   auto input = varcharInput("2021-01-01 02:00:00 -09:00");
   assertMatchesCpu(
@@ -535,13 +523,14 @@ TEST_F(TimezoneFunctionTest, parseDatetimeNoColonOffset) {
 }
 
 // Reproducer for the colon-offset minute drop. cuDF's "%z" is fixed-width
-// "+/-HHMM": it reads the two hour digits, then the two minute digits at a fixed
-// position, so a colon (Joda ZZ, "+05:30") lands where a minute digit is
-// expected and only "+05:00" is folded into the UTC instant. The trailing-offset
-// regex still recovers "+05:30" for the zone key, leaving the instant 30 minutes
-// off from CPU. The existing -09:00/-0900 tests miss this because their minute
-// component is zero. Red until the colon offset is normalized (or the wall clock
-// is parsed without "%z" and the recovered offset subtracted).
+// "+/-HHMM": it reads the two hour digits, then the two minute digits at a
+// fixed position, so a colon (Joda ZZ, "+05:30") lands where a minute digit is
+// expected and only "+05:00" is folded into the UTC instant. The
+// trailing-offset regex still recovers "+05:30" for the zone key, leaving the
+// instant 30 minutes off from CPU. The existing -09:00/-0900 tests miss this
+// because their minute component is zero. Red until the colon offset is
+// normalized (or the wall clock is parsed without "%z" and the recovered offset
+// subtracted).
 TEST_F(TimezoneFunctionTest, parseDatetimeColonOffsetWithMinutes) {
   auto input = varcharInput("2026-01-02 00:45:00 +05:30");
   assertMatchesCpu(
@@ -586,8 +575,8 @@ TEST_F(TimezoneFunctionTest, parseDatetimeLiteralZUtc) {
 }
 
 // CPU also accepts UTC/UCT/GMT/GMT0 for the numeric-offset token (Z/ZZ), all
-// mapping to GMT. Confirms the fix keeps a named-UTC alias correct (again offset
-// 0 / GMT via the no-match path).
+// mapping to GMT. Confirms the fix keeps a named-UTC alias correct (again
+// offset 0 / GMT via the no-match path).
 TEST_F(TimezoneFunctionTest, parseDatetimeNamedUtcAlias) {
   auto input = varcharInput("2026-01-02 00:45:00 GMT");
   assertMatchesCpu(
@@ -783,7 +772,8 @@ TEST_F(TimezoneFunctionTest, fromIso8601MalformedThrowsLikeCpu) {
   auto input = varcharInput("not-a-timestamp");
   auto exprSet =
       compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
-  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 
@@ -793,7 +783,8 @@ TEST_F(TimezoneFunctionTest, fromIso8601SpaceSeparatorThrowsLikeCpu) {
   auto input = varcharInput("2021-01-02 11:38");
   auto exprSet =
       compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
-  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 
@@ -802,14 +793,16 @@ TEST_F(TimezoneFunctionTest, fromIso8601EmptyStringThrowsLikeCpu) {
   auto input = varcharInput("");
   auto exprSet =
       compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
-  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 TEST_F(TimezoneFunctionTest, fromIso8601BareTThrowsLikeCpu) {
   auto input = varcharInput("T");
   auto exprSet =
       compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
-  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 
@@ -822,14 +815,16 @@ TEST_F(TimezoneFunctionTest, fromIso8601InvalidMonthDayThrowsLikeCpu) {
   auto input = varcharInput("2021-13-45");
   auto exprSet =
       compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
-  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 TEST_F(TimezoneFunctionTest, fromIso8601InvalidFebruaryThrowsLikeCpu) {
   auto input = varcharInput("2021-02-30");
   auto exprSet =
       compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
-  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 
@@ -858,66 +853,6 @@ TEST_F(TimezoneFunctionTest, fromIso8601NullRowStaysNull) {
   auto input = makeRowVector(
       {makeNullableFlatVector<std::string>({std::nullopt}, VARCHAR())});
   assertMatchesCpu("from_iso8601_timestamp(c0)", input);
-}
-
-// now()/current_timestamp -> timestamp with time zone. now() is
-// non-deterministic -- a live CPU now() and a separate GPU now() observe
-// different instants -- so this cannot assert CPU == GPU against a live clock.
-// Instead it pins the deterministic contract CPU's CurrentTimestampFunction
-// implements: pack(sessionStartTimeMs, sessionZone). The GPU must emit a
-// TIMESTAMP WITH TIME ZONE whose UTC millis are the session start time and
-// whose zone key is the session zone. A dummy column sizes the batch.
-TEST_F(TimezoneFunctionTest, nowUsesSessionStartTimeAndTimezone) {
-  constexpr int64_t kStartMs = 1'609'466'400'000; // 2021-01-01T02:00:00 UTC.
-  setSessionStartTimeAndTimeZone(kStartMs, "America/Los_Angeles");
-  auto input = doubleInput(0.0);
-  auto exprSet = compileExpression("now()", asRowType(input->type()));
-  auto result = evaluate(*exprSet, input);
-  ASSERT_NE(result, nullptr);
-  ASSERT_EQ(result->size(), input->size());
-  ASSERT_TRUE(isTimestampWithTimeZoneType(result->type()))
-      << "now() must produce TIMESTAMP WITH TIME ZONE, got "
-      << result->type()->toString();
-  const auto packed = result->as<SimpleVector<int64_t>>()->valueAt(0);
-  EXPECT_EQ(unpackMillisUtc(packed), kStartMs);
-  EXPECT_EQ(unpackZoneKeyId(packed), tz::getTimeZoneID("America/Los_Angeles"));
-}
-
-// now()/current_timestamp must be rejected exactly when CPU rejects it. CPU's
-// CurrentTimestampFunction throws "Timezone cannot be null" when
-// getTimeZoneFromConfig returns null -- i.e. when
-// adjust_timestamp_to_session_timezone is off, or the session timezone is
-// empty. The GPU previously honored neither condition (defaulting the zone key
-// to GMT) and silently produced a value where CPU failed. Assert both paths
-// throw for the two rejection configs. The exception is captured at
-// initialize() and re-thrown at eval time, so compileExpression succeeds and
-// the throw surfaces from evaluate().
-TEST_F(TimezoneFunctionTest, nowWithoutAdjustedSessionTimezoneRejectedLikeCpu) {
-  auto input = doubleInput(0.0);
-  const auto rowType = asRowType(input->type());
-
-  // Adjust on but no session timezone -> rejected on both paths.
-  queryCtx_->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
-  });
-  {
-    auto exprSet = compileExpression("now()", rowType);
-    EXPECT_ANY_THROW(
-        functions::test::FunctionBaseTest::evaluate(*exprSet, input));
-    EXPECT_ANY_THROW(evaluate(*exprSet, input));
-  }
-
-  // Session timezone set but adjust off -> rejected on both paths.
-  queryCtx_->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
-      {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
-  });
-  {
-    auto exprSet = compileExpression("now()", rowType);
-    EXPECT_ANY_THROW(
-        functions::test::FunctionBaseTest::evaluate(*exprSet, input));
-    EXPECT_ANY_THROW(evaluate(*exprSet, input));
-  }
 }
 
 } // namespace

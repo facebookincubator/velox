@@ -18,13 +18,16 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Time.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::exec::test {
 
@@ -295,6 +298,80 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncDateAdjustTimezoneUsesCudf) {
 
   ASSERT_TRUE(wasCudfFilterProjectUsed(task));
   ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+// now() reaches the GPU as a constant, never as a call. It takes no arguments,
+// so the optimizer's "all inputs are constant" test is vacuously true and
+// expression::optimize always constant folds it (ExprOptimizer.cpp:121-130);
+// every operator optimizes before compiling. The projection CudfFilterProject
+// compiles is therefore a TIMESTAMP WITH TIME ZONE constant.
+//
+// Pin both halves of that, because they can fail independently: the folded
+// value must still be the session start time packed with the session zone, and
+// a constant-only projection of a custom type must still be claimed by the GPU
+// operator. Value parity alone would keep passing if the projection silently
+// fell back to CPU.
+TEST_F(ToCudfSelectionTest, nowFoldsToConstantAndStaysOnGpu) {
+  constexpr int64_t kStartMs = 1'609'466'400'000; // 2021-01-01T02:00:00 UTC.
+  auto input =
+      makeRowVector({"amount"}, {makeFlatVector<int64_t>({1, 2, 3, 4})});
+
+  auto plan =
+      PlanBuilder().values({input}).project({"now() AS result"}).planNode();
+
+  std::shared_ptr<Task> task;
+  auto results =
+      AssertQueryBuilder(plan)
+          .config("cudf.enabled", true)
+          .config(QueryConfig::kSessionTimezone, "America/Los_Angeles")
+          .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+          .config(QueryConfig::kSessionStartTime, std::to_string(kStartMs))
+          .copyResults(pool(), task);
+
+  ASSERT_EQ(results->size(), input->size());
+  const auto& resultColumn = results->childAt(0);
+  ASSERT_TRUE(isTimestampWithTimeZoneType(resultColumn->type()))
+      << "now() must produce TIMESTAMP WITH TIME ZONE, got "
+      << resultColumn->type()->toString();
+  const auto packed = resultColumn->as<SimpleVector<int64_t>>()->valueAt(0);
+  EXPECT_EQ(unpackMillisUtc(packed), kStartMs);
+  EXPECT_EQ(unpackZoneKeyId(packed), tz::getTimeZoneID("America/Los_Angeles"));
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+// now() must fail exactly where CPU fails, and the constant folding above does
+// not weaken that. CPU's CurrentTimestampFunction::initialize fails when
+// getTimeZoneFromConfig returns null, which happens when
+// adjust_timestamp_to_session_timezone is off or the session timezone is empty.
+// Folding runs that same initialize, so the query still fails for both
+// configurations. Pin it here: a GPU path that produced a value where CPU fails
+// would be a silently wrong result, and this is the only check that would catch
+// it.
+TEST_F(ToCudfSelectionTest, nowWithoutAdjustedSessionTimezoneRejected) {
+  auto input =
+      makeRowVector({"amount"}, {makeFlatVector<int64_t>({1, 2, 3, 4})});
+
+  auto plan =
+      PlanBuilder().values({input}).project({"now() AS result"}).planNode();
+
+  // Adjustment enabled, but no session timezone to adjust to.
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .config("cudf.enabled", true)
+          .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+          .copyResults(pool()),
+      "Timezone cannot be null");
+
+  // Session timezone present, but adjustment disabled.
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .config("cudf.enabled", true)
+          .config(QueryConfig::kSessionTimezone, "America/Los_Angeles")
+          .config(QueryConfig::kAdjustTimestampToTimezone, "false")
+          .copyResults(pool()),
+      "Timezone cannot be null");
 }
 
 // Test supported aggregation should use CUDF

@@ -23,6 +23,8 @@
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -47,7 +49,34 @@ class TableEvolutionFuzzer {
         dwio::common::FileFormat,
         FuzzerGenerator&)>
         extraWriteSerdeParams;
+
+    /// Returns a pair of connector session property maps, one per scan task in
+    /// a query shape. The two maps may differ so that the pushdown and
+    /// reference scans exercise different read-side configs (e.g. dictionary
+    /// preservation on vs off), turning the existing result comparison into a
+    /// cross-config correctness check. Called once per query shape.
+    std::function<std::pair<
+        std::unordered_map<std::string, std::string>,
+        std::unordered_map<std::string, std::string>>(FuzzerGenerator&)>
+        extraReadSessionProperties;
   };
+
+  /// Per-batch raw-byte target and clamp bounds for adaptive batch sizing. A
+  /// batch is sized to about kTargetBatchBytes raw bytes regardless of schema
+  /// width: narrow schemas get many rows, wide/nested schemas get few. Public
+  /// so the adaptive sizing can be unit tested.
+  static constexpr int64_t kTargetBatchBytes = 768 * 1024L;
+  static constexpr int kMinAdaptiveVectorSize = 16;
+  static constexpr int kMaxAdaptiveVectorSize = 50'000;
+
+  /// Maps an estimated per-row raw byte cost to a per-batch row count
+  /// (~targetBatchBytes per batch), clamped to [FLAGS_min_adaptive_vector_size,
+  /// FLAGS_max_adaptive_vector_size] (which default to kMinAdaptiveVectorSize /
+  /// kMaxAdaptiveVectorSize). A per-row cost below 1 byte is treated as 1.
+  /// Defined in the .cpp so it can read the clamp-bound gflags.
+  static int adaptiveVectorSizeForBytesPerRow(
+      double bytesPerRow,
+      int64_t targetBatchBytes = kTargetBatchBytes);
 
   explicit TableEvolutionFuzzer(const Config& config);
 
@@ -138,7 +167,7 @@ class TableEvolutionFuzzer {
 
   static std::unique_ptr<TaskCursor> makeWriteTask(
       const Setup& setup,
-      const RowVectorPtr& data,
+      const std::vector<RowVectorPtr>& dataBatches,
       const std::string& outputDir,
       const std::vector<column_index_t>& bucketColumnIndices,
       FuzzerGenerator& rng,
@@ -166,7 +195,9 @@ class TableEvolutionFuzzer {
       bool useFiltersAsNode,
       bool insertProjectToBlockPushdown,
       const RowTypePtr& fullOutSchema,
-      const std::vector<std::string>& outputColumnNames);
+      const std::vector<std::string>& outputColumnNames,
+      const std::unordered_map<std::string, std::string>&
+          readSessionProperties);
 
   /// Builds schema for flatmap as struct reading by converting selected map
   /// columns to struct types.
@@ -183,14 +214,14 @@ class TableEvolutionFuzzer {
 
   /// Creates write tasks for all evolution steps.
   /// Generates test data and creates TaskCursor objects for writing data
-  /// to temporary directories. Populates the writeTasks vector and sets
-  /// finalExpectedData to the data from the last evolution step.
+  /// to temporary directories. Populates the writeTasks vector and collects the
+  /// last evolution step's batches into finalExpectedBatches.
   void createWriteTasks(
       const std::vector<Setup>& testSetups,
       const std::vector<column_index_t>& bucketColumnIndices,
       const std::string& tableOutputRootDirPath,
       std::vector<std::shared_ptr<TaskCursor>>& writeTasks,
-      RowVectorPtr& finalExpectedData,
+      std::vector<RowVectorPtr>& finalExpectedBatches,
       folly::F14FastMap<int, folly::F14FastSet<std::string>>&
           globalMapColumnKeys,
       std::vector<int>& globallyConsistentColumnIndexVector);
@@ -203,8 +234,7 @@ class TableEvolutionFuzzer {
       const std::vector<std::vector<RowVectorPtr>>& writeResults,
       const std::vector<Setup>& testSetups,
       const std::vector<column_index_t>& bucketColumnIndices,
-      std::optional<int32_t> selectedBucket,
-      const RowVectorPtr& finalExpectedData);
+      std::optional<int32_t> selectedBucket);
 
   /// Applies remaining filters with updated column names.
   /// Updates filter expressions to use evolved column names based on the
@@ -216,10 +246,37 @@ class TableEvolutionFuzzer {
       PushdownConfig& pushdownConfig,
       const std::unordered_set<std::string>& subfieldFilteredFields);
 
+  /// Generates a single fresh query shape over the already-written files and
+  /// verifies the pushdown plan against the FilterNode reference plan. Draws
+  /// subfield filters, remaining-filter application, dropped filter-only
+  /// columns, aggregation config, and the flatmap-as-struct read schema, then
+  /// rebuilds the scan splits (no rewrite) and runs both scan tasks. Called
+  /// once per query shape so a single write amortizes many shapes.
+  void runQueryShape(
+      const std::vector<std::vector<RowVectorPtr>>& writeResults,
+      const std::vector<Setup>& testSetups,
+      const std::vector<column_index_t>& bucketColumnIndices,
+      const RowVectorPtr& finalExpectedData,
+      const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
+          globalMapColumnKeys,
+      const std::vector<int>& globallyConsistentColumnIndexVector,
+      bool shouldGenerateRemainingFilters,
+      const fuzzer::ExpressionFuzzer::FuzzedExpressionData&
+          generatedRemainingFilters,
+      const std::unordered_map<std::string, std::string>& columnNameMapping,
+      folly::Executor& executor);
+
   const Config config_;
   VectorFuzzer vectorFuzzer_;
   unsigned currentSeed_;
   FuzzerGenerator rng_;
+  /// Per-query-shape read-side connector session properties for the pushdown
+  /// scan (first) and the reference scan (second). Computed once per shape in
+  /// runQueryShape() and passed to makeScanTask(); logged on failure.
+  std::pair<
+      std::unordered_map<std::string, std::string>,
+      std::unordered_map<std::string, std::string>>
+      readSessionProperties_;
   int64_t sequenceNumber_ = 0;
 };
 

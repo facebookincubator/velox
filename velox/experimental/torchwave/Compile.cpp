@@ -16,6 +16,7 @@
 
 #include "velox/experimental/torchwave/Compile.h"
 #include <fmt/format.h>
+#include "velox/experimental/torchwave/Cat.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/Headers.h" // @manual: registers JIT headers via static init
 #include "velox/experimental/torchwave/Utils.h"
@@ -183,6 +184,45 @@ bool isParamPresent(NodeCP node, std::string_view name) {
   return attr && !std::holds_alternative<nativert::None>(attr->value);
 }
 
+// Counts the SymIntList (vector<int64_t>) attributes of 'node'.
+size_t numIntListAttributes(NodeCP node) {
+  size_t count = 0;
+  for (const auto& attr : node->attributes()) {
+    if (std::holds_alternative<std::vector<int64_t>>(attr.value)) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+// True if 'left' and 'right' carry the same SymIntList attributes. Unlike
+// scalar constants, these never reach the constant area (forEachSortedAttribute
+// skips them): a fused op materializes their literal values inline, and a
+// factory op's 'size' also fixes the enclosing expression's shape (SizeExpr::
+// constShapes). Both are baked into the ProjectOperation, so two nodes that
+// differ in one are not interchangeable.
+bool intListAttributesMatch(NodeCP left, NodeCP right) {
+  if (numIntListAttributes(left) != numIntListAttributes(right)) {
+    return false;
+  }
+  for (const auto& attr : left->attributes()) {
+    const auto* values = std::get_if<std::vector<int64_t>>(&attr.value);
+    if (!values) {
+      continue;
+    }
+    const auto* rightAttr = right->tryGetAttribute(attr.name);
+    if (!rightAttr) {
+      return false;
+    }
+    const auto* rightValues =
+        std::get_if<std::vector<int64_t>>(&rightAttr->value);
+    if (!rightValues || *rightValues != *values) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool subgraphNodesMatch(
     NodeCP left,
     NodeCP right,
@@ -191,6 +231,9 @@ bool subgraphNodesMatch(
     const Subgraph& leftSg,
     const Subgraph& rightSg) {
   if (left->target() != right->target()) {
+    return false;
+  }
+  if (!intListAttributesMatch(left, right)) {
     return false;
   }
   // dtype attributes must match when present.
@@ -318,6 +361,17 @@ void hashSubgraphNode(
       }
     }
   }
+  // SymIntList attributes are baked into the generated code and into the
+  // subgraph's shape expressions, so they are part of a node's identity (see
+  // intListAttributesMatch).
+  for (const auto& attr : node->attributes()) {
+    if (!std::holds_alternative<std::vector<int64_t>>(attr.value)) {
+      continue;
+    }
+    auto ah = std::hash<std::string>{}(
+        attr.name + "=" + constantToString(attr.value));
+    hash ^= ah + kGoldenRatioHash + (hash << 6) + (hash >> 2);
+  }
   for (auto& input : node->inputs()) {
     if (inputs.count(input.value)) {
       continue;
@@ -441,8 +495,37 @@ nativert::Node* copyVariantNode(
           // Variant function created nodes directly in the variant graph.
           // Map all variant chain nodes to the original.
           mapVariantChain(variantRoot, node, valueMap, nodeMap);
+          // An original output can be produced by any node of the variant
+          // chain, not just variantRoot: a multi-stage expansion (e.g.
+          // masked_select_jagged -> head/scatter/lengths) yields the values
+          // list from the scatter stage and new_sizes from the lengths stage.
+          // Collect every chain-produced output (walking from variantRoot via
+          // producers, stopping at already-mapped external inputs, as
+          // mapVariantChain does) and match original outputs by id against all
+          // of them.
+          std::vector<nativert::Value*> chainOutputs;
+          {
+            std::unordered_set<NodeCP> seen;
+            std::function<void(NodeCP)> collect = [&](NodeCP chainNode) {
+              if (!seen.insert(chainNode).second) {
+                return;
+              }
+              for (const auto* out : chainNode->outputs()) {
+                chainOutputs.push_back(const_cast<nativert::Value*>(out));
+              }
+              for (const auto& input : chainNode->inputs()) {
+                if (valueMap.count(input.value)) {
+                  continue;
+                }
+                if (auto* producer = input.value->producer()) {
+                  collect(producer);
+                }
+              }
+            };
+            collect(variantRoot);
+          }
           for (auto* origOut : node->outputs()) {
-            for (auto* vrOut : variantRoot->outputs()) {
+            for (auto* vrOut : chainOutputs) {
               if (vrOut->id() == origOut->id()) {
                 valueMap[origOut] = vrOut;
                 if (origOut->type().kind() ==
@@ -860,6 +943,54 @@ static bool setsSizeOnDevice(NodeCP producer) {
   return false;
 }
 
+// True when the consumer described by 'consumerMeta' reads its input
+// 'inputIdx' from the memory output of an elementwise 'producer' that would
+// fuse into the consumer's kernel. Codegen orders
+// such an edge with an intra-kernel opBarrier (see callNeedsBarrier), which in
+// multi-kernel mode forces a cooperative, whole-grid-resident launch; ending
+// the producer's kernel avoids it. The read goes through memory when the input
+// is a whole tensor (argumentMeta wholeTensor) or the producer returns a
+// non-register (materialized) result. Only elementwise producers qualify:
+// non-elementwise ops already run standalone, and producers carrying
+// multiBlockReturnBarrier already end their own kernel via isKernelBreak.
+static bool readsFusedElementwiseProducerFromMemory(
+    int32_t inputIdx,
+    const Metadata* consumerMeta,
+    ValueCP inputValue,
+    NodeCP producer,
+    const ValueTypes& types,
+    bool allStandalone) {
+  if (!producer) {
+    return false;
+  }
+  const auto* producerMeta = nodeMeta(producer);
+  if (!producerMeta || !producerMeta->elementwise ||
+      producerMeta->isStandalone(producer, types) || allStandalone) {
+    return false;
+  }
+  const bool wholeTensorArg = consumerMeta &&
+      static_cast<size_t>(inputIdx) < consumerMeta->argumentMeta.size() &&
+      consumerMeta->argumentMeta[inputIdx].wholeTensor;
+  // Ask about the output the consumer actually reads, not the producer's
+  // first one. A producer with several outputs can pass some in registers and
+  // materialize others, so keying on returnMeta[0] would break the producer's
+  // kernel for a register-passed input (or fuse through a materialized one).
+  // Elementwise ops are usually single-output, in which case this resolves to
+  // index 0 anyway.
+  size_t outputIdx = 0;
+  const auto& producerOutputs = producer->outputs();
+  for (size_t i = 0; i < producerOutputs.size(); ++i) {
+    if (producerOutputs[i] == inputValue) {
+      outputIdx = i;
+      break;
+    }
+  }
+  const bool nonRegisterProducer =
+      outputIdx < producerMeta->returnMeta.size() &&
+      !producerMeta->returnMeta[outputIdx].isRegister;
+  return wholeTensorArg || nonRegisterProducer;
+}
+
 Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
   if (node->target() == "prim.ListUnpack" && !node->inputs().empty()) {
     auto* inputValue = node->inputs()[0].value;
@@ -910,29 +1041,45 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     }
   };
 
+  // Place the previous-kernel (ordering) input first, if any. Its producer is
+  // its own kernel stage, separated from this op by a kernel break; placing it
+  // first materializes any inputs it shares with this op (e.g. a scan head that
+  // reads the same data tensor as its final stage), so the loop below then
+  // finds those producers already placed. When the producer's isKernelBreak is
+  // false (e.g. a single-block scan head) it returns kFused and would be
+  // collected into this op's fusedInputs -- which the kFusedBreak path below
+  // discards -- so push it directly instead, otherwise this op reads a buffer
+  // its producer never wrote (an orphaned scan stage).
+  if (meta && meta->inputFromPreviousKernel.has_value()) {
+    breakProducerIntoOwnKernel(
+        node->inputs()[meta->inputFromPreviousKernel.value()]
+            .value->producer());
+  }
+
   for (auto i = 0; i < node->inputs().size(); ++i) {
-    bool isPrevKernel = meta && meta->inputFromPreviousKernel.has_value() &&
-        i == meta->inputFromPreviousKernel.value();
-    if (meta && meta->inputFromPreviousKernel.has_value() && !isPrevKernel) {
+    // The ordering input was placed above. Its non-ordering siblings still need
+    // their producers placed if the previous-kernel stage did not already
+    // materialize them (placeInput is a no-op for producers already placed).
+    // Skipping them entirely -- as this loop used to -- orphans a producer
+    // reachable only through this op, e.g. a standalone op feeding
+    // repeat_interleave's data input: placeKernels never materializes it, yet
+    // extractSubgraph still pulls it in as an interior node, so codegen aborts.
+    if (meta && meta->inputFromPreviousKernel.has_value() &&
+        i == meta->inputFromPreviousKernel.value()) {
       continue;
     }
     auto* inputValue = node->inputs()[i].value;
     auto* producer = inputValue->producer();
-    if (isPrevKernel) {
-      // The producer of an inputFromPreviousKernel argument is always its own
-      // kernel stage: there is a kernel break between it and this op.  Place
-      // its own inputs, then push it directly.  Otherwise, when the producer's
-      // isKernelBreak is false (e.g. a single-block scan head) it returns
-      // kFused and is collected into this op's fusedInputs -- which the
-      // kFusedBreak path below discards, leaving this op reading a buffer its
-      // producer never wrote (an orphaned scan stage).
-      if (producer && !placed_.count(producer) &&
-          !(inputs_ && inputs_->count(producer))) {
-        placeKernels(producer, Context::kFused);
-        if (!placed_.count(producer)) {
-          pushdownFused(producer);
-        }
-      }
+    // In multi-kernel mode, a fused elementwise producer whose output this op
+    // reads from memory would be ordered by an intra-kernel opBarrier, which
+    // forces a cooperative (whole-grid-resident) launch. End the producer's
+    // kernel instead so its output is materialized by a prior stream-ordered
+    // launch; the launch boundary is the barrier. cg and single-block keep the
+    // in-kernel barrier on purpose.
+    if (thisContext == Context::kFused && !isCgGrid_ && !isSingleBlock_ &&
+        readsFusedElementwiseProducerFromMemory(
+            i, meta, inputValue, producer, types_, allStandalone_)) {
+      breakProducerIntoOwnKernel(producer);
       continue;
     }
     auto inputKind = inputValue->type().kind();
@@ -941,7 +1088,11 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
         inputKind != nativert::Type::Kind::TensorList;
     if (thisContext == Context::kFused && producer &&
         producer->target() == "prim.ListPack") {
+      const bool hostShapes = concatNeedsHostShapes(node, types_);
       for (const auto& listInput : producer->inputs()) {
+        if (hostShapes) {
+          breakDeviceSizedProducers(listInput.value);
+        }
         placeInput(listInput.value, isScalarSize);
       }
     } else {
@@ -1053,6 +1204,34 @@ void CompileCtx::pushdownFused(NodeCP node) {
   fillConstantIndices(sg, launch);
   placeKernelLaunch(std::move(launch));
   placed_.insert(node);
+}
+
+void CompileCtx::breakDeviceSizedProducers(ValueCP value) {
+  auto* producer = value->producer();
+  if (!producer || placed_.count(producer) ||
+      (inputs_ && inputs_->count(producer))) {
+    return;
+  }
+  // Post-order: the innermost device-sized op ends its kernel first, so the ops
+  // above it read a host tensor that already carries the real extent and can
+  // stay fused with the concat.
+  for (const auto& input : producer->inputs()) {
+    breakDeviceSizedProducers(input.value);
+  }
+  if (setsSizeOnDevice(producer)) {
+    breakProducerIntoOwnKernel(producer);
+  }
+}
+
+void CompileCtx::breakProducerIntoOwnKernel(NodeCP producer) {
+  if (!producer || placed_.count(producer) ||
+      (inputs_ && inputs_->count(producer))) {
+    return;
+  }
+  placeKernels(producer, Context::kFused);
+  if (!placed_.count(producer)) {
+    pushdownFused(producer);
+  }
 }
 
 std::unique_ptr<KernelOperation> CompileCtx::generateFused(const Subgraph& sg) {
@@ -1176,13 +1355,7 @@ void CompileCtx::generateElementwiseBorderImpl(
   // register scalar.
   auto isElementwiseProducer = [&](NodeCP producer) {
     auto* meta = nodeMeta(producer);
-    if (!meta || !meta->elementwise) {
-      return false;
-    }
-    if (!meta->returnMeta.empty() && !meta->returnMeta[0].isRegister) {
-      return false;
-    }
-    return true;
+    return meta && meta->elementwise && !meta->isElementwiseBorder();
   };
 
   for (size_t inputIdx = 0; inputIdx < node->inputs().size(); ++inputIdx) {
@@ -1472,7 +1645,20 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
     code_ << "  if (blockInfo.blockInOp == 0) {\n";
   }
   if (!subgraphs.empty()) {
-    generateElementwise(subgraphs, ewResultSpecs, callStmt, meta->hasBarrier);
+    // For a data-dependent scan op (masked_select / nonzero) whose size is set
+    // on device, pass its output so generateElementwise can zero the length for
+    // an empty input before a fused consumer reads it.
+    ValueCP shapeSetOnDeviceResult = nullptr;
+    if (meta && !meta->returnMeta.empty() &&
+        meta->returnMeta[0].shapeSetOnDevice && !node->outputs().empty()) {
+      shapeSetOnDeviceResult = node->outputs()[0];
+    }
+    generateElementwise(
+        subgraphs,
+        ewResultSpecs,
+        callStmt,
+        meta->hasBarrier,
+        shapeSetOnDeviceResult);
   }
   if (multiBlockSingleOp) {
     code_ << "  }\n";
@@ -2192,7 +2378,10 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
     return nullptr;
   }
   auto compositeKernel = std::make_unique<CompositeKernel>(
-      std::move(opStorage_), std::move(kernelOpStorage_), includes_);
+      std::move(opStorage_),
+      std::move(kernelOpStorage_),
+      includes_,
+      nextKernelId());
   // Values whose last use is in this node (graph outputs already excluded);
   // WaveConfig::freeIntermediates releases their frame tensors after execute().
   std::vector<nativert::ValueId> lastUseIds;
@@ -2200,12 +2389,63 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
   for (auto* value : project.lastUse) {
     lastUseIds.push_back(value->id());
   }
+  // Values whose buffer an elementwise op may reuse in place for its output:
+  // reusable last-use boundary inputs and expr-local overwritable temps. Only
+  // eligible when EVERY consumer is a pointwise op
+  // (Metadata::inPlaceIfLastUse): such ops read the operand at the identity
+  // index, so writing the output into its buffer is a per-element
+  // read-before-write and cannot clobber a value the kernel still needs. A
+  // non-pointwise consumer (broadcast/gather/view/scatter, which carry
+  // inPlaceIfLastUse=false) reads at other indices, where in-place reuse would
+  // corrupt results.
+  auto reuseSafe = [](ValueCP value) {
+    // Exactly one consumer: a forked value (>1 user) feeds several ops, each of
+    // which could reuse its buffer for its own output and clobber the others'
+    // reads. Require a single consumer so at most one output reuses the buffer.
+    if (value->users().size() != 1) {
+      return false;
+    }
+    for (auto* user : value->users()) {
+      const Metadata* m = Registry::metadata(user->target());
+      if (m == nullptr || !m->inPlaceIfLastUse) {
+        return false;
+      }
+    }
+    return true;
+  };
+  std::vector<nativert::ValueId> reusableIds;
+  for (const auto& perExpr : project.reusableValues_) {
+    for (auto* value : perExpr) {
+      if (reuseSafe(value)) {
+        reusableIds.push_back(value->id());
+      }
+    }
+  }
+  for (const auto& perExpr : project.overwritableTemps_) {
+    for (auto* value : perExpr) {
+      if (reuseSafe(value)) {
+        reusableIds.push_back(value->id());
+      }
+    }
+  }
+  // Inputs of the clones elided in this node, with the number of copies of
+  // each saved. Reported at runtime as the bytes not copied; also registered
+  // graph-wide so the reference-frame checks skip these deliberately
+  // overwritten buffers.
+  std::vector<std::pair<nativert::ValueId, int32_t>> elidedCloneInputs(
+      project.elidedCloneCounts.begin(), project.elidedCloneCounts.end());
+  for (const auto& [valueId, count] : elidedCloneInputs) {
+    waveGraph_.addElidedCloneInput(valueId);
+  }
   auto invocation = std::make_unique<CompositeInvocation>(
       std::move(compositeKernel),
       std::move(ops_),
       std::move(ivalueStorage_),
       waveGraph_.nextCompositeInvocationId(),
-      std::move(lastUseIds));
+      std::move(lastUseIds),
+      std::move(reusableIds),
+      std::vector<Launch>{},
+      std::move(elidedCloneInputs));
   placed_.insert(nodes.begin(), nodes.end());
   return std::make_unique<CompiledNode>(std::move(invocation));
 }

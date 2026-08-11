@@ -437,17 +437,22 @@ function install_hdfs_deps {
 }
 
 function install_uv {
+  # Default the uv tool/install dirs to INSTALL_PREFIX only when it is writable.
+  # On bare CI runners INSTALL_PREFIX (/usr/local) is root-owned, so a non-sudo
+  # `uv tool install` cannot symlink there and fails with "Permission denied";
+  # leaving these unset lets uv use its writable default (~/.local/bin).
+  # Container images set UV_TOOL_BIN_DIR via ENV, which is preserved here.
+  if [[ -w "$INSTALL_PREFIX/bin" ]]; then
+    export UV_TOOL_BIN_DIR="${UV_TOOL_BIN_DIR:-$INSTALL_PREFIX/bin}"
+    export UV_INSTALL_DIR="${UV_INSTALL_DIR:-$UV_TOOL_BIN_DIR}"
+  fi
   if command -v uv >/dev/null 2>&1; then
     echo "uv is already installed."
   else
     echo "Installing uv..."
-
-    export UV_TOOL_BIN_DIR="${UV_TOOL_BIN_DIR:-$INSTALL_PREFIX/bin}"
-    export UV_INSTALL_DIR=${UV_INSTALL_DIR:-"$UV_TOOL_BIN_DIR"}
-
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    uv tool update-shell
   fi
+  uv tool update-shell
 }
 
 function uv_install {

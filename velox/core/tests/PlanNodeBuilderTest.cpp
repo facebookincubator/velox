@@ -614,6 +614,7 @@ TEST_F(PlanNodeBuilderTest, partitionedOutputNode) {
       std::make_shared<GatherPartitionFunctionSpec>();
   const RowTypePtr outputType = ROW({"c0"}, {BIGINT()});
   const auto serdeKind = "Presto";
+  const std::string transportOptions = R"({"exchangeId":"test"})";
 
   const auto verify =
       [&](const std::shared_ptr<const PartitionedOutputNode>& node) {
@@ -624,6 +625,7 @@ TEST_F(PlanNodeBuilderTest, partitionedOutputNode) {
         EXPECT_EQ(node->isReplicateNullsAndAny(), replicateNullsAndAny);
         EXPECT_EQ(node->outputType(), outputType);
         EXPECT_EQ(node->serdeKind(), serdeKind);
+        EXPECT_EQ(node->transportOptions(), transportOptions);
         EXPECT_EQ(node->partitionFunctionSpecPtr(), partitionFunctionSpec);
         EXPECT_EQ(node->sources(), std::vector<PlanNodePtr>{source_});
       };
@@ -637,12 +639,16 @@ TEST_F(PlanNodeBuilderTest, partitionedOutputNode) {
                         .partitionFunctionSpec(partitionFunctionSpec)
                         .outputType(outputType)
                         .serdeKind(serdeKind)
+                        .transportKind(std::string{TransportKind::kInMemory})
+                        .transportOptions(transportOptions)
                         .source(source_)
                         .build();
   verify(node);
 
   const auto node2 = PartitionedOutputNode::Builder(*node).build();
   verify(node2);
+
+  EXPECT_EQ(node->serialize()["transportOptions"], transportOptions);
 }
 
 TEST_F(PlanNodeBuilderTest, hashJoinNode) {

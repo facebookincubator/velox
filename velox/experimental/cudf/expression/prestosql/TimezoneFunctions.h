@@ -23,8 +23,12 @@ namespace facebook::velox::cudf_velox {
 /// Registers GPU implementations of the Presto TIMESTAMP WITH TIME ZONE
 /// function family: from_unixtime (with zone name or hour/minute offset),
 /// to_unixtime, at_timezone, timezone_hour, timezone_minute, to_iso8601,
-/// format_datetime, parse_datetime, from_iso8601_timestamp, and
-/// now/current_timestamp. Names are prefixed with `prefix`.
+/// format_datetime, parse_datetime and from_iso8601_timestamp. Names are
+/// prefixed with `prefix`.
+///
+/// now/current_timestamp are deliberately absent: they take no arguments, so
+/// expression::optimize always constant folds them before an evaluator is
+/// chosen, and a GPU implementation could never be reached.
 void registerTimezoneFunctions(const std::string& prefix);
 
 } // namespace facebook::velox::cudf_velox
