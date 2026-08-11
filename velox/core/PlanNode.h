@@ -45,6 +45,9 @@ struct TransportKind {
   /// delivered is decided by the layer above -- read locally, fetched over
   /// HTTP, or written to a shuffle service.
   static constexpr std::string_view kInMemory{"in-memory"};
+  /// Materialized output buffering backed by an application-provided durable
+  /// exchange implementation.
+  static constexpr std::string_view kMaterialized{"materialized"};
   /// UCX-based RDMA exchange for high-bandwidth GPU transfers between workers.
   static constexpr std::string_view kUcx{"UCX"};
   /// Deprecated source-compat alias for kInMemory; prefer kInMemory.
@@ -2726,7 +2729,32 @@ class PartitionedOutputNode : public PlanNode {
       RowTypePtr outputType,
       std::string serdeKind,
       std::string transportKind,
+      std::string transportOptions,
       PlanNodePtr source);
+
+  PartitionedOutputNode(
+      const PlanNodeId& id,
+      Kind kind,
+      const std::vector<TypedExprPtr>& keys,
+      int numPartitions,
+      bool replicateNullsAndAny,
+      PartitionFunctionSpecPtr partitionFunctionSpec,
+      RowTypePtr outputType,
+      std::string serdeKind,
+      std::string transportKind,
+      PlanNodePtr source)
+      : PartitionedOutputNode(
+            id,
+            kind,
+            keys,
+            numPartitions,
+            replicateNullsAndAny,
+            std::move(partitionFunctionSpec),
+            std::move(outputType),
+            std::move(serdeKind),
+            std::move(transportKind),
+            {},
+            std::move(source)) {}
 
   // Backward-compatible ctor without an explicit transport; defaults to the
   // in-memory transport. Prefer the ctor above.
@@ -2831,6 +2859,7 @@ class PartitionedOutputNode : public PlanNode {
       outputType_ = other.outputType();
       serdeKind_ = other.serdeKind();
       transportKind_ = other.transportKind();
+      transportOptions_ = other.transportOptions();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
     }
@@ -2880,6 +2909,11 @@ class PartitionedOutputNode : public PlanNode {
       return *this;
     }
 
+    Builder& transportOptions(std::string transportOptions) {
+      transportOptions_ = std::move(transportOptions);
+      return *this;
+    }
+
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
       return *this;
@@ -2921,6 +2955,7 @@ class PartitionedOutputNode : public PlanNode {
           outputType_.value(),
           serdeKind_.value(),
           transportKind_.value(),
+          transportOptions_.value_or(std::string{}),
           source_.value());
     }
 
@@ -2934,6 +2969,7 @@ class PartitionedOutputNode : public PlanNode {
     std::optional<RowTypePtr> outputType_;
     std::optional<std::string> serdeKind_;
     std::optional<std::string> transportKind_;
+    std::optional<std::string> transportOptions_;
     std::optional<PlanNodePtr> source_;
   };
 
@@ -2985,6 +3021,11 @@ class PartitionedOutputNode : public PlanNode {
     return transportKind_;
   }
 
+  /// Opaque configuration interpreted by the selected output transport.
+  const std::string& transportOptions() const {
+    return transportOptions_;
+  }
+
   /// Returns true if an arbitrary row and all rows with null keys must be
   /// replicated to all destinations. This is used to ensure correct results
   /// for anti-join which requires all nodes to know whether combined build
@@ -3021,6 +3062,7 @@ class PartitionedOutputNode : public PlanNode {
   const PartitionFunctionSpecPtr partitionFunctionSpec_;
   const std::string serdeKind_;
   const std::string transportKind_;
+  const std::string transportOptions_;
   const RowTypePtr outputType_;
 };
 

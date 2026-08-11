@@ -344,6 +344,13 @@ struct Metadata {
   /// (empty if none); the dim is a constant stored as an attribute.
   std::string dimAttr;
 
+  /// If true, graph normalization rewrites a constant negative "dim" attribute
+  /// to its non-negative form and errors if it is out of range for the first
+  /// input's rank. Set on the metadata-only view ops whose host-side shortcut
+  /// indexes sizes()/strides() directly, so the shortcut needs neither the wrap
+  /// nor the check at run time.
+  bool normalizeDimAttr{false};
+
   /// Attribute name of the accumulate / scatter-reduce flag (empty if none).
   /// When true on a node, an in-place FUSED write needs atomics.
   std::string accumulateAttr;
@@ -430,6 +437,20 @@ struct Metadata {
   /// typeTemplateParams and hasDtypeTemplateParam, in list order. These
   /// attributes are skipped by forEachSortedAttribute.
   std::vector<std::string> templateAttrs;
+
+  /// Returns true if this elementwise op's result is materialized in memory
+  /// rather than kept in a register, i.e. the op writes a whole tensor as a
+  /// side effect (the fused in-place scatters, index_put_elt_*, masked_put_).
+  /// Such a producer cannot be inlined into a consuming elementwise
+  /// expression: codegen emits it as its own expression and the consumer reads
+  /// its output back from memory (see
+  /// CompileCtx::generateElementwiseBorderImpl). The size machinery must stop
+  /// at the same boundary -- the consumer is sized by the materialized output,
+  /// not by this op's operands.
+  bool isElementwiseBorder() const {
+    return elementwise != nullptr && !returnMeta.empty() &&
+        !returnMeta[0].isRegister;
+  }
 
   /// Returns true if any argument has isRegister set.
   bool hasRegisterInputs() const {
@@ -590,6 +611,7 @@ class MetadataBuilder {
   MetadataBuilder& valuesArg(int32_t ordinal);
   MetadataBuilder& layoutAgnostic(bool val = true);
   MetadataBuilder& dimAttr(std::string name);
+  MetadataBuilder& normalizeDimAttr(bool val = true);
   MetadataBuilder& accumulateAttr(std::string name);
   MetadataBuilder& memoryFormatAttr(std::string name);
   MetadataBuilder& shapeAttr(std::string name);

@@ -282,6 +282,19 @@ class CompileCtx {
 
   void pushdownFused(NodeCP node);
 
+  /// Ends the kernel of every op in 'value's producer chain whose output extent
+  /// is computed on device, so the extent is read back to the host before the
+  /// consuming launch sizes its outputs. Used for a rank > 1 cat / stack, which
+  /// must know every operand's shape on the host to lay the result out.
+  void breakDeviceSizedProducers(ValueCP value);
+
+  /// Places 'producer' and its own inputs, then emits 'producer' as its own
+  /// kernel launch so a consumer reads its output as a materialized border
+  /// across a kernel boundary. Used where the whole of 'producer's output must
+  /// be visible before the consumer runs, but an in-kernel barrier (which
+  /// forces a cooperative, whole-grid-resident launch) is undesirable.
+  void breakProducerIntoOwnKernel(NodeCP producer);
+
   std::unique_ptr<KernelOperation> generateFused(const Subgraph& sg);
 
   void generateFusedInner(const Subgraph& sg);
