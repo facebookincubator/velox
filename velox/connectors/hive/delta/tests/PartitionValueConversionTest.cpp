@@ -28,6 +28,8 @@
 using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
 
+namespace {
+
 class PartitionValueConversionTest : public ::testing::Test {
  protected:
   static void SetUpTestSuite() {
@@ -51,12 +53,7 @@ TEST_F(PartitionValueConversionTest, shortDecimalConversion) {
 
   // Test positive decimal
   auto result = newConstantFromString(
-      decimalType,
-      "123.45",
-      pool_.get(),
-      false,
-      false,
-      nullptr);
+      decimalType, "123.45", pool_.get(), false, false, nullptr);
 
   ASSERT_NE(nullptr, result);
   EXPECT_EQ(1, result->size());
@@ -75,12 +72,7 @@ TEST_F(PartitionValueConversionTest, shortDecimalNegative) {
 
   // Test negative decimal
   auto result = newConstantFromString(
-      decimalType,
-      "-456.78",
-      pool_.get(),
-      false,
-      false,
-      nullptr);
+      decimalType, "-456.78", pool_.get(), false, false, nullptr);
 
   ASSERT_NE(nullptr, result);
   auto flatVector = result->as<ConstantVector<int64_t>>();
@@ -95,12 +87,7 @@ TEST_F(PartitionValueConversionTest, shortDecimalZero) {
   auto decimalType = DECIMAL(10, 2);
 
   auto result = newConstantFromString(
-      decimalType,
-      "0.00",
-      pool_.get(),
-      false,
-      false,
-      nullptr);
+      decimalType, "0.00", pool_.get(), false, false, nullptr);
 
   ASSERT_NE(nullptr, result);
   auto flatVector = result->as<ConstantVector<int64_t>>();
@@ -153,12 +140,7 @@ TEST_F(PartitionValueConversionTest, decimalNullValue) {
   auto decimalType = DECIMAL(10, 2);
 
   auto result = newConstantFromString(
-      decimalType,
-      std::nullopt,
-      pool_.get(),
-      false,
-      false,
-      nullptr);
+      decimalType, std::nullopt, pool_.get(), false, false, nullptr);
 
   ASSERT_NE(nullptr, result);
   EXPECT_EQ(1, result->size());
@@ -216,12 +198,7 @@ TEST_F(PartitionValueConversionTest, timestampWithTimeZoneNull) {
   auto timestampTzType = TIMESTAMP_WITH_TIME_ZONE();
 
   auto result = newConstantFromString(
-      timestampTzType,
-      std::nullopt,
-      pool_.get(),
-      false,
-      false,
-      nullptr);
+      timestampTzType, std::nullopt, pool_.get(), false, false, nullptr);
 
   ASSERT_NE(nullptr, result);
   EXPECT_EQ(1, result->size());
@@ -233,12 +210,7 @@ TEST_F(PartitionValueConversionTest, regularTimestampConversion) {
   auto timestampType = TIMESTAMP();
 
   auto result = newConstantFromString(
-      timestampType,
-      "2024-02-18 10:30:45",
-      pool_.get(),
-      false,
-      false,
-      nullptr);
+      timestampType, "2024-02-18 10:30:45", pool_.get(), false, false, nullptr);
 
   ASSERT_NE(nullptr, result);
   EXPECT_EQ(1, result->size());
@@ -256,12 +228,7 @@ TEST_F(PartitionValueConversionTest, dateConversion) {
   auto dateType = DATE();
 
   auto result = newConstantFromString(
-      dateType,
-      "2024-02-18",
-      pool_.get(),
-      false,
-      false,
-      nullptr);
+      dateType, "2024-02-18", pool_.get(), false, false, nullptr);
 
   ASSERT_NE(nullptr, result);
   EXPECT_EQ(1, result->size());
@@ -300,12 +267,7 @@ TEST_F(PartitionValueConversionTest, decimalPrecisionValidation) {
 
   // This should work
   auto result = newConstantFromString(
-      decimalType,
-      "999.99",
-      pool_.get(),
-      false,
-      false,
-      nullptr);
+      decimalType, "999.99", pool_.get(), false, false, nullptr);
 
   ASSERT_NE(nullptr, result);
   auto flatVector = result->as<ConstantVector<int64_t>>();
@@ -317,12 +279,7 @@ TEST_F(PartitionValueConversionTest, decimalScaleHandling) {
   auto decimalType = DECIMAL(10, 4); // scale=4
 
   auto result = newConstantFromString(
-      decimalType,
-      "123.4567",
-      pool_.get(),
-      false,
-      false,
-      nullptr);
+      decimalType, "123.4567", pool_.get(), false, false, nullptr);
 
   ASSERT_NE(nullptr, result);
   auto flatVector = result->as<ConstantVector<int64_t>>();
@@ -337,12 +294,7 @@ TEST_F(PartitionValueConversionTest, decimalTrailingZeros) {
   auto decimalType = DECIMAL(10, 3);
 
   auto result = newConstantFromString(
-      decimalType,
-      "100.000",
-      pool_.get(),
-      false,
-      false,
-      nullptr);
+      decimalType, "100.000", pool_.get(), false, false, nullptr);
 
   ASSERT_NE(nullptr, result);
   auto flatVector = result->as<ConstantVector<int64_t>>();
@@ -356,12 +308,7 @@ TEST_F(PartitionValueConversionTest, decimalLeadingZeros) {
   auto decimalType = DECIMAL(10, 2);
 
   auto result = newConstantFromString(
-      decimalType,
-      "000.12",
-      pool_.get(),
-      false,
-      false,
-      nullptr);
+      decimalType, "000.12", pool_.get(), false, false, nullptr);
 
   ASSERT_NE(nullptr, result);
   auto flatVector = result->as<ConstantVector<int64_t>>();
@@ -376,12 +323,7 @@ TEST_F(PartitionValueConversionTest, stringPartitionValue) {
   auto stringType = VARCHAR();
 
   auto result = newConstantFromString(
-      stringType,
-      "partition_value",
-      pool_.get(),
-      false,
-      false,
-      nullptr);
+      stringType, "partition_value", pool_.get(), false, false, nullptr);
 
   ASSERT_NE(nullptr, result);
   EXPECT_EQ(1, result->size());
@@ -395,13 +337,8 @@ TEST_F(PartitionValueConversionTest, stringPartitionValue) {
 TEST_F(PartitionValueConversionTest, integerPartitionValue) {
   auto intType = INTEGER();
 
-  auto result = newConstantFromString(
-      intType,
-      "42",
-      pool_.get(),
-      false,
-      false,
-      nullptr);
+  auto result =
+      newConstantFromString(intType, "42", pool_.get(), false, false, nullptr);
 
   ASSERT_NE(nullptr, result);
   auto flatVector = result->as<ConstantVector<int32_t>>();
@@ -455,8 +392,8 @@ TEST_F(PartitionValueConversionTest, timestampLocalTime) {
 }
 
 // Test TIMESTAMP WITH TIME ZONE type with timezone parameter
-// This tests that TIMESTAMP WITH TIME ZONE type always packs with UTC timezone key,
-// regardless of the timezone parameter passed to newConstantFromString.
+// This tests that TIMESTAMP WITH TIME ZONE type always packs with UTC timezone
+// key, regardless of the timezone parameter passed to newConstantFromString.
 TEST_F(PartitionValueConversionTest, timestampWithTimeZoneWithTimezone) {
   auto timestampTzType = TIMESTAMP_WITH_TIME_ZONE();
   auto timezone = tz::locateZone("Europe/London");
@@ -484,12 +421,7 @@ TEST_F(PartitionValueConversionTest, invalidDecimalFormat) {
   EXPECT_THROW(
       {
         newConstantFromString(
-            decimalType,
-            "not_a_number",
-            pool_.get(),
-            false,
-            false,
-            nullptr);
+            decimalType, "not_a_number", pool_.get(), false, false, nullptr);
       },
       VeloxUserError);
 }
@@ -575,12 +507,7 @@ TEST_F(PartitionValueConversionTest, invalidIntegerFormat) {
   EXPECT_THROW(
       {
         newConstantFromString(
-            intType,
-            "abc123",
-            pool_.get(),
-            false,
-            false,
-            nullptr);
+            intType, "abc123", pool_.get(), false, false, nullptr);
       },
       VeloxUserError);
 }
@@ -625,11 +552,7 @@ TEST_F(PartitionValueConversionTest, timestampDifferentTimezones) {
 
   // Test with different timezones
   std::vector<std::string> timezones = {
-      "America/New_York",
-      "Europe/London",
-      "Asia/Tokyo",
-      "Australia/Sydney"
-  };
+      "America/New_York", "Europe/London", "Asia/Tokyo", "Australia/Sydney"};
 
   for (const auto& tzName : timezones) {
     auto timezone = tz::locateZone(tzName);
@@ -679,12 +602,7 @@ TEST_F(PartitionValueConversionTest, decimalNegativeOverflow) {
   EXPECT_THROW(
       {
         newConstantFromString(
-            decimalType,
-            "-10000.00",
-            pool_.get(),
-            false,
-            false,
-            nullptr);
+            decimalType, "-10000.00", pool_.get(), false, false, nullptr);
       },
       VeloxUserError);
 }
@@ -713,12 +631,7 @@ TEST_F(PartitionValueConversionTest, decimalEmptyString) {
   EXPECT_THROW(
       {
         newConstantFromString(
-            decimalType,
-            "",
-            pool_.get(),
-            false,
-            false,
-            nullptr);
+            decimalType, "", pool_.get(), false, false, nullptr);
       },
       VeloxUserError);
 }
@@ -726,7 +639,9 @@ TEST_F(PartitionValueConversionTest, decimalEmptyString) {
 // Tests for the corrected TIMESTAMP WITH TIME ZONE parsing (Presto semantics).
 
 // No timezone in string → packed with UTC key 0, millis unchanged.
-TEST_F(PartitionValueConversionTest, timestampWithTimeZoneNoTimezoneUsesUTCKey) {
+TEST_F(
+    PartitionValueConversionTest,
+    timestampWithTimeZoneNoTimezoneUsesUTCKey) {
   auto type = TIMESTAMP_WITH_TIME_ZONE();
   auto result = newConstantFromString(
       type, "1970-01-01 00:00:00", pool_.get(), false, false, nullptr);
@@ -740,7 +655,9 @@ TEST_F(PartitionValueConversionTest, timestampWithTimeZoneNoTimezoneUsesUTCKey) 
 }
 
 // Named timezone in string → converted to UTC, timezone key preserved.
-TEST_F(PartitionValueConversionTest, timestampWithTimeZoneNamedTimezoneConvertsToUTC) {
+TEST_F(
+    PartitionValueConversionTest,
+    timestampWithTimeZoneNamedTimezoneConvertsToUTC) {
   auto type = TIMESTAMP_WITH_TIME_ZONE();
   // "2021-01-01 00:00:00 America/Los_Angeles": LA is UTC-8 in January,
   // so UTC time is 2021-01-01 08:00:00.
@@ -784,7 +701,9 @@ TEST_F(PartitionValueConversionTest, timestampWithTimeZoneUTCNamedZone) {
 
 // Hour >= 24 is rejected by the offset parser, falls through to BIGINT
 // conversion which also fails — net result is a user error.
-TEST_F(PartitionValueConversionTest, timestampWithTimeZoneOutOfRangeHourThrows) {
+TEST_F(
+    PartitionValueConversionTest,
+    timestampWithTimeZoneOutOfRangeHourThrows) {
   auto type = TIMESTAMP_WITH_TIME_ZONE();
   EXPECT_THROW(
       newConstantFromString(
@@ -801,7 +720,9 @@ TEST_F(PartitionValueConversionTest, timestampWithTimeZoneOutOfRangeHourThrows) 
 // valid (hour < 24) but not in the database, so timeZone == nullptr while
 // offsetMillis is set. Our code rejects this rather than silently packing
 // the wrong millis.
-TEST_F(PartitionValueConversionTest, timestampWithTimeZoneUnrecognizedOffsetThrows) {
+TEST_F(
+    PartitionValueConversionTest,
+    timestampWithTimeZoneUnrecognizedOffsetThrows) {
   auto type = TIMESTAMP_WITH_TIME_ZONE();
   VELOX_ASSERT_THROW(
       newConstantFromString(
@@ -831,3 +752,5 @@ TEST_F(PartitionValueConversionTest, dateInvalidDaysSinceEpoch) {
       },
       std::exception); // Catches folly::ConversionError
 }
+
+} // namespace

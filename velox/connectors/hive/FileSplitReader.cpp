@@ -16,9 +16,6 @@
 
 #include "velox/connectors/hive/FileSplitReader.h"
 
-#include <cstddef>
-#include <cstdint>
-
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/ConstantFromString.h"
@@ -87,7 +84,8 @@ FileSplitReader::FileSplitReader(
           connectorQueryCtx->sessionTimezone().empty()
               ? nullptr
               : tz::locateZone(connectorQueryCtx->sessionTimezone())),
-      adjustTimestampToTimezone_(connectorQueryCtx->adjustTimestampToTimezone()),
+      adjustTimestampToTimezone_(
+          connectorQueryCtx->adjustTimestampToTimezone()),
       scanSpec_(scanSpec),
       subfieldFiltersForValidation_(subfieldFiltersForValidation),
       fileSplit_(fileSplit),

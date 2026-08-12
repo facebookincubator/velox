@@ -41,16 +41,14 @@ std::unique_ptr<FileSplitReader> HiveSplitReader::create(
     const std::unordered_map<std::string, FileColumnHandlePtr>* infoColumns,
     std::vector<column_index_t> bucketChannels,
     const common::SubfieldFilters* subfieldFiltersForValidation) {
-  // Create the SplitReader based on hiveSplit->customSplitInfo["table_format"]
-  if (hiveSplit->customSplitInfo.count("table_format") > 0) {
-    const auto& tableFormat = hiveSplit->customSplitInfo.at("table_format");
-
-    if (tableFormat == "hive-delta") {
+  // Create the SplitReader based on hiveSplit->customSplitInfo["table_format"].
+  if (auto it = hiveSplit->customSplitInfo.find("table_format");
+      it != hiveSplit->customSplitInfo.end()) {
+    if (it->second == "hive-delta") {
       auto deltaSplit =
           std::dynamic_pointer_cast<const delta::HiveDeltaSplit>(hiveSplit);
       VELOX_CHECK_NOT_NULL(
-          deltaSplit,
-          "Expected HiveDeltaSplit for table_format=hive-delta");
+          deltaSplit, "Expected HiveDeltaSplit for table_format=hive-delta");
       return std::make_unique<delta::DeltaSplitReader>(
           deltaSplit,
           tableHandle,
