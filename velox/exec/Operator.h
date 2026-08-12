@@ -132,7 +132,7 @@ class Operator : public BaseRuntimeStatWriter {
     virtual std::unique_ptr<Operator>
     toOperator(DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node);
 
-    /// An overloaded method that should be called when the operator needs a
+    /// An overloaded method that should be called when the operator needs an
     /// InMemoryExchangeClient.
     virtual std::unique_ptr<Operator> toOperator(
         DriverCtx* ctx,
