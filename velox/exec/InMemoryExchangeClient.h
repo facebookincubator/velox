@@ -22,6 +22,10 @@ namespace facebook::velox::exec {
 
 // Handle for a set of producers. This may be shared by multiple Exchanges, one
 // per consumer thread.
+//
+// Renamed from ExchangeClient, which velox/exec/ExchangeClient.h keeps as an
+// alias of this class for the read-only-synced Prestissimo build. That alias
+// and its header go away once every caller uses this name.
 class InMemoryExchangeClient
     : public std::enable_shared_from_this<InMemoryExchangeClient> {
  public:

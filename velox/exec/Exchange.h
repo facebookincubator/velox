@@ -17,6 +17,10 @@
 
 #include <random>
 
+// Empty unless VELOX_ENABLE_BACKWARD_COMPATIBILITY is defined, in which case it
+// supplies the legacy ExchangeClient alias. Included here because pre-migration
+// callers reach that name through this header, as they did before the rename.
+#include "velox/exec/ExchangeClient.h"
 #include "velox/exec/InMemoryExchangeClient.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OperatorType.h"
