@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -177,6 +178,23 @@ class AsyncRPCFunction {
   /// when to flush.
   virtual int32_t pendingBatchSize() const {
     return 0;
+  }
+
+  /// Largest prefix of the currently-pending rows whose cumulative *estimated*
+  /// serialized size fits within budgetBytes. Called by the operator before a
+  /// flush when the function's capability declares maxBatchBytes > 0, so one
+  /// request never exceeds the backend's per-request size cap.
+  ///
+  /// MUST return at least 1 even when the first pending row alone exceeds the
+  /// budget: the caller needs to make progress, and the function fails that
+  /// oversized row loud inside flushBatch() rather than deadlocking the drain
+  /// loop. The estimate should be conservative (round up framing); the operator
+  /// pairs it with headroom in the declared budget. Rows are measured from the
+  /// front of the pending queue, matching flushBatch()'s flush order.
+  ///
+  /// Default: no limit (for functions that do not declare maxBatchBytes).
+  virtual int32_t rowsWithinByteBudget(int64_t /*budgetBytes*/) const {
+    return std::numeric_limits<int32_t>::max();
   }
 
   // ── Output ────────────────────────────────────────────────────

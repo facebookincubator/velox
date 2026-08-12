@@ -210,7 +210,8 @@ struct RpcCapability {
       return it->second;
     }
     return {};
-  }
+
+ }
 };
 
 /// Generic response structure from RPC calls.

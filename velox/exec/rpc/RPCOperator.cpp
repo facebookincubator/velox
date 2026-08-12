@@ -336,10 +336,21 @@ void RPCOperator::flushBatchRequests(int32_t maxRows) {
     return;
   }
 
-  // Determine how many rows to flush.
-  auto flushCount = maxRows > 0
-      ? std::min(static_cast<int32_t>(batchRowLocations_.size()), maxRows)
-      : static_cast<int32_t>(batchRowLocations_.size());
+  // Determine how many rows to flush. maxRows == 0 means "flush all pending".
+  const auto pending = static_cast<int32_t>(batchRowLocations_.size());
+  auto flushCount = maxRows > 0 ? std::min(pending, maxRows) : pending;
+
+  // Cap the flush by the backend's per-request byte limit so one request never
+  // exceeds it (a large constant per-row argument can otherwise blow the cap
+  // and lose every row in the batch). The clamp applies to the flush-all path
+  // too, so noMoreInput()/drain still chunk oversized backlogs.
+  // rowsWithinByteBudget() returns >= 1, so we always make progress; a lone
+  // oversized row is failed loud inside flushBatch().
+  const auto caps = function_->capabilities();
+  if (caps.maxBatchBytes > 0) {
+    flushCount = std::min(
+        flushCount, function_->rowsWithinByteBudget(caps.maxBatchBytes));
+  }
 
   RPC_OP_LOG(INFO) << "Flushing batch with " << flushCount << " of "
                    << function_->pendingBatchSize() << " accumulated rows";
@@ -353,7 +364,7 @@ void RPCOperator::flushBatchRequests(int32_t maxRows) {
       batchRowLocations_.begin(), batchRowLocations_.begin() + flushCount);
   batchRowIds_.erase(batchRowIds_.begin(), batchRowIds_.begin() + flushCount);
 
-  auto future = function_->flushBatch(maxRows);
+  auto future = function_->flushBatch(flushCount);
 
   // Count each flushBatch() as 1 pending unit in the rate limiter.
   auto token = std::make_shared<RPCRateLimiter::Token>(
