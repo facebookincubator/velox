@@ -264,7 +264,7 @@ class TableWriterNotNullTest : public HiveConnectorTestBase {
             .outputDirectoryPath(directories_.back()->getPath())
             .notNullColumns(notNullColumns);
     if (targetColumns != nullptr) {
-      writerBuilder.outputType(targetColumns);
+      writerBuilder.targetColumns(targetColumns);
     }
     return writerBuilder.endTableWriter().planNode();
   }
