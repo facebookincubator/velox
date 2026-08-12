@@ -72,7 +72,7 @@ PyPlanBuilder& PyPlanBuilder::tableWrite(
     if (outputRowSchema == nullptr) {
       throw std::runtime_error("Output schema must be a ROW().");
     }
-    builder.outputType(outputRowSchema);
+    builder.targetColumns(outputRowSchema);
   }
 
   if (!outputFile && !outputPath) {
