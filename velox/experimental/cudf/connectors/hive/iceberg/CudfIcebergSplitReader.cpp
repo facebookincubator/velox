@@ -148,7 +148,7 @@ cudf::ast::expression const* CudfIcebergSplitReader::pushdownFilter() const {
 }
 
 void CudfIcebergSplitReader::prepareSplitInternal(
-    dwio::common::RuntimeStatistics& runtimeStats) {
+    dwio::common::RuntimeStats& runtimeStats) {
   // Reset delete readers and column injection
   resetSplit();
 
@@ -458,7 +458,7 @@ CudfIcebergSplitReader::readNextChunk() {
 }
 
 void CudfIcebergSplitReader::setupDeleteFileReaders(
-    dwio::common::RuntimeStatistics& runtimeStats) {
+    dwio::common::RuntimeStats& runtimeStats) {
   const auto splitOffset = baseReadOffset_;
 
   // Decodes the position bound from an Iceberg bounds map.
