@@ -20,6 +20,7 @@
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
 
+#include <folly/container/F14Set.h>
 #include <algorithm>
 #include <sstream>
 
@@ -288,6 +289,36 @@ bool isAllElementwise(
     }
   }
   return true;
+}
+
+// True if any producer in the subgraph materializes its result in memory
+// (Metadata::isElementwiseBorder), which makes the subgraph a set of separate
+// expressions rather than one.
+bool hasElementwiseBorder(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    folly::F14FastSet<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return false;
+  }
+  for (auto& input : node->inputs()) {
+    auto* value = input.value;
+    if (subgraphInputs.count(value)) {
+      continue;
+    }
+    auto* producer = value->producer();
+    if (!producer) {
+      continue;
+    }
+    const auto* meta = Registry::metadata(producer->target());
+    if (meta && meta->isElementwiseBorder()) {
+      return true;
+    }
+    if (hasElementwiseBorder(producer, subgraphInputs, visited)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void collectAttrOffsets(
@@ -587,8 +618,14 @@ KernelOperation::KernelOperation(
   // operand's producer, so it may have more than one memory-backed output; each
   // is then sized from its own shape expression rather than byLargestInput, and
   // callNeedsBarrier orders the producer before the random-access read.
+  // An op holding an elementwise border holds more than one expression, and
+  // they need not have the same extent. Its op-wide largest input then belongs
+  // to whichever expression is biggest, not to every output, so leave each
+  // output to its own size expression.
+  folly::F14FastSet<NodeCP> borderVisited;
   std::unordered_set<NodeCP> ewVisited;
-  if (!outputValues.empty() && isAllElementwise(sg.root, inputs_, ewVisited)) {
+  if (!outputValues.empty() && isAllElementwise(sg.root, inputs_, ewVisited) &&
+      !hasElementwiseBorder(sg.root, inputs_, borderVisited)) {
     // Size each memory-backed output by its largest input, unless the output
     // declares its own shape expression (reserveShape, e.g. index_select,
     // slice_scatter, the factory ops), in which case that shape wins.
@@ -781,11 +818,23 @@ namespace {
 // Recurses through elementwise producers, collecting leaf inputs (kernel op
 // inputs or non-elementwise producers) into 'leafIds'. Skips inputs whose
 // argumentMeta has wholeTensor set.
+//
+// 'stopAtBorder' selects what an isElementwiseBorder() producer contributes. A
+// kernel op can hold several expressions -- a border producer is emitted as its
+// own loop and the consuming expression reads its materialized output -- and
+// the two sizes serve different purposes: the op's grid must cover the largest
+// expression in it (stopAtBorder false, walk everything), while each output is
+// sized by its own expression alone (stopAtBorder true, stop at the border and
+// size from the materialized value). Walking everything for a per-output size
+// gives the consumer its producer's extent, e.g. a scatter_add of a [3942617]
+// src into a [256] self sizes the consumer's output [3942617], whose element
+// count then drives the device loop past the end of every [256] operand.
 void collectElementwiseLeaves(
     NodeCP node,
     const std::unordered_set<ValueCP>& subgraphInputs,
     std::unordered_set<ValueCP>& seen,
-    std::vector<nativert::ValueId>& leafIds) {
+    std::vector<nativert::ValueId>& leafIds,
+    bool stopAtBorder) {
   auto* meta = Registry::metadata(node->target());
   const auto& inputs = node->inputs();
   for (size_t i = 0; i < inputs.size(); ++i) {
@@ -812,8 +861,10 @@ void collectElementwiseLeaves(
           } else {
             auto* lp = lv->producer();
             auto* lpMeta = Registry::metadata(lp->target());
-            if (lpMeta && lpMeta->elementwise) {
-              collectElementwiseLeaves(lp, subgraphInputs, seen, leafIds);
+            if (lpMeta && lpMeta->elementwise &&
+                !(stopAtBorder && lpMeta->isElementwiseBorder())) {
+              collectElementwiseLeaves(
+                  lp, subgraphInputs, seen, leafIds, stopAtBorder);
             } else {
               leafIds.push_back(lv->id());
             }
@@ -834,8 +885,25 @@ void collectElementwiseLeaves(
       // shape-only tensor available at launch, so use it as the size leaf.
       if (producerMeta->sizeFromOutput) {
         leafIds.push_back(value->id());
+      } else if (stopAtBorder && producerMeta->isElementwiseBorder()) {
+        // The materialized output is what this expression reads. Its shape is
+        // the mutated self's, so add self too: self is typically an input of
+        // the enclosing kernel op and therefore already in the frame when the
+        // size is evaluated, while the output is only reserved afterwards.
+        leafIds.push_back(value->id());
+        if (producerMeta->mutatesArg.has_value()) {
+          auto ordinal = *producerMeta->mutatesArg;
+          if (ordinal >= 0 &&
+              static_cast<size_t>(ordinal) < producer->inputs().size()) {
+            auto* self = producer->inputs()[ordinal].value;
+            if (self != nullptr && seen.insert(self).second) {
+              leafIds.push_back(self->id());
+            }
+          }
+        }
       } else {
-        collectElementwiseLeaves(producer, subgraphInputs, seen, leafIds);
+        collectElementwiseLeaves(
+            producer, subgraphInputs, seen, leafIds, stopAtBorder);
       }
     } else {
       leafIds.push_back(value->id());
@@ -888,7 +956,8 @@ SizeExpr KernelOperation::makeSizeExpr(
   if (meta && meta->elementwise) {
     std::unordered_set<ValueCP> seen;
     std::vector<nativert::ValueId> leafIds;
-    collectElementwiseLeaves(node, subgraphInputs, seen, leafIds);
+    collectElementwiseLeaves(
+        node, subgraphInputs, seen, leafIds, /*stopAtBorder=*/true);
     std::unordered_set<NodeCP> factoryVisited;
     std::vector<std::vector<Dim>> constShapes;
     collectFactorySizes(node, subgraphInputs, factoryVisited, constShapes);
@@ -944,7 +1013,10 @@ SizeExpr KernelOperation::makeDeepSizeExpr() {
     if (isAllElementwise(expr_, inputs_, ewVisited)) {
       std::unordered_set<ValueCP> seen;
       std::vector<nativert::ValueId> leafIds;
-      collectElementwiseLeaves(expr_, inputs_, seen, leafIds);
+      // The grid must cover every expression in this op, including the ones
+      // emitted at an elementwise border, so walk through borders here.
+      collectElementwiseLeaves(
+          expr_, inputs_, seen, leafIds, /*stopAtBorder=*/false);
       std::unordered_set<NodeCP> factoryVisited;
       std::vector<std::vector<Dim>> constShapes;
       collectFactorySizes(expr_, inputs_, factoryVisited, constShapes);
@@ -1241,6 +1313,15 @@ void KernelOperation::setOutputs(
           auto mutated = dataMutatedInputs(node);
           if (!mutated.empty()) {
             desc.aliasSelfId = mutated[0]->id();
+          } else if (meta->mutatesArg.has_value()) {
+            // Writers that carry mutatesArg metadata but no schema alias
+            // annotation (e.g. tw.slice_scatter / tw.select_scatter) still
+            // alias their self argument in place; bind the output to it.
+            auto ord = *meta->mutatesArg;
+            if (ord >= 0 && static_cast<size_t>(ord) < node->inputs().size() &&
+                node->inputs()[ord].value != nullptr) {
+              desc.aliasSelfId = node->inputs()[ord].value->id();
+            }
           }
         }
       }

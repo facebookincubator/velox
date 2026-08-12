@@ -86,7 +86,7 @@ void BufferedInputDataSource::enqueueForDevice(
         std::vector<uint8_t> buffer(size);
         sharedStream->readFully(reinterpret_cast<char*>(buffer.data()), size);
         CUDF_CUDA_TRY(cudaMemcpyAsync(
-            dst, buffer.data(), size, cudaMemcpyHostToDevice, stream.value()));
+            dst, buffer.data(), size, cudaMemcpyDefault, stream.value()));
       });
 }
 
@@ -148,7 +148,7 @@ std::future<size_t> BufferedInputDataSource::device_read_async(
                           dst,
                           hostBuffer->data(),
                           hostBuffer->size(),
-                          cudaMemcpyHostToDevice,
+                          cudaMemcpyDefault,
                           stream.value()));
                       return hostBuffer->size();
                     });
@@ -316,7 +316,7 @@ fetchByteRangesAsync(
                       dest,
                       hostBuffer->data(),
                       hostBuffer->size(),
-                      cudaMemcpyHostToDevice,
+                      cudaMemcpyDefault,
                       stream.value()));
                   return ioSize;
                 }));

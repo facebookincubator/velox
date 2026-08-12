@@ -173,6 +173,18 @@ Generic Configuration
        probe.  When set to 0, no Bloom filter will be generated.  To achieve
        optimal performance, this should not be too larger than the CPU cache
        size on the host.
+   * - bypass_hash_probe_bloom_filter_min_rows
+     - integer
+     - 0
+     - The number of probe rows used to decide whether to bypass the build-side
+       Bloom filter for left joins and non-null-aware left semi-project and left
+       anti joins. When set to 0, local Bloom filter probing is disabled.
+   * - bypass_hash_probe_bloom_filter_min_pct
+     - integer
+     - 85
+     - Bypass the build-side Bloom filter if its acceptance percentage meets
+       or exceeds this value. When set to 0, the Bloom filter is bypassed
+       without sampling.
    * - debug.validate_output_from_operators
      - bool
      - false
@@ -1115,6 +1127,13 @@ Parquet Options (prefix ``hive.parquet.``)
      - Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
        When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.
        Session: ``hive.parquet.writer.enable_store_decimal_as_integer``.
+   * - ``writer.enable-page-index``
+     - bool
+     - false
+     - Whether to write the Parquet page index (column index and offset index) when writing into
+       Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
+       index instead of the data page headers, letting readers skip pages that cannot match a filter.
+       Session: ``hive.parquet.writer.enable_page_index``.
 
 Nimble Options (prefix ``hive.nimble.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

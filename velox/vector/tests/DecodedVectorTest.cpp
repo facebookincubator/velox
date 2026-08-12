@@ -651,6 +651,60 @@ TEST_F(DecodedVectorTest, dictionary) {
       1000, [](vector_size_t i) { return std::make_shared<int>(i % 5); });
 }
 
+TEST_F(DecodedVectorTest, valueAtOpaqueDoesNotCopy) {
+  using TOpaque = std::shared_ptr<void>;
+  constexpr vector_size_t size = 100;
+
+  static_assert(
+      std::is_same_v<
+          decltype(std::declval<const DecodedVector&>().valueAt<TOpaque>(0)),
+          const TOpaque&>,
+      "Opaque values must be returned by const reference.");
+  static_assert(
+      std::is_same_v<
+          decltype(std::declval<const DecodedVector&>().valueAt<int64_t>(0)),
+          int64_t>,
+      "Non-opaque values must be returned by value.");
+
+  std::vector<TOpaque> values(size);
+  for (auto i = 0; i < size; ++i) {
+    values[i] = std::make_shared<int>(i);
+  }
+  auto flatVector =
+      makeFlatVector<TOpaque>(size, [&](vector_size_t i) { return values[i]; });
+
+  // 'row' of the decoded vector is expected to hold values[valueIndex].
+  auto check = [&](const DecodedVector& decoded,
+                   vector_size_t row,
+                   vector_size_t valueIndex) {
+    const auto useCount = values[valueIndex].use_count();
+    const auto& value = decoded.valueAt<TOpaque>(row);
+    // Returning by value would bind 'value' to a temporary copy, adding a use
+    // for as long as it stays in scope.
+    EXPECT_EQ(values[valueIndex].use_count(), useCount) << "at " << row;
+    // The reference points into the decoded data rather than at a copy.
+    EXPECT_EQ(&value, decoded.data<TOpaque>() + decoded.index(row));
+    EXPECT_EQ(value, values[valueIndex]);
+  };
+
+  {
+    DecodedVector decoded(*flatVector);
+    for (auto i = 0; i < size; ++i) {
+      check(decoded, i, i);
+    }
+  }
+
+  {
+    auto dictionarySize = size / 2;
+    auto dictionaryVector = BaseVector::wrapInDictionary(
+        BufferPtr(nullptr), makeEvenIndices(size), dictionarySize, flatVector);
+    DecodedVector decoded(*dictionaryVector);
+    for (auto i = 0; i < dictionarySize; ++i) {
+      check(decoded, i, 2 * i);
+    }
+  }
+}
+
 TEST_F(DecodedVectorTest, dictionaryOverLazy) {
   constexpr vector_size_t size = 1000;
   auto lazyVector = vectorMaker_.lazyFlatVector<int32_t>(

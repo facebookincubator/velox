@@ -434,6 +434,12 @@ TEST(TimeZoneMapTest, getShortName) {
   // In "2024-01-01", it was not (UTC-08).
   ts = 1704096000000;
   EXPECT_EQ("PST", toShortName("America/Los_Angeles", ts));
+
+  // Older versions of the generated names table were missing Europe/Kyiv, so
+  // this threw instead of returning a name.
+  EXPECT_EQ("EET", toShortName("Europe/Kyiv", ts));
+  ts = 1721890800000;
+  EXPECT_EQ("EEST", toShortName("Europe/Kyiv", ts));
 }
 
 TEST(TimeZoneMapTest, getLongName) {
@@ -459,6 +465,32 @@ TEST(TimeZoneMapTest, getLongName) {
   // In "2024-01-01", it was not (UTC-08).
   ts = 1704096000000;
   EXPECT_EQ("Pacific Standard Time", toLongName("America/Los_Angeles", ts));
+
+  // Older versions of the generated names table were missing Europe/Kyiv, so
+  // this threw instead of returning a name.
+  EXPECT_EQ("Eastern European Standard Time", toLongName("Europe/Kyiv", ts));
+}
+
+TEST(TimeZoneMapTest, namesAvailableForEveryZone) {
+  // TimeZoneNames.cpp and TimeZoneDatabase.cpp are generated from independent
+  // sources - a JDK's DateFormatSymbols and Presto's zone-index.properties -
+  // so they can drift apart. A zone present only in the latter makes
+  // getShortName()/getLongName() throw at runtime.
+  for (const int16_t timeZoneID : getTimeZoneIDs()) {
+    const auto* timeZone = locateZone(timeZoneID, false);
+
+    // Not every ID resolves; zones absent from the local tzdata are skipped
+    // while the database is built.
+    if (timeZone == nullptr) {
+      continue;
+    }
+
+    SCOPED_TRACE(timeZone->name());
+    EXPECT_NO_THROW(
+        timeZone->getShortName(milliseconds{0}, TimeZone::TChoose::kEarliest));
+    EXPECT_NO_THROW(
+        timeZone->getLongName(milliseconds{0}, TimeZone::TChoose::kEarliest));
+  }
 }
 
 } // namespace

@@ -383,6 +383,45 @@ void SelectiveStructColumnReaderBase::next(
   }
 }
 
+void SelectiveStructColumnReaderBase::readFlatMapChildren(
+    int64_t offset,
+    const RowSet& rows,
+    const uint64_t* incomingNulls) {
+  numReads_ = scanSpec_->newRead();
+  prepareRead<char>(offset, rows, incomingNulls);
+  VELOX_DCHECK(!hasDeletion());
+  auto activeRows = rows;
+  const auto* mapNulls =
+      nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
+  if (scanSpec_->filter()) {
+    const auto kind = scanSpec_->filter()->kind();
+    VELOX_CHECK(
+        kind == velox::common::FilterKind::kIsNull ||
+        kind == velox::common::FilterKind::kIsNotNull);
+    filterNulls<int32_t>(
+        rows, kind == velox::common::FilterKind::kIsNull, false);
+    if (outputRows_.empty()) {
+      for (auto* child : children_) {
+        child->addParentNulls(offset, mapNulls, rows);
+      }
+      lazyVectorReadOffset_ = offset;
+      readOffset_ = offset + rows.back() + 1;
+      return;
+    }
+    activeRows = outputRows_;
+  }
+  // Separate the loop to be cache friendly.
+  for (auto* child : children_) {
+    advanceFieldReader(child, offset);
+  }
+  for (auto* child : children_) {
+    child->readWithTiming(offset, activeRows, mapNulls);
+    child->addParentNulls(offset, mapNulls, rows);
+  }
+  lazyVectorReadOffset_ = offset;
+  readOffset_ = offset + rows.back() + 1;
+}
+
 void SelectiveStructColumnReaderBase::read(
     int64_t offset,
     const RowSet& rows,

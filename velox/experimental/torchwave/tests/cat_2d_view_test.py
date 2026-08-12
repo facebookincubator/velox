@@ -30,8 +30,8 @@ def _group(t: Tensor) -> Tensor:
 
 class Cat2dViewTest(nn.Module):
     """Chained same-shape concats: o2 depends on o1 so the two concats land in
-    different waves (ProjectNodes). The second reuses the first's standalone
-    concat ProjectOperation across ProjectNode boundaries."""
+    different waves (ProjectNodes). The second reuses the first's concat
+    ProjectOperation across ProjectNode boundaries."""
 
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
         o1 = _group(x)

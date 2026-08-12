@@ -2153,6 +2153,40 @@ TEST_F(MinMaxByNTest, groupByVarchar) {
       {data}, {"c0"}, {"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"}, {expected});
 }
 
+TEST_F(MinMaxByNTest, varbinaryCompare) {
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
+      makeFlatVector<std::string>(
+          {"a", "b", "c", "d", "e", "f", "g"}, VARBINARY()),
+      makeFlatVector<bool>({false, false, false, false, true, true, true}),
+  });
+
+  // Global.
+  auto expected = makeRowVector({
+      makeArrayVector<int32_t>({
+          {1, 2, 3},
+      }),
+      makeArrayVector<int32_t>({
+          {7, 6, 5, 4},
+      }),
+  });
+  testAggregations(
+      {data}, {}, {"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"}, {expected});
+  testReadFromFiles(
+      {data}, {}, {"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"}, {expected});
+
+  // Group-by.
+  expected = makeRowVector({
+      makeFlatVector<bool>({false, true}),
+      makeArrayVector<int32_t>({{1, 2}, {5, 6}}),
+      makeArrayVector<int32_t>({{4, 3}, {7, 6}}),
+  });
+  testAggregations(
+      {data}, {"c2"}, {"min_by(c0, c1, 2)", "max_by(c0, c1, 2)"}, {expected});
+  testReadFromFiles(
+      {data}, {"c2"}, {"min_by(c0, c1, 2)", "max_by(c0, c1, 2)"}, {expected});
+}
+
 TEST_F(MinMaxByNTest, stringComparison) {
   std::string s[6];
   for (int i = 0; i < 6; ++i) {
