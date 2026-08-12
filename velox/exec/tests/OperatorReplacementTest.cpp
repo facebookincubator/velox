@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/JoinBridge.h"
+#include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
