@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <cstdint>
+#include <initializer_list>
 #include <map>
 #include <optional>
 #include <string>
@@ -27,6 +29,8 @@ namespace facebook::velox::rpc {
 
 /// Well-known option key constants for RPCRequest.options.
 /// Use these instead of raw string literals to prevent typo bugs.
+// TODO Phase 2 (draft preview): delete entire namespace keys (12) — moved to
+// FbLlmInference.h CompletionRequest fields
 namespace keys {
 inline constexpr std::string_view kModel = "model";
 inline constexpr std::string_view kTemperature = "temperature";
@@ -91,6 +95,8 @@ struct RPCRequest {
   std::string payload;
 
   /// Type-safe options for backend-specific parameters.
+  // TODO Phase 2: delete options map — Functions use typed
+  // CompletionRequest/EmbeddingRequest
   std::map<std::string, std::string> options;
 };
 
@@ -120,6 +126,91 @@ enum class RPCErrorKind {
   /// Non-retryable: the same request will fail again, so the transport fails
   /// fast rather than spending its retry budget.
   kInvalidRequest,
+};
+
+/// A dispatch strategy a backend/model can execute.
+enum class RpcCapabilityMode {
+  /// One RPC per row (synchronous). Every backend supports this.
+  kPerRow = 0,
+  /// Native multi-input batch RPC (synchronous): one request carries many rows
+  /// and returns one response.
+  kNativeBatch = 1,
+  /// Asynchronous offline job: submit -> poll -> fetch. Latency is queue/GPU
+  /// time, not congestion, so the operator bypasses the RTT window for it.
+  kAsyncJob = 2,
+  /// Number of dispatch modes; keep last. Bounds the RpcCapabilityModeSet
+  /// width.
+  kNumModes,
+};
+
+/// A set of RpcCapabilityMode values; kPerRow is always present.
+class RpcCapabilityModeSet {
+  static_assert(
+      static_cast<int>(RpcCapabilityMode::kNumModes) <= 32,
+      "RpcCapabilityMode outgrew the 32-bit set; widen bits_");
+
+ public:
+  constexpr RpcCapabilityModeSet() {
+    add(RpcCapabilityMode::kPerRow);
+  }
+  /* implicit */ constexpr RpcCapabilityModeSet(
+      std::initializer_list<RpcCapabilityMode> modes) {
+    add(RpcCapabilityMode::kPerRow);
+    for (auto mode : modes) {
+      add(mode);
+    }
+  }
+
+  constexpr void add(RpcCapabilityMode mode) {
+    bits_ |= bit(mode);
+  }
+  constexpr bool has(RpcCapabilityMode mode) const {
+    return (bits_ & bit(mode)) != 0;
+  }
+
+ private:
+  static constexpr uint32_t bit(RpcCapabilityMode mode) {
+    return 1u << static_cast<int>(mode);
+  }
+  uint32_t bits_{0};
+};
+
+/// Per-mode flow-control bounds — only modes in supportedModes have an entry.
+/// 0 means unlimited / backend default for that dimension.
+struct RpcCapabilityBounds {
+  int32_t maxBatchRows{0};
+  int64_t maxBatchTokens{0};
+  int64_t maxBatchBytes{0};
+};
+
+/// What dispatch strategies a (backend, model) supports, plus per-mode
+/// flow-control bounds. kPerRow is always supported and never needs bounds.
+/// Examples:
+///   - an async-job backend:   {supportedModes = {kPerRow, kAsyncJob},
+///                             boundsPerMode = {{kAsyncJob, {1000, 32000,
+///                             5<<20}}}}
+///   - a native-batch backend: {supportedModes = {kPerRow, kNativeBatch},
+///                             boundsPerMode = {{kNativeBatch, {128, 8000,
+///                             1<<20}}}}
+struct RpcCapability {
+  /// Dispatch modes this (backend, model) supports; kPerRow is always included.
+  RpcCapabilityModeSet supportedModes;
+
+  /// Per-mode bounds. Only modes in supportedModes have an entry; e.g.
+  /// async-job 10k rows vs native-batch 128. kPerRow entries are ignored.
+  std::map<RpcCapabilityMode, RpcCapabilityBounds> boundsPerMode;
+
+  bool hasMode(RpcCapabilityMode mode) const {
+    return supportedModes.has(mode);
+  }
+
+  RpcCapabilityBounds getBounds(RpcCapabilityMode mode) const {
+    auto it = boundsPerMode.find(mode);
+    if (it != boundsPerMode.end()) {
+      return it->second;
+    }
+    return {};
+  }
 };
 
 /// Generic response structure from RPC calls.
