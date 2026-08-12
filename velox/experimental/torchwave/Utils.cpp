@@ -40,6 +40,25 @@
 
 namespace torch::wave {
 
+at::Tensor aliasTensor(
+    const at::Tensor& base,
+    c10::IntArrayRef sizes,
+    c10::IntArrayRef strides,
+    int64_t storageOffset) {
+  // Built from the TensorImpl directly rather than through narrow/select: a
+  // reservation rebuilds its views on every launch, and two dispatcher
+  // round-trips per view dominated that path. at::detail::make_tensor is
+  // private to its namespace, so the impl is constructed explicitly -- that is
+  // all make_tensor does -- and handed to Tensor's public constructor.
+  auto impl = c10::make_intrusive<at::TensorImpl>(
+      c10::TensorImpl::VIEW,
+      c10::Storage(base.storage()),
+      base.key_set(),
+      base.dtype());
+  impl->set_sizes_and_strides(sizes, strides, storageOffset);
+  return at::Tensor(std::move(impl));
+}
+
 std::vector<ValueCP> inputValues(NodeCP node) {
   std::vector<ValueCP> result;
   result.reserve(node->inputs().size());

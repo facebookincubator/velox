@@ -390,6 +390,11 @@ MetadataBuilder& MetadataBuilder::dimAttr(std::string name) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::normalizeDimAttr(bool val) {
+  md_.normalizeDimAttr = val;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::accumulateAttr(std::string name) {
   md_.accumulateAttr = std::move(name);
   return *this;

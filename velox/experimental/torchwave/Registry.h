@@ -344,6 +344,13 @@ struct Metadata {
   /// (empty if none); the dim is a constant stored as an attribute.
   std::string dimAttr;
 
+  /// If true, graph normalization rewrites a constant negative "dim" attribute
+  /// to its non-negative form and errors if it is out of range for the first
+  /// input's rank. Set on the metadata-only view ops whose host-side shortcut
+  /// indexes sizes()/strides() directly, so the shortcut needs neither the wrap
+  /// nor the check at run time.
+  bool normalizeDimAttr{false};
+
   /// Attribute name of the accumulate / scatter-reduce flag (empty if none).
   /// When true on a node, an in-place FUSED write needs atomics.
   std::string accumulateAttr;
@@ -604,6 +611,7 @@ class MetadataBuilder {
   MetadataBuilder& valuesArg(int32_t ordinal);
   MetadataBuilder& layoutAgnostic(bool val = true);
   MetadataBuilder& dimAttr(std::string name);
+  MetadataBuilder& normalizeDimAttr(bool val = true);
   MetadataBuilder& accumulateAttr(std::string name);
   MetadataBuilder& memoryFormatAttr(std::string name);
   MetadataBuilder& shapeAttr(std::string name);

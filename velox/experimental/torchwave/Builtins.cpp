@@ -2893,6 +2893,7 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .viewOfArg(0)
       .metadataOnly()
+      .normalizeDimAttr()
       .isStandaloneFunc(viewHasDynamicShapeArgs)
       .headerFile("velox/experimental/torchwave/Views.cuh")
       .deviceFunc("tw_slice")
@@ -2938,6 +2939,7 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .viewOfArg(0)
       .metadataOnly()
+      .normalizeDimAttr()
       .headerFile("velox/experimental/torchwave/Views.cuh")
       .deviceFunc("tw_select")
       .typeTemplateParams({0})
@@ -2971,6 +2973,7 @@ void registerBuiltins() {
       .isStandalone()
       .viewOfArg(0)
       .metadataOnly()
+      .normalizeDimAttr()
       .rankArgument(0)
       .registerOp();
 
@@ -3949,6 +3952,19 @@ void registerBuiltins() {
       .hasBlockSizeTemplateParam()
       .alwaysSingleBlock()
       .multiBlockReturnBarrier()
+      // One row per non-zero element, one column per input dim (nonzeroReserve
+      // and nonzero1d both produce that shape), so the result is one rank wider
+      // than the input. Without this, consumers see an unknown rank and fall
+      // back to their eager form.
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            auto rank = types.rank(inputAt(node, 0));
+            return {
+                {.rank = rank >= 0 ? static_cast<int8_t>(rank + 1)
+                                   : static_cast<int8_t>(-1),
+                 .contiguity = Contiguity::kContiguous}};
+          })
       .registerOp();
 
   // tw.nonzero1d_head: (Tensor) -> Tensor
@@ -4044,8 +4060,8 @@ void registerBuiltins() {
       .numBarriers(3)
       .registerOp();
 
-  // Cat — registered in Cat.cpp.
-  registerCatMetadata();
+  // Cat and stack — registered together in Cat.cpp.
+  registerConcatMetadata();
 
   // --- repeat_interleave ---
 
@@ -4057,20 +4073,67 @@ void registerBuiltins() {
              ValueTypes& types,
              WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
             auto* graph = waveGraph.graph();
-            auto inputId = node->inputs()[0].value->id();
-            auto inputDtype = types.types[inputId]->dtype();
-            auto* headNode = graph->createNode(
-                "tw.repeat_interleave_head",
-                {{"repeats", node->inputs()[1].value}});
+            auto* input = node->inputs()[0].value;
+            auto* repeats = node->inputs()[1].value;
+            auto inputDtype = types.types[input->id()]->dtype();
+            // The interleave axis is resolved once, here, and handed to both
+            // nodes already normalized: nullopt means dim=None (flatten to
+            // 1-D), otherwise a non-negative axis. Normalizing in one place
+            // keeps the head and the final from disagreeing about what a
+            // negative 'dim' means.
+            std::optional<int64_t> dim;
+            if (auto dimOpt = constIntArg(node, "dim")) {
+              int64_t rank = static_cast<int64_t>(types.rank(input));
+              int64_t resolved = *dimOpt < 0 ? *dimOpt + rank : *dimOpt;
+              TORCH_CHECK(
+                  resolved >= 0 && resolved < rank,
+                  "repeat_interleave: dim ",
+                  *dimOpt,
+                  " out of range for rank ",
+                  rank);
+              dim = resolved;
+            }
+            // A 0-dim repeat count broadcasts to every segment; the broadcast
+            // head reads the segment count from its (host-sized) prefix, so it
+            // takes 'input' and the 'dim' attr. A 1-D repeats is per-segment.
+            //
+            // torch.repeat_interleave also broadcasts a 1-D repeats of length
+            // 1, but that cannot be detected here: an input's TensorMeta
+            // carries placeholder sizes (only its rank is meaningful), so
+            // numel() would misroute every 1-D repeats to the broadcast head.
+            // The length is first known at launch, by which point the head
+            // kernel is already chosen -- so instead of guessing,
+            // repeatInterleaveFinalReserve rejects a prefix that does not cover
+            // the segment count, turning what would be an out-of-bounds device
+            // read into a host-side error.
+            nativert::Node* headNode = nullptr;
+            if (types.rank(repeats) == 0) {
+              headNode = graph->createNode(
+                  "tw.repeat_interleave_bcast_head",
+                  {{"repeats", repeats}, {"input", input}});
+              if (dim.has_value()) {
+                headNode->addAttribute({"dim", *dim});
+              }
+            } else {
+              headNode = graph->createNode(
+                  "tw.repeat_interleave_head", {{"repeats", repeats}});
+            }
             auto* prefixOutput = waveGraph.newTensorValue(
                 headNode, "repeat_prefix", c10::ScalarType::Int);
             auto* totalOutput = waveGraph.newScalarValue(
                 headNode, "repeat_total", c10::ScalarType::Int);
             auto* finalNode = graph->createNode(
                 "tw.repeat_interleave_final",
-                {{"input", node->inputs()[0].value},
+                {{"input", input},
                  {"prefix", prefixOutput},
                  {"total", totalOutput}});
+            // Propagate the interleave axis so the final's reserveShape and
+            // rank constraint reconstruct the full (multi-dim) output shape,
+            // and so the kernel knows the axis without re-deriving it from the
+            // shapes (which is ambiguous when the repeats sum back to
+            // size(input, dim)). It is a template parameter of the device func,
+            // so the flatten-to-1D case (dim=None) is encoded as -1.
+            finalNode->addAttribute({"dim", dim.value_or(-1)});
             auto* resultOutput = waveGraph.newTensorValue(
                 finalNode, "repeat_result", inputDtype);
             return {{node->outputs()[0], resultOutput}};
@@ -4110,6 +4173,62 @@ void registerBuiltins() {
           })
       .registerOp();
 
+  auto repeatInterleaveBcastReserve =
+      [](NodeCP node,
+         nativert::ExecutionFrame& frame,
+         const FormalToActual& map,
+         NodeCP /*originalFormalNode*/,
+         const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
+    // prefix length = number of source segments = size(input, dim), or
+    // numEl(input) when flattening (dim=None).
+    auto inputTensor = paramTensor(node->inputs()[1].value, frame, map);
+    auto dimOpt = constIntArg(node, "dim");
+    if (!dimOpt.has_value()) {
+      return {{static_cast<Dim>(inputTensor.numel())}};
+    }
+    // 'dim' arrives already normalized to a non-negative axis -- the rewrite
+    // resolves it once for both this head and the final -- so this only
+    // re-checks it against the runtime rank.
+    int64_t rank = inputTensor.dim();
+    int64_t dim = *dimOpt;
+    TORCH_CHECK(
+        dim >= 0 && dim < rank,
+        "repeat_interleave: dim ",
+        dim,
+        " out of range for rank ",
+        rank);
+    return {{static_cast<Dim>(inputTensor.size(dim))}};
+  };
+
+  // Broadcast (0-dim repeat count) head: prefix[i] = (i+1)*r, sized to the
+  // segment count. Reused for both dim-given and flatten (dim=None) cases.
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.repeat_interleave_bcast_head",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("repeats", c10::TensorType::get()),
+              c10::Argument("input", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("prefix", c10::TensorType::get()),
+              c10::Argument("total", c10::IntType::get())}))
+      .sizeOrdinal({0})
+      .hasBarrier()
+      .returnMeta(
+          {{.isRegister = false, .reserveShape = repeatInterleaveBcastReserve},
+           {.neededOnHost = true}})
+      .headerFile(kScanHeader)
+      .deviceFunc("repeat_interleave_bcast_head")
+      .typeTemplateParams({0})
+      .hasBlockSizeTemplateParam()
+      .multiBlockReturnBarrier()
+      .outputConstraints(
+          [](NodeCP /*node*/,
+             const ValueTypes& /*types*/) -> std::vector<ValueConstraint> {
+            return {{.rank = 1}, {}};
+          })
+      .registerOp();
+
   auto repeatInterleaveFinalReserve =
       [](NodeCP node,
          nativert::ExecutionFrame& frame,
@@ -4117,7 +4236,64 @@ void registerBuiltins() {
          NodeCP /*originalFormalNode*/,
          const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
     auto total = paramSymInt(node->inputs()[2].value, frame, map);
-    return {{static_cast<Dim>(total)}};
+    // The whole scan pipeline indexes prefixes with int32, so a result at or
+    // past INT32_MAX cannot be represented no matter how it arose. The
+    // broadcast head saturates to INT32_MAX on an overflowing segments *
+    // repeatCount and reports it through debugInfo, but that report is
+    // diagnostic only -- errorString() is gated on keepStatsOnThread and never
+    // throws -- so without this the gather would run on a clamped prefix and
+    // return wrong data. 'total' is already neededOnHost, so gating here costs
+    // no extra device round trip.
+    TORCH_CHECK(
+        total < std::numeric_limits<int32_t>::max(),
+        "repeat_interleave: result of ",
+        total,
+        " elements along the interleave axis is not representable in the "
+        "int32 prefix-sum pipeline");
+    auto dimOpt = constIntArg(node, "dim");
+    // The gather walks prefix[0 .. segments), where segments is size(input,
+    // dim) or numEl(input) when flattening. A per-segment 'repeats' sizes the
+    // prefix by its own length, so a mismatch (notably torch's length-1
+    // broadcast form, which the rewrite cannot recognize -- see the comment
+    // there) would read past the end of the prefix on device. Checked here,
+    // where the real extents are known, so it surfaces as a host-side error.
+    // The index_final overload shares this reserve, carries no 'dim' at all,
+    // and sizes its prefix from the same repeats it iterates, so it is exempt.
+    auto checkPrefixCoversSegments = [&](int64_t segments) {
+      auto prefixTensor = paramTensor(node->inputs()[1].value, frame, map);
+      TORCH_CHECK(
+          prefixTensor.numel() == segments,
+          "repeat_interleave: 'repeats' has ",
+          prefixTensor.numel(),
+          " entries but the input has ",
+          segments,
+          " segments along the interleave axis; a length-1 broadcast 'repeats'"
+          " is not supported on the wave path");
+    };
+    // dim=None: repeat_interleave flattens to a 1-D output of 'total'
+    // elements. The index_final overload shares this reserve and never carries
+    // a 'dim'; the gather final always does, using -1 for the flatten case.
+    if (!dimOpt.has_value()) {
+      return {{static_cast<Dim>(total)}};
+    }
+    auto inputTensor = paramTensor(node->inputs()[0].value, frame, map);
+    if (*dimOpt < 0) {
+      checkPrefixCoversSegments(inputTensor.numel());
+      return {{static_cast<Dim>(total)}};
+    }
+    int64_t rank = inputTensor.dim();
+    int64_t dim = *dimOpt;
+    TORCH_CHECK(
+        dim < rank,
+        "repeat_interleave: dim ",
+        dim,
+        " out of range for rank ",
+        rank);
+    checkPrefixCoversSegments(inputTensor.size(dim));
+    std::vector<Dim> shape(
+        inputTensor.sizes().begin(), inputTensor.sizes().end());
+    shape.at(dim) = static_cast<Dim>(total);
+    return {shape};
   };
 
   // tw.repeat_interleave_final: (Tensor, Tensor, int) -> Tensor
@@ -4137,12 +4313,28 @@ void registerBuiltins() {
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
       .deviceFunc("repeat_interleave_final")
-      .sharedDecls({{"uint32_t", "size"}, {"uint32_t", "rounded"}})
+      .sharedDecls({{"uint32_t", "size"}})
       .typeTemplateParams({0})
+      // The interleave axis is a compile-time parameter of the kernel: it
+      // cannot be recovered on device from the shapes alone.
+      .templateAttrs({"dim"})
       .hasBarrier()
       .hasBlockSizeTemplateParam()
       .multiBlockReturnBarrier()
-      .outputConstraints(rank1Constraint)
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            // dim=None (encoded as -1) flattens to rank 1; otherwise the
+            // output keeps the input's rank (only the interleave axis changes
+            // length).
+            auto dimOpt = constIntArg(node, "dim");
+            if (!dimOpt.has_value() || *dimOpt < 0) {
+              return {{.rank = 1, .contiguity = Contiguity::kContiguous}};
+            }
+            return {
+                {.rank = types.rank(inputAt(node, 0)),
+                 .contiguity = Contiguity::kContiguous}};
+          })
       .registerOp();
 
   // Index-generating overload: given a 1-D counts tensor, returns a 1-D tensor
@@ -5130,24 +5322,6 @@ void registerBuiltins() {
             })
         .registerOp();
   }
-  // stack: concatenates along a new dim, so rank = element rank + 1.
-  MetadataBuilder("torch.ops.aten.stack.default")
-      .sizeOrdinal({0})
-      .isStandalone()
-      .outputConstraints(
-          [](NodeCP node,
-             const ValueTypes& types) -> std::vector<ValueConstraint> {
-            auto elems = inputAt(node, 0)->getListElements();
-            if (elems.empty()) {
-              return {};
-            }
-            auto r = types.rank(elems[0]);
-            return {
-                {.rank = r >= 0 ? static_cast<int8_t>(r + 1)
-                                : static_cast<int8_t>(-1),
-                 .contiguity = Contiguity::kContiguous}};
-          })
-      .registerOp();
   // full_like: self-shaped tensor filled with a scalar. Like ones_like, but the
   // fill value arrives as the "fill_value" scalar attribute param consumed by
   // __full. self is used only for the output shape, so it is skipped during

@@ -16,6 +16,7 @@
 
 #include "velox/experimental/torchwave/Compile.h"
 #include <fmt/format.h>
+#include "velox/experimental/torchwave/Cat.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/Headers.h" // @manual: registers JIT headers via static init
 #include "velox/experimental/torchwave/Utils.h"
@@ -183,6 +184,45 @@ bool isParamPresent(NodeCP node, std::string_view name) {
   return attr && !std::holds_alternative<nativert::None>(attr->value);
 }
 
+// Counts the SymIntList (vector<int64_t>) attributes of 'node'.
+size_t numIntListAttributes(NodeCP node) {
+  size_t count = 0;
+  for (const auto& attr : node->attributes()) {
+    if (std::holds_alternative<std::vector<int64_t>>(attr.value)) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+// True if 'left' and 'right' carry the same SymIntList attributes. Unlike
+// scalar constants, these never reach the constant area (forEachSortedAttribute
+// skips them): a fused op materializes their literal values inline, and a
+// factory op's 'size' also fixes the enclosing expression's shape (SizeExpr::
+// constShapes). Both are baked into the ProjectOperation, so two nodes that
+// differ in one are not interchangeable.
+bool intListAttributesMatch(NodeCP left, NodeCP right) {
+  if (numIntListAttributes(left) != numIntListAttributes(right)) {
+    return false;
+  }
+  for (const auto& attr : left->attributes()) {
+    const auto* values = std::get_if<std::vector<int64_t>>(&attr.value);
+    if (!values) {
+      continue;
+    }
+    const auto* rightAttr = right->tryGetAttribute(attr.name);
+    if (!rightAttr) {
+      return false;
+    }
+    const auto* rightValues =
+        std::get_if<std::vector<int64_t>>(&rightAttr->value);
+    if (!rightValues || *rightValues != *values) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool subgraphNodesMatch(
     NodeCP left,
     NodeCP right,
@@ -191,6 +231,9 @@ bool subgraphNodesMatch(
     const Subgraph& leftSg,
     const Subgraph& rightSg) {
   if (left->target() != right->target()) {
+    return false;
+  }
+  if (!intListAttributesMatch(left, right)) {
     return false;
   }
   // dtype attributes must match when present.
@@ -317,6 +360,17 @@ void hashSubgraphNode(
         hash ^= ah + kGoldenRatioHash + (hash << 6) + (hash >> 2);
       }
     }
+  }
+  // SymIntList attributes are baked into the generated code and into the
+  // subgraph's shape expressions, so they are part of a node's identity (see
+  // intListAttributesMatch).
+  for (const auto& attr : node->attributes()) {
+    if (!std::holds_alternative<std::vector<int64_t>>(attr.value)) {
+      continue;
+    }
+    auto ah = std::hash<std::string>{}(
+        attr.name + "=" + constantToString(attr.value));
+    hash ^= ah + kGoldenRatioHash + (hash << 6) + (hash >> 2);
   }
   for (auto& input : node->inputs()) {
     if (inputs.count(input.value)) {
@@ -1034,7 +1088,11 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
         inputKind != nativert::Type::Kind::TensorList;
     if (thisContext == Context::kFused && producer &&
         producer->target() == "prim.ListPack") {
+      const bool hostShapes = concatNeedsHostShapes(node, types_);
       for (const auto& listInput : producer->inputs()) {
+        if (hostShapes) {
+          breakDeviceSizedProducers(listInput.value);
+        }
         placeInput(listInput.value, isScalarSize);
       }
     } else {
@@ -1146,6 +1204,23 @@ void CompileCtx::pushdownFused(NodeCP node) {
   fillConstantIndices(sg, launch);
   placeKernelLaunch(std::move(launch));
   placed_.insert(node);
+}
+
+void CompileCtx::breakDeviceSizedProducers(ValueCP value) {
+  auto* producer = value->producer();
+  if (!producer || placed_.count(producer) ||
+      (inputs_ && inputs_->count(producer))) {
+    return;
+  }
+  // Post-order: the innermost device-sized op ends its kernel first, so the ops
+  // above it read a host tensor that already carries the real extent and can
+  // stay fused with the concat.
+  for (const auto& input : producer->inputs()) {
+    breakDeviceSizedProducers(input.value);
+  }
+  if (setsSizeOnDevice(producer)) {
+    breakProducerIntoOwnKernel(producer);
+  }
 }
 
 void CompileCtx::breakProducerIntoOwnKernel(NodeCP producer) {
