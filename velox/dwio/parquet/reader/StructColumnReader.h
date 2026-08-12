@@ -17,10 +17,10 @@
 #pragma once
 
 #include "velox/dwio/common/Options.h"
-#include "velox/dwio/common/RowRanges.h"
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 #include "velox/dwio/parquet/common/LevelConversion.h"
 #include "velox/dwio/parquet/reader/ColumnPageIndex.h"
+#include "velox/dwio/parquet/reader/PagePruningPlan.h"
 
 namespace facebook::velox::dwio::common {
 class BufferedInput;
@@ -31,6 +31,7 @@ namespace facebook::velox::parquet {
 enum class LevelMode;
 class PageReader;
 class ParquetParams;
+class ParquetData;
 
 class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
  public:
@@ -52,7 +53,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   std::shared_ptr<dwio::common::BufferedInput> loadRowGroup(
       uint32_t index,
       const std::shared_ptr<dwio::common::BufferedInput>& input,
-      dwio::common::RowRanges& rowRanges);
+      const RowGroupPagePruningPlanPtr& pagePlan);
 
   // No-op in Parquet. All readers switch row groups at the same time, there is
   // no on-demand skipping to a new row group.
@@ -82,14 +83,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
 
   bool collectIndexPageInfoMap(uint32_t index, PageIndexInfoMap& map);
 
-  void filterDataPages(
-      uint32_t index,
-      folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>&
-          pageIndices,
-      dwio::common::RowRanges& range,
-      std::vector<std::pair<
-          const velox::common::MetadataFilter::LeafNode*,
-          dwio::common::RowRanges>>& metadataFilterResults);
+  ParquetData* findFlatLeaf(uint32_t column);
 
  private:
   dwio::common::SelectiveColumnReader* findBestLeaf();
@@ -97,7 +91,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   void enqueueRowGroup(
       uint32_t index,
       dwio::common::BufferedInput& input,
-      dwio::common::RowRanges& rowRanges);
+      const RowGroupPagePruningPlanPtr& pagePlan);
 
   bool isRowGroupBuffered(uint32_t index, dwio::common::BufferedInput& input);
 

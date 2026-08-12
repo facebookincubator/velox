@@ -124,6 +124,7 @@ void ParquetWriterOptions::merge(
   mergeIfSet(
       parquetWriteTimestampUnit, parquetOverrides->parquetWriteTimestampUnit);
   mergeIfSet(enableDictionary, parquetOverrides->enableDictionary);
+  mergeIfSet(enablePageIndex, parquetOverrides->enablePageIndex);
   mergeIfSet(
       enableStoreDecimalAsInteger,
       parquetOverrides->enableStoreDecimalAsInteger);
@@ -226,6 +227,11 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
     properties = properties->enableStoreDecimalAsInteger();
   } else {
     properties = properties->disableStoreDecimalAsInteger();
+  }
+  if (parquetOptions.enablePageIndex.value_or(false)) {
+    properties = properties->enableWritePageIndex();
+  } else if (parquetOptions.enablePageIndex.has_value()) {
+    properties = properties->disableWritePageIndex();
   }
   if (parquetOptions.useParquetDataPageV2.value_or(false)) {
     properties = properties->dataPageVersion(arrow::ParquetDataPageVersion::V2);

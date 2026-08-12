@@ -18,7 +18,11 @@
 
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/ITypedExpr.h"
+#include "velox/dwio/common/RowIntervalSet.h"
 #include "velox/dwio/common/RowRanges.h"
+
+#include <optional>
+#include <vector>
 
 namespace facebook::velox::common {
 
@@ -57,6 +61,14 @@ class MetadataFilter {
       std::vector<std::pair<const LeafNode*, dwio::common::RowRanges>>&
           leafNodeResults,
       dwio::common::RowRanges& finalResult);
+
+  /// Evaluates page-level rejection intervals without mutating leaf inputs.
+  /// AND combines known rejections with union; OR combines them with
+  /// intersection and returns unknown when any child is missing.
+  std::optional<dwio::common::RowIntervalSet> evalRejectedRows(
+      const std::vector<
+          std::pair<const LeafNode*, dwio::common::RowIntervalSet>>&
+          leafNodeResults) const;
 
   std::string toString() const;
 

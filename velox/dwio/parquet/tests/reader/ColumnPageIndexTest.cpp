@@ -14,164 +14,231 @@
  * limitations under the License.
  */
 
+#include <cstring>
+
 #include <gtest/gtest.h>
 
-#include "velox/dwio/parquet/reader/ColumnPageIndex.h"
-#include "velox/dwio/parquet/tests/ParquetTestBase.h"
+#include "velox/dwio/common/RowIntervalSet.h"
+#include "velox/dwio/parquet/common/PageIndex.h"
+#include "velox/dwio/parquet/reader/PagePruningPlan.h"
 
 using namespace facebook::velox;
-using namespace facebook::velox::parquet;
 using namespace facebook::velox::dwio::common;
+using namespace facebook::velox::parquet;
 
-class ColumnPageIndexTest : public ParquetTestBase {
- public:
-  thrift::ColumnIndex makeColumnIndex(
-      const std::vector<bool>& nullPages,
-      const std::vector<std::string>& mins,
-      const std::vector<std::string>& maxs,
-      const std::vector<int64_t>& nullCounts) {
-    thrift::ColumnIndex ci;
-    ci.null_pages() = nullPages;
-    ci.min_values() = mins;
-    ci.max_values() = maxs;
-    ci.null_counts() = nullCounts;
-    return ci;
-  }
+namespace {
 
-  thrift::OffsetIndex makeOffsetIndex(
-      const std::vector<int64_t>& firstRowIndex,
-      const std::vector<int64_t>& offsets,
-      const std::vector<int32_t>& sizes) {
-    thrift::OffsetIndex oi;
-    std::vector<thrift::PageLocation> locs;
-    size_t n = offsets.size();
-    locs.reserve(n);
-    for (size_t i = 0; i < n; ++i) {
-      thrift::PageLocation pl;
-      pl.first_row_index() = firstRowIndex[i];
-      pl.offset() = offsets[i];
-      pl.compressed_page_size() = sizes[i];
-      locs.push_back(std::move(pl));
-    }
-    oi.page_locations() = locs;
-    return oi;
-  }
-
-  template <typename T>
-  std::string encode(T v) {
-    std::string s(sizeof(T), '\0');
-    std::memcpy(s.data(), &v, sizeof(T));
-    return s;
-  }
-};
-
-TEST_F(ColumnPageIndexTest, basic) {
-  // Pages: [0..29], [30..69], [70..99]
-  auto ci = makeColumnIndex(
-      std::vector<bool>{false, false, false},
-      std::vector<std::string>{"a", "m", "x"},
-      std::vector<std::string>{"l", "w", "z"},
-      std::vector<int64_t>{0, 2, 5});
-  auto oi = makeOffsetIndex(
-      std::vector<int64_t>{0, 30, 70},
-      std::vector<int64_t>{100, 200, 300},
-      std::vector<int32_t>{50, 60, 70});
-  ColumnPageIndex idx(std::move(ci), std::move(oi), 100);
-
-  EXPECT_EQ(idx.numPages(), 3);
-  EXPECT_EQ(idx.pageRowCount(0), 30);
-  EXPECT_EQ(idx.pageRowCount(1), 40);
-  EXPECT_EQ(idx.pageRowCount(2), 30);
-  EXPECT_EQ(idx.pageFirstRowIndex(2), 70);
-  EXPECT_EQ(idx.pageOffset(1), 200);
-  EXPECT_EQ(idx.compressedPageSize(2), 70);
+template <typename T>
+std::string encode(T value) {
+  std::string bytes(sizeof(T), '\0');
+  std::memcpy(bytes.data(), &value, sizeof(T));
+  return bytes;
 }
 
-TEST_F(ColumnPageIndexTest, updateSkippedPages) {
-  auto ci = makeColumnIndex(
-      {false, false, false}, {"a", "m", "x"}, {"l", "w", "z"}, {0, 2, 5});
-  auto oi = makeOffsetIndex({0, 30, 70}, {100, 200, 300}, {50, 60, 70});
-  ColumnPageIndex idx(std::move(ci), std::move(oi), 100);
-
-  RowRanges ranges;
-  ranges.add(InclusiveRowRange(10, 20)); // overlaps page0
-  ranges.add(InclusiveRowRange(35, 65)); // overlaps page1
-  idx.updateSkippedPages(ranges);
-
-  EXPECT_FALSE(idx.isPageSkipped(0));
-  EXPECT_FALSE(idx.isPageSkipped(1));
-  EXPECT_TRUE(idx.isPageSkipped(2)); // no overlap with [70..99]
-}
-
-TEST_F(ColumnPageIndexTest, booleanStatistics) {
-  // one page
-  auto ci = makeColumnIndex({false}, {""}, {""}, {3}); // three nulls
-  auto oi = makeOffsetIndex({0}, {0}, {10}); // pageRowCount = 10
-  ColumnPageIndex idx(std::move(ci), std::move(oi), 10);
-
-  auto stats = idx.buildColumnStatisticsForPage(0, *BOOLEAN());
-  auto bs = dynamic_cast<BooleanColumnStatistics*>(stats.get());
-  EXPECT_NE(bs, nullptr);
-  EXPECT_EQ(bs->hasNull(), std::optional<bool>(true));
-  EXPECT_EQ(bs->getNumberOfValues(), std::optional<uint64_t>(7));
-}
-
-TEST_F(ColumnPageIndexTest, integerStatisticsNoNulls) {
-  // one page
-  auto ci = makeColumnIndex(
-      {false}, {encode<int32_t>(-42)}, {encode<int32_t>(99)}, {0});
-  auto oi = makeOffsetIndex({0}, {0}, {5}); // pageRowCount = 5
-  ColumnPageIndex idx(std::move(ci), std::move(oi), 5);
-
-  auto stats = idx.buildColumnStatisticsForPage(0, *INTEGER());
-  auto is = dynamic_cast<IntegerColumnStatistics*>(stats.get());
-  EXPECT_NE(is, nullptr);
-  EXPECT_EQ(is->hasNull(), std::optional<bool>(false));
-  EXPECT_EQ(is->getNumberOfValues(), std::optional<uint64_t>(5));
-  EXPECT_EQ(is->getMinimum(), std::optional<int32_t>(-42));
-  EXPECT_EQ(is->getMaximum(), std::optional<int32_t>(99));
-}
-
-TEST_F(ColumnPageIndexTest, integerStatisticsNullPage) {
-  // one page, all nulls
-  auto ci = makeColumnIndex({true}, {""}, {""}, {5});
-  auto oi = makeOffsetIndex({0}, {0}, {5});
-  ColumnPageIndex idx(std::move(ci), std::move(oi), 5);
-
-  auto stats = idx.buildColumnStatisticsForPage(0, *INTEGER());
-  auto is = dynamic_cast<IntegerColumnStatistics*>(stats.get());
-  EXPECT_NE(is, nullptr);
-  // entire page null → min/max nullopt, valueCount=0, hasNull=true
-  EXPECT_EQ(is->getMinimum(), std::nullopt);
-  EXPECT_EQ(is->getMaximum(), std::nullopt);
-  EXPECT_EQ(is->getNumberOfValues(), std::optional<uint64_t>(0));
-  EXPECT_EQ(is->hasNull(), std::optional<bool>(true));
-}
-
-TEST_F(ColumnPageIndexTest, doubleAndStringStatistics) {
-  // double page
-  auto ci = makeColumnIndex(
-      {false, false},
-      {encode<double>(3.14), "apple"},
-      {encode<double>(6.28), "zebra"},
-      {1, 0});
-  auto oi = makeOffsetIndex({0, 0}, {0, 0}, {4, 3});
-  ColumnPageIndex idx(std::move(ci), std::move(oi), /*totalRows*/ 7);
-
-  // double
-  {
-    auto stats = idx.buildColumnStatisticsForPage(0, *DOUBLE());
-    auto ds = dynamic_cast<DoubleColumnStatistics*>(stats.get());
-    EXPECT_NE(ds, nullptr);
-    EXPECT_EQ(ds->getMinimum(), std::optional<double>(3.14));
-    EXPECT_EQ(ds->getMaximum(), std::optional<double>(6.28));
+thrift::OffsetIndex makeOffsetIndex(
+    std::vector<int64_t> firstRows,
+    std::vector<int64_t> offsets,
+    std::vector<int32_t> sizes) {
+  thrift::OffsetIndex index;
+  for (size_t i = 0; i < firstRows.size(); ++i) {
+    thrift::PageLocation location;
+    location.first_row_index() = firstRows[i];
+    location.offset() = offsets[i];
+    location.compressed_page_size() = sizes[i];
+    index.page_locations()->push_back(std::move(location));
   }
-  // string
-  {
-    auto stats = idx.buildColumnStatisticsForPage(1, *VARCHAR());
-    auto ss = dynamic_cast<StringColumnStatistics*>(stats.get());
-    EXPECT_NE(ss, nullptr);
-    EXPECT_EQ(ss->getMinimum(), std::optional<std::string>("apple"));
-    EXPECT_EQ(ss->getMaximum(), std::optional<std::string>("zebra"));
+  return index;
+}
+
+thrift::ColumnIndex makeColumnIndex(
+    std::vector<bool> nullPages,
+    std::vector<std::string> minimums,
+    std::vector<std::string> maximums,
+    std::vector<int64_t> nullCounts) {
+  thrift::ColumnIndex index;
+  index.null_pages() = std::move(nullPages);
+  index.min_values() = std::move(minimums);
+  index.max_values() = std::move(maximums);
+  index.boundary_order() = thrift::BoundaryOrder::ASCENDING;
+  index.null_counts() = std::move(nullCounts);
+  return index;
+}
+
+} // namespace
+
+TEST(PageIndexTest, decodesTypedPhysicalBounds) {
+  auto columnIndex = makeColumnIndex(
+      {false}, {encode<int32_t>(-10)}, {encode<int32_t>(20)}, {0});
+  auto offsetIndex = makeOffsetIndex({0}, {100}, {20});
+
+  auto decoded = decodeColumnIndex(
+      columnIndex,
+      offsetIndex,
+      thrift::Type::INT32,
+      std::nullopt,
+      PageBoundsCapability::kOrderedBounds,
+      20,
+      1'000);
+
+  ASSERT_TRUE(decoded);
+  ASSERT_TRUE(decoded.value->column.has_value());
+  ASSERT_EQ(decoded.value->offset.pages.size(), 1);
+  EXPECT_EQ(decoded.value->offset.pages[0].firstRow, 0);
+  EXPECT_EQ(decoded.value->offset.pages[0].numRows, 20);
+  ASSERT_TRUE(decoded.value->column->bounds(0).minimum.has_value());
+  EXPECT_EQ(std::get<int32_t>(*decoded.value->column->bounds(0).minimum), -10);
+}
+
+TEST(PageIndexTest, rejectsCardinalityAndRowOrderErrors) {
+  auto columnIndex =
+      makeColumnIndex({false}, {encode<int32_t>(1)}, {encode<int32_t>(2)}, {0});
+  auto offsetIndex = makeOffsetIndex({1}, {100}, {20});
+
+  auto decoded = decodeColumnIndex(
+      columnIndex,
+      offsetIndex,
+      thrift::Type::INT32,
+      std::nullopt,
+      PageBoundsCapability::kOrderedBounds,
+      20,
+      1'000);
+
+  EXPECT_FALSE(decoded);
+  EXPECT_EQ(decoded.reason, PageIndexFallbackReason::kInvalidRowOrder);
+}
+
+TEST(PageIndexTest, rejectsInvalidLocationsBeforeArithmetic) {
+  auto columnIndex =
+      makeColumnIndex({false}, {encode<int32_t>(1)}, {encode<int32_t>(2)}, {0});
+  auto negativeOffset = makeOffsetIndex({0}, {-1}, {20});
+
+  auto decoded = decodeColumnIndex(
+      columnIndex,
+      negativeOffset,
+      thrift::Type::INT32,
+      std::nullopt,
+      PageBoundsCapability::kOrderedBounds,
+      20,
+      1'000);
+
+  EXPECT_FALSE(decoded);
+  EXPECT_EQ(decoded.reason, PageIndexFallbackReason::kInvalidLocation);
+}
+
+TEST(PagePruningPlanTest, keepsGappedPagesInSeparateLogicalRuns) {
+  ValidatedOffsetIndex offset;
+  offset.pages = {
+      {100, 50, 0, 10},
+      {150, 50, 10, 10},
+      {250, 25, 20, 10},
+  };
+  RowIntervalSet retained;
+  retained.add({0, 20});
+  retained.add({20, 30});
+
+  auto column = buildColumnPageReadPlan(
+      3, offset, retained, common::Region{50, 50}, 200, 40);
+
+  EXPECT_EQ(column.numSkippedPages, 0);
+  ASSERT_EQ(column.retainedRuns.size(), 2);
+  EXPECT_EQ(column.retainedRuns[0].region.offset, 100);
+  EXPECT_EQ(column.retainedRuns[0].region.length, 100);
+  EXPECT_EQ(column.retainedRuns[1].region.offset, 250);
+  EXPECT_EQ(column.retainedRuns[1].region.length, 25);
+  EXPECT_EQ(column.dataPageToRun, (std::vector<int32_t>{0, 0, 1}));
+}
+
+TEST(PagePruningPlanTest, skipsPagesFromImmutableRows) {
+  ValidatedOffsetIndex offset;
+  offset.pages = {
+      {100, 50, 0, 10},
+      {150, 50, 10, 10},
+      {200, 50, 20, 10},
+  };
+  RowIntervalSet retained;
+  retained.add({10, 20});
+
+  auto column =
+      buildColumnPageReadPlan(1, offset, retained, std::nullopt, 150, 20);
+
+  EXPECT_EQ(column.numSkippedPages, 2);
+  ASSERT_EQ(column.retainedRuns.size(), 1);
+  EXPECT_EQ(column.retainedRuns[0].firstDataPageOrdinal, 1);
+  EXPECT_EQ(column.dataPageToRun[0], -1);
+  EXPECT_EQ(column.dataPageToRun[1], 0);
+  EXPECT_EQ(column.dataPageToRun[2], -1);
+}
+
+TEST(PagePruningPlanTest, fallsBackWhenPhysicalSavingsAreNotMaterial) {
+  ValidatedOffsetIndex offset;
+  offset.pages = {
+      {100, 50, 0, 10},
+      {150, 50, 10, 10},
+  };
+  RowIntervalSet retained;
+  retained.add({0, 10});
+
+  auto preloaded =
+      buildColumnPageReadPlan(1, offset, retained, std::nullopt, 50, 20, true);
+  EXPECT_FALSE(preloaded.useWholeChunkStream);
+
+  auto noSavings =
+      buildColumnPageReadPlan(1, offset, retained, std::nullopt, 50, 20, false);
+  EXPECT_TRUE(noSavings.useWholeChunkStream);
+}
+
+  TEST(PagePruningPlanTest, modelsPhysicalGapCoalescingAndCostFallback) {
+    ValidatedOffsetIndex offset;
+    offset.pages = {
+      {100, 10, 0, 10},
+      {120, 10, 10, 10},
+      {1'000, 10, 20, 10},
+    };
+    RowIntervalSet retained;
+    retained.add({0, 10});
+    retained.add({20, 30});
+
+    const PagePruningCostModelOptions coalescing{
+      .maxCoalesceDistance = 900,
+      .maxCoalesceBytes = 1'000,
+      .loadQuantum = 100,
+    };
+    auto coalesced = buildColumnPageReadPlan(
+      1, offset, retained, std::nullopt, 1'000, 0, false, coalescing);
+    EXPECT_EQ(coalesced.retainedRuns.size(), 2);
+    EXPECT_EQ(coalesced.plannedPhysicalBytes, 910);
+    EXPECT_EQ(coalesced.plannedPhysicalLoads, 10);
+    EXPECT_FALSE(coalesced.useWholeChunkStream);
+
+    const PagePruningCostModelOptions split{
+      .maxCoalesceDistance = 10,
+      .maxCoalesceBytes = 1'000,
+      .loadQuantum = 100,
+    };
+    auto splitRuns = buildColumnPageReadPlan(
+      1, offset, retained, std::nullopt, 1'000, 0, false, split);
+    EXPECT_EQ(splitRuns.plannedPhysicalBytes, 20);
+    EXPECT_EQ(splitRuns.plannedPhysicalLoads, 2);
+
+    auto fallback = buildColumnPageReadPlan(
+      1, offset, retained, std::nullopt, 20, 0, false, coalescing);
+    EXPECT_TRUE(fallback.useWholeChunkStream);
+    EXPECT_TRUE(fallback.costModelFallback);
   }
+
+TEST(PagePruningPlanTest, representsAllPagesRejectedExplicitly) {
+  ValidatedOffsetIndex offset;
+  offset.pages = {
+      {100, 50, 0, 10},
+      {150, 50, 10, 10},
+  };
+  RowIntervalSet retained;
+
+  auto column = buildColumnPageReadPlan(
+      1, offset, retained, std::nullopt, 100, 20, false);
+
+  EXPECT_TRUE(column.allPagesSkipped);
+  EXPECT_FALSE(column.useWholeChunkStream);
+  EXPECT_EQ(column.retainedRuns.size(), 0);
+  EXPECT_EQ(column.dataPageToRun, (std::vector<int32_t>{-1, -1}));
 }

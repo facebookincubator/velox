@@ -17,7 +17,6 @@
 #pragma once
 
 #include "velox/dwio/common/Options.h"
-#include "velox/dwio/common/RowRanges.h"
 #include "velox/dwio/common/SelectiveRepeatedColumnReader.h"
 #include "velox/dwio/parquet/reader/ColumnPageIndex.h"
 #include "velox/dwio/parquet/reader/ParquetData.h"
@@ -77,7 +76,7 @@ class MapColumnReader : public dwio::common::SelectiveMapColumnReader {
   void enqueueRowGroup(
       uint32_t index,
       dwio::common::BufferedInput& input,
-      dwio::common::RowRanges& rowRanges);
+      const RowGroupPagePruningPlanPtr& pagePlan);
 
   void read(
       int64_t offset,
@@ -110,15 +109,6 @@ class MapColumnReader : public dwio::common::SelectiveMapColumnReader {
       dwio::common::FormatData::FilterRowGroupsResult&) const override;
 
   bool collectIndexPageInfoMap(uint32_t index, PageIndexInfoMap& map);
-
-  void filterDataPages(
-      uint32_t index,
-      folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>&
-          pageIndices,
-      dwio::common::RowRanges& range,
-      std::vector<std::pair<
-          const velox::common::MetadataFilter::LeafNode*,
-          dwio::common::RowRanges>>& metadataFilterResults);
 
  private:
   RepeatedLengths lengths_;
@@ -148,7 +138,7 @@ class ListColumnReader : public dwio::common::SelectiveListColumnReader {
   void enqueueRowGroup(
       uint32_t index,
       dwio::common::BufferedInput& input,
-      dwio::common::RowRanges& rowRanges);
+      const RowGroupPagePruningPlanPtr& pagePlan);
 
   void read(
       int64_t offset,
@@ -181,15 +171,6 @@ class ListColumnReader : public dwio::common::SelectiveListColumnReader {
       dwio::common::FormatData::FilterRowGroupsResult&) const override;
 
   bool collectIndexPageInfoMap(uint32_t index, PageIndexInfoMap& map);
-
-  void filterDataPages(
-      uint32_t index,
-      folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>&
-          pageIndices,
-      dwio::common::RowRanges& range,
-      std::vector<std::pair<
-          const velox::common::MetadataFilter::LeafNode*,
-          dwio::common::RowRanges>>& metadataFilterResults);
 
  private:
   RepeatedLengths lengths_;

@@ -21,6 +21,7 @@ velox_add_library(
   PageReader.cpp
   ParquetColumnReader.cpp
   ParquetData.cpp
+  PagePruningPlan.cpp
   RepeatedColumnReader.cpp
   RleBpDecoder.cpp
   StructColumnReader.cpp
@@ -29,6 +30,8 @@ velox_add_library(
   HEADERS
   BooleanColumnReader.h
   BooleanDecoder.h
+  ColumnPageIndex.h
+  PagePruningPlan.h
   DeltaBpDecoder.h
   DeltaByteArrayDecoder.h
   FloatingPointColumnReader.h

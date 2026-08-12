@@ -24,6 +24,7 @@
 #include <folly/ScopeGuard.h>
 #include <folly/lang/Bits.h>
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/BufferUtil.h"
@@ -63,48 +64,71 @@ uint32_t checkedPageSize(int32_t size, const char* name) {
 void PageReader::seekToPage(int64_t row) {
   defineDecoder_.reset();
   repeatDecoder_.reset();
+  if (pagePlan_ && !prefixRead_) {
+    readPrefix();
+  }
   // 'rowOfPage_' is the row number of the first row of the next page.
   rowOfPage_ += numRowsInPage_;
   for (;;) {
-    if (chunkSize_ <= pageStart_) {
+    if (pagePlan_ && nextDataPageOrdinal_ >= pagePlan_->dataPages.size()) {
+      numRepDefsInPage_ = 0;
+      numRowsInPage_ = 0;
+      break;
+    }
+    if (!pagePlan_ && chunkSize_ <= pageStart_) {
       // This may happen if seeking to exactly end of row group.
       numRepDefsInPage_ = 0;
       numRowsInPage_ = 0;
       break;
     }
     bool pageSkipped = false;
-    size_t pageIndex = columnPageIndexPosition_++;
-    if (columnPageIndex_) {
-      auto streamIndex = columnPageIndex_->getPageStreamIndex(pageIndex);
-      if (pageIndex == 0 && streamIndex == -1) {
-        pageIndex = columnPageIndexPosition_++;
-        streamIndex = columnPageIndex_->getPageStreamIndex(pageIndex);
-      }
-      if (streamIndex != -1) {
-        // If this is the first page or the stream index changed, update
-        // inputStream_.
-        if (pageIndex == 0 ||
-            streamIndex !=
-                columnPageIndex_->getPageStreamIndex(pageIndex - 1)) {
-          inputStream_ = std::move(pageStreams_[streamIndex]);
-        }
-      } else {
+    size_t pageIndex = 0;
+    if (pagePlan_) {
+      pageIndex = nextDataPageOrdinal_++;
+      const auto& page = pagePlan_->dataPages.at(pageIndex);
+      const auto streamIndex = pagePlan_->dataPageToRun.at(pageIndex);
+      if (streamIndex < 0) {
         pageSkipped = true;
+        VELOX_CHECK_LE(
+            page.numRows,
+            static_cast<uint64_t>(std::numeric_limits<int32_t>::max()),
+            "Page row count exceeds PageReader limits");
+        numRowsInPage_ = static_cast<int32_t>(page.numRows);
+        numRepDefsInPage_ = numRowsInPage_;
+      } else {
+        VELOX_CHECK_LT(
+            static_cast<size_t>(streamIndex),
+            pageStreams_.size(),
+            "Page plan refers to an invalid logical stream");
+        if (currentRunIndex_ != streamIndex) {
+          if (currentRunIndex_ >= 0) {
+            VELOX_CHECK_EQ(
+                pageStart_,
+                currentRunLength_,
+                "Previous logical page stream was not fully consumed");
+          }
+          inputStream_ = std::move(pageStreams_[streamIndex]);
+          VELOX_CHECK_NOT_NULL(inputStream_);
+          currentRunIndex_ = streamIndex;
+          currentRunLength_ =
+              pagePlan_->retainedRuns[streamIndex].region.length;
+          bufferStart_ = nullptr;
+          bufferEnd_ = nullptr;
+          pageStart_ = 0;
+        }
       }
     }
     if (pageSkipped) {
       dataPageSkipped_ = true;
-      const auto compressedPageSize = checkedPageSize(
-          columnPageIndex_->compressedPageSize(pageIndex - 1),
-          "compressed page size");
-      pageStart_ += compressedPageSize;
-      numRowsInPage_ = columnPageIndex_->pageRowCount(pageIndex - 1);
     } else {
       dataPageSkipped_ = false;
       PageHeader pageHeader = readPageHeader();
       const auto compressedPageSize = checkedPageSize(
           *pageHeader.compressed_page_size(), "compressed page size");
-      pageStart_ = pageDataStart_ + compressedPageSize;
+      pageStart_ = checkedPlus(
+          pageDataStart_,
+          static_cast<uint64_t>(compressedPageSize),
+          "page offset");
 
       switch (*pageHeader.type()) {
         case thrift::PageType::DATA_PAGE:
@@ -114,6 +138,10 @@ void PageReader::seekToPage(int64_t row) {
           prepareDataPageV2(pageHeader, row);
           break;
         case thrift::PageType::DICTIONARY_PAGE:
+          if (pagePlan_) {
+            VELOX_FAIL(
+                "Indexed logical page stream contains a dictionary page");
+          }
           if (row == kRepDefOnly) {
             skipBytes(
                 static_cast<int32_t>(compressedPageSize),
@@ -125,7 +153,11 @@ void PageReader::seekToPage(int64_t row) {
           prepareDictionary(pageHeader);
           continue;
         default:
-          break; // ignore INDEX page type and any other custom extensions
+          if (pagePlan_) {
+            VELOX_FAIL(
+                "Indexed logical page stream contains a non-data page");
+          }
+          break;
       }
     }
     if (row == kRepDefOnly || row < rowOfPage_ + numRowsInPage_) {
@@ -135,16 +167,67 @@ void PageReader::seekToPage(int64_t row) {
   }
 }
 
+void PageReader::readPrefix() {
+  prefixRead_ = true;
+  if (!pagePlan_ || !pagePlan_->prefixRegion.has_value() ||
+      pagePlan_->allPagesSkipped) {
+    return;
+  }
+  inputStream_ = std::move(prefixStream_);
+  VELOX_CHECK_NOT_NULL(inputStream_);
+  bufferStart_ = nullptr;
+  bufferEnd_ = nullptr;
+
+  while (pageStart_ < pagePlan_->prefixRegion->length) {
+    const auto pageHeader = readPageHeader();
+    const auto compressedPageSize = checkedPageSize(
+        *pageHeader.compressed_page_size(), "compressed page size");
+    pageStart_ = checkedPlus(
+        pageDataStart_,
+        static_cast<uint64_t>(compressedPageSize),
+        "page offset");
+    VELOX_CHECK_LE(
+        pageStart_,
+        pagePlan_->prefixRegion->length,
+        "Page extends beyond the indexed prefix region");
+
+    switch (*pageHeader.type()) {
+      case thrift::PageType::DICTIONARY_PAGE:
+        prepareDictionary(pageHeader);
+        break;
+      case thrift::PageType::DATA_PAGE:
+      case thrift::PageType::DATA_PAGE_V2:
+        VELOX_FAIL("Indexed prefix contains a data page");
+      default:
+        skipBytes(
+            static_cast<int32_t>(compressedPageSize),
+            inputStream_.get(),
+            bufferStart_,
+            bufferEnd_);
+        break;
+    }
+  }
+
+  VELOX_CHECK_EQ(pageStart_, pagePlan_->prefixRegion->length);
+  inputStream_.reset();
+  bufferStart_ = nullptr;
+  bufferEnd_ = nullptr;
+}
+
 PageHeader PageReader::readPageHeader() {
   TestValue::adjust(
       "facebook::velox::parquet::PageReader::readPageHeader", this);
   PageHeader pageHeader;
+  const auto initialDataBytes = bufferStart_ && bufferEnd_
+      ? static_cast<size_t>(bufferEnd_ - bufferStart_)
+      : 0;
   auto result = thrift::deserialize(
       &pageHeader,
       inputStream_.get(),
       reinterpret_cast<const uint8_t*>(bufferStart_),
-      bufferEnd_ - bufferStart_);
-  pageDataStart_ = pageStart_ + result.readBytes;
+      initialDataBytes);
+  pageDataStart_ = checkedPlus(
+      pageStart_, static_cast<uint64_t>(result.readBytes), "page header end");
 
   // Keep the coalesced buffer alive so deserialized pageHeader data and
   // 'remainedData' remain valid. Only replace 'thriftBuffer_' when the
@@ -1092,6 +1175,10 @@ void PageReader::skipNullsOnly(int64_t numRows) {
     toSkip = firstUnvisited_ - rowOfPage_;
   } else {
     firstUnvisited_ += numRows;
+  }
+
+  if (dataPageSkipped_) {
+    return;
   }
 
   // Skip nulls

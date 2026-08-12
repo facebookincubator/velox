@@ -17,6 +17,7 @@ velox_add_library(
   BloomFilter.cpp
   LevelComparison.cpp
   LevelConversion.cpp
+  PageIndex.cpp
   XxHasher.cpp
   HEADERS
   BitStreamUtilsInternal.h
@@ -25,6 +26,7 @@ velox_add_library(
   LevelComparison.h
   LevelConversion.h
   LevelConversionUtil.h
+  PageIndex.h
   ParquetConfig.h
   RleEncodingInternal.h
   XxHasher.h
@@ -42,3 +44,19 @@ velox_link_libraries(
   Snappy::snappy
   zstd::zstd
 )
+
+if(VELOX_BUILD_TESTING)
+  add_executable(velox_dwio_parquet_page_index_test PageIndexTest.cpp)
+  add_test(
+    velox_dwio_parquet_page_index_test
+    velox_dwio_parquet_page_index_test
+  )
+  target_link_libraries(
+    velox_dwio_parquet_page_index_test
+    velox_dwio_parquet_common
+    velox_link_libs
+    ${TEST_LINK_LIBS}
+    GTest::gtest
+    GTest::gtest_main
+  )
+endif()

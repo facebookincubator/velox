@@ -51,6 +51,7 @@ add_executable(
   ReaderTest.cpp
   RetryTests.cpp
   RowRangesTest.cpp
+  RowIntervalSetTest.cpp
   ScanSpecTest.cpp
   SelectiveColumnReaderTest.cpp
   SortingWriterTest.cpp

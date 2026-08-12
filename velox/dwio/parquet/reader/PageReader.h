@@ -23,9 +23,9 @@
 #include "velox/dwio/common/compression/Compression.h"
 #include "velox/dwio/parquet/common/RleEncodingInternal.h"
 #include "velox/dwio/parquet/reader/BooleanDecoder.h"
-#include "velox/dwio/parquet/reader/ColumnPageIndex.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaByteArrayDecoder.h"
+#include "velox/dwio/parquet/reader/PagePruningPlan.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/reader/RleBpDataDecoder.h"
 #include "velox/dwio/parquet/reader/StringDecoder.h"
@@ -69,15 +69,17 @@ class PageReader {
   PageReader(
       std::vector<std::unique_ptr<dwio::common::SeekableInputStream>>&&
           pageStreams,
+      std::unique_ptr<dwio::common::SeekableInputStream> prefixStream,
       memory::MemoryPool& pool,
       ParquetTypeWithIdPtr fileType,
       common::CompressionKind codec,
       int64_t chunkSize,
       dwio::common::ColumnReaderStatistics& stats,
       const tz::TimeZone* sessionTimezone,
-      std::unique_ptr<ColumnPageIndex> pageIndex)
+      const ColumnPageReadPlan* pagePlan)
       : pool_(pool),
         pageStreams_(std::move(pageStreams)),
+        prefixStream_(std::move(prefixStream)),
         type_(std::move(fileType)),
         maxRepeat_(type_->maxRepeat_),
         maxDefine_(type_->maxDefine_),
@@ -87,7 +89,7 @@ class PageReader {
         nullConcatenation_(pool_),
         stats_(stats),
         sessionTimezone_(sessionTimezone),
-        columnPageIndex_(std::move(pageIndex)) {
+        pagePlan_(pagePlan) {
     type_->makeLevelInfo(leafInfo_);
   }
 
@@ -221,6 +223,9 @@ class PageReader {
   // nulls. Seeking ahead of pages covered by decodeRepDefs is not
   // allowed for non-top level columns.
   void seekToPage(int64_t row);
+
+  // Parses the prefix stream before the first indexed data page.
+  void readPrefix();
 
   // Preloads the repdefs for the column chunk. To avoid preloading,
   // would need a way too clone the input stream so that one stream
@@ -434,6 +439,7 @@ class PageReader {
 
   std::unique_ptr<dwio::common::SeekableInputStream> inputStream_;
   std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> pageStreams_;
+  std::unique_ptr<dwio::common::SeekableInputStream> prefixStream_;
   ParquetTypeWithIdPtr type_;
   const int32_t maxRepeat_;
   const int32_t maxDefine_;
@@ -585,8 +591,12 @@ class PageReader {
   std::unique_ptr<RleBpDataDecoder> rleBooleanDecoder_;
   // Add decoders for other encodings here.
 
-  std::unique_ptr<ColumnPageIndex> columnPageIndex_{nullptr};
-  size_t columnPageIndexPosition_{0};
+  // Immutable physical page selection published by the row-group planner.
+  const ColumnPageReadPlan* pagePlan_{nullptr};
+  uint32_t nextDataPageOrdinal_{0};
+  int32_t currentRunIndex_{-1};
+  uint64_t currentRunLength_{0};
+  bool prefixRead_{false};
 };
 
 FOLLY_ALWAYS_INLINE dwio::common::compression::CompressionOptions

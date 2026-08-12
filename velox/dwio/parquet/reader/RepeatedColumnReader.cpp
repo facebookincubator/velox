@@ -87,14 +87,14 @@ void enqueueChildren(
     dwio::common::SelectiveColumnReader* reader,
     uint32_t index,
     dwio::common::BufferedInput& input,
-    dwio::common::RowRanges& rowRanges) {
+    const RowGroupPagePruningPlanPtr& pagePlan) {
   auto children = reader->children();
   if (children.empty()) {
     return reader->formatData().as<ParquetData>().enqueueRowGroup(
-        index, input, rowRanges);
+        index, input, pagePlan);
   }
   for (auto* child : children) {
-    enqueueChildren(child, index, input, rowRanges);
+    enqueueChildren(child, index, input, pagePlan);
   }
 }
 } // namespace
@@ -145,8 +145,8 @@ MapColumnReader::MapColumnReader(
 void MapColumnReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input,
-    dwio::common::RowRanges& rowRanges) {
-  enqueueChildren(this, index, input, rowRanges);
+    const RowGroupPagePruningPlanPtr& pagePlan) {
+  enqueueChildren(this, index, input, pagePlan);
 }
 
 void MapColumnReader::seekToRowGroup(int64_t index) {
@@ -234,14 +234,6 @@ bool MapColumnReader::collectIndexPageInfoMap(
   return false;
 }
 
-void MapColumnReader::filterDataPages(
-    uint32_t index,
-    folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>& pageIndices,
-    dwio::common::RowRanges& range,
-    std::vector<std::pair<
-        const velox::common::MetadataFilter::LeafNode*,
-        dwio::common::RowRanges>>& metadataFilterResults) {}
-
 ListColumnReader::ListColumnReader(
     const dwio::common::ColumnReaderOptions& columnReaderOptions,
     const TypePtr& requestedType,
@@ -268,8 +260,8 @@ ListColumnReader::ListColumnReader(
 void ListColumnReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input,
-    dwio::common::RowRanges& rowRanges) {
-  enqueueChildren(this, index, input, rowRanges);
+    const RowGroupPagePruningPlanPtr& pagePlan) {
+  enqueueChildren(this, index, input, pagePlan);
 }
 
 void ListColumnReader::seekToRowGroup(int64_t index) {
@@ -355,13 +347,5 @@ bool ListColumnReader::collectIndexPageInfoMap(
     PageIndexInfoMap& map) {
   return false;
 }
-
-void ListColumnReader::filterDataPages(
-    uint32_t index,
-    folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>& pageIndices,
-    dwio::common::RowRanges& range,
-    std::vector<std::pair<
-        const velox::common::MetadataFilter::LeafNode*,
-        dwio::common::RowRanges>>& metadataFilterResults) {}
 
 } // namespace facebook::velox::parquet

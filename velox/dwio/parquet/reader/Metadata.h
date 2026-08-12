@@ -42,6 +42,12 @@ class ColumnChunkMetaDataPtr {
   /// ColumnChunk metadata.
   bool hasColumnAndOffsetIndexOffset() const;
 
+  /// Check whether a valid-looking OffsetIndex location is present.
+  bool hasOffsetIndex() const;
+
+  /// Check whether a valid-looking ColumnIndex location is present.
+  bool hasColumnIndex() const;
+
   /// Return the ColumnChunk statistics. Timestamp columns require
   /// convertedType and logicalType to produce min/max statistics.
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
@@ -192,6 +198,9 @@ class FileMetaDataPtr {
 
   /// Return the Parquet writer created_by string.
   std::string createdBy() const;
+
+  /// Returns whether the leaf column has a supported type-defined order.
+  bool hasTypeDefinedColumnOrder(uint32_t column) const;
 
   /// Returns the estimated total heap memory held by this file's thrift
   /// representation: sizeof(thrift::FileMetaData) plus every dynamically

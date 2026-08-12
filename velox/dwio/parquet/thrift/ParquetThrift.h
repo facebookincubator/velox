@@ -17,6 +17,8 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <cstdint>
+#include <limits>
 #include <ostream>
 #include <string_view>
 
@@ -27,6 +29,10 @@
 #include "velox/dwio/parquet/thrift/gen-cpp2/parquet_types_custom_protocol.h"
 
 namespace facebook::velox::parquet::thrift {
+
+inline constexpr int32_t kThriftStringSizeLimit = 100 * 1000 * 1000;
+inline constexpr int32_t kThriftContainerSizeLimit = 1000 * 1000;
+
 template <
     typename Enum,
     bool IsEnum =
@@ -51,7 +57,8 @@ std::ostream& operator<<(std::ostream& os, const Enum& value) {
 
 template <typename ThriftStruct>
 unsigned long deserialize(ThriftStruct* thriftStruct, std::string_view data) {
-  apache::thrift::CompactV1ProtocolReader reader;
+  apache::thrift::CompactV1ProtocolReader reader(
+      kThriftStringSizeLimit, kThriftContainerSizeLimit);
   folly::IOBuf buffer(
       folly::IOBuf::WRAP_BUFFER,
       folly::ByteRange(
@@ -296,6 +303,8 @@ DeserializeResult deserialize(
       lastRefillBuffer);
 
   apache::thrift::CompactV1ProtocolReaderWithRefill reader(std::ref(refiller));
+  reader.setStringSizeLimit(kThriftStringSizeLimit);
+  reader.setContainerSizeLimit(kThriftContainerSizeLimit);
   folly::IOBuf initialBuffer(
       folly::IOBuf::WRAP_BUFFER, initialData, initialDataBytes);
 

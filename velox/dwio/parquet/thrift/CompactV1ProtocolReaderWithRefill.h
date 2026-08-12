@@ -28,6 +28,14 @@ class CompactV1ProtocolReaderWithRefill
   using ProtocolWriter = CompactV1ProtocolWriter;
   using CompactProtocolReaderWithRefill::CompactProtocolReaderWithRefill;
 
+  void setStringSizeLimit(int32_t limit) {
+    protocol_.setStringSizeLimit(limit);
+  }
+
+  void setContainerSizeLimit(int32_t limit) {
+    protocol_.setContainerSizeLimit(limit);
+  }
+
   inline void readDouble(double& dub) override {
     static_assert(sizeof(double) == sizeof(uint64_t));
     static_assert(std::numeric_limits<double>::is_iec559);

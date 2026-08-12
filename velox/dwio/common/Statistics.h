@@ -581,6 +581,19 @@ struct RuntimeStatistics {
 
   int64_t processedPages{0};
 
+  // Page-index pruning metrics. The skipped/processed page counters above are
+  // retained as compatibility aliases for existing operators.
+  int64_t pageIndexRowsRejected{0};
+  int64_t pageIndexPagesSkipped{0};
+  int64_t pageIndexPagesRetained{0};
+  int64_t pageIndexBytesRead{0};
+  int64_t pageIndexDataBytesPlanned{0};
+  int64_t pageIndexDataBytesAvoided{0};
+  int64_t pageIndexLogicalRuns{0};
+  int64_t pageIndexParseTimeNs{0};
+  int64_t pageIndexEvaluationTimeNs{0};
+  std::unordered_map<std::string, int64_t> pageIndexFallbacks;
+
   // Estimated bytes reported to the memory pool for the deserialized
   // Parquet file footer, when the parquet reader's footer-memory
   // tracking path is engaged. Lets operators compare the estimate

@@ -17,10 +17,11 @@
 #pragma once
 
 #include "velox/dwio/common/BufferUtil.h"
-#include "velox/dwio/common/RowRanges.h"
 #include "velox/dwio/parquet/reader/ColumnPageIndex.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
+#include "velox/dwio/parquet/reader/PagePruningPlan.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
+#include "velox/type/Filter.h"
 
 namespace facebook::velox::common {
 class ScanSpec;
@@ -67,31 +68,20 @@ class ParquetData : public dwio::common::FormatData {
       memory::MemoryPool& pool,
       dwio::common::ColumnReaderStatistics& stats,
       const tz::TimeZone* sessionTimezone,
-      const velox::common::ScanSpec& scanSpec)
-      : pool_(pool),
-        type_(std::static_pointer_cast<const ParquetTypeWithId>(type)),
-        fileMetaDataPtr_(fileMetadataPtr),
-        maxDefine_(type_->maxDefine_),
-        maxRepeat_(type_->maxRepeat_),
-        rowsInRowGroup_(-1),
-        stats_(stats),
-        sessionTimezone_(sessionTimezone),
-        scanSpec_(scanSpec) {}
+      const velox::common::ScanSpec& scanSpec);
 
   /// Prepares to read data for 'index'th row group.
   void enqueueRowGroup(
       uint32_t index,
       dwio::common::BufferedInput& input,
-      dwio::common::RowRanges& rowRanges);
+      const RowGroupPagePruningPlanPtr& pagePlan);
 
   /// Positions 'this' at 'index'th row group. loadRowGroup must be called
   /// first. The returned PositionProvider is empty and should not be used.
   /// Other formats may use it.
   /// Note:
-  /// If page pruning has occurred,
-  /// we create the PageReader using the ColumnPageIndex and the per‑page
-  /// streams produced after pruning. Otherwise, we create the PageReader from
-  /// the original row group data stream.
+  /// If page pruning has occurred, create the PageReader from the immutable
+  /// column plan and exact logical streams. Otherwise, use the whole chunk.
   dwio::common::PositionProvider seekToRowGroup(int64_t index) override;
 
   void filterRowGroups(
@@ -223,33 +213,26 @@ class ParquetData : public dwio::common::FormatData {
   // Returns the <offset, length> of the row group.
   std::pair<int64_t, int64_t> getRowGroupRegion(uint32_t index) const;
 
-  /// Updates the page indices for the row group of 'index'.
-  /// Returns true if we should apply page pruning.
+  uint32_t column() const {
+    return type_->column();
+  }
+
+  /// Collects page-index locations for the row group of 'index'.
+  /// Returns true if page pruning can be applied to this column.
   bool collectIndexPageInfoMap(uint32_t index, PageIndexInfoMap& map);
 
-  /// Generates RowRanges that do not satisfy the given filter.
-  void filterDataPages(
-      uint32_t index,
-      folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>&
-          pageIndices,
-      dwio::common::RowRanges& range,
+  /// Evaluates validated page bounds without changing reader or plan state.
+  void evaluatePageIndex(
+      const ValidatedPageIndexes& pageIndexes,
+      dwio::common::RowIntervalSet& rejectedRows,
       std::vector<std::pair<
           const velox::common::MetadataFilter::LeafNode*,
-          dwio::common::RowRanges>>& metadataFilterResults);
+          dwio::common::RowIntervalSet>>& metadataResults) const;
 
  private:
   /// True if 'filter' may have hits for the column of 'this' according to the
   /// stats in 'rowGroup'.
   bool rowGroupMatches(uint32_t rowGroupId, const common::Filter* filter);
-
-  /// Returns the number of pages skipped in the column chunk of 'index' due to
-  /// page skipping.
-  int64_t handlePageSkipping(
-      uint32_t index,
-      dwio::common::BufferedInput& input,
-      dwio::common::RowRanges& rowRanges,
-      uint64_t chunkReadOffset,
-      uint64_t chunkReadSize);
 
  protected:
   memory::MemoryPool& pool_;
@@ -275,14 +258,21 @@ class ParquetData : public dwio::common::FormatData {
   // Count of leading skipped positions in 'presetNulls_'
   int32_t presetNullsConsumed_{0};
 
-  // The page indices for the row groups.
-  std::vector<std::unique_ptr<ColumnPageIndex>> pageIndices_;
+  // Streams for the exact logical page runs after page pruning.
+  struct PlannedStreams {
+    std::unique_ptr<dwio::common::SeekableInputStream> prefix;
+    std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> runs;
+  };
+  std::vector<std::optional<PlannedStreams>> plannedStreams_;
 
-  // Streams for the pages after page pruning.
-  std::vector<std::vector<std::unique_ptr<dwio::common::SeekableInputStream>>>
-      pagesStreams_;
+  // Retain plans only for row groups in the prefetch window. The current
+  // PageReader keeps the plan object alive through this vector while future
+  // groups wait for their streams to be consumed.
+  std::vector<RowGroupPagePruningPlanPtr> pagePlans_;
 
   const common::ScanSpec& scanSpec_;
+  std::unique_ptr<common::Filter> pageIndexFilter_;
+  std::vector<std::unique_ptr<common::Filter>> pageIndexMetadataFilters_;
 };
 
 } // namespace facebook::velox::parquet

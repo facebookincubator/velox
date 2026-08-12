@@ -222,6 +222,16 @@ uint64_t SelectiveStructColumnReaderBase::skip(uint64_t numValues) {
   return numValues;
 }
 
+void SelectiveStructColumnReaderBase::skipBatch(uint64_t numValues) {
+  numReads_ = scanSpec_->newRead();
+  lazyVectorReadOffset_ = readOffset_;
+  const auto skipped = skip(numValues);
+  setReadOffset(readOffset_ + skipped);
+  inputRows_.clear();
+  outputRows_.clear();
+  nullsInReadRange_.reset();
+}
+
 void SelectiveStructColumnReaderBase::seekToPropagateNullsToChildren(
     int64_t offset) {
   if (offset == readOffset_) {

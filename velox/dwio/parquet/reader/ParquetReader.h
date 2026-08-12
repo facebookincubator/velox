@@ -21,8 +21,10 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/common/RowIntervalSet.h"
 #include "velox/dwio/parquet/common/ParquetConfig.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
+#include "velox/dwio/parquet/reader/PagePruningPlan.h"
 
 namespace facebook::velox::dwio::common {
 
