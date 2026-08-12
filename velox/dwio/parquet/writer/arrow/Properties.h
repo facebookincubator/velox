@@ -695,7 +695,7 @@ class PARQUET_EXPORT WriterProperties {
       return this;
     }
 
-    /// Enable writing page index in general for all columns. Default disabled.
+    /// Enable writing page index in general for all columns. Default enabled.
     ///
     /// Writing statistics to the page index disables the old method of writing
     /// statistics to each data page header.
@@ -710,35 +710,35 @@ class PARQUET_EXPORT WriterProperties {
       return this;
     }
 
-    /// Disable writing page index in general for all columns. Default disabled.
+    /// Disable writing page index in general for all columns. Default enabled.
     Builder* disableWritePageIndex() {
       defaultColumnProperties_.setPageIndexEnabled(false);
       return this;
     }
 
     /// Enable writing page index for column specified by `path`.
-    /// Default disabled.
+    /// Default enabled.
     Builder* enableWritePageIndex(const std::string& path) {
       pageIndexEnabled_[path] = true;
       return this;
     }
 
     /// Enable writing page index for column specified by `path`.
-    /// Default disabled.
+    /// Default enabled.
     Builder* enableWritePageIndex(
         const std::shared_ptr<schema::ColumnPath>& path) {
       return this->enableWritePageIndex(path->toDotString());
     }
 
     /// Disable writing page index for column specified by `path`.
-    /// Default disabled.
+    /// Default enabled.
     Builder* disableWritePageIndex(const std::string& path) {
       pageIndexEnabled_[path] = false;
       return this;
     }
 
     /// Disable writing page index for column specified by `path`.
-    /// Default disabled.
+    /// Default enabled.
     Builder* disableWritePageIndex(
         const std::shared_ptr<schema::ColumnPath>& path) {
       return this->disableWritePageIndex(path->toDotString());

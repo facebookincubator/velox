@@ -153,7 +153,7 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   std::optional<bool> useParquetDataPageV2;
   /// Whether to write the Parquet page index (column index and offset index).
   /// When enabled, per-page statistics are stored in the page index rather than
-  /// the data page headers. Defaults to false.
+  /// the data page headers. Defaults to true.
   std::optional<bool> enableWritePageIndex;
   std::optional<std::string> createdBy;
 

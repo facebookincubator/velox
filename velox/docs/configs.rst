@@ -1129,11 +1129,19 @@ Parquet Options (prefix ``hive.parquet.``)
        Session: ``hive.parquet.writer.enable_store_decimal_as_integer``.
    * - ``writer.enable-page-index``
      - bool
-     - false
+     - true
      - Whether to write the Parquet page index (column index and offset index) when writing into
        Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
        index instead of the data page headers, letting readers skip pages that cannot match a filter.
        Session: ``hive.parquet.writer.enable_page_index``.
+   * - ``writer.size-statistics-level``
+     - string
+     - PAGE_AND_COLUMN_CHUNK
+     - Controls Parquet size statistics written by the Arrow bridge. ``NONE`` disables size
+       statistics; ``COLUMN_CHUNK`` writes only column-chunk statistics; and
+       ``PAGE_AND_COLUMN_CHUNK`` writes both column-chunk and page-level statistics. Page-level
+       statistics require ``writer.enable-page-index`` to be enabled.
+       Session: ``hive.parquet.writer.size_statistics_level``.
 
 Nimble Options (prefix ``hive.nimble.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -250,6 +250,7 @@ TEST_F(ParquetWriterTest, createFormatOptions) {
       {"hive.parquet.writer.page-size", "2KB"},
       {"hive.parquet.writer.created-by", "test-writer"},
       {"hive.parquet.writer.enable-page-index", "true"},
+      {"hive.parquet.writer.size-statistics-level", "COLUMN_CHUNK"},
       {"iceberg.parquet.writer.page-size", "4KB"},
   });
   config::ConfigBase session({
@@ -268,14 +269,18 @@ TEST_F(ParquetWriterTest, createFormatOptions) {
   ASSERT_TRUE(parquetOptions->batchSize.has_value());
   ASSERT_TRUE(parquetOptions->createdBy.has_value());
   ASSERT_TRUE(parquetOptions->enableWritePageIndex.has_value());
+  ASSERT_TRUE(parquetOptions->sizeStatisticsLevel.has_value());
   EXPECT_FALSE(parquetOptions->enableDictionary.value());
   EXPECT_EQ(parquetOptions->dataPageSize.value(), 2 * 1024);
   EXPECT_EQ(parquetOptions->batchSize.value(), 97);
   EXPECT_EQ(parquetOptions->createdBy.value(), "test-writer");
   EXPECT_TRUE(parquetOptions->enableWritePageIndex.value());
+  EXPECT_EQ(
+      parquetOptions->sizeStatisticsLevel.value(),
+      parquetArrow::SizeStatisticsLevel::ColumnChunk);
 
   // When unset in both connector and session config, the option is left unset
-  // so the writer falls back to its default (page index off).
+  // so the writer falls back to its default (page index on).
   {
     auto defaultOptions =
         checkedPointerCast<ParquetWriterOptions>(factory.createFormatOptions(
@@ -810,8 +815,8 @@ TEST_F(ParquetWriterTest, writePageIndex) {
     return {columnChunk.hasColumnIndex(), columnChunk.hasOffsetIndex()};
   };
 
-  // Unset leaves the page index off (default behavior).
-  EXPECT_EQ(writeAndReadPageIndex(std::nullopt), std::make_pair(false, false));
+  // Unset leaves the page index on (default behavior).
+  EXPECT_EQ(writeAndReadPageIndex(std::nullopt), std::make_pair(true, true));
   // Explicitly disabled leaves the page index off.
   EXPECT_EQ(writeAndReadPageIndex(false), std::make_pair(false, false));
   // Enabled writes both the column index and the offset index.

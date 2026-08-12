@@ -376,6 +376,24 @@ std::optional<bool> isParquetV2(std::optional<std::string> version) {
   VELOX_FAIL("Unsupported parquet datapage version {}", *version);
 }
 
+std::optional<arrow::SizeStatisticsLevel> toSizeStatisticsLevel(
+    std::optional<std::string> level) {
+  if (!level) {
+    return std::nullopt;
+  }
+  if (*level == "NONE") {
+    return arrow::SizeStatisticsLevel::None;
+  }
+  if (*level == "COLUMN_CHUNK") {
+    return arrow::SizeStatisticsLevel::ColumnChunk;
+  }
+  if (*level == "PAGE_AND_COLUMN_CHUNK") {
+    return arrow::SizeStatisticsLevel::PageAndColumnChunk;
+  }
+  VELOX_USER_FAIL(
+      "Unsupported parquet writer size statistics level {}", *level);
+}
+
 std::optional<int64_t> toParquetPageSize(std::optional<std::string> pageSize) {
   if (!pageSize) {
     return std::nullopt;
@@ -843,6 +861,8 @@ ParquetWriterFactory::createFormatOptions(
   parquetOptions->enableWritePageIndex = toBoolConfigValue(
       ParquetConfig::writerEnablePageIndex(connectorConfig, session),
       "enable write page index");
+  parquetOptions->sizeStatisticsLevel = toSizeStatisticsLevel(
+      ParquetConfig::writerSizeStatisticsLevel(connectorConfig, session));
   parquetOptions->dataPageSize = toParquetPageSize(
       ParquetConfig::writerPageSize(connectorConfig, session));
   parquetOptions->batchSize = toParquetBatchSize(
