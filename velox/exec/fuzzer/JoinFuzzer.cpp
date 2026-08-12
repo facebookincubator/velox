@@ -721,7 +721,7 @@ void JoinFuzzer::verify(core::JoinType joinType) {
 
   if (core::isLeftSemiProjectJoin(joinType) ||
       core::isRightSemiProjectJoin(joinType)) {
-    outputColumns.push_back("match");
+    outputColumns.emplace_back("match");
   }
 
   shuffleJoinKeys(probeKeys, buildKeys);
