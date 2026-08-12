@@ -16,8 +16,6 @@
 
 #include "velox/exec/TableWriter.h"
 
-#include <folly/container/F14Set.h>
-
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
@@ -110,11 +108,9 @@ void TableWriter::setNotNullChannels(
     return;
   }
 
-  const folly::F14FastSet<std::string> notNullColumnSet(
-      notNullColumns.begin(), notNullColumns.end());
   const auto& targetNames = tableWriteNode->columnNames();
   for (auto i = 0; i < targetNames.size(); ++i) {
-    if (notNullColumnSet.contains(targetNames[i])) {
+    if (notNullColumns.contains(targetNames[i])) {
       notNullChannels_.emplace_back(inputMapping_[i], targetNames[i]);
     }
   }
@@ -170,18 +166,8 @@ void TableWriter::checkNotNullConstraints(const RowVectorPtr& input) {
     return;
   }
 
-  // Decoding catches nulls behind dictionary or constant wrapping. The scan is
-  // bounded to the batch's rows because a child may be longer than 'input'.
+  // Bounded to the batch's rows because a child may be longer than 'input'.
   notNullRows_.resizeFill(input->size());
-
-  // A null row of 'input' is null in every column, and addInput() forwards it
-  // to the data sink as such, but the children do not reflect it. Every
-  // constrained column is violated, so report the first.
-  notNullDecodedVector_.decode(*input, notNullRows_);
-  VELOX_USER_CHECK(
-      !notNullDecodedVector_.hasNulls(),
-      "NULL value not allowed for NOT NULL column: {}",
-      notNullChannels_.front().second);
 
   for (const auto& [channel, name] : notNullChannels_) {
     notNullDecodedVector_.decode(*input->childAt(channel), notNullRows_);

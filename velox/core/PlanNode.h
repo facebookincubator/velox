@@ -16,6 +16,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <folly/container/F14Set.h>
 
 #include <utility>
 
@@ -57,12 +58,12 @@ struct TransportKind {
 /// Generic representation of InsertTable
 struct InsertTableHandle {
  public:
-  /// @param notNullColumns Throws a user error if it contains duplicates.
+  /// @param notNullColumns Throws a user error if any name is empty.
   InsertTableHandle(
       const std::string& connectorId,
       const connector::ConnectorInsertTableHandlePtr&
           connectorInsertTableHandle,
-      std::vector<std::string> notNullColumns);
+      folly::F14FastSet<std::string> notNullColumns);
 
   const std::string& connectorId() const {
     return connectorId_;
@@ -73,9 +74,8 @@ struct InsertTableHandle {
     return connectorInsertTableHandle_;
   }
 
-  /// Unique target columns that must not contain nulls. Empty if
-  /// unconstrained.
-  const std::vector<std::string>& notNullColumns() const {
+  /// Target columns that must not contain nulls. Empty if unconstrained.
+  const folly::F14FastSet<std::string>& notNullColumns() const {
     return notNullColumns_;
   }
 
@@ -86,7 +86,7 @@ struct InsertTableHandle {
   // Write request to a DataSink of that connector type
   const connector::ConnectorInsertTableHandlePtr connectorInsertTableHandle_;
 
-  const std::vector<std::string> notNullColumns_;
+  const folly::F14FastSet<std::string> notNullColumns_;
 };
 
 class SortOrder {

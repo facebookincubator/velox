@@ -374,7 +374,7 @@ class TableWriteTest : public CudfHiveConnectorTestBase {
             outputRowType->children(),
             makeLocationHandle(outputDirectoryPath, outputTableType),
             compressionKind),
-        /*notNullColumns=*/std::vector<std::string>{});
+        /*notNullColumns=*/folly::F14FastSet<std::string>{});
   }
 
   // Returns a table insert plan node.

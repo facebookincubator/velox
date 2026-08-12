@@ -3092,15 +3092,12 @@ void validateGroupingKeys(
 InsertTableHandle::InsertTableHandle(
     const std::string& connectorId,
     const connector::ConnectorInsertTableHandlePtr& connectorInsertTableHandle,
-    std::vector<std::string> notNullColumns)
+    folly::F14FastSet<std::string> notNullColumns)
     : connectorId_(connectorId),
       connectorInsertTableHandle_(connectorInsertTableHandle),
       notNullColumns_(std::move(notNullColumns)) {
-  folly::F14FastSet<std::string> seenColumns;
-  seenColumns.reserve(notNullColumns_.size());
   for (const auto& name : notNullColumns_) {
-    VELOX_USER_CHECK(
-        seenColumns.insert(name).second, "Duplicate NOT NULL column: {}", name);
+    VELOX_USER_CHECK(!name.empty(), "NOT NULL column name must not be empty");
   }
 }
 
@@ -3192,15 +3189,17 @@ void addStatsSpecDetails(
 } // namespace
 
 void TableWriteNode::addDetails(std::stringstream& stream) const {
-  stream << insertTableHandle_->connectorId() << ", "
-         << folly::join(", ", columnNames_);
+  stream << insertTableHandle_->connectorId();
+  const auto& notNullColumns = insertTableHandle_->notNullColumns();
+  for (const auto& columnName : columnNames_) {
+    stream << ", " << columnName;
+    if (notNullColumns.contains(columnName)) {
+      stream << " not null";
+    }
+  }
   if (columnStatsSpec_.has_value()) {
     stream << ", ";
     addStatsSpecDetails(stream, columnStatsSpec_);
-  }
-  const auto& notNullColumns = insertTableHandle_->notNullColumns();
-  if (!notNullColumns.empty()) {
-    stream << ", notNullColumns: [" << folly::join(", ", notNullColumns) << "]";
   }
 }
 
@@ -3277,9 +3276,13 @@ folly::dynamic TableWriteNode::serialize() const {
   obj["outputType"] = outputType_->serialize();
   obj["commitStrategy"] =
       std::string(connector::CommitStrategyName::toName(commitStrategy_));
-  if (!insertTableHandle_->notNullColumns().empty()) {
-    obj["notNullColumns"] =
-        ISerializable::serialize(insertTableHandle_->notNullColumns());
+  const auto& notNullColumns = insertTableHandle_->notNullColumns();
+  if (!notNullColumns.empty()) {
+    // Sorted to keep the serialized form stable across runs.
+    std::vector<std::string> sortedNotNullColumns(
+        notNullColumns.begin(), notNullColumns.end());
+    std::sort(sortedNotNullColumns.begin(), sortedNotNullColumns.end());
+    obj["notNullColumns"] = ISerializable::serialize(sortedNotNullColumns);
   }
   return obj;
 }
@@ -3308,10 +3311,11 @@ PlanNodePtr TableWriteNode::create(const folly::dynamic& obj, void* context) {
   if (obj.count("columnStatsSpec") != 0) {
     columnStatsSpec = ColumnStatsSpec::create(obj["columnStatsSpec"], context);
   }
-  std::vector<std::string> notNullColumns;
+  folly::F14FastSet<std::string> notNullColumns;
   if (obj.count("notNullColumns") != 0) {
-    notNullColumns = ISerializable::deserialize<std::vector<std::string>>(
+    const auto names = ISerializable::deserialize<std::vector<std::string>>(
         obj["notNullColumns"]);
+    notNullColumns.insert(names.begin(), names.end());
   }
   return std::make_shared<TableWriteNode>(
       id,

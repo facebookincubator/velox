@@ -709,7 +709,7 @@ the written file paths on storage and the collected column stats.
    * - aggregationNode
      - Optional Aggregation plan node used to collect column stats for the data written to storage.
    * - insertTableHandle
-     - Connector-specific description of the destination table. Its notNullColumns is a unique subset of columnNames; writing a null into one of them fails the query.
+     - Connector-specific description of the destination table. Its notNullColumns is a subset of columnNames; writing a null into one of them fails the query.
    * - outputType
      - A list of output columns containing the metadata of the data written storage.
 
