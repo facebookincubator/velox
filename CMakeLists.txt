@@ -66,6 +66,7 @@ list(
 include(ResolveDependency)
 include(VeloxUtils)
 include(CMakeDependentOption)
+include(CheckIPOSupported)
 
 velox_set_with_default(VELOX_DEPENDENCY_SOURCE_DEFAULT VELOX_DEPENDENCY_SOURCE AUTO)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
@@ -91,6 +92,7 @@ option(VELOX_MONO_LIBRARY "Build single unified library." ON)
 option(ENABLE_ALL_WARNINGS "Enable -Wall and -Wextra compiler warnings." ON)
 option(VELOX_BUILD_SHARED "Build Velox as shared libraries." OFF)
 option(VELOX_BUILD_CMAKE_PACKAGE "Build CMake package for Velox." OFF)
+option(VELOX_ENABLE_LTO "Enable link-time optimization (IPO/LTO)." OFF)
 option(VELOX_SKIP_WAVE_BRANCH_KERNEL_TEST "Disable Wave branch kernel test." OFF)
 # While it's possible to build both in one go we currently want to build either
 # static or shared.
@@ -114,6 +116,18 @@ if(VELOX_BUILD_SHARED)
     "When building Velox as a shared library it's recommended to build against a shared build of folly to avoid issues with linking of gflags. "
     "This is currently NOT being enforced so user discretion is advised."
   )
+endif()
+
+if(VELOX_ENABLE_LTO)
+  check_ipo_supported(RESULT VELOX_IPO_SUPPORTED OUTPUT VELOX_IPO_ERROR LANGUAGES CXX)
+  if(NOT VELOX_IPO_SUPPORTED)
+    message(
+      FATAL_ERROR
+      "VELOX_ENABLE_LTO requested, but IPO/LTO is not supported: ${VELOX_IPO_ERROR}"
+    )
+  endif()
+  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+  message(STATUS "VELOX_ENABLE_LTO enabled")
 endif()
 
 # option() always creates a BOOL variable so we have to use a normal cache
