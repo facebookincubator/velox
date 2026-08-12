@@ -204,12 +204,11 @@ void CudfSplitReader::setupReader() {
 }
 
 void CudfSplitReader::prepareSplitInternal(
-    dwio::common::RuntimeStatistics& /*runtimeStats*/) {
+    dwio::common::RuntimeStats& /*runtimeStats*/) {
   setupReader();
 }
 
-void CudfSplitReader::prepareSplit(
-    dwio::common::RuntimeStatistics& runtimeStats) {
+void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
   // Reset existing split and split readers, if any
   resetSplit();
 
