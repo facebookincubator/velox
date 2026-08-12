@@ -193,6 +193,109 @@ TEST_F(TimezoneFunctionTest, toIso8601Pre1970Instant) {
   assertMatchesCpu("to_iso8601(c0)", input);
 }
 
+// The regression reported in review: with the table ending at 2400, these two
+// instants took the final interval's offset, so July lost daylight saving.
+// America/Los_Angeles observes DST in July, so July 2401 is -07:00 and January
+// 2401 is -08:00; reusing a single trailing interval gets one of them wrong.
+// TIMESTAMP WITH TIME ZONE stores 52-bit millis, so both instants are
+// representable and CPU answers correctly from the horizon-free tzdb rules.
+//
+// Asserted through timezone_hour rather than by comparing the TIMESTAMP WITH
+// TIME ZONE column: that type's comparator orders on unpacked UTC millis and
+// ignores the zone key, so a wrong offset is invisible to a direct comparison.
+TEST_F(TimezoneFunctionTest, timezoneHourYear2401Summer) {
+  // 2401-07-15T12:00:00Z.
+  auto input =
+      timestampWithTimeZoneInput(13'617'979'200'000, "America/Los_Angeles");
+  assertMatchesCpu("timezone_hour(c0)", input);
+}
+
+TEST_F(TimezoneFunctionTest, timezoneHourYear2401Winter) {
+  // 2401-01-15T12:00:00Z.
+  auto input =
+      timestampWithTimeZoneInput(13'602'340'800'000, "America/Los_Angeles");
+  assertMatchesCpu("timezone_hour(c0)", input);
+}
+
+// Widening the materialized window moves its edges; it does not remove them. An
+// instant outside the window in either direction must still get the offset CPU
+// gives, since a 52-bit millis field reaches roughly year 71,000 and tzdb
+// answers from recurring rules with no horizon.
+//
+// Above the end, the lookup used to fold onto the final interval and lose
+// daylight saving. Below the start it is worse than wrong: the index is
+// `upper_bound - 1`, so an instant before the first transition yields -1 and
+// the gather runs with out_of_bounds_policy::DONT_CHECK. The existing pre-1970
+// case uses 1938, which is inside the window, so nothing covered this.
+TEST_F(TimezoneFunctionTest, timezoneHourBeyondWindowEndSummer) {
+  // 12000-07-15T12:00:00Z.
+  auto input =
+      timestampWithTimeZoneInput(316'533'182'400'000, "America/Los_Angeles");
+  assertMatchesCpu("timezone_hour(c0)", input);
+}
+
+TEST_F(TimezoneFunctionTest, timezoneHourBeyondWindowEndWinter) {
+  // 12000-01-15T12:00:00Z.
+  auto input =
+      timestampWithTimeZoneInput(316'517'457'600'000, "America/Los_Angeles");
+  assertMatchesCpu("timezone_hour(c0)", input);
+}
+
+// A fixed-offset zone has one interval covering all time. Keying that interval
+// at the epoch would send every pre-1970 instant below the first key, and the
+// index lookup subtracts one from upper_bound, so the gather would run out of
+// bounds. Both these instants share a zone whose offset never changes, so the
+// answer is the same either side of 1970 -- what is being pinned is that the
+// earlier one is looked up at all.
+TEST_F(TimezoneFunctionTest, timezoneMinuteFixedOffsetZonePre1970) {
+  auto input = twoZoneTimestampWithTimeZoneInput(
+      -1'000'000'000'000, "+05:30", 1'609'466'400'000, "+05:30");
+  assertMatchesCpu("timezone_minute(c0)", input);
+}
+
+TEST_F(TimezoneFunctionTest, toIso8601FixedOffsetZonePre1970) {
+  auto input = timestampWithTimeZoneInput(-1'000'000'000'000, "+05:30");
+  assertMatchesCpu("to_iso8601(c0)", input);
+}
+
+TEST_F(TimezoneFunctionTest, timezoneHourBeforeWindowStart) {
+  // 1500-06-15T12:00:00Z, well before the first materialized transition. Los
+  // Angeles had no daylight saving then, so this is local mean time.
+  auto input =
+      timestampWithTimeZoneInput(-14'817'470'400'000, "America/Los_Angeles");
+  assertMatchesCpu("timezone_hour(c0)", input);
+}
+
+// The window has to widen more than once in a single process, and widening must
+// not drop coverage it already had. Each step below needs a wider window than
+// the one before, and the ordinary 2021 instant is re-checked at the end to
+// prove the rebuilds did not lose the middle of the range.
+TEST_F(TimezoneFunctionTest, timezoneHourWidensWindowRepeatedly) {
+  const std::vector<int64_t> widening = {
+      1'609'466'400'000, // 2021-01-01, inside the initial window
+      316'533'182'400'000, // 12000-07-15, above it
+      -14'817'470'400'000, // 1500-06-15, below both
+      884'558'318'400'000, // 30000-07-15, above again
+      -24'284'491'200'000, // 1200-06-15, below again
+      1'609'466'400'000, // 2021 again: coverage must not have been lost
+  };
+  for (auto millisUtc : widening) {
+    auto input = timestampWithTimeZoneInput(millisUtc, "America/Los_Angeles");
+    assertMatchesCpu("timezone_hour(c0)", input);
+  }
+}
+
+// A single batch spanning both extremes at once, so one window must cover the
+// pair rather than being widened twice in sequence.
+TEST_F(TimezoneFunctionTest, timezoneHourSpansFarPastAndFarFuture) {
+  auto input = twoZoneTimestampWithTimeZoneInput(
+      -14'817'470'400'000,
+      "America/Los_Angeles",
+      316'533'182'400'000,
+      "America/Los_Angeles");
+  assertMatchesCpu("timezone_hour(c0)", input);
+}
+
 TEST_F(TimezoneFunctionTest, atTimezone) {
   // at_timezone(timestamp with time zone, varchar) -> timestamp with time zone.
   auto input =

@@ -95,15 +95,93 @@ struct Transition {
   int64_t offset;
 };
 
-// Walks the zone's daylight-savings transitions from 1700 to 2400. That window
-// covers the representable range of nanosecond timestamps (~1678-2262) with no
-// folding; instants beyond it reuse the last interval's offset.
-std::vector<Transition> enumerateTransitions(const tz::TimeZone* timeZone) {
+// Bounds of the materialized transition window. The end is exclusive, so 10000
+// covers all of year 9999 -- the upper bound of the year range the rest of this
+// module accepts. A batch reaching past it is answered on the host rather than
+// widening the table, which keeps the table's size fixed and independent of the
+// data.
+constexpr int kTransitionTableStartYear = 1700;
+constexpr int kTransitionTableEndYear = 10000;
+
+int64_t yearStartSeconds(int year) {
+  return std::chrono::duration_cast<std::chrono::seconds>(
+             date::sys_days{date::year{year} / date::January / 1}
+                 .time_since_epoch())
+      .count();
+}
+
+// UTC second at which the materialized window ends. An instant at or past this
+// point is not reliably covered by the table, so its batch is answered on the
+// host instead.
+int64_t transitionWindowEnd() {
+  return yearStartSeconds(kTransitionTableEndYear);
+}
+
+// Largest instant in the column as UTC seconds, used to decide whether the
+// batch stays on the device path. Returns 0 for an empty or all-null column,
+// which always does. Reading the reduced scalar synchronizes the stream; the
+// per-row zone handling in this module already pays a device-to-host sync, so
+// this adds one reduction rather than a new class of stall.
+int64_t maxInstantSeconds(
+    const cudf::column_view& timestamps,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (timestamps.size() == timestamps.null_count()) {
+    return 0;
+  }
+  const auto secondsType = cudf::data_type{cudf::type_id::TIMESTAMP_SECONDS};
+  auto asSeconds = cudf::cast(timestamps, secondsType, stream, mr);
+  auto maxInstant = cudf::reduce(
+      asSeconds->view(),
+      *cudf::make_max_aggregation<cudf::reduce_aggregation>(),
+      secondsType,
+      stream,
+      mr);
+  using ScalarType = cudf::scalar_type_t<cudf::timestamp_s>;
+  auto* typed = static_cast<ScalarType*>(maxInstant.get());
+  if (!typed->is_valid(stream)) {
+    return 0;
+  }
+  return typed->value(stream).time_since_epoch().count();
+}
+
+// Walks the zone's daylight-savings transitions from 1700 up to
+// `horizonSeconds`.
+//
+// An instant past the last materialized transition would fold onto its offset
+// and silently lose daylight saving -- America/Los_Angeles in July 2401
+// reported -08:00 where the correct offset is -07:00, back when the window
+// ended at 2400.
+//
+// Only a TIMESTAMP WITH TIME ZONE can get out that far. It stores 52-bit millis
+// and so reaches roughly year 71,000, whereas a plain TIMESTAMP cannot cross
+// into the GPU past about 2262 at all: Timestamp::toNanos multiplies seconds by
+// 1e9 and raises on overflow, which is where the original 2400 bound came from.
+// Ending the window at 9999 therefore keeps every plain timestamp and any
+// plausible zoned one on the device path; the rest is answered on the host.
+//
+// A zone whose rules recur forever never reports a final interval, which is why
+// enumeration needs a stopping point at all. One whose rules do end reports
+// sys_seconds::max() and terminates early, whatever horizon was asked for.
+std::vector<Transition> enumerateTransitions(
+    const tz::TimeZone* timeZone,
+    int64_t horizonSeconds) {
   using std::chrono::seconds;
 
-  // Offset-only zones (e.g. "+05:30") have a single constant offset.
+  // Offset-only zones (e.g. "+05:30") have one constant offset that applies for
+  // all time, so its interval starts at the earliest representable instant.
+  //
+  // Keying it at the epoch instead left the lookup depending on undefined
+  // behaviour. activeIntervalIndices computes upper_bound - 1, so any pre-1970
+  // instant produced -1, which then indexed a gather running with
+  // out_of_bounds_policy::DONT_CHECK. It happens to return the right answer
+  // today only because the table has exactly one row, so an out-of-range index
+  // cannot reach a different one. A second row would make it read some other
+  // interval's offset.
   if (auto fixed = timeZone->offset(); fixed.has_value()) {
-    return {Transition{0, std::chrono::duration_cast<seconds>(*fixed).count()}};
+    return {Transition{
+        std::numeric_limits<int64_t>::min(),
+        std::chrono::duration_cast<seconds>(*fixed).count()}};
   }
 
   const auto* zone = timeZone->tz();
@@ -112,16 +190,8 @@ std::vector<Transition> enumerateTransitions(const tz::TimeZone* timeZone) {
       "Time zone has neither a fixed offset nor a database entry: {}",
       timeZone->name());
 
-  const auto yearStart = [](int year) {
-    return std::chrono::duration_cast<seconds>(
-               date::sys_days{date::year{year} / date::January / 1}
-                   .time_since_epoch())
-        .count();
-  };
-  const int64_t horizonSeconds = yearStart(2400);
-
   std::vector<Transition> transitions;
-  int64_t probe = yearStart(1700);
+  int64_t probe = yearStartSeconds(kTransitionTableStartYear);
   while (true) {
     auto info = zone->get_info(date::sys_seconds{seconds{probe}});
     transitions.push_back(
@@ -191,8 +261,8 @@ std::unique_ptr<cudf::table> buildForwardTable(
 // Builds the local-keyed inverse table [localInstant (TIMESTAMP_SECONDS),
 // offset (DURATION_SECONDS), gap (BOOL8)] from the zone's transitions. A
 // transition from prevOffset to curOffset at UTC instant `inst` shifts the wall
-// clock between inst+prevOffset and inst+curOffset. A forward shift (curOffset >
-// prevOffset, spring forward) makes that local range nonexistent, so it is
+// clock between inst+prevOffset and inst+curOffset. A forward shift (curOffset
+// > prevOffset, spring forward) makes that local range nonexistent, so it is
 // flagged as a gap; a backward shift (fall back) makes it ambiguous, and
 // keeping the pre-transition offset over the overlap matches toGMT's kEarliest
 // choice (so only the later local boundary needs a breakpoint). Synchronizes
@@ -294,12 +364,23 @@ std::unique_ptr<cudf::column> activeIntervalIndices(
 class OffsetTable {
  public:
   OffsetTable(
+      const tz::TimeZone* timeZone,
       std::unique_ptr<cudf::table> forward,
       std::unique_ptr<cudf::table> inverse)
-      : forward_(std::move(forward)), inverse_(std::move(inverse)) {}
+      : timeZone_(timeZone),
+        forward_(std::move(forward)),
+        inverse_(std::move(inverse)) {}
 
   // Returns the table for `timeZone`, building it on first use and caching it
   // by zone id for the process lifetime. Thread-safe.
+  //
+  // The window has no lower bound to manage: tzdb reports the earliest interval
+  // as beginning at the start of time, so the first key is at or below any
+  // representable instant and a past instant always lands on a real interval.
+  // Only the upper end is bounded, because a zone with recurring
+  // daylight-saving rules never reports a final interval, so enumeration has to
+  // stop somewhere. A batch reaching past that end is answered on the host
+  // instead; see utcOffsetOnHost.
   static std::shared_ptr<const OffsetTable> get(const tz::TimeZone* timeZone);
 
   // Per-row UT offset (DURATION_SECONDS) at each UTC instant; the input null
@@ -324,6 +405,22 @@ class OffsetTable {
       rmm::device_async_resource_ref mr) const;
 
  private:
+  // Offsets for a batch that reaches past the materialized window, computed on
+  // the host from the same tzdb lookup the table itself is built from. tzdb
+  // evaluates recurring rules arithmetically, so it answers any instant without
+  // a horizon.
+  //
+  // The whole batch is routed rather than only the offending rows: such a batch
+  // is rare by construction, and one loop over the column is far less machinery
+  // -- no mask, gather, scatter or index bookkeeping -- on a path that little
+  // else exercises.
+  std::unique_ptr<cudf::column> utcOffsetOnHost(
+      const cudf::column_view& utcTimestamps,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const;
+
+  // Borrowed from the process-wide zone registry, which outlives the cache.
+  const tz::TimeZone* timeZone_;
   // [instant (TIMESTAMP_SECONDS), offset (DURATION_SECONDS)], UTC-keyed.
   std::unique_ptr<cudf::table> forward_;
   // [instant (TIMESTAMP_SECONDS), offset (DURATION_SECONDS), gap (BOOL8)],
@@ -350,9 +447,10 @@ std::shared_ptr<const OffsetTable> OffsetTable::get(
   // tables do not depend on any caller's stream or memory resource.
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
-  auto transitions = enumerateTransitions(timeZone);
+  auto transitions = enumerateTransitions(timeZone, transitionWindowEnd());
   VELOX_CHECK(!transitions.empty());
   auto table = std::make_shared<const OffsetTable>(
+      timeZone,
       buildForwardTable(transitions, stream, mr),
       buildInverseTable(transitions, stream, mr));
   // Another thread may have inserted the same zone meanwhile; emplace keeps the
@@ -360,10 +458,73 @@ std::shared_ptr<const OffsetTable> OffsetTable::get(
   return cache.wlock()->emplace(id, std::move(table)).first->second;
 }
 
+// Copies a column of instants to the host as whole seconds, with a validity
+// flag per row. Shared by both host paths.
+std::pair<std::vector<int64_t>, std::vector<int8_t>> instantsToHost(
+    const cudf::column_view& timestamps,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto asSeconds = cudf::cast(
+      timestamps,
+      cudf::data_type{cudf::type_id::TIMESTAMP_SECONDS},
+      stream,
+      mr);
+  auto valid = cudf::is_valid(asSeconds->view(), stream, mr);
+
+  const auto size = static_cast<size_t>(timestamps.size());
+  std::vector<int64_t> seconds(size);
+  std::vector<int8_t> isValid(size);
+  if (size > 0) {
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        seconds.data(),
+        asSeconds->view().data<int64_t>(),
+        size * sizeof(int64_t),
+        cudaMemcpyDeviceToHost,
+        stream.value()));
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        isValid.data(),
+        valid->view().data<int8_t>(),
+        size * sizeof(int8_t),
+        cudaMemcpyDeviceToHost,
+        stream.value()));
+    stream.synchronize();
+  }
+  return {std::move(seconds), std::move(isValid)};
+}
+
+std::unique_ptr<cudf::column> OffsetTable::utcOffsetOnHost(
+    const cudf::column_view& utcTimestamps,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) const {
+  const auto* zone = timeZone_->tz();
+  VELOX_CHECK_NOT_NULL(
+      zone,
+      "Instant outside the transition window in a zone with no database entry: {}",
+      timeZone_->name());
+
+  auto [seconds, isValid] = instantsToHost(utcTimestamps, stream, mr);
+  std::vector<int64_t> offsets(seconds.size(), 0);
+  for (size_t i = 0; i < seconds.size(); ++i) {
+    if (!isValid[i]) {
+      continue;
+    }
+    offsets[i] =
+        zone->get_info(date::sys_seconds{std::chrono::seconds{seconds[i]}})
+            .offset.count();
+  }
+
+  auto offsetColumn =
+      makeDeviceColumn(offsets, cudf::type_id::DURATION_SECONDS, stream, mr);
+  return withInputNullMask(std::move(offsetColumn), utcTimestamps, stream, mr);
+}
+
 std::unique_ptr<cudf::column> OffsetTable::utcOffset(
     const cudf::column_view& utcTimestamps,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
+  if (maxInstantSeconds(utcTimestamps, stream, mr) >= transitionWindowEnd()) {
+    return utcOffsetOnHost(utcTimestamps, stream, mr);
+  }
   auto indices = activeIntervalIndices(
       forward_->view().column(0), utcTimestamps, stream, mr);
   auto gathered = cudf::gather(
