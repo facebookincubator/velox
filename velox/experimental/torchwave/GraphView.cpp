@@ -117,9 +117,20 @@ void printGraphView(
 
   const ValueTypes* typesPtr =
       (valueMeta && waveGraphHolder) ? &waveGraphHolder->types() : nullptr;
+  // Mirrors the executor: drop read-only clones before partitioning, so the
+  // printed project nodes match what the executor compiles.
+  if (waveGraphHolder && WaveConfig::get().enableReuse &&
+      WaveConfig::get().elideClones) {
+    elideReadOnlyClones(graph, waveGraphHolder->types());
+  }
   std::cout << "\nProject Nodes:\n";
   torch::wave::ParallelNodes parallelNodes;
   auto* lastProjectNode = parallelNodes.makeParallelNodes(graph);
+  // Apply the in-place / clone-elision reuse pass so the printed project nodes
+  // and function counts reflect it (gated on WaveConfig::enableReuse).
+  if (waveGraphHolder && WaveConfig::get().enableReuse) {
+    parallelNodes.rewriteInPlace(graph, waveGraphHolder->types());
+  }
   std::vector<const torch::wave::ProjectNode*> projectNodeList;
   for (auto* pn = lastProjectNode; pn != nullptr; pn = pn->input()) {
     projectNodeList.push_back(pn);

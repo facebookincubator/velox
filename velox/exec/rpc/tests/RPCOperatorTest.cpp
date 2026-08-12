@@ -23,6 +23,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/rpc/RPCPlanNodeTranslator.h"
 #include "velox/exec/rpc/RPCRateLimiter.h"
 #include "velox/exec/rpc/tests/DemoBatchRPCFunction.h"
@@ -31,6 +32,13 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
+
+#include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/futures/Future.h>
+
+#include <chrono>
+
+#include "velox/exec/Task.h"
 
 namespace facebook::velox::exec::rpc {
 
@@ -189,6 +197,26 @@ TEST_F(RPCOperatorTest, basicPerRow) {
   EXPECT_EQ(rows["hello world"], "Response for: hello world");
   EXPECT_EQ(rows["test prompt"], "Response for: test prompt");
   EXPECT_EQ(rows["third row"], "Response for: third row");
+}
+
+// kPerRow output is sized from QueryConfig::preferredOutputBatchRows: 50 rows
+// with a cap of 10 emit at least 5 output vectors.
+TEST_F(RPCOperatorTest, outputBatchSizeFromConfig) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<std::string>(50, [](auto row) {
+                      return fmt::format("row {}", row);
+                    })});
+  auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
+
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config(core::QueryConfig::kPreferredOutputBatchRows, "10")
+                    .copyResults(pool(), task);
+  EXPECT_EQ(result->size(), 50);
+
+  // 50 rows capped at 10 per output vector => at least 5 vectors.
+  const auto planStats = toPlanStats(task->taskStats());
+  EXPECT_GE(planStats.at(plan->id()).outputVectors, 5);
 }
 
 /// Null input rows should produce null in the RPC result column.
@@ -502,6 +530,141 @@ TEST_F(RPCOperatorTest, batchPipelinedDispatch) {
   for (vector_size_t i = 0; i < result->size(); ++i) {
     EXPECT_FALSE(results->isNullAt(i));
   }
+}
+
+namespace {
+
+// BATCH RPC function whose flushBatch completes after a fixed latency on a
+// SEPARATE executor (mirroring a real transport). Lets a test create sustained
+// mid-stream BATCH back-pressure with in-flight batches to wait on.
+class SlowBatchRPCFunction : public AsyncRPCFunction {
+ public:
+  SlowBatchRPCFunction(
+      std::chrono::milliseconds latency,
+      std::shared_ptr<folly::CPUThreadPoolExecutor> executor)
+      : latency_(latency), executor_(std::move(executor)) {}
+
+  void initialize(
+      const core::QueryConfig&,
+      const std::vector<TypePtr>&,
+      const std::vector<VectorPtr>&) override {}
+
+  std::string name() const override {
+    return "slow_batch_rpc";
+  }
+
+  TypePtr resultType() const override {
+    return VARCHAR();
+  }
+
+  std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+  dispatchPerRow(const SelectivityVector&, const std::vector<VectorPtr>&)
+      override {
+    VELOX_UNSUPPORTED("slow_batch_rpc is batch-only");
+  }
+
+  std::vector<vector_size_t> accumulateBatch(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& /*args*/) override {
+    std::vector<vector_size_t> indices;
+    rows.applyToSelected([&](vector_size_t row) {
+      indices.push_back(row);
+      ++pending_;
+    });
+    return indices;
+  }
+
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    const int32_t n =
+        maxRows > 0 ? std::min<int32_t>(maxRows, pending_) : pending_;
+    pending_ -= n;
+    std::vector<RPCResponse> responses;
+    responses.reserve(n);
+    for (int32_t i = 0; i < n; ++i) {
+      RPCResponse response;
+      response.rowId = i;
+      response.result = "ok";
+      responses.push_back(std::move(response));
+    }
+    // Complete after `latency_` on the transport executor (NOT the driver
+    // thread), so the operator has a genuinely in-flight batch to park on. Use
+    // a futures-based delay rather than a blocking sleep so no executor thread
+    // is parked for the latency.
+    return folly::futures::sleep(latency_)
+        .via(executor_.get())
+        .thenValue([responses = std::move(responses)](auto&&) mutable {
+          return std::move(responses);
+        })
+        .semi();
+  }
+
+  int32_t pendingBatchSize() const override {
+    return pending_;
+  }
+
+ private:
+  const std::chrono::milliseconds latency_;
+  std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
+  int32_t pending_{0};
+};
+
+} // namespace
+
+// Regression proof for the BATCH mid-stream back-pressure yield.
+//
+// Before the fix, RPCOperator::isBlocked returned kNotBlocked while a batch was
+// in flight under mid-stream back-pressure, so the driver busy-spun on its
+// thread (never reporting itself blocked) until the batch completed. After the
+// fix it parks (kWaitForRPC) on an in-flight batch, so the driver's
+// blockedWallNanos reflects the batch waits.
+//
+// The plan feeds many single-row Values vectors (input keeps arriving, so
+// noMoreInput_ stays false) into a BATCH RPCNode with dispatchBatchSize=1 and a
+// slow (200ms) batch. With the BATCH window of 2 this produces repeated
+// mid-stream back-pressure. We assert the RPC operator's blockedWallNanos is
+// several multiples of the batch latency (parked). On the pre-fix code it is at
+// most ~one latency (the end-of-input wait only), which fails this assertion.
+TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
+  constexpr std::chrono::milliseconds kLatency{200};
+  auto rpcExecutor = std::make_shared<folly::CPUThreadPoolExecutor>(4);
+  AsyncRPCFunctionRegistry::registerFunction(
+      "slow_batch_rpc", [kLatency, rpcExecutor]() {
+        return std::make_shared<SlowBatchRPCFunction>(kLatency, rpcExecutor);
+      });
+
+  constexpr int kRows = 8;
+  std::vector<RowVectorPtr> inputs;
+  inputs.reserve(kRows);
+  for (int i = 0; i < kRows; ++i) {
+    inputs.push_back(makeRowVector(
+        {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})}));
+  }
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values(inputs).planNode(),
+      {"prompt"},
+      "slow_batch_rpc",
+      /*dispatchBatchSize=*/1);
+
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
+  ASSERT_EQ(result->size(), kRows);
+
+  uint64_t blockedNs = 0;
+  for (const auto& pipeline : task->taskStats().pipelineStats) {
+    for (const auto& op : pipeline.operatorStats) {
+      if (op.operatorType == "RPC") {
+        blockedNs += op.blockedWallNanos;
+      }
+    }
+  }
+
+  const uint64_t latencyNs =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(kLatency).count();
+  EXPECT_GT(blockedNs, 2 * latencyNs)
+      << "RPC operator did not park under mid-stream BATCH back-pressure: "
+      << "blockedWallNanos=" << blockedNs << " latencyNs=" << latencyNs;
 }
 
 /// PER_ROW congestion path. On the function's overload verdict
