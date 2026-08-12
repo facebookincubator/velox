@@ -492,14 +492,6 @@ int64_t ColumnChunkMetaDataPtr::dictionaryPageOffset() const {
            ->dictionary_page_offset());
 }
 
-bool ColumnChunkMetaDataPtr::hasColumnIndex() const {
-  return thriftColumnChunkPtr(ptr_)->column_index_offset().has_value();
-}
-
-bool ColumnChunkMetaDataPtr::hasOffsetIndex() const {
-  return thriftColumnChunkPtr(ptr_)->offset_index_offset().has_value();
-}
-
 common::CompressionKind ColumnChunkMetaDataPtr::compression() const {
   return thriftCodecToCompressionKind(
       apache::thrift::can_throw(
