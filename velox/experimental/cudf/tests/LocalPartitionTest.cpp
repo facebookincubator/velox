@@ -476,5 +476,39 @@ TEST_F(LocalPartitionTest, roundRobinDistributionVerification) {
   ASSERT_EQ(partitionCounts[2], 1);
 }
 
+TEST_F(LocalPartitionTest, gpuBytesTriggerBackpressure) {
+  std::vector<RowVectorPtr> vectors = {makeRowVector(
+      {makeFlatSequence<int64_t>(0, 1'024),
+       makeFlatSequence<int64_t>(0, 1'024)})};
+  createDuckDbTable(vectors);
+
+  for (const int32_t numDrivers : {1, 2}) {
+    SCOPED_TRACE(fmt::format("numDrivers: {}", numDrivers));
+    core::PlanNodeId localPartitionId;
+    auto plan = PlanBuilder()
+                    .values(vectors)
+                    .partialAggregation({"c0"}, {"max(c1)"})
+                    .localPartition({"c0"})
+                    .capturePlanNodeId(localPartitionId)
+                    .finalAggregation()
+                    .planNode();
+
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .maxDrivers(numDrivers)
+            .config(
+                core::QueryConfig::kMaxLocalExchangePartitionCount, numDrivers)
+            .config(core::QueryConfig::kMaxLocalExchangeBufferSize, 4'096)
+            .assertResults("SELECT c0, max(c1) FROM tmp GROUP BY c0");
+
+    const auto stats = exec::toPlanStats(task->taskStats());
+    ASSERT_GT(
+        stats.at(localPartitionId)
+            .customStats.at("blockedWaitForConsumerTimes")
+            .sum,
+        0);
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::exec::test

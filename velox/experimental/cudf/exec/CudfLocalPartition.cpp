@@ -27,12 +27,23 @@
 #include <cudf/copying.hpp>
 #include <cudf/partitioning.hpp>
 
+#include <limits>
+
 namespace facebook::velox::cudf_velox {
 
 namespace {
 template <class... Deriveds, class Base>
 bool isAnyOf(const Base* p) {
   return ((dynamic_cast<const Deriveds*>(p) != nullptr) || ...);
+}
+
+int64_t retainedBytes(const CudfVector& vector) {
+  const auto bytes = vector.retainedSize();
+  VELOX_CHECK_LE(
+      bytes,
+      std::numeric_limits<int64_t>::max(),
+      "CudfVector is too large for local exchange byte accounting");
+  return static_cast<int64_t>(bytes);
 }
 } // namespace
 
@@ -171,8 +182,8 @@ void CudfLocalPartition::enqueuePartition(
   }
 
   ContinueFuture future;
-  auto blockingReason =
-      queues_[partitionIndex]->enqueue(cudfVector, cudfVector->size(), &future);
+  auto blockingReason = queues_[partitionIndex]->enqueue(
+      cudfVector, retainedBytes(*cudfVector), &future);
   if (blockingReason != exec::BlockingReason::kNotBlocked) {
     blockingReasons_.push_back(blockingReason);
     futures_.push_back(std::move(future));
@@ -257,7 +268,7 @@ void CudfLocalPartition::doAddInput(RowVectorPtr input) {
     // Single partition case.
     ContinueFuture future;
     auto blockingReason =
-        queues_[0]->enqueue(input, input->retainedSize(), &future);
+        queues_[0]->enqueue(input, retainedBytes(*cudfVector), &future);
     if (blockingReason != exec::BlockingReason::kNotBlocked) {
       blockingReasons_.push_back(blockingReason);
       futures_.push_back(std::move(future));

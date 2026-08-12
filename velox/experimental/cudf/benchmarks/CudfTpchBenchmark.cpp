@@ -58,6 +58,11 @@ DEFINE_int32(
     100000,
     "Preferred output batch size in rows for cudf operators.");
 
+DEFINE_uint64(
+    cudf_local_exchange_buffer_size,
+    1UL << 30,
+    "Maximum buffered bytes per local exchange before applying backpressure.");
+
 DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
 
 DEFINE_string(
@@ -107,6 +112,8 @@ void CudfTpchBenchmark::initialize() {
 
   queryConfigs_[facebook::velox::cudf_velox::CudfFromVelox::kGpuBatchSizeRows] =
       std::to_string(FLAGS_cudf_gpu_batch_size_rows);
+  queryConfigs_[core::QueryConfig::kMaxLocalExchangeBufferSize] =
+      std::to_string(FLAGS_cudf_local_exchange_buffer_size);
 }
 
 std::shared_ptr<config::ConfigBase>
