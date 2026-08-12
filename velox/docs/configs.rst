@@ -1127,6 +1127,13 @@ Parquet Options (prefix ``hive.parquet.``)
      - Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
        When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.
        Session: ``hive.parquet.writer.enable_store_decimal_as_integer``.
+   * - ``writer.enable-page-index``
+     - bool
+     - false
+     - Whether to write the Parquet page index (column index and offset index) when writing into
+       Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
+       index instead of the data page headers, letting readers skip pages that cannot match a filter.
+       Session: ``hive.parquet.writer.enable_page_index``.
 
 Nimble Options (prefix ``hive.nimble.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

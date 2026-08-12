@@ -131,6 +131,7 @@ void ParquetWriterOptions::merge(
   mergeIfSet(
       dictionaryPageSizeLimit, parquetOverrides->dictionaryPageSizeLimit);
   mergeIfSet(useParquetDataPageV2, parquetOverrides->useParquetDataPageV2);
+  mergeIfSet(enableWritePageIndex, parquetOverrides->enableWritePageIndex);
   mergeIfSet(dataPageSize, parquetOverrides->dataPageSize);
   mergeIfSet(batchSize, parquetOverrides->batchSize);
   mergeIfSet(createdBy, parquetOverrides->createdBy);
@@ -237,6 +238,12 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
     properties = properties->dataPageVersion(arrow::ParquetDataPageVersion::V2);
   } else {
     properties = properties->dataPageVersion(arrow::ParquetDataPageVersion::V1);
+  }
+  if (parquetOptions.enableWritePageIndex.value_or(
+          facebook::velox::parquet::arrow::DEFAULT_IS_PAGE_INDEX_ENABLED)) {
+    properties = properties->enableWritePageIndex();
+  } else {
+    properties = properties->disableWritePageIndex();
   }
   if (parquetOptions.createdBy.has_value()) {
     properties = properties->createdBy(parquetOptions.createdBy.value());
@@ -831,6 +838,9 @@ ParquetWriterFactory::createFormatOptions(
       ParquetConfig::writerDictionaryPageSizeLimit(connectorConfig, session));
   parquetOptions->useParquetDataPageV2 = isParquetV2(
       ParquetConfig::writerDataPageVersion(connectorConfig, session));
+  parquetOptions->enableWritePageIndex = toBoolConfigValue(
+      ParquetConfig::writerEnablePageIndex(connectorConfig, session),
+      "enable write page index");
   parquetOptions->dataPageSize = toParquetPageSize(
       ParquetConfig::writerPageSize(connectorConfig, session));
   parquetOptions->batchSize = toParquetBatchSize(
