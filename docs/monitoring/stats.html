@@ -672,7 +672,12 @@ lookup. Same prefetch undercounting caveat as indexStripeLoadCpuNanos.</p></td>
 <p>These stats are reported by the file-based connector data source (Hive connector).
 Data stream IO stats use the stat names directly (e.g., <code class="docutils literal notranslate"><span class="pre">storageReadBytes</span></code>).
 Metadata IO stats (footer, stripe groups, index) use a <code class="docutils literal notranslate"><span class="pre">metadata.</span></code> prefix
-(e.g., <code class="docutils literal notranslate"><span class="pre">metadata.storageReadBytes</span></code>, <code class="docutils literal notranslate"><span class="pre">metadata.ramReadBytes</span></code>).</p>
+(e.g., <code class="docutils literal notranslate"><span class="pre">metadata.storageReadBytes</span></code>, <code class="docutils literal notranslate"><span class="pre">metadata.ramReadBytes</span></code>). Reader
+format-specific stats are prefixed with the file format name
+(e.g., <code class="docutils literal notranslate"><span class="pre">dwrf.flattenStringDictionaryValues</span></code>). Column statistics are also
+reported per column using <code class="docutils literal notranslate"><span class="pre">column_&lt;nodeId&gt;</span></code> and the column type. For example,
+<code class="docutils literal notranslate"><span class="pre">parquet.pageLoadTimeNanos</span></code> aggregates all Parquet columns, while
+<code class="docutils literal notranslate"><span class="pre">parquet.column_2.BIGINT.pageLoadTimeNanos</span></code> identifies one column.</p>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 40.0%" />
@@ -714,15 +719,6 @@ over-reading.</p></td>
 <tr class="row-even"><td><p>numStripes</p></td>
 <td></td>
 <td><p>The number of stripes read from the file.</p></td>
-</tr>
-<tr class="row-odd"><td><p>flattenStringDictionaryValues</p></td>
-<td></td>
-<td><p>The number of rows returned by the string dictionary reader that were
-flattened instead of keeping dictionary encoding.</p></td>
-</tr>
-<tr class="row-even"><td><p>pageLoadTimeNs</p></td>
-<td><p>nanos</p></td>
-<td><p>The total time spent loading pages.</p></td>
 </tr>
 <tr class="row-odd"><td><p>numPrefetch</p></td>
 <td></td>
@@ -769,6 +765,48 @@ max per read operation.</p></td>
 coalescing. Measures data locality on disk — smaller gaps indicate
 co-accessed columns are physically adjacent in the file. Includes
 min and max per gap.</p></td>
+</tr>
+<tr class="row-odd"><td><p>parquet.footerEstimatedBytes</p></td>
+<td><p>bytes</p></td>
+<td><p>The estimated memory used by the deserialized Parquet footer when
+footer memory tracking is enabled.</p></td>
+</tr>
+<tr class="row-even"><td><div class="line-block">
+<div class="line">dwrf.flattenStringDictionaryValues</div>
+<div class="line">dwrf.column_&lt;nodeId&gt;.&lt;type&gt;.flattenStringDictionaryValues</div>
+</div>
+</td>
+<td></td>
+<td><p>The number of rows returned by the DWRF string dictionary reader that
+were flattened instead of keeping dictionary encoding. Reported across
+all columns and by column.</p></td>
+</tr>
+<tr class="row-odd"><td><div class="line-block">
+<div class="line">parquet.pageLoadTimeNanos</div>
+<div class="line">parquet.column_&lt;nodeId&gt;.&lt;type&gt;.pageLoadTimeNanos</div>
+</div>
+</td>
+<td><p>nanos</p></td>
+<td><p>The time spent loading Parquet pages. Reported across all columns and
+by column.</p></td>
+</tr>
+<tr class="row-even"><td><div class="line-block">
+<div class="line">&lt;format&gt;.decompressCPUTimeNanos</div>
+<div class="line">&lt;format&gt;.column_&lt;nodeId&gt;.&lt;type&gt;.decompressCPUTimeNanos</div>
+</div>
+</td>
+<td><p>nanos</p></td>
+<td><p>The CPU time spent decompressing column data. Reported across all
+columns and by column.</p></td>
+</tr>
+<tr class="row-odd"><td><div class="line-block">
+<div class="line">&lt;format&gt;.decodeCPUTimeNanos</div>
+<div class="line">&lt;format&gt;.column_&lt;nodeId&gt;.&lt;type&gt;.decodeCPUTimeNanos</div>
+</div>
+</td>
+<td><p>nanos</p></td>
+<td><p>The CPU time spent decoding column data. Reported across all columns,
+and by column.</p></td>
 </tr>
 </tbody>
 </table>

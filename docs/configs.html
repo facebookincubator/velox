@@ -1351,7 +1351,7 @@ to the pool so the next allocation check fails fast instead of
 silently over-consuming. The reservation shrinks as row groups are
 skipped by filterRowGroups and is released in full when the reader
 is destroyed. When tracking engages, the estimate is also surfaced
-per scan via the runtime stat <code class="docutils literal notranslate"><span class="pre">parquetFooterEstimatedBytes</span></code> so
+per scan via the runtime stat <code class="docutils literal notranslate"><span class="pre">parquet.footerEstimatedBytes</span></code> so
 operators can compare it against actual pool usage. Session: <code class="docutils literal notranslate"><span class="pre">parquet_footer_memory_tracking_threshold</span></code>.</p>
 </td>
 </tr>
