@@ -116,6 +116,7 @@ set(
   # group5 (~445s): TableWriterTest 225 + DefaultOutputBufMgr 98
   # + TopNRowNumber 64 + StreamingAgg 58
   TableWriterTest.cpp
+  TableWriterNotNullTest.cpp
   DefaultOutputBufferManagerTest.cpp
   TopNRowNumberTest.cpp
   StreamingAggregationTest.cpp

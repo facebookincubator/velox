@@ -83,7 +83,7 @@ std::function<PlanNodePtr(std::string, PlanNodePtr)> cudfTableWrite(
     auto insertHandle = std::make_shared<core::InsertTableHandle>(
         std::string(connectorId),
         parquetHandle,
-        /*notNullColumns=*/std::vector<std::string>{});
+        /*notNullColumns=*/folly::F14FastSet<std::string>{});
 
     return std::make_shared<core::TableWriteNode>(
         nodeId,

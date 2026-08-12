@@ -371,7 +371,9 @@ TEST_F(PlanNodeBuilderTest, tableWriteNode) {
   const auto outputType = TableWriteTraits::outputType(statsSpec);
 
   const auto insertTableHandle = std::make_shared<InsertTableHandle>(
-      "connector_id", nullptr, /*notNullColumns=*/std::vector<std::string>{});
+      "connector_id",
+      nullptr,
+      /*notNullColumns=*/folly::F14FastSet<std::string>{});
 
   const auto verify = [&](const std::shared_ptr<const TableWriteNode>& node) {
     EXPECT_EQ(node->id(), id);
@@ -400,6 +402,31 @@ TEST_F(PlanNodeBuilderTest, tableWriteNode) {
 
   const auto node2 = TableWriteNode::Builder(*node).build();
   verify(node2);
+}
+
+TEST_F(PlanNodeBuilderTest, tableWriteNodeEmptyNotNullColumn) {
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<InsertTableHandle>(
+          "connector_id", nullptr, folly::F14FastSet<std::string>{""}),
+      "NOT NULL column name must not be empty");
+}
+
+TEST_F(PlanNodeBuilderTest, tableWriteNodeNotNullColumnOutsideSchema) {
+  const auto insertTableHandle = std::make_shared<InsertTableHandle>(
+      "connector_id", nullptr, folly::F14FastSet<std::string>{"c1"});
+
+  VELOX_ASSERT_USER_THROW(
+      TableWriteNode::Builder()
+          .id("test_id")
+          .columns(ROW({"c0"}, {INTEGER()}))
+          .columnNames({"c0"})
+          .insertTableHandle(insertTableHandle)
+          .hasPartitioningScheme(false)
+          .outputType(TableWriteTraits::outputType(std::nullopt))
+          .commitStrategy(connector::CommitStrategy::kNoCommit)
+          .source(source_)
+          .build(),
+      "NOT NULL column is not in the table schema: c1");
 }
 
 TEST_F(PlanNodeBuilderTest, tableWriteMergeNode) {

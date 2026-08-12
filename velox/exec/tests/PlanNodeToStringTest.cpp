@@ -1057,7 +1057,7 @@ TEST_F(PlanNodeToStringTest, tableWrite) {
                     .planNode();
     ASSERT_EQ("-- TableWrite[1]\n", plan->toString());
     ASSERT_EQ(
-        "-- TableWrite[1][test-hive, c0, c1, c2, notNullColumns: [c0, c2]] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY\n",
+        "-- TableWrite[1][test-hive, c0 not null, c1, c2 not null] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY\n",
         plan->toString(true, false));
   }
 

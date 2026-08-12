@@ -98,7 +98,7 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
       const std::vector<std::string>& partitionedBy,
       const std::shared_ptr<HiveBucketProperty> bucketProperty,
       const std::optional<CompressionKind> compressionKind = {},
-      std::vector<std::string> notNullColumns = {}) {
+      folly::F14FastSet<std::string> notNullColumns = {}) {
     return std::make_shared<core::InsertTableHandle>(
         kHiveConnectorId,
         makeHiveInsertTableHandle(
@@ -428,7 +428,7 @@ TEST_F(TableWriterReplayerTest, serdeParametersPreserved) {
           fileFormat_,
           std::nullopt,
           serdeParams),
-      /*notNullColumns=*/std::vector<std::string>{});
+      /*notNullColumns=*/folly::F14FastSet<std::string>{});
 
   std::string traceNodeId;
   auto plan =
@@ -507,7 +507,7 @@ TEST_F(TableWriterReplayerTest, notNullConstraintPreserved) {
 
   auto rowType = asRowType(data->type());
   auto targetDirectoryPath = TempDirectoryPath::create();
-  const std::vector<std::string> notNullColumns = {"c1"};
+  const folly::F14FastSet<std::string> notNullColumns = {"c1"};
   constexpr std::string_view kErrorMessage =
       "NULL value not allowed for NOT NULL column: c1";
 
