@@ -1236,11 +1236,18 @@ class FromIso8601Function : public CudfFunction {
     // keeps it. Groups: 0 year, 1 month, 2 day, 3 hour, 4 minute, 5 second, 6
     // fraction, 7 zone suffix, 8 sign, 9 offset hours, 10 offset minutes.
     // Batch-independent, so build once.
-    isoProgram_ = cudf::strings::regex_program::create(
-        "^([0-9]{4})(?:-([0-9]{2}))?(?:-([0-9]{2}))?"
-        "(?:T([0-9]{2})?(?::([0-9]{2}))?(?::([0-9]{2}))?)?"
-        "(?:[.,]([0-9]+))?"
-        "(Z|([+-])([0-9]{2})(?::?([0-9]{2}))?)?$");
+    //
+    // Everything after the year is shared with extremeProgram_, which exists to
+    // tell a CPU-valid extreme year from a malformed string. The two must
+    // accept the same fields or an extreme year with an invalid field would
+    // match neither and be reported as a parse error instead of an unsupported
+    // year, so the tail is built once here rather than written out twice.
+    const std::string isoTail =
+        "(?:-(0[1-9]|1[0-2])(?:-(0[1-9]|[12][0-9]|3[01]))?)?"
+        "(?:T(?:([01][0-9]|2[0-3])(?::([0-5][0-9])"
+        "(?::([0-5][0-9]|60)(?:[.,]([0-9]+))?)?)?)?)?"
+        "(Z|([+-])(0[0-9]|1[0-4])(?::?([0-5][0-9]))?)?$";
+    isoProgram_ = cudf::strings::regex_program::create("^([0-9]{4})" + isoTail);
     // Identifies a leading time-only form ("Thh...") so eval can prefix the
     // epoch date "1970-01-01" and reuse the date-anchored program. A bare "T"
     // (no digits) does not match, so it stays unprefixed and is later rejected
@@ -1248,13 +1255,10 @@ class FromIso8601Function : public CudfFunction {
     timeOnlyProgram_ = cudf::strings::regex_program::create("^T[0-9]{2}");
     // Matches an otherwise-valid ISO8601 string whose year is signed or has 5+
     // digits -- the CPU-valid extreme years cudf::strings::to_timestamps (int16
-    // %Y) cannot represent. Same tail as isoProgram_ so only the year token
-    // differs; used only as a match test (captures are ignored).
+    // %Y) cannot represent. Only the year token differs from isoProgram_; used
+    // only as a match test, so its captures are ignored.
     extremeProgram_ = cudf::strings::regex_program::create(
-        "^(?:[+-][0-9]{4,}|[0-9]{5,})(?:-([0-9]{2}))?(?:-([0-9]{2}))?"
-        "(?:T([0-9]{2})?(?::([0-9]{2}))?(?::([0-9]{2}))?)?"
-        "(?:[.,]([0-9]+))?"
-        "(Z|([+-])([0-9]{2})(?::?([0-9]{2}))?)?$");
+        "^(?:[+-][0-9]{4,}|[0-9]{5,})" + isoTail);
   }
 
   ColumnOrView eval(

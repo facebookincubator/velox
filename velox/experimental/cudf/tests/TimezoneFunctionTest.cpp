@@ -871,6 +871,85 @@ TEST_F(TimezoneFunctionTest, fromIso8601TimeOnlyWithOffset) {
 
 // Malformed input: CPU (util::fromTimestampWithTimezoneString) throws; the GPU
 // must not silently return NULL. Red until the throw block lands.
+// Out-of-range date, time and offset fields must be rejected, as CPU rejects
+// them. The regex used [0-9]{2} for the hour, minute, second and offset
+// minutes, so each form below parsed to a wrong value instead of failing:
+// "T25:00" rolled into the next day, and "+05:99" passed the +/-840 magnitude
+// check as "+06:39".
+//
+// The two date forms guard the interaction between the day and the offset:
+// both groups are optional, so a day that fails its range could still match as
+// a negative offset and be misclassified instead of rejected. On the
+// extreme-year path that made "+12021-01-32" an unsupported year; offset hours
+// are bounded to 00-14 so neither group accepts it.
+//
+// Raised independently by both reviewers; one regex change closes both threads.
+TEST_F(TimezoneFunctionTest, fromIso8601OutOfRangeFieldsThrowLikeCpu) {
+  for (const auto& invalid : std::vector<std::string>{
+           "2021-13-01", // month past 12
+           "2021-01-32", // day past 31
+           "2021-01-02T25:00", // hour past 23
+           "2021-01-02T12:60", // minute past 59
+           "2021-01-02T12:30:61", // second past the leap second
+           "2021-01-02T12:30:45+05:99", // offset minutes past 59
+           "2021-01-02T:30", // minute without an hour
+           "2021-01-02T12:30.5", // fraction not on the seconds field
+           "2021-01-01.5", // fraction with no time at all
+           "2021.5", // fraction on a year-only form
+       }) {
+    SCOPED_TRACE(invalid);
+    auto input = varcharInput(invalid);
+    auto exprSet = compileExpression(
+        "from_iso8601_timestamp(c0)", asRowType(input->type()));
+    EXPECT_ANY_THROW(
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+    VELOX_ASSERT_THROW(
+        evaluate(*exprSet, input),
+        "Unable to parse timestamp value in from_iso8601_timestamp");
+  }
+}
+
+// A malformed field in a string whose year is out of range must be reported as
+// a parse error, not as an unsupported year. Both programs carry the same tail,
+// so such a string matches neither and is malformed -- which is what CPU calls
+// it. The extreme-year path raises before the calendar round-trip runs, so the
+// ranges in the regex are the only thing that classifies this correctly.
+TEST_F(TimezoneFunctionTest, fromIso8601ExtremeYearWithBadFieldIsMalformed) {
+  for (const auto& invalid : std::vector<std::string>{
+           "+12021-13-01", // month past 12
+           "+12021-01-32", // day past 31
+           "+12021-01-01T25:00", // hour past 23
+       }) {
+    SCOPED_TRACE(invalid);
+    auto input = varcharInput(invalid);
+    auto exprSet = compileExpression(
+        "from_iso8601_timestamp(c0)", asRowType(input->type()));
+    EXPECT_ANY_THROW(
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+    VELOX_ASSERT_THROW(
+        evaluate(*exprSet, input),
+        "Unable to parse timestamp value in from_iso8601_timestamp");
+  }
+}
+
+// The forms next to those boundaries must keep parsing, so the tightened ranges
+// cannot be over-tightened unnoticed.
+//
+// The seconds field still admits 60 on purpose: CPU accepts a leap second and
+// normalises "T12:30:60" to 12:31:00, so rejecting it would trade one parity
+// break for another.
+TEST_F(TimezoneFunctionTest, fromIso8601InRangeFieldBoundariesMatchCpu) {
+  for (const auto& valid : std::vector<std::string>{
+           "2021-01-02T23:59:59",
+           "2021-01-02T12:30:60", // leap second, normalised by CPU
+           "2021-01-02T12:30:45+14:00", // largest legal offset
+           "2021-01-02T12:30:45-00:30", // sub-hour negative offset
+       }) {
+    SCOPED_TRACE(valid);
+    assertMatchesCpu("from_iso8601_timestamp(c0)", varcharInput(valid));
+  }
+}
+
 TEST_F(TimezoneFunctionTest, fromIso8601MalformedThrowsLikeCpu) {
   auto input = varcharInput("not-a-timestamp");
   auto exprSet =
