@@ -355,10 +355,10 @@ class MmapAllocator : public MemoryAllocator {
   void* allocateBytesWithoutRetry(uint64_t bytes, uint16_t alignment) override;
 
   // Ensures that there are at least 'newMappedNeeded' pages that are not
-  // backing any existing allocation. Advises away enough pages backing freed
-  // slots in the size classes to stay within the greater of
-  // 'admissionCapacity' and the current allocated pages. Returns false if it
-  // cannot advise away enough free but backed pages.
+  // backing any existing allocation. Advises away pages backing freed slots
+  // in the size classes toward the greater of 'admissionCapacity' and the
+  // current allocated pages. Returns false only if reclaim falls short and
+  // the current mapped-page count still exceeds that fresh effective bound.
   bool ensureEnoughMappedPages(
       int32_t newMappedNeeded,
       MachinePageCount admissionCapacity);
