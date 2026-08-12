@@ -1699,4 +1699,51 @@ TEST_F(Re2FunctionsTest, parseSubstrings) {
 }
 
 } // namespace
+
+// The Presto regexp_replace path binds prepareRegexpReplacePattern as a
+// template argument (see prestosql/RegexpReplace.h), so it must keep both its
+// signature and its named-group-only behaviour. In particular the Java->RE2
+// translation applied to the Spark functions must not leak into Presto.
+TEST_F(Re2FunctionsTest, prepareRegexpReplacePatternIsNamedGroupOnly) {
+  auto prepare = [](const std::string& pattern) {
+    return prepareRegexpReplacePattern(StringView(pattern));
+  };
+
+  EXPECT_EQ(prepare("(?<name>a)"), "(?P<name>a)");
+
+  // Not rewritten for Presto: these are Spark-only parity fixes.
+  EXPECT_EQ(prepare("\\s"), "\\s");
+  EXPECT_EQ(prepare("\\S"), "\\S");
+  EXPECT_EQ(prepare("\\u0041"), "\\u0041");
+  EXPECT_EQ(prepare("\\p{InGreek}"), "\\p{InGreek}");
+
+  // Usable as a function pointer, which is how Presto consumes it.
+  std::string (*fn)(const StringView&) = &prepareRegexpReplacePattern;
+  EXPECT_EQ(fn(StringView("(?<g>x)")), "(?P<g>x)");
+}
+
+// This helper now delegates to the scanner-based rewrite, which IS a behaviour
+// change for Presto: the previous RE2::GlobalReplace("[(][?]<([^>]*)>") also
+// rewrote '(?<' occurrences that are literal text, so it silently matched the
+// wrong input. RE2 compiles the corrupted spellings, so nothing threw.
+//
+// The corrected results agree with java.util.regex, which is the semantics
+// Presto's regexp_replace documents, e.g. for pattern '\Q(?<g>\E' on input
+// 'a(?<g>b' Java replaces the quoted literal and yields "aXb".
+TEST_F(Re2FunctionsTest, prepareRegexpReplacePatternHonorsQuotingAndClasses) {
+  auto prepare = [](const std::string& pattern) {
+    return prepareRegexpReplacePattern(StringView(pattern));
+  };
+
+  // \Q...\E quotes literal text: no group is declared inside it.
+  EXPECT_EQ(prepare("\\Q(?<g>\\E"), "\\Q(?<g>\\E");
+  // Inside a character class '(' is an ordinary member.
+  EXPECT_EQ(prepare("[(?<g>]"), "[(?<g>]");
+  // An escaped '(' is a literal paren.
+  EXPECT_EQ(prepare("\\(?<g>"), "\\(?<g>");
+
+  // A real named group following a quoted run is still rewritten.
+  EXPECT_EQ(prepare("\\Q(?<g>\\E(?<real>a)"), "\\Q(?<g>\\E(?P<real>a)");
+}
+
 } // namespace facebook::velox::functions
