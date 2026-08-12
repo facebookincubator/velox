@@ -633,33 +633,45 @@ void Writer::setMemoryReclaimers() {
 
 namespace {
 
-// Returns true if 'vector' or any of its descendants is dictionary-encoded.
-// Used to detect dictionary encoding nested inside a top-level complex column
-// (ARRAY/MAP/ROW). Constant descendants are exported densely by the Arrow
-// bridge (flattenConstant=true) and therefore do not need to be checked here.
-bool hasDictionaryDescendant(const VectorPtr& vector) {
+// Returns true if 'vector' or any of its descendants must be flattened before
+// Arrow export. Used to detect encodings nested inside a top-level complex
+// column (ARRAY/MAP/ROW) that the Velox-to-Arrow bridge cannot export:
+//   - A dictionary-encoded descendant would be exported as an Arrow
+//     DictionaryArray, which is only safe for top-level scalar columns.
+//   - A constant wrapping a non-flat vector (constant-of-complex or
+//     constant-of-dictionary) reaches the bridge's flattenConstant path, which
+//     only supports constants over flat scalar values and otherwise fails with
+//     "An unsupported nested encoding was found".
+bool descendantNeedsFlatten(const VectorPtr& vector) {
   if (vector == nullptr) {
     return false;
   }
   switch (vector->encoding()) {
     case VectorEncoding::Simple::DICTIONARY:
       return true;
+    case VectorEncoding::Simple::CONSTANT:
+      // Mirror the top-level constant handling in childNeedsFlatten(): a
+      // constant over a non-flat vector must be flattened, while a constant
+      // over a flat scalar (or a null constant with no value vector) is
+      // exported densely and needs no flattening.
+      return vector->valueVector() != nullptr &&
+          !vector->wrappedVector()->isFlatEncoding();
     case VectorEncoding::Simple::ROW: {
       const auto* row = vector->asUnchecked<RowVector>();
       for (const auto& child : row->children()) {
-        if (hasDictionaryDescendant(child)) {
+        if (descendantNeedsFlatten(child)) {
           return true;
         }
       }
       return false;
     }
     case VectorEncoding::Simple::ARRAY:
-      return hasDictionaryDescendant(
+      return descendantNeedsFlatten(
           vector->asUnchecked<ArrayVector>()->elements());
     case VectorEncoding::Simple::MAP: {
       const auto* map = vector->asUnchecked<MapVector>();
-      return hasDictionaryDescendant(map->mapKeys()) ||
-          hasDictionaryDescendant(map->mapValues());
+      return descendantNeedsFlatten(map->mapKeys()) ||
+          descendantNeedsFlatten(map->mapValues());
     }
     default:
       return false;
@@ -710,12 +722,13 @@ bool childNeedsFlatten(const VectorPtr& child) {
       return true;
     }
   } else if (!child->type()->isPrimitiveType()) {
-    // A flat complex column (ARRAY/MAP/ROW) is not itself flattened, but the
-    // Velox-to-Arrow bridge exports dictionary-encoded descendants as Arrow
-    // DictionaryArrays (flattenDictionary=false). Dictionary passthrough is
-    // only safe for top-level scalar VARCHAR/VARBINARY columns, so flatten the
-    // whole column if any descendant is dictionary-encoded.
-    return hasDictionaryDescendant(child);
+    // A flat complex column (ARRAY/MAP/ROW) is not itself flattened, but a
+    // dictionary- or constant-encoded descendant would break Arrow export:
+    // dictionary passthrough is only safe for top-level scalar
+    // VARCHAR/VARBINARY columns, and the bridge cannot flatten a nested
+    // constant over a complex vector. Flatten the whole column if any
+    // descendant requires it.
+    return descendantNeedsFlatten(child);
   }
   return false;
 }

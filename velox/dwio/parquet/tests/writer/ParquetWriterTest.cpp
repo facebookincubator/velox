@@ -1922,6 +1922,63 @@ TEST_F(ParquetWriterTest, flatComplexWithEncodedDescendantFlattens) {
   assertFlattenedRoundTrip(makeRowVector({structColumn, arrayColumn}));
 }
 
+// Verifies that a flat complex column whose descendant is a CONSTANT wrapping a
+// non-flat (complex) vector is flattened before Arrow export. The constant
+// analogue of flatComplexWithEncodedDescendantFlattens:
+// descendantNeedsFlatten() recurses into ARRAY/MAP/ROW children and must
+// flatten a nested constant-of-complex. Otherwise it reaches the
+// Velox-to-Arrow bridge's flattenConstant path, which supports only constants
+// over flat scalar values, and export fails with "An unsupported nested
+// encoding was found".
+TEST_F(ParquetWriterTest, flatComplexWithConstantOfComplexDescendantFlattens) {
+  constexpr vector_size_t kSize = 500;
+  constexpr int kInnerSize = 10;
+
+  // Builds a CONSTANT wrapping a dictionary over an ARRAY<INTEGER>, so the
+  // constant's wrapped vector is non-flat (ARRAY) -- the same shape as
+  // constantWrappingDictionaryFlattens, but here nested inside a flat complex
+  // column rather than at the top level. Builds fresh vectors on each call:
+  // flattening a complex vector rewrites its children in place, so the expected
+  // (flattened) output must not alias the written input.
+  auto makeConstantOfComplex = [&](vector_size_t size) {
+    auto innerArray = makeArrayVector<int32_t>(
+        kInnerSize,
+        [](auto row) { return row % 3 + 1; },
+        [](auto row) { return static_cast<int32_t>(row); });
+    auto dictOfArray = makeDictionaryColumn(
+        kInnerSize, innerArray, [](auto row) { return row; });
+    auto constVector = BaseVector::wrapInConstant(size, 0, dictOfArray);
+    EXPECT_EQ(constVector->encoding(), VectorEncoding::Simple::CONSTANT);
+    EXPECT_FALSE(constVector->wrappedVector()->isFlatEncoding());
+    return constVector;
+  };
+
+  std::vector<vector_size_t> offsets(kSize);
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    offsets[i] = i;
+  }
+
+  // A flat ROW column and a flat ARRAY column, each carrying a
+  // constant-of-complex descendant.
+  auto data = makeRowVector(
+      {makeRowVector({makeConstantOfComplex(kSize)}),
+       makeArrayVector(offsets, makeConstantOfComplex(kSize))});
+  ASSERT_EQ(data->childAt(0)->encoding(), VectorEncoding::Simple::ROW);
+  ASSERT_EQ(data->childAt(1)->encoding(), VectorEncoding::Simple::ARRAY);
+
+  // Build the expected output from independent vectors, then flatten them.
+  // assertFlattenedRoundTrip() cannot be used here: its flatten() helper
+  // rewrites the input's children in place, which would pre-flatten 'data' and
+  // mask the regression (the writer would never see the nested constant).
+  VectorPtr expectedStruct = makeRowVector({makeConstantOfComplex(kSize)});
+  VectorPtr expectedArray =
+      makeArrayVector(offsets, makeConstantOfComplex(kSize));
+  BaseVector::flattenVector(expectedStruct);
+  BaseVector::flattenVector(expectedArray);
+
+  assertRoundTrip(data, makeRowVector({expectedStruct, expectedArray}));
+}
+
 // Verifies selective per-column flattening: a dict-of-dict column (must
 // flatten) alongside a passthrough dictionary column (must NOT flatten).
 // With blanket flattening, both would be materialized. With selective
