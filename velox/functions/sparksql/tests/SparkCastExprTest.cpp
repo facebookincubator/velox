@@ -2681,5 +2681,122 @@ TEST_F(SparkCastExprTestAnsiOff, realToDecimal) {
   testCast<float, int128_t>(REAL(), DECIMAL(38, 2), {NAN}, {std::nullopt});
 }
 
+TEST_F(SparkCastExprTestAnsiOn, castNumericToIntegralOverflow) {
+  // Casts that overflow the target integral type throw under ANSI mode.
+  auto assertOverflowThrows = [this](
+                                  const std::string& toType,
+                                  const VectorPtr& input,
+                                  const std::string& expectedError) {
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("cast(c0 as {})", toType), makeRowVector({input})),
+        expectedError);
+  };
+
+  assertOverflowThrows(
+      "tinyint",
+      makeFlatVector<int32_t>({256}),
+      "Cannot cast INTEGER '256' to TINYINT");
+  assertOverflowThrows(
+      "smallint",
+      makeFlatVector<int64_t>({100000}),
+      "Cannot cast BIGINT '100000' to SMALLINT");
+  assertOverflowThrows(
+      "integer", makeFlatVector<double>({3.0e10}), "Cannot cast DOUBLE");
+  assertOverflowThrows(
+      "bigint", makeFlatVector<double>({1.0e20}), "Cannot cast DOUBLE");
+  assertOverflowThrows(
+      "tinyint",
+      makeFlatVector<int32_t>({-200}),
+      "Cannot cast INTEGER '-200' to TINYINT");
+  assertOverflowThrows(
+      "smallint",
+      makeFlatVector<int64_t>({-50000}),
+      "Cannot cast BIGINT '-50000' to SMALLINT");
+
+  // In-range values still cast successfully under ANSI mode.
+  testCast<int32_t, int8_t>("tinyint", {127}, {127});
+  testCast<int32_t, int8_t>("tinyint", {-128}, {-128});
+}
+
+TEST_F(SparkCastExprTestAnsiOn, castFloatToIntegralNaN) {
+  // NaN cannot be cast to an integral value under ANSI mode.
+  auto assertNaNThrows = [this](
+                             const std::string& toType,
+                             const VectorPtr& input) {
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("cast(c0 as {})", toType), makeRowVector({input})),
+        "Cannot cast NaN to an integral value");
+  };
+
+  assertNaNThrows(
+      "integer",
+      makeFlatVector<float>({std::numeric_limits<float>::quiet_NaN()}));
+  assertNaNThrows(
+      "bigint",
+      makeFlatVector<double>({std::numeric_limits<double>::quiet_NaN()}));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, castFloatToIntegralInfinity) {
+  // Infinity overflows the target integral type under ANSI mode.
+  auto assertInfinityThrows = [this](const VectorPtr& input) {
+    VELOX_ASSERT_THROW(
+        evaluate("cast(c0 as integer)", makeRowVector({input})),
+        "Cannot cast DOUBLE");
+  };
+
+  assertInfinityThrows(
+      makeFlatVector<double>({std::numeric_limits<double>::infinity()}));
+  assertInfinityThrows(
+      makeFlatVector<double>({-std::numeric_limits<double>::infinity()}));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, tryCastNotAffectedByAnsiMode) {
+  // try_cast returns null on overflow regardless of the ANSI mode setting.
+  testTryCast<int32_t, int8_t>("tinyint", {256}, {std::nullopt});
+  testTryCast<float, int32_t>("integer", {3.0e10f}, {std::nullopt});
+}
+
+TEST_F(SparkCastExprTestAnsiOff, castNumericToIntegralOverflow) {
+  // Casts that overflow the target integral type wrap or saturate when ANSI
+  // mode is disabled.
+  testCast<int32_t, int8_t>("tinyint", {256}, {static_cast<int8_t>(256)});
+  testCast<int64_t, int16_t>(
+      "smallint", {100000}, {static_cast<int16_t>(100000)});
+  testCast<double, int32_t>(
+      "integer", {3.0e10}, {std::numeric_limits<int32_t>::max()});
+}
+
+TEST_F(SparkCastExprTestAnsiOff, tryCastFloatToIntegralSaturation) {
+  // Spark try_cast for float/double to integral saturates when the value
+  // equals the target type's limit after floating-point rounding, and returns
+  // null when the value clearly exceeds the target type's range.
+
+  // Values at the double-rounded limit saturate to min/max.
+  testTryCast<float, int64_t>(
+      "bigint", {9.223372E18f}, {std::numeric_limits<int64_t>::max()});
+  testTryCast<float, int64_t>(
+      "bigint", {-9.223372E18f}, {std::numeric_limits<int64_t>::min()});
+  testTryCast<double, int64_t>(
+      "bigint", {9.223372036854776E18}, {std::numeric_limits<int64_t>::max()});
+  testTryCast<double, int64_t>(
+      "bigint", {-9.223372036854776E18}, {std::numeric_limits<int64_t>::min()});
+  testTryCast<double, int32_t>(
+      "integer", {2147483647.9}, {std::numeric_limits<int32_t>::max()});
+  testTryCast<double, int32_t>(
+      "integer", {-2147483648.9}, {std::numeric_limits<int32_t>::min()});
+
+  // Values beyond the range return null.
+  testTryCast<double, int32_t>("integer", {3.0e10}, {std::nullopt});
+  testTryCast<float, int64_t>("bigint", {1.0e20f}, {std::nullopt});
+  testTryCast<float, int8_t>("tinyint", {3.0e9f}, {std::nullopt});
+  testTryCast<float, int16_t>("smallint", {1.0e6f}, {std::nullopt});
+  testTryCast<double, int8_t>("tinyint", {-200.0}, {std::nullopt});
+  testTryCast<float, int64_t>(
+      "bigint", {std::numeric_limits<float>::quiet_NaN()}, {std::nullopt});
+
+  // In-range values truncate toward zero.
+  testTryCast<float, int8_t>("tinyint", {100.5f}, {100});
+  testTryCast<double, int64_t>("bigint", {42.7}, {42});
+}
 } // namespace
 } // namespace facebook::velox::test
