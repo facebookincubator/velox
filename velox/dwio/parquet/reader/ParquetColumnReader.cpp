@@ -30,8 +30,44 @@
 #include "velox/dwio/parquet/reader/TimeColumnReader.h"
 #include "velox/dwio/parquet/reader/TimestampColumnReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::parquet {
+namespace {
+
+// Builds the TimestampColumnReader variant matching the physical Parquet type.
+// Serves both TIMESTAMP and TIMESTAMP WITH TIME ZONE requested types; the
+// reader inspects the requested type to decide the output representation.
+std::unique_ptr<dwio::common::SelectiveColumnReader> buildTimestampColumnReader(
+    const TypePtr& requestedType,
+    const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
+    ParquetParams& params,
+    common::ScanSpec& scanSpec,
+    const std::string& colName) {
+  const auto parquetType =
+      std::static_pointer_cast<const ParquetTypeWithId>(fileType)->parquetType_;
+  VELOX_CHECK(
+      parquetType.has_value(),
+      "Missing Parquet type information for timestamp column: {}",
+      colName);
+  switch (parquetType.value()) {
+    // INT64 timestamps, used by Delta Lake and modern Parquet writers.
+    case thrift::Type::INT64:
+      return std::make_unique<TimestampColumnReader<int64_t>>(
+          requestedType, fileType, params, scanSpec);
+    // INT96 timestamps, the legacy encoding.
+    case thrift::Type::INT96:
+      return std::make_unique<TimestampColumnReader<int128_t>>(
+          requestedType, fileType, params, scanSpec);
+    default:
+      VELOX_FAIL(
+          "Unsupported Parquet type for timestamp column: {}, {}",
+          static_cast<int>(parquetType.value()),
+          colName);
+  }
+}
+
+} // namespace
 
 // static
 std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
@@ -56,10 +92,19 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
 
   switch (fileType->type()->kind()) {
     case TypeKind::INTEGER:
-    case TypeKind::BIGINT:
     case TypeKind::SMALLINT:
     case TypeKind::TINYINT:
     case TypeKind::HUGEINT:
+      return std::make_unique<IntegerColumnReader>(
+          requestedType, fileType, params, scanSpec);
+
+    case TypeKind::BIGINT:
+      // TIMESTAMP WITH TIME ZONE has BIGINT as its physical type, so a
+      // timestamp reader is needed to unpack the Parquet encoding.
+      if (isTimestampWithTimeZoneType(requestedType)) {
+        return buildTimestampColumnReader(
+            requestedType, fileType, params, scanSpec, colName);
+      }
       return std::make_unique<IntegerColumnReader>(
           requestedType, fileType, params, scanSpec);
 
@@ -97,22 +142,9 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
       return std::make_unique<BooleanColumnReader>(
           requestedType, fileType, params, scanSpec);
 
-    case TypeKind::TIMESTAMP: {
-      const auto parquetType =
-          std::static_pointer_cast<const ParquetTypeWithId>(fileType)
-              ->parquetType_;
-      VELOX_CHECK(parquetType);
-      switch (parquetType.value()) {
-        case thrift::Type::INT64:
-          return std::make_unique<TimestampColumnReader<int64_t>>(
-              requestedType, fileType, params, scanSpec);
-        case thrift::Type::INT96:
-          return std::make_unique<TimestampColumnReader<int128_t>>(
-              requestedType, fileType, params, scanSpec);
-        default:
-          VELOX_UNREACHABLE();
-      }
-    }
+    case TypeKind::TIMESTAMP:
+      return buildTimestampColumnReader(
+          requestedType, fileType, params, scanSpec, colName);
 
     default:
       VELOX_FAIL(

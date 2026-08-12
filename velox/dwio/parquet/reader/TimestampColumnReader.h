@@ -19,6 +19,8 @@
 #include "velox/dwio/parquet/reader/IntegerColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::parquet {
 namespace {
@@ -130,6 +132,11 @@ class TimestampColumnReader : public IntegerColumnReader {
   }
 
   void getValues(const RowSet& rows, VectorPtr* result) override {
+    // TIMESTAMP WITH TIME ZONE is physically an int64 packing millis and a
+    // timezone key, so its values need a second pass below.
+    const bool isTimestampWithTimeZone =
+        isTimestampWithTimeZoneType(requestedType_);
+
     getFlatValues<Timestamp, Timestamp>(rows, result, requestedType_);
     if (allNull_) {
       return;
@@ -154,6 +161,40 @@ class TimestampColumnReader : public IntegerColumnReader {
         rawValues[i] =
             toInt96Timestamp(encoded).toPrecision(requestedPrecision_);
       }
+    }
+    if (isTimestampWithTimeZone) {
+      auto* timestampVector = resultVector->as<FlatVector<Timestamp>>();
+      const auto size = timestampVector->size();
+      const Timestamp* __restrict rawTimestamps = timestampVector->rawValues();
+
+      BufferPtr packedBuffer =
+          AlignedBuffer::allocate<int64_t>(size, timestampVector->pool());
+      int64_t* __restrict rawPacked = packedBuffer->asMutable<int64_t>();
+
+      // Parquet stores timestamps in UTC, so every value carries the UTC key.
+      const int64_t timeZoneBits = tz::getTimeZoneID("UTC") & kTimezoneMask;
+
+      // Null rows are packed along with the rest. Their underlying values are
+      // garbage, but writing them keeps the loop branch-free and vectorizable,
+      // and the null flags shared below mask them out. This is also why
+      // TimestampWithTimeZoneType's pack() is not used here: its range check
+      // would fire on the garbage held by null rows.
+#ifdef __clang__
+#pragma clang loop vectorize(enable)
+#endif
+      for (vector_size_t i = 0; i < size; ++i) {
+        const int64_t millis = rawTimestamps[i].getSeconds() * 1'000 +
+            rawTimestamps[i].getNanos() / 1'000'000;
+        rawPacked[i] = (millis << kMillisShift) | timeZoneBits;
+      }
+
+      *result = std::make_shared<FlatVector<int64_t>>(
+          timestampVector->pool(),
+          requestedType_,
+          timestampVector->nulls(),
+          size,
+          std::move(packedBuffer),
+          std::vector<BufferPtr>{});
     }
   }
 
