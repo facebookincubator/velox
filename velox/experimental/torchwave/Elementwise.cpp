@@ -1091,6 +1091,28 @@ void CompileCtx::elementwiseExprImpl(
     firstValue = false;
   };
 
+  // Forces an own-dims index calculator on every terminal tensor leaf reachable
+  // through 'v'. A fused in-place scatter (tw.slice_scatter / select_scatter /
+  // scatter / scatter_add: hasOutputArg + a valuesArg written per element)
+  // sizes its elementwise loop by 'src' (the valuesArg), not by the op's output
+  // tensor
+  // (== self, which is excluded from sizing). So a non-contiguous src leaf's
+  // per-lane read must decompose 'idx' by the leaf's OWN dims (== src's shape),
+  // not broadcast against self's (larger) shape as the default prologue would.
+  // Marking the leaf routes it to ensureIndexCalculator() so the slow-path
+  // complexIdx() uses the src's real strides.
+  std::function<void(ValueCP)> forceSrcLeafOwnDims = [&](ValueCP v) {
+    if (isTerminal(v)) {
+      if (v->type().kind() == nativert::Type::Kind::Tensor) {
+        generatingOp_->addOwnDimsCalcOffset(op.paramOffset(v));
+      }
+      return;
+    }
+    for (const auto& input : v->producer()->inputs()) {
+      forceSrcLeafOwnDims(input.value);
+    }
+  };
+
   // Gather call args via forArguments for BOTH the generateCall and the default
   // path, so register args that arrive as constant ATTRIBUTES (not graph edges)
   // are emitted too.  The base's scalar support folds e.g. scalar_tensor's
@@ -1119,6 +1141,15 @@ void CompileCtx::elementwiseExprImpl(
           if (isWhole && meta->elementwise && meta->elementwise->hasOutputArg &&
               v->type().kind() == nativert::Type::Kind::Tensor) {
             generatingOp_->addOwnDimsCalcOffset(op.paramOffset(v));
+          }
+          // The register src of a fused in-place scatter (hasOutputArg +
+          // valuesArg) is read per element while the loop is sized by src, not
+          // by self; force own-dims calculators on its leaves so a
+          // non-contiguous src view is read at its real strides.
+          if (isReg && meta->valuesArg.has_value() && meta->elementwise &&
+              meta->elementwise->hasOutputArg &&
+              v->type().kind() == nativert::Type::Kind::Tensor) {
+            forceSrcLeafOwnDims(v);
           }
           processValue(v, isWhole, isReg);
         } else if (attr) {

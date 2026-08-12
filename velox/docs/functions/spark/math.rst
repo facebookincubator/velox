@@ -374,6 +374,25 @@ Mathematical Functions
         SELECT rand(0);    -- 0.7604953758285915
         SELECT rand(NULL); -- 0.7604953758285915
 
+.. spark:function:: randn() -> double
+
+    Returns a random value from the standard normal distribution (mean 0.0 and
+    standard deviation 1.0). ::
+
+        SELECT randn(); -- -1.1750280342265669
+
+.. spark:function:: randn(seed) -> double
+
+    Returns a random value from the standard normal distribution (mean 0.0 and
+    standard deviation 1.0) using a seed formed by combining user-specified
+    ``seed`` and the configuration `spark.partition_id`. The framework is
+    responsible for deterministic partitioning of the data and assigning unique
+    `spark.partition_id` to each thread (in a deterministic way).
+    ``seed`` must be constant. NULL ``seed`` is identical to zero ``seed``. ::
+
+        SELECT randn(0);    -- 1.6034991609278433
+        SELECT randn(NULL); -- 1.6034991609278433
+
 .. spark:function:: random() -> double
 
     An alias for ``rand()``.

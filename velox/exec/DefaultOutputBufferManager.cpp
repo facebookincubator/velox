@@ -134,7 +134,8 @@ void DefaultOutputBufferManager::initializeTask(
     std::shared_ptr<Task> task,
     core::PartitionedOutputNode::Kind kind,
     int numDestinations,
-    int numDrivers) {
+    int numDrivers,
+    const std::string& /*transportOptions*/) {
   const auto& taskId = task->taskId();
 
   buffers_.withLock([&](auto& buffers) {

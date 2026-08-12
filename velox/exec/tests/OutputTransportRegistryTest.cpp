@@ -47,7 +47,8 @@ class MockOutputBufferManager : public OutputBufferManager {
       std::shared_ptr<Task> /*task*/,
       core::PartitionedOutputNode::Kind /*kind*/,
       int /*numDestinations*/,
-      int /*numDrivers*/) override {
+      int /*numDrivers*/,
+      const std::string& /*transportOptions*/) override {
     ++initCount;
   }
 
