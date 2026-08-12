@@ -16,9 +16,6 @@
 
 #include "velox/connectors/hive/FileSplitReader.h"
 
-#include <cstddef>
-#include <cstdint>
-
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/FileConfig.h"
@@ -26,7 +23,6 @@
 #include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/core/VectorUtil.h"
 #include "velox/dwio/common/ReaderFactory.h"
-#include "velox/type/DecimalUtil.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::connector::hive {
@@ -87,7 +83,8 @@ FileSplitReader::FileSplitReader(
           connectorQueryCtx->sessionTimezone().empty()
               ? nullptr
               : tz::locateZone(connectorQueryCtx->sessionTimezone())),
-      adjustTimestampToTimezone_(connectorQueryCtx->adjustTimestampToTimezone()),
+      adjustTimestampToTimezone_(
+          connectorQueryCtx->adjustTimestampToTimezone()),
       scanSpec_(scanSpec),
       subfieldFiltersForValidation_(subfieldFiltersForValidation),
       fileSplit_(fileSplit),

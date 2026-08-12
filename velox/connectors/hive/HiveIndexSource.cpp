@@ -16,7 +16,6 @@
 #include "velox/connectors/hive/HiveIndexSource.h"
 #include "velox/core/VectorUtil.h"
 
-
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Set.h>
 #include "velox/common/base/RuntimeMetrics.h"
@@ -1136,12 +1135,13 @@ void HiveIndexSource::createSplitGroup(
     const auto& partitionValue =
         extractPartitionValue(split, cond.partitionColumnName);
     const auto& handle = partitionKeyHandles_.at(cond.partitionColumnName);
-    group.partitionValues.emplace_back(core::newConstantFromString(
-        handle->dataType(),
-        partitionValue,
-        pool_,
-        readTimestampAsLocal,
-        cond.isPartitionDateValueDaysSinceEpoch));
+    group.partitionValues.emplace_back(
+        core::newConstantFromString(
+            handle->dataType(),
+            partitionValue,
+            pool_,
+            readTimestampAsLocal,
+            cond.isPartitionDateValueDaysSinceEpoch));
   }
 
   // Store splits for lazy reader creation on first access.

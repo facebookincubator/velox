@@ -20,12 +20,15 @@
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Timestamp.h"
+#include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::parquet;
 using namespace facebook::velox::dwio::common;
+
+namespace {
 
 class TimestampWithTimeZoneTest : public ParquetTestBase {
  protected:
@@ -34,16 +37,10 @@ class TimestampWithTimeZoneTest : public ParquetTestBase {
     return TIMESTAMP_WITH_TIME_ZONE();
   }
 
-  // Helper to pack timestamp and timezone into int64
-  static int64_t pack(const Timestamp& timestamp, int16_t tzKey) {
-    return (static_cast<int64_t>(timestamp.toMillis()) << 12) | (tzKey & 0xFFF);
-  }
-
-  // Helper to unpack int64 into timestamp and timezone
-  static std::pair<Timestamp, int16_t> unpack(int64_t packed) {
-    int64_t millis = packed >> 12;
-    int16_t tzKey = packed & 0xFFF;
-    return {Timestamp::fromMillis(millis), tzKey};
+  // Splits a packed value using the canonical helpers, so the test never
+  // reimplements the packed layout it is verifying.
+  static std::pair<Timestamp, TimeZoneKey> unpack(int64_t packed) {
+    return {unpackTimestampUtc(packed), unpackZoneKeyId(packed)};
   }
 
   // Write test data to Parquet in memory and return reader
@@ -75,21 +72,19 @@ class TimestampWithTimeZoneTest : public ParquetTestBase {
 
     // Write to Parquet in memory
     auto sink = std::make_unique<MemorySink>(
-        4 * 1024 * 1024,
-        FileSink::Options{.pool = leafPool_.get()});
+        4 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
     auto* sinkPtr = sink.get();
 
     ParquetWriterOptions parquetOptions;
     parquetOptions.writeInt96AsTimestamp = false;
-    parquetOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+    parquetOptions.parquetWriteTimestampUnit =
+        TimestampPrecision::kMicroseconds;
     dwio::common::WriterOptions options;
     options.memoryPool = rootPool_.get();
     options.formatSpecificOptions =
         std::make_shared<ParquetWriterOptions>(parquetOptions);
     auto writer = std::make_unique<parquet::Writer>(
-        std::move(sink),
-        options,
-        writeRowType);
+        std::move(sink), options, writeRowType);
 
     writer->write(batch);
     writer->close();
@@ -106,11 +101,11 @@ class TimestampWithTimeZoneTest : public ParquetTestBase {
 // Test reading INT64 timestamps as TIMESTAMP WITH TIME ZONE
 TEST_F(TimestampWithTimeZoneTest, readInt64Timestamps) {
   std::vector<Timestamp> timestamps = {
-      Timestamp(0, 0),                    // Epoch
-      Timestamp(1000000, 0),              // 1970-01-12 13:46:40
-      Timestamp(1609459200, 0),           // 2021-01-01 00:00:00
-      Timestamp(1735689600, 0),           // 2025-01-01 00:00:00
-      Timestamp(-62135596800, 0),         // 0001-01-01 00:00:00
+      Timestamp(0, 0), // Epoch
+      Timestamp(1000000, 0), // 1970-01-12 13:46:40
+      Timestamp(1609459200, 0), // 2021-01-01 00:00:00
+      Timestamp(1735689600, 0), // 2025-01-01 00:00:00
+      Timestamp(-62135596800, 0), // 0001-01-01 00:00:00
   };
 
   auto reader = writeAndCreateReader(timestamps);
@@ -127,7 +122,7 @@ TEST_F(TimestampWithTimeZoneTest, readInt64Timestamps) {
   auto resultVector = result->loadedVector()->as<RowVector>();
   auto tsVector = resultVector->childAt(0)->as<FlatVector<int64_t>>();
 
-  constexpr int16_t kUtcKey = 0;
+  const TimeZoneKey kUtcKey = tz::getTimeZoneID("UTC");
   for (size_t i = 0; i < timestamps.size(); ++i) {
     ASSERT_FALSE(tsVector->isNullAt(i)) << "Row " << i << " should not be null";
     auto [ts, tzKey] = unpack(tsVector->valueAt(i));
@@ -169,7 +164,8 @@ TEST_F(TimestampWithTimeZoneTest, readWithNulls) {
     if (nulls[i]) {
       EXPECT_TRUE(tsVector->isNullAt(i)) << "Row " << i << " should be null";
     } else {
-      EXPECT_FALSE(tsVector->isNullAt(i)) << "Row " << i << " should not be null";
+      EXPECT_FALSE(tsVector->isNullAt(i))
+          << "Row " << i << " should not be null";
       auto [ts, tzKey] = unpack(tsVector->valueAt(i));
       EXPECT_EQ(ts.getSeconds(), timestamps[i].getSeconds())
           << "Timestamp seconds mismatch at row " << i;
@@ -180,10 +176,10 @@ TEST_F(TimestampWithTimeZoneTest, readWithNulls) {
 // Test reading timestamps with microsecond precision
 TEST_F(TimestampWithTimeZoneTest, readMicrosecondPrecision) {
   std::vector<Timestamp> timestamps = {
-      Timestamp(1000000, 123456000),      // With microseconds
-      Timestamp(2000000, 999999000),      // Max microseconds
-      Timestamp(3000000, 0),              // No fractional seconds
-      Timestamp(4000000, 500000000),      // Half second
+      Timestamp(1000000, 123456000), // With microseconds
+      Timestamp(2000000, 999999000), // Max microseconds
+      Timestamp(3000000, 0), // No fractional seconds
+      Timestamp(4000000, 500000000), // Half second
   };
 
   auto reader = writeAndCreateReader(timestamps);
@@ -206,18 +202,19 @@ TEST_F(TimestampWithTimeZoneTest, readMicrosecondPrecision) {
         << "Timestamp seconds mismatch at row " << i;
     // Note: Precision may be adjusted during conversion
     EXPECT_GE(ts.getNanos(), 0) << "Nanos should be non-negative at row " << i;
-    EXPECT_LT(ts.getNanos(), 1000000000) << "Nanos should be < 1 second at row " << i;
+    EXPECT_LT(ts.getNanos(), 1000000000)
+        << "Nanos should be < 1 second at row " << i;
   }
 }
 
 // Test reading negative timestamps (before epoch)
 TEST_F(TimestampWithTimeZoneTest, readNegativeTimestamps) {
   std::vector<Timestamp> timestamps = {
-      Timestamp(-1000000, 0),             // Before epoch
-      Timestamp(-86400, 0),               // 1969-12-31 00:00:00
-      Timestamp(-1, 999999999),           // Just before epoch
-      Timestamp(0, 0),                    // Epoch
-      Timestamp(1, 0),                    // Just after epoch
+      Timestamp(-1000000, 0), // Before epoch
+      Timestamp(-86400, 0), // 1969-12-31 00:00:00
+      Timestamp(-1, 999999999), // Just before epoch
+      Timestamp(0, 0), // Epoch
+      Timestamp(1, 0), // Just after epoch
   };
 
   auto reader = writeAndCreateReader(timestamps);
@@ -234,7 +231,7 @@ TEST_F(TimestampWithTimeZoneTest, readNegativeTimestamps) {
   auto resultVector = result->loadedVector()->as<RowVector>();
   auto tsVector = resultVector->childAt(0)->as<FlatVector<int64_t>>();
 
-  constexpr int16_t kUtcKey = 0;
+  const TimeZoneKey kUtcKey = tz::getTimeZoneID("UTC");
   for (size_t i = 0; i < timestamps.size(); ++i) {
     auto [ts, tzKey] = unpack(tsVector->valueAt(i));
     EXPECT_EQ(ts.getSeconds(), timestamps[i].getSeconds())
@@ -355,7 +352,7 @@ TEST_F(TimestampWithTimeZoneTest, readInt96Timestamps) {
   auto resultVector = result->loadedVector()->as<RowVector>();
   auto tsVector = resultVector->childAt(0)->as<FlatVector<int64_t>>();
 
-  constexpr int16_t kUtcKey = 0;
+  const TimeZoneKey kUtcKey = tz::getTimeZoneID("UTC");
   for (size_t i = 0; i < timestamps.size(); ++i) {
     ASSERT_FALSE(tsVector->isNullAt(i));
     auto [ts, tzKey] = unpack(tsVector->valueAt(i));
@@ -364,3 +361,5 @@ TEST_F(TimestampWithTimeZoneTest, readInt96Timestamps) {
     EXPECT_EQ(tzKey, kUtcKey) << "Timezone key should be UTC at row " << i;
   }
 }
+
+} // namespace

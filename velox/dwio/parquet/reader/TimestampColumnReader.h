@@ -20,6 +20,7 @@
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::parquet {
 namespace {
@@ -131,8 +132,10 @@ class TimestampColumnReader : public IntegerColumnReader {
   }
 
   void getValues(const RowSet& rows, VectorPtr* result) override {
-    // Check if we need to produce packed int64 for TIMESTAMP_WITH_TIME_ZONE
-    const bool isTimestampWithTZ = isTimestampWithTimeZoneType(requestedType_);
+    // TIMESTAMP WITH TIME ZONE is physically an int64 packing millis and a
+    // timezone key, so its values need a second pass below.
+    const bool isTimestampWithTimeZone =
+        isTimestampWithTimeZoneType(requestedType_);
 
     getFlatValues<Timestamp, Timestamp>(rows, result, requestedType_);
     if (allNull_) {
@@ -159,44 +162,40 @@ class TimestampColumnReader : public IntegerColumnReader {
             toInt96Timestamp(encoded).toPrecision(requestedPrecision_);
       }
     }
-    if (isTimestampWithTZ) {
-      auto timestampVector = resultVector->as<FlatVector<Timestamp>>();
-      auto size = timestampVector->size();
+    if (isTimestampWithTimeZone) {
+      auto* timestampVector = resultVector->as<FlatVector<Timestamp>>();
+      const auto size = timestampVector->size();
+      const Timestamp* __restrict rawTimestamps = timestampVector->rawValues();
 
-      const Timestamp* __restrict rawTimestamps =
-          timestampVector->rawValues();
-
-      // Allocate a separate output buffer for packed int64
-      BufferPtr packedBuffer = AlignedBuffer::allocate<int64_t>(
-          size, timestampVector->pool());
+      BufferPtr packedBuffer =
+          AlignedBuffer::allocate<int64_t>(size, timestampVector->pool());
       int64_t* __restrict rawPacked = packedBuffer->asMutable<int64_t>();
 
+      // Parquet stores timestamps in UTC, so every value carries the UTC key.
+      const int64_t timeZoneBits = tz::getTimeZoneID("UTC") & kTimezoneMask;
+
+      // Null rows are packed along with the rest. Their underlying values are
+      // garbage, but writing them keeps the loop branch-free and vectorizable,
+      // and the null flags shared below mask them out. This is also why
+      // TimestampWithTimeZoneType's pack() is not used here: its range check
+      // would fire on the garbage held by null rows.
 #ifdef __clang__
-      #pragma clang loop vectorize(enable)
+#pragma clang loop vectorize(enable)
 #endif
-
       for (vector_size_t i = 0; i < size; ++i) {
-        const int64_t seconds = rawTimestamps[i].getSeconds();
-        const int64_t nanos   = rawTimestamps[i].getNanos();
-
-        // Convert to milliseconds
-        const int64_t millis = seconds * 1000 + nanos / 1'000'000;
-
-        // Pack as (millis << 12) | (tzKey & 0xFFF): upper 52 bits hold
-        // milliseconds since epoch, lower 12 bits hold the timezone key (UTC=0).
-        rawPacked[i] = (millis << 12);
+        const int64_t millis = rawTimestamps[i].getSeconds() * 1'000 +
+            rawTimestamps[i].getNanos() / 1'000'000;
+        rawPacked[i] = (millis << kMillisShift) | timeZoneBits;
       }
 
-      // Create a new FlatVector<int64_t> with the packed buffer
       *result = std::make_shared<FlatVector<int64_t>>(
           timestampVector->pool(),
           requestedType_,
-          timestampVector->nulls(), // share the nulls buffer
+          timestampVector->nulls(),
           size,
-          packedBuffer,             // use the new packed buffer
+          std::move(packedBuffer),
           std::vector<BufferPtr>{});
     }
-
   }
 
   template <

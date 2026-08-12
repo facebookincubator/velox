@@ -62,4 +62,3 @@ class DeltaSplitReader : public HiveSplitReader {
 };
 
 } // namespace facebook::velox::connector::hive::delta
-

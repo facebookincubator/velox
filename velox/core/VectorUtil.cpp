@@ -15,8 +15,6 @@
  */
 
 #include "velox/core/VectorUtil.h"
-#include <cstddef>
-#include <cstdint>
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Timestamp.h"
@@ -26,6 +24,12 @@
 
 namespace facebook::velox::core {
 namespace {
+
+// Timezone key for UTC, resolved once instead of hardcoding its numeric value.
+const TimeZoneKey& utcTimeZoneKey() {
+  static const TimeZoneKey kUtc = tz::getTimeZoneID("UTC");
+  return kUtc;
+}
 
 // Parses a TIMESTAMP WITH TIME ZONE string using Presto-cast semantics and
 // returns a packed int64 constant vector, or nullopt if parsing fails.
@@ -48,7 +52,7 @@ std::optional<VectorPtr> handleTimestampWithTimeZoneTypeConversion(
           "Unknown timezone in TIMESTAMP WITH TIME ZONE value: {}", value);
     }
     // No timezone in string — already UTC, skip toGMT.
-    int64_t packedValue = pack(timestamp.toMillis(), 0 /* UTC */);
+    int64_t packedValue = pack(timestamp.toMillis(), utcTimeZoneKey());
     return std::make_shared<ConstantVector<int64_t>>(
         pool, 1, false, type, std::move(packedValue));
   }
@@ -76,9 +80,9 @@ VectorPtr newConstantFromStringImpl(
     // For Iceberg, the date partition values are already in daysSinceEpoch
     // form.
     if (isDaysSinceEpoch) {
-      days = folly::to<int32_t>(value.value());
+      days = folly::to<int32_t>(*value);
     } else {
-      days = DATE()->toDays(value.value());
+      days = DATE()->toDays(*value);
     }
     return std::make_shared<ConstantVector<int32_t>>(
         pool, 1, false, type, std::move(days));
@@ -89,30 +93,29 @@ VectorPtr newConstantFromStringImpl(
       T decimalValue = 0;
       auto [precision, scale] = getDecimalPrecisionScale(*type);
       auto status = DecimalUtil::castFromString(
-          StringView(value.value()), precision, scale, decimalValue);
+          StringView(*value), precision, scale, decimalValue);
       if (!status.ok()) {
         VELOX_USER_FAIL(status.message());
       }
       return std::make_shared<ConstantVector<T>>(
           pool, 1, false, type, std::move(decimalValue));
     } else if (isTimestampWithTimeZoneType(type)) {
-      auto result = handleTimestampWithTimeZoneTypeConversion(
-          type, value.value(), pool);
+      auto result =
+          handleTimestampWithTimeZoneTypeConversion(type, *value, pool);
       if (result.has_value()) {
-        return result.value();
+        return *result;
       }
-      // Fall through to normal BIGINT handling if conversion failed
+      // Fall through to normal BIGINT handling if conversion failed.
     }
   }
 
   if constexpr (std::is_same_v<T, StringView>) {
     return std::make_shared<ConstantVector<StringView>>(
-        pool, 1, false, type, StringView(value.value()));
+        pool, 1, false, type, StringView(*value));
   } else {
-    auto copy = velox::util::Converter<kind>::tryCast(value.value())
-                    .thenOrThrow(folly::identity, [&](const Status& status) {
-                      VELOX_USER_FAIL("{}", status.message());
-                    });
+    auto copy = velox::util::Converter<kind>::tryCast(*value).thenOrThrow(
+        folly::identity,
+        [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
     if constexpr (kind == TypeKind::TIMESTAMP) {
       // TIMESTAMP partition value is read as local time subject to the
       // 'readTimestampPartitionValueAsLocalTime' setting. TIMESTAMP_UTC

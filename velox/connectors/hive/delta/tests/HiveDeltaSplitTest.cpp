@@ -22,6 +22,8 @@ using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::connector::hive::delta;
 
+namespace {
+
 class HiveDeltaSplitTest : public ::testing::Test {};
 
 TEST_F(HiveDeltaSplitTest, basicConstruction) {
@@ -42,7 +44,8 @@ TEST_F(HiveDeltaSplitTest, basicConstruction) {
 }
 
 TEST_F(HiveDeltaSplitTest, constructionWithAllParameters) {
-  FileProperties properties = {.fileSize = 1024000, .modificationTime = 1234567890};
+  FileProperties properties = {
+      .fileSize = 1024000, .modificationTime = 1234567890};
   auto extraInfo = std::make_shared<std::string>("delta metadata");
 
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
@@ -74,7 +77,8 @@ TEST_F(HiveDeltaSplitTest, constructionWithAllParameters) {
       properties);
 
   EXPECT_EQ("delta-connector", split->connectorId);
-  EXPECT_EQ("/delta/table/year=2024/month=02/day=18/file.parquet", split->filePath);
+  EXPECT_EQ(
+      "/delta/table/year=2024/month=02/day=18/file.parquet", split->filePath);
   EXPECT_EQ(dwio::common::FileFormat::PARQUET, split->fileFormat);
   EXPECT_EQ(100, split->start);
   EXPECT_EQ(50000, split->length);
@@ -198,8 +202,7 @@ TEST_F(HiveDeltaSplitTest, filePropertiesOptional) {
 
   // Test with file properties
   FileProperties properties = {
-      .fileSize = 512000,
-      .modificationTime = 1700000000};
+      .fileSize = 512000, .modificationTime = 1700000000};
 
   auto splitWithProps = std::make_shared<HiveDeltaSplit>(
       "test-connector",
@@ -217,7 +220,8 @@ TEST_F(HiveDeltaSplitTest, filePropertiesOptional) {
 
   EXPECT_TRUE(splitWithProps->properties.has_value());
   EXPECT_EQ(512000, splitWithProps->properties.value().fileSize.value());
-  EXPECT_EQ(1700000000, splitWithProps->properties.value().modificationTime.value());
+  EXPECT_EQ(
+      1700000000, splitWithProps->properties.value().modificationTime.value());
 }
 
 TEST_F(HiveDeltaSplitTest, cacheableFlag) {
@@ -266,9 +270,7 @@ TEST_F(HiveDeltaSplitTest, differentFileFormats) {
 
   // Test with ORC
   auto orcSplit = std::make_shared<HiveDeltaSplit>(
-      "test-connector",
-      "/path/to/file.orc",
-      dwio::common::FileFormat::ORC);
+      "test-connector", "/path/to/file.orc", dwio::common::FileFormat::ORC);
   EXPECT_EQ(dwio::common::FileFormat::ORC, orcSplit->fileFormat);
 }
 
@@ -304,3 +306,5 @@ TEST_F(HiveDeltaSplitTest, inheritanceFromHiveConnectorSplit) {
   EXPECT_EQ("test-connector", hiveSplit->connectorId);
   EXPECT_EQ("/path/to/file.parquet", hiveSplit->filePath);
 }
+
+} // namespace
