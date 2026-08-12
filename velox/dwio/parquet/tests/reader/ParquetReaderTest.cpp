@@ -248,6 +248,35 @@ TEST_F(ParquetReaderTest, parquetFieldIdColumnMapping) {
       *leafPool_);
 }
 
+TEST_F(ParquetReaderTest, nestedNameColumnMapping) {
+  auto data = makeRowVector(
+      {"nested"},
+      {makeRowVector(
+          // Make positional and name-based mapping disagree.
+          {"padding", "present"},
+          {makeFlatVector<int32_t>({10, 20, 30}),
+           makeFlatVector<int32_t>({1, 2, 3})})});
+  auto* sink = write(data);
+
+  const auto outputNestedType = ROW({"present", "missing"}, INTEGER());
+  const auto outputType = ROW("nested", outputNestedType);
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(outputType);
+  readerOptions.setColumnMappingMode(ColumnMappingMode::kName);
+
+  auto readerBundle =
+      readerBuilder(*sink, outputType).options(readerOptions).build();
+  auto expected = makeRowVector(
+      {"nested"},
+      {makeRowVector(
+          {"present", "missing"},
+          {makeFlatVector<int32_t>({1, 2, 3}),
+           makeNullableFlatVector<int32_t>(
+               {std::nullopt, std::nullopt, std::nullopt})})});
+  assertReadWithReaderAndExpected(
+      outputType, *readerBundle.rowReader, expected, *leafPool_);
+}
+
 TEST_F(ParquetReaderTest, parseEmptyNestedList) {
   // parse_empty_nested_list.parquet holds 1,000 rows of the following data:
   //

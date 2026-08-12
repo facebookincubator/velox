@@ -336,9 +336,8 @@ DwrfRowReader::DwrfRowReader(
     makeProjectedNodes(*getReader().schemaWithId(), *projectedNodes_);
   }
 
-  // Configure reader options before calling 'getUnitLoader()'.
-  // Construction is single-threaded, and the unit loader is created only
-  // after 'columnReaderOptions_' has been initialized.
+  // Keep this before 'getUnitLoader()': it copies 'columnReaderOptions_' into
+  // every DwrfUnit, which then uses the copy to build its column readers.
   columnReaderOptions_ = dwio::common::makeColumnReaderOptions(
       readerBaseShared()->readerOptions());
   unitLoader_ = getUnitLoader();
