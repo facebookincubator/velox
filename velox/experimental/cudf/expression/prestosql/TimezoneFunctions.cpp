@@ -1128,8 +1128,20 @@ class ParseDatetimeFunction : public CudfFunction {
       // "-09:00" and "-0900" match; an absent match (a literal "Z" or a
       // UTC/GMT alias) leaves the null groups that signedOffsetMinutes maps to
       // offset 0 (GMT), matching CPU. Groups: 0 sign, 1 hours, 2 minutes.
-      offsetProgram_ = cudf::strings::regex_program::create(
-          "([+-])([0-9]{2})(?::?([0-9]{2}))?$");
+      //
+      // CPU accepts exactly six forms here and resolves each through
+      // tz::locateZone, where a failed lookup is a parse error
+      // (parseTimezoneOffset in functions/lib/DateTimeFormatter.cpp): "+HH",
+      // "+HH:MM", "+HHMM", "Z", "UTC"/"UCT" and "GMT"/"GMT0". zoneFormProgram_
+      // accepts all six and eval rejects anything else, because an unmatched
+      // trailing zone would otherwise reach signedOffsetMinutes as null groups
+      // and read as GMT. Both programs are built from one numeric pattern so
+      // they cannot disagree about the shape of an offset.
+      const std::string numericOffset = "([+-])([0-9]{2})(?::?([0-5][0-9]))?";
+      offsetProgram_ =
+          cudf::strings::regex_program::create(numericOffset + "$");
+      zoneFormProgram_ = cudf::strings::regex_program::create(
+          "(?:Z|UTC|UCT|GMT0|GMT|" + numericOffset + ")$");
     } else if (trailing != TrailingZone::kNone) {
       VELOX_NYI("parse_datetime zone-name token is not supported on GPU");
     }
@@ -1148,8 +1160,36 @@ class ParseDatetimeFunction : public CudfFunction {
           "parse_datetime on GPU with a non-UTC session timezone is not yet "
           "supported");
     }
+    // to_timestamps is documented as undefined for input that does not match
+    // the format: it reads whatever digits sit at each field position and
+    // computes a timestamp from them, so an out-of-range field rolls over
+    // instead of failing. is_timestamp applies the range and calendar checks
+    // that conversion skips, so validate before converting.
+    //
+    // is_timestamp reports false for a null row, which is not invalid input, so
+    // null rows are admitted explicitly and stay null through the conversion.
+    // It also stops at the last format item rather than at the end of the
+    // string, so text beyond the format is not covered. A trailing zone is
+    // checked separately below, but anything else left over is still accepted
+    // where CPU requires the whole input to be consumed.
+    // TODO: Anchor the match at both ends with a regex derived from the Joda
+    // format, emitted by the same pass that builds strptime_. See
+    // DISABLED_parseDatetimeTrailingTextThrowsLikeCpu.
+    auto strings = cudf::strings_column_view(input);
+    auto validFormat =
+        cudf::strings::is_timestamp(strings, strptime_, stream, mr);
+    auto inputIsNull = cudf::is_null(input, stream, mr);
+    auto validOrNull = cudf::binary_operation(
+        validFormat->view(),
+        inputIsNull->view(),
+        cudf::binary_operator::BITWISE_OR,
+        cudf::data_type{kBool8},
+        stream,
+        mr);
+    checkAllTrue(
+        validOrNull->view(), "Invalid format for parse_datetime", stream, mr);
     auto parsed = cudf::strings::to_timestamps(
-        cudf::strings_column_view(input),
+        strings,
         cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
         strptime_,
         stream,
@@ -1166,12 +1206,29 @@ class ParseDatetimeFunction : public CudfFunction {
           stream,
           mr);
     }
+    // The format carries a zone token, so the input must end in one of the six
+    // forms CPU accepts. Without this check an offset CPU rejects, such as
+    // "+05:99", and a garbled or absent one both leave offsetProgram_ with no
+    // match, and signedOffsetMinutes reads null groups as offset 0 (GMT).
+    auto zoneFormOk =
+        cudf::strings::contains_re(strings, *zoneFormProgram_, stream, mr);
+    auto zoneFormOkOrNull = cudf::binary_operation(
+        zoneFormOk->view(),
+        inputIsNull->view(),
+        cudf::binary_operator::BITWISE_OR,
+        cudf::data_type{kBool8},
+        stream,
+        mr);
+    checkAllTrue(
+        zoneFormOkOrNull->view(),
+        "Invalid timezone offset in parse_datetime",
+        stream,
+        mr);
     // Recover the trailing offset (parsed without "%z", so it is not yet folded
     // into wallMillis) and convert to UTC: utcMillis = wallMillis -
     // offsetMinutes * 60'000. Pack the matching fixed-offset zone key so
     // timezone_hour/to_iso8601 reflect the parsed offset instead of GMT.
-    auto groups = cudf::strings::extract(
-        cudf::strings_column_view(input), *offsetProgram_, stream, mr);
+    auto groups = cudf::strings::extract(strings, *offsetProgram_, stream, mr);
     auto g = groups->view();
     auto offsetMinutes =
         signedOffsetMinutes(g.column(0), g.column(1), g.column(2), stream, mr);
@@ -1213,6 +1270,10 @@ class ParseDatetimeFunction : public CudfFunction {
   bool hasOffset_{false};
   // Compiled trailing-offset extraction program, built once when hasOffset_.
   std::unique_ptr<cudf::strings::regex_program> offsetProgram_;
+  // Accepts the six trailing zone forms CPU allows, including the "Z" and
+  // UTC/GMT aliases that offsetProgram_ deliberately does not match. Built
+  // once when hasOffset_.
+  std::unique_ptr<cudf::strings::regex_program> zoneFormProgram_;
 };
 
 // from_iso8601_timestamp(varchar) -> timestamp with time zone.

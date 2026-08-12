@@ -688,6 +688,106 @@ TEST_F(TimezoneFunctionTest, parseDatetimeNamedUtcAlias) {
       "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
 }
 
+// parse_datetime hands its input straight to cudf::strings::to_timestamps,
+// which cuDF documents as undefined for a string that does not match the
+// format: it reads whatever digits sit at each field position and computes a
+// timestamp from them, so "2026-01-02 25:00:00" rolls into the next day rather
+// than failing. CPU raises a user error for every form below. Red until eval
+// validates its input.
+TEST_F(TimezoneFunctionTest, parseDatetimeInvalidInputThrowsLikeCpu) {
+  for (const auto& invalid : std::vector<std::string>{
+           "not-a-date", // no timestamp at all
+           "2026-01-02 25:00:00", // hour past 23
+           "2026-01-02 00:70:00", // minute past 59
+           "2026-01-02", // missing the time the format requires
+       }) {
+    SCOPED_TRACE(invalid);
+    auto input = varcharInput(invalid);
+    auto exprSet = compileExpression(
+        "parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss')", asRowType(input->type()));
+    EXPECT_ANY_THROW(
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+    VELOX_ASSERT_THROW(
+        evaluate(*exprSet, input), "Invalid format for parse_datetime");
+  }
+}
+
+// Control for the validation above: a NULL row is not invalid input.
+// cudf::strings::is_timestamp reports false for a null, so checking its result
+// alone would throw on a legitimate SQL NULL; the check must exempt null rows
+// and the result must stay null, as on CPU.
+TEST_F(TimezoneFunctionTest, parseDatetimeNullRowStaysNull) {
+  auto input = makeRowVector({makeNullableFlatVector<std::string>(
+      {"2021-01-01 02:00:00", std::nullopt}, VARCHAR())});
+  assertMatchesCpu("parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss')", input);
+}
+
+// When the format carries a zone token, CPU accepts exactly six forms for it --
+// "+HH", "+HH:MM", "+HHMM", "Z", "UTC"/"UCT" and "GMT"/"GMT0" -- and resolves
+// each through tz::locateZone, where a failed lookup is a parse error
+// (DateTimeFormatter.cpp parseTimezoneOffset). The GPU recovered the offset
+// with a regex whose minute group was [0-9]{2} and treated a non-match as
+// offset 0, so "+05:99" became "+06:39" (399 minutes, inside the +/-840 the
+// magnitude check allows) and a garbled or absent offset silently became GMT.
+// Red until the trailing zone is required to be one of CPU's forms.
+// Dropping the zone token from strptime_ leaves the literal that preceded it,
+// so an input ending at the seconds fails the format itself and is reported as
+// a format error; an input that reaches the zone position with something
+// unacceptable there is reported as an offset error. Both are user errors, as
+// on CPU, so each case names the check it trips.
+TEST_F(TimezoneFunctionTest, parseDatetimeInvalidOffsetThrowsLikeCpu) {
+  for (const auto& [invalid, expectedError] :
+       std::vector<std::pair<std::string, std::string>>{
+           // Offset minutes past 59, with and without the colon.
+           {"2021-01-01 02:00:00 +05:99",
+            "Invalid timezone offset in parse_datetime"},
+           {"2021-01-01 02:00:00 +0599",
+            "Invalid timezone offset in parse_datetime"},
+           // Present, but neither an offset nor one of CPU's aliases.
+           {"2021-01-01 02:00:00 bogus",
+            "Invalid timezone offset in parse_datetime"},
+           // No zone at all where the format requires one.
+           {"2021-01-01 02:00:00", "Invalid format for parse_datetime"},
+       }) {
+    SCOPED_TRACE(invalid);
+    auto input = varcharInput(invalid);
+    auto exprSet = compileExpression(
+        "parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss ZZ')",
+        asRowType(input->type()));
+    EXPECT_ANY_THROW(
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+    VELOX_ASSERT_THROW(evaluate(*exprSet, input), expectedError);
+  }
+}
+
+// CPU requires the whole input to be consumed: after the last format token,
+// anything left over is a parse failure (DateTimeFormatter::parse, "Ensure all
+// input was consumed"). cudf::strings::is_timestamp instead stops at the last
+// format item, so text beyond it is unchecked -- both trailing junk and junk
+// between the time and a valid offset are accepted.
+//
+// Closing this needs a shape regex derived from the Joda format so the match
+// can be anchored at both ends. That regex has to be emitted by the same pass
+// that builds strptime_, or the two drift; jodaToStrftime is also where T19's
+// quote and '%' handling lands, so both are done together there rather than
+// restructuring that function twice.
+// TODO: Enable with the format-derived shape regex.
+TEST_F(TimezoneFunctionTest, DISABLED_parseDatetimeTrailingTextThrowsLikeCpu) {
+  for (const auto& [invalid, format] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"2021-01-01 02:00:00 junk", "yyyy-MM-dd HH:mm:ss"},
+           {"2021-01-01 02:00:00 junk +05:30", "yyyy-MM-dd HH:mm:ss ZZ"},
+       }) {
+    SCOPED_TRACE(invalid);
+    auto input = varcharInput(invalid);
+    auto exprSet = compileExpression(
+        "parse_datetime(c0, '" + format + "')", asRowType(input->type()));
+    EXPECT_ANY_THROW(
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+    EXPECT_ANY_THROW(evaluate(*exprSet, input));
+  }
+}
+
 TEST_F(TimezoneFunctionTest, fromIso8601Timestamp) {
   // from_iso8601_timestamp(varchar) -> timestamp with time zone.
   assertMatchesCpu(
