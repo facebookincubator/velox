@@ -817,24 +817,15 @@ TEST_F(TimezoneFunctionTest, parseDatetimeNullRowStaysNull) {
 // offset 0, so "+05:99" became "+06:39" (399 minutes, inside the +/-840 the
 // magnitude check allows) and a garbled or absent offset silently became GMT.
 // Red until the trailing zone is required to be one of CPU's forms.
-// Dropping the zone token from strptime_ leaves the literal that preceded it,
-// so an input ending at the seconds fails the format itself and is reported as
-// a format error; an input that reaches the zone position with something
-// unacceptable there is reported as an offset error. Both are user errors, as
-// on CPU, so each case names the check it trips.
+// The shape regex covers the trailing zone, so a zone outside the forms CPU
+// accepts and a missing one are both reported as a format error rather than
+// each tripping a separate check.
 TEST_F(TimezoneFunctionTest, parseDatetimeInvalidOffsetThrowsLikeCpu) {
-  for (const auto& [invalid, expectedError] :
-       std::vector<std::pair<std::string, std::string>>{
-           // Offset minutes past 59, with and without the colon.
-           {"2021-01-01 02:00:00 +05:99",
-            "Invalid timezone offset in parse_datetime"},
-           {"2021-01-01 02:00:00 +0599",
-            "Invalid timezone offset in parse_datetime"},
-           // Present, but neither an offset nor one of CPU's aliases.
-           {"2021-01-01 02:00:00 bogus",
-            "Invalid timezone offset in parse_datetime"},
-           // No zone at all where the format requires one.
-           {"2021-01-01 02:00:00", "Invalid format for parse_datetime"},
+  for (const auto& invalid : std::vector<std::string>{
+           "2021-01-01 02:00:00 +05:99", // offset minutes past 59
+           "2021-01-01 02:00:00 +0599", // same, without the colon
+           "2021-01-01 02:00:00 bogus", // neither an offset nor an alias
+           "2021-01-01 02:00:00", // no zone where the format requires one
        }) {
     SCOPED_TRACE(invalid);
     auto input = varcharInput(invalid);
@@ -843,7 +834,8 @@ TEST_F(TimezoneFunctionTest, parseDatetimeInvalidOffsetThrowsLikeCpu) {
         asRowType(input->type()));
     EXPECT_ANY_THROW(
         functions::test::FunctionBaseTest::evaluate(*exprSet, input));
-    VELOX_ASSERT_THROW(evaluate(*exprSet, input), expectedError);
+    VELOX_ASSERT_THROW(
+        evaluate(*exprSet, input), "Invalid format for parse_datetime");
   }
 }
 
@@ -858,8 +850,7 @@ TEST_F(TimezoneFunctionTest, parseDatetimeInvalidOffsetThrowsLikeCpu) {
 // that builds strptime_, or the two drift; jodaToStrftime is also where T19's
 // quote and '%' handling lands, so both are done together there rather than
 // restructuring that function twice.
-// TODO: Enable with the format-derived shape regex.
-TEST_F(TimezoneFunctionTest, DISABLED_parseDatetimeTrailingTextThrowsLikeCpu) {
+TEST_F(TimezoneFunctionTest, parseDatetimeTrailingTextThrowsLikeCpu) {
   for (const auto& [invalid, format] :
        std::vector<std::pair<std::string, std::string>>{
            {"2021-01-01 02:00:00 junk", "yyyy-MM-dd HH:mm:ss"},

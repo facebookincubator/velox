@@ -441,9 +441,54 @@ void appendLiteralByte(std::string& out, char byte) {
   }
 }
 
-std::string jodaToStrftime(const std::string& joda, TrailingZone& trailing) {
-  trailing = TrailingZone::kNone;
-  std::string out;
+// Appends one literal byte to a regex, escaping what would otherwise be a
+// metacharacter. Deliberately separate from appendLiteralByte: the same byte
+// needs '%' doubled for cuDF's format compiler and a backslash for its regex
+// engine, so running a literal through the wrong one corrupts it.
+void appendLiteralByteToRegex(std::string& out, char byte) {
+  constexpr std::string_view kMetacharacters{"\\^$.|?*+()[]{}"};
+  if (kMetacharacters.find(byte) != std::string_view::npos) {
+    out += '\\';
+  }
+  out += byte;
+}
+
+// The trailing zone forms CPU accepts for a numeric zone token, as one regex
+// alternation. CPU resolves each through tz::locateZone and treats a failed
+// lookup as a parse error (parseTimezoneOffset in
+// functions/lib/DateTimeFormatter.cpp).
+constexpr std::string_view kZoneFormPattern{
+    "(?:Z|UTC|UCT|GMT0|GMT|[+-][0-9]{2}(?::?[0-5][0-9])?)"};
+
+// What one walk over a Joda format produces.
+struct JodaFormat {
+  // The strftime format cuDF converts with. Excludes a trailing zone token,
+  // which is handled separately.
+  std::string strftime;
+  // A regex matching the whole input, anchored at both ends. cuDF stops at the
+  // last format item rather than at the end of the input, so without this
+  // nothing notices text beyond the format, which CPU rejects.
+  //
+  // Numeric fields are `[0-9]+` rather than a fixed width on purpose. The
+  // purpose here is to bound the input, not to check field widths, and Joda
+  // treats a letter count as a minimum rather than an exact width -- a
+  // width-exact regex would reject input CPU accepts.
+  std::string shape;
+  TrailingZone trailing{TrailingZone::kNone};
+};
+
+JodaFormat jodaToStrftime(const std::string& joda) {
+  JodaFormat format;
+  std::string& out = format.strftime;
+  std::string& shape = format.shape;
+  TrailingZone& trailing = format.trailing;
+  shape += '^';
+  // Emits a literal byte into both outputs, so the format and the regex cannot
+  // disagree about what the literal text is.
+  auto emitLiteral = [&out, &shape](char byte) {
+    appendLiteralByte(out, byte);
+    appendLiteralByteToRegex(shape, byte);
+  };
   size_t i = 0;
   while (i < joda.size()) {
     const char c = joda[i];
@@ -455,7 +500,7 @@ std::string jodaToStrftime(const std::string& joda, TrailingZone& trailing) {
       // inside a run is an escaped quote that does not end it, and a run with
       // no closing quote is a user error.
       if (i + 1 < joda.size() && joda[i + 1] == '\'') {
-        appendLiteralByte(out, '\'');
+        emitLiteral('\'');
         i += 2;
         continue;
       }
@@ -464,7 +509,7 @@ std::string jodaToStrftime(const std::string& joda, TrailingZone& trailing) {
       while (i < joda.size()) {
         if (joda[i] == '\'') {
           if (i + 1 < joda.size() && joda[i + 1] == '\'') {
-            appendLiteralByte(out, '\'');
+            emitLiteral('\'');
             i += 2;
             continue;
           }
@@ -472,7 +517,7 @@ std::string jodaToStrftime(const std::string& joda, TrailingZone& trailing) {
           closed = true;
           break;
         }
-        appendLiteralByte(out, joda[i++]);
+        emitLiteral(joda[i++]);
       }
       VELOX_USER_CHECK(closed, "No closing single quote for literal");
       continue;
@@ -487,24 +532,34 @@ std::string jodaToStrftime(const std::string& joda, TrailingZone& trailing) {
         case 'y':
         case 'Y':
           out += runLength >= 3 ? "%Y" : "%y";
+          shape += "[0-9]+";
           break;
         case 'M':
           out += runLength >= 4 ? "%B" : (runLength == 3 ? "%b" : "%m");
+          // A run of 3 or more is a month name, which is letters rather than
+          // digits. Any length of name is admitted here; is_timestamp and the
+          // conversion decide whether the name itself is valid.
+          shape += runLength >= 3 ? "[A-Za-z]+" : "[0-9]+";
           break;
         case 'd':
           out += "%d";
+          shape += "[0-9]+";
           break;
         case 'H':
           out += "%H";
+          shape += "[0-9]+";
           break;
         case 'h':
           out += "%I";
+          shape += "[0-9]+";
           break;
         case 'm':
           out += "%M";
+          shape += "[0-9]+";
           break;
         case 's':
           out += "%S";
+          shape += "[0-9]+";
           break;
         case 'S':
           // The 'S' run length is the fractional-second digit count ('S' -> 1
@@ -518,12 +573,15 @@ std::string jodaToStrftime(const std::string& joda, TrailingZone& trailing) {
                 runLength);
           }
           out += "%" + std::to_string(runLength) + "f";
+          shape += "[0-9]+";
           break;
         case 'a':
           out += "%p";
+          shape += "(?:[AaPp][Mm])";
           break;
         case 'E':
           out += runLength >= 4 ? "%A" : "%a";
+          shape += "[A-Za-z]+";
           break;
         case 'Z':
         case 'z':
@@ -540,6 +598,13 @@ std::string jodaToStrftime(const std::string& joda, TrailingZone& trailing) {
           } else {
             trailing = TrailingZone::kZoneId;
           }
+          // Only a numeric zone token contributes to the shape. The zone-name
+          // and zone-id forms are rejected by the constructors that consume
+          // this, so there is nothing to describe.
+          if (trailing == TrailingZone::kOffsetNoColon ||
+              trailing == TrailingZone::kOffsetColon) {
+            shape += kZoneFormPattern;
+          }
           break;
         default:
           VELOX_NYI(
@@ -549,10 +614,11 @@ std::string jodaToStrftime(const std::string& joda, TrailingZone& trailing) {
       i = j;
       continue;
     }
-    appendLiteralByte(out, c);
+    emitLiteral(c);
     ++i;
   }
-  return out;
+  shape += '$';
+  return format;
 }
 
 // to_unixtime(timestamp with time zone) -> double.
@@ -708,7 +774,10 @@ class FormatDatetimeFunction : public CudfFunction {
       memory::MemoryPool* pool) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "format_datetime expects exactly 2 inputs");
-    strftime_ = jodaToStrftime(constStringArg(expr, 1, pool), trailing_);
+    // Rendering consumes no input, so the format's shape regex is unused here.
+    auto format = jodaToStrftime(constStringArg(expr, 1, pool));
+    strftime_ = std::move(format.strftime);
+    trailing_ = format.trailing;
   }
 
   ColumnOrView eval(
@@ -1147,8 +1216,12 @@ class ParseDatetimeFunction : public CudfFunction {
       memory::MemoryPool* pool) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "parse_datetime expects exactly 2 inputs");
-    TrailingZone trailing = TrailingZone::kNone;
-    strptime_ = jodaToStrftime(constStringArg(expr, 1, pool), trailing);
+    auto format = jodaToStrftime(constStringArg(expr, 1, pool));
+    strptime_ = std::move(format.strftime);
+    const auto trailing = format.trailing;
+    // Matches the whole input, so text beyond the format is rejected as CPU
+    // rejects it, and so a trailing zone must be one of the forms CPU accepts.
+    shapeProgram_ = cudf::strings::regex_program::create(format.shape);
     if (trailing == TrailingZone::kOffsetNoColon ||
         trailing == TrailingZone::kOffsetColon) {
       hasOffset_ = true;
@@ -1162,19 +1235,13 @@ class ParseDatetimeFunction : public CudfFunction {
       // UTC/GMT alias) leaves the null groups that signedOffsetMinutes maps to
       // offset 0 (GMT), matching CPU. Groups: 0 sign, 1 hours, 2 minutes.
       //
-      // CPU accepts exactly six forms here and resolves each through
-      // tz::locateZone, where a failed lookup is a parse error
-      // (parseTimezoneOffset in functions/lib/DateTimeFormatter.cpp): "+HH",
-      // "+HH:MM", "+HHMM", "Z", "UTC"/"UCT" and "GMT"/"GMT0". zoneFormProgram_
-      // accepts all six and eval rejects anything else, because an unmatched
-      // trailing zone would otherwise reach signedOffsetMinutes as null groups
-      // and read as GMT. Both programs are built from one numeric pattern so
-      // they cannot disagree about the shape of an offset.
-      const std::string numericOffset = "([+-])([0-9]{2})(?::?([0-5][0-9]))?";
-      offsetProgram_ =
-          cudf::strings::regex_program::create(numericOffset + "$");
-      zoneFormProgram_ = cudf::strings::regex_program::create(
-          "(?:Z|UTC|UCT|GMT0|GMT|" + numericOffset + ")$");
+      // Which of CPU's six forms the input carries is decided by the shape
+      // program above, whose zone alternation is kZoneFormPattern. This program
+      // only has to capture the groups of a numeric one; an input that reaches
+      // it has already been accepted, so its own strictness is not what rejects
+      // a bad offset.
+      offsetProgram_ = cudf::strings::regex_program::create(
+          "([+-])([0-9]{2})(?::?([0-5][0-9]))?$");
     } else if (trailing != TrailingZone::kNone) {
       VELOX_NYI("parse_datetime zone-name token is not supported on GPU");
     }
@@ -1201,19 +1268,31 @@ class ParseDatetimeFunction : public CudfFunction {
     //
     // is_timestamp reports false for a null row, which is not invalid input, so
     // null rows are admitted explicitly and stay null through the conversion.
+    //
     // It also stops at the last format item rather than at the end of the
-    // string, so text beyond the format is not covered. A trailing zone is
-    // checked separately below, but anything else left over is still accepted
-    // where CPU requires the whole input to be consumed.
-    // TODO: Anchor the match at both ends with a regex derived from the Joda
-    // format, emitted by the same pass that builds strptime_. See
-    // DISABLED_parseDatetimeTrailingTextThrowsLikeCpu.
+    // input, so on its own it accepts text beyond the format where CPU requires
+    // the whole input to be consumed. shapeProgram_ matches the input end to
+    // end, which covers that and makes a trailing zone outside CPU's accepted
+    // forms a rejection too. The two are combined rather than checked in
+    // sequence, so the result does not depend on which fails first: cuDF's
+    // is_timestamp dereferences a literal without a bounds check, so an input
+    // ending exactly at the last specifier reads one byte past the string and
+    // its verdict there is not reproducible.
     auto strings = cudf::strings_column_view(input);
+    auto shapeOk =
+        cudf::strings::matches_re(strings, *shapeProgram_, stream, mr);
     auto validFormat =
         cudf::strings::is_timestamp(strings, strptime_, stream, mr);
+    auto shapeAndFormat = cudf::binary_operation(
+        shapeOk->view(),
+        validFormat->view(),
+        cudf::binary_operator::LOGICAL_AND,
+        cudf::data_type{kBool8},
+        stream,
+        mr);
     auto inputIsNull = cudf::is_null(input, stream, mr);
     auto validOrNull = cudf::binary_operation(
-        validFormat->view(),
+        shapeAndFormat->view(),
         inputIsNull->view(),
         cudf::binary_operator::BITWISE_OR,
         cudf::data_type{kBool8},
@@ -1239,24 +1318,6 @@ class ParseDatetimeFunction : public CudfFunction {
           stream,
           mr);
     }
-    // The format carries a zone token, so the input must end in one of the six
-    // forms CPU accepts. Without this check an offset CPU rejects, such as
-    // "+05:99", and a garbled or absent one both leave offsetProgram_ with no
-    // match, and signedOffsetMinutes reads null groups as offset 0 (GMT).
-    auto zoneFormOk =
-        cudf::strings::contains_re(strings, *zoneFormProgram_, stream, mr);
-    auto zoneFormOkOrNull = cudf::binary_operation(
-        zoneFormOk->view(),
-        inputIsNull->view(),
-        cudf::binary_operator::BITWISE_OR,
-        cudf::data_type{kBool8},
-        stream,
-        mr);
-    checkAllTrue(
-        zoneFormOkOrNull->view(),
-        "Invalid timezone offset in parse_datetime",
-        stream,
-        mr);
     // Recover the trailing offset (parsed without "%z", so it is not yet folded
     // into wallMillis) and convert to UTC: utcMillis = wallMillis -
     // offsetMinutes * 60'000. Pack the matching fixed-offset zone key so
@@ -1303,10 +1364,9 @@ class ParseDatetimeFunction : public CudfFunction {
   bool hasOffset_{false};
   // Compiled trailing-offset extraction program, built once when hasOffset_.
   std::unique_ptr<cudf::strings::regex_program> offsetProgram_;
-  // Accepts the six trailing zone forms CPU allows, including the "Z" and
-  // UTC/GMT aliases that offsetProgram_ deliberately does not match. Built
-  // once when hasOffset_.
-  std::unique_ptr<cudf::strings::regex_program> zoneFormProgram_;
+  // Matches the whole input against the shape the Joda format describes,
+  // anchored at both ends. Built once, for every format.
+  std::unique_ptr<cudf::strings::regex_program> shapeProgram_;
 };
 
 // from_iso8601_timestamp(varchar) -> timestamp with time zone.
