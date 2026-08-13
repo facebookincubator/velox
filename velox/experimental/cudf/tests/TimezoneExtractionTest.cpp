@@ -193,6 +193,18 @@ constexpr int64_t kJan2021At0500Utc = 1'609'477'200;
 
 constexpr std::string_view kLosAngeles = "America/Los_Angeles";
 constexpr std::string_view kKolkata = "Asia/Kolkata";
+// America/Havana shifts at local midnight, which is what makes it usable here:
+// date_trunc only ever hands the local-to-UTC conversion a truncation boundary,
+// so a zone that shifts at 02:00 can never place that boundary in a gap.
+// Verified against the host tz database: 2021-03-14 04:59:59 UTC is 23:59:59
+// CST, and one second later it is 01:00:00 CDT, so local 2021-03-14 00:00 does
+// not exist. On 2021-11-07 the clocks go back at local 01:00 CDT, so local
+// 2021-11-07 00:00 occurs twice.
+constexpr std::string_view kHavana = "America/Havana";
+// 2021-03-14 12:00 UTC and 2021-11-07 12:00 UTC, both the same local day in
+// Havana as the transition, so truncating to the day lands on it.
+constexpr int64_t kHavanaGapDayUtc = 1'615'723'200;
+constexpr int64_t kHavanaOverlapDayUtc = 1'636'286'400;
 
 TEST_F(TimezoneExtractionTest, yearHonorsSessionTimezone) {
   // Expect local year 2020; GPU currently returns UTC year 2021.
@@ -387,6 +399,30 @@ TEST_F(TimezoneExtractionTest, dateTruncHourHonorsHalfHourOffsetZone) {
   // from the UTC hour boundary; the DST-safe UTC delta must reproduce it.
   assertGpuMatchesCpu(
       timestampInput(kJan2021MidnightUtc), "date_trunc('hour', ts)", kKolkata);
+}
+
+// The local-to-UTC direction has two boundary cases that nothing exercised
+// through a SQL function: a truncated day that does not exist, and one that
+// occurs twice. date_trunc is the only caller that reaches them with a local
+// wall clock it did not parse from text.
+//
+// A nonexistent local time has no UTC instant, and CPU's Timestamp::toGMT
+// reports that as a user error, so both engines must fail.
+TEST_F(TimezoneExtractionTest, dateTruncDayInSpringForwardGapThrowsLikeCpu) {
+  auto input = timestampInput(kHavanaGapDayUtc);
+  EXPECT_ANY_THROW(project(input, "date_trunc('day', ts)", kHavana));
+  cudf_velox::unregisterCudf();
+  EXPECT_ANY_THROW(project(input, "date_trunc('day', ts)", kHavana));
+  cudf_velox::registerCudf();
+}
+
+// An ambiguous local time resolves to the earlier of its two instants, which is
+// CPU's TChoose::kEarliest. The GPU inverse table keeps the pre-transition
+// offset across the overlap to get the same answer, so this pins the two
+// together.
+TEST_F(TimezoneExtractionTest, dateTruncDayInFallBackOverlapMatchesCpu) {
+  assertGpuMatchesCpu(
+      timestampInput(kHavanaOverlapDayUtc), "date_trunc('day', ts)", kHavana);
 }
 
 TEST_F(TimezoneExtractionTest, dateTruncSecondMinuteUnaffectedByTimezone) {

@@ -125,6 +125,21 @@ class TimezoneFunctionTest : public cudf_velox::CudfFunctionBaseTest {
         TIMESTAMP_WITH_TIME_ZONE())});
   }
 
+  // Builds a three-row TIMESTAMP WITH TIME ZONE column carrying two different
+  // zone keys and a NULL, so one vector exercises per-row zone handling and
+  // null propagation together.
+  RowVectorPtr twoZoneAndNullTimestampWithTimeZoneInput(
+      int64_t millisUtcA,
+      const char* zoneA,
+      int64_t millisUtcB,
+      const char* zoneB) {
+    return makeRowVector({makeNullableFlatVector<int64_t>(
+        {pack(millisUtcA, tz::getTimeZoneID(zoneA)),
+         pack(millisUtcB, tz::getTimeZoneID(zoneB)),
+         std::nullopt},
+        TIMESTAMP_WITH_TIME_ZONE())});
+  }
+
   // Builds a single-row double input column named c0.
   RowVectorPtr doubleInput(double value) {
     return makeRowVector({makeFlatVector<double>({value})});
@@ -685,6 +700,22 @@ TEST_F(TimezoneFunctionTest, formatDatetimeHalfdayWithTextNamesMatchesCpu) {
     assertMatchesCpu("format_datetime(c0, 'hh:mm a')", input);
     assertMatchesCpu("format_datetime(c0, 'EEEE hh:mm a')", input);
   }
+}
+
+// Mixed zone keys and a NULL in one vector, run through both of the projections
+// that read the zone key. The existing coverage uses a mixed-zone vector for
+// one and a null-bearing vector for the other, so nothing asserted that a null
+// row survives the per-zone select: that path computes the offset for each
+// distinct key over the whole column and combines the results, which is where a
+// null row could pick up a neighbour's value.
+TEST_F(TimezoneFunctionTest, mixedZonesWithNullThroughBothProjections) {
+  auto input = twoZoneAndNullTimestampWithTimeZoneInput(
+      1'609'466'400'000,
+      "America/Los_Angeles",
+      1'609'466'400'000,
+      "Asia/Kolkata");
+  assertMatchesCpu("timezone_hour(c0)", input);
+  assertMatchesCpu("to_iso8601(c0)", input);
 }
 
 // Functions that produce a TIMESTAMP WITH TIME ZONE from plain inputs. The
