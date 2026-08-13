@@ -234,6 +234,12 @@ void FileSplitReader::createReader(
   if (!tableHandle_->name().empty()) {
     fileProperties.fileReadOps[kTableNameKey] = tableHandle_->name();
   }
+  // Per-operation counters are attributed to the data source that opened the
+  // file, so they are only meaningful while file handles are not reused across
+  // data sources. A cached handle would both outlive these statistics and
+  // report one data source's reads against another's.
+  fileProperties.ioStatistics =
+      fileHandleFactory_->maxSize() == 0 ? dataIoStats_.get() : nullptr;
 
   try {
     fileHandleCachePtr = fileHandleFactory_->generate(
