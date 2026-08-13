@@ -586,6 +586,19 @@ TEST_F(TimezoneFunctionTest, parseDatetimeQuotedLiteralsMatchCpu) {
   }
 }
 
+// A literal run combined with a zone token, from the case suggested in review.
+// Worth its own test for two reasons: the projection has to go through
+// to_iso8601 because the parsed offset lands in the zone key, which a
+// comparison of TIMESTAMP WITH TIME ZONE values ignores; and it is the one
+// input that exercises the literal rule and the trailing-zone accept test
+// together.
+TEST_F(TimezoneFunctionTest, parseDatetimeQuotedLiteralWithOffsetMatchesCpu) {
+  assertMatchesCpu(
+      "to_iso8601(parse_datetime(c0, " +
+          jodaLiteral("'he''llo' yyyy-MM-dd HH:mm:ss Z") + "))",
+      varcharInput("he'llo 2026-01-02 00:45:00 +0530"));
+}
+
 // Functions that produce a TIMESTAMP WITH TIME ZONE from plain inputs. The
 // inputs convert to cuDF fine; the function is the work the GPU must learn.
 
