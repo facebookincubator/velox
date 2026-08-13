@@ -25,6 +25,5 @@ target_link_libraries(
   nimble_common
   Folly::folly
   lz4
-  openzl
-  openzl_cpp
+  ${VELOX_OPENZL_LIBRARIES}
 )

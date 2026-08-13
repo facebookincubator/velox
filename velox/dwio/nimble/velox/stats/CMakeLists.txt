@@ -30,4 +30,6 @@ target_link_libraries(
   velox_dwio_common
 )
 
-add_subdirectory(tests)
+if(NIMBLE_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

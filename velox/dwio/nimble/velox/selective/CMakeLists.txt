@@ -40,4 +40,6 @@ target_link_libraries(
   nimble_velox_common
 )
 
-add_subdirectory(tests)
+if(NIMBLE_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

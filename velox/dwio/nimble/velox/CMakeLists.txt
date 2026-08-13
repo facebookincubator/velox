@@ -70,6 +70,7 @@ add_library(
   BufferGrowthPolicy.cpp
   DeduplicationUtils.cpp
   FieldWriter.cpp
+  NimbleConfig.cpp
 )
 target_link_libraries(
   nimble_velox_field_writer
@@ -114,7 +115,7 @@ build_flatbuffers(
 add_library(nimble_velox_metadata_fb INTERFACE)
 target_include_directories(
   nimble_velox_metadata_fb
-  INTERFACE ${FLATBUFFERS_INCLUDE_DIR}
+  INTERFACE ${PROJECT_BINARY_DIR} ${FLATBUFFERS_INCLUDE_DIR}
 )
 add_dependencies(nimble_velox_metadata_fb nimble_velox_metadata_schema_fb)
 
@@ -130,7 +131,7 @@ build_flatbuffers(
 add_library(nimble_velox_stats_fb INTERFACE)
 target_include_directories(
   nimble_velox_stats_fb
-  INTERFACE ${FLATBUFFERS_INCLUDE_DIR}
+  INTERFACE ${PROJECT_BINARY_DIR} ${FLATBUFFERS_INCLUDE_DIR}
 )
 add_dependencies(nimble_velox_stats_fb nimble_velox_stats_schema_fb)
 
@@ -175,4 +176,6 @@ target_link_libraries(
 add_subdirectory(index)
 add_subdirectory(selective)
 add_subdirectory(stats)
-add_subdirectory(tests)
+if(NIMBLE_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

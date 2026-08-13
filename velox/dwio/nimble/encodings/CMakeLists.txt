@@ -11,10 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_subdirectory(benchmarks)
-add_subdirectory(tests)
+if(VELOX_ENABLE_BENCHMARKS)
+  add_subdirectory(benchmarks)
+endif()
+if(NIMBLE_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
 add_subdirectory(legacy)
-add_subdirectory(selection/tests)
+if(NIMBLE_BUILD_TESTING)
+  add_subdirectory(selection/tests)
+endif()
 
 add_library(
   nimble_encodings
@@ -39,44 +45,22 @@ add_library(
   views/HuffmanEncodingView.h
 )
 
-set(FSST_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../third-party/fsst")
-if(NOT TARGET fsst AND EXISTS "${FSST_SOURCE_DIR}/CMakeLists.txt")
-  add_subdirectory("${FSST_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/fsst")
-endif()
-if(NOT TARGET fsst)
-  include(FetchContent)
-  FetchContent_Declare(
-    fsst
-    GIT_REPOSITORY https://github.com/cwida/fsst.git
-    GIT_TAG 50dd308befd5121bd1121428a833f42cce6e1f9d
-  )
-  FetchContent_MakeAvailable(fsst)
-  set(FSST_SOURCE_DIR "${fsst_SOURCE_DIR}")
-endif()
-
-if(TARGET fsst)
-  target_include_directories(fsst PUBLIC "${FSST_SOURCE_DIR}")
-  target_compile_definitions(
-    fsst
-    PRIVATE
-      fsst_create=nimble_fsst_create
-      fsst_duplicate=nimble_fsst_duplicate
-      fsst_export=nimble_fsst_export
-      fsst_destroy=nimble_fsst_destroy
-      fsst_import=nimble_fsst_import
-      fsst_decoder=nimble_fsst_decoder
-      fsst_compress=nimble_fsst_compress
-      fsst_decompress=nimble_fsst_decompress
-  )
-  if(TARGET binary)
-    set_target_properties(binary PROPERTIES EXCLUDE_FROM_ALL TRUE)
-  endif()
-  if(TARGET binary12)
-    set_target_properties(binary12 PROPERTIES EXCLUDE_FROM_ALL TRUE)
-  endif()
-else()
-  target_include_directories(nimble_encodings PUBLIC "${FSST_SOURCE_DIR}")
-endif()
+# FSST is vendored at velox/external/fsst and added by velox/CMakeLists.txt
+# before this directory, so the target always exists here. Nimble renames FSST's
+# exported symbols to avoid clashing with any other copy linked into the same
+# binary; PRIVATE keeps the renames on FSST's own translation units.
+target_compile_definitions(
+  fsst
+  PRIVATE
+    fsst_create=nimble_fsst_create
+    fsst_duplicate=nimble_fsst_duplicate
+    fsst_export=nimble_fsst_export
+    fsst_destroy=nimble_fsst_destroy
+    fsst_import=nimble_fsst_import
+    fsst_decoder=nimble_fsst_decoder
+    fsst_compress=nimble_fsst_compress
+    fsst_decompress=nimble_fsst_decompress
+)
 
 target_link_libraries(
   nimble_encodings

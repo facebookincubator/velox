@@ -27,20 +27,5 @@ target_link_libraries(
   fmt::fmt
 )
 
-add_executable(nimble_stream_slicer_benchmark StreamSlicerBenchmark.cpp)
-
-target_link_libraries(
-  nimble_stream_slicer_benchmark
-  nimble_deserializer
-  nimble_projector
-  nimble_serializer
-  nimble_stream_slicer
-  nimble_velox_schema_reader
-  Folly::follybenchmark
-  Folly::folly
-  velox_common_compression
-  velox_memory
-  velox_presto_serializer
-  velox_vector
-  fmt::fmt
-)
+# StreamSlicerBenchmark.cpp includes fb_velox/common/Profiler.h, a Meta-internal
+# header that is not part of the OSS export, so it has no OSS build.

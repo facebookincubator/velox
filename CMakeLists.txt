@@ -661,8 +661,11 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   velox_resolve_dependency(pybind11 2.10.0)
 endif()
 
-# DWIO (ORC/DWRF) depends on protobuf.
-if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR} OR VELOX_ENABLE_GCS)
+# DWIO (ORC/DWRF) depends on protobuf. Nimble's serializer does too.
+if(${VELOX_BUILD_MINIMAL_WITH_DWIO}
+   OR ${VELOX_ENABLE_HIVE_CONNECTOR}
+   OR VELOX_ENABLE_GCS
+   OR VELOX_ENABLE_NIMBLE)
   # Locate or build protobuf.
   velox_set_source(Protobuf)
   velox_resolve_dependency(Protobuf 3.21.7 REQUIRED)

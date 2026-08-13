@@ -217,4 +217,6 @@ target_link_libraries(
   nimble_chunk_stats_fb
 )
 
-add_subdirectory(tests)
+if(NIMBLE_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

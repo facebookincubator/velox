@@ -19,7 +19,9 @@ add_library(
   ${CMAKE_CURRENT_SOURCE_DIR}/../velox/ChunkedStreamWriter.cpp
   BufferPolicy.h
   EncodingLayoutTree.cpp
+  EncodingSelectionPolicyFactory.cpp
   FlushPolicy.cpp
+  FlushPolicyFactory.cpp
   StreamChunker.cpp
   Writer.cpp
   WriterDefaultMetadataOSS.cpp
