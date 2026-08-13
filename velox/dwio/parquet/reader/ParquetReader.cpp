@@ -88,6 +88,8 @@ bool isParquetReservedKeyword(
 }
 
 constexpr int32_t kMissingPhysicalFieldId = std::numeric_limits<int32_t>::min();
+constexpr uint64_t kMaxPageIndexBytesPerRowGroup = kMaxPageIndexRegionBytes * 2;
+constexpr uint64_t kMaxPageIndexBytesPerWindow = 128ULL << 20;
 
 int32_t fieldIdOrMissing(const thrift::SchemaElement& schemaElement) {
   return schemaElement.field_id().value_or(kMissingPhysicalFieldId);
@@ -266,6 +268,31 @@ class ReaderBase {
     std::unordered_map<std::string, int64_t> pageIndexFallbacks;
   };
 
+ private:
+  struct PageIndexPrefetch {
+    enum class EnqueueResult { kEnqueued, kWindowFull };
+
+    using StreamMap = folly::F14FastMap<
+        uint32_t,
+        std::unique_ptr<dwio::common::SeekableInputStream>>;
+
+    struct PendingRowGroup {
+      PageIndexInfoMap map;
+      PageIndexInfoMap proofMap;
+      StreamMap offsetStreams;
+      StreamMap columnStreams;
+      std::optional<PageIndexFallbackReason> fallbackReason;
+      bool shouldApplyPagePruning{false};
+      uint64_t bytes{0};
+    };
+
+    std::unique_ptr<dwio::common::BufferedInput> ownedInput;
+    dwio::common::BufferedInput* input{nullptr};
+    folly::F14FastMap<uint32_t, PendingRowGroup> rowGroups;
+    uint64_t bytes{0};
+  };
+
+ public:
   ReaderBase(
       std::unique_ptr<dwio::common::BufferedInput>,
       const dwio::common::ReaderOptions& options);
@@ -390,6 +417,11 @@ class ReaderBase {
   void releaseThriftBytes(size_t bytes);
 
  private:
+  PageIndexPrefetch::EnqueueResult enqueuePageIndexRegions(
+      uint32_t rowGroup,
+      StructColumnReader& reader,
+      PageIndexPrefetch& prefetch) const;
+
   // Reads and parses file footer.
   void loadFileMetaData();
 
@@ -423,7 +455,8 @@ class ReaderBase {
       uint32_t thisGroup,
       StructColumnReader& reader,
       const std::shared_ptr<velox::common::MetadataFilter>& metadataFilter,
-      RowReaderState& state) const;
+      RowReaderState& state,
+      PageIndexPrefetch& prefetch) const;
 
   memory::MemoryPool& pool_;
   const uint64_t filePreloadThreshold_;
@@ -1578,17 +1611,96 @@ std::shared_ptr<const RowType> ReaderBase::createRowType(
       std::move(childNames), std::move(childTypes));
 }
 
+ReaderBase::PageIndexPrefetch::EnqueueResult
+ReaderBase::enqueuePageIndexRegions(
+    uint32_t rowGroup,
+    StructColumnReader& reader,
+    PageIndexPrefetch& prefetch) const {
+  auto& pending = prefetch.rowGroups[rowGroup];
+  pending.shouldApplyPagePruning =
+      reader.collectIndexPageInfoMap(rowGroup, pending.map);
+  if (pending.map.empty()) {
+    return PageIndexPrefetch::EnqueueResult::kEnqueued;
+  }
+
+  for (const auto& [column, info] : pending.map) {
+    if (info.readColumnIndex) {
+      pending.proofMap.emplace(column, info);
+    }
+  }
+  if (!pending.shouldApplyPagePruning || pending.proofMap.empty()) {
+    return PageIndexPrefetch::EnqueueResult::kEnqueued;
+  }
+  folly::F14FastMap<uint32_t, common::Region> offsetRegions;
+  folly::F14FastMap<uint32_t, common::Region> columnRegions;
+  uint64_t rowGroupBytes{0};
+  for (const auto& [column, info] : pending.map) {
+    auto offsetRegion = validatePageIndexRegion(
+        info.offsetIndexOffset, info.offsetIndexLength, fileLength_);
+    if (!offsetRegion) {
+      pending.fallbackReason = offsetRegion.reason;
+      return PageIndexPrefetch::EnqueueResult::kEnqueued;
+    }
+    if (offsetRegion.value->length > kMaxPageIndexRegionBytes ||
+        rowGroupBytes >
+            kMaxPageIndexBytesPerRowGroup - offsetRegion.value->length) {
+      pending.fallbackReason = PageIndexFallbackReason::kIndexTooLarge;
+      return PageIndexPrefetch::EnqueueResult::kEnqueued;
+    }
+    rowGroupBytes += offsetRegion.value->length;
+    offsetRegions.emplace(column, *offsetRegion.value);
+
+    if (!info.readColumnIndex) {
+      continue;
+    }
+    auto columnRegion = validatePageIndexRegion(
+        info.columnIndexOffset, info.columnIndexLength, fileLength_);
+    if (!columnRegion) {
+      pending.fallbackReason = columnRegion.reason;
+      return PageIndexPrefetch::EnqueueResult::kEnqueued;
+    }
+    if (columnRegion.value->length > kMaxPageIndexRegionBytes ||
+        rowGroupBytes >
+            kMaxPageIndexBytesPerRowGroup - columnRegion.value->length) {
+      pending.fallbackReason = PageIndexFallbackReason::kIndexTooLarge;
+      return PageIndexPrefetch::EnqueueResult::kEnqueued;
+    }
+    rowGroupBytes += columnRegion.value->length;
+    columnRegions.emplace(column, *columnRegion.value);
+  }
+  if (rowGroupBytes > kMaxPageIndexBytesPerWindow) {
+    pending.fallbackReason = PageIndexFallbackReason::kIndexTooLarge;
+    return PageIndexPrefetch::EnqueueResult::kEnqueued;
+  }
+  if (prefetch.bytes > kMaxPageIndexBytesPerWindow - rowGroupBytes) {
+    prefetch.rowGroups.erase(rowGroup);
+    return PageIndexPrefetch::EnqueueResult::kWindowFull;
+  }
+
+  pending.bytes = rowGroupBytes;
+  prefetch.bytes += rowGroupBytes;
+  for (const auto& [column, region] : offsetRegions) {
+    pending.offsetStreams[column] = prefetch.input->enqueue(region);
+  }
+  for (const auto& [column, region] : columnRegions) {
+    pending.columnStreams[column] = prefetch.input->enqueue(region);
+  }
+  return PageIndexPrefetch::EnqueueResult::kEnqueued;
+}
+
 RowGroupPagePruningPlanPtr ReaderBase::applyPageIndexFiltering(
     uint32_t thisGroup,
     StructColumnReader& reader,
     const std::shared_ptr<velox::common::MetadataFilter>& metadataFilter,
-    RowReaderState& state) const {
-  PageIndexInfoMap map;
-  const bool shouldApplyPagePruning =
-      reader.collectIndexPageInfoMap(thisGroup, map);
+    RowReaderState& state,
+    PageIndexPrefetch& prefetch) const {
+  const auto& pending = prefetch.rowGroups.at(thisGroup);
+  const auto& map = pending.map;
+  const auto& proofMap = pending.proofMap;
   const auto& rowGroup =
       apache::thrift::can_throw(*fileMetaData_->row_groups())[thisGroup];
   const auto numRows = static_cast<uint64_t>(*rowGroup.num_rows());
+  state.pageIndexBytesRead += static_cast<int64_t>(pending.bytes);
   auto measureParse = [&](auto function) {
     uint64_t elapsedNs{0};
     auto result = [&]() {
@@ -1614,55 +1726,18 @@ RowGroupPagePruningPlanPtr ReaderBase::applyPageIndexFiltering(
     plan->stats.fallbackReason = reason;
     return RowGroupPagePruningPlanPtr(std::move(plan));
   };
-  if (!shouldApplyPagePruning || map.empty()) {
-    return fallback(
-        shouldApplyPagePruning ? PageIndexFallbackReason::kMissingColumnIndex
-                               : PageIndexFallbackReason::kNoFilter);
+  if (pending.fallbackReason) {
+    return fallback(*pending.fallbackReason);
   }
-  PageIndexInfoMap proofMap;
-  for (const auto& [column, info] : map) {
-    if (info.readColumnIndex) {
-      proofMap.emplace(column, info);
-    }
+  if (!pending.shouldApplyPagePruning || map.empty()) {
+    return fallback(
+        pending.shouldApplyPagePruning
+            ? PageIndexFallbackReason::kMissingColumnIndex
+            : PageIndexFallbackReason::kNoFilter);
   }
   if (proofMap.empty()) {
     return fallback(PageIndexFallbackReason::kMissingColumnIndex);
   }
-  using StreamMap = folly::
-      F14FastMap<uint32_t, std::unique_ptr<dwio::common::SeekableInputStream>>;
-  auto pageIndexInput = input_->clone();
-  StreamMap offsetStreams;
-  StreamMap columnStreams;
-  uint64_t pageIndexBytes{0};
-  for (const auto& [column, info] : proofMap) {
-    auto offsetRegion = validatePageIndexRegion(
-        info.offsetIndexOffset, info.offsetIndexLength, fileLength_);
-    if (!offsetRegion) {
-      return fallback(offsetRegion.reason);
-    }
-    if (offsetRegion.value->length > kMaxPageIndexRegionBytes ||
-        pageIndexBytes >
-            kMaxPageIndexRegionBytes * 4 - offsetRegion.value->length) {
-      return fallback(PageIndexFallbackReason::kIndexTooLarge);
-    }
-    pageIndexBytes += offsetRegion.value->length;
-    offsetStreams[column] = pageIndexInput->enqueue(*offsetRegion.value);
-    if (info.readColumnIndex) {
-      auto columnRegion = validatePageIndexRegion(
-          info.columnIndexOffset, info.columnIndexLength, fileLength_);
-      if (!columnRegion) {
-        return fallback(columnRegion.reason);
-      }
-      if (columnRegion.value->length > kMaxPageIndexRegionBytes ||
-          pageIndexBytes >
-              kMaxPageIndexRegionBytes * 4 - columnRegion.value->length) {
-        return fallback(PageIndexFallbackReason::kIndexTooLarge);
-      }
-      pageIndexBytes += columnRegion.value->length;
-      columnStreams[column] = pageIndexInput->enqueue(*columnRegion.value);
-    }
-  }
-  pageIndexInput->load(dwio::common::LogType::STRIPE);
 
   folly::F14FastMap<uint32_t, ValidatedPageIndexes> indexes;
   dwio::common::RowIntervalSet rejectedRows;
@@ -1671,8 +1746,9 @@ RowGroupPagePruningPlanPtr ReaderBase::applyPageIndexFiltering(
       dwio::common::RowIntervalSet>>
       metadataResults;
   for (const auto& [column, info] : proofMap) {
-    auto offsetIndex = measureParse(
-        [&] { return deserializeOffsetIndex(*offsetStreams[column]); });
+    auto offsetIndex = measureParse([&] {
+      return deserializeOffsetIndex(*pending.offsetStreams.at(column));
+    });
     if (!offsetIndex) {
       return fallback(offsetIndex.reason);
     }
@@ -1709,8 +1785,9 @@ RowGroupPagePruningPlanPtr ReaderBase::applyPageIndexFiltering(
       if (!leaf || !leaf->parquetType_) {
         return fallback(PageIndexFallbackReason::kUnsupportedPhysicalType);
       }
-      auto columnIndex = measureParse(
-          [&] { return deserializeColumnIndex(*columnStreams[column]); });
+      auto columnIndex = measureParse([&] {
+        return deserializeColumnIndex(*pending.columnStreams.at(column));
+      });
       if (!columnIndex) {
         return fallback(columnIndex.reason);
       }
@@ -1746,37 +1823,13 @@ RowGroupPagePruningPlanPtr ReaderBase::applyPageIndexFiltering(
   const auto retainedRows = dwio::common::RowIntervalSet::difference(
       dwio::common::RowIntervalSet::full(numRows), rejectedRows);
 
-  if (rejectedRows.intervals().empty()) {
-    map = proofMap;
-  } else {
-    auto remainingIndexInput = input_->clone();
-    StreamMap remainingOffsetStreams;
-    uint64_t remainingIndexBytes{0};
-    for (const auto& [column, info] : map) {
-      if (info.readColumnIndex) {
-        continue;
-      }
-      auto offsetRegion = validatePageIndexRegion(
-          info.offsetIndexOffset, info.offsetIndexLength, fileLength_);
-      if (!offsetRegion) {
-        return fallback(offsetRegion.reason);
-      }
-      if (offsetRegion.value->length > kMaxPageIndexRegionBytes ||
-          remainingIndexBytes >
-              kMaxPageIndexRegionBytes * 4 - offsetRegion.value->length) {
-        return fallback(PageIndexFallbackReason::kIndexTooLarge);
-      }
-      remainingIndexBytes += offsetRegion.value->length;
-      remainingOffsetStreams[column] =
-          remainingIndexInput->enqueue(*offsetRegion.value);
-    }
-    remainingIndexInput->load(dwio::common::LogType::STRIPE);
+  if (!rejectedRows.intervals().empty()) {
     for (const auto& [column, info] : map) {
       if (info.readColumnIndex) {
         continue;
       }
       auto offsetIndex = measureParse([&] {
-        return deserializeOffsetIndex(*remainingOffsetStreams[column]);
+        return deserializeOffsetIndex(*pending.offsetStreams.at(column));
       });
       if (!offsetIndex) {
         return fallback(offsetIndex.reason);
@@ -1864,14 +1917,56 @@ void ReaderBase::scheduleRowGroups(
   auto numRowGroupsToLoad = std::min(
       options_.prefetchRowGroups() + 1,
       static_cast<int64_t>(rowGroupIds.size() - currentGroup));
+  if (shouldUsePageIndexFiltering_) {
+    const auto pageIndexBatchSize =
+        std::max<int64_t>(8, options_.prefetchRowGroups() + 1);
+    const auto payloadEnd = std::min<int64_t>(
+        currentGroup + numRowGroupsToLoad, rowGroupIds.size());
+    std::optional<int64_t> firstRequiredUnplanned;
+    for (auto i = currentGroup; i < payloadEnd; ++i) {
+      if (state.pagePlans.count(rowGroupIds[i]) == 0) {
+        firstRequiredUnplanned = i;
+        break;
+      }
+    }
+    if (firstRequiredUnplanned) {
+      PageIndexPrefetch pageIndexPrefetch;
+      if (input_->preloaded()) {
+        pageIndexPrefetch.input = input_.get();
+      } else {
+        pageIndexPrefetch.ownedInput = input_->clone();
+        pageIndexPrefetch.input = pageIndexPrefetch.ownedInput.get();
+      }
+
+      auto numPlanned = int64_t{0};
+      for (auto i = *firstRequiredUnplanned;
+           i < rowGroupIds.size() && numPlanned < pageIndexBatchSize;
+           ++i) {
+        const auto thisGroup = rowGroupIds[i];
+        if (state.pagePlans.count(thisGroup) != 0) {
+          continue;
+        }
+        if (enqueuePageIndexRegions(thisGroup, reader, pageIndexPrefetch) ==
+            PageIndexPrefetch::EnqueueResult::kWindowFull) {
+          break;
+        }
+        ++numPlanned;
+      }
+      if (pageIndexPrefetch.bytes > 0 && !input_->preloaded()) {
+        pageIndexPrefetch.input->load(dwio::common::LogType::STRIPE);
+      }
+      for (const auto& entry : pageIndexPrefetch.rowGroups) {
+        const auto thisGroup = entry.first;
+        auto pagePlan = applyPageIndexFiltering(
+            thisGroup, reader, metadataFilter, state, pageIndexPrefetch);
+        state.pagePlans[thisGroup] = std::move(pagePlan);
+      }
+    }
+  }
   for (auto i = 0; i < numRowGroupsToLoad; i++) {
     auto thisGroup = rowGroupIds[currentGroup + i];
     if (!state.inputs[thisGroup]) {
-      RowGroupPagePruningPlanPtr pagePlan;
-      if (shouldUsePageIndexFiltering_) {
-        pagePlan =
-            applyPageIndexFiltering(thisGroup, reader, metadataFilter, state);
-      }
+      auto pagePlan = rowGroupPagePlan(thisGroup, state);
       if (!pagePlan) {
         auto plan = std::make_shared<RowGroupPagePruningPlan>();
         plan->rowGroup = thisGroup;
@@ -1892,8 +1987,6 @@ void ReaderBase::scheduleRowGroups(
       state.processedPages += pagePlan->stats.pagesRetained;
       state.pageIndexPagesSkipped += pagePlan->stats.pagesSkipped;
       state.pageIndexPagesRetained += pagePlan->stats.pagesRetained;
-      state.pageIndexBytesRead +=
-          static_cast<int64_t>(pagePlan->stats.indexBytesPlanned);
       state.pageIndexDataBytesPlanned +=
           static_cast<int64_t>(pagePlan->stats.dataBytesPlanned);
       state.pageIndexDataBytesAvoided +=

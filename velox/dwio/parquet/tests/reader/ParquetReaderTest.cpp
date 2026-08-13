@@ -24,12 +24,40 @@
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
+#include <atomic>
 #include <limits>
 
 using namespace facebook::velox;
 using namespace facebook::velox::common;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::parquet;
+
+namespace {
+
+class CountingBufferedInput final : public BufferedInput {
+ public:
+  CountingBufferedInput(
+      std::shared_ptr<ReadFile> readFile,
+      memory::MemoryPool& pool,
+      std::shared_ptr<std::atomic<uint64_t>> loadCount)
+      : BufferedInput(std::move(readFile), pool),
+        loadCount_(std::move(loadCount)) {}
+
+  void load(const LogType logType) override {
+    ++*loadCount_;
+    BufferedInput::load(logType);
+  }
+
+  std::unique_ptr<BufferedInput> clone() const override {
+    return std::make_unique<CountingBufferedInput>(
+        getReadFile(), *pool_, loadCount_);
+  }
+
+ private:
+  const std::shared_ptr<std::atomic<uint64_t>> loadCount_;
+};
+
+} // namespace
 
 class ParquetReaderTest : public ParquetTestBase {
  public:
@@ -617,8 +645,8 @@ TEST_F(ParquetReaderTest, pageIndexRejectedChunkPreservesRowNumberType) {
   EXPECT_EQ(result->size(), 0);
   ASSERT_TRUE(result->type()->isRow());
   EXPECT_EQ(result->type()->size(), rowType->size() + 1);
-  EXPECT_EQ(
-      result->type()->childAt(rowType->size())->kind(), TypeKind::BIGINT);
+    EXPECT_EQ(
+            result->type()->childAt(rowType->size())->kind(), TypeKind::BIGINT);
 }
 
 TEST_F(ParquetReaderTest, pageIndexRuntimeStats) {
@@ -1436,6 +1464,70 @@ TEST_F(ParquetReaderTest, prefetchRowGroups) {
       parquetRowReader->nextRowNumber();
     }
   }
+}
+
+TEST_F(ParquetReaderTest, pageIndexPrefetchBatchesAcrossPayloadWindow) {
+  constexpr int64_t kRowsPerRowGroup = 10'000;
+  constexpr int64_t kNumRowGroups = 20;
+  const auto rowType = ROW("id", BIGINT());
+  const auto data = makeRowVector(
+      {"id"},
+      {makeFlatVector<int64_t>(
+          kRowsPerRowGroup * kNumRowGroups, [](auto row) { return row; })});
+
+  dwio::common::WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  writerOptions.flushPolicyFactory = [kRowsPerRowGroup]() {
+    return std::make_unique<DefaultFlushPolicy>(
+        kRowsPerRowGroup, 512 * 1'024 * 1'024);
+  };
+  ParquetWriterOptions parquetOptions;
+  parquetOptions.enableWritePageIndex = true;
+  auto* sink = write(data, writerOptions, parquetOptions);
+
+  const auto makeReader =
+      [&](const std::shared_ptr<std::atomic<uint64_t>>& loadCount) {
+        auto readerOptions = makeDefaultReaderOptions();
+        readerOptions.setFilePreloadThreshold(0);
+        readerOptions.setPrefetchRowGroups(1);
+        auto input = std::make_unique<CountingBufferedInput>(
+            std::make_shared<InMemoryReadFile>(
+                std::string(sink->data(), sink->size())),
+            *leafPool_,
+            loadCount);
+        return std::make_unique<ParquetReader>(
+            std::move(input), std::move(readerOptions));
+      };
+
+  const auto readAll = [&](ParquetReader& reader, bool withFilter) {
+    auto scanSpec = makeScanSpec(rowType);
+    if (withFilter) {
+      scanSpec->getOrCreateChild(Subfield("id"))
+          ->setFilter(
+              std::make_unique<BigintRange>(
+                  std::numeric_limits<int64_t>::min(), INT64_MAX, false));
+    }
+    auto rowReaderOptions = makeRowReaderOpts(rowType);
+    rowReaderOptions.setScanSpec(scanSpec);
+    auto rowReader = reader.createRowReader(rowReaderOptions);
+    auto result = BaseVector::create(rowType, 0, leafPool_.get());
+    while (rowReader->next(1'000, result) > 0) {
+    }
+  };
+
+  auto noFilterLoads = std::make_shared<std::atomic<uint64_t>>();
+  auto noFilterReader = makeReader(noFilterLoads);
+  ASSERT_EQ(noFilterReader->fileMetaData().numRowGroups(), kNumRowGroups);
+  readAll(*noFilterReader, false);
+  const auto noFilterLoadCount = noFilterLoads->load();
+  EXPECT_EQ(noFilterLoadCount, kNumRowGroups);
+
+  auto filteredLoads = std::make_shared<std::atomic<uint64_t>>();
+  auto filteredReader = makeReader(filteredLoads);
+  ASSERT_EQ(filteredReader->fileMetaData().numRowGroups(), kNumRowGroups);
+  readAll(*filteredReader, true);
+
+  EXPECT_EQ(filteredLoads->load() - noFilterLoadCount, 3);
 }
 
 TEST_F(ParquetReaderTest, testEmptyRowGroups) {
