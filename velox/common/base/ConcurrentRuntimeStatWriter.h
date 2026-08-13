@@ -28,7 +28,7 @@ namespace facebook::velox {
 /// Accumulates runtime metrics by name behind a lock, and exposes a snapshot.
 /// Unlike writers that forward each sample to an owning operator, this one owns
 /// the values, so any number of threads may record into it concurrently.
-class ConcurrentRuntimeStatWriter final : public BaseRuntimeStatWriter {
+class ConcurrentRuntimeStatWriter : public BaseRuntimeStatWriter {
  public:
   /// Merges 'value' under 'name'. All samples under a name must share the same
   /// unit; a mismatched unit throws.
