@@ -163,6 +163,14 @@ class StreamChunkerTestsBase : public ::testing::Test {
     velox::memory::MemoryManager::testingSetInstance(options);
   }
 
+  static void TearDownTestCase() {
+    // registerFactory() throws if the kind is already registered, and every
+    // suite in this binary runs SetUpTestCase. Pairing them leaves the
+    // process-global registry as each suite found it, matching
+    // OperatorTestBase::TearDownTestCase.
+    velox::memory::SharedArbitrator::unregisterFactory();
+  }
+
   void SetUp() override {
     rootPool_ = velox::memory::memoryManager()->addRootPool("default_root");
     leafPool_ = rootPool_->addLeafChild("default_leaf");

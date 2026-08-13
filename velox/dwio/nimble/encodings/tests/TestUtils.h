@@ -186,11 +186,22 @@ class Encoder {
         return information;
       }
 
+#ifdef DISABLE_META_INTERNAL_COMPRESSOR
+      // The Meta internal compressor has no OSS implementation and is not put
+      // in the registry by Compression.cpp, so returning it here would throw
+      // from getCompressor(). Redirect to Zstd; tests that assert on the
+      // resulting compression type already account for this mapping.
+      nimble::CompressionConfig information{
+          .compressionType = nimble::CompressionType::Zstd};
+      information.parameters.zstd.compressionLevel = 3;
+      return information;
+#else
       nimble::CompressionConfig information{
           .compressionType = nimble::CompressionType::MetaInternal};
       information.parameters.metaInternal.compressionLevel = 9;
       information.parameters.metaInternal.decompressionLevel = 2;
       return information;
+#endif
     }
 
     virtual bool shouldAccept(

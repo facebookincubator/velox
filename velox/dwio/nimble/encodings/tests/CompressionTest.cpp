@@ -122,6 +122,9 @@ using TestTypes = ::testing::Types<TYPES>;
 TYPED_TEST_CASE(CompressionTests, TestTypes);
 
 TYPED_TEST(CompressionTests, MinCompressibleSizeMetaInternal) {
+#ifdef DISABLE_META_INTERNAL_COMPRESSOR
+  GTEST_SKIP() << "The Meta internal compressor has no OSS implementation.";
+#endif
   using T = TypeParam;
   assertMinCompressibleSizeMetaInternal<T>(
       nimble::CompressionType::MetaInternal,
@@ -216,6 +219,9 @@ TEST(CompressionTests, ConfiguredCompressionPolicyAcceptRatioOverride) {
 }
 
 TEST(CompressionTests, MinCompresssionSizeIsApplied) {
+#ifdef DISABLE_META_INTERNAL_COMPRESSOR
+  GTEST_SKIP() << "The Meta internal compressor has no OSS implementation.";
+#endif
   const auto pool =
       facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   const auto compressionType = nimble::CompressionType::MetaInternal;

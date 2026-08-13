@@ -49,7 +49,7 @@ class ScalarColumnReaderTest : public ::testing::Test,
                                public ::testing::WithParamInterface<bool> {
  protected:
   static void SetUpTestCase() {
-    memory::initializeMemoryManager(velox::memory::MemoryManager::Options{});
+    memory::MemoryManager::testingSetInstance(velox::memory::MemoryManager::Options{});
     registerSelectiveNimbleReaderFactory();
   }
 

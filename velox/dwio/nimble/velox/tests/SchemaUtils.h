@@ -124,10 +124,27 @@ void schema(
 #define NIMBLE_ARRAY(elements) facebook::nimble::test::array(builder, elements)
 #define NIMBLE_OFFSETARRAY(elements) \
   facebook::nimble::test::arrayWithOffsets(builder, elements)
-#define NIMBLE_MAP(keys, values) \
-  facebook::nimble::test::map(builder, keys, values)
-#define NIMBLE_SLIDINGWINDOWMAP(keys, values) \
-  facebook::nimble::test::slidingWindowMap(builder, keys, values)
+// Both operands allocate schema nodes, and the order in which a function's
+// arguments are evaluated is unspecified in C++ (GCC evaluates right to left,
+// Clang left to right). Passing them directly would therefore hand out schema
+// offsets in a compiler dependent order. Sequence them so keys always take the
+// lower offset, which is what the recorded expectations assume.
+#define NIMBLE_MAP(keys, values)                        \
+  [&]() {                                               \
+    auto nimbleMapKeys = (keys);                        \
+    auto nimbleMapValues = (values);                    \
+    return facebook::nimble::test::map(                 \
+        builder, std::move(nimbleMapKeys), std::move(nimbleMapValues)); \
+  }()
+#define NIMBLE_SLIDINGWINDOWMAP(keys, values)            \
+  [&]() {                                                \
+    auto nimbleWindowKeys = (keys);                      \
+    auto nimbleWindowValues = (values);                  \
+    return facebook::nimble::test::slidingWindowMap(     \
+        builder,                                         \
+        std::move(nimbleWindowKeys),                     \
+        std::move(nimbleWindowValues));                  \
+  }()
 #define NIMBLE_FLATMAP(keyKind, values, adder)                \
   facebook::nimble::test::flatMap(                            \
       builder,                                                \

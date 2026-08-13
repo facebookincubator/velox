@@ -26,7 +26,7 @@ using nimble::ColumnStats;
 class FieldWriterStatsTests : public ::testing::TestWithParam<bool> {
  protected:
   static void SetUpTestCase() {
-    velox::memory::initializeMemoryManager(
+    velox::memory::MemoryManager::testingSetInstance(
         velox::memory::MemoryManager::Options{});
   }
 

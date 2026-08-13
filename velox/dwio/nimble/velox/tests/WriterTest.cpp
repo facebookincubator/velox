@@ -69,6 +69,21 @@ DEFINE_uint32(
 
 using nimble::test::makeTestTabletOptions;
 
+// The Meta internal compressor has no OSS implementation. The replay policy
+// redirects a request for it to Zstd, which the accept ratio may in turn reject
+// in favour of leaving the data uncompressed, so both outcomes are valid there.
+void expectMetaInternalCompression(nimble::CompressionType actual) {
+#ifdef DISABLE_META_INTERNAL_COMPRESSOR
+  EXPECT_TRUE(
+      actual == nimble::CompressionType::Zstd ||
+      actual == nimble::CompressionType::Uncompressed)
+      << "Expected MetaInternal (redirected to Zstd or Uncompressed), but got "
+      << nimble::toString(actual);
+#else
+  EXPECT_EQ(nimble::CompressionType::MetaInternal, actual);
+#endif
+}
+
 class WriterTest : public ::testing::Test {
  protected:
   static void SetUpTestCase() {
@@ -76,6 +91,14 @@ class WriterTest : public ::testing::Test {
     velox::memory::MemoryManager::Options options;
     options.arbitratorKind = "SHARED";
     velox::memory::MemoryManager::testingSetInstance(options);
+  }
+
+  static void TearDownTestCase() {
+    // registerFactory() throws if the kind is already registered, and every
+    // suite in this binary runs SetUpTestCase. Pairing them leaves the
+    // process-global registry as each suite found it, matching
+    // OperatorTestBase::TearDownTestCase.
+    velox::memory::SharedArbitrator::unregisterFactory();
   }
 
   void SetUp() override {
@@ -1876,8 +1899,7 @@ TEST_F(WriterTest, encodingLayout) {
             nimble::EncodingType::FixedBitWidth,
             capture.child(nimble::EncodingIdentifiers::Dictionary::Alphabet)
                 ->encodingType());
-        EXPECT_EQ(
-            nimble::CompressionType::MetaInternal,
+        expectMetaInternalCompression(
             capture.child(nimble::EncodingIdentifiers::Dictionary::Alphabet)
                 ->compressionType());
       }
@@ -1895,8 +1917,7 @@ TEST_F(WriterTest, encodingLayout) {
             capture
                 .child(nimble::EncodingIdentifiers::MainlyConstant::OtherValues)
                 ->encodingType());
-        EXPECT_EQ(
-            nimble::CompressionType::MetaInternal,
+        expectMetaInternalCompression(
             capture
                 .child(nimble::EncodingIdentifiers::MainlyConstant::OtherValues)
                 ->compressionType());

@@ -137,6 +137,18 @@ CompressionConfig ReplayedCompressionPolicy::config() const {
     return config;
   }
 
+#ifdef DISABLE_META_INTERNAL_COMPRESSOR
+  // Replaying a layout recorded by an internal writer can ask for the Meta
+  // internal compressor, which has no OSS implementation and is not put in the
+  // registry by Compression.cpp. Falling through to it would throw from
+  // getCompressor(), so redirect to Zstd.
+  CompressionConfig config{
+      .compressionType = CompressionType::Zstd,
+      .minCompressionSize = compressionOptions_.zstdMinCompressionSize};
+  config.parameters.zstd.compressionLevel =
+      compressionOptions_.zstdCompressionLevel;
+  return config;
+#else
   CompressionConfig config{
       .compressionType = CompressionType::MetaInternal,
       .minCompressionSize = compressionOptions_.internalMinCompressionSize};
@@ -149,6 +161,7 @@ CompressionConfig ReplayedCompressionPolicy::config() const {
   config.parameters.metaInternal.compressionKey =
       compressionOptions_.metaInternalCompressionKey;
   return config;
+#endif
 }
 
 bool ReplayedCompressionPolicy::shouldAccept(

@@ -69,8 +69,8 @@ class HuffmanEncodingTest : public ::testing::Test {
     for (const auto useLegacy : {false, true}) {
       SCOPED_TRACE(fmt::format("legacy={}", useLegacy));
       std::unique_ptr<Encoding> encoding = useLegacy
-          ? legacy::EncodingFactory({}).create(*pool_, encoded, nullptr)
-          : EncodingFactory({}).create(*pool_, encoded, nullptr);
+          ? legacy::EncodingFactory().create(*pool_, encoded, nullptr)
+          : EncodingFactory().create(*pool_, encoded, nullptr);
       EXPECT_EQ(encoding->encodingType(), EncodingType::Huffman);
       EXPECT_EQ(encoding->dataType(), TypeTraits<T>::dataType);
       EXPECT_EQ(encoding->rowCount(), values.size());

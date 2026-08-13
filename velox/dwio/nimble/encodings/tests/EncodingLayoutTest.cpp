@@ -40,7 +40,8 @@ namespace {
 
 void verifyEncodingLayout(
     const std::optional<const nimble::EncodingLayout>& expected,
-    const std::optional<const nimble::EncodingLayout>& actual) {
+    const std::optional<const nimble::EncodingLayout>& actual,
+    bool compressionMayBeRedirected) {
   ASSERT_EQ(expected.has_value(), actual.has_value());
 
   if (!expected.has_value()) {
@@ -58,7 +59,8 @@ void verifyEncodingLayout(
   // If expected is MetaInternal but we don't have it, accept Zstd or
   // Uncompressed (Uncompressed can happen if the data is too small to benefit
   // from compression)
-  if (expectedCompression == nimble::CompressionType::MetaInternal) {
+  if (compressionMayBeRedirected &&
+      expectedCompression == nimble::CompressionType::MetaInternal) {
     ASSERT_TRUE(
         actualCompression == nimble::CompressionType::Zstd ||
         actualCompression == nimble::CompressionType::Uncompressed)
@@ -74,7 +76,8 @@ void verifyEncodingLayout(
   ASSERT_EQ(expected->childrenCount(), actual->childrenCount());
 
   for (auto i = 0; i < expected->childrenCount(); ++i) {
-    verifyEncodingLayout(expected->child(i), actual->child(i));
+    verifyEncodingLayout(
+        expected->child(i), actual->child(i), compressionMayBeRedirected);
   }
 }
 
@@ -84,7 +87,8 @@ void testSerialization(nimble::EncodingLayout expected) {
   auto size = expected.serialize(output);
   auto actual = nimble::EncodingLayout::create(
       {output.data(), static_cast<size_t>(size)});
-  verifyEncodingLayout(expected, actual.first);
+  verifyEncodingLayout(
+      expected, actual.first, /*compressionMayBeRedirected=*/false);
 }
 
 template <typename T, typename TCollection = std::vector<T>>
@@ -116,7 +120,9 @@ nimble::EncodingLayout encodeAndCapture(
 template <typename T, typename TCollection = std::vector<T>>
 void testCapture(nimble::EncodingLayout expected, TCollection data) {
   verifyEncodingLayout(
-      expected, encodeAndCapture<T>(expected, std::move(data)));
+      expected,
+      encodeAndCapture<T>(expected, std::move(data)),
+      /*compressionMayBeRedirected=*/true);
 }
 
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
@@ -488,7 +494,8 @@ TEST(EncodingLayoutTests, sharedDictionary) {
   verifyEncodingLayout(
       expected,
       nimble::EncodingLayoutCapture::capture(
-          encoded, nimble::Encoding::Options{}));
+          encoded, nimble::Encoding::Options{}),
+      /*compressionMayBeRedirected=*/true);
 
   struct TraversedEncoding {
     nimble::EncodingType encodingType;
@@ -687,7 +694,8 @@ TEST(EncodingLayoutTests, nullable) {
   // just captures the data node.
   verifyEncodingLayout(
       expected.child(nimble::EncodingIdentifiers::Nullable::Data),
-      actual.first);
+      actual.first,
+      /*compressionMayBeRedirected=*/false);
 }
 
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
@@ -831,7 +839,8 @@ TEST(EncodingLayoutTests, subIntSplitCapture) {
   ASSERT_GT(serializedSize, 0);
   auto [deserialized, bytesRead] = nimble::EncodingLayout::create(
       {output.data(), static_cast<size_t>(serializedSize)});
-  verifyEncodingLayout(captured, deserialized);
+  verifyEncodingLayout(
+      captured, deserialized, /*compressionMayBeRedirected=*/false);
   auto preserveMode = deserialized.config().get(
       std::string(nimble::detail::subintsplit::kSplitModeConfigKey));
   ASSERT_TRUE(preserveMode.has_value());

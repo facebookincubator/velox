@@ -33,7 +33,7 @@ using namespace velox::common;
 class IndexFilterTestBase : public ::testing::Test {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::initialize({});
+    memory::MemoryManager::testingSetInstance({});
   }
 
   void SetUp() override {

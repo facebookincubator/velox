@@ -70,6 +70,16 @@ class TestCompressPolicy : public nimble::CompressionPolicy {
       return {.compressionType = nimble::CompressionType::Uncompressed};
     }
 
+#ifdef DISABLE_META_INTERNAL_COMPRESSOR
+    // The Meta internal compressor has no OSS implementation and is not put in
+    // the registry by Compression.cpp, so returning it here would throw from
+    // getCompressor(). Redirect to Zstd so the surrounding encoding tests still
+    // exercise a real compression path.
+    nimble::CompressionConfig information{
+        .compressionType = nimble::CompressionType::Zstd};
+    information.parameters.zstd.compressionLevel = 3;
+    return information;
+#else
     nimble::CompressionConfig information{
         .compressionType = nimble::CompressionType::MetaInternal};
     information.parameters.metaInternal.compressionLevel = 9;
@@ -77,6 +87,7 @@ class TestCompressPolicy : public nimble::CompressionPolicy {
     information.parameters.metaInternal.useVariableBitWidthCompressor =
         useVariableBitWidthCompressor_;
     return information;
+#endif
   }
 
   virtual bool shouldAccept(

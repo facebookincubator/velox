@@ -24,7 +24,7 @@ using namespace facebook;
 class VectorAdaptersTest : public ::testing::Test {
  protected:
   static void SetUpTestSuite() {
-    velox::memory::MemoryManager::initialize(
+    velox::memory::MemoryManager::testingSetInstance(
         velox::memory::MemoryManager::Options{});
   }
 

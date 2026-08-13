@@ -2614,8 +2614,8 @@ TEST_F(SerializationTest, serializerRejectsFixedStreamRowCountEncoding) {
   SerializerOptions options{
       .version = SerializationVersion::kSerialization,
       .streamIndicesEncodingType = EncodingType::Trivial,
-      .streamSizesEncodingType = EncodingType::Trivial,
       .encodingOptions = Encoding::Options{.useVarintRowCount = false},
+      .streamSizesEncodingType = EncodingType::Trivial,
   };
   Serializer serializer{options, type, pool_.get()};
   NIMBLE_ASSERT_THROW(

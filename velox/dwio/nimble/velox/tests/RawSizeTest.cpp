@@ -83,7 +83,7 @@ uint64_t getSize<velox::Timestamp>(velox::Timestamp /*value*/) {
 class RawSizeBaseTestFixture : public ::testing::Test {
  protected:
   static void SetUpTestSuite() {
-    velox::memory::MemoryManager::initialize(
+    velox::memory::MemoryManager::testingSetInstance(
         velox::memory::MemoryManager::Options{});
   }
 

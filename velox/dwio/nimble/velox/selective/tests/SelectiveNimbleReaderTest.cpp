@@ -134,7 +134,7 @@ class SelectiveNimbleReaderTest
  protected:
   static void SetUpTestCase() {
     if (!memory::MemoryManager::testInstance()) {
-      memory::initializeMemoryManager(velox::memory::MemoryManager::Options{});
+      memory::MemoryManager::testingSetInstance(velox::memory::MemoryManager::Options{});
     }
     registerSelectiveNimbleReaderFactory();
   }
@@ -4121,7 +4121,7 @@ class SmallFilePreloadTest : public ::testing::Test,
  protected:
   static void SetUpTestCase() {
     if (!memory::MemoryManager::testInstance()) {
-      memory::initializeMemoryManager(velox::memory::MemoryManager::Options{});
+      memory::MemoryManager::testingSetInstance(velox::memory::MemoryManager::Options{});
     }
     registerSelectiveNimbleReaderFactory();
   }

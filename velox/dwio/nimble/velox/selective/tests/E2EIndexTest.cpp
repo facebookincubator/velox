@@ -190,7 +190,7 @@ class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
 class E2EIndexTestBase : public ::testing::Test {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::initialize({});
+    memory::MemoryManager::testingSetInstance({});
     registerSelectiveNimbleReaderFactory();
   }
 

@@ -568,7 +568,7 @@ void runMultiTypeBenchmarks() {
 
 int main(int argc, char** argv) {
   folly::Init init{&argc, &argv};
-  facebook::velox::memory::initializeMemoryManager(
+  facebook::velox::memory::MemoryManager::testingSetInstance(
       facebook::velox::memory::MemoryManager::Options{});
 
   facebook::nimble::runBenchmarks();

@@ -179,7 +179,7 @@ TEST(NimbleTypeProjectionTest, rejectsEmptyProjection) {
 class NimbleIndexProjectorTest : public ::testing::TestWithParam<TestParam> {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::initialize({});
+    memory::MemoryManager::testingSetInstance({});
   }
 
   void SetUp() override {
@@ -1534,11 +1534,11 @@ TEST_P(NimbleIndexProjectorTest, projectedComplexNullFuzzer) {
           {
               .vectorSize = kRowsPerBatch,
               .nullRatio = 0,
+              .useRandomNullPattern = true,
               .stringLength = 12,
               .stringVariableLength = true,
               .containerLength = 3,
               .containerVariableLength = true,
-              .useRandomNullPattern = true,
               .normalizeMapKeys = true,
           },
           leafPool_.get(),
@@ -2180,11 +2180,19 @@ TEST_P(NimbleIndexProjectorTest, localReadModeStats) {
     bool bufferIo;
     bool useIoUring;
   };
-  const std::vector<TestCase> testCases = {
+  std::vector<TestCase> testCases = {
       {"buffered", /*bufferIo=*/true, /*useIoUring=*/false},
       {"direct", /*bufferIo=*/false, /*useIoUring=*/false},
-      {"directIoUring", /*bufferIo=*/false, /*useIoUring=*/true},
   };
+  // LocalReadFile rejects a useIoUring request outright when io_uring is
+  // unavailable, which is the case whenever folly was built without liburing.
+  // Velox neither declares nor installs liburing, so a stock OSS build never
+  // has it. The cache assertions below are expressed in terms of
+  // testCases.size(), so the mode is dropped rather than skipped in the loop.
+  if (velox::IoUringReader::available()) {
+    testCases.push_back(
+        {"directIoUring", /*bufferIo=*/false, /*useIoUring=*/true});
+  }
 
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(testCase.name);

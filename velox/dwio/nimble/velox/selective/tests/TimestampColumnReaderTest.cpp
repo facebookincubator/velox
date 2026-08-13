@@ -34,7 +34,7 @@ class TimestampColumnReaderTest : public ::testing::Test,
                                   public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::initializeMemoryManager(velox::memory::MemoryManager::Options{});
+    memory::MemoryManager::testingSetInstance(velox::memory::MemoryManager::Options{});
     registerSelectiveNimbleReaderFactory();
   }
 

@@ -6125,6 +6125,12 @@ TEST_P(VeloxReaderTest, veloxTypeFromNimbleSchemaEmptyFlatMap) {
 }
 
 TEST_P(VeloxReaderTest, missingMetadata) {
+  if (nimble::detail::defaultMetadata().empty()) {
+    GTEST_SKIP() << "This build injects no default metadata "
+                    "(WriterDefaultMetadataOSS.cpp returns an empty map), so a "
+                    "file written without explicit metadata has none to read "
+                    "back and the lazy-load chunk counts do not apply.";
+  }
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   auto vector =
       vectorMaker.rowVector({vectorMaker.flatVector<int32_t>({1, 2, 3})});

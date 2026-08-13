@@ -41,7 +41,7 @@ velox::BufferPtr toBufferPtr(
 } // namespace
 
 void ClusterIndexTestBase::SetUpTestCase() {
-  velox::memory::MemoryManager::initialize({});
+  velox::memory::MemoryManager::testingSetInstance({});
   velox::common::testutil::TestValue::enable();
 }
 

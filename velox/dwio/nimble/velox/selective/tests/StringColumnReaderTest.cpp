@@ -49,7 +49,7 @@ class StringColumnReaderTest : public ::testing::Test,
                                public ::testing::WithParamInterface<bool> {
  protected:
   static void SetUpTestCase() {
-    memory::initializeMemoryManager(velox::memory::MemoryManager::Options{});
+    memory::MemoryManager::testingSetInstance(velox::memory::MemoryManager::Options{});
     common::testutil::TestValue::enable();
     registerSelectiveNimbleReaderFactory();
   }
