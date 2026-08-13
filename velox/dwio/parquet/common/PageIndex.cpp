@@ -16,6 +16,7 @@
 
 #include "velox/dwio/parquet/common/PageIndex.h"
 
+#include <cmath>
 #include <cstring>
 #include <limits>
 
@@ -52,8 +53,15 @@ PageIndexResult<DecodedPageBounds> decodeBounds(
             PageIndexFallbackReason::kInvalidBounds,
             "BOOLEAN bounds must contain one byte");
       }
-      result.minimum = minimum[0] != 0;
-      result.maximum = maximum[0] != 0;
+      const auto minimumValue = static_cast<uint8_t>(minimum[0]);
+      const auto maximumValue = static_cast<uint8_t>(maximum[0]);
+      if (minimumValue > 1 || maximumValue > 1) {
+        return PageIndexResult<DecodedPageBounds>::fallback(
+            PageIndexFallbackReason::kInvalidBounds,
+            "BOOLEAN bounds must be zero or one");
+      }
+      result.minimum = minimumValue != 0;
+      result.maximum = maximumValue != 0;
       break;
     }
     case thrift::Type::INT32: {
@@ -128,6 +136,26 @@ PageIndexResult<DecodedPageBounds> decodeBounds(
           PageIndexFallbackReason::kUnsupportedPhysicalType,
           "Physical type does not have a supported bound decoder");
   }
+
+  const bool unusableBounds = std::visit(
+      [&](const auto& min) {
+        using Value = std::decay_t<decltype(min)>;
+        if (!std::holds_alternative<Value>(*result.maximum)) {
+          return true;
+        }
+        const auto& max = std::get<Value>(*result.maximum);
+        if constexpr (
+            std::is_same_v<Value, float> || std::is_same_v<Value, double>) {
+          if (std::isnan(min) || std::isnan(max)) {
+            return true;
+          }
+        }
+        return min > max;
+      },
+      *result.minimum);
+  if (unusableBounds) {
+    return PageIndexResult<DecodedPageBounds>::success(DecodedPageBounds{});
+  }
   return PageIndexResult<DecodedPageBounds>::success(std::move(result));
 }
 
@@ -176,19 +204,14 @@ validatePageIndexRegion(int64_t offset, int32_t length, uint64_t fileLength) {
 
 PageIndexResult<ValidatedPageIndexes> decodeColumnIndex(
     const thrift::ColumnIndex& columnIndex,
-    const thrift::OffsetIndex& offsetIndex,
+    const ValidatedOffsetIndex& offsetIndex,
     thrift::Type physicalType,
     std::optional<int32_t> typeLength,
     PageBoundsCapability requestedCapability,
     uint64_t rowGroupRows,
     uint64_t fileLength) {
-  if (requestedCapability == PageBoundsCapability::kOrderedBounds &&
-      *columnIndex.boundary_order() == thrift::BoundaryOrder::UNORDERED) {
-    requestedCapability = PageBoundsCapability::kNullabilityOnly;
-  }
-
-  const auto numPages = offsetIndex.page_locations()->size();
-    if (numPages == 0 || numPages > std::numeric_limits<uint32_t>::max() ||
+  const auto numPages = offsetIndex.pages.size();
+  if (numPages == 0 || numPages > kMaxPageIndexPages ||
       columnIndex.null_pages()->size() != numPages ||
       columnIndex.min_values()->size() != numPages ||
       columnIndex.max_values()->size() != numPages ||
@@ -208,65 +231,34 @@ PageIndexResult<ValidatedPageIndexes> decodeColumnIndex(
   nullCounts.reserve(numPages);
   decodedBounds.reserve(numPages);
 
-  uint64_t previousFirstRow{0};
-  uint64_t previousEnd{0};
   for (size_t i = 0; i < numPages; ++i) {
-    const auto& location = offsetIndex.page_locations()->at(i);
-    const auto firstRow = *location.first_row_index();
-    const auto offset = *location.offset();
-    const auto compressedSize = *location.compressed_page_size();
-    if (firstRow < 0 || static_cast<uint64_t>(firstRow) >= rowGroupRows ||
-        (i == 0 ? firstRow != 0
-                : static_cast<uint64_t>(firstRow) <= previousFirstRow)) {
-      return PageIndexResult<ValidatedPageIndexes>::fallback(
-          PageIndexFallbackReason::kInvalidRowOrder,
-          "Offset-index row or page location is invalid");
-    }
-    if (offset < 0 || compressedSize <= 0) {
-      return PageIndexResult<ValidatedPageIndexes>::fallback(
-        PageIndexFallbackReason::kInvalidLocation,
-        "Offset-index page location is invalid");
-    }
-
-    const auto unsignedOffset = static_cast<uint64_t>(offset);
-    const auto unsignedSize = static_cast<uint64_t>(compressedSize);
-    if (unsignedOffset > fileLength ||
-        unsignedSize > fileLength - unsignedOffset ||
-        (i > 0 && unsignedOffset < previousEnd)) {
-      return PageIndexResult<ValidatedPageIndexes>::fallback(
-          PageIndexFallbackReason::kInvalidLocation,
-          "Data page region is outside the file or overlaps a prior page");
-    }
-
-    const auto endRow = i + 1 < numPages
-        ? static_cast<uint64_t>(
-              *offsetIndex.page_locations()->at(i + 1).first_row_index())
-        : rowGroupRows;
-    if (endRow <= static_cast<uint64_t>(firstRow)) {
-      return PageIndexResult<ValidatedPageIndexes>::fallback(
-          PageIndexFallbackReason::kInvalidRowOrder,
-          "Data page row span is empty");
-    }
-    const auto numRows = endRow - static_cast<uint64_t>(firstRow);
-    if (columnIndex.null_counts() &&
-        ((*columnIndex.null_counts())[i] < 0 ||
-         static_cast<uint64_t>((*columnIndex.null_counts())[i]) > numRows)) {
+    const auto& location = offsetIndex.pages.at(i);
+    const auto nullCount = columnIndex.null_counts()
+        ? std::optional<int64_t>((*columnIndex.null_counts())[i])
+        : std::nullopt;
+    if (nullCount.has_value() &&
+        (nullCount.value() < 0 ||
+         static_cast<uint64_t>(nullCount.value()) > location.numRows)) {
       return PageIndexResult<ValidatedPageIndexes>::fallback(
           PageIndexFallbackReason::kInvalidBounds,
           "Null count exceeds the page row count");
     }
 
     const bool nullPage = (*columnIndex.null_pages())[i];
-    result.offset.pages.push_back(
-        {unsignedOffset,
-         static_cast<uint32_t>(compressedSize),
-         static_cast<uint64_t>(firstRow),
-         numRows});
+    if (nullCount.has_value() &&
+        ((nullPage &&
+          nullCount.value() != static_cast<int64_t>(location.numRows)) ||
+         (!nullPage &&
+          nullCount.value() == static_cast<int64_t>(location.numRows)))) {
+      return PageIndexResult<ValidatedPageIndexes>::fallback(
+          PageIndexFallbackReason::kInvalidBounds,
+          "Null-page and null-count metadata disagree");
+    }
+    result.offset.pages.push_back(location);
     nullPages.push_back(nullPage);
     nullCounts.push_back(
-        columnIndex.null_counts()
-            ? std::optional<uint64_t>(
-                  static_cast<uint64_t>((*columnIndex.null_counts())[i]))
+        nullCount.has_value()
+            ? std::optional<uint64_t>(static_cast<uint64_t>(nullCount.value()))
             : std::nullopt);
 
     if (nullPage) {
@@ -286,13 +278,6 @@ PageIndexResult<ValidatedPageIndexes> decodeColumnIndex(
       decodedBounds.push_back(
           decodedPageBounds.value.value_or(DecodedPageBounds{}));
     }
-    previousFirstRow = static_cast<uint64_t>(firstRow);
-    if (unsignedOffset > std::numeric_limits<uint64_t>::max() - unsignedSize) {
-      return PageIndexResult<ValidatedPageIndexes>::fallback(
-          PageIndexFallbackReason::kInvalidLocation,
-          "Data page region end overflows");
-    }
-    previousEnd = unsignedOffset + unsignedSize;
   }
   result.column = DecodedColumnIndex(
       requestedCapability,
@@ -305,11 +290,11 @@ PageIndexResult<ValidatedPageIndexes> decodeColumnIndex(
 PageIndexResult<ValidatedOffsetIndex> decodeOffsetIndex(
     const thrift::OffsetIndex& offsetIndex,
     uint64_t rowGroupRows,
-  uint64_t fileLength,
-  std::optional<uint64_t> dataPageOffset,
-  std::optional<common::Region> columnChunkRegion) {
+    uint64_t fileLength,
+    std::optional<uint64_t> dataPageOffset,
+    std::optional<common::Region> columnChunkRegion) {
   const auto numPages = offsetIndex.page_locations()->size();
-  if (numPages == 0 || numPages > std::numeric_limits<uint32_t>::max()) {
+  if (numPages == 0 || numPages > kMaxPageIndexPages) {
     return PageIndexResult<ValidatedOffsetIndex>::fallback(
         PageIndexFallbackReason::kCardinalityMismatch,
         "Offset-index page count is invalid");
@@ -333,8 +318,8 @@ PageIndexResult<ValidatedOffsetIndex> decodeOffsetIndex(
     }
     if (offset < 0 || compressedSize <= 0) {
       return PageIndexResult<ValidatedOffsetIndex>::fallback(
-        PageIndexFallbackReason::kInvalidLocation,
-        "Offset-index page location is invalid");
+          PageIndexFallbackReason::kInvalidLocation,
+          "Offset-index page location is invalid");
     }
 
     const auto unsignedOffset = static_cast<uint64_t>(offset);
@@ -347,8 +332,7 @@ PageIndexResult<ValidatedOffsetIndex> decodeOffsetIndex(
          (unsignedOffset < columnChunkRegion->offset ||
           unsignedOffset - columnChunkRegion->offset >
               columnChunkRegion->length ||
-          unsignedSize >
-              columnChunkRegion->length -
+          unsignedSize > columnChunkRegion->length -
                   (unsignedOffset - columnChunkRegion->offset))) ||
         (i > 0 && unsignedOffset < previousEnd)) {
       return PageIndexResult<ValidatedOffsetIndex>::fallback(

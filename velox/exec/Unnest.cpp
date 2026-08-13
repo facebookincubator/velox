@@ -187,7 +187,7 @@ void Unnest::finishInput() {
   firstInnerRowStart_ = 0;
 }
 
-Unnest::InclusiveRowRange Unnest::extractRowRange(vector_size_t inputSize) const {
+Unnest::RowRange Unnest::extractRowRange(vector_size_t inputSize) const {
   vector_size_t numInputRows{0};
   vector_size_t numInnerRows{0};
   std::optional<vector_size_t> lastInnerRowEnd;
@@ -235,7 +235,7 @@ Unnest::InclusiveRowRange Unnest::extractRowRange(vector_size_t inputSize) const
 };
 
 void Unnest::generateRepeatedColumns(
-    const InclusiveRowRange& range,
+    const RowRange& range,
     std::vector<VectorPtr>& outputs) {
   // Create "indices" buffer to repeat rows as many times as there are elements
   // in the array (or map) in unnestDecoded.
@@ -287,7 +287,7 @@ void Unnest::generateRepeatedColumns(
 
 const Unnest::UnnestChannelEncoding Unnest::generateEncodingForChannel(
     column_index_t channel,
-    const InclusiveRowRange& range) {
+    const RowRange& range) {
   BufferPtr innerRowIndices = allocateIndices(range.numInnerRows, pool());
   auto* rawInnerRowIndices = innerRowIndices->asMutable<vector_size_t>();
 
@@ -339,7 +339,7 @@ const Unnest::UnnestChannelEncoding Unnest::generateEncodingForChannel(
   return {innerRowIndices, nulls, identityMapping};
 }
 
-VectorPtr Unnest::generateOrdinalityVector(const InclusiveRowRange& range) {
+VectorPtr Unnest::generateOrdinalityVector(const RowRange& range) {
   VELOX_DCHECK_GT(range.numInputRows, 0);
 
   auto ordinalityVector = BaseVector::create<FlatVector<int64_t>>(
@@ -378,7 +378,7 @@ VectorPtr Unnest::generateOrdinalityVector(const InclusiveRowRange& range) {
   return ordinalityVector;
 }
 
-VectorPtr Unnest::generateMarkerVector(const InclusiveRowRange& range) {
+VectorPtr Unnest::generateMarkerVector(const RowRange& range) {
   VELOX_CHECK(withMarker_);
   VELOX_DCHECK_GT(range.numInputRows, 0);
 
@@ -415,7 +415,7 @@ VectorPtr Unnest::generateMarkerVector(const InclusiveRowRange& range) {
   return markerVector;
 }
 
-RowVectorPtr Unnest::generateOutput(const InclusiveRowRange& range) {
+RowVectorPtr Unnest::generateOutput(const RowRange& range) {
   std::vector<VectorPtr> outputs(outputType_->size());
   generateRepeatedColumns(range, outputs);
 
@@ -494,7 +494,7 @@ bool Unnest::isFinished() {
   return noMoreInput_ && input_ == nullptr;
 }
 
-void Unnest::InclusiveRowRange::forEachRow(
+void Unnest::RowRange::forEachRow(
     const std::function<void(
         vector_size_t /*row*/,
         vector_size_t /*start*/,

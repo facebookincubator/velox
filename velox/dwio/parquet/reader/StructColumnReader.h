@@ -63,6 +63,9 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
 
   void setNullsFromRepDefs(PageReader& pageReader);
 
+  /// Loads repdefs needed to advance projected repeated children.
+  void prepareForSkip(uint64_t numValues);
+
   dwio::common::SelectiveColumnReader* childForRepDefs() const {
     return childForRepDefs_;
   }

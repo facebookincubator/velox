@@ -21,6 +21,7 @@
 #include "velox/dwio/parquet/reader/Metadata.h"
 #include "velox/dwio/parquet/reader/PagePruningPlan.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
+#include "velox/dwio/parquet/reader/SemanticVersion.h"
 #include "velox/type/Filter.h"
 
 namespace facebook::velox::common {
@@ -40,11 +41,13 @@ class ParquetParams : public dwio::common::FormatParams {
       dwio::common::ColumnReaderStatistics& stats,
       const FileMetaDataPtr metaData,
       const tz::TimeZone* sessionTimezone,
-      TimestampPrecision timestampPrecision)
+      TimestampPrecision timestampPrecision,
+      std::optional<SemanticVersion> parquetVersion)
       : FormatParams(pool, stats),
         metaData_(metaData),
         sessionTimezone_(sessionTimezone),
-        timestampPrecision_(timestampPrecision) {}
+        timestampPrecision_(timestampPrecision),
+        parquetVersion_(std::move(parquetVersion)) {}
   std::unique_ptr<dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const common::ScanSpec& scanSpec) override;
@@ -53,10 +56,16 @@ class ParquetParams : public dwio::common::FormatParams {
     return timestampPrecision_;
   }
 
+  bool shouldIgnoreStatistics(thrift::Type type) const {
+    return !parquetVersion_.has_value() ||
+        parquetVersion_->shouldIgnoreStatistics(type);
+  }
+
  private:
   const FileMetaDataPtr metaData_;
   const tz::TimeZone* sessionTimezone_;
   const TimestampPrecision timestampPrecision_;
+  const std::optional<SemanticVersion> parquetVersion_;
 };
 
 /// Format-specific data created for each leaf column of a Parquet rowgroup.
@@ -68,7 +77,8 @@ class ParquetData : public dwio::common::FormatData {
       memory::MemoryPool& pool,
       dwio::common::ColumnReaderStatistics& stats,
       const tz::TimeZone* sessionTimezone,
-      const velox::common::ScanSpec& scanSpec);
+      const velox::common::ScanSpec& scanSpec,
+      bool ignoreStatistics);
 
   /// Prepares to read data for 'index'th row group.
   void enqueueRowGroup(
@@ -248,6 +258,7 @@ class ParquetData : public dwio::common::FormatData {
   dwio::common::ColumnReaderStatistics& stats_;
   const tz::TimeZone* sessionTimezone_;
   std::unique_ptr<PageReader> reader_;
+  const bool ignoreStatistics_;
 
   // Nulls derived from leaf repdefs for non-leaf readers.
   BufferPtr presetNulls_;
@@ -260,19 +271,14 @@ class ParquetData : public dwio::common::FormatData {
 
   // Streams for the exact logical page runs after page pruning.
   struct PlannedStreams {
+    std::unique_ptr<dwio::common::SeekableInputStream> fallback;
     std::unique_ptr<dwio::common::SeekableInputStream> prefix;
     std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> runs;
+    RowGroupPagePruningPlanPtr pagePlan;
   };
   std::vector<std::optional<PlannedStreams>> plannedStreams_;
 
-  // Retain plans only for row groups in the prefetch window. The current
-  // PageReader keeps the plan object alive through this vector while future
-  // groups wait for their streams to be consumed.
-  std::vector<RowGroupPagePruningPlanPtr> pagePlans_;
-
   const common::ScanSpec& scanSpec_;
-  std::unique_ptr<common::Filter> pageIndexFilter_;
-  std::vector<std::unique_ptr<common::Filter>> pageIndexMetadataFilters_;
 };
 
 } // namespace facebook::velox::parquet

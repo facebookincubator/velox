@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "velox/common/compression/Compression.h"
 #include "velox/dwio/common/BitConcatenation.h"
 #include "velox/dwio/common/DirectDecoder.h"
@@ -76,7 +78,10 @@ class PageReader {
       int64_t chunkSize,
       dwio::common::ColumnReaderStatistics& stats,
       const tz::TimeZone* sessionTimezone,
-      const ColumnPageReadPlan* pagePlan)
+      const ColumnPageReadPlan* pagePlan,
+      RowGroupPagePruningPlanPtr pageGroupPlan = nullptr,
+      std::unique_ptr<dwio::common::SeekableInputStream> fallbackStream =
+          nullptr)
       : pool_(pool),
         pageStreams_(std::move(pageStreams)),
         prefixStream_(std::move(prefixStream)),
@@ -89,8 +94,18 @@ class PageReader {
         nullConcatenation_(pool_),
         stats_(stats),
         sessionTimezone_(sessionTimezone),
-        pagePlan_(pagePlan) {
+        fallbackStream_(std::move(fallbackStream)) {
     type_->makeLevelInfo(leafInfo_);
+    if (pageGroupPlan) {
+      const auto planColumn = pageGroupPlan->columns.find(type_->column());
+      VELOX_CHECK(
+          planColumn != pageGroupPlan->columns.end(),
+          "Missing immutable page plan for column {}",
+          type_->column());
+      pagePlan_ = planColumn->second;
+    } else if (pagePlan != nullptr) {
+      pagePlan_ = *pagePlan;
+    }
   }
 
   // This PageReader constructor is for unit test only.
@@ -258,6 +273,9 @@ class PageReader {
   // Handles both refiller and non-refiller cases.
   void updateBufferPointersAfterDeserialization(
       const thrift::DeserializeResult& result);
+
+  // Switches to the whole column chunk after an indexed header mismatch.
+  bool fallbackToWholeChunk();
 
   static inline const char* toCharPtr(const uint8_t* ptr) {
     return reinterpret_cast<const char*>(ptr);
@@ -592,7 +610,8 @@ class PageReader {
   // Add decoders for other encodings here.
 
   // Immutable physical page selection published by the row-group planner.
-  const ColumnPageReadPlan* pagePlan_{nullptr};
+  std::optional<ColumnPageReadPlan> pagePlan_;
+  std::unique_ptr<dwio::common::SeekableInputStream> fallbackStream_;
   uint32_t nextDataPageOrdinal_{0};
   int32_t currentRunIndex_{-1};
   uint64_t currentRunLength_{0};

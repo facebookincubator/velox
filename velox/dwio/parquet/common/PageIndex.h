@@ -30,6 +30,9 @@
 
 namespace facebook::velox::parquet {
 
+inline constexpr uint64_t kMaxPageIndexRegionBytes = 64ULL << 20;
+inline constexpr uint32_t kMaxPageIndexPages = 1'000'000;
+
 enum class PageIndexFallbackReason {
   kNone,
   kDisabled,
@@ -168,14 +171,15 @@ PageIndexResult<thrift::OffsetIndex> deserializeOffsetIndex(
 PageIndexResult<ValidatedOffsetIndex> decodeOffsetIndex(
     const thrift::OffsetIndex& offsetIndex,
     uint64_t rowGroupRows,
-  uint64_t fileLength,
-  std::optional<uint64_t> dataPageOffset = std::nullopt,
-  std::optional<common::Region> columnChunkRegion = std::nullopt);
+    uint64_t fileLength,
+    std::optional<uint64_t> dataPageOffset = std::nullopt,
+    std::optional<common::Region> columnChunkRegion = std::nullopt);
 
-/// Validates and decodes one already-deserialized pair of page indexes.
+/// Validates and decodes one already-deserialized column index against a
+/// validated offset index.
 PageIndexResult<ValidatedPageIndexes> decodeColumnIndex(
     const thrift::ColumnIndex& columnIndex,
-    const thrift::OffsetIndex& offsetIndex,
+    const ValidatedOffsetIndex& offsetIndex,
     thrift::Type physicalType,
     std::optional<int32_t> typeLength,
     PageBoundsCapability requestedCapability,

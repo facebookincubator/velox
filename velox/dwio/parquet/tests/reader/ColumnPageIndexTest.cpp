@@ -64,6 +64,16 @@ thrift::ColumnIndex makeColumnIndex(
   return index;
 }
 
+ValidatedOffsetIndex makeValidatedOffsetIndex(
+    const thrift::OffsetIndex& offsetIndex,
+    std::optional<uint64_t> dataPageOffset = std::nullopt,
+    std::optional<common::Region> columnChunkRegion = std::nullopt) {
+  auto result = decodeOffsetIndex(
+      offsetIndex, 20, 1'000, dataPageOffset, columnChunkRegion);
+  EXPECT_TRUE(result);
+  return result.value.value_or(ValidatedOffsetIndex{});
+}
+
 } // namespace
 
 TEST(PageIndexTest, decodesTypedPhysicalBounds) {
@@ -73,7 +83,7 @@ TEST(PageIndexTest, decodesTypedPhysicalBounds) {
 
   auto decoded = decodeColumnIndex(
       columnIndex,
-      offsetIndex,
+      makeValidatedOffsetIndex(offsetIndex),
       thrift::Type::INT32,
       std::nullopt,
       PageBoundsCapability::kOrderedBounds,
@@ -94,35 +104,107 @@ TEST(PageIndexTest, rejectsCardinalityAndRowOrderErrors) {
       makeColumnIndex({false}, {encode<int32_t>(1)}, {encode<int32_t>(2)}, {0});
   auto offsetIndex = makeOffsetIndex({1}, {100}, {20});
 
-  auto decoded = decodeColumnIndex(
-      columnIndex,
-      offsetIndex,
-      thrift::Type::INT32,
-      std::nullopt,
-      PageBoundsCapability::kOrderedBounds,
-      20,
-      1'000);
+  auto decoded = decodeOffsetIndex(offsetIndex, 20, 1'000);
 
   EXPECT_FALSE(decoded);
   EXPECT_EQ(decoded.reason, PageIndexFallbackReason::kInvalidRowOrder);
 }
 
 TEST(PageIndexTest, rejectsInvalidLocationsBeforeArithmetic) {
-  auto columnIndex =
-      makeColumnIndex({false}, {encode<int32_t>(1)}, {encode<int32_t>(2)}, {0});
   auto negativeOffset = makeOffsetIndex({0}, {-1}, {20});
+
+  auto decoded = decodeOffsetIndex(negativeOffset, 20, 1'000);
+
+  EXPECT_FALSE(decoded);
+  EXPECT_EQ(decoded.reason, PageIndexFallbackReason::kInvalidLocation);
+}
+
+TEST(PageIndexTest, rejectsPageOutsideColumnChunk) {
+  auto offsetIndex = makeOffsetIndex({0}, {200}, {20});
+
+  auto decoded =
+      decodeOffsetIndex(offsetIndex, 20, 1'000, 100, common::Region{100, 20});
+
+  EXPECT_FALSE(decoded);
+  EXPECT_EQ(decoded.reason, PageIndexFallbackReason::kInvalidLocation);
+}
+
+TEST(PageIndexTest, rejectsContradictoryOrderedBounds) {
+  auto columnIndex = makeColumnIndex(
+      {false}, {encode<int32_t>(20)}, {encode<int32_t>(0)}, {0});
+  auto offsetIndex = makeOffsetIndex({0}, {100}, {20});
 
   auto decoded = decodeColumnIndex(
       columnIndex,
-      negativeOffset,
+      makeValidatedOffsetIndex(offsetIndex),
       thrift::Type::INT32,
       std::nullopt,
       PageBoundsCapability::kOrderedBounds,
       20,
       1'000);
 
+  ASSERT_TRUE(decoded);
+  ASSERT_TRUE(decoded.value->column.has_value());
+  EXPECT_FALSE(decoded.value->column->bounds(0).minimum.has_value());
+  EXPECT_FALSE(decoded.value->column->bounds(0).maximum.has_value());
+}
+
+TEST(PageIndexTest, rejectsContradictoryNullMetadata) {
+  auto columnIndex =
+      makeColumnIndex({true}, {encode<int32_t>(0)}, {encode<int32_t>(0)}, {0});
+  auto offsetIndex = makeOffsetIndex({0}, {100}, {20});
+
+  auto decoded = decodeColumnIndex(
+      columnIndex,
+      makeValidatedOffsetIndex(offsetIndex),
+      thrift::Type::INT32,
+      std::nullopt,
+      PageBoundsCapability::kNullabilityOnly,
+      20,
+      1'000);
+
   EXPECT_FALSE(decoded);
-  EXPECT_EQ(decoded.reason, PageIndexFallbackReason::kInvalidLocation);
+  EXPECT_EQ(decoded.reason, PageIndexFallbackReason::kInvalidBounds);
+}
+
+TEST(PageIndexTest, evaluatesUnorderedPagesIndependently) {
+  auto columnIndex = makeColumnIndex(
+      {false}, {encode<int32_t>(10)}, {encode<int32_t>(20)}, {0});
+  columnIndex.boundary_order() = thrift::BoundaryOrder::UNORDERED;
+  auto offsetIndex = makeOffsetIndex({0}, {100}, {20});
+
+  auto decoded = decodeColumnIndex(
+      columnIndex,
+      makeValidatedOffsetIndex(offsetIndex),
+      thrift::Type::INT32,
+      std::nullopt,
+      PageBoundsCapability::kOrderedBounds,
+      20,
+      1'000);
+
+  ASSERT_TRUE(decoded);
+  ASSERT_TRUE(decoded.value->column.has_value());
+  EXPECT_EQ(
+      decoded.value->column->capability(),
+      PageBoundsCapability::kOrderedBounds);
+  EXPECT_TRUE(decoded.value->column->bounds(0).minimum.has_value());
+}
+
+TEST(PageIndexTest, rejectsMalformedBooleanBounds) {
+  auto columnIndex = makeColumnIndex({false}, {"\x80"}, {"\x80"}, {0});
+  auto offsetIndex = makeOffsetIndex({0}, {100}, {20});
+
+  auto decoded = decodeColumnIndex(
+      columnIndex,
+      makeValidatedOffsetIndex(offsetIndex),
+      thrift::Type::BOOLEAN,
+      std::nullopt,
+      PageBoundsCapability::kOrderedBounds,
+      20,
+      1'000);
+
+  EXPECT_FALSE(decoded);
+  EXPECT_EQ(decoded.reason, PageIndexFallbackReason::kInvalidBounds);
 }
 
 TEST(PagePruningPlanTest, keepsGappedPagesInSeparateLogicalRuns) {
@@ -187,44 +269,61 @@ TEST(PagePruningPlanTest, fallsBackWhenPhysicalSavingsAreNotMaterial) {
   EXPECT_TRUE(noSavings.useWholeChunkStream);
 }
 
-  TEST(PagePruningPlanTest, modelsPhysicalGapCoalescingAndCostFallback) {
-    ValidatedOffsetIndex offset;
-    offset.pages = {
+TEST(PagePruningPlanTest, treatsIndexBytesAsSunkCost) {
+  ValidatedOffsetIndex offset;
+  offset.pages = {
+      {100, 50, 0, 10},
+      {150, 50, 10, 10},
+  };
+  RowIntervalSet retained;
+  retained.add({0, 10});
+
+  auto column =
+      buildColumnPageReadPlan(1, offset, retained, std::nullopt, 100, 60);
+
+  EXPECT_FALSE(column.useWholeChunkStream);
+  EXPECT_FALSE(column.costModelFallback);
+  EXPECT_EQ(column.plannedPhysicalBytes, 50);
+}
+
+TEST(PagePruningPlanTest, modelsPhysicalGapCoalescingAndCostFallback) {
+  ValidatedOffsetIndex offset;
+  offset.pages = {
       {100, 10, 0, 10},
       {120, 10, 10, 10},
       {1'000, 10, 20, 10},
-    };
-    RowIntervalSet retained;
-    retained.add({0, 10});
-    retained.add({20, 30});
+  };
+  RowIntervalSet retained;
+  retained.add({0, 10});
+  retained.add({20, 30});
 
-    const PagePruningCostModelOptions coalescing{
+  const PagePruningCostModelOptions coalescing{
       .maxCoalesceDistance = 900,
       .maxCoalesceBytes = 1'000,
       .loadQuantum = 100,
-    };
-    auto coalesced = buildColumnPageReadPlan(
+  };
+  auto coalesced = buildColumnPageReadPlan(
       1, offset, retained, std::nullopt, 1'000, 0, false, coalescing);
-    EXPECT_EQ(coalesced.retainedRuns.size(), 2);
-    EXPECT_EQ(coalesced.plannedPhysicalBytes, 910);
-    EXPECT_EQ(coalesced.plannedPhysicalLoads, 10);
-    EXPECT_FALSE(coalesced.useWholeChunkStream);
+  EXPECT_EQ(coalesced.retainedRuns.size(), 2);
+  EXPECT_EQ(coalesced.plannedPhysicalBytes, 910);
+  EXPECT_EQ(coalesced.plannedPhysicalLoads, 10);
+  EXPECT_FALSE(coalesced.useWholeChunkStream);
 
-    const PagePruningCostModelOptions split{
+  const PagePruningCostModelOptions split{
       .maxCoalesceDistance = 10,
       .maxCoalesceBytes = 1'000,
       .loadQuantum = 100,
-    };
-    auto splitRuns = buildColumnPageReadPlan(
+  };
+  auto splitRuns = buildColumnPageReadPlan(
       1, offset, retained, std::nullopt, 1'000, 0, false, split);
-    EXPECT_EQ(splitRuns.plannedPhysicalBytes, 20);
-    EXPECT_EQ(splitRuns.plannedPhysicalLoads, 2);
+  EXPECT_EQ(splitRuns.plannedPhysicalBytes, 20);
+  EXPECT_EQ(splitRuns.plannedPhysicalLoads, 2);
 
-    auto fallback = buildColumnPageReadPlan(
+  auto fallback = buildColumnPageReadPlan(
       1, offset, retained, std::nullopt, 20, 0, false, coalescing);
-    EXPECT_TRUE(fallback.useWholeChunkStream);
-    EXPECT_TRUE(fallback.costModelFallback);
-  }
+  EXPECT_TRUE(fallback.useWholeChunkStream);
+  EXPECT_TRUE(fallback.costModelFallback);
+}
 
 TEST(PagePruningPlanTest, representsAllPagesRejectedExplicitly) {
   ValidatedOffsetIndex offset;

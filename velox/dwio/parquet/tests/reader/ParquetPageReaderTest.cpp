@@ -276,6 +276,55 @@ TEST_F(ParquetPageReaderTest, fixedLenByteArrayDictOverflow) {
   VELOX_ASSERT_THROW(pageReader->skip(1), "");
 }
 
+TEST_F(ParquetPageReaderTest, indexedPageMustMatchPlannedRowSpan) {
+  auto pageHeader = createDataPageV1Header(
+      /*uncompressedSize=*/4,
+      /*compressedSize=*/4,
+      /*numValues=*/1);
+  const auto headerBytes = serializePageHeader(pageHeader);
+  const std::string pageData(4, '\0');
+  const std::string fullData = headerBytes + pageData;
+
+  ColumnPageReadPlan pagePlan;
+  pagePlan.dataPages.push_back({0, 0, 2, common::Region{0, fullData.size()}});
+  pagePlan.retainedRuns.push_back({common::Region{0, fullData.size()}, 0, 1});
+  pagePlan.dataPageToRun.push_back(0);
+
+  std::vector<std::unique_ptr<SeekableInputStream>> pageStreams;
+  pageStreams.push_back(
+      std::make_unique<SeekableArrayInputStream>(
+          fullData.data(), fullData.size()));
+
+  auto fileType = std::make_shared<const ParquetTypeWithId>(
+      BIGINT(),
+      std::vector<std::unique_ptr<dwio::common::TypeWithId>>{},
+      /*id=*/0,
+      /*maxId=*/0,
+      /*column=*/0,
+      "test_col",
+      thrift::Type::INT64,
+      std::nullopt,
+      std::nullopt,
+      /*maxRepeat=*/0,
+      /*maxDefine=*/0,
+      /*isOptional=*/false,
+      /*isRepeated=*/false);
+
+  dwio::common::ColumnReaderStatistics stats;
+  auto pageReader = std::make_unique<PageReader>(
+      std::move(pageStreams),
+      nullptr,
+      *leafPool_,
+      fileType,
+      common::CompressionKind::CompressionKind_NONE,
+      fullData.size(),
+      stats,
+      nullptr,
+      &pagePlan);
+
+  VELOX_ASSERT_THROW(pageReader->skip(1), "row count does not match");
+}
+
 // Ensures the Snappy path validates the advertised uncompressed size against
 // the size embedded in the Snappy stream. A corrupt page whose declared
 // uncompressed_page_size is smaller than the embedded length must be rejected;

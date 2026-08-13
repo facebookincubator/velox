@@ -96,7 +96,7 @@ class RowsStreamingWindowBuild : public WindowBuild {
   const bool hasRangeFrame_;
 
   // Ranges of input rows buffered for the current partition.
-  std::vector<InclusiveRowRange> currentRanges_;
+  std::vector<RowRange> currentRanges_;
 
   // Partition-key values from the last row of the previous input vector, used
   // to detect partition boundaries across vectors.

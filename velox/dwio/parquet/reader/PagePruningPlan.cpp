@@ -24,64 +24,62 @@ using facebook::velox::common::Region;
 using facebook::velox::parquet::PagePruningCostModelOptions;
 
 struct PhysicalReadEstimate {
-    uint64_t bytes{0};
-    uint32_t loads{0};
+  uint64_t bytes{0};
+  uint32_t loads{0};
 };
 
 PhysicalReadEstimate estimatePhysicalReads(
-        const std::vector<Region>& regions,
-        const PagePruningCostModelOptions& options) {
-    if (regions.empty()) {
-        return {};
+    const std::vector<Region>& regions,
+    const PagePruningCostModelOptions& options) {
+  if (regions.empty()) {
+    return {};
+  }
+
+  const auto maxDistance = options.maxCoalesceDistance;
+  const auto maxBytes = std::max<uint64_t>(options.maxCoalesceBytes, 1);
+  const auto loadQuantum = std::max<uint64_t>(options.loadQuantum, 1);
+  PhysicalReadEstimate estimate;
+  uint64_t groupStart{0};
+  uint64_t groupEnd{0};
+
+  const auto flush = [&]() {
+    estimate.bytes = facebook::velox::checkedPlus(
+        estimate.bytes, groupEnd - groupStart, "physical page bytes");
+    const auto numLoads =
+        (groupEnd - groupStart + loadQuantum - 1) / loadQuantum;
+    estimate.loads = facebook::velox::checkedPlus(
+        estimate.loads, static_cast<uint32_t>(numLoads), "physical page loads");
+  };
+
+  for (const auto& region : regions) {
+    if (region.length == 0) {
+      continue;
+    }
+    const auto regionEnd = facebook::velox::checkedPlus(
+        region.offset, region.length, "physical page region end");
+    if (groupEnd == 0) {
+      groupStart = region.offset;
+      groupEnd = regionEnd;
+      continue;
     }
 
-    const auto maxDistance = options.maxCoalesceDistance;
-    const auto maxBytes = std::max<uint64_t>(options.maxCoalesceBytes, 1);
-    const auto loadQuantum = std::max<uint64_t>(options.loadQuantum, 1);
-    PhysicalReadEstimate estimate;
-    uint64_t groupStart{0};
-    uint64_t groupEnd{0};
-
-    const auto flush = [&]() {
-        estimate.bytes = facebook::velox::checkedPlus(
-                estimate.bytes, groupEnd - groupStart, "physical page bytes");
-        const auto numLoads = (groupEnd - groupStart + loadQuantum - 1) /
-            loadQuantum;
-        estimate.loads = facebook::velox::checkedPlus(
-            estimate.loads,
-            static_cast<uint32_t>(numLoads),
-            "physical page loads");
-    };
-
-    for (const auto& region : regions) {
-        if (region.length == 0) {
-            continue;
-        }
-        const auto regionEnd = facebook::velox::checkedPlus(
-                region.offset, region.length, "physical page region end");
-        if (groupEnd == 0) {
-            groupStart = region.offset;
-            groupEnd = regionEnd;
-            continue;
-        }
-
-        const auto gap = region.offset >= groupEnd ? region.offset - groupEnd : 0;
-        const auto nextPhysicalBytes = regionEnd - groupStart;
-        if (region.offset < groupEnd ||
-                (gap <= maxDistance && nextPhysicalBytes <= maxBytes)) {
-            groupEnd = std::max(groupEnd, regionEnd);
-            continue;
-        }
-
-        flush();
-        groupStart = region.offset;
-        groupEnd = regionEnd;
+    const auto gap = region.offset >= groupEnd ? region.offset - groupEnd : 0;
+    const auto nextPhysicalBytes = regionEnd - groupStart;
+    if (region.offset < groupEnd ||
+        (gap <= maxDistance && nextPhysicalBytes <= maxBytes)) {
+      groupEnd = std::max(groupEnd, regionEnd);
+      continue;
     }
 
-    if (groupEnd != 0) {
-        flush();
-    }
-    return estimate;
+    flush();
+    groupStart = region.offset;
+    groupEnd = regionEnd;
+  }
+
+  if (groupEnd != 0) {
+    flush();
+  }
+  return estimate;
 }
 
 } // namespace
@@ -144,33 +142,32 @@ ColumnPageReadPlan buildColumnPageReadPlan(
 
   const bool allPagesSkipped = !result.dataPages.empty() &&
       result.numSkippedPages == result.dataPages.size();
-    std::vector<common::Region> physicalRegions;
-    physicalRegions.reserve(
-            result.retainedRuns.size() + (prefixRegion.has_value() ? 1 : 0));
-    if (prefixRegion.has_value()) {
-        physicalRegions.push_back(*prefixRegion);
-    }
-    for (const auto& run : result.retainedRuns) {
-        physicalRegions.push_back(run.region);
-    }
-    const auto estimate = estimatePhysicalReads(physicalRegions, costModel);
-    result.plannedPhysicalBytes = estimate.bytes;
-    result.plannedPhysicalLoads = estimate.loads;
-    const bool tooManyRuns = result.retainedRuns.size() > 256;
-    const bool noMaterialSavings = !preloaded && fullChunkBytes != 0 &&
-            (indexBytes >= fullChunkBytes ||
-             estimate.bytes >= fullChunkBytes - indexBytes || tooManyRuns);
+  std::vector<common::Region> physicalRegions;
+  physicalRegions.reserve(
+      result.retainedRuns.size() + (prefixRegion.has_value() ? 1 : 0));
+  if (prefixRegion.has_value()) {
+    physicalRegions.push_back(*prefixRegion);
+  }
+  for (const auto& run : result.retainedRuns) {
+    physicalRegions.push_back(run.region);
+  }
+  const auto estimate = estimatePhysicalReads(physicalRegions, costModel);
+  result.plannedPhysicalBytes = estimate.bytes;
+  result.plannedPhysicalLoads = estimate.loads;
+  const bool tooManyRuns = result.retainedRuns.size() > 256;
+  const bool noMaterialSavings = !preloaded && fullChunkBytes != 0 &&
+      (estimate.bytes >= fullChunkBytes || tooManyRuns);
   result.allPagesSkipped = allPagesSkipped;
-  result.useWholeChunkStream = result.numSkippedPages == 0 ||
-            (!allPagesSkipped && noMaterialSavings);
-    result.costModelFallback =
-            !allPagesSkipped && result.numSkippedPages != 0 && noMaterialSavings;
-    if (result.useWholeChunkStream && fullChunkBytes != 0) {
-        const auto loadQuantum = std::max<uint64_t>(costModel.loadQuantum, 1);
-        result.plannedPhysicalBytes = fullChunkBytes;
-        result.plannedPhysicalLoads = static_cast<uint32_t>(
-                (fullChunkBytes + loadQuantum - 1) / loadQuantum);
-    }
+  result.useWholeChunkStream =
+      result.numSkippedPages == 0 || (!allPagesSkipped && noMaterialSavings);
+  result.costModelFallback =
+      !allPagesSkipped && result.numSkippedPages != 0 && noMaterialSavings;
+  if (result.useWholeChunkStream && fullChunkBytes != 0) {
+    const auto loadQuantum = std::max<uint64_t>(costModel.loadQuantum, 1);
+    result.plannedPhysicalBytes = fullChunkBytes;
+    result.plannedPhysicalLoads =
+        static_cast<uint32_t>((fullChunkBytes + loadQuantum - 1) / loadQuantum);
+  }
   return result;
 }
 
@@ -230,9 +227,9 @@ RowGroupPagePruningPlanPtr buildRowGroupPagePruningPlan(
         result->stats.logicalRuns,
         static_cast<uint32_t>(plan.retainedRuns.size()),
         "logical run count");
-        if (plan.costModelFallback) {
-            result->stats.fallbackReason = PageIndexFallbackReason::kCostModel;
-        }
+    if (plan.costModelFallback) {
+      result->stats.fallbackReason = PageIndexFallbackReason::kCostModel;
+    }
     result->columns.emplace(column, std::move(plan));
   }
 

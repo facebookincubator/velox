@@ -50,7 +50,6 @@ add_executable(
   ReadFileInputStreamTests.cpp
   ReaderTest.cpp
   RetryTests.cpp
-  RowRangesTest.cpp
   RowIntervalSetTest.cpp
   ScanSpecTest.cpp
   SelectiveColumnReaderTest.cpp

@@ -115,7 +115,6 @@ velox_add_library(
   Range.h
   Reader.h
   ReaderFactory.h
-  RowRanges.h
   RowIntervalSet.h
   Retry.h
   ScanSpec.h

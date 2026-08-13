@@ -19,7 +19,6 @@
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/dwio/common/RowIntervalSet.h"
-#include "velox/dwio/common/RowRanges.h"
 
 #include <optional>
 #include <vector>
@@ -50,17 +49,6 @@ class MetadataFilter {
       std::vector<std::pair<const LeafNode*, std::vector<uint64_t>>>&
           leafNodeResults,
       std::vector<uint64_t>& finalResult);
-
-  /// Evaluate the filter results based on logical conjunctions tracked in this
-  /// object. The `leafNodeResults` parameter stores the results for each leaf
-  /// node as RowRanges. Existing RowRanges in `finalResult` will be merged with
-  /// the evaluation outcome and updated accordingly. This function is utilized
-  /// for parquet data page skipping. Because data pages are not aligned across
-  /// columns, RowRanges are used to represent the results.
-  void evalRowRanges(
-      std::vector<std::pair<const LeafNode*, dwio::common::RowRanges>>&
-          leafNodeResults,
-      dwio::common::RowRanges& finalResult);
 
   /// Evaluates page-level rejection intervals without mutating leaf inputs.
   /// AND combines known rejections with union; OR combines them with

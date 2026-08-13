@@ -43,9 +43,10 @@ bool filterAcceptsNaN(const common::Filter* filter) {
 PageBoundsCapability pageBoundsCapability(
     const ParquetTypeWithId& type,
     const common::Filter* filter,
-    const std::vector<std::unique_ptr<common::Filter>>& metadataFilters,
-    bool hasTypeDefinedColumnOrder) {
-  if (!hasTypeDefinedColumnOrder || type.isRepeated_) {
+    const common::ScanSpec& scanSpec,
+    bool hasTypeDefinedColumnOrder,
+    bool ignoreStatistics) {
+  if (!hasTypeDefinedColumnOrder || ignoreStatistics || type.isRepeated_) {
     return PageBoundsCapability::kNullabilityOnly;
   }
   if (type.parquetType_ == thrift::Type::INT96 ||
@@ -89,8 +90,8 @@ PageBoundsCapability pageBoundsCapability(
   if ((type.type()->kind() == TypeKind::REAL ||
        type.type()->kind() == TypeKind::DOUBLE) &&
       (filterAcceptsNaN(filter) || [&]() {
-        for (const auto& metadataFilter : metadataFilters) {
-          if (filterAcceptsNaN(metadataFilter.get())) {
+        for (int i = 0; i < scanSpec.numMetadataFilters(); ++i) {
+          if (filterAcceptsNaN(scanSpec.metadataFilterAt(i))) {
             return true;
           }
         }
@@ -114,8 +115,17 @@ PageBoundsCapability pageBoundsCapability(
 std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
     const std::shared_ptr<const dwio::common::TypeWithId>& type,
     const common::ScanSpec& scanSpec) {
+  const auto parquetType =
+      std::static_pointer_cast<const ParquetTypeWithId>(type);
   return std::make_unique<ParquetData>(
-      type, metaData_, pool(), runtimeStatistics(), sessionTimezone_, scanSpec);
+      type,
+      metaData_,
+      pool(),
+      runtimeStatistics(),
+      sessionTimezone_,
+      scanSpec,
+      !parquetType->parquetType_.has_value() ||
+          shouldIgnoreStatistics(*parquetType->parquetType_));
 }
 
 ParquetData::ParquetData(
@@ -124,7 +134,8 @@ ParquetData::ParquetData(
     memory::MemoryPool& pool,
     dwio::common::ColumnReaderStatistics& stats,
     const tz::TimeZone* sessionTimezone,
-    const velox::common::ScanSpec& scanSpec)
+    const velox::common::ScanSpec& scanSpec,
+    bool ignoreStatistics)
     : pool_(pool),
       type_(std::static_pointer_cast<const ParquetTypeWithId>(type)),
       fileMetaDataPtr_(fileMetadataPtr),
@@ -133,15 +144,8 @@ ParquetData::ParquetData(
       rowsInRowGroup_(-1),
       stats_(stats),
       sessionTimezone_(sessionTimezone),
-      scanSpec_(scanSpec),
-      pageIndexFilter_(
-          scanSpec.filter() ? scanSpec.filter()->clone() : nullptr) {
-  pageIndexMetadataFilters_.reserve(scanSpec.numMetadataFilters());
-  for (int i = 0; i < scanSpec.numMetadataFilters(); ++i) {
-    auto* filter = scanSpec.metadataFilterAt(i);
-    pageIndexMetadataFilters_.push_back(filter ? filter->clone() : nullptr);
-  }
-}
+      ignoreStatistics_(ignoreStatistics),
+      scanSpec_(scanSpec) {}
 
 void ParquetData::filterRowGroups(
     const common::ScanSpec& scanSpec,
@@ -216,7 +220,7 @@ bool ParquetData::collectIndexPageInfoMap(
     uint32_t index,
     PageIndexInfoMap& map) {
   const bool hasFilter =
-      pageIndexFilter_ != nullptr || !pageIndexMetadataFilters_.empty();
+      scanSpec_.filter() != nullptr || scanSpec_.numMetadataFilters() != 0;
   bool canApplyPagePruning = hasFilter;
   if (canApplyPagePruning) {
     for (auto* parent = type_.get(); parent != nullptr;
@@ -236,21 +240,24 @@ bool ParquetData::collectIndexPageInfoMap(
   if (chunk.hasOffsetIndex() && chunk.offsetIndexLength() > 0) {
     const bool readColumnIndex = canApplyPagePruning &&
         chunk.hasColumnIndex() && chunk.columnIndexLength() > 0;
-    map[type_->column()] = {
-        chunk.offsetIndexOffset(),
-        chunk.offsetIndexLength(),
-        chunk.hasColumnIndex() ? chunk.columnIndexOffset() : 0,
-        chunk.hasColumnIndex() ? chunk.columnIndexLength() : 0,
-        readColumnIndex,
-        true,
-        readColumnIndex
-            ? pageBoundsCapability(
-                  *type_,
-                  pageIndexFilter_.get(),
-                  pageIndexMetadataFilters_,
-                  fileMetaDataPtr_.hasTypeDefinedColumnOrder(type_->column()))
-            : PageBoundsCapability::kNone,
-    };
+    ColumnPageIndexInformation info;
+    info.offsetIndexOffset = chunk.offsetIndexOffset();
+    info.offsetIndexLength = chunk.offsetIndexLength();
+    info.columnIndexOffset =
+        chunk.hasColumnIndex() ? chunk.columnIndexOffset() : 0;
+    info.columnIndexLength =
+        chunk.hasColumnIndex() ? chunk.columnIndexLength() : 0;
+    info.readColumnIndex = readColumnIndex;
+    info.readOffsetIndex = true;
+    info.boundsCapability = readColumnIndex
+        ? pageBoundsCapability(
+              *type_,
+              scanSpec_.filter(),
+              scanSpec_,
+              fileMetaDataPtr_.hasTypeDefinedColumnOrder(type_->column()),
+              ignoreStatistics_)
+        : PageBoundsCapability::kNone;
+    map[type_->column()] = info;
   }
   return canApplyPagePruning;
 }
@@ -283,15 +290,15 @@ void ParquetData::evaluatePageIndex(
   const auto& pageIndex = *pageIndexes.column;
   const bool hasOrderedBounds =
       pageIndex.capability() == PageBoundsCapability::kOrderedBounds;
-  const bool filterMayAcceptNaN = acceptsNaN(pageIndexFilter_.get());
+  const bool filterMayAcceptNaN = acceptsNaN(scanSpec_.filter());
   std::vector<bool> metadataAcceptsNaN;
-  metadataAcceptsNaN.reserve(pageIndexMetadataFilters_.size());
-  for (const auto& filter : pageIndexMetadataFilters_) {
-    metadataAcceptsNaN.push_back(acceptsNaN(filter.get()));
+  metadataAcceptsNaN.reserve(scanSpec_.numMetadataFilters());
+  for (int i = 0; i < scanSpec_.numMetadataFilters(); ++i) {
+    metadataAcceptsNaN.push_back(acceptsNaN(scanSpec_.metadataFilterAt(i)));
   }
 
   const auto metadataResultsStart = metadataResults.size();
-  for (size_t i = 0; i < pageIndexMetadataFilters_.size(); ++i) {
+  for (int i = 0; i < scanSpec_.numMetadataFilters(); ++i) {
     metadataResults.emplace_back(
         scanSpec_.metadataFilterNodeAt(i), dwio::common::RowIntervalSet());
   }
@@ -357,14 +364,12 @@ void ParquetData::evaluatePageIndex(
           *location.minimum);
     };
 
-    if (canReject(pageIndexFilter_.get(), filterMayAcceptNaN)) {
+    if (canReject(scanSpec_.filter(), filterMayAcceptNaN)) {
       rejectedRows.add(pageRows);
     }
-    for (size_t filter = 0; filter < pageIndexMetadataFilters_.size();
-         ++filter) {
+    for (int filter = 0; filter < scanSpec_.numMetadataFilters(); ++filter) {
       if (canReject(
-              pageIndexMetadataFilters_[filter].get(),
-              metadataAcceptsNaN[filter])) {
+              scanSpec_.metadataFilterAt(filter), metadataAcceptsNaN[filter])) {
         metadataResults[metadataResultsStart + filter].second.add(pageRows);
       }
     }
@@ -379,8 +384,6 @@ void ParquetData::enqueueRowGroup(
       fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
   streams_.resize(fileMetaDataPtr_.numRowGroups());
   plannedStreams_.resize(fileMetaDataPtr_.numRowGroups());
-  pagePlans_.resize(fileMetaDataPtr_.numRowGroups());
-  pagePlans_[index] = pagePlan;
   VELOX_CHECK(
       chunk.hasMetadata(),
       "ColumnMetaData does not exist for schema Id ",
@@ -412,12 +415,17 @@ void ParquetData::enqueueRowGroup(
   }
 
   if (columnPlan->allPagesSkipped) {
-    plannedStreams_[index] = PlannedStreams{};
+    plannedStreams_[index] = PlannedStreams{nullptr, nullptr, {}, pagePlan};
     streams_[index].reset();
     return;
   }
 
   PlannedStreams planned;
+  planned.pagePlan = pagePlan;
+  planned.fallback = input.read(
+      chunkReadOffset,
+      static_cast<uint64_t>(readSize),
+      dwio::common::LogType::STRIPE);
   if (columnPlan->prefixRegion) {
     planned.prefix = input.enqueue(*columnPlan->prefixRegion, &streamId);
   }
@@ -432,11 +440,6 @@ void ParquetData::enqueueRowGroup(
 dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
   static std::vector<uint64_t> empty;
   VELOX_CHECK_LT(index, streams_.size());
-  if (index > 0) {
-    for (int64_t oldIndex = 0; oldIndex < index; ++oldIndex) {
-      pagePlans_[oldIndex].reset();
-    }
-  }
   const auto metadata =
       fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
   if (streams_[index] != nullptr) {
@@ -456,13 +459,6 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
       "No planned streams for row group {} column {}",
       index,
       type_->column());
-  const auto& pagePlan = pagePlans_.at(index);
-  VELOX_CHECK_NOT_NULL(pagePlan);
-  const auto planColumn = pagePlan->columns.find(type_->column());
-  VELOX_CHECK(
-      planColumn != pagePlan->columns.end(),
-      "Missing immutable page plan for column {}",
-      type_->column());
   auto planned = std::move(*plannedStreams_[index]);
   plannedStreams_[index].reset();
   reader_ = std::make_unique<PageReader>(
@@ -474,7 +470,9 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
       metadata.totalCompressedSize(),
       stats_,
       sessionTimezone_,
-      &planColumn->second);
+      nullptr,
+      std::move(planned.pagePlan),
+      std::move(planned.fallback));
   return dwio::common::PositionProvider(empty);
 }
 

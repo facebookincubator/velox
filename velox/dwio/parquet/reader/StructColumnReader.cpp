@@ -165,7 +165,8 @@ bool StructColumnReader::collectIndexPageInfoMap(
   auto shouldApplyPagePruning = false;
   for (auto& child : children_) {
     if (auto structChild = dynamic_cast<StructColumnReader*>(child)) {
-      continue;
+      shouldApplyPagePruning |=
+          structChild->collectIndexPageInfoMap(index, map);
     } else if (auto listChild = dynamic_cast<ListColumnReader*>(child)) {
       continue;
     } else if (auto mapChild = dynamic_cast<MapColumnReader*>(child)) {
@@ -245,6 +246,16 @@ void StructColumnReader::setNullsFromRepDefs(PageReader& pageReader) {
       nullsInReadRange()->asMutable<uint64_t>(),
       0);
   formatData_->as<ParquetData>().setNulls(nullsInReadRange(), numStructs);
+}
+
+void StructColumnReader::prepareForSkip(uint64_t numValues) {
+  for (auto* child : children_) {
+    if (dynamic_cast<StructColumnReader*>(child) ||
+        dynamic_cast<ListColumnReader*>(child) ||
+        dynamic_cast<MapColumnReader*>(child)) {
+      ensureRepDefs(*child, numValues);
+    }
+  }
 }
 
 void StructColumnReader::filterRowGroups(
