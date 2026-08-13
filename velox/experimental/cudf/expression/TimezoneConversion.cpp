@@ -432,6 +432,13 @@ class OffsetTable {
 std::shared_ptr<const OffsetTable> OffsetTable::get(
     const tz::TimeZone* timeZone) {
   VELOX_CHECK_NOT_NULL(timeZone, "Time zone must not be null");
+  // Cached for the process and keyed only by timezone id, which assumes one
+  // device per process. An OffsetTable owns CUDA device allocations, so an
+  // entry built while one device was current is only usable on that device:
+  // were a worker ever able to move between devices, a cache hit would hand it
+  // memory belonging to another. The assumption holds for the current
+  // deployment model of one worker process per GPU; a worker that switches
+  // devices needs the key widened to include the device.
   static folly::Synchronized<
       std::unordered_map<int16_t, std::shared_ptr<const OffsetTable>>>
       cache;
