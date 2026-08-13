@@ -380,6 +380,27 @@ and scale throws an error. Otherwise, such casts return NULL.</p>
 </pre></div>
 </div>
 </section>
+<section id="from-decimal-types">
+<h3>From decimal types<a class="headerlink" href="#from-decimal-types" title="Link to this heading">¶</a></h3>
+<p><em>(ANSI compliant)</em></p>
+<p>Casting a decimal value to a decimal of a different precision and scale is
+allowed.</p>
+<p>When ANSI mode is enabled, casting a value that overflows the target precision
+and scale throws an error. Otherwise, such casts return NULL.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="o">-</span><span class="mf">0.03</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">));</span> <span class="o">--</span> <span class="o">-</span><span class="mf">0.0300</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">1.05</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">5</span><span class="p">));</span> <span class="o">--</span> <span class="mf">1.05000</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">55.00</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">10</span><span class="p">));</span> <span class="o">--</span> <span class="mf">55.0000000000</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">1.2345</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">1</span><span class="p">));</span> <span class="o">--</span> <span class="mf">1.2</span>
+</pre></div>
+</div>
+<p>Invalid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="o">-</span><span class="mf">1000.000</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">4</span><span class="p">));</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">OFF</span><span class="p">)</span> <span class="o">/</span> <span class="n">ERROR</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">ON</span><span class="p">)</span> <span class="o">//</span> <span class="n">Value</span> <span class="n">too</span> <span class="n">large</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mi">99999999999999999999999999999999999999</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">1</span><span class="p">));</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">OFF</span><span class="p">)</span> <span class="o">/</span> <span class="n">ERROR</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">ON</span><span class="p">)</span> <span class="o">//</span> <span class="n">Value</span> <span class="n">too</span> <span class="n">large</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="o">-</span><span class="mi">99999999999999999999999999999999999999</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">1</span><span class="p">));</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">OFF</span><span class="p">)</span> <span class="o">/</span> <span class="n">ERROR</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">ON</span><span class="p">)</span> <span class="o">//</span> <span class="n">Value</span> <span class="n">too</span> <span class="n">large</span>
+</pre></div>
+</div>
+</section>
 <section id="id6">
 <h3>From floating-point types<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <p><em>(ANSI compliant)</em></p>
@@ -583,6 +604,7 @@ Leading and trailing whitespace is stripped before parsing.</p>
 <li><a class="reference internal" href="#cast-to-decimal">Cast to Decimal</a><ul>
 <li><a class="reference internal" href="#id4">From varchar</a></li>
 <li><a class="reference internal" href="#id5">From integral types</a></li>
+<li><a class="reference internal" href="#from-decimal-types">From decimal types</a></li>
 <li><a class="reference internal" href="#id6">From floating-point types</a></li>
 </ul>
 </li>
