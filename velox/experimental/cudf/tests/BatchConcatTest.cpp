@@ -15,17 +15,49 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfBatchConcat.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/Driver.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+
+#include <algorithm>
+#include <limits>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::cudf_velox;
+
+namespace {
+
+class EstimatedSizeCudfVector final : public CudfVector {
+ public:
+  EstimatedSizeCudfVector(
+      memory::MemoryPool* pool,
+      TypePtr type,
+      vector_size_t size,
+      std::unique_ptr<cudf::table>&& table,
+      rmm::cuda_stream_view stream,
+      uint64_t estimatedSizeBytes)
+      : CudfVector(pool, type, size, std::move(table), stream),
+        estimatedSizeBytes_(estimatedSizeBytes) {}
+
+  uint64_t estimateFlatSize() const override {
+    return estimatedSizeBytes_;
+  }
+
+ private:
+  const uint64_t estimatedSizeBytes_;
+};
 
 class CudfBatchConcatTest : public OperatorTestBase {
  protected:
@@ -36,15 +68,66 @@ class CudfBatchConcatTest : public OperatorTestBase {
   }
 
   void TearDown() override {
-    CudfConfig::getInstance().concatOptimizationEnabled = false;
+    auto& config = CudfConfig::getInstance();
+    config.concatOptimizationEnabled = false;
+    config.batchSizeMinThreshold = 100'000;
+    config.batchSizeMinBytes.reset();
+    config.batchSizeMaxThreshold.reset();
     cudf_velox::unregisterCudf();
     OperatorTestBase::TearDown();
   }
 
-  void updateCudfConfig(int32_t min, std::optional<int32_t> max) {
+  void updateCudfConfig(
+      uint64_t minBytes,
+      std::optional<int32_t> maxRows,
+      int32_t zeroColumnMinRows = 100'000) {
     auto& config = CudfConfig::getInstance();
-    config.batchSizeMinThreshold = min;
-    config.batchSizeMaxThreshold = max;
+    config.batchSizeMinBytes = minBytes;
+    config.batchSizeMinThreshold = zeroColumnMinRows;
+    config.batchSizeMaxThreshold = maxRows;
+  }
+
+  CudfVectorPtr toCudfVector(
+      const RowVectorPtr& input,
+      std::optional<uint64_t> estimatedSizeBytes = std::nullopt) {
+    auto stream = cudfGlobalStreamPool().get_stream();
+    std::unique_ptr<cudf::table> table;
+    if (input->childrenSize() == 0) {
+      table = std::make_unique<cudf::table>();
+    } else {
+      table =
+          with_arrow::toCudfTable(input, pool_.get(), stream, get_output_mr());
+    }
+
+    if (estimatedSizeBytes.has_value()) {
+      return std::make_shared<EstimatedSizeCudfVector>(
+          pool_.get(),
+          input->type(),
+          input->size(),
+          std::move(table),
+          stream,
+          estimatedSizeBytes.value());
+    }
+    return std::make_shared<CudfVector>(
+        pool_.get(), input->type(), input->size(), std::move(table), stream);
+  }
+
+  core::PlanNodePtr createAggregationPlan(const RowVectorPtr& input) {
+    return PlanBuilder()
+        .values({input})
+        .singleAggregation({}, {"count(*)"})
+        .planNode();
+  }
+
+  std::shared_ptr<Task> createTask(const core::PlanNodePtr& planNode) {
+    core::PlanFragment planFragment;
+    planFragment.planNode = planNode->sources().front();
+    return Task::create(
+        "CudfBatchConcatTest",
+        std::move(planFragment),
+        0,
+        core::QueryCtx::create(driverExecutor_.get()),
+        Task::ExecutionMode::kParallel);
   }
 
   template <typename T>
@@ -82,13 +165,170 @@ class CudfBatchConcatTest : public OperatorTestBase {
   }
 };
 
+} // namespace
+
+TEST_F(
+    CudfBatchConcatTest,
+    flushesByEstimatedGpuBytesAndRetainsTailUntilNoMoreInput) {
+  constexpr vector_size_t kRowsPerBatch = 10;
+  auto smallInput = makeRowVector({makeFlatVector<std::string>(
+      kRowsPerBatch, [](auto /*row*/) { return "x"; })});
+  auto largeInput = makeRowVector({makeFlatVector<std::string>(
+      kRowsPerBatch, [](auto /*row*/) { return std::string(4'096, 'y'); })});
+  auto tailInput = makeRowVector({makeFlatVector<std::string>(
+      kRowsPerBatch, [](auto /*row*/) { return "z"; })});
+
+  auto small = toCudfVector(smallInput);
+  auto large = toCudfVector(largeInput);
+  auto tail = toCudfVector(tailInput);
+  ASSERT_LT(small->estimateFlatSize(), large->estimateFlatSize());
+  ASSERT_LT(tail->estimateFlatSize(), large->estimateFlatSize());
+
+  const auto targetBytes =
+      std::max(small->estimateFlatSize(), tail->estimateFlatSize()) + 1;
+  ASSERT_LT(targetBytes, large->estimateFlatSize());
+  updateCudfConfig(
+      /*minBytes=*/targetBytes, /*maxRows=*/std::nullopt);
+  auto plan = createAggregationPlan(smallInput);
+  auto task = createTask(plan);
+  DriverCtx driverCtx(task, 0, 0, 0, 0);
+  CudfBatchConcat concat(0, &driverCtx, plan);
+
+  ASSERT_TRUE(concat.needsInput());
+  concat.addInput(small);
+  EXPECT_TRUE(concat.needsInput());
+  EXPECT_EQ(concat.getOutput(), nullptr);
+
+  concat.addInput(large);
+  EXPECT_FALSE(concat.needsInput());
+  auto fullBatch = concat.getOutput();
+  ASSERT_NE(fullBatch, nullptr);
+  EXPECT_EQ(fullBatch->size(), 2 * kRowsPerBatch);
+  EXPECT_GE(
+      fullBatch->estimateFlatSize(),
+      CudfConfig::getInstance().batchSizeMinBytes.value());
+
+  ASSERT_TRUE(concat.needsInput());
+  concat.addInput(tail);
+  EXPECT_TRUE(concat.needsInput());
+  EXPECT_EQ(concat.getOutput(), nullptr);
+  EXPECT_FALSE(concat.isFinished());
+
+  concat.noMoreInput();
+  auto tailBatch = concat.getOutput();
+  ASSERT_NE(tailBatch, nullptr);
+  EXPECT_EQ(tailBatch->size(), kRowsPerBatch);
+  EXPECT_TRUE(concat.isFinished());
+}
+
+TEST_F(CudfBatchConcatTest, usesRowTargetWhenByteTargetIsNotConfigured) {
+  constexpr vector_size_t kRowsPerBatch = 10;
+  auto input = makeRowVector({makeFlatSequence<int64_t>(0, kRowsPerBatch)});
+  auto first = toCudfVector(input, 1'000'000);
+  auto second = toCudfVector(input, 1'000'000);
+
+  auto& config = CudfConfig::getInstance();
+  config.batchSizeMinBytes = {};
+  config.batchSizeMinThreshold = 2 * kRowsPerBatch;
+  config.batchSizeMaxThreshold.reset();
+
+  auto plan = createAggregationPlan(input);
+  auto task = createTask(plan);
+  DriverCtx driverCtx(task, 0, 0, 0, 0);
+  CudfBatchConcat concat(0, &driverCtx, plan);
+
+  concat.addInput(first);
+  EXPECT_TRUE(concat.needsInput());
+  EXPECT_EQ(concat.getOutput(), nullptr);
+
+  concat.addInput(second);
+  EXPECT_FALSE(concat.needsInput());
+  auto output = concat.getOutput();
+  ASSERT_NE(output, nullptr);
+  EXPECT_EQ(output->size(), 2 * kRowsPerBatch);
+}
+
+TEST_F(CudfBatchConcatTest, rejectsZeroByteTarget) {
+  auto input = makeRowVector({makeFlatVector<int64_t>({1})});
+  auto plan = createAggregationPlan(input);
+  auto task = createTask(plan);
+  DriverCtx driverCtx(task, 0, 0, 0, 0);
+  updateCudfConfig(/*minBytes=*/0, /*maxRows=*/std::nullopt);
+
+  VELOX_ASSERT_THROW(
+      CudfBatchConcat(0, &driverCtx, plan),
+      "cuDF BatchConcat minimum byte target must be positive");
+}
+
+TEST_F(CudfBatchConcatTest, rejectsBufferedByteOverflow) {
+  auto input = makeRowVector({makeFlatVector<int64_t>({1})});
+  auto first = toCudfVector(input, std::numeric_limits<uint64_t>::max() - 1);
+  auto second = toCudfVector(input, 2);
+  updateCudfConfig(
+      /*minBytes=*/std::numeric_limits<uint64_t>::max(),
+      /*maxRows=*/std::nullopt);
+
+  auto plan = createAggregationPlan(input);
+  auto task = createTask(plan);
+  DriverCtx driverCtx(task, 0, 0, 0, 0);
+  CudfBatchConcat concat(0, &driverCtx, plan);
+
+  concat.addInput(first);
+  ASSERT_TRUE(concat.needsInput());
+  VELOX_ASSERT_THROW(
+      concat.addInput(second), "CudfBatchConcat buffered byte count overflow");
+}
+
+TEST_F(CudfBatchConcatTest, zeroColumnVectorsUseRowFallback) {
+  constexpr vector_size_t kRowsPerBatch = 10;
+  auto input = std::make_shared<RowVector>(
+      pool_.get(),
+      ROW({}, {}),
+      BufferPtr(nullptr),
+      kRowsPerBatch,
+      std::vector<VectorPtr>{},
+      std::nullopt);
+  auto first = toCudfVector(input);
+  auto second = toCudfVector(input);
+  auto tail = toCudfVector(input);
+  ASSERT_EQ(first->estimateFlatSize(), 0);
+
+  updateCudfConfig(
+      /*minBytes=*/1,
+      /*maxRows=*/std::nullopt,
+      /*zeroColumnMinRows=*/2 * kRowsPerBatch);
+  auto plan = createAggregationPlan(input);
+  auto task = createTask(plan);
+  DriverCtx driverCtx(task, 0, 0, 0, 0);
+  CudfBatchConcat concat(0, &driverCtx, plan);
+
+  concat.addInput(first);
+  EXPECT_TRUE(concat.needsInput());
+  EXPECT_EQ(concat.getOutput(), nullptr);
+
+  concat.addInput(second);
+  EXPECT_FALSE(concat.needsInput());
+  auto fullBatch = concat.getOutput();
+  ASSERT_NE(fullBatch, nullptr);
+  EXPECT_EQ(fullBatch->size(), 2 * kRowsPerBatch);
+  EXPECT_EQ(fullBatch->estimateFlatSize(), 0);
+
+  concat.addInput(tail);
+  EXPECT_TRUE(concat.needsInput());
+  EXPECT_EQ(concat.getOutput(), nullptr);
+  concat.noMoreInput();
+  auto tailBatch = concat.getOutput();
+  ASSERT_NE(tailBatch, nullptr);
+  EXPECT_EQ(tailBatch->size(), kRowsPerBatch);
+  EXPECT_TRUE(concat.isFinished());
+}
+
 // Verifies that CudfBatchConcat is inserted before aggregation and reduces
 // the number of batches reaching the aggregation operator.
 TEST_F(CudfBatchConcatTest, concatReducesBatchesBeforeAggregation) {
   // 6 batches of 10 rows each = 60 rows total.
-  // With min threshold 30, concat should accumulate ~3 batches before flushing,
-  // producing fewer output batches than the 6 it received.
-  updateCudfConfig(/*min=*/30, /*max=*/std::nullopt);
+  // A byte target above their combined size merges them on noMoreInput.
+  updateCudfConfig(/*minBytes=*/1'048'576, /*maxRows=*/std::nullopt);
   CudfConfig::getInstance().concatOptimizationEnabled = true;
 
   std::vector<RowVectorPtr> vectors;
@@ -129,7 +369,7 @@ TEST_F(CudfBatchConcatTest, concatReducesBatchesBeforeAggregation) {
 // Verifies that CudfBatchConcat is not inserted when the optimization is
 // disabled, even when aggregation is present.
 TEST_F(CudfBatchConcatTest, concatNotInsertedWhenDisabled) {
-  updateCudfConfig(/*min=*/30, /*max=*/std::nullopt);
+  updateCudfConfig(/*minBytes=*/1'048'576, /*maxRows=*/std::nullopt);
   CudfConfig::getInstance().concatOptimizationEnabled = false;
 
   std::vector<RowVectorPtr> vectors;
@@ -160,10 +400,10 @@ TEST_F(CudfBatchConcatTest, concatNotInsertedWhenDisabled) {
       << "CudfBatchConcat should not be present when optimization is disabled";
 }
 
-// When the threshold exceeds total input rows, concat accumulates all batches
+// When the threshold exceeds total input bytes, concat accumulates all batches
 // and flushes them as a single merged batch on noMoreInput.
 TEST_F(CudfBatchConcatTest, concatMergesAllOnFlushWithHighThreshold) {
-  updateCudfConfig(/*min=*/100000, /*max=*/std::nullopt);
+  updateCudfConfig(/*minBytes=*/1'048'576, /*maxRows=*/std::nullopt);
   CudfConfig::getInstance().concatOptimizationEnabled = true;
 
   std::vector<RowVectorPtr> vectors;
@@ -202,7 +442,7 @@ TEST_F(CudfBatchConcatTest, concatMergesAllOnFlushWithHighThreshold) {
 
 // Verifies correctness with grouped aggregation (non-global) and concat.
 TEST_F(CudfBatchConcatTest, concatWithGroupedAggregation) {
-  updateCudfConfig(/*min=*/30, /*max=*/std::nullopt);
+  updateCudfConfig(/*minBytes=*/1'048'576, /*maxRows=*/std::nullopt);
   CudfConfig::getInstance().concatOptimizationEnabled = true;
 
   std::vector<RowVectorPtr> vectors;
@@ -238,7 +478,10 @@ TEST_F(CudfBatchConcatTest, concatWithGroupedAggregation) {
 }
 
 TEST_F(CudfBatchConcatTest, concatPreservesZeroColumnRowCountForCountStar) {
-  updateCudfConfig(/*min=*/30, /*max=*/std::nullopt);
+  updateCudfConfig(
+      /*minBytes=*/1,
+      /*maxRows=*/std::nullopt,
+      /*zeroColumnMinRows=*/30);
   CudfConfig::getInstance().concatOptimizationEnabled = true;
 
   auto data = makeRowVector({
@@ -273,7 +516,7 @@ TEST_F(CudfBatchConcatTest, concatPreservesZeroColumnRowCountForCountStar) {
 // Verifies that CudfBatchConcat is inserted before the hash join probe and
 // correctly handles the 2-source HashJoinNode plan node.
 TEST_F(CudfBatchConcatTest, concatBeforeHashJoinProbe) {
-  updateCudfConfig(/*min=*/30, /*max=*/std::nullopt);
+  updateCudfConfig(/*minBytes=*/1'048'576, /*maxRows=*/std::nullopt);
   CudfConfig::getInstance().concatOptimizationEnabled = true;
 
   // Probe side: 6 batches of 10 rows each.
@@ -330,7 +573,7 @@ TEST_F(CudfBatchConcatTest, concatBeforeHashJoinProbe) {
 }
 
 TEST_F(CudfBatchConcatTest, rightJoinCollectsMatchedRowsFromPeerProbes) {
-  updateCudfConfig(/*min=*/30, /*max=*/std::nullopt);
+  updateCudfConfig(/*minBytes=*/1'048'576, /*maxRows=*/std::nullopt);
   CudfConfig::getInstance().concatOptimizationEnabled = true;
 
   std::vector<RowVectorPtr> probeVectors;
@@ -376,7 +619,8 @@ TEST_F(CudfBatchConcatTest, rightJoinCollectsMatchedRowsFromPeerProbes) {
 }
 
 TEST_F(CudfBatchConcatTest, concatSplitsZeroColumnBatchesAtMaxThreshold) {
-  updateCudfConfig(/*min=*/30, /*max=*/20);
+  updateCudfConfig(
+      /*minBytes=*/1, /*maxRows=*/20, /*zeroColumnMinRows=*/30);
   CudfConfig::getInstance().concatOptimizationEnabled = true;
 
   std::vector<RowVectorPtr> vectors;
