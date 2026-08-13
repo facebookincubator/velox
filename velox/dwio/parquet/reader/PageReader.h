@@ -16,8 +16,7 @@
 
 #pragma once
 
-#include <cstring>
-#include <type_traits>
+#include <folly/lang/Bits.h>
 
 #include "velox/common/compression/Compression.h"
 #include "velox/dwio/common/BitConcatenation.h"
@@ -255,9 +254,7 @@ class PageReader {
 
   template <typename T>
   T readField(const char* FOLLY_NONNULL& ptr) {
-    static_assert(std::is_trivially_copyable_v<T>);
-    T data;
-    std::memcpy(&data, ptr, sizeof(T));
+    T data = folly::loadUnaligned<T>(ptr);
     ptr += sizeof(T);
     return data;
   }
