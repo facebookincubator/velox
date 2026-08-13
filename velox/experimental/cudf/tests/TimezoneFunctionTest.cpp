@@ -599,6 +599,48 @@ TEST_F(TimezoneFunctionTest, parseDatetimeQuotedLiteralWithOffsetMatchesCpu) {
       varcharInput("he'llo 2026-01-02 00:45:00 +0530"));
 }
 
+// Historical offsets are not whole minutes: before New York adopted standard
+// time its offset was local mean time, -04:56:02, and Kathmandu's was
+// +05:41:16. CPU emits the seconds whenever abs(offset) % 60 is non-zero
+// (appendTimezoneOffset in functions/lib/DateTimeFormatter.cpp), and the colon
+// before them is unconditional -- it sits outside the includeColon guard, which
+// the buffer sizing corroborates by reserving 8 bytes for Joda 'Z' and 9 for
+// 'ZZ'. So 'Z' renders "-0456:02", with a colon it would not otherwise have.
+//
+// The GPU computes hours and minutes but never the remaining seconds, so each
+// of these renders a truncated offset. The instants are the ones CPU's own
+// to_iso8601 tests use, at local 10:00 on 0022-11-01.
+TEST_F(TimezoneFunctionTest, toIso8601SubMinuteOffsetKeepsSeconds) {
+  assertMatchesCpu(
+      "to_iso8601(c0)",
+      timestampWithTimeZoneInput(-61'446'589'438'000, "America/New_York"));
+  assertMatchesCpu(
+      "to_iso8601(c0)",
+      timestampWithTimeZoneInput(-61'446'627'676'000, "Asia/Kathmandu"));
+}
+
+// The colon before the seconds is present for Joda 'Z' as well, which otherwise
+// separates nothing.
+TEST_F(TimezoneFunctionTest, formatDatetimeSubMinuteOffsetKeepsSeconds) {
+  auto input =
+      timestampWithTimeZoneInput(-61'446'589'438'000, "America/New_York");
+  assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z')", input);
+  assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss ZZ')", input);
+}
+
+// Control: a whole-minute offset must not grow a ":00", and a zero offset must
+// still render as "Z" rather than "+00:00:00". Without these the suffix could
+// be made unconditional and the tests above would still pass.
+TEST_F(TimezoneFunctionTest, toIso8601WholeMinuteOffsetHasNoSeconds) {
+  assertMatchesCpu(
+      "to_iso8601(c0)",
+      timestampWithTimeZoneInput(1'609'466'400'000, "Asia/Kolkata"));
+  assertMatchesCpu(
+      "to_iso8601(c0)", timestampWithTimeZoneInput(1'609'466'400'000, "UTC"));
+  auto input = timestampWithTimeZoneInput(1'609'466'400'000, "Asia/Kolkata");
+  assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z')", input);
+}
+
 // Functions that produce a TIMESTAMP WITH TIME ZONE from plain inputs. The
 // inputs convert to cuDF fine; the function is the work the GPU must learn.
 

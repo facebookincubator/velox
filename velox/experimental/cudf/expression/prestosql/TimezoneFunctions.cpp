@@ -359,6 +359,54 @@ std::unique_ptr<cudf::column> formatOffsetStrings(
       cudf::strings::separator_on_nulls::YES,
       stream,
       mr);
+
+  // A historical offset need not be a whole number of minutes: New York was
+  // -04:56:02 before it adopted standard time. CPU appends ":SS" exactly when
+  // abs(offset) % 60 is non-zero, and that colon is unconditional -- it sits
+  // outside the includeColon guard in appendTimezoneOffset, so Joda "Z" renders
+  // "-0456:02". The seconds come from `absolute` so the modulus cannot be
+  // negative, as for the hours and minutes above. This runs before the
+  // zero-offset text is applied, so a row rendered as "Z" keeps that text.
+  auto seconds = binaryOp(
+      absolute->view(),
+      int64Scalar(60, stream),
+      cudf::binary_operator::MOD,
+      int64Type(),
+      stream,
+      mr);
+  auto hasSeconds = binaryOp(
+      seconds->view(),
+      int64Scalar(0, stream),
+      cudf::binary_operator::GREATER,
+      cudf::data_type{kBool8},
+      stream,
+      mr);
+  auto secondsStr = cudf::strings::from_integers(seconds->view(), stream, mr);
+  auto secondsPadded = cudf::strings::zfill(
+      cudf::strings_column_view(secondsStr->view()), 2, stream, mr);
+  auto colons = cudf::make_column_from_scalar(
+      cudf::string_scalar(":", true, stream), absolute->size(), stream, mr);
+  auto colonSeconds = cudf::strings::concatenate(
+      cudf::table_view{{colons->view(), secondsPadded->view()}},
+      cudf::string_scalar("", true, stream),
+      cudf::string_scalar("", false, stream),
+      cudf::strings::separator_on_nulls::YES,
+      stream,
+      mr);
+  auto secondsSuffix = cudf::copy_if_else(
+      colonSeconds->view(),
+      cudf::string_scalar("", true, stream),
+      hasSeconds->view(),
+      stream,
+      mr);
+  offsetStr = cudf::strings::concatenate(
+      cudf::table_view{{offsetStr->view(), secondsSuffix->view()}},
+      cudf::string_scalar("", true, stream),
+      cudf::string_scalar("", false, stream),
+      cudf::strings::separator_on_nulls::YES,
+      stream,
+      mr);
+
   if (!zeroOffsetText.has_value()) {
     return offsetStr;
   }
