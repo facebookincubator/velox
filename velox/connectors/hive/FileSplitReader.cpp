@@ -21,71 +21,10 @@
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileConnectorUtil.h"
+#include "velox/connectors/hive/PartitionValue.h"
 #include "velox/dwio/common/ReaderFactory.h"
-#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::connector::hive {
-namespace {
-
-template <TypeKind kind>
-VectorPtr newConstantFromStringImpl(
-    const TypePtr& type,
-    const std::optional<std::string>& value,
-    velox::memory::MemoryPool* pool,
-    bool isLocalTimestamp,
-    bool isDaysSinceEpoch) {
-  using T = typename TypeTraits<kind>::NativeType;
-  if (!value.has_value()) {
-    return std::make_shared<ConstantVector<T>>(pool, 1, true, type, T());
-  }
-
-  if (type->isDate()) {
-    int32_t days = 0;
-    // For Iceberg, the date partition values are already in daysSinceEpoch
-    // form.
-    if (isDaysSinceEpoch) {
-      days = folly::to<int32_t>(value.value());
-    } else {
-      days = DATE()->toDays(value.value());
-    }
-    return std::make_shared<ConstantVector<int32_t>>(
-        pool, 1, false, type, std::move(days));
-  }
-
-  if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
-    if (type->isDecimal()) {
-      T decimalValue = 0;
-      auto [precision, scale] = getDecimalPrecisionScale(*type);
-      auto status = DecimalUtil::castFromString(
-          StringView(value.value()), precision, scale, decimalValue);
-      if (!status.ok()) {
-        VELOX_USER_FAIL(status.message());
-      }
-      return std::make_shared<ConstantVector<T>>(
-          pool, 1, false, type, std::move(decimalValue));
-    }
-  }
-  if constexpr (std::is_same_v<T, StringView>) {
-    return std::make_shared<ConstantVector<StringView>>(
-        pool, 1, false, type, StringView(value.value()));
-  } else {
-    auto copy = velox::util::Converter<kind>::tryCast(value.value())
-                    .thenOrThrow(folly::identity, [&](const Status& status) {
-                      VELOX_USER_FAIL("{}", status.message());
-                    });
-    if constexpr (kind == TypeKind::TIMESTAMP) {
-      // TIMESTAMP partition value is read as local time subject to the
-      // 'readTimestampPartitionValueAsLocalTime' setting. TIMESTAMP_UTC
-      // partition value is always read as UTC.
-      if (type->equivalent(*TIMESTAMP()) && isLocalTimestamp) {
-        copy.toGMT(Timestamp::defaultTimezone());
-      }
-    }
-    return std::make_shared<ConstantVector<T>>(
-        pool, 1, false, type, std::move(copy));
-  }
-}
-} // namespace
 
 VectorPtr newConstantFromString(
     const TypePtr& type,
@@ -93,14 +32,20 @@ VectorPtr newConstantFromString(
     velox::memory::MemoryPool* pool,
     bool isLocalTimestamp,
     bool isDaysSinceEpoch) {
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
-      newConstantFromStringImpl,
-      type->kind(),
+  if (!value.has_value()) {
+    return BaseVector::createNullConstant(type, 1, pool);
+  }
+  return BaseVector::createConstant(
       type,
-      value,
-      pool,
-      isLocalTimestamp,
-      isDaysSinceEpoch);
+      PartitionValue::fromString(
+          value.value(),
+          *type,
+          isLocalTimestamp ? PartitionValue::TimestampMode::kLocalTime
+                           : PartitionValue::TimestampMode::kUtc,
+          isDaysSinceEpoch ? PartitionValue::DateMode::kDaysSinceEpoch
+                           : PartitionValue::DateMode::kIsoString),
+      1,
+      pool);
 }
 
 std::unique_ptr<FileSplitReader> FileSplitReader::create(
