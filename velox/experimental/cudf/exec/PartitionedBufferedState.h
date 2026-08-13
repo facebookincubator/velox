@@ -167,6 +167,33 @@ class BufferedStateOps {
   // Absorb one prepared chunk into an existing leaf.
   virtual void addInputToLeaf(BufferedState& leaf, InputChunk input) = 0;
 
+  // Optionally consume input without restoring a spilled leaf. Returning true
+  // tells PBS that the implementation retained the input and deliberately
+  // kept the leaf spilled. Such a leaf may grow beyond maxRowsPerLeaf because
+  // repartitioning its stored state would require restoring it first.
+  //
+  // The default preserves the restore-before-mutation behavior.
+  virtual bool addInputToSpilledLeaf(
+      BufferedState& /*leaf*/,
+      InputChunk& /*input*/) {
+    return false;
+  }
+
+  // Return true when a leaf kept spilled during input processing has another
+  // independently restorable chunk that PBS must replay while draining. PBS
+  // detaches such a leaf from the partition tree and feeds each restored chunk
+  // back through its normal insertion and row-limit enforcement path.
+  virtual bool hasNextDrainChunk(const BufferedState& /*leaf*/) const {
+    return false;
+  }
+
+  // Restore and consume the next chunk advertised by hasNextDrainChunk().
+  // The returned chunk must be suitable for insert() without another call to
+  // prepareInput().
+  virtual InputChunk restoreNextDrainChunk(BufferedState& /*leaf*/) {
+    VELOX_UNSUPPORTED("Buffered state does not support drain replay");
+  }
+
   // Report the logical row count PBS should track for this leaf.
   virtual size_t leafRowCount(const BufferedState& leaf) const = 0;
 
@@ -275,6 +302,11 @@ class PartitionedBufferedState {
   uint64_t reclaim(uint64_t targetBytes);
 
  private:
+  enum class InsertMode : uint8_t {
+    kInput,
+    kDrainReplay,
+  };
+
   class ActiveLeafGuard {
    public:
     ActiveLeafGuard(PartitionedBufferedState& owner, Node& node);
@@ -288,7 +320,10 @@ class PartitionedBufferedState {
     Node* previous_;
   };
 
-  void insert(Node& node, InputChunk bufferedInput);
+  void insert(
+      Node& node,
+      InputChunk bufferedInput,
+      InsertMode mode = InsertMode::kInput);
 
   void splitLeaf(Node& node);
 

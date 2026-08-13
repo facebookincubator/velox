@@ -43,6 +43,7 @@ struct IdentityBufferedStateOpsStats {
   bool oldLeafDestroyedBeforeChildCreation{true};
   size_t createLeafCallsAfterPartition{0};
   size_t createLeafFromInputsCalls{0};
+  size_t addInputCalls{0};
   size_t addInputCallsAfterPartition{0};
   std::vector<size_t> spilledLeafRows;
   std::vector<size_t> restoredLeafRows;
@@ -117,8 +118,11 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
     if (leafOperationCallback_) {
       leafOperationCallback_(leaf);
     }
-    if (stats_ && stats_->oldLeafDestroyed) {
-      ++stats_->addInputCallsAfterPartition;
+    if (stats_) {
+      ++stats_->addInputCalls;
+      if (stats_->oldLeafDestroyed) {
+        ++stats_->addInputCallsAfterPartition;
+      }
     }
     auto& tableLeaf = asLeaf(leaf);
     tableLeaf.chunk = mergeChunks(std::move(tableLeaf.chunk), std::move(input));
@@ -235,6 +239,10 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
     spillingEnabled_ = true;
   }
 
+  void enableDeduplicatingMerges() {
+    deduplicateMerges_ = true;
+  }
+
   void setLeafOperationCallback(
       std::function<void(const BufferedState&)> callback) {
     leafOperationCallback_ = std::move(callback);
@@ -252,6 +260,7 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   std::function<void(const BufferedState&)> leafOperationCallback_;
 
   bool spillingEnabled_{false};
+  bool deduplicateMerges_{false};
 
   TableLeafState& asLeaf(BufferedState& leaf) const {
     return static_cast<TableLeafState&>(leaf);
@@ -285,6 +294,15 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
     }
     if (right.empty()) {
       return left;
+    }
+
+    if (deduplicateMerges_) {
+      auto keys = extractKeys(left);
+      auto rightKeys = extractKeys(right);
+      keys.insert(keys.end(), rightKeys.begin(), rightKeys.end());
+      std::sort(keys.begin(), keys.end());
+      keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+      return makeChunk_(keys);
     }
 
     auto stream = left.stream;
@@ -618,6 +636,31 @@ TEST_F(
   EXPECT_TRUE(state.empty());
 }
 
+TEST_F(
+    PartitionedBufferedStateTest,
+    defaultPolicyRestoresSpilledLeafBeforeAddingInput) {
+  auto stats = std::make_shared<IdentityBufferedStateOpsStats>();
+  auto ops =
+      std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_, stats);
+  ops->enableSpilling();
+  ops->setPartitioning(
+      [&](const InputChunk& input) { return toKeys(input); },
+      [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
+      [](int64_t key, uint32_t /* seed */, int32_t numPartitions) {
+        return static_cast<int32_t>(key % numPartitions);
+      });
+  PartitionedBufferedState state(std::move(ops), 10, 0);
+
+  state.addInput(makeCudfVector({1, 2}));
+  EXPECT_EQ(state.reclaim(0), 2);
+  EXPECT_EQ(state.reclaimableBytes(), 0);
+
+  state.addInput(makeCudfVector({3}));
+  EXPECT_EQ(stats->restoredLeafRows, (std::vector<size_t>{2}));
+  EXPECT_EQ(state.reclaimableBytes(), 3);
+  EXPECT_EQ(drainAll(state), (std::vector<std::vector<int64_t>>{{1, 2, 3}}));
+}
+
 TEST_F(PartitionedBufferedStateTest, reentrantReclaimExcludesTheActiveLeaf) {
   auto stats = std::make_shared<IdentityBufferedStateOpsStats>();
   auto ops =
@@ -729,6 +772,55 @@ TEST_F(PartitionedBufferedStateTest, noProgressSplitRetriesNewSeeds) {
   EXPECT_TRUE(stats->oldLeafAliveOnRetries);
   EXPECT_TRUE(stats->oldLeafDestroyed);
   EXPECT_TRUE(stats->oldLeafDestroyedBeforeChildCreation);
+  EXPECT_EQ(drainAll(state), (std::vector<std::vector<int64_t>>{{1, 3}, {2}}));
+  EXPECT_TRUE(state.empty());
+}
+
+TEST_F(
+    PartitionedBufferedStateTest,
+    noProgressSplitAggregatesOverlappingInputBeforeFailing) {
+  auto stats = std::make_shared<IdentityBufferedStateOpsStats>();
+  auto ops =
+      std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_, stats);
+  ops->enableDeduplicatingMerges();
+  ops->setPartitioning(
+      [&](const InputChunk& input) { return toKeys(input); },
+      [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
+      [](int64_t /* key */, uint32_t /* seed */, int32_t /* partitions */) {
+        return 0;
+      });
+  PartitionedBufferedState state(std::move(ops), 1, 0);
+
+  state.addInput(makeCudfVector({7}));
+  state.addInput(makeCudfVector({7}));
+
+  EXPECT_EQ(stats->originalLeafPartitionCalls, 4);
+  EXPECT_EQ(stats->addInputCalls, 1);
+  EXPECT_FALSE(stats->oldLeafDestroyed);
+  EXPECT_EQ(drainAll(state), (std::vector<std::vector<int64_t>>{{7}}));
+  EXPECT_TRUE(state.empty());
+}
+
+TEST_F(
+    PartitionedBufferedStateTest,
+    noProgressSplitPartitionsCompactedStateWhenItStillExceedsLimit) {
+  auto stats = std::make_shared<IdentityBufferedStateOpsStats>();
+  auto ops =
+      std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_, stats);
+  ops->setPartitioning(
+      [&](const InputChunk& input) { return toKeys(input); },
+      [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
+      [](int64_t key, uint32_t seed, int32_t numPartitions) {
+        return seed < 4 ? 0 : static_cast<int32_t>(key % numPartitions);
+      });
+  PartitionedBufferedState state(std::move(ops), 2, 0);
+
+  state.addInput(makeCudfVector({1, 2}));
+  state.addInput(makeCudfVector({3}));
+
+  EXPECT_EQ(stats->originalLeafPartitionCalls, 5);
+  EXPECT_EQ(stats->addInputCalls, 1);
+  EXPECT_TRUE(stats->oldLeafDestroyed);
   EXPECT_EQ(drainAll(state), (std::vector<std::vector<int64_t>>{{1, 3}, {2}}));
   EXPECT_TRUE(state.empty());
 }

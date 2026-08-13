@@ -601,7 +601,10 @@ void PartitionedBufferedState::collectReclaimableLeaves(
   }
 }
 
-void PartitionedBufferedState::insert(Node& node, InputChunk bufferedInput) {
+void PartitionedBufferedState::insert(
+    Node& node,
+    InputChunk bufferedInput,
+    InsertMode mode) {
   if (bufferedInput.empty()) {
     return;
   }
@@ -613,7 +616,7 @@ void PartitionedBufferedState::insert(Node& node, InputChunk bufferedInput) {
     VELOX_CHECK_EQ(partitions.size(), node.children.size());
     for (size_t i = 0; i < partitions.size(); ++i) {
       if (!partitions[i].empty()) {
-        insert(*node.children[i], std::move(partitions[i]));
+        insert(*node.children[i], std::move(partitions[i]), mode);
       }
     }
     return;
@@ -630,6 +633,11 @@ void PartitionedBufferedState::insert(Node& node, InputChunk bufferedInput) {
   }
 
   ActiveLeafGuard activeLeaf(*this, node);
+  if (mode == InsertMode::kInput &&
+      ops_->addInputToSpilledLeaf(*node.leafState, bufferedInput)) {
+    node.leafRows = ops_->leafRowCount(*node.leafState);
+    return;
+  }
   restoreLeaf(node);
   // If node is a leaf and not empty, check if the input can be added to the
   // leaf. If not, split the leaf and insert the input into the new subtree.
@@ -658,53 +666,69 @@ void PartitionedBufferedState::splitLeafAndAddInput(
   restoreLeaf(node);
 
   const auto totalRows = node.leafRows + bufferedInput.size();
-  auto splitAttempt = [&]() {
-    for (uint32_t attempt = 1;; ++attempt) {
-      auto spec = makePartitionSpec(totalRows);
-      auto storedPartitions = node.leafState
-          ? ops_->partitionLeaf(*node.leafState, spec)
-          : std::vector<InputChunk>(spec.numPartitions);
-      auto incomingPartitions = partitionInput(bufferedInput, spec);
-      const auto nonEmptyChildren =
-          countNonEmptyChildren(storedPartitions, incomingPartitions);
+  std::optional<SplitLeafAttempt> splitAttempt;
+  for (uint32_t attempt = 1; attempt <= kMaxSplitSeedAttempts; ++attempt) {
+    auto spec = makePartitionSpec(totalRows);
+    auto storedPartitions = node.leafState
+        ? ops_->partitionLeaf(*node.leafState, spec)
+        : std::vector<InputChunk>(spec.numPartitions);
+    auto incomingPartitions = partitionInput(bufferedInput, spec);
+    const auto nonEmptyChildren =
+        countNonEmptyChildren(storedPartitions, incomingPartitions);
 
-      if (nonEmptyChildren > 1) {
-        // Found a partition spec that can split the leaf into more than one
-        // child. If nonEmptyChildren = 1, then the partition spec could not
-        // split and we'd have no meaningful progress.
-        return SplitLeafAttempt{
-            std::move(spec),
-            std::move(storedPartitions),
-            std::move(incomingPartitions)};
-      }
-
-      VELOX_CHECK_LT(
-          attempt,
-          kMaxSplitSeedAttempts,
-          "Partitioning buffered state made no progress after {} hash seed "
-          "attempts: {} rows exceeded the per-leaf limit of {} rows using {} "
-          "hash partitions. This can happen when every row has the same "
-          "partition key.",
-          kMaxSplitSeedAttempts,
-          totalRows,
-          maxRowsPerLeaf_,
-          spec.numPartitions);
+    if (nonEmptyChildren > 1) {
+      // Found a partition spec that can split the leaf into more than one
+      // child. If nonEmptyChildren = 1, then the partition spec could not
+      // split and we'd have no meaningful progress.
+      splitAttempt.emplace(
+          SplitLeafAttempt{
+              std::move(spec),
+              std::move(storedPartitions),
+              std::move(incomingPartitions)});
+      break;
     }
-  }();
+  }
+
+  if (!splitAttempt.has_value() && !bufferedInput.empty()) {
+    // The conservative row-count estimate can exceed the limit even when the
+    // stored and incoming chunks contain many of the same grouping keys. If
+    // partitioning cannot separate them, aggregate first and decide from the
+    // compacted result whether a split is actually necessary.
+    ops_->addInputToLeaf(*node.leafState, std::move(bufferedInput));
+    node.leafRows = ops_->leafRowCount(*node.leafState);
+    if (node.leafRows <= maxRowsPerLeaf_) {
+      return;
+    }
+
+    // The compacted state still exceeds the limit. It now represents the
+    // actual groups that must be partitioned rather than an upper bound from
+    // two overlapping chunks.
+    splitLeafAndAddInput(node, InputChunk{});
+    return;
+  }
+
+  VELOX_CHECK(
+      splitAttempt.has_value(),
+      "Partitioning buffered state made no progress after {} hash seed "
+      "attempts: {} rows exceeded the per-leaf limit of {} rows. This can "
+      "happen when every row has the same partition key.",
+      kMaxSplitSeedAttempts,
+      totalRows,
+      maxRowsPerLeaf_);
 
   node.leafRows = 0;
   node.leafState.reset();
-  node.partitionSpec = splitAttempt.spec;
+  node.partitionSpec = splitAttempt->spec;
   node.children.clear();
-  node.children.reserve(splitAttempt.spec.numPartitions);
-  for (int32_t i = 0; i < splitAttempt.spec.numPartitions; ++i) {
+  node.children.reserve(splitAttempt->spec.numPartitions);
+  for (int32_t i = 0; i < splitAttempt->spec.numPartitions; ++i) {
     node.children.push_back(std::make_unique<Node>());
   }
 
   for (size_t i = 0; i < node.children.size(); ++i) {
     auto& child = *node.children[i];
-    auto& stored = splitAttempt.storedPartitions[i];
-    auto& incoming = splitAttempt.incomingPartitions[i];
+    auto& stored = splitAttempt->storedPartitions[i];
+    auto& incoming = splitAttempt->incomingPartitions[i];
     if (!stored.empty() && !incoming.empty()) {
       child.leafState =
           ops_->createLeafFromInputs(std::move(stored), std::move(incoming));
@@ -736,6 +760,18 @@ CudfVectorPtr PartitionedBufferedState::drainNextOutput(Node& node) {
 
   if (!node.leafState) {
     return nullptr;
+  }
+
+  if (ops_->hasNextDrainChunk(*node.leafState)) {
+    auto replayLeaf = std::move(node.leafState);
+    node.leafRows = 0;
+    while (ops_->hasNextDrainChunk(*replayLeaf)) {
+      insert(
+          node,
+          ops_->restoreNextDrainChunk(*replayLeaf),
+          InsertMode::kDrainReplay);
+    }
+    return drainNextOutput(node);
   }
 
   ActiveLeafGuard activeLeaf(*this, node);

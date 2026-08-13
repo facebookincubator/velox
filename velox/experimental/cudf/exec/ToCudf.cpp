@@ -415,6 +415,20 @@ void CudfConfig::initialize(
     concatOptimizationEnabled =
         folly::to<bool>(config[kCudfConcatOptimizationEnabled]);
   }
+  if (config.find(kCudfGroupbySpillStrategy) != config.end()) {
+    const auto& strategy = config[kCudfGroupbySpillStrategy];
+    if (strategy == "restore_on_input") {
+      groupbySpillStrategy = GroupbySpillStrategy::kRestoreOnInput;
+    } else if (strategy == "stay_spilled") {
+      groupbySpillStrategy = GroupbySpillStrategy::kStaySpilled;
+    } else {
+      VELOX_USER_FAIL(
+          "Invalid {} value '{}'. Expected 'restore_on_input' or "
+          "'stay_spilled'",
+          kCudfGroupbySpillStrategy,
+          strategy);
+    }
+  }
   if (config.find(kCudfFunctionNamePrefix) != config.end()) {
     functionNamePrefix = config[kCudfFunctionNamePrefix];
   }

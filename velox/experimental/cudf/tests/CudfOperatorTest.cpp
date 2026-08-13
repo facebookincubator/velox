@@ -29,9 +29,9 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
-#include <folly/ScopeGuard.h>
-
 #include <rmm/device_buffer.hpp>
+
+#include <folly/ScopeGuard.h>
 
 #include <algorithm>
 #include <map>
@@ -266,12 +266,15 @@ TEST_F(CudfOperatorTest, groupbySpillsAndRestoresThroughSharedArbitrator) {
   auto& config = CudfConfig::getInstance();
   const auto savedBatchSizeMaxThreshold = config.batchSizeMaxThreshold;
   const auto savedConcatOptimizationEnabled = config.concatOptimizationEnabled;
+  const auto savedGroupbySpillStrategy = config.groupbySpillStrategy;
   auto restoreConfig = folly::makeGuard([&]() {
     config.batchSizeMaxThreshold = savedBatchSizeMaxThreshold;
     config.concatOptimizationEnabled = savedConcatOptimizationEnabled;
+    config.groupbySpillStrategy = savedGroupbySpillStrategy;
   });
   config.batchSizeMaxThreshold = kNumInitialGroups + 1;
   config.concatOptimizationEnabled = false;
+  config.groupbySpillStrategy = GroupbySpillStrategy::kStaySpilled;
 
   auto rawInput = makeRowVector(
       {"c0", "c1"},
@@ -340,11 +343,10 @@ TEST_F(CudfOperatorTest, groupbySpillsAndRestoresThroughSharedArbitrator) {
                                 .queryId("cudf-groupby-arbitration-pressure")
                                 .customMemoryResource(resource)
                                 .build();
-    auto pressurePool = pressureQueryCtx
-                            ->customPool(std::string{kCudfMemoryResourceTag})
-                            ->addLeafChild("arbitrationPressure");
-    CudfMemoryResource pressureResource{
-        *output_mr_, pressurePool, resource};
+    auto pressurePool =
+        pressureQueryCtx->customPool(std::string{kCudfMemoryResourceTag})
+            ->addLeafChild("arbitrationPressure");
+    CudfMemoryResource pressureResource{*output_mr_, pressurePool, resource};
     exec::Operator::NonReclaimableSectionGuard nonReclaimableGuard(&groupby);
     rmm::device_buffer pressure{
         kGpuCapacity, rmm::cuda_stream_default, pressureResource};
@@ -363,14 +365,27 @@ TEST_F(CudfOperatorTest, groupbySpillsAndRestoresThroughSharedArbitrator) {
   EXPECT_EQ(reclaimableBytes, 0);
 
   groupby.addInput(makePartialInput({1, kNumInitialGroups}, {2, 1}));
+  groupby.addInput(makePartialInput({1, kNumInitialGroups + 1}, {3, 1}));
+  EXPECT_EQ(gpuPool->usedBytes(), 0);
+  const auto statsBeforeDrain = groupby.stats(false).runtimeStats;
+  EXPECT_EQ(
+      statsBeforeDrain.at(std::string(CudfGroupby::kSpilledInputChunks)).sum,
+      2);
+  EXPECT_EQ(
+      statsBeforeDrain.count(std::string(CudfGroupby::kRestoredLeaves)), 0);
+  EXPECT_EQ(
+      statsBeforeDrain.count(std::string(CudfGroupby::kRestoredInputChunks)),
+      0);
   groupby.noMoreInput();
 
   std::map<int64_t, int64_t> actual;
+  size_t outputBatches = 0;
   while (!groupby.isFinished()) {
     auto output = std::dynamic_pointer_cast<CudfVector>(groupby.getOutput());
     if (!output) {
       continue;
     }
+    ++outputBatches;
     auto stream = output->stream();
     auto row = with_arrow::toVeloxColumn(
         output->getTableView(),
@@ -387,11 +402,13 @@ TEST_F(CudfOperatorTest, groupbySpillsAndRestoresThroughSharedArbitrator) {
     }
   }
 
-  ASSERT_EQ(actual.size(), kNumInitialGroups + 1);
+  ASSERT_EQ(actual.size(), kNumInitialGroups + 2);
+  EXPECT_GT(outputBatches, 1);
   EXPECT_EQ(actual.at(0), 1);
-  EXPECT_EQ(actual.at(1), 3);
+  EXPECT_EQ(actual.at(1), 6);
   EXPECT_EQ(actual.at(kNumInitialGroups - 1), 1);
   EXPECT_EQ(actual.at(kNumInitialGroups), 1);
+  EXPECT_EQ(actual.at(kNumInitialGroups + 1), 1);
 
   const auto runtimeStats = groupby.stats(false).runtimeStats;
   EXPECT_GE(
@@ -399,17 +416,126 @@ TEST_F(CudfOperatorTest, groupbySpillsAndRestoresThroughSharedArbitrator) {
       usedBytesBefore);
   EXPECT_EQ(
       runtimeStats.at(std::string(CudfGroupby::kSpilledRows)).sum,
-      kNumInitialGroups);
-  EXPECT_GT(
-      runtimeStats.at(std::string(CudfGroupby::kSpilledLeaves)).sum, 0);
+      kNumInitialGroups + 4);
+  EXPECT_GT(runtimeStats.at(std::string(CudfGroupby::kSpilledLeaves)).sum, 0);
+  EXPECT_EQ(
+      runtimeStats.at(std::string(CudfGroupby::kSpilledInputChunks)).sum, 2);
   EXPECT_GE(
       runtimeStats.at(std::string(CudfGroupby::kRestoredBytes)).sum,
       usedBytesBefore);
   EXPECT_EQ(
       runtimeStats.at(std::string(CudfGroupby::kRestoredRows)).sum,
-      kNumInitialGroups);
-  EXPECT_GT(
-      runtimeStats.at(std::string(CudfGroupby::kRestoredLeaves)).sum, 0);
+      kNumInitialGroups + 4);
+  EXPECT_GT(runtimeStats.at(std::string(CudfGroupby::kRestoredLeaves)).sum, 0);
+  EXPECT_EQ(
+      runtimeStats.at(std::string(CudfGroupby::kRestoredInputChunks)).sum, 2);
+}
+
+TEST_F(CudfOperatorTest, stickyGroupbyDrainCompactsOverlappingKeys) {
+  constexpr int64_t kGpuCapacity = 64L << 20;
+  auto& config = CudfConfig::getInstance();
+  const auto savedBatchSizeMaxThreshold = config.batchSizeMaxThreshold;
+  const auto savedConcatOptimizationEnabled = config.concatOptimizationEnabled;
+  const auto savedGroupbySpillStrategy = config.groupbySpillStrategy;
+  auto restoreConfig = folly::makeGuard([&]() {
+    config.batchSizeMaxThreshold = savedBatchSizeMaxThreshold;
+    config.concatOptimizationEnabled = savedConcatOptimizationEnabled;
+    config.groupbySpillStrategy = savedGroupbySpillStrategy;
+  });
+  config.batchSizeMaxThreshold = 1;
+  config.concatOptimizationEnabled = false;
+  config.groupbySpillStrategy = GroupbySpillStrategy::kStaySpilled;
+
+  auto rawInput = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({7}), makeFlatVector<int64_t>({1})});
+  auto plan = exec::test::PlanBuilder()
+                  .values({rawInput})
+                  .partialAggregation({"c0"}, {"count(1)"})
+                  .finalAggregation()
+                  .planNode();
+  auto aggregationNode =
+      std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+  ASSERT_NE(aggregationNode, nullptr);
+
+  auto resource = createCudfCustomMemoryResource(kGpuCapacity);
+  ASSERT_NE(resource, nullptr);
+  auto queryCtx = core::QueryCtx::Builder()
+                      .executor(driverExecutor_.get())
+                      .queryId("cudf-groupby-sticky-overlap")
+                      .customMemoryResource(resource)
+                      .build();
+  core::PlanFragment planFragment;
+  planFragment.planNode = plan;
+  auto task = exec::Task::create(
+      "CudfGroupbyStickyOverlapTest",
+      std::move(planFragment),
+      0,
+      queryCtx,
+      exec::Task::ExecutionMode::kParallel);
+  auto driver = exec::Driver::testingCreate(
+      std::make_unique<exec::DriverCtx>(task, 0, 0, 0, 0));
+  CudfGroupby groupby{0, driver->driverCtx(), aggregationNode};
+  groupby.initialize();
+
+  auto makePartialInput = [&](int64_t count) {
+    auto row = makeRowVector(
+        {"c0", "a0"},
+        {makeFlatVector<int64_t>({7}), makeFlatVector<int64_t>({count})});
+    auto stream = cudfGlobalStreamPool().get_stream();
+    auto table =
+        with_arrow::toCudfTable(row, groupby.pool(), stream, get_output_mr());
+    stream.synchronize();
+    return std::make_shared<CudfVector>(
+        groupby.pool(), row->type(), row->size(), std::move(table), stream);
+  };
+
+  groupby.addInput(makePartialInput(1));
+  auto* gpuPool = groupby.customPool(kCudfMemoryResourceTag);
+  ASSERT_NE(gpuPool, nullptr);
+  ASSERT_NE(gpuPool->reclaimer(), nullptr);
+  {
+    task->requestPause().wait();
+    auto resumeTask = folly::makeGuard([&]() { exec::Task::resume(task); });
+    memory::MemoryReclaimer::Stats stats;
+    memory::ScopedMemoryArbitrationContext context(gpuPool);
+    EXPECT_GT(gpuPool->reclaim(0, 0, stats), 0);
+  }
+  EXPECT_EQ(gpuPool->usedBytes(), 0);
+
+  groupby.addInput(makePartialInput(2));
+  groupby.addInput(makePartialInput(3));
+  EXPECT_EQ(gpuPool->usedBytes(), 0);
+  groupby.noMoreInput();
+
+  int64_t resultCount = 0;
+  size_t outputBatches = 0;
+  while (!groupby.isFinished()) {
+    auto output = std::dynamic_pointer_cast<CudfVector>(groupby.getOutput());
+    if (!output) {
+      continue;
+    }
+    ++outputBatches;
+    auto stream = output->stream();
+    auto row = with_arrow::toVeloxColumn(
+        output->getTableView(),
+        groupby.pool(),
+        aggregationNode->outputType(),
+        "",
+        stream,
+        get_output_mr());
+    stream.synchronize();
+    ASSERT_EQ(row->size(), 1);
+    EXPECT_EQ(row->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0), 7);
+    resultCount = row->childAt(1)->as<FlatVector<int64_t>>()->valueAt(0);
+  }
+
+  EXPECT_EQ(outputBatches, 1);
+  EXPECT_EQ(resultCount, 6);
+  const auto runtimeStats = groupby.stats(false).runtimeStats;
+  EXPECT_EQ(runtimeStats.at(std::string(CudfGroupby::kRestoredRows)).sum, 3);
+  EXPECT_EQ(
+      runtimeStats.at(std::string(CudfGroupby::kRestoredInputChunks)).sum, 2);
 }
 
 TEST_F(CudfOperatorTest, skipsGpuReclaimInNonReclaimableSection) {

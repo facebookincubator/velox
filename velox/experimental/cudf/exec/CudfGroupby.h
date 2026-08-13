@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/exec/PartitionedBufferedState.h"
@@ -75,15 +76,15 @@ bool canGroupbyAggregationBeEvaluatedByCudf(
 
 class CudfGroupby : public CudfOperatorBase {
  public:
-  static constexpr std::string_view kSpilledBytes{
-      "cudfGroupbySpilledBytes"};
+  static constexpr std::string_view kSpilledBytes{"cudfGroupbySpilledBytes"};
   static constexpr std::string_view kSpilledRows{"cudfGroupbySpilledRows"};
-  static constexpr std::string_view kSpilledLeaves{
-      "cudfGroupbySpilledLeaves"};
-  static constexpr std::string_view kRestoredBytes{
-      "cudfGroupbyRestoredBytes"};
-  static constexpr std::string_view kRestoredRows{
-      "cudfGroupbyRestoredRows"};
+  static constexpr std::string_view kSpilledLeaves{"cudfGroupbySpilledLeaves"};
+  static constexpr std::string_view kSpilledInputChunks{
+      "cudfGroupbySpilledInputChunks"};
+  static constexpr std::string_view kRestoredInputChunks{
+      "cudfGroupbyRestoredInputChunks"};
+  static constexpr std::string_view kRestoredBytes{"cudfGroupbyRestoredBytes"};
+  static constexpr std::string_view kRestoredRows{"cudfGroupbyRestoredRows"};
   static constexpr std::string_view kRestoredLeaves{
       "cudfGroupbyRestoredLeaves"};
 
@@ -147,6 +148,7 @@ class CudfGroupby : public CudfOperatorBase {
 
   const bool isPartialOutput_;
   const bool isSingleStep_;
+  const GroupbySpillStrategy groupbySpillStrategy_;
   // Streaming aggregation is disabled if companion aggregates are present.
   bool streamingEnabled_{true};
   const int64_t maxPartialAggregationMemoryUsage_;

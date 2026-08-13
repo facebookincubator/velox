@@ -40,6 +40,7 @@
 #include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
 
+#include <deque>
 #include <limits>
 
 namespace {
@@ -817,6 +818,12 @@ void checkOwnedLeafChunk(const InputChunk& chunk) {
       "A persistent groupby leaf must be the sole owner of its CudfVector");
 }
 
+struct SpilledGroupbyChunk {
+  size_t rowCount;
+  bool leafSnapshot;
+  SpilledCudfVector vector;
+};
+
 struct GroupbyLeafState final : public BufferedState {
   explicit GroupbyLeafState(InputChunk chunk)
       : rowCount(chunk.size()), chunk(std::move(chunk)) {
@@ -829,7 +836,7 @@ struct GroupbyLeafState final : public BufferedState {
 
   size_t rowCount;
   InputChunk chunk;
-  std::optional<SpilledCudfVector> spilled;
+  std::deque<SpilledGroupbyChunk> spilledChunks;
 };
 
 } // namespace
@@ -922,6 +929,45 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
     checkOwnedLeafChunk(groupbyLeaf.chunk);
   }
 
+  bool addInputToSpilledLeaf(BufferedState& leaf, InputChunk& input) override {
+    auto& groupbyLeaf = asLeafState(leaf);
+    if (owner_.isSingleStep_ ||
+        owner_.groupbySpillStrategy_ != GroupbySpillStrategy::kStaySpilled ||
+        groupbyLeaf.isResident()) {
+      return false;
+    }
+
+    VELOX_CHECK(!groupbyLeaf.spilledChunks.empty());
+    const auto inputRows = input.size();
+    auto ownedInput = std::move(input).materialize(get_output_mr());
+    const auto inputBytes = ownedInput.owner->estimateFlatSize();
+    auto spilled = SpilledCudfVector::spill(ownedInput.owner, owner_.pool());
+    ownedInput = InputChunk{};
+    input = InputChunk{};
+    groupbyLeaf.spilledChunks.push_back(
+        SpilledGroupbyChunk{inputRows, false, std::move(spilled)});
+    groupbyLeaf.rowCount += inputRows;
+    owner_.addRuntimeStat(
+        CudfGroupby::kSpilledBytes,
+        RuntimeCounter(saturateCast(inputBytes), RuntimeCounter::Unit::kBytes));
+    owner_.addRuntimeStat(
+        CudfGroupby::kSpilledRows, RuntimeCounter(saturateCast(inputRows)));
+    owner_.addRuntimeStat(CudfGroupby::kSpilledInputChunks, RuntimeCounter(1));
+    return true;
+  }
+
+  bool hasNextDrainChunk(const BufferedState& leaf) const override {
+    const auto& groupbyLeaf = asLeafState(leaf);
+    return owner_.groupbySpillStrategy_ == GroupbySpillStrategy::kStaySpilled &&
+        !groupbyLeaf.isResident() && !groupbyLeaf.spilledChunks.empty();
+  }
+
+  InputChunk restoreNextDrainChunk(BufferedState& leaf) override {
+    auto& groupbyLeaf = asLeafState(leaf);
+    VELOX_CHECK(hasNextDrainChunk(groupbyLeaf));
+    return restoreNextSpilledChunk(groupbyLeaf);
+  }
+
   size_t leafRowCount(const BufferedState& leaf) const override {
     return asLeafState(leaf).rowCount;
   }
@@ -929,7 +975,7 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
   uint64_t leafFlatSize(const BufferedState& leaf) const override {
     const auto& groupbyLeaf = asLeafState(leaf);
     if (!groupbyLeaf.isResident()) {
-      VELOX_CHECK(groupbyLeaf.spilled.has_value());
+      VELOX_CHECK(!groupbyLeaf.spilledChunks.empty());
       return 0;
     }
     const auto& chunk = groupbyLeaf.chunk;
@@ -944,7 +990,7 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
   void spillLeaf(BufferedState& leaf) override {
     auto& groupbyLeaf = asLeafState(leaf);
     VELOX_CHECK(groupbyLeaf.isResident());
-    VELOX_CHECK(!groupbyLeaf.spilled.has_value());
+    VELOX_CHECK(groupbyLeaf.spilledChunks.empty());
     checkOwnedLeafChunk(groupbyLeaf.chunk);
     const auto spilledBytes = leafFlatSize(leaf);
     const auto spilledRows = groupbyLeaf.rowCount;
@@ -953,16 +999,15 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
       auto spilled =
           SpilledCudfVector::spill(groupbyLeaf.chunk.owner, owner_.pool());
       groupbyLeaf.chunk = InputChunk{};
-      groupbyLeaf.spilled.emplace(std::move(spilled));
+      groupbyLeaf.spilledChunks.push_back(
+          SpilledGroupbyChunk{spilledRows, true, std::move(spilled)});
       owner_.addRuntimeStat(
           CudfGroupby::kSpilledBytes,
           RuntimeCounter(
               saturateCast(spilledBytes), RuntimeCounter::Unit::kBytes));
       owner_.addRuntimeStat(
-          CudfGroupby::kSpilledRows,
-          RuntimeCounter(saturateCast(spilledRows)));
-      owner_.addRuntimeStat(
-          CudfGroupby::kSpilledLeaves, RuntimeCounter(1));
+          CudfGroupby::kSpilledRows, RuntimeCounter(saturateCast(spilledRows)));
+      owner_.addRuntimeStat(CudfGroupby::kSpilledLeaves, RuntimeCounter(1));
     } catch (...) {
       // A transactional spill may reconstruct the resident table. Refresh the
       // view because the old one referred to the released table.
@@ -980,22 +1025,15 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
       checkOwnedLeafChunk(groupbyLeaf.chunk);
       return;
     }
-    VELOX_CHECK(groupbyLeaf.spilled.has_value());
-    auto restored = groupbyLeaf.spilled->restore(get_output_mr());
-    groupbyLeaf.chunk =
-        makeOwnedChunk(std::move(restored), owner_.bufferedResultType_);
-    const auto restoredBytes = groupbyLeaf.chunk.owner->estimateFlatSize();
-    groupbyLeaf.spilled.reset();
+    VELOX_CHECK(!groupbyLeaf.spilledChunks.empty());
+    while (!groupbyLeaf.spilledChunks.empty()) {
+      auto restored = restoreNextSpilledChunk(groupbyLeaf);
+      groupbyLeaf.chunk = groupbyLeaf.chunk.empty()
+          ? std::move(restored)
+          : mergeChunks(std::move(groupbyLeaf.chunk), std::move(restored));
+    }
+    groupbyLeaf.rowCount = groupbyLeaf.chunk.size();
     checkOwnedLeafChunk(groupbyLeaf.chunk);
-    owner_.addRuntimeStat(
-        CudfGroupby::kRestoredBytes,
-        RuntimeCounter(
-            saturateCast(restoredBytes), RuntimeCounter::Unit::kBytes));
-    owner_.addRuntimeStat(
-        CudfGroupby::kRestoredRows,
-        RuntimeCounter(saturateCast(groupbyLeaf.rowCount)));
-    owner_.addRuntimeStat(
-        CudfGroupby::kRestoredLeaves, RuntimeCounter(1));
   }
 
   std::vector<InputChunk> partitionInput(
@@ -1077,6 +1115,29 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
 
   const GroupbyLeafState& asLeafState(const BufferedState& leaf) const {
     return static_cast<const GroupbyLeafState&>(leaf);
+  }
+
+  InputChunk restoreNextSpilledChunk(GroupbyLeafState& leaf) const {
+    VELOX_CHECK(!leaf.spilledChunks.empty());
+    auto& spilledChunk = leaf.spilledChunks.front();
+    const auto restoredBytes = spilledChunk.vector.deviceBytes();
+    const auto restoredRows = spilledChunk.rowCount;
+    const auto leafSnapshot = spilledChunk.leafSnapshot;
+    auto restored = makeOwnedChunk(
+        spilledChunk.vector.restore(get_output_mr()),
+        owner_.bufferedResultType_);
+    leaf.spilledChunks.pop_front();
+    owner_.addRuntimeStat(
+        CudfGroupby::kRestoredBytes,
+        RuntimeCounter(
+            saturateCast(restoredBytes), RuntimeCounter::Unit::kBytes));
+    owner_.addRuntimeStat(
+        CudfGroupby::kRestoredRows, RuntimeCounter(saturateCast(restoredRows)));
+    owner_.addRuntimeStat(
+        leafSnapshot ? CudfGroupby::kRestoredLeaves
+                     : CudfGroupby::kRestoredInputChunks,
+        RuntimeCounter(1));
+    return restored;
   }
 
   InputChunk makeOwnedChunk(CudfVectorPtr owner, const TypePtr& type) const {
@@ -1246,6 +1307,7 @@ CudfGroupby::CudfGroupby(
           !hasFinalAggs(aggregationNode->aggregates())),
       isSingleStep_(
           aggregationNode->step() == core::AggregationNode::Step::kSingle),
+      groupbySpillStrategy_(CudfConfig::getInstance().groupbySpillStrategy),
       maxPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxPartialAggregationMemoryUsage()) {}
 

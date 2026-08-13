@@ -27,6 +27,7 @@ TEST(ConfigTest, CudfConfig) {
       {CudfConfig::kCudfMemoryResource, "arena"},
       {CudfConfig::kCudfMemoryPercent, "25"},
       {CudfConfig::kCudfFunctionNamePrefix, "presto"},
+      {CudfConfig::kCudfGroupbySpillStrategy, "stay_spilled"},
       {CudfConfig::kCudfAllowCpuFallback, "false"}};
 
   CudfConfig config;
@@ -36,6 +37,13 @@ TEST(ConfigTest, CudfConfig) {
   ASSERT_EQ(config.memoryResource, "arena");
   ASSERT_EQ(config.memoryPercent, 25);
   ASSERT_EQ(config.functionNamePrefix, "presto");
+  ASSERT_EQ(config.groupbySpillStrategy, GroupbySpillStrategy::kStaySpilled);
   ASSERT_EQ(config.allowCpuFallback, false);
+}
+
+TEST(ConfigTest, groupbySpillStrategyRejectsUnknownValue) {
+  CudfConfig config;
+  EXPECT_ANY_THROW(
+      config.initialize({{CudfConfig::kCudfGroupbySpillStrategy, "unknown"}}));
 }
 } // namespace facebook::velox::cudf_velox::test

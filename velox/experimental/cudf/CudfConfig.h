@@ -18,11 +18,21 @@
 
 #include <cudf/types.hpp>
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <unordered_map>
 
 namespace facebook::velox::cudf_velox {
+
+enum class GroupbySpillStrategy : uint8_t {
+  // Restore a spilled leaf as soon as new input is routed to it.
+  kRestoreOnInput,
+
+  // Keep a spilled leaf on host and append incoming chunks as independently
+  // spilled fragments. Restore and merge the fragments only while draining.
+  kStaySpilled,
+};
 
 struct CudfConfig {
   /// Keys used by the initialize() method.
@@ -49,6 +59,8 @@ struct CudfConfig {
       "cudf.batch_size_max_threshold"};
   static constexpr const char* kCudfConcatOptimizationEnabled{
       "cudf.concat_optimization_enabled"};
+  static constexpr const char* kCudfGroupbySpillStrategy{
+      "cudf.groupby_spill_strategy"};
   static constexpr const char* kCudfTimestampUnit{"cudf.timestamp_unit"};
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
@@ -115,6 +127,12 @@ struct CudfConfig {
   /// This batch size is determined by batchSizeMinThreshold and
   /// batchSizeMaxThreshold
   bool concatOptimizationEnabled{false};
+
+  /// Controls what final groupby does when input is routed to a leaf that
+  /// arbitration has already spilled. Accepted configuration values are
+  /// "restore_on_input" and "stay_spilled".
+  GroupbySpillStrategy groupbySpillStrategy{
+      GroupbySpillStrategy::kRestoreOnInput};
 
   /// Minimum rows to accumulate before GPU-side concatenation in
   /// `CudfBatchConcat` (default 100k).
