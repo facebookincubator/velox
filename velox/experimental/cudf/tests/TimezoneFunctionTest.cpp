@@ -512,6 +512,80 @@ TEST_F(TimezoneFunctionTest, formatDatetimeFractionMicros) {
   assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss.SSSSSS')", input);
 }
 
+// Renders a Joda format as a SQL string literal, doubling each single quote as
+// SQL requires. Quoted-literal formats are the subject of the tests below, and
+// spelling them with SQL escaping applied by hand is unreadable: the Joda
+// format 'he''llo' would have to be written '''he''''llo'''.
+std::string jodaLiteral(const std::string& jodaFormat) {
+  std::string sql{"'"};
+  for (const char c : jodaFormat) {
+    sql += c;
+    if (c == '\'') {
+      sql += c;
+    }
+  }
+  sql += "'";
+  return sql;
+}
+
+// Joda quotes a literal run with single quotes and escapes a literal quote by
+// doubling it, and CPU implements that in numLiteralChars plus the literal
+// branch of buildJodaDateTimeFormatter. The GPU's quote loop ends the literal
+// at the first quote it sees, so a doubled quote terminates the run instead of
+// producing one, and "''" alone produces nothing. Literal bytes also reach cuDF
+// unescaped, where '%' starts a specifier: "'%d'" renders the day of month
+// instead of the text, and a bare '%' escapes as a raw std::invalid_argument
+// rather than a Velox user error. Red until literals follow CPU's rule and
+// every literal byte is emitted through one escaping step.
+//
+// The formats use yyyy rather than y: Joda prints a single 'y' as the full year
+// while the GPU maps a short run to "%y", which is T18's field-width gap and
+// would make these red for an unrelated reason.
+TEST_F(TimezoneFunctionTest, formatDatetimeQuotedLiteralsMatchCpu) {
+  auto input = timestampWithTimeZoneInput(1'609'466'400'000, "Asia/Kolkata");
+  for (const auto& jodaFormat : std::vector<std::string>{
+           "'hello'", // a plain quoted run
+           "''", // an escaped quote on its own
+           "yyyy '' yyyy", // an escaped quote between specifiers
+           "'he''llo'", // an escaped quote inside a run
+           "'''he''llo'''", // runs and escaped quotes adjacent
+           "'%d'", // a specifier inside a literal stays text
+           "yyyy % MM", // a bare '%' is literal text on CPU
+       }) {
+    SCOPED_TRACE(jodaFormat);
+    assertMatchesCpu(
+        "format_datetime(c0, " + jodaLiteral(jodaFormat) + ")", input);
+  }
+}
+
+// An unterminated literal is a user error on CPU ("No closing single quote for
+// literal"); the GPU consumes the rest of the format as literal text.
+TEST_F(TimezoneFunctionTest, formatDatetimeUnterminatedLiteralThrowsLikeCpu) {
+  auto input = timestampWithTimeZoneInput(1'609'466'400'000, "Asia/Kolkata");
+  auto exprSet = compileExpression(
+      "format_datetime(c0, " + jodaLiteral("'abcd") + ")",
+      asRowType(input->type()));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  VELOX_ASSERT_THROW(
+      evaluate(*exprSet, input), "No closing single quote for literal");
+}
+
+// jodaToStrftime serves parse_datetime too, so the same literal handling has to
+// hold on the parse side, where a literal must match the input text.
+TEST_F(TimezoneFunctionTest, parseDatetimeQuotedLiteralsMatchCpu) {
+  for (const auto& [value, jodaFormat] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"2021-01-01T02:00:00", "yyyy-MM-dd'T'HH:mm:ss"},
+           {"2021-01-01 % 02:00:00", "yyyy-MM-dd '%' HH:mm:ss"},
+       }) {
+    SCOPED_TRACE(jodaFormat);
+    assertMatchesCpu(
+        "parse_datetime(c0, " + jodaLiteral(jodaFormat) + ")",
+        varcharInput(value));
+  }
+}
+
 // Functions that produce a TIMESTAMP WITH TIME ZONE from plain inputs. The
 // inputs convert to cuDF fine; the function is the work the GPU must learn.
 

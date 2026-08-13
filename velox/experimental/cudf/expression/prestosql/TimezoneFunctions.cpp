@@ -428,6 +428,19 @@ enum class TrailingZone {
 // Translates the subset of Joda DateTimeFormat pattern letters used by the
 // covered functions to cuDF strftime/strptime specifiers. A trailing time-zone
 // token (Z/z) is classified via trailing and rendered separately.
+// Appends one literal byte of a Joda format to a strftime format, doubling '%'
+// so cuDF reads it as text. cuDF's format compiler maps "%%" to a literal '%'
+// and is shared by from_timestamps, to_timestamps and is_timestamp, so one rule
+// serves rendering, parsing and validation. Every literal byte must go through
+// here: an unescaped '%' would start a specifier, making "'%d'" render the day
+// of month and a bare '%' raise from cuDF instead of printing.
+void appendLiteralByte(std::string& out, char byte) {
+  out += byte;
+  if (byte == '%') {
+    out += '%';
+  }
+}
+
 std::string jodaToStrftime(const std::string& joda, TrailingZone& trailing) {
   trailing = TrailingZone::kNone;
   std::string out;
@@ -435,13 +448,33 @@ std::string jodaToStrftime(const std::string& joda, TrailingZone& trailing) {
   while (i < joda.size()) {
     const char c = joda[i];
     if (c == '\'') {
+      // Joda quotes a literal run and escapes a literal quote by doubling it.
+      // Mirrors CPU (numLiteralChars plus the literal branch of
+      // buildJodaDateTimeFormatter in functions/lib/DateTimeFormatter.cpp): a
+      // doubled quote outside a run is one literal quote, a doubled quote
+      // inside a run is an escaped quote that does not end it, and a run with
+      // no closing quote is a user error.
+      if (i + 1 < joda.size() && joda[i + 1] == '\'') {
+        appendLiteralByte(out, '\'');
+        i += 2;
+        continue;
+      }
       ++i;
-      while (i < joda.size() && joda[i] != '\'') {
-        out += joda[i++];
+      bool closed = false;
+      while (i < joda.size()) {
+        if (joda[i] == '\'') {
+          if (i + 1 < joda.size() && joda[i + 1] == '\'') {
+            appendLiteralByte(out, '\'');
+            i += 2;
+            continue;
+          }
+          ++i;
+          closed = true;
+          break;
+        }
+        appendLiteralByte(out, joda[i++]);
       }
-      if (i < joda.size()) {
-        ++i;
-      }
+      VELOX_USER_CHECK(closed, "No closing single quote for literal");
       continue;
     }
     if (std::isalpha(static_cast<unsigned char>(c))) {
@@ -516,7 +549,7 @@ std::string jodaToStrftime(const std::string& joda, TrailingZone& trailing) {
       i = j;
       continue;
     }
-    out += c;
+    appendLiteralByte(out, c);
     ++i;
   }
   return out;
