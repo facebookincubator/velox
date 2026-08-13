@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/memory/RawVector.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -676,7 +677,7 @@ TEST_F(LazyVectorTest, reset) {
 }
 
 TEST_F(LazyVectorTest, runtimeStats) {
-  TestRuntimeStatWriter writer;
+  ConcurrentRuntimeStatWriter writer;
   RuntimeStatWriterScopeGuard guard(&writer);
   auto lazy = std::make_shared<LazyVector>(
       pool_.get(),
@@ -686,17 +687,17 @@ TEST_F(LazyVectorTest, runtimeStats) {
         return makeFlatVector<int32_t>(rows.back() + 1, folly::identity);
       }));
   ASSERT_EQ(lazy->loadedVector()->size(), 10);
-  auto stats = writer.stats();
-  std::sort(stats.begin(), stats.end(), [](auto& x, auto& y) {
-    return x.first < y.first;
-  });
+  const auto stats = writer.runtimeStats();
   ASSERT_EQ(stats.size(), 3);
-  ASSERT_EQ(stats[0].first, LazyVector::kCpuNanos);
-  ASSERT_GE(stats[0].second.value, 0);
-  ASSERT_EQ(stats[1].first, LazyVector::kInputBytes);
-  ASSERT_GE(stats[1].second.value, 0);
-  ASSERT_EQ(stats[2].first, LazyVector::kWallNanos);
-  ASSERT_GE(stats[2].second.value, 0);
+  for (const auto& name :
+       {LazyVector::kCpuNanos,
+        LazyVector::kInputBytes,
+        LazyVector::kWallNanos}) {
+    SCOPED_TRACE(name);
+    const auto& metric = stats.at(std::string(name));
+    EXPECT_EQ(metric.count, 1);
+    EXPECT_GE(metric.sum, 0);
+  }
 }
 
 TEST_F(LazyVectorTest, chain) {

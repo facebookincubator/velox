@@ -25,6 +25,7 @@
 #include "velox/common/Casts.h"
 #include "velox/dwio/common/ParquetFieldId.h"
 #include "velox/dwio/common/StatisticsBuilder.h"
+#include "velox/dwio/parquet/common/ParquetRuntimeStats.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
@@ -1572,11 +1573,14 @@ class ParquetRowReader::Impl {
       : pool_{readerBase->getMemoryPool()},
         readerBase_{readerBase},
         options_{options},
+        columnReaderOptions_{
+            dwio::common::makeColumnReaderOptions(readerBase_->options())},
         rowGroups_{*readerBase_->thriftFileMetaData().row_groups()},
         nextRowGroupIdsIdx_{0},
         currentRowGroupPtr_{nullptr},
         rowsInCurrentRowGroup_{0},
-        currentRowInGroup_{0} {
+        currentRowInGroup_{0},
+        splitStats_{dwio::common::FileFormat::PARQUET} {
     // Validate the requested type is compatible with what's in the file
     std::function<std::string()> createExceptionContext = [&]() {
       std::string exceptionMessageContext = fmt::format(
@@ -1590,15 +1594,20 @@ class ParquetRowReader::Impl {
       return exceptionMessageContext;
     };
 
+    splitStats_.initColumnStatsCollection(
+        *readerBase_->schemaWithId(), options_);
     if (rowGroups_.empty()) {
       return; // TODO
     }
     parquetStatsContext_ = ParquetStatsContext(readerBase_->version());
-    columnReaderOptions_ =
-        dwio::common::makeColumnReaderOptions(readerBase_->options());
+    if (readerBase_->initialThriftSize() > 0) {
+      splitStats_.accumulateStat(
+          ParquetRuntimeStats::kFooterEstimatedBytesMetric,
+          readerBase_->initialThriftSize());
+    }
     ParquetParams params(
         pool_,
-        columnReaderStats_,
+        splitStats_,
         readerBase_->fileMetaData(),
         readerBase->sessionTimezone(),
         options_.timestampPrecision());
@@ -1765,12 +1774,10 @@ class ParquetRowReader::Impl {
     return estimatedRowSize_;
   }
 
-  void updateRuntimeStats(dwio::common::RuntimeStatistics& stats) const {
+  void updateRuntimeStats(dwio::common::RuntimeStats& stats) const {
     stats.skippedStrides += skippedStrides_;
     stats.processedStrides += rowGroupIds_.size();
-    stats.parquetFooterEstimatedBytes += readerBase_->initialThriftSize();
-    stats.columnReaderStats.pageLoadTimeNs.merge(
-        columnReaderStats_.pageLoadTimeNs);
+    stats.mergeFrom(splitStats_);
   }
 
   void resetFilterCaches() {
@@ -1803,7 +1810,7 @@ class ParquetRowReader::Impl {
   memory::MemoryPool& pool_;
   const std::shared_ptr<ReaderBase> readerBase_;
   const dwio::common::RowReaderOptions options_;
-  dwio::common::ColumnReaderOptions columnReaderOptions_;
+  const dwio::common::ColumnReaderOptions columnReaderOptions_;
 
   // All row groups from file metadata.
   std::vector<thrift::RowGroup>& rowGroups_;
@@ -1821,7 +1828,7 @@ class ParquetRowReader::Impl {
   TypePtr requestedType_;
   ParquetStatsContext parquetStatsContext_;
 
-  dwio::common::ColumnReaderStatistics columnReaderStats_;
+  dwio::common::SplitStats splitStats_;
 
   mutable std::optional<size_t> estimatedRowSize_;
   mutable int32_t lastRowGroupWithRowEstimate_{-1};
@@ -1853,7 +1860,7 @@ uint64_t ParquetRowReader::next(
 }
 
 void ParquetRowReader::updateRuntimeStats(
-    dwio::common::RuntimeStatistics& stats) const {
+    dwio::common::RuntimeStats& stats) const {
   impl_->updateRuntimeStats(stats);
 }
 
