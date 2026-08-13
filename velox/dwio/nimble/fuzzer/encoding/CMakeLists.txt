@@ -37,7 +37,11 @@ if(NOT TARGET gflags::gflags)
   endforeach()
 endif()
 
-add_executable(nimble_encoding_fuzzer_tests EncodingFuzzerTest.cpp)
+add_executable(
+  nimble_encoding_fuzzer_tests
+  EncodingFuzzerTest.cpp
+  EncodingFuzzer.h
+)
 
 target_compile_definitions(
   nimble_encoding_fuzzer_tests

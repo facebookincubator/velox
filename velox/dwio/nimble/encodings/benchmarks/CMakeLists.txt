@@ -11,7 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(nimble_fixed_bit_width_benchmark FixedBitWidthBenchmark.cpp)
+add_executable(
+  nimble_fixed_bit_width_benchmark
+  FixedBitWidthBenchmark.cpp
+  BenchmarkUtils.h
+  NimbleEncodingRunner.h
+)
 
 target_link_libraries(
   nimble_fixed_bit_width_benchmark

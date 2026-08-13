@@ -33,6 +33,34 @@ add_library(
   IndexLookup.cpp
   IndexWriter.cpp
   SortOrder.cpp
+  SortedIndexWriter.h
+  SortedIndexConfig.h
+  SortedIndex.h
+  SortOrder.h
+  KeyEncoding.h
+  KeyChunkDecoder.h
+  IndexWriter.h
+  IndexTypes.h
+  IndexSerialization.h
+  IndexLookup.h
+  IndexKeyEncoder.h
+  IndexFilter.h
+  IndexFactoryRegistry.h
+  IndexConstants.h
+  IndexConfig.h
+  HashIndexWriter.h
+  HashIndexUtils.h
+  HashIndexConfig.h
+  HashIndex.h
+  DenseIndexRegistry.h
+  DenseIndexFactory.h
+  ClusterIndexWriter.h
+  ClusterIndexFactory.h
+  ClusterIndexConfig.h
+  ClusterIndex.h
+  ChunkStatsGroup.h
+  ChunkStats.h
+  BloomFilter.h
 )
 
 target_link_libraries(

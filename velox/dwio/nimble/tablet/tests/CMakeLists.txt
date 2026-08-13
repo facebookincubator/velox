@@ -18,6 +18,7 @@ add_executable(
   FileLayoutTest.cpp
   MetadataBufferTest.cpp
   TabletTest.cpp
+  TabletTestUtils.h
 )
 
 add_test(nimble_tablet_tests nimble_tablet_tests)

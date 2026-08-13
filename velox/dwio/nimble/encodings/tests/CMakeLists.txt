@@ -16,10 +16,16 @@ add_library(
   SharedDictionaryEncodingTestUtils.cpp
   TestUtils.cpp
   ../selection/tests/RandomEncodingSelectionPolicy.cpp
+  TestUtils.h
+  SharedDictionaryEncodingTestUtils.h
 )
 target_link_libraries(nimble_encodings_tests_utils nimble_encodings fsst)
 
-add_library(nimble_encoding_layout_test_helper EncodingLayoutTestHelper.cpp)
+add_library(
+  nimble_encoding_layout_test_helper
+  EncodingLayoutTestHelper.cpp
+  EncodingLayoutTestHelper.h
+)
 target_link_libraries(nimble_encoding_layout_test_helper nimble_encodings)
 
 add_executable(
@@ -66,6 +72,7 @@ add_executable(
   StatisticsTest.cpp
   TrivialEncodingViewTest.cpp
   TrivialEncodingTest.cpp
+  EncodingViewTestUtils.h
 )
 
 if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)

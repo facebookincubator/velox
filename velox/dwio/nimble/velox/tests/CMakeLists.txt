@@ -11,7 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(nimble_velox_schema_utils SchemaUtils.cpp)
+add_library(
+  nimble_velox_schema_utils
+  SchemaUtils.cpp
+  SchemaUtils.h
+)
 target_link_libraries(
   nimble_velox_schema_utils
   nimble_velox_schema_fb
@@ -21,7 +25,11 @@ target_link_libraries(
   gtest_main
 )
 
-add_library(nimble_writer_test_utils WriterTestUtils.cpp)
+add_library(
+  nimble_writer_test_utils
+  WriterTestUtils.cpp
+  WriterTestUtils.h
+)
 target_link_libraries(
   nimble_writer_test_utils
   nimble_velox_reader
@@ -56,6 +64,7 @@ add_executable(
   VeloxReaderTest.cpp
   WriterTest.cpp
   FieldWriterStatsTest.cpp
+  TestUtils.h
 )
 add_test(nimble_velox_tests nimble_velox_tests)
 

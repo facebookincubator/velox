@@ -11,7 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(nimble_common_file_writer NimbleFileWriter.cpp)
+add_library(
+  nimble_common_file_writer
+  NimbleFileWriter.cpp
+  NimbleFileWriter.h
+)
 
 target_link_libraries(
   nimble_common_file_writer
@@ -33,6 +37,9 @@ add_executable(
   FixedBitArrayTests.cpp
   VarintTests.cpp
   VectorTest.cpp
+  TestUtils.h
+  NimbleCompare.h
+  GTestUtils.h
 )
 
 add_test(nimble_common_tests nimble_common_tests)

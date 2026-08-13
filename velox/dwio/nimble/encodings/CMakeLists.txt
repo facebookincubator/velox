@@ -43,6 +43,64 @@ add_library(
   views/DeltaBlockEncodingView.h
   views/EncodingViewFactory.cpp
   views/HuffmanEncodingView.h
+  views/TrivialEncodingView.h
+  views/SparseBoolEncodingView.h
+  views/SimdForBitpackEncodingView.h
+  views/RLEEncodingView.h
+  views/PFOREncodingView.h
+  views/MainlyConstantEncodingView.h
+  views/FixedBitWidthEncodingView.h
+  views/FOREncodingView.h
+  views/EncodingViewFactory.h
+  views/EncodingView.h
+  views/DictionaryEncodingView.h
+  views/ConstantEncodingView.h
+  views/BlockBitPackingEncodingView.h
+  views/ALPEncodingView.h
+  selection/Statistics.h
+  selection/NestedAlpSizeEstimation.h
+  selection/EncodingSizeEstimation.h
+  selection/EncodingSelectionPolicy.h
+  selection/EncodingSelection.h
+  selection/EncodingIdentifier.h
+  common/EncodingUtils.h
+  common/EncodingType.h
+  common/EncodingPrimitives.h
+  common/EncodingPrefix.h
+  common/EncodingLayout.h
+  common/EncodingFactory.h
+  common/Encoding.h
+  common/BufferedEncoding.h
+  VarintEncoding.h
+  TrivialEncoding.h
+  SubIntSplitSelector.h
+  SubIntSplitSampler.h
+  SubIntSplitMetrics.h
+  SubIntSplitEncoding.h
+  SubIntSplitCostModels.h
+  SubIntSplitConfig.h
+  SparseBoolEncoding.h
+  SimdForBitpackEncoding.h
+  SharedDictionaryTypes.h
+  SharedDictionaryEncoding.h
+  SharedDictionaryBuilder.h
+  SentinelEncoding.h
+  RLEEncoding.h
+  PrefixEncoding.h
+  PFOREncoding.h
+  NullableEncoding.h
+  MainlyConstantEncoding.h
+  FsstEncoding.h
+  FrequencyPartitionEncoding.h
+  ForEncoding.h
+  FixedBitWidthEncoding.h
+  EncodingSliceFactory.h
+  DictionaryEncoding.h
+  DeltaEncoding.h
+  DeltaBlockEncoding.h
+  ConstantEncoding.h
+  BlockBitPackingEncoding.h
+  ALPEncoding.h
 )
 
 # FSST is vendored at velox/external/fsst and added by velox/CMakeLists.txt

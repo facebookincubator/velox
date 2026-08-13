@@ -151,6 +151,15 @@ add_library(
   MetadataBuffer.cpp
   MetadataInput.cpp
   Postscript.cpp
+  Postscript.h
+  MetadataInput.h
+  MetadataCache.h
+  MetadataBuffer.h
+  FileFeatures.h
+  Constants.h
+  Compression.h
+  Chunk.h
+  Callbacks.h
 )
 target_link_libraries(
   nimble_tablet_common
@@ -163,7 +172,11 @@ target_link_libraries(
   Folly::folly
 )
 
-add_library(nimble_data_input DataInput.cpp)
+add_library(
+  nimble_data_input
+  DataInput.cpp
+  DataInput.h
+)
 target_link_libraries(
   nimble_data_input
   nimble_common
@@ -178,6 +191,9 @@ add_library(
   FileLayout.cpp
   StripeGroup.cpp
   TabletReader.cpp
+  TabletReader.h
+  StripeGroup.h
+  FileLayout.h
 )
 target_link_libraries(
   nimble_tablet_reader
@@ -190,7 +206,11 @@ target_link_libraries(
     nimble_hash_index_fb
 )
 
-add_library(nimble_tablet_reader_cache TabletReaderCache.cpp)
+add_library(
+  nimble_tablet_reader_cache
+  TabletReaderCache.cpp
+  TabletReaderCache.h
+)
 target_link_libraries(
   nimble_tablet_reader_cache
   PUBLIC
@@ -207,7 +227,13 @@ target_link_libraries(
     Folly::folly
 )
 
-add_library(nimble_tablet_writer ChunkStatsWriter.cpp TabletWriter.cpp)
+add_library(
+  nimble_tablet_writer
+  ChunkStatsWriter.cpp
+  TabletWriter.cpp
+  ChunkStatsWriter.h
+  TabletWriter.h
+)
 target_link_libraries(
   nimble_tablet_writer
   nimble_encodings

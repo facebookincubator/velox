@@ -11,7 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(nimble_index_projector NimbleIndexProjector.cpp)
+add_library(
+  nimble_index_projector
+  NimbleIndexProjector.cpp
+  NimbleIndexProjector.h
+)
 target_link_libraries(
   nimble_index_projector
   nimble_data_input

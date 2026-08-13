@@ -18,6 +18,24 @@ add_library(
   RLEEncoding.cpp
   SparseBoolEncoding.cpp
   TrivialEncoding.cpp
+  VarintEncoding.h
+  TrivialEncoding.h
+  SparseBoolEncoding.h
+  SentinelEncoding.h
+  RLEEncoding.h
+  PrefixEncoding.h
+  NullableEncoding.h
+  MainlyConstantEncoding.h
+  FixedBitWidthEncoding.h
+  EncodingUtils.h
+  EncodingTrait.h
+  EncodingSizeEstimation.h
+  EncodingIdentifier.h
+  EncodingFactory.h
+  Encoding.h
+  DictionaryEncoding.h
+  DeltaEncoding.h
+  ConstantEncoding.h
 )
 
 target_link_libraries(

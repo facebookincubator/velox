@@ -30,6 +30,23 @@ add_library(
   StructColumnReader.cpp
   TimestampColumnReader.cpp
   VariableLengthColumnReader.cpp
+  VariableLengthColumnReader.h
+  TimestampColumnReader.h
+  StructColumnReader.h
+  StringColumnReader.h
+  SelectiveNimbleReader.h
+  SelectiveNimbleIndexReader.h
+  RowSizeTracker.h
+  ReaderBase.h
+  NullColumnReader.h
+  NimbleData.h
+  IntegerColumnReader.h
+  FloatingPointColumnReader.h
+  FlatMapColumnReader.h
+  ColumnReader.h
+  ColumnLoader.h
+  ChunkedDecoder.h
+  ByteColumnReader.h
 )
 target_link_libraries(
   nimble_velox_selective

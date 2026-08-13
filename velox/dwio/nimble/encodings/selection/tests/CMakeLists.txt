@@ -15,6 +15,7 @@
 add_library(
   nimble_random_encoding_selection_policy
   RandomEncodingSelectionPolicy.cpp
+  RandomEncodingSelectionPolicy.h
 )
 target_link_libraries(
   nimble_random_encoding_selection_policy

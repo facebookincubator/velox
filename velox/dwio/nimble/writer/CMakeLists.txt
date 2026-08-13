@@ -26,6 +26,15 @@ add_library(
   Writer.cpp
   WriterDefaultMetadataOSS.cpp
   WriterMemoryReclaimerOSS.cpp
+  WriterOptions.h
+  WriterFactory.h
+  Writer.h
+  StreamChunker.h
+  NimbleFileMetadata.h
+  FlushPolicyFactory.h
+  FlushPolicy.h
+  EncodingSelectionPolicyFactory.h
+  EncodingLayoutTree.h
 )
 target_link_libraries(
   nimble_writer

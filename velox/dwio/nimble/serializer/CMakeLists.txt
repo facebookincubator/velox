@@ -18,7 +18,12 @@ if(NIMBLE_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
 
-add_library(nimble_serializer_options Options.cpp)
+add_library(
+  nimble_serializer_options
+  Options.cpp
+  Options.h
+  ZstdContext.h
+)
 target_link_libraries(
   nimble_serializer_options
   nimble_common
@@ -31,7 +36,11 @@ target_link_libraries(
 # links against it.
 add_subdirectory(legacy)
 
-add_library(nimble_serialization_header SerializationHeader.cpp)
+add_library(
+  nimble_serialization_header
+  SerializationHeader.cpp
+  SerializationHeader.h
+)
 target_link_libraries(
   nimble_serialization_header
   nimble_serializer_options
@@ -40,7 +49,11 @@ target_link_libraries(
   Folly::folly
 )
 
-add_library(nimble_stream_data_writer StreamDataWriter.cpp)
+add_library(
+  nimble_stream_data_writer
+  StreamDataWriter.cpp
+  StreamDataWriter.h
+)
 target_link_libraries(
   nimble_stream_data_writer
   nimble_serialization_header
@@ -52,7 +65,11 @@ target_link_libraries(
   velox_memory
 )
 
-add_library(nimble_stream_data StreamData.cpp)
+add_library(
+  nimble_stream_data
+  StreamData.cpp
+  StreamData.h
+)
 target_link_libraries(
   nimble_stream_data
   nimble_serializer_options
@@ -62,7 +79,11 @@ target_link_libraries(
   velox_memory
 )
 
-add_library(nimble_stream_data_parser StreamDataParser.cpp)
+add_library(
+  nimble_stream_data_parser
+  StreamDataParser.cpp
+  StreamDataParser.h
+)
 target_link_libraries(
   nimble_stream_data_parser
   nimble_serialization_header
@@ -75,7 +96,11 @@ target_link_libraries(
   Folly::folly
 )
 
-add_library(nimble_batched_stream_decoder BatchedStreamDecoder.cpp)
+add_library(
+  nimble_batched_stream_decoder
+  BatchedStreamDecoder.cpp
+  BatchedStreamDecoder.h
+)
 target_link_libraries(
   nimble_batched_stream_decoder
   nimble_stream_data
@@ -87,7 +112,11 @@ target_link_libraries(
   Folly::folly
 )
 
-add_library(nimble_deserializer Deserializer.cpp)
+add_library(
+  nimble_deserializer
+  Deserializer.cpp
+  Deserializer.h
+)
 target_link_libraries(
   nimble_deserializer
   nimble_stream_data_parser
@@ -101,7 +130,11 @@ target_link_libraries(
   Folly::folly
 )
 
-add_library(nimble_serializer Serializer.cpp)
+add_library(
+  nimble_serializer
+  Serializer.cpp
+  Serializer.h
+)
 target_link_libraries(
   nimble_serializer
   nimble_serializer_options
@@ -112,7 +145,11 @@ target_link_libraries(
   Folly::folly
 )
 
-add_library(nimble_projector Projector.cpp)
+add_library(
+  nimble_projector
+  Projector.cpp
+  Projector.h
+)
 target_link_libraries(
   nimble_projector
   nimble_serialization_header
@@ -126,7 +163,11 @@ target_link_libraries(
   Folly::folly
 )
 
-add_library(nimble_stream_slicer StreamSlicer.cpp)
+add_library(
+  nimble_stream_slicer
+  StreamSlicer.cpp
+  StreamSlicer.h
+)
 target_link_libraries(
   nimble_stream_slicer
   nimble_stream_data_parser

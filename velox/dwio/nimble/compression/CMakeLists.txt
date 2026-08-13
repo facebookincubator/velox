@@ -18,6 +18,10 @@ add_library(
   Lz4Compressor.cpp
   OpenZLCompressor.cpp
   ZstdCompressor.cpp
+  ZstdCompressor.h
+  OpenZLCompressor.h
+  Lz4Compressor.h
+  Compression.h
 )
 
 target_link_libraries(

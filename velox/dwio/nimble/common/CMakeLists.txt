@@ -27,6 +27,22 @@ add_library(
   NimbleException.cpp
   Types.cpp
   Varint.cpp
+  Zigzag.h
+  Vector.h
+  Varint.h
+  Types.h
+  StatsUtil.h
+  NimbleException.h
+  MetricsLogger.h
+  FixedBitArray.h
+  FeatureGate.h
+  Exceptions.h
+  ExceptionHelper.h
+  Constants.h
+  ChunkHeader.h
+  Checksum.h
+  Buffer.h
+  BitEncoder.h
 )
 
 target_link_libraries(
