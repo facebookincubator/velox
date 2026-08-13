@@ -1285,6 +1285,41 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             DECIMAL(20, 10)));
   }
 
+  // Valid bool-to-decimal cases. Results are identical regardless of ANSI
+  // mode, so they are shared between the ANSI ON and ANSI OFF tests.
+  void testBoolToDecimal() {
+    auto input =
+        makeFlatVector<bool>({true, false, false, true, true, true, false});
+    // Bool to short decimal.
+    testCast(
+        input,
+        makeFlatVector<int64_t>({100, 0, 0, 100, 100, 100, 0}, DECIMAL(6, 2)));
+
+    // Bool to long decimal.
+    testCast(
+        input,
+        makeFlatVector<int128_t>(
+            {10'000'000'000,
+             0,
+             0,
+             10'000'000'000,
+             10'000'000'000,
+             10'000'000'000,
+             0},
+            DECIMAL(20, 10)));
+
+    // False becomes zero, which fits any precision and scale.
+    testCast<bool, int64_t>(BOOLEAN(), DECIMAL(1, 1), {false}, {0});
+    testCast<bool, int128_t>(BOOLEAN(), DECIMAL(38, 38), {false}, {0});
+
+    // Nulls are preserved.
+    testCast<bool, int64_t>(
+        BOOLEAN(),
+        DECIMAL(6, 2),
+        {true, std::nullopt, false},
+        {100, std::nullopt, 0});
+  }
+
   void testDecimalToDecimal() {
     // Short to short, scale up.
     auto shortFlat =
@@ -2608,6 +2643,24 @@ TEST_F(SparkCastExprTestAnsiOn, decimalToDecimal) {
   testOverflowThrow();
 }
 
+TEST_F(SparkCastExprTestAnsiOn, boolToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testBoolToDecimal();
+
+  // Under ANSI ON, true overflows a target with no integer digits
+  // (precision == scale), because 1 cannot be represented there.
+  testThrow<bool>(
+      BOOLEAN(),
+      DECIMAL(1, 1),
+      {true},
+      "Cannot cast BOOLEAN 'true' to DECIMAL(1, 1)");
+  testThrow<bool>(
+      BOOLEAN(),
+      DECIMAL(38, 38),
+      {true},
+      "Cannot cast BOOLEAN 'true' to DECIMAL(38, 38)");
+}
+
 TEST_F(SparkCastExprTestAnsiOn, doubleToDecimal) {
   // Regular cases produce the same results regardless of ANSI mode.
   testDoubleToDecimal();
@@ -2858,6 +2911,16 @@ TEST_F(SparkCastExprTestAnsiOff, integralToDecimal) {
   testOverflowNull.operator()<int16_t>();
   testOverflowNull.operator()<int32_t>();
   testOverflowNull.operator()<int64_t>();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, boolToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testBoolToDecimal();
+
+  // Under ANSI OFF, the same overflowing inputs return NULL instead of
+  // throwing.
+  testCast<bool, int64_t>(BOOLEAN(), DECIMAL(1, 1), {true}, {std::nullopt});
+  testCast<bool, int128_t>(BOOLEAN(), DECIMAL(38, 38), {true}, {std::nullopt});
 }
 
 TEST_F(SparkCastExprTestAnsiOff, doubleToDecimal) {
