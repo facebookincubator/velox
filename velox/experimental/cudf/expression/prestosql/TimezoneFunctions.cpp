@@ -28,6 +28,7 @@
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/datetime.hpp>
 #include <cudf/reduction.hpp>
@@ -54,6 +55,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <array>
 #include <cctype>
 #include <limits>
 #include <optional>
@@ -523,6 +525,9 @@ struct JodaFormat {
   // width-exact regex would reject input CPU accepts.
   std::string shape;
   TrailingZone trailing{TrailingZone::kNone};
+  // True when the format renders a month or weekday by name, which cuDF can
+  // only do if it is handed a table of those names.
+  bool usesTextNames{false};
 };
 
 JodaFormat jodaToStrftime(const std::string& joda) {
@@ -588,6 +593,7 @@ JodaFormat jodaToStrftime(const std::string& joda) {
           // digits. Any length of name is admitted here; is_timestamp and the
           // conversion decide whether the name itself is valid.
           shape += runLength >= 3 ? "[A-Za-z]+" : "[0-9]+";
+          format.usesTextNames |= runLength >= 3;
           break;
         case 'd':
           out += "%d";
@@ -630,6 +636,7 @@ JodaFormat jodaToStrftime(const std::string& joda) {
         case 'E':
           out += runLength >= 4 ? "%A" : "%a";
           shape += "[A-Za-z]+";
+          format.usesTextNames = true;
           break;
         case 'Z':
         case 'z':
@@ -815,6 +822,51 @@ class ToIso8601Function : public CudfFunction {
 };
 
 // format_datetime(timestamp with time zone, varchar) -> varchar.
+// The names cuDF needs to render "%a", "%A", "%b" and "%B", in the order it
+// documents (strings/convert/convert_datetime.hpp): AM and PM, the seven
+// weekday names in full starting at Sunday, the seven abbreviated, the twelve
+// month names in full, then the twelve abbreviated. cuDF rejects a names column
+// that is neither empty nor exactly this long.
+//
+// These duplicate CPU's tables, which are file-local to
+// functions/lib/DateTimeFormatter.cpp and not exported. The order agrees: CPU
+// indexes weekdays by chrono's encoding, where Sunday is zero, as cuDF does.
+//
+// AM and PM lead the table and must stay exactly these two strings. cuDF only
+// falls back to a hardcoded "AM"/"PM" for "%p" while no names column is
+// supplied; once one is, "%p" reads these entries instead, so Joda 'a' depends
+// on them.
+constexpr std::array<std::string_view, 40> kFormatNames{
+    "AM",        "PM",      "Sunday",   "Monday",   "Tuesday", "Wednesday",
+    "Thursday",  "Friday",  "Saturday", "Sun",      "Mon",     "Tue",
+    "Wed",       "Thu",     "Fri",      "Sat",      "January", "February",
+    "March",     "April",   "May",      "June",     "July",    "August",
+    "September", "October", "November", "December", "Jan",     "Feb",
+    "Mar",       "Apr",     "May",      "Jun",      "Jul",     "Aug",
+    "Sep",       "Oct",     "Nov",      "Dec"};
+
+// Materialises kFormatNames as a strings column. Built per call rather than
+// cached, because a cache would have to be keyed by device and outlive the
+// stream it was built on; this runs only for a format that renders a name.
+std::unique_ptr<cudf::column> formatNamesColumn(
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  std::vector<std::unique_ptr<cudf::column>> owned;
+  std::vector<cudf::column_view> views;
+  owned.reserve(kFormatNames.size());
+  views.reserve(kFormatNames.size());
+  for (const auto name : kFormatNames) {
+    owned.push_back(
+        cudf::make_column_from_scalar(
+            cudf::string_scalar(std::string{name}, true, stream),
+            1,
+            stream,
+            mr));
+    views.push_back(owned.back()->view());
+  }
+  return cudf::concatenate(views, stream, mr);
+}
+
 class FormatDatetimeFunction : public CudfFunction {
  public:
   FormatDatetimeFunction(
@@ -826,6 +878,7 @@ class FormatDatetimeFunction : public CudfFunction {
     auto format = jodaToStrftime(constStringArg(expr, 1, pool));
     strftime_ = std::move(format.strftime);
     trailing_ = format.trailing;
+    usesTextNames_ = format.usesTextNames;
   }
 
   ColumnOrView eval(
@@ -834,10 +887,17 @@ class FormatDatetimeFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
     auto parts = localAndOffset(packed, stream, mr);
+    // Without a names column cuDF writes nothing for a name specifier, so
+    // "EEEE, MMMM dd" would render as ", 02".
+    std::unique_ptr<cudf::column> names;
+    if (usesTextNames_) {
+      names = formatNamesColumn(stream, mr);
+    }
     auto dateStr = cudf::strings::from_timestamps(
         parts.localMillis->view(),
         strftime_,
-        cudf::strings_column_view{},
+        names ? cudf::strings_column_view(names->view())
+              : cudf::strings_column_view{},
         stream,
         mr);
     if (trailing_ == TrailingZone::kNone) {
@@ -887,6 +947,9 @@ class FormatDatetimeFunction : public CudfFunction {
  private:
   std::string strftime_;
   TrailingZone trailing_{TrailingZone::kNone};
+  // True when the format renders a month or weekday by name, so eval has to
+  // supply the names cuDF would otherwise leave blank.
+  bool usesTextNames_{false};
 };
 
 // Mirrors the CPU pack() range check: throws if any non-null millis value falls

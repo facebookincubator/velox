@@ -641,6 +641,52 @@ TEST_F(TimezoneFunctionTest, toIso8601WholeMinuteOffsetHasNoSeconds) {
   assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z')", input);
 }
 
+// Joda renders a month or weekday as text once the letter run reaches three,
+// and jodaToStrftime maps those to "%b"/"%B" and "%a"/"%A". cuDF writes nothing
+// for those specifiers unless it is handed a table of the names, so "EEEE, MMMM
+// dd" rendered as ", 02". The scaffolding uses yyyy/dd rather than single
+// letters because a one-letter numeric run is T18's field-width gap.
+TEST_F(TimezoneFunctionTest, formatDatetimeTextNamesMatchCpu) {
+  // 2021-01-01 is a Friday; 2021-06-15 a Tuesday, to catch an off-by-one in the
+  // weekday table that a single date could hide.
+  for (const auto millisUtc : std::vector<int64_t>{
+           1'609'466'400'000,
+           1'623'760'000'000,
+       }) {
+    auto input = timestampWithTimeZoneInput(millisUtc, "Asia/Kolkata");
+    SCOPED_TRACE(millisUtc);
+    for (const auto& format : std::vector<std::string>{
+             "E", // abbreviated weekday
+             "EE",
+             "EEE",
+             "EEEE", // full weekday
+             "MMM", // abbreviated month
+             "MMMM", // full month
+             "EEEE, MMMM dd", // the reported case
+             "yyyy-MM-dd EEE MMM",
+         }) {
+      SCOPED_TRACE(format);
+      assertMatchesCpu("format_datetime(c0, '" + format + "')", input);
+    }
+  }
+}
+
+// Supplying the names table changes where cuDF reads AM/PM from: with no table
+// it uses a hardcoded pair, and with one it reads the table's first two
+// entries. So a format that mixes a name with 'a' would regress if those
+// entries were wrong.
+TEST_F(TimezoneFunctionTest, formatDatetimeHalfdayWithTextNamesMatchesCpu) {
+  for (const auto millisUtc : std::vector<int64_t>{
+           1'609'466'400'000, // 05:30 IST, before noon
+           1'609'509'600'000, // 17:30 IST, after noon
+       }) {
+    auto input = timestampWithTimeZoneInput(millisUtc, "Asia/Kolkata");
+    SCOPED_TRACE(millisUtc);
+    assertMatchesCpu("format_datetime(c0, 'hh:mm a')", input);
+    assertMatchesCpu("format_datetime(c0, 'EEEE hh:mm a')", input);
+  }
+}
+
 // Functions that produce a TIMESTAMP WITH TIME ZONE from plain inputs. The
 // inputs convert to cuDF fine; the function is the work the GPU must learn.
 
