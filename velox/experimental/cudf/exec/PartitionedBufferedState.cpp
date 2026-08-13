@@ -601,10 +601,7 @@ void PartitionedBufferedState::collectReclaimableLeaves(
   }
 }
 
-void PartitionedBufferedState::insert(
-    Node& node,
-    InputChunk bufferedInput,
-    InsertMode mode) {
+void PartitionedBufferedState::insert(Node& node, InputChunk bufferedInput) {
   if (bufferedInput.empty()) {
     return;
   }
@@ -616,7 +613,7 @@ void PartitionedBufferedState::insert(
     VELOX_CHECK_EQ(partitions.size(), node.children.size());
     for (size_t i = 0; i < partitions.size(); ++i) {
       if (!partitions[i].empty()) {
-        insert(*node.children[i], std::move(partitions[i]), mode);
+        insert(*node.children[i], std::move(partitions[i]));
       }
     }
     return;
@@ -633,8 +630,7 @@ void PartitionedBufferedState::insert(
   }
 
   ActiveLeafGuard activeLeaf(*this, node);
-  if (mode == InsertMode::kInput &&
-      ops_->addInputToSpilledLeaf(*node.leafState, bufferedInput)) {
+  if (ops_->addInputToSpilledLeaf(*node.leafState, bufferedInput)) {
     node.leafRows = ops_->leafRowCount(*node.leafState);
     return;
   }
@@ -763,13 +759,11 @@ CudfVectorPtr PartitionedBufferedState::drainNextOutput(Node& node) {
   }
 
   if (ops_->hasNextDrainChunk(*node.leafState)) {
+    ActiveLeafGuard activeLeaf(*this, node);
     auto replayLeaf = std::move(node.leafState);
     node.leafRows = 0;
     while (ops_->hasNextDrainChunk(*replayLeaf)) {
-      insert(
-          node,
-          ops_->restoreNextDrainChunk(*replayLeaf),
-          InsertMode::kDrainReplay);
+      insert(node, ops_->restoreNextDrainChunk(*replayLeaf));
     }
     return drainNextOutput(node);
   }

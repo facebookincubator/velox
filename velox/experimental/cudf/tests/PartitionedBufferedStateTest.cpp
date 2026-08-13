@@ -26,6 +26,7 @@
 #include <cudf/copying.hpp>
 
 #include <algorithm>
+#include <deque>
 #include <functional>
 #include <limits>
 
@@ -50,6 +51,9 @@ struct IdentityBufferedStateOpsStats {
   std::vector<const BufferedState*> spilledLeaves;
   const BufferedState* activeLeafDuringCallback{nullptr};
   uint64_t pinnedHostBytes{0};
+  size_t stickySpilledChunks{0};
+  size_t restoredDrainChunks{0};
+  size_t eagerRestoreCalls{0};
 };
 
 struct TableLeafState final : public BufferedState {
@@ -72,7 +76,7 @@ struct TableLeafState final : public BufferedState {
 
   size_t rowCount;
   InputChunk chunk;
-  std::optional<SpilledCudfVector> spilled;
+  std::deque<SpilledCudfVector> spilledChunks;
   std::shared_ptr<IdentityBufferedStateOpsStats> stats;
 };
 
@@ -148,11 +152,11 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
     auto& tableLeaf = asLeaf(leaf);
     VELOX_CHECK(spillingEnabled_);
     VELOX_CHECK(tableLeaf.isResident());
-    VELOX_CHECK(!tableLeaf.spilled.has_value());
+    VELOX_CHECK(tableLeaf.spilledChunks.empty());
     try {
       auto spilled = SpilledCudfVector::spill(tableLeaf.chunk.owner, pool_);
       tableLeaf.chunk = InputChunk{};
-      tableLeaf.spilled.emplace(std::move(spilled));
+      tableLeaf.spilledChunks.push_back(std::move(spilled));
     } catch (...) {
       if (tableLeaf.chunk.owner) {
         tableLeaf.chunk.view = tableLeaf.chunk.owner->getTableView();
@@ -163,7 +167,7 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
     if (stats_) {
       stats_->spilledLeafRows.push_back(tableLeaf.rowCount);
       stats_->spilledLeaves.push_back(&leaf);
-      stats_->pinnedHostBytes += tableLeaf.spilled->hostBytes();
+      stats_->pinnedHostBytes += tableLeaf.spilledChunks.back().hostBytes();
     }
   }
 
@@ -172,13 +176,57 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
     if (tableLeaf.isResident()) {
       return;
     }
-    VELOX_CHECK(tableLeaf.spilled.has_value());
-    auto restored = tableLeaf.spilled->restore(get_output_mr());
-    tableLeaf.chunk = makeOwnedChunk(std::move(restored));
-    tableLeaf.spilled.reset();
+    VELOX_CHECK(!tableLeaf.spilledChunks.empty());
+    while (!tableLeaf.spilledChunks.empty()) {
+      auto restored = tableLeaf.spilledChunks.front().restore(get_output_mr());
+      tableLeaf.spilledChunks.pop_front();
+      tableLeaf.chunk = mergeChunks(
+          std::move(tableLeaf.chunk), makeOwnedChunk(std::move(restored)));
+    }
     if (stats_) {
+      ++stats_->eagerRestoreCalls;
       stats_->restoredLeafRows.push_back(tableLeaf.rowCount);
     }
+  }
+
+  bool addInputToSpilledLeaf(BufferedState& leaf, InputChunk& input) override {
+    auto& tableLeaf = asLeaf(leaf);
+    if (!stickySpillingEnabled_ || tableLeaf.isResident()) {
+      return false;
+    }
+
+    VELOX_CHECK(!tableLeaf.spilledChunks.empty());
+    const auto inputRows = input.size();
+    auto ownedInput = std::move(input).materialize(get_output_mr());
+    auto spilled = SpilledCudfVector::spill(ownedInput.owner, pool_);
+    ownedInput = InputChunk{};
+    input = InputChunk{};
+    tableLeaf.spilledChunks.push_back(std::move(spilled));
+    tableLeaf.rowCount += inputRows;
+    if (stats_) {
+      ++stats_->stickySpilledChunks;
+    }
+    return true;
+  }
+
+  bool hasNextDrainChunk(const BufferedState& leaf) const override {
+    const auto& tableLeaf = asLeaf(leaf);
+    return stickySpillingEnabled_ && !tableLeaf.isResident() &&
+        !tableLeaf.spilledChunks.empty();
+  }
+
+  InputChunk restoreNextDrainChunk(BufferedState& leaf) override {
+    auto& tableLeaf = asLeaf(leaf);
+    VELOX_CHECK(hasNextDrainChunk(tableLeaf));
+    if (stats_) {
+      ++stats_->restoredDrainChunks;
+      if (restoreDrainChunkCallback_) {
+        restoreDrainChunkCallback_(stats_->restoredDrainChunks);
+      }
+    }
+    auto restored = tableLeaf.spilledChunks.front().restore(get_output_mr());
+    tableLeaf.spilledChunks.pop_front();
+    return makeOwnedChunk(std::move(restored));
   }
 
   std::vector<InputChunk> partitionInput(
@@ -239,6 +287,11 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
     spillingEnabled_ = true;
   }
 
+  void enableStickySpilling() {
+    spillingEnabled_ = true;
+    stickySpillingEnabled_ = true;
+  }
+
   void enableDeduplicatingMerges() {
     deduplicateMerges_ = true;
   }
@@ -246,6 +299,10 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   void setLeafOperationCallback(
       std::function<void(const BufferedState&)> callback) {
     leafOperationCallback_ = std::move(callback);
+  }
+
+  void setRestoreDrainChunkCallback(std::function<void(size_t)> callback) {
+    restoreDrainChunkCallback_ = std::move(callback);
   }
 
  private:
@@ -258,8 +315,10 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   std::function<InputChunk(const std::vector<int64_t>&)> makeChunk_;
   std::function<int32_t(int64_t, uint32_t, int32_t)> partitionFn_;
   std::function<void(const BufferedState&)> leafOperationCallback_;
+  std::function<void(size_t)> restoreDrainChunkCallback_;
 
   bool spillingEnabled_{false};
+  bool stickySpillingEnabled_{false};
   bool deduplicateMerges_{false};
 
   TableLeafState& asLeaf(BufferedState& leaf) const {
@@ -659,6 +718,51 @@ TEST_F(
   EXPECT_EQ(stats->restoredLeafRows, (std::vector<size_t>{2}));
   EXPECT_EQ(state.reclaimableBytes(), 3);
   EXPECT_EQ(drainAll(state), (std::vector<std::vector<int64_t>>{{1, 2, 3}}));
+}
+
+TEST_F(
+    PartitionedBufferedStateTest,
+    stickyDrainKeepsReconstructedChildrenSpilled) {
+  auto stats = std::make_shared<IdentityBufferedStateOpsStats>();
+  auto ops =
+      std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_, stats);
+  auto* opsPtr = ops.get();
+  ops->enableStickySpilling();
+  ops->setPartitioning(
+      [&](const InputChunk& input) { return toKeys(input); },
+      [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
+      [](int64_t key, uint32_t /* seed */, int32_t numPartitions) {
+        return static_cast<int32_t>(key % numPartitions);
+      });
+  PartitionedBufferedState state(std::move(ops), 5, 0);
+
+  state.addInput(makeCudfVector({0, 1, 2, 3}));
+  EXPECT_EQ(state.reclaim(0), 4);
+  state.addInput(makeCudfVector({4, 5, 6, 7}));
+  state.addInput(makeCudfVector({8, 9}));
+
+  // Restoring the first two chunks splits the original leaf into two resident
+  // children. Reclaim both just before replaying the final chunk so it routes
+  // to spilled children. Those partitions must append to the child spill
+  // queues instead of eagerly restoring each child.
+  opsPtr->setRestoreDrainChunkCallback([&](size_t restoredChunks) {
+    if (restoredChunks == 2) {
+      EXPECT_EQ(state.reclaimableBytes(), 0);
+      EXPECT_EQ(state.reclaim(0), 0);
+    }
+    if (restoredChunks == 3) {
+      EXPECT_EQ(state.reclaim(0), 8);
+    }
+  });
+
+  EXPECT_EQ(
+      drainAll(state),
+      (std::vector<std::vector<int64_t>>{{0, 2, 4, 6, 8}, {1, 3, 5, 7, 9}}));
+  EXPECT_EQ(stats->eagerRestoreCalls, 0);
+  EXPECT_EQ(stats->stickySpilledChunks, 4);
+  EXPECT_EQ(stats->restoredDrainChunks, 7);
+  EXPECT_EQ(stats->spilledLeafRows, (std::vector<size_t>{4, 4, 4}));
+  EXPECT_TRUE(state.empty());
 }
 
 TEST_F(PartitionedBufferedStateTest, reentrantReclaimExcludesTheActiveLeaf) {

@@ -167,10 +167,12 @@ class BufferedStateOps {
   // Absorb one prepared chunk into an existing leaf.
   virtual void addInputToLeaf(BufferedState& leaf, InputChunk input) = 0;
 
-  // Optionally consume input without restoring a spilled leaf. Returning true
-  // tells PBS that the implementation retained the input and deliberately
-  // kept the leaf spilled. Such a leaf may grow beyond maxRowsPerLeaf because
-  // repartitioning its stored state would require restoring it first.
+  // Optionally consume a routed chunk without restoring a spilled leaf.
+  // Returning true tells PBS that the implementation retained the chunk and
+  // deliberately kept the leaf spilled. This applies both to normal input and
+  // to chunks replayed while draining. Such a leaf may grow beyond
+  // maxRowsPerLeaf because repartitioning its stored state would require
+  // restoring it first.
   //
   // The default preserves the restore-before-mutation behavior.
   virtual bool addInputToSpilledLeaf(
@@ -302,11 +304,6 @@ class PartitionedBufferedState {
   uint64_t reclaim(uint64_t targetBytes);
 
  private:
-  enum class InsertMode : uint8_t {
-    kInput,
-    kDrainReplay,
-  };
-
   class ActiveLeafGuard {
    public:
     ActiveLeafGuard(PartitionedBufferedState& owner, Node& node);
@@ -320,10 +317,7 @@ class PartitionedBufferedState {
     Node* previous_;
   };
 
-  void insert(
-      Node& node,
-      InputChunk bufferedInput,
-      InsertMode mode = InsertMode::kInput);
+  void insert(Node& node, InputChunk bufferedInput);
 
   void splitLeaf(Node& node);
 
