@@ -391,7 +391,10 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
         dataColumns_,
         indexColumns_,
         /*tableParameters=*/std::unordered_map<std::string, std::string>{},
-        filterColumnHandles_);
+        filterColumnHandles_,
+        sampleRate_,
+        /*dbName=*/"",
+        dataColumnFieldIds_);
   }
   core::PlanNodePtr result = std::make_shared<core::TableScanNode>(
       id, outputType_, tableHandle_, assignments_);

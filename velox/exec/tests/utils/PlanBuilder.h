@@ -127,6 +127,8 @@ class PlanBuilder {
   static constexpr const std::string_view kTpchDefaultConnectorId{"test-tpch"};
   static constexpr const std::string_view kTpcdsDefaultConnectorId{
       "test-tpcds"};
+  static constexpr const std::string_view kIcebergDefaultConnectorId{
+      "test-iceberg"};
 
   ///
   /// TableScan
@@ -348,6 +350,16 @@ class PlanBuilder {
       return *this;
     }
 
+    /// @param dataColumnFieldIds Iceberg field IDs aligned positionally to
+    /// dataColumns(). An empty vector means field IDs are unavailable. When
+    /// set, these are forwarded into the HiveTableHandle so Iceberg readers
+    /// can resolve columns by Iceberg field ID rather than by ordinal position.
+    TableScanBuilder& dataColumnFieldIds(
+        std::vector<int32_t> dataColumnFieldIds) {
+      dataColumnFieldIds_ = std::move(dataColumnFieldIds);
+      return *this;
+    }
+
     /// Stop the TableScanBuilder.
     PlanBuilder& endTableScan() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -366,6 +378,7 @@ class PlanBuilder {
     double sampleRate_{1.0};
     RowTypePtr dataColumns_;
     std::vector<std::string> indexColumns_;
+    std::vector<int32_t> dataColumnFieldIds_;
     std::vector<connector::hive::HiveColumnHandlePtr> filterColumnHandles_;
     std::unordered_map<std::string, std::string> columnAliases_;
     connector::ConnectorTableHandlePtr tableHandle_;
