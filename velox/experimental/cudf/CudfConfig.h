@@ -18,6 +18,7 @@
 
 #include <cudf/types.hpp>
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -45,6 +46,9 @@ struct CudfConfig {
   static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
   static constexpr const char* kCudfBatchSizeMinThreshold{
       "cudf.batch_size_min_threshold"};
+  /// Minimum buffered GPU byte target for CudfBatchConcat.
+  static constexpr const char* kCudfBatchSizeMinBytes{
+      "cudf.batch_size_min_bytes"};
   static constexpr const char* kCudfBatchSizeMaxThreshold{
       "cudf.batch_size_max_threshold"};
   static constexpr const char* kCudfConcatOptimizationEnabled{
@@ -110,15 +114,19 @@ struct CudfConfig {
   /// Whether to insert CudfBatchConcat operators before supported Cudf
   /// operators.
   /// This can improve performance by reducing the number of cuda kernel
-  /// launches on addInput of certain operators by collecting a minimum number
-  /// of rows before concatenating and passing on to the next operator.
-  /// This batch size is determined by batchSizeMinThreshold and
-  /// batchSizeMaxThreshold
+  /// launches on addInput of certain operators. Inputs are collected until
+  /// batchSizeMinBytes is reached, or batchSizeMinThreshold otherwise.
+  /// batchSizeMaxThreshold limits the rows in a concatenated batch.
   bool concatOptimizationEnabled{false};
 
-  /// Minimum rows to accumulate before GPU-side concatenation in
-  /// `CudfBatchConcat` (default 100k).
+  /// Minimum rows to accumulate before GPU-side concatenation when
+  /// batchSizeMinBytes is not configured. This is also the fallback target for
+  /// zero-column vectors, which have no GPU buffers to count (default 100k).
   int32_t batchSizeMinThreshold{100000};
+
+  /// Optional minimum GPU byte target for concatenation, measured by
+  /// CudfVector::estimateFlatSize(). When unset, batchSizeMinThreshold applies.
+  std::optional<uint64_t> batchSizeMinBytes;
 
   /// Maximum rows allowed in a concatenated batch (user configurable).
   /// When not set, cuDF's own `size_type::max()` is used.

@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
+#include <limits>
 #include <utility>
 
 namespace facebook::velox::cudf_velox {
@@ -40,6 +41,24 @@ RowTypePtr getConcatOutputType(
   return planNode->sources()[0]->outputType();
 }
 
+std::optional<uint64_t> getBatchSizeMinBytes() {
+  const auto targetBytes = CudfConfig::getInstance().batchSizeMinBytes;
+  if (targetBytes.has_value()) {
+    VELOX_CHECK_GT(
+        targetBytes.value(),
+        0,
+        "cuDF BatchConcat minimum byte target must be positive");
+  }
+  return targetBytes;
+}
+
+size_t getBatchSizeMinRows() {
+  const auto targetRows = CudfConfig::getInstance().batchSizeMinThreshold;
+  VELOX_CHECK_GT(
+      targetRows, 0, "cuDF BatchConcat minimum row target must be positive");
+  return static_cast<size_t>(targetRows);
+}
+
 } // namespace
 
 CudfBatchConcat::CudfBatchConcat(
@@ -57,7 +76,9 @@ CudfBatchConcat::CudfBatchConcat(
           std::nullopt,
           planNode),
       driverCtx_(driverCtx),
-      targetRows_(CudfConfig::getInstance().batchSizeMinThreshold) {}
+      targetBytes_(getBatchSizeMinBytes()),
+      usesRowFallback_(!targetBytes_.has_value() || outputType_->size() == 0),
+      targetRows_(usesRowFallback_ ? getBatchSizeMinRows() : 0) {}
 
 void CudfBatchConcat::doAddInput(RowVectorPtr input) {
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
@@ -67,8 +88,21 @@ void CudfBatchConcat::doAddInput(RowVectorPtr input) {
     return;
   }
 
-  // Push input cudf table to buffer
-  currentNumRows_ += cudfVector->size();
+  if (usesRowFallback_) {
+    const auto inputRows = static_cast<size_t>(cudfVector->size());
+    VELOX_CHECK_LE(
+        inputRows,
+        std::numeric_limits<size_t>::max() - currentNumRows_,
+        "CudfBatchConcat buffered row count overflow");
+    currentNumRows_ += inputRows;
+  } else {
+    const auto inputBytes = cudfVector->estimateFlatSize();
+    VELOX_CHECK_LE(
+        inputBytes,
+        std::numeric_limits<uint64_t>::max() - currentBytes_,
+        "CudfBatchConcat buffered byte count overflow");
+    currentBytes_ += inputBytes;
+  }
   buffer_.push_back(std::move(cudfVector));
 }
 
@@ -80,8 +114,8 @@ RowVectorPtr CudfBatchConcat::doGetOutput() {
     return output;
   }
 
-  // Merge tables if there are enough rows
-  if (!buffer_.empty() && (currentNumRows_ >= targetRows_ || noMoreInput_)) {
+  // Merge tables once the active target is reached.
+  if (!buffer_.empty() && (targetReached() || noMoreInput_)) {
     // Concatenating a single column-bearing input only materializes a copy of
     // the same table. Pass it through unchanged. Zero-column inputs still need
     // the batching helper below to preserve their row count and enforce the
@@ -89,6 +123,7 @@ RowVectorPtr CudfBatchConcat::doGetOutput() {
     if (buffer_.size() == 1 && outputType_->size() > 0) {
       auto output = std::move(buffer_.front());
       buffer_.clear();
+      currentBytes_ = 0;
       currentNumRows_ = 0;
       return output;
     }
@@ -102,6 +137,7 @@ RowVectorPtr CudfBatchConcat::doGetOutput() {
         outputStream,
         get_output_mr());
 
+    currentBytes_ = 0;
     currentNumRows_ = 0;
     VELOX_CHECK_GT(outputVectors.size(), 0);
 
@@ -109,13 +145,18 @@ RowVectorPtr CudfBatchConcat::doGetOutput() {
       outputQueue_.push(std::move(*it));
     }
 
-    // If last table is a smaller batch and we still expect more input and keep
-    // it in buffer.
+    // Keep a below-target final table buffered while more input can arrive.
     auto& last = outputVectors.back();
-    auto rowCount = last->size();
+    const auto numRows = static_cast<size_t>(last->size());
+    const auto lastBytes =
+        usesRowFallback_ ? uint64_t{0} : last->estimateFlatSize();
+    const auto retainLast = !noMoreInput_ &&
+        (usesRowFallback_ ? numRows < targetRows_
+                          : lastBytes < targetBytes_.value());
 
-    if (!noMoreInput_ && rowCount < targetRows_) {
-      currentNumRows_ = rowCount;
+    if (retainLast) {
+      currentBytes_ = lastBytes;
+      currentNumRows_ = usesRowFallback_ ? numRows : 0;
       buffer_.push_back(std::move(last));
     } else {
       outputQueue_.push(std::move(last));
