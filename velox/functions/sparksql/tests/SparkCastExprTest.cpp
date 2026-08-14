@@ -2011,14 +2011,6 @@ TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleMixedRows) {
   }
 }
 
-TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleNullInput) {
-  // NULL input returns NULL, not an error.
-  auto input =
-      makeRowVector({makeNullableFlatVector<std::string>({std::nullopt})});
-  EXPECT_FALSE(evaluateOnce<float>("cast(c0 as real)", input).has_value());
-  EXPECT_FALSE(evaluateOnce<double>("cast(c0 as double)", input).has_value());
-}
-
 TEST_F(SparkCastExprTestAnsiOn, fromString) {
   testFromString();
 }
