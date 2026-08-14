@@ -13,13 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/tests/utils/CudfTpcdsQueryBuilder.h"
 
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/experimental/cudf/CudfConfig.h"
 
 // Forward-declare registerCudf/unregisterCudf to avoid pulling in ToCudf.h
 // which has namespace issues when included from a non-CUDA translation unit
