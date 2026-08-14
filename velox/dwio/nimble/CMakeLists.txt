@@ -17,6 +17,16 @@
 # resolved by the top-level Velox CMakeLists before this point, so this file
 # only configures what is specific to Nimble.
 
+# FsstEncoding.h includes <fsst.h>, and DuckDB vendors a header of the same name.
+# Resolved BUNDLED, DuckDB contributes its copy to Velox targets through the link
+# interface, which CMake emits after a target's own include directories. Adding
+# the vendored copy at directory scope therefore puts it first for every target
+# in this subtree, including those that only pull FsstEncoding.h in transitively
+# and never link fsst. Relies on the fsst target exporting this path as a plain
+# -I: while it was SYSTEM, CMake de-duplicated the two and kept the -isystem,
+# which is searched after every -I.
+include_directories(BEFORE "${CMAKE_SOURCE_DIR}/velox/external/fsst")
+
 # Nimble code expects an upper case suffix to the generated file.
 set(FLATBUFFERS_FLATC_SCHEMA_EXTRA_ARGS "--filename-suffix" "Generated")
 
