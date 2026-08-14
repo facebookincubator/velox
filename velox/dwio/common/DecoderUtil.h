@@ -150,6 +150,7 @@ inline int32_t firstNullIndex(const uint64_t* nulls, int32_t numRows) {
   return first;
 }
 
+// Returns raw bytes because fixed-width page data may be unaligned.
 template <typename T>
 const char*
 fixedWidthValueBytes(const T* buffer, int32_t row, int32_t rowOffset) {
