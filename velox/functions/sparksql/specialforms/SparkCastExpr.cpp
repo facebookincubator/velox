@@ -134,6 +134,10 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
     }
   }
 
+  if (toType->isTimestamp() && (fromType->isReal() || fromType->isDouble())) {
+    return true;
+  }
+
   return false;
 }
 

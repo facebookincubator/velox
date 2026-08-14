@@ -90,6 +90,8 @@ class CudfReduce : public CudfOperatorBase {
 
   void doNoMoreInput() override;
 
+  void doClose() override;
+
  private:
   CudfVectorPtr doGlobalAggregation(
       cudf::table_view tableView,

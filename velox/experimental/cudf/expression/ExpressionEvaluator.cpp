@@ -1274,6 +1274,13 @@ class CoalesceFunction : public CudfFunction {
         !inputColumns.empty(),
         "coalesce requires at least one non-literal input");
     ColumnOrView result = asView(inputColumns[0]);
+    if (std::holds_alternative<std::unique_ptr<cudf::column>>(
+            inputColumns[0])) {
+      // Preserve an owned subexpression result instead of returning a view
+      // that dangles when FunctionExpression destroys its temporary results.
+      result =
+          std::move(std::get<std::unique_ptr<cudf::column>>(inputColumns[0]));
+    }
     size_t stop = std::min(numColumnsBeforeLiteral_, inputColumns.size());
     for (size_t i = 1; i < stop && asView(result).has_nulls(); ++i) {
       result = cudf::replace_nulls(
