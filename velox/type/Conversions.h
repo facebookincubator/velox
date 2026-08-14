@@ -490,8 +490,11 @@ struct Converter<
           // unlike the non-ANSI branch above which uses LimitType (wrapping
           // byte/smallint through int32 to match Spark's non-ANSI semantics).
           const auto truncated = std::trunc(v);
-          if (truncated > static_cast<double>(std::numeric_limits<T>::max()) ||
-              truncated < static_cast<double>(std::numeric_limits<T>::min())) {
+          const auto maxAsDouble =
+              static_cast<double>(std::numeric_limits<T>::max());
+          const auto minAsDouble =
+              static_cast<double>(std::numeric_limits<T>::min());
+          if (truncated > maxAsDouble || truncated < minAsDouble) {
             return folly::makeUnexpected(
                 Status::UserError(
                     "Cannot cast floating-point value to an integral value due to "
@@ -500,10 +503,10 @@ struct Converter<
           // The truncated value may equal (double)max/(double)min yet exceed
           // the exact integral limit due to rounding (e.g. 2^63 for BIGINT);
           // clamp to avoid undefined behavior in the static_cast below.
-          if (truncated >= static_cast<double>(std::numeric_limits<T>::max())) {
+          if (truncated >= maxAsDouble) {
             return std::numeric_limits<T>::max();
           }
-          if (truncated <= static_cast<double>(std::numeric_limits<T>::min())) {
+          if (truncated <= minAsDouble) {
             return std::numeric_limits<T>::min();
           }
           return static_cast<T>(truncated);

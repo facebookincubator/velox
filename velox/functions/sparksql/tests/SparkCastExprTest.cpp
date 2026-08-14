@@ -56,6 +56,17 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     return evaluate(cast, makeRowVector({input}));
   }
 
+  // Asserts that casting `input` to `toType` throws with a message containing
+  // `expectedError`. Used by the ANSI-mode overflow/NaN/infinity cast tests.
+  void assertCastThrows(
+      const std::string& toType,
+      const VectorPtr& input,
+      const std::string& expectedError) {
+    VELOX_ASSERT_THROW(
+        evaluate(fmt::format("cast(c0 as {})", toType), makeRowVector({input})),
+        expectedError);
+  }
+
   void testBoolToTimestamp() {
     testCast(
         makeFlatVector<bool>({true, false}),
@@ -2683,32 +2694,23 @@ TEST_F(SparkCastExprTestAnsiOff, realToDecimal) {
 
 TEST_F(SparkCastExprTestAnsiOn, castNumericToIntegralOverflow) {
   // Casts that overflow the target integral type throw under ANSI mode.
-  auto assertOverflowThrows = [this](
-                                  const std::string& toType,
-                                  const VectorPtr& input,
-                                  const std::string& expectedError) {
-    VELOX_ASSERT_THROW(
-        evaluate(fmt::format("cast(c0 as {})", toType), makeRowVector({input})),
-        expectedError);
-  };
-
-  assertOverflowThrows(
+  assertCastThrows(
       "tinyint",
       makeFlatVector<int32_t>({256}),
       "Cannot cast INTEGER '256' to TINYINT");
-  assertOverflowThrows(
+  assertCastThrows(
       "smallint",
       makeFlatVector<int64_t>({100000}),
       "Cannot cast BIGINT '100000' to SMALLINT");
-  assertOverflowThrows(
+  assertCastThrows(
       "integer", makeFlatVector<double>({3.0e10}), "Cannot cast DOUBLE");
-  assertOverflowThrows(
+  assertCastThrows(
       "bigint", makeFlatVector<double>({1.0e20}), "Cannot cast DOUBLE");
-  assertOverflowThrows(
+  assertCastThrows(
       "tinyint",
       makeFlatVector<int32_t>({-200}),
       "Cannot cast INTEGER '-200' to TINYINT");
-  assertOverflowThrows(
+  assertCastThrows(
       "smallint",
       makeFlatVector<int64_t>({-50000}),
       "Cannot cast BIGINT '-50000' to SMALLINT");
@@ -2720,37 +2722,29 @@ TEST_F(SparkCastExprTestAnsiOn, castNumericToIntegralOverflow) {
 
 TEST_F(SparkCastExprTestAnsiOn, castFloatToIntegralNaN) {
   // NaN cannot be cast to an integral value under ANSI mode.
-  auto assertNaNThrows = [this](
-                             const std::string& toType,
-                             const VectorPtr& input) {
-    VELOX_ASSERT_THROW(
-        evaluate(fmt::format("cast(c0 as {})", toType), makeRowVector({input})),
-        "Cannot cast NaN to an integral value");
-  };
-
-  assertNaNThrows(
+  assertCastThrows(
       "integer",
-      makeFlatVector<float>({std::numeric_limits<float>::quiet_NaN()}));
-  assertNaNThrows(
+      makeFlatVector<float>({std::numeric_limits<float>::quiet_NaN()}),
+      "Cannot cast NaN to an integral value");
+  assertCastThrows(
       "bigint",
-      makeFlatVector<double>({std::numeric_limits<double>::quiet_NaN()}));
+      makeFlatVector<double>({std::numeric_limits<double>::quiet_NaN()}),
+      "Cannot cast NaN to an integral value");
 }
 
 TEST_F(SparkCastExprTestAnsiOn, castFloatToIntegralInfinity) {
   // Infinity overflows the target integral type under ANSI mode.
-  auto assertInfinityThrows = [this](const VectorPtr& input) {
-    VELOX_ASSERT_THROW(
-        evaluate("cast(c0 as integer)", makeRowVector({input})),
-        "Cannot cast DOUBLE");
-  };
-
-  assertInfinityThrows(
-      makeFlatVector<double>({std::numeric_limits<double>::infinity()}));
-  assertInfinityThrows(
-      makeFlatVector<double>({-std::numeric_limits<double>::infinity()}));
+  assertCastThrows(
+      "integer",
+      makeFlatVector<double>({std::numeric_limits<double>::infinity()}),
+      "Cannot cast DOUBLE");
+  assertCastThrows(
+      "integer",
+      makeFlatVector<double>({-std::numeric_limits<double>::infinity()}),
+      "Cannot cast DOUBLE");
 }
 
-TEST_F(SparkCastExprTestAnsiOn, tryCastNotAffectedByAnsiMode) {
+TEST_F(SparkCastExprTestAnsiOn, tryCastNumericToIntegralOverflow) {
   // try_cast returns null on overflow regardless of the ANSI mode setting.
   testTryCast<int32_t, int8_t>("tinyint", {256}, {std::nullopt});
   testTryCast<float, int32_t>("integer", {3.0e10f}, {std::nullopt});
