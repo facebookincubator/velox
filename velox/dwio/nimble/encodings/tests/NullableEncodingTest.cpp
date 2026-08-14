@@ -50,6 +50,13 @@ struct TestConfig {
 
 #define TC(T) TestConfig<T, false>, TestConfig<T, true>
 
+#include <random>
+
+namespace {
+// Fixed so the shuffled order is reproducible across runs.
+constexpr uint32_t kShuffleSeed = 20240816;
+} // namespace
+
 namespace {
 enum class NullsPattern {
   None,
@@ -87,7 +94,7 @@ class NullableEncodingTest : public ::testing::Test {
     for (uint32_t i = 0; i < dataSize; ++i) {
       nulls[i] = true;
     }
-    std::random_shuffle(nulls.begin(), nulls.end());
+    std::shuffle(nulls.begin(), nulls.end(), std::mt19937{kShuffleSeed});
     return nulls;
   }
 

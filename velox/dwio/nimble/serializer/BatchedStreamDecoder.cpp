@@ -66,6 +66,7 @@ inline uint32_t getTypeStorageWidth(const Type& type) {
     case Kind::SlidingWindowMap:
       return 4;
   }
+  NIMBLE_UNREACHABLE("Unsupported type kind: {}.", toString(type.kind()));
 }
 
 // Get the ScalarKind for a type based on its storage format.

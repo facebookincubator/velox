@@ -146,7 +146,7 @@ TEST(IndexConfigTest, rejectsMismatchedConfigType) {
 }
 
 TEST(IndexConfigTest, indexFamilySerializationRoundTrip) {
-  for (const auto [family, serializedFamily] :
+  for (const auto& [family, serializedFamily] :
        {std::pair{IndexFamily::Cluster, serialization::IndexFamily_Cluster},
         std::pair{IndexFamily::Dense, serialization::IndexFamily_Dense}}) {
     SCOPED_TRACE(static_cast<int>(family));

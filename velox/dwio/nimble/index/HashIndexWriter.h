@@ -132,10 +132,10 @@ class HashIndexWriter : public IndexWriter {
   // Per-index accumulator that collects keys and builds the hash table.
   struct IndexAccumulator {
     Options options;
-    std::unique_ptr<IndexKeyEncoder> encoder;
+    std::unique_ptr<IndexKeyEncoder> encoder{};
     // Accumulated index entries with encoded keys pointing into
     // encodingBuffer_.
-    std::vector<IndexEntry> entries;
+    std::vector<IndexEntry> entries{};
 
     void clear() {
       entries.clear();

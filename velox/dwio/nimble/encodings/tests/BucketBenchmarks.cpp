@@ -19,6 +19,12 @@
 #include "common/init/light.h"
 #include "folly/Benchmark.h"
 #include "folly/Random.h"
+#include <random>
+
+namespace {
+// Fixed so the shuffled order is reproducible across runs.
+constexpr uint32_t kShuffleSeed = 20240816;
+} // namespace
 
 constexpr size_t kDataSize = 20 * 1024 * 1024; // 20M
 constexpr size_t kRepeatSize = 5 * 1024; // 5K
@@ -152,8 +158,8 @@ int main(int argc, char** argv) {
     uniqueData[i] = i;
   }
 
-  std::random_shuffle(repeatingData.begin(), repeatingData.end());
-  std::random_shuffle(uniqueData.begin(), uniqueData.end());
+  std::shuffle(repeatingData.begin(), repeatingData.end(), std::mt19937{kShuffleSeed});
+  std::shuffle(uniqueData.begin(), uniqueData.end(), std::mt19937{kShuffleSeed});
 
   folly::runBenchmarks();
   return 0;

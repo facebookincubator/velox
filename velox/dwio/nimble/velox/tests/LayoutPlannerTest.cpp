@@ -19,6 +19,12 @@
 #include "folly/Random.h"
 #include "velox/dwio/nimble/velox/LayoutPlanner.h"
 #include "velox/dwio/nimble/velox/tests/SchemaUtils.h"
+#include <random>
+
+namespace {
+// Fixed so the shuffled order is reproducible across runs.
+constexpr uint32_t kShuffleSeed = 20240816;
+} // namespace
 
 using namespace facebook;
 
@@ -118,7 +124,7 @@ void testStreamLayout(
     nimble::DefaultLayoutPlanner& planner,
     std::vector<nimble::Stream>&& streams,
     std::vector<std::string>&& expected) {
-  std::random_shuffle(streams.begin(), streams.end());
+  std::shuffle(streams.begin(), streams.end(), std::mt19937{kShuffleSeed});
 
   ASSERT_EQ(expected.size(), streams.size());
   streams = planner.getLayout(std::move(streams));
@@ -146,7 +152,7 @@ void testStreamLayout(
     }
   }
 
-  std::random_shuffle(streamSubset.begin(), streamSubset.end());
+  std::shuffle(streamSubset.begin(), streamSubset.end(), std::mt19937{kShuffleSeed});
 
   ASSERT_EQ(expectedSubset.size(), streamSubset.size());
   streamSubset = planner.getLayout(std::move(streamSubset));

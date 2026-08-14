@@ -34,7 +34,7 @@ namespace facebook::nimble {
 /// Represents a stream of chunks with a file offset.
 struct Stream {
   uint32_t offset{0};
-  std::vector<Chunk> chunks;
+  std::vector<Chunk> chunks{};
 };
 
 class LayoutPlanner {
@@ -90,8 +90,8 @@ class TabletWriter {
     // Callback invoked at stripe group flush boundaries. Used by index
     // writers (e.g., ClusterIndexWriter) to write partition data aligned
     // with stripe groups.
-    StripeGroupFlushCallback stripeGroupFlushCallback;
-    CloseCallback closeCallback;
+    StripeGroupFlushCallback stripeGroupFlushCallback{};
+    CloseCallback closeCallback{};
   };
 
   struct Stats {

@@ -217,6 +217,8 @@ TEST(ExceptionTests, context) {
       case velox::VeloxException::Type::kSystem:
         return fmt::format("SYSTEM {}", msg);
     }
+    NIMBLE_UNREACHABLE(
+        "Unknown exception type: {}", static_cast<int>(exceptionType));
   };
   std::string context1Message = "1";
   velox::ExceptionContextSetter context1({messageFunc, &context1Message, true});

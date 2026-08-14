@@ -76,13 +76,13 @@ struct EncodingSelectionResult {
   EncodingType encodingType;
   /// Encoding-specific configuration passed from the selection policy.
   /// Currently this config is manually set, not dynamically determined.
-  EncodingLayout::Config encodingConfig;
+  EncodingLayout::Config encodingConfig{};
   /// Estimated serialized size for encodingType, when the policy computed one
   /// while selecting the encoding.
-  std::optional<uint64_t> estimatedSize;
+  std::optional<uint64_t> estimatedSize{};
   /// SharedDictionary-specific encoding data supplied by the writer-side
   /// selection policy.
-  std::optional<SharedDictionaryEncodingInput> sharedDictionaryInput;
+  std::optional<SharedDictionaryEncodingInput> sharedDictionaryInput{};
   std::function<std::unique_ptr<CompressionPolicy>()> compressionPolicyFactory =
       []() { return std::make_unique<NoCompressionPolicy>(); };
 };

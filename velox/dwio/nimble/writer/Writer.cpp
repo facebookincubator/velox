@@ -142,7 +142,6 @@ class WriterContext : public FieldWriterContext {
 
   void updateMemoryUsed(uint64_t value) {
     memoryUsed_ += value;
-    NIMBLE_CHECK_GE(memoryUsed_, 0);
   }
 
   uint64_t bytesWritten() const {
@@ -1351,7 +1350,6 @@ void Writer::writeBatch(const velox::VectorPtr& input) {
         schema_.get(),
         context_->flatMapNodeIds(),
         context_->ignoreTopLevelNulls());
-    NIMBLE_CHECK_GE(rawSize, 0, "Invalid raw size");
     context_->updateFileRawSize(rawSize);
   }
 

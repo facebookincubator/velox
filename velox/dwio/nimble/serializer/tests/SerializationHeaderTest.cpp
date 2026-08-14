@@ -188,7 +188,7 @@ tabletChunkHeaderRoundTripParams() {
     std::string name;
     uint32_t rowCount{};
     RowRange rowRange;
-    std::optional<std::string> resumeKey;
+    std::optional<std::string> resumeKey{};
   };
 
   const BaseCase baseCases[]{

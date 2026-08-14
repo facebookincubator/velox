@@ -162,7 +162,7 @@ class Encoding {
 
     /// Resolves alphabets referenced by SharedDictionary encodings. The
     /// resolver is bound to the current file and stripe decode context.
-    std::shared_ptr<const SharedDictionaryResolver> sharedDictionaryResolver;
+    std::shared_ptr<const SharedDictionaryResolver> sharedDictionaryResolver{};
 
     velox::io::IoCounter* decompressCounter() const {
       return decodingStats != nullptr ? &decodingStats->decompressCPUTimeNanos

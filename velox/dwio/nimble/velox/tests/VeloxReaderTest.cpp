@@ -74,9 +74,9 @@ using nimble::test::makeTestTabletOptions;
 
 struct VeloxMapGeneratorConfig {
   // A RowType containing a group of map feature column types.
-  std::shared_ptr<const velox::RowType> featureTypes;
+  std::shared_ptr<const velox::RowType> featureTypes{};
 
-  velox::TypeKind keyType;
+  velox::TypeKind keyType{};
 
   std::string stringKeyPrefix = "test_";
 
@@ -5467,10 +5467,10 @@ TEST_P(VeloxReaderTest, rangeReads) {
       *leafPool_, *rootPool_, vectors, writerOptions);
 
   auto test = [&readerFactory, &vectors](RangeTestParams params) {
-    auto reader = readerFactory.createReader(
-        nimble::VeloxReadParams{
-            .fileRangeStartOffset = params.rangeStart,
-            .fileRangeEndOffset = params.rangeEnd});
+    nimble::VeloxReadParams readParams;
+    readParams.fileRangeStartOffset = params.rangeStart;
+    readParams.fileRangeEndOffset = params.rangeEnd;
+    auto reader = readerFactory.createReader(readParams);
     EXPECT_EQ(reader.getRowNumber(), params.firstRow);
 
     for (const auto& expectedRead : params.expectedReads) {

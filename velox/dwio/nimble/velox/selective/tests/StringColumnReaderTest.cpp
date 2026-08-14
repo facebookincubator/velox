@@ -385,7 +385,7 @@ TEST_P(StringColumnReaderTest, varbinaryColumn) {
             s[1] = static_cast<char>(i + 1);
             s[2] = static_cast<char>(i + 2);
             s[3] = static_cast<char>(i + 3);
-            return std::move(s);
+            return s;
           }),
   });
   // We write as VARCHAR but the byte content round-trips the same way.

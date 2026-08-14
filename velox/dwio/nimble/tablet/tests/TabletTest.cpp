@@ -116,7 +116,7 @@ struct StripeSpecifications {
 
 struct StripeData {
   uint32_t rowCount;
-  std::vector<nimble::Stream> streams;
+  std::vector<nimble::Stream> streams{};
 };
 
 void printData(std::string prefix, std::string_view data) {
@@ -1782,7 +1782,7 @@ class TabletWithIndexTest : public TabletTest {
     for (const auto& testCase : testCases) {
       SCOPED_TRACE(fmt::format("key '{}'", testCase.key));
       std::vector<velox::serializer::EncodedKeyBounds> keyBounds = {
-          {.lowerKey = testCase.key}};
+          {.lowerKey = testCase.key, .upperKey = {}}};
       auto result = index->lookup(
           nimble::index::IndexLookup::LookupRequest::rangeScan(keyBounds));
       ASSERT_EQ(result.size(), 1);
@@ -4430,7 +4430,7 @@ TEST_F(TabletWithIndexTest, configCombinations) {
       const nimble::RowRange chunk1(50, 100);
       auto lookupKey = [&](const std::string& key) {
         std::vector<velox::serializer::EncodedKeyBounds> keyBounds = {
-            {.lowerKey = key}};
+            {.lowerKey = key, .upperKey = {}}};
         return idx->lookup(
             nimble::index::IndexLookup::LookupRequest::rangeScan(keyBounds));
       };
@@ -4718,7 +4718,7 @@ TEST_P(TabletWithIndexTest, cacheWarmPath) {
 
     // Verify index lookup works — all stripes in one partition [0, 300).
     std::vector<velox::serializer::EncodedKeyBounds> keyBounds = {
-        {.lowerKey = "bbb"}};
+        {.lowerKey = "bbb", .upperKey = {}}};
     auto result = coldReader->clusterIndex()->lookup(
         nimble::index::IndexLookup::LookupRequest::rangeScan(keyBounds));
     ASSERT_EQ(result.size(), 1);
@@ -4758,7 +4758,7 @@ TEST_P(TabletWithIndexTest, cacheWarmPath) {
 
     // Verify index lookup still works from cache — same partition [0, 300).
     std::vector<velox::serializer::EncodedKeyBounds> warmKeyBounds = {
-        {.lowerKey = "ddd"}};
+        {.lowerKey = "ddd", .upperKey = {}}};
     auto warmResult = warmReader->clusterIndex()->lookup(
         nimble::index::IndexLookup::LookupRequest::rangeScan(warmKeyBounds));
     ASSERT_EQ(warmResult.size(), 1);

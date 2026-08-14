@@ -18,8 +18,10 @@
 #include <optional>
 #include <span>
 
+#ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wimplicit-fallthrough"
+#endif
 #pragma push_macro("fsst_create")
 #pragma push_macro("fsst_duplicate")
 #pragma push_macro("fsst_export")
@@ -45,7 +47,9 @@
 #pragma pop_macro("fsst_export")
 #pragma pop_macro("fsst_duplicate")
 #pragma pop_macro("fsst_create")
+#ifdef __clang__
 #pragma clang diagnostic pop
+#endif
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"

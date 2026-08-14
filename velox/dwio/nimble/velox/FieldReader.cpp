@@ -2487,15 +2487,15 @@ class RowFieldReader final : public FieldReader {
     for (uint32_t task = 0; task < taskCount; ++task) {
       const uint32_t endChildIdx = nextChildIdx + childrenPerTask +
           (task < numRemainderChildren ? 1 : 0);
-      tasks.emplace_back(
+      tasks.emplace_back(folly::coro::co_withExecutor(
+          decodeExecutor_,
           folly::coro::co_invoke(
               [&decodeRange,
                nextChildIdx,
                endChildIdx]() -> folly::coro::Task<void> {
                 decodeRange(nextChildIdx, endChildIdx);
                 co_return;
-              })
-              .scheduleOn(decodeExecutor_));
+              })));
       nextChildIdx = endChildIdx;
     }
 
@@ -3134,15 +3134,15 @@ class StructFlatMapFieldReader : public FlatMapFieldReaderBase<T, hasNull> {
     for (uint32_t task = 0; task < taskCount; ++task) {
       const uint32_t endChildIdx = nextChildIdx + childrenPerTask +
           (task < numRemainderChildren ? 1 : 0);
-      tasks.emplace_back(
+      tasks.emplace_back(folly::coro::co_withExecutor(
+          this->decodeExecutor_,
           folly::coro::co_invoke(
               [&decodeRange,
                nextChildIdx,
                endChildIdx]() -> folly::coro::Task<void> {
                 decodeRange(nextChildIdx, endChildIdx);
                 co_return;
-              })
-              .scheduleOn(this->decodeExecutor_));
+              })));
       nextChildIdx = endChildIdx;
     }
 
@@ -3741,12 +3741,12 @@ std::unique_ptr<FieldReaderFactory> createFieldReaderFactory(
     case velox::TypeKind::VARBINARY: {
       NIMBLE_CHECK(
           nimbleType->isScalar() &&
-              (veloxKind == velox::TypeKind::VARCHAR &&
-                   nimbleType->asScalar().scalarDescriptor().scalarKind() ==
-                       ScalarKind::String ||
-               veloxKind == velox::TypeKind::VARBINARY &&
-                   nimbleType->asScalar().scalarDescriptor().scalarKind() ==
-                       ScalarKind::Binary),
+              ((veloxKind == velox::TypeKind::VARCHAR &&
+                nimbleType->asScalar().scalarDescriptor().scalarKind() ==
+                    ScalarKind::String) ||
+               (veloxKind == velox::TypeKind::VARBINARY &&
+                nimbleType->asScalar().scalarDescriptor().scalarKind() ==
+                    ScalarKind::Binary)),
           "Provided schema doesn't match file schema.");
       offsets.emplace_back(nimbleType->asScalar().scalarDescriptor().offset());
       return std::make_unique<StringFieldReaderFactory>(

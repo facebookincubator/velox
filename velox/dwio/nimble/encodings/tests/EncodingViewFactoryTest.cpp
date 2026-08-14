@@ -109,7 +109,7 @@ TEST_F(EncodingViewTest, rejectsUnsupportedEncodingTypes) {
       };
 
   const nimble::Encoding::Options options;
-  for (const auto [encodingType, dataType] : unsupportedEncodings) {
+  for (const auto& [encodingType, dataType] : unsupportedEncodings) {
     SCOPED_TRACE(fmt::format("encodingType={}", encodingType));
     std::string serialized(nimble::EncodingPrefix::kFixedPrefixSize, 0);
     char* pos = serialized.data();

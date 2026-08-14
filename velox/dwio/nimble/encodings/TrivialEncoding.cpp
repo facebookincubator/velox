@@ -21,7 +21,7 @@ namespace {
 
 struct UncompressedData {
   const char* data;
-  velox::BufferPtr buffer;
+  velox::BufferPtr buffer{};
 };
 
 struct StringPayload {

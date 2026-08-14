@@ -22,6 +22,12 @@
 
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/selection/Statistics.h"
+#include <random>
+
+namespace {
+// Fixed so the shuffled order is reproducible across runs.
+constexpr uint32_t kShuffleSeed = 20240816;
+} // namespace
 
 using namespace facebook;
 
@@ -206,7 +212,7 @@ TYPED_TEST(StatisticsBoolTests, Create) {
   EXPECT_EQ(std::max(trueCount, falseCount), statistics.maxRepeat());
   EXPECT_EQ(2, statistics.consecutiveRepeatCount());
 
-  std::random_shuffle(data.get(), data.get() + trueCount + falseCount);
+  std::shuffle(data.get(), data.get() + trueCount + falseCount, std::mt19937{kShuffleSeed});
 
   statistics =
       T::create(std::span<const bool>(data.get(), trueCount + falseCount));
@@ -353,7 +359,7 @@ void verifyString(
         currentRepeat--);
   }
 
-  std::random_shuffle(data.begin(), data.end());
+  std::shuffle(data.begin(), data.end(), std::mt19937{kShuffleSeed});
 
   statistics = genStatisticsType(data);
 
@@ -414,7 +420,7 @@ TYPED_TEST(StatisticsStringTests, Create) {
         currentRepeat--);
   }
 
-  std::random_shuffle(data.begin(), data.end());
+  std::shuffle(data.begin(), data.end(), std::mt19937{kShuffleSeed});
 
   statistics =
       nimble::Statistics<std::string_view, std::string>::create({data});

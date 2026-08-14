@@ -148,6 +148,7 @@ class SelectLz : public openzl::Selector {
         .name = std::string{"nimble.select_lz"},
         .inputTypeMask = openzl::TypeMask::Numeric,
         .customGraphs = {fieldLz_},
+        .localParams = {},
     };
   }
 
@@ -179,6 +180,7 @@ class SelectTokenize : public openzl::Selector {
                          : "nimble.select_tokenize_int",
         .inputTypeMask = openzl::TypeMask::Numeric,
         .customGraphs = {tokenize_, noTokenize_},
+        .localParams = {},
     };
   }
 
@@ -209,6 +211,7 @@ class SelectRangePack : public openzl::Selector {
         .name = std::string{"nimble.select_range_pack"},
         .inputTypeMask = openzl::TypeMask::Numeric,
         .customGraphs = {rangePack_, noRangePack_},
+        .localParams = {},
     };
   }
 
@@ -250,6 +253,8 @@ openzl::GraphID wrapWithDefaultSegmenter(
       .customGraphs = nullptr,
       .numCustomGraphs = 0,
       .localParams = {},
+      .materializer = {},
+      .opaque = {},
   };
   ZL_GraphID const segmenterBase =
       ZL_Compressor_registerSegmenter(cgraph, &desc);
@@ -260,11 +265,16 @@ openzl::GraphID wrapWithDefaultSegmenter(
   }};
   ZL_LocalParams segParams = {
       .intParams = {.intParams = intParams, .nbIntParams = 1},
+      .copyParams = {},
+      .refParams = {},
   };
   ZL_ParameterizedGraphDesc const segGraphDesc = {
+      .name = nullptr,
       .graph = segmenterBase,
       .customGraphs = &innerGraph,
       .nbCustomGraphs = 1,
+      .customNodes = nullptr,
+      .nbCustomNodes = 0,
       .localParams = &segParams,
   };
   return ZL_Compressor_registerParameterizedGraph(cgraph, &segGraphDesc);

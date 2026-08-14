@@ -143,6 +143,7 @@ uint32_t maxStreamOffset(const Type& type) {
            maxStreamOffset(*type.asSlidingWindowMap().keys()),
            maxStreamOffset(*type.asSlidingWindowMap().values())});
   }
+  NIMBLE_UNREACHABLE("Unsupported type kind: {}.", toString(type.kind()));
 }
 
 uint32_t streamCount(const std::shared_ptr<const Type>& schema) {

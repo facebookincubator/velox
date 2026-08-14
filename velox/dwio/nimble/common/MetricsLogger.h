@@ -52,8 +52,8 @@ struct StripeFlushMetrics {
   // uint64_t residentMemory;
 
   // Perf stats.
-  uint64_t flushCpuUsec;
-  uint64_t flushWallTimeUsec;
+  uint64_t flushCpuUsec{};
+  uint64_t flushWallTimeUsec{};
   // Add IOStatistics when we have finished WS api consolidations.
 
   folly::dynamic serialize() const;
@@ -61,7 +61,7 @@ struct StripeFlushMetrics {
 
 struct FileCloseMetrics {
   uint64_t rowCount;
-  uint64_t inputSize;
+  uint64_t inputSize{};
   uint64_t stripeCount;
   uint64_t fileSize;
 

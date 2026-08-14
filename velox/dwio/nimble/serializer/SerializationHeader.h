@@ -299,7 +299,7 @@ struct TabletChunkHeader {
   /// True when encoding stream prefixes store row counts as varints.
   bool streamEncodingUsesVarintRowCount{false};
   RowRange rowRange;
-  std::optional<std::string> resumeKey;
+  std::optional<std::string> resumeKey{};
 };
 
 /// Builds the kTablet chunk slice header as a freshly-allocated IOBuf.

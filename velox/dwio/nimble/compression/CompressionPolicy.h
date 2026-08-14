@@ -130,7 +130,7 @@ struct CompressionOptions {
   uint32_t internalCompressionLevel = 4;
   uint32_t internalDecompressionLevel = 2;
   bool useVariableBitWidthCompressor = false;
-  MetaInternalCompressionKey metaInternalCompressionKey;
+  MetaInternalCompressionKey metaInternalCompressionKey{};
   uint64_t openzlMinCompressionSize = kOpenZLMinCompressionSize;
   int32_t openzlCompressionLevel = 6;
   int32_t openzlDecompressionLevel = 3;

@@ -51,6 +51,7 @@ struct WriterOptions {
         .blockBitPackingBlockSize = blockBitPackingBlockSize,
         .fixedBitWidthUseExactBits = fixedBitWidthUseExactBits,
         .allowNestedAlpSelection = allowNestedAlpSelection,
+        .sharedDictionaryResolver = {},
         .fsstCompressionTargetRatio = fsstCompressionTargetRatio};
   }
 
@@ -102,7 +103,7 @@ struct WriterOptions {
   /// pruning.
   /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
   /// production tables without consulting the Nimble team (oncall: dwios).
-  std::shared_ptr<const index::IndexConfig> clusterIndexConfig;
+  std::shared_ptr<const index::IndexConfig> clusterIndexConfig{};
 
   /// Whether to omit cluster index key columns from normal data storage. The
   /// key columns must still be present in write input batches.
@@ -122,7 +123,7 @@ struct WriterOptions {
   /// one writer that may produce multiple logical indexes.
   /// EXPERIMENTAL: Dense indexes are not production-ready. Do not enable for
   /// production tables without consulting the Nimble team (oncall: dwios).
-  std::vector<std::shared_ptr<const index::IndexConfig>> denseIndexConfigs;
+  std::vector<std::shared_ptr<const index::IndexConfig>> denseIndexConfigs{};
 
   /// Columns that should be encoded as flat maps. Maps column name to a set
   /// of predefined key strings. When the set is empty, the column is
@@ -130,7 +131,7 @@ struct WriterOptions {
   /// are predefined in sorted order to ensure all writers produce
   /// identical schemas regardless of data arrival order. Unknown keys not in
   /// the set will cause an error during writing.
-  folly::F14FastMap<std::string, std::set<std::string>> flatMapColumns;
+  folly::F14FastMap<std::string, std::set<std::string>> flatMapColumns{};
 
   /// Maximum number of distinct flat-map keys allowed per file; 0 means
   /// unlimited. Writing fails when exceeded, bounding the per-key native memory
@@ -151,7 +152,7 @@ struct WriterOptions {
   /// Empty map (default) is a no-op: every existing NIMBLE writer produces
   /// byte-identical files.
   folly::F14FastMap<uint32_t, std::vector<std::pair<std::string, std::string>>>
-      schemaAttributes;
+      schemaAttributes{};
 
   /// When true, the writer skips encoding flat map in-map boolean streams that
   /// are all-true (every row has the key) or all-false (no row has the key).
@@ -166,16 +167,16 @@ struct WriterOptions {
   /// NOTE: For each column, ALL the arrays inside this column will be encoded
   /// using dictionary arrays. In the future we'll have finer control on
   /// individual arrays within a column.
-  folly::F14FastSet<std::string> dictionaryArrayColumns;
+  folly::F14FastSet<std::string> dictionaryArrayColumns{};
 
   /// Columns that should be encoded as dictionary map
   /// NOTE: For each column, ALL the maps inside this column will be encoded
   /// using dictionary maps.
-  folly::F14FastSet<std::string> deduplicatedMapColumns;
+  folly::F14FastSet<std::string> deduplicatedMapColumns{};
 
   /// The metric logger would come populated with access descriptor information,
   /// application generated query id or specific sampling configs.
-  std::shared_ptr<MetricsLogger> metricsLogger;
+  std::shared_ptr<MetricsLogger> metricsLogger{};
 
   /// Optional feature reordering config.
   /// The key for this config is a (top-level) flat map column ordinal and
@@ -183,7 +184,7 @@ struct WriterOptions {
   /// writer will make sure that flat map features are grouped together and
   /// ordered based on this config.
   std::optional<std::vector<std::tuple<size_t, std::vector<int64_t>>>>
-      featureReordering;
+      featureReordering{};
 
   /// Optional captured encoding layout tree.
   /// Encoding layout tree is overlayed on the writer tree and the captured
@@ -192,10 +193,10 @@ struct WriterOptions {
   /// Captured encodings can be used to speed up writes (as no encoding
   /// selection is needed at runtime) and cal also provide better selected
   /// encodings, based on history data.
-  std::optional<EncodingLayoutTree> encodingLayoutTree;
+  std::optional<EncodingLayoutTree> encodingLayoutTree{};
 
   /// Compression settings to be used when encoding and compressing data streams
-  CompressionOptions compressionOptions;
+  CompressionOptions compressionOptions{};
 
   /// Per-chunk compression of encoded data streams (layered on top of
   /// compressionOptions).
@@ -247,7 +248,7 @@ struct WriterOptions {
 
   /// If present, metadata sections above this threshold size will be
   /// compressed.
-  std::optional<uint32_t> metadataCompressionThreshold;
+  std::optional<uint32_t> metadataCompressionThreshold{};
 
   /// When flushing data streams into chunks, streams with raw data size smaller
   /// than this threshold will not be flushed.
@@ -292,7 +293,7 @@ struct WriterOptions {
   // When unset (the default), the writer takes the legacy path: write the
   // whole batch, then consult flushPolicyFactory's shouldFlush.
   // See BufferPolicy.h for the interface + lifecycle.
-  std::function<std::unique_ptr<BufferPolicy>()> bufferPolicyFactory;
+  std::function<std::unique_ptr<BufferPolicy>()> bufferPolicyFactory{};
 
   // When the writer needs to buffer data, and internal buffers don't have
   /// enough capacity, the writer is using this policy to claculate the the new
@@ -350,7 +351,7 @@ struct WriterOptions {
   /// As a result, if a KeepAlive is still being held, clients trying to
   /// destruct the last reference of a shared_ptr to that executor will block
   /// until all KeepAlive references are destructed.
-  folly::Executor::KeepAlive<> encodingExecutor;
+  folly::Executor::KeepAlive<> encodingExecutor{};
 
   /// When maxEncodeParallelism > 0 and encodingExecutor is set,
   /// FieldWriter::write() operations will be parallelized using coroutines

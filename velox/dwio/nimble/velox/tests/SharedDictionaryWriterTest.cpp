@@ -155,8 +155,8 @@ std::vector<uint32_t> repeatedIndices(
 
 struct ExpectedStripeDictionary {
   std::vector<int32_t> values;
-  std::vector<uint32_t> indices;
-  std::vector<int32_t> alphabet;
+  std::vector<uint32_t> indices{};
+  std::vector<int32_t> alphabet{};
 };
 
 ExpectedStripeDictionary expectedStripeDictionary(std::vector<int32_t> values) {

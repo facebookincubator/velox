@@ -34,7 +34,7 @@ std::ostream& operator<<(std::ostream& out, EncodingPropertyType propertyType);
 
 struct EncodingProperty {
   std::string value;
-  std::string_view data;
+  std::string_view data{};
 };
 
 void traverseEncodings(

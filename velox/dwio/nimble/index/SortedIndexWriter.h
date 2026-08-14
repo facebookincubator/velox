@@ -98,12 +98,12 @@ class SortedIndexWriter : public IndexWriter {
 
   struct IndexAccumulator {
     Options options;
-    std::unique_ptr<IndexKeyEncoder> encoder;
-    std::vector<IndexEntry> entries;
+    std::unique_ptr<IndexKeyEncoder> encoder{};
+    std::vector<IndexEntry> entries{};
     // Backs encoded key string_views in entries. Each accumulator owns its
     // buffer so it can be freed independently after composite entries are
     // built.
-    std::unique_ptr<Buffer> encodingBuffer;
+    std::unique_ptr<Buffer> encodingBuffer{};
 
     void sort();
     void clear();

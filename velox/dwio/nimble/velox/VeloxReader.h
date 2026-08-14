@@ -48,25 +48,25 @@ struct VeloxReadParams : public FieldReaderParams {
   // Optional reader decoding executor. When supplied, decoding into a Velox
   // vector will be parallelized by this executor, if the column type supports
   // parallel decoding.
-  std::shared_ptr<folly::Executor> decodingExecutor;
+  std::shared_ptr<folly::Executor> decodingExecutor{};
 
   // Metric logger with pro-populated access info.
-  std::shared_ptr<MetricsLogger> metricsLogger;
+  std::shared_ptr<MetricsLogger> metricsLogger{};
 
   // Report the number of stripes that will be read (consider the given range).
-  std::function<void(uint32_t)> stripeCountCallback;
+  std::function<void(uint32_t)> stripeCountCallback{};
 
   // Report the Wall time (ms) that we're blocked waiting on IO.
   std::function<void(std::chrono::high_resolution_clock::duration)>
-      blockedOnIoCallback;
+      blockedOnIoCallback{};
 
   // Report the Wall time (us) that we spend decoding.
   std::function<void(std::chrono::high_resolution_clock::duration)>
-      decodingTimeCallback;
+      decodingTimeCallback{};
 
   // Factory with the algorithm to load stripes (units).
   // If nullptr we'll use the default one, that doesn't pre-load stripes.
-  std::shared_ptr<velox::dwio::common::UnitLoaderFactory> unitLoaderFactory;
+  std::shared_ptr<velox::dwio::common::UnitLoaderFactory> unitLoaderFactory{};
 
   // Used strictly for backward compatible migrations where the Encoding
   // implementations might have different read implementations, but

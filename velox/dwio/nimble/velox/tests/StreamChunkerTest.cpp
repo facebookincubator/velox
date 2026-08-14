@@ -61,7 +61,7 @@ std::vector<T> toVector(std::string_view data) {
 // Expected chunk result structure
 template <typename T>
 struct ExpectedChunk {
-  std::vector<T> chunkData;
+  std::vector<T> chunkData{};
   std::vector<bool> chunkNonNulls = {};
   bool hasNulls = false;
   size_t extraMemory = 0;

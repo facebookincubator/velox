@@ -17,6 +17,7 @@
 #include <locale>
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
@@ -266,6 +267,7 @@ std::string getMinMaxString(const ColumnStatistics& stat) {
     case StatType::DEDUPLICATED:
       return "N/A";
   }
+  NIMBLE_UNREACHABLE("Unsupported statistics type.");
 }
 
 std::string getMaxString(const ColumnStatistics& stat) {
@@ -289,6 +291,7 @@ std::string getMaxString(const ColumnStatistics& stat) {
     case StatType::DEDUPLICATED:
       return "N/A";
   }
+  NIMBLE_UNREACHABLE("Unsupported statistics type.");
 }
 
 std::string statTypeName(StatType type) {
@@ -304,6 +307,7 @@ std::string statTypeName(StatType type) {
     case StatType::DEFAULT:
       return "DEFAULT";
   }
+  NIMBLE_UNREACHABLE("Unsupported statistics type: {}.", static_cast<int>(type));
 }
 
 } // namespace

@@ -761,7 +761,7 @@ TEST_F(WriterTest, fsstEncodingTargetControlsWriterEncoding) {
     std::string name;
     double targetRatio;
     nimble::CompressionType fsstCompressionType;
-    nimble::CompressionOptions compressionOptions;
+    nimble::CompressionOptions compressionOptions{};
     nimble::EncodingType expectedEncodingType;
     nimble::CompressionType expectedCompressionType;
   };

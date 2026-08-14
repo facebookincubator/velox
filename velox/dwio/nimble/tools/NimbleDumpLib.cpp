@@ -182,7 +182,7 @@ uint64_t getRawDataSize(
 struct GroupingKey {
   EncodingType encodingType;
   DataType dataType;
-  std::optional<CompressionType> compressinType;
+  std::optional<CompressionType> compressinType{};
 };
 
 struct GroupingKeyHash {
