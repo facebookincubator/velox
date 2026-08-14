@@ -356,8 +356,9 @@ TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
         parseTimestampWithTimezone(invalid, TimestampParseMode::kSparkCast),
         parserError);
   }
-  // A space separator is unaffected: Spark trims the input, so a trailing
-  // space is equivalent to a date-only string.
+  // A space separator is unaffected by this change. A trailing space after
+  // a date-only string remains valid; known space-path divergences are
+  // tracked separately.
   EXPECT_EQ(
       Timestamp(1426636800, 0),
       parseTimestamp("2015-03-18 ", TimestampParseMode::kSparkCast));

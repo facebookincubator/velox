@@ -655,6 +655,9 @@ Invalid examples
 
   SELECT cast('INVALID' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('2012-Oct-01' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('2015-03-18T' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+
+A ``T`` date-time separator must be followed immediately by the time component.
 
 From boolean
 ^^^^^^^^^^^^
