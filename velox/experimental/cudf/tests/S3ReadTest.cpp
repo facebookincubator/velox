@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
@@ -48,6 +49,8 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
     S3Test::SetUp();
     // Register cudf to enable the CudfDatasource creation from
     // CudfHiveConnector
+    facebook::velox::cudf_velox::CudfConfig::getInstance().allowCpuFallback =
+        false;
     facebook::velox::cudf_velox::registerCudf();
     filesystems::registerS3FileSystem();
 

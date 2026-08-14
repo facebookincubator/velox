@@ -454,6 +454,7 @@ class CudfStringExprTest : public cudf_velox::CudfFunctionBaseTest {
     parse::registerTypeResolver();
     functions::prestosql::registerAllScalarFunctions();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 
