@@ -252,9 +252,11 @@ TypePtr resolveTypeInt(
     coercions.resize(numArgs);
   }
 
+  // Records the coercion every then clause up to 'index' needs to reach
+  // 'type'. A clause already of that type needs none.
   auto setCoercionsUpTo = [&](int index, const TypePtr& type) {
     for (auto i = 1; i <= index; i += 2) {
-      coercions[i] = type;
+      coercions[i] = *argTypes[i] == *type ? nullptr : type;
     }
   };
 
@@ -268,18 +270,18 @@ TypePtr resolveTypeInt(
         "Condition of  SWITCH statement is not bool");
 
     if (*thenType != *resultType) {
-      if (allowedCoercions && coercer.coerce(thenType, resultType)) {
-        coercions[i * 2 + 1] = resultType;
-      } else if (allowedCoercions && coercer.coerce(resultType, thenType)) {
-        resultType = thenType;
-        setCoercionsUpTo(i * 2 - 1, resultType);
-      } else {
-        VELOX_FAIL(
-            "All then clauses of a SWITCH statement must have the same type. "
-            "Expected {}, but got {}.",
-            resultType->toString(),
-            thenType->toString());
-      }
+      const auto common = allowedCoercions
+          ? coercer.leastCommonSuperType(resultType, thenType)
+          : nullptr;
+      VELOX_CHECK_NOT_NULL(
+          common,
+          "All then clauses of a SWITCH statement must have the same type. "
+          "Expected {}, but got {}.",
+          resultType->toString(),
+          thenType->toString());
+
+      resultType = common;
+      setCoercionsUpTo(i * 2 + 1, resultType);
     }
   }
 
@@ -288,18 +290,19 @@ TypePtr resolveTypeInt(
     const auto& elseType = argTypes.back();
 
     if (*elseType != *resultType) {
-      if (allowedCoercions && coercer.coerce(elseType, resultType)) {
-        coercions.back() = resultType;
-      } else if (allowedCoercions && coercer.coerce(resultType, elseType)) {
-        resultType = elseType;
-        setCoercionsUpTo(numArgs - 2, resultType);
-      } else {
-        VELOX_FAIL(
-            "Else clause of a SWITCH statement must have the same type as 'then' clauses. "
-            "Expected {}, but got {}.",
-            resultType->toString(),
-            elseType->toString());
-      }
+      const auto common = allowedCoercions
+          ? coercer.leastCommonSuperType(resultType, elseType)
+          : nullptr;
+      VELOX_CHECK_NOT_NULL(
+          common,
+          "Else clause of a SWITCH statement must have the same type as 'then' clauses. "
+          "Expected {}, but got {}.",
+          resultType->toString(),
+          elseType->toString());
+
+      resultType = common;
+      setCoercionsUpTo(numArgs - 2, resultType);
+      coercions.back() = *elseType == *resultType ? nullptr : resultType;
     }
   }
 
