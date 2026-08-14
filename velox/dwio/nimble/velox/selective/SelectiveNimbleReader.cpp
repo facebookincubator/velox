@@ -159,8 +159,7 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
       VectorPtr& result,
       const dwio::common::Mutation* mutation) override;
 
-  void updateRuntimeStats(
-      dwio::common::RuntimeStats& stats) const override;
+  void updateRuntimeStats(dwio::common::RuntimeStats& stats) const override;
 
   void resetFilterCaches() override;
 

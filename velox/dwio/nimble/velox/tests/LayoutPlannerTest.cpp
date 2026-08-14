@@ -16,10 +16,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <random>
 #include "folly/Random.h"
 #include "velox/dwio/nimble/velox/LayoutPlanner.h"
 #include "velox/dwio/nimble/velox/tests/SchemaUtils.h"
-#include <random>
 
 namespace {
 // Fixed so the shuffled order is reproducible across runs.
@@ -152,7 +152,8 @@ void testStreamLayout(
     }
   }
 
-  std::shuffle(streamSubset.begin(), streamSubset.end(), std::mt19937{kShuffleSeed});
+  std::shuffle(
+      streamSubset.begin(), streamSubset.end(), std::mt19937{kShuffleSeed});
 
   ASSERT_EQ(expectedSubset.size(), streamSubset.size());
   streamSubset = planner.getLayout(std::move(streamSubset));

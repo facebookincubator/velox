@@ -129,21 +129,19 @@ void schema(
 // Clang left to right). Passing them directly would therefore hand out schema
 // offsets in a compiler dependent order. Sequence them so keys always take the
 // lower offset, which is what the recorded expectations assume.
-#define NIMBLE_MAP(keys, values)                        \
-  [&]() {                                               \
-    auto nimbleMapKeys = (keys);                        \
-    auto nimbleMapValues = (values);                    \
-    return facebook::nimble::test::map(                 \
+#define NIMBLE_MAP(keys, values)                                        \
+  [&]() {                                                               \
+    auto nimbleMapKeys = (keys);                                        \
+    auto nimbleMapValues = (values);                                    \
+    return facebook::nimble::test::map(                                 \
         builder, std::move(nimbleMapKeys), std::move(nimbleMapValues)); \
   }()
-#define NIMBLE_SLIDINGWINDOWMAP(keys, values)            \
-  [&]() {                                                \
-    auto nimbleWindowKeys = (keys);                      \
-    auto nimbleWindowValues = (values);                  \
-    return facebook::nimble::test::slidingWindowMap(     \
-        builder,                                         \
-        std::move(nimbleWindowKeys),                     \
-        std::move(nimbleWindowValues));                  \
+#define NIMBLE_SLIDINGWINDOWMAP(keys, values)                                 \
+  [&]() {                                                                     \
+    auto nimbleWindowKeys = (keys);                                           \
+    auto nimbleWindowValues = (values);                                       \
+    return facebook::nimble::test::slidingWindowMap(                          \
+        builder, std::move(nimbleWindowKeys), std::move(nimbleWindowValues)); \
   }()
 #define NIMBLE_FLATMAP(keyKind, values, adder)                \
   facebook::nimble::test::flatMap(                            \

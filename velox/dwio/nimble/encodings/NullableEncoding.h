@@ -389,10 +389,8 @@ std::string_view NullableEncoding<T>::encodeNullable(
       EncodingIdentifiers::Nullable::Nulls, nulls, scopedBuffer.get(), options);
 
   const uint32_t encodingSize =
-      TypedEncoding<T, physicalType>::serializePrefixSize(
-          rowCount, useVarint) +
-      4 +
-      serializedValues.size() + serializedNulls.size();
+      TypedEncoding<T, physicalType>::serializePrefixSize(rowCount, useVarint) +
+      4 + serializedValues.size() + serializedNulls.size();
   char* reserved = buffer.reserve(encodingSize);
   char* pos = reserved;
   TypedEncoding<T, physicalType>::serializePrefix(

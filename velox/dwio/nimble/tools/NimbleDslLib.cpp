@@ -307,7 +307,8 @@ std::string statTypeName(StatType type) {
     case StatType::DEFAULT:
       return "DEFAULT";
   }
-  NIMBLE_UNREACHABLE("Unsupported statistics type: {}.", static_cast<int>(type));
+  NIMBLE_UNREACHABLE(
+      "Unsupported statistics type: {}.", static_cast<int>(type));
 }
 
 } // namespace

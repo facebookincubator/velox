@@ -16,10 +16,10 @@
 #include <tsl/robin_map.h>
 #include <bit>
 
+#include <random>
 #include "common/init/light.h"
 #include "folly/Benchmark.h"
 #include "folly/Random.h"
-#include <random>
 
 namespace {
 // Fixed so the shuffled order is reproducible across runs.
@@ -158,8 +158,10 @@ int main(int argc, char** argv) {
     uniqueData[i] = i;
   }
 
-  std::shuffle(repeatingData.begin(), repeatingData.end(), std::mt19937{kShuffleSeed});
-  std::shuffle(uniqueData.begin(), uniqueData.end(), std::mt19937{kShuffleSeed});
+  std::shuffle(
+      repeatingData.begin(), repeatingData.end(), std::mt19937{kShuffleSeed});
+  std::shuffle(
+      uniqueData.begin(), uniqueData.end(), std::mt19937{kShuffleSeed});
 
   folly::runBenchmarks();
   return 0;

@@ -20,9 +20,9 @@
 #include <type_traits>
 #include <utility>
 
+#include <random>
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/selection/Statistics.h"
-#include <random>
 
 namespace {
 // Fixed so the shuffled order is reproducible across runs.
@@ -212,7 +212,10 @@ TYPED_TEST(StatisticsBoolTests, Create) {
   EXPECT_EQ(std::max(trueCount, falseCount), statistics.maxRepeat());
   EXPECT_EQ(2, statistics.consecutiveRepeatCount());
 
-  std::shuffle(data.get(), data.get() + trueCount + falseCount, std::mt19937{kShuffleSeed});
+  std::shuffle(
+      data.get(),
+      data.get() + trueCount + falseCount,
+      std::mt19937{kShuffleSeed});
 
   statistics =
       T::create(std::span<const bool>(data.get(), trueCount + falseCount));

@@ -106,8 +106,8 @@ class FsstEncodingTest : public ::testing::Test {
     auto encoded = encodeFsst(values, buffer);
     stringBuffers_.clear();
 
-    auto encoding = EncodingFactory().create(
-        *pool_, encoded, createStringBufferFactory());
+    auto encoding =
+        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
 
     ASSERT_EQ(encoding->dataType(), DataType::String);
     ASSERT_EQ(encoding->encodingType(), expectedEncodingType);

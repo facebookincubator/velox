@@ -2487,15 +2487,15 @@ class RowFieldReader final : public FieldReader {
     for (uint32_t task = 0; task < taskCount; ++task) {
       const uint32_t endChildIdx = nextChildIdx + childrenPerTask +
           (task < numRemainderChildren ? 1 : 0);
-      tasks.emplace_back(folly::coro::co_withExecutor(
-          decodeExecutor_,
-          folly::coro::co_invoke(
-              [&decodeRange,
-               nextChildIdx,
-               endChildIdx]() -> folly::coro::Task<void> {
-                decodeRange(nextChildIdx, endChildIdx);
-                co_return;
-              })));
+      tasks.emplace_back(
+          folly::coro::co_withExecutor(
+              decodeExecutor_,
+              folly::coro::co_invoke(
+                  [&decodeRange, nextChildIdx, endChildIdx]()
+                      -> folly::coro::Task<void> {
+                    decodeRange(nextChildIdx, endChildIdx);
+                    co_return;
+                  })));
       nextChildIdx = endChildIdx;
     }
 
@@ -3134,15 +3134,15 @@ class StructFlatMapFieldReader : public FlatMapFieldReaderBase<T, hasNull> {
     for (uint32_t task = 0; task < taskCount; ++task) {
       const uint32_t endChildIdx = nextChildIdx + childrenPerTask +
           (task < numRemainderChildren ? 1 : 0);
-      tasks.emplace_back(folly::coro::co_withExecutor(
-          this->decodeExecutor_,
-          folly::coro::co_invoke(
-              [&decodeRange,
-               nextChildIdx,
-               endChildIdx]() -> folly::coro::Task<void> {
-                decodeRange(nextChildIdx, endChildIdx);
-                co_return;
-              })));
+      tasks.emplace_back(
+          folly::coro::co_withExecutor(
+              this->decodeExecutor_,
+              folly::coro::co_invoke(
+                  [&decodeRange, nextChildIdx, endChildIdx]()
+                      -> folly::coro::Task<void> {
+                    decodeRange(nextChildIdx, endChildIdx);
+                    co_return;
+                  })));
       nextChildIdx = endChildIdx;
     }
 
