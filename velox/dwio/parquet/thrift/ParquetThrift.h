@@ -23,6 +23,7 @@
 #include <string_view>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/time/Timer.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/parquet/thrift/CompactV1ProtocolReaderWithRefill.h"
 #include "velox/dwio/parquet/thrift/gen-cpp2/parquet_types.h"
@@ -75,7 +76,7 @@ struct DeserializeResult {
   unsigned long readBytes;
   const uint8_t* remainedData;
   size_t remainedDataBytes;
-  uint64_t readUs;
+  uint64_t readNs;
   // Holds the last buffer read from the refiller to keep remainedData valid.
   std::unique_ptr<folly::IOBuf> lastBuffer;
   // Track if we consumed data from the initial buffer or needed refills.
@@ -87,18 +88,18 @@ struct DeserializeResult {
 
 struct StreamReader {
   facebook::velox::dwio::common::SeekableInputStream* input;
-  uint64_t& totalReadUs;
+  uint64_t& totalReadNs;
   const void*& lastStreamData;
   int32_t& lastStreamDataBytes;
 
   bool readNext(const void** data, int32_t* dataBytes) {
     bool haveData;
-    uint64_t readUs{0};
+    uint64_t readNs{0};
     {
-      MicrosecondWallTimer timer(&readUs);
+      NanosecondWallTimer timer(&readNs);
       haveData = input->Next(data, dataBytes);
     }
-    totalReadUs += readUs;
+    totalReadNs += readNs;
     // Track the last data read from stream
     if (haveData) {
       lastStreamData = *data;
@@ -274,7 +275,7 @@ DeserializeResult deserializeImpl(
     const uint8_t* initialData,
     size_t initialDataBytes,
     bool bounded) {
-  uint64_t totalReadUs{0};
+  uint64_t totalReadNs{0};
   std::unique_ptr<folly::IOBuf> lastRefillBuffer;
   bool usedRefiller = false;
   const void* lastStreamData = initialData;
@@ -287,7 +288,7 @@ DeserializeResult deserializeImpl(
   int32_t lastStreamDataBytes = initialDataBytes;
 
   StreamReader streamReader{
-      input, totalReadUs, lastStreamData, lastStreamDataBytes};
+      input, totalReadNs, lastStreamData, lastStreamDataBytes};
 
   auto [data, size] =
       ensureInitialData(streamReader, initialData, initialDataBytes);
@@ -319,7 +320,7 @@ DeserializeResult deserializeImpl(
     auto cursor = reader.getCursor();
     result.remainedData = cursor.data();
     result.remainedDataBytes = cursor.length();
-    result.readUs = totalReadUs;
+    result.readNs = totalReadNs;
     result.lastBuffer = std::move(lastRefillBuffer);
     result.usedRefiller = usedRefiller;
     result.streamData = lastStreamData;

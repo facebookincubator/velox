@@ -329,7 +329,7 @@ class PageIndexBenchmark {
             std::chrono::steady_clock::now() - start)
             .count();
 
-    RuntimeStatistics runtimeStats;
+    RuntimeStats runtimeStats;
     rowReader->updateRuntimeStats(runtimeStats);
     VELOX_CHECK_EQ(outputRows, expectedOutputRows);
     return {

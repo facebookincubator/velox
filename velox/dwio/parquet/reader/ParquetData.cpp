@@ -121,7 +121,7 @@ std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
       type,
       metaData_,
       pool(),
-      runtimeStatistics(),
+      columnStats(type->id(), type->type()->kind()),
       sessionTimezone_,
       scanSpec,
       !parquetType->parquetType_.has_value() ||
@@ -132,7 +132,7 @@ ParquetData::ParquetData(
     const std::shared_ptr<const dwio::common::TypeWithId>& type,
     const FileMetaDataPtr fileMetadataPtr,
     memory::MemoryPool& pool,
-    dwio::common::ColumnReaderStatistics& stats,
+    dwio::common::ColumnRuntimeStats& stats,
     const tz::TimeZone* sessionTimezone,
     const velox::common::ScanSpec& scanSpec,
     bool ignoreStatistics)

@@ -28,6 +28,7 @@ velox_add_library(
   LevelConversionUtil.h
   PageIndex.h
   ParquetConfig.h
+  ParquetRuntimeStats.h
   RleEncodingInternal.h
   XxHasher.h
 )

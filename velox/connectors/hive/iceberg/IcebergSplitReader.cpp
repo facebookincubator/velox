@@ -206,7 +206,7 @@ std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
 
 void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStatistics& runtimeStats,
+    dwio::common::RuntimeStats& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   // Forward per-query delegated credentials into fileReadOps so delegated-auth
   // filesystems authorize the read as the caller rather than the service

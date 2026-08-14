@@ -47,6 +47,7 @@ velox_add_library(
   HivePartitionName.cpp
   HiveSplitReader.cpp
   PartitionIdGenerator.cpp
+  PartitionValue.cpp
   TableHandle.cpp
   HEADERS
   BufferedInputBuilder.h
@@ -77,6 +78,7 @@ velox_add_library(
   HiveSplitReader.h
   IndexReader.h
   PartitionIdGenerator.h
+  PartitionValue.h
   TableHandle.h
 )
 

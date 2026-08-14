@@ -38,7 +38,7 @@ class ParquetParams : public dwio::common::FormatParams {
  public:
   ParquetParams(
       memory::MemoryPool& pool,
-      dwio::common::ColumnReaderStatistics& stats,
+      dwio::common::SplitStats& stats,
       const FileMetaDataPtr metaData,
       const tz::TimeZone* sessionTimezone,
       TimestampPrecision timestampPrecision,
@@ -75,7 +75,7 @@ class ParquetData : public dwio::common::FormatData {
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const FileMetaDataPtr fileMetadataPtr,
       memory::MemoryPool& pool,
-      dwio::common::ColumnReaderStatistics& stats,
+      dwio::common::ColumnRuntimeStats& stats,
       const tz::TimeZone* sessionTimezone,
       const velox::common::ScanSpec& scanSpec,
       bool ignoreStatistics);
@@ -255,7 +255,7 @@ class ParquetData : public dwio::common::FormatData {
   const uint32_t maxDefine_;
   const uint32_t maxRepeat_;
   int64_t rowsInRowGroup_;
-  dwio::common::ColumnReaderStatistics& stats_;
+  dwio::common::ColumnRuntimeStats& stats_;
   const tz::TimeZone* sessionTimezone_;
   std::unique_ptr<PageReader> reader_;
   const bool ignoreStatistics_;

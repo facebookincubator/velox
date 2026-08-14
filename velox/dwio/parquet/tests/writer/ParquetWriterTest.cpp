@@ -152,7 +152,7 @@ class ParquetWriterTest : public ParquetTestBase {
   }
 
   inline static const std::string kHiveConnectorId = "test-hive";
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
 
   struct WriterWithSink {
     std::unique_ptr<facebook::velox::parquet::Writer> writer;
