@@ -528,9 +528,22 @@ struct JodaFormat {
   // True when the format renders a month or weekday by name, which cuDF can
   // only do if it is handed a table of those names.
   bool usesTextNames{false};
+  // True when a two-digit year token is present. cuDF's "%y" pivots at 69 and
+  // Joda at 70, so "69" parses to 1969 here and 2069 on CPU.
+  bool hasTwoDigitYear{false};
+  // True when a numeric token's run length is one cuDF cannot express. Joda
+  // treats the run length as a minimum field width, while cuDF's specifiers are
+  // fixed width, so only the lengths that happen to agree are usable.
+  bool hasUnsupportedFieldWidth{false};
+  // Empty when the format is usable. Otherwise the message the eval path
+  // raises, with userError distinguishing a malformed format from one the GPU
+  // cannot express. Recorded rather than thrown so a canEvaluate can answer
+  // false.
+  std::string error;
+  bool userError{false};
 };
 
-JodaFormat jodaToStrftime(const std::string& joda) {
+JodaFormat analyzeJodaFormat(const std::string& joda) {
   JodaFormat format;
   std::string& out = format.strftime;
   std::string& shape = format.shape;
@@ -572,7 +585,11 @@ JodaFormat jodaToStrftime(const std::string& joda) {
         }
         emitLiteral(joda[i++]);
       }
-      VELOX_USER_CHECK(closed, "No closing single quote for literal");
+      if (!closed) {
+        format.error = "No closing single quote for literal";
+        format.userError = true;
+        return format;
+      }
       continue;
     }
     if (std::isalpha(static_cast<unsigned char>(c))) {
@@ -586,6 +603,13 @@ JodaFormat jodaToStrftime(const std::string& joda) {
         case 'Y':
           out += runLength >= 3 ? "%Y" : "%y";
           shape += "[0-9]+";
+          // Joda pads a year to the run length and prints it in full otherwise,
+          // so only "yy" and "yyyy" line up with cuDF's fixed widths: a single
+          // 'y' prints 2021 where "%y" gives 21, and five or more pad wider
+          // than
+          // "%Y" ever does.
+          format.hasTwoDigitYear |= runLength == 2;
+          format.hasUnsupportedFieldWidth |= runLength != 2 && runLength != 4;
           break;
         case 'M':
           out += runLength >= 4 ? "%B" : (runLength == 3 ? "%b" : "%m");
@@ -594,26 +618,32 @@ JodaFormat jodaToStrftime(const std::string& joda) {
           // conversion decide whether the name itself is valid.
           shape += runLength >= 3 ? "[A-Za-z]+" : "[0-9]+";
           format.usesTextNames |= runLength >= 3;
+          format.hasUnsupportedFieldWidth |= runLength == 1;
           break;
         case 'd':
           out += "%d";
           shape += "[0-9]+";
+          format.hasUnsupportedFieldWidth |= runLength != 2;
           break;
         case 'H':
           out += "%H";
           shape += "[0-9]+";
+          format.hasUnsupportedFieldWidth |= runLength != 2;
           break;
         case 'h':
           out += "%I";
           shape += "[0-9]+";
+          format.hasUnsupportedFieldWidth |= runLength != 2;
           break;
         case 'm':
           out += "%M";
           shape += "[0-9]+";
+          format.hasUnsupportedFieldWidth |= runLength != 2;
           break;
         case 's':
           out += "%S";
           shape += "[0-9]+";
+          format.hasUnsupportedFieldWidth |= runLength != 2;
           break;
         case 'S':
           // The 'S' run length is the fractional-second digit count ('S' -> 1
@@ -621,10 +651,11 @@ JodaFormat jodaToStrftime(const std::string& joda) {
           // renders "%<n>f" for n in 1..9; nothing finer than nanoseconds is
           // representable.
           if (runLength > 9) {
-            VELOX_NYI(
+            format.error =
                 "format_datetime supports at most 9 fractional-second digits "
-                "on GPU, got {}",
-                runLength);
+                "on GPU, got " +
+                std::to_string(runLength);
+            return format;
           }
           out += "%" + std::to_string(runLength) + "f";
           shape += "[0-9]+";
@@ -640,10 +671,11 @@ JodaFormat jodaToStrftime(const std::string& joda) {
           break;
         case 'Z':
         case 'z':
-          VELOX_CHECK_EQ(
-              j,
-              joda.size(),
-              "cuDF datetime format supports a time zone token only at the end");
+          if (j != joda.size()) {
+            format.error =
+                "cuDF datetime format supports a time zone token only at the end";
+            return format;
+          }
           if (c == 'z') {
             trailing = TrailingZone::kZoneName;
           } else if (runLength == 1) {
@@ -662,9 +694,9 @@ JodaFormat jodaToStrftime(const std::string& joda) {
           }
           break;
         default:
-          VELOX_NYI(
-              "Unsupported datetime format letter on GPU: {}",
-              std::string(1, c));
+          format.error =
+              "Unsupported datetime format letter on GPU: " + std::string(1, c);
+          return format;
       }
       i = j;
       continue;
@@ -673,6 +705,21 @@ JodaFormat jodaToStrftime(const std::string& joda) {
     ++i;
   }
   shape += '$';
+  return format;
+}
+
+// Analyses the format and raises what the walk recorded, keeping the eval
+// path's errors as they were: a malformed format is the caller's fault, while
+// one cuDF cannot express is not implemented. A canEvaluate calls
+// analyzeJodaFormat directly, because it has to answer false rather than raise.
+JodaFormat jodaToStrftime(const std::string& joda) {
+  auto format = analyzeJodaFormat(joda);
+  if (!format.error.empty()) {
+    if (format.userError) {
+      VELOX_USER_FAIL("{}", format.error);
+    }
+    VELOX_NYI("{}", format.error);
+  }
   return format;
 }
 
