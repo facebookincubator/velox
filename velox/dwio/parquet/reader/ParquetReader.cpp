@@ -90,6 +90,8 @@ bool isParquetReservedKeyword(
 constexpr int32_t kMissingPhysicalFieldId = std::numeric_limits<int32_t>::min();
 constexpr uint64_t kMaxPageIndexBytesPerRowGroup = kMaxPageIndexRegionBytes * 2;
 constexpr uint64_t kMaxPageIndexBytesPerWindow = 128ULL << 20;
+constexpr uint64_t kMaxDecodedPageIndexBytesPerWindow = 64ULL << 20;
+constexpr uint64_t kEstimatedPageIndexBytesPerPage = 256;
 
 int32_t fieldIdOrMissing(const thrift::SchemaElement& schemaElement) {
   return schemaElement.field_id().value_or(kMissingPhysicalFieldId);
@@ -290,6 +292,7 @@ class ReaderBase {
     dwio::common::BufferedInput* input{nullptr};
     folly::F14FastMap<uint32_t, PendingRowGroup> rowGroups;
     uint64_t bytes{0};
+    uint64_t decodedBytes{0};
   };
 
  public:
@@ -356,7 +359,10 @@ class ReaderBase {
       uint32_t rowGroup,
       const RowReaderState& state) const {
     auto it = state.pagePlans.find(rowGroup);
-    return it == state.pagePlans.end() ? nullptr : it->second;
+    return it == state.pagePlans.end() || !it->second ||
+            it->second->filterGeneration != state.filterGeneration
+        ? nullptr
+        : it->second;
   }
 
   /// Returns the uncompressed size for columns in 'type' and its children in
@@ -395,26 +401,13 @@ class ReaderBase {
     }
   }
 
-  /// Returns true if the deserialized Thrift footer's memory has been
-  /// reported to the memory pool. False when the footer was smaller than
-  /// the tracking threshold, so no allocation was reported.
-  bool isThriftMemoryReported() const {
-    return thriftMemoryReported_;
-  }
-
   /// Returns the estimated footer size reported to the pool at
-  /// construction. Unchanged by later releaseThriftBytes() calls, so it
-  /// reflects the initial estimate rather than the remaining reservation.
+  /// construction. It reflects the initial estimate rather than the remaining
+  /// reservation.
   /// Zero when tracking was not engaged.
   size_t initialThriftSize() const {
     return initialThriftSize_;
   }
-
-  /// Releases 'bytes' from the previously reported Thrift footer memory
-  /// back to the pool and reduces the remaining tracked size accordingly.
-  /// Called when parts of the footer (e.g. cleared row group columns) are
-  /// released early, before ~ReaderBase frees the rest.
-  void releaseThriftBytes(size_t bytes);
 
  private:
   PageIndexPrefetch::EnqueueResult enqueuePageIndexRegions(
@@ -478,19 +471,14 @@ class ReaderBase {
 
   // Whether the deserialized Thrift footer's heap footprint has been
   // reported to 'pool_'. Set once in the constructor after a successful
-  // reportExternalAllocation, and consulted by ~ReaderBase and
-  // releaseThriftBytes to decide whether the pool needs to be notified on
-  // release.
+  // reportExternalAllocation and consulted by ~ReaderBase on release.
   bool thriftMemoryReported_{false};
 
-  // Estimated bytes of heap memory held by 'fileMetaData_' that have been
-  // reported to 'pool_' and not yet released. Decreases as row group
-  // columns are cleared early; the remainder is released by ~ReaderBase.
+  // Estimated bytes of heap memory held by 'fileMetaData_' reported to
+  // 'pool_'. The reservation is released by ~ReaderBase.
   size_t thriftSize_{0};
 
-  // The value of 'thriftSize_' at construction time, captured before any
-  // releaseThriftBytes() calls shrink it. Surfaced as a runtime stat so
-  // operators can compare the estimate against actual pool usage.
+  // Captures the initial reservation for runtime statistics.
   size_t initialThriftSize_{0};
 };
 
@@ -528,12 +516,6 @@ ReaderBase::~ReaderBase() {
   if (thriftMemoryReported_ && thriftSize_ > 0) {
     pool_.reportExternalFree(thriftSize_);
   }
-}
-
-void ReaderBase::releaseThriftBytes(size_t bytes) {
-  VELOX_CHECK_GE(thriftSize_, bytes);
-  pool_.reportExternalFree(bytes);
-  thriftSize_ -= bytes;
 }
 
 void ReaderBase::loadFileMetaData() {
@@ -1722,6 +1704,7 @@ RowGroupPagePruningPlanPtr ReaderBase::applyPageIndexFiltering(
     state.pageIndexFallbacks[pageIndexFallbackReasonName(reason)]++;
     auto plan = std::make_shared<RowGroupPagePruningPlan>();
     plan->rowGroup = thisGroup;
+    plan->filterGeneration = state.filterGeneration;
     plan->retainedRows = dwio::common::RowIntervalSet::full(numRows);
     plan->stats.fallbackReason = reason;
     return RowGroupPagePruningPlanPtr(std::move(plan));
@@ -1741,6 +1724,22 @@ RowGroupPagePruningPlanPtr ReaderBase::applyPageIndexFiltering(
 
   folly::F14FastMap<uint32_t, ValidatedPageIndexes> indexes;
   dwio::common::RowIntervalSet rejectedRows;
+  uint64_t decodedBytes{0};
+  const auto reserveDecodedPageIndexBytes = [&](size_t numPages,
+                                                uint64_t serializedBytes) {
+    const auto columnBytes = checkedMultiply(
+        static_cast<uint64_t>(numPages),
+        kEstimatedPageIndexBytesPerPage,
+        "decoded page-index bytes");
+    decodedBytes = checkedPlus(
+        decodedBytes,
+        checkedPlus(
+            columnBytes, serializedBytes, "decoded page-index column bytes"),
+        "decoded page-index window bytes");
+    return decodedBytes <= kMaxDecodedPageIndexBytesPerWindow &&
+        prefetch.decodedBytes <=
+        kMaxDecodedPageIndexBytesPerWindow - decodedBytes;
+  };
   std::vector<std::pair<
       const velox::common::MetadataFilter::LeafNode*,
       dwio::common::RowIntervalSet>>
@@ -1776,6 +1775,14 @@ RowGroupPagePruningPlanPtr ReaderBase::applyPageIndexFiltering(
     });
     if (!validatedOffset) {
       return fallback(validatedOffset.reason);
+    }
+    const auto serializedIndexBytes =
+        static_cast<uint64_t>(info.offsetIndexLength) +
+        (info.readColumnIndex ? static_cast<uint64_t>(info.columnIndexLength)
+                              : 0);
+    if (!reserveDecodedPageIndexBytes(
+            validatedOffset.value->pages.size(), serializedIndexBytes)) {
+      return fallback(PageIndexFallbackReason::kIndexTooLarge);
     }
     ValidatedPageIndexes validated;
     validated.offset = *validatedOffset.value;
@@ -1859,6 +1866,11 @@ RowGroupPagePruningPlanPtr ReaderBase::applyPageIndexFiltering(
       if (!validatedOffset) {
         return fallback(validatedOffset.reason);
       }
+      if (!reserveDecodedPageIndexBytes(
+              validatedOffset.value->pages.size(),
+              static_cast<uint64_t>(info.offsetIndexLength))) {
+        return fallback(PageIndexFallbackReason::kIndexTooLarge);
+      }
       ValidatedPageIndexes validated;
       validated.offset = std::move(*validatedOffset.value);
       indexes.emplace(column, std::move(validated));
@@ -1891,7 +1903,7 @@ RowGroupPagePruningPlanPtr ReaderBase::applyPageIndexFiltering(
         (info.readColumnIndex ? static_cast<uint64_t>(info.columnIndexLength)
                               : 0);
   }
-  return buildRowGroupPagePruningPlan(
+  auto plan = buildRowGroupPagePruningPlan(
       thisGroup,
       numRows,
       retainedRows,
@@ -1906,6 +1918,9 @@ RowGroupPagePruningPlanPtr ReaderBase::applyPageIndexFiltering(
           static_cast<uint64_t>(
               std::max<int64_t>(options_.maxCoalesceBytes(), 0)),
           static_cast<uint64_t>(std::max(options_.loadQuantum(), 1))});
+  prefetch.decodedBytes = checkedPlus(
+      prefetch.decodedBytes, decodedBytes, "decoded page-index window bytes");
+  return plan;
 }
 
 void ReaderBase::scheduleRowGroups(
@@ -1918,13 +1933,12 @@ void ReaderBase::scheduleRowGroups(
       options_.prefetchRowGroups() + 1,
       static_cast<int64_t>(rowGroupIds.size() - currentGroup));
   if (shouldUsePageIndexFiltering_) {
-    const auto pageIndexBatchSize =
-        std::max<int64_t>(8, options_.prefetchRowGroups() + 1);
     const auto payloadEnd = std::min<int64_t>(
         currentGroup + numRowGroupsToLoad, rowGroupIds.size());
+    const auto pageIndexBatchSize = payloadEnd - currentGroup;
     std::optional<int64_t> firstRequiredUnplanned;
     for (auto i = currentGroup; i < payloadEnd; ++i) {
-      if (state.pagePlans.count(rowGroupIds[i]) == 0) {
+      if (!rowGroupPagePlan(rowGroupIds[i], state)) {
         firstRequiredUnplanned = i;
         break;
       }
@@ -1940,10 +1954,10 @@ void ReaderBase::scheduleRowGroups(
 
       auto numPlanned = int64_t{0};
       for (auto i = *firstRequiredUnplanned;
-           i < rowGroupIds.size() && numPlanned < pageIndexBatchSize;
+           i < payloadEnd && numPlanned < pageIndexBatchSize;
            ++i) {
         const auto thisGroup = rowGroupIds[i];
-        if (state.pagePlans.count(thisGroup) != 0) {
+        if (rowGroupPagePlan(thisGroup, state)) {
           continue;
         }
         if (enqueuePageIndexRegions(thisGroup, reader, pageIndexPrefetch) ==
@@ -1970,6 +1984,7 @@ void ReaderBase::scheduleRowGroups(
       if (!pagePlan) {
         auto plan = std::make_shared<RowGroupPagePruningPlan>();
         plan->rowGroup = thisGroup;
+        plan->filterGeneration = state.filterGeneration;
         plan->retainedRows = dwio::common::RowIntervalSet::full(
             static_cast<uint64_t>(apache::thrift::can_throw(
                 *apache::thrift::can_throw(
@@ -2107,7 +2122,9 @@ class ParquetRowReader::Impl {
         dwio::common::makeColumnReaderOptions(readerBase_->options());
   }
 
-  void filterRowGroups() {
+  void filterRowGroups(std::optional<uint32_t> forcedCurrentGroup = {}) {
+    rowGroupIds_.clear();
+    firstRowOfRowGroup_.clear();
     rowGroupIds_.reserve(rowGroups_.size());
     firstRowOfRowGroup_.reserve(rowGroups_.size());
 
@@ -2155,31 +2172,24 @@ class ParquetRowReader::Impl {
     }
 
     uint64_t rowNumber = 0;
-    size_t freedThriftSize{0};
     for (auto i = 0; i < rowGroups_.size(); i++) {
-      const bool isExcluded = bits::isBitSet(res.filterResult.data(), i);
+      const bool isForcedCurrentGroup =
+          forcedCurrentGroup.has_value() && i == forcedCurrentGroup.value();
+      const bool isExcluded =
+          (forcedCurrentGroup.has_value() && i < forcedCurrentGroup.value()) ||
+          (!isForcedCurrentGroup && bits::isBitSet(res.filterResult.data(), i));
       if (!isExcluded) {
         rowGroupIds_.push_back(i);
         firstRowOfRowGroup_.push_back(rowNumber);
       } else {
-        if (i != 0) {
-          if (readerBase_->isThriftMemoryReported()) {
-            for (const auto& column : *rowGroups_[i].columns()) {
-              freedThriftSize +=
-                  ColumnChunkMetaDataPtr(&column).estimateColumnMetadataSize();
-            }
-          }
-          std::vector<thrift::ColumnChunk>().swap(*rowGroups_[i].columns());
-        }
-        if (rowGroupInRange[i]) {
+        if ((!forcedCurrentGroup.has_value() ||
+             i >= forcedCurrentGroup.value()) &&
+            rowGroupInRange[i]) {
           skippedStrides_++;
         }
       }
 
       rowNumber += *rowGroups_[i].num_rows();
-    }
-    if (freedThriftSize > 0) {
-      readerBase_->releaseThriftBytes(freedThriftSize);
     }
   }
 
@@ -2267,11 +2277,40 @@ class ParquetRowReader::Impl {
   void resetFilterCaches() {
     columnReader_->resetFilterCaches();
     ++rowReaderState_.filterGeneration;
-    if (nextRowGroupIdsIdx_ < rowGroupIds_.size()) {
-      for (size_t i = nextRowGroupIdsIdx_; i < rowGroupIds_.size(); ++i) {
-        rowReaderState_.inputs.erase(rowGroupIds_[i]);
-        rowReaderState_.pagePlans.erase(rowGroupIds_[i]);
+    const bool hasCurrentRowGroup = nextRowGroupIdsIdx_ != 0;
+    if (!hasCurrentRowGroup) {
+      rowReaderState_.inputs.clear();
+      rowReaderState_.pagePlans.clear();
+      filterRowGroups();
+      if (rowGroupIds_.empty()) {
+        return;
       }
+      currentRowGroupPtr_ = nullptr;
+      rowsInCurrentRowGroup_ = 0;
+      currentRowInGroup_ = 0;
+      retainedRows_ = {};
+      retainedRowCursor_ = 0;
+      VELOX_CHECK(advanceToNextRowGroup());
+      return;
+    }
+    const auto currentRowGroup = rowGroupIds_[std::min(
+        static_cast<size_t>(nextRowGroupIdsIdx_ - 1), rowGroupIds_.size() - 1)];
+    const auto currentRow = currentRowInGroup_;
+    rowReaderState_.inputs.clear();
+    rowReaderState_.pagePlans.clear();
+    filterRowGroups(currentRowGroup);
+    nextRowGroupIdsIdx_ = 0;
+    currentRowGroupPtr_ = nullptr;
+    rowsInCurrentRowGroup_ = 0;
+    currentRowInGroup_ = 0;
+    retainedRows_ = {};
+    retainedRowCursor_ = 0;
+    VELOX_CHECK(advanceToNextRowGroup());
+    if (rowGroupIds_.front() == currentRowGroup && currentRow != 0) {
+      auto& structReader = static_cast<StructColumnReader&>(*columnReader_);
+      structReader.prepareForSkip(currentRow);
+      structReader.SelectiveStructColumnReaderBase::skipBatch(currentRow);
+      currentRowInGroup_ = currentRow;
     }
   }
 
@@ -2374,7 +2413,7 @@ class ParquetRowReader::Impl {
   dwio::common::ColumnReaderOptions columnReaderOptions_;
 
   // All row groups from file metadata.
-  std::vector<thrift::RowGroup>& rowGroups_;
+  const std::vector<thrift::RowGroup>& rowGroups_;
   // Indices of row groups where stats match filters.
   std::vector<uint32_t> rowGroupIds_;
   std::vector<uint64_t> firstRowOfRowGroup_;

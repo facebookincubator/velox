@@ -32,6 +32,10 @@
 #include "velox/dwio/parquet/reader/RleBpDataDecoder.h"
 #include "velox/dwio/parquet/reader/StringDecoder.h"
 
+namespace facebook::velox::dwio::common {
+class BufferedInput;
+} // namespace facebook::velox::dwio::common
+
 namespace facebook::velox::parquet {
 
 /// Manages access to pages inside a ColumnChunk. Interprets page headers and
@@ -81,7 +85,9 @@ class PageReader {
       const ColumnPageReadPlan* pagePlan,
       RowGroupPagePruningPlanPtr pageGroupPlan = nullptr,
       std::unique_ptr<dwio::common::SeekableInputStream> fallbackStream =
-          nullptr)
+          nullptr,
+      dwio::common::BufferedInput* fallbackInput = nullptr,
+      std::optional<common::Region> fallbackRegion = std::nullopt)
       : pool_(pool),
         pageStreams_(std::move(pageStreams)),
         prefixStream_(std::move(prefixStream)),
@@ -94,17 +100,20 @@ class PageReader {
         nullConcatenation_(pool_),
         stats_(stats),
         sessionTimezone_(sessionTimezone),
-        fallbackStream_(std::move(fallbackStream)) {
+        fallbackStream_(std::move(fallbackStream)),
+        fallbackInput_(fallbackInput),
+        fallbackRegion_(std::move(fallbackRegion)) {
     type_->makeLevelInfo(leafInfo_);
     if (pageGroupPlan) {
-      const auto planColumn = pageGroupPlan->columns.find(type_->column());
+      pageGroupPlan_ = std::move(pageGroupPlan);
+      const auto planColumn = pageGroupPlan_->columns.find(type_->column());
       VELOX_CHECK(
-          planColumn != pageGroupPlan->columns.end(),
+          planColumn != pageGroupPlan_->columns.end(),
           "Missing immutable page plan for column {}",
           type_->column());
-      pagePlan_ = planColumn->second;
+      pagePlan_ = &planColumn->second;
     } else if (pagePlan != nullptr) {
-      pagePlan_ = *pagePlan;
+      pagePlan_ = pagePlan;
     }
   }
 
@@ -610,8 +619,11 @@ class PageReader {
   // Add decoders for other encodings here.
 
   // Immutable physical page selection published by the row-group planner.
-  std::optional<ColumnPageReadPlan> pagePlan_;
+  RowGroupPagePruningPlanPtr pageGroupPlan_;
+  const ColumnPageReadPlan* pagePlan_{nullptr};
   std::unique_ptr<dwio::common::SeekableInputStream> fallbackStream_;
+  dwio::common::BufferedInput* fallbackInput_{nullptr};
+  std::optional<common::Region> fallbackRegion_;
   uint32_t nextDataPageOrdinal_{0};
   int32_t currentRunIndex_{-1};
   uint64_t currentRunLength_{0};

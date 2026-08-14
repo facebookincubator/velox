@@ -32,7 +32,6 @@ namespace facebook::velox::parquet {
 
 /// Describes one data page in an immutable row-group read plan.
 struct PageDataSpan {
-  uint32_t dataPageOrdinal{0};
   uint64_t firstRow{0};
   uint64_t numRows{0};
   common::Region region;
@@ -63,7 +62,7 @@ struct ColumnPageReadPlan {
   uint64_t fullChunkBytes{0};
   uint64_t retainedPageBytes{0};
   uint64_t plannedPhysicalBytes{0};
-  uint32_t plannedPhysicalLoads{0};
+  uint64_t plannedPhysicalLoads{0};
   bool allPagesSkipped{false};
   bool useWholeChunkStream{false};
   bool costModelFallback{false};

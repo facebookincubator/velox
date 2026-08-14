@@ -221,24 +221,28 @@ bool ParquetData::collectIndexPageInfoMap(
     PageIndexInfoMap& map) {
   const bool hasFilter =
       scanSpec_.filter() != nullptr || scanSpec_.numMetadataFilters() != 0;
-  bool canApplyPagePruning = hasFilter;
-  if (canApplyPagePruning) {
+  bool canProveRowRejection = hasFilter;
+  if (canProveRowRejection) {
     for (auto* parent = type_.get(); parent != nullptr;
          parent = parent->parquetParent()) {
       if (parent->parquetParent() &&
           (parent->type()->kind() == TypeKind::ARRAY ||
            parent->type()->kind() == TypeKind::MAP ||
            parent->type()->kind() == TypeKind::ROW)) {
-        canApplyPagePruning = false;
+        canProveRowRejection = false;
         break;
       }
     }
   }
+  const bool canConsumeSparsePages = type_->parquetParent() != nullptr &&
+      type_->parquetParent()->parquetParent() == nullptr && maxRepeat_ == 0 &&
+      maxDefine_ <= 1;
 
   const auto chunk =
       fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
-  if (chunk.hasOffsetIndex() && chunk.offsetIndexLength() > 0) {
-    const bool readColumnIndex = canApplyPagePruning &&
+  if (canConsumeSparsePages && chunk.hasOffsetIndex() &&
+      chunk.offsetIndexLength() > 0) {
+    const bool readColumnIndex = canProveRowRejection &&
         chunk.hasColumnIndex() && chunk.columnIndexLength() > 0;
     ColumnPageIndexInformation info;
     info.offsetIndexOffset = chunk.offsetIndexOffset();
@@ -259,7 +263,7 @@ bool ParquetData::collectIndexPageInfoMap(
         : PageBoundsCapability::kNone;
     map[type_->column()] = info;
   }
-  return canApplyPagePruning;
+  return canProveRowRejection;
 }
 
 void ParquetData::evaluatePageIndex(
@@ -415,17 +419,17 @@ void ParquetData::enqueueRowGroup(
   }
 
   if (columnPlan->allPagesSkipped) {
-    plannedStreams_[index] = PlannedStreams{nullptr, nullptr, {}, pagePlan};
+    plannedStreams_[index] =
+        PlannedStreams{nullptr, std::nullopt, nullptr, {}, pagePlan};
     streams_[index].reset();
     return;
   }
 
   PlannedStreams planned;
   planned.pagePlan = pagePlan;
-  planned.fallback = input.read(
-      chunkReadOffset,
-      static_cast<uint64_t>(readSize),
-      dwio::common::LogType::STRIPE);
+  planned.fallbackInput = &input;
+  planned.fallbackRegion =
+      common::Region{chunkReadOffset, static_cast<uint64_t>(readSize)};
   if (columnPlan->prefixRegion) {
     planned.prefix = input.enqueue(*columnPlan->prefixRegion, &streamId);
   }
@@ -472,7 +476,9 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
       sessionTimezone_,
       nullptr,
       std::move(planned.pagePlan),
-      std::move(planned.fallback));
+      nullptr,
+      planned.fallbackInput,
+      planned.fallbackRegion);
   return dwio::common::PositionProvider(empty);
 }
 

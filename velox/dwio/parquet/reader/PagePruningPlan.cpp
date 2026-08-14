@@ -25,7 +25,7 @@ using facebook::velox::parquet::PagePruningCostModelOptions;
 
 struct PhysicalReadEstimate {
   uint64_t bytes{0};
-  uint32_t loads{0};
+  uint64_t loads{0};
 };
 
 PhysicalReadEstimate estimatePhysicalReads(
@@ -45,10 +45,11 @@ PhysicalReadEstimate estimatePhysicalReads(
   const auto flush = [&]() {
     estimate.bytes = facebook::velox::checkedPlus(
         estimate.bytes, groupEnd - groupStart, "physical page bytes");
+    const auto groupBytes = groupEnd - groupStart;
     const auto numLoads =
-        (groupEnd - groupStart + loadQuantum - 1) / loadQuantum;
+        groupBytes / loadQuantum + (groupBytes % loadQuantum == 0 ? 0 : 1);
     estimate.loads = facebook::velox::checkedPlus(
-        estimate.loads, static_cast<uint32_t>(numLoads), "physical page loads");
+        estimate.loads, numLoads, "physical page loads");
   };
 
   for (const auto& region : regions) {
@@ -106,7 +107,6 @@ ColumnPageReadPlan buildColumnPageReadPlan(
     const auto pageEnd =
         checkedPlus(page.firstRow, page.numRows, "page row end");
     result.dataPages.push_back({
-        ordinal,
         page.firstRow,
         page.numRows,
         common::Region{page.offset, page.compressedSize},
@@ -154,19 +154,22 @@ ColumnPageReadPlan buildColumnPageReadPlan(
   const auto estimate = estimatePhysicalReads(physicalRegions, costModel);
   result.plannedPhysicalBytes = estimate.bytes;
   result.plannedPhysicalLoads = estimate.loads;
-  const bool tooManyRuns = result.retainedRuns.size() > 256;
+  const auto loadQuantum = std::max<uint64_t>(costModel.loadQuantum, 1);
+  const auto wholeChunkLoads = fullChunkBytes == 0
+      ? uint64_t{0}
+      : fullChunkBytes / loadQuantum +
+          (fullChunkBytes % loadQuantum == 0 ? 0 : 1);
   const bool noMaterialSavings = !preloaded && fullChunkBytes != 0 &&
-      (estimate.bytes >= fullChunkBytes || tooManyRuns);
+      (estimate.bytes >= fullChunkBytes || estimate.loads >= wholeChunkLoads);
   result.allPagesSkipped = allPagesSkipped;
   result.useWholeChunkStream =
       result.numSkippedPages == 0 || (!allPagesSkipped && noMaterialSavings);
   result.costModelFallback =
       !allPagesSkipped && result.numSkippedPages != 0 && noMaterialSavings;
   if (result.useWholeChunkStream && fullChunkBytes != 0) {
-    const auto loadQuantum = std::max<uint64_t>(costModel.loadQuantum, 1);
     result.plannedPhysicalBytes = fullChunkBytes;
-    result.plannedPhysicalLoads =
-        static_cast<uint32_t>((fullChunkBytes + loadQuantum - 1) / loadQuantum);
+    result.plannedPhysicalLoads = fullChunkBytes / loadQuantum +
+        (fullChunkBytes % loadQuantum == 0 ? 0 : 1);
   }
   return result;
 }

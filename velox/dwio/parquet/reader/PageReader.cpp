@@ -28,6 +28,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/parquet/common/LevelConversion.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
@@ -62,10 +63,18 @@ uint32_t checkedPageSize(int32_t size, const char* name) {
 } // namespace
 
 bool PageReader::fallbackToWholeChunk() {
+  if (!fallbackStream_ && fallbackInput_ && fallbackRegion_) {
+    fallbackStream_ = fallbackInput_->read(
+        fallbackRegion_->offset,
+        fallbackRegion_->length,
+        dwio::common::LogType::STRIPE);
+    fallbackInput_ = nullptr;
+    fallbackRegion_.reset();
+  }
   if (!fallbackStream_) {
     return false;
   }
-  pagePlan_.reset();
+  pagePlan_ = nullptr;
   pageStreams_.clear();
   prefixStream_.reset();
   inputStream_ = std::move(fallbackStream_);

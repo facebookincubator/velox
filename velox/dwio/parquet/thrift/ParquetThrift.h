@@ -31,7 +31,8 @@
 namespace facebook::velox::parquet::thrift {
 
 inline constexpr int32_t kThriftStringSizeLimit = 100 * 1000 * 1000;
-inline constexpr int32_t kThriftContainerSizeLimit = 1000 * 1000;
+// Keep page-index vectors bounded before decoded-page accounting runs.
+inline constexpr int32_t kThriftPageIndexContainerSizeLimit = 256 * 1024;
 
 template <
     typename Enum,
@@ -57,8 +58,7 @@ std::ostream& operator<<(std::ostream& os, const Enum& value) {
 
 template <typename ThriftStruct>
 unsigned long deserialize(ThriftStruct* thriftStruct, std::string_view data) {
-  apache::thrift::CompactV1ProtocolReader reader(
-      kThriftStringSizeLimit, kThriftContainerSizeLimit);
+  apache::thrift::CompactV1ProtocolReader reader;
   folly::IOBuf buffer(
       folly::IOBuf::WRAP_BUFFER,
       folly::ByteRange(
@@ -268,11 +268,12 @@ class ThriftStreamRefiller {
 };
 
 template <typename ThriftStruct>
-DeserializeResult deserialize(
+DeserializeResult deserializeImpl(
     ThriftStruct* thriftStruct,
     facebook::velox::dwio::common::SeekableInputStream* input,
     const uint8_t* initialData,
-    size_t initialDataBytes) {
+    size_t initialDataBytes,
+    bool bounded) {
   uint64_t totalReadUs{0};
   std::unique_ptr<folly::IOBuf> lastRefillBuffer;
   bool usedRefiller = false;
@@ -303,8 +304,10 @@ DeserializeResult deserialize(
       lastRefillBuffer);
 
   apache::thrift::CompactV1ProtocolReaderWithRefill reader(std::ref(refiller));
-  reader.setStringSizeLimit(kThriftStringSizeLimit);
-  reader.setContainerSizeLimit(kThriftContainerSizeLimit);
+  if (bounded) {
+    reader.setStringSizeLimit(kThriftStringSizeLimit);
+    reader.setContainerSizeLimit(kThriftPageIndexContainerSizeLimit);
+  }
   folly::IOBuf initialBuffer(
       folly::IOBuf::WRAP_BUFFER, initialData, initialDataBytes);
 
@@ -334,6 +337,26 @@ DeserializeResult deserialize(
   } catch (const std::exception& e) {
     VELOX_FAIL("Thrift deserialize error: {}", e.what());
   }
+}
+
+template <typename ThriftStruct>
+DeserializeResult deserializePageIndex(
+    ThriftStruct* thriftStruct,
+    facebook::velox::dwio::common::SeekableInputStream* input,
+    const uint8_t* initialData,
+    size_t initialDataBytes) {
+  return deserializeImpl(
+      thriftStruct, input, initialData, initialDataBytes, true);
+}
+
+template <typename ThriftStruct>
+DeserializeResult deserialize(
+    ThriftStruct* thriftStruct,
+    facebook::velox::dwio::common::SeekableInputStream* input,
+    const uint8_t* initialData,
+    size_t initialDataBytes) {
+  return deserializeImpl(
+      thriftStruct, input, initialData, initialDataBytes, false);
 }
 
 template <typename ThriftStruct>

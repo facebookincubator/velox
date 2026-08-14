@@ -165,7 +165,7 @@ template <typename T>
 PageIndexResult<T> deserializeIndex(dwio::common::SeekableInputStream& input) {
   T result;
   try {
-    thrift::deserialize(&result, &input, nullptr, 0);
+    thrift::deserializePageIndex(&result, &input, nullptr, 0);
   } catch (const VeloxRuntimeError& error) {
     return PageIndexResult<T>::fallback(
         PageIndexFallbackReason::kDeserializeFailure, error.what());

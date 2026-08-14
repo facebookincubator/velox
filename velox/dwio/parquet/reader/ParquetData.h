@@ -271,7 +271,8 @@ class ParquetData : public dwio::common::FormatData {
 
   // Streams for the exact logical page runs after page pruning.
   struct PlannedStreams {
-    std::unique_ptr<dwio::common::SeekableInputStream> fallback;
+    dwio::common::BufferedInput* fallbackInput{nullptr};
+    std::optional<common::Region> fallbackRegion;
     std::unique_ptr<dwio::common::SeekableInputStream> prefix;
     std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> runs;
     RowGroupPagePruningPlanPtr pagePlan;

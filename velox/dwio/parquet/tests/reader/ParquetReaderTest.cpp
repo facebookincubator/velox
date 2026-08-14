@@ -623,6 +623,85 @@ TEST_F(ParquetReaderTest, nextReadSizeMatchesPageIndexChunk) {
   EXPECT_EQ(rowReader->next(1000, result), advertisedSize);
 }
 
+TEST_F(ParquetReaderTest, nestedNullableRowWithPageIndexFilter) {
+  const auto rowType =
+      ROW({"nested", "id"}, {ROW("value", BIGINT()), BIGINT()});
+  auto data = makeRowVector(
+      {"nested", "id"},
+      {makeRowVector(
+           {"value"},
+           {makeFlatVector<int64_t>({1, 2, 3, 4})},
+           [](auto row) { return row == 1; }),
+       makeFlatVector<int64_t>({0, 100, 200, 300})});
+
+  ParquetWriterOptions writerOptions;
+  writerOptions.enableWritePageIndex = true;
+  writerOptions.dataPageSize = 1;
+  auto* sink = write(data, writerOptions);
+  const auto outputType = rowType;
+  auto readerBundle = readerBuilder(*sink, outputType).build();
+  auto scanSpec = makeScanSpec(outputType);
+  scanSpec->getOrCreateChild(Subfield("id"))
+      ->setFilter(std::make_unique<BigintRange>(100, 100, false));
+  auto rowReaderOptions = makeRowReaderOpts(outputType);
+  rowReaderOptions.setScanSpec(scanSpec);
+  auto filteredReader = readerBundle.reader->createRowReader(rowReaderOptions);
+  VectorPtr result;
+  EXPECT_EQ(filteredReader->next(100, result), 4);
+  ASSERT_NE(result, nullptr);
+  ASSERT_EQ(result->size(), 1);
+  const auto& resultRow = result->as<RowVector>();
+  EXPECT_EQ(resultRow->childAt(1)->as<FlatVector<int64_t>>()->valueAt(0), 100);
+  EXPECT_TRUE(resultRow->childAt(0)->isNullAt(0));
+
+  dwio::common::RuntimeStatistics stats;
+  filteredReader->updateRuntimeStats(stats);
+  EXPECT_GT(stats.pageIndexPagesSkipped, 0);
+}
+
+TEST_F(ParquetReaderTest, resetFilterCachesRebuildsActivePagePlan) {
+  const auto rowType =
+      ROW({"nested", "id"}, {ROW("value", BIGINT()), BIGINT()});
+  auto data = makeRowVector(
+      {"nested", "id"},
+      {makeRowVector(
+           {"value"},
+           {makeFlatVector<int64_t>({1, 2, 3, 4})},
+           [](auto row) { return row == 1; }),
+       makeFlatVector<int64_t>({0, 100, 200, 300})});
+
+  ParquetWriterOptions writerOptions;
+  writerOptions.enableWritePageIndex = true;
+  writerOptions.dataPageSize = 1;
+  auto* sink = write(data, writerOptions);
+  auto readerBundle = readerBuilder(*sink, rowType).build();
+
+  auto scanSpec = makeScanSpec(rowType);
+  scanSpec->getOrCreateChild(Subfield("id"))
+      ->setFilter(std::make_unique<BigintRange>(100, 100, false));
+  auto rowReaderOptions = makeRowReaderOpts(rowType);
+  rowReaderOptions.setScanSpec(scanSpec);
+  auto rowReader = readerBundle.reader->createRowReader(rowReaderOptions);
+
+  VectorPtr prefix;
+  EXPECT_EQ(rowReader->next(1, prefix), 1);
+  ASSERT_NE(prefix, nullptr);
+  EXPECT_EQ(prefix->size(), 1);
+
+  scanSpec->getOrCreateChild(Subfield("id"))
+      ->setFilter(std::make_unique<BigintRange>(0, 300, false));
+  rowReader->resetFilterCaches();
+
+  VectorPtr result;
+  EXPECT_EQ(rowReader->next(100, result), 3);
+  ASSERT_NE(result, nullptr);
+  EXPECT_EQ(result->size(), 3);
+
+  dwio::common::RuntimeStatistics stats;
+  rowReader->updateRuntimeStats(stats);
+  EXPECT_GT(stats.pageIndexPagesSkipped, 0);
+}
+
 TEST_F(ParquetReaderTest, pageIndexRejectedChunkPreservesRowNumberType) {
   const auto rowType = ROW("_1", BIGINT());
   auto reader = createReader("column_index.parquet");
@@ -1527,7 +1606,7 @@ TEST_F(ParquetReaderTest, pageIndexPrefetchBatchesAcrossPayloadWindow) {
   ASSERT_EQ(filteredReader->fileMetaData().numRowGroups(), kNumRowGroups);
   readAll(*filteredReader, true);
 
-  EXPECT_EQ(filteredLoads->load() - noFilterLoadCount, 3);
+  EXPECT_EQ(filteredLoads->load() - noFilterLoadCount, (kNumRowGroups + 1) / 2);
 }
 
 TEST_F(ParquetReaderTest, testEmptyRowGroups) {

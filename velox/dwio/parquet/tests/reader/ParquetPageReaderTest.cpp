@@ -286,7 +286,7 @@ TEST_F(ParquetPageReaderTest, indexedPageMustMatchPlannedRowSpan) {
   const std::string fullData = headerBytes + pageData;
 
   ColumnPageReadPlan pagePlan;
-  pagePlan.dataPages.push_back({0, 0, 2, common::Region{0, fullData.size()}});
+  pagePlan.dataPages.push_back({0, 2, common::Region{0, fullData.size()}});
   pagePlan.retainedRuns.push_back({common::Region{0, fullData.size()}, 0, 1});
   pagePlan.dataPageToRun.push_back(0);
 
