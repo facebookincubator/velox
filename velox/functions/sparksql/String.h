@@ -1183,7 +1183,7 @@ struct ConvFunction {
       toChars(result, unsignedValue, toBase, resultSize);
     }
 
-    // Converts to uppper case, consistent with Spark.
+    // Converts to upper case, consistent with Spark.
     if (std::abs(toBase) > 10) {
       toUpper(result.data(), result.size());
     }
