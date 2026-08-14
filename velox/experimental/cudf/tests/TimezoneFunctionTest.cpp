@@ -735,6 +735,54 @@ TEST_F(TimezoneFunctionTest, nullConstantArgumentYieldsNullLikeCpu) {
   assertMatchesCpu("from_unixtime(c0, 5, cast(null as bigint))", seconds);
 }
 
+// CPU picks the zone the format parsed and falls back to the session zone only
+// when the format carried none (ParseDateTimeFunction::call). The GPU instead
+// rejected any non-UTC session outright, so a format stating its own offset --
+// where the session cannot matter -- failed for a reason that did not apply.
+//
+// Asserted through projections that read the zone key, since comparing
+// TIMESTAMP WITH TIME ZONE values ignores it.
+TEST_F(TimezoneFunctionTest, parseDatetimeExplicitOffsetIgnoresSessionZone) {
+  setSessionTimezone("America/Los_Angeles");
+  auto input = varcharInput("2021-01-01 02:00:00 -0930");
+  assertMatchesCpu(
+      "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
+  assertMatchesCpu(
+      "to_unixtime(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
+}
+
+// With no zone token the wall clock belongs to the session zone, and the result
+// carries that zone -- the same rule from_iso8601_timestamp already follows for
+// an offsetless string.
+TEST_F(TimezoneFunctionTest, parseDatetimeOffsetlessUsesSessionZone) {
+  setSessionTimezone("America/Los_Angeles");
+  auto input = varcharInput("2021-01-01 02:00:00");
+  assertMatchesCpu(
+      "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss'))", input);
+  assertMatchesCpu(
+      "to_unixtime(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss'))", input);
+}
+
+// The session-zone conversion inherits CPU's boundary rules from toGMT: a local
+// time in a spring-forward gap has no instant and raises, and an ambiguous one
+// resolves to the earlier instant.
+TEST_F(TimezoneFunctionTest, parseDatetimeOffsetlessGapThrowsLikeCpu) {
+  setSessionTimezone("America/Los_Angeles");
+  auto input = varcharInput("2021-03-14 02:30:00");
+  auto exprSet = compileExpression(
+      "parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss')", asRowType(input->type()));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(evaluate(*exprSet, input));
+}
+
+TEST_F(TimezoneFunctionTest, parseDatetimeOffsetlessAmbiguousPicksEarliest) {
+  setSessionTimezone("Australia/Sydney");
+  auto input = varcharInput("2021-04-04 02:30:00");
+  assertMatchesCpu(
+      "to_unixtime(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss'))", input);
+}
+
 // Functions that produce a TIMESTAMP WITH TIME ZONE from plain inputs. The
 // inputs convert to cuDF fine; the function is the work the GPU must learn.
 

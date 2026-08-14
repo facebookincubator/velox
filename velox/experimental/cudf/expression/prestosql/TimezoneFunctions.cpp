@@ -1427,14 +1427,6 @@ class ParseDatetimeFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto input = asView(inputColumns[0]);
-    // cuDF parses the wall clock as UTC. With no embedded zone the result is
-    // interpreted in the session timezone (GMT when unset), so the parsed
-    // value equals the UTC instant in the GMT case the tests exercise.
-    if (!context_.sessionTimezone.empty()) {
-      VELOX_NYI(
-          "parse_datetime on GPU with a non-UTC session timezone is not yet "
-          "supported");
-    }
     // to_timestamps is documented as undefined for input that does not match
     // the format: it reads whatever digits sit at each field position and
     // computes a timestamp from them, so an out-of-range field rolls over
@@ -1483,8 +1475,39 @@ class ParseDatetimeFunction : public CudfFunction {
         mr);
     auto wallMillis = bitcastColumn(parsed->view(), kInt64);
     if (!hasOffset_) {
-      // No zone token: the parsed wall clock is the UTC instant already.
-      // pack(millis, GMT) == millis << 12.
+      // cuDF parses the wall clock as UTC, but with no zone token in the format
+      // the clock belongs to the session zone, and CPU packs that zone as the
+      // result's own (ParseDateTimeFunction::call falls back to the session
+      // zone and calls toGMT). toUtcTimestamp applies the same conversion, so a
+      // local time in a spring-forward gap raises and an ambiguous one resolves
+      // to the earlier instant.
+      //
+      // Unlike from_iso8601_timestamp, which decides per row because a zone
+      // suffix may or may not be present in each string, the split here is
+      // static: every row shares one format.
+      if (!context_.sessionTimezone.empty()) {
+        auto wallTimestamp =
+            bitcastColumn(wallMillis, cudf::type_id::TIMESTAMP_MILLISECONDS);
+        auto utcTimestamp =
+            toUtcTimestamp(wallTimestamp, context_.sessionTimezone, stream, mr);
+        auto utcMillis = bitcastColumn(utcTimestamp->view(), kInt64);
+        auto shifted = binaryOp(
+            utcMillis,
+            int64Scalar(kMillisShift, stream),
+            cudf::binary_operator::SHIFT_LEFT,
+            int64Type(),
+            stream,
+            mr);
+        return binaryOp(
+            shifted->view(),
+            int64Scalar(tz::getTimeZoneID(context_.sessionTimezone), stream),
+            cudf::binary_operator::BITWISE_OR,
+            int64Type(),
+            stream,
+            mr);
+      }
+      // No session zone: the parsed wall clock is the UTC instant already, and
+      // pack(millis, GMT) is millis << 12.
       return binaryOp(
           wallMillis,
           int64Scalar(kMillisShift, stream),
