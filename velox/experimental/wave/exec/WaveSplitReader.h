@@ -70,7 +70,7 @@ class WaveSplitReader {
   virtual void configureReaderOptions() {}
   virtual void prepareSplit(
       std::shared_ptr<common::MetadataFilter> metadataFilter,
-      dwio::common::RuntimeStatistics& runtimeStats) {}
+      dwio::common::RuntimeStats& runtimeStats) {}
 
   static void registerFactory(std::unique_ptr<WaveSplitReaderFactory> factory);
 

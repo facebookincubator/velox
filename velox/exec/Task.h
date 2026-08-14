@@ -1531,8 +1531,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // a path that will be into spillDirectory_
   std::function<std::string()> spillDirectoryCallback_;
 
-  // Mutex to ensure only the first caller thread of 'getOrCreateSpillDirectory'
-  // creates the directory.
+  // Serializes spill directory creation and removal.
   mutable std::mutex spillDirCreateMutex_;
 
   // Indicates whether the spill directory has been created.

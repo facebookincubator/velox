@@ -38,6 +38,14 @@ class ColumnChunkMetaDataPtr {
   /// Check the presence of the dictionary page offset in ColumnChunk metadata.
   bool hasDictionaryPageOffset() const;
 
+  /// Check the presence of the column index (per-page min/max/null-count
+  /// statistics) for this column chunk.
+  bool hasColumnIndex() const;
+
+  /// Check the presence of the offset index (per-page byte offsets and row
+  /// ranges) for this column chunk.
+  bool hasOffsetIndex() const;
+
   /// Return the ColumnChunk statistics. Timestamp columns require
   /// convertedType and logicalType to produce min/max statistics.
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(

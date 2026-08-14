@@ -42,7 +42,8 @@ block()
   set(LIBXML2_WITH_PROGRAMS OFF)
   set(LIBXML2_WITH_TESTS OFF)
   # Without iconv/ICU the bundled build only handles the built-in UTF-8/ASCII/
-  # Latin-1 encodings; this is sufficient for Gluten, whose XML inputs are UTF-8.
+  # Latin-1 encodings. This is sufficient because Spark's XPath functions
+  # operate on StringType, which is always UTF-8 encoded.
   set(LIBXML2_WITH_ICONV OFF)
   set(LIBXML2_WITH_ICU OFF)
   set(LIBXML2_WITH_LZMA OFF)
