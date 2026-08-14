@@ -25,16 +25,6 @@
 
 namespace facebook::velox {
 
-namespace {
-// Transient HDFS read failures (DataNode hiccups, dropped connections) surface
-// as a negative return from libhdfs3's hdfsRead. Retry a bounded number of
-// times with exponential backoff before giving up, instead of failing the whole
-// Spark task (and therefore the whole query) on the first transient error.
-// Allows up to 4 total read attempts: one initial attempt and 3 retries.
-constexpr int kMaxReadRetries = 3;
-constexpr int kReadRetryBaseDelayMs = 200;
-} // namespace
-
 struct HdfsFile {
   filesystems::arrow::io::internal::LibHdfsShim* driver_;
   hdfsFS client_;
@@ -112,8 +102,14 @@ class HdfsReadFile::Impl {
   Impl(
       filesystems::arrow::io::internal::LibHdfsShim* driver,
       hdfsFS hdfs,
-      const std::string_view path)
-      : driver_(driver), hdfsClient_(hdfs), filePath_(path) {
+      const std::string_view path,
+      int maxReadAttempts,
+      int retryBaseDelayMs)
+      : driver_(driver),
+        hdfsClient_(hdfs),
+        filePath_(path),
+        maxReadAttempts_(maxReadAttempts),
+        retryBaseDelayMs_(retryBaseDelayMs) {
     fileInfo_ = driver_->GetPathInfo(hdfsClient_, filePath_.data());
     if (fileInfo_ == nullptr) {
       auto error = fmt::format(
@@ -143,7 +139,9 @@ class HdfsReadFile::Impl {
     }
     file_->seek(offset);
     uint64_t totalBytesRead = 0;
-    int retries = 0;
+    // attempt counts the read attempts for this pread. maxReadAttempts_ == 1
+    // means fail-fast with no retries; the budget spans the whole pread.
+    int attempt = 1;
     while (totalBytesRead < length) {
       auto bytesRead = file_->read(pos, length - totalBytesRead);
       // checkFileReadParameters guarantees offset + length stays within the
@@ -154,23 +152,23 @@ class HdfsReadFile::Impl {
       // case out would spin this loop forever.
       if (bytesRead <= 0) {
         VELOX_CHECK_LT(
-            retries,
-            kMaxReadRetries,
-            "Read failure in HDFSReadFile::preadInternal after {} retries, "
+            attempt,
+            maxReadAttempts_,
+            "Read failure in HDFSReadFile::preadInternal after {} attempts, "
             "file: {}, offset: {}, length: {}, root cause: {}",
-            kMaxReadRetries,
+            maxReadAttempts_,
             filePath_,
             offset,
             length,
             driver_->GetLastExceptionRootCause());
-        ++retries;
         LOG(WARNING) << "Transient HDFS read failure on " << filePath_
-                     << " (offset=" << offset + totalBytesRead << ", retry "
-                     << retries << "/" << kMaxReadRetries << "), root cause: "
+                     << " (offset=" << offset + totalBytesRead << ", attempt "
+                     << attempt << "/" << maxReadAttempts_ << "), root cause: "
                      << driver_->GetLastExceptionRootCause();
         std::this_thread::sleep_for(
             std::chrono::milliseconds(
-                kReadRetryBaseDelayMs * (1 << (retries - 1))));
+                retryBaseDelayMs_ * (1 << (attempt - 1))));
+        ++attempt;
         // Rebuild the handle and reposition to the first unread byte; already
         // read bytes are kept.
         file_->reopen(filePath_);
@@ -232,14 +230,24 @@ class HdfsReadFile::Impl {
   hdfsFS hdfsClient_;
   std::string filePath_;
   hdfsFileInfo* fileInfo_;
+  const int maxReadAttempts_;
+  const int retryBaseDelayMs_;
   folly::ThreadLocal<HdfsFile> file_;
 };
 
 HdfsReadFile::HdfsReadFile(
     filesystems::arrow::io::internal::LibHdfsShim* driver,
     hdfsFS hdfs,
-    const std::string_view path)
-    : pImpl(std::make_unique<Impl>(driver, hdfs, path)) {}
+    const std::string_view path,
+    int maxReadAttempts,
+    int retryBaseDelayMs)
+    : pImpl(
+          std::make_unique<Impl>(
+              driver,
+              hdfs,
+              path,
+              maxReadAttempts,
+              retryBaseDelayMs)) {}
 
 HdfsReadFile::~HdfsReadFile() = default;
 

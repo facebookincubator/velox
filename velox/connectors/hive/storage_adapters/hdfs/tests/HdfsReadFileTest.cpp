@@ -32,6 +32,10 @@
 // below and drive Read() to fail a fixed number of times before succeeding --
 // something a real MiniCluster (which can only be up or down) cannot do
 // reproducibly.
+//
+// Retries are opt-in via the maxReadAttempts constructor argument. The tests
+// that exercise the retry loop pass a small non-default value; a fast base
+// delay (kTestRetryDelayMs) keeps the backoff sleeps negligible.
 
 namespace facebook::velox {
 namespace {
@@ -42,6 +46,9 @@ using filesystems::arrow::io::internal::LibHdfsShim;
 // any non-null value works.
 hdfsFS kFakeFs = reinterpret_cast<hdfsFS>(0x1);
 hdfsFile kFakeHandle = reinterpret_cast<hdfsFile>(0x2);
+
+// Small backoff base so the retry tests don't actually sleep for long.
+constexpr int kTestRetryDelayMs = 1;
 
 // libhdfs3 uses C function pointers, which cannot capture state, so the stub
 // behaviour is driven through translation-unit-local variables. The fixture
@@ -110,6 +117,19 @@ class HdfsReadFileRetryTest : public testing::Test {
   LibHdfsShim shim_;
 };
 
+// With retries disabled (maxReadAttempts == 1, the default), the very first
+// transient failure throws immediately and Read() is attempted exactly once.
+// This pins "default == original fail-fast behavior" as a regression guard: the
+// PR is a no-op unless a caller explicitly opts in.
+TEST_F(HdfsReadFileRetryTest, failFastByDefault) {
+  gFailCount = 1;
+  gFailReturn = -1;
+
+  HdfsReadFile readFile(&shim_, kFakeFs, "/mock");
+  VELOX_ASSERT_THROW(readFile.pread(0, gFileSize), "after 1 attempts");
+  EXPECT_EQ(gReadCalls, 1);
+}
+
 // Two transient errors, then success: the read recovers and returns the full
 // payload. Exactly three Read() calls (2 failed + 1 success) confirms the retry
 // loop re-issued the read rather than giving up or double-counting.
@@ -117,7 +137,8 @@ TEST_F(HdfsReadFileRetryTest, recoversAfterTransientNegativeFailures) {
   gFailCount = 2;
   gFailReturn = -1;
 
-  HdfsReadFile readFile(&shim_, kFakeFs, "/mock");
+  HdfsReadFile readFile(
+      &shim_, kFakeFs, "/mock", /*maxReadAttempts=*/4, kTestRetryDelayMs);
   const auto data = readFile.pread(0, gFileSize);
 
   EXPECT_EQ(data, std::string(gFileSize, 'x'));
@@ -131,27 +152,30 @@ TEST_F(HdfsReadFileRetryTest, retriesOnZeroReturn) {
   gFailCount = 2;
   gFailReturn = 0;
 
-  HdfsReadFile readFile(&shim_, kFakeFs, "/mock");
+  HdfsReadFile readFile(
+      &shim_, kFakeFs, "/mock", /*maxReadAttempts=*/4, kTestRetryDelayMs);
   const auto data = readFile.pread(0, gFileSize);
 
   EXPECT_EQ(data, std::string(gFileSize, 'x'));
   EXPECT_EQ(gReadCalls, 3);
 }
 
-// A persistent failure throws after the retry budget is exhausted. The retry
-// budget is kMaxReadRetries (3), so Read() is attempted 4 times in total (1
-// initial + 3 retries) before the final throw, and the message reports it.
+// A persistent failure throws after the retry budget is exhausted. With
+// maxReadAttempts == 4, Read() is attempted 4 times in total (1 initial + 3
+// retries) before the final throw, and the message reports it.
 TEST_F(HdfsReadFileRetryTest, throwsAfterExhaustion) {
   gFailCount = 1000; // always fails
   gFailReturn = -1;
 
-  HdfsReadFile readFile(&shim_, kFakeFs, "/mock");
-  VELOX_ASSERT_THROW(readFile.pread(0, gFileSize), "after 3 retries");
+  HdfsReadFile readFile(
+      &shim_, kFakeFs, "/mock", /*maxReadAttempts=*/4, kTestRetryDelayMs);
+  VELOX_ASSERT_THROW(readFile.pread(0, gFileSize), "after 4 attempts");
   EXPECT_EQ(gReadCalls, 4);
 }
 
 // A successful but short read is not a failure: preadInternal must keep the
 // bytes and loop until the request is filled, without consuming any retries.
+// maxReadAttempts == 1 proves short reads never touch the retry budget.
 TEST_F(HdfsReadFileRetryTest, shortReadsAccumulateWithoutRetry) {
   gFailCount = 0;
   gMaxChunk = 256; // 1024 / 256 = 4 short reads
