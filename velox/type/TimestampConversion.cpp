@@ -639,9 +639,8 @@ bool tryParseTimestampString(
   parseTimeSeparator(buf, pos, parseMode);
 
   // In Spark cast mode, a 'T' separator must be followed immediately by the
-  // time component. Preserve the existing space-separator behavior; this
-  // change is scoped specifically to 'T'. Known space-path divergences are
-  // tracked separately.
+  // time component. Space-separator behavior is outside the scope of this
+  // change.
   if (parseMode == TimestampParseMode::kSparkCast && pos > preSeparatorPos &&
       buf[preSeparatorPos] == 'T' &&
       (pos >= len || !characterIsDigit(buf[pos]))) {
