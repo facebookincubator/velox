@@ -45,10 +45,4 @@ add_library(
   BitEncoder.h
 )
 
-target_link_libraries(
-  nimble_common
-  velox_common_base
-  velox_memory
-  velox_exception
-  Folly::folly
-)
+target_link_libraries(nimble_common velox_common_base velox_memory velox_exception Folly::folly)

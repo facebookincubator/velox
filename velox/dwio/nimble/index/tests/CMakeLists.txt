@@ -11,11 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(
-  nimble_index_test_utils
-  ClusterIndexTestUtils.cpp
-  ClusterIndexTestUtils.h
-)
+add_library(nimble_index_test_utils ClusterIndexTestUtils.cpp ClusterIndexTestUtils.h)
 target_link_libraries(
   nimble_index_test_utils
   nimble_index
@@ -27,11 +23,7 @@ target_link_libraries(
   Folly::folly
 )
 
-add_library(
-  nimble_index_test_base
-  ClusterIndexTestBase.cpp
-  ClusterIndexTestBase.h
-)
+add_library(nimble_index_test_base ClusterIndexTestBase.cpp ClusterIndexTestBase.h)
 target_link_libraries(
   nimble_index_test_base
   nimble_index

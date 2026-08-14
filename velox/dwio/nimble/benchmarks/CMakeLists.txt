@@ -15,9 +15,4 @@
 # Header-only helper shared by the per-directory benchmark binaries. It has no
 # sources of its own; the target exists so the header is owned by the build
 # graph rather than showing up as untracked.
-velox_add_library(
-  velox_dwio_nimble_benchmark_suite
-  INTERFACE
-  HEADERS
-  BenchmarkSuite.h
-)
+velox_add_library(velox_dwio_nimble_benchmark_suite INTERFACE HEADERS BenchmarkSuite.h)

@@ -24,10 +24,4 @@ add_library(
   Compression.h
 )
 
-target_link_libraries(
-  nimble_compression
-  nimble_common
-  Folly::folly
-  lz4
-  ${VELOX_OPENZL_LIBRARIES}
-)
+target_link_libraries(nimble_compression nimble_common Folly::folly lz4 ${VELOX_OPENZL_LIBRARIES})

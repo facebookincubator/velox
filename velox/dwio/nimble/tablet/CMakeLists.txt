@@ -172,11 +172,7 @@ target_link_libraries(
   Folly::folly
 )
 
-add_library(
-  nimble_data_input
-  DataInput.cpp
-  DataInput.h
-)
+add_library(nimble_data_input DataInput.cpp DataInput.h)
 target_link_libraries(
   nimble_data_input
   nimble_common
@@ -206,19 +202,10 @@ target_link_libraries(
     nimble_hash_index_fb
 )
 
-add_library(
-  nimble_tablet_reader_cache
-  TabletReaderCache.cpp
-  TabletReaderCache.h
-)
+add_library(nimble_tablet_reader_cache TabletReaderCache.cpp TabletReaderCache.h)
 target_link_libraries(
   nimble_tablet_reader_cache
-  PUBLIC
-    nimble_tablet_reader
-    nimble_velox_schema_reader
-    velox_caching
-    velox_memory
-    velox_type
+  PUBLIC nimble_tablet_reader nimble_velox_schema_reader velox_caching velox_memory velox_type
   PRIVATE
     nimble_common
     nimble_velox_common

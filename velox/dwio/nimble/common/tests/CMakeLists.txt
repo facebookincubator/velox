@@ -11,18 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(
-  nimble_common_file_writer
-  NimbleFileWriter.cpp
-  NimbleFileWriter.h
-)
+add_library(nimble_common_file_writer NimbleFileWriter.cpp NimbleFileWriter.h)
 
-target_link_libraries(
-  nimble_common_file_writer
-  nimble_common
-  nimble_writer
-  velox_vector
-)
+target_link_libraries(nimble_common_file_writer nimble_common nimble_writer velox_vector)
 
 add_executable(
   nimble_common_tests

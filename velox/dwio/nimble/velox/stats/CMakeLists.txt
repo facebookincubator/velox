@@ -19,18 +19,9 @@ add_library(
   ColumnStatistics.h
   VectorizedStatistics.h
 )
-target_link_libraries(
-  nimble_column_stats
-  nimble_common
-  nimble_encodings
-  velox_dwio_common
-)
+target_link_libraries(nimble_column_stats nimble_common nimble_encodings velox_dwio_common)
 
-add_library(
-  nimble_column_stats_utils
-  ColumnStatsUtils.cpp
-  ColumnStatsUtils.h
-)
+add_library(nimble_column_stats_utils ColumnStatsUtils.cpp ColumnStatsUtils.h)
 target_link_libraries(
   nimble_column_stats_utils
   nimble_velox_schema

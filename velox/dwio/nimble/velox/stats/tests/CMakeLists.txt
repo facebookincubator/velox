@@ -13,10 +13,5 @@
 # limitations under the License.
 
 add_executable(nimble_column_stats_tests ColumnStatisticsTests.cpp)
-target_link_libraries(
-  nimble_column_stats_tests
-  nimble_column_stats
-  gtest
-  gtest_main
-)
+target_link_libraries(nimble_column_stats_tests nimble_column_stats gtest gtest_main)
 add_test(nimble_column_stats_tests nimble_column_stats_tests)

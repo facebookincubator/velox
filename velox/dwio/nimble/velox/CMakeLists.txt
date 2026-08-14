@@ -11,43 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(
-  nimble_velox_common
-  SchemaUtils.cpp
-  SchemaUtils.h
-)
-target_link_libraries(
-  nimble_velox_common
-  nimble_common
-  velox_type
-  Folly::folly
-  fmt::fmt
-)
+add_library(nimble_velox_common SchemaUtils.cpp SchemaUtils.h)
+target_link_libraries(nimble_velox_common nimble_common velox_type Folly::folly fmt::fmt)
 
-add_library(
-  nimble_velox_schema
-  SchemaTypes.cpp
-  SchemaTypes.h
-)
+add_library(nimble_velox_schema SchemaTypes.cpp SchemaTypes.h)
 target_link_libraries(nimble_velox_schema nimble_common Folly::folly)
 
-add_library(
-  nimble_velox_schema_reader
-  SchemaReader.cpp
-  SchemaReader.h
-)
-target_link_libraries(
-  nimble_velox_schema_reader
-  nimble_velox_schema
-  nimble_common
-  Folly::folly
-)
+add_library(nimble_velox_schema_reader SchemaReader.cpp SchemaReader.h)
+target_link_libraries(nimble_velox_schema_reader nimble_velox_schema nimble_common Folly::folly)
 
-add_library(
-  nimble_velox_schema_builder
-  SchemaBuilder.cpp
-  SchemaBuilder.h
-)
+add_library(nimble_velox_schema_builder SchemaBuilder.cpp SchemaBuilder.h)
 target_link_libraries(
   nimble_velox_schema_builder
   nimble_velox_schema_reader
@@ -56,22 +29,10 @@ target_link_libraries(
   Folly::folly
 )
 
-add_library(
-  nimble_velox_stream_data
-  StreamData.cpp
-  StreamData.h
-)
-target_link_libraries(
-  nimble_velox_stream_data
-  nimble_velox_schema_builder
-  nimble_common
-)
+add_library(nimble_velox_stream_data StreamData.cpp StreamData.h)
+target_link_libraries(nimble_velox_stream_data nimble_velox_schema_builder nimble_common)
 
-add_library(
-  nimble_velox_field_reader
-  FieldReader.cpp
-  FieldReader.h
-)
+add_library(nimble_velox_field_reader FieldReader.cpp FieldReader.h)
 target_link_libraries(
   nimble_velox_field_reader
   nimble_encodings_legacy
@@ -82,16 +43,8 @@ target_link_libraries(
   protobuf::libprotobuf
 )
 
-add_library(
-  nimble_velox_layout_planner
-  LayoutPlanner.cpp
-  LayoutPlanner.h
-)
-target_link_libraries(
-  nimble_velox_layout_planner
-  nimble_velox_schema_reader
-  nimble_tablet_writer
-)
+add_library(nimble_velox_layout_planner LayoutPlanner.cpp LayoutPlanner.h)
+target_link_libraries(nimble_velox_layout_planner nimble_velox_schema_reader nimble_tablet_writer)
 
 add_library(
   nimble_velox_field_writer
@@ -174,11 +127,7 @@ target_include_directories(
 )
 add_dependencies(nimble_velox_stats_fb nimble_velox_stats_schema_fb)
 
-add_library(
-  nimble_velox_schema_serialization
-  SchemaSerialization.cpp
-  SchemaSerialization.h
-)
+add_library(nimble_velox_schema_serialization SchemaSerialization.cpp SchemaSerialization.h)
 target_link_libraries(
   nimble_velox_schema_serialization
   nimble_velox_schema_reader
@@ -219,12 +168,7 @@ add_library(
   DecodedVectorManager.h
   RawSizeUtils.h
 )
-target_link_libraries(
-  raw_size_utils
-  nimble_common
-  velox_vector
-  velox_dwio_common
-)
+target_link_libraries(raw_size_utils nimble_common velox_vector velox_dwio_common)
 
 add_subdirectory(index)
 add_subdirectory(selective)

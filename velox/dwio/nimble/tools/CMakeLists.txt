@@ -11,24 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(
-  nimble_tools_common
-  EncodingUtilities.cpp
-  EncodingUtilities.h
-)
+add_library(nimble_tools_common EncodingUtilities.cpp EncodingUtilities.h)
 
-target_link_libraries(
-  nimble_tools_common
-  nimble_common
-  nimble_tablet_reader
-  nimble_column_stats
-)
+target_link_libraries(nimble_tools_common nimble_common nimble_tablet_reader nimble_column_stats)
 
-add_library(
-  nimble_dump_lib
-  NimbleDumpLib.cpp
-  NimbleDumpLib.h
-)
+add_library(nimble_dump_lib NimbleDumpLib.cpp NimbleDumpLib.h)
 target_link_libraries(
   nimble_dump_lib
   nimble_tools_common
@@ -43,11 +30,7 @@ target_link_libraries(
   Folly::folly
 )
 
-add_library(
-  nimble_serializer_dump_lib
-  SerializerDumpLib.cpp
-  SerializerDumpLib.h
-)
+add_library(nimble_serializer_dump_lib SerializerDumpLib.cpp SerializerDumpLib.h)
 target_link_libraries(
   nimble_serializer_dump_lib
   nimble_common
@@ -57,13 +40,7 @@ target_link_libraries(
   Folly::folly
 )
 
-add_library(
-  nimble_dsl_lib
-  NimbleDslLib.cpp
-  NimbleDslVm.cpp
-  NimbleDslLib.h
-  NimbleDslVm.h
-)
+add_library(nimble_dsl_lib NimbleDslLib.cpp NimbleDslVm.cpp NimbleDslLib.h NimbleDslVm.h)
 target_link_libraries(
   nimble_dsl_lib
   nimble_dump_lib

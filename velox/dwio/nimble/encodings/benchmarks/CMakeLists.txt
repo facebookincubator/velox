@@ -27,10 +27,7 @@ target_link_libraries(
   velox_memory
 )
 
-add_executable(
-  nimble_block_bit_packing_encoding_benchmark
-  BlockBitPackingEncodingBenchmark.cpp
-)
+add_executable(nimble_block_bit_packing_encoding_benchmark BlockBitPackingEncodingBenchmark.cpp)
 
 target_link_libraries(
   nimble_block_bit_packing_encoding_benchmark
@@ -42,10 +39,7 @@ target_link_libraries(
   velox_memory
 )
 
-add_executable(
-  nimble_exact_bit_width_storage_benchmark
-  ExactBitWidthStorageBenchmark.cpp
-)
+add_executable(nimble_exact_bit_width_storage_benchmark ExactBitWidthStorageBenchmark.cpp)
 
 target_link_libraries(
   nimble_exact_bit_width_storage_benchmark

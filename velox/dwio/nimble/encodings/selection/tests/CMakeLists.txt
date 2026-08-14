@@ -17,9 +17,4 @@ add_library(
   RandomEncodingSelectionPolicy.cpp
   RandomEncodingSelectionPolicy.h
 )
-target_link_libraries(
-  nimble_random_encoding_selection_policy
-  nimble_encodings
-  fsst
-  Folly::folly
-)
+target_link_libraries(nimble_random_encoding_selection_policy nimble_encodings fsst Folly::folly)
