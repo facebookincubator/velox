@@ -41,9 +41,11 @@ block()
   set(LIBXML2_WITH_PYTHON OFF)
   set(LIBXML2_WITH_PROGRAMS OFF)
   set(LIBXML2_WITH_TESTS OFF)
-  # Without iconv/ICU the bundled build only handles the built-in UTF-8/ASCII/
-  # Latin-1 encodings. This is sufficient because Spark's XPath functions
-  # operate on StringType, which is always UTF-8 encoded.
+  # iconv/ICU are only needed to transcode XML documents whose declared
+  # encoding differs from libxml2's built-in UTF-8/ASCII/Latin-1 support.
+  # Spark's XPath functions operate on StringType, whose values use the UTF-8
+  # charset, so no cross-charset transcoding is required. Documents declaring
+  # an unsupported encoding simply fail to parse, matching invalid-XML handling.
   set(LIBXML2_WITH_ICONV OFF)
   set(LIBXML2_WITH_ICU OFF)
   set(LIBXML2_WITH_LZMA OFF)
