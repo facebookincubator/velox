@@ -44,6 +44,7 @@ class CudfFilterProjectTest : public CudfFunctionBaseTest {
     functions::sparksql::registerFunctions("");
     functions::registerArrayConstructor("array_constructor");
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
     cudf_velox::registerSparkFunctions("");
   }
@@ -673,10 +674,9 @@ TEST_F(CudfFilterProjectTest, tryLikeInvalidEscapeUsage) {
                   .project({"try(like(c0, 'test_o', 'o')) AS c1"})
                   .planNode();
 
-  auto expected = makeRowVector({
-      makeNullableFlatVector<bool>({std::nullopt, std::nullopt, std::nullopt}),
-  });
-  AssertQueryBuilder(plan).assertResults(expected);
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Replacement with cuDF operator failed");
 }
 
 TEST_F(CudfFilterProjectTest, likeColumnPatternInvalidEscapeUsage) {

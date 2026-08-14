@@ -19,6 +19,7 @@
 
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/experimental/cudf/CudfConfig.h"
 
 // Forward-declare registerCudf/unregisterCudf to avoid pulling in ToCudf.h
 // which has namespace issues when included from a non-CUDA translation unit
@@ -36,6 +37,7 @@ CudfTpcdsQueryBuilder::CudfTpcdsQueryBuilder(
     : TpcdsQueryBuilder(format), ioExecutor_(ioExecutor) {}
 
 void CudfTpcdsQueryBuilder::enableCudf() {
+  CudfConfig::getInstance().allowCpuFallback = false;
   cudf_velox::registerCudf();
   cudfEnabled_ = true;
 }
