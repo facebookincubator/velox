@@ -401,6 +401,34 @@ Invalid examples
   SELECT cast(cast(100 as integer) as decimal(17, 16)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
   SELECT cast(cast(-100 as bigint) as decimal(17, 16)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
 
+From decimal types
+^^^^^^^^^^^^^^^^^
+
+*(ANSI compliant)*
+
+Casting a decimal value to a decimal of a different precision and scale is
+allowed.
+
+When ANSI mode is enabled, casting a value that overflows the target precision
+and scale throws an error. Otherwise, such casts return NULL.
+
+Valid examples
+
+::
+
+  SELECT cast(cast(-0.03 as decimal(2, 2)) as decimal(4, 4)); -- -0.0300
+  SELECT cast(cast(1.05 as decimal(20, 2)) as decimal(10, 5)); -- 1.05000
+  SELECT cast(cast(55.00 as decimal(6, 2)) as decimal(20, 10)); -- 55.0000000000
+  SELECT cast(cast(1.2345 as decimal(6, 4)) as decimal(20, 1)); -- 1.2
+
+Invalid examples
+
+::
+
+  SELECT cast(cast(-1000.000 as decimal(20, 3)) as decimal(6, 4)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
+  SELECT cast(cast(99999999999999999999999999999999999999 as decimal(38, 0)) as decimal(38, 1)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
+  SELECT cast(cast(-99999999999999999999999999999999999999 as decimal(38, 0)) as decimal(38, 1)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
+
 From floating-point types
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 

@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/TrackedExecutor.h"
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 
 #include <folly/BenchmarkUtil.h>
 #include <folly/executors/InlineExecutor.h>
@@ -22,7 +23,6 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
-#include <map>
 #include <stdexcept>
 #include <string>
 
@@ -30,30 +30,6 @@
 
 namespace facebook::velox {
 namespace {
-
-// Captures the metrics that TrackedExecutor::reportTo writes so the test can
-// inspect them by name.
-class MapStatWriter : public BaseRuntimeStatWriter {
- public:
-  void setRuntimeStat(std::string_view name, const RuntimeMetric& metric)
-      override {
-    metrics_.insert_or_assign(std::string{name}, metric);
-  }
-
-  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
-      override {
-    auto [it, inserted] =
-        metrics_.try_emplace(std::string{name}, RuntimeMetric(value.unit));
-    it->second.addValue(value.value);
-  }
-
-  const std::map<std::string, RuntimeMetric>& metrics() const {
-    return metrics_;
-  }
-
- private:
-  std::map<std::string, RuntimeMetric> metrics_;
-};
 
 class TrackedExecutorTest : public testing::Test {};
 
@@ -74,9 +50,9 @@ TEST_F(TrackedExecutorTest, reportsPerCallbackMetricsUnderPrefix) {
     });
   }
 
-  MapStatWriter writer;
+  ConcurrentRuntimeStatWriter writer;
   tracked.reportTo(writer, "myOp");
-  const auto& metrics = writer.metrics();
+  const auto metrics = writer.runtimeStats();
 
   ASSERT_THAT(
       metrics,
@@ -117,9 +93,9 @@ TEST_F(TrackedExecutorTest, keepsMetricCountsAlignedWhenCallbackThrows) {
       }),
       std::runtime_error);
 
-  MapStatWriter writer;
+  ConcurrentRuntimeStatWriter writer;
   tracked.reportTo(writer, "op");
-  const auto& metrics = writer.metrics();
+  const auto metrics = writer.runtimeStats();
 
   EXPECT_EQ(metrics.at("op-executorWaitNanos").count, 1);
   EXPECT_EQ(metrics.at("op-executorExecutionWallNanos").count, 1);
