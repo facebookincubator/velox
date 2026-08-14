@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -25,10 +26,58 @@
 
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/file/Region.h"
+#include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/RowIntervalSet.h"
 #include "velox/dwio/parquet/common/PageIndex.h"
 
 namespace facebook::velox::parquet {
+
+namespace detail {
+
+struct PagePlanMemoryBudgetState {
+  memory::MemoryPool* pool{nullptr};
+  uint64_t maxBytes{0};
+  std::atomic<uint64_t> usedBytes{0};
+};
+
+} // namespace detail
+
+/// Releases a decoded page-index reservation with the final plan reference.
+class PagePlanMemoryReservation {
+ public:
+  PagePlanMemoryReservation(
+      std::shared_ptr<detail::PagePlanMemoryBudgetState> state,
+      uint64_t bytes)
+      : state_(std::move(state)), bytes_(bytes) {}
+
+  PagePlanMemoryReservation(const PagePlanMemoryReservation&) = delete;
+  PagePlanMemoryReservation& operator=(const PagePlanMemoryReservation&) =
+      delete;
+  PagePlanMemoryReservation(PagePlanMemoryReservation&&) = delete;
+  PagePlanMemoryReservation& operator=(PagePlanMemoryReservation&&) = delete;
+
+  ~PagePlanMemoryReservation();
+
+ private:
+  const std::shared_ptr<detail::PagePlanMemoryBudgetState> state_;
+  const uint64_t bytes_;
+};
+
+/// Tracks decoded page-index memory shared by all plans in one row reader.
+class PagePlanMemoryBudget {
+ public:
+  PagePlanMemoryBudget(memory::MemoryPool& pool, uint64_t maxBytes);
+
+  uint64_t usedBytes() const;
+
+  bool canReserve(uint64_t bytes) const;
+
+  /// Reserves memory or returns null when the aggregate limit is exceeded.
+  std::shared_ptr<PagePlanMemoryReservation> tryReserve(uint64_t bytes);
+
+ private:
+  const std::shared_ptr<detail::PagePlanMemoryBudgetState> state_;
+};
 
 /// Describes one data page in an immutable row-group read plan.
 struct PageDataSpan {
@@ -88,6 +137,8 @@ struct RowGroupPagePruningPlan {
   dwio::common::RowIntervalSet retainedRows;
   folly::F14FastMap<uint32_t, ColumnPageReadPlan> columns;
   PagePruningStats stats;
+  uint64_t decodedPageIndexBytes{0};
+  std::shared_ptr<PagePlanMemoryReservation> decodedPageIndexMemory;
   uint64_t filterGeneration{0};
 };
 
@@ -117,6 +168,8 @@ RowGroupPagePruningPlanPtr buildRowGroupPagePruningPlan(
     const folly::F14FastMap<uint32_t, uint64_t>& indexBytes,
     bool preloaded = false,
     uint64_t filterGeneration = 0,
-    PagePruningCostModelOptions costModel = {});
+    PagePruningCostModelOptions costModel = {},
+    uint64_t decodedPageIndexBytes = 0,
+    std::shared_ptr<PagePlanMemoryBudget> memoryBudget = nullptr);
 
 } // namespace facebook::velox::parquet

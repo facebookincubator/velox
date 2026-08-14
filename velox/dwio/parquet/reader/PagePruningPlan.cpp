@@ -18,6 +18,8 @@
 
 #include <algorithm>
 
+#include <folly/ScopeGuard.h>
+
 namespace {
 
 using facebook::velox::common::Region;
@@ -86,6 +88,63 @@ PhysicalReadEstimate estimatePhysicalReads(
 } // namespace
 
 namespace facebook::velox::parquet {
+
+PagePlanMemoryReservation::~PagePlanMemoryReservation() {
+  if (bytes_ == 0) {
+    return;
+  }
+  state_->usedBytes.fetch_sub(bytes_, std::memory_order_relaxed);
+  state_->pool->reportExternalFree(bytes_);
+}
+
+PagePlanMemoryBudget::PagePlanMemoryBudget(
+    memory::MemoryPool& pool,
+    uint64_t maxBytes)
+    : state_(std::make_shared<detail::PagePlanMemoryBudgetState>()) {
+  state_->pool = &pool;
+  state_->maxBytes = maxBytes;
+}
+
+uint64_t PagePlanMemoryBudget::usedBytes() const {
+  return state_->usedBytes.load(std::memory_order_relaxed);
+}
+
+bool PagePlanMemoryBudget::canReserve(uint64_t bytes) const {
+  return bytes <= state_->maxBytes && usedBytes() <= state_->maxBytes - bytes;
+}
+
+std::shared_ptr<PagePlanMemoryReservation> PagePlanMemoryBudget::tryReserve(
+    uint64_t bytes) {
+  auto current = state_->usedBytes.load(std::memory_order_relaxed);
+  for (;;) {
+    if (bytes > state_->maxBytes || current > state_->maxBytes - bytes) {
+      return nullptr;
+    }
+    if (state_->usedBytes.compare_exchange_weak(
+            current,
+            current + bytes,
+            std::memory_order_relaxed,
+            std::memory_order_relaxed)) {
+      bool poolAllocationReported{false};
+      auto rollback = folly::makeGuard([&] {
+        if (bytes > 0) {
+          state_->usedBytes.fetch_sub(bytes, std::memory_order_relaxed);
+          if (poolAllocationReported) {
+            state_->pool->reportExternalFree(bytes);
+          }
+        }
+      });
+      if (bytes > 0) {
+        state_->pool->reportExternalAllocation(bytes);
+        poolAllocationReported = true;
+      }
+      auto reservation =
+          std::make_shared<PagePlanMemoryReservation>(state_, bytes);
+      rollback.dismiss();
+      return reservation;
+    }
+  }
+}
 
 ColumnPageReadPlan buildColumnPageReadPlan(
     uint32_t column,
@@ -185,9 +244,16 @@ RowGroupPagePruningPlanPtr buildRowGroupPagePruningPlan(
     const folly::F14FastMap<uint32_t, uint64_t>& indexBytes,
     bool preloaded,
     uint64_t filterGeneration,
-    PagePruningCostModelOptions costModel) {
+    PagePruningCostModelOptions costModel,
+    uint64_t decodedPageIndexBytes,
+    std::shared_ptr<PagePlanMemoryBudget> memoryBudget) {
   auto result = std::make_shared<RowGroupPagePruningPlan>();
   result->rowGroup = rowGroup;
+  result->decodedPageIndexBytes = decodedPageIndexBytes;
+  if (memoryBudget) {
+    result->decodedPageIndexMemory =
+        memoryBudget->tryReserve(decodedPageIndexBytes);
+  }
   result->retainedRows = retainedRows;
   result->filterGeneration = filterGeneration;
 

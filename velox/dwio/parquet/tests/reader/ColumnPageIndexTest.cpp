@@ -15,9 +15,13 @@
  */
 
 #include <cstring>
+#include <type_traits>
+#include <unordered_map>
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/RowIntervalSet.h"
 #include "velox/dwio/parquet/common/PageIndex.h"
 #include "velox/dwio/parquet/reader/PagePruningPlan.h"
@@ -340,4 +344,76 @@ TEST(PagePruningPlanTest, representsAllPagesRejectedExplicitly) {
   EXPECT_FALSE(column.useWholeChunkStream);
   EXPECT_EQ(column.retainedRuns.size(), 0);
   EXPECT_EQ(column.dataPageToRun, (std::vector<int32_t>{-1, -1}));
+}
+
+TEST(PagePlanMemoryBudgetTest, enforcesLimitAndSharedLifetime) {
+  MemoryManager manager(MemoryManager::Options{});
+  auto root = manager.addRootPool("pagePlanBudget");
+  auto pool = root->addLeafChild("pagePlanBudget");
+  const auto initialUsage = pool->usedBytes();
+  PagePlanMemoryBudget budget(*pool, 100);
+
+  auto first = budget.tryReserve(60);
+  ASSERT_NE(first, nullptr);
+  EXPECT_EQ(budget.usedBytes(), 60);
+  auto atLimit = budget.tryReserve(40);
+  ASSERT_NE(atLimit, nullptr);
+  EXPECT_EQ(budget.usedBytes(), 100);
+  EXPECT_FALSE(budget.tryReserve(1));
+
+  auto second = first;
+  first.reset();
+  EXPECT_EQ(budget.usedBytes(), 100);
+  atLimit.reset();
+  EXPECT_EQ(budget.usedBytes(), 60);
+  second.reset();
+  EXPECT_EQ(budget.usedBytes(), 0);
+  EXPECT_EQ(pool->usedBytes(), initialUsage);
+}
+
+TEST(PagePlanMemoryBudgetTest, releasesAfterPlanReferenceAndMapEviction) {
+  MemoryManager manager(MemoryManager::Options{});
+  auto root = manager.addRootPool("pagePlanEviction");
+  auto pool = root->addLeafChild("pagePlanEviction");
+  const auto initialUsage = pool->usedBytes();
+  auto budget = std::make_shared<PagePlanMemoryBudget>(*pool, 100);
+  auto reservation = budget->tryReserve(60);
+  ASSERT_NE(reservation, nullptr);
+
+  auto plan = std::make_shared<RowGroupPagePruningPlan>();
+  plan->decodedPageIndexBytes = 60;
+  plan->decodedPageIndexMemory = reservation;
+  reservation.reset();
+  std::unordered_map<uint32_t, RowGroupPagePruningPlanPtr> plans;
+  plans.emplace(0, plan);
+  plans.erase(0);
+  EXPECT_EQ(budget->usedBytes(), 60);
+  plan.reset();
+  EXPECT_EQ(budget->usedBytes(), 0);
+  EXPECT_EQ(pool->usedBytes(), initialUsage);
+}
+
+TEST(PagePlanMemoryBudgetTest, poolFailureRollsBackCounters) {
+  MemoryManager::Options options;
+  options.allocatorCapacity = 64;
+  options.arbitratorCapacity = 64;
+  MemoryManager manager(options);
+  auto root = manager.addRootPool("pagePlanFailure", 64);
+  auto pool = root->addLeafChild("pagePlanFailure");
+  PagePlanMemoryBudget budget(*pool, 128);
+  const auto initialStats = pool->stats();
+
+  VELOX_ASSERT_THROW(budget.tryReserve(65), "Exceeded memory pool capacity");
+  EXPECT_EQ(budget.usedBytes(), 0);
+  EXPECT_EQ(pool->usedBytes(), 0);
+  const auto finalStats = pool->stats();
+  EXPECT_EQ(finalStats.numExternalAllocs, initialStats.numExternalAllocs);
+  EXPECT_EQ(finalStats.numExternalFrees, initialStats.numExternalFrees);
+}
+
+TEST(PagePlanMemoryBudgetTest, reservationIsNotCopyable) {
+  EXPECT_FALSE(std::is_copy_constructible_v<PagePlanMemoryReservation>);
+  EXPECT_FALSE(std::is_copy_assignable_v<PagePlanMemoryReservation>);
+  EXPECT_FALSE(std::is_move_constructible_v<PagePlanMemoryReservation>);
+  EXPECT_FALSE(std::is_move_assignable_v<PagePlanMemoryReservation>);
 }

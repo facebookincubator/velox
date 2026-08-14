@@ -608,9 +608,10 @@ TEST_F(ParquetReaderTest, nextReadSizeMatchesPageIndexChunk) {
   const auto rowType = ROW("_1", BIGINT());
   auto reader = createReader("column_index.parquet");
   auto scanSpec = makeScanSpec(rowType);
-  scanSpec->getOrCreateChild(Subfield("_1"))->setFilter(
-      std::make_unique<common::BigintRange>(
-          std::numeric_limits<int64_t>::min(), 19, false));
+  scanSpec->getOrCreateChild(Subfield("_1"))
+      ->setFilter(
+          std::make_unique<common::BigintRange>(
+              std::numeric_limits<int64_t>::min(), 19, false));
 
   auto rowReaderOptions = makeRowReaderOpts(rowType);
   rowReaderOptions.setScanSpec(scanSpec);
@@ -637,6 +638,8 @@ TEST_F(ParquetReaderTest, nestedNullableRowWithPageIndexFilter) {
   ParquetWriterOptions writerOptions;
   writerOptions.enableWritePageIndex = true;
   writerOptions.dataPageSize = 1;
+  writerOptions.batchSize = 1;
+  writerOptions.enableDictionary = false;
   auto* sink = write(data, writerOptions);
   const auto outputType = rowType;
   auto readerBundle = readerBuilder(*sink, outputType).build();
@@ -647,12 +650,20 @@ TEST_F(ParquetReaderTest, nestedNullableRowWithPageIndexFilter) {
   rowReaderOptions.setScanSpec(scanSpec);
   auto filteredReader = readerBundle.reader->createRowReader(rowReaderOptions);
   VectorPtr result;
-  EXPECT_EQ(filteredReader->next(100, result), 4);
-  ASSERT_NE(result, nullptr);
-  ASSERT_EQ(result->size(), 1);
-  const auto& resultRow = result->as<RowVector>();
-  EXPECT_EQ(resultRow->childAt(1)->as<FlatVector<int64_t>>()->valueAt(0), 100);
-  EXPECT_TRUE(resultRow->childAt(0)->isNullAt(0));
+  uint64_t scannedRows{0};
+  uint64_t outputRows{0};
+  while (auto scanned = filteredReader->next(100, result)) {
+    scannedRows += scanned;
+    outputRows += result->size();
+    if (result->size() == 1) {
+      const auto& resultRow = result->as<RowVector>();
+      EXPECT_EQ(
+          resultRow->childAt(1)->as<FlatVector<int64_t>>()->valueAt(0), 100);
+      EXPECT_TRUE(resultRow->childAt(0)->isNullAt(0));
+    }
+  }
+  EXPECT_EQ(scannedRows, 4);
+  EXPECT_EQ(outputRows, 1);
 
   dwio::common::RuntimeStatistics stats;
   filteredReader->updateRuntimeStats(stats);
@@ -673,12 +684,14 @@ TEST_F(ParquetReaderTest, resetFilterCachesRebuildsActivePagePlan) {
   ParquetWriterOptions writerOptions;
   writerOptions.enableWritePageIndex = true;
   writerOptions.dataPageSize = 1;
+  writerOptions.batchSize = 1;
+  writerOptions.enableDictionary = false;
   auto* sink = write(data, writerOptions);
   auto readerBundle = readerBuilder(*sink, rowType).build();
 
   auto scanSpec = makeScanSpec(rowType);
   scanSpec->getOrCreateChild(Subfield("id"))
-      ->setFilter(std::make_unique<BigintRange>(100, 100, false));
+      ->setFilter(std::make_unique<BigintRange>(0, 0, false));
   auto rowReaderOptions = makeRowReaderOpts(rowType);
   rowReaderOptions.setScanSpec(scanSpec);
   auto rowReader = readerBundle.reader->createRowReader(rowReaderOptions);
@@ -693,9 +706,14 @@ TEST_F(ParquetReaderTest, resetFilterCachesRebuildsActivePagePlan) {
   rowReader->resetFilterCaches();
 
   VectorPtr result;
-  EXPECT_EQ(rowReader->next(100, result), 3);
-  ASSERT_NE(result, nullptr);
-  EXPECT_EQ(result->size(), 3);
+  uint64_t scannedRows{0};
+  uint64_t outputRows{0};
+  while (auto scanned = rowReader->next(100, result)) {
+    scannedRows += scanned;
+    outputRows += result->size();
+  }
+  EXPECT_EQ(scannedRows, 3);
+  EXPECT_EQ(outputRows, 3);
 
   dwio::common::RuntimeStatistics stats;
   rowReader->updateRuntimeStats(stats);
@@ -706,8 +724,8 @@ TEST_F(ParquetReaderTest, pageIndexRejectedChunkPreservesRowNumberType) {
   const auto rowType = ROW("_1", BIGINT());
   auto reader = createReader("column_index.parquet");
   auto scanSpec = makeScanSpec(rowType);
-  scanSpec->getOrCreateChild(Subfield("_1"))->setFilter(
-      std::make_unique<common::BigintRange>(100, INT64_MAX, false));
+  scanSpec->getOrCreateChild(Subfield("_1"))
+      ->setFilter(std::make_unique<common::BigintRange>(100, INT64_MAX, false));
 
   auto rowReaderOptions = makeRowReaderOpts(rowType);
   rowReaderOptions.setScanSpec(scanSpec);
@@ -724,40 +742,40 @@ TEST_F(ParquetReaderTest, pageIndexRejectedChunkPreservesRowNumberType) {
   EXPECT_EQ(result->size(), 0);
   ASSERT_TRUE(result->type()->isRow());
   EXPECT_EQ(result->type()->size(), rowType->size() + 1);
-    EXPECT_EQ(
-            result->type()->childAt(rowType->size())->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(result->type()->childAt(rowType->size())->kind(), TypeKind::BIGINT);
 }
 
 TEST_F(ParquetReaderTest, pageIndexRuntimeStats) {
-    const auto rowType = ROW("_1", BIGINT());
-    auto reader = createReader("column_index.parquet");
-    auto scanSpec = makeScanSpec(rowType);
-    scanSpec->getOrCreateChild(Subfield("_1"))->setFilter(
-            std::make_unique<common::BigintRange>(
-                    std::numeric_limits<int64_t>::min(), 19, false));
+  const auto rowType = ROW("_1", BIGINT());
+  auto reader = createReader("column_index.parquet");
+  auto scanSpec = makeScanSpec(rowType);
+  scanSpec->getOrCreateChild(Subfield("_1"))
+      ->setFilter(
+          std::make_unique<common::BigintRange>(
+              std::numeric_limits<int64_t>::min(), 19, false));
 
-    auto rowReaderOptions = makeRowReaderOpts(rowType);
-    rowReaderOptions.setScanSpec(scanSpec);
-    auto rowReader = reader->createRowReader(rowReaderOptions);
-    VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
-    while (rowReader->next(1000, result) > 0) {
-    }
+  auto rowReaderOptions = makeRowReaderOpts(rowType);
+  rowReaderOptions.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+  VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+  while (rowReader->next(1000, result) > 0) {
+  }
 
-    dwio::common::RuntimeStatistics stats;
-    rowReader->updateRuntimeStats(stats);
-    EXPECT_GT(stats.pageIndexRowsRejected, 0);
-    EXPECT_GT(stats.pageIndexPagesSkipped, 0);
-    EXPECT_GT(stats.pageIndexPagesRetained, 0);
-    EXPECT_GT(stats.pageIndexBytesRead, 0);
-    EXPECT_GT(stats.pageIndexDataBytesPlanned, 0);
-    EXPECT_GT(stats.pageIndexDataBytesAvoided, 0);
-    EXPECT_GT(stats.pageIndexLogicalRuns, 0);
-    EXPECT_GT(stats.pageIndexParseTimeNs, 0);
-    EXPECT_GT(stats.pageIndexEvaluationTimeNs, 0);
+  dwio::common::RuntimeStatistics stats;
+  rowReader->updateRuntimeStats(stats);
+  EXPECT_GT(stats.pageIndexRowsRejected, 0);
+  EXPECT_GT(stats.pageIndexPagesSkipped, 0);
+  EXPECT_GT(stats.pageIndexPagesRetained, 0);
+  EXPECT_GT(stats.pageIndexBytesRead, 0);
+  EXPECT_GT(stats.pageIndexDataBytesPlanned, 0);
+  EXPECT_GT(stats.pageIndexDataBytesAvoided, 0);
+  EXPECT_GT(stats.pageIndexLogicalRuns, 0);
+  EXPECT_GT(stats.pageIndexParseTimeNs, 0);
+  EXPECT_GT(stats.pageIndexEvaluationTimeNs, 0);
 
-    const auto metrics = stats.toRuntimeMetricMap();
-    EXPECT_TRUE(metrics.count("pageIndexRowsRejected"));
-    EXPECT_TRUE(metrics.count("pageIndexDataBytesAvoided"));
+  const auto metrics = stats.toRuntimeMetricMap();
+  EXPECT_TRUE(metrics.count("pageIndexRowsRejected"));
+  EXPECT_TRUE(metrics.count("pageIndexDataBytesAvoided"));
 }
 
 TEST_F(ParquetReaderTest, parseReadAsLowerCase) {
@@ -2585,17 +2603,17 @@ TEST_F(ParquetReaderTest, simultaneousRowReadersRetainFooterMetadata) {
     RowReaderOptions rowReaderOpts;
     rowReaderOpts.setScanSpec(makeScanSpec(rowType));
     rowReaderOpts.range(0, secondRowGroupOffset);
-        auto firstRowReader = reader->createRowReader(rowReaderOpts);
+    auto firstRowReader = reader->createRowReader(rowReaderOpts);
 
-        auto secondRowReaderOpts = RowReaderOptions{};
-        secondRowReaderOpts.setScanSpec(makeScanSpec(rowType));
-        auto secondRowReader = reader->createRowReader(secondRowReaderOpts);
-        EXPECT_GT(leafPool_->usedBytes(), initialUsage);
+    auto secondRowReaderOpts = RowReaderOptions{};
+    secondRowReaderOpts.setScanSpec(makeScanSpec(rowType));
+    auto secondRowReader = reader->createRowReader(secondRowReaderOpts);
+    EXPECT_GT(leafPool_->usedBytes(), initialUsage);
 
-        VectorPtr firstResult = BaseVector::create(rowType, 0, leafPool_.get());
-        VectorPtr secondResult = BaseVector::create(rowType, 0, leafPool_.get());
-        EXPECT_GT(firstRowReader->next(1000, firstResult), 0);
-        EXPECT_GT(secondRowReader->next(1000, secondResult), 0);
+    VectorPtr firstResult = BaseVector::create(rowType, 0, leafPool_.get());
+    VectorPtr secondResult = BaseVector::create(rowType, 0, leafPool_.get());
+    EXPECT_GT(firstRowReader->next(1000, firstResult), 0);
+    EXPECT_GT(secondRowReader->next(1000, secondResult), 0);
   }
 
   EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
