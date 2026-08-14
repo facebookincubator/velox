@@ -97,6 +97,8 @@ class CudfGroupby : public CudfOperatorBase {
 
   void doNoMoreInput() override;
 
+  void doClose() override;
+
  private:
   CudfVectorPtr doGroupByAggregation(
       cudf::table_view tableView,
