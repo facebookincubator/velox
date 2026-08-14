@@ -106,6 +106,40 @@ bool constantArgIsNull(const core::TypedExprPtr& expr, int32_t index) {
   return constant->value().isNull();
 }
 
+// Reads a constant VARCHAR argument without a memory pool, returning nullopt
+// when it is absent, not a constant, not a VARCHAR, or null. constArgToString
+// cannot serve here: materialising a Variant-backed constant needs a pool, and
+// the predicate that decides whether an expression may run on the GPU is not
+// given one.
+std::optional<std::string> constantVarcharArg(
+    const core::TypedExprPtr& expr,
+    int32_t index) {
+  if (expr == nullptr || index >= static_cast<int32_t>(expr->inputs().size())) {
+    return std::nullopt;
+  }
+  const auto& input = expr->inputs()[index];
+  if (input == nullptr || !input->isConstantKind() ||
+      !input->type()->isVarchar()) {
+    return std::nullopt;
+  }
+  const auto* constant = input->asUnchecked<core::ConstantTypedExpr>();
+  if (constant->hasValueVector()) {
+    const auto& vector = constant->valueVector();
+    if (vector->isNullAt(0)) {
+      return std::nullopt;
+    }
+    // toString on a materialised VARCHAR vector yields the value itself; this
+    // is the same accessor constArgToString uses, minus the pool it needs to
+    // materialise a Variant-backed constant.
+    return vector->toString(0);
+  }
+  const auto& value = constant->value();
+  if (value.isNull()) {
+    return std::nullopt;
+  }
+  return value.value<TypeKind::VARCHAR>();
+}
+
 // Reads a required constant string argument (e.g. a timezone name or format).
 std::string constStringArg(
     const core::TypedExprPtr& expr,
@@ -2011,6 +2045,50 @@ exec::FunctionSignaturePtr twtzArgSignature(const std::string& returnType) {
       .build();
 }
 
+// Whether the GPU may render this format_datetime. A format cuDF cannot
+// render
+// the way CPU does has to run on CPU instead of returning a different string:
+// Joda treats a token's run length as a minimum width while cuDF's specifiers
+// are fixed, so `y-M-d` prints `2026-1-2` on CPU and pads here.
+//
+// A format that cannot be analysed at all is declined too, so a query CPU can
+// answer is answered rather than killed -- except a malformed one, which is a
+// user error on both engines and is left to raise.
+bool formatDatetimeCanEvaluate(const core::TypedExprPtr& expr) {
+  const auto format = constantVarcharArg(expr, 1);
+  if (!format.has_value()) {
+    // A null or non-constant format is not this predicate's business: the
+    // null case is answered with nulls, and a non-constant one cannot be
+    // inspected.
+    return true;
+  }
+  const auto analyzed = analyzeJodaFormat(*format);
+  if (!analyzed.error.empty()) {
+    return analyzed.userError;
+  }
+  return !analyzed.hasUnsupportedFieldWidth;
+}
+
+// Whether the GPU may parse with this parse_datetime format. Beyond the field
+// widths, cuDF's parser rejects month and weekday names outright, and its
+// two-digit year pivots at 69 where Joda pivots at 70, so `69` would parse to
+// 1969 here and 2069 on CPU. A zone name or zone id token is declined because
+// only a numeric offset can be recovered from the input.
+bool parseDatetimeCanEvaluate(const core::TypedExprPtr& expr) {
+  const auto format = constantVarcharArg(expr, 1);
+  if (!format.has_value()) {
+    return true;
+  }
+  const auto analyzed = analyzeJodaFormat(*format);
+  if (!analyzed.error.empty()) {
+    return analyzed.userError;
+  }
+  return !analyzed.hasUnsupportedFieldWidth && !analyzed.usesTextNames &&
+      !analyzed.hasTwoDigitYear &&
+      analyzed.trailing != TrailingZone::kZoneName &&
+      analyzed.trailing != TrailingZone::kZoneId;
+}
+
 } // namespace
 
 void registerTimezoneFunctions(const std::string& prefix) {
@@ -2121,7 +2199,9 @@ void registerTimezoneFunctions(const std::string& prefix) {
            .returnType("varchar")
            .argumentType("timestamp with time zone")
            .constantArgumentType("varchar")
-           .build()});
+           .build()},
+      /*overwrite=*/true,
+      formatDatetimeCanEvaluate);
 
   registerCudfFunction(
       prefix + "from_unixtime",
@@ -2187,7 +2267,9 @@ void registerTimezoneFunctions(const std::string& prefix) {
            .returnType("timestamp with time zone")
            .argumentType("varchar")
            .constantArgumentType("varchar")
-           .build()});
+           .build()},
+      /*overwrite=*/true,
+      parseDatetimeCanEvaluate);
 
   registerCudfFunction(
       prefix + "from_iso8601_timestamp",

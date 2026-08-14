@@ -127,6 +127,84 @@ class ToCudfSelectionTest : public OperatorTestBase {
            VARCHAR()})};
 };
 
+// A datetime format the GPU cannot reproduce exactly must leave the projection
+// on the CPU operator rather than return a different answer. Selection is the
+// only thing that can see this: the value suites force GPU evaluation, so they
+// are blind to a fallback.
+//
+// Joda treats a token's run length as a minimum width while cuDF's specifiers
+// are fixed, so 'y-M-d' prints 2026-1-2 on CPU and pads on the GPU.
+TEST_F(ToCudfSelectionTest, formatDatetimeVariableFieldWidthFallsBack) {
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<int64_t>(
+          {pack(1'609'466'400'000, tz::getTimeZoneID("Asia/Kolkata"))},
+          TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"format_datetime(event_ts, 'y-M-d') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
+// A width the GPU does render identically stays on it, so the gate above is not
+// simply refusing every format.
+TEST_F(ToCudfSelectionTest, formatDatetimeFixedFieldWidthUsesCudf) {
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<int64_t>(
+          {pack(1'609'466'400'000, tz::getTimeZoneID("Asia/Kolkata"))},
+          TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .project({"format_datetime(event_ts, 'yyyy-MM-dd') AS result"})
+          .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+// parse_datetime has three further formats it cannot handle: a two-digit year,
+// because cuDF pivots at 69 and Joda at 70, so '69' would parse to 1969 here
+// and 2069 on CPU; a month or weekday name, which cuDF's parser rejects
+// outright; and a zone name, from which no numeric offset can be recovered.
+TEST_F(ToCudfSelectionTest, parseDatetimeUnsupportedFormatsFallBack) {
+  // Each format needs text it actually matches: falling back means CPU parses
+  // for real, and a mismatched input would fail the query rather than the
+  // selection assertion.
+  for (const auto& [format, text] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"yy-MM-dd", "21-01-02"},
+           {"EEE, dd MMM yyyy", "Sat, 02 Jan 2021"},
+           {"yyyy-MM-dd z", "2021-01-02 UTC"},
+       }) {
+    SCOPED_TRACE(format);
+    auto input = makeRowVector({"text"}, {makeFlatVector<std::string>({text})});
+    auto plan =
+        PlanBuilder()
+            .values({input})
+            .project({"parse_datetime(text, '" + format + "') AS result"})
+            .planNode();
+
+    std::shared_ptr<Task> task;
+    AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+    ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+    ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+  }
+}
+
 TEST_F(ToCudfSelectionTest, supportedPrestoDateAddDateUsesCudf) {
   auto input = makeRowVector(
       {"amount", "event_date"},
