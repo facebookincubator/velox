@@ -89,6 +89,23 @@ std::string constArgToString(
   return vector->toString(0);
 }
 
+// True when a required constant argument is null. Type-agnostic: a null
+// constant holds no value whichever way ConstantTypedExpr stores it, so this
+// covers the varchar and bigint arguments alike. Reading one instead renders
+// the text "null", which for an integer argument reaches std::stoll and throws
+// while the expression is being built.
+bool constantArgIsNull(const core::TypedExprPtr& expr, int32_t index) {
+  const auto& input = expr->inputs()[index];
+  if (input == nullptr || !input->isConstantKind()) {
+    return false;
+  }
+  const auto* constant = input->asUnchecked<core::ConstantTypedExpr>();
+  if (constant->hasValueVector()) {
+    return constant->valueVector()->isNullAt(0);
+  }
+  return constant->value().isNull();
+}
+
 // Reads a required constant string argument (e.g. a timezone name or format).
 std::string constStringArg(
     const core::TypedExprPtr& expr,
@@ -1982,6 +1999,34 @@ void registerTimezoneFunctions(const std::string& prefix) {
   // depending on registration order; registerCustomType is idempotent.
   registerTimestampWithTimeZoneType();
 
+  // Produces an all-null column of `type`. A required constant argument that is
+  // null makes the whole expression null on CPU, so the GPU must neither raise
+  // while building the function nor compute a value: the factory hands back
+  // this instead. Reading such a constant used to render it as the text "null",
+  // which then reached std::stoll and threw during expression construction,
+  // where not even a try() could catch it.
+  class AllNullFunction : public CudfFunction {
+   public:
+    explicit AllNullFunction(cudf::data_type type) : type_(type) {}
+
+    ColumnOrView eval(
+        std::vector<ColumnOrView>& inputColumns,
+        rmm::cuda_stream_view stream,
+        rmm::device_async_resource_ref mr) const override {
+      const auto size =
+          inputColumns.empty() ? 0 : asView(inputColumns[0]).size();
+      if (type_.id() == cudf::type_id::STRING) {
+        return cudf::make_column_from_scalar(
+            cudf::string_scalar("", false, stream), size, stream, mr);
+      }
+      return cudf::make_fixed_width_column(
+          type_, size, cudf::mask_state::ALL_NULL, stream, mr);
+    }
+
+   private:
+    const cudf::data_type type_;
+  };
+
   registerCudfFunction(
       prefix + "to_unixtime",
       [](const std::string&,
@@ -1996,7 +2041,12 @@ void registerTimezoneFunctions(const std::string& prefix) {
       [](const std::string&,
          const core::TypedExprPtr& expr,
          memory::MemoryPool* pool) {
-        return std::make_shared<AtTimezoneFunction>(expr, pool);
+        if (constantArgIsNull(expr, 1)) {
+          return std::shared_ptr<CudfFunction>(
+              std::make_shared<AllNullFunction>(int64Type()));
+        }
+        return std::shared_ptr<CudfFunction>(
+            std::make_shared<AtTimezoneFunction>(expr, pool));
       },
       {FunctionSignatureBuilder()
            .returnType("timestamp with time zone")
@@ -2036,7 +2086,13 @@ void registerTimezoneFunctions(const std::string& prefix) {
       [](const std::string&,
          const core::TypedExprPtr& expr,
          memory::MemoryPool* pool) {
-        return std::make_shared<FormatDatetimeFunction>(expr, pool);
+        if (constantArgIsNull(expr, 1)) {
+          return std::shared_ptr<CudfFunction>(
+              std::make_shared<AllNullFunction>(
+                  cudf::data_type{cudf::type_id::STRING}));
+        }
+        return std::shared_ptr<CudfFunction>(
+            std::make_shared<FormatDatetimeFunction>(expr, pool));
       },
       {FunctionSignatureBuilder()
            .returnType("varchar")
@@ -2049,9 +2105,14 @@ void registerTimezoneFunctions(const std::string& prefix) {
       [](const std::string&,
          const core::TypedExprPtr& expr,
          memory::MemoryPool* pool) {
-        return std::make_shared<FromUnixtimeWithZoneFunction>(
-            tz::getTimeZoneID(constStringArg(expr, 1, pool)),
-            FromUnixtimeRounding::kWhole);
+        if (constantArgIsNull(expr, 1)) {
+          return std::shared_ptr<CudfFunction>(
+              std::make_shared<AllNullFunction>(int64Type()));
+        }
+        return std::shared_ptr<CudfFunction>(
+            std::make_shared<FromUnixtimeWithZoneFunction>(
+                tz::getTimeZoneID(constStringArg(expr, 1, pool)),
+                FromUnixtimeRounding::kWhole));
       },
       {FunctionSignatureBuilder()
            .returnType("timestamp with time zone")
@@ -2068,12 +2129,17 @@ void registerTimezoneFunctions(const std::string& prefix) {
         // CPU FromUnixtimeFunction; tz::getTimeZoneID then bounds the result to
         // +/-840 minutes. Guards against a large hours value overflowing the
         // product and truncating into a bogus in-range offset.
+        if (constantArgIsNull(expr, 1) || constantArgIsNull(expr, 2)) {
+          return std::shared_ptr<CudfFunction>(
+              std::make_shared<AllNullFunction>(int64Type()));
+        }
         const auto offsetMinutes = checkedPlus(
             checkedMultiply<int64_t>(constIntArg(expr, 1, pool), 60),
             constIntArg(expr, 2, pool));
-        return std::make_shared<FromUnixtimeWithZoneFunction>(
-            tz::getTimeZoneID(static_cast<int32_t>(offsetMinutes)),
-            FromUnixtimeRounding::kFloorThenFraction);
+        return std::shared_ptr<CudfFunction>(
+            std::make_shared<FromUnixtimeWithZoneFunction>(
+                tz::getTimeZoneID(static_cast<int32_t>(offsetMinutes)),
+                FromUnixtimeRounding::kFloorThenFraction));
       },
       {FunctionSignatureBuilder()
            .returnType("timestamp with time zone")
@@ -2087,7 +2153,12 @@ void registerTimezoneFunctions(const std::string& prefix) {
       [](const std::string&,
          const core::TypedExprPtr& expr,
          memory::MemoryPool* pool) {
-        return std::make_shared<ParseDatetimeFunction>(expr, pool);
+        if (constantArgIsNull(expr, 1)) {
+          return std::shared_ptr<CudfFunction>(
+              std::make_shared<AllNullFunction>(int64Type()));
+        }
+        return std::shared_ptr<CudfFunction>(
+            std::make_shared<ParseDatetimeFunction>(expr, pool));
       },
       {FunctionSignatureBuilder()
            .returnType("timestamp with time zone")

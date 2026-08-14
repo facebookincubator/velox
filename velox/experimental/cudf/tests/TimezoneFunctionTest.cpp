@@ -718,6 +718,23 @@ TEST_F(TimezoneFunctionTest, mixedZonesWithNullThroughBothProjections) {
   assertMatchesCpu("to_iso8601(c0)", input);
 }
 
+// A null constant zone or format makes the whole expression null on CPU. The
+// GPU read such a constant as the text "null", which for the integer arguments
+// then reached std::stoll and threw while the expression was being built --
+// before evaluation, so a try() could not catch it either.
+TEST_F(TimezoneFunctionTest, nullConstantArgumentYieldsNullLikeCpu) {
+  auto zoned = timestampWithTimeZoneInput(1'609'466'400'000, "Asia/Kolkata");
+  assertMatchesCpu("at_timezone(c0, cast(null as varchar))", zoned);
+  assertMatchesCpu("format_datetime(c0, cast(null as varchar))", zoned);
+  assertMatchesCpu(
+      "parse_datetime(c0, cast(null as varchar))",
+      varcharInput("2021-01-01 02:00:00"));
+  auto seconds = doubleInput(1'609'466'400.0);
+  assertMatchesCpu("from_unixtime(c0, cast(null as varchar))", seconds);
+  assertMatchesCpu("from_unixtime(c0, cast(null as bigint), 0)", seconds);
+  assertMatchesCpu("from_unixtime(c0, 5, cast(null as bigint))", seconds);
+}
+
 // Functions that produce a TIMESTAMP WITH TIME ZONE from plain inputs. The
 // inputs convert to cuDF fine; the function is the work the GPU must learn.
 
