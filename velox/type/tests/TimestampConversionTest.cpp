@@ -339,16 +339,21 @@ TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
   VELOX_ASSERT_THROW(
       parseTimestamp("2000-01-01T 12:21:56", TimestampParseMode::kIso8601),
       parserError);
-  // In Spark cast mode a 'T' separator must be followed immediately by the
-  // time digits; anything else is invalid.
+  // In Spark cast mode a 'T' separator must be followed immediately by a
+  // digit; anything else is invalid, including a 'T' after a year-only or
+  // year-month date, and whitespace between 'T' and an otherwise valid time.
   for (const auto& invalid :
        {"2015-03-18T",
         "2015-03-18T ",
         "2015-03-18T\t",
         "2015-03-18T\n",
         "2015-03-18T 12:00:00",
+        "2015-03-18T\t12:00:00",
         "2015-03-18TZ",
-        "2015-03-18T+08:00"}) {
+        "2015-03-18T+08:00",
+        "2015T",
+        "2015-03T",
+        "+2015-03-18T"}) {
     SCOPED_TRACE(invalid);
     VELOX_ASSERT_THROW(
         parseTimestamp(invalid, TimestampParseMode::kSparkCast), parserError);
@@ -356,14 +361,22 @@ TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
         parseTimestampWithTimezone(invalid, TimestampParseMode::kSparkCast),
         parserError);
   }
-  // A space separator is unaffected by this change. Space-separator behavior
-  // is outside the scope of this change.
+  // A space separator is unaffected by this change, and a 'T' followed
+  // directly by time digits still parses.
   EXPECT_EQ(
       Timestamp(1426636800, 0),
       parseTimestamp("2015-03-18 ", TimestampParseMode::kSparkCast));
   EXPECT_EQ(
       Timestamp(1426680000, 0),
       parseTimestamp("2015-03-18T12:00:00", TimestampParseMode::kSparkCast));
+  // Only kSparkCast is affected: a trailing 'T' still parses as a bare date
+  // under ISO 8601 and legacy cast.
+  EXPECT_EQ(
+      Timestamp(1426636800, 0),
+      parseTimestamp("2015-03-18T", TimestampParseMode::kIso8601));
+  EXPECT_EQ(
+      Timestamp(1426636800, 0),
+      parseTimestamp("2015-03-18T", TimestampParseMode::kLegacyCast));
 
   // Parse timestamp with (broken) timezones.
   VELOX_ASSERT_THROW(
