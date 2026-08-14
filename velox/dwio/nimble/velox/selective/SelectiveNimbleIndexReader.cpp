@@ -499,7 +499,7 @@ void SelectiveNimbleIndexReader::initStripeColumnReader(uint32_t stripeIndex) {
     streams_.setStripe(stripeIndex);
     NimbleParams params(
         *readerBase_->pool(),
-        columnReaderStatistics_,
+        splitStats_,
         readerBase_->nimbleSchema(),
         streams_,
         options_.trackRowSize() ? rowSizeTracker_.get() : nullptr,

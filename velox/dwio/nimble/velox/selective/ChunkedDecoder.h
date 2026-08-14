@@ -909,7 +909,7 @@ class ChunkedDecoder {
   // Tracks the current row position in the stream.
   uint32_t rowPosition_{0};
 
-  // Per-column decoding statistics. Owned by ColumnReaderStatistics; valid for
+  // Per-column decoding statistics. Owned by SplitStats; valid for
   // the lifetime of this decoder.
   velox::dwio::common::DecodingStats* const decodingStats_{nullptr};
   friend class ChunkedDecoderTestHelper;

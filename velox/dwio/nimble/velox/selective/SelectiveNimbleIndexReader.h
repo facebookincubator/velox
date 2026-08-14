@@ -289,7 +289,8 @@ class SelectiveNimbleIndexReader : public velox::dwio::common::IndexReader {
   std::unique_ptr<velox::serializer::KeyEncoder> keyEncoder_;
 
   std::unique_ptr<velox::dwio::common::SelectiveColumnReader> columnReader_;
-  velox::dwio::common::ColumnReaderStatistics columnReaderStatistics_;
+  velox::dwio::common::SplitStats splitStats_{
+      velox::dwio::common::FileFormat::NIMBLE};
 
   // Current lookup state.
   size_t numRequests_{0};

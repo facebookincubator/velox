@@ -135,7 +135,7 @@ class NimbleParams : public velox::dwio::common::FormatParams {
  public:
   NimbleParams(
       velox::memory::MemoryPool& pool,
-      velox::dwio::common::ColumnReaderStatistics& stats,
+      velox::dwio::common::SplitStats& stats,
       const std::shared_ptr<const Type>& nimbleType,
       StripeStreams& streams,
       RowSizeTracker* rowSizeTracker,
@@ -163,7 +163,7 @@ class NimbleParams : public velox::dwio::common::FormatParams {
   NimbleParams makeChildParams(const std::shared_ptr<const Type>& type) {
     return NimbleParams(
         pool(),
-        runtimeStatistics(),
+        splitStats(),
         type,
         *streams_,
         rowSizeTracker_,

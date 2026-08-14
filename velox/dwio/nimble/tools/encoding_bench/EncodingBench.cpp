@@ -291,7 +291,7 @@ struct ReaderContext {
   std::string fileData;
   std::shared_ptr<nimble::ReaderBase> readerBase;
   std::unique_ptr<nimble::StripeStreams> streams;
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::SplitStats stats{dwio::common::FileFormat::NIMBLE};
   std::unique_ptr<nimble::RowSizeTracker> rowSizeTracker;
   nimble::EncodingFactory encodingFactory;
   std::shared_ptr<common::ScanSpec> scanSpec;

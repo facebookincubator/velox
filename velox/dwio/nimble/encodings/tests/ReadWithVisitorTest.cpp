@@ -310,7 +310,7 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
     std::string fileData;
     std::shared_ptr<ReaderBase> readerBase;
     std::unique_ptr<StripeStreams> streams;
-    dwio::common::ColumnReaderStatistics stats;
+    dwio::common::SplitStats stats{dwio::common::FileFormat::NIMBLE};
     std::unique_ptr<RowSizeTracker> rowSizeTracker;
     EncodingFactory encodingFactory;
   };

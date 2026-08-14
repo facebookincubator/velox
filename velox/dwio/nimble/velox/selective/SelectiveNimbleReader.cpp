@@ -137,7 +137,7 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
         streams_(readerBase_),
         rowSizeTracker_{
             std::make_unique<RowSizeTracker>(readerBase->fileSchemaWithId())} {
-    columnReaderStatistics_.initColumnStatsCollection(
+    splitStats_.initColumnStatsCollection(
         *readerBase_->fileSchemaWithId(), options);
     initReadRange();
     initIndexBounds();
@@ -160,7 +160,7 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
       const dwio::common::Mutation* mutation) override;
 
   void updateRuntimeStats(
-      dwio::common::RuntimeStatistics& stats) const override;
+      dwio::common::RuntimeStats& stats) const override;
 
   void resetFilterCaches() override;
 
@@ -255,7 +255,7 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
   int64_t trailingSkippedRows_{0};
 
   std::unique_ptr<dwio::common::SelectiveColumnReader> columnReader_;
-  dwio::common::ColumnReaderStatistics columnReaderStatistics_;
+  dwio::common::SplitStats splitStats_{dwio::common::FileFormat::NIMBLE};
   std::unique_ptr<RowSizeTracker> rowSizeTracker_;
 
   // Cached row size estimate derived from file-level statistics.
@@ -352,13 +352,12 @@ uint64_t SelectiveNimbleRowReader::next(
 }
 
 void SelectiveNimbleRowReader::updateRuntimeStats(
-    dwio::common::RuntimeStatistics& stats) const {
+    dwio::common::RuntimeStats& stats) const {
   stats.skippedStrides += skippedStripes_;
   const auto& tabletStats = readerBase_->tablet().stats();
   stats.footerBufferOverread += tabletStats.footerBufferOverread;
   stats.footerBufferUnderread += tabletStats.footerBufferUnderread;
   stats.footerCacheHit += tabletStats.footerCacheHit ? 1 : 0;
-  stats.columnReaderStats.mergeFrom(columnReaderStatistics_);
 }
 
 void SelectiveNimbleRowReader::resetFilterCaches() {
@@ -465,7 +464,7 @@ void SelectiveNimbleRowReader::loadCurrentStripe() {
   streams_.setStripe(currentStripe_);
   NimbleParams params(
       *readerBase_->pool(),
-      columnReaderStatistics_,
+      splitStats_,
       readerBase_->nimbleSchema(),
       streams_,
       options_.trackRowSize() ? rowSizeTracker_.get() : nullptr,

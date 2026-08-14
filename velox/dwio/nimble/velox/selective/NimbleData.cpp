@@ -244,11 +244,12 @@ std::unique_ptr<ChunkedDecoder> NimbleData::makeDecoder(
 std::unique_ptr<velox::dwio::common::FormatData> NimbleParams::toFormatData(
     const std::shared_ptr<const velox::dwio::common::TypeWithId>& type,
     const velox::common::ScanSpec& /*scanSpec*/) {
-  velox::dwio::common::DecodingStats* decodingStats = nullptr;
-  if (runtimeStatistics().decodingStatsSet.has_value()) {
-    decodingStats = runtimeStatistics().decodingStatsSet->getOrCreate(
-        type->id(), type->type()->kind());
-  }
+  // Per column counters now live on the column's ColumnRuntimeStats and are
+  // only populated when decoding stats collection is enabled.
+  auto& columnStatistics = columnStats(type->id(), type->type()->kind());
+  velox::dwio::common::DecodingStats* decodingStats =
+      columnStatistics.decodingStats ? &*columnStatistics.decodingStats
+                                     : nullptr;
   return std::make_unique<NimbleData>(
       nimbleType_,
       *streams_,
