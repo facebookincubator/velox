@@ -1,3 +1,16 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -58,7 +71,22 @@ add_executable(
   FieldWriterStatsTest.cpp
   TestUtils.h
 )
-add_test(nimble_velox_tests nimble_velox_tests)
+# VeloxReaderTest accounts for almost all of this binary's runtime: its cases are
+# parameterized over sixteen combinations, and the whole suite runs well past
+# ctest's default fifteen hundred second limit as a single test. Register it as
+# four gtest shards instead so ctest schedules them concurrently, and give each
+# shard a limit with room to spare for a loaded runner.
+set(NIMBLE_VELOX_TEST_SHARDS 4)
+math(EXPR NIMBLE_VELOX_TEST_LAST_SHARD "${NIMBLE_VELOX_TEST_SHARDS} - 1")
+foreach(shard RANGE ${NIMBLE_VELOX_TEST_LAST_SHARD})
+  add_test(NAME nimble_velox_tests_shard${shard} COMMAND nimble_velox_tests)
+  set_tests_properties(
+    nimble_velox_tests_shard${shard}
+    PROPERTIES
+      ENVIRONMENT "GTEST_TOTAL_SHARDS=${NIMBLE_VELOX_TEST_SHARDS};GTEST_SHARD_INDEX=${shard}"
+      TIMEOUT 2400
+  )
+endforeach()
 
 target_link_libraries(
   nimble_velox_tests
