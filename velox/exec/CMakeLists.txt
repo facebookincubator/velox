@@ -1,0 +1,278 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+velox_add_library(
+  velox_exec
+  AddressableNonNullValueList.cpp
+  Aggregate.cpp
+  AggregateCompanionAdapter.cpp
+  AggregateCompanionSignatures.cpp
+  AggregateFunctionRegistry.cpp
+  AggregateInfo.cpp
+  AggregationMasks.cpp
+  ArrowStream.cpp
+  AssignUniqueId.cpp
+  BlockingReason.cpp
+  CallbackSink.cpp
+  ColumnStatsCollector.cpp
+  ContainerRowSerde.cpp
+  DistinctAggregations.cpp
+  Driver.cpp
+  EnforceSingleRow.cpp
+  Exchange.cpp
+  ExchangeClient.cpp
+  ExchangeQueue.cpp
+  ExchangeSource.cpp
+  SerializedPage.cpp
+  Expand.cpp
+  FilterProject.cpp
+  GroupId.cpp
+  GroupingSet.cpp
+  HashAggregation.cpp
+  HashBuild.cpp
+  HashJoinBridge.cpp
+  HashPartitionFunction.cpp
+  HashProbe.cpp
+  HashTable.cpp
+  HashTableCache.cpp
+  IndexLookupJoin.cpp
+  IndexLookupJoinBridge.cpp
+  JoinBridge.cpp
+  Limit.cpp
+  LocalPartition.cpp
+  LocalPlanner.cpp
+  MarkDistinct.cpp
+  MarkSorted.cpp
+  EnforceDistinct.cpp
+  MemoryReclaimer.cpp
+  Merge.cpp
+  MergeJoin.cpp
+  MergeSource.cpp
+  MixedUnion.cpp
+  NestedLoopJoinBuild.cpp
+  NestedLoopJoinProbe.cpp
+  SpatialIndex.cpp
+  SpatialJoinBuild.cpp
+  SpatialJoinProbe.cpp
+  Operator.cpp
+  OperatorTraceCtx.cpp
+  OperatorTraceReader.cpp
+  OperatorTraceScan.cpp
+  OperatorTraceWriter.cpp
+  OperatorUtils.cpp
+  OrderBy.cpp
+  OutputBuffer.cpp
+  DefaultOutputBufferManager.cpp
+  OutputTransportRegistry.cpp
+  ParallelProject.cpp
+  PartitionFunction.cpp
+  PartitionedOutput.cpp
+  PlanNodeStats.cpp
+  PrefixSort.cpp
+  ProbeOperatorState.cpp
+  RowContainer.cpp
+  RowNumber.cpp
+  ScaleWriterLocalPartition.cpp
+  ScaledScanController.cpp
+  SortBuffer.cpp
+  SortedAggregations.cpp
+  SpatialJoinBuild.cpp
+  SpatialJoinProbe.cpp
+  Spill.cpp
+  SpillFile.cpp
+  Spiller.cpp
+  StreamingAggregation.cpp
+  StreamingEnforceDistinct.cpp
+  Strings.cpp
+  TableScan.cpp
+  TableWriteMerge.cpp
+  TableWriter.cpp
+  Task.cpp
+  TaskStructs.cpp
+  TaskTraceReader.cpp
+  TaskTraceWriter.cpp
+  TopN.cpp
+  TopNRowNumber.cpp
+  Unnest.cpp
+  Values.cpp
+  VectorHasher.cpp
+  Window.cpp
+  WindowFunction.cpp
+  WindowPartition.cpp
+  HEADERS
+  AddressableNonNullValueList.h
+  Aggregate.h
+  AdaptivePrefetch.h
+  AggregateCompanionAdapter.h
+  AggregateCompanionSignatures.h
+  AggregateFunctionRegistry.h
+  AggregateInfo.h
+  AggregationMasks.h
+  ArrowStream.h
+  AssignUniqueId.h
+  BarrierSplit.h
+  BlockingReason.h
+  CallbackSink.h
+  ColumnStatsCollector.h
+  ContainerRowSerde.h
+  DistinctAggregations.h
+  Driver.h
+  DriverStats.h
+  EnforceDistinct.h
+  EnforceSingleRow.h
+  Exchange.h
+  ExchangeClient.h
+  ExchangeQueue.h
+  ExchangeSource.h
+  Expand.h
+  FilterProject.h
+  GroupId.h
+  GroupingSet.h
+  HashAggregation.h
+  HashBitRange.h
+  HashBuild.h
+  HashJoinBridge.h
+  HashPartitionFunction.h
+  HashProbe.h
+  HashTable.h
+  HashTableCache.h
+  HilbertIndex.h
+  IndexLookupJoin.h
+  IndexLookupJoinBridge.h
+  JoinBridge.h
+  Limit.h
+  LocalPartition.h
+  LocalPlanner.h
+  MarkDistinct.h
+  MarkSorted.h
+  MemoryReclaimer.h
+  Merge.h
+  MergeJoin.h
+  MergeSource.h
+  MixedUnion.h
+  NestedLoopJoinBuild.h
+  NestedLoopJoinProbe.h
+  OneWayStatusFlag.h
+  Operator.h
+  OperatorStats.h
+  OperatorTraceCtx.h
+  OperatorTraceReader.h
+  OperatorTraceScan.h
+  OperatorTraceWriter.h
+  OperatorType.h
+  OperatorUtils.h
+  OrderBy.h
+  OutputBuffer.h
+  OutputBufferStats.h
+  OutputBufferManager.h
+  DefaultOutputBufferManager.h
+  OutputTransportRegistry.h
+  ParallelProject.h
+  PartitionFunction.h
+  PartitionedOutput.h
+  PartitionedOutputFactory.h
+  PlanNodeStats.h
+  PrefixSort.h
+  ProbeOperatorState.h
+  RoundRobinPartitionFunction.h
+  RowContainer.h
+  RowNumber.h
+  ScaleWriterLocalPartition.h
+  ScaledScanController.h
+  SerializedPage.h
+  SetAccumulator.h
+  SimpleAggregateAdapter.h
+  SortBuffer.h
+  SortedAggregations.h
+  SpatialIndex.h
+  SpatialJoinBuild.h
+  SpatialJoinProbe.h
+  Spill.h
+  SpillFile.h
+  Spiller.h
+  Split.h
+  StreamingAggregation.h
+  StreamingEnforceDistinct.h
+  Strings.h
+  TableScan.h
+  TableWriteMerge.h
+  TableWriter.h
+  Task.h
+  TaskStats.h
+  TaskStructs.h
+  TaskTraceReader.h
+  TaskTraceWriter.h
+  TopN.h
+  TopNRowNumber.h
+  TraceUtil.h
+  Unnest.h
+  UnorderedStreamReader.h
+  Values.h
+  VectorHasher-inl.h
+  VectorHasher.h
+  Window.h
+  WindowFunction.h
+  WindowPartition.h
+)
+
+velox_add_library(velox_exec_spill_stats SpillStats.cpp HEADERS SpillStats.h)
+velox_link_libraries(velox_exec_spill_stats velox_common_base velox_file Folly::folly)
+
+velox_link_libraries(
+  velox_exec
+  velox_arrow_bridge
+  velox_common_base
+  velox_common_compression
+  velox_core
+  velox_connector
+  velox_connector_registry
+  velox_custom_memory_resource_registry
+  velox_exec_spill_stats
+  velox_exec_window
+  velox_expression
+  velox_file
+  velox_presto_serializer
+  velox_trace
+  velox_time
+  velox_test_util
+  velox_vector
+)
+
+if(VELOX_ENABLE_GEO)
+  velox_compile_definitions(velox_exec PRIVATE VELOX_ENABLE_GEO)
+  velox_link_libraries(velox_exec velox_common_geospatial_serde)
+endif()
+
+velox_add_library(velox_cursor Cursor.cpp HEADERS Cursor.h)
+
+velox_link_libraries(velox_cursor velox_core velox_exception velox_expression)
+
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(fuzzer)
+  add_subdirectory(tests)
+elseif(${VELOX_BUILD_TEST_UTILS})
+  add_subdirectory(tests/utils)
+endif()
+
+if(${VELOX_ENABLE_BENCHMARKS})
+  add_subdirectory(benchmarks)
+endif()
+
+add_subdirectory(prefixsort)
+add_subdirectory(rpc)
+add_subdirectory(trace)
+add_subdirectory(window)
+
+velox_add_library(velox_aggregate_util INTERFACE HEADERS AggregateUtil.h)
+
+velox_add_library(velox_operator_type INTERFACE HEADERS OperatorType.h)

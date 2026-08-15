@@ -1,0 +1,206 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "velox/common/base/GTestMacros.h"
+#include "velox/dwio/common/Arena.h"
+#include "velox/dwio/dwrf/writer/WriterContext.h"
+#include "velox/dwio/dwrf/writer/WriterSink.h"
+
+namespace facebook::velox::dwrf {
+
+using dwio::common::ArenaCreate;
+
+class WriterBase {
+ public:
+  explicit WriterBase(std::unique_ptr<dwio::common::FileSink> sink)
+      : sink_{std::move(sink)},
+        arena_(std::make_unique<google::protobuf::Arena>()) {
+    VELOX_CHECK_NOT_NULL(sink_);
+  }
+
+  virtual ~WriterBase() = default;
+
+  virtual void close() {
+    if (writerSink_) {
+      writerSink_->flush();
+    }
+    sink_->close();
+  }
+
+  virtual void abort() {
+    writerSink_ = nullptr;
+    if (context_ != nullptr) {
+      context_->abort();
+    }
+    if (sink_) {
+      sink_->close();
+      sink_ = nullptr;
+    }
+  }
+
+  const WriterContext& getContext() const {
+    VELOX_CHECK_NOT_NULL(context_);
+    return *context_;
+  }
+
+  WriterSink& getSink() {
+    VELOX_CHECK_NOT_NULL(writerSink_);
+    return *writerSink_;
+  }
+
+  const WriterSink& getSink() const {
+    VELOX_CHECK_NOT_NULL(writerSink_);
+    return *writerSink_;
+  }
+
+  void addUserMetadata(const std::string& key, const std::string& value) {
+    userMetadata_[key] = value;
+  }
+
+  /// Sets the per-type attributes (e.g. Iceberg "iceberg.id") to stamp into the
+  /// footer, keyed by pre-order schema node id. Empty by default.
+  void setSchemaAttributes(
+      std::unordered_map<
+          uint32_t,
+          std::vector<std::pair<std::string, std::string>>> schemaAttributes) {
+    schemaAttributes_ = std::move(schemaAttributes);
+  }
+
+  // protected:
+  void writeFooter(const Type& type);
+
+  void initContext(
+      const std::shared_ptr<const Config>& config,
+      std::shared_ptr<velox::memory::MemoryPool> pool,
+      const tz::TimeZone* sessionTimezone = nullptr,
+      const bool adjustTimestampToTimezone = false,
+      std::unique_ptr<encryption::EncryptionHandler> handler = nullptr,
+      int64_t memoryBudget = std::numeric_limits<int64_t>::max()) {
+    context_ = std::make_unique<WriterContext>(
+        config,
+        std::move(pool),
+        sink_->metricsLog(),
+        sessionTimezone,
+        adjustTimestampToTimezone,
+        std::move(handler),
+        memoryBudget);
+    writerSink_ = std::make_unique<WriterSink>(
+        *sink_,
+        context_->getMemoryPool(MemoryUsageCategory::OUTPUT_STREAM),
+        context_->getConfigs());
+    auto dwrfFooter_ = ArenaCreate<proto::Footer>(arena_.get());
+    footer_ = std::make_unique<FooterWriteWrapper>(dwrfFooter_);
+  }
+
+  void initBuffers();
+
+  WriterContext& getContext() {
+    VELOX_CHECK_NOT_NULL(context_);
+    return *context_;
+  }
+
+  template <typename T>
+  void writeProto(const T& t) {
+    writeProto(t, context_->compression());
+  }
+
+  template <typename T>
+  void writeProto(const T& t, common::CompressionKind kind) {
+    auto holder = context_->newDataBufferHolder();
+    auto stream = context_->newStream(kind, *holder);
+
+    t->SerializeToZeroCopyStream(stream.get());
+    stream->flush();
+
+    writerSink_->addBuffers(*holder);
+  }
+
+  template <typename T>
+  void writeProtoAsString(
+      std::string& output,
+      const T& t,
+      const dwio::common::encryption::Encrypter* encrypter = nullptr) {
+    auto holder = context_->newDataBufferHolder();
+    auto stream =
+        context_->newStream(context_->compression(), *holder, encrypter);
+
+    t.SerializeToZeroCopyStream(stream.get());
+    stream->flush();
+
+    output.reserve(holder->size());
+    for (auto& buffer : holder->getBuffers()) {
+      output.append(buffer.data(), buffer.size());
+    }
+  }
+
+  StripeInformationWriteWrapper addStripeInfo() {
+    auto stripe = footer_->addStripes();
+    stripe.setNumberOfRows(context_->stripeRowCount());
+    if (context_->stripeRawSize() > 0 || context_->stripeRowCount() == 0) {
+      // ColumnTransformWriter, when rewriting presto written
+      // file does not have rawSize.
+      stripe.setRawDataSize(context_->stripeRawSize());
+    }
+
+    auto* checksum = writerSink_->getChecksum();
+    if (checksum != nullptr) {
+      stripe.setChecksum(checksum->getDigest());
+    }
+    return stripe;
+  }
+
+  std::unique_ptr<FooterWriteWrapper>& getFooter() {
+    return footer_;
+  }
+
+  void validateStreamSize(
+      const DwrfStreamIdentifier& streamId,
+      uint64_t streamSize) {
+    if (context_->streamSizeAboveThresholdCheckEnabled()) {
+      // Jolly doesn't support Streams bigger than 2GB.
+      VELOX_CHECK_LE(
+          streamSize,
+          std::numeric_limits<int32_t>::max(),
+          "Stream is bigger than 2GB ",
+          streamId.toString());
+    }
+  }
+
+ private:
+  void writeUserMetadata(uint32_t writerVersion);
+
+  std::unique_ptr<WriterContext> context_;
+  std::unique_ptr<dwio::common::FileSink> sink_;
+  std::unique_ptr<WriterSink> writerSink_;
+  std::unique_ptr<FooterWriteWrapper> footer_;
+  proto::orc::Metadata metadata_;
+  std::unordered_map<std::string, std::string> userMetadata_;
+  std::unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>
+      schemaAttributes_;
+  std::unique_ptr<google::protobuf::Arena> arena_;
+
+  friend class WriterTest;
+  VELOX_FRIEND_TEST(WriterBaseTest, FlushWriterSinkUponClose);
+};
+
+} // namespace facebook::velox::dwrf

@@ -1,0 +1,1150 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/exec/Cursor.h"
+
+#include <folly/OperationCancelled.h>
+#include <folly/system/HardwareConcurrency.h>
+#include <filesystem>
+#include <optional>
+
+#include "velox/common/file/FileSystems.h"
+#include "velox/common/future/VeloxPromise.h"
+#include "velox/exec/BlockingReason.h"
+#include "velox/vector/EncodedVectorCopy.h"
+
+namespace facebook::velox::exec {
+namespace {
+
+class TaskQueue {
+ public:
+  struct TaskQueueEntry {
+    RowVectorPtr vector;
+    uint64_t bytes;
+  };
+
+  explicit TaskQueue(
+      uint64_t maxBytes,
+      const std::shared_ptr<memory::MemoryPool>& outputPool)
+      : pool_(
+            outputPool != nullptr ? outputPool
+                                  : memory::memoryManager()->addLeafPool()),
+        maxBytes_(maxBytes) {}
+
+  void setNumProducers(int32_t n) {
+    numProducers_ = n;
+  }
+
+  // Adds a batch of rows to the queue and returns kNotBlocked if the
+  // producer may continue. Returns kWaitForConsumer if the queue is
+  // full after the addition and sets 'future' to a future that is
+  // realized when the producer may continue.
+  exec::BlockingReason
+  enqueue(RowVectorPtr vector, bool drained, velox::ContinueFuture& future);
+
+  // Returns the next batch if one is available. Otherwise returns nullptr and,
+  // if more output may still arrive, sets 'future' to a future realized when
+  // the consumer should retry; when all producers are at end (or the queue is
+  // closed) returns nullptr and leaves 'future' untouched. The caller
+  // distinguishes "blocked" from "done" by whether 'future' is valid.
+  RowVectorPtr dequeue(velox::ContinueFuture& future);
+
+  void close();
+
+  bool hasNext();
+
+  velox::memory::MemoryPool* pool() const {
+    return pool_.get();
+  }
+
+  std::optional<int32_t> numProducers_;
+  std::atomic_int32_t numDrainedProducers_{0};
+
+ private:
+  // Owns the vectors in 'queue_', hence must be declared first.
+  std::shared_ptr<velox::memory::MemoryPool> pool_;
+  std::deque<TaskQueueEntry> queue_;
+  int32_t producersFinished_{0};
+  uint64_t totalBytes_{0};
+  // Blocks the producer if 'totalBytes' exceeds 'maxBytes' after
+  // adding the result.
+  uint64_t maxBytes_;
+  std::mutex mutex_;
+  std::vector<ContinuePromise> producerUnblockPromises_;
+  bool consumerBlocked_{false};
+  ContinuePromise consumerPromise_{ContinuePromise::makeEmpty()};
+  bool closed_{false};
+};
+
+exec::BlockingReason TaskQueue::enqueue(
+    RowVectorPtr vector,
+    bool drained,
+    velox::ContinueFuture& future) {
+  if (!vector) {
+    // Fulfilled after releasing 'mutex_': setValue() may resume a coroutine
+    // consumer inline, which would re-enter the queue and deadlock on 'mutex_'.
+    ContinuePromise wakeConsumer{ContinuePromise::makeEmpty()};
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      if (drained) {
+        ++numDrainedProducers_;
+      } else {
+        ++producersFinished_;
+      }
+      // Only wake a blocked consumer once all producers have finished or all
+      // have drained. A producer-done signal from just one of several producers
+      // leaves data still potentially arriving from the others, so waking here
+      // would hand the consumer an empty queue and force it to re-wait. Data
+      // enqueues wake the consumer on their own. When the consumer is blocked,
+      // numProducers_ is already set (dequeue runs after start()'s
+      // setNumProducers()), so a missing count cannot hide this signal.
+      const bool allFinishedOrDrained = numProducers_.has_value() &&
+          (producersFinished_ == numProducers_.value() ||
+           numDrainedProducers_ == numProducers_.value());
+      if (consumerBlocked_ && allFinishedOrDrained) {
+        consumerBlocked_ = false;
+        wakeConsumer = std::move(consumerPromise_);
+      }
+    }
+    if (wakeConsumer.valid()) {
+      wakeConsumer.setValue();
+    }
+    return exec::BlockingReason::kNotBlocked;
+  }
+
+  auto bytes = vector->retainedSize();
+  TaskQueueEntry entry{std::move(vector), bytes};
+
+  // Fulfilled after releasing 'mutex_' for the same reason as above.
+  ContinuePromise wakeConsumer{ContinuePromise::makeEmpty()};
+  exec::BlockingReason reason{exec::BlockingReason::kNotBlocked};
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    // Check inside 'mutex_'
+    if (closed_) {
+      throw std::runtime_error("Consumer cursor is closed");
+    }
+    queue_.push_back(std::move(entry));
+    totalBytes_ += bytes;
+    if (consumerBlocked_) {
+      consumerBlocked_ = false;
+      wakeConsumer = std::move(consumerPromise_);
+    }
+    if (totalBytes_ > maxBytes_) {
+      auto [unblockPromise, unblockFuture] =
+          makeVeloxContinuePromiseContract("TaskQueue::enqueue");
+      producerUnblockPromises_.emplace_back(std::move(unblockPromise));
+      future = std::move(unblockFuture);
+      reason = exec::BlockingReason::kWaitForConsumer;
+    }
+  }
+  if (wakeConsumer.valid()) {
+    wakeConsumer.setValue();
+  }
+  return reason;
+}
+
+RowVectorPtr TaskQueue::dequeue(velox::ContinueFuture& future) {
+  RowVectorPtr vector;
+  std::vector<ContinuePromise> mayContinue;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (closed_) {
+      return nullptr;
+    }
+
+    if (!queue_.empty()) {
+      auto result = std::move(queue_.front());
+      queue_.pop_front();
+      totalBytes_ -= result.bytes;
+      vector = std::move(result.vector);
+      if (totalBytes_ < maxBytes_ / 2) {
+        mayContinue = std::move(producerUnblockPromises_);
+      }
+    } else if (
+        numProducers_.has_value() && producersFinished_ == numProducers_) {
+      return nullptr;
+    } else if (numDrainedProducers_ == numProducers_) {
+      return nullptr;
+    }
+
+    if (!vector) {
+      // No data yet but more may arrive: hand the consumer future to the caller
+      // so it can wait without blocking this thread. Single-consumer contract:
+      // the caller must wait on the previously handed-out future before
+      // re-calling. Always-on check: overwriting an unfulfilled promise would
+      // strand any waiter on the prior future in a silent, permanent hang.
+      VELOX_CHECK(!consumerBlocked_);
+      consumerBlocked_ = true;
+      consumerPromise_ = ContinuePromise("TaskQueue::dequeue");
+      future = consumerPromise_.getFuture();
+    }
+  }
+  // outside of 'mutex_'
+  for (auto& promise : mayContinue) {
+    promise.setValue();
+  }
+  return vector;
+}
+
+void TaskQueue::close() {
+  // Fulfilled after releasing 'mutex_': setValue() may resume a coroutine
+  // consumer inline, which would re-enter the queue and deadlock on 'mutex_'.
+  ContinuePromise wakeConsumer{ContinuePromise::makeEmpty()};
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    closed_ = true;
+    // Unblock producers.
+    for (auto& promise : producerUnblockPromises_) {
+      promise.setValue();
+    }
+    producerUnblockPromises_.clear();
+
+    // Unblock the consumer.
+    if (consumerBlocked_) {
+      consumerBlocked_ = false;
+      wakeConsumer = std::move(consumerPromise_);
+    }
+  }
+  if (wakeConsumer.valid()) {
+    wakeConsumer.setValue();
+  }
+}
+
+bool TaskQueue::hasNext() {
+  std::lock_guard<std::mutex> l(mutex_);
+  return !queue_.empty();
+}
+
+class TaskCursorBase : public TaskCursor {
+ public:
+  TaskCursorBase(
+      const CursorParameters& params,
+      const std::shared_ptr<folly::Executor>& executor) {
+    static std::atomic<int32_t> cursorId;
+    taskId_ = fmt::format("test_cursor_{}", ++cursorId);
+
+    if (params.queryCtx) {
+      queryCtx_ = params.queryCtx;
+    } else {
+      // NOTE: the destructor of 'executor_' will wait for all the async task
+      // activities to finish on TaskCursor destruction.
+      executor_ = executor;
+      static std::atomic<uint64_t> cursorQueryId{0};
+      queryCtx_ = core::QueryCtx::create(
+          executor_.get(),
+          core::QueryConfig({}),
+          std::
+              unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
+          cache::AsyncDataCache::getInstance(),
+          nullptr,
+          nullptr,
+          fmt::format("TaskCursorQuery_{}", cursorQueryId++));
+    }
+
+    // If query configs needs to be overwritten in queryCtx.
+    if (!params.queryConfigs.empty() || !params.breakpoints.empty()) {
+      auto configCopy = !params.queryConfigs.empty()
+          ? params.queryConfigs
+          : queryCtx_->queryConfig().rawConfigsCopy();
+
+      if (!params.breakpoints.empty()) {
+        configCopy.insert({core::QueryConfig::kQueryTraceEnabled, "true"});
+      }
+      queryCtx_->testingOverrideConfigUnsafe(std::move(configCopy));
+    }
+
+    planFragment_ = {
+        params.planNode,
+        params.executionStrategy,
+        params.numSplitGroups,
+        params.groupedExecutionLeafNodeIds};
+    planFragment_.taskUniqueId = params.taskUniqueId;
+    beforeTaskStart_ = params.beforeTaskStart;
+
+    if (!params.spillDirectory.empty()) {
+      taskSpillDirectory_ = params.spillDirectory + "/" + taskId_;
+      taskSpillDirectoryCb_ = params.spillDirectoryCallback;
+      if (taskSpillDirectoryCb_ == nullptr) {
+        auto fileSystem =
+            velox::filesystems::getFileSystem(taskSpillDirectory_, nullptr);
+        VELOX_CHECK_NOT_NULL(fileSystem, "File System is null!");
+        try {
+          fileSystem->mkdir(taskSpillDirectory_);
+        } catch (...) {
+          LOG(ERROR) << "Failed to create task spill directory "
+                     << taskSpillDirectory_ << " base directory "
+                     << params.spillDirectory << " exists["
+                     << std::filesystem::exists(taskSpillDirectory_) << "]";
+
+          std::rethrow_exception(std::current_exception());
+        }
+
+        LOG(INFO) << "Task spill directory[" << taskSpillDirectory_
+                  << "] created";
+      }
+    }
+  }
+
+ protected:
+  std::string taskId_;
+  std::shared_ptr<core::QueryCtx> queryCtx_;
+  core::PlanFragment planFragment_;
+  std::string taskSpillDirectory_;
+  std::function<std::string()> taskSpillDirectoryCb_;
+  std::function<void(Task&)> beforeTaskStart_;
+
+ private:
+  std::shared_ptr<folly::Executor> executor_;
+};
+
+class MultiThreadedTaskCursor : public TaskCursorBase {
+ public:
+  explicit MultiThreadedTaskCursor(const CursorParameters& params)
+      : TaskCursorBase(
+            params,
+            std::make_shared<folly::CPUThreadPoolExecutor>(
+                folly::available_concurrency())),
+        maxDrivers_{params.maxDrivers},
+        numConcurrentSplitGroups_{params.numConcurrentSplitGroups},
+        numSplitGroups_{params.numSplitGroups} {
+    VELOX_CHECK(!params.serialExecution);
+    VELOX_CHECK(
+        queryCtx_->isExecutorSupplied(),
+        "Executor should be set in parallel task cursor");
+
+    queue_ =
+        std::make_shared<TaskQueue>(params.bufferedBytes, params.outputPool);
+
+    // Captured as a shared_ptr by the consumer callback of task_.
+    auto queueHolder = std::weak_ptr(queue_);
+    std::optional<common::SpillDiskOptions> spillDiskOpts;
+    if (!taskSpillDirectory_.empty()) {
+      spillDiskOpts = common::SpillDiskOptions{
+          .spillDirPath = taskSpillDirectory_,
+          .spillDirCreated = taskSpillDirectoryCb_ == nullptr,
+          .spillDirCreateCb = taskSpillDirectoryCb_};
+    }
+    task_ = Task::create(
+        taskId_,
+        std::move(planFragment_),
+        params.destination,
+        std::move(queryCtx_),
+        Task::ExecutionMode::kParallel,
+        // consumer
+        [queueHolder, copyResult = params.copyResult, taskId = taskId_](
+            const RowVectorPtr& vector,
+            bool drained,
+            velox::ContinueFuture* future) {
+          auto queue = queueHolder.lock();
+          if (queue == nullptr) {
+            LOG(ERROR) << "TaskQueue has been destroyed, taskId: " << taskId;
+            return exec::BlockingReason::kNotBlocked;
+          }
+
+          if (!vector || !copyResult) {
+            return queue->enqueue(vector, drained, *future);
+          }
+          VectorPtr copy = encodedVectorCopy(
+              {.pool = queue->pool(), .reuseSource = false}, vector);
+          return queue->enqueue(
+              std::static_pointer_cast<RowVector>(std::move(copy)),
+              drained,
+              *future);
+        },
+        0,
+        std::move(spillDiskOpts),
+        [queueHolder, taskId = taskId_](std::exception_ptr) {
+          // onError close the queue to unblock producers and consumers.
+          // moveNext will handle rethrowing the error once it's
+          // unblocked.
+          auto queue = queueHolder.lock();
+          if (queue == nullptr) {
+            LOG(ERROR) << "TaskQueue has been destroyed, taskId: " << taskId;
+            return;
+          }
+          queue->close();
+        });
+
+    if (beforeTaskStart_) {
+      beforeTaskStart_(*task_);
+    }
+  }
+
+  ~MultiThreadedTaskCursor() override {
+    queue_->close();
+    if (task_ && !atEnd_) {
+      task_->requestCancel();
+    }
+  }
+
+  /// Starts the task if not started yet.
+  void start() override {
+    if (!started_) {
+      started_ = true;
+      try {
+        task_->start(maxDrivers_, numConcurrentSplitGroups_);
+        queue_->setNumProducers(numSplitGroups_ * task_->numOutputDrivers());
+      } catch (const VeloxException& e) {
+        // Could not find output pipeline, due to Task terminated before
+        // start. Do not override the error.
+        if (e.message().find("Output pipeline not found for task") ==
+            std::string::npos) {
+          throw;
+        }
+      }
+    }
+  }
+
+  /// Fetches another batch from the task queue.
+  /// Starts the task if not started yet.
+  bool moveNext(ContinueFuture* future) override {
+    while (true) {
+      start();
+      if (error_) {
+        std::rethrow_exception(error_);
+      }
+
+      // Task might be aborted before start.
+      ContinueFuture waitFuture = ContinueFuture::makeEmpty();
+      checkTaskError();
+      current_ = queue_->dequeue(waitFuture);
+      checkTaskError();
+
+      if (current_) {
+        return true;
+      }
+      if (waitFuture.valid()) {
+        // More output may still arrive. Hand the future to the caller when
+        // non-blocking, otherwise wait here and retry.
+        if (future != nullptr) {
+          *future = std::move(waitFuture);
+          return false;
+        }
+        waitFuture.wait();
+        continue;
+      }
+      // No future from the queue means producers are at end (or drained).
+      // A completed drain returns false with an invalid '*future', the same
+      // signal as end-of-stream. This preserves the prior blocking contract
+      // (both yielded false); the moveNext() protocol does not distinguish a
+      // drain boundary from end-of-stream.
+      if (queue_->numDrainedProducers_ > 0) {
+        VELOX_CHECK(queue_->numProducers_.has_value());
+        VELOX_CHECK_EQ(
+            queue_->numDrainedProducers_.load(), queue_->numProducers_.value());
+        queue_->numDrainedProducers_ = 0;
+        return false;
+      }
+      atEnd_ = true;
+      return false;
+    }
+  }
+
+  bool moveStep(const core::PlanNodeId& /*planId*/ = "") override {
+    return moveNext(nullptr);
+  }
+
+  void setNoMoreSplits() override {
+    VELOX_CHECK(!noMoreSplits_);
+    noMoreSplits_ = true;
+  }
+
+  bool noMoreSplits() const override {
+    return noMoreSplits_;
+  }
+
+  RowVectorPtr& current() override {
+    return current_;
+  }
+
+  core::PlanNodeId at() const override {
+    return ""; // always at task output.
+  }
+
+  void setError(std::exception_ptr error) override {
+    error_ = error;
+    if (task_) {
+      task_->setError(error);
+    }
+  }
+
+  const std::shared_ptr<Task>& task() override {
+    return task_;
+  }
+
+ private:
+  void checkTaskError() {
+    if (!task_->error()) {
+      return;
+    }
+    // Wait for the task to finish (there's a small period of time between
+    // when the error is set on the Task and terminate is called).
+    task_->taskCompletionFuture()
+        .within(std::chrono::microseconds(5'000'000))
+        .wait();
+
+    // Wait for all task drivers to finish to avoid destroying the executor_
+    // before task_ finished using it and causing a crash.
+    waitForTaskDriversToFinish(task_.get());
+    // A requested cancellation is not a query failure: surface it as
+    // cooperative cancellation (folly::OperationCancelled) so callers can tell
+    // a user/deadline stop apart from a genuine error. kAborted keeps its
+    // error.
+    if (task_->state() == TaskState::kCanceled) {
+      throw folly::OperationCancelled{};
+    }
+    std::rethrow_exception(task_->error());
+  }
+
+  const int32_t maxDrivers_;
+  const int32_t numConcurrentSplitGroups_;
+  const int32_t numSplitGroups_;
+
+  bool started_{false};
+  std::shared_ptr<TaskQueue> queue_;
+  std::shared_ptr<exec::Task> task_;
+  RowVectorPtr current_;
+  bool atEnd_{false};
+  tsan_atomic<bool> noMoreSplits_{false};
+  std::exception_ptr error_;
+};
+
+class SingleThreadedTaskCursor : public TaskCursorBase {
+ public:
+  explicit SingleThreadedTaskCursor(const CursorParameters& params)
+      : TaskCursorBase(params, nullptr),
+        outputPool_{
+            (params.outputPool != nullptr || !params.copyResult)
+                ? params.outputPool
+                : memory::memoryManager()->addLeafPool()},
+        copyResult_{params.copyResult} {
+    VELOX_CHECK(params.serialExecution);
+    VELOX_CHECK(
+        !queryCtx_->isExecutorSupplied(),
+        "Executor should not be set in serial task cursor");
+    std::optional<common::SpillDiskOptions> spillDiskOpts;
+    if (!taskSpillDirectory_.empty()) {
+      spillDiskOpts = common::SpillDiskOptions{
+          .spillDirPath = taskSpillDirectory_,
+          .spillDirCreated = true,
+          .spillDirCreateCb = taskSpillDirectoryCb_};
+    }
+    task_ = Task::create(
+        taskId_,
+        std::move(planFragment_),
+        params.destination,
+        std::move(queryCtx_),
+        Task::ExecutionMode::kSerial,
+        std::function<BlockingReason(RowVectorPtr, bool, ContinueFuture*)>{},
+        0,
+        std::move(spillDiskOpts));
+
+    VELOX_CHECK(
+        task_->supportSerialExecutionMode(),
+        "Plan doesn't support serial execution mode");
+
+    if (beforeTaskStart_) {
+      beforeTaskStart_(*task_);
+    }
+  }
+
+  ~SingleThreadedTaskCursor() override {
+    if (task_) {
+      task_->requestCancel().wait();
+    }
+  }
+
+  void start() override {
+    // no-op
+  }
+
+  void setNoMoreSplits() override {
+    VELOX_CHECK(!noMoreSplits_);
+    noMoreSplits_ = true;
+  }
+
+  bool noMoreSplits() const override {
+    return noMoreSplits_;
+  }
+
+  bool moveNext(ContinueFuture* future) override {
+    while (true) {
+      if (!task_->isRunning()) {
+        // Surface a cancellation/abort error rather than reporting "done", so
+        // an async caller can distinguish a terminated task from end-of-stream
+        // (matches the parallel cursor's checkTaskError() behavior).
+        if (auto error = task_->error()) {
+          // A requested cancellation surfaces as cooperative cancellation, not
+          // a query failure; kAborted keeps its error.
+          if (task_->state() == TaskState::kCanceled) {
+            throw folly::OperationCancelled{};
+          }
+          std::rethrow_exception(error);
+        }
+        return false;
+      }
+
+      ContinueFuture waitFuture = ContinueFuture::makeEmpty();
+      RowVectorPtr next = task_->next(&waitFuture);
+      if (next != nullptr) {
+        if (outputPool_ && copyResult_) {
+          VectorPtr copy = encodedVectorCopy(
+              {.pool = outputPool_.get(), .reuseSource = false}, next);
+          current_ = std::static_pointer_cast<RowVector>(std::move(copy));
+        } else {
+          current_ = next;
+        }
+        return true;
+      }
+      // next is null: either blocked on an external event (valid future) or
+      // the task is done (invalid future).
+      if (waitFuture.valid()) {
+        if (future != nullptr) {
+          *future = std::move(waitFuture);
+          return false;
+        }
+        waitFuture.wait();
+        continue;
+      }
+      VELOX_CHECK(!task_->isRunning() || !noMoreSplits_);
+      return false;
+    }
+  }
+
+  bool moveStep(const core::PlanNodeId& /*planId*/ = "") override {
+    return moveNext(nullptr);
+  }
+
+  RowVectorPtr& current() override {
+    return current_;
+  }
+
+  core::PlanNodeId at() const override {
+    return ""; // always at task output.
+  }
+
+  void setError(std::exception_ptr error) override {
+    error_ = error;
+    if (task_) {
+      task_->setError(error);
+    }
+  }
+
+  const std::shared_ptr<Task>& task() override {
+    return task_;
+  }
+
+ private:
+  std::shared_ptr<exec::Task> task_;
+  std::shared_ptr<memory::MemoryPool> outputPool_;
+  bool copyResult_{false};
+  bool noMoreSplits_{false};
+  RowVectorPtr current_;
+  std::exception_ptr error_;
+};
+
+/// Common base class for debugging cursors that support breakpoints.
+///
+/// Provides shared infrastructure for pausing execution at traced operators
+/// and inspecting intermediate results. Subclasses implement the execution
+/// model (serial vs parallel) via the `advance()` and `start()` methods.
+class TaskDebuggerCursorBase : public TaskCursorBase {
+ public:
+  // Debugging cursors are interactive and run synchronously, so they ignore
+  // 'future' and block, leaving it invalid.
+  bool moveNext(ContinueFuture* future) override {
+    if (future != nullptr) {
+      *future = ContinueFuture::makeEmpty();
+    }
+    return advance(false);
+  }
+
+  bool moveStep(const core::PlanNodeId& planId = "") override {
+    return advance(true, planId);
+  }
+
+  RowVectorPtr& current() override {
+    return current_;
+  }
+
+  core::PlanNodeId at() const override {
+    if (pendingTraceDriverState_) {
+      return pendingTraceDriverState_->planId;
+    }
+    return "";
+  }
+
+  void setNoMoreSplits() override {
+    VELOX_CHECK(!noMoreSplits_);
+    noMoreSplits_ = true;
+  }
+
+  bool noMoreSplits() const override {
+    return noMoreSplits_;
+  }
+
+  void setError(std::exception_ptr error) override {
+    error_ = error;
+    if (task_) {
+      task_->setError(error);
+    }
+  }
+
+  const std::shared_ptr<Task>& task() override {
+    return task_;
+  }
+
+ protected:
+  // Internal state for coordinating between the tracer and cursor.
+  //
+  // Manages the synchronization between the trace writer (which produces
+  // intermediate results) and the cursor (which consumes them).
+  struct TraceDriverState {
+    // Promise used to signal the tracer to continue after a partial result
+    // has been consumed.
+    ContinuePromise tracePromise{ContinuePromise::makeEmpty()};
+
+    // The most recent intermediate result from a traced operator.
+    RowVectorPtr traceData;
+
+    // The plan id where this state came from.
+    core::PlanNodeId planId;
+  };
+
+  struct TraceState {
+    std::deque<TraceDriverState> queue;
+    std::mutex mutex;
+
+    // Consumer blocking fields used by the parallel cursor to coordinate
+    // between the consumer callback and the advance() loop. In serial mode,
+    // consumerBlocked is never set to true, so the wakeup code is a no-op.
+    bool consumerBlocked = false;
+    ContinuePromise consumerPromise{ContinuePromise::makeEmpty()};
+    ContinueFuture consumerFuture;
+  };
+
+  // Custom trace context implementation for the debugger.
+  //
+  // Pauses execution at traced operators by blocking the trace writer until
+  // the cursor consumes the intermediate result.
+  class TaskDebuggerTraceCtx : public trace::TraceCtx {
+   public:
+    // Constructs a trace context for the specified plan nodes.
+    //
+    // @param breakpoints Map of plan node IDs to optional callbacks.
+    // @param traceState Reference to the shared trace state for coordination.
+    TaskDebuggerTraceCtx(
+        const CursorParameters::TBreakpointMap& breakpoints,
+        TraceState& traceState)
+        : TraceCtx(false), breakpoints_(breakpoints), traceState_(traceState) {}
+
+    // Determines whether a given operator should be traced.
+    //
+    // @param op The operator to check.
+    // @return true if the operator's plan node ID is in the traced set.
+    bool shouldTrace(const Operator& op) const override {
+      return breakpoints_.contains(op.planNodeId());
+    }
+
+    // Creates an input trace writer for the given operator.
+    //
+    // @param op The operator to create a tracer for.
+    // @return A unique pointer to the trace input writer.
+    std::unique_ptr<trace::TraceInputWriter> createInputTracer(
+        Operator& op) const override {
+      auto it = breakpoints_.find(op.planNodeId());
+      return std::make_unique<TaskDebuggerTraceInputWriter>(
+          op.planNodeId(),
+          it != breakpoints_.end() ? it->second : nullptr,
+          traceState_);
+    }
+
+   private:
+    // Trace writer that captures input vectors and pauses execution.
+    //
+    // When an input vector is written, this writer stores it in the shared
+    // trace state and blocks until the cursor signals to continue.
+    class TaskDebuggerTraceInputWriter : public trace::TraceInputWriter {
+     public:
+      TaskDebuggerTraceInputWriter(
+          const core::PlanNodeId& planId,
+          CursorParameters::BreakpointCallback callback,
+          TraceState& traceState)
+          : planId_(planId),
+            callback_(std::move(callback)),
+            traceState_(traceState) {}
+
+      // Writes an input vector and potentially pauses execution.
+      //
+      // Invokes the callback if set. If the callback returns false, the writer
+      // does not block and execution continues. If the callback returns true
+      // (or is null), stores the vector in the trace state and creates a future
+      // that blocks until the cursor consumes the result and signals
+      // continuation.
+      //
+      // @param vector The input vector to trace.
+      // @param future Output parameter set to a future that blocks until
+      //        the cursor is ready to continue.
+      // @return true if the writer is blocked waiting for the future, false
+      //         if execution should continue without blocking.
+      bool write(const RowVectorPtr& vector, ContinueFuture* future) override {
+        // Invoke the callback if set. If it returns false, don't block.
+        if (callback_ && !callback_(vector)) {
+          return false;
+        }
+
+        std::lock_guard<std::mutex> l(traceState_.mutex);
+        traceState_.queue.push_back(
+            TraceDriverState{
+                .tracePromise = ContinuePromise("TaskQueue::dequeue"),
+                .traceData = vector,
+                .planId = planId_,
+            });
+        *future = traceState_.queue.back().tracePromise.getFuture();
+
+        // If the consumer is blocked waiting for output, unblock it.
+        if (traceState_.consumerBlocked) {
+          traceState_.consumerBlocked = false;
+          traceState_.consumerPromise.setValue();
+        }
+        return true;
+      }
+
+      // Called when tracing is complete for this operator.
+      void finish() override {}
+
+     private:
+      const core::PlanNodeId planId_;
+      const CursorParameters::BreakpointCallback callback_;
+      TraceState& traceState_;
+    };
+
+    CursorParameters::TBreakpointMap breakpoints_;
+    TraceState& traceState_;
+  };
+
+  using TaskCursorBase::TaskCursorBase;
+
+  /// Ensures the task completes before cleanup.
+  ~TaskDebuggerCursorBase() override {
+    if (task_) {
+      task_->requestCancel().wait();
+    }
+  }
+
+  // Advance to the next vector to produce, storing it in `current_`. If
+  // `isStep` is true, move to the next trace point or task output. If false,
+  // moves to the next task output.
+  //
+  // If `isStep` is true and `planId` is non-empty, only stops at trace points
+  // matching the given plan node ID; other trace points are skipped.
+  //
+  // Returns false when the task is done producing output.
+  virtual bool advance(bool isStep, const core::PlanNodeId& planId = "") = 0;
+
+  // Unblocks the trace writer (driver) from the previously consumed trace
+  // state.
+  void unblockPendingState() {
+    if (pendingTraceDriverState_) {
+      pendingTraceDriverState_->tracePromise.setValue();
+      pendingTraceDriverState_.reset();
+    }
+  }
+
+  std::shared_ptr<exec::Task> task_;
+  bool noMoreSplits_{false};
+  RowVectorPtr current_;
+  std::exception_ptr error_;
+
+  // Holds the trace state that was returned to the user via moveStep(),
+  // so its promise can be fulfilled on the next advance() call.
+  std::optional<TraceDriverState> pendingTraceDriverState_;
+};
+
+/// A debugging cursor for interactive serial task execution.
+///
+/// @note This class assumes serial (single-threaded) execution mode.
+class TaskDebuggerSerialCursor : public TaskDebuggerCursorBase {
+ public:
+  explicit TaskDebuggerSerialCursor(const CursorParameters& params)
+      : TaskDebuggerCursorBase(params, nullptr) {
+    // Installs the required trace provider.
+    queryCtx_->setTraceCtxProvider(
+        [&](core::QueryCtx&, const core::PlanFragment&) {
+          return std::make_unique<TaskDebuggerTraceCtx>(
+              params.breakpoints, traceState_);
+        });
+
+    task_ = Task::create(
+        taskId_,
+        std::move(planFragment_),
+        params.destination,
+        std::move(queryCtx_),
+        Task::ExecutionMode::kSerial);
+  }
+
+  // no-op
+  void start() override {}
+
+ private:
+  bool advance(bool isStep, const core::PlanNodeId& planId = "") override {
+    if (error_) {
+      std::rethrow_exception(error_);
+    }
+
+    unblockPendingState();
+
+    while (true) {
+      ContinueFuture future = ContinueFuture::makeEmpty();
+
+      if (auto vector = task_->next(&future)) {
+        current_ = vector;
+        return true;
+      }
+
+      // Check if any trace states have been queued by writers.
+      {
+        std::lock_guard<std::mutex> l(traceState_.mutex);
+        if (!traceState_.queue.empty()) {
+          auto state = std::move(traceState_.queue.front());
+          traceState_.queue.pop_front();
+
+          if (isStep && (planId.empty() || state.planId == planId)) {
+            current_ = state.traceData;
+            pendingTraceDriverState_ = std::move(state);
+            return true;
+          }
+
+          // Signal the task driver to unblock.
+          state.tracePromise.setValue();
+        }
+      }
+
+      // Wait until the task future is unblocked.
+      if (future.valid()) {
+        future.wait();
+      } else {
+        // When no vector was produced and the future is not valid, it's the
+        // task signal that it has finished producing output.
+        VELOX_CHECK(!task_->isRunning() || !noMoreSplits_);
+        break;
+      }
+    }
+    return false;
+  }
+
+  TraceState traceState_;
+};
+
+/// A debugging cursor for interactive parallel task execution.
+///
+/// Uses a consumer callback to receive output from parallel drivers.
+class TaskDebuggerParallelCursor : public TaskDebuggerCursorBase {
+ public:
+  explicit TaskDebuggerParallelCursor(const CursorParameters& params)
+      : TaskDebuggerCursorBase(
+            params,
+            std::make_shared<folly::CPUThreadPoolExecutor>(
+                folly::available_concurrency())),
+        maxDrivers_(params.maxDrivers),
+        numConcurrentSplitGroups_(params.numConcurrentSplitGroups) {
+    // Installs the required trace provider.
+    queryCtx_->setTraceCtxProvider(
+        [&](core::QueryCtx&, const core::PlanFragment&) {
+          return std::make_unique<TaskDebuggerTraceCtx>(
+              params.breakpoints, traceState_);
+        });
+
+    task_ = Task::create(
+        taskId_,
+        std::move(planFragment_),
+        params.destination,
+        std::move(queryCtx_),
+        Task::ExecutionMode::kParallel,
+        // consumer
+        [&](const RowVectorPtr& vector,
+            bool drained,
+            velox::ContinueFuture* future) {
+          VELOX_CHECK(
+              !drained, "Unexpected drain in multithreaded task cursor");
+
+          if (!vector) {
+            // End-of-stream from a driver. Track completion and wake the
+            // consumer if it's blocked waiting for data.
+            std::lock_guard<std::mutex> l(traceState_.mutex);
+            ++traceState_.numFinishedProducers;
+            if (traceState_.consumerBlocked) {
+              traceState_.consumerBlocked = false;
+              traceState_.consumerPromise.setValue();
+            }
+            return exec::BlockingReason::kNotBlocked;
+          }
+
+          std::lock_guard<std::mutex> l(traceState_.mutex);
+          traceState_.queue.push_back(
+              TraceDriverState{
+                  .tracePromise = ContinuePromise("TaskQueue::dequeue"),
+                  .traceData = vector,
+                  .planId = "",
+              });
+          *future = traceState_.queue.back().tracePromise.getFuture();
+
+          if (traceState_.consumerBlocked) {
+            traceState_.consumerBlocked = false;
+            traceState_.consumerPromise.setValue();
+          }
+          return exec::BlockingReason::kWaitForConsumer;
+        });
+  }
+
+  void start() override {
+    if (!started_) {
+      started_ = true;
+      try {
+        task_->start(maxDrivers_, numConcurrentSplitGroups_);
+        numProducers_ = task_->numOutputDrivers();
+      } catch (const VeloxException& e) {
+        // Could not find output pipeline, due to Task terminated before
+        // start. Do not override the error.
+        if (e.message().find("Output pipeline not found for task") ==
+            std::string::npos) {
+          throw;
+        }
+      }
+    }
+  }
+
+ private:
+  bool advance(bool isStep, const core::PlanNodeId& planId = "") override {
+    start();
+    if (error_) {
+      std::rethrow_exception(error_);
+    }
+
+    unblockPendingState();
+
+    while (true) {
+      // Check if any trace states have been queued by writers.
+      {
+        std::lock_guard<std::mutex> l(traceState_.mutex);
+        if (!traceState_.queue.empty()) {
+          auto state = std::move(traceState_.queue.front());
+          traceState_.queue.pop_front();
+
+          const bool matchesPlanId = planId.empty() || state.planId == planId;
+          if ((isStep && matchesPlanId) || state.planId.empty()) {
+            current_ = state.traceData;
+            pendingTraceDriverState_ = std::move(state);
+            return true;
+          }
+
+          // moveNext() skips breakpoint trace data, or the planId filter
+          // didn't match; unblock the trace writer (driver).
+          state.tracePromise.setValue();
+        }
+
+        // Queue is empty. If all producers have finished, we're done.
+        if (traceState_.numFinishedProducers >= numProducers_) {
+          break;
+        }
+
+        traceState_.consumerBlocked = true;
+        traceState_.consumerPromise = ContinuePromise("TaskQueue::dequeue");
+        traceState_.consumerFuture = traceState_.consumerPromise.getFuture();
+      }
+      traceState_.consumerFuture.wait();
+    }
+    return false;
+  }
+
+  struct ParallelTraceState : TraceState {
+    // Number of output drivers that have finished (sent a null vector).
+    int numFinishedProducers{0};
+  };
+
+  ParallelTraceState traceState_;
+
+  bool started_{false};
+  int32_t maxDrivers_;
+  int32_t numConcurrentSplitGroups_;
+  int numProducers_{0};
+};
+
+} // namespace
+
+bool RowCursor::next() {
+  if (++currentRow_ < numRows_) {
+    return true;
+  }
+  if (!cursor_->moveNext()) {
+    return false;
+  }
+  auto vector = cursor_->current();
+  numRows_ = vector->size();
+  if (!numRows_) {
+    return next();
+  }
+  currentRow_ = 0;
+  if (decoded_.empty()) {
+    decoded_.resize(vector->childrenSize());
+    for (int32_t i = 0; i < vector->childrenSize(); ++i) {
+      decoded_[i] = std::make_unique<DecodedVector>();
+    }
+  }
+  allRows_.resize(vector->size());
+  allRows_.setAll();
+  for (int32_t i = 0; i < decoded_.size(); ++i) {
+    decoded_[i]->decode(*vector->childAt(i), allRows_);
+  }
+  return true;
+}
+
+std::unique_ptr<TaskCursor> TaskCursor::create(const CursorParameters& params) {
+  if (!params.breakpoints.empty()) {
+    if (params.serialExecution) {
+      return std::make_unique<TaskDebuggerSerialCursor>(params);
+    } else {
+      return std::make_unique<TaskDebuggerParallelCursor>(params);
+    }
+  }
+
+  if (params.serialExecution) {
+    return std::make_unique<SingleThreadedTaskCursor>(params);
+  }
+  return std::make_unique<MultiThreadedTaskCursor>(params);
+}
+
+bool waitForTaskDriversToFinish(exec::Task* task, uint64_t maxWaitMicros) {
+  VELOX_USER_CHECK(!task->isRunning());
+  uint64_t waitMicros = 0;
+  while ((task->numFinishedDrivers() != task->numTotalDrivers()) &&
+         (waitMicros < maxWaitMicros)) {
+    const uint64_t kWaitMicros = 1000;
+    std::this_thread::sleep_for(std::chrono::microseconds(kWaitMicros));
+    waitMicros += kWaitMicros;
+  }
+
+  if (task->numFinishedDrivers() != task->numTotalDrivers()) {
+    LOG(ERROR) << "Timed out waiting for all drivers of task " << task->taskId()
+               << " to finish. Finished drivers: " << task->numFinishedDrivers()
+               << ". Total drivers: " << task->numTotalDrivers();
+  }
+
+  return task->numFinishedDrivers() == task->numTotalDrivers();
+}
+
+} // namespace facebook::velox::exec

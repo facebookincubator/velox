@@ -1,0 +1,1946 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/dwio/parquet/reader/ParquetReader.h"
+
+#include <algorithm>
+#include <limits>
+#include <unordered_map>
+
+#include <thrift/lib/cpp2/FieldRef.h>
+
+#include "velox/common/Casts.h"
+#include "velox/dwio/common/ParquetFieldId.h"
+#include "velox/dwio/common/StatisticsBuilder.h"
+#include "velox/dwio/parquet/common/ParquetRuntimeStats.h"
+#include "velox/dwio/parquet/reader/ParquetColumnReader.h"
+#include "velox/dwio/parquet/reader/ParquetStatsContext.h"
+#include "velox/dwio/parquet/reader/StructColumnReader.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
+#include "velox/functions/lib/string/StringImpl.h"
+
+namespace facebook::velox::parquet {
+
+using dwio::common::ColumnMappingMode;
+
+namespace {
+
+/// Finds the node with the given ID in the TypeWithId tree. Uses a full
+/// traversal because Parquet's TypeWithId nodes all share the same maxId
+/// (the global max schema element index), so the maxId-based pruning used
+/// by ORC/DWRF does not work here.
+const dwio::common::TypeWithId* findNode(
+    const dwio::common::TypeWithId& root,
+    uint32_t nodeId) {
+  if (root.id() == nodeId) {
+    return &root;
+  }
+  for (auto i = 0; i < root.size(); ++i) {
+    if (auto* result = findNode(*root.childAt(i), nodeId)) {
+      return result;
+    }
+  }
+  return nullptr;
+}
+
+bool isParquetReservedKeyword(
+    std::string name,
+    uint32_t parentSchemaIdx,
+    uint32_t curSchemaIdx) {
+  // We skip this for the top-level nodes.
+  return ((parentSchemaIdx == 0 && curSchemaIdx == 0) ||
+          (parentSchemaIdx != 0 &&
+           (name == "key_value" || name == "key" || name == "value" ||
+            name == "list" || name == "element" || name == "bag" ||
+            name == "array_element")))
+      ? true
+      : false;
+}
+
+constexpr int32_t kMissingPhysicalFieldId = std::numeric_limits<int32_t>::min();
+
+int32_t fieldIdOrMissing(const thrift::SchemaElement& schemaElement) {
+  return schemaElement.field_id().value_or(kMissingPhysicalFieldId);
+}
+
+std::string schemaElementNameOrFieldId(
+    const thrift::SchemaElement& schemaElement,
+    dwio::common::ColumnMappingMode mode) {
+  if (mode == dwio::common::ColumnMappingMode::kParquetFieldId) {
+    return std::to_string(fieldIdOrMissing(schemaElement));
+  }
+  return *schemaElement.name();
+}
+
+// Consumes a physical Parquet schema subtree that is not selected by the
+// requested field IDs. Even though the node is skipped from the reader schema,
+// the traversal must still advance schemaIdx and leaf columnIdx.
+//
+// columnNames has one entry per physical schema node, in DFS order, indexed by
+// schemaIdx. This helper must push exactly one name for each physical node it
+// visits; otherwise getParquetColumnInfo() can later read the wrong name with
+// columnNames.at(curSchemaIdx).
+void skipParquetSchemaNode(
+    const std::vector<thrift::SchemaElement>& schema,
+    dwio::common::ColumnMappingMode mappingMode,
+    bool fileColumnNamesReadAsLowerCase,
+    uint32_t& schemaIdx,
+    uint32_t& columnIdx,
+    std::vector<std::string>& columnNames) {
+  auto name = schemaElementNameOrFieldId(schema[schemaIdx], mappingMode);
+  if (fileColumnNamesReadAsLowerCase) {
+    name = functions::stringImpl::utf8StrToLowerCopy(name);
+  }
+  columnNames.push_back(name);
+
+  const auto& schemaElement = schema[schemaIdx];
+  if (schemaElement.type()) {
+    ++columnIdx;
+  } else {
+    VELOX_CHECK(
+        schemaElement.num_children() && *schemaElement.num_children() > 0,
+        "Node has no children but should");
+    for (auto i = 0; i < *schemaElement.num_children(); ++i) {
+      ++schemaIdx;
+      skipParquetSchemaNode(
+          schema,
+          mappingMode,
+          fileColumnNamesReadAsLowerCase,
+          schemaIdx,
+          columnIdx,
+          columnNames);
+    }
+  }
+}
+
+// An unannotated array in Parquet is a repeated field that is not explicitly
+// marked as a LIST logical type. If current schema element is a repeated field
+// and the requested type is an array, we treat the current schema element as an
+// unannotated array, and returns true if the element type is compatible with
+// the physical type.
+bool isCompatible(
+    const TypePtr& requestedType,
+    bool isRepeated,
+    const std::function<bool(const TypePtr&)>& isCompatibleFunc) {
+  return isCompatibleFunc(requestedType) ||
+      (requestedType->isArray() && isRepeated &&
+       isCompatibleFunc(requestedType->asArray().elementType()));
+}
+
+// Checks if a decimal type has enough integer precision to hold all values
+// of the given Parquet physical int type.
+bool hasEnoughDecimalPrecision(const TypePtr& type, int32_t minIntegerDigits) {
+  if (!type->isDecimal()) {
+    return false;
+  }
+  auto [precision, scale] = getDecimalPrecisionScale(*type);
+  return (precision - scale) >= minIntegerDigits;
+}
+
+// Checks if a type is compatible with an INT32 physical type.
+// INT_8, INT_16, and INT_32 are all stored as Parquet INT32.
+// 'minTypeKind' is the smallest Velox type that matches the file's
+// converted type annotation (TINYINT for INT_8, SMALLINT for INT_16,
+// INTEGER for INT_32 or unannotated INT32).
+// For decimal targets, requires precision - scale >= 10.
+// When 'allowNarrowing' is true, any integer type is accepted and the
+// value is silently truncated on overflow. When false, only same-size
+// or wider types are allowed.
+bool isInt32Compatible(
+    const TypePtr& type,
+    TypeKind minTypeKind,
+    bool allowNarrowing) {
+  static_assert(
+      TypeKind::TINYINT < TypeKind::SMALLINT &&
+          TypeKind::SMALLINT < TypeKind::INTEGER &&
+          TypeKind::INTEGER < TypeKind::BIGINT,
+      "TypeKind enum ordering mismatch");
+
+  if (type->isDecimal()) {
+    return hasEnoughDecimalPrecision(type, 10);
+  }
+
+  auto kind = type->kind();
+  switch (kind) {
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+      return allowNarrowing || kind >= minTypeKind;
+    case TypeKind::DOUBLE:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Checks whether the given type is compatible with a Parquet INT64 source.
+// Accepts BIGINT identity mapping and Decimal targets with sufficient
+// precision (precision - scale >= 20, covering the full INT64 range).
+bool isInt64Compatible(const TypePtr& type) {
+  if (type->isDecimal()) {
+    return hasEnoughDecimalPrecision(type, 20);
+  }
+  return type->kind() == TypeKind::BIGINT;
+}
+
+ParquetReaderOptions getParquetReaderOptions(
+    const dwio::common::ReaderOptions& options) {
+  if (options.formatSpecificOptions()) {
+    return *checkedPointerCast<ParquetReaderOptions>(
+        options.formatSpecificOptions());
+  }
+
+  ParquetReaderOptions parquetOptions;
+  parquetOptions.footerSpeculativeIoSize = options.footerSpeculativeIoSize();
+  return parquetOptions;
+}
+
+} // namespace
+
+std::shared_ptr<dwio::common::FormatSpecificOptions>
+ParquetReaderFactory::createFormatOptions(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) const {
+  auto options = std::make_shared<ParquetReaderOptions>();
+  options->footerSpeculativeIoSize =
+      ParquetConfig::footerSpeculativeIoSize(connectorConfig, session);
+  options->setAllowInt32Narrowing(
+      ParquetConfig::allowInt32Narrowing(connectorConfig, session));
+  options->setFooterMemoryTrackingThreshold(
+      ParquetConfig::footerMemoryTrackingThreshold(connectorConfig, session));
+  return options;
+}
+
+/// Metadata and options for reading Parquet.
+class ReaderBase {
+ public:
+  ReaderBase(
+      std::unique_ptr<dwio::common::BufferedInput>,
+      const dwio::common::ReaderOptions& options);
+
+  virtual ~ReaderBase();
+
+  memory::MemoryPool& getMemoryPool() const {
+    return pool_;
+  }
+
+  dwio::common::BufferedInput& bufferedInput() const {
+    return *input_;
+  }
+
+  uint64_t fileLength() const {
+    return fileLength_;
+  }
+
+  thrift::FileMetaData& thriftFileMetaData() const {
+    return *fileMetaData_;
+  }
+
+  FileMetaDataPtr fileMetaData() const {
+    return FileMetaDataPtr(reinterpret_cast<const void*>(fileMetaData_.get()));
+  }
+
+  const dwio::common::ReaderOptions& options() const {
+    return options_;
+  }
+
+  const std::shared_ptr<const RowType>& schema() const {
+    return schema_;
+  }
+
+  const std::shared_ptr<const dwio::common::TypeWithId>& schemaWithId() {
+    return schemaWithId_;
+  }
+
+  bool isFileColumnNamesReadAsLowerCase() const {
+    return options_.fileColumnNamesReadAsLowerCase();
+  }
+
+  const tz::TimeZone* sessionTimezone() const {
+    return options_.sessionTimezone();
+  }
+
+  std::optional<SemanticVersion> version() const {
+    return version_;
+  }
+
+  /// Ensures that streams are enqueued and loading for the row group at
+  /// 'currentGroup'. May start loading one or more subsequent groups.
+  void scheduleRowGroups(
+      const std::vector<uint32_t>& groups,
+      int32_t currentGroup,
+      StructColumnReader& reader);
+
+  /// Returns the uncompressed size for columns in 'type' and its children in
+  /// row group.
+  int64_t rowGroupUncompressedSize(
+      int32_t rowGroupIndex,
+      const dwio::common::TypeWithId& type) const;
+
+  /// Checks whether the specific row group has been loaded and
+  /// the data still exists in the buffered inputs.
+  bool isRowGroupBuffered(int32_t rowGroupIndex) const;
+
+  /// Returns true if the deserialized Thrift footer's memory has been
+  /// reported to the memory pool. False when the footer was smaller than
+  /// the tracking threshold, so no allocation was reported.
+  bool isThriftMemoryReported() const {
+    return thriftMemoryReported_;
+  }
+
+  /// Returns the estimated footer size reported to the pool at
+  /// construction. Unchanged by later releaseThriftBytes() calls, so it
+  /// reflects the initial estimate rather than the remaining reservation.
+  /// Zero when tracking was not engaged.
+  size_t initialThriftSize() const {
+    return initialThriftSize_;
+  }
+
+  /// Releases 'bytes' from the previously reported Thrift footer memory
+  /// back to the pool and reduces the remaining tracked size accordingly.
+  /// Called when parts of the footer (e.g. cleared row group columns) are
+  /// released early, before ~ReaderBase frees the rest.
+  void releaseThriftBytes(size_t bytes);
+
+ private:
+  // Reads and parses file footer.
+  void loadFileMetaData();
+
+  void initializeSchema();
+
+  void initializeVersion();
+
+  std::unique_ptr<ParquetTypeWithId> getParquetColumnInfo(
+      uint32_t maxSchemaElementIdx,
+      uint32_t maxRepeat,
+      uint32_t maxDefine,
+      uint32_t parentSchemaIdx,
+      uint32_t& schemaIdx,
+      uint32_t& columnIdx,
+      const TypePtr& requestedType,
+      const TypePtr& parentRequestedType,
+      const ParquetFieldId* requestedFieldIds,
+      std::vector<std::string>& columnNames) const;
+
+  TypePtr convertType(
+      const thrift::SchemaElement& schemaElement,
+      const TypePtr& requestedType) const;
+
+  template <typename T>
+  static std::shared_ptr<const RowType> createRowType(
+      const std::vector<T>& children,
+      bool fileColumnNamesReadAsLowerCase);
+
+  memory::MemoryPool& pool_;
+  const uint64_t filePreloadThreshold_;
+  // Copy of options. Must be owned by 'this'.
+  const dwio::common::ReaderOptions options_;
+  // Copy of Parquet-specific options, or defaults for direct ParquetReader
+  // callers that do not go through ParquetReaderFactory.
+  const ParquetReaderOptions parquetReaderOptions_;
+  std::shared_ptr<velox::dwio::common::BufferedInput> input_;
+  uint64_t fileLength_;
+  std::unique_ptr<thrift::FileMetaData> fileMetaData_;
+  RowTypePtr schema_;
+  std::shared_ptr<const dwio::common::TypeWithId> schemaWithId_;
+
+  std::optional<SemanticVersion> version_;
+
+  // Map from row group index to pre-created loading BufferedInput.
+  std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
+      inputs_;
+
+  // Whether the deserialized Thrift footer's heap footprint has been
+  // reported to 'pool_'. Set once in the constructor after a successful
+  // reportExternalAllocation, and consulted by ~ReaderBase and
+  // releaseThriftBytes to decide whether the pool needs to be notified on
+  // release.
+  bool thriftMemoryReported_{false};
+
+  // Estimated bytes of heap memory held by 'fileMetaData_' that have been
+  // reported to 'pool_' and not yet released. Decreases as row group
+  // columns are cleared early; the remainder is released by ~ReaderBase.
+  size_t thriftSize_{0};
+
+  // The value of 'thriftSize_' at construction time, captured before any
+  // releaseThriftBytes() calls shrink it. Surfaced as a runtime stat so
+  // operators can compare the estimate against actual pool usage.
+  size_t initialThriftSize_{0};
+};
+
+ReaderBase::ReaderBase(
+    std::unique_ptr<dwio::common::BufferedInput> input,
+    const dwio::common::ReaderOptions& options)
+    : pool_{options.memoryPool()},
+      filePreloadThreshold_{options.filePreloadThreshold()},
+      options_{options},
+      parquetReaderOptions_{getParquetReaderOptions(options)},
+      input_{std::move(input)},
+      fileLength_{input_->getReadFile()->size()} {
+  VELOX_CHECK_GT(fileLength_, 0, "Parquet file is empty");
+  VELOX_CHECK_GE(fileLength_, 12, "Parquet file is too small");
+
+  loadFileMetaData();
+  initializeSchema();
+  initializeVersion();
+
+  // Report the thrift footer reservation only after all other initialization
+  // succeeds. If a step before this throws, ~ReaderBase will not run, so a
+  // reportExternalAllocation made earlier in the constructor would leak.
+  // Doing it last keeps reportExternalAllocation/reportExternalFree paired
+  // through ~ReaderBase.
+  if (thriftSize_ > 0) {
+    pool_.reportExternalAllocation(thriftSize_);
+    thriftMemoryReported_ = true;
+    initialThriftSize_ = thriftSize_;
+  }
+}
+
+ReaderBase::~ReaderBase() {
+  if (thriftMemoryReported_ && thriftSize_ > 0) {
+    pool_.reportExternalFree(thriftSize_);
+  }
+}
+
+void ReaderBase::releaseThriftBytes(size_t bytes) {
+  VELOX_CHECK_GE(thriftSize_, bytes);
+  pool_.reportExternalFree(bytes);
+  thriftSize_ -= bytes;
+}
+
+void ReaderBase::loadFileMetaData() {
+  bool preloadFile = fileLength_ <=
+      std::max(filePreloadThreshold_,
+               parquetReaderOptions_.footerSpeculativeIoSize);
+  uint64_t readSize =
+      preloadFile ? fileLength_ : parquetReaderOptions_.footerSpeculativeIoSize;
+
+  std::unique_ptr<dwio::common::SeekableInputStream> stream;
+  if (preloadFile) {
+    stream = input_->loadCompleteFile();
+  } else {
+    stream = input_->read(
+        fileLength_ - readSize, readSize, dwio::common::LogType::FOOTER);
+  }
+
+  std::vector<char> copy(readSize);
+  const char* bufferStart = nullptr;
+  const char* bufferEnd = nullptr;
+  dwio::common::readBytes(
+      readSize, stream.get(), copy.data(), bufferStart, bufferEnd);
+  VELOX_CHECK(
+      strncmp(copy.data() + readSize - 4, "PAR1", 4) == 0,
+      "No magic bytes found at end of the Parquet file");
+
+  uint32_t footerLength;
+  std::memcpy(&footerLength, copy.data() + readSize - 8, sizeof(uint32_t));
+  VELOX_CHECK_LE(
+      static_cast<uint64_t>(footerLength) + 12,
+      fileLength_,
+      "Parquet file footer length is inconsistent with file length: footer length {}, file length {}",
+      footerLength,
+      fileLength_);
+  int32_t footerOffsetInBuffer = readSize - 8 - footerLength;
+  if (footerLength > readSize - 8) {
+    footerOffsetInBuffer = 0;
+    auto missingLength = footerLength - readSize + 8;
+    stream = input_->read(
+        fileLength_ - footerLength - 8,
+        missingLength,
+        dwio::common::LogType::FOOTER);
+    copy.resize(footerLength);
+    std::memmove(copy.data() + missingLength, copy.data(), readSize - 8);
+    bufferStart = nullptr;
+    bufferEnd = nullptr;
+    dwio::common::readBytes(
+        missingLength, stream.get(), copy.data(), bufferStart, bufferEnd);
+  }
+
+  fileMetaData_ = std::make_unique<thrift::FileMetaData>();
+  thrift::deserialize(
+      fileMetaData_.get(),
+      std::string_view(
+          reinterpret_cast<char*>(copy.data() + footerOffsetInBuffer),
+          footerLength));
+  if (footerLength > parquetReaderOptions_.footerMemoryTrackingThreshold()) {
+    thriftSize_ = fileMetaData().estimateFileMetadataSize();
+  }
+}
+
+void ReaderBase::initializeSchema() {
+  if (fileMetaData_->encryption_algorithm()) {
+    VELOX_UNSUPPORTED("Encrypted Parquet files are not supported");
+  }
+
+  VELOX_CHECK_GT(
+      fileMetaData_->schema()->size(),
+      1,
+      "Invalid Parquet schema: Need at least one non-root column in the file");
+  // parquet.thrift says "The root of the schema does not have a
+  // repetition_type" but there are Parquet files that specify
+  // REQUIRED explicitly.
+  VELOX_CHECK_EQ(
+      (*fileMetaData_->schema())[0].repetition_type().value_or(
+          thrift::FieldRepetitionType::REQUIRED),
+      thrift::FieldRepetitionType::REQUIRED,
+      "Invalid Parquet schema: root element must be REQUIRED");
+  VELOX_CHECK_GT(
+      *(*fileMetaData_->schema())[0].num_children(),
+      0,
+      "Invalid Parquet schema: root element must have at least 1 child");
+
+  uint32_t maxDefine = 0;
+  uint32_t maxRepeat = 0;
+  uint32_t schemaIdx = 0;
+  uint32_t columnIdx = 0;
+  uint32_t maxSchemaElementIdx = fileMetaData_->schema()->size() - 1;
+  std::vector<std::string> columnNames;
+  const auto& fieldIds = options_.fieldIds();
+  ParquetFieldId rootFieldIds{-1, fieldIds};
+  // Setting the parent schema index of the root("hive_schema") to be 0, which
+  // is the root itself. This is ok because it's never required to check the
+  // parent of the root in getParquetColumnInfo().
+  schemaWithId_ = getParquetColumnInfo(
+      maxSchemaElementIdx,
+      maxRepeat,
+      maxDefine,
+      0,
+      schemaIdx,
+      columnIdx,
+      options_.fileSchema(),
+      nullptr,
+      fieldIds.empty() ? nullptr : &rootFieldIds,
+      columnNames);
+  schema_ = createRowType(
+      schemaWithId_->getChildren(), isFileColumnNamesReadAsLowerCase());
+}
+
+void ReaderBase::initializeVersion() {
+  if (fileMetaData_->created_by()) {
+    version_ = SemanticVersion::parse(*fileMetaData_->created_by());
+  } else {
+    version_ = std::nullopt;
+  }
+}
+
+std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
+    uint32_t maxSchemaElementIdx,
+    uint32_t maxRepeat,
+    uint32_t maxDefine,
+    uint32_t parentSchemaIdx,
+    uint32_t& schemaIdx,
+    uint32_t& columnIdx,
+    const TypePtr& requestedType,
+    const TypePtr& parentRequestedType,
+    const ParquetFieldId* requestedFieldIds,
+    std::vector<std::string>& columnNames) const {
+  VELOX_CHECK(fileMetaData_ != nullptr);
+  VELOX_CHECK_LT(schemaIdx, fileMetaData_->schema()->size());
+
+  // columnNames has one entry per physical schema node, in DFS order, indexed
+  // by schemaIdx. Each branch in this function must either push exactly one
+  // name for the current physical node or rely on its parent to have already
+  // pushed that node's requested name before recursing.
+  auto& schema = *fileMetaData_->schema();
+  uint32_t curSchemaIdx = schemaIdx;
+  auto& schemaElement = schema[curSchemaIdx];
+  bool isRepeated = false;
+  bool isOptional = false;
+
+  if (schemaElement.repetition_type()) {
+    if (*schemaElement.repetition_type() !=
+        thrift::FieldRepetitionType::REQUIRED) {
+      maxDefine++;
+    }
+    if (apache::thrift::can_throw(*schemaElement.repetition_type()) ==
+        thrift::FieldRepetitionType::REPEATED) {
+      maxRepeat++;
+      isRepeated = true;
+    }
+    if (*schemaElement.repetition_type() ==
+        thrift::FieldRepetitionType::OPTIONAL) {
+      isOptional = true;
+    }
+  }
+
+  const auto mappingMode = options_.columnMappingMode();
+  auto physicalName = *schemaElement.name();
+  if (isFileColumnNamesReadAsLowerCase()) {
+    physicalName = functions::stringImpl::utf8StrToLowerCopy(physicalName);
+  }
+  auto name = schemaElementNameOrFieldId(schemaElement, mappingMode);
+  if (isFileColumnNamesReadAsLowerCase()) {
+    name = functions::stringImpl::utf8StrToLowerCopy(name);
+  }
+
+  const bool parentProvidesChildNames =
+      (mappingMode == dwio::common::ColumnMappingMode::kPosition ||
+       (mappingMode == dwio::common::ColumnMappingMode::kParquetFieldId &&
+        requestedFieldIds != nullptr && requestedType != nullptr)) &&
+      options_.fileSchema();
+  if (parentProvidesChildNames) {
+    if (isParquetReservedKeyword(name, parentSchemaIdx, curSchemaIdx)) {
+      columnNames.push_back(name);
+    }
+  } else {
+    columnNames.push_back(name);
+  }
+
+  if (!schemaElement.type()) { // inner node
+    VELOX_CHECK(
+        schemaElement.num_children() && *schemaElement.num_children() > 0,
+        "Node has no children but should");
+    VELOX_CHECK(
+        !requestedType || requestedType->isRow() || requestedType->isArray() ||
+        requestedType->isMap());
+
+    std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>> children;
+
+    RowTypePtr requestedRowType = nullptr;
+    if (requestedType) {
+      if (requestedType->isRow()) {
+        requestedRowType =
+            std::dynamic_pointer_cast<const velox::RowType>(requestedType);
+      } else if (
+          requestedType->isArray() && isRepeated &&
+          requestedType->asArray().elementType()->isRow()) {
+        // Handle the case of unannotated array of structs (repeated group
+        // without LIST annotation).
+        requestedRowType = std::dynamic_pointer_cast<const velox::RowType>(
+            requestedType->asArray().elementType());
+      }
+    }
+
+    std::unordered_map<int32_t, uint32_t> requestedIndexByFieldId;
+    if (mappingMode == dwio::common::ColumnMappingMode::kParquetFieldId &&
+        requestedFieldIds != nullptr && requestedRowType != nullptr) {
+      const auto numFields = std::min(
+          requestedRowType->size(),
+          static_cast<uint32_t>(requestedFieldIds->children.size()));
+      for (uint32_t fieldIndex = 0; fieldIndex < numFields; ++fieldIndex) {
+        requestedIndexByFieldId.emplace(
+            requestedFieldIds->children[fieldIndex].fieldId, fieldIndex);
+      }
+    }
+
+    auto curSchemaIdx = schemaIdx;
+    for (int32_t i = 0; i < *schemaElement.num_children(); i++) {
+      ++schemaIdx;
+      auto childName =
+          schemaElementNameOrFieldId(schema[schemaIdx], mappingMode);
+      if (isFileColumnNamesReadAsLowerCase()) {
+        childName = functions::stringImpl::utf8StrToLowerCopy(childName);
+      }
+
+      TypePtr childRequestedType = nullptr;
+      const ParquetFieldId* childRequestedFieldIds = nullptr;
+      bool followChild = true;
+
+      if (requestedRowType) {
+        if (mappingMode == dwio::common::ColumnMappingMode::kName) {
+          auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
+          if (fileTypeIdx.has_value()) {
+            childRequestedType = requestedRowType->childAt(*fileTypeIdx);
+          }
+        } else if (
+            mappingMode == dwio::common::ColumnMappingMode::kParquetFieldId) {
+          if (requestedFieldIds != nullptr) {
+            const auto fieldId = fieldIdOrMissing(schema[schemaIdx]);
+            const auto requestedIndex = requestedIndexByFieldId.find(fieldId);
+            if (requestedIndex != requestedIndexByFieldId.end()) {
+              columnNames.push_back(
+                  requestedRowType->nameOf(requestedIndex->second));
+              childRequestedType =
+                  requestedRowType->childAt(requestedIndex->second);
+              childRequestedFieldIds =
+                  &requestedFieldIds->children[requestedIndex->second];
+            } else {
+              followChild = false;
+            }
+          } else {
+            auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
+            if (fileTypeIdx.has_value()) {
+              childRequestedType = requestedRowType->childAt(*fileTypeIdx);
+            } else {
+              followChild = false;
+            }
+          }
+        } else {
+          // Handle schema evolution.
+          if (i < requestedRowType->size()) {
+            columnNames.push_back(requestedRowType->nameOf(i));
+            childRequestedType = requestedRowType->childAt(i);
+          } else {
+            followChild = false;
+          }
+        }
+      }
+
+      // Handling elements of ARRAY/MAP
+      if (!requestedType && parentRequestedType) {
+        if (parentRequestedType->isArray()) {
+          childRequestedType = parentRequestedType->asArray().elementType();
+          childRequestedFieldIds =
+              (requestedFieldIds && !requestedFieldIds->children.empty())
+              ? &requestedFieldIds->children[0]
+              : nullptr;
+          if (mappingMode == dwio::common::ColumnMappingMode::kParquetFieldId &&
+              childRequestedFieldIds != nullptr) {
+            columnNames.push_back("element");
+          }
+        } else if (parentRequestedType->isMap()) {
+          auto mapType = parentRequestedType->asMap();
+          // Processing map keys
+          if (i == 0) {
+            childRequestedType = mapType.keyType();
+            childRequestedFieldIds =
+                (requestedFieldIds && !requestedFieldIds->children.empty())
+                ? &requestedFieldIds->children[0]
+                : nullptr;
+            if (mappingMode ==
+                    dwio::common::ColumnMappingMode::kParquetFieldId &&
+                childRequestedFieldIds != nullptr) {
+              columnNames.push_back("key");
+            }
+          } else {
+            childRequestedType = mapType.valueType();
+            childRequestedFieldIds =
+                (requestedFieldIds && requestedFieldIds->children.size() > 1)
+                ? &requestedFieldIds->children[1]
+                : nullptr;
+            if (mappingMode ==
+                    dwio::common::ColumnMappingMode::kParquetFieldId &&
+                childRequestedFieldIds != nullptr) {
+              columnNames.push_back("value");
+            }
+          }
+        }
+      }
+
+      if (mappingMode == dwio::common::ColumnMappingMode::kParquetFieldId &&
+          requestedFieldIds != nullptr && requestedType &&
+          (requestedType->isArray() || requestedType->isMap()) &&
+          childRequestedFieldIds == nullptr) {
+        childRequestedFieldIds = requestedFieldIds;
+      }
+
+      if (followChild) {
+        auto child = getParquetColumnInfo(
+            maxSchemaElementIdx,
+            maxRepeat,
+            maxDefine,
+            curSchemaIdx,
+            schemaIdx,
+            columnIdx,
+            childRequestedType,
+            requestedType,
+            childRequestedFieldIds,
+            columnNames);
+        children.push_back(std::move(child));
+      } else {
+        skipParquetSchemaNode(
+            schema,
+            mappingMode,
+            isFileColumnNamesReadAsLowerCase(),
+            schemaIdx,
+            columnIdx,
+            columnNames);
+      }
+    }
+    VELOX_CHECK(
+        !children.empty() ||
+            (mappingMode == dwio::common::ColumnMappingMode::kParquetFieldId &&
+             requestedFieldIds != nullptr),
+        "Parquet schema node has no selected children");
+    name = columnNames.at(curSchemaIdx);
+
+    if (schemaElement.converted_type()) {
+      switch (*schemaElement.converted_type()) {
+        case thrift::ConvertedType::LIST: {
+          VELOX_CHECK_EQ(children.size(), 1);
+          const auto& child = children[0];
+          isRepeated = true;
+          // In case the child is a MAP or current element is repeated then
+          // wrap child around additional ARRAY
+          if (child->type()->kind() == TypeKind::MAP ||
+              apache::thrift::can_throw(*schemaElement.repetition_type()) ==
+                  thrift::FieldRepetitionType::REPEATED) {
+            return std::make_unique<ParquetTypeWithId>(
+                TypeFactory<TypeKind::ARRAY>::create(child->type()),
+                std::move(children),
+                curSchemaIdx,
+                maxSchemaElementIdx,
+                ParquetTypeWithId::kNonLeaf,
+                std::move(name),
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                maxRepeat + 1,
+                maxDefine,
+                isOptional,
+                isRepeated);
+          }
+          // Only special case list of map and list of list is handled here,
+          // other generic case is handled with case MAP
+          [[fallthrough]];
+        }
+        case thrift::ConvertedType::MAP_KEY_VALUE:
+          // If the MAP_KEY_VALUE annotated group's parent is a MAP, it should
+          // be the repeated key_value group that directly contains the key and
+          // value children.
+          if (schema[parentSchemaIdx].converted_type() &&
+              *schema[parentSchemaIdx].converted_type() ==
+                  thrift::ConvertedType::MAP) {
+            // TODO: the group names need to be checked. According to the spec,
+            // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#maps
+            // the name of the schema element being 'key_value' is
+            // also an indication of this is a map type
+            VELOX_CHECK_EQ(
+                *schemaElement.repetition_type(),
+                thrift::FieldRepetitionType::REPEATED);
+            VELOX_CHECK_EQ(children.size(), 2);
+
+            auto type = TypeFactory<TypeKind::MAP>::create(
+                children[0]->type(), children[1]->type());
+            return std::make_unique<ParquetTypeWithId>(
+                std::move(type),
+                std::move(children),
+                curSchemaIdx, // TODO: there are holes in the ids
+                maxSchemaElementIdx,
+                ParquetTypeWithId::kNonLeaf, // columnIdx,
+                std::move(name),
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                maxRepeat,
+                maxDefine,
+                isOptional,
+                isRepeated);
+          }
+
+          // For backward-compatibility, a group annotated with MAP_KEY_VALUE
+          // that is not contained by a MAP-annotated group should be handled as
+          // a MAP-annotated group.
+          [[fallthrough]];
+
+        case thrift::ConvertedType::MAP: {
+          VELOX_CHECK_EQ(children.size(), 1);
+          const auto& child = children[0];
+          auto type = child->type();
+          isRepeated = true;
+          // This level will not have the "isRepeated" info in the parquet
+          // schema since parquet schema will have a child layer which will have
+          // the "repeated info" which we are ignoring here, hence we set the
+          // isRepeated to true eg
+          // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
+          return std::make_unique<ParquetTypeWithId>(
+              std::move(type),
+              std::move(*(ParquetTypeWithId*)child.get()).moveChildren(),
+              curSchemaIdx, // TODO: there are holes in the ids
+              maxSchemaElementIdx,
+              ParquetTypeWithId::kNonLeaf, // columnIdx,
+              std::move(name),
+              std::nullopt,
+              std::nullopt,
+              std::nullopt,
+              maxRepeat + 1,
+              maxDefine,
+              isOptional,
+              isRepeated);
+        }
+
+        default:
+          VELOX_UNREACHABLE(
+              "Invalid SchemaElement converted_type: {}, name: {}",
+              *schemaElement.converted_type(),
+              name);
+      }
+    } else {
+      if (schemaElement.repetition_type() &&
+          *schemaElement.repetition_type() ==
+              thrift::FieldRepetitionType::REPEATED) {
+        auto convertedType = schema[parentSchemaIdx].converted_type();
+        if (convertedType && *convertedType == thrift::ConvertedType::LIST) {
+          // TODO: the group names need to be checked. According to spec,
+          // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
+          // the name of the schema element being 'array' is
+          // also an indication of this is a list type
+          // child of LIST
+          VELOX_CHECK_GE(children.size(), 1);
+          if (children.size() == 1 && physicalName != "array" &&
+              physicalName != *schema[parentSchemaIdx].name() + "_tuple") {
+            auto type =
+                TypeFactory<TypeKind::ARRAY>::create(children[0]->type());
+            return std::make_unique<ParquetTypeWithId>(
+                std::move(type),
+                std::move(children),
+                curSchemaIdx,
+                maxSchemaElementIdx,
+                ParquetTypeWithId::kNonLeaf, // columnIdx,
+                std::move(name),
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                maxRepeat,
+                maxDefine,
+                isOptional,
+                isRepeated);
+          } else {
+            // According to the spec of list backward compatibility
+            // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
+            // "If the repeated field is a group with multiple fields, then its
+            // type is the element type and elements are required." when there
+            // are multiple fields, creating a new row type instance which has
+            // all the fields as its children.
+            // TODO: since this is newly created node, its schemaIdx actually
+            // doesn't exist from the footer schema. Reusing the curSchemaIdx
+            // but potentially could have issue.
+            auto childrenRowType =
+                createRowType(children, isFileColumnNamesReadAsLowerCase());
+            std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>>
+                rowChildren;
+            // In this legacy case, there is no middle layer between "array"
+            // node and the children nodes. Below creates this dummy middle
+            // layer to mimic the non-legacy case and fill the gap.
+            rowChildren.emplace_back(
+                std::make_unique<ParquetTypeWithId>(
+                    childrenRowType,
+                    std::move(children),
+                    curSchemaIdx,
+                    maxSchemaElementIdx,
+                    ParquetTypeWithId::kNonLeaf,
+                    "dummy",
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    maxRepeat,
+                    maxDefine,
+                    isOptional,
+                    isRepeated));
+            auto res = std::make_unique<ParquetTypeWithId>(
+                TypeFactory<TypeKind::ARRAY>::create(childrenRowType),
+                std::move(rowChildren),
+                curSchemaIdx,
+                maxSchemaElementIdx,
+                ParquetTypeWithId::kNonLeaf, // columnIdx,
+                std::move(name),
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                maxRepeat,
+                maxDefine,
+                isOptional,
+                isRepeated);
+            return res;
+          }
+        } else if (
+            convertedType &&
+            (*convertedType == thrift::ConvertedType::MAP ||
+             *convertedType == thrift::ConvertedType::MAP_KEY_VALUE)) {
+          // children  of MAP
+          VELOX_CHECK_EQ(children.size(), 2);
+          auto type = TypeFactory<TypeKind::MAP>::create(
+              children[0]->type(), children[1]->type());
+          return std::make_unique<ParquetTypeWithId>(
+              std::move(type),
+              std::move(children),
+              curSchemaIdx, // TODO: there are holes in the ids
+              maxSchemaElementIdx,
+              ParquetTypeWithId::kNonLeaf, // columnIdx,
+              std::move(name),
+              std::nullopt,
+              std::nullopt,
+              std::nullopt,
+              maxRepeat,
+              maxDefine,
+              isOptional,
+              isRepeated);
+        } else {
+          // Row type
+          // To support list backward compatibility, need create a new row type
+          // instance and set all the fields as its children.
+          auto childrenRowType =
+              createRowType(children, isFileColumnNamesReadAsLowerCase());
+          std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>>
+              rowChildren;
+          // In this legacy case, there is no middle layer between "array"
+          // node and the children nodes. Below creates this dummy middle
+          // layer to mimic the non-legacy case and fill the gap.
+          rowChildren.emplace_back(
+              std::make_unique<ParquetTypeWithId>(
+                  childrenRowType,
+                  std::move(children),
+                  curSchemaIdx,
+                  maxSchemaElementIdx,
+                  ParquetTypeWithId::kNonLeaf,
+                  "dummy",
+                  std::nullopt,
+                  std::nullopt,
+                  std::nullopt,
+                  maxRepeat,
+                  maxDefine,
+                  isOptional,
+                  isRepeated));
+          return std::make_unique<ParquetTypeWithId>(
+              TypeFactory<TypeKind::ARRAY>::create(childrenRowType),
+              std::move(rowChildren),
+              curSchemaIdx,
+              maxSchemaElementIdx,
+              ParquetTypeWithId::kNonLeaf, // columnIdx,
+              std::move(name),
+              std::nullopt,
+              std::nullopt,
+              std::nullopt,
+              maxRepeat,
+              maxDefine,
+              isOptional,
+              isRepeated);
+        }
+      } else {
+        // Row type
+        auto type = createRowType(children, isFileColumnNamesReadAsLowerCase());
+        return std::make_unique<ParquetTypeWithId>(
+            std::move(type),
+            std::move(children),
+            curSchemaIdx,
+            maxSchemaElementIdx,
+            ParquetTypeWithId::kNonLeaf, // columnIdx,
+            std::move(name),
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            maxRepeat,
+            maxDefine,
+            isOptional,
+            isRepeated);
+      }
+    }
+  } else { // leaf node
+    name = columnNames.at(curSchemaIdx);
+    const auto veloxType = convertType(schemaElement, requestedType);
+    int32_t precision = schemaElement.precision().value_or(0);
+    int32_t scale = schemaElement.scale().value_or(0);
+    int32_t typeLength = schemaElement.type_length().value_or(0);
+    std::vector<std::unique_ptr<dwio::common::TypeWithId>> children;
+    const std::optional<thrift::LogicalType> logicalType_ =
+        schemaElement.logicalType().to_optional();
+    const std::optional<thrift::ConvertedType> convertedType =
+        schemaElement.converted_type().to_optional();
+
+    auto leafTypePtr = std::make_unique<ParquetTypeWithId>(
+        veloxType,
+        std::move(children),
+        curSchemaIdx,
+        maxSchemaElementIdx,
+        columnIdx++,
+        name,
+        *schemaElement.type(),
+        logicalType_,
+        convertedType,
+        maxRepeat,
+        maxDefine,
+        isOptional,
+        isRepeated,
+        precision,
+        scale,
+        typeLength);
+
+    if (apache::thrift::can_throw(*schemaElement.repetition_type()) ==
+        thrift::FieldRepetitionType::REPEATED) {
+      // Array
+      children.clear();
+      children.reserve(1);
+      children.push_back(std::move(leafTypePtr));
+      return std::make_unique<ParquetTypeWithId>(
+          TypeFactory<TypeKind::ARRAY>::create(veloxType),
+          std::move(children),
+          curSchemaIdx,
+          maxSchemaElementIdx,
+          columnIdx - 1, // was already incremented for leafTypePtr
+          std::move(name),
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          maxRepeat,
+          maxDefine - 1,
+          isOptional,
+          isRepeated);
+    }
+    return leafTypePtr;
+  }
+
+  VELOX_FAIL("Unable to extract Parquet column info.");
+  return nullptr;
+}
+
+TypePtr ReaderBase::convertType(
+    const thrift::SchemaElement& schemaElement,
+    const TypePtr& requestedType) const {
+  VELOX_CHECK(
+      schemaElement.type() && schemaElement.num_children().value_or(0) == 0);
+  VELOX_CHECK(
+      *schemaElement.type() != thrift::Type::FIXED_LEN_BYTE_ARRAY ||
+          schemaElement.type_length(),
+      "FIXED_LEN_BYTE_ARRAY requires length to be set");
+
+  static constexpr const char* kTypeMappingErrorFmtStr =
+      "Converted type {} is not allowed for requested type {} for file column '{}'";
+  const bool isRepeated = schemaElement.repetition_type() &&
+      *schemaElement.repetition_type() == thrift::FieldRepetitionType::REPEATED;
+  const bool allowNarrowing = parquetReaderOptions_.allowInt32Narrowing();
+
+  if (schemaElement.logicalType() &&
+      schemaElement.logicalType()->getType() ==
+          thrift::LogicalType::Type::UNKNOWN) {
+    VELOX_CHECK(
+        !requestedType ||
+            isCompatible(
+                requestedType,
+                isRepeated,
+                [](const TypePtr& type) {
+                  return type->kind() == TypeKind::UNKNOWN;
+                }),
+        kTypeMappingErrorFmtStr,
+        "UNKNOWN",
+        requestedType->toString(),
+        *schemaElement.name());
+    return UNKNOWN();
+  }
+
+  if (schemaElement.converted_type()) {
+    switch (*schemaElement.converted_type()) {
+      case thrift::ConvertedType::INT_8:
+      case thrift::ConvertedType::UINT_8:
+        VELOX_CHECK_EQ(
+            *schemaElement.type(),
+            thrift::Type::INT32,
+            "{} converted type can only be set for value of thrift::Type::INT32",
+            *schemaElement.converted_type());
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [&](const TypePtr& type) {
+                      return isInt32Compatible(
+                          type, TypeKind::TINYINT, allowNarrowing);
+                    }),
+            kTypeMappingErrorFmtStr,
+            "TINYINT",
+            requestedType->toString(),
+            *schemaElement.name());
+        return TINYINT();
+
+      case thrift::ConvertedType::INT_16:
+      case thrift::ConvertedType::UINT_16:
+        VELOX_CHECK_EQ(
+            *schemaElement.type(),
+            thrift::Type::INT32,
+            "{} converted type can only be set for value of thrift::Type::INT32",
+            *schemaElement.converted_type());
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [&](const TypePtr& type) {
+                      return isInt32Compatible(
+                          type, TypeKind::SMALLINT, allowNarrowing);
+                    }),
+            kTypeMappingErrorFmtStr,
+            "SMALLINT",
+            requestedType->toString(),
+            *schemaElement.name());
+        return SMALLINT();
+
+      case thrift::ConvertedType::INT_32:
+      case thrift::ConvertedType::UINT_32:
+        VELOX_CHECK_EQ(
+            *schemaElement.type(),
+            thrift::Type::INT32,
+            "{} converted type can only be set for value of thrift::Type::INT32",
+            *schemaElement.converted_type());
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [&](const TypePtr& type) {
+                      return isInt32Compatible(
+                          type, TypeKind::INTEGER, allowNarrowing);
+                    }),
+            kTypeMappingErrorFmtStr,
+            "INTEGER",
+            requestedType->toString(),
+            *schemaElement.name());
+        return INTEGER();
+
+      case thrift::ConvertedType::INT_64:
+      case thrift::ConvertedType::UINT_64:
+        VELOX_CHECK_EQ(
+            *schemaElement.type(),
+            thrift::Type::INT64,
+            "{} converted type can only be set for value of thrift::Type::INT64",
+            *schemaElement.converted_type());
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(requestedType, isRepeated, isInt64Compatible),
+            kTypeMappingErrorFmtStr,
+            "BIGINT",
+            requestedType->toString(),
+            *schemaElement.name());
+        return BIGINT();
+
+      case thrift::ConvertedType::DATE:
+        VELOX_CHECK_EQ(
+            *schemaElement.type(),
+            thrift::Type::INT32,
+            "DATE converted type can only be set for value of thrift::Type::INT32");
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [](const TypePtr& type) { return type->isDate(); }),
+            kTypeMappingErrorFmtStr,
+            "DATE",
+            requestedType->toString(),
+            *schemaElement.name());
+        return DATE();
+
+      case thrift::ConvertedType::TIMESTAMP_MICROS:
+      case thrift::ConvertedType::TIMESTAMP_MILLIS:
+        VELOX_CHECK_EQ(
+            *schemaElement.type(),
+            thrift::Type::INT64,
+            "TIMESTAMP_MICROS or TIMESTAMP_MILLIS converted type can only be set for value of thrift::Type::INT64");
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [](const TypePtr& type) {
+                      return type->kind() == TypeKind::TIMESTAMP;
+                    }),
+            kTypeMappingErrorFmtStr,
+            "TIMESTAMP",
+            requestedType->toString(),
+            *schemaElement.name());
+        return TIMESTAMP();
+
+      case thrift::ConvertedType::DECIMAL: {
+        VELOX_CHECK(
+            schemaElement.precision() && schemaElement.scale(),
+            "DECIMAL requires a length and scale specifier!");
+        const auto schemaElementPrecision = *schemaElement.precision();
+        const auto schemaElementScale = *schemaElement.scale();
+        auto type = DECIMAL(schemaElementPrecision, schemaElementScale);
+        if (requestedType) {
+          VELOX_CHECK(
+              isCompatible(
+                  requestedType,
+                  isRepeated,
+                  [](const TypePtr& type) { return type->isDecimal(); }),
+              kTypeMappingErrorFmtStr,
+              "DECIMAL",
+              requestedType->toString(),
+              *schemaElement.name());
+          // Allow decimal widening: precision may be larger and scale may
+          // increase as long as precisionIncrease >= scaleIncrease.
+          // Short-to-long decimal crossing is handled by getDecimalValues
+          // via the upcast path.
+          VELOX_CHECK(
+              isCompatible(
+                  requestedType,
+                  isRepeated,
+                  [&](const TypePtr& type) {
+                    auto [precision, scale] = getDecimalPrecisionScale(*type);
+                    auto precisionInc = precision - schemaElementPrecision;
+                    auto scaleInc = scale - schemaElementScale;
+                    return scaleInc >= 0 && precisionInc >= scaleInc;
+                  }),
+              kTypeMappingErrorFmtStr,
+              type->toString(),
+              requestedType->toString(),
+              *schemaElement.name());
+        }
+        return type;
+      }
+
+      case thrift::ConvertedType::UTF8:
+        switch (*schemaElement.type()) {
+          case thrift::Type::BYTE_ARRAY:
+          case thrift::Type::FIXED_LEN_BYTE_ARRAY:
+            VELOX_CHECK(
+                !requestedType ||
+                    isCompatible(
+                        requestedType,
+                        isRepeated,
+                        [](const TypePtr& type) {
+                          return type->kind() == TypeKind::VARCHAR;
+                        }),
+                kTypeMappingErrorFmtStr,
+                "VARCHAR",
+                requestedType->toString(),
+                *schemaElement.name());
+            return VARCHAR();
+          default:
+            VELOX_FAIL(
+                "UTF8 converted type can only be set for thrift::Type::(FIXED_LEN_)BYTE_ARRAY");
+        }
+      case thrift::ConvertedType::ENUM: {
+        VELOX_CHECK_EQ(
+            *schemaElement.type(),
+            thrift::Type::BYTE_ARRAY,
+            "ENUM converted type can only be set for value of thrift::Type::BYTE_ARRAY");
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [](const TypePtr& type) {
+                      return type->kind() == TypeKind::VARCHAR;
+                    }),
+            kTypeMappingErrorFmtStr,
+            "VARCHAR",
+            requestedType->toString(),
+            *schemaElement.name());
+        return VARCHAR();
+      }
+      case thrift::ConvertedType::TIME_MILLIS:
+        VELOX_CHECK_EQ(
+            static_cast<int>(*schemaElement.type()),
+            static_cast<int>(thrift::Type::INT32),
+            "TIME_MILLIS converted type can only be set for value of thrift::Type::INT32");
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [](const TypePtr& type) {
+                      return type->equivalent(*TIME());
+                    }),
+            kTypeMappingErrorFmtStr,
+            "TIME",
+            requestedType->toString(),
+            *schemaElement.name());
+        return TIME();
+
+      case thrift::ConvertedType::TIME_MICROS: {
+        VELOX_CHECK_EQ(
+            *schemaElement.type(),
+            thrift::Type::INT64,
+            "TIME_MICROS converted type can only be set for value of thrift::Type::INT64");
+        const bool isCompatibleRequestedType = !requestedType ||
+            isCompatible(requestedType, isRepeated, [](const TypePtr& type) {
+              return type->equivalent(*TIME_MICRO_UTC());
+            });
+        VELOX_CHECK(
+            isCompatibleRequestedType,
+            kTypeMappingErrorFmtStr,
+            "TIME MICRO UTC",
+            requestedType->toString());
+        return TIME_MICRO_UTC();
+      }
+
+      case thrift::ConvertedType::MAP:
+      case thrift::ConvertedType::MAP_KEY_VALUE:
+      case thrift::ConvertedType::LIST:
+      case thrift::ConvertedType::JSON:
+      case thrift::ConvertedType::BSON:
+      case thrift::ConvertedType::INTERVAL:
+      default:
+        VELOX_FAIL(
+            "Unsupported Parquet SchemaElement converted type: {}",
+            *schemaElement.converted_type());
+    }
+  } else {
+    switch (*schemaElement.type()) {
+      case thrift::Type::BOOLEAN:
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [](const TypePtr& type) {
+                      return type->kind() == TypeKind::BOOLEAN;
+                    }),
+            kTypeMappingErrorFmtStr,
+            "BOOLEAN",
+            requestedType->toString(),
+            *schemaElement.name());
+        return BOOLEAN();
+      case thrift::Type::INT32:
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [&](const TypePtr& type) {
+                      return isInt32Compatible(
+                          type, TypeKind::INTEGER, allowNarrowing);
+                    }),
+            kTypeMappingErrorFmtStr,
+            "INTEGER",
+            requestedType->toString(),
+            *schemaElement.name());
+        return INTEGER();
+      case thrift::Type::INT64:
+        // For Int64 Timestamp in nano precision
+        if (schemaElement.logicalType() &&
+            schemaElement.logicalType()->getType() ==
+                thrift::LogicalType::Type::TIMESTAMP) {
+          VELOX_CHECK(
+              !requestedType ||
+                  isCompatible(
+                      requestedType,
+                      isRepeated,
+                      [](const TypePtr& type) {
+                        return type->kind() == TypeKind::TIMESTAMP;
+                      }),
+              kTypeMappingErrorFmtStr,
+              "TIMESTAMP",
+              requestedType->toString(),
+              *schemaElement.name());
+          return TIMESTAMP();
+        }
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(requestedType, isRepeated, isInt64Compatible),
+            kTypeMappingErrorFmtStr,
+            "BIGINT",
+            requestedType->toString(),
+            *schemaElement.name());
+        return BIGINT();
+      case thrift::Type::INT96:
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [](const TypePtr& type) {
+                      return type->kind() == TypeKind::TIMESTAMP;
+                    }),
+            kTypeMappingErrorFmtStr,
+            "TIMESTAMP",
+            requestedType->toString(),
+            *schemaElement.name());
+        return TIMESTAMP(); // INT96 only maps to a timestamp
+      case thrift::Type::FLOAT:
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [](const TypePtr& type) {
+                      return type->kind() == TypeKind::REAL ||
+                          type->kind() == TypeKind::DOUBLE;
+                    }),
+            kTypeMappingErrorFmtStr,
+            "REAL",
+            requestedType->toString(),
+            *schemaElement.name());
+        return REAL();
+      case thrift::Type::DOUBLE:
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [](const TypePtr& type) {
+                      return type->kind() == TypeKind::DOUBLE;
+                    }),
+            kTypeMappingErrorFmtStr,
+            "DOUBLE",
+            requestedType->toString(),
+            *schemaElement.name());
+        return DOUBLE();
+      case thrift::Type::BYTE_ARRAY:
+      case thrift::Type::FIXED_LEN_BYTE_ARRAY:
+        if (requestedType &&
+            isCompatible(requestedType, isRepeated, [](const TypePtr& type) {
+              return type->isVarchar();
+            })) {
+          return VARCHAR();
+        } else {
+          VELOX_CHECK(
+              !requestedType ||
+                  isCompatible(
+                      requestedType,
+                      isRepeated,
+                      [](const TypePtr& type) { return type->isVarbinary(); }),
+              kTypeMappingErrorFmtStr,
+              "VARBINARY",
+              requestedType->toString(),
+              *schemaElement.name());
+          return VARBINARY();
+        }
+
+      default:
+        VELOX_FAIL(
+            "Unknown Parquet SchemaElement type: {}",
+            static_cast<int>(*schemaElement.type()));
+    }
+  }
+}
+
+template <typename T>
+std::shared_ptr<const RowType> ReaderBase::createRowType(
+    const std::vector<T>& children,
+    bool fileColumnNamesReadAsLowerCase) {
+  std::vector<std::string> childNames;
+  std::vector<TypePtr> childTypes;
+  for (auto& child : children) {
+    auto childName = static_cast<const ParquetTypeWithId&>(*child).name_;
+    if (fileColumnNamesReadAsLowerCase) {
+      childName = functions::stringImpl::utf8StrToLowerCopy(childName);
+    }
+    childNames.push_back(std::move(childName));
+    childTypes.push_back(child->type());
+  }
+  return TypeFactory<TypeKind::ROW>::create(
+      std::move(childNames), std::move(childTypes));
+}
+
+void ReaderBase::scheduleRowGroups(
+    const std::vector<uint32_t>& rowGroupIds,
+    int32_t currentGroup,
+    StructColumnReader& reader) {
+  auto numRowGroupsToLoad = std::min(
+      options_.prefetchRowGroups() + 1,
+      static_cast<int64_t>(rowGroupIds.size() - currentGroup));
+  for (auto i = 0; i < numRowGroupsToLoad; i++) {
+    auto thisGroup = rowGroupIds[currentGroup + i];
+    if (!inputs_[thisGroup]) {
+      inputs_[thisGroup] = reader.loadRowGroup(thisGroup, input_);
+    }
+  }
+
+  if (currentGroup >= 1) {
+    inputs_.erase(rowGroupIds[currentGroup - 1]);
+  }
+}
+
+int64_t ReaderBase::rowGroupUncompressedSize(
+    int32_t rowGroupIndex,
+    const dwio::common::TypeWithId& type) const {
+  if (type.column() != ParquetTypeWithId::kNonLeaf) {
+    VELOX_CHECK_LT(rowGroupIndex, fileMetaData_->row_groups()->size());
+    VELOX_CHECK_LT(
+        type.column(),
+        apache::thrift::can_throw(*fileMetaData_->row_groups())[rowGroupIndex]
+            .columns()
+            ->size());
+    return apache::thrift::can_throw(
+               *apache::thrift::can_throw(
+                    *fileMetaData_->row_groups())[rowGroupIndex]
+                    .columns()
+                    .value()[type.column()]
+                    .meta_data())
+        .total_uncompressed_size()
+        .value();
+  }
+  int64_t sum = 0;
+  for (auto child : type.getChildren()) {
+    sum += rowGroupUncompressedSize(rowGroupIndex, *child);
+  }
+  return sum;
+}
+
+bool ReaderBase::isRowGroupBuffered(int32_t rowGroupIndex) const {
+  return inputs_.count(rowGroupIndex) != 0;
+}
+
+class ParquetRowReader::Impl {
+ public:
+  Impl(
+      const std::shared_ptr<ReaderBase>& readerBase,
+      const dwio::common::RowReaderOptions& options)
+      : pool_{readerBase->getMemoryPool()},
+        readerBase_{readerBase},
+        options_{options},
+        columnReaderOptions_{
+            dwio::common::makeColumnReaderOptions(readerBase_->options())},
+        rowGroups_{*readerBase_->thriftFileMetaData().row_groups()},
+        nextRowGroupIdsIdx_{0},
+        currentRowGroupPtr_{nullptr},
+        rowsInCurrentRowGroup_{0},
+        currentRowInGroup_{0},
+        splitStats_{dwio::common::FileFormat::PARQUET} {
+    // Validate the requested type is compatible with what's in the file
+    std::function<std::string()> createExceptionContext = [&]() {
+      std::string exceptionMessageContext = fmt::format(
+          "The schema loaded in the reader does not match the schema in the file footer."
+          "Input Name: {},\n"
+          "File Footer Schema (without partition columns): {},\n"
+          "Input Table Schema (with partition columns): {}\n",
+          readerBase_->bufferedInput().getReadFile()->getName(),
+          readerBase_->schema()->toString(),
+          requestedType_->toString());
+      return exceptionMessageContext;
+    };
+
+    splitStats_.initColumnStatsCollection(
+        *readerBase_->schemaWithId(), options_);
+    if (rowGroups_.empty()) {
+      return; // TODO
+    }
+    parquetStatsContext_ = ParquetStatsContext(readerBase_->version());
+    if (readerBase_->initialThriftSize() > 0) {
+      splitStats_.accumulateStat(
+          ParquetRuntimeStats::kFooterEstimatedBytesMetric,
+          readerBase_->initialThriftSize());
+    }
+    ParquetParams params(
+        pool_,
+        splitStats_,
+        readerBase_->fileMetaData(),
+        readerBase->sessionTimezone(),
+        options_.timestampPrecision());
+    requestedType_ = options_.requestedType() ? options_.requestedType()
+                                              : readerBase_->schema();
+    columnReader_ = ParquetColumnReader::build(
+        columnReaderOptions_,
+        requestedType_,
+        readerBase_->schemaWithId(), // Id is schema id
+        params,
+        *options_.scanSpec());
+    columnReader_->setIsTopLevel();
+
+    filterRowGroups();
+    if (!rowGroupIds_.empty()) {
+      // schedule prefetch of first row group right after reading the metadata.
+      // This is usually on a split preload thread before the split goes to
+      // table scan.
+      advanceToNextRowGroup();
+    }
+  }
+
+  void filterRowGroups() {
+    rowGroupIds_.reserve(rowGroups_.size());
+    firstRowOfRowGroup_.reserve(rowGroups_.size());
+
+    ParquetData::FilterRowGroupsResult res;
+    res.totalCount = rowGroups_.size();
+    res.filterResult.assign(bits::nwords(res.totalCount), 0);
+
+    // Pre-mark cheap exclusions (out-of-range, empty) so column-level
+    // statistics evaluation in ParquetData::filterRowGroups can skip them.
+    // The split's [offset, limit) typically covers a small subset of the
+    // file's row groups, so this avoids building stats and running testFilter
+    // on row groups owned by other splits. Cache rowGroupInRange separately
+    // because skippedStrides_ is only bumped for in-range exclusions.
+    std::vector<bool> rowGroupInRange(rowGroups_.size());
+    for (auto i = 0; i < rowGroups_.size(); ++i) {
+      VELOX_CHECK_GT(rowGroups_[i].columns()->size(), 0);
+      const auto fileOffset =
+          (rowGroups_[i].file_offset() &&
+           apache::thrift::can_throw(*rowGroups_[i].file_offset()) != 0)
+          ? apache::thrift::can_throw(*rowGroups_[i].file_offset())
+          : apache::thrift::can_throw(
+                rowGroups_[i].columns().value()[0].meta_data())
+                ->dictionary_page_offset()
+          ? apache::thrift::can_throw(
+                *apache::thrift::can_throw(
+                     rowGroups_[i].columns().value()[0].meta_data())
+                     ->dictionary_page_offset())
+          : apache::thrift::can_throw(
+                *apache::thrift::can_throw(
+                     rowGroups_[i].columns().value()[0].meta_data())
+                     ->data_page_offset());
+      VELOX_CHECK_GT(fileOffset, 0);
+      rowGroupInRange[i] =
+          (fileOffset >= options_.offset() && fileOffset < options_.limit());
+      const bool isEmpty =
+          apache::thrift::can_throw(*rowGroups_[i].num_rows()) == 0;
+      if (!rowGroupInRange[i] || isEmpty) {
+        bits::setBit(res.filterResult.data(), i);
+      }
+    }
+
+    columnReader_->filterRowGroups(0, parquetStatsContext_, res);
+    if (auto& metadataFilter = options_.metadataFilter()) {
+      metadataFilter->eval(res.metadataFilterResults, res.filterResult);
+    }
+
+    uint64_t rowNumber = 0;
+    size_t freedThriftSize = 0;
+    for (auto i = 0; i < rowGroups_.size(); i++) {
+      const bool isExcluded = bits::isBitSet(res.filterResult.data(), i);
+      if (!isExcluded) {
+        rowGroupIds_.push_back(i);
+        firstRowOfRowGroup_.push_back(rowNumber);
+      } else {
+        if (i != 0) {
+          // Clear the metadata of row groups that are not read. This helps
+          // reduce the memory consumption. ColumnChunks consume the most
+          // memory. Skip the 0th RowGroup as it is used by estimatedRowSize().
+          // Measure the columns BEFORE clearing so we can release the matching
+          // amount from the pool reservation that ReaderBase reported.
+          if (readerBase_->isThriftMemoryReported()) {
+            for (const auto& column : *rowGroups_[i].columns()) {
+              freedThriftSize +=
+                  ColumnChunkMetaDataPtr(&column).estimateColumnMetadataSize();
+            }
+          }
+          // Swap with a fresh empty vector to actually release the buffer.
+          // operator=({}) and clear() preserve capacity, so the bytes
+          // reported as freed would still be resident; only the
+          // swap-with-empty idiom guarantees the allocation is released.
+          std::vector<thrift::ColumnChunk>().swap(*rowGroups_[i].columns());
+        }
+        if (rowGroupInRange[i]) {
+          skippedStrides_++;
+        }
+      }
+
+      rowNumber += *rowGroups_[i].num_rows();
+    }
+
+    if (freedThriftSize > 0) {
+      // ReaderBase reported the full thrift footprint at construction. Release
+      // the portion we just freed by clearing skipped row groups; the
+      // remainder is released by ~ReaderBase.
+      readerBase_->releaseThriftBytes(freedThriftSize);
+    }
+  }
+
+  int64_t nextRowNumber() {
+    if (currentRowInGroup_ >= rowsInCurrentRowGroup_ &&
+        !advanceToNextRowGroup()) {
+      return kAtEnd;
+    }
+    return firstRowOfRowGroup_[nextRowGroupIdsIdx_ - 1] + currentRowInGroup_;
+  }
+
+  int64_t nextReadSize(uint64_t size) {
+    VELOX_CHECK_GT(size, 0);
+    if (nextRowNumber() == kAtEnd) {
+      return kAtEnd;
+    }
+    return std::min(size, rowsInCurrentRowGroup_ - currentRowInGroup_);
+  }
+
+  uint64_t next(
+      uint64_t size,
+      velox::VectorPtr& result,
+      const dwio::common::Mutation* mutation) {
+    auto rowsToRead = nextReadSize(size);
+    if (rowsToRead == kAtEnd) {
+      return 0;
+    }
+    VELOX_DCHECK_GT(rowsToRead, 0);
+    columnReader_->setCurrentRowNumber(nextRowNumber());
+    if (!options_.rowNumberColumnInfo().has_value()) {
+      columnReader_->next(rowsToRead, result, mutation);
+    } else {
+      readWithRowNumber(
+          columnReader_,
+          options_,
+          nextRowNumber(),
+          rowsToRead,
+          mutation,
+          result);
+    }
+
+    currentRowInGroup_ += rowsToRead;
+    return rowsToRead;
+  }
+
+  std::optional<size_t> estimatedRowSize() const {
+    auto index =
+        nextRowGroupIdsIdx_ < 1 ? 0 : rowGroupIds_[nextRowGroupIdsIdx_ - 1];
+    if (index == lastRowGroupWithRowEstimate_) {
+      return estimatedRowSize_;
+    }
+    estimatedRowSize_ = readerBase_->rowGroupUncompressedSize(
+                            index, *readerBase_->schemaWithId()) /
+        *rowGroups_[index].num_rows();
+    lastRowGroupWithRowEstimate_ = index;
+    return estimatedRowSize_;
+  }
+
+  void updateRuntimeStats(dwio::common::RuntimeStats& stats) const {
+    stats.skippedStrides += skippedStrides_;
+    stats.processedStrides += rowGroupIds_.size();
+    stats.mergeFrom(splitStats_);
+  }
+
+  void resetFilterCaches() {
+    columnReader_->resetFilterCaches();
+  }
+
+  bool isRowGroupBuffered(int32_t rowGroupIndex) const {
+    return readerBase_->isRowGroupBuffered(rowGroupIndex);
+  }
+
+ private:
+  bool advanceToNextRowGroup() {
+    if (nextRowGroupIdsIdx_ == rowGroupIds_.size()) {
+      return false;
+    }
+
+    auto nextRowGroupIndex = rowGroupIds_[nextRowGroupIdsIdx_];
+    readerBase_->scheduleRowGroups(
+        rowGroupIds_,
+        nextRowGroupIdsIdx_,
+        static_cast<StructColumnReader&>(*columnReader_));
+    currentRowGroupPtr_ = &rowGroups_[rowGroupIds_[nextRowGroupIdsIdx_]];
+    rowsInCurrentRowGroup_ = *currentRowGroupPtr_->num_rows();
+    currentRowInGroup_ = 0;
+    nextRowGroupIdsIdx_++;
+    columnReader_->seekToRowGroup(nextRowGroupIndex);
+    return true;
+  }
+
+  memory::MemoryPool& pool_;
+  const std::shared_ptr<ReaderBase> readerBase_;
+  const dwio::common::RowReaderOptions options_;
+  const dwio::common::ColumnReaderOptions columnReaderOptions_;
+
+  // All row groups from file metadata.
+  std::vector<thrift::RowGroup>& rowGroups_;
+  // Indices of row groups where stats match filters.
+  std::vector<uint32_t> rowGroupIds_;
+  std::vector<uint64_t> firstRowOfRowGroup_;
+  uint32_t nextRowGroupIdsIdx_;
+  const thrift::RowGroup* currentRowGroupPtr_{nullptr};
+  uint64_t rowsInCurrentRowGroup_;
+  uint64_t currentRowInGroup_;
+  uint32_t skippedStrides_{0};
+
+  std::unique_ptr<dwio::common::SelectiveColumnReader> columnReader_;
+
+  TypePtr requestedType_;
+  ParquetStatsContext parquetStatsContext_;
+
+  dwio::common::SplitStats splitStats_;
+
+  mutable std::optional<size_t> estimatedRowSize_;
+  mutable int32_t lastRowGroupWithRowEstimate_{-1};
+};
+
+ParquetRowReader::ParquetRowReader(
+    const std::shared_ptr<ReaderBase>& readerBase,
+    const dwio::common::RowReaderOptions& options) {
+  impl_ = std::make_unique<ParquetRowReader::Impl>(readerBase, options);
+}
+
+void ParquetRowReader::filterRowGroups() {
+  impl_->filterRowGroups();
+}
+
+int64_t ParquetRowReader::nextRowNumber() {
+  return impl_->nextRowNumber();
+}
+
+int64_t ParquetRowReader::nextReadSize(uint64_t size) {
+  return impl_->nextReadSize(size);
+}
+
+uint64_t ParquetRowReader::next(
+    uint64_t size,
+    velox::VectorPtr& result,
+    const dwio::common::Mutation* mutation) {
+  return impl_->next(size, result, mutation);
+}
+
+void ParquetRowReader::updateRuntimeStats(
+    dwio::common::RuntimeStats& stats) const {
+  impl_->updateRuntimeStats(stats);
+}
+
+void ParquetRowReader::resetFilterCaches() {
+  impl_->resetFilterCaches();
+}
+
+bool ParquetRowReader::isRowGroupBuffered(int32_t rowGroupIndex) const {
+  return impl_->isRowGroupBuffered(rowGroupIndex);
+}
+
+std::optional<size_t> ParquetRowReader::estimatedRowSize() const {
+  return impl_->estimatedRowSize();
+}
+
+ParquetReader::ParquetReader(
+    std::unique_ptr<dwio::common::BufferedInput> input,
+    const dwio::common::ReaderOptions& options)
+    : readerBase_(std::make_shared<ReaderBase>(std::move(input), options)) {}
+
+std::optional<uint64_t> ParquetReader::numberOfRows() const {
+  return *readerBase_->thriftFileMetaData().num_rows();
+}
+
+std::unique_ptr<dwio::common::ColumnStatistics> ParquetReader::columnStatistics(
+    uint32_t index) const {
+  auto node = findNode(*readerBase_->schemaWithId(), index);
+  if (!node) {
+    return nullptr;
+  }
+  auto& parquetNode = static_cast<const ParquetTypeWithId&>(*node);
+  if (!parquetNode.isLeaf()) {
+    return nullptr;
+  }
+
+  auto fileMetaData = readerBase_->fileMetaData();
+  const auto numRowGroups = fileMetaData.numRowGroups();
+  if (numRowGroups == 0) {
+    return nullptr;
+  }
+
+  // Merge per-row-group statistics into file-level statistics.
+  dwio::stats::StatisticsBuilderOptions options{
+      /*stringLengthLimit=*/std::numeric_limits<uint32_t>::max()};
+  auto builder =
+      dwio::stats::StatisticsBuilder::create(*parquetNode.type(), options);
+
+  for (int i = 0; i < numRowGroups; ++i) {
+    auto rowGroup = fileMetaData.rowGroup(i);
+    auto columnChunk = rowGroup.columnChunk(parquetNode.column());
+    if (!columnChunk.hasStatistics()) {
+      return nullptr;
+    }
+    auto rowGroupStats = columnChunk.getColumnStatistics(
+        parquetNode.type(),
+        rowGroup.numRows(),
+        parquetNode.convertedType_,
+        parquetNode.logicalType_);
+    builder->merge(*rowGroupStats);
+  }
+
+  return builder->build();
+}
+
+const velox::RowTypePtr& ParquetReader::rowType() const {
+  return readerBase_->schema();
+}
+
+const std::shared_ptr<const dwio::common::TypeWithId>&
+ParquetReader::typeWithId() const {
+  return readerBase_->schemaWithId();
+}
+
+std::unique_ptr<dwio::common::RowReader> ParquetReader::createRowReader(
+    const dwio::common::RowReaderOptions& options) const {
+  return std::make_unique<ParquetRowReader>(readerBase_, options);
+}
+
+FileMetaDataPtr ParquetReader::fileMetaData() const {
+  return readerBase_->fileMetaData();
+}
+
+} // namespace facebook::velox::parquet

@@ -1,0 +1,1269 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <fmt/format.h>
+#include <folly/Random.h>
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include "velox/common/base/Exceptions.h"
+
+using namespace facebook::velox;
+
+struct Counter {
+  mutable int counter = 0;
+};
+
+std::ostream& operator<<(std::ostream& os, const Counter& c) {
+  os << c.counter;
+  ++c.counter;
+  return os;
+}
+
+template <>
+struct fmt::formatter<Counter> {
+  constexpr auto parse(format_parse_context& ctx) {
+    return ctx.begin();
+  }
+
+  template <typename FormatContext>
+  auto format(const Counter& c, FormatContext& ctx) const {
+    auto x = c.counter++;
+    return fmt::format_to(ctx.out(), "{}", x);
+  }
+};
+
+template <typename T>
+void verifyException(
+    std::function<void()> f,
+    std::function<void(const T&)> exceptionVerifier) {
+  try {
+    f();
+    FAIL() << "Expected exception of type " << typeid(T).name()
+           << ", but no exception was thrown.";
+  } catch (const T& e) {
+    exceptionVerifier(e);
+  } catch (...) {
+    FAIL() << "Expected exception of type " << typeid(T).name()
+           << ", but instead got an exception of a different type.";
+  }
+}
+
+void verifyVeloxException(
+    std::function<void()> f,
+    const std::string& messagePrefix) {
+  verifyException<VeloxException>(f, [&messagePrefix](const auto& e) {
+    EXPECT_TRUE(std::string_view{e.what()}.starts_with(messagePrefix))
+        << "\nException message prefix mismatch.\n\nExpected prefix: "
+        << messagePrefix << "\n\nActual message: " << e.what();
+  });
+}
+
+void testExceptionTraceCollectionControl(bool userException, bool enabled) {
+  // Disable rate control in the test.
+  FLAGS_velox_exception_user_stacktrace_rate_limit_ms = 0;
+  FLAGS_velox_exception_system_stacktrace_rate_limit_ms = 0;
+
+  if (userException) {
+    FLAGS_velox_exception_user_stacktrace_enabled = enabled ? true : false;
+    FLAGS_velox_exception_system_stacktrace_enabled = folly::Random::oneIn(2);
+  } else {
+    FLAGS_velox_exception_system_stacktrace_enabled = enabled ? true : false;
+    FLAGS_velox_exception_user_stacktrace_enabled = folly::Random::oneIn(2);
+  }
+  try {
+    if (userException) {
+      throw VeloxUserError(
+          "file_name",
+          1,
+          "function_name()",
+          "operator()",
+          "test message",
+          "",
+          error_code::kArithmeticError,
+          false);
+    } else {
+      throw VeloxRuntimeError(
+          "file_name",
+          1,
+          "function_name()",
+          "operator()",
+          "test message",
+          "",
+          error_code::kArithmeticError,
+          false);
+    }
+  } catch (VeloxException& e) {
+    SCOPED_TRACE(
+        fmt::format(
+            "enabled: {}, user flag: {}, sys flag: {}",
+            enabled,
+            FLAGS_velox_exception_user_stacktrace_enabled,
+            FLAGS_velox_exception_system_stacktrace_enabled));
+    ASSERT_EQ(userException, e.exceptionType() == VeloxException::Type::kUser);
+    ASSERT_EQ(enabled, e.stackTrace() != nullptr);
+  }
+}
+
+void testExceptionTraceCollectionRateControl(
+    bool userException,
+    bool hasRateLimit) {
+  // Disable rate control in the test.
+  // Enable trace rate control in the test.
+  FLAGS_velox_exception_user_stacktrace_enabled = true;
+  FLAGS_velox_exception_system_stacktrace_enabled = true;
+  // Set rate control interval to a large value to avoid time related test
+  // flakiness.
+  const int kRateLimitIntervalMs = 4000;
+  if (hasRateLimit) {
+    // Wait a bit to ensure that the last stack trace collection time has
+    // passed sufficient long.
+    /* sleep override */
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(kRateLimitIntervalMs)); // NOLINT
+  }
+  if (userException) {
+    FLAGS_velox_exception_user_stacktrace_rate_limit_ms =
+        hasRateLimit ? kRateLimitIntervalMs : 0;
+    FLAGS_velox_exception_system_stacktrace_rate_limit_ms =
+        folly::Random::rand32();
+  } else {
+    // Set rate control to a large interval to avoid time related test
+    // flakiness.
+    FLAGS_velox_exception_system_stacktrace_rate_limit_ms =
+        hasRateLimit ? kRateLimitIntervalMs : 0;
+    FLAGS_velox_exception_user_stacktrace_rate_limit_ms =
+        folly::Random::rand32();
+  }
+  for (int iter = 0; iter < 3; ++iter) {
+    try {
+      if (userException) {
+        throw VeloxUserError(
+            "file_name",
+            1,
+            "function_name()",
+            "operator()",
+            "test message",
+            "",
+            error_code::kArithmeticError,
+            false);
+      } else {
+        throw VeloxRuntimeError(
+            "file_name",
+            1,
+            "function_name()",
+            "operator()",
+            "test message",
+            "",
+            error_code::kArithmeticError,
+            false);
+      }
+    } catch (VeloxException& e) {
+      SCOPED_TRACE(
+          fmt::format(
+              "userException: {}, hasRateLimit: {}, user limit: {}ms, sys limit: {}ms",
+              userException,
+              hasRateLimit,
+              FLAGS_velox_exception_user_stacktrace_rate_limit_ms,
+              FLAGS_velox_exception_system_stacktrace_rate_limit_ms));
+      ASSERT_EQ(
+          userException, e.exceptionType() == VeloxException::Type::kUser);
+      ASSERT_EQ(!hasRateLimit || ((iter % 2) == 0), e.stackTrace() != nullptr);
+      // NOTE: with rate limit control, we want to verify if we can collect
+      // stack trace after waiting for a while.
+      if (hasRateLimit && (iter % 2 != 0)) {
+        /* sleep override */
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(kRateLimitIntervalMs)); // NOLINT
+      }
+    }
+  }
+}
+
+// Ensures that expressions on the stream are not evaluated unless the condition
+// is met.
+TEST(ExceptionTest, lazyStreamEvaluation) {
+  Counter c;
+
+  EXPECT_EQ(0, c.counter);
+  VELOX_CHECK(true, "{}", c);
+  EXPECT_EQ(0, c.counter);
+
+  EXPECT_THROW(([&]() { VELOX_CHECK(false, "{}", c); })(), VeloxRuntimeError);
+  EXPECT_EQ(1, c.counter);
+
+  VELOX_CHECK(true, "{}", c);
+  EXPECT_EQ(1, c.counter);
+
+  EXPECT_THROW(([&]() { VELOX_USER_CHECK(false, "{}", c); })(), VeloxUserError);
+  EXPECT_EQ(2, c.counter);
+
+  EXPECT_THROW(([&]() { VELOX_CHECK(false, "{}", c); })(), VeloxRuntimeError);
+  EXPECT_EQ(3, c.counter);
+
+  // Simple types.
+  size_t i = 0;
+  VELOX_CHECK(true, "{}", i++);
+  EXPECT_EQ(0, i);
+  VELOX_CHECK(true, "{}", ++i);
+  EXPECT_EQ(0, i);
+
+  EXPECT_THROW(([&]() { VELOX_CHECK(false, "{}", i++); })(), VeloxRuntimeError);
+  EXPECT_EQ(1, i);
+  EXPECT_THROW(([&]() { VELOX_CHECK(false, "{}", ++i); })(), VeloxRuntimeError);
+  EXPECT_EQ(2, i);
+}
+
+TEST(ExceptionTest, messageCheck) {
+  verifyVeloxException(
+      []() { VELOX_CHECK(4 > 5, "Test message 1"); },
+      "Exception: VeloxRuntimeError\nError Source: RUNTIME\n"
+      "Error Code: INVALID_STATE\nReason: Test message 1\n"
+      "Retriable: False\nExpression: 4 > 5\nFunction: operator()\nFile: ");
+}
+
+TEST(ExceptionTest, messageUnreachable) {
+  verifyVeloxException(
+      []() { VELOX_UNREACHABLE("Test message 3"); },
+      "Exception: VeloxRuntimeError\nError Source: RUNTIME\n"
+      "Error Code: UNREACHABLE_CODE\nReason: Test message 3\n"
+      "Retriable: False\nFunction: operator()\nFile: ");
+}
+
+#define RUN_TEST(test)                                                      \
+  TEST_##test(                                                              \
+      VELOX_CHECK_##test, "RUNTIME", "INVALID_STATE", "VeloxRuntimeError"); \
+  TEST_##test(                                                              \
+      VELOX_USER_CHECK_##test, "USER", "INVALID_ARGUMENT", "VeloxUserError");
+
+#define TEST_GT(macro, system, code, prefix)                               \
+  verifyVeloxException(                                                    \
+      []() { macro(4, 5); },                                               \
+      "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+      "\nReason: (4 vs. 5)"                                                \
+      "\nRetriable: False"                                                 \
+      "\nExpression: 4 > 5"                                                \
+      "\nFunction: operator()"                                             \
+      "\nFile: ");                                                         \
+                                                                           \
+  verifyVeloxException(                                                    \
+      []() { macro(3, 3); },                                               \
+      "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+      "\nReason: (3 vs. 3)"                                                \
+      "\nRetriable: False"                                                 \
+      "\nExpression: 3 > 3"                                                \
+      "\nFunction: operator()"                                             \
+      "\nFile: ");                                                         \
+                                                                           \
+  verifyVeloxException(                                                    \
+      []() { macro(-1, 1, "Message 1"); },                                 \
+      "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+      "\nReason: (-1 vs. 1) Message 1"                                     \
+      "\nRetriable: False"                                                 \
+      "\nExpression: -1 > 1"                                               \
+      "\nFunction: operator()"                                             \
+      "\nFile: ");                                                         \
+                                                                           \
+  macro(3, 2);                                                             \
+  macro(1, -1, "Message 2");
+
+TEST(ExceptionTest, greaterThan) {
+  RUN_TEST(GT);
+}
+
+#define TEST_GE(macro, system, code, prefix)                               \
+  verifyVeloxException(                                                    \
+      []() { macro(4, 5); },                                               \
+      "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+      "\nReason: (4 vs. 5)"                                                \
+      "\nRetriable: False"                                                 \
+      "\nExpression: 4 >= 5"                                               \
+      "\nFunction: operator()"                                             \
+      "\nFile: ");                                                         \
+                                                                           \
+  verifyVeloxException(                                                    \
+      []() { macro(-1, 1, "Message 1"); },                                 \
+      "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+      "\nReason: (-1 vs. 1) Message 1"                                     \
+      "\nRetriable: False"                                                 \
+      "\nExpression: -1 >= 1"                                              \
+      "\nFunction: operator()"                                             \
+      "\nFile: ");                                                         \
+                                                                           \
+  macro(3, 2);                                                             \
+  macro(3, 3);                                                             \
+  macro(1, -1, "Message 2");
+
+TEST(ExceptionTest, greaterEqual) {
+  RUN_TEST(GE);
+}
+
+#define TEST_LT(macro, system, code, prefix)                               \
+  verifyVeloxException(                                                    \
+      []() { macro(5, 4); },                                               \
+      "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+      "\nReason: (5 vs. 4)"                                                \
+      "\nRetriable: False"                                                 \
+      "\nExpression: 5 < 4"                                                \
+      "\nFunction: operator()"                                             \
+      "\nFile: ");                                                         \
+                                                                           \
+  verifyVeloxException(                                                    \
+      []() { macro(2, 2); },                                               \
+      "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+      "\nReason: (2 vs. 2)"                                                \
+      "\nRetriable: False"                                                 \
+      "\nExpression: 2 < 2"                                                \
+      "\nFunction: operator()"                                             \
+      "\nFile: ");                                                         \
+                                                                           \
+  verifyVeloxException(                                                    \
+      []() { macro(1, -1, "Message 1"); },                                 \
+      "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+      "\nReason: (1 vs. -1) Message 1"                                     \
+      "\nRetriable: False"                                                 \
+      "\nExpression: 1 < -1"                                               \
+      "\nFunction: operator()"                                             \
+      "\nFile: ");                                                         \
+                                                                           \
+  macro(2, 3);                                                             \
+  macro(-1, 1, "Message 2");
+
+TEST(ExceptionTest, lessThan) {
+  RUN_TEST(LT);
+}
+
+#define TEST_LE(macro, system, code, prefix)                               \
+  verifyVeloxException(                                                    \
+      []() { macro(6, 2); },                                               \
+      "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+      "\nReason: (6 vs. 2)"                                                \
+      "\nRetriable: False"                                                 \
+      "\nExpression: 6 <= 2"                                               \
+      "\nFunction: operator()"                                             \
+      "\nFile: ");                                                         \
+                                                                           \
+  verifyVeloxException(                                                    \
+      []() { macro(3, -3, "Message 1"); },                                 \
+      "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+      "\nReason: (3 vs. -3) Message 1"                                     \
+      "\nRetriable: False"                                                 \
+      "\nExpression: 3 <= -3"                                              \
+      "\nFunction: operator()"                                             \
+      "\nFile: ");                                                         \
+                                                                           \
+  macro(5, 54);                                                            \
+  macro(1, 1);                                                             \
+  macro(-3, 3, "Message 2");
+
+TEST(ExceptionTest, lessEqual) {
+  RUN_TEST(LE);
+}
+
+#define TEST_EQ(macro, system, code, prefix)                                 \
+  {                                                                          \
+    verifyVeloxException(                                                    \
+        []() { macro(1, 2); },                                               \
+        "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+        "\nReason: (1 vs. 2)"                                                \
+        "\nRetriable: False"                                                 \
+        "\nExpression: 1 == 2"                                               \
+        "\nFunction: operator()"                                             \
+        "\nFile: ");                                                         \
+                                                                             \
+    verifyVeloxException(                                                    \
+        []() { macro(2, 1, "Message 1"); },                                  \
+        "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+        "\nReason: (2 vs. 1) Message 1"                                      \
+        "\nRetriable: False"                                                 \
+        "\nExpression: 2 == 1"                                               \
+        "\nFunction: operator()"                                             \
+        "\nFile: ");                                                         \
+                                                                             \
+    auto t = true;                                                           \
+    auto f = false;                                                          \
+    macro(521, 521);                                                         \
+    macro(1.1, 1.1);                                                         \
+    macro(true, t, "Message 2");                                             \
+    macro(f, false, "Message 3");                                            \
+  }
+
+TEST(ExceptionTest, equal) {
+  RUN_TEST(EQ);
+}
+
+#define TEST_NE(macro, system, code, prefix)                                 \
+  {                                                                          \
+    verifyVeloxException(                                                    \
+        []() { macro(1, 1); },                                               \
+        "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+        "\nReason: (1 vs. 1)"                                                \
+        "\nRetriable: False"                                                 \
+        "\nExpression: 1 != 1"                                               \
+        "\nFunction: operator()"                                             \
+        "\nFile: ");                                                         \
+                                                                             \
+    verifyVeloxException(                                                    \
+        []() { macro(2.2, 2.2, "Message 1"); },                              \
+        "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+        "\nReason: (2.2 vs. 2.2) Message 1"                                  \
+        "\nRetriable: False"                                                 \
+        "\nExpression: 2.2 != 2.2"                                           \
+        "\nFunction: operator()"                                             \
+        "\nFile: ");                                                         \
+                                                                             \
+    auto t = true;                                                           \
+    auto f = false;                                                          \
+    macro(521, 522);                                                         \
+    macro(1.2, 1.1);                                                         \
+    macro(true, f, "Message 2");                                             \
+    macro(t, false, "Message 3");                                            \
+  }
+
+TEST(ExceptionTest, notEqual) {
+  RUN_TEST(NE);
+}
+
+#define TEST_NOT_NULL(macro, system, code, prefix)                           \
+  {                                                                          \
+    verifyVeloxException(                                                    \
+        []() { macro(nullptr); },                                            \
+        "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+        "\nRetriable: False"                                                 \
+        "\nExpression: nullptr != nullptr"                                   \
+        "\nFunction: operator()"                                             \
+        "\nFile: ");                                                         \
+    verifyVeloxException(                                                    \
+        []() {                                                               \
+          std::shared_ptr<int> a;                                            \
+          macro(a, "Message 1");                                             \
+        },                                                                   \
+        "Exception: " prefix "\nError Source: " system "\nError Code: " code \
+        "\nReason: Message 1"                                                \
+        "\nRetriable: False"                                                 \
+        "\nExpression: a != nullptr"                                         \
+        "\nFunction: operator()"                                             \
+        "\nFile: ");                                                         \
+    auto b = std::make_shared<int>(5);                                       \
+    macro(b);                                                                \
+  }
+
+TEST(ExceptionTest, notNull) {
+  RUN_TEST(NOT_NULL);
+}
+
+TEST(ExceptionTest, expressionString) {
+  size_t i = 1;
+  size_t j = 100;
+  constexpr auto msgTemplate =
+      "Exception: VeloxRuntimeError"
+      "\nError Source: RUNTIME"
+      "\nError Code: INVALID_STATE"
+      "\nReason: ({1})"
+      "\nRetriable: False"
+      "\nExpression: {0}"
+      "\nFunction: operator()"
+      "\nFile: ";
+
+  verifyVeloxException(
+      [&]() { VELOX_CHECK_EQ(i, j); },
+      fmt::format(msgTemplate, "i == j", "1 vs. 100"));
+
+  verifyVeloxException(
+      [&]() { VELOX_CHECK_NE(i, 1); },
+      fmt::format(msgTemplate, "i != 1", "1 vs. 1"));
+
+  verifyVeloxException(
+      [&]() { VELOX_CHECK_LT(i + j, j); },
+      fmt::format(msgTemplate, "i + j < j", "101 vs. 100"));
+
+  verifyVeloxException(
+      [&]() { VELOX_CHECK_GE(i + j * 2, 1000); },
+      fmt::format(msgTemplate, "i + j * 2 >= 1000", "201 vs. 1000"));
+}
+
+TEST(ExceptionTest, notImplemented) {
+  verifyVeloxException(
+      []() { VELOX_NYI(); },
+      "Exception: VeloxRuntimeError\nError Source: RUNTIME\n"
+      "Error Code: NOT_IMPLEMENTED\n"
+      "Retriable: False\nFunction: operator()\nFile: ");
+
+  verifyVeloxException(
+      []() { VELOX_NYI("Message 1"); },
+      "Exception: VeloxRuntimeError\nError Source: RUNTIME\n"
+      "Error Code: NOT_IMPLEMENTED\nReason: Message 1\nRetriable: False\n"
+      "Function: operator()\nFile: ");
+}
+
+TEST(ExceptionTest, errorCode) {
+  std::string msgTemplate =
+      "Exception: {}"
+      "\nError Source: {}"
+      "\nError Code: {}"
+      "\nRetriable: {}"
+      "\nExpression: {}"
+      "\nFunction: {}"
+      "\nFile: ";
+
+  verifyVeloxException(
+      [&]() { VELOX_FAIL(); },
+      fmt::format(
+          "Exception: {}"
+          "\nError Source: {}"
+          "\nError Code: {}"
+          "\nRetriable: {}"
+          "\nFunction: {}"
+          "\nFile: ",
+          "VeloxRuntimeError",
+          "RUNTIME",
+          "INVALID_STATE",
+          "False",
+          "operator()"));
+
+  verifyVeloxException(
+      [&]() { VELOX_USER_FAIL(); },
+      fmt::format(
+          "Exception: {}"
+          "\nError Source: {}"
+          "\nError Code: {}"
+          "\nRetriable: {}"
+          "\nFunction: {}"
+          "\nFile: ",
+          "VeloxUserError",
+          "USER",
+          "INVALID_ARGUMENT",
+          "False",
+          "operator()"));
+}
+
+TEST(ExceptionTest, context) {
+  // No context.
+  verifyVeloxException(
+      [&]() { VELOX_CHECK_EQ(1, 3); },
+      "Exception: VeloxRuntimeError"
+      "\nError Source: RUNTIME"
+      "\nError Code: INVALID_STATE"
+      "\nReason: (1 vs. 3)"
+      "\nRetriable: False"
+      "\nExpression: 1 == 3"
+      "\nFunction: operator()"
+      "\nFile: ");
+
+  // With context.
+  int callCount = 0;
+
+  struct MessageFunctionArg {
+    std::string message;
+    int* callCount;
+  };
+
+  auto messageFunction = [](facebook::velox::VeloxException::Type exceptionType,
+                            void* untypedArg) {
+    auto arg = static_cast<MessageFunctionArg*>(untypedArg);
+    ++(*arg->callCount);
+    switch (exceptionType) {
+      case facebook::velox::VeloxException::Type::kUser:
+        return fmt::format("User error: {}", arg->message);
+      case facebook::velox::VeloxException::Type::kSystem:
+        return fmt::format("System error: {}", arg->message);
+      default:
+        return fmt::format("Unexpected error type: {}", arg->message);
+    }
+  };
+
+  {
+    // Create multi-layer contexts with top level marked as essential.
+    MessageFunctionArg topLevelTroubleshootingAid{
+        "Top-level troubleshooting aid.", &callCount};
+    facebook::velox::ExceptionContextSetter additionalContext(
+        {.messageFunc = messageFunction,
+         .arg = &topLevelTroubleshootingAid,
+         .isEssential = true});
+
+    MessageFunctionArg midLevelTroubleshootingAid{
+        "Mid-level troubleshooting aid.", &callCount};
+    facebook::velox::ExceptionContextSetter midLevelContext(
+        {messageFunction, &midLevelTroubleshootingAid});
+
+    MessageFunctionArg innerLevelTroubleshootingAid{
+        "Inner-level troubleshooting aid.", &callCount};
+    facebook::velox::ExceptionContextSetter innerLevelContext(
+        {messageFunction, &innerLevelTroubleshootingAid});
+
+    verifyVeloxException(
+        [&]() { VELOX_CHECK_EQ(1, 3); },
+        "Exception: VeloxRuntimeError"
+        "\nError Source: RUNTIME"
+        "\nError Code: INVALID_STATE"
+        "\nReason: (1 vs. 3)"
+        "\nRetriable: False"
+        "\nExpression: 1 == 3"
+        "\nContext: System error: Inner-level troubleshooting aid."
+        "\nAdditional Context: System error: Top-level troubleshooting aid."
+        "\nFunction: operator()"
+        "\nFile: ");
+
+    EXPECT_EQ(2, callCount);
+
+    verifyVeloxException(
+        [&]() { VELOX_USER_CHECK_EQ(1, 3); },
+        "Exception: VeloxUserError"
+        "\nError Source: USER"
+        "\nError Code: INVALID_ARGUMENT"
+        "\nReason: (1 vs. 3)"
+        "\nRetriable: False"
+        "\nExpression: 1 == 3"
+        "\nContext: User error: Inner-level troubleshooting aid."
+        "\nAdditional Context: User error: Top-level troubleshooting aid."
+        "\nFunction: operator()"
+        "\nFile: ");
+
+    EXPECT_EQ(4, callCount);
+  }
+
+  {
+    callCount = 0;
+    // Create multi-layer contexts with middle level marked as essential.
+    MessageFunctionArg topLevelTroubleshootingAid{
+        "Top-level troubleshooting aid.", &callCount};
+    facebook::velox::ExceptionContextSetter additionalContext(
+        {.messageFunc = messageFunction, .arg = &topLevelTroubleshootingAid});
+
+    MessageFunctionArg midLevelTroubleshootingAid{
+        "Mid-level troubleshooting aid.", &callCount};
+    facebook::velox::ExceptionContextSetter midLevelContext(
+        {.messageFunc = messageFunction,
+         .arg = &midLevelTroubleshootingAid,
+         .isEssential = true});
+
+    MessageFunctionArg innerLevelTroubleshootingAid{
+        "Inner-level troubleshooting aid.", &callCount};
+    facebook::velox::ExceptionContextSetter innerLevelContext(
+        {messageFunction, &innerLevelTroubleshootingAid});
+
+    verifyVeloxException(
+        [&]() { VELOX_CHECK_EQ(1, 3); },
+        "Exception: VeloxRuntimeError"
+        "\nError Source: RUNTIME"
+        "\nError Code: INVALID_STATE"
+        "\nReason: (1 vs. 3)"
+        "\nRetriable: False"
+        "\nExpression: 1 == 3"
+        "\nContext: System error: Inner-level troubleshooting aid."
+        "\nAdditional Context: System error: Mid-level troubleshooting aid."
+        "\nFunction: operator()"
+        "\nFile: ");
+
+    EXPECT_EQ(2, callCount);
+
+    verifyVeloxException(
+        [&]() { VELOX_USER_CHECK_EQ(1, 3); },
+        "Exception: VeloxUserError"
+        "\nError Source: USER"
+        "\nError Code: INVALID_ARGUMENT"
+        "\nReason: (1 vs. 3)"
+        "\nRetriable: False"
+        "\nExpression: 1 == 3"
+        "\nContext: User error: Inner-level troubleshooting aid."
+        "\nAdditional Context: User error: Mid-level troubleshooting aid."
+        "\nFunction: operator()"
+        "\nFile: ");
+
+    EXPECT_EQ(4, callCount);
+  }
+
+  {
+    callCount = 0;
+    // Create multi-layer contexts with none marked as essential.
+    MessageFunctionArg topLevelTroubleshootingAid{
+        "Top-level troubleshooting aid.", &callCount};
+    facebook::velox::ExceptionContextSetter additionalContext(
+        {.messageFunc = messageFunction, .arg = &topLevelTroubleshootingAid});
+
+    MessageFunctionArg midLevelTroubleshootingAid{
+        "Mid-level troubleshooting aid.", &callCount};
+    facebook::velox::ExceptionContextSetter midLevelContext(
+        {.messageFunc = messageFunction, .arg = &midLevelTroubleshootingAid});
+
+    MessageFunctionArg innerLevelTroubleshootingAid{
+        "Inner-level troubleshooting aid.", &callCount};
+    facebook::velox::ExceptionContextSetter innerLevelContext(
+        {messageFunction, &innerLevelTroubleshootingAid});
+
+    verifyVeloxException(
+        [&]() { VELOX_CHECK_EQ(1, 3); },
+        "Exception: VeloxRuntimeError"
+        "\nError Source: RUNTIME"
+        "\nError Code: INVALID_STATE"
+        "\nReason: (1 vs. 3)"
+        "\nRetriable: False"
+        "\nExpression: 1 == 3"
+        "\nContext: System error: Inner-level troubleshooting aid."
+        "\nFunction: operator()"
+        "\nFile: ");
+
+    EXPECT_EQ(1, callCount);
+
+    verifyVeloxException(
+        [&]() { VELOX_USER_CHECK_EQ(1, 3); },
+        "Exception: VeloxUserError"
+        "\nError Source: USER"
+        "\nError Code: INVALID_ARGUMENT"
+        "\nReason: (1 vs. 3)"
+        "\nRetriable: False"
+        "\nExpression: 1 == 3"
+        "\nContext: User error: Inner-level troubleshooting aid."
+        "\nFunction: operator()"
+        "\nFile: ");
+
+    EXPECT_EQ(2, callCount);
+  }
+
+  {
+    callCount = 0;
+    // Create multi-layer contexts with all ancestors marked as essential.
+    MessageFunctionArg topLevelTroubleshootingAid{
+        "Top-level troubleshooting aid.", &callCount};
+    facebook::velox::ExceptionContextSetter additionalContext(
+        {.messageFunc = messageFunction,
+         .arg = &topLevelTroubleshootingAid,
+         .isEssential = true});
+
+    MessageFunctionArg midLevelTroubleshootingAid{
+        "Mid-level troubleshooting aid.", &callCount};
+    facebook::velox::ExceptionContextSetter midLevelContext(
+        {.messageFunc = messageFunction,
+         .arg = &midLevelTroubleshootingAid,
+         .isEssential = true});
+
+    MessageFunctionArg innerLevelTroubleshootingAid{
+        "Inner-level troubleshooting aid.", &callCount};
+    facebook::velox::ExceptionContextSetter innerLevelContext(
+        {messageFunction, &innerLevelTroubleshootingAid});
+
+    verifyVeloxException(
+        [&]() { VELOX_CHECK_EQ(1, 3); },
+        "Exception: VeloxRuntimeError"
+        "\nError Source: RUNTIME"
+        "\nError Code: INVALID_STATE"
+        "\nReason: (1 vs. 3)"
+        "\nRetriable: False"
+        "\nExpression: 1 == 3"
+        "\nContext: System error: Inner-level troubleshooting aid."
+        "\nAdditional Context: System error: Mid-level troubleshooting aid. System error: Top-level troubleshooting aid."
+        "\nFunction: operator()"
+        "\nFile: ");
+
+    EXPECT_EQ(3, callCount);
+
+    verifyVeloxException(
+        [&]() { VELOX_USER_CHECK_EQ(1, 3); },
+        "Exception: VeloxUserError"
+        "\nError Source: USER"
+        "\nError Code: INVALID_ARGUMENT"
+        "\nReason: (1 vs. 3)"
+        "\nRetriable: False"
+        "\nExpression: 1 == 3"
+        "\nContext: User error: Inner-level troubleshooting aid."
+        "\nAdditional Context: User error: Mid-level troubleshooting aid. User error: Top-level troubleshooting aid."
+        "\nFunction: operator()"
+        "\nFile: ");
+
+    EXPECT_EQ(6, callCount);
+  }
+
+  // Different context.
+  {
+    callCount = 0;
+
+    // Create a single layer of context. Context and top-level context are
+    // expected to be the same.
+    MessageFunctionArg debuggingInfo{"Debugging info.", &callCount};
+    facebook::velox::ExceptionContextSetter context(
+        {messageFunction, &debuggingInfo});
+
+    verifyVeloxException(
+        [&]() { VELOX_CHECK_EQ(1, 3); },
+        "Exception: VeloxRuntimeError"
+        "\nError Source: RUNTIME"
+        "\nError Code: INVALID_STATE"
+        "\nReason: (1 vs. 3)"
+        "\nRetriable: False"
+        "\nExpression: 1 == 3"
+        "\nContext: System error: Debugging info."
+        "\nFunction: operator()"
+        "\nFile: ");
+
+    EXPECT_EQ(1, callCount);
+
+    verifyVeloxException(
+        [&]() { VELOX_USER_CHECK_EQ(1, 3); },
+        "Exception: VeloxUserError"
+        "\nError Source: USER"
+        "\nError Code: INVALID_ARGUMENT"
+        "\nReason: (1 vs. 3)"
+        "\nRetriable: False"
+        "\nExpression: 1 == 3"
+        "\nContext: User error: Debugging info."
+        "\nFunction: operator()"
+        "\nFile: ");
+
+    EXPECT_EQ(2, callCount);
+  }
+
+  callCount = 0;
+
+  // No context.
+  verifyVeloxException(
+      [&]() { VELOX_CHECK_EQ(1, 3); },
+      "Exception: VeloxRuntimeError"
+      "\nError Source: RUNTIME"
+      "\nError Code: INVALID_STATE"
+      "\nReason: (1 vs. 3)"
+      "\nRetriable: False"
+      "\nExpression: 1 == 3"
+      "\nFunction: operator()"
+      "\nFile: ");
+
+  EXPECT_EQ(0, callCount);
+
+  // With message function throwing an exception.
+  auto throwingMessageFunction =
+      [](facebook::velox::VeloxException::Type /*exceptionType*/,
+         void* untypedArg) -> std::string {
+    auto arg = static_cast<MessageFunctionArg*>(untypedArg);
+    ++(*arg->callCount);
+    VELOX_FAIL("Test failure.");
+  };
+  {
+    MessageFunctionArg debuggingInfo{"Debugging info.", &callCount};
+    facebook::velox::ExceptionContextSetter context(
+        {throwingMessageFunction, &debuggingInfo});
+
+    verifyVeloxException(
+        [&]() { VELOX_CHECK_EQ(1, 3); },
+        "Exception: VeloxRuntimeError"
+        "\nError Source: RUNTIME"
+        "\nError Code: INVALID_STATE"
+        "\nReason: (1 vs. 3)"
+        "\nRetriable: False"
+        "\nExpression: 1 == 3"
+        "\nContext: Failed to produce additional context."
+        "\nFunction: operator()"
+        "\nFile: ");
+
+    EXPECT_EQ(1, callCount);
+  }
+}
+
+TEST(ExceptionTest, traceCollectionEnabling) {
+  // Switch on/off tests.
+  for (const bool enabled : {false, true}) {
+    for (const bool userException : {false, true}) {
+      testExceptionTraceCollectionControl(userException, enabled);
+    }
+  }
+}
+
+TEST(ExceptionTest, traceCollectionRateControl) {
+  // Rate limit tests.
+  for (const bool withLimit : {false, true}) {
+    for (const bool userException : {false, true}) {
+      testExceptionTraceCollectionRateControl(userException, withLimit);
+    }
+  }
+}
+
+TEST(ExceptionTest, wrappedException) {
+  try {
+    throw std::invalid_argument("This is a test.");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    ASSERT_EQ(ve.message(), "This is a test.");
+    ASSERT_TRUE(ve.isUserError());
+    ASSERT_EQ(ve.context(), "");
+    ASSERT_EQ(ve.additionalContext(), "");
+    ASSERT_THROW(
+        std::rethrow_exception(ve.wrappedException()), std::invalid_argument);
+  }
+
+  try {
+    throw std::invalid_argument("This is a test.");
+  } catch (const std::exception& e) {
+    VeloxRuntimeError ve(std::current_exception(), e.what(), false);
+    ASSERT_EQ(ve.message(), "This is a test.");
+    ASSERT_FALSE(ve.isUserError());
+    ASSERT_EQ(ve.context(), "");
+    ASSERT_EQ(ve.additionalContext(), "");
+    ASSERT_THROW(
+        std::rethrow_exception(ve.wrappedException()), std::invalid_argument);
+  }
+
+  try {
+    VELOX_FAIL("This is a test.");
+  } catch (const VeloxException& e) {
+    ASSERT_EQ(e.message(), "This is a test.");
+    ASSERT_TRUE(e.wrappedException() == nullptr);
+  }
+}
+
+TEST(ExceptionTest, wrappedExceptionWithContext) {
+  auto messageFunction = [](facebook::velox::VeloxException::Type exceptionType,
+                            void* untypedArg) {
+    auto data = static_cast<char*>(untypedArg);
+    switch (exceptionType) {
+      case facebook::velox::VeloxException::Type::kUser:
+        return fmt::format("User error: {}", data);
+      case facebook::velox::VeloxException::Type::kSystem:
+        return fmt::format("System error: {}", data);
+      default:
+        return fmt::format("Unexpected error type: {}", data);
+    }
+  };
+
+  std::string data = "lakes";
+  facebook::velox::ExceptionContextSetter context(
+      {messageFunction, data.data(), true});
+
+  try {
+    throw std::invalid_argument("This is a test.");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    ASSERT_EQ(ve.message(), "This is a test.");
+    ASSERT_TRUE(ve.isUserError());
+    ASSERT_EQ(ve.context(), "User error: lakes");
+    ASSERT_EQ(ve.additionalContext(), "");
+    ASSERT_THROW(
+        std::rethrow_exception(ve.wrappedException()), std::invalid_argument);
+  }
+
+  try {
+    throw std::invalid_argument("This is a test.");
+  } catch (const std::exception& e) {
+    VeloxRuntimeError ve(std::current_exception(), e.what(), false);
+    ASSERT_EQ(ve.message(), "This is a test.");
+    ASSERT_FALSE(ve.isUserError());
+    ASSERT_EQ(ve.context(), "System error: lakes");
+    ASSERT_EQ(ve.additionalContext(), "");
+    ASSERT_THROW(
+        std::rethrow_exception(ve.wrappedException()), std::invalid_argument);
+  }
+
+  std::string innerData = "mountains";
+  facebook::velox::ExceptionContextSetter innerContext(
+      {messageFunction, innerData.data()});
+
+  try {
+    throw std::invalid_argument("This is a test.");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    ASSERT_EQ(ve.message(), "This is a test.");
+    ASSERT_TRUE(ve.isUserError());
+    ASSERT_EQ(ve.context(), "User error: mountains");
+    ASSERT_EQ(ve.additionalContext(), "User error: lakes");
+    ASSERT_THROW(
+        std::rethrow_exception(ve.wrappedException()), std::invalid_argument);
+  }
+
+  try {
+    throw std::invalid_argument("This is a test.");
+  } catch (const std::exception& e) {
+    VeloxRuntimeError ve(std::current_exception(), e.what(), false);
+    ASSERT_EQ(ve.message(), "This is a test.");
+    ASSERT_FALSE(ve.isUserError());
+    ASSERT_EQ(ve.context(), "System error: mountains");
+    ASSERT_EQ(ve.additionalContext(), "System error: lakes");
+    ASSERT_THROW(
+        std::rethrow_exception(ve.wrappedException()), std::invalid_argument);
+  }
+}
+
+TEST(ExceptionTest, properties) {
+  using facebook::velox::ExceptionContextProperties;
+  using facebook::velox::ExpressionExceptionProperties;
+
+  auto makeProperties =
+      [](facebook::velox::VeloxException::Type /*exceptionType*/,
+         void* untypedArg)
+      -> std::shared_ptr<const ExceptionContextProperties> {
+    auto properties = std::make_shared<ExpressionExceptionProperties>();
+    properties->owner = static_cast<const char*>(untypedArg);
+    properties->functionName = "expr";
+    properties->expression = "expr(c0)";
+    return properties;
+  };
+
+  // No properties context: properties() is null.
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    EXPECT_EQ(ve.properties(), nullptr);
+  }
+
+  const char* outer = "outer-team";
+  facebook::velox::ExceptionContextSetter outerContext(
+      {.arg = (void*)outer, .propertiesFunc = makeProperties});
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    auto properties =
+        std::dynamic_pointer_cast<const ExpressionExceptionProperties>(
+            ve.properties());
+    ASSERT_NE(properties, nullptr);
+    EXPECT_EQ(properties->owner, "outer-team");
+    EXPECT_EQ(properties->functionName, "expr");
+    EXPECT_EQ(properties->expression, "expr(c0)");
+  }
+
+  // The inner-most context's properties win.
+  auto makeInnerProperties =
+      [](facebook::velox::VeloxException::Type /*exceptionType*/,
+         void* /*untypedArg*/)
+      -> std::shared_ptr<const ExceptionContextProperties> {
+    auto properties = std::make_shared<ExpressionExceptionProperties>();
+    properties->owner = "inner-team";
+    properties->functionName = "innerExpr";
+    properties->expression = "expr(c1)";
+    return properties;
+  };
+  facebook::velox::ExceptionContextSetter innerContext(
+      {.arg = nullptr, .propertiesFunc = makeInnerProperties});
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    auto properties =
+        std::dynamic_pointer_cast<const ExpressionExceptionProperties>(
+            ve.properties());
+    ASSERT_NE(properties, nullptr);
+    EXPECT_EQ(properties->owner, "inner-team");
+    EXPECT_EQ(properties->functionName, "innerExpr");
+    EXPECT_EQ(properties->expression, "expr(c1)");
+  }
+}
+
+// A propertiesFunc that itself throws must (1) not be re-invoked by the nested
+// VeloxException it throws (re-entrancy guard), and (2) not leave the context
+// suspended, so a later exception invokes it again.
+TEST(ExceptionTest, propertiesReentrancyAndRestore) {
+  int callCount = 0;
+  auto throwingProperties =
+      [](facebook::velox::VeloxException::Type /*exceptionType*/, void* arg)
+      -> std::shared_ptr<const facebook::velox::ExceptionContextProperties> {
+    ++(*static_cast<int*>(arg));
+    VELOX_FAIL("props boom");
+  };
+  facebook::velox::ExceptionContextSetter context(
+      {.arg = &callCount, .propertiesFunc = throwingProperties});
+
+  // propertiesFunc runs once and throws; the nested VeloxException from
+  // VELOX_FAIL must not re-invoke it, so callCount stays 1 (not infinite).
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    EXPECT_EQ(ve.properties(), nullptr);
+  }
+  EXPECT_EQ(callCount, 1);
+
+  // The context must not be left suspended: propertiesFunc runs again. With the
+  // pre-guard code this would stay 1 (the context stayed suspended).
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    EXPECT_EQ(ve.properties(), nullptr);
+  }
+  EXPECT_EQ(callCount, 2);
+}
+
+// Same guarantee for messageFunc: a throwing messageFunc falls back and does
+// not leave the context suspended, so a later exception invokes it again.
+TEST(ExceptionTest, messageReentrancyAndRestore) {
+  int callCount = 0;
+  auto throwingMessage =
+      [](facebook::velox::VeloxException::Type /*exceptionType*/,
+         void* arg) -> std::string {
+    ++(*static_cast<int*>(arg));
+    VELOX_FAIL("message boom");
+  };
+  facebook::velox::ExceptionContextSetter context(
+      {.messageFunc = throwingMessage, .arg = &callCount});
+
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    EXPECT_THAT(
+        ve.context(),
+        testing::HasSubstr("Failed to produce additional context."));
+  }
+  EXPECT_EQ(callCount, 1);
+
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    EXPECT_THAT(
+        ve.context(),
+        testing::HasSubstr("Failed to produce additional context."));
+  }
+  EXPECT_EQ(callCount, 2);
+}
+
+TEST(ExceptionTest, exceptionMacroInlining) {
+  // Verify that the right formatting method is inlined when using _VELOX_THROW
+  // macro. This test can be removed if fmt::vformat changes behavior and starts
+  // ignoring extra brackets.
+
+  // The following string should throw an error when passed to fmt::vformat.
+  std::string errorStr = "This {} {is a test.";
+  // Inlined with the method that directly returns the std::string input.
+  try {
+    VELOX_USER_FAIL(errorStr);
+  } catch (const VeloxUserError& ve) {
+    ASSERT_EQ(ve.message(), errorStr);
+  }
+
+  // Inlined with the method that directly returns the char* input.
+  try {
+    VELOX_USER_FAIL(errorStr.c_str());
+  } catch (const VeloxUserError& ve) {
+    ASSERT_EQ(ve.message(), errorStr);
+  }
+}
+
+TEST(ExceptionTest, messageTemplate) {
+  using testing::Property;
+  using testing::StrEq;
+  using testing::Throws;
+
+  auto noMsg = [] { VELOX_FAIL(); };
+  EXPECT_THAT(
+      noMsg,
+      Throws<VeloxException>(
+          Property(&VeloxException::messageTemplate, StrEq(""))));
+
+  auto plainMsg = [] { VELOX_FAIL("Something went wrong"); };
+  EXPECT_THAT(
+      plainMsg,
+      Throws<VeloxException>(Property(
+          &VeloxException::messageTemplate, StrEq("Something went wrong"))));
+
+  // message() is interpolated, messageTemplate() is not.
+  auto fmtMsg = [] { VELOX_FAIL("Error: {} vs {}", 42, 99); };
+  EXPECT_THAT(
+      fmtMsg,
+      Throws<VeloxException>(Property(
+          &VeloxException::messageTemplate, StrEq("Error: {} vs {}"))));
+  EXPECT_THAT(
+      fmtMsg,
+      Throws<VeloxException>(
+          Property(&VeloxException::message, StrEq("Error: 42 vs 99"))));
+
+  auto userFail = [] { VELOX_USER_FAIL("Not supported: {}", "rank"); };
+  EXPECT_THAT(
+      userFail,
+      Throws<VeloxException>(Property(
+          &VeloxException::messageTemplate, StrEq("Not supported: {}"))));
+
+  auto checkFail = [] { VELOX_CHECK(false, "Bad state: {}", "disconnected"); };
+  EXPECT_THAT(
+      checkFail,
+      Throws<VeloxException>(
+          Property(&VeloxException::messageTemplate, StrEq("Bad state: {}"))));
+
+  auto checkEq = [] { VELOX_CHECK_EQ(1, 2); };
+  EXPECT_THAT(
+      checkEq,
+      Throws<VeloxException>(
+          Property(&VeloxException::messageTemplate, StrEq("({} vs. {})"))));
+
+  auto checkLt = [] { VELOX_CHECK_LT(10, 5, "Expected smaller"); };
+  EXPECT_THAT(
+      checkLt,
+      Throws<VeloxException>(Property(
+          &VeloxException::messageTemplate,
+          StrEq("({} vs. {}) Expected smaller"))));
+
+  auto unsupported = [] { VELOX_UNSUPPORTED("{} not supported", "merge"); };
+  EXPECT_THAT(
+      unsupported,
+      Throws<VeloxException>(Property(
+          &VeloxException::messageTemplate, StrEq("{} not supported"))));
+
+  auto nyi = [] { VELOX_NYI("{} not implemented", "windowing"); };
+  EXPECT_THAT(
+      nyi,
+      Throws<VeloxException>(Property(
+          &VeloxException::messageTemplate, StrEq("{} not implemented"))));
+
+  // Wrapped exception has no explicit template, so messageTemplate() returns
+  // the message itself.
+  {
+    auto exceptionPtr =
+        std::make_exception_ptr(std::invalid_argument("wrapped"));
+    VeloxUserError ve(exceptionPtr, "wrapped", false);
+    EXPECT_EQ(ve.messageTemplate(), "wrapped");
+  }
+
+  // messageTemplate not in what().
+  try {
+    VELOX_FAIL("Count: {}", 42);
+    FAIL() << "Expected an exception";
+  } catch (const VeloxException& e) {
+    EXPECT_EQ(e.messageTemplate(), "Count: {}");
+    EXPECT_EQ(
+        std::string(e.what()).find("Message Template:"), std::string::npos);
+  }
+
+  // No message arg.
+  auto checkNotNull = [] {
+    int* ptr = nullptr;
+    VELOX_CHECK_NOT_NULL(ptr);
+  };
+  EXPECT_THAT(
+      checkNotNull,
+      Throws<VeloxException>(
+          Property(&VeloxException::messageTemplate, StrEq(""))));
+
+  // VELOX_CHECK_EQ with user-provided format args.
+  auto checkEqFmt = [] { VELOX_CHECK_EQ(1, 2, "Expected {} == {}", 1, 2); };
+  EXPECT_THAT(
+      checkEqFmt,
+      Throws<VeloxException>(Property(
+          &VeloxException::messageTemplate,
+          StrEq("({} vs. {}) Expected {} == {}"))));
+
+  // Exception copy preserves messageTemplate.
+  try {
+    VELOX_FAIL("Copy test: {}", 42);
+    FAIL() << "Expected an exception";
+  } catch (const VeloxException& e) {
+    const VeloxException& copy = e;
+    EXPECT_EQ(copy.messageTemplate(), "Copy test: {}");
+
+    auto rethrown = std::current_exception();
+    try {
+      std::rethrow_exception(rethrown);
+    } catch (const VeloxException& e2) {
+      EXPECT_EQ(e2.messageTemplate(), "Copy test: {}");
+    }
+  }
+}

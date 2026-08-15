@@ -1,0 +1,2081 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#include "velox/exec/Window.h"
+#include <folly/system/HardwareConcurrency.h>
+#include <gmock/gmock.h>
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/exec/OrderBy.h"
+#include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/window/RowsStreamingWindowBuild.h"
+#include "velox/exec/window/SortWindowBuild.h"
+#include "velox/exec/window/VectorWindowPartition.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
+#include "velox/vector/LazyVector.h"
+#include "velox/vector/SimpleVector.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
+
+#include <limits>
+
+using namespace facebook::velox::exec::test;
+
+namespace facebook::velox::exec {
+using namespace facebook::velox::common::testutil;
+namespace {
+
+class WindowTest : public OperatorTestBase {
+ public:
+  void SetUp() override {
+    OperatorTestBase::SetUp();
+    velox::window::prestosql::registerAllWindowFunctions();
+    filesystems::registerLocalFileSystem();
+  }
+
+  common::SpillConfig getSpillConfig(
+      const std::string& spillDir,
+      bool enablePrefixSort) const {
+    const auto prefixSortConfig = enablePrefixSort
+        ? std::optional<common::PrefixSortConfig>(common::PrefixSortConfig())
+        : std::nullopt;
+    return common::SpillConfig(
+        [spillDir]() -> const std::string& { return spillDir; },
+        [&](uint64_t) {},
+        "0.0.0",
+        0,
+        0,
+        1 << 20,
+        executor_.get(),
+        5,
+        10,
+        0,
+        0,
+        0,
+        0,
+        0,
+        "none",
+        0,
+        prefixSortConfig);
+  }
+
+  const std::shared_ptr<folly::Executor> executor_{
+      std::make_shared<folly::CPUThreadPoolExecutor>(
+          folly::available_concurrency())};
+
+  // Builds one partition's worth of pre-sorted input: 'p' is constant so the
+  // build sees a single ever-growing incomplete partition, and 's' ascends from
+  // 'sortKeyOffset'. Each sort key repeats 'peerGroupSize' times, so peer
+  // groups straddle flush boundaries. 'payloadBytes' sizes the 'v' column,
+  // which is what drives the retained-byte budget; 0 means a narrow bigint.
+  RowVectorPtr makeSinglePartitionData(
+      vector_size_t size,
+      vector_size_t peerGroupSize,
+      int32_t payloadBytes,
+      int32_t sortKeyOffset) {
+    auto partitionKey =
+        makeFlatVector<int16_t>(size, [](auto /*row*/) { return 1; });
+    auto sortKey = makeFlatVector<int32_t>(
+        size, [&](auto row) { return sortKeyOffset + row / peerGroupSize; });
+    if (payloadBytes == 0) {
+      return makeRowVector(
+          {"p", "s", "v"},
+          {partitionKey, sortKey, makeFlatVector<int64_t>(size, [](auto row) {
+             return row;
+           })});
+    }
+    const std::string payload(payloadBytes, 'x');
+    return makeRowVector(
+        {"p", "s", "v"},
+        {partitionKey, sortKey, makeFlatVector<StringView>(size, [&](auto) {
+           return StringView(payload);
+         })});
+  }
+
+  // Returns the WindowNode for 'windowFunctions' over 'data', already sorted by
+  // the partition and sort keys.
+  std::shared_ptr<const core::WindowNode> makeStreamingWindowNode(
+      const std::vector<RowVectorPtr>& data,
+      const std::vector<std::string>& windowFunctions) {
+    auto plan = PlanBuilder()
+                    .values(data)
+                    .orderBy({"p", "s"}, false)
+                    .streamingWindow(windowFunctions)
+                    .planNode();
+    auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+    VELOX_CHECK_NOT_NULL(windowNode);
+    return windowNode;
+  }
+
+  // Returns a retained-byte budget worth 'numRows' rows of 'data'.
+  uint64_t budgetForRows(const RowVectorPtr& data, int32_t numRows) {
+    const uint64_t rowSize = data->estimateFlatSize() / data->size();
+    VELOX_CHECK_GT(rowSize, 0);
+    return rowSize * numRows;
+  }
+
+  tsan_atomic<bool> nonReclaimableSection_{false};
+};
+
+// Wraps 'call' in the default ROWS frame. An omitted frame clause parses to
+// RANGE, and 'hasRangeFrame_' is node-wide, so a single unframed function
+// exempts the whole build from the byte budget.
+std::string rowsFrameFunction(const std::string& call) {
+  return fmt::format(
+      "{} over (partition by p order by s rows between unbounded preceding "
+      "and current row)",
+      call);
+}
+
+// Retained-byte budget for tests that are not exercising the byte-budget
+// throttle and want the build to accept input unconditionally.
+constexpr uint64_t kUnboundedRetainedBytes =
+    std::numeric_limits<uint64_t>::max();
+
+class TestingRowsStreamingWindowBuild
+    : public window::RowsStreamingWindowBuild {
+ public:
+  using window::RowsStreamingWindowBuild::RowsStreamingWindowBuild;
+
+  bool testingHasRowContainer() const {
+    return data_ != nullptr;
+  }
+};
+
+TEST_F(WindowTest, spill) {
+  const vector_size_t size = 1'000;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row % 11; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .window({"row_number() over (partition by p order by s)"})
+                  .capturePlanNodeId(windowId)
+                  .planNode();
+
+  auto spillDirectory = TempDirectoryPath::create();
+  TestScopedSpillInjection scopedSpillInjection(100);
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kWindowSpillEnabled, "true")
+          .spillDirectory(spillDirectory->getPath())
+          .assertResults(
+              "SELECT *, row_number() over (partition by p order by s) FROM tmp");
+
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  const auto& stats = taskStats.at(windowId);
+
+  ASSERT_GT(stats.spilledBytes, 0);
+  ASSERT_GT(stats.spilledRows, 0);
+  ASSERT_GT(stats.spilledFiles, 0);
+  ASSERT_GT(stats.spilledPartitions, 0);
+}
+
+TEST_F(WindowTest, spillBatchReadTinyPartitions) {
+  const vector_size_t size = 1'000;
+  const uint32_t minReadBatchRows = 100;
+  // Each tiny partition has 1 row.
+  const uint32_t partitionRows = 1;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row / partitionRows; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .window({"row_number() over (partition by p order by s)"})
+                  .capturePlanNodeId(windowId)
+                  .planNode();
+
+  auto spillDirectory = TempDirectoryPath::create();
+  TestScopedSpillInjection scopedSpillInjection(100);
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kWindowSpillEnabled, "true")
+          .config(
+              core::QueryConfig::kWindowSpillMinReadBatchRows, minReadBatchRows)
+          .spillDirectory(spillDirectory->getPath())
+          .assertResults(
+              "SELECT *, row_number() over (partition by p order by s) FROM tmp");
+
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  const auto& stats = taskStats.at(windowId);
+
+  ASSERT_GT(stats.spilledBytes, 0);
+  ASSERT_GT(stats.spilledRows, 0);
+  ASSERT_GT(stats.spilledFiles, 0);
+  ASSERT_GT(stats.spilledPartitions, 0);
+  ASSERT_EQ(
+      stats.operatorStats.at("Window")
+          ->customStats[std::string(Window::kWindowSpillReadNumBatches)]
+          .sum,
+      size / minReadBatchRows);
+}
+
+TEST_F(WindowTest, spillBatchReadHugePartitions) {
+  const vector_size_t size = 1'000;
+  const uint32_t minReadBatchRows = 100;
+  // Each huge partition has 200 rows, which is larger than minReadBatchRows.
+  const uint32_t partitionRows = 200;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row / partitionRows; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .window({"row_number() over (partition by p order by s)"})
+                  .capturePlanNodeId(windowId)
+                  .planNode();
+
+  auto spillDirectory = TempDirectoryPath::create();
+  TestScopedSpillInjection scopedSpillInjection(100);
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kWindowSpillEnabled, "true")
+          .config(
+              core::QueryConfig::kWindowSpillMinReadBatchRows, minReadBatchRows)
+          .spillDirectory(spillDirectory->getPath())
+          .assertResults(
+              "SELECT *, row_number() over (partition by p order by s) FROM tmp");
+
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  const auto& stats = taskStats.at(windowId);
+
+  ASSERT_GT(stats.spilledBytes, 0);
+  ASSERT_GT(stats.spilledRows, 0);
+  ASSERT_GT(stats.spilledFiles, 0);
+  ASSERT_GT(stats.spilledPartitions, 0);
+  ASSERT_EQ(
+      stats.operatorStats.at("Window")
+          ->customStats[std::string(Window::kWindowSpillReadNumBatches)]
+          .sum,
+      size / partitionRows);
+}
+
+TEST_F(WindowTest, spillUnsupported) {
+  const vector_size_t size = 1'000;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row % 11; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .window({"row_number() over (order by s)"})
+                  .capturePlanNodeId(windowId)
+                  .planNode();
+
+  auto spillDirectory = TempDirectoryPath::create();
+  TestScopedSpillInjection scopedSpillInjection(100);
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kWindowSpillEnabled, "true")
+          .spillDirectory(spillDirectory->getPath())
+          .assertResults("SELECT *, row_number() over (order by s) FROM tmp");
+
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  const auto& stats = taskStats.at(windowId);
+
+  ASSERT_EQ(stats.spilledBytes, 0);
+  ASSERT_EQ(stats.spilledRows, 0);
+  ASSERT_EQ(stats.spilledFiles, 0);
+  ASSERT_EQ(stats.spilledPartitions, 0);
+  auto opStats = toOperatorStats(task->taskStats());
+  ASSERT_GT(
+      opStats.at("Window")
+          .runtimeStats[std::string(Operator::kSpillNotSupported)]
+          .sum,
+      1);
+}
+
+TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
+  const vector_size_t size = 1'000'000;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  // Abstract the common values vector split.
+  auto valuesSplit = split(data, 10);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  CursorParameters params;
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->testingOverrideMemoryPool(
+      memory::memoryManager()->addRootPool(
+          queryCtx->queryId(),
+          8'388'608 /* 8MB */,
+          exec::MemoryReclaimer::create()));
+
+  params.queryCtx = queryCtx;
+
+  auto testWindowBuild = [&](bool useStreamingWindow) {
+    if (useStreamingWindow) {
+      params.planNode =
+          PlanBuilder(planNodeIdGenerator)
+              .values(valuesSplit)
+              .streamingWindow(
+                  {"row_number() over (partition by p order by s)"})
+              .project({"d"})
+              .singleAggregation({}, {"sum(d)"})
+              .planNode();
+
+      readCursor(params);
+    } else {
+      params.planNode =
+          PlanBuilder(planNodeIdGenerator)
+              .values(valuesSplit)
+              .window({"row_number() over (partition by p order by s)"})
+              .project({"d"})
+              .singleAggregation({}, {"sum(d)"})
+              .planNode();
+
+      VELOX_ASSERT_THROW(readCursor(params), "Exceeded memory pool capacity");
+    }
+  };
+  // RowStreamingWindow will not OOM.
+  testWindowBuild(true);
+  // SortBasedWindow will OOM.
+  testWindowBuild(false);
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, aggWindowResultMismatch) {
+  auto data = makeRowVector(
+      {"id", "order_num"},
+      {makeFlatVector<int64_t>(4500, [](auto row) { return row; }),
+       makeConstant(1, 4500)});
+
+  createDuckDbTable({data});
+
+  const std::vector<std::string> kClauses = {
+      "sum(order_num) over (order by order_num DESC)"};
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"order_num"}, false)
+                  .streamingWindow(kClauses)
+                  .planNode();
+
+  std::atomic_bool isStreamCreated{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(window::RowsStreamingWindowBuild*)>(
+          [&](window::RowsStreamingWindowBuild* windowBuild) {
+            isStreamCreated.store(true);
+          }));
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .assertResults(
+          "SELECT *, sum(order_num) over (order by order_num DESC) FROM tmp");
+  ASSERT_TRUE(isStreamCreated.load());
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, singlePartitionRowCountLimit) {
+  // A single window partition is limited to vector_size_t (int32) rows. Inject
+  // a count at the limit so the next row append would overflow, and verify the
+  // operator fails with a catchable user error rather than overflowing and
+  // aborting the process.
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"sum(c0) over (order by c0)"})
+                  .planNode();
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::window::SortWindowBuild::addDecodedInputRow",
+      std::function<void(vector_size_t*)>([](vector_size_t* numRows) {
+        *numRows = std::numeric_limits<vector_size_t>::max();
+      }));
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Window operator cannot process more than");
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, subPartitionedRowCountLimit) {
+  // The same limit applies to SubPartitionedSortWindowBuild, whose own counter
+  // aggregates all sub-partitions. Force sub-partitioning and inject a count at
+  // the limit; the next batch must fail cleanly rather than overflow.
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"sum(c0) over (order by c0)"})
+                  .planNode();
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::window::SubPartitionedSortWindowBuild::addInput",
+      std::function<void(vector_size_t*)>([](vector_size_t* numRows) {
+        *numRows = std::numeric_limits<vector_size_t>::max();
+      }));
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kWindowNumSubPartitions, "4")
+          .copyResults(pool()),
+      "Window operator cannot process more than");
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, operatorRowCountLimit) {
+  // The Window operator keeps its own vector_size_t (int32) row counter that
+  // feeds isFinished()/getOutput() accounting and bounds every per-build int32
+  // counter (e.g. RowsStreamingWindowBuild::pendingRowCount_). The guard runs
+  // before delegating to the build, so inject a count at the limit and verify
+  // the batch is rejected before it reaches the streaming build.
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+
+  // orderBy() + streamingWindow() selects RowsStreamingWindowBuild, the path
+  // where the operator counter is the only guard.
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"c0"}, false)
+                  .streamingWindow(
+                      {"rank() over (order by c0 rows unbounded preceding)"})
+                  .planNode();
+
+  std::atomic_bool isStreamCreated{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(window::RowsStreamingWindowBuild*)>(
+          [&](window::RowsStreamingWindowBuild*) {
+            isStreamCreated.store(true);
+          }));
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Window::addInput",
+      std::function<void(vector_size_t*)>([](vector_size_t* numRows) {
+        *numRows = std::numeric_limits<vector_size_t>::max();
+      }));
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Window operator cannot process more than");
+
+  // The guard must have fired on the rows-streaming path, not a sort build.
+  ASSERT_TRUE(isStreamCreated.load());
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, rankRowStreamingWindowBuild) {
+  auto data = makeRowVector(
+      {"c1"},
+      {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2})});
+
+  createDuckDbTable({data});
+
+  const std::vector<std::string> kClauses = {
+      "rank() over (order by c1 rows unbounded preceding)"};
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"c1"}, false)
+                  .streamingWindow(kClauses)
+                  .planNode();
+
+  std::atomic_bool isStreamCreated{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(window::RowsStreamingWindowBuild*)>(
+          [&](window::RowsStreamingWindowBuild* windowBuild) {
+            isStreamCreated.store(true);
+          }));
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .assertResults(
+          "SELECT *, rank() over (order by c1 rows unbounded preceding) FROM tmp");
+
+  ASSERT_TRUE(isStreamCreated.load());
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, valuesRowsStreamingWindowBuild) {
+  const vector_size_t size = 1'00;
+
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
+       makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
+       makeFlatVector<int64_t>(
+           size, [](auto row) { return row % 3 + 1; }, nullEvery(5)),
+       makeFlatVector<int32_t>(size, [](auto row) { return row % 40; }),
+       makeFlatVector<int32_t>(size, [](auto row) { return row; })});
+
+  createDuckDbTable({data});
+
+  const std::vector<std::string> kClauses = {
+      "rank() over (partition by c0, c2 order by c1, c3)",
+      "dense_rank() over (partition by c0, c2 order by c1, c3)",
+      "row_number() over (partition by c0, c2 order by c1, c3)",
+      "sum(c4) over (partition by c0, c2 order by c1, c3)"};
+
+  auto plan = PlanBuilder()
+                  .values({split(data, 10)})
+                  .orderBy({"c0", "c2", "c1", "c3"}, false)
+                  .streamingWindow(kClauses)
+                  .planNode();
+
+  std::atomic_bool isStreamCreated{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(window::RowsStreamingWindowBuild*)>(
+          [&](window::RowsStreamingWindowBuild* windowBuild) {
+            isStreamCreated.store(true);
+          }));
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .assertResults(
+          "SELECT *, rank() over (partition by c0, c2 order by c1, c3), dense_rank() over (partition by c0, c2 order by c1, c3), row_number() over (partition by c0, c2 order by c1, c3), sum(c4) over (partition by c0, c2 order by c1, c3) FROM tmp");
+  ASSERT_TRUE(isStreamCreated.load());
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, encodedRowsStreamingWindowBuild) {
+  const vector_size_t size = 120;
+  const vector_size_t baseSize = size * 2;
+  const auto indices = makeIndices(size, [](auto row) { return row * 2; });
+  auto data = makeRowVector(
+      {"p", "s", "v"},
+      {
+          wrapInDictionary(
+              indices,
+              size,
+              makeFlatVector<int32_t>(
+                  baseSize, [](auto row) { return (row / 2) / 24; })),
+          wrapInDictionary(
+              indices,
+              size,
+              makeFlatVector<int32_t>(
+                  baseSize, [](auto row) { return ((row / 2) % 24) / 3; })),
+          wrapInDictionary(
+              indices,
+              size,
+              makeFlatVector<int64_t>(
+                  baseSize,
+                  [](auto row) { return (row / 2) % 7 + 1; },
+                  [](auto row) {
+                    return row % 2 == 0 && (row / 2) % 11 == 0;
+                  })),
+      });
+
+  createDuckDbTable({data});
+
+  const std::vector<std::string> kClauses = {
+      "rank() over (partition by p order by s)",
+      "dense_rank() over (partition by p order by s)",
+      "sum(v) over (partition by p order by s)"};
+
+  auto plan = PlanBuilder()
+                  .values(split(data, 7))
+                  .orderBy({"p", "s"}, false)
+                  .streamingWindow(kClauses)
+                  .planNode();
+
+  std::atomic_bool isStreamCreated{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(window::RowsStreamingWindowBuild*)>(
+          [&](window::RowsStreamingWindowBuild* windowBuild) {
+            isStreamCreated.store(true);
+          }));
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "4")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "4")
+      .assertResults(
+          "SELECT *, rank() over (partition by p order by s), dense_rank() over (partition by p order by s), sum(v) over (partition by p order by s) FROM tmp");
+  ASSERT_TRUE(isStreamCreated.load());
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildDoesNotMaterializeRows) {
+  auto data = makeRowVector(
+      {"p", "s", "v"},
+      {
+          makeFlatVector<int16_t>({1, 1, 1, 2, 2, 2}),
+          makeFlatVector<int32_t>({1, 1, 2, 1, 1, 2}),
+          makeFlatVector<int64_t>({10, 20, 30, 40, 50, 60}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"p", "s"}, false)
+                  .streamingWindow(
+                      {"rank() over (partition by p order by s)",
+                       "sum(v) over (partition by p order by s)"})
+                  .planNode();
+  auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+  ASSERT_NE(windowNode, nullptr);
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
+  windowBuild.setNumRowsPerOutput(2);
+  windowBuild.addInput(data);
+  windowBuild.noMoreInput();
+
+  ASSERT_FALSE(windowBuild.testingHasRowContainer());
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildThrottlesLargePartition) {
+  // A single partition (constant 'p') feeds one ever-growing, not-yet-complete
+  // VectorWindowPartition, so the 'windowPartitions_.size() < 2' rule never
+  // throttles. With a retained-byte budget, needsInput() must ask the driver to
+  // stop feeding once the buffered (by-reference) input exceeds the budget so a
+  // large partition doesn't accumulate its entire input before any output.
+  const vector_size_t size = 1'000;
+  auto data = makeSinglePartitionData(size, 1, 0, 0);
+  auto windowNode =
+      makeStreamingWindowNode({data}, {rowsFrameFunction("row_number()")});
+
+  // Budget for 8 rows; one 1000-row batch far exceeds it.
+  const uint64_t budget = budgetForRows(data, 8);
+
+  {
+    TestingRowsStreamingWindowBuild windowBuild(
+        windowNode, pool(), nullptr, &nonReclaimableSection_, budget);
+    windowBuild.setNumRowsPerOutput(4);
+
+    // No input yet (no row-size estimate): needs input.
+    EXPECT_TRUE(windowBuild.needsInput());
+
+    windowBuild.addInput(data);
+    // Retained input for the single incomplete partition now far exceeds the
+    // byte budget, so it stops asking for input to let output drain.
+    EXPECT_FALSE(windowBuild.needsInput());
+  }
+
+  {
+    // With the default (unbounded) budget, a single incomplete partition is
+    // never throttled - this is the pre-fix behavior.
+    TestingRowsStreamingWindowBuild windowBuild(
+        windowNode,
+        pool(),
+        nullptr,
+        &nonReclaimableSection_,
+        kUnboundedRetainedBytes);
+    windowBuild.setNumRowsPerOutput(4);
+    windowBuild.addInput(data);
+    EXPECT_TRUE(windowBuild.needsInput());
+  }
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildThrottleStaysDrainable) {
+  // When the byte budget is reached mid-partition before 'numRowsPerOutput_'
+  // rows accumulate, the pending rows must still be flushed into a partition so
+  // the driver can drain them. Otherwise needsInput() returns false (budget
+  // reached) while hasNextPartition() is false (nothing flushed): the Window
+  // operator can neither accept input nor produce output and the driver spins
+  // forever. This reproduces the production deadlock, where wide rows fill the
+  // budget at a handful of rows while 'numRowsPerOutput_' keeps the operator's
+  // init-time default (set from a nullopt row-size estimate).
+  const vector_size_t size = 1'000;
+  auto data = makeSinglePartitionData(size, 1, 0, 0);
+  auto windowNode =
+      makeStreamingWindowNode({data}, {rowsFrameFunction("row_number()")});
+
+  const uint64_t budget = budgetForRows(data, 8);
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode, pool(), nullptr, &nonReclaimableSection_, budget);
+  // Mimic the Window operator, which fixes 'numRowsPerOutput_' at initialize()
+  // from a nullopt row-size estimate; for wide rows this default is far larger
+  // than the byte budget in rows, so the row-count flush never fires within the
+  // partition.
+  windowBuild.setNumRowsPerOutput(size * 2);
+
+  windowBuild.addInput(data);
+
+  // The byte budget stopped input for the single incomplete partition, so the
+  // build must expose a drainable partition; otherwise the driver deadlocks.
+  EXPECT_FALSE(windowBuild.needsInput());
+  EXPECT_TRUE(windowBuild.hasNextPartition());
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildBudgetTracksGrowingRowSize) {
+  // The budget is in bytes and 'estimatedRowSize_' only grows, so a batch of
+  // much wider rows must start throttling even though the same row count of
+  // narrow rows did not. Guards against testing the budget against a stale
+  // row-width estimate taken from earlier, narrower input.
+  const vector_size_t batchSize = 100;
+  auto narrowBatch = makeSinglePartitionData(batchSize, 1, 0, 0);
+  auto secondNarrowBatch = makeSinglePartitionData(batchSize, 1, 0, batchSize);
+  auto wideBatch = makeSinglePartitionData(batchSize, 1, 4'096, 2 * batchSize);
+
+  auto windowNode = makeStreamingWindowNode(
+      {narrowBatch, secondNarrowBatch, wideBatch},
+      {rowsFrameFunction("row_number()")});
+
+  // Room for 4x the narrow batch, so two narrow batches stay under budget.
+  const uint64_t budget = budgetForRows(narrowBatch, 4 * batchSize);
+  ASSERT_LT(budgetForRows(narrowBatch, 1), budgetForRows(wideBatch, 1) / 100)
+      << "the wide payload must dominate the row-size estimate";
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode, pool(), nullptr, &nonReclaimableSection_, budget);
+  // Keeps the row-count flush from firing, so throttling is driven by bytes.
+  windowBuild.setNumRowsPerOutput(10 * batchSize);
+
+  windowBuild.addInput(narrowBatch);
+  EXPECT_TRUE(windowBuild.needsInput());
+
+  // Twice the rows, still narrow: under budget, so still accepting.
+  windowBuild.addInput(secondNarrowBatch);
+  EXPECT_TRUE(windowBuild.needsInput());
+
+  // Only 50% more rows, but each ~300x wider: the re-estimated row size puts
+  // the retained bytes far over budget.
+  windowBuild.addInput(wideBatch);
+  EXPECT_FALSE(windowBuild.needsInput());
+  EXPECT_TRUE(windowBuild.hasNextPartition());
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildBudgetFlushesOnce) {
+  // The byte-budget flush only has to make the pending rows drainable once.
+  // The budget stays exceeded until the driver drains, so re-testing it per row
+  // would flush every remaining row of the input as its own range, and
+  // VectorWindowPartition walks its ranges on each row lookup and rebuilds
+  // prefix sums on each removeProcessedRows().
+  const vector_size_t size = 1'000;
+  auto data = makeSinglePartitionData(size, 1, 0, 0);
+  auto windowNode =
+      makeStreamingWindowNode({data}, {rowsFrameFunction("row_number()")});
+
+  const uint64_t budget = budgetForRows(data, 8);
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode, pool(), nullptr, &nonReclaimableSection_, budget);
+  // Keeps the row-count flush from firing, so every flush comes from the
+  // budget.
+  windowBuild.setNumRowsPerOutput(size * 2);
+
+  windowBuild.addInput(data);
+
+  auto partition = std::dynamic_pointer_cast<window::VectorWindowPartition>(
+      windowBuild.nextPartition());
+  ASSERT_NE(partition, nullptr);
+  EXPECT_EQ(partition->testingNumRanges(), 1);
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildBudgetPreservesResults) {
+  // The byte budget changes only when the build stops accepting input and when
+  // it flushes; it must not change results. Heavy ties on the sort key put peer
+  // groups across the flush boundaries the budget creates, which is where
+  // rank/dense_rank would break if a partial partition were mistaken for a
+  // complete one.
+  //
+  // Every function needs an explicit ROWS frame. An omitted frame clause parses
+  // to RANGE, and 'hasRangeFrame_' is node-wide, so a single unframed function
+  // exempts the whole build from the budget and makes this comparison vacuous.
+  const vector_size_t size = 500;
+  auto data = makeSinglePartitionData(size, 7, 4'096, 0);
+  createDuckDbTable({data});
+
+  auto windowNode = makeStreamingWindowNode(
+      {data},
+      {rowsFrameFunction("rank()"),
+       rowsFrameFunction("dense_rank()"),
+       rowsFrameFunction("row_number()"),
+       rowsFrameFunction("sum(s)")});
+  for (const auto& function : windowNode->windowFunctions()) {
+    ASSERT_EQ(function.frame.type, core::WindowNode::WindowType::kRows)
+        << "a RANGE function would exempt the build from the byte budget";
+  }
+
+  auto tiny = AssertQueryBuilder(windowNode)
+                  .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+                  .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+                  .copyResults(pool());
+  auto unbounded =
+      AssertQueryBuilder(windowNode)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1000000000")
+          .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+          .copyResults(pool());
+
+  ASSERT_EQ(tiny->size(), size);
+  ASSERT_EQ(unbounded->size(), size);
+  for (auto row = 0; row < size; ++row) {
+    ASSERT_TRUE(tiny->equalValueAt(unbounded.get(), row, row))
+        << "row " << row << ": tiny=" << tiny->toString(row)
+        << " unbounded=" << unbounded->toString(row);
+  }
+
+  AssertQueryBuilder(windowNode, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+      .assertResults(
+          "SELECT p, s, v, "
+          "rank() over (partition by p order by s rows between unbounded "
+          "preceding and current row), "
+          "dense_rank() over (partition by p order by s rows between unbounded "
+          "preceding and current row), "
+          "row_number() over (partition by p order by s rows between unbounded "
+          "preceding and current row), "
+          "sum(s) over (partition by p order by s rows between unbounded "
+          "preceding and current row) FROM tmp");
+}
+
+DEBUG_ONLY_TEST_F(
+    WindowTest,
+    rowsStreamingWindowBuildBudgetPreservesResultsNonDefaultFrame) {
+  // The default-frame restriction in Window::supportRowsStreaming() applies
+  // only to aggregates, so ranking functions reach this build under any frame,
+  // including one that extends past the current row. They ignore the frame -
+  // both Rank::apply() and RowNumber::apply() discard frameStarts/frameEnds -
+  // but the byte budget must not change their results either way. The RANGE
+  // case additionally covers the path where the budget is disabled outright.
+  const vector_size_t size = 500;
+  auto data = makeSinglePartitionData(size, 7, 4'096, 0);
+  createDuckDbTable({data});
+
+  for (const auto& frame :
+       {"rows between current row and unbounded following",
+        "rows between 3 preceding and 2 following",
+        "range between unbounded preceding and current row"}) {
+    SCOPED_TRACE(frame);
+    std::atomic_bool isStreamCreated{false};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+        std::function<void(window::RowsStreamingWindowBuild*)>(
+            [&](window::RowsStreamingWindowBuild*) {
+              isStreamCreated.store(true);
+            }));
+    auto windowNode = makeStreamingWindowNode(
+        {data},
+        {fmt::format("rank() over (partition by p order by s {})", frame),
+         fmt::format(
+             "row_number() over (partition by p order by s {})", frame)});
+
+    auto tiny =
+        AssertQueryBuilder(windowNode)
+            .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+            .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+            .copyResults(pool());
+    auto unbounded =
+        AssertQueryBuilder(windowNode)
+            .config(core::QueryConfig::kPreferredOutputBatchBytes, "1000000000")
+            .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+            .copyResults(pool());
+
+    // These frames do reach this build; if the gate ever tightens, the
+    // invariant below stops being about the byte budget.
+    EXPECT_TRUE(isStreamCreated.load());
+    ASSERT_EQ(tiny->size(), size);
+    for (auto row = 0; row < size; ++row) {
+      ASSERT_TRUE(tiny->equalValueAt(unbounded.get(), row, row))
+          << "row " << row << ": tiny=" << tiny->toString(row)
+          << " unbounded=" << unbounded->toString(row);
+    }
+  }
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildWideRowsSinglePartition) {
+  // End-to-end counterpart of the two throttle tests above. Rows wide enough
+  // that the retained-byte budget is reached almost immediately, a single
+  // partition that stays incomplete until the input ends, and an output-row
+  // target far above the budget in rows. The build refusing input and the
+  // operator producing output have to interleave, otherwise the driver makes no
+  // progress.
+  const vector_size_t size = 200;
+  auto data = makeSinglePartitionData(size, 1, 4'096, 0);
+  auto windowNode =
+      makeStreamingWindowNode({data}, {rowsFrameFunction("row_number()")});
+
+  auto result =
+      AssertQueryBuilder(windowNode)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+          .copyResults(pool());
+  ASSERT_EQ(result->size(), size);
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildLoadsOnlyBoundaryColumns) {
+  const vector_size_t size = 6;
+
+  auto makeLazyColumn = [&](const TypePtr& type,
+                            std::function<VectorPtr()> loader) {
+    return std::make_shared<LazyVector>(
+        pool(),
+        type,
+        size,
+        std::make_unique<velox::test::SimpleVectorLoader>(
+            [loader = std::move(loader)](RowSet /*rows*/) {
+              return loader();
+            }));
+  };
+
+  auto partitionKey = makeLazyColumn(
+      INTEGER(), [&]() { return makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2}); });
+  auto sortKey = makeLazyColumn(
+      INTEGER(), [&]() { return makeFlatVector<int32_t>({1, 1, 2, 1, 1, 2}); });
+  auto payload = makeLazyColumn(BIGINT(), [&]() {
+    return makeFlatVector<int64_t>({10, 20, 30, 40, 50, 60});
+  });
+
+  auto data = makeRowVector({"p", "s", "v"}, {partitionKey, sortKey, payload});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"p", "s"}, false)
+                  .streamingWindow({"rank() over (partition by p order by s)"})
+                  .planNode();
+  auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+  ASSERT_NE(windowNode, nullptr);
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
+  windowBuild.setNumRowsPerOutput(2);
+  windowBuild.addInput(data);
+
+  EXPECT_TRUE(partitionKey->isLoaded());
+  EXPECT_TRUE(sortKey->isLoaded());
+  EXPECT_FALSE(payload->isLoaded());
+}
+
+TEST_F(
+    WindowTest,
+    rowsStreamingWindowBuildLoadsFunctionOnlyLazyColumnDuringApply) {
+  const vector_size_t size = 6;
+  auto payload = std::make_shared<LazyVector>(
+      pool(),
+      BIGINT(),
+      size,
+      std::make_unique<velox::test::SimpleVectorLoader>([&](RowSet /*rows*/) {
+        return makeFlatVector<int64_t>({10, 20, 30, 40, 50, 60});
+      }));
+
+  auto data = makeRowVector(
+      {"p", "s", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1}),
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+          payload,
+      });
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"p", "s"}, false)
+                  .streamingWindow({"sum(v) over (partition by p order by s)"})
+                  .planNode();
+  auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+  ASSERT_NE(windowNode, nullptr);
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
+  windowBuild.setNumRowsPerOutput(10);
+  windowBuild.addInput(data);
+  EXPECT_FALSE(payload->isLoaded());
+  windowBuild.noMoreInput();
+
+  auto partition = windowBuild.nextPartition();
+  HashStringAllocator stringAllocator{pool()};
+  const auto& function = windowNode->windowFunctions()[0];
+  auto windowFunction = WindowFunction::create(
+      function.functionCall->name(),
+      {WindowFunctionArg{BIGINT(), nullptr, 2}},
+      function.functionCall->type(),
+      function.ignoreNulls,
+      pool(),
+      &stringAllocator,
+      core::QueryConfig({}));
+  windowFunction->resetPartition(partition.get());
+
+  auto peerStarts = AlignedBuffer::allocate<vector_size_t>(size, pool());
+  auto peerEnds = AlignedBuffer::allocate<vector_size_t>(size, pool());
+  auto frameStarts = AlignedBuffer::allocate<vector_size_t>(size, pool());
+  auto frameEnds = AlignedBuffer::allocate<vector_size_t>(size, pool());
+  auto* rawPeerStarts = peerStarts->asMutable<vector_size_t>();
+  auto* rawPeerEnds = peerEnds->asMutable<vector_size_t>();
+  auto* rawFrameStarts = frameStarts->asMutable<vector_size_t>();
+  auto* rawFrameEnds = frameEnds->asMutable<vector_size_t>();
+  for (auto i = 0; i < size; ++i) {
+    rawPeerStarts[i] = i;
+    rawPeerEnds[i] = i;
+    rawFrameStarts[i] = 0;
+    rawFrameEnds[i] = i;
+  }
+
+  auto result = BaseVector::create(function.functionCall->type(), size, pool());
+  windowFunction->apply(
+      peerStarts,
+      peerEnds,
+      frameStarts,
+      frameEnds,
+      SelectivityVector(size),
+      0,
+      result);
+
+  EXPECT_TRUE(payload->isLoaded());
+  velox::test::assertEqualVectors(
+      makeFlatVector<int64_t>({10, 30, 60, 100, 150, 210}), result);
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildRetainsEncodedRows) {
+  const vector_size_t size = 12;
+  const vector_size_t baseSize = size * 2;
+  const auto indices = makeIndices(size, [](auto row) { return row * 2; });
+  auto data = makeRowVector(
+      {"p", "s", "v"},
+      {
+          wrapInDictionary(indices, size, makeConstant<int32_t>(1, baseSize)),
+          wrapInDictionary(
+              indices,
+              size,
+              makeFlatVector<int32_t>(
+                  baseSize, [](auto row) { return (row / 2) / 3; })),
+          wrapInDictionary(
+              indices,
+              size,
+              makeFlatVector<int64_t>(
+                  baseSize,
+                  [](auto row) { return (row / 2) + 10; },
+                  [](auto row) { return (row / 2) == 5; })),
+      });
+
+  auto inputs = split(data, 5);
+  auto plan = PlanBuilder()
+                  .values(inputs)
+                  .orderBy({"p", "s"}, false)
+                  .streamingWindow(
+                      {"rank() over (partition by p order by s)",
+                       "sum(v) over (partition by p order by s)"})
+                  .planNode();
+  auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+  ASSERT_NE(windowNode, nullptr);
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
+  windowBuild.setNumRowsPerOutput(4);
+  for (const auto& input : inputs) {
+    windowBuild.addInput(input);
+  }
+  windowBuild.noMoreInput();
+
+  ASSERT_FALSE(windowBuild.testingHasRowContainer());
+
+  std::vector<vector_size_t> rowNumbers{0, 5, -1, 11};
+  auto result = BaseVector::create(BIGINT(), 0, pool());
+  windowBuild.nextPartition()->extractColumn(
+      2, folly::Range(rowNumbers.data(), rowNumbers.size()), 0, result);
+
+  ASSERT_EQ(result->size(), 4);
+  EXPECT_EQ(result->as<SimpleVector<int64_t>>()->valueAt(0), 10);
+  EXPECT_TRUE(result->isNullAt(1));
+  EXPECT_TRUE(result->isNullAt(2));
+  EXPECT_EQ(result->as<SimpleVector<int64_t>>()->valueAt(3), 21);
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildExtractsNegativeRowsAsNull) {
+  auto data = makeRowVector(
+      {"p", "s", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1}),
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"p", "s"}, false)
+                  .streamingWindow({"rank() over (partition by p order by s)"})
+                  .planNode();
+  auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+  ASSERT_NE(windowNode, nullptr);
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
+  windowBuild.setNumRowsPerOutput(10);
+  windowBuild.addInput(data);
+  windowBuild.noMoreInput();
+
+  std::vector<vector_size_t> rowNumbers{0, -2, 2};
+  auto result = BaseVector::create(BIGINT(), 0, pool());
+  windowBuild.nextPartition()->extractColumn(
+      2, folly::Range(rowNumbers.data(), rowNumbers.size()), 0, result);
+
+  ASSERT_EQ(result->size(), 3);
+  EXPECT_EQ(result->as<SimpleVector<int64_t>>()->valueAt(0), 10);
+  EXPECT_TRUE(result->isNullAt(1));
+  EXPECT_EQ(result->as<SimpleVector<int64_t>>()->valueAt(2), 30);
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildKRangeFrameNanBounds) {
+  const auto kNan = std::numeric_limits<double>::quiet_NaN();
+  auto data = makeRowVector(
+      {"s0", "bound"},
+      {
+          makeFlatVector<double>({1.0, 2.0, 3.0, kNan}),
+          makeFlatVector<double>({kNan, 2.0, kNan, kNan}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"s0"}, false)
+                  .streamingWindow(
+                      {"rank() over (order by s0 range between bound preceding "
+                       "and current row)"})
+                  .planNode();
+  auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+  ASSERT_NE(windowNode, nullptr);
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
+  windowBuild.setNumRowsPerOutput(10);
+  windowBuild.addInput(data);
+  windowBuild.noMoreInput();
+
+  auto partition = windowBuild.nextPartition();
+  partition->removeProcessedRows(2);
+
+  const auto startRow = 2;
+  const auto numRows = data->size() - startRow;
+  std::vector<vector_size_t> peerStarts(numRows);
+  std::vector<vector_size_t> peerEnds(numRows);
+  partition->computePeerBuffers(
+      startRow, data->size(), 0, 0, peerStarts.data(), peerEnds.data());
+
+  std::vector<vector_size_t> frameBounds(numRows);
+  SelectivityVector validFrames(numRows, true);
+  partition->computeKRangeFrameBounds(
+      true,
+      true,
+      1,
+      startRow,
+      numRows,
+      peerStarts.data(),
+      frameBounds.data(),
+      validFrames);
+
+  EXPECT_FALSE(validFrames.isValid(0));
+  EXPECT_TRUE(validFrames.isValid(1));
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildKRangeFramePeerBounds) {
+  auto data = makeRowVector(
+      {"s0", "bound"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2, 3}),
+          makeFlatVector<int32_t>({1, 1, 2, 3}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .orderBy({"s0"}, false)
+          .streamingWindow({"rank() over (order by s0 range between bound "
+                            "following and unbounded following)"})
+          .planNode();
+  auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+  ASSERT_NE(windowNode, nullptr);
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
+  windowBuild.setNumRowsPerOutput(10);
+  windowBuild.addInput(data);
+  windowBuild.noMoreInput();
+
+  auto partition = windowBuild.nextPartition();
+  const auto numRows = data->size();
+  std::vector<vector_size_t> peerStarts(numRows);
+  std::vector<vector_size_t> peerEnds(numRows);
+  partition->computePeerBuffers(
+      0, numRows, 0, 0, peerStarts.data(), peerEnds.data());
+
+  std::vector<vector_size_t> frameBounds(numRows);
+  SelectivityVector validFrames(numRows, true);
+  partition->computeKRangeFrameBounds(
+      true,
+      false,
+      1,
+      0,
+      numRows,
+      peerStarts.data(),
+      frameBounds.data(),
+      validFrames);
+
+  EXPECT_EQ(frameBounds[0], 0);
+  EXPECT_EQ(frameBounds[1], 0);
+  EXPECT_EQ(frameBounds[2], 2);
+  EXPECT_EQ(frameBounds[3], 3);
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildPeerContinuesAcrossInputBatches) {
+  auto firstBatch = makeRowVector(
+      {"p", "s"},
+      {
+          makeFlatVector<int32_t>({1, 1}),
+          makeFlatVector<int32_t>({10, 10}),
+      });
+  auto secondBatch = makeRowVector(
+      {"p", "s"},
+      {
+          makeFlatVector<int32_t>({1, 1}),
+          makeFlatVector<int32_t>({10, 10}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({firstBatch, secondBatch})
+          .orderBy({"p", "s"}, false)
+          .streamingWindow({"rank() over (partition by p order by s rows "
+                            "unbounded preceding)"})
+          .planNode();
+  auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+  ASSERT_NE(windowNode, nullptr);
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
+  windowBuild.setNumRowsPerOutput(2);
+  windowBuild.addInput(firstBatch);
+  windowBuild.addInput(secondBatch);
+
+  auto partition = windowBuild.nextPartition();
+  std::vector<vector_size_t> peerStarts(2);
+  std::vector<vector_size_t> peerEnds(2);
+  auto peerBounds = partition->computePeerBuffers(
+      0, 2, 0, 0, peerStarts.data(), peerEnds.data());
+  EXPECT_THAT(peerStarts, ::testing::ElementsAre(0, 0));
+  EXPECT_THAT(peerEnds, ::testing::ElementsAre(1, 1));
+  EXPECT_EQ(peerBounds.first, 0);
+  EXPECT_EQ(peerBounds.second, 2);
+
+  partition->removeProcessedRows(2);
+  windowBuild.noMoreInput();
+
+  peerBounds = partition->computePeerBuffers(
+      2,
+      4,
+      peerBounds.first,
+      peerBounds.second,
+      peerStarts.data(),
+      peerEnds.data());
+  EXPECT_THAT(peerStarts, ::testing::ElementsAre(0, 0));
+  EXPECT_THAT(peerEnds, ::testing::ElementsAre(3, 3));
+  EXPECT_EQ(peerBounds.first, 0);
+  EXPECT_EQ(peerBounds.second, 4);
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildKRangeFrameSearchBounds) {
+  auto testSearchBounds = [&](const RowVectorPtr& data,
+                              const std::string& sortKey,
+                              const std::string& windowFunction) {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .orderBy({sortKey}, false)
+                    .streamingWindow({windowFunction})
+                    .planNode();
+    auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+    ASSERT_NE(windowNode, nullptr);
+
+    TestingRowsStreamingWindowBuild windowBuild(
+        windowNode,
+        pool(),
+        nullptr,
+        &nonReclaimableSection_,
+        kUnboundedRetainedBytes);
+    windowBuild.setNumRowsPerOutput(10);
+    auto splitData = split(data, 4);
+    for (const auto& input : splitData) {
+      windowBuild.addInput(input);
+    }
+    windowBuild.noMoreInput();
+
+    auto partition = windowBuild.nextPartition();
+    partition->removeProcessedRows(2);
+
+    const auto startRow = 2;
+    const auto endRow = data->size();
+    const auto numRows = endRow - startRow;
+    std::vector<vector_size_t> peerStarts(numRows);
+    std::vector<vector_size_t> peerEnds(numRows);
+    partition->computePeerBuffers(
+        startRow, endRow, 0, 0, peerStarts.data(), peerEnds.data());
+
+    std::vector<vector_size_t> frameBounds(numRows);
+    SelectivityVector validFrames(numRows, true);
+    partition->computeKRangeFrameBounds(
+        true,
+        true,
+        1,
+        startRow,
+        numRows,
+        peerStarts.data(),
+        frameBounds.data(),
+        validFrames);
+    EXPECT_THAT(frameBounds, ::testing::ElementsAre(2, 2, 3, 4, 5, 6));
+
+    validFrames.resizeFill(numRows, true);
+    partition->computeKRangeFrameBounds(
+        false,
+        false,
+        2,
+        startRow,
+        numRows,
+        peerEnds.data(),
+        frameBounds.data(),
+        validFrames);
+    EXPECT_THAT(frameBounds, ::testing::ElementsAre(3, 4, 5, 6, 9, 9));
+  };
+
+  testSearchBounds(
+      makeRowVector(
+          {"s0", "preceding_bound", "following_bound"},
+          {
+              makeFlatVector<int32_t>({0, 10, 20, 30, 40, 50, 60, 70}),
+              makeFlatVector<int32_t>({-15, -5, 5, 15, 25, 35, 45, 55}),
+              makeFlatVector<int32_t>({15, 25, 35, 45, 55, 65, 75, 85}),
+          }),
+      "s0",
+      "rank() over (order by s0 range between preceding_bound preceding "
+      "and current row)");
+
+  testSearchBounds(
+      makeRowVector(
+          {"s0", "preceding_bound", "following_bound"},
+          {
+              makeFlatVector<int32_t>({70, 60, 50, 40, 30, 20, 10, 0}),
+              makeFlatVector<int32_t>({85, 75, 65, 55, 45, 35, 25, 15}),
+              makeFlatVector<int32_t>({55, 45, 35, 25, 15, 5, -5, -15}),
+          }),
+      "s0 DESC",
+      "rank() over (order by s0 desc range between preceding_bound preceding "
+      "and current row)");
+}
+
+TEST_F(WindowTest, prePartitionedSortBuild) {
+  const vector_size_t size = 1'000;
+  const int numPartitions = 37;
+  const int numSubPartitions = 4;
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          // Partition key.
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan =
+      PlanBuilder()
+          .values(split(data, 10))
+          .window({"row_number() over (partition by p order by s desc)"})
+          .capturePlanNodeId(windowId)
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(
+          core::QueryConfig::kWindowNumSubPartitions,
+          std::to_string(numSubPartitions))
+      .assertResults(
+          "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
+}
+
+TEST_F(WindowTest, prePartitionedSortBuildSkewed) {
+  const vector_size_t size = 1'000;
+  const int numPartitions = 4;
+  const int numSubPartitions = 16;
+  auto data = makeRowVector(
+      {"p", "s"},
+      {
+          // Partition key.
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan =
+      PlanBuilder()
+          .values(split(data, 10))
+          .window({"row_number() over (partition by p order by s desc)"})
+          .capturePlanNodeId(windowId)
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(
+          core::QueryConfig::kWindowNumSubPartitions,
+          std::to_string(numSubPartitions))
+      .assertResults(
+          "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
+}
+
+TEST_F(WindowTest, prePartitionedBuildWithSpill) {
+  const vector_size_t size = 1'000;
+  const int numPartitions = 37;
+  const int numSubPartitions = 4;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(
+              size, [](auto row) { return row % numPartitions; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan =
+      PlanBuilder()
+          .values(split(data, 10))
+          .window({"row_number() over (partition by p order by s desc)"})
+          .capturePlanNodeId(windowId)
+          .planNode();
+
+  auto spillDirectory = TempDirectoryPath::create();
+  TestScopedSpillInjection scopedSpillInjection(100);
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(
+              core::QueryConfig::kWindowNumSubPartitions,
+              std::to_string(numSubPartitions))
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kWindowSpillEnabled, "true")
+          .config(core::QueryConfig::kOrderBySpillEnabled, "false")
+          .spillDirectory(spillDirectory->getPath())
+          .assertResults(
+              "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
+
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  const auto& stats = taskStats.at(windowId);
+
+  ASSERT_GT(stats.spilledBytes, 0);
+  ASSERT_GT(stats.spilledRows, 0);
+  ASSERT_GT(stats.spilledFiles, 0);
+  ASSERT_GT(stats.spilledPartitions, 0);
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, aggregationWithNonDefaultFrame) {
+  const vector_size_t size = 1'00;
+
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
+       makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
+       makeFlatVector<int64_t>(
+           size, [](auto row) { return row % 3 + 1; }, nullEvery(5)),
+       makeFlatVector<int32_t>(size, [](auto row) { return row % 40; }),
+       makeFlatVector<int32_t>(size, [](auto row) { return row; })});
+
+  createDuckDbTable({data});
+
+  const std::vector<std::string> kClauses = {
+      "sum(c4) over (partition by c0, c2 order by c1, c3 range between unbounded preceding and unbounded following)"};
+
+  auto plan = PlanBuilder()
+                  .values({split(data, 10)})
+                  .orderBy({"c0", "c2", "c1", "c3"}, false)
+                  .streamingWindow(kClauses)
+                  .planNode();
+
+  std::atomic_bool isStreamCreated{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(window::RowsStreamingWindowBuild*)>(
+          [&](window::RowsStreamingWindowBuild* windowBuild) {
+            isStreamCreated.store(true);
+          }));
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .assertResults(
+          "SELECT *, sum(c4) over (partition by c0, c2 order by c1, c3 range between unbounded preceding and unbounded following) FROM tmp");
+
+  ASSERT_FALSE(isStreamCreated.load());
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, nonRowsStreamingWindow) {
+  auto data = makeRowVector(
+      {"c1"},
+      {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2})});
+
+  createDuckDbTable({data});
+
+  const std::vector<std::string> kClauses = {
+      "first_value(c1) over (order by c1 rows unbounded preceding)",
+      "nth_value(c1, 1) over (order by c1 rows unbounded preceding)"};
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"c1"}, false)
+                  .streamingWindow(kClauses)
+                  .planNode();
+
+  std::atomic_bool isStreamCreated{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(window::RowsStreamingWindowBuild*)>(
+          [&](window::RowsStreamingWindowBuild* windowBuild) {
+            isStreamCreated.store(true);
+          }));
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .assertResults(
+          "SELECT *, first_value(c1) over (order by c1 rows unbounded preceding), nth_value(c1, 1) over (order by c1 rows unbounded preceding) FROM tmp");
+  ASSERT_FALSE(isStreamCreated.load());
+}
+
+TEST_F(WindowTest, missingFunctionSignature) {
+  auto input = {makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      makeFlatVector<std::string>({"A", "B", "C"}),
+      makeFlatVector<int64_t>({10, 20, 30}),
+  })};
+
+  auto runWindow = [&](const core::CallTypedExprPtr& callExpr) {
+    core::WindowNode::Frame frame{
+        core::WindowNode::WindowType::kRows,
+        core::WindowNode::BoundType::kUnboundedPreceding,
+        nullptr,
+        core::WindowNode::BoundType::kUnboundedFollowing,
+        nullptr};
+
+    core::WindowNode::Function windowFunction{callExpr, frame, false};
+
+    CursorParameters params;
+    params.planNode =
+        PlanBuilder()
+            .values(input)
+            .addNode([&](auto nodeId, auto source) -> core::PlanNodePtr {
+              return std::make_shared<core::WindowNode>(
+                  nodeId,
+                  std::vector<core::FieldAccessTypedExprPtr>{
+                      std::make_shared<core::FieldAccessTypedExpr>(
+                          BIGINT(), "c0")},
+                  std::vector<core::FieldAccessTypedExprPtr>{}, // sortingKeys
+                  std::vector<core::SortOrder>{}, // sortingOrders
+                  std::vector<std::string>{"w"},
+                  std::vector<core::WindowNode::Function>{windowFunction},
+                  false,
+                  source);
+            })
+            .planNode();
+
+    readCursor(params);
+  };
+
+  auto callExpr = std::make_shared<core::CallTypedExpr>(
+      BIGINT(),
+      "sum",
+      std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c1"));
+
+  VELOX_ASSERT_THROW(
+      runWindow(callExpr),
+      "Window function signature is not supported: sum(VARCHAR). Supported signatures:");
+
+  callExpr = std::make_shared<core::CallTypedExpr>(
+      VARCHAR(),
+      "sum",
+      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c2"));
+
+  VELOX_ASSERT_THROW(
+      runWindow(callExpr),
+      "Unexpected return type for window function sum(BIGINT). Expected BIGINT. Got VARCHAR.");
+}
+
+TEST_F(WindowTest, duplicateOrOverlappingKeys) {
+  auto data = makeRowVector(
+      ROW({"a", "b", "c", "d", "e"},
+          {
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+              BIGINT(),
+          }),
+      10);
+
+  auto plan = [&](const std::vector<std::string>& partitionKeys,
+                  const std::vector<std::string>& sortingKeys) {
+    std::ostringstream sql;
+    sql << "row_number() over (";
+    if (!partitionKeys.empty()) {
+      sql << " partition by ";
+      sql << folly::join(", ", partitionKeys);
+    }
+    if (!sortingKeys.empty()) {
+      sql << " order by ";
+      sql << folly::join(", ", sortingKeys);
+    }
+    sql << ")";
+
+    PlanBuilder().values({data}).window({sql.str()}).planNode();
+  };
+
+  VELOX_ASSERT_THROW(
+      plan({"a", "a"}, {"b"}),
+      "Partitioning keys must be unique. Found duplicate key: a");
+
+  VELOX_ASSERT_THROW(
+      plan({"a", "b"}, {"c", "d", "c"}),
+      "Sorting keys must be unique and not overlap with partitioning keys. Found duplicate key: c");
+
+  VELOX_ASSERT_THROW(
+      plan({"a", "b"}, {"c", "b"}),
+      "Sorting keys must be unique and not overlap with partitioning keys. Found duplicate key: b");
+}
+
+TEST_F(WindowTest, nagativeFrameArg) {
+  const vector_size_t size = 1'000;
+
+  auto sizeAt = [](vector_size_t row) { return row % 5; };
+  auto keyAt = [](vector_size_t row) { return row % 11; };
+  auto keys = makeArrayVector<float>(size, sizeAt, keyAt);
+  auto data = makeRowVector(
+      {"c0", "c1", "p0", "p1", "k0", "row_number"},
+      {
+          // Payload.
+          makeFlatVector<float>(size, [](auto row) { return row; }),
+          makeFlatVector<float>(size, [](auto row) { return row; }),
+          // Partition key.
+          keys,
+          makeFlatVector<std::string>(
+              size, [](auto row) { return fmt::format("{}", row + 20); }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          // Sorting key.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  struct {
+    std::string fragmentStart;
+    std::string fragmentEnd;
+
+    std::string debugString() const {
+      if (fragmentStart[0] == '-') {
+        return fmt::format(
+            "Window frame {} offset must not be negative", fragmentStart);
+      } else {
+        return fmt::format(
+            "Window frame {} offset must not be negative", fragmentEnd);
+      }
+    }
+  } testSettings[] = {
+      {"k0", "-1"}, // Negative end
+      {"-1", "k0"}, // Negative start
+      {"-1", "-3"} // Negative start, negative end
+  };
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    const auto& startOffset = testData.fragmentStart;
+    const auto& endOffset = testData.fragmentEnd;
+    auto plan =
+        PlanBuilder()
+            .values(split(data, 10))
+            .window({fmt::format(
+                "regr_count(c0, c1) over (partition by p0, p1 order by row_number ROWS between {} PRECEDING and {} FOLLOWING)",
+                startOffset,
+                endOffset)})
+            .planNode();
+    VELOX_ASSERT_USER_THROW(
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .assertResults(
+                fmt::format(
+                    "SELECT *, regr_count(c0, c1) over (partition by p0, p1 order by row_number  ROWS between {} PRECEDING and {} FOLLOWING) from tmp",
+                    startOffset,
+                    endOffset)),
+        testData.debugString());
+  }
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, frameColumnNullCheck) {
+  auto makePlan = [&](const RowVectorPtr& input) {
+    return PlanBuilder()
+        .values({input})
+        .window(
+            {"sum(c0) OVER (PARTITION BY p0 ORDER BY s0 RANGE BETWEEN UNBOUNDED PRECEDING AND off0 FOLLOWING)"})
+        .planNode();
+  };
+
+  // Null values in order-by column 's0' and frame column 'off0' do not match,
+  // so exception is expected.
+  auto inputThrow = makeRowVector(
+      {"c0", "p0", "s0", "off0"},
+      {
+          makeNullableFlatVector<int64_t>({1, std::nullopt, 1, 2, 2}),
+          makeFlatVector<int64_t>({1, 2, 1, 2, 1}),
+          makeNullableFlatVector<int64_t>({1, 2, 3, std::nullopt, 5}),
+          makeNullableFlatVector<int64_t>({2, std::nullopt, 4, 5, 6}),
+      });
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(makePlan(inputThrow)).copyResults(pool()), "");
+
+  // Null values in order-by column 's0' and frame column 'off0' match, so no
+  // exception should be thrown.
+  auto inputNoThrow = makeRowVector(
+      {"c0", "p0", "s0", "off0"},
+      {
+          makeNullableFlatVector<int64_t>({1, 1, 2, std::nullopt, 2}),
+          makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
+          makeNullableFlatVector<int64_t>({1, std::nullopt, 2, 3, 5}),
+          makeNullableFlatVector<int64_t>({2, std::nullopt, 3, 4, 6}),
+      });
+  ASSERT_NO_THROW(
+      AssertQueryBuilder(makePlan(inputNoThrow)).copyResults(pool()));
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
+  struct {
+    bool usePrefixSort;
+    bool spillEnabled;
+    bool enableSpillPrefixSort;
+  } testSettings[] = {
+      {false, true, false}, {true, false, true}, {true, true, false}};
+
+  const vector_size_t size = 1'000;
+  auto prefixSortData = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row % 11; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+  auto prefixSortPlan = std::dynamic_pointer_cast<const core::WindowNode>(
+      PlanBuilder()
+          .values(split(prefixSortData, 10))
+          .window({"row_number() over (partition by p order by s)"})
+          .planNode());
+
+  const std::vector<std::string> fruits = {
+      "apple", "banana", "pear", "grapes", "mango", "grapefruit"};
+  auto nonPrefixSortData = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row % 11; }),
+          // Sorting key.
+          makeFlatVector<StringView>(
+              size,
+              [&fruits](auto row) {
+                return StringView(fruits[row % fruits.size()]);
+              }),
+      });
+  auto nonPrefixSortPlan = std::dynamic_pointer_cast<const core::WindowNode>(
+      PlanBuilder()
+          .values(split(nonPrefixSortData, 10))
+          .window({"row_number() over (partition by p order by s)"})
+          .planNode());
+
+  for (const auto [usePrefixSort, spillEnabled, enableSpillPrefixSort] :
+       testSettings) {
+    SCOPED_TRACE(
+        fmt::format(
+            "usePrefixSort: {}, spillEnabled: {}, enableSpillPrefixSort: {}",
+            usePrefixSort,
+            spillEnabled,
+            enableSpillPrefixSort));
+    auto spillDirectory = TempDirectoryPath::create();
+    auto spillConfig =
+        getSpillConfig(spillDirectory->getPath(), enableSpillPrefixSort);
+    exec::SpillStats spillStats;
+    const auto plan = usePrefixSort ? prefixSortPlan : nonPrefixSortPlan;
+    velox::common::PrefixSortConfig prefixSortConfig =
+        velox::common::PrefixSortConfig{
+            std::numeric_limits<int32_t>::max(), 130, 12};
+    folly::Synchronized<OperatorStats> opStats;
+    auto sortWindowBuild = std::make_unique<window::SortWindowBuild>(
+        plan,
+        pool_.get(),
+        std::move(prefixSortConfig),
+        spillEnabled ? &spillConfig : nullptr,
+        &nonReclaimableSection_,
+        &opStats,
+        &spillStats);
+
+    TestScopedSpillInjection scopedSpillInjection(0);
+    const auto data = usePrefixSort ? prefixSortData : nonPrefixSortData;
+    sortWindowBuild->addInput(data);
+
+    std::atomic_bool hasReserveMemory = false;
+    // Reserve memory for sort.
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::common::memory::MemoryPoolImpl::maybeReserve",
+        std::function<void(memory::MemoryPoolImpl*)>(
+            ([&](memory::MemoryPoolImpl* pool) {
+              hasReserveMemory.store(true);
+            })));
+
+    sortWindowBuild->noMoreInput();
+    if (spillEnabled) {
+      // Reserve memory for sort.
+      ASSERT_TRUE(hasReserveMemory);
+    } else {
+      ASSERT_FALSE(hasReserveMemory);
+    }
+  }
+}
+
+TEST_F(WindowTest, NaNFrameBound) {
+  const auto kNan = std::numeric_limits<double>::quiet_NaN();
+  auto data = makeRowVector(
+      {"c0", "s0", "off0", "off1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+          makeFlatVector<double>({1.0, 2.0, 3.0, kNan}),
+          makeFlatVector<double>({0.1, 2.0, 1.9, kNan}),
+          makeFlatVector<double>({kNan, 2.0, kNan, kNan}),
+      });
+
+  const auto makeFrames = [](const std::string& call) {
+    std::vector<std::string> frames;
+
+    std::vector<std::string> orders{"asc", "desc"};
+    std::vector<std::string> bounds{"preceding", "following"};
+    for (const std::string& order : orders) {
+      for (const std::string& startBound : bounds) {
+        for (const std::string& endBound : bounds) {
+          // Frames starting from following and ending at preceding are not
+          // allowed.
+          if (startBound == "following" && endBound == "preceding") {
+            continue;
+          }
+          frames.push_back(
+              fmt::format(
+                  "{} over (order by s0 {} range between off0 {} and off1 {})",
+                  call,
+                  order,
+                  startBound,
+                  endBound));
+          frames.push_back(
+              fmt::format(
+                  "{} over (order by s0 {} range between off1 {} and off0 {})",
+                  call,
+                  order,
+                  startBound,
+                  endBound));
+        }
+      }
+    }
+    return frames;
+  };
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int64_t>({std::nullopt, 2, std::nullopt, 4})});
+  for (const auto& frame : makeFrames("sum(c0)")) {
+    auto plan =
+        PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+
+  // rank() should not be affected by the frames, so added this test to ensure
+  // rank() produces correct results even if the frame bounds contain NaN.
+  expected = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
+  for (const auto& frame : makeFrames("rank()")) {
+    auto plan =
+        PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+}
+
+TEST_F(WindowTest, nanFrameBoundAcrossOutputBatches) {
+  const auto kNan = std::numeric_limits<double>::quiet_NaN();
+  auto data = makeRowVector(
+      {"value", "sort_key", "frame_offset"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+          makeFlatVector<double>({1.0, 2.0, 3.0, 4.0}),
+          makeFlatVector<double>({0.0, 0.0, kNan, 0.0}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window(
+              {"sum(value) over (order by sort_key range between frame_offset preceding and current row)"})
+          .project({"w0"})
+          .planNode();
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int64_t>({1, 3, std::nullopt, 10})});
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .assertResults(expected);
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, releaseWindowBuildInTime) {
+  const vector_size_t size = 1'000;
+  auto data = makeRowVector(
+      {"d", "p0", "s"},
+      {
+          // Payload Data.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row % 11; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  core::PlanNodeId orderById;
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .window({"row_number() over (partition by p0 order by s)"})
+                  .capturePlanNodeId(windowId)
+                  .orderBy({"d"}, false)
+                  .capturePlanNodeId(orderById)
+                  .planNode();
+
+  std::atomic<memory::MemoryPool*> windowPool{nullptr};
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(Operator*)>([&](exec::Operator* op) {
+        auto* windowOp = dynamic_cast<exec::Window*>(op);
+        if (windowOp == nullptr || windowPool != nullptr) {
+          return;
+        }
+        windowPool = windowOp->pool();
+      }));
+
+  std::atomic_bool checkOnce{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::noMoreInput",
+      std::function<void(Operator*)>([&](exec::Operator* op) {
+        if (dynamic_cast<exec::OrderBy*>(op) == nullptr ||
+            checkOnce.exchange(true)) {
+          return;
+        }
+        ASSERT_LT(
+            windowPool.load()->usedBytes(), windowPool.load()->peakBytes() / 3);
+      }));
+
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .assertResults(
+              "SELECT *, row_number() over (partition by p0 order by s) "
+              "FROM tmp "
+              "ORDER BY d");
+}
+
+} // namespace
+} // namespace facebook::velox::exec

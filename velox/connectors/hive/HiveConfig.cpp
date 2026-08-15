@@ -1,0 +1,201 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/connectors/hive/HiveConfig.h"
+
+#include <boost/algorithm/string.hpp>
+#include "velox/common/config/Config.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/dwrf/common/Config.h"
+#include "velox/dwio/parquet/common/ParquetConfig.h"
+
+namespace facebook::velox::connector::hive {
+
+namespace {
+
+HiveConfig::InsertExistingPartitionsBehavior
+stringToInsertExistingPartitionsBehavior(const std::string& strValue) {
+  auto upperValue = boost::algorithm::to_upper_copy(strValue);
+  if (upperValue == "ERROR") {
+    return HiveConfig::InsertExistingPartitionsBehavior::kError;
+  }
+  if (upperValue == "OVERWRITE") {
+    return HiveConfig::InsertExistingPartitionsBehavior::kOverwrite;
+  }
+  VELOX_UNSUPPORTED(
+      "Unsupported insert existing partitions behavior: {}.", strValue);
+}
+
+} // namespace
+
+const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
+  static const std::vector<config::ConfigProperty> kProperties = [] {
+    // Start with FileConfig properties.
+    auto properties = FileConfig::registeredProperties();
+#define VELOX_HIVE_CONFIG_REGISTER(constName) \
+  config::registerConfigProperty<HiveConfig::constName##Property>(properties)
+
+    VELOX_HIVE_CONFIG_REGISTER(kInsertExistingPartitionsBehaviorSession);
+    VELOX_HIVE_CONFIG_REGISTER(kSortWriterMaxOutputBytesSession);
+    VELOX_HIVE_CONFIG_REGISTER(kParquetMaxTargetFileSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kOrcMaxTargetFileSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kNimbleMaxTargetFileSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kMaxPartitionsPerWritersSession);
+    VELOX_HIVE_CONFIG_REGISTER(kAllowNullPartitionKeysSession);
+    VELOX_HIVE_CONFIG_REGISTER(kPartitionPathAsLowerCaseSession);
+    VELOX_HIVE_CONFIG_REGISTER(kSortWriterMaxOutputRowsSession);
+    VELOX_HIVE_CONFIG_REGISTER(kSortWriterFinishTimeSliceLimitMsSession);
+    VELOX_HIVE_CONFIG_REGISTER(kUser);
+    VELOX_HIVE_CONFIG_REGISTER(kSource);
+    VELOX_HIVE_CONFIG_REGISTER(kSchema);
+    VELOX_HIVE_CONFIG_REGISTER(kMaxBucketCountSession);
+    VELOX_HIVE_CONFIG_REGISTER(kMaxRowsPerIndexRequestSession);
+
+#undef VELOX_HIVE_CONFIG_REGISTER
+
+    parquet::ParquetConfig::registerProperties(
+        properties,
+        dwio::common::formatConfigPrefix(
+            dwio::common::FileFormat::PARQUET, "_"));
+    dwrf::Config::registerProperties(
+        properties,
+        dwio::common::formatConfigPrefix(dwio::common::FileFormat::ORC, "_"));
+    return properties;
+  }();
+  return kProperties;
+}
+
+// static
+std::string HiveConfig::insertExistingPartitionsBehaviorString(
+    InsertExistingPartitionsBehavior behavior) {
+  switch (behavior) {
+    case InsertExistingPartitionsBehavior::kError:
+      return "ERROR";
+    case InsertExistingPartitionsBehavior::kOverwrite:
+      return "OVERWRITE";
+    default:
+      return fmt::format("UNKNOWN BEHAVIOR {}", static_cast<int>(behavior));
+  }
+}
+
+HiveConfig::InsertExistingPartitionsBehavior
+HiveConfig::insertExistingPartitionsBehavior(
+    const config::ConfigBase* session) const {
+  return stringToInsertExistingPartitionsBehavior(session->get<std::string>(
+      kInsertExistingPartitionsBehaviorSession,
+      config_->get<std::string>(kInsertExistingPartitionsBehavior, "ERROR")));
+}
+
+bool HiveConfig::immutablePartitions() const {
+  return configValue<bool>(kImmutablePartitions, false);
+}
+
+std::string HiveConfig::gcsEndpoint() const {
+  return configValue<std::string>(kGcsEndpoint, std::string(""));
+}
+
+std::string HiveConfig::gcsCredentialsPath() const {
+  return configValue<std::string>(kGcsCredentialsPath, std::string(""));
+}
+
+std::optional<int> HiveConfig::gcsMaxRetryCount() const {
+  if (auto val = config_->get<int>(kGcsMaxRetryCount)) {
+    return val;
+  }
+  return config_->get<int>(std::string(kLegacyPrefix) + kGcsMaxRetryCount);
+}
+
+std::optional<std::string> HiveConfig::gcsMaxRetryTime() const {
+  if (auto val = config_->get<std::string>(kGcsMaxRetryTime)) {
+    return val;
+  }
+  return config_->get<std::string>(
+      std::string(kLegacyPrefix) + kGcsMaxRetryTime);
+}
+
+std::optional<std::string> HiveConfig::gcsAuthAccessTokenProvider() const {
+  if (auto val = config_->get<std::string>(kGcsAuthAccessTokenProvider)) {
+    return val;
+  }
+  return config_->get<std::string>(
+      std::string(kLegacyPrefix) + kGcsAuthAccessTokenProvider);
+}
+
+int32_t HiveConfig::numCacheFileHandles() const {
+  return config_->get<int32_t>(kNumCacheFileHandles, 20'000);
+}
+
+uint64_t HiveConfig::fileHandleExpirationDurationMs() const {
+  return config_->get<uint64_t>(kFileHandleExpirationDurationMs, 0);
+}
+
+bool HiveConfig::isFileHandleCacheEnabled() const {
+  return config_->get<bool>(kEnableFileHandleCache, true);
+}
+
+std::string HiveConfig::writeFileCreateConfig() const {
+  // Legacy key used snake_case: "hive.write_file_create_config".
+  if (auto val = config_->get<std::string>(kWriteFileCreateConfig)) {
+    return val.value();
+  }
+  return config_->get<std::string>("hive.write_file_create_config", "");
+}
+
+uint64_t HiveConfig::sortWriterMaxOutputBytes(
+    const config::ConfigBase* session) const {
+  return config::toCapacity(
+      session->get<std::string>(
+          kSortWriterMaxOutputBytesSession,
+          config_->get<std::string>(kSortWriterMaxOutputBytes, "10MB")),
+      config::CapacityUnit::BYTE);
+}
+
+uint64_t HiveConfig::maxTargetFileSizeBytes(
+    dwio::common::FileFormat fileFormat,
+    const config::ConfigBase* session) const {
+  const char* sessionKey;
+  const char* configKey;
+  const char* defaultValue;
+  switch (fileFormat) {
+    case dwio::common::FileFormat::PARQUET:
+      sessionKey = kParquetMaxTargetFileSizeSession;
+      configKey = kParquetMaxTargetFileSize;
+      defaultValue = kParquetMaxTargetFileSizeSessionProperty::defaultValue;
+      break;
+    case dwio::common::FileFormat::DWRF:
+    case dwio::common::FileFormat::ORC:
+      sessionKey = kOrcMaxTargetFileSizeSession;
+      configKey = kOrcMaxTargetFileSize;
+      defaultValue = kOrcMaxTargetFileSizeSessionProperty::defaultValue;
+      break;
+    case dwio::common::FileFormat::NIMBLE:
+      sessionKey = kNimbleMaxTargetFileSizeSession;
+      configKey = kNimbleMaxTargetFileSize;
+      defaultValue = kNimbleMaxTargetFileSizeSessionProperty::defaultValue;
+      break;
+    default:
+      return 0;
+  }
+
+  auto maxTargetFileSize = session->get<std::string>(sessionKey);
+  if (!maxTargetFileSize.has_value()) {
+    maxTargetFileSize = config_->get<std::string>(configKey);
+  }
+  return config::toCapacity(
+      maxTargetFileSize.value_or(defaultValue), config::CapacityUnit::BYTE);
+}
+
+} // namespace facebook::velox::connector::hive

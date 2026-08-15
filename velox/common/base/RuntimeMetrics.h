@@ -1,0 +1,162 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include <fmt/format.h>
+#include <folly/CppAttributes.h>
+#include <chrono>
+#include <limits>
+#include <string>
+#include <string_view>
+
+namespace facebook::velox {
+
+/// Converts unsigned bigint to signed, capping at int64_t max if overflow
+/// happens. Could be replaced by 'std::saturate_cast' since C++26.
+inline int64_t saturateCast(uint64_t value) {
+  return static_cast<int64_t>(std::min(
+      value, static_cast<uint64_t>(std::numeric_limits<int64_t>::max())));
+}
+
+struct RuntimeCounter {
+  enum class Unit { kNone, kNanos, kBytes };
+  int64_t value;
+  Unit unit{Unit::kNone};
+
+  explicit RuntimeCounter(int64_t _value, Unit _unit = Unit::kNone)
+      : value(_value), unit(_unit) {}
+};
+
+struct RuntimeMetric {
+  // Sum, min, max have the same unit, count has kNone.
+  RuntimeCounter::Unit unit;
+  int64_t sum{0};
+  uint64_t count{0};
+  int64_t min{std::numeric_limits<int64_t>::max()};
+  int64_t max{std::numeric_limits<int64_t>::min()};
+
+  explicit RuntimeMetric(
+      RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
+      : unit(_unit) {}
+
+  explicit RuntimeMetric(
+      int64_t value,
+      RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
+      : unit(_unit), sum{value}, count{1}, min{value}, max{value} {}
+
+  explicit RuntimeMetric(
+      int64_t _sum,
+      uint64_t _count,
+      int64_t _min,
+      int64_t _max,
+      RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
+      : unit(_unit), sum{_sum}, count{_count}, min{_min}, max{_max} {}
+
+  void addValue(int64_t value);
+
+  /// Aggregate sets 'min' and 'max' to 'sum', also sets 'count' to 1 if
+  /// positive.
+  void aggregate();
+
+  void printMetric(std::ostream& stream) const;
+
+  /// Merges 'value' into this metric. Both must have the same unit.
+  void merge(const RuntimeCounter& value);
+
+  void merge(const RuntimeMetric& other);
+
+  std::string toString() const;
+};
+
+/// Simple interface to implement writing of runtime stats to Velox Operator
+/// stats.
+/// Inherit a concrete class from this to implement your writing.
+class BaseRuntimeStatWriter {
+ public:
+  virtual ~BaseRuntimeStatWriter() = default;
+
+  virtual void addRuntimeStat(
+      std::string_view /* name */,
+      const RuntimeCounter& /* value */) {}
+
+  /// Sets a runtime metric by name, replacing any existing value for that key.
+  virtual void setRuntimeStat(
+      std::string_view /* name */,
+      const RuntimeMetric& /* metric */) {}
+
+  /// Adds a wall or cpu duration sample under 'name', tagged as nanoseconds.
+  void addTiming(std::string_view name, std::chrono::nanoseconds duration) {
+    addRuntimeStat(
+        name, RuntimeCounter(duration.count(), RuntimeCounter::Unit::kNanos));
+  }
+
+  /// Adds a unitless count sample under 'name'.
+  void addCount(std::string_view name, int64_t value) {
+    addRuntimeStat(name, RuntimeCounter(value));
+  }
+
+  /// Adds a size sample under 'name', tagged as bytes.
+  void addBytes(std::string_view name, int64_t bytes) {
+    addRuntimeStat(name, RuntimeCounter(bytes, RuntimeCounter::Unit::kBytes));
+  }
+};
+
+/// Setting a concrete runtime stats writer on the thread will ensure that any
+/// code can add runtime counters to the current Operator running on that
+/// thread.
+/// NOTE: This is only used by the Velox Driver at the moment, which ensures the
+/// active Operator is being used by the writer.
+void setThreadLocalRunTimeStatWriter(BaseRuntimeStatWriter* writer);
+
+/// Retrives the current runtime stats writer.
+BaseRuntimeStatWriter* getThreadLocalRunTimeStatWriter();
+
+/// Writes runtime counter to the current Operator running on that thread.
+void addThreadLocalRuntimeStat(
+    std::string_view name,
+    const RuntimeCounter& value);
+
+/// Sets a runtime metric on the current Operator, overriding any existing
+/// value for the given name.
+void setThreadLocalRuntimeStat(
+    std::string_view name,
+    const RuntimeMetric& metric);
+
+/// Scope guard to conveniently set and revert back the current stat writer.
+class RuntimeStatWriterScopeGuard {
+ public:
+  explicit RuntimeStatWriterScopeGuard(BaseRuntimeStatWriter* writer)
+      : prevWriter_(getThreadLocalRunTimeStatWriter()) {
+    setThreadLocalRunTimeStatWriter(writer);
+  }
+
+  ~RuntimeStatWriterScopeGuard() {
+    setThreadLocalRunTimeStatWriter(prevWriter_);
+  }
+
+ private:
+  BaseRuntimeStatWriter* const prevWriter_;
+};
+
+} // namespace facebook::velox
+template <>
+struct fmt::formatter<facebook::velox::RuntimeCounter::Unit> : formatter<int> {
+  auto format(facebook::velox::RuntimeCounter::Unit s, format_context& ctx)
+      const {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};

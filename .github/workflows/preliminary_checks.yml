@@ -1,0 +1,59 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+name: Run Checks
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - edited
+      - synchronize
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  pre-commit:
+    runs-on: 4-core-ubuntu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+
+  title-check:
+    name: PR Title Format
+    runs-on: 4-core-ubuntu
+    steps:
+      - shell: python
+        env:
+          title: "${{ github.event.pull_request.title }}"
+        run: |
+          import re
+          import os
+          title = os.environ["title"]
+          title_re = r"^(feat|fix|perf|build|test|docs|refactor|misc)(\(.+\))?!?: ([A-Z].+)[^.]$"
+          match = re.search(title_re, title)
+
+          if match is None:
+            print("::error::Please follow conventional commit guidelines in commit titles as described in CONTRIBUTING.md: https://github.com/facebookincubator/velox/blob/main/CONTRIBUTING.md#commit-messages")
+            exit(1)
+          else:
+            exit(0)

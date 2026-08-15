@@ -1,0 +1,540 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
+#include "velox/type/Variant.h"
+
+#include <stdint.h>
+
+namespace facebook::velox::functions::sparksql::test {
+namespace {
+
+class MapTest : public SparkFunctionBaseTest {
+ protected:
+  template <typename K = int64_t, typename V = std::string>
+  void testMap(
+      const std::string& expression,
+      const std::vector<VectorPtr>& parameters,
+      const VectorPtr& expected) {
+    auto result = evaluate<MapVector>(expression, makeRowVector(parameters));
+    ::facebook::velox::test::assertEqualVectors(expected, result);
+  }
+
+  void testMapFails(
+      const std::string& expression,
+      const std::vector<VectorPtr>& parameters,
+      const std::string errorMsg) {
+    VELOX_ASSERT_USER_THROW(
+        evaluate<MapVector>(expression, makeRowVector(parameters)), errorMsg);
+  }
+};
+
+TEST_F(MapTest, Basics) {
+  auto inputVector1 = makeNullableFlatVector<int64_t>({1, 2, 3});
+  auto inputVector2 = makeNullableFlatVector<int64_t>({4, 5, 6});
+  auto mapVector =
+      makeMapVector<int64_t, int64_t>({{{1, 4}}, {{2, 5}}, {{3, 6}}});
+  testMap("map(c0, c1)", {inputVector1, inputVector2}, mapVector);
+}
+
+TEST_F(MapTest, Nulls) {
+  auto inputVector1 = makeNullableFlatVector<int64_t>({1, 2, 3});
+  auto inputVector2 =
+      makeNullableFlatVector<int64_t>({std::nullopt, 5, std::nullopt});
+  auto mapVector = makeMapVector<int64_t, int64_t>(
+      {{{1, std::nullopt}}, {{2, 5}}, {{3, std::nullopt}}});
+  testMap("map(c0, c1)", {inputVector1, inputVector2}, mapVector);
+}
+
+TEST_F(MapTest, differentTypes) {
+  auto inputVector1 = makeNullableFlatVector<int64_t>({1, 2, 3});
+  auto inputVector2 = makeNullableFlatVector<double>({4.0, 5.0, 6.0});
+  auto mapVector =
+      makeMapVector<int64_t, double>({{{1, 4.0}}, {{2, 5.0}}, {{3, 6.0}}});
+  testMap("map(c0, c1)", {inputVector1, inputVector2}, mapVector);
+}
+
+TEST_F(MapTest, boolType) {
+  auto inputVector1 = makeNullableFlatVector<bool>({1, 1, 0});
+  auto inputVector2 = makeNullableFlatVector<bool>({0, 0, 1});
+  auto mapVector = makeMapVector<bool, bool>({{{1, 0}}, {{1, 0}}, {{0, 1}}});
+  testMap("map(c0, c1)", {inputVector1, inputVector2}, mapVector);
+}
+
+TEST_F(MapTest, duplicateMapKey) {
+  // Input vectors with duplicate keys.
+  auto inputVector1 = makeNullableFlatVector<int64_t>({1, 20, 3});
+  auto inputVector2 = makeNullableFlatVector<double>({4.0, 5.0, 6.0});
+  auto inputVector3 = makeNullableFlatVector<int64_t>({10, 20, 30});
+  auto inputVector4 = makeNullableFlatVector<double>({4.1, 5.1, 6.1});
+  auto inputVector5 = makeNullableFlatVector<int64_t>({100, 200, 30});
+  auto inputVector6 = makeNullableFlatVector<double>({4.2, 5.2, 6.2});
+
+  // Deduplicate map keys based on LAST_WIN policy.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+
+  const auto expectedMapVector1 =
+      makeMapVector<int64_t, double>({{{1, 4.0}}, {{20, 5.0}}, {{3, 6.0}}});
+  const auto expectedMapVector2 = makeMapVector<int64_t, double>(
+      {{{10, 4.1}, {100, 4.2}}, {{20, 5.1}, {200, 5.2}}, {{30, 6.2}}});
+  const auto expectedMapVector3 = makeMapVector<int64_t, double>(
+      {{{1, 4.0}, {10, 4.1}, {100, 4.2}},
+       {{20, 5.1}, {200, 5.2}},
+       {{3, 6.0}, {30, 6.2}}});
+
+  testMap("map(c0, c1)", {inputVector1, inputVector2}, expectedMapVector1);
+
+  testMap(
+      "map(c0, c1, c2, c3)",
+      {inputVector3, inputVector4, inputVector5, inputVector6},
+      expectedMapVector2);
+
+  testMap(
+      "map(c0, c1, c2, c3, c4, c5)",
+      {inputVector1,
+       inputVector2,
+       inputVector3,
+       inputVector4,
+       inputVector5,
+       inputVector6},
+      expectedMapVector3);
+
+  // Throw exception when duplicate keys are found.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"}});
+
+  testMapFails(
+      "map(c0, c1, c2, c3)",
+      {inputVector3, inputVector4, inputVector5, inputVector6},
+      "Duplicate map key (30) was found.");
+
+  testMapFails(
+      "map(c0, c1, c2, c3, c4, c5)",
+      {inputVector1,
+       inputVector2,
+       inputVector3,
+       inputVector4,
+       inputVector5,
+       inputVector6},
+      "Duplicate map key (20) was found.");
+}
+
+TEST_F(MapTest, duplicateMapKeyThreeOrMoreOccurrences) {
+  // Regression test for the case where the same key appears 3+ times in a
+  // single row under the LAST_WIN policy. The result size was computed by
+  // counting duplicate pairs (C(N,2)), while only N-1 occurrences are actually
+  // dropped, so the map was under-sized (0 for N=3, negative for N>=4), leading
+  // to an out-of-bounds write / crash. See fix in Map.cpp.
+  auto key = makeNullableFlatVector<int64_t>({7, 8});
+  auto value1 = makeNullableFlatVector<double>({1.0, 4.0});
+  auto value2 = makeNullableFlatVector<double>({2.0, 5.0});
+  auto value3 = makeNullableFlatVector<double>({3.0, 6.0});
+  auto value4 = makeNullableFlatVector<double>({3.5, 6.5});
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+
+  // Same key 3 times: keep the last value (LAST_WIN).
+  // map(k, v1, k, v2, k, v3) -> {k: v3}
+  const auto expectedThree =
+      makeMapVector<int64_t, double>({{{7, 3.0}}, {{8, 6.0}}});
+  testMap(
+      "map(c0, c1, c0, c2, c0, c3)",
+      {key, value1, value2, value3},
+      expectedThree);
+
+  // Same key 4 times: keep the last value.
+  // map(k, v1, k, v2, k, v3, k, v4) -> {k: v4}
+  const auto expectedFour =
+      makeMapVector<int64_t, double>({{{7, 3.5}}, {{8, 6.5}}});
+  testMap(
+      "map(c0, c1, c0, c2, c0, c3, c0, c4)",
+      {key, value1, value2, value3, value4},
+      expectedFour);
+
+  // EXCEPTION policy is unaffected: still fails on the duplicate key.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"}});
+  testMapFails(
+      "map(c0, c1, c0, c2, c0, c3)",
+      {key, value1, value2, value3},
+      "Duplicate map key (7) was found.");
+}
+
+TEST_F(MapTest, wide) {
+  auto inputVector1 = makeNullableFlatVector<int64_t>({1, 2, 3});
+  auto inputVector2 = makeNullableFlatVector<double>({4.0, 5.0, 6.0});
+  auto inputVector11 = makeNullableFlatVector<int64_t>({10, 20, 30});
+  auto inputVector22 = makeNullableFlatVector<double>({4.1, 5.1, 6.1});
+  auto mapVector = makeMapVector<int64_t, double>(
+      {{{1, 4.0}, {10, 4.1}}, {{2, 5.0}, {20, 5.1}}, {{3, 6.0}, {30, 6.1}}});
+  testMap(
+      "map(c0, c1, c2, c3)",
+      {inputVector1, inputVector2, inputVector11, inputVector22},
+      mapVector);
+}
+
+TEST_F(MapTest, tenKeyValuePairs) {
+  // Test map function with 10 key-value pairs (20 arguments).
+  auto key1 = makeFlatVector<int64_t>({1, 11, 21});
+  auto val1 = makeFlatVector<std::string>({"a", "aa", "aaa"});
+  auto key2 = makeFlatVector<int64_t>({2, 12, 22});
+  auto val2 = makeFlatVector<std::string>({"b", "bb", "bbb"});
+  auto key3 = makeFlatVector<int64_t>({3, 13, 23});
+  auto val3 = makeFlatVector<std::string>({"c", "cc", "ccc"});
+  auto key4 = makeFlatVector<int64_t>({4, 14, 24});
+  auto val4 = makeFlatVector<std::string>({"d", "dd", "ddd"});
+  auto key5 = makeFlatVector<int64_t>({5, 15, 25});
+  auto val5 = makeFlatVector<std::string>({"e", "ee", "eee"});
+  auto key6 = makeFlatVector<int64_t>({6, 16, 26});
+  auto val6 = makeFlatVector<std::string>({"f", "ff", "fff"});
+  auto key7 = makeFlatVector<int64_t>({7, 17, 27});
+  auto val7 = makeFlatVector<std::string>({"g", "gg", "ggg"});
+  auto key8 = makeFlatVector<int64_t>({8, 18, 28});
+  auto val8 = makeFlatVector<std::string>({"h", "hh", "hhh"});
+  auto key9 = makeFlatVector<int64_t>({9, 19, 29});
+  auto val9 = makeFlatVector<std::string>({"i", "ii", "iii"});
+  auto key10 = makeFlatVector<int64_t>({10, 20, 30});
+  auto val10 = makeFlatVector<std::string>({"j", "jj", "jjj"});
+
+  auto expectedMap = makeMapVector<int64_t, std::string>(
+      {{{1, "a"},
+        {2, "b"},
+        {3, "c"},
+        {4, "d"},
+        {5, "e"},
+        {6, "f"},
+        {7, "g"},
+        {8, "h"},
+        {9, "i"},
+        {10, "j"}},
+       {{11, "aa"},
+        {12, "bb"},
+        {13, "cc"},
+        {14, "dd"},
+        {15, "ee"},
+        {16, "ff"},
+        {17, "gg"},
+        {18, "hh"},
+        {19, "ii"},
+        {20, "jj"}},
+       {{21, "aaa"},
+        {22, "bbb"},
+        {23, "ccc"},
+        {24, "ddd"},
+        {25, "eee"},
+        {26, "fff"},
+        {27, "ggg"},
+        {28, "hhh"},
+        {29, "iii"},
+        {30, "jjj"}}});
+
+  testMap(
+      "map(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, "
+      "c15, c16, c17, c18, c19)",
+      {key1, val1, key2, val2, key3, val3, key4, val4, key5,  val5,
+       key6, val6, key7, val7, key8, val8, key9, val9, key10, val10},
+      expectedMap);
+}
+
+TEST_F(MapTest, errorCases) {
+  auto inputVectorInt64 = makeNullableFlatVector<int64_t>({1, 2, 3});
+  auto inputVectorDouble = makeNullableFlatVector<double>({4.0, 5.0, 6.0});
+  auto nullInputVector = makeNullableFlatVector<int64_t>({1, std::nullopt, 3});
+
+  // Number of args.
+  testMapFails(
+      "map(c0)",
+      {inputVectorInt64},
+      "Scalar function signature is not supported: map(BIGINT)");
+  testMapFails(
+      "map(c0, c1, c2)",
+      {inputVectorInt64, inputVectorDouble, inputVectorInt64},
+      "Scalar function signature is not supported: map(BIGINT, DOUBLE, BIGINT)");
+
+  // Test with 22 arguments (11 pairs) - exceeds the maximum of 10 key-value
+  // pairs supported by the map function.
+  testMapFails(
+      "map(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21)",
+      {inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble},
+      "Scalar function signature is not supported: map(DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE)");
+
+  // Types of args.
+  testMapFails(
+      "map(c0, c1, c2, c3)",
+      {inputVectorInt64,
+       inputVectorDouble,
+       inputVectorDouble,
+       inputVectorDouble},
+      "Scalar function signature is not supported: map(BIGINT, DOUBLE, DOUBLE, DOUBLE)");
+  testMapFails(
+      "map(c0, c1, c2, c3)",
+      {inputVectorDouble,
+       inputVectorInt64,
+       inputVectorDouble,
+       inputVectorDouble},
+      "Scalar function signature is not supported: map(DOUBLE, BIGINT, DOUBLE, DOUBLE)");
+
+  testMapFails(
+      "map(c0, c1)",
+      {nullInputVector, inputVectorDouble},
+      "Cannot use null as map key");
+}
+
+TEST_F(MapTest, complexTypes) {
+  auto makeSingleMapVector = [&](const VectorPtr& keyVector,
+                                 const VectorPtr& valueVector) {
+    return makeMapVector(
+        {
+            0,
+        },
+        keyVector,
+        valueVector);
+  };
+
+  auto makeSingleRowVector = [&](vector_size_t size = 1,
+                                 vector_size_t base = 0) {
+    return makeRowVector({
+        makeFlatVector<int64_t>(size, [&](auto row) { return row + base; }),
+    });
+  };
+
+  auto testSingleMap = [&](const VectorPtr& keyVector,
+                           const VectorPtr& valueVector) {
+    testMap(
+        "map(c0, c1)",
+        {keyVector, valueVector},
+        makeSingleMapVector(keyVector, valueVector));
+  };
+
+  auto arrayKey = makeArrayVectorFromJson<int64_t>({"[1, 2, 3]"});
+  auto arrayValue = makeArrayVectorFromJson<int64_t>({"[1, 3, 5]"});
+  auto nullArrayValue = makeArrayVectorFromJson<int64_t>({"null"});
+
+  testSingleMap(makeSingleRowVector(), makeSingleRowVector(1, 2));
+
+  testSingleMap(arrayKey, arrayValue);
+
+  testSingleMap(
+      makeSingleMapVector(makeSingleRowVector(), makeSingleRowVector(1, 3)),
+      makeSingleMapVector(makeSingleRowVector(), makeSingleRowVector(1, 2)));
+
+  testSingleMap(
+      makeSingleMapVector(
+          makeSingleMapVector(makeSingleRowVector(), makeSingleRowVector()),
+          makeSingleRowVector()),
+      makeSingleMapVector(
+          arrayKey,
+          makeSingleMapVector(makeSingleRowVector(), makeSingleRowVector())));
+
+  testSingleMap(arrayKey, nullArrayValue);
+
+  auto mixedArrayKey1 = makeArrayVector<int64_t>({{1, 2, 3}});
+  auto mixedRowValue1 = makeSingleRowVector();
+  auto mixedArrayKey2 = makeArrayVector<int64_t>({{4, 5}});
+  auto mixedRowValue2 = makeSingleRowVector(1, 1);
+  auto mixedMapResult = makeSingleMapVector(
+      makeArrayVector<int64_t>({{1, 2, 3}, {4, 5}}), makeSingleRowVector(2, 0));
+  testMap(
+      "map(c0, c1, c2, c3)",
+      {mixedArrayKey1, mixedRowValue1, mixedArrayKey2, mixedRowValue2},
+      mixedMapResult);
+
+  auto arrayMapResult1 = makeMapVector(
+      {
+          0,
+          1,
+      },
+      makeArrayVector<int64_t>({{1, 2, 3}, {7, 9}}),
+      makeArrayVector<int64_t>({{1, 2}, {4, 6}}));
+  testMap(
+      "map(c0, c1)",
+      {makeArrayVector<int64_t>({{1, 2, 3}, {7, 9}}),
+       makeArrayVector<int64_t>({{1, 2}, {4, 6}})},
+      arrayMapResult1);
+}
+
+TEST_F(MapTest, complexTypesDuplicateMapKey) {
+  auto makeSingleMapVector = [&](const VectorPtr& keyVector,
+                                 const VectorPtr& valueVector) {
+    return makeMapVector(
+        {
+            0,
+        },
+        keyVector,
+        valueVector);
+  };
+  auto arrayKey = makeArrayVectorFromJson<int64_t>({"[1, 2, 3]"});
+  auto arrayValue = makeArrayVectorFromJson<int64_t>({"[1, 3, 5]"});
+  auto nullArrayValue = makeArrayVectorFromJson<int64_t>({"null"});
+
+  // Deduplicate map keys based on LAST_WIN policy.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+  testMap(
+      "map(c0, c1, c2, c3)",
+      {arrayKey, arrayValue, arrayKey, arrayValue},
+      makeSingleMapVector(arrayKey, arrayValue));
+
+  testMap(
+      "map(c0, c1, c2, c3)",
+      {arrayKey, nullArrayValue, arrayKey, nullArrayValue},
+      makeSingleMapVector(arrayKey, nullArrayValue));
+
+  // Throw exception on duplicate map key.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"}});
+  testMapFails(
+      "map(c0, c1, c2, c3)",
+      {arrayKey, arrayValue, arrayKey, arrayValue},
+      "Duplicate map key ({1, 2, 3}) was found.");
+}
+
+TEST_F(MapTest, complexTypesWithNestedNullsDuplicateMapKey) {
+  // Create array keys with nulls.
+  auto arrayKeysWithNull1 = makeNullableArrayVector<int64_t>(
+      {{1, std::nullopt, 3}, {4, 5, std::nullopt}, {7, 8, 9}});
+  auto valuesForKey1 = makeArrayVector<std::string>(
+      {{"a", "b", "c"}, {"d", "e", "f"}, {"g", "h", "i"}});
+
+  // Create duplicate keys with the same null pattern.
+  auto arrayKeysWithNull2 = makeNullableArrayVector<int64_t>(
+      {{1, std::nullopt, 3}, {10, 11, 12}, {13, 14, 15}});
+  auto valuesForKey2 = makeArrayVector<std::string>(
+      {{"x", "y", "z"}, {"p", "q", "r"}, {"s", "t", "u"}});
+
+  // Create complex type with map containing null values.
+  auto mapKey1 = makeMapVector<int64_t, int64_t>(
+      {{{1, 10}, {2, std::nullopt}},
+       {{3, 30}, {4, std::nullopt}},
+       {{5, 50}, {6, 60}}});
+  auto valueForMapKey1 = makeFlatVector<int64_t>({100, 200, 300});
+
+  // Create duplicate complex map key with the same null pattern.
+  auto mapKey2 = makeMapVector<int64_t, int64_t>(
+      {{{1, 10}, {2, std::nullopt}},
+       {{30, 300}, {40, 400}},
+       {{50, 500}, {60, 600}}});
+  auto valueForMapKey2 = makeFlatVector<int64_t>({1000, 2000, 3000});
+
+  // Deduplicate map keys based on LAST_WIN policy.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+
+  // Test case 1: Array keys with nulls.
+  // Expected: [1, null, 3] appears twice, last value ["x", "y", "z"] wins.
+  auto expectedArrayMap = makeMapVector(
+      {0, 1, 3},
+      makeNullableArrayVector<int64_t>(
+          {{1, std::nullopt, 3},
+           {4, 5, std::nullopt},
+           {10, 11, 12},
+           {7, 8, 9},
+           {13, 14, 15}}),
+      makeArrayVector<std::string>(
+          {{"x", "y", "z"},
+           {"d", "e", "f"},
+           {"p", "q", "r"},
+           {"g", "h", "i"},
+           {"s", "t", "u"}}));
+
+  testMap(
+      "map(c0, c1, c2, c3)",
+      {arrayKeysWithNull1, valuesForKey1, arrayKeysWithNull2, valuesForKey2},
+      expectedArrayMap);
+
+  // Test case 2: Map keys with nulls.
+  // Expected: {{1, 10}, {2, null}} appears twice, last value 1000 wins.
+  auto expectedMapOfMap = makeMapVector(
+      {0, 1, 3},
+      makeMapVector<int64_t, int64_t>(
+          {{{1, 10}, {2, std::nullopt}},
+           {{3, 30}, {4, std::nullopt}},
+           {{30, 300}, {40, 400}},
+           {{5, 50}, {6, 60}},
+           {{50, 500}, {60, 600}}}),
+      makeFlatVector<int64_t>({1000, 200, 2000, 300, 3000}));
+
+  testMap(
+      "map(c0, c1, c2, c3)",
+      {mapKey1, valueForMapKey1, mapKey2, valueForMapKey2},
+      expectedMapOfMap);
+
+  // Test case 3: Test with deeply nested structures containing nulls.
+  auto rowKey1 = makeRowVector(
+      {makeNullableArrayVector<int64_t>({{1, std::nullopt, 3}}),
+       makeMapVector<int64_t, int64_t>({{{1, 10}, {2, std::nullopt}}})});
+  auto valueForRow1 = makeFlatVector<std::string>({"first"});
+
+  // Duplicate row key with same null pattern.
+  auto rowKey2 = makeRowVector(
+      {makeNullableArrayVector<int64_t>({{1, std::nullopt, 3}}),
+       makeMapVector<int64_t, int64_t>({{{1, 10}, {2, std::nullopt}}})});
+  auto valueForRow2 = makeFlatVector<std::string>({"last"});
+
+  // Expected: Complex row with nulls appears twice, last value "last" wins.
+  auto expectedRowMap = makeMapVector(
+      {0},
+      makeRowVector(
+          {makeNullableArrayVector<int64_t>({{1, std::nullopt, 3}}),
+           makeMapVector<int64_t, int64_t>({{{1, 10}, {2, std::nullopt}}})}),
+      makeFlatVector<std::string>({"last"}));
+
+  testMap(
+      "map(c0, c1, c2, c3)",
+      {rowKey1, valueForRow1, rowKey2, valueForRow2},
+      expectedRowMap);
+
+  // Test case 4: Test with exception throwing enabled.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"}});
+
+  testMapFails(
+      "map(c0, c1, c2, c3)",
+      {arrayKeysWithNull1, valuesForKey1, arrayKeysWithNull2, valuesForKey2},
+      "Duplicate map key ({1, null, 3}) was found.");
+
+  testMapFails(
+      "map(c0, c1, c2, c3)",
+      {mapKey1, valueForMapKey1, mapKey2, valueForMapKey2},
+      "Duplicate map key ({1 => 10, 2 => null}) was found.");
+}
+
+TEST_F(MapTest, resultSize) {
+  auto condition = makeFlatVector<int64_t>({1, 2, 3});
+  auto keys = makeFlatVector<int64_t>({3, 2, 1});
+  auto values = makeFlatVector<int64_t>({4, 5, 6});
+  auto mapVector =
+      makeMapVector<int64_t, int64_t>({{{4, 3}}, {{5, 2}}, {{1, 6}}});
+  testMap(
+      "if(greaterthan(c2, 2), map(c0, c1), map(c1, c0))",
+      {keys, values, condition},
+      mapVector);
+}
+
+} // namespace
+} // namespace facebook::velox::functions::sparksql::test

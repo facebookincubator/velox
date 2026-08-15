@@ -1,0 +1,195 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <c10/core/ScalarType.h>
+#include <folly/CPortability.h>
+
+namespace c10 {
+struct IValue;
+}
+
+namespace torch::wave {
+
+struct WaveConfig;
+
+/// Returns a mutable reference to the thread-local WaveConfig override pointer.
+/// While it is non-null, WaveConfig::get() returns the pointee instead of the
+/// global singleton, so wave graphs compiled and executed with different
+/// configs can run concurrently on different threads. Null on threads with no
+/// active override.
+WaveConfig*& waveConfigOverride();
+
+/// Process-wide configuration for wave graph execution (block size, tracing,
+/// grid hints).
+struct WaveConfig {
+  static constexpr int32_t kNodes = 1;
+  static constexpr int32_t kLaunches = 2;
+  static constexpr int32_t kTensors = 4;
+  static constexpr int32_t kFrame = 8;
+  static constexpr int32_t kTiming = 16;
+
+  int32_t blockSize{256};
+  bool allStandalone{false};
+
+  /// If non-zero, use this as the number of SMs instead of reading from the
+  /// device.
+  int32_t numSms{0};
+
+  /// Trace bit mask. kNodes prints node headers, kLaunches prints per-launch
+  /// details.
+  int32_t trace{0};
+
+  /// If set, forces the grid choice between single-block and multi-block
+  /// variants. If nullopt, the choice is made based on input size.
+  std::optional<bool> useSingleBlock;
+
+  /// If set and true, use the cooperative grid variant when available.
+  std::optional<bool> isCg;
+
+  /// Reference values keyed by ValueId for verifying intermediates.
+  std::unordered_map<int32_t, c10::IValue>* referenceFrame{nullptr};
+
+  /// If non-empty, save the wave execution frame to this path.
+  std::string saveReferenceFramePath;
+
+  // If non-empty, cache compiled CUDA kernels (cubin) in this directory.
+  std::string kernelCacheDir;
+
+  // Max pointer variables in elementwise codegen before inlining storage
+  // expressions.
+  int32_t maxElementwiseVars{7};
+
+  // Character threshold for extracting elementwise subtrees into
+  // __device__ __noinline__ helpers. 0 disables extraction.
+  int32_t outOfLineExprSize{10'000};
+
+  // Print timing for wave graph execution.
+  bool printTiming{false};
+
+  // Comma-separated list of value ids to trace during execution.
+  std::string traceValues;
+
+  // Max elements printed per tensor when tracing values. 0 means no limit.
+  int32_t tensorPrintElementLimit{100};
+
+  // Re-verify all previously passed reference values on each step to detect
+  // corruption.
+  bool reverify{false};
+
+  // If true, copy per-block debug info from device to thread-local storage
+  // before returning the execution state to the pool.
+  bool keepStatsOnThread{true};
+
+  // If true, throw after execution if any block reported an error.
+  bool throwOnError{true};
+
+  // If true, skip the elementwise fast path and always generate the slow
+  // path with complexIdx.
+  bool noElementwiseFastPath{false};
+
+  // If true, log reference mismatches but continue execution instead of
+  // throwing.
+  bool continueAfterMismatch{false};
+
+  // Enable device-side debug printfs. Emergency use only.
+  bool kernelDebugOutput{false};
+
+  // Compile kernels with -lineinfo so compute-sanitizer can attribute a fault
+  // to a source line. Read once, from initialize(), because wave freezes its
+  // NVRTC flags on the first compile -- setting it later has no effect.
+  // Optimization stays on (unlike -G, which ptxas rejects at -O>0). It changes
+  // the kernel cache key, so the first run after enabling it recompiles.
+  bool kernelLineInfo{false};
+
+  // Launch kernel once per block for debugging, waiting between launches.
+  // Each kernel op runs as a standalone invocation so device-side errors
+  // can be attributed to a single op.
+  bool debugSingleOps{false};
+
+  // If true, adjust per-op cost multipliers after each execution based on
+  // actual thread block clock distribution.
+  bool autoAdjustCost{false};
+
+  // If true, reuse a value's buffer in place when an op is its unique last use
+  // (turning copying ops into in-place ops), and drop clones that no consumer
+  // needs. On by default.
+  bool enableReuse{true};
+
+  // If true, run the pre-partition read-only clone elision pass. Only consulted
+  // when enableReuse is set; separated from it so the pass can be A/B'd against
+  // the post-partition in-place rewrite alone.
+  bool elideClones{true};
+
+  // Force a launch boundary after a multi-block (non-cooperative) scan so every
+  // cross-block consumer of its output reads a fully materialized buffer from a
+  // later stream-ordered launch, and fence a multi-block cat's shifted copies
+  // with a grid-wide opBarrier before an in-kernel consumer reads them.
+  // Without this, a fused cat consumer that reads a scan output (or a
+  // shift-by-offset cat element) cross-block within one kernel is ordered only
+  // by intra-block __syncthreads(), which is insufficient across
+  // non-co-resident blocks and produces stale reads.  On by default (a
+  // correctness fix); the race harness flips it off for the racy A/B arm.
+  bool scanOutputReturnBarrier{true};
+
+  // If true, release the frame tensors of each ProjectNode's last-use values
+  // right after that node's composite invocation executes, instead of keeping
+  // them until the whole graph finishes. Off by default.
+  bool freeIntermediates{false};
+
+  // If true, the graph optimizer assumes every producer-less value (model
+  // input, weight, or constant) is contiguous, so downstream passes may treat
+  // them as densely laid out. When on, executeWave verifies each such tensor is
+  // actually contiguous and throws otherwise. Off by default.
+  bool inputContiguous{false};
+
+  // If true, cooperative-grid mode expands tw.masked_select_jagged into its
+  // multi-kernel stages instead of the single-node cg form. The stages reserve
+  // the output list to the exact selected count, which the cg form cannot do:
+  // with no host round trip it must over-allocate to the mask length and set
+  // the real shape on device. The stages stay in separate launches inside the
+  // cg grid because each names its predecessor through inputFromPreviousKernel,
+  // which breaks that producer into its own kernel whatever the grid mode.
+  bool mkSelect{false};
+
+  /// Returns the active config: the thread-local override set by
+  /// waveConfigOverride() when non-null, otherwise the process-wide singleton.
+  /// The singleton is not thread-safe; all of its mutations must happen before
+  /// concurrent reads.
+  FOLLY_EXPORT static WaveConfig& get() {
+    if (auto* configOverride = waveConfigOverride()) {
+      return *configOverride;
+    }
+    static WaveConfig instance;
+    return instance;
+  }
+
+  /// Returns a compact, comma-separated list of the settings whose value
+  /// differs from its default (e.g. "trace=16, autoAdjustCost=true,
+  /// freeIntermediates=true"), or "defaults" when every field is at its
+  /// default. Used in the performance report so a run's active configuration is
+  /// self-documenting.
+  std::string toString() const;
+};
+
+} // namespace torch::wave

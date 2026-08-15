@@ -1,0 +1,567 @@
+=====
+Types
+=====
+
+Velox supports scalar types and complex types.
+Scalar types are categorized into a fixed set of physical types,
+and an extensible set of logical types.
+Physical types determine the in-memory layout of the data.
+Logical types add additional semantics to a physical type.
+
+Physical Types
+~~~~~~~~~~~~~~
+Each physical type is implemented using a C++ type. The table
+below shows the supported physical types, their corresponding C++ type,
+and fixed-width bytes required per value.
+
+================   ===========================   ===================
+Physical Type      C++ Type                      Fixed Width (bytes)
+================   ===========================   ===================
+BOOLEAN            bool                          0.125 (i.e. 1 bit)
+TINYINT            int8_t                        1
+SMALLINT           int16_t                       2
+INTEGER            int32_t                       4
+BIGINT             int64_t                       8
+HUGEINT            int128_t                      16
+REAL               float                         4
+DOUBLE             double                        8
+TIMESTAMP          struct Timestamp              16
+VARCHAR            struct StringView             16
+VARBINARY          struct StringView             16
+OPAQUE             std::shared_ptr<void>         16
+UNKNOWN            struct UnknownValue           0
+================   ===========================   ===================
+
+All physical types except VARCHAR and VARBINARY have a one-to-one mapping
+with their C++ types.
+The C++ type is also used as a template parameter for vector classes.
+For example, vector of 64-bit integers is represented as `FlatVector<int64_t>`
+whose type is `BIGINT`.
+
+OPAQUE type can be used to define custom types.
+An OPAQUE type must be specified wih an unique `std::type_index`.
+Values for this type must be provided as `std::shared_ptr<T>` where T is a C++ type.
+More details on when to use an OPAQUE type to define a custom type are given below.
+
+VARCHAR, VARBINARY, OPAQUE use variable number of bytes per value.
+These types store a fixed-width part in the C++ type and a variable-width part elsewhere.
+All other types use fixed-width bytes per value as shown in the above table.
+For example: VARCHAR and VARBINARY :doc:`FlatVectors </develop/vectors>` store the
+fixed-width part in a StringView for each value.
+StringView is a struct that contains a 4-byte size field, a 4-byte prefix field,
+and an 8-byte field pointer that points to variable-width part.
+The variable-width part for each value is store in `stringBuffers`.
+OPAQUE types store variable-width parts outside of the FlatVector.
+
+UNKNOWN type is used to represent an empty or all nulls vector of unknown type.
+For example, SELECT array() returns an ARRAY(UNKNOWN()) because it is not possible
+to determine the type of the elements. This works because there are no elements.
+
+TIMESTAMP type is used to represent a specific point in time.
+A TIMESTAMP is defined as the sum of seconds and nanoseconds since UNIX epoch.
+`struct Timestamp` contains one 64-bit signed integer for seconds and another 64-bit
+unsigned integer for nanoseconds. Nanoseconds represent the high-precision part of
+the timestamp, which is less than 1 second. Valid range of nanoseconds is [0, 10^9).
+Timestamps before the epoch are specified using negative values for the seconds.
+Examples:
+
+* Timestamp(0, 0) represents 1970-01-01 T00:00:00 (epoch).
+* Timestamp(10*24*60*60 + 125, 0) represents 1970-01-11 00:02:05 (10 days 125 seconds after epoch).
+* Timestamp(19524*24*60*60 + 500, 38726411) represents 2023-06-16 08:08:20.038726411
+  (19524 days 500 seconds 38726411 nanoseconds after epoch).
+* Timestamp(-10*24*60*60 - 125, 0) represents 1969-12-21 23:57:55 (10 days 125 seconds before epoch).
+* Timestamp(-5000*24*60*60 - 1000, 123456) represents 1956-04-24 07:43:20.000123456
+  (5000 days 1000 seconds before epoch plus 123456 nanoseconds).
+
+Floating point types (REAL, DOUBLE) have special values negative infinity, positive infinity, and
+not-a-number (NaN).
+
+For NaN the semantics are different than the C++ standard floating point semantics:
+
+* The different types of NaN (+/-, signaling/quiet) are treated as canonical NaN (+, quiet).
+* `NaN = NaN` returns true.
+* NaN is treated as a normal numerical value in join and group-by keys.
+* When sorting, NaN values are considered larger than any other value. When sorting in ascending order, NaN values appear last. When sorting in descending order, NaN values appear first.
+* For a number N: `N > NaN` is false and `NaN > N` is true.
+
+For negative infinity and positive infinity the following C++ standard floating point semantics apply:
+
+Given N is a positive finite number.
+
+* +inf * N = +inf
+* -inf * N = -inf
+* +inf * -N = -inf
+* -inf * -N = +inf
+* +inf * 0 = NaN
+* -inf * 0 = NaN
+* +inf = +inf returns true.
+* -inf = -inf returns true.
+* Positive infinity and negative infinity are treated as normal numerical values in join and group-by keys.
+* Positive infinity sorts lower than NaN and higher than any other value.
+* Negative infinity sorts lower than any other value.
+
+Logical Types
+~~~~~~~~~~~~~
+Logical types are backed by a physical type and include additional semantics.
+There can be multiple logical types backed by the same physical type.
+Therefore, knowing the C++ type is not sufficient to infer a logical type.
+The table below shows the supported logical types, and
+their corresponding physical type.
+
+======================  ======================================================
+Logical Type            Physical Type
+======================  ======================================================
+DATE                    INTEGER
+DECIMAL                 BIGINT if precision <= 18, HUGEINT if precision >= 19
+INTERVAL DAY TO SECOND  BIGINT
+INTERVAL YEAR TO MONTH  INTEGER
+TIME                    BIGINT
+TIME_MICRO_UTC          BIGINT
+TIMESTAMP_UTC           TIMESTAMP
+======================  ======================================================
+
+DECIMAL type carries additional `precision`,
+and `scale` information. `Precision` is the number of
+digits in a number. `Scale` is the number of digits to the right of the decimal
+point in a number. For example, the number `123.45` has a precision of `5` and a
+scale of `2`. DECIMAL types are backed by `BIGINT` and `HUGEINT` physical types,
+which store the unscaled value. For example, the unscaled value of decimal
+`123.45` is `12345`. `BIGINT` is used upto 18 precision, and has a range of
+:math:`[-10^{18} + 1, +10^{18} - 1]`. `HUGEINT` is used starting from 19 precision
+upto 38 precision, with a range of :math:`[-10^{38} + 1, +10^{38} - 1]`.
+
+All the three values, precision, scale, unscaled value are required to represent a
+decimal value.
+
+TIME represents time in milliseconds since midnight, subject to session timezone interpretation. Thus min/max value can range from 0 to 23:59:59.999.
+TIME_MICRO_UTC represents time in microseconds since midnight in UTC, not subject to session timezone adjustment. Thus min/max value can range from 00:00:00.000000 to 23:59:59.999999.
+The TIME and TIME_MICRO_UTC types are backed by BIGINT physical type.
+
+TIMESTAMP represents a timestamp subject to session timezone interpretation. TIMESTAMP_UTC represents a timestamp in UTC, not subject to session timezone adjustment. Both types are backed by TIMESTAMP physical type.
+
+Custom Types
+~~~~~~~~~~~~
+Most custom types can be represented as logical types and can be built by extending
+the existing physical types. For example, Presto Types described below are implemented
+by extending the physical types.
+An OPAQUE type must be used when there is no physical type available to back the logical type.
+
+When extending an existing physical type, if different compare and/or hash semantics are
+needed instead of those provided by the underlying native C++ type, this can be achieved by
+doing the following:
+* Pass `true` for the `providesCustomComparison` argument in the custom type's base class's constructor.
+* Override the `compare` and `hash` functions inherited from the `TypeBase` class (you must implement both).
+Note that this is currently only supported for custom types that extend physical types that
+are primitive and fixed width.
+
+Complex Types
+~~~~~~~~~~~~~
+Velox supports the ARRAY, MAP, and ROW complex types.
+Complex types are composed of scalar types and can be nested with
+other complex types.
+
+For example: MAP<INTEGER, ARRAY<BIGINT>> is a complex type whose
+key is a scalar type INTEGER and value is a complex type ARRAY with
+element type BIGINT.
+
+Array type contains its element type.
+Map type contains the key type and value type.
+Row type contains its field types along with their names.
+
+Presto Types
+~~~~~~~~~~~~
+Velox supports a number of Presto-specific logical types.
+The table below shows the supported Presto types.
+
+========================  =====================
+Presto Type               Physical Type
+========================  =====================
+HYPERLOGLOG               VARBINARY
+KHYPERLOGLOG              VARBINARY
+P4HYPERLOGLOG             VARBINARY
+JSON                      VARCHAR
+TIMESTAMP WITH TIME ZONE  BIGINT
+UUID                      HUGEINT
+IPADDRESS                 HUGEINT
+IPPREFIX                  ROW(HUGEINT,TINYINT)
+BINGTILE                  BIGINT
+GEOMETRY                  VARBINARY
+SPHERICALGEOGRAPHY        VARBINARY
+SETDIGEST                 VARBINARY
+TDIGEST                   VARBINARY
+QDIGEST                   VARBINARY
+BIGINT_ENUM               BIGINT
+VARCHAR_ENUM              VARCHAR
+TIME WITH TIME ZONE       BIGINT
+========================  =====================
+
+KHYPERLOGLOG is a data sketch for estimating reidentifiability and joinability within a dataset.
+Based on the `KHyperLogLog paper <https://research.google/pubs/khyperloglog-estimating-reidentifiability-and-joinability-of-large-data-at-scale/>`_,
+it maintains a map of K number of HyperLogLog structures, where each entry corresponds to a unique key from one column,
+and the HLL estimates the cardinality of the associated unique identifiers from another column.
+For storage and retrieval it may be cast to/from VARBINARY.
+
+P4HYPERLOGLOG is a data sketch for cardinality estimation that uses only the dense HyperLogLog
+representation. Unlike standard HYPERLOGLOG which supports both sparse and dense formats,
+P4HYPERLOGLOG always uses dense format. It may be cast to/from HYPERLOGLOG and to/from VARBINARY
+for storage and retrieval.
+
+TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
+from UNIX epoch with timezone information. Its physical type is BIGINT.
+The high 52 bits of bigint store signed integer for milliseconds in UTC.
+Supported range of milliseconds is [0xFFF8000000000000L, 0x7FFFFFFFFFFFF]
+(or [-69387-04-22T03:45:14.752, 73326-09-11T20:14:45.247]). The low 12 bits
+store timezone ID. Supported range of timezone ID is [1, 1680].
+The definition of timezone IDs can be found in ``TimeZoneDatabase.cpp``.
+
+IPADDRESS represents an IPv6 or IPv4 formatted IPv6 address. Its physical
+type is HUGEINT. The format that the address is stored in is defined as part of `RFC 4291#section-2.5.5.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_.
+As Velox is run on Little Endian systems and the standard is network byte(Big Endian)
+order, we reverse the bytes to allow for masking and other bit operations
+used in IPADDRESS/IPPREFIX related functions. This type can be used to
+create IPPREFIX networks as well as to check IPADDRESS validity within
+IPPREFIX networks.
+
+IPPREFIX represents an IPv6 or IPv4 formatted IPv6 address along with a one byte
+prefix length. Its physical type is ROW(HUGEINT, TINYINT). The IPADDRESS is stored in
+the HUGEINT and is in the form defined in `RFC 4291#section-2.5.5.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_.
+The prefix length is stored in the TINYINT. Note that IPv6 prefix lengths go up
+to 128, which overflows TINYINT (int8_t, max 127). Prefix length 128 is stored
+as -128. Code that reads the prefix length must cast to uint8_t to recover the
+correct unsigned value.
+The IP address stored is the canonical(smallest) IP address in the
+subnet range. This type can be used in IP subnet functions.
+
+Example:
+
+In this example the first 32 bits(*FFFF:FFFF*) represents the network prefix.
+As a result the IPPREFIX object stores *FFFF:FFFF::* and the length 32 for both of these IPPREFIX objects.
+
+::
+
+   IPPREFIX 'FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF/32' -- IPPREFIX 'FFFF:FFFF:0000:0000:0000:0000:0000:0000/32'
+   IPPREFIX 'FFFF:FFFF:4455:6677:8899:AABB:CCDD:EEFF/32' -- IPPREFIX 'FFFF:FFFF:0000:0000:0000:0000:0000:0000/32'
+
+SETDIGEST is a data sketch for estimating set cardinality and performing set operations
+like intersection cardinality and Jaccard index. It combines HyperLogLog with MinHash.
+SetDigests may be merged, and for storage and retrieval they may be cast to/from VARBINARY.
+
+TDIGEST(DOUBLE) is a data sketch for estimating rank-based metrics.
+T-digests may be merged without losing precision, and for storage and retrieval
+they may be cast to/from VARBINARY. The T-digest accepts a parameter of type
+DOUBLE which represents the set of numbers to be ingested by the T-digest.
+
+QDIGEST(BIGINT), QDIGEST(REAL), QDIGEST(DOUBLE) are data sketches for
+estimating rank-based metrics. A quantile digest captures the approximate distribution of
+data for a given input set, and can be queried to retrieve approximate quantile values from the
+distribution. They may be merged without losing precision, and for storage and retrieval they may
+be cast to/from VARBINARY. The parameter type (BIGINT, REAL, or DOUBLE) represents
+the set of numbers that may be ingested by the quantile digest.
+
+BIGINT_ENUM(LongEnumParameter) type represents an enumerated value where the physical type is BIGINT.
+It takes one LongEnumParameter as parameter, which consists of a string name and a mapping of
+string keys to BIGINT values.
+There is a static cache which stores instances of different BIGINT_ENUM types. This is to treat each
+different enum type as a singleton. The LongEnumParameter is used as the key to retrieve the cached instance,
+and a new instance is only created if it has not been created with the given LongEnumParameter.
+Casting is permitted from any integer type to an enum type. Casting is only permitted from an enum type
+to a BIGINT type. Casting between different enum types is not permitted.
+Comparison operations are only allowed between values of the same enum type.
+
+VARCHAR_ENUM(VarcharEnumParameter) type represents an enumerated value where the physical type is VARCHAR.
+It takes one VarcharEnumParameter as parameter, which consists of a string name and a mapping of
+string keys to VARCHAR values.
+Similar to BIGINT_ENUM, there is a static cache which stores instances of different VARCHAR_ENUM types, with the
+VarcharEnumParameter as the key.
+Casting is only permitted to and from VARCHAR type, and is case-sensitive. Casting between different enum types is not permitted.
+Comparison operations are only allowed between values of the same enum type.
+
+TIME WITH TIME ZONE represents time from midnight in milliseconds precision at a particular timezone.
+Its physical type is BIGINT. The high 52 bits of bigint store signed integer for milliseconds in UTC.
+The lower 12 bits store the time zone offsets minutes. This allows the time to be converted at any point of
+time without ambiguity of daylight savings time. Time zone offsets range from -14:00 hours to +14:00 hours.
+
+BINGTILE represents a `Bing tile <https://learn.microsoft.com/en-us/bingmaps/articles/bing-maps-tile-system>`_.
+It is a quadtree in the Web Mercator projection, where each tile is 256x256 pixels. Its physical type is BIGINT.
+
+GEOMETRY represents a geometry as defined in `Simple Feature Access <https://en.wikipedia.org/wiki/Simple_Features>`_.
+Subtypes include Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon, and GeometryCollection. They
+are often stored as `Well-Known Text <https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry>`_ or
+`Well-Known Binary <https://en.wikipedia.org/wiki/Well-known_binary>`_.
+
+SPHERICALGEOGRAPHY represents a geometry on a spherical model of the Earth. It is internally represented the same
+way as GEOMETRY, but only certain functions are supported.  Moreover, these functions will return values in meters
+as opposed to the units of the coordinate space.
+
+Spark Types
+~~~~~~~~~~~~
+The `data types <https://spark.apache.org/docs/latest/sql-ref-datatypes.html>`_ in Spark have some semantic differences compared to those in
+Presto. These differences require us to implement the same functions
+separately for each system in Velox, such as min, max and collect_set. The
+key differences are listed below.
+
+* Spark operates on timestamps with "microsecond" precision while Presto with
+  "millisecond" precision.
+  Example::
+
+      SELECT min(ts)
+      FROM (
+          VALUES
+              (cast('2014-03-08 09:00:00.123456789' as timestamp)),
+              (cast('2014-03-08 09:00:00.012345678' as timestamp))
+      ) AS t(ts);
+      -- 2014-03-08 09:00:00.012345
+
+* Spark operates on the TIME_MICRO_UTC type for "microsecond" precision and timezone unawareness,
+  while Presto uses the standard TIME type.
+  Example::
+
+      SELECT cast('12:30:45.123456' as time)  -- 12:30:45.123456
+
+* Spark uses TIMESTAMP_UTC to support TimestampNTZType. TIMESTAMP_UTC is not subject to session timezone adjustment.
+
+* In function comparisons, nested null values are handled as values.
+  Example::
+
+      SELECT equalto(ARRAY[1, null], ARRAY[1, null]); -- true
+
+      SELECT min(a)
+      FROM (
+          VALUES
+              (ARRAY[1, 2]),
+              (ARRAY[1, null])
+      ) AS t(a);
+      -- ARRAY[1, null]
+
+* MAP type is not comparable and not orderable in Spark. In Presto, MAP type is
+  also not orderable, but it is comparable if both key and value types are
+  comparable. The implication is that MAP type cannot be used as a join, group
+  by or order by key in Spark.
+
+Type Coercion
+~~~~~~~~~~~~~
+Type coercion is the implicit conversion of a value from one type to
+another during query planning. It resolves function overloads and
+special-form result types when arguments don't match a signature exactly.
+
+Coercion is a planning-time concern: by the time a Velox ``Task`` is
+constructed, every implicit conversion is already a materialized ``Cast``
+node in the typed expression tree, and runtime evaluators do not consult
+the coercer.
+
+Coercion rules live in ``TypeCoercer`` (``velox/type/TypeCoercer.h``).
+``TypeCoercer`` is value-typed and immutable after construction. Velox ships
+a default instance (``TypeCoercer::defaults()``) holding a conservative
+built-in rule set used when no dialect coercer is provided. SQL dialects
+ship their own complete instances -- for example,
+``velox::functions::prestosql::typeCoercer()`` for the Presto dialect -- that
+match the dialect's overload-resolution semantics.
+
+``TypeCoercer`` itself is frontend-agnostic: it's a plain value type that
+the resolver APIs (``SignatureBinder``,
+``resolveFunction*WithCoercions``, the special-form ``resolveTypeInt``
+helpers) accept as a defaulted tail parameter so existing callers
+compile unchanged and use ``TypeCoercer::defaults()``. How a coercer
+reaches the resolver APIs is the frontend's choice. Axiom, for example,
+threads the dialect coercer through ``logical_plan::PlanBuilder``'s
+``Context.coercer`` field, which the SQL parser sets when constructing
+the plan builder; other frontends may pass a coercer directly into the
+resolver APIs or wire it through their own planning context.
+
+Customization scope
+^^^^^^^^^^^^^^^^^^^
+
+What a dialect's ``TypeCoercer`` rule set controls:
+
+* **Primitives** (TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, BOOLEAN,
+  VARCHAR, VARBINARY, DATE, TIMESTAMP, UNKNOWN): full control over which
+  source/target pairs are allowed and at what cost. Lower cost is preferred
+  during overload resolution.
+* **DECIMAL**: customizable for source and target separately; DECIMAL ->
+  DECIMAL is not customizable. See the DECIMAL section below.
+* **Container types** (ARRAY, MAP, ROW) and FUNCTION/OPAQUE: not
+  customizable directly. Coercibility is structural -- names and arities
+  must match, and children are recursed element-wise. A dialect controls
+  container behavior only indirectly via element-type rules.
+* **Custom types** (e.g. JSON, TIMESTAMP WITH TIME ZONE, BINGTILE): not
+  customizable through a dialect's ``TypeCoercer`` rule set. Custom-type
+  coercions are registered via ``registerCastRules`` alongside
+  ``registerCustomType`` and live in the global ``CastRulesRegistry``,
+  which is shared across dialects. To keep callers from having to query
+  both registries, ``TypeCoercer::coerceTypeBase`` consults
+  ``CastRulesRegistry`` as a fallback after its own rule lookup -- so
+  custom-type coercions remain reachable through any ``TypeCoercer``
+  instance even though the dialect can't override them.
+
+Cost magnitudes
+^^^^^^^^^^^^^^^
+
+Overload resolution sums per-argument coercion costs
+(``Coercion::overallCost``) to compare candidate signatures. For sums to
+be meaningful, every ``CoercionEntry.cost`` in a single ``TypeCoercer``
+instance must be in the same small magnitude -- today's defaults use
+costs 1-9, one per source-type series. There is no hardcoded surcharge
+added at lookup time: the dialect's rule cost is returned verbatim.
+
+DECIMAL
+^^^^^^^
+
+DECIMAL handling depends on which side is DECIMAL. Rule keys collapse on
+the name ``DECIMAL`` regardless of (p, s) -- one rule per
+``(sourceName, targetName)`` pair on each side.
+
+**Source DECIMAL** (e.g. ``DECIMAL(p, s) -> DOUBLE``). A dialect
+registers one rule per ``(DECIMAL, target)`` where ``target`` is a
+non-DECIMAL type (DECIMAL -> DECIMAL is not customizable; see below).
+The source must be the canonical placeholder ``DECIMAL(1, 0)``; the rule
+fires for any actual ``DECIMAL(p, s)`` source because the source's
+precision/scale is not part of the lookup key. The rule resolves
+directly to the target type at the rule's cost.
+
+**Target DECIMAL** (e.g. ``INTEGER -> DECIMAL(p, s)``). A dialect
+registers one rule per ``(source, DECIMAL)``. The rule's stored target
+is the minimum-width decimal that holds every value of the source
+(e.g. ``INTEGER -> DECIMAL(10, 0)``). At lookup, the type system extends
+the rule's fixed target to the caller's requested ``DECIMAL(p, s)`` via
+``ShortDecimalType::isCoercibleTo`` / ``LongDecimalType::isCoercibleTo``
+(see widening rule below). Returns ``nullopt`` if the caller's target is
+too narrow.
+
+Widening itself contributes 0 to the cost; the rule's stored cost is
+returned verbatim. ``INT -> DECIMAL(10, 0)`` and ``INT -> DECIMAL(38,
+18)`` both cost whatever the rule says (e.g. cost 2 in INTEGER's series).
+This is a simple choice that works for current overload-resolution
+cases; it may need to be revisited if a function is registered with
+multiple concrete DECIMAL-target signatures, since they would all coerce
+at the same cost and produce ambiguous resolution.
+
+**DECIMAL -> DECIMAL** (e.g. ``DECIMAL(10, 2) -> DECIMAL(20, 4)``) is
+**not customizable** by dialects. ``TypeCoercer`` rejects rule entries
+with both source and target DECIMAL at construction time, so attempting
+to register one fails fast. Dialects that need non-standard
+DECIMAL -> DECIMAL semantics must extend the type system, not
+``TypeCoercer``.
+
+At lookup time, ``coerceTypeBase`` short-circuits for any two DECIMALs
+regardless of (p, s) and returns ``Coercion{type: from, cost: 0}``.
+Precision/scale reconciliation is therefore not done by
+``coerceTypeBase`` itself; instead it happens via DECIMAL-specific paths
+in two places:
+
+* ``LongDecimalType::commonSuperType`` inside ``leastCommonSuperType``
+  computes the common ``(p, s)`` for plan-level operations (UNION, CASE
+  result type, etc.).
+* ``SignatureBinder``'s integer-parameter binding handles function
+  signatures of the form ``DECIMAL(P, S)`` by binding ``P`` and ``S`` as
+  integer variables from the actual argument types.
+
+*DECIMAL widening rule.* ``DECIMAL(p1, s1)`` is coercible to
+``DECIMAL(p2, s2)`` iff:
+
+* ``p1 - s1 <= p2 - s2`` -- the target has at least as many integer
+  digits as the source, and
+* ``s1 <= s2`` -- the target has at least as much scale.
+
+Both conditions must hold; otherwise the widening fails. This rule is
+used by Target DECIMAL above (extending a fixed-width target to a wider
+caller-requested DECIMAL) and by ``LongDecimalType::commonSuperType``
+for DECIMAL -> DECIMAL reconciliation.
+
+``coerce``
+^^^^^^^^^^
+
+``coerce(from, to)`` is the single recursive coercion primitive: scalars
+resolve via a single rule lookup, a bare UNKNOWN coerces to any resolved
+target, and containers match on name and arity then recurse element-wise,
+summing child costs (so ``coerce(ARRAY<INT>, ARRAY<BIGINT>)`` succeeds while
+a mismatched name or arity returns ``nullopt``).
+
+Default coercion rules
+^^^^^^^^^^^^^^^^^^^^^^
+
+``TypeCoercer::defaults()`` ships the rules below. In this and the
+Presto-specific table that follows, allowed targets are listed in cost
+order (cheapest first), and for DECIMAL targets the listed type is the
+minimum-width decimal that holds every value of the source (lookup
+widens to a wider DECIMAL when compatible -- see the DECIMAL section
+above).
+
+==============   ==========================================================
+Source           Allowed targets (in cost order, cheapest first)
+==============   ==========================================================
+TINYINT          SMALLINT, INTEGER, BIGINT, DECIMAL(3, 0), REAL, DOUBLE
+SMALLINT         INTEGER, BIGINT, DECIMAL(5, 0), REAL, DOUBLE
+INTEGER          BIGINT, DECIMAL(10, 0), REAL, DOUBLE
+BIGINT           DECIMAL(19, 0), DOUBLE
+REAL             DOUBLE
+DECIMAL          REAL, DOUBLE
+DATE             TIMESTAMP
+UNKNOWN          TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE,
+                 VARCHAR, VARBINARY
+==============   ==========================================================
+
+Notable absences:
+
+* ``BIGINT -> REAL`` is not in the defaults (BIGINT has 64-bit integer
+  precision; REAL holds only ~7 decimal digits). Presto allows it; the
+  Presto dialect coercer adds it (see below).
+* No reverse conversions (e.g. ``DOUBLE -> REAL``, ``BIGINT -> INTEGER``).
+* No string conversions (e.g. ``INTEGER -> VARCHAR``).
+* No conversions between unrelated families (e.g. ``BOOLEAN -> INTEGER``,
+  ``DATE -> BIGINT``).
+
+Presto-specific coercion rules
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``velox::functions::prestosql::typeCoercer()`` (in
+``velox/functions/prestosql/coercion/PrestoCoercions.{h,cpp}``) ships a
+complete rule set independent from ``TypeCoercer::defaults()`` so that
+dialect-specific changes don't silently shift when Velox defaults change.
+Same table conventions as above.
+
+==============   ==========================================================
+Source           Allowed targets (in cost order, cheapest first)
+==============   ==========================================================
+TINYINT          SMALLINT, INTEGER, BIGINT, DECIMAL(3, 0), REAL, DOUBLE
+SMALLINT         INTEGER, BIGINT, DECIMAL(5, 0), REAL, DOUBLE
+INTEGER          BIGINT, DECIMAL(10, 0), REAL, DOUBLE
+BIGINT           DECIMAL(19, 0), REAL, DOUBLE
+REAL             DOUBLE
+DECIMAL          REAL, DOUBLE
+DATE             TIMESTAMP
+UNKNOWN          TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE,
+                 VARCHAR, VARBINARY
+==============   ==========================================================
+
+Differences from Velox's defaults:
+
+* ``BIGINT -> REAL`` is added. The BIGINT row becomes
+  ``DECIMAL(19, 0), REAL, DOUBLE``, mirroring the INTEGER row's
+  ordering. This makes ``divide(real, bigint)`` resolve to
+  ``divide(real, real)`` via ``BIGINT -> REAL`` (cost 2) instead of
+  ``divide(double, double)`` via ``REAL -> DOUBLE + BIGINT -> DOUBLE``
+  (cost 1 + 3 = 4), matching Presto's overload resolution.
+
+Presto also allows the following implicit coercions:
+
+==============================   ==========================================
+Source                           Target
+==============================   ==========================================
+TIMESTAMP                        TIMESTAMP WITH TIME ZONE
+DATE                             TIMESTAMP WITH TIME ZONE
+TIME                             TIME WITH TIME ZONE
+==============================   ==========================================
+
+These are not part of ``presto::typeCoercer()``'s rule set. From
+Velox's perspective the targets above are *custom* types
+(``TIMESTAMP WITH TIME ZONE``, ``TIME WITH TIME ZONE``) registered via
+``registerCustomType``, so their coercion rules live in the global
+``CastRulesRegistry`` (registered with ``implicitAllowed = true``
+alongside the type) rather than in the dialect's ``TypeCoercer``.
+Lookup still finds them because ``coerceTypeBase`` consults
+``CastRulesRegistry`` as a fallback.
+
+Casts to other Presto types backed by Velox custom types (JSON,
+BINGTILE, IPADDRESS, IPPREFIX, UUID, BIGINT_ENUM, VARCHAR_ENUM,
+P4HYPERLOGLOG) are explicit-only -- see
+:doc:`/functions/presto/conversion`.

@@ -1,0 +1,150 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
+#include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+
+#include "velox/common/base/RandomUtil.h"
+#include "velox/common/io/IoStatistics.h"
+#include "velox/common/io/Options.h"
+#include "velox/connectors/Connector.h"
+#include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/dwio/common/Statistics.h"
+#include "velox/type/Type.h"
+
+#include <cudf/ast/expressions.hpp>
+
+#include <mutex>
+#include <unordered_set>
+
+namespace facebook::velox::cudf_velox::connector::hive {
+
+using namespace facebook::velox::connector;
+
+class CudfHiveDataSource : public DataSource, public NvtxHelper {
+ public:
+  CudfHiveDataSource(
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle,
+      const ColumnHandleMap& columnHandles,
+      facebook::velox::FileHandleFactory* fileHandleFactory,
+      folly::Executor* executor,
+      const ConnectorQueryCtx* connectorQueryCtx,
+      const std::shared_ptr<CudfHiveConfig>& CudfHiveConfig);
+
+  void addSplit(std::shared_ptr<ConnectorSplit> split) override;
+
+  void addDynamicFilter(
+      column_index_t /*outputChannel*/,
+      const std::shared_ptr<facebook::velox::common::Filter>& /*filter*/)
+      override {
+    VELOX_NYI(
+        "Dynamic filters not yet implemented by cudf::CudfHiveConnector.");
+  }
+
+  std::optional<RowVectorPtr> next(
+      uint64_t size,
+      velox::ContinueFuture& /* future */) override;
+
+  uint64_t getCompletedRows() override {
+    return completedRows_;
+  }
+
+  const common::SubfieldFilters* getFilters() const override {
+    return &subfieldFilters_;
+  }
+
+  uint64_t getCompletedBytes() override {
+    return completedBytes_;
+  }
+
+  std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
+
+ protected:
+  // Virtual method to create a `CudfSplitReader` or subclass for the data
+  // source.
+  virtual std::unique_ptr<CudfSplitReader> createCudfSplitReader();
+
+  // Virtual method to convert the input `ConnectorSplit` to appropriate
+  // subclass(es).
+  virtual void convertSplit(std::shared_ptr<ConnectorSplit> split);
+
+  std::shared_ptr<CudfHiveConnectorSplit> split_;
+  std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>
+      tableHandle_;
+
+  const std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
+  facebook::velox::FileHandleFactory* const fileHandleFactory_;
+  folly::Executor* const executor_;
+  const ConnectorQueryCtx* const connectorQueryCtx_;
+
+  // Columns to read.
+  std::vector<std::string> readColumnNames_;
+
+  std::shared_ptr<io::IoStatistics> ioStatistics_;
+  std::shared_ptr<velox::IoStats> ioStats_;
+
+  // The row type for the data source output, not including filter-only columns.
+  const RowTypePtr outputType_;
+
+  bool useExperimentalCudfReader_;
+
+  // Cached combined subfield filter expression owned by 'subfieldTree_'.
+  cudf::ast::expression const* subfieldFilterExpr_{nullptr};
+
+ private:
+  // Construct and cache a RowTypePtr for the table column names and types.
+  const RowTypePtr getTableRowType();
+  RowTypePtr cachedTableRowType_{};
+
+  memory::MemoryPool* const pool_;
+
+  size_t completedRows_{0};
+  size_t completedBytes_{0};
+
+  dwio::common::RuntimeStats runtimeStats_;
+
+  std::unique_ptr<CudfSplitReader> cudfSplitReader_;
+
+  // Optimized remaining-filter expression, or null when there is no remaining
+  // filter. Gates remaining-filter evaluation in next().
+  core::TypedExprPtr optimizedRemainingFilter_;
+
+  // Compiled cuDF evaluator for the remaining filter, applied post-read in
+  // next(). Null when there is no remaining filter.
+  std::shared_ptr<velox::cudf_velox::CudfExpression>
+      cudfRemainingFilterExpression_;
+
+  std::atomic<uint64_t> totalRemainingFilterTime_{0};
+
+  std::unordered_set<std::string> readColumnSet_;
+
+  // Expression evaluator for remaining filter.
+  core::ExpressionEvaluator* const expressionEvaluator_;
+
+  // Expression evaluator for subfield filter.
+  std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
+  cudf::ast::tree subfieldTree_;
+  common::SubfieldFilters subfieldFilters_;
+};
+
+} // namespace facebook::velox::cudf_velox::connector::hive

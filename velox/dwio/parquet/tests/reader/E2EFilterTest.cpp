@@ -1,0 +1,987 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/common/io/IoStatistics.h"
+#include "velox/dwio/common/tests/utils/E2EFilterTestBase.h"
+#include "velox/dwio/parquet/reader/ParquetReader.h"
+#include "velox/dwio/parquet/writer/Writer.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
+
+#include <folly/init/Init.h>
+
+using namespace facebook;
+using namespace facebook::velox;
+using namespace facebook::velox::common;
+using namespace facebook::velox::dwio::common;
+using namespace facebook::velox::parquet;
+
+using dwio::common::MemorySink;
+
+class E2EFilterTest : public E2EFilterTestBase,
+                      public velox::test::VectorTestBase {
+ protected:
+  void SetUp() override {
+    E2EFilterTestBase::SetUp();
+  }
+
+  void testWithTypes(
+      const std::string& columns,
+      std::function<void()> customize,
+      bool wrapInStruct,
+      const std::vector<std::string>& filterable,
+      int32_t numCombinations) {
+    testScenario(columns, customize, wrapInStruct, filterable, numCombinations);
+
+    // Always test no null case.
+    auto newCustomize = [&]() {
+      if (customize) {
+        customize();
+      }
+      makeNotNull(0);
+    };
+    testScenario(
+        columns, newCustomize, wrapInStruct, filterable, numCombinations);
+  }
+
+  void writeToMemory(
+      const TypePtr& type,
+      const std::vector<RowVectorPtr>& batches,
+      bool forRowGroupSkip = false,
+      const std::vector<std::string>& /*indexColumns*/ = {}) override {
+    auto sink = std::make_unique<MemorySink>(
+        200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
+    auto* sinkPtr = sink.get();
+    commonOptions_.memoryPool = E2EFilterTestBase::rootPool_.get();
+    int32_t flushCounter = 0;
+    commonOptions_.flushPolicyFactory = [&]() {
+      return std::make_unique<LambdaFlushPolicy>(
+          rowsInRowGroup_, bytesInRowGroup_, [&]() {
+            return forRowGroupSkip
+                ? false
+                : (++flushCounter % flushEveryNBatches_ == 0);
+          });
+    };
+
+    commonOptions_.formatSpecificOptions =
+        std::make_shared<ParquetWriterOptions>(options_);
+    writer_ = std::make_unique<facebook::velox::parquet::Writer>(
+        std::move(sink), commonOptions_, asRowType(type));
+    for (auto& batch : batches) {
+      writer_->write(batch);
+    }
+    writer_->flush();
+    writer_->close();
+    sinkData_ = std::string_view(sinkPtr->data(), sinkPtr->size());
+  }
+
+  std::unique_ptr<dwio::common::Reader> makeReader(
+      const dwio::common::ReaderOptions& opts,
+      std::unique_ptr<dwio::common::BufferedInput> input) override {
+    return std::make_unique<ParquetReader>(std::move(input), opts);
+  }
+
+  // Returns true if the given encoding appears in the encodings list of the
+  // first column chunk of the first row group of the most recently written
+  // file. Uses ColumnChunkMetaDataPtr::encodings() — no PageReader needed.
+  bool columnChunkUsesEncoding(
+      facebook::velox::parquet::arrow::Encoding::type encoding) {
+    dwio::common::ReaderOptions readerOpts(leafPool_.get());
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
+    auto reader = std::make_unique<ParquetReader>(
+        std::make_unique<dwio::common::BufferedInput>(
+            std::make_shared<InMemoryReadFile>(std::string(sinkData_)),
+            readerOpts.memoryPool()),
+        readerOpts);
+    const auto expected = static_cast<thrift::Encoding>(encoding);
+    for (const auto fileEncoding :
+         reader->fileMetaData().rowGroup(0).columnChunk(0).encodings()) {
+      if (fileEncoding == expected) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
+  std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
+  std::unique_ptr<facebook::velox::parquet::Writer> writer_;
+  dwio::common::WriterOptions commonOptions_;
+  ParquetWriterOptions options_;
+  uint64_t rowsInRowGroup_ = 10'000;
+  int64_t bytesInRowGroup_ = 128 * 1'024 * 1'024;
+};
+
+TEST_F(E2EFilterTest, unknownType) {
+  rowType_ = ROW({"bigint_val", "unknown_val"}, {BIGINT(), UNKNOWN()});
+  filterGenerator_ = std::make_unique<FilterGenerator>(rowType_, seed_);
+
+  std::vector<RowVectorPtr> batches;
+  for (auto batch = 0; batch < batchCount_; ++batch) {
+    auto bigintValues = makeFlatVector<int64_t>(
+        batchSize_, [batch, this](vector_size_t row) -> int64_t {
+          return static_cast<int64_t>(batch) * batchSize_ + row;
+        });
+    auto unknownValues =
+        BaseVector::createNullConstant(UNKNOWN(), batchSize_, leafPool_.get());
+    batches.push_back(makeRowVector(
+        rowType_->names(),
+        std::vector<VectorPtr>{bigintValues, unknownValues}));
+  }
+
+  writeToMemory(rowType_, batches, false);
+  testNoRowGroupSkip(batches, {"bigint_val"}, 10);
+}
+
+TEST_F(E2EFilterTest, boolean) {
+  testWithTypes(
+      "boolean_val:boolean,"
+      "boolean_null:boolean",
+      [&]() { makeAllNulls("boolean_null"); },
+      true,
+      {"boolean_val"},
+      20);
+}
+
+TEST_F(E2EFilterTest, integerDirect) {
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+
+  testWithTypes(
+      "short_val:smallint,"
+      "int_val:int,"
+      "long_val:bigint,"
+      "long_null:bigint",
+      [&]() { makeAllNulls("long_null"); },
+      true,
+      {"short_val", "int_val", "long_val"},
+      20);
+}
+
+TEST_F(E2EFilterTest, integerDeltaBinaryPack) {
+  options_.enableDictionary = false;
+  options_.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+  const auto expectedEncoding = options_.encoding;
+
+  testWithTypes(
+      "short_val:smallint,"
+      "int_val:int,"
+      "long_val:bigint,"
+      "long_null:bigint",
+      [&]() { makeAllNulls("long_null"); },
+      true,
+      {"short_val", "int_val", "long_val"},
+      20);
+  EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
+}
+
+TEST_F(E2EFilterTest, compression) {
+  for (const auto compression :
+       {common::CompressionKind_SNAPPY,
+        common::CompressionKind_ZSTD,
+        common::CompressionKind_GZIP,
+        common::CompressionKind_NONE,
+        common::CompressionKind_LZ4}) {
+    if (!facebook::velox::parquet::Writer::isCodecAvailable(compression)) {
+      continue;
+    }
+
+    options_.dataPageSize = 4 * 1024;
+    commonOptions_.compressionKind = compression;
+
+    testWithTypes(
+        "tinyint_val:tinyint,"
+        "short_val:smallint,"
+        "int_val:int,"
+        "long_val:bigint",
+        [&]() {
+          makeIntDistribution<int64_t>(
+              "long_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -9999, // rareMin
+              10000000000, // rareMax
+              true); // keepNulls
+
+          makeIntDistribution<int32_t>(
+              "int_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -9999, // rareMin
+              100000000, // rareMax
+              false); // keepNulls
+
+          makeIntDistribution<int16_t>(
+              "short_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -999, // rareMin
+              30000, // rareMax
+              true); // keepNulls
+
+          makeIntDistribution<int8_t>(
+              "tinyint_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -99, // rareMin
+              3000, // rareMax
+              true); // keepNulls
+        },
+        true,
+        {"tinyint_val", "short_val", "int_val", "long_val"},
+        3);
+  }
+}
+
+TEST_F(E2EFilterTest, integerDictionary) {
+  options_.dataPageSize = 4 * 1024;
+
+  testWithTypes(
+      "short_val:smallint,"
+      "int_val:int,"
+      "long_val:bigint",
+      [&]() {
+        makeIntDistribution<int64_t>(
+            "long_val",
+            10, // min
+            100, // max
+            22, // repeats
+            19, // rareFrequency
+            -9999, // rareMin
+            10000000000, // rareMax
+            true); // keepNulls
+
+        makeIntDistribution<int32_t>(
+            "int_val",
+            10, // min
+            100, // max
+            22, // repeats
+            19, // rareFrequency
+            -9999, // rareMin
+            100000000, // rareMax
+            false); // keepNulls
+
+        makeIntDistribution<int16_t>(
+            "short_val",
+            10, // min
+            100, // max
+            22, // repeats
+            19, // rareFrequency
+            -999, // rareMin
+            30000, // rareMax
+            true); // keepNulls
+      },
+      true,
+      {"short_val", "int_val", "long_val"},
+      20);
+}
+
+TEST_F(E2EFilterTest, timestampInt64Direct) {
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+
+  testWithTypes(
+      "timestamp_val_0:timestamp,"
+      "timestamp_val_1:timestamp",
+      [&]() {},
+      true,
+      {"timestamp_val_0", "timestamp_val_1"},
+      20);
+}
+
+TEST_F(E2EFilterTest, timestampInt64Dictionary) {
+  options_.dataPageSize = 4 * 1024;
+
+  testWithTypes(
+      "timestamp_val_0:timestamp,"
+      "timestamp_val_1:timestamp",
+      [&]() {},
+      true,
+      {"timestamp_val_0", "timestamp_val_1"},
+      20);
+}
+
+TEST_F(E2EFilterTest, timestampInt96Direct) {
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+  options_.writeInt96AsTimestamp = true;
+
+  testWithTypes(
+      "timestamp_val_0:timestamp,"
+      "timestamp_val_1:timestamp",
+      [&]() {},
+      true,
+      {"timestamp_val_0", "timestamp_val_1"},
+      20);
+}
+
+TEST_F(E2EFilterTest, timestampInt96Dictionary) {
+  options_.dataPageSize = 4 * 1024;
+  options_.writeInt96AsTimestamp = true;
+
+  testWithTypes(
+      "timestamp_val_0:timestamp,"
+      "timestamp_val_1:timestamp",
+      [&]() {},
+      true,
+      {"timestamp_val_0", "timestamp_val_1"},
+      20);
+}
+
+TEST_F(E2EFilterTest, floatAndDoubleDirect) {
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+
+  testWithTypes(
+      "float_val:float,"
+      "double_val:double,"
+      "float_val2:float,"
+      "double_val2:double,"
+      "long_val:bigint,"
+      "float_null:float",
+      [&]() {
+        makeAllNulls("float_null");
+        makeQuantizedFloat<float>("float_val2", 200, true);
+        makeQuantizedFloat<double>("double_val2", 522, true);
+      },
+      true,
+      {"float_val", "double_val", "float_val2", "double_val2", "float_null"},
+      20);
+}
+
+TEST_F(E2EFilterTest, floatAndDouble) {
+  // float_val and double_val may be direct since the
+  // values are random.float_val2 and double_val2 are expected to be
+  // dictionaries since the values are quantized.
+  testWithTypes(
+      "float_val:float,"
+      "double_val:double,"
+      "float_val2:float,"
+      "double_val2:double,"
+
+      "long_val:bigint,"
+      "float_null:float",
+      [&]() {
+        makeAllNulls("float_null");
+        makeQuantizedFloat<float>("float_val2", 200, true);
+        makeQuantizedFloat<double>("double_val2", 522, true);
+        // Make sure there are RLE's.
+        makeReapeatingValues<float>("float_val2", 0, 100, 200, 10.1);
+        makeReapeatingValues<double>("double_val2", 0, 100, 200, 100.8);
+      },
+      true,
+      {"float_val", "double_val", "float_val2", "double_val2", "float_null"},
+      20);
+}
+
+TEST_F(E2EFilterTest, shortDecimalDictionary) {
+  // decimal(8, 5) maps to 4 bytes FLBA in Parquet.
+  // decimal(10, 5) maps to 5 bytes FLBA in Parquet.
+  // decimal(17, 5) maps to 8 bytes FLBA in Parquet.
+  for (const auto& type : {
+           "shortdecimal_val:decimal(8, 5)",
+           "shortdecimal_val:decimal(10, 5)",
+           "shortdecimal_val:decimal(17, 5)",
+       }) {
+    testWithTypes(
+        type,
+        [&]() {
+          makeIntDistribution<int64_t>(
+              "shortdecimal_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -999, // rareMin
+              30000, // rareMax
+              true);
+        },
+        false,
+        {"shortdecimal_val"},
+        20);
+  }
+}
+
+TEST_F(E2EFilterTest, shortDecimalDirect) {
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+
+  // decimal(8, 5) maps to 4 bytes FLBA in Parquet.
+  // decimal(10, 5) maps to 5 bytes FLBA in Parquet.
+  // decimal(17, 5) maps to 8 bytes FLBA in Parquet.
+  for (const auto& type : {
+           "shortdecimal_val:decimal(8, 5)",
+           "shortdecimal_val:decimal(10, 5)",
+           "shortdecimal_val:decimal(17, 5)",
+       }) {
+    testWithTypes(
+        type,
+        [&]() {
+          makeIntDistribution<int64_t>(
+              "shortdecimal_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -999, // rareMin
+              30000, // rareMax
+              true);
+        },
+        false,
+        {"shortdecimal_val"},
+        20);
+  }
+
+  testWithTypes(
+      "shortdecimal_val:decimal(10, 5)",
+      [&]() {
+        useSuppliedValues<int64_t>("shortdecimal_val", 0, {-479, 40000000});
+      },
+      false,
+      {"shortdecimal_val"},
+      20);
+}
+
+TEST_F(E2EFilterTest, longDecimalDictionary) {
+  // decimal(30, 10) maps to 13 bytes FLBA in Parquet.
+  // decimal(37, 15) maps to 16 bytes FLBA in Parquet.
+  for (const auto& type : {
+           "longdecimal_val:decimal(30, 10)",
+           "longdecimal_val:decimal(37, 15)",
+       }) {
+    testWithTypes(
+        type,
+        [&]() {
+          makeIntDistribution<int128_t>(
+              "longdecimal_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -999, // rareMin
+              30000, // rareMax
+              true);
+        },
+        true,
+        {"longdecimal_val"},
+        20);
+  }
+}
+
+TEST_F(E2EFilterTest, longDecimalDirect) {
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+
+  // decimal(30, 10) maps to 13 bytes FLBA in Parquet.
+  // decimal(37, 15) maps to 16 bytes FLBA in Parquet.
+  for (const auto& type : {
+           "longdecimal_val:decimal(30, 10)",
+           "longdecimal_val:decimal(37, 15)",
+       }) {
+    testWithTypes(
+        type,
+        [&]() {
+          makeIntDistribution<int128_t>(
+              "longdecimal_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -999, // rareMin
+              30000, // rareMax
+              true);
+        },
+        true,
+        {"longdecimal_val"},
+        20);
+  }
+
+  testWithTypes(
+      "longdecimal_val:decimal(30, 10)",
+      [&]() {
+        useSuppliedValues<int128_t>(
+            "longdecimal_val",
+            0,
+            {-479, HugeInt::build(1546093991, 4054979645)});
+      },
+      false,
+      {"longdecimal_val"},
+      20);
+}
+
+TEST_F(E2EFilterTest, stringDirect) {
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+
+  testWithTypes(
+      "string_val:string,"
+      "string_val_2:string",
+      [&]() {
+        makeStringUnique("string_val");
+        makeStringUnique("string_val_2");
+      },
+      true,
+      {"string_val", "string_val_2"},
+      20);
+}
+
+TEST_F(E2EFilterTest, stringDictionary) {
+  testWithTypes(
+      "string_val:string,"
+      "string_val_2:string,"
+      "string_const: string",
+      [&]() {
+        makeStringDistribution("string_val", 100, true, false);
+        makeStringDistribution("string_val_2", 170, false, true);
+        makeStringDistribution("string_const", 1, true, false);
+      },
+      true,
+      {"string_val", "string_val_2"},
+      20);
+}
+
+TEST_F(E2EFilterTest, stringDeltaByteArray) {
+  options_.enableDictionary = false;
+  options_.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaByteArray;
+  const auto expectedEncoding = options_.encoding;
+
+  testWithTypes(
+      "string_val:string,"
+      "string_val_2:string",
+      [&]() {
+        makeStringUnique("string_val");
+        makeStringUnique("string_val_2");
+      },
+      true,
+      {"string_val", "string_val_2"},
+      20);
+  EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
+}
+
+TEST_F(E2EFilterTest, stringDeltaLengthByteArray) {
+  options_.enableDictionary = false;
+  options_.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaLengthByteArray;
+  const auto expectedEncoding = options_.encoding;
+
+  testWithTypes(
+      "string_val:string,"
+      "string_val_2:string",
+      [&]() {
+        makeStringUnique("string_val");
+        makeStringUnique("string_val_2");
+      },
+      true,
+      {"string_val", "string_val_2"},
+      20);
+  EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
+}
+
+TEST_F(E2EFilterTest, dedictionarize) {
+  rowsInRowGroup_ = 10'000;
+  options_.dictionaryPageSizeLimit = 20'000;
+
+  testWithTypes(
+      "long_val: bigint,"
+      "string_val:string,"
+      "string_val_2:string",
+      [&]() {
+        makeStringDistribution("string_val", 10000000, true, false);
+        makeStringDistribution("string_val_2", 1700000, false, true);
+      },
+      true,
+      {"long_val", "string_val", "string_val_2"},
+      20);
+}
+
+TEST_F(E2EFilterTest, filterStruct) {
+  // The data has a struct member with one second level struct
+  // column. Both structs have a column that gets filtered 'nestedxxx'
+  // and one that does not 'dataxxx'.
+  testWithTypes(
+      "long_val:bigint,"
+      "outer_struct: struct<nested1:bigint, "
+      "  data1: string, "
+      "  inner_struct: struct<nested2: bigint, data2: array<smallint>>>",
+      [&]() {},
+      false,
+      {"long_val",
+       "outer_struct.inner_struct",
+       "outer_struct.nested1",
+       "outer_struct.inner_struct.nested2"},
+      40);
+}
+
+TEST_F(E2EFilterTest, list) {
+  // Break up the leaf data in small pages to cover coalescing repdefs.
+  options_.dataPageSize = 4 * 1024;
+
+  batchCount_ = 2;
+  batchSize_ = 12000;
+  testWithTypes(
+      "long_val:bigint, array_val:array<int>,"
+      "struct_array: struct<a: array<struct<k:int, v:int, va: array<smallint>>>>",
+      nullptr,
+      false,
+      {"long_val", "array_val"},
+      10);
+}
+
+TEST_F(E2EFilterTest, metadataFilter) {
+  // Follow the batch size in `E2EFiltersTestBase`,
+  // so that each batch can produce a row group.
+  rowsInRowGroup_ = 10;
+  testMetadataFilter();
+}
+
+TEST_F(E2EFilterTest, subfieldsPruning) {
+  testSubfieldsPruning();
+}
+
+TEST_F(E2EFilterTest, mutationCornerCases) {
+  testMutationCornerCases();
+}
+
+TEST_F(E2EFilterTest, map) {
+  // Break up the leaf data in small pages to cover coalescing repdefs.
+  options_.dataPageSize = 4 * 1024;
+
+  batchCount_ = 2;
+  batchSize_ = 12000;
+  testWithTypes(
+      "long_val:bigint,"
+      "map_val:map<int, int>,"
+      "nested_map:map<int, map<int, bigint>>,"
+      "struct_map: struct<m: map<int, struct<k:int, v:int, vm: map<bigint, smallint>>>>",
+      nullptr,
+      false,
+      {"long_val", "map_val"},
+      10);
+}
+
+TEST_F(E2EFilterTest, varbinaryDirect) {
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+
+  testWithTypes(
+      "varbinary_val:varbinary,"
+      "varbinary_val_2:varbinary",
+      [&]() {
+        makeStringUnique("varbinary_val");
+        makeStringUnique("varbinary_val_2");
+      },
+      true,
+      {"varbinary_val", "varbinary_val_2"},
+      20);
+}
+
+TEST_F(E2EFilterTest, varbinaryDictionary) {
+  testWithTypes(
+      "varbinary_val:varbinary,"
+      "varbinary_val_2:varbinary,"
+      "varbinary_const:varbinary",
+      [&]() {
+        makeStringDistribution("varbinary_val", 100, true, false);
+        makeStringDistribution("varbinary_val_2", 170, false, true);
+        makeStringDistribution("varbinary_const", 1, true, false);
+      },
+      true,
+      {"varbinary_val", "varbinary_val_2"},
+      20);
+}
+
+TEST_F(E2EFilterTest, date) {
+  testWithTypes(
+      "date_val:date",
+      [&]() {
+        makeIntDistribution<int32_t>(
+            "date_val",
+            10, // min
+            100, // max
+            22, // repeats
+            19, // rareFrequency
+            -999, // rareMin
+            30000, // rareMax
+            true); // keepNulls
+      },
+      false,
+      {"date_val"},
+      20);
+}
+
+TEST_F(E2EFilterTest, time) {
+  struct {
+    parquet::arrow::Encoding::type encoding;
+    bool enableDictionary;
+    bool keepNulls;
+  } testCases[] = {
+      {parquet::arrow::Encoding::kPlain, false, true},
+      {parquet::arrow::Encoding::kPlain, true, true},
+      {parquet::arrow::Encoding::kDeltaBinaryPacked, false, false},
+      {parquet::arrow::Encoding::kDeltaBinaryPacked, false, true},
+  };
+
+  for (const auto& testCase : testCases) {
+    options_.encoding = testCase.encoding;
+    bool enableDictionary = testCase.enableDictionary;
+    bool keepNulls = testCase.keepNulls;
+    SCOPED_TRACE(
+        fmt::format(
+            "Encoding: {}, Dictionary: {}, KeepNulls: {}",
+            static_cast<int>(options_.encoding),
+            enableDictionary,
+            keepNulls));
+
+    options_.enableDictionary = enableDictionary;
+    options_.dataPageSize = 4 * 1024;
+    const int valMax = enableDictionary ? 1000 : 86399999;
+
+    testWithTypes(
+        "time_val:time",
+        [&]() {
+          makeIntDistribution<int64_t>(
+              "time_val",
+              0, // min
+              valMax, // max
+              22, // repeats
+              19, // rareFrequency
+              0, // rareMin
+              valMax, // rareMax
+              keepNulls); // keepNulls
+        },
+        false,
+        {"time_val"},
+        20);
+    // kPlain always appears in the encodings list (dictionary pages use PLAIN),
+    // so skip the check for it — it would pass regardless of whether the option
+    // was forwarded.
+    if (testCase.encoding != parquet::arrow::Encoding::kPlain) {
+      EXPECT_TRUE(columnChunkUsesEncoding(testCase.encoding));
+    }
+  }
+}
+
+TEST_F(E2EFilterTest, timeMicros) {
+  struct {
+    parquet::arrow::Encoding::type encoding;
+    bool enableDictionary;
+    bool keepNulls;
+  } testCases[] = {
+      {parquet::arrow::Encoding::kPlain, false, true},
+      {parquet::arrow::Encoding::kPlain, true, true},
+      {parquet::arrow::Encoding::kDeltaBinaryPacked, false, false},
+      {parquet::arrow::Encoding::kDeltaBinaryPacked, false, true},
+  };
+
+  for (const auto& testCase : testCases) {
+    options_.encoding = testCase.encoding;
+    bool enableDictionary = testCase.enableDictionary;
+    bool keepNulls = testCase.keepNulls;
+    SCOPED_TRACE(
+        fmt::format(
+            "Encoding: {}, Dictionary: {}, KeepNulls: {}",
+            static_cast<int>(options_.encoding),
+            enableDictionary,
+            keepNulls));
+
+    options_.enableDictionary = enableDictionary;
+    options_.dataPageSize = 4 * 1024;
+    // Microseconds since midnight up to 86,399,999,999 (one second short of
+    // 24 h). Use a smaller cap when forcing a dictionary so values are dense.
+    const int64_t valMax = enableDictionary ? 1'000 : 86'399'999'999LL;
+
+    testWithTypes(
+        "time_val:time_micro_utc",
+        [&]() {
+          makeIntDistribution<int64_t>(
+              "time_val",
+              0, // min
+              valMax, // max
+              22, // repeats
+              19, // rareFrequency
+              0, // rareMin
+              valMax, // rareMax
+              keepNulls); // keepNulls
+        },
+        false,
+        {"time_val"},
+        20);
+    // kPlain always appears in the encodings list (dictionary pages use PLAIN),
+    // so skip the check for it — it would pass regardless of whether the option
+    // was forwarded.
+    if (testCase.encoding != parquet::arrow::Encoding::kPlain) {
+      EXPECT_TRUE(columnChunkUsesEncoding(testCase.encoding));
+    }
+  }
+}
+
+TEST_F(E2EFilterTest, combineRowGroup) {
+  rowsInRowGroup_ = 5;
+  rowType_ = ROW({"c0"}, {INTEGER()});
+  std::vector<RowVectorPtr> batches;
+  for (int i = 0; i < 5; i++) {
+    batches.push_back(
+        std::static_pointer_cast<RowVector>(test::BatchMaker::createBatch(
+            rowType_, 1, *leafPool_, nullptr, 0)));
+  }
+  writeToMemory(rowType_, batches, false);
+  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
+  auto input = std::make_unique<BufferedInput>(
+      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
+  auto reader = makeReader(readerOpts, std::move(input));
+  auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
+  EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 1);
+  EXPECT_EQ(parquetReader.numberOfRows(), 5);
+}
+
+// Reproduces the real-world scenario from the bug report. Parquet-mr 1.8.1
+// computed binary column min/max using signed byte ordering, which differs from
+// the unsigned lexicographic (memcmp) ordering Velox uses.
+//
+// With signed byte ordering:  三星应用商店 < 360手机助手 < vivo预装
+// With memcmp byte ordering:  360手机助手  < vivo预装    < 三星应用商店
+//
+// A row group containing {"三星应用商店", "vivo预装"} has memcmp-based stats
+// min="vivo预装", max="三星应用商店". A filter for "360手机助手" falls below
+// the memcmp min, so the row group would be incorrectly skipped — even though
+// it should match under the signed ordering that parquet-mr 1.8.1 used to write
+// the stats.
+TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
+  const std::string kSanXing = "三星应用商店";
+  const std::string kVivo = "vivo预装";
+  const std::string k360 = "360手机助手";
+
+  auto rowType = ROW({"s"}, {VARCHAR()});
+
+  auto writeAndGetStats = [&](const std::string& createdBy,
+                              RuntimeStats& stats) {
+    commonOptions_.memoryPool = E2EFilterTestBase::rootPool_.get();
+    options_.createdBy = createdBy;
+    // Flush after every 5 rows to create separate row groups.
+    commonOptions_.flushPolicyFactory = []() {
+      return std::make_unique<LambdaFlushPolicy>(
+          /*rowsInRowGroup=*/5,
+          /*bytesInRowGroup=*/1'024 * 1'024,
+          []() { return false; });
+    };
+
+    auto sink = std::make_unique<MemorySink>(
+        200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
+    auto* sinkPtr = sink.get();
+    commonOptions_.formatSpecificOptions =
+        std::make_shared<ParquetWriterOptions>(options_);
+    auto writer = std::make_unique<parquet::Writer>(
+        std::move(sink), commonOptions_, rowType);
+    // Row group 1: contains the value we will filter for ("360手机助手").
+    writer->write(makeRowVector(
+        {"s"},
+        {makeFlatVector<std::string>(
+            {k360, kSanXing, kVivo, k360, kSanXing})}));
+    // Row group 2: does not contain "360手机助手".
+    writer->write(makeRowVector(
+        {"s"},
+        {makeFlatVector<std::string>(
+            {kSanXing, kVivo, kSanXing, kVivo, kSanXing})}));
+    writer->close();
+
+    dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    auto input = std::make_unique<BufferedInput>(
+        std::make_shared<InMemoryReadFile>(
+            std::string(sinkPtr->data(), sinkPtr->size())),
+        readerOptions.memoryPool());
+    auto reader = makeReader(readerOptions, std::move(input));
+    auto& parquetReader = dynamic_cast<ParquetReader&>(*reader);
+    EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 2);
+
+    auto scanSpec = std::make_shared<ScanSpec>("");
+    scanSpec->addAllChildFields(*rowType);
+    // Equality filter: s = "360手机助手".
+    scanSpec->getOrCreateChild(Subfield("s"))
+        ->setFilter(
+            std::make_unique<BytesRange>(
+                k360, false, false, k360, false, false, false));
+
+    RowReaderOptions rowReaderOpts;
+    rowReaderOpts.select(
+        std::make_shared<ColumnSelector>(rowType, rowType->names()));
+    rowReaderOpts.setScanSpec(scanSpec);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    VectorPtr result = BaseVector::create(rowType, 1, leafPool_.get());
+    uint64_t totalRows{0};
+    while (rowReader->next(1'000, result)) {
+      totalRows += result->size();
+    }
+    EXPECT_EQ(totalRows, 2);
+
+    rowReader->updateRuntimeStats(stats);
+  };
+
+  // parquet-mr 1.8.2: stats are trusted. Under memcmp ordering, row group 1
+  // has min="360手机助手" max="三星应用商店" which contains "360手机助手", so
+  // it is read. Row group 2 has min="vivo预装" max="三星应用商店" which does
+  // not contain "360手机助手" (it falls below memcmp min), so it is skipped.
+  RuntimeStats stats182;
+  writeAndGetStats("parquet-mr version 1.8.2", stats182);
+  EXPECT_EQ(stats182.skippedStrides, 1);
+  EXPECT_EQ(stats182.processedStrides, 1);
+
+  // parquet-mr 1.8.1: stats are untrusted (signed byte ordering bug), so no
+  // row groups are skipped. Both row groups are scanned.
+  RuntimeStats stats181;
+  writeAndGetStats("parquet-mr version 1.8.1", stats181);
+  EXPECT_EQ(stats181.skippedStrides, 0);
+  EXPECT_EQ(stats181.processedStrides, 2);
+}
+
+TEST_F(E2EFilterTest, booleanRle) {
+  options_.enableDictionary = false;
+  options_.encoding = facebook::velox::parquet::arrow::Encoding::kRle;
+  options_.useParquetDataPageV2 = true;
+  const auto expectedEncoding = options_.encoding;
+
+  testWithTypes(
+      "boolean_val:boolean,"
+      "boolean_null:boolean",
+      [&]() { makeAllNulls("boolean_null"); },
+      false,
+      {"boolean_val"},
+      20);
+  EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
+}
+
+// Define main so that gflags get processed.
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  folly::Init init{&argc, &argv, false};
+  return RUN_ALL_TESTS();
+}

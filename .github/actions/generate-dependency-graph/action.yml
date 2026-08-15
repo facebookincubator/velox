@@ -1,0 +1,62 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Generate Dependency Graph
+description: >
+  Configure CMake with File API and compile_commands.json, then generate
+  the dependency graph JSON (file_to_targets, header_to_sources, target_deps).
+
+runs:
+  using: composite
+  steps:
+    - name: Fix git permissions
+      shell: bash
+      run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
+
+    - name: Set up File API query
+      shell: bash
+      run: |
+        mkdir -p _build/release/.cmake/api/v1/query
+        echo '{}' > _build/release/.cmake/api/v1/query/codemodel-v2
+
+    - name: CMake configure
+      shell: bash
+      env:
+        MAKEFLAGS: NUM_THREADS=8
+        # Mirror the adapters job: build FAISS from source instead of
+        # resolving the system-installed package. The system FAISS
+        # config (/usr/local/share/faiss/faiss-config.cmake) sets the
+        # link interface of the imported `faiss` target to include
+        # OpenMP::OpenMP_CXX without ever calling find_package(OpenMP)
+        # to define it, so a SYSTEM resolution fails the configure.
+        faiss_SOURCE: BUNDLED
+      run: |
+        # The adapters image exports CC/CXX pointing at GCC 12 (used
+        # during image build); without an explicit override the
+        # configure runs as GCC 12, which mismatches the actual
+        # adapters build's GCC 14. Mirror that setup so cmake feature
+        # detection sees the same toolchain.
+        source /opt/rh/gcc-toolset-14/enable
+        export CC=gcc CXX=g++
+        # Flag set lives in .github/scripts/cmake-flags.sh.
+        BUILD_PROFILE=dep-graph source .github/scripts/cmake-flags.sh
+        cmake -B _build/release -GNinja "${CMAKE_FLAGS[@]}"
+
+    - name: Generate dependency graph
+      shell: bash
+      run: |
+        python3 .github/scripts/generate-dependency-graph.py \
+          --build-dir _build/release \
+          --source-dir . \
+          --output dependency-graph.json

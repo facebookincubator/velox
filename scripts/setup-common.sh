@@ -1,0 +1,506 @@
+#!/bin/bash
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# trigger reinstall
+# shellcheck source-path=SCRIPT_DIR
+
+SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
+source "$SCRIPT_DIR"/setup-helper-functions.sh
+source "$SCRIPT_DIR"/setup-versions.sh
+
+VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"}        #Build folly and gflags shared for use in libvelox.so.
+VELOX_ARROW_CMAKE_PATCH=${VELOX_ARROW_CMAKE_PATCH:-""} # avoid error due to +u
+VELOX_FBTHRIFT_CMAKE_PATCH=${VELOX_FBTHRIFT_CMAKE_PATCH:-""}
+VELOX_OPENZL_CMAKE_PATCH=${VELOX_OPENZL_CMAKE_PATCH:-""}
+CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
+DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
+BUILD_GEOS="${BUILD_GEOS:-true}"
+BUILD_S2GEOMETRY="${BUILD_S2GEOMETRY:-true}"
+BUILD_FAISS="${BUILD_FAISS:-true}"
+BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
+EXTRA_ARROW_OPTIONS=${EXTRA_ARROW_OPTIONS:-""}
+EXTRA_ARROW_PATCH=${EXTRA_ARROW_PATCH:-""}
+SIMDJSON_SKIPUTF8VALIDATION=${SIMDJSON_SKIPUTF8VALIDATION:-"OFF"}
+
+USE_CLANG="${USE_CLANG:-false}"
+
+MACHINE=$(uname -m)
+
+# Read WGET_OPTIONS into an array which can be expanded to nothing
+# using a normal variable expands into an empty string causing wget to exit 1
+read -r -a WGET_OPTS <<<"${WGET_OPTIONS:-}"
+
+mkdir -p "${DEPENDENCY_DIR}"
+
+function install_fmt {
+  wget_and_untar https://github.com/fmtlib/fmt/archive/"${FMT_VERSION}".tar.gz fmt
+  cmake_install_dir fmt -DFMT_TEST=OFF
+}
+
+function install_folly {
+  wget_and_untar https://github.com/facebook/folly/archive/refs/tags/"${FB_OS_VERSION}".tar.gz folly
+  local FOLLY_FLAGS=(-DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
+  # When folly is static, use static gflags to avoid dual gflags flag
+  # registration when .so plugins are dlopen'd (both the binary and plugin
+  # would register the same flags in a shared gflags registry).
+  if [[ ${VELOX_BUILD_SHARED} != "ON" ]]; then
+    FOLLY_FLAGS+=(-DGFLAGS_SHARED=FALSE)
+  fi
+  cmake_install_dir folly "${FOLLY_FLAGS[@]}"
+}
+
+function install_fizz {
+  wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/"${FB_OS_VERSION}".tar.gz fizz
+  cmake_install_dir fizz/fizz -DBUILD_TESTS=OFF
+}
+
+function install_fast_float {
+  wget_and_untar https://github.com/fastfloat/fast_float/archive/refs/tags/"${FAST_FLOAT_VERSION}".tar.gz fast_float
+  cmake_install_dir fast_float -DBUILD_TESTS=OFF
+}
+
+# Only required for VELOX_ENABLE_NIMBLE=ON. Both the runtime library and the
+# flatc code generator are needed, since Nimble generates C++ headers from .fbs
+# schemas at build time.
+function install_flatbuffers {
+  wget_and_untar https://github.com/google/flatbuffers/archive/refs/tags/v"${FLATBUFFERS_VERSION}".tar.gz flatbuffers
+  cmake_install_dir flatbuffers -DFLATBUFFERS_BUILD_TESTS=OFF -DFLATBUFFERS_BUILD_FLATC=ON -DFLATBUFFERS_BUILD_SHAREDLIB=OFF
+}
+
+# Only required for VELOX_ENABLE_NIMBLE=ON. Only the core library and its C++
+# bindings are consumed; everything else OpenZL can build pulls in dependencies
+# Velox does not otherwise need.
+function install_openzl {
+  wget_and_untar https://github.com/facebook/openzl/archive/"${OPENZL_VERSION}".tar.gz openzl
+  (
+    # OpenZL hard-codes C++17, which would leave openzl_cpp ABI-incompatible
+    # with C++20 Velox. Apply the same patch the BUNDLED CMake resolver uses so
+    # both resolution modes produce a C++20 library.
+    if [ -z "$VELOX_OPENZL_CMAKE_PATCH" ]; then
+      # A different path is needed when building the Dockerfile.
+      ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
+      VELOX_OPENZL_CMAKE_PATCH="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch"
+    fi
+
+    cd "$DEPENDENCY_DIR"/openzl || exit 1
+    if command -v patch >/dev/null 2>&1; then
+      patch -p1 -i "$VELOX_OPENZL_CMAKE_PATCH" || exit 1
+    else
+      git apply "$VELOX_OPENZL_CMAKE_PATCH" || exit 1
+    fi
+  ) || exit 1
+  cmake_install_dir openzl \
+    -DCMAKE_CXX_STANDARD=20 \
+    -DOPENZL_BUILD_CLI=OFF \
+    -DOPENZL_BUILD_EXAMPLES=OFF \
+    -DOPENZL_BUILD_TOOLS=OFF \
+    -DOPENZL_BUILD_CUSTOM_PARSERS=OFF \
+    -DOPENZL_BUILD_TESTS=OFF \
+    -DOPENZL_BUILD_BENCHMARKS=OFF \
+    -DOPENZL_BUILD_PYTHON_EXT=OFF
+}
+
+function install_wangle {
+  wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/"${FB_OS_VERSION}".tar.gz wangle
+  cmake_install_dir wangle/wangle -DBUILD_TESTS=OFF
+}
+
+function install_mvfst {
+  wget_and_untar https://github.com/facebook/mvfst/archive/refs/tags/"${FB_OS_VERSION}".tar.gz mvfst
+  cmake_install_dir mvfst -DBUILD_TESTS=OFF
+}
+
+function install_fbthrift {
+  wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/"${FB_OS_VERSION}".tar.gz fbthrift
+
+  # This patch is integrated into the latest FBOS version of folly and can be removed on upgrade.
+  if [ -z "${VELOX_FBTHRIFT_CMAKE_PATCH}" ]; then
+    # We need to set a different path when building the Dockerfile.
+    ABSOLUTE_SCRIPTDIR=$(realpath "${SCRIPT_DIR}")
+
+    VELOX_FBTHRIFT_CMAKE_PATCH="${ABSOLUTE_SCRIPTDIR}/../CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch"
+  fi
+  (
+    cd "$DEPENDENCY_DIR"/fbthrift || exit 1
+    # Skip applying the patch if it is already applied.
+    git apply --reverse --check "${VELOX_FBTHRIFT_CMAKE_PATCH}" 2>/dev/null ||
+      git apply "${VELOX_FBTHRIFT_CMAKE_PATCH}" || exit 1
+  )
+
+  # Apple Clang's libc++ no longer defines _LIBCPP_HAS_NO_ASAN (renamed to
+  # _LIBCPP_INSTRUMENTED_WITH_ASAN), so folly's UninitializedMemoryHacks.h
+  # causing undefined symbol. This is fixed in the latest FBOS versions and
+  # can be removed on FBOS upgrade.
+  local FBTHRIFT_EXTRA_CXXFLAGS=""
+  if [[ "$(uname)" == "Darwin" ]]; then
+    FBTHRIFT_EXTRA_CXXFLAGS=" -D_LIBCPP_HAS_NO_ASAN"
+  fi
+  EXTRA_PKG_CXXFLAGS="$FBTHRIFT_EXTRA_CXXFLAGS" \
+    cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+}
+
+function install_duckdb {
+  if $BUILD_DUCKDB; then
+    wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/"${DUCKDB_VERSION}".tar.gz duckdb
+    # DuckDB uses git commands to retrieve version information during the build,
+    # which works with git clone. To prevent incorrectly using the parent project's
+    # git version when building from a tarball, we define GIT_COMMIT_HASH to skip
+    # that.
+    cmake_install_dir duckdb \
+      -DGIT_COMMIT_HASH="6536a77" -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF \
+      -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
+  fi
+}
+
+function install_boost {
+  wget_and_untar https://github.com/boostorg/boost/releases/download/"${BOOST_VERSION}"/"${BOOST_VERSION}".tar.gz boost
+  (
+    cd "${DEPENDENCY_DIR}"/boost || exit
+    if [[ "$(uname)" == "Linux" && ${USE_CLANG} != "false" ]]; then
+      ./bootstrap.sh --prefix="${INSTALL_PREFIX}" --with-toolset="clang-15"
+      # Switch the compiler from the clang-15 toolset which doesn't exist (clang-15.jam) to
+      # clang of version 15 when toolset clang-15 is used.
+      # This reconciles the project-config.jam generation with what the b2 build system allows for customization.
+      sed -i 's/using clang-15/using clang : 15/g' project-config.jam
+      ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi toolset=clang-15 --without-python
+    else
+      ./bootstrap.sh --prefix="${INSTALL_PREFIX}"
+      ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi --without-python
+    fi
+  )
+}
+
+function install_protobuf {
+  install_abseil
+
+  wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v"${PROTOBUF_VERSION}"/protobuf-all-"${PROTOBUF_VERSION}".tar.gz protobuf
+  cmake_install_dir protobuf -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_ABSL_PROVIDER=package
+}
+
+function install_grpc {
+  wget_and_untar https://github.com/grpc/grpc/archive/refs/tags/v"${GRPC_VERSION}".tar.gz grpc
+  cmake_install_dir grpc \
+    -DgRPC_BUILD_TESTS=OFF \
+    -DgRPC_ABSL_PROVIDER=package \
+    -DgRPC_ZLIB_PROVIDER=package \
+    -DgRPC_CARES_PROVIDER=package \
+    -DgRPC_RE2_PROVIDER=package \
+    -DgRPC_SSL_PROVIDER=package \
+    -DgRPC_PROTOBUF_PROVIDER=package \
+    -DgRPC_INSTALL=ON
+}
+
+function install_double_conversion {
+  wget_and_untar https://github.com/google/double-conversion/archive/refs/tags/"${DOUBLE_CONVERSION_VERSION}".tar.gz double-conversion
+  cmake_install_dir double-conversion -DBUILD_TESTING=OFF
+}
+
+function install_ranges_v3 {
+  wget_and_untar https://github.com/ericniebler/range-v3/archive/refs/tags/"${RANGE_V3_VERSION}".tar.gz ranges_v3
+  cmake_install_dir ranges_v3 -DRANGES_ENABLE_WERROR=OFF -DRANGE_V3_TESTS=OFF -DRANGE_V3_EXAMPLES=OFF
+}
+
+function install_abseil {
+  # Abseil is a dependency of multiple libraries, so install_abseil can be
+  # invoked more than once per run. Build it only on the first call within a
+  # run.
+  if [ -n "${VELOX_ABSEIL_INSTALLED:-}" ]; then
+    echo "Abseil already installed in this run, skipping."
+    return 0
+  fi
+  VELOX_ABSEIL_INSTALLED=1
+  wget_and_untar https://github.com/abseil/abseil-cpp/archive/refs/tags/"${ABSEIL_VERSION}".tar.gz abseil-cpp
+  local OS
+  OS=$(uname)
+  if [[ $OS == "Darwin" ]]; then
+    ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
+    (
+      cd "${DEPENDENCY_DIR}/abseil-cpp" || exit 1
+      PATCH_FILE="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/absl/absl-macos.patch"
+      # Skip applying the patch if it is already applied.
+      git apply --reverse --check "$PATCH_FILE" 2>/dev/null ||
+        git apply "$PATCH_FILE"
+    )
+  fi
+  cmake_install_dir abseil-cpp \
+    -DABSL_BUILD_TESTING=OFF \
+    -DCMAKE_CXX_STANDARD=17 \
+    -DABSL_PROPAGATE_CXX_STD=ON \
+    -DABSL_ENABLE_INSTALL=ON
+}
+
+function install_re2 {
+  install_abseil
+
+  wget_and_untar https://github.com/google/re2/archive/refs/tags/"${RE2_VERSION}".tar.gz re2
+  cmake_install_dir re2 -DRE2_BUILD_TESTING=OFF -Dabsl_DIR="${INSTALL_PREFIX}/lib/cmake/absl"
+}
+
+function install_glog {
+  wget_and_untar https://github.com/google/glog/archive/"${GLOG_VERSION}".tar.gz glog
+  cmake_install_dir glog -DBUILD_SHARED_LIBS=ON
+}
+
+function install_lzo {
+  wget_and_untar https://www.oberhumer.com/opensource/lzo/download/lzo-"${LZO_VERSION}".tar.gz lzo
+  (
+    cd "${DEPENDENCY_DIR}"/lzo || exit
+    ./configure --prefix="${INSTALL_PREFIX}" --enable-shared --disable-static --docdir=/usr/share/doc/lzo-"${LZO_VERSION}"
+    make "-j${NPROC}"
+    ${SUDO} make install
+  )
+}
+
+function install_snappy {
+  wget_and_untar https://github.com/google/snappy/archive/"${SNAPPY_VERSION}".tar.gz snappy
+  cmake_install_dir snappy -DSNAPPY_BUILD_TESTS=OFF
+}
+
+function install_xsimd {
+  wget_and_untar https://github.com/xtensor-stack/xsimd/archive/refs/tags/"${XSIMD_VERSION}".tar.gz xsimd
+  cmake_install_dir xsimd
+}
+
+function install_simdjson {
+  wget_and_untar https://github.com/simdjson/simdjson/archive/refs/tags/v"${SIMDJSON_VERSION}".tar.gz simdjson
+  cmake_install_dir simdjson -DSIMDJSON_SKIPUTF8VALIDATION=${SIMDJSON_SKIPUTF8VALIDATION}
+}
+
+function install_arrow {
+  wget_and_untar https://github.com/apache/arrow/archive/apache-arrow-"${ARROW_VERSION}".tar.gz arrow
+  (
+    # Can be removed after an upgrade to Arrow 20.0.0
+    if [ -z "$VELOX_ARROW_CMAKE_PATCH" ]; then
+      # We need to set a different path when building the Dockerfile.
+      ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
+
+      VELOX_ARROW_CMAKE_PATCH="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch"
+      VELOX_ARROW_CMAKE_PATCH+=" $ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
+    fi
+
+    cd "$DEPENDENCY_DIR"/arrow || exit 1
+    for patch in $VELOX_ARROW_CMAKE_PATCH; do
+      # Try patch command first (handles line number offsets), fall back to git apply
+      if command -v patch >/dev/null 2>&1; then
+        patch -p1 -i "$patch" || exit 1
+      else
+        git apply "$patch" || exit 1
+      fi
+    done
+    # Presto needs this for Arrow Flight
+    if [[ -n $EXTRA_ARROW_PATCH ]]; then
+      git apply "$EXTRA_ARROW_PATCH" || exit 1
+    fi
+  ) || exit 1
+
+  cmake_install_dir arrow/cpp \
+    -DARROW_PARQUET=OFF \
+    -DARROW_WITH_LZ4=ON \
+    -DARROW_WITH_SNAPPY=ON \
+    -DARROW_WITH_ZLIB=ON \
+    -DARROW_WITH_ZSTD=ON \
+    -DARROW_JEMALLOC=OFF \
+    -DARROW_SIMD_LEVEL=NONE \
+    -DARROW_RUNTIME_SIMD_LEVEL=NONE \
+    -DARROW_WITH_UTF8PROC=OFF \
+    -DARROW_TESTING=ON \
+    -DCMAKE_INSTALL_PREFIX="$INSTALL_PREFIX" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DARROW_BUILD_STATIC=ON \
+    -DBOOST_ROOT="$INSTALL_PREFIX" \
+    $EXTRA_ARROW_OPTIONS
+}
+
+function install_stemmer {
+  wget_and_untar https://snowballstem.org/dist/libstemmer_c-"${STEMMER_VERSION}".tar.gz stemmer
+  (
+    cd "${DEPENDENCY_DIR}"/stemmer || exit
+    sed -i='' '/CPPFLAGS=-Iinclude/ s/$/ -fPIC/' Makefile
+    make clean && make "-j${NPROC}"
+    ${SUDO} cp libstemmer.a "${INSTALL_PREFIX}"/lib/
+    ${SUDO} cp include/libstemmer.h "${INSTALL_PREFIX}"/include/
+  )
+}
+
+function install_geos {
+  if [[ $BUILD_GEOS == "true" ]]; then
+    wget_and_untar https://github.com/libgeos/geos/archive/"${GEOS_VERSION}".tar.gz geos
+    cmake_install_dir geos -DBUILD_TESTING=OFF
+  fi
+}
+
+function install_s2geometry {
+  if [[ $BUILD_S2GEOMETRY == "true" ]]; then
+    wget_and_untar https://github.com/google/s2geometry/archive/refs/tags/v"${S2GEOMETRY_VERSION}".tar.gz s2geometry
+    # Apply the same GCC 12 patch used by the BUNDLED CMake resolver.
+    patch -p1 -d "${DEPENDENCY_DIR}/s2geometry" < \
+      "${SCRIPT_DIR}/../CMake/resolve_dependency_modules/s2geometry/s2geometry-gcc12-max.patch" || true
+    cmake_install_dir s2geometry -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+  fi
+}
+
+function install_faiss_deps {
+  echo "Unsupported platform for faiss"
+}
+
+function install_faiss {
+  if [[ $BUILD_FAISS == "true" ]]; then
+    # Install OpenBLAS and libomp if not already installed
+    install_faiss_deps
+
+    wget_and_untar "https://github.com/facebookresearch/faiss/archive/refs/tags/v${FAISS_VERSION}.tar.gz" faiss
+    cmake_install_dir faiss \
+      -DFAISS_ENABLE_GPU=OFF \
+      -DFAISS_ENABLE_PYTHON=OFF \
+      -DFAISS_ENABLE_REMOTE=OFF \
+      -DFAISS_ENABLE_GPU_TESTS=OFF \
+      -DFAISS_ENABLE_BENCHMARKS=OFF
+  fi
+}
+
+# Adapters that can be installed.
+
+function install_aws_deps {
+  local AWS_REPO_NAME="aws/aws-sdk-cpp"
+
+  github_checkout $AWS_REPO_NAME "$AWS_SDK_VERSION" --depth 1 --recurse-submodules
+  cmake_install_dir aws-sdk-cpp -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
+}
+
+function install_minio {
+  local MINIO_OS=${1:-darwin}
+  local MINIO_ARCH
+
+  if [[ $MACHINE == aarch64 ]]; then
+    MINIO_ARCH="arm64"
+  elif [[ $MACHINE == x86_64 ]]; then
+    MINIO_ARCH="amd64"
+  else
+    echo "Unsupported Minio platform"
+  fi
+
+  wget "${WGET_OPTS[@]}" https://dl.min.io/server/minio/release/"${MINIO_OS}"-${MINIO_ARCH}/archive/minio.RELEASE."${MINIO_VERSION}" -O "${MINIO_BINARY_NAME}"
+  chmod +x ./"${MINIO_BINARY_NAME}"
+  mkdir -p "$INSTALL_PREFIX"/bin/
+  ${SUDO} mv ./"${MINIO_BINARY_NAME}" "$INSTALL_PREFIX"/bin/
+}
+
+function install_gcs_sdk_cpp {
+  # Install gcs dependencies
+  # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
+
+  # abseil-cpp, protobuf, grpc
+  install_protobuf
+  install_grpc
+
+  # crc32
+  wget_and_untar https://github.com/google/crc32c/archive/refs/tags/"${CRC32_VERSION}".tar.gz crc32c
+  cmake_install_dir crc32c \
+    -DCRC32C_BUILD_TESTS=OFF \
+    -DCRC32C_BUILD_BENCHMARKS=OFF \
+    -DCRC32C_USE_GLOG=OFF
+
+  # nlohmann json
+  wget_and_untar https://github.com/nlohmann/json/archive/refs/tags/v"${NLOHMAN_JSON_VERSION}".tar.gz json
+  cmake_install_dir json \
+    -DJSON_BuildTests=OFF
+
+  # google-cloud-cpp
+  wget_and_untar https://github.com/googleapis/google-cloud-cpp/archive/refs/tags/v"${GOOGLE_CLOUD_CPP_VERSION}".tar.gz google-cloud-cpp
+  cmake_install_dir google-cloud-cpp \
+    -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
+    -DGOOGLE_CLOUD_CPP_ENABLE=storage
+}
+
+function install_azure_storage_sdk_cpp {
+  # Disable VCPKG to install additional static dependencies under the VCPKG installed path
+  # instead of using system pre-installed dependencies.
+  export AZURE_SDK_DISABLE_AUTO_VCPKG=ON
+  vcpkg_commit_id=7a6f366cefd27210f6a8309aed10c31104436509
+  github_checkout azure/azure-sdk-for-cpp azure-storage-files-datalake_"${AZURE_SDK_VERSION}"
+  pushd azure-sdk-for-cpp || exit
+  sed -i='' "s/set(VCPKG_COMMIT_STRING .*)/set(VCPKG_COMMIT_STRING $vcpkg_commit_id)/" cmake-modules/AzureVcpkg.cmake
+
+  azure_core_dir="sdk/core/azure-core"
+  if ! grep -q "baseline" $azure_core_dir/vcpkg.json; then
+    # build and install azure-core with the version compatible with system pre-installed openssl
+    openssl_version=$(openssl version -v | awk '{print $2}')
+    if [[ $openssl_version == 1.1.1* ]]; then
+      openssl_version="1.1.1n"
+    fi
+    sed -i='' "s/\"version-string\"/\"builtin-baseline\": \"$vcpkg_commit_id\",\"version-string\"/" $azure_core_dir/vcpkg.json
+    sed -i='' "s/\"version-string\"/\"overrides\": [{ \"name\": \"openssl\", \"version-string\": \"$openssl_version\" }],\"version-string\"/" $azure_core_dir/vcpkg.json
+  fi
+  (
+    cd $azure_core_dir || exit
+    cmake_install -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" -DBUILD_SHARED_LIBS=OFF
+  )
+  # install azure-identity
+  (
+    cd sdk/identity/azure-identity || exit
+    cmake_install -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" -DBUILD_SHARED_LIBS=OFF
+  )
+  # install azure-storage-common
+  (
+    cd sdk/storage/azure-storage-common || exit
+    cmake_install -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" -DBUILD_SHARED_LIBS=OFF
+  )
+  # install azure-storage-blobs
+  (
+    cd sdk/storage/azure-storage-blobs || exit
+    cmake_install -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" -DBUILD_SHARED_LIBS=OFF
+  )
+  # install azure-storage-files-datalake
+  (
+    cd sdk/storage/azure-storage-files-datalake || exit
+    cmake_install -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" -DBUILD_SHARED_LIBS=OFF
+  )
+  popd || exit
+}
+
+function install_hdfs_deps {
+  # Dependencies for Hadoop testing
+  wget_and_untar https://dlcdn.apache.org/hadoop/common/hadoop-"${HADOOP_VERSION}"/hadoop-"${HADOOP_VERSION}".tar.gz hadoop
+  cp -a "${DEPENDENCY_DIR}"/hadoop "$INSTALL_PREFIX"
+  wget "${WGET_OPTS[@]}" -P "$INSTALL_PREFIX"/hadoop/share/hadoop/common/lib/ https://repo1.maven.org/maven2/junit/junit/4.11/junit-4.11.jar
+  # Needed for HADOOP 3.3.6 minicluster. Can remove after updating to 3.4.2.
+  wget "${WGET_OPTS[@]}" -P "$INSTALL_PREFIX"/hadoop/share/hadoop/mapreduce/ https://repo1.maven.org/maven2/org/mockito/mockito-core/2.23.4/mockito-core-2.23.4.jar
+}
+
+function install_uv {
+  # Default the uv tool/install dirs to INSTALL_PREFIX only when it is writable.
+  # On bare CI runners INSTALL_PREFIX (/usr/local) is root-owned, so a non-sudo
+  # `uv tool install` cannot symlink there and fails with "Permission denied";
+  # leaving these unset lets uv use its writable default (~/.local/bin).
+  # Container images set UV_TOOL_BIN_DIR via ENV, which is preserved here.
+  if [[ -w "$INSTALL_PREFIX/bin" ]]; then
+    export UV_TOOL_BIN_DIR="${UV_TOOL_BIN_DIR:-$INSTALL_PREFIX/bin}"
+    export UV_INSTALL_DIR="${UV_INSTALL_DIR:-$UV_TOOL_BIN_DIR}"
+  fi
+  if command -v uv >/dev/null 2>&1; then
+    echo "uv is already installed."
+  else
+    echo "Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+  fi
+  uv tool update-shell
+}
+
+function uv_install {
+  uv tool install "$@" || {
+    ret=$?
+    # exit code 2 means the binary already exists, so we can ignore that
+    [ "$ret" -eq 2 ] || exit "$ret"
+  }
+}

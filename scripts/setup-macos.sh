@@ -1,0 +1,229 @@
+#!/bin/bash
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# shellcheck source-path=SCRIPT_DIR
+
+# This script documents setting up a macOS host for Velox
+# development.  Running it should make you ready to compile.
+#
+# Environment variables:
+# * INSTALL_PREREQUISITES="N": Skip installation of brew/pip deps.
+# * PROMPT_ALWAYS_RESPOND="n": Automatically respond to interactive prompts.
+#     Use "n" to never wipe directories.
+#
+# You can also run individual functions below by specifying them as arguments:
+# $ scripts/setup-macos.sh install_googletest install_fmt
+#
+
+set -e # Exit on error.
+set -x # Print commands that are executed.
+
+SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
+export INSTALL_PREFIX=${INSTALL_PREFIX:-"$(pwd)/deps-install"}
+source "$SCRIPT_DIR"/setup-common.sh
+PYTHON_VENV=${PYTHON_VENV:-"${SCRIPT_DIR}/../.venv"}
+# Allow installed package headers to be picked up before brew package headers
+# by tagging the brew packages to be system packages.
+# This is used during package builds.
+OS_CXXFLAGS=" -isystem $(brew --prefix)/include "
+export OS_CXXFLAGS
+export CMAKE_POLICY_VERSION_MINIMUM="3.5"
+
+DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
+# gflags and glog are installed from source to ensure version compatibility.
+# Homebrew's glog 0.7.x has breaking API changes that are incompatible with folly.
+MACOS_VELOX_DEPS="bison double-conversion fast_float flex googletest icu4c libevent libsodium lz4 openssl simdjson snappy xz xxhash zstd"
+MACOS_BUILD_DEPS="ninja cmake"
+
+SUDO="${SUDO:-""}"
+
+function update_brew {
+  DEFAULT_BREW_PATH=/usr/local/bin/brew
+  if [ "$(arch)" == "arm64" ]; then
+    DEFAULT_BREW_PATH=$(which brew)
+  fi
+  BREW_PATH=${BREW_PATH:-$DEFAULT_BREW_PATH}
+  $BREW_PATH update --auto-update --verbose
+  $BREW_PATH developer off
+}
+
+function install_from_brew {
+  pkg=$1
+  if [[ ${pkg} =~ ^([0-9a-z-]*):([0-9](\.[0-9\])*)$ ]]; then
+    pkg=${BASH_REMATCH[1]}
+    ver=${BASH_REMATCH[2]}
+    echo "Installing '${pkg}' at '${ver}'"
+    tap="velox/local-${pkg}"
+    brew tap-new "${tap}"
+    brew extract "--version=${ver}" "${pkg}" "${tap}"
+    brew install "${tap}/${pkg}@${ver}" || (
+      echo "Failed to install ${tap}/${pkg}@${ver}"
+      exit 1
+    )
+  else
+    (brew install --formula "${pkg}" && echo "Installation of ${pkg} is successful" || brew upgrade --formula "$pkg") || (
+      echo "Failed to install ${pkg}"
+      exit 1
+    )
+  fi
+}
+
+function install_build_prerequisites {
+  for pkg in ${MACOS_BUILD_DEPS}; do
+    install_from_brew "${pkg}"
+  done
+  if [ ! -f "${PYTHON_VENV}"/pyvenv.cfg ]; then
+    echo "Creating Python Virtual Environment at ${PYTHON_VENV}"
+    python3 -m venv "${PYTHON_VENV}"
+  fi
+  source "${PYTHON_VENV}"/bin/activate
+  pip3 install regex pyyaml
+
+  # Install ccache
+  curl -L https://github.com/ccache/ccache/releases/download/v"${CCACHE_VERSION}"/ccache-"${CCACHE_VERSION}"-darwin.tar.gz -o ccache.tar.gz
+  tar -xf ccache.tar.gz
+  $SUDO mkdir -p "$INSTALL_PREFIX"/bin
+  $SUDO mv ccache-"${CCACHE_VERSION}"-darwin/ccache "$INSTALL_PREFIX"/bin
+  rm -rf ccache-"${CCACHE_VERSION}"-darwin ccache.tar.gz
+}
+
+function install_velox_deps_from_brew {
+  for pkg in ${MACOS_VELOX_DEPS}; do
+    install_from_brew "${pkg}"
+  done
+}
+
+function install_gflags {
+  wget_and_untar https://github.com/gflags/gflags/archive/"${GFLAGS_VERSION}".tar.gz gflags
+  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON
+}
+
+function install_s3 {
+  install_aws_deps
+
+  local MINIO_OS="darwin"
+  install_minio ${MINIO_OS}
+}
+
+function install_gcs {
+  install_gcs_sdk_cpp
+}
+
+function install_abfs {
+  install_azure_storage_sdk_cpp
+}
+
+function install_hdfs {
+  brew install libxml2 gsasl
+  install_hdfs_deps
+}
+
+function install_adapters {
+  run_and_time install_s3
+  run_and_time install_gcs
+  run_and_time install_abfs
+  run_and_time install_hdfs
+}
+
+function install_duckdb_clang {
+  clang_major_version=$(echo | clang -dM -E - | grep __clang_major__ | awk '{print $3}')
+  # Clang17 requires this. See issue #13215.
+  if [ "${clang_major_version}" -ge 17 ]; then
+    EXTRA_PKG_CXXFLAGS=" -Wno-missing-template-arg-list-after-template-kw" install_duckdb
+  else
+    install_duckdb
+  fi
+}
+
+function install_faiss_deps {
+  brew install openblas
+  brew install libomp
+}
+
+function install_faiss {
+  if [[ $BUILD_FAISS == "true" ]]; then
+    # Install OpenBLAS and libomp if not already installed
+    install_faiss_deps
+
+    wget_and_untar "https://github.com/facebookresearch/faiss/archive/refs/tags/v${FAISS_VERSION}.tar.gz" faiss
+    local cmake_args
+    cmake_args=(
+      -DFAISS_ENABLE_GPU=OFF
+      -DFAISS_ENABLE_PYTHON=OFF
+      -DFAISS_ENABLE_REMOTE=OFF
+      -DFAISS_ENABLE_GPU_TESTS=OFF
+      -DFAISS_ENABLE_BENCHMARKS=OFF
+      -DFAISS_ENABLE_GPU=OFF
+      -DFAISS_ENABLE_MKL=OFF
+    )
+
+    local libomp_prefix
+    libomp_prefix=$(brew --prefix libomp)
+    cmake_args+=(
+      "-DCMAKE_PREFIX_PATH=${libomp_prefix}"
+    )
+    cmake_install_dir faiss "${cmake_args[@]}"
+  fi
+}
+
+function install_velox_deps {
+  run_and_time install_velox_deps_from_brew
+  run_and_time install_ranges_v3
+  run_and_time install_double_conversion
+  run_and_time install_re2
+  run_and_time install_gflags
+  run_and_time install_glog
+  run_and_time install_boost
+  run_and_time install_protobuf
+  run_and_time install_fmt
+  run_and_time install_fast_float
+  run_and_time install_flatbuffers
+  run_and_time install_openzl
+  run_and_time install_folly
+  run_and_time install_fizz
+  run_and_time install_wangle
+  run_and_time install_mvfst
+  run_and_time install_fbthrift
+  run_and_time install_xsimd
+  run_and_time install_stemmer
+  run_and_time install_arrow
+  run_and_time install_duckdb_clang
+  run_and_time install_geos
+  run_and_time install_s2geometry
+  run_and_time install_faiss
+}
+
+(return 2>/dev/null) && return # If script was sourced, don't run commands.
+
+(
+  update_brew
+  if [[ $# -ne 0 ]]; then
+    for cmd in "$@"; do
+      run_and_time "${cmd}"
+    done
+    echo "All specified dependencies installed!"
+  else
+    if [ "${INSTALL_PREREQUISITES:-Y}" == "Y" ]; then
+      echo "Installing build dependencies"
+      run_and_time install_build_prerequisites
+    else
+      echo "Skipping installation of build dependencies since INSTALL_PREREQUISITES is not set"
+    fi
+    install_velox_deps
+    echo 'All deps for Velox installed! Now try "make"'
+  fi
+)
+
+echo "To reuse the installed dependencies for subsequent builds, consider adding this to your ~/.zshrc"
+echo "export INSTALL_PREFIX=$INSTALL_PREFIX"

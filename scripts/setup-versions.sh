@@ -1,0 +1,71 @@
+#!/bin/bash
+# shellcheck disable=SC2034
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The versions of the dependencies are also listed in the
+# README.md velox/CMake/resolve_dependency_modules/README.md
+# The versions should match the declared versions in this file.
+
+# Build dependencies versions.
+# Note: When updating FB_OS_VERSION, ensure that
+# CMake/third-party/FBThriftCppLibrary.cmake is updated
+# with the matching version from fbthrift:
+# <fbthrift_github>/build/fbcode_builder/CMake/FBThriftCppLibrary.cmake
+# The new FB_OS version of fbthrift might require changes such that thrift
+# files are generated properly on all platforms.
+FB_OS_VERSION="v2026.01.05.00"
+FMT_VERSION="11.2.0"
+BOOST_VERSION="boost-1.84.0"
+ARROW_VERSION="18.0.0"
+DUCKDB_VERSION="v0.8.1"
+PROTOBUF_VERSION="21.8"
+XSIMD_VERSION="10.0.0"
+SIMDJSON_VERSION="4.1.0"
+CPR_VERSION="1.10.5"
+DOUBLE_CONVERSION_VERSION="v3.1.5"
+RANGE_V3_VERSION="0.12.0"
+RE2_VERSION="2024-07-02"
+GFLAGS_VERSION="v2.3.0"
+GLOG_VERSION="v0.6.0"
+LZO_VERSION="2.10"
+SNAPPY_VERSION="1.1.8"
+STEMMER_VERSION="2.2.0"
+GEOS_VERSION="3.10.7"
+S2GEOMETRY_VERSION="0.12.0"
+# shellcheck disable=SC2034
+FAISS_VERSION="1.11.0"
+FAST_FLOAT_VERSION="v8.0.2"
+CCACHE_VERSION="4.11.3"
+# Only needed for VELOX_ENABLE_NIMBLE=ON. FSST is vendored under
+# velox/external/fsst, so it has no pin here. OpenZL is pinned to the revision
+# Nimble's own submodule carries rather than to v0.2.0, which predates the
+# cross-platform zstd handling it needs to configure here. FlatBuffers is held
+# at the version cuDF expects, since a system install of anything newer is
+# picked up by cuDF's own find_package() and breaks its build; see
+# CMake/resolve_dependency_modules/flatbuffers.cmake. Keep the two in sync.
+FLATBUFFERS_VERSION="24.3.25"
+OPENZL_VERSION="6b48fa4868160ed1e5c78ac422639615dd0dcf28"
+
+# Adapter related versions.
+ABSEIL_VERSION="20240116.2"
+GRPC_VERSION="1.48.1"
+CRC32_VERSION="1.1.2"
+NLOHMAN_JSON_VERSION="3.11.3"
+GOOGLE_CLOUD_CPP_VERSION="2.22.0"
+HADOOP_VERSION="3.3.6"
+AZURE_SDK_VERSION="12.8.0"
+MINIO_VERSION="2022-05-26T05-48-41Z"
+MINIO_BINARY_NAME="minio-2022-05-26"
+AWS_SDK_VERSION="1.11.654"

@@ -1,0 +1,143 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+velox_add_library(velox_type_signature OBJECT TypeSignature.cpp HEADERS TypeSignature.h)
+
+velox_link_libraries(velox_type_signature velox_common_base)
+
+velox_add_library(
+  velox_expression_functions
+  FunctionSignature.cpp
+  ReverseSignatureBinder.cpp
+  SignatureBinder.cpp
+  VectorFunctionListener.cpp
+  HEADERS
+  FunctionMetadata.h
+  FunctionSignature.h
+  ReverseSignatureBinder.h
+  SignatureBinder.h
+  VectorFunctionListener.h
+)
+
+velox_link_libraries(
+  velox_expression_functions
+  velox_common_base
+  velox_type_calculation
+  velox_type_signature
+  velox_signature_parser
+)
+
+velox_add_library(
+  velox_expression
+  BooleanMix.cpp
+  CaseExpr.cpp
+  CastExpr.cpp
+  CastHooks.cpp
+  CoalesceExpr.cpp
+  ConjunctExpr.cpp
+  ConstantExpr.cpp
+  EvalCtx.cpp
+  Expr.cpp
+  ExprCompiler.cpp
+  ExprRewriteRegistry.cpp
+  ExprOptimizer.cpp
+  ExprToSubfieldFilter.cpp
+  ExprUtils.cpp
+  FieldReference.cpp
+  FunctionCallToSpecialForm.cpp
+  GenericWriter.cpp
+  LambdaExpr.cpp
+  NullIfExpr.cpp
+  PeeledEncoding.cpp
+  PrestoCastHooks.cpp
+  RegisterSpecialForm.cpp
+  RowConstructor.cpp
+  SimpleFunctionRegistry.cpp
+  SpecialFormRegistry.cpp
+  CoalesceRewrite.cpp
+  ConjunctRewrite.cpp
+  SwitchExpr.cpp
+  SwitchRewrite.cpp
+  TryExpr.cpp
+  VectorFunction.cpp
+  HEADERS
+  BooleanMix.h
+  CaseExpr.h
+  CastExpr-inl.h
+  CastExpr.h
+  CastHooks.h
+  CastTypeChecker.h
+  CoalesceExpr.h
+  CoalesceRewrite.h
+  ComplexViewTypes.h
+  ComplexWriterTypes.h
+  ConjunctExpr.h
+  ConjunctRewrite.h
+  ConstantExpr.h
+  DecodedArgs.h
+  EvalCtx.h
+  Expr.h
+  ExprCompiler.h
+  ExprConstants.h
+  ExprOptimizer.h
+  ExprRewriteRegistry.h
+  ExprStats.h
+  ExprToSubfieldFilter.h
+  ExprUtils.h
+  FieldReference.h
+  FunctionCallToSpecialForm.h
+  KindToSimpleType.h
+  LambdaExpr.h
+  NullIfExpr.h
+  PeeledEncoding.h
+  PrestoCastHooks.h
+  RegisterSpecialForm.h
+  RowConstructor.h
+  ScopedVarSetter.h
+  SimpleFunctionAdapter.h
+  SimpleFunctionRegistry.h
+  SpecialForm.h
+  SpecialFormRegistry.h
+  StringWriter.h
+  SwitchExpr.h
+  SwitchRewrite.h
+  TryExpr.h
+  UdfTypeResolver.h
+  VariadicView.h
+  VectorFunction.h
+  VectorReaders.h
+  VectorWriters.h
+)
+
+velox_link_libraries(
+  velox_expression
+  velox_core
+  velox_vector
+  velox_common_base
+  velox_expression_functions
+  velox_functions_util
+  velox_trace
+  velox_type_tz
+  FastFloat::fast_float
+  Folly::folly
+)
+
+add_subdirectory(rpc)
+add_subdirectory(type_calculation)
+add_subdirectory(signature_parser)
+
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+  add_subdirectory(fuzzer)
+endif()

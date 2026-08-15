@@ -1,0 +1,705 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/exec/Spill.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/lib/window/tests/WindowTestBase.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
+
+using namespace facebook::velox::common::testutil;
+using namespace facebook::velox::exec::test;
+using namespace facebook::velox::functions::aggregate::test;
+using namespace facebook::velox::window::test;
+
+namespace facebook::velox::aggregate::test {
+
+namespace {
+
+class ArbitraryTest : public AggregationTestBase {
+ protected:
+  // Runs the clustered-input streaming-aggregation test loop.
+  // 'makeBatch' is called for each batch and must return a pair of RowVectors:
+  //   first  = flat reference data (loaded into DuckDB),
+  //   second = (possibly encoded) data fed to Velox.
+  // When both are the same vector the caller can return {v, v}.
+  void testClusteredInput(
+      std::function<std::pair<RowVectorPtr, RowVectorPtr>(int batchSize, int i)>
+          makeBatch) {
+    constexpr int kSize = 1000;
+    for (int batchRows : {kSize, 13}) {
+      std::vector<RowVectorPtr> flatData;
+      std::vector<RowVectorPtr> encodedData;
+      for (int i = 0; i < kSize; i += batchRows) {
+        auto batchSize = std::min(batchRows, kSize - i);
+        auto [flat, encoded] = makeBatch(batchSize, i);
+        flatData.push_back(flat);
+        encodedData.push_back(encoded);
+      }
+      createDuckDbTable(flatData);
+      for (bool mask : {false, true}) {
+        auto builder = PlanBuilder().values(encodedData);
+        std::string expected;
+        if (mask) {
+          builder.partialStreamingAggregation(
+              {"c0"}, {"arbitrary(c1)"}, {"c2"});
+          expected =
+              "select c0, first(c1) filter (where c2 and c1 is not null) from tmp group by 1";
+        } else {
+          builder.partialStreamingAggregation({"c0"}, {"arbitrary(c1)"});
+          expected =
+              "select c0, first(c1) filter (where c1 is not null) from tmp group by 1";
+        }
+        auto plan = builder.finalAggregation().planNode();
+        for (int32_t flushRows : {0, 1}) {
+          SCOPED_TRACE(
+              fmt::format(
+                  "mask={} batchRows={} flushRows={}",
+                  mask,
+                  batchRows,
+                  flushRows));
+          AssertQueryBuilder(plan, duckDbQueryRunner_)
+              .config(core::QueryConfig::kPreferredOutputBatchRows, batchRows)
+              .config(
+                  core::QueryConfig::kStreamingAggregationMinOutputBatchRows,
+                  flushRows)
+              .assertResults(expected);
+        }
+      }
+    }
+  }
+};
+
+TEST_F(ArbitraryTest, noNulls) {
+  // Create vectors without nulls because DuckDB's "first" aggregate does not
+  // ignore them.
+  const int32_t size = 10'000;
+  auto vectors = {makeRowVector(
+      {makeFlatVector<int64_t>(size, [](vector_size_t row) { return row; }),
+       makeFlatVector<int8_t>(size, [](vector_size_t row) { return row; }),
+       makeFlatVector<int16_t>(size, [](vector_size_t row) { return row; }),
+       makeFlatVector<int32_t>(size, [](vector_size_t row) { return row; }),
+       makeFlatVector<int64_t>(size, [](vector_size_t row) { return row; }),
+       makeFlatVector<float>(size, [](vector_size_t row) { return row; }),
+       makeFlatVector<double>(size, [](vector_size_t row) { return row; })})};
+  createDuckDbTable(vectors);
+
+  std::vector<std::string> aggregates = {
+      "arbitrary(c1)",
+      "arbitrary(c2)",
+      "any_value(c3)",
+      "arbitrary(c4)",
+      "arbitrary(c5)",
+      "any_value(c6)"};
+
+  // We do not test with TableScan because having two input splits makes the
+  // result non-deterministic.
+  // Global aggregation.
+  testAggregations(
+      vectors,
+      {},
+      aggregates,
+      "SELECT first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp");
+
+  // Group by aggregation.
+  testAggregations(
+      [&](PlanBuilder& builder) {
+        builder.values(vectors).project(
+            {"c0 % 10", "c1", "c2", "c3", "c4", "c5", "c6"});
+      },
+      {"p0"},
+      aggregates,
+      "SELECT c0 % 10, first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp GROUP BY 1");
+
+  // encodings: use filter to wrap aggregation inputs in a dictionary.
+  testAggregations(
+      [&](PlanBuilder& builder) {
+        builder.values(vectors)
+            .filter("c0 % 2 = 0")
+            .project({"c0 % 10", "c1", "c2", "c3", "c4", "c5", "c6"});
+      },
+      {"p0"},
+      aggregates,
+      "SELECT c0 % 10, first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1");
+
+  testAggregations(
+      [&](PlanBuilder& builder) {
+        builder.values(vectors).filter("c0 % 2 = 0");
+      },
+      {},
+      aggregates,
+      "SELECT first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp WHERE c0 % 2 = 0");
+}
+
+TEST_F(ArbitraryTest, nulls) {
+  auto vectors = {
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({1, 1, 2, 2, 3, 3}),
+           makeNullableFlatVector<int64_t>(
+               {std::nullopt, std::nullopt, std::nullopt, 4, std::nullopt, 5}),
+           makeNullableFlatVector<double>({
+               std::nullopt,
+               0.50,
+               std::nullopt,
+               std::nullopt,
+               0.25,
+               std::nullopt,
+           }),
+           makeNullConstant(TypeKind::UNKNOWN, 6)}),
+  };
+
+  // We do not test with TableScan because having two input splits makes the
+  // result non-deterministic. Also, unknown type is not supported in Writer
+  // yet. Global aggregation.
+  testAggregations(
+      vectors,
+      {},
+      {"arbitrary(c1)", "arbitrary(c2)", "arbitrary(c3)"},
+      "SELECT * FROM( VALUES (4, 0.50, NULL)) AS t");
+
+  // Group by aggregation.
+  testAggregations(
+      vectors,
+      {"c0"},
+      {"arbitrary(c1)", "arbitrary(c2)", "arbitrary(c3)"},
+      "SELECT * FROM(VALUES (1, NULL, 0.50, NULL), (2, 4, NULL, NULL), (3, 5, 0.25, NULL)) AS t");
+}
+
+TEST_F(ArbitraryTest, varchar) {
+  auto rowType = ROW({"c0", "c1"}, {INTEGER(), VARCHAR()});
+  auto vectors = makeVectors(rowType, 1000, 10);
+  createDuckDbTable(vectors);
+
+  // We do not test with TableScan because having two input splits makes the
+  // result non-deterministic.
+  testAggregations(
+      [&](PlanBuilder& builder) {
+        builder.values(vectors).project({"c0 % 11", "c1"});
+      },
+      {"p0"},
+      {"arbitrary(c1)"},
+      "SELECT c0 % 11, first(c1) FROM tmp WHERE c1 IS NOT NULL GROUP BY 1");
+
+  testAggregations(
+      vectors,
+      {},
+      {"arbitrary(c1)"},
+      "SELECT first(c1) FROM tmp WHERE c1 IS NOT NULL");
+
+  // encodings: use filter to wrap aggregation inputs in a dictionary.
+  testAggregations(
+      [&](PlanBuilder& builder) {
+        builder.values(vectors).filter("c0 % 2 = 0").project({"c0 % 11", "c1"});
+      },
+      {"p0"},
+      {"arbitrary(c1)"},
+      "SELECT c0 % 11, first(c1) FROM tmp WHERE c0 % 2 = 0 AND c1 IS NOT NULL GROUP BY 1");
+
+  testAggregations(
+      [&](PlanBuilder& builder) {
+        builder.values(vectors).filter("c0 % 2 = 0");
+      },
+      {},
+      {"arbitrary(c1)"},
+      "SELECT first(c1) FROM tmp WHERE c0 % 2 = 0 AND c1 IS NOT NULL");
+}
+
+TEST_F(ArbitraryTest, varcharConstAndNulls) {
+  auto vectors = {makeRowVector({
+      makeFlatVector<int32_t>(100, [](auto row) { return row % 7; }),
+      makeConstant("apple", 100),
+      makeNullConstant(TypeKind::VARCHAR, 100),
+  })};
+
+  createDuckDbTable(vectors);
+
+  testAggregations(
+      vectors,
+      {},
+      {"arbitrary(c1)", "arbitrary(c2)"},
+      "SELECT first(c1), first(c2) FROM tmp");
+
+  testAggregations(
+      vectors,
+      {"c0"},
+      {"arbitrary(c1)", "arbitrary(c2)"},
+      "SELECT c0, first(c1), first(c2) FROM tmp group by c0");
+}
+
+TEST_F(ArbitraryTest, numericConstAndNulls) {
+  auto vectors = {makeRowVector(
+      {makeFlatVector<int32_t>(100, [](auto row) { return row % 7; }),
+       makeConstant(11, 100),
+       makeNullConstant(TypeKind::BIGINT, 100)})};
+
+  createDuckDbTable(vectors);
+
+  testAggregations(
+      vectors,
+      {},
+      {"arbitrary(c1)", "arbitrary(c2)"},
+      "SELECT first(c1), first(c2) FROM tmp");
+
+  testAggregations(
+      vectors,
+      {"c0"},
+      {"arbitrary(c1)", "arbitrary(c2)"},
+      "SELECT c0, first(c1), first(c2) FROM tmp group by c0");
+}
+
+TEST_F(ArbitraryTest, boolean) {
+  auto data = makeRowVector({
+      // Grouping key.
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
+      // Input values: 'constant' within groups.
+      makeNullableFlatVector<bool>(
+          {true,
+           true,
+           false,
+           false,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           false}),
+      makeConstant<bool>(std::nullopt, 8),
+  });
+
+  auto expectedResult = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      makeNullableFlatVector<bool>({true, false, std::nullopt, false}),
+  });
+
+  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+
+  // Global aggregation.
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({}, {"arbitrary(c1)"})
+                  .planNode();
+
+  assertQuery(plan, "SELECT true");
+
+  testAggregations({data}, {}, {"arbitrary(c2)"}, "SELECT null");
+}
+
+TEST_F(ArbitraryTest, timestamp) {
+  auto data = makeRowVector({
+      // Grouping key.
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
+      // Input values: constant within groups: 100.1, 100.1, 200.2, 200.2, etc.
+      makeNullableFlatVector<Timestamp>(
+          {Timestamp(100, 1),
+           Timestamp(100, 1),
+           Timestamp(200, 2),
+           Timestamp(200, 2),
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           Timestamp(100, 4)}),
+      makeConstant<Timestamp>(std::nullopt, 8),
+  });
+
+  auto expectedResult = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      makeNullableFlatVector<Timestamp>(
+          {Timestamp(100, 1),
+           Timestamp(200, 2),
+           std::nullopt,
+           Timestamp(100, 4)}),
+  });
+
+  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+
+  // Global aggregation.
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({}, {"arbitrary(c1)"})
+                  .planNode();
+
+  auto result = readSingleValue(plan);
+  ASSERT_TRUE(!result.isNull());
+  ASSERT_EQ(result.kind(), TypeKind::TIMESTAMP);
+
+  auto timestamp = result.value<Timestamp>();
+  ASSERT_EQ(timestamp, Timestamp(100, 1));
+
+  testAggregations({data}, {}, {"arbitrary(c2)"}, "SELECT null");
+}
+
+TEST_F(ArbitraryTest, date) {
+  auto data = makeRowVector({
+      // Grouping key.
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
+      // Input values: constant within groups.
+      makeNullableFlatVector<int32_t>(
+          {125, 125, 126, 126, std::nullopt, std::nullopt, std::nullopt, 128},
+          DATE()),
+      makeConstant<Timestamp>(std::nullopt, 8),
+  });
+
+  auto expectedResult = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      makeNullableFlatVector<int32_t>({125, 126, std::nullopt, 128}, DATE()),
+  });
+
+  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+
+  // Global aggregation.
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({}, {"arbitrary(c1)"})
+                  .planNode();
+
+  auto result = readSingleValue(plan);
+  ASSERT_TRUE(!result.isNull());
+  ASSERT_EQ(result.kind(), TypeKind::INTEGER);
+
+  auto date = result.value<int32_t>();
+  ASSERT_EQ(date, 125);
+
+  testAggregations({data}, {}, {"arbitrary(c2)"}, "SELECT null");
+}
+
+TEST_F(ArbitraryTest, interval) {
+  auto data = makeRowVector({
+      // Grouping key.
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
+      // Input values: constant within groups.
+      makeNullableFlatVector<int64_t>(
+          {125, 125, 126, 126, std::nullopt, std::nullopt, std::nullopt, 128},
+          INTERVAL_DAY_TIME()),
+      makeConstant<Timestamp>(std::nullopt, 8),
+  });
+
+  auto expectedResult = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      makeNullableFlatVector<int64_t>(
+          {125, 126, std::nullopt, 128}, INTERVAL_DAY_TIME()),
+  });
+
+  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+
+  // Global aggregation.
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({}, {"arbitrary(c1)"})
+                  .planNode();
+
+  auto interval = readSingleValue(plan);
+  ASSERT_EQ(interval.value<int64_t>(), 125);
+
+  testAggregations({data}, {}, {"arbitrary(c2)"}, "SELECT null");
+}
+
+TEST_F(ArbitraryTest, longDecimal) {
+  auto data = makeRowVector(
+      {// Grouping key.
+       makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
+       makeNullableFlatVector<int128_t>(
+           {HugeInt::build(10, 100),
+            HugeInt::build(10, 100),
+            HugeInt::build(10, 200),
+            HugeInt::build(10, 200),
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            HugeInt::build(10, 400)},
+           DECIMAL(38, 8))});
+
+  auto expectedResult = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      makeNullableFlatVector<int128_t>(
+          {HugeInt::build(10, 100),
+           HugeInt::build(10, 200),
+           std::nullopt,
+           HugeInt::build(10, 400)},
+          DECIMAL(38, 8)),
+  });
+
+  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+}
+
+TEST_F(ArbitraryTest, shortDecimal) {
+  auto data = makeRowVector(
+      {// Grouping key.
+       makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
+       makeNullableFlatVector<int64_t>(
+           {10000000000000000,
+            10000000000000000,
+            20000000000000000,
+            20000000000000000,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            40000000000000000},
+           DECIMAL(15, 2))});
+
+  auto expectedResult = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      makeNullableFlatVector<int64_t>(
+          {10000000000000000,
+           20000000000000000,
+           std::nullopt,
+           40000000000000000},
+          DECIMAL(15, 2)),
+  });
+
+  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+}
+
+TEST_F(ArbitraryTest, ipAddress) {
+  auto data = makeRowVector(
+      {// Grouping key.
+       makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
+       // IPADDRESS values
+       makeNullableFlatVector<int128_t>(
+           {ipaddress::tryGetIPv6asInt128FromString("192.168.1.1").value(),
+            ipaddress::tryGetIPv6asInt128FromString("192.168.1.1").value(),
+            ipaddress::tryGetIPv6asInt128FromString("10.0.0.1").value(),
+            ipaddress::tryGetIPv6asInt128FromString("10.0.0.1").value(),
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            ipaddress::tryGetIPv6asInt128FromString("172.16.0.1").value()},
+           IPADDRESS())});
+
+  auto expectedResult = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3, 4}),
+       makeNullableFlatVector<int128_t>(
+           {ipaddress::tryGetIPv6asInt128FromString("192.168.1.1").value(),
+            ipaddress::tryGetIPv6asInt128FromString("10.0.0.1").value(),
+            std::nullopt,
+            ipaddress::tryGetIPv6asInt128FromString("172.16.0.1").value()},
+           IPADDRESS())});
+
+  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+}
+
+class ArbitraryWindowTest : public WindowTestBase {};
+
+TEST_F(ArbitraryWindowTest, basic) {
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+       makeArrayVector<double>({{1.0}, {2.0}, {3.0}, {4.0}, {5.0}}),
+       makeFlatVector<bool>({false, false, false, false, false})});
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+       makeArrayVector<double>({{1.0}, {2.0}, {3.0}, {4.0}, {5.0}}),
+       makeFlatVector<bool>({false, false, false, false, false}),
+       makeFlatVector<int64_t>({1, 1, 1, 1, 1})});
+  window::test::WindowTestBase::testWindowFunction(
+      {data},
+      "arbitrary(c0)",
+      "partition by c2 order by c0",
+      "range between unbounded preceding and current row",
+      expected);
+
+  expected = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+       makeArrayVector<double>({{1.0}, {2.0}, {3.0}, {4.0}, {5.0}}),
+       makeFlatVector<bool>({false, false, false, false, false}),
+       makeArrayVector<double>({{1.0}, {1.0}, {1.0}, {1.0}, {1.0}})});
+  window::test::WindowTestBase::testWindowFunction(
+      {data},
+      "arbitrary(c1)",
+      "partition by c2 order by c0",
+      "range between unbounded preceding and current row",
+      expected);
+}
+
+TEST_F(ArbitraryTest, spilling) {
+  auto data = makeRowVector(
+      {makeFlatVector<float>({0.1, 0.2, 0.3, 0.4, 0.5, 0.6}),
+       makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5, 6})});
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5, 6}),
+       makeNullableFlatVector<float>({0.1, 0.2, 0.3, 0.4, 0.5, 0.6})});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"c1"}, {"arbitrary(c0)"})
+                  .planNode();
+
+  std::shared_ptr<TempDirectoryPath> spillDirectory;
+  AssertQueryBuilder builder(plan);
+
+  exec::TestScopedSpillInjection scopedSpillInjection(100);
+  spillDirectory = TempDirectoryPath::create();
+  builder.spillDirectory(spillDirectory->getPath())
+      .config(core::QueryConfig::kSpillEnabled, "true")
+      .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+      .config(core::QueryConfig::kSpillNumPartitionBits, "0");
+
+  auto result = builder.maxDrivers(2).copyResults(pool_.get());
+  ::facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(ArbitraryTest, clusteredInput) {
+  testClusteredInput([&](int batchSize, int i) {
+    auto row = makeRowVector({
+        makeFlatVector<int64_t>(
+            batchSize, [&](auto j) { return (i + j) / 17; }),
+        makeFlatVector<std::string>(
+            batchSize, [&](auto j) { return std::to_string(i + j); }),
+        makeFlatVector<bool>(
+            batchSize, [&](auto j) { return (i + j) % 11 == 0; }),
+    });
+    return std::make_pair(row, row);
+  });
+}
+
+// Tests that addRawClusteredInput correctly decodes dictionary-encoded inputs
+// and stores the base vector in the accumulator. Uses a non-identity dictionary
+// mapping (reversed) so that storing the wrong vector/index pair would produce
+// incorrect results.
+TEST_F(ArbitraryTest, clusteredInputDictionaryEncoded) {
+  testClusteredInput([&](int batchSize, int i) {
+    auto keys = makeFlatVector<int64_t>(
+        batchSize, [&](auto j) { return (i + j) / 17; });
+    auto values = makeFlatVector<std::string>(
+        batchSize, [&](auto j) { return std::to_string(i + j); });
+    auto mask = makeFlatVector<bool>(
+        batchSize, [&](auto j) { return (i + j) % 11 == 0; });
+
+    auto reversedBase = makeFlatVector<std::string>(batchSize, [&](auto j) {
+      return std::to_string(i + (batchSize - 1 - j));
+    });
+    auto indices =
+        makeIndices(batchSize, [&](auto idx) { return batchSize - 1 - idx; });
+    auto dictValues =
+        BaseVector::wrapInDictionary(nullptr, indices, batchSize, reversedBase);
+
+    return std::make_pair(
+        makeRowVector({keys, values, mask}),
+        makeRowVector({keys, dictValues, mask}));
+  });
+}
+
+// Tests that addRawClusteredInput correctly decodes constant-encoded inputs.
+// When input is a ConstantVector, decodeAndGetBase returns the underlying flat
+// vector and the decoded index, both of which must be stored consistently in
+// the accumulator.
+TEST_F(ArbitraryTest, clusteredInputConstantEncoded) {
+  testClusteredInput([&](int batchSize, int i) {
+    auto keys = makeFlatVector<int64_t>(
+        batchSize, [&](auto j) { return (i + j) / 17; });
+    auto constantValue = fmt::format("batch_{}", i);
+    auto values = makeFlatVector<std::string>(
+        batchSize, [&](auto /*j*/) { return constantValue; });
+    auto mask = makeFlatVector<bool>(
+        batchSize, [&](auto j) { return (i + j) % 11 == 0; });
+
+    auto singleValue =
+        makeFlatVector<std::string>(1, [&](auto) { return constantValue; });
+    auto constValues = BaseVector::wrapInConstant(batchSize, 0, singleValue);
+
+    return std::make_pair(
+        makeRowVector({keys, values, mask}),
+        makeRowVector({keys, constValues, mask}));
+  });
+}
+
+// Tests dictionary-encoded inputs with nulls injected via the dictionary's null
+// bitmap. This exercises the null-skipping branch in addRawClusteredInput with
+// encoded vectors where the accumulator must correctly store the base vector
+// and decoded index for the first non-null row.
+TEST_F(ArbitraryTest, clusteredInputDictionaryEncodedWithNulls) {
+  testClusteredInput([&](int batchSize, int i) {
+    auto keys = makeFlatVector<int64_t>(
+        batchSize, [&](auto j) { return (i + j) / 17; });
+    auto values = makeFlatVector<std::string>(
+        batchSize,
+        [&](auto j) { return std::to_string(i + j); },
+        [&](auto j) { return (i + j) % 3 == 0; });
+    auto mask = makeFlatVector<bool>(
+        batchSize, [&](auto j) { return (i + j) % 11 == 0; });
+
+    auto reversedBase = makeFlatVector<std::string>(batchSize, [&](auto j) {
+      return std::to_string(i + (batchSize - 1 - j));
+    });
+    auto indices =
+        makeIndices(batchSize, [&](auto idx) { return batchSize - 1 - idx; });
+    auto nulls = makeNulls(batchSize, [&](auto j) { return (i + j) % 3 == 0; });
+    auto dictValues =
+        BaseVector::wrapInDictionary(nulls, indices, batchSize, reversedBase);
+
+    return std::make_pair(
+        makeRowVector({keys, values, mask}),
+        makeRowVector({keys, dictValues, mask}));
+  });
+}
+
+// Tests the optimization in NonNumericArbitrary::extractValues where when the
+// source vector size equals numGroups for a single contiguous range, we assign
+// the source vector directly instead of slicing.
+TEST_F(ArbitraryTest, clusteredInputDirectVectorAssign) {
+  // Each batch has exactly one row per distinct group so that when
+  // extractValues runs, the source vector size matches numGroups, triggering
+  // the direct assignment path (no slice).
+  constexpr int kNumGroups = 100;
+  std::vector<RowVectorPtr> data;
+  data.push_back(makeRowVector({
+      makeFlatVector<int64_t>(kNumGroups, [](auto j) { return j; }),
+      makeFlatVector<std::string>(
+          kNumGroups, [](auto j) { return std::to_string(j * 10); }),
+  }));
+
+  createDuckDbTable(data);
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialStreamingAggregation({"c0"}, {"arbitrary(c1)"})
+                  .finalAggregation()
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, kNumGroups)
+      .config(core::QueryConfig::kStreamingAggregationMinOutputBatchRows, 0)
+      .assertResults("select c0, first(c1) from tmp group by 1");
+}
+
+// Also verify the direct vector assign path with multiple batches where the
+// source vector size may differ from numGroups (exercises the slice fallback).
+TEST_F(ArbitraryTest, clusteredInputSliceFallback) {
+  // Use a larger batch size than the number of groups so that the source
+  // vector size exceeds numGroups, exercising the existing slice path.
+  constexpr int kSize = 200;
+  constexpr int kGroupDivisor = 5;
+  std::vector<RowVectorPtr> data;
+  data.push_back(makeRowVector({
+      makeFlatVector<int64_t>(kSize, [](auto j) { return j / kGroupDivisor; }),
+      makeFlatVector<std::string>(
+          kSize, [](auto j) { return std::to_string(j); }),
+  }));
+
+  createDuckDbTable(data);
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialStreamingAggregation({"c0"}, {"arbitrary(c1)"})
+                  .finalAggregation()
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, kSize)
+      .config(core::QueryConfig::kStreamingAggregationMinOutputBatchRows, 0)
+      .assertResults("select c0, first(c1) from tmp group by 1");
+}
+
+} // namespace
+} // namespace facebook::velox::aggregate::test

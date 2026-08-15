@@ -1,0 +1,184 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+#include "velox/exec/HashPartitionFunction.h"
+#include "velox/exec/HashTable.h"
+#include "velox/exec/Operator.h"
+#include "velox/exec/Spiller.h"
+
+namespace facebook::velox::exec {
+class RowNumberHashTableSpiller;
+class RowNumberInputSpiller;
+
+class RowNumber : public Operator {
+ public:
+  RowNumber(
+      int32_t operatorId,
+      DriverCtx* driverCtx,
+      const std::shared_ptr<const core::RowNumberNode>& rowNumberNode);
+
+  void addInput(RowVectorPtr input) override;
+
+  void noMoreInput() override;
+
+  RowVectorPtr getOutput() override;
+
+  bool needsInput() const override {
+    // Guard on 'input_ == nullptr': RowNumber buffers a single input batch in
+    // 'input_' and addInput() overwrites it. Without this guard, when a
+    // downstream operator applies backpressure (e.g. a BATCH-mode RPC operator
+    // returning needsInput()=false while async requests are in flight), the
+    // Driver keeps feeding this operator and addInput() silently overwrites the
+    // undrained batch, dropping its rows. Mirrors the single-buffer pattern in
+    // Expand/MarkDistinct/Unnest/AssignUniqueId.
+    return !noMoreInput_ && !finishedEarly_ && input_ == nullptr;
+  }
+
+  BlockingReason isBlocked(ContinueFuture* /* unused */) override {
+    return BlockingReason::kNotBlocked;
+  }
+
+  bool isFinished() override {
+    return (noMoreInput_ && input_ == nullptr &&
+            spillInputReader_ == nullptr) ||
+        finishedEarly_;
+  }
+
+  void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
+      override;
+
+ private:
+  bool spillEnabled() const {
+    return spillConfig_.has_value();
+  }
+
+  void setupInputSpiller(const SpillPartitionIdSet& spillPartitionIdSet);
+
+  void ensureInputFits(const RowVectorPtr& input);
+
+  void spillInput(const RowVectorPtr& input, memory::MemoryPool* pool);
+
+  void spill();
+
+  void restoreNextSpillPartition();
+
+  SpillPartitionIdSet spillHashTable();
+
+  int64_t numRows(char* partition);
+
+  void setNumRows(char* partition, int64_t numRows);
+
+  RowVectorPtr getOutputForSinglePartition();
+
+  FlatVector<int64_t>& getOrCreateRowNumberVector(vector_size_t size);
+
+  // Finishes the current input spilling and restore the next processing
+  // partition.
+  void finishSpillInputAndRestoreNext();
+
+  // Used by recursive spill processing to read the spilled input data from the
+  // previous spill run through 'spillInputReader_' and then spill them back
+  // into a number of sub-partitions. After that, the function restores one of
+  // the newly spilled partitions and resets 'spillInputReader_' accordingly.
+  void recursiveSpillInput();
+
+  // Set 'spillPartitionBits_' for (recursive) spill. If 'restoredPartitionId'
+  // is not null, use it to set 'spillPartitionBits_', otherwise use
+  // 'spillConfig_'. If the new 'spillPartitionBits_' exceeds the
+  // 'maxSpillLevel', set 'exceededMaxSpillLevelLimit_' to true.
+  //
+  // NOTE: we don't increment 'spillMaxLevelExceededCount' here, as the actual
+  // increment happens in the 'reclaim()' method if
+  // 'exceededMaxSpillLevelLimit_' is true.
+  void setSpillPartitionBits(
+      const SpillPartitionId* restoredPartitionId = nullptr);
+
+  const std::optional<int32_t> limit_;
+  const bool generateRowNumber_;
+
+  // Hash table to store number of rows seen so far per partition. Not used if
+  // there are no partitioning keys.
+  std::unique_ptr<BaseHashTable> table_;
+  std::unique_ptr<HashLookup> lookup_;
+  int32_t numRowsOffset_;
+
+  // Total number of input rows. Used when there are no partitioning keys and
+  // therefore no hash table.
+  int64_t numTotalInput_{0};
+
+  // Boolean indicating that the operator finished processing before seeing all
+  // the input. This happens when there are no partitioning keys and the
+  // operator already received 'limit_' rows.
+  bool finishedEarly_{false};
+
+  RowTypePtr inputType_;
+
+  // The spill partition bits used by both hash table content spill and input
+  // data spill.
+  HashBitRange spillPartitionBits_;
+
+  // Used to restore previously spilled hash table.
+  std::unique_ptr<UnorderedStreamReader<BatchStream>> spillHashTableReader_;
+
+  SpillPartitionSet spillHashTablePartitionSet_;
+
+  // Spiller for input received after spilling has been triggered.
+  std::unique_ptr<NoRowContainerSpiller> inputSpiller_;
+
+  // Used to restore previously spilled input.
+  std::unique_ptr<UnorderedStreamReader<BatchStream>> spillInputReader_;
+
+  // The spill partition id for the currently restoring partition, corresponding
+  // to 'spillInputReader_'. Not set if row number hasn't spilled yet.
+  std::optional<SpillPartitionId> restoringPartitionId_;
+
+  SpillPartitionSet spillInputPartitionSet_;
+
+  // Used to calculate the spill partition numbers of the inputs.
+  std::unique_ptr<HashPartitionFunction> spillHashFunction_;
+
+  // The cpu may be voluntarily yield after running too long when processing
+  // input from spilled file.
+  bool yield_{false};
+
+  bool exceededMaxSpillLevelLimit_{false};
+};
+
+class RowNumberHashTableSpiller : public SpillerBase {
+ public:
+  static constexpr std::string_view kType = "RowNumberHashTableSpiller";
+
+  RowNumberHashTableSpiller(
+      RowContainer* container,
+      std::optional<SpillPartitionId> parentId,
+      RowTypePtr rowType,
+      HashBitRange bits,
+      const common::SpillConfig* spillConfig,
+      exec::SpillStats* spillStats);
+
+  void spill();
+
+ private:
+  bool needSort() const override {
+    return false;
+  }
+
+  std::string type() const override {
+    return std::string(kType);
+  }
+};
+} // namespace facebook::velox::exec

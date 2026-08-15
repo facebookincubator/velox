@@ -1,0 +1,563 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/expression/ExprCompiler.h"
+#include "velox/expression/ConstantExpr.h"
+#include "velox/expression/ExprConstants.h"
+#include "velox/expression/ExprOptimizer.h"
+#include "velox/expression/ExprRewriteRegistry.h"
+#include "velox/expression/ExprUtils.h"
+#include "velox/expression/FieldReference.h"
+#include "velox/expression/LambdaExpr.h"
+#include "velox/expression/NullIfExpr.h"
+#include "velox/expression/RowConstructor.h"
+#include "velox/expression/SimpleFunctionRegistry.h"
+#include "velox/expression/SpecialFormRegistry.h"
+
+namespace facebook::velox::exec {
+
+namespace {
+
+using core::ITypedExpr;
+using core::TypedExprPtr;
+
+/// Parses a comma-separated list of function names that should turn on CPU
+/// tracking.
+std::unordered_set<std::string> fetchCallExprNamesForCpuTracking(
+    const core::QueryConfig& queryConfig) {
+  std::vector<std::string> nameList;
+  folly::split(
+      ',', queryConfig.exprTrackCpuUsageForFunctions(), nameList, true);
+
+  std::unordered_set<std::string> result;
+  for (auto& name : nameList) {
+    // Sanitize function names.
+    folly::toLowerAscii(name);
+    if (!name.empty()) {
+      result.insert(std::move(name));
+    }
+  }
+  return result;
+}
+
+// Map for deduplicating ITypedExpr trees.
+using ExprDedupMap = folly::F14FastMap<
+    const ITypedExpr*,
+    std::shared_ptr<Expr>,
+    core::ITypedExprHasher,
+    core::ITypedExprComparer>;
+
+struct CompilerCtx {
+  core::QueryCtx* queryCtx;
+  memory::MemoryPool* pool;
+
+  /// Whether to enable constant folding.
+  bool enableConstantFolding;
+
+  /// Names of simple or vector functions within the expression tree being
+  /// compiled that support flattening.
+  std::unordered_set<std::string> flatteningCandidates;
+
+  /// List of call expression names whose CPU usage should be tracked.
+  /// Extracted from the query config.
+  std::unordered_set<std::string> cpuUsageTrackingCandidates;
+};
+
+/// Represents a lexical scope. A top level scope corresponds to a top
+/// level Expr and is shared among the Exprs of the ExprSet. Each
+/// lambda introduces a new Scope where the 'locals' are the formal
+/// parameters of the lambda. References to variables not defined in
+/// a lambda's Scope are detected and added as captures to the
+/// lambda. Common subexpression elimination can only take place
+/// within one Scope.
+struct Scope {
+  // Names of variables declared in this Scope, i.e. formal parameters of a
+  // lambda. Empty for a top level Scope.
+  const std::vector<std::string> locals;
+
+  // The enclosing scope, nullptr if top level scope.
+  Scope* parent{nullptr};
+  ExprSet* exprSet{nullptr};
+
+  // Field names of an enclosing scope referenced from this or an inner scope.
+  std::vector<std::string> capture;
+  // Corresponds 1:1 to 'capture'.
+  std::vector<FieldReference*> captureReferences;
+  // Corresponds 1:1 to 'capture'.
+  std::vector<const ITypedExpr*> captureFieldAccesses;
+  // Deduplicatable ITypedExprs. Only applies within the one scope.
+  ExprDedupMap visited;
+
+  std::vector<TypedExprPtr> rewrittenExpressions;
+
+  Scope(std::vector<std::string>&& _locals, Scope* _parent, ExprSet* _exprSet)
+      : locals(std::move(_locals)), parent(_parent), exprSet(_exprSet) {}
+
+  void addCapture(FieldReference* reference, const ITypedExpr* fieldAccess) {
+    capture.emplace_back(reference->field());
+    captureReferences.emplace_back(reference);
+    captureFieldAccesses.emplace_back(fieldAccess);
+  }
+};
+
+std::optional<std::string> shouldFlatten(
+    const TypedExprPtr& expr,
+    const std::unordered_set<std::string>& flatteningCandidates) {
+  if (expr->isCallKind()) {
+    const auto* call = expr->asUnchecked<core::CallTypedExpr>();
+    // Currently only supports the most common case for flattening where all
+    // inputs are of the same type.
+    if (call->name() == expression::kAnd || call->name() == expression::kOr ||
+        (flatteningCandidates.count(call->name()) &&
+         expression::utils::allInputTypesEquivalent(expr))) {
+      return call->name();
+    }
+  }
+  return std::nullopt;
+}
+
+ExprPtr getAlreadyCompiled(
+    const ITypedExpr* expr,
+    const core::QueryConfig& config,
+    ExprDedupMap* visited) {
+  auto iter = visited->find(expr);
+  if (iter == visited->end()) {
+    return nullptr;
+  }
+
+  const ExprPtr& alreadyCompiled = iter->second;
+  if (alreadyCompiled->isDeterministic()) {
+    return alreadyCompiled;
+  }
+
+  return config.exprDedupNonDeterministic() ? alreadyCompiled : nullptr;
+}
+
+ExprPtr compileExpression(
+    const TypedExprPtr& expr,
+    Scope* scope,
+    const CompilerCtx& ctx);
+
+std::vector<ExprPtr>
+compileInputs(const TypedExprPtr& expr, Scope* scope, const CompilerCtx& ctx) {
+  std::vector<ExprPtr> compiledInputs;
+  auto flattenIf = shouldFlatten(expr, ctx.flatteningCandidates);
+  for (auto& input : expr->inputs()) {
+    if (input->isInputKind()) {
+      VELOX_CHECK(
+          expr->isFieldAccessKind(),
+          "An InputReference can only occur under a FieldReference");
+    } else {
+      if (flattenIf.has_value()) {
+        std::vector<TypedExprPtr> flat;
+        expression::utils::flattenInput(input, flattenIf.value(), flat);
+        for (auto& input_2 : flat) {
+          compiledInputs.push_back(compileExpression(input_2, scope, ctx));
+        }
+      } else {
+        compiledInputs.push_back(compileExpression(input, scope, ctx));
+      }
+    }
+  }
+  return compiledInputs;
+}
+
+std::vector<TypePtr> getTypes(const std::vector<ExprPtr>& exprs) {
+  std::vector<TypePtr> types;
+  types.reserve(exprs.size());
+  for (auto& expr : exprs) {
+    types.emplace_back(expr->type());
+  }
+  return types;
+}
+
+ExprPtr getSpecialForm(
+    const core::QueryConfig& config,
+    const std::string& name,
+    const TypePtr& type,
+    std::vector<ExprPtr>&& compiledChildren,
+    bool trackCpuUsage) {
+  // If we just check the output of constructSpecialForm we'll have moved
+  // compiledChildren, and if the function isn't a special form we'll still need
+  // compiledChildren. Splitting the check in two avoids this use after move.
+  if (isFunctionCallToSpecialFormRegistered(name)) {
+    return constructSpecialForm(
+        name, type, std::move(compiledChildren), trackCpuUsage, config);
+  }
+
+  return nullptr;
+}
+
+void captureFieldReference(
+    FieldReference* reference,
+    const ITypedExpr* fieldAccess,
+    Scope* const referenceScope) {
+  auto& field = reference->field();
+  for (auto* scope = referenceScope; scope->parent; scope = scope->parent) {
+    const auto& locals = scope->locals;
+    auto& capture = scope->capture;
+    if (std::find(locals.begin(), locals.end(), field) != locals.end() ||
+        std::find(capture.begin(), capture.end(), field) != capture.end()) {
+      // Return if the field is defined or captured in this scope.
+      return;
+    }
+    scope->addCapture(reference, fieldAccess);
+  }
+}
+
+std::shared_ptr<Expr> compileLambda(
+    const core::LambdaTypedExpr* lambda,
+    Scope* scope,
+    const CompilerCtx& ctx) {
+  auto signature = lambda->signature();
+  auto parameterNames = signature->names();
+  Scope lambdaScope(std::move(parameterNames), scope, scope->exprSet);
+  auto body = compileExpression(lambda->body(), &lambdaScope, ctx);
+
+  // The lambda depends on the captures. For a lambda caller to be
+  // able to peel off encodings, the captures too must be peelable.
+  std::vector<std::shared_ptr<FieldReference>> captureReferences;
+  captureReferences.reserve(lambdaScope.capture.size());
+  for (auto i = 0; i < lambdaScope.capture.size(); ++i) {
+    auto expr = lambdaScope.captureFieldAccesses[i];
+    auto reference =
+        getAlreadyCompiled(expr, ctx.queryCtx->queryConfig(), &scope->visited);
+    if (!reference) {
+      auto inner = lambdaScope.captureReferences[i];
+      reference = std::make_shared<FieldReference>(
+          inner->type(), std::vector<ExprPtr>{}, inner->field());
+      scope->visited[expr] = reference;
+    }
+    captureReferences.emplace_back(
+        std::static_pointer_cast<FieldReference>(reference));
+  }
+
+  auto functionType = std::make_shared<FunctionType>(
+      std::vector<TypePtr>(signature->children()), body->type());
+  return std::make_shared<LambdaExpr>(
+      std::move(functionType),
+      std::move(signature),
+      std::move(captureReferences),
+      std::move(body),
+      ctx.queryCtx->queryConfig().exprTrackCpuUsage());
+}
+
+/// Returns a vector aligned with exprs vector where elements that correspond to
+/// constant expressions are set to constant values of these expressions.
+/// Elements that correspond to non-constant expressions are set to null.
+std::vector<VectorPtr> getConstantInputs(const std::vector<ExprPtr>& exprs) {
+  std::vector<VectorPtr> constants;
+  constants.reserve(exprs.size());
+  for (auto& expr : exprs) {
+    if (expr->isConstant()) {
+      auto* constantExpr = dynamic_cast<ConstantExpr*>(expr.get());
+      constants.emplace_back(constantExpr->value());
+    } else {
+      constants.emplace_back(nullptr);
+    }
+  }
+  return constants;
+}
+
+ExprPtr compileCall(
+    const TypedExprPtr& expr,
+    std::vector<ExprPtr> inputs,
+    bool trackCpuUsage,
+    const CompilerCtx& ctx) {
+  const auto* call = expr->asUnchecked<core::CallTypedExpr>();
+  // Determine if CPU tracking should be enabled for this specific expression.
+  if (!trackCpuUsage && !ctx.cpuUsageTrackingCandidates.empty()) {
+    trackCpuUsage = ctx.cpuUsageTrackingCandidates.count(call->name()) > 0;
+  }
+  const auto& resultType = expr->type();
+  const auto inputTypes = getTypes(inputs);
+
+  if (auto specialForm = specialFormRegistry().getSpecialForm(call->name())) {
+    return specialForm->constructSpecialForm(
+        resultType,
+        std::move(inputs),
+        trackCpuUsage,
+        ctx.queryCtx->queryConfig());
+  }
+
+  std::shared_ptr<VectorFunction> vectorFunction;
+  VectorFunctionMetadata metadata;
+
+  if (auto functionWithMetadata = getVectorFunctionWithMetadata(
+          call->name(),
+          inputTypes,
+          getConstantInputs(inputs),
+          ctx.queryCtx->queryConfig())) {
+    vectorFunction = functionWithMetadata->first;
+    metadata = functionWithMetadata->second;
+  } else if (
+      auto simpleFunctionEntry =
+          simpleFunctions().resolveFunction(call->name(), inputTypes)) {
+    VELOX_USER_CHECK(
+        resultType->equivalent(*simpleFunctionEntry->type().get()),
+        "Found incompatible return types for '{}' ({} vs. {}) "
+        "for input types ({}).",
+        call->name(),
+        simpleFunctionEntry->type(),
+        resultType,
+        folly::join(", ", inputTypes));
+
+    vectorFunction =
+        simpleFunctionEntry->createFunction()->createVectorFunction(
+            inputTypes,
+            getConstantInputs(inputs),
+            ctx.queryCtx->queryConfig(),
+            ctx.pool);
+    metadata = simpleFunctionEntry->metadata();
+  } else {
+    const auto& functionName = call->name();
+    auto vectorFunctionSignatures = getVectorFunctionSignatures(functionName);
+    auto simpleFunctionSignatures =
+        simpleFunctions().getFunctionSignatures(functionName);
+    std::vector<std::string> signatures;
+
+    if (vectorFunctionSignatures.has_value()) {
+      for (const auto& signature : vectorFunctionSignatures.value()) {
+        signatures.push_back(fmt::format("({})", signature->toString()));
+      }
+    }
+
+    for (const auto& signature : simpleFunctionSignatures) {
+      signatures.push_back(fmt::format("({})", signature->toString()));
+    }
+
+    if (signatures.empty()) {
+      VELOX_USER_FAIL(
+          "Scalar function name not registered: {}, called with arguments: ({}).",
+          call->name(),
+          folly::join(", ", inputTypes));
+    } else {
+      VELOX_USER_FAIL(
+          "Scalar function {} not registered with arguments: ({}). "
+          "Found function registered with the following signatures:\n{}",
+          call->name(),
+          folly::join(", ", inputTypes),
+          folly::join("\n", signatures));
+    }
+  }
+
+  auto listeners = createVectorFunctionListeners(
+      call->name(), metadata, ctx.queryCtx->queryConfig());
+
+  return std::make_shared<Expr>(
+      resultType,
+      std::move(inputs),
+      std::move(vectorFunction),
+      metadata,
+      call->name(),
+      trackCpuUsage,
+      std::move(listeners));
+}
+
+ExprPtr compileCast(
+    const TypedExprPtr& expr,
+    std::vector<ExprPtr> inputs,
+    bool trackCpuUsage,
+    const core::QueryConfig& config) {
+  VELOX_CHECK_EQ(1, inputs.size());
+
+  const auto& resultType = expr->type();
+
+  if (FOLLY_UNLIKELY(*resultType == *inputs[0]->type())) {
+    return inputs[0];
+  }
+
+  const auto* cast = expr->asUnchecked<core::CastTypedExpr>();
+  return getSpecialForm(
+      config,
+      cast->isTryCast() ? expression::kTryCast : expression::kCast,
+      resultType,
+      std::move(inputs),
+      trackCpuUsage);
+}
+
+ExprPtr compileRewrittenExpression(
+    const TypedExprPtr& expr,
+    Scope* scope,
+    const CompilerCtx& ctx) {
+  ExprPtr alreadyCompiled = getAlreadyCompiled(
+      expr.get(), ctx.queryCtx->queryConfig(), &scope->visited);
+  if (alreadyCompiled) {
+    if (!alreadyCompiled->isMultiplyReferenced()) {
+      scope->exprSet->addToReset(alreadyCompiled);
+      alreadyCompiled->setMultiplyReferenced();
+      // A property of this expression changed, namely isMultiplyReferenced_,
+      // that affects metadata, so we re-compute it.
+      alreadyCompiled->clearMetaData();
+      alreadyCompiled->computeMetadata();
+    }
+    return alreadyCompiled;
+  }
+
+  const bool trackCpuUsage = ctx.queryCtx->queryConfig().exprTrackCpuUsage();
+
+  const auto& resultType = expr->type();
+  auto compiledInputs = compileInputs(expr, scope, ctx);
+
+  ExprPtr result;
+  switch (expr->kind()) {
+    case core::ExprKind::kConcat: {
+      result = getSpecialForm(
+          ctx.queryCtx->queryConfig(),
+          expression::kRowConstructor,
+          resultType,
+          std::move(compiledInputs),
+          trackCpuUsage);
+      break;
+    }
+    case core::ExprKind::kCast: {
+      result = compileCast(
+          expr, compiledInputs, trackCpuUsage, ctx.queryCtx->queryConfig());
+      break;
+    }
+    case core::ExprKind::kNullIf: {
+      const auto* nullIf = expr->asUnchecked<core::NullIfTypedExpr>();
+      result = NullIfExpr::create(
+          std::move(compiledInputs),
+          nullIf->commonType(),
+          trackCpuUsage,
+          ctx.queryCtx->queryConfig());
+      break;
+    }
+    case core::ExprKind::kCall: {
+      result = compileCall(expr, compiledInputs, trackCpuUsage, ctx);
+      break;
+    }
+    case core::ExprKind::kFieldAccess: {
+      const auto* access = expr->asUnchecked<core::FieldAccessTypedExpr>();
+      auto fieldReference = std::make_shared<FieldReference>(
+          expr->type(), std::move(compiledInputs), access->name());
+      if (access->isInputColumn()) {
+        // We only want to capture references to top level fields, not struct
+        // fields.
+        captureFieldReference(fieldReference.get(), expr.get(), scope);
+      }
+      result = fieldReference;
+      break;
+    }
+    case core::ExprKind::kDereference: {
+      const auto* dereference = expr->asUnchecked<core::DereferenceTypedExpr>();
+      result = std::make_shared<FieldReference>(
+          expr->type(), std::move(compiledInputs), dereference->index());
+      break;
+    }
+    case core::ExprKind::kInput: {
+      VELOX_UNSUPPORTED("InputTypedExpr is not supported");
+    }
+    case core::ExprKind::kConstant: {
+      const auto* constant = expr->asUnchecked<core::ConstantTypedExpr>();
+      result =
+          std::make_shared<ConstantExpr>(constant->toConstantVector(ctx.pool));
+      break;
+    }
+    case core::ExprKind::kLambda: {
+      result =
+          compileLambda(expr->asUnchecked<core::LambdaTypedExpr>(), scope, ctx);
+      break;
+    }
+    default: {
+      VELOX_UNSUPPORTED("Unknown typed expression");
+    }
+  }
+
+  result->computeMetadata();
+  scope->visited[expr.get()] = result;
+  return result;
+}
+
+ExprPtr compileExpression(
+    const TypedExprPtr& expr,
+    Scope* scope,
+    const CompilerCtx& ctx) {
+  auto rewritten = ctx.enableConstantFolding
+      ? expression::optimize(expr, ctx.queryCtx, ctx.pool)
+      : expr;
+  if (rewritten.get() != expr.get()) {
+    scope->rewrittenExpressions.push_back(rewritten);
+  }
+  return compileRewrittenExpression(
+      rewritten == nullptr ? expr : rewritten, scope, ctx);
+}
+
+/// Walk expression tree and collect names of functions used in CallTypedExpr
+/// into provided 'names' set.
+void collectCallNames(
+    const TypedExprPtr& expr,
+    std::unordered_set<std::string>& names) {
+  if (expr->isCallKind()) {
+    names.insert(expr->asUnchecked<core::CallTypedExpr>()->name());
+  }
+
+  for (const auto& input : expr->inputs()) {
+    collectCallNames(input, names);
+  }
+}
+
+/// Walk expression trees and collection function calls that support flattening.
+std::unordered_set<std::string> collectFlatteningCandidates(
+    const std::vector<TypedExprPtr>& exprs) {
+  std::unordered_set<std::string> names;
+  for (const auto& expr : exprs) {
+    collectCallNames(expr, names);
+  }
+
+  return vectorFunctionFactories().withRLock([&](auto& functionMap) {
+    std::unordered_set<std::string> flatteningCandidates;
+    for (const auto& name : names) {
+      auto it = functionMap.find(name);
+      if (it != functionMap.end()) {
+        const auto& metadata = it->second.metadata;
+        if (metadata.supportsFlattening) {
+          flatteningCandidates.insert(name);
+        }
+      }
+    }
+    return flatteningCandidates;
+  });
+}
+} // namespace
+
+std::vector<std::shared_ptr<Expr>> compileExpressions(
+    const std::vector<TypedExprPtr>& sources,
+    core::ExecCtx* execCtx,
+    ExprSet* exprSet,
+    bool enableConstantFolding) {
+  Scope scope({}, nullptr, exprSet);
+  std::vector<std::shared_ptr<Expr>> exprs;
+  exprs.reserve(sources.size());
+
+  CompilerCtx ctx{
+      .queryCtx = execCtx->queryCtx(),
+      .pool = execCtx->pool(),
+      .enableConstantFolding = enableConstantFolding,
+      // Precompute a set of function calls that support flattening. This allows
+      // to lock function registry once vs. locking for each function call.
+      .flatteningCandidates = collectFlatteningCandidates(sources),
+      .cpuUsageTrackingCandidates =
+          fetchCallExprNamesForCpuTracking(execCtx->queryCtx()->queryConfig())};
+
+  for (auto& source : sources) {
+    exprs.push_back(compileExpression(source, &scope, ctx));
+  }
+  return exprs;
+}
+
+} // namespace facebook::velox::exec

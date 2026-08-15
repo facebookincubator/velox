@@ -1,0 +1,46 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+add_library(velox_file_test_utils TestUtils.cpp FaultyFile.cpp FaultyFileSystem.cpp)
+velox_add_test_headers(
+  velox_file_test_utils
+  FaultyFile.h
+  FaultyFileSystem.h
+  FaultyFileSystemOperations.h
+  TestUtils.h
+)
+
+target_link_libraries(velox_file_test_utils PUBLIC velox_file)
+
+if(VELOX_BUILD_TESTING)
+  add_executable(
+    velox_file_test
+    FileTest.cpp
+    FileInputStreamTest.cpp
+    FileIoTracerTest.cpp
+    FileUtilsTest.cpp
+  )
+  add_test(velox_file_test velox_file_test)
+  target_link_libraries(
+    velox_file_test
+    PRIVATE
+      velox_buffer
+      velox_file
+      velox_file_test_utils
+      velox_test_util
+      GTest::gmock
+      GTest::gtest
+      GTest::gtest_main
+  )
+endif()

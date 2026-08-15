@@ -1,0 +1,82 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# tzdata is pinned to an exact version so docker rebuilds (any time
+# scripts/docker/*.dockerfile or scripts/setup-*.sh changes) do not
+# silently bump tzdata in the image. See issue #17522 for the bug class
+# this prevents: a version mismatch between OS tzdata and consumers'
+# bundled tzdb code can produce silent one hour offsets in TIMESTAMP
+# WITH TIME ZONE values.
+#
+# Ubuntu keeps only the latest build of tzdata in the jammy pockets, so an
+# exact pin is purged once Canonical publishes a newer build, which then
+# fails the image bake with "Version ... not found" (issue #18440). Track
+# the build currently published for 22.04. The Presto source of truth
+# fuzzers, the tz sensitive consumer from #17522, run on the centos9 and
+# presto-java images and are governed by CENTOS_TZDATA_VERSION, not this
+# pin, so this version can move independently. To bump: set it to the
+# current 22.04 build and rebuild to confirm before merging.
+ARG UBUNTU_TZDATA_VERSION=2026c-0ubuntu0.22.04.1
+
+ARG base=ubuntu:22.04
+FROM ${base}
+
+ARG UBUNTU_TZDATA_VERSION
+ARG DEBIAN_FRONTEND="noninteractive"
+RUN apt-get update && \
+      apt-get install -y --allow-downgrades "tzdata=${UBUNTU_TZDATA_VERSION}"
+
+RUN apt update && \
+      apt install -y sudo \
+            lsb-release \
+            pip \
+            python3
+
+
+COPY scripts /velox/scripts/
+COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
+COPY CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch /
+COPY CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch /
+COPY CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch /
+
+ENV VELOX_ARROW_CMAKE_PATCH="/cmake-compatibility.patch /arrow-testing-boost.patch" \
+    VELOX_FBTHRIFT_CMAKE_PATCH="/compactv1-protocol-refiller.patch" \
+    VELOX_OPENZL_CMAKE_PATCH="/openzl-cxx-standard.patch" \
+    UV_TOOL_BIN_DIR=/usr/local/bin \
+    UV_INSTALL_DIR=/usr/local/bin
+
+# TZ and DEBIAN_FRONTEND="noninteractive"
+# are required to avoid tzdata installation
+# to prompt for region selection.
+ARG DEBIAN_FRONTEND="noninteractive"
+# Set a default timezone, can be overriden via ARG
+ARG tz="Etc/UTC"
+ENV TZ=${tz}
+RUN /bin/bash -o pipefail /velox/scripts/setup-ubuntu.sh
+
+# Install tools needed for CI (gh for GitHub Actions stash, jq for JSON parsing)
+RUN apt-get update && \
+      apt-get install -y -q --no-install-recommends jq && \
+      curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
+      apt-get update && apt-get install -y -q --no-install-recommends gh && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Pre-download gflags source for BUNDLED builds to avoid downloading at build time.
+RUN mkdir -p /velox/deps-sources && \
+    curl -fsSL -o /velox/deps-sources/gflags-v2.3.0.tar.gz \
+      https://github.com/gflags/gflags/archive/refs/tags/v2.3.0.tar.gz
+
+WORKDIR /velox

@@ -1,0 +1,811 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+#include "folly/CancellationToken.h"
+#include "velox/common/EnumDeclare.h"
+#include "velox/common/base/AsyncSource.h"
+#include "velox/common/base/PrefixSortConfig.h"
+#include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/base/SpillConfig.h"
+#include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/caching/ScanTracker.h"
+#include "velox/common/config/ConfigProvider.h"
+#include "velox/common/file/TokenProvider.h"
+#include "velox/common/future/VeloxPromise.h"
+#include "velox/core/ExpressionEvaluator.h"
+#include "velox/core/QueryConfig.h"
+#include "velox/core/ScanBatchEvent.h"
+#include "velox/exec/SpillStats.h"
+#include "velox/type/Filter.h"
+#include "velox/vector/ComplexVector.h"
+
+#include <folly/Synchronized.h>
+#include <folly/container/F14Map.h>
+
+namespace facebook::velox {
+class Config;
+}
+namespace facebook::velox::wave {
+class WaveDataSource;
+}
+namespace facebook::velox::config {
+class ConfigBase;
+}
+
+namespace facebook::velox::core {
+class ITypedExpr;
+} // namespace facebook::velox::core
+
+namespace facebook::velox::core {
+struct IndexLookupCondition;
+}
+
+namespace facebook::velox::connector {
+
+class DataSource;
+
+/// A split represents a chunk of data that a connector should load and return
+/// as a RowVectorPtr, potentially after processing pushdowns.
+struct ConnectorSplit : public ISerializable {
+  const std::string connectorId;
+  const int64_t splitWeight{0};
+  const bool cacheable{true};
+
+  /// Optional hint for the number of rows a TableScan should read per batch
+  /// from this split. When set (> 0), TableScan uses this instead of the
+  /// query-level preferred batch size. This allows split generators (e.g.,
+  /// MixedUnion split iterators) to control per-source read rates by stamping
+  /// each split with a batch size proportional to its share of the union.
+  int32_t batchSizeHint{0};
+
+  std::unique_ptr<AsyncSource<DataSource>> dataSource;
+
+  explicit ConnectorSplit(
+      const std::string& _connectorId,
+      int64_t _splitWeight = 0,
+      bool _cacheable = true)
+      : connectorId(_connectorId),
+        splitWeight(_splitWeight),
+        cacheable(_cacheable) {}
+
+  folly::dynamic serialize() const override {
+    VELOX_UNSUPPORTED();
+    return nullptr;
+  }
+
+  virtual uint64_t size() const {
+    return 0;
+  }
+
+  virtual ~ConnectorSplit() {
+    if (dataSource) {
+      dataSource->close();
+    }
+  }
+
+  virtual std::string toString() const {
+    return fmt::format(
+        "[split: connector id {}, weight {}, cacheable {}]",
+        connectorId,
+        splitWeight,
+        cacheable ? "true" : "false");
+  }
+};
+
+class ColumnHandle : public ISerializable {
+ public:
+  virtual ~ColumnHandle() = default;
+
+  virtual const std::string& name() const = 0;
+
+  virtual std::string toString() const {
+    return name();
+  }
+
+  folly::dynamic serialize() const override;
+
+ protected:
+  static folly::dynamic serializeBase(std::string_view name);
+};
+
+using ColumnHandlePtr = std::shared_ptr<const ColumnHandle>;
+
+using ColumnHandleMap =
+    std::unordered_map<std::string, connector::ColumnHandlePtr>;
+
+class ConnectorTableHandle;
+using ConnectorTableHandlePtr = std::shared_ptr<const ConnectorTableHandle>;
+
+class ConnectorTableHandle : public ISerializable {
+ public:
+  explicit ConnectorTableHandle(std::string connectorId)
+      : connectorId_(std::move(connectorId)) {}
+
+  virtual ~ConnectorTableHandle() = default;
+
+  const std::string& connectorId() const {
+    return connectorId_;
+  }
+
+  /// Returns the table name.
+  virtual const std::string& name() const = 0;
+
+  /// Returns true if the connector table handle supports index lookup.
+  virtual bool supportsIndexLookup() const {
+    return false;
+  }
+
+  /// Returns true if this table handle requires splits for index lookup.
+  /// Default implementation returns false. Subclasses can override this to
+  /// indicate that splits need to be provided to the index source before
+  /// performing lookups.
+  ///
+  /// NOTE: this only applies if supportsIndexLookup() returns true.
+  virtual bool needsIndexSplit() const {
+    return false;
+  }
+
+  virtual std::string toString() const {
+    return name();
+  }
+
+  virtual folly::dynamic serialize() const override;
+
+ protected:
+  folly::dynamic serializeBase(std::string_view name) const;
+
+ private:
+  const std::string connectorId_;
+};
+
+/// Represents a request for writing to connector
+class ConnectorInsertTableHandle : public ISerializable {
+ public:
+  virtual ~ConnectorInsertTableHandle() {}
+
+  /// Whether multi-threaded write is supported by this connector. Planner uses
+  /// this flag to determine number of drivers.
+  virtual bool supportsMultiThreading() const {
+    return false;
+  }
+
+  virtual std::string toString() const = 0;
+
+  folly::dynamic serialize() const override {
+    VELOX_NYI();
+  }
+};
+
+using ConnectorInsertTableHandlePtr =
+    std::shared_ptr<const ConnectorInsertTableHandle>;
+
+/// Represents the commit strategy for writing to connector.
+enum class CommitStrategy {
+  /// No more commit actions are needed.
+  kNoCommit,
+  /// Task level commit is needed.
+  kTaskCommit,
+};
+
+VELOX_DECLARE_ENUM_NAME(CommitStrategy);
+
+/// Writes data received from table writer operator into different partitions
+/// based on the specific table layout. The actual implementation doesn't need
+/// to be thread-safe.
+class DataSink {
+ public:
+  struct Stats {
+    uint64_t numWrittenBytes{0};
+    uint32_t numWrittenFiles{0};
+    uint64_t writeIOTimeUs{0};
+    uint64_t numCompressedBytes{0};
+    uint64_t recodeTimeNs{0};
+    uint64_t compressionTimeNs{0};
+    folly::F14FastMap<std::string, RuntimeMetric> writerRuntimeStats;
+
+    exec::SpillStats spillStats;
+
+    bool empty() const;
+
+    std::string toString() const;
+  };
+
+  virtual ~DataSink() = default;
+
+  /// Add the next data (vector) to be written. This call is blocking.
+  /// TODO maybe at some point we want to make it async.
+  virtual void appendData(RowVectorPtr input) = 0;
+
+  /// Called after all data has been added via possibly multiple calls to
+  /// appendData() This function finishes the data procesing like sort all the
+  /// added data and write them to the file writer. The finish might take long
+  /// time so it returns false to yield in the middle of processing. The
+  /// function returns true if it has processed all data. This call is blocking.
+  virtual bool finish() = 0;
+
+  /// Called once after all data has been added via possibly multiple calls to
+  /// appendData(). The function returns the metadata of written data in string
+  /// form. We don't expect any appendData() calls on a closed data sink object.
+  virtual std::vector<std::string> close() = 0;
+
+  /// Called to abort this data sink object and we don't expect any appendData()
+  /// calls on an aborted data sink object.
+  virtual void abort() = 0;
+
+  /// Returns the stats of this data sink.
+  virtual Stats stats() const = 0;
+
+  virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() const {
+    return {};
+  }
+};
+
+class DataSource {
+ public:
+  static constexpr int64_t kUnknownRowSize = -1;
+  virtual ~DataSource() = default;
+
+  /// Add split to process, then call next multiple times to process the split.
+  /// A split must be fully processed by next before another split can be
+  /// added. Next returns nullptr to indicate that current split is fully
+  /// processed.
+  virtual void addSplit(std::shared_ptr<ConnectorSplit> split) = 0;
+
+  /// Process a split added via addSplit. Returns nullptr if split has been
+  /// fully processed. Returns std::nullopt and sets the 'future' if started
+  /// asynchronous work and needs to wait for it to complete to continue
+  /// processing. The caller will wait for the 'future' to complete before
+  /// calling 'next' again.
+  virtual std::optional<RowVectorPtr> next(
+      uint64_t size,
+      velox::ContinueFuture& future) = 0;
+
+  virtual const common::SubfieldFilters* getFilters() const {
+    return nullptr;
+  }
+
+  /// Add dynamically generated filter.
+  /// @param outputChannel index into outputType specified in
+  /// Connector::createDataSource() that identifies the column this filter
+  /// applies to.
+  virtual void addDynamicFilter(
+      column_index_t outputChannel,
+      const std::shared_ptr<common::Filter>& filter) = 0;
+
+  /// Returns the number of input bytes processed so far.
+  virtual uint64_t getCompletedBytes() = 0;
+
+  /// Returns the number of input rows processed so far.
+  virtual uint64_t getCompletedRows() = 0;
+
+  /// Stores a callback to fire after each scan batch.
+  void setScanBatchCallback(core::ScanBatchCallback callback) {
+    scanBatchCallback_ = std::move(callback);
+  }
+
+  /// Called by TableScan after each non-empty batch with generic scan stats.
+  /// Default is a no-op. Subclasses should override to create a
+  /// connector-specific event (e.g., FileScanBatchEvent), enrich it with
+  /// connector-specific fields, and call scanBatchCallback_.
+  virtual void fireScanBatchCallback(core::ScanBatchEvent /*event*/) {}
+
+  /// Returns cumulative runtime stats for work completed so far by this data
+  /// source.
+  virtual std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() {
+    return {};
+  }
+
+  /// Returns true if 'this' has initiated all the prefetch this will initiate.
+  /// This means that the caller should schedule next splits to prefetch in the
+  /// background. false if the source does not prefetch.
+  virtual bool allPrefetchIssued() const {
+    return false;
+  }
+
+  /// Initializes this from 'source'. 'source' is effectively moved into 'this'
+  /// Adaptation like dynamic filters stay in effect but the parts dealing with
+  /// open files, prefetched data etc. are moved. 'source' is freed after the
+  /// move.
+  virtual void setFromDataSource(std::unique_ptr<DataSource> /*source*/) {
+    VELOX_UNSUPPORTED("setFromDataSource");
+  }
+
+  /// Returns a connector dependent row size if available. This can be
+  /// called after addSplit().  This estimates uncompressed data
+  /// sizes. This is better than getCompletedBytes()/getCompletedRows()
+  /// since these track sizes before decompression and may include
+  /// read-ahead and extra IO from coalescing reads and  will not
+  /// fully account for size of sparsely accessed columns.
+  virtual int64_t estimatedRowSize() {
+    return kUnknownRowSize;
+  }
+
+  /// Returns a Wave delegate that implements the Wave Operator
+  /// interface for a GPU table scan. This should be called after
+  /// construction and no other methods should be called on 'this'
+  /// after creating the delegate. Splits, dynamic filters etc.  will
+  /// be added to the WaveDataSource instead of 'this'. 'this' should
+  /// stay live until after the destruction of the delegate.
+  virtual std::shared_ptr<wave::WaveDataSource> toWaveDataSource() {
+    VELOX_UNSUPPORTED();
+  }
+
+  /// Invoked by table scan close to cancel any inflight async operations
+  /// running inside the data source. This is the best effort and the actual
+  /// connector implementation decides how to support the cancellation if
+  /// needed.
+  virtual void cancel() {}
+
+ protected:
+  core::ScanBatchCallback scanBatchCallback_;
+};
+
+class IndexSource {
+ public:
+  virtual ~IndexSource() = default;
+
+  /// Adds splits to the index source for lookup. This is called when
+  /// the table handle's needsIndexSplit() returns true. This method must be
+  /// called before the first call to lookup(). This method is expected to be
+  /// called only once. Default implementation throws as most index sources
+  /// don't require splits.
+  virtual void addSplits(
+      std::vector<std::shared_ptr<ConnectorSplit>> /*splits*/) {
+    VELOX_UNSUPPORTED("This IndexSource does not support splits");
+  }
+
+  /// Represents a lookup request for a given input.
+  struct Request {
+    /// Contains the input column vectors used by lookup join and range
+    /// conditions.
+    RowVectorPtr input;
+
+    explicit Request(RowVectorPtr input) : input(std::move(input)) {}
+  };
+
+  /// Represents the lookup result for a subset of input produced by the
+  /// 'ResultIterator'.
+  struct Result {
+    /// Specifies the indices of input row in the lookup request that have
+    /// matches in 'output'. It contains the input indices in the order
+    /// of the input rows in the lookup request. Any gap in the indices means
+    /// the input rows that has no matches in output.
+    ///
+    /// Example:
+    ///   Request: input = [0, 1, 2, 3, 4]
+    ///   Result:  inputHits = [0, 0, 2, 2, 3, 4, 4, 4]
+    ///            output    = [0, 1, 2, 3, 4, 5, 6, 7]
+    ///
+    ///   Here is match results for each input row:
+    ///   input row #0: match with output rows #0 and #1.
+    ///   input row #1: no matches
+    ///   input row #2: match with output rows #2 and #3.
+    ///   input row #3: match with output row #4.
+    ///   input row #4: match with output rows #5, #6 and #7.
+    ///
+    /// 'ResultIterator' must also produce the output result in order of
+    /// input rows.
+    BufferPtr inputHits;
+
+    /// Contains the lookup result rows.
+    RowVectorPtr output;
+
+    size_t size() const {
+      return output->size();
+    }
+
+    Result(BufferPtr _inputHits, RowVectorPtr _output)
+        : inputHits(std::move(_inputHits)), output(std::move(_output)) {
+      VELOX_CHECK_EQ(inputHits->size() / sizeof(vector_size_t), output->size());
+    }
+  };
+
+  /// The lookup result iterator used to fetch the lookup result in batch for a
+  /// given lookup request.
+  class ResultIterator {
+   public:
+    virtual ~ResultIterator() = default;
+
+    /// Invoked to check if there are more lookup results available to fetch.
+    /// Returns true if there are more results, false otherwise. This allows
+    /// the caller to determine whether to continue calling 'next()'.
+    virtual bool hasNext() = 0;
+
+    /// Invoked to fetch up to 'size' number of output rows. Returns nullptr if
+    /// all the lookup results have been fetched. Returns std::nullopt and sets
+    /// the 'future' if started asynchronous work and needs to wait for it to
+    /// complete to continue processing. The caller will wait for the 'future'
+    /// to complete before calling 'next' again.
+    virtual std::optional<std::unique_ptr<Result>> next(
+        vector_size_t size,
+        velox::ContinueFuture& future) {
+      VELOX_UNSUPPORTED();
+    }
+  };
+
+  virtual std::shared_ptr<ResultIterator> lookup(const Request& request) = 0;
+
+  virtual std::unordered_map<std::string, RuntimeMetric> runtimeStats() = 0;
+};
+
+/// Collection of context data for use in a DataSource, IndexSource or DataSink.
+/// One instance of this per DataSource and DataSink. This may be passed between
+/// threads but methods must be invoked sequentially. Serializing use is the
+/// responsibility of the caller.
+class ConnectorQueryCtx {
+ public:
+  ConnectorQueryCtx(
+      memory::MemoryPool* operatorPool,
+      memory::MemoryPool* connectorPool,
+      const config::ConfigBase* sessionProperties,
+      const common::SpillConfig* spillConfig,
+      common::PrefixSortConfig prefixSortConfig,
+      std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
+      cache::AsyncDataCache* cache,
+      const std::string& queryId,
+      const std::string& taskId,
+      const std::string& planNodeId,
+      int driverId,
+      const std::string& sessionTimezone,
+      bool adjustTimestampToTimezone = false,
+      folly::CancellationToken cancellationToken = {},
+      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {})
+      : operatorPool_(operatorPool),
+        connectorPool_(connectorPool),
+        sessionProperties_(sessionProperties),
+        spillConfig_(spillConfig),
+        prefixSortConfig_(prefixSortConfig),
+        expressionEvaluator_(std::move(expressionEvaluator)),
+        cache_(cache),
+        scanId_(fmt::format("{}.{}", taskId, planNodeId)),
+        queryId_(queryId),
+        taskId_(taskId),
+        driverId_(driverId),
+        planNodeId_(planNodeId),
+        sessionTimezone_(sessionTimezone),
+        adjustTimestampToTimezone_(adjustTimestampToTimezone),
+        cancellationToken_(std::move(cancellationToken)),
+        fsTokenProvider_(std::move(tokenProvider)) {
+    VELOX_CHECK_NOT_NULL(sessionProperties);
+  }
+
+  /// Returns the associated operator's memory pool which is a leaf kind of
+  /// memory pool, used for direct memory allocation use.
+  memory::MemoryPool* memoryPool() const {
+    return operatorPool_;
+  }
+
+  /// Returns the connector's memory pool which is an aggregate kind of
+  /// memory pool, used for the data sink for table write that needs the
+  /// hierarchical memory pool management, such as HiveDataSink.
+  memory::MemoryPool* connectorMemoryPool() const {
+    return connectorPool_;
+  }
+
+  const config::ConfigBase* sessionProperties() const {
+    return sessionProperties_;
+  }
+
+  const common::SpillConfig* spillConfig() const {
+    return spillConfig_;
+  }
+
+  const common::PrefixSortConfig& prefixSortConfig() const {
+    return prefixSortConfig_;
+  }
+
+  core::ExpressionEvaluator* expressionEvaluator() const {
+    return expressionEvaluator_.get();
+  }
+
+  cache::AsyncDataCache* cache() const {
+    return cache_;
+  }
+
+  /// This is a combination of task id and the scan's PlanNodeId. This is an
+  /// id that allows sharing state between different threads of the same
+  /// scan. This is used for locating a scanTracker, which tracks the read
+  /// density of columns for prefetch and other memory hierarchy purposes.
+  const std::string& scanId() const {
+    return scanId_;
+  }
+
+  const std::string queryId() const {
+    return queryId_;
+  }
+
+  const std::string& taskId() const {
+    return taskId_;
+  }
+
+  int driverId() const {
+    return driverId_;
+  }
+
+  const std::string& planNodeId() const {
+    return planNodeId_;
+  }
+
+  /// Session timezone used for reading Timestamp. Stores a string with the
+  /// actual timezone name. If the session timezone is not set in the
+  /// QueryConfig, it will return an empty string.
+  const std::string& sessionTimezone() const {
+    return sessionTimezone_;
+  }
+
+  /// Whether to adjust Timestamp to the timeZone obtained through
+  /// sessionTimezone(). This is used to be compatible with the
+  /// old logic of Presto.
+  bool adjustTimestampToTimezone() const {
+    return adjustTimestampToTimezone_;
+  }
+
+  /// Returns the cancellation token associated with this task.
+  const folly::CancellationToken& cancellationToken() const {
+    return cancellationToken_;
+  }
+
+  /// Deprecated: Use FileConfig::kSelectiveNimbleReaderEnabledSession instead.
+  bool selectiveNimbleReaderEnabled() const {
+    return selectiveNimbleReaderEnabled_;
+  }
+
+  /// Deprecated: Use connector session properties instead.
+  void setSelectiveNimbleReaderEnabled(bool value) {
+    selectiveNimbleReaderEnabled_ = value;
+  }
+
+  core::QueryConfig::RowSizeTrackingMode rowSizeTrackingMode() const {
+    return rowSizeTrackingEnabled_;
+  }
+
+  void setRowSizeTrackingMode(core::QueryConfig::RowSizeTrackingMode value) {
+    rowSizeTrackingEnabled_ = value;
+  }
+
+  std::shared_ptr<filesystems::TokenProvider> fsTokenProvider() const {
+    return fsTokenProvider_;
+  }
+
+ private:
+  memory::MemoryPool* const operatorPool_;
+  memory::MemoryPool* const connectorPool_;
+  const config::ConfigBase* const sessionProperties_;
+  const common::SpillConfig* const spillConfig_;
+  const common::PrefixSortConfig prefixSortConfig_;
+  const std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator_;
+  cache::AsyncDataCache* cache_;
+  const std::string scanId_;
+  const std::string queryId_;
+  const std::string taskId_;
+  const int driverId_;
+  const std::string planNodeId_;
+  const std::string sessionTimezone_;
+  const bool adjustTimestampToTimezone_;
+  const folly::CancellationToken cancellationToken_;
+  const std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
+  bool selectiveNimbleReaderEnabled_{false};
+  core::QueryConfig::RowSizeTrackingMode rowSizeTrackingEnabled_{
+      core::QueryConfig::RowSizeTrackingMode::ENABLED_FOR_ALL};
+};
+
+class Connector;
+
+class ConnectorFactory {
+ public:
+  explicit ConnectorFactory(const char* name) : name_(name) {}
+
+  virtual ~ConnectorFactory() = default;
+
+  const std::string& connectorName() const {
+    return name_;
+  }
+
+  virtual std::shared_ptr<Connector> newConnector(
+      const std::string& id,
+      std::shared_ptr<const config::ConfigBase> config,
+      folly::Executor* ioExecutor = nullptr,
+      folly::Executor* cpuExecutor = nullptr) = 0;
+
+ private:
+  const std::string name_;
+};
+
+class Connector {
+ public:
+  explicit Connector(
+      const std::string& id,
+      std::shared_ptr<const config::ConfigBase> config = nullptr)
+      : id_(id), config_(std::move(config)) {}
+
+  virtual ~Connector() = default;
+
+  const std::string& connectorId() const {
+    return id_;
+  }
+
+  const std::shared_ptr<const config::ConfigBase>& connectorConfig() const {
+    return config_;
+  }
+
+  /// Returns the config provider for this connector's session properties,
+  /// or nullptr if the connector has no session-overridable properties.
+  virtual const config::ConfigProvider* configProvider() const {
+    return nullptr;
+  }
+
+  /// Returns true if this connector would accept a filter dynamically
+  /// generated during query execution.
+  virtual bool canAddDynamicFilter() const {
+    return false;
+  }
+
+  virtual std::unique_ptr<DataSource> createDataSource(
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
+      ConnectorQueryCtx* connectorQueryCtx) = 0;
+
+  /// Returns true if addSplit of DataSource can use 'dataSource' from
+  /// ConnectorSplit in addSplit(). If so, TableScan can preload splits
+  /// so that file opening and metadata operations are off the Driver'
+  /// thread.
+  virtual bool supportsSplitPreload() const {
+    return false;
+  }
+
+  /// Returns true if the connector supports index lookup, otherwise false.
+  virtual bool supportsIndexLookup() const {
+    return false;
+  }
+
+  /// Creates index source for index join lookup.
+  /// @param inputType The list of probe-side columns used in join conditions.
+  /// @param joinConditions The join conditions that specify how to perform the
+  /// index lookup. This includes:
+  /// - EqualIndexLookupCondition: For equi-join conditions.
+  /// - InIndexLookupCondition: For IN-list conditions.
+  /// - BetweenIndexLookupCondition: For range conditions.
+  /// The index source can determine which columns form the index prefix by
+  /// examining EqualIndexLookupCondition objects where !isFilter().
+  /// @param outputType The lookup output type from index source.
+  /// @param tableHandle The index table handle.
+  /// @param columnHandles The column handles which maps from column name
+  /// used in 'outputType' and 'joinConditions' to the corresponding column
+  /// handles in the index table.
+  /// @param connectorQueryCtx The query context.
+  ///
+  /// Here is an example that how the lookup join operator uses index source:
+  ///
+  /// SELECT t.sid, t.day_ts, u.event_value
+  /// FROM t LEFT JOIN u
+  /// ON t.sid = u.sid
+  ///  AND contains(t.event_list, u.event_type)
+  ///  AND t.ds BETWEEN '2024-01-01' AND '2024-01-07'
+  ///
+  /// Here,
+  /// - 'inputType' is ROW{t.sid, t.event_list}
+  /// - 'joinConditions' includes:
+  ///   - EqualIndexLookupCondition(u.sid, t.sid) for the equi-join
+  ///   - InIndexLookupCondition(u.event_type, t.event_list) for the IN
+  ///     condition
+  ///   - BetweenIndexLookupCondition(u.ds, '2024-01-01', '2024-01-07') for the
+  ///     BETWEEN condition
+  /// - 'outputType' is ROW{u.event_value}
+  /// - 'tableHandle' specifies the metadata of the index table.
+  /// - 'columnHandles' is a map from 'u.event_type' (in 'joinConditions') and
+  ///   'u.event_value' (in 'outputType') to the actual column names in the
+  ///   index table.
+  /// - 'connectorQueryCtx' provide the connector query execution context.
+  ///
+  virtual std::shared_ptr<IndexSource> createIndexSource(
+      const RowTypePtr& inputType,
+      const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
+          joinConditions,
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle,
+      const connector::ColumnHandleMap& columnHandles,
+      ConnectorQueryCtx* connectorQueryCtx) {
+    VELOX_UNSUPPORTED(
+        "Connector {} does not support index source", connectorId());
+  }
+
+  virtual std::unique_ptr<DataSink> createDataSink(
+      RowTypePtr inputType,
+      ConnectorInsertTableHandlePtr connectorInsertTableHandle,
+      ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy) = 0;
+
+  /// Returns a ScanTracker for 'id'. 'id' uniquely identifies the
+  /// tracker and different threads will share the same
+  /// instance. 'loadQuantum' is the largest single IO for the query
+  /// being tracked.
+  static std::shared_ptr<cache::ScanTracker> getTracker(
+      const std::string& scanId,
+      int32_t loadQuantum);
+
+  /// Returns the IOExecutor used by the connector. It is used to run async IO
+  /// operations by the connector.
+  virtual folly::Executor* ioExecutor() const {
+    return nullptr;
+  }
+
+  // This is for backward compatibility, todo: remove after verax repo is
+  // updated
+  virtual folly::Executor* executor() const {
+    return nullptr;
+  }
+
+  /// The name of the common runtime stats collected and reported by connector
+  /// data/index sources.
+  static constexpr std::string_view kTotalRemainingFilterTime{
+      "totalRemainingFilterWallNanos"};
+
+  /// Total CPU time spent on remaining filter evaluation.
+  static inline const std::string kTotalRemainingFilterCpuTime{
+      "totalRemainingFilterCpuNanos"};
+
+  /// Total time spent waiting for synchronously issued IO or for an in-progress
+  /// read-ahead to finish.
+  static constexpr std::string_view kIoWaitWallNanos{"ioWaitWallNanos"};
+
+  /// Time spent waiting for remote storage reads (S3, HDFS, etc.)
+  static constexpr std::string_view kStorageReadWallNanos{
+      "storageReadWallNanos"};
+
+  /// Time spent waiting for SSD cache reads.
+  static constexpr std::string_view kSsdCacheReadWallNanos{
+      "ssdCacheReadWallNanos"};
+
+  /// Time spent waiting for EXCLUSIVE cache entries (another thread is
+  /// loading).
+  static constexpr std::string_view kCacheWaitWallNanos{"cacheWaitWallNanos"};
+
+  /// Time spent waiting for coalesced loads from SSD cache.
+  static constexpr std::string_view kCoalescedSsdLoadWallNanos{
+      "coalescedSsdLoadWallNanos"};
+
+  /// Time spent waiting for coalesced loads from remote storage.
+  static constexpr std::string_view kCoalescedStorageLoadWallNanos{
+      "coalescedStorageLoadWallNanos"};
+
+ private:
+  static void unregisterTracker(cache::ScanTracker* tracker);
+
+  const std::string id_;
+  const std::shared_ptr<const config::ConfigBase> config_;
+
+  static folly::Synchronized<
+      std::unordered_map<std::string_view, std::weak_ptr<cache::ScanTracker>>>
+      trackers_;
+};
+
+/// Deprecated free functions. Use ConnectorRegistry methods instead.
+
+[[deprecated("Use ConnectorRegistry::global().insert() instead.")]]
+bool registerConnector(const std::shared_ptr<Connector>& connector);
+
+[[deprecated("Use ConnectorRegistry::tryGet() instead.")]]
+bool hasConnector(const std::string& connectorId);
+
+[[deprecated("Use ConnectorRegistry::global().erase() instead.")]]
+bool unregisterConnector(const std::string& connectorId);
+
+[[deprecated("Use ConnectorRegistry::tryGet() instead.")]]
+std::shared_ptr<Connector> getConnector(const std::string& connectorId);
+
+} // namespace facebook::velox::connector

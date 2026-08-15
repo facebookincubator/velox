@@ -1,0 +1,152 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+#include "velox/expression/EvalCtx.h"
+#include "velox/functions/lib/RowsTranslationUtil.h"
+#include "velox/vector/ComplexVector.h"
+#include "velox/vector/DecodedVector.h"
+#include "velox/vector/FunctionVector.h"
+
+namespace facebook::velox::functions {
+
+// Returns the total number of nested elements for the specified top-levels rows
+// in array or map vector. T is either ArrayVector or MapVector.
+template <typename T>
+vector_size_t countElements(
+    const SelectivityVector& rows,
+    DecodedVector& decodedVector) {
+  auto indices = decodedVector.indices();
+  auto rawSizes = decodedVector.base()->as<T>()->rawSizes();
+
+  vector_size_t count = 0;
+  rows.applyToSelected([&](vector_size_t row) {
+    if (decodedVector.isNullAt(row)) {
+      return;
+    }
+    // In some cases, the array/map vector is wrapped in dictionary encoding
+    // that can explode the cardinality of the underlying elements. This check
+    // helps ensure we fail instead of silently wrapping around and causing
+    // memory corruption or segfaults.
+    count = checkedPlus<vector_size_t>(count, rawSizes[indices[row]]);
+  });
+  return count;
+}
+
+// Returns an array of indices that allows aligning captures with the nested
+// elements of an array or vector. For each top-level row, the index equal to
+// the row number is repeated for each of the nested rows.
+template <typename T>
+BufferPtr toWrapCapture(
+    vector_size_t size,
+    const Callable* callable,
+    const SelectivityVector& topLevelRows,
+    const std::shared_ptr<T>& topLevelVector) {
+  if (!callable->hasCapture()) {
+    return nullptr;
+  }
+
+  auto rawNulls = topLevelVector->rawNulls();
+  auto rawSizes = topLevelVector->rawSizes();
+  auto rawOffsets = topLevelVector->rawOffsets();
+
+  BufferPtr wrapCapture = allocateIndices(size, topLevelVector->pool());
+  auto rawWrapCapture = wrapCapture->asMutable<vector_size_t>();
+  topLevelRows.applyToSelected([&](vector_size_t row) {
+    if (rawNulls && bits::isBitNull(rawNulls, row)) {
+      return;
+    }
+    auto size = rawSizes[row];
+    auto offset = rawOffsets[row];
+    for (auto i = 0; i < size; ++i) {
+      rawWrapCapture[offset + i] = row;
+    }
+  });
+  return wrapCapture;
+}
+
+// Given possibly wrapped array vector, flattens the wrappings and returns a
+// flat array vector. Returns the original vector unmodified if the vector is
+// not wrapped. Flattening is shallow, e.g. elements vector may still be
+// wrapped.
+ArrayVectorPtr flattenArray(
+    const SelectivityVector& rows,
+    const VectorPtr& vector,
+    DecodedVector& decodedVector);
+
+// Given possibly wrapped map vector, flattens the wrappings and returns a flat
+// map vector. Returns the original vector unmodified if the vector is not
+// wrapped. Flattening is shallow, e.g. keys and values vectors may still be
+// wrapped.
+MapVectorPtr flattenMap(
+    const SelectivityVector& rows,
+    const VectorPtr& vector,
+    DecodedVector& decodedVector);
+
+// Creates a nulls buffer to hold rows.size() nulls. Copies the original nulls
+// in 'vector' for positions [rows.begin(), rows.end()) and sets nulls for
+// unselected rows in 'rows'.
+BufferPtr addNullsForUnselectedRows(
+    const VectorPtr& vector,
+    const SelectivityVector& rows);
+
+/// Applies a lambda function to all elements of an array or map container.
+/// This is a common pattern used by transform, filter, and similar functions.
+///
+/// @tparam ContainerType Either ArrayVector or MapVector.
+///
+/// @param functionArg The VectorPtr containing the lambda function.
+/// @param rows The top-level rows to process.
+/// @param numElements The total number of elements across all containers.
+/// @param flatContainer The flattened container vector.
+/// @param lambdaArgs The arguments to pass to the lambda function.
+/// @param validRowsInReusedResult SelectivityVector indicating which element
+///        rows are valid in the reused result.
+/// @param context The evaluation context.
+/// @param outputElements Output parameter for the transformed elements.
+template <typename ContainerType>
+void applyLambdaToElements(
+    const VectorPtr& functionArg,
+    const SelectivityVector& rows,
+    vector_size_t numElements,
+    const std::shared_ptr<ContainerType>& flatContainer,
+    const std::vector<VectorPtr>& lambdaArgs,
+    SelectivityVector& validRowsInReusedResult,
+    exec::EvalCtx& context,
+    VectorPtr& outputElements) {
+  auto elementToTopLevelRows = getElementToTopLevelRows(
+      numElements, rows, flatContainer.get(), context.pool());
+
+  // Loop over lambda functions and apply these to elements of the container.
+  auto it = functionArg->asUnchecked<FunctionVector>()->iterator(&rows);
+  while (auto entry = it.next()) {
+    auto elementRows = toElementRows<ContainerType>(
+        numElements, *entry.rows, flatContainer.get());
+    auto wrapCapture = toWrapCapture<ContainerType>(
+        numElements, entry.callable, *entry.rows, flatContainer);
+
+    entry.callable->apply(
+        elementRows,
+        &validRowsInReusedResult,
+        wrapCapture,
+        &context,
+        lambdaArgs,
+        elementToTopLevelRows,
+        &outputElements);
+  }
+}
+
+} // namespace facebook::velox::functions

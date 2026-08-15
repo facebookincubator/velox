@@ -1,0 +1,444 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+#include "velox/vector/DecodedVector.h"
+#include "velox/vector/SimpleVector.h"
+
+namespace facebook::velox {
+
+// A set of unique, increasing row numbers for use as qualifying
+// set. This is logically interchangeable with
+// SelectivityVector. Since column reading does not have frequent bit
+// operations but always loops over often sparse positions, an array
+// of positions is more convenient. folly::Range is also faster to
+// pass and access than the indirections and smart pointers that may
+// be involved in SelectivityVector.
+using RowSet = folly::Range<const vector_size_t*>;
+
+// Defines a per-value callback to apply to values when loading a
+// LazyVector. This enables pushing down an arbitrary operation into
+// e.g. table scan when loading columns of scalar data types. In this
+// way one can bypass copying data into a vector before use.
+class ValueHook {
+ public:
+  // Type and constants for identifying specific hooks.  Loaders may have
+  // hook-specialized template instantiations for some operations.
+  enum Kind {
+    kGeneric,
+    kBigintSum,
+    kBigintSumOverflow,
+    kDoubleSum,
+    kBigintMax,
+    kBigintMin,
+    kFloatingPointMax,
+    kFloatingPointMin,
+  };
+
+  static constexpr bool kSkipNulls = true;
+
+  virtual ~ValueHook() = default;
+
+  virtual bool acceptsNulls() const {
+    return false;
+  }
+
+  virtual Kind kind() const {
+    return kGeneric;
+  }
+
+  virtual void addNull(vector_size_t /*index*/) {}
+
+  virtual void addValue(vector_size_t /*row*/, int64_t /*value*/) {
+    VELOX_UNSUPPORTED();
+  }
+
+  virtual void addValue(vector_size_t /*row*/, int128_t /*value*/) {
+    VELOX_UNSUPPORTED();
+  }
+
+  virtual void addValue(vector_size_t /*row*/, float /*value*/) {
+    VELOX_UNSUPPORTED();
+  }
+
+  virtual void addValue(vector_size_t /*row*/, double /*value*/) {
+    VELOX_UNSUPPORTED();
+  }
+
+  virtual void addValue(vector_size_t /*row*/, std::string_view /*value*/) {
+    VELOX_UNSUPPORTED();
+  }
+
+  // Fallback implementation of bulk path for addValues.  Actual hooks are
+  // expected to override these if they are not inlined in reader.
+  virtual void
+  addValues(const vector_size_t* rows, const bool* values, vector_size_t size) {
+    for (auto i = 0; i < size; ++i) {
+      addValueTyped(rows[i], values[i]);
+    }
+  }
+
+  virtual void addValues(
+      const vector_size_t* rows,
+      const int8_t* values,
+      vector_size_t size) {
+    for (auto i = 0; i < size; ++i) {
+      addValueTyped(rows[i], values[i]);
+    }
+  }
+
+  virtual void addValues(
+      const vector_size_t* rows,
+      const int16_t* values,
+      vector_size_t size) {
+    for (auto i = 0; i < size; ++i) {
+      addValueTyped(rows[i], values[i]);
+    }
+  }
+
+  virtual void addValues(
+      const vector_size_t* rows,
+      const int32_t* values,
+      vector_size_t size) {
+    for (auto i = 0; i < size; ++i) {
+      addValueTyped(rows[i], values[i]);
+    }
+  }
+
+  virtual void addValues(
+      const vector_size_t* rows,
+      const int64_t* values,
+      vector_size_t size) {
+    for (auto i = 0; i < size; ++i) {
+      addValue(rows[i], values[i]);
+    }
+  }
+
+  virtual void addValues(
+      const vector_size_t* rows,
+      const int128_t* values,
+      vector_size_t size) {
+    for (auto i = 0; i < size; ++i) {
+      addValue(rows[i], values[i]);
+    }
+  }
+
+  virtual void addValues(
+      const vector_size_t* rows,
+      const float* values,
+      vector_size_t size) {
+    for (auto i = 0; i < size; ++i) {
+      addValue(rows[i], values[i]);
+    }
+  }
+
+  virtual void addValues(
+      const vector_size_t* rows,
+      const double* values,
+      vector_size_t size) {
+    for (auto i = 0; i < size; ++i) {
+      addValue(rows[i], values[i]);
+    }
+  }
+
+  virtual void addValues(
+      const vector_size_t* rows,
+      const StringView* values,
+      vector_size_t size) {
+    for (auto i = 0; i < size; ++i) {
+      // TODO: Remove explicit std::string_view cast.
+      addValue(rows[i], std::string_view(values[i]));
+    }
+  }
+
+  template <typename T>
+  void addValueTyped(vector_size_t row, T value) {
+    if constexpr (std::is_integral_v<T> && sizeof(T) < sizeof(int64_t)) {
+      addValue(row, static_cast<int64_t>(value));
+    } else if constexpr (std::is_same_v<T, StringView>) {
+      // TODO: Remove explicit std::string_view cast.
+      addValue(row, std::string_view(value));
+    } else {
+      addValue(row, value);
+    }
+  }
+};
+
+class ChainedVectorLoader;
+
+// Produces values for a LazyVector for a set of positions.
+class VectorLoader {
+ public:
+  virtual ~VectorLoader() = default;
+
+  // Produces the lazy values for 'rows' and if 'hook' is non-nullptr,
+  // calls hook on each. If 'hook' is nullptr, sets '*result' to a
+  // vector that contains the values for 'rows'. 'rows' must be a
+  // subset of the rows that were intended to be loadable when the
+  // loader was created. This may be called once in the lifetime of
+  // 'this'.
+  // Notes: Implementations of this class should ensure:
+  // 1.‘result’ is unique before mutating it.
+  // 2. result’ size is at least resultSize.
+  void load(
+      RowSet rows,
+      ValueHook* hook,
+      vector_size_t resultSize,
+      VectorPtr* result);
+
+  // Converts 'rows' into a RowSet and calls load(). Provided for
+  // convenience in loading LazyVectors in expression evaluation.
+  void load(
+      const SelectivityVector& rows,
+      ValueHook* hook,
+      vector_size_t resultSize,
+      VectorPtr* result,
+      memory::MemoryPool* pool);
+
+  virtual bool supportsHook() const {
+    return false;
+  }
+
+ protected:
+  friend class ChainedVectorLoader;
+
+  virtual void loadInternal(
+      RowSet rows,
+      ValueHook* hook,
+      vector_size_t resultSize,
+      VectorPtr* result) = 0;
+};
+
+class ChainedVectorLoader : public VectorLoader {
+ public:
+  using PostVectorLoadProcessor = std::function<void(VectorPtr&)>;
+
+  ChainedVectorLoader(
+      std::unique_ptr<VectorLoader> loader,
+      PostVectorLoadProcessor postLoadProc)
+      : loader_(std::move(loader)), postLoadProc_(std::move(postLoadProc)) {}
+
+ private:
+  void loadInternal(
+      RowSet rows,
+      ValueHook* hook,
+      vector_size_t resultSize,
+      VectorPtr* result) override {
+    loader_->loadInternal(rows, hook, resultSize, result);
+    postLoadProc_(*result);
+  }
+
+  std::unique_ptr<VectorLoader> loader_;
+  PostVectorLoadProcessor postLoadProc_;
+};
+
+// Vector class which produces values on first use. This is used for
+// loading columns on demand. This allows eliding load of
+// columns which have all values filtered out by e.g. joins or which
+// are never referenced due to conditionals in projection. If the call
+// site known that only a subset of the positions in the vector will
+// ever be accessed, loading can be limited to these positions. This
+// also allows pushing down computation into loading a column, hence
+// bypassing materialization into a vector.
+// Unloaded LazyVectors should be referenced only by one top-level vector.
+// Otherwise, it runs the risk of being loaded for different set of rows by each
+// top-level vector.
+class LazyVector : public BaseVector {
+ public:
+  static constexpr const char* kCpuNanos = "dataSourceLazyCpuNanos";
+  static constexpr const char* kWallNanos = "dataSourceLazyWallNanos";
+  static constexpr const char* kInputBytes = "dataSourceLazyInputBytes";
+
+  LazyVector(
+      velox::memory::MemoryPool* pool,
+      TypePtr type,
+      vector_size_t size,
+      std::unique_ptr<VectorLoader>&& loader,
+      VectorPtr&& vector = nullptr)
+      : BaseVector(
+            pool,
+            std::move(type),
+            VectorEncoding::Simple::LAZY,
+            BufferPtr(nullptr),
+            size),
+        loader_(std::move(loader)),
+        vector_(std::move(vector)) {}
+
+  void reset(std::unique_ptr<VectorLoader>&& loader, vector_size_t size) {
+    VELOX_CHECK_GE(size, 0, "Size must be non-negative.");
+    BaseVector::length_ = size;
+    loader_ = std::move(loader);
+    allLoaded_ = false;
+    containsLazyAndIsWrapped_ = false;
+    resetNulls();
+  }
+
+  inline bool isLoaded() const {
+    return allLoaded_;
+  }
+
+  // Loads the positions in 'rows' into loadedVector_. If 'hook' is
+  // non-nullptr, the hook is instead called on the values and
+  // loadedVector is not updated. This method is const because call
+  // sites often have a const VaseVector. Lazy construction is
+  // logically not a mutation.
+  void load(RowSet rows, ValueHook* hook) const;
+
+  std::optional<int32_t> compare(
+      const BaseVector* other,
+      vector_size_t index,
+      vector_size_t otherIndex,
+      CompareFlags flags) const override {
+    return loadedVector()->compare(other, index, otherIndex, flags);
+  }
+
+  uint64_t hashValueAt(vector_size_t index) const override {
+    return loadedVector()->hashValueAt(index);
+  }
+
+  std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override {
+    return loadedVector()->hashAll();
+  }
+
+  const BaseVector* loadedVector() const override {
+    return loadedVectorShared().get();
+  }
+
+  BaseVector* loadedVector() override {
+    return loadedVectorShared().get();
+  }
+
+  // Returns a shared_ptr to the vector holding the values. If vector is not
+  // loaded, loads all the rows, otherwise returns the loaded vector which can
+  // have partially loaded rows.
+  VectorPtr& loadedVectorShared() {
+    loadVectorInternal();
+    return vector_;
+  }
+
+  const VectorPtr& loadedVectorShared() const {
+    loadVectorInternal();
+    return vector_;
+  }
+
+  const BaseVector* wrappedVector() const override {
+    return loadedVector()->wrappedVector();
+  }
+
+  vector_size_t wrappedIndex(vector_size_t index) const override {
+    return loadedVector()->wrappedIndex(index);
+  }
+
+  const BufferPtr& wrapInfo() const override {
+    return loadedVector()->wrapInfo();
+  }
+
+  bool isScalar() const override {
+    return type()->isPrimitiveType() || type()->isOpaque();
+  }
+
+  bool mayHaveNulls() const override {
+    return loadedVector()->mayHaveNulls();
+  }
+
+  bool mayHaveNullsRecursive() const override {
+    return loadedVector()->mayHaveNullsRecursive();
+  }
+
+  bool isNullAt(vector_size_t index) const override {
+    return loadedVector()->isNullAt(index);
+  }
+
+  bool containsNullAt(vector_size_t index) const override {
+    return loadedVector()->containsNullAt(index);
+  }
+
+  /// Returns zero if vector has not been loaded yet.
+  uint64_t estimateFlatSize() const override {
+    return isLoaded() ? loadedVector()->estimateFlatSize() : 0;
+  }
+
+  std::string toString(vector_size_t index) const override {
+    return loadedVector()->toString(index);
+  }
+
+  VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
+
+  bool supportsHook() const {
+    return loader_->supportsHook();
+  }
+
+  void chain(ChainedVectorLoader::PostVectorLoadProcessor postLoadProc) {
+    VELOX_CHECK(!allLoaded_);
+    loader_ = std::make_unique<ChainedVectorLoader>(
+        std::move(loader_), std::move(postLoadProc));
+  }
+
+  // Loads 'rows' of 'vector'. 'vector' may be an arbitrary wrapping
+  // of a LazyVector. 'rows' are translated through the wrappers. If
+  // there is no LazyVector inside 'vector', this has no
+  // effect.
+  static void ensureLoadedRows(
+      const VectorPtr& vector,
+      const SelectivityVector& rows);
+
+  // as ensureLoadedRows, above, but takes a scratch DecodedVector and
+  // SelectivityVector as arguments to enable reuse.
+  static void ensureLoadedRows(
+      const VectorPtr& vector,
+      const SelectivityVector& rows,
+      DecodedVector& decoded,
+      SelectivityVector& baseRows);
+
+  void validate(const VectorValidateOptions& options) const override;
+
+  VectorPtr testingCopyPreserveEncodings(
+      velox::memory::MemoryPool* pool = nullptr) const override {
+    VELOX_CHECK(isLoaded());
+    return loadedVector()->testingCopyPreserveEncodings(pool);
+  }
+
+  void transferOrCopyTo(velox::memory::MemoryPool* pool) override {
+    BaseVector::transferOrCopyTo(pool);
+    if (vector_) {
+      vector_->transferOrCopyTo(pool);
+    }
+  }
+
+ private:
+  static void ensureLoadedRowsImpl(
+      const VectorPtr& vector,
+      DecodedVector& decoded,
+      const SelectivityVector& rows,
+      SelectivityVector& baseRows);
+
+  void loadVectorInternal() const;
+
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override {
+    return isLoaded() ? loadedVector()->retainedSize(totalStringBufferSize)
+                      : BaseVector::retainedSizeImpl();
+  }
+
+  std::unique_ptr<VectorLoader> loader_;
+
+  // True if all values are loaded.
+  mutable tsan_atomic<bool> allLoaded_{false};
+  // Vector to hold loaded values. This may be present before load for
+  // reuse. If loading is with ValueHook, this will not be created.
+  mutable VectorPtr vector_;
+};
+
+} // namespace facebook::velox

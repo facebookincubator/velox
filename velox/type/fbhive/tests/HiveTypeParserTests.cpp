@@ -1,0 +1,263 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <memory>
+#include <stdexcept>
+
+#include "gtest/gtest-message.h"
+#include "gtest/gtest-test-part.h"
+#include "gtest/gtest.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/type/OpaqueCustomTypes.h"
+#include "velox/type/fbhive/HiveTypeParser.h"
+
+using facebook::velox::TypeKind;
+
+namespace facebook::velox::type::fbhive {
+
+template <TypeKind KIND>
+void validate(const char* str) {
+  HiveTypeParser parser;
+  auto t = parser.parse(str);
+  ASSERT_EQ(t->kind(), KIND);
+}
+
+TEST(FbHive, typeParserPrimitive) {
+  HiveTypeParser parser;
+  validate<TypeKind::BOOLEAN>("boolean");
+  validate<TypeKind::TINYINT>("tinyint");
+  validate<TypeKind::SMALLINT>("smallint");
+  validate<TypeKind::INTEGER>("int");
+  validate<TypeKind::BIGINT>("bigint");
+  validate<TypeKind::REAL>("float");
+  validate<TypeKind::DOUBLE>("double");
+  validate<TypeKind::VARCHAR>("string");
+  validate<TypeKind::VARCHAR>("varchar");
+  validate<TypeKind::VARCHAR>("varchar(16)");
+  validate<TypeKind::INTEGER>("   int  ");
+}
+
+TEST(FbHive, map) {
+  HiveTypeParser parser;
+  auto t = parser.parse("map<int, bigint>");
+  ASSERT_EQ(t->kind(), TypeKind::MAP);
+  ASSERT_EQ(t->size(), 2);
+  ASSERT_EQ(t->childAt(0)->kind(), TypeKind::INTEGER);
+  ASSERT_EQ(t->childAt(1)->kind(), TypeKind::BIGINT);
+  ASSERT_EQ(t->toString(), "MAP<INTEGER,BIGINT>");
+}
+
+TEST(FbHive, decimal) {
+  HiveTypeParser parser;
+  auto t = parser.parse("decimal(10,5)");
+  ASSERT_EQ(t->kind(), TypeKind::BIGINT);
+  auto shortType = t->asShortDecimal();
+  ASSERT_EQ(shortType.precision(), 10);
+  ASSERT_EQ(shortType.scale(), 5);
+  ASSERT_EQ(t->toString(), "DECIMAL(10, 5)");
+  t = parser.parse("decimal(21, 3)");
+  ASSERT_EQ(t->kind(), TypeKind::HUGEINT);
+  auto longType = t->asLongDecimal();
+  ASSERT_EQ(longType.precision(), 21);
+  ASSERT_EQ(longType.scale(), 3);
+  ASSERT_EQ(t->toString(), "DECIMAL(21, 3)");
+}
+
+TEST(FbHive, date) {
+  HiveTypeParser parser;
+  auto t = parser.parse("date");
+  ASSERT_EQ(t, DATE());
+  ASSERT_EQ(t->kind(), TypeKind::INTEGER);
+}
+
+TEST(FbHive, list) {
+  HiveTypeParser parser;
+  auto t = parser.parse("array<bigint>");
+  ASSERT_EQ(t->toString(), "ARRAY<BIGINT>");
+}
+
+TEST(FbHive, structNames) {
+  HiveTypeParser parser;
+  auto t = parser.parse("struct< foo : bigint , int : int, zoo : float>");
+  ASSERT_EQ(t->toString(), "ROW<foo:BIGINT,int:INTEGER,zoo:REAL>");
+
+  t = parser.parse("struct<_a:int,b_2:float,c3:double,4d:string,5:int>");
+  ASSERT_EQ(
+      t->toString(),
+      "ROW<_a:INTEGER,b_2:REAL,c3:DOUBLE,\"4d\":VARCHAR,\"5\":INTEGER>");
+}
+
+TEST(FbHive, unionDeprecation) {
+  HiveTypeParser parser;
+  VELOX_ASSERT_THROW(
+      parser.parse("uniontype< bigint , int, float>"),
+      "Unexpected token uniontype at < bigint , int, float>");
+  VELOX_ASSERT_THROW(
+      parser.parse("struct<a:uniontype<int,string>>"),
+      "Unexpected token uniontype at <int,string>>");
+  VELOX_ASSERT_THROW(
+      parser.parse(
+          "struct<a:map<int,array<struct<a:map<string,int>,b:array<int>,c:uniontype<int,float>>>>>"),
+      "Unexpected token uniontype at <int,float>>>>>");
+}
+
+TEST(FbHive, nested2) {
+  HiveTypeParser parser;
+  auto t = parser.parse("array<map<bigint, float>>");
+  ASSERT_EQ(t->toString(), "ARRAY<MAP<BIGINT,REAL>>");
+}
+
+TEST(FbHive, badParse) {
+  HiveTypeParser parser;
+  VELOX_ASSERT_THROW(
+      parser.parse("   "), "Unexpected end of stream parsing type!!!");
+  VELOX_ASSERT_THROW(
+      parser.parse("uniontype< bigint , int, float"),
+      "Unexpected token uniontype at < bigint , int, float");
+  VELOX_ASSERT_THROW(parser.parse("badid"), "Unexpected token badid at ");
+  VELOX_ASSERT_THROW(parser.parse("not_a_real_type"), "Unexpected token");
+  VELOX_ASSERT_THROW(
+      parser.parse("struct<int, bigint>"), "Unexpected token ' bigint>'");
+  VELOX_ASSERT_THROW(parser.parse("list<>"), "Unexpected token list at <>");
+  VELOX_ASSERT_THROW(
+      parser.parse("map<>"), "wrong param count for map type def");
+  VELOX_ASSERT_THROW(
+      parser.parse("uniontype<>"), "Unexpected token uniontype at <>");
+  VELOX_ASSERT_THROW(
+      parser.parse("list<int, bigint>"),
+      "Unexpected token list at <int, bigint>");
+  VELOX_ASSERT_THROW(
+      parser.parse("map<int>"), "wrong param count for map type def");
+  VELOX_ASSERT_THROW(
+      parser.parse("decimal<20, 10>"), "Unexpected token '20, 10>'");
+  VELOX_ASSERT_THROW(parser.parse("decimal(20, 10>"), "Unexpected token ");
+  VELOX_ASSERT_THROW(
+      parser.parse("decimal(a, 10)"),
+      "Decimal precision must be a positive integer");
+  VELOX_ASSERT_THROW(
+      parser.parse("decimal(20, b)"),
+      "Decimal scale must be a positive integer");
+  VELOX_ASSERT_THROW(
+      parser.parse("varchar(foo)"),
+      "Varchar length must be a positive integer");
+  VELOX_ASSERT_THROW(
+      parser.parse("varchar()"), "Varchar length must be a positive integer");
+}
+
+TEST(FbHive, caseInsensitive) {
+  HiveTypeParser parser;
+  auto t = parser.parse("STRUCT<a:INT,b:ARRAY<DOUBLE>,c:MAP<STRING,INT>>");
+  ASSERT_EQ(
+      t->toString(), "ROW<a:INTEGER,b:ARRAY<DOUBLE>,c:MAP<VARCHAR,INTEGER>>");
+}
+
+TEST(FbHive, parseTypeToString) {
+  HiveTypeParser parser;
+  auto t = parser.parse("struct<a:int,b:string,c:binary,d:float>");
+  ASSERT_EQ(t->toString(), "ROW<a:INTEGER,b:VARCHAR,c:VARBINARY,d:REAL>");
+  auto t2 = parser.parse(t->toString());
+  ASSERT_EQ(*t, *t2);
+}
+
+TEST(FbHive, parseSpecialChar) {
+  HiveTypeParser parser;
+  auto t = parser.parse("struct<a$_#:int>");
+  ASSERT_EQ(t->toString(), "ROW<\"a$_#\":INTEGER>");
+}
+
+struct Foo {};
+TEST(FbHive, parseOpaque) {
+  // Use a custom name to highlight this is just an alias.
+  registerOpaqueType<Foo>("bar");
+  HiveTypeParser parser;
+  auto t = parser.parse("opaque<bar>");
+  ASSERT_EQ(t->toString(), "OPAQUE<facebook::velox::type::fbhive::Foo>");
+  EXPECT_EQ(t->kind(), TypeKind::OPAQUE);
+  EXPECT_FALSE(customTypeExists("bar"));
+  unregisterOpaqueType<Foo>("bar");
+}
+
+TEST(FbHive, parseUnregisteredOpaque) {
+  // Use a custom name to highlight this is just an alias.
+  registerOpaqueType<Foo>("bar");
+  HiveTypeParser parser;
+  VELOX_ASSERT_THROW(
+      parser.parse("opaque<Foo>"),
+      "Could not find type 'Foo'. Did you call registerOpaqueType?");
+  unregisterOpaqueType<Foo>("bar");
+}
+
+struct CustomFoo {};
+constexpr char kCustomFooName[] = "CustomFoo";
+using CustomFooRegistrar = OpaqueCustomTypeRegister<CustomFoo, kCustomFooName>;
+
+TEST(FbHive, parseOpaqueCustomTypeReturnsSingleton) {
+  CustomFooRegistrar::registerType();
+  HiveTypeParser parser;
+  auto parsed = parser.parse("opaque<CustomFoo>");
+  // The parser must return the registered custom-type singleton so that
+  // pointer equality with the type produced by CustomType<TypeT> in UDF
+  // signatures holds.
+  EXPECT_EQ(parsed.get(), CustomFooRegistrar::singletonTypePtr().get());
+  CustomFooRegistrar::unregisterType();
+}
+
+namespace {
+
+// A generic VARCHAR-backed custom type used solely to exercise the parser's
+// custom-type lookup. It is unrelated to any real type.
+class TestCustomType final : public VarcharType {
+  TestCustomType() = default;
+
+ public:
+  static std::shared_ptr<const TestCustomType> get() {
+    static const TestCustomType kInstance;
+    return {std::shared_ptr<const TestCustomType>{}, &kInstance};
+  }
+};
+
+class TestCustomTypeFactory : public CustomTypeFactory {
+ public:
+  TypePtr getType(const std::vector<TypeParameter>& parameters) const override {
+    VELOX_CHECK(parameters.empty());
+    return TestCustomType::get();
+  }
+
+  exec::CastOperatorPtr getCastOperator() const override {
+    return nullptr;
+  }
+
+  AbstractInputGeneratorPtr getInputGenerator(
+      const InputGeneratorConfig& /*config*/) const override {
+    return nullptr;
+  }
+};
+
+} // namespace
+
+TEST(FbHive, parseCustomTypeReturnsSingleton) {
+  // An identifier that names a registered custom type must resolve to that
+  // registered singleton (not fail as an unknown token) so downstream
+  // type-equality with UDF signatures holds.
+  registerCustomType(
+      "test_custom_type", std::make_unique<const TestCustomTypeFactory>());
+  HiveTypeParser parser;
+  auto parsed = parser.parse("test_custom_type");
+  EXPECT_EQ(parsed.get(), TestCustomType::get().get());
+  EXPECT_EQ(parsed->kind(), TypeKind::VARCHAR);
+  unregisterCustomType("test_custom_type");
+}
+} // namespace facebook::velox::type::fbhive

@@ -1,0 +1,1238 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Crc.h"
+#include "velox/type/HugeInt.h"
+
+#include <cstring>
+#include <limits>
+#include <span>
+
+#include <boost/crc.hpp>
+#include <fmt/format.h>
+#include <folly/Random.h>
+#include <folly/hash/Checksum.h>
+#include <gflags/gflags.h>
+#include <gtest/gtest.h>
+
+DECLARE_bool(bmi2); // NOLINT
+
+namespace facebook {
+namespace velox {
+namespace bits {
+
+class BitUtilTest : public testing::Test {
+ protected:
+  template <typename T>
+  void testBitAccess() {
+    T words[16 / sizeof(T)];
+    memset(words, 0, sizeof(words));
+    EXPECT_FALSE(isBitSet(words, 111));
+    setBit(words, 111);
+    EXPECT_TRUE(isBitSet(words, 111));
+    clearBit(words, 111);
+    EXPECT_FALSE(isBitSet(words, 111));
+  }
+
+  void testSetRange(std::vector<uint64_t>& words, int32_t range) {
+    for (int32_t i = 0; i < words.size() * 64 - range; ++i) {
+      ASSERT_EQ(
+          isAllSet(&words[0], i, i + range, true),
+          simpleIsAllSet(&words[0], i, i + range, true));
+      ASSERT_EQ(
+          isAllSet(&words[0], i, i + range, false),
+          simpleIsAllSet(&words[0], i, i + range, false));
+    }
+  }
+
+  bool simpleIsAllSet(uint64_t* bits, int32_t begin, int32_t end, bool value) {
+    for (int32_t i = begin; i < end; ++i) {
+      if (isBitSet(bits, i) != value) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void testCopyBits(
+      const std::vector<uint64_t>& source,
+      int32_t bit,
+      int32_t numBits) {
+    std::vector<uint64_t> target(source.size());
+    std::vector<uint64_t> temp(source.size());
+    copyBits(source.data(), bit, temp.data(), 64 - bit, numBits);
+    for (auto i = 0; i < numBits; ++i) {
+      EXPECT_EQ(
+          isBitSet(source.data(), i + bit),
+          isBitSet(temp.data(), i + (64 - bit)));
+    }
+    copyBits(source.data(), 0, target.data(), 0, bit);
+    copyBits(
+        source.data(),
+        bit + numBits,
+        target.data(),
+        bit + numBits,
+        target.size() * 64 - bit - numBits);
+    copyBits(temp.data(), 64 - bit, target.data(), bit, numBits);
+    EXPECT_EQ(source, target);
+  }
+};
+
+static int32_t
+simpleCountBits(const uint64_t* bits, int32_t begin, int32_t end) {
+  int32_t count = 0;
+  for (int32_t i = begin; i < end; ++i) {
+    count += isBitSet(bits, i);
+  }
+  return count;
+}
+
+TEST_F(BitUtilTest, countBits) {
+  uint64_t data[] = {
+      0xff00ff00ffff00ff,
+      0x0f0f0f0f0f0f0f0f,
+      0xfedcba9876543210,
+      0xf0f0f0f0f0f0f0f0,
+      0x0123456789abcdef};
+  // We drop one high bit and one low bit on every round.
+  int32_t totalBits = sizeof(data) * 8;
+  for (int32_t i = 0; i < 10 + (totalBits / 2); ++i) {
+    EXPECT_EQ(
+        countBits(data, i, totalBits - i),
+        simpleCountBits(data, i, totalBits - i));
+  }
+}
+
+TEST_F(BitUtilTest, reverseBits) {
+  const unsigned char BitReverseTable256[] = {
+      0x00, 0x80, 0x40, 0xC0, 0x20, 0xA0, 0x60, 0xE0, 0x10, 0x90, 0x50, 0xD0,
+      0x30, 0xB0, 0x70, 0xF0, 0x08, 0x88, 0x48, 0xC8, 0x28, 0xA8, 0x68, 0xE8,
+      0x18, 0x98, 0x58, 0xD8, 0x38, 0xB8, 0x78, 0xF8, 0x04, 0x84, 0x44, 0xC4,
+      0x24, 0xA4, 0x64, 0xE4, 0x14, 0x94, 0x54, 0xD4, 0x34, 0xB4, 0x74, 0xF4,
+      0x0C, 0x8C, 0x4C, 0xCC, 0x2C, 0xAC, 0x6C, 0xEC, 0x1C, 0x9C, 0x5C, 0xDC,
+      0x3C, 0xBC, 0x7C, 0xFC, 0x02, 0x82, 0x42, 0xC2, 0x22, 0xA2, 0x62, 0xE2,
+      0x12, 0x92, 0x52, 0xD2, 0x32, 0xB2, 0x72, 0xF2, 0x0A, 0x8A, 0x4A, 0xCA,
+      0x2A, 0xAA, 0x6A, 0xEA, 0x1A, 0x9A, 0x5A, 0xDA, 0x3A, 0xBA, 0x7A, 0xFA,
+      0x06, 0x86, 0x46, 0xC6, 0x26, 0xA6, 0x66, 0xE6, 0x16, 0x96, 0x56, 0xD6,
+      0x36, 0xB6, 0x76, 0xF6, 0x0E, 0x8E, 0x4E, 0xCE, 0x2E, 0xAE, 0x6E, 0xEE,
+      0x1E, 0x9E, 0x5E, 0xDE, 0x3E, 0xBE, 0x7E, 0xFE, 0x01, 0x81, 0x41, 0xC1,
+      0x21, 0xA1, 0x61, 0xE1, 0x11, 0x91, 0x51, 0xD1, 0x31, 0xB1, 0x71, 0xF1,
+      0x09, 0x89, 0x49, 0xC9, 0x29, 0xA9, 0x69, 0xE9, 0x19, 0x99, 0x59, 0xD9,
+      0x39, 0xB9, 0x79, 0xF9, 0x05, 0x85, 0x45, 0xC5, 0x25, 0xA5, 0x65, 0xE5,
+      0x15, 0x95, 0x55, 0xD5, 0x35, 0xB5, 0x75, 0xF5, 0x0D, 0x8D, 0x4D, 0xCD,
+      0x2D, 0xAD, 0x6D, 0xED, 0x1D, 0x9D, 0x5D, 0xDD, 0x3D, 0xBD, 0x7D, 0xFD,
+      0x03, 0x83, 0x43, 0xC3, 0x23, 0xA3, 0x63, 0xE3, 0x13, 0x93, 0x53, 0xD3,
+      0x33, 0xB3, 0x73, 0xF3, 0x0B, 0x8B, 0x4B, 0xCB, 0x2B, 0xAB, 0x6B, 0xEB,
+      0x1B, 0x9B, 0x5B, 0xDB, 0x3B, 0xBB, 0x7B, 0xFB, 0x07, 0x87, 0x47, 0xC7,
+      0x27, 0xA7, 0x67, 0xE7, 0x17, 0x97, 0x57, 0xD7, 0x37, 0xB7, 0x77, 0xF7,
+      0x0F, 0x8F, 0x4F, 0xCF, 0x2F, 0xAF, 0x6F, 0xEF, 0x1F, 0x9F, 0x5F, 0xDF,
+      0x3F, 0xBF, 0x7F, 0xFF};
+
+  uint8_t bytes[10000];
+  for (size_t i = 0; i < 10000; i++) {
+    bytes[i] = rand();
+  }
+
+  uint8_t bytesCopy[10000];
+  memcpy(bytesCopy, bytes, 10000);
+
+  reverseBits(bytes, 10000);
+  for (size_t i = 0; i < 10000; i++) {
+    EXPECT_EQ(bytes[i], BitReverseTable256[bytesCopy[i]]);
+  }
+
+  reverseBits(bytes, 10000);
+  for (size_t i = 0; i < 10000; i++) {
+    EXPECT_EQ(bytes[i], bytesCopy[i]);
+  }
+}
+
+TEST_F(BitUtilTest, isAllSet) {
+  std::vector<uint64_t> data(100);
+  fillBits(&data[0], 11, 222, true);
+  fillBits(&data[0], 256, 384, true);
+  // Fractional word.
+  testSetRange(data, 11);
+  // Parts of 2 words.
+  testSetRange(data, 111);
+  // Whole word and parts of surrounding words.
+  testSetRange(data, 133);
+  uint64_t* word = reinterpret_cast<uint64_t*>(&data[0]);
+  EXPECT_EQ(findFirstBit(word, 0, 11), -1);
+  EXPECT_EQ(findFirstBit(word, 0, 12), 11);
+  EXPECT_EQ(findFirstBit(word, 0, 123), 11);
+  EXPECT_EQ(findLastBit(word, 0, 12), 11);
+  EXPECT_EQ(findLastBit(word, 0, 88), 87);
+  EXPECT_EQ(findLastBit(word, 233, 255), -1);
+  EXPECT_EQ(findLastBit(word, 221, 255), 221);
+  EXPECT_EQ(findLastBit(word, 0, 255), 221);
+  EXPECT_EQ(findLastBit(word, 381, 600), 383);
+}
+
+TEST_F(BitUtilTest, findLastUnsetBit) {
+  uint64_t allOnes = static_cast<uint64_t>(-1);
+
+  std::vector<uint64_t> vector(100, allOnes);
+  auto data = vector.data();
+  int32_t dataSizeInBits = 64 * vector.size();
+
+  ASSERT_EQ(-1, findLastUnsetBit(data, 0 /*begin*/, dataSizeInBits /*end*/));
+
+  clearBit(data, 500);
+  clearBit(data, 300);
+
+  ASSERT_EQ(500, findLastUnsetBit(data, 0 /*begin*/, dataSizeInBits /*end*/));
+
+  ASSERT_EQ(300, findLastUnsetBit(data, 0 /*begin*/, 400));
+  ASSERT_EQ(300, findLastUnsetBit(data, 100 /*begin*/, 400));
+
+  ASSERT_EQ(-1, findLastUnsetBit(data, 350 /*begin*/, 450));
+}
+
+TEST_F(BitUtilTest, nbytes) {
+  EXPECT_EQ(nbytes(0), 0);
+  EXPECT_EQ(nbytes(1), 1);
+  EXPECT_EQ(nbytes(23), 3);
+  EXPECT_EQ(nbytes(24), 3);
+  EXPECT_EQ(nbytes(25), 4);
+}
+
+TEST_F(BitUtilTest, nwords) {
+  EXPECT_EQ(nwords(0), 0);
+  EXPECT_EQ(nwords(24), 1);
+  EXPECT_EQ(nwords(63), 1);
+  EXPECT_EQ(nwords(64), 1);
+  EXPECT_EQ(nwords(65), 2);
+}
+
+TEST_F(BitUtilTest, setBits) {
+  testBitAccess<uint64_t>();
+  testBitAccess<uint32_t>();
+  testBitAccess<uint16_t>();
+  testBitAccess<uint8_t>();
+  uint64_t words[2] = {0, 0};
+  uint8_t* bytes = reinterpret_cast<uint8_t*>(words);
+  // Set with words, test with bytes.
+  EXPECT_FALSE(isBitSet(words, 111));
+  setBit(words, 111);
+  EXPECT_TRUE(isBitSet(bytes, 111));
+  clearBit(words, 111);
+  EXPECT_FALSE(isBitSet(bytes, 111));
+}
+
+TEST_F(BitUtilTest, booleans) {
+  std::vector<uint64_t> left(8);
+  std::vector<uint64_t> right(8);
+  // Test filling
+  fillBits(&left[0], 11, 89, true);
+  fillBits(&right[0], 11, 89, true);
+  EXPECT_EQ(left, right);
+  EXPECT_TRUE(isSubset(&left[0], &right[0], 10, 90));
+  EXPECT_TRUE(isSubset(&right[0], &left[0], 10, 90));
+  EXPECT_TRUE(hasIntersection(&left[0], &right[0], 10, 90));
+
+  fillBits(&left[0], 91, 132, true);
+  EXPECT_TRUE(isSubset(&left[0], &right[0], 10, 90));
+  // False, we just added bits 91... to 'left'.
+  EXPECT_FALSE(isSubset(&left[0], &right[0], 10, 122));
+  EXPECT_FALSE(isAllSet(&left[0], 0, 14, false));
+  EXPECT_TRUE(isAllSet(&left[0], 22, 83, true));
+  EXPECT_FALSE(isAllSet(&left[0], 22, 92, true));
+
+  fillBits(&left[0], 0, left.size() * 64, false);
+  fillBits(&right[0], 0, left.size() * 64, false);
+  fillBits(&left[0], 10, 222, true);
+  fillBits(&right[0], 210, 300, true);
+  EXPECT_TRUE(hasIntersection(&left[0], &right[0], 200, 240));
+  EXPECT_FALSE(hasIntersection(&left[0], &right[0], 235, 240));
+  auto result = left;
+  orRange<false>(&result[0], &left[0], &right[0], 5, 400);
+  EXPECT_TRUE(isAllSet(&result[0], 10, 300));
+  EXPECT_FALSE(isBitSet(&result[0], 9) || isBitSet(&result[0], 300));
+  result = left;
+  andRange<false>(&result[0], &left[0], &right[0], 5, 400);
+  EXPECT_TRUE(isAllSet(&result[0], 210, 222));
+  EXPECT_FALSE(isBitSet(&result[0], 209) || isBitSet(&result[0], 222));
+}
+
+TEST_F(BitUtilTest, testBits) {
+  uint64_t data[] = {0x0, 0x0, 0x0, 0x0, 0x0};
+  auto totalBits = sizeof(data) * 8;
+
+  // no bits are set
+  auto neverCalled = [](int32_t idx) {
+    EXPECT_TRUE(false) << "Didn't expect this call";
+    return true;
+  };
+  EXPECT_TRUE(testSetBits(data, 0, totalBits, neverCalled));
+  EXPECT_TRUE(testSetBits(data, 2, totalBits, neverCalled));
+  EXPECT_TRUE(testSetBits(data, 2, totalBits - 3, neverCalled));
+
+  int32_t expectedIndex = 0;
+  auto calledOnEachBit = [&expectedIndex](int32_t idx) {
+    EXPECT_EQ(expectedIndex, idx);
+    expectedIndex++;
+    return true;
+  };
+
+  EXPECT_TRUE(testUnsetBits(data, 0, totalBits, calledOnEachBit));
+  EXPECT_EQ(totalBits, expectedIndex);
+
+  expectedIndex = 2;
+  EXPECT_TRUE(testUnsetBits(data, 2, totalBits, calledOnEachBit));
+  EXPECT_EQ(totalBits, expectedIndex);
+
+  expectedIndex = 2;
+  EXPECT_TRUE(testUnsetBits(data, 2, totalBits - 3, calledOnEachBit));
+  EXPECT_EQ(totalBits - 3, expectedIndex);
+
+  // set even bits
+  for (size_t i = 0; i < totalBits; i += 2) {
+    setBit(data, i);
+  }
+
+  auto calledOnEveryOther = [&expectedIndex](int32_t idx) {
+    EXPECT_EQ(expectedIndex, idx);
+    expectedIndex += 2;
+    return true;
+  };
+
+  expectedIndex = 0;
+  EXPECT_TRUE(testSetBits(data, 0, totalBits, calledOnEveryOther));
+  EXPECT_EQ(totalBits, expectedIndex);
+
+  expectedIndex = 2;
+  EXPECT_TRUE(testSetBits(data, 2, totalBits, calledOnEveryOther));
+  EXPECT_EQ(totalBits, expectedIndex);
+
+  expectedIndex = 2;
+  EXPECT_TRUE(testSetBits(data, 2, totalBits - 3, calledOnEveryOther));
+  EXPECT_EQ(totalBits - 2, expectedIndex);
+
+  expectedIndex = 1;
+  EXPECT_TRUE(testUnsetBits(data, 0, totalBits, calledOnEveryOther));
+  EXPECT_EQ(totalBits + 1, expectedIndex);
+
+  expectedIndex = 3;
+  EXPECT_TRUE(testUnsetBits(data, 2, totalBits, calledOnEveryOther));
+  EXPECT_EQ(totalBits + 1, expectedIndex);
+
+  expectedIndex = 3;
+  EXPECT_TRUE(testUnsetBits(data, 2, totalBits - 3, calledOnEveryOther));
+  EXPECT_EQ(totalBits - 3, expectedIndex);
+
+  // test early termination
+  int32_t maxIndex = 0;
+  auto terminatedEarly = [&expectedIndex, &maxIndex](int32_t idx) {
+    EXPECT_EQ(expectedIndex, idx);
+    expectedIndex += 2;
+    return expectedIndex < maxIndex;
+  };
+
+  expectedIndex = 0;
+  maxIndex = 10;
+  EXPECT_FALSE(testSetBits(data, 0, totalBits, terminatedEarly));
+  EXPECT_EQ(maxIndex, expectedIndex);
+
+  // test early termination within partial first word
+  expectedIndex = 2;
+  maxIndex = 6;
+  EXPECT_FALSE(testSetBits(data, 2, totalBits, terminatedEarly));
+  EXPECT_EQ(maxIndex, expectedIndex);
+
+  // test early termination within partial last word
+  expectedIndex = 2;
+  maxIndex = totalBits - 4;
+  EXPECT_FALSE(testSetBits(data, 2, totalBits - 3, terminatedEarly));
+  EXPECT_EQ(maxIndex, expectedIndex);
+}
+
+TEST_F(BitUtilTest, forEachBit) {
+  uint64_t data[] = {0x0, 0x0, 0x0, 0x0, 0x0};
+  auto totalBits = sizeof(data) * 8;
+
+  // no bits are set
+  auto neverCalled = [](int32_t idx) {
+    EXPECT_TRUE(false) << "Didn't expect this call";
+  };
+  forEachSetBit(data, 0, totalBits, neverCalled);
+  forEachSetBit(data, 2, totalBits, neverCalled);
+  forEachSetBit(data, 2, totalBits - 3, neverCalled);
+
+  int32_t expectedIndex = 0;
+  auto calledOnEachBit = [&expectedIndex](int32_t idx) {
+    EXPECT_EQ(expectedIndex, idx);
+    expectedIndex++;
+  };
+
+  forEachUnsetBit(data, 0, totalBits, calledOnEachBit);
+  EXPECT_EQ(totalBits, expectedIndex);
+
+  expectedIndex = 2;
+  forEachUnsetBit(data, 2, totalBits, calledOnEachBit);
+  EXPECT_EQ(totalBits, expectedIndex);
+
+  expectedIndex = 2;
+  forEachUnsetBit(data, 2, totalBits - 3, calledOnEachBit);
+  EXPECT_EQ(totalBits - 3, expectedIndex);
+
+  // set even bits
+  for (size_t i = 0; i < totalBits; i += 2) {
+    setBit(data, i);
+  }
+
+  auto calledOnEveryOther = [&expectedIndex](int32_t idx) {
+    EXPECT_EQ(expectedIndex, idx);
+    expectedIndex += 2;
+  };
+
+  expectedIndex = 0;
+  forEachSetBit(data, 0, totalBits, calledOnEveryOther);
+  EXPECT_EQ(totalBits, expectedIndex);
+
+  expectedIndex = 2;
+  forEachSetBit(data, 2, totalBits, calledOnEveryOther);
+  EXPECT_EQ(totalBits, expectedIndex);
+
+  expectedIndex = 2;
+  forEachSetBit(data, 2, totalBits - 3, calledOnEveryOther);
+  EXPECT_EQ(totalBits - 2, expectedIndex);
+
+  expectedIndex = 1;
+  forEachUnsetBit(data, 0, totalBits, calledOnEveryOther);
+  EXPECT_EQ(totalBits + 1, expectedIndex);
+
+  expectedIndex = 3;
+  forEachUnsetBit(data, 2, totalBits, calledOnEveryOther);
+  EXPECT_EQ(totalBits + 1, expectedIndex);
+
+  expectedIndex = 3;
+  forEachUnsetBit(data, 2, totalBits - 3, calledOnEveryOther);
+  EXPECT_EQ(totalBits - 3, expectedIndex);
+
+  totalBits = 100;
+  std::vector<uint64_t> bits(bits::nwords(totalBits));
+  uint64_t* rawBits = bits.data();
+
+  // Test all bits set.
+  bits::fillBits(rawBits, 0, totalBits, true);
+  int count = 0;
+  auto countEach = [&](auto row) {
+    ASSERT_EQ(row, count);
+    count++;
+  };
+
+  bits::forEachBit(rawBits, 0, totalBits, true, countEach);
+  ASSERT_EQ(totalBits, count);
+
+  // Test all bits unset.
+  bits::fillBits(rawBits, 0, totalBits, false);
+
+  count = 0;
+  bits::forEachBit(rawBits, 0, totalBits, false, countEach);
+  ASSERT_EQ(totalBits, count);
+
+  // Test all but one bit set.
+  bits::fillBits(rawBits, 0, totalBits, true);
+  bits::setBit(rawBits, 50, false);
+  count = 0;
+  auto incrementCount = [&](auto _) { count++; };
+  bits::forEachBit(rawBits, 0, totalBits, true, incrementCount);
+  ASSERT_EQ(totalBits - 1, count);
+
+  // Test all but one bit unset.
+  bits::fillBits(rawBits, 0, totalBits, false);
+  bits::setBit(rawBits, 50, true);
+  count = 0;
+  bits::forEachBit(rawBits, 0, totalBits, false, incrementCount);
+  ASSERT_EQ(totalBits - 1, count);
+}
+
+TEST_F(BitUtilTest, hash) {
+  std::unordered_map<uint64_t, int32_t> hashes;
+  std::string text =
+      "Forget the night, come live with us in forests of azure, "
+      "for we have constructed pyramids in honor of our escaping...";
+  for (int32_t i = 0; i < text.size(); ++i) {
+    // starts hashing at unaligned addresses.
+    int32_t offset = i > 3 && i < text.size() - 3 ? i % 3 : 0;
+    auto hash = hashBytes(1, text.data() + offset, i);
+    if (i + offset < text.size() - 1) {
+      ++text[i + offset];
+      // Change the first byte after the hashed range and check that the hash
+      // function does not overread its range.
+      EXPECT_EQ(hash, hashBytes(1, text.data() + offset, i));
+      --text[i + offset];
+    }
+    auto it = hashes.find(hash);
+    if (it == hashes.end()) {
+      hashes[hash] = i;
+    } else {
+      EXPECT_TRUE(false) << "Duplicate hash at " << i;
+    }
+  }
+  EXPECT_EQ(hashes.size(), text.size());
+}
+
+TEST_F(BitUtilTest, nextPowerOfTwo) {
+  EXPECT_EQ(nextPowerOfTwo(0), 0);
+  EXPECT_EQ(nextPowerOfTwo(1), 1);
+  EXPECT_EQ(nextPowerOfTwo(2), 2);
+  EXPECT_EQ(nextPowerOfTwo(3), 4);
+  EXPECT_EQ(nextPowerOfTwo(4), 4);
+  EXPECT_EQ(nextPowerOfTwo(5), 8);
+  EXPECT_EQ(nextPowerOfTwo(6), 8);
+  EXPECT_EQ(nextPowerOfTwo(7), 8);
+  EXPECT_EQ(nextPowerOfTwo(8), 8);
+  EXPECT_EQ(nextPowerOfTwo(31), 32);
+  EXPECT_EQ(nextPowerOfTwo(32), 32);
+  EXPECT_EQ(nextPowerOfTwo(33), 64);
+  EXPECT_EQ(nextPowerOfTwo(1ULL << 32), 1ULL << 32);
+  EXPECT_EQ(nextPowerOfTwo((1ULL << 32) + 1), 1ULL << 33);
+  EXPECT_EQ(nextPowerOfTwo((1ULL << 62) + 1), 1ULL << 63);
+}
+
+TEST_F(BitUtilTest, isPowerOfTwo) {
+  EXPECT_TRUE(isPowerOfTwo(0));
+  EXPECT_TRUE(isPowerOfTwo(1));
+  EXPECT_TRUE(isPowerOfTwo(2));
+  EXPECT_FALSE(isPowerOfTwo(3));
+  EXPECT_TRUE(isPowerOfTwo(4));
+  EXPECT_FALSE(isPowerOfTwo(7));
+  EXPECT_TRUE(isPowerOfTwo(64));
+  EXPECT_FALSE(isPowerOfTwo(65));
+  EXPECT_FALSE(isPowerOfTwo(1000));
+  EXPECT_TRUE(isPowerOfTwo(1024));
+}
+
+TEST_F(BitUtilTest, getAndClearLastSetBit) {
+  uint16_t bits = 0;
+  for (int32_t i = 0; i < 16; i++) {
+    bits::setBit(&bits, i, i % 3 == 0);
+  }
+
+  EXPECT_EQ(getAndClearLastSetBit(bits), 0);
+  EXPECT_EQ(getAndClearLastSetBit(bits), 3);
+  EXPECT_EQ(getAndClearLastSetBit(bits), 6);
+  EXPECT_EQ(getAndClearLastSetBit(bits), 9);
+  EXPECT_EQ(getAndClearLastSetBit(bits), 12);
+  EXPECT_EQ(getAndClearLastSetBit(bits), 15);
+  EXPECT_EQ(bits, 0);
+
+  for (int32_t i = 0; i < 16; i++) {
+    bits::setBit(&bits, i, i % 5 == 2);
+  }
+
+  EXPECT_EQ(getAndClearLastSetBit(bits), 2);
+  EXPECT_EQ(getAndClearLastSetBit(bits), 7);
+  EXPECT_EQ(getAndClearLastSetBit(bits), 12);
+  EXPECT_EQ(bits, 0);
+}
+
+TEST_F(BitUtilTest, negateBit) {
+  char data[35];
+  for (int32_t i = 0; i < 100; i++) {
+    setBit(data, i, true);
+  }
+  std::vector<uint64_t> indices = {0, 1, 2, 3, 4, 5, 6, 7};
+  for (auto i : indices) {
+    negateBit(data, i);
+    EXPECT_EQ(isBitSet(data, i), false);
+  }
+  for (int32_t i = 8; i < 100; i++) {
+    EXPECT_EQ(isBitSet(data, i), true);
+  }
+}
+
+TEST_F(BitUtilTest, negate) {
+  char data[35];
+  for (int32_t i = 0; i < 100; i++) {
+    setBit(data, i, i % 2 == 0);
+  }
+
+  negate(reinterpret_cast<uint64_t*>(data), 64);
+  for (int32_t i = 0; i < 64; i++) {
+    EXPECT_EQ(isBitSet(data, i), i % 2 != 0) << "at " << i;
+  }
+  for (int32_t i = 64; i < 100; i++) {
+    EXPECT_EQ(isBitSet(data, i), i % 2 == 0) << "at " << i;
+  }
+
+  negate(reinterpret_cast<uint64_t*>(data), 64);
+  for (int32_t i = 0; i < 64; i++) {
+    EXPECT_EQ(isBitSet(data, i), i % 2 == 0) << "at " << i;
+  }
+
+  negate(reinterpret_cast<uint64_t*>(data), 72);
+  for (int32_t i = 0; i < 72; i++) {
+    EXPECT_EQ(isBitSet(data, i), i % 2 != 0) << "at " << i;
+  }
+  for (int32_t i = 72; i < 100; i++) {
+    EXPECT_EQ(isBitSet(data, i), i % 2 == 0) << "at " << i;
+  }
+
+  negate(reinterpret_cast<uint64_t*>(data), 72);
+  for (int32_t i = 0; i < 72; i++) {
+    EXPECT_EQ(isBitSet(data, i), i % 2 == 0) << "at " << i;
+  }
+
+  negate(reinterpret_cast<uint64_t*>(data), 100);
+  for (int32_t i = 0; i < 100; i++) {
+    EXPECT_EQ(isBitSet(data, i), i % 2 != 0) << "at " << i;
+  }
+
+  negate(reinterpret_cast<uint64_t*>(data), 100);
+  for (int32_t i = 0; i < 100; i++) {
+    EXPECT_EQ(isBitSet(data, i), i % 2 == 0) << "at " << i;
+  }
+}
+
+TEST_F(BitUtilTest, bitfields) {
+  uint64_t source = 0x123456789abcdef0;
+  uint64_t mask20 = (1 << 20) - 1;
+  uint64_t mask31 = (1UL << 31) - 1;
+  // Do a load that fits in uint32_t
+  EXPECT_EQ(
+      detail::loadBits<uint32_t>(&source, 3, 20) & mask20,
+      source >> 3 & mask20);
+
+  // Do a load that accesses the next byte after first uint32_t
+  EXPECT_EQ(
+      detail::loadBits<uint32_t>(&source, 3, 31) & mask31,
+      source >> 3 & mask31);
+
+  uint64_t target = 0x123456789abcdef0;
+  uint64_t original = target;
+  uint32_t value = 0x76543210;
+  detail::storeBits<uint32_t>(&target, 3, value, 20);
+  // Check the bit field was written and the bits outside were left as
+  // is.  Force load from the address of target, the type punned store
+  // above may have been missed by alias tracking in optimized mode.
+  auto targetValue = *reinterpret_cast<volatile uint64_t*>(&target);
+  EXPECT_EQ((targetValue >> 3) & mask20, value & mask20);
+  EXPECT_EQ(targetValue & ~(mask20 << 3), original & ~(mask20 << 3));
+
+  // Repeat the same writing a bit field that overflows into the next byte.
+  target = original;
+
+  detail::storeBits<uint32_t>(&target, 3, value, 31);
+  // Check the bit field was written and the bits outside were left as is.
+  targetValue = *reinterpret_cast<volatile uint64_t*>(&target);
+  EXPECT_EQ((targetValue >> 3) & mask31, value & mask31);
+  EXPECT_EQ(targetValue & ~(mask31 << 3), original & ~(mask31 << 3));
+}
+
+TEST_F(BitUtilTest, copyBits) {
+  std::vector<uint64_t> source(10);
+
+  for (auto i = 0; i < source.size(); ++i) {
+    source[i] = 0x1234567890abcdef >> i;
+  }
+  testCopyBits(source, 10, 21);
+  testCopyBits(source, 55, 21);
+  testCopyBits(source, 0, 128);
+  testCopyBits(source, 1, 128);
+  testCopyBits(source, 63, 128);
+  testCopyBits(source, 45, 301);
+  testCopyBits(source, 63, 407);
+  // Write bits 61..638 in temp, check that there is no write past
+  // 10th word in temp.
+  testCopyBits(source, 3, 640 - 62);
+}
+
+TEST_F(BitUtilTest, copyBitsBackward) {
+  std::vector<uint64_t> origin(10);
+  for (auto i = 0; i < origin.size(); ++i) {
+    origin[i] = 0x1234567890abcdef >> i;
+  }
+  auto test = [&](int source, int target, int size) {
+    SCOPED_TRACE(
+        fmt::format("source={} target={} size={}", source, target, size));
+    auto data = origin;
+    copyBitsBackward(data.data(), source, target, size);
+    for (int i = 0; i < data.size() * 64; ++i) {
+      int j = i;
+      if (target <= i && i < target + size) {
+        j = i - target + source;
+      }
+      ASSERT_EQ(isBitSet(data.data(), i), isBitSet(origin.data(), j))
+          << "i=" << i << " j=" << j;
+    }
+  };
+  for (int source = 0; source <= 64; ++source) {
+    for (int target = source + 1; target <= 64; ++target) {
+      for (int size = 128; size <= 138; ++size) {
+        test(source, target, size);
+      }
+    }
+  }
+}
+
+TEST_F(BitUtilTest, toString) {
+  uint64_t bits = 0x1234567890abcdef;
+  EXPECT_EQ(
+      toString(&bits, 0, 64),
+      "1111011110110011110101010000100100011110011010100010110001001000");
+  uint8_t byte = 0x42;
+  EXPECT_EQ(toString(&byte, 0, 8), "01000010");
+}
+
+TEST_F(BitUtilTest, scatterBits) {
+  constexpr int32_t kSize = 100;
+  constexpr int32_t kNumBits = kSize * 64 - 2;
+  std::vector<uint64_t> mask(kSize);
+  auto maskData = mask.data();
+
+  // Ranges of tens of set and unset bits.
+  fillBits(maskData, kNumBits - 130, kNumBits - 2, true);
+  fillBits(maskData, kNumBits - 601, kNumBits - 403, true);
+
+  folly::Random::DefaultGenerator rng;
+  rng.seed(1);
+  // Range of mostly set bits, 1/50 is not set.
+  for (auto bit = kNumBits - 1000; bit > 400; --bit) {
+    if (folly::Random::rand32(rng) % 50) {
+      setBit(maskData, bit);
+    }
+  }
+  // Alternating groups of 5 bits with 0-3 bis set.
+  for (auto i = 0; i < 305; i += 5) {
+    auto numSet = (i / 5) % 4;
+    for (auto j = 0; j < numSet; ++j) {
+      setBit(maskData, i + j, true);
+    }
+  }
+
+  auto numInMask = bits::countBits(maskData, 0, kNumBits);
+  std::vector<uint64_t> source(kSize);
+  uint64_t seed = 0x123456789abcdef0LL;
+  for (auto& item : source) {
+    item = seed;
+    seed *= 0x5cdf;
+  }
+  std::vector<char> test(kSize * 8);
+  std::vector<char> reference(kSize * 8);
+  auto sourceAsChar = reinterpret_cast<char*>(source.data());
+  scatterBits(numInMask, kNumBits, sourceAsChar, maskData, test.data());
+  // Generate the reference output with the non-BMI implementation.
+  FLAGS_bmi2 = false; // NOLINT
+  scatterBits(numInMask, kNumBits, sourceAsChar, maskData, reference.data());
+  FLAGS_bmi2 = true; // NOLINT
+  EXPECT_EQ(reference, test);
+  // Repeat the same in place.
+  scatterBits(numInMask, kNumBits, sourceAsChar, maskData, sourceAsChar);
+  for (int32_t i = kNumBits - 1; i >= 0; --i) {
+    EXPECT_EQ(
+        bits::isBitSet(reference.data(), i), bits::isBitSet(sourceAsChar, i));
+  }
+}
+
+TEST_F(BitUtilTest, hashMix) {
+  EXPECT_NE(bits::hashMix(123, 321), bits::hashMix(321, 123));
+  EXPECT_EQ(
+      bits::commutativeHashMix(123, 321), bits::commutativeHashMix(321, 123));
+}
+
+TEST_F(BitUtilTest, crc) {
+  const char* text =
+      "We were sailing on the sloop John B., ny grandfather and me...";
+  const char* text2 = "around old Nassau we would rowm";
+  boost::crc_32_type crc32;
+  crc32.process_bytes(text, sizeof(text));
+  crc32.process_bytes(text2, sizeof(text2));
+  auto boostCrc = crc32.checksum();
+  bits::Crc32 crc;
+  crc.process_bytes(text, sizeof(text));
+  crc.process_bytes(text2, sizeof(text2));
+  auto follyCrc = crc.checksum();
+
+  EXPECT_EQ(boostCrc, follyCrc);
+}
+
+TEST_F(BitUtilTest, pad) {
+  char bytes[100];
+  memset(bytes, 1, sizeof(bytes));
+  bits::padToAlignment(&bytes[11], 30, 7, 16);
+  // We expect a 0 in bytes[11 +7] ... bytes[11 + 15].
+  EXPECT_EQ(1, bytes[11 + 6]);
+  for (auto i = 11 + 7; i < 11 + 16; ++i) {
+    EXPECT_EQ(0, bytes[i]);
+  }
+  EXPECT_EQ(1, bytes[11 + 16]);
+
+  // Test with end of data before next aligned address.
+  memset(bytes, 1, sizeof(bytes));
+  bits::padToAlignment(&bytes[11], 12, 7, 16);
+  // We expect a 0 in bytes[11 +7] ... bytes[11 + 12].
+  EXPECT_EQ(1, bytes[11 + 6]);
+  for (auto i = 11 + 7; i < 11 + 12; ++i) {
+    EXPECT_EQ(0, bytes[i]);
+  }
+  EXPECT_EQ(1, bytes[11 + 13]);
+}
+
+TEST_F(BitUtilTest, forBatches) {
+  uint64_t bits[] = {
+      0x0f0f'000f'ff00'f0f0, 0xff00'ffff'0000'00ff, 0x0, 0x0fff'0000'0000'ff0f};
+  auto test = [&](int32_t begin, int32_t end) {
+    int32_t numSet = 0;
+    auto numOnes = countBits(bits, begin, end);
+    forBatches<8>(bits, begin, end, [&](int32_t index, uint8_t mask) {
+      EXPECT_EQ(0, index % 8);
+      auto bitfield = reinterpret_cast<const uint8_t*>(bits)[index / 8] & mask;
+      EXPECT_NE(0, bitfield & mask);
+      numSet += __builtin_popcount(bitfield);
+    });
+    EXPECT_EQ(numOnes, numSet);
+    numSet = 0;
+    forBatches<64>(bits, begin, end, [&](int32_t index, uint64_t mask) {
+      EXPECT_EQ(0, index % 64);
+      auto bitfield =
+          reinterpret_cast<const uint64_t*>(bits)[index / 64] & mask;
+      EXPECT_NE(0, bitfield & mask);
+      numSet += __builtin_popcountl(bitfield);
+    });
+    EXPECT_EQ(numOnes, numSet);
+  };
+
+  // Empty
+  test(11, 11);
+
+  // Begins and ends in the same word
+  test(65, 75);
+
+  // multiword, starts and ends on and off 64 bit boundaries.
+  test(64, 140);
+  test(31, 128);
+  test(1, sizeof(bits) * 8 - 22);
+  test(0, sizeof(bits) * 8);
+}
+
+TEST_F(BitUtilTest, rotateLeft64) {
+  uint64_t data[] = {
+      0xff00ff00ffff00ff,
+      0x0f0f0f0f0f0f0f0f,
+      0xfedcba9876543210,
+      0xf0f0f0f0f0f0f0f0,
+      0x0123456789abcdef};
+  // The expected result was obtained by running with java standard library
+  // System.out.println(Long.toHexString(Long.rotateLeft(0x0f0f0f0f0f0f0f0fL,
+  // 2)));
+  uint64_t expectedShift2[] = {
+      0xfc03fc03fffc03ff,
+      0x3c3c3c3c3c3c3c3c,
+      0xfb72ea61d950c843,
+      0xc3c3c3c3c3c3c3c3,
+      0x48d159e26af37bc};
+  uint64_t expectedShift33[] = {
+      0xfffe01fffe01fe01,
+      0x1e1e1e1e1e1e1e1e,
+      0xeca86421fdb97530,
+      0xe1e1e1e1e1e1e1e1,
+      0x13579bde02468acf};
+  for (int32_t i = 0; i < 5; i++) {
+    EXPECT_EQ(rotateLeft64(data[i], 2), expectedShift2[i]);
+    EXPECT_EQ(rotateLeft64(data[i], 33), expectedShift33[i]);
+  }
+}
+
+TEST_F(BitUtilTest, bswap128) {
+  EXPECT_EQ(builtin_bswap128(10), HugeInt::build(720575940379279360, 0));
+  EXPECT_EQ(
+      builtin_bswap128(HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)),
+      -248);
+}
+
+TEST_F(BitUtilTest, countLeadingZeros) {
+  EXPECT_EQ(countLeadingZeros<uint64_t>(0), 64);
+  EXPECT_EQ(countLeadingZeros<uint64_t>(1), 63);
+  EXPECT_EQ(countLeadingZeros<__uint128_t>(0), 128);
+  EXPECT_EQ(countLeadingZeros<__uint128_t>(1), 127);
+  EXPECT_EQ(countLeadingZeros<__uint128_t>(1), 127);
+  EXPECT_EQ(
+      countLeadingZeros<__uint128_t>(
+          HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)),
+      4);
+  EXPECT_EQ(
+      countLeadingZeros<__uint128_t>(HugeInt::build(0x08FFFFFFFFFFFFFF, 0)), 4);
+}
+
+TEST_F(BitUtilTest, storeBitsToByte) {
+  uint8_t bytes[3]{};
+  storeBitsToByte<8>(0xAA, bytes, 0);
+  ASSERT_EQ(bytes[0], 0xAA);
+  ASSERT_EQ(bytes[1], 0);
+  ASSERT_EQ(bytes[2], 0);
+  storeBitsToByte<4>(0x5, bytes, 8);
+  ASSERT_EQ(bytes[0], 0xAA);
+  ASSERT_EQ(bytes[1], 0x5);
+  ASSERT_EQ(bytes[2], 0);
+  storeBitsToByte<4>(0xA, bytes, 12);
+  ASSERT_EQ(bytes[0], 0xAA);
+  ASSERT_EQ(bytes[1], 0xA5);
+  ASSERT_EQ(bytes[2], 0);
+}
+
+TEST_F(BitUtilTest, roundUp) {
+  struct {
+    uint64_t value;
+    uint64_t factor;
+    uint64_t expected;
+
+    std::string debugString() const {
+      return fmt::format(
+          "value: {}, factor: {}, expected: {}", value, factor, expected);
+    }
+  } testSettings[] = {
+      {10, 1, 10},
+      {10, 3, 12},
+      {10, 4, 12},
+      {10, 10, 10},
+      {10, 11, 11},
+      {10, 20, 20},
+      {11, 1, 11},
+      {11, 3, 12},
+      {11, 4, 12},
+      {11, 11, 11},
+      {11, 12, 12},
+      {11, 23, 23}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    ASSERT_EQ(
+        bits::roundUp(testData.value, testData.factor), testData.expected);
+  }
+}
+
+TEST_F(BitUtilTest, divRoundUp) {
+  struct {
+    uint64_t value;
+    uint64_t factor;
+    uint64_t expected;
+
+    std::string debugString() const {
+      return fmt::format(
+          "value: {}, factor: {}, expected: {}", value, factor, expected);
+    }
+  } testSettings[] = {
+      {10, 1, 10},
+      {10, 3, 4},
+      {10, 4, 3},
+      {10, 10, 1},
+      {10, 11, 1},
+      {10, 20, 1},
+      {11, 1, 11},
+      {11, 3, 4},
+      {11, 4, 3},
+      {11, 11, 1},
+      {11, 12, 1},
+      {11, 23, 1}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    ASSERT_EQ(
+        bits::divRoundUp(testData.value, testData.factor), testData.expected);
+  }
+}
+TEST_F(BitUtilTest, bitsRequired) {
+  EXPECT_EQ(bitsRequired(0), 1);
+  EXPECT_EQ(bitsRequired(1), 1);
+  EXPECT_EQ(bitsRequired(2), 2);
+  EXPECT_EQ(bitsRequired(3), 2);
+  EXPECT_EQ(bitsRequired(4), 3);
+  EXPECT_EQ(bitsRequired(7), 3);
+  EXPECT_EQ(bitsRequired(8), 4);
+  EXPECT_EQ(bitsRequired(15), 4);
+  EXPECT_EQ(bitsRequired(16), 5);
+  EXPECT_EQ(bitsRequired(255), 8);
+  EXPECT_EQ(bitsRequired(256), 9);
+  EXPECT_EQ(bitsRequired(0xFFFFFFFF), 32);
+  EXPECT_EQ(bitsRequired(0x100000000ULL), 33);
+  EXPECT_EQ(bitsRequired(std::numeric_limits<uint64_t>::max()), 64);
+  // Powers of two.
+  for (int i = 0; i < 63; ++i) {
+    EXPECT_EQ(bitsRequired(1ULL << i), i + 1);
+  }
+}
+
+TEST_F(BitUtilTest, maybeSetBit) {
+  uint8_t bytes[16];
+  memset(bytes, 0, sizeof(bytes));
+
+  // Setting with value=true should set the bit.
+  maybeSetBit(bytes, 0, true);
+  EXPECT_TRUE(isBitSet(bytes, 0));
+
+  maybeSetBit(bytes, 7, true);
+  EXPECT_TRUE(isBitSet(bytes, 7));
+
+  maybeSetBit(bytes, 64, true);
+  EXPECT_TRUE(isBitSet(bytes, 64));
+
+  // Setting with value=false should be a no-op (bit stays as-is).
+  maybeSetBit(bytes, 5, false);
+  EXPECT_FALSE(isBitSet(bytes, 5));
+
+  // Already-set bit stays set even with value=false (OR semantics).
+  maybeSetBit(bytes, 0, false);
+  EXPECT_TRUE(isBitSet(bytes, 0));
+
+  // Verify untouched bits are still clear.
+  EXPECT_FALSE(isBitSet(bytes, 1));
+  EXPECT_FALSE(isBitSet(bytes, 6));
+
+  // Test with uint64_t pointer type.
+  uint64_t words[2] = {0, 0};
+  maybeSetBit(words, 3, true);
+  EXPECT_TRUE(isBitSet(words, 3));
+  maybeSetBit(words, 3, false);
+  EXPECT_TRUE(isBitSet(words, 3)); // OR semantics, stays set.
+  maybeSetBit(words, 100, true);
+  EXPECT_TRUE(isBitSet(words, 100));
+}
+
+TEST_F(BitUtilTest, packBitmap) {
+  // Pack 128 bools into a bitmap.
+  bool boolArray[128];
+  for (int i = 0; i < 128; ++i) {
+    boolArray[i] = (i % 3 == 0);
+  }
+
+  char bitmap[16];
+  memset(bitmap, 0, sizeof(bitmap));
+  packBitmap(std::span<const bool>(boolArray, 128), bitmap);
+
+  for (int i = 0; i < 128; ++i) {
+    EXPECT_EQ(
+        isBitSet(reinterpret_cast<const uint8_t*>(bitmap), i), (i % 3 == 0))
+        << "at bit " << i;
+  }
+
+  // Test empty span.
+  char emptyBitmap[8];
+  memset(emptyBitmap, 0, sizeof(emptyBitmap));
+  packBitmap(std::span<const bool>(), emptyBitmap);
+  for (int i = 0; i < 64; ++i) {
+    EXPECT_FALSE(isBitSet(reinterpret_cast<const uint8_t*>(emptyBitmap), i));
+  }
+
+  // Test non-64-aligned count (e.g., 100 bools).
+  bool bools100[100];
+  for (int i = 0; i < 100; ++i) {
+    bools100[i] = (i % 7 == 0);
+  }
+  char bitmap100[16];
+  memset(bitmap100, 0, sizeof(bitmap100));
+  packBitmap(std::span<const bool>(bools100, 100), bitmap100);
+  for (int i = 0; i < 100; ++i) {
+    EXPECT_EQ(
+        isBitSet(reinterpret_cast<const uint8_t*>(bitmap100), i), (i % 7 == 0))
+        << "at bit " << i;
+  }
+
+  // Test OR semantics: pre-existing bits are preserved.
+  char bitmapOr[8];
+  memset(bitmapOr, 0, sizeof(bitmapOr));
+  setBit(reinterpret_cast<uint8_t*>(bitmapOr), 1);
+  bool boolsOr[8] = {true, false, false, true, false, false, false, false};
+  packBitmap(std::span<const bool>(boolsOr, 8), bitmapOr);
+  EXPECT_TRUE(isBitSet(reinterpret_cast<const uint8_t*>(bitmapOr), 0));
+  EXPECT_TRUE(
+      isBitSet(reinterpret_cast<const uint8_t*>(bitmapOr), 1)); // preserved
+  EXPECT_TRUE(isBitSet(reinterpret_cast<const uint8_t*>(bitmapOr), 3));
+}
+
+TEST_F(BitUtilTest, findSetBit) {
+  // Build a bitmap with known set bits.
+  uint64_t words[4] = {0, 0, 0, 0};
+  auto bitmap = reinterpret_cast<char*>(words);
+
+  // Set bits at positions 5, 10, 15, 64, 100, 200.
+  setBit(words, 5);
+  setBit(words, 10);
+  setBit(words, 15);
+  setBit(words, 64);
+  setBit(words, 100);
+  setBit(words, 200);
+
+  // Find the 1st set bit starting from 0.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 1), 5u);
+  // Find the 2nd set bit.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 2), 10u);
+  // Find the 3rd set bit.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 3), 15u);
+  // Find the 4th set bit.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 4), 64u);
+  // Find the 5th set bit.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 5), 100u);
+  // Find the 6th set bit.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 6), 200u);
+  // 7th set bit doesn't exist.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 7), 256u);
+
+  // Search starting from a non-zero begin.
+  EXPECT_EQ(findSetBit(bitmap, 6, 256, 1), 10u);
+  EXPECT_EQ(findSetBit(bitmap, 11, 256, 1), 15u);
+  EXPECT_EQ(findSetBit(bitmap, 16, 256, 1), 64u);
+
+  // Search with restricted end.
+  EXPECT_EQ(findSetBit(bitmap, 0, 14, 3), 14u); // Only 2 set bits in [0,14)
+
+  // Edge cases.
+  EXPECT_EQ(findSetBit(bitmap, 0, 256, 0), 0u); // n=0 returns begin
+  EXPECT_EQ(findSetBit(bitmap, 10, 10, 1), 10u); // begin==end returns begin
+  EXPECT_EQ(findSetBit(bitmap, 20, 10, 1), 20u); // begin>end returns begin
+
+  // All bits set in a word.
+  uint64_t allSet[2] = {~0ULL, ~0ULL};
+  auto allSetBitmap = reinterpret_cast<char*>(allSet);
+  EXPECT_EQ(findSetBit(allSetBitmap, 0, 128, 1), 0u);
+  EXPECT_EQ(findSetBit(allSetBitmap, 0, 128, 64), 63u);
+  EXPECT_EQ(findSetBit(allSetBitmap, 0, 128, 65), 64u);
+  EXPECT_EQ(findSetBit(allSetBitmap, 0, 128, 128), 127u);
+  EXPECT_EQ(findSetBit(allSetBitmap, 0, 128, 129), 128u);
+}
+
+TEST_F(BitUtilTest, printBitsTest) {
+  // uint8_t: 0 should be all zeros.
+  EXPECT_EQ(printBits(static_cast<uint8_t>(0)), "0000 0000");
+  // uint8_t: 0xFF should be all ones.
+  EXPECT_EQ(printBits(static_cast<uint8_t>(0xFF)), "1111 1111");
+  // uint8_t: 0xA5 = 1010 0101.
+  EXPECT_EQ(printBits(static_cast<uint8_t>(0xA5)), "1010 0101");
+  // uint16_t.
+  EXPECT_EQ(printBits(static_cast<uint16_t>(0x00FF)), "0000 0000 1111 1111");
+  // uint32_t: 1.
+  EXPECT_EQ(
+      printBits(static_cast<uint32_t>(1)),
+      "0000 0000 0000 0000 0000 0000 0000 0001");
+}
+
+TEST_F(BitUtilTest, bitmap) {
+  uint8_t data[16];
+  memset(data, 0, sizeof(data));
+  setBit(data, 0);
+  setBit(data, 7);
+  setBit(data, 8);
+  setBit(data, 63);
+  setBit(data, 64);
+  setBit(data, 127);
+
+  Bitmap bm(data, 128);
+  EXPECT_EQ(bm.size(), 128u);
+  EXPECT_EQ(bm.bits(), data);
+  EXPECT_TRUE(bm.test(0));
+  EXPECT_FALSE(bm.test(1));
+  EXPECT_TRUE(bm.test(7));
+  EXPECT_TRUE(bm.test(8));
+  EXPECT_FALSE(bm.test(9));
+  EXPECT_TRUE(bm.test(63));
+  EXPECT_TRUE(bm.test(64));
+  EXPECT_FALSE(bm.test(65));
+  EXPECT_TRUE(bm.test(127));
+}
+
+TEST_F(BitUtilTest, bitmapBuilder) {
+  uint8_t data[16];
+  memset(data, 0, sizeof(data));
+
+  BitmapBuilder builder(data, 128);
+
+  // Test single-bit set.
+  builder.set(5);
+  EXPECT_TRUE(builder.test(5));
+  EXPECT_FALSE(builder.test(4));
+
+  // Test maybeSet.
+  builder.maybeSet(10, true);
+  EXPECT_TRUE(builder.test(10));
+  builder.maybeSet(11, false);
+  EXPECT_FALSE(builder.test(11));
+
+  // Test range set.
+  builder.set(20, 30);
+  for (uint32_t i = 20; i < 30; ++i) {
+    EXPECT_TRUE(builder.test(i)) << "at " << i;
+  }
+  EXPECT_FALSE(builder.test(19));
+  EXPECT_FALSE(builder.test(30));
+
+  // Test range clear.
+  builder.clear(22, 28);
+  EXPECT_TRUE(builder.test(20));
+  EXPECT_TRUE(builder.test(21));
+  for (uint32_t i = 22; i < 28; ++i) {
+    EXPECT_FALSE(builder.test(i)) << "at " << i;
+  }
+  EXPECT_TRUE(builder.test(28));
+  EXPECT_TRUE(builder.test(29));
+}
+
+TEST_F(BitUtilTest, bitmapBuilderCopy) {
+  uint8_t src[16];
+  uint8_t dst[16];
+  memset(src, 0, sizeof(src));
+  memset(dst, 0, sizeof(dst));
+
+  // Set some bits in src.
+  setBit(src, 0);
+  setBit(src, 3);
+  setBit(src, 7);
+  setBit(src, 8);
+  setBit(src, 15);
+  setBit(src, 50);
+  setBit(src, 63);
+  setBit(src, 64);
+  setBit(src, 100);
+
+  // Set a bit in dst that is before the copy range; it should be preserved.
+  setBit(dst, 1);
+
+  Bitmap srcBm(src, 128);
+  BitmapBuilder dstBuilder(dst, 128);
+
+  // Copy range [3, 101).
+  dstBuilder.copy(srcBm, 3, 101);
+
+  // Bit 1 in dst should still be set (before copy range).
+  EXPECT_TRUE(isBitSet(dst, 1));
+  // Bits from src in [3, 101) should now be in dst.
+  EXPECT_TRUE(isBitSet(dst, 3));
+  EXPECT_TRUE(isBitSet(dst, 7));
+  EXPECT_TRUE(isBitSet(dst, 8));
+  EXPECT_TRUE(isBitSet(dst, 15));
+  EXPECT_TRUE(isBitSet(dst, 50));
+  EXPECT_TRUE(isBitSet(dst, 63));
+  EXPECT_TRUE(isBitSet(dst, 64));
+  EXPECT_TRUE(isBitSet(dst, 100));
+
+  // Bits that are not set in src within the range should be clear in dst.
+  EXPECT_FALSE(isBitSet(dst, 4));
+  EXPECT_FALSE(isBitSet(dst, 9));
+  EXPECT_FALSE(isBitSet(dst, 65));
+
+  // Copy byte-aligned range.
+  memset(dst, 0xFF, sizeof(dst));
+  dstBuilder.copy(srcBm, 0, 128);
+  for (int i = 0; i < 128; ++i) {
+    EXPECT_EQ(isBitSet(dst, i), isBitSet(src, i)) << "at bit " << i;
+  }
+}
+
+} // namespace bits
+} // namespace velox
+} // namespace facebook

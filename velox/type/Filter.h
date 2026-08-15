@@ -1,0 +1,2550 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+#include <folly/Range.h>
+#include <folly/container/F14Set.h>
+#include <xsimd/xsimd.hpp>
+#include "velox/common/EnumDeclare.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/base/SimdUtil.h"
+#include "velox/common/base/SplitBlockBloomFilter.h"
+#include "velox/common/serialization/Serializable.h"
+#include "velox/type/StringView.h"
+#include "velox/type/Subfield.h"
+#include "velox/type/Type.h"
+#include "velox/type/Variant.h"
+
+namespace facebook::velox::common {
+
+enum class FilterKind {
+  kAlwaysFalse,
+  kAlwaysTrue,
+  kIsNull,
+  kIsNotNull,
+  kBoolValue,
+  kBigintRange,
+  kBigintValuesUsingHashTable,
+  kBigintValuesUsingBitmask,
+  kNegatedBigintRange,
+  kNegatedBigintValuesUsingHashTable,
+  kNegatedBigintValuesUsingBitmask,
+  kDoubleRange,
+  kFloatRange,
+  kBytesRange,
+  kNegatedBytesRange,
+  kBytesValues,
+  kNegatedBytesValues,
+  kBigintMultiRange,
+  kMultiRange,
+  kHugeintRange,
+  kTimestampRange,
+  kHugeintValuesUsingHashTable,
+  kBigintValuesUsingBloomFilter,
+};
+
+VELOX_DECLARE_ENUM_NAME(FilterKind);
+
+class Filter;
+using FilterPtr = std::shared_ptr<Filter>;
+
+using SubfieldFilters = std::unordered_map<Subfield, FilterPtr>;
+
+/// A simple filter (e.g. comparison with literal) that can be applied
+/// efficiently while extracting values from an ORC, DWRF, Parquet, or Nimble
+/// stream.
+class Filter : public velox::ISerializable {
+ protected:
+  Filter(bool _deterministic, bool _nullAllowed, FilterKind _kind)
+      : nullAllowed_(_nullAllowed),
+        deterministic_(_deterministic),
+        kind_(_kind) {}
+
+ public:
+  virtual ~Filter() = default;
+
+  static void registerSerDe();
+
+  /// Templates parametrized on filter need to know determinism at compile
+  /// time. If this is false, deterministic() will be consulted at
+  /// runtime.
+  static constexpr bool deterministic = true;
+
+  FilterKind kind() const {
+    return kind_;
+  }
+
+  std::string_view kindName() const {
+    return FilterKindName::toName(kind_);
+  }
+
+  bool is(FilterKind kind) const {
+    return kind_ == kind;
+  }
+
+  /// @pre The caller must ensure this filter's kind matches TFilter.
+  template <typename TFilter>
+  TFilter* as() {
+    static_assert(std::is_base_of_v<Filter, TFilter>);
+    return static_cast<TFilter*>(this);
+  }
+
+  /// @pre The caller must ensure this filter's kind matches TFilter.
+  template <typename TFilter>
+  const TFilter* as() const {
+    static_assert(std::is_base_of_v<Filter, TFilter>);
+    return static_cast<const TFilter*>(this);
+  }
+
+  bool nullAllowed() const {
+    return nullAllowed_;
+  }
+
+  /// Return a copy of this filter. If nullAllowed is set, modified the
+  /// nullAllowed flag in the copy to match.
+  virtual std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const = 0;
+
+  /// A filter becomes non-deterministic when applied to a nested column,
+  /// e.g. a[1] > 10 is non-deterministic because > 10 filter applies only to
+  /// some positions, e.g. first entry in a set of entries that correspond to a
+  /// single top-level position.
+  bool isDeterministic() const {
+    return deterministic_;
+  }
+
+  /// When a filter applied to a nested column fails, the whole top-level
+  /// position should fail. To enable this functionality, the filter keeps track
+  /// of the boundaries of top-level positions and allows the caller to find out
+  /// where the current top-level position started and how far it continues.
+  /// @return number of positions from the start of the current top-level
+  /// position up to the current position (excluding current position)
+  int getPrecedingPositionsToFail() const {
+    return 0;
+  }
+
+  /// Only used in test code.
+  /// @return Whether an object is the same as itself.
+  virtual bool testingEquals(const Filter& other) const = 0;
+
+  /// @return number of positions remaining until the end of the current
+  /// top-level position
+  int getSucceedingPositionsToFail() const {
+    return 0;
+  }
+
+  bool testNull() const {
+    return nullAllowed_;
+  }
+
+  /// Used to apply is [not] null filters to complex types, e.g.
+  /// a[1] is null AND a[3] is not null, where a is an array(array(T)).
+  ///
+  /// In these case, the exact values are not known, but it is known whether
+  /// they are null or not. Furthermore, for some positions only nulls are
+  /// allowed (a[1] is null), for others only non-nulls (a[3] is not null), and
+  /// for the rest both are allowed (a[2] and a[N], where N > 3).
+  virtual bool testNonNull() const {
+    VELOX_UNSUPPORTED("{}: testNonNull() is not supported.", toString());
+  }
+
+  virtual bool testInt64(int64_t /* unused */) const {
+    VELOX_UNSUPPORTED("{}: testInt64() is not supported.", toString());
+  }
+
+  virtual bool testInt128(const int128_t& /* unused */) const {
+    VELOX_UNSUPPORTED("{}: testInt128() is not supported.", toString());
+  }
+
+  virtual bool testDouble(double /* unused */) const {
+    VELOX_UNSUPPORTED("{}: testDouble() is not supported.", toString());
+  }
+
+  virtual bool testFloat(float /* unused */) const {
+    VELOX_UNSUPPORTED("{}: testFloat() is not supported.", toString());
+  }
+
+  virtual xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t> x) const {
+    return genericTestValues(x, [this](int64_t x) { return testInt64(x); });
+  }
+
+  virtual xsimd::batch_bool<int32_t> testValues(xsimd::batch<int32_t> x) const {
+    return genericTestValues(x, [this](int32_t x) { return testInt64(x); });
+  }
+
+  virtual xsimd::batch_bool<int16_t> testValues(xsimd::batch<int16_t> x) const {
+    return genericTestValues(x, [this](int16_t x) { return testInt64(x); });
+  }
+
+  virtual xsimd::batch_bool<double> testValues(xsimd::batch<double> x) const {
+    return genericTestValues(x, [this](double x) { return testDouble(x); });
+  }
+
+  virtual xsimd::batch_bool<float> testValues(xsimd::batch<float> x) const {
+    return genericTestValues(x, [this](float x) { return testFloat(x); });
+  }
+
+  virtual bool testBool(bool /* unused */) const {
+    VELOX_UNSUPPORTED("{}: testBool() is not supported.", toString());
+  }
+
+  virtual bool testBytes(const char* /* unused */, int32_t /* unused */) const {
+    VELOX_UNSUPPORTED("{}: testBytes() is not supported.", toString());
+  }
+
+  virtual bool testStringView(const StringView& view) const {
+    return testBytes(view.data(), view.size());
+  }
+
+  virtual bool testTimestamp(const Timestamp& /* unused */) const {
+    VELOX_UNSUPPORTED("{}: testTimestamp() is not supported.", toString());
+  }
+
+  /// Returns true if it is useful to call testLength before other
+  /// tests. This should be true for string IN and equals because it is
+  /// possible to fail these based on the length alone. This would
+  /// typically be false of string ranges because these cannot be
+  /// generally decided without looking at the string itself.
+  virtual bool hasTestLength() const {
+    return false;
+  }
+
+  /// Filters like string equality and IN, as well as conditions on cardinality
+  /// of lists and maps can be at least partly decided by looking at lengths
+  /// alone. If this is false, then no further checks are needed. If true,
+  /// eventual filters on the data itself need to be evaluated.
+  virtual bool testLength(int32_t /* unused */) const {
+    VELOX_UNSUPPORTED("{}: testLength() is not supported.", toString());
+  }
+
+  /// Tests multiple lengths at a time.
+  virtual xsimd::batch_bool<int32_t> testLengths(
+      xsimd::batch<int32_t> lengths) const {
+    return genericTestValues(
+        lengths, [this](int32_t x) { return testLength(x); });
+  }
+
+  /// Returns true if at least one value in the specified range can pass the
+  /// filter. The range is defined as all values between min and max inclusive
+  /// plus null if hasNull is true.
+  virtual bool
+  testInt64Range(int64_t /*min*/, int64_t /*max*/, bool /*hasNull*/) const {
+    VELOX_UNSUPPORTED("{}: testInt64Range() is not supported.", toString());
+  }
+
+  virtual bool testInt128Range(
+      const int128_t& /*min*/,
+      const int128_t& /*max*/,
+      bool /*hasNull*/) const {
+    VELOX_UNSUPPORTED("{}: testInt128Range() is not supported.", toString());
+  }
+
+  /// Returns true if at least one value in the specified range can pass the
+  /// filter. The range is defined as all values between min and max inclusive
+  /// plus null if hasNull is true.
+  virtual bool testDoubleRange(double /*min*/, double /*max*/, bool /*hasNull*/)
+      const {
+    VELOX_UNSUPPORTED("{}: testDoubleRange() is not supported.", toString());
+  }
+
+  virtual bool testBytesRange(
+      std::optional<std::string_view> /*min*/,
+      std::optional<std::string_view> /*max*/,
+      bool /*hasNull*/) const {
+    VELOX_UNSUPPORTED("{}: testBytesRange() is not supported.", toString());
+  }
+
+  virtual bool testTimestampRange(
+      const Timestamp& /*min*/,
+      const Timestamp& /*max*/,
+      bool /*hasNull*/) const {
+    VELOX_UNSUPPORTED("{}: testTimestampRange() is not supported.", toString());
+  }
+
+  /// Combines this filter with another filter using 'AND' logic.
+  virtual std::unique_ptr<Filter> mergeWith(const Filter* /*other*/) const {
+    VELOX_UNSUPPORTED("{}: mergeWith() is not supported.", toString());
+  }
+
+  static void merge(
+      const std::shared_ptr<Filter>& newFilter,
+      std::shared_ptr<Filter>& filter) {
+    if (filter) {
+      filter = filter->mergeWith(newFilter.get());
+    } else {
+      filter = newFilter;
+    }
+  }
+
+  virtual std::string toString() const;
+
+ protected:
+  template <typename TFilter>
+  const TFilter* testingBaseEquals(const Filter& other) const {
+    if (deterministic_ == other.isDeterministic() &&
+        nullAllowed_ == other.nullAllowed_ && kind_ == other.kind()) {
+      return other.as<TFilter>();
+    }
+
+    return nullptr;
+  }
+
+  folly::dynamic serializeBase() const;
+
+ protected:
+  template <typename T, typename F>
+  static xsimd::batch_bool<T> genericTestValues(
+      xsimd::batch<T> batch,
+      F&& testValue) {
+    constexpr int N = decltype(batch)::size;
+    constexpr int kAlign = decltype(batch)::arch_type::alignment();
+    alignas(kAlign) T data[N];
+    alignas(kAlign) T res[N];
+    batch.store_aligned(data);
+    for (int i = 0; i < N; ++i) {
+      res[i] = testValue(data[i]);
+    }
+    return xsimd::broadcast<T>(0) != xsimd::load_aligned(res);
+  }
+
+  const bool nullAllowed_;
+
+ private:
+  const bool deterministic_;
+  const FilterKind kind_;
+};
+
+/// TODO Check if this filter is needed. This should not be passed down.
+class AlwaysFalse final : public Filter {
+ public:
+  AlwaysFalse() : Filter(true, false, FilterKind::kAlwaysFalse) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& /*obj*/);
+
+  bool testingEquals(const Filter& other) const final {
+    return Filter::testingBaseEquals<AlwaysFalse>(other);
+  }
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    return std::make_unique<AlwaysFalse>();
+  }
+
+  bool testNonNull() const final {
+    return false;
+  }
+
+  bool testInt64(int64_t /* unused */) const final {
+    return false;
+  }
+
+  bool testInt64Range(int64_t /*min*/, int64_t /*max*/, bool /*hasNull*/)
+      const final {
+    return false;
+  }
+
+  bool testInt128Range(
+      const int128_t& /*min*/,
+      const int128_t& /*max*/,
+      bool /*hasNull*/) const final {
+    return false;
+  }
+
+  bool testInt128(const int128_t& /* unused */) const final {
+    return false;
+  }
+
+  bool testDouble(double /* unused */) const final {
+    return false;
+  }
+
+  bool testDoubleRange(double /*min*/, double /*max*/, bool /*hasNull*/)
+      const final {
+    return false;
+  }
+
+  bool testFloat(float /* unused */) const final {
+    return false;
+  }
+
+  bool testBool(bool /* unused */) const final {
+    return false;
+  }
+
+  bool testBytes(const char* /* unused */, int32_t /* unused */) const final {
+    return false;
+  }
+
+  bool testBytesRange(
+      std::optional<std::string_view> /*min*/,
+      std::optional<std::string_view> /*max*/,
+      bool /*hasNull*/) const final {
+    return false;
+  }
+
+  bool testTimestampRange(
+      const Timestamp& /*min*/,
+      const Timestamp& /*max*/,
+      bool /*hasNull*/) const final {
+    return false;
+  }
+
+  bool testLength(int32_t /* unused */) const final {
+    return false;
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* /*other*/) const final {
+    // false AND <any> is false.
+    return this->clone();
+  }
+};
+
+/// TODO Check if this filter is needed. This should not be passed down.
+class AlwaysTrue final : public Filter {
+ public:
+  AlwaysTrue() : Filter(true, true, FilterKind::kAlwaysTrue) {}
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    return std::make_unique<AlwaysTrue>();
+  }
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& /*obj*/);
+
+  bool testingEquals(const Filter& other) const final {
+    return Filter::testingBaseEquals<AlwaysTrue>(other);
+  }
+
+  bool testNonNull() const final {
+    return true;
+  }
+
+  bool testInt64(int64_t /* unused */) const final {
+    return true;
+  }
+
+  bool testInt128(const int128_t& /* unused */) const final {
+    return true;
+  }
+
+  bool testInt64Range(int64_t /*min*/, int64_t /*max*/, bool /*hasNull*/)
+      const final {
+    return true;
+  }
+
+  bool testInt128Range(
+      const int128_t& /*min*/,
+      const int128_t& /*max*/,
+      bool /*hasNull*/) const final {
+    return true;
+  }
+
+  bool testDoubleRange(double /*min*/, double /*max*/, bool /*hasNull*/)
+      const final {
+    return true;
+  }
+
+  bool testDouble(double /* unused */) const final {
+    return true;
+  }
+
+  bool testFloat(float /* unused */) const final {
+    return true;
+  }
+
+  bool testBool(bool /* unused */) const final {
+    return true;
+  }
+
+  bool testBytes(const char* /* unused */, int32_t /* unused */) const final {
+    return true;
+  }
+
+  bool testBytesRange(
+      std::optional<std::string_view> /*min*/,
+      std::optional<std::string_view> /*max*/,
+      bool /*hasNull*/) const final {
+    return true;
+  }
+
+  bool testTimestampRange(
+      const Timestamp& /*min*/,
+      const Timestamp& /*max*/,
+      bool /*hasNull*/) const final {
+    return true;
+  }
+
+  bool testLength(int32_t /* unused */) const final {
+    return true;
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final {
+    // true AND <any> is <any>.
+    return other->clone();
+  }
+};
+
+/// Returns true if the value is null. Supports all data types.
+class IsNull final : public Filter {
+ public:
+  IsNull() : Filter(true, true, FilterKind::kIsNull) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& /*obj*/);
+
+  bool testingEquals(const Filter& other) const final {
+    return Filter::testingBaseEquals<IsNull>(other);
+  }
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    return std::make_unique<IsNull>();
+  }
+
+  bool testNonNull() const final {
+    return false;
+  }
+
+  bool testInt64(int64_t /* unused */) const final {
+    return false;
+  }
+
+  bool testInt128(const int128_t& /* unused */) const final {
+    return false;
+  }
+
+  bool testInt64Range(int64_t /*min*/, int64_t /*max*/, bool hasNull)
+      const final {
+    return hasNull;
+  }
+
+  bool testInt128Range(
+      const int128_t& /*min*/,
+      const int128_t& /*max*/,
+      bool hasNull) const final {
+    return hasNull;
+  }
+
+  bool testDoubleRange(double /*min*/, double /*max*/, bool hasNull)
+      const final {
+    return hasNull;
+  }
+
+  bool testDouble(double /* unused */) const final {
+    return false;
+  }
+
+  bool testFloat(float /* unused */) const final {
+    return false;
+  }
+
+  bool testBool(bool /* unused */) const final {
+    return false;
+  }
+
+  bool testBytes(const char* /* unused */, int32_t /* unused */) const final {
+    return false;
+  }
+
+  bool testTimestamp(const Timestamp& /* unused */) const final {
+    return false;
+  }
+
+  bool testBytesRange(
+      std::optional<std::string_view> /*min*/,
+      std::optional<std::string_view> /*max*/,
+      bool hasNull) const final {
+    return hasNull;
+  }
+
+  bool testTimestampRange(
+      const Timestamp& /*min*/,
+      const Timestamp& /*max*/,
+      bool hasNull) const final {
+    return hasNull;
+  }
+
+  bool testLength(int32_t /* unused */) const final {
+    return false;
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+};
+
+/// Returns true if the value is not null. Supports all data types.
+class IsNotNull final : public Filter {
+ public:
+  IsNotNull() : Filter(true, false, FilterKind::kIsNotNull) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& /*obj*/);
+
+  bool testingEquals(const Filter& other) const final {
+    return Filter::testingBaseEquals<IsNotNull>(other);
+  }
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    return std::make_unique<IsNotNull>();
+  }
+
+  bool testNonNull() const final {
+    return true;
+  }
+
+  bool testInt64(int64_t /* unused */) const final {
+    return true;
+  }
+
+  bool testInt128(const int128_t& /* unused */) const final {
+    return true;
+  }
+
+  bool testInt64Range(int64_t /*min*/, int64_t /*max*/, bool /*hasNull*/)
+      const final {
+    return true;
+  }
+
+  bool testInt128Range(
+      const int128_t& /*min*/,
+      const int128_t& /*max*/,
+      bool /*hasNull*/) const final {
+    return true;
+  }
+
+  bool testDoubleRange(double /*min*/, double /*max*/, bool /*hasNull*/)
+      const final {
+    return true;
+  }
+
+  bool testDouble(double /* unused */) const final {
+    return true;
+  }
+
+  bool testFloat(float /* unused */) const final {
+    return true;
+  }
+
+  bool testBool(bool /* unused */) const final {
+    return true;
+  }
+
+  bool testBytes(const char* /* unused */, int32_t /* unused */) const final {
+    return true;
+  }
+
+  bool testTimestamp(const Timestamp& /* unused */) const final {
+    return true;
+  }
+
+  bool testBytesRange(
+      std::optional<std::string_view> /*min*/,
+      std::optional<std::string_view> /*max*/,
+      bool /*hasNull*/) const final {
+    return true;
+  }
+
+  bool testTimestampRange(
+      const Timestamp& /*min*/,
+      const Timestamp& /*max*/,
+      bool /*hasNull*/) const final {
+    return true;
+  }
+
+  bool testLength(int /* unused */) const final {
+    return true;
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+};
+
+/// Tests whether boolean value is true or false or integral value is zero or
+/// not. Support boolean and integral data types.
+class BoolValue final : public Filter {
+ public:
+  /// @param value The boolean value that passes the filter. If true, integral
+  /// values that are not zero are passing as well.
+  /// @param nullAllowed Null values are passing the filter if true.
+  BoolValue(bool value, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kBoolValue), value_(value) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  bool testingEquals(const Filter& other) const final;
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<BoolValue>(this->value_, nullAllowed.value());
+    } else {
+      return std::make_unique<BoolValue>(*this);
+    }
+  }
+
+  bool testBool(bool value) const final {
+    return value_ == value;
+  }
+
+  bool testInt64(int64_t value) const final {
+    return value_ == (value != 0);
+  }
+
+  bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final {
+    if (hasNull && nullAllowed_) {
+      return true;
+    }
+
+    if (value_) {
+      return min != 0 || max != 0;
+    } else {
+      return min <= 0 && max >= 0;
+    }
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+ private:
+  const bool value_;
+};
+
+/// Range filter for integral data types. Supports open, closed and unbounded
+/// ranges, e.g. c >= 10, c <= 34, c BETWEEN 10 and 34. Open ranges can be
+/// implemented by using the value to the left or right of the end of the range,
+/// e.g. a < 10 is equivalent to a <= 9.
+class BigintRange final : public Filter {
+ public:
+  /// @param lower Lower end of the range, inclusive.
+  /// @param upper Upper end of the range, inclusive.
+  /// @param nullAllowed Null values are passing the filter if true.
+  BigintRange(int64_t lower, int64_t upper, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kBigintRange),
+        lower_(lower),
+        upper_(upper),
+        lower32_(std::max<int64_t>(lower, std::numeric_limits<int32_t>::min())),
+        upper32_(std::min<int64_t>(upper, std::numeric_limits<int32_t>::max())),
+        lower16_(std::max<int64_t>(lower, std::numeric_limits<int16_t>::min())),
+        upper16_(std::min<int64_t>(upper, std::numeric_limits<int16_t>::max())),
+        isSingleValue_(upper_ == lower_),
+        inInt32Range_(
+            lower <= std::numeric_limits<int32_t>::max() &&
+            upper >= std::numeric_limits<int32_t>::min()),
+        inInt16Range_(
+            lower <= std::numeric_limits<int16_t>::max() &&
+            upper >= std::numeric_limits<int16_t>::min()) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<BigintRange>(
+          this->lower_, this->upper_, nullAllowed.value());
+    } else {
+      return std::make_unique<BigintRange>(*this);
+    }
+  }
+
+  bool testInt64(int64_t value) const final {
+    return value >= lower_ && value <= upper_;
+  }
+
+  xsimd::batch_bool<int64_t> testValues(
+      xsimd::batch<int64_t> values) const final {
+    if (isSingleValue_) {
+      return values == xsimd::broadcast<int64_t>(lower_);
+    }
+    return (xsimd::broadcast<int64_t>(lower_) <= values) &
+        (values <= xsimd::broadcast<int64_t>(upper_));
+  }
+
+  xsimd::batch_bool<int32_t> testValues(
+      xsimd::batch<int32_t> values) const final {
+    if (!inInt32Range_) {
+      return xsimd::batch_bool<int32_t>(false);
+    }
+    if (isSingleValue_) {
+      if (UNLIKELY(lower32_ != lower_)) {
+        return xsimd::batch_bool<int32_t>(false);
+      }
+      return values == xsimd::broadcast<int32_t>(lower_);
+    }
+    return (xsimd::broadcast<int32_t>(lower32_) <= values) &
+        (values <= xsimd::broadcast<int32_t>(upper32_));
+  }
+
+  xsimd::batch_bool<int16_t> testValues(
+      xsimd::batch<int16_t> values) const final {
+    if (!inInt16Range_) {
+      return xsimd::batch_bool<int16_t>(false);
+    }
+    if (isSingleValue_) {
+      if (UNLIKELY(lower16_ != lower_)) {
+        return xsimd::batch_bool<int16_t>(false);
+      }
+      return values == xsimd::broadcast<int16_t>(lower_);
+    }
+    return (xsimd::broadcast<int16_t>(lower16_) <= values) &
+        (values <= xsimd::broadcast<int16_t>(upper16_));
+  }
+
+  bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final {
+    if (hasNull && nullAllowed_) {
+      return true;
+    }
+
+    return !(min > upper_ || max < lower_);
+  }
+
+  int64_t lower() const {
+    return lower_;
+  }
+
+  int64_t upper() const {
+    return upper_;
+  }
+
+  bool isSingleValue() const {
+    return isSingleValue_;
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  std::string toString() const override {
+    return fmt::format(
+        "BigintRange: [{}, {}] {}",
+        lower_,
+        upper_,
+        nullAllowed_ ? "with nulls" : "no nulls");
+  }
+
+  bool testingEquals(const Filter& other) const final;
+
+ private:
+  const int64_t lower_;
+  const int64_t upper_;
+  const int32_t lower32_;
+  const int32_t upper32_;
+  const int16_t lower16_;
+  const int16_t upper16_;
+  const bool isSingleValue_;
+  const bool inInt32Range_;
+  const bool inInt16Range_;
+};
+
+class NegatedBigintRange final : public Filter {
+ public:
+  /// @param lower Lowest value in the rejected range, inclusive.
+  /// @param upper Highest value in the range, inclusive.
+  /// @param nullAllowed Null values are passing the filter if true.
+  NegatedBigintRange(int64_t lower, int64_t upper, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kNegatedBigintRange),
+        nonNegated_(std::make_unique<BigintRange>(lower, upper, !nullAllowed)) {
+  }
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    return std::make_unique<NegatedBigintRange>(
+        nonNegated_->lower(),
+        nonNegated_->upper(),
+        nullAllowed.value_or(nullAllowed_));
+  }
+
+  bool testInt64(int64_t value) const final {
+    return !nonNegated_->testInt64(value);
+  }
+
+  xsimd::batch_bool<int64_t> testValues(
+      xsimd::batch<int64_t> values) const final {
+    return ~nonNegated_->testValues(values);
+  }
+
+  xsimd::batch_bool<int32_t> testValues(
+      xsimd::batch<int32_t> values) const final {
+    return ~nonNegated_->testValues(values);
+  }
+
+  xsimd::batch_bool<int16_t> testValues(
+      xsimd::batch<int16_t> values) const final {
+    return ~nonNegated_->testValues(values);
+  }
+
+  bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final {
+    if (hasNull && nullAllowed_) {
+      return true;
+    }
+
+    return !(nonNegated_->lower() <= min && max <= nonNegated_->upper());
+  }
+
+  int64_t lower() const {
+    return nonNegated_->lower();
+  }
+
+  int64_t upper() const {
+    return nonNegated_->upper();
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  std::string toString() const override {
+    return "Negated" + nonNegated_->toString();
+  }
+
+  bool testingEquals(const Filter& other) const final;
+
+  const BigintRange* getNonNegated() const {
+    return nonNegated_.get();
+  }
+
+ private:
+  std::unique_ptr<BigintRange> nonNegated_;
+};
+
+class HugeintRange final : public Filter {
+ public:
+  /// @param lower Lowest value in the rejected range, inclusive.
+  /// @param upper Highest value in the range, inclusive.
+  /// @param nullAllowed Null values are passing the filter if true.
+  HugeintRange(const int128_t& lower, const int128_t& upper, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kHugeintRange),
+        lower_(lower),
+        upper_(upper) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<HugeintRange>(
+          this->lower_, this->upper_, nullAllowed.value());
+    } else {
+      return std::make_unique<HugeintRange>(*this);
+    }
+  }
+
+  bool testInt128(const int128_t& value) const final {
+    return value >= lower_ && value <= upper_;
+  }
+
+  bool testInt128Range(const int128_t& min, const int128_t& max, bool hasNull)
+      const final {
+    if (hasNull && nullAllowed_) {
+      return true;
+    }
+
+    return !(min > upper_ || max < lower_);
+  }
+
+  int128_t lower() const {
+    return lower_;
+  }
+
+  int128_t upper() const {
+    return upper_;
+  }
+
+  std::string toString() const override {
+    return fmt::format(
+        "HugeintRange: [{}, {}] {}",
+        lower_,
+        upper_,
+        nullAllowed_ ? "with nulls" : "no nulls");
+  }
+
+  bool testingEquals(const Filter& other) const final;
+
+ private:
+  const int128_t lower_;
+  const int128_t upper_;
+};
+
+/// IN-list filter for integral data types. Implemented as a hash table. Good
+/// for large number of values that do not fit within a small range.
+class BigintValuesUsingHashTable final : public Filter {
+ public:
+  /// @param min Minimum value.
+  /// @param max Maximum value.
+  /// @param values A list of unique values that pass the filter. Must contain
+  /// at least two entries.
+  /// @param nullAllowed Null values are passing the filter if true.
+  BigintValuesUsingHashTable(
+      int64_t min,
+      int64_t max,
+      const std::vector<int64_t>& values,
+      bool nullAllowed);
+
+  BigintValuesUsingHashTable(
+      const BigintValuesUsingHashTable& other,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, other.kind()),
+        min_(other.min_),
+        max_(other.max_),
+        hashTable_(other.hashTable_),
+        containsEmptyMarker_(other.containsEmptyMarker_),
+        values_(other.values_),
+        sizeMask_(other.sizeMask_) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<BigintValuesUsingHashTable>(
+          *this, nullAllowed.value());
+    } else {
+      return std::make_unique<BigintValuesUsingHashTable>(*this);
+    }
+  }
+
+  bool testInt64(int64_t value) const final {
+    if (containsEmptyMarker_ && value == kEmptyMarker) {
+      return true;
+    }
+    if (value < min_ || value > max_) {
+      return false;
+    }
+    uint32_t pos = (value * M) & sizeMask_;
+    for (auto i = pos; i <= pos + sizeMask_; i++) {
+      int32_t idx = i & sizeMask_;
+      int64_t l = hashTable_[idx];
+      if (l == kEmptyMarker) {
+        return false;
+      }
+      if (l == value) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t> x) const final {
+    auto outOfRange = (x < xsimd::broadcast<int64_t>(min_)) |
+        (x > xsimd::broadcast<int64_t>(max_));
+    if (simd::all(outOfRange)) {
+      return xsimd::batch_bool<int64_t>(false);
+    }
+    if (containsEmptyMarker_) {
+      return Filter::testValues(x);
+    }
+    auto allEmpty = xsimd::broadcast<int64_t>(kEmptyMarker);
+    // Temporarily casted to unsigned to suppress overflow error.
+    auto indices = simd::reinterpretBatch<int64_t>(
+        simd::reinterpretBatch<uint64_t>(x) * M & sizeMask_);
+    auto data =
+        simd::maskGather(allEmpty, ~outOfRange, hashTable_.data(), indices);
+    // The lanes with kEmptyMarker missed, the lanes matching x hit and the
+    // other lanes must check next positions.
+
+    auto result = x == data;
+    auto resultBits = simd::toBitMask(result);
+    auto missed = simd::toBitMask(data == allEmpty);
+    static_assert(decltype(result)::size <= 16);
+    uint16_t unresolved =
+        simd::allSetBitMask<int64_t>() ^ (resultBits | missed);
+    if (!unresolved) {
+      return result;
+    }
+    constexpr int kAlign = xsimd::default_arch::alignment();
+    constexpr int kArraySize = xsimd::batch<int64_t>::size;
+    alignas(kAlign) int64_t indicesArray[kArraySize];
+    alignas(kAlign) int64_t valuesArray[kArraySize];
+    (indices + 1).store_aligned(indicesArray);
+    x.store_aligned(valuesArray);
+    while (unresolved) {
+      auto lane = bits::getAndClearLastSetBit(unresolved);
+      // Loop for each unresolved (not hit and
+      // not empty) until finding hit or empty.
+      int64_t index = indicesArray[lane];
+      int64_t value = valuesArray[lane];
+      auto allValue = xsimd::broadcast<int64_t>(value);
+      for (;;) {
+        auto line = xsimd::load_unaligned(hashTable_.data() + index);
+
+        if (simd::any(line == allValue)) {
+          resultBits |= 1 << lane;
+          break;
+        }
+        if (simd::any(line == allEmpty)) {
+          resultBits &= ~(1 << lane);
+          break;
+        }
+        index += line.size;
+        if (index > sizeMask_) {
+          index = 0;
+        }
+      }
+    }
+    return simd::fromBitMask<int64_t>(resultBits);
+  }
+
+  xsimd::batch_bool<int32_t> testValues(xsimd::batch<int32_t> x) const final {
+    // Calls 4x64 twice since the hash table is 64 bits wide in any
+    // case. A 32-bit hash table would be possible but all the use
+    // cases seen are in the 64 bit range.
+    auto first = simd::toBitMask(testValues(simd::getHalf<int64_t, 0>(x)));
+    auto second = simd::toBitMask(testValues(simd::getHalf<int64_t, 1>(x)));
+    return simd::fromBitMask<int32_t>(
+        first | (second << xsimd::batch<int64_t>::size));
+  }
+
+  xsimd::batch_bool<int16_t> testValues(xsimd::batch<int16_t> x) const final {
+    return genericTestValues(x, [this](int16_t x) { return testInt64(x); });
+  }
+
+  bool testInt64Range(int64_t min, int64_t max, bool hashNull) const final;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  int64_t min() const {
+    return min_;
+  }
+
+  int64_t max() const {
+    return max_;
+  }
+
+  const std::vector<int64_t>& values() const {
+    return values_;
+  }
+
+  const std::vector<int64_t>& hashTable() const {
+    return hashTable_;
+  }
+
+  std::string toString() const override {
+    return fmt::format(
+        "BigintValuesUsingHashTable: [{}, {}] {}",
+        min_,
+        max_,
+        nullAllowed_ ? "with nulls" : "no nulls");
+  }
+
+  bool testingEquals(const Filter& other) const final;
+
+ private:
+  std::unique_ptr<Filter>
+  mergeWith(int64_t min, int64_t max, const Filter* other) const;
+
+  static constexpr int64_t kEmptyMarker = 0xdeadbeefbadefeedL;
+
+  // From Murmur hash.
+  static constexpr uint64_t M = 0xc6a4a7935bd1e995L;
+
+  const int64_t min_;
+  const int64_t max_;
+  std::vector<int64_t> hashTable_;
+  bool containsEmptyMarker_ = false;
+  std::vector<int64_t> values_;
+  int32_t sizeMask_;
+};
+
+/// IN-list filter for int128_t data type, implemented as a hash table.
+class HugeintValuesUsingHashTable final : public Filter {
+ public:
+  HugeintValuesUsingHashTable(
+      const int128_t& min,
+      const int128_t& max,
+      const std::vector<int128_t>& values,
+      const bool nullAllowed);
+
+  HugeintValuesUsingHashTable(
+      const HugeintValuesUsingHashTable& other,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, other.kind()),
+        min_(other.min_),
+        max_(other.max_),
+        values_(other.values_) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<HugeintValuesUsingHashTable>(
+          *this, nullAllowed.value());
+    } else {
+      return std::make_unique<HugeintValuesUsingHashTable>(*this);
+    }
+  }
+
+  bool testInt128(const int128_t& value) const final;
+
+  bool testingEquals(const Filter& other) const final;
+
+  int128_t min() const {
+    return min_;
+  }
+
+  int128_t max() const {
+    return max_;
+  }
+
+  const folly::F14FastSet<int128_t>& values() const {
+    return values_;
+  }
+
+ private:
+  const int128_t min_;
+  const int128_t max_;
+  folly::F14FastSet<int128_t> values_;
+};
+
+/// IN-list filter for integral data types. Implemented as a bitmask. Offers
+/// better performance than the hash table when the range of values is small.
+class BigintValuesUsingBitmask final : public Filter {
+ public:
+  /// @param min Minimum value.
+  /// @param max Maximum value.
+  /// @param values A list of unique values that pass the filter. Must contain
+  /// at least two entries.
+  /// @param nullAllowed Null values are passing the filter if true.
+  BigintValuesUsingBitmask(
+      int64_t min,
+      int64_t max,
+      const std::vector<int64_t>& values,
+      bool nullAllowed);
+
+  BigintValuesUsingBitmask(
+      const BigintValuesUsingBitmask& other,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBitmask),
+        bitmask_(other.bitmask_),
+        min_(other.min_),
+        max_(other.max_) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<BigintValuesUsingBitmask>(
+          *this, nullAllowed.value());
+    } else {
+      return std::make_unique<BigintValuesUsingBitmask>(*this);
+    }
+  }
+
+  std::vector<int64_t> values() const;
+
+  bool testInt64(int64_t value) const final {
+    if (value < min_ || value > max_) {
+      return false;
+    }
+    return bitmask_[value - min_];
+  }
+
+  bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  bool testingEquals(const Filter& other) const final;
+
+  int64_t min() const {
+    return min_;
+  }
+
+  int64_t max() const {
+    return max_;
+  }
+
+ private:
+  std::unique_ptr<Filter>
+  mergeWith(int64_t min, int64_t max, const Filter* other) const;
+
+  std::vector<bool> bitmask_;
+  const int64_t min_;
+  const int64_t max_;
+};
+
+class BigintValuesUsingBloomFilter final : public Filter {
+ public:
+  static int64_t numBlocks(int64_t capacity) {
+    return SplitBlockBloomFilter::numBlocks(capacity, 0.01);
+  }
+
+  BigintValuesUsingBloomFilter(int64_t capacity, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBloomFilter),
+        blocks_(numBlocks(capacity)),
+        filter_(blocks_) {}
+
+  bool testInt64(int64_t value) const final {
+    return filter_.mayContain(hash(value));
+  }
+
+  xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t> x) const final {
+    return genericTestValues(x, [this](int64_t x) { return testInt64(x); });
+  }
+
+  xsimd::batch_bool<int32_t> testValues(xsimd::batch<int32_t> x) const final {
+    return genericTestValues(x, [this](int32_t x) { return testInt64(x); });
+  }
+
+  xsimd::batch_bool<int16_t> testValues(xsimd::batch<int16_t> x) const final {
+    return genericTestValues(x, [this](int16_t x) { return testInt64(x); });
+  }
+
+  bool testInt64Range(int64_t /*min*/, int64_t /*max*/, bool /*hasNull*/)
+      const final {
+    return true;
+  }
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed) const override {
+    return std::unique_ptr<BigintValuesUsingBloomFilter>(
+        new BigintValuesUsingBloomFilter(
+            nullAllowed.value_or(nullAllowed_), blocks_));
+  }
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  bool testingEquals(const Filter& other) const override;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const override;
+
+  void insert(int64_t value) {
+    filter_.insert(hash(value));
+  }
+
+  uint64_t blockIndex(int64_t value) const {
+    return filter_.blockIndex(hash(value));
+  }
+
+  int64_t blocksByteSize() const {
+    return blocks_.size() * sizeof(SplitBlockBloomFilter::Block);
+  }
+
+ private:
+  static uint64_t hash(int64_t value) {
+    // Simple multiplication hash like the one in BigintValuesUsingHashTable
+    // does not distribute values evenly.  Maybe we need to reconsider the hash
+    // choice in BigintValuesUsingHashTable as well in the future.
+    return folly::hasher<int64_t>()(value);
+  }
+
+  // Private constructor used by clone() and create().
+  BigintValuesUsingBloomFilter(
+      bool nullAllowed,
+      std::vector<SplitBlockBloomFilter::Block> blocks)
+      : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBloomFilter),
+        blocks_(std::move(blocks)),
+        filter_(blocks_) {}
+
+  std::vector<SplitBlockBloomFilter::Block> blocks_;
+  SplitBlockBloomFilter filter_;
+};
+
+// NOT IN-list filter for integral data types. Implemented as a hash table. Good
+// for large number of rejected values that do not fit within a small range.
+class NegatedBigintValuesUsingHashTable final : public Filter {
+ public:
+  /// @param min Minimum rejected value.
+  /// @param max Maximum rejected value.
+  /// @param values A list of unique values that fail the filter. Must contain
+  /// at least two entries.
+  /// @param nullAllowed Null values are passing the filter if true.
+  NegatedBigintValuesUsingHashTable(
+      int64_t min,
+      int64_t max,
+      const std::vector<int64_t>& values,
+      bool nullAllowed);
+
+  NegatedBigintValuesUsingHashTable(
+      const NegatedBigintValuesUsingHashTable& other,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, other.kind()),
+        nonNegated_(
+            std::make_unique<BigintValuesUsingHashTable>(*other.nonNegated_)) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    return std::make_unique<NegatedBigintValuesUsingHashTable>(
+        *this, nullAllowed.value_or(nullAllowed_));
+  }
+
+  bool testInt64(int64_t value) const final {
+    return !nonNegated_->testInt64(value);
+  }
+
+  xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t> x) const final {
+    return ~nonNegated_->testValues(x);
+  }
+
+  xsimd::batch_bool<int32_t> testValues(xsimd::batch<int32_t> x) const final {
+    return ~nonNegated_->testValues(x);
+  }
+
+  xsimd::batch_bool<int16_t> testValues(xsimd::batch<int16_t> x) const final {
+    return ~nonNegated_->testValues(x);
+  }
+
+  bool testInt64Range(int64_t min, int64_t max, bool hashNull) const final;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  int64_t min() const {
+    return nonNegated_->min();
+  }
+
+  int64_t max() const {
+    return nonNegated_->max();
+  }
+
+  const std::vector<int64_t>& values() const {
+    return nonNegated_->values();
+  }
+
+  const BigintValuesUsingHashTable* getNonNegated() const {
+    return nonNegated_.get();
+  }
+
+  std::string toString() const override {
+    return fmt::format(
+        "NegatedBigintValuesUsingHashTable: [{}, {}] {}",
+        nonNegated_->min(),
+        nonNegated_->max(),
+        nullAllowed_ ? "with nulls" : "no nulls");
+  }
+
+  bool testingEquals(const Filter& other) const final;
+
+ private:
+  std::unique_ptr<Filter>
+  mergeWith(int64_t min, int64_t max, const Filter* other) const;
+
+  std::unique_ptr<BigintValuesUsingHashTable> nonNegated_;
+};
+
+/// NOT IN-list filter for integral data types. Implemented as a bitmask. Offers
+/// better performance than the hash table when the range of values is small.
+class NegatedBigintValuesUsingBitmask final : public Filter {
+ public:
+  /// @param min Minimum REJECTED value.
+  /// @param max Maximum REJECTED value.
+  /// @param values A list of unique values that pass the filter. Must contain
+  /// at least two entries.
+  /// @param nullAllowed Null values are passing the filter if true.
+  NegatedBigintValuesUsingBitmask(
+      int64_t min,
+      int64_t max,
+      const std::vector<int64_t>& values,
+      bool nullAllowed);
+  NegatedBigintValuesUsingBitmask(
+      const NegatedBigintValuesUsingBitmask& other,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, other.kind()),
+        min_(other.min_),
+        max_(other.max_),
+        nonNegated_(
+            std::make_unique<BigintValuesUsingBitmask>(*other.nonNegated_)) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    return std::make_unique<NegatedBigintValuesUsingBitmask>(
+        *this, nullAllowed.value_or(nullAllowed_));
+  }
+
+  std::vector<int64_t> values() const {
+    return nonNegated_->values();
+  }
+
+  bool testInt64(int64_t value) const final {
+    return !nonNegated_->testInt64(value);
+  }
+
+  bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  bool testingEquals(const Filter& other) const final;
+
+  int64_t min() const {
+    return min_;
+  }
+
+  int64_t max() const {
+    return max_;
+  }
+
+  const BigintValuesUsingBitmask* getNonNegated() const {
+    return nonNegated_.get();
+  }
+
+ private:
+  std::unique_ptr<Filter>
+  mergeWith(int64_t min, int64_t max, const Filter* other) const;
+
+  int64_t min_;
+  int64_t max_;
+  std::unique_ptr<BigintValuesUsingBitmask> nonNegated_;
+};
+
+/// Base class for range filters on floating point and string data types.
+class AbstractRange : public Filter {
+ public:
+  bool lowerUnbounded() const {
+    return lowerUnbounded_;
+  }
+
+  bool lowerExclusive() const {
+    return lowerExclusive_;
+  }
+
+  bool upperUnbounded() const {
+    return upperUnbounded_;
+  }
+
+  bool upperExclusive() const {
+    return upperExclusive_;
+  }
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+ protected:
+  AbstractRange(
+      bool lowerUnbounded,
+      bool lowerExclusive,
+      bool upperUnbounded,
+      bool upperExclusive,
+      bool nullAllowed,
+      FilterKind kind)
+      : Filter(true, nullAllowed, kind),
+        lowerUnbounded_(lowerUnbounded),
+        lowerExclusive_(lowerUnbounded ? true : lowerExclusive),
+        upperUnbounded_(upperUnbounded),
+        upperExclusive_(upperUnbounded ? true : upperExclusive) {
+    VELOX_CHECK(
+        !lowerUnbounded_ || !upperUnbounded_,
+        "A range filter must have a lower or upper bound");
+  }
+
+  template <typename TFilter>
+  const TFilter* testingBaseEquals(const Filter& other) const {
+    if (const auto* otherRange = Filter::testingBaseEquals<TFilter>(other)) {
+      if (lowerUnbounded_ == otherRange->lowerUnbounded_ &&
+          lowerExclusive_ == otherRange->lowerExclusive_ &&
+          upperUnbounded_ == otherRange->upperUnbounded_ &&
+          upperExclusive_ == otherRange->upperExclusive_) {
+        return otherRange;
+      }
+    }
+
+    return nullptr;
+  }
+
+  folly::dynamic serializeBase() const {
+    auto obj = Filter::serializeBase();
+    obj["lowerUnbounded"] = lowerUnbounded_;
+    obj["lowerExclusive"] = lowerExclusive_;
+    obj["upperUnbounded"] = upperUnbounded_;
+    obj["upperExclusive"] = upperExclusive_;
+    return obj;
+  }
+
+  const bool lowerUnbounded_;
+  const bool lowerExclusive_;
+  const bool upperUnbounded_;
+  const bool upperExclusive_;
+};
+
+/// Range filter for floating point data types. Supports open, closed and
+/// unbounded ranges, e.g. c >= 10.3, c > 10.3, c <= 34.8, c < 34.8, c >= 10.3
+/// AND c < 34.8, c BETWEEN 10.3 and 34.8.
+/// @tparam T Floating point type: float or double.
+template <typename T>
+class FloatingPointRange final : public AbstractRange {
+ public:
+  /// @param lower Lower end of the range.
+  /// @param lowerUnbounded True if lower end is negative infinity in which case
+  /// the value of lower is ignored.
+  /// @param lowerExclusive True if open range, e.g. lower value doesn't pass
+  /// the filter.
+  /// @param upper Upper end of the range.
+  /// @param upperUnbounded True if upper end is positive infinity in which case
+  /// the value of upper is ignored.
+  /// @param upperExclusive True if open range, e.g. upper value doesn't pass
+  /// the filter.
+  /// @param nullAllowed Null values are passing the filter if true.
+  FloatingPointRange(
+      T lower,
+      bool lowerUnbounded,
+      bool lowerExclusive,
+      T upper,
+      bool upperUnbounded,
+      bool upperExclusive,
+      bool nullAllowed)
+      : AbstractRange(
+            lowerUnbounded,
+            lowerExclusive,
+            upperUnbounded,
+            upperExclusive,
+            nullAllowed,
+            (std::is_same_v<T, double>) ? FilterKind::kDoubleRange
+                                        : FilterKind::kFloatRange),
+        lower_(lower),
+        upper_(upper) {
+    VELOX_CHECK(lowerUnbounded || !std::isnan(lower_));
+    VELOX_CHECK(upperUnbounded || !std::isnan(upper_));
+  }
+
+  FloatingPointRange(const FloatingPointRange& other, bool nullAllowed)
+      : AbstractRange(
+            other.lowerUnbounded_,
+            other.lowerExclusive_,
+            other.upperUnbounded_,
+            other.upperExclusive_,
+            nullAllowed,
+            (std::is_same_v<T, double>) ? FilterKind::kDoubleRange
+                                        : FilterKind::kFloatRange),
+        lower_(other.lower_),
+        upper_(other.upper_) {
+    VELOX_CHECK(lowerUnbounded_ || !std::isnan(lower_));
+    VELOX_CHECK(upperUnbounded_ || !std::isnan(upper_));
+  }
+
+  folly::dynamic serialize() const override {
+    auto obj = AbstractRange::serializeBase();
+    obj["lower"] = lower_;
+    obj["upper"] = upper_;
+    return obj;
+  }
+
+  double lower() const {
+    return lower_;
+  }
+
+  double upper() const {
+    return upper_;
+  }
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<FloatingPointRange<T>>(
+          *this, nullAllowed.value());
+    } else {
+      return std::make_unique<FloatingPointRange<T>>(*this);
+    }
+  }
+
+  bool testDouble(double value) const final {
+    return testFloatingPoint(value);
+  }
+
+  bool testFloat(float value) const final {
+    return testFloatingPoint(value);
+  }
+
+  xsimd::batch_bool<double> testValues(xsimd::batch<double>) const final;
+  xsimd::batch_bool<float> testValues(xsimd::batch<float>) const final;
+
+  bool testDoubleRange(double min, double max, bool hasNull) const final {
+    if (hasNull && nullAllowed_) {
+      return true;
+    }
+
+    return !(
+        (!upperUnbounded_ && min > upper_) ||
+        (!lowerUnbounded_ && max < lower_));
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final {
+    switch (other->kind()) {
+      case FilterKind::kAlwaysTrue:
+      case FilterKind::kAlwaysFalse:
+      case FilterKind::kIsNull:
+      case FilterKind::kMultiRange:
+        return other->mergeWith(this);
+      case FilterKind::kIsNotNull:
+        return std::make_unique<FloatingPointRange<T>>(
+            lower_,
+            lowerUnbounded_,
+            lowerExclusive_,
+            upper_,
+            upperUnbounded_,
+            upperExclusive_,
+            false);
+      case FilterKind::kDoubleRange:
+      case FilterKind::kFloatRange: {
+        bool bothNullAllowed = nullAllowed_ && other->testNull();
+
+        auto otherRange = static_cast<const FloatingPointRange<T>*>(other);
+
+        auto lower = std::max(lower_, otherRange->lower_);
+        auto upper = std::min(upper_, otherRange->upper_);
+
+        auto bothLowerUnbounded =
+            lowerUnbounded_ && otherRange->lowerUnbounded_;
+        auto bothUpperUnbounded =
+            upperUnbounded_ && otherRange->upperUnbounded_;
+
+        auto lowerExclusive = !bothLowerUnbounded &&
+            (!testDouble(lower) || !other->testDouble(lower));
+        auto upperExclusive = !bothUpperUnbounded &&
+            (!testDouble(upper) || !other->testDouble(upper));
+
+        if (lower > upper ||
+            (lower == upper && (lowerExclusive || upperExclusive))) {
+          if (bothNullAllowed) {
+            return std::make_unique<IsNull>();
+          }
+          return std::make_unique<AlwaysFalse>();
+        }
+
+        return std::make_unique<FloatingPointRange<T>>(
+            lower,
+            bothLowerUnbounded,
+            lowerExclusive,
+            upper,
+            bothUpperUnbounded,
+            upperExclusive,
+            bothNullAllowed);
+      }
+      default:
+        VELOX_UNREACHABLE();
+    }
+  }
+
+  std::string toString() const override;
+
+  bool testingEquals(const Filter& other) const final {
+    if (const auto* otherRange =
+            AbstractRange::testingBaseEquals<FloatingPointRange<T>>(other)) {
+      return (lowerUnbounded_ ||
+              approximatelyEqual(lower_, otherRange->lower_)) &&
+          (upperUnbounded_ || approximatelyEqual(upper_, otherRange->upper_));
+    }
+
+    return false;
+  }
+
+ private:
+  static bool approximatelyEqual(T a, T b) {
+    return std::fabs(a - b) < std::numeric_limits<T>::epsilon();
+  }
+
+  std::string toString(const std::string& name) const {
+    return fmt::format(
+        "{}: {}{}, {}{} {}",
+        name,
+        (lowerUnbounded_ || lowerExclusive_) ? "(" : "[",
+        lowerUnbounded_ ? "-inf" : std::to_string(lower_),
+        // "nan" is considered valid value(s) and
+        // "nan > +inf" so "nan" is the upper bound in case of unbounded range.
+        upperUnbounded_ ? "nan" : std::to_string(upper_),
+        (upperUnbounded_ || upperExclusive_) ? ")" : "]",
+        nullAllowed_ ? "with nulls" : "no nulls");
+  }
+
+  bool testFloatingPoint(T value) const {
+    if (std::isnan(value)) {
+      return upperUnbounded_;
+    }
+    if (!lowerUnbounded_) {
+      if (value < lower_) {
+        return false;
+      }
+      if (lowerExclusive_ && lower_ == value) {
+        return false;
+      }
+    }
+    if (!upperUnbounded_) {
+      if (value > upper_) {
+        return false;
+      }
+      if (upperExclusive_ && value == upper_) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  xsimd::batch_bool<T> testFloatingPoints(xsimd::batch<T> values) const {
+    xsimd::batch_bool<T> result;
+    if (!lowerUnbounded_) {
+      auto allLower = xsimd::broadcast<T>(lower_);
+      if (lowerExclusive_) {
+        result = allLower < values;
+      } else {
+        result = allLower <= values;
+      }
+      if (!upperUnbounded_) {
+        auto allUpper = xsimd::broadcast<T>(upper_);
+        if (upperExclusive_) {
+          result = result & (values < allUpper);
+        } else {
+          result = result & (values <= allUpper);
+        }
+      }
+    } else {
+      auto allUpper = xsimd::broadcast<T>(upper_);
+      if (upperExclusive_) {
+        result = values < allUpper;
+      } else {
+        result = values <= allUpper;
+      }
+    }
+    if (upperUnbounded_) {
+      auto nanResult = xsimd::isnan(values);
+      result = xsimd::bitwise_or(nanResult, result);
+    }
+    return result;
+  }
+
+  const T lower_;
+  const T upper_;
+};
+
+template <>
+inline std::string FloatingPointRange<double>::toString() const {
+  return toString("DoubleRange");
+}
+
+template <>
+inline std::string FloatingPointRange<float>::toString() const {
+  return toString("FloatRange");
+}
+
+template <>
+inline xsimd::batch_bool<double> FloatingPointRange<double>::testValues(
+    xsimd::batch<double> x) const {
+  return testFloatingPoints(x);
+}
+
+template <>
+inline xsimd::batch_bool<float> FloatingPointRange<double>::testValues(
+    xsimd::batch<float> x) const {
+  // Slow path for schema evolution:  handles the case where double filter is
+  // applied to float data (e.g., reading float column with double type
+  // request). Falls back to element-by-element testing as batch processing
+  // requires type matching.
+  return Filter::testValues(x);
+}
+
+template <>
+inline xsimd::batch_bool<double> FloatingPointRange<float>::testValues(
+    xsimd::batch<double>) const {
+  VELOX_FAIL("Not defined for float filter");
+}
+
+template <>
+inline xsimd::batch_bool<float> FloatingPointRange<float>::testValues(
+    xsimd::batch<float> x) const {
+  return testFloatingPoints(x);
+}
+
+using DoubleRange = FloatingPointRange<double>;
+using FloatRange = FloatingPointRange<float>;
+
+/// Range filter for string data type. Supports open, closed and
+/// unbounded ranges.
+class BytesRange final : public AbstractRange {
+ public:
+  /// @param lower Lower end of the range.
+  /// @param lowerUnbounded True if lower end is "negative infinity" in which
+  /// case the value of lower is ignored.
+  /// @param lowerExclusive True if open range, e.g. lower value doesn't pass
+  /// the filter.
+  /// @param upper Upper end of the range.
+  /// @param upperUnbounded True if upper end is "positive infinity" in which
+  /// case the value of upper is ignored.
+  /// @param upperExclusive True if open range, e.g. upper value doesn't pass
+  /// the filter.
+  /// @param nullAllowed Null values are passing the filter if true.
+  BytesRange(
+      std::string lower,
+      bool lowerUnbounded,
+      bool lowerExclusive,
+      std::string upper,
+      bool upperUnbounded,
+      bool upperExclusive,
+      bool nullAllowed)
+      : AbstractRange(
+            lowerUnbounded,
+            lowerExclusive,
+            upperUnbounded,
+            upperExclusive,
+            nullAllowed,
+            FilterKind::kBytesRange),
+        lower_(std::move(lower)),
+        upper_(std::move(upper)),
+        lowerView_(lower_),
+        upperView_(upper_),
+        singleValue_(
+            !lowerExclusive_ && !upperExclusive_ && !lowerUnbounded_ &&
+            !upperUnbounded_ && lower_ == upper_) {
+    // Always-true filters should be specified using AlwaysTrue.
+    VELOX_CHECK(!lowerUnbounded_ || !upperUnbounded_);
+  }
+
+  BytesRange(const BytesRange& other, bool nullAllowed)
+      : AbstractRange(
+            other.lowerUnbounded_,
+            other.lowerExclusive_,
+            other.upperUnbounded_,
+            other.upperExclusive_,
+            nullAllowed,
+            FilterKind::kBytesRange),
+        lower_(other.lower_),
+        upper_(other.upper_),
+        lowerView_(lower_),
+        upperView_(upper_),
+        singleValue_(other.singleValue_) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<BytesRange>(*this, nullAllowed.value());
+    } else {
+      return std::make_unique<BytesRange>(*this);
+    }
+  }
+
+  std::string toString() const override {
+    return fmt::format(
+        "BytesRange: {}{}, {}{} {}",
+        (lowerUnbounded_ || lowerExclusive_) ? "(" : "[",
+        lowerUnbounded_ ? "..." : lower_,
+        upperUnbounded_ ? "..." : upper_,
+        (upperUnbounded_ || upperExclusive_) ? ")" : "]",
+        nullAllowed_ ? "with nulls" : "no nulls");
+  }
+
+  bool testBytes(const char* value, int32_t length) const final;
+
+  bool testStringView(const StringView& view) const final {
+    if (singleValue_) {
+      return view == lowerView_;
+    }
+    if (!lowerUnbounded_) {
+      if (lowerExclusive_) {
+        if (view <= lowerView_) {
+          return false;
+        }
+      } else {
+        if (view < lowerView_) {
+          return false;
+        }
+      }
+    }
+    if (!upperUnbounded_) {
+      if (upperExclusive_) {
+        if (view >= upperView_) {
+          return false;
+        }
+      } else {
+        if (view > upperView_) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  bool testBytesRange(
+      std::optional<std::string_view> min,
+      std::optional<std::string_view> max,
+      bool hasNull) const final;
+
+  bool hasTestLength() const final {
+    return singleValue_;
+  }
+
+  bool testLength(int length) const final {
+    return !singleValue_ || static_cast<int64_t>(lower_.size()) == length;
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  xsimd::batch_bool<int32_t> testLengths(
+      xsimd::batch<int32_t> lengths) const final {
+    VELOX_DCHECK(singleValue_);
+    return lengths == xsimd::broadcast<int32_t>(lower_.size());
+  }
+
+  bool isSingleValue() const {
+    return singleValue_;
+  }
+
+  bool isUpperUnbounded() const {
+    return upperUnbounded_;
+  }
+
+  bool isLowerUnbounded() const {
+    return lowerUnbounded_;
+  }
+
+  bool isUpperExclusive() const {
+    return upperExclusive_;
+  }
+
+  bool isLowerExclusive() const {
+    return lowerExclusive_;
+  }
+
+  const std::string& lower() const {
+    return lower_;
+  }
+
+  const std::string& upper() const {
+    return upper_;
+  }
+
+  bool testingEquals(const Filter& other) const final;
+
+ private:
+  const std::string lower_;
+  const std::string upper_;
+  const StringView lowerView_;
+  const StringView upperView_;
+  const bool singleValue_;
+};
+
+// Negated range filter for strings
+class NegatedBytesRange final : public Filter {
+ public:
+  /// @param lower Lower end of the rejected range.
+  /// @param lowerUnbounded True if lower end is "negative infinity" in which
+  /// case the value of lower is ignored.
+  /// @param lowerExclusive True if open range, e.g. lower value doesn't pass
+  /// the filter.
+  /// @param upper Upper end of the range.
+  /// @param upperUnbounded True if upper end is "positive infinity" in which
+  /// case the value of upper is ignored.
+  /// @param upperExclusive True if open range, e.g. upper value doesn't pass
+  /// the filter.
+  /// @param nullAllowed Null values are passing the filter if true.
+  NegatedBytesRange(
+      std::string lower,
+      bool lowerUnbounded,
+      bool lowerExclusive,
+      std::string upper,
+      bool upperUnbounded,
+      bool upperExclusive,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kNegatedBytesRange) {
+    nonNegated_ = std::make_unique<BytesRange>(
+        std::move(lower),
+        lowerUnbounded,
+        lowerExclusive,
+        std::move(upper),
+        upperUnbounded,
+        upperExclusive,
+        nullAllowed);
+  }
+
+  NegatedBytesRange(const NegatedBytesRange& other, bool nullAllowed)
+      : Filter(true, nullAllowed, other.kind()),
+        nonNegated_(std::make_unique<BytesRange>(*other.nonNegated_)) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    return std::make_unique<NegatedBytesRange>(
+        *this, nullAllowed.value_or(nullAllowed_));
+  }
+
+  std::string toString() const override {
+    return "Negated" + nonNegated_->toString();
+  }
+
+  bool testBytes(const char* value, int32_t length) const final {
+    return !nonNegated_->testBytes(value, length);
+  }
+
+  bool testStringView(const StringView& view) const final {
+    return !nonNegated_->testStringView(view);
+  }
+
+  bool testBytesRange(
+      std::optional<std::string_view> min,
+      std::optional<std::string_view> max,
+      bool hasNull) const final;
+
+  bool testLength(int length) const final {
+    // A range almost never covers all values of a particular length,
+    // so at least one value of each length is probably accepted.
+    return true;
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  bool isSingleValue() const {
+    return nonNegated_->isSingleValue();
+  }
+
+  bool isUpperUnbounded() const {
+    return nonNegated_->isUpperUnbounded();
+  }
+
+  bool isLowerUnbounded() const {
+    return nonNegated_->isLowerUnbounded();
+  }
+
+  bool isUpperExclusive() const {
+    return nonNegated_->isUpperExclusive();
+  }
+
+  bool isLowerExclusive() const {
+    return nonNegated_->isLowerExclusive();
+  }
+
+  const std::string& lower() const {
+    return nonNegated_->lower();
+  }
+
+  const std::string& upper() const {
+    return nonNegated_->upper();
+  }
+
+  bool testingEquals(const Filter& other) const final;
+
+  const BytesRange* getNonNegated() const {
+    return nonNegated_.get();
+  }
+
+ private:
+  std::unique_ptr<Filter> toMultiRange() const;
+
+  std::unique_ptr<BytesRange> nonNegated_;
+};
+
+/// Range filter for Timestamp. Supports open, closed and unbounded
+/// ranges.
+/// Examples:
+/// c > timestamp '2023-07-19 17:00:00.000'
+/// c <= timestamp '1970-02-01 08:00:00.000'
+/// c BETWEEN timestamp '2002-12-19 23:00:00.000' and timestamp '2018-02-13
+/// 08:00:00.000'
+///
+/// Open ranges can be implemented by using the value to the left
+/// or right of the end of the range, e.g. a < timestamp '2023-07-19
+/// 17:00:00.777' is equivalent to a <= timestamp '2023-07-19 17:00:00.776'.
+class TimestampRange : public Filter {
+ public:
+  /// @param lower Lower end of the range, inclusive.
+  /// @param upper Upper end of the range, inclusive.
+  /// @param nullAllowed Null values are passing the filter if true.
+  TimestampRange(
+      const Timestamp& lower,
+      const Timestamp& upper,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kTimestampRange),
+        lower_(lower),
+        upper_(upper),
+        singleValue_(lower_ == upper) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<TimestampRange>(
+          this->lower_, this->upper_, nullAllowed.value());
+    } else {
+      return std::make_unique<TimestampRange>(*this);
+    }
+  }
+
+  std::string toString() const override {
+    return fmt::format(
+        "TimestampRange: [{}, {}] {}",
+        lower_.toString(),
+        upper_.toString(),
+        nullAllowed_ ? "with nulls" : "no nulls");
+  }
+
+  bool testTimestamp(const Timestamp& value) const final {
+    return value >= lower_ && value <= upper_;
+  }
+
+  bool testTimestampRange(
+      const Timestamp& min,
+      const Timestamp& max,
+      bool hasNull) const final {
+    if (hasNull && nullAllowed_) {
+      return true;
+    }
+
+    return !(min > upper_ || max < lower_);
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  bool isSingleValue() const {
+    return singleValue_;
+  }
+
+  const Timestamp lower() const {
+    return lower_;
+  }
+
+  const Timestamp upper() const {
+    return upper_;
+  }
+
+  bool testingEquals(const Filter& other) const final;
+
+ private:
+  const Timestamp lower_;
+  const Timestamp upper_;
+  const bool singleValue_;
+};
+
+/// IN-list filter for string data type.
+class BytesValues final : public Filter {
+ public:
+  /// @param values List of values that pass the filter. Must contain at least
+  /// one entry.
+  /// @param nullAllowed Null values are passing the filter if true.
+  BytesValues(const std::vector<std::string>& values, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kBytesValues) {
+    VELOX_CHECK(!values.empty(), "values must not be empty");
+
+    for (const auto& value : values) {
+      lengths_.insert(value.size());
+      values_.insert(value);
+    }
+
+    lower_ = *std::min_element(values_.begin(), values_.end());
+    upper_ = *std::max_element(values_.begin(), values_.end());
+  }
+
+  BytesValues(const BytesValues& other, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kBytesValues),
+        lower_(other.lower_),
+        upper_(other.upper_),
+        values_(other.values_),
+        lengths_(other.lengths_) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<BytesValues>(*this, nullAllowed.value());
+    } else {
+      return std::make_unique<BytesValues>(*this);
+    }
+  }
+
+  bool testLength(int32_t length) const final {
+    return lengths_.contains(length);
+  }
+
+  bool testBytes(const char* value, int32_t length) const final {
+    return lengths_.contains(length) &&
+        values_.contains(std::string(value, length));
+  }
+
+  bool testBytesRange(
+      std::optional<std::string_view> min,
+      std::optional<std::string_view> max,
+      bool hasNull) const final;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  const folly::F14FastSet<std::string>& values() const {
+    return values_;
+  }
+
+  bool testingEquals(const Filter& other) const final;
+
+ private:
+  std::string lower_;
+  std::string upper_;
+  folly::F14FastSet<std::string> values_;
+  folly::F14FastSet<uint32_t> lengths_;
+};
+
+/// Represents a combination of two of more range filters on integral types with
+/// OR semantics. The filter passes if at least one of the contained filters
+/// passes.
+class BigintMultiRange final : public Filter {
+ public:
+  /// @param ranges List of range filters. Must contain at least two entries.
+  /// Ranges must be sorted in ascending order and must not overlap.
+  /// @param nullAllowed Null values are passing the filter if true. nullAllowed
+  /// flags in the 'ranges' filters are ignored.
+  BigintMultiRange(
+      std::vector<std::unique_ptr<BigintRange>> ranges,
+      bool nullAllowed);
+
+  BigintMultiRange(const BigintMultiRange& other, bool nullAllowed);
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final;
+
+  bool testInt64(int64_t value) const final;
+
+  bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  const std::vector<std::unique_ptr<BigintRange>>& ranges() const {
+    return ranges_;
+  }
+
+  std::string toString() const override;
+
+  bool testingEquals(const Filter& other) const final;
+
+ private:
+  const std::vector<std::unique_ptr<BigintRange>> ranges_;
+  std::vector<int64_t> lowerBounds_;
+};
+
+/// NOT IN-list filter for string data type.
+class NegatedBytesValues final : public Filter {
+ public:
+  /// @param values List of values that fail the filter. Must contain at least
+  /// one entry.
+  /// @param nullAllowed Null values are passing the filter if true.
+  NegatedBytesValues(const std::vector<std::string>& values, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kNegatedBytesValues) {
+    VELOX_CHECK(!values.empty(), "values must not be empty");
+    nonNegated_ = std::make_unique<BytesValues>(values, !nullAllowed);
+  }
+
+  NegatedBytesValues(const NegatedBytesValues& other, bool nullAllowed)
+      : Filter(true, nullAllowed, other.kind()),
+        nonNegated_(std::make_unique<BytesValues>(*other.nonNegated_)) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    return std::make_unique<NegatedBytesValues>(
+        *this, nullAllowed.value_or(nullAllowed_));
+  }
+
+  bool testLength(int32_t /* unused */) const final {
+    // It is very rare that we will reject all strings of a given length
+    // using a NegatedBytesValues filter.
+    return true;
+  }
+
+  bool testBytes(const char* value, int32_t length) const final {
+    return !nonNegated_->testBytes(value, length);
+  }
+
+  bool testBytesRange(
+      std::optional<std::string_view> min,
+      std::optional<std::string_view> max,
+      bool hasNull) const final;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  const folly::F14FastSet<std::string>& values() const {
+    return nonNegated_->values();
+  }
+
+  bool testingEquals(const Filter& other) const final;
+
+  const BytesValues* getNonNegated() const {
+    return nonNegated_.get();
+  }
+
+ private:
+  std::unique_ptr<BytesValues> nonNegated_;
+};
+
+/// Represents a combination of two of more filters with
+/// OR semantics. The filter passes if at least one of the contained filters
+/// passes.
+class MultiRange final : public Filter {
+ public:
+  /// @param ranges List of range filters. Must contain at least two entries.
+  /// All entries must support the same data types.
+  /// @param nullAllowed Null values are passing the filter if true. nullAllowed
+  /// flags in the 'ranges' filters are ignored.
+  /// TODO: remove redundant param `nanAllowed` after presto removes the use of
+  /// this param. For now, we set a default value to avoid breaking presto.
+  MultiRange(
+      std::vector<std::unique_ptr<Filter>> filters,
+      bool nullAllowed,
+      bool nanAllowed = false)
+      : Filter(true, nullAllowed, FilterKind::kMultiRange),
+        filters_(std::move(filters)) {}
+
+  folly::dynamic serialize() const override;
+
+  static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final;
+
+  bool testDouble(double value) const final;
+
+  bool testFloat(float value) const final;
+
+  bool testInt128(const int128_t& value) const final;
+
+  bool testBytes(const char* value, int32_t length) const final;
+
+  bool testTimestamp(const Timestamp& value) const final;
+
+  bool testLength(int32_t length) const final;
+
+  bool testBytesRange(
+      std::optional<std::string_view> min,
+      std::optional<std::string_view> max,
+      bool hasNull) const final;
+
+  bool testDoubleRange(double min, double max, bool hasNull) const final;
+
+  bool testTimestampRange(
+      const Timestamp& min,
+      const Timestamp& max,
+      bool hasNull) const final;
+
+  const std::vector<std::unique_ptr<Filter>>& filters() const {
+    return filters_;
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  bool testingEquals(const Filter& other) const final;
+
+ private:
+  const std::vector<std::unique_ptr<Filter>> filters_;
+};
+
+// Helper for applying filters to different types
+template <typename TFilter, typename T>
+static inline bool applyFilter(TFilter& filter, T value) {
+  if constexpr (std::is_same_v<T, int128_t>) {
+    return filter.testInt128(value);
+  } else if constexpr (
+      std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t> ||
+      std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t>) {
+    return filter.testInt64(value);
+  } else if constexpr (std::is_same_v<T, float>) {
+    return filter.testFloat(value);
+  } else if constexpr (std::is_same_v<T, double>) {
+    return filter.testDouble(value);
+  } else if constexpr (std::is_same_v<T, bool>) {
+    return filter.testBool(value);
+  } else if constexpr (std::is_same_v<T, Timestamp>) {
+    return filter.testTimestamp(value);
+  } else {
+    VELOX_FAIL("Bad argument type to filter: {}", typeid(T).name());
+  }
+}
+
+template <typename TFilter>
+static inline bool applyFilter(TFilter& filter, const std::string& value) {
+  return filter.testBytes(value.data(), value.size());
+}
+
+template <typename TFilter>
+static inline bool applyFilter(TFilter& filter, std::string_view value) {
+  return filter.testBytes(value.data(), value.size());
+}
+
+template <typename TFilter>
+static inline bool applyFilter(TFilter& filter, StringView value) {
+  return filter.testStringView(value);
+}
+
+namespace detail {
+template <TypeKind kind, typename TFilter>
+bool applyFilterToVariant(TFilter& filter, const Variant& value) {
+  return applyFilter(filter, value.value<kind>());
+}
+} // namespace detail
+
+/// 'value' must not be null.
+template <typename TFilter>
+static inline bool applyFilter(TFilter& filter, const Variant& value) {
+  VELOX_USER_CHECK(!value.isNull(), "Filter cannot be applied to a null value");
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      detail::applyFilterToVariant, value.kind(), filter, value);
+}
+
+/// Create a hash or bitmap based IN filter depending on value distribution.
+std::unique_ptr<Filter> createBigintValues(
+    const std::vector<int64_t>& values,
+    bool nullAllowed);
+
+std::unique_ptr<Filter> createHugeintValues(
+    const std::vector<int128_t>& values,
+    bool nullAllowed);
+
+/// Create a hash or bitmap based NOT IN filter depending on value distribution.
+std::unique_ptr<Filter> createNegatedBigintValues(
+    const std::vector<int64_t>& values,
+    bool nullAllowed);
+
+} // namespace facebook::velox::common
+
+template <>
+struct fmt::formatter<facebook::velox::common::FilterKind>
+    : formatter<std::string> {
+  auto format(facebook::velox::common::FilterKind s, format_context& ctx)
+      const {
+    return formatter<std::string>::format(
+        std::string(facebook::velox::common::FilterKindName::toName(s)), ctx);
+  }
+};

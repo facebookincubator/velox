@@ -1,0 +1,230 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# Build the test and build container for presto_cpp
+
+# This multi-stage Dockerfile contains the following relevant targets:
+#   - centos9: Our base CI build
+#   - adapters: Based on centos9 with all optional dependencies installed
+#   - pyvelox: Image used by cibuildwheel to build pyvelox
+#
+# tzdata is pinned to a known-good version across every stage. Without
+# the pin, each docker rebuild silently picks up the latest tzdata from
+# the CentOS repos — tzdata 2026b's encoding of British Columbia's
+# permanent-PDT change broke Velox's bundled libc++ chrono::tzdb parser
+# (issue #17522). To bump intentionally: change the default below and
+# re-run the Presto-SOT fuzzers locally to confirm before merging.
+ARG CENTOS_TZDATA_VERSION=2026a-1.el9
+
+########################
+# Stage 1: Base Build  #
+########################
+ARG image=quay.io/centos/centos:stream9
+FROM $image AS base-build
+
+ARG CENTOS_TZDATA_VERSION
+# Pin tzdata. `dnf install` is a no-op if already at the pinned version,
+# and falls through to `downgrade` when the base image ships a newer one.
+RUN dnf -y install "tzdata-${CENTOS_TZDATA_VERSION}.noarch" || \
+      dnf -y downgrade "tzdata-${CENTOS_TZDATA_VERSION}.noarch"
+
+COPY scripts/setup-helper-functions.sh /
+COPY scripts/setup-versions.sh /
+COPY scripts/setup-common.sh /
+COPY scripts/setup-centos9.sh /
+COPY CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch /
+COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
+COPY CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch /
+COPY CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch /
+
+ARG VELOX_BUILD_SHARED=ON
+# Building libvelox.so requires folly and gflags to be built shared as well for now
+# gflags is always both shared and static turned on.
+ENV VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED}
+
+ARG ARM_BUILD_TARGET=local
+ENV ARM_BUILD_TARGET=${ARM_BUILD_TARGET}
+
+RUN mkdir build
+WORKDIR /build
+
+# We don't want UV symlinks to be copied into the following stages
+ENV UV_TOOL_BIN_DIR=/usr/local/bin \
+    UV_INSTALL_DIR=/usr/local/bin \
+    INSTALL_PREFIX=/deps
+
+# CMake 4.0 removed support for cmake minimums of <=3.5 and will fail
+# builds, CMAKE_POLICY_VERSION_MINIMUM and cmake-compatibility.path
+# override it.
+# Apache Arrow 18.0.0 has a problem that Boost isn't detected when
+# ARROW_TESTING=ON is only used:
+# https://github.com/apache/arrow/pull/45424
+ENV CMAKE_POLICY_VERSION_MINIMUM="3.5" \
+    VELOX_ARROW_CMAKE_PATCH="/arrow-testing-boost.patch /cmake-compatibility.patch" \
+    VELOX_FBTHRIFT_CMAKE_PATCH="/compactv1-protocol-refiller.patch" \
+    VELOX_OPENZL_CMAKE_PATCH="/openzl-cxx-standard.patch"
+
+# Ensure libraries installed to INSTALL_PREFIX are found at runtime (e.g.
+# thrift1 needs libgflags.so.2.2 when folly links gflags statically but
+# other tools still use shared gflags).
+ENV LD_LIBRARY_PATH="${INSTALL_PREFIX}/lib:${INSTALL_PREFIX}/lib64"
+
+# Some CMake configs contain the hard coded prefix '/deps', we need to replace that with
+# the future location to avoid build errors in the base-image
+RUN bash /setup-centos9.sh && \
+    find $INSTALL_PREFIX/lib/cmake -type f -name '*.cmake' -exec sed -i 's|/deps/|/usr/local/|g' {} \;
+
+########################
+# Stage 2: Base Image  #
+########################
+FROM $image AS base-image
+
+ARG CENTOS_TZDATA_VERSION
+# Pin tzdata — see top of file for rationale. Inherited by centos9,
+# pyvelox, and (transitively, via the centos9 tag) the java images.
+RUN dnf -y install "tzdata-${CENTOS_TZDATA_VERSION}.noarch" || \
+      dnf -y downgrade "tzdata-${CENTOS_TZDATA_VERSION}.noarch"
+
+COPY scripts/setup-helper-functions.sh /
+COPY scripts/setup-versions.sh /
+COPY scripts/setup-common.sh /
+COPY scripts/setup-centos9.sh /
+
+# This way it's on the PATH and doesn't clash with the version installed in manylinux
+ENV UV_TOOL_BIN_DIR=/usr/local/bin \
+    UV_INSTALL_DIR=/usr/local/bin
+
+RUN /bin/bash -c 'source /setup-centos9.sh && \
+      install_build_prerequisites && \
+      install_velox_deps_from_dnf && \
+      dnf clean all'
+
+RUN ln -s $(which python3) /usr/bin/python
+
+COPY --from=base-build /deps /usr/local
+
+########################
+# Stage: Centos 9      #
+########################
+FROM base-image AS centos9
+
+# Install tools needed for CI
+RUN /bin/bash -c "source /setup-centos9.sh && \
+      dnf_install 'dnf-command(config-manager)' && \
+      dnf config-manager --add-repo 'https://cli.github.com/packages/rpm/gh-cli.repo' && \
+      dnf_install gh jq && \
+      dnf clean all"
+
+ENV CC=/opt/rh/gcc-toolset-12/root/bin/gcc \
+    CXX=/opt/rh/gcc-toolset-12/root/bin/g++
+
+ENTRYPOINT ["/bin/bash", "-c", "source /opt/rh/gcc-toolset-12/enable && exec \"$@\"", "--"]
+CMD ["/bin/bash"]
+
+########################
+# Stage: PyVelox       #
+########################
+FROM base-image AS pyvelox
+
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/velox_deps.conf \
+ && echo "/usr/local/lib64" >> /etc/ld.so.conf.d/velox_deps.conf \
+ && ldconfig
+
+########################
+# Stage: Adapters Build#
+########################
+FROM $image AS adapters-build
+
+ARG CENTOS_TZDATA_VERSION
+# Pin tzdata — see top of file for rationale.
+RUN dnf -y install "tzdata-${CENTOS_TZDATA_VERSION}.noarch" || \
+      dnf -y downgrade "tzdata-${CENTOS_TZDATA_VERSION}.noarch"
+
+COPY scripts/setup-helper-functions.sh /
+COPY scripts/setup-versions.sh /
+COPY scripts/setup-common.sh /
+COPY scripts/setup-centos9.sh /
+COPY scripts/setup-centos-adapters.sh /
+
+ARG ARM_BUILD_TARGET=local
+ENV ARM_BUILD_TARGET=${ARM_BUILD_TARGET}
+
+RUN mkdir build
+WORKDIR /build
+
+ENV UV_TOOL_BIN_DIR=/usr/local/bin \
+    UV_INSTALL_DIR=/usr/local/bin \
+    INSTALL_PREFIX=/deps
+
+RUN bash -c 'source /setup-centos9.sh && install_build_prerequisites'
+
+RUN bash /setup-centos-adapters.sh install_adapters && \
+    find $INSTALL_PREFIX/lib/cmake -type f -name '*.cmake' -exec sed -i 's|/deps/|/usr/local/|g' {} \;
+
+########################
+# Stage: Adapters      #
+########################
+FROM centos9 AS adapters
+
+COPY scripts/setup-centos-adapters.sh /
+
+ARG CUDA_VERSION
+ENV CUDA_VERSION=${CUDA_VERSION:-12.9}
+
+RUN bash /setup-centos-adapters.sh install_cuda && \
+      dnf clean all
+
+RUN bash /setup-centos-adapters.sh install_adapters_deps_from_dnf && \
+      dnf clean all
+
+ARG CENTOS_TZDATA_VERSION
+# tzdata-java is pulled in by the Java install above. Pin it to match
+# the OS tzdata pinned in centos9 so the JDK and Velox C++ see the
+# same timezone rules — issue #17522 was caused by this drift.
+RUN dnf -y install "tzdata-java-${CENTOS_TZDATA_VERSION}.noarch" || \
+      dnf -y downgrade "tzdata-java-${CENTOS_TZDATA_VERSION}.noarch"
+
+# put CUDA binaries on the PATH
+ENV PATH=/usr/local/cuda/bin:${PATH}
+
+# configuration for nvidia-container-toolkit
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES="compute,utility"
+
+# Install test dependencies
+RUN uv pip install --system https://github.com/googleapis/storage-testbench/archive/refs/tags/v0.36.0.tar.gz
+
+RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+RUN . /root/.nvm/nvm.sh && nvm install 22
+
+# Install azurite and symlink nvm managed binaries into /usr/local/bin which is on the path
+RUN . /root/.nvm/nvm.sh && npm install -g azurite && \
+      ln -s $(dirname $(which node))/* /usr/local/bin
+
+ENV HADOOP_HOME=/usr/local/hadoop \
+    HADOOP_ROOT_LOGGER="WARN,DRFA" \
+    LC_ALL=C \
+    PATH=/usr/local/hadoop/bin:${PATH} \
+    JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk \
+    PATH=/usr/lib/jvm/java-1.8.0-openjdk/bin:${PATH}
+
+COPY --from=adapters-build /deps /usr/local
+
+# thrift1 requires shared libraries copied from /deps to /usr/local.
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/velox_deps.conf \
+ && echo "/usr/local/lib64" >> /etc/ld.so.conf.d/velox_deps.conf \
+ && ldconfig
+
+COPY scripts/setup-classpath.sh /
+ENTRYPOINT ["/bin/bash", "-c", "source /setup-classpath.sh && source /opt/rh/gcc-toolset-12/enable && exec \"$@\"", "--"]
+CMD ["/bin/bash"]

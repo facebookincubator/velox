@@ -1,0 +1,1054 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/exec/SimpleAggregateAdapter.h"
+#include "velox/exec/Aggregate.h"
+#include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+
+using namespace facebook::velox::exec;
+using namespace facebook::velox::exec::test;
+using facebook::velox::functions::aggregate::test::AggregationTestBase;
+
+namespace facebook::velox::aggregate::test {
+namespace {
+
+const char* const kSimpleAvg = "simple_avg";
+const char* const kSimpleArrayAgg = "simple_array_agg";
+const char* const kSimpleCountNulls = "simple_count_nulls";
+const char* const kSimpleVariadicSum = "simple_variadic_sum";
+const char* const kSimpleVariadicArrayAgg = "simple_variadic_array_agg";
+
+class SimpleAverageAggregationTest : public AggregationTestBase {
+ protected:
+  void SetUp() override {
+    AggregationTestBase::SetUp();
+
+    registerSimpleAverageAggregate(kSimpleAvg);
+  }
+};
+
+TEST_F(SimpleAverageAggregationTest, averageAggregate) {
+  auto inputVectors = makeRowVector(
+      {makeFlatVector<bool>(
+           {true,
+            false,
+            true,
+            false,
+            true,
+            false,
+            true,
+            false,
+            true,
+            false,
+            true,
+            false}),
+       makeFlatVector<bool>(
+           {true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            false,
+            false}),
+       makeNullableFlatVector<int64_t>(
+           {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, std::nullopt, std::nullopt}),
+       makeNullableFlatVector<double>(
+           {1.1,
+            2.2,
+            3.3,
+            4.4,
+            5.5,
+            6.6,
+            7.7,
+            8.8,
+            9.9,
+            11,
+            std::nullopt,
+            std::nullopt})});
+
+  auto expected = makeRowVector(
+      {makeFlatVector<bool>({true, false}),
+       makeFlatVector<double>({5, 6}),
+       makeFlatVector<double>({5.5, 6.6})});
+  testAggregations(
+      {inputVectors}, {"c0"}, {"simple_avg(c2)", "simple_avg(c3)"}, {expected});
+
+  expected = makeRowVector(
+      {makeFlatVector<bool>({true, false}),
+       makeNullableFlatVector<double>({5.5, std::nullopt}),
+       makeNullableFlatVector<double>({6.05, std::nullopt})});
+  testAggregations(
+      {inputVectors}, {"c1"}, {"simple_avg(c2)", "simple_avg(c3)"}, {expected});
+
+  expected = makeRowVector(
+      {makeFlatVector<double>(std::vector<double>{5.5}),
+       makeFlatVector<double>(std::vector<double>{6.05})});
+  testAggregations(
+      {inputVectors}, {}, {"simple_avg(c2)", "simple_avg(c3)"}, {expected});
+
+  inputVectors = makeRowVector({makeNullableFlatVector<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt})});
+  expected = makeRowVector({makeNullableFlatVector<double>({std::nullopt})});
+  testAggregations({inputVectors}, {}, {"simple_avg(c0)"}, {expected});
+}
+
+class SimpleArrayAggAggregationTest : public AggregationTestBase {
+ protected:
+  void SetUp() override {
+    AggregationTestBase::SetUp();
+
+    registerSimpleArrayAggAggregate(kSimpleArrayAgg);
+  }
+};
+
+TEST_F(SimpleArrayAggAggregationTest, numbers) {
+  auto inputVectors = makeRowVector(
+      {makeFlatVector<bool>(
+           {true,
+            false,
+            true,
+            false,
+            true,
+            false,
+            true,
+            false,
+            true,
+            false,
+            true,
+            false}),
+       makeFlatVector<bool>(
+           {true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            false,
+            false}),
+       makeNullableFlatVector<int64_t>(
+           {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, std::nullopt, std::nullopt}),
+       makeNullableFlatVector<double>(
+           {1.1,
+            2.2,
+            3.3,
+            4.4,
+            5.5,
+            6.6,
+            7.7,
+            8.8,
+            9.9,
+            11,
+            std::nullopt,
+            std::nullopt})});
+  auto expected = makeRowVector(
+      {makeNullableArrayVector<int64_t>(
+           {{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, std::nullopt, std::nullopt}}),
+       makeNullableArrayVector<double>(
+           {{1.1,
+             2.2,
+             3.3,
+             4.4,
+             5.5,
+             6.6,
+             7.7,
+             8.8,
+             9.9,
+             11,
+             std::nullopt,
+             std::nullopt}})});
+  testAggregations(
+      {inputVectors},
+      {},
+      {"simple_array_agg(c2)", "simple_array_agg(c3)"},
+      {"array_sort(a0)", "array_sort(a1)"},
+      {expected});
+
+  expected = makeRowVector(
+      {makeFlatVector<bool>({true, false}),
+       makeNullableArrayVector<int64_t>(
+           {{1, 3, 5, 7, 9, std::nullopt}, {2, 4, 6, 8, 10, std::nullopt}}),
+       makeNullableArrayVector<double>(
+           {{1.1, 3.3, 5.5, 7.7, 9.9, std::nullopt},
+            {2.2, 4.4, 6.6, 8.8, 11, std::nullopt}})});
+  testAggregations(
+      {inputVectors},
+      {"c0"},
+      {"simple_array_agg(c2)", "simple_array_agg(c3)"},
+      {"c0", "array_sort(a0)", "array_sort(a1)"},
+      {expected});
+
+  expected = makeRowVector(
+      {makeFlatVector<bool>({true, false}),
+       vectorMaker_.arrayVectorNullable<int64_t>(
+           {{{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}}, {{std::nullopt, std::nullopt}}}),
+       vectorMaker_.arrayVectorNullable<double>(
+           {{{1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 11}},
+            {{std::nullopt, std::nullopt}}})});
+  testAggregations(
+      {inputVectors},
+      {"c1"},
+      {"simple_array_agg(c2)", "simple_array_agg(c3)"},
+      {"c1", "array_sort(a0)", "array_sort(a1)"},
+      {expected});
+
+  inputVectors = makeRowVector({makeNullableFlatVector<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt})});
+  expected = makeRowVector({vectorMaker_.arrayVectorNullable<int64_t>(
+      {{{std::nullopt, std::nullopt, std::nullopt}}})});
+  testAggregations({inputVectors}, {}, {"simple_array_agg(c0)"}, {expected});
+}
+
+TEST_F(SimpleArrayAggAggregationTest, nestedArray) {
+  auto inputVectors = makeRowVector(
+      {makeFlatVector<bool>({true, false, true, false, true, false}),
+       vectorMaker_.arrayVectorNullable<int32_t>(
+           {{{1, 2}},
+            {{3, 4}},
+            {{5, 6}},
+            {{7, 8}},
+            std::nullopt,
+            std::nullopt}),
+       vectorMaker_.arrayVectorNullable<StringView>(
+           {{{"1a", "2a"}},
+            {{"3a", "4a"}},
+            {{"5a", "6a"}},
+            {{"7a", "8a"}},
+            std::nullopt,
+            std::nullopt})});
+
+  auto expected = makeRowVector(
+      {makeFlatVector<bool>({true, false}),
+       makeNullableNestedArrayVector<int32_t>(
+           {{{{{1, 2}}, {{5, 6}}, std::nullopt}},
+            {{{{3, 4}}, {{7, 8}}, std::nullopt}}}),
+       makeNullableNestedArrayVector<StringView>(
+           {{{{{"1a", "2a"}}, {{"5a", "6a"}}, std::nullopt}},
+            {{{{"3a", "4a"}}, {{"7a", "8a"}}, std::nullopt}}})});
+  testAggregations(
+      {inputVectors},
+      {"c0"},
+      {"simple_array_agg(c1)", "simple_array_agg(c2)"},
+      {"c0", "array_sort(a0)", "array_sort(a1)"},
+      {expected});
+
+  expected = makeRowVector(
+      {makeNullableNestedArrayVector<int32_t>(
+           {{{{{1, 2}},
+              {{3, 4}},
+              {{5, 6}},
+              {{7, 8}},
+              std::nullopt,
+              std::nullopt}}}),
+       makeNullableNestedArrayVector<StringView>(
+           {{{{{"1a", "2a"}},
+              {{"3a", "4a"}},
+              {{"5a", "6a"}},
+              {{"7a", "8a"}},
+              std::nullopt,
+              std::nullopt}}})});
+  testAggregations(
+      {inputVectors},
+      {},
+      {"simple_array_agg(c1)", "simple_array_agg(c2)"},
+      {"array_sort(a0)", "array_sort(a1)"},
+      {expected});
+}
+
+TEST_F(SimpleArrayAggAggregationTest, trackRowSize) {
+  core::QueryConfig queryConfig({});
+  auto testTractRowSize = [&](core::AggregationNode::Step step,
+                              const VectorPtr& input,
+                              bool testGlobal) {
+    auto fn = Aggregate::create(
+        "simple_array_agg",
+        isPartialOutput(step) ? core::AggregationNode::Step::kPartial
+                              : core::AggregationNode::Step::kSingle,
+        std::vector<TypePtr>{BIGINT()},
+        ARRAY(BIGINT()),
+        queryConfig);
+
+    HashStringAllocator stringAllocator{pool()};
+    memory::AllocationPool allocationPool{pool()};
+    fn->setAllocator(&stringAllocator);
+
+    int32_t rowSizeOffset = bits::nbytes(1);
+    int32_t offset = rowSizeOffset + sizeof(uint32_t);
+    offset = bits::roundUp(offset, fn->accumulatorAlignmentSize());
+    fn->setOffsets(
+        offset,
+        RowContainer::nullByte(0),
+        RowContainer::nullMask(0),
+        RowContainer::initializedByte(0),
+        RowContainer::initializedMask(0),
+        rowSizeOffset);
+
+    // Make two groups for odd and even rows.
+    auto size = input->size();
+    std::vector<char> group1(offset + fn->accumulatorFixedWidthSize());
+    std::vector<char> group2(offset + fn->accumulatorFixedWidthSize());
+    std::vector<char*> groups(size);
+    for (auto i = 0; i < size; ++i) {
+      groups[i] = i % 2 == 0 ? group1.data() : group2.data();
+    }
+
+    std::vector<vector_size_t> indices{0, 1};
+    fn->initializeNewGroups(groups.data(), indices);
+
+    SelectivityVector rows{size};
+    if (isRawInput(step)) {
+      if (testGlobal) {
+        fn->addSingleGroupRawInput(group1.data(), rows, {input}, false);
+      } else {
+        fn->addRawInput(groups.data(), rows, {input}, false);
+      }
+    } else {
+      if (testGlobal) {
+        fn->addSingleGroupIntermediateResults(
+            group1.data(), rows, {input}, false);
+      } else {
+        fn->addIntermediateResults(groups.data(), rows, {input}, false);
+      }
+    }
+
+    VELOX_CHECK_GT(*reinterpret_cast<int32_t*>(groups[0] + rowSizeOffset), 0);
+    if (!testGlobal) {
+      VELOX_CHECK_GT(*reinterpret_cast<int32_t*>(groups[1] + rowSizeOffset), 0);
+    }
+  };
+
+  auto rawInput = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
+  testTractRowSize(core::AggregationNode::Step::kPartial, rawInput, true);
+  testTractRowSize(core::AggregationNode::Step::kPartial, rawInput, false);
+
+  auto intermediate =
+      makeArrayVector<int64_t>({{1, 2}, {3, 4}, {5, 6}, {7, 8}, {9, 10}});
+  testTractRowSize(core::AggregationNode::Step::kFinal, intermediate, true);
+  testTractRowSize(core::AggregationNode::Step::kFinal, intermediate, false);
+}
+
+// A testing aggregation function that counts the number of nulls in inputs.
+// Return NULL for a group if there is no input null in the group.
+class CountNullsAggregate {
+ public:
+  using InputType = Row<double>; // Input vector type wrapped in Row.
+  using IntermediateType = int64_t; // Intermediate result type.
+  using OutputType = int64_t; // Output vector type.
+
+  static constexpr bool default_null_behavior_ = false;
+
+  struct Accumulator {
+    int64_t nullsCount_;
+
+    Accumulator() = delete;
+
+    explicit Accumulator(
+        HashStringAllocator* /*allocator*/,
+        CountNullsAggregate* /*fn*/) {
+      nullsCount_ = 0;
+    }
+
+    bool addInput(
+        HashStringAllocator* /*allocator*/,
+        exec::optional_arg_type<double> data) {
+      if (!data.has_value()) {
+        nullsCount_++;
+        return true;
+      }
+      return false;
+    }
+
+    bool combine(
+        HashStringAllocator* /*allocator*/,
+        exec::optional_arg_type<int64_t> nullsCount) {
+      if (nullsCount.has_value()) {
+        nullsCount_ += nullsCount.value();
+        return true;
+      }
+      return false;
+    }
+
+    bool writeFinalResult(bool nonNull, exec::out_type<OutputType>& out) {
+      return writeResult<OutputType>(nonNull, out);
+    }
+
+    bool writeIntermediateResult(
+        bool nonNull,
+        exec::out_type<IntermediateType>& out) {
+      return writeResult<IntermediateType>(nonNull, out);
+    }
+
+   private:
+    template <typename T>
+    bool writeResult(bool nonNull, exec::out_type<T>& out) {
+      if (nonNull) {
+        out = nullsCount_;
+        return true;
+      }
+      return false;
+    }
+  };
+
+  using AccumulatorType = Accumulator;
+};
+
+exec::AggregateRegistrationResult registerSimpleCountNullsAggregate(
+    const std::string& name) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("bigint")
+          .intermediateType("bigint")
+          .argumentType("double")
+          .build()};
+
+  return exec::registerAggregateFunction(
+      name,
+      std::move(signatures),
+      [name](
+          core::AggregationNode::Step step,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
+        VELOX_CHECK_LE(
+            argTypes.size(), 1, "{} takes at most one argument", name);
+        return std::make_unique<SimpleAggregateAdapter<CountNullsAggregate>>(
+            step, argTypes, resultType);
+      },
+      false /*registerCompanionFunctions*/,
+      true /*overwrite*/);
+}
+
+void registerSimpleCountNullsAggregate() {
+  registerSimpleCountNullsAggregate(kSimpleCountNulls);
+}
+
+class SimpleCountNullsAggregationTest : public AggregationTestBase {
+ protected:
+  SimpleCountNullsAggregationTest() {
+    registerSimpleCountNullsAggregate();
+  }
+};
+
+TEST_F(SimpleCountNullsAggregationTest, basic) {
+  auto vectors = makeRowVector(
+      {makeNullableFlatVector<bool>({true, false, true, false, true, false}),
+       makeNullableFlatVector<bool>({true, false, false, true, false, true}),
+       makeNullableFlatVector<double>(
+           {1.1, std::nullopt, std::nullopt, 4.4, std::nullopt, 5.5})});
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<bool>({true, false}),
+       makeNullableFlatVector<int64_t>({2, 1})});
+  testAggregations({vectors}, {"c0"}, {"simple_count_nulls(c2)"}, {expected});
+
+  expected = makeRowVector(
+      {makeNullableFlatVector<bool>({true, false}),
+       makeNullableFlatVector<int64_t>({std::nullopt, 3})});
+  testAggregations({vectors}, {"c1"}, {"simple_count_nulls(c2)"}, {expected});
+
+  expected = makeRowVector({makeNullableFlatVector<int64_t>({3})});
+  testAggregations({vectors}, {}, {"simple_count_nulls(c2)"}, {expected});
+}
+
+class ConstantInputForwardingAggregate {
+ public:
+  using InputType = Row<int64_t, int64_t>;
+  using IntermediateType = int64_t;
+  using OutputType = int64_t;
+
+  void setConstantInputs(const std::vector<VectorPtr>& constantInputs) {
+    // The hook fires for each aggregation step. In the final aggregation
+    // step the only argument is the intermediate column, so there are no
+    // constants to read.
+    if (constantInputs.size() != 2) {
+      return;
+    }
+    VELOX_CHECK_NULL(constantInputs[0]);
+    VELOX_CHECK_NOT_NULL(constantInputs[1]);
+    auto* constant = constantInputs[1]->as<ConstantVector<int64_t>>();
+    VELOX_CHECK_NOT_NULL(constant);
+
+    offset_ = constant->valueAt(0);
+  }
+
+  struct Accumulator {
+    int64_t sum{0};
+    ConstantInputForwardingAggregate* fn;
+
+    explicit Accumulator(
+        HashStringAllocator* /*allocator*/,
+        ConstantInputForwardingAggregate* fn)
+        : fn(fn) {}
+
+    void addInput(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<int64_t> value,
+        exec::arg_type<int64_t> /*constantValue*/) {
+      sum += value + fn->offset_;
+    }
+
+    void combine(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<int64_t> other) {
+      sum += other;
+    }
+
+    bool writeIntermediateResult(exec::out_type<IntermediateType>& out) {
+      out = sum;
+      return true;
+    }
+
+    bool writeFinalResult(exec::out_type<OutputType>& out) {
+      out = sum;
+      return true;
+    }
+  };
+
+  using AccumulatorType = Accumulator;
+
+  // Read from the constant second argument; 0 when constants are not
+  // forwarded, which makes the aggregate result detectably wrong.
+  int64_t offset_{0};
+};
+
+const char* const kSimpleConstFwd = "simple_const_fwd";
+
+exec::AggregateRegistrationResult registerSimpleConstantForwardingAggregate(
+    const std::string& name) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("bigint")
+          .intermediateType("bigint")
+          .argumentType("bigint")
+          .argumentType("bigint")
+          .build()};
+
+  return exec::registerAggregateFunction(
+      name,
+      std::move(signatures),
+      [name](
+          core::AggregationNode::Step step,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
+        VELOX_CHECK_EQ(
+            argTypes.size(), 2, "{} takes exactly two arguments", name);
+        return std::make_unique<
+            SimpleAggregateAdapter<ConstantInputForwardingAggregate>>(
+            step, argTypes, resultType);
+      },
+      false /*registerCompanionFunctions*/,
+      true /*overwrite*/);
+}
+
+class SimpleConstantInputForwardingAggregationTest
+    : public AggregationTestBase {
+ protected:
+  void SetUp() override {
+    AggregationTestBase::SetUp();
+    registerSimpleConstantForwardingAggregate(kSimpleConstFwd);
+  }
+};
+
+TEST_F(SimpleConstantInputForwardingAggregationTest, forwardsConstantInputs) {
+  auto input = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto expected = makeRowVector({makeConstant<int64_t>(36, 1)});
+  // The literal 10 parses to a BIGINT constant -> AggregateInfo discovers it
+  // and calls setConstantInputs(), which the adapter forwards to the simple
+  // function. A cast expression like BIGINT '10' would be rejected by
+  // AggregateInfo, which only accepts field accesses, constants, and lambdas.
+  testAggregations({input}, {}, {"simple_const_fwd(c0, 10)"}, {expected});
+}
+
+// A testing simple avg aggregate function, and it is used to check for
+// expectations for function-level variables. The validation logic is in the
+// Accumulator::addInput method.
+class FuncLevelVariableTestAggregate {
+ public:
+  using InputType = Row<int64_t>;
+  using IntermediateType = Row<int64_t, double>;
+  using OutputType = double;
+
+  // These two variables are used for testing, they are set during the creation
+  // of the aggregation function and will be checked in addInput().
+  TypePtr inputType_;
+  TypePtr resultType_;
+
+  void initialize(
+      core::AggregationNode::Step /*step*/,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& resultType) {
+    VELOX_CHECK_EQ(argTypes.size(), 1);
+    inputType_ = argTypes[0];
+    resultType_ = resultType;
+  }
+
+  struct Accumulator {
+    int64_t sum{0};
+    double count{0};
+    FuncLevelVariableTestAggregate* fn_;
+
+    explicit Accumulator(
+        HashStringAllocator* /*allocator*/,
+        FuncLevelVariableTestAggregate* fn)
+        : fn_(fn) {}
+
+    void addInput(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<int64_t> data) {
+      VELOX_CHECK_NOT_NULL(fn_->inputType_);
+      VELOX_CHECK_NOT_NULL(fn_->resultType_);
+      if (fn_->inputType_->isRow()) {
+        VELOX_CHECK_EQ(fn_->inputType_->size(), 2);
+        VELOX_CHECK_EQ(fn_->inputType_->childAt(0), BIGINT());
+        VELOX_CHECK_EQ(fn_->inputType_->childAt(1), DOUBLE());
+      } else {
+        VELOX_CHECK_EQ(fn_->inputType_, BIGINT());
+      }
+      if (fn_->resultType_->isRow()) {
+        VELOX_CHECK_EQ(fn_->resultType_->size(), 2);
+        VELOX_CHECK_EQ(fn_->resultType_->childAt(0), BIGINT());
+        VELOX_CHECK_EQ(fn_->resultType_->childAt(1), DOUBLE());
+      } else {
+        VELOX_CHECK_EQ(fn_->resultType_, DOUBLE());
+      }
+      sum += data;
+      count = checkedPlus<int64_t>(count, 1);
+    }
+
+    void combine(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<IntermediateType> other) {
+      VELOX_CHECK(other.at<0>().has_value());
+      VELOX_CHECK(other.at<1>().has_value());
+      sum += other.at<0>().value();
+      count += other.at<1>().value();
+    }
+
+    bool writeIntermediateResult(exec::out_type<IntermediateType>& out) {
+      out = std::make_tuple(sum, count);
+      return true;
+    }
+
+    bool writeFinalResult(exec::out_type<OutputType>& out) {
+      out = sum / count;
+      return true;
+    }
+  };
+
+  using AccumulatorType = Accumulator;
+};
+
+exec::AggregateRegistrationResult registerFuncLevelVariableTestAggregate(
+    const std::string& name) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("DOUBLE")
+          .intermediateType("ROW(BIGINT, DOUBLE)")
+          .argumentType("BIGINT")
+          .build()};
+
+  return exec::registerAggregateFunction(
+      name,
+      std::move(signatures),
+      [name](
+          core::AggregationNode::Step step,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
+        VELOX_CHECK_LE(argTypes.size(), 1, "{} takes at most 1 argument", name);
+        return std::make_unique<
+            SimpleAggregateAdapter<FuncLevelVariableTestAggregate>>(
+            step, argTypes, resultType);
+      },
+      true /*registerCompanionFunctions*/,
+      true /*overwrite*/);
+}
+
+class SimpleFuncLevelVariableAggregationTest : public AggregationTestBase {
+ protected:
+  void SetUp() override {
+    AggregationTestBase::SetUp();
+    registerFuncLevelVariableTestAggregate("simple_func_level_variable_agg");
+  }
+};
+
+TEST_F(SimpleFuncLevelVariableAggregationTest, simpleAggregateVariables) {
+  auto inputVectors = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
+  std::vector<double> finalResult = {2.5};
+  auto expected = makeRowVector({makeFlatVector<double>(finalResult)});
+  testAggregations(
+      {inputVectors}, {}, {"simple_func_level_variable_agg(c0)"}, {expected});
+  testAggregationsWithCompanion(
+      {inputVectors},
+      [](auto& /*builder*/) {},
+      {},
+      {"simple_func_level_variable_agg(c0)"},
+      {{BIGINT()}},
+      {},
+      {expected},
+      {});
+}
+
+class SimpleVariadicSumAggregationTest : public AggregationTestBase {
+ protected:
+  void SetUp() override {
+    AggregationTestBase::SetUp();
+    registerSimpleVariadicSumAggregate(kSimpleVariadicSum);
+  }
+};
+
+TEST_F(SimpleVariadicSumAggregationTest, basicVariadicSum) {
+  // Test global with 3 variadic arguments: sum each column across rows.
+  // Input:
+  //   Row 1: count=3, a=1, b=2, c=3
+  //   Row 2: count=3, a=4, b=5, c=6
+  // Expected output: [1+4, 2+5, 3+6] = [5, 7, 9]
+  auto inputVectors = makeRowVector({
+      makeFlatVector<int64_t>({3, 3}),
+      makeFlatVector<int64_t>({1, 4}),
+      makeFlatVector<int64_t>({2, 5}),
+      makeFlatVector<int64_t>({3, 6}),
+  });
+
+  auto expected = makeRowVector({makeArrayVector<int64_t>({{5, 7, 9}})});
+
+  testAggregations(
+      {inputVectors}, {}, {"simple_variadic_sum(c0, c1, c2, c3)"}, {expected});
+
+  // Test with grouping.
+  // Group true: [1+5, 2+6] = [6, 8]
+  // Group false: [3+7, 4+8] = [10, 12]
+  inputVectors = makeRowVector({
+      makeFlatVector<bool>({true, false, true, false}),
+      makeFlatVector<int64_t>({2, 2, 2, 2}),
+      makeFlatVector<int64_t>({1, 3, 5, 7}),
+      makeFlatVector<int64_t>({2, 4, 6, 8}),
+  });
+
+  expected = makeRowVector({
+      makeFlatVector<bool>({true, false}),
+      makeArrayVector<int64_t>({{6, 8}, {10, 12}}),
+  });
+
+  testAggregations(
+      {inputVectors}, {"c0"}, {"simple_variadic_sum(c1, c2, c3)"}, {expected});
+}
+
+TEST_F(SimpleVariadicSumAggregationTest, variadicSumWithNulls) {
+  // Test global handling of null values in variadic arguments.
+  // With default null behavior, rows with any null variadic element are
+  // skipped entirely.
+  // Row 0: variadic=[1, null, 3] -> SKIPPED (null in variadic)
+  // Row 1: variadic=[4, 5, 6]   -> processed
+  // Row 2: variadic=[7, 8, 9]   -> processed
+  // Expected: [4+7, 5+8, 6+9] = [11, 13, 15]
+  auto inputVectors = makeRowVector({
+      makeFlatVector<int64_t>({3, 3, 3}),
+      makeNullableFlatVector<int64_t>({1, 4, 7}),
+      makeNullableFlatVector<int64_t>({std::nullopt, 5, 8}),
+      makeNullableFlatVector<int64_t>({3, 6, 9}),
+  });
+
+  auto expected = makeRowVector({makeArrayVector<int64_t>({{11, 13, 15}})});
+
+  testAggregations(
+      {inputVectors}, {}, {"simple_variadic_sum(c0, c1, c2, c3)"}, {expected});
+
+  // Test with grouping and null values.
+  // Row 0 (true):  variadic=[1, 2, 3]    -> processed
+  // Row 1 (false): variadic=[4, null, 6]  -> SKIPPED
+  // Row 2 (true):  variadic=[null, 8, 9]  -> SKIPPED
+  // Row 3 (false): variadic=[10, 11, 12]  -> processed
+  // Group true: only row 0 -> [1, 2, 3]
+  // Group false: only row 3 -> [10, 11, 12]
+  inputVectors = makeRowVector({
+      makeFlatVector<bool>({true, false, true, false}),
+      makeFlatVector<int64_t>({3, 3, 3, 3}),
+      makeNullableFlatVector<int64_t>({1, 4, std::nullopt, 10}),
+      makeNullableFlatVector<int64_t>({2, std::nullopt, 8, 11}),
+      makeNullableFlatVector<int64_t>({3, 6, 9, 12}),
+  });
+
+  expected = makeRowVector({
+      makeFlatVector<bool>({true, false}),
+      makeArrayVector<int64_t>({{1, 2, 3}, {10, 11, 12}}),
+  });
+
+  testAggregations(
+      {inputVectors},
+      {"c0"},
+      {"simple_variadic_sum(c1, c2, c3, c4)"},
+      {expected});
+}
+
+TEST_F(SimpleVariadicSumAggregationTest, singleVariadicArg) {
+  // Test global with only 1 variadic argument.
+  // Input:
+  //   Row 1: dummy=1, a=10
+  //   Row 2: dummy=1, a=20
+  // Expected output: [10+20] = [30]
+  auto inputVectors = makeRowVector({
+      makeFlatVector<int64_t>({1, 1}),
+      makeFlatVector<int64_t>({10, 20}),
+  });
+
+  auto expected = makeRowVector({makeArrayVector<int64_t>({{30}})});
+
+  testAggregations(
+      {inputVectors}, {}, {"simple_variadic_sum(c0, c1)"}, {expected});
+
+  // Test with only 1 variadic argument with grouping.
+  // Group true: [10+30] = [40]
+  // Group false: [20+40] = [60]
+  inputVectors = makeRowVector({
+      makeFlatVector<bool>({true, false, true, false}),
+      makeFlatVector<int64_t>({1, 1, 1, 1}),
+      makeFlatVector<int64_t>({10, 20, 30, 40}),
+  });
+
+  expected = makeRowVector({
+      makeFlatVector<bool>({true, false}),
+      makeArrayVector<int64_t>({{40}, {60}}),
+  });
+
+  testAggregations(
+      {inputVectors}, {"c0"}, {"simple_variadic_sum(c1, c2)"}, {expected});
+}
+
+TEST_F(SimpleVariadicSumAggregationTest, noVariadicArg) {
+  // Test global with no variadic argument.
+  // Expected output: []
+  auto inputVectors = makeRowVector({
+      makeFlatVector<int64_t>({1, 1}),
+  });
+
+  auto expected = makeRowVector({makeArrayVector<int64_t>({{}})});
+
+  testAggregations({inputVectors}, {}, {"simple_variadic_sum(c0)"}, {expected});
+
+  // Test with no variadic argument with grouping.
+  // Group true: []
+  // Group false: []
+  inputVectors = makeRowVector({
+      makeFlatVector<bool>({true, false, true, false}),
+      makeFlatVector<int64_t>({1, 1, 1, 1}),
+  });
+
+  expected = makeRowVector({
+      makeFlatVector<bool>({true, false}),
+      makeArrayVector<int64_t>({{}, {}}),
+  });
+
+  testAggregations(
+      {inputVectors}, {"c0"}, {"simple_variadic_sum(c1)"}, {expected});
+}
+
+class SimpleVariadicArrayAggAggregationTest : public AggregationTestBase {
+ protected:
+  void SetUp() override {
+    AggregationTestBase::SetUp();
+    registerSimpleVariadicArrayAggAggregate(kSimpleVariadicArrayAgg);
+  }
+};
+
+TEST_F(SimpleVariadicArrayAggAggregationTest, basicVariadicArrayAgg) {
+  // Test global with 3 variadic arguments: collect all values into a single
+  // array. Input:
+  //   Row 1: a=1, b=2, c=3
+  //   Row 2: a=4, b=5, c=6
+  // Expected output: [1, 2, 3, 4, 5, 6]
+  auto inputVectors = makeRowVector({
+      makeFlatVector<int64_t>({1, 4}),
+      makeFlatVector<int64_t>({2, 5}),
+      makeFlatVector<int64_t>({3, 6}),
+  });
+
+  auto expected =
+      makeRowVector({makeArrayVector<int64_t>({{1, 2, 3, 4, 5, 6}})});
+
+  testAggregations(
+      {inputVectors},
+      {},
+      {"simple_variadic_array_agg(c0, c1, c2)"},
+      {"array_sort(a0)"},
+      {expected});
+
+  // Test with grouping.
+  // Group true: rows 1 and 3 -> [1, 2, 5, 6]
+  // Group false: rows 2 and 4 -> [3, 4, 7, 8]
+  inputVectors = makeRowVector({
+      makeFlatVector<bool>({true, false, true, false}),
+      makeFlatVector<int64_t>({1, 3, 5, 7}),
+      makeFlatVector<int64_t>({2, 4, 6, 8}),
+  });
+
+  expected = makeRowVector({
+      makeFlatVector<bool>({false, true}),
+      makeArrayVector<int64_t>({{3, 4, 7, 8}, {1, 2, 5, 6}}),
+  });
+
+  testAggregations(
+      {inputVectors},
+      {"c0"},
+      {"simple_variadic_array_agg(c1, c2)"},
+      {"c0", "array_sort(a0)"},
+      {expected});
+}
+
+TEST_F(SimpleVariadicArrayAggAggregationTest, variadicArrayAggWithNulls) {
+  // Test global handling of null values in variadic arguments.
+  // Nulls should be included in the output array (non-default null behavior).
+  // Row 1: 1, null, 3
+  // Row 2: 4, 5, null
+  // Expected: [1, 3, 4, 5, null, null]
+  auto inputVectors = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, 4}),
+      makeNullableFlatVector<int64_t>({std::nullopt, 5}),
+      makeNullableFlatVector<int64_t>({3, std::nullopt}),
+  });
+
+  auto expected = makeRowVector({vectorMaker_.arrayVectorNullable<int64_t>(
+      {{{1, 3, 4, 5, std::nullopt, std::nullopt}}})});
+
+  testAggregations(
+      {inputVectors},
+      {},
+      {"simple_variadic_array_agg(c0, c1, c2)"},
+      {"array_sort(a0)"},
+      {expected});
+
+  // Test with grouping and null values.
+  // Group true: rows 1, 3 -> [1, null, 3, 5, 7, null]
+  // Group false: rows 2, 4 -> [2, 4, null, 6, null, 8]
+  inputVectors = makeRowVector({
+      makeFlatVector<bool>({true, false, true, false}),
+      makeNullableFlatVector<int64_t>({1, 2, 5, 6}),
+      makeNullableFlatVector<int64_t>({std::nullopt, 4, 7, std::nullopt}),
+      makeNullableFlatVector<int64_t>({3, std::nullopt, std::nullopt, 8}),
+  });
+
+  expected = makeRowVector({
+      makeFlatVector<bool>({false, true}),
+      vectorMaker_.arrayVectorNullable<int64_t>(
+          {{{2, 4, 6, 8, std::nullopt, std::nullopt}},
+           {{1, 3, 5, 7, std::nullopt, std::nullopt}}}),
+  });
+
+  testAggregations(
+      {inputVectors},
+      {"c0"},
+      {"simple_variadic_array_agg(c1, c2, c3)"},
+      {"c0", "array_sort(a0)"},
+      {expected});
+}
+
+TEST_F(SimpleVariadicArrayAggAggregationTest, variadicArrayAggStrings) {
+  // Test global with string type to verify Generic<T1> works with different
+  // types.
+  auto inputVectors = makeRowVector({
+      makeFlatVector<StringView>({"a", "d"}),
+      makeFlatVector<StringView>({"b", "e"}),
+      makeFlatVector<StringView>({"c", "f"}),
+  });
+
+  auto expected = makeRowVector(
+      {makeArrayVector<StringView>({{"a", "b", "c", "d", "e", "f"}})});
+
+  testAggregations(
+      {inputVectors},
+      {},
+      {"simple_variadic_array_agg(c0, c1, c2)"},
+      {"array_sort(a0)"},
+      {expected});
+
+  // Test with grouping and string type.
+  // Group true: rows 1, 3 -> ["a", "b", "e", "f"]
+  // Group false: rows 2, 4 -> ["c", "d", "g", "h"]
+  inputVectors = makeRowVector({
+      makeFlatVector<bool>({true, false, true, false}),
+      makeFlatVector<StringView>({"a", "c", "e", "g"}),
+      makeFlatVector<StringView>({"b", "d", "f", "h"}),
+  });
+
+  expected = makeRowVector({
+      makeFlatVector<bool>({false, true}),
+      makeArrayVector<StringView>({{"c", "d", "g", "h"}, {"a", "b", "e", "f"}}),
+  });
+
+  testAggregations(
+      {inputVectors},
+      {"c0"},
+      {"simple_variadic_array_agg(c1, c2)"},
+      {"c0", "array_sort(a0)"},
+      {expected});
+}
+
+TEST_F(SimpleVariadicArrayAggAggregationTest, singleVariadicArg) {
+  // Test global with only 1 variadic argument.
+  // Input:
+  //   Row 1: a=10
+  //   Row 2: a=20
+  //   Row 3: a=30
+  // Expected output: [10, 20, 30]
+  auto inputVectors = makeRowVector({
+      makeFlatVector<int64_t>({10, 20, 30}),
+  });
+
+  auto expected = makeRowVector({makeArrayVector<int64_t>({{10, 20, 30}})});
+
+  testAggregations(
+      {inputVectors},
+      {},
+      {"simple_variadic_array_agg(c0)"},
+      {"array_sort(a0)"},
+      {expected});
+
+  // Test with only 1 variadic argument with grouping.
+  // Group true: [10, 30]
+  // Group false: [20, 40]
+  inputVectors = makeRowVector({
+      makeFlatVector<bool>({true, false, true, false}),
+      makeFlatVector<int64_t>({10, 20, 30, 40}),
+  });
+
+  expected = makeRowVector({
+      makeFlatVector<bool>({false, true}),
+      makeArrayVector<int64_t>({{20, 40}, {10, 30}}),
+  });
+
+  testAggregations(
+      {inputVectors},
+      {"c0"},
+      {"simple_variadic_array_agg(c1)"},
+      {"c0", "array_sort(a0)"},
+      {expected});
+}
+
+} // namespace
+} // namespace facebook::velox::aggregate::test

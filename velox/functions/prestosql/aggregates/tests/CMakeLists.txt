@@ -1,0 +1,109 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Split velox_aggregates_test into individual test binaries for parallel execution.
+set(
+  VELOX_AGGREGATES_TEST_SOURCES
+  AggregationFunctionRegTest.cpp
+  ApproxDistinctTest.cpp
+  ApproxMostFrequentTest.cpp
+  ApproxPercentileTest.cpp
+  ApproxWinsorizedMeanAggregateTest.cpp
+  ArbitraryTest.cpp
+  ArrayAggTest.cpp
+  VectorSumTest.cpp
+  AverageAggregationTest.cpp
+  BitwiseAggregationTest.cpp
+  BoolAndOrTest.cpp
+  CentralMomentsAggregationTest.cpp
+  ChecksumAggregateTest.cpp
+  ClassificationAggregationTest.cpp
+  CountAggregationTest.cpp
+  CountDistinctTest.cpp
+  CountIfAggregationTest.cpp
+  CovarianceAggregationTest.cpp
+  EntropyAggregationTest.cpp
+  GeometricMeanTest.cpp
+  HistogramTest.cpp
+  KHyperLogLogAggregateTest.cpp
+  MapAccumulatorTest.cpp
+  MapAggTest.cpp
+  MapUnionAggregationTest.cpp
+  MapUnionSumTest.cpp
+  NumericHistogramTest.cpp
+  MaxSizeForStatsTest.cpp
+  MinMaxByAggregationTest.cpp
+  MinMaxTest.cpp
+  MultiMapAggTest.cpp
+  NoisyCountGaussianAggregationTest.cpp
+  NoisyCountIfGaussianAggregationTest.cpp
+  NoisySumGaussianAggregationTest.cpp
+  NoisyApproxSfmAggregationTest.cpp
+  PrestoHasherTest.cpp
+  QDigestAggTest.cpp
+  ReduceAggTest.cpp
+  ReservoirSampleTest.cpp
+  SetAggTest.cpp
+  SetDigestAggregateTest.cpp
+  SetUnionTest.cpp
+  SumDataSizeForStatsTest.cpp
+  SumTest.cpp
+  VarianceAggregationTest.cpp
+)
+
+set(
+  VELOX_AGGREGATES_TEST_DEPS
+  velox_aggregates
+  velox_core
+  velox_dwio_common_test_utils
+  velox_exec
+  velox_exec_test_lib
+  velox_file
+  velox_functions_aggregates
+  velox_functions_aggregates_test_lib
+  velox_functions_window_test_lib
+  velox_functions_test_lib
+  velox_functions_prestosql
+  velox_functions_lib
+  velox_hive_connector
+  velox_simple_aggregate
+  velox_type
+  velox_vector_fuzzer
+  velox_test_util
+  gflags::gflags
+  GTest::gtest
+  GTest::gtest_main
+)
+
+velox_add_grouped_tests(
+  PREFIX velox_aggregates_test
+  SOURCES ${VELOX_AGGREGATES_TEST_SOURCES}
+  DEPS ${VELOX_AGGREGATES_TEST_DEPS}
+  EXTRA_SOURCES Main.cpp
+  WORKING_DIRECTORY .
+)
+
+if(${VELOX_ENABLE_GEO})
+  add_executable(velox_aggregates_GeometryAggregateTest GeometryAggregateTest.cpp Main.cpp)
+  add_test(
+    NAME velox_aggregates_GeometryAggregateTest
+    COMMAND velox_aggregates_GeometryAggregateTest
+    WORKING_DIRECTORY .
+  )
+  target_link_libraries(
+    velox_aggregates_GeometryAggregateTest
+    ${VELOX_AGGREGATES_TEST_DEPS}
+    velox_functions_geo
+  )
+endif()

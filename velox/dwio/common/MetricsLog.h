@@ -1,0 +1,153 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include "velox/dwio/common/FilterNode.h"
+#include "velox/dwio/common/exception/Exception.h"
+
+namespace facebook::velox::dwio::common {
+
+class MetricsLog {
+ public:
+  static constexpr std::string_view LIB_VERSION_STRING{"1.1"};
+  static constexpr std::string_view WRITE_OPERATION{"WRITE"};
+
+  /// Identifies the type of metadata being read or logged for metrics purposes.
+  enum class Type {
+    HEADER,
+    FOOTER,
+    FILE,
+    STRIPE,
+    STRIPE_INDEX,
+    STRIPE_FOOTER,
+    STREAM,
+    STREAM_BUNDLE,
+    GROUP,
+    GROUP_INDEX,
+    BLOCK,
+    TEST,
+    METADATA
+  };
+
+  virtual ~MetricsLog() = default;
+
+  // read path logging methods
+  virtual void logRead(
+      uint64_t duration, // milliseconds
+      const std::string& category,
+      uint64_t fileSize,
+      uint64_t psSize,
+      uint64_t footerSize,
+      uint64_t readOffset,
+      uint64_t readSize,
+      Type type,
+      uint32_t numFileRead,
+      uint32_t numStripeCache) const {}
+
+  struct ReadMetrics {
+    uint64_t duration; // milliseconds
+    std::string category;
+    uint64_t fileSize;
+    uint64_t psSize;
+    uint64_t footerSize;
+    uint64_t readOffset;
+    uint64_t readSize;
+    std::string header;
+    uint32_t numFileRead;
+    uint32_t numStripeCache;
+  };
+
+  // read path logging methods
+  virtual void logRead(const ReadMetrics& metrics) const {}
+
+  virtual void logColumnFilter(
+      const ColumnFilter& filter,
+      uint64_t numColumns,
+      uint64_t numNodes,
+      bool hasSchema) const {}
+
+  // write path logging methods
+  virtual void logWrite(size_t size, size_t duration) const {}
+
+  virtual void
+  logWrite(const std::string& operation, size_t size, size_t duration) const {}
+
+  struct StripeFlushMetrics {
+    std::string writerVersion;
+    uint32_t stripeIndex;
+    uint64_t rawStripeSize;
+    uint64_t rowsInStripe;
+    uint64_t stripeSize;
+    uint64_t limit;
+    uint64_t maxDictSize;
+    uint64_t dictionaryMemory;
+    uint64_t outputStreamMemoryEstimate;
+    uint64_t availableMemory;
+    size_t flushOverhead;
+    float compressionRatio;
+    float flushOverheadRatio;
+    float averageRowSize;
+    uint64_t stripeSizeEstimate;
+    uint64_t groupSize;
+    bool close;
+  };
+
+  virtual void logStripeFlush(const StripeFlushMetrics& /* metrics */) const {}
+
+  struct FileCloseMetrics {
+    std::string writerVersion;
+    uint64_t footerLength;
+    uint64_t fileSize;
+    uint64_t cacheSize;
+    uint64_t numCacheBlocks;
+    int32_t cacheMode;
+    uint64_t numOfStripes;
+    uint64_t rowCount;
+    uint64_t rawDataSize;
+    uint64_t numOfStreams;
+    // NOTE: these are memory footprints after the final flush.
+    int64_t totalMemory;
+    int64_t dictionaryMemory;
+    int64_t generalMemory;
+  };
+
+  virtual void logFileClose(const FileCloseMetrics& /* metrics */) const {}
+
+  static std::shared_ptr<const MetricsLog> voidLog();
+
+ protected:
+  MetricsLog(const std::string& file) : file_{file} {}
+
+  static std::string getMetricTypeName(Type type);
+
+  std::string file_;
+};
+
+using LogType = MetricsLog::Type;
+using MetricsLogPtr = std::shared_ptr<const MetricsLog>;
+
+class DwioMetricsLogFactory {
+ public:
+  virtual ~DwioMetricsLogFactory() = default;
+  virtual MetricsLogPtr create(const std::string& filePath, bool ioLogging) = 0;
+};
+
+void registerMetricsLogFactory(std::shared_ptr<DwioMetricsLogFactory> factory);
+
+DwioMetricsLogFactory& getMetricsLogFactory();
+
+} // namespace facebook::velox::dwio::common

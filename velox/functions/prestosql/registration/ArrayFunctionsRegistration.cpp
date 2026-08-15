@@ -1,0 +1,516 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <string>
+
+#include "velox/expression/ExprRewriteRegistry.h"
+#include "velox/functions/Registerer.h"
+#include "velox/functions/lib/ArrayRemoveNullFunction.h"
+#include "velox/functions/lib/ArrayShuffle.h"
+#include "velox/functions/lib/Repeat.h"
+#include "velox/functions/lib/Slice.h"
+#include "velox/functions/prestosql/ArrayConstructor.h"
+#include "velox/functions/prestosql/ArrayFunctions.h"
+#include "velox/functions/prestosql/ArraySort.h"
+#include "velox/functions/prestosql/ArraySubset.h"
+#include "velox/functions/prestosql/DotProduct.h"
+#include "velox/functions/prestosql/L2Norm.h"
+#include "velox/functions/prestosql/WidthBucketArray.h"
+#include "velox/functions/prestosql/types/JsonRegistration.h"
+#include "velox/type/SimpleFunctionApi.h"
+
+namespace facebook::velox::functions {
+extern void registerArrayConcatFunctions(const std::string& prefix);
+extern void registerArrayNGramsFunctions(const std::string& prefix);
+extern void registerArraySplitIntoChunksFunctions(const std::string& prefix);
+
+template <typename T>
+inline void registerArrayMinMaxFunctions(const std::string& prefix) {
+  registerFunction<ArrayMinFunction, T, Array<T>>({prefix + "array_min"});
+  registerFunction<ArrayMaxFunction, T, Array<T>>({prefix + "array_max"});
+}
+
+template <typename T>
+inline void registerArrayJoinFunctions(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<ArrayJoinFunction, T>,
+      Varchar,
+      Array<T>,
+      Varchar>({prefix + "array_join"});
+
+  registerFunction<
+      ParameterBinder<ArrayJoinFunction, T>,
+      Varchar,
+      Array<T>,
+      Varchar,
+      Varchar>({prefix + "array_join"});
+}
+
+template <typename T>
+inline void registerArrayCombinationsFunctions(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<CombinationsFunction, T>,
+      Array<Array<T>>,
+      Array<T>,
+      int32_t>({prefix + "combinations"});
+}
+
+template <typename T>
+inline void registerArrayCumSumFunction(const std::string& prefix) {
+  registerFunction<ParameterBinder<ArrayCumSumFunction, T>, Array<T>, Array<T>>(
+      {prefix + "array_cum_sum"});
+}
+
+template <typename T>
+inline void registerArrayHasDuplicatesFunctions(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<ArrayHasDuplicatesFunction, T>,
+      bool,
+      Array<T>>({prefix + "array_has_duplicates"});
+}
+
+template <typename T>
+inline void registerArrayFrequencyFunctions(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<ArrayFrequencyFunction, T>,
+      Map<T, int>,
+      Array<T>>({prefix + "array_frequency"});
+}
+
+template <typename T>
+inline void registerArrayNormalizeFunctions(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<ArrayNormalizeFunction, T>,
+      Array<T>,
+      Array<T>,
+      T>({prefix + "array_normalize"});
+}
+
+template <typename T>
+inline void registerArrayTrimFunctions(const std::string& prefix) {
+  registerFunction<ArrayTrimFunction, Array<T>, Array<T>, int64_t>(
+      {prefix + "trim_array"});
+}
+
+template <typename T>
+inline void registerArrayTopNFunction(const std::string& prefix) {
+  registerFunction<ArrayTopNFunction, Array<T>, Array<T>, int32_t>(
+      {prefix + "array_top_n"});
+}
+
+template <typename T>
+inline void registerArrayRemoveNullFunctions(const std::string& prefix) {
+  registerFunction<ArrayRemoveNullFunction, Array<T>, Array<T>>(
+      {prefix + "remove_nulls"});
+}
+
+template <typename T>
+inline void registerArrayUnionFunctions(const std::string& prefix) {
+  registerFunction<ArrayUnionFunction, Array<T>, Array<T>, Array<T>>(
+      {prefix + "array_union"});
+}
+
+template <typename T>
+inline void registerArrayRemoveFunctions(const std::string& prefix) {
+  registerFunction<ArrayRemoveFunction, Array<T>, Array<T>, T>(
+      {prefix + "array_remove"});
+}
+
+template <typename T>
+inline void registerArraySubsetFunctions(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<ArraySubsetFunction, T>,
+      Array<T>,
+      Array<T>,
+      Array<int32_t>>({prefix + "array_subset"});
+}
+
+void registerInternalArrayFunctions() {
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_$internal$canonicalize, "$internal$canonicalize");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_$internal$contains, "$internal$contains");
+}
+
+void registerArrayFunctions(const std::string& prefix) {
+  registerJsonType();
+  registerArrayConstructor(prefix + "array_constructor");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_all_match, prefix + "all_match");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_any_match, prefix + "any_match");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_none_match, prefix + "none_match");
+
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_find_first, prefix + "find_first");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_find_first_index, prefix + "find_first_index");
+
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_distinct, prefix + "array_distinct");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_array_duplicates, prefix + "array_duplicates");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_array_intersect, prefix + "array_intersect");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, prefix + "contains");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, prefix + "array_except");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_arrays_overlap, prefix + "arrays_overlap");
+  registerBigintSliceFunction(prefix);
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_zip, prefix + "zip");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_zip_with, prefix + "zip_with");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, prefix + "array_position");
+  exec::registerStatefulVectorFunction(
+      prefix + "shuffle",
+      arrayShuffleSignatures(),
+      makeArrayShuffle,
+      getMetadataForArrayShuffle());
+
+  exec::registerStatefulVectorFunction(
+      prefix + "array_sort", arraySortSignatures(true), makeArraySortAsc);
+  exec::registerStatefulVectorFunction(
+      prefix + "array_sort_desc",
+      arraySortSignatures(false),
+      makeArraySortDesc);
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_max_by, prefix + "array_max_by");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_min_by, prefix + "array_min_by");
+
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_flatten, prefix + "flatten");
+
+  auto checker = std::make_shared<SimpleComparisonChecker>();
+  expression::ExprRewriteRegistry::instance().registerRewrite(
+      [prefix, checker](const auto& expr) {
+        return rewriteArraySortCall(prefix, expr, checker);
+      });
+
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_sum, prefix + "array_sum");
+  exec::registerStatefulVectorFunction(
+      prefix + "repeat", repeatSignatures(), makeRepeat, repeatMetadata());
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_sequence, prefix + "sequence");
+
+  exec::registerStatefulVectorFunction(
+      prefix + "width_bucket",
+      widthBucketArraySignature(),
+      makeWidthBucketArray);
+
+  registerArrayMinMaxFunctions<int8_t>(prefix);
+  registerArrayMinMaxFunctions<int16_t>(prefix);
+  registerArrayMinMaxFunctions<int32_t>(prefix);
+  registerArrayMinMaxFunctions<int64_t>(prefix);
+  registerArrayMinMaxFunctions<int128_t>(prefix);
+  registerArrayMinMaxFunctions<float>(prefix);
+  registerArrayMinMaxFunctions<double>(prefix);
+  registerArrayMinMaxFunctions<bool>(prefix);
+  registerArrayMinMaxFunctions<Varchar>(prefix);
+  registerArrayMinMaxFunctions<Timestamp>(prefix);
+  registerArrayMinMaxFunctions<Date>(prefix);
+  registerArrayMinMaxFunctions<Orderable<T1>>(prefix);
+
+  registerArrayJoinFunctions<int8_t>(prefix);
+  registerArrayJoinFunctions<int16_t>(prefix);
+  registerArrayJoinFunctions<int32_t>(prefix);
+  registerArrayJoinFunctions<int64_t>(prefix);
+  registerArrayJoinFunctions<int128_t>(prefix);
+  registerArrayJoinFunctions<float>(prefix);
+  registerArrayJoinFunctions<double>(prefix);
+  registerArrayJoinFunctions<bool>(prefix);
+  registerArrayJoinFunctions<Varchar>(prefix);
+  registerArrayJoinFunctions<Timestamp>(prefix);
+  registerArrayJoinFunctions<Date>(prefix);
+  registerArrayJoinFunctions<Json>(prefix);
+  registerArrayJoinFunctions<UnknownValue>(prefix);
+
+  registerFunction<ArrayAverageFunction, double, Array<double>>(
+      {prefix + "array_average"});
+
+  registerArrayConcatFunctions(prefix);
+  registerArrayNGramsFunctions(prefix);
+  registerArraySplitIntoChunksFunctions(prefix);
+
+  registerArrayRemoveFunctions<int8_t>(prefix);
+  registerArrayRemoveFunctions<int16_t>(prefix);
+  registerArrayRemoveFunctions<int32_t>(prefix);
+  registerArrayRemoveFunctions<int64_t>(prefix);
+  registerArrayRemoveFunctions<int128_t>(prefix);
+  registerArrayRemoveFunctions<float>(prefix);
+  registerArrayRemoveFunctions<double>(prefix);
+  registerArrayRemoveFunctions<bool>(prefix);
+  registerArrayRemoveFunctions<Timestamp>(prefix);
+  registerArrayRemoveFunctions<Date>(prefix);
+  registerArrayRemoveFunctions<Varbinary>(prefix);
+  registerArrayRemoveFunctions<Generic<T1>>(prefix);
+  registerFunction<
+      ArrayRemoveFunctionString,
+      Array<Varchar>,
+      Array<Varchar>,
+      Varchar>({prefix + "array_remove"});
+
+  registerArrayTrimFunctions<int8_t>(prefix);
+  registerArrayTrimFunctions<int16_t>(prefix);
+  registerArrayTrimFunctions<int32_t>(prefix);
+  registerArrayTrimFunctions<int64_t>(prefix);
+  registerArrayTrimFunctions<int128_t>(prefix);
+  registerArrayTrimFunctions<float>(prefix);
+  registerArrayTrimFunctions<double>(prefix);
+  registerArrayTrimFunctions<bool>(prefix);
+  registerArrayTrimFunctions<Timestamp>(prefix);
+  registerArrayTrimFunctions<Date>(prefix);
+  registerArrayTrimFunctions<Varbinary>(prefix);
+  registerArrayTrimFunctions<Generic<T1>>(prefix);
+  registerFunction<
+      ArrayTrimFunctionString,
+      Array<Varchar>,
+      Array<Varchar>,
+      int64_t>({prefix + "trim_array"});
+
+  registerArrayTopNFunction<int8_t>(prefix);
+  registerArrayTopNFunction<int16_t>(prefix);
+  registerArrayTopNFunction<int32_t>(prefix);
+  registerArrayTopNFunction<int64_t>(prefix);
+  registerArrayTopNFunction<int128_t>(prefix);
+  registerArrayTopNFunction<float>(prefix);
+  registerArrayTopNFunction<double>(prefix);
+  registerArrayTopNFunction<Varchar>(prefix);
+  registerArrayTopNFunction<Timestamp>(prefix);
+  registerArrayTopNFunction<Date>(prefix);
+  registerArrayTopNFunction<Varbinary>(prefix);
+  registerArrayTopNFunction<Orderable<T1>>(prefix);
+
+  registerArrayRemoveNullFunctions<int8_t>(prefix);
+  registerArrayRemoveNullFunctions<int16_t>(prefix);
+  registerArrayRemoveNullFunctions<int32_t>(prefix);
+  registerArrayRemoveNullFunctions<int64_t>(prefix);
+  registerArrayRemoveNullFunctions<int128_t>(prefix);
+  registerArrayRemoveNullFunctions<float>(prefix);
+  registerArrayRemoveNullFunctions<double>(prefix);
+  registerArrayRemoveNullFunctions<bool>(prefix);
+  registerArrayRemoveNullFunctions<Timestamp>(prefix);
+  registerArrayRemoveNullFunctions<Date>(prefix);
+  registerArrayRemoveNullFunctions<Varbinary>(prefix);
+  registerArrayRemoveNullFunctions<Generic<T1>>(prefix);
+  registerFunction<
+      ArrayRemoveNullFunctionString,
+      Array<Varchar>,
+      Array<Varchar>>({prefix + "remove_nulls"});
+
+  registerArrayUnionFunctions<int8_t>(prefix);
+  registerArrayUnionFunctions<int16_t>(prefix);
+  registerArrayUnionFunctions<int32_t>(prefix);
+  registerArrayUnionFunctions<int64_t>(prefix);
+  registerArrayUnionFunctions<int128_t>(prefix);
+  registerArrayUnionFunctions<float>(prefix);
+  registerArrayUnionFunctions<double>(prefix);
+  registerArrayUnionFunctions<bool>(prefix);
+  registerArrayUnionFunctions<Timestamp>(prefix);
+  registerArrayUnionFunctions<Date>(prefix);
+  registerArrayUnionFunctions<Varbinary>(prefix);
+  registerArrayUnionFunctions<Generic<T1>>(prefix);
+
+  registerArrayCombinationsFunctions<int8_t>(prefix);
+  registerArrayCombinationsFunctions<int16_t>(prefix);
+  registerArrayCombinationsFunctions<int32_t>(prefix);
+  registerArrayCombinationsFunctions<int64_t>(prefix);
+  registerArrayCombinationsFunctions<int128_t>(prefix);
+  registerArrayCombinationsFunctions<float>(prefix);
+  registerArrayCombinationsFunctions<double>(prefix);
+  registerArrayCombinationsFunctions<bool>(prefix);
+  registerArrayCombinationsFunctions<Varchar>(prefix);
+  registerArrayCombinationsFunctions<Timestamp>(prefix);
+  registerArrayCombinationsFunctions<Date>(prefix);
+  registerArrayCombinationsFunctions<Generic<T1>>(prefix);
+
+  registerArrayCumSumFunction<int8_t>(prefix);
+  registerArrayCumSumFunction<int16_t>(prefix);
+  registerArrayCumSumFunction<int32_t>(prefix);
+  registerArrayCumSumFunction<int64_t>(prefix);
+  registerArrayCumSumFunction<int128_t>(prefix);
+  registerArrayCumSumFunction<float>(prefix);
+  registerArrayCumSumFunction<double>(prefix);
+  registerArrayCumSumFunction<LongDecimal<P1, S1>>(prefix);
+  registerArrayCumSumFunction<ShortDecimal<P1, S1>>(prefix);
+
+  registerArrayHasDuplicatesFunctions<int8_t>(prefix);
+  registerArrayHasDuplicatesFunctions<int16_t>(prefix);
+  registerArrayHasDuplicatesFunctions<int32_t>(prefix);
+  registerArrayHasDuplicatesFunctions<int64_t>(prefix);
+  registerArrayHasDuplicatesFunctions<int128_t>(prefix);
+  registerArrayHasDuplicatesFunctions<Varchar>(prefix);
+  registerArrayHasDuplicatesFunctions<Json>(prefix);
+
+  registerArrayFrequencyFunctions<bool>(prefix);
+  registerArrayFrequencyFunctions<int8_t>(prefix);
+  registerArrayFrequencyFunctions<int16_t>(prefix);
+  registerArrayFrequencyFunctions<int32_t>(prefix);
+  registerArrayFrequencyFunctions<int64_t>(prefix);
+  registerArrayFrequencyFunctions<int128_t>(prefix);
+  registerArrayFrequencyFunctions<float>(prefix);
+  registerArrayFrequencyFunctions<double>(prefix);
+  registerArrayFrequencyFunctions<Timestamp>(prefix);
+  registerArrayFrequencyFunctions<Date>(prefix);
+  registerArrayFrequencyFunctions<Varchar>(prefix);
+
+  registerArrayNormalizeFunctions<int8_t>(prefix);
+  registerArrayNormalizeFunctions<int16_t>(prefix);
+  registerArrayNormalizeFunctions<int32_t>(prefix);
+  registerArrayNormalizeFunctions<int64_t>(prefix);
+  registerArrayNormalizeFunctions<float>(prefix);
+  registerArrayNormalizeFunctions<double>(prefix);
+
+  registerArraySubsetFunctions<int8_t>(prefix);
+  registerArraySubsetFunctions<int16_t>(prefix);
+  registerArraySubsetFunctions<int32_t>(prefix);
+  registerArraySubsetFunctions<int64_t>(prefix);
+  registerArraySubsetFunctions<int128_t>(prefix);
+  registerArraySubsetFunctions<float>(prefix);
+  registerArraySubsetFunctions<double>(prefix);
+  registerArraySubsetFunctions<bool>(prefix);
+  registerArraySubsetFunctions<Timestamp>(prefix);
+  registerArraySubsetFunctions<Date>(prefix);
+  registerArraySubsetFunctions<Varbinary>(prefix);
+  registerArraySubsetFunctions<Generic<T1>>(prefix);
+  registerFunction<
+      ArraySubsetVarcharFunction,
+      Array<Varchar>,
+      Array<Varchar>,
+      Array<int32_t>>({prefix + "array_subset"});
+  registerFunction<
+      ArraySubsetGenericFunction,
+      Array<Generic<T1>>,
+      Array<Generic<T1>>,
+      Array<int32_t>>({prefix + "array_subset"});
+
+  // Register l2_norm function for arrays
+  registerFunction<ArrayL2NormFunction, double, Array<int8_t>>(
+      {prefix + "l2_norm"});
+  registerFunction<ArrayL2NormFunction, double, Array<int16_t>>(
+      {prefix + "l2_norm"});
+  registerFunction<ArrayL2NormFunction, double, Array<int32_t>>(
+      {prefix + "l2_norm"});
+  registerFunction<ArrayL2NormFunction, double, Array<int64_t>>(
+      {prefix + "l2_norm"});
+  registerFunction<ArrayL2NormFunction, double, Array<float>>(
+      {prefix + "l2_norm"});
+  registerFunction<ArrayL2NormFunction, double, Array<double>>(
+      {prefix + "l2_norm"});
+
+  // Register l2_norm function for maps with numeric values
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, int8_t>,
+      double,
+      Map<Varchar, int8_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, int16_t>,
+      double,
+      Map<Varchar, int16_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, int32_t>,
+      double,
+      Map<Varchar, int32_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, int64_t>,
+      double,
+      Map<Varchar, int64_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, float>,
+      double,
+      Map<Varchar, float>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, double>,
+      double,
+      Map<Varchar, double>>({prefix + "l2_norm"});
+
+  // Register l2_norm function for maps with integer keys
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int32_t, int32_t>,
+      double,
+      Map<int32_t, int32_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int32_t, int64_t>,
+      double,
+      Map<int32_t, int64_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int32_t, float>,
+      double,
+      Map<int32_t, float>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int32_t, double>,
+      double,
+      Map<int32_t, double>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int64_t, int64_t>,
+      double,
+      Map<int64_t, int64_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int64_t, double>,
+      double,
+      Map<int64_t, double>>({prefix + "l2_norm"});
+
+  // Register dot_product for integer arrays only.
+  // Float and double array versions already exist in
+  // MathematicalFunctionsRegistration.cpp (DotProductArray,
+  // DotProductFloatArray) with different semantics: they return NaN for empty
+  // arrays to maintain compatibility with cosine_similarity and other distance
+  // functions there. Integer versions here return 0 for empty arrays.
+  registerFunction<
+      ParameterBinder<DotProductFunction, int8_t>,
+      int64_t,
+      Array<int8_t>,
+      Array<int8_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<DotProductFunction, int16_t>,
+      int64_t,
+      Array<int16_t>,
+      Array<int16_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<DotProductFunction, int32_t>,
+      int64_t,
+      Array<int32_t>,
+      Array<int32_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<DotProductFunction, int64_t>,
+      int64_t,
+      Array<int64_t>,
+      Array<int64_t>>({prefix + "dot_product"});
+
+  // Register dot_product for maps with integer keys
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, int32_t, int64_t>,
+      int64_t,
+      Map<int32_t, int64_t>,
+      Map<int32_t, int64_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, int64_t, int64_t>,
+      int64_t,
+      Map<int64_t, int64_t>,
+      Map<int64_t, int64_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, int32_t, double>,
+      double,
+      Map<int32_t, double>,
+      Map<int32_t, double>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, int64_t, double>,
+      double,
+      Map<int64_t, double>,
+      Map<int64_t, double>>({prefix + "dot_product"});
+
+  // Register dot_product for maps with varchar keys
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, Varchar, int64_t>,
+      int64_t,
+      Map<Varchar, int64_t>,
+      Map<Varchar, int64_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, Varchar, double>,
+      double,
+      Map<Varchar, double>,
+      Map<Varchar, double>>({prefix + "dot_product"});
+}
+} // namespace facebook::velox::functions

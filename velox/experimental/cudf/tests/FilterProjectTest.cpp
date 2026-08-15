@@ -1,0 +1,2763 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
+
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
+#include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/parse/TypeResolver.h"
+#include "velox/type/Time.h"
+
+#include <folly/ScopeGuard.h>
+
+#include <limits>
+
+using namespace facebook::velox;
+using namespace facebook::velox::exec;
+using namespace facebook::velox::exec::test;
+using namespace facebook::velox::common::testutil;
+
+namespace {
+
+template <typename T>
+T getColValue(const std::vector<RowVectorPtr>& input, int col, int32_t index) {
+  return input[0]->as<RowVector>()->childAt(col)->as<FlatVector<T>>()->valueAt(
+      index);
+}
+
+class CudfFilterProjectTest : public OperatorTestBase {
+ protected:
+  void SetUp() override {
+    OperatorTestBase::SetUp();
+    filesystems::registerLocalFileSystem();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::registerCudf();
+    cudf_velox::registerPrestoFunctions(
+        cudf_velox::CudfConfig::getInstance().functionNamePrefix);
+    rng_.seed(123);
+
+    rowType_ = ROW({{"c0", INTEGER()}, {"c1", DOUBLE()}, {"c2", VARCHAR()}});
+  }
+
+  void TearDown() override {
+    cudf_velox::unregisterFunctions();
+    cudf_velox::unregisterCudf();
+    OperatorTestBase::TearDown();
+  }
+
+  void testMultiplyOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a multiply operation
+    auto plan =
+        PlanBuilder().values(input).project({"1.0 * c1 AS result"}).planNode();
+
+    // Run the test
+    runTest(plan, "SELECT 1.0 * c1 AS result FROM tmp");
+  }
+
+  void testDivideOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a divide operation
+    auto plan =
+        PlanBuilder().values(input).project({"c0 / c1 AS result"}).planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 / c1 AS result FROM tmp");
+  }
+
+  void testMultiplyAndMinusOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a multiply and minus operation
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c0 * (1.0 - c1) AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 * (1.0 - c1) AS result FROM tmp");
+  }
+
+  void testStringEqualOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a string equal operation
+    auto c2Value = input[0]
+                       ->as<RowVector>()
+                       ->childAt(2)
+                       ->as<FlatVector<StringView>>()
+                       ->valueAt(1)
+                       .str();
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c2 = '" + c2Value + "' AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c2 = '" + c2Value + "' AS result FROM tmp");
+  }
+
+  void testStringNotEqualOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a string not equal operation
+    auto c2Value = input[0]
+                       ->as<RowVector>()
+                       ->childAt(2)
+                       ->as<FlatVector<StringView>>()
+                       ->valueAt(1)
+                       .str();
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c2 <> '" + c2Value + "' AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c2 <> '" + c2Value + "' AS result FROM tmp");
+  }
+
+  void testAndOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with AND operation
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c0 = 1 AND c1 = 2.0 AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 = 1 AND c1 = 2.0 AS result FROM tmp");
+  }
+
+  void testOrOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with OR operation
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c0 = 1 OR c1 = 2.0 AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 = 1 OR c1 = 2.0 AS result FROM tmp");
+  }
+
+  void testLogicalShortCircuitWithLiterals(
+      const std::vector<RowVectorPtr>& input) {
+    // Constant false as first conjunct: LogicalFunction short-circuits to
+    // false.
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"false AND (c0 = 1) AS result"})
+                    .planNode();
+    runTest(plan, "SELECT false AND (c0 = 1) AS result FROM tmp");
+
+    // Constant true as first disjunct: LogicalFunction short-circuits to true.
+    plan = PlanBuilder()
+               .values(input)
+               .project({"true OR (c0 = 1) AS result"})
+               .planNode();
+    runTest(plan, "SELECT true OR (c0 = 1) AS result FROM tmp");
+  }
+
+  void testLogicalAndOrLiteralsAndMixed(
+      const std::vector<RowVectorPtr>& input) {
+    // Literal-only (exercises LogicalFunction scalar/scalar and broadcast
+    // paths).
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"true AND false AS r1", "true OR false AS r2"})
+                    .planNode();
+    runTest(plan, "SELECT true AND false AS r1, true OR false AS r2 FROM tmp");
+
+    plan = PlanBuilder()
+               .values(input)
+               .project(
+                   {"false AND true AS r1",
+                    "false OR true AS r2",
+                    "true AND true AS r3",
+                    "false OR false AS r4"})
+               .planNode();
+    runTest(
+        plan,
+        "SELECT false AND true AS r1, false OR true AS r2, true AND true AS r3, false OR false AS r4 FROM tmp");
+
+    // Literal on the left or right of a column predicate.
+    plan = PlanBuilder()
+               .values(input)
+               .project(
+                   {"(c0 = 1) AND true AS r1",
+                    "true AND (c0 = 1) AS r2",
+                    "(c0 = 1) OR false AS r3",
+                    "false OR (c0 = 1) AS r4"})
+               .planNode();
+    runTest(
+        plan,
+        "SELECT (c0 = 1) AND true AS r1, true AND (c0 = 1) AS r2, (c0 = 1) OR false AS r3, false OR (c0 = 1) AS r4 FROM tmp");
+
+    // Three-way mix: literals and columns interleaved.
+    plan = PlanBuilder()
+               .values(input)
+               .project(
+                   {"(c0 = 1) AND true AND (c1 = 2.0) AS r1",
+                    "false OR (c0 = 1) OR (c1 = 2.0) AS r2"})
+               .planNode();
+    runTest(
+        plan,
+        "SELECT (c0 = 1) AND true AND (c1 = 2.0) AS r1, false OR (c0 = 1) OR (c1 = 2.0) AS r2 FROM tmp");
+  }
+
+  void testYearFunction(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with YEAR function
+    auto plan =
+        PlanBuilder().values(input).project({"YEAR(c2) AS result"}).planNode();
+
+    // Run the test
+    runTest(plan, "SELECT YEAR(c2) AS result FROM tmp");
+  }
+
+  void testLengthFunction(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with LENGTH function
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"LENGTH(c2) AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT LENGTH(c2) AS result FROM tmp");
+  }
+
+  void testCaseWhenOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a CASE WHEN operation
+    auto plan =
+        PlanBuilder()
+            .values(input)
+            .project({"CASE WHEN c0 = 0 THEN 1.0 ELSE 0.0 END AS result"})
+            .planNode();
+
+    // Run the test
+    runTest(
+        plan,
+        "SELECT CASE WHEN c0 = 0 THEN 1.0 ELSE 0.0 END AS result FROM tmp");
+  }
+
+  void testSubstrOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a substr operation
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"substr(c2, 1, 3) AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT substr(c2, 1, 3) AS result FROM tmp");
+  }
+
+  void testLikeOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a like operation
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c2 LIKE '%test%' AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c2 LIKE '%test%' AS result FROM tmp");
+  }
+
+  void testAddOperation(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"c0 + c1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 + c1 AS result FROM tmp");
+
+    plan =
+        PlanBuilder().values(input).project({"1.0 + c1 AS result"}).planNode();
+    runTest(plan, "SELECT 1.0 + c1 AS result FROM tmp");
+  }
+
+  void testSubtractOperation(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"c0 - c1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 - c1 AS result FROM tmp");
+
+    plan =
+        PlanBuilder().values(input).project({"c1 - 1.0 AS result"}).planNode();
+    runTest(plan, "SELECT c1 - 1.0 AS result FROM tmp");
+  }
+
+  void testMultiplyColumnColumn(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"c0 * c1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 * c1 AS result FROM tmp");
+
+    plan =
+        PlanBuilder().values(input).project({"c1 * 2.0 AS result"}).planNode();
+    runTest(plan, "SELECT c1 * 2.0 AS result FROM tmp");
+  }
+
+  void testDivideScalarVariants(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"c1 / 2.0 AS result"}).planNode();
+    runTest(plan, "SELECT c1 / 2.0 AS result FROM tmp");
+
+    plan = PlanBuilder()
+               .values(input)
+               .project({"100.0 / c1 AS result"})
+               .planNode();
+    runTest(plan, "SELECT 100.0 / c1 AS result FROM tmp");
+  }
+
+  void testModuloOperation(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"c0 % 10 AS result"}).planNode();
+    runTest(plan, "SELECT c0 % 10 AS result FROM tmp");
+  }
+
+  void testLessThanOperation(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"c0 < c1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 < c1 AS result FROM tmp");
+
+    plan = PlanBuilder().values(input).project({"c0 < 1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 < 1 AS result FROM tmp");
+
+    plan = PlanBuilder().values(input).project({"1 < c0 AS result"}).planNode();
+    runTest(plan, "SELECT 1 < c0 AS result FROM tmp");
+  }
+
+  void testGreaterThanOperation(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"c0 > c1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 > c1 AS result FROM tmp");
+
+    plan = PlanBuilder().values(input).project({"c0 > 1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 > 1 AS result FROM tmp");
+
+    plan = PlanBuilder().values(input).project({"1 > c0 AS result"}).planNode();
+    runTest(plan, "SELECT 1 > c0 AS result FROM tmp");
+  }
+
+  void testLessThanEqualOperation(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"c0 <= c1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 <= c1 AS result FROM tmp");
+
+    plan =
+        PlanBuilder().values(input).project({"c0 <= 1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 <= 1 AS result FROM tmp");
+
+    plan =
+        PlanBuilder().values(input).project({"1 <= c0 AS result"}).planNode();
+    runTest(plan, "SELECT 1 <= c0 AS result FROM tmp");
+  }
+
+  void testGreaterThanEqualOperation(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"c0 >= c1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 >= c1 AS result FROM tmp");
+
+    plan =
+        PlanBuilder().values(input).project({"c0 >= 1 AS result"}).planNode();
+    runTest(plan, "SELECT c0 >= 1 AS result FROM tmp");
+
+    plan =
+        PlanBuilder().values(input).project({"1 >= c0 AS result"}).planNode();
+    runTest(plan, "SELECT 1 >= c0 AS result FROM tmp");
+  }
+
+  void testEqualScalarLeft(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"1 = c0 AS result"}).planNode();
+    runTest(plan, "SELECT 1 = c0 AS result FROM tmp");
+  }
+
+  void testNotEqualScalarLeft(const std::vector<RowVectorPtr>& input) {
+    auto plan =
+        PlanBuilder().values(input).project({"1 <> c0 AS result"}).planNode();
+    runTest(plan, "SELECT 1 <> c0 AS result FROM tmp");
+  }
+
+  void testNotOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a NOT operation
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"NOT (c0 = 1) AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT NOT (c0 = 1) AS result FROM tmp");
+  }
+
+  void testBetweenOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a BETWEEN operation
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c0 BETWEEN 1 AND 100 AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 BETWEEN 1 AND 100 AS result FROM tmp");
+  }
+
+  void testMultiInputAndOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with multiple AND operations
+    auto c2Value = getColValue<StringView>(input, 2, 1).str();
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project(
+                        {"c0 > 1000 AND c0 < 20000 AND c2 = '" + c2Value +
+                         "' AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(
+        plan,
+        "SELECT c0 > 1000 AND c0 < 20000 AND c2 = '" + c2Value +
+            "' AS result FROM tmp");
+  }
+
+  void testMultiInputOrOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with multiple OR operations
+    auto c2Value = getColValue<StringView>(input, 2, 1).str();
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project(
+                        {"c0 > 16000 OR c0 < 8000 OR c1 = 2.0 OR c2 = '" +
+                         c2Value + "' AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(
+        plan,
+        "SELECT c0 > 16000 OR c0 < 8000 OR c1 = 2.0 OR c2 = '" + c2Value +
+            "' AS result FROM tmp");
+  }
+
+  void testIntegerInOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with an IN operation for integers
+    std::vector<int32_t> c0Values;
+    for (int32_t i = 0; i < 5; i++) {
+      c0Values.push_back(getColValue<int32_t>(input, 0, i));
+    }
+    std::string c0ValuesStr;
+    for (size_t i = 0; i < c0Values.size(); ++i) {
+      c0ValuesStr += std::to_string(c0Values[i]) + ",";
+    }
+    c0ValuesStr.pop_back();
+    auto plan = PlanBuilder(pool_.get())
+                    .values(input)
+                    .project({"c0 IN (" + c0ValuesStr + ") AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 IN (" + c0ValuesStr + ") AS result FROM tmp");
+  }
+
+  void testDoubleInOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with an IN operation for doubles
+    std::vector<double> c1Values;
+    for (int32_t i = 0; i < 4; i++) {
+      c1Values.push_back(getColValue<double>(input, 1, i));
+    }
+    std::string c1ValuesStr;
+    for (size_t i = 0; i < c1Values.size(); ++i) {
+      c1ValuesStr += std::to_string(c1Values[i]) + ",";
+    }
+    c1ValuesStr.pop_back();
+    auto plan = PlanBuilder(pool_.get())
+                    .values(input)
+                    .project({"c1 IN (" + c1ValuesStr + ") AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c1 IN (" + c1ValuesStr + ") AS result FROM tmp");
+  }
+
+  void testStringInOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with an IN operation for strings
+    std::vector<StringView> c2Values;
+    for (int32_t i = 0; i < 3; i++) {
+      c2Values.push_back(getColValue<StringView>(input, 2, i));
+    }
+    std::string c2ValuesStr;
+    for (size_t i = 0; i < c2Values.size(); ++i) {
+      c2ValuesStr += "'" + c2Values[i].str() + "',";
+    }
+    c2ValuesStr.pop_back();
+    auto plan = PlanBuilder(pool_.get())
+                    .values(input)
+                    .project({"c2 IN (" + c2ValuesStr + ") AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c2 IN (" + c2ValuesStr + ") AS result FROM tmp");
+  }
+
+  void testMixedInOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan that combines multiple IN operations
+    auto plan =
+        PlanBuilder(pool_.get())
+            .values(input)
+            .project(
+                {"c0 IN (1, 2, 3) OR c1 IN (1.5, 2.5) OR c2 IN ('test1', 'test2') AS result"})
+            .planNode();
+
+    // Run the test
+    runTest(
+        plan,
+        "SELECT c0 IN (1, 2, 3) OR c1 IN (1.5, 2.5) OR c2 IN ('test1', 'test2') AS result FROM tmp");
+  }
+
+  void testStringLiteralExpansion(const std::vector<RowVectorPtr>& input) {
+    // Test VARCHAR literal as standalone expression (needs special handling)
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"'literal_value' AS result"})
+                    .planNode();
+
+    runTest(plan, "SELECT 'literal_value' AS result FROM tmp");
+  }
+
+  void testStringLiteralInComparison(const std::vector<RowVectorPtr>& input) {
+    // Test VARCHAR literal within comparison (should work normally)
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c2 = 'test_value' AS result"})
+                    .planNode();
+
+    runTest(plan, "SELECT c2 = 'test_value' AS result FROM tmp");
+  }
+
+  void testStringLowerOperation(const std::vector<RowVectorPtr>& input) {
+    // Test VARCHAR lower
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"LOWER(c2) = 'test_value' AS result"})
+                    .planNode();
+
+    runTest(plan, "SELECT LOWER(c2) = 'test_value' AS result FROM tmp");
+  }
+
+  void testStringUpperOperation(const std::vector<RowVectorPtr>& input) {
+    // Test VARCHAR upper
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"UPPER(c2) = 'TEST_VALUE' AS result"})
+                    .planNode();
+
+    runTest(plan, "SELECT UPPER(c2) = 'TEST_VALUE' AS result FROM tmp");
+  }
+
+  void testMixedLiteralProjection(const std::vector<RowVectorPtr>& input) {
+    // Test mixing standalone literals with expressions containing literals
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project(
+                        {"'standalone_string' AS str_literal",
+                         "42 AS int_literal",
+                         "c2 = 'comparison_string' AS bool_result"})
+                    .planNode();
+
+    runTest(
+        plan,
+        "SELECT 'standalone_string' AS str_literal, 42 AS int_literal, c2 = 'comparison_string' AS bool_result FROM tmp");
+  }
+
+  void assertFilterIds(
+      const std::vector<RowVectorPtr>& input,
+      const std::string& filter,
+      const std::vector<int32_t>& expectedIds) {
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .filter(filter)
+                    .project({"event_id"})
+                    .planNode();
+    auto expected = makeRowVector({makeFlatVector<int32_t>(expectedIds)});
+    assertQuery(plan, expected);
+  }
+
+  int32_t toDateDays(const std::string& dateStr) const {
+    return DATE()->toDays(dateStr);
+  }
+
+  RowVectorPtr runFilterPlan(
+      const std::vector<RowVectorPtr>& input,
+      const std::string& filter,
+      const std::vector<std::string>& projections) {
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .filter(filter)
+                    .project(projections)
+                    .planNode();
+    return AssertQueryBuilder(plan).copyResults(pool());
+  }
+
+  void assertFilterMatchesVelox(
+      const std::vector<RowVectorPtr>& input,
+      const std::string& filter,
+      const std::vector<std::string>& projections = {"event_id"}) {
+    auto cudfResult = runFilterPlan(input, filter, projections);
+
+    cudf_velox::unregisterCudf();
+    auto veloxResult = runFilterPlan(input, filter, projections);
+    cudf_velox::registerCudf();
+    facebook::velox::test::assertEqualVectors(cudfResult, veloxResult);
+  }
+
+  RowVectorPtr runPlan(const core::PlanNodePtr& plan) {
+    return AssertQueryBuilder(plan).copyResults(pool());
+  }
+
+  void assertPlanMatchesVelox(const core::PlanNodePtr& plan) {
+    auto cudfResult = runPlan(plan);
+    cudf_velox::unregisterCudf();
+    auto veloxResult = runPlan(plan);
+    cudf_velox::registerCudf();
+    facebook::velox::test::assertEqualVectors(cudfResult, veloxResult);
+  }
+
+  void assertProjectMatchesVelox(
+      const std::vector<RowVectorPtr>& input,
+      const std::vector<std::string>& projections) {
+    auto plan = PlanBuilder().values(input).project(projections).planNode();
+    assertPlanMatchesVelox(plan);
+  }
+
+  void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
+    SCOPED_TRACE("run without spilling");
+    assertQuery(planNode, duckDbSql);
+  }
+
+  std::vector<RowVectorPtr> makeVectors(
+      const RowTypePtr& rowType,
+      int32_t numVectors,
+      int32_t rowsPerVector) {
+    std::vector<RowVectorPtr> vectors;
+    for (int32_t i = 0; i < numVectors; ++i) {
+      auto vector = std::dynamic_pointer_cast<RowVector>(
+          facebook::velox::test::BatchMaker::createBatch(
+              rowType, rowsPerVector, *pool_));
+      vectors.push_back(vector);
+    }
+    return vectors;
+  }
+
+  std::vector<RowVectorPtr> makeTimestampExtractVectors() {
+    std::vector<std::optional<Timestamp>> timestamps = {
+        Timestamp(-14400, 0), // 1969-12-31 20:00:00
+        Timestamp(1609459199, 0), // 2020-12-31 23:59:59
+        Timestamp(1609459200, 0), // 2021-01-01 00:00:00
+        Timestamp(1609718400, 0), // 2021-01-04 00:00:00
+        Timestamp(1709183167, 0), // 2024-02-29 05:06:07
+        Timestamp(1736942461, 123000000), // 2025-01-15 12:01:01.123
+        Timestamp(1738367999, 999000000), // 2025-01-31 23:59:59.999
+        std::nullopt};
+
+    std::vector<std::optional<int32_t>> dates = {
+        toDateDays("1969-12-31"),
+        toDateDays("2020-12-31"),
+        toDateDays("2021-01-01"),
+        toDateDays("2021-01-04"),
+        toDateDays("2024-02-29"),
+        toDateDays("2025-01-15"),
+        toDateDays("2025-01-31"),
+        std::nullopt};
+
+    auto data = makeRowVector(
+        {"event_id", "event_ts", "event_date"},
+        {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8}),
+         makeNullableFlatVector<Timestamp>(timestamps, TIMESTAMP()),
+         makeNullableFlatVector<int32_t>(dates, DATE())});
+    return {data};
+  }
+
+  folly::Random::DefaultGenerator rng_;
+  RowTypePtr rowType_;
+};
+
+TEST_F(CudfFilterProjectTest, multiplyOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMultiplyOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, divideOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testDivideOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, multiplyAndMinusOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMultiplyAndMinusOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, addOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testAddOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, subtractOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testSubtractOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, multiplyColumnColumn) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMultiplyColumnColumn(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, divideScalarVariants) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testDivideScalarVariants(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, moduloOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testModuloOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, equalScalarLeft) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testEqualScalarLeft(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, notEqualScalarLeft) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testNotEqualScalarLeft(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringEqualOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringEqualOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringNotEqualOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringNotEqualOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, andOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testAndOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, orOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testOrOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, logicalShortCircuitWithLiterals) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testLogicalShortCircuitWithLiterals(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, logicalAndOrLiteralsAndMixed) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testLogicalAndOrLiteralsAndMixed(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, lengthFunction) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testLengthFunction(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, yearFunction) {
+  // Update row type to use TIMESTAMP directly
+  auto rowType =
+      ROW({{"c0", INTEGER()}, {"c1", DOUBLE()}, {"c2", TIMESTAMP()}});
+
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType, 2, batchSize);
+
+  // Set timestamp values directly
+  for (auto& vector : vectors) {
+    auto timestampVector = vector->childAt(2)->asFlatVector<Timestamp>();
+    for (vector_size_t i = 0; i < batchSize; ++i) {
+      // Set to 2024-03-14 12:34:56
+      Timestamp ts(1710415496, 0); // seconds, nanos
+      timestampVector->set(i, ts);
+    }
+  }
+
+  createDuckDbTable(vectors);
+  testYearFunction(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, timestampLiteralFilter) {
+  std::vector<Timestamp> timestamps = {
+      Timestamp(1735689599, 0), // 2024-12-31 23:59:59
+      Timestamp(1735689600, 0), // 2025-01-01 00:00:00
+      Timestamp(1736942400, 0), // 2025-01-15 12:00:00
+      Timestamp(1738367999, 0), // 2025-01-31 23:59:59
+      Timestamp(1738368000, 0), // 2025-02-01 00:00:00
+      Timestamp(1738454400, 0) // 2025-02-02 00:00:00
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_ts"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeFlatVector<Timestamp>(timestamps, TIMESTAMP())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .filter(
+              "event_ts >= TIMESTAMP '2025-01-01 00:00:00' AND event_ts < TIMESTAMP '2025-02-01 00:00:00'")
+          .project({"event_id"})
+          .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int32_t>({2, 3, 4})});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, timestampLiteralComparisons) {
+  std::vector<Timestamp> timestamps = {
+      Timestamp(1735689599, 0), // 2024-12-31 23:59:59
+      Timestamp(1735689600, 0), // 2025-01-01 00:00:00
+      Timestamp(1736942400, 0), // 2025-01-15 12:00:00
+      Timestamp(1738367999, 0), // 2025-01-31 23:59:59
+      Timestamp(1738368000, 0), // 2025-02-01 00:00:00
+      Timestamp(1738454400, 0) // 2025-02-02 00:00:00
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_ts"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeFlatVector<Timestamp>(timestamps, TIMESTAMP())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  struct Case {
+    std::string filter;
+    std::vector<int32_t> expectedIds;
+  };
+  const std::vector<Case> cases{
+      {"event_ts = TIMESTAMP '2025-01-01 00:00:00'", {2}},
+      {"event_ts <> TIMESTAMP '2025-01-01 00:00:00'", {1, 3, 4, 5, 6}},
+      {"event_ts < TIMESTAMP '2025-01-01 00:00:00'", {1}},
+      {"event_ts <= TIMESTAMP '2025-01-01 00:00:00'", {1, 2}},
+      {"event_ts > TIMESTAMP '2025-01-31 23:59:59'", {5, 6}},
+      {"event_ts >= TIMESTAMP '2025-01-31 23:59:59'", {4, 5, 6}}};
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.filter);
+    assertFilterIds(vectors, testCase.filter, testCase.expectedIds);
+  }
+}
+
+// Comparing a timestamp column against a timestamp literal must work under
+// every value cudf.timestamp_unit accepts. Regression test for the
+// millisecond and second units, whose constant scalars previously fell
+// through to VELOX_FAIL("Unsupported timestamp unit").
+TEST_F(CudfFilterProjectTest, timestampLiteralComparisonsAcrossUnits) {
+  std::vector<Timestamp> timestamps = {
+      Timestamp(1735689599, 0), // 2024-12-31 23:59:59
+      Timestamp(1735689600, 0), // 2025-01-01 00:00:00
+      Timestamp(1736942400, 0), // 2025-01-15 12:00:00
+      Timestamp(1738367999, 0), // 2025-01-31 23:59:59
+      Timestamp(1738368000, 0), // 2025-02-01 00:00:00
+      Timestamp(1738454400, 0) // 2025-02-02 00:00:00
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_ts"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeFlatVector<Timestamp>(timestamps, TIMESTAMP())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  struct Case {
+    std::string filter;
+    std::vector<int32_t> expectedIds;
+  };
+  const std::vector<Case> cases{
+      {"event_ts = TIMESTAMP '2025-01-01 00:00:00'", {2}},
+      {"event_ts <> TIMESTAMP '2025-01-01 00:00:00'", {1, 3, 4, 5, 6}},
+      {"event_ts < TIMESTAMP '2025-01-01 00:00:00'", {1}},
+      {"event_ts <= TIMESTAMP '2025-01-01 00:00:00'", {1, 2}},
+      {"event_ts > TIMESTAMP '2025-01-31 23:59:59'", {5, 6}},
+      {"event_ts >= TIMESTAMP '2025-01-31 23:59:59'", {4, 5, 6}}};
+
+  struct Unit {
+    cudf::type_id id;
+    std::string name;
+  };
+  // event_ts and the literals are whole seconds, so the coarsest unit
+  // (seconds) is lossless and the expected result is identical for all units.
+  const std::vector<Unit> units{
+      {cudf::type_id::TIMESTAMP_SECONDS, "s"},
+      {cudf::type_id::TIMESTAMP_MILLISECONDS, "ms"},
+      {cudf::type_id::TIMESTAMP_MICROSECONDS, "us"},
+      {cudf::type_id::TIMESTAMP_NANOSECONDS, "ns"}};
+
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+
+  for (const auto& unit : units) {
+    config.timestampUnit = unit.id;
+    for (const auto& testCase : cases) {
+      SCOPED_TRACE("unit=" + unit.name + " filter=" + testCase.filter);
+      assertFilterIds(vectors, testCase.filter, testCase.expectedIds);
+    }
+  }
+}
+
+TEST_F(CudfFilterProjectTest, dateLiteralComparisons) {
+  std::vector<int32_t> dates = {
+      toDateDays("2024-12-31"),
+      toDateDays("2025-01-01"),
+      toDateDays("2025-01-15"),
+      toDateDays("2025-01-31"),
+      toDateDays("2025-02-01"),
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_date"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+       makeFlatVector<int32_t>(dates, DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  struct Case {
+    std::string filter;
+    std::vector<int32_t> expectedIds;
+  };
+  const std::vector<Case> cases{
+      {"event_date = DATE '2025-01-01'", {2}},
+      {"event_date <> DATE '2025-01-01'", {1, 3, 4, 5}},
+      {"event_date < DATE '2025-01-01'", {1}},
+      {"event_date <= DATE '2025-01-01'", {1, 2}},
+      {"event_date > DATE '2025-01-31'", {5}},
+      {"event_date >= DATE '2025-01-31'", {4, 5}},
+      {"event_date >= DATE '2025-01-01' AND event_date < DATE '2025-02-01'",
+       {2, 3, 4}}};
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.filter);
+    assertFilterIds(vectors, testCase.filter, testCase.expectedIds);
+  }
+}
+
+// TODO: Re-enable once https://github.com/facebookincubator/velox/pull/17314
+// (NotFunction, IsNullFunction, IsNotNullFunction) lands. AST/JIT cannot
+// evaluate timestamp expressions, so IS [NOT] NULL and NOT BETWEEN over
+// TIMESTAMP rely on the function-registry path provided by that PR.
+TEST_F(CudfFilterProjectTest, DISABLED_timestampBetweenAndNullSemantics) {
+  std::vector<std::optional<Timestamp>> timestamps = {
+      Timestamp(1735689599, 0), // 2024-12-31 23:59:59
+      std::nullopt,
+      Timestamp(1735689600, 0), // 2025-01-01 00:00:00
+      Timestamp(1736942400, 0), // 2025-01-15 12:00:00
+      std::nullopt,
+      Timestamp(1738367999, 0) // 2025-01-31 23:59:59
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_ts"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeNullableFlatVector<Timestamp>(timestamps, TIMESTAMP())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> filters{
+      "event_ts BETWEEN TIMESTAMP '2025-01-01 00:00:00' AND TIMESTAMP '2025-01-31 23:59:59'",
+      "event_ts NOT BETWEEN TIMESTAMP '2025-01-01 00:00:00' AND TIMESTAMP '2025-01-31 23:59:59'",
+      "event_ts IS NULL",
+      "event_ts IS NOT NULL",
+      "event_ts < TIMESTAMP '2025-01-01 00:00:00'",
+      "event_ts >= TIMESTAMP '2025-01-15 12:00:00'"};
+
+  for (const auto& filter : filters) {
+    SCOPED_TRACE(filter);
+    assertFilterMatchesVelox(vectors, filter);
+  }
+}
+
+TEST_F(CudfFilterProjectTest, dateBetweenAndNullSemantics) {
+  std::vector<std::optional<int32_t>> dates = {
+      toDateDays("2024-12-31"),
+      std::nullopt,
+      toDateDays("2025-01-01"),
+      toDateDays("2025-01-15"),
+      std::nullopt,
+      toDateDays("2025-01-31"),
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_date"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeNullableFlatVector<int32_t>(dates, DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> filters{
+      "event_date BETWEEN DATE '2025-01-01' AND DATE '2025-01-31'",
+      "event_date NOT BETWEEN DATE '2025-01-01' AND DATE '2025-01-31'",
+      "event_date IS NULL",
+      "event_date IS NOT NULL",
+      "event_date < DATE '2025-01-01'",
+      "event_date >= DATE '2025-01-15'"};
+
+  for (const auto& filter : filters) {
+    SCOPED_TRACE(filter);
+    assertFilterMatchesVelox(vectors, filter);
+  }
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalOneDay) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>(
+           {toDateDays("2025-01-01"),
+            toDateDays("2025-02-28"),
+            toDateDays("2024-02-29")},
+           DATE()),
+       makeConstant<int64_t>(kMillisInDay, 3, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int32_t>(
+      {toDateDays("2025-01-02"),
+       toDateDays("2025-03-01"),
+       toDateDays("2024-03-01")},
+      DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalMultipleDays) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>(
+           {toDateDays("2025-01-01"), toDateDays("2024-02-29")}, DATE()),
+       makeConstant<int64_t>(365 * kMillisInDay, 2, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int32_t>(
+      {toDateDays("2026-01-01"), toDateDays("2025-02-28")}, DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalNegative) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>(
+           {toDateDays("2025-01-10"), toDateDays("2025-03-01")}, DATE()),
+       makeConstant<int64_t>(-3 * kMillisInDay, 2, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int32_t>(
+      {toDateDays("2025-01-07"), toDateDays("2025-02-26")}, DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalZero) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>({toDateDays("2025-06-15")}, DATE()),
+       makeConstant<int64_t>(0, 1, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>({toDateDays("2025-06-15")}, DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalNullHandling) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeNullableFlatVector<int32_t>(
+           {toDateDays("2025-01-01"), std::nullopt, toDateDays("2025-03-01")},
+           DATE()),
+       makeNullableFlatVector<int64_t>(
+           {kMillisInDay, kMillisInDay, std::nullopt}, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector({makeNullableFlatVector<int32_t>(
+      {toDateDays("2025-01-02"), std::nullopt, std::nullopt}, DATE())});
+  assertQuery(plan, expected);
+}
+
+// Regression test for the literal-null interval path. Constructing
+// DatePlusIntervalFunction with a constant-null interval used to silently
+// treat it as +0 days (the validity bit was unconditionally set to true), so
+// the row-wise output came back as the input dates instead of NULL.
+TEST_F(CudfFilterProjectTest, datePlusIntervalNullLiteral) {
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>(
+          {toDateDays("2020-01-01"), toDateDays("2020-12-31")}, DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .project(
+              {"plus(event_date, CAST(NULL AS INTERVAL DAY TO SECOND)) AS result"})
+          .planNode();
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}, DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalRejectsSubDayInterval) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>({toDateDays("2025-01-01")}, DATE()),
+       makeConstant<int64_t>(
+           kMillisInDay + 12 * kMillisInHour, 1, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Cannot add hours, minutes, seconds or milliseconds to a date");
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateConstantValue) {
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeNullableFlatVector<int32_t>(
+          {toDateDays("2019-02-28"),
+           toDateDays("2019-01-30"),
+           toDateDays("2019-11-30"),
+           toDateDays("2020-02-29"),
+           std::nullopt},
+          DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('day', 1, event_date) AS plus_day",
+      "date_add('week', 1, event_date) AS plus_week",
+      "date_add('month', 13, event_date) AS plus_month",
+      "date_add('quarter', 1, event_date) AS plus_quarter",
+      "date_add('year', 1, event_date) AS plus_year",
+      "date_add('day', -366, event_date) AS minus_day"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateColumnValue) {
+  auto data = makeRowVector(
+      {"event_date", "amount"},
+      {makeNullableFlatVector<int32_t>(
+           {toDateDays("2019-02-28"),
+            toDateDays("2019-01-30"),
+            toDateDays("2020-02-29"),
+            std::nullopt,
+            toDateDays("2025-01-15")},
+           DATE()),
+       makeNullableFlatVector<int64_t>({1, 13, -1, 2, std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('day', amount, event_date) AS plus_day",
+      "date_add('week', amount, event_date) AS plus_week",
+      "date_add('month', amount, event_date) AS plus_month",
+      "date_add('quarter', amount, event_date) AS plus_quarter",
+      "date_add('year', amount, event_date) AS plus_year",
+      "date_add('week', amount, DATE '2020-01-31') AS literal_date_week",
+      "date_add('month', amount, DATE '2020-01-31') AS literal_date_month"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralValue) {
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>(
+          {toDateDays("2020-01-01"),
+           toDateDays("2020-06-15"),
+           toDateDays("2020-12-31")},
+          DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('day', CAST(NULL AS BIGINT), event_date) AS plus_day",
+      "date_add('year', CAST(NULL AS BIGINT), event_date) AS plus_year"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralDate) {
+  auto data = makeRowVector({"amount"}, {makeFlatVector<int64_t>({1, 13, -1})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('day', amount, CAST(NULL AS DATE)) AS plus_day",
+      "date_add('month', amount, CAST(NULL AS DATE)) AS plus_month"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateLiteralValueOutOfRange) {
+  // Literal value that exceeds int32 range; checked at eval time by
+  // checkedScaleValue -> checkValueInInt32Range.
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>({toDateDays("2020-01-01")}, DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"date_add('day', 2147483648, event_date) AS r"})
+                  .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "date_add value is out of range");
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateColumnValueOutOfRange) {
+  // Column value that exceeds int32 range; checked at eval time by
+  // checkValueRange on the GPU.
+  auto data = makeRowVector(
+      {"event_date", "amount"},
+      {makeFlatVector<int32_t>(
+           {toDateDays("2020-01-01"), toDateDays("2020-12-31")}, DATE()),
+       makeFlatVector<int64_t>({1, std::numeric_limits<int64_t>::max()})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"date_add('day', amount, event_date) AS r"})
+                  .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "date_add value is out of range");
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateNullDateSkipsValueRangeCheck) {
+  auto data = makeRowVector(
+      {"event_date", "amount"},
+      {makeNullableFlatVector<int32_t>(
+           {toDateDays("2020-01-01"), std::nullopt, std::nullopt}, DATE()),
+       makeFlatVector<int64_t>(
+           {1,
+            std::numeric_limits<int64_t>::max(),
+            std::numeric_limits<int64_t>::min()})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('day', amount, event_date) AS plus_day",
+      "date_add('month', amount, event_date) AS plus_month"};
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateScaledOverflowMatchesVelox) {
+  constexpr int64_t kPositiveWeekOverflow =
+      std::numeric_limits<int32_t>::max() / 7LL + 1;
+  constexpr int64_t kNegativeWeekOverflow =
+      std::numeric_limits<int32_t>::min() / 7LL - 1;
+
+  auto data = makeRowVector(
+      {"event_date", "amount"},
+      {makeFlatVector<int32_t>({0, 0}, DATE()),
+       makeFlatVector<int64_t>(
+           {kPositiveWeekOverflow, kNegativeWeekOverflow})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('week', amount, event_date) AS column_value",
+      "date_add('week', 306783379, event_date) AS positive_literal",
+      "date_add('week', -306783379, event_date) AS negative_literal"};
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateTruncTimestampUnits) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "date_trunc('second', event_ts) AS second",
+      "date_trunc('minute', event_ts) AS minute",
+      "date_trunc('hour', event_ts) AS hour",
+      "date_trunc('day', event_ts) AS day",
+      "date_trunc('week', event_ts) AS week",
+      "date_trunc('month', event_ts) AS month",
+      "date_trunc('quarter', event_ts) AS quarter",
+      "date_trunc('year', event_ts) AS year"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateTruncDateUnits) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "date_trunc('day', event_date) AS day",
+      "date_trunc('week', event_date) AS week",
+      "date_trunc('month', event_date) AS month",
+      "date_trunc('quarter', event_date) AS quarter",
+      "date_trunc('year', event_date) AS year"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateTruncGroupByOrderBy) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "date_trunc('day', event_ts) AS day",
+      "date_trunc('month', event_ts) AS month",
+      "date_trunc('year', event_ts) AS year"};
+  const std::vector<std::string> groupingKeys{"year", "month", "day"};
+  const std::vector<std::string> orderByKeys{
+      "year ASC NULLS LAST", "month ASC NULLS LAST", "day ASC NULLS LAST"};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project(projections)
+                  .singleAggregation(groupingKeys, {"count(1) AS events"})
+                  .orderBy(orderByKeys, false)
+                  .planNode();
+
+  assertPlanMatchesVelox(plan);
+}
+
+TEST_F(CudfFilterProjectTest, extractTimestampComponents) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "year(event_ts) AS year",
+      "quarter(event_ts) AS quarter",
+      "month(event_ts) AS month",
+      "week(event_ts) AS week",
+      "week_of_year(event_ts) AS week_of_year",
+      "day(event_ts) AS day",
+      "day_of_week(event_ts) AS day_of_week",
+      "dow(event_ts) AS dow",
+      "day_of_year(event_ts) AS day_of_year",
+      "doy(event_ts) AS doy",
+      "year_of_week(event_ts) AS year_of_week",
+      "yow(event_ts) AS yow",
+      "hour(event_ts) AS hour",
+      "minute(event_ts) AS minute",
+      "second(event_ts) AS second",
+      "millisecond(event_ts) AS millisecond"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, extractDateComponents) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "year(event_date) AS year",
+      "quarter(event_date) AS quarter",
+      "month(event_date) AS month",
+      "week(event_date) AS week",
+      "week_of_year(event_date) AS week_of_year",
+      "day(event_date) AS day",
+      "day_of_week(event_date) AS day_of_week",
+      "dow(event_date) AS dow",
+      "day_of_year(event_date) AS day_of_year",
+      "doy(event_date) AS doy",
+      "year_of_week(event_date) AS year_of_week",
+      "yow(event_date) AS yow",
+      "hour(event_date) AS hour",
+      "minute(event_date) AS minute",
+      "second(event_date) AS second",
+      "millisecond(event_date) AS millisecond"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, extractGroupByOrderBy) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "year(event_ts) AS year",
+      "quarter(event_ts) AS quarter",
+      "month(event_ts) AS month",
+      "week(event_ts) AS week",
+      "day(event_ts) AS day",
+      "day_of_week(event_ts) AS dow",
+      "day_of_year(event_ts) AS doy",
+      "year_of_week(event_ts) AS yow",
+      "hour(event_ts) AS hour",
+      "minute(event_ts) AS minute",
+      "second(event_ts) AS second",
+      "millisecond(event_ts) AS millisecond"};
+
+  const std::vector<std::string> groupingKeys{
+      "year",
+      "quarter",
+      "month",
+      "week",
+      "day",
+      "dow",
+      "doy",
+      "yow",
+      "hour",
+      "minute",
+      "second",
+      "millisecond"};
+
+  std::vector<std::string> orderByKeys;
+  orderByKeys.reserve(groupingKeys.size());
+  for (const auto& key : groupingKeys) {
+    orderByKeys.push_back(key + " ASC NULLS LAST");
+  }
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project(projections)
+                  .singleAggregation(groupingKeys, {"count(1) AS events"})
+                  .orderBy(orderByKeys, false)
+                  .planNode();
+
+  assertPlanMatchesVelox(plan);
+}
+
+// The result mismatches.
+TEST_F(CudfFilterProjectTest, caseWhenOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testCaseWhenOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, substrOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testSubstrOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, likeOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testLikeOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, lessThanOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testLessThanOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, greaterThanOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testGreaterThanOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, lessThanEqualOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testLessThanEqualOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, greaterThanEqualOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testGreaterThanEqualOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, notOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testNotOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, betweenOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testBetweenOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, multiInputAndOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMultiInputAndOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, multiInputOrOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMultiInputOrOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, integerInOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testIntegerInOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, doubleInOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testDoubleInOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringInOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringInOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, mixedInOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMixedInOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, round) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({4123, 456789098})});
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+  auto plan = PlanBuilder()
+                  .setParseOptions(options)
+                  .values({data})
+                  .project({"round(c0, 2) as c1"})
+                  .planNode();
+  AssertQueryBuilder(plan).assertResults(data);
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
+  AssertQueryBuilder(plan).assertResults(data);
+
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -3) as c1"})
+             .planNode();
+  auto expected = makeRowVector({makeFlatVector<int64_t>({4000, 456789000})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, roundDecimal) {
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+
+  // Note that the underlying cudf::round_decimal function returns
+  // a value with the specified scale, and rounds the internal integer
+  // value accordingly, e.g. rounding 41.2389 to 2 decimal places
+  // results in an internal integer value of 4124 with a scale of 2.
+  //
+  // When the specified scale is non-zero, Velox inserts extra casts
+  // to restore the original scale. However, when the specified scale
+  // is zero, Velox does NOT do that, and the result has a scale of 0.
+
+  // Input values 41.2389 and -45.6789 as DECIMAL(10, 4).
+  auto decimalData = makeRowVector(
+      {makeFlatVector<int64_t>({412389, -456789}, DECIMAL(10, 4))});
+
+  // Round to 2 decimal places.
+  // Expected values are 41.24 and -45.68 as DECIMAL(10, 4).
+  auto plan = PlanBuilder()
+                  .setParseOptions(options)
+                  .values({decimalData})
+                  .project({"round(c0, 2) as c1"})
+                  .planNode();
+  auto decimalExpected = makeRowVector(
+      {makeFlatVector<int64_t>({412400, -456800}, DECIMAL(10, 4))});
+  AssertQueryBuilder(plan).assertResults(decimalExpected);
+
+  // Round to 0 decimal places.
+  // Expected values are 41.0 and -46.0 as DECIMAL(10, 0).
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({decimalData})
+             .project({"round(c0) as c1"})
+             .planNode();
+  decimalExpected =
+      makeRowVector({makeFlatVector<int64_t>({41, -46}, DECIMAL(10, 0))});
+  AssertQueryBuilder(plan).assertResults(decimalExpected);
+
+  // Round to -1 decimal places.
+  // Expected values are 40.0 and -50.0 as DECIMAL(10, 4).
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({decimalData})
+             .project({"round(c0, -1) as c1"})
+             .planNode();
+  decimalExpected = makeRowVector(
+      {makeFlatVector<int64_t>({400000, -500000}, DECIMAL(10, 4))});
+  AssertQueryBuilder(plan).assertResults(decimalExpected);
+}
+
+TEST_F(CudfFilterProjectTest, simpleFilter) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with a simple filter
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c0 > 500")
+                  .project({"c0", "c1", "c2"})
+                  .planNode();
+
+  // Run the test
+  assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 > 500");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithProject) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with filter and project
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .filter("c0 > 500")
+          .project({"c0 + 2 as doubled", "c1 + 1.0 as incremented", "c2"})
+          .planNode();
+
+  // Run the test
+  assertQuery(
+      plan,
+      "SELECT c0 + 2 as doubled, c1 + 1.0 as incremented, c2 FROM tmp WHERE c0 > 500");
+}
+
+TEST_F(CudfFilterProjectTest, complexFilter) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with a complex filter condition
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c0 > 500 AND c1 < 0.5 AND c2 LIKE '%test%'")
+                  .project({"c0", "c1", "c2"})
+                  .planNode();
+
+  // Run the test
+  assertQuery(
+      plan,
+      "SELECT c0, c1, c2 FROM tmp WHERE c0 > 500 AND c1 < 0.5 AND c2 LIKE '%test%'");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithNullValues) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+
+  // Add some null values to the vectors
+  for (auto& vector : vectors) {
+    auto c0Vector = vector->childAt(0)->asFlatVector<int32_t>();
+    auto c1Vector = vector->childAt(1)->asFlatVector<double>();
+    for (vector_size_t i = 0; i < batchSize; i += 10) {
+      c0Vector->setNull(i, true);
+      c1Vector->setNull(i, true);
+    }
+  }
+
+  createDuckDbTable(vectors);
+
+  // Create a plan with filter that handles null values
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c0 IS NOT NULL AND c1 IS NOT NULL")
+                  .project({"c0", "c1", "c2"})
+                  .planNode();
+
+  // Run the test
+  assertQuery(
+      plan,
+      "SELECT c0, c1, c2 FROM tmp WHERE c0 IS NOT NULL AND c1 IS NOT NULL");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithOrCondition) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with OR condition in filter
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c0 > 500 OR c1 < 0.5")
+                  .project({"c0", "c1", "c2"})
+                  .planNode();
+
+  // Run the test
+  assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 > 500 OR c1 < 0.5");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithInCondition) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with IN condition in filter
+  auto plan = PlanBuilder(pool_.get())
+                  .values(vectors)
+                  .filter("c0 IN (100, 200, 300, 400, 500)")
+                  .project({"c0", "c1", "c2"})
+                  .planNode();
+
+  // Run the test
+  assertQuery(
+      plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 IN (100, 200, 300, 400, 500)");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithBetweenCondition) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with BETWEEN condition in filter
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c0 BETWEEN 100 AND 500")
+                  .project({"c0", "c1", "c2"})
+                  .planNode();
+
+  // Run the test
+  assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 BETWEEN 100 AND 500");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithStringOperations) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with string operations in filter
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("LENGTH(c2) > 5")
+                  .project({"c0", "c1", "c2"})
+                  .planNode();
+
+  // Run the test
+  assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE LENGTH(c2) > 5");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithoutProject) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with only filter (no projection)
+  auto plan =
+      PlanBuilder().values(vectors).filter("c0 > 500 AND c1 < 0.5").planNode();
+
+  // Run the test - should return all columns without modification
+  assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 > 500 AND c1 < 0.5");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithEmptyResult) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with a filter that should return no rows
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c0 < 0 AND c0 > 1000") // Impossible condition
+                  .planNode();
+
+  // Run the test - should return empty result
+  assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 < 0 AND c0 > 1000");
+}
+
+TEST_F(CudfFilterProjectTest, stringLiteralExpansion) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringLiteralExpansion(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringLiteralInComparison) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringLiteralInComparison(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringLowerOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringLowerOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringUpperOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringUpperOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMixedLiteralProjection(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, dereference) {
+  auto rowType = ROW(
+      {"c0", "c1", "c2", "c3"}, {BIGINT(), INTEGER(), SMALLINT(), DOUBLE()});
+  auto vectors = makeVectors(rowType, 10, 100);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"row_constructor(c1, c2) AS c1_c2"})
+                  .project({"c1_c2.c1", "c1_c2.c2"})
+                  .planNode();
+  assertQuery(plan, "SELECT c1, c2 FROM tmp");
+
+  plan = PlanBuilder()
+             .values(vectors)
+             .project({"row_constructor(c1, c2) AS c1_c2"})
+             .filter("c1_c2.c1 % 10 = 5")
+             .project({"c1_c2.c1", "c1_c2.c2"})
+             .planNode();
+  assertQuery(plan, "SELECT c1, c2 FROM tmp WHERE c1 % 10 = 5");
+}
+
+TEST_F(CudfFilterProjectTest, dereferenceWithLiteralAndNullFields) {
+  vector_size_t batchSize = 128;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .project({"row_constructor(c0, cast(null as integer), 'x') AS r"})
+          .project({"r.c1", "r.c2", "r.c3"})
+          .planNode();
+
+  assertQuery(plan, "SELECT c0, CAST(NULL AS INTEGER), 'x' FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, cardinality) {
+  auto input = makeArrayVector<int64_t>({{1, 2, 3}, {1, 2}, {}});
+  auto data = makeRowVector({input});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"cardinality(c0) AS result"})
+                  .planNode();
+  auto expected = makeRowVector({makeFlatVector<int64_t>({3, 2, 0})});
+  AssertQueryBuilder(plan).assertResults({expected});
+}
+
+TEST_F(CudfFilterProjectTest, split) {
+  auto input = makeFlatVector<std::string>(
+      {"hello world", "hello world2", "hello hello"});
+  auto data = makeRowVector({input});
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"split(c0, 'hello', 2) AS result"})
+                  .planNode();
+  auto splitResults = AssertQueryBuilder(plan).copyResults(pool());
+
+  auto calculatedSplitResults = makeRowVector({
+      makeArrayVector<std::string>({
+          {"", " world"},
+          {"", " world2"},
+          {"", " hello"},
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(
+      splitResults, calculatedSplitResults);
+}
+
+TEST_F(CudfFilterProjectTest, cardinalityAndSplitOneByOne) {
+  auto input = makeFlatVector<std::string>(
+      {"hello world", "hello world2", "hello hello", "does not contain it"});
+  auto data = makeRowVector({input});
+  auto splitPlan = PlanBuilder()
+                       .values({data})
+                       .project({"split(c0, 'hello', 2) AS c0"})
+                       .planNode();
+  auto splitResults = AssertQueryBuilder(splitPlan).copyResults(pool());
+
+  auto calculatedSplitResults = makeRowVector({
+      makeArrayVector<std::string>({
+          {"", " world"},
+          {"", " world2"},
+          {"", " hello"},
+          {"does not contain it"},
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(
+      splitResults, calculatedSplitResults);
+  auto cardinalityPlan = PlanBuilder()
+                             .values({splitResults})
+                             .project({"cardinality(c0) AS result"})
+                             .planNode();
+  auto expected = makeRowVector({makeFlatVector<int64_t>({2, 2, 2, 1})});
+  AssertQueryBuilder(cardinalityPlan).assertResults({expected});
+}
+
+// TODO: Requires a fix for the expression evaluator to handle function nesting.
+TEST_F(CudfFilterProjectTest, cardinalityAndSplitFused) {
+  auto input = makeFlatVector<std::string>(
+      {"hello world", "hello world2", "hello hello", "does not contain it"});
+  auto data = makeRowVector({input});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"cardinality(split(c0, 'hello', 2)) AS c0"})
+                  .planNode();
+  auto expected = makeRowVector({makeFlatVector<int64_t>({2, 2, 2, 1})});
+  AssertQueryBuilder(plan).assertResults({expected});
+}
+
+TEST_F(CudfFilterProjectTest, negativeSubstr) {
+  auto input =
+      makeFlatVector<std::string>({"hellobutlonghello", "secondstring"});
+  auto data = makeRowVector({input});
+  auto negativeSubstrPlan =
+      PlanBuilder().values({data}).project({"substr(c0, -2) AS c0"}).planNode();
+  auto negativeSubstrResults =
+      AssertQueryBuilder(negativeSubstrPlan).copyResults(pool());
+
+  auto calculatedNegativeSubstrResults = makeRowVector({
+      makeFlatVector<std::string>({
+          "lo",
+          "ng",
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(
+      negativeSubstrResults, calculatedNegativeSubstrResults);
+}
+
+TEST_F(CudfFilterProjectTest, negativeSubstrWithLength) {
+  auto input =
+      makeFlatVector<std::string>({"hellobutlonghello", "secondstring"});
+  auto data = makeRowVector({input});
+  auto negativeSubstrWithLengthPlan = PlanBuilder()
+                                          .values({data})
+                                          .project({"substr(c0, -6, 3) AS c0"})
+                                          .planNode();
+  auto negativeSubstrWithLengthResults =
+      AssertQueryBuilder(negativeSubstrWithLengthPlan).copyResults(pool());
+
+  auto calculatedNegativeSubstrWithLengthResults = makeRowVector({
+      makeFlatVector<std::string>({
+          "ghe",
+          "str",
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(
+      negativeSubstrWithLengthResults,
+      calculatedNegativeSubstrWithLengthResults);
+}
+
+TEST_F(CudfFilterProjectTest, substrWithLength) {
+  auto input =
+      makeFlatVector<std::string>({"hellobutlonghello", "secondstring"});
+  auto data = makeRowVector({input});
+  auto substrPlan = PlanBuilder()
+                        .values({data})
+                        .project({"substr(c0, 1, 3) AS c0"})
+                        .planNode();
+  auto substrResults = AssertQueryBuilder(substrPlan).copyResults(pool());
+
+  auto calculatedSubstrResults = makeRowVector({
+      makeFlatVector<std::string>({
+          "hel",
+          "sec",
+      }),
+  });
+  facebook::velox::test::assertEqualVectors(
+      substrResults, calculatedSubstrResults);
+}
+
+TEST_F(CudfFilterProjectTest, coalesceColumnWithLiteral) {
+  vector_size_t batchSize = 100;
+  auto vectors = makeVectors(rowType_, 1, batchSize);
+  // Introduce nulls into c0 to exercise replacement
+  auto& vec = vectors[0];
+  auto c0Vector = vec->childAt(0)->asFlatVector<int32_t>();
+  for (vector_size_t i = 0; i < batchSize; i += 3) {
+    c0Vector->setNull(i, true);
+  }
+
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"coalesce(c0, 5::INTEGER) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT coalesce(c0, 5) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, coalesceLiteralFirst) {
+  vector_size_t batchSize = 100;
+  auto vectors = makeVectors(rowType_, 1, batchSize);
+  createDuckDbTable(vectors);
+
+  // Literal appears before any column; result should be a constant column.
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"coalesce(5::INTEGER, c0) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT coalesce(5, c0) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, coalesceStopsAtFirstLiteral) {
+  // Use two integer columns to validate that columns after the literal are
+  // ignored.
+  auto rowType = ROW({{"c0", INTEGER()}, {"c1", INTEGER()}});
+  auto vectors = makeVectors(rowType, 1, 50);
+  // Make some c0 nulls so fallback engages.
+  auto& vec = vectors[0];
+  auto c0 = vec->childAt(0)->asFlatVector<int32_t>();
+  for (vector_size_t i = 1; i < vec->size(); i += 4) {
+    c0->setNull(i, true);
+  }
+
+  createDuckDbTable(vectors);
+
+  // With expression coalesce(c0, 100, c1), rows with null c0 should become 100,
+  // regardless of c1. This also verifies we stop at the first literal.
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"coalesce(c0, 100::INTEGER, c1) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT coalesce(c0, 100, c1) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalColumn) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>(
+           {toDateDays("2025-01-01"),
+            toDateDays("2025-02-28"),
+            toDateDays("2024-02-29")},
+           DATE()),
+       makeFlatVector<int64_t>(
+           {1 * kMillisInDay, 5 * kMillisInDay, 30 * kMillisInDay},
+           INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int32_t>(
+      {toDateDays("2025-01-02"),
+       toDateDays("2025-03-05"),
+       toDateDays("2024-03-30")},
+      DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalConstantLiteral) {
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>(
+          {toDateDays("2025-01-01"),
+           toDateDays("2025-02-28"),
+           toDateDays("2024-02-29")},
+          DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  // Build expression tree programmatically with a constant interval literal,
+  // matching how a query planner delivers date + INTERVAL '1' DAY.
+  auto dateField =
+      std::make_shared<core::FieldAccessTypedExpr>(DATE(), "event_date");
+  auto intervalConst = std::make_shared<core::ConstantTypedExpr>(
+      INTERVAL_DAY_TIME(), variant(static_cast<int64_t>(kMillisInDay)));
+  auto plusExpr = std::make_shared<core::CallTypedExpr>(
+      DATE(),
+      std::vector<core::TypedExprPtr>{dateField, intervalConst},
+      "plus");
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .addNode([&](auto nodeId, auto source) {
+                    return std::make_shared<core::ProjectNode>(
+                        nodeId,
+                        std::vector<std::string>{"result"},
+                        std::vector<core::TypedExprPtr>{plusExpr},
+                        source);
+                  })
+                  .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int32_t>(
+      {toDateDays("2025-01-02"),
+       toDateDays("2025-03-01"),
+       toDateDays("2024-03-01")},
+      DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, switchExpr) {
+  auto data = makeRowVector(
+      {makeFlatVector<double>({45676567.78, 6789098767.90876, -2.34}),
+       makeFlatVector<double>({123.4, 124.5, 1678})});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"CASE WHEN c0 > 0.0 THEN c0 / c1 ELSE cast(null as double) END AS result"})
+          .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<double>(
+          {45676567.78 / 123.4, 6789098767.90876 / 124.5, std::nullopt}),
+  });
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfFilterProjectTest, greatestLeastAllColumns) {
+  auto data = makeRowVector({
+      makeFlatVector<double>({1.0, 5.0, -3.0}),
+      makeFlatVector<double>({4.0, 2.0, -1.0}),
+      makeFlatVector<double>({3.0, 3.0, -2.0}),
+  });
+  createDuckDbTable({data});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project({"greatest(c0, c1, c2) AS g", "least(c0, c1, c2) AS l"})
+          .planNode();
+  assertQuery(plan, "SELECT greatest(c0, c1, c2), least(c0, c1, c2) FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, greatestLeastMixed) {
+  auto data = makeRowVector({
+      makeFlatVector<double>({1.0, 10.0, -3.0}),
+      makeFlatVector<double>({4.0, 2.0, -1.0}),
+  });
+  createDuckDbTable({data});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project({"greatest(c0, 5.0, c1) AS g", "least(c0, 0.0, c1) AS l"})
+          .planNode();
+  assertQuery(
+      plan, "SELECT greatest(c0, 5.0, c1), least(c0, 0.0, c1) FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, greatestLeastAllLiterals) {
+  auto data = makeRowVector({makeFlatVector<double>({0.0})});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"greatest(1.0, 3.0, 2.0) AS g", "least(1.0, 3.0, 2.0) AS l"})
+          .planNode();
+  auto expected = makeRowVector({
+      makeFlatVector<double>({3.0}),
+      makeFlatVector<double>({1.0}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, greatestLeastWithNulls) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<double>({1.0, std::nullopt, std::nullopt}),
+      makeNullableFlatVector<double>({std::nullopt, 2.0, std::nullopt}),
+      makeNullableFlatVector<double>({3.0, std::nullopt, std::nullopt}),
+  });
+  createDuckDbTable({data});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project({"greatest(c0, c1, c2) AS g", "least(c0, c1, c2) AS l"})
+          .planNode();
+  assertQuery(plan, "SELECT greatest(c0, c1, c2), least(c0, c1, c2) FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, betweenDouble) {
+  auto data = makeRowVector({
+      makeFlatVector<double>({-1.0, 0.5, 1.5, 3.0}),
+  });
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"c0 BETWEEN 0.0 AND 2.0 AS result"})
+                  .planNode();
+  assertQuery(plan, "SELECT c0 BETWEEN 0.0 AND 2.0 AS result FROM tmp");
+}
+
+class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
+ protected:
+  static void SetUpTestCase() {
+    parse::registerTypeResolver();
+    functions::prestosql::registerAllScalarFunctions();
+    aggregate::prestosql::registerAllAggregateFunctions();
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    cudf_velox::registerCudf();
+  }
+
+  static void TearDownTestCase() {
+    cudf_velox::unregisterCudf();
+  }
+
+  void assertExpressionMatchesCpu(
+      const std::string& expr,
+      const RowVectorPtr& input,
+      const RowTypePtr& rowType) {
+    auto exprSet = compileExpression(expr, rowType);
+    auto expected =
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+    // Evaluate the typed expression directly (no exec::Expr SQL round-trip) so
+    // computed-ROW dereferences and unnamed ROW fields are preserved.
+    auto actual = evaluate(makeTypedExpr(expr, rowType), input);
+    facebook::velox::test::assertEqualVectors(expected, actual);
+  }
+};
+
+TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
+  auto castValue = evaluateOnce<int16_t, int32_t>("cast(c0 as smallint)", 12);
+  EXPECT_EQ(castValue, 12);
+  auto tryCast =
+      evaluateOnce<int16_t, int32_t>("try_cast(c0 as smallint)", -214);
+  EXPECT_EQ(tryCast, -214);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, rowConstructorAndDereference) {
+  auto rowType = ROW({{"c0", INTEGER()}, {"c1", VARCHAR()}});
+  auto c0 = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+  auto c1 = makeNullableFlatVector<std::string>({"x", "y", std::nullopt});
+  auto input = makeRowVector({c0, c1});
+
+  assertExpressionMatchesCpu("row_constructor(c0, c1).c1", input, rowType);
+  assertExpressionMatchesCpu("row_constructor(c0, c1).c2", input, rowType);
+  assertExpressionMatchesCpu("row_constructor(c0, 1).c2", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(c0, cast(null as varchar)).c1", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(c0, cast(null as varchar)).c2", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(cast(null as integer), c1).c1", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(cast(null as integer), c1).c2", input, rowType);
+  assertExpressionMatchesCpu("row_constructor(c0, 'z').c2", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(row_constructor(c0, c1), cast(null as integer)).c1.c1",
+      input,
+      rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(row_constructor(c0, c1), cast(null as integer)).c1.c2",
+      input,
+      rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(row_constructor(c0, cast(null as varchar)), 1).c1.c2",
+      input,
+      rowType);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, nullableStructDereference) {
+  auto rowType = ROW({{"r", ROW({{"a", INTEGER()}, {"b", VARCHAR()}})}});
+  auto a = makeNullableFlatVector<int32_t>({1, 2, std::nullopt, 4});
+  auto b = makeNullableFlatVector<std::string>({"x", std::nullopt, "z", "w"});
+  auto nullableStruct = makeRowVector({"a", "b"}, {a, b}, nullEvery(2));
+  auto input = makeRowVector({"r"}, {nullableStruct});
+
+  assertExpressionMatchesCpu("r.a", input, rowType);
+  assertExpressionMatchesCpu("r.b", input, rowType);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, rowConstructorDereferenceByIndex) {
+  auto c0 = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+  auto c1 = makeNullableFlatVector<std::string>({"x", "y", std::nullopt});
+  auto input = makeRowVector({c0, c1});
+
+  auto unnamedRowType = ROW({{"", INTEGER()}, {"", VARCHAR()}});
+  auto typed = std::make_shared<core::DereferenceTypedExpr>(
+      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(
+          unnamedRowType,
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"),
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c1"),
+          },
+          "row_constructor"),
+      1);
+  exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
+
+  auto expected = functions::test::FunctionBaseTest::evaluate(exprSet, input);
+  auto actual = evaluate(typed, input);
+  facebook::velox::test::assertEqualVectors(expected, actual);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, rowConstructorDereferenceByName) {
+  auto c0 = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+  auto c1 = makeNullableFlatVector<std::string>({"x", "y", std::nullopt});
+  auto input = makeRowVector({c0, c1});
+
+  auto namedRowType = ROW({{"left", INTEGER()}, {"right", VARCHAR()}});
+  auto typed = std::make_shared<core::FieldAccessTypedExpr>(
+      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(
+          namedRowType,
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"),
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c1"),
+          },
+          "row_constructor"),
+      "right");
+  exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
+
+  auto expected = functions::test::FunctionBaseTest::evaluate(exprSet, input);
+  auto actual = evaluate(typed, input);
+  facebook::velox::test::assertEqualVectors(expected, actual);
+}
+
+// Test unary math functions
+TEST_F(CudfSimpleFilterProjectTest, unaryMathFunctions) {
+  auto testUnaryFunction =
+      [&](std::string expr, double input, double expected) {
+        auto valueOpt = evaluateOnce<double, double>(expr, input);
+        EXPECT_DOUBLE_EQ(valueOpt.value(), expected);
+      };
+  // Trigonometric functions (use 0.0 where stable/clean)
+  testUnaryFunction("sin(c0)", 0.0, 0.0);
+  testUnaryFunction("cos(c0)", 0.0, 1.0);
+  testUnaryFunction("tan(c0)", 0.0, 0.0);
+
+  // Inverse trig (use stable inputs)
+  testUnaryFunction("asin(c0)", 0.0, 0.0);
+  testUnaryFunction("acos(c0)", 1.0, 0.0);
+  testUnaryFunction("atan(c0)", 0.0, 0.0);
+
+  // Hyperbolic functions
+  testUnaryFunction("cosh(c0)", 0.0, 1.0);
+  testUnaryFunction("tanh(c0)", 0.0, 0.0);
+
+  // Exponential / log / roots
+  testUnaryFunction("exp(c0)", 0.0, 1.0);
+  testUnaryFunction("ln(c0)", 1.0, 0.0);
+  testUnaryFunction("sqrt(c0)", 4.0, 2.0);
+  testUnaryFunction("cbrt(c0)", 8.0, 2.0);
+
+  // Absolute value
+  testUnaryFunction("abs(c0)", -5.5, 5.5);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, nullLogicalAnd) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
+  // All 9 combinations of {true, false, null} x {true, false, null}.
+  auto c0 = makeNullableFlatVector<bool>({
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+  });
+  auto c1 = makeNullableFlatVector<bool>({
+      true,
+      false,
+      std::nullopt,
+      true,
+      false,
+      std::nullopt,
+      true,
+      false,
+      std::nullopt,
+  });
+  auto input = makeRowVector({c0, c1});
+  assertExpressionMatchesCpu("c0 AND c1", input, rowType);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, nullLogicalOr) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
+  auto c0 = makeNullableFlatVector<bool>({
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+  });
+  auto c1 = makeNullableFlatVector<bool>({
+      true,
+      false,
+      std::nullopt,
+      true,
+      false,
+      std::nullopt,
+      true,
+      false,
+      std::nullopt,
+  });
+  auto input = makeRowVector({c0, c1});
+  assertExpressionMatchesCpu("c0 OR c1", input, rowType);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, nullLogicalAndThreeArg) {
+  const auto rowType =
+      ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}, {"c2", BOOLEAN()}});
+  // (true AND null) AND false -> false; (null AND true) AND false -> false.
+  auto c0 = makeNullableFlatVector<bool>({true, std::nullopt, false});
+  auto c1 = makeNullableFlatVector<bool>({std::nullopt, true, true});
+  auto c2 = makeNullableFlatVector<bool>({false, false, true});
+  auto input = makeRowVector({c0, c1, c2});
+  assertExpressionMatchesCpu("c0 AND c1 AND c2", input, rowType);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, nullLogicalOrThreeArg) {
+  const auto rowType =
+      ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}, {"c2", BOOLEAN()}});
+  // (false OR null) OR true -> true; (null OR false) OR true -> true.
+  auto c0 = makeNullableFlatVector<bool>({false, std::nullopt, std::nullopt});
+  auto c1 = makeNullableFlatVector<bool>({std::nullopt, false, false});
+  auto c2 = makeNullableFlatVector<bool>({true, true, true});
+  auto input = makeRowVector({c0, c1, c2});
+  assertExpressionMatchesCpu("c0 OR c1 OR c2", input, rowType);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalAndAllLiterals) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}});
+  auto input = makeRowVector({makeFlatVector<bool>({true})});
+  for (const auto& expr :
+       {"true AND true",
+        "true AND false",
+        "false AND true",
+        "false AND false"}) {
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalOrAllLiterals) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}});
+  auto input = makeRowVector({makeFlatVector<bool>({true})});
+  for (const auto& expr :
+       {"true OR true", "true OR false", "false OR true", "false OR false"}) {
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalAndColumnWithLiteral) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}});
+  auto c0 =
+      makeNullableFlatVector<bool>({true, false, std::nullopt, std::nullopt});
+  auto input = makeRowVector({c0});
+  for (const auto& expr :
+       {"c0 AND true", "true AND c0", "c0 AND false", "false AND c0"}) {
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalOrColumnWithLiteral) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}});
+  auto c0 =
+      makeNullableFlatVector<bool>({true, false, std::nullopt, std::nullopt});
+  auto input = makeRowVector({c0});
+  for (const auto& expr :
+       {"c0 OR true", "true OR c0", "c0 OR false", "false OR c0"}) {
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalAndThreeArgLiteralsMixed) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
+  auto c0 = makeNullableFlatVector<bool>({true, false, std::nullopt});
+  auto c1 = makeNullableFlatVector<bool>({false, true, true});
+  auto input = makeRowVector({c0, c1});
+  for (const auto& expr :
+       {"c0 AND true AND c1",
+        "true AND c0 AND c1",
+        "c0 AND c1 AND false",
+        "false AND c0 AND c1"}) {
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalOrThreeArgLiteralsMixed) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
+  auto c0 = makeNullableFlatVector<bool>({false, true, std::nullopt});
+  auto c1 = makeNullableFlatVector<bool>({false, false, true});
+  auto input = makeRowVector({c0, c1});
+  for (const auto& expr :
+       {"c0 OR false OR c1",
+        "false OR c0 OR c1",
+        "c0 OR c1 OR true",
+        "true OR c0 OR c1"}) {
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
+
+TEST_F(CudfFilterProjectTest, andAndAndExpr) {
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>({100, 100, 100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, 100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, -100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, -100, -100}, DECIMAL(17, 2))});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"(c0 > CAST(0.0 AS DECIMAL(17, 2))) AND (c1 > CAST(0.0 AS DECIMAL(17, 2))) AND (c2 > CAST(0.0 AS DECIMAL(17, 2))) AND (c3 > CAST(0.0 AS DECIMAL(17, 2))) AS result"})
+          .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>({true, false, false, false}),
+  });
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfFilterProjectTest, andAndAndWithDecimalDivideBelowExpr) {
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>({100, 100, 100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, 100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, -100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, -100, -100}, DECIMAL(17, 2))});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"(CAST((c0 / CAST(3.0 AS DECIMAL(17,2))) AS DECIMAL(17, 2)) > CAST(0.0 AS DECIMAL(17, 2))) AND (c1 > CAST(0.0 AS DECIMAL(17, 2))) AND (c2 > CAST(0.0 AS DECIMAL(17, 2))) AND (c3 > CAST(0.0 AS DECIMAL(17, 2))) AS result"})
+          .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>({true, false, false, false}),
+  });
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+
+  // round(double) with no scale (defaults to 0)
+  auto data = makeRowVector(
+      {makeFlatVector<double>({3.14159, 2.71828, -1.5, 0.5, 100.999})});
+  auto plan = PlanBuilder()
+                  .setParseOptions(options)
+                  .values({data})
+                  .project({"round(c0) as c1"})
+                  .planNode();
+  auto expected =
+      makeRowVector({makeFlatVector<double>({3.0, 3.0, -2.0, 1.0, 101.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // round(double, 2)
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, 2) as c1"})
+             .planNode();
+  expected =
+      makeRowVector({makeFlatVector<double>({3.14, 2.72, -1.5, 0.5, 101.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // round(double, -1) — round to nearest 10
+  data =
+      makeRowVector({makeFlatVector<double>({123.456, -987.654, 55.0, 5.0})});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -1) as c1"})
+             .planNode();
+  expected =
+      makeRowVector({makeFlatVector<double>({120.0, -990.0, 60.0, 10.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // round(double, -3) — round to nearest 1000
+  data = makeRowVector({makeFlatVector<double>({4123.0, 456789098.0})});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -3) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({4000.0, 456789000.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // Large values
+  data = makeRowVector({makeFlatVector<double>({1e15 + 0.5, -1e15 - 0.5})});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({1e15 + 1.0, -1e15 - 1.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // Corner cases: IEEE-754 half-way values and representation artifacts.
+  // The FLOAT64 round path JIT-compiles Velox CPU's round algorithm
+  // (std::round(x * factor) / factor), so the result depends on the actual
+  // binary value of the input and on any rounding introduced by the factor
+  // multiply. For example, 2.675 is stored as 2.6749999999999998 but
+  // multiplied by 100 lands on the exactly-representable 267.5 tie, which
+  // std::round rounds away from zero to 268 -> 2.68. By contrast, 1.005 is
+  // stored as 1.0049999999999999 and multiplied by 100 falls just below
+  // 100.5, which rounds down to 100 -> 1.00.
+  data = makeRowVector({makeFlatVector<double>({
+      // HALF_UP ties at integer magnitudes.
+      2.5,
+      3.5,
+      -2.5,
+      -3.5,
+      2.675,
+      0.1,
+      0.3,
+      1.005,
+      1.0000000000000002,
+      0.0,
+      0.5,
+      -0.5,
+      -1.5,
+      -2.675,
+      -1.6,
+      -1.645,
+      0.125,
+      1e-10,
+      999999999999999.5,
+  })});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({
+      3.0, 4.0,  -3.0, -4.0, 3.0,  0.0,  0.0, 1.0, 1.0,  0.0,
+      1.0, -1.0, -2.0, -3.0, -2.0, -2.0, 0.0, 0.0, 1e15,
+  })});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, 2) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({
+      2.5,
+      3.5,
+      -2.5,
+      -3.5,
+      2.68,
+      0.1,
+      0.3,
+      1.0,
+      1.0,
+      0.0,
+      0.5,
+      -0.5,
+      -1.5,
+      -2.68,
+      -1.6,
+      -1.65,
+      0.13,
+      0.0,
+      999999999999999.5,
+  })});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+} // namespace
