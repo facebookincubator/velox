@@ -49,6 +49,22 @@ target_link_libraries(
 )
 
 # ---------------------------------------------------------------------------
+# bench_decode_bulk: full-materialization decode throughput.
+# ---------------------------------------------------------------------------
+add_executable(nimble_mlidc_decode_bulk bench_decode_bulk.cpp)
+
+target_link_libraries(
+  nimble_mlidc_decode_bulk
+  nimble_mlidc_common
+  nimble_encodings
+  nimble_encodings_tests_utils
+  nimble_common
+  Folly::folly
+  velox_memory
+  gflags
+)
+
+# ---------------------------------------------------------------------------
 # Future driver targets (placeholders)
 # ---------------------------------------------------------------------------
 # add_executable(nimble_mlidc_gather      bench_gather.cpp)

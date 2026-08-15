@@ -73,18 +73,17 @@ class NimbleBenchTarget {
   using T = typename EncodingT::cppDataType;
 
   NimbleBenchTarget()
-      : pool_(benchmarks::benchmarkPool()),
-        buffer_(*pool_) {}
+      : pool_(benchmarks::benchmarkPool()) {}
 
   // Encode data.  Destroys any previously encoded state.
   void encode(
       const Vector<T>& data,
       const Encoding::Options& options = {},
       bool realNestedSelection = false) {
-    buffer_ = Buffer{*pool_};
+    Buffer buf{*pool_};
     encoded_ = std::string(
         test::Encoder<EncodingT>::encode(
-            buffer_, data, CompressionType::Uncompressed, options,
+            buf, data, CompressionType::Uncompressed, options,
             realNestedSelection));
     // Construct the Encoding directly from the encoded bytes rather than
     // re-encoding via createEncoding(), which would silently drop
@@ -150,7 +149,6 @@ class NimbleBenchTarget {
 
  private:
   std::shared_ptr<velox::memory::MemoryPool> pool_;
-  Buffer buffer_;
   std::string encoded_;
   std::unique_ptr<Encoding> encoding_;
 };
