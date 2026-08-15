@@ -286,7 +286,10 @@ HiveTableHandle::HiveTableHandle(
     const std::unordered_map<std::string, std::string>& tableParameters,
     std::vector<HiveColumnHandlePtr> filterColumnHandles,
     double sampleRate,
-    std::string dbName)
+    std::string dbName,
+    bool isChangelogQuery,
+    const std::unordered_map<std::string, velox::connector::ColumnHandlePtr>&
+        dataColumnHandles)
     : FileTableHandle(std::move(connectorId)),
       tableName_(tableName),
       subfieldFilters_(std::move(subfieldFilters)),
@@ -296,7 +299,9 @@ HiveTableHandle::HiveTableHandle(
       indexColumns_(std::move(indexColumns)),
       tableParameters_(tableParameters),
       filterColumnHandles_(std::move(filterColumnHandles)),
-      dbName_(std::move(dbName)) {
+      dbName_(std::move(dbName)),
+      isChangelogQuery_(isChangelogQuery),
+      dataColumnHandles_(dataColumnHandles) {
   VELOX_CHECK_GT(sampleRate_, 0.0, "Sample rate must be positive");
   VELOX_CHECK_LE(sampleRate_, 1.0, "Sample rate must not exceed 1.0");
 }
