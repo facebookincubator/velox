@@ -537,7 +537,7 @@ __device__ void lengths_to_offsets(
     // Unlike exclusive_sum (output size + 1), this output has exactly 'size'
     // elements, so an empty input yields an empty output; guard the out[0]
     // write to avoid an out-of-bounds store on a zero-length output.
-    out[0] = TOut(0);
+    out[complexIdx(output->contiguous, output, 0)] = TOut(0);
   }
   for (uint32_t idx = threadIdx.x; idx < rounded; idx += blockDim.x) {
     // Honor the input's stride (non-contiguous select-column views), matching
@@ -551,8 +551,11 @@ __device__ void lengths_to_offsets(
     TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
         val, nullptr, static_cast<TOut*>(temp));
     // Drop the final total: write out[i+1] only while i+1 stays in range.
+    // The output's stride matters for the same reason the input's does: fused
+    // as a cat or stack operand producer, this writes a strided slice of the
+    // concatenation, not a contiguous buffer.
     if (idx + 1 < size) {
-      out[idx + 1] = sum;
+      out[complexIdx(output->contiguous, output, idx + 1)] = sum;
     }
     if (threadIdx.x == blockDim.x - 1) {
       counter = sum;
@@ -569,6 +572,11 @@ __device__ void lengths_to_offsets(
 // Embarrassingly parallel grid-stride loop, one thread per segment; the grid
 // may be sized larger than N (kMax over inputs includes values), so the loop is
 // bounded by N.
+// Honors both tensors' strides: fusing this op as the operand producer of a cat
+// or stack makes 'output' a strided slice of the concatenation (a stack along
+// dim 1 gives it stride 2), and a select-column offsets input is strided the
+// same way. Writing out[idx] would fill that slice contiguously, overwriting
+// the neighbouring operand's elements and leaving its own tail unset.
 template <int32_t kBlockSize, typename T>
 __device__ void offsets_to_lengths(
     Tensor* offsets,
@@ -582,22 +590,28 @@ __device__ void offsets_to_lengths(
   for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x;
        idx < static_cast<uint32_t>(n);
        idx += block.numBlocksInOp * blockDim.x) {
-    int64_t start = static_cast<int64_t>(off[idx]);
+    int64_t start = static_cast<int64_t>(
+        off[complexIdx(offsets->contiguous, offsets, idx)]);
     int64_t end = (static_cast<int64_t>(idx) + 1 < n)
-        ? static_cast<int64_t>(off[idx + 1])
+        ? static_cast<int64_t>(
+              off[complexIdx(offsets->contiguous, offsets, idx + 1)])
         : total;
-    out[idx] = static_cast<T>(end - start);
+    out[complexIdx(output->contiguous, output, idx)] =
+        static_cast<T>(end - start);
   }
 }
 
-// fb.offsets_to_ranges: builds a fresh [N, 1, 2] int32 ranges tensor from a 1-D
+// fb.offsets_to_ranges: builds a [N, 1, 2] int32 ranges tensor from a 1-D
 // offsets tensor of N segments. Row i is (start, length) = (offsets[i],
 // offsets[i+1] - offsets[i]); the last length extends to values->numEl,
 // matching the eager kernel (offsets_to_ranges_kernel in
-// offsets_to_ranges_cuda.cu). The output is contiguous, so segment i writes
-// out[2*i] (start) and out[2*i+1] (length). Output is always int32 regardless
-// of the offsets dtype; TOff is the offsets element type. One thread per
-// segment, grid-stride, bounded by N.
+// offsets_to_ranges_cuda.cu). Segment i occupies output elements 2*i (start)
+// and 2*i+1 (length) in row-major order, mapped through the output's layout:
+// fused as the operand producer of a cat or stack, the output is a strided
+// slice of the concatenation (joining [N,1,2] tensors on dim 1 gives it row
+// stride 4), and writing out[2*i] directly would fill that slice densely.
+// Output is always int32 regardless of the offsets dtype; TOff is the offsets
+// element type. One thread per segment, grid-stride, bounded by N.
 template <int32_t kBlockSize, typename TOff>
 __device__ void offsets_to_ranges(
     Tensor* offsets,
@@ -611,12 +625,16 @@ __device__ void offsets_to_ranges(
   for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x;
        idx < static_cast<uint32_t>(n);
        idx += block.numBlocksInOp * blockDim.x) {
-    int64_t start = static_cast<int64_t>(off[idx]);
+    int64_t start = static_cast<int64_t>(
+        off[complexIdx(offsets->contiguous, offsets, idx)]);
     int64_t end = (static_cast<int64_t>(idx) + 1 < n)
-        ? static_cast<int64_t>(off[idx + 1])
+        ? static_cast<int64_t>(
+              off[complexIdx(offsets->contiguous, offsets, idx + 1)])
         : total;
-    out[2 * idx] = static_cast<int32_t>(start);
-    out[2 * idx + 1] = static_cast<int32_t>(end - start);
+    out[complexIdx(output->contiguous, output, 2 * idx)] =
+        static_cast<int32_t>(start);
+    out[complexIdx(output->contiguous, output, 2 * idx + 1)] =
+        static_cast<int32_t>(end - start);
   }
 }
 
@@ -935,6 +953,17 @@ __device__ void tw_reduce_head(
   __syncthreads();
   TIn* in = storage<TIn>(input);
   TOut* out = storage<TOut>(output);
+  if (size == 0) {
+    // Empty input: the loop below runs zero iterations, so this block's partial
+    // slot would keep whatever the buffer already held and the final stage
+    // would reduce over that. The host reserves the slot expecting this write
+    // (numBlocksShape in Builtins.cpp), so write the identity -- the same guard
+    // masked_select_head needs, for the same reason.
+    if (threadIdx.x == 0) {
+      out[block.blockInOp] = Op::identity();
+    }
+    return;
+  }
   uint32_t blockIdx = block.blockInOp;
   for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
        idx += block.numBlocksInOp * blockDim.x) {

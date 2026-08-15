@@ -163,6 +163,15 @@ struct WaveConfig {
   // actually contiguous and throws otherwise. Off by default.
   bool inputContiguous{false};
 
+  // If true, cooperative-grid mode expands tw.masked_select_jagged into its
+  // multi-kernel stages instead of the single-node cg form. The stages reserve
+  // the output list to the exact selected count, which the cg form cannot do:
+  // with no host round trip it must over-allocate to the mask length and set
+  // the real shape on device. The stages stay in separate launches inside the
+  // cg grid because each names its predecessor through inputFromPreviousKernel,
+  // which breaks that producer into its own kernel whatever the grid mode.
+  bool mkSelect{false};
+
   /// Returns the active config: the thread-local override set by
   /// waveConfigOverride() when non-null, otherwise the process-wide singleton.
   /// The singleton is not thread-safe; all of its mutations must happen before
@@ -174,6 +183,13 @@ struct WaveConfig {
     static WaveConfig instance;
     return instance;
   }
+
+  /// Returns a compact, comma-separated list of the settings whose value
+  /// differs from its default (e.g. "trace=16, autoAdjustCost=true,
+  /// freeIntermediates=true"), or "defaults" when every field is at its
+  /// default. Used in the performance report so a run's active configuration is
+  /// self-documenting.
+  std::string toString() const;
 };
 
 } // namespace torch::wave

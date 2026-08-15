@@ -362,12 +362,17 @@ std::vector<int64_t> paramIntListByName(
         ": expected prim.ListPack producer for '",
         name,
         "'");
+    // The pack was resolved through idToValue, which is keyed by actual ids, so
+    // its operands are already actual Values. 'map' is keyed by formal ids and
+    // normally has no entry for them; fall back to the id as-is, the same way
+    // repeatReserve resolves its self tensor.
     std::vector<int64_t> result;
     for (const auto& elem : producer->inputs()) {
-      auto elemIt = map.find(elem.value->id());
-      TORCH_CHECK(
-          elemIt != map.end(), node->target(), ": ListPack element not in map");
-      result.push_back(frame.getIValue(elemIt->second).toInt());
+      auto elemId = elem.value->id();
+      if (auto elemIt = map.find(elemId); elemIt != map.end()) {
+        elemId = elemIt->second;
+      }
+      result.push_back(frame.getIValue(elemId).toInt());
     }
     return result;
   }
@@ -682,6 +687,21 @@ StandaloneShortcut standaloneShortcutForTarget(std::string_view target) {
   if (target == "torch.ops.aten.narrow.default") {
     return StandaloneShortcut::kNarrow;
   }
+  if (target == "prim.ListUnpack") {
+    return StandaloneShortcut::kListUnpack;
+  }
+  if (target == "torch.ops.aten.unbind.int") {
+    return StandaloneShortcut::kUnbind;
+  }
+  if (target == "torch.ops.aten.split_with_sizes.default") {
+    return StandaloneShortcut::kSplitWithSizes;
+  }
+  if (target == "torch.ops.aten.squeeze.dim") {
+    return StandaloneShortcut::kSqueezeDim;
+  }
+  if (target == "torch.ops.aten.expand.default") {
+    return StandaloneShortcut::kExpand;
+  }
   return StandaloneShortcut::kNone;
 }
 } // namespace
@@ -694,18 +714,26 @@ Launch::Launch(
   standaloneShortcut = standaloneShortcutForTarget(standaloneNode->target());
   // prim.ListPack is metadata-only only when it builds a TensorList; a SymInt /
   // int list packs scalars, which the kListPack shortcut cannot handle, so
-  // leave those on the generic path.
+  // leave those on the generic path. The same holds for the unpack: its input
+  // is the list, so the type to check is the operand's, not the output's.
   if (standaloneShortcut == StandaloneShortcut::kListPack &&
       (standaloneNode->outputs().empty() ||
        standaloneNode->outputs()[0]->type().kind() !=
            nativert::Type::Kind::TensorList)) {
     standaloneShortcut = StandaloneShortcut::kNone;
   }
+  if (standaloneShortcut == StandaloneShortcut::kListUnpack &&
+      (standaloneNode->inputs().empty() ||
+       standaloneNode->inputs()[0].value->type().kind() !=
+           nativert::Type::Kind::TensorList)) {
+    standaloneShortcut = StandaloneShortcut::kNone;
+  }
   auto* meta = Registry::metadata(standaloneNode->target());
   // prim.ListPack has no registry entry but is metadata-only by definition;
   // every other op's metadata-only status comes from its Metadata.
-  metadataOnly =
-      meta ? meta->metadataOnly : (standaloneNode->target() == "prim.ListPack");
+  metadataOnly = meta ? meta->metadataOnly
+                      : (standaloneNode->target() == "prim.ListPack" ||
+                         standaloneNode->target() == "prim.ListUnpack");
   if (!meta || meta->argumentMeta.empty()) {
     return;
   }
@@ -1529,6 +1557,9 @@ void fillLaunchParams(
             paramBase + launch.tensorOffsets[i]);
       }
     }
+    TORCH_CHECK(
+        launch.scalarsInFrame.size() == launch.scalarOffsets.size(),
+        "scalarsInFrame/scalarOffsets size mismatch");
     for (size_t i = 0; i < launch.scalarsInFrame.size(); ++i) {
       fillScalarParam(
           frame.getIValue(launch.scalarsInFrame[i]),
@@ -1607,6 +1638,13 @@ void fillLaunchParams(
   }
 
   // Fill output params, recording values and offsets.
+  //
+  // Every index into a 'launch' vector below is bounds-checked where it is
+  // used -- by this loop's own bound, or by an explicit size test in the same
+  // condition. ParameterUncheckedArrayBounds credits neither, only an
+  // emptiness assert on the parameter, which would state a false invariant:
+  // an op with no tensor-typed outputs legitimately has these empty.
+  // NOLINTBEGIN(facebook-hte-ParameterUncheckedArrayBounds)
   for (size_t i = 0; i < launch.actualOutputs.size(); ++i) {
     auto* formalValue = orderedInputs[numInputs + i];
     if (formalValue->type().kind() == nativert::Type::Kind::TensorList) {
@@ -1689,6 +1727,7 @@ void fillLaunchParams(
         returnBegin,
         returnEnd);
   }
+  // NOLINTEND(facebook-hte-ParameterUncheckedArrayBounds)
 
   // Fill constant params (first time only, constants don't change).
   auto constantOffset = kernelOp->constantAreaOffset();
@@ -2188,10 +2227,50 @@ void CompositeInvocation::gatherLaunches(
             state.kernelMap,
             idToValue,
             reusableIds_);
-        // If any tensor input or output is None, skip this kernel
-        // (set numElements=0 so makeGrid assigns 0 blocks).
-        for (auto inputId : data.actualInputs) {
-          auto& iv = state.frame->getIValue(inputId);
+        // If a tensor input this kernel does NOT produce itself is None, skip
+        // the kernel (set numElements=0 so makeGrid assigns 0 blocks). Two
+        // kinds of input can be None without meaning "not ready":
+        //
+        //  - A value the op computes itself. Its producer is one of the op's
+        //    own nodes, so the launch writes it before the code that reads it
+        //    (ordered by the op's internal barriers); it is simply not
+        //    materialized yet at host sizing time.
+        //  - A non-tensor. An absent optional argument -- clamp's `min`, say --
+        //    is legitimately None and says nothing about readiness.
+        //
+        // Counting either one starved the launch to a single block: it zeroed
+        // numElements and left the cg path to rebuild a size from static
+        // shapes alone.
+        const auto& opInputs = launch.op->orderedInputs();
+        const auto& opNodes = launch.op->allNodes();
+        auto numOpInputs = static_cast<size_t>(launch.op->numInputs());
+        // orderedInputs is the inputs followed by the outputs, and
+        // actualInputs is translated from its first numInputs entries, so
+        // these two sizes always agree. Scanning fewer than all the actual
+        // inputs would let a None slip past and starve the launch to a single
+        // block, so this is checked rather than clamped.
+        TORCH_CHECK(
+            data.actualInputs.size() == numOpInputs &&
+                numOpInputs <= opInputs.size(),
+            "Kernel op input count mismatch: ",
+            data.actualInputs.size(),
+            " actual vs ",
+            numOpInputs,
+            " formal of ",
+            opInputs.size(),
+            " ordered");
+        for (size_t k = 0; k < numOpInputs; ++k) {
+          const auto* formal = opInputs[k];
+          auto kind = formal->type().kind();
+          if (kind != nativert::Type::Kind::Tensor &&
+              kind != nativert::Type::Kind::TensorList) {
+            continue;
+          }
+          const auto* producer = formal->producer();
+          if (producer != nullptr && opNodes.count(producer) > 0) {
+            continue;
+          }
+          auto& iv = state.frame->getIValue(data.actualInputs[k]);
           if (iv.isNone()) {
             data.numElements = 0;
             break;
