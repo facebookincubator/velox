@@ -5994,7 +5994,8 @@ using MarkSortedNodePtr = std::shared_ptr<const MarkSortedNode>;
 /// Optimized version of a WindowNode for a single row_number, rank or
 /// dense_rank function with a limit over sorted partitions. The output of this
 /// node contains all input columns followed by an optional
-/// 'rowNumberColumnName' BIGINT column.
+/// 'rowNumberColumnName' BIGINT column, with rows within each partition emitted
+/// in ascending order of sorting keys (matching WindowNode).
 /// TODO: This node will be renamed to TopNRank or TopNRowNode once all the
 /// support for handling rank and dense_rank is committed to Velox.
 class TopNRowNumberNode : public PlanNode {
