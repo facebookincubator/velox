@@ -1391,6 +1391,94 @@ TEST_F(IcebergReadTest, targetTableRowIdSynthesis) {
       .assertResults({expected});
 }
 
+// Info columns arrive as strings on the split and are parsed at read time.
+// A value the coordinator could not have produced means the split metadata is
+// corrupt, so the reader must fail loudly rather than silently substituting a
+// default: $first_row_id and $data_sequence_number both feed V3 row lineage,
+// and a wrong value there mislabels every row in the file.
+class IcebergInfoColumnValidationTest : public IcebergReadTest {
+ protected:
+  // Runs a scan of a single BIGINT column with 'infoColumns' attached to the
+  // split, projecting 'outputType' (which decides whether the row-lineage or
+  // MERGE row-id parsing paths run at all).
+  void assertScanFails(
+      const std::unordered_map<std::string, std::string>& infoColumns,
+      const RowTypePtr& outputType,
+      const std::string& expectedMessage) {
+    std::vector<RowVectorPtr> inputVectors = {
+        makeRowVector({"c0"}, {makeFlatVector<int64_t>({10, 20, 30})})};
+    auto dataFilePath = TempFilePath::create();
+    writeToFile(dataFilePath->getPath(), inputVectors);
+
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan(test::kIcebergConnectorId)
+                    .outputType(outputType)
+                    .dataColumns(ROW({"c0"}, {BIGINT()}))
+                    .endTableScan()
+                    .planNode();
+
+    VELOX_ASSERT_THROW(
+        exec::test::AssertQueryBuilder(plan)
+            .splits({makeIcebergSplitWithInfoColumns(
+                dataFilePath->getPath(), infoColumns)})
+            .copyResults(pool()),
+        expectedMessage);
+  }
+
+  // Projecting _row_id is what makes the reader parse $first_row_id.
+  RowTypePtr rowLineageOutputType() const {
+    return ROW(
+        {"c0", IcebergMetadataColumn::kRowIdColumnName}, {BIGINT(), BIGINT()});
+  }
+
+  // Projecting $target_table_row_id is what makes the reader parse $spec_id.
+  RowTypePtr targetRowIdOutputType() const {
+    return ROW(
+        {"c0", IcebergMetadataColumn::kTargetTableRowIdColumnName},
+        {BIGINT(),
+         ROW({"file_path", "row_position", "spec_id", "partition_data"},
+             {VARCHAR(), BIGINT(), INTEGER(), VARCHAR()})});
+  }
+};
+
+TEST_F(IcebergInfoColumnValidationTest, rejectsNonNumericFirstRowId) {
+  assertScanFails(
+      {{IcebergMetadataColumn::kFirstRowIdInfoColumn, "not-a-number"}},
+      rowLineageOutputType(),
+      "Invalid $first_row_id value in split info columns");
+}
+
+TEST_F(IcebergInfoColumnValidationTest, rejectsNegativeFirstRowId) {
+  // Parses cleanly but is out of range: row ids are file-absolute offsets.
+  assertScanFails(
+      {{IcebergMetadataColumn::kFirstRowIdInfoColumn, "-1"}},
+      rowLineageOutputType(),
+      "First row ID must be non-negative");
+}
+
+TEST_F(IcebergInfoColumnValidationTest, rejectsNonNumericDataSequenceNumber) {
+  assertScanFails(
+      {{IcebergMetadataColumn::kFirstRowIdInfoColumn, "0"},
+       {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "abc"}},
+      rowLineageOutputType(),
+      "Invalid $data_sequence_number value in split info columns");
+}
+
+TEST_F(IcebergInfoColumnValidationTest, rejectsNegativeDataSequenceNumber) {
+  assertScanFails(
+      {{IcebergMetadataColumn::kFirstRowIdInfoColumn, "0"},
+       {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "-5"}},
+      rowLineageOutputType(),
+      "Data sequence number must be non-negative");
+}
+
+TEST_F(IcebergInfoColumnValidationTest, rejectsNonNumericSpecId) {
+  assertScanFails(
+      {{IcebergMetadataColumn::kSpecIdInfoColumn, "spec-seven"}},
+      targetRowIdOutputType(),
+      "Invalid $spec_id value in split info columns");
+}
+
 TEST_F(IcebergReadTest, flatMapAsStruct) {
   // Write a DWRF file with a MAP<BIGINT, DOUBLE> column.
   auto mapType = MAP(BIGINT(), DOUBLE());

@@ -468,6 +468,42 @@ TEST_F(IcebergMergeSinkTest, dataInputTypeNamesComeFromHandleNotSource) {
 
 // VELOX_ENABLE_PARQUET guard removed: rely on the iceberg_connector
 // target's unconditional Parquet writer dependency.
+TEST_F(IcebergMergeSinkTest, appendDataIgnoresNullAndEmptyPages) {
+  auto tempDir = TempDirectoryPath::create();
+  auto sink = makeSink(tempDir->getPath());
+
+  // Neither page carries rows, so neither sub-sink is driven and no operation
+  // byte is validated.
+  sink->appendData(nullptr);
+  sink->appendData(makeInput(
+      /*ids=*/std::vector<std::optional<int64_t>>{},
+      /*names=*/std::vector<std::optional<std::string>>{},
+      /*operations=*/std::vector<int8_t>{},
+      /*filePaths=*/std::vector<std::optional<std::string>>{},
+      /*positions=*/std::vector<std::optional<int64_t>>{},
+      /*insertFromUpdate=*/std::vector<int8_t>{}));
+
+  EXPECT_TRUE(sink->finish());
+  EXPECT_TRUE(sink->close().empty());
+}
+
+TEST_F(IcebergMergeSinkTest, abortIsIdempotent) {
+  auto tempDir = TempDirectoryPath::create();
+  auto sink = makeSink(tempDir->getPath());
+
+  sink->appendData(makeInput(
+      /*ids=*/{1},
+      /*names=*/{{std::string("a")}},
+      /*operations=*/{IMS::kInsertOperationNumber},
+      /*filePaths=*/{std::nullopt},
+      /*positions=*/{std::nullopt},
+      /*insertFromUpdate=*/{0}));
+
+  // The second abort must not re-enter the sub-sinks, which are not safe to
+  // abort twice.
+  sink->abort();
+  sink->abort();
+}
 
 } // namespace
 } // namespace facebook::velox::connector::hive::iceberg::test
