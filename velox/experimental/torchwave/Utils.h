@@ -259,6 +259,49 @@ void forArguments(const Metadata& meta, NodeCP node, Func&& func) {
   }
 }
 
+/// Maps a node input position to the position of the matching argument in the
+/// op's function schema, which is what argumentMeta is indexed by. The two
+/// coincide only when every schema argument arrives as an input. An argument
+/// supplied as a constant attribute instead -- tw.scatter's 'dim', declared
+/// second in the schema but carried as an attribute -- shifts every later
+/// input, so indexing argumentMeta by input position reads a neighbouring
+/// argument's flags. Matching by name is what forArguments already does.
+/// Returns 'inputIdx' unchanged when there is nothing to match against.
+inline size_t
+schemaArgIndex(const Metadata& meta, NodeCP node, size_t inputIdx) {
+  const auto& inputs = node->inputs();
+  if (inputIdx >= inputs.size()) {
+    return inputIdx;
+  }
+  const auto& name = inputs[inputIdx].name;
+  if (meta.functionSchema) {
+    const auto& args = meta.functionSchema->arguments();
+    for (size_t i = 0; i < args.size(); ++i) {
+      if (args[i].name() == name) {
+        return i;
+      }
+    }
+  } else {
+    for (size_t i = 0; i < meta.argumentNames.size(); ++i) {
+      if (meta.argumentNames[i] == name) {
+        return i;
+      }
+    }
+  }
+  return inputIdx;
+}
+
+/// The ArgumentMeta for the node input at 'inputIdx', resolved through
+/// schemaArgIndex. Null when the op has no metadata entry for that argument.
+inline const ArgumentMeta*
+argMetaForInput(const Metadata* meta, NodeCP node, size_t inputIdx) {
+  if (meta == nullptr) {
+    return nullptr;
+  }
+  const auto idx = schemaArgIndex(*meta, node, inputIdx);
+  return idx < meta->argumentMeta.size() ? &meta->argumentMeta[idx] : nullptr;
+}
+
 /// Visits sorted attributes of each node reachable from 'node' in dependency
 /// order. Skips values in 'inputs' and already-visited nodes. Calls
 /// func(node, attr) for each attribute in alphabetical order per node.
