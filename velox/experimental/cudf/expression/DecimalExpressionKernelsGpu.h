@@ -93,8 +93,9 @@ __int128_t getDecimalScalarValue(
  * @brief Dispatches a per-row device loop for fixed-point decimal division.
  *
  * Computes (lhs * rescaleFactor) / rhs with half-away-from-zero rounding on the
- * remainder, writing into out. Input nulls are written as null in the output
- * null mask. A zero divisor sets the division-by-zero status bit.
+ * remainder, writing into out. The host must install the null stencil on out
+ * (bitmask_and of the operands) before launch; the kernel skips null rows. A
+ * zero divisor sets the division-by-zero status bit.
  *
  * @param inType DECIMAL64 or DECIMAL128 input storage width selector.
  * @param outType DECIMAL64 or DECIMAL128 output storage width selector.

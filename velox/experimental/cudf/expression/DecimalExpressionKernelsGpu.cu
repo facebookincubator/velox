@@ -74,12 +74,16 @@ constexpr __int128_t kLongDecimalMin = -kLongDecimalPowerOfTen38 + 1;
 constexpr int32_t kDecimalOverflowBit = 1;
 constexpr int32_t kDecimalDivByZeroBit = 2;
 
-__device__ inline void markDecimalOverflow(int32_t* overflowFlag) {
-  atomicOr(overflowFlag, kDecimalOverflowBit);
+__device__ inline void markError(int32_t* overflowFlag, DecimalBinaryOpStatus status) {
+  atomicOr(overflowFlag, static_cast<int32_t>(status));
 }
 
-__device__ inline void markDecimalDivByZero(int32_t* overflowFlag) {
-  atomicOr(overflowFlag, kDecimalDivByZeroBit);
+// Host precomputes the output null stencil (bitmask_and / copy_bitmask) before
+// the kernel. A null mask pointer of nullptr means every row is active.
+__device__ inline bool isRowActive(
+    cudf::bitmask_type const* nullMask,
+    int32_t idx) {
+  return nullMask == nullptr || cudf::bit_is_set(nullMask, idx);
 }
 
 // Maps the raw device overflowFlag bits to a DecimalBinaryOpStatus. Division by
@@ -153,7 +157,7 @@ __device__ OutT decimalDivideImpl(
   unsigned __int128 scaled = uNum * uRescaleFactor;
   // Match Velox CPU checkedMultiply on rescale.
   if (uRescaleFactor != 0 && scaled / uRescaleFactor != uNum) {
-    markDecimalOverflow(overflowFlag);
+    markError(overflowFlag, DecimalBinaryOpStatus::kOverflow);
     return OutT{0};
   }
 
@@ -166,21 +170,21 @@ __device__ OutT decimalDivideImpl(
   if (remainder > (uDenom - 1) / 2) {
     // Round-up would wrap unsigned quotient; CPU path would overflow too.
     if (quotient >= kUnsigned128Max) {
-      markDecimalOverflow(overflowFlag);
+      markError(overflowFlag, DecimalBinaryOpStatus::kOverflow);
       return OutT{0};
     }
     ++quotient;
   }
 
   if (!fitsRepresentableInt128(quotient, negative)) {
-    markDecimalOverflow(overflowFlag);
+    markError(overflowFlag, DecimalBinaryOpStatus::kOverflow);
     return OutT{0};
   }
 
   __int128_t const result = signedFromUnsigned(quotient, negative);
   // Match Velox CPU DecimalUtil::valueInRange after divide.
   if (result < kLongDecimalMin || result > kLongDecimalMax) {
-    markDecimalOverflow(overflowFlag);
+    markError(overflowFlag, DecimalBinaryOpStatus::kOverflow);
     return OutT{0};
   }
 
@@ -194,15 +198,16 @@ struct DivideFunctor {
   cudf::mutable_column_device_view out;
   __int128_t rescaleFactor;
   int32_t* overflowFlag;
+  cudf::bitmask_type const* nullMask;
 
   __device__ void operator()(cudf::size_type idx) const {
-    if (lhs.is_null(idx) || rhs.is_null(idx)) {
-      out.set_null(idx);
+    // Null stencil is applied on the host (bitmask_and); skip inactive rows
+    // instead of calling set_null (a device-wide atomic per row).
+    if (!isRowActive(nullMask, idx)) {
       return;
     }
     if (rhs.element<InT>(idx) == 0) {
-      markDecimalDivByZero(overflowFlag);
-      out.set_null(idx);
+      markError(overflowFlag, DecimalBinaryOpStatus::kDivisionByZero);
       return;
     }
     out.element<OutT>(idx) = decimalDivideImpl<OutT>(
@@ -220,15 +225,14 @@ struct DivideLhsScalarFunctor {
   cudf::mutable_column_device_view out;
   __int128_t rescaleFactor;
   int32_t* overflowFlag;
+  cudf::bitmask_type const* nullMask;
 
   __device__ void operator()(cudf::size_type idx) const {
-    if (rhs.is_null(idx)) {
-      out.set_null(idx);
+    if (!isRowActive(nullMask, idx)) {
       return;
     }
     if (rhs.element<InColT>(idx) == 0) {
-      markDecimalDivByZero(overflowFlag);
-      out.set_null(idx);
+      markError(overflowFlag, DecimalBinaryOpStatus::kDivisionByZero);
       return;
     }
     out.element<OutT>(idx) = decimalDivideImpl<OutT>(
@@ -243,15 +247,14 @@ struct DivideRhsScalarFunctor {
   cudf::mutable_column_device_view out;
   __int128_t rescaleFactor;
   int32_t* overflowFlag;
+  cudf::bitmask_type const* nullMask;
 
   __device__ void operator()(cudf::size_type idx) const {
-    if (lhs.is_null(idx)) {
-      out.set_null(idx);
+    if (!isRowActive(nullMask, idx)) {
       return;
     }
     if (rhsValue == 0) {
-      markDecimalDivByZero(overflowFlag);
-      out.set_null(idx);
+      markError(overflowFlag, DecimalBinaryOpStatus::kDivisionByZero);
       return;
     }
     out.element<OutT>(idx) = decimalDivideImpl<OutT>(
@@ -306,7 +309,12 @@ struct divideColumnColumnKernel {
         lhs.size(),
         [&](int32_t* overflowFlag) {
           return DivideFunctor<InT, OutT>{
-              *lhsDev, *rhsDev, *outDev, rescaleFactor, overflowFlag};
+              *lhsDev,
+              *rhsDev,
+              *outDev,
+              rescaleFactor,
+              overflowFlag,
+              out.null_mask()};
         },
         stream));
   }
@@ -335,7 +343,12 @@ struct divideColumnScalarKernel {
         lhs.size(),
         [&](int32_t* overflowFlag) {
           return DivideRhsScalarFunctor<InT, OutT>{
-              *lhsDev, rhsValue, *outDev, rescaleFactor, overflowFlag};
+              *lhsDev,
+              rhsValue,
+              *outDev,
+              rescaleFactor,
+              overflowFlag,
+              out.null_mask()};
         },
         stream));
   }
@@ -364,7 +377,12 @@ struct divideScalarColumnKernel {
         rhs.size(),
         [&](int32_t* overflowFlag) {
           return DivideLhsScalarFunctor<InT, OutT>{
-              lhsValue, *rhsDev, *outDev, rescaleFactor, overflowFlag};
+              lhsValue,
+              *rhsDev,
+              *outDev,
+              rescaleFactor,
+              overflowFlag,
+              out.null_mask()};
         },
         stream));
   }
@@ -445,11 +463,6 @@ namespace {
 
 using errc = cudf::errc;
 
-__device__ inline bool
-isRowActive(cudf::bitmask_type const* nullMask, bool hasNullMask, int32_t idx) {
-  return !hasNullMask || cudf::bit_is_set(nullMask, idx);
-}
-
 template <typename Rep>
 __device__ numeric::decimal<Rep> makeDecimal(
     Rep value,
@@ -514,7 +527,7 @@ __device__ void evalDecimalBinaryRow(
   // which validates the divisor before rescaling). rhs is always the divisor
   // for MOD across all operand orderings.
   if (op == cudf::binary_operator::MOD && rhsDec.value() == Rep{0}) {
-    markDecimalDivByZero(overflowFlag);
+    markError(overflowFlag, DecimalBinaryOpStatus::kDivisionByZero);
     out[idx] = OutRep{0};
     return;
   }
@@ -531,7 +544,7 @@ __device__ void evalDecimalBinaryRow(
     auto lhsRescaled = checkedRescale<Rep>(lhsDec, outScale);
     auto rhsRescaled = checkedRescale<Rep>(rhsDec, outScale);
     if (!lhsRescaled.has_value() || !rhsRescaled.has_value()) {
-      markDecimalOverflow(overflowFlag);
+      markError(overflowFlag, DecimalBinaryOpStatus::kOverflow);
       out[idx] = OutRep{0};
       return;
     }
@@ -553,9 +566,9 @@ __device__ void evalDecimalBinaryRow(
   auto opResult = applyCheckedBinOp<Rep>(op, lhsDec, rhsDec);
   if (!opResult.has_value()) {
     if (opResult.error() == errc::DIVISION_BY_ZERO) {
-      markDecimalDivByZero(overflowFlag);
+      markError(overflowFlag, DecimalBinaryOpStatus::kDivisionByZero);
     } else {
-      markDecimalOverflow(overflowFlag);
+      markError(overflowFlag, DecimalBinaryOpStatus::kOverflow);
     }
     out[idx] = OutRep{0};
     return;
@@ -563,7 +576,7 @@ __device__ void evalDecimalBinaryRow(
 
   auto rescaled = checkedRescale<Rep>(opResult.value(), outScale);
   if (!rescaled.has_value()) {
-    markDecimalOverflow(overflowFlag);
+    markError(overflowFlag, DecimalBinaryOpStatus::kOverflow);
     out[idx] = OutRep{0};
     return;
   }
@@ -571,7 +584,7 @@ __device__ void evalDecimalBinaryRow(
   auto precisionChecked =
       cudf::detail::ops::check_precision(rescaled.value(), outPrecision);
   if (!precisionChecked.has_value()) {
-    markDecimalOverflow(overflowFlag);
+    markError(overflowFlag, DecimalBinaryOpStatus::kOverflow);
     out[idx] = OutRep{0};
     return;
   }
@@ -590,11 +603,9 @@ struct DecimalBinaryColColFunctor {
   int32_t outPrecision;
   cudf::binary_operator op;
   cudf::bitmask_type const* nullMask;
-  bool hasNullMask;
 
   __device__ void operator()(int32_t idx) const {
-    bool const rowActive = isRowActive(nullMask, hasNullMask, idx);
-    if (!rowActive) {
+    if (!isRowActive(nullMask, idx)) {
       return;
     }
     evalDecimalBinaryRow<Rep, OutRep>(
@@ -621,11 +632,9 @@ struct DecimalBinaryLhsScalarFunctor {
   int32_t outPrecision;
   cudf::binary_operator op;
   cudf::bitmask_type const* nullMask;
-  bool hasNullMask;
 
   __device__ void operator()(int32_t idx) const {
-    bool const rowActive = isRowActive(nullMask, hasNullMask, idx);
-    if (!rowActive) {
+    if (!isRowActive(nullMask, idx)) {
       return;
     }
     evalDecimalBinaryRow<Rep, OutRep>(
@@ -652,11 +661,9 @@ struct DecimalBinaryRhsScalarFunctor {
   int32_t outPrecision;
   cudf::binary_operator op;
   cudf::bitmask_type const* nullMask;
-  bool hasNullMask;
 
   __device__ void operator()(int32_t idx) const {
-    bool const rowActive = isRowActive(nullMask, hasNullMask, idx);
-    if (!rowActive) {
+    if (!isRowActive(nullMask, idx)) {
       return;
     }
     evalDecimalBinaryRow<Rep, OutRep>(
@@ -696,8 +703,7 @@ int32_t launchDecimalBinaryColColKernel(
             outScale,
             outPrecision,
             op,
-            nullMask,
-            nullMask != nullptr};
+            nullMask};
       },
       stream);
 }
@@ -727,8 +733,7 @@ int32_t launchDecimalBinaryRhsScalarKernel(
             outScale,
             outPrecision,
             op,
-            nullMask,
-            nullMask != nullptr};
+            nullMask};
       },
       stream);
 }
@@ -758,8 +763,7 @@ int32_t launchDecimalBinaryLhsScalarKernel(
             outScale,
             outPrecision,
             op,
-            nullMask,
-            nullMask != nullptr};
+            nullMask};
       },
       stream);
 }

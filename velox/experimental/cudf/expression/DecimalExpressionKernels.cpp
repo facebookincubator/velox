@@ -24,6 +24,7 @@
 #include <cudf/column/column_factories.hpp>
 #include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/null_mask.hpp>
+#include <cudf/table/table_view.hpp>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -94,15 +95,17 @@ void checkDecimalDivideTypes(cudf::type_id inType, cudf::type_id outType) {
   }
 }
 
-void finalizeDivideOutputNullCount(
-    cudf::column& out,
-    rmm::cuda_stream_view stream) {
-  if (out.size() == 0) {
-    return;
-  }
-  auto const nullCount =
-      cudf::null_count(out.view().null_mask(), 0, out.size(), stream);
-  out.set_null_count(nullCount);
+/// Output column whose null stencil is already applied (bitmask_and /
+/// copy_bitmask). The divide kernel skips null rows instead of set_null.
+std::unique_ptr<cudf::column> makeDivideResultColumn(
+    cudf::size_type size,
+    cudf::data_type outputType,
+    rmm::device_buffer&& nullMask,
+    cudf::size_type nullCount,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  return cudf::make_fixed_width_column(
+      outputType, size, std::move(nullMask), nullCount, stream, mr);
 }
 
 } // namespace
@@ -176,8 +179,11 @@ std::unique_ptr<cudf::column> decimalDivide(
   const auto outType = outputType.id();
   checkDecimalDivideTypes(inType, outType);
 
-  auto out = cudf::make_fixed_width_column(
-      outputType, lhs.size(), cudf::mask_state::ALL_VALID, stream, mr);
+  // Precompute the null stencil so the kernel never calls set_null.
+  auto [nullMask, nullCount] =
+      cudf::bitmask_and(cudf::table_view({lhs, rhs}), stream, mr);
+  auto out = makeDivideResultColumn(
+      lhs.size(), outputType, std::move(nullMask), nullCount, stream, mr);
 
   const __int128_t rescaleFactor = DecimalUtil::kPowersOfTen[aRescale];
   checkDecimalBinaryOpStatus(
@@ -191,7 +197,6 @@ std::unique_ptr<cudf::column> decimalDivide(
           stream),
       cudf::binary_operator::DIV);
 
-  finalizeDivideOutputNullCount(*out, stream);
   return out;
 }
 
@@ -216,8 +221,14 @@ std::unique_ptr<cudf::column> decimalDivide(
     return makeAllNullDecimalColumn(outputType, lhs.size(), stream, mr);
   }
 
-  auto out = cudf::make_fixed_width_column(
-      outputType, lhs.size(), cudf::mask_state::ALL_VALID, stream, mr);
+  auto nullMask = cudf::copy_bitmask(lhs, stream, mr);
+  auto out = makeDivideResultColumn(
+      lhs.size(),
+      outputType,
+      std::move(nullMask),
+      lhs.null_count(),
+      stream,
+      mr);
 
   auto rhsValue = detail::getDecimalScalarValue(rhs, stream);
 
@@ -236,7 +247,6 @@ std::unique_ptr<cudf::column> decimalDivide(
           stream),
       cudf::binary_operator::DIV);
 
-  finalizeDivideOutputNullCount(*out, stream);
   return out;
 }
 
@@ -261,8 +271,14 @@ std::unique_ptr<cudf::column> decimalDivide(
     return makeAllNullDecimalColumn(outputType, rhs.size(), stream, mr);
   }
 
-  auto out = cudf::make_fixed_width_column(
-      outputType, rhs.size(), cudf::mask_state::ALL_VALID, stream, mr);
+  auto nullMask = cudf::copy_bitmask(rhs, stream, mr);
+  auto out = makeDivideResultColumn(
+      rhs.size(),
+      outputType,
+      std::move(nullMask),
+      rhs.null_count(),
+      stream,
+      mr);
 
   auto lhsValue = detail::getDecimalScalarValue(lhs, stream);
 
@@ -282,7 +298,6 @@ std::unique_ptr<cudf::column> decimalDivide(
           stream),
       cudf::binary_operator::DIV);
 
-  finalizeDivideOutputNullCount(*out, stream);
   return out;
 }
 

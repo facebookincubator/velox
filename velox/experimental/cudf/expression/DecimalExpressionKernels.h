@@ -30,9 +30,10 @@ namespace facebook::velox::cudf_velox {
 /**
  * @brief Element-wise decimal division of two columns.
  *
- * Runs the GPU divide into outputType. The kernel propagates input nulls. A
- * zero divisor fails the batch with "Division by zero"; arithmetic overflow
- * fails with "Decimal overflow in divide".
+ * Runs the GPU divide into outputType. Nulls are propagated via a host-side
+ * bitmask_and stencil before the kernel runs. A zero divisor fails the batch
+ * with "Division by zero"; arithmetic overflow fails with "Decimal overflow in
+ * divide".
  *
  * @param lhs Left-hand decimal operand column (DECIMAL64 or DECIMAL128).
  * @param rhs Right-hand decimal operand column (same type as lhs).
@@ -55,8 +56,8 @@ std::unique_ptr<cudf::column> decimalDivide(
  * @brief Element-wise decimal division of a column by a scalar.
  *
  * If the scalar is invalid, returns an all-null column of outputType;
- * otherwise the kernel propagates lhs nulls. A zero divisor fails the batch
- * with "Division by zero".
+ * otherwise lhs nulls are copied into the output stencil before the kernel. A
+ * zero divisor fails the batch with "Division by zero".
  *
  * @param lhs Left-hand decimal operand column.
  * @param rhs Right-hand decimal operand scalar.
@@ -78,8 +79,9 @@ std::unique_ptr<cudf::column> decimalDivide(
 /**
  * @brief Element-wise decimal division of a scalar by a column.
  *
- * Invalid lhs yields all-null output; otherwise the kernel propagates rhs
- * nulls. A zero divisor fails the batch with "Division by zero".
+ * Invalid lhs yields all-null output; otherwise rhs nulls are copied into the
+ * output stencil before the kernel. A zero divisor fails the batch with
+ * "Division by zero".
  *
  * @param lhs Left-hand decimal operand scalar.
  * @param rhs Right-hand decimal operand column.
