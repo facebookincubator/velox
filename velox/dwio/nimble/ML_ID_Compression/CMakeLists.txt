@@ -65,10 +65,130 @@ target_link_libraries(
 )
 
 # ---------------------------------------------------------------------------
-# Future driver targets (placeholders)
+# bench_decode_range: contiguous-range decode throughput heatmap.
 # ---------------------------------------------------------------------------
-# add_executable(nimble_mlidc_gather      bench_gather.cpp)
-# target_link_libraries(nimble_mlidc_gather ...)
-#
-# add_executable(nimble_mlidc_skip        bench_skip.cpp)
-# target_link_libraries(nimble_mlidc_skip ...)
+add_executable(nimble_mlidc_decode_range bench_decode_range.cpp)
+
+target_link_libraries(
+  nimble_mlidc_decode_range
+  nimble_mlidc_common
+  nimble_encodings
+  nimble_encodings_tests_utils
+  nimble_common
+  Folly::folly
+  velox_memory
+  gflags
+)
+
+# ---------------------------------------------------------------------------
+# bench_encode: encode throughput per encoder/dataset pair.
+# ---------------------------------------------------------------------------
+add_executable(nimble_mlidc_encode bench_encode.cpp)
+
+target_link_libraries(
+  nimble_mlidc_encode
+  nimble_mlidc_common
+  nimble_encodings
+  nimble_encodings_tests_utils
+  nimble_common
+  Folly::folly
+  velox_memory
+  gflags
+)
+
+# ---------------------------------------------------------------------------
+# bench_decode_point: single-probe point-lookup latency.
+# ---------------------------------------------------------------------------
+add_executable(nimble_mlidc_decode_point bench_decode_point.cpp)
+
+target_link_libraries(
+  nimble_mlidc_decode_point
+  nimble_mlidc_common
+  nimble_encodings
+  nimble_encodings_tests_utils
+  nimble_common
+  Folly::folly
+  velox_memory
+  gflags
+)
+
+# ---------------------------------------------------------------------------
+# bench_decode_gather: gather-pattern decode throughput.
+# ---------------------------------------------------------------------------
+add_executable(nimble_mlidc_decode_gather bench_decode_gather.cpp)
+
+target_link_libraries(
+  nimble_mlidc_decode_gather
+  nimble_mlidc_common
+  nimble_encodings
+  nimble_encodings_tests_utils
+  nimble_common
+  Folly::folly
+  velox_memory
+  gflags
+)
+
+# ---------------------------------------------------------------------------
+# bench_costmodel_oracle: validates SubIntSplit's DP cost model against an
+# oracle that actually encodes each candidate bit range.
+# ---------------------------------------------------------------------------
+add_executable(nimble_mlidc_costmodel_oracle bench_costmodel_oracle.cpp)
+
+target_link_libraries(
+  nimble_mlidc_costmodel_oracle
+  nimble_mlidc_common
+  nimble_encodings
+  nimble_encodings_tests_utils
+  nimble_common
+  Folly::folly
+  velox_memory
+  gflags
+)
+
+# ---------------------------------------------------------------------------
+# bench_index_oracle: sweeps FPE index types, Pareto frontier, scalarised oracle.
+# ---------------------------------------------------------------------------
+add_executable(nimble_mlidc_index_oracle bench_index_oracle.cpp)
+
+target_link_libraries(
+  nimble_mlidc_index_oracle
+  nimble_mlidc_common
+  nimble_encodings
+  nimble_encodings_tests_utils
+  nimble_common
+  Folly::folly
+  velox_memory
+  gflags
+)
+
+# ---------------------------------------------------------------------------
+# bench_ablation: progressive encoding-set restriction for SIS sections.
+# ---------------------------------------------------------------------------
+add_executable(nimble_mlidc_ablation bench_ablation.cpp)
+
+target_link_libraries(
+  nimble_mlidc_ablation
+  nimble_mlidc_common
+  nimble_encodings
+  nimble_encodings_tests_utils
+  nimble_common
+  Folly::folly
+  velox_memory
+  gflags
+)
+
+# ---------------------------------------------------------------------------
+# bench_smoke: encode + decode correctness check (no timing).
+# ---------------------------------------------------------------------------
+add_executable(nimble_mlidc_smoke bench_smoke.cpp)
+
+target_link_libraries(
+  nimble_mlidc_smoke
+  nimble_mlidc_common
+  nimble_encodings
+  nimble_encodings_tests_utils
+  nimble_common
+  Folly::folly
+  velox_memory
+  gflags
+)
