@@ -16,6 +16,7 @@
 
 #include "gtest/gtest.h"
 
+#include "velox/core/Expressions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -209,6 +210,64 @@ TEST_F(EvalSimplifiedTest, dereference) {
         {wrapInDictionary(indices, c0), wrapInDictionary(indices, c1)});
     testDereference("c0.c0", makeRowVector({data}));
     testDereference("c0.c1", makeRowVector({data}));
+  }
+
+  // Ordinal dereference of a later field when names are duplicate or empty.
+  // Name lookup returns the first unnamed field, so the stored ordinal must
+  // win.
+  {
+    auto c0 = makeFlatVector<int64_t>({11, 22, 33, 44, 55});
+    auto c1 = makeFlatVector<bool>({false, true, false, true, false});
+
+    auto testOrdinalDereference = [&](const std::string& trace,
+                                      const VectorPtr& nested,
+                                      const RowTypePtr& nestedType) {
+      SCOPED_TRACE(trace);
+      auto input = makeRowVector({"nested"}, {nested});
+      auto dereference = std::make_shared<core::DereferenceTypedExpr>(
+          BOOLEAN(),
+          std::make_shared<core::FieldAccessTypedExpr>(nestedType, "nested"),
+          1);
+      SelectivityVector rows(input->size());
+      exec::ExprSet exprSetCommon({dereference}, &execCtx_);
+      exec::ExprSetSimplified exprSetSimplified({dereference}, &execCtx_);
+      compareEvals(exprSetCommon, exprSetSimplified, input, rows);
+    };
+
+    auto nested = makeRowVector({"", ""}, {c0, c1});
+    auto nestedType = asRowType(nested->type());
+    ASSERT_EQ(nestedType->getChildIdx(""), 0);
+
+    // Sanity-check the expected values on the flat case before enforcing
+    // common vs simplified parity on the remaining encodings.
+    {
+      SCOPED_TRACE("flat");
+      auto input = makeRowVector({"nested"}, {nested});
+      auto dereference = std::make_shared<core::DereferenceTypedExpr>(
+          BOOLEAN(),
+          std::make_shared<core::FieldAccessTypedExpr>(nestedType, "nested"),
+          1);
+      ASSERT_EQ(dereference->index(), 1);
+      exec::ExprSet exprSetCommon({dereference}, &execCtx_);
+      exec::ExprSetSimplified exprSetSimplified({dereference}, &execCtx_);
+      assertEqualVectors(c1, evaluate(exprSetCommon, input));
+      assertEqualVectors(c1, evaluate(exprSetSimplified, input));
+    }
+
+    // Parent row with nulls.
+    auto nestedWithNulls = makeRowVector({"", ""}, {c0, c1});
+    nestedWithNulls->setNull(1, true);
+    nestedWithNulls->setNull(3, true);
+    testOrdinalDereference("parent nulls", nestedWithNulls, nestedType);
+
+    // Dictionary-wrapped input.
+    auto indices = makeIndices({4, 3, 2, 1, 0});
+    testOrdinalDereference(
+        "dictionary", wrapInDictionary(indices, nested), nestedType);
+
+    // Constant-wrapped input.
+    testOrdinalDereference(
+        "constant", BaseVector::wrapInConstant(5, 2, nested), nestedType);
   }
 }
 
