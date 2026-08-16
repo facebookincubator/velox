@@ -30,13 +30,6 @@
 #include "velox/dwio/nimble/ML_ID_Compression/CachePolicy.h"
 #include "velox/dwio/nimble/ML_ID_Compression/MeasureLoop.h"
 
-#include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
-#include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
-#include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
-#include "velox/dwio/nimble/encodings/RLEEncoding.h"
-#include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
-#include "velox/dwio/nimble/encodings/TrivialEncoding.h"
-
 DEFINE_int32(grid, 16, "Grid resolution per axis; ~grid^2/2 cells in triangle");
 DEFINE_string(cache_state, "hot", "hot | cold-payload | cold-all");
 DEFINE_bool(validate, false, "Round-trip check before measuring");
@@ -48,13 +41,6 @@ namespace {
 using Elem = int64_t;
 constexpr size_t kElemSize = sizeof(Elem);
 
-bool parseCacheState(const std::string& text, CacheState& out) {
-  if (text == "hot") { out = CacheState::Hot; return true; }
-  if (text == "cold-payload") { out = CacheState::ColdPayload; return true; }
-  if (text == "cold-all") { out = CacheState::ColdAll; return true; }
-  return false;
-}
-
 struct Cell { size_t a{}; size_t b{}; };
 
 Cell resolveCell(double aFrac, double bFrac, size_t n) {
@@ -65,61 +51,6 @@ Cell resolveCell(double aFrac, double bFrac, size_t n) {
   if (c.a >= n) c.a = n - 1;
   if (c.a + c.b > n) c.b = n - c.a;
   return c;
-}
-
-std::vector<EncoderEntry<Elem>> buildEncoders() {
-  std::vector<EncoderEntry<Elem>> encoders;
-  encoders.push_back(makeEncoderEntry<TrivialEncoding<Elem>>(
-      "Trivial", "Baseline", "trivial", true, true, false));
-  encoders.push_back(makeEncoderEntry<FixedBitWidthEncoding<Elem>>(
-      "FixedBitWidth", "Baseline", "fbw", true, true, false));
-  encoders.push_back(makeEncoderEntry<DictionaryEncoding<Elem>>(
-      "Dictionary", "Baseline", "dict", true, false, false));
-  encoders.push_back(makeEncoderEntry<RLEEncoding<Elem>>(
-      "RLE", "Baseline", "rle", true, true, false));
-
-  const std::array<std::string, 4> fpeNames = {
-      "fpe_noindex", "fpe_pertier", "fpe_tagtag", "fpe_elias"};
-  const std::array<bool, 4> fpeRA = {false, true, true, true};
-  const std::array<bool, 4> fpeSkip = {false, true, true, true};
-  for (int idx = 0; idx < 4; ++idx) {
-    EncoderEntry<Elem> entry;
-    entry.name = "FPE/" + fpeNames[idx];
-    entry.family = "FrequencyPartition";
-    entry.variant = fpeNames[idx];
-    entry.isSequential = true;
-    entry.fastSkip = fpeSkip[idx];
-    entry.randomAccess = fpeRA[idx];
-    entry.factory = [idx](const Vector<Elem>& data,
-                          const Encoding::Options& opts) {
-      auto impl = std::make_unique<
-          NimbleBenchTargetImpl<FrequencyPartitionEncoding<Elem>>>();
-      Encoding::Options o = opts;
-      o.frequencyPartitionIndex = static_cast<uint8_t>(idx);
-      impl->target.encode(data, o);
-      return std::unique_ptr<NimbleBenchTargetBase<Elem>>(std::move(impl));
-    };
-    encoders.push_back(std::move(entry));
-  }
-
-  {
-    EncoderEntry<Elem> entry;
-    entry.name = "SIS/realNested";
-    entry.family = "SubIntSplit";
-    entry.variant = "real_nested";
-    entry.isSequential = false;
-    entry.fastSkip = false;
-    entry.randomAccess = false;
-    entry.factory = [](const Vector<Elem>& data,
-                       const Encoding::Options& opts) {
-      auto impl =
-          std::make_unique<NimbleBenchTargetImpl<SubIntSplitEncoding<Elem>>>();
-      impl->target.encode(data, opts, /*realNestedSelection=*/true);
-      return std::unique_ptr<NimbleBenchTargetBase<Elem>>(std::move(impl));
-    };
-    encoders.push_back(std::move(entry));
-  }
-  return encoders;
 }
 
 } // namespace
@@ -152,7 +83,7 @@ int main(int argc, char** argv) {
     for (double b : bFracs)
       if (a + b <= 1.0 + 1e-9) ++cellCount;
 
-  auto encoders = buildEncoders();
+  auto encoders = buildDefaultEncoders<Elem>();
   auto datasets = defaultInt64Datasets<Elem>();
   const CacheTopology topo = CacheTopology::detect();
 

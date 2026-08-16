@@ -14,17 +14,11 @@
  * limitations under the License.
  */
 
-// BenchCommon.h — shared infrastructure for the ML ID Compression benchmark
-// suite.  Provides NimbleBenchTarget<E>, CsvResultWriter, RunManifest,
-// EncoderEntry, DatasetEntry, and seeded dataset generators.
-//
-// Gated on NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS because it transitively
-// includes SubIntSplitEncoding.h via TestUtils.h.
-
 #pragma once
 
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 
+#include <array>
 #include <cstdint>
 #include <fstream>
 #include <functional>
@@ -43,6 +37,7 @@
 
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/ML_ID_Compression/CachePolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/BenchmarkUtils.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
@@ -239,16 +234,6 @@ class CsvResultWriter {
 
 namespace detail {
 
-inline std::string readFirstLine(const std::string& path) {
-  std::ifstream f(path);
-  if (!f.is_open()) {
-    return "";
-  }
-  std::string line;
-  std::getline(f, line);
-  return line;
-}
-
 inline std::string readFile(const std::string& path) {
   std::ifstream f(path);
   if (!f.is_open()) {
@@ -285,20 +270,12 @@ inline std::string cpuModel() {
 }
 
 inline folly::dynamic cacheTopology() {
-  folly::dynamic result = folly::dynamic::object;
-  const std::string base = "/sys/devices/system/cpu/cpu0/cache/";
-  for (int idx = 0; idx < 8; ++idx) {
-    std::string dir = base + "index" + std::to_string(idx) + "/";
-    std::string level = readFile(dir + "level");
-    std::string type = readFile(dir + "type");
-    std::string size = readFile(dir + "size");
-    if (level.empty() && type.empty()) {
-      break;
-    }
-    std::string key = "L" + level + "-" + type;
-    result[key] = size;
-  }
-  return result;
+  auto topo = CacheTopology::detect();
+  return folly::dynamic::object(
+      "l1d_bytes", static_cast<int64_t>(topo.l1dBytes))(
+      "l2_bytes", static_cast<int64_t>(topo.l2Bytes))(
+      "llc_bytes", static_cast<int64_t>(topo.llcBytes))(
+      "line_bytes", static_cast<int64_t>(topo.lineBytes));
 }
 
 inline std::string scalingGovernor() {
@@ -574,6 +551,69 @@ std::vector<DatasetEntry<T>> defaultInt64Datasets() {
                  }});
 
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Default 9-encoder suite shared across decode/encode/smoke drivers.
+// ---------------------------------------------------------------------------
+
+template <typename T>
+std::vector<EncoderEntry<T>> buildDefaultEncoders() {
+  std::vector<EncoderEntry<T>> encoders;
+
+  encoders.push_back(makeEncoderEntry<TrivialEncoding<T>>(
+      "Trivial", "Baseline", "trivial", true, true, false));
+  encoders.push_back(makeEncoderEntry<FixedBitWidthEncoding<T>>(
+      "FixedBitWidth", "Baseline", "fbw", true, true, false));
+  encoders.push_back(makeEncoderEntry<DictionaryEncoding<T>>(
+      "Dictionary", "Baseline", "dict", true, false, false));
+  encoders.push_back(makeEncoderEntry<RLEEncoding<T>>(
+      "RLE", "Baseline", "rle", true, true, false));
+
+  const std::array<std::string, 4> fpeNames = {
+      "fpe_noindex", "fpe_pertier", "fpe_tagtag", "fpe_elias"};
+  const std::array<bool, 4> fpeRA = {false, true, true, true};
+  const std::array<bool, 4> fpeSkip = {false, true, true, true};
+
+  for (int idx = 0; idx < 4; ++idx) {
+    EncoderEntry<T> entry;
+    entry.name = "FPE/" + fpeNames[idx];
+    entry.family = "FrequencyPartition";
+    entry.variant = fpeNames[idx];
+    entry.isSequential = true;
+    entry.fastSkip = fpeSkip[idx];
+    entry.randomAccess = fpeRA[idx];
+    entry.factory = [idx](const Vector<T>& data,
+                          const Encoding::Options& opts) {
+      auto impl = std::make_unique<
+          NimbleBenchTargetImpl<FrequencyPartitionEncoding<T>>>();
+      Encoding::Options o = opts;
+      o.frequencyPartitionIndex = static_cast<uint8_t>(idx);
+      impl->target.encode(data, o);
+      return std::unique_ptr<NimbleBenchTargetBase<T>>(std::move(impl));
+    };
+    encoders.push_back(std::move(entry));
+  }
+
+  {
+    EncoderEntry<T> entry;
+    entry.name = "SIS/realNested";
+    entry.family = "SubIntSplit";
+    entry.variant = "real_nested";
+    entry.isSequential = false;
+    entry.fastSkip = false;
+    entry.randomAccess = false;
+    entry.factory = [](const Vector<T>& data,
+                       const Encoding::Options& opts) {
+      auto impl =
+          std::make_unique<NimbleBenchTargetImpl<SubIntSplitEncoding<T>>>();
+      impl->target.encode(data, opts, /*realNestedSelection=*/true);
+      return std::unique_ptr<NimbleBenchTargetBase<T>>(std::move(impl));
+    };
+    encoders.push_back(std::move(entry));
+  }
+
+  return encoders;
 }
 
 } // namespace facebook::nimble::mlidc

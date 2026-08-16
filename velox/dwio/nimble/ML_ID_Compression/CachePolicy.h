@@ -84,6 +84,13 @@ inline const char* evictMethodName(EvictMethod m) {
   return "auto";
 }
 
+inline bool parseCacheState(const std::string& text, CacheState& out) {
+  if (text == "hot") { out = CacheState::Hot; return true; }
+  if (text == "cold-payload") { out = CacheState::ColdPayload; return true; }
+  if (text == "cold-all") { out = CacheState::ColdAll; return true; }
+  return false;
+}
+
 struct CacheTopology {
   size_t l1dBytes{};
   size_t l2Bytes{};

@@ -66,22 +66,6 @@ std::vector<IndexTypeEntry> indexTypes = {
     {"EliasFano", 3, true},
 };
 
-bool parseCacheState(const std::string& text, CacheState& out) {
-  if (text == "hot") {
-    out = CacheState::Hot;
-    return true;
-  }
-  if (text == "cold-payload") {
-    out = CacheState::ColdPayload;
-    return true;
-  }
-  if (text == "cold-all") {
-    out = CacheState::ColdAll;
-    return true;
-  }
-  return false;
-}
-
 std::vector<double> buildLambdaSweep() {
   std::vector<double> lambdas;
   for (int e = -6; e <= 2; ++e) {

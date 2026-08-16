@@ -57,8 +57,8 @@ struct EncodingInfo {
   bool hasCostModel;
 };
 
-inline std::vector<EncodingInfo> encodingInventory() {
-  return {
+inline const std::vector<EncodingInfo>& encodingInventory() {
+  static const std::vector<EncodingInfo> inv = {
       {EncodingType::Trivial, "Trivial", AccessClass::PureRA, true},
       {EncodingType::FixedBitWidth, "FixedBitWidth", AccessClass::PureRA, true},
       {EncodingType::Constant, "Constant", AccessClass::PureRA, true},
@@ -68,6 +68,7 @@ inline std::vector<EncodingInfo> encodingInventory() {
       {EncodingType::RLE, "RLE", AccessClass::PureSeq, true},
       {EncodingType::Varint, "Varint", AccessClass::PureSeq, true},
   };
+  return inv;
 }
 
 inline AccessClass accessClassOf(EncodingType t) {
@@ -152,92 +153,15 @@ inline SelectorResult selectSplitsRestricted(
     size_t fullCount,
     const SelectorConfig& cfg,
     const std::unordered_set<EncodingType>& allowed) {
-  if (samples.empty() || kBits <= 0) return {};
-  kBits = std::min(kBits, 64);
-
-  const MetricFlags requiredFlags = allCostModelRequiredFlags();
-  MetricCollector collector;
-
-  struct SegmentChoice {
-    double cost{std::numeric_limits<double>::infinity()};
-    EncodingType encoding{EncodingType::Trivial};
-  };
-
-  const int sz = kBits;
-  std::vector<SegmentChoice> bestCost(sz * sz);
-
-  BitRangeExtractor extractor(samples);
-  const size_t numSamples = samples.size();
-
-  for (int l = 0; l < sz; ++l) {
-    extractor.reset(l);
-    for (int r = l; r < sz; ++r) {
-      extractor.extend(r);
-      const auto& segValues = extractor.values();
-      const SegmentMetrics metrics =
-          collector.compute(segValues, requiredFlags);
-      const int bitWidth = r - l + 1;
-
-      EncodingType bestEnc = EncodingType::Trivial;
-      const double perSampleCost = bestCostBitsRestricted(
-          metrics, numSamples, bitWidth, bestEnc, allowed);
-
-      const double fullCost = perSampleCost *
-          static_cast<double>(fullCount) / static_cast<double>(numSamples);
-
-      bestCost[l * sz + r] = {fullCost, bestEnc};
-    }
-  }
-
-  std::vector<double> dp(sz + 1, std::numeric_limits<double>::infinity());
-  std::vector<int> prev(sz + 1, -1);
-  std::vector<EncodingType> chosen(sz + 1, EncodingType::Trivial);
-  dp[0] = 0.0;
-
-  for (int i = 1; i <= sz; ++i) {
-    for (int j = 0; j < i; ++j) {
-      const int width = i - j;
-      if (width < cfg.minSegmentWidth) continue;
-      const auto& choice = bestCost[j * sz + (i - 1)];
-      if (!std::isfinite(choice.cost)) continue;
-      const double splitCost = (j == 0) ? 0.0 : cfg.splitPenalty;
-      const double candidate = dp[j] + choice.cost + splitCost;
-      if (candidate < dp[i]) {
-        dp[i] = candidate;
-        prev[i] = j;
-        chosen[i] = choice.encoding;
-      }
-    }
-  }
-
-  SelectorResult result;
-  result.totalCost = dp[sz];
-
-  if (!std::isfinite(result.totalCost)) {
-    SegmentPlan fallback;
-    fallback.bitStart = 0;
-    fallback.bitEnd = sz - 1;
-    fallback.encoding = EncodingType::Trivial;
-    fallback.cost = bestCost[0 * sz + (sz - 1)].cost;
-    result.segments.push_back(fallback);
-    result.totalCost = fallback.cost;
-    return result;
-  }
-
-  int idx = sz;
-  while (idx > 0) {
-    const int start = prev[idx];
-    if (start < 0) break;
-    SegmentPlan plan;
-    plan.bitStart = start;
-    plan.bitEnd = idx - 1;
-    plan.encoding = chosen[idx];
-    plan.cost = bestCost[start * sz + (idx - 1)].cost;
-    result.segments.push_back(plan);
-    idx = start;
-  }
-  std::reverse(result.segments.begin(), result.segments.end());
-  return result;
+  return selectSplitsImpl(
+      samples, kBits, fullCount, cfg,
+      [&allowed](
+          const SegmentMetrics& m,
+          size_t numValues,
+          int bitWidth,
+          EncodingType& bestEnc) noexcept {
+        return bestCostBitsRestricted(m, numValues, bitWidth, bestEnc, allowed);
+      });
 }
 
 } // namespace detail_ablation

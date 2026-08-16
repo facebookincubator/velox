@@ -70,11 +70,9 @@ struct TimingSummary {
   int64_t min_ns{0};
 };
 
-/// Sorts `samples` in place, then returns median, p90, and min.
 inline TimingSummary summarize(std::vector<int64_t>& samples) {
-  std::sort(samples.begin(), samples.end());
   TimingSummary s;
-  s.min_ns = samples.empty() ? 0 : samples.front();
+  s.min_ns = minOf(samples);
   s.median_ns = percentileOf(samples, 0.5);
   s.p90_ns = percentileOf(samples, 0.9);
   return s;
