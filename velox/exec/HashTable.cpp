@@ -2096,7 +2096,21 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
     return listJoinResultsFastPath(
         iter, includeMisses, inputRows, hits, maxBytes);
   }
+  if (nextOffset_ == 0 || !hasDuplicates_) {
+    return listJoinResultsSingleHit(
+        iter, includeMisses, inputRows, hits, maxBytes);
+  }
+  return listJoinResultsInterleaved(
+      iter, includeMisses, inputRows, hits, maxBytes);
+}
 
+template <bool ignoreNullKeys>
+int32_t HashTable<ignoreNullKeys>::listJoinResultsSingleHit(
+    JoinResultIterator& iter,
+    bool includeMisses,
+    folly::Range<vector_size_t*> inputRows,
+    folly::Range<char**> hits,
+    uint64_t maxBytes) {
   size_t numOut = 0;
   auto maxOut = inputRows.size();
   uint64_t totalBytes{0};
@@ -2144,6 +2158,126 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
     }
   }
   return numOut;
+}
+
+template <bool ignoreNullKeys>
+int32_t HashTable<ignoreNullKeys>::listJoinResultsInterleaved(
+    JoinResultIterator& iter,
+    bool includeMisses,
+    folly::Range<vector_size_t*> inputRows,
+    folly::Range<char**> hits,
+    uint64_t maxBytes) {
+  if (iter.rows == nullptr || iter.rows->empty()) {
+    return 0;
+  }
+
+  size_t numOut = 0;
+  const auto maxOut = inputRows.size();
+  uint64_t totalBytes{0};
+
+  constexpr int32_t kNumParallelChains =
+      JoinResultIterator::kNumParallelChains;
+  constexpr int32_t kAheadWindow = JoinResultIterator::kAheadWindow;
+  const auto numProbeRows = iter.rows->size();
+  const bool hasEstimatedSize = iter.estimatedRowSize.has_value();
+  const uint64_t estimatedSize =
+      hasEstimatedSize ? iter.estimatedRowSize.value() : 0;
+  const auto& varSizeListColumns = iter.varSizeListColumns;
+  const uint64_t fixedSizeListColumnsSizeSum =
+      iter.fixedSizeListColumnsSizeSum;
+
+  auto emit = [&](vector_size_t probeRow, char* hit) -> bool {
+    inputRows[numOut] = probeRow; // NOLINT
+    hits[numOut] = hit;
+    if (hit != nullptr) {
+      totalBytes += hasEstimatedSize
+          ? estimatedSize
+          : (joinProjectedVarColumnsSize(varSizeListColumns, hit) +
+             fixedSizeListColumnsSizeSum);
+    }
+    ++numOut;
+    return numOut < maxOut && totalBytes < maxBytes;
+  };
+
+  while (true) {
+    if (iter.slotHead >= iter.numActive) {
+      iter.slotHead = 0;
+      iter.numActive = 0;
+      while (iter.numActive < kNumParallelChains &&
+             iter.lastRowIndex < numProbeRows) {
+        const auto row = (*iter.rows)[iter.lastRowIndex]; // NOLINT
+        auto* hit = (*iter.hits)[row]; // NOLINT
+        ++iter.lastRowIndex;
+        if (hit == nullptr && !includeMisses) {
+          continue;
+        }
+        iter.slotProbeRows[iter.numActive] = row;
+        iter.slotCursors[iter.numActive] = hit;
+        if (hit == nullptr) {
+          iter.bufferData[iter.numActive][0] = nullptr;
+          iter.bufferLength[iter.numActive] = 1;
+        } else {
+          iter.bufferLength[iter.numActive] = 0;
+          __builtin_prefetch(hit);
+        }
+        ++iter.numActive;
+      }
+      if (iter.numActive == 0) {
+        return numOut;
+      }
+    }
+
+    const int32_t bufferLength = iter.bufferLength[iter.slotHead];
+    if (bufferLength > 0) {
+      const auto probeRow = iter.slotProbeRows[iter.slotHead];
+      while (iter.drainPosition < bufferLength) {
+        auto* bufferedHit =
+            iter.bufferData[iter.slotHead][iter.drainPosition++];
+        if (!emit(probeRow, bufferedHit)) {
+          if (iter.drainPosition == bufferLength) {
+            // Fully drained; reset so the next call skips this slot's
+            // flush and advances slotHead.
+            iter.bufferLength[iter.slotHead] = 0;
+            iter.drainPosition = 0;
+          }
+          return numOut;
+        }
+      }
+      iter.bufferLength[iter.slotHead] = 0;
+      iter.drainPosition = 0;
+    }
+
+    char* headCursor = iter.slotCursors[iter.slotHead];
+    if (headCursor == nullptr) {
+      ++iter.slotHead;
+      continue;
+    }
+
+    const int32_t numActive = iter.numActive;
+    const int32_t slotHead = iter.slotHead;
+    for (int32_t i = slotHead; i < numActive; ++i) {
+      char* cursor = iter.slotCursors[i];
+      if (cursor != nullptr &&
+          (i == slotHead || iter.bufferLength[i] < kAheadWindow)) {
+        __builtin_prefetch(cursor + nextOffset_);
+      }
+    }
+
+    for (int32_t i = slotHead + 1; i < numActive; ++i) {
+      char* cursor = iter.slotCursors[i];
+      if (cursor == nullptr || iter.bufferLength[i] >= kAheadWindow) {
+        continue;
+      }
+      iter.bufferData[i][iter.bufferLength[i]++] = cursor;
+      iter.slotCursors[i] = nextRow(cursor);
+    }
+
+    const auto headRow = iter.slotProbeRows[slotHead];
+    iter.slotCursors[slotHead] = nextRow(headCursor);
+    if (!emit(headRow, headCursor)) {
+      return numOut;
+    }
+  }
 }
 
 template <bool ignoreNullKeys>

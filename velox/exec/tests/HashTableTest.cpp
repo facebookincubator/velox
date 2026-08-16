@@ -71,6 +71,10 @@ class HashTableTestHelper {
         mode, numNew, BaseHashTable::kNoSpillInputStartPartitionBit);
   }
 
+  void markHasDuplicates() {
+    table_->hasDuplicates_.set();
+  }
+
  private:
   explicit HashTableTestHelper(HashTable<ignoreNullKeys>* table)
       : table_(table) {
@@ -976,6 +980,100 @@ TEST_P(HashTableTest, listJoinResultsSize) {
         iter, true, inputRows, outputRows, testParam.maxBytes);
     ASSERT_EQ(numRows, testParam.expectedRows);
   }
+}
+
+TEST_P(HashTableTest, listJoinResultsInterleaved) {
+  std::vector<std::unique_ptr<VectorHasher>> keyHashers;
+  keyHashers.emplace_back(std::make_unique<VectorHasher>(BIGINT(), 0));
+  auto table = HashTable<true>::createForJoin(
+      std::move(keyHashers),
+      {BIGINT()},
+      /*allowDuplicates=*/true,
+      /*hasProbedFlag=*/false,
+      /*hasCountFlag=*/false,
+      1'000,
+      pool());
+
+  auto* rowContainer = table->rows();
+  const auto nextOffset = rowContainer->nextOffset();
+  ASSERT_GT(nextOffset, 0);
+
+  // The first chain advances long enough for the second chain to fill its
+  // ahead window and pause before it becomes head.
+  const std::vector<int32_t> chainLengths{10, 11, 3};
+  std::vector<std::vector<char*>> chains;
+  for (const auto chainLength : chainLengths) {
+    std::vector<char*> chain;
+    for (int32_t i = 0; i < chainLength; ++i) {
+      auto* row = rowContainer->newRow();
+      *reinterpret_cast<char**>(row + nextOffset) = nullptr;
+      chain.push_back(row);
+    }
+    for (int32_t i = 1; i < chainLength; ++i) {
+      *reinterpret_cast<char**>(chain[i - 1] + nextOffset) = chain[i];
+    }
+    chains.push_back(std::move(chain));
+  }
+
+  HashTableTestHelper<true>::create(table.get()).markHasDuplicates();
+  HashLookup lookup(table->hashers(), pool());
+  lookup.reset(4);
+  std::iota(lookup.rows.begin(), lookup.rows.end(), 0);
+  lookup.hits[0] = chains[0].front();
+  lookup.hits[1] = nullptr;
+  lookup.hits[2] = chains[1].front();
+  lookup.hits[3] = chains[2].front();
+
+  auto expected = [&](bool includeMisses) {
+    std::vector<vector_size_t> probeRows;
+    std::vector<char*> hits;
+    auto appendChain = [&](vector_size_t probeRow, const auto& chain) {
+      probeRows.insert(probeRows.end(), chain.size(), probeRow);
+      hits.insert(hits.end(), chain.begin(), chain.end());
+    };
+    appendChain(0, chains[0]);
+    if (includeMisses) {
+      probeRows.push_back(1);
+      hits.push_back(nullptr);
+    }
+    appendChain(2, chains[1]);
+    appendChain(3, chains[2]);
+    return std::make_pair(std::move(probeRows), std::move(hits));
+  };
+
+  auto run = [&](int32_t outputCapacity,
+                 bool includeMisses,
+                 uint64_t maxBytes) {
+    BaseHashTable::JoinResultIterator iter(
+        {}, /*fixedSizeListColumnsSizeSum=*/8, std::nullopt);
+    iter.reset(lookup);
+    std::vector<vector_size_t> probeRows;
+    std::vector<char*> hits;
+    std::vector<vector_size_t> outputProbeRows(outputCapacity);
+    std::vector<char*> outputHits(outputCapacity);
+    while (!iter.atEnd()) {
+      const auto numOutput = table->listJoinResults(
+          iter,
+          includeMisses,
+          folly::Range(outputProbeRows.data(), outputCapacity),
+          folly::Range(outputHits.data(), outputCapacity),
+          maxBytes);
+      ASSERT_GT(numOutput, 0);
+      probeRows.insert(
+          probeRows.end(),
+          outputProbeRows.begin(),
+          outputProbeRows.begin() + numOutput);
+      hits.insert(hits.end(), outputHits.begin(), outputHits.begin() + numOutput);
+    }
+    const auto [expectedProbeRows, expectedHits] = expected(includeMisses);
+    EXPECT_EQ(probeRows, expectedProbeRows);
+    EXPECT_EQ(hits, expectedHits);
+  };
+
+  run(64, false, std::numeric_limits<uint64_t>::max());
+  run(64, true, std::numeric_limits<uint64_t>::max());
+  run(1, true, std::numeric_limits<uint64_t>::max());
+  run(64, true, 16);
 }
 
 TEST_P(HashTableTest, groupBySpill) {
