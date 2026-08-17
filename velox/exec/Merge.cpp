@@ -746,6 +746,7 @@ LocalMerge::LocalMerge(
                     operatorId,
                     OperatorType::kLocalMerge)
               : std::nullopt) {
+  stats_.wlock()->role = OperatorStats::Role::kNodeOutput;
   VELOX_CHECK_EQ(
       operatorCtx_->driverCtx()->driverId,
       0,

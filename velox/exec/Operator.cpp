@@ -614,6 +614,8 @@ void OperatorStats::add(const OperatorStats& other) {
   numNullKeys += other.numNullKeys;
 
   dynamicFilterStats.add(other.dynamicFilterStats);
+
+  role = other.role;
 }
 
 void OperatorStats::clear() {
