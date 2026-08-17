@@ -168,6 +168,66 @@ TEST(SubIntSplitCostModelsTest, PforBeatsFixedBitWidthForBaselinePlusOutliers) {
   EXPECT_LT(pfor, fixedBitWidth);
 }
 
+TEST(SubIntSplitCostModelsTest, HuffmanIsFiniteAndCheaperThanPforForLowCardinalityBaselinePlusOutliers) {
+  // Same data as makePforFriendlyValues: 17 distinct values total (16
+  // baseline + 1 outlier). Huffman's exact per-symbol code length beats
+  // PFOR's fixed-base-bit-width approximation for this small an alphabet.
+  const std::vector<uint64_t> values = makePforFriendlyValues();
+  MetricCollector collector;
+  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+
+  constexpr int kBitWidth = 16;
+  const double huffman = huffmanCostBits(values, values.size());
+  const double pfor = pforCostBits(m, values.size(), kBitWidth);
+
+  EXPECT_TRUE(std::isfinite(huffman));
+  EXPECT_GT(huffman, 0.0);
+  EXPECT_LT(huffman, pfor);
+}
+
+TEST(SubIntSplitCostModelsTest, HuffmanCostBitsInfiniteWhenAlphabetTooLarge) {
+  // Every value distinct and count > HuffmanEncoding<uint64_t>::kMaxSymbols
+  // (4096): HuffmanEncoding::estimateSize returns nullopt past this cap.
+  std::vector<uint64_t> values;
+  values.reserve(HuffmanEncoding<uint64_t>::kMaxSymbols + 1);
+  for (uint32_t i = 0; i <= HuffmanEncoding<uint64_t>::kMaxSymbols; ++i) {
+    values.push_back(static_cast<uint64_t>(i));
+  }
+
+  const double huffman = huffmanCostBits(values, values.size());
+
+  EXPECT_TRUE(std::isinf(huffman));
+}
+
+TEST(SubIntSplitCostModelsTest, DeltaBlockIsFiniteAndCheaperThanDeltaForConstantStepData) {
+  const std::vector<uint64_t> values = makeDeltaFriendlyValues();
+  MetricCollector collector;
+  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+
+  constexpr int kBitWidth = 15; // bit_width(19980) == 15
+  const double deltaBlock = deltaBlockCostBits(values, values.size());
+  const double delta = deltaCostBits(m, values.size(), kBitWidth);
+
+  EXPECT_TRUE(std::isfinite(deltaBlock));
+  EXPECT_GT(deltaBlock, 0.0);
+  EXPECT_LT(deltaBlock, delta);
+}
+
+TEST(SubIntSplitCostModelsTest, DeltaBlockCostBitsInfiniteWhenBlockContainsADecrease) {
+  // A single decrease within a deltaBlockSize (default 256) window makes the
+  // whole block ineligible for DeltaBlock's non-decreasing-only design.
+  std::vector<uint64_t> values;
+  values.reserve(300);
+  for (uint64_t i = 0; i < 300; ++i) {
+    values.push_back(i);
+  }
+  values[10] = 0; // introduces a decrease within the first 256-value block.
+
+  const double deltaBlock = deltaBlockCostBits(values, values.size());
+
+  EXPECT_TRUE(std::isinf(deltaBlock));
+}
+
 TEST(
     SubIntSplitCostModelsTest,
     BlockBitPackingBeatsFixedBitWidthForLocallyClusteredData) {
@@ -203,7 +263,12 @@ TEST(SubIntSplitCostModelsTest, SimdForBitpackIsFiniteAndCheaperThanTrivial) {
   EXPECT_LT(simdForBitpack, trivial);
 }
 
-TEST(SubIntSplitCostModelsTest, BestCostBitsSelectsPforForBaselinePlusOutliers) {
+TEST(
+    SubIntSplitCostModelsTest,
+    BestCostBitsSelectsHuffmanForLowCardinalityBaselinePlusOutliers) {
+  // Same 17-distinct-value data PFOR was originally tuned for: now that
+  // Huffman is a candidate, its exact per-symbol code length beats PFOR's
+  // fixed-base-bit-width approximation for this small an alphabet.
   const std::vector<uint64_t> values = makePforFriendlyValues();
   MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
@@ -214,7 +279,40 @@ TEST(SubIntSplitCostModelsTest, BestCostBitsSelectsPforForBaselinePlusOutliers) 
       bestCostBits(m, values.size(), kBitWidth, values, bestEncoding);
 
   EXPECT_TRUE(std::isfinite(best));
-  EXPECT_EQ(bestEncoding, EncodingType::PFOR);
+  EXPECT_EQ(bestEncoding, EncodingType::Huffman);
+}
+
+TEST(
+    SubIntSplitCostModelsTest,
+    BestCostBitsDoesNotUseHuffmanForHighCardinalityBaselinePlusOutliers) {
+  // Widen the baseline from 16 to 200 distinct values (bit_width <= 8),
+  // still well under HuffmanEncoding's kMaxSymbols cap, with a near-uniform
+  // frequency distribution across a wider alphabet -- Huffman's per-symbol
+  // savings shrink relative to Dictionary, which packs each of the 210
+  // unique values (200 baseline + 10 distinct-looking outliers folded into
+  // the same 16-bit alphabet) into an 8-bit index, cheaper than the
+  // segment's native 16-bit width (driven up by the rare 65535 outliers).
+  // Values are multiplicatively permuted (rather than a plain i % 200
+  // sawtooth) to avoid accidentally producing long monotonic runs that would
+  // let Delta win instead.
+  std::vector<uint64_t> values;
+  values.reserve(1000);
+  for (int i = 0; i < 990; ++i) {
+    values.push_back(static_cast<uint64_t>((i * 37) % 200));
+  }
+  for (int i = 0; i < 10; ++i) {
+    values.push_back(65535);
+  }
+  MetricCollector collector;
+  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+
+  constexpr int kBitWidth = 16;
+  EncodingType bestEncoding = EncodingType::Trivial;
+  const double best =
+      bestCostBits(m, values.size(), kBitWidth, values, bestEncoding);
+
+  EXPECT_TRUE(std::isfinite(best));
+  EXPECT_EQ(bestEncoding, EncodingType::Dictionary);
 }
 
 TEST(
@@ -274,7 +372,10 @@ TEST(SubIntSplitCostModelsTest, ForCostBitsFiniteAndPositive) {
 
 TEST(
     SubIntSplitCostModelsTest,
-    BestCostBitsSelectsDeltaForWideRangeConstantStepData) {
+    BestCostBitsSelectsDeltaBlockForWideRangeConstantStepData) {
+  // Strictly increasing, no decreases anywhere in the stream, so every
+  // deltaBlockSize block is eligible for DeltaBlock -- its exact per-block
+  // bit-packed deltas beat Delta's byte-rounded per-value cost.
   const std::vector<uint64_t> values = makeDeltaFriendlyValues();
   MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
@@ -285,13 +386,41 @@ TEST(
       bestCostBits(m, values.size(), kBitWidth, values, bestEncoding);
 
   EXPECT_TRUE(std::isfinite(best));
-  EXPECT_EQ(bestEncoding, EncodingType::Delta);
+  EXPECT_EQ(bestEncoding, EncodingType::DeltaBlock);
 }
 
 TEST(
     SubIntSplitCostModelsTest,
-    BestCostBitsSelectsForForUnitStepMonotonicData) {
+    BestCostBitsSelectsDeltaBlockForUnitStepMonotonicData) {
+  // Strictly increasing with step 1: DeltaBlock's per-block bit-packing of
+  // (mostly) zero-width deltas beats FOR's per-frame local-range estimate.
   const std::vector<uint64_t> values = makeForFriendlyValues();
+  MetricCollector collector;
+  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+
+  constexpr int kBitWidth = 10; // bit_width(999) == 10
+  EncodingType bestEncoding = EncodingType::Trivial;
+  const double best =
+      bestCostBits(m, values.size(), kBitWidth, values, bestEncoding);
+
+  EXPECT_TRUE(std::isfinite(best));
+  EXPECT_EQ(bestEncoding, EncodingType::DeltaBlock);
+}
+
+TEST(
+    SubIntSplitCostModelsTest,
+    BestCostBitsSelectsForForMonotonicDataWithADecrease) {
+  // Same step-1 growth as makeForFriendlyValues, but with a single decrease
+  // inside the first deltaBlockSize (256) block, which disqualifies that
+  // block -- and therefore the whole segment -- from DeltaBlock. FOR's
+  // per-frame (128-value) local-range packing still handles the isolated
+  // decrease cheaply and remains the best candidate.
+  std::vector<uint64_t> values;
+  values.reserve(1000);
+  for (int i = 0; i < 1000; ++i) {
+    values.push_back(static_cast<uint64_t>(i));
+  }
+  values[10] = 0;
   MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
 

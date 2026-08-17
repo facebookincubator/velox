@@ -24,8 +24,11 @@
 
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
+#include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitMetrics.h"
+#include "velox/dwio/nimble/encodings/selection/Statistics.h"
 
 // Per-segment cost models for SubIntSplitEncoding's DP selector.
 //
@@ -371,6 +374,55 @@ inline double blockBitPackingCostBits(
   return static_cast<double>(bytes.value()) * 8.0;
 }
 
+// Huffman: canonical Huffman coding over the observed value alphabet.
+// Delegates to HuffmanEncoding<uint64_t>::estimateSize directly (rather than
+// approximating from SegmentMetrics) since the exact per-symbol code length
+// depends on the full frequency distribution, which SegmentMetrics does not
+// retain. Only evaluated when the segment's cardinality is low enough for
+// Huffman to apply (see the `bestCostBits` guard below), keeping the
+// Statistics<uint64_t>::create() cost bounded.
+// Required: none beyond `segValues` itself.
+inline double huffmanCostBits(
+    const std::vector<uint64_t>& segValues,
+    size_t numValues) noexcept {
+  if (numValues < 2) {
+    return std::numeric_limits<double>::infinity();
+  }
+  const std::span<const uint64_t> values(segValues.data(), numValues);
+  const auto statistics = Statistics<uint64_t>::create(values);
+  const auto bytes = HuffmanEncoding<uint64_t>::estimateSize(
+      values, statistics, Encoding::Options{});
+  if (!bytes.has_value()) {
+    return std::numeric_limits<double>::infinity();
+  }
+  return static_cast<double>(bytes.value()) * 8.0;
+}
+
+// DeltaBlock: fixed-size blocks, each storing a base value plus bit-packed
+// non-decreasing deltas from that base. Delegates directly to
+// DeltaBlockEncoding<uint64_t>::estimateSize on the raw sample, mirroring
+// blockBitPackingCostBits -- DeltaBlockEncoding's own estimator is already
+// exact (it walks real block boundaries), so approximating from
+// SegmentMetrics would only lose precision. Returns infinity for any block
+// containing a decrease, matching DeltaBlockEncoding's non-decreasing-only
+// design.
+// Required: none beyond `segValues` itself.
+inline double deltaBlockCostBits(
+    const std::vector<uint64_t>& segValues,
+    size_t numValues,
+    const Encoding::Options& options = {}) noexcept {
+  if (numValues == 0) {
+    return 0.0;
+  }
+  const std::span<const uint64_t> values(segValues.data(), numValues);
+  const auto bytes = DeltaBlockEncoding<uint64_t>::estimateSize(
+      values, options);
+  if (!bytes.has_value()) {
+    return std::numeric_limits<double>::infinity();
+  }
+  return static_cast<double>(bytes.value()) * 8.0;
+}
+
 // Delta: positive-delta encoding with restatements for non-monotonic steps.
 // Infinity unless at least 90% of consecutive steps are non-decreasing
 // (matches DeltaEncoding's positive-delta-only design — frequent decreases
@@ -559,6 +611,14 @@ inline double bestCostBits(
         frequencyPartitionCostBits(m, numValues, bitWidth),
         EncodingType::FrequencyPartition);
   }
+  // Huffman is only viable within its supported alphabet size; skip the
+  // Statistics<uint64_t>::create() call entirely otherwise.
+  if (m.uniqueCount > 0 && !m.uniqueCountCapped &&
+      m.uniqueCount <= HuffmanEncoding<uint64_t>::kMaxSymbols) {
+    consider(huffmanCostBits(segValues, numValues), EncodingType::Huffman);
+  }
+  consider(
+      deltaBlockCostBits(segValues, numValues), EncodingType::DeltaBlock);
   return best;
 }
 
