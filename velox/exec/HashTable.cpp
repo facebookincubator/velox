@@ -2175,16 +2175,14 @@ int32_t HashTable<ignoreNullKeys>::listJoinResultsInterleaved(
   const auto maxOut = inputRows.size();
   uint64_t totalBytes{0};
 
-  constexpr int32_t kNumParallelChains =
-      JoinResultIterator::kNumParallelChains;
+  constexpr int32_t kNumParallelChains = JoinResultIterator::kNumParallelChains;
   constexpr int32_t kAheadWindow = JoinResultIterator::kAheadWindow;
   const auto numProbeRows = iter.rows->size();
   const bool hasEstimatedSize = iter.estimatedRowSize.has_value();
   const uint64_t estimatedSize =
       hasEstimatedSize ? iter.estimatedRowSize.value() : 0;
   const auto& varSizeListColumns = iter.varSizeListColumns;
-  const uint64_t fixedSizeListColumnsSizeSum =
-      iter.fixedSizeListColumnsSizeSum;
+  const uint64_t fixedSizeListColumnsSizeSum = iter.fixedSizeListColumnsSizeSum;
 
   auto emit = [&](vector_size_t probeRow, char* hit) -> bool {
     inputRows[numOut] = probeRow; // NOLINT

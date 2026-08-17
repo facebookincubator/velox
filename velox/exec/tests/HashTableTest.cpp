@@ -1041,34 +1041,34 @@ TEST_P(HashTableTest, listJoinResultsInterleaved) {
     return std::make_pair(std::move(probeRows), std::move(hits));
   };
 
-  auto run = [&](int32_t outputCapacity,
-                 bool includeMisses,
-                 uint64_t maxBytes) {
-    BaseHashTable::JoinResultIterator iter(
-        {}, /*fixedSizeListColumnsSizeSum=*/8, std::nullopt);
-    iter.reset(lookup);
-    std::vector<vector_size_t> probeRows;
-    std::vector<char*> hits;
-    std::vector<vector_size_t> outputProbeRows(outputCapacity);
-    std::vector<char*> outputHits(outputCapacity);
-    while (!iter.atEnd()) {
-      const auto numOutput = table->listJoinResults(
-          iter,
-          includeMisses,
-          folly::Range(outputProbeRows.data(), outputCapacity),
-          folly::Range(outputHits.data(), outputCapacity),
-          maxBytes);
-      ASSERT_GT(numOutput, 0);
-      probeRows.insert(
-          probeRows.end(),
-          outputProbeRows.begin(),
-          outputProbeRows.begin() + numOutput);
-      hits.insert(hits.end(), outputHits.begin(), outputHits.begin() + numOutput);
-    }
-    const auto [expectedProbeRows, expectedHits] = expected(includeMisses);
-    EXPECT_EQ(probeRows, expectedProbeRows);
-    EXPECT_EQ(hits, expectedHits);
-  };
+  auto run =
+      [&](int32_t outputCapacity, bool includeMisses, uint64_t maxBytes) {
+        BaseHashTable::JoinResultIterator iter(
+            {}, /*fixedSizeListColumnsSizeSum=*/8, std::nullopt);
+        iter.reset(lookup);
+        std::vector<vector_size_t> probeRows;
+        std::vector<char*> hits;
+        std::vector<vector_size_t> outputProbeRows(outputCapacity);
+        std::vector<char*> outputHits(outputCapacity);
+        while (!iter.atEnd()) {
+          const auto numOutput = table->listJoinResults(
+              iter,
+              includeMisses,
+              folly::Range(outputProbeRows.data(), outputCapacity),
+              folly::Range(outputHits.data(), outputCapacity),
+              maxBytes);
+          ASSERT_GT(numOutput, 0);
+          probeRows.insert(
+              probeRows.end(),
+              outputProbeRows.begin(),
+              outputProbeRows.begin() + numOutput);
+          hits.insert(
+              hits.end(), outputHits.begin(), outputHits.begin() + numOutput);
+        }
+        const auto [expectedProbeRows, expectedHits] = expected(includeMisses);
+        EXPECT_EQ(probeRows, expectedProbeRows);
+        EXPECT_EQ(hits, expectedHits);
+      };
 
   run(64, false, std::numeric_limits<uint64_t>::max());
   run(64, true, std::numeric_limits<uint64_t>::max());
