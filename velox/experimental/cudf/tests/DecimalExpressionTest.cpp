@@ -2172,9 +2172,10 @@ TEST_F(CudfDecimalTest, decimalModuloByZero) {
           .planNode());
 }
 
-// The overflow status is a single batch-wide device flag updated with atomicOr
-// by every failing row. A single-row input never exercises concurrent updates,
-// so this uses a multi-block input (> 1 thread block) with several overflowing
+// The overflow status is a single batch-wide device flag. Each thread ORs
+// failing rows into a register and flushes once with atomicOr, so a single-row
+// input never exercises concurrent updates. This uses a multi-block input
+// (> 1 thread block) with several overflowing
 // rows interleaved with non-overflowing and null rows, including an overflowing
 // row under a null mask. The batch must still fail fast, matching Velox CPU.
 TEST_F(CudfDecimalTest, decimalMultiRowOverflowFlag) {

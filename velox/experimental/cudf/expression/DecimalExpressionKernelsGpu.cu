@@ -474,13 +474,6 @@ namespace {
 using errc = cudf::errc;
 
 template <typename Rep>
-__device__ numeric::decimal<Rep> makeDecimal(
-    Rep value,
-    numeric::scale_type scale) {
-  return numeric::decimal<Rep>{numeric::scaled_integer<Rep>{value, scale}};
-}
-
-template <typename Rep>
 __device__ cuda::std::expected<numeric::decimal<Rep>, errc> checkedRescale(
     numeric::decimal<Rep> value,
     numeric::scale_type targetScale) {
@@ -619,8 +612,10 @@ struct DecimalBinaryColColFunctor {
       return;
     }
     evalDecimalBinaryRow<Rep, OutRep>(
-        makeDecimal<Rep>(lhs[idx], lhsScale),
-        makeDecimal<Rep>(rhs[idx], rhsScale),
+        numeric::decimal<Rep>{
+            numeric::scaled_integer<Rep>{lhs[idx], lhsScale}},
+        numeric::decimal<Rep>{
+            numeric::scaled_integer<Rep>{rhs[idx], rhsScale}},
         op,
         outScale,
         outPrecision,
@@ -647,8 +642,10 @@ struct DecimalBinaryLhsScalarFunctor {
       return;
     }
     evalDecimalBinaryRow<Rep, OutRep>(
-        makeDecimal<Rep>(lhsValue, lhsScale),
-        makeDecimal<Rep>(rhs[idx], rhsScale),
+        numeric::decimal<Rep>{
+            numeric::scaled_integer<Rep>{lhsValue, lhsScale}},
+        numeric::decimal<Rep>{
+            numeric::scaled_integer<Rep>{rhs[idx], rhsScale}},
         op,
         outScale,
         outPrecision,
@@ -675,8 +672,10 @@ struct DecimalBinaryRhsScalarFunctor {
       return;
     }
     evalDecimalBinaryRow<Rep, OutRep>(
-        makeDecimal<Rep>(lhs[idx], lhsScale),
-        makeDecimal<Rep>(rhsValue, rhsScale),
+        numeric::decimal<Rep>{
+            numeric::scaled_integer<Rep>{lhs[idx], lhsScale}},
+        numeric::decimal<Rep>{
+            numeric::scaled_integer<Rep>{rhsValue, rhsScale}},
         op,
         outScale,
         outPrecision,
