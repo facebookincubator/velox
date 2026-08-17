@@ -115,6 +115,23 @@ target_link_libraries(
   nimble_column_stats_utils
 )
 
+add_executable(nimble_writer_chunking_fuzz_tests WriterChunkingFuzzTest.cpp)
+add_test(nimble_writer_chunking_fuzz_tests nimble_writer_chunking_fuzz_tests)
+
+target_link_libraries(
+  nimble_writer_chunking_fuzz_tests
+  nimble_writer_test_utils
+  nimble_velox_reader
+  nimble_writer
+  nimble_common
+  velox_memory
+  velox_vector
+  velox_vector_fuzzer
+  gtest
+  gtest_main
+  Folly::folly
+)
+
 add_executable(nimble_writer_fuzz_tests WriterFuzzTest.cpp)
 add_test(nimble_writer_fuzz_tests nimble_writer_fuzz_tests)
 

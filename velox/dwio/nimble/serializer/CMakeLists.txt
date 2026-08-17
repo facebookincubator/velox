@@ -52,6 +52,15 @@ target_link_libraries(
   velox_memory
 )
 
+add_library(nimble_chunked_stream_payload ChunkedStreamPayload.cpp ChunkedStreamPayload.h)
+target_link_libraries(
+  nimble_chunked_stream_payload
+  nimble_serializer_options
+  nimble_encodings
+  nimble_common
+  lz4
+)
+
 add_library(nimble_stream_data StreamData.cpp StreamData.h)
 target_link_libraries(
   nimble_stream_data
