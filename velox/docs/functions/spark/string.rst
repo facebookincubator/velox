@@ -111,6 +111,22 @@ String Functions
         SELECT empty2null(''); -- NULL
         SELECT empty2null('abc'); -- 'abc'
 
+.. spark:function:: encode(string, charset) -> varbinary
+
+    Encodes the first argument into a binary using the provided ``charset``.
+    Supported charsets (case-insensitive) are ``US-ASCII``, ``ISO-8859-1``,
+    ``UTF-8``, ``UTF-16BE``, ``UTF-16LE``, and ``UTF-16``. Common Java aliases
+    such as ``UTF8``, ``ASCII``, and ``LATIN1`` are also accepted. Throws an
+    exception when ``charset`` is not supported. When encoding to a single-byte
+    charset (``US-ASCII`` or ``ISO-8859-1``), characters outside the charset's
+    range are replaced with ``?``. ``UTF-16`` prepends a byte-order mark and
+    emits big-endian data. Malformed UTF-8 in ``string`` is normalized to the
+    replacement character ``U+FFFD`` before encoding. ::
+
+        SELECT encode('Spark SQL', 'UTF-8'); -- [53 70 61 72 6B 20 53 51 4C]
+        SELECT encode('A', 'UTF-16BE'); -- [00 41]
+        SELECT encode('A', 'UTF-16LE'); -- [41 00]
+
 .. spark:function:: endswith(left, right) -> boolean
 
     Returns true if 'left' ends with 'right'. Otherwise, returns false. ::

@@ -22,6 +22,7 @@
 #include "velox/functions/sparksql/Base64Function.h"
 #include "velox/functions/sparksql/CharTypeWriteSideCheck.h"
 #include "velox/functions/sparksql/ConcatWs.h"
+#include "velox/functions/sparksql/EncodeFunction.h"
 #include "velox/functions/sparksql/FormatNumber.h"
 #include "velox/functions/sparksql/InitcapFunction.h"
 #include "velox/functions/sparksql/LuhnCheckFunction.h"
@@ -227,6 +228,8 @@ void registerStringFunctions(const std::string& prefix) {
 
   registerFunction<Base64Function, Varchar, Varbinary>({prefix + "base64"});
   registerFunction<UnBase64Function, Varbinary, Varchar>({prefix + "unbase64"});
+  registerFunction<EncodeFunction, Varbinary, Varchar, Varchar>(
+      {prefix + "encode"});
 
   registerFunction<InitCapFunction, Varchar, Varchar>({prefix + "initcap"});
 
