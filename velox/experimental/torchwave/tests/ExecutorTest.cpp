@@ -167,6 +167,217 @@ std::vector<at::Tensor> runWaveProgrammatic(
   return hostOutputs;
 }
 
+// compilePlans for a programmatic graph: same steps as the .pt2 path, so a
+// graph built here can assert plan structure rather than only results.
+CompiledPlan compilePlanProgrammatic(
+    std::unique_ptr<nativert::Graph> graph,
+    const std::unordered_map<std::string, torch::_export::TensorMeta>& meta,
+    CompiledPlan::Mode mode) {
+  graph->setTensorValuesMeta(meta);
+  setGraphDevice(graph.get(), /*isCuda=*/true);
+  auto ctx = std::make_unique<ModelContext>();
+  ctx->weights = std::make_shared<nativert::Weights>(graph.get());
+  ctx->graph = std::move(graph);
+  // Constructing the executor compiles and places the graph, which is what
+  // fills the grids CompiledPlan reads.
+  WaveGraphExecutor exec(std::move(ctx));
+  return CompiledPlan::from(*exec.waveGraph(), mode);
+}
+
+// Ordering guard for an in-place write over a buffer that a DIFFERENT kernel op
+// filled. c[:, 0] = v lowers to a copy into a select view plus a select_scatter
+// that wave rewrites into an in-place write; the buffer it overwrites is the
+// clone, produced by an earlier kernel op. The write must not land in the same
+// kernel as the op that fills that buffer -- in multi-kernel mode that means a
+// kernel boundary between them (in cg / single-block it would be an
+// intra-kernel opBarrier instead). kernelBoundaryBetween also requires both ops
+// to appear, so the assertion fails rather than passes vacuously if the
+// in-place rewrite stops firing and the shape under test disappears.
+// Programmatic graph, no external .pt2.
+TEST_F(ExecutorTest, inPlaceWriteOverEarlierKernelBufferTest) {
+  const char* kGraph = R"(graph(%x, %v):
+%c = torch.ops.aten.cumsum.default(self=%x, dim=1)
+%col = torch.ops.aten.select.int(self=%c, dim=1, index=0)
+%w = torch.ops.aten.copy.default(self=%col, src=%v)
+%sc = torch.ops.aten.select_scatter.default(self=%c, src=%w, dim=1, index=0)
+%other = torch.ops.aten.select.int(self=%sc, dim=1, index=1)
+%o = torch.ops.aten.mul.Tensor(self=%other, other=%other)
+return(%o)
+)";
+  auto meta = [] {
+    std::unordered_map<std::string, torch::_export::TensorMeta> m;
+    m["x"] = makeTensorMeta(c10::ScalarType::Float, 2);
+    m["v"] = makeTensorMeta(c10::ScalarType::Float, 1);
+    m["c"] = makeTensorMeta(c10::ScalarType::Float, 2);
+    m["col"] = makeTensorMeta(c10::ScalarType::Float, 1);
+    m["w"] = makeTensorMeta(c10::ScalarType::Float, 1);
+    m["sc"] = makeTensorMeta(c10::ScalarType::Float, 2);
+    m["other"] = makeTensorMeta(c10::ScalarType::Float, 1);
+    m["o"] = makeTensorMeta(c10::ScalarType::Float, 1);
+    return m;
+  }();
+
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kGraph), meta, CompiledPlan::Mode::kMultiKernel);
+  EXPECT_TRUE(
+      plan.kernelBoundaryBetween("aten.clone.default", "tw.select_scatter"));
+
+  constexpr int32_t kRows = 512;
+  constexpr int32_t kCols = 8;
+  auto x = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) / 7;
+  auto v = at::arange(kRows, at::kFloat) * 3;
+  auto outputs =
+      runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{x, v}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto scatter = at::cumsum(x, 1);
+  scatter.select(1, 0).copy_(v);
+  auto reference = scatter.select(1, 1) * scatter.select(1, 1);
+  EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+      << firstDifference(outputs[0], reference);
+}
+
+// A cumsum whose input is another cumsum. The second scan reads the first's
+// output from memory, so every mode has to order the two, and each does it
+// differently: multi-kernel ends the first scan's kernel, cg co-fuses them
+// behind opBarriers, single-block behind __syncthreads. That makes this the
+// shape to soak (--gtest_filter plus --gtest_repeat) when a barrier or
+// kernel-boundary rule changes -- a dropped one shows up as wrong sums, not as
+// a crash. One test per mode, so a failure names the mode in the gtest summary,
+// which is all a repeated run leaves behind. Programmatic graph, no .pt2.
+const char* kDoubleCumsumGraph = R"(graph(%x):
+%c1 = torch.ops.aten.cumsum.default(self=%x, dim=0)
+%c2 = torch.ops.aten.cumsum.default(self=%c1, dim=0)
+return(%c2)
+)";
+
+std::unordered_map<std::string, torch::_export::TensorMeta> doubleCumsumMeta() {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"x", "c1", "c2"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  return meta;
+}
+
+// Compiles the graph with the mode choice left open: the per-mode variant grids
+// are only populated then, since forcing a mode puts that one grid in the
+// main slot instead.
+CompiledPlan doubleCumsumPlan(CompiledPlan::Mode mode) {
+  return compilePlanProgrammatic(
+      nativert::stringToGraph(kDoubleCumsumGraph), doubleCumsumMeta(), mode);
+}
+
+// 100k elements so the multi-block path really is multi-block. Values are kept
+// small (% 7) because the result is a sum of sums.
+void runDoubleCumsum() {
+  auto input = at::arange(100000, at::kLong) % 7;
+  auto outputs = runWaveProgrammatic(
+      nativert::stringToGraph(kDoubleCumsumGraph),
+      doubleCumsumMeta(),
+      {{input}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto reference = at::cumsum(at::cumsum(input, 0), 0);
+  EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+      << firstDifference(outputs[0], reference);
+}
+
+TEST_F(ExecutorTest, doubleCumsumMultiBlockTest) {
+  auto resetConfig =
+      folly::makeGuard([] { WaveConfig::get().useSingleBlock = std::nullopt; });
+
+  // The second scan's head must not land in the first scan's kernel: the
+  // launch boundary is what orders the read. Both ops appear, so this fails
+  // rather than passes vacuously if the lowering changes.
+  auto plan = doubleCumsumPlan(CompiledPlan::Mode::kMultiKernel);
+  EXPECT_TRUE(
+      plan.kernelBoundaryBetween("aten.cumsum.default", "tw.cumsum_head"));
+
+  WaveConfig::get().useSingleBlock = false;
+  runDoubleCumsum();
+}
+
+TEST_F(ExecutorTest, doubleCumsumSingleBlockTest) {
+  auto resetConfig =
+      folly::makeGuard([] { WaveConfig::get().useSingleBlock = std::nullopt; });
+
+  // Single-block orders the two scans with __syncthreads, which allocates no
+  // barrier counter and so is invisible to the plan. Assert the shape the mode
+  // promises -- both scans in ONE kernel, not split -- and leave the ordering
+  // itself to the numeric check below.
+  auto plan = doubleCumsumPlan(CompiledPlan::Mode::kSingleBlock);
+  int32_t fusedKernels = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        if (!kernel.standalone) {
+          ++fusedKernels;
+        }
+      }
+    }
+  }
+  EXPECT_EQ(fusedKernels, 1);
+
+  WaveConfig::get().useSingleBlock = true;
+  runDoubleCumsum();
+}
+
+TEST_F(ExecutorTest, doubleCumsumCgTest) {
+  auto resetConfig =
+      folly::makeGuard([] { WaveConfig::get().isCg = std::nullopt; });
+
+  // cg keeps both scans in one cooperative kernel, so the ordering has to be an
+  // intra-kernel opBarrier. barrierBetween checks both: co-fused, and that
+  // kernel carries at least one barrier.
+  auto plan = doubleCumsumPlan(CompiledPlan::Mode::kCG);
+  EXPECT_TRUE(plan.barrierBetween("aten.cumsum.default", "tw.cumsum_cg"));
+
+  WaveConfig::get().isCg = true;
+  runDoubleCumsum();
+}
+
+// A RANDOM-ACCESS read of a scan's output inside the same cooperative kernel.
+// aten.index.Tensor carries no barrier of its own, and the index is REVERSED,
+// so block 0 reads what the last block wrote: that is what makes a missing
+// barrier observable. A second cumsum does not -- its
+// reader is aligned 1:1 with the writer and never crosses a block boundary, so
+// it stays correct even with the ordering removed. Anything that changes when
+// callNeedsBarrier fires should be soaked against THIS shape
+// (--gtest_filter='*cumsumIndexTensorCg*' --gtest_repeat=N), not against a
+// chain of scans. Programmatic graph, no external .pt2.
+TEST_F(ExecutorTest, cumsumIndexTensorCgTest) {
+  auto resetConfig =
+      folly::makeGuard([] { WaveConfig::get().isCg = std::nullopt; });
+
+  const char* kGraph = R"(graph(%x, %idx):
+%c = torch.ops.aten.cumsum.default(self=%x, dim=0)
+%list[] = prim.ListPack(l0=%idx)
+%o = torch.ops.aten.index.Tensor(self=%c, indices=%list)
+return(%o)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["x"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["c"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["idx"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["o"] = makeTensorMeta(c10::ScalarType::Long, 1);
+
+  // Large enough that the scan spans many blocks and the last of them is still
+  // writing when the first starts gathering. Reversed rather than a scattered
+  // permutation on purpose: measured against a stubbed callNeedsBarrier,
+  // reversed gives ~27k wrong elements and a permutation only ~2.9k, because
+  // what matters is the time between the write and the read, and reversing
+  // maximizes it. A permutation mostly reads locations already written.
+  constexpr int64_t kSize = 1 << 20;
+  auto x = at::arange(kSize, at::kLong) % 7;
+  auto idx = kSize - 1 - at::arange(kSize, at::kLong);
+
+  WaveConfig::get().isCg = true;
+  auto outputs =
+      runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{x, idx}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto reference = at::index_select(at::cumsum(x, 0), 0, idx);
+  EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+      << firstDifference(outputs[0], reference);
+}
+
 TEST_F(ExecutorTest, elementTest) {
   runTest("data/element_test.pt2", "data/element_test_results.pt");
 }
@@ -228,6 +439,60 @@ TEST_F(ExecutorTest, inPlaceCloneElisionTest) {
   // Merging the two collapses output 4 ('e') to a non-tensor, because the
   // value its output slot names is left with a dead producer.
   runTest("data/in_place_test.pt2", "data/in_place_test_results.pt");
+}
+
+// Column writes through `.copy_`, the shape the ROO preproc graph produces:
+// select -> copy -> select_scatter, chained over four columns. The functional
+// copy carries the destination only for its shape and dtype, so it lowers to a
+// register-valued elementwise and the whole chain lands in one kernel. Before
+// copy was registered it ran as an eager standalone and split each write into
+// its own step.
+TEST_F(ExecutorTest, copyColumnTest) {
+  runTest("data/copy_column_test.pt2", "data/copy_column_test_results.pt");
+
+  auto plans = compilePlans("data/copy_column_test.pt2");
+  EXPECT_TRUE(plans.multiKernel.fuses(
+      {"aten.copy.default", "aten.select.int", "tw.select_scatter"}));
+}
+
+// copy with a source that broadcasts and/or converts to the destination:
+// a size-1 dim broadcast over rows, a one-element source, an int64 source cast
+// to float, an explicit aten.expand feeding the copy (the ROO form), and a
+// lower-rank source. All five fuse; expand comes along as an elementwise
+// identity rather than a separate host-side view.
+TEST_F(ExecutorTest, copyBroadcastTest) {
+  runTest(
+      "data/copy_broadcast_test.pt2", "data/copy_broadcast_test_results.pt");
+
+  auto plans = compilePlans("data/copy_broadcast_test.pt2");
+  EXPECT_TRUE(
+      plans.multiKernel.fuses({"aten.copy.default", "aten.expand.default"}));
+}
+
+// copy whose source aliases the buffer the enclosing scatter writes, shifted by
+// one element. Clone elision drops the snapshot (the source's previous value is
+// dead), so a register-valued copy would read and write one buffer in a single
+// fused loop with no ordering between lanes. The overlap check must retarget
+// these to tw.copy_out, which materializes the read into its own buffer.
+//
+// The plan assertion below, not the output comparison, is what catches a
+// regression here. The wrong lowering is a race, and it does not reliably
+// produce wrong numbers: within a warp every lane loads before any lane stores,
+// so corruption needs an unlucky schedule across warps. Removing the
+// copyMayOverlap check leaves the outputs correct on this hardware and fails
+// only the plan.
+TEST_F(ExecutorTest, copyOverlapTest) {
+  runTest("data/copy_overlap_test.pt2", "data/copy_overlap_test_results.pt");
+
+  auto plans = compilePlans("data/copy_overlap_test.pt2");
+  // The overlapping copies take the materializing variant, not the register
+  // one. Its output is a real buffer, which puts the scatter that reads it in a
+  // later step -- so the whole read is behind a kernel boundary, not merely a
+  // barrier, and the register form (which would inline the read into the
+  // scatter's write) is never generated.
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.copy_out"}));
+  EXPECT_TRUE(plans.multiKernel.inLaterStep("tw.slice_scatter", "tw.copy_out"));
+  EXPECT_FALSE(plans.multiKernel.fuses({"aten.copy.default"}));
 }
 
 // slice_scatter on 2-D tensors along dim 0 and dim 1 with a runtime (symint)
@@ -630,17 +895,28 @@ TEST_F(ExecutorTest, bincountTest) {
 }
 
 TEST_F(ExecutorTest, cumsumTest) {
-  WaveConfig::get().useSingleBlock = false;
-  runTest("data/cumsum_test.pt2", "data/cumsum_test_results.pt", "multi-block");
-
-  WaveConfig::get().useSingleBlock = true;
-  runTest(
-      "data/cumsum_test.pt2", "data/cumsum_test_results.pt", "single-block");
-
-  WaveConfig::get().useSingleBlock = std::nullopt;
-  WaveConfig::get().isCg = true;
-  runTest("data/cumsum_test.pt2", "data/cumsum_test_results.pt", "cg");
-  WaveConfig::get().isCg = std::nullopt;
+  // The mode reaches verifyOutputs as the display name, but a scoped trace also
+  // attaches it to failures raised anywhere else under it -- worth having when
+  // the only record of a rare failure is a truncated log.
+  {
+    SCOPED_TRACE("multi-block");
+    WaveConfig::get().useSingleBlock = false;
+    runTest(
+        "data/cumsum_test.pt2", "data/cumsum_test_results.pt", "multi-block");
+  }
+  {
+    SCOPED_TRACE("single-block");
+    WaveConfig::get().useSingleBlock = true;
+    runTest(
+        "data/cumsum_test.pt2", "data/cumsum_test_results.pt", "single-block");
+  }
+  {
+    SCOPED_TRACE("cg");
+    WaveConfig::get().useSingleBlock = std::nullopt;
+    WaveConfig::get().isCg = true;
+    runTest("data/cumsum_test.pt2", "data/cumsum_test_results.pt", "cg");
+    WaveConfig::get().isCg = std::nullopt;
+  }
 }
 
 // Explicit coverage for the two cooperative-grid launch paths, run on the large
@@ -1417,8 +1693,10 @@ TEST_F(ExecutorTest, indexTensorTest) {
   // Prove the rewrite fired: corrupt one converted index per case out of range
   // and confirm the device-side bounds check in __index_select reports the
   // matching dimension. Only the fused index_select performs this check, so a
-  // "<dim> <badValue> Bad idx" error means x[sel] took the fused path (not the
-  // eager fallback). sel0/sel1/sel2 select dims 0/1/2 respectively.
+  // "<dim> <badValue>" error means x[sel] took the fused path (not the eager
+  // fallback). sel0/sel1/sel2 select dims 0/1/2 respectively. The site reports
+  // the bound and the operand shapes after those two, so match on the pair
+  // that identifies the failure rather than on the whole line.
   constexpr int32_t kBadIndex = 999'999;
   struct IndexErrorCase {
     std::string indexInput;
@@ -1452,11 +1730,15 @@ TEST_F(ExecutorTest, indexTensorTest) {
             iv.toTensor().fill_(kBadIndex);
           }
         });
-    const std::string expected = std::to_string(errorCase.expectedDim) + " " +
-        std::to_string(kBadIndex) + " Bad idx";
+    const std::string expected =
+        std::to_string(errorCase.expectedDim) + " " + std::to_string(kBadIndex);
     EXPECT_NE(errors.find(expected), std::string::npos)
         << "Case " << errorCase.indexInput << ": expected '" << expected
         << "' in device errors, got:\n"
+        << errors;
+    EXPECT_NE(errors.find("Bad idx"), std::string::npos)
+        << "Case " << errorCase.indexInput
+        << ": expected a 'Bad idx' report, got:\n"
         << errors;
   }
 

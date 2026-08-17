@@ -965,6 +965,11 @@ void CudfReduce::doNoMoreInput() {
   }
 }
 
+void CudfReduce::doClose() {
+  inputs_.clear();
+  Operator::close();
+}
+
 bool CudfReduce::isFinished() {
   return finished_;
 }

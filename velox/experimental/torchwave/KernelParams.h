@@ -245,7 +245,11 @@ struct DebugInfo {
   int64_t barrierClocks{0};
   int32_t op{0};
   int32_t line{0};
-  int64_t extra[2] = {};
+  /// Site-defined values printed after the line number, most sites using only
+  /// the first two. A bad index is worth reporting with the bound it violated
+  /// and the operand shapes it came from: which of the two is wrong is not
+  /// decidable from the index alone.
+  int64_t extra[6] = {};
   char message[20] = {};
 };
 

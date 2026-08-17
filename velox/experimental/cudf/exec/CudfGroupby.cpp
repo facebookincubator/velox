@@ -1361,6 +1361,16 @@ void CudfGroupby::doNoMoreInput() {
   }
 }
 
+void CudfGroupby::doClose() {
+  inputs_.clear();
+  bufferedResult_.reset();
+  aggregators_.clear();
+  intermediateAggregators_.clear();
+  partialAggregators_.clear();
+  finalAggregators_.clear();
+  Operator::close();
+}
+
 bool CudfGroupby::isFinished() {
   return finished_;
 }

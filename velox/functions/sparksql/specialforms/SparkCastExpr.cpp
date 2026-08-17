@@ -122,11 +122,19 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
     return true;
   }
 
-  if (isIntegralType(fromType) && toType->isDecimal()) {
-    return true;
+  if (toType->isDecimal()) {
+    if (fromType->isDecimal()) {
+      return true;
+    }
+    if (isIntegralType(fromType)) {
+      return true;
+    }
+    if (fromType->isReal() || fromType->isDouble()) {
+      return true;
+    }
   }
 
-  if ((fromType->isReal() || fromType->isDouble()) && toType->isDecimal()) {
+  if (toType->isTimestamp() && (fromType->isReal() || fromType->isDouble())) {
     return true;
   }
 

@@ -1289,7 +1289,7 @@ uint64_t SharedArbitrator::reclaimUsedMemoryBySpill(
     }
   }
   if (victims.empty()) {
-    FB_LOG_EVERY_MS(WARNING, 1'000)
+    VELOX_MEM_LOG_EVERY_MS(WARNING, 1'000)
         << "No spill victim participant found with global arbitration target: "
         << succinctBytes(targetBytes);
     return 0;
@@ -1408,8 +1408,8 @@ uint64_t SharedArbitrator::reclaim(
 
   freeCapacity(reclaimedBytes);
   if (reclaimedBytes == 0) {
-    FB_LOG_EVERY_MS(WARNING, 1'000) << fmt::format(
-        "Nothing reclaimed from memory pool {} with reclaim target {},  memory pool stats:\n{}\n{}",
+    VELOX_MEM_LOG_EVERY_MS(WARNING, 1'000) << fmt::format(
+        "Nothing reclaimed from memory pool {} with reclaim target {}, memory pool stats:\n{}\n{}",
         participant->name(),
         succinctBytes(targetBytes),
         participant->pool()->toString(),

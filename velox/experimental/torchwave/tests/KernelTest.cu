@@ -480,6 +480,57 @@ __global__ void cumsumFinalKernel(TorchWaveParams params) {
       blockInfo);
 }
 
+__global__ void sumHeadKernel(TorchWaveParams params) {
+  __shared__ BlockInfo blockInfo;
+  __shared__ uint32_t size;
+  __shared__ uint32_t rounded;
+  __shared__ Int32X32 temp;
+
+  if (threadIdx.x == 0) {
+    blockInfo =
+        params.info ? params.info[blockIdx.x] : params.inlineInfo[blockIdx.x];
+  }
+  __syncthreads();
+
+  tw_sum_head<kBlockSize, int64_t, int64_t>(
+      param<Tensor>(blockInfo, 0),
+      param<Tensor>(blockInfo, sizeof(Tensor)),
+      (void*)temp,
+      size,
+      rounded,
+      blockInfo);
+}
+
+// An empty input still has to leave a per-block partial behind. The host
+// reserves one slot per block whatever the input length (numBlocksShape in
+// Builtins.cpp) and the final stage reduces over all of them, so a slot the
+// head skips feeds whatever the buffer already held into the result. The
+// partials buffer starts poisoned here because a fresh, zeroed allocation
+// gives the right answer either way -- which is exactly what hides this in a
+// whole-graph test, where it only shows up on a second execution.
+TEST_F(KernelTest, reduceHeadEmptyInput) {
+  auto options = at::TensorOptions().dtype(at::kLong).device(at::kCUDA);
+  auto input = at::empty({0}, options);
+  auto partials = at::full({1}, 44, options);
+
+  auto params = allocateManagedArray<Tensor>(2);
+  fillTensorParam(input, &params[0]);
+  fillTensorParam(partials, &params[1]);
+
+  TorchWaveParams twParams;
+  memset(&twParams, 0, sizeof(twParams));
+  auto& bi = twParams.inlineInfo[0];
+  bi.numBlocksInOp = 1;
+  bi.params = params.get();
+
+  sumHeadKernel<<<1, kBlockSize>>>(twParams);
+  CUDA_CHECK_FATAL(cudaGetLastError());
+  CUDA_CHECK_FATAL(cudaDeviceSynchronize());
+
+  EXPECT_EQ(partials.cpu().data_ptr<int64_t>()[0], 0)
+      << "empty input: the head left its partial slot at its old value";
+}
+
 TEST_F(KernelTest, cumsumSingleBlock) {
   constexpr int32_t kSize = 200;
 

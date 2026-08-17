@@ -27,10 +27,13 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/window/RowsStreamingWindowBuild.h"
 #include "velox/exec/window/SortWindowBuild.h"
+#include "velox/exec/window/VectorWindowPartition.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+
+#include <limits>
 
 using namespace facebook::velox::exec::test;
 
@@ -76,8 +79,74 @@ class WindowTest : public OperatorTestBase {
       std::make_shared<folly::CPUThreadPoolExecutor>(
           folly::available_concurrency())};
 
+  // Builds one partition's worth of pre-sorted input: 'p' is constant so the
+  // build sees a single ever-growing incomplete partition, and 's' ascends from
+  // 'sortKeyOffset'. Each sort key repeats 'peerGroupSize' times, so peer
+  // groups straddle flush boundaries. 'payloadBytes' sizes the 'v' column,
+  // which is what drives the retained-byte budget; 0 means a narrow bigint.
+  RowVectorPtr makeSinglePartitionData(
+      vector_size_t size,
+      vector_size_t peerGroupSize,
+      int32_t payloadBytes,
+      int32_t sortKeyOffset) {
+    auto partitionKey =
+        makeFlatVector<int16_t>(size, [](auto /*row*/) { return 1; });
+    auto sortKey = makeFlatVector<int32_t>(
+        size, [&](auto row) { return sortKeyOffset + row / peerGroupSize; });
+    if (payloadBytes == 0) {
+      return makeRowVector(
+          {"p", "s", "v"},
+          {partitionKey, sortKey, makeFlatVector<int64_t>(size, [](auto row) {
+             return row;
+           })});
+    }
+    const std::string payload(payloadBytes, 'x');
+    return makeRowVector(
+        {"p", "s", "v"},
+        {partitionKey, sortKey, makeFlatVector<StringView>(size, [&](auto) {
+           return StringView(payload);
+         })});
+  }
+
+  // Returns the WindowNode for 'windowFunctions' over 'data', already sorted by
+  // the partition and sort keys.
+  std::shared_ptr<const core::WindowNode> makeStreamingWindowNode(
+      const std::vector<RowVectorPtr>& data,
+      const std::vector<std::string>& windowFunctions) {
+    auto plan = PlanBuilder()
+                    .values(data)
+                    .orderBy({"p", "s"}, false)
+                    .streamingWindow(windowFunctions)
+                    .planNode();
+    auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+    VELOX_CHECK_NOT_NULL(windowNode);
+    return windowNode;
+  }
+
+  // Returns a retained-byte budget worth 'numRows' rows of 'data'.
+  uint64_t budgetForRows(const RowVectorPtr& data, int32_t numRows) {
+    const uint64_t rowSize = data->estimateFlatSize() / data->size();
+    VELOX_CHECK_GT(rowSize, 0);
+    return rowSize * numRows;
+  }
+
   tsan_atomic<bool> nonReclaimableSection_{false};
 };
+
+// Wraps 'call' in the default ROWS frame. An omitted frame clause parses to
+// RANGE, and 'hasRangeFrame_' is node-wide, so a single unframed function
+// exempts the whole build from the byte budget.
+std::string rowsFrameFunction(const std::string& call) {
+  return fmt::format(
+      "{} over (partition by p order by s rows between unbounded preceding "
+      "and current row)",
+      call);
+}
+
+// Retained-byte budget for tests that are not exercising the byte-budget
+// throttle and want the build to accept input unconditionally.
+constexpr uint64_t kUnboundedRetainedBytes =
+    std::numeric_limits<uint64_t>::max();
 
 class TestingRowsStreamingWindowBuild
     : public window::RowsStreamingWindowBuild {
@@ -615,12 +684,288 @@ TEST_F(WindowTest, rowsStreamingWindowBuildDoesNotMaterializeRows) {
   ASSERT_NE(windowNode, nullptr);
 
   TestingRowsStreamingWindowBuild windowBuild(
-      windowNode, pool(), nullptr, &nonReclaimableSection_);
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
   windowBuild.setNumRowsPerOutput(2);
   windowBuild.addInput(data);
   windowBuild.noMoreInput();
 
   ASSERT_FALSE(windowBuild.testingHasRowContainer());
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildThrottlesLargePartition) {
+  // A single partition (constant 'p') feeds one ever-growing, not-yet-complete
+  // VectorWindowPartition, so the 'windowPartitions_.size() < 2' rule never
+  // throttles. With a retained-byte budget, needsInput() must ask the driver to
+  // stop feeding once the buffered (by-reference) input exceeds the budget so a
+  // large partition doesn't accumulate its entire input before any output.
+  const vector_size_t size = 1'000;
+  auto data = makeSinglePartitionData(size, 1, 0, 0);
+  auto windowNode =
+      makeStreamingWindowNode({data}, {rowsFrameFunction("row_number()")});
+
+  // Budget for 8 rows; one 1000-row batch far exceeds it.
+  const uint64_t budget = budgetForRows(data, 8);
+
+  {
+    TestingRowsStreamingWindowBuild windowBuild(
+        windowNode, pool(), nullptr, &nonReclaimableSection_, budget);
+    windowBuild.setNumRowsPerOutput(4);
+
+    // No input yet (no row-size estimate): needs input.
+    EXPECT_TRUE(windowBuild.needsInput());
+
+    windowBuild.addInput(data);
+    // Retained input for the single incomplete partition now far exceeds the
+    // byte budget, so it stops asking for input to let output drain.
+    EXPECT_FALSE(windowBuild.needsInput());
+  }
+
+  {
+    // With the default (unbounded) budget, a single incomplete partition is
+    // never throttled - this is the pre-fix behavior.
+    TestingRowsStreamingWindowBuild windowBuild(
+        windowNode,
+        pool(),
+        nullptr,
+        &nonReclaimableSection_,
+        kUnboundedRetainedBytes);
+    windowBuild.setNumRowsPerOutput(4);
+    windowBuild.addInput(data);
+    EXPECT_TRUE(windowBuild.needsInput());
+  }
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildThrottleStaysDrainable) {
+  // When the byte budget is reached mid-partition before 'numRowsPerOutput_'
+  // rows accumulate, the pending rows must still be flushed into a partition so
+  // the driver can drain them. Otherwise needsInput() returns false (budget
+  // reached) while hasNextPartition() is false (nothing flushed): the Window
+  // operator can neither accept input nor produce output and the driver spins
+  // forever. This reproduces the production deadlock, where wide rows fill the
+  // budget at a handful of rows while 'numRowsPerOutput_' keeps the operator's
+  // init-time default (set from a nullopt row-size estimate).
+  const vector_size_t size = 1'000;
+  auto data = makeSinglePartitionData(size, 1, 0, 0);
+  auto windowNode =
+      makeStreamingWindowNode({data}, {rowsFrameFunction("row_number()")});
+
+  const uint64_t budget = budgetForRows(data, 8);
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode, pool(), nullptr, &nonReclaimableSection_, budget);
+  // Mimic the Window operator, which fixes 'numRowsPerOutput_' at initialize()
+  // from a nullopt row-size estimate; for wide rows this default is far larger
+  // than the byte budget in rows, so the row-count flush never fires within the
+  // partition.
+  windowBuild.setNumRowsPerOutput(size * 2);
+
+  windowBuild.addInput(data);
+
+  // The byte budget stopped input for the single incomplete partition, so the
+  // build must expose a drainable partition; otherwise the driver deadlocks.
+  EXPECT_FALSE(windowBuild.needsInput());
+  EXPECT_TRUE(windowBuild.hasNextPartition());
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildBudgetTracksGrowingRowSize) {
+  // The budget is in bytes and 'estimatedRowSize_' only grows, so a batch of
+  // much wider rows must start throttling even though the same row count of
+  // narrow rows did not. Guards against testing the budget against a stale
+  // row-width estimate taken from earlier, narrower input.
+  const vector_size_t batchSize = 100;
+  auto narrowBatch = makeSinglePartitionData(batchSize, 1, 0, 0);
+  auto secondNarrowBatch = makeSinglePartitionData(batchSize, 1, 0, batchSize);
+  auto wideBatch = makeSinglePartitionData(batchSize, 1, 4'096, 2 * batchSize);
+
+  auto windowNode = makeStreamingWindowNode(
+      {narrowBatch, secondNarrowBatch, wideBatch},
+      {rowsFrameFunction("row_number()")});
+
+  // Room for 4x the narrow batch, so two narrow batches stay under budget.
+  const uint64_t budget = budgetForRows(narrowBatch, 4 * batchSize);
+  ASSERT_LT(budgetForRows(narrowBatch, 1), budgetForRows(wideBatch, 1) / 100)
+      << "the wide payload must dominate the row-size estimate";
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode, pool(), nullptr, &nonReclaimableSection_, budget);
+  // Keeps the row-count flush from firing, so throttling is driven by bytes.
+  windowBuild.setNumRowsPerOutput(10 * batchSize);
+
+  windowBuild.addInput(narrowBatch);
+  EXPECT_TRUE(windowBuild.needsInput());
+
+  // Twice the rows, still narrow: under budget, so still accepting.
+  windowBuild.addInput(secondNarrowBatch);
+  EXPECT_TRUE(windowBuild.needsInput());
+
+  // Only 50% more rows, but each ~300x wider: the re-estimated row size puts
+  // the retained bytes far over budget.
+  windowBuild.addInput(wideBatch);
+  EXPECT_FALSE(windowBuild.needsInput());
+  EXPECT_TRUE(windowBuild.hasNextPartition());
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildBudgetFlushesOnce) {
+  // The byte-budget flush only has to make the pending rows drainable once.
+  // The budget stays exceeded until the driver drains, so re-testing it per row
+  // would flush every remaining row of the input as its own range, and
+  // VectorWindowPartition walks its ranges on each row lookup and rebuilds
+  // prefix sums on each removeProcessedRows().
+  const vector_size_t size = 1'000;
+  auto data = makeSinglePartitionData(size, 1, 0, 0);
+  auto windowNode =
+      makeStreamingWindowNode({data}, {rowsFrameFunction("row_number()")});
+
+  const uint64_t budget = budgetForRows(data, 8);
+
+  TestingRowsStreamingWindowBuild windowBuild(
+      windowNode, pool(), nullptr, &nonReclaimableSection_, budget);
+  // Keeps the row-count flush from firing, so every flush comes from the
+  // budget.
+  windowBuild.setNumRowsPerOutput(size * 2);
+
+  windowBuild.addInput(data);
+
+  auto partition = std::dynamic_pointer_cast<window::VectorWindowPartition>(
+      windowBuild.nextPartition());
+  ASSERT_NE(partition, nullptr);
+  EXPECT_EQ(partition->testingNumRanges(), 1);
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildBudgetPreservesResults) {
+  // The byte budget changes only when the build stops accepting input and when
+  // it flushes; it must not change results. Heavy ties on the sort key put peer
+  // groups across the flush boundaries the budget creates, which is where
+  // rank/dense_rank would break if a partial partition were mistaken for a
+  // complete one.
+  //
+  // Every function needs an explicit ROWS frame. An omitted frame clause parses
+  // to RANGE, and 'hasRangeFrame_' is node-wide, so a single unframed function
+  // exempts the whole build from the budget and makes this comparison vacuous.
+  const vector_size_t size = 500;
+  auto data = makeSinglePartitionData(size, 7, 4'096, 0);
+  createDuckDbTable({data});
+
+  auto windowNode = makeStreamingWindowNode(
+      {data},
+      {rowsFrameFunction("rank()"),
+       rowsFrameFunction("dense_rank()"),
+       rowsFrameFunction("row_number()"),
+       rowsFrameFunction("sum(s)")});
+  for (const auto& function : windowNode->windowFunctions()) {
+    ASSERT_EQ(function.frame.type, core::WindowNode::WindowType::kRows)
+        << "a RANGE function would exempt the build from the byte budget";
+  }
+
+  auto tiny = AssertQueryBuilder(windowNode)
+                  .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+                  .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+                  .copyResults(pool());
+  auto unbounded =
+      AssertQueryBuilder(windowNode)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1000000000")
+          .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+          .copyResults(pool());
+
+  ASSERT_EQ(tiny->size(), size);
+  ASSERT_EQ(unbounded->size(), size);
+  for (auto row = 0; row < size; ++row) {
+    ASSERT_TRUE(tiny->equalValueAt(unbounded.get(), row, row))
+        << "row " << row << ": tiny=" << tiny->toString(row)
+        << " unbounded=" << unbounded->toString(row);
+  }
+
+  AssertQueryBuilder(windowNode, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+      .assertResults(
+          "SELECT p, s, v, "
+          "rank() over (partition by p order by s rows between unbounded "
+          "preceding and current row), "
+          "dense_rank() over (partition by p order by s rows between unbounded "
+          "preceding and current row), "
+          "row_number() over (partition by p order by s rows between unbounded "
+          "preceding and current row), "
+          "sum(s) over (partition by p order by s rows between unbounded "
+          "preceding and current row) FROM tmp");
+}
+
+DEBUG_ONLY_TEST_F(
+    WindowTest,
+    rowsStreamingWindowBuildBudgetPreservesResultsNonDefaultFrame) {
+  // The default-frame restriction in Window::supportRowsStreaming() applies
+  // only to aggregates, so ranking functions reach this build under any frame,
+  // including one that extends past the current row. They ignore the frame -
+  // both Rank::apply() and RowNumber::apply() discard frameStarts/frameEnds -
+  // but the byte budget must not change their results either way. The RANGE
+  // case additionally covers the path where the budget is disabled outright.
+  const vector_size_t size = 500;
+  auto data = makeSinglePartitionData(size, 7, 4'096, 0);
+  createDuckDbTable({data});
+
+  for (const auto& frame :
+       {"rows between current row and unbounded following",
+        "rows between 3 preceding and 2 following",
+        "range between unbounded preceding and current row"}) {
+    SCOPED_TRACE(frame);
+    std::atomic_bool isStreamCreated{false};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+        std::function<void(window::RowsStreamingWindowBuild*)>(
+            [&](window::RowsStreamingWindowBuild*) {
+              isStreamCreated.store(true);
+            }));
+    auto windowNode = makeStreamingWindowNode(
+        {data},
+        {fmt::format("rank() over (partition by p order by s {})", frame),
+         fmt::format(
+             "row_number() over (partition by p order by s {})", frame)});
+
+    auto tiny =
+        AssertQueryBuilder(windowNode)
+            .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+            .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+            .copyResults(pool());
+    auto unbounded =
+        AssertQueryBuilder(windowNode)
+            .config(core::QueryConfig::kPreferredOutputBatchBytes, "1000000000")
+            .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+            .copyResults(pool());
+
+    // These frames do reach this build; if the gate ever tightens, the
+    // invariant below stops being about the byte budget.
+    EXPECT_TRUE(isStreamCreated.load());
+    ASSERT_EQ(tiny->size(), size);
+    for (auto row = 0; row < size; ++row) {
+      ASSERT_TRUE(tiny->equalValueAt(unbounded.get(), row, row))
+          << "row " << row << ": tiny=" << tiny->toString(row)
+          << " unbounded=" << unbounded->toString(row);
+    }
+  }
+}
+
+TEST_F(WindowTest, rowsStreamingWindowBuildWideRowsSinglePartition) {
+  // End-to-end counterpart of the two throttle tests above. Rows wide enough
+  // that the retained-byte budget is reached almost immediately, a single
+  // partition that stays incomplete until the input ends, and an output-row
+  // target far above the budget in rows. The build refusing input and the
+  // operator producing output have to interleave, otherwise the driver makes no
+  // progress.
+  const vector_size_t size = 200;
+  auto data = makeSinglePartitionData(size, 1, 4'096, 0);
+  auto windowNode =
+      makeStreamingWindowNode({data}, {rowsFrameFunction("row_number()")});
+
+  auto result =
+      AssertQueryBuilder(windowNode)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+          .copyResults(pool());
+  ASSERT_EQ(result->size(), size);
 }
 
 TEST_F(WindowTest, rowsStreamingWindowBuildLoadsOnlyBoundaryColumns) {
@@ -656,7 +1001,11 @@ TEST_F(WindowTest, rowsStreamingWindowBuildLoadsOnlyBoundaryColumns) {
   ASSERT_NE(windowNode, nullptr);
 
   TestingRowsStreamingWindowBuild windowBuild(
-      windowNode, pool(), nullptr, &nonReclaimableSection_);
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
   windowBuild.setNumRowsPerOutput(2);
   windowBuild.addInput(data);
 
@@ -693,7 +1042,11 @@ TEST_F(
   ASSERT_NE(windowNode, nullptr);
 
   TestingRowsStreamingWindowBuild windowBuild(
-      windowNode, pool(), nullptr, &nonReclaimableSection_);
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
   windowBuild.setNumRowsPerOutput(10);
   windowBuild.addInput(data);
   EXPECT_FALSE(payload->isLoaded());
@@ -776,7 +1129,11 @@ TEST_F(WindowTest, rowsStreamingWindowBuildRetainsEncodedRows) {
   ASSERT_NE(windowNode, nullptr);
 
   TestingRowsStreamingWindowBuild windowBuild(
-      windowNode, pool(), nullptr, &nonReclaimableSection_);
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
   windowBuild.setNumRowsPerOutput(4);
   for (const auto& input : inputs) {
     windowBuild.addInput(input);
@@ -815,7 +1172,11 @@ TEST_F(WindowTest, rowsStreamingWindowBuildExtractsNegativeRowsAsNull) {
   ASSERT_NE(windowNode, nullptr);
 
   TestingRowsStreamingWindowBuild windowBuild(
-      windowNode, pool(), nullptr, &nonReclaimableSection_);
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
   windowBuild.setNumRowsPerOutput(10);
   windowBuild.addInput(data);
   windowBuild.noMoreInput();
@@ -851,7 +1212,11 @@ TEST_F(WindowTest, rowsStreamingWindowBuildKRangeFrameNanBounds) {
   ASSERT_NE(windowNode, nullptr);
 
   TestingRowsStreamingWindowBuild windowBuild(
-      windowNode, pool(), nullptr, &nonReclaimableSection_);
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
   windowBuild.setNumRowsPerOutput(10);
   windowBuild.addInput(data);
   windowBuild.noMoreInput();
@@ -901,7 +1266,11 @@ TEST_F(WindowTest, rowsStreamingWindowBuildKRangeFramePeerBounds) {
   ASSERT_NE(windowNode, nullptr);
 
   TestingRowsStreamingWindowBuild windowBuild(
-      windowNode, pool(), nullptr, &nonReclaimableSection_);
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
   windowBuild.setNumRowsPerOutput(10);
   windowBuild.addInput(data);
   windowBuild.noMoreInput();
@@ -956,7 +1325,11 @@ TEST_F(WindowTest, rowsStreamingWindowBuildPeerContinuesAcrossInputBatches) {
   ASSERT_NE(windowNode, nullptr);
 
   TestingRowsStreamingWindowBuild windowBuild(
-      windowNode, pool(), nullptr, &nonReclaimableSection_);
+      windowNode,
+      pool(),
+      nullptr,
+      &nonReclaimableSection_,
+      kUnboundedRetainedBytes);
   windowBuild.setNumRowsPerOutput(2);
   windowBuild.addInput(firstBatch);
   windowBuild.addInput(secondBatch);
@@ -1000,7 +1373,11 @@ TEST_F(WindowTest, rowsStreamingWindowBuildKRangeFrameSearchBounds) {
     ASSERT_NE(windowNode, nullptr);
 
     TestingRowsStreamingWindowBuild windowBuild(
-        windowNode, pool(), nullptr, &nonReclaimableSection_);
+        windowNode,
+        pool(),
+        nullptr,
+        &nonReclaimableSection_,
+        kUnboundedRetainedBytes);
     windowBuild.setNumRowsPerOutput(10);
     auto splitData = split(data, 4);
     for (const auto& input : splitData) {

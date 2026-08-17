@@ -37,6 +37,21 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
   /// sequence number filtering.
   int64_t dataSequenceNumber{0};
 
+  /// Partition values keyed by the Iceberg *source* column field ID, for
+  /// partition fields the serialized spec explicitly marks as the 'identity'
+  /// transform. Only an identity value equals the source column's value, so
+  /// only these entries may be substituted for a read of the source column.
+  ///
+  /// Transformed fields (bucket, truncate, day, void) are never present, even
+  /// when their derived partition-field name happens to collide with a source
+  /// column name. An empty map means no identity provenance was available and
+  /// callers must read source columns from the data file.
+  ///
+  /// Distinct from the inherited name-keyed 'partitionKeys', which carries
+  /// every partition field under its derived 'PartitionField.name()' and
+  /// therefore cannot prove a transform is identity.
+  std::unordered_map<int32_t, std::optional<std::string>> identityPartitionKeys;
+
   HiveIcebergSplit(
       const std::string& connectorId,
       const std::string& filePath,
@@ -51,7 +66,9 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       bool cacheable = true,
       const std::unordered_map<std::string, std::string>& infoColumns = {},
       std::optional<FileProperties> fileProperties = std::nullopt,
-      int64_t dataSequenceNumber = 0);
+      int64_t dataSequenceNumber = 0,
+      const std::unordered_map<int32_t, std::optional<std::string>>&
+          identityPartitionKeys = {});
 
   // For tests only
   HiveIcebergSplit(
@@ -69,7 +86,9 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       std::vector<IcebergDeleteFile> deletes = {},
       const std::unordered_map<std::string, std::string>& infoColumns = {},
       std::optional<FileProperties> fileProperties = std::nullopt,
-      int64_t dataSequenceNumber = 0);
+      int64_t dataSequenceNumber = 0,
+      const std::unordered_map<int32_t, std::optional<std::string>>&
+          identityPartitionKeys = {});
 };
 
 /// Builds Iceberg splits with named parameters.
@@ -124,6 +143,14 @@ class IcebergSplitBuilder {
     return *this;
   }
 
+  /// Sets identity-transform partition values keyed by source field ID. See
+  /// 'HiveIcebergSplit::identityPartitionKeys'.
+  IcebergSplitBuilder& identityPartitionKeys(
+      const std::unordered_map<int32_t, std::optional<std::string>>& keys) {
+    identityPartitionKeys_ = keys;
+    return *this;
+  }
+
   std::shared_ptr<HiveIcebergSplit> build() const;
 
  private:
@@ -136,6 +163,8 @@ class IcebergSplitBuilder {
   std::unordered_map<std::string, std::string> infoColumns_;
   std::vector<IcebergDeleteFile> deleteFiles_;
   int64_t dataSequenceNumber_{0};
+  std::unordered_map<int32_t, std::optional<std::string>>
+      identityPartitionKeys_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg
