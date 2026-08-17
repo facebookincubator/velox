@@ -907,15 +907,15 @@ TEST_F(TimezoneFunctionTest, parseDatetimeNoColonOffset) {
       "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
 }
 
-// Reproducer for the colon-offset minute drop. cuDF's "%z" is fixed-width
-// "+/-HHMM": it reads the two hour digits, then the two minute digits at a
-// fixed position, so a colon (Joda ZZ, "+05:30") lands where a minute digit is
-// expected and only "+05:00" is folded into the UTC instant. The
-// trailing-offset regex still recovers "+05:30" for the zone key, leaving the
-// instant 30 minutes off from CPU. The existing -09:00/-0900 tests miss this
-// because their minute component is zero. Red until the colon offset is
-// normalized (or the wall clock is parsed without "%z" and the recovered offset
-// subtracted).
+// A colon offset used to lose its minutes. cuDF's "%z" is fixed-width
+// "+/-HHMM": it reads the two hour digits, then the two minute digits at a fixed
+// position, so a colon (Joda ZZ, "+05:30") landed where a minute digit was
+// expected and only "+05:00" reached the UTC instant, leaving it 30 minutes off
+// while the trailing-offset regex still recovered "+05:30" for the zone key. The
+// wall clock is now parsed without "%z" and the recovered offset subtracted
+// instead, which also reads the hours-only form "+05" that a fixed-width
+// specifier cannot. The -09:00 and -0900 tests above miss this because their
+// minute component is zero.
 TEST_F(TimezoneFunctionTest, parseDatetimeColonOffsetWithMinutes) {
   auto input = varcharInput("2026-01-02 00:45:00 +05:30");
   assertMatchesCpu(
