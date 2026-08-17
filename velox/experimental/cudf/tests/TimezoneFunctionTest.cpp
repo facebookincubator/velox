@@ -57,6 +57,7 @@
 // and is out of scope for a GPU-vs-CPU gap.
 
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/TimezoneConversion.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -66,7 +67,17 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
+#include <cudf/column/column_factories.hpp>
+#include <cudf/utilities/default_stream.hpp>
+#include <cudf/utilities/error.hpp>
+#include <cudf/utilities/memory_resource.hpp>
+
+#include <cuda_runtime_api.h>
+
+#include <gmock/gmock.h>
+
 #include <limits>
+#include <vector>
 
 using namespace facebook::velox;
 using namespace facebook::velox::cudf_velox;
@@ -1397,6 +1408,135 @@ TEST_F(TimezoneFunctionTest, fromIso8601NullRowStaysNull) {
   auto input = makeRowVector(
       {makeNullableFlatVector<std::string>({std::nullopt}, VARCHAR())});
   assertMatchesCpu("from_iso8601_timestamp(c0)", input);
+}
+
+// Direct tests of the conversion API in TimezoneConversion.h. Every other test
+// in this file reaches it through a SQL function, and each of those constrains
+// what can arrive: date_trunc only ever supplies a truncation boundary, and
+// from_iso8601_timestamp only a wall clock it parsed from text. These call the
+// two functions with arbitrary instants, and assert the round trip, which no
+// SQL path can express.
+//
+// The values are America/Los_Angeles in 2021. The clocks jump forward at
+// 2021-03-14 10:00Z, so local 01:00 is PST (-08:00) and local 03:00 is PDT
+// (-07:00) and local 02:30 never happens. They go back at 2021-11-07 09:00Z, so
+// local 01:30 occurs twice, at 08:30Z and again at 09:30Z.
+
+constexpr int64_t kUtcBeforeSpringForward = 1'615'712'400'000; // 09:00Z
+constexpr int64_t kLocalBeforeSpringForward = 1'615'683'600'000; // 01:00 PST
+constexpr int64_t kUtcAfterSpringForward = 1'615'716'000'000; // 10:00Z
+constexpr int64_t kLocalAfterSpringForward = 1'615'690'800'000; // 03:00 PDT
+constexpr int64_t kLocalInGap = 1'615'689'000'000; // 02:30, nonexistent
+constexpr int64_t kLocalInOverlap = 1'636'248'600'000; // 01:30, twice
+constexpr int64_t kUtcEarliestOfOverlap = 1'636'273'800'000; // 08:30Z
+
+// Builds a TIMESTAMP_MILLISECONDS column from host values.
+std::unique_ptr<cudf::column> millisColumn(
+    const std::vector<int64_t>& values,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto column = cudf::make_fixed_width_column(
+      cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
+      static_cast<cudf::size_type>(values.size()),
+      cudf::mask_state::UNALLOCATED,
+      stream,
+      mr);
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      column->mutable_view().data<int64_t>(),
+      values.data(),
+      values.size() * sizeof(int64_t),
+      cudaMemcpyHostToDevice,
+      stream.value()));
+  stream.synchronize();
+  return column;
+}
+
+std::vector<int64_t> millisToHost(
+    const cudf::column_view& view,
+    rmm::cuda_stream_view stream) {
+  std::vector<int64_t> host(view.size());
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      host.data(),
+      view.data<int64_t>(),
+      host.size() * sizeof(int64_t),
+      cudaMemcpyDeviceToHost,
+      stream.value()));
+  stream.synchronize();
+  return host;
+}
+
+TEST_F(TimezoneFunctionTest, toLocalTimestampShiftsAcrossTransition) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto utc = millisColumn(
+      {kUtcBeforeSpringForward, kUtcAfterSpringForward}, stream, mr);
+
+  auto local = toLocalTimestamp(utc->view(), "America/Los_Angeles", stream, mr);
+
+  EXPECT_THAT(
+      millisToHost(local->view(), stream),
+      testing::ElementsAre(
+          kLocalBeforeSpringForward, kLocalAfterSpringForward));
+}
+
+// The round trip is the property no SQL path states: converting to local and
+// back has to land on the instant it started from, on both sides of a
+// transition where the offset differs.
+TEST_F(TimezoneFunctionTest, toUtcTimestampInvertsToLocalTimestamp) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  const std::vector<int64_t> instants{
+      kUtcBeforeSpringForward, kUtcAfterSpringForward};
+  auto utc = millisColumn(instants, stream, mr);
+
+  auto local = toLocalTimestamp(utc->view(), "America/Los_Angeles", stream, mr);
+  auto roundTripped =
+      toUtcTimestamp(local->view(), "America/Los_Angeles", stream, mr);
+
+  EXPECT_THAT(
+      millisToHost(roundTripped->view(), stream),
+      testing::ElementsAre(instants[0], instants[1]));
+}
+
+TEST_F(TimezoneFunctionTest, toUtcTimestampGapRaises) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto local = millisColumn({kLocalInGap}, stream, mr);
+
+  VELOX_ASSERT_THROW(
+      toUtcTimestamp(local->view(), "America/Los_Angeles", stream, mr),
+      "does not exist in the time zone");
+}
+
+TEST_F(TimezoneFunctionTest, toUtcTimestampOverlapPicksEarliest) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto local = millisColumn({kLocalInOverlap}, stream, mr);
+
+  auto utc = toUtcTimestamp(local->view(), "America/Los_Angeles", stream, mr);
+
+  EXPECT_THAT(
+      millisToHost(utc->view(), stream),
+      testing::ElementsAre(kUtcEarliestOfOverlap));
+}
+
+// A null row is not a gap, so an all-null column must convert without raising
+// -- the property that lets a caller null out the rows it does not want
+// checked.
+TEST_F(TimezoneFunctionTest, toUtcTimestampNullRowIsNotAGap) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto local = cudf::make_fixed_width_column(
+      cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
+      1,
+      cudf::mask_state::ALL_NULL,
+      stream,
+      mr);
+
+  auto utc = toUtcTimestamp(local->view(), "America/Los_Angeles", stream, mr);
+
+  EXPECT_EQ(utc->size(), 1);
+  EXPECT_EQ(utc->null_count(), 1);
 }
 
 } // namespace
