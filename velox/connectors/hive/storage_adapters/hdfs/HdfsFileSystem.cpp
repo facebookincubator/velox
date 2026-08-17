@@ -32,10 +32,13 @@ class HdfsFileSystem::Impl {
     // Read-retry policy. Defaults preserve the original fail-fast behavior:
     // maxReadAttempts == 1 means no retries. Retries are opt-in because the
     // JNI-backed libhdfs.so already retries and fails over internally, whereas
-    // libhdfs3 does not.
-    maxReadAttempts_ = config->get<int32_t>("hive.hdfs.read-max-attempts", 1);
-    retryBaseDelayMs_ =
-        config->get<int32_t>("hive.hdfs.read-retry-delay-ms", 100);
+    // libhdfs3 does not. config may be null (getFileSystem can be called with a
+    // null config), in which case the member defaults are kept.
+    if (config != nullptr) {
+      maxReadAttempts_ = config->get<int32_t>("hive.hdfs.read-max-attempts", 1);
+      retryBaseDelayMs_ =
+          config->get<int32_t>("hive.hdfs.read-retry-delay-ms", 100);
+    }
 
     auto status = filesystems::arrow::io::internal::ConnectLibHdfs(&driver_);
     VELOX_CHECK(
