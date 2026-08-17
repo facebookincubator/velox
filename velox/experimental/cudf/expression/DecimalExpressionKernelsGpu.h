@@ -40,9 +40,9 @@ enum class DecimalBinaryOpStatus : int32_t {
 };
 
 // CUDA implementations that return {result, status}. The status is tracked with
-// a single device-side flag (set via atomicOr by any failing row), matching the
-// fail-fast semantics of Presto / Velox CPU decimal arithmetic; no per-row
-// (O(n)) status column is allocated.
+// a single device-side flag (OR'd via a per-thread register, then one
+// atomicOr per thread), matching the fail-fast semantics of Presto / Velox
+// CPU decimal arithmetic; no per-row (O(n)) status column is allocated.
 std::pair<std::unique_ptr<cudf::column>, DecimalBinaryOpStatus>
 decimalBinaryOperationWithOverflow(
     const cudf::column_view& lhs,
