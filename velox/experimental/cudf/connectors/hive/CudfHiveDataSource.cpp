@@ -77,7 +77,7 @@ const std::string& resolvePhysicalColumnName(
   return it == physicalColumnNames.end() ? name : it->second;
 }
 
-// Resolves a physical column name against the logical table schema.
+// Resolves a physical column name into its index
 uint32_t resolveColumnIndex(const RowType& rowType, const std::string& name) {
   if (const auto childIndex = rowType.getChildIdxIfExists(name)) {
     return *childIndex;
