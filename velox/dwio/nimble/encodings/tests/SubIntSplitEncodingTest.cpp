@@ -222,14 +222,16 @@ class ExtendedSubIntSplitPolicy final
  public:
   nimble::EncodingSelectionResult select(
       std::span<const physicalType> /* values */,
-      const nimble::Statistics<physicalType>& /* statistics */) override {
+      const nimble::Statistics<physicalType>& /* statistics */,
+      const nimble::Encoding::Options& /* options */) override {
     return {.encodingType = nimble::EncodingType::SubIntSplit};
   }
 
   nimble::EncodingSelectionResult selectNullable(
       std::span<const physicalType> /* values */,
       std::span<const bool> /* nulls */,
-      const nimble::Statistics<physicalType>& /* statistics */) override {
+      const nimble::Statistics<physicalType>& /* statistics */,
+      const nimble::Encoding::Options& /* options */) override {
     return {.encodingType = nimble::EncodingType::Nullable};
   }
 
@@ -237,8 +239,8 @@ class ExtendedSubIntSplitPolicy final
       nimble::EncodingType encodingType,
       nimble::NestedEncodingIdentifier identifier,
       nimble::DataType type) override {
-    auto readFactors =
-        nimble::ManualEncodingSelectionPolicyFactory::defaultReadFactors();
+    auto readFactors = nimble::ManualEncodingSelectionPolicyFactory::
+        defaultEncodingReadFactors();
     readFactors.erase(
         std::remove_if(
             readFactors.begin(),
@@ -525,7 +527,8 @@ TEST(SubIntSplitEncodingTests, FullWidthSingleSectionRoundTrip) {
 
 TEST(SubIntSplitEncodingTests, CreateImplExtendsCandidatesForSubIntSplitChildren) {
   nimble::ManualEncodingSelectionPolicy<uint64_t> policy{
-      nimble::ManualEncodingSelectionPolicyFactory::defaultReadFactors(),
+      nimble::ManualEncodingSelectionPolicyFactory::
+          defaultEncodingReadFactors(),
       std::nullopt,
       std::nullopt};
 
