@@ -34,7 +34,6 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
-#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 
 // Frame of Reference encoding. Divides data into fixed-size frames, storing
 // a reference value per frame and bit-packing the exceptions (value - ref).
