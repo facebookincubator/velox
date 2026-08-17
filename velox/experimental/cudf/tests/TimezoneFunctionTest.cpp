@@ -1413,13 +1413,28 @@ TEST_F(TimezoneFunctionTest, fromIso8601NullRowStaysNull) {
 // (-07:00) and local 02:30 never happens. They go back at 2021-11-07 09:00Z, so
 // local 01:30 occurs twice, at 08:30Z and again at 09:30Z.
 
+constexpr const char* kLosAngelesZone = "America/Los_Angeles";
 constexpr int64_t kUtcBeforeSpringForward = 1'615'712'400'000; // 09:00Z
-constexpr int64_t kLocalBeforeSpringForward = 1'615'683'600'000; // 01:00 PST
 constexpr int64_t kUtcAfterSpringForward = 1'615'716'000'000; // 10:00Z
-constexpr int64_t kLocalAfterSpringForward = 1'615'690'800'000; // 03:00 PDT
 constexpr int64_t kLocalInGap = 1'615'689'000'000; // 02:30, nonexistent
-constexpr int64_t kLocalInOverlap = 1'636'248'600'000; // 01:30, twice
-constexpr int64_t kUtcEarliestOfOverlap = 1'636'273'800'000; // 08:30Z
+constexpr int64_t kLocalInOverlap = 1'636'248'600'000; // 01:30, occurs twice
+
+// CPU's counterpart of toLocalTimestamp: shifts a GMT instant to the wall clock
+// at the zone. Used as the oracle so the expectations come from Velox rather
+// than from arithmetic done here, as everywhere else in this file.
+int64_t cpuToLocalMillis(int64_t utcMillis, const char* zone) {
+  auto timestamp = Timestamp::fromMillis(utcMillis);
+  timestamp.toTimezone(*tz::locateZone(zone));
+  return timestamp.toMillis();
+}
+
+// CPU's counterpart of toUtcTimestamp, and the function toUtcTimestamp is
+// documented as matching. It raises for a local time that does not exist.
+int64_t cpuToUtcMillis(int64_t localMillis, const char* zone) {
+  auto timestamp = Timestamp::fromMillis(localMillis);
+  timestamp.toGMT(*tz::locateZone(zone));
+  return timestamp.toMillis();
+}
 
 // Builds a TIMESTAMP_MILLISECONDS column from host values.
 std::unique_ptr<cudf::column> millisColumn(
@@ -1462,12 +1477,13 @@ TEST_F(TimezoneFunctionTest, toLocalTimestampShiftsAcrossTransition) {
   auto utc = millisColumn(
       {kUtcBeforeSpringForward, kUtcAfterSpringForward}, stream, mr);
 
-  auto local = toLocalTimestamp(utc->view(), "America/Los_Angeles", stream, mr);
+  auto local = toLocalTimestamp(utc->view(), kLosAngelesZone, stream, mr);
 
   EXPECT_THAT(
       millisToHost(local->view(), stream),
       testing::ElementsAre(
-          kLocalBeforeSpringForward, kLocalAfterSpringForward));
+          cpuToLocalMillis(kUtcBeforeSpringForward, kLosAngelesZone),
+          cpuToLocalMillis(kUtcAfterSpringForward, kLosAngelesZone)));
 }
 
 // The round trip is the property no SQL path states: converting to local and
@@ -1480,9 +1496,9 @@ TEST_F(TimezoneFunctionTest, toUtcTimestampInvertsToLocalTimestamp) {
       kUtcBeforeSpringForward, kUtcAfterSpringForward};
   auto utc = millisColumn(instants, stream, mr);
 
-  auto local = toLocalTimestamp(utc->view(), "America/Los_Angeles", stream, mr);
+  auto local = toLocalTimestamp(utc->view(), kLosAngelesZone, stream, mr);
   auto roundTripped =
-      toUtcTimestamp(local->view(), "America/Los_Angeles", stream, mr);
+      toUtcTimestamp(local->view(), kLosAngelesZone, stream, mr);
 
   EXPECT_THAT(
       millisToHost(roundTripped->view(), stream),
@@ -1494,8 +1510,9 @@ TEST_F(TimezoneFunctionTest, toUtcTimestampGapRaises) {
   auto mr = cudf::get_current_device_resource_ref();
   auto local = millisColumn({kLocalInGap}, stream, mr);
 
+  EXPECT_ANY_THROW(cpuToUtcMillis(kLocalInGap, kLosAngelesZone));
   VELOX_ASSERT_THROW(
-      toUtcTimestamp(local->view(), "America/Los_Angeles", stream, mr),
+      toUtcTimestamp(local->view(), kLosAngelesZone, stream, mr),
       "does not exist in the time zone");
 }
 
@@ -1504,11 +1521,11 @@ TEST_F(TimezoneFunctionTest, toUtcTimestampOverlapPicksEarliest) {
   auto mr = cudf::get_current_device_resource_ref();
   auto local = millisColumn({kLocalInOverlap}, stream, mr);
 
-  auto utc = toUtcTimestamp(local->view(), "America/Los_Angeles", stream, mr);
+  auto utc = toUtcTimestamp(local->view(), kLosAngelesZone, stream, mr);
 
   EXPECT_THAT(
       millisToHost(utc->view(), stream),
-      testing::ElementsAre(kUtcEarliestOfOverlap));
+      testing::ElementsAre(cpuToUtcMillis(kLocalInOverlap, kLosAngelesZone)));
 }
 
 // A null row is not a gap, so an all-null column must convert without raising
@@ -1524,7 +1541,7 @@ TEST_F(TimezoneFunctionTest, toUtcTimestampNullRowIsNotAGap) {
       stream,
       mr);
 
-  auto utc = toUtcTimestamp(local->view(), "America/Los_Angeles", stream, mr);
+  auto utc = toUtcTimestamp(local->view(), kLosAngelesZone, stream, mr);
 
   EXPECT_EQ(utc->size(), 1);
   EXPECT_EQ(utc->null_count(), 1);
