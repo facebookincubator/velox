@@ -102,9 +102,7 @@ endif()
 
 if(VELOX_ENABLE_GEO)
   velox_compile_definitions(velox_hive_iceberg_splitreader PRIVATE VELOX_ENABLE_GEO)
-  velox_link_libraries(
-    velox_hive_iceberg_splitreader velox_common_geospatial_serde GEOS::geos
-  )
+  velox_link_libraries(velox_hive_iceberg_splitreader velox_common_geospatial_serde GEOS::geos)
 endif()
 
 if(${VELOX_BUILD_TESTING})

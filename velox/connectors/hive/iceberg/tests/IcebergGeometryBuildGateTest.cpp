@@ -14,13 +14,15 @@
  * limitations under the License.
  */
 
-// Runtime behavior of an Iceberg geometry read as a function of the build flag. Unlike
-// IcebergGeometryReadTest this file is compiled in *both* configurations, because the point is to
-// pin what a VELOX_ENABLE_GEO=OFF binary does when it meets a geometry column: it must fail with an
-// explicit message naming the flag, and it must never hand raw WKB back inside a GEOMETRY vector.
+// Runtime behavior of an Iceberg geometry read as a function of the build flag.
+// Unlike IcebergGeometryReadTest this file is compiled in *both*
+// configurations, because the point is to pin what a VELOX_ENABLE_GEO=OFF
+// binary does when it meets a geometry column: it must fail with an explicit
+// message naming the flag, and it must never hand raw WKB back inside a
+// GEOMETRY vector.
 //
-// Nothing here needs GEOS: the WKB is a hard-coded byte string and GeometryType is header-only, so
-// the test links in a geospatial-free build.
+// Nothing here needs GEOS: the WKB is a hard-coded byte string and GeometryType
+// is header-only, so the test links in a geospatial-free build.
 
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 
@@ -35,12 +37,13 @@
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
 
-// Little-endian ISO WKB for POINT (10 20), written out by hand so that this file needs no WKB writer.
+// Little-endian ISO WKB for POINT (10 20), written out by hand so that this
+// file needs no WKB writer.
 const std::string kPointWkb = {
-    '\x01',                                                 // little endian
-    '\x01', '\x00', '\x00', '\x00',                         // type 1 = Point
+    '\x01', // little endian
+    '\x01', '\x00', '\x00', '\x00', // type 1 = Point
     '\x00', '\x00', '\x00', '\x00', '\x00', '\x00', '\x24', '\x40', // x = 10
-    '\x00', '\x00', '\x00', '\x00', '\x00', '\x00', '\x34', '\x40'  // y = 20
+    '\x00', '\x00', '\x00', '\x00', '\x00', '\x00', '\x34', '\x40' // y = 20
 };
 
 class IcebergGeometryBuildGateTest : public test::IcebergTestBase {
@@ -77,7 +80,8 @@ TEST_F(IcebergGeometryBuildGateTest, geometryReadDependsOnBuildFlag) {
   auto splits = createSplitsForDirectory(dataPath);
 
 #ifdef VELOX_ENABLE_GEO
-  // With geospatial support the value is re-encoded, so the output is *not* the WKB that is on disk.
+  // With geospatial support the value is re-encoded, so the output is *not* the
+  // WKB that is on disk.
   auto result =
       exec::test::AssertQueryBuilder(plan).splits(splits).copyResults(pool());
   ASSERT_EQ(result->size(), 1);
@@ -87,8 +91,8 @@ TEST_F(IcebergGeometryBuildGateTest, geometryReadDependsOnBuildFlag) {
   EXPECT_NE(decoded.valueAt<StringView>(0).str(), kPointWkb)
       << "the GEOMETRY vector still holds raw WKB";
 #else
-  // Without it, the read must fail and name the flag. Any successful read here would mean raw WKB
-  // was exposed as a GEOMETRY vector.
+  // Without it, the read must fail and name the flag. Any successful read here
+  // would mean raw WKB was exposed as a GEOMETRY vector.
   VELOX_ASSERT_THROW(
       exec::test::AssertQueryBuilder(plan).splits(splits).copyResults(pool()),
       "requires a build with geospatial support (VELOX_ENABLE_GEO=ON)");
@@ -96,7 +100,8 @@ TEST_F(IcebergGeometryBuildGateTest, geometryReadDependsOnBuildFlag) {
 }
 
 TEST_F(IcebergGeometryBuildGateTest, plainBinaryReadWorksInEitherBuild) {
-  // The same file read as VARBINARY is unaffected by the flag: the bytes come back verbatim.
+  // The same file read as VARBINARY is unaffected by the flag: the bytes come
+  // back verbatim.
   const auto outputDirectory = test::TempDirectoryPath::create();
   const auto dataPath = outputDirectory->getPath();
   auto data = makeRowVector({"geom"}, {makeWkbVector()});

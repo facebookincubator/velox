@@ -16,17 +16,18 @@
 
 // Cross-runtime compatibility check for the internal geometry encoding.
 //
-// A geometry value read by the native worker crosses exchange, spill and coordinator boundaries and
-// may be interpreted by Presto's Java worker, so this runtime's
-// common::geospatial::GeometrySerializer output and the Java worker's EsriGeometrySerde output must
-// be the same bytes for the same WKB input. Testing each side against WKT independently does not
-// establish that.
+// A geometry value read by the native worker crosses exchange, spill and
+// coordinator boundaries and may be interpreted by Presto's Java worker, so
+// this runtime's common::geospatial::GeometrySerializer output and the Java
+// worker's EsriGeometrySerde output must be the same bytes for the same WKB
+// input. Testing each side against WKT independently does not establish that.
 //
-// examples/geometry_internal_encoding_golden.tsv pins those bytes. The same file, with the same
-// SHA-256 drift guard, is checked into prestodb/presto at
-// presto-iceberg/src/test/resources/iceberg_v3/geometry_internal_encoding_golden.tsv, where
-// TestIcebergGeometryCrossRuntimeEncoding asserts against it. If either implementation changes its
-// encoding, exactly one of the two suites starts failing.
+// examples/geometry_internal_encoding_golden.tsv pins those bytes. The same
+// file, with the same SHA-256 drift guard, is checked into prestodb/presto at
+// presto-iceberg/src/test/resources/iceberg_v3/geometry_internal_encoding_golden.tsv,
+// where TestIcebergGeometryCrossRuntimeEncoding asserts against it. If either
+// implementation changes its encoding, exactly one of the two suites starts
+// failing.
 
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 
@@ -83,7 +84,8 @@ class IcebergGeometryCrossRuntimeEncodingTest : public test::IcebergTestBase {
     std::string out;
     out.reserve(hex.size() / 2);
     for (size_t i = 0; i < hex.size(); i += 2) {
-      out.push_back(static_cast<char>(std::stoi(hex.substr(i, 2), nullptr, 16)));
+      out.push_back(
+          static_cast<char>(std::stoi(hex.substr(i, 2), nullptr, 16)));
     }
     return out;
   }
@@ -100,9 +102,11 @@ class IcebergGeometryCrossRuntimeEncodingTest : public test::IcebergTestBase {
     return out;
   }
 
-  /// SHA-256 of the record lines of the golden fixture, mirrored in the file's own drift-guard
-  /// header and in prestodb/presto's TestIcebergGeometryCrossRuntimeEncoding. Updating it means
-  /// changing an internal encoding, which needs a deliberate, explained change in both repositories.
+  /// SHA-256 of the record lines of the golden fixture, mirrored in the file's
+  /// own drift-guard header and in prestodb/presto's
+  /// TestIcebergGeometryCrossRuntimeEncoding. Updating it means changing an
+  /// internal encoding, which needs a deliberate, explained change in both
+  /// repositories.
   static constexpr const char* kGoldenRecordsSha256 =
       "9452293bacd3a49b73a75b819896a7e0d39e57f2e91cf3cda19fd37e6485f6ed";
 
@@ -112,8 +116,9 @@ class IcebergGeometryCrossRuntimeEncodingTest : public test::IcebergTestBase {
         "examples/geometry_internal_encoding_golden.tsv");
   }
 
-  /// The record lines only: every line that is neither blank nor a comment, joined with a newline
-  /// and terminated by one. Must match how the hash in the file header was computed.
+  /// The record lines only: every line that is neither blank nor a comment,
+  /// joined with a newline and terminated by one. Must match how the hash in
+  /// the file header was computed.
   static std::string readGoldenRecordPayload() {
     std::ifstream file(goldenPath());
     VELOX_CHECK(file.is_open(), "cannot open golden file {}", goldenPath());
@@ -150,7 +155,8 @@ class IcebergGeometryCrossRuntimeEncodingTest : public test::IcebergTestBase {
     std::string internalHex;
   };
 
-  /// Reads the cross-runtime golden table. The same file is checked into prestodb/presto at
+  /// Reads the cross-runtime golden table. The same file is checked into
+  /// prestodb/presto at
   /// presto-iceberg/src/test/resources/iceberg_v3/geometry_internal_encoding_golden.tsv.
   static std::vector<GoldenRecord> loadGolden() {
     const auto path = goldenPath();
@@ -164,8 +170,10 @@ class IcebergGeometryCrossRuntimeEncodingTest : public test::IcebergTestBase {
       }
       const auto first = line.find('\t');
       const auto second = line.find('\t', first + 1);
-      VELOX_CHECK_NE(first, std::string::npos, "malformed golden record: {}", line);
-      VELOX_CHECK_NE(second, std::string::npos, "malformed golden record: {}", line);
+      VELOX_CHECK_NE(
+          first, std::string::npos, "malformed golden record: {}", line);
+      VELOX_CHECK_NE(
+          second, std::string::npos, "malformed golden record: {}", line);
       records.push_back(
           {line.substr(0, first),
            fromHex(line.substr(first + 1, second - first - 1)),
@@ -176,33 +184,34 @@ class IcebergGeometryCrossRuntimeEncodingTest : public test::IcebergTestBase {
 };
 
 TEST_F(IcebergGeometryCrossRuntimeEncodingTest, goldenFileHasNotDrifted) {
-  // Fails on any accidental edit to this copy, and on any edit that was not mirrored into the
-  // prestodb/presto copy, which asserts the same constant.
+  // Fails on any accidental edit to this copy, and on any edit that was not
+  // mirrored into the prestodb/presto copy, which asserts the same constant.
   EXPECT_EQ(sha256Hex(readGoldenRecordPayload()), kGoldenRecordsSha256)
       << "the cross-runtime golden fixture changed; see the drift-guard header in "
       << goldenPath();
 }
 
 TEST_F(IcebergGeometryCrossRuntimeEncodingTest, internalEncodingMatchesGolden) {
-  // Pins the bytes a GEOMETRY vector must hold, so that a value produced here and a value produced
-  // by Presto's Java worker (EsriGeometrySerde) are interchangeable across an exchange.
+  // Pins the bytes a GEOMETRY vector must hold, so that a value produced here
+  // and a value produced by Presto's Java worker (EsriGeometrySerde) are
+  // interchangeable across an exchange.
   const auto records = loadGolden();
   ASSERT_GE(records.size(), 17);
 
   std::vector<std::string> mismatches;
   for (const auto& record : records) {
     auto input = makeVarbinaryVector({record.wkb});
-    auto converted =
-        convertIcebergGeometry(input, GEOMETRY(), pool(), "geom");
+    auto converted = convertIcebergGeometry(input, GEOMETRY(), pool(), "geom");
     ASSERT_TRUE(isGeometryType(converted->type()));
     const auto actual =
         toHex(converted->asFlatVector<StringView>()->valueAt(0));
     if (actual != record.internalHex) {
-      mismatches.push_back(fmt::format(
-          "{}\n  golden: {}\n  actual: {}",
-          record.wkt,
-          record.internalHex,
-          actual));
+      mismatches.push_back(
+          fmt::format(
+              "{}\n  golden: {}\n  actual: {}",
+              record.wkt,
+              record.internalHex,
+              actual));
     }
   }
   EXPECT_TRUE(mismatches.empty())
@@ -212,8 +221,9 @@ TEST_F(IcebergGeometryCrossRuntimeEncodingTest, internalEncodingMatchesGolden) {
 }
 
 TEST_F(IcebergGeometryCrossRuntimeEncodingTest, goldenWkbMatchesGeosOutput) {
-  // Guards the golden file itself: its WKB column must be what a WKB writer produces for its WKT,
-  // so a corrupted golden file cannot silently weaken the test above.
+  // Guards the golden file itself: its WKB column must be what a WKB writer
+  // produces for its WKT, so a corrupted golden file cannot silently weaken the
+  // test above.
   for (const auto& record : loadGolden()) {
     const auto written = toWkb(record.wkt);
     EXPECT_EQ(toHex(StringView(written)), toHex(StringView(record.wkb)))

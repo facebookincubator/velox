@@ -148,7 +148,9 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
   endif()
   if(VELOX_ENABLE_PARQUET)
     target_link_libraries(
-      velox_hive_iceberg_geometry_gate_test velox_dwio_parquet_reader velox_dwio_parquet_writer
+      velox_hive_iceberg_geometry_gate_test
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
     )
   endif()
 

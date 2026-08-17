@@ -31,8 +31,9 @@
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
 
-// EWKB (PostGIS) flags in the 32-bit WKB geometry type word. Iceberg mandates ISO WKB, which never
-// sets them, so their presence means the payload does not honor the Iceberg contract.
+// EWKB (PostGIS) flags in the 32-bit WKB geometry type word. Iceberg mandates
+// ISO WKB, which never sets them, so their presence means the payload does not
+// honor the Iceberg contract.
 constexpr uint32_t kEwkbFlagZ = 0x8000'0000;
 constexpr uint32_t kEwkbFlagM = 0x4000'0000;
 constexpr uint32_t kEwkbFlagSrid = 0x2000'0000;
@@ -40,9 +41,10 @@ constexpr uint32_t kEwkbFlagSrid = 0x2000'0000;
 constexpr int32_t kWkbHeaderLength = 5;
 constexpr uint8_t kWkbBigEndian = 0;
 constexpr uint8_t kWkbLittleEndian = 1;
-// ISO WKB geometry codes 1..7 are Point .. GeometryCollection. Higher codes (CircularString,
-// CompoundCurve, CurvePolygon, MultiCurve, MultiSurface, PolyhedralSurface, TIN, Triangle) belong to
-// ISO SQL/MM and are not representable by Velox's GEOMETRY.
+// ISO WKB geometry codes 1..7 are Point .. GeometryCollection. Higher codes
+// (CircularString, CompoundCurve, CurvePolygon, MultiCurve, MultiSurface,
+// PolyhedralSurface, TIN, Triangle) belong to ISO SQL/MM and are not
+// representable by Velox's GEOMETRY.
 constexpr uint32_t kMaxSupportedWkbGeometryCode = 7;
 
 const char* dimensionName(uint32_t dimensions) {
@@ -58,10 +60,11 @@ const char* dimensionName(uint32_t dimensions) {
   }
 }
 
-/// Rejects payloads that Velox's two-dimensional, SRID-less GEOMETRY cannot represent faithfully,
-/// rather than silently dropping dimensions. Only the outermost header is inspected: in conforming
-/// ISO WKB the dimensionality of a collection is declared on the collection itself, so a 2D header
-/// implies 2D children.
+/// Rejects payloads that Velox's two-dimensional, SRID-less GEOMETRY cannot
+/// represent faithfully, rather than silently dropping dimensions. Only the
+/// outermost header is inspected: in conforming ISO WKB the dimensionality of a
+/// collection is declared on the collection itself, so a 2D header implies 2D
+/// children.
 void validateIsoWkb(StringView wkb, const std::string& columnPath) {
   VELOX_USER_CHECK_GE(
       wkb.size(),
@@ -81,8 +84,7 @@ void validateIsoWkb(StringView wkb, const std::string& columnPath) {
   } else if (data[0] == kWkbBigEndian) {
     typeCode = (static_cast<uint32_t>(data[1]) << 24) |
         (static_cast<uint32_t>(data[2]) << 16) |
-        (static_cast<uint32_t>(data[3]) << 8) |
-        static_cast<uint32_t>(data[4]);
+        (static_cast<uint32_t>(data[3]) << 8) | static_cast<uint32_t>(data[4]);
   } else {
     VELOX_USER_FAIL(
         "Invalid well-known binary (WKB) in Iceberg geometry column '{}': unknown byte order marker {}",
@@ -112,7 +114,8 @@ void validateIsoWkb(StringView wkb, const std::string& columnPath) {
       geometryCode);
 }
 
-/// Parses one WKB value and appends Velox's internal geometry encoding to 'out'.
+/// Parses one WKB value and appends Velox's internal geometry encoding to
+/// 'out'.
 void wkbToVeloxGeometry(
     StringView wkb,
     geos::io::WKBReader& wkbReader,
@@ -129,13 +132,15 @@ void wkbToVeloxGeometry(
         columnPath,
         e.what());
   }
-  // Standard WKB carries no SRID and Velox's GEOMETRY has no SRID concept: never invent one.
-  // GeometrySerializer must not run inside a GEOS_TRY: it needs its exceptions to bubble up.
+  // Standard WKB carries no SRID and Velox's GEOMETRY has no SRID concept:
+  // never invent one. GeometrySerializer must not run inside a GEOS_TRY: it
+  // needs its exceptions to bubble up.
   common::geospatial::GeometrySerializer::serialize(*geometry, out);
 }
 
-/// Converts the live positions of a flat scalar vector of WKB payloads into a new flat GEOMETRY
-/// vector. Positions outside 'rows', and null positions, are left null; their bytes are never read.
+/// Converts the live positions of a flat scalar vector of WKB payloads into a
+/// new flat GEOMETRY vector. Positions outside 'rows', and null positions, are
+/// left null; their bytes are never read.
 VectorPtr convertGeometryLeaf(
     const VectorPtr& input,
     const SelectivityVector& rows,
@@ -165,16 +170,16 @@ VectorPtr convertGeometryLeaf(
     serialized.clear();
     wkbToVeloxGeometry(
         flatInput->valueAt(i), wkbReader, serialized, columnPath);
-    // set() copies non-inline values into the result's own string buffers, so the result never
-    // aliases the reader's (recycled) page buffers.
+    // set() copies non-inline values into the result's own string buffers, so
+    // the result never aliases the reader's (recycled) page buffers.
     result->set(i, StringView(serialized));
   });
   return result;
 }
 
-/// Selects the element positions referenced by the live rows of an ARRAY or MAP. Offsets and sizes
-/// are read per row, so non-zero offsets, unreferenced gaps and sliced vectors are all handled and
-/// no packed layout is assumed.
+/// Selects the element positions referenced by the live rows of an ARRAY or
+/// MAP. Offsets and sizes are read per row, so non-zero offsets, unreferenced
+/// gaps and sliced vectors are all handled and no packed layout is assumed.
 SelectivityVector selectReferencedElements(
     const ArrayVectorBase& vector,
     const SelectivityVector& rows,
@@ -197,7 +202,8 @@ SelectivityVector selectReferencedElements(
   return selected;
 }
 
-/// Selects the dictionary entries referenced by the live rows of a dictionary vector.
+/// Selects the dictionary entries referenced by the live rows of a dictionary
+/// vector.
 SelectivityVector selectReferencedDictionaryEntries(
     const BaseVector& dictionary,
     const SelectivityVector& rows,
@@ -234,10 +240,11 @@ VectorPtr convertIcebergGeometry(
       if (loaded->isNullAt(0)) {
         return BaseVector::createNullConstant(targetType, loaded->size(), pool);
       }
-      // A non-null constant geometry does not arise from a scan (a geometry column can be neither a
-      // partition column nor a non-null initial default per the Iceberg spec), so flatten instead of
-      // special-casing scalar and complex constants. The flattened vector is FLAT, so the recursive
-      // call lands in the leaf/complex handling below.
+      // A non-null constant geometry does not arise from a scan (a geometry
+      // column can be neither a partition column nor a non-null initial default
+      // per the Iceberg spec), so flatten instead of special-casing scalar and
+      // complex constants. The flattened vector is FLAT, so the recursive call
+      // lands in the leaf/complex handling below.
       auto flattened = BaseVector::create(loaded->type(), loaded->size(), pool);
       flattened->copy(loaded.get(), 0, 0, loaded->size());
       return convertIcebergGeometry(
@@ -245,13 +252,14 @@ VectorPtr convertIcebergGeometry(
     }
 
     case VectorEncoding::Simple::DICTIONARY: {
-      // Convert only the referenced dictionary entries, once each rather than once per row, and
-      // never in place: the Parquet dictionary is shared across batches and column readers.
+      // Convert only the referenced dictionary entries, once each rather than
+      // once per row, and never in place: the Parquet dictionary is shared
+      // across batches and column readers.
       const auto& base = loaded->valueVector();
       auto baseRows =
           selectReferencedDictionaryEntries(*loaded, rows, base->size());
-      auto convertedValues = convertIcebergGeometry(
-          base, targetType, baseRows, pool, columnPath);
+      auto convertedValues =
+          convertIcebergGeometry(base, targetType, baseRows, pool, columnPath);
       return BaseVector::wrapInDictionary(
           loaded->nulls(),
           loaded->wrapInfo(),
@@ -271,13 +279,15 @@ VectorPtr convertIcebergGeometry(
     case TypeKind::ROW: {
       auto* row = loaded->as<RowVector>();
       VELOX_CHECK_NOT_NULL(
-          row, "Expected a RowVector for Iceberg geometry column '{}'", columnPath);
+          row,
+          "Expected a RowVector for Iceberg geometry column '{}'",
+          columnPath);
       const auto& rowType = targetType->asRow();
       std::vector<VectorPtr> children = row->children();
       for (auto i = 0; i < rowType.size(); ++i) {
         if (containsGeometry(rowType.childAt(i))) {
-          // A row's children are positionally aligned with the row itself, so the live rows carry
-          // over unchanged.
+          // A row's children are positionally aligned with the row itself, so
+          // the live rows carry over unchanged.
           children[i] = convertIcebergGeometry(
               children[i],
               rowType.childAt(i),
