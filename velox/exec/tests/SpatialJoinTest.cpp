@@ -62,7 +62,8 @@ class SpatialJoinTest : public OperatorTestBase {
   static constexpr std::string_view kMultipointU = "MULTIPOINT ((15 15))";
   static constexpr std::string_view kMultipointT =
       "MULTIPOINT ((14.5 14.5), (16 16))";
-  static constexpr std::string_view kMultipointR = "MULTIPOINT ((15 15), (19 19))";
+  static constexpr std::string_view kMultipointR =
+      "MULTIPOINT ((15 15), (19 19))";
 
  protected:
   void runTest(

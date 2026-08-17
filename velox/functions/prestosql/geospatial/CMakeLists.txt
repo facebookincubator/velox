@@ -12,8 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 velox_add_library(
-  velox_functions_geo GeometryUtils.cpp GeometryWktWriter.cpp HEADERS
-  GeometryUtils.h GeometryWktWriter.h)
+  velox_functions_geo
+  GeometryUtils.cpp
+  GeometryWktWriter.cpp
+  HEADERS
+  GeometryUtils.h
+  GeometryWktWriter.h
+)
 
 velox_link_libraries(
   velox_functions_geo

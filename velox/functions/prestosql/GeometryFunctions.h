@@ -93,9 +93,7 @@ struct StAsTextFunction {
         common::geospatial::GeometryDeserializer::deserialize(geometry);
 
     GEOS_TRY(
-        {
-          result = geospatial::writeWktPrestoCompatible(*geosGeometry);
-        },
+        { result = geospatial::writeWktPrestoCompatible(*geosGeometry); },
         "Failed to write WKT");
     return Status::OK();
   }
@@ -112,9 +110,7 @@ struct SphericalAsTextFunction {
         common::geospatial::GeometryDeserializer::deserialize(geography);
 
     GEOS_TRY(
-        {
-          result = geospatial::writeWktPrestoCompatible(*geosGeometry);
-        },
+        { result = geospatial::writeWktPrestoCompatible(*geosGeometry); },
         "Failed to write WKT");
     return Status::OK();
   }

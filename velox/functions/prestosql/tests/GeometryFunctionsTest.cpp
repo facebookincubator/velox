@@ -409,7 +409,6 @@ TEST_F(GeometryFunctionsTest, multiPointWktMatchesJava) {
       toWkbHex("MULTIPOINT ((0 0), (10 20), (30 40))"));
 }
 
-
 // Constructors and accessors
 
 TEST_F(GeometryFunctionsTest, testStPoint) {
@@ -667,7 +666,10 @@ TEST_F(GeometryFunctionsTest, testStDisjoint) {
   assertRelation("ST_Disjoint", std::nullopt, "POINT (150 150)", true);
   assertRelation("ST_Disjoint", "POINT (50 100)", "POINT (150 150)", true);
   assertRelation(
-      "ST_Disjoint", "MULTIPOINT ((50 100), (50 200))", "POINT (50 100)", false);
+      "ST_Disjoint",
+      "MULTIPOINT ((50 100), (50 200))",
+      "POINT (50 100)",
+      false);
   assertRelation(
       "ST_Disjoint", "LINESTRING (0 0, 0 1)", "LINESTRING (1 1, 1 0)", true);
   assertRelation(
@@ -755,7 +757,10 @@ TEST_F(GeometryFunctionsTest, testStIntersects) {
   assertRelation("ST_Intersects", std::nullopt, "POINT (150 150)", false);
   assertRelation("ST_Intersects", "POINT (50 100)", "POINT (150 150)", false);
   assertRelation(
-      "ST_Intersects", "MULTIPOINT ((50 100), (50 200))", "POINT (50 100)", true);
+      "ST_Intersects",
+      "MULTIPOINT ((50 100), (50 200))",
+      "POINT (50 100)",
+      true);
   assertRelation(
       "ST_Intersects", "LINESTRING (0 0, 0 1)", "LINESTRING (1 1, 1 0)", false);
   assertRelation(
@@ -826,7 +831,10 @@ TEST_F(GeometryFunctionsTest, testStOverlaps) {
   assertRelation("ST_Overlaps", "POINT (50 100)", "POINT (150 150)", false);
   assertRelation("ST_Overlaps", "POINT (50 100)", "POINT (50 100)", false);
   assertRelation(
-      "ST_Overlaps", "MULTIPOINT ((50 100), (50 200))", "POINT (50 100)", false);
+      "ST_Overlaps",
+      "MULTIPOINT ((50 100), (50 200))",
+      "POINT (50 100)",
+      false);
   assertRelation(
       "ST_Overlaps", "LINESTRING (0 0, 0 1)", "LINESTRING (1 1, 1 0)", false);
   assertRelation(
@@ -1365,12 +1373,14 @@ TEST_F(GeometryFunctionsTest, testStIsSimpleValid) {
   assertStIsValidSimpleFunc("POINT (1.5 2.5)", true, true);
 
   assertStIsValidSimpleFunc("MULTIPOINT ((1 2), (3 4))", true, true);
-  assertStIsValidSimpleFunc("MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", true, true);
+  assertStIsValidSimpleFunc(
+      "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", true, true);
   // Repeated point
   assertStIsValidSimpleFunc(
       "MULTIPOINT ((0 0), (0 1), (0 1), (1 1))", true, false);
   // Duplicate point
-  assertStIsValidSimpleFunc("MULTIPOINT ((1 2), (2 4), (3 6), (1 2))", true, false);
+  assertStIsValidSimpleFunc(
+      "MULTIPOINT ((1 2), (2 4), (3 6), (1 2))", true, false);
 
   assertStIsValidSimpleFunc("LINESTRING (0 0, 1 2, 3 4)", true, true);
   // Geos/JTS considers LineStrings with repeated points valid/simple (it drops
@@ -1540,7 +1550,8 @@ TEST_F(GeometryFunctionsTest, testGeometryInvalidReason) {
   assertInvalidReason("POINT (1 2)", std::nullopt);
   assertInvalidReason("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", std::nullopt);
   assertInvalidReason(
-      "GEOMETRYCOLLECTION (MULTIPOINT ((1 0), (1 1), (0 1), (0 0)))", std::nullopt);
+      "GEOMETRYCOLLECTION (MULTIPOINT ((1 0), (1 1), (0 1), (0 0)))",
+      std::nullopt);
 }
 
 TEST_F(GeometryFunctionsTest, testSimplifyGeometry) {
@@ -1645,7 +1656,10 @@ TEST_F(GeometryFunctionsTest, testStCentroid) {
       "ST_Centroid", "LINESTRING EMPTY", std::nullopt, true);
   assertResult<std::string>("ST_Centroid", "POINT (3 5)", "POINT (3 5)", true);
   assertResult<std::string>(
-      "ST_Centroid", "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", "POINT (2.5 5)", true);
+      "ST_Centroid",
+      "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))",
+      "POINT (2.5 5)",
+      true);
   assertResult<std::string>(
       "ST_Centroid", "LINESTRING (1 1, 2 2, 3 3)", "POINT (2 2)", true);
   assertResult<std::string>(
@@ -1763,7 +1777,9 @@ TEST_F(GeometryFunctionsTest, testStGeometryType) {
   assertResult<std::string>(
       "ST_GeometryType", "MULTIPOINT EMPTY", "ST_MultiPoint");
   assertResult<std::string>(
-      "ST_GeometryType", "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", "ST_MultiPoint");
+      "ST_GeometryType",
+      "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))",
+      "ST_MultiPoint");
   assertResult<std::string>(
       "ST_GeometryType", "MULTILINESTRING EMPTY", "ST_MultiLineString");
   assertResult<std::string>(
@@ -2054,11 +2070,16 @@ TEST_F(GeometryFunctionsTest, testStGeometryN) {
   testStGeometryNFunc("POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))", -1, std::nullopt);
   testStGeometryNFunc("POLYGON EMPTY", 0, std::nullopt);
   testStGeometryNFunc("POLYGON EMPTY", 2, std::nullopt);
-  testStGeometryNFunc("MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 1, "POINT (1 2)");
-  testStGeometryNFunc("MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 2, "POINT (2 4)");
-  testStGeometryNFunc("MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 0, std::nullopt);
-  testStGeometryNFunc("MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 5, std::nullopt);
-  testStGeometryNFunc("MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", -1, std::nullopt);
+  testStGeometryNFunc(
+      "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 1, "POINT (1 2)");
+  testStGeometryNFunc(
+      "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 2, "POINT (2 4)");
+  testStGeometryNFunc(
+      "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 0, std::nullopt);
+  testStGeometryNFunc(
+      "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 5, std::nullopt);
+  testStGeometryNFunc(
+      "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", -1, std::nullopt);
   testStGeometryNFunc(
       "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 1, "LINESTRING (1 1, 5 1)");
   testStGeometryNFunc(
@@ -2681,7 +2702,8 @@ TEST_F(GeometryFunctionsTest, testStNumPoints) {
   assertResult<int64_t>("ST_NumPoints", "GEOMETRYCOLLECTION EMPTY", 0);
 
   assertResult<int64_t>("ST_NumPoints", "POINT (1 2)", 1);
-  assertResult<int64_t>("ST_NumPoints", "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 4);
+  assertResult<int64_t>(
+      "ST_NumPoints", "MULTIPOINT ((1 2), (2 4), (3 6), (4 8))", 4);
   assertResult<int64_t>("ST_NumPoints", "LINESTRING (8 4, 5 7)", 2);
   assertResult<int64_t>(
       "ST_NumPoints", "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", 4);
@@ -4357,14 +4379,17 @@ TEST_F(GeometryFunctionsTest, testStSphericalCentroid) {
   testStSphericalCentroidFunction("MULTIPOINT ((3 5))", "POINT (3 5)");
 
   // Two points on opposite sides of equator at same longitude
-  testStSphericalCentroidFunction("MULTIPOINT ((0 -45), (0 45))", "POINT (0 0)");
+  testStSphericalCentroidFunction(
+      "MULTIPOINT ((0 -45), (0 45))", "POINT (0 0)");
 
   // Two points on equator at opposite longitudes
-  testStSphericalCentroidFunction("MULTIPOINT ((45 0), (-45 0))", "POINT (0 0)");
+  testStSphericalCentroidFunction(
+      "MULTIPOINT ((45 0), (-45 0))", "POINT (0 0)");
 
   // Two antipodal points on the equator (0, 0) and (-180, 0)
   // The result is arbitrary but GEOS calculates it as (-90 45)
-  testStSphericalCentroidFunction("MULTIPOINT ((0 0), (-180 0))", "POINT (-90 45)");
+  testStSphericalCentroidFunction(
+      "MULTIPOINT ((0 0), (-180 0))", "POINT (-90 45)");
 
   // Three points - the Java test expects (12.36780515862267, 0)
   // We'll check with some tolerance
