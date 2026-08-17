@@ -612,10 +612,8 @@ struct DecimalBinaryColColFunctor {
       return;
     }
     evalDecimalBinaryRow<Rep, OutRep>(
-        numeric::decimal<Rep>{
-            numeric::scaled_integer<Rep>{lhs[idx], lhsScale}},
-        numeric::decimal<Rep>{
-            numeric::scaled_integer<Rep>{rhs[idx], rhsScale}},
+        numeric::decimal<Rep>{numeric::scaled_integer<Rep>{lhs[idx], lhsScale}},
+        numeric::decimal<Rep>{numeric::scaled_integer<Rep>{rhs[idx], rhsScale}},
         op,
         outScale,
         outPrecision,
@@ -642,10 +640,8 @@ struct DecimalBinaryLhsScalarFunctor {
       return;
     }
     evalDecimalBinaryRow<Rep, OutRep>(
-        numeric::decimal<Rep>{
-            numeric::scaled_integer<Rep>{lhsValue, lhsScale}},
-        numeric::decimal<Rep>{
-            numeric::scaled_integer<Rep>{rhs[idx], rhsScale}},
+        numeric::decimal<Rep>{numeric::scaled_integer<Rep>{lhsValue, lhsScale}},
+        numeric::decimal<Rep>{numeric::scaled_integer<Rep>{rhs[idx], rhsScale}},
         op,
         outScale,
         outPrecision,
@@ -672,10 +668,8 @@ struct DecimalBinaryRhsScalarFunctor {
       return;
     }
     evalDecimalBinaryRow<Rep, OutRep>(
-        numeric::decimal<Rep>{
-            numeric::scaled_integer<Rep>{lhs[idx], lhsScale}},
-        numeric::decimal<Rep>{
-            numeric::scaled_integer<Rep>{rhsValue, rhsScale}},
+        numeric::decimal<Rep>{numeric::scaled_integer<Rep>{lhs[idx], lhsScale}},
+        numeric::decimal<Rep>{numeric::scaled_integer<Rep>{rhsValue, rhsScale}},
         op,
         outScale,
         outPrecision,
