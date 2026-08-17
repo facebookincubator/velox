@@ -504,11 +504,11 @@ class PlanBuilder {
    public:
     explicit TableWriterBuilder(PlanBuilder& builder) : planBuilder_(builder) {}
 
-    /// @param outputType The schema that will be written to the output file. It
-    /// may reference a subset or change the order of columns from the input
-    /// (upstream operator output).
-    TableWriterBuilder& outputType(RowTypePtr outputType) {
-      outputType_ = std::move(outputType);
+    /// @param targetColumns The target table's columns, in the order they are
+    /// written to the output file. It may reference a subset or change the
+    /// order of columns from the input (upstream operator output).
+    TableWriterBuilder& targetColumns(RowTypePtr targetColumns) {
+      targetColumns_ = std::move(targetColumns);
       return *this;
     }
 
@@ -629,7 +629,7 @@ class PlanBuilder {
     core::PlanNodePtr build(core::PlanNodeId id);
 
     PlanBuilder& planBuilder_;
-    RowTypePtr outputType_;
+    RowTypePtr targetColumns_;
     std::string outputDirectoryPath_;
     std::string outputFileName_;
     std::string connectorId_{kHiveDefaultConnectorId};
