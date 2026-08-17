@@ -158,7 +158,7 @@ std::vector<uint64_t> makeMainlyConstantValues() {
 
 TEST(SubIntSplitCostModelsTest, PforBeatsFixedBitWidthForBaselinePlusOutliers) {
   const std::vector<uint64_t> values = makePforFriendlyValues();
-  const MetricCollector collector;
+  MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 16;
@@ -172,7 +172,7 @@ TEST(
     SubIntSplitCostModelsTest,
     BlockBitPackingBeatsFixedBitWidthForLocallyClusteredData) {
   const std::vector<uint64_t> values = makeBlockClusteredValues();
-  const MetricCollector collector;
+  MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 20; // bit_width(750015) == 20
@@ -191,7 +191,7 @@ TEST(SubIntSplitCostModelsTest, SimdForBitpackIsFiniteAndCheaperThanTrivial) {
   for (int i = 0; i < 1000; ++i) {
     values.push_back(static_cast<uint64_t>(i % 64)); // bit_width <= 6
   }
-  const MetricCollector collector;
+  MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 8;
@@ -205,7 +205,7 @@ TEST(SubIntSplitCostModelsTest, SimdForBitpackIsFiniteAndCheaperThanTrivial) {
 
 TEST(SubIntSplitCostModelsTest, BestCostBitsSelectsPforForBaselinePlusOutliers) {
   const std::vector<uint64_t> values = makePforFriendlyValues();
-  const MetricCollector collector;
+  MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 16;
@@ -221,7 +221,7 @@ TEST(
     SubIntSplitCostModelsTest,
     BestCostBitsSelectsBlockBitPackingForLocallyClusteredData) {
   const std::vector<uint64_t> values = makeBlockClusteredValues();
-  const MetricCollector collector;
+  MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 20;
@@ -235,7 +235,7 @@ TEST(
 
 TEST(SubIntSplitCostModelsTest, DeltaCostBitsFiniteForMonotonicData) {
   const std::vector<uint64_t> values = makeDeltaFriendlyValues();
-  const MetricCollector collector;
+  MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 15; // bit_width(19980) == 15
@@ -249,7 +249,7 @@ TEST(SubIntSplitCostModelsTest, DeltaCostBitsFiniteForMonotonicData) {
 
 TEST(SubIntSplitCostModelsTest, DeltaCostBitsInfiniteForNonMonotonicData) {
   const std::vector<uint64_t> values = makeAlternatingValues();
-  const MetricCollector collector;
+  MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 10; // bit_width(1000) == 10
@@ -260,7 +260,7 @@ TEST(SubIntSplitCostModelsTest, DeltaCostBitsInfiniteForNonMonotonicData) {
 
 TEST(SubIntSplitCostModelsTest, ForCostBitsFiniteAndPositive) {
   const std::vector<uint64_t> values = makeForFriendlyValues();
-  const MetricCollector collector;
+  MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 10; // bit_width(999) == 10
@@ -276,7 +276,7 @@ TEST(
     SubIntSplitCostModelsTest,
     BestCostBitsSelectsDeltaForWideRangeConstantStepData) {
   const std::vector<uint64_t> values = makeDeltaFriendlyValues();
-  const MetricCollector collector;
+  MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 15; // bit_width(19980) == 15
@@ -292,7 +292,7 @@ TEST(
     SubIntSplitCostModelsTest,
     BestCostBitsSelectsForForUnitStepMonotonicData) {
   const std::vector<uint64_t> values = makeForFriendlyValues();
-  const MetricCollector collector;
+  MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 10; // bit_width(999) == 10
@@ -308,7 +308,7 @@ TEST(
     SubIntSplitCostModelsTest,
     FrequencyPartitionCostBitsFiniteForZipfianData) {
   const std::vector<uint64_t> values = makeZipfianValues();
-  const MetricCollector collector;
+  MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
 
   // Values 0..67 require 7 bits; FPE should be finite and beat fixed-bit-width
@@ -326,7 +326,7 @@ TEST(
     SubIntSplitCostModelsTest,
     BestCostBitsSelectsFrequencyPartitionForZipfianData) {
   const std::vector<uint64_t> values = makeZipfianValues();
-  const MetricCollector collector;
+  MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 7; // bit_width(67) == 7
@@ -342,7 +342,7 @@ TEST(
     SubIntSplitCostModelsTest,
     MainlyConstantCostBitsFiniteForDominantData) {
   const std::vector<uint64_t> values = makeMainlyConstantValues();
-  const MetricCollector collector;
+  MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
 
   // bit_width(227) == 8; MainlyConstant should be finite and beat FixedBitWidth
@@ -360,7 +360,7 @@ TEST(
     SubIntSplitCostModelsTest,
     BestCostBitsSelectsMainlyConstantForDominantData) {
   const std::vector<uint64_t> values = makeMainlyConstantValues();
-  const MetricCollector collector;
+  MetricCollector collector;
   const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 8; // bit_width(227) == 8
