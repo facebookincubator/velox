@@ -15,39 +15,30 @@
  */
 
 // Class B correctness tests: GPU (cuDF) evaluation of the TIMESTAMP WITH TIME
-// ZONE function family must match CPU. These reproduce the missing timezone
-// support by failing while it is absent.
+// ZONE function family must match CPU.
 //
-// None of these functions are implemented on the GPU path today. Each works on
-// CPU (it is registered by registerAllScalarFunctions), but forcing GPU
-// evaluation currently throws from FunctionExpression::eval:
+// The input conversion is not where the work is: cuDF has no TIMESTAMP WITH
+// TIME ZONE type, but such a column is carried as its physical BIGINT and
+// round-trips without error (see
+// timestampWithTimeZoneColumnPreservedThroughGpu, which is the baseline proving
+// a failure elsewhere is in the function rather than in the column conversion).
 //
-//   "Unsupported expression for recursive evaluation: <name>"
-//   (velox/experimental/cudf/expression/ExpressionEvaluator.cpp)
+// CudfFunctionBaseTest::evaluate forces GPU execution -- it does not consult
+// allowCpuFallback -- and assertExpressionMatchesCpu compares that result
+// against CPU's, which is the oracle throughout. Two consequences worth
+// knowing:
 //
-// This is true both for functions that produce a TIMESTAMP WITH TIME ZONE from
-// plain double/varchar inputs and for functions that consume a TIMESTAMP WITH
-// TIME ZONE column. The input conversion (Velox -> cuDF) is *not* the failure
-// site: cuDF has no TIMESTAMP WITH TIME ZONE type, but a TIMESTAMP WITH TIME
-// ZONE column is carried as its physical BIGINT and round-trips without error
-// (see timestampWithTimeZoneColumnPreservedThroughGpu). The failure surfaces
-// only when an unsupported function is evaluated.
+//   - These tests cannot see a CPU fallback. An expression the GPU declines is
+//     covered by a selection test instead, in ToCudfSelectionTest.
+//   - A comparison of TIMESTAMP WITH TIME ZONE values ignores the zone key.
+//     That type's comparator orders on the unpacked UTC millis, so a case whose
+//     visible effect is the offset must project through timezone_hour or
+//     to_iso8601 for the assertion to see it.
 //
-// CudfFunctionBaseTest::evaluate forces GPU execution (it does not consult
-// allowCpuFallback), and assertExpressionMatchesCpu compares that GPU result to
-// the CPU result -- so until a function is implemented the GPU evaluation
-// throws and the test fails.
-//
-// IMPORTANT: these are test-driven-development tests for the *target* behavior,
-// so they FAIL today and pass once the gap is closed. Each asserts the GPU
-// result equals CPU; until the function (and a GPU TIMESTAMP WITH TIME ZONE
-// representation) is implemented, GPU evaluation throws and the test is red. A
-// red test here means the function is still unsupported on GPU; do not "fix" a
-// failure by weakening the assertion. The one exception is
-// timestampWithTimeZoneColumnPreservedThroughGpu, which passes today: a plain
-// passthrough never touches timezone semantics and the physical BIGINT
-// round-trips losslessly, so it serves as a baseline proving the function tests
-// fail in the function and not in the column conversion.
+// The tests near the end call TimezoneConversion.h directly. Every other case
+// reaches those conversions through a SQL function, and each function narrows
+// what can arrive, so the direct ones cover the round trip and the gap and
+// overlap boundaries with arbitrary instants.
 //
 // These tests require a GPU and are labeled cuda_driver; they will not run in a
 // CPU-only environment.
@@ -908,14 +899,14 @@ TEST_F(TimezoneFunctionTest, parseDatetimeNoColonOffset) {
 }
 
 // A colon offset used to lose its minutes. cuDF's "%z" is fixed-width
-// "+/-HHMM": it reads the two hour digits, then the two minute digits at a fixed
-// position, so a colon (Joda ZZ, "+05:30") landed where a minute digit was
-// expected and only "+05:00" reached the UTC instant, leaving it 30 minutes off
-// while the trailing-offset regex still recovered "+05:30" for the zone key. The
-// wall clock is now parsed without "%z" and the recovered offset subtracted
-// instead, which also reads the hours-only form "+05" that a fixed-width
-// specifier cannot. The -09:00 and -0900 tests above miss this because their
-// minute component is zero.
+// "+/-HHMM": it reads the two hour digits, then the two minute digits at a
+// fixed position, so a colon (Joda ZZ, "+05:30") landed where a minute digit
+// was expected and only "+05:00" reached the UTC instant, leaving it 30 minutes
+// off while the trailing-offset regex still recovered "+05:30" for the zone
+// key. The wall clock is now parsed without "%z" and the recovered offset
+// subtracted instead, which also reads the hours-only form "+05" that a
+// fixed-width specifier cannot. The -09:00 and -0900 tests above miss this
+// because their minute component is zero.
 TEST_F(TimezoneFunctionTest, parseDatetimeColonOffsetWithMinutes) {
   auto input = varcharInput("2026-01-02 00:45:00 +05:30");
   assertMatchesCpu(

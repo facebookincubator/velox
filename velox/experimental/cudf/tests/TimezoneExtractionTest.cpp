@@ -15,17 +15,13 @@
  */
 
 // Class A correctness tests: GPU (cuDF) date/time extraction functions must
-// honor the session timezone exactly as CPU does. These reproduce the missing
-// timezone support by failing while it is absent.
+// honor the session timezone exactly as CPU does.
 //
 // On CPU, year/month/day/hour/... read the session timezone (via
 // getTimeZoneFromConfig + getDateTime in velox/functions/lib/TimeUtils.h) and
 // return the component of the *local* wall-clock time whenever
-// adjust_timestamp_to_session_timezone is set. On GPU,
-// ExtractComponentFunction::eval (velox/experimental/cudf/expression/
-// ExpressionEvaluator.cpp) currently calls
-// cudf::datetime::extract_datetime_component directly on the raw epoch column,
-// so it always returns the UTC component and ignores the session timezone.
+// adjust_timestamp_to_session_timezone is set. The GPU path converts the
+// instant to the session zone before extracting the field, so the two agree.
 //
 // Each test runs the same projection twice under a non-UTC session timezone --
 // once with cuDF registered (GPU) and once without (CPU) -- and asserts the two
@@ -34,14 +30,6 @@
 // the GPU path applies the session-timezone offset before extracting the field.
 // A matching control under UTC proves a failure is specifically timezone-driven
 // and not a pre-existing extraction bug.
-//
-// IMPORTANT: these are test-driven-development tests for the *target* behavior,
-// so they FAIL today and pass once the gap is closed. Each test below fails
-// with the local-vs-UTC mismatch noted in its comment until the GPU path
-// applies the session-timezone offset before extraction. A red test here means
-// the timezone gap is still open; do not "fix" a failure by weakening the
-// assertion. The UTC controls and the sub-minute fields already pass and guard
-// the harness.
 //
 // The plan/operator path is used here rather than
 // CudfFunctionBaseTest::assertExpressionMatchesCpu because that lightweight
