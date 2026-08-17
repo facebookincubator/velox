@@ -216,10 +216,19 @@ std::string_view encodeWithNonRecursiveSubIntSplit(
 // candidate list with PFOR / SimdForBitpack / BlockBitPacking.
 template <typename T>
 class ExtendedSubIntSplitPolicy final
-    : public nimble::EncodingSelectionPolicy<T> {
+    : public nimble::ManualEncodingSelectionPolicy<T> {
   using physicalType = typename nimble::TypeTraits<T>::physicalType;
 
  public:
+  // ManualEncodingSelectionPolicy::createImpl() is protected, so its
+  // special-cased SubIntSplit child candidates can only be exercised by
+  // inheriting it (rather than delegating to a sibling instance).
+  ExtendedSubIntSplitPolicy()
+      : nimble::ManualEncodingSelectionPolicy<T>(
+            filteredReadFactors(),
+            std::nullopt,
+            std::nullopt) {}
+
   nimble::EncodingSelectionResult select(
       std::span<const physicalType> /* values */,
       const nimble::Statistics<physicalType>& /* statistics */,
@@ -235,10 +244,9 @@ class ExtendedSubIntSplitPolicy final
     return {.encodingType = nimble::EncodingType::Nullable};
   }
 
-  std::unique_ptr<nimble::EncodingSelectionPolicyBase> createImpl(
-      nimble::EncodingType encodingType,
-      nimble::NestedEncodingIdentifier identifier,
-      nimble::DataType type) override {
+ private:
+  static std::vector<std::pair<nimble::EncodingType, float>>
+  filteredReadFactors() {
     auto readFactors = nimble::ManualEncodingSelectionPolicyFactory::
         defaultEncodingReadFactors();
     readFactors.erase(
@@ -249,9 +257,7 @@ class ExtendedSubIntSplitPolicy final
               return factor.first == nimble::EncodingType::SubIntSplit;
             }),
         readFactors.end());
-    nimble::ManualEncodingSelectionPolicy<T> delegate{
-        std::move(readFactors), std::nullopt, std::nullopt};
-    return delegate.createImpl(encodingType, identifier, type);
+    return readFactors;
   }
 };
 
