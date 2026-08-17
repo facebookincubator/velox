@@ -103,6 +103,8 @@ void registerStringFunctions(const std::string& prefix) {
   registerFunction<RTrimSpaceFunction, Varchar, Varchar>({prefix + "rtrim"});
   registerFunction<RTrimFunction, Varchar, Varchar, Varchar>(
       {prefix + "rtrim"});
+  registerFunction<TrimSpaceFunction, Varchar, Varchar>({prefix + "btrim"});
+  registerFunction<TrimFunction, Varchar, Varchar, Varchar>({prefix + "btrim"});
   registerFunction<TranslateFunction, Varchar, Varchar, Varchar, Varchar>(
       {prefix + "translate"});
   registerFunction<ConvFunction, Varchar, Varchar, int32_t, int32_t>(
