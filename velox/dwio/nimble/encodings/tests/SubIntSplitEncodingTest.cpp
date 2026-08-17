@@ -551,13 +551,14 @@ TEST(SubIntSplitEncodingTests, CreateImplExtendsCandidatesForSubIntSplitChildren
       };
 
   // Direct children of a SubIntSplit node get the extended candidate list.
-  auto subIntSplitChild = policy.createImpl(
-      nimble::EncodingType::SubIntSplit, 0, nimble::DataType::Uint64);
+  auto subIntSplitChild =
+      policy.create<uint64_t>(nimble::EncodingType::SubIntSplit, 0);
   auto* subIntSplitChildPolicy =
       dynamic_cast<nimble::ManualEncodingSelectionPolicy<uint64_t>*>(
           subIntSplitChild.get());
   ASSERT_NE(subIntSplitChildPolicy, nullptr);
-  const auto& extendedFactors = subIntSplitChildPolicy->readFactors();
+  const auto& extendedFactors =
+      subIntSplitChildPolicy->candidateEncodingReadFactors();
   EXPECT_TRUE(containsType(extendedFactors, nimble::EncodingType::PFOR));
   EXPECT_TRUE(
       containsType(extendedFactors, nimble::EncodingType::SimdForBitpack));
@@ -569,13 +570,13 @@ TEST(SubIntSplitEncodingTests, CreateImplExtendsCandidatesForSubIntSplitChildren
       containsType(extendedFactors, nimble::EncodingType::FrequencyPartition));
 
   // Children of a non-SubIntSplit node do not get the extended list.
-  auto pforChild = policy.createImpl(
-      nimble::EncodingType::PFOR, 0, nimble::DataType::Uint64);
+  auto pforChild = policy.create<uint64_t>(nimble::EncodingType::PFOR, 0);
   auto* pforChildPolicy =
       dynamic_cast<nimble::ManualEncodingSelectionPolicy<uint64_t>*>(
           pforChild.get());
   ASSERT_NE(pforChildPolicy, nullptr);
-  const auto& unextendedFactors = pforChildPolicy->readFactors();
+  const auto& unextendedFactors =
+      pforChildPolicy->candidateEncodingReadFactors();
   EXPECT_FALSE(containsType(unextendedFactors, nimble::EncodingType::PFOR));
   EXPECT_FALSE(
       containsType(unextendedFactors, nimble::EncodingType::SimdForBitpack));
@@ -593,7 +594,8 @@ TYPED_TEST(SubIntSplitEncodingTest, ExtendedCandidatesRoundTrip) {
 
   const auto encoded =
       encodeWithExtendedSubIntSplit<T>(values, *this->buffer_);
-  const auto captured = nimble::EncodingLayoutCapture::capture(encoded);
+  const auto captured = nimble::EncodingLayoutCapture::capture(
+      encoded, nimble::Encoding::Options{});
   ASSERT_EQ(captured.encodingType(), nimble::EncodingType::SubIntSplit);
 
   const auto decoded = decodeAll<T>(encoded, *this->pool_);
@@ -611,7 +613,8 @@ TYPED_TEST(SubIntSplitEncodingTest, WideRangeMonotonicRoundTrip) {
 
   const auto encoded =
       encodeWithExtendedSubIntSplit<T>(values, *this->buffer_);
-  const auto captured = nimble::EncodingLayoutCapture::capture(encoded);
+  const auto captured = nimble::EncodingLayoutCapture::capture(
+      encoded, nimble::Encoding::Options{});
   ASSERT_EQ(captured.encodingType(), nimble::EncodingType::SubIntSplit);
 
   const auto decoded = decodeAll<T>(encoded, *this->pool_);
@@ -635,7 +638,8 @@ TYPED_TEST(SubIntSplitEncodingTest, ZipfianRoundTrip) {
 
   const auto encoded =
       encodeWithExtendedSubIntSplit<T>(values, *this->buffer_);
-  const auto captured = nimble::EncodingLayoutCapture::capture(encoded);
+  const auto captured = nimble::EncodingLayoutCapture::capture(
+      encoded, nimble::Encoding::Options{});
   ASSERT_EQ(captured.encodingType(), nimble::EncodingType::SubIntSplit);
 
   const auto decoded = decodeAll<T>(encoded, *this->pool_);
