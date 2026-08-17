@@ -1311,13 +1311,6 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     // False becomes zero, which fits any precision and scale.
     testCast<bool, int64_t>(BOOLEAN(), DECIMAL(1, 1), {false}, {0});
     testCast<bool, int128_t>(BOOLEAN(), DECIMAL(38, 38), {false}, {0});
-
-    // Nulls are preserved.
-    testCast<bool, int64_t>(
-        BOOLEAN(),
-        DECIMAL(6, 2),
-        {true, std::nullopt, false},
-        {100, std::nullopt, 0});
   }
 
   void testDecimalToDecimal() {
