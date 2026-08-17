@@ -207,10 +207,20 @@ class BlockBitPackingEncoding final
         velox::bits::divRoundUp(static_cast<uint32_t>(rowCount), blockSize);
     const uint64_t packedSize =
         FixedBitArray::bufferSize(rowCount, typicalBitWidth);
-    const uint64_t metadataSize = kMetadataHeaderSize +
-        TrivialEncoding<physicalType>::estimateSize(numBlocks) +
-        TrivialEncoding<uint8_t>::estimateSize(numBlocks) +
-        TrivialEncoding<uint32_t>::estimateSize(numBlocks);
+    const auto baselinesSize =
+        TrivialEncoding<physicalType>::estimateSize(numBlocks);
+    const auto bitWidthsSize = TrivialEncoding<uint8_t>::estimateSize(numBlocks);
+    const auto offsetsSize = TrivialEncoding<uint32_t>::estimateSize(numBlocks);
+    const auto firstBlockRows =
+        std::min<uint32_t>(blockSize, static_cast<uint32_t>(rowCount));
+    const uint64_t metadataSize = headerSize(
+                                      blockSize,
+                                      numBlocks,
+                                      static_cast<uint32_t>(baselinesSize),
+                                      static_cast<uint32_t>(bitWidthsSize),
+                                      static_cast<uint32_t>(offsetsSize),
+                                      firstBlockRows) +
+        baselinesSize + bitWidthsSize + offsetsSize;
     return EncodingPrefix::kFixedPrefixSize + metadataSize + packedSize;
   }
 #endif

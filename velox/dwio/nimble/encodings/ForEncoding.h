@@ -135,9 +135,10 @@ class ForEncoding final
     // EncodingPrefix::kFixedPrefixSize(6) + FOR-specific fixed fields
     // (compressionType + frameSize + numFrames + enableBitOffsets = 10),
     // plus each of the four sub-streams' 4-byte size prefix.
-    return EncodingPrefix::kFixedPrefixSize +
-        (kPrefixSize - Encoding::kPrefixSize) + 4 + bitWidthsSize + 4 +
-        referencesSize + 4 + bitOffsetsSize + 4 + packedSize;
+    constexpr uint64_t kForSpecificFixedFieldsSize = 10;
+    return EncodingPrefix::kFixedPrefixSize + kForSpecificFixedFieldsSize +
+        4 + bitWidthsSize + 4 + referencesSize + 4 + bitOffsetsSize + 4 +
+        packedSize;
   }
 #endif
 

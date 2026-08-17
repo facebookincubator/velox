@@ -363,9 +363,12 @@ inline double blockBitPackingCostBits(
   if (numValues == 0) {
     return 0.0;
   }
-  const uint64_t bytes =
+  const auto bytes =
       BlockBitPackingEncoding<uint64_t>::estimateSize(segValues, blockSize);
-  return static_cast<double>(bytes) * 8.0;
+  if (!bytes.has_value()) {
+    return std::numeric_limits<double>::infinity();
+  }
+  return static_cast<double>(bytes.value()) * 8.0;
 }
 
 // Delta: positive-delta encoding with restatements for non-monotonic steps.
