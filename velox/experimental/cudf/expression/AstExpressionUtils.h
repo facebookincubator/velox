@@ -113,6 +113,10 @@ std::vector<cudf::ast::literal> createLiteralsFromArray(
       if (elements->isScalar()) {
         literals.reserve(size);
         extractArrayLiterals(arrayVector, literals, scalars, offset, size);
+      } else if (elements->typeKind() == TypeKind::UNKNOWN) {
+        // An untyped null list (e.g. `x IN (NULL)` parsed as ARRAY<UNKNOWN>)
+        // contains only null elements. Leaving the literal list empty routes
+        // the caller to the null-only IN path, which yields NULL.
       } else if (elements->typeKind() == TypeKind::ARRAY) {
         // Nested arrays not supported in IN expressions
         VELOX_FAIL("Nested arrays not supported in IN expressions");

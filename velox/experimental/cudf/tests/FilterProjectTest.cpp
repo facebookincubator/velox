@@ -1683,6 +1683,26 @@ TEST_F(CudfFilterProjectTest, nullInListDownstreamAggregation) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+TEST_F(CudfFilterProjectTest, untypedNullInList) {
+  auto vectors = makeVectors(rowType_, 2, 1000);
+  // `c0 IN (NULL)` parses to an in-list of type ARRAY<UNKNOWN> because the NULL
+  // is untyped. This is a null-only list and must yield NULL on every row, the
+  // same as an explicitly typed all-null list.
+  auto plan = PlanBuilder(pool_.get())
+                  .values(vectors)
+                  .project({"c0 IN (NULL) AS result"})
+                  .planNode();
+
+  vector_size_t totalRows = 0;
+  for (const auto& batch : vectors) {
+    totalRows += batch->size();
+  }
+  auto expected = makeRowVector(
+      {"result"},
+      {BaseVector::createNullConstant(BOOLEAN(), totalRows, pool())});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_F(CudfFilterProjectTest, round) {
   auto data = makeRowVector({makeFlatVector<int64_t>({4123, 456789098})});
   parse::ParseOptions options;
