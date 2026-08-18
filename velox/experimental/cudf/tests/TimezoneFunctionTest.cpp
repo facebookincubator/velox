@@ -67,6 +67,7 @@
 
 #include <gmock/gmock.h>
 
+#include <algorithm>
 #include <limits>
 #include <vector>
 
@@ -1558,6 +1559,84 @@ TEST_F(TimezoneFunctionTest, toUtcTimestampNullRowIsNotAGap) {
 
   EXPECT_EQ(utc->size(), 1);
   EXPECT_EQ(utc->null_count(), 1);
+}
+
+// A structural sweep over every zone in the database.
+//
+// The instants are not a sample. They are the points where the offset lookup
+// can change behaviour: either side of the materialized window's start and end,
+// the epoch the fixed-offset interval was once keyed at, a pre-1970 instant,
+// and instants past the window end -- which route a zone with transitions to
+// the host while a zone with a constant offset must stay on the device. Between
+// two consecutive transitions the offset cannot change, so the boundaries are
+// what carry information.
+//
+// Every zone is included rather than a chosen few, since there are only a
+// couple of thousand and the failure that motivated this was one zone shape, a
+// numeric offset, in one region, past the window end. A sweep over both axes is
+// what makes that a covered cell rather than a missed case.
+//
+// Zones are swept in chunks so one projection carries many distinct zone keys,
+// which also exercises the per-row zone path at a cardinality nothing else
+// does.
+class TimezoneSweepTest : public TimezoneFunctionTest {
+ protected:
+  // Instants in milliseconds, computed from the proleptic Gregorian calendar.
+  static std::vector<int64_t> structuralInstants() {
+    return {
+        -46'388'678'400'000, // 0500-01-01, far below the window
+        -30'610'224'000'000, // 1000-01-01, below the window
+        -8'551'872'000'000, // 1699-01-01, just below the window start
+        -8'520'336'000'000, // 1700-01-01, the window start
+        -1'000'000'000'000, // 1938, pre-1970 but inside the window
+        0, // the epoch
+        1'609'466'400'000, // 2021, an ordinary instant
+        9'214'646'400'000, // 2262, where a plain TIMESTAMP stops
+        253'370'764'800'000, // 9999-01-01, the last year inside
+        253'402'300'800'000, // 10000-01-01, the window end exactly
+        316'516'204'800'000, // 12000-01-01, past the end
+        884'541'340'800'000, // 30000-01-01, far past the end
+    };
+  }
+
+  // One packed column carrying every (zone, instant) pair for the given zones.
+  RowVectorPtr sweepInput(const std::vector<int16_t>& zoneIds) {
+    const auto instants = structuralInstants();
+    std::vector<int64_t> packed;
+    packed.reserve(zoneIds.size() * instants.size());
+    for (const auto zoneId : zoneIds) {
+      for (const auto millis : instants) {
+        packed.push_back(pack(millis, zoneId));
+      }
+    }
+    return makeRowVector(
+        {makeFlatVector<int64_t>(packed, TIMESTAMP_WITH_TIME_ZONE())});
+  }
+
+  // Runs one projection over every zone, in chunks of zones per column.
+  void sweepAllZones(const std::string& expr, size_t zonesPerChunk = 64) {
+    const auto allZones = tz::getTimeZoneIDs();
+    ASSERT_FALSE(allZones.empty());
+    for (size_t begin = 0; begin < allZones.size(); begin += zonesPerChunk) {
+      const auto end = std::min(begin + zonesPerChunk, allZones.size());
+      const std::vector<int16_t> chunk(
+          allZones.begin() + begin, allZones.begin() + end);
+      SCOPED_TRACE(
+          expr + " zones [" + std::to_string(begin) + ", " +
+          std::to_string(end) + ")");
+      assertMatchesCpu(expr, sweepInput(chunk));
+    }
+  }
+};
+
+TEST_F(TimezoneSweepTest, timezoneHourEveryZoneAtEveryBoundary) {
+  sweepAllZones("timezone_hour(c0)");
+}
+
+// timezone_minute is a separate renderer of the same offset, and the only one
+// that shows a sub-minute or half-hour offset going wrong.
+TEST_F(TimezoneSweepTest, timezoneMinuteEveryZoneAtEveryBoundary) {
+  sweepAllZones("timezone_minute(c0)");
 }
 
 } // namespace
