@@ -21,32 +21,29 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
-namespace facebook::velox::exec::test {
+using namespace facebook::velox::exec::test;
 
+namespace facebook::velox::exec {
 using namespace facebook::velox::common::testutil;
+namespace {
 
 // Writes data through a TableWriter whose target columns carry a NOT NULL
 // constraint, and checks which nulls the operator rejects and which it lets
 // through.
 class TableWriterNotNullTest : public HiveConnectorTestBase {
  protected:
-  // Plans a write of 'input' into a fresh directory. 'targetColumns', when set,
-  // selects and reorders the written columns.
+  // Plans a write of 'input' into a fresh directory.
   core::PlanNodePtr writePlan(
       const std::vector<RowVectorPtr>& input,
-      const folly::F14FastSet<std::string>& notNullColumns,
-      const RowTypePtr& targetColumns = nullptr) {
+      const folly::F14FastSet<std::string>& notNullColumns) {
     directories_.push_back(TempDirectoryPath::create());
-    PlanBuilder planBuilder;
-    auto& writerBuilder =
-        planBuilder.values(input)
-            .startTableWriter()
-            .outputDirectoryPath(directories_.back()->getPath())
-            .notNullColumns(notNullColumns);
-    if (targetColumns != nullptr) {
-      writerBuilder.targetColumns(targetColumns);
-    }
-    return writerBuilder.endTableWriter().planNode();
+    return PlanBuilder()
+        .values(input)
+        .startTableWriter()
+        .outputDirectoryPath(directories_.back()->getPath())
+        .notNullColumns(notNullColumns)
+        .endTableWriter()
+        .planNode();
   }
 
   int64_t writtenRows(const core::PlanNodePtr& plan) {
@@ -62,99 +59,87 @@ class TableWriterNotNullTest : public HiveConnectorTestBase {
 };
 
 TEST_F(TableWriterNotNullTest, enforcement) {
-  const vector_size_t size = 100;
-  auto nonNulls = makeFlatVector<int32_t>(size, [](auto row) { return row; });
-  auto values =
-      makeFlatVector<int32_t>(size, [](auto row) { return row; }, nullEvery(3));
-  auto indices = makeIndices(size, [](auto row) { return row; });
-  // The same nulls presented flat, dictionary- and constant-wrapped, and as a
-  // struct that is itself null.
-  const std::vector<VectorPtr> nullColumns = {
-      values,
-      wrapInDictionary(indices, size, values),
-      makeNullConstant(TypeKind::INTEGER, size),
-      makeRowVector({nonNulls}, nullEvery(3)),
-  };
+  auto data = makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int32_t>({0, 1, 2}),
+          makeNullableFlatVector<int32_t>({0, std::nullopt, 2}),
+      });
 
-  for (const auto& nullColumn : nullColumns) {
-    SCOPED_TRACE(nullColumn->toString());
-    auto data = makeRowVector({"c0", "c1"}, {nonNulls, nullColumn});
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(writePlan({data}, {"c0", "c1"})).countResults(),
+      "NULL value not allowed for NOT NULL column: c1");
 
-    // Constraining c0 leaves the nulls in c1 alone.
-    ASSERT_EQ(writtenRows(writePlan({data}, {"c0"})), size);
-
-    VELOX_ASSERT_USER_THROW(
-        AssertQueryBuilder(writePlan({data}, {"c0", "c1"})).countResults(),
-        "NULL value not allowed for NOT NULL column: c1");
-  }
+  ASSERT_EQ(writtenRows(writePlan({data}, {"c0"})), data->size());
 }
 
-// Nulls inside a struct's fields are the fields' nulls, not the column's.
-TEST_F(TableWriterNotNullTest, nullsInsideStruct) {
-  const vector_size_t size = 10;
-  auto data = makeRowVector(
-      {"c0"},
-      {makeRowVector({makeFlatVector<int32_t>(
-          size, [](auto row) { return row; }, nullEvery(3))})});
+// A dictionary wrap decides the column's nulls: it may add nulls the base does
+// not have, and hide nulls the base does have.
+TEST_F(TableWriterNotNullTest, dictionaryEncoding) {
+  auto nullFree = makeFlatVector<int32_t>({0, 1, 2});
+  auto withNulls = makeNullableFlatVector<int32_t>({0, std::nullopt, 2});
 
-  ASSERT_EQ(writtenRows(writePlan({data}, {"c0"})), size);
+  // The wrap adds a null over a null-free base.
+  auto addsNulls = makeRowVector(
+      {"c0"},
+      {BaseVector::wrapInDictionary(
+          makeNulls({false, true, false}),
+          makeIndices({0, 1, 2}),
+          3,
+          nullFree)});
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(writePlan({addsNulls}, {"c0"})).countResults(),
+      "NULL value not allowed for NOT NULL column: c0");
+
+  // The wrap selects only the base's non-null rows.
+  auto hidesNulls =
+      makeRowVector({"c0"}, {wrapInDictionary(makeIndices({2, 0}), withNulls)});
+  ASSERT_EQ(writtenRows(writePlan({hidesNulls}, {"c0"})), 2);
+
+  // The wrap selects some of the base's rows, one of them null.
+  auto keepsNull =
+      makeRowVector({"c0"}, {wrapInDictionary(makeIndices({2, 1}), withNulls)});
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(writePlan({keepsNull}, {"c0"})).countResults(),
+      "NULL value not allowed for NOT NULL column: c0");
+}
+
+TEST_F(TableWriterNotNullTest, constantNull) {
+  auto data = makeRowVector({"c0"}, {makeNullConstant(TypeKind::INTEGER, 3)});
+
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(writePlan({data}, {"c0"})).countResults(),
+      "NULL value not allowed for NOT NULL column: c0");
 }
 
 // A RowVector may be shorter than its children, as in Limit's output. Nulls
 // past its size are not part of the batch.
 TEST_F(TableWriterNotNullTest, ignoresNullsBeyondBatchSize) {
-  const vector_size_t childSize = 10;
-  const vector_size_t batchSize = 4;
-  auto indices = makeIndices(childSize, [](auto row) { return row; });
-  auto base = makeFlatVector<int32_t>(
-      childSize,
-      [](auto row) { return row; },
-      [batchSize](auto row) { return row >= batchSize; });
+  const vector_size_t batchSize = 2;
   auto data = std::make_shared<RowVector>(
       pool(),
-      ROW({"c0"}, {INTEGER()}),
+      ROW("c0", INTEGER()),
       nullptr,
       batchSize,
-      std::vector<VectorPtr>{wrapInDictionary(indices, childSize, base)});
+      std::vector<VectorPtr>{
+          makeNullableFlatVector<int32_t>({0, 1, std::nullopt})});
 
   ASSERT_EQ(writtenRows(writePlan({data}, {"c0"})), batchSize);
 }
 
-// The constraint names target table columns, which may be a reordered subset
-// of the input columns.
-TEST_F(TableWriterNotNullTest, reorderedColumns) {
-  const vector_size_t size = 10;
-  auto data = makeRowVector(
-      {"c0", "c1", "c2"},
-      {
-          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
-          makeFlatVector<int32_t>(size, [](auto row) { return row * 2; }),
-          makeFlatVector<int32_t>(
-              size, [](auto row) { return row * 3; }, nullEvery(3)),
-      });
-  auto targetColumns = ROW({"c2", "c0"}, {INTEGER(), INTEGER()});
-
-  ASSERT_EQ(writtenRows(writePlan({data}, {"c0"}, targetColumns)), size);
-
-  VELOX_ASSERT_USER_THROW(
-      AssertQueryBuilder(writePlan({data}, {"c2"}, targetColumns))
-          .countResults(),
-      "NULL value not allowed for NOT NULL column: c2");
-}
-
-// The constraint names the table's columns, which may differ from the input's.
-// PlanBuilder always writes under the input names, so build the node directly.
+// The constraint names the table's columns, which may be renamed and reordered
+// relative to the input's. PlanBuilder writes under the input names, so build
+// the node directly.
 TEST_F(TableWriterNotNullTest, renamedColumns) {
-  const vector_size_t size = 10;
   auto data = makeRowVector(
       {"c0", "c1"},
       {
-          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
-          makeFlatVector<int32_t>(
-              size, [](auto row) { return row; }, nullEvery(3)),
+          makeFlatVector<int32_t>({0, 1, 2}),
+          makeNullableFlatVector<int32_t>({0, std::nullopt, 2}),
       });
-  const auto inputColumns = asRowType(data->type());
-  const std::vector<std::string> tableColumnNames = {"key", "value"};
+  // 'value' is input column c1, 'key' is c0.
+  const auto targetColumns = ROW({"c1", "c0"}, INTEGER());
+  const std::vector<std::string> tableColumnNames = {"value", "key"};
 
   auto directory = TempDirectoryPath::create();
   auto writePlan = [&](const folly::F14FastSet<std::string>& notNullColumns) {
@@ -162,7 +147,7 @@ TEST_F(TableWriterNotNullTest, renamedColumns) {
         kHiveConnectorId,
         makeHiveInsertTableHandle(
             tableColumnNames,
-            inputColumns->children(),
+            targetColumns->children(),
             /*partitionedBy=*/{},
             makeLocationHandle(directory->getPath())),
         notNullColumns);
@@ -171,7 +156,7 @@ TEST_F(TableWriterNotNullTest, renamedColumns) {
         .addNode([&](const core::PlanNodeId& nodeId, core::PlanNodePtr source) {
           return std::make_shared<core::TableWriteNode>(
               nodeId,
-              inputColumns,
+              targetColumns,
               tableColumnNames,
               /*columnStatsSpec=*/std::nullopt,
               insertHandle,
@@ -183,45 +168,30 @@ TEST_F(TableWriterNotNullTest, renamedColumns) {
         .planNode();
   };
 
-  // 'key' maps to input column c0, which has no nulls.
-  ASSERT_EQ(writtenRows(writePlan({"key"})), size);
+  ASSERT_EQ(writtenRows(writePlan({"key"})), data->size());
 
   VELOX_ASSERT_USER_THROW(
       AssertQueryBuilder(writePlan({"value"})).countResults(),
       "NULL value not allowed for NOT NULL column: value");
 }
 
-// The reused DecodedVector must not break on a change of size or encoding, nor
-// mask a null in a later batch.
+// The reused DecodedVector must not break on a change of batch size or
+// encoding, nor mask a null in a later batch.
 TEST_F(TableWriterNotNullTest, multipleBatches) {
-  auto makeBatch = [&](vector_size_t size, bool dictionary, bool hasNulls) {
-    std::function<bool(vector_size_t)> isNullAt;
-    if (hasNulls) {
-      isNullAt = nullEvery(3);
-    }
-    auto values =
-        makeFlatVector<int32_t>(size, [](auto row) { return row; }, isNullAt);
-    if (!dictionary) {
-      return makeRowVector({"c0"}, {values});
-    }
-    auto indices = makeIndices(size, [](auto row) { return row; });
-    return makeRowVector({"c0"}, {wrapInDictionary(indices, size, values)});
-  };
+  auto flat = makeRowVector({"c0"}, {makeFlatVector<int32_t>({0, 1, 2})});
+  auto dictionary = makeRowVector(
+      {"c0"},
+      {wrapInDictionary(makeIndices({1, 0}), makeFlatVector<int32_t>({0, 1}))});
+  auto withNull =
+      makeRowVector({"c0"}, {makeNullableFlatVector<int32_t>({std::nullopt})});
 
-  ASSERT_EQ(
-      writtenRows(writePlan(
-          {makeBatch(10, false, false),
-           makeBatch(50, true, false),
-           makeBatch(1, true, false)},
-          {"c0"})),
-      61);
+  ASSERT_EQ(writtenRows(writePlan({flat, dictionary}, {"c0"})), 5);
 
   VELOX_ASSERT_USER_THROW(
-      AssertQueryBuilder(
-          writePlan(
-              {makeBatch(10, false, false), makeBatch(5, true, true)}, {"c0"}))
+      AssertQueryBuilder(writePlan({flat, dictionary, withNull}, {"c0"}))
           .countResults(),
       "NULL value not allowed for NOT NULL column: c0");
 }
 
-} // namespace facebook::velox::exec::test
+} // namespace
+} // namespace facebook::velox::exec

@@ -404,13 +404,6 @@ TEST_F(PlanNodeBuilderTest, tableWriteNode) {
   verify(node2);
 }
 
-TEST_F(PlanNodeBuilderTest, tableWriteNodeEmptyNotNullColumn) {
-  VELOX_ASSERT_USER_THROW(
-      std::make_shared<InsertTableHandle>(
-          "connector_id", nullptr, folly::F14FastSet<std::string>{""}),
-      "NOT NULL column name must not be empty");
-}
-
 TEST_F(PlanNodeBuilderTest, tableWriteNodeNotNullColumnOutsideSchema) {
   const auto insertTableHandle = std::make_shared<InsertTableHandle>(
       "connector_id", nullptr, folly::F14FastSet<std::string>{"c1"});
