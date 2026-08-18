@@ -735,6 +735,23 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             {"\n\f\r\t\n\x1f 2000-01-01 12:21:56\v\x1c\x1d\x1e"}, VARCHAR()),
         makeNullableFlatVector<Timestamp>(
             {Timestamp(946'729'316, 0)}, TIMESTAMP_UTC()));
+
+    // Outer whitespace trimming: trailing/leading spaces, tabs, and newlines
+    // around a date-only string are trimmed by CastExpr before the parser
+    // sees the input. These must remain valid through the full cast path.
+    testCast(
+        makeNullableFlatVector<std::string>(
+            {"2015-03-18 ",
+             "\t2015-03-18\n",
+             "2015-03-18\t",
+             "2015-03-18\n"},
+            VARCHAR()),
+        makeNullableFlatVector<Timestamp>(
+            {Timestamp(1'426'636'800, 0),
+             Timestamp(1'426'636'800, 0),
+             Timestamp(1'426'636'800, 0),
+             Timestamp(1'426'636'800, 0)},
+            TIMESTAMP_UTC()));
   }
 
   void testStringToDate() {
@@ -1852,16 +1869,24 @@ TEST_F(SparkCastExprTestAnsiOn, stringToTimestampInvalidThrows) {
 
   testInvalidTimestamp("INVALID");
   testInvalidTimestamp("2012-Oct-01");
-  // SPARK-36286: trailing T with no time component is invalid.
+  // A trailing 'T' with no time component is invalid.
   testInvalidTimestamp("2015-03-18T");
   testInvalidTimestamp("2015-03-18T ");
   testInvalidTimestamp("2015-03-18T\t");
   testInvalidTimestamp("2015-03-18T\n");
-  // T followed by whitespace then a valid time is still invalid.
+  // 'T' followed by whitespace then a valid time is still invalid.
   testInvalidTimestamp("2015-03-18T 12:00:00");
-  // T followed by a non-digit, non-time character is invalid.
+  // 'T' followed by a non-digit, non-time character is invalid.
   testInvalidTimestamp("2015-03-18TZ");
   testInvalidTimestamp("2015-03-18T+08:00");
+  // A space separator followed by a non-digit is invalid, matching Spark's
+  // grammar. Outer whitespace is trimmed by CastExpr, so these inputs reach
+  // the parser with the space separator intact.
+  testInvalidTimestamp("2015-03-18 Z");
+  testInvalidTimestamp("2015-03-18 +08:00");
+  testInvalidTimestamp("2015-03-18 UTC");
+  testInvalidTimestamp("2015-03-18  12:00:00");
+  testInvalidTimestamp("2015-03-18 x");
 }
 
 TEST_F(SparkCastExprTestAnsiOn, stringToTimestampUtc) {
@@ -2195,8 +2220,8 @@ TEST_F(SparkCastExprTestAnsiOff, stringToTimestamp) {
   testStringToTimestamp();
   testCast<std::string, Timestamp>(
       "timestamp", {"INVALID", "2012-Oct-01"}, {std::nullopt, std::nullopt});
-  // SPARK-36286: in non-ANSI mode, an invalid trailing-T string yields null
-  // rather than throwing. Covers the same set as the TRY and ANSI-ON tests.
+  // In non-ANSI mode, an invalid separator string yields null rather than
+  // throwing. Covers the same set as the ANSI-ON tests.
   testCast<std::string, Timestamp>(
       "timestamp",
       {"2015-03-18T",
@@ -2205,8 +2230,18 @@ TEST_F(SparkCastExprTestAnsiOff, stringToTimestamp) {
        "2015-03-18T\n",
        "2015-03-18T 12:00:00",
        "2015-03-18TZ",
-       "2015-03-18T+08:00"},
+       "2015-03-18T+08:00",
+       "2015-03-18 Z",
+       "2015-03-18 +08:00",
+       "2015-03-18 UTC",
+       "2015-03-18  12:00:00",
+       "2015-03-18 x"},
       {std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
        std::nullopt,
        std::nullopt,
        std::nullopt,

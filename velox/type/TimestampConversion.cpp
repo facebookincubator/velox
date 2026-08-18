@@ -635,15 +635,16 @@ bool tryParseTimestampString(
   }
 
   // Try to parse a time field.
-  size_t preSeparatorPos = pos;
+  const size_t preSeparatorPos = pos;
   parseTimeSeparator(buf, pos, parseMode);
 
-  // In Spark cast mode, a 'T' separator must be followed immediately by a
-  // digit. Spark applies the same rule after a ' ' separator, but it trims the
-  // input first while Velox does not, so guarding ' ' the same way here would
-  // reject "2015-03-18 ", which Spark accepts. The ' ' form is left alone.
+  // In Spark cast mode, once a date-time separator ('T' or ' ') is consumed,
+  // the time component must begin immediately with a digit. This mirrors
+  // Spark's grammar: a separator followed by a timezone, garbage, or end of
+  // input is rejected. Outer whitespace is trimmed earlier by CastExpr's
+  // removeWhiteSpaces, so a bare trailing separator like "2015-03-18 " never
+  // reaches this point (it is trimmed to "2015-03-18" and handled as a date).
   if (parseMode == TimestampParseMode::kSparkCast && pos > preSeparatorPos &&
-      buf[preSeparatorPos] == 'T' &&
       (pos >= len || !characterIsDigit(buf[pos]))) {
     return false;
   }
