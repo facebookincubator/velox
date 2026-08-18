@@ -1966,6 +1966,78 @@ struct AtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
   }
 };
 
+/// at_timezone_v2(TIMESTAMP WITH TIME ZONE, varchar) -> TIMESTAMP
+/// Converts the UTC instant to the wall clock in the target zone and drops the
+/// zone, producing a naive timestamp.
+template <typename T>
+struct AtTimezoneV2ToTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Target zone when the timezone argument is constant; null otherwise.
+  const tz::TimeZone* targetTimeZone_{nullptr};
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<TimestampWithTimezone>* /*timestampWithTimezone*/,
+      const arg_type<Varchar>* timezone) {
+    if (timezone) {
+      targetTimeZone_ =
+          tz::locateZone(std::string_view(timezone->data(), timezone->size()));
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Timestamp>& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone,
+      const arg_type<Varchar>& timezone) {
+    const auto* targetTimeZone = targetTimeZone_ != nullptr
+        ? targetTimeZone_
+        : tz::locateZone(std::string_view(timezone.data(), timezone.size()));
+
+    Timestamp timestamp = unpackTimestampUtc(*timestampWithTimezone);
+    timestamp.toTimezone(*targetTimeZone);
+    result = timestamp;
+  }
+};
+
+/// at_timezone_v2(TIMESTAMP, varchar) -> TIMESTAMP WITH TIME ZONE
+/// Interprets the naive wall clock as being in the target zone and returns the
+/// UTC instant tagged with that zone.
+/// A DST spring-forward gap fails; a fall-back overlap resolves to the earliest
+/// instant.
+template <typename T>
+struct AtTimezoneV2ToTimestampWithTimezoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Target zone when the timezone argument is constant; null otherwise.
+  const tz::TimeZone* targetTimeZone_{nullptr};
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Timestamp>* /*timestamp*/,
+      const arg_type<Varchar>* timezone) {
+    if (timezone) {
+      targetTimeZone_ =
+          tz::locateZone(std::string_view(timezone->data(), timezone->size()));
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimestampWithTimezone>& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<Varchar>& timezone) {
+    const auto* targetTimeZone = targetTimeZone_ != nullptr
+        ? targetTimeZone_
+        : tz::locateZone(std::string_view(timezone.data(), timezone.size()));
+
+    Timestamp utcTime = timestamp;
+    utcTime.toGMT(*targetTimeZone);
+    result = pack(utcTime.toMillis(), targetTimeZone->id());
+  }
+};
+
 template <typename T>
 struct AtTimezoneTimeWithTimezoneFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
