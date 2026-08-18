@@ -34,12 +34,12 @@ std::string writeWkt(
   return writer.write(&geometry);
 }
 
-/// Return the "x y" text of a single point by asking GEOS to write it and
-/// taking what is between the outermost parentheses of "POINT (x y)". The
-/// input is a Point this function just wrote itself, and coordinate text never
-/// contains parentheses, so the span is unambiguous. Callers must handle empty
-/// points, for which GEOS writes "POINT EMPTY" and there is nothing to
-/// extract.
+// Return the "x y" text of a single point by asking GEOS to write it and
+// taking what is between the outermost parentheses of "POINT (x y)". The
+// input is a Point this function just wrote itself, and coordinate text never
+// contains parentheses, so the span is unambiguous. Callers must handle empty
+// points, for which GEOS writes "POINT EMPTY" and there is nothing to
+// extract.
 std::string pointCoordinateText(
     geos::io::WKTWriter& writer,
     const geos::geom::Geometry& point) {
