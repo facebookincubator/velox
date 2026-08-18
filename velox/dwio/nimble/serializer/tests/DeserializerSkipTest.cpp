@@ -18,7 +18,6 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <array>
-#include <numeric>
 #include <optional>
 #include <string_view>
 #include <thread>
@@ -26,12 +25,10 @@
 #include "folly/container/F14Set.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/BufferedInput.h"
-#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
-#include "velox/dwio/nimble/serializer/StreamDataWriter.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
@@ -43,7 +40,6 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/SelectivityVector.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 using namespace facebook;
