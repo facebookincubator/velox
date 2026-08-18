@@ -360,3 +360,83 @@ TEST_F(FilterGeneratorSeedTest, noEmptyResultForUnsupportedTypes) {
     EXPECT_EQ(countEmptyResultSpecs(generated.specs), 0);
   }
 }
+
+// An OR of disjoint ranges reaches reader code that a single contiguous range
+// does not: BigintMultiRange has its own testInt64 and testInt64Range, so a
+// min/max check stops being one comparison against a pair of bounds.
+TEST_F(FilterGeneratorSeedTest, multiRangeFiltersAreGenerated) {
+  auto rowType = ROW({{"a", BIGINT()}, {"b", BIGINT()}});
+  std::vector<RowVectorPtr> batches{makeRowVector(
+      rowType->names(),
+      {makeFlatVector<int64_t>(kBatchRows, [](auto row) { return row; }),
+       makeFlatVector<int64_t>(kBatchRows, [](auto row) { return row * 3; })})};
+
+  int32_t multiRanges = 0;
+  for (uint32_t seed = 1; seed <= 200; ++seed) {
+    const auto generated = generate(rowType, batches, seed, 0.0);
+    for (const auto& [subfield, filter] : generated.filters) {
+      if (filter->kind() != common::FilterKind::kBigintMultiRange) {
+        continue;
+      }
+      ++multiRanges;
+      const auto* multiRange =
+          static_cast<const common::BigintMultiRange*>(filter.get());
+      const auto& ranges = multiRange->ranges();
+      // The constructor enforces this, so a violation would have thrown rather
+      // than reached here -- the assertions pin that the fallback, not luck, is
+      // what keeps a coarse sample from producing an invalid filter.
+      ASSERT_GE(ranges.size(), 2);
+      for (size_t i = 1; i < ranges.size(); ++i) {
+        EXPECT_GT(ranges[i]->lower(), ranges[i - 1]->upper());
+      }
+    }
+  }
+  EXPECT_GT(multiRanges, 0);
+}
+
+TEST_F(FilterGeneratorSeedTest, multiRangeFiltersAreGeneratedForVarchar) {
+  auto rowType = ROW({{"str", VARCHAR()}});
+  std::vector<std::string> data;
+  data.reserve(kBatchRows);
+  for (int32_t i = 0; i < kBatchRows; ++i) {
+    data.push_back(fmt::format("value_{:04d}", i));
+  }
+  std::vector<RowVectorPtr> batches{
+      makeRowVector(rowType->names(), {makeFlatVector(data)})};
+
+  int32_t multiRanges = 0;
+  for (uint32_t seed = 1; seed <= 200; ++seed) {
+    const auto generated = generate(rowType, batches, seed, 0.0);
+    for (const auto& [subfield, filter] : generated.filters) {
+      multiRanges += filter->kind() == common::FilterKind::kMultiRange ? 1 : 0;
+    }
+  }
+  EXPECT_GT(multiRanges, 0);
+}
+
+// The reference row set has to agree with whatever filter was handed back. A
+// multi-range is built from percentile boundaries rather than from the two
+// bounds the surrounding code computed, so a mistake there would desynchronise
+// the two and every consumer would compare against the wrong expected rows.
+TEST_F(FilterGeneratorSeedTest, multiRangeHitRowsAgreeWithTheFilter) {
+  auto rowType = ROW({{"a", BIGINT()}});
+  std::vector<RowVectorPtr> batches{makeRowVector(
+      rowType->names(),
+      {makeFlatVector<int64_t>(kBatchRows, [](auto row) { return row; })})};
+
+  int32_t checked = 0;
+  for (uint32_t seed = 1; seed <= 200; ++seed) {
+    const auto generated = generate(rowType, batches, seed, 0.0);
+    const auto it = generated.filters.find(Subfield("a"));
+    if (it == generated.filters.end() ||
+        it->second->kind() != common::FilterKind::kBigintMultiRange) {
+      continue;
+    }
+    ++checked;
+    auto* values = batches[0]->childAt(0)->asFlatVector<int64_t>();
+    for (auto hit : generated.hitRows) {
+      EXPECT_TRUE(it->second->testInt64(values->valueAt(batchRow(hit))));
+    }
+  }
+  EXPECT_GT(checked, 0);
+}

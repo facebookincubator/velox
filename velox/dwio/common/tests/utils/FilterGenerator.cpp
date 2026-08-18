@@ -247,6 +247,40 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
         nullAllowed);
   }
 
+  // The string counterpart of the OR of disjoint ranges the integer path
+  // builds. MultiRange has no ordering contract of its own -- overlapping
+  // members would still be a correct OR -- but ascending disjoint members are
+  // what makes it more than a single wide range, so fall back when the sample
+  // is too coarse to give them.
+  if (folly::Random::oneIn(4, rng_)) {
+    std::vector<std::unique_ptr<Filter>> ranges;
+    std::string previousUpper;
+    bool usable = true;
+    for (const auto& [from, to] : multiRangeBands(filterSpec)) {
+      std::string rangeLower = std::string(valueAtPct(from));
+      std::string rangeUpper = std::string(valueAtPct(to));
+      if (rangeLower > rangeUpper ||
+          (!ranges.empty() && rangeLower <= previousUpper)) {
+        usable = false;
+        break;
+      }
+      previousUpper = rangeUpper;
+      ranges.push_back(
+          std::make_unique<velox::common::BytesRange>(
+              std::move(rangeLower),
+              false,
+              false,
+              std::move(rangeUpper),
+              false,
+              false,
+              nullAllowed));
+    }
+    if (usable) {
+      return std::make_unique<velox::common::MultiRange>(
+          std::move(ranges), nullAllowed);
+    }
+  }
+
   return std::make_unique<velox::common::BytesRange>(
       std::string(lower),
       false,
