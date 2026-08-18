@@ -18,6 +18,7 @@
 #include "folly/ssl/OpenSSLHash.h"
 
 #include <string>
+#include "velox/expression/StringWriter.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/string/StringCore.h"
