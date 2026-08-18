@@ -16,6 +16,8 @@
 
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 
+#include <cmath>
+
 #include <algorithm>
 #include <memory>
 #include <typeinfo>
@@ -396,6 +398,40 @@ bool supportsRowGroupSkip(const TypePtr& type) {
       kind == TypeKind::TIMESTAMP;
 }
 
+// Draws a filter selectivity in percent.
+//
+// The previous scheme picked from {1, 10, 20, 30} and {76, 80, ... 100}, which
+// left two gaps that matter for reader coverage: nothing between 31% and 75%,
+// which is exactly where a filter partially overlaps a stripe or a row group
+// and boundary handling is interesting, and a degenerate match-everything
+// filter at 100% roughly one draw in thirteen.
+//
+// Splits the range into three equally weighted regimes instead. The low band is
+// log-uniform because selectivity there spans two orders of magnitude and a
+// uniform draw would almost never produce the very selective filters that
+// exercise skipping; the other two are uniform. Capped below 100 so the filter
+// always excludes something and startPct below always has a non-empty range to
+// draw from.
+float randomSelectPct(folly::Random::DefaultGenerator& rng) {
+  switch (folly::Random::rand32(3, rng)) {
+    case 0: {
+      // Highly selective: log-uniform over [0.5, 10).
+      constexpr double kMin = 0.5;
+      constexpr double kMax = 10.0;
+      const double logMin = std::log(kMin);
+      const double span = std::log(kMax) - logMin;
+      return static_cast<float>(
+          std::exp(logMin + folly::Random::randDouble01(rng) * span));
+    }
+    case 1:
+      // The band the old scheme could not reach at all.
+      return static_cast<float>(10.0 + folly::Random::randDouble01(rng) * 65.0);
+    default:
+      // Permissive, but never all-inclusive.
+      return static_cast<float>(75.0 + folly::Random::randDouble01(rng) * 24.0);
+  }
+}
+
 // Resolves a top level field by name. Returns nullptr for the dotted subfield
 // paths a caller may supply directly, which findChild does not accept.
 TypePtr topLevelFieldType(const RowType& rowType, const std::string& name) {
@@ -433,16 +469,12 @@ std::vector<FilterSpec> FilterGenerator::makeRandomSpecs(
     specs.emplace_back();
     specs.back().field = name;
     auto category = folly::Random::rand32(rng_) % 13;
-    if (category == 0) {
-      specs.back().selectPct = 1;
-    } else if (category < 4) {
-      specs.back().selectPct = category * 10;
-    } else if (category == 11) {
+    if (category == 11) {
       specs.back().filterKind = FilterKind::kIsNull;
     } else if (category == 12) {
       specs.back().filterKind = FilterKind::kIsNotNull;
     } else {
-      specs.back().selectPct = 60 + category * 4;
+      specs.back().selectPct = randomSelectPct(rng_);
     }
 
     specs.back().startPct = specs.back().selectPct < 100
