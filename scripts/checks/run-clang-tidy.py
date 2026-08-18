@@ -54,7 +54,9 @@ def git_changed_lines(commit, exclude_dirs=None):
                 "cudf/" not in matched_file
                 and "wave/" not in matched_file
                 and "ucx-exchange/" not in matched_file
-                and not any(exclude_dir in matched_file for exclude_dir in (exclude_dirs or []))
+                and not any(
+                    exclude_dir in matched_file for exclude_dir in (exclude_dirs or [])
+                )
                 and not matched_file.endswith("-inl.h")
             ):
                 file = matched_file
