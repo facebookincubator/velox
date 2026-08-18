@@ -67,7 +67,7 @@ class IcebergGeometryReadTest : public test::IcebergTestBase {
     fileFormat_ = dwio::common::FileFormat::PARQUET;
   }
 
-  /// ISO WKB, as an Iceberg `geometry` column stores it on disk.
+  // ISO WKB, as an Iceberg `geometry` column stores it on disk.
   static std::string toWkb(const std::string& wkt) {
     geos::io::WKTReader wktReader;
     geos::io::WKBWriter wkbWriter;
@@ -76,7 +76,7 @@ class IcebergGeometryReadTest : public test::IcebergTestBase {
     return out.str();
   }
 
-  /// Velox's internal geometry encoding, i.e. what a GEOMETRY vector must hold.
+  // Velox's internal geometry encoding, i.e. what a GEOMETRY vector must hold.
   static std::string toVeloxGeometry(const std::string& wkt) {
     geos::io::WKTReader wktReader;
     std::string out;
@@ -85,8 +85,8 @@ class IcebergGeometryReadTest : public test::IcebergTestBase {
     return out;
   }
 
-  /// A five-byte WKB prefix carrying only the type word, enough to exercise the
-  /// header validation that runs before any coordinate is read.
+  // A five-byte WKB prefix carrying only the type word, enough to exercise the
+  // header validation that runs before any coordinate is read.
   static std::string typeCodeOnlyWkb(uint32_t typeCode) {
     std::string bytes(5, '\0');
     bytes[0] = 1;
@@ -119,8 +119,8 @@ class IcebergGeometryReadTest : public test::IcebergTestBase {
         GEOMETRY());
   }
 
-  /// Writes 'vectors' as Iceberg Parquet data files and scans them back with
-  /// 'outputType'.
+  // Writes 'vectors' as Iceberg Parquet data files and scans them back with
+  // 'outputType'.
   void assertScan(
       const std::vector<RowVectorPtr>& vectors,
       const RowTypePtr& outputType,
@@ -770,6 +770,37 @@ TEST_F(IcebergGeometryReadTest, nonParquetGeometryIsRejected) {
           .splits(makeIcebergSplits(filePath->getPath()))
           .copyResults(pool()),
       "Reading Iceberg geometry columns is only supported for Parquet files");
+}
+
+// Geometry support is read-only. The reader re-encodes the file's ISO WKB into
+// Velox's internal encoding, but the writer does not perform the inverse
+// conversion, and GEOMETRY is VARBINARY-backed -- so writing a GEOMETRY vector
+// would put internal bytes on disk where the Iceberg spec requires WKB,
+// producing a file neither this reader nor any other Iceberg engine can read.
+// The sink rejects the write instead. Once the writer converts internal -> WKB,
+// this test should be replaced by a GEOMETRY vector -> write -> read round
+// trip.
+TEST_F(IcebergGeometryReadTest, writingGeometryIsRejected) {
+  const auto outputDirectory = test::TempDirectoryPath::create();
+
+  VELOX_ASSERT_THROW(
+      createDataSink(ROW({"geom"}, {GEOMETRY()}), outputDirectory->getPath()),
+      "Writing an Iceberg geometry column is not supported");
+
+  // Nested geometry is rejected on the same grounds.
+  VELOX_ASSERT_THROW(
+      createDataSink(
+          ROW({"r"}, {ROW({"geom"}, {GEOMETRY()})}),
+          outputDirectory->getPath()),
+      "Writing an Iceberg geometry column is not supported");
+  VELOX_ASSERT_THROW(
+      createDataSink(
+          ROW({"a"}, {ARRAY(GEOMETRY())}), outputDirectory->getPath()),
+      "Writing an Iceberg geometry column is not supported");
+
+  // A geometry-free schema still writes.
+  EXPECT_NO_THROW(createDataSink(
+      ROW({"id", "b"}, {BIGINT(), VARBINARY()}), outputDirectory->getPath()));
 }
 
 #endif // VELOX_ENABLE_PARQUET

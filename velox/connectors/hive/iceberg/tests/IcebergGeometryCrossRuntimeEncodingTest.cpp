@@ -59,7 +59,7 @@ class IcebergGeometryCrossRuntimeEncodingTest : public test::IcebergTestBase {
     registerGeometryType();
   }
 
-  /// ISO WKB, as an Iceberg `geometry` column stores it on disk.
+  // ISO WKB, as an Iceberg `geometry` column stores it on disk.
   static std::string toWkb(const std::string& wkt) {
     geos::io::WKTReader wktReader;
     geos::io::WKBWriter wkbWriter;
@@ -102,11 +102,11 @@ class IcebergGeometryCrossRuntimeEncodingTest : public test::IcebergTestBase {
     return out;
   }
 
-  /// SHA-256 of the record lines of the golden fixture, mirrored in the file's
-  /// own drift-guard header and in prestodb/presto's
-  /// TestIcebergGeometryCrossRuntimeEncoding. Updating it means changing an
-  /// internal encoding, which needs a deliberate, explained change in both
-  /// repositories.
+  // SHA-256 of the record lines of the golden fixture, mirrored in the file's
+  // own drift-guard header and in prestodb/presto's
+  // TestIcebergGeometryCrossRuntimeEncoding. Updating it means changing an
+  // internal encoding, which needs a deliberate, explained change in both
+  // repositories.
   static constexpr const char* kGoldenRecordsSha256 =
       "9452293bacd3a49b73a75b819896a7e0d39e57f2e91cf3cda19fd37e6485f6ed";
 
@@ -116,9 +116,9 @@ class IcebergGeometryCrossRuntimeEncodingTest : public test::IcebergTestBase {
         "examples/geometry_internal_encoding_golden.tsv");
   }
 
-  /// The record lines only: every line that is neither blank nor a comment,
-  /// joined with a newline and terminated by one. Must match how the hash in
-  /// the file header was computed.
+  // The record lines only: every line that is neither blank nor a comment,
+  // joined with a newline and terminated by one. Must match how the hash in
+  // the file header was computed.
   static std::string readGoldenRecordPayload() {
     std::ifstream file(goldenPath());
     VELOX_CHECK(file.is_open(), "cannot open golden file {}", goldenPath());
@@ -155,9 +155,9 @@ class IcebergGeometryCrossRuntimeEncodingTest : public test::IcebergTestBase {
     std::string internalHex;
   };
 
-  /// Reads the cross-runtime golden table. The same file is checked into
-  /// prestodb/presto at
-  /// presto-iceberg/src/test/resources/iceberg_v3/geometry_internal_encoding_golden.tsv.
+  // Reads the cross-runtime golden table. The same file is checked into
+  // prestodb/presto at
+  // presto-iceberg/src/test/resources/iceberg_v3/geometry_internal_encoding_golden.tsv.
   static std::vector<GoldenRecord> loadGolden() {
     const auto path = goldenPath();
     std::ifstream file(path);

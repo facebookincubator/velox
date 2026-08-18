@@ -60,11 +60,11 @@ const char* dimensionName(uint32_t dimensions) {
   }
 }
 
-/// Rejects payloads that Velox's two-dimensional, SRID-less GEOMETRY cannot
-/// represent faithfully, rather than silently dropping dimensions. Only the
-/// outermost header is inspected: in conforming ISO WKB the dimensionality of a
-/// collection is declared on the collection itself, so a 2D header implies 2D
-/// children.
+// Rejects payloads that Velox's two-dimensional, SRID-less GEOMETRY cannot
+// represent faithfully, rather than silently dropping dimensions. Only the
+// outermost header is inspected: in conforming ISO WKB the dimensionality of a
+// collection is declared on the collection itself, so a 2D header implies 2D
+// children.
 void validateIsoWkb(StringView wkb, const std::string& columnPath) {
   VELOX_USER_CHECK_GE(
       wkb.size(),
@@ -114,8 +114,8 @@ void validateIsoWkb(StringView wkb, const std::string& columnPath) {
       geometryCode);
 }
 
-/// Parses one WKB value and appends Velox's internal geometry encoding to
-/// 'out'.
+// Parses one WKB value and appends Velox's internal geometry encoding to
+// 'out'.
 void wkbToVeloxGeometry(
     StringView wkb,
     geos::io::WKBReader& wkbReader,
@@ -138,9 +138,9 @@ void wkbToVeloxGeometry(
   common::geospatial::GeometrySerializer::serialize(*geometry, out);
 }
 
-/// Converts the live positions of a flat scalar vector of WKB payloads into a
-/// new flat GEOMETRY vector. Positions outside 'rows', and null positions, are
-/// left null; their bytes are never read.
+// Converts the live positions of a flat scalar vector of WKB payloads into a
+// new flat GEOMETRY vector. Positions outside 'rows', and null positions, are
+// left null; their bytes are never read.
 VectorPtr convertGeometryLeaf(
     const VectorPtr& input,
     const SelectivityVector& rows,
@@ -177,9 +177,9 @@ VectorPtr convertGeometryLeaf(
   return result;
 }
 
-/// Selects the element positions referenced by the live rows of an ARRAY or
-/// MAP. Offsets and sizes are read per row, so non-zero offsets, unreferenced
-/// gaps and sliced vectors are all handled and no packed layout is assumed.
+// Selects the element positions referenced by the live rows of an ARRAY or
+// MAP. Offsets and sizes are read per row, so non-zero offsets, unreferenced
+// gaps and sliced vectors are all handled and no packed layout is assumed.
 SelectivityVector selectReferencedElements(
     const ArrayVectorBase& vector,
     const SelectivityVector& rows,
@@ -202,8 +202,8 @@ SelectivityVector selectReferencedElements(
   return selected;
 }
 
-/// Selects the dictionary entries referenced by the live rows of a dictionary
-/// vector.
+// Selects the dictionary entries referenced by the live rows of a dictionary
+// vector.
 SelectivityVector selectReferencedDictionaryEntries(
     const BaseVector& dictionary,
     const SelectivityVector& rows,

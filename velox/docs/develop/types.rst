@@ -301,6 +301,13 @@ with an explicit error rather than silently flattened, and no SRID is inferred f
 files are supported; a geometry column in an ORC or DWRF data file is rejected. A build with ``VELOX_ENABLE_GEO=ON`` is
 required; otherwise the read fails naming the flag and never exposes raw WKB inside a GEOMETRY vector.
 
+Geometry support in the Iceberg connector is **read-only**. Reading re-encodes ISO WKB into Velox's internal encoding,
+but the write side does not perform the inverse conversion, and GEOMETRY is backed by VARBINARY -- so writing a GEOMETRY
+vector would place Velox's internal bytes on disk where the Iceberg specification requires ISO WKB, producing a file
+that neither this reader nor any other Iceberg engine could interpret. ``IcebergDataSink`` therefore rejects a GEOMETRY
+column, at any nesting depth, rather than emitting a non-conforming file. Writes become symmetric once the writer
+converts internal encoding to WKB.
+
 SPHERICALGEOGRAPHY represents a geometry on a spherical model of the Earth. It is internally represented the same
 way as GEOMETRY, but only certain functions are supported.  Moreover, these functions will return values in meters
 as opposed to the units of the coordinate space.
