@@ -116,6 +116,21 @@ void readStructNulls<StringView>(
   source->skip(dataSize);
 }
 
+// Opaque values are serialized as strings. Keep in sync with
+// read<OpaqueType>().
+template <>
+void readStructNulls<OpaqueType>(
+    ByteInputStream* source,
+    const TypePtr& /*type*/,
+    bool /*useLosslessTimestamp*/,
+    Scratch& scratch) {
+  const int32_t size = source->read<int32_t>();
+  source->skip(size * sizeof(int32_t));
+  valueCount(source, size, scratch);
+  const int32_t dataSize = source->read<int32_t>();
+  source->skip(dataSize);
+}
+
 void readStructNullsColumns(
     ByteInputStream* source,
     const std::vector<TypePtr>& types,
@@ -248,6 +263,7 @@ void readStructNullsColumns(
           {TypeKind::TIMESTAMP, &readStructNulls<Timestamp>},
           {TypeKind::VARCHAR, &readStructNulls<StringView>},
           {TypeKind::VARBINARY, &readStructNulls<StringView>},
+          {TypeKind::OPAQUE, &readStructNulls<OpaqueType>},
           {TypeKind::ARRAY, &readArrayVectorStructNulls},
           {TypeKind::MAP, &readMapVectorStructNulls},
           {TypeKind::ROW, &readRowVectorStructNulls},
