@@ -76,6 +76,7 @@ velox_add_library(
   DecimalUtil.h
   detail/DecimalArithmeticFunctions.h
   detail/DecimalCeilFunction.h
+  EncodeFunction.h
   Factorial.h
   FormatNumber.h
   GetJsonObject.h
