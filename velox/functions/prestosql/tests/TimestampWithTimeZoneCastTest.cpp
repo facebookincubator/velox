@@ -76,6 +76,24 @@ class TimestampWithTimeZoneCastTest : public functions::test::CastBaseTest {
         {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
     });
   }
+
+  // Session zone set, legacy_timestamp_with_timezone off: casts render in the
+  // session zone.
+  void setSessionZoneNonLegacy(const std::string& timeZone) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionTimezone, timeZone},
+        {core::QueryConfig::kLegacyTimestampWithTimezone, "false"},
+    });
+  }
+
+  // Session zone set, legacy_timestamp_with_timezone on: casts render in each
+  // value's embedded zone.
+  void setSessionZoneLegacy(const std::string& timeZone) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionTimezone, timeZone},
+        {core::QueryConfig::kLegacyTimestampWithTimezone, "true"},
+    });
+  }
 };
 
 TEST_F(TimestampWithTimeZoneCastTest, fromTimestamp) {
@@ -157,6 +175,50 @@ TEST_F(TimestampWithTimeZoneCastTest, toVarchar) {
       "1970-01-01 14:11:37.123 Asia/Shanghai",
       "1970-01-01 11:41:37.123 Asia/Kolkata", // Asia/Calcutta is linked to
                                               // Asia/Kolkata.
+  });
+
+  auto result = evaluate("cast(c0 as varchar)", makeRowVector({input}));
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(TimestampWithTimeZoneCastTest, toVarcharSessionZone) {
+  setSessionZoneNonLegacy("America/New_York");
+
+  // 1970-01-01 05:30 UTC, the same instant tagged with two different zones.
+  const int64_t utcMillis = 5 * kMillisInHour + 30 * kMillisInMinute;
+  auto input = makeFlatVector<int64_t>(
+      {
+          pack(utcMillis, tz::getTimeZoneID("-04:00")),
+          pack(utcMillis, tz::getTimeZoneID("-07:00")),
+      },
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  // 05:30 UTC is 00:30 in New York (EST, -05:00) for both.
+  auto expected = makeFlatVector<std::string>({
+      "1970-01-01 00:30:00.000 America/New_York",
+      "1970-01-01 00:30:00.000 America/New_York",
+  });
+
+  auto result = evaluate("cast(c0 as varchar)", makeRowVector({input}));
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(TimestampWithTimeZoneCastTest, toVarcharLegacyPreservesEmbeddedZone) {
+  // Guard: with the flag on, the session zone is ignored and each value renders
+  // in its embedded zone.
+  setSessionZoneLegacy("America/New_York");
+
+  const int64_t utcMillis = 5 * kMillisInHour + 30 * kMillisInMinute;
+  auto input = makeFlatVector<int64_t>(
+      {
+          pack(utcMillis, tz::getTimeZoneID("-04:00")),
+          pack(utcMillis, tz::getTimeZoneID("-07:00")),
+      },
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  auto expected = makeFlatVector<std::string>({
+      "1970-01-01 01:30:00.000 -04:00",
+      "1969-12-31 22:30:00.000 -07:00",
   });
 
   auto result = evaluate("cast(c0 as varchar)", makeRowVector({input}));
@@ -297,13 +359,53 @@ TEST_F(TimestampWithTimeZoneCastTest, toDate) {
   auto result = evaluate("cast(c0 as date)", makeRowVector({input}));
   test::assertEqualVectors(expected, result);
 
-  // Verify that session time zone doesn't affect the result.
+  // Under the legacy default the session time zone does not affect the result.
 
   for (auto tz : {"America/New_York", "America/Los_Angeles", "Asia/Shanghai"}) {
     setQueryTimeZone(tz);
     result = evaluate("cast(c0 as date)", makeRowVector({input}));
     test::assertEqualVectors(expected, result);
   }
+}
+
+TEST_F(TimestampWithTimeZoneCastTest, toDateSessionZone) {
+  setSessionZoneNonLegacy("America/New_York");
+
+  // 1970-01-01 05:30 UTC; in -07:00 this is the previous day, but in the
+  // session zone (EST, -05:00) both fall on 1970-01-01.
+  const int64_t utcMillis = 5 * kMillisInHour + 30 * kMillisInMinute;
+  auto input = makeFlatVector<int64_t>(
+      {
+          pack(utcMillis, tz::getTimeZoneID("-04:00")),
+          pack(utcMillis, tz::getTimeZoneID("-07:00")),
+      },
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  auto expected = makeFlatVector<int32_t>({0, 0}, DATE());
+
+  auto result = evaluate("cast(c0 as date)", makeRowVector({input}));
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(TimestampWithTimeZoneCastTest, toDateLegacyPreservesEmbeddedZone) {
+  // Guard: with the flag on, the session zone is ignored and each value's date
+  // is taken in its embedded zone.
+  setSessionZoneLegacy("America/New_York");
+
+  const int64_t utcMillis = 5 * kMillisInHour + 30 * kMillisInMinute;
+  auto input = makeFlatVector<int64_t>(
+      {
+          pack(utcMillis, tz::getTimeZoneID("-04:00")),
+          pack(utcMillis, tz::getTimeZoneID("-07:00")),
+      },
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  // 05:30 UTC is 01:30 at -04:00 (1970-01-01) but 22:30 the prior day at
+  // -07:00.
+  auto expected = makeFlatVector<int32_t>({0, -1}, DATE());
+
+  auto result = evaluate("cast(c0 as date)", makeRowVector({input}));
+  test::assertEqualVectors(expected, result);
 }
 
 TEST_F(TimestampWithTimeZoneCastTest, fromDate) {
@@ -682,6 +784,47 @@ TEST_F(TimestampWithTimeZoneCastTest, toTime) {
        std::nullopt,
        // 03:04:05.321
        3 * kMillisInHour + 4 * kMillisInMinute + 5 * kMillisInSecond + 321},
+      TIME());
+
+  testCast(input, expected);
+}
+
+TEST_F(TimestampWithTimeZoneCastTest, toTimeSessionZone) {
+  setSessionZoneNonLegacy("America/New_York");
+
+  // 1970-01-01 05:30 UTC, the same instant tagged with two different zones.
+  const int64_t utcMillis = 5 * kMillisInHour + 30 * kMillisInMinute;
+  auto input = makeFlatVector<int64_t>(
+      {
+          pack(utcMillis, tz::getTimeZoneID("-04:00")),
+          pack(utcMillis, tz::getTimeZoneID("-07:00")),
+      },
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  // 05:30 UTC is 00:30 in New York (EST, -05:00) for both.
+  auto expected = makeFlatVector<int64_t>(
+      {30 * kMillisInMinute, 30 * kMillisInMinute}, TIME());
+
+  testCast(input, expected);
+}
+
+TEST_F(TimestampWithTimeZoneCastTest, toTimeLegacyPreservesEmbeddedZone) {
+  // Guard: with the flag on, the session zone is ignored and each value's time
+  // of day is taken in its embedded zone.
+  setSessionZoneLegacy("America/New_York");
+
+  const int64_t utcMillis = 5 * kMillisInHour + 30 * kMillisInMinute;
+  auto input = makeFlatVector<int64_t>(
+      {
+          pack(utcMillis, tz::getTimeZoneID("-04:00")),
+          pack(utcMillis, tz::getTimeZoneID("-07:00")),
+      },
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  // 05:30 UTC is 01:30 at -04:00 and 22:30 at -07:00.
+  auto expected = makeFlatVector<int64_t>(
+      {1 * kMillisInHour + 30 * kMillisInMinute,
+       22 * kMillisInHour + 30 * kMillisInMinute},
       TIME());
 
   testCast(input, expected);
