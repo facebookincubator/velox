@@ -115,6 +115,15 @@ class AbstractColumnStats {
   }
 
  protected:
+  // Whether the generated filter should pass nulls. `allowNulls_` on the spec
+  // is a hard constraint from the caller; when it permits nulls the answer is
+  // drawn independently rather than derived from selectPct, which used to tie
+  // the two together and make "selective filter that also passes nulls"
+  // unreachable.
+  bool drawNullAllowed(const FilterSpec& filterSpec) {
+    return filterSpec.allowNulls_ && folly::Random::oneIn(2, rng_);
+  }
+
   const TypePtr type_;
   const RowTypePtr rootType_;
   int32_t numDistinct_ = 0;
@@ -307,6 +316,7 @@ class ColumnStats : public AbstractColumnStats {
       return std::make_unique<velox::common::BigintRange>(
           getIntegerValue(lower), getIntegerValue(upper), false);
     }
+    const bool nullAllowed = drawNullAllowed(filterSpec);
     if (upperIndex - lowerIndex < 1000 &&
         folly::Random::rand32(10, rng_) <= 3) {
       std::vector<int64_t> in;
@@ -315,21 +325,17 @@ class ColumnStats : public AbstractColumnStats {
       }
       // make sure we don't accidentally generate an AlwaysFalse filter
       if (folly::Random::oneIn(2, rng_) && filterSpec.selectPct < 100.0) {
-        return velox::common::createNegatedBigintValues(in, true);
+        return velox::common::createNegatedBigintValues(in, nullAllowed);
       }
-      return velox::common::createBigintValues(in, true);
+      return velox::common::createBigintValues(in, nullAllowed);
     }
     // sometimes make a negated filter instead (1/4 chance)
     if (folly::Random::oneIn(4, rng_) && filterSpec.selectPct < 100.0) {
       return std::make_unique<velox::common::NegatedBigintRange>(
-          getIntegerValue(lower),
-          getIntegerValue(upper),
-          filterSpec.selectPct < 75);
+          getIntegerValue(lower), getIntegerValue(upper), nullAllowed);
     }
     return std::make_unique<velox::common::BigintRange>(
-        getIntegerValue(lower),
-        getIntegerValue(upper),
-        filterSpec.selectPct > 25);
+        getIntegerValue(lower), getIntegerValue(upper), nullAllowed);
   }
 
   std::unique_ptr<Filter> makeRowGroupSkipRangeFilter(

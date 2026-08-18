@@ -114,7 +114,7 @@ std::unique_ptr<Filter> ColumnStats<float>::makeRangeFilter(
       upper,
       upperUnbounded,
       false,
-      filterSpec.selectPct > 25);
+      drawNullAllowed(filterSpec));
 }
 
 template <>
@@ -153,7 +153,7 @@ std::unique_ptr<Filter> ColumnStats<double>::makeRangeFilter(
       upper,
       upperUnbounded,
       false,
-      filterSpec.selectPct > 25);
+      drawNullAllowed(filterSpec));
 }
 
 template <>
@@ -216,6 +216,7 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
   StringView lower = valueAtPct(filterSpec.startPct, &lowerIndex);
   StringView upper =
       valueAtPct(filterSpec.startPct + filterSpec.selectPct, &upperIndex);
+  const bool nullAllowed = drawNullAllowed(filterSpec);
   if (upperIndex - lowerIndex < 1000 && folly::Random::rand32(10, rng_) <= 3) {
     std::vector<std::string> inRange;
     inRange.reserve(upperIndex - lowerIndex);
@@ -227,10 +228,9 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
     }
     if (folly::Random::oneIn(2, rng_) && filterSpec.selectPct != 100.0) {
       return std::make_unique<velox::common::NegatedBytesValues>(
-          inRange, filterSpec.selectPct < 75);
+          inRange, nullAllowed);
     }
-    return std::make_unique<velox::common::BytesValues>(
-        inRange, filterSpec.selectPct > 25);
+    return std::make_unique<velox::common::BytesValues>(inRange, nullAllowed);
   }
 
   // sometimes create a negated filter instead
@@ -242,7 +242,7 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
         std::string(upper),
         false,
         false,
-        filterSpec.selectPct < 75);
+        nullAllowed);
   }
 
   return std::make_unique<velox::common::BytesRange>(
@@ -252,7 +252,7 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
       std::string(upper),
       false,
       false,
-      filterSpec.selectPct > 25);
+      nullAllowed);
 }
 
 template <>
@@ -268,7 +268,7 @@ std::unique_ptr<Filter> ColumnStats<Timestamp>::makeRangeFilter(
       valueAtPct(filterSpec.startPct + filterSpec.selectPct, &upperIndex);
 
   return std::make_unique<velox::common::TimestampRange>(
-      lower, upper, filterSpec.selectPct > 25);
+      lower, upper, drawNullAllowed(filterSpec));
 }
 
 template <>
