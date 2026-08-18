@@ -48,11 +48,9 @@ class HivePartitionName {
   /// instead of raw integer value.
   static std::string toName(int128_t value, const TypePtr& type);
 
-  /// Format Timestamp partition values. Specialized to:
-  /// 1. Convert to default timezone
-  /// 2. Use space as date-time separator (not 'T')
-  /// 3. Use millisecond precision with trailing zeros skipped
-  /// 4. Always keep at least ".0" for fractional seconds (Presto compatibility)
+  /// Format Timestamp partition values. Rendered by PartitionValue::toString,
+  /// which shifts a plain TIMESTAMP to the default timezone and leaves a
+  /// TIMESTAMP_UTC as it stands.
   static std::string toName(Timestamp value, const TypePtr& type);
 
   /// Build partition key-value pairs from partition values.

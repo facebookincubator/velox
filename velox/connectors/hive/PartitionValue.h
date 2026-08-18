@@ -50,6 +50,17 @@ class PartitionValue {
     kDaysSinceEpoch,
   };
 
+  /// Converts 'value' to the text a partition is named with. 'value' must be
+  /// non-null. A TIMESTAMP is rendered with millisecond precision, trailing
+  /// zeros dropped, and at least one fractional digit, as Presto's
+  /// java.sql.Timestamp.toString() does. A TIMESTAMP_UTC is never shifted; a
+  /// plain TIMESTAMP follows 'timestampMode', and a DATE follows 'dateMode'.
+  static std::string toString(
+      const Variant& value,
+      const Type& type,
+      TimestampMode timestampMode,
+      DateMode dateMode);
+
   /// 'value' must be non-null. Accepted input per type:
   /// - BOOLEAN: t, f, 1, 0, true or false, case-insensitively.
   /// - TINYINT, SMALLINT, INTEGER, BIGINT: an integer, range-checked against
