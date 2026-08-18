@@ -52,12 +52,13 @@ struct FilterSpec {
 
   std::string toString() const {
     return fmt::format(
-        "FilterSpec(field={}, startPct={}, selectPct={}, filterKind={}, isForRowGroupSkip={}, allowNulls={})",
+        "FilterSpec(field={}, startPct={}, selectPct={}, filterKind={}, isForRowGroupSkip={}, isForEmptyResult={}, allowNulls={})",
         field,
         startPct,
         selectPct,
         filterKind,
         isForRowGroupSkip,
+        isForEmptyResult,
         allowNulls_);
   }
 
@@ -68,6 +69,9 @@ struct FilterSpec {
   // If true, makes a filter that matches max value in the column so as to skip
   // row groups on min/max.
   bool isForRowGroupSkip{false};
+  // If true, makes a filter positioned just past the column maximum, so that no
+  // row survives it. Opt in with FilterGenerator::setEmptyResultProbability.
+  bool isForEmptyResult{false};
   bool allowNulls_{true};
 };
 
@@ -108,6 +112,15 @@ class AbstractColumnStats {
       std::vector<uint64_t>& hits) = 0;
 
   virtual std::unique_ptr<Filter> rowGroupSkipFilter(
+      const std::vector<RowVectorPtr>& /*batches*/,
+      const Subfield& /*subfield*/,
+      std::vector<uint64_t>& /*hits*/) {
+    VELOX_NYI();
+  }
+
+  // Returns a filter that no row passes, or nullptr when the column admits no
+  // such filter (every value null, or the maximum is already the type maximum).
+  virtual std::unique_ptr<Filter> emptyResultFilter(
       const std::vector<RowVectorPtr>& /*batches*/,
       const Subfield& /*subfield*/,
       std::vector<uint64_t>& /*hits*/) {
@@ -194,29 +207,7 @@ class ColumnStats : public AbstractColumnStats {
         break;
     }
 
-    size_t numHits = 0;
-    SimpleVector<T>* values = nullptr;
-    int32_t previousBatch = -1;
-    for (auto hit : hits) {
-      auto batch = batchNumber(hit);
-      if (batch != previousBatch) {
-        previousBatch = batch;
-        auto vector = batches[batch];
-        values = getChildBySubfield(batches[batch].get(), subfield, rootType_)
-                     ->template as<SimpleVector<T>>();
-      }
-      auto row = batchRow(hit);
-      if (values->isNullAt(row)) {
-        if (filter->testNull()) {
-          hits[numHits++] = hit;
-        }
-        continue;
-      }
-      if (velox::common::applyFilter(*filter, values->valueAt(row))) {
-        hits[numHits++] = hit;
-      }
-    }
-    hits.resize(numHits);
+    narrowHits(batches, subfield, *filter, hits);
     return filter;
   }
 
@@ -226,6 +217,31 @@ class ColumnStats : public AbstractColumnStats {
       std::vector<uint64_t>& hits) override {
     std::unique_ptr<Filter> filter;
     filter = makeRowGroupSkipRangeFilter(batches, subfield);
+    narrowHits(batches, subfield, *filter, hits);
+    return filter;
+  }
+
+  std::unique_ptr<Filter> emptyResultFilter(
+      const std::vector<RowVectorPtr>& batches,
+      const Subfield& subfield,
+      std::vector<uint64_t>& hits) override {
+    auto filter = makeEmptyResultRangeFilter(batches, subfield);
+    if (filter == nullptr) {
+      return nullptr;
+    }
+    narrowHits(batches, subfield, *filter, hits);
+    return filter;
+  }
+
+ private:
+  // Narrows 'hits' to the rows the filter passes. Every filter flavor shares
+  // this: the reference row set has to be derived from the filter that is
+  // actually handed to the reader, not from the spec that produced it.
+  void narrowHits(
+      const std::vector<RowVectorPtr>& batches,
+      const Subfield& subfield,
+      const Filter& filter,
+      std::vector<uint64_t>& hits) {
     size_t numHits = 0;
     SimpleVector<T>* values = nullptr;
     int32_t previousBatch = -1;
@@ -233,26 +249,23 @@ class ColumnStats : public AbstractColumnStats {
       auto batch = batchNumber(hit);
       if (batch != previousBatch) {
         previousBatch = batch;
-        auto vector = batches[batch];
         values = getChildBySubfield(batches[batch].get(), subfield, rootType_)
                      ->template as<SimpleVector<T>>();
       }
       auto row = batchRow(hit);
       if (values->isNullAt(row)) {
-        if (filter->testNull()) {
+        if (filter.testNull()) {
           hits[numHits++] = hit;
         }
         continue;
       }
-      if (velox::common::applyFilter(*filter, values->valueAt(row))) {
+      if (velox::common::applyFilter(filter, values->valueAt(row))) {
         hits[numHits++] = hit;
       }
     }
     hits.resize(numHits);
-    return filter;
   }
 
- private:
   void addSample(SimpleVector<T>* vector, vector_size_t index) {
     ++numSamples_;
     if (vector->isNullAt(index)) {
@@ -338,10 +351,13 @@ class ColumnStats : public AbstractColumnStats {
         getIntegerValue(lower), getIntegerValue(upper), nullAllowed);
   }
 
-  std::unique_ptr<Filter> makeRowGroupSkipRangeFilter(
+  // Scans every row rather than the sample in 'values_': a filter that has to
+  // sit at or past the column maximum cannot be built from a sample. Returns
+  // false, leaving 'max' untouched, if every value is null.
+  bool columnMax(
       const std::vector<RowVectorPtr>& batches,
-      const Subfield& subfield) {
-    T max;
+      const Subfield& subfield,
+      T& max) {
     bool hasMax = false;
     for (auto batch : batches) {
       auto values = getChildBySubfield(batch.get(), subfield, rootType_)
@@ -356,16 +372,40 @@ class ColumnStats : public AbstractColumnStats {
         if (values->isNullAt(i)) {
           continue;
         }
-        if (hasMax && max < values->valueAt(i)) {
-          max = values->valueAt(i);
-        } else if (!hasMax) {
+        if (!hasMax || max < values->valueAt(i)) {
           max = values->valueAt(i);
           hasMax = true;
         }
       }
     }
+    return hasMax;
+  }
+
+  std::unique_ptr<Filter> makeRowGroupSkipRangeFilter(
+      const std::vector<RowVectorPtr>& batches,
+      const Subfield& subfield) {
+    T max{};
+    columnMax(batches, subfield, max);
     return std::make_unique<velox::common::BigintRange>(
         getIntegerValue(max), getIntegerValue(max), false);
+  }
+
+  // One past the column maximum. Only reached for the integral kinds, where
+  // getIntegerValue is exact -- see supportsEmptyResult in the .cpp -- so the
+  // resulting range cannot accidentally overlap a value.
+  std::unique_ptr<Filter> makeEmptyResultRangeFilter(
+      const std::vector<RowVectorPtr>& batches,
+      const Subfield& subfield) {
+    T max{};
+    if (!columnMax(batches, subfield, max)) {
+      return nullptr;
+    }
+    const int64_t bound = getIntegerValue(max);
+    if (bound == std::numeric_limits<int64_t>::max()) {
+      return nullptr;
+    }
+    return std::make_unique<velox::common::BigintRange>(
+        bound + 1, bound + 1, false);
   }
 
   std::unique_ptr<Filter> makeRandomFilter(const FilterSpec& filterSpec) {
@@ -451,6 +491,15 @@ class ComplexColumnStats : public AbstractColumnStats {
     VELOX_FAIL("N/A in ComplexType");
   }
 
+  // A complex type only admits is null / is not null, so whether either matches
+  // nothing depends on the data rather than on how the filter is built.
+  std::unique_ptr<Filter> emptyResultFilter(
+      const std::vector<RowVectorPtr>& /*batches*/,
+      const Subfield& /*subfield*/,
+      std::vector<uint64_t>& /*hits*/) override {
+    VELOX_FAIL("N/A in ComplexType");
+  }
+
  private:
   std::unique_ptr<Filter> makeRangeFilter(const FilterSpec&) {
     VELOX_FAIL("N/A in ComplexType");
@@ -502,6 +551,16 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRowGroupSkipRangeFilter(
 
 template <>
 std::unique_ptr<Filter> ColumnStats<Timestamp>::makeRowGroupSkipRangeFilter(
+    const std::vector<RowVectorPtr>& /*batches*/,
+    const Subfield& /*subfield*/);
+
+template <>
+std::unique_ptr<Filter> ColumnStats<StringView>::makeEmptyResultRangeFilter(
+    const std::vector<RowVectorPtr>& /*batches*/,
+    const Subfield& /*subfield*/);
+
+template <>
+std::unique_ptr<Filter> ColumnStats<Timestamp>::makeEmptyResultRangeFilter(
     const std::vector<RowVectorPtr>& /*batches*/,
     const Subfield& /*subfield*/);
 
@@ -572,6 +631,23 @@ class FilterGenerator {
   // Add the filter to an existing ScanSpec.
   static void addToScanSpec(const SubfieldFilters& filters, ScanSpec&);
 
+  // Probability that a generated spec set asks for a filter no row passes.
+  // Zero by default, and at zero not a single random number is drawn for it, so
+  // callers that do not opt in keep their exact filter sequence.
+  //
+  // Ordinary selective filters already intersect to nothing now and then, but
+  // only by accident and only from inside the value range, so the reader still
+  // descends into every row group and rejects row by row. The filter this asks
+  // for sits past the column maximum instead, which is what makes min/max
+  // pruning skip every row group. Opt-in because it is a trade: the columns
+  // filtered alongside it contribute nothing, having no row left to accept or
+  // reject.
+  void setEmptyResultProbability(double probability) {
+    VELOX_CHECK_GE(probability, 0.0);
+    VELOX_CHECK_LE(probability, 1.0);
+    emptyResultProbability_ = probability;
+  }
+
   inline folly::Random::DefaultGenerator& rng() {
     return rng_;
   }
@@ -593,6 +669,7 @@ class FilterGenerator {
   std::shared_ptr<const RowType> rowType_;
   folly::Random::DefaultGenerator::result_type seed_;
   folly::Random::DefaultGenerator rng_;
+  double emptyResultProbability_{0.0};
   std::unordered_map<std::string, std::array<int32_t, 2>> filterCoverage_;
 };
 
