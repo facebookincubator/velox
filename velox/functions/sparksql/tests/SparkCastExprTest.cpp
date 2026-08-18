@@ -1829,18 +1829,26 @@ TEST_F(SparkCastExprTest, tryCastStringToTimestampInvalid) {
     auto input = makeRowVector({makeFlatVector<std::string>({
         "INVALID",
         "2012-Oct-01",
-        // SPARK-36286: trailing T with no time component is invalid.
+        // A trailing 'T' with no time component is invalid.
         "2015-03-18T",
-        // T followed by whitespace then end of string is invalid.
+        // 'T' followed by whitespace then end of string is invalid.
         "2015-03-18T ",
         "2015-03-18T\t",
         "2015-03-18T\n",
-        // T followed by whitespace then a valid time is still invalid:
-        // Spark requires time digits immediately after T.
+        // 'T' followed by whitespace then a valid time is still invalid:
+        // Spark requires time digits immediately after the separator.
         "2015-03-18T 12:00:00",
-        // T followed by a non-digit, non-time character is invalid.
+        // 'T' followed by a non-digit, non-time character is invalid.
         "2015-03-18TZ",
         "2015-03-18T+08:00",
+        // A space separator followed by a non-digit is invalid, matching
+        // Spark's grammar. Outer whitespace is trimmed by CastExpr, so
+        // these inputs reach the parser with the space separator intact.
+        "2015-03-18 Z",
+        "2015-03-18 +08:00",
+        "2015-03-18 UTC",
+        "2015-03-18  12:00:00",
+        "2015-03-18 x",
     })});
 
     auto result =

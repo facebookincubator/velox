@@ -634,8 +634,8 @@ From strings
 
 Casting from strings to timestamp uses Spark-compatible timestamp parsing.
 The parser accepts date-only values, both ``' '`` and ``'T'`` as date-time
-separators, fractional seconds, and leading or trailing spaces. A ``'T'``
-separator must be followed immediately by a digit.
+separators, fractional seconds, and leading or trailing spaces. Both ``' '``
+and ``'T'`` date-time separators must be followed immediately by a digit.
 
 Casting from invalid strings returns NULL when ANSI mode is disabled and throws
 an error when ANSI mode is enabled.
@@ -658,6 +658,7 @@ Invalid examples
   SELECT cast('2012-Oct-01' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('2015-03-18T' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('2015-03-18T 12:00:00' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('2015-03-18 Z' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 From boolean
 ^^^^^^^^^^^^
