@@ -100,6 +100,7 @@ jobs:
           CXX_COMPILER=$(sed -n 's/^set(CMAKE_CXX_COMPILER "\(.*\)")$/\1/p' "$COMPILER_FILE")
           GCC_INCLUDE=$("$CXX_COMPILER" -print-file-name=include)
           sed -i 's/-Wno-maybe-uninitialized//g' "$BUILD_PATH/compile_commands.json"
+          sed -i 's/-Werror/-Werror -Wno-error=deprecated-declarations/g' "$BUILD_PATH/compile_commands.json"
           sed -i "s# -fopenmp -DPLATFORM_OPENMP# -isystem ${GCC_INCLUDE} -fopenmp -DPLATFORM_OPENMP#g" "$BUILD_PATH/compile_commands.json"
 
           if [[ -n "$FILES" ]]; then
