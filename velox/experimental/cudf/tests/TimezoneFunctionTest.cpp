@@ -275,6 +275,19 @@ TEST_F(TimezoneFunctionTest, toIso8601FixedOffsetZonePre1970) {
   assertMatchesCpu("to_iso8601(c0)", input);
 }
 
+// A fixed-offset zone past the window end. Reaching the end sends the batch to
+// the host, which answers from the zone database -- and a fixed-offset zone has
+// no entry there, so the lookup has nothing to read. It does not need one: its
+// single interval starts at the earliest representable instant and so already
+// covers every instant, however far out.
+TEST_F(TimezoneFunctionTest, timezoneHourFixedOffsetBeyondWindowEnd) {
+  // 12000-07-15T12:00:00Z.
+  auto input = timestampWithTimeZoneInput(316'533'182'400'000, "+05:30");
+  assertMatchesCpu("timezone_hour(c0)", input);
+  // The minute is where a wrong offset for this zone would show.
+  assertMatchesCpu("timezone_minute(c0)", input);
+}
+
 TEST_F(TimezoneFunctionTest, timezoneHourBeforeWindowStart) {
   // 1500-06-15T12:00:00Z, well before the first materialized transition. Los
   // Angeles had no daylight saving then, so this is local mean time.

@@ -529,7 +529,14 @@ std::unique_ptr<cudf::column> OffsetTable::utcOffset(
     const cudf::column_view& utcTimestamps,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
-  if (maxInstantSeconds(utcTimestamps, stream, mr) >= transitionWindowEnd()) {
+  // Only a zone with transitions can outrun the table. A fixed-offset zone has
+  // a single interval anchored at the earliest representable instant, so the
+  // table answers every instant however far out, and the host could not answer
+  // at all: such a zone has no database entry to read. Testing that first also
+  // skips the reduction, whose scalar read synchronizes the stream.
+  const bool hasTransitions = !timeZone_->offset().has_value();
+  if (hasTransitions &&
+      maxInstantSeconds(utcTimestamps, stream, mr) >= transitionWindowEnd()) {
     return utcOffsetOnHost(utcTimestamps, stream, mr);
   }
   auto indices = activeIntervalIndices(
