@@ -44,6 +44,24 @@ void SelectiveFlatMapColumnReader::getValues(
     const RowSet& rows,
     VectorPtr* result) {
   VELOX_CHECK(!scanSpec_->children().empty());
+
+  // A delta update requires materializing the full map so it can be updated
+  // and then transformed; only take the direct size path otherwise.
+  if (scanSpec_->extractionType() ==
+          velox::common::ScanSpec::ExtractionType::kSize &&
+      !scanSpec_->deltaUpdate()) {
+    std::vector<const uint64_t*> inMaps(children_.size());
+    for (int i = 0; i < children_.size(); ++i) {
+      const auto& inMap = inMapBuffer(i);
+      inMaps[i] = inMap ? inMap->as<uint64_t>() : nullptr;
+    }
+    auto* mapNulls =
+        nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
+    makeFlatMapSizes(pool_, rows, mapNulls, inMaps, result);
+    setComplexNulls(rows, *result);
+    return;
+  }
+
   VELOX_CHECK_NOT_NULL(
       *result, "SelectiveFlatMapColumnReader expects a non-null result");
   VELOX_CHECK(

@@ -33,6 +33,10 @@ struct FlatMapContext {
   std::function<void(
       facebook::velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
       keySelectionCallback{nullptr};
+
+  // When set, only the IN_MAP presence stream is needed (kSize extraction), so
+  // the value column's PRESENT (value-null) stream is neither opened nor read.
+  bool inMapOnly{false};
 };
 
 } // namespace facebook::velox::dwrf
