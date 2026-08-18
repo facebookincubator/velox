@@ -82,8 +82,6 @@ VectorPtr getChildBySubfield(
   return vector;
 }
 
-uint32_t AbstractColumnStats::counter_ = 0;
-
 template <>
 std::unique_ptr<Filter> ColumnStats<bool>::makeRangeFilter(
     const FilterSpec& filterSpec) {
@@ -218,7 +216,7 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
   StringView lower = valueAtPct(filterSpec.startPct, &lowerIndex);
   StringView upper =
       valueAtPct(filterSpec.startPct + filterSpec.selectPct, &upperIndex);
-  if (upperIndex - lowerIndex < 1000 && ++counter_ % 10 <= 3) {
+  if (upperIndex - lowerIndex < 1000 && folly::Random::rand32(10, rng_) <= 3) {
     std::vector<std::string> inRange;
     inRange.reserve(upperIndex - lowerIndex);
     for (StringView s : values_) {
@@ -227,7 +225,7 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
         inRange.push_back(s.getString());
       }
     }
-    if (counter_ % 2 == 0 && filterSpec.selectPct != 100.0) {
+    if (folly::Random::oneIn(2, rng_) && filterSpec.selectPct != 100.0) {
       return std::make_unique<velox::common::NegatedBytesValues>(
           inRange, filterSpec.selectPct < 75);
     }
@@ -236,7 +234,7 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
   }
 
   // sometimes create a negated filter instead
-  if (counter_ % 4 == 1 && filterSpec.selectPct < 100.0) {
+  if (folly::Random::oneIn(4, rng_) && filterSpec.selectPct < 100.0) {
     return std::make_unique<velox::common::NegatedBytesRange>(
         std::string(lower),
         false,
@@ -517,46 +515,46 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
     std::unique_ptr<AbstractColumnStats> stats;
     switch (vector->typeKind()) {
       case TypeKind::BOOLEAN:
-        stats = makeStats<TypeKind::BOOLEAN>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::BOOLEAN>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::TINYINT:
-        stats = makeStats<TypeKind::TINYINT>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::TINYINT>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::SMALLINT:
-        stats = makeStats<TypeKind::SMALLINT>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::SMALLINT>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::INTEGER:
-        stats = makeStats<TypeKind::INTEGER>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::INTEGER>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::BIGINT:
-        stats = makeStats<TypeKind::BIGINT>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::BIGINT>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::HUGEINT:
-        stats = makeStats<TypeKind::HUGEINT>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::HUGEINT>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::VARCHAR:
-        stats = makeStats<TypeKind::VARCHAR>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::VARCHAR>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::VARBINARY:
-        stats = makeStats<TypeKind::VARBINARY>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::VARBINARY>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::REAL:
-        stats = makeStats<TypeKind::REAL>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::REAL>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::DOUBLE:
-        stats = makeStats<TypeKind::DOUBLE>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::DOUBLE>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::TIMESTAMP:
-        stats = makeStats<TypeKind::TIMESTAMP>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::TIMESTAMP>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::ROW:
-        stats = makeStats<TypeKind::ROW>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::ROW>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::ARRAY:
-        stats = makeStats<TypeKind::ARRAY>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::ARRAY>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::MAP:
-        stats = makeStats<TypeKind::MAP>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::MAP>(vector->type(), rowType_, rng_);
         break;
       default:
         VELOX_CHECK(
