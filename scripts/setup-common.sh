@@ -91,17 +91,21 @@ function install_openzl {
       # A different path is needed when building the Dockerfile.
       ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
       VELOX_OPENZL_CMAKE_PATCH="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch"
+      VELOX_OPENZL_CMAKE_PATCH+=" $ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/openzl/openzl-system-zstd.patch"
     fi
 
     cd "$DEPENDENCY_DIR"/openzl || exit 1
-    if command -v patch >/dev/null 2>&1; then
-      patch -p1 -i "$VELOX_OPENZL_CMAKE_PATCH" || exit 1
-    else
-      git apply "$VELOX_OPENZL_CMAKE_PATCH" || exit 1
-    fi
+    for patch in $VELOX_OPENZL_CMAKE_PATCH; do
+      if command -v patch >/dev/null 2>&1; then
+        patch -p1 -i "$patch" || exit 1
+      else
+        git apply "$patch" || exit 1
+      fi
+    done
   ) || exit 1
   cmake_install_dir openzl \
     -DCMAKE_CXX_STANDARD=20 \
+    -DOPENZL_USE_SYSTEM_ZSTD=ON \
     -DOPENZL_BUILD_CLI=OFF \
     -DOPENZL_BUILD_EXAMPLES=OFF \
     -DOPENZL_BUILD_TOOLS=OFF \

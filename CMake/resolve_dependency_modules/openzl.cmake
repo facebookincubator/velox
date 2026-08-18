@@ -43,6 +43,7 @@ set(OPENZL_BUILD_TESTS OFF)
 set(OPENZL_BUILD_BENCHMARKS OFF)
 set(OPENZL_BUILD_PYTHON_EXT OFF)
 set(OPENZL_INSTALL OFF)
+set(OPENZL_USE_SYSTEM_ZSTD ON)
 
 # OpenZL hard-codes CMAKE_CXX_STANDARD to 17, but Velox builds with C++20. Its
 # C++ bindings select between std:: types and internal polyfills (poly::span,
@@ -58,7 +59,9 @@ FetchContent_Declare(
   openzl
   URL ${VELOX_OPENZL_SOURCE_URL}
   URL_HASH ${VELOX_OPENZL_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND git init -q && git apply ${CMAKE_CURRENT_LIST_DIR}/openzl/openzl-cxx-standard.patch
+  PATCH_COMMAND
+    git init -q && git apply ${CMAKE_CURRENT_LIST_DIR}/openzl/openzl-cxx-standard.patch
+    ${CMAKE_CURRENT_LIST_DIR}/openzl/openzl-system-zstd.patch
   OVERRIDE_FIND_PACKAGE
   SYSTEM
   EXCLUDE_FROM_ALL
