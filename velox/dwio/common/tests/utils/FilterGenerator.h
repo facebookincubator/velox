@@ -88,6 +88,18 @@ VectorPtr getChildBySubfield(
     const Subfield& subfield,
     const RowTypePtr& rowType = nullptr);
 
+// As above, and additionally marks in 'ancestorNulls' the rows where a struct
+// enclosing the subfield is null. Needed because a null struct leaves its
+// children's values undefined instead of marking them null, so the leaf's own
+// null flags do not say what a reader will produce for the subfield. Left
+// empty when the path crosses an ARRAY or a MAP, where positions stop being
+// row indices and nothing collected can be lined up with the caller's rows.
+VectorPtr getChildBySubfieldWithAncestorNulls(
+    const RowVector* rowVector,
+    const Subfield& subfield,
+    const RowTypePtr& rootType,
+    std::vector<uint8_t>* ancestorNulls);
+
 class AbstractColumnStats {
  public:
   // ASCII string greater than test data values. Used for row group skipping
@@ -128,6 +140,14 @@ class AbstractColumnStats {
   }
 
  protected:
+  // Empty whenever the subfield has no struct above it, or the path crossed an
+  // ARRAY or a MAP and the positions stopped meaning rows.
+  static bool isAncestorNull(
+      const std::vector<uint8_t>& ancestorNulls,
+      vector_size_t row) {
+    return !ancestorNulls.empty() && ancestorNulls[row] != 0;
+  }
+
   // Whether the generated filter should pass nulls. `allowNulls_` on the spec
   // is a hard constraint from the caller; when it permits nulls the answer is
   // drawn independently rather than derived from selectPct, which used to tie
@@ -184,16 +204,27 @@ class ColumnStats : public AbstractColumnStats {
       std::vector<uint64_t>& rows) override {
     int32_t previousBatch = -1;
     SimpleVector<T>* values = nullptr;
+    std::vector<uint8_t> ancestorNulls;
     for (auto row : rows) {
       auto batch = batchNumber(row);
       if (batch != previousBatch) {
         previousBatch = batch;
         auto vector = batches[batch];
 
-        values = getChildBySubfield(vector.get(), subfield, rootType_)
+        ancestorNulls.clear();
+        values = getChildBySubfieldWithAncestorNulls(
+                     vector.get(), subfield, rootType_, &ancestorNulls)
                      ->template asUnchecked<SimpleVector<T>>();
       }
 
+      // A row under a null struct contributes nothing to the value
+      // distribution: the leaf holds a value there, but no reader will ever
+      // return it.
+      if (isAncestorNull(ancestorNulls, batchRow(row))) {
+        ++numSamples_;
+        ++numNulls_;
+        continue;
+      }
       addSample(values, batchRow(row));
     }
     if constexpr (!std::is_same_v<T, ComplexType>) {
@@ -264,15 +295,18 @@ class ColumnStats : public AbstractColumnStats {
     size_t numHits = 0;
     SimpleVector<T>* values = nullptr;
     int32_t previousBatch = -1;
+    std::vector<uint8_t> ancestorNulls;
     for (auto hit : hits) {
       auto batch = batchNumber(hit);
       if (batch != previousBatch) {
         previousBatch = batch;
-        values = getChildBySubfield(batches[batch].get(), subfield, rootType_)
+        ancestorNulls.clear();
+        values = getChildBySubfieldWithAncestorNulls(
+                     batches[batch].get(), subfield, rootType_, &ancestorNulls)
                      ->template as<SimpleVector<T>>();
       }
       auto row = batchRow(hit);
-      if (values->isNullAt(row)) {
+      if (values->isNullAt(row) || isAncestorNull(ancestorNulls, row)) {
         if (filter.testNull()) {
           hits[numHits++] = hit;
         }
@@ -410,8 +444,11 @@ class ColumnStats : public AbstractColumnStats {
       const Subfield& subfield,
       T& max) {
     bool hasMax = false;
+    std::vector<uint8_t> ancestorNulls;
     for (auto batch : batches) {
-      auto values = getChildBySubfield(batch.get(), subfield, rootType_)
+      ancestorNulls.clear();
+      auto values = getChildBySubfieldWithAncestorNulls(
+                        batch.get(), subfield, rootType_, &ancestorNulls)
                         ->template as<SimpleVector<T>>();
       DWIO_ENSURE_NOT_NULL(
           values,
@@ -420,7 +457,7 @@ class ColumnStats : public AbstractColumnStats {
           "> for batch of kind ",
           batch->type()->kindName());
       for (auto i = 0; i < values->size(); ++i) {
-        if (values->isNullAt(i)) {
+        if (values->isNullAt(i) || isAncestorNull(ancestorNulls, i)) {
           continue;
         }
         if (!hasMax || max < values->valueAt(i)) {
@@ -482,16 +519,20 @@ class ComplexColumnStats : public AbstractColumnStats {
       std::vector<uint64_t>& rows) override {
     int32_t previousBatch = -1;
     VectorPtr values = nullptr;
+    std::vector<uint8_t> ancestorNulls;
     for (auto row : rows) {
       auto batch = batchNumber(row);
       if (batch != previousBatch) {
         previousBatch = batch;
         auto vector = batches[batch];
 
-        values = getChildBySubfield(vector.get(), subfield, rootType_);
+        ancestorNulls.clear();
+        values = getChildBySubfieldWithAncestorNulls(
+            vector.get(), subfield, rootType_, &ancestorNulls);
       }
       ++numSamples_;
-      if (values->isNullAt(batchRow(row))) {
+      if (values->isNullAt(batchRow(row)) ||
+          isAncestorNull(ancestorNulls, batchRow(row))) {
         ++numNulls_;
       }
     }
@@ -514,16 +555,21 @@ class ComplexColumnStats : public AbstractColumnStats {
     BaseVector* values = nullptr;
     bool isNull = filter->kind() == velox::common::FilterKind::kIsNull;
     int32_t previousBatch = -1;
+    std::vector<uint8_t> ancestorNulls;
+    VectorPtr held;
     for (auto hit : hits) {
       auto batch = batchNumber(hit);
       if (batch != previousBatch) {
         previousBatch = batch;
-        auto vector = batches[batch];
-        values =
-            getChildBySubfield(batches[batch].get(), subfield, rootType_).get();
+        ancestorNulls.clear();
+        held = getChildBySubfieldWithAncestorNulls(
+            batches[batch].get(), subfield, rootType_, &ancestorNulls);
+        values = held.get();
       }
       auto row = batchRow(hit);
-      if (values->isNullAt(row) == isNull) {
+      const bool rowIsNull =
+          values->isNullAt(row) || isAncestorNull(ancestorNulls, row);
+      if (rowIsNull == isNull) {
         hits[numHits++] = hit;
       }
     }

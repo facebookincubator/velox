@@ -440,3 +440,83 @@ TEST_F(FilterGeneratorSeedTest, multiRangeHitRowsAgreeWithTheFilter) {
   }
   EXPECT_GT(checked, 0);
 }
+
+// Nested struct fields used to be invisible to filtering: a ROW column was
+// offered whole, so the only filter it could carry was is null / is not null.
+TEST(FilterGeneratorTest, nestedSubfieldsAreFilterable) {
+  auto rowType = ROW(
+      {{"flat", BIGINT()},
+       {"s", ROW({{"a", BIGINT()}, {"t", ROW({{"b", INTEGER()}})}})}});
+  auto type = rowType;
+  FilterGenerator generator(type, /*seed=*/1234);
+  auto filterable = generator.makeFilterables(100, 100);
+
+  std::set<std::string> names(filterable.begin(), filterable.end());
+  EXPECT_TRUE(names.contains("flat"));
+  // The struct stays filterable in its own right -- is null on a struct is a
+  // real shape -- and its scalar leaves become reachable alongside it.
+  EXPECT_TRUE(names.contains("s"));
+  EXPECT_TRUE(names.contains("s.a"));
+  EXPECT_TRUE(names.contains("s.t"));
+  EXPECT_TRUE(names.contains("s.t.b"));
+}
+
+// Positions inside an array's elements vector are element indices, not row
+// indices, so a path through one would make the reference row computation read
+// values belonging to other rows.
+TEST(FilterGeneratorTest, recursionStopsAtArraysAndMaps) {
+  auto rowType = ROW(
+      {{"arr", ARRAY(ROW({{"a", BIGINT()}}))},
+       {"m", MAP(INTEGER(), ROW({{"b", BIGINT()}}))}});
+  auto type = rowType;
+  FilterGenerator generator(type, /*seed=*/1234);
+  for (const auto& name : generator.makeFilterables(100, 100)) {
+    EXPECT_EQ(name.find('.'), std::string::npos) << name;
+  }
+}
+
+// A null struct does not mark its children null -- the leaf keeps whatever
+// value it happened to be built with -- but a reader projects the whole
+// subfield as null. If the reference row set were computed from the leaf's own
+// null flags it would disagree with every reader on exactly those rows.
+TEST_F(FilterGeneratorSeedTest, nestedSubfieldTreatsNullParentAsNull) {
+  auto innerType = ROW({{"a", BIGINT()}});
+  auto rowType = ROW({{"s", innerType}});
+
+  // Every third row has a null struct, while the child underneath holds a
+  // perfectly ordinary value there.
+  auto inner = makeRowVector(
+      {"a"},
+      {makeFlatVector<int64_t>(kBatchRows, [](auto row) { return row; })});
+  for (vector_size_t row = 0; row < kBatchRows; row += 3) {
+    inner->setNull(row, true);
+  }
+  std::vector<RowVectorPtr> batches{makeRowVector({"s"}, {inner})};
+
+  std::vector<FilterSpec> specs(1);
+  specs[0].field = "s.a";
+  specs[0].startPct = 0;
+  specs[0].selectPct = 100;
+  specs[0].filterKind = common::FilterKind::kBigintRange;
+  // Pins the filter to one that rejects nulls, so the assertion below cannot
+  // pass merely because the filter happened to accept them. The range then
+  // spans every sampled value, so a row under a null struct can only survive
+  // by having been evaluated against the leaf's own value.
+  specs[0].allowNulls_ = false;
+
+  auto type = rowType;
+  FilterGenerator generator(type, /*seed=*/7);
+  std::vector<uint64_t> hitRows;
+  auto filters =
+      generator.makeSubfieldFilters(specs, batches, nullptr, hitRows);
+
+  auto it = filters.find(Subfield("s.a"));
+  ASSERT_NE(it, filters.end());
+  ASSERT_FALSE(it->second->testNull());
+  for (auto hit : hitRows) {
+    EXPECT_NE(batchRow(hit) % 3, 0)
+        << "row under a null struct survived a null-rejecting filter";
+  }
+  // Non-vacuous: the rows that are not under a null struct do survive.
+  EXPECT_GT(hitRows.size(), 0);
+}
