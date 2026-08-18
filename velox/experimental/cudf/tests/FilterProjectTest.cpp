@@ -1703,6 +1703,35 @@ TEST_F(CudfFilterProjectTest, untypedNullInList) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+TEST_F(CudfFilterProjectTest, emptyInList) {
+  auto vectors = makeVectors(rowType_, 2, 1000);
+  // A genuinely empty in-list is a user error on the CPU path
+  // (InPredicate::create). The cuDF path must reject it the same way rather
+  // than silently returning NULL.
+  auto emptyElements = makeFlatVector<int32_t>(std::vector<int32_t>{});
+  auto inListConstant =
+      BaseVector::wrapInConstant(1, 0, makeArrayVector({0}, emptyElements));
+  auto inListExpr = std::make_shared<core::ConstantTypedExpr>(inListConstant);
+  auto field = std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0");
+  auto inExpr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(), std::vector<core::TypedExprPtr>{field, inListExpr}, "in");
+
+  auto plan = PlanBuilder(pool_.get())
+                  .values(vectors)
+                  .addNode([&](auto id, auto source) {
+                    return std::make_shared<core::ProjectNode>(
+                        id,
+                        std::vector<std::string>{"result"},
+                        std::vector<core::TypedExprPtr>{inExpr},
+                        source);
+                  })
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "IN list must not be empty");
+}
+
 TEST_F(CudfFilterProjectTest, round) {
   auto data = makeRowVector({makeFlatVector<int64_t>({4123, 456789098})});
   parse::ParseOptions options;
