@@ -267,6 +267,12 @@ void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
   options.maxStreamChunkRawSize = uint64_t{1}
       << (10 + folly::Random::rand32(12, rng));
   options.enableChunkIndex = folly::Random::oneIn(2, rng);
+  if (options.enableChunkIndex) {
+    // Small fuzz files often fall below the production threshold. Always emit
+    // chunk stats when this configuration is selected so the round trip
+    // covers files carrying chunk-index metadata.
+    options.chunkStatsMinAvgChunks = 0;
+  }
   options.enableStreamDeduplication = folly::Random::oneIn(2, rng);
   options.fixedBitWidthUseExactBits = folly::Random::oneIn(2, rng);
   options.allowNestedAlpSelection = folly::Random::oneIn(2, rng);
