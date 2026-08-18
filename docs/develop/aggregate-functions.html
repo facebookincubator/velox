@@ -535,7 +535,7 @@ add this support.</p>
 of the row and figure out offsets at which different aggregates will be storing their data. The
 operator then calls velox::exec::Aggregate::setOffsets method for each aggregate to specify the
 location of the accumulator.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Sets the offset and null indicator position of &#39;this&#39;.</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Sets the offset and null indicator position of 'this'.</span>
 <span class="c1">// @param offset Offset in bytes from the start of the row of the accumulator</span>
 <span class="c1">// @param nullByte Offset in bytes from the start of the row of the null flag</span>
 <span class="c1">// @param nullMask The specific bit in the nullByte that stores the null flag</span>
@@ -599,7 +599,7 @@ location of the accumulator.</p>
 <p>Once you have accumulatorFixedWidthSize(), the next method to implement is initializeNewGroupsInternal().</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Initializes null flags and accumulators for newly encountered groups.</span>
 <span class="c1">// @param groups Pointers to the start of the new group rows.</span>
-<span class="c1">// @param indices Indices into &#39;groups&#39; of the new entries.</span>
+<span class="c1">// @param indices Indices into 'groups' of the new entries.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">initializeNewGroupsInternal</span><span class="p">(</span>
 <span class="w">    </span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span>
 <span class="w">    </span><span class="n">folly</span><span class="o">::</span><span class="n">Range</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">vector_size_t</span><span class="o">*&gt;</span><span class="w"> </span><span class="n">indices</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
@@ -720,17 +720,17 @@ table shows which methods are used in which workflows.</p>
 </tbody>
 </table>
 <p>We start with the addRawInput() method which receives raw input vectors and adds the data to accumulators.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Updates the accumulator in &#39;groups&#39; with the values in &#39;args&#39;.</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Updates the accumulator in 'groups' with the values in 'args'.</span>
 <span class="c1">// @param groups Pointers to the start of the group rows. These are aligned</span>
-<span class="c1">// with the &#39;args&#39;, e.g. data in the i-th row of the &#39;args&#39; goes to the i-th group.</span>
+<span class="c1">// with the 'args', e.g. data in the i-th row of the 'args' goes to the i-th group.</span>
 <span class="c1">// The groups may repeat if different rows go into the same group.</span>
-<span class="c1">// @param rows Rows of the &#39;args&#39; to add to the accumulators. These may not be</span>
+<span class="c1">// @param rows Rows of the 'args' to add to the accumulators. These may not be</span>
 <span class="c1">// contiguous if the aggregation is configured to drop null grouping keys.</span>
 <span class="c1">// This would be the case when aggregation is followed by the join on the</span>
 <span class="c1">// grouping keys.</span>
 <span class="c1">// @param args Data to add to the accumulators.</span>
 <span class="c1">// @param mayPushdown True if aggregation can be pushdown down via LazyVector.</span>
-<span class="c1">// The pushdown can happen only if this flag is true and &#39;args&#39; is a single</span>
+<span class="c1">// The pushdown can happen only if this flag is true and 'args' is a single</span>
 <span class="c1">// LazyVector.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">addRawInput</span><span class="p">(</span>
 <span class="w">    </span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span>
@@ -772,12 +772,12 @@ table shows which methods are used in which workflows.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Updates the single final accumulator from intermediate results for global</span>
 <span class="c1">// aggregation.</span>
 <span class="c1">// @param group Pointer to the start of the group row.</span>
-<span class="c1">// @param rows Rows of the &#39;args&#39; to add to the accumulators. These may not</span>
-<span class="c1">// be contiguous if the aggregation has mask. &#39;rows&#39; is guaranteed to have at</span>
+<span class="c1">// @param rows Rows of the 'args' to add to the accumulators. These may not</span>
+<span class="c1">// be contiguous if the aggregation has mask. 'rows' is guaranteed to have at</span>
 <span class="c1">// least one active row.</span>
 <span class="c1">// @param args Intermediate results produced by extractAccumulators().</span>
 <span class="c1">// @param mayPushdown True if aggregation can be pushdown down via LazyVector.</span>
-<span class="c1">// The pushdown can happen only if this flag is true and &#39;args&#39; is a single</span>
+<span class="c1">// The pushdown can happen only if this flag is true and 'args' is a single</span>
 <span class="c1">// LazyVector.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">addSingleGroupIntermediateResults</span><span class="p">(</span>
 <span class="w">    </span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">group</span><span class="p">,</span>
@@ -804,20 +804,20 @@ implement toIntermediate() method which simply returns the input unmodified.</p>
 <span class="p">}</span>
 
 <span class="c1">/// Produces an accumulator initialized from a single value for each</span>
-<span class="c1">/// row in &#39;rows&#39;. The raw arguments of the aggregate are in &#39;args&#39;,</span>
+<span class="c1">/// row in 'rows'. The raw arguments of the aggregate are in 'args',</span>
 <span class="c1">/// which have the same meaning as in addRawInput. The result is</span>
-<span class="c1">/// placed in &#39;result&#39;. &#39;result&#39; is expected to be a writable flat vector of</span>
+<span class="c1">/// placed in 'result'. 'result' is expected to be a writable flat vector of</span>
 <span class="c1">/// the right type.</span>
 <span class="c1">///</span>
 <span class="c1">/// @param rows A set of rows to produce intermediate results for. The</span>
-<span class="c1">/// &#39;result&#39; is expected to have rows.size() rows. Invalid rows represent rows</span>
+<span class="c1">/// 'result' is expected to have rows.size() rows. Invalid rows represent rows</span>
 <span class="c1">/// that were masked out, these need to have correct intermediate results as</span>
-<span class="c1">/// well. It is possible that all entries in &#39;rows&#39; are invalid (masked out).</span>
+<span class="c1">/// well. It is possible that all entries in 'rows' are invalid (masked out).</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">toIntermediate</span><span class="p">(</span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span>
 <span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span>
 <span class="w">    </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="n">VELOX_NYI</span><span class="p">(</span><span class="s">&quot;toIntermediate not supported&quot;</span><span class="p">);</span>
+<span class="w">  </span><span class="n">VELOX_NYI</span><span class="p">(</span><span class="s">"toIntermediate not supported"</span><span class="p">);</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -835,7 +835,7 @@ already implemented as it is used for spilling group by).</p>
 <span class="c1">// @param allRows A contiguous range of row numbers starting from 0.</span>
 <span class="c1">// @param args Data to add to the accumulators.</span>
 <span class="c1">// @param mayPushdown True if aggregation can be pushdown down via LazyVector.</span>
-<span class="c1">// The pushdown can happen only if this flag is true and &#39;args&#39; is a single</span>
+<span class="c1">// The pushdown can happen only if this flag is true and 'args' is a single</span>
 <span class="c1">// LazyVector.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">addSingleGroupRawInput</span><span class="p">(</span>
 <span class="w">    </span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">group</span><span class="p">,</span>
@@ -972,7 +972,7 @@ unique pointers. Below is an example.</p>
 <span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">QueryConfig</span><span class="o">&amp;</span><span class="w"> </span><span class="cm">/*config*/</span><span class="p">)</span>
 <span class="w">        </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">exec</span><span class="o">::</span><span class="n">Aggregate</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
 <span class="w">      </span><span class="n">VELOX_CHECK_EQ</span><span class="p">(</span>
-<span class="w">          </span><span class="n">argTypes</span><span class="p">.</span><span class="n">size</span><span class="p">(),</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;{} takes at most one argument&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">);</span>
+<span class="w">          </span><span class="n">argTypes</span><span class="p">.</span><span class="n">size</span><span class="p">(),</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="s">"{} takes at most one argument"</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">);</span>
 <span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">SimpleAggregateAdapter</span><span class="o">&lt;</span><span class="n">SimpleArrayAggAggregate</span><span class="o">&gt;&gt;</span><span class="p">(</span>
 <span class="w">          </span><span class="n">step</span><span class="p">,</span><span class="w"> </span><span class="n">argTypes</span><span class="p">,</span><span class="w"> </span><span class="n">resultType</span><span class="p">);</span>
 <span class="w">    </span><span class="p">});</span>
@@ -991,22 +991,22 @@ of type INTEGER, and a percentage argument of type DOUBLE. The intermediate
 type does not depend on the input types and is always VARBINARY. The final
 result type is the same as input value type.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">inputType</span><span class="w"> </span><span class="o">:</span>
-<span class="w">       </span><span class="p">{</span><span class="s">&quot;tinyint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;smallint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;integer&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;bigint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;real&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;double&quot;</span><span class="p">})</span><span class="w"> </span><span class="p">{</span>
+<span class="w">       </span><span class="p">{</span><span class="s">"tinyint"</span><span class="p">,</span><span class="w"> </span><span class="s">"smallint"</span><span class="p">,</span><span class="w"> </span><span class="s">"integer"</span><span class="p">,</span><span class="w"> </span><span class="s">"bigint"</span><span class="p">,</span><span class="w"> </span><span class="s">"real"</span><span class="p">,</span><span class="w"> </span><span class="s">"double"</span><span class="p">})</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="c1">// (x, double percentage) -&gt; varbinary -&gt; x</span>
 <span class="w">    </span><span class="n">signatures</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateFunctionSignatureBuilder</span><span class="p">()</span>
 <span class="w">                             </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span>
-<span class="w">                             </span><span class="p">.</span><span class="n">intermediateType</span><span class="p">(</span><span class="s">&quot;varbinary&quot;</span><span class="p">)</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">intermediateType</span><span class="p">(</span><span class="s">"varbinary"</span><span class="p">)</span>
 <span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span>
-<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;double&quot;</span><span class="p">)</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">"double"</span><span class="p">)</span>
 <span class="w">                             </span><span class="p">.</span><span class="n">build</span><span class="p">());</span>
 
 <span class="w">    </span><span class="c1">// (x, integer weight, double percentage) -&gt; varbinary -&gt; x</span>
 <span class="w">    </span><span class="n">signatures</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateFunctionSignatureBuilder</span><span class="p">()</span>
 <span class="w">                             </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span>
-<span class="w">                             </span><span class="p">.</span><span class="n">intermediateType</span><span class="p">(</span><span class="s">&quot;varbinary&quot;</span><span class="p">)</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">intermediateType</span><span class="p">(</span><span class="s">"varbinary"</span><span class="p">)</span>
 <span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span>
-<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;bigint&quot;</span><span class="p">)</span>
-<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;double&quot;</span><span class="p">)</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">"bigint"</span><span class="p">)</span>
+<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">"double"</span><span class="p">)</span>
 <span class="w">                             </span><span class="p">.</span><span class="n">build</span><span class="p">());</span>
 <span class="w">  </span><span class="p">}</span>
 </pre></div>
@@ -1024,20 +1024,20 @@ aggregates and a SQL query to run on DuckDB to calculate the expected results
 and call helper function testAggregates defined in AggregationTestBase class.
 Grouping keys can be empty for global aggregations.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Global aggregation.</span>
-<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;sum(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="s">&quot;SELECT sum(c1) FROM tmp&quot;</span><span class="p">);</span>
+<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="p">{</span><span class="s">"sum(c1)"</span><span class="p">},</span><span class="w"> </span><span class="s">"SELECT sum(c1) FROM tmp"</span><span class="p">);</span>
 
 <span class="c1">// Group by aggregation.</span>
 <span class="n">testAggregations</span><span class="p">(</span>
-<span class="w">    </span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;c0&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;sum(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="s">&quot;SELECT c0, sum(c1) FROM tmp GROUP BY 1&quot;</span><span class="p">);</span>
+<span class="w">    </span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s">"c0"</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">"sum(c1)"</span><span class="p">},</span><span class="w"> </span><span class="s">"SELECT c0, sum(c1) FROM tmp GROUP BY 1"</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>If the new function is not supported by DuckDB, you need to specify the expected
 results manually.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Global aggregation.</span>
-<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;map_union(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">);</span>
+<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="p">{</span><span class="s">"map_union(c1)"</span><span class="p">},</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">);</span>
 
 <span class="c1">// Group by aggregation.</span>
-<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;c0&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;map_union(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">);</span>
+<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s">"c0"</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">"map_union(c1)"</span><span class="p">},</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>Under the covers, testAggregations method generates multiple different but
@@ -1214,7 +1214,7 @@ into the arena and returns a StringView pointing to the copy.</p>
 </pre></div>
 </div>
 <p>Strings class provides a free method to release memory back to the arena.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Frees memory used by the strings. StringViews returned from &#39;append&#39;</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Frees memory used by the strings. StringViews returned from 'append'</span>
 <span class="c1">/// become invalid after this call.</span>
 <span class="kt">void</span><span class="w"> </span><span class="nf">free</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span>
 </pre></div>
@@ -1285,7 +1285,7 @@ MapAccumulator&lt;T&gt; template to accumulate the values. Similar to SetAccumul
 MapAccumulator is built using F14FastMap, AlignedStlAllocator, Strings and
 AddressableNonNullValueList.</p>
 <p>insert() method adds a pair of (key, value) to the map discarding the value if matching key already exists.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Adds key-value pair if entry with that key doesn&#39;t exist yet.</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Adds key-value pair if entry with that key doesn't exist yet.</span>
 <span class="kt">void</span><span class="w"> </span><span class="n">insert</span><span class="p">(</span>
 <span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">DecodedVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">decodedKeys</span><span class="p">,</span>
 <span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">DecodedVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">decodedValues</span><span class="p">,</span>
@@ -1327,7 +1327,7 @@ add memory allocated since object’s creation.</p>
 <section id="end-to-end-testing">
 <h2>End-to-End Testing<a class="headerlink" href="#end-to-end-testing" title="Link to this heading">¶</a></h2>
 <p>To confirm that aggregate function works end to end as part of query, update testAggregations() test in TestHiveAggregationQueries.java in presto_cpp repo to add a query that uses the new function.</p>
-<div class="highlight-java notranslate"><div class="highlight"><pre><span></span><span class="n">assertQuery</span><span class="p">(</span><span class="s">&quot;SELECT orderkey, array_agg(linenumber) FROM lineitem GROUP BY 1&quot;</span><span class="p">);</span>
+<div class="highlight-java notranslate"><div class="highlight"><pre><span></span><span class="n">assertQuery</span><span class="p">(</span><span class="s">"SELECT orderkey, array_agg(linenumber) FROM lineitem GROUP BY 1"</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>

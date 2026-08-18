@@ -95,11 +95,11 @@ the presence of the “next” block and store the pointer to that block in the 
 <p>Allocate() and free() methods allocate and free continuous blocks of specified
 size. When the free() method is called on the first block in a multi-part
 non-contiguous allocation, it frees all the blocks in that allocation.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Allocates &#39;size&#39; contiguous bytes preceded by a Header. Returns</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Allocates 'size' contiguous bytes preceded by a Header. Returns</span>
 <span class="c1">// the address of Header.</span>
 <span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="nf">allocate</span><span class="p">(</span><span class="kt">int32_t</span><span class="w"> </span><span class="n">size</span><span class="p">);</span>
 
-<span class="c1">// Adds the allocation of &#39;header&#39; and any extensions (if header has</span>
+<span class="c1">// Adds the allocation of 'header' and any extensions (if header has</span>
 <span class="c1">// kContinued set) to the free list.</span>
 <span class="kt">void</span><span class="w"> </span><span class="nf">free</span><span class="p">(</span><span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">header</span><span class="p">);</span>
 </pre></div>
@@ -119,18 +119,18 @@ calling HashStringAllocator::newRange() method.</p>
 <span class="n">Position</span><span class="w"> </span><span class="nf">newWrite</span><span class="p">(</span><span class="n">ByteOutputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">preferredSize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMinContiguous</span><span class="p">);</span>
 
 <span class="c1">// Completes a write prepared with newWrite or</span>
-<span class="c1">// extendWrite. Up to &#39;numReserveBytes&#39; unused bytes, if available, are left</span>
+<span class="c1">// extendWrite. Up to 'numReserveBytes' unused bytes, if available, are left</span>
 <span class="c1">// after the end of the write to accommodate another write. Returns the</span>
 <span class="c1">// position immediately after the last written byte.</span>
 <span class="n">Position</span><span class="w"> </span><span class="nf">finishWrite</span><span class="p">(</span><span class="n">ByteOutputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">numReserveBytes</span><span class="p">);</span>
 
-<span class="c1">// Sets &#39;stream&#39; to write starting at &#39;position&#39;. If new ranges have to</span>
+<span class="c1">// Sets 'stream' to write starting at 'position'. If new ranges have to</span>
 <span class="c1">// be allocated when writing, headers will be updated accordingly.</span>
 <span class="kt">void</span><span class="w"> </span><span class="nf">extendWrite</span><span class="p">(</span><span class="n">Position</span><span class="w"> </span><span class="n">position</span><span class="p">,</span><span class="w"> </span><span class="n">ByteOutputStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>The prepareRead() method allows deserializing the data using ByteInputStream.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Sets &#39;stream&#39; to range over the data in the range of &#39;header&#39; and</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Sets 'stream' to range over the data in the range of 'header' and</span>
 <span class="c1">// possible continuation ranges.</span>
 <span class="k">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">prepareRead</span><span class="p">(</span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">header</span><span class="p">,</span>

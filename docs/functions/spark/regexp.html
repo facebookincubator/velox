@@ -69,8 +69,8 @@ require compilation of regular expressions. Patterns ‘hello’, ‘hello%’, 
 contains only regular characters and ‘_’ wildcards are evaluated without
 using regular expressions. Only those patterns that require the compilation of
 regular expressions are counted towards the limit.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">like</span><span class="p">(</span><span class="s1">&#39;abc&#39;</span><span class="p">,</span> <span class="s1">&#39;%b%&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
-<span class="n">SELECT</span> <span class="n">like</span><span class="p">(</span><span class="s1">&#39;a_c&#39;</span><span class="p">,</span> <span class="s1">&#39;%#_%&#39;</span><span class="p">,</span> <span class="s1">&#39;#&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">like</span><span class="p">(</span><span class="s1">'abc'</span><span class="p">,</span> <span class="s1">'%b%'</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">like</span><span class="p">(</span><span class="s1">'a_c'</span><span class="p">,</span> <span class="s1">'%#_%'</span><span class="p">,</span> <span class="s1">'#'</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -82,7 +82,7 @@ regular expressions are counted towards the limit.</p>
 in <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 <p>regexp_extract does not support column references for the <code class="docutils literal notranslate"><span class="pre">pattern</span></code> argument.
 Patterns must be constant values.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;\d+&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract</span><span class="p">(</span><span class="s1">'1a 2b 14m'</span><span class="p">,</span> <span class="s1">'\d+'</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -94,7 +94,7 @@ Patterns must be constant values.</p>
 <code class="docutils literal notranslate"><span class="pre">string</span></code> and returns the capturing group number <code class="docutils literal notranslate"><span class="pre">group</span></code>.</p>
 <p>regexp_extract does not support column references for the <code class="docutils literal notranslate"><span class="pre">pattern</span></code> argument.
 Patterns must be constant values.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;(\d+)([a-z]+)&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;a&#39;</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract</span><span class="p">(</span><span class="s1">'1a 2b 14m'</span><span class="p">,</span> <span class="s1">'(\d+)([a-z]+)'</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="s1">'a'</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -104,7 +104,7 @@ Patterns must be constant values.</p>
 <span class="sig-name descname"><span class="pre">regexp_extract_all</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array(varchar):</span></span></span><a class="headerlink" href="#regexp_extract_all" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the substring(s) matched by the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code>
 in <code class="docutils literal notranslate"><span class="pre">string</span></code>:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract_all</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;\d+&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">14</span><span class="p">]</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract_all</span><span class="p">(</span><span class="s1">'1a 2b 14m'</span><span class="p">,</span> <span class="s1">'\d+'</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">14</span><span class="p">]</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -114,7 +114,7 @@ in <code class="docutils literal notranslate"><span class="pre">string</span></c
 <span class="sig-name descname"><span class="pre">regexp_extract_all</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">group</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array(varchar):</span></span></span></dt>
 <dd><p>Finds all occurrences of the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> in
 <code class="docutils literal notranslate"><span class="pre">string</span></code> and returns the capturing group number <code class="docutils literal notranslate"><span class="pre">group</span></code>:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract_all</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;(\d+)([a-z]+)&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">,</span> <span class="s1">&#39;m&#39;</span><span class="p">]</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract_all</span><span class="p">(</span><span class="s1">'1a 2b 14m'</span><span class="p">,</span> <span class="s1">'(\d+)([a-z]+)'</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="s1">'a'</span><span class="p">,</span> <span class="s1">'b'</span><span class="p">,</span> <span class="s1">'m'</span><span class="p">]</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -126,9 +126,9 @@ in <code class="docutils literal notranslate"><span class="pre">string</span></c
 that matches the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code>. Returns 0 if no match is found.
 If <code class="docutils literal notranslate"><span class="pre">string</span></code> is NULL, returns NULL.</p>
 <p>Examples:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_instr</span><span class="p">(</span><span class="s1">&#39;hello world&#39;</span><span class="p">,</span> <span class="s1">&#39;world&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">7</span>
-<span class="n">SELECT</span> <span class="n">regexp_instr</span><span class="p">(</span><span class="s1">&#39;abc123def&#39;</span><span class="p">,</span> <span class="s1">&#39;[0-9]+&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">4</span>
-<span class="n">SELECT</span> <span class="n">regexp_instr</span><span class="p">(</span><span class="s1">&#39;hello&#39;</span><span class="p">,</span> <span class="s1">&#39;xyz&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_instr</span><span class="p">(</span><span class="s1">'hello world'</span><span class="p">,</span> <span class="s1">'world'</span><span class="p">);</span> <span class="o">--</span> <span class="mi">7</span>
+<span class="n">SELECT</span> <span class="n">regexp_instr</span><span class="p">(</span><span class="s1">'abc123def'</span><span class="p">,</span> <span class="s1">'[0-9]+'</span><span class="p">);</span> <span class="o">--</span> <span class="mi">4</span>
+<span class="n">SELECT</span> <span class="n">regexp_instr</span><span class="p">(</span><span class="s1">'hello'</span><span class="p">,</span> <span class="s1">'xyz'</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -145,7 +145,7 @@ needing to match all of <code class="docutils literal notranslate"><span class="
 the entire string by anchoring the pattern using <code class="docutils literal notranslate"><span class="pre">^</span></code> and <code class="docutils literal notranslate"><span class="pre">$</span></code>.</p>
 <p>rlike does not support column references for the <code class="docutils literal notranslate"><span class="pre">pattern</span></code> argument.
 Patterns must be constant values.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">rlike</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;\d+b&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">rlike</span><span class="p">(</span><span class="s1">'1a 2b 14m'</span><span class="p">,</span> <span class="s1">'\d+b'</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -164,10 +164,10 @@ backslash(<code class="docutils literal notranslate"><span class="pre">\</span><
 <li><p><strong>overwrite</strong>: The string that replaces the substrings in <code class="docutils literal notranslate"><span class="pre">string</span></code> that match the <code class="docutils literal notranslate"><span class="pre">pattern</span></code>.</p></li>
 </ul>
 <p>Examples:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;Hello, World!&#39;</span><span class="p">,</span> <span class="s1">&#39;l&#39;</span><span class="p">,</span> <span class="s1">&#39;L&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;HeLLo, WorLd!&#39;</span>
-<span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;300-300&#39;</span><span class="p">,</span> <span class="s1">&#39;(</span><span class="se">\\</span><span class="s1">d+)-(</span><span class="se">\\</span><span class="s1">d+)&#39;</span><span class="p">,</span> <span class="s1">&#39;400&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;400&#39;</span>
-<span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;300-300&#39;</span><span class="p">,</span> <span class="s1">&#39;(</span><span class="se">\\</span><span class="s1">d+)&#39;</span><span class="p">,</span> <span class="s1">&#39;400&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;400-400&#39;</span>
-<span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;[</span><span class="si">{}</span><span class="s1">]&#39;</span><span class="p">,</span> <span class="s1">&#39;\}\]&#39;</span><span class="p">,</span> <span class="s1">&#39;\}&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;[</span><span class="si">{}</span><span class="s1">&#39;</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">'Hello, World!'</span><span class="p">,</span> <span class="s1">'l'</span><span class="p">,</span> <span class="s1">'L'</span><span class="p">);</span> <span class="o">--</span> <span class="s1">'HeLLo, WorLd!'</span>
+<span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">'300-300'</span><span class="p">,</span> <span class="s1">'(</span><span class="se">\\</span><span class="s1">d+)-(</span><span class="se">\\</span><span class="s1">d+)'</span><span class="p">,</span> <span class="s1">'400'</span><span class="p">);</span> <span class="o">--</span> <span class="s1">'400'</span>
+<span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">'300-300'</span><span class="p">,</span> <span class="s1">'(</span><span class="se">\\</span><span class="s1">d+)'</span><span class="p">,</span> <span class="s1">'400'</span><span class="p">);</span> <span class="o">--</span> <span class="s1">'400-400'</span>
+<span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">'[</span><span class="si">{}</span><span class="s1">]'</span><span class="p">,</span> <span class="s1">'\}\]'</span><span class="p">,</span> <span class="s1">'\}'</span><span class="p">);</span> <span class="o">--</span> <span class="s1">'[</span><span class="si">{}</span><span class="s1">'</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -188,11 +188,11 @@ Parameters:</p>
 <li><p><strong>position</strong>: The position to start from in terms of number of characters. 1 means to start from the beginning of the string. 3 means to start from the 3rd character. Positions less than one, the function will throw an error. If <code class="docutils literal notranslate"><span class="pre">position</span></code> is greater than the length of <code class="docutils literal notranslate"><span class="pre">string</span></code>, the function returns the original <code class="docutils literal notranslate"><span class="pre">string</span></code> without any modifications.</p></li>
 </ul>
 <p>Examples:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;Hello, World!&#39;</span><span class="p">,</span> <span class="s1">&#39;l&#39;</span><span class="p">,</span> <span class="s1">&#39;L&#39;</span><span class="p">,</span> <span class="mi">6</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Hello, WorLd!&#39;</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">'Hello, World!'</span><span class="p">,</span> <span class="s1">'l'</span><span class="p">,</span> <span class="s1">'L'</span><span class="p">,</span> <span class="mi">6</span><span class="p">);</span> <span class="o">--</span> <span class="s1">'Hello, WorLd!'</span>
 
-<span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;Hello, World!&#39;</span><span class="p">,</span> <span class="s1">&#39;l&#39;</span><span class="p">,</span> <span class="s1">&#39;L&#39;</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Hello, World!&#39;</span>
+<span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">'Hello, World!'</span><span class="p">,</span> <span class="s1">'l'</span><span class="p">,</span> <span class="s1">'L'</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="s1">'Hello, World!'</span>
 
-<span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;Hello, World!&#39;</span><span class="p">,</span> <span class="s1">&#39;l&#39;</span><span class="p">,</span> <span class="s1">&#39;L&#39;</span><span class="p">,</span> <span class="mi">100</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Hello, World!&#39;</span>
+<span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">'Hello, World!'</span><span class="p">,</span> <span class="s1">'l'</span><span class="p">,</span> <span class="s1">'L'</span><span class="p">,</span> <span class="mi">100</span><span class="p">);</span> <span class="o">--</span> <span class="s1">'Hello, World!'</span>
 </pre></div>
 </div>
 </dd></dl>

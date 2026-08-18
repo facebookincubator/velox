@@ -416,13 +416,13 @@ respectively.</p>
 return distinct rows. EXCEPT ALL and INTERSECT ALL preserve duplicates and
 operate on multisets: each row is considered independently.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- EXCEPT removes duplicates:</span>
-<span class="c1">-- {A, A, A, B, B} EXCEPT {A, C} = {A, B}    (just &quot;is A present?&quot;)</span>
+<span class="c1">-- {A, A, A, B, B} EXCEPT {A, C} = {A, B}    (just "is A present?")</span>
 
 <span class="c1">-- EXCEPT ALL counts duplicates:</span>
 <span class="c1">-- {A, A, A, B, B} EXCEPT ALL {A, C} = {A, A, B, B}    (remove one A)</span>
 
 <span class="c1">-- INTERSECT removes duplicates:</span>
-<span class="c1">-- {A, A, A, B, B} INTERSECT {A, A, C} = {A}    (just &quot;is A present?&quot;)</span>
+<span class="c1">-- {A, A, A, B, B} INTERSECT {A, A, C} = {A}    (just "is A present?")</span>
 
 <span class="c1">-- INTERSECT ALL counts duplicates:</span>
 <span class="c1">-- {A, A, A, B, B} INTERSECT ALL {A, A, C} = {A, A}    (keep min count)</span>

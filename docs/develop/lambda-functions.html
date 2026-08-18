@@ -202,10 +202,10 @@ returnType)” syntax for the type of the lambda argument. Here is an example of
 the signature of the “filter” function:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// array(T), function(T, boolean) -&gt; array(T)</span>
 <span class="k">return</span><span class="w"> </span><span class="p">{</span><span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span>
-<span class="w">            </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">&quot;T&quot;</span><span class="p">)</span>
-<span class="w">            </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;array(T)&quot;</span><span class="p">)</span>
-<span class="w">            </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;array(T)&quot;</span><span class="p">)</span>
-<span class="w">            </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;function(T,boolean)&quot;</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">"T"</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">"array(T)"</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">"array(T)"</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">"function(T,boolean)"</span><span class="p">)</span>
 <span class="w">            </span><span class="p">.</span><span class="n">build</span><span class="p">()};</span>
 </pre></div>
 </div>
@@ -214,7 +214,7 @@ the signature of the “filter” function:</p>
 <h2>Testing<a class="headerlink" href="#testing" title="Link to this heading">¶</a></h2>
 <p>Testing framework fully supports evaluating lambda expression. Just write
 an expression as you would in Presto SQL:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">evaluate</span><span class="p">(</span><span class="s">&quot;filter(a, x -&gt; (x &gt;= b))&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">);</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">evaluate</span><span class="p">(</span><span class="s">"filter(a, x -&gt; (x &gt;= b))"</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>In the above, ‘data’ is expected to have a column “a” of type array and

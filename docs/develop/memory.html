@@ -393,10 +393,10 @@ and memory arbitration. The following is a list of the major APIs to use in each
 of the three sets.</p>
 <section id="memory-pool-management">
 <h4>Memory Pool Management<a class="headerlink" href="#memory-pool-management" title="Link to this heading">¶</a></h4>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Creates a root memory pool with specified &#39;name&#39; and &#39;maxCapacity&#39;.</span>
-<span class="c1">/// &#39;reclaimer&#39; is provided for memory arbitration process.</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Creates a root memory pool with specified 'name' and 'maxCapacity'.</span>
+<span class="c1">/// 'reclaimer' is provided for memory arbitration process.</span>
 <span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">MemoryPool</span><span class="o">&gt;</span><span class="w"> </span><span class="n">MemoryManager</span><span class="o">::</span><span class="n">addRootPool</span><span class="p">(</span>
-<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">,</span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">""</span><span class="p">,</span>
 <span class="w">   </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">maxCapacity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMaxMemory</span><span class="p">,</span>
 <span class="w">   </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">MemoryReclaimer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reclaimer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">);</span>
 
@@ -440,7 +440,7 @@ details). Velox uses this allocation for <em>HashTable</em>. For any other ad ho
 allocations, we can use <em>MemoryPool::allocate</em>. The memory allocator determines
 how to allocate memory based on the actual allocation size (see
 <a class="reference external" href="#small-allocation">small allocation section</a> for details).</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Allocates a buffer with specified &#39;size&#39;. If the memory allocation is</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Allocates a buffer with specified 'size'. If the memory allocation is</span>
 <span class="c1">/// smaller than a predefined threshold, then we delegate the allocation to</span>
 <span class="c1">/// std::malloc (MmapAllocator::Options::maxMallocBytes).</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="nf">MemoryPool::allocate</span><span class="p">(</span><span class="kt">int64_t</span><span class="w"> </span><span class="n">size</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
@@ -448,29 +448,29 @@ how to allocate memory based on the actual allocation size (see
 <span class="c1">/// Frees an allocated buffer.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::free</span><span class="p">(</span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="n">p</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">size</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
-<span class="c1">/// Allocates one or more runs that add up to at least &#39;numPages&#39;, with the</span>
-<span class="c1">/// smallest run being at least &#39;minSizeClass&#39; pages. &#39;minSizeClass&#39; must</span>
+<span class="c1">/// Allocates one or more runs that add up to at least 'numPages', with the</span>
+<span class="c1">/// smallest run being at least 'minSizeClass' pages. 'minSizeClass' must</span>
 <span class="c1">/// be &lt;= the size of the largest size class (see non-contiguous allocation</span>
-<span class="c1">/// section for size class definition). The new memory is returned in &#39;out&#39; on</span>
-<span class="c1">/// success and any memory formerly referenced by &#39;out&#39; is freed. The function</span>
-<span class="c1">/// throws if allocation fails and &#39;out&#39; references no memory and any partially</span>
+<span class="c1">/// section for size class definition). The new memory is returned in 'out' on</span>
+<span class="c1">/// success and any memory formerly referenced by 'out' is freed. The function</span>
+<span class="c1">/// throws if allocation fails and 'out' references no memory and any partially</span>
 <span class="c1">/// allocated memory is freed.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::allocateNonContiguous</span><span class="p">(</span>
 <span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">numPages</span><span class="p">,</span>
 <span class="w">   </span><span class="n">Allocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span>
 <span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">minSizeClass</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
-<span class="c1">/// Frees non-contiguous &#39;allocation&#39;. &#39;allocation&#39; is empty on return.</span>
+<span class="c1">/// Frees non-contiguous 'allocation'. 'allocation' is empty on return.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::freeNonContiguous</span><span class="p">(</span><span class="n">Allocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocation</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
-<span class="c1">/// Makes a large contiguous mmap of &#39;numPages&#39;. The new mapped pages are</span>
-<span class="c1">/// returned in &#39;out&#39; on success. Any formly mapped pages referenced by &#39;out&#39;</span>
+<span class="c1">/// Makes a large contiguous mmap of 'numPages'. The new mapped pages are</span>
+<span class="c1">/// returned in 'out' on success. Any formly mapped pages referenced by 'out'</span>
 <span class="c1">/// is unmapped in all the cases even if the allocation fails.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::allocateContiguous</span><span class="p">(</span>
 <span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">numPages</span><span class="p">,</span>
 <span class="w">   </span><span class="n">ContiguousAllocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
-<span class="c1">/// Frees contiguous &#39;allocation&#39;. &#39;allocation&#39; is empty on return.</span>
+<span class="c1">/// Frees contiguous 'allocation'. 'allocation' is empty on return.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::freeContiguous</span><span class="p">(</span><span class="n">ContiguousAllocation</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocation</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 </pre></div>
 </div>
@@ -479,41 +479,41 @@ how to allocate memory based on the actual allocation size (see
 <h4>Memory Arbitration<a class="headerlink" href="#memory-arbitration" title="Link to this heading">¶</a></h4>
 <p>The <a class="reference external" href="#memory-arbitrator">memory arbitrator section</a> below discusses how these memory arbitration
 related methods are used in the memory arbitration and reclaim process.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Returns the number of bytes that haven&#39;t been reserved for use, and can be</span>
-<span class="c1">/// freed by reducing this memory pool&#39;s limit.</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Returns the number of bytes that haven't been reserved for use, and can be</span>
+<span class="c1">/// freed by reducing this memory pool's limit.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::freeBytes</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
-<span class="c1">/// Invoked to bump up the memory pool&#39;s capacity by &#39;bytes&#39;. The function</span>
-<span class="c1">/// returns the memory pool&#39;s new capacity after the grow.</span>
+<span class="c1">/// Invoked to bump up the memory pool's capacity by 'bytes'. The function</span>
+<span class="c1">/// returns the memory pool's new capacity after the grow.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::grow</span><span class="p">(</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">bytes</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
 <span class="c1">/// Invoked to free up to the specified amount of unused memory reservations by</span>
-<span class="c1">/// reducing this memory pool&#39;s capacity without actually freeing up any</span>
+<span class="c1">/// reducing this memory pool's capacity without actually freeing up any</span>
 <span class="c1">/// used memory. The function returns the actually freed memory bytes. If</span>
-<span class="c1">/// &#39;targetBytes&#39; is zero, the function frees all the unused memory reservation</span>
+<span class="c1">/// 'targetBytes' is zero, the function frees all the unused memory reservation</span>
 <span class="c1">/// bytes.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::shrink</span><span class="p">(</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">targetBytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
 <span class="c1">/// Invoked by the memory arbitrator to enter memory arbitration processing. It</span>
-<span class="c1">/// is a noop if &#39;reclaimer_&#39; is not set, otherwise invoke the reclaimer&#39;s</span>
+<span class="c1">/// is a noop if 'reclaimer_' is not set, otherwise invoke the reclaimer's</span>
 <span class="c1">/// corresponding method.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::enterArbitration</span><span class="p">();</span>
 
 <span class="c1">/// Invoked by the memory arbitrator to leave memory arbitration processing. It</span>
-<span class="c1">/// is a noop if &#39;reclaimer_&#39; is not set, otherwise invoke the reclaimer&#39;s</span>
+<span class="c1">/// is a noop if 'reclaimer_' is not set, otherwise invoke the reclaimer's</span>
 <span class="c1">/// corresponding method.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">MemoryPool::leaveArbitration</span><span class="p">();</span>
 
 <span class="c1">/// Function estimates the number of reclaimable bytes and returns in</span>
-<span class="c1">/// &#39;reclaimableBytes&#39;. If the &#39;reclaimer&#39; is not set, the function returns</span>
+<span class="c1">/// 'reclaimableBytes'. If the 'reclaimer' is not set, the function returns</span>
 <span class="c1">/// std::nullopt. Otherwise, it will invoke the corresponding method of the</span>
 <span class="c1">/// reclaimer.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reclaimableBytes</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
 <span class="c1">/// Invoked by the memory arbitrator to reclaim memory from this memory pool</span>
-<span class="c1">/// with specified reclaim target bytes. If &#39;targetBytes&#39; is zero, then it</span>
+<span class="c1">/// with specified reclaim target bytes. If 'targetBytes' is zero, then it</span>
 <span class="c1">/// tries to reclaim all the reclaimable memory from the memory pool. It is</span>
-<span class="c1">/// noop if the reclaimer is not set, otherwise invoke the reclaimer&#39;s</span>
+<span class="c1">/// noop if the reclaimer is not set, otherwise invoke the reclaimer's</span>
 <span class="c1">/// corresponding method.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">MemoryPool::reclaim</span><span class="p">(</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">targetBytes</span><span class="p">);</span>
 </pre></div>
@@ -874,7 +874,7 @@ a process-global root via <em>global()</em> and creates child scopes via
 scope is protected by its own lock. Extensions register resources in the
 global scope at process startup, after <em>initializeMemoryManager</em>:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">resource</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">memory</span><span class="o">::</span><span class="n">CustomMemoryResource</span><span class="o">&gt;</span><span class="p">(</span>
-<span class="w">    </span><span class="s">&quot;device&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"device"</span><span class="p">,</span>
 <span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">MyTieredAllocator</span><span class="o">&gt;</span><span class="p">(...),</span>
 <span class="w">    </span><span class="n">MemoryArbitrator</span><span class="o">::</span><span class="n">create</span><span class="p">(...),</span>
 <span class="w">    </span><span class="p">[]()</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">MyReclaimer</span><span class="o">&gt;</span><span class="p">();</span><span class="w"> </span><span class="p">},</span>
@@ -889,12 +889,12 @@ the resource up by tag, materializes the per-resource root pool through
 via <em>Builder::customPool</em>:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">manager</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">memory</span><span class="o">::</span><span class="n">memoryManager</span><span class="p">();</span>
 <span class="k">auto</span><span class="w"> </span><span class="n">resource</span><span class="w"> </span><span class="o">=</span>
-<span class="w">    </span><span class="n">memory</span><span class="o">::</span><span class="n">CustomMemoryResourceRegistry</span><span class="o">::</span><span class="n">global</span><span class="p">().</span><span class="n">find</span><span class="p">(</span><span class="s">&quot;device&quot;</span><span class="p">);</span>
-<span class="n">VELOX_USER_CHECK_NOT_NULL</span><span class="p">(</span><span class="n">resource</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;Unknown resource tag: device&quot;</span><span class="p">);</span>
-<span class="k">auto</span><span class="w"> </span><span class="n">devicePool</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">manager</span><span class="o">-&gt;</span><span class="n">addCustomRootPool</span><span class="p">(</span><span class="s">&quot;query.q0.device&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">resource</span><span class="p">);</span>
+<span class="w">    </span><span class="n">memory</span><span class="o">::</span><span class="n">CustomMemoryResourceRegistry</span><span class="o">::</span><span class="n">global</span><span class="p">().</span><span class="n">find</span><span class="p">(</span><span class="s">"device"</span><span class="p">);</span>
+<span class="n">VELOX_USER_CHECK_NOT_NULL</span><span class="p">(</span><span class="n">resource</span><span class="p">,</span><span class="w"> </span><span class="s">"Unknown resource tag: device"</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">devicePool</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">manager</span><span class="o">-&gt;</span><span class="n">addCustomRootPool</span><span class="p">(</span><span class="s">"query.q0.device"</span><span class="p">,</span><span class="w"> </span><span class="n">resource</span><span class="p">);</span>
 <span class="k">auto</span><span class="w"> </span><span class="n">queryCtx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">QueryCtx</span><span class="o">::</span><span class="n">Builder</span><span class="p">()</span>
-<span class="w">                    </span><span class="p">.</span><span class="n">customPool</span><span class="p">(</span><span class="s">&quot;device&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">devicePool</span><span class="p">))</span>
-<span class="w">                    </span><span class="p">.</span><span class="n">queryId</span><span class="p">(</span><span class="s">&quot;q0&quot;</span><span class="p">)</span>
+<span class="w">                    </span><span class="p">.</span><span class="n">customPool</span><span class="p">(</span><span class="s">"device"</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">devicePool</span><span class="p">))</span>
+<span class="w">                    </span><span class="p">.</span><span class="n">queryId</span><span class="p">(</span><span class="s">"q0"</span><span class="p">)</span>
 <span class="w">                    </span><span class="p">.</span><span class="n">build</span><span class="p">();</span>
 </pre></div>
 </div>

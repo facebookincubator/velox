@@ -371,20 +371,20 @@ accumulators.</p>
 <span class="p">}</span>
 
 <span class="c1">/// Produces an accumulator initialized from a single value for each</span>
-<span class="c1">/// row in &#39;rows&#39;. The raw arguments of the aggregate are in &#39;args&#39;,</span>
+<span class="c1">/// row in 'rows'. The raw arguments of the aggregate are in 'args',</span>
 <span class="c1">/// which have the same meaning as in addRawInput. The result is</span>
-<span class="c1">/// placed in &#39;result&#39;. &#39;result&#39; is expected to be a writable flat</span>
+<span class="c1">/// placed in 'result'. 'result' is expected to be a writable flat</span>
 <span class="c1">/// vector of the right type.</span>
 <span class="c1">///</span>
 <span class="c1">/// @param rows A set of rows to produce intermediate results for. The</span>
-<span class="c1">/// &#39;result&#39; is expected to have rows.size() rows. Invalid rows represent rows</span>
+<span class="c1">/// 'result' is expected to have rows.size() rows. Invalid rows represent rows</span>
 <span class="c1">/// that were masked out, these need to have correct intermediate results as</span>
-<span class="c1">/// well. It is possible that all entries in &#39;rows&#39; are invalid (masked out).</span>
+<span class="c1">/// well. It is possible that all entries in 'rows' are invalid (masked out).</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">toIntermediate</span><span class="p">(</span>
 <span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span>
 <span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span>
 <span class="w">  </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">VELOX_NYI</span><span class="p">(</span><span class="s">&quot;toIntermediate not supported&quot;</span><span class="p">);</span>
+<span class="w">    </span><span class="n">VELOX_NYI</span><span class="p">(</span><span class="s">"toIntermediate not supported"</span><span class="p">);</span>
 <span class="p">}</span>
 </pre></div>
 </div>

@@ -323,7 +323,7 @@ shown.</p>
 <section id="initialization">
 <h3>Initialization<a class="headerlink" href="#initialization" title="Link to this heading">¶</a></h3>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>initialize():
-    cacheKey = &quot;queryId:planNodeId&quot;
+    cacheKey = "queryId:planNodeId"
     cacheEntry = HashTableCache::instance()-&gt;get(cacheKey, taskId, queryCtx, &amp;future_)
 
     if cacheEntry.buildComplete:        // Late Arrival

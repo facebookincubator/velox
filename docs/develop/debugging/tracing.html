@@ -103,33 +103,33 @@ already supported in Velox (see <a class="reference external" href="https://gith
 <p>The metadata is saved as a single JSON object string in the metadata file. It would look similar
 to the following simplified, pretty-printed JSON string (with some content removed for brevity):</p>
 <div class="highlight-JSON notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;planNode&quot;</span><span class="p">:{</span>
-<span class="w">    </span><span class="nt">&quot;nullAware&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;outputType&quot;</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
-<span class="w">    </span><span class="nt">&quot;leftKeys&quot;</span><span class="p">:[</span><span class="err">...</span><span class="p">],</span>
-<span class="w">    </span><span class="nt">&quot;rightKeys&quot;</span><span class="p">:[</span><span class="err">...</span><span class="p">],</span>
-<span class="w">    </span><span class="nt">&quot;joinType&quot;</span><span class="p">:</span><span class="s2">&quot;INNER&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;sources&quot;</span><span class="p">:[</span>
+<span class="w">  </span><span class="nt">"planNode"</span><span class="p">:{</span>
+<span class="w">    </span><span class="nt">"nullAware"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"outputType"</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
+<span class="w">    </span><span class="nt">"leftKeys"</span><span class="p">:[</span><span class="err">...</span><span class="p">],</span>
+<span class="w">    </span><span class="nt">"rightKeys"</span><span class="p">:[</span><span class="err">...</span><span class="p">],</span>
+<span class="w">    </span><span class="nt">"joinType"</span><span class="p">:</span><span class="s2">"INNER"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"sources"</span><span class="p">:[</span>
 <span class="w">      </span><span class="p">{</span>
-<span class="w">        </span><span class="nt">&quot;outputType&quot;</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
-<span class="w">        </span><span class="nt">&quot;tableHandle&quot;</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
-<span class="w">        </span><span class="nt">&quot;assignments&quot;</span><span class="p">:[</span><span class="err">...</span><span class="p">],</span>
-<span class="w">        </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="s2">&quot;0&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="s2">&quot;TableScanNode&quot;</span>
+<span class="w">        </span><span class="nt">"outputType"</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"tableHandle"</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"assignments"</span><span class="p">:[</span><span class="err">...</span><span class="p">],</span>
+<span class="w">        </span><span class="nt">"id"</span><span class="p">:</span><span class="s2">"0"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"name"</span><span class="p">:</span><span class="s2">"TableScanNode"</span>
 <span class="w">      </span><span class="p">},</span>
 <span class="w">      </span><span class="p">{</span>
-<span class="w">        </span><span class="nt">&quot;outputType&quot;</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
-<span class="w">        </span><span class="nt">&quot;tableHandle&quot;</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
-<span class="w">        </span><span class="nt">&quot;assignments&quot;</span><span class="p">:[</span><span class="err">...</span><span class="p">],</span>
-<span class="w">        </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="s2">&quot;1&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="s2">&quot;TableScanNode&quot;</span>
+<span class="w">        </span><span class="nt">"outputType"</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"tableHandle"</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"assignments"</span><span class="p">:[</span><span class="err">...</span><span class="p">],</span>
+<span class="w">        </span><span class="nt">"id"</span><span class="p">:</span><span class="s2">"1"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"name"</span><span class="p">:</span><span class="s2">"TableScanNode"</span>
 <span class="w">      </span><span class="p">}</span>
 <span class="w">    </span><span class="p">],</span>
-<span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="s2">&quot;2&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="s2">&quot;HashJoinNode&quot;</span>
+<span class="w">    </span><span class="nt">"id"</span><span class="p">:</span><span class="s2">"2"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"name"</span><span class="p">:</span><span class="s2">"HashJoinNode"</span>
 <span class="w">  </span><span class="p">},</span>
-<span class="w">  </span><span class="nt">&quot;connectorProperties&quot;</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
-<span class="w">  </span><span class="nt">&quot;queryConfig&quot;</span><span class="p">:{</span><span class="nt">&quot;query_trace_node_id&quot;</span><span class="p">:</span><span class="s2">&quot;2&quot;</span><span class="p">,</span><span class="w"> </span><span class="err">...</span><span class="p">}</span>
+<span class="w">  </span><span class="nt">"connectorProperties"</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"queryConfig"</span><span class="p">:{</span><span class="nt">"query_trace_node_id"</span><span class="p">:</span><span class="s2">"2"</span><span class="p">,</span><span class="w"> </span><span class="err">...</span><span class="p">}</span>
 <span class="p">}</span>
 </pre></div>
 </div>

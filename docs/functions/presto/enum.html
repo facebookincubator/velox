@@ -45,7 +45,7 @@
 <dt class="sig sig-object py" id="enum_key">
 <span class="sig-name descname"><span class="pre">enum_key</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#enum_key" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the string key of the enum value, where <code class="docutils literal notranslate"><span class="pre">x</span></code> is either a BigintEnum or VarcharEnum value.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">enum_key</span><span class="p">(</span><span class="n">alpha</span><span class="o">.</span><span class="n">A</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;A&quot;</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">enum_key</span><span class="p">(</span><span class="n">alpha</span><span class="o">.</span><span class="n">A</span><span class="p">);</span> <span class="o">--</span> <span class="s2">"A"</span>
 </pre></div>
 </div>
 <p>where alpha is a BigintEnum type with name “alpha” and values {“A”: 1, “B”: 2}</p>

@@ -63,15 +63,15 @@ fragment  = Related
 <h2>Invalid URI’s<a class="headerlink" href="#invalid-uri-s" title="Link to this heading">¶</a></h2>
 <p>Well formed URI’s should not contain ascii whitespace. <a class="reference external" href="https://www.rfc-editor.org/rfc/rfc3986#section-2.1">Percent-encoded URI’s</a> should be followed by two hexadecimal
 digits after the percent character “%”. All the url extract functions will return null when passed an invalid uri.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Examples of url functions with Invalid URI&#39;s.</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Examples of url functions with Invalid URI's.</span>
 
 <span class="c1"># Invalid URI due to whitespace</span>
-<span class="n">SELECT</span> <span class="n">url_extract_path</span><span class="p">(</span><span class="s1">&#39;foo &#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="mi">1</span> <span class="n">row</span><span class="p">)</span>
-<span class="n">SELECT</span> <span class="n">url_extract_host</span><span class="p">(</span><span class="s1">&#39;http://www.foo.com &#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="mi">1</span> <span class="n">row</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">url_extract_path</span><span class="p">(</span><span class="s1">'foo '</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="mi">1</span> <span class="n">row</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">url_extract_host</span><span class="p">(</span><span class="s1">'http://www.foo.com '</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="mi">1</span> <span class="n">row</span><span class="p">)</span>
 
-<span class="c1"># Invalid URI due to improper escaping of &#39;%&#39;</span>
-<span class="n">SELECT</span> <span class="n">url_extract_path</span><span class="p">(</span><span class="s1">&#39;https://www.ucu.edu.uy/agenda/evento/</span><span class="si">%%</span><span class="s1">UCUrlCompartir</span><span class="si">%%</span><span class="s1">&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="mi">1</span> <span class="n">row</span><span class="p">)</span>
-<span class="n">SELECT</span> <span class="n">url_extract_host</span><span class="p">(</span><span class="s1">&#39;https://www.ucu.edu.uy/agenda/evento/</span><span class="si">%%</span><span class="s1">UCUrlCompartir</span><span class="si">%%</span><span class="s1">&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="mi">1</span> <span class="n">row</span><span class="p">)</span>
+<span class="c1"># Invalid URI due to improper escaping of '%'</span>
+<span class="n">SELECT</span> <span class="n">url_extract_path</span><span class="p">(</span><span class="s1">'https://www.ucu.edu.uy/agenda/evento/</span><span class="si">%%</span><span class="s1">UCUrlCompartir</span><span class="si">%%</span><span class="s1">'</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="mi">1</span> <span class="n">row</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">url_extract_host</span><span class="p">(</span><span class="s1">'https://www.ucu.edu.uy/agenda/evento/</span><span class="si">%%</span><span class="s1">UCUrlCompartir</span><span class="si">%%</span><span class="s1">'</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="mi">1</span> <span class="n">row</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>

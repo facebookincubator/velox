@@ -381,7 +381,7 @@ Supported types are: BIGINT, VARBINARY and VARCHAR.
 If the argument is a VARCHAR or VARBINARY, the result is string where each input byte is represented using 2 hex characters.
 If the argument is a positive BIGINT, the result is a hex representation of the number (up to 16 characters),
 if the argument is a negative BIGINT, the result is a hex representation of the number which will be treated as two’s complement.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">hex</span><span class="p">(</span><span class="s2">&quot;Spark SQL&quot;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">537061726</span><span class="n">B2053514C</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">hex</span><span class="p">(</span><span class="s2">"Spark SQL"</span><span class="p">);</span> <span class="o">--</span> <span class="mi">537061726</span><span class="n">B2053514C</span>
 <span class="n">SELECT</span> <span class="nb">hex</span><span class="p">(</span><span class="mi">17</span><span class="p">);</span> <span class="o">--</span> <span class="mi">11</span>
 <span class="n">SELECT</span> <span class="nb">hex</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">FFFFFFFFFFFFFFFF</span>
 </pre></div>
@@ -663,11 +663,11 @@ ANSI mode is enabled. For interval inputs (<code class="docutils literal notrans
 If <code class="docutils literal notranslate"><span class="pre">x</span></code> contains non-hexadecimal character, the function returns NULL.
 When <code class="docutils literal notranslate"><span class="pre">x</span></code> contains an even number of characters, each pair is converted to a single byte. The number of bytes in the result is half the number of bytes in the input.
 When <code class="docutils literal notranslate"><span class="pre">x</span></code> contains an odd number of characters, the first character is decoded into the first byte of the result and the remaining pairs of characters are decoded into subsequent bytes. This behavior matches Spark 3.3.2 and newer.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">unhex</span><span class="p">(</span><span class="s2">&quot;23&quot;</span><span class="p">);</span> <span class="o">--</span> <span class="c1">#</span>
-<span class="n">SELECT</span> <span class="n">unhex</span><span class="p">(</span><span class="s2">&quot;f&quot;</span><span class="p">);</span> <span class="o">--</span> \<span class="n">x0F</span>
-<span class="n">SELECT</span> <span class="n">unhex</span><span class="p">(</span><span class="s2">&quot;b2323&quot;</span><span class="p">);</span> <span class="o">--</span> \<span class="n">x0B</span><span class="c1">##</span>
-<span class="n">SELECT</span> <span class="n">unhex</span><span class="p">(</span><span class="s2">&quot;G&quot;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
-<span class="n">SELECT</span> <span class="n">unhex</span><span class="p">(</span><span class="s2">&quot;G23&quot;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">unhex</span><span class="p">(</span><span class="s2">"23"</span><span class="p">);</span> <span class="o">--</span> <span class="c1">#</span>
+<span class="n">SELECT</span> <span class="n">unhex</span><span class="p">(</span><span class="s2">"f"</span><span class="p">);</span> <span class="o">--</span> \<span class="n">x0F</span>
+<span class="n">SELECT</span> <span class="n">unhex</span><span class="p">(</span><span class="s2">"b2323"</span><span class="p">);</span> <span class="o">--</span> \<span class="n">x0B</span><span class="c1">##</span>
+<span class="n">SELECT</span> <span class="n">unhex</span><span class="p">(</span><span class="s2">"G"</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">unhex</span><span class="p">(</span><span class="s2">"G23"</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
 </pre></div>
 </div>
 </dd></dl>

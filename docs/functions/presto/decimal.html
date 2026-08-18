@@ -201,12 +201,12 @@ scale of either inputs. Hence the result type precision and scale are:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">A</span> <span class="o">=</span> <span class="n">a</span> <span class="o">*</span> <span class="mi">10</span><span class="o">^</span><span class="n">s1</span>
 <span class="n">B</span> <span class="o">=</span> <span class="n">b</span> <span class="o">*</span> <span class="mi">10</span><span class="o">^</span><span class="n">s2</span>
 
-<span class="n">A</span><span class="s1">&#39; = a * 10^s</span>
-<span class="sa">B</span><span class="s1">&#39; = b * 10^s</span>
+<span class="n">A</span><span class="s1">' = a * 10^s</span>
+<span class="sa">B</span><span class="s1">' = b * 10^s</span>
 </pre></div>
 </div>
 <p>Then we compute modulus of the rescaled values:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">R</span> <span class="o">=</span> <span class="n">A</span><span class="s1">&#39; % B&#39;</span> <span class="o">=</span> <span class="n">r</span> <span class="o">*</span> <span class="mi">10</span><span class="o">^</span><span class="n">s</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">R</span> <span class="o">=</span> <span class="n">A</span><span class="s1">' % B'</span> <span class="o">=</span> <span class="n">r</span> <span class="o">*</span> <span class="mi">10</span><span class="o">^</span><span class="n">s</span>
 </pre></div>
 </div>
 <p>For example, say <cite>a</cite> = 12.3 and <cite>b</cite> = 1.21, <cite>r</cite> = <code class="code docutils literal notranslate"><span class="pre">a</span> <span class="pre">%</span> <span class="pre">b</span></code> is calculated
@@ -217,8 +217,8 @@ as follows:</p>
 <span class="n">A</span> <span class="o">=</span> <span class="mf">12.3</span> <span class="o">*</span> <span class="mi">10</span><span class="o">^</span><span class="mi">1</span> <span class="o">=</span> <span class="mi">123</span>
 <span class="n">B</span> <span class="o">=</span> <span class="mf">1.21</span> <span class="o">*</span> <span class="mi">10</span><span class="o">^</span><span class="mi">2</span> <span class="o">=</span> <span class="mi">121</span>
 
-<span class="n">A</span><span class="s1">&#39; = 12.3 * 10^2 = 1230</span>
-<span class="sa">B</span><span class="s1">&#39; = 1.21 * 10^2 = 121</span>
+<span class="n">A</span><span class="s1">' = 12.3 * 10^2 = 1230</span>
+<span class="sa">B</span><span class="s1">' = 1.21 * 10^2 = 121</span>
 
 <span class="n">R</span> <span class="o">=</span> <span class="mi">1230</span> <span class="o">%</span> <span class="mi">121</span> <span class="o">=</span> <span class="mi">20</span> <span class="o">=</span> <span class="mf">0.20</span> <span class="o">*</span> <span class="mi">100</span>
 </pre></div>

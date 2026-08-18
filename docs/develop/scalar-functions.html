@@ -283,7 +283,7 @@ attribution and debugging. By default, no owner is set.</p>
 <span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExec</span><span class="p">);</span>
 
 <span class="w">  </span><span class="c1">// Specify the team or individual responsible for this function.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="w"> </span><span class="n">owner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;my-team&quot;</span><span class="p">;</span>
+<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="w"> </span><span class="n">owner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"my-team"</span><span class="p">;</span>
 
 <span class="w">  </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="kt">int64_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
@@ -470,13 +470,13 @@ the return type, the remaining template parameters are argument types. Aliases
 parameter allows developers to specify multiple names for the same function,
 but each function registration needs to provide at least one name. The “ceil”
 function defined above can be registered using the following function call:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">CeilFunction</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;ceil&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;ceiling&quot;</span><span class="p">});</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">CeilFunction</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="o">&gt;</span><span class="p">({</span><span class="s">"ceil"</span><span class="p">,</span><span class="w"> </span><span class="s">"ceiling"</span><span class="p">});</span>
 </pre></div>
 </div>
 <p>Here, we register the CeilFunction function that takes a double and returns a
 double. If we want to allow the ceil function to be called on float inputs,
 we need to call registerFunction again:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">CeilFunction</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;ceil&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;ceiling&quot;</span><span class="p">});</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">CeilFunction</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="o">&gt;</span><span class="p">({</span><span class="s">"ceil"</span><span class="p">,</span><span class="w"> </span><span class="s">"ceiling"</span><span class="p">});</span>
 </pre></div>
 </div>
 <p>We need to call registerFunction for each signature we want to support.</p>
@@ -534,17 +534,17 @@ argument and return types during registration.</p>
 </tbody>
 </table>
 <p>For example, to register array_min function for string inputs:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">ArrayMinFunction</span><span class="p">,</span><span class="w"> </span><span class="n">Varchar</span><span class="p">,</span><span class="w"> </span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&gt;</span><span class="p">({</span><span class="s">&quot;array_min&quot;</span><span class="p">});</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">ArrayMinFunction</span><span class="p">,</span><span class="w"> </span><span class="n">Varchar</span><span class="p">,</span><span class="w"> </span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&gt;</span><span class="p">({</span><span class="s">"array_min"</span><span class="p">});</span>
 </pre></div>
 </div>
 <p>To register array_min function for arrays of any type, use Generic&lt;T1&gt; for the element type:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">ArrayMinFunction</span><span class="p">,</span><span class="w"> </span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;&gt;</span><span class="p">({</span><span class="s">&quot;array_min&quot;</span><span class="p">});</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">ArrayMinFunction</span><span class="p">,</span><span class="w"> </span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;&gt;</span><span class="p">({</span><span class="s">"array_min"</span><span class="p">});</span>
 </pre></div>
 </div>
 <p>Since array_min needs to sort the elements to find the smallest, the element
 type needs to be orderable. You can restrict array elements to orderable types
 using Orderable&lt;T1&gt;.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">ArrayMinFunction</span><span class="p">,</span><span class="w"> </span><span class="n">Orderable</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Orderable</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;&gt;</span><span class="p">({</span><span class="s">&quot;array_min&quot;</span><span class="p">});</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">ArrayMinFunction</span><span class="p">,</span><span class="w"> </span><span class="n">Orderable</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Orderable</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;&gt;</span><span class="p">({</span><span class="s">"array_min"</span><span class="p">});</span>
 </pre></div>
 </div>
 <p>You can use multiple generic types in a function signature. For example, to register
@@ -554,13 +554,13 @@ map_top_n function:</p>
 <span class="w">    </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">Orderable</span><span class="o">&lt;</span><span class="n">T2</span><span class="o">&gt;&gt;</span><span class="p">,</span><span class="w">    </span><span class="c1">// result map type</span>
 <span class="w">    </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">Orderable</span><span class="o">&lt;</span><span class="n">T2</span><span class="o">&gt;&gt;</span><span class="p">,</span><span class="w">    </span><span class="c1">// input map type</span>
 <span class="w">    </span><span class="kt">int64_t</span><span class="w">                             </span><span class="c1">// type of N argument</span>
-<span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;map_top_n&quot;</span><span class="p">});</span>
+<span class="o">&gt;</span><span class="p">({</span><span class="s">"map_top_n"</span><span class="p">});</span>
 </pre></div>
 </div>
 <p>Generic types must use T1, T2, T3… naming.</p>
 <p>Finally, you can specify that an argument must be constant using Constant&lt;T&gt;.
 For example, to specify rand signature with a constant seed argument:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">RandFunction</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="n">Constant</span><span class="o">&lt;</span><span class="kt">int32_t</span><span class="o">&gt;&gt;</span><span class="p">({</span><span class="s">&quot;rand&quot;</span><span class="p">});</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">RandFunction</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="n">Constant</span><span class="o">&lt;</span><span class="kt">int32_t</span><span class="o">&gt;&gt;</span><span class="p">({</span><span class="s">"rand"</span><span class="p">});</span>
 </pre></div>
 </div>
 </section>
@@ -912,7 +912,7 @@ allows to easily construct ‘metadata’. For example,</p>
 VectorFunctionMetadataBuilder:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VectorFunctionMetadataBuilder</span><span class="p">()</span>
 <span class="w">    </span><span class="p">.</span><span class="n">defaultNullBehavior</span><span class="p">(</span><span class="nb">false</span><span class="p">)</span>
-<span class="w">    </span><span class="p">.</span><span class="n">owner</span><span class="p">(</span><span class="s">&quot;my-team&quot;</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">owner</span><span class="p">(</span><span class="s">"my-team"</span><span class="p">)</span>
 <span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">();</span>
 </pre></div>
 </div>
@@ -974,8 +974,8 @@ generics, variable number of arguments and lambdas. Here are some examples.</p>
 bigint:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// varchar -&gt; bigint</span>
 <span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span>
-<span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;bigint&quot;</span><span class="p">)</span>
-<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;varchar&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">"bigint"</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">"varchar"</span><span class="p">)</span>
 <span class="w">  </span><span class="p">.</span><span class="n">build</span><span class="p">()</span>
 </pre></div>
 </div>
@@ -984,10 +984,10 @@ specify types of multiple arguments, call argumentType() method for each
 argument in order.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// varchar, integer, integer -&gt; bigint</span>
 <span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span>
-<span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;varchar&quot;</span><span class="p">)</span>
-<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;varchar&quot;</span><span class="p">)</span>
-<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;integer&quot;</span><span class="p">)</span>
-<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;integer&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">"varchar"</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">"varchar"</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">"integer"</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">"integer"</span><span class="p">)</span>
 <span class="w">  </span><span class="p">.</span><span class="n">build</span><span class="p">()</span>
 </pre></div>
 </div>
@@ -996,18 +996,18 @@ varchar. FunctionSignatureBuilder allows specifying that the last augment may
 appear zero or more times by calling variableArity(“varchar”) method.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// varchar... -&gt; varchar</span>
 <span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span>
-<span class="w">    </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;varchar&quot;</span><span class="p">)</span>
-<span class="w">    </span><span class="p">.</span><span class="n">variableArity</span><span class="p">(</span><span class="s">&quot;varchar&quot;</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">"varchar"</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">variableArity</span><span class="p">(</span><span class="s">"varchar"</span><span class="p">)</span>
 <span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">()</span>
 </pre></div>
 </div>
 <p>The map_keys function takes any map and returns an array of map keys.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// map(K,V) -&gt; array(K)</span>
 <span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span>
-<span class="w">  </span><span class="p">.</span><span class="n">knownTypeVariable</span><span class="p">(</span><span class="s">&quot;K&quot;</span><span class="p">)</span>
-<span class="w">  </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">&quot;V&quot;</span><span class="p">)</span>
-<span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;array(K)&quot;</span><span class="p">)</span>
-<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;map(K,V)&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">knownTypeVariable</span><span class="p">(</span><span class="s">"K"</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">"V"</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">"array(K)"</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">"map(K,V)"</span><span class="p">)</span>
 <span class="w">  </span><span class="p">.</span><span class="n">build</span><span class="p">()</span>
 </pre></div>
 </div>
@@ -1015,11 +1015,11 @@ appear zero or more times by calling variableArity(“varchar”) method.</p>
 element of the array and returns a new array of the results.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// array(T), function(T, U) -&gt; array(U)</span>
 <span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span>
-<span class="w">  </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">&quot;T&quot;</span><span class="p">)</span>
-<span class="w">  </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">&quot;U&quot;</span><span class="p">)</span>
-<span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;array(U)&quot;</span><span class="p">)</span>
-<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;array(T)&quot;</span><span class="p">)</span>
-<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;function(T, U)&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">"T"</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">"U"</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">"array(U)"</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">"array(T)"</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">"function(T, U)"</span><span class="p">)</span>
 <span class="w">  </span><span class="p">.</span><span class="n">build</span><span class="p">();</span>
 </pre></div>
 </div>
@@ -1029,13 +1029,13 @@ The constraints are evaluated using a type calculator built from Flex and Bison
 tools. The decimal arithmetic addition function has the following signature:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// decimal, decimal -&gt; decimal</span>
 <span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span>
-<span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;DECIMAL(r_precision, r_scale)&quot;</span><span class="p">)</span>
-<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;DECIMAL(a_precision, a_scale)&quot;</span><span class="p">)</span>
-<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;DECIMAL(b_precision, b_scale)&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">"DECIMAL(r_precision, r_scale)"</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">"DECIMAL(a_precision, a_scale)"</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">"DECIMAL(b_precision, b_scale)"</span><span class="p">)</span>
 <span class="w">  </span><span class="p">.</span><span class="n">variableConstraint</span><span class="p">(</span>
-<span class="w">      </span><span class="s">&quot;r_precision&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="s">&quot;min(38, max(a_precision - a_scale, b_precision - b_scale) + max(a_scale, b_scale) + 1)&quot;</span><span class="p">)</span>
-<span class="w">  </span><span class="p">.</span><span class="n">variableConstraint</span><span class="p">(</span><span class="s">&quot;r_scale&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;max(a_scale, b_scale)&quot;</span><span class="p">)</span>
+<span class="w">      </span><span class="s">"r_precision"</span><span class="p">,</span>
+<span class="w">      </span><span class="s">"min(38, max(a_precision - a_scale, b_precision - b_scale) + max(a_scale, b_scale) + 1)"</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">variableConstraint</span><span class="p">(</span><span class="s">"r_scale"</span><span class="p">,</span><span class="w"> </span><span class="s">"max(a_scale, b_scale)"</span><span class="p">)</span>
 <span class="w">  </span><span class="p">.</span><span class="n">build</span><span class="p">();</span>
 </pre></div>
 </div>
@@ -1072,7 +1072,7 @@ values. The encodings of the vectors may not be the same.</p>
 <span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">testContains</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="o">&amp;</span><span class="p">](</span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">search</span><span class="p">,</span>
 <span class="w">                          </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;&gt;&amp;</span><span class="w"> </span><span class="n">expected</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">evaluate</span><span class="o">&lt;</span><span class="n">SimpleVector</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;&gt;</span><span class="p">(</span>
-<span class="w">        </span><span class="s">&quot;contains(c0, c1)&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">"contains(c0, c1)"</span><span class="p">,</span>
 <span class="w">        </span><span class="n">makeRowVector</span><span class="p">({</span>
 <span class="w">            </span><span class="n">arrayVector</span><span class="p">,</span>
 <span class="w">            </span><span class="n">makeConstant</span><span class="p">(</span><span class="n">search</span><span class="p">,</span><span class="w"> </span><span class="n">arrayVector</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">()),</span>
@@ -1098,7 +1098,7 @@ result. Here is an example of a test for simple function “sqrt”:</p>
 <span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="kt">double</span><span class="w"> </span><span class="n">kNan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">numeric_limits</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;::</span><span class="n">quiet_NaN</span><span class="p">();</span>
 
 <span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">sqrt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="o">&amp;</span><span class="p">](</span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">evaluateOnce</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="s">&quot;sqrt(c0)&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">evaluateOnce</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="s">"sqrt(c0)"</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="p">);</span>
 <span class="w">  </span><span class="p">};</span>
 
 <span class="w">  </span><span class="n">EXPECT_EQ</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="mi">1</span><span class="p">));</span>
@@ -1176,7 +1176,7 @@ ExprCompiler calls each factory’s <code class="docutils literal notranslate"><
 function. The factory receives the function name, <code class="docutils literal notranslate"><span class="pre">VectorFunctionMetadata</span></code>,
 and <code class="docutils literal notranslate"><span class="pre">QueryConfig</span></code>, and returns a <code class="docutils literal notranslate"><span class="pre">VectorFunctionListeners</span></code> struct containing
 optional pre and/or post listeners, or <code class="docutils literal notranslate"><span class="pre">std::nullopt</span></code> to skip that function.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/expression/VectorFunctionListener.h&quot;</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"velox/expression/VectorFunctionListener.h"</span>
 
 <span class="k">class</span><span class="w"> </span><span class="nc">MyListenerFactory</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="k">public</span><span class="w"> </span><span class="n">VectorFunctionListenerFactory</span><span class="w"> </span><span class="p">{</span>
 <span class="w"> </span><span class="k">public</span><span class="o">:</span>
@@ -1184,7 +1184,7 @@ optional pre and/or post listeners, or <code class="docutils literal notranslate
 <span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="w"> </span><span class="n">functionName</span><span class="p">,</span>
 <span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">VectorFunctionMetadata</span><span class="o">&amp;</span><span class="w"> </span><span class="n">metadata</span><span class="p">,</span>
 <span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">QueryConfig</span><span class="o">&amp;</span><span class="w"> </span><span class="n">queryConfig</span><span class="p">)</span><span class="w"> </span><span class="k">override</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">functionName</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;target_fn&quot;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">functionName</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">"target_fn"</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">;</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">VectorFunctionListeners</span><span class="p">{</span>
@@ -1205,7 +1205,7 @@ optional pre and/or post listeners, or <code class="docutils literal notranslate
 <span class="w">               </span><span class="k">const</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span>
 <span class="w">               </span><span class="n">std</span><span class="o">::</span><span class="n">exception_ptr</span><span class="w"> </span><span class="n">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">              </span><span class="c1">// Called after VectorFunction::apply, even if apply threw.</span>
-<span class="w">              </span><span class="c1">// &#39;error&#39; is non-null when apply threw; the framework</span>
+<span class="w">              </span><span class="c1">// 'error' is non-null when apply threw; the framework</span>
 <span class="w">              </span><span class="c1">// rethrows it after all post-listeners have executed.</span>
 <span class="w">            </span><span class="p">}),</span>
 <span class="w">    </span><span class="p">};</span>

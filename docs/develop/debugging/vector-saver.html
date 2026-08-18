@@ -74,9 +74,9 @@ Line: 107
 contains the input data for the expression. We can load this file into a vector in a
 unit test or standalone program:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;fstream&gt;</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/vector/VectorSaver.h&quot;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"velox/vector/VectorSaver.h"</span>
 
-<span class="n">std</span><span class="o">::</span><span class="n">ifstream</span><span class="w"> </span><span class="n">inputFile</span><span class="p">(</span><span class="s">&quot;/tmp/velox_vector_f7dneH&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ifstream</span><span class="o">::</span><span class="n">binary</span><span class="p">);</span>
+<span class="n">std</span><span class="o">::</span><span class="n">ifstream</span><span class="w"> </span><span class="n">inputFile</span><span class="p">(</span><span class="s">"/tmp/velox_vector_f7dneH"</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ifstream</span><span class="o">::</span><span class="n">binary</span><span class="p">);</span>
 <span class="k">auto</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">restoreVector</span><span class="p">(</span><span class="n">inputFile</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">());</span>
 <span class="n">inputFile</span><span class="p">.</span><span class="n">close</span><span class="p">();</span>
 
@@ -88,7 +88,7 @@ unit test or standalone program:</p>
 evaluate it on the input vector (with minimal tweaking to replace
 <cite>,:VARCHAR</cite> with <cite>‘,’</cite>) to reproduce and debug the error:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">evaluate</span><span class="p">(</span>
-<span class="w">    </span><span class="s">&quot;concat(cast((c0) as VARCHAR), &#39;,&#39;)&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"concat(cast((c0) as VARCHAR), ',')"</span><span class="p">,</span>
 <span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">dynamic_pointer_cast</span><span class="o">&lt;</span><span class="n">RowVector</span><span class="o">&gt;</span><span class="p">(</span><span class="n">data</span><span class="p">));</span>
 </pre></div>
 </div>
