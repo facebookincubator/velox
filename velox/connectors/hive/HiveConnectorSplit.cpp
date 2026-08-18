@@ -89,14 +89,7 @@ folly::dynamic HiveConnectorSplit::serialize() const {
   obj["infoColumns"] = infoColumnsObj;
 
   if (properties.has_value()) {
-    folly::dynamic propertiesObj = folly::dynamic::object;
-    propertiesObj["fileSize"] = properties->fileSize.has_value()
-        ? folly::dynamic(properties->fileSize.value())
-        : nullptr;
-    propertiesObj["modificationTime"] = properties->modificationTime.has_value()
-        ? folly::dynamic(properties->modificationTime.value())
-        : nullptr;
-    obj["properties"] = propertiesObj;
+    obj["properties"] = properties->serialize();
   }
 
   if (rowIdProperties.has_value()) {
@@ -173,13 +166,7 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
   std::optional<FileProperties> properties = std::nullopt;
   const auto& propertiesObj = obj.getDefault("properties", nullptr);
   if (propertiesObj != nullptr) {
-    properties = FileProperties{
-        .fileSize = propertiesObj["fileSize"].isNull()
-            ? std::nullopt
-            : std::optional(propertiesObj["fileSize"].asInt()),
-        .modificationTime = propertiesObj["modificationTime"].isNull()
-            ? std::nullopt
-            : std::optional(propertiesObj["modificationTime"].asInt())};
+    properties = FileProperties::create(propertiesObj);
   }
 
   std::optional<RowIdProperties> rowIdProperties = std::nullopt;
