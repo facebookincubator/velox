@@ -15,7 +15,10 @@ add_executable(
   nimble_fixed_bit_width_benchmark
   FixedBitWidthBenchmark.cpp
   BenchmarkUtils.h
+  DeltaBenchmarkData.h
+  FixedBitWidthBenchmarkData.h
   NimbleEncodingRunner.h
+  SparseBoolBenchmarkData.h
 )
 
 target_link_libraries(
