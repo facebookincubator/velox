@@ -273,6 +273,12 @@ void Serializer::initEncodingLayouts(
       // FlatmapFieldAddedEventHandler.
       flatMapBuilder.setContext(
           std::make_unique<FlatmapEncodingLayoutContext>(keyEncodings));
+      for (size_t index = 0; index < flatMapBuilder.childrenCount(); ++index) {
+        const auto it = keyEncodings.find(flatMapBuilder.nameAt(index));
+        if (it != keyEncodings.end()) {
+          initEncodingLayouts(*it->second, flatMapBuilder.childAt(index));
+        }
+      }
       break;
     }
     default:
