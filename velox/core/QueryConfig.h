@@ -792,6 +792,19 @@ class QueryConfig {
       "",
       "Config for creating row number spill files.")
 
+  /// Suffix appended to filesystem IoStats keys harvested from the spill
+  /// FileSystem when folded into an operator's runtimeStats. Empty by
+  /// default. Set to a non-empty value (e.g. ".spill") to disambiguate
+  /// spill IoStats keys from connector IoStats keys that may be folded into
+  /// the same OperatorStats by other code paths.
+  VELOX_QUERY_CONFIG(
+      kSpillIoStatsKeySuffix,
+      spillIoStatsKeySuffix,
+      "spill_io_stats_key_suffix",
+      std::string,
+      "",
+      "Suffix appended to spill filesystem IoStats keys in runtimeStats.")
+
   /// Default offset spill start partition bit.
   VELOX_QUERY_CONFIG(
       kSpillStartPartitionBit,
