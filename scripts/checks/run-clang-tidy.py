@@ -83,7 +83,11 @@ def check_output(output):
 
 def tidy(args):
     files = util.input_files(args.files)
-    files = [file for file in files if not any(exclude_dir in file for exclude_dir in args.exclude_dirs)]
+    files = [
+        file
+        for file in files
+        if not any(exclude_dir in file for exclude_dir in args.exclude_dirs)
+    ]
     files = [file for file in files if re.match(r".*(\.cpp|\.h|\.hpp)$", file)]
 
     # Exclude files in cudf, wave, and torchwave directories
