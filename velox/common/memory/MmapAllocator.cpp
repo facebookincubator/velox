@@ -75,7 +75,7 @@ bool MmapAllocator::allocateNonContiguousWithCapacity(
     const SizeMix& sizeMix,
     Allocation& out,
     MachinePageCount admissionCapacity) {
-  VELOX_CHECK_LE(admissionCapacity, capacity_);
+  admissionCapacity = std::min(admissionCapacity, capacity_);
   const MachinePageCount numFreed = freeNonContiguousInternal(out);
   if (sizeMix.totalPages == 0) {
     numAllocated_.fetch_sub(numFreed);
@@ -171,13 +171,17 @@ bool MmapAllocator::ensureEnoughMappedPages(
     return true;
   }
   if (testingHasInjectedFailure(InjectedFailure::kMadvise)) {
-    return false;
+    return newMappedNeeded == 0;
   }
   std::lock_guard<std::mutex> l(sizeClassBalanceMutex_);
   const auto totalMaps =
       numMapped_.fetch_add(newMappedNeeded) + newMappedNeeded;
-  const auto effectiveCapacity =
-      std::max(admissionCapacity, numAllocated_.load());
+  const auto currentEffectiveCapacity = [&]() {
+    return admissionCapacity < capacity_
+        ? std::max(admissionCapacity, numAllocated_.load())
+        : capacity_;
+  };
+  const auto effectiveCapacity = currentEffectiveCapacity();
   if (totalMaps <= effectiveCapacity) {
     // We are not at capacity. No need to advise away.
     return true;
@@ -188,8 +192,8 @@ bool MmapAllocator::ensureEnoughMappedPages(
       "facebook::velox::memory::MmapAllocator::ensureEnoughMappedPages", this);
   const auto numAdvised = adviseAway(target);
   numMapped_.fetch_sub(numAdvised);
-  if (numAdvised >= target ||
-      numMapped_.load() <= std::max(admissionCapacity, numAllocated_.load())) {
+  if (newMappedNeeded == 0 || numAdvised >= target ||
+      numMapped_.load() <= currentEffectiveCapacity()) {
     return true;
   }
   numMapped_.fetch_sub(newMappedNeeded);
@@ -253,7 +257,7 @@ bool MmapAllocator::allocateContiguousWithCapacity(
     ContiguousAllocation& allocation,
     MachinePageCount maxPages,
     MachinePageCount admissionCapacity) {
-  VELOX_CHECK_LE(admissionCapacity, capacity_);
+  admissionCapacity = std::min(admissionCapacity, capacity_);
   bool result;
   stats_.recordAllocate(AllocationTraits::pageBytes(numPages), 1, [&]() {
     result = allocateContiguousImpl(
@@ -330,6 +334,8 @@ bool MmapAllocator::allocateContiguousImpl(
 
   numExternalMapped_ += numPages - numCollateralUnmap;
   auto numAllocated = numAllocated_.fetch_add(newPages) + newPages;
+  common::testutil::TestValue::adjust(
+      "facebook::velox::memory::MmapAllocator::allocateContiguousImpl", this);
   // Check if went over the limit. But a net decrease always succeeds even if
   // ending up over the limit because some other thread might be transiently
   // over the limit.
@@ -448,7 +454,7 @@ bool MmapAllocator::growContiguousWithCapacity(
     MachinePageCount increment,
     ContiguousAllocation& allocation,
     MachinePageCount admissionCapacity) {
-  VELOX_CHECK_LE(admissionCapacity, capacity_);
+  admissionCapacity = std::min(admissionCapacity, capacity_);
   auto numAllocated = numAllocated_.fetch_add(increment) + increment;
   if (numAllocated > admissionCapacity ||
       testingHasInjectedFailure(InjectedFailure::kCap)) {

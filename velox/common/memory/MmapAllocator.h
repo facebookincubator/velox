@@ -136,7 +136,11 @@ class MmapAllocator : public MemoryAllocator {
   // other callers must use the public allocation APIs, which own validation,
   // reservation, retry, and cleanup. These functions limit net increases in
   // allocated and mapped pages while allowing existing usage to remain above a
-  // reduced capacity until memory is freed.
+  // reduced capacity until memory is freed. Values above the configured
+  // capacity are clamped. Derived allocators used with a cache must override
+  // capacity() to reflect their admission policy without reporting less than
+  // allocated usage, so that cache headroom calculations neither underflow nor
+  // bypass eviction.
   bool allocateNonContiguousWithCapacity(
       const SizeMix& sizeMix,
       Allocation& out,

@@ -161,6 +161,134 @@ TEST(DynamicMmapAllocatorTest, allowsNoGrowthAboveReducedCapacity) {
 
 DEBUG_ONLY_TEST(
     DynamicMmapAllocatorTest,
+    preservesConfiguredMappedCapacityDuringConcurrentFailure) {
+  MmapAllocator allocator(makeAllocatorOptions());
+
+  Allocation mapped;
+  Allocation mappedFree;
+  Allocation additionalMappedFree;
+  ASSERT_TRUE(
+      allocator.allocateNonContiguous(kConfiguredCapacityPages - 2, mapped));
+  ASSERT_TRUE(allocator.allocateNonContiguous(1, mappedFree));
+  ASSERT_TRUE(allocator.allocateNonContiguous(1, additionalMappedFree));
+  allocator.freeNonContiguous(mappedFree);
+  allocator.freeNonContiguous(additionalMappedFree);
+  ASSERT_EQ(allocator.numAllocated(), kConfiguredCapacityPages - 2);
+  ASSERT_EQ(allocator.numMapped(), kConfiguredCapacityPages);
+  auto mappedGuard =
+      folly::makeGuard([&]() { allocator.freeNonContiguous(mapped); });
+
+  folly::Baton<> firstReservation;
+  folly::Baton<> secondReservation;
+  folly::Baton<> releaseFirstReservation;
+  folly::Baton<> releaseSecondReservation;
+  std::atomic<int32_t> numReservations{0};
+  TestValue::enable();
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::MmapAllocator::allocateContiguousImpl",
+      std::function<void(MmapAllocator*)>([&](MmapAllocator* /*unused*/) {
+        if (numReservations.fetch_add(1) == 0) {
+          firstReservation.post();
+          releaseFirstReservation.wait();
+        } else {
+          secondReservation.post();
+          releaseSecondReservation.wait();
+        }
+      }));
+
+  ContiguousAllocation first;
+  bool firstSucceeded{false};
+  std::exception_ptr firstError;
+  std::thread firstThread([&]() {
+    try {
+      firstSucceeded = allocator.allocateContiguous(2, nullptr, first);
+    } catch (...) {
+      firstError = std::current_exception();
+    }
+  });
+  auto firstThreadGuard = folly::makeGuard([&]() {
+    releaseFirstReservation.post();
+    releaseSecondReservation.post();
+    if (firstThread.joinable()) {
+      firstThread.join();
+    }
+    allocator.freeContiguous(first);
+  });
+  ASSERT_TRUE(firstReservation.try_wait_for(5s));
+
+  ContiguousAllocation second;
+  bool secondSucceeded{false};
+  std::exception_ptr secondError;
+  std::thread secondThread([&]() {
+    try {
+      secondSucceeded = allocator.allocateContiguous(1, nullptr, second);
+    } catch (...) {
+      secondError = std::current_exception();
+    }
+  });
+  auto secondThreadGuard = folly::makeGuard([&]() {
+    releaseFirstReservation.post();
+    releaseSecondReservation.post();
+    if (secondThread.joinable()) {
+      secondThread.join();
+    }
+    allocator.freeContiguous(second);
+  });
+  ASSERT_TRUE(secondReservation.try_wait_for(5s));
+  ASSERT_EQ(allocator.numAllocated(), kConfiguredCapacityPages + 1);
+
+  releaseFirstReservation.post();
+  firstThread.join();
+  EXPECT_LE(allocator.numMapped(), kConfiguredCapacityPages);
+  releaseSecondReservation.post();
+  secondThread.join();
+  if (firstError) {
+    std::rethrow_exception(firstError);
+  }
+  if (secondError) {
+    std::rethrow_exception(secondError);
+  }
+
+  EXPECT_TRUE(firstSucceeded);
+  EXPECT_FALSE(secondSucceeded);
+  EXPECT_TRUE(allocator.checkConsistency());
+
+  allocator.freeNonContiguous(mapped);
+  mappedGuard.dismiss();
+  allocator.freeContiguous(first);
+  firstThreadGuard.dismiss();
+  allocator.freeContiguous(second);
+  secondThreadGuard.dismiss();
+  EXPECT_EQ(allocator.numAllocated(), 0);
+  EXPECT_TRUE(allocator.checkConsistency());
+}
+
+TEST(DynamicMmapAllocatorTest, allowsMappedAllocationWhenBestEffortTrimFails) {
+  constexpr MachinePageCount kInitialCapacityPages = 8;
+  constexpr MachinePageCount kReducedCapacityPages = 4;
+  TestingAdmissionCapacityMmapAllocator allocator(kInitialCapacityPages);
+
+  Allocation mapped;
+  Allocation additionalMapped;
+  ASSERT_TRUE(allocator.allocateNonContiguous(kReducedCapacityPages, mapped));
+  ASSERT_TRUE(
+      allocator.allocateNonContiguous(kReducedCapacityPages, additionalMapped));
+  allocator.freeNonContiguous(mapped);
+  allocator.freeNonContiguous(additionalMapped);
+  ASSERT_EQ(allocator.numMapped(), kInitialCapacityPages);
+
+  allocator.setAdmissionCapacity(kReducedCapacityPages);
+  allocator.testingSetFailureInjection(
+      MemoryAllocator::InjectedFailure::kMadvise);
+  EXPECT_TRUE(allocator.allocateNonContiguous(kReducedCapacityPages, mapped));
+  EXPECT_EQ(allocator.numAllocated(), kReducedCapacityPages);
+  EXPECT_TRUE(allocator.checkConsistency());
+
+  allocator.freeNonContiguous(mapped);
+}
+
+DEBUG_ONLY_TEST(
+    DynamicMmapAllocatorTest,
     rechecksMappedCapacityAfterConcurrentAllocation) {
   constexpr MachinePageCount kInitialCapacityPages = 16;
   constexpr MachinePageCount kReducedCapacityPages = 2;
@@ -316,15 +444,32 @@ DEBUG_ONLY_TEST(
   EXPECT_TRUE(allocator.checkConsistency());
 }
 
-TEST(DynamicMmapAllocatorTest, rejectsCapacityAboveConfiguredCapacity) {
+TEST(DynamicMmapAllocatorTest, clampsCapacityToConfiguredCapacity) {
   TestingAdmissionCapacityMmapAllocator allocator(kConfiguredCapacityPages + 1);
 
-  Allocation allocation;
-  EXPECT_THROW(
-      allocator.allocateNonContiguous(1, allocation), VeloxRuntimeError);
-  if (!allocation.empty()) {
-    allocator.freeNonContiguous(allocation);
-  }
+  Allocation nonContiguous;
+  ASSERT_TRUE(
+      allocator.allocateNonContiguous(kConfiguredCapacityPages, nonContiguous));
+  Allocation extra;
+  EXPECT_FALSE(allocator.allocateNonContiguous(1, extra));
+  allocator.freeNonContiguous(nonContiguous);
+
+  ContiguousAllocation contiguous;
+  ASSERT_TRUE(allocator.allocateContiguous(
+      kConfiguredCapacityPages, nullptr, contiguous));
+  ContiguousAllocation extraContiguous;
+  EXPECT_FALSE(allocator.allocateContiguous(1, nullptr, extraContiguous));
+  allocator.freeContiguous(contiguous);
+
+  ASSERT_TRUE(allocator.allocateContiguous(
+      kConfiguredCapacityPages - 1,
+      nullptr,
+      contiguous,
+      nullptr,
+      kConfiguredCapacityPages + 1));
+  EXPECT_TRUE(allocator.growContiguous(1, contiguous));
+  EXPECT_FALSE(allocator.growContiguous(1, contiguous));
+  allocator.freeContiguous(contiguous);
 }
 
 TEST(DynamicMmapAllocatorTest, cacheEvictsAtAdmissionCapacity) {
