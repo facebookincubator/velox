@@ -1,0 +1,162 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+#include <cstddef>
+#include <memory>
+#include <string_view>
+#include <vector>
+
+#include "folly/io/IOBuf.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/serializer/Options.h"
+#include "velox/dwio/nimble/velox/SchemaReader.h"
+
+namespace facebook::nimble::serde {
+
+/// Produces compact serialized row-range slices from serialized Nimble
+/// payloads.
+///
+/// The slicer rewrites stream metadata and copies only the encoded byte ranges
+/// needed for the requested top-level rows. It preserves the schema while
+/// preparing compact server-side payloads for wire transfer without
+/// materializing values into Velox vectors.
+class StreamSlicer {
+ public:
+  /// Controls the trailer encodings used for sliced output.
+  struct Options {
+    EncodingType streamIndicesEncodingType{EncodingType::FixedBitWidth};
+    EncodingType streamSizesEncodingType{EncodingType::FixedBitWidth};
+  };
+
+  /// Creates a slicer for payloads that use the supplied Nimble schema.
+  StreamSlicer(
+      std::shared_ptr<const Type> schema,
+      velox::memory::MemoryPool* pool,
+      Options options);
+
+  /// Returns a compact serialization containing rows [offset, offset + length).
+  folly::IOBuf slice(std::string_view input, uint32_t offset, uint32_t length)
+      const;
+
+  /// Sliced stream-set result backed by an owned IOBuf chain.
+  struct SlicedStreams {
+    /// Owns the encoded bytes referenced by streams.
+    folly::IOBuf data;
+
+    /// Views into data ordered by stream offset.
+    std::vector<std::string_view> streams;
+
+    /// Indicates whether the stream set needs a row null-barrier on read.
+    bool requiresNullBarrier{false};
+  };
+
+  /// Returns compact raw streams containing rows [offset, offset + length).
+  /// `streamVersion` selects the row-count format used by each encoded stream.
+  SlicedStreams slice(
+      const std::vector<std::string_view>& inputStreams,
+      uint32_t offset,
+      uint32_t length,
+      SerializationVersion streamVersion) const;
+
+ private:
+  // Top-level row range in the current stream's row domain.
+  struct Range {
+    uint32_t offset;
+    uint32_t length;
+  };
+
+  // Recursively slices all streams reachable from a schema node.
+  void sliceType(
+      const Type& type,
+      Range range,
+      const std::vector<std::string_view>& inputStreams,
+      std::vector<std::string_view>& outputStreams,
+      bool& outputRequiresNullBarrier,
+      Buffer& outputBuffer,
+      const Encoding::Options& encodingOptions) const;
+
+  // Slices one stream descriptor and propagates null-barrier requirements.
+  void sliceDescriptor(
+      const StreamDescriptor& descriptor,
+      Range range,
+      const std::vector<std::string_view>& inputStreams,
+      std::vector<std::string_view>& outputStreams,
+      bool isRowOrFlatMapNullStream,
+      bool& outputRequiresNullBarrier,
+      Buffer& outputBuffer,
+      const Encoding::Options& encodingOptions) const;
+
+  // Returns sliced stream views backed by an owned output buffer.
+  SlicedStreams sliceStreams(
+      const std::vector<std::string_view>& inputStreams,
+      Range range,
+      Buffer& outputBuffer,
+      const Encoding::Options& encodingOptions) const;
+
+  // Returns true when the descriptor points to a present, non-empty stream.
+  bool hasStream(
+      const std::vector<std::string_view>& inputStreams,
+      const StreamDescriptor& descriptor) const;
+
+  // Returns true when a FlatMap child has any encoded value stream.
+  bool hasFlatMapValues(
+      const Type& type,
+      const std::vector<std::string_view>& inputStreams) const;
+
+  // Maps a nullable stream range to its non-null child-value range.
+  Range nonNullRange(
+      std::string_view encoded,
+      Range range,
+      const Encoding::Options& encodingOptions) const;
+
+  // Maps a boolean stream range to the range covering true positions.
+  Range trueRange(
+      std::string_view encoded,
+      Range range,
+      const Encoding::Options& encodingOptions) const;
+
+  // Maps an offsets stream range to the child-element range it references.
+  Range offsetsRange(
+      std::string_view encoded,
+      Range range,
+      const Encoding::Options& encodingOptions) const;
+
+  // Counts non-null rows in the range.
+  uint32_t countNonNull(
+      std::string_view encoded,
+      Range range,
+      const Encoding::Options& encodingOptions) const;
+
+  // Counts true values in the range.
+  uint32_t countTrue(
+      std::string_view encoded,
+      Range range,
+      const Encoding::Options& encodingOptions) const;
+
+  const std::shared_ptr<const Type> schema_;
+  velox::memory::MemoryPool* const pool_;
+  const Options options_;
+  const uint32_t streamCount_;
+  mutable std::vector<std::string_view> inputStreams_;
+  mutable std::vector<uint32_t> streamSizes_;
+  mutable Vector<char> headerBuffer_;
+  mutable Vector<char> trailerBuffer_;
+};
+
+} // namespace facebook::nimble::serde

@@ -80,12 +80,17 @@ enum class SizeShortcut { kNone, kMax, kSum };
 enum class StandaloneShortcut {
   kNone,
   kListPack,
+  kListUnpack,
   kView,
   kSlice,
   kSelectInt,
   kUnsqueeze,
   kTranspose,
   kNarrow,
+  kUnbind,
+  kSplitWithSizes,
+  kSqueezeDim,
+  kExpand,
 };
 
 /// Specifies which arguments determine the number of elements a kernel

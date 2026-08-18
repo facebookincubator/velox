@@ -188,7 +188,8 @@ class HiveTableHandle : public FileTableHandle {
       const std::unordered_map<std::string, std::string>& tableParameters = {},
       std::vector<HiveColumnHandlePtr> filterColumnHandles = {},
       double sampleRate = 1.0,
-      std::string dbName = "");
+      std::string dbName = "",
+      std::vector<int32_t> dataColumnFieldIds = {});
 
   /// Legacy constructor without indexColumns parameter for backward
   /// compatibility.
@@ -234,6 +235,12 @@ class HiveTableHandle : public FileTableHandle {
     return dataColumns_;
   }
 
+  /// Returns Iceberg field IDs aligned positionally to dataColumns(). An empty
+  /// vector means field IDs are unavailable.
+  const std::vector<int32_t>& dataColumnFieldIds() const {
+    return dataColumnFieldIds_;
+  }
+
   /// Returns the names of the index columns for the table.
   const std::vector<std::string>& indexColumns() const {
     return indexColumns_;
@@ -275,6 +282,7 @@ class HiveTableHandle : public FileTableHandle {
   const core::TypedExprPtr remainingFilter_;
   const double sampleRate_;
   const RowTypePtr dataColumns_;
+  const std::vector<int32_t> dataColumnFieldIds_;
   const std::vector<std::string> indexColumns_;
   const std::unordered_map<std::string, std::string> tableParameters_;
   const std::vector<HiveColumnHandlePtr> filterColumnHandles_;

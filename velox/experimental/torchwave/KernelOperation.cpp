@@ -839,8 +839,8 @@ void collectElementwiseLeaves(
   const auto& inputs = node->inputs();
   for (size_t i = 0; i < inputs.size(); ++i) {
     auto* value = inputs[i].value;
-    if (meta && i < meta->argumentMeta.size() &&
-        meta->argumentMeta[i].wholeTensor) {
+    const auto* argMeta = argMetaForInput(meta, node, i);
+    if (argMeta && argMeta->wholeTensor) {
       continue;
     }
     if (!seen.insert(value).second) {
@@ -848,8 +848,7 @@ void collectElementwiseLeaves(
     }
     auto* producer = value->producer();
     if (producer && producer->target() == "prim.ListPack") {
-      bool isRegister = meta && i < meta->argumentMeta.size() &&
-          meta->argumentMeta[i].isRegister;
+      bool isRegister = argMeta && argMeta->isRegister;
       if (isRegister) {
         for (const auto& listInput : producer->inputs()) {
           auto* lv = listInput.value;
@@ -924,10 +923,30 @@ void collectFactorySizes(
   if (!visited.insert(node).second) {
     return;
   }
-  if (const auto* sizeAttr = node->tryGetAttribute("size")) {
-    if (std::holds_alternative<std::vector<int64_t>>(sizeAttr->value)) {
-      const auto& sz = std::get<std::vector<int64_t>>(sizeAttr->value);
-      constShapes.emplace_back(sz.begin(), sz.end());
+  // A factory op is one with no tensor input -- that is what makes its `size`
+  // the only description of its extent. Other ops carry a `size` attribute
+  // that means something else entirely: aten.expand's size=[-1, 2] says "keep
+  // dimension 0, broadcast dimension 1 to 2", and aten.view's size=[-1] says
+  // "infer this dimension". Those -1 placeholders are not extents. Taking them
+  // as extents narrows -1 to 4294967295 in Dim (uint32_t) and that value then
+  // wins the per-dimension max below, so the fused output reserves a buffer of
+  // 4294967295 rows.
+  const bool isFactory = std::none_of(
+      node->inputs().begin(), node->inputs().end(), [](const auto& input) {
+        return input.value != nullptr &&
+            input.value->type().kind() == nativert::Type::Kind::Tensor;
+      });
+  if (isFactory) {
+    if (const auto* sizeAttr = node->tryGetAttribute("size")) {
+      if (std::holds_alternative<std::vector<int64_t>>(sizeAttr->value)) {
+        const auto& sz = std::get<std::vector<int64_t>>(sizeAttr->value);
+        // A factory's own size should never carry a placeholder, but a
+        // negative extent must not reach Dim under any circumstances.
+        if (std::none_of(
+                sz.begin(), sz.end(), [](int64_t d) { return d < 0; })) {
+          constShapes.emplace_back(sz.begin(), sz.end());
+        }
+      }
     }
   }
   for (const auto& input : node->inputs()) {
@@ -1196,8 +1215,8 @@ void KernelOperation::setOutputs(
     }
     auto* producer = value->producer();
     if (producer) {
-      bool inputInMemory = meta && i < meta->argumentMeta.size() &&
-          !meta->argumentMeta[i].isRegister;
+      const auto* am = argMetaForInput(meta, node, i);
+      bool inputInMemory = am && !am->isRegister;
       setOutputs(
           producer,
           subgraphInputs,

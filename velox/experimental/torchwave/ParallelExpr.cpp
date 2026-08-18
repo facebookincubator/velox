@@ -625,6 +625,129 @@ bool otherInputAliases(NodeCP consumer, int32_t selfOrdinal, ValueCP x) {
   return false;
 }
 
+// The alias steps from 'value' back to its storage base, outermost first: the
+// producing node of every view / in-place edge viewStorageBase follows. Two
+// values address the same elements only if these chains match op for op.
+std::vector<NodeCP> viewChain(ValueCP value) {
+  std::vector<NodeCP> chain;
+  while (value != nullptr) {
+    auto* producer = value->producer();
+    if (producer == nullptr) {
+      break;
+    }
+    ValueCP next = schemaAliasedInput(producer, value);
+    if (next == nullptr) {
+      const auto* meta = Registry::metadata(producer->target());
+      if (meta == nullptr || !meta->viewOfArg.has_value() ||
+          *meta->viewOfArg >= static_cast<int32_t>(producer->inputs().size())) {
+        break;
+      }
+      next = producer->inputs()[*meta->viewOfArg].value;
+    }
+    chain.push_back(producer);
+    value = next;
+  }
+  return chain;
+}
+
+// Constant is a variant; a subgraph alternative is move-only and never carries
+// an index, so treat it as unequal rather than comparing it.
+bool constantsEqual(const nativert::Constant& a, const nativert::Constant& b) {
+  if (a.index() != b.index()) {
+    return false;
+  }
+  return std::visit(
+      [&b](const auto& av) -> bool {
+        using T = std::decay_t<decltype(av)>;
+        if constexpr (std::is_same_v<T, std::unique_ptr<nativert::Graph>>) {
+          return false;
+        } else {
+          return av == std::get<T>(b);
+        }
+      },
+      a);
+}
+
+bool sameAttributes(NodeCP a, NodeCP b) {
+  const auto& aAttrs = a->attributes();
+  const auto& bAttrs = b->attributes();
+  if (aAttrs.size() != bAttrs.size()) {
+    return false;
+  }
+  for (const auto& attr : aAttrs) {
+    const auto* other = b->tryGetAttribute(attr.name);
+    if (other == nullptr || !constantsEqual(attr.value, other->value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// True if 'a' and 'b' address exactly the same elements of their shared base:
+// the same alias steps, in the same order, with the same indices.
+bool sameViewPath(ValueCP a, ValueCP b) {
+  if (a == b) {
+    return true;
+  }
+  auto aChain = viewChain(a);
+  auto bChain = viewChain(b);
+  if (aChain.size() != bChain.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < aChain.size(); ++i) {
+    if (aChain[i]->target() != bChain[i]->target() ||
+        !sameAttributes(aChain[i], bChain[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// True if some other operand of 'consumer' is computed from a read of the write
+// target's storage that does not address the same elements as the write.
+//
+// otherInputAliases only inspects the operands themselves, so it clears an
+// operand that is a materialized tensor (its own storage base) even when the
+// expression producing it reads the target. Fusion puts that read in the same
+// kernel as the write, so eliding the clone lets the write land before the read
+// and the read returns post-write data. Walk each other operand back through
+// its in-layer producers: a read of the target's base is only safe when it
+// covers exactly the elements being overwritten (identical index path), which
+// makes the pair element-to-element.
+bool otherInputReadsTargetElsewhere(
+    NodeCP consumer,
+    int32_t selfOrdinal,
+    ValueCP self,
+    const NodeSet& layerNodes) {
+  ValueCP base = viewStorageBase(self);
+  std::vector<ValueCP> work;
+  const auto& inputs = consumer->inputs();
+  for (int32_t j = 0; j < static_cast<int32_t>(inputs.size()); ++j) {
+    if (j != selfOrdinal && inputs[j].value != nullptr) {
+      work.push_back(inputs[j].value);
+    }
+  }
+  std::unordered_set<ValueCP> visited;
+  while (!work.empty()) {
+    ValueCP value = work.back();
+    work.pop_back();
+    if (value == nullptr || !visited.insert(value).second) {
+      continue;
+    }
+    if (viewStorageBase(value) == base && !sameViewPath(value, self)) {
+      return true;
+    }
+    auto* producer = value->producer();
+    if (producer == nullptr || layerNodes.count(producer) == 0) {
+      continue;
+    }
+    for (const auto& input : producer->inputs()) {
+      work.push_back(input.value);
+    }
+  }
+  return false;
+}
+
 // True if 'cloneNode' requests an explicit memory_format, i.e. it is a layout
 // conversion whose output cannot be replaced by its (possibly differently laid
 // out) input.
@@ -750,9 +873,8 @@ bool absorbsStrides(NodeCP reader, ValueCP value) {
       return false; // read from two argument slots
     }
     seen = true;
-    if (i < meta->argumentMeta.size() &&
-        (meta->argumentMeta[i].wholeTensor ||
-         meta->argumentMeta[i].randomAccess)) {
+    const auto* am = argMetaForInput(meta, reader, i);
+    if (am && (am->wholeTensor || am->randomAccess)) {
       return false;
     }
   }
@@ -809,6 +931,10 @@ bool tryElideClone(
     const int32_t selfOrdinal =
         *Registry::metadata(consumer->target())->mutatesArg;
     if (otherInputAliases(consumer, selfOrdinal, source)) {
+      return false;
+    }
+    if (otherInputReadsTargetElsewhere(
+            consumer, selfOrdinal, source, layerNodes)) {
       return false;
     }
     rewireInput(consumer, cloneOut, source);

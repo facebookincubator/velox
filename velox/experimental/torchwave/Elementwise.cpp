@@ -39,9 +39,10 @@ void CompileCtx::collectSubgraphInputs(
     // When a placed prim.ListPack has isRegister in the consumer's
     // argument meta, expand to its individual tensor elements so they
     // appear in the ElementExpr parameter set.
+    const auto* listArgMeta = argMetaForInput(meta, node, i);
     if (producer && placed_.count(producer) &&
-        producer->target() == "prim.ListPack" && meta &&
-        i < meta->argumentMeta.size() && meta->argumentMeta[i].isRegister) {
+        producer->target() == "prim.ListPack" && listArgMeta &&
+        listArgMeta->isRegister) {
       for (auto& listInput : producer->inputs()) {
         auto* lv = listInput.value;
         auto* lp = lv->producer();
@@ -316,8 +317,7 @@ void CompileCtx::generateElementwise(
     const auto& inputs = node->inputs();
     for (size_t i = 0; i < inputs.size(); ++i) {
       auto* v = inputs[i].value;
-      const ArgumentMeta* am =
-          (i < meta->argumentMeta.size()) ? &meta->argumentMeta[i] : nullptr;
+      const ArgumentMeta* am = argMetaForInput(meta, node, i);
       if (am && am->wholeTensor) {
         wholeTensorValues.insert(v);
       }
