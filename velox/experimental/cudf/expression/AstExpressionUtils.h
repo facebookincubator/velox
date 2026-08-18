@@ -626,12 +626,17 @@ cudf::ast::expression const& AstContext::pushExprToTree(
         // output column carries a proper null validity mask for downstream
         // operators (e.g. count(column)).
         if (exprVec.empty()) {
-          auto nullBoolean =
-              BaseVector::createNullConstant(BOOLEAN(), 1, pool);
+          auto nullBoolean = BaseVector::createNullConstant(BOOLEAN(), 1, pool);
           createLiteral(nullBoolean, scalars);
           std::string fillExpr = "fill " + std::to_string(scalars.size() - 1);
-          return addPrecomputeInstruction(
-              inputRowSchema[0]->nameOf(0), fillExpr);
+          // Anchor the fill column to the side the IN operand references, not
+          // unconditionally to side 0: a join probe side may have zero columns
+          // while the operand references the build side.
+          int sideIdx = findExpressionSide(expr);
+          if (sideIdx < 0) {
+            sideIdx = 0;
+          }
+          return addPrecomputeInstructionOnSide(sideIdx, 0, fillExpr, "");
         }
 
         auto* result = exprVec[0];
