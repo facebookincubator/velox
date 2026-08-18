@@ -408,6 +408,20 @@ std::vector<std::string> deserializeStrings(const folly::dynamic& array) {
   return ISerializable::deserialize<std::vector<std::string>>(array);
 }
 
+std::vector<std::optional<std::string>> deserializeOptionalStrings(
+    const folly::dynamic& array) {
+  std::vector<std::optional<std::string>> names;
+  names.reserve(array.size());
+  for (const auto& name : array) {
+    if (name.isNull()) {
+      names.emplace_back(std::nullopt);
+    } else {
+      names.emplace_back(name.asString());
+    }
+  }
+  return names;
+}
+
 RowTypePtr deserializeRowType(const folly::dynamic& obj) {
   return ISerializable::deserialize<RowType>(obj);
 }
@@ -1369,7 +1383,7 @@ UnnestNode::UnnestNode(
     const PlanNodeId& id,
     std::vector<FieldAccessTypedExprPtr> replicateVariables,
     std::vector<FieldAccessTypedExprPtr> unnestVariables,
-    std::vector<std::string> unnestNames,
+    std::vector<std::optional<std::string>> unnestNames,
     std::optional<std::string> ordinalityName,
     std::optional<std::string> markerName,
     const PlanNodePtr& source)
@@ -1387,7 +1401,7 @@ UnnestNode::UnnestNode(
     const PlanNodeId& id,
     std::vector<FieldAccessTypedExprPtr> replicateVariables,
     std::vector<FieldAccessTypedExprPtr> unnestVariables,
-    std::vector<std::string> unnestNames,
+    std::vector<std::optional<std::string>> unnestNames,
     std::optional<std::string> ordinalityName,
     std::optional<std::string> markerName,
     std::optional<bool> splitOutput,
@@ -1428,16 +1442,25 @@ UnnestNode::UnnestNode(
   int unnestIndex = 0;
   for (const auto& variable : unnestVariables_) {
     if (variable->type()->isArray()) {
-      names.emplace_back(unnestNames_[unnestIndex++]);
-      types.emplace_back(variable->type()->asArray().elementType());
+      if (unnestNames_[unnestIndex].has_value()) {
+        names.emplace_back(unnestNames_[unnestIndex].value());
+        types.emplace_back(variable->type()->asArray().elementType());
+      }
+      ++unnestIndex;
     } else if (variable->type()->isMap()) {
       const auto& mapType = variable->type()->asMap();
 
-      names.emplace_back(unnestNames_[unnestIndex++]);
-      types.emplace_back(mapType.keyType());
+      if (unnestNames_[unnestIndex].has_value()) {
+        names.emplace_back(unnestNames_[unnestIndex].value());
+        types.emplace_back(mapType.keyType());
+      }
+      ++unnestIndex;
 
-      names.emplace_back(unnestNames_[unnestIndex++]);
-      types.emplace_back(mapType.valueType());
+      if (unnestNames_[unnestIndex].has_value()) {
+        names.emplace_back(unnestNames_[unnestIndex].value());
+        types.emplace_back(mapType.valueType());
+      }
+      ++unnestIndex;
     } else {
       VELOX_FAIL(
           "Unexpected type of unnest variable. Expected ARRAY or MAP, but got {}.",
@@ -1466,7 +1489,13 @@ folly::dynamic UnnestNode::serialize() const {
   auto obj = PlanNode::serialize();
   obj["replicateVariables"] = ISerializable::serialize(replicateVariables_);
   obj["unnestVariables"] = ISerializable::serialize(unnestVariables_);
-  obj["unnestNames"] = ISerializable::serialize(unnestNames_);
+  folly::dynamic unnestNames = folly::dynamic::array;
+  for (const auto& name : unnestNames_) {
+    unnestNames.push_back(
+        name.has_value() ? folly::dynamic(name.value())
+                         : folly::dynamic(nullptr));
+  }
+  obj["unnestNames"] = std::move(unnestNames);
 
   if (ordinalityName_.has_value()) {
     obj["ordinalityName"] = ordinalityName_.value();
@@ -1492,7 +1521,7 @@ PlanNodePtr UnnestNode::create(const folly::dynamic& obj, void* context) {
   auto replicateVariables =
       deserializeFields(obj["replicateVariables"], context);
   auto unnestVariables = deserializeFields(obj["unnestVariables"], context);
-  auto unnestNames = deserializeStrings(obj["unnestNames"]);
+  auto unnestNames = deserializeOptionalStrings(obj["unnestNames"]);
   std::optional<std::string> ordinalityName = std::nullopt;
   if (obj.count("ordinalityName")) {
     ordinalityName = obj["ordinalityName"].asString();

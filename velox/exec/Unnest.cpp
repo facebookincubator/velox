@@ -55,13 +55,31 @@ Unnest::Unnest(
               : std::numeric_limits<vector_size_t>::max()) {
   const auto& inputType = unnestNode->sources()[0]->outputType();
   const auto& unnestVariables = unnestNode->unnestVariables();
-  for (const auto& variable : unnestVariables) {
+  const auto& unnestNames = unnestNode->unnestNames();
+  size_t nameIndex{0};
+  for (column_index_t channel = 0; channel < unnestVariables.size();
+       ++channel) {
+    const auto& variable = unnestVariables[channel];
     if (!variable->type()->isArray() && !variable->type()->isMap()) {
       VELOX_UNSUPPORTED(
           "Unnest operator supports only ARRAY and MAP types, the actual type is {}",
           variable->type()->toString());
     }
     unnestChannels_.push_back(inputType->getChildIdx(variable->name()));
+    // Emit each expansion column whose name is present; a std::nullopt name
+    // prunes it (neither materialized nor emitted).
+    if (variable->type()->isArray()) {
+      if (unnestNames[nameIndex++].has_value()) {
+        unnestOutputColumns_.push_back({channel, /*sourceChildIndex=*/0});
+      }
+    } else {
+      if (unnestNames[nameIndex++].has_value()) {
+        unnestOutputColumns_.push_back({channel, /*sourceChildIndex=*/0});
+      }
+      if (unnestNames[nameIndex++].has_value()) {
+        unnestOutputColumns_.push_back({channel, /*sourceChildIndex=*/1});
+      }
+    }
   }
   unnestDecoded_.resize(unnestVariables.size());
 
@@ -419,28 +437,32 @@ RowVectorPtr Unnest::generateOutput(const RowRange& range) {
   std::vector<VectorPtr> outputs(outputType_->size());
   generateRepeatedColumns(range, outputs);
 
-  // Create unnest columns.
-  column_index_t outputColumnIndex = identityProjections_.size();
-  for (auto channel = 0; channel < unnestChannels_.size(); ++channel) {
-    const auto unnestChannelEncoding =
-        generateEncodingForChannel(channel, range);
-
-    const auto& currentDecoded = unnestDecoded_[channel];
-    if (currentDecoded.base()->typeKind() == TypeKind::ARRAY) {
-      // Construct unnest column using Array elements wrapped using above
-      // created dictionary.
-      const auto* unnestBaseArray = currentDecoded.base()->as<ArrayVector>();
-      outputs[outputColumnIndex++] = unnestChannelEncoding.wrap(
-          unnestBaseArray->elements(), range.numInnerRows);
-    } else {
-      // Construct two unnest columns for Map keys and values vectors wrapped
-      // using above created dictionary.
-      const auto* unnestBaseMap = currentDecoded.base()->as<MapVector>();
-      outputs[outputColumnIndex++] = unnestChannelEncoding.wrap(
-          unnestBaseMap->mapKeys(), range.numInnerRows);
-      outputs[outputColumnIndex++] = unnestChannelEncoding.wrap(
-          unnestBaseMap->mapValues(), range.numInnerRows);
+  // Create unnest columns, one per emitted output column. Pruned columns are
+  // absent from 'unnestOutputColumns_', so a fully pruned channel builds no
+  // encoding and copies nothing. A channel's encoding is shared across its
+  // emitted columns and built once, when the channel first appears.
+  const auto unnestChild =
+      [this](column_index_t channel, uint32_t sourceChildIndex) -> VectorPtr {
+    const auto* base = unnestDecoded_[channel].base();
+    if (base->typeKind() == TypeKind::ARRAY) {
+      return base->as<ArrayVector>()->elements();
     }
+    const auto* mapVector = base->as<MapVector>();
+    return sourceChildIndex == 0 ? mapVector->mapKeys()
+                                 : mapVector->mapValues();
+  };
+
+  column_index_t outputColumnIndex = identityProjections_.size();
+  std::optional<column_index_t> encodedChannel;
+  std::optional<UnnestChannelEncoding> encoding;
+  for (const auto& outputColumn : unnestOutputColumns_) {
+    if (encodedChannel != outputColumn.channel) {
+      encoding = generateEncodingForChannel(outputColumn.channel, range);
+      encodedChannel = outputColumn.channel;
+    }
+    outputs[outputColumnIndex++] = encoding->wrap(
+        unnestChild(outputColumn.channel, outputColumn.sourceChildIndex),
+        range.numInnerRows);
   }
 
   // 'Ordinality' and 'EmptyUnnestValue' columns are always at the end.
