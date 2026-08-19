@@ -149,6 +149,11 @@ void ScanSpec::resetHasFilterUpToRoot() {
   }
 }
 
+void ScanSpec::setFilterEnabled(bool value) {
+  enableFilterInSubTree(value);
+  resetHasFilterUpToRoot();
+}
+
 void ScanSpec::setDeltaUpdate(dwio::common::DeltaColumnUpdater* update) {
   deltaUpdate_ = update;
   enableFilterInSubTree(update == nullptr);

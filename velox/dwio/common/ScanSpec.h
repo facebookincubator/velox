@@ -69,6 +69,13 @@ class ScanSpec {
     filter_ = std::move(filter);
   }
 
+  /// Enables or disables filtering by 'this' and its descendants in the
+  /// readers, leaving the filters in place. Use for a column whose final values
+  /// the reader does not produce: filtering on what it sees drops the wrong
+  /// rows. The caller applies the filter with applyFilter() once values are
+  /// final.
+  void setFilterEnabled(bool value);
+
   void setMaxArrayElementsCount(vector_size_t count) {
     maxArrayElementsCount_ = count;
   }

@@ -127,6 +127,49 @@ bool shouldSkipBySequenceNumber(
                           : (deleteFileSeqNum < dataSeqNum);
 }
 
+// Removes the rows whose bit is set in 'rowsToRemove' from 'output'. Does not
+// touch the caller's scanned row count: 0 means end of split, so a batch that
+// loses every row must still report the rows it read.
+void removeRows(
+    VectorPtr& output,
+    const uint64_t* rowsToRemove,
+    vector_size_t numRows,
+    memory::MemoryPool* pool) {
+  const auto numRemoved = bits::countBits(rowsToRemove, 0, numRows);
+  if (numRemoved == 0) {
+    return;
+  }
+
+  const vector_size_t numSurviving = numRows - numRemoved;
+  if (numSurviving == 0) {
+    output = BaseVector::create(output->type(), 0, pool);
+    return;
+  }
+
+  // Copy each run of surviving rows as one range; a range filter on a monotonic
+  // column like _row_id typically leaves a single long run.
+  std::vector<BaseVector::CopyRange> ranges;
+  // A removed row can end at most one run, and the batch can open one more.
+  ranges.reserve(std::min(numRemoved + 1, numSurviving));
+  vector_size_t numCopied{0};
+  for (vector_size_t row = 0; row < numRows;) {
+    if (bits::isBitSet(rowsToRemove, row)) {
+      ++row;
+      continue;
+    }
+    const vector_size_t runBegin = row;
+    while (row < numRows && !bits::isBitSet(rowsToRemove, row)) {
+      ++row;
+    }
+    ranges.push_back({runBegin, numCopied, row - runBegin});
+    numCopied += row - runBegin;
+  }
+
+  auto newOutput = BaseVector::create(output->type(), numSurviving, pool);
+  newOutput->copyRanges(output.get(), ranges);
+  output = newOutput;
+}
+
 } // namespace
 
 IcebergSplitReader::IcebergSplitReader(
@@ -260,6 +303,10 @@ void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStats& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
+  // Must precede the file schema extension and the reader creation below, both
+  // of which read 'readerOutputType_'.
+  projectFilterOnlySynthesizedColumns();
+
   // Forward per-query delegated credentials into fileReadOps so delegated-auth
   // filesystems authorize the read as the caller rather than the service
   // identity. The session-property keys carrying the credentials are named by
@@ -350,7 +397,10 @@ void IcebergSplitReader::prepareSplit(
         if (readerOutputType_->containsChild(colName) &&
             !originalFileSchema->containsChild(colName)) {
           names.emplace_back(colName);
-          types.emplace_back(BIGINT());
+          // From the output type: the reader sizes the slot it allocates from
+          // the file schema, while next() synthesizes into the output slot, so
+          // the two have to agree.
+          types.emplace_back(readerOutputType_->findChild(colName));
           modified = true;
         }
       }
@@ -419,9 +469,8 @@ void IcebergSplitReader::prepareSplit(
   // Iceberg MERGE INTO row-id synthesis: detect projection of
   // $target_table_row_id and cache the constant fields (spec_id,
   // partition_data) so next() can build the composite RowVector cheaply.
-  // file_path comes from the split's filePath directly; row_position is
-  // computed per row in next() using either the injected row-number column
-  // (filter / skip / positional-delete paths) or the contiguous formula.
+  // file_path comes from the split's filePath directly; row_position comes
+  // per row from the row-number column the reader injects below.
   targetTableRowIdOutputIndex_ = std::nullopt;
   targetTableSpecId_ = std::nullopt;
   targetTablePartitionData_ = std::nullopt;
@@ -446,30 +495,22 @@ void IcebergSplitReader::prepareSplit(
     }
   }
 
+  // Needs the output indexes resolved above, and must precede the split
+  // pruning and row reader configuration below, which read the filters.
+  deferFiltersOnSynthesizedColumns();
+
   if (checkIfSplitIsEmpty(runtimeStats)) {
     VELOX_CHECK(emptySplit_);
     return;
   }
 
-  // Inject a row-number column when filters, random-skip, or row-skipping
-  // deletes make the output-to-file-position mapping non-contiguous.
-  // Check split metadata rather than positionalDeleteFileReaders_ because
-  // the row reader must be configured before delete files are opened. Both
-  // _row_id and $target_table_row_id need accurate file-absolute positions,
-  // so request injection when either is projected. Deletion vectors skip rows
-  // exactly like V2 positional deletes and must be counted here too.
-  const bool hasRowSkippingDeletes = std::any_of(
-      icebergSplit_->deleteFiles.begin(),
-      icebergSplit_->deleteFiles.end(),
-      [](const IcebergDeleteFile& deleteFile) {
-        return (deleteFile.content == FileContent::kPositionalDeletes ||
-                deleteFile.content == FileContent::kDeletionVector) &&
-            deleteFile.recordCount > 0;
-      });
-  useRowNumberColumn_ = (rowIdOutputIndex_.has_value() ||
-                         targetTableRowIdOutputIndex_.has_value()) &&
-      (scanSpec_->hasFilter() || baseReaderOpts_.randomSkip() != nullptr ||
-       hasRowSkippingDeletes);
+  // Inject a row-number column whenever a column derived from the file row
+  // position is projected. Filters, random skip and deletes by position all
+  // leave gaps in the positions, and none of them is known here, where the row
+  // reader has to be configured: delete files are opened below, and a join can
+  // push a filter down after the split has started reading.
+  useRowNumberColumn_ =
+      rowIdOutputIndex_.has_value() || targetTableRowIdOutputIndex_.has_value();
   if (useRowNumberColumn_) {
     dwio::common::RowNumberColumnInfo rowNumInfo;
     rowNumInfo.insertPosition = readerOutputType_->size();
@@ -600,13 +641,143 @@ void IcebergSplitReader::prepareSplit(
   }
 }
 
+std::vector<common::ScanSpec*> IcebergSplitReader::appendProjectedColumns(
+    const std::vector<std::string>& names,
+    const std::vector<TypePtr>& types) {
+  VELOX_CHECK_EQ(
+      names.size(), types.size(), "Column names and types must match.");
+  std::vector<common::ScanSpec*> specs;
+  if (names.empty()) {
+    return specs;
+  }
+
+  const auto firstChannel = readerOutputType_->size();
+  specs.reserve(names.size());
+  for (size_t i = 0; i < names.size(); ++i) {
+    auto* childSpec = scanSpec_->getOrCreateChild(names[i]);
+    childSpec->setProjectOut(true);
+    childSpec->setChannel(static_cast<column_index_t>(firstChannel + i));
+    specs.push_back(childSpec);
+  }
+
+  // Appending keeps the query's columns at their indices, so FileDataSource's
+  // positional projection still returns only those.
+  auto outputNames = readerOutputType_->names();
+  auto outputTypes = readerOutputType_->children();
+  outputNames.insert(outputNames.end(), names.begin(), names.end());
+  outputTypes.insert(outputTypes.end(), types.begin(), types.end());
+  readerOutputType_ = ROW(std::move(outputNames), std::move(outputTypes));
+  return specs;
+}
+
+namespace {
+
+// True if 'spec' or one of its descendants carries a filter, whether or not
+// filtering by it is enabled. hasFilter() answers false once filtering has been
+// deferred, which is the state the two callers below are looking at.
+bool hasFilterIgnoringDisabled(const common::ScanSpec& spec) {
+  return spec.hasFilterApplicableToConstant();
+}
+
+} // namespace
+
+void IcebergSplitReader::projectFilterOnlySynthesizedColumns() {
+  const auto& dataColumns = tableHandle_->dataColumns();
+
+  std::vector<std::string> extraNames;
+  std::vector<TypePtr> extraTypes;
+  for (const auto* columnName :
+       {IcebergMetadataColumn::kRowIdColumnName,
+        IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName,
+        IcebergMetadataColumn::kTargetTableRowIdColumnName}) {
+    auto* childSpec = scanSpec_->childByName(columnName);
+    if (childSpec == nullptr || !hasFilterIgnoringDisabled(*childSpec) ||
+        readerOutputType_->containsChild(columnName)) {
+      continue;
+    }
+    // The type comes from the table schema, the same place makeScanSpec() takes
+    // it from for a column that is not projected. It is always there: the spec
+    // child read above only exists because makeScanSpec() found the column in
+    // this same schema when it built a child for a column the query filters on
+    // without selecting it.
+    VELOX_CHECK_NOT_NULL(dataColumns);
+    extraNames.emplace_back(columnName);
+    extraTypes.push_back(dataColumns->findChild(columnName));
+  }
+
+  appendProjectedColumns(extraNames, extraTypes);
+}
+
+void IcebergSplitReader::deferFiltersOnSynthesizedColumns() {
+  deferredFilters_.clear();
+  const std::pair<const char*, std::optional<column_index_t>>
+      synthesizedColumns[] = {
+          {IcebergMetadataColumn::kRowIdColumnName, rowIdOutputIndex_},
+          {IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName,
+           lastUpdatedSeqNumOutputIndex_},
+          {IcebergMetadataColumn::kTargetTableRowIdColumnName,
+           targetTableRowIdOutputIndex_},
+      };
+
+  for (const auto& [columnName, outputIndex] : synthesizedColumns) {
+    auto* childSpec = scanSpec_->childByName(columnName);
+    if (childSpec == nullptr) {
+      continue;
+    }
+    // A previous split may have deferred a column this one does not synthesize,
+    // where the reader has to filter it again.
+    childSpec->setFilterEnabled(!outputIndex.has_value());
+    if (outputIndex.has_value()) {
+      deferredFilters_.push_back({childSpec, *outputIndex});
+    }
+  }
+}
+
+void IcebergSplitReader::markRowsFailingDeferredFilters(
+    const RowVector& output,
+    uint64_t* rowsToRemove) {
+  const auto numRows = output.size();
+  if (numRows == 0) {
+    return;
+  }
+
+  // Decided per batch because dynamic filter pushdown can add a filter after
+  // the split starts.
+  const bool anyFilter = std::any_of(
+      deferredFilters_.begin(),
+      deferredFilters_.end(),
+      [](const DeferredFilter& deferred) {
+        return hasFilterIgnoringDisabled(*deferred.scanSpec);
+      });
+  if (!anyFilter) {
+    return;
+  }
+
+  // applyFilter() narrows a set of passing rows, so start with all rows in.
+  const auto numWords = bits::nwords(numRows);
+  dwio::common::ensureCapacity<uint64_t>(
+      passingRows_, numWords, connectorQueryCtx_->memoryPool());
+  auto* rawPassingRows = passingRows_->asMutable<uint64_t>();
+  std::memset(rawPassingRows, 0xff, numWords * sizeof(uint64_t));
+  for (const auto& deferred : deferredFilters_) {
+    deferred.scanSpec->applyFilter(
+        *output.childAt(deferred.outputIndex), numRows, rawPassingRows);
+  }
+
+  // The bits past 'numRows' stay set, so negating them marks no row that does
+  // not exist.
+  bits::orWithNegatedBits(rowsToRemove, rawPassingRows, 0, numRows);
+}
+
 void IcebergSplitReader::configureEqualityDeleteColumns() {
   // Reset partition-column tracking from any prior split before re-augmenting.
   equalityAugmentedPartitionColumns_.clear();
 
-  std::vector<std::string> extraEqualityColumns;
   std::vector<std::string> extraNames;
   std::vector<TypePtr> extraTypes;
+  // Identity-partition value of each augmented column, parallel to
+  // 'extraNames'. Unset for a column that is read from the data file.
+  std::vector<std::optional<std::string>> extraPartitionValues;
   const auto& deleteFiles = icebergSplit_->deleteFiles;
   const auto& identityPartitionKeys = icebergSplit_->identityPartitionKeys;
 
@@ -627,9 +798,8 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
     for (size_t i = 0; i < equalityColumnNames.size(); ++i) {
       const auto& name = equalityColumnNames[i];
       // Skip if this column was already added by a previous delete file.
-      if (std::find(
-              extraEqualityColumns.begin(), extraEqualityColumns.end(), name) !=
-          extraEqualityColumns.end()) {
+      if (std::find(extraNames.begin(), extraNames.end(), name) !=
+          extraNames.end()) {
         continue;
       }
       auto* fieldSpec = scanSpec_->childByName(name);
@@ -643,16 +813,10 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
       }
       // Either no spec exists, or one exists but is filter-only, or the
       // scan-spec child is projected but the column is missing from
-      // 'readerOutputType_'. In all cases ensure the column ends up in
-      // 'readerOutputType_' AND has a projected scan-spec child with a
-      // non-conflicting channel.
-      if (fieldSpec == nullptr) {
-        fieldSpec = scanSpec_->getOrCreateChild(name);
-      }
-      fieldSpec->setProjectOut(true);
-      fieldSpec->setChannel(
-          static_cast<column_index_t>(
-              readerOutputType_->size() + extraEqualityColumns.size()));
+      // 'readerOutputType_'. In all cases the column has to end up in
+      // 'readerOutputType_' with a projected scan-spec child.
+      extraNames.push_back(name);
+      extraTypes.push_back(equalityColumnTypes[i]);
 
       // Substitute the partition value for the source column only when the
       // Iceberg partition spec explicitly marks this equality field's source
@@ -668,50 +832,44 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
       // constant installed, so the column is read from the data file.
       const auto identityIt =
           identityPartitionKeys.find(deleteFile.equalityFieldIds[i]);
-      if (identityIt != identityPartitionKeys.end()) {
-        // Iceberg encodes DATE partition values as the integer number of
-        // days since the Unix epoch (e.g. "19345"). The standard
-        // 'setPartitionValue' helper learns this from the planner-supplied
-        // ColumnHandle via 'isPartitionDateValueDaysSinceEpoch()', but no
-        // ColumnHandle is available here when the partition column is not
-        // in the user's projection. Derive the flag from the column type
-        // instead — Iceberg always uses days-since-epoch for DATE.
-        const bool isDaysSinceEpoch = equalityColumnTypes[i]->isDate();
-        auto constant = newConstantFromString(
-            equalityColumnTypes[i],
-            identityIt->second,
-            connectorQueryCtx_->memoryPool(),
-            fileConfig_->readTimestampPartitionValueAsLocalTime(
-                connectorQueryCtx_->sessionProperties()),
-            isDaysSinceEpoch);
-        fieldSpec->setConstantValue(constant);
-        // Mirror Java's PARTITION_KEY column-type marking: this column's
-        // value MUST come from the partition metadata, never from the file
-        // body. Track it so 'adaptColumns' Branch 1 does not later wipe the
-        // constant when the file happens to also carry the column.
-        equalityAugmentedPartitionColumns_.insert(name);
-      }
-
-      extraEqualityColumns.push_back(name);
-      extraNames.push_back(name);
-      extraTypes.push_back(equalityColumnTypes[i]);
+      extraPartitionValues.push_back(
+          identityIt != identityPartitionKeys.end()
+              ? std::optional<std::string>(identityIt->second)
+              : std::nullopt);
     }
   }
 
-  if (extraEqualityColumns.empty()) {
-    return;
-  }
+  const auto extraSpecs = appendProjectedColumns(extraNames, extraTypes);
 
-  // Extend 'readerOutputType_' so the upstream FileDataSource allocates the
-  // output RowVector wide enough for the augmented scan-spec channels. The
-  // original projection columns remain at indices [0, originalSize), so
-  // FileDataSource's positional projection still returns exactly the
-  // user-requested columns.
-  auto names = readerOutputType_->names();
-  auto types = readerOutputType_->children();
-  names.insert(names.end(), extraNames.begin(), extraNames.end());
-  types.insert(types.end(), extraTypes.begin(), extraTypes.end());
-  readerOutputType_ = ROW(std::move(names), std::move(types));
+  // Set the identity-partition value as a constant, whether or not the file
+  // carries the column, so the read does not depend on the writer having
+  // included it.
+  for (size_t i = 0; i < extraSpecs.size(); ++i) {
+    if (!extraPartitionValues[i].has_value()) {
+      continue;
+    }
+    // Iceberg encodes DATE partition values as the integer number of days since
+    // the Unix epoch (e.g. "19345"). The standard 'setPartitionValue' helper
+    // learns this from the planner-supplied ColumnHandle via
+    // 'isPartitionDateValueDaysSinceEpoch()', but no ColumnHandle is available
+    // here when the partition column is not in the user's projection. Derive
+    // the flag from the column type instead — Iceberg always uses
+    // days-since-epoch for DATE.
+    const bool isDaysSinceEpoch = extraTypes[i]->isDate();
+    auto constant = newConstantFromString(
+        extraTypes[i],
+        *extraPartitionValues[i],
+        connectorQueryCtx_->memoryPool(),
+        fileConfig_->readTimestampPartitionValueAsLocalTime(
+            connectorQueryCtx_->sessionProperties()),
+        isDaysSinceEpoch);
+    extraSpecs[i]->setConstantValue(constant);
+    // Mirror Java's PARTITION_KEY column-type marking: this column's value MUST
+    // come from the partition metadata, never from the file body. Track it so
+    // 'adaptColumns' Branch 1 does not later wipe the constant when the file
+    // happens to also carry the column.
+    equalityAugmentedPartitionColumns_.insert(extraNames[i]);
+  }
 }
 
 std::pair<std::vector<std::string>, std::vector<TypePtr>>
@@ -758,6 +916,28 @@ IcebergSplitReader::resolveEqualityColumns(
   }
   return {std::move(equalityColumnNames), std::move(equalityColumnTypes)};
 }
+
+namespace {
+
+// True if 'batchType' is 'stripped' with one more column appended, the shape
+// the reader returns once it has injected the row-number column. Compares the
+// child types by pointer: the reader builds a new type object for every batch,
+// but it copies the same child types into each one, so rebuilding 'stripped'
+// from it would allocate a name per column per batch to reach the same answer.
+bool isRowNumberAppendedTo(const RowType& batchType, const RowType& stripped) {
+  if (batchType.size() != stripped.size() + 1) {
+    return false;
+  }
+  for (uint32_t i = 0; i < stripped.size(); ++i) {
+    if (batchType.childAt(i).get() != stripped.childAt(i).get() ||
+        batchType.nameOf(i) != stripped.nameOf(i)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+} // namespace
 
 uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
   Mutation mutation;
@@ -828,24 +1008,18 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
           seqNumChild, pool, [seqNum](vector_size_t) { return seqNum; });
     }
 
-    // Resolve file-absolute row positions once and reuse for both
-    // _row_id and $target_table_row_id. When useRowNumberColumn_ is true,
-    // the reader appended a row-number column at index
-    // readerOutputType_->size(). Otherwise the output is contiguous and we
-    // derive positions from the split offset plus per-row index.
-    const bool needRowPositions = rowIdOutputIndex_.has_value() ||
-        targetTableRowIdOutputIndex_.has_value();
+    // The reader appended the file-absolute row positions as a row-number
+    // column, which both _row_id and $target_table_row_id read from.
     std::optional<DecodedVector> decodedRowNumsHolder;
-    if (needRowPositions && useRowNumberColumn_) {
+    if (useRowNumberColumn_) {
       decodedRowNumsHolder.emplace(
           *rowOutput->childAt(readerOutputType_->size()));
     }
+    // Called only from the two row-id branches below, either of which implies
+    // 'useRowNumberColumn_'.
     auto rowPositionAt = [&](vector_size_t i) -> int64_t {
-      if (useRowNumberColumn_) {
-        return decodedRowNumsHolder->valueAt<int64_t>(i);
-      }
-      return static_cast<int64_t>(splitOffset_ + baseReadOffset_) +
-          static_cast<int64_t>(i);
+      VELOX_DCHECK(decodedRowNumsHolder.has_value());
+      return decodedRowNumsHolder->valueAt<int64_t>(i);
     };
 
     if (rowIdOutputIndex_.has_value() && firstRowId_.has_value()) {
@@ -872,7 +1046,9 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
           "$target_table_row_id must be a 4-field ROW; got {}",
           rowIdType->toString());
       const auto& rowIdRowType = rowIdType->asRow();
-      const auto numRows = static_cast<vector_size_t>(rowsScanned);
+      // Sized by the rows the reader returned, not by the rows it scanned: the
+      // two differ once a delete or a filter drops rows.
+      const auto numRows = rowOutput->size();
 
       auto filePathConst = BaseVector::createConstant(
           rowIdRowType.childAt(0),
@@ -913,76 +1089,59 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
     // Strip the injected row-number column (always last, allocated when
     // useRowNumberColumn_ is true). Done once for both row-id paths.
     if (useRowNumberColumn_) {
+      // The stripped type comes from the batch, not from 'readerOutputType_':
+      // extraction pushdown makes the reader produce the extracted type for a
+      // column where 'readerOutputType_' holds the file's type. The reader
+      // rebuilds an equal type for every batch, so keep the stripped one and
+      // rebuild only when the batch stops matching it, as it does when a flat
+      // map contributes different keys.
+      const auto& outputRowType = rowOutput->type()->asRow();
+      if (strippedOutputType_ == nullptr ||
+          !isRowNumberAppendedTo(outputRowType, *strippedOutputType_)) {
+        auto names = outputRowType.names();
+        auto types = outputRowType.children();
+        names.pop_back();
+        types.pop_back();
+        strippedOutputType_ = ROW(std::move(names), std::move(types));
+      }
       auto children = rowOutput->children();
       children.pop_back();
       output = std::make_shared<RowVector>(
           rowOutput->pool(),
-          readerOutputType_,
+          strippedOutputType_,
           rowOutput->nulls(),
           rowOutput->size(),
           std::move(children));
     }
   }
 
-  // Apply equality deletes after reading base data. Unlike positional deletes
-  // (which set bits before reading), equality deletes require the data values
-  // to be available for comparison.
-  if (rowsScanned > 0 && !equalityDeleteFileReaders_.empty()) {
+  // The deferred filters and the equality deletes both drop rows from the
+  // returned batch, so they share one bitmap and compact it once.
+  if (rowsScanned > 0 &&
+      (!deferredFilters_.empty() || !equalityDeleteFileReaders_.empty())) {
     auto outputRowVector = std::dynamic_pointer_cast<RowVector>(output);
     VELOX_CHECK_NOT_NULL(
-        outputRowVector, "Output must be a RowVector for equality deletes.");
+        outputRowVector, "Output must be a RowVector for post-read filtering.");
 
-    auto numRows = outputRowVector->size();
+    const auto numRows = outputRowVector->size();
+    if (numRows > 0) {
+      const auto numWords = bits::nwords(numRows);
+      dwio::common::ensureCapacity<uint64_t>(rowsToRemove_, numWords, pool);
+      auto* rawRowsToRemove = rowsToRemove_->asMutable<uint64_t>();
+      std::memset(rawRowsToRemove, 0, numWords * sizeof(uint64_t));
 
-    // Use a separate bitmap for equality deletes to track which rows to
-    // remove from the output.
-    BufferPtr eqDeleteBitmap = AlignedBuffer::allocate<bool>(numRows, pool);
-    std::memset(
-        eqDeleteBitmap->asMutable<uint8_t>(), 0, eqDeleteBitmap->size());
+      // The synthesized columns are final now, so the deferred filters can run.
+      markRowsFailingDeferredFilters(*outputRowVector, rawRowsToRemove);
 
-    for (auto& reader : equalityDeleteFileReaders_) {
-      reader->applyDeletes(outputRowVector, eqDeleteBitmap);
-    }
-
-    // Count surviving rows and compact the output if any rows were deleted.
-    auto* eqBitmap = eqDeleteBitmap->as<uint8_t>();
-    vector_size_t numDeleted = 0;
-    for (vector_size_t i = 0; i < numRows; ++i) {
-      if (bits::isBitSet(eqBitmap, i)) {
-        ++numDeleted;
+      // Equality deletes need the data values, so unlike positional deletes
+      // they run after the read. They skip the rows already marked, saving
+      // those hash probes.
+      for (auto& reader : equalityDeleteFileReaders_) {
+        reader->applyDeletes(outputRowVector, rowsToRemove_);
       }
+
+      removeRows(output, rawRowsToRemove, numRows, pool);
     }
-
-    if (numDeleted > 0) {
-      vector_size_t numSurviving = numRows - numDeleted;
-      if (numSurviving == 0) {
-        // All rows in this batch were deleted by equality deletes. Do not
-        // return 0 here — that would be interpreted as end-of-split and
-        // prematurely stop scanning remaining rows in the data file.
-        // Instead, set output to an empty vector and return the original
-        // scanned count so the caller continues reading.
-        output = BaseVector::create(outputRowVector->type(), 0, pool);
-      } else {
-        // Build a list of surviving row ranges and use it to compact.
-        std::vector<BaseVector::CopyRange> ranges;
-        ranges.reserve(numSurviving);
-        vector_size_t targetIdx = 0;
-        for (vector_size_t i = 0; i < numRows; ++i) {
-          if (!bits::isBitSet(eqBitmap, i)) {
-            ranges.push_back({i, targetIdx++, 1});
-          }
-        }
-
-        auto newOutput =
-            BaseVector::create(outputRowVector->type(), numSurviving, pool);
-        newOutput->copyRanges(outputRowVector.get(), ranges);
-        newOutput->resize(numSurviving);
-        output = newOutput;
-        rowsScanned = numSurviving;
-      }
-    }
-
-    return rowsScanned;
   }
 
   return rowsScanned;
