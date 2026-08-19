@@ -2166,36 +2166,20 @@ int32_t HashTable<ignoreNullKeys>::listJoinResultsSingleHit(
         return projectedRowSize(iter, hit);
       });
 
+  // Dispatch guarantees at most one hit per probe row: either
+  // nextOffset_ == 0 (no chain pointer) or !hasDuplicates_.
   while (iter.lastRowIndex < iter.rows->size()) {
-    if (!iter.nextHit) {
-      const auto row = (*iter.rows)[iter.lastRowIndex];
-      iter.nextHit = (*iter.hits)[row]; // NOLINT
-      if (!iter.nextHit) {
-        ++iter.lastRowIndex;
-        if (includeMisses && !emit(row, nullptr)) {
-          return numOut;
-        }
-        continue;
-      }
-    }
-
-    while (iter.nextHit) {
-      char* next = nullptr;
-      if (nextOffset_) {
-        next = nextRow(iter.nextHit);
-        if (next) {
-          __builtin_prefetch(reinterpret_cast<char*>(next) + nextOffset_);
-        }
-      }
-      const auto row = (*iter.rows)[iter.lastRowIndex]; // NOLINT
-      char* hit = iter.nextHit;
-      iter.nextHit = next;
-      if (!iter.nextHit) {
-        ++iter.lastRowIndex;
-      }
-      if (!emit(row, hit)) {
+    const auto row = (*iter.rows)[iter.lastRowIndex]; // NOLINT
+    char* hit = (*iter.hits)[row];
+    ++iter.lastRowIndex;
+    if (hit == nullptr) {
+      if (includeMisses && !emit(row, nullptr)) {
         return numOut;
       }
+      continue;
+    }
+    if (!emit(row, hit)) {
+      return numOut;
     }
   }
   return numOut;

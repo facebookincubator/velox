@@ -256,7 +256,6 @@ class BaseHashTable {
       rows = &lookup.rows;
       hits = &lookup.hits;
       lastRowIndex = 0;
-      nextHit = nullptr;
       walker.reset();
     }
 
@@ -287,7 +286,6 @@ class BaseHashTable {
     const raw_vector<char*>* hits{nullptr};
 
     vector_size_t lastRowIndex{0};
-    char* nextHit{nullptr};
 
     /// Cross-call state for the interleaved walker.
     InterleavedWalkerState walker;
