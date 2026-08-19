@@ -345,10 +345,39 @@ void RPCOperator::flushBatchRequests(int32_t maxRows) {
     return;
   }
 
-  // Determine how many rows to flush.
-  auto flushCount = maxRows > 0
-      ? std::min(static_cast<int32_t>(batchRowLocations_.size()), maxRows)
-      : static_cast<int32_t>(batchRowLocations_.size());
+  // Determine how many rows to flush. maxRows == 0 means "flush all pending".
+  const auto pending = static_cast<int32_t>(batchRowLocations_.size());
+  auto flushCount = maxRows > 0 ? std::min(pending, maxRows) : pending;
+
+  // Cap the flush by the per-request byte limit of the batch mode this backend
+  // actually dispatches in. A backend that rejects an oversized request loses
+  // every row in it, so the clamp applies to the flush-all paths too.
+  //
+  // An async job and a native batch are different backend APIs with different
+  // caps, and no backend declares both today. Taking the min of the two would
+  // silently impose the tighter cap of an API this flush never calls, so pick
+  // one; if a backend ever declares both, flushBatch() must report which it
+  // used rather than leaving the operator to guess.
+  const auto caps = function_->capabilities();
+  int64_t byteBudget{0};
+  if (caps.hasMode(velox::rpc::RpcCapabilityMode::kAsyncJob)) {
+    byteBudget =
+        function_->transportBounds(velox::rpc::RpcCapabilityMode::kAsyncJob)
+            .maxBatchBytes;
+  } else if (caps.hasMode(velox::rpc::RpcCapabilityMode::kNativeBatch)) {
+    byteBudget =
+        function_->transportBounds(velox::rpc::RpcCapabilityMode::kNativeBatch)
+            .maxBatchBytes;
+  }
+  if (byteBudget > 0) {
+    // rowsWithinByteBudget() is contracted to return >= 1 so a lone oversized
+    // row still makes progress and is failed loudly inside flushBatch(). Clamp
+    // it: a 0 would reach flushBatch() as "flush all", discarding the byte cap
+    // entirely -- the exact failure this budget exists to prevent.
+    const int32_t withinBudget =
+        std::max<int32_t>(1, function_->rowsWithinByteBudget(byteBudget));
+    flushCount = std::min(flushCount, withinBudget);
+  }
 
   RPC_OP_LOG(INFO) << "Flushing batch with " << flushCount << " of "
                    << function_->pendingBatchSize() << " accumulated rows";
@@ -362,7 +391,7 @@ void RPCOperator::flushBatchRequests(int32_t maxRows) {
       batchRowLocations_.begin(), batchRowLocations_.begin() + flushCount);
   batchRowIds_.erase(batchRowIds_.begin(), batchRowIds_.begin() + flushCount);
 
-  auto future = function_->flushBatch(maxRows);
+  auto future = function_->flushBatch(flushCount);
 
   // Count each flushBatch() as 1 pending unit against tier capacity.
   auto token = std::make_shared<BackendAdmission::Token>(admission_->acquire());
@@ -380,8 +409,8 @@ void RPCOperator::flushBatchRequests(int32_t maxRows) {
           .within(kBatchRpcTimeout)
           .deferError([rowIdsPtr, token](folly::exception_wrapper ew) {
             // A whole-batch failure (e.g. an operator-level batch/RPC timeout)
-            // degrades to per-row errored responses so the per-row error policy
-            // (meta_ai_on_error) applies downstream, instead of hard-failing
+            // degrades to per-row errored responses so the configured per-row
+            // error policy applies downstream, instead of hard-failing
             // the whole query. Mirrors the client-layer fan-out, but covers all
             // backends and the operator-level timeout uniformly. Both AIMD
             // controllers still back off via evaluateCongestion (a batch
@@ -404,9 +433,8 @@ void RPCOperator::flushBatchRequests(int32_t maxRows) {
           })
           // Scatter responses into batch-position order using each response's
           // function-assigned rowId (its position within the batch), then stamp
-          // the global rowIds. Functions may return results out of order (e.g.,
-          // MetaGen's batchDialogCompletion streams results in arbitrary
-          // order). Without this, responses[i] would be paired with
+          // the global rowIds. A backend may stream batch results in arbitrary
+          // order. Without this, responses[i] would be paired with
           // rowLocations[i] in buildOutputFromReadyBatch, silently mis-mapping
           // results to wrong passthrough rows. Invariant violations here are
           // fatal by design.
@@ -768,9 +796,13 @@ bool RPCOperator::startDrain() {
   VELOX_CHECK(isDraining());
   VELOX_CHECK(!noMoreInput_);
 
-  // Flush any undispatched accumulated rows.
-  if (function_->pendingBatchSize() > 0) {
-    flushBatchRequests();
+  // Flush any undispatched accumulated rows in chunks, mirroring
+  // noMoreInput(). A single flush is not enough: the byte budget can cap
+  // flushCount below the pending count, and rows left behind here would never
+  // dispatch, because setNoMoreInput() below lets the operator finish the
+  // drain without them.
+  while (function_->pendingBatchSize() > 0) {
+    flushBatchRequests(dispatchBatchSize_ > 0 ? dispatchBatchSize_ : 0);
   }
 
   // Signal RPCState that no more rows will be dispatched so it can

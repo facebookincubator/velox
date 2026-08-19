@@ -44,6 +44,54 @@ namespace facebook::velox::exec::rpc {
 
 using namespace facebook::velox::exec::test;
 
+// Declares a per-request byte budget and reports a fixed number of rows that
+// fit it, so the operator must chunk a large backlog to keep each request
+// under the cap. Records every flush's row count so the test can assert no
+// flush exceeds the budget-derived limit and no rows are lost. In the new
+// stack the budget lives in RpcEffectiveBounds via transportBounds(), not
+// RpcCapability — the operator resolves it per batch mode.
+class ByteBudgetedBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  using DemoBatchRPCFunction::DemoBatchRPCFunction;
+
+  static constexpr int64_t kMaxBatchBytes = 3000;
+  static constexpr int32_t kRowsPerBudget = 3;
+
+  // Flush chunk sizes observed across a query. Cleared at the start of the
+  // test.
+  static std::vector<int32_t>& flushChunks() {
+    static std::vector<int32_t> chunks;
+    return chunks;
+  }
+
+  RpcCapability capabilities() const override {
+    return {
+        .supportedModes = {
+            RpcCapabilityMode::kPerRow, RpcCapabilityMode::kNativeBatch}};
+  }
+
+  velox::rpc::RpcEffectiveBounds transportBounds(
+      velox::rpc::RpcCapabilityMode mode) const override {
+    if (mode == velox::rpc::RpcCapabilityMode::kNativeBatch) {
+      return {.maxBatchBytes = kMaxBatchBytes};
+    }
+    return {};
+  }
+
+  // Report a fixed prefix that "fits" the budget (>= 1), independent of the
+  // actual byte math — this test exercises the operator's clamp, not the
+  // function's estimator.
+  int32_t rowsWithinByteBudget(int64_t /*budgetBytes*/) const override {
+    return kRowsPerBudget;
+  }
+
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    flushChunks().push_back(maxRows);
+    return DemoBatchRPCFunction::flushBatch(maxRows);
+  }
+};
+
 class RPCOperatorTest : public OperatorTestBase {
  protected:
   static void SetUpTestCase() {
@@ -92,6 +140,12 @@ class RPCOperatorTest : public OperatorTestBase {
               /*failOnError=*/false,
               /*dropOneResponse=*/true);
         });
+    // Declares maxBatchBytes so the operator clamps each flush by the byte
+    // budget (see batchClampedByByteBudget). Adapted to new stack: budget via
+    // transportBounds(kNativeBatch).maxBatchBytes, not RpcCapability.
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_byte_budgeted",
+        []() { return std::make_shared<ByteBudgetedBatchRPCFunction>(); });
   }
 
   static void TearDownTestCase() {
@@ -672,6 +726,48 @@ TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
   EXPECT_GT(blockedNs, 2 * latencyNs)
       << "RPC operator did not park under mid-stream BATCH back-pressure: "
       << "blockedWallNanos=" << blockedNs << " latencyNs=" << latencyNs;
+}
+
+// Byte-budget clamp: when the function declares maxBatchBytes via
+// transportBounds(kNativeBatch), the operator caps each flush to
+// rowsWithinByteBudget() — chunking a backlog so no single request exceeds the
+// backend's per-request size cap while still
+// emitting every row. Uses the flush-all path (dispatchBatchSize=0), which
+// noMoreInput() must also chunk.
+TEST_F(RPCOperatorTest, batchClampedByByteBudget) {
+  ByteBudgetedBatchRPCFunction::flushChunks().clear();
+
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeFlatVector<StringView>(
+          {"r0", "r1", "r2", "r3", "r4", "r5", "r6"})}); // 7 rows
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "demo_batch_rpc_byte_budgeted",
+      /*dispatchBatchSize=*/0);
+
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+
+  // No rows lost.
+  ASSERT_EQ(result->size(), 7);
+  auto* results = result->childAt(1)->asFlatVector<StringView>();
+  for (vector_size_t i = 0; i < result->size(); ++i) {
+    EXPECT_FALSE(results->isNullAt(i));
+  }
+
+  // Every flush stayed within the budget-derived cap, and together they cover
+  // all 7 rows (expected chunks [3, 3, 1]).
+  const auto& chunks = ByteBudgetedBatchRPCFunction::flushChunks();
+  ASSERT_FALSE(chunks.empty());
+  int32_t total = 0;
+  for (auto c : chunks) {
+    EXPECT_GE(c, 1);
+    EXPECT_LE(c, ByteBudgetedBatchRPCFunction::kRowsPerBudget);
+    total += c;
+  }
+  EXPECT_EQ(total, 7);
 }
 
 /// PER_ROW congestion path. On the function's overload verdict
