@@ -162,6 +162,12 @@ bool ScanSpec::setDeltaUpdateWithoutReset(
   return enableFilterInSubTree(update == nullptr);
 }
 
+void ScanSpec::setFilterEnabled(bool value) {
+  if (enableFilterInSubTree(value)) {
+    resetCachedValuesInTree();
+  }
+}
+
 void ScanSpec::setDeltaUpdate(dwio::common::DeltaColumnUpdater* update) {
   if (setDeltaUpdateWithoutReset(update)) {
     resetCachedValuesInTree();
