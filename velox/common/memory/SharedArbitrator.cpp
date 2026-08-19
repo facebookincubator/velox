@@ -355,7 +355,11 @@ void SharedArbitrator::setupGlobalArbitration(
                              ",", globalArbitrationSpillCapacityLimits_);
 
   globalArbitrationController_ = std::make_unique<std::thread>([&]() {
-    folly::setThreadName("GlobalArbitrationController");
+    // Thread names are truncated to 15 characters (Linux TASK_COMM_LEN - 1),
+    // so keep this name short enough to stay fully visible in top and pstack.
+    static constexpr std::string_view kThreadName{"ArbitrationMain"};
+    static_assert(kThreadName.size() <= 15);
+    folly::setThreadName(kThreadName);
     globalArbitrationMain();
   });
 }
