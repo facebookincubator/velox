@@ -343,6 +343,68 @@ RuntimeStats::toRuntimeMetricMap() const {
   if (numStripes > 0) {
     result.emplace("numStripes", RuntimeMetric(numStripes));
   }
+  if (skippedPages > 0) {
+    result.emplace("skippedPages", RuntimeMetric(skippedPages));
+  }
+  if (processedPages > 0) {
+    result.emplace("processedPages", RuntimeMetric(processedPages));
+  }
+  if (pageIndexRowsRejected > 0) {
+    result.emplace(
+        "pageIndexRowsRejected", RuntimeMetric(pageIndexRowsRejected));
+  }
+  if (pageIndexPagesSkipped > 0) {
+    result.emplace(
+        "pageIndexPagesSkipped", RuntimeMetric(pageIndexPagesSkipped));
+  }
+  if (pageIndexPagesRetained > 0) {
+    result.emplace(
+        "pageIndexPagesRetained", RuntimeMetric(pageIndexPagesRetained));
+  }
+  if (pageIndexBytesRead > 0) {
+    result.emplace(
+        "pageIndexBytesRead",
+        RuntimeMetric(pageIndexBytesRead, RuntimeCounter::Unit::kBytes));
+  }
+  if (pageIndexDataBytesPlanned > 0) {
+    result.emplace(
+        "pageIndexDataBytesPlanned",
+        RuntimeMetric(
+            pageIndexDataBytesPlanned, RuntimeCounter::Unit::kBytes));
+  }
+  if (pageIndexDataBytesAvoided > 0) {
+    result.emplace(
+        "pageIndexDataBytesAvoided",
+        RuntimeMetric(
+            pageIndexDataBytesAvoided, RuntimeCounter::Unit::kBytes));
+  }
+  if (pageIndexLogicalRuns > 0) {
+    result.emplace(
+        "pageIndexLogicalRuns", RuntimeMetric(pageIndexLogicalRuns));
+  }
+  if (pageIndexParseTimeNs > 0) {
+    result.emplace(
+        "pageIndexParseTimeNs",
+        RuntimeMetric(pageIndexParseTimeNs, RuntimeCounter::Unit::kNanos));
+  }
+  if (pageIndexEvaluationTimeNs > 0) {
+    result.emplace(
+        "pageIndexEvaluationTimeNs",
+        RuntimeMetric(
+            pageIndexEvaluationTimeNs, RuntimeCounter::Unit::kNanos));
+  }
+  for (const auto& [reason, count] : pageIndexFallbacks) {
+    if (count > 0) {
+      result.emplace(
+          fmt::format("pageIndexFallback.{}", reason), RuntimeMetric(count));
+    }
+  }
+  if (parquetFooterEstimatedBytes > 0) {
+    result.emplace(
+        "parquetFooterEstimatedBytes",
+        RuntimeMetric(
+            parquetFooterEstimatedBytes, RuntimeCounter::Unit::kBytes));
+  }
   for (const auto& [format, metrics] : formatSpecificStats) {
     for (const auto& [name, metric] : metrics) {
       result.emplace(

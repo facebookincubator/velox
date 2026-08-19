@@ -17,8 +17,12 @@
 #pragma once
 
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/parquet/reader/ColumnPageIndex.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
+#include "velox/dwio/parquet/reader/PagePruningPlan.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
+#include "velox/dwio/parquet/reader/SemanticVersion.h"
+#include "velox/type/Filter.h"
 
 namespace facebook::velox::common {
 class ScanSpec;
@@ -37,11 +41,13 @@ class ParquetParams : public dwio::common::FormatParams {
       dwio::common::SplitStats& stats,
       const FileMetaDataPtr metaData,
       const tz::TimeZone* sessionTimezone,
-      TimestampPrecision timestampPrecision)
+      TimestampPrecision timestampPrecision,
+      std::optional<SemanticVersion> parquetVersion)
       : FormatParams(pool, stats),
         metaData_(metaData),
         sessionTimezone_(sessionTimezone),
-        timestampPrecision_(timestampPrecision) {}
+        timestampPrecision_(timestampPrecision),
+        parquetVersion_(std::move(parquetVersion)) {}
   std::unique_ptr<dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const common::ScanSpec& scanSpec) override;
@@ -50,10 +56,16 @@ class ParquetParams : public dwio::common::FormatParams {
     return timestampPrecision_;
   }
 
+  bool shouldIgnoreStatistics(thrift::Type type) const {
+    return !parquetVersion_.has_value() ||
+        parquetVersion_->shouldIgnoreStatistics(type);
+  }
+
  private:
   const FileMetaDataPtr metaData_;
   const tz::TimeZone* sessionTimezone_;
   const TimestampPrecision timestampPrecision_;
+  const std::optional<SemanticVersion> parquetVersion_;
 };
 
 /// Format-specific data created for each leaf column of a Parquet rowgroup.
@@ -64,22 +76,22 @@ class ParquetData : public dwio::common::FormatData {
       const FileMetaDataPtr fileMetadataPtr,
       memory::MemoryPool& pool,
       dwio::common::ColumnRuntimeStats& stats,
-      const tz::TimeZone* sessionTimezone)
-      : pool_(pool),
-        type_(std::static_pointer_cast<const ParquetTypeWithId>(type)),
-        fileMetaDataPtr_(fileMetadataPtr),
-        maxDefine_(type_->maxDefine_),
-        maxRepeat_(type_->maxRepeat_),
-        rowsInRowGroup_(-1),
-        stats_(stats),
-        sessionTimezone_(sessionTimezone) {}
+      const tz::TimeZone* sessionTimezone,
+      const velox::common::ScanSpec& scanSpec,
+      bool ignoreStatistics);
 
   /// Prepares to read data for 'index'th row group.
-  void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
+  void enqueueRowGroup(
+      uint32_t index,
+      dwio::common::BufferedInput& input,
+      const RowGroupPagePruningPlanPtr& pagePlan);
 
   /// Positions 'this' at 'index'th row group. loadRowGroup must be called
   /// first. The returned PositionProvider is empty and should not be used.
   /// Other formats may use it.
+  /// Note:
+  /// If page pruning has occurred, create the PageReader from the immutable
+  /// column plan and exact logical streams. Otherwise, use the whole chunk.
   dwio::common::PositionProvider seekToRowGroup(int64_t index) override;
 
   void filterRowGroups(
@@ -211,6 +223,22 @@ class ParquetData : public dwio::common::FormatData {
   // Returns the <offset, length> of the row group.
   std::pair<int64_t, int64_t> getRowGroupRegion(uint32_t index) const;
 
+  uint32_t column() const {
+    return type_->column();
+  }
+
+  /// Collects page-index locations for the row group of 'index'.
+  /// Returns true if page pruning can be applied to this column.
+  bool collectIndexPageInfoMap(uint32_t index, PageIndexInfoMap& map);
+
+  /// Evaluates validated page bounds without changing reader or plan state.
+  void evaluatePageIndex(
+      const ValidatedPageIndexes& pageIndexes,
+      dwio::common::RowIntervalSet& rejectedRows,
+      std::vector<std::pair<
+          const velox::common::MetadataFilter::LeafNode*,
+          dwio::common::RowIntervalSet>>& metadataResults) const;
+
  private:
   /// True if 'filter' may have hits for the column of 'this' according to the
   /// stats in 'rowGroup'.
@@ -230,6 +258,7 @@ class ParquetData : public dwio::common::FormatData {
   dwio::common::ColumnRuntimeStats& stats_;
   const tz::TimeZone* sessionTimezone_;
   std::unique_ptr<PageReader> reader_;
+  const bool ignoreStatistics_;
 
   // Nulls derived from leaf repdefs for non-leaf readers.
   BufferPtr presetNulls_;
@@ -239,6 +268,18 @@ class ParquetData : public dwio::common::FormatData {
 
   // Count of leading skipped positions in 'presetNulls_'
   int32_t presetNullsConsumed_{0};
+
+  // Streams for the exact logical page runs after page pruning.
+  struct PlannedStreams {
+    dwio::common::BufferedInput* fallbackInput{nullptr};
+    std::optional<common::Region> fallbackRegion;
+    std::unique_ptr<dwio::common::SeekableInputStream> prefix;
+    std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> runs;
+    RowGroupPagePruningPlanPtr pagePlan;
+  };
+  std::vector<std::optional<PlannedStreams>> plannedStreams_;
+
+  const common::ScanSpec& scanSpec_;
 };
 
 } // namespace facebook::velox::parquet

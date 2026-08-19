@@ -588,6 +588,30 @@ struct RuntimeStats {
   // Counts stripes observed in the file.
   int64_t numStripes{0};
 
+  int64_t skippedPages{0};
+
+  int64_t processedPages{0};
+
+  // Page-index pruning metrics. The skipped/processed page counters above are
+  // retained as compatibility aliases for existing operators.
+  int64_t pageIndexRowsRejected{0};
+  int64_t pageIndexPagesSkipped{0};
+  int64_t pageIndexPagesRetained{0};
+  int64_t pageIndexBytesRead{0};
+  int64_t pageIndexDataBytesPlanned{0};
+  int64_t pageIndexDataBytesAvoided{0};
+  int64_t pageIndexLogicalRuns{0};
+  int64_t pageIndexParseTimeNs{0};
+  int64_t pageIndexEvaluationTimeNs{0};
+  std::unordered_map<std::string, int64_t> pageIndexFallbacks;
+
+  // Estimated bytes reported to the memory pool for the deserialized
+  // Parquet file footer, when the parquet reader's footer-memory
+  // tracking path is engaged. Lets operators compare the estimate
+  // against actual pool usage. 0 when the reader did not engage
+  // tracking (e.g. footer below threshold or non-parquet format).
+  int64_t parquetFooterEstimatedBytes{0};
+
   // Stores unit-loader runtime metrics.
   UnitLoaderStats unitLoaderStats;
 

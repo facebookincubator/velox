@@ -420,6 +420,20 @@ bool ColumnChunkMetaDataPtr::hasDictionaryPageOffset() const {
           .has_value();
 }
 
+bool ColumnChunkMetaDataPtr::hasColumnAndOffsetIndexOffset() const {
+  return hasOffsetIndex() && hasColumnIndex();
+}
+
+bool ColumnChunkMetaDataPtr::hasOffsetIndex() const {
+  return thriftColumnChunkPtr(ptr_)->offset_index_offset().has_value() &&
+      thriftColumnChunkPtr(ptr_)->offset_index_length().has_value();
+}
+
+bool ColumnChunkMetaDataPtr::hasColumnIndex() const {
+  return thriftColumnChunkPtr(ptr_)->column_index_offset().has_value() &&
+      thriftColumnChunkPtr(ptr_)->column_index_length().has_value();
+}
+
 std::unique_ptr<dwio::common::ColumnStatistics>
 ColumnChunkMetaDataPtr::getColumnStatistics(
     const TypePtr type,
@@ -478,14 +492,6 @@ int64_t ColumnChunkMetaDataPtr::dictionaryPageOffset() const {
            ->dictionary_page_offset());
 }
 
-bool ColumnChunkMetaDataPtr::hasColumnIndex() const {
-  return thriftColumnChunkPtr(ptr_)->column_index_offset().has_value();
-}
-
-bool ColumnChunkMetaDataPtr::hasOffsetIndex() const {
-  return thriftColumnChunkPtr(ptr_)->offset_index_offset().has_value();
-}
-
 common::CompressionKind ColumnChunkMetaDataPtr::compression() const {
   return thriftCodecToCompressionKind(
       apache::thrift::can_throw(
@@ -513,6 +519,26 @@ int64_t ColumnChunkMetaDataPtr::totalUncompressedSize() const {
   return apache::thrift::can_throw(
       *apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
            ->total_uncompressed_size());
+}
+
+int64_t ColumnChunkMetaDataPtr::offsetIndexOffset() const {
+  return apache::thrift::can_throw(
+      *thriftColumnChunkPtr(ptr_)->offset_index_offset());
+}
+
+int32_t ColumnChunkMetaDataPtr::offsetIndexLength() const {
+  return apache::thrift::can_throw(
+      *thriftColumnChunkPtr(ptr_)->offset_index_length());
+}
+
+int64_t ColumnChunkMetaDataPtr::columnIndexOffset() const {
+  return apache::thrift::can_throw(
+      *thriftColumnChunkPtr(ptr_)->column_index_offset());
+}
+
+int32_t ColumnChunkMetaDataPtr::columnIndexLength() const {
+  return apache::thrift::can_throw(
+      *thriftColumnChunkPtr(ptr_)->column_index_length());
 }
 
 FOLLY_ALWAYS_INLINE const thrift::RowGroup* thriftRowGroupPtr(
@@ -638,6 +664,27 @@ std::string FileMetaDataPtr::keyValueMetadataValue(
 
 std::string FileMetaDataPtr::createdBy() const {
   return apache::thrift::can_throw(*thriftFileMetaDataPtr(ptr_)->created_by());
+}
+
+bool FileMetaDataPtr::hasTypeDefinedColumnOrder(uint32_t column) const {
+  const auto& metadata = *thriftFileMetaDataPtr(ptr_);
+  if (!metadata.column_orders()) {
+    return false;
+  }
+
+  size_t numLeafColumns = 0;
+  for (const auto& schemaElement : *metadata.schema()) {
+    if (schemaElement.type()) {
+      ++numLeafColumns;
+    }
+  }
+  if (metadata.column_orders()->size() != numLeafColumns ||
+      column >= metadata.column_orders()->size()) {
+    return false;
+  }
+
+  return (*metadata.column_orders())[column].getType() ==
+      thrift::ColumnOrder::Type::TYPE_ORDER;
 }
 
 size_t ColumnChunkMetaDataPtr::estimateColumnMetadataSize() const {

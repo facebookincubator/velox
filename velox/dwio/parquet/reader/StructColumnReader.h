@@ -19,6 +19,8 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 #include "velox/dwio/parquet/common/LevelConversion.h"
+#include "velox/dwio/parquet/reader/ColumnPageIndex.h"
+#include "velox/dwio/parquet/reader/PagePruningPlan.h"
 
 namespace facebook::velox::dwio::common {
 class BufferedInput;
@@ -29,6 +31,7 @@ namespace facebook::velox::parquet {
 enum class LevelMode;
 class PageReader;
 class ParquetParams;
+class ParquetData;
 
 class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
  public:
@@ -49,7 +52,8 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   /// the streams in a new input and loads.
   std::shared_ptr<dwio::common::BufferedInput> loadRowGroup(
       uint32_t index,
-      const std::shared_ptr<dwio::common::BufferedInput>& input);
+      const std::shared_ptr<dwio::common::BufferedInput>& input,
+      const RowGroupPagePruningPlanPtr& pagePlan);
 
   // No-op in Parquet. All readers switch row groups at the same time, there is
   // no on-demand skipping to a new row group.
@@ -58,6 +62,9 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       int64_t /*offset*/) override {}
 
   void setNullsFromRepDefs(PageReader& pageReader);
+
+  /// Loads repdefs needed to advance projected repeated children.
+  void prepareForSkip(uint64_t numValues);
 
   dwio::common::SelectiveColumnReader* childForRepDefs() const {
     return childForRepDefs_;
@@ -77,10 +84,17 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       const dwio::common::StatsContext&,
       dwio::common::FormatData::FilterRowGroupsResult&) const override;
 
+  bool collectIndexPageInfoMap(uint32_t index, PageIndexInfoMap& map);
+
+  ParquetData* findFlatLeaf(uint32_t column);
+
  private:
   dwio::common::SelectiveColumnReader* findBestLeaf();
 
-  void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
+  void enqueueRowGroup(
+      uint32_t index,
+      dwio::common::BufferedInput& input,
+      const RowGroupPagePruningPlanPtr& pagePlan);
 
   bool isRowGroupBuffered(uint32_t index, dwio::common::BufferedInput& input);
 

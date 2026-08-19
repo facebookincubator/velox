@@ -24,9 +24,11 @@
 #include <folly/ScopeGuard.h>
 #include <folly/lang/Bits.h>
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/parquet/common/LevelConversion.h"
 #include "velox/dwio/parquet/common/ParquetRuntimeStats.h"
@@ -61,43 +63,225 @@ uint32_t checkedPageSize(int32_t size, const char* name) {
 }
 } // namespace
 
+bool PageReader::fallbackToWholeChunk() {
+  if (!fallbackStream_ && fallbackInput_ && fallbackRegion_) {
+    fallbackStream_ = fallbackInput_->read(
+        fallbackRegion_->offset,
+        fallbackRegion_->length,
+        dwio::common::LogType::STRIPE);
+    fallbackInput_ = nullptr;
+    fallbackRegion_.reset();
+  }
+  if (!fallbackStream_) {
+    return false;
+  }
+  pagePlan_ = nullptr;
+  pageStreams_.clear();
+  prefixStream_.reset();
+  inputStream_ = std::move(fallbackStream_);
+  bufferStart_ = nullptr;
+  bufferEnd_ = nullptr;
+  pageStart_ = 0;
+  pageDataStart_ = 0;
+  rowOfPage_ = 0;
+  numRowsInPage_ = 0;
+  numRepDefsInPage_ = 0;
+  nextDataPageOrdinal_ = 0;
+  currentRunIndex_ = -1;
+  currentRunLength_ = 0;
+  prefixRead_ = true;
+  return true;
+}
+
 void PageReader::seekToPage(int64_t row) {
   defineDecoder_.reset();
   repeatDecoder_.reset();
+  if (pagePlan_ && !prefixRead_) {
+    readPrefix();
+  }
   // 'rowOfPage_' is the row number of the first row of the next page.
   rowOfPage_ += numRowsInPage_;
   for (;;) {
-    if (chunkSize_ <= pageStart_) {
+    if (pagePlan_ && nextDataPageOrdinal_ >= pagePlan_->dataPages.size()) {
+      if (currentRunIndex_ >= 0) {
+        if (pageStart_ != currentRunLength_) {
+          if (fallbackToWholeChunk()) {
+            continue;
+          }
+          VELOX_CHECK_EQ(
+              pageStart_,
+              currentRunLength_,
+              "Indexed logical page stream was not fully consumed");
+        }
+      }
+      numRepDefsInPage_ = 0;
+      numRowsInPage_ = 0;
+      break;
+    }
+    if (!pagePlan_ && chunkSize_ <= pageStart_) {
       // This may happen if seeking to exactly end of row group.
       numRepDefsInPage_ = 0;
       numRowsInPage_ = 0;
       break;
     }
-    PageHeader pageHeader = readPageHeader();
-    const uint32_t compressedPageSize = checkedPageSize(
-        *pageHeader.compressed_page_size(), "compressed page size");
-    pageStart_ = pageDataStart_ + compressedPageSize;
-
-    switch (*pageHeader.type()) {
-      case thrift::PageType::DATA_PAGE:
-        prepareDataPageV1(pageHeader, row);
-        break;
-      case thrift::PageType::DATA_PAGE_V2:
-        prepareDataPageV2(pageHeader, row);
-        break;
-      case thrift::PageType::DICTIONARY_PAGE:
-        if (row == kRepDefOnly) {
-          skipBytes(
-              static_cast<int32_t>(compressedPageSize),
-              inputStream_.get(),
-              bufferStart_,
-              bufferEnd_);
-          continue;
+    bool pageSkipped = false;
+    size_t pageIndex = 0;
+    int32_t streamIndex{-1};
+    if (pagePlan_) {
+      pageIndex = nextDataPageOrdinal_++;
+      const auto& page = pagePlan_->dataPages.at(pageIndex);
+      streamIndex = pagePlan_->dataPageToRun.at(pageIndex);
+      if (streamIndex < 0) {
+        pageSkipped = true;
+        VELOX_CHECK_LE(
+            page.numRows,
+            static_cast<uint64_t>(std::numeric_limits<int32_t>::max()),
+            "Page row count exceeds PageReader limits");
+        numRowsInPage_ = static_cast<int32_t>(page.numRows);
+        numRepDefsInPage_ = numRowsInPage_;
+      } else {
+        VELOX_CHECK_LT(
+            static_cast<size_t>(streamIndex),
+            pageStreams_.size(),
+            "Page plan refers to an invalid logical stream");
+        if (currentRunIndex_ != streamIndex) {
+          if (currentRunIndex_ >= 0) {
+            if (pageStart_ != currentRunLength_) {
+              if (fallbackToWholeChunk()) {
+                continue;
+              }
+              VELOX_CHECK_EQ(
+                  pageStart_,
+                  currentRunLength_,
+                  "Previous logical page stream was not fully consumed");
+            }
+          }
+          inputStream_ = std::move(pageStreams_[streamIndex]);
+          VELOX_CHECK_NOT_NULL(inputStream_);
+          currentRunIndex_ = streamIndex;
+          currentRunLength_ =
+              pagePlan_->retainedRuns[streamIndex].region.length;
+          bufferStart_ = nullptr;
+          bufferEnd_ = nullptr;
+          pageStart_ = 0;
         }
-        prepareDictionary(pageHeader);
-        continue;
-      default:
-        break; // ignore INDEX page type and any other custom extensions
+      }
+    }
+    if (pageSkipped) {
+      dataPageSkipped_ = true;
+    } else {
+      dataPageSkipped_ = false;
+      std::optional<uint64_t> expectedPageStart;
+      const PageDataSpan* plannedPage{nullptr};
+      if (pagePlan_) {
+        plannedPage = &pagePlan_->dataPages.at(pageIndex);
+        const auto& run = pagePlan_->retainedRuns.at(streamIndex);
+        if (plannedPage->region.offset < run.region.offset) {
+          if (fallbackToWholeChunk()) {
+            continue;
+          }
+          VELOX_CHECK_GE(
+              plannedPage->region.offset,
+              run.region.offset,
+              "Indexed page starts before its logical stream");
+        }
+        expectedPageStart = plannedPage->region.offset - run.region.offset;
+        if (expectedPageStart.value() > run.region.length ||
+            pageStart_ != expectedPageStart.value()) {
+          if (fallbackToWholeChunk()) {
+            continue;
+          }
+          VELOX_CHECK_LE(
+              expectedPageStart.value(),
+              run.region.length,
+              "Indexed page starts beyond its logical stream");
+          VELOX_CHECK_EQ(
+              pageStart_,
+              expectedPageStart.value(),
+              "Indexed page location does not match the logical stream");
+        }
+      }
+      PageHeader pageHeader = readPageHeader();
+      const auto compressedPageSize = checkedPageSize(
+          *pageHeader.compressed_page_size(), "compressed page size");
+      pageStart_ = checkedPlus(
+          pageDataStart_,
+          static_cast<uint64_t>(compressedPageSize),
+          "page offset");
+      if (plannedPage != nullptr) {
+        const auto expectedPageEnd = checkedPlus(
+            expectedPageStart.value(),
+            plannedPage->region.length,
+            "indexed page end");
+        if (pageStart_ != expectedPageEnd) {
+          if (fallbackToWholeChunk()) {
+            continue;
+          }
+          VELOX_CHECK_EQ(
+              pageStart_,
+              expectedPageEnd,
+              "Indexed page extent does not match its PageLocation");
+        }
+
+        if (*pageHeader.type() == thrift::PageType::DATA_PAGE && isTopLevel_) {
+          if (*pageHeader.data_page_header()->num_values() !=
+              plannedPage->numRows) {
+            if (fallbackToWholeChunk()) {
+              continue;
+            }
+            VELOX_CHECK_EQ(
+                *pageHeader.data_page_header()->num_values(),
+                plannedPage->numRows,
+                "Indexed page row count does not match its PageLocation");
+          }
+        } else if (*pageHeader.type() == thrift::PageType::DATA_PAGE_V2) {
+          if (*pageHeader.data_page_header_v2()->num_rows() !=
+              plannedPage->numRows) {
+            if (fallbackToWholeChunk()) {
+              continue;
+            }
+            VELOX_CHECK_EQ(
+                *pageHeader.data_page_header_v2()->num_rows(),
+                plannedPage->numRows,
+                "Indexed page row count does not match its PageLocation");
+          }
+        }
+      }
+
+      switch (*pageHeader.type()) {
+        case thrift::PageType::DATA_PAGE:
+          prepareDataPageV1(pageHeader, row);
+          break;
+        case thrift::PageType::DATA_PAGE_V2:
+          prepareDataPageV2(pageHeader, row);
+          break;
+        case thrift::PageType::DICTIONARY_PAGE:
+          if (pagePlan_) {
+            if (fallbackToWholeChunk()) {
+              continue;
+            }
+            VELOX_FAIL(
+                "Indexed logical page stream contains a dictionary page");
+          }
+          if (row == kRepDefOnly) {
+            skipBytes(
+                static_cast<int32_t>(compressedPageSize),
+                inputStream_.get(),
+                bufferStart_,
+                bufferEnd_);
+            continue;
+          }
+          prepareDictionary(pageHeader);
+          continue;
+        default:
+          if (pagePlan_) {
+            if (fallbackToWholeChunk()) {
+              continue;
+            }
+            VELOX_FAIL("Indexed logical page stream contains a non-data page");
+          }
+          break;
+      }
     }
     if (row == kRepDefOnly || row < rowOfPage_ + numRowsInPage_) {
       break;
@@ -106,16 +290,80 @@ void PageReader::seekToPage(int64_t row) {
   }
 }
 
+void PageReader::readPrefix() {
+  prefixRead_ = true;
+  if (!pagePlan_ || !pagePlan_->prefixRegion.has_value() ||
+      pagePlan_->allPagesSkipped) {
+    return;
+  }
+  inputStream_ = std::move(prefixStream_);
+  VELOX_CHECK_NOT_NULL(inputStream_);
+  bufferStart_ = nullptr;
+  bufferEnd_ = nullptr;
+
+  while (pageStart_ < pagePlan_->prefixRegion->length) {
+    const auto pageHeader = readPageHeader();
+    const auto compressedPageSize = checkedPageSize(
+        *pageHeader.compressed_page_size(), "compressed page size");
+    pageStart_ = checkedPlus(
+        pageDataStart_,
+        static_cast<uint64_t>(compressedPageSize),
+        "page offset");
+    if (pageStart_ > pagePlan_->prefixRegion->length) {
+      if (fallbackToWholeChunk()) {
+        return;
+      }
+      VELOX_CHECK_LE(
+          pageStart_,
+          pagePlan_->prefixRegion->length,
+          "Page extends beyond the indexed prefix region");
+    }
+
+    switch (*pageHeader.type()) {
+      case thrift::PageType::DICTIONARY_PAGE:
+        prepareDictionary(pageHeader);
+        break;
+      case thrift::PageType::DATA_PAGE:
+      case thrift::PageType::DATA_PAGE_V2:
+        if (fallbackToWholeChunk()) {
+          return;
+        }
+        VELOX_FAIL("Indexed prefix contains a data page");
+      default:
+        skipBytes(
+            static_cast<int32_t>(compressedPageSize),
+            inputStream_.get(),
+            bufferStart_,
+            bufferEnd_);
+        break;
+    }
+  }
+
+  if (pageStart_ != pagePlan_->prefixRegion->length) {
+    if (fallbackToWholeChunk()) {
+      return;
+    }
+    VELOX_CHECK_EQ(pageStart_, pagePlan_->prefixRegion->length);
+  }
+  inputStream_.reset();
+  bufferStart_ = nullptr;
+  bufferEnd_ = nullptr;
+}
+
 PageHeader PageReader::readPageHeader() {
   TestValue::adjust(
       "facebook::velox::parquet::PageReader::readPageHeader", this);
   PageHeader pageHeader;
+  const auto initialDataBytes = bufferStart_ && bufferEnd_
+      ? static_cast<size_t>(bufferEnd_ - bufferStart_)
+      : 0;
   auto result = thrift::deserialize(
       &pageHeader,
       inputStream_.get(),
       reinterpret_cast<const uint8_t*>(bufferStart_),
-      bufferEnd_ - bufferStart_);
-  pageDataStart_ = pageStart_ + result.readBytes;
+      initialDataBytes);
+  pageDataStart_ = checkedPlus(
+      pageStart_, static_cast<uint64_t>(result.readBytes), "page header end");
 
   // Keep the coalesced buffer alive so deserialized pageHeader data and
   // 'remainedData' remain valid. Only replace 'thriftBuffer_' when the
@@ -1000,6 +1248,9 @@ void PageReader::skip(int64_t numRows) {
   }
   firstUnvisited_ += numRows;
 
+  if (dataPageSkipped_) {
+    return;
+  }
   if (toSkip == 0) {
     return;
   }
@@ -1064,6 +1315,10 @@ void PageReader::skipNullsOnly(int64_t numRows) {
     toSkip = firstUnvisited_ - rowOfPage_;
   } else {
     firstUnvisited_ += numRows;
+  }
+
+  if (dataPageSkipped_) {
+    return;
   }
 
   // Skip nulls

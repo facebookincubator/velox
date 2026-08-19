@@ -18,14 +18,18 @@
 
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/ITypedExpr.h"
+#include "velox/dwio/common/RowIntervalSet.h"
+
+#include <optional>
+#include <vector>
 
 namespace facebook::velox::common {
 
 class ScanSpec;
 
-/// Represent a logical combination of filters that can be used in row group
-/// skipping.  Filters are put at leaf nodes and internal nodes represents
-/// logical conjunctions between them.
+/// Represent a logical combination of filters that can be used in row group /
+/// data page skipping.  Filters are put at leaf nodes and internal nodes
+/// represents logical conjunctions between them.
 class MetadataFilter {
  public:
   class LeafNode;
@@ -45,6 +49,14 @@ class MetadataFilter {
       std::vector<std::pair<const LeafNode*, std::vector<uint64_t>>>&
           leafNodeResults,
       std::vector<uint64_t>& finalResult);
+
+  /// Evaluates page-level rejection intervals without mutating leaf inputs.
+  /// AND combines known rejections with union; OR combines them with
+  /// intersection and returns unknown when any child is missing.
+  std::optional<dwio::common::RowIntervalSet> evalRejectedRows(
+      const std::vector<
+          std::pair<const LeafNode*, dwio::common::RowIntervalSet>>&
+          leafNodeResults) const;
 
   std::string toString() const;
 

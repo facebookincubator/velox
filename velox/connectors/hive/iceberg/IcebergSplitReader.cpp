@@ -783,7 +783,7 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
 
   auto* pool = connectorQueryCtx_->memoryPool();
 
-  if (rowsScanned > 0 &&
+  if (output && output->size() > 0 &&
       (lastUpdatedSeqNumOutputIndex_.has_value() ||
        rowIdOutputIndex_.has_value() ||
        targetTableRowIdOutputIndex_.has_value())) {
@@ -843,7 +843,7 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
           "$target_table_row_id must be a 4-field ROW; got {}",
           rowIdType->toString());
       const auto& rowIdRowType = rowIdType->asRow();
-      const auto numRows = static_cast<vector_size_t>(rowsScanned);
+      const auto numRows = rowOutput->size();
 
       auto filePathConst = BaseVector::createConstant(
           rowIdRowType.childAt(0),
@@ -880,10 +880,13 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
               numRows,
               std::move(children));
     }
+  }
 
-    // Strip the injected row-number column (always last, allocated when
-    // useRowNumberColumn_ is true). Done once for both row-id paths.
-    if (useRowNumberColumn_) {
+  // Strip the injected row-number column (always last, allocated when
+  // useRowNumberColumn_ is true), including zero-row rejected chunks.
+  if (useRowNumberColumn_ && output && output->type()->isRow()) {
+    auto* rowOutput = output->asUnchecked<RowVector>();
+    if (rowOutput->childrenSize() == readerOutputType_->size() + 1) {
       auto children = rowOutput->children();
       children.pop_back();
       output = std::make_shared<RowVector>(
@@ -898,7 +901,7 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
   // Apply equality deletes after reading base data. Unlike positional deletes
   // (which set bits before reading), equality deletes require the data values
   // to be available for comparison.
-  if (rowsScanned > 0 && !equalityDeleteFileReaders_.empty()) {
+  if (output && output->size() > 0 && !equalityDeleteFileReaders_.empty()) {
     auto outputRowVector = std::dynamic_pointer_cast<RowVector>(output);
     VELOX_CHECK_NOT_NULL(
         outputRowVector, "Output must be a RowVector for equality deletes.");

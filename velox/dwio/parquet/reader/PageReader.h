@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "velox/common/compression/Compression.h"
 #include "velox/dwio/common/BitConcatenation.h"
 #include "velox/dwio/common/DirectDecoder.h"
@@ -25,9 +27,14 @@
 #include "velox/dwio/parquet/reader/BooleanDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaByteArrayDecoder.h"
+#include "velox/dwio/parquet/reader/PagePruningPlan.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/reader/RleBpDataDecoder.h"
 #include "velox/dwio/parquet/reader/StringDecoder.h"
+
+namespace facebook::velox::dwio::common {
+class BufferedInput;
+} // namespace facebook::velox::dwio::common
 
 namespace facebook::velox::parquet {
 
@@ -63,6 +70,51 @@ class PageReader {
         stats_(stats),
         sessionTimezone_(sessionTimezone) {
     type_->makeLevelInfo(leafInfo_);
+  }
+
+  PageReader(
+      std::vector<std::unique_ptr<dwio::common::SeekableInputStream>>&&
+          pageStreams,
+      std::unique_ptr<dwio::common::SeekableInputStream> prefixStream,
+      memory::MemoryPool& pool,
+      ParquetTypeWithIdPtr fileType,
+      common::CompressionKind codec,
+      int64_t chunkSize,
+      dwio::common::ColumnRuntimeStats& stats,
+      const tz::TimeZone* sessionTimezone,
+      const ColumnPageReadPlan* pagePlan,
+      RowGroupPagePruningPlanPtr pageGroupPlan = nullptr,
+      std::unique_ptr<dwio::common::SeekableInputStream> fallbackStream =
+          nullptr,
+      dwio::common::BufferedInput* fallbackInput = nullptr,
+      std::optional<common::Region> fallbackRegion = std::nullopt)
+      : pool_(pool),
+        pageStreams_(std::move(pageStreams)),
+        prefixStream_(std::move(prefixStream)),
+        type_(std::move(fileType)),
+        maxRepeat_(type_->maxRepeat_),
+        maxDefine_(type_->maxDefine_),
+        isTopLevel_(maxRepeat_ == 0 && maxDefine_ <= 1),
+        codec_(codec),
+        chunkSize_(chunkSize),
+        nullConcatenation_(pool_),
+        stats_(stats),
+        sessionTimezone_(sessionTimezone),
+        fallbackStream_(std::move(fallbackStream)),
+        fallbackInput_(fallbackInput),
+        fallbackRegion_(std::move(fallbackRegion)) {
+    type_->makeLevelInfo(leafInfo_);
+    if (pageGroupPlan) {
+      pageGroupPlan_ = std::move(pageGroupPlan);
+      const auto planColumn = pageGroupPlan_->columns.find(type_->column());
+      VELOX_CHECK(
+          planColumn != pageGroupPlan_->columns.end(),
+          "Missing immutable page plan for column {}",
+          type_->column());
+      pagePlan_ = &planColumn->second;
+    } else if (pagePlan != nullptr) {
+      pagePlan_ = pagePlan;
+    }
   }
 
   // This PageReader constructor is for unit test only.
@@ -196,6 +248,9 @@ class PageReader {
   // allowed for non-top level columns.
   void seekToPage(int64_t row);
 
+  // Parses the prefix stream before the first indexed data page.
+  void readPrefix();
+
   // Preloads the repdefs for the column chunk. To avoid preloading,
   // would need a way too clone the input stream so that one stream
   // reads ahead for repdefs and the other tracks the data. This is
@@ -227,6 +282,9 @@ class PageReader {
   // Handles both refiller and non-refiller cases.
   void updateBufferPointersAfterDeserialization(
       const thrift::DeserializeResult& result);
+
+  // Switches to the whole column chunk after an indexed header mismatch.
+  bool fallbackToWholeChunk();
 
   static inline const char* toCharPtr(const uint8_t* ptr) {
     return reinterpret_cast<const char*>(ptr);
@@ -407,6 +465,8 @@ class PageReader {
   memory::MemoryPool& pool_;
 
   std::unique_ptr<dwio::common::SeekableInputStream> inputStream_;
+  std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> pageStreams_;
+  std::unique_ptr<dwio::common::SeekableInputStream> prefixStream_;
   ParquetTypeWithIdPtr type_;
   const int32_t maxRepeat_;
   const int32_t maxDefine_;
@@ -470,6 +530,9 @@ class PageReader {
 
   // Number of rows in current page.
   int32_t numRowsInPage_{0};
+
+  // True if the current page is skipped.
+  bool dataPageSkipped_{false};
 
   // Number of repdefs in page. Not the same as number of rows for a non-top
   // level column.
@@ -554,6 +617,17 @@ class PageReader {
   std::unique_ptr<DeltaLengthByteArrayDecoder> deltaLengthByteArrDecoder_;
   std::unique_ptr<RleBpDataDecoder> rleBooleanDecoder_;
   // Add decoders for other encodings here.
+
+  // Immutable physical page selection published by the row-group planner.
+  RowGroupPagePruningPlanPtr pageGroupPlan_;
+  const ColumnPageReadPlan* pagePlan_{nullptr};
+  std::unique_ptr<dwio::common::SeekableInputStream> fallbackStream_;
+  dwio::common::BufferedInput* fallbackInput_{nullptr};
+  std::optional<common::Region> fallbackRegion_;
+  uint32_t nextDataPageOrdinal_{0};
+  int32_t currentRunIndex_{-1};
+  uint64_t currentRunLength_{0};
+  bool prefixRead_{false};
 };
 
 FOLLY_ALWAYS_INLINE dwio::common::compression::CompressionOptions

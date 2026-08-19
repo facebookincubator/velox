@@ -46,6 +46,9 @@ class ColumnChunkMetaDataPtr {
   /// ranges) for this column chunk.
   bool hasOffsetIndex() const;
 
+  /// Check the presence of both column and offset index page offsets in the
+  /// ColumnChunk metadata.
+  bool hasColumnAndOffsetIndexOffset() const;
   /// Return the ColumnChunk statistics. Timestamp columns require
   /// convertedType and logicalType to produce min/max statistics.
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
@@ -94,6 +97,18 @@ class ColumnChunkMetaDataPtr {
   /// column data in this row group.
   /// This information is optional and may be 0 if omitted.
   int64_t totalUncompressedSize() const;
+
+  /// Returns the file byte offset of this column chunk's offset index.
+  int64_t offsetIndexOffset() const;
+
+  /// Returns the length in bytes of this column chunk's offset index.
+  int32_t offsetIndexLength() const;
+
+  /// Returns the file byte offset of this column chunk's column index.
+  int64_t columnIndexOffset() const;
+
+  /// Returns the length in bytes of this column chunk's column index.
+  int32_t columnIndexLength() const;
 
   /// Returns the estimated total bytes held by this column's thrift
   /// representation: sizeof(thrift::ColumnChunk) plus every dynamically
@@ -184,6 +199,9 @@ class FileMetaDataPtr {
 
   /// Return the Parquet writer created_by string.
   std::string createdBy() const;
+
+  /// Returns whether the leaf column has a supported type-defined order.
+  bool hasTypeDefinedColumnOrder(uint32_t column) const;
 
   /// Returns the estimated total heap memory held by this file's thrift
   /// representation: sizeof(thrift::FileMetaData) plus every dynamically

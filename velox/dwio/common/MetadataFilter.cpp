@@ -26,7 +26,11 @@ namespace facebook::velox::common {
 namespace {
 using LeafResults =
     folly::F14FastMap<const MetadataFilter::LeafNode*, std::vector<uint64_t>*>;
-}
+
+using LeafIntervalResults = folly::F14FastMap<
+    const MetadataFilter::LeafNode*,
+    const dwio::common::RowIntervalSet*>;
+} // namespace
 
 struct MetadataFilter::Node {
   static std::unique_ptr<Node> fromExpression(
@@ -36,6 +40,8 @@ struct MetadataFilter::Node {
   virtual ~Node() = default;
   virtual void addToScanSpec(ScanSpec&) const = 0;
   virtual uint64_t* eval(LeafResults&, int size) const = 0;
+  virtual std::optional<dwio::common::RowIntervalSet> evalRejectedRows(
+      const LeafIntervalResults& leafResults) const = 0;
   virtual std::string toString() const = 0;
 };
 
@@ -53,6 +59,14 @@ class MetadataFilter::LeafNode : public Node {
       return it->second->data();
     }
     return nullptr;
+  }
+
+  std::optional<dwio::common::RowIntervalSet> evalRejectedRows(
+      const LeafIntervalResults& leafResults) const override {
+    if (auto it = leafResults.find(this); it != leafResults.end()) {
+      return *it->second;
+    }
+    return std::nullopt;
   }
 
   const Subfield& field() const {
@@ -136,6 +150,23 @@ struct MetadataFilter::AndNode final : ConditionNode {
     return result;
   }
 
+  std::optional<dwio::common::RowIntervalSet> evalRejectedRows(
+      const LeafIntervalResults& leafResults) const override {
+    std::optional<dwio::common::RowIntervalSet> result;
+    for (const auto& arg : args_) {
+      auto current = arg->evalRejectedRows(leafResults);
+      if (!current.has_value()) {
+        continue;
+      }
+      if (!result.has_value()) {
+        result = std::move(current);
+      } else {
+        result = dwio::common::RowIntervalSet::setUnion(*result, *current);
+      }
+    }
+    return result;
+  }
+
   std::string toString() const final {
     return ToStringImpl("and(");
   }
@@ -155,6 +186,23 @@ struct MetadataFilter::OrNode final : ConditionNode {
         result = a;
       } else {
         bits::andBits(result, a, 0, size);
+      }
+    }
+    return result;
+  }
+
+  std::optional<dwio::common::RowIntervalSet> evalRejectedRows(
+      const LeafIntervalResults& leafResults) const override {
+    std::optional<dwio::common::RowIntervalSet> result;
+    for (const auto& arg : args_) {
+      auto current = arg->evalRejectedRows(leafResults);
+      if (!current.has_value()) {
+        return std::nullopt;
+      }
+      if (!result.has_value()) {
+        result = std::move(current);
+      } else {
+        result = dwio::common::RowIntervalSet::intersection(*result, *current);
       }
     }
     return result;
@@ -262,6 +310,23 @@ void MetadataFilter::eval(
   if (auto* combined = root_->eval(leafResults, bitCount)) {
     bits::orBits(finalResult.data(), combined, 0, bitCount);
   }
+}
+
+std::optional<dwio::common::RowIntervalSet> MetadataFilter::evalRejectedRows(
+    const std::vector<std::pair<const LeafNode*, dwio::common::RowIntervalSet>>&
+        leafNodeResults) const {
+  if (!root_) {
+    return std::nullopt;
+  }
+
+  LeafIntervalResults leafResults;
+  for (const auto& [leaf, result] : leafNodeResults) {
+    VELOX_CHECK(
+        leafResults.emplace(leaf, &result).second,
+        "Duplicate results: {}",
+        leaf->field().toString());
+  }
+  return root_->evalRejectedRows(leafResults);
 }
 
 std::string MetadataFilter::toString() const {

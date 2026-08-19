@@ -52,6 +52,7 @@ velox_add_library(
   Range.cpp
   Reader.cpp
   ReaderFactory.cpp
+  RowIntervalSet.cpp
   ScanSpec.cpp
   SeekableInputStream.cpp
   SelectiveByteRleColumnReader.cpp
@@ -114,6 +115,7 @@ velox_add_library(
   Range.h
   Reader.h
   ReaderFactory.h
+  RowIntervalSet.h
   Retry.h
   ScanSpec.h
   SeekableInputStream.h

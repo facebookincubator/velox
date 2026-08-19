@@ -17,6 +17,8 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <cstdint>
+#include <limits>
 #include <ostream>
 #include <string_view>
 
@@ -28,6 +30,11 @@
 #include "velox/dwio/parquet/thrift/gen-cpp2/parquet_types_custom_protocol.h"
 
 namespace facebook::velox::parquet::thrift {
+
+inline constexpr int32_t kThriftStringSizeLimit = 100 * 1000 * 1000;
+// Keep page-index vectors bounded before decoded-page accounting runs.
+inline constexpr int32_t kThriftPageIndexContainerSizeLimit = 256 * 1024;
+
 template <
     typename Enum,
     bool IsEnum =
@@ -262,11 +269,12 @@ class ThriftStreamRefiller {
 };
 
 template <typename ThriftStruct>
-DeserializeResult deserialize(
+DeserializeResult deserializeImpl(
     ThriftStruct* thriftStruct,
     facebook::velox::dwio::common::SeekableInputStream* input,
     const uint8_t* initialData,
-    size_t initialDataBytes) {
+    size_t initialDataBytes,
+    bool bounded) {
   uint64_t totalReadNs{0};
   std::unique_ptr<folly::IOBuf> lastRefillBuffer;
   bool usedRefiller = false;
@@ -297,6 +305,10 @@ DeserializeResult deserialize(
       lastRefillBuffer);
 
   apache::thrift::CompactV1ProtocolReaderWithRefill reader(std::ref(refiller));
+  if (bounded) {
+    reader.setStringSizeLimit(kThriftStringSizeLimit);
+    reader.setContainerSizeLimit(kThriftPageIndexContainerSizeLimit);
+  }
   folly::IOBuf initialBuffer(
       folly::IOBuf::WRAP_BUFFER, initialData, initialDataBytes);
 
@@ -326,6 +338,26 @@ DeserializeResult deserialize(
   } catch (const std::exception& e) {
     VELOX_FAIL("Thrift deserialize error: {}", e.what());
   }
+}
+
+template <typename ThriftStruct>
+DeserializeResult deserializePageIndex(
+    ThriftStruct* thriftStruct,
+    facebook::velox::dwio::common::SeekableInputStream* input,
+    const uint8_t* initialData,
+    size_t initialDataBytes) {
+  return deserializeImpl(
+      thriftStruct, input, initialData, initialDataBytes, true);
+}
+
+template <typename ThriftStruct>
+DeserializeResult deserialize(
+    ThriftStruct* thriftStruct,
+    facebook::velox::dwio::common::SeekableInputStream* input,
+    const uint8_t* initialData,
+    size_t initialDataBytes) {
+  return deserializeImpl(
+      thriftStruct, input, initialData, initialDataBytes, false);
 }
 
 template <typename ThriftStruct>

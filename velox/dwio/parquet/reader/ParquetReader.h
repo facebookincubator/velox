@@ -21,8 +21,10 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/common/RowIntervalSet.h"
 #include "velox/dwio/parquet/common/ParquetConfig.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
+#include "velox/dwio/parquet/reader/PagePruningPlan.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -54,6 +56,14 @@ class ParquetReaderOptions : public dwio::common::FormatSpecificOptions {
     return allowInt32Narrowing_;
   }
 
+  void setFilterColumnIndexEnabled(bool enabled) {
+    filterColumnIndexEnabled_ = enabled;
+  }
+
+  bool filterColumnIndexEnabled() const {
+    return filterColumnIndexEnabled_;
+  }
+
   void setFooterMemoryTrackingThreshold(uint64_t threshold) {
     footerMemoryTrackingThreshold_ = threshold;
   }
@@ -66,6 +76,11 @@ class ParquetReaderOptions : public dwio::common::FormatSpecificOptions {
   /// Allows reading INT32 physical columns as narrower integer types.
   bool allowInt32Narrowing_{
       ParquetConfig::kAllowInt32NarrowingSessionProperty::defaultValue};
+
+  /// Enables page-index (column and offset index) based data page pruning
+  /// when pushdown filters are present.
+  bool filterColumnIndexEnabled_{
+      ParquetConfig::kFilterColumnIndexEnabledSessionProperty::defaultValue};
 
   /// Serialized footer size threshold above which heap tracking is enabled.
   uint64_t footerMemoryTrackingThreshold_{

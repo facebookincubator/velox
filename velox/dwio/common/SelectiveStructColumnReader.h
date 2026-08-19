@@ -36,6 +36,9 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
 
   uint64_t skip(uint64_t numValues) override;
 
+  /// Advances the root reader by a batch and invalidates existing lazy loads.
+  void skipBatch(uint64_t numValues);
+
   void next(uint64_t numValues, VectorPtr& result, const Mutation*) override;
 
   void filterRowGroups(

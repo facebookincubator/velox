@@ -86,13 +86,15 @@ void skipUnreadLengthsAndNulls(dwio::common::SelectiveColumnReader& reader) {
 void enqueueChildren(
     dwio::common::SelectiveColumnReader* reader,
     uint32_t index,
-    dwio::common::BufferedInput& input) {
+    dwio::common::BufferedInput& input,
+    const RowGroupPagePruningPlanPtr& pagePlan) {
   auto children = reader->children();
   if (children.empty()) {
-    return reader->formatData().as<ParquetData>().enqueueRowGroup(index, input);
+    return reader->formatData().as<ParquetData>().enqueueRowGroup(
+        index, input, pagePlan);
   }
   for (auto* child : children) {
-    enqueueChildren(child, index, input);
+    enqueueChildren(child, index, input, pagePlan);
   }
 }
 } // namespace
@@ -142,8 +144,9 @@ MapColumnReader::MapColumnReader(
 
 void MapColumnReader::enqueueRowGroup(
     uint32_t index,
-    dwio::common::BufferedInput& input) {
-  enqueueChildren(this, index, input);
+    dwio::common::BufferedInput& input,
+    const RowGroupPagePruningPlanPtr& pagePlan) {
+  enqueueChildren(this, index, input, pagePlan);
 }
 
 void MapColumnReader::seekToRowGroup(int64_t index) {
@@ -225,6 +228,12 @@ void MapColumnReader::filterRowGroups(
   // empty placeholder to avoid incorrect calling on parent's impl
 }
 
+bool MapColumnReader::collectIndexPageInfoMap(
+    uint32_t index,
+    PageIndexInfoMap& map) {
+  return false;
+}
+
 ListColumnReader::ListColumnReader(
     const dwio::common::ColumnReaderOptions& columnReaderOptions,
     const TypePtr& requestedType,
@@ -250,8 +259,9 @@ ListColumnReader::ListColumnReader(
 
 void ListColumnReader::enqueueRowGroup(
     uint32_t index,
-    dwio::common::BufferedInput& input) {
-  enqueueChildren(this, index, input);
+    dwio::common::BufferedInput& input,
+    const RowGroupPagePruningPlanPtr& pagePlan) {
+  enqueueChildren(this, index, input, pagePlan);
 }
 
 void ListColumnReader::seekToRowGroup(int64_t index) {
@@ -330,6 +340,12 @@ void ListColumnReader::filterRowGroups(
     const dwio::common::StatsContext& context,
     dwio::common::FormatData::FilterRowGroupsResult& result) const {
   // empty placeholder to avoid incorrect calling on parent's impl
+}
+
+bool ListColumnReader::collectIndexPageInfoMap(
+    uint32_t index,
+    PageIndexInfoMap& map) {
+  return false;
 }
 
 } // namespace facebook::velox::parquet
