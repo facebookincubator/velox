@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include <numeric>
-
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
+
+#include <numeric>
 
 #include "velox/dwio/common/ColumnLoader.h"
 
