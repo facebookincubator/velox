@@ -1413,6 +1413,76 @@ TEST_F(VectorHasherTest, stringFilterDistinctOverflow) {
   ASSERT_TRUE(filter == nullptr);
 }
 
+TEST_F(VectorHasherTest, serializeStateRoundTripStringDistinctValues) {
+  std::vector<std::string> strings = {
+      "short",
+      "this is a long string value",
+      "medium",
+      "another long string value",
+      "short"};
+
+  auto vector = makeFlatVector<StringView>(
+      strings.size(),
+      [&strings](vector_size_t row) { return StringView(strings[row]); });
+
+  auto hasher = exec::VectorHasher::create(VARCHAR(), 0);
+  SelectivityVector rows(vector->size());
+  raw_vector<uint64_t> hashes(vector->size());
+  hasher->decode(*vector, rows);
+  hasher->computeValueIds(rows, hashes);
+  hasher->enableValueIds(1, 0);
+
+  auto serialized = hasher->serializeState();
+
+  auto restored = exec::VectorHasher::create(VARCHAR(), 0);
+  restored->deserializeState(serialized);
+
+  EXPECT_EQ(restored->numUniqueValues(), 4);
+
+  auto filter = restored->getFilter(false);
+  ASSERT_NE(filter, nullptr);
+  auto bytesValues = dynamic_cast<common::BytesValues*>(filter.get());
+  ASSERT_NE(bytesValues, nullptr);
+  EXPECT_TRUE(bytesValues->testBytes(strings[0].data(), strings[0].size()));
+  EXPECT_TRUE(bytesValues->testBytes(strings[1].data(), strings[1].size()));
+  EXPECT_TRUE(bytesValues->testBytes(strings[2].data(), strings[2].size()));
+  EXPECT_TRUE(bytesValues->testBytes(strings[3].data(), strings[3].size()));
+  EXPECT_FALSE(bytesValues->testBytes("missing", 7));
+}
+
+TEST_F(VectorHasherTest, serializeStateRoundTripBloomFilter) {
+  auto hasher = exec::VectorHasher::create(BIGINT(), 0);
+
+  constexpr uint32_t numRows = 10'000;
+  constexpr int numBatches = 15;
+  SelectivityVector rows(numRows);
+  raw_vector<uint64_t> hashes(numRows);
+  for (int batch = 0; batch < numBatches; ++batch) {
+    auto vector = makeFlatVector<int64_t>(
+        numRows, [batch](vector_size_t row) { return batch * numRows + row; });
+    hasher->decode(*vector, rows);
+    hasher->computeValueIds(rows, hashes);
+  }
+
+  ASSERT_TRUE(hasher->supportsBloomFilter());
+
+  auto filter = std::make_shared<common::BigintValuesUsingBloomFilter>(
+      numRows * numBatches, false);
+  for (int64_t value : {1, 17, 1024, 65536}) {
+    filter->insert(value);
+  }
+  hasher->setBloomFilter(filter);
+
+  auto serialized = hasher->serializeState();
+
+  auto restored = exec::VectorHasher::create(BIGINT(), 0);
+  restored->deserializeState(serialized);
+
+  auto restoredFilter = restored->getBloomFilter();
+  ASSERT_NE(restoredFilter, nullptr);
+  EXPECT_TRUE(restoredFilter->testingEquals(*filter));
+}
+
 DEBUG_ONLY_TEST_F(VectorHasherTest, customComparisonNoValueIds) {
   // Test that custom comparison types cannot use value IDs for optimization.
   auto data = makeRowVector({makeNullableFlatVector<int64_t>(
