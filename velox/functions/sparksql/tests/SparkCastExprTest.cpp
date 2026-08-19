@@ -575,6 +575,49 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             {"1970-01-01 00:00:00", "2000-01-01 12:21:56"}, VARCHAR()));
   }
 
+  void testDateToTimestampUtc() {
+    // Day 0 = 1970-01-01.
+    testCast(
+        makeFlatVector<int32_t>({0}, DATE()),
+        makeFlatVector<Timestamp>({Timestamp(0, 0)}, TIMESTAMP_UTC()));
+    // Day 18262 = 2020-01-01.
+    testCast(
+        makeFlatVector<int32_t>({18262}, DATE()),
+        makeFlatVector<Timestamp>({Timestamp(1577836800, 0)}, TIMESTAMP_UTC()));
+
+    // Timezone must not affect the result.
+    SCOPE_EXIT {
+      setTimezone("");
+    };
+    setTimezone("America/Los_Angeles");
+    testCast(
+        makeFlatVector<int32_t>({18262}, DATE()),
+        makeFlatVector<Timestamp>({Timestamp(1577836800, 0)}, TIMESTAMP_UTC()));
+  }
+
+  void testTimestampUtcToDate() {
+    // 2020-01-01 → day 18262.
+    testCast(
+        makeFlatVector<Timestamp>({Timestamp(1577836800, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({18262}, DATE()));
+    // Epoch → 1970-01-01 (day 0).
+    testCast(
+        makeFlatVector<Timestamp>({Timestamp(0, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({0}, DATE()));
+
+    // Kolkata (UTC+5:30) would shift -19800s to day 0; UTC gives day -1.
+    SCOPE_EXIT {
+      setTimezone("");
+    };
+    setTimezone("Asia/Kolkata");
+    testCast(
+        makeFlatVector<Timestamp>({Timestamp(-19800, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({-1}, DATE()));
+    testCast(
+        makeFlatVector<Timestamp>({Timestamp(1577836800, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({18262}, DATE()));
+  }
+
   void testInvalidDate() {
     testInvalidCast<int8_t>(
         "date", {12}, "Cast from TINYINT to DATE is not supported", TINYINT());
@@ -2291,6 +2334,22 @@ TEST_F(SparkCastExprTestAnsiOff, overflow) {
 
 TEST_F(SparkCastExprTestAnsiOff, recursiveTryCast) {
   testRecursiveTryCast();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, dateToTimestampUtc) {
+  testDateToTimestampUtc();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, dateToTimestampUtc) {
+  testDateToTimestampUtc();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, timestampUtcToDate) {
+  testTimestampUtcToDate();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampUtcToDate) {
+  testTimestampUtcToDate();
 }
 
 // Verify that casting DATE to TIMESTAMP in a timezone where midnight falls in
