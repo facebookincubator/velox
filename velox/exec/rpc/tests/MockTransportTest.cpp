@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-/// MockRPCClientTest - Tests the mock RPC backend.
+/// MockTransportTest - Tests the mock RPC backend.
 ///
 /// TESTS:
 /// - basicCallAndError: Single call succeeds; error preserves rowId
 /// - batchCallAndError: Batch call returns correct count; errors preserve
 /// rowIds
 
-#include "velox/common/rpc/clients/MockRPCClient.h"
+#include "velox/common/rpc/clients/MockTransport.h"
 
 #include <folly/futures/Future.h>
 #include <gtest/gtest.h>
@@ -29,16 +29,15 @@
 namespace facebook::velox::rpc {
 namespace {
 
-class MockRPCClientTest : public testing::Test {};
+class MockTransportTest : public testing::Test {};
 
-TEST_F(MockRPCClientTest, basicCallAndError) {
+TEST_F(MockTransportTest, basicCallAndError) {
   // Success path
-  MockRPCClient client(std::chrono::milliseconds(1), 0.0);
+  MockTransport client(std::chrono::milliseconds(1), 0.0);
 
   RPCRequest request;
   request.rowId = 42;
-  request.payload = "What is the capital of France?";
-  request.options[std::string(rpc::keys::kModel)] = "test-model";
+  request.originalRowIndex = 42;
 
   auto response = client.call(request).get();
 
@@ -48,11 +47,11 @@ TEST_F(MockRPCClientTest, basicCallAndError) {
   EXPECT_EQ(client.callCount(), 1);
 
   // Error path: rowId must be preserved
-  MockRPCClient errorClient(std::chrono::milliseconds(1), 1.0);
+  MockTransport errorClient(std::chrono::milliseconds(1), 1.0);
 
   RPCRequest errorRequest;
   errorRequest.rowId = 12345;
-  errorRequest.payload = "Test";
+  errorRequest.originalRowIndex = 12345;
 
   auto errorResponse = errorClient.call(errorRequest).get();
 
@@ -60,15 +59,15 @@ TEST_F(MockRPCClientTest, basicCallAndError) {
   EXPECT_EQ(errorResponse.rowId, 12345);
 }
 
-TEST_F(MockRPCClientTest, batchCallAndError) {
+TEST_F(MockTransportTest, batchCallAndError) {
   // Success path
-  MockRPCClient client(std::chrono::milliseconds(1), 0.0);
+  MockTransport client(std::chrono::milliseconds(1), 0.0);
 
   std::vector<RPCRequest> requests;
   for (int i = 0; i < 5; i++) {
     RPCRequest req;
     req.rowId = i;
-    req.payload = "Prompt " + std::to_string(i);
+    req.originalRowIndex = i;
     requests.push_back(std::move(req));
   }
 
@@ -82,13 +81,13 @@ TEST_F(MockRPCClientTest, batchCallAndError) {
   EXPECT_EQ(client.callCount(), 5);
 
   // Error path: rowIds must be preserved
-  MockRPCClient errorClient(std::chrono::milliseconds(1), 1.0);
+  MockTransport errorClient(std::chrono::milliseconds(1), 1.0);
 
   std::vector<RPCRequest> errorRequests;
   for (int i = 0; i < 5; i++) {
     RPCRequest req;
     req.rowId = 100 + i;
-    req.payload = "Test " + std::to_string(i);
+    req.originalRowIndex = 100 + i;
     errorRequests.push_back(std::move(req));
   }
 

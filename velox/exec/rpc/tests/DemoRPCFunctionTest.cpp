@@ -84,9 +84,10 @@ TEST_F(DemoRPCFunctionTest, endToEnd) {
   auto* flat = result->asFlatVector<StringView>();
   EXPECT_FALSE(flat->isNullAt(0));
   EXPECT_FALSE(flat->isNullAt(1));
-  // MockRPCClient returns "Response for: <payload>".
-  EXPECT_EQ(flat->valueAt(0).str(), "Response for: hello world");
-  EXPECT_EQ(flat->valueAt(1).str(), "Response for: test prompt");
+  // RPCRequest is correlation-only, so MockTransport keys its response on the
+  // row id rather than echoing the prompt.
+  EXPECT_EQ(flat->valueAt(0).str(), "Response for row 0");
+  EXPECT_EQ(flat->valueAt(1).str(), "Response for row 1");
 }
 
 TEST_F(DemoRPCFunctionTest, nullInput) {

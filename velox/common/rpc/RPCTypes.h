@@ -16,7 +16,8 @@
 
 #pragma once
 
-#include <map>
+#include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -24,23 +25,6 @@
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::rpc {
-
-/// Well-known option key constants for RPCRequest.options.
-/// Use these instead of raw string literals to prevent typo bugs.
-namespace keys {
-inline constexpr std::string_view kModel = "model";
-inline constexpr std::string_view kTemperature = "temperature";
-inline constexpr std::string_view kMaxTokens = "max_tokens";
-inline constexpr std::string_view kSystemPrompt = "systemPrompt";
-inline constexpr std::string_view kJsonSchema = "json_schema";
-inline constexpr std::string_view kMetagenKey = "metagen_key";
-inline constexpr std::string_view kTierOverride = "tier_override";
-inline constexpr std::string_view kCatToken = "cat_token";
-inline constexpr std::string_view kPollIntervalMs = "poll_interval_ms";
-inline constexpr std::string_view kOwnerUnixname = "owner_unixname";
-inline constexpr std::string_view kIsQuery = "is_query";
-inline constexpr std::string_view kPrefixDim = "prefix_dim";
-} // namespace keys
 
 /// Streaming mode for RPC execution.
 /// Controls how RPC results are emitted to downstream operators.
@@ -86,12 +70,6 @@ struct RPCRequest {
   /// response so that buildOutput() produces SQL NULL for this row.
   /// Replaces the former "__null_input" magic string in options.
   bool isNull{false};
-
-  /// The request payload (opaque to the framework).
-  std::string payload;
-
-  /// Type-safe options for backend-specific parameters.
-  std::map<std::string, std::string> options;
 };
 
 /// Typed cause of an RPC failure, carried alongside the human-readable error
@@ -138,9 +116,6 @@ struct RPCResponse {
 
   /// The response result (opaque to the framework).
   std::string result;
-
-  /// Type-safe metadata from the backend.
-  std::map<std::string, std::string> metadata;
 
   /// Error message if the request failed.
   std::optional<std::string> error;
