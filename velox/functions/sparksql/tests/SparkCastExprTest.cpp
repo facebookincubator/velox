@@ -1959,24 +1959,30 @@ TEST_F(SparkCastExprTestAnsiOn, stringToTime) {
 TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleInvalidThrows) {
   // Invalid format strings throw in ANSI mode. The message follows the standard
   // Velox Spark cast convention: "Cannot cast VARCHAR '<v>' to <T>. ...".
-  for (const auto& type : {"real", "double"}) {
+  for (const auto& type : {REAL(), DOUBLE()}) {
     for (const auto& value : invalidStringToRealDoubleInputs()) {
-      SCOPED_TRACE(fmt::format("cast('{}' as {})", value, type));
-      auto input = makeRowVector({makeFlatVector<std::string>({value})});
-      VELOX_ASSERT_THROW(
-          (evaluate(fmt::format("cast(c0 as {})", type), input)),
-          "Cannot cast");
+      SCOPED_TRACE(fmt::format("cast('{}' as {})", value, type->toString()));
+      testThrow<std::string>(
+          VARCHAR(),
+          type,
+          {value},
+          fmt::format(
+              "Cannot cast VARCHAR '{}' to {}", value, type->toString()));
     }
   }
 
-  // Empty and whitespace-only strings (trimmed to empty) throw "Empty string".
-  for (const auto& type : {"real", "double"}) {
+  // Empty and whitespace-only strings are trimmed to empty before throwing.
+  for (const auto& type : {REAL(), DOUBLE()}) {
     for (const auto& value : {"", "   ", "\t\n"}) {
-      SCOPED_TRACE(fmt::format("cast('{}' as {})", value, type));
-      auto input = makeRowVector({makeFlatVector<std::string>({value})});
-      VELOX_ASSERT_THROW(
-          (evaluate(fmt::format("cast(c0 as {})", type), input)),
-          "Empty string");
+      SCOPED_TRACE(fmt::format("cast('{}' as {})", value, type->toString()));
+      testThrow<std::string>(
+          VARCHAR(),
+          type,
+          {value},
+          fmt::format(
+              "Cannot cast VARCHAR '{}' to {}. Empty string",
+              value,
+              type->toString()));
     }
   }
 }
@@ -1989,19 +1995,22 @@ TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleMixedRows) {
   // A vector mixing null, valid, invalid, and special values: CAST throws on
   // the first invalid value, while TRY_CAST nulls invalid rows and preserves
   // the rest, both with ANSI on.
-  auto input = makeRowVector({makeNullableFlatVector<std::string>(
-      {std::nullopt, "1.5", "abc", "nan"})});
+  const std::vector<std::optional<std::string>> values{
+      std::nullopt, "1.5", "abc", "nan"};
+  auto input = makeRowVector({makeNullableFlatVector<std::string>(values)});
 
   {
     SCOPED_TRACE("real");
-    VELOX_ASSERT_THROW((evaluate("cast(c0 as real)", input)), "Cannot cast");
+    testThrow<std::string>(
+        VARCHAR(), REAL(), values, "Cannot cast VARCHAR 'abc' to REAL");
     auto expected =
         makeNullableFlatVector<float>({std::nullopt, 1.5f, std::nullopt, kNan});
     assertEqualVectors(expected, evaluate("try_cast(c0 as real)", input));
   }
   {
     SCOPED_TRACE("double");
-    VELOX_ASSERT_THROW((evaluate("cast(c0 as double)", input)), "Cannot cast");
+    testThrow<std::string>(
+        VARCHAR(), DOUBLE(), values, "Cannot cast VARCHAR 'abc' to DOUBLE");
     auto expected = makeNullableFlatVector<double>(
         {std::nullopt,
          1.5,
