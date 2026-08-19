@@ -95,6 +95,43 @@ class DeserializerSkipTest : public ::testing::Test {
     return {std::move(serialized), std::move(schema)};
   }
 
+  std::string makeTabletBatch(std::string_view serialized, RowRange rowRange) {
+    const DeserializerOptions parserOptions{.hasHeader = true};
+    serde::StreamDataParser parser{pool_.get(), parserOptions};
+    const auto rowCount = parser.initialize(serialized);
+    auto header = serde::createTabletChunkHeader({
+        .rowCount = rowCount,
+        .requiresNullBarrier = parser.requiresNullBarrier(),
+        .streamEncodingUsesVarintRowCount =
+            parser.streamEncodingUsesVarintRowCount(),
+        .streamHasChunkHeader = false,
+        .rowRange = rowRange,
+    });
+    std::string output(
+        reinterpret_cast<const char*>(header.data()), header.length());
+    std::vector<uint32_t> streamIds;
+    std::vector<uint32_t> streamSizeIndices;
+    std::vector<uint32_t> streamSizes;
+    parser.iterateStreams([&](uint32_t streamId, std::string_view streamData) {
+      if (streamData.empty()) {
+        return;
+      }
+      streamIds.emplace_back(streamId);
+      streamSizeIndices.emplace_back(static_cast<uint32_t>(streamSizes.size()));
+      streamSizes.emplace_back(static_cast<uint32_t>(streamData.size()));
+      output.append(streamData);
+    });
+    serde::detail::writeTrailer(
+        streamIds,
+        streamSizeIndices,
+        streamSizes,
+        EncodingType::Trivial,
+        EncodingType::Trivial,
+        EncodingType::Trivial,
+        output);
+    return output;
+  }
+
   // ROW(a INTEGER, s ROW(b INTEGER)). Rows listed in `nestedNullRows` get a
   // null `s`, so s's Row null stream is written with real nulls and the
   // batch's null-barrier flag is set. A nullable *scalar* column would not
@@ -293,6 +330,71 @@ class DeserializerSkipTest : public ::testing::Test {
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::unique_ptr<velox::test::VectorMaker> vm_;
 };
+
+TEST_F(DeserializerSkipTest, reportsOutputRowsPerInputBatch) {
+  const std::vector<velox::VectorPtr> inputs{
+      makeBarrierBatch(/*base=*/100, /*rows=*/3, /*nestedNullRows=*/{}),
+      makeBarrierBatch(/*base=*/200, /*rows=*/4, /*nestedNullRows=*/{1}),
+  };
+  auto [serialized, schema] = serialize(barrierType(), inputs);
+  struct TestCase {
+    std::string name;
+    std::array<RowRange, 2> rowRanges;
+    std::vector<uint32_t> expectedOutputRows;
+  };
+  const std::vector<TestCase> testCases{
+      {
+          .name = "allFull",
+          .rowRanges = {RowRange{0, 3}, RowRange{0, 4}},
+          .expectedOutputRows = {3, 4},
+      },
+      {
+          .name = "allPartial",
+          .rowRanges = {RowRange{1, 2}, RowRange{1, 3}},
+          .expectedOutputRows = {1, 2},
+      },
+      {
+          .name = "fullThenPartial",
+          .rowRanges = {RowRange{0, 3}, RowRange{1, 3}},
+          .expectedOutputRows = {3, 2},
+      },
+      {
+          .name = "partialThenFull",
+          .rowRanges = {RowRange{1, 2}, RowRange{0, 4}},
+          .expectedOutputRows = {1, 4},
+      },
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.name);
+    std::vector<std::string> tabletBatches;
+    tabletBatches.reserve(serialized.size());
+    for (size_t i = 0; i < serialized.size(); ++i) {
+      tabletBatches.emplace_back(
+          makeTabletBatch(serialized[i], testCase.rowRanges[i]));
+    }
+    std::vector<std::string_view> views;
+    views.reserve(tabletBatches.size());
+    for (const auto& batch : tabletBatches) {
+      views.emplace_back(batch);
+    }
+
+    Deserializer deserializer{
+        schema, pool_.get(), DeserializerOptions{.hasHeader = true}};
+    velox::VectorPtr output;
+    std::vector<uint32_t> outputRows;
+    deserializer.deserialize(views, output, outputRows);
+
+    EXPECT_EQ(outputRows, testCase.expectedOutputRows);
+    ASSERT_NE(output, nullptr);
+    EXPECT_EQ(
+        output->size(),
+        std::accumulate(
+            testCase.expectedOutputRows.begin(),
+            testCase.expectedOutputRows.end(),
+            uint32_t{0}));
+  }
+}
 
 // --- Dense scalar column, no nulls -----------------------------------------
 
