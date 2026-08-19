@@ -90,6 +90,14 @@ class Deserializer {
       const std::vector<std::string_view>& data,
       velox::VectorPtr& output) const;
 
+  /// Decodes a sequence of serialized batches and records the number of rows
+  /// each input batch contributes to `output` in `outputRowCounts`.
+  /// Per-batch rowRange handling matches the overload above.
+  void deserialize(
+      const std::vector<std::string_view>& data,
+      velox::VectorPtr& output,
+      std::vector<uint32_t>& outputRowCounts) const;
+
   /// Decodes each batch in `data`, appending only the rows in
   /// `rowRanges[i]` for `data[i]`. The output is the concatenation of the
   /// selected rows across batches, in order.
@@ -160,10 +168,13 @@ class Deserializer {
   // `rowRanges` to decode whatever range each batch exposes (its header
   // rowRange, or the whole batch); pass a `data.size()`-sized `rowRanges`
   // to narrow within that range per batch (`rowRanges[i]` for `data[i]`).
+  // When set, `outputRowCounts` receives the number of rows contributed by
+  // each input batch.
   void deserializeImpl(
       folly::Range<const std::string_view*> data,
       folly::Range<const nimble::RowRange*> rowRanges,
-      velox::VectorPtr& output) const;
+      velox::VectorPtr& output,
+      std::vector<uint32_t>* outputRowCounts) const;
 
   // Open run of non-barrier batches that can be decoded together.
   struct DecodeRun {
@@ -225,8 +236,9 @@ class Deserializer {
   // If the batch requires a null barrier, `decodeRun` fires before and
   // after queuing so the barrier batch decodes standalone. A rowRange
   // applies there too: a barrier batch is a one-batch run, which is exactly
-  // the unit the range narrows.
-  void appendBatch(
+  // the unit the range narrows. Returns the number of rows this batch adds to
+  // the output.
+  uint32_t appendBatch(
       std::string_view batch,
       std::optional<nimble::RowRange> rowRange,
       DecodeRun& run,
