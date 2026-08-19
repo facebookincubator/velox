@@ -297,7 +297,11 @@ jobs:
       # When clang is used a number of dependencies are excluded from the build so we don't
       # need to run clang-tidy for that.
       # Let's also run this as last step so that if skipped it doesn't affect subsequent steps.
-      - name: Install and run clang-tidy
+      - name: Install clang-tidy
+        if: ${{ steps.build.outcome == 'success' && ! inputs.use-clang && needs.get-changes.outputs.run-clang-tidy == 'true' }}
+        uses: ./.github/actions/setup-clang-tidy
+
+      - name: Run clang-tidy
         if: ${{ steps.build.outcome == 'success' && ! inputs.use-clang && needs.get-changes.outputs.run-clang-tidy == 'true' }}
         env:
           FILES: ${{ needs.get-changes.outputs.changed-files }}
@@ -305,7 +309,6 @@ jobs:
           MERGE_BASE_COMMIT: ${{ needs.get-changes.outputs.merge-base-commit }}
         run: |
           git config --global --add safe.directory /__w/velox/velox
-          uv tool install clang-tidy==18.1.8
           git fetch origin $MERGE_BASE_COMMIT
           # The usage of GCC14 adds compiler warnings not understood by Clang/Clang-tidy.
           # We replace them for now but eventually move Clang-tidy to the Clang based build.
