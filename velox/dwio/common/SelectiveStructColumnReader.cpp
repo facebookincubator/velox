@@ -21,16 +21,6 @@
 namespace facebook::velox::dwio::common {
 namespace {
 
-bool testFilterOnConstant(const velox::common::ScanSpec& spec) {
-  if (spec.isConstant() && !spec.constantValue()->isNullAt(0)) {
-    // Non-null constant is known value during split scheduling and filters on
-    // them should not be handled at execution level.
-    return true;
-  }
-  // Check filter on missing field.
-  return !spec.hasFilter() || spec.testNull();
-}
-
 // Recursively makes empty RowVectors for positions in 'children' where the
 // corresponding child type in 'rowType' is a row. The reader expects RowVector
 // outputs to be initialized so that the content corresponds to the query schema
@@ -383,6 +373,45 @@ void SelectiveStructColumnReaderBase::next(
   }
 }
 
+void SelectiveStructColumnReaderBase::readFlatMapChildren(
+    int64_t offset,
+    const RowSet& rows,
+    const uint64_t* incomingNulls) {
+  numReads_ = scanSpec_->newRead();
+  prepareRead<char>(offset, rows, incomingNulls);
+  VELOX_DCHECK(!hasDeletion());
+  auto activeRows = rows;
+  const auto* mapNulls =
+      nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
+  if (scanSpec_->filter()) {
+    const auto kind = scanSpec_->filter()->kind();
+    VELOX_CHECK(
+        kind == velox::common::FilterKind::kIsNull ||
+        kind == velox::common::FilterKind::kIsNotNull);
+    filterNulls<int32_t>(
+        rows, kind == velox::common::FilterKind::kIsNull, false);
+    if (outputRows_.empty()) {
+      for (auto* child : children_) {
+        child->addParentNulls(offset, mapNulls, rows);
+      }
+      lazyVectorReadOffset_ = offset;
+      readOffset_ = offset + rows.back() + 1;
+      return;
+    }
+    activeRows = outputRows_;
+  }
+  // Separate the loop to be cache friendly.
+  for (auto* child : children_) {
+    advanceFieldReader(child, offset);
+  }
+  for (auto* child : children_) {
+    child->readWithTiming(offset, activeRows, mapNulls);
+    child->addParentNulls(offset, mapNulls, rows);
+  }
+  lazyVectorReadOffset_ = offset;
+  readOffset_ = offset + rows.back() + 1;
+}
+
 void SelectiveStructColumnReaderBase::read(
     int64_t offset,
     const RowSet& rows,
@@ -690,6 +719,18 @@ void SelectiveStructColumnReaderBase::getValues(
   }
 
   resultRow->invalidateContainsLazyNotLoaded();
+}
+
+// static
+bool SelectiveStructColumnReaderBase::testFilterOnConstant(
+    const velox::common::ScanSpec& spec) {
+  if (spec.isConstant() && !spec.constantValue()->isNullAt(0)) {
+    // Non-null constant is known value during split scheduling and filters on
+    // them should not be handled at execution level.
+    return true;
+  }
+  // Check filter on missing field.
+  return !spec.hasFilter() || spec.testNull();
 }
 
 namespace detail {

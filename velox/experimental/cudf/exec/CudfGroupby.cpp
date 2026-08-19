@@ -16,13 +16,13 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
@@ -829,7 +829,8 @@ bool canGroupbyAggregationBeEvaluatedByCudf(
 
 bool canGroupbyBeEvaluatedByCudf(
     const core::AggregationNode& aggregationNode,
-    core::QueryCtx* queryCtx) {
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool) {
   const core::PlanNode* sourceNode = aggregationNode.sources().empty()
       ? nullptr
       : aggregationNode.sources()[0].get();
@@ -864,8 +865,7 @@ bool canGroupbyBeEvaluatedByCudf(
     // Check input expressions can be evaluated by cuDF, expand the input first.
     for (const auto& input : aggregate.call->inputs()) {
       auto expandedInput = expandFieldReference(input, sourceNode);
-      std::vector<core::TypedExprPtr> exprs = {expandedInput};
-      if (!canBeEvaluatedByCudf(exprs, queryCtx)) {
+      if (!canExprRunOnGpu(expandedInput, queryCtx, pool)) {
         return false;
       }
     }
@@ -873,7 +873,7 @@ bool canGroupbyBeEvaluatedByCudf(
 
   // Check grouping key expressions
   if (!canGroupingKeysBeEvaluatedByCudf(
-          aggregationNode.groupingKeys(), sourceNode, queryCtx)) {
+          aggregationNode.groupingKeys(), sourceNode, queryCtx, pool)) {
     return false;
   }
 
@@ -1286,6 +1286,16 @@ void CudfGroupby::doNoMoreInput() {
   if (isPartialOutput_ && inputs_.empty()) {
     finished_ = true;
   }
+}
+
+void CudfGroupby::doClose() {
+  inputs_.clear();
+  bufferedResult_.reset();
+  aggregators_.clear();
+  intermediateAggregators_.clear();
+  partialAggregators_.clear();
+  finalAggregators_.clear();
+  Operator::close();
 }
 
 bool CudfGroupby::isFinished() {

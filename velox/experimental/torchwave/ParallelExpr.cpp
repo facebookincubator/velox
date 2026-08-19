@@ -25,15 +25,21 @@
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include <vector>
 
+#include <c10/core/MemoryFormat.h>
 #include <fmt/format.h>
+#include <folly/CppAttributes.h>
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Map.h>
 
 #include "velox/experimental/torchwave/ParallelExpr.h"
+
+#include <map>
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
+#include "velox/experimental/torchwave/WaveGraph.h"
 
 namespace torch::wave {
 
@@ -498,6 +504,33 @@ void collectExprBoundaryInputs(
   }
 }
 
+// Collects every node of the expr rooted at 'exprRoot', walking down to (but
+// not through) the layer 'boundary'. The result is the set of nodes whose
+// outputs are candidate expr-local temporaries.
+void collectExprSubgraph(
+    NodeCP exprRoot,
+    const std::unordered_set<NodeCP>& boundary,
+    NodeSet& subgraph) {
+  std::vector<NodeCP> stack{exprRoot};
+  while (!stack.empty()) {
+    NodeCP n = stack.back();
+    stack.pop_back();
+    if (!subgraph.insert(n).second) {
+      continue;
+    }
+    for (const auto& in : n->inputs()) {
+      ValueCP v = in.value;
+      if (v == nullptr) {
+        continue;
+      }
+      NodeCP producer = v->producer();
+      if (producer != nullptr && boundary.count(producer) == 0) {
+        stack.push_back(producer);
+      }
+    }
+  }
+}
+
 // The layer's internal (non-boundary) nodes, in program order. Value ids are
 // assigned in creation order, so the first-output id sorts nodes into program
 // order; the alias analysis below depends on this so consumption is seen after
@@ -539,9 +572,679 @@ std::vector<NodeCP> layerNodesInOrder(const ProjectNode* pn) {
   return result;
 }
 
+// The value a writing op mutates in place (its mutatesArg "self"), or null when
+// 'node' is not a registered writer or the ordinal is out of range.
+ValueCP FOLLY_NULLABLE inPlaceSelf(NodeCP node) {
+  const Metadata* meta = Registry::metadata(node->target());
+  if (meta == nullptr || !meta->mutatesArg.has_value()) {
+    return nullptr;
+  }
+  const auto ordinal = *meta->mutatesArg;
+  const auto& inputs = node->inputs();
+  if (ordinal < 0 || static_cast<size_t>(ordinal) >= inputs.size()) {
+    return nullptr;
+  }
+  return inputs[ordinal].value;
+}
+
+// Rewrites every input slot of 'consumer' that reads 'from' to read 'to',
+// maintaining Value::users() (a raw slot assignment alone leaves the old
+// value's users() stale and never adds the node to the new value's users()).
+void rewireInput(NodeCP consumer, ValueCP from, ValueCP to) {
+  auto* node = const_cast<nativert::Node*>(consumer);
+  auto* toMutable = const_cast<nativert::Value*>(to);
+  bool replaced = false;
+  for (auto& input : node->inputs()) {
+    if (input.value == from) {
+      input.value = toMutable;
+      replaced = true;
+    }
+  }
+  if (replaced) {
+    // Safe: all of 'from's slots on this node were rewritten above, so the
+    // node no longer references 'from'. addUser dedups if 'to' was already
+    // read.
+    const_cast<nativert::Value*>(from)->eraseUser(node);
+    const_cast<nativert::Value*>(to)->addUser(node);
+  }
+}
+
+// True if any input of 'consumer' other than slot 'selfOrdinal' shares a
+// storage base with 'x' (C3: no other operand may alias the write target).
+bool otherInputAliases(NodeCP consumer, int32_t selfOrdinal, ValueCP x) {
+  ValueCP xBase = viewStorageBase(x);
+  const auto& inputs = consumer->inputs();
+  for (int32_t j = 0; j < static_cast<int32_t>(inputs.size()); ++j) {
+    if (j == selfOrdinal || inputs[j].value == nullptr) {
+      continue;
+    }
+    if (viewStorageBase(inputs[j].value) == xBase) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The alias steps from 'value' back to its storage base, outermost first: the
+// producing node of every view / in-place edge viewStorageBase follows. Two
+// values address the same elements only if these chains match op for op.
+std::vector<NodeCP> viewChain(ValueCP value) {
+  std::vector<NodeCP> chain;
+  while (value != nullptr) {
+    auto* producer = value->producer();
+    if (producer == nullptr) {
+      break;
+    }
+    ValueCP next = schemaAliasedInput(producer, value);
+    if (next == nullptr) {
+      const auto* meta = Registry::metadata(producer->target());
+      if (meta == nullptr || !meta->viewOfArg.has_value() ||
+          *meta->viewOfArg >= static_cast<int32_t>(producer->inputs().size())) {
+        break;
+      }
+      next = producer->inputs()[*meta->viewOfArg].value;
+    }
+    chain.push_back(producer);
+    value = next;
+  }
+  return chain;
+}
+
+// Constant is a variant; a subgraph alternative is move-only and never carries
+// an index, so treat it as unequal rather than comparing it.
+bool constantsEqual(const nativert::Constant& a, const nativert::Constant& b) {
+  if (a.index() != b.index()) {
+    return false;
+  }
+  return std::visit(
+      [&b](const auto& av) -> bool {
+        using T = std::decay_t<decltype(av)>;
+        if constexpr (std::is_same_v<T, std::unique_ptr<nativert::Graph>>) {
+          return false;
+        } else {
+          return av == std::get<T>(b);
+        }
+      },
+      a);
+}
+
+bool sameAttributes(NodeCP a, NodeCP b) {
+  const auto& aAttrs = a->attributes();
+  const auto& bAttrs = b->attributes();
+  if (aAttrs.size() != bAttrs.size()) {
+    return false;
+  }
+  for (const auto& attr : aAttrs) {
+    const auto* other = b->tryGetAttribute(attr.name);
+    if (other == nullptr || !constantsEqual(attr.value, other->value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// True if 'a' and 'b' address exactly the same elements of their shared base:
+// the same alias steps, in the same order, with the same indices.
+bool sameViewPath(ValueCP a, ValueCP b) {
+  if (a == b) {
+    return true;
+  }
+  auto aChain = viewChain(a);
+  auto bChain = viewChain(b);
+  if (aChain.size() != bChain.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < aChain.size(); ++i) {
+    if (aChain[i]->target() != bChain[i]->target() ||
+        !sameAttributes(aChain[i], bChain[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// True if some other operand of 'consumer' is computed from a read of the write
+// target's storage that does not address the same elements as the write.
+//
+// otherInputAliases only inspects the operands themselves, so it clears an
+// operand that is a materialized tensor (its own storage base) even when the
+// expression producing it reads the target. Fusion puts that read in the same
+// kernel as the write, so eliding the clone lets the write land before the read
+// and the read returns post-write data. Walk each other operand back through
+// its in-layer producers: a read of the target's base is only safe when it
+// covers exactly the elements being overwritten (identical index path), which
+// makes the pair element-to-element.
+bool otherInputReadsTargetElsewhere(
+    NodeCP consumer,
+    int32_t selfOrdinal,
+    ValueCP self,
+    const NodeSet& layerNodes) {
+  ValueCP base = viewStorageBase(self);
+  std::vector<ValueCP> work;
+  const auto& inputs = consumer->inputs();
+  for (int32_t j = 0; j < static_cast<int32_t>(inputs.size()); ++j) {
+    if (j != selfOrdinal && inputs[j].value != nullptr) {
+      work.push_back(inputs[j].value);
+    }
+  }
+  std::unordered_set<ValueCP> visited;
+  while (!work.empty()) {
+    ValueCP value = work.back();
+    work.pop_back();
+    if (value == nullptr || !visited.insert(value).second) {
+      continue;
+    }
+    if (viewStorageBase(value) == base && !sameViewPath(value, self)) {
+      return true;
+    }
+    auto* producer = value->producer();
+    if (producer == nullptr || layerNodes.count(producer) == 0) {
+      continue;
+    }
+    for (const auto& input : producer->inputs()) {
+      work.push_back(input.value);
+    }
+  }
+  return false;
+}
+
+// True if 'cloneNode' requests an explicit memory_format, i.e. it is a layout
+// conversion whose output cannot be replaced by its (possibly differently laid
+// out) input.
+bool cloneForcesLayout(
+    NodeCP cloneNode,
+    ValueCP input,
+    const ValueTypes& types) {
+  const auto* attr = cloneNode->tryGetAttribute("memory_format");
+  if (attr == nullptr) {
+    return false;
+  }
+  bool concrete = false;
+  bool contiguousFormat = false;
+  if (std::holds_alternative<c10::MemoryFormat>(attr->value)) {
+    concrete = true;
+    contiguousFormat = std::get<c10::MemoryFormat>(attr->value) ==
+        c10::MemoryFormat::Contiguous;
+  } else if (std::holds_alternative<std::string>(attr->value)) {
+    const auto& name = std::get<std::string>(attr->value);
+    if (!name.empty() && name != "None") {
+      concrete = true;
+      contiguousFormat = name == "contiguous_format" || name == "Contiguous";
+    }
+  } else if (std::holds_alternative<int64_t>(attr->value)) {
+    // c10::MemoryFormat::Contiguous is enum value 0.
+    concrete = true;
+    contiguousFormat = std::get<int64_t>(attr->value) == 0;
+  }
+  if (!concrete) {
+    return false; // memory_format=None (or unrecognized): not a conversion.
+  }
+  // A non-contiguous target (channels_last, ...) always forces a real layout
+  // conversion. A contiguous target only forces one when the input is not
+  // already contiguous; otherwise the clone is a no-op copy.
+  return contiguousFormat ? !types.contiguous(input) : true;
+}
+
+// True if 'op' reads its tensor inputs at arbitrary strides: an elementwise op
+// (whose codegen handles strides and whose result values are layout
+// independent -- e.g. a fused tw.bucketize) or a clone (which copies any
+// layout). A clone that only densifies its input is unnecessary before such a
+// consumer.
+bool readsStridedInput(NodeCP op) {
+  if (op->target() == "torch.ops.aten.clone.default") {
+    return true;
+  }
+  const Metadata* meta = Registry::metadata(op->target());
+  if (meta == nullptr) {
+    return false;
+  }
+  return meta->elementwise != nullptr || meta->layoutAgnostic;
+}
+
+// True if 'node' is dead: it performs no in-place mutation and none of its
+// outputs is read. Such nodes linger after an optimizer rewrite (e.g. a detach
+// whose output uses were already replaced) but still reference their inputs, so
+// they pollute users(); they must not constrain clone elision.
+bool isDeadNode(NodeCP node) {
+  if (!dataMutatedInputs(node).empty()) {
+    return false; // an in-place mutation's effect is live even if its SSA
+                  // output is dead
+  }
+  for (auto* out : node->outputs()) {
+    if (out != nullptr && !out->users().empty()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The single live op that reads 'value'. prim.ListPack is transparent: packing
+// a value into a list moves no data, so the real reader is the list's consumer.
+// Returns nullptr unless exactly one live reader resolves.
+NodeCP FOLLY_NULLABLE soleLiveReader(ValueCP value) {
+  NodeCP found = nullptr;
+  for (auto* user : value->users()) {
+    if (isDeadNode(user)) {
+      continue;
+    }
+    if (found != nullptr) {
+      return nullptr;
+    }
+    found = user;
+  }
+  if (found == nullptr || found->target() != "prim.ListPack") {
+    return found;
+  }
+  if (found->outputs().empty()) {
+    return nullptr;
+  }
+  // Packed twice into the same list means the reader visits it twice.
+  int32_t occurrences = 0;
+  for (const auto& input : found->inputs()) {
+    if (input.value == value) {
+      ++occurrences;
+    }
+  }
+  if (occurrences != 1) {
+    return nullptr;
+  }
+  return soleLiveReader(found->outputs()[0]);
+}
+
+// True when dropping a densifying clone before 'reader' is layout-neutral:
+// 'reader' reads at arbitrary strides and visits each element once, so the
+// strided addressing simply moves out of the clone's copy and into the reader.
+// A reader that revisits elements (wholeTensor / randomAccess) would repeat
+// that addressing, which one densifying copy amortizes, so it keeps the clone.
+bool absorbsStrides(NodeCP reader, ValueCP value) {
+  if (!readsStridedInput(reader)) {
+    return false;
+  }
+  const Metadata* meta = Registry::metadata(reader->target());
+  if (meta == nullptr) {
+    return true; // a consuming clone copies each element once
+  }
+  bool seen = false;
+  for (size_t i = 0; i < reader->inputs().size(); ++i) {
+    if (reader->inputs()[i].value != value) {
+      continue;
+    }
+    if (seen) {
+      return false; // read from two argument slots
+    }
+    seen = true;
+    const auto* am = argMetaForInput(meta, reader, i);
+    if (am && (am->wholeTensor || am->randomAccess)) {
+      return false;
+    }
+  }
+  // Not found as a direct argument means 'value' arrived through a list, whose
+  // element the reader copies once (see __copy's non-contiguous branch).
+  return true;
+}
+
+// Attempts to replace clone(x) by x for one clone node in a layer.
+// 'layerNodes' is the ProjectNode's node set; the clone's single consumer must
+// be in the same layer so x's lifetime is not extended across layers (whether
+// that consumer is fused or standalone does not matter). 'pn' provides the
+// alias-aware reuse sets and 'types' the per-value constraints. Returns true
+// when the clone is elided.
+bool tryElideClone(
+    NodeCP cloneNode,
+    const ProjectNode* pn,
+    const NodeSet& layerNodes,
+    const ValueTypes& types) {
+  if (cloneNode->target() != "torch.ops.aten.clone.default" ||
+      cloneNode->inputs().empty() || cloneNode->outputs().empty()) {
+    return false;
+  }
+  ValueCP source = cloneNode->inputs()[0].value;
+  ValueCP cloneOut = cloneNode->outputs()[0];
+  if (source == nullptr || cloneOut == nullptr) {
+    return false;
+  }
+  // A single consumer in the same layer. Same-layer keeps source's lifetime
+  // within one ProjectNode (no cross-layer extension); the consumer being fused
+  // or standalone does not affect elidability.
+  const auto& users = cloneOut->users();
+  if (users.size() != 1 || layerNodes.count(users[0]) == 0) {
+    return false;
+  }
+  NodeCP consumer = users[0];
+
+  if (inPlaceSelf(consumer) == cloneOut) {
+    // Mutating consumer (C3): eliding writes source in place. A memory_format
+    // clone materialized the write buffer, so keep it; otherwise source must be
+    // safe to overwrite -- last use here with a single in-layer storage
+    // consumer (reusable/overwritable), not externally owned, not a graph
+    // output, no zero strides, and no other operand of the writer aliasing it.
+    if (cloneForcesLayout(cloneNode, source, types)) {
+      return false;
+    }
+    if (!pn->isReusableInput(source) && !pn->isOverwritableTemp(source)) {
+      return false;
+    }
+    if (types.zeroStrides(source) || types.externallyOwned(source) ||
+        types.graphOutput(source)) {
+      return false;
+    }
+    const int32_t selfOrdinal =
+        *Registry::metadata(consumer->target())->mutatesArg;
+    if (otherInputAliases(consumer, selfOrdinal, source)) {
+      return false;
+    }
+    if (otherInputReadsTargetElsewhere(
+            consumer, selfOrdinal, source, layerNodes)) {
+      return false;
+    }
+    rewireInput(consumer, cloneOut, source);
+    return true;
+  }
+
+  // Read-only consumer. The clone is unneeded when the consumer can read source
+  // at its native layout: either source is already contiguous, or the consumer
+  // is layout-agnostic (an elementwise op -- e.g. a fused tw.bucketize -- or
+  // another clone) that reads arbitrary strides and yields layout-independent
+  // values. A layout-agnostic consumer also makes any requested memory_format
+  // moot; otherwise a memory_format densify must be kept.
+  const bool consumerReadsStrided = readsStridedInput(consumer);
+  if (!types.contiguous(source) && !consumerReadsStrided) {
+    return false;
+  }
+  if (!consumerReadsStrided && cloneForcesLayout(cloneNode, source, types)) {
+    return false;
+  }
+  if (types.graphOutput(cloneOut)) {
+    return false;
+  }
+  const Metadata* meta = Registry::metadata(consumer->target());
+  if (meta != nullptr && meta->isView() && types.zeroStrides(source)) {
+    return false; // C5: a view over a stride-0 input needs a real buffer.
+  }
+  rewireInput(consumer, cloneOut, source);
+  return true;
+}
+
+// Elides a multi-user clone by pointing every use at the input. Unlike
+// tryElideClone this is not restricted to a single same-layer consumer:
+// Graph::replaceAllUses rewires all users (maintaining users()) and
+// computeLastUse is re-run afterward to refresh the input's now-extended
+// lifetime. The clone is droppable when it is a no-op (input already
+// contiguous) or every user is layout-agnostic (reads the input at native
+// strides -- an elementwise op such as a fused tw.bucketize, or another clone).
+// Safe only when the input's storage is never mutated (so the clone carries no
+// pre-mutation snapshot), the output does not escape as a graph output, and no
+// user writes the clone in place.
+bool tryElideMultiUserClone(
+    NodeCP cloneNode,
+    nativert::Graph& graph,
+    const std::unordered_set<ValueCP>& mutatedBases,
+    const ValueTypes& types) {
+  if (cloneNode->target() != "torch.ops.aten.clone.default" ||
+      cloneNode->inputs().empty() || cloneNode->outputs().empty()) {
+    return false;
+  }
+  ValueCP source = cloneNode->inputs()[0].value;
+  ValueCP cloneOut = cloneNode->outputs()[0];
+  if (source == nullptr || cloneOut == nullptr) {
+    return false;
+  }
+  // Every live user must read the clone (never write it in place); track
+  // whether all of them read at arbitrary strides. Dead users (e.g. an
+  // already-elided detach still referencing the clone) do not constrain.
+  bool allReadStrided = true;
+  for (auto* user : cloneOut->users()) {
+    if (isDeadNode(user)) {
+      continue;
+    }
+    if (inPlaceSelf(user) == cloneOut) {
+      return false;
+    }
+    if (!readsStridedInput(user)) {
+      allReadStrided = false;
+    }
+  }
+  // Droppable when the clone is a no-op (input already contiguous) or the
+  // strided access it would have absorbed simply moves into its readers: either
+  // every user reads at native strides, or there is exactly one reader and it
+  // visits each element once. A memory_format densify still matters otherwise.
+  bool stridesAbsorbed = allReadStrided;
+  if (!stridesAbsorbed) {
+    NodeCP reader = soleLiveReader(cloneOut);
+    stridesAbsorbed = reader != nullptr && absorbsStrides(reader, cloneOut);
+  }
+  if (!types.contiguous(source) && !stridesAbsorbed) {
+    return false;
+  }
+  if (!stridesAbsorbed && cloneForcesLayout(cloneNode, source, types)) {
+    return false;
+  }
+  // The output must not escape as a graph output (would alias input to output),
+  // and the input's storage must never be mutated (else the clone snapshots a
+  // pre-mutation value).
+  if (types.graphOutput(cloneOut) ||
+      mutatedBases.count(viewStorageBase(source)) > 0) {
+    return false;
+  }
+  graph.replaceAllUses(
+      const_cast<nativert::Value*>(cloneOut),
+      const_cast<nativert::Value*>(source));
+  return true;
+}
+
 } // namespace
 
+// Elides every clone whose users only read it, over the whole graph. Runs
+// before partitioning, so it sees clones that rewriteInPlace cannot: that pass
+// walks one ProjectNode layer at a time, and a source fanned out to many
+// consumers lands its clones in different layers. In the ROO preproc graph one
+// group_length_guard_sparse output is cloned 26 times, once per consumer, and
+// no two of those clones ever appear in the same layer.
+//
+// A clone that survives fusion is a copy plus a barrier, never free, so
+// dropping one is always a win when it is safe. Safety is exactly
+// tryElideMultiUserClone's: no user writes it, it does not escape as a graph
+// output, and the source's storage is never mutated anywhere.
+int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types) {
+  std::unordered_set<ValueCP> mutatedBases;
+  for (const auto& node : graph.nodes()) {
+    for (auto* mutated : dataMutatedInputs(&node)) {
+      if (mutated != nullptr) {
+        mutatedBases.insert(viewStorageBase(mutated));
+      }
+    }
+  }
+
+  // Snapshot first: eliding rewires users, and a live walk would revisit
+  // clones that are already dead.
+  std::vector<NodeCP> clones;
+  for (const auto& node : graph.nodes()) {
+    if (node.target() == "torch.ops.aten.clone.default") {
+      clones.push_back(&node);
+    }
+  }
+
+  int64_t elided = 0;
+  for (NodeCP cloneNode : clones) {
+    if (tryElideMultiUserClone(cloneNode, graph, mutatedBases, types)) {
+      ++elided;
+    }
+  }
+
+  // A clone whose source is not contiguous cannot be dropped: it densifies,
+  // and that work is real. It only has to happen once per source, though.
+  // Identical clones of one source are interchangeable as long as neither is
+  // written in place, so keep the first and redirect the rest. In this graph a
+  // single group_length_guard_sparse output is cloned once per consumer.
+  int64_t cse = 0;
+  std::map<std::pair<ValueCP, std::string>, ValueCP> firstCloneOf;
+  for (NodeCP cloneNode : clones) {
+    if (isDeadNode(cloneNode) || cloneNode->outputs()[0]->users().empty()) {
+      continue;
+    }
+    ValueCP src = cloneNode->inputs()[0].value;
+    ValueCP out = cloneNode->outputs()[0];
+    bool written = false;
+    for (auto* user : out->users()) {
+      if (!isDeadNode(user) && inPlaceSelf(user) == out) {
+        written = true;
+      }
+    }
+    // A snapshot of storage that is mutated somewhere is only valid at the
+    // point it was taken, so two such clones are not interchangeable.
+    if (written || mutatedBases.count(viewStorageBase(src)) > 0) {
+      continue;
+    }
+    // A graph output takes no part in the merge, in either direction.
+    // Redirecting one away would leave it unproduced: replaceAllUses rewires
+    // users, and the output node is not one of them. Merging others INTO one
+    // would hand the caller a buffer that internal values also read -- safe
+    // only as long as nothing writes it, which is an invariant of this pass
+    // rather than of the returned tensor, and not one the caller can see. The
+    // clones that remain are internal, so the survivor is always a value the
+    // graph fully owns.
+    if (types.graphOutput(out)) {
+      continue;
+    }
+    // Two clones only match if they produce the same layout.
+    const auto* fmt = cloneNode->tryGetAttribute("memory_format");
+    std::pair<ValueCP, std::string> mapKey{
+        src, fmt ? std::to_string(fmt->value.index()) : std::string("none")};
+    auto it = firstCloneOf.find(mapKey);
+    if (it == firstCloneOf.end()) {
+      firstCloneOf.emplace(mapKey, out);
+      continue;
+    }
+    graph.replaceAllUses(
+        const_cast<nativert::Value*>(out),
+        const_cast<nativert::Value*>(it->second));
+    ++cse;
+  }
+  elided += cse;
+  if ((WaveConfig::get().trace & WaveConfig::kTiming) && elided > 0) {
+    LOG(INFO) << "pre-partition clone pass: elided " << elided << " clone(s)";
+  }
+  return elided;
+}
+
+void ParallelNodes::computeReuseEligibility(
+    const std::unordered_set<ValueCP>& graphOutputs) {
+  // Distinct boundary inputs of each top-level expr (for the reusable-input
+  // pass below). Indexed by ProjectNode id, which makeParallelProject assigns
+  // from nextId_ as each node is created, so it is always a valid slot; at()
+  // makes that an exception rather than a silent overrun if it ever is not.
+  std::vector<std::vector<std::unordered_set<ValueCP>>> exprInputs(
+      projectNodes_.size());
+  for (auto& pnPtr : projectNodes_) {
+    ProjectNode* pn = pnPtr.get();
+    auto& perExpr = exprInputs.at(pn->id());
+    perExpr.resize(pn->nodes().size());
+    for (size_t i = 0; i < pn->nodes().size(); ++i) {
+      collectExprBoundaryInputs(pn->nodes()[i], pn->inputs(), perExpr[i]);
+    }
+  }
+
+  // A (now alias-corrected) lastUse value may be reused in place by an expr's
+  // kernel op only when its storage is consumed by exactly one expr in this
+  // layer. "Consumed" is judged by storage group, not raw value: an operand
+  // that is a view of -- or otherwise shares storage with -- a value counts as
+  // touching the same buffer, so reusing it in place would corrupt that
+  // aliasing read. No later layer reads the storage: lastUse membership already
+  // guarantees that via the viewStorageBase/baseLast grouping in
+  // computeLastUse. Comparing raw value identity would miss aliases read by a
+  // sibling expr, so group each expr's boundary inputs by viewStorageBase.
+  std::unordered_map<ValueCP, ValueCP> storageBaseMemo;
+  auto storageBase = [&](ValueCP value) -> ValueCP {
+    auto it = storageBaseMemo.find(value);
+    if (it != storageBaseMemo.end()) {
+      return it->second;
+    }
+    ValueCP base = viewStorageBase(value);
+    storageBaseMemo[value] = base;
+    return base;
+  };
+  for (auto& pnPtr : projectNodes_) {
+    ProjectNode* pn = pnPtr.get();
+    const auto& perExpr = exprInputs.at(pn->id());
+    pn->reusableValues_.assign(pn->nodes().size(), {});
+    pn->overwritableTemps_.assign(pn->nodes().size(), {});
+
+    // For each storage base touched at this layer's boundary, the set of exprs
+    // reading any value that aliases it. A base read by exactly one expr has a
+    // single in-layer consumer, so that expr may mutate the buffer in place.
+    std::unordered_map<ValueCP, std::unordered_set<int32_t>> baseToExprs;
+    for (size_t i = 0; i < perExpr.size(); ++i) {
+      for (ValueCP w : perExpr[i]) {
+        baseToExprs[storageBase(w)].insert(static_cast<int32_t>(i));
+      }
+    }
+
+    for (ValueCP v : pn->lastUse) {
+      auto it = baseToExprs.find(storageBase(v));
+      if (it == baseToExprs.end() || it->second.size() != 1) {
+        continue;
+      }
+      int32_t onlyExpr = *it->second.begin();
+      // Flag 'v' for the expr that actually reads 'v' as a boundary input, so
+      // its kernel has 'v''s buffer to write into (an aliasing sibling value in
+      // the same group is flagged in its own iteration).
+      if (perExpr[onlyExpr].count(v) > 0) {
+        pn->reusableValues_[onlyExpr].push_back(v);
+      }
+    }
+
+    // Expr-local overwritable temps: for each top-level expr, the values it
+    // produces and consumes entirely internally. A value qualifies when it owns
+    // its storage (storageBase(v) == v) and neither it nor any value aliasing
+    // it escapes the expr subgraph -- i.e. no use in a sibling expr, a later
+    // layer, or a graph output. Escape is detected per storage base: any
+    // produced value whose group leaves the subgraph disqualifies that whole
+    // base.
+    for (size_t i = 0; i < pn->nodes().size(); ++i) {
+      NodeCP exprRoot = pn->nodes()[i];
+      if (pn->inputs().count(exprRoot) > 0) {
+        continue; // boundary node from an earlier layer, not an expr root here
+      }
+      NodeSet subgraph;
+      collectExprSubgraph(exprRoot, pn->inputs(), subgraph);
+      std::unordered_set<ValueCP> escapingBase;
+      std::vector<ValueCP> produced;
+      for (NodeCP n : subgraph) {
+        for (auto* v : n->outputs()) {
+          if (v == nullptr) {
+            continue;
+          }
+          produced.push_back(v);
+          bool escapes = graphOutputs.count(v) > 0;
+          if (!escapes) {
+            for (auto* u : v->users()) {
+              if (subgraph.count(u) == 0) {
+                escapes = true;
+                break;
+              }
+            }
+          }
+          if (escapes) {
+            escapingBase.insert(storageBase(v));
+          }
+        }
+      }
+      for (ValueCP v : produced) {
+        if (storageBase(v) == v && escapingBase.count(v) == 0) {
+          pn->overwritableTemps_[i].push_back(v);
+        }
+      }
+    }
+  }
+}
+
 void ParallelNodes::computeLastUse(const nativert::Graph& graph) {
+  // Clear per-layer last-use sets so this is safe to re-run after the in-place
+  // pass rewrites the graph (reusableValues_/overwritableTemps_ are reassigned
+  // in the third pass below; lastUse is only inserted into, so clear it here).
+  for (auto& pnPtr : projectNodes_) {
+    pnPtr->lastUse.clear();
+  }
   // Values that leave the graph must never be reused or released, so exclude
   // them from the last-use sets even if no later layer reads them.
   // Graph outputs (and elements of list-typed outputs) escape the graph and
@@ -672,43 +1375,10 @@ void ParallelNodes::computeLastUse(const nativert::Graph& graph) {
     projectNodes_[baseLast[b]]->lastUse.insert(value);
   }
 
-  // Distinct boundary inputs of each top-level expr (for the reusable-input
-  // third pass below).
-  std::vector<std::vector<std::unordered_set<ValueCP>>> exprInputs(
-      projectNodes_.size());
-  for (auto& pnPtr : projectNodes_) {
-    ProjectNode* pn = pnPtr.get();
-    auto& perExpr = exprInputs[pn->id()];
-    perExpr.resize(pn->nodes().size());
-    for (size_t i = 0; i < pn->nodes().size(); ++i) {
-      collectExprBoundaryInputs(pn->nodes()[i], pn->inputs(), perExpr[i]);
-    }
-  }
-
-  // Third pass: a (now alias-corrected) lastUse value that is a boundary input
-  // of exactly one top-level expr in its layer can be reused in place by that
-  // expr's kernel op.
-  for (auto& pnPtr : projectNodes_) {
-    ProjectNode* pn = pnPtr.get();
-    const auto& perExpr = exprInputs[pn->id()];
-    pn->reusableValues_.assign(pn->nodes().size(), {});
-    for (ValueCP v : pn->lastUse) {
-      int32_t onlyExpr = -1;
-      int32_t count = 0;
-      for (size_t i = 0; i < perExpr.size(); ++i) {
-        if (perExpr[i].count(v) > 0) {
-          ++count;
-          onlyExpr = static_cast<int32_t>(i);
-          if (count > 1) {
-            break;
-          }
-        }
-      }
-      if (count == 1) {
-        pn->reusableValues_[onlyExpr].push_back(v);
-      }
-    }
-  }
+  // Reuse eligibility (reusableValues_ / overwritableTemps_) is a distinct
+  // concern from the lifetime computation above; compute it in its own pass so
+  // the core last-use logic stays readable.
+  computeReuseEligibility(graphOutputs);
 
   // Diagnostic (kFrame): validate the (alias-corrected) lastUse against
   // viewStorageBase ground truth. A value freed in a layer whose storage is
@@ -843,6 +1513,66 @@ ProjectNode* ParallelNodes::makeParallelNodes(const nativert::Graph& graph) {
   computeLastUse(graph);
 
   return current;
+}
+
+void ParallelNodes::rewriteInPlace(
+    nativert::Graph& graph,
+    const ValueTypes& types) {
+  // Storage bases mutated anywhere in the graph. A clone of such a base may be
+  // a required pre-mutation snapshot, so it is never treated as a no-op.
+  std::unordered_set<ValueCP> mutatedBases;
+  for (const auto& node : graph.nodes()) {
+    for (auto* mv : dataMutatedInputs(&node)) {
+      if (mv != nullptr) {
+        mutatedBases.insert(viewStorageBase(mv));
+      }
+    }
+  }
+
+  int64_t elided = 0;
+  for (auto& pnPtr : projectNodes_) {
+    ProjectNode* pn = pnPtr.get();
+    auto ordered = layerNodesInOrder(pn);
+    NodeSet layerNodes(ordered.begin(), ordered.end());
+    // Snapshot the clone nodes first: eliding one clone leaves the others
+    // untouched, and a re-walk would see the now-dead clone.
+    std::vector<NodeCP> clones;
+    for (NodeCP n : ordered) {
+      if (n->target() == "torch.ops.aten.clone.default") {
+        clones.push_back(n);
+      }
+    }
+    for (NodeCP cloneNode : clones) {
+      if (cloneNode->outputs().empty() || cloneNode->inputs().empty()) {
+        continue;
+      }
+      // Read the source before the rewrite: it is the buffer whose copy is
+      // saved, and it identifies the elision once the clone output is dead.
+      ValueCP source = cloneNode->inputs()[0].value;
+      // A multi-user clone is a CSE border consumed across layers (every use is
+      // rewired); a single-user clone is elided in place within its layer.
+      // Fusion status of the consumer does not affect either path.
+      const bool multiUser = cloneNode->outputs()[0]->users().size() > 1;
+      const bool ok = multiUser
+          ? tryElideMultiUserClone(cloneNode, graph, mutatedBases, types)
+          : tryElideClone(cloneNode, pn, layerNodes, types);
+      if (ok) {
+        ++elided;
+        if (source != nullptr) {
+          ++pn->elidedCloneCounts[source->id()];
+        }
+      }
+    }
+  }
+  // The graph changed (uses rewired, clones now dead); refresh the alias-aware
+  // last-use / reuse sets so downstream freeing and reuse stay correct with the
+  // possibly cross-layer extended input lifetimes.
+  if (elided > 0) {
+    computeLastUse(graph);
+  }
+  if ((WaveConfig::get().trace & WaveConfig::kTiming) && elided > 0) {
+    LOG(INFO) << "in-place pass: elided " << elided << " clone(s)";
+  }
 }
 
 // Debugger helper - callable from GDB.

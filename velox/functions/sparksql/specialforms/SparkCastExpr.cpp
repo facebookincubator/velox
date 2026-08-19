@@ -27,6 +27,14 @@ bool isIntegralType(const TypePtr& type) {
       type == BIGINT();
 }
 
+bool isFloatingPointType(const TypePtr& type) {
+  return type == REAL() || type == DOUBLE();
+}
+
+bool isNumericType(const TypePtr& type) {
+  return isIntegralType(type) || isFloatingPointType(type);
+}
+
 exec::ExprPtr makeSparkCastExpr(
     const TypePtr& type,
     exec::ExprPtr&& input,
@@ -122,11 +130,25 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
     return true;
   }
 
-  if (isIntegralType(fromType) && toType->isDecimal()) {
+  if (toType->isDecimal()) {
+    if (fromType->isDecimal()) {
+      return true;
+    }
+    if (isIntegralType(fromType)) {
+      return true;
+    }
+    if (fromType->isReal() || fromType->isDouble()) {
+      return true;
+    }
+  }
+
+  // Numeric types (integral + floating point) to integral types support ANSI
+  // mode.
+  if (isNumericType(fromType) && isIntegralType(toType)) {
     return true;
   }
 
-  if ((fromType->isReal() || fromType->isDouble()) && toType->isDecimal()) {
+  if (toType->isTimestamp() && (fromType->isReal() || fromType->isDouble())) {
     return true;
   }
 

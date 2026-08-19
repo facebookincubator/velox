@@ -80,12 +80,17 @@ enum class SizeShortcut { kNone, kMax, kSum };
 enum class StandaloneShortcut {
   kNone,
   kListPack,
+  kListUnpack,
   kView,
   kSlice,
   kSelectInt,
   kUnsqueeze,
   kTranspose,
   kNarrow,
+  kUnbind,
+  kSplitWithSizes,
+  kSqueezeDim,
+  kExpand,
 };
 
 /// Specifies which arguments determine the number of elements a kernel
@@ -319,6 +324,46 @@ struct Metadata {
     return viewOfArg.has_value();
   }
 
+  // --- In-place-rewrite / scatter-writer metadata (for the functional ->
+  // in-place rewrite + clone-elision pass). Tensor operands are named by
+  // TENSOR-INPUT ordinal (as inputAt indexes -- constant scalars are dropped);
+  // constant scalars that nativert stores as attributes are named by attribute.
+
+  /// Tensor-input ordinal of the input a writing op overwrites in place (the
+  /// "self"/target). Set on scatter / index / masked / slice-scatter writers
+  /// (= 0). Marks the op as an in-place-rewrite candidate.
+  std::optional<int32_t> mutatesArg;
+
+  /// Tensor-input ordinal of the index / mask operand of a scatter/index op.
+  std::optional<int32_t> indicesArg;
+
+  /// Tensor-input ordinal of the source / values operand written into self
+  /// (unset when the written value is a scalar attribute, e.g. masked_fill).
+  std::optional<int32_t> valuesArg;
+
+  /// If true, the op reads all its tensor inputs at arbitrary strides
+  /// (elementwise, cat), so a producing clone of a strided input is elidable.
+  bool layoutAgnostic{false};
+
+  /// Attribute name of the `dim` argument for dim-wise scatter/index ops
+  /// (empty if none); the dim is a constant stored as an attribute.
+  std::string dimAttr;
+
+  /// If true, graph normalization rewrites a constant negative "dim" attribute
+  /// to its non-negative form and errors if it is out of range for the first
+  /// input's rank. Set on the metadata-only view ops whose host-side shortcut
+  /// indexes sizes()/strides() directly, so the shortcut needs neither the wrap
+  /// nor the check at run time.
+  bool normalizeDimAttr{false};
+
+  /// Attribute name of the accumulate / scatter-reduce flag (empty if none).
+  /// When true on a node, an in-place FUSED write needs atomics.
+  std::string accumulateAttr;
+
+  /// Attribute name of a memory_format argument (empty if none). A clone that
+  /// sets it is a layout conversion and must not be elided.
+  std::string memoryFormatAttr;
+
   /// If set, the output rank is taken from the input at this ordinal. Takes
   /// precedence over outputConstraints and the elementwise default.
   std::optional<int32_t> rankArgument;
@@ -397,6 +442,20 @@ struct Metadata {
   /// typeTemplateParams and hasDtypeTemplateParam, in list order. These
   /// attributes are skipped by forEachSortedAttribute.
   std::vector<std::string> templateAttrs;
+
+  /// Returns true if this elementwise op's result is materialized in memory
+  /// rather than kept in a register, i.e. the op writes a whole tensor as a
+  /// side effect (the fused in-place scatters, index_put_elt_*, masked_put_).
+  /// Such a producer cannot be inlined into a consuming elementwise
+  /// expression: codegen emits it as its own expression and the consumer reads
+  /// its output back from memory (see
+  /// CompileCtx::generateElementwiseBorderImpl). The size machinery must stop
+  /// at the same boundary -- the consumer is sized by the materialized output,
+  /// not by this op's operands.
+  bool isElementwiseBorder() const {
+    return elementwise != nullptr && !returnMeta.empty() &&
+        !returnMeta[0].isRegister;
+  }
 
   /// Returns true if any argument has isRegister set.
   bool hasRegisterInputs() const {
@@ -552,6 +611,14 @@ class MetadataBuilder {
   MetadataBuilder& costFunction(
       std::function<float(NodeCP, const Metadata&)> func);
   MetadataBuilder& viewOfArg(int32_t ordinal);
+  MetadataBuilder& mutatesArg(int32_t ordinal);
+  MetadataBuilder& indicesArg(int32_t ordinal);
+  MetadataBuilder& valuesArg(int32_t ordinal);
+  MetadataBuilder& layoutAgnostic(bool val = true);
+  MetadataBuilder& dimAttr(std::string name);
+  MetadataBuilder& normalizeDimAttr(bool val = true);
+  MetadataBuilder& accumulateAttr(std::string name);
+  MetadataBuilder& memoryFormatAttr(std::string name);
   MetadataBuilder& shapeAttr(std::string name);
   MetadataBuilder& ignoreAttrs(std::vector<std::string> attrs);
   MetadataBuilder& rankArgument(int32_t ordinal);

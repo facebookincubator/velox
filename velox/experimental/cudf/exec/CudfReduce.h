@@ -55,7 +55,8 @@ std::vector<std::unique_ptr<ReduceAggregator>> toReduceAggregators(
 
 bool canReduceBeEvaluatedByCudf(
     const core::AggregationNode& aggregationNode,
-    core::QueryCtx* queryCtx);
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
 
 bool canReduceAggregationBeEvaluatedByCudf(
     const core::CallTypedExpr& call,
@@ -88,6 +89,8 @@ class CudfReduce : public CudfOperatorBase {
   RowVectorPtr doGetOutput() override;
 
   void doNoMoreInput() override;
+
+  void doClose() override;
 
  private:
   CudfVectorPtr doGlobalAggregation(

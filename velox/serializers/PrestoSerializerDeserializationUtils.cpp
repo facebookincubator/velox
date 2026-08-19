@@ -303,6 +303,7 @@ vector_size_t readNulls(
     const uint64_t* incomingNulls,
     int32_t numIncomingNulls,
     BaseVector& result) {
+  result.resetDataDependentFlags(nullptr);
   VELOX_DCHECK_LE(
       result.size(), resultOffset + (incomingNulls ? numIncomingNulls : size));
   if (source->readByte() == 0) {

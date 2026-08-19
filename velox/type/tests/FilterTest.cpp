@@ -21,6 +21,7 @@
 #include <optional>
 
 #include <velox/type/DecimalUtil.h>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Filter.h"
 
@@ -2230,6 +2231,47 @@ TEST(FilterTest, dateRange) {
       between(DATE()->toDays("1970-01-01"), DATE()->toDays("1980-01-01"));
   EXPECT_TRUE(applyFilter(*filter, DATE()->toDays("1970-06-01")));
   EXPECT_FALSE(applyFilter(*filter, DATE()->toDays("1980-06-01")));
+}
+
+TEST(FilterTest, applyFilterToVariant) {
+  const BigintRange bigintFilter(10, 20, /*nullAllowed=*/false);
+  EXPECT_TRUE(applyFilter(bigintFilter, Variant(int64_t{15})));
+  EXPECT_FALSE(applyFilter(bigintFilter, Variant(int64_t{25})));
+
+  // Every integer width reaches testInt64.
+  EXPECT_TRUE(applyFilter(bigintFilter, Variant(int32_t{15})));
+  EXPECT_TRUE(applyFilter(bigintFilter, Variant(int16_t{15})));
+
+  const auto huge = HugeInt::parse("1234567890123456789012");
+  const HugeintRange hugeintFilter(huge, huge, /*nullAllowed=*/false);
+  EXPECT_TRUE(applyFilter(hugeintFilter, Variant(huge)));
+
+  const BoolValue boolFilter(true, /*nullAllowed=*/false);
+  EXPECT_TRUE(applyFilter(boolFilter, Variant(true)));
+  EXPECT_FALSE(applyFilter(boolFilter, Variant(false)));
+
+  const FloatRange floatFilter(
+      1.0f,
+      /*lowerUnbounded=*/false,
+      /*lowerExclusive=*/false,
+      2.0f,
+      /*upperUnbounded=*/false,
+      /*upperExclusive=*/false,
+      /*nullAllowed=*/false);
+  EXPECT_TRUE(applyFilter(floatFilter, Variant(1.25f)));
+  EXPECT_FALSE(applyFilter(floatFilter, Variant(2.5f)));
+
+  const Timestamp ts(10, 123000000);
+  const TimestampRange timestampFilter(ts, ts, /*nullAllowed=*/false);
+  EXPECT_TRUE(applyFilter(timestampFilter, Variant(ts)));
+
+  const auto bytesFilter = equal("abc");
+  EXPECT_TRUE(applyFilter(*bytesFilter, Variant(std::string("abc"))));
+  EXPECT_FALSE(applyFilter(*bytesFilter, Variant(std::string("abd"))));
+
+  VELOX_ASSERT_USER_THROW(
+      applyFilter(bigintFilter, Variant::null(TypeKind::BIGINT)),
+      "Filter cannot be applied to a null value");
 }
 
 TEST(FilterTest, timestampRange) {

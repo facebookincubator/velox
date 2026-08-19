@@ -104,7 +104,7 @@ class IcebergReadTest : public test::IcebergTestBase {
     std::string dataName;
     TypePtr type;
     parquet::ParquetFieldId fieldId;
-    std::vector<std::string> requiredSubfields;
+    std::vector<std::string> requiredSubfields{};
   };
 
   ColumnHandleMap makeFieldIdAssignments(
@@ -391,9 +391,9 @@ TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
           ROW({"enabled", "id"}, {BOOLEAN(), BIGINT()}),
           ROW({"id", "flag", "status"}, {BIGINT(), BOOLEAN(), VARCHAR()}),
           {
-              {"id", "id", BIGINT(), makeFieldId(1)},
-              {"enabled", "flag", BOOLEAN(), makeFieldId(2)},
-              {"status", "status", VARCHAR(), makeFieldId(3)},
+              {"id", "id", BIGINT(), makeFieldId(1), {}},
+              {"enabled", "flag", BOOLEAN(), makeFieldId(2), {}},
+              {"status", "status", VARCHAR(), makeFieldId(3), {}},
           },
           makeRowVector(
               {"enabled", "id"},
@@ -407,10 +407,10 @@ TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
           ROW({"id", "flag", "status", "score"},
               {BIGINT(), BOOLEAN(), VARCHAR(), INTEGER()}),
           {
-              {"id", "id", BIGINT(), makeFieldId(1)},
-              {"flag", "flag", BOOLEAN(), makeFieldId(2)},
-              {"status", "status", VARCHAR(), makeFieldId(3)},
-              {"score", "score", INTEGER(), makeFieldId(4)},
+              {"id", "id", BIGINT(), makeFieldId(1), {}},
+              {"flag", "flag", BOOLEAN(), makeFieldId(2), {}},
+              {"status", "status", VARCHAR(), makeFieldId(3), {}},
+              {"score", "score", INTEGER(), makeFieldId(4), {}},
           },
           makeRowVector(
               {"id", "flag", "status", "score"},
@@ -425,8 +425,8 @@ TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
           ROW({"id", "status"}, {BIGINT(), VARCHAR()}),
           ROW({"id", "status"}, {BIGINT(), VARCHAR()}),
           {
-              {"id", "id", BIGINT(), makeFieldId(1)},
-              {"status", "status", VARCHAR(), makeFieldId(3)},
+              {"id", "id", BIGINT(), makeFieldId(1), {}},
+              {"status", "status", VARCHAR(), makeFieldId(3), {}},
           },
           makeRowVector(
               {"id", "status"},
@@ -438,7 +438,7 @@ TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
           ROW({"score"}, {INTEGER()}),
           ROW({"score"}, {INTEGER()}),
           {
-              {"score", "score", INTEGER(), makeFieldId(4)},
+              {"score", "score", INTEGER(), makeFieldId(4), {}},
           },
           makeRowVector(
               {"score"},
@@ -450,8 +450,8 @@ TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
           ROW({"id", "status"}, {BIGINT(), BOOLEAN()}),
           ROW({"id", "status"}, {BIGINT(), BOOLEAN()}),
           {
-              {"id", "id", BIGINT(), makeFieldId(1)},
-              {"status", "status", BOOLEAN(), makeFieldId(4)},
+              {"id", "id", BIGINT(), makeFieldId(1), {}},
+              {"status", "status", BOOLEAN(), makeFieldId(4), {}},
           },
           makeRowVector(
               {"id", "status"},
@@ -481,7 +481,7 @@ TEST_F(IcebergReadTest, readParquetFilterOnlyColumnByFieldId) {
           .outputType(ROW({"id"}, {BIGINT()}))
           .dataColumns(testData.writeType)
           .assignments(makeFieldIdAssignments({
-              {"id", "id", BIGINT(), makeFieldId(1)},
+              {"id", "id", BIGINT(), makeFieldId(1), {}},
           }))
           .filterColumnHandles({
               makeIcebergHandle("status", VARCHAR(), makeFieldId(3)),
@@ -573,8 +573,8 @@ TEST_F(IcebergReadTest, readParquetArrayByFieldId) {
             {"items",
              "items",
              nestedReadType->childAt(0),
-             makeFieldId(
-                 1, {makeFieldId(2, {makeFieldId(4), makeFieldId(3)})})},
+             makeFieldId(1, {makeFieldId(2, {makeFieldId(4), makeFieldId(3)})}),
+             {}},
         },
         {nestedExpected});
   }
@@ -596,7 +596,8 @@ TEST_F(IcebergReadTest, readParquetArrayByFieldId) {
             {"items",
              "items",
              nestedProjectedReadType->childAt(0),
-             makeFieldId(1, {makeFieldId(2, {makeFieldId(4)})})},
+             makeFieldId(1, {makeFieldId(2, {makeFieldId(4)})}),
+             {}},
         },
         {nestedProjectedExpected});
   }
@@ -645,7 +646,8 @@ TEST_F(IcebergReadTest, readParquetMapByFieldId) {
              makeFieldId(
                  1,
                  {makeFieldId(2),
-                  makeFieldId(3, {makeFieldId(5), makeFieldId(4)})})},
+                  makeFieldId(3, {makeFieldId(5), makeFieldId(4)})}),
+             {}},
         },
         {mapExpected});
   }
@@ -671,8 +673,8 @@ TEST_F(IcebergReadTest, readParquetMapByFieldId) {
             {"attributes",
              "attributes",
              mapProjectedReadType->childAt(0),
-             makeFieldId(
-                 1, {makeFieldId(2), makeFieldId(3, {makeFieldId(5)})})},
+             makeFieldId(1, {makeFieldId(2), makeFieldId(3, {makeFieldId(5)})}),
+             {}},
         },
         {mapProjectedExpected});
   }
@@ -1389,6 +1391,94 @@ TEST_F(IcebergReadTest, targetTableRowIdSynthesis) {
       .assertResults({expected});
 }
 
+// Info columns arrive as strings on the split and are parsed at read time.
+// A value the coordinator could not have produced means the split metadata is
+// corrupt, so the reader must fail loudly rather than silently substituting a
+// default: $first_row_id and $data_sequence_number both feed V3 row lineage,
+// and a wrong value there mislabels every row in the file.
+class IcebergInfoColumnValidationTest : public IcebergReadTest {
+ protected:
+  // Runs a scan of a single BIGINT column with 'infoColumns' attached to the
+  // split, projecting 'outputType' (which decides whether the row-lineage or
+  // MERGE row-id parsing paths run at all).
+  void assertScanFails(
+      const std::unordered_map<std::string, std::string>& infoColumns,
+      const RowTypePtr& outputType,
+      const std::string& expectedMessage) {
+    std::vector<RowVectorPtr> inputVectors = {
+        makeRowVector({"c0"}, {makeFlatVector<int64_t>({10, 20, 30})})};
+    auto dataFilePath = TempFilePath::create();
+    writeToFile(dataFilePath->getPath(), inputVectors);
+
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan(test::kIcebergConnectorId)
+                    .outputType(outputType)
+                    .dataColumns(ROW({"c0"}, {BIGINT()}))
+                    .endTableScan()
+                    .planNode();
+
+    VELOX_ASSERT_THROW(
+        exec::test::AssertQueryBuilder(plan)
+            .splits({makeIcebergSplitWithInfoColumns(
+                dataFilePath->getPath(), infoColumns)})
+            .copyResults(pool()),
+        expectedMessage);
+  }
+
+  // Projecting _row_id is what makes the reader parse $first_row_id.
+  RowTypePtr rowLineageOutputType() const {
+    return ROW(
+        {"c0", IcebergMetadataColumn::kRowIdColumnName}, {BIGINT(), BIGINT()});
+  }
+
+  // Projecting $target_table_row_id is what makes the reader parse $spec_id.
+  RowTypePtr targetRowIdOutputType() const {
+    return ROW(
+        {"c0", IcebergMetadataColumn::kTargetTableRowIdColumnName},
+        {BIGINT(),
+         ROW({"file_path", "row_position", "spec_id", "partition_data"},
+             {VARCHAR(), BIGINT(), INTEGER(), VARCHAR()})});
+  }
+};
+
+TEST_F(IcebergInfoColumnValidationTest, rejectsNonNumericFirstRowId) {
+  assertScanFails(
+      {{IcebergMetadataColumn::kFirstRowIdInfoColumn, "not-a-number"}},
+      rowLineageOutputType(),
+      "Invalid $first_row_id value in split info columns");
+}
+
+TEST_F(IcebergInfoColumnValidationTest, rejectsNegativeFirstRowId) {
+  // Parses cleanly but is out of range: row ids are file-absolute offsets.
+  assertScanFails(
+      {{IcebergMetadataColumn::kFirstRowIdInfoColumn, "-1"}},
+      rowLineageOutputType(),
+      "First row ID must be non-negative");
+}
+
+TEST_F(IcebergInfoColumnValidationTest, rejectsNonNumericDataSequenceNumber) {
+  assertScanFails(
+      {{IcebergMetadataColumn::kFirstRowIdInfoColumn, "0"},
+       {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "abc"}},
+      rowLineageOutputType(),
+      "Invalid $data_sequence_number value in split info columns");
+}
+
+TEST_F(IcebergInfoColumnValidationTest, rejectsNegativeDataSequenceNumber) {
+  assertScanFails(
+      {{IcebergMetadataColumn::kFirstRowIdInfoColumn, "0"},
+       {IcebergMetadataColumn::kDataSequenceNumberInfoColumn, "-5"}},
+      rowLineageOutputType(),
+      "Data sequence number must be non-negative");
+}
+
+TEST_F(IcebergInfoColumnValidationTest, rejectsNonNumericSpecId) {
+  assertScanFails(
+      {{IcebergMetadataColumn::kSpecIdInfoColumn, "spec-seven"}},
+      targetRowIdOutputType(),
+      "Invalid $spec_id value in split info columns");
+}
+
 TEST_F(IcebergReadTest, flatMapAsStruct) {
   // Write a DWRF file with a MAP<BIGINT, DOUBLE> column.
   auto mapType = MAP(BIGINT(), DOUBLE());
@@ -1441,6 +1531,115 @@ TEST_F(IcebergReadTest, flatMapAsStruct) {
   exec::test::AssertQueryBuilder(plan)
       .splits(makeIcebergSplits(dataFilePath->getPath()))
       .assertResults({expected});
+}
+
+TEST_F(IcebergReadTest, filterPushdownWithInitialDefaultInFilterColumnHandles) {
+  // Test's a scenario where filter on default value column is used in the query
+  // TABLE = [id int , country varchar(defaultValue='IN')]
+  // QUERY = SELECT id FROM table WHERE country = 'IN'
+  // When filter pushdown is enabled, column handle for 'country' is present
+  // only in filterColumnHandles_ of HiveTableHandle. adaptColumns was searching
+  // only in columnHandles_ for the default value, missing it and creating null
+  // vector.
+
+  // Old data file: only the 'id' column present.
+  std::vector<RowVectorPtr> dataVectors = {
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})};
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(dataFilePath->getPath(), dataVectors);
+
+  auto outputType = ROW({"id"}, {BIGINT()});
+
+  ColumnHandleMap assignments;
+  assignments["id"] = makeIcebergHandle("id", BIGINT(), 1);
+
+  // filterColumnHandles carries country WITH initialDefaultValue="IN".
+  std::vector<HiveColumnHandlePtr> filterHandles = {
+      makeIcebergHandle("country", VARCHAR(), 2, "IN")};
+
+  // Expected: all 3 rows (country filter passes via default constant).
+  std::vector<RowVectorPtr> allRowsIN = {
+      makeRowVector(outputType->names(), {makeFlatVector<int64_t>({1, 2, 3})})};
+
+  // Full schema used for subfieldFilter expression parsing (country must be
+  // reachable even though it is not in outputType).
+  auto fullSchema = ROW({"id", "country"}, {BIGINT(), VARCHAR()});
+
+  auto assertFilter =
+      [&](const std::string& subfieldFilter,
+          const std::vector<RowVectorPtr>& expected,
+          const std::vector<std::shared_ptr<ConnectorSplit>>& splits,
+          int32_t numSplitsSkipped = 0) {
+        auto plan = exec::test::PlanBuilder()
+                        .startTableScan()
+                        .connectorId(test::kIcebergConnectorId)
+                        .outputType(outputType)
+                        .dataColumns(fullSchema)
+                        .assignments(assignments)
+                        .filterColumnHandles(filterHandles)
+                        .subfieldFilter(subfieldFilter)
+                        .endTableScan()
+                        .planNode();
+        auto task =
+            exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(
+                expected);
+        ASSERT_EQ(
+            task->taskStats()
+                .pipelineStats[0]
+                .operatorStats[0]
+                .runtimeStats["skippedSplits"]
+                .sum,
+            numSplitsSkipped)
+            << "Unexpected skipped splits for filter: " << subfieldFilter;
+      };
+
+  // Bug scenario: country absent from file, assignments handle has no default.
+  // Without fix: adaptColumns finds no default → sets NULL → testFilters skips
+  //              file (NULL != 'IN') → 0 rows, numSplitsSkipped=1. WRONG.
+  // With fix:    adaptColumns finds default 'IN' in filterColumnHandles →
+  //              constant 'IN' → testFilters passes → 3 rows. CORRECT.
+  // Note: splits must be recreated for each assertFilter call — ConnectorSplit
+  // objects have their dataSource set during execution and cannot be reused.
+  assertFilter(
+      "country = 'IN'",
+      allRowsIN,
+      makeIcebergSplits(dataFilePath->getPath()),
+      /*numSplitsSkipped=*/0);
+
+  // Non-matching default: constant 'IN' != 'US' → file skipped regardless.
+  assertFilter(
+      "country = 'US'",
+      {},
+      makeIcebergSplits(dataFilePath->getPath()),
+      /*numSplitsSkipped=*/1);
+
+  // New file written AFTER ALTER TABLE: country physically present = 'US'.
+  // Output still only has {id} — country is filter-only.
+  std::vector<RowVectorPtr> newData = {makeRowVector(
+      {"id", "country"},
+      {makeFlatVector<int64_t>({4, 5}),
+       makeFlatVector<std::string>({"US", "US"})})};
+  auto newFilePath = TempFilePath::create();
+  writeToFile(newFilePath->getPath(), newData);
+
+  auto makeTwoSplits = [&]() {
+    auto s1 = makeIcebergSplits(dataFilePath->getPath());
+    auto s2 = makeIcebergSplits(newFilePath->getPath());
+    s1.insert(s1.end(), s2.begin(), s2.end());
+    return s1;
+  };
+
+  // country='IN': old file passes (constant 'IN'), new file skipped ('US').
+  // 1 split skipped, rows {1,2,3} from old file.
+  assertFilter(
+      "country = 'IN'", allRowsIN, makeTwoSplits(), /*numSplitsSkipped=*/1);
+
+  // country='US': old file skipped (constant 'IN'!='US'), new file passes.
+  // 1 split skipped, rows {4,5} from new file.
+  std::vector<RowVectorPtr> newRowsUS = {
+      makeRowVector(outputType->names(), {makeFlatVector<int64_t>({4, 5})})};
+  assertFilter(
+      "country = 'US'", newRowsUS, makeTwoSplits(), /*numSplitsSkipped=*/1);
 }
 
 } // namespace

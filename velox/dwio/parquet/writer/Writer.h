@@ -150,6 +150,10 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   /// regardless of precision.
   std::optional<bool> enableStoreDecimalAsInteger;
   std::optional<bool> useParquetDataPageV2;
+  /// Whether to write the Parquet page index (column index and offset index).
+  /// When enabled, per-page statistics are stored in the page index rather than
+  /// the data page headers. Defaults to false.
+  std::optional<bool> enableWritePageIndex;
   std::optional<std::string> createdBy;
 
   std::shared_ptr<arrow::MemoryPool> arrowMemoryPool;
@@ -194,9 +198,6 @@ class Writer : public dwio::common::Writer {
 
   void flush() override;
 
-  // Forces a row group boundary before the data added by next write().
-  void newRowGroup(int32_t numRows);
-
   bool finish() override {
     return true;
   }
@@ -213,10 +214,27 @@ class Writer : public dwio::common::Writer {
   // Sets the memory reclaimers for all the memory pools used by this writer.
   void setMemoryReclaimers();
 
-  // Checks if the input data contains a nested wrapped vector or complex
-  // vector. If so, flatten the input to make it compatible with
-  // 'exportFlattenedVector' in Arrow export.
-  bool needFlatten(const VectorPtr& data) const;
+  // Selectively flattens columns that cannot be exported as-is to Arrow.
+  // Flattens:
+  //  - Dictionary wrapping a complex (non-primitive) type.
+  //  - Dictionary wrapping a non-flat inner vector (e.g., dict-of-dict).
+  //  - Dictionary of a non-string/binary type (no benefit in Parquet).
+  //  - Dictionary whose values contain nulls (unsupported by Arrow writer).
+  //  - Dictionary when cached schema expects a non-dictionary type (schema
+  //    consistency across batches).
+  //  - Constant wrapping a non-flat inner vector (e.g., constant-of-dict).
+  // Only VARCHAR/VARBINARY dictionary vectors with null-free values are
+  // passed through as Arrow DictionaryArrays for zero-copy Parquet writing.
+  //
+  // Also handles the reverse schema mismatch: if the cached schema expects a
+  // dictionary type but the current data is flat, the cached schema is updated
+  // to use the dictionary's value type so ImportRecordBatch buffer counts
+  // match.
+  //
+  // When flattening is needed, only the columns that require it are flattened.
+  // Columns that can be passed through are left unchanged, avoiding
+  // unnecessary materialization.
+  VectorPtr flattenIfNeeded(const VectorPtr& data) const;
 
   // Pool for 'stream_'.
   std::shared_ptr<memory::MemoryPool> pool_;
@@ -235,7 +253,7 @@ class Writer : public dwio::common::Writer {
 
   const RowTypePtr schema_;
 
-  ArrowOptions options_{.flattenDictionary = true, .flattenConstant = true};
+  ArrowOptions options_{.flattenDictionary = false, .flattenConstant = true};
 
   // Whether to write Int96 timestamps in Arrow Parquet write.
   bool writeInt96AsTimestamp_;

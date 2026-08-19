@@ -674,14 +674,10 @@ bool Task::allNodesReceivedNoMoreSplitsMessageLocked() const {
 }
 
 const std::string& Task::getOrCreateSpillDirectory() {
+  std::lock_guard<std::mutex> l(spillDirCreateMutex_);
   VELOX_CHECK(
       !spillDirectory_.empty() || spillDirectoryCallback_,
       "Spill directory or spill directory callback must be set");
-  if (spillDirectoryCreated_) {
-    return spillDirectory_;
-  }
-
-  std::lock_guard<std::mutex> l(spillDirCreateMutex_);
   if (spillDirectoryCreated_) {
     return spillDirectory_;
   }
@@ -709,16 +705,22 @@ const std::string& Task::getOrCreateSpillDirectory() {
 }
 
 void Task::removeSpillDirectoryIfExists() {
-  if (spillDirectory_.empty() || !spillDirectoryCreated_) {
-    return;
+  {
+    std::lock_guard<std::mutex> l(spillDirCreateMutex_);
+    if (spillDirectory_.empty() || !spillDirectoryCreated_) {
+      return;
+    }
+    try {
+      auto fs = filesystems::getFileSystem(spillDirectory_, nullptr);
+      fs->rmdir(spillDirectory_);
+      spillDirectoryCreated_ = false;
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to remove spill directory '" << spillDirectory_
+                 << "' for Task " << taskId() << ": " << e.what();
+    }
   }
-  try {
-    auto fs = filesystems::getFileSystem(spillDirectory_, nullptr);
-    fs->rmdir(spillDirectory_);
-  } catch (const std::exception& e) {
-    LOG(ERROR) << "Failed to remove spill directory '" << spillDirectory_
-               << "' for Task " << taskId() << ": " << e.what();
-  }
+  TestValue::adjust(
+      "facebook::velox::exec::Task::removeSpillDirectoryIfExists", this);
 }
 
 uint64_t Task::driverCpuTimeSliceLimitMs() const {
@@ -1337,7 +1339,8 @@ void Task::initializePartitionOutput() {
         shared_from_this(),
         partitionedOutputNode->kind(),
         partitionedOutputNode->numPartitions(),
-        numOutputDrivers);
+        numOutputDrivers,
+        partitionedOutputNode->transportOptions());
   }
 }
 
@@ -1644,6 +1647,7 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
 
   if (allFinished) {
     self->terminate(TaskState::kFinished);
+    self->removeSpillDirectoryIfExists();
   }
 }
 
