@@ -314,28 +314,26 @@ void generateAggregatesForColumns(
     return;
   }
 
-  int numAggregates = std::min(
+  const int numAggregates = std::min(
       static_cast<int>(availableColumns.size()),
       std::min(
           static_cast<int>(5),
           static_cast<int>(
               folly::Random::rand32(1, availableColumns.size() + 1, rng))));
 
-  std::unordered_set<int> selectedIndices;
+  // Partial Fisher-Yates over a copy: draws numAggregates distinct columns in
+  // one pass. The previous rejection loop could spin for a while on the last
+  // pick, when only one of the available columns was still unselected.
+  std::vector<int> shuffled = availableColumns;
   for (int i = 0; i < numAggregates; ++i) {
-    if (folly::Random::oneIn(2, rng)) {
-      int randomIdx;
-      do {
-        randomIdx = folly::Random::rand32(availableColumns.size(), rng);
-      } while (selectedIndices.count(randomIdx) > 0);
-      selectedIndices.insert(randomIdx);
-
-      int colIdx = availableColumns[randomIdx];
-      std::string aggFunc = supportedAggFuncs[folly::Random::rand32(
-          supportedAggFuncs.size(), rng)];
-      aggregates.push_back(
-          fmt::format("{}({})", aggFunc, schema->nameOf(colIdx)));
-    }
+    const int pick = i +
+        static_cast<int>(folly::Random::rand32(
+            static_cast<uint32_t>(shuffled.size() - i), rng));
+    std::swap(shuffled[i], shuffled[pick]);
+    const auto& aggFunc = supportedAggFuncs[folly::Random::rand32(
+        static_cast<uint32_t>(supportedAggFuncs.size()), rng)];
+    aggregates.push_back(
+        fmt::format("{}({})", aggFunc, schema->nameOf(shuffled[i])));
   }
 }
 
