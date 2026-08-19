@@ -43,8 +43,12 @@ add_library(fsst OBJECT libfsst.cpp fsst_avx512.cpp)
 # installed artifact; it only registers the target.
 install(TARGETS fsst EXPORT velox_targets)
 
-# fsst.h sits next to the sources and is included as "fsst.h" by consumers.
-target_include_directories(fsst SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+# fsst.h sits next to the sources and is included as <fsst.h> by consumers.
+# Deliberately not SYSTEM: DuckDB vendors a header of the same name and, when
+# resolved BUNDLED, contributes it as a plain -I. -isystem is searched after
+# every -I, so a SYSTEM export here loses and Nimble compiles against DuckDB's
+# FSST, leaving the nimble_fsst_* renames undefined.
+target_include_directories(fsst PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Upstream compiles this one file at -O1 in release builds. The AVX-512 kernels
 # are heavily unrolled by the .inc files, and -O3 makes compilation
