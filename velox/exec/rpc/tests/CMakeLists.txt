@@ -12,17 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_mock_rpc_client_test MockRPCClientTest.cpp)
+add_executable(velox_mock_transport_test MockTransportTest.cpp)
 
 target_link_libraries(
-  velox_mock_rpc_client_test
-  velox_mock_rpc_client
+  velox_mock_transport_test
+  velox_mock_transport
   GTest::gtest
   GTest::gtest_main
   Folly::folly
 )
 
-add_test(NAME velox_mock_rpc_client_test COMMAND velox_mock_rpc_client_test)
+add_test(NAME velox_mock_transport_test COMMAND velox_mock_transport_test)
 
 add_executable(velox_rpc_state_test RPCStateTest.cpp)
 
@@ -53,7 +53,7 @@ add_executable(velox_rpc_node_test RPCNodeTest.cpp)
 
 target_link_libraries(
   velox_rpc_node_test
-  velox_mock_rpc_client
+  velox_mock_transport
   velox_core
   velox_memory
   velox_vector
@@ -80,17 +80,17 @@ target_link_libraries(
 
 add_test(NAME velox_demo_rpc_function_test COMMAND velox_demo_rpc_function_test)
 
-add_executable(velox_rpc_rate_limiter_test RPCRateLimiterTest.cpp)
+add_executable(velox_backend_admission_test BackendAdmissionTest.cpp)
 
 target_link_libraries(
-  velox_rpc_rate_limiter_test
-  velox_rpc_rate_limiter
+  velox_backend_admission_test
+  velox_backend_admission
   GTest::gtest
   GTest::gtest_main
   Folly::folly
 )
 
-add_test(NAME velox_rpc_rate_limiter_test COMMAND velox_rpc_rate_limiter_test)
+add_test(NAME velox_backend_admission_test COMMAND velox_backend_admission_test)
 
 add_executable(velox_rpc_error_classification_test RpcErrorClassificationTest.cpp)
 
@@ -123,7 +123,7 @@ add_executable(velox_rpc_aimd_under_load_test RPCAimdUnderLoadTest.cpp Main.cpp)
 
 target_link_libraries(
   velox_rpc_aimd_under_load_test
-  velox_mock_rpc_client
+  velox_mock_transport
   velox_rpc_plan_node_translator
   velox_async_rpc_function_registry
   velox_exec_test_lib

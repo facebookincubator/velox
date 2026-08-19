@@ -29,20 +29,20 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
-#include "velox/common/rpc/clients/MockRPCClient.h"
+#include "velox/common/rpc/clients/MockTransport.h"
 #include "velox/expression/rpc/AsyncRPCFunction.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::exec::rpc {
 
-using velox::rpc::MockRPCClient;
+using velox::rpc::MockTransport;
 
 namespace {
 
 /// Mock implementation of AsyncRPCFunction for testing.
 class MockAsyncRPCFunction : public AsyncRPCFunction {
  public:
-  explicit MockAsyncRPCFunction(std::shared_ptr<MockRPCClient> client)
+  explicit MockAsyncRPCFunction(std::shared_ptr<MockTransport> client)
       : client_(std::move(client)) {}
 
   std::string name() const override {
@@ -51,6 +51,10 @@ class MockAsyncRPCFunction : public AsyncRPCFunction {
 
   TypePtr resultType() const override {
     return VARCHAR();
+  }
+
+  RpcCapability capabilities() const override {
+    return {.supportedModes = {RpcCapabilityMode::kPerRow}};
   }
 
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
@@ -76,12 +80,12 @@ class MockAsyncRPCFunction : public AsyncRPCFunction {
             folly::makeSemiFuture<RPCResponse>(RPCResponse{
                 .rowId = static_cast<int64_t>(row),
                 .result = "",
-                .metadata = {},
                 .error = "null_input"}));
         return;
       }
       RPCRequest request;
-      request.payload = promptVector->valueAt(row).str();
+      request.rowId = row;
+      request.originalRowIndex = row;
       results.emplace_back(row, client_->call(request));
     });
 
@@ -89,7 +93,7 @@ class MockAsyncRPCFunction : public AsyncRPCFunction {
   }
 
  private:
-  std::shared_ptr<MockRPCClient> client_;
+  std::shared_ptr<MockTransport> client_;
 };
 
 class RPCNodeTest : public testing::Test {
@@ -100,12 +104,12 @@ class RPCNodeTest : public testing::Test {
 
   void SetUp() override {
     client_ =
-        std::make_shared<MockRPCClient>(std::chrono::milliseconds(10), 0.0);
+        std::make_shared<MockTransport>(std::chrono::milliseconds(10), 0.0);
     function_ = std::make_shared<MockAsyncRPCFunction>(client_);
     pool_ = memory::memoryManager()->addLeafPool();
   }
 
-  std::shared_ptr<MockRPCClient> client_;
+  std::shared_ptr<MockTransport> client_;
   std::shared_ptr<MockAsyncRPCFunction> function_;
   std::shared_ptr<memory::MemoryPool> pool_;
 };

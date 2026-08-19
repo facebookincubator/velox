@@ -23,7 +23,7 @@ void DemoAsyncRPCFunction::initialize(
     const std::vector<TypePtr>& /*inputTypes*/,
     const std::vector<VectorPtr>& /*constantInputs*/) {
   // Create and cache the mock client during initialization.
-  client_ = std::make_shared<MockRPCClient>(
+  client_ = std::make_shared<MockTransport>(
       std::chrono::milliseconds(1), // minimal latency
       0.0); // no errors
 }
@@ -48,17 +48,16 @@ DemoAsyncRPCFunction::dispatchPerRow(
       // Null input → immediate error response.
       results.emplace_back(
           row,
-          folly::makeSemiFuture<RPCResponse>(RPCResponse{
-              .rowId = 0,
-              .result = "",
-              .metadata = {},
-              .error = "null_input"}));
+          folly::makeSemiFuture<RPCResponse>(
+              RPCResponse{.rowId = 0, .result = "", .error = "null_input"}));
       return;
     }
 
-    // Build RPCRequest for MockRPCClient (test utility still uses payload).
+    // Build correlation-only RPCRequest. Demo uses rowId to track responses;
+    // prompt text is not carried in RPCRequest (typed CompletionRequest path) —
+    // mock validates via rowId.
     RPCRequest request;
-    request.payload = promptVector->valueAt(row).str();
+    request.rowId = row; // use row as correlation key for demo validation
 
     results.emplace_back(row, client_->call(request));
   });
@@ -73,7 +72,7 @@ AsyncRPCFunction::CongestionSignal DemoAsyncRPCFunction::evaluateCongestion(
   for (const auto& response : responses) {
     if (!response.hasError() &&
         response.result.find("OVERLOAD") != std::string::npos) {
-      return CongestionSignal::kError;
+      return CongestionSignal::kOverloaded;
     }
   }
   // Healthy completions feed RTT to the gradient window (the kSuccess path);
