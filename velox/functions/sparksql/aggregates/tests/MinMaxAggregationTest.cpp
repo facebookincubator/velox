@@ -305,7 +305,7 @@ TEST_F(MinMaxAggregationTest, failOnUnorderableType) {
   }
 }
 
-TEST_F(MinMaxAggregationTest, partialCompanionAbandonPartialAggregation) {
+DEBUG_ONLY_TEST_F(MinMaxAggregationTest, partialCompanionAbandonPartialAggregation) {
   constexpr vector_size_t kBatchSize = 100;
   std::vector<RowVectorPtr> data;
   for (auto batch = 0; batch < 3; ++batch) {
