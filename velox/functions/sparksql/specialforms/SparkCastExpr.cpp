@@ -140,6 +140,9 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
     if (fromType->isReal() || fromType->isDouble()) {
       return true;
     }
+    if (fromType->isBoolean()) {
+      return true;
+    }
   }
 
   // Numeric types (integral + floating point) to integral types support ANSI

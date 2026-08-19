@@ -402,7 +402,7 @@ Invalid examples
   SELECT cast(cast(-100 as bigint) as decimal(17, 16)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
 
 From decimal types
-^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^
 
 *(ANSI compliant)*
 
@@ -466,6 +466,36 @@ Invalid examples
   SELECT cast(cast(1e38 as double) as decimal(20, 2)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Result overflows
   SELECT cast(cast('inf' as double) as decimal(38, 2)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value is not finite
   SELECT cast(cast('nan' as double) as decimal(38, 2)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value is not finite
+
+From boolean
+^^^^^^^^^^^^
+
+*(ANSI compliant)*
+
+Casting a boolean to a decimal of given precision and scale is allowed.
+``true`` becomes 1 and ``false`` becomes 0.
+
+When ANSI mode is enabled, casting a value that overflows the target precision
+and scale throws an error. Otherwise, such casts return NULL. Only ``true`` can
+overflow, and only when the target has no integer digits (precision equals
+scale), since 1 cannot be represented there. ``false`` becomes 0, which fits any
+precision and scale.
+
+Valid examples
+
+::
+
+  SELECT cast(true as decimal(6, 2)); -- 1.00
+  SELECT cast(false as decimal(6, 2)); -- 0.00
+  SELECT cast(true as decimal(20, 10)); -- 1.0000000000
+  SELECT cast(false as decimal(1, 1)); -- 0.0
+
+Invalid examples
+
+::
+
+  SELECT cast(true as decimal(1, 1)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
+  SELECT cast(true as decimal(38, 38)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
 
 Cast to Varbinary
 -----------------
