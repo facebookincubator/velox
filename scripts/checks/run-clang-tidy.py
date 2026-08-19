@@ -49,11 +49,13 @@ def git_changed_lines(commit, exclude_dirs=None):
             # as clang-tidy doesn't support CUDA compiler flags and CUDA
             # headers. Exclude *-inl.h files: they are designed to be
             # included from their corresponding header and cannot be
-            # compiled as standalone translation units.
+            # compiled as standalone translation units. Nimble is not enabled
+            # in the adapters build that produces the compilation database.
             if (
                 "cudf/" not in matched_file
                 and "wave/" not in matched_file
                 and "ucx-exchange/" not in matched_file
+                and "velox/dwio/nimble/" not in matched_file
                 and not any(
                     exclude_dir in matched_file for exclude_dir in (exclude_dirs or [])
                 )

@@ -485,6 +485,17 @@ void Deserializer::deserialize(
       folly::Range<const std::string_view*>(data.data(), data.size()), output);
 }
 
+void Deserializer::deserialize(
+    const std::vector<std::string_view>& data,
+    velox::VectorPtr& output,
+    std::vector<uint32_t>& outputRowCounts) const {
+  deserializeImpl(
+      folly::Range<const std::string_view*>(data.data(), data.size()),
+      {},
+      output,
+      &outputRowCounts);
+}
+
 void Deserializer::appendToOutput(
     velox::VectorPtr&& decoded,
     velox::VectorPtr& output) const {
@@ -617,7 +628,7 @@ void Deserializer::appendStreamSegments(
   }
 }
 
-void Deserializer::appendBatch(
+uint32_t Deserializer::appendBatch(
     std::string_view batch,
     std::optional<nimble::RowRange> rowRange,
     DecodeRun& run,
@@ -657,12 +668,13 @@ void Deserializer::appendBatch(
     decodeRun(run, output);
     parser_->reset();
   }
+  return range.numRows();
 }
 
 void Deserializer::deserialize(
     folly::Range<const std::string_view*> data,
     velox::VectorPtr& output) const {
-  deserializeImpl(data, {}, output);
+  deserializeImpl(data, /*rowRanges=*/{}, output, /*outputRowCounts=*/nullptr);
 }
 
 void Deserializer::deserialize(
@@ -672,13 +684,15 @@ void Deserializer::deserialize(
   deserializeImpl(
       folly::Range<const std::string_view*>(data.data(), data.size()),
       folly::Range<const nimble::RowRange*>(rowRanges.data(), rowRanges.size()),
-      output);
+      output,
+      /*outputRowCounts=*/nullptr);
 }
 
 void Deserializer::deserializeImpl(
     folly::Range<const std::string_view*> data,
     folly::Range<const nimble::RowRange*> rowRanges,
-    velox::VectorPtr& output) const {
+    velox::VectorPtr& output,
+    std::vector<uint32_t>* outputRowCounts) const {
   NIMBLE_USER_CHECK(!data.empty(), "Expected at least one serialized batch");
   if (!rowRanges.empty()) {
     NIMBLE_USER_CHECK_EQ(
@@ -695,6 +709,10 @@ void Deserializer::deserializeImpl(
   };
 
   output = nullptr;
+  if (outputRowCounts != nullptr) {
+    outputRowCounts->clear();
+    outputRowCounts->reserve(data.size());
+  }
   DecodeRun run;
   runRanges_.reserve(data.size());
   for (size_t i = 0; i < data.size(); ++i) {
@@ -702,7 +720,10 @@ void Deserializer::deserializeImpl(
     if (!rowRanges.empty()) {
       rowRange = rowRanges[i];
     }
-    appendBatch(data[i], rowRange, run, output);
+    const auto outputRows = appendBatch(data[i], rowRange, run, output);
+    if (outputRowCounts != nullptr) {
+      outputRowCounts->emplace_back(outputRows);
+    }
   }
   decodeRun(run, output);
   parser_->reset();
