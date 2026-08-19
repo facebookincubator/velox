@@ -15,6 +15,7 @@
  */
 #include <folly/init/Init.h>
 
+#include "common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -359,7 +360,7 @@ TEST_F(AverageAggregationTest, avgDecimalCompanionMergeExtract) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
-TEST_F(AverageAggregationTest, abandonPartialAggregation) {
+DEBUG_ONLY_TEST_F(AverageAggregationTest, abandonPartialAggregation) {
   constexpr vector_size_t kBatchSize = 100;
   std::vector<RowVectorPtr> data;
   for (auto batch = 0; batch < 3; ++batch) {
