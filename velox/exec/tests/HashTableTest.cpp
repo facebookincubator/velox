@@ -71,8 +71,26 @@ class HashTableTestHelper {
         mode, numNew, BaseHashTable::kNoSpillInputStartPartitionBit);
   }
 
-  void markHasDuplicates() {
-    table_->hasDuplicates_.set();
+  // Bypasses dispatch so tests can compare the two walker paths directly.
+  int32_t testingListJoinResultsSingleHit(
+      BaseHashTable::JoinResultIterator& iter,
+      bool includeMisses,
+      folly::Range<vector_size_t*> inputRows,
+      folly::Range<char**> hits,
+      uint64_t maxBytes) {
+    return table_->listJoinResultsSingleHit(
+        iter, includeMisses, inputRows, hits, maxBytes);
+  }
+
+  // Bypasses dispatch so tests can invoke the interleaved walker directly.
+  int32_t testingListJoinResultsInterleaved(
+      BaseHashTable::JoinResultIterator& iter,
+      bool includeMisses,
+      folly::Range<vector_size_t*> inputRows,
+      folly::Range<char**> hits,
+      uint64_t maxBytes) {
+    return table_->listJoinResultsInterleaved(
+        iter, includeMisses, inputRows, hits, maxBytes);
   }
 
  private:
@@ -983,6 +1001,18 @@ TEST_P(HashTableTest, listJoinResultsSize) {
 }
 
 TEST_P(HashTableTest, listJoinResultsInterleaved) {
+  // Build a join table with duplicate keys via the normal insert path so
+  // the walker exercises the same chain structure as production. Probing
+  // yields lookup.hits pointing at the chain heads.
+  // Chains longer than `kAheadWindow` force a non-head slot's buffer to
+  // fill, pause, and resume once its slot becomes head — that boundary is
+  // what the interleaved walker rests on.
+  constexpr int32_t kNumKeys = 20;
+  constexpr int32_t kRowsPerKey =
+      BaseHashTable::JoinResultIterator::kAheadWindow + 4;
+  constexpr int32_t kNumRows = kNumKeys * kRowsPerKey;
+  auto buildType = ROW({"k", "v"}, {BIGINT(), BIGINT()});
+
   std::vector<std::unique_ptr<VectorHasher>> keyHashers;
   keyHashers.emplace_back(std::make_unique<VectorHasher>(BIGINT(), 0));
   auto table = HashTable<true>::createForJoin(
@@ -994,86 +1024,126 @@ TEST_P(HashTableTest, listJoinResultsInterleaved) {
       1'000,
       pool());
 
-  auto* rowContainer = table->rows();
-  const auto nextOffset = rowContainer->nextOffset();
-  ASSERT_GT(nextOffset, 0);
+  auto buildKeys = makeFlatVector<int64_t>(
+      kNumRows, [&](vector_size_t row) { return row % kNumKeys; });
+  auto buildValues =
+      makeFlatVector<int64_t>(kNumRows, [&](vector_size_t row) { return row; });
+  std::vector<RowVectorPtr> batches{makeRowVector({buildKeys, buildValues})};
+  copyVectorsToTable(batches, 0, table.get());
+  auto helper = HashTableTestHelper<true>::create(table.get());
+  table->prepareJoinTable(
+      {},
+      BaseHashTable::kNoSpillInputStartPartitionBit,
+      1'000'000,
+      false,
+      executor_.get());
+  ASSERT_GT(table->rows()->nextOffset(), 0);
+  // `hasDuplicates_` must be set by the insert path; combined with a
+  // non-zero `nextOffset_` this is what forces `listJoinResults` to
+  // dispatch to `listJoinResultsInterleaved` below.
+  ASSERT_TRUE(table->hasDuplicateKeys());
 
-  // The first chain advances long enough for the second chain to fill its
-  // ahead window and pause before it becomes head.
-  const std::vector<int32_t> chainLengths{10, 11, 3};
-  std::vector<std::vector<char*>> chains;
-  for (const auto chainLength : chainLengths) {
-    std::vector<char*> chain;
-    for (int32_t i = 0; i < chainLength; ++i) {
-      auto* row = rowContainer->newRow();
-      *reinterpret_cast<char**>(row + nextOffset) = nullptr;
-      chain.push_back(row);
-    }
-    for (int32_t i = 1; i < chainLength; ++i) {
-      *reinterpret_cast<char**>(chain[i - 1] + nextOffset) = chain[i];
-    }
-    chains.push_back(std::move(chain));
+  // Probe with more than kNumParallelChains keys so the walker refills a
+  // second slot batch mid-run. Some keys are deliberately absent from the
+  // build side to exercise the miss path. The `GetParam()` bool changes
+  // miss placement relative to the slot refill.
+  constexpr int32_t kNumProbe = 24;
+  const bool missesFirst = GetParam();
+  std::vector<int64_t> probeKeys(kNumProbe);
+  for (int32_t i = 0; i < kNumProbe; ++i) {
+    const bool miss = missesFirst ? (i < kNumProbe / 3) : (i % 3 == 0);
+    probeKeys[i] = miss ? (kNumKeys + i) : (i % kNumKeys);
   }
-
-  HashTableTestHelper<true>::create(table.get()).markHasDuplicates();
+  auto probeVector = makeRowVector({makeFlatVector<int64_t>(probeKeys)});
+  SelectivityVector selectivity(kNumProbe);
   HashLookup lookup(table->hashers(), pool());
-  lookup.reset(4);
+  table->prepareForJoinProbe(lookup, probeVector, selectivity, false);
+  lookup.hits.resize(kNumProbe);
+  std::fill(lookup.hits.begin(), lookup.hits.end(), nullptr);
+  table->joinProbe(lookup);
+  lookup.rows.resize(kNumProbe);
   std::iota(lookup.rows.begin(), lookup.rows.end(), 0);
-  lookup.hits[0] = chains[0].front();
-  lookup.hits[1] = nullptr;
-  lookup.hits[2] = chains[1].front();
-  lookup.hits[3] = chains[2].front();
 
-  auto expected = [&](bool includeMisses) {
+  // Collect the reference expansion via the (already tested) single-hit
+  // path; the interleaved walker must produce the same (row, hit) sequence.
+  auto collect = [&](auto&& runWalker,
+                     int32_t outputCapacity,
+                     bool includeMisses,
+                     uint64_t maxBytes) {
+    BaseHashTable::JoinResultIterator iter(
+        {}, /*fixedSizeListColumnsSizeSum=*/8, std::nullopt);
+    iter.reset(lookup);
     std::vector<vector_size_t> probeRows;
     std::vector<char*> hits;
-    auto appendChain = [&](vector_size_t probeRow, const auto& chain) {
-      probeRows.insert(probeRows.end(), chain.size(), probeRow);
-      hits.insert(hits.end(), chain.begin(), chain.end());
-    };
-    appendChain(0, chains[0]);
-    if (includeMisses) {
-      probeRows.push_back(1);
-      hits.push_back(nullptr);
+    std::vector<vector_size_t> outputProbeRows(outputCapacity);
+    std::vector<char*> outputHits(outputCapacity);
+    while (!iter.atEnd()) {
+      const auto numOutput = runWalker(
+          iter,
+          includeMisses,
+          folly::Range(outputProbeRows.data(), outputCapacity),
+          folly::Range(outputHits.data(), outputCapacity),
+          maxBytes);
+      if (numOutput == 0) {
+        // A call is allowed to return 0 only when it has just consumed
+        // the tail (e.g. trailing misses with includeMisses=false) —
+        // otherwise the loop would spin without making progress.
+        EXPECT_TRUE(iter.atEnd());
+        break;
+      }
+      probeRows.insert(
+          probeRows.end(),
+          outputProbeRows.begin(),
+          outputProbeRows.begin() + numOutput);
+      hits.insert(
+          hits.end(), outputHits.begin(), outputHits.begin() + numOutput);
     }
-    appendChain(2, chains[1]);
-    appendChain(3, chains[2]);
     return std::make_pair(std::move(probeRows), std::move(hits));
   };
 
-  auto run =
-      [&](int32_t outputCapacity, bool includeMisses, uint64_t maxBytes) {
-        BaseHashTable::JoinResultIterator iter(
-            {}, /*fixedSizeListColumnsSizeSum=*/8, std::nullopt);
-        iter.reset(lookup);
-        std::vector<vector_size_t> probeRows;
-        std::vector<char*> hits;
-        std::vector<vector_size_t> outputProbeRows(outputCapacity);
-        std::vector<char*> outputHits(outputCapacity);
-        while (!iter.atEnd()) {
-          const auto numOutput = table->listJoinResults(
-              iter,
-              includeMisses,
-              folly::Range(outputProbeRows.data(), outputCapacity),
-              folly::Range(outputHits.data(), outputCapacity),
-              maxBytes);
-          ASSERT_GT(numOutput, 0);
-          probeRows.insert(
-              probeRows.end(),
-              outputProbeRows.begin(),
-              outputProbeRows.begin() + numOutput);
-          hits.insert(
-              hits.end(), outputHits.begin(), outputHits.begin() + numOutput);
-        }
-        const auto [expectedProbeRows, expectedHits] = expected(includeMisses);
-        EXPECT_EQ(probeRows, expectedProbeRows);
-        EXPECT_EQ(hits, expectedHits);
-      };
+  // Three paths under test: the single-hit walker (used as the reference
+  // expansion), the interleaved walker invoked directly, and the public
+  // entry point which must dispatch to the interleaved walker under
+  // `hasDuplicates_ = true` + non-zero `nextOffset_`. Comparing all three
+  // catches both walker-level divergence and a dispatch regression that
+  // silently picks the wrong path.
+  auto singleHit = [&](auto&&... args) {
+    return helper.testingListJoinResultsSingleHit(
+        std::forward<decltype(args)>(args)...);
+  };
+  auto interleavedDirect = [&](auto&&... args) {
+    return helper.testingListJoinResultsInterleaved(
+        std::forward<decltype(args)>(args)...);
+  };
+  auto publicDispatch = [&](auto&&... args) {
+    return table->listJoinResults(std::forward<decltype(args)>(args)...);
+  };
 
-  run(64, false, std::numeric_limits<uint64_t>::max());
-  run(64, true, std::numeric_limits<uint64_t>::max());
-  run(1, true, std::numeric_limits<uint64_t>::max());
-  run(64, true, 16);
+  const std::vector<std::tuple<int32_t, bool, uint64_t>> cases{
+      {64, false, std::numeric_limits<uint64_t>::max()},
+      {64, true, std::numeric_limits<uint64_t>::max()},
+      {1, true, std::numeric_limits<uint64_t>::max()},
+      {kNumProbe / 2, true, std::numeric_limits<uint64_t>::max()},
+      {64, true, 16},
+  };
+  for (const auto& [outputCapacity, includeMisses, maxBytes] : cases) {
+    SCOPED_TRACE(
+        fmt::format(
+            "outputCapacity={} includeMisses={} maxBytes={}",
+            outputCapacity,
+            includeMisses,
+            maxBytes));
+    const auto [refRows, refHits] =
+        collect(singleHit, outputCapacity, includeMisses, maxBytes);
+    const auto [directRows, directHits] =
+        collect(interleavedDirect, outputCapacity, includeMisses, maxBytes);
+    const auto [publicRows, publicHits] =
+        collect(publicDispatch, outputCapacity, includeMisses, maxBytes);
+    EXPECT_EQ(directRows, refRows);
+    EXPECT_EQ(directHits, refHits);
+    EXPECT_EQ(publicRows, refRows);
+    EXPECT_EQ(publicHits, refHits);
+  }
 }
 
 TEST_P(HashTableTest, groupBySpill) {
