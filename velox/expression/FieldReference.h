@@ -92,9 +92,9 @@ class FieldReference : public SpecialForm {
   // Resolves 'index_' from 'field_' on first use for name-based references
   // and validates the index against 'rowType'. Ordinal references skip name
   // validation because the stored position is authoritative and the field
-  // name is informational. Checks the child type only when
-  // 'validateChildType' is true; the common eval path skips it to avoid
-  // per-batch overhead. Returns the validated child index.
+  // name is informational (empty for unnamed structs). Checks the child type
+  // only when 'validateChildType' is true; the common eval path skips it to
+  // avoid per-batch overhead. Returns the validated child index.
   int32_t resolveAndValidateIndex(
       const RowType& rowType,
       bool validateChildType);
@@ -104,7 +104,8 @@ class FieldReference : public SpecialForm {
 
   // True when created from an ordinal (DereferenceTypedExpr); 'index_' is
   // then authoritative and never re-resolved by name, since the input row
-  // type may contain duplicate or empty field names.
+  // type may be an unnamed struct whose field names are all empty. Non-empty
+  // duplicate field names are never allowed.
   const bool isOrdinalReference_{false};
 };
 } // namespace facebook::velox::exec

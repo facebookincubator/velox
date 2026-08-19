@@ -212,9 +212,9 @@ TEST_F(EvalSimplifiedTest, dereference) {
     testDereference("c0.c1", makeRowVector({data}));
   }
 
-  // Ordinal dereference of a later field when names are duplicate or empty.
-  // Name lookup returns the first unnamed field, so the stored ordinal must
-  // win.
+  // Ordinal dereference of a later field in an unnamed struct, where all
+  // field names are empty. Name lookup returns the first unnamed field, so
+  // the stored ordinal must win.
   {
     auto c0 = makeFlatVector<int64_t>({11, 22, 33, 44, 55});
     auto c1 = makeFlatVector<bool>({false, true, false, true, false});
