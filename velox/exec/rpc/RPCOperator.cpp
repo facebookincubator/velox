@@ -937,10 +937,8 @@ void RPCOperator::recordRuntimeStats() {
       kRpcRateLimiterCap, RuntimeCounter(admissionStats.capacity));
   lockedStats->addRuntimeStat(
       kRpcRateLimiterPeakPending, RuntimeCounter(admissionStats.peakPending));
-  if (admissionStats.lowWaterCapacity > 0) {
-    lockedStats->addRuntimeStat(
-        kRpcRateLimiterMinCap, RuntimeCounter(admissionStats.lowWaterCapacity));
-  }
+  lockedStats->addRuntimeStat(
+      kRpcRateLimiterMinCap, RuntimeCounter(admissionStats.lowWaterCapacity));
 }
 
 RowVectorPtr RPCOperator::buildOutputFromReadyBatch(
