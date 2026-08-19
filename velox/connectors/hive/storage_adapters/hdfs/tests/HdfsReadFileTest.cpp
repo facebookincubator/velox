@@ -120,7 +120,7 @@ class HdfsReadFileRetryTest : public testing::Test {
 // With retries disabled (maxReadAttempts == 1, the default), the very first
 // transient failure throws immediately and Read() is attempted exactly once.
 // This pins "default == original fail-fast behavior" as a regression guard: the
-// PR is a no-op unless a caller explicitly opts in.
+// default behavior is a no-op unless a caller explicitly opts in.
 TEST_F(HdfsReadFileRetryTest, failFastByDefault) {
   gFailCount = 1;
   gFailReturn = -1;
