@@ -757,6 +757,11 @@ TEST_F(SumAggregationTest, abandonPartialAggregation) {
                   .capturePlanNodeId(partialNodeId)
                   .finalAggregation()
                   .planNode();
+  std::atomic_bool usedToIntermediateFastPath{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Aggregate::toIntermediate",
+      std::function<void(void*)>(
+          [&](void*) { usedToIntermediateFastPath = true; }));
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .maxDrivers(1)
@@ -773,6 +778,7 @@ TEST_F(SumAggregationTest, abandonPartialAggregation) {
       stats.at(partialNodeId)
           .customStats.at("abandonedPartialAggregationRows")
           .sum);
+  EXPECT_TRUE(usedToIntermediateFastPath);
 }
 
 } // namespace
