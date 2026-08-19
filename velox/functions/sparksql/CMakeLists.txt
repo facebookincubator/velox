@@ -72,7 +72,9 @@ velox_add_library(
   ConcatWs.h
   DateTimeFunctions.h
   DecimalArithmetic.h
+  DecimalArithmeticFunctions.h
   DecimalCeil.h
+  DecimalCeilFunction.h
   DecimalUtil.h
   Factorial.h
   FormatNumber.h
