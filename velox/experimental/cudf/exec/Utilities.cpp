@@ -159,6 +159,21 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
   return output;
 }
 
+std::unique_ptr<cudf::table> concatenateViews(
+    const std::vector<cudf::table_view>& tableViews,
+    const std::vector<rmm::cuda_stream_view>& inputStreams,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  VELOX_CHECK_GT(tableViews.size(), 0);
+
+  cudf::detail::join_streams(inputStreams, stream);
+  auto output = cudf::concatenate(tableViews, stream, mr);
+
+  CudaEvent event(cudaEventDisableTiming);
+  streamsWaitForStream(event, inputStreams, stream);
+  return output;
+}
+
 std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
     std::vector<CudfVectorPtr>&& tables,
     const TypePtr& tableType,
