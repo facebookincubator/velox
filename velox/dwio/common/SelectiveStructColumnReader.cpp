@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <numeric>
+
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 
 #include "velox/dwio/common/ColumnLoader.h"
@@ -338,25 +340,30 @@ void SelectiveStructColumnReaderBase::next(
   if (hasDeletion_) {
     fillOutputRowsFromMutation(numValues);
     numValues = outputRows_.size();
+  } else if (useOutputRows()) {
+    // Nothing on this path populates 'outputRows_', but useOutputRows() is also
+    // true when the scan spec has a filter, so outputRows() would return an
+    // empty set while the result carries 'numValues' rows. Callers rely on the
+    // two agreeing -- the synthesized fields below, and
+    // RowReader::readWithRowNumber -- so keep the invariant here rather than at
+    // each use. No row is eliminated on this path: with no child readers the
+    // only filters are on constant columns, and those are all-or-nothing and
+    // handled below.
+    outputRows_.resize(numValues);
+    std::iota(outputRows_.begin(), outputRows_.end(), 0);
   }
   for (const auto& childSpec : scanSpec_->children()) {
     if (isChildConstant(*childSpec) && !testFilterOnConstant(*childSpec)) {
       outputRows_.clear();
+      // A constant column's filter is not counted by ScanSpec::hasFilter(), so
+      // useOutputRows() can be false here; clear 'inputRows_' too, otherwise
+      // outputRows() would fall back to it and report rows that were filtered
+      // out.
+      inputRows_ = {};
       numValues = 0;
       break;
     }
   }
-  // 'outputRows_' is populated only when there is a deletion, but outputRows()
-  // consults useOutputRows(), which is also true when the scan spec has a
-  // filter. With a filter and no deletion it therefore returns the empty
-  // 'outputRows_', which would size the synthesized fields below to zero while
-  // the result vector is sized to 'numValues', producing a RowVector whose
-  // child is shorter than its parent. Size them from 'numValues' instead so the
-  // two always agree.
-  const RowSet fieldRows = hasDeletion_
-      ? RowSet(outputRows_)
-      : RowSet(rows.data(), static_cast<size_t>(numValues));
-
   prepareResult(result);
   auto* resultRowVector = result->asChecked<RowVector>();
   resultRowVector->unsafeResize(numValues);
@@ -377,7 +384,7 @@ void SelectiveStructColumnReaderBase::next(
         velox::common::ScanSpec::ColumnType::kRowIndex) {
       VELOX_CHECK(!childSpec->hasFilter());
       setRowNumberField(
-          currentRowNumber_, fieldRows, resultRowVector->pool(), childField);
+          currentRowNumber_, outputRows(), resultRowVector->pool(), childField);
     } else if (
         childSpec->columnType() ==
         velox::common::ScanSpec::ColumnType::kComposite) {
@@ -385,7 +392,7 @@ void SelectiveStructColumnReaderBase::next(
       setCompositeField(
           *childSpec,
           currentRowNumber_,
-          fieldRows,
+          outputRows(),
           resultRowVector->pool(),
           childField);
     } else {
