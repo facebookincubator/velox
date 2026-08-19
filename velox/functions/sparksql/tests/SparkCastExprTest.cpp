@@ -1957,9 +1957,11 @@ TEST_F(SparkCastExprTestAnsiOn, stringToTime) {
 }
 
 TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleInvalidThrows) {
+  const std::vector<TypePtr> types{REAL(), DOUBLE()};
+
   // Invalid format strings throw in ANSI mode. The message follows the standard
   // Velox Spark cast convention: "Cannot cast VARCHAR '<v>' to <T>. ...".
-  for (const auto& type : {REAL(), DOUBLE()}) {
+  for (const auto& type : types) {
     for (const auto& value : invalidStringToRealDoubleInputs()) {
       SCOPED_TRACE(fmt::format("cast('{}' as {})", value, type->toString()));
       testThrow<std::string>(
@@ -1972,7 +1974,7 @@ TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleInvalidThrows) {
   }
 
   // Empty and whitespace-only strings are trimmed to empty before throwing.
-  for (const auto& type : {REAL(), DOUBLE()}) {
+  for (const auto& type : types) {
     for (const auto& value : {"", "   ", "\t\n"}) {
       SCOPED_TRACE(fmt::format("cast('{}' as {})", value, type->toString()));
       testThrow<std::string>(
