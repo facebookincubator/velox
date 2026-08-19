@@ -24,6 +24,14 @@
 #include "velox/external/hdfs/ArrowHdfsInternal.h"
 
 namespace facebook::velox {
+namespace {
+// Upper bound on the exponential backoff between read retries. Without a cap
+// the delay doubles unbounded as the attempt count grows (and the shift would
+// eventually overflow), so a large maxReadAttempts_ could stall a read for
+// hours. 30s is long enough to ride out a transient DataNode blip while keeping
+// the worst-case wait bounded.
+constexpr int64_t kMaxRetryDelayMs = 30'000;
+} // namespace
 
 struct HdfsFile {
   filesystems::arrow::io::internal::LibHdfsShim* driver_;
@@ -165,9 +173,13 @@ class HdfsReadFile::Impl {
                      << " (offset=" << offset + totalBytesRead << ", attempt "
                      << attempt << "/" << maxReadAttempts_ << "), root cause: "
                      << driver_->GetLastExceptionRootCause();
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(
-                retryBaseDelayMs_ * (1 << (attempt - 1))));
+        // Exponential backoff, capped at kMaxRetryDelayMs. The shift is clamped
+        // (and done in 64-bit) so a large attempt count can neither overflow
+        // nor produce an absurdly long sleep.
+        const int shift = std::min(attempt - 1, 20);
+        const int64_t delayMs = std::min<int64_t>(
+            int64_t{retryBaseDelayMs_} << shift, kMaxRetryDelayMs);
+        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
         ++attempt;
         // Rebuild the handle and reposition to the first unread byte; already
         // read bytes are kept.
