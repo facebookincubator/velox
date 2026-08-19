@@ -59,9 +59,10 @@ using velox::rpc::RPCResponse;
 
 // A PER_ROW RPC function backed by a MockTransport that rejects a
 // deterministic window of requests with rate-limit errors. It classifies
-// rate-limit/timeout failures as backend overload (kError -> both controllers
-// back off) and clean drains as kSuccess (feed the RTT gradient / drive
-// rate-limiter recovery), exactly as a production congestion policy would.
+// rate-limit/timeout failures as backend overload (kOverloaded -> both
+// controllers back off) and clean drains as kSuccess (feed the RTT gradient /
+// drive rate-limiter recovery), exactly as a production congestion policy
+// would.
 class BurstRPCFunction : public AsyncRPCFunction {
  public:
   struct Config {
@@ -145,16 +146,17 @@ class BurstRPCFunction : public AsyncRPCFunction {
   }
 
   // Overload classifier: rate-limit / timeout failures are backend overload
-  // (kError). A null-input error is a user error and must NOT move the window
-  // (folded into kSuccess/kNone below since it is not rate-limit/timeout). A
-  // clean drain feeds its RTT to the gradient and drives rate-limiter recovery.
+  // (kOverloaded). A null-input error is a user error and must NOT move the
+  // window (folded into kSuccess/kNone below since it is not
+  // rate-limit/timeout). A clean drain feeds its RTT to the gradient and drives
+  // rate-limiter recovery.
   CongestionSignal evaluateCongestion(
       const std::vector<RPCResponse>& responses) const override {
     for (const auto& response : responses) {
       if (response.hasError() &&
           (response.errorKind == RPCErrorKind::kRateLimited ||
            response.errorKind == RPCErrorKind::kTimeout)) {
-        return CongestionSignal::kError;
+        return CongestionSignal::kOverloaded;
       }
     }
     return responses.empty() ? CongestionSignal::kNone
