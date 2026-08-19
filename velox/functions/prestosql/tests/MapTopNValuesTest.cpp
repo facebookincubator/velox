@@ -107,6 +107,52 @@ TEST_F(MapTopNValuesTest, basic) {
       "n must be greater than or equal to 0");
 }
 
+TEST_F(MapTopNValuesTest, tieBreak) {
+  // Two logically identical maps stored in a different entry order. Ties on the
+  // transformed value are broken on the keys, so both rows return the same top
+  // values no matter how the entries are laid out.
+  auto map = makeMapVector(
+      {0, 3},
+      makeFlatVector<int32_t>({1, 2, 3, 3, 2, 1}),
+      makeFlatVector<int64_t>({10, 20, 30, 30, 20, 10}));
+
+  assertEqualVectors(
+      evaluate("map_top_n_values(c0, 2, (k,v) -> 0)", makeRowVector({map})),
+      makeArrayVectorFromJson<int64_t>({
+          "[30, 20]",
+          "[30, 20]",
+      }));
+}
+
+TEST_F(MapTopNValuesTest, lambdaReturnsNull) {
+  RowVectorPtr input = makeRowVector({
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{1:10, 2:20, 3:30, 4:40}",
+      }),
+  });
+
+  // The entry whose transformed value is null ranks last.
+  assertEqualVectors(
+      evaluate(
+          "map_top_n_values(c0, 4, (k,v) -> if(k = 2, cast(null as integer), k))",
+          input),
+      makeArrayVectorFromJson<int64_t>({"[40, 30, 10, 20]"}));
+}
+
+TEST_F(MapTopNValuesTest, nIsZeroWithFailingLambda) {
+  RowVectorPtr input = makeRowVector({
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{0:5, 1:10}",
+      }),
+  });
+
+  // n = 0 discards the whole result, so the lambda is never evaluated and its
+  // division by zero is not raised.
+  assertEqualVectors(
+      evaluate("map_top_n_values(c0, 0, (k,v) -> v / k)", input),
+      makeArrayVectorFromJson<int64_t>({"[]"}));
+}
+
 TEST_F(MapTopNValuesTest, complexKeys) {
   RowVectorPtr input =
       makeRowVector({makeMapVectorFromJson<std::string, std::string>(

@@ -78,6 +78,34 @@ TEST_F(MapTopNKeysTest, multipleMaps) {
       }));
 }
 
+TEST_F(MapTopNKeysTest, tieBreak) {
+  // Two logically identical maps stored in a different entry order. Ties on the
+  // transformed value are broken on the keys, so both rows return the same top
+  // keys no matter how the entries are laid out.
+  auto map = makeMapVector(
+      {0, 3},
+      makeFlatVector<int32_t>({1, 2, 3, 3, 2, 1}),
+      makeFlatVector<int64_t>({5, 5, 5, 5, 5, 5}));
+
+  RowVectorPtr input = makeRowVector({map});
+
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 2, (k,v) -> 0)", input),
+      makeArrayVectorFromJson<int32_t>({
+          "[3, 2]",
+          "[3, 2]",
+      }));
+
+  // Entries whose transformed value is null tie with each other and are broken
+  // the same way.
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 2, (k,v) -> cast(null as integer))", input),
+      makeArrayVectorFromJson<int32_t>({
+          "[3, 2]",
+          "[3, 2]",
+      }));
+}
+
 TEST_F(MapTopNKeysTest, nIsZero) {
   RowVectorPtr input = makeRowVector({
       makeMapVectorFromJson<int32_t, int64_t>({
@@ -91,6 +119,20 @@ TEST_F(MapTopNKeysTest, nIsZero) {
 
   assertEqualVectors(
       evaluate("map_top_n_keys(c0, 0, (x,y) -> x)", input),
+      makeArrayVectorFromJson<int32_t>({"[]"}));
+}
+
+TEST_F(MapTopNKeysTest, nIsZeroWithFailingLambda) {
+  RowVectorPtr input = makeRowVector({
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{0:5, 1:10}",
+      }),
+  });
+
+  // n = 0 discards the whole result, so the lambda is never evaluated and its
+  // division by zero is not raised.
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 0, (k,v) -> v / k)", input),
       makeArrayVectorFromJson<int32_t>({"[]"}));
 }
 
@@ -192,6 +234,32 @@ TEST_F(MapTopNKeysTest, dictionaryEncodedMap) {
       makeArrayVectorFromJson<int32_t>({"[4]", "[4]", "[4]"}));
 }
 
+TEST_F(MapTopNKeysTest, wrappedMapWithNulls) {
+  auto map = makeMapVectorFromJson<int32_t, int64_t>({
+      "{1:10, 2:20}",
+      "null",
+      "{3:30, 4:40}",
+  });
+
+  // A null map reached through dictionary indices.
+  auto dictMap = wrapInDictionary(makeIndices({1, 2, 0, 1}), 4, map);
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 2, (k,v) -> k)", makeRowVector({dictMap})),
+      makeArrayVectorFromJson<int32_t>({
+          "null",
+          "[4, 3]",
+          "[2, 1]",
+          "null",
+      }));
+
+  // A constant NULL map broadcast across rows.
+  auto nullMap =
+      BaseVector::createNullConstant(MAP(INTEGER(), BIGINT()), 3, pool());
+  assertEqualVectors(
+      evaluate("map_top_n_keys(c0, 2, (k,v) -> k)", makeRowVector({nullMap})),
+      makeArrayVectorFromJson<int32_t>({"null", "null", "null"}));
+}
+
 TEST_F(MapTopNKeysTest, nGreaterThanMapSize) {
   RowVectorPtr input = makeRowVector({
       makeMapVectorFromJson<int32_t, int64_t>({
@@ -270,6 +338,24 @@ TEST_F(MapTopNKeysTest, lambdaReturnsNull) {
       makeArrayVectorFromJson<int32_t>({
           "[4, 3, 1, 2]",
       }));
+}
+
+TEST_F(MapTopNKeysTest, nonOrderableKeys) {
+  // The lambda signature does not require the key type to be orderable, so a
+  // map-typed key must not reach the key tie-break. Every transform value is
+  // equal here, which forces every comparison through the tie-break.
+  auto keys = makeMapVectorFromJson<int32_t, int64_t>({
+      "{1:10}",
+      "{2:20}",
+      "{3:30}",
+  });
+  auto input = makeRowVector({makeMapVector(
+      /*offsets=*/{0}, keys, makeFlatVector<int64_t>({1, 2, 3}))});
+
+  auto result = evaluate("map_top_n_keys(c0, 2, (k,v) -> 0)", input);
+  ASSERT_EQ(result->size(), 1);
+  ASSERT_FALSE(result->isNullAt(0));
+  EXPECT_EQ(result->as<ArrayVector>()->sizeAt(0), 2);
 }
 
 TEST_F(MapTopNKeysTest, varcharKeys) {

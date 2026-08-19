@@ -285,8 +285,10 @@ Map Functions
         This query works correctly in Velox (C++) but requires sidecar mode to be enabled
         when running through Presto Java to delegate execution to the Velox engine.
 
-        **Tie-breaking behavior**: When multiple elements have equal transformed values, the function
-        uses a deterministic index-based tie-breaker. For example::
+        **Tie-breaking behavior**: When multiple elements have equal transformed values, the tie is
+        broken on the map keys, in descending order, so the result does not depend on the order in
+        which the map stores its entries. Keys that are not orderable, such as map-typed keys, break
+        ties on the position of the entry in the input instead. For example::
 
             SELECT map_top_n_keys(MAP(ARRAY[1, 2, 3], ARRAY[5, 5, 5]), 2, (k, v) -> 0); -- [3, 2]
 
@@ -311,8 +313,10 @@ Map Functions
 
     .. note::
 
-        **Tie-breaking behavior**: When multiple elements have equal transformed values, the function
-        uses a deterministic index-based tie-breaker. For example::
+        **Tie-breaking behavior**: When multiple elements have equal transformed values, the tie is
+        broken on the map keys, in descending order, so the result does not depend on the order in
+        which the map stores its entries. Keys that are not orderable, such as map-typed keys, break
+        ties on the position of the entry in the input instead. For example::
 
             SELECT map_top_n_values(MAP(ARRAY[1, 2, 3], ARRAY[10, 20, 30]), 2, (k, v) -> 0); -- [30, 20]
 
