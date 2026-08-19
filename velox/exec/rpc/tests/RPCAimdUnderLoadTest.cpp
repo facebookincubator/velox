@@ -39,9 +39,9 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/rpc/clients/MockTransport.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/rpc/BackendAdmission.h"
 #include "velox/exec/rpc/RPCOperator.h"
 #include "velox/exec/rpc/RPCPlanNodeTranslator.h"
-#include "velox/exec/rpc/RPCRateLimiter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -208,7 +208,7 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
   void TearDown() override {
     // The rate limiter is process-global; reset it so its adaptive state does
     // not leak into other tests.
-    RPCRateLimiter::testingResetAllState();
+    BackendRegistry::global().testingReset();
     OperatorTestBase::TearDown();
   }
 
