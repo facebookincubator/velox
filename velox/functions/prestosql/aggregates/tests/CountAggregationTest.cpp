@@ -137,7 +137,7 @@ TEST_F(CountAggregationTest, mask) {
   core::PlanNodeId partialNodeId;
   plan = PlanBuilder()
              .values(data)
-             .partialAggregation({"k"}, {"count(c)"}, {"m"})
+             .partialAggregation({"k"}, {"count(c)", "count()"}, {"m", "m"})
              .capturePlanNodeId(partialNodeId)
              .finalAggregation()
              .planNode();
@@ -147,7 +147,8 @@ TEST_F(CountAggregationTest, mask) {
           .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
           .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
           .assertResults(
-              "SELECT k, count(c) FILTER (where m) FROM tmp GROUP BY k");
+              "SELECT k, count(c) FILTER (where m), count(1) FILTER (where m) "
+              "FROM tmp GROUP BY k");
   auto taskStats = toPlanStats(task->taskStats());
   auto partialStats = taskStats.at(partialNodeId).customStats;
   EXPECT_LT(0, partialStats.at("abandonedPartialAggregationRows").sum);

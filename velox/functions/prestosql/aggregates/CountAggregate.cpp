@@ -34,6 +34,30 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
     return sizeof(int64_t);
   }
 
+  bool supportsToIntermediate() const override {
+    return true;
+  }
+
+  void toIntermediate(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      VectorPtr& result) const override {
+    auto* vector = result->asFlatVector<int64_t>();
+    vector->clearAllNulls();
+    auto* rawValues = vector->mutableRawValues();
+    std::fill_n(rawValues, rows.size(), 0);
+
+    if (args.empty()) {
+      rows.applyToSelected([&](vector_size_t row) { rawValues[row] = 1; });
+      return;
+    }
+
+    DecodedVector decoded(*args[0], rows);
+    rows.applyToSelected([&](vector_size_t row) {
+      rawValues[row] = decoded.isNullAt(row) ? 0 : 1;
+    });
+  }
+
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     BaseAggregate::doExtractValues(groups, numGroups, result, [&](char* group) {
