@@ -359,7 +359,7 @@ The result precision is decided with the number of integral digits and the resul
 <dl class="spark function">
 <dt class="sig sig-object spark" id="make_decimal">
 <span class="sig-name descname"><span class="pre">make_decimal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">nullOnOverflow</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">decimal</span></span></span><a class="headerlink" href="#make_decimal" title="Link to this definition">¶</a></dt>
-<dd><p>Create <code class="docutils literal notranslate"><span class="pre">decimal</span></code> of requsted precision and scale from an unscaled bigint value <code class="docutils literal notranslate"><span class="pre">x</span></code>.
+<dd><p>Create <code class="docutils literal notranslate"><span class="pre">decimal</span></code> of requested precision and scale from an unscaled bigint value <code class="docutils literal notranslate"><span class="pre">x</span></code>.
 By default, the value of <code class="docutils literal notranslate"><span class="pre">nullOnOverflow</span></code> is true, and null will be returned when <code class="docutils literal notranslate"><span class="pre">x</span></code> is too large for the result precision.
 Otherwise, exception will be thrown when <code class="docutils literal notranslate"><span class="pre">x</span></code> overflows.</p>
 </dd></dl>
