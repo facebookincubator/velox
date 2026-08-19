@@ -192,11 +192,17 @@ struct VectorInitializer<velox::ArrayVector> {
       resetIfNotWritable(output, nulls, sizes, offsets);
     }
 
+    const velox::Buffer* prevOffsets = offsets.get();
+    const velox::Buffer* prevSizes = sizes.get();
+
     ensureBuffer<bool, /* ShouldAllocate */ false>(&nulls, rowCount, pool);
     ensureBuffer<velox::vector_size_t>(&offsets, rowCount, pool);
     ensureBuffer<velox::vector_size_t>(&sizes, rowCount, pool);
 
-    if (!output) {
+    // Reconstruct when ensureBuffer reallocated a reused vector's offsets/sizes
+    // buffers: otherwise the vector keeps its stale buffers and the subsequent
+    // resize() re-grows and zero-fills them.
+    if (!output || offsets.get() != prevOffsets || sizes.get() != prevSizes) {
       output = std::make_shared<velox::ArrayVector>(
           pool,
           veloxType,
@@ -232,11 +238,17 @@ struct VectorInitializer<velox::MapVector> {
       resetIfNotWritable(output, nulls, sizes, offsets);
     }
 
+    const velox::Buffer* prevOffsets = offsets.get();
+    const velox::Buffer* prevSizes = sizes.get();
+
     ensureBuffer<bool, /* ShouldAllocate */ false>(&nulls, rowCount, pool);
     ensureBuffer<velox::vector_size_t>(&offsets, rowCount, pool);
     ensureBuffer<velox::vector_size_t>(&sizes, rowCount, pool);
 
-    if (!output) {
+    // Reconstruct when ensureBuffer reallocated a reused vector's offsets/sizes
+    // buffers: otherwise the vector keeps its stale buffers and the subsequent
+    // resize() re-grows and zero-fills them.
+    if (!output || offsets.get() != prevOffsets || sizes.get() != prevSizes) {
       output = std::make_shared<velox::MapVector>(
           pool,
           veloxType,
