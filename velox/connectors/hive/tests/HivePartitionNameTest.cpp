@@ -175,6 +175,33 @@ TEST_F(HivePartitionNameTest, partitionNameForNull) {
   }
 }
 
+TEST_F(HivePartitionNameTest, shortDecimalPartitionValueFormatting) {
+  RowVectorPtr input = makeRowVector(
+      {"short_decimal_col"},
+      {makeFlatVector<int64_t>(std::vector<int64_t>{1234}, DECIMAL(10, 2))});
+
+  std::vector<column_index_t> partitionChannels{0};
+  EXPECT_EQ(
+      FileUtils::makePartName(
+          extractPartitionKeyValues(input, partitionChannels), true),
+      "short_decimal_col=12.34");
+}
+
+// A TIMESTAMP_UTC column reaches this path, and unlike a plain TIMESTAMP it is
+// named as it stands rather than in the default timezone.
+TEST_F(HivePartitionNameTest, timestampUtcPartitionValueIsNotShifted) {
+  RowVectorPtr input = makeRowVector(
+      {"ts"},
+      {makeFlatVector<Timestamp>(
+          std::vector<Timestamp>{Timestamp(0, 0)}, TIMESTAMP_UTC())});
+
+  std::vector<column_index_t> partitionChannels{0};
+  EXPECT_EQ(
+      FileUtils::makePartName(
+          extractPartitionKeyValues(input, partitionChannels), true),
+      "ts=1970-01-01 00%3A00%3A00.0");
+}
+
 TEST_F(HivePartitionNameTest, timestampPartitionValueFormatting) {
   // Test timestamp partition value formatting to match Presto's
   // java.sql.Timestamp.toString() behavior: removes trailing zeros but keeps at

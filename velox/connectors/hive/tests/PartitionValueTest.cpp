@@ -112,6 +112,89 @@ TEST(PartitionValueTest, timestampModes) {
       unshifted);
 }
 
+std::string toPartitionString(
+    const Variant& value,
+    const TypePtr& type,
+    TimestampMode timestampMode = TimestampMode::kUtc,
+    DateMode dateMode = DateMode::kIsoString) {
+  return PartitionValue::toString(value, *type, timestampMode, dateMode);
+}
+
+// A whole second is named with one fractional digit, so a filter matching a
+// partition has to render it the same way.
+TEST(PartitionValueTest, toStringNamesPartitions) {
+  const auto wholeSecond = parseTimestamp("2020-01-01 12:34:56");
+  EXPECT_EQ(
+      toPartitionString(Variant(wholeSecond), TIMESTAMP()),
+      "2020-01-01 12:34:56.0");
+  EXPECT_EQ(
+      toPartitionString(
+          Variant(parseTimestamp("2020-01-01 12:34:56.123")), TIMESTAMP()),
+      "2020-01-01 12:34:56.123");
+
+  EXPECT_EQ(toPartitionString(Variant(18'263), DATE()), "2020-01-02");
+  EXPECT_EQ(
+      toPartitionString(
+          Variant(18'263),
+          DATE(),
+          TimestampMode::kUtc,
+          DateMode::kDaysSinceEpoch),
+      "18263");
+
+  EXPECT_EQ(
+      toPartitionString(Variant(int64_t{1'234}), DECIMAL(10, 2)), "12.34");
+  EXPECT_EQ(toPartitionString(Variant(true), BOOLEAN()), "true");
+  EXPECT_EQ(toPartitionString(Variant(std::string("us")), VARCHAR()), "us");
+}
+
+// Shifting a TIMESTAMP_UTC, as naming a plain TIMESTAMP does, would not
+// survive fromString(), which leaves this type unshifted.
+TEST(PartitionValueTest, toStringLeavesTimestampUtcUnshifted) {
+  const auto timestamp = parseTimestamp("2020-01-01 12:34:56");
+  EXPECT_EQ(
+      PartitionValue::toString(
+          Variant(timestamp),
+          *TIMESTAMP_UTC(),
+          TimestampMode::kLocalTime,
+          DateMode::kIsoString),
+      "2020-01-01 12:34:56.0");
+  EXPECT_EQ(
+      toVariant(
+          "2020-01-01 12:34:56", TIMESTAMP_UTC(), TimestampMode::kLocalTime)
+          .value<TypeKind::TIMESTAMP>(),
+      timestamp);
+}
+
+TEST(PartitionValueTest, toStringRejectsNull) {
+  VELOX_ASSERT_USER_THROW(
+      toPartitionString(Variant::null(TypeKind::BIGINT), BIGINT()),
+      "A null partition value has no string");
+}
+
+TEST(PartitionValueTest, namingRoundTripsForEveryType) {
+  const std::vector<std::pair<Variant, TypePtr>> cases{
+      {Variant(true), BOOLEAN()},
+      {Variant(int8_t{-1}), TINYINT()},
+      {Variant(int16_t{-2}), SMALLINT()},
+      {Variant(int32_t{-3}), INTEGER()},
+      {Variant(int64_t{-4}), BIGINT()},
+      {Variant(1.25f), REAL()},
+      {Variant(2.5), DOUBLE()},
+      {Variant(std::string("us")), VARCHAR()},
+      {Variant(18'263), DATE()},
+      {Variant(int64_t{1'234}), DECIMAL(10, 2)},
+      {Variant(HugeInt::parse("1234567890123456789012")), DECIMAL(25, 2)},
+      {Variant(parseTimestamp("2020-01-01 12:34:56")), TIMESTAMP()},
+      {Variant(parseTimestamp("2020-01-01 12:34:56.123")), TIMESTAMP()},
+  };
+
+  for (const auto& [value, type] : cases) {
+    const auto named = PartitionValue::toString(
+        value, *type, TimestampMode::kUtc, DateMode::kIsoString);
+    EXPECT_EQ(toVariant(named, type), value) << "for " << type->toString();
+  }
+}
+
 TEST(PartitionValueTest, filterOnConvertedValue) {
   const common::BigintRange bigintRange(10, 20, /*nullAllowed=*/false);
   EXPECT_TRUE(applyFilter(bigintRange, toVariant("15", BIGINT())));

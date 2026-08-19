@@ -28,6 +28,68 @@
 namespace facebook::velox::connector::hive {
 namespace {
 
+template <typename T>
+std::string formatDecimal(T value, const Type& type) {
+  const auto [precision, scale] = getDecimalPrecisionScale(type);
+  const auto maxSize = DecimalUtil::maxStringViewSize(precision, scale);
+  std::string buffer(maxSize, '\0');
+  buffer.resize(
+      DecimalUtil::castToString(value, scale, maxSize, buffer.data()));
+  return buffer;
+}
+
+std::string timestampToString(Timestamp value) {
+  static const TimestampToStringOptions kOptions{
+      .precision = TimestampPrecision::kMilliseconds,
+      .skipTrailingZeros = true,
+      .dateTimeSeparator = ' ',
+  };
+  auto result = value.toString(kOptions);
+  // Presto's java.sql.Timestamp.toString() always keeps one decimal place, so
+  // a whole second is named "...:56.0" and must be matched as such.
+  if (result.find_last_of('.') == std::string::npos) {
+    result += ".0";
+  }
+  return result;
+}
+
+template <TypeKind kind>
+std::string toStringImpl(
+    const Variant& value,
+    const Type& type,
+    PartitionValue::TimestampMode timestampMode,
+    PartitionValue::DateMode dateMode) {
+  using NativeType = typename TypeTraits<kind>::NativeType;
+
+  if (type.isDate()) {
+    const auto days = value.value<TypeKind::INTEGER>();
+    return dateMode == PartitionValue::DateMode::kDaysSinceEpoch
+        ? fmt::to_string(days)
+        : DateType::toIso8601(days);
+  }
+
+  if constexpr (
+      std::is_same_v<NativeType, int64_t> ||
+      std::is_same_v<NativeType, int128_t>) {
+    if (type.isDecimal()) {
+      return formatDecimal(value.value<kind>(), type);
+    }
+  }
+
+  if constexpr (std::is_same_v<NativeType, StringView>) {
+    return value.value<kind>();
+  } else if constexpr (kind == TypeKind::TIMESTAMP) {
+    auto timestamp = value.value<TypeKind::TIMESTAMP>();
+    if (type.equivalent(*TIMESTAMP()) &&
+        timestampMode == PartitionValue::TimestampMode::kLocalTime) {
+      timestamp.toTimezone(Timestamp::defaultTimezone());
+    }
+    return timestampToString(timestamp);
+  } else {
+    return fmt::to_string(value.value<kind>());
+  }
+}
+
 template <TypeKind kind>
 Variant fromStringImpl(
     std::string_view value,
@@ -73,6 +135,17 @@ Variant fromStringImpl(
 }
 
 } // namespace
+
+// static
+std::string PartitionValue::toString(
+    const Variant& value,
+    const Type& type,
+    TimestampMode timestampMode,
+    DateMode dateMode) {
+  VELOX_USER_CHECK(!value.isNull(), "A null partition value has no string");
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      toStringImpl, type.kind(), value, type, timestampMode, dateMode);
+}
 
 // static
 Variant PartitionValue::fromString(
