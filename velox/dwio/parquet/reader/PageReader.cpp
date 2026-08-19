@@ -631,7 +631,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       }
       auto header = strings;
       for (auto i = 0; i < dictionary_.numValues; ++i) {
-        auto length = *reinterpret_cast<const int32_t*>(header);
+        auto length = folly::loadUnaligned<int32_t>(header);
         values[i] = StringView(header + sizeof(int32_t), length);
         header += length + sizeof(int32_t);
       }

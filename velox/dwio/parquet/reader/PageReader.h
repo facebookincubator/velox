@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/lang/Bits.h>
+
 #include "velox/common/compression/Compression.h"
 #include "velox/dwio/common/BitConcatenation.h"
 #include "velox/dwio/common/DirectDecoder.h"
@@ -253,7 +255,7 @@ class PageReader {
 
   template <typename T>
   T readField(const char* FOLLY_NONNULL& ptr) {
-    T data = *reinterpret_cast<const T*>(ptr);
+    T data = folly::loadUnaligned<T>(ptr);
     ptr += sizeof(T);
     return data;
   }
