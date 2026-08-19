@@ -44,6 +44,7 @@ ScanSpec* ScanSpec::getOrCreateChild(const std::string& name) {
   }
   this->children_.push_back(std::make_shared<ScanSpec>(name));
   const auto& child = this->children_.back();
+  child->parent_ = this;
   this->childByFieldName_[child->fieldName()] = child.get();
   stableOrder_.push_back(child);
   stableChildren_.reset();
@@ -138,6 +139,17 @@ void ScanSpec::enableFilterInSubTree(bool value) {
   for (auto& child : children_) {
     child->enableFilterInSubTree(value);
   }
+}
+
+void ScanSpec::resetHasFilterUpToRoot() {
+  for (auto* spec = this; spec != nullptr; spec = spec->parent_) {
+    spec->hasFilter_.reset();
+  }
+}
+
+void ScanSpec::setFilterEnabled(bool value) {
+  enableFilterInSubTree(value);
+  resetHasFilterUpToRoot();
 }
 
 ScanSpec::StableChildren ScanSpec::stableChildren() {

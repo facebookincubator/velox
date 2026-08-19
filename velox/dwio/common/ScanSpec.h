@@ -80,6 +80,13 @@ class ScanSpec {
     filter_ = std::move(filter);
   }
 
+  /// Enables or disables filtering by 'this' and its descendants in the
+  /// readers, leaving the filters in place. Use for a column whose final values
+  /// the reader does not produce: filtering on what it sees drops the wrong
+  /// rows. The caller applies the filter with applyFilter() once values are
+  /// final.
+  void setFilterEnabled(bool value);
+
   void setMaxArrayElementsCount(vector_size_t count) {
     maxArrayElementsCount_ = count;
   }
@@ -491,6 +498,13 @@ class ScanSpec {
 
   void enableFilterInSubTree(bool value);
 
+  // Resets the memoized hasFilter() of this spec and of every ancestor. Only
+  // those can be stale after filtering is turned on or off here: an ancestor
+  // memoizes what its children report, while a descendant memoizes nothing
+  // while filtering is disabled, because hasFilter() answers from
+  // 'filterDisabled_' before it reads the memo.
+  void resetHasFilterUpToRoot();
+
   bool compareTimeToDropValue(
       const std::shared_ptr<ScanSpec>& x,
       const std::shared_ptr<ScanSpec>& y);
@@ -542,6 +556,10 @@ class ScanSpec {
   SelectivityInfo selectivity_;
 
   std::vector<std::shared_ptr<ScanSpec>> children_;
+
+  // Containing spec, nullptr for the root. reorder() permutes 'children_'
+  // without moving the specs, so this stays valid.
+  ScanSpec* parent_{nullptr};
 
   // Children in the order they were added, never reordered. Append-only, so an
   // earlier snapshot is a prefix of a later one.
