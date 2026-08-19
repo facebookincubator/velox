@@ -35,7 +35,9 @@ class HdfsReadFile final : public ReadFile {
   /// retries and fails over internally via DFSInputStream, whereas libhdfs3
   /// does not.
   /// @param retryBaseDelayMs Base delay for the exponential backoff between
-  /// retries: the Nth retry waits retryBaseDelayMs * 2^(N-1) milliseconds.
+  /// retries: the Nth retry waits retryBaseDelayMs * 2^(N-1) milliseconds,
+  /// capped at an internal maximum so a large maxReadAttempts cannot stall a
+  /// read for an unbounded amount of time.
   explicit HdfsReadFile(
       filesystems::arrow::io::internal::LibHdfsShim* driver,
       hdfsFS hdfs,
