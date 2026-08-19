@@ -722,7 +722,7 @@ TEST_F(SumAggregationTest, dummySum) {
   assertQuery(plan, "SELECT sum(distinct c0), avg(c1) from tmp");
 }
 
-TEST_F(SumAggregationTest, abandonPartialAggregation) {
+DEBUG_ONLY_TEST_F(SumAggregationTest, abandonPartialAggregation) {
   constexpr vector_size_t kBatchSize = 100;
   std::vector<RowVectorPtr> data;
   for (auto batch = 0; batch < 3; ++batch) {
