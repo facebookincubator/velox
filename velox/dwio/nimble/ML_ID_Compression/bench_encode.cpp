@@ -25,6 +25,7 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/ML_ID_Compression/BenchCommon.h"
+#include "velox/dwio/nimble/ML_ID_Compression/OpenZLBenchTarget.h"
 #include "velox/dwio/nimble/ML_ID_Compression/CachePolicy.h"
 #include "velox/dwio/nimble/ML_ID_Compression/MeasureLoop.h"
 
@@ -51,6 +52,7 @@ int main(int argc, char** argv) {
   const uint64_t seed = static_cast<uint64_t>(FLAGS_mlidc_seed);
 
   auto encoders = buildDefaultEncoders<Elem>();
+  encoders.push_back(buildOpenZLEncoder<Elem>());
   auto datasets = defaultInt64Datasets<Elem>();
 
   const CacheTopology topo = CacheTopology::detect();

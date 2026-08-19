@@ -25,6 +25,7 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/ML_ID_Compression/BenchCommon.h"
+#include "velox/dwio/nimble/ML_ID_Compression/OpenZLBenchTarget.h"
 
 DEFINE_bool(validate, false, "Round-trip check after each encode");
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");
@@ -47,6 +48,7 @@ int main(int argc, char** argv) {
   const uint64_t seed = static_cast<uint64_t>(FLAGS_mlidc_seed);
 
   auto encoders = buildDefaultEncoders<Elem>();
+  encoders.push_back(buildOpenZLEncoder<Elem>());
   auto datasets = defaultInt64Datasets<Elem>();
 
   std::cout << "bench_compression: " << encoders.size() << " encoders x "
