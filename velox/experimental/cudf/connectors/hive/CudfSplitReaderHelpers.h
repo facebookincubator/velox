@@ -31,6 +31,7 @@
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/resource_ref.hpp>
 
+#include <future>
 #include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -81,18 +82,29 @@ class BufferedInputDataSource : public cudf::io::datasource {
       pendingDeviceLoads_;
 };
 
-/**
- * @brief Hybrid scan reader state
- *
- * This struct is used to store the column chunk data for the hybrid scan reader
- * and a once flag to ensure the setup is only done once.
- */
-struct HybridScanState {
-  HybridScanState() : isHybridScanSetup_(std::make_unique<std::once_flag>()) {}
+/// Tracks progress of reading the row groups selected for a split as a
+/// sequence of passes, each materialized as one or more table chunks.
+struct RowGroupPassState {
+  /// Per-source row group indices of each pass, in read order.
+  std::vector<std::vector<std::vector<cudf::size_type>>> passes;
 
-  std::vector<rmm::device_buffer> columnChunkBuffers_;
-  std::vector<cudf::device_span<const uint8_t>> columnChunkData_;
-  std::unique_ptr<std::once_flag> isHybridScanSetup_;
+  /// Index of the pass currently being read.
+  size_t currentPass{0};
+
+  /// Whether chunking has been set up for the current pass.
+  bool isChunkingSetup{false};
+
+  /// Device buffers holding the column chunk data of the current pass. These
+  /// must outlive every table chunk materialized from that pass.
+  std::vector<rmm::device_buffer> columnChunkBuffers;
+
+  /// Device spans into 'columnChunkBuffers', one per column chunk byte range
+  /// of the current pass.
+  std::vector<cudf::device_span<const uint8_t>> columnChunkData;
+
+  /// Set while the reads filling 'columnChunkBuffers' are in flight. Must be
+  /// waited on before the buffers are read from or released.
+  std::future<void> pendingFetch;
 };
 
 /**

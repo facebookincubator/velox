@@ -29,8 +29,6 @@
 #include <cuda/iterator>
 #include <cuda/std/tuple>
 
-#include <folly/futures/Future.h>
-
 #include <future>
 #include <mutex>
 #include <vector>
@@ -48,21 +46,6 @@ std::mutex& ioBatchMutex() {
   return mutex;
 }
 
-template <typename T>
-std::future<T> toStdFuture(folly::Future<T> follyFuture) {
-  auto promise = std::make_shared<std::promise<T>>();
-  auto stdFuture = promise->get_future();
-
-  std::move(follyFuture).thenTry([promise](folly::Try<T>&& result) mutable {
-    if (result.hasValue()) {
-      promise->set_value(std::move(result.value()));
-    } else {
-      promise->set_exception(result.exception().to_exception_ptr());
-    }
-  });
-
-  return stdFuture;
-}
 } // namespace
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -91,9 +74,13 @@ void BufferedInputDataSource::enqueueForDevice(
 }
 
 void BufferedInputDataSource::load(rmm::cuda_stream_view stream) {
+  // Each load consumes the streams enqueued since the previous one. Replaying
+  // them in a later load would read past the end of their exhausted streams
+  // and overwrite device buffers that no longer belong to this batch.
+  auto deviceLoads = std::exchange(pendingDeviceLoads_, {});
   input_->load(velox::dwio::common::LogType::FILE);
   std::lock_guard<std::mutex> lock(ioBatchMutex());
-  for (auto& deviceLoad : pendingDeviceLoads_) {
+  for (auto& deviceLoad : deviceLoads) {
     deviceLoad(stream);
   }
 }
@@ -140,19 +127,19 @@ std::future<size_t> BufferedInputDataSource::device_read_async(
     size_t size,
     uint8_t* dst,
     rmm::cuda_stream_view stream) {
-  VELOX_CHECK(input_->executor() != nullptr, "IO executor is not initialized");
-  auto future = folly::via(input_->executor())
-                    .thenValue([this, offset, size, dst, stream](auto&&) {
-                      auto hostBuffer = this->host_read(offset, size);
-                      CUDF_CUDA_TRY(cudaMemcpyAsync(
-                          dst,
-                          hostBuffer->data(),
-                          hostBuffer->size(),
-                          cudaMemcpyDefault,
-                          stream.value()));
-                      return hostBuffer->size();
-                    });
-  return toStdFuture(std::move(future));
+  // Read on the calling thread rather than on the IO executor: split
+  // preloading prepares readers on that executor, so a task waiting there for
+  // another task on the same executor can deadlock the pool.
+  return std::async(std::launch::deferred, [this, offset, size, dst, stream]() {
+    auto hostBuffer = this->host_read(offset, size);
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        dst,
+        hostBuffer->data(),
+        hostBuffer->size(),
+        cudaMemcpyDefault,
+        stream.value()));
+    return hostBuffer->size();
+  });
 }
 
 bool BufferedInputDataSource::supports_device_read() const {
