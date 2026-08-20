@@ -213,13 +213,9 @@ CudfSplitReader::~CudfSplitReader() {
   }
 }
 
-void CudfSplitReader::setupReader() {
-  createCudfReader();
-}
-
 void CudfSplitReader::prepareSplitInternal(
     dwio::common::RuntimeStats& /*runtimeStats*/) {
-  setupReader();
+  createCudfReader();
 }
 
 void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {

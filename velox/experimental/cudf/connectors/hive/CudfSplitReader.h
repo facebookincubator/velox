@@ -96,9 +96,6 @@ class CudfSplitReader : public NvtxHelper {
   // Performs split-specific setup after base reader state is reset.
   virtual void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats);
 
-  // Setup the cuDF reader.
-  virtual void setupReader();
-
   // Return the split-specific filter to push down to the cuDF reader.
   virtual cudf::ast::expression const* pushdownFilter() const;
 

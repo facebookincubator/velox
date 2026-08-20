@@ -261,11 +261,11 @@ void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
   subfieldFilterExpr_ = preparedSource->subfieldFilterExpr_;
 
   cudfSplitReader_ = std::move(preparedSource->cudfSplitReader_);
-  if (cudfSplitReader_ != nullptr) {
-    // 'source' owns the query context the reader was prepared with and is
-    // freed right after this call.
-    cudfSplitReader_->setConnectorQueryCtx(connectorQueryCtx_);
-  }
+  VELOX_CHECK_NOT_NULL(cudfSplitReader_);
+
+  // 'source' owns the query context the reader was prepared with and is
+  // freed right after this call.
+  cudfSplitReader_->setConnectorQueryCtx(connectorQueryCtx_);
 
   // The adopted reader keeps writing I/O statistics to the objects of
   // 'source', so carry the balance accumulated here over to those.

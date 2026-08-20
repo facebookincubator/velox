@@ -68,9 +68,6 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Sets up delete file readers and column projection after base state reset.
   void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats) override;
 
-  // Override to only setup cuDF reader if we have columns to read.
-  void setupReader() override;
-
   // Skip Parquet pushdown when the subfield filter must run after reading.
   cudf::ast::expression const* pushdownFilter() const override;
 

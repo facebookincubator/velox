@@ -128,12 +128,6 @@ void CudfIcebergSplitReader::resetSplit() {
   deleteMask_.reset();
 }
 
-void CudfIcebergSplitReader::setupReader() {
-  if (not noColumnsToRead_) {
-    CudfSplitReader::setupReader();
-  }
-}
-
 cudf::ast::expression const* CudfIcebergSplitReader::pushdownFilter() const {
   if (transformedPushdownFilter_) {
     if (transformedPushdownFilter_->requiresSplitSpecificDecimalTypes and
@@ -179,7 +173,9 @@ void CudfIcebergSplitReader::prepareSplitInternal(
                "columns or unavailable split-specific decimal types.";
   }
 
-  setupReader();
+  if (not noColumnsToRead_) {
+    createCudfReader();
+  }
 }
 
 rmm::device_async_resource_ref
