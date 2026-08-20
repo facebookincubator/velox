@@ -137,9 +137,7 @@ CudfFilterProject::CudfFilterProject(
   }
 }
 
-void CudfFilterProject::initialize() {
-  Operator::initialize();
-
+void CudfFilterProject::doInitialize() {
   std::vector<core::TypedExprPtr> allExprs;
   if (hasFilter_) {
     VELOX_CHECK_NOT_NULL(filter_);
