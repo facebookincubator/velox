@@ -16,9 +16,8 @@
 
 #pragma once
 
-#include <array>
-
 #include <folly/Varint.h>
+#include <folly/small_vector.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Nulls.h"
@@ -36,11 +35,6 @@ class DeltaBpDecoder {
   static constexpr int kRequiredTrailingPadding = 8;
 
   explicit DeltaBpDecoder(const char* start) : bufferStart_(start) {
-    initHeader();
-  }
-
-  void reset(const char* start) {
-    bufferStart_ = start;
     initHeader();
   }
 
@@ -172,7 +166,8 @@ class DeltaBpDecoder {
         // Non-constant delta: for skip we only need the final lastValue,
         // not intermediate prefix-sums. When skipping full miniblocks from
         // their start, compute sum(deltas) directly (no dependency chain).
-        if (toSkipInBlock == static_cast<int32_t>(valuesRemainingCurrentMiniBlock_) &&
+        if (toSkipInBlock ==
+                static_cast<int32_t>(valuesRemainingCurrentMiniBlock_) &&
             valuesRemainingCurrentMiniBlock_ == valuesPerMiniBlock_) {
           // Full miniblock from start: sum deltas without prefix-sum.
           uint64_t deltaSum = sumMiniBlockDeltas(
@@ -189,8 +184,7 @@ class DeltaBpDecoder {
           int64_t scratch[kBatch];
           int32_t skipped = 0;
           while (skipped < toSkipInBlock) {
-            auto batch =
-                std::min<int32_t>(kBatch, toSkipInBlock - skipped);
+            auto batch = std::min<int32_t>(kBatch, toSkipInBlock - skipped);
             decodeLongs(scratch, batch);
             skipped += batch;
           }
@@ -360,24 +354,25 @@ class DeltaBpDecoder {
 
   /// Compute the sum of packed deltas in a miniblock without a prefix-sum
   /// dependency chain. Used by skipValues() when only the final lastValue
-  /// is needed (not intermediate values). This is a simple horizontal
-  /// reduction that the compiler can auto-vectorize.
-  uint64_t sumMiniBlockDeltas(
-      const char* src,
-      uint64_t numValues,
-      uint64_t bitWidth) {
+  /// is needed (not intermediate values). Breaking the dependency chain
+  /// lets the compiler overlap the loads across iterations.
+  uint64_t
+  sumMiniBlockDeltas(const char* src, uint64_t numValues, uint64_t bitWidth) {
     if (bitWidth == 0) {
       return 0;
     }
-    const uint64_t mask =
-        (bitWidth >= 64) ? ~0ULL : ((1ULL << bitWidth) - 1);
+    const uint64_t mask = (bitWidth >= 64) ? ~0ULL : ((1ULL << bitWidth) - 1);
+    const auto* source = reinterpret_cast<const uint64_t*>(src);
     uint64_t sum = 0;
+    uint64_t bitOffset = 0;
     for (uint64_t i = 0; i < numValues; ++i) {
-      uint64_t bitPos = i * bitWidth;
-      uint64_t byteOff = bitPos >> 3;
-      uint64_t bitInByte = bitPos & 7;
-      uint64_t word = *reinterpret_cast<const uint64_t*>(src + byteOff);
-      sum += (word >> bitInByte) & mask;
+      // loadBits reads the extra trailing byte when a value straddles the
+      // 64-bit load boundary (bitWidth up to 64 for INT64 pages), matching
+      // the main decode path in readLong()/decodeLongs().
+      const uint64_t value =
+          bits::detail::loadBits<uint64_t>(source, bitOffset, bitWidth) & mask;
+      sum += value;
+      bitOffset += bitWidth;
     }
     return sum;
   }
@@ -400,7 +395,8 @@ class DeltaBpDecoder {
     // Use narrower accumulator for INT32 to improve throughput.
     // Parquet spec: arithmetic is unsigned modular, so 32-bit wraparound
     // is correct for INT32 columns.
-    using AccumType = std::conditional_t<sizeof(DataType) <= 4, uint32_t, uint64_t>;
+    using AccumType =
+        std::conditional_t<sizeof(DataType) <= 4, uint32_t, uint64_t>;
     AccumType cumulative = static_cast<AccumType>(lastValue);
     const AccumType step = static_cast<AccumType>(minDelta);
     if constexpr (bitWidth <= 16) {
@@ -415,9 +411,11 @@ class DeltaBpDecoder {
         out[i + 0] = static_cast<DataType>(cumulative);
         cumulative += step + static_cast<AccumType>((word >> bitWidth) & mask);
         out[i + 1] = static_cast<DataType>(cumulative);
-        cumulative += step + static_cast<AccumType>((word >> (2 * bitWidth)) & mask);
+        cumulative +=
+            step + static_cast<AccumType>((word >> (2 * bitWidth)) & mask);
         out[i + 2] = static_cast<DataType>(cumulative);
-        cumulative += step + static_cast<AccumType>((word >> (3 * bitWidth)) & mask);
+        cumulative +=
+            step + static_cast<AccumType>((word >> (3 * bitWidth)) & mask);
         out[i + 3] = static_cast<DataType>(cumulative);
       }
     } else {
@@ -552,10 +550,9 @@ class DeltaBpDecoder {
         valuesPerMiniBlock_);
 
     totalValuesRemaining_ = totalValueCount_;
-    VELOX_CHECK_LE(
-        miniBlocksPerBlock_,
-        kMaxMiniBlocksPerBlock,
-        "miniBlocksPerBlock exceeds supported maximum");
+    // Size the bit-width storage to the block's miniblock count. small_vector
+    // keeps this allocation-free for the common case (<= 8 miniblocks).
+    deltaBitWidths_.resize(miniBlocksPerBlock_);
     firstBlockInitialized_ = false;
     valuesRemainingCurrentMiniBlock_ = 0;
   }
@@ -672,11 +669,11 @@ class DeltaBpDecoder {
   bool firstBlockInitialized_;
   int64_t minDelta_;
   uint64_t miniBlockIdx_;
-  // Parquet default: 4 miniblocks per block. Use a fixed-size array to
-  // avoid heap allocation. The spec allows arbitrary values but real-world
-  // writers use <= 8.
-  static constexpr uint64_t kMaxMiniBlocksPerBlock = 64;
-  std::array<uint8_t, kMaxMiniBlocksPerBlock> deltaBitWidths_;
+  // Bit width of each miniblock in the current block. Sized to
+  // miniBlocksPerBlock_ (Parquet default 4, real-world writers use <= 8), so
+  // the inline storage avoids a per-page heap allocation in the common case
+  // while still supporting arbitrarily large values allowed by the spec.
+  folly::small_vector<uint8_t, 8> deltaBitWidths_;
   uint64_t deltaBitWidth_;
 
   int64_t lastValue_;
