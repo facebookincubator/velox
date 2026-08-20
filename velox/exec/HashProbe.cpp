@@ -289,13 +289,17 @@ void HashProbe::maybeSetupInputSpiller(
   // operator itself won't trigger any spilling.
   inputSpiller_->setPartitionsSpilled(spillInputPartitionIds_);
 
+  // Null-key probe rows can never match; for non-null-aware joins their
+  // spill partition is semantically free, so scatter them instead of letting
+  // hash(null)'s constant concentrate them into one partition.
   spillPartitionFunction_ = std::make_unique<SpillPartitionFunction>(
       SpillPartitionIdLookup(
           spillInputPartitionIds_,
           spillConfig()->startPartitionBit,
           spillConfig()->numPartitionBits),
       probeType_,
-      keyChannels_);
+      keyChannels_,
+      /*scatterNullKeyRows=*/!nullAware_);
 
   // If we have received no more input signal from either source or restored
   // spill input, then we shall just finish the spiller and records the spilled

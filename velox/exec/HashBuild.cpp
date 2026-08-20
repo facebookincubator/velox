@@ -774,9 +774,24 @@ void HashBuild::computeSpillPartitions(const RowVectorPtr& input) {
     }
   }
 
+  // Right and full joins keep null-key rows in 'activeRows_' (they are
+  // emitted as misses); scatter them across spill partitions -- see
+  // SpillerBase::scatterNullKeyRows_.
+  const bool scatterNullKeys =
+      isRightJoin(joinType_) || isFullJoin(joinType_);
+  if (scatterNullKeys) {
+    spillNonNullActiveRows_ = activeRows_;
+    deselectRowsWithNulls(hashers, spillNonNullActiveRows_);
+  }
+
   spillPartitions_.resize(input->size());
   activeRows_.applyToSelected([&](int32_t row) {
-    spillPartitions_[row] = spiller_->hashBits().partition(hashes_[row]);
+    if (scatterNullKeys && !spillNonNullActiveRows_.isValid(row)) {
+      spillPartitions_[row] = spiller_->hashBits().partition(
+          folly::hasher<uint64_t>()(spillNullScatterSeq_++));
+    } else {
+      spillPartitions_[row] = spiller_->hashBits().partition(hashes_[row]);
+    }
   });
 }
 
@@ -1473,6 +1488,11 @@ HashBuildSpiller::HashBuildSpiller(
           spillStats),
       spillProbeFlag_(needRightSideJoin(joinType)) {
   VELOX_CHECK(container_->accumulators().empty());
+  // Right and full joins are the only types that retain null-key build rows
+  // (for miss output); scatter them so they cannot concentrate into one
+  // un-splittable spill partition. Null-aware join types (anti, left semi
+  // project) drop or short-circuit on null build keys before spilling.
+  scatterNullKeyRows_ = isRightJoin(joinType) || isFullJoin(joinType);
 }
 
 void HashBuildSpiller::spill() {
