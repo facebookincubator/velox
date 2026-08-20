@@ -410,13 +410,11 @@ void CastExpr::applyVarcharToDecimalCastKernel(
 }
 
 namespace {
-// Largest integer exactly representable by a double (2^53). Unscaled decimal
-// values up to this magnitude can be cast to double and divided by a power of
-// ten without rounding the unscaled value, matching the BigDecimal-based
-// approach used by Spark and Presto.
+// Unscaled decimal values below this threshold can be cast to double and
+// divided by a power of ten without rounding the unscaled value, matching
+// Spark's BigDecimal-based conversion.
 // Reference:
 // https://github.com/openjdk/jdk8u-dev/blob/20e72d16f569e823a9ecdd9951a742b4397ca978/jdk/src/share/classes/java/math/BigDecimal.java#L3294
-// https://github.com/prestodb/presto/blob/master/presto-main/src/main/java/com/facebook/presto/type/DecimalCasts.java#L447
 constexpr int64_t kDoubleMaxExact = 1L << 52;
 
 // Powers of 10 which can be represented exactly in double. Only scales up to
