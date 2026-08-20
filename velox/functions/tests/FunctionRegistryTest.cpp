@@ -1111,6 +1111,16 @@ TEST_F(FunctionRegistryTest, resolveSwitchWithCoercions) {
       {BOOLEAN(), DECIMAL(8, 5), BOOLEAN(), DECIMAL(12, 2), INTEGER()},
       DECIMAL(15, 5),
       {nullptr, DECIMAL(15, 5), nullptr, DECIMAL(15, 5), DECIMAL(15, 5)});
+
+  // A null literal condition, which types as UNKNOWN, coerces to boolean.
+  testSpecialFormCoercions(
+      "switch",
+      {UNKNOWN(), BIGINT(), BOOLEAN(), BIGINT(), BIGINT()},
+      BIGINT(),
+      {BOOLEAN(), nullptr, nullptr, nullptr, nullptr});
+
+  // A condition of any other type does not.
+  testSpecialFormCannotResolve("switch", {INTEGER(), BIGINT(), BIGINT()});
 }
 
 TEST_F(FunctionRegistryTest, resolveCaseWithCoercions) {
