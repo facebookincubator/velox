@@ -198,6 +198,36 @@ epoch (1970-01-01 00:00:00 UTC).</p>
 </div>
 </section>
 </section>
+<section id="cast-to-floating-point-types">
+<h2>Cast to Floating-Point Types<a class="headerlink" href="#cast-to-floating-point-types" title="Link to this heading">¶</a></h2>
+<section id="id1">
+<h3>From strings<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
+<p><em>(ANSI compliant)</em></p>
+<p>Casting a string to <code class="docutils literal notranslate"><span class="pre">REAL</span></code> or <code class="docutils literal notranslate"><span class="pre">DOUBLE</span></code> accepts decimal and scientific
+notation, an optional leading sign, and the case-insensitive special literals
+<code class="docutils literal notranslate"><span class="pre">nan</span></code>, <code class="docutils literal notranslate"><span class="pre">inf</span></code>, <code class="docutils literal notranslate"><span class="pre">infinity</span></code> (optionally signed). Values that overflow the
+target type produce <code class="docutils literal notranslate"><span class="pre">Infinity</span></code> rather than an error, matching Spark.</p>
+<p>Casting from invalid strings returns NULL when ANSI mode is disabled; throws an
+error otherwise.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'1.5'</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.5</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'-3.14E-2'</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mf">0.0314</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'1.5e10'</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.5E10</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'nan'</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="n">NaN</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'-Infinity'</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="n">Infinity</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'1e39'</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Infinity</span> <span class="p">(</span><span class="n">overflow</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'1e309'</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="n">Infinity</span> <span class="p">(</span><span class="n">overflow</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Invalid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'abc'</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">OFF</span><span class="p">)</span> <span class="o">/</span> <span class="n">ERROR</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">ON</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'1.2a'</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">OFF</span><span class="p">)</span> <span class="o">/</span> <span class="n">ERROR</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">ON</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'1.2.3'</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">OFF</span><span class="p">)</span> <span class="o">/</span> <span class="n">ERROR</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">ON</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">''</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">OFF</span><span class="p">)</span> <span class="o">/</span> <span class="n">ERROR</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">ON</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
 <section id="cast-to-boolean">
 <h2>Cast to Boolean<a class="headerlink" href="#cast-to-boolean" title="Link to this heading">¶</a></h2>
 <section id="from-varchar">
@@ -234,8 +264,8 @@ or returns NULL when ANSI mode is disabled.</p>
 </section>
 <section id="cast-to-string">
 <h2>Cast to String<a class="headerlink" href="#cast-to-string" title="Link to this heading">¶</a></h2>
-<section id="id1">
-<h3>From DECIMAL<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
+<section id="id2">
+<h3>From DECIMAL<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
 <p><em>(ANSI compliant)</em></p>
 <p>Casting a DECIMAL to STRING returns a plain decimal value.
 The scale is preserved and trailing zeros are kept for normal (non-scientific) form.
@@ -256,8 +286,8 @@ When the absolute value is less than:math:<cite>10^{-6}</cite>, the result is fo
 </pre></div>
 </div>
 </section>
-<section id="id2">
-<h3>From TIMESTAMP<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<section id="id3">
+<h3>From TIMESTAMP<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
 <p>Casting a timestamp to a string returns ISO 8601 format with space as separator between date and time,
 and the year part is padded with zeros to 4 characters.
 The conversion precision is microsecond, and trailing zeros are not appended.
@@ -293,8 +323,8 @@ When the year exceeds 9999, a positive sign is added.</p>
 </section>
 <section id="cast-to-date">
 <h2>Cast to Date<a class="headerlink" href="#cast-to-date" title="Link to this heading">¶</a></h2>
-<section id="id3">
-<h3>From strings<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<section id="id4">
+<h3>From strings<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
 <p><em>(ANSI compliant)</em></p>
 <p>All Spark supported patterns are allowed:</p>
 <blockquote>
@@ -341,8 +371,8 @@ When ANSI mode is disabled, casting from invalid input values returns NULL.</p>
 <p class="admonition-title">Note</p>
 <p>The TIME type was introduced in Apache Spark 4.1.0.</p>
 </div>
-<section id="id4">
-<h3>From strings<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<section id="id5">
+<h3>From strings<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
 <p><em>(ANSI compliant)</em></p>
 <p>Supported format is <code class="docutils literal notranslate"><span class="pre">H:m[:s[.SSSSSS]]</span></code> where:</p>
 <blockquote>
@@ -383,8 +413,8 @@ stored as microseconds since midnight (0 to 86,399,999,999).</p>
 </section>
 <section id="cast-to-decimal">
 <h2>Cast to Decimal<a class="headerlink" href="#cast-to-decimal" title="Link to this heading">¶</a></h2>
-<section id="id5">
-<h3>From varchar<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<section id="id6">
+<h3>From varchar<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <p><em>(ANSI compliant)</em></p>
 <p>Casting varchar to a decimal of given precision and scale is allowed.
 The behavior is similar with Presto except Spark allows leading and trailing white-spaces in input varchars.</p>
@@ -409,8 +439,8 @@ return NULL.</p>
 </pre></div>
 </div>
 </section>
-<section id="id6">
-<h3>From integral types<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<section id="id7">
+<h3>From integral types<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
 <p><em>(ANSI compliant)</em></p>
 <p>Casting an integral value to a decimal of given precision and scale is allowed.
 Supported types are tinyint, smallint, integer and bigint.</p>
@@ -451,8 +481,8 @@ and scale throws an error. Otherwise, such casts return NULL.</p>
 </pre></div>
 </div>
 </section>
-<section id="id7">
-<h3>From floating-point types<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<section id="id8">
+<h3>From floating-point types<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
 <p><em>(ANSI compliant)</em></p>
 <p>Casting a floating-point value to a decimal of given precision and scale is
 allowed. Supported types are real and double.</p>
@@ -508,8 +538,8 @@ precision and scale.</p>
 </section>
 <section id="cast-to-varbinary">
 <h2>Cast to Varbinary<a class="headerlink" href="#cast-to-varbinary" title="Link to this heading">¶</a></h2>
-<section id="id8">
-<h3>From integral types<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<section id="id9">
+<h3>From integral types<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
 <p>Casting integral value to varbinary type is allowed.
 Bytes of input value are converted into an array of bytes in little-endian order.
 Supported types are tinyint, smallint, integer and bigint.</p>
@@ -524,8 +554,8 @@ Supported types are tinyint, smallint, integer and bigint.</p>
 </section>
 <section id="cast-to-timestamp">
 <h2>Cast to Timestamp<a class="headerlink" href="#cast-to-timestamp" title="Link to this heading">¶</a></h2>
-<section id="id9">
-<h3>From integral types<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<section id="id10">
+<h3>From integral types<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
 <p>Casting integral value to timestamp type is allowed.
 The input value is treated as the number of seconds since the epoch (1970-01-01 00:00:00 UTC).
 Supported types are tinyint, smallint, integer and bigint.</p>
@@ -537,8 +567,8 @@ Supported types are tinyint, smallint, integer and bigint.</p>
 </pre></div>
 </div>
 </section>
-<section id="id10">
-<h3>From floating-point types<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
+<section id="id11">
+<h3>From floating-point types<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
 <p><em>(ANSI compliant)</em></p>
 <p>Casting from floating-point input to timestamp type is allowed.
 The input value is treated as the number of seconds since the epoch
@@ -574,8 +604,8 @@ error</p></li>
 </pre></div>
 </div>
 </section>
-<section id="id11">
-<h3>From strings<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<section id="id12">
+<h3>From strings<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
 <p><em>(ANSI compliant)</em></p>
 <p>Casting from strings to timestamp uses Spark-compatible timestamp parsing.
 The parser accepts date-only values, both <code class="docutils literal notranslate"><span class="pre">'</span> <span class="pre">'</span></code> and <code class="docutils literal notranslate"><span class="pre">'T'</span></code> as date-time
@@ -596,8 +626,8 @@ an error when ANSI mode is enabled.</p>
 </pre></div>
 </div>
 </section>
-<section id="id12">
-<h3>From boolean<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
+<section id="id13">
+<h3>From boolean<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
 <p>Casting from boolean to timestamp is supported.</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">true</span></code> - cast to <strong>1970-01-01 00:00:00.000001</strong></p></li>
@@ -609,8 +639,8 @@ an error when ANSI mode is enabled.</p>
 </pre></div>
 </div>
 </section>
-<section id="id13">
-<h3>From TIMESTAMP_UTC<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<section id="id14">
+<h3>From TIMESTAMP_UTC<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
 <p>Casting a TIMESTAMP_UTC to TIMESTAMP interprets the stored timestamp as a local
 timestamp in the session timezone and returns the corresponding UTC epoch. When
 the local timestamp falls in a DST spring-forward gap, Spark adjusts to the
@@ -625,8 +655,8 @@ post-transition timestamp instead of throwing.</p>
 </section>
 <section id="cast-to-timestamp-utc">
 <h2>Cast to TIMESTAMP UTC<a class="headerlink" href="#cast-to-timestamp-utc" title="Link to this heading">¶</a></h2>
-<section id="id14">
-<h3>From TIMESTAMP<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
+<section id="id15">
+<h3>From TIMESTAMP<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
 <p>Casting a TIMESTAMP to TIMESTAMP_UTC applies the session timezone offset so
 that the local timestamp is preserved. The stored epoch in TIMESTAMP_UTC
 represents the same timestamp fields as the local timestamp, treated as a UTC
@@ -638,8 +668,8 @@ epoch. When no session timezone is configured the cast is an identity operation.
 </pre></div>
 </div>
 </section>
-<section id="id15">
-<h3>From VARCHAR<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
+<section id="id16">
+<h3>From VARCHAR<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
 <p>Casting a string to timestamp_utc parses the input as a local timestamp,
 not subject to session timezone adjustment.
 Any timezone suffix in the string is accepted but ignored — only the
@@ -681,47 +711,51 @@ Leading and trailing whitespace is stripped before parsing.</p>
 <li><a class="reference internal" href="#from-timestamp">From timestamp</a></li>
 </ul>
 </li>
+<li><a class="reference internal" href="#cast-to-floating-point-types">Cast to Floating-Point Types</a><ul>
+<li><a class="reference internal" href="#id1">From strings</a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#cast-to-boolean">Cast to Boolean</a><ul>
 <li><a class="reference internal" href="#from-varchar">From VARCHAR</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-string">Cast to String</a><ul>
-<li><a class="reference internal" href="#id1">From DECIMAL</a></li>
-<li><a class="reference internal" href="#id2">From TIMESTAMP</a></li>
+<li><a class="reference internal" href="#id2">From DECIMAL</a></li>
+<li><a class="reference internal" href="#id3">From TIMESTAMP</a></li>
 <li><a class="reference internal" href="#from-timestamp-utc">From TIMESTAMP_UTC</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-date">Cast to Date</a><ul>
-<li><a class="reference internal" href="#id3">From strings</a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#cast-to-time">Cast to Time</a><ul>
 <li><a class="reference internal" href="#id4">From strings</a></li>
 </ul>
 </li>
+<li><a class="reference internal" href="#cast-to-time">Cast to Time</a><ul>
+<li><a class="reference internal" href="#id5">From strings</a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#cast-to-decimal">Cast to Decimal</a><ul>
-<li><a class="reference internal" href="#id5">From varchar</a></li>
-<li><a class="reference internal" href="#id6">From integral types</a></li>
+<li><a class="reference internal" href="#id6">From varchar</a></li>
+<li><a class="reference internal" href="#id7">From integral types</a></li>
 <li><a class="reference internal" href="#from-decimal-types">From decimal types</a></li>
-<li><a class="reference internal" href="#id7">From floating-point types</a></li>
+<li><a class="reference internal" href="#id8">From floating-point types</a></li>
 <li><a class="reference internal" href="#from-boolean">From boolean</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-varbinary">Cast to Varbinary</a><ul>
-<li><a class="reference internal" href="#id8">From integral types</a></li>
+<li><a class="reference internal" href="#id9">From integral types</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-timestamp">Cast to Timestamp</a><ul>
-<li><a class="reference internal" href="#id9">From integral types</a></li>
-<li><a class="reference internal" href="#id10">From floating-point types</a></li>
-<li><a class="reference internal" href="#id11">From strings</a></li>
-<li><a class="reference internal" href="#id12">From boolean</a></li>
-<li><a class="reference internal" href="#id13">From TIMESTAMP_UTC</a></li>
+<li><a class="reference internal" href="#id10">From integral types</a></li>
+<li><a class="reference internal" href="#id11">From floating-point types</a></li>
+<li><a class="reference internal" href="#id12">From strings</a></li>
+<li><a class="reference internal" href="#id13">From boolean</a></li>
+<li><a class="reference internal" href="#id14">From TIMESTAMP_UTC</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-timestamp-utc">Cast to TIMESTAMP UTC</a><ul>
-<li><a class="reference internal" href="#id14">From TIMESTAMP</a></li>
-<li><a class="reference internal" href="#id15">From VARCHAR</a></li>
+<li><a class="reference internal" href="#id15">From TIMESTAMP</a></li>
+<li><a class="reference internal" href="#id16">From VARCHAR</a></li>
 </ul>
 </li>
 </ul>
