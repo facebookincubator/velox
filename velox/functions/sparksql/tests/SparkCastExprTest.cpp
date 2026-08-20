@@ -15,6 +15,7 @@
  */
 
 #include <folly/ScopeGuard.h>
+#include <cmath>
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
@@ -1285,6 +1286,34 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             DECIMAL(20, 10)));
   }
 
+  // Valid bool-to-decimal cases. Results are identical regardless of ANSI
+  // mode, so they are shared between the ANSI ON and ANSI OFF tests.
+  void testBoolToDecimal() {
+    auto input =
+        makeFlatVector<bool>({true, false, false, true, true, true, false});
+    // Bool to short decimal.
+    testCast(
+        input,
+        makeFlatVector<int64_t>({100, 0, 0, 100, 100, 100, 0}, DECIMAL(6, 2)));
+
+    // Bool to long decimal.
+    testCast(
+        input,
+        makeFlatVector<int128_t>(
+            {10'000'000'000,
+             0,
+             0,
+             10'000'000'000,
+             10'000'000'000,
+             10'000'000'000,
+             0},
+            DECIMAL(20, 10)));
+
+    // False becomes zero, which fits any precision and scale.
+    testCast<bool, int64_t>(BOOLEAN(), DECIMAL(1, 1), {false}, {0});
+    testCast<bool, int128_t>(BOOLEAN(), DECIMAL(38, 38), {false}, {0});
+  }
+
   void testDecimalToDecimal() {
     // Short to short, scale up.
     auto shortFlat =
@@ -1527,6 +1556,81 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     testCast(
         makeConstant<float>(std::numeric_limits<float>::min(), 1),
         makeConstant<int128_t>(0, 1, DECIMAL(38, 2)));
+  }
+
+  // Valid string-to-real/double conversions produce identical results whether
+  // ANSI mode is on or off, so both fixtures share these assertions.
+  void testStringToRealDoubleValidFormats() {
+    // kNan/kInf (float) are inherited from CastBaseTest; the double equivalents
+    // have no base-class constant, so they are defined locally.
+    const auto doubleNan = std::numeric_limits<double>::quiet_NaN();
+    const auto doubleInfinity = std::numeric_limits<double>::infinity();
+
+    // Basic valid values.
+    testCast<std::string, float>("real", {"1.5"}, {1.5f});
+    testCast<std::string, double>("double", {"1.5"}, {1.5});
+
+    // Special literals (case variants).
+    testCast<std::string, float>("real", {"nan"}, {kNan});
+    testCast<std::string, float>("real", {"NaN"}, {kNan});
+    testCast<std::string, float>("real", {"inf"}, {kInf});
+    testCast<std::string, float>("real", {"Inf"}, {kInf});
+    testCast<std::string, float>("real", {"-inf"}, {-kInf});
+    testCast<std::string, float>("real", {"-Inf"}, {-kInf});
+    testCast<std::string, float>("real", {"infinity"}, {kInf});
+    testCast<std::string, float>("real", {"Infinity"}, {kInf});
+    testCast<std::string, float>("real", {"-infinity"}, {-kInf});
+    testCast<std::string, float>("real", {"-Infinity"}, {-kInf});
+    testCast<std::string, double>("double", {"nan"}, {doubleNan});
+    testCast<std::string, double>("double", {"NaN"}, {doubleNan});
+    testCast<std::string, double>("double", {"inf"}, {doubleInfinity});
+    testCast<std::string, double>("double", {"Inf"}, {doubleInfinity});
+    testCast<std::string, double>("double", {"-inf"}, {-doubleInfinity});
+    testCast<std::string, double>("double", {"-Inf"}, {-doubleInfinity});
+    testCast<std::string, double>("double", {"infinity"}, {doubleInfinity});
+    testCast<std::string, double>("double", {"Infinity"}, {doubleInfinity});
+    testCast<std::string, double>("double", {"-infinity"}, {-doubleInfinity});
+    testCast<std::string, double>("double", {"-Infinity"}, {-doubleInfinity});
+
+    // Scientific notation.
+    testCast<std::string, float>("real", {"1.5e2"}, {150.0f});
+    testCast<std::string, float>("real", {"-3.14E-2"}, {-0.0314f});
+    testCast<std::string, double>("double", {"1.5e10"}, {1.5e10});
+    testCast<std::string, double>("double", {"-3.14E-5"}, {-3.14e-5});
+
+    // Signed values.
+    testCast<std::string, float>("real", {"+1.5"}, {1.5f});
+    testCast<std::string, float>("real", {"-1.5"}, {-1.5f});
+    testCast<std::string, double>("double", {"+1.5"}, {1.5});
+
+    // Signed zeros: value equality does not distinguish +0 from -0, so assert
+    // the sign bit explicitly.
+    auto realSignBit = [this](const std::string& value) {
+      auto input = makeRowVector({makeFlatVector<std::string>({value})});
+      return std::signbit(
+          evaluateOnce<float>("cast(c0 as real)", input).value());
+    };
+    auto doubleSignBit = [this](const std::string& value) {
+      auto input = makeRowVector({makeFlatVector<std::string>({value})});
+      return std::signbit(
+          evaluateOnce<double>("cast(c0 as double)", input).value());
+    };
+    EXPECT_FALSE(realSignBit("+0"));
+    EXPECT_TRUE(realSignBit("-0"));
+    EXPECT_FALSE(doubleSignBit("+0"));
+    EXPECT_TRUE(doubleSignBit("-0"));
+
+    // Overflow yields Infinity rather than an error, matching Spark.
+    testCast<std::string, float>("real", {"1e39"}, {kInf});
+    testCast<std::string, float>("real", {"-1e39"}, {-kInf});
+    testCast<std::string, double>("double", {"1e309"}, {doubleInfinity});
+    testCast<std::string, double>("double", {"-1e309"}, {-doubleInfinity});
+  }
+
+  // Malformed string-to-real/double inputs. ANSI mode throws on these; legacy
+  // mode returns NULL. Both fixtures share this input set.
+  static std::vector<std::string> invalidStringToRealDoubleInputs() {
+    return {"abc", "1.2a", "1.2.3", "xyz123"};
   }
 };
 
@@ -1825,6 +1929,97 @@ TEST_F(SparkCastExprTestAnsiOn, stringToDate) {
   testInvalidDate("2015/03/18");
   testInvalidDate("2015-13-01");
   testInvalidDate("2015-02-30");
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToTime) {
+  auto validInput = makeRowVector({makeFlatVector<std::string>(
+      {"12:03:17.123456", " 12:30:45 ", "12:30"})});
+  auto validResult = evaluateCast(VARCHAR(), TIME_MICRO_UTC(), validInput);
+  ASSERT_TRUE(validResult->type()->equivalent(*TIME_MICRO_UTC()));
+  assertEqualVectors(
+      makeFlatVector<int64_t>(
+          {43'397'123'456LL, 45'045'000'000LL, 45'000'000'000LL},
+          TIME_MICRO_UTC()),
+      validResult);
+
+  auto testInvalidString = [this](const std::string& value) {
+    auto input = makeRowVector({makeFlatVector<std::string>({value})});
+    VELOX_ASSERT_THROW(
+        evaluateCast(VARCHAR(), TIME_MICRO_UTC(), input), "Cannot cast");
+  };
+
+  testInvalidString("24:00:00");
+  testInvalidString("12:60:00");
+  testInvalidString("12:30:60");
+  testInvalidString("12:30:45.1234567");
+  testInvalidString("abc");
+  testInvalidString("");
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleInvalidThrows) {
+  const std::vector<TypePtr> types{REAL(), DOUBLE()};
+
+  // Invalid format strings throw in ANSI mode. The message follows the standard
+  // Velox Spark cast convention: "Cannot cast VARCHAR '<v>' to <T>. ...".
+  for (const auto& type : types) {
+    for (const auto& value : invalidStringToRealDoubleInputs()) {
+      SCOPED_TRACE(fmt::format("cast('{}' as {})", value, type->toString()));
+      testThrow<std::string>(
+          VARCHAR(),
+          type,
+          {value},
+          fmt::format(
+              "Cannot cast VARCHAR '{}' to {}", value, type->toString()));
+    }
+  }
+
+  // Empty and whitespace-only strings are trimmed to empty before throwing.
+  for (const auto& type : types) {
+    for (const auto& value : {"", "   ", "\t\n"}) {
+      SCOPED_TRACE(fmt::format("cast('{}' as {})", value, type->toString()));
+      testThrow<std::string>(
+          VARCHAR(),
+          type,
+          {value},
+          fmt::format(
+              "Cannot cast VARCHAR '{}' to {}. Empty string",
+              value,
+              type->toString()));
+    }
+  }
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleValidFormats) {
+  testStringToRealDoubleValidFormats();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleMixedRows) {
+  // A vector mixing null, valid, invalid, and special values: CAST throws on
+  // the first invalid value, while TRY_CAST nulls invalid rows and preserves
+  // the rest, both with ANSI on.
+  const std::vector<std::optional<std::string>> values{
+      std::nullopt, "1.5", "abc", "nan"};
+  auto input = makeRowVector({makeNullableFlatVector<std::string>(values)});
+
+  {
+    SCOPED_TRACE("real");
+    testThrow<std::string>(
+        VARCHAR(), REAL(), values, "Cannot cast VARCHAR 'abc' to REAL");
+    auto expected =
+        makeNullableFlatVector<float>({std::nullopt, 1.5f, std::nullopt, kNan});
+    assertEqualVectors(expected, evaluate("try_cast(c0 as real)", input));
+  }
+  {
+    SCOPED_TRACE("double");
+    testThrow<std::string>(
+        VARCHAR(), DOUBLE(), values, "Cannot cast VARCHAR 'abc' to DOUBLE");
+    auto expected = makeNullableFlatVector<double>(
+        {std::nullopt,
+         1.5,
+         std::nullopt,
+         std::numeric_limits<double>::quiet_NaN()});
+    assertEqualVectors(expected, evaluate("try_cast(c0 as double)", input));
+  }
 }
 
 TEST_F(SparkCastExprTestAnsiOn, fromString) {
@@ -2135,6 +2330,36 @@ TEST_F(SparkCastExprTestAnsiOff, stringToDate) {
       {std::nullopt, std::nullopt, std::nullopt, std::nullopt},
       VARCHAR(),
       DATE());
+}
+
+TEST_F(SparkCastExprTestAnsiOff, stringToTime) {
+  testCast<std::string, int64_t>(
+      VARCHAR(),
+      TIME_MICRO_UTC(),
+      {"00:00:00",
+       "01:30:00",
+       "12:03:17.123",
+       "12:03:17.123456",
+       " 12:30:45 ",
+       "24:00:00",
+       "12:60:00",
+       "12:30:60",
+       "12:30",
+       "12:30:45.1234567",
+       "abc",
+       ""},
+      {0LL,
+       5'400'000'000LL,
+       43'397'123'000LL,
+       43'397'123'456LL,
+       45'045'000'000LL,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       45'000'000'000LL,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt});
 }
 
 TEST_F(SparkCastExprTestAnsiOff, fromString) {
@@ -2608,6 +2833,24 @@ TEST_F(SparkCastExprTestAnsiOn, decimalToDecimal) {
   testOverflowThrow();
 }
 
+TEST_F(SparkCastExprTestAnsiOn, boolToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testBoolToDecimal();
+
+  // Under ANSI ON, true overflows a target with no integer digits
+  // (precision == scale), because 1 cannot be represented there.
+  testThrow<bool>(
+      BOOLEAN(),
+      DECIMAL(1, 1),
+      {true},
+      "Cannot cast BOOLEAN 'true' to DECIMAL(1, 1)");
+  testThrow<bool>(
+      BOOLEAN(),
+      DECIMAL(38, 38),
+      {true},
+      "Cannot cast BOOLEAN 'true' to DECIMAL(38, 38)");
+}
+
 TEST_F(SparkCastExprTestAnsiOn, doubleToDecimal) {
   // Regular cases produce the same results regardless of ANSI mode.
   testDoubleToDecimal();
@@ -2860,6 +3103,16 @@ TEST_F(SparkCastExprTestAnsiOff, integralToDecimal) {
   testOverflowNull.operator()<int64_t>();
 }
 
+TEST_F(SparkCastExprTestAnsiOff, boolToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testBoolToDecimal();
+
+  // Under ANSI OFF, the same overflowing inputs return NULL instead of
+  // throwing.
+  testCast<bool, int64_t>(BOOLEAN(), DECIMAL(1, 1), {true}, {std::nullopt});
+  testCast<bool, int128_t>(BOOLEAN(), DECIMAL(38, 38), {true}, {std::nullopt});
+}
+
 TEST_F(SparkCastExprTestAnsiOff, doubleToDecimal) {
   // Regular cases produce the same results regardless of ANSI mode.
   testDoubleToDecimal();
@@ -3004,6 +3257,26 @@ TEST_F(SparkCastExprTestAnsiOff, tryCastFloatToIntegralSaturation) {
   // In-range values truncate toward zero.
   testTryCast<float, int8_t>("tinyint", {100.5f}, {100});
   testTryCast<double, int64_t>("bigint", {42.7}, {42});
+}
+
+TEST_F(SparkCastExprTestAnsiOff, stringToRealDoubleValidFormats) {
+  // Valid inputs parse identically whether ANSI mode is on or off.
+  testStringToRealDoubleValidFormats();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, stringToRealDoubleInvalidReturnsNull) {
+  // Invalid format strings return NULL in legacy (ANSI off) mode. Empty and
+  // whitespace-only strings (trimmed to empty) return NULL as well.
+  for (const auto& value : invalidStringToRealDoubleInputs()) {
+    SCOPED_TRACE(value);
+    testCast<std::string, float>("real", {value}, {std::nullopt});
+    testCast<std::string, double>("double", {value}, {std::nullopt});
+  }
+  for (const auto& value : {"", "   ", "\t\n"}) {
+    SCOPED_TRACE(value);
+    testCast<std::string, float>("real", {value}, {std::nullopt});
+    testCast<std::string, double>("double", {value}, {std::nullopt});
+  }
 }
 } // namespace
 } // namespace facebook::velox::test

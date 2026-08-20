@@ -68,6 +68,14 @@ TEST(TypesTest, ToEncodingTypeUnknown) {
   EXPECT_ANY_THROW(toEncodingType("unknown"));
 }
 
+TEST(TypesTest, ReadOnlyEncoding) {
+  EXPECT_TRUE(isReadOnlyEncoding(EncodingType::PFOR));
+  EXPECT_TRUE(isReadOnlyEncoding("PFOR"));
+  EXPECT_FALSE(isReadOnlyEncoding(EncodingType::Trivial));
+  EXPECT_FALSE(isReadOnlyEncoding("Trivial"));
+  EXPECT_FALSE(isReadOnlyEncoding("unknown"));
+}
+
 TEST(TypesTest, EncodingTypeStreamOperator) {
   std::ostringstream ss;
   ss << EncodingType::Trivial;
