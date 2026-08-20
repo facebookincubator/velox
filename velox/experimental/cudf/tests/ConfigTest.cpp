@@ -20,10 +20,16 @@
 
 namespace facebook::velox::cudf_velox::test {
 
+TEST(ConfigTest, MemoryTrackingDisabledByDefault) {
+  CudfConfig config;
+  EXPECT_FALSE(config.memoryTrackingEnabled);
+}
+
 TEST(ConfigTest, CudfConfig) {
   std::unordered_map<std::string, std::string> options = {
       {CudfConfig::kCudfEnabled, "false"},
       {CudfConfig::kCudfDebugEnabled, "true"},
+      {CudfConfig::kCudfMemoryTrackingEnabled, "true"},
       {CudfConfig::kCudfMemoryResource, "arena"},
       {CudfConfig::kCudfMemoryPercent, "25"},
       {CudfConfig::kCudfFunctionNamePrefix, "presto"},
@@ -33,6 +39,7 @@ TEST(ConfigTest, CudfConfig) {
   config.initialize(std::move(options));
   ASSERT_EQ(config.enabled, false);
   ASSERT_EQ(config.debugEnabled, true);
+  ASSERT_EQ(config.memoryTrackingEnabled, true);
   ASSERT_EQ(config.memoryResource, "arena");
   ASSERT_EQ(config.memoryPercent, 25);
   ASSERT_EQ(config.functionNamePrefix, "presto");

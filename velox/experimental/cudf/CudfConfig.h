@@ -28,6 +28,8 @@ struct CudfConfig {
   /// Keys used by the initialize() method.
   static constexpr const char* kCudfEnabled{"cudf.enabled"};
   static constexpr const char* kCudfDebugEnabled{"cudf.debug_enabled"};
+  static constexpr const char* kCudfMemoryTrackingEnabled{
+      "cudf.memory_tracking_enabled"};
   static constexpr const char* kCudfMemoryResource{"cudf.memory_resource"};
   static constexpr const char* kCudfMemoryPercent{"cudf.memory_percent"};
   static constexpr const char* kCudfFunctionNamePrefix{
@@ -66,6 +68,13 @@ struct CudfConfig {
 
   /// Enable debug printing.
   bool debugEnabled{false};
+
+  /// Attributes GPU allocations to operator instances and publishes them as
+  /// NVTX counters.
+  ///
+  /// This installs a tracking wrapper around the RMM resource, so it is off by
+  /// default; the NVTX emission it feeds is itself free when unprofiled.
+  bool memoryTrackingEnabled{false};
 
   /// Allow fallback to CPU operators if GPU operator replacement fails.
   bool allowCpuFallback{true};
