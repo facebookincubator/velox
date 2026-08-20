@@ -18,19 +18,19 @@
 
 #include <memory>
 
-#include "velox/common/rpc/clients/MockRPCClient.h"
+#include "velox/common/rpc/clients/MockTransport.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/rpc/AsyncRPCFunction.h"
 
 namespace facebook::velox::exec::rpc {
 
-using velox::rpc::MockRPCClient;
+using velox::rpc::MockTransport;
 
-/// Demo AsyncRPCFunction that uses MockRPCClient for end-to-end testing.
+/// Demo AsyncRPCFunction that uses MockTransport for end-to-end testing.
 ///
 /// Demonstrates the full AsyncRPCFunction lifecycle:
-///   1. initialize() — creates and caches the MockRPCClient
-///   2. dispatchPerRow() — dispatches per-row RPCs via MockRPCClient
+///   1. initialize() — creates and caches the MockTransport
+///   2. dispatchPerRow() — dispatches per-row RPCs via MockTransport
 ///   3. buildOutput() — uses base class default (error→null, result→varchar)
 ///
 /// Returns "Response for: <prompt>" for each input row. No external
@@ -55,7 +55,7 @@ class DemoAsyncRPCFunction : public AsyncRPCFunction {
     return VARCHAR();
   }
 
-  /// Dispatch individual RPCs for each active row via MockRPCClient.
+  /// Dispatch individual RPCs for each active row via MockTransport.
   /// Null-input rows get an immediate RPCResponse with error="null_input".
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
   dispatchPerRow(
@@ -72,7 +72,7 @@ class DemoAsyncRPCFunction : public AsyncRPCFunction {
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures();
 
  private:
-  std::shared_ptr<MockRPCClient> client_;
+  std::shared_ptr<MockTransport> client_;
 };
 
 } // namespace facebook::velox::exec::rpc

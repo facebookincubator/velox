@@ -20,17 +20,19 @@
 #include <chrono>
 #include <random>
 
-#include <folly/executors/CPUThreadPoolExecutor.h>
+#include "velox/common/rpc/RPCTypes.h"
 
-#include "velox/common/rpc/IRPCClient.h"
+#include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/futures/Future.h>
 
 namespace facebook::velox::rpc {
 
-/// Mock RPC client that simulates backend latency for testing.
+/// Transport double with configurable latency and error rate, for exercising
+/// the async dispatch path without a real backend.
 /// Thread-safe for concurrent use. Uses a thread pool executor for async
 /// execution — either a shared executor passed in, or a local one created
 /// per-client.
-class MockRPCClient : public IRPCClient {
+class MockTransport {
  public:
   /// Creates a mock client with configurable latency and error rate.
   /// @param latency Simulated RPC latency (default 200ms).
@@ -38,17 +40,17 @@ class MockRPCClient : public IRPCClient {
   /// @param executor Shared executor for async work. If nullptr, creates a
   ///   local thread pool. Pass a shared executor for global throttling across
   ///   query instances.
-  explicit MockRPCClient(
+  explicit MockTransport(
       std::chrono::milliseconds latency = std::chrono::milliseconds(200),
       double errorRate = 0.0,
       std::shared_ptr<folly::CPUThreadPoolExecutor> executor = nullptr);
 
-  ~MockRPCClient() override;
+  ~MockTransport();
 
-  folly::SemiFuture<RPCResponse> call(const RPCRequest& request) override;
+  folly::SemiFuture<RPCResponse> call(const RPCRequest& request);
 
   folly::SemiFuture<std::vector<RPCResponse>> callBatch(
-      const std::vector<RPCRequest>& requests) override;
+      const std::vector<RPCRequest>& requests);
 
   /// Returns the total number of RPC calls made.
   int64_t callCount() const {
