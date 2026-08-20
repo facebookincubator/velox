@@ -410,16 +410,26 @@ DEBUG_ONLY_TEST_F(CountAggregationTest, toIntermediate) {
       "facebook::velox::exec::Aggregate::toIntermediate",
       std::function<void(void*)>(
           [&](void*) { usedToIntermediateFastPath = true; }));
+  core::PlanNodeId partialNodeId;
   auto plan = PlanBuilder()
                   .values(data)
                   .partialAggregation({"k"}, {"count(c)"})
+                  .capturePlanNodeId(partialNodeId)
                   .finalAggregation()
                   .planNode();
-  AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .maxDrivers(1)
-      .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-      .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
-      .assertResults("SELECT k, count(c) FROM tmp GROUP BY k");
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .assertResults("SELECT k, count(c) FROM tmp GROUP BY k");
+
+  const auto stats = toPlanStats(task->taskStats());
+  EXPECT_LT(
+      0,
+      stats.at(partialNodeId)
+          .customStats.at("abandonedPartialAggregationRows")
+          .sum);
   EXPECT_TRUE(usedToIntermediateFastPath);
 }
 
