@@ -667,6 +667,11 @@ void VectorHasher::analyzeValue(int128_t value) {
   }
 }
 
+void VectorHasher::analyzeValue(Timestamp value) {
+  updateTimestampRange(value);
+  analyzeValue(timestampAsInt128(value));
+}
+
 template <>
 void VectorHasher::analyzeValue(StringView value) {
   int size = value.size();
@@ -983,7 +988,7 @@ void VectorHasher::merge(const VectorHasher& other, size_t maxNumDistinct) {
     setDistinctOverflow();
     return;
   }
-  if (typeKind_ == TypeKind::HUGEINT) {
+  if (usesInt128DistinctValues()) {
     hasHugeintValue_ |= other.hasHugeintValue_;
 
     for (const auto& entry : other.uniqueHugeintValues_) {
