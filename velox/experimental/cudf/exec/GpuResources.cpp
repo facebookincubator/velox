@@ -27,6 +27,7 @@
 #include <rmm/mr/cuda_async_memory_resource.hpp>
 #include <rmm/mr/cuda_memory_resource.hpp>
 #include <rmm/mr/managed_memory_resource.hpp>
+#include <rmm/mr/per_device_resource.hpp>
 #include <rmm/mr/pool_memory_resource.hpp>
 #include <rmm/mr/prefetch_resource_adaptor.hpp>
 
@@ -36,6 +37,12 @@
 #include <string_view>
 
 namespace facebook::velox::cudf_velox {
+namespace {
+
+thread_local std::optional<rmm::device_async_resource_ref> scopedTempMr;
+thread_local std::optional<rmm::device_async_resource_ref> scopedOutputMr;
+
+} // namespace
 
 cuda::mr::any_resource<cuda::mr::device_accessible> createMemoryResource(
     std::string_view mode,
@@ -88,8 +95,29 @@ cudf::detail::cuda_stream_pool& cudfGlobalStreamPool() {
 std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>> mr_;
 std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>> output_mr_;
 
+rmm::device_async_resource_ref get_temp_mr() {
+  return scopedTempMr.has_value() ? *scopedTempMr
+                                  : rmm::mr::get_current_device_resource_ref();
+}
+
 rmm::device_async_resource_ref get_output_mr() {
-  return output_mr_.value();
+  if (scopedOutputMr.has_value()) {
+    return *scopedOutputMr;
+  }
+  return rmm::device_async_resource_ref{output_mr_.value()};
+}
+
+ScopedCudfMemoryResources::ScopedCudfMemoryResources(
+    rmm::device_async_resource_ref tempMr,
+    rmm::device_async_resource_ref outputMr)
+    : previousTempMr_(scopedTempMr), previousOutputMr_(scopedOutputMr) {
+  scopedTempMr = tempMr;
+  scopedOutputMr = outputMr;
+}
+
+ScopedCudfMemoryResources::~ScopedCudfMemoryResources() {
+  scopedTempMr = previousTempMr_;
+  scopedOutputMr = previousOutputMr_;
 }
 
 } // namespace facebook::velox::cudf_velox

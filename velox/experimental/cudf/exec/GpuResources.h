@@ -31,8 +31,33 @@ extern std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>> mr_;
 extern std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>>
     output_mr_;
 
+/// Returns the memory resource designated for temporary allocations.
+rmm::device_async_resource_ref get_temp_mr();
+
 /// Returns the memory resource designated for output vector allocations.
 rmm::device_async_resource_ref get_output_mr();
+
+/// Installs per-call temporary and output resources for helpers that use
+/// get_temp_mr() and get_output_mr(). The selected resource objects themselves
+/// carry accounting identity, so allocations remain correctly attributed when
+/// cuDF uses a different thread or stream after receiving the resource ref.
+class ScopedCudfMemoryResources {
+ public:
+  ScopedCudfMemoryResources(
+      rmm::device_async_resource_ref tempMr,
+      rmm::device_async_resource_ref outputMr);
+  ~ScopedCudfMemoryResources();
+
+  ScopedCudfMemoryResources(const ScopedCudfMemoryResources&) = delete;
+  ScopedCudfMemoryResources& operator=(const ScopedCudfMemoryResources&) =
+      delete;
+  ScopedCudfMemoryResources(ScopedCudfMemoryResources&&) = delete;
+  ScopedCudfMemoryResources& operator=(ScopedCudfMemoryResources&&) = delete;
+
+ private:
+  std::optional<rmm::device_async_resource_ref> previousTempMr_;
+  std::optional<rmm::device_async_resource_ref> previousOutputMr_;
+};
 
 /**
  * @brief Creates a memory resource based on the given mode.
@@ -43,6 +68,14 @@ rmm::device_async_resource_ref get_output_mr();
  */
 [[nodiscard]] cuda::mr::any_resource<cuda::mr::device_accessible>
 createMemoryResource(std::string_view mode, int percent);
+
+/// Releases retired UCX exchange resources with no live packed buffers.
+/// Returns true when no active or in-use exchange resources remain.
+bool tryResetCudfExchangeMemoryResource();
+
+/// Tears down all process-owned UCX exchange resources. There must be no
+/// active query users or live packed buffers.
+void resetCudfExchangeMemoryResource();
 
 /**
  * @brief Returns the global CUDA stream pool used by cudf.

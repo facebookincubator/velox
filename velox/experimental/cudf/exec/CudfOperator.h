@@ -17,6 +17,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/DebugUtil.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 #include "velox/common/base/SpillConfig.h"
@@ -73,6 +74,8 @@ class CudfOperator : public NvtxHelper {
 /// close) are marked final and must NOT be overridden by derived classes.
 /// Instead, derived classes should ONLY override the corresponding protected
 /// do* virtual methods:
+///   - doInitialize() -- performs subclass initialization
+///   - doIsBlocked()  -- reports subclass blocking state
 ///   - doAddInput()    -- receives input rows; called by addInput()
 ///   - doGetOutput()   -- produces output rows; called by getOutput()
 ///   - doNoMoreInput() -- signals end of input; called by noMoreInput()
@@ -80,8 +83,9 @@ class CudfOperator : public NvtxHelper {
 ///   - doClose()       -- releases resources; called by close()
 ///                        (defaults to Operator::close())
 ///
-/// This design ensures that NVTX profiling ranges are applied uniformly
-/// across all operators without each subclass having to manage them. The
+/// This design scopes cuDF memory resources around every lifecycle call and
+/// applies NVTX profiling ranges uniformly. Subclasses override doInitialize()
+/// and doIsBlocked() instead of the final public methods. The
 /// nvtxMethods bitmask (NvtxMethodFlag) lets operators suppress NVTX ranges
 /// for do* methods they do not override, keeping nsys profiles clean.
 ///
@@ -113,19 +117,24 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
       NvtxMethodFlag nvtxMethods = NvtxMethodFlag::kAll,
       std::optional<common::SpillConfig> spillConfig = std::nullopt,
       std::optional<std::shared_ptr<const core::PlanNode>> planNode =
-          std::nullopt)
-      : Operator(
-            driverCtx,
-            outputType,
-            operatorId,
-            planNodeId,
-            operatorName,
-            spillConfig),
-        NvtxHelper(color, operatorId, fmt::format("[{}]", planNodeId)),
-        className_(operatorName),
-        nvtxMethods_(nvtxMethods) {}
+          std::nullopt);
+
+  void initialize() final {
+    auto memoryResources = scopedMemoryResources();
+    Operator::initialize();
+    doInitialize();
+    checkCudaErrorInDebug();
+  }
+
+  exec::BlockingReason isBlocked(ContinueFuture* future) final {
+    auto memoryResources = scopedMemoryResources();
+    auto reason = doIsBlocked(future);
+    checkCudaErrorInDebug();
+    return reason;
+  }
 
   void addInput(RowVectorPtr input) final {
+    auto memoryResources = scopedMemoryResources();
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kAddInput, className_);
     doAddInput(std::move(input));
@@ -133,6 +142,7 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
   }
 
   RowVectorPtr getOutput() final {
+    auto memoryResources = scopedMemoryResources();
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kGetOutput, className_);
     auto result = doGetOutput();
@@ -141,6 +151,7 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
   }
 
   void noMoreInput() final {
+    auto memoryResources = scopedMemoryResources();
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kNoMoreInput, className_);
     doNoMoreInput();
@@ -148,6 +159,7 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
   }
 
   void close() final {
+    auto memoryResources = scopedMemoryResources();
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kClose, className_);
     doClose();
@@ -155,6 +167,17 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
   }
 
  protected:
+  [[nodiscard]] ScopedCudfMemoryResources scopedMemoryResources() const {
+    return ScopedCudfMemoryResources{
+        tempMemoryResource(), outputMemoryResource()};
+  }
+
+  virtual void doInitialize() {}
+
+  virtual exec::BlockingReason doIsBlocked(ContinueFuture* /*future*/) {
+    return exec::BlockingReason::kNotBlocked;
+  }
+
   virtual void doAddInput(RowVectorPtr input) = 0;
 
   virtual RowVectorPtr doGetOutput() = 0;
@@ -168,8 +191,20 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
   }
 
  private:
+  rmm::device_async_resource_ref tempMemoryResource() const {
+    return tempMemoryResource_.has_value() ? *tempMemoryResource_
+                                           : get_temp_mr();
+  }
+
+  rmm::device_async_resource_ref outputMemoryResource() const {
+    return outputMemoryResource_.has_value() ? *outputMemoryResource_
+                                             : get_output_mr();
+  }
+
   const std::string className_;
   const NvtxMethodFlag nvtxMethods_;
+  std::optional<rmm::device_async_resource_ref> tempMemoryResource_;
+  std::optional<rmm::device_async_resource_ref> outputMemoryResource_;
 };
 
 } // namespace facebook::velox::cudf_velox
