@@ -86,6 +86,8 @@ struct LaunchMeta {
   // Time spent on reference-frame device-to-host copy and comparison for this
   // step (debug-only; excluded from the reported e2e time).
   int64_t refCheckUs{0};
+  // Bytes of copying the clone-elision pass saved, charged to this step.
+  int64_t elidedCloneBytes{0};
 };
 
 /// Per-thread debug info from the most recent wave execution. Populated by
@@ -203,6 +205,11 @@ struct StepVectors {
   // Time spent on reference-frame device-to-host copy and comparison for this
   // step (debug-only; excluded from the reported e2e time).
   int64_t refCheckUs{0};
+  // Bytes of copying the clone-elision pass saved, charged to this step: for
+  // each of the node's elided clone inputs that first has a tensor here,
+  // numel * element size * the number of clones elided for it. Filled only
+  // when the kTiming trace bit is on.
+  int64_t elidedCloneBytes{0};
 
   // Lifecycle stage for bundling frees with wave-stream syncs. Reset to
   // kNotStarted at the start of executeWave, set to kAllocated once this step's

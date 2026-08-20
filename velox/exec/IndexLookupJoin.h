@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/exec/IndexLookupJoinBridge.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/VectorHasher.h"
@@ -87,33 +88,11 @@ class IndexLookupJoin : public Operator {
   static constexpr std::string_view kNumIndexSplits{"numIndexSplits"};
 
  private:
-  // Intercepts runtime stats emitted during index-side operations (getOutput /
-  // startLookup) and accumulates them into a local map, separating them from
-  // probe-side stats so Driver::processLazyIoStats() correctly attributes
-  // only probe-side stats to the scan operator. Held via shared_ptr so the
-  // stat splitter lambda can outlive the operator and read the final stats.
-  class IndexStatWriter : public BaseRuntimeStatWriter {
-   public:
-    void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
-        override;
-
-    // Sets a runtime metric in the index source stats map. Thread-safe.
-    void setRuntimeStat(std::string_view name, const RuntimeMetric& metric)
-        override;
-
-    // Returns a snapshot of the accumulated index source runtime stats.
-    std::unordered_map<std::string, RuntimeMetric> runtimeStats() const;
-
-   private:
-    folly::Synchronized<std::unordered_map<std::string, RuntimeMetric>>
-        runtimeStats_;
-  };
-
   // Produces separate OperatorStats for IndexLookupJoin and IndexSource nodes.
   static std::vector<OperatorStats> splitStats(
       const OperatorStats& combinedStats,
       const core::PlanNodeId& indexSourceNodeId,
-      const IndexStatWriter& indexSourceStatWriter);
+      const ConcurrentRuntimeStatWriter& indexSourceStatWriter);
 
   using ResultIterator = connector::IndexSource::ResultIterator;
   using Result = connector::IndexSource::Result;
@@ -479,6 +458,6 @@ class IndexLookupJoin : public Operator {
   // Intercepts and accumulates index source runtime stats. Held via
   // shared_ptr so the stat splitter lambda can read the final stats after the
   // operator is destroyed.
-  std::shared_ptr<IndexStatWriter> indexStatWriter_;
+  std::shared_ptr<ConcurrentRuntimeStatWriter> indexStatWriter_;
 };
 } // namespace facebook::velox::exec

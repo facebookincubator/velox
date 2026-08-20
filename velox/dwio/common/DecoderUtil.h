@@ -17,6 +17,11 @@
 #pragma once
 
 #include <algorithm>
+#include <cstring>
+#include <type_traits>
+
+#include <folly/lang/Bits.h>
+
 #include "velox/common/base/Portability.h"
 #include "velox/common/memory/RawVector.h"
 #include "velox/common/process/ProcessBase.h"
@@ -145,12 +150,26 @@ inline int32_t firstNullIndex(const uint64_t* nulls, int32_t numRows) {
   return first;
 }
 
+// Returns raw bytes because fixed-width page data may be unaligned.
+template <typename T>
+const char*
+fixedWidthValueBytes(const T* buffer, int32_t row, int32_t rowOffset) {
+  return reinterpret_cast<const char*>(buffer) + (row - rowOffset) * sizeof(T);
+}
+
 template <typename T, typename Any>
 void scatterDense(
     const Any* data,
     const int32_t* indices,
     int32_t size,
     T* target) {
+  if constexpr (std::is_same_v<Any, char>) {
+    for (auto i = 0; i < size; ++i) {
+      target[indices[i]] = folly::loadUnaligned<T>(data + i * sizeof(T));
+    }
+    return;
+  }
+
   auto source = reinterpret_cast<const T*>(data);
   if (source >= target && source < target + indices[size - 1]) {
     for (int32_t i = size - 1; i >= 0; --i) {
@@ -309,7 +328,7 @@ void fixedWidthScan(
           if (isDense(&rows[rowIndex], numRowsInBuffer)) {
             std::memcpy(
                 rawValues + numValues,
-                buffer + rows[rowIndex] - rowOffset,
+                fixedWidthValueBytes<T>(buffer, rows[rowIndex], rowOffset),
                 sizeof(T) * numRowsInBuffer);
             numValues += numRowsInBuffer;
             return;
@@ -322,23 +341,19 @@ void fixedWidthScan(
             [&](int32_t rowIndex) {
               auto firstRow = rows[rowIndex];
               if (!hasFilter) {
+                auto* firstValue =
+                    fixedWidthValueBytes<T>(buffer, firstRow, rowOffset);
                 if (hasHook) {
-                  hook.addValues(
-                      scatterRows + rowIndex,
-                      buffer + firstRow - rowOffset,
-                      kStep);
+                  T values[kStep];
+                  std::memcpy(values, firstValue, sizeof(T) * kStep);
+                  hook.addValues(scatterRows + rowIndex, values, kStep);
                 } else {
                   if (scatter) {
                     scatterDense(
-                        buffer + firstRow - rowOffset,
-                        scatterRows + rowIndex,
-                        kStep,
-                        rawValues);
+                        firstValue, scatterRows + rowIndex, kStep, rawValues);
                   } else {
                     FOLLY_BUILTIN_MEMCPY(
-                        rawValues + numValues,
-                        buffer + firstRow - rowOffset,
-                        sizeof(T) * kStep);
+                        rawValues + numValues, firstValue, sizeof(T) * kStep);
                   }
                 }
                 numValues += kStep;

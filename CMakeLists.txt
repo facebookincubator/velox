@@ -66,6 +66,7 @@ list(
 include(ResolveDependency)
 include(VeloxUtils)
 include(CMakeDependentOption)
+include(CheckIPOSupported)
 
 velox_set_with_default(VELOX_DEPENDENCY_SOURCE_DEFAULT VELOX_DEPENDENCY_SOURCE AUTO)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
@@ -91,6 +92,7 @@ option(VELOX_MONO_LIBRARY "Build single unified library." ON)
 option(ENABLE_ALL_WARNINGS "Enable -Wall and -Wextra compiler warnings." ON)
 option(VELOX_BUILD_SHARED "Build Velox as shared libraries." OFF)
 option(VELOX_BUILD_CMAKE_PACKAGE "Build CMake package for Velox." OFF)
+option(VELOX_ENABLE_LTO "Enable link-time optimization (IPO/LTO)." OFF)
 option(VELOX_SKIP_WAVE_BRANCH_KERNEL_TEST "Disable Wave branch kernel test." OFF)
 # While it's possible to build both in one go we currently want to build either
 # static or shared.
@@ -114,6 +116,18 @@ if(VELOX_BUILD_SHARED)
     "When building Velox as a shared library it's recommended to build against a shared build of folly to avoid issues with linking of gflags. "
     "This is currently NOT being enforced so user discretion is advised."
   )
+endif()
+
+if(VELOX_ENABLE_LTO)
+  check_ipo_supported(RESULT VELOX_IPO_SUPPORTED OUTPUT VELOX_IPO_ERROR LANGUAGES CXX)
+  if(NOT VELOX_IPO_SUPPORTED)
+    message(
+      FATAL_ERROR
+      "VELOX_ENABLE_LTO requested, but IPO/LTO is not supported: ${VELOX_IPO_ERROR}"
+    )
+  endif()
+  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+  message(STATUS "VELOX_ENABLE_LTO enabled")
 endif()
 
 # option() always creates a BOOL variable so we have to use a normal cache
@@ -155,6 +169,7 @@ option(VELOX_ENABLE_GCS "Build GCS Connector" OFF)
 option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
+option(VELOX_ENABLE_NIMBLE "Enable Nimble support" OFF)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_GEO "Enable Geospatial support" ON)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
@@ -660,8 +675,13 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   velox_resolve_dependency(pybind11 2.10.0)
 endif()
 
-# DWIO (ORC/DWRF) depends on protobuf.
-if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR} OR VELOX_ENABLE_GCS)
+# DWIO (ORC/DWRF) depends on protobuf. Nimble's serializer does too.
+if(
+  ${VELOX_BUILD_MINIMAL_WITH_DWIO}
+  OR ${VELOX_ENABLE_HIVE_CONNECTOR}
+  OR VELOX_ENABLE_GCS
+  OR VELOX_ENABLE_NIMBLE
+)
   # Locate or build protobuf.
   velox_set_source(Protobuf)
   velox_resolve_dependency(Protobuf 3.21.7 REQUIRED)
@@ -854,6 +874,43 @@ if(VELOX_ENABLE_GEO)
   list(PREPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/CMake/resolve_dependency_modules/s2geometry)
   velox_set_source(s2geometry)
   velox_resolve_dependency(s2geometry)
+endif()
+
+# Resolved last, after every other dependency. OpenZL vendors its own copy of
+# zstd, whose CMake defines an `uninstall` target. GEOS defines one too, but
+# without the `if(NOT TARGET uninstall)` guard that zstd has, so GEOS fails
+# outright if anything claimed the name first. Ordering Nimble after GEOS lets
+# GEOS win the race and zstd skip, which is the only arrangement in which a
+# BUNDLED build of both succeeds. Nothing between here and add_subdirectory()
+# needs these targets.
+if(VELOX_ENABLE_NIMBLE)
+  # Nimble is the only consumer of both, so they are resolved here rather than
+  # unconditionally. FlatBuffers supplies both the runtime library and the flatc
+  # code generator that turns Nimble's .fbs schemas into C++ headers. Nimble's
+  # third dependency, FSST, is vendored under velox/external/fsst instead.
+  velox_set_source(flatbuffers)
+  velox_resolve_dependency(flatbuffers)
+  # build_flatbuffers() only ships with FlatBuffers 22.9.4 and later, and a
+  # bundled build does not put the package's own modules on CMAKE_MODULE_PATH at
+  # all, so CMake/third-party/BuildFlatBuffers.cmake is used unconditionally to
+  # keep a single code path. It resolves flatc from FLATBUFFERS_FLATC_EXECUTABLE,
+  # the flatbuffers::flatc target or the flatc target, whichever the resolved
+  # package provides.
+  include(BuildFlatBuffers)
+
+  velox_set_source(openzl)
+  velox_resolve_dependency(openzl)
+  # A bundled build exposes the bare target names while find_package() exposes
+  # namespaced ones. Aliasing between them is not safe: a find_package() that
+  # reports the package as not found still leaves its imported OpenZL:: targets
+  # behind, so `if(NOT TARGET OpenZL::openzl_cpp)` would skip the alias and
+  # consumers would link the rejected system package. Select on the resolution
+  # mode instead, which is unambiguous.
+  if(openzl_SOURCE STREQUAL "SYSTEM")
+    set(VELOX_OPENZL_LIBRARIES OpenZL::openzl OpenZL::openzl_cpp)
+  else()
+    set(VELOX_OPENZL_LIBRARIES openzl openzl_cpp)
+  endif()
 endif()
 
 add_subdirectory(velox)

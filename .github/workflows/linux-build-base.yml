@@ -46,7 +46,7 @@ jobs:
   get-changes:
     # Always runs — clang-tidy in the adapters job needs the changed-files
     # list and diff range in both selective and full modes.
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     outputs:
       run-clang-tidy: ${{ steps.changes.outputs.run_clang_tidy }}
       changed-files: ${{ steps.changes.outputs.files}}
@@ -143,6 +143,7 @@ jobs:
         env:
           VELOX_BUILD_SHARED: "ON"
           VELOX_FBTHRIFT_CMAKE_PATCH: ${{ github.workspace }}/CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch
+          VELOX_OPENZL_CMAKE_PATCH: ${{ github.workspace }}/CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             echo "Removing previous AWS SDK and s2n installations to avoid conflicts..."
@@ -296,7 +297,11 @@ jobs:
       # When clang is used a number of dependencies are excluded from the build so we don't
       # need to run clang-tidy for that.
       # Let's also run this as last step so that if skipped it doesn't affect subsequent steps.
-      - name: Install and run clang-tidy
+      - name: Install clang-tidy
+        if: ${{ steps.build.outcome == 'success' && ! inputs.use-clang && needs.get-changes.outputs.run-clang-tidy == 'true' }}
+        uses: ./.github/actions/setup-clang-tidy
+
+      - name: Run clang-tidy
         if: ${{ steps.build.outcome == 'success' && ! inputs.use-clang && needs.get-changes.outputs.run-clang-tidy == 'true' }}
         env:
           FILES: ${{ needs.get-changes.outputs.changed-files }}
@@ -304,7 +309,6 @@ jobs:
           MERGE_BASE_COMMIT: ${{ needs.get-changes.outputs.merge-base-commit }}
         run: |
           git config --global --add safe.directory /__w/velox/velox
-          uv tool install clang-tidy==18.1.8
           git fetch origin $MERGE_BASE_COMMIT
           # The usage of GCC14 adds compiler warnings not understood by Clang/Clang-tidy.
           # We replace them for now but eventually move Clang-tidy to the Clang based build.
@@ -313,7 +317,9 @@ jobs:
           sed -i 's/-Wno-class-memaccess//g' $BUILD_PATH/compile_commands.json
           sed -i 's/-Wno-maybe-uninitialized//g' $BUILD_PATH/compile_commands.json
           sed -i 's/-fcoroutines//g' $BUILD_PATH/compile_commands.json
-          python ./scripts/checks/run-clang-tidy.py -p $BUILD_PATH --commit $RANGE $FILES
+          # Breeze is a separate CMake project. Its files need the Breeze
+          # compile database, not the adapters build compile database.
+          python ./scripts/checks/run-clang-tidy.py -p $BUILD_PATH --commit $RANGE --exclude-dir breeze/ $FILES
 
       - name: Check cuDF Changes
         uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
@@ -387,7 +393,7 @@ jobs:
   adapters-build-status:
     if: always()
     needs: adapters
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "BUILD: Linux release with adapters"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -413,7 +419,7 @@ jobs:
   adapters-test-status:
     if: always()
     needs: adapters
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "TEST: Linux release with adapters"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -558,6 +564,7 @@ jobs:
         env:
           VELOX_BUILD_SHARED: "ON"
           VELOX_FBTHRIFT_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch
+          VELOX_OPENZL_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             # Overwrite old setup scripts with changed versions
@@ -714,7 +721,7 @@ jobs:
     # didn't run.
     if: ${{ inputs.is-full-mode && always() }}
     needs: ubuntu-debug
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "BUILD: Ubuntu debug with system dependencies"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -740,7 +747,7 @@ jobs:
   ubuntu-debug-test-status:
     if: ${{ inputs.is-full-mode && always() }}
     needs: ubuntu-debug
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "TEST: Ubuntu debug with system dependencies"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -798,6 +805,7 @@ jobs:
         env:
           VELOX_BUILD_SHARED: "ON"
           VELOX_FBTHRIFT_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch
+          VELOX_OPENZL_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             # Overwrite old setup scripts with changed versions
@@ -863,7 +871,7 @@ jobs:
   fedora-debug-build-status:
     if: ${{ inputs.is-full-mode && always() }}
     needs: fedora-debug
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "BUILD: Fedora debug"
     steps:
       - run: |
@@ -1038,7 +1046,7 @@ jobs:
   asan-ubsan-build-status:
     if: ${{ inputs.is-full-mode && always() }}
     needs: asan-ubsan-adapters
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "BUILD: Linux sanitizers with system dependencies"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1064,7 +1072,7 @@ jobs:
   asan-ubsan-test-status:
     if: ${{ inputs.is-full-mode && always() }}
     needs: asan-ubsan-adapters
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "TEST: Linux sanitizers with system dependencies"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

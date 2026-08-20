@@ -32,6 +32,7 @@
 #include <torch/nativert/graph/Graph.h>
 
 #include "velox/experimental/torchwave/CompiledOp.h"
+#include "velox/experimental/torchwave/ParallelExpr.h"
 #include "velox/experimental/torchwave/Pt2Load.h"
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/Utils.h"
@@ -222,7 +223,23 @@ class CompileTest : public ::testing::Test {
     return false;
   }
 
+  /// Loads a .pt2 model and returns its (un-optimized) nativert graph. The
+  /// LoadedModel and its reader are kept alive by this fixture.
+  nativert::Graph& loadGraph(const std::string& pt2File) {
+    const std::string kBaseDir = "velox/experimental/torchwave/tests";
+    auto pt2Path = getDataFilePath(kBaseDir, pt2File);
+    auto reader = std::make_shared<caffe2::serialize::PyTorchStreamReader>(
+        std::make_unique<caffe2::serialize::FileAdapter>(pt2Path));
+    auto modelNames = getModelNames(*reader);
+    EXPECT_FALSE(modelNames.empty()) << "No models found in " << pt2Path;
+    readers_.push_back(reader);
+    loadedModels_.push_back(loadPt2Model(reader, modelNames[0]));
+    return *loadedModels_.back().graph;
+  }
+
  private:
+  // Owns readers so graphs loaded via loadGraph remain valid.
+  std::vector<std::shared_ptr<caffe2::serialize::PyTorchStreamReader>> readers_;
   // Owns LoadedModels so the graph (and its nodes) remain valid.
   std::vector<LoadedModel> loadedModels_;
   // Owns ModelContexts so the WaveGraph's borrowed pointer remains valid.
@@ -230,6 +247,21 @@ class CompileTest : public ::testing::Test {
   // Owns TensorMeta objects so pointers in ValueTypes remain valid.
   std::vector<std::unique_ptr<nativert::TensorMeta>> metaStore_;
 };
+
+// toString() takes its defaults from a default-constructed config, so a field
+// is reported exactly when it differs from the default the header declares.
+TEST(WaveConfigTest, toStringReportsOnlyNonDefaults) {
+  WaveConfig config;
+  EXPECT_EQ(config.toString(), "defaults");
+
+  config.enableReuse = false;
+  EXPECT_EQ(config.toString(), "enableReuse=false");
+
+  config.enableReuse = true;
+  config.trace = WaveConfig::kTiming;
+  config.freeIntermediates = true;
+  EXPECT_EQ(config.toString(), "trace=16, freeIntermediates=true");
+}
 
 TEST_F(CompileTest, maskedSelectTest) {
   auto waveGraph = loadAndCompile("data/masked_select_test.pt2");
@@ -347,6 +379,17 @@ TEST_F(CompileTest, planMatchers) {
   EXPECT_TRUE(multi.inLaterStep("tw.add_sizes", "tw.masked_select_head"));
   EXPECT_TRUE(multi.inLaterStep("tw.masked_select_final", "tw.add_sizes"));
 
+  // The cg plan for the SAME graph comes out different from the multi-kernel
+  // plan: cg fuses every stage into one cooperative kernel ordered by an
+  // intra-kernel barrier, whereas multi splits the stages across kernel
+  // boundaries with no barrier. Asserting both guards against the mode
+  // parameter silently ceasing to change the plan.
+  EXPECT_TRUE(multi.kernelBoundaryBetween(
+      "tw.masked_select_head", "tw.masked_select_final"));
+  auto cg = CompiledPlan::from(*graph, CompiledPlan::Mode::kCG);
+  EXPECT_TRUE(cg.fuses({"tw.masked_select_cg", "aten.add.Tensor"}));
+  EXPECT_TRUE(cg.barrierBetween("tw.masked_select_cg", "aten.add.Tensor"));
+
   // Single-block: the whole masked_select fuses into one kernel.
   auto single = CompiledPlan::from(*graph, CompiledPlan::Mode::kSingleBlock);
   EXPECT_TRUE(single.fuses(
@@ -372,18 +415,28 @@ TEST_F(CompileTest, planMatchers) {
       {"tw.masked_select_head", "aten.add.Tensor", "aten.lt.Scalar"}));
 }
 
-// tw.index_select is an all-elementwise op; an elementwise producer of its
-// source/index fuses INTO its kernel and is ordered by an intra-kernel barrier
-// (a barrier within one kernel, not a kernel boundary between two).
-TEST_F(CompileTest, planBarrier) {
+// tw.index_select reads its source and index as whole tensors (argumentMeta
+// wholeTensor). In multi-kernel mode an elementwise producer of a whole-tensor
+// input runs in its own earlier kernel: fusing it in would force an
+// intra-kernel opBarrier, which promotes the launch to cooperative (whole grid
+// resident). So the multi-kernel plan carries no barriers. (A downstream add
+// that merely consumes index_select's register output still fuses with it,
+// harmlessly and without a barrier -- which is why a name-based boundary
+// matcher cannot be used here.)
+TEST_F(CompileTest, planWholeTensorBoundary) {
   auto graph = loadAndCompile("data/index_select_test.pt2");
   ASSERT_NE(graph, nullptr);
 
   auto multi = CompiledPlan::from(*graph, CompiledPlan::Mode::kMultiKernel);
-  LOG(INFO) << multi.describe();
-
-  EXPECT_TRUE(multi.fuses({"tw.index_select", "aten.add.Tensor"}));
-  EXPECT_TRUE(multi.barrierBetween("tw.index_select", "aten.add.Tensor"));
+  int32_t numBarriers = 0;
+  for (const auto& node : multi.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        numBarriers += kernel.numBarriers;
+      }
+    }
+  }
+  EXPECT_EQ(numBarriers, 0) << multi.describe();
 }
 
 // A standalone op inside a cat that is the tensor repeated by
@@ -441,7 +494,7 @@ return(%r)
       .returnMeta({{.isRegister = false}})
       .outputConstraints(
           [](NodeCP, const ValueTypes&) -> std::vector<ValueConstraint> {
-            return {{.rank = 1, .contiguous = true}};
+            return {{.rank = 1, .contiguity = Contiguity::kContiguous}};
           })
       .registerOp();
   auto restore = folly::makeGuard([&] {
@@ -453,6 +506,504 @@ return(%r)
   EXPECT_NE(waveGraph, nullptr);
 }
 
+// A linear chain of in-place index_puts on a new_ones tensor
+//   a = new_ones(...); b = index_put(a, ...); c = index_put(b, ...);
+//   d = index_put(c, ...); e = d * 2
+// fuses into a single expr. Every tensor buffer created in that expr -- the
+// factory result and each in-place index_put result -- is last-read within the
+// expr and does not escape, so all of them must be flagged as last uses. Only
+// the final result (mul) escapes to the graph output. Each successive clone
+// inserted by the index_put rewrite aliases the same buffer as its index_put
+// result, so the buffer is represented by exactly one flagged value.
+TEST_F(CompileTest, indexPutChainLastUse) {
+  auto& graph = loadGraph("data/index_put_chain_test.pt2");
+
+  ValueTypes types;
+  std::vector<std::unique_ptr<nativert::TensorMeta>> metaStore;
+  initValueTypes(graph, types, metaStore);
+  auto waveHolder = WaveGraph::optimizeOnly(graph, types);
+
+  ParallelNodes parallelNodes;
+  auto* last = parallelNodes.makeParallelNodes(graph);
+  ASSERT_NE(last, nullptr);
+
+  // Union of every layer's last-use values.
+  std::unordered_set<ValueCP> lastUse;
+  for (auto* pn = last; pn != nullptr; pn = pn->input()) {
+    lastUse.insert(pn->lastUse.begin(), pn->lastUse.end());
+  }
+
+  std::unordered_set<ValueCP> outputs;
+  for (const auto& in : graph.outputNode()->inputs()) {
+    outputs.insert(in.value);
+  }
+
+  // Every live buffer produced inside the fused chain -- the ones factory and
+  // each in-place index_put result -- must be flagged as a non-escaping last
+  // use.
+  int32_t numChainBuffers = 0;
+  for (auto* v : graph.values()) {
+    if (v == nullptr || v->producer() == nullptr || v->users().empty()) {
+      continue;
+    }
+    const std::string_view target = v->producer()->target();
+    const bool isChainBuffer = target == "tw.index_put_elt_one" ||
+        target == "torch.ops.aten.ones.default" ||
+        target == "torch.ops.aten.new_ones.default";
+    if (!isChainBuffer) {
+      continue;
+    }
+    EXPECT_EQ(outputs.count(v), 0u)
+        << "chain buffer %" << v->id() << " unexpectedly escapes";
+    EXPECT_GT(lastUse.count(v), 0u)
+        << "non-escaping chain buffer %" << v->id() << " (" << target
+        << ") was not flagged as a last use";
+    ++numChainBuffers;
+  }
+  // ones + three index_put results.
+  EXPECT_EQ(numChainBuffers, 4);
+
+  // The final result escapes to the graph output, so it is never a last use.
+  for (auto* out : outputs) {
+    EXPECT_EQ(lastUse.count(out), 0u)
+        << "escaping output %" << out->id() << " must not be a last use";
+  }
+}
+
+// A shared value c = a + b feeds two independent index_put chains whose ends
+// (c2, c4) escape:
+//   c1 = index_put(c, ...);  c2 = index_put(c1, ...)
+//   c3 = index_put(c, ...);  c4 = index_put(c3, ...)
+// c is read by both chains -- two exprs in the same layer -- so its buffer must
+// not be reused in place: it must appear as a last use but must NOT be flagged
+// reusable. The single-use temporaries (c1, c3) are non-escaping last uses; the
+// chain ends escape and are never last uses.
+TEST_F(CompileTest, indexPutForkSharedNotReusable) {
+  auto& graph = loadGraph("data/index_put_fork_test.pt2");
+
+  ValueTypes types;
+  std::vector<std::unique_ptr<nativert::TensorMeta>> metaStore;
+  initValueTypes(graph, types, metaStore);
+  auto waveHolder = WaveGraph::optimizeOnly(graph, types);
+
+  ParallelNodes parallelNodes;
+  auto* last = parallelNodes.makeParallelNodes(graph);
+  ASSERT_NE(last, nullptr);
+
+  std::unordered_set<ValueCP> outputs;
+  for (const auto& in : graph.outputNode()->inputs()) {
+    outputs.insert(in.value);
+  }
+  std::unordered_set<ValueCP> lastUse;
+  for (auto* pn = last; pn != nullptr; pn = pn->input()) {
+    lastUse.insert(pn->lastUse.begin(), pn->lastUse.end());
+  }
+
+  // The shared value c = a + b, read by both chains.
+  ValueCP shared = nullptr;
+  for (auto* v : graph.values()) {
+    if (v != nullptr && v->producer() != nullptr &&
+        v->producer()->target() == "torch.ops.aten.add.Tensor") {
+      shared = v;
+      break;
+    }
+  }
+  ASSERT_NE(shared, nullptr);
+  EXPECT_GE(shared->users().size(), 2u)
+      << "shared value %" << shared->id() << " should feed both chains";
+
+  // c is a last use, but must NOT be reusable in place: two exprs read it, so
+  // overwriting its buffer would corrupt the other chain.
+  bool sharedIsLastUse = false;
+  for (auto* pn = last; pn != nullptr; pn = pn->input()) {
+    if (pn->lastUse.count(shared) > 0) {
+      sharedIsLastUse = true;
+      EXPECT_FALSE(pn->isReusableInput(shared))
+          << "shared value %" << shared->id()
+          << " is read by two exprs and must not be flagged reusable";
+    }
+  }
+  EXPECT_TRUE(sharedIsLastUse)
+      << "shared value %" << shared->id() << " should be a last use";
+
+  // The two chain ends escape to graph outputs, so they are never last uses.
+  int32_t numOutputs = 0;
+  for (auto* v : graph.values()) {
+    if (v == nullptr || outputs.count(v) == 0) {
+      continue;
+    }
+    ++numOutputs;
+    EXPECT_EQ(lastUse.count(v), 0u)
+        << "escaping output %" << v->id() << " must not be a last use";
+  }
+  EXPECT_EQ(numOutputs, 2);
+
+  // Each non-escaping index_put temporary (c1, c3) is a single-use last use.
+  int32_t numTemps = 0;
+  for (auto* v : graph.values()) {
+    if (v == nullptr || v->producer() == nullptr || v->users().empty() ||
+        outputs.count(v) > 0) {
+      continue;
+    }
+    if (v->producer()->target() != "tw.index_put_elt_one") {
+      continue;
+    }
+    EXPECT_GT(lastUse.count(v), 0u)
+        << "non-escaping index_put temp %" << v->id()
+        << " must be flagged as a last use";
+    ++numTemps;
+  }
+  EXPECT_EQ(numTemps, 2);
+}
+
+// The index_put chain
+//   a = base.new_ones(...); b = a.index_put(...); c = b.index_put(...);
+//   d = c.index_put(...); e = d * 2; return e
+// fuses into one expr. The index_put results write in place, so a, b, c and d
+// all share a's storage; only the separate `* 2` result e escapes. a's private
+// buffer is therefore produced and consumed entirely within the expr and never
+// escapes, so it must be flagged as an expr-local overwritable temp; the
+// escaping output e must not be.
+TEST_F(CompileTest, exprLocalOverwritableTemps) {
+  auto& graph = loadGraph("data/index_put_chain_test.pt2");
+
+  ValueTypes types;
+  std::vector<std::unique_ptr<nativert::TensorMeta>> metaStore;
+  initValueTypes(graph, types, metaStore);
+  auto waveHolder = WaveGraph::optimizeOnly(graph, types);
+
+  ParallelNodes parallelNodes;
+  auto* last = parallelNodes.makeParallelNodes(graph);
+  ASSERT_NE(last, nullptr);
+
+  std::unordered_set<ValueCP> outputs;
+  for (const auto& in : graph.outputNode()->inputs()) {
+    outputs.insert(in.value);
+  }
+
+  auto isOverwritable = [&](ValueCP v) {
+    for (auto* pn = last; pn != nullptr; pn = pn->input()) {
+      if (pn->isOverwritableTemp(v)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // The new_ones buffer that backs the in-place chain is an expr-local temp.
+  ValueCP ones = nullptr;
+  for (auto* v : graph.values()) {
+    if (v != nullptr && v->producer() != nullptr &&
+        (v->producer()->target() == "torch.ops.aten.new_ones.default" ||
+         v->producer()->target() == "torch.ops.aten.ones.default")) {
+      ones = v;
+      break;
+    }
+  }
+  ASSERT_NE(ones, nullptr);
+  EXPECT_TRUE(isOverwritable(ones))
+      << "new_ones buffer %" << ones->id()
+      << " is a non-escaping expr-local temp and should be overwritable";
+
+  // No graph output may ever be an overwritable temp.
+  for (auto* out : outputs) {
+    EXPECT_FALSE(isOverwritable(out))
+        << "escaping output %" << out->id() << " must not be overwritable";
+  }
+
+  // Every flagged temp has a producer and is not a graph output.
+  int32_t numOverwritable = 0;
+  for (auto* v : graph.values()) {
+    if (v == nullptr || !isOverwritable(v)) {
+      continue;
+    }
+    ++numOverwritable;
+    EXPECT_NE(v->producer(), nullptr)
+        << "overwritable temp %" << v->id() << " must have a producer";
+    EXPECT_EQ(outputs.count(v), 0u)
+        << "overwritable temp %" << v->id() << " must not escape";
+  }
+  EXPECT_GE(numOverwritable, 1)
+      << "expected at least the new_ones buffer to be an overwritable temp";
+}
+
+// The linear index_put chain
+//   a = base.new_ones(...); b = a.index_put(...); c = b.index_put(...);
+//   d = c.index_put(...); e = d * 2
+// is lowered to a defensive clone before each in-place index_put_ (its self).
+// Every clone input (a, b, c) is a single-consumer, last-use buffer, so
+// rewriteInPlace elides all of them: each in-place writer is rewired to write
+// its original buffer, and every clone output is left dead (no users).
+TEST_F(CompileTest, cloneElisionRewritesInPlaceChain) {
+  auto& graph = loadGraph("data/index_put_chain_test.pt2");
+
+  ValueTypes types;
+  std::vector<std::unique_ptr<nativert::TensorMeta>> metaStore;
+  initValueTypes(graph, types, metaStore);
+  auto waveHolder = WaveGraph::optimizeOnly(graph, types);
+
+  ParallelNodes parallelNodes;
+  auto* last = parallelNodes.makeParallelNodes(graph);
+  ASSERT_NE(last, nullptr);
+
+  // The defensive clones the index_put rewrite inserted, each currently read by
+  // its in-place writer.
+  std::vector<ValueCP> cloneOutputs;
+  for (auto* v : graph.values()) {
+    if (v != nullptr && v->producer() != nullptr &&
+        v->producer()->target() == "torch.ops.aten.clone.default") {
+      cloneOutputs.push_back(v);
+    }
+  }
+  ASSERT_FALSE(cloneOutputs.empty())
+      << "setup: the index_put chain should contain defensive clones";
+  for (ValueCP c : cloneOutputs) {
+    ASSERT_FALSE(c->users().empty())
+        << "setup: clone %" << c->id() << " should have a consumer pre-pass";
+  }
+
+  // Use the optimized constraints (optimizeOnly copies the ValueTypes it is
+  // given, so the local 'types' is not updated in place).
+  parallelNodes.rewriteInPlace(graph, waveHolder->types());
+
+  for (ValueCP c : cloneOutputs) {
+    EXPECT_TRUE(c->users().empty())
+        << "clone %" << c->id()
+        << " should be elided: its in-place writer is rewired to the original"
+        << " last-use buffer";
+  }
+}
+
+// The fork graph
+//   c = a + b;
+//   c1 = index_put(c, ...);  c2 = index_put(c1, ...)
+//   c3 = index_put(c, ...);  c4 = index_put(c3, ...)
+// clones c before each of the two chains. c is read by both chains, so writing
+// it in place would corrupt the other chain: rewriteInPlace must KEEP the
+// clones whose input is c. The single-use temporaries c1 and c3 are still
+// safely elided, so the pass is selective, not a no-op.
+TEST_F(CompileTest, cloneElisionKeepsForkedInput) {
+  auto& graph = loadGraph("data/index_put_fork_test.pt2");
+
+  ValueTypes types;
+  std::vector<std::unique_ptr<nativert::TensorMeta>> metaStore;
+  initValueTypes(graph, types, metaStore);
+  auto waveHolder = WaveGraph::optimizeOnly(graph, types);
+
+  ParallelNodes parallelNodes;
+  auto* last = parallelNodes.makeParallelNodes(graph);
+  ASSERT_NE(last, nullptr);
+
+  ValueCP shared = nullptr;
+  for (auto* v : graph.values()) {
+    if (v != nullptr && v->producer() != nullptr &&
+        v->producer()->target() == "torch.ops.aten.add.Tensor") {
+      shared = v;
+      break;
+    }
+  }
+  ASSERT_NE(shared, nullptr);
+  ASSERT_GE(shared->users().size(), 2u)
+      << "shared value %" << shared->id() << " should feed both chains";
+
+  // Clones whose input is the shared value: eliding these would write the
+  // shared buffer in place.
+  std::vector<ValueCP> sharedClones;
+  for (auto* v : graph.values()) {
+    if (v != nullptr && v->producer() != nullptr &&
+        v->producer()->target() == "torch.ops.aten.clone.default" &&
+        !v->producer()->inputs().empty() &&
+        v->producer()->inputs()[0].value == shared) {
+      sharedClones.push_back(v);
+    }
+  }
+  ASSERT_FALSE(sharedClones.empty())
+      << "setup: expected clones of the shared value";
+
+  parallelNodes.rewriteInPlace(graph, waveHolder->types());
+
+  for (ValueCP c : sharedClones) {
+    EXPECT_FALSE(c->users().empty())
+        << "clone %" << c->id()
+        << " of the shared value must be kept: the shared buffer has another"
+        << " consumer, so in-place would corrupt the other chain";
+  }
+
+  // Selectivity: the pass is not a no-op -- the single-use clones (of c1, c3)
+  // were elided.
+  int32_t elided = 0;
+  for (auto* v : graph.values()) {
+    if (v != nullptr && v->producer() != nullptr &&
+        v->producer()->target() == "torch.ops.aten.clone.default" &&
+        v->users().empty()) {
+      ++elided;
+    }
+  }
+  EXPECT_GT(elided, 0)
+      << "expected the pass to elide the single-use clones while keeping the"
+      << " shared ones";
+}
+
+// The functionalized form of `base[:, 0] = vals`:
+//   s1  = slice(base, dim=0);  col = select(s1, dim=1, index=0)
+//   cp  = copy(col, vals)                      <- reads base's column 0
+//   s2  = slice(base, dim=0);  cl  = clone(s2) <- the defensive clone
+//   ss  = select_scatter(cl, cp, dim=1, index=0)
+//   out = slice_scatter(base, ss, dim=0)
+// The clone's only consumer is the scatter, and base is dead afterwards, so the
+// per-expr last-use test alone would elide the clone. That is wrong: cp is
+// computed from a read of base at a different index path than the value being
+// overwritten, and fusion puts that read in the same kernel as the write, so
+// the read would return post-write data. The clone must be kept.
+TEST_F(CompileTest, cloneElisionKeepsReadOfWriteTarget) {
+  auto rank2 = [] { return makeTensorMeta(c10::ScalarType::Float, 2); };
+  auto rank1 = [] { return makeTensorMeta(c10::ScalarType::Float, 1); };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"inp", rank2()},
+      {"base", rank2()},
+      {"vals", rank1()},
+      {"s1", rank2()},
+      {"col", rank1()},
+      {"cp", rank1()},
+      {"s2", rank2()},
+      {"cl", rank2()},
+      {"ss", rank2()},
+      {"out", rank2()}};
+  // base is produced inside the graph, not a graph input: an externally owned
+  // buffer is rejected for in-place reuse before the read/write check is
+  // reached, which would make this fixture pass for the wrong reason.
+  const char* graphStr =
+      R"(graph(%inp, %vals):
+%base = torch.ops.aten.ones_like.default(self=%inp)
+%s1 = torch.ops.aten.slice.Tensor(self=%base, dim=0, start=0, end=9223372036854775807, step=1)
+%col = torch.ops.aten.select.int(self=%s1, dim=1, index=0)
+%cp = torch.ops.aten.copy.default(self=%col, src=%vals)
+%s2 = torch.ops.aten.slice.Tensor(self=%base, dim=0, start=0, end=9223372036854775807, step=1)
+%cl = torch.ops.aten.clone.default(self=%s2)
+%ss = torch.ops.aten.select_scatter.default(self=%cl, src=%cp, dim=1, index=0)
+%out = torch.ops.aten.slice_scatter.default(self=%base, src=%ss, dim=0, start=0, end=9223372036854775807, step=1)
+return(%out)
+)";
+
+  auto graphOwner = nativert::stringToGraph(graphStr);
+  graphOwner->setTensorValuesMeta(meta);
+  setGraphDevice(graphOwner.get(), /*isCuda=*/true);
+  auto& graph = *graphOwner;
+
+  ValueTypes types;
+  std::vector<std::unique_ptr<nativert::TensorMeta>> metaStore;
+  initValueTypes(graph, types, metaStore);
+  auto waveHolder = WaveGraph::optimizeOnly(graph, types);
+
+  ParallelNodes parallelNodes;
+  auto* last = parallelNodes.makeParallelNodes(graph);
+  ASSERT_NE(last, nullptr);
+
+  std::vector<ValueCP> cloneOutputs;
+  for (auto* v : graph.values()) {
+    if (v != nullptr && v->producer() != nullptr &&
+        v->producer()->target() == "torch.ops.aten.clone.default") {
+      cloneOutputs.push_back(v);
+    }
+  }
+  ASSERT_FALSE(cloneOutputs.empty())
+      << "setup: the scatter's defensive clone should be present";
+  for (ValueCP c : cloneOutputs) {
+    ASSERT_FALSE(c->users().empty())
+        << "setup: clone %" << c->id() << " should have a consumer pre-pass";
+  }
+
+  parallelNodes.rewriteInPlace(graph, waveHolder->types());
+
+  for (ValueCP c : cloneOutputs) {
+    EXPECT_FALSE(c->users().empty())
+        << "clone %" << c->id()
+        << " must be kept: another operand of the scatter is computed from a"
+        << " read of the write target at a different index path";
+  }
+}
+
+// transpose is registered as a view (viewOfArg + metadataOnly) rather than an
+// unconditional standalone, so KernelOperation::setOutputs reaches its
+// meta->isView() branch and gives it an OutputDesc with viewNode set: the view
+// becomes an output of the enclosing kernel op, materialized as host-side
+// metadata at launch, with no step of its own.
+//
+// transpose(a + transpose(b)) + c over 2-D operands: b is transposed into a's
+// layout and the sum is transposed back into c's, so all four ops belong to one
+// expression and compile to a single step. Registered standalone, as it used to
+// be, each transpose is its own launch and the expression splits into four.
+TEST_F(CompileTest, transposeAsFusedView) {
+  auto f = [] { return makeTensorMeta(c10::ScalarType::Float, 2); };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"a", f()},
+      {"b", f()},
+      {"c", f()},
+      {"tb", f()},
+      {"s", f()},
+      {"ts", f()},
+      {"r", f()}};
+  const char* graphStr = R"(graph(%a, %b, %c):
+%tb = torch.ops.aten.transpose.int(self=%b, dim0=0, dim1=1)
+%s = torch.ops.aten.add.Tensor(self=%a, other=%tb)
+%ts = torch.ops.aten.transpose.int(self=%s, dim0=0, dim1=1)
+%r = torch.ops.aten.add.Tensor(self=%ts, other=%c)
+return(%r)
+)";
+
+  auto countSteps = [](WaveGraph& g) {
+    auto plan = CompiledPlan::from(g, CompiledPlan::Mode::kMultiKernel);
+    int32_t steps = 0;
+    for (const auto& node : plan.nodes()) {
+      steps += static_cast<int32_t>(node.steps.size());
+    }
+    return steps;
+  };
+
+  // The registered behavior: the whole expression is one step and neither
+  // transpose is a launch of its own.
+  int32_t fusedSteps = 0;
+  {
+    auto waveGraph = compileGraphString(graphStr, meta);
+    ASSERT_NE(waveGraph, nullptr);
+    fusedSteps = countSteps(*waveGraph);
+    auto plan =
+        CompiledPlan::from(*waveGraph, CompiledPlan::Mode::kMultiKernel);
+    EXPECT_FALSE(plan.standalone("aten.transpose.int")) << plan.describe();
+    EXPECT_EQ(fusedSteps, 1) << plan.describe();
+  }
+
+  // Contrast: re-registered as an unconditional standalone, the same graph
+  // splits. Without this the test would still pass if transpose silently
+  // stopped appearing in the plan at all.
+  auto saved = Registry::unregister("torch.ops.aten.transpose.int");
+  auto restore = folly::makeGuard([&] {
+    Registry::unregister("torch.ops.aten.transpose.int");
+    Registry::restoreRegistry("torch.ops.aten.transpose.int", std::move(saved));
+  });
+  MetadataBuilder("torch.ops.aten.transpose.int")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .viewOfArg(0)
+      .metadataOnly()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            return {
+                {.rank = types.rank(node->inputs()[0].value),
+                 .contiguity = Contiguity::kUnknown}};
+          })
+      .registerOp();
+
+  auto standaloneGraph = compileGraphString(graphStr, meta);
+  ASSERT_NE(standaloneGraph, nullptr);
+  auto standalonePlan =
+      CompiledPlan::from(*standaloneGraph, CompiledPlan::Mode::kMultiKernel);
+  EXPECT_TRUE(standalonePlan.standalone("aten.transpose.int"))
+      << standalonePlan.describe();
+  EXPECT_GT(countSteps(*standaloneGraph), fusedSteps)
+      << standalonePlan.describe();
+}
 } // namespace
 } // namespace torch::wave
 
