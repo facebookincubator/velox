@@ -253,8 +253,9 @@ openzl::GraphID wrapWithDefaultSegmenter(
       .customGraphs = nullptr,
       .numCustomGraphs = 0,
       .localParams = {},
-      .materializer = {},
       .opaque = {},
+      .mparamMat = {},
+      .mparam = {},
   };
   ZL_GraphID const segmenterBase =
       ZL_Compressor_registerSegmenter(cgraph, &desc);
@@ -276,6 +277,7 @@ openzl::GraphID wrapWithDefaultSegmenter(
       .customNodes = nullptr,
       .nbCustomNodes = 0,
       .localParams = &segParams,
+      .mparam = {},
   };
   return ZL_Compressor_registerParameterizedGraph(cgraph, &segGraphDesc);
 }
