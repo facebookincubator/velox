@@ -32,8 +32,8 @@ using namespace facebook::velox::parquet;
 
 namespace {
 
-// Returns the file-level runtime metric name for a Parquet metric.
-std::string parquetMetricName(std::string_view name) {
+// Returns the file-level runtime metric name.
+std::string metricName(std::string_view name) {
   return fmt::format(
       "{}.{}", FileFormatName::toName(FileFormat::PARQUET), name);
 }
@@ -42,7 +42,7 @@ std::string parquetMetricName(std::string_view name) {
 int64_t sumOf(
     const std::unordered_map<std::string, RuntimeMetric>& metrics,
     std::string_view name) {
-  return metrics.at(parquetMetricName(name)).sum;
+  return metrics.at(metricName(name)).sum;
 }
 
 } // namespace
@@ -2451,11 +2451,10 @@ TEST_F(ParquetReaderTest, thriftMemoryRuntimeStat) {
   rowReader->updateRuntimeStats(stats);
 
   auto metrics = stats.toRuntimeMetricMap();
-  const auto metricName =
-      parquetMetricName(ParquetRuntimeStats::kFooterEstimatedBytes);
-  ASSERT_TRUE(metrics.count(metricName));
-  EXPECT_GT(metrics[metricName].sum, 0);
-  EXPECT_EQ(metrics[metricName].unit, RuntimeCounter::Unit::kBytes);
+  const auto name = metricName(ParquetRuntimeStats::kFooterEstimatedBytes);
+  ASSERT_TRUE(metrics.count(name));
+  EXPECT_GT(metrics[name].sum, 0);
+  EXPECT_EQ(metrics[name].unit, RuntimeCounter::Unit::kBytes);
 }
 
 // Verifies that without tracking the runtime stat stays at zero and
@@ -2471,9 +2470,8 @@ TEST_F(ParquetReaderTest, thriftMemoryRuntimeStatAbsentWithoutTracking) {
   rowReader->updateRuntimeStats(stats);
 
   auto metrics = stats.toRuntimeMetricMap();
-  const auto metricName =
-      parquetMetricName(ParquetRuntimeStats::kFooterEstimatedBytes);
-  EXPECT_EQ(metrics.count(metricName), 0);
+  const auto name = metricName(ParquetRuntimeStats::kFooterEstimatedBytes);
+  EXPECT_EQ(metrics.count(name), 0);
 }
 
 // Verifies that without setting the threshold the tracking path is
@@ -2602,6 +2600,7 @@ TEST_F(ParquetReaderTest, pageSkipStats) {
     dwio::common::RuntimeStats stats;
     rowReader->updateRuntimeStats(stats);
     const auto metrics = stats.toRuntimeMetricMap();
+    // Column 'a' processes 98 pages; lazy column 'b' skips 96 and processes 2.
     EXPECT_EQ(sumOf(metrics, ParquetRuntimeStats::kProcessedPages), 100);
     EXPECT_EQ(sumOf(metrics, ParquetRuntimeStats::kSkippedPages), 96);
   };
