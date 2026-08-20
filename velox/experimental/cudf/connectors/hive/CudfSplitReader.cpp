@@ -198,8 +198,18 @@ CudfSplitReader::CudfSplitReader(
 CudfSplitReader::~CudfSplitReader() {
   // A split abandoned before it is read, e.g. when the task is cancelled while
   // the preloader prepares it, can still have reads in flight.
-  if (passState_ != nullptr) {
+  if (passState_ == nullptr) {
+    return;
+  }
+  try {
     releaseCurrentPassData();
+  } catch (const std::exception& e) {
+    // The data of a failed read is being dropped anyway, so the failure must
+    // not propagate out of the destructor.
+    LOG(ERROR) << fmt::format(
+        "Failed to drain the reads of an abandoned split. Path: {}. Error: {}.",
+        split_ != nullptr ? split_->filePath : "unknown",
+        e.what());
   }
 }
 
@@ -289,7 +299,7 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
 
 void CudfSplitReader::startCurrentPassFetch() {
   if (passState_->currentPass >= passState_->passes.size() or
-      passState_->pendingFetch.valid() or passState_->isChunkingSetup) {
+      passState_->fetch.pending.valid() or passState_->isChunkingSetup) {
     return;
   }
 
@@ -303,16 +313,9 @@ void CudfSplitReader::startCurrentPassFetch() {
           .first;
 
   nvtxRangePush("fetchByteRanges");
-
-  // Tuple containing a vector of device buffers, a vector of device spans
-  // for each input byte range, and a future to wait for all reads to complete
-  auto ioData = fetchByteRangesAsync(
+  passState_->fetch = fetchByteRangesAsync(
       dataSource_, columnChunkByteRanges, stream_, get_temp_mr());
   nvtxRangePop();
-
-  passState_->columnChunkBuffers = std::move(std::get<0>(ioData));
-  passState_->columnChunkData = std::move(std::get<1>(ioData));
-  passState_->pendingFetch = std::move(std::get<2>(ioData));
 }
 
 void CudfSplitReader::setupChunkingForCurrentPass(
@@ -321,13 +324,13 @@ void CudfSplitReader::setupChunkingForCurrentPass(
   startCurrentPassFetch();
 
   // Wait for all reads of the pass to complete.
-  passState_->pendingFetch.get();
+  passState_->fetch.pending.get();
 
   splitReader_->setup_chunking_for_all_columns(
       chunkReadLimit_,
       passReadLimit_,
       passState_->passes[passState_->currentPass],
-      passState_->columnChunkData,
+      passState_->fetch.data,
       readerOptions_,
       stream_,
       mr);
@@ -336,12 +339,14 @@ void CudfSplitReader::setupChunkingForCurrentPass(
 }
 
 void CudfSplitReader::releaseCurrentPassData() {
-  if (passState_->pendingFetch.valid()) {
-    // Reads still in flight write into the buffers about to be released.
-    passState_->pendingFetch.get();
+  auto& fetch = passState_->fetch;
+  if (fetch.pending.valid() and fetch.writesInFlight) {
+    // Reads still in flight write into the buffers about to be released. A
+    // fetch whose reads have not started yet is dropped instead: waiting on it
+    // would read the whole pass only to discard it.
+    fetch.pending.get();
   }
-  passState_->columnChunkData.clear();
-  passState_->columnChunkBuffers.clear();
+  passState_->fetch = {};
 }
 
 void CudfSplitReader::resetSplit() {
@@ -576,7 +581,8 @@ void CudfSplitReader::createCudfReader() {
 
   // Issue the reads of the first pass without waiting for them. When the split
   // is prepared by the preloader, this overlaps its I/O with the work the
-  // driver is still doing on the previous split.
+  // driver is still doing on the previous split, at the cost of holding the
+  // buffers of one pass per preloaded split rather than per driver.
   startCurrentPassFetch();
 }
 

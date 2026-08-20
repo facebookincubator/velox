@@ -248,6 +248,10 @@ void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
   completedBytes_ += preparedSource->completedBytes_;
   completedRows_ += preparedSource->completedRows_;
 
+  // Drop the reader of the previous split before replacing the AST storage it
+  // references below.
+  cudfSplitReader_.reset();
+
   // The reader's Parquet filter references the AST expressions and literal
   // scalars owned by 'source', which is freed right after this call. Adopt that
   // storage so the reader keeps pointing at live expressions; the nodes are

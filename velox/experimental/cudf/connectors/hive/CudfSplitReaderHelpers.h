@@ -70,16 +70,51 @@ class BufferedInputDataSource : public cudf::io::datasource {
   // Pass a device buffer to copy to after load.
   void enqueueForDevice(uint64_t offset, uint64_t size, uint8_t* dst);
 
-  // loads and copies to device.
-  void load(rmm::cuda_stream_view stream);
+  /// Plans the reads of the regions enqueued since the previous load and
+  /// submits the prefetchable ones to the IO executor. Returns without waiting
+  /// for them, so it is safe to call from a task running on that executor.
+  void startLoad();
+
+  /// Drains the regions enqueued since the previous load and copies them to
+  /// the device buffers they were enqueued with. Blocks until every read of
+  /// the batch has completed.
+  void finishLoad(rmm::cuda_stream_view stream);
 
  private:
+  // A region enqueued for reading into device memory. 'startLoad()' plans the
+  // read of 'stream' and 'finishLoad()' drains it into 'dst'.
+  struct PendingDeviceLoad {
+    std::shared_ptr<facebook::velox::dwio::common::SeekableInputStream> stream;
+    uint8_t* dst;
+    uint64_t size;
+  };
+
   void readContiguous(size_t offset, size_t size, uint8_t* dst);
 
   std::shared_ptr<facebook::velox::dwio::common::BufferedInput> input_;
   const size_t fileSize_;
-  std::vector<std::function<void(rmm::cuda_stream_view stream)>>
-      pendingDeviceLoads_;
+  std::vector<PendingDeviceLoad> pendingDeviceLoads_;
+};
+
+/// An in-progress fetch of a set of byte ranges into device memory.
+struct ByteRangeFetch {
+  /// Device buffers holding the fetched data. These must outlive every use of
+  /// 'data'.
+  std::vector<rmm::device_buffer> buffers;
+
+  /// Device spans into 'buffers', one per requested byte range.
+  std::vector<cudf::device_span<const uint8_t>> data;
+
+  /// Waits for every read of the fetch to complete. Must be waited on before
+  /// 'data' is read from.
+  std::future<void> pending;
+
+  /// Whether reads that write into 'buffers' are already in flight. When
+  /// false, waiting on 'pending' is what performs the copies into 'buffers',
+  /// so it can be dropped rather than waited on if the data is not needed
+  /// after all. When true, 'pending' must be waited on before the buffers are
+  /// released.
+  bool writesInFlight{false};
 };
 
 /// Tracks progress of reading the row groups selected for a split as a
@@ -94,35 +129,26 @@ struct RowGroupPassState {
   /// Whether chunking has been set up for the current pass.
   bool isChunkingSetup{false};
 
-  /// Device buffers holding the column chunk data of the current pass. These
-  /// must outlive every table chunk materialized from that pass.
-  std::vector<rmm::device_buffer> columnChunkBuffers;
-
-  /// Device spans into 'columnChunkBuffers', one per column chunk byte range
-  /// of the current pass.
-  std::vector<cudf::device_span<const uint8_t>> columnChunkData;
-
-  /// Set while the reads filling 'columnChunkBuffers' are in flight. Must be
-  /// waited on before the buffers are read from or released.
-  std::future<void> pendingFetch;
+  /// The fetch of the column chunk data of the current pass. Its buffers must
+  /// outlive every table chunk materialized from that pass.
+  ByteRangeFetch fetch;
 };
 
 /**
  * @brief Fetches a list of byte ranges from a host buffer into device buffers
+ *
+ * The reads are not necessarily complete when this returns; see
+ * `ByteRangeFetch`.
  *
  * @param dataSource Input datasource
  * @param byteRanges Byte ranges to fetch
  * @param stream CUDA stream
  * @param mr Device memory resource
  *
- * @return A tuple containing the device buffers, the device spans of the
- * fetched data, and a future to wait on the read tasks
+ * @return The device buffers, the device spans of the fetched data, and the
+ * handle to wait for the reads
  */
-std::tuple<
-    std::vector<rmm::device_buffer>,
-    std::vector<cudf::device_span<const uint8_t>>,
-    std::future<void>>
-fetchByteRangesAsync(
+ByteRangeFetch fetchByteRangesAsync(
     std::shared_ptr<cudf::io::datasource> dataSource,
     cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,
     rmm::cuda_stream_view stream,

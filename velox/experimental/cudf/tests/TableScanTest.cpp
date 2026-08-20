@@ -400,8 +400,8 @@ TEST_F(TableScanTest, preloadSplits) {
       filePaths.size());
 }
 
-// Tears the task down while the preloader is blocked on a busy IO thread pool,
-// so preloaded splits are abandoned rather than adopted.
+// A busy IO thread pool never runs the preload tasks, so the splits are
+// prepared inline on the driver thread when it comes to read them.
 TEST_F(TableScanTest, preloadingSplitClose) {
   auto filePaths = makeFilePaths(20);
   auto vectors = makeVectors(20, 100);
@@ -443,6 +443,51 @@ TEST_F(TableScanTest, preloadingSplitClose) {
     baton.post();
   }
   latch.wait();
+}
+
+// A query that stops early leaves the splits the preloader has already prepared
+// unread, so their readers are destroyed with the fetch of their first row
+// group pass outstanding.
+TEST_F(TableScanTest, abandonPreloadedSplits) {
+  auto filePaths = makeFilePaths(10);
+  auto vectors = makeVectors(10, 1'000);
+  for (auto i = 0; i < vectors.size(); ++i) {
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+  }
+  createDuckDbTable(vectors);
+
+  // The limit is reached partway into the second split, so the splits the
+  // preloader prepared behind it are never read. Which rows are returned is
+  // unspecified, so only the row count can be asserted.
+  constexpr int32_t kLimit = 1'500;
+  core::PlanNodeId scanNodeId;
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(rowType_)
+                  .tableHandle(makeTableHandle())
+                  .endTableScan()
+                  .capturePlanNodeId(scanNodeId)
+                  .limit(0, kLimit, false)
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "8")
+                    .splits(makeCudfHiveConnectorSplits(filePaths))
+                    .copyResults(pool_.get(), task);
+  EXPECT_EQ(result->size(), kLimit);
+
+  // The first split is read before the preloader runs, so only the splits
+  // after it are preloaded. The stat counts the preloaded splits that were
+  // read, so it confirms preloading was on but cannot measure how many were
+  // abandoned.
+  auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(scanNodeId).customStats;
+  ASSERT_EQ(customStats.count(std::string(TableScan::kPreloadedSplits)), 1);
+  EXPECT_GE(customStats.at(std::string(TableScan::kPreloadedSplits)).sum, 1);
+
+  task.reset();
+  ASSERT_EQ(Task::numRunningTasks(), 0);
 }
 
 // A filter that no row group can satisfy prunes every row group of the split,

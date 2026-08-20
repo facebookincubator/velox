@@ -31,6 +31,7 @@
 
 #include <future>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -62,26 +63,45 @@ void BufferedInputDataSource::enqueueForDevice(
     uint64_t offset,
     uint64_t size,
     uint8_t* dst) {
-  auto inputStream = input_->enqueue({offset, size});
-  std::shared_ptr sharedStream(std::move(inputStream));
   pendingDeviceLoads_.push_back(
-      [dst, size, sharedStream](rmm::cuda_stream_view stream) {
-        std::vector<uint8_t> buffer(size);
-        sharedStream->readFully(reinterpret_cast<char*>(buffer.data()), size);
-        CUDF_CUDA_TRY(cudaMemcpyAsync(
-            dst, buffer.data(), size, cudaMemcpyDefault, stream.value()));
-      });
+      {.stream = input_->enqueue({offset, size}), .dst = dst, .size = size});
 }
 
-void BufferedInputDataSource::load(rmm::cuda_stream_view stream) {
+void BufferedInputDataSource::startLoad() {
+  // 'BufferedInput::load' plans the coalesced reads of the enqueued regions
+  // and hands the prefetchable ones to the IO executor without waiting for
+  // them. The reads are drained by 'finishLoad'.
+  input_->load(velox::dwio::common::LogType::FILE);
+}
+
+void BufferedInputDataSource::finishLoad(rmm::cuda_stream_view stream) {
   // Each load consumes the streams enqueued since the previous one. Replaying
   // them in a later load would read past the end of their exhausted streams
   // and overwrite device buffers that no longer belong to this batch.
-  auto deviceLoads = std::exchange(pendingDeviceLoads_, {});
-  input_->load(velox::dwio::common::LogType::FILE);
+  const auto pendingLoads = std::exchange(pendingDeviceLoads_, {});
+
+  // Read on the calling thread but outside 'ioBatchMutex()': a read blocks
+  // until its region is in the cache and must not hold up the other drivers.
+  std::vector<std::vector<uint8_t>> hostBuffers;
+  hostBuffers.reserve(pendingLoads.size());
+  for (const auto& pendingLoad : pendingLoads) {
+    auto& hostBuffer = hostBuffers.emplace_back(pendingLoad.size);
+    pendingLoad.stream->readFully(
+        reinterpret_cast<char*>(hostBuffer.data()), pendingLoad.size);
+  }
+
+  // Launch the copies of a batch back to back so that drivers can move ahead
+  // without waiting for the copies of another driver. The host buffers are
+  // pageable, so each copy has been staged by the time it returns and they can
+  // be freed on return.
   std::lock_guard<std::mutex> lock(ioBatchMutex());
-  for (auto& deviceLoad : deviceLoads) {
-    deviceLoad(stream);
+  for (size_t i = 0; i < pendingLoads.size(); ++i) {
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        pendingLoads[i].dst,
+        hostBuffers[i].data(),
+        pendingLoads[i].size,
+        cudaMemcpyDefault,
+        stream.value()));
   }
 }
 
@@ -157,11 +177,7 @@ void BufferedInputDataSource::readContiguous(
   stream->readFully(reinterpret_cast<char*>(dst), size);
 }
 
-std::tuple<
-    std::vector<rmm::device_buffer>,
-    std::vector<cudf::device_span<const uint8_t>>,
-    std::future<void>>
-fetchByteRangesAsync(
+ByteRangeFetch fetchByteRangesAsync(
     std::shared_ptr<cudf::io::datasource> dataSource,
     cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,
     rmm::cuda_stream_view stream,
@@ -216,18 +232,24 @@ fetchByteRangesAsync(
               const_cast<uint8_t*>(destination.data()));
         });
 
-    // load buffered input data source
+    // Plan the reads and hand the prefetchable ones to the IO executor now so
+    // that they overlap with whatever the caller does before waiting.
+    bufferedInput->startLoad();
+
     auto syncFunction = [](std::shared_ptr<cudf::io::datasource> dataSource,
                            rmm::cuda_stream_view stream) {
-      auto buffer =
-          checkedPointerCast<BufferedInputDataSource>(dataSource.get());
-      buffer->load(stream);
+      checkedPointerCast<BufferedInputDataSource>(dataSource.get())
+          ->finishLoad(stream);
     };
 
     return {
-        std::move(columnChunkBuffers),
-        std::move(columnChunkData),
-        std::async(std::launch::deferred, syncFunction, dataSource, stream)};
+        .buffers = std::move(columnChunkBuffers),
+        .data = std::move(columnChunkData),
+        .pending =
+            std::async(std::launch::deferred, syncFunction, dataSource, stream),
+        // 'finishLoad' performs the copies into the device buffers, so nothing
+        // writes into them until the fetch is waited on.
+        .writesInFlight = false};
   }
 
   // KvikIO dataSource: Impl borrowed from `fetch_byte_ranges_to_device_async()`
@@ -322,13 +344,16 @@ fetchByteRangesAsync(
   };
 
   return {
-      std::move(columnChunkBuffers),
-      std::move(columnChunkData),
-      std::async(
+      .buffers = std::move(columnChunkBuffers),
+      .data = std::move(columnChunkData),
+      .pending = std::async(
           std::launch::deferred,
           std::move(syncFunction),
           std::move(hostReadTasks),
-          std::move(deviceReadTasks))};
+          std::move(deviceReadTasks)),
+      // The read tasks were launched above and are already writing into the
+      // device buffers, so they must be joined before the buffers are released.
+      .writesInFlight = true};
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive

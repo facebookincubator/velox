@@ -170,7 +170,8 @@ class CudfSplitReader : public NvtxHelper {
   void setupChunkingForCurrentPass(rmm::device_async_resource_ref mr);
 
   // Release the column chunk data of the current pass, waiting for any reads
-  // still writing into it.
+  // already writing into it. A fetch whose reads have not started yet is
+  // dropped rather than waited on.
   void releaseCurrentPassData();
 
   std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
