@@ -257,7 +257,7 @@ void FlatVector<StringView>::copy(
       rows.applyToSelected([&](vector_size_t row) { setNull(row, true); });
     } else {
       rows.applyToSelected([&](vector_size_t row) {
-        auto sourceRow = toSourceRow ? toSourceRow[row] : row;
+        [[maybe_unused]] auto sourceRow = toSourceRow ? toSourceRow[row] : row;
         VELOX_DCHECK(source->isNullAt(sourceRow));
         setNull(row, true);
       });
