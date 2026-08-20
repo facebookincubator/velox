@@ -24,7 +24,7 @@
 
 #include <fmt/format.h>
 
-// Single file containing all the types and enums in nimble, as well as some
+// Single file containing all the types and enums in Nimble, as well as some
 // templates for mapping between those types and C++ types.
 //
 // A note on types: For all of our enum classes, we assume the number of
