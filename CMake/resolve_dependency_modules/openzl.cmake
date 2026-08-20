@@ -13,14 +13,18 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-# Pinned to the commit the standalone Nimble repository carries as its openzl
-# submodule, rather than to the v0.2.0 tag: Nimble is validated against this
-# revision, and v0.2.0 predates the cross-platform zstd/xxhash dependency
-# handling that OpenZL needs to configure cleanly here.
-set(VELOX_OPENZL_VERSION 6b48fa4868160ed1e5c78ac422639615dd0dcf28)
+# Pinned to a raw commit rather than to the v0.2.0 tag, which predates both the
+# cross-platform zstd/xxhash dependency handling OpenZL needs to configure
+# cleanly here and the current descriptor API. The revision tracks what fbcode
+# builds Nimble against, so that velox/dwio/nimble compiles identically in both
+# trees; a pin older than fbcode's OpenZL breaks the internal build. OpenZL
+# ships from fbcode to GitHub, so there is no tag to follow. Keep in sync with
+# OPENZL_VERSION in scripts/setup-versions.sh, which installs the same revision
+# for builds that resolve OpenZL as a system package.
+set(VELOX_OPENZL_VERSION 7340a712cce1b8331bec3467600dba99a562e052)
 set(
   VELOX_OPENZL_BUILD_SHA256_CHECKSUM
-  59bd4d05cc8a34a8d92863e42846af4bf99772da4452f5d59cde1229cb7d89d4
+  ace6a975c3bb28da0f211c86b3f172b427acec4a2044ab637e66649cb022a953
 )
 string(
   CONCAT

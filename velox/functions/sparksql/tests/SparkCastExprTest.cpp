@@ -1285,6 +1285,34 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             DECIMAL(20, 10)));
   }
 
+  // Valid bool-to-decimal cases. Results are identical regardless of ANSI
+  // mode, so they are shared between the ANSI ON and ANSI OFF tests.
+  void testBoolToDecimal() {
+    auto input =
+        makeFlatVector<bool>({true, false, false, true, true, true, false});
+    // Bool to short decimal.
+    testCast(
+        input,
+        makeFlatVector<int64_t>({100, 0, 0, 100, 100, 100, 0}, DECIMAL(6, 2)));
+
+    // Bool to long decimal.
+    testCast(
+        input,
+        makeFlatVector<int128_t>(
+            {10'000'000'000,
+             0,
+             0,
+             10'000'000'000,
+             10'000'000'000,
+             10'000'000'000,
+             0},
+            DECIMAL(20, 10)));
+
+    // False becomes zero, which fits any precision and scale.
+    testCast<bool, int64_t>(BOOLEAN(), DECIMAL(1, 1), {false}, {0});
+    testCast<bool, int128_t>(BOOLEAN(), DECIMAL(38, 38), {false}, {0});
+  }
+
   void testDecimalToDecimal() {
     // Short to short, scale up.
     auto shortFlat =
@@ -1827,6 +1855,31 @@ TEST_F(SparkCastExprTestAnsiOn, stringToDate) {
   testInvalidDate("2015-02-30");
 }
 
+TEST_F(SparkCastExprTestAnsiOn, stringToTime) {
+  auto validInput = makeRowVector({makeFlatVector<std::string>(
+      {"12:03:17.123456", " 12:30:45 ", "12:30"})});
+  auto validResult = evaluateCast(VARCHAR(), TIME_MICRO_UTC(), validInput);
+  ASSERT_TRUE(validResult->type()->equivalent(*TIME_MICRO_UTC()));
+  assertEqualVectors(
+      makeFlatVector<int64_t>(
+          {43'397'123'456LL, 45'045'000'000LL, 45'000'000'000LL},
+          TIME_MICRO_UTC()),
+      validResult);
+
+  auto testInvalidString = [this](const std::string& value) {
+    auto input = makeRowVector({makeFlatVector<std::string>({value})});
+    VELOX_ASSERT_THROW(
+        evaluateCast(VARCHAR(), TIME_MICRO_UTC(), input), "Cannot cast");
+  };
+
+  testInvalidString("24:00:00");
+  testInvalidString("12:60:00");
+  testInvalidString("12:30:60");
+  testInvalidString("12:30:45.1234567");
+  testInvalidString("abc");
+  testInvalidString("");
+}
+
 TEST_F(SparkCastExprTestAnsiOn, fromString) {
   testFromString();
 }
@@ -2135,6 +2188,36 @@ TEST_F(SparkCastExprTestAnsiOff, stringToDate) {
       {std::nullopt, std::nullopt, std::nullopt, std::nullopt},
       VARCHAR(),
       DATE());
+}
+
+TEST_F(SparkCastExprTestAnsiOff, stringToTime) {
+  testCast<std::string, int64_t>(
+      VARCHAR(),
+      TIME_MICRO_UTC(),
+      {"00:00:00",
+       "01:30:00",
+       "12:03:17.123",
+       "12:03:17.123456",
+       " 12:30:45 ",
+       "24:00:00",
+       "12:60:00",
+       "12:30:60",
+       "12:30",
+       "12:30:45.1234567",
+       "abc",
+       ""},
+      {0LL,
+       5'400'000'000LL,
+       43'397'123'000LL,
+       43'397'123'456LL,
+       45'045'000'000LL,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       45'000'000'000LL,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt});
 }
 
 TEST_F(SparkCastExprTestAnsiOff, fromString) {
@@ -2608,6 +2691,24 @@ TEST_F(SparkCastExprTestAnsiOn, decimalToDecimal) {
   testOverflowThrow();
 }
 
+TEST_F(SparkCastExprTestAnsiOn, boolToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testBoolToDecimal();
+
+  // Under ANSI ON, true overflows a target with no integer digits
+  // (precision == scale), because 1 cannot be represented there.
+  testThrow<bool>(
+      BOOLEAN(),
+      DECIMAL(1, 1),
+      {true},
+      "Cannot cast BOOLEAN 'true' to DECIMAL(1, 1)");
+  testThrow<bool>(
+      BOOLEAN(),
+      DECIMAL(38, 38),
+      {true},
+      "Cannot cast BOOLEAN 'true' to DECIMAL(38, 38)");
+}
+
 TEST_F(SparkCastExprTestAnsiOn, doubleToDecimal) {
   // Regular cases produce the same results regardless of ANSI mode.
   testDoubleToDecimal();
@@ -2858,6 +2959,16 @@ TEST_F(SparkCastExprTestAnsiOff, integralToDecimal) {
   testOverflowNull.operator()<int16_t>();
   testOverflowNull.operator()<int32_t>();
   testOverflowNull.operator()<int64_t>();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, boolToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testBoolToDecimal();
+
+  // Under ANSI OFF, the same overflowing inputs return NULL instead of
+  // throwing.
+  testCast<bool, int64_t>(BOOLEAN(), DECIMAL(1, 1), {true}, {std::nullopt});
+  testCast<bool, int128_t>(BOOLEAN(), DECIMAL(38, 38), {true}, {std::nullopt});
 }
 
 TEST_F(SparkCastExprTestAnsiOff, doubleToDecimal) {
