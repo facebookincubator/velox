@@ -748,6 +748,14 @@ TEST_P(ReadWithVisitorTest, denseNoFilterWithNulls) {
   // Every row is "output" since there is no filter.
   EXPECT_EQ(child->numValues(), kRows);
   EXPECT_TRUE(child->hasNulls());
+
+  std::vector<vector_size_t> rowNumbers(kRows);
+  std::iota(rowNumbers.begin(), rowNumbers.end(), 0);
+  VectorPtr result;
+  child->getValues(RowSet(rowNumbers.data(), rowNumbers.size()), &result);
+  for (int i = 0; i < kRows; ++i) {
+    EXPECT_EQ(result->isNullAt(i), i % 7 == 0) << "row " << i;
+  }
 }
 
 // ===========================================================================
