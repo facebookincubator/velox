@@ -204,6 +204,13 @@ velox_add_grouped_tests(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# SqlTest.cpp includes velox/parse/QueryPlanner.h, which pulls in <duckdb.hpp>.
+# The vendored DuckDB headers do not compile as C++23 (constexpr ~unique_ptr
+# over an incomplete duckdb::QueryNode), so compile just this source as C++20.
+# Setting it per-source (rather than per-target) keeps the rest of its group
+# binary at C++23 on grouped (Linux CI) builds.
+set_source_files_properties(SqlTest.cpp PROPERTIES COMPILE_OPTIONS -std=gnu++20)
+
 if(VELOX_ENABLE_GEO)
   add_executable(velox_exec_SpatialJoinTest SpatialJoinTest.cpp Main.cpp)
   add_test(

@@ -36,6 +36,22 @@ velox_add_library(
 )
 velox_link_libraries(velox_parse_parser velox_parse_expression velox_type velox_duckdb_parser)
 
+# QueryPlanner.cpp includes <duckdb.hpp> (via QueryPlanner.h /
+# DuckLogicalOperator.h), whose vendored headers do not compile as C++23
+# (constexpr ~unique_ptr over an incomplete duckdb::QueryNode). Compile it as
+# C++20. velox_add_library may alias velox_parse_parser to the single velox
+# mono-library defined in another directory, so the source property must be set
+# in that target's directory scope (TARGET_DIRECTORY).
+get_target_property(_velox_parse_parser_tgt velox_parse_parser ALIASED_TARGET)
+if(NOT _velox_parse_parser_tgt)
+  set(_velox_parse_parser_tgt velox_parse_parser)
+endif()
+set_source_files_properties(
+  ${CMAKE_CURRENT_SOURCE_DIR}/QueryPlanner.cpp
+  TARGET_DIRECTORY ${_velox_parse_parser_tgt}
+  PROPERTIES COMPILE_OPTIONS -std=gnu++20
+)
+
 velox_add_library(velox_parse_utils TypeResolver.cpp HEADERS PlanNodeIdGenerator.h)
 velox_link_libraries(
   velox_parse_utils

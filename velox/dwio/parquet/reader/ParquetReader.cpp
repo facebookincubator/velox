@@ -1840,6 +1840,8 @@ ParquetRowReader::ParquetRowReader(
   impl_ = std::make_unique<ParquetRowReader::Impl>(readerBase, options);
 }
 
+ParquetRowReader::~ParquetRowReader() = default;
+
 void ParquetRowReader::filterRowGroups() {
   impl_->filterRowGroups();
 }

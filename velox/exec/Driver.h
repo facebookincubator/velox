@@ -560,14 +560,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
   static std::atomic_uint64_t& yieldCount();
 
   static std::shared_ptr<Driver> testingCreate(
-      std::unique_ptr<DriverCtx> ctx = nullptr) {
-    auto driver = new Driver();
-    if (ctx != nullptr) {
-      ctx->driver = driver;
-      driver->ctx_ = std::move(ctx);
-    }
-    return std::shared_ptr<Driver>(driver);
-  }
+      std::unique_ptr<DriverCtx> ctx = nullptr);
 
  private:
   // Ensures that the thread is removed from its Task's thread count on exit.
@@ -598,7 +591,10 @@ class Driver : public std::enable_shared_from_this<Driver> {
     bool isThrow_{true};
   };
 
-  Driver() = default;
+  // Defined out of line in Driver.cpp: the defaulted default constructor must
+  // destroy a std::vector<std::unique_ptr<Operator>> member, which requires the
+  // complete Operator type (unique_ptr's destructor is constexpr since C++23).
+  Driver();
 
   // Invoked to record the driver cpu yield count.
   static void recordYieldCount();
