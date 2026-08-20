@@ -129,6 +129,19 @@ target_link_libraries(
   ${TEST_LINK_LIBS}
 )
 
+add_executable(velox_dwio_parquet_delta_bp_decoder_test DeltaBpDecoderTest.cpp)
+add_test(
+  NAME velox_dwio_parquet_delta_bp_decoder_test
+  COMMAND velox_dwio_parquet_delta_bp_decoder_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+  velox_dwio_parquet_delta_bp_decoder_test
+  velox_dwio_native_parquet_reader
+  velox_link_libs
+  ${TEST_LINK_LIBS}
+)
+
 if(${VELOX_ENABLE_ARROW})
   add_executable(velox_dwio_parquet_rlebp_decoder_test RleBpDecoderTest.cpp)
   add_test(
