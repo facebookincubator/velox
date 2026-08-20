@@ -687,6 +687,20 @@ void readWithVisitorFast(
     auto numNonNulls = velox::simd::indicesOfSetBits(
         nulls, visitor.rowIndex(), visitor.numRows(), outerRows.data());
     outerRows.resize(numNonNulls);
+    if constexpr (kOutputNulls) {
+      if (numNonNulls != numRows) {
+        if (!visitor.reader().returnReaderNulls()) {
+          params.prepareResultNulls();
+          velox::bits::copyBits(
+              nulls,
+              visitor.rowIndex(),
+              visitor.reader().rawResultNulls(),
+              visitor.rowIndex(),
+              numRows);
+        }
+        visitor.setHasNulls();
+      }
+    }
     if (outerRows.empty()) {
       if constexpr (kOutputNulls) {
         visitor.addNumValues(numRows);
