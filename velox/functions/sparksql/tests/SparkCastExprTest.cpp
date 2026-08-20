@@ -741,10 +741,7 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     // sees the input. These must remain valid through the full cast path.
     testCast(
         makeFlatVector<std::string>(
-            {"2015-03-18 ",
-             "\t2015-03-18\n",
-             "2015-03-18\t",
-             "2015-03-18\n"},
+            {"2015-03-18 ", "\t2015-03-18\n", "2015-03-18\t", "2015-03-18\n"},
             VARCHAR()),
         makeFlatVector<Timestamp>(
             {Timestamp(1'426'636'800, 0),
