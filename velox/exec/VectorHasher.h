@@ -362,6 +362,9 @@ class VectorHasher {
 
   // true if no values have been added.
   bool empty() const {
+    if (typeSupportsValueIds() && distinctOverflow_) {
+      return false;
+    }
     const bool hasSeenValue =
         typeKind_ == TypeKind::HUGEINT ? hasHugeintValue_ : hasRange_;
     return !hasSeenValue && numDistinct() == 0;
@@ -513,11 +516,23 @@ class VectorHasher {
 
   void analyzeValue(int128_t value);
 
+  void analyzeValue(Timestamp value);
+
   template <typename T>
   bool tryMapToRangeSimd(
       const T* values,
       const SelectivityVector& rows,
       uint64_t* result);
+
+  bool
+  tryMapInt64ToRange(int64_t int64Value, vector_size_t row, uint64_t* result) {
+    if (int64Value > max_ || int64Value < min_) {
+      return false;
+    }
+    const auto hash = int64Value - min_ + 1;
+    result[row] = multiplier_ == 1 ? hash : result[row] + multiplier_ * hash;
+    return true;
+  }
 
   template <typename T>
   bool tryMapToRange(
@@ -541,14 +556,10 @@ class VectorHasher {
 
       bool inRange = true;
       rows.testSelected([&](vector_size_t row) {
-        auto int64Value = toInt64(values[row]);
-        if (int64Value > max_ || int64Value < min_) {
+        if (!tryMapInt64ToRange(toInt64(values[row]), row, result)) {
           inRange = false;
           return false;
         }
-        auto hash = int64Value - min_ + 1;
-        result[row] =
-            multiplier_ == 1 ? hash : result[row] + multiplier_ * hash;
         return true;
       });
 
@@ -762,7 +773,7 @@ inline uint64_t VectorHasher::lookupValueId(StringView value) const {
 
 template <>
 inline uint64_t VectorHasher::lookupValueId(Timestamp timestamp) const {
-  return timestamp.getNanos() % 1'000'000 != 0
+  return timestamp.getNanos() % Timestamp::kNanosecondsInMillisecond != 0
       ? kUnmappable
       : lookupValueId(timestamp.toMillis());
 }
@@ -782,6 +793,35 @@ inline uint64_t VectorHasher::valueId(Timestamp value) {
     return kUnmappable;
   }
   return valueId(value.toMillis());
+}
+
+template <>
+inline bool VectorHasher::tryMapToRange(
+    const Timestamp* values,
+    const SelectivityVector& rows,
+    uint64_t* result) {
+  VELOX_DCHECK(isRange_);
+  if (!isRange_) {
+    return false;
+  }
+
+  bool inRange = true;
+  rows.testSelected([&](vector_size_t row) {
+    const auto value = values[row];
+    if (FOLLY_UNLIKELY(
+            value.getNanos() % Timestamp::kNanosecondsInMillisecond != 0)) {
+      inRange = false;
+      return false;
+    }
+
+    if (!tryMapInt64ToRange(value.toMillis(), row, result)) {
+      inRange = false;
+      return false;
+    }
+    return true;
+  });
+
+  return inRange;
 }
 
 template <>
