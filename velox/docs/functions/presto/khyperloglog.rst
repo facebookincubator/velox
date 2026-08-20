@@ -14,7 +14,11 @@ A KHyperLogLog is a data sketch which stores approximate cardinality information
 associations. The Velox type for this data structure is called ``KHyperLogLog``.
 For storage and retrieval, KHyperLogLog values may be cast to/from ``VARBINARY``.
 
-Serialization format is compatible with Presto's.
+Serialization format is compatible with Presto's, so a sketch written by either
+engine can be read by the other. The *contents* produced by
+``khyperloglog_agg`` are not byte compatible with Presto Java, because the two
+hash their inputs differently. Use ``khyperloglog_agg_java_compat`` when a
+sketch has to be merged with, or compared against, one built by Presto Java.
 
 Aggregate Functions
 -------------------
@@ -25,6 +29,18 @@ Aggregate Functions
     the key column ``x`` and the unique identifier column ``uii``.
     The ``x`` parameter represents the key values and ``uii`` represents
     the unique identifiers associated with each key.
+
+.. function:: khyperloglog_agg_java_compat(x, uii) -> KHyperLogLog
+
+    Same as :func:`khyperloglog_agg`, but hashes ``x`` and ``uii`` exactly the
+    way Presto Java does, so the resulting sketch is byte identical to one
+    Presto Java would produce for the same input. Sketches produced by this
+    function can safely be merged with Java-built sketches; sketches produced
+    by :func:`khyperloglog_agg` cannot.
+
+    The two functions differ only for a ``varchar``/``varbinary`` ``uii``, and
+    for keys whose hashed bytes include a value ``>= 0x80``. They are otherwise
+    identical.
 
 .. function:: merge(KHyperLogLog) -> KHyperLogLog
    :noindex:

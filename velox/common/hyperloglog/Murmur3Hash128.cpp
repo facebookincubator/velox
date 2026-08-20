@@ -24,12 +24,23 @@ int64_t getLong(const void* data, int32_t offset) {
   return folly::loadUnaligned<int64_t>(static_cast<const char*>(data) + offset);
 }
 
-char getByte(const void* data, int32_t offset) {
-  return *(static_cast<const char*>(data) + offset);
+// Presto Java masks each tail byte with & 0xFF. Reading through 'char', which
+// is signed on x86-64, sign extends bytes >= 0x80 and corrupts the higher lanes
+// of k1/k2. JavaCompat=true reproduces Java; JavaCompat=false preserves the
+// long-standing Velox behaviour that existing sketches were built with.
+template <bool JavaCompat>
+auto getByte(const void* data, int32_t offset) {
+  if constexpr (JavaCompat) {
+    return folly::loadUnaligned<uint8_t>(
+        static_cast<const uint8_t*>(data) + offset);
+  } else {
+    return folly::loadUnaligned<char>(static_cast<const char*>(data) + offset);
+  }
 }
 
-// static
-int64_t Murmur3Hash128::hash64(const void* data, int32_t length, int64_t seed) {
+template <bool JavaCompat>
+int64_t
+Murmur3Hash128::hash64Impl(const void* data, int32_t length, int64_t seed) {
   VELOX_DCHECK_NOT_NULL(data);
   const int32_t fastLimit =
       static_cast<int32_t>(length - (2 * sizeof(int64_t)) + 1);
@@ -71,25 +82,30 @@ int64_t Murmur3Hash128::hash64(const void* data, int32_t length, int64_t seed) {
   VELOX_DCHECK_LE(current + (length & 15), length);
   switch (length & 15) {
     case 15:
-      k2 ^= (static_cast<int64_t>(getByte(data, current + 14))) << 48;
+      k2 ^= (static_cast<int64_t>(getByte<JavaCompat>(data, current + 14)))
+          << 48;
       [[fallthrough]];
     case 14:
-      k2 ^= (static_cast<int64_t>(getByte(data, current + 13))) << 40;
+      k2 ^= (static_cast<int64_t>(getByte<JavaCompat>(data, current + 13)))
+          << 40;
       [[fallthrough]];
     case 13:
-      k2 ^= (static_cast<int64_t>(getByte(data, current + 12))) << 32;
+      k2 ^= (static_cast<int64_t>(getByte<JavaCompat>(data, current + 12)))
+          << 32;
       [[fallthrough]];
     case 12:
-      k2 ^= (static_cast<int64_t>(getByte(data, current + 11))) << 24;
+      k2 ^= (static_cast<int64_t>(getByte<JavaCompat>(data, current + 11)))
+          << 24;
       [[fallthrough]];
     case 11:
-      k2 ^= (static_cast<int64_t>(getByte(data, current + 10))) << 16;
+      k2 ^= (static_cast<int64_t>(getByte<JavaCompat>(data, current + 10)))
+          << 16;
       [[fallthrough]];
     case 10:
-      k2 ^= (static_cast<int64_t>(getByte(data, current + 9))) << 8;
+      k2 ^= (static_cast<int64_t>(getByte<JavaCompat>(data, current + 9))) << 8;
       [[fallthrough]];
     case 9:
-      k2 ^= (static_cast<int64_t>(getByte(data, current + 8))) << 0;
+      k2 ^= (static_cast<int64_t>(getByte<JavaCompat>(data, current + 8))) << 0;
 
       k2 = static_cast<int64_t>(k2 * C2);
       k2 = static_cast<int64_t>(bits::rotateLeft64(k2, 33));
@@ -98,28 +114,34 @@ int64_t Murmur3Hash128::hash64(const void* data, int32_t length, int64_t seed) {
       [[fallthrough]];
 
     case 8:
-      k1 ^= (static_cast<int64_t>(getByte(data, current + 7))) << 56;
+      k1 ^= (static_cast<int64_t>(getByte<JavaCompat>(data, current + 7)))
+          << 56;
       [[fallthrough]];
     case 7:
-      k1 ^= (static_cast<int64_t>(getByte(data, current + 6))) << 48;
+      k1 ^= (static_cast<int64_t>(getByte<JavaCompat>(data, current + 6)))
+          << 48;
       [[fallthrough]];
     case 6:
-      k1 ^= (static_cast<int64_t>(getByte(data, current + 5))) << 40;
+      k1 ^= (static_cast<int64_t>(getByte<JavaCompat>(data, current + 5)))
+          << 40;
       [[fallthrough]];
     case 5:
-      k1 ^= (static_cast<int64_t>(getByte(data, current + 4))) << 32;
+      k1 ^= (static_cast<int64_t>(getByte<JavaCompat>(data, current + 4)))
+          << 32;
       [[fallthrough]];
     case 4:
-      k1 ^= (static_cast<int64_t>(getByte(data, current + 3))) << 24;
+      k1 ^= (static_cast<int64_t>(getByte<JavaCompat>(data, current + 3)))
+          << 24;
       [[fallthrough]];
     case 3:
-      k1 ^= (static_cast<int64_t>(getByte(data, current + 2))) << 16;
+      k1 ^= (static_cast<int64_t>(getByte<JavaCompat>(data, current + 2)))
+          << 16;
       [[fallthrough]];
     case 2:
-      k1 ^= (static_cast<int64_t>(getByte(data, current + 1))) << 8;
+      k1 ^= (static_cast<int64_t>(getByte<JavaCompat>(data, current + 1))) << 8;
       [[fallthrough]];
     case 1:
-      k1 ^= (static_cast<int64_t>(getByte(data, current + 0))) << 0;
+      k1 ^= (static_cast<int64_t>(getByte<JavaCompat>(data, current + 0))) << 0;
 
       k1 = static_cast<int64_t>(k1 * C1);
       k1 = static_cast<int64_t>(bits::rotateLeft64(k1, 31));
@@ -140,6 +162,19 @@ int64_t Murmur3Hash128::hash64(const void* data, int32_t length, int64_t seed) {
   h2 = mix64(h2);
 
   return static_cast<int64_t>(h1 + h2);
+}
+
+// static
+int64_t Murmur3Hash128::hash64(const void* data, int32_t length, int64_t seed) {
+  return hash64Impl<false>(data, length, seed);
+}
+
+// static
+int64_t Murmur3Hash128::hash64JavaCompat(
+    const void* data,
+    int32_t length,
+    int64_t seed) {
+  return hash64Impl<true>(data, length, seed);
 }
 
 void Murmur3Hash128::hash(
