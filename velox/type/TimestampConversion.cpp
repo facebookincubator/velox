@@ -641,9 +641,7 @@ bool tryParseTimestampString(
   // In Spark cast mode, once a date-time separator ('T' or ' ') is consumed,
   // the time component must begin immediately with a digit. This mirrors
   // Spark's grammar: a separator followed by a timezone, garbage, or end of
-  // input is rejected. Outer whitespace is trimmed earlier by CastExpr's
-  // removeWhiteSpaces, so a bare trailing separator like "2015-03-18 " never
-  // reaches this point (it is trimmed to "2015-03-18" and handled as a date).
+  // input is rejected.
   if (parseMode == TimestampParseMode::kSparkCast && pos > preSeparatorPos &&
       (pos >= len || !characterIsDigit(buf[pos]))) {
     return false;

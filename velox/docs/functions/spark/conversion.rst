@@ -636,6 +636,8 @@ Casting from strings to timestamp uses Spark-compatible timestamp parsing.
 The parser accepts date-only values, both ``' '`` and ``'T'`` as date-time
 separators, fractional seconds, and leading or trailing spaces. Both ``' '``
 and ``'T'`` date-time separators must be followed immediately by a digit.
+Outer whitespace is trimmed before the parser runs, so a bare trailing
+separator such as ``"2015-03-18 "`` is handled as a date-only value.
 
 Casting from invalid strings returns NULL when ANSI mode is disabled and throws
 an error when ANSI mode is enabled.
