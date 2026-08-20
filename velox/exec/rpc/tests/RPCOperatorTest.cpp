@@ -558,6 +558,12 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
     return VARCHAR();
   }
 
+  RpcCapability capabilities() const override {
+    return {
+        .supportedModes = {
+            RpcCapabilityMode::kPerRow, RpcCapabilityMode::kNativeBatch}};
+  }
+
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
   dispatchPerRow(const SelectivityVector&, const std::vector<VectorPtr>&)
       override {

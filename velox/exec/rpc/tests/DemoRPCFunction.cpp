@@ -54,10 +54,10 @@ DemoAsyncRPCFunction::dispatchPerRow(
     }
 
     // Build correlation-only RPCRequest. Demo uses rowId to track responses;
-    // prompt text is not carried in RPCRequest (typed request path) -- the
+    // prompt text is not carried in RPCRequest (typed CompletionRequest path) —
     // mock validates via rowId.
     RPCRequest request;
-    request.rowId = row;
+    request.rowId = row; // use row as correlation key for demo validation
 
     results.emplace_back(row, client_->call(request));
   });

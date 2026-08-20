@@ -33,12 +33,15 @@ using velox::rpc::MockTransport;
 ///   2. dispatchPerRow() — dispatches per-row RPCs via MockTransport
 ///   3. buildOutput() — uses base class default (error→null, result→varchar)
 ///
-/// Returns "Response for: <prompt>" for each input row. No external
-/// dependencies — runs entirely in-process with simulated latency.
+/// Returns "Response for row <rowId>" for each input row. RPCRequest is
+/// correlation-only, so the prompt reaches a real backend through the typed
+/// request closure, not through RPCRequest; MockTransport therefore keys its
+/// response on the row id. No external dependencies — runs entirely in-process
+/// with simulated latency.
 ///
 /// SQL usage:
 ///   SELECT demo_rpc('hello world')
-///   -- Returns: "Response for: hello world"
+///   -- Returns: "Response for row 0"
 class DemoAsyncRPCFunction : public AsyncRPCFunction {
  public:
   /// Initialize the mock client. Called by RPCOperator during init.
@@ -53,6 +56,11 @@ class DemoAsyncRPCFunction : public AsyncRPCFunction {
 
   TypePtr resultType() const override {
     return VARCHAR();
+  }
+
+  /// Per-row only; no batch path.
+  RpcCapability capabilities() const override {
+    return {.supportedModes = {RpcCapabilityMode::kPerRow}};
   }
 
   /// Dispatch individual RPCs for each active row via MockTransport.
