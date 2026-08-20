@@ -456,52 +456,49 @@ class DeltaBpDecoder {
   }
 
   /// Dispatch to the compile-time-specialized miniblock decoder for the given
-  /// bitWidth. Uses a switch for a proper jump table (better I-cache behavior
-  /// than the fold-expression linear comparison chain).
+  /// bitWidth. Constant-delta miniblocks (bitWidth 0) take the dedicated path;
+  /// widths 1..32 expand to a fold-expression comparison chain that inlines
+  /// into the decode loop. Must stay force-inlined: a benchmark showed that
+  /// letting the compiler outline this (e.g. as a switch) adds a call per
+  /// 32-value miniblock and regresses sequential decode.
   template <typename DataType>
-  bool dispatchSimdMiniBlock(
+  FOLLY_ALWAYS_INLINE bool dispatchSimdMiniBlock(
       uint64_t bitWidth,
       const char* src,
       int32_t numValues,
       int64_t minDelta,
       int64_t& lastValue,
       DataType* out) {
-    switch (bitWidth) {
-      case 0: decodeMiniBlockConstantDelta(numValues, minDelta, lastValue, out); return true;
-      case 1: decodeMiniBlockSimd<DataType, 1>(src, numValues, minDelta, lastValue, out); return true;
-      case 2: decodeMiniBlockSimd<DataType, 2>(src, numValues, minDelta, lastValue, out); return true;
-      case 3: decodeMiniBlockSimd<DataType, 3>(src, numValues, minDelta, lastValue, out); return true;
-      case 4: decodeMiniBlockSimd<DataType, 4>(src, numValues, minDelta, lastValue, out); return true;
-      case 5: decodeMiniBlockSimd<DataType, 5>(src, numValues, minDelta, lastValue, out); return true;
-      case 6: decodeMiniBlockSimd<DataType, 6>(src, numValues, minDelta, lastValue, out); return true;
-      case 7: decodeMiniBlockSimd<DataType, 7>(src, numValues, minDelta, lastValue, out); return true;
-      case 8: decodeMiniBlockSimd<DataType, 8>(src, numValues, minDelta, lastValue, out); return true;
-      case 9: decodeMiniBlockSimd<DataType, 9>(src, numValues, minDelta, lastValue, out); return true;
-      case 10: decodeMiniBlockSimd<DataType, 10>(src, numValues, minDelta, lastValue, out); return true;
-      case 11: decodeMiniBlockSimd<DataType, 11>(src, numValues, minDelta, lastValue, out); return true;
-      case 12: decodeMiniBlockSimd<DataType, 12>(src, numValues, minDelta, lastValue, out); return true;
-      case 13: decodeMiniBlockSimd<DataType, 13>(src, numValues, minDelta, lastValue, out); return true;
-      case 14: decodeMiniBlockSimd<DataType, 14>(src, numValues, minDelta, lastValue, out); return true;
-      case 15: decodeMiniBlockSimd<DataType, 15>(src, numValues, minDelta, lastValue, out); return true;
-      case 16: decodeMiniBlockSimd<DataType, 16>(src, numValues, minDelta, lastValue, out); return true;
-      case 17: decodeMiniBlockSimd<DataType, 17>(src, numValues, minDelta, lastValue, out); return true;
-      case 18: decodeMiniBlockSimd<DataType, 18>(src, numValues, minDelta, lastValue, out); return true;
-      case 19: decodeMiniBlockSimd<DataType, 19>(src, numValues, minDelta, lastValue, out); return true;
-      case 20: decodeMiniBlockSimd<DataType, 20>(src, numValues, minDelta, lastValue, out); return true;
-      case 21: decodeMiniBlockSimd<DataType, 21>(src, numValues, minDelta, lastValue, out); return true;
-      case 22: decodeMiniBlockSimd<DataType, 22>(src, numValues, minDelta, lastValue, out); return true;
-      case 23: decodeMiniBlockSimd<DataType, 23>(src, numValues, minDelta, lastValue, out); return true;
-      case 24: decodeMiniBlockSimd<DataType, 24>(src, numValues, minDelta, lastValue, out); return true;
-      case 25: decodeMiniBlockSimd<DataType, 25>(src, numValues, minDelta, lastValue, out); return true;
-      case 26: decodeMiniBlockSimd<DataType, 26>(src, numValues, minDelta, lastValue, out); return true;
-      case 27: decodeMiniBlockSimd<DataType, 27>(src, numValues, minDelta, lastValue, out); return true;
-      case 28: decodeMiniBlockSimd<DataType, 28>(src, numValues, minDelta, lastValue, out); return true;
-      case 29: decodeMiniBlockSimd<DataType, 29>(src, numValues, minDelta, lastValue, out); return true;
-      case 30: decodeMiniBlockSimd<DataType, 30>(src, numValues, minDelta, lastValue, out); return true;
-      case 31: decodeMiniBlockSimd<DataType, 31>(src, numValues, minDelta, lastValue, out); return true;
-      case 32: decodeMiniBlockSimd<DataType, 32>(src, numValues, minDelta, lastValue, out); return true;
-      default: return false;
+    if (bitWidth == 0) {
+      decodeMiniBlockConstantDelta(numValues, minDelta, lastValue, out);
+      return true;
     }
+    return dispatchSimdMiniBlockImpl<DataType>(
+        bitWidth,
+        src,
+        numValues,
+        minDelta,
+        lastValue,
+        out,
+        std::make_index_sequence<32>{});
+  }
+
+  template <typename DataType, std::size_t... Is>
+  FOLLY_ALWAYS_INLINE bool dispatchSimdMiniBlockImpl(
+      uint64_t bitWidth,
+      const char* src,
+      int32_t numValues,
+      int64_t minDelta,
+      int64_t& lastValue,
+      DataType* out,
+      std::index_sequence<Is...>) {
+    bool dispatched = false;
+    (void)((bitWidth == Is + 1 ? (decodeMiniBlockSimd<DataType, Is + 1>(
+                                      src, numValues, minDelta, lastValue, out),
+                                  dispatched = true)
+                               : false) ||
+           ...);
+    return dispatched;
   }
 
   bool getVlqInt(uint64_t& v) {
