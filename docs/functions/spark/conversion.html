@@ -609,7 +609,10 @@ error</p></li>
 <p><em>(ANSI compliant)</em></p>
 <p>Casting from strings to timestamp uses Spark-compatible timestamp parsing.
 The parser accepts date-only values, both <code class="docutils literal notranslate"><span class="pre">'</span> <span class="pre">'</span></code> and <code class="docutils literal notranslate"><span class="pre">'T'</span></code> as date-time
-separators, fractional seconds, and leading or trailing spaces.</p>
+separators, fractional seconds, and leading or trailing spaces. Both <code class="docutils literal notranslate"><span class="pre">'</span> <span class="pre">'</span></code>
+and <code class="docutils literal notranslate"><span class="pre">'T'</span></code> date-time separators must be followed immediately by a digit.
+Outer whitespace is trimmed before the parser runs, so a bare trailing
+separator such as <code class="docutils literal notranslate"><span class="pre">&quot;2015-03-18</span> <span class="pre">&quot;</span></code> is handled as a date-only value.</p>
 <p>Casting from invalid strings returns NULL when ANSI mode is disabled and throws
 an error when ANSI mode is enabled.</p>
 <p>Valid examples</p>
@@ -623,6 +626,9 @@ an error when ANSI mode is enabled.</p>
 <p>Invalid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'INVALID'</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">OFF</span><span class="p">)</span> <span class="o">/</span> <span class="n">ERROR</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">ON</span><span class="p">)</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'2012-Oct-01'</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">OFF</span><span class="p">)</span> <span class="o">/</span> <span class="n">ERROR</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">ON</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'2015-03-18T'</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">OFF</span><span class="p">)</span> <span class="o">/</span> <span class="n">ERROR</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">ON</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'2015-03-18T 12:00:00'</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">OFF</span><span class="p">)</span> <span class="o">/</span> <span class="n">ERROR</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">ON</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'2015-03-18 Z'</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">OFF</span><span class="p">)</span> <span class="o">/</span> <span class="n">ERROR</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">ON</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>
