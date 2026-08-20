@@ -32,6 +32,7 @@
 #include <rmm/resource_ref.hpp>
 
 #include <future>
+#include <memory>
 #include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -134,24 +135,27 @@ struct RowGroupPassState {
   ByteRangeFetch fetch;
 };
 
-/**
- * @brief Fetches a list of byte ranges from a host buffer into device buffers
- *
- * The reads are not necessarily complete when this returns; see
- * `ByteRangeFetch`.
- *
- * @param dataSource Input datasource
- * @param byteRanges Byte ranges to fetch
- * @param stream CUDA stream
- * @param mr Device memory resource
- *
- * @return The device buffers, the device spans of the fetched data, and the
- * handle to wait for the reads
- */
+/// Fetches byte ranges from a data source into device buffers.
+/// Does not necessarily complete reads before returning; see
+/// `ByteRangeFetch::pending`.
+/// @param dataSource Input data source.
+/// @param byteRanges Byte ranges to fetch.
+/// @param stream CUDA stream.
+/// @param mr Device memory resource.
+/// @return Device buffers, spans of the fetched data, and a completion handle.
 ByteRangeFetch fetchByteRangesAsync(
     std::shared_ptr<cudf::io::datasource> dataSource,
     cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
+
+/// Fetches page-index buffers and returns views into them.
+/// Keeps returned buffers alive while using the views.
+std::pair<
+    std::vector<std::unique_ptr<cudf::io::datasource::buffer>>,
+    std::vector<cudf::host_span<const uint8_t>>>
+fetchPageIndexes(
+    const std::shared_ptr<cudf::io::datasource>& dataSource,
+    cudf::host_span<const cudf::io::text::byte_range_info> pageIndexByteRanges);
 
 } // namespace facebook::velox::cudf_velox::connector::hive

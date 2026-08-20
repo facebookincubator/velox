@@ -29,7 +29,10 @@
 #include <cuda/iterator>
 #include <cuda/std/tuple>
 
+#include <algorithm>
+#include <functional>
 #include <future>
+#include <iterator>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -177,6 +180,31 @@ void BufferedInputDataSource::readContiguous(
   stream->readFully(reinterpret_cast<char*>(dst), size);
 }
 
+std::pair<
+    std::vector<std::unique_ptr<cudf::io::datasource::buffer>>,
+    std::vector<cudf::host_span<const uint8_t>>>
+fetchPageIndexes(
+    const std::shared_ptr<cudf::io::datasource>& dataSource,
+    cudf::host_span<const cudf::io::text::byte_range_info>
+        pageIndexByteRanges) {
+  std::vector<std::reference_wrapper<cudf::io::datasource>> dataSources{
+      std::ref(*dataSource)};
+  auto buffers = cudf::io::parquet::fetch_page_indexes_to_host(
+      dataSources, pageIndexByteRanges);
+
+  std::vector<cudf::host_span<const uint8_t>> spans;
+  spans.reserve(buffers.size());
+  std::transform(
+      buffers.begin(),
+      buffers.end(),
+      std::back_inserter(spans),
+      [](const auto& buffer) {
+        return cudf::host_span<const uint8_t>{*buffer};
+      });
+
+  return {std::move(buffers), std::move(spans)};
+}
+
 ByteRangeFetch fetchByteRangesAsync(
     std::shared_ptr<cudf::io::datasource> dataSource,
     cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,
@@ -247,8 +275,8 @@ ByteRangeFetch fetchByteRangesAsync(
         .data = std::move(columnChunkData),
         .pending =
             std::async(std::launch::deferred, syncFunction, dataSource, stream),
-        // 'finishLoad' performs the copies into the device buffers, so nothing
-        // writes into them until the fetch is waited on.
+        // 'finishLoad' performs the copies into the device buffers, so
+        // nothing writes into them until the fetch is waited on.
         .writesInFlight = false};
   }
 

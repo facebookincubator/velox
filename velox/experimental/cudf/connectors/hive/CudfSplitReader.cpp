@@ -35,7 +35,6 @@
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/experimental/hybrid_scan_multifile.hpp>
 #include <cudf/io/parquet.hpp>
-#include <cudf/io/parquet_io_utils.hpp>
 #include <cudf/io/parquet_metadata.hpp>
 #include <cudf/io/text/byte_range_info.hpp>
 #include <cudf/io/types.hpp>
@@ -47,7 +46,6 @@
 #include <cuda_runtime.h>
 #include <nvtx3/nvtx3.hpp>
 
-#include <algorithm>
 #include <memory>
 #include <numeric>
 #include <ranges>
@@ -572,9 +570,8 @@ void CudfSplitReader::createCudfReader() {
 
   // Create a hybrid scan reader over all sources of the split
   nvtxRangePush("hybridScanMultifileReader");
-  splitReader_ = std::make_unique<CudfParquetReader>(
-      cudf::host_span<const cudf::io::parquet::FileMetaData>{fileMetaData_},
-      readerOptions_);
+  splitReader_ =
+      std::make_unique<CudfParquetReader>(fileMetaData_, readerOptions_);
   nvtxRangePop();
 
   // Metadata ingested
@@ -602,22 +599,9 @@ void CudfSplitReader::setupPageIndexes() {
     return;
   }
 
-  std::vector<std::reference_wrapper<cudf::io::datasource>> dataSources{
-      std::ref(*dataSource_)};
-  const auto pageIndexBuffers = cudf::io::parquet::fetch_page_indexes_to_host(
-      dataSources, pageIndexByteRanges);
-
-  std::vector<cudf::host_span<const uint8_t>> pageIndexSpans;
-  pageIndexSpans.reserve(pageIndexBuffers.size());
-  std::transform(
-      pageIndexBuffers.begin(),
-      pageIndexBuffers.end(),
-      std::back_inserter(pageIndexSpans),
-      [](const auto& buffer) {
-        return cudf::host_span<const uint8_t>{*buffer};
-      });
-
-  splitReader_->setup_page_indexes(pageIndexSpans);
+  [[maybe_unused]] auto [pageIndexBuffers, pageIndexData] =
+      fetchPageIndexes(dataSource_, pageIndexByteRanges);
+  splitReader_->setup_page_indexes(pageIndexData);
 }
 
 std::vector<std::vector<std::vector<cudf::size_type>>>
