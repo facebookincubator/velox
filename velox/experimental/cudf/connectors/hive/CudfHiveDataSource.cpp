@@ -32,6 +32,8 @@
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/expression/FieldReference.h"
+#include "velox/type/tz/TimeZoneMap.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ExprOptimizer.h"
 
@@ -144,8 +146,19 @@ CudfHiveDataSource::CudfHiveDataSource(
   // and doesn't depend on split-specific state.
   if (!subfieldFilters_.empty()) {
     auto const readerFilterType = getTableRowType();
+    const auto* sessionTimezone =
+        connectorQueryCtx_->adjustTimestampToTimezone() and
+            not connectorQueryCtx_->sessionTimezone().empty()
+        ? tz::locateZone(connectorQueryCtx_->sessionTimezone())
+        : nullptr;
     subfieldFilterExpr_ = &createAstFromSubfieldFilters(
-        subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
+        subfieldFilters_,
+        subfieldTree_,
+        subfieldScalars_,
+        readerFilterType,
+        cudfHiveConfig_->timestampTypeSession(
+            connectorQueryCtx_->sessionProperties()),
+        sessionTimezone);
   }
 
   VELOX_CHECK_NOT_NULL(fileHandleFactory_, "No FileHandleFactory present");
