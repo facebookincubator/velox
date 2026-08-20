@@ -23,7 +23,8 @@ namespace facebook::velox::exec::rpc {
 
 void CongestionController::onError() {
   const auto prevEffective = effective_;
-  effective_ = std::max<int64_t>(effective_ / 2, minWindow_);
+  effective_ =
+      std::max<double>(effective_ / 2.0, static_cast<double>(minWindow_));
   if (effective_ < prevEffective) {
     ++numShrinks_;
   }
@@ -71,12 +72,15 @@ void CongestionController::onSample(int64_t rttNs) {
   // sqrt headroom keeps probing upward when latency is flat (gradient ~ 1), so
   // the window is never pinned by a fixed ceiling. stepCoef_ scales how hard it
   // probes (1.0 = the plain sqrt headroom).
-  const double headroom =
-      stepCoef_ * std::sqrt(static_cast<double>(effective_));
-  const auto newWindow = static_cast<int64_t>(
-      static_cast<double>(effective_) * gradient + headroom);
+  const double headroom = stepCoef_ * std::sqrt(effective_);
+  // Accumulate in floating point: one step is usually a fraction of a unit, and
+  // truncating here would discard it and pin the window.
+  const double newWindow = effective_ * gradient + headroom;
   const auto prevEffective = effective_;
-  effective_ = std::clamp(newWindow, minWindow_, maxWindow_);
+  effective_ = std::clamp<double>(
+      newWindow,
+      static_cast<double>(minWindow_),
+      static_cast<double>(maxWindow_));
   if (effective_ < prevEffective) {
     ++numShrinks_;
   }
