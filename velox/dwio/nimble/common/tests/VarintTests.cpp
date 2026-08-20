@@ -126,7 +126,7 @@ TEST(VarintTests, maxVarintSizeForBitWidth) {
   EXPECT_EQ(nimble::varint::maxVarintSizeForBitWidth(65), 10);
 }
 
-TEST(VarintTests, WriteRead32) {
+TEST(VarintTests, writeRead32) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -176,7 +176,7 @@ TEST(VarintTests, WriteRead32) {
   }
 }
 
-TEST(VarintTests, WriteRead64) {
+TEST(VarintTests, writeRead64) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -236,7 +236,7 @@ TEST(VarintTests, WriteRead64) {
 // ============================================================================
 
 // All 128 single-byte values (0-127) decode correctly for uint32_t.
-TEST(VarintTests, SingleByte32_AllValues) {
+TEST(VarintTests, singleByte32AllValues) {
   std::vector<uint32_t> data(128);
   std::iota(data.begin(), data.end(), 0);
   auto [buf, size] = encodeValues(data);
@@ -245,7 +245,7 @@ TEST(VarintTests, SingleByte32_AllValues) {
 }
 
 // All 128 single-byte values (0-127) decode correctly for uint64_t.
-TEST(VarintTests, SingleByte64_AllValues) {
+TEST(VarintTests, singleByte64AllValues) {
   std::vector<uint64_t> data(128);
   std::iota(data.begin(), data.end(), 0);
   auto [buf, size] = encodeValues(data);
@@ -255,7 +255,7 @@ TEST(VarintTests, SingleByte64_AllValues) {
 
 // Test every count from 0 to 100 with all-zero values.
 // Exercises exact boundary transitions between wide/8-byte/tail loops.
-TEST(VarintTests, SingleByte32_AllCountsZero) {
+TEST(VarintTests, singleByte32AllCountsZero) {
   for (int count = 0; count <= 100; ++count) {
     std::vector<uint32_t> data(count, 0);
     auto [buf, size] = encodeValues(data);
@@ -264,7 +264,7 @@ TEST(VarintTests, SingleByte32_AllCountsZero) {
 }
 
 // Test every count from 0 to 100 with value 127 (max single-byte varint).
-TEST(VarintTests, SingleByte32_AllCountsMax) {
+TEST(VarintTests, singleByte32AllCountsMax) {
   for (int count = 0; count <= 100; ++count) {
     std::vector<uint32_t> data(count, 127);
     auto [buf, size] = encodeValues(data);
@@ -273,7 +273,7 @@ TEST(VarintTests, SingleByte32_AllCountsMax) {
 }
 
 // Test counts at specific SIMD boundaries with uint64_t.
-TEST(VarintTests, SingleByte64_SimdBoundaries) {
+TEST(VarintTests, singleByte64SimdBoundaries) {
   for (int count : {0,  1,  2,  7,  8,  9,  15,  16,  17,  31,
                     32, 33, 63, 64, 65, 96, 127, 128, 256, 1000}) {
     std::vector<uint64_t> data(count);
@@ -289,7 +289,7 @@ TEST(VarintTests, SingleByte64_SimdBoundaries) {
 // A multi-byte varint (>=128) interrupts the single-byte run at each position
 // within a 64-element window. Verifies the SIMD path correctly bails out and
 // the remaining elements are decoded by the fallback path.
-TEST(VarintTests, SingleByte32_MultiByteInterrupt) {
+TEST(VarintTests, singleByte32MultiByteInterrupt) {
   for (int interruptPos = 0; interruptPos < 64; ++interruptPos) {
     const int count = 64;
     std::vector<uint32_t> data(count);
@@ -301,7 +301,7 @@ TEST(VarintTests, SingleByte32_MultiByteInterrupt) {
   }
 }
 
-TEST(VarintTests, SingleByte64_MultiByteInterrupt) {
+TEST(VarintTests, singleByte64MultiByteInterrupt) {
   for (int interruptPos = 0; interruptPos < 64; ++interruptPos) {
     const int count = 64;
     std::vector<uint64_t> data(count);
@@ -315,7 +315,7 @@ TEST(VarintTests, SingleByte64_MultiByteInterrupt) {
 
 // Single-byte values followed by progressively longer multi-byte varints.
 // Tests the transition from decodeSingleByteRun into the BMI2/scalar path.
-TEST(VarintTests, SingleByte32_TransitionToMultiByte) {
+TEST(VarintTests, singleByte32TransitionToMultiByte) {
   for (int singleCount : {0, 1, 7, 8, 15, 16, 31, 32, 33, 64}) {
     for (int multiCount : {0, 1, 5, 10}) {
       std::vector<uint32_t> data;
@@ -332,7 +332,7 @@ TEST(VarintTests, SingleByte32_TransitionToMultiByte) {
   }
 }
 
-TEST(VarintTests, SingleByte64_TransitionToMultiByte) {
+TEST(VarintTests, singleByte64TransitionToMultiByte) {
   for (int singleCount : {0, 1, 7, 8, 15, 16, 31, 32, 33, 64}) {
     for (int multiCount : {0, 1, 5, 10}) {
       std::vector<uint64_t> data;
@@ -351,7 +351,7 @@ TEST(VarintTests, SingleByte64_TransitionToMultiByte) {
 
 // Alternating single-byte and multi-byte varints. The SIMD path must
 // correctly handle frequent bail-outs and re-entries.
-TEST(VarintTests, SingleByte32_AlternatingSingleMulti) {
+TEST(VarintTests, singleByte32AlternatingSingleMulti) {
   std::vector<uint32_t> data;
   data.reserve(200);
   for (int i = 0; i < 200; ++i) {
@@ -362,7 +362,7 @@ TEST(VarintTests, SingleByte32_AlternatingSingleMulti) {
 }
 
 // Large run of single-byte varints to stress the wide SIMD loop.
-TEST(VarintTests, SingleByte32_LargeRun) {
+TEST(VarintTests, singleByte32LargeRun) {
   const int count = 100000;
   std::vector<uint32_t> data(count);
   for (int i = 0; i < count; ++i) {
@@ -373,7 +373,7 @@ TEST(VarintTests, SingleByte32_LargeRun) {
   verifyBulkDecode(data, buf.get());
 }
 
-TEST(VarintTests, SingleByte64_LargeRun) {
+TEST(VarintTests, singleByte64LargeRun) {
   const int count = 100000;
   std::vector<uint64_t> data(count);
   for (int i = 0; i < count; ++i) {
@@ -385,7 +385,7 @@ TEST(VarintTests, SingleByte64_LargeRun) {
 }
 
 // Random mix: ~80% single-byte, ~20% multi-byte, with a random seed.
-TEST(VarintTests, SingleByte32_RandomMix) {
+TEST(VarintTests, singleByte32RandomMix) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -402,7 +402,7 @@ TEST(VarintTests, SingleByte32_RandomMix) {
   verifyBulkDecode(data, buf.get());
 }
 
-TEST(VarintTests, SingleByte64_RandomMix) {
+TEST(VarintTests, singleByte64RandomMix) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -420,7 +420,7 @@ TEST(VarintTests, SingleByte64_RandomMix) {
 }
 
 // Constant value runs for each single-byte value.
-TEST(VarintTests, SingleByte32_ConstantRuns) {
+TEST(VarintTests, singleByte32ConstantRuns) {
   for (uint32_t val = 0; val < 128; ++val) {
     std::vector<uint32_t> data(37, val);
     auto [buf, size] = encodeValues(data);
@@ -429,7 +429,7 @@ TEST(VarintTests, SingleByte32_ConstantRuns) {
 }
 
 // Verify that a single multi-byte varint at the very start works.
-TEST(VarintTests, SingleByte32_MultiByteFirst) {
+TEST(VarintTests, singleByte32MultiByteFirst) {
   std::vector<uint32_t> data = {300};
   for (int i = 0; i < 50; ++i) {
     data.push_back(i % 128);
@@ -439,7 +439,7 @@ TEST(VarintTests, SingleByte32_MultiByteFirst) {
 }
 
 // Verify that a single multi-byte varint at the very end works.
-TEST(VarintTests, SingleByte32_MultiByteLast) {
+TEST(VarintTests, singleByte32MultiByteLast) {
   std::vector<uint32_t> data;
   data.reserve(51);
   for (int i = 0; i < 50; ++i) {
@@ -457,7 +457,7 @@ TEST(VarintTests, SingleByte32_MultiByteLast) {
 // ============================================================================
 
 // All two-byte boundary values decode correctly for uint32_t.
-TEST(VarintTests, TwoByte32_BoundaryValues) {
+TEST(VarintTests, twoByte32BoundaryValues) {
   std::vector<uint32_t> data = {128, 255, 256, 1000, 8191, 16383};
   auto [buf, size] = encodeValues(data);
   ASSERT_EQ(size, 12u);
@@ -465,7 +465,7 @@ TEST(VarintTests, TwoByte32_BoundaryValues) {
 }
 
 // All two-byte boundary values decode correctly for uint64_t.
-TEST(VarintTests, TwoByte64_BoundaryValues) {
+TEST(VarintTests, twoByte64BoundaryValues) {
   std::vector<uint64_t> data = {128, 255, 256, 1000, 8191, 16383};
   auto [buf, size] = encodeValues(data);
   ASSERT_EQ(size, 12u);
@@ -474,7 +474,7 @@ TEST(VarintTests, TwoByte64_BoundaryValues) {
 
 // Test every count from 0 to 100 with uniform two-byte varints.
 // Exercises the 4-at-a-time wide loop and trailing scalar loop boundaries.
-TEST(VarintTests, TwoByte32_AllCounts) {
+TEST(VarintTests, twoByte32AllCounts) {
   for (int count = 0; count <= 100; ++count) {
     std::vector<uint32_t> data(count, 200);
     auto [buf, size] = encodeValues(data);
@@ -484,7 +484,7 @@ TEST(VarintTests, TwoByte32_AllCounts) {
 }
 
 // Test counts at multiples of 4 (wide loop boundary) with uint64_t.
-TEST(VarintTests, TwoByte64_WideBoundaries) {
+TEST(VarintTests, twoByte64WideBoundaries) {
   for (int count : {0, 1, 2, 3, 4, 5, 7, 8, 9, 12, 16, 32, 64, 100, 1000}) {
     std::vector<uint64_t> data(count);
     for (int i = 0; i < count; ++i) {
@@ -497,7 +497,7 @@ TEST(VarintTests, TwoByte64_WideBoundaries) {
 }
 
 // Constant value runs for representative two-byte values.
-TEST(VarintTests, TwoByte32_ConstantRuns) {
+TEST(VarintTests, twoByte32ConstantRuns) {
   for (uint32_t val : {128u, 200u, 1000u, 8192u, 16383u}) {
     std::vector<uint32_t> data(37, val);
     auto [buf, size] = encodeValues(data);
@@ -506,7 +506,7 @@ TEST(VarintTests, TwoByte32_ConstantRuns) {
 }
 
 // Large run of two-byte varints to stress the wide loop.
-TEST(VarintTests, TwoByte32_LargeRun) {
+TEST(VarintTests, twoByte32LargeRun) {
   const int count = 100000;
   std::vector<uint32_t> data(count);
   for (int i = 0; i < count; ++i) {
@@ -517,7 +517,7 @@ TEST(VarintTests, TwoByte32_LargeRun) {
   verifyBulkDecode(data, buf.get());
 }
 
-TEST(VarintTests, TwoByte64_LargeRun) {
+TEST(VarintTests, twoByte64LargeRun) {
   const int count = 100000;
   std::vector<uint64_t> data(count);
   for (int i = 0; i < count; ++i) {
@@ -530,7 +530,7 @@ TEST(VarintTests, TwoByte64_LargeRun) {
 
 // A 3+ byte varint interrupts the two-byte run at each position within a
 // 32-element window. Verifies the fast path correctly bails out.
-TEST(VarintTests, TwoByte32_MultiByteInterrupt) {
+TEST(VarintTests, twoByte32MultiByteInterrupt) {
   for (int interruptPos = 0; interruptPos < 32; ++interruptPos) {
     const int count = 32;
     std::vector<uint32_t> data(count);
@@ -543,7 +543,7 @@ TEST(VarintTests, TwoByte32_MultiByteInterrupt) {
 }
 
 // Two-byte values followed by multi-byte values.
-TEST(VarintTests, TwoByte32_TransitionToMultiByte) {
+TEST(VarintTests, twoByte32TransitionToMultiByte) {
   for (int twoByteCount : {0, 1, 3, 4, 5, 8, 16, 32}) {
     for (int multiCount : {0, 1, 5, 10}) {
       std::vector<uint32_t> data;
@@ -570,7 +570,7 @@ TEST(VarintTests, TwoByte32_TransitionToMultiByte) {
 
 // Single-byte run, then two-byte run, then single-byte run again.
 // The BMI2 decoder should not be entered at all.
-TEST(VarintTests, Dispatch32_SingleTwoSingle) {
+TEST(VarintTests, dispatch32SingleTwoSingle) {
   std::vector<uint32_t> data;
   data.reserve(150);
   for (int i = 0; i < 50; ++i) {
@@ -588,7 +588,7 @@ TEST(VarintTests, Dispatch32_SingleTwoSingle) {
 
 // A large 5-byte varint followed by single-byte varints.
 // Tests the dispatch loop re-entering single-byte fast path after BMI2.
-TEST(VarintTests, Dispatch32_LargeHeadThenSingleByte) {
+TEST(VarintTests, dispatch32LargeHeadThenSingleByte) {
   std::vector<uint32_t> data;
   data.reserve(201);
   data.push_back(UINT32_MAX);
@@ -601,7 +601,7 @@ TEST(VarintTests, Dispatch32_LargeHeadThenSingleByte) {
 
 // A large 5-byte varint followed by two-byte varints.
 // Tests the dispatch loop re-entering two-byte fast path after BMI2.
-TEST(VarintTests, Dispatch32_LargeHeadThenTwoByte) {
+TEST(VarintTests, dispatch32LargeHeadThenTwoByte) {
   std::vector<uint32_t> data;
   data.reserve(201);
   data.push_back(UINT32_MAX);
@@ -612,7 +612,7 @@ TEST(VarintTests, Dispatch32_LargeHeadThenTwoByte) {
   verifyBulkDecode(data, buf.get());
 }
 
-TEST(VarintTests, Dispatch64_LargeHeadThenSingleByte) {
+TEST(VarintTests, dispatch64LargeHeadThenSingleByte) {
   std::vector<uint64_t> data;
   data.reserve(201);
   data.push_back(UINT64_MAX);
@@ -623,7 +623,7 @@ TEST(VarintTests, Dispatch64_LargeHeadThenSingleByte) {
   verifyBulkDecode(data, buf.get());
 }
 
-TEST(VarintTests, Dispatch64_LargeHeadThenTwoByte) {
+TEST(VarintTests, dispatch64LargeHeadThenTwoByte) {
   std::vector<uint64_t> data;
   data.reserve(201);
   data.push_back(UINT64_MAX);
@@ -637,7 +637,7 @@ TEST(VarintTests, Dispatch64_LargeHeadThenTwoByte) {
 // Sporadic large values every N elements among single-byte values.
 // Each large value forces the BMI2 decoder, then the dispatch loop must
 // re-enter the single-byte fast path.
-TEST(VarintTests, Dispatch32_SporadicLargeAmongSingleByte) {
+TEST(VarintTests, dispatch32SporadicLargeAmongSingleByte) {
   for (int interval : {4, 8, 16, 64, 256}) {
     const int count = 1024;
     std::vector<uint32_t> data(count);
@@ -650,7 +650,7 @@ TEST(VarintTests, Dispatch32_SporadicLargeAmongSingleByte) {
 }
 
 // Sporadic large values every N elements among two-byte values.
-TEST(VarintTests, Dispatch32_SporadicLargeAmongTwoByte) {
+TEST(VarintTests, dispatch32SporadicLargeAmongTwoByte) {
   for (int interval : {4, 8, 16, 64, 256}) {
     const int count = 1024;
     std::vector<uint32_t> data(count);
@@ -662,7 +662,7 @@ TEST(VarintTests, Dispatch32_SporadicLargeAmongTwoByte) {
   }
 }
 
-TEST(VarintTests, Dispatch64_SporadicLargeAmongSingleByte) {
+TEST(VarintTests, dispatch64SporadicLargeAmongSingleByte) {
   for (int interval : {4, 8, 16, 64, 256}) {
     const int count = 1024;
     std::vector<uint64_t> data(count);
@@ -676,7 +676,7 @@ TEST(VarintTests, Dispatch64_SporadicLargeAmongSingleByte) {
 
 // Repeating pattern: single-byte block, two-byte block, large value.
 // Exercises all three dispatch loop phases in sequence, multiple times.
-TEST(VarintTests, Dispatch32_RepeatingThreePhase) {
+TEST(VarintTests, dispatch32RepeatingThreePhase) {
   std::vector<uint32_t> data;
   data.reserve(20 * 21);
   for (int round = 0; round < 20; ++round) {
@@ -692,7 +692,7 @@ TEST(VarintTests, Dispatch32_RepeatingThreePhase) {
   verifyBulkDecode(data, buf.get());
 }
 
-TEST(VarintTests, Dispatch64_RepeatingThreePhase) {
+TEST(VarintTests, dispatch64RepeatingThreePhase) {
   std::vector<uint64_t> data;
   data.reserve(20 * 21);
   for (int round = 0; round < 20; ++round) {
@@ -710,7 +710,7 @@ TEST(VarintTests, Dispatch64_RepeatingThreePhase) {
 
 // All 3-byte, 4-byte, and 5-byte varints (no fast path applies).
 // Everything goes through BMI2 general decoder.
-TEST(VarintTests, Dispatch32_AllMultiByte) {
+TEST(VarintTests, dispatch32AllMultiByte) {
   for (auto [lo, hi] : std::vector<std::pair<uint32_t, uint32_t>>{
            {16384, 2097151}, {2097152, 268435455}, {268435456, UINT32_MAX}}) {
     auto seed = folly::Random::rand32();
@@ -727,7 +727,7 @@ TEST(VarintTests, Dispatch32_AllMultiByte) {
 }
 
 // Random mix of all varint widths with dispatch loop stress.
-TEST(VarintTests, Dispatch32_RandomAllWidths) {
+TEST(VarintTests, dispatch32RandomAllWidths) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -758,7 +758,7 @@ TEST(VarintTests, Dispatch32_RandomAllWidths) {
   verifyBulkDecode(data, buf.get());
 }
 
-TEST(VarintTests, Dispatch64_RandomAllWidths) {
+TEST(VarintTests, dispatch64RandomAllWidths) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -789,7 +789,7 @@ TEST(VarintTests, Dispatch64_RandomAllWidths) {
 }
 
 // Edge case: exactly n=1 for each varint width.
-TEST(VarintTests, Dispatch32_SingleElement) {
+TEST(VarintTests, dispatch32SingleElement) {
   for (uint32_t val : {0u, 127u, 128u, 16383u, 16384u, 2097151u, UINT32_MAX}) {
     std::vector<uint32_t> data = {val};
     auto [buf, size] = encodeValues(data);

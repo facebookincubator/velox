@@ -100,7 +100,7 @@ TEST_F(StripeDictionaryCacheTest, RegisterDictionary) {
   }
 }
 
-TEST_F(StripeDictionaryCacheTest, GetDictionaryBuffer) {
+TEST_F(StripeDictionaryCacheTest, getDictionaryBuffer) {
   {
     StripeDictionaryCache cache{pool_.get()};
 

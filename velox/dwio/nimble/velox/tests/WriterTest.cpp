@@ -1104,7 +1104,7 @@ TEST_F(WriterTest, schemaGrowthExtraSubField) {
   }
 }
 
-TEST_F(WriterTest, FeatureReorderingNonFlatmapColumnIgnoresMismatchedConfig) {
+TEST_F(WriterTest, featureReorderingNonFlatmapColumnIgnoresMismatchedConfig) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   auto vector = vectorMaker.rowVector(
       {"map", "flatmap"},
@@ -1137,7 +1137,7 @@ TEST_F(WriterTest, FeatureReorderingNonFlatmapColumnIgnoresMismatchedConfig) {
 }
 
 // A single write whose map has more distinct keys than maxFlatMapKeys fails.
-TEST_F(WriterTest, FlatMapKeyLimitExceededInSingleWriteThrows) {
+TEST_F(WriterTest, flatMapKeyLimitExceededInSingleWriteThrows) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   // One row with 10 distinct BIGINT keys against a limit of 4.
   auto vector = vectorMaker.rowVector(
@@ -1163,7 +1163,7 @@ TEST_F(WriterTest, FlatMapKeyLimitExceededInSingleWriteThrows) {
 }
 
 // A map whose distinct key count is at/under maxFlatMapKeys writes fine.
-TEST_F(WriterTest, FlatMapKeyLimitWithinLimitSucceeds) {
+TEST_F(WriterTest, flatMapKeyLimitWithinLimitSucceeds) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   // 5 distinct keys, well under the limit of 100.
   auto vector = vectorMaker.rowVector(
@@ -1193,7 +1193,7 @@ TEST_F(WriterTest, FlatMapKeyLimitWithinLimitSucceeds) {
 
 // The limit is file-wide: distinct keys accumulate across write() calls even
 // when no single write exceeds it.
-TEST_F(WriterTest, FlatMapKeyLimitAccumulatesAcrossWrites) {
+TEST_F(WriterTest, flatMapKeyLimitAccumulatesAcrossWrites) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   // Each batch has 8 distinct keys (< limit 10), but the two batches use
   // disjoint key ranges, so the file-wide count (16) exceeds the limit.
@@ -1229,7 +1229,7 @@ TEST_F(WriterTest, FlatMapKeyLimitAccumulatesAcrossWrites) {
 }
 
 // A maxFlatMapKeys of 0 disables the cap (unlimited keys).
-TEST_F(WriterTest, FlatMapKeyLimitZeroMeansUnlimited) {
+TEST_F(WriterTest, flatMapKeyLimitZeroMeansUnlimited) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   // 50 distinct keys, which would exceed any small positive limit.
   auto vector = vectorMaker.rowVector(
@@ -1589,7 +1589,7 @@ class StripeRawSizeFlushPolicyTest
     : public WriterTest,
       public ::testing::WithParamInterface<StripeRawSizeFlushPolicyTestCase> {};
 
-TEST_P(StripeRawSizeFlushPolicyTest, StripeRawSizeFlushPolicy) {
+TEST_P(StripeRawSizeFlushPolicyTest, stripeRawSizeFlushPolicy) {
   auto type = velox::ROW({{"simple", velox::INTEGER()}});
   nimble::WriterOptions writerOptions{.flushPolicyFactory = []() {
     // Buffering 256MB data before encoding stripes.
@@ -3778,7 +3778,7 @@ class ChunkFlushPolicyTest
     : public WriterTest,
       public ::testing::WithParamInterface<ChunkFlushPolicyTestCase> {};
 
-TEST_P(ChunkFlushPolicyTest, ChunkFlushPolicyIntegration) {
+TEST_P(ChunkFlushPolicyTest, chunkFlushPolicyIntegration) {
   const auto type = velox::ROW(
       {{"BIGINT", velox::BIGINT()}, {"SMALLINT", velox::SMALLINT()}});
   nimble::WriterOptions writerOptions{
@@ -4029,7 +4029,7 @@ class TimestampEdgeCaseTest
       public ::testing::WithParamInterface<TimestampTestCase> {};
 
 // We rely on fuzz tests in VeloxReaderTests for more complex data shapes.
-TEST_P(TimestampEdgeCaseTest, RoundTrip) {
+TEST_P(TimestampEdgeCaseTest, roundTrip) {
   auto testCase = GetParam();
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
 
@@ -4061,7 +4061,7 @@ TEST_P(TimestampEdgeCaseTest, RoundTrip) {
 // Test that timestamps exceeding Nimble's microsecond range cause overflow.
 // Nimble stores timestamps as int64 microseconds, so seconds values beyond
 // INT64_MAX/1'000'000 or INT64_MIN/1'000'000 will overflow during conversion.
-TEST_F(WriterTest, TimestampOverflowMax) {
+TEST_F(WriterTest, timestampOverflowMax) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
 
   auto overflowVector = vectorMaker.rowVector(
@@ -4076,7 +4076,7 @@ TEST_F(WriterTest, TimestampOverflowMax) {
   EXPECT_THROW(writer.write(overflowVector), nimble::NimbleUserError);
 }
 
-TEST_F(WriterTest, TimestampOverflowMin) {
+TEST_F(WriterTest, timestampOverflowMin) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
 
   auto overflowVector = vectorMaker.rowVector(

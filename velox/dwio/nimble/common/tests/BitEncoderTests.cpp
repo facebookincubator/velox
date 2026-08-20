@@ -20,7 +20,7 @@
 
 using namespace ::facebook;
 
-TEST(BitEncoderTests, WriteThenReadDifferentBitLengths) {
+TEST(BitEncoderTests, writeThenReadDifferentBitLengths) {
   constexpr int elementCount = 1000;
   std::vector<char> buffer(4 * elementCount);
   nimble::BitEncoder bitEncoder(buffer.data());
@@ -32,7 +32,7 @@ TEST(BitEncoderTests, WriteThenReadDifferentBitLengths) {
   }
 }
 
-TEST(BitEncoderTests, WriteAndReadIntermixed) {
+TEST(BitEncoderTests, writeAndReadIntermixed) {
   constexpr int elementCount = 1000;
   std::vector<int> data;
   for (int i = 0; i < elementCount; ++i) {
@@ -54,7 +54,7 @@ TEST(BitEncoderTests, WriteAndReadIntermixed) {
   }
 }
 
-TEST(BitEncoderTests, WriteThenReadFullBitRange) {
+TEST(BitEncoderTests, writeThenReadFullBitRange) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);

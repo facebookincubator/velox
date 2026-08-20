@@ -3619,7 +3619,7 @@ TEST_P(E2EIndexTest, filterRestorationAcrossMultipleSplits) {
 
 // Verifies that createIndexReader() throws a clear error (not SIGSEGV) when
 // the Nimble file has no cluster index — both with data and with an empty file.
-TEST_F(E2EIndexTestBase, CreateIndexReaderWithoutClusterIndex) {
+TEST_F(E2EIndexTestBase, createIndexReaderWithoutClusterIndex) {
   auto rowType = ROW({"a", "b"}, {VARCHAR(), INTEGER()});
   auto batch = vectorMaker_->rowVector(
       {"a", "b"},

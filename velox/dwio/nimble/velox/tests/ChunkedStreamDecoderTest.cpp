@@ -375,7 +375,7 @@ class ChunkedStreamDecoderTests
       public ::testing::WithParamInterface<
           std::tuple<bool, bool, bool, bool, bool, bool>> {};
 
-TEST_P(ChunkedStreamDecoderTests, Decode) {
+TEST_P(ChunkedStreamDecoderTests, decode) {
   const auto
       [multipleChunks,
        hasNulls,
@@ -399,7 +399,7 @@ TEST_P(ChunkedStreamDecoderTests, Decode) {
   }
 }
 
-TEST_P(ChunkedStreamDecoderTests, DecodeStrings) {
+TEST_P(ChunkedStreamDecoderTests, decodeStrings) {
   const auto
       [multipleChunks,
        hasNulls,
