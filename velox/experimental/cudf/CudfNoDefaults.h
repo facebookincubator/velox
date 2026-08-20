@@ -58,13 +58,8 @@ get_current_device_resource_ref();
 
 namespace facebook::velox::cudf_velox {
 
-/// Returns the current device memory resource as an async resource reference.
-/// Equivalent to cudf::get_current_device_resource_ref(), but bypasses the
-/// __attribute__((error)) redeclaration above by calling the underlying RMM
-/// function directly. Use this at call sites where you intentionally want
-/// the current default device memory resource.
-inline rmm::device_async_resource_ref get_temp_mr() {
-  return rmm::mr::get_current_device_resource_ref();
-}
+/// Returns the temporary resource selected for the current cuDF call, falling
+/// back to RMM's current device resource outside an operator call.
+rmm::device_async_resource_ref get_temp_mr();
 
 } // namespace facebook::velox::cudf_velox

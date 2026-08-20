@@ -1462,9 +1462,7 @@ CudfVectorPtr CudfGroupby::finalizeStreamingGroupby() {
   return result;
 }
 
-void CudfGroupby::initialize() {
-  Operator::initialize();
-
+void CudfGroupby::doInitialize() {
   inputType_ = aggregationNode_->sources()[0]->outputType();
   ignoreNullKeys_ = aggregationNode_->ignoreNullKeys();
   setupGroupingKeyChannelProjections(

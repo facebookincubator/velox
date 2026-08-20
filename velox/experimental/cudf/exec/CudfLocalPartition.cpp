@@ -276,7 +276,7 @@ void CudfLocalPartition::doAddInput(RowVectorPtr input) {
   }
 }
 
-exec::BlockingReason CudfLocalPartition::isBlocked(ContinueFuture* future) {
+exec::BlockingReason CudfLocalPartition::doIsBlocked(ContinueFuture* future) {
   if (!futures_.empty()) {
     auto blockingReason = blockingReasons_.front();
     *future = folly::collectAll(futures_.begin(), futures_.end()).unit();
