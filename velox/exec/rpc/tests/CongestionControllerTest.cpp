@@ -249,5 +249,50 @@ TEST(CongestionControllerTest, baselineTracksSustainedLatencyAndRecovers) {
   EXPECT_GT(window.limit(), 4);
 }
 
+// Mild latency elevation must move the window off the floor. One
+// recomputation changes it by stepCoef*sqrt(w) - w*(1 - gradient); at w = 1
+// with gradient 0.8 that is +0.8, and an integer-valued window truncated 1.8
+// back to 1 and discarded it, every window, forever. Accumulating in floating
+// point lets those sub-unit steps add up. Measured over 200 windows of the
+// same input: 1 before this change, 1024 after.
+TEST(CongestionControllerTest, mildCongestionMovesWindowOffTheFloor) {
+  auto window = CongestionController{1, 1024};
+  feedWindow(window, 1'000'000); // baseline = 1ms
+  // A few windows at 1.25ms: gradient ~0.8, before the baseline has chased it.
+  for (int round = 0; round < 5; ++round) {
+    feedWindow(window, 1'250'000);
+  }
+  EXPECT_GT(window.limit(), 1);
+
+  // Sustained, the baseline absorbs the elevation and the window keeps
+  // probing; the point is that it climbs at all, not where it stops.
+  for (int round = 0; round < 195; ++round) {
+    feedWindow(window, 1'250'000);
+  }
+  EXPECT_GE(window.limit(), 16);
+}
+
+// A backend that batches internally gets *faster* as concurrency rises until
+// it reaches its knee. The window must climb through that region: latency
+// falling as the window grows reads as gradient 1, which is the grow signal.
+// The risk this pins down is the composite one -- a window parked below the
+// knee sees the backend's worst latency, which then looks like congestion.
+TEST(CongestionControllerTest, climbsThroughBatchingKnee) {
+  constexpr int64_t kKnee = 6;
+  auto window = CongestionController{1, 1024};
+  // Latency model: 10ms at a window of 1, falling to 1ms at the knee, then
+  // rising again with queueing beyond it.
+  auto rttFor = [](int64_t w) -> int64_t {
+    if (w <= kKnee) {
+      return 10'000'000 - (w - 1) * 1'500'000;
+    }
+    return 1'000'000 + (w - kKnee) * 500'000;
+  };
+  for (int round = 0; round < 100; ++round) {
+    feedWindow(window, rttFor(window.limit()));
+  }
+  EXPECT_GE(window.limit(), kKnee);
+}
+
 } // namespace
 } // namespace facebook::velox::exec::rpc
