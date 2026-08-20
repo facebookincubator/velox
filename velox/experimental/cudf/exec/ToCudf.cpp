@@ -403,6 +403,13 @@ void registerCudf() {
 }
 
 void unregisterCudf() {
+  if (!tryResetCudfExchangeMemoryResource()) {
+    LOG(WARNING)
+        << "Retaining active or in-use cuDF UCX exchange memory resources; "
+           "they become reclaimable after their queries and packed buffers "
+           "are released";
+  }
+
   // Reset the any_resource copies before the adaptors they were copied from,
   // so that the wrapped upstream resources are released here.
   output_mr_.reset();

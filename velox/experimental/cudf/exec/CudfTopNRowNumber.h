@@ -43,13 +43,13 @@ class CudfTopNRowNumber : public CudfOperatorBase {
     return !noMoreInput_;
   }
 
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
-    return exec::BlockingReason::kNotBlocked;
-  }
-
   bool isFinished() override;
 
  protected:
+  exec::BlockingReason doIsBlocked(ContinueFuture* /*future*/) override {
+    return exec::BlockingReason::kNotBlocked;
+  }
+
   void doAddInput(RowVectorPtr input) override;
   RowVectorPtr doGetOutput() override;
   void doNoMoreInput() override;

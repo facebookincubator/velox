@@ -62,10 +62,6 @@ class CudfMarkDistinct : public CudfOperatorBase {
     return noMoreInput_ && input_ == nullptr;
   }
 
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
-    return exec::BlockingReason::kNotBlocked;
-  }
-
  protected:
   void doAddInput(RowVectorPtr input) override;
   RowVectorPtr doGetOutput() override;
