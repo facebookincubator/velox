@@ -4993,7 +4993,7 @@ TEST_F(DateTimeFunctionsTest, dateFormatTimestampWithTimezone) {
           "%y-%M-%e %T %p", TimestampWithTimezone(-20220915000, "-03:00")));
 }
 
-TEST_F(DateTimeFunctionsTest, test_week_year) {
+TEST_F(DateTimeFunctionsTest, testWeekYear) {
   const auto dateFormat = [&](std::optional<Timestamp> timestamp,
                               std::optional<std::string> format) {
     return evaluateOnce<std::string>("date_format(c0, c1)", timestamp, format);
