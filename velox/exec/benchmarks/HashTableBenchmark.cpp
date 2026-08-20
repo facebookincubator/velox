@@ -53,11 +53,13 @@ struct HashTableBenchmarkParams {
       int64_t size,
       int32_t hitrate,
       int32_t keySpacing = 1,
-      int32_t _numWays = 10)
+      int32_t _numWays = 10,
+      TypePtr buildType = ROW({"k1"}, {BIGINT()}))
       : title(std::move(title)),
         buildSize(size),
         size(100 * (size / _numWays) / hitrate),
         numWays(_numWays),
+        buildType(std::move(buildType)),
         insertPct(hitrate),
         keySpacing(keySpacing) {}
 
@@ -376,6 +378,15 @@ class HashTableBenchmark : public VectorTestBase {
             },
             nullptr);
 
+      case TypeKind::TIMESTAMP:
+        return vectorMaker_->flatVector<Timestamp>(
+            size,
+            [&](vector_size_t row) {
+              return Timestamp::fromMillis(
+                  params_.keySpacing * (sequence + row));
+            },
+            nullptr);
+
       case TypeKind::VARCHAR: {
         auto strings = BaseVector::create<FlatVector<StringView>>(
             VARCHAR(), size, pool_.get());
@@ -655,6 +666,13 @@ int main(int argc, char** argv) {
 
       HashTableBenchmarkParams("HitVid10K", 10000, 100, 1000),
       HashTableBenchmarkParams("MissVid10K", 10000, 5, 1000),
+      HashTableBenchmarkParams(
+          "TimestampHitVid10K",
+          10000,
+          100,
+          1000,
+          10,
+          ROW({"k1"}, {TIMESTAMP()})),
 
       HashTableBenchmarkParams("Hit4M", 4000000, 100),
       HashTableBenchmarkParams("Miss4M", 4000000, 5),
