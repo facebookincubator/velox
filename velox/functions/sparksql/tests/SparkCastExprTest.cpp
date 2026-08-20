@@ -740,13 +740,13 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     // around a date-only string are trimmed by CastExpr before the parser
     // sees the input. These must remain valid through the full cast path.
     testCast(
-        makeNullableFlatVector<std::string>(
+        makeFlatVector<std::string>(
             {"2015-03-18 ",
              "\t2015-03-18\n",
              "2015-03-18\t",
              "2015-03-18\n"},
             VARCHAR()),
-        makeNullableFlatVector<Timestamp>(
+        makeFlatVector<Timestamp>(
             {Timestamp(1'426'636'800, 0),
              Timestamp(1'426'636'800, 0),
              Timestamp(1'426'636'800, 0),
