@@ -298,7 +298,7 @@ TEST_F(CollectSetAggregateTest, unknownType) {
   });
   testAggregations({data}, {}, {"collect_set(c0, true)"}, {}, {expected});
 
-  // The grouping key is of UNKONWN type.
+  // The grouping key is of UNKNOWN type.
   expected = makeRowVector({
       makeNullConstant(TypeKind::UNKNOWN, 1),
       makeArrayVectorFromJson<int32_t>({"[]"}),

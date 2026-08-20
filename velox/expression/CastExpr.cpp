@@ -403,11 +403,12 @@ VectorPtr CastExpr::castToTime(
     const SelectivityVector& rows,
     const BaseVector& input,
     exec::EvalCtx& context,
-    const TypePtr& fromType) {
+    const TypePtr& fromType,
+    const TypePtr& toType) {
   switch (fromType->kind()) {
     case TypeKind::VARCHAR: {
       VectorPtr castResult;
-      context.ensureWritable(rows, TIME(), castResult);
+      context.ensureWritable(rows, toType, castResult);
       (*castResult).clearNulls(rows);
 
       // Get session timezone and start time for timezone conversions
@@ -420,27 +421,28 @@ VectorPtr CastExpr::castToTime(
       auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
 
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        try {
-          const auto inputString = inputVector->valueAt(row);
-          int64_t result =
-              TIME()->valueToTime(inputString, timeZone, sessionStartTimeMs);
-          resultFlatVector->set(row, result);
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, TIME()) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, TIME()) + " " + e.what());
-        }
+        bool wrapException = true;
+        const auto inputString =
+            hooks_->removeWhiteSpaces(inputVector->valueAt(row));
+        const auto result =
+            hooks_->castStringToTime(inputString, timeZone, sessionStartTimeMs);
+        setResultOrError(
+            row,
+            result,
+            [&](const std::string& details) {
+              return makeErrorMessage(input, row, toType, details);
+            },
+            context,
+            resultFlatVector,
+            wrapException);
       });
 
       return castResult;
     }
     case TypeKind::TIMESTAMP: {
       VELOX_DCHECK(fromType->equivalent(*TIMESTAMP()));
+      // TIMESTAMP -> TIME is supported, but TIMESTAMP -> TIME_MICRO_UTC is not.
+      VELOX_DCHECK(toType->equivalent(*TIME()));
       VectorPtr castResult;
       context.ensureWritable(rows, TIME(), castResult);
       (*castResult).clearNulls(rows);
@@ -449,7 +451,7 @@ VectorPtr CastExpr::castToTime(
       auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
 
       // Cast from TIMESTAMP to TIME extracts the time-of-day component
-      // (milliseconds since midnight) from the timestamp
+      // (milliseconds since midnight) from the timestamp.
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
         const auto timestamp = inputVector->valueAt(row);
         // Extract time-of-day using std::chrono.
@@ -940,8 +942,7 @@ void CastExpr::applyPeeled(
     VELOX_DCHECK(fromType->equivalent(*TIME()));
     result = castFromTime(rows, input, context, toType);
   } else if (toType->isTime()) {
-    VELOX_DCHECK(toType->equivalent(*TIME()));
-    result = castToTime(rows, input, context, fromType);
+    result = castToTime(rows, input, context, fromType, toType);
   } else if (toType->isShortDecimal()) {
     result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
   } else if (toType->isLongDecimal()) {

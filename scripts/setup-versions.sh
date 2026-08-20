@@ -50,13 +50,16 @@ FAST_FLOAT_VERSION="v8.0.2"
 CCACHE_VERSION="4.11.3"
 # Only needed for VELOX_ENABLE_NIMBLE=ON. FSST is vendored under
 # velox/external/fsst, so it has no pin here. OpenZL is pinned to the revision
-# Nimble's own submodule carries rather than to v0.2.0, which predates the
-# cross-platform zstd handling it needs to configure here. FlatBuffers is held
-# at the version cuDF expects, since a system install of anything newer is
-# picked up by cuDF's own find_package() and breaks its build; see
+# fbcode builds Nimble against rather than to v0.2.0, which predates the
+# cross-platform zstd handling it needs to configure here; keep it in sync with
+# VELOX_OPENZL_VERSION in CMake/resolve_dependency_modules/openzl.cmake, or a
+# system install and a bundled build resolve different descriptor APIs.
+# FlatBuffers is held at the version cuDF expects, since a system install of
+# anything newer is picked up by cuDF's own find_package() and breaks its
+# build; see
 # CMake/resolve_dependency_modules/flatbuffers.cmake. Keep the two in sync.
 FLATBUFFERS_VERSION="24.3.25"
-OPENZL_VERSION="6b48fa4868160ed1e5c78ac422639615dd0dcf28"
+OPENZL_VERSION="7340a712cce1b8331bec3467600dba99a562e052"
 
 # Adapter related versions.
 ABSEIL_VERSION="20240116.2"

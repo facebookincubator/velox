@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <string_view>
 
+#include <folly/lang/Bits.h>
+
 #include "velox/common/base/Nulls.h"
 #include "velox/common/base/SimdUtil.h"
 
@@ -108,7 +110,7 @@ class StringDecoder {
 
  private:
   int32_t lengthAt(const char* buffer) {
-    return *reinterpret_cast<const int32_t*>(buffer);
+    return folly::loadUnaligned<int32_t>(buffer);
   }
 
   std::string_view readString() {
