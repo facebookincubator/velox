@@ -74,6 +74,7 @@ TEST(TypesTest, readOnlyEncoding) {
   EXPECT_FALSE(isReadOnlyEncoding(EncodingType::Trivial));
   EXPECT_FALSE(isReadOnlyEncoding("Trivial"));
   EXPECT_FALSE(isReadOnlyEncoding("unknown"));
+}
 
 TEST(TypesTest, encodingTypeStreamOperator) {
   std::ostringstream ss;

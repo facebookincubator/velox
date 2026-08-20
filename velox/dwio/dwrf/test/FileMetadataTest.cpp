@@ -42,9 +42,7 @@ TEST_F(FileMetadataTest, stripeFooterWrapperGetFormatCorrectFormat) {
   EXPECT_EQ(orcStripeFooterWrapper_.format(), DwrfFormat::kOrc);
 }
 
-TEST_F(
-    FileMetadataTest,
-    stripeFooterWrapperGetStripeFooterReturnsProtoTypes) {
+TEST_F(FileMetadataTest, stripeFooterWrapperGetStripeFooterReturnsProtoTypes) {
   EXPECT_EQ(
       &dwrfStripeFooterWrapper_.getStripeFooterDwrf(), dwrfStripeFooter_.get());
   EXPECT_ANY_THROW(dwrfStripeFooterWrapper_.getStripeFooterOrc());
