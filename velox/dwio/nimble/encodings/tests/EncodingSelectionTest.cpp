@@ -19,6 +19,7 @@
 #include <limits>
 #include <optional>
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
@@ -1860,6 +1861,13 @@ TEST(ManualEncodingSelectionPolicyFactoryTest, fsstRequiresExplicitOptIn) {
           "Fsst=1.0"),
       (std::vector<std::pair<nimble::EncodingType, float>>{
           {nimble::EncodingType::Fsst, 1.0}}));
+}
+
+TEST(ManualEncodingSelectionPolicyFactoryTest, rejectsReadOnlyEncodings) {
+  NIMBLE_ASSERT_THROW(
+      nimble::ManualEncodingSelectionPolicyFactory::parseEncodingReadFactors(
+          "PFOR=1.0"),
+      "Encoding is read-only and cannot be used for new writes: PFOR");
 }
 
 TEST(
