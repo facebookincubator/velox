@@ -272,25 +272,35 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
 
   auto outputMr = determineCudfMemoryResource();
 
-  while (passState_->currentPass < passState_->passes.size()) {
-    if (not passState_->isChunkingSetup) {
-      setupChunkingForCurrentPass(outputMr);
-    }
+  if (passState_->currentPass >= passState_->passes.size()) {
+    return std::nullopt;
+  }
 
-    if (splitReader_->has_next_table_chunk()) {
-      auto tableWithMetadata = splitReader_->materialize_all_columns_chunk();
-      return castDecimalColumnsToVeloxTypes(
-          std::move(tableWithMetadata.tbl), outputType_, stream_, outputMr);
-    }
+  if (not passState_->isChunkingSetup) {
+    setupChunkingForCurrentPass(outputMr);
+    VELOX_CHECK(
+        splitReader_->has_next_table_chunk(),
+        "cuDF row group pass did not produce a table chunk");
+  }
 
-    // The pass is exhausted. Release its column chunk data, which is no
-    // longer referenced by the reader, before starting the next pass.
+  auto tableWithMetadata = splitReader_->materialize_all_columns_chunk();
+  auto table = castDecimalColumnsToVeloxTypes(
+      std::move(tableWithMetadata.tbl), outputType_, stream_, outputMr);
+
+  // This was the last chunk of the pass. Drop its fetch buffers and begin
+  // I/O for the next pass while the caller consumes this table.
+  if (not splitReader_->has_next_table_chunk()) {
     releaseCurrentPassData();
     passState_->isChunkingSetup = false;
     ++passState_->currentPass;
+    if (passState_->currentPass < passState_->passes.size()) {
+      startCurrentPassFetch();
+    } else {
+      passState_->passes.clear();
+    }
   }
 
-  return std::nullopt;
+  return table;
 }
 
 void CudfSplitReader::startCurrentPassFetch() {

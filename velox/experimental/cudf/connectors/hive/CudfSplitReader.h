@@ -109,6 +109,9 @@ class CudfSplitReader : public NvtxHelper {
   // Setup the cuDF data source
   void setupCudfDataSource();
 
+  // Create the parquet reader and select the row group passes to read.
+  void createCudfReader();
+
   // Read file metadatas.
   void fileMetaDatas();
 
@@ -145,9 +148,6 @@ class CudfSplitReader : public NvtxHelper {
 
   // Setup the cuDF reader options
   void setupReaderOptions();
-
-  // Create the parquet reader and select the row group passes to read.
-  void createCudfReader();
 
   // Populate the reader's page index, which data page pruning needs. No-op for
   // files written without a page index.
