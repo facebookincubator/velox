@@ -53,6 +53,10 @@ class MockAsyncRPCFunction : public AsyncRPCFunction {
     return VARCHAR();
   }
 
+  RpcCapability capabilities() const override {
+    return {.supportedModes = {RpcCapabilityMode::kPerRow}};
+  }
+
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
   dispatchPerRow(
       const SelectivityVector& rows,
@@ -81,6 +85,7 @@ class MockAsyncRPCFunction : public AsyncRPCFunction {
       }
       RPCRequest request;
       request.rowId = row;
+      request.originalRowIndex = row;
       results.emplace_back(row, client_->call(request));
     });
 
