@@ -112,6 +112,33 @@ TEST(PartitionValueTest, timestampModes) {
       unshifted);
 }
 
+TEST(PartitionValueTest, timestampMicrosSinceEpoch) {
+  EXPECT_EQ(
+      toVariant(
+          "1705314600000000", TIMESTAMP(), TimestampMode::kMicrosSinceEpoch)
+          .value<TypeKind::TIMESTAMP>(),
+      Timestamp(1705314600, 0));
+  EXPECT_EQ(
+      toVariant("-1", TIMESTAMP(), TimestampMode::kMicrosSinceEpoch)
+          .value<TypeKind::TIMESTAMP>(),
+      Timestamp(-1, 999999000));
+  EXPECT_EQ(
+      toVariant(
+          "1705314600000000", TIMESTAMP_UTC(), TimestampMode::kMicrosSinceEpoch)
+          .value<TypeKind::TIMESTAMP>(),
+      Timestamp(1705314600, 0));
+}
+
+TEST(PartitionValueTest, invalidEpochEncodings) {
+  VELOX_ASSERT_USER_THROW(
+      toVariant(
+          "not-a-date", DATE(), TimestampMode::kUtc, DateMode::kDaysSinceEpoch),
+      "Failed to parse DATE value 'not-a-date' as days since epoch");
+  VELOX_ASSERT_USER_THROW(
+      toVariant("not-a-ts", TIMESTAMP(), TimestampMode::kMicrosSinceEpoch),
+      "Failed to parse TIMESTAMP value 'not-a-ts' as microseconds since epoch");
+}
+
 TEST(PartitionValueTest, filterOnConvertedValue) {
   const common::BigintRange bigintRange(10, 20, /*nullAllowed=*/false);
   EXPECT_TRUE(applyFilter(bigintRange, toVariant("15", BIGINT())));

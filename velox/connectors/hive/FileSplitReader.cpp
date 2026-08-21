@@ -31,7 +31,8 @@ VectorPtr newConstantFromString(
     const std::optional<std::string>& value,
     velox::memory::MemoryPool* pool,
     bool isLocalTimestamp,
-    bool isDaysSinceEpoch) {
+    bool isDaysSinceEpoch,
+    bool isMicrosSinceEpoch) {
   if (!value.has_value()) {
     return BaseVector::createNullConstant(type, 1, pool);
   }
@@ -40,8 +41,10 @@ VectorPtr newConstantFromString(
       PartitionValue::fromString(
           value.value(),
           *type,
-          isLocalTimestamp ? PartitionValue::TimestampMode::kLocalTime
-                           : PartitionValue::TimestampMode::kUtc,
+          isMicrosSinceEpoch
+              ? PartitionValue::TimestampMode::kMicrosSinceEpoch
+              : (isLocalTimestamp ? PartitionValue::TimestampMode::kLocalTime
+                                  : PartitionValue::TimestampMode::kUtc),
           isDaysSinceEpoch ? PartitionValue::DateMode::kDaysSinceEpoch
                            : PartitionValue::DateMode::kIsoString),
       1,

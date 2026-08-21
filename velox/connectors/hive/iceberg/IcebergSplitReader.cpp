@@ -1101,14 +1101,22 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
           auto columnType = tableSchema->findChild(fieldName);
           if (it != handleByName.end() &&
               it->second->initialDefaultValue().has_value()) {
+            const auto& icebergMetadata = it->second->icebergMetadata();
+            VELOX_USER_CHECK(
+                !icebergMetadata.timestampUnit.has_value() ||
+                    icebergMetadata.timestampUnit.value() != "NANOS",
+                "Iceberg initial default for column '{}' uses unsupported "
+                "timestamp unit NANOS",
+                fieldName);
             childSpec->setConstantValue(newConstantFromString(
                 columnType,
                 it->second->initialDefaultValue().value(),
                 connectorQueryCtx_->memoryPool(),
                 readTimestampAsLocalTime,
-                true));
+                true,
+                columnType->kind() == TypeKind::TIMESTAMP));
           } else {
-            // Fall back to NULL if no default value
+            // Fall back to NULL if no default value.
             VELOX_CHECK_NOT_NULL(
                 columnType, "Column '{}' not found in table schema", fieldName);
             childSpec->setConstantValue(

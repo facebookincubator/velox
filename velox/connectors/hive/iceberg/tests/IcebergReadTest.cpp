@@ -185,19 +185,19 @@ class IcebergReadTest : public test::IcebergTestBase {
       const std::vector<RowVectorPtr>& expected,
       const std::unordered_map<std::string, std::string>& sessionProperties =
           {},
-      const std::optional<std::string>& filter = std::nullopt) {
+      const std::optional<std::string>& scanFilter = std::nullopt) {
     auto dataFilePath = TempFilePath::create();
     writeToFile(dataFilePath->getPath(), data);
-    auto planBuilder = exec::test::PlanBuilder()
-                           .startTableScan(test::kIcebergConnectorId)
-                           .outputType(outputType)
-                           .dataColumns(scanSpecType)
-                           .assignments(assignments)
-                           .endTableScan();
-    if (filter.has_value()) {
-      planBuilder.filter(*filter);
+    exec::test::PlanBuilder planBuilder;
+    auto& tableScanBuilder =
+        planBuilder.startTableScan(test::kIcebergConnectorId)
+            .outputType(outputType)
+            .dataColumns(scanSpecType)
+            .assignments(assignments);
+    if (scanFilter.has_value()) {
+      tableScanBuilder.remainingFilter(*scanFilter);
     }
-    auto plan = planBuilder.planNode();
+    auto plan = tableScanBuilder.endTableScan().planNode();
 
     exec::test::AssertQueryBuilder(plan)
         .connectorSessionProperties(

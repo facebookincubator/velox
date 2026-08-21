@@ -69,6 +69,8 @@ namespace facebook::velox::connector::hive {
 /// @param isDaysSinceEpoch If true and type is DATE, treats the string value as
 /// an integer representing days since epoch (used by Iceberg). If false, parses
 /// the string as a date string in ISO 8601 format (used by Hive).
+/// @param isMicrosSinceEpoch If true and type is TIMESTAMP or TIMESTAMP_UTC,
+/// treats the string value as an integer representing microseconds since epoch.
 ///
 /// @return A constant vector of size 1 containing the converted value, or a
 /// null constant if value is nullopt.
@@ -78,7 +80,8 @@ VectorPtr newConstantFromString(
     const std::optional<std::string>& value,
     velox::memory::MemoryPool* pool,
     bool isLocalTimestamp,
-    bool isDaysSinceEpoch);
+    bool isDaysSinceEpoch,
+    bool isMicrosSinceEpoch = false);
 
 class FileConfig;
 
