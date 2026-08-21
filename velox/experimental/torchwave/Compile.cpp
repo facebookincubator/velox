@@ -2368,6 +2368,47 @@ void addDuplicateExtraBindings(
   }
 }
 
+// Returns every actual frame value 'op' may read, over all of its grid
+// variants. Used to decide at which step a last-use value can be released, so
+// this has to err on the side of listing too much: a reader missed here is a
+// buffer freed while a later step still reads it. orderingInputs is the right
+// source for a kernel launch -- it is the set the scheduler orders the launch
+// against, and so already includes the host-side view operands that are inputs
+// of no fused node. The subgraph leaves cover an op whose grid is empty.
+std::unordered_set<nativert::ValueId> opReadSet(const OpInvocation& op) {
+  const auto& bindings = op.bindings();
+  auto toActual = [&](nativert::ValueId formalId) {
+    auto it = bindings.find(formalId);
+    return it != bindings.end() ? it->second : formalId;
+  };
+  std::unordered_set<nativert::ValueId> ids;
+  auto* projectOp = op.projectOp();
+  for (const auto* grid :
+       {&projectOp->grid(),
+        &projectOp->singleBlockGrid(),
+        &projectOp->cgGrid()}) {
+    for (const auto& step : *grid) {
+      for (const auto& launch : step) {
+        if (launch.op != nullptr) {
+          for (auto id : launch.op->orderingInputs()) {
+            ids.insert(toActual(id));
+          }
+        } else if (launch.standalone != nullptr) {
+          for (const auto& input : launch.standalone->inputs()) {
+            if (input.value != nullptr) {
+              ids.insert(toActual(input.value->id()));
+            }
+          }
+        }
+      }
+    }
+  }
+  for (const auto* input : projectOp->subgraph().inputs) {
+    ids.insert(toActual(input->id()));
+  }
+  return ids;
+}
+
 bool isAllViews(
     NodeCP node,
     const std::unordered_set<NodeCP>& placed,
@@ -2505,8 +2546,31 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
   // WaveConfig::freeIntermediates releases their frame tensors after execute().
   std::vector<nativert::ValueId> lastUseIds;
   lastUseIds.reserve(project.lastUse.size());
+  // For each of them, the ops_ indices that read it, which is what lets the
+  // executor release the value after the last step those ops occupy instead of
+  // after the node's last step. Left empty -- meaning "release at the node's
+  // last step" -- for a value produced inside this node: its producer writes
+  // the frame slot at a step this reader-based bound knows nothing about.
+  std::vector<std::vector<int32_t>> lastUseReaderOps;
+  lastUseReaderOps.reserve(project.lastUse.size());
+  std::vector<std::unordered_set<nativert::ValueId>> readSets;
+  readSets.reserve(ops_.size());
+  for (const auto& op : ops_) {
+    readSets.push_back(opReadSet(op));
+  }
+  const std::unordered_set<NodeCP> layerNodes(nodes.begin(), nodes.end());
   for (auto* value : project.lastUse) {
     lastUseIds.push_back(value->id());
+    std::vector<int32_t> readers;
+    const auto* producer = value->producer();
+    if (producer == nullptr || layerNodes.count(producer) == 0) {
+      for (size_t i = 0; i < readSets.size(); ++i) {
+        if (readSets[i].count(value->id()) != 0) {
+          readers.push_back(static_cast<int32_t>(i));
+        }
+      }
+    }
+    lastUseReaderOps.push_back(std::move(readers));
   }
   // Values whose buffer an elementwise op may reuse in place for its output:
   // reusable last-use boundary inputs and expr-local overwritable temps. Only
@@ -2562,6 +2626,7 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
       std::move(ivalueStorage_),
       waveGraph_.nextCompositeInvocationId(),
       std::move(lastUseIds),
+      std::move(lastUseReaderOps),
       std::move(reusableIds),
       std::vector<Launch>{},
       std::move(elidedCloneInputs));

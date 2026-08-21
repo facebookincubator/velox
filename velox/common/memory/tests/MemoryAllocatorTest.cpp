@@ -1553,7 +1553,7 @@ TEST_P(MemoryAllocatorTest, allocateZeroFilled) {
   ASSERT_TRUE(instance_->checkConsistency());
 }
 
-TEST_P(MemoryAllocatorTest, StlMemoryAllocator) {
+TEST_P(MemoryAllocatorTest, stlMemoryAllocator) {
   {
     std::vector<double, StlAllocator<double>> data(
         0, StlAllocator<double>(*pool_));

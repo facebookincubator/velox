@@ -273,8 +273,9 @@ TEST_F(TimeWithTimezoneCastTest, fromVarcharInvalid) {
   // Invalid: Second out of range (60 >= 60)
   testInvalidCast("12:34:60+00:00", "Invalid second value");
 
-  // Invalid: Microsecond precision not supported (4 digits after decimal)
-  testInvalidCast("12:34:56.1234+00:00", "Microsecond precision not supported");
+  // Invalid: fractional precision exceeds 3 digits.
+  testInvalidCast(
+      "12:34:56.1234+00:00", "fractional precision exceeds 3 digits");
 
   // Invalid: Timezone offset out of range (+15:00 > +14:00)
   testInvalidCast("12:00:00+15:00", "out of range");

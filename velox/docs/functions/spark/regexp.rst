@@ -5,10 +5,10 @@ Regular Expression Functions
 Regular expression functions use RE2 as the regex engine. RE2 is fast, but
 supports only a subset of PCRE syntax and in particular does not support
 backtracking and associated features (e.g. back references).
-Java and RE2 regex output can diverage and users should be cautious that
+Java and RE2 regex output can diverge and users should be cautious that
 the patterns they are using perform similarly between RE2 and Java.
 For example, character class unions, intersections, and differences
-``([a[b]], [a&&[b]], [a&&[^b]])`` are intepreted as a single character class
+``([a[b]], [a&&[b]], [a&&[^b]])`` are interpreted as a single character class
 that contain ``[, &, and ^`` rather than union, intersection, or
 difference of the character classes.
 

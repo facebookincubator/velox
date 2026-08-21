@@ -181,6 +181,43 @@ Invalid examples
   SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as smallint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as tinyint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
+Cast to Floating-Point Types
+----------------------------
+
+From strings
+^^^^^^^^^^^^
+
+*(ANSI compliant)*
+
+Casting a string to ``REAL`` or ``DOUBLE`` accepts decimal and scientific
+notation, an optional leading sign, and the case-insensitive special literals
+``nan``, ``inf``, ``infinity`` (optionally signed). Values that overflow the
+target type produce ``Infinity`` rather than an error, matching Spark.
+
+Casting from invalid strings returns NULL when ANSI mode is disabled; throws an
+error otherwise.
+
+Valid examples
+
+::
+
+  SELECT cast('1.5' as double); -- 1.5
+  SELECT cast('-3.14E-2' as real); -- -0.0314
+  SELECT cast('1.5e10' as double); -- 1.5E10
+  SELECT cast('nan' as double); -- NaN (case insensitive)
+  SELECT cast('-Infinity' as double); -- -Infinity (case insensitive)
+  SELECT cast('1e39' as real); -- Infinity (overflow)
+  SELECT cast('1e309' as double); -- Infinity (overflow)
+
+Invalid examples
+
+::
+
+  SELECT cast('abc' as double); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1.2a' as double); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1.2.3' as real); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('' as double); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+
 Cast to Boolean
 ---------------
 
@@ -337,6 +374,53 @@ Invalid examples
   SELECT cast('2012/10/23' as date); -- NULL // Invalid argument
   SELECT cast('2012.10.23' as date); -- NULL // Invalid argument
 
+Cast to Time
+------------
+
+.. note::
+   The TIME type was introduced in Apache Spark 4.1.0.
+
+From strings
+^^^^^^^^^^^^
+
+*(ANSI compliant)*
+
+Supported format is ``H:m[:s[.SSSSSS]]`` where:
+
+  * ``H`` is hour (0-23)
+  * ``m`` is minute (0-59)
+  * ``s`` is an optional second (0-59); omitted seconds default to zero
+  * ``SSSSSS`` is optional fractional seconds (0-999999, up to microseconds)
+
+All leading and trailing UTF8 white-spaces are trimmed before casting.
+Velox represents Spark ``TIME`` using ``TIME MICRO UTC``, whose values are
+stored as microseconds since midnight (0 to 86,399,999,999).
+
+**ANSI mode behavior:**
+
+  * **ANSI ON**: Invalid time strings throw an error.
+  * **ANSI OFF**: Invalid time strings return NULL.
+
+Valid examples
+
+::
+
+  SELECT cast('00:00:00' as time); -- 0 (midnight)
+  SELECT cast('12:30' as time); -- 45000000000 (seconds default to zero)
+  SELECT cast('12:30:45' as time); -- 45045000000 (12:30:45 in microseconds)
+  SELECT cast('23:59:59' as time); -- 86399000000
+  SELECT cast('12:03:17.123' as time); -- 43397123000 (with milliseconds)
+  SELECT cast('12:03:17.123456' as time); -- 43397123456 (with microseconds)
+  SELECT cast(' 12:30:45 ' as time); -- 45045000000 (whitespace trimmed)
+
+Invalid examples
+
+::
+
+  SELECT cast('24:00:00' as time); -- NULL / throws error (hour out of range)
+  SELECT cast('12:60:00' as time); -- NULL / throws error (minute out of range)
+  SELECT cast('12:30:60' as time); -- NULL / throws error (second out of range)
+
 Cast to Decimal
 ---------------
 
@@ -402,7 +486,7 @@ Invalid examples
   SELECT cast(cast(-100 as bigint) as decimal(17, 16)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
 
 From decimal types
-^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^
 
 *(ANSI compliant)*
 
@@ -466,6 +550,36 @@ Invalid examples
   SELECT cast(cast(1e38 as double) as decimal(20, 2)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Result overflows
   SELECT cast(cast('inf' as double) as decimal(38, 2)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value is not finite
   SELECT cast(cast('nan' as double) as decimal(38, 2)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value is not finite
+
+From boolean
+^^^^^^^^^^^^
+
+*(ANSI compliant)*
+
+Casting a boolean to a decimal of given precision and scale is allowed.
+``true`` becomes 1 and ``false`` becomes 0.
+
+When ANSI mode is enabled, casting a value that overflows the target precision
+and scale throws an error. Otherwise, such casts return NULL. Only ``true`` can
+overflow, and only when the target has no integer digits (precision equals
+scale), since 1 cannot be represented there. ``false`` becomes 0, which fits any
+precision and scale.
+
+Valid examples
+
+::
+
+  SELECT cast(true as decimal(6, 2)); -- 1.00
+  SELECT cast(false as decimal(6, 2)); -- 0.00
+  SELECT cast(true as decimal(20, 10)); -- 1.0000000000
+  SELECT cast(false as decimal(1, 1)); -- 0.0
+
+Invalid examples
+
+::
+
+  SELECT cast(true as decimal(1, 1)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
+  SELECT cast(true as decimal(38, 38)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
 
 Cast to Varbinary
 -----------------
@@ -557,7 +671,10 @@ From strings
 
 Casting from strings to timestamp uses Spark-compatible timestamp parsing.
 The parser accepts date-only values, both ``' '`` and ``'T'`` as date-time
-separators, fractional seconds, and leading or trailing spaces.
+separators, fractional seconds, and leading or trailing spaces. Both ``' '``
+and ``'T'`` date-time separators must be followed immediately by a digit.
+Outer whitespace is trimmed before the parser runs, so a bare trailing
+separator such as ``"2015-03-18 "`` is handled as a date-only value.
 
 Casting from invalid strings returns NULL when ANSI mode is disabled and throws
 an error when ANSI mode is enabled.
@@ -578,6 +695,9 @@ Invalid examples
 
   SELECT cast('INVALID' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('2012-Oct-01' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('2015-03-18T' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('2015-03-18T 12:00:00' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('2015-03-18 Z' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 From boolean
 ^^^^^^^^^^^^

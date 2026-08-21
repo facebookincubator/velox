@@ -33,7 +33,7 @@ namespace {
 
 class TrackedExecutorTest : public testing::Test {};
 
-TEST_F(TrackedExecutorTest, reportsPerCallbackMetricsUnderPrefix) {
+TEST_F(TrackedExecutorTest, reportsOneSamplePerCallback) {
   // Run callbacks inline so the per-metric counts are deterministic.
   TrackedExecutor tracked{
       folly::getKeepAliveToken(folly::InlineExecutor::instance())};
@@ -51,19 +51,19 @@ TEST_F(TrackedExecutorTest, reportsPerCallbackMetricsUnderPrefix) {
   }
 
   ConcurrentRuntimeStatWriter writer;
-  tracked.reportTo(writer, "myOp");
+  tracked.reportTo(writer);
   const auto metrics = writer.runtimeStats();
 
   ASSERT_THAT(
       metrics,
       testing::UnorderedElementsAre(
-          testing::Key("myOp-executorWaitNanos"),
-          testing::Key("myOp-executorExecutionWallNanos"),
-          testing::Key("myOp-executorExecutionCpuNanos")));
+          testing::Key("executorWaitNanos"),
+          testing::Key("executorExecutionWallNanos"),
+          testing::Key("executorExecutionCpuNanos")));
 
-  const auto& wait = metrics.at("myOp-executorWaitNanos");
-  const auto& wall = metrics.at("myOp-executorExecutionWallNanos");
-  const auto& cpu = metrics.at("myOp-executorExecutionCpuNanos");
+  const auto& wait = metrics.at("executorWaitNanos");
+  const auto& wall = metrics.at("executorExecutionWallNanos");
+  const auto& cpu = metrics.at("executorExecutionCpuNanos");
 
   // Every scheduled callback contributes one sample to each metric.
   EXPECT_EQ(wait.count, kNumTasks);
@@ -94,12 +94,12 @@ TEST_F(TrackedExecutorTest, keepsMetricCountsAlignedWhenCallbackThrows) {
       std::runtime_error);
 
   ConcurrentRuntimeStatWriter writer;
-  tracked.reportTo(writer, "op");
+  tracked.reportTo(writer);
   const auto metrics = writer.runtimeStats();
 
-  EXPECT_EQ(metrics.at("op-executorWaitNanos").count, 1);
-  EXPECT_EQ(metrics.at("op-executorExecutionWallNanos").count, 1);
-  EXPECT_EQ(metrics.at("op-executorExecutionCpuNanos").count, 1);
+  EXPECT_EQ(metrics.at("executorWaitNanos").count, 1);
+  EXPECT_EQ(metrics.at("executorExecutionWallNanos").count, 1);
+  EXPECT_EQ(metrics.at("executorExecutionCpuNanos").count, 1);
 }
 
 } // namespace

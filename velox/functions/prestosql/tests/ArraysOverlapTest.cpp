@@ -317,7 +317,7 @@ TEST_F(ArraysOverlapTest, dictionaryEncodedElementsInConstant) {
       {array});
 }
 
-TEST_F(ArraysOverlapTest, TimestampWithTimezone) {
+TEST_F(ArraysOverlapTest, timestampWithTimezone) {
   auto testArraysOverlap =
       [this](
           const std::vector<std::optional<int64_t>>& array1,
