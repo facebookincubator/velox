@@ -20,7 +20,33 @@
 
 #include <cudf/groupby.hpp>
 
+#include <optional>
+
 namespace facebook::velox::cudf_velox {
+
+class CudaEvent;
+
+struct StreamingGroupbyPreparedColumn {
+  column_index_t inputIndex;
+  std::optional<column_index_t> childIndex;
+  TypePtr type;
+};
+
+struct StreamingGroupbyRequestSpec {
+  column_index_t preparedInputIndex;
+  cudf::aggregation::Kind kind;
+};
+
+struct StreamingGroupbyOutputSpec {
+  enum class Kind {
+    kDirect,
+    kAverage,
+  };
+
+  Kind kind;
+  TypePtr type;
+  std::vector<size_t> resultIndices;
+};
 
 struct GroupbyAggregator {
   core::AggregationNode::Step step;
@@ -97,6 +123,8 @@ class CudfGroupby : public CudfOperatorBase {
 
   void doNoMoreInput() override;
 
+  void doClose() override;
+
  private:
   CudfVectorPtr doGroupByAggregation(
       cudf::table_view tableView,
@@ -107,6 +135,19 @@ class CudfGroupby : public CudfOperatorBase {
       rmm::device_async_resource_ref mr);
 
   CudfVectorPtr releaseAndResetBufferedResult();
+
+  bool initializeStreamingGroupbyApi(
+      const RowTypePtr& inputRowSchema,
+      const std::vector<VectorPtr>& constants);
+
+  cudf::table_view makeStreamingGroupbyInputView(cudf::table_view input) const;
+
+  std::unique_ptr<cudf::groupby::streaming_groupby> createStreamingGroupby(
+      size_t capacity) const;
+
+  void computeFinalGroupbyWithStreamingApi(CudfVectorPtr input);
+
+  CudfVectorPtr finalizeStreamingGroupby();
 
   void computePartialGroupbyStreaming(CudfVectorPtr tbl);
   void computeFinalGroupbyStreaming(CudfVectorPtr tbl);
@@ -128,6 +169,7 @@ class CudfGroupby : public CudfOperatorBase {
   const bool isSingleStep_;
   // Streaming aggregation is disabled if companion aggregates are present.
   bool streamingEnabled_{true};
+  bool streamingGroupbyApiEnabled_{false};
   const int64_t maxPartialAggregationMemoryUsage_;
   int64_t numInputRows_ = 0;
 
@@ -139,6 +181,14 @@ class CudfGroupby : public CudfOperatorBase {
   TypePtr inputType_;
   RowTypePtr bufferedResultType_;
   CudfVectorPtr bufferedResult_;
+
+  std::vector<StreamingGroupbyPreparedColumn> streamingPreparedColumns_;
+  std::vector<StreamingGroupbyRequestSpec> streamingRequestSpecs_;
+  std::vector<StreamingGroupbyOutputSpec> streamingOutputSpecs_;
+  std::unique_ptr<cudf::groupby::streaming_groupby> streamingGroupby_;
+  std::optional<rmm::cuda_stream_view> streamingGroupbyStream_;
+  std::unique_ptr<CudaEvent> streamingGroupbyEvent_;
+  size_t streamingGroupbyCapacity_{0};
 };
 
 } // namespace facebook::velox::cudf_velox

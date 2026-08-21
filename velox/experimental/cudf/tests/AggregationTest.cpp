@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/AggregationRegistry.h"
+#include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/PrestoAggregateFunctions.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
@@ -47,12 +48,17 @@ class AggregationTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
+    savedStreamingGroupbyApiEnabled_ =
+        cudf_velox::CudfConfig::getInstance().streamingGroupbyApiEnabled;
+    cudf_velox::CudfConfig::getInstance().streamingGroupbyApiEnabled = false;
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
     cudf_velox::registerPrestoAggregateFunctions("");
   }
 
   void TearDown() override {
+    cudf_velox::CudfConfig::getInstance().streamingGroupbyApiEnabled =
+        savedStreamingGroupbyApiEnabled_;
     cudf_velox::unregisterCudf();
     cudf_velox::unregisterAggregateFunctions();
     OperatorTestBase::TearDown();
@@ -222,7 +228,38 @@ class AggregationTest : public OperatorTestBase {
            DOUBLE(), // DM: This used to be REAL() but we don't support that
            DOUBLE(),
            VARCHAR()})};
+  bool savedStreamingGroupbyApiEnabled_{false};
 };
+
+class StreamingGroupbyApiAggregationTest : public AggregationTest {
+ protected:
+  void SetUp() override {
+    AggregationTest::SetUp();
+    cudf_velox::CudfConfig::getInstance().streamingGroupbyApiEnabled = true;
+  }
+};
+
+bool hasStreamingGroupbyStat(
+    const std::shared_ptr<exec::Task>& task,
+    const core::PlanNodeId& planNodeId,
+    const std::string& name) {
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto it = planStats.find(planNodeId);
+  return it != planStats.end() && it->second.customStats.count(name) > 0;
+}
+
+int64_t streamingGroupbyStatSum(
+    const std::shared_ptr<exec::Task>& task,
+    const core::PlanNodeId& planNodeId,
+    const std::string& name) {
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto planIt = planStats.find(planNodeId);
+  if (planIt == planStats.end()) {
+    return 0;
+  }
+  const auto statIt = planIt->second.customStats.find(name);
+  return statIt == planIt->second.customStats.end() ? 0 : statIt->second.sum;
+}
 
 TEST_F(AggregationTest, global) {
   auto vectors = makeVectors(rowType_, 10, 100);
@@ -1070,6 +1107,123 @@ TEST_F(AggregationTest, finalAggregationStreamingMultiKey) {
 
   const auto planStats = toPlanStats(task->taskStats());
   EXPECT_GT(planStats.at(finalAggId).outputRows, 0);
+}
+
+TEST_F(
+    StreamingGroupbyApiAggregationTest,
+    partialFinalUsesStreamingGroupbyForSupportedAggregates) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId partialAggId;
+  core::PlanNodeId finalAggId;
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+          .plan(
+              PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation(
+                      {"c0", "c6"},
+                      {"sum(c2)", "count(c1)", "min(c3)", "max(c5)", "avg(c4)"})
+                  .capturePlanNodeId(partialAggId)
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .planNode())
+          .assertResults(
+              "SELECT c0, c6, sum(c2), count(c1), min(c3), max(c5), "
+              "avg(c4) FROM tmp GROUP BY c0, c6");
+
+  EXPECT_FALSE(
+      hasStreamingGroupbyStat(task, partialAggId, "streamingGroupbyApiUsed"));
+  EXPECT_TRUE(
+      hasStreamingGroupbyStat(task, finalAggId, "streamingGroupbyApiUsed"));
+}
+
+TEST_F(
+    StreamingGroupbyApiAggregationTest,
+    growsBeforeInsertingAnotherHighCardinalityBatch) {
+  constexpr int32_t kBatchRows = 8;
+  constexpr int32_t kNumBatches = 8;
+  std::vector<RowVectorPtr> vectors;
+  vectors.reserve(kNumBatches);
+  for (int32_t batch = 0; batch < kNumBatches; ++batch) {
+    const auto offset = static_cast<int64_t>(batch) * kBatchRows;
+    vectors.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kBatchRows, [offset](auto row) { return offset + row; }),
+        makeFlatVector<int64_t>(kBatchRows, [](auto /*row*/) { return 1; }),
+    }));
+  }
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId finalAggId;
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, kBatchRows)
+          .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+          .plan(
+              PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"c0"}, {"sum(c1)"})
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .planNode())
+          .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+
+  EXPECT_TRUE(
+      hasStreamingGroupbyStat(task, finalAggId, "streamingGroupbyApiUsed"));
+  EXPECT_GT(
+      streamingGroupbyStatSum(task, finalAggId, "streamingGroupbyApiRebuilds"),
+      0);
+}
+
+TEST_F(
+    StreamingGroupbyApiAggregationTest,
+    unsupportedVariableWidthMinUsesExistingGroupby) {
+  auto vectors = makeVectors(rowType_, 10, 20);
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId finalAggId;
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+                  .plan(
+                      PlanBuilder()
+                          .values(vectors)
+                          .partialAggregation({"c0"}, {"min(c6)"})
+                          .finalAggregation()
+                          .capturePlanNodeId(finalAggId)
+                          .planNode())
+                  .assertResults("SELECT c0, min(c6) FROM tmp GROUP BY c0");
+
+  EXPECT_FALSE(
+      hasStreamingGroupbyStat(task, finalAggId, "streamingGroupbyApiUsed"));
+}
+
+TEST_F(
+    StreamingGroupbyApiAggregationTest,
+    partialFinalAverageOfAllNullGroupIsNull) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 2}),
+      makeNullableFlatVector<double>({std::nullopt, std::nullopt, 4.0, 8.0}),
+  });
+  createDuckDbTable({data});
+
+  core::PlanNodeId finalAggId;
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, 2)
+                  .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+                  .plan(
+                      PlanBuilder()
+                          .values({data})
+                          .partialAggregation({"c0"}, {"avg(c1)"})
+                          .finalAggregation()
+                          .capturePlanNodeId(finalAggId)
+                          .planNode())
+                  .assertResults("SELECT c0, avg(c1) FROM tmp GROUP BY c0");
+
+  EXPECT_TRUE(
+      hasStreamingGroupbyStat(task, finalAggId, "streamingGroupbyApiUsed"));
 }
 
 class EmptyInputAggregationTest : public AggregationTest {
