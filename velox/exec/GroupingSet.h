@@ -23,6 +23,7 @@
 #include "velox/exec/HashTable.h"
 #include "velox/exec/SortedAggregations.h"
 #include "velox/exec/Spiller.h"
+#include "velox/exec/UnorderedStreamReader.h"
 #include "velox/exec/VectorHasher.h"
 
 namespace facebook::velox::exec {
@@ -278,6 +279,54 @@ class GroupingSet {
   // spilled partitions have been processed.
   bool prepareNextSpillPartitionOutput();
 
+  // Returns true if spilled aggregation data is recovered through hash
+  // re-aggregation (vectorized, unsorted spill) instead of the row-by-row
+  // ordered (sorted) merge. This is a stable, query-lifetime decision based on
+  // the 'aggregation_spill_hash_recovery_enabled' config and the aggregate
+  // shape: only plain group-by aggregates without sorted/distinct aggregates
+  // are supported. The same predicate drives both the spill-time sort decision
+  // and the read-time recovery path, so they always agree.
+  bool useHashRecovery() const;
+
+  // Starts hash-based recovery for 'partition': sets up 'recoveryTable_' and
+  // 'recoveryReader_' and marks 'currentPartitionHashRecovery_'.
+  // 'respillStartBit' is the partition bit offset to use if the partition has
+  // to be recursively re-spilled because it does not fit in memory.
+  void startHashRecovery(SpillPartition& partition, uint8_t respillStartBit);
+
+  // Returns true if the recovery hash table cannot accommodate 'batch' within
+  // the available memory and the partition should be recursively re-spilled
+  // (provided the spill level limit is not exceeded). Mirrors the reservation
+  // logic of ensureInputFits().
+  bool recoveryShouldRespill(const RowVectorPtr& batch);
+
+  // Spills the current contents of 'recoveryTable_' into 'recoverySpiller_'
+  // (creating it on first use) and clears the table, so draining can continue
+  // into a fresh table. Marks 'recoveryRespilling_'.
+  void respillRecoveryTable();
+
+  // Finalizes recursive re-spill of the current partition: spills any remaining
+  // recovery rows, finishes 'recoverySpiller_' and pushes the resulting
+  // sub-partitions onto 'recoveryWorkStack_' for later processing.
+  void finalizeRecoveryRespill();
+
+  // Re-aggregates one batch of spilled intermediate rows into
+  // 'recoveryTable_'. The batch layout is [keys..., intermediate accumulators].
+  void addSpillBatchToHashRecovery(const RowVectorPtr& batch);
+
+  // Reads spilled rows for the current partition via hash-based recovery: on
+  // the first call it fully drains the partition into 'recoveryTable_', then
+  // returns the re-aggregated groups in 'maxOutputRows'/'maxOutputBytes' sized
+  // chunks. Advances to the next partition when the current one is exhausted.
+  bool mergeNextWithHashRecovery(
+      int32_t maxOutputRows,
+      int32_t maxOutputBytes,
+      const RowVectorPtr& result);
+
+  // Releases the hash-recovery state for the current partition and returns any
+  // unused memory reservation back to the pool.
+  void finishHashRecoveryPartition();
+
   // Reads from spilled rows until producing a batch of final results in
   // 'result'. Returns false and leaves 'result' empty when the spilled data is
   // fully read. 'maxOutputRows' and 'maxOutputBytes' specify the max number of
@@ -317,8 +366,12 @@ class GroupingSet {
   // 'keys'. This is called for each row received from a merge of spilled data.
   void updateRow(SpillMergeStream& keys, char* row);
 
-  // Returns a RowType of the spilled data.
+  // Returns a RowType of the spilled data for the main hash table.
   RowTypePtr makeSpillType() const;
+
+  // Returns a RowType of the spilled data for an arbitrary aggregation row
+  // container (e.g. the recovery hash table during recursive re-spill).
+  RowTypePtr makeSpillType(const RowContainer* rows) const;
 
   // Copies the finalized state from 'mergeRows' to 'result' and clears
   // 'mergeRows'. Used for producing a batch of results when aggregating spilled
@@ -470,6 +523,54 @@ class GroupingSet {
   // Temporary for case where an aggregate in toIntermediate() outputs post-init
   // state of aggregate for all rows.
   std::vector<char*> firstGroup_;
+
+  // Hash-based spill recovery state (alternative to the ordered merge in
+  // 'merge_'). Only one of 'merge_' / 'recoveryTable_' is active per spill
+  // partition. See useHashRecovery() and startHashRecovery().
+  //
+  // True if the current spill partition is being recovered via a hash table
+  // rather than the ordered merge.
+  bool currentPartitionHashRecovery_{false};
+
+  // True once the current partition has been fully drained into
+  // 'recoveryTable_' and we are extracting its groups.
+  bool hashRecoveryDrained_{false};
+
+  // Unordered reader over the current spill partition's files.
+  std::unique_ptr<UnorderedStreamReader<BatchStream>> recoveryReader_;
+
+  // Hash table holding the re-aggregated groups of the current spill partition.
+  std::unique_ptr<BaseHashTable> recoveryTable_;
+
+  std::unique_ptr<HashLookup> recoveryLookup_;
+
+  // Iterator over 'recoveryTable_' rows while extracting output in chunks.
+  RowContainerIterator recoveryResultIterator_;
+
+  // A spill partition pending hash recovery together with the partition bit
+  // offset to use if it has to be recursively re-spilled.
+  struct RecoveryPartition {
+    std::unique_ptr<SpillPartition> partition;
+    uint8_t respillStartBit;
+  };
+
+  // Sub-partitions produced by recursive re-spill of a recovery partition that
+  // did not fit in memory. Processed (depth-first) before the next top-level
+  // spill partition.
+  std::vector<RecoveryPartition> recoveryWorkStack_;
+
+  // Spiller used to recursively re-spill the current recovery partition when it
+  // does not fit in memory. Partitions the (intermediate) aggregation state by
+  // 'currentRespillStartBit_'.
+  std::unique_ptr<AggregationInputSpiller> recoverySpiller_;
+
+  // True once the current recovery partition has started recursive re-spill, in
+  // which case it produces no direct output and is fully routed to
+  // 'recoverySpiller_'.
+  bool recoveryRespilling_{false};
+
+  // Partition bit offset used to re-spill the current recovery partition.
+  uint8_t currentRespillStartBit_{0};
 };
 
 class AggregationInputSpiller : public SpillerBase {
@@ -482,7 +583,8 @@ class AggregationInputSpiller : public SpillerBase {
       const HashBitRange& hashBitRange,
       const std::vector<SpillSortKey>& sortingKeys,
       const common::SpillConfig* spillConfig,
-      exec::SpillStats* spillStats);
+      exec::SpillStats* spillStats,
+      bool needSort = true);
 
   void spill();
 
@@ -492,8 +594,13 @@ class AggregationInputSpiller : public SpillerBase {
   }
 
   bool needSort() const override {
-    return true;
+    return needSort_;
   }
+
+  // When false, spilled runs are not sorted. This is used when the spilled data
+  // is recovered through hash re-aggregation (see GroupingSet hash recovery)
+  // instead of the ordered (sorted) merge, which removes the spill-time sort.
+  const bool needSort_;
 };
 
 class AggregationOutputSpiller : public SpillerBase {
