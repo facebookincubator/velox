@@ -28,11 +28,27 @@ std::atomic<uint64_t> TableScan::ioWaitNanos_;
 using exec::BlockingReason;
 
 BlockingReason TableScan::isBlocked(
-    WaveStream& /*stream*/,
+    WaveStream& stream,
     ContinueFuture* future) {
-  if (!dataSource_ || needNewSplit_) {
+  while (!dataSource_ || needNewSplit_) {
     nextSplit(future);
-    isNewSplit_ = true;
+    if (blockingFuture_.valid()) {
+      break;
+    }
+    if (noMoreSplits_) {
+      return BlockingReason::kNotBlocked;
+    }
+    // The row count of the first batch of a new split is taken here and not in
+    // canAdvance() because a split can produce no rows at all, for example an
+    // empty split. Such a split must be replaced by the next one, while a
+    // canAdvance() that reports no rows ends the pipeline.
+    nextAvailableRows_ = waveDataSource_->canAdvance(stream);
+    if (nextAvailableRows_ == 0) {
+      if (auto splitReader = waveDataSource_->splitReader()) {
+        updateStats(splitReader->runtimeStats(), splitReader.get());
+      }
+      needNewSplit_ = true;
+    }
   }
   if (blockingFuture_.valid()) {
     *future = std::move(blockingFuture_);
@@ -43,16 +59,10 @@ BlockingReason TableScan::isBlocked(
 
 std::vector<AdvanceResult> TableScan::canAdvance(WaveStream& stream) {
   std::vector<AdvanceResult> results;
-  if (!dataSource_ || needNewSplit_) {
+  if (!dataSource_ || needNewSplit_ || nextAvailableRows_ == 0) {
     return results;
   }
-  auto& result = results.emplace_back();
-  if (isNewSplit_) {
-    isNewSplit_ = false;
-    result.numRows = waveDataSource_->canAdvance(stream);
-  } else {
-    result.numRows = nextAvailableRows_;
-  }
+  results.emplace_back().numRows = nextAvailableRows_;
   return results;
 }
 

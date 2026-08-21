@@ -147,12 +147,8 @@ class TableScan : public WaveSourceOperator {
   // global static 'ioWaitNanos_'.
   uint64_t lastIoWaitNanos_{0};
 
-  // The value returned by canAdvance() of the WaveDataSource after last
-  // schedule().
+  // The value returned by canAdvance() of the WaveDataSource after the last
+  // schedule() or after adding a split.
   int32_t nextAvailableRows_{0};
-
-  // True if canAdvance() should do waveDataSource_->canAdvance() instead of
-  // returning 'nextAvailableRows_'.
-  bool isNewSplit_{false};
 };
 } // namespace facebook::velox::wave

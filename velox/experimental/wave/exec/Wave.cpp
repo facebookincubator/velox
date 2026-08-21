@@ -896,11 +896,14 @@ LaunchControl* WaveStream::prepareProgramLaunch(
     // will show one error.
     control.params.status = addBytes<BlockStatus*>(start, statusOffset);
     deviceBlockStatus_ = control.params.status;
+    // The last block is full when the row count is a multiple of kBlockSize.
+    const int32_t rowsInLastBlock =
+        numRows_ - (inputBlocksPerExe - 1) * kBlockSize;
     // Memory is already set to all 0.
     for (auto i = 0; i < inputBlocksPerExe; ++i) {
       auto status = &control.params.status[i];
       status->numRows =
-          i == inputBlocksPerExe - 1 ? inputRows % kBlockSize : kBlockSize;
+          i == inputBlocksPerExe - 1 ? rowsInLastBlock : kBlockSize;
     }
   } else if (!inputControl) {
     // No input control and retry. the statuses are as left by the previous try.
