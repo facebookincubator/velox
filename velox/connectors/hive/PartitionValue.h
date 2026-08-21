@@ -40,6 +40,9 @@ class PartitionValue {
 
     /// Interprets the value as UTC. No shift.
     kUtc,
+
+    /// Parses an integer count of microseconds since the epoch.
+    kMicrosSinceEpoch,
   };
 
   enum class DateMode {
@@ -57,8 +60,9 @@ class PartitionValue {
   /// - REAL, DOUBLE: a floating point literal.
   /// - DECIMAL: a decimal literal, scaled by the type's scale.
   /// - VARCHAR, VARBINARY: taken verbatim.
-  /// - TIMESTAMP: parsed as TimestampParseMode::kPrestoCast, then shifted per
-  ///   'timestampMode'.
+  /// - TIMESTAMP: parsed as TimestampParseMode::kPrestoCast, shifted per
+  ///   'timestampMode', or parsed as epoch microseconds when
+  ///   'timestampMode' is kMicrosSinceEpoch.
   /// - DATE: parsed per 'dateMode'.
   ///
   /// Fails for a non-scalar type, and for a value that does not parse as
