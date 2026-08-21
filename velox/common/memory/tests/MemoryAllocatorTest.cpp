@@ -664,6 +664,30 @@ TEST_P(MemoryAllocatorTest, allocationClass2) {
   allocation->clear();
 }
 
+TEST_P(MemoryAllocatorTest, sizeClassStatsDifference) {
+  SizeClassStats newer;
+  newer.size = 8;
+  newer.allocateClocks = 500;
+  newer.freeClocks = 70;
+  newer.numAllocations = 9;
+  newer.totalBytes = 4'096;
+
+  SizeClassStats older;
+  older.size = 8;
+  older.allocateClocks = 200;
+  older.freeClocks = 20;
+  older.numAllocations = 4;
+  older.totalBytes = 1'024;
+
+  const auto delta = newer - older;
+  EXPECT_EQ(delta.size, 8);
+  EXPECT_EQ(delta.allocateClocks, 300);
+  EXPECT_EQ(delta.freeClocks, 50);
+  EXPECT_EQ(delta.numAllocations, 5);
+  EXPECT_EQ(delta.totalBytes, 3'072);
+  EXPECT_EQ(delta.clocks(), 350);
+}
+
 TEST_P(MemoryAllocatorTest, stats) {
   const std::vector<MachinePageCount>& sizes = instance_->sizeClasses();
   for (auto i = 0; i < sizes.size(); ++i) {
