@@ -111,6 +111,7 @@ IcebergInsertTableHandlePtr IcebergMergeSink::cloneHandleWithKind(
       original.compressionKind(),
       original.serdeParameters(),
       kind,
+      std::vector<int32_t>{},
       original.existingDeletionVectors(),
       original.fileNameGenerator());
 }
