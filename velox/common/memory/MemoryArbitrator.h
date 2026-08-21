@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <vector>
 
 #include "velox/common/base/AsyncSource.h"
@@ -93,9 +94,26 @@ class MemoryArbitrator {
     std::unordered_map<std::string, std::string> extraConfigs{};
 
     std::string toString() const {
-      std::stringstream ss;
+      // Emit the extra configs in key order. Iterating the unordered map
+      // directly makes the output depend on the hash implementation, which
+      // differs between standard libraries and would make error messages and
+      // logs vary by platform.
+      std::vector<const std::pair<const std::string, std::string>*>
+          sortedConfigs;
+      sortedConfigs.reserve(extraConfigs.size());
       for (const auto& extraConfig : extraConfigs) {
-        ss << extraConfig.first << "=" << extraConfig.second << ";";
+        sortedConfigs.push_back(&extraConfig);
+      }
+      std::sort(
+          sortedConfigs.begin(),
+          sortedConfigs.end(),
+          [](const auto* lhs, const auto* rhs) {
+            return lhs->first < rhs->first;
+          });
+
+      std::stringstream ss;
+      for (const auto* extraConfig : sortedConfigs) {
+        ss << extraConfig->first << "=" << extraConfig->second << ";";
       }
       return fmt::format(
           "kind={};capacity={};arbitrationStateCheckCb={};{}",
