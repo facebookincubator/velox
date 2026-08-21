@@ -4560,7 +4560,7 @@ TEST_P(ReadWithVisitorTest, encodingLevelSimdForBitpackBigintRangeSparse) {
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_AlwaysTrue_Dense_Int32_FastPath) {
+    encodingLevelBlockBitPackingAlwaysTrueDenseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kRows = kChunkSize * 3 + 500;
 
@@ -4636,7 +4636,7 @@ TEST_P(
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_AlwaysTrue_Sparse_Int32_FastPath) {
+    encodingLevelBlockBitPackingAlwaysTrueSparseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kTotalRows = kChunkSize * 3;
 
@@ -4711,7 +4711,7 @@ TEST_P(
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_BigintRange_Dense_Int32_FastPath) {
+    encodingLevelBlockBitPackingBigintRangeDenseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kRows = kChunkSize * 2;
 
@@ -4781,7 +4781,7 @@ TEST_P(
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_AlwaysTrue_VerySparse_Int32_FastPath) {
+    encodingLevelBlockBitPackingAlwaysTrueVerySparseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kTotalRows = kChunkSize * 4;
 
