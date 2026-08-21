@@ -21,6 +21,7 @@
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/common/memory/MmapArena.h"
 #include "velox/common/memory/SharedArbitrator.h"
+#include "velox/common/memory/tests/MmapAllocatorCompatibility.h"
 #include "velox/common/testutil/TestValue.h"
 
 #include <fmt/format.h>
@@ -59,6 +60,9 @@ class MemoryAllocatorTest : public testing::TestWithParam<int> {
   }
 
   void SetUp() override {
+    if (GetParam() == 0) {
+      SKIP_IF_MMAP_ALLOCATOR_UNSUPPORTED();
+    }
     setupAllocator();
   }
 
@@ -2161,6 +2165,12 @@ class MmapConfigTest : public testing::Test {
 };
 
 TEST_F(MmapConfigTest, sizeClasses) {
+  // SKIP_IF_MMAP_ALLOCATOR_UNSUPPORTED() must be called directly in the
+  // test body, not from setupAllocator(): GTEST_SKIP() only returns from
+  // its immediate enclosing function, so calling it inside a helper does
+  // not stop this test body from running afterward with an
+  // uninitialized allocator_.
+  SKIP_IF_MMAP_ALLOCATOR_UNSUPPORTED();
   setupAllocator();
   Allocation result;
   ASSERT_TRUE(

@@ -18,6 +18,8 @@
 
 #include "folly/Range.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/memory/tests/MmapAllocatorCompatibility.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/type/StringView.h"
 
@@ -256,6 +258,14 @@ TEST_F(BufferTest, testReallocateNoReuse) {
 
   auto test = [&](BufferResizeOption bufferResizeOption,
                   bool useMmapAllocator) {
+    if (useMmapAllocator && memory::test::mmapAllocatorUnsupported()) {
+      // Unlike the other MmapAllocator-dependent tests, this one calls
+      // both useMmapAllocator settings from a single test body, so
+      // GTEST_SKIP() (which aborts the whole test) would also throw away
+      // the still-valid useMmapAllocator=false coverage below. Just skip
+      // this one invocation.
+      return;
+    }
     memory::MemoryManager::Options options;
     options.useMmapAllocator = useMmapAllocator;
     options.allocatorCapacity = 1024 * 1024;

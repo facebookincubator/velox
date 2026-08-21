@@ -24,6 +24,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/memory/tests/MmapAllocatorCompatibility.h"
 #include "velox/common/testutil/ScopedTestTime.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
@@ -89,6 +90,9 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
   }
 
   void SetUp() override {
+    // This whole suite requires MmapAllocator (there is no MallocAllocator
+    // variant here, unlike MemoryAllocatorTest).
+    SKIP_IF_MMAP_ALLOCATOR_UNSUPPORTED();
     filesystems::registerLocalFileSystem();
   }
 

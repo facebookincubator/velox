@@ -23,6 +23,7 @@
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/memory/tests/MmapAllocatorCompatibility.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/tablet/Compression.h"
@@ -311,6 +312,8 @@ class MetadataBufferCacheTest : public ::testing::Test {
   static constexpr uint64_t kCacheSize = 64 << 20;
 
   void SetUp() override {
+    // This suite unconditionally constructs an MmapAllocator.
+    SKIP_IF_MMAP_ALLOCATOR_UNSUPPORTED();
     velox::memory::MemoryManager::Options options;
     options.useMmapAllocator = true;
     options.allocatorCapacity = kCacheSize;

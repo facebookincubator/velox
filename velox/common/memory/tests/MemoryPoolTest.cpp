@@ -27,6 +27,7 @@
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/common/memory/SharedArbitrator.h"
+#include "velox/common/memory/tests/MmapAllocatorCompatibility.h"
 #include "velox/common/memory/tests/SharedArbitratorTestUtil.h"
 #include "velox/common/testutil/TestValue.h"
 
@@ -87,6 +88,9 @@ class MemoryPoolTest : public testing::TestWithParam<TestParam> {
         isLeafThreadSafe_(GetParam().threadSafe) {}
 
   void SetUp() override {
+    if (useMmap_) {
+      SKIP_IF_MMAP_ALLOCATOR_UNSUPPORTED();
+    }
     // For duration of the test, make a local MmapAllocator that will not be
     // seen by any other test.
     MemoryManager::Options options;
@@ -110,7 +114,10 @@ class MemoryPoolTest : public testing::TestWithParam<TestParam> {
   }
 
   void TearDown() override {
-    if (useCache_) {
+    // cache_ is left null if SetUp() returned early (e.g. via GTEST_SKIP()
+    // before setupMemory() ran); TearDown() runs unconditionally even
+    // after a skip, so it must not assume setup completed.
+    if (useCache_ && cache_ != nullptr) {
       cache_->shutdown();
     }
   }
@@ -334,6 +341,7 @@ void testMmapMemoryAllocation(
     MachinePageCount allocPages,
     size_t allocCount,
     bool threadSafe) {
+  SKIP_IF_MMAP_ALLOCATOR_UNSUPPORTED();
   MemoryManager::Options options;
   options.allocatorCapacity = capacity;
   options.useMmapAllocator = true;

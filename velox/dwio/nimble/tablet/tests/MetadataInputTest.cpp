@@ -32,6 +32,7 @@
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/memory/tests/MmapAllocatorCompatibility.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -568,6 +569,8 @@ class CachedMetadataInputTest : public MetadataInputTestBase,
   }
 
   void SetUp() override {
+    // This suite unconditionally constructs an MmapAllocator.
+    SKIP_IF_MMAP_ALLOCATOR_UNSUPPORTED();
     velox::filesystems::registerLocalFileSystem();
     velox::memory::MemoryManager::Options options;
     options.useMmapAllocator = true;

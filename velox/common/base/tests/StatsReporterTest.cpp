@@ -27,6 +27,7 @@
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/memory/tests/MmapAllocatorCompatibility.h"
 
 namespace facebook::velox::test {
 
@@ -393,6 +394,7 @@ class TestMemoryPool : public memory::MemoryPool {
 };
 
 TEST_F(PeriodicStatsReporterTest, basic) {
+  SKIP_IF_MMAP_ALLOCATOR_UNSUPPORTED();
   TestStatsReportMmapAllocator allocator(1, 1, 1, 1);
   TestStatsReportAsyncDataCache cache(
       {.ssdStats = std::make_shared<cache::SsdCacheStats>()});

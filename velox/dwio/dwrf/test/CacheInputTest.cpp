@@ -24,6 +24,7 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/memory/tests/MmapAllocatorCompatibility.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/dwrf/common/Common.h"
@@ -61,6 +62,9 @@ class CacheTest : public ::testing::Test {
   }
 
   void SetUp() override {
+    // Every test in this fixture calls initializeCache(), which
+    // unconditionally constructs an MmapAllocator.
+    SKIP_IF_MMAP_ALLOCATOR_UNSUPPORTED();
     // executor_ = std::make_unique<folly::IOThreadPoolExecutor>(10, 10);
     rng_.seed(1);
     ioStats_ = std::make_shared<facebook::velox::IoStats>();

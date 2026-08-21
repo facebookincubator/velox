@@ -17,6 +17,7 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/memory/tests/MmapAllocatorCompatibility.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -222,6 +223,13 @@ TEST_P(MemoryCapExceededTest, allocatorCapacityExceededError) {
            ".* reservation .used .*MB, reserved .*MB, min .*B. counters",
            ".*, frees .*, reserves .*, releases .*, collisions .*"}}};
   for (const auto& testData : testSettings) {
+    if (testData.useMmap && memory::test::mmapAllocatorUnsupported()) {
+      // Unlike the other MmapAllocator-dependent tests in this file, this
+      // one exercises both useMmap settings in a single test body, so a
+      // GTEST_SKIP() (which aborts the whole test) would also throw away
+      // the still-valid useMmap=false coverage. Skip just this iteration.
+      continue;
+    }
     memory::MemoryManager::Options options;
     options.allocatorCapacity = (int64_t)testData.allocatorCapacity;
     options.useMmapAllocator = testData.useMmap;

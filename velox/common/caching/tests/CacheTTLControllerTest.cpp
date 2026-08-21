@@ -21,6 +21,7 @@
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/memory/tests/MmapAllocatorCompatibility.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::memory;
@@ -30,6 +31,8 @@ namespace facebook::velox::cache {
 class CacheTTLControllerTest : public ::testing::Test {
  protected:
   void SetUp() override {
+    // This suite unconditionally constructs an MmapAllocator.
+    SKIP_IF_MMAP_ALLOCATOR_UNSUPPORTED();
     allocator_ = std::make_shared<MmapAllocator>(
         MemoryAllocator::Options{.capacity = 1024L * 1024L});
     cache_ = AsyncDataCache::create(allocator_.get());

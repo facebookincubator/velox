@@ -19,6 +19,7 @@
 #include "velox/common/file/FileInputStream.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/memory/tests/MmapAllocatorCompatibility.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 
 #include <gtest/gtest.h>
@@ -34,6 +35,8 @@ class FileInputStreamTest : public testing::Test {
   }
 
   void SetUp() override {
+    // This suite unconditionally constructs an MmapAllocator.
+    SKIP_IF_MMAP_ALLOCATOR_UNSUPPORTED();
     constexpr uint64_t kMaxMappedMemory = 64 << 20;
     MemoryManager::Options options;
     options.useMmapAllocator = true;
