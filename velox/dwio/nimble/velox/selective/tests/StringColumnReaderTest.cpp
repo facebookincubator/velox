@@ -1257,6 +1257,246 @@ TEST_P(StringColumnReaderTest, abandonDictionaryAfterSkipWithNulls) {
       /*childIndex=*/1);
 }
 
+// Regression for T285606902: spurious NULLs after a dict->flat abandon when a
+// pushdown filter on the string column compacts the dictionary prefix.
+//
+// readWithDictionary reads the prefix with the filter suppressed, so
+// filterDictionaryIndices later compacts numValues_ down to the passing rows
+// but clears the result nulls only up to that new count. The vacated tail
+// [numValues_, prefixRowsRead) keeps the prefix's pre-compaction null bits. The
+// flat continuation then appends over that tail with addValue(), which writes
+// the value but not the null bit, and ChunkedDecoder::readWithVisitor skips
+// prepareNulls() (its resultNullsPrepared seed is true because the prefix's
+// nulls left anyNulls_ set), so nothing ever clears those bits. They surface as
+// NULLs on rows that hold a real string.
+//
+// Needs all of: dictionary preservation (creates the abandon), a filter on the
+// string column (creates the compaction tail), nulls in the dictionary prefix
+// (leaves the stale bits and sets anyNulls_), and a sibling filter making the
+// row set sparse (so resultNulls() resolves to resultNulls_, not
+// nullsInReadRange_).
+TEST_P(StringColumnReaderTest, abandonDictionaryAfterFilterCompaction) {
+  const bool stringDecoderZeroCopy = GetParam();
+  if (!stringDecoderZeroCopy) {
+    GTEST_SKIP() << "Dictionary path requires stringDecoderZeroCopy";
+  }
+
+  constexpr int kChunkRows = 400;
+  constexpr int kTotalRows = 2 * kChunkRows;
+  auto chunk1String = [](int i) -> std::optional<std::string> {
+    if (i % 7 == 0) {
+      return std::nullopt;
+    }
+    return std::vector<std::string>{"aaa", "bbb", "ccc"}[i % 3];
+  };
+  auto chunk2String = [](int i) -> std::optional<std::string> {
+    return fmt::format("bbb_unique_{:04d}", i);
+  };
+
+  std::vector<std::optional<std::string>> chunk1Data(kChunkRows);
+  std::vector<std::optional<std::string>> chunk2Data(kChunkRows);
+  for (int i = 0; i < kChunkRows; ++i) {
+    chunk1Data[i] = chunk1String(i);
+    chunk2Data[i] = chunk2String(i);
+  }
+  // Chunk 1: low cardinality with nulls -> Nullable<Dictionary>. Chunk 2: all
+  // unique -> Trivial, which is not dictionary-convertible and drives the
+  // mid-read abandon.
+  auto chunk1 = makeRowVector({
+      makeFlatVector<int64_t>(kChunkRows, [](auto i) { return i % 5; }),
+      makeNullableFlatVector<std::string>(chunk1Data),
+  });
+  auto chunk2 = makeRowVector({
+      makeFlatVector<int64_t>(
+          kChunkRows, [](auto i) { return (kChunkRows + i) % 5; }),
+      makeNullableFlatVector<std::string>(chunk2Data),
+  });
+
+  WriterOptions writerOptions;
+  writerOptions.enableChunking = true;
+  writerOptions.minStreamChunkRawSize = 0;
+  writerOptions.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        /*flushLambda=*/[](const StripeProgress&) { return false; },
+        /*chunkLambda=*/[](const StripeProgress&) { return true; });
+  };
+  auto file = test::createNimbleFile(
+      *rootPool(), {chunk1, chunk2}, writerOptions, /*flushAfterWrite=*/false);
+
+  auto readType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*readType);
+  // Sibling filter: drop every 5th row so the string column's row set is
+  // sparse.
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(0, 3, /*nullAllowed=*/false));
+  // Filter on the string column itself, accepting ["b", "c"): "bbb" from the
+  // dictionary chunk and every "bbb_unique_*" from the trivial chunk, rejecting
+  // "aaa", "ccc" and all nulls. Rejecting most of the prefix is what opens the
+  // compaction tail.
+  scanSpec->childByName("c1")->setFilter(
+      std::make_unique<common::BytesRange>(
+          "b",
+          /*lowerUnbounded=*/false,
+          /*lowerExclusive=*/false,
+          "c",
+          /*upperUnbounded=*/false,
+          /*upperExclusive=*/true,
+          /*nullAllowed=*/false));
+
+  std::vector<std::string> expectedData;
+  for (int i = 0; i < kTotalRows; ++i) {
+    if (i % 5 == 4) {
+      continue;
+    }
+    const auto value =
+        i < kChunkRows ? chunk1String(i) : chunk2String(i - kChunkRows);
+    if (!value.has_value() || *value < "b" || *value >= "c") {
+      continue;
+    }
+    expectedData.push_back(*value);
+  }
+  auto expectedStrings = makeFlatVector<std::string>(expectedData);
+
+  auto readers = makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy);
+  using E = VectorEncoding::Simple;
+  // One batch covering both chunks: the dictionary prefix is filtered and
+  // compacted, then the abandon hands off to the flat continuation.
+  validateWithEncodingChecks(
+      *expectedStrings,
+      *readers.rowReader,
+      /*batchSize=*/kTotalRows,
+      kTotalRows,
+      {E::FLAT},
+      readType,
+      pool(),
+      /*childIndex=*/1);
+}
+
+// Companion to abandonDictionaryAfterFilterCompaction, guarding the branch of
+// filterDictionaryIndices that compacts a null-free dictionary prefix. That
+// branch does not clear the tail it vacates, and the leftovers are real:
+// instrumenting this exact read shows 24 stale bits still set when the branch
+// returns, inside the range the flat continuation goes on to fill, with
+// anyNulls_ turning true afterwards so resultNulls() stops hiding the buffer.
+//
+// The output is still correct because prepareResultNulls() runs unconditionally
+// ahead of the first addNull(), and prepareNulls() clears the whole buffer.
+// This test pins that ordering: make the clear conditional and the stale bits
+// show up here as spurious nulls.
+//
+// Three chunks build the worst case: an earlier batch writes real null bits and
+// compacts them out, the next batch's dictionary prefix is null-free (so
+// nothing in filterDictionaryIndices clears the tail), and the chunk it
+// abandons into carries nulls under a null-accepting filter.
+TEST_P(StringColumnReaderTest, abandonDictionaryAfterNullFreePrefixCompaction) {
+  const bool stringDecoderZeroCopy = GetParam();
+  if (!stringDecoderZeroCopy) {
+    GTEST_SKIP() << "Dictionary path requires stringDecoderZeroCopy";
+  }
+
+  constexpr int kChunkRows = 400;
+  constexpr int kTotalRows = 3 * kChunkRows;
+  // Chunk 1: low cardinality with nulls -> Nullable<Dictionary>, so the first
+  // batch writes null bits that its filter then compacts away.
+  auto chunk1String = [](int i) -> std::optional<std::string> {
+    if (i % 7 == 0) {
+      return std::nullopt;
+    }
+    return std::vector<std::string>{"aaa", "bbb", "ccc"}[i % 3];
+  };
+  // Chunk 2: low cardinality, no nulls -> Dictionary. This is the prefix that
+  // reaches the null-free compaction branch.
+  auto chunk2String = [](int i) -> std::optional<std::string> {
+    return std::vector<std::string>{"aaa", "bbb", "ccc"}[i % 3];
+  };
+  // Chunk 3: all unique with nulls -> Nullable<Trivial>, not
+  // dictionary-convertible, so the read abandons into it and then emits nulls.
+  auto chunk3String = [](int i) -> std::optional<std::string> {
+    if (i % 5 == 0) {
+      return std::nullopt;
+    }
+    return fmt::format("bbb_unique_{:04d}", i);
+  };
+
+  auto makeChunk = [&](int chunkIndex, auto&& stringAt) {
+    std::vector<std::optional<std::string>> data(kChunkRows);
+    for (int i = 0; i < kChunkRows; ++i) {
+      data[i] = stringAt(i);
+    }
+    return makeRowVector({
+        makeFlatVector<int64_t>(
+            kChunkRows,
+            [&](auto i) { return (chunkIndex * kChunkRows + i) % 5; }),
+        makeNullableFlatVector<std::string>(data),
+    });
+  };
+  auto chunk1 = makeChunk(0, chunk1String);
+  auto chunk2 = makeChunk(1, chunk2String);
+  auto chunk3 = makeChunk(2, chunk3String);
+
+  WriterOptions writerOptions;
+  writerOptions.enableChunking = true;
+  writerOptions.minStreamChunkRawSize = 0;
+  writerOptions.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        /*flushLambda=*/[](const StripeProgress&) { return false; },
+        /*chunkLambda=*/[](const StripeProgress&) { return true; });
+  };
+  auto file = test::createNimbleFile(
+      *rootPool(),
+      {chunk1, chunk2, chunk3},
+      writerOptions,
+      /*flushAfterWrite=*/false);
+
+  auto readType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*readType);
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(0, 3, /*nullAllowed=*/false));
+  scanSpec->childByName("c1")->setFilter(
+      std::make_unique<common::BytesRange>(
+          "b",
+          /*lowerUnbounded=*/false,
+          /*lowerExclusive=*/false,
+          "c",
+          /*upperUnbounded=*/false,
+          /*upperExclusive=*/true,
+          /*nullAllowed=*/true));
+
+  // Nulls are retained so the flat continuation calls addNull() and turns
+  // anyNulls_ on -- without that, resultNulls() keeps returning an empty
+  // buffer and any leftover bits stay invisible.
+  std::vector<std::optional<std::string>> expectedData;
+  for (int i = 0; i < kTotalRows; ++i) {
+    if (i % 5 == 4) {
+      continue;
+    }
+    const auto value = i < kChunkRows ? chunk1String(i)
+        : i < 2 * kChunkRows          ? chunk2String(i - kChunkRows)
+                                      : chunk3String(i - 2 * kChunkRows);
+    if (value.has_value() && (*value < "b" || *value >= "c")) {
+      continue;
+    }
+    expectedData.push_back(value);
+  }
+  auto expectedStrings = makeNullableFlatVector<std::string>(expectedData);
+
+  auto readers = makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy);
+  using E = VectorEncoding::Simple;
+  // Batch 1 covers chunks 1-2 and stays in dictionary mode; batch 2 starts in
+  // chunk 2 (the null-free prefix) and abandons into chunk 3.
+  validateWithEncodingChecks(
+      *expectedStrings,
+      *readers.rowReader,
+      /*batchSize=*/600,
+      kTotalRows,
+      {E::DICTIONARY, E::FLAT},
+      readType,
+      pool(),
+      /*childIndex=*/1);
+}
+
 // Non-convertible ENTRY chunk with NO cross-chunk skip: a single Trivial
 // (all-unique) nullable string column read contiguously. readWithDictionary
 // abandons at entry. Isolates whether the no-skip abandon (prepareRead then
