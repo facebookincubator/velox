@@ -318,7 +318,7 @@ struct TabletChunkHeader {
   /// True when each encoding stream retains its tablet chunk header.
   bool streamHasChunkHeader{false};
   RowRange rowRange;
-  std::optional<std::string> resumeKey;
+  std::optional<std::string> resumeKey{};
 };
 
 /// Builds the kTablet chunk slice header as a freshly-allocated IOBuf.

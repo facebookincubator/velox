@@ -60,7 +60,7 @@ class MetadataInput {
     const velox::FileHandle* fileHandle{nullptr};
     velox::cache::AsyncDataCache* cache{nullptr};
     /// When set, metadata entries above this size in bytes bypass the cache.
-    std::optional<uint32_t> maxCacheEntrySize;
+    std::optional<uint32_t> maxCacheEntrySize{};
   };
 
   static std::unique_ptr<MetadataInput> create(

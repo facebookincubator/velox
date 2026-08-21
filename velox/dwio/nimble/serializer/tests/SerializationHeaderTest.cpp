@@ -115,7 +115,7 @@ struct TabletChunkHeaderRoundTripParam {
   std::string name;
   uint32_t rowCount{};
   RowRange rowRange;
-  std::optional<std::string> resumeKey;
+  std::optional<std::string> resumeKey{};
   bool requiresNullBarrier{};
   bool streamEncodingUsesVarintRowCount{};
   bool streamHasChunkHeader{};
@@ -193,7 +193,7 @@ tabletChunkHeaderRoundTripParams() {
     std::string name;
     uint32_t rowCount{};
     RowRange rowRange;
-    std::optional<std::string> resumeKey;
+    std::optional<std::string> resumeKey{};
   };
 
   const BaseCase baseCases[]{
