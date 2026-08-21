@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <boost/multiprecision/cpp_dec_float.hpp>
 #include <folly/ScopeGuard.h>
 #include <cmath>
 #include "velox/core/Expressions.h"
@@ -1646,6 +1647,95 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
   static std::vector<std::string> invalidStringToRealDoubleInputs() {
     return {"abc", "1.2a", "1.2.3", "xyz123"};
   }
+
+  template <typename T>
+  void testDecimalToFloatCasts() {
+    // short to short, scale up.
+    auto shortFlat = makeNullableFlatVector<int64_t>(
+        {DecimalUtil::kShortDecimalMin,
+         DecimalUtil::kShortDecimalMin,
+         -3,
+         0,
+         55,
+         DecimalUtil::kShortDecimalMax,
+         DecimalUtil::kShortDecimalMax,
+         std::nullopt},
+        DECIMAL(18, 18));
+    testCast(
+        shortFlat,
+        makeNullableFlatVector<T>(
+            {-1,
+             // the same DecimalUtil::kShortDecimalMin conversion, checking
+             // floating point diff works on decimals
+             -0.999999999999999999,
+             -0.000000000000000003,
+             0,
+             0.000000000000000055,
+             // the same DecimalUtil::kShortDecimalMax conversion, checking
+             // floating point diff works on decimals
+             0.999999999999999999,
+             1,
+             std::nullopt}));
+
+    auto longFlat = makeNullableFlatVector<int128_t>(
+        {DecimalUtil::kLongDecimalMin,
+         0,
+         DecimalUtil::kLongDecimalMax,
+         HugeInt::build(0xffff, 0xffffffffffffffff),
+         std::nullopt},
+        DECIMAL(38, 5));
+    testCast(
+        longFlat,
+        makeNullableFlatVector<T>(
+            {-1e33, 0, 1e33, 1.2089258196146293E19, std::nullopt}));
+
+    testCast(
+        makeNullableFlatVector<int128_t>(
+            {HugeInt::build(0, 299250000)}, DECIMAL(20, 4)),
+        makeNullableFlatVector<T>({29925.0}));
+
+    for (int scale = 0; scale <= 18; ++scale) {
+      int64_t unscaledValue = 123456789123456789l;
+      const int precision = 18;
+      auto expect = boost::multiprecision::cpp_dec_float_50(unscaledValue);
+      expect /= boost::multiprecision::cpp_dec_float_50(
+          DecimalUtil::kPowersOfTen[scale]);
+      testCast(
+          makeNullableFlatVector<int64_t>(
+              {unscaledValue}, DECIMAL(precision, scale)),
+          makeNullableFlatVector<T>({expect.convert_to<T>()}));
+    }
+
+    for (int scale = 0; scale <= 38; ++scale) {
+      int128_t unscaledValue =
+          HugeInt::parse("12345678912345678912345678912345678912");
+      const int precision = 38;
+      auto expect = boost::multiprecision::cpp_dec_float_50(unscaledValue);
+      expect /= boost::multiprecision::cpp_dec_float_50(
+          DecimalUtil::kPowersOfTen[scale]);
+      testCast(
+          makeNullableFlatVector<int128_t>(
+              {unscaledValue}, DECIMAL(precision, scale)),
+          makeNullableFlatVector<T>({expect.convert_to<T>()}));
+    }
+
+    // Small unscaled values with scales 23-38 exercise the boundary of the
+    // exact fast path: the unscaled value fits in a double, but the scale
+    // exceeds the exactly-representable powers of ten, so the cast must fall
+    // back to the general conversion instead of indexing past the power-of-ten
+    // table.
+    for (int scale = 23; scale <= 38; ++scale) {
+      int128_t unscaledValue = 1;
+      const int precision = 38;
+      auto expect = boost::multiprecision::cpp_dec_float_50(unscaledValue);
+      expect /= boost::multiprecision::cpp_dec_float_50(
+          DecimalUtil::kPowersOfTen[scale]);
+      testCast(
+          makeNullableFlatVector<int128_t>(
+              {unscaledValue}, DECIMAL(precision, scale)),
+          makeNullableFlatVector<T>({expect.convert_to<T>()}));
+    }
+  }
 };
 
 class SparkCastExprTestAnsiOn : public SparkCastExprTest {
@@ -1721,6 +1811,20 @@ TEST_F(SparkCastExprTestAnsiOn, decimalToString) {
 
 TEST_F(SparkCastExprTestAnsiOn, decimalToIntegral) {
   testDecimalToIntegral();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, decimalToFloat) {
+  SCOPE_EXIT {
+    queryCtx_->testingOverrideConfigUnsafe({});
+  };
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+       {SparkQueryConfig::qualify(
+            SparkQueryConfig::kDecimalToFloatHighPrecisionCastEnabled),
+        "true"}});
+
+  testDecimalToFloatCasts<float>();
+  testDecimalToFloatCasts<double>();
 }
 
 TEST_F(SparkCastExprTestAnsiOn, floatToTimestamp) {
@@ -2231,6 +2335,20 @@ TEST_F(SparkCastExprTestAnsiOff, bigIntToBinary) {
 
 TEST_F(SparkCastExprTestAnsiOff, decimalToIntegral) {
   testDecimalToIntegral();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, decimalToFloat) {
+  SCOPE_EXIT {
+    queryCtx_->testingOverrideConfigUnsafe({});
+  };
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"},
+       {SparkQueryConfig::qualify(
+            SparkQueryConfig::kDecimalToFloatHighPrecisionCastEnabled),
+        "true"}});
+
+  testDecimalToFloatCasts<float>();
+  testDecimalToFloatCasts<double>();
 }
 
 TEST_F(SparkCastExprTestAnsiOff, decimalToString) {
