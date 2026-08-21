@@ -4427,13 +4427,13 @@ TEST_F(WriterTest, smallMaxChunkSizeProducesMultipleChunks) {
       velox::ROW({{"c0", velox::BIGINT()}, {"c1", velox::VARCHAR()}});
 
   nimble::WriterOptions options{
+      .enableChunkIndex = true,
       .minStreamChunkRawSize = 0,
       .maxStreamChunkRawSize = 2048,
       .flushPolicyFactory = []() -> std::unique_ptr<nimble::FlushPolicy> {
         return std::make_unique<nimble::StripeRawSizeFlushPolicy>(256ULL << 20);
       },
       .enableChunking = true,
-      .enableChunkIndex = true,
   };
 
   std::string file;
