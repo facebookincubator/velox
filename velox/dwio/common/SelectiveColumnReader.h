@@ -430,7 +430,7 @@ class SelectiveColumnReader {
   /// is used at read time and is expected to produce the same result.
   bool useBulkPath() const {
     auto* filter = scanSpec_->filter();
-    return hasBulkPath() && process::hasAvx2() &&
+    return hasBulkPath() && process::hasSimd() &&
         (!filter ||
          (filter->isDeterministic() &&
           (!nullsInReadRange_ || !filter->testNull()))) &&
