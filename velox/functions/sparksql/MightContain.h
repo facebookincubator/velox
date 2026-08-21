@@ -15,9 +15,11 @@
  */
 #pragma once
 
+#include <cstring>
 #include <optional>
+#include <vector>
 
-#include "velox/common/base/BloomFilter.h"
+#include "velox/common/base/SplitBlockBloomFilter.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
 
@@ -36,22 +38,40 @@ struct BloomFilterMightContainFunction {
       return;
     }
 
-    VELOX_USER_CHECK_GE(
-        serialized->size(),
-        BloomFilterView::kSerializedHeaderSize,
-        "Serialized BloomFilter is too small: {}",
+    VELOX_USER_CHECK_GT(
+        serialized->size(), 0, "Serialized split-block Bloom filter is empty");
+    VELOX_USER_CHECK_EQ(
+        serialized->size() % sizeof(SplitBlockBloomFilter::Block),
+        0,
+        "Invalid serialized split-block Bloom filter size: {}",
         serialized->size());
-    bloomFilterView_.emplace(serialized->data());
+    using Block = SplitBlockBloomFilter::Block;
+    const auto numBlocks =
+        static_cast<int32_t>(serialized->size() / sizeof(Block));
+    const auto* serializedBlocks = serialized->data();
+    Block* blocks;
+    if (reinterpret_cast<uintptr_t>(serializedBlocks) % alignof(Block) == 0) {
+      // Reuse aligned serialized blocks without copying.
+      blocks = reinterpret_cast<Block*>(const_cast<char*>(serializedBlocks));
+    } else {
+      // Copy unaligned serialized blocks into aligned storage.
+      ownedBlocks_.resize(numBlocks);
+      std::memcpy(
+          ownedBlocks_.data(), serializedBlocks, numBlocks * sizeof(Block));
+      blocks = ownedBlocks_.data();
+    }
+    bloomFilter_.emplace(std::span<Block>(blocks, numBlocks));
   }
 
   FOLLY_ALWAYS_INLINE void
   call(bool& result, const arg_type<Varbinary>&, const int64_t& input) {
-    result = bloomFilterView_.has_value() &&
-        bloomFilterView_->mayContain(folly::hasher<int64_t>()(input));
+    result = bloomFilter_.has_value() &&
+        bloomFilter_->mayContain(folly::hasher<int64_t>()(input));
   }
 
  private:
-  std::optional<BloomFilterView> bloomFilterView_;
+  std::vector<SplitBlockBloomFilter::Block> ownedBlocks_;
+  std::optional<SplitBlockBloomFilter> bloomFilter_;
 };
 
 } // namespace facebook::velox::functions::sparksql
