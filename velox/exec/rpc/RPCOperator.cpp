@@ -107,7 +107,10 @@ void RPCOperator::initialize() {
   // Initialize the function with query config, argument types, and constants.
   // The function creates/caches its own transport and clients internally.
   function_->initialize(
-      operatorCtx_->driverCtx()->queryConfig(), inputTypes, constantInputs);
+      operatorCtx_->driverCtx()->queryConfig(),
+      inputTypes,
+      constantInputs,
+      rpcNode_->streamingMode());
 
   tierKey_ = function_->tierKey();
 

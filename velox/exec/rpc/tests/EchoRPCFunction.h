@@ -52,7 +52,8 @@ class EchoAsyncRPCFunction : public AsyncRPCFunction {
   void initialize(
       const core::QueryConfig& queryConfig,
       const std::vector<TypePtr>& inputTypes,
-      const std::vector<VectorPtr>& constantInputs) override;
+      const std::vector<VectorPtr>& constantInputs,
+      velox::rpc::RPCStreamingMode /*mode*/) override;
 
   std::string name() const override {
     return "echo_rpc";
@@ -60,6 +61,11 @@ class EchoAsyncRPCFunction : public AsyncRPCFunction {
 
   TypePtr resultType() const override {
     return VARCHAR();
+  }
+
+  /// Per-row only; no batch path.
+  RpcCapability capabilities() const override {
+    return {};
   }
 
   /// Dispatch one simulated RPC per active row. Null-input rows short-circuit

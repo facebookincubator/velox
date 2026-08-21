@@ -78,7 +78,8 @@ class BurstRPCFunction : public AsyncRPCFunction {
   void initialize(
       const core::QueryConfig& /*queryConfig*/,
       const std::vector<TypePtr>& /*inputTypes*/,
-      const std::vector<VectorPtr>& /*constantInputs*/) override {
+      const std::vector<VectorPtr>& /*constantInputs*/,
+      velox::rpc::RPCStreamingMode /*mode*/) override {
     // Call ordinals are what pin the burst to rows [kWarmupRows,
     // kWarmupRows + kBurstRows). A second initialize() would install a fresh
     // client whose ordinals restart at 0 and silently move the burst, so
@@ -96,6 +97,11 @@ class BurstRPCFunction : public AsyncRPCFunction {
 
   TypePtr resultType() const override {
     return VARCHAR();
+  }
+
+  /// Per-row only; the AIMD-under-load test drives the per-row dispatch path.
+  RpcCapability capabilities() const override {
+    return {};
   }
 
   std::string tierKey() const override {

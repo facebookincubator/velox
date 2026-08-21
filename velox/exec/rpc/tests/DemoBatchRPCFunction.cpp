@@ -48,7 +48,8 @@ VectorPtr DemoBatchRPCFunction::buildOutput(
 void DemoBatchRPCFunction::initialize(
     const core::QueryConfig& /*queryConfig*/,
     const std::vector<TypePtr>& /*inputTypes*/,
-    const std::vector<VectorPtr>& /*constantInputs*/) {}
+    const std::vector<VectorPtr>& /*constantInputs*/,
+    velox::rpc::RPCStreamingMode /*mode*/) {}
 
 std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
 DemoBatchRPCFunction::dispatchPerRow(

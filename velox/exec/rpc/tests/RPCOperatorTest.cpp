@@ -547,7 +547,8 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
   void initialize(
       const core::QueryConfig&,
       const std::vector<TypePtr>&,
-      const std::vector<VectorPtr>&) override {}
+      const std::vector<VectorPtr>&,
+      velox::rpc::RPCStreamingMode) override {}
 
   std::string name() const override {
     return "slow_batch_rpc";
@@ -555,6 +556,10 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
 
   TypePtr resultType() const override {
     return VARCHAR();
+  }
+
+  RpcCapability capabilities() const override {
+    return {.supportsBatch = true};
   }
 
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>

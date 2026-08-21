@@ -43,7 +43,8 @@ class EchoRPCFunctionTest : public testing::Test {
     pool_ = memory::memoryManager()->addLeafPool();
 
     // Follow the lifecycle: initialize() before any dispatch.
-    function_->initialize(core::QueryConfig{{}}, {}, {});
+    function_->initialize(
+        core::QueryConfig{{}}, {}, {}, velox::rpc::RPCStreamingMode::kPerRow);
   }
 
   std::shared_ptr<EchoAsyncRPCFunction> function_;

@@ -21,7 +21,8 @@ namespace facebook::velox::exec::rpc {
 void EchoAsyncRPCFunction::initialize(
     const core::QueryConfig& /*queryConfig*/,
     const std::vector<TypePtr>& /*inputTypes*/,
-    const std::vector<VectorPtr>& /*constantInputs*/) {
+    const std::vector<VectorPtr>& /*constantInputs*/,
+    velox::rpc::RPCStreamingMode /*mode*/) {
   simulator_ = std::make_shared<test::ResponseSimulator>(
       std::chrono::milliseconds(1), 0.0);
 }

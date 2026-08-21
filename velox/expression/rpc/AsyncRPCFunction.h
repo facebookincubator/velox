@@ -38,6 +38,23 @@ using velox::rpc::RPCResponse;
 using velox::rpc::RPCResponsePayload;
 using velox::rpc::RPCStreamingMode;
 
+/// Which execution modes are meaningful for a function on its resolved
+/// backend, and what each one means.
+///
+/// This is policy, not limits: how much fits in one call is transportBounds().
+/// Per-row is always available, so the only question is whether a multi-row
+/// call exists and what its latency represents.
+struct RpcCapability {
+  /// A multi-row call exists: accumulateBatch() followed by flushBatch().
+  bool supportsBatch{false};
+
+  /// The batch path is an offline job -- submit, poll, fetch. Its latency is
+  /// queue and GPU time rather than a round trip, so it says nothing about
+  /// backend load and a planner should weigh it differently from a native
+  /// batch.
+  bool batchIsAsyncJob{false};
+};
+
 /// Read a response's payload as the concrete type the function produced.
 ///
 /// The cast is unchecked in release builds: a function only ever reads back
@@ -133,10 +150,15 @@ class AsyncRPCFunction {
   /// @param constantInputs Constant values aligned with inputTypes.
   ///        Non-constant arguments are nullptr. Constant arguments are
   ///        single-element ConstantVectors.
+  /// @param mode The execution mode the operator resolved for this query.
+  ///        Fixed for the operator's lifetime. A function that dispatches
+  ///        differently per mode -- a different transport, say -- sets that up
+  ///        here rather than inferring it later from which method is called.
   virtual void initialize(
       const core::QueryConfig& /*queryConfig*/,
       const std::vector<TypePtr>& /*inputTypes*/,
-      const std::vector<VectorPtr>& /*constantInputs*/) {}
+      const std::vector<VectorPtr>& /*constantInputs*/,
+      RPCStreamingMode /*mode*/) {}
 
   /// Return the name of this RPC function.
   virtual std::string name() const = 0;
@@ -149,6 +171,12 @@ class AsyncRPCFunction {
   virtual std::string tierKey() const {
     return "";
   }
+
+  /// Which execution modes are meaningful on this function's resolved
+  /// backend. A function whose backend is not yet pinned reports per-row only:
+  /// advertising a batch mode the resolved backend may not have would let a
+  /// caller size a batch the transport cannot send.
+  virtual RpcCapability capabilities() const = 0;
 
   // ── PER_ROW mode ──────────────────────────────────────────────
 
