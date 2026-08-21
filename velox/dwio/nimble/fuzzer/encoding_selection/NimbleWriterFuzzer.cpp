@@ -65,6 +65,11 @@ using ::facebook::velox::TypePtr;
 using ::facebook::velox::VectorPtr;
 using ::facebook::velox::fuzzer::FuzzerGenerator;
 
+// Writable encodings that this fuzzer target intentionally does not force.
+// This is not a global unsupported-encoding list.
+constexpr auto kExcludedFuzzerCandidateEncodings =
+    std::to_array({EncodingType::SubIntSplit});
+
 // Scalar types the Nimble writer round-trips with type identity.
 // FieldWriter::create dispatches on the physical TypeKind, so DATE, TIME,
 // INTERVAL and short DECIMAL write fine but read back as INTEGER/BIGINT, which
@@ -141,7 +146,6 @@ bool isNumericCompatible(EncodingType encodingType) {
       return true;
     // Gated on isIntegralType<physicalType>(), which holds for float and
     // double as well since their physical types are uint32_t and uint64_t.
-    case EncodingType::PFOR:
     case EncodingType::SimdForBitpack:
     case EncodingType::Huffman:
       return true;
@@ -730,23 +734,16 @@ std::string_view toString(ReaderPath readerPath) {
 }
 
 std::vector<EncodingType> allCandidateEncodings() {
-  return {
-      EncodingType::Constant,
-      EncodingType::Trivial,
-      EncodingType::FixedBitWidth,
-      EncodingType::MainlyConstant,
-      EncodingType::SparseBool,
-      EncodingType::Dictionary,
-      EncodingType::RLE,
-      EncodingType::Varint,
-      EncodingType::ALP,
-      EncodingType::BlockBitPacking,
-      EncodingType::Fsst,
-      EncodingType::DeltaBlock,
-      EncodingType::PFOR,
-      EncodingType::SimdForBitpack,
-      EncodingType::Huffman,
-  };
+  // The fuzzer's repair phase forces each candidate through
+  // `nimble.encoding_selection_config` using the `encodings:` key. Keep this
+  // list derived from the same writable-encoding source as that parser, so
+  // deprecating an encoding for new writes does not leave the fuzzer forcing a
+  // config string production code now rejects.
+  auto encodings = ManualEncodingSelectionPolicyFactory::possibleEncodings();
+  for (const auto encodingType : kExcludedFuzzerCandidateEncodings) {
+    std::erase(encodings, encodingType);
+  }
+  return encodings;
 }
 
 bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
@@ -760,8 +757,8 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
     return isStringCompatible(encodingType);
   }
 
-  // Gated on isFloatingPointType<T>() / isIntegralType<T>(), which unlike the
-  // PFOR family test the logical type, so these two split cleanly.
+  // Gated on isFloatingPointType<T>() / isIntegralType<T>(), which test the
+  // logical type, so these two split cleanly.
   if (encodingType == EncodingType::ALP) {
     return isFloatingPointDataType(dataType);
   }
@@ -779,7 +776,6 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
 
 bool isIntegralOnlyEncoding(EncodingType encodingType) {
   return encodingType == EncodingType::DeltaBlock ||
-      encodingType == EncodingType::PFOR ||
       encodingType == EncodingType::SimdForBitpack ||
       encodingType == EncodingType::Huffman;
 }
@@ -830,9 +826,9 @@ std::string NimbleWriterFuzzer::writeFile(
       selectionConfig);
   EncodingSelectionPolicyCreator policyCreator = std::move(*parsedCreator);
 
-  // The write-side gate admits floating point directly for PFOR, SimdForBitpack
-  // and Huffman. A Nullable float's nested policy can also admit DeltaBlock
-  // after the logical type becomes its Uint32/Uint64 physical type.
+  // The write-side gate admits floating point directly for SimdForBitpack and
+  // Huffman. A Nullable float's nested policy can also admit DeltaBlock after
+  // the logical type becomes its Uint32/Uint64 physical type.
   writerOptions.encodingSelectionPolicyCreator = encodingType.has_value()
       ? gateFloatingPointStreams(
             std::move(policyCreator),
@@ -1414,7 +1410,7 @@ void NimbleWriterFuzzer::logPairCoverage() const {
     std::vector<std::string> unapplied;
     std::vector<std::string> incompatible;
     for (const auto encodingType : allCandidateEncodings()) {
-      // The integral-only four are withheld from floating point on purpose
+      // Integral-only encodings are withheld from floating point on purpose
       // (T283330065), so for those streams they are unusable rather than
       // merely unapplied.
       if (!isTypeCompatible(encodingType, dataType) ||

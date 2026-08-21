@@ -127,25 +127,26 @@ enum class WriteOutcome {
   kNotApplied,
 };
 
-/// Every encoding the fuzzer requests. All of them are accepted by the
-/// 'encodings:' key of nimble.encoding_selection_config, which validates
-/// against ManualEncodingSelectionPolicyFactory::possibleEncodings().
+/// Writable encodings the fuzzer requests. The list is derived from
+/// ManualEncodingSelectionPolicyFactory::possibleEncodings(), which is also the
+/// source of truth for the 'encodings:' key of
+/// nimble.encoding_selection_config.
 std::vector<EncodingType> allCandidateEncodings();
 
 /// Number of unfiltered random-policy files written before coverage repair.
 inline constexpr uint32_t kNumUnfilteredRounds = 10;
 
 /// Whether an encoding may only be requested for a stream that is not REAL or
-/// DOUBLE. PFOR, SimdForBitpack and Huffman can be selected for a
-/// floating-point stream because their write-side gate tests physicalType
-/// (uint32_t/uint64_t, hence integral). DeltaBlock's direct gate tests the
-/// logical type, but a Nullable float's nested policy sees the physical type
-/// and can select it there. Every read-side gate rejects all four for float and
-/// double, producing a file no selective reader can decode. See T283330065.
+/// DOUBLE. SimdForBitpack and Huffman can be selected for a floating-point
+/// stream because their write-side gate tests physicalType (uint32_t/uint64_t,
+/// hence integral). DeltaBlock's direct gate tests the logical type, but a
+/// Nullable float's nested policy sees the physical type and can select it
+/// there. Every read-side gate rejects all three for float and double,
+/// producing a file no selective reader can decode. See T283330065.
 ///
 /// The restriction is per stream, not per schema: a schema holding one REAL
-/// column alongside integer columns still exercises these four on the integer
-/// columns.
+/// column alongside integer columns still exercises these encodings on the
+/// integer columns.
 bool isIntegralOnlyEncoding(EncodingType encodingType);
 
 /// Whether EncodingSizeEstimation's *type* gate admits 'encodingType' for a
@@ -159,12 +160,12 @@ bool isIntegralOnlyEncoding(EncodingType encodingType);
 /// recovers it by mirroring the `if constexpr` gates and the
 /// numeric/bool/string dispatch in EncodingSizeEstimation.
 ///
-/// It mirrors the *write* side only: PFOR, SimdForBitpack and Huffman are
-/// reported compatible with Float and Double because that is what the
-/// write-side gate does -- it tests physicalType, which is integral for floats
-/// -- even though no reader can decode the result (T283330065). Callers that
-/// also care about readability must exclude those separately. Nothing pins
-/// this mirror to EncodingSizeEstimation; it has drifted once (T283801877).
+/// It mirrors the *write* side only: SimdForBitpack and Huffman are reported
+/// compatible with Float and Double because that is what the write-side gate
+/// does -- it tests physicalType, which is integral for floats -- even though
+/// no reader can decode the result (T283330065). Callers that also care about
+/// readability must exclude those separately. Nothing pins this mirror to
+/// EncodingSizeEstimation; it has drifted once (T283801877).
 bool isTypeCompatible(EncodingType encodingType, DataType dataType);
 
 /// Knobs for a fuzzer run. Everything else is derived from the seed so a

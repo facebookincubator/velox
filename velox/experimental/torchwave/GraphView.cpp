@@ -123,6 +123,9 @@ void printGraphView(
       WaveConfig::get().elideClones) {
     elideReadOnlyClones(graph, waveGraphHolder->types());
   }
+  if (waveGraphHolder && WaveConfig::get().duplicateMetadata) {
+    duplicateMetadataOps(graph, waveGraphHolder->types(), *waveGraphHolder);
+  }
   std::cout << "\nProject Nodes:\n";
   torch::wave::ParallelNodes parallelNodes;
   auto* lastProjectNode = parallelNodes.makeParallelNodes(graph);

@@ -391,11 +391,36 @@ EncodingLayoutTree remapEncodingLayoutTree(
       std::move(children)};
 }
 
+void validateEncodingLayout(const EncodingLayout& layout) {
+  NIMBLE_USER_CHECK(
+      !isReadOnlyEncoding(layout.encodingType()),
+      "Encoding is read-only and cannot be used for new writes: {}",
+      layout.encodingType());
+  for (uint32_t index = 0; index < layout.childrenCount(); ++index) {
+    const auto& child = layout.child(index);
+    if (child.has_value()) {
+      validateEncodingLayout(child.value());
+    }
+  }
+}
+
+void validateEncodingLayoutTree(const EncodingLayoutTree& tree) {
+  for (const auto identifier : tree.encodingLayoutIdentifiers()) {
+    validateEncodingLayout(*tree.encodingLayout(identifier));
+  }
+  for (uint32_t index = 0; index < tree.childrenCount(); ++index) {
+    validateEncodingLayoutTree(tree.child(index));
+  }
+}
+
 WriterOptions storedWriterOptions(
     const velox::TypePtr& inputType,
     const velox::TypePtr& storedType,
     const std::vector<velox::column_index_t>& storedInputColumnIndices,
     WriterOptions options) {
+  if (options.encodingLayoutTree.has_value()) {
+    validateEncodingLayoutTree(options.encodingLayoutTree.value());
+  }
   if (!omitClusterIndexKeyColumnStorage(options)) {
     return options;
   }

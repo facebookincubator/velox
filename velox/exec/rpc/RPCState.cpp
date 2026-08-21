@@ -125,6 +125,16 @@ std::vector<VectorPtr> RPCState::getInputBatchColumns(
   return inputBatches_[batchIndex].flatColumns;
 }
 
+void RPCState::releaseAllInputBatches() {
+  std::lock_guard<std::mutex> l(mutex_);
+  for (auto& batch : inputBatches_) {
+    batch.flatColumns.clear();
+    batch.activeRowCount = 0;
+  }
+  RPC_STATE_VLOG(1) << "releaseAllInputBatches: dropped "
+                    << inputBatches_.size() << " input batches";
+}
+
 void RPCState::releaseRows(int32_t batchIndex, int64_t count) {
   std::lock_guard<std::mutex> l(mutex_);
   VELOX_CHECK_LT(
