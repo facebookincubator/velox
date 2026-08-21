@@ -60,7 +60,7 @@ namespace facebook::velox::exec::rpc {
 ///      RPCNode → RPCOperator → AsyncRPCFunction.
 ///
 /// Usage (in function's .cpp file):
-///   // For a complete example, see velox/exec/rpc/tests/DemoRPCFunction*.
+///   // For a complete example, see velox/exec/rpc/tests/EchoRPCFunction*.
 ///
 ///   #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 ///   VELOX_REGISTER_RPC_FUNCTION(my_function, MyAsyncRPCFunction);

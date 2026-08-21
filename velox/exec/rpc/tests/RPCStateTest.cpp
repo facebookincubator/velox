@@ -42,6 +42,7 @@
 /// - drainReadyRows: Batched drain of multiple ready rows
 
 #include "velox/exec/rpc/RPCState.h"
+#include "velox/expression/rpc/AsyncRPCFunction.h"
 
 #include <folly/futures/Promise.h>
 #include <folly/synchronization/CallOnce.h>
@@ -94,7 +95,7 @@ TEST_F(RPCStateTest, basicAddAndClaim) {
   // Fulfill the promise
   RPCResponse response;
   response.rowId = 42;
-  response.result = "test result";
+  response.payload = makeTextPayload("test result");
   promise.setValue(std::move(response));
 
   // Wait for async callback to move response into readyRows_
@@ -108,7 +109,7 @@ TEST_F(RPCStateTest, basicAddAndClaim) {
   ASSERT_EQ(result, RPCState::ClaimResult::kClaimed);
   ASSERT_TRUE(claimedRow.has_value());
   EXPECT_EQ(claimedRow->rowId, 42);
-  EXPECT_EQ(claimedRow->response.result, "test result");
+  EXPECT_EQ(responseAs<TextPayload>(claimedRow->response).text, "test result");
 }
 
 TEST_F(RPCStateTest, addAndClaimDirect) {
@@ -122,7 +123,7 @@ TEST_F(RPCStateTest, addAndClaimDirect) {
   // Fulfill the promise
   RPCResponse response;
   response.rowId = 42;
-  response.result = "test result";
+  response.payload = makeTextPayload("test result");
   promise.setValue(std::move(response));
 
   // Wait for async callback to move response into readyRows_
@@ -136,7 +137,7 @@ TEST_F(RPCStateTest, addAndClaimDirect) {
   ASSERT_EQ(result, RPCState::ClaimResult::kClaimed);
   ASSERT_TRUE(claimedRow.has_value());
   EXPECT_EQ(claimedRow->rowId, 42);
-  EXPECT_EQ(claimedRow->response.result, "test result");
+  EXPECT_EQ(responseAs<TextPayload>(claimedRow->response).text, "test result");
   EXPECT_FALSE(claimedRow->response.hasError());
 }
 
@@ -172,7 +173,7 @@ TEST_F(RPCStateTest, claimOrWaitMustWait) {
   // Fulfill to clean up
   RPCResponse response;
   response.rowId = 1;
-  response.result = "done";
+  response.payload = makeTextPayload("done");
   promise.setValue(std::move(response));
 }
 
@@ -195,7 +196,7 @@ TEST_F(RPCStateTest, pendingRowCount) {
   // Fulfill first
   RPCResponse r1;
   r1.rowId = 1;
-  r1.result = "r1";
+  r1.payload = makeTextPayload("r1");
   promise1.setValue(std::move(r1));
 
   waitFor([&]() { return state_->numInFlight() == 1; });
@@ -204,7 +205,7 @@ TEST_F(RPCStateTest, pendingRowCount) {
   // Fulfill second
   RPCResponse r2;
   r2.rowId = 2;
-  r2.result = "r2";
+  r2.payload = makeTextPayload("r2");
   promise2.setValue(std::move(r2));
 
   waitFor([&]() { return state_->numInFlight() == 0; });
@@ -225,7 +226,7 @@ TEST_F(RPCStateTest, basicAddAndPollBatch) {
   std::vector<RPCResponse> responses;
   RPCResponse batchResponse;
   batchResponse.rowId = 1;
-  batchResponse.result = "test";
+  batchResponse.payload = makeTextPayload("test");
   responses.push_back(std::move(batchResponse));
   promise.setValue(std::move(responses));
 
@@ -326,7 +327,7 @@ TEST_F(RPCStateTest, isFinishedWithPendingRows) {
   // Fulfill and claim
   RPCResponse response;
   response.rowId = 1;
-  response.result = "done";
+  response.payload = makeTextPayload("done");
   promise.setValue(std::move(response));
 
   waitFor([&]() { return state_->numInFlight() == 0; });
@@ -424,7 +425,7 @@ TEST_F(RPCStateTest, batchRowLocationsCarriedThrough) {
   for (int i = 0; i < 3; ++i) {
     RPCResponse r;
     r.rowId = i;
-    r.result = "result_" + std::to_string(i);
+    r.payload = makeTextPayload("result_" + std::to_string(i));
     responses.push_back(std::move(r));
   }
   promise.setValue(std::move(responses));
@@ -468,7 +469,7 @@ TEST_F(RPCStateTest, drainReadyRows) {
   for (int i = 0; i < 3; ++i) {
     RPCResponse response;
     response.rowId = i;
-    response.result = "result_" + std::to_string(i);
+    response.payload = makeTextPayload("result_" + std::to_string(i));
     promises[i].setValue(std::move(response));
   }
 
@@ -513,7 +514,7 @@ TEST_F(RPCStateTest, backpressure) {
   // Fulfill one to relieve backpressure
   RPCResponse r1;
   r1.rowId = 1;
-  r1.result = "r1";
+  r1.payload = makeTextPayload("r1");
   promise1.setValue(std::move(r1));
 
   waitFor([&]() { return !state_->isUnderBackpressure(); });
@@ -522,7 +523,7 @@ TEST_F(RPCStateTest, backpressure) {
   // Clean up
   RPCResponse r2;
   r2.rowId = 2;
-  r2.result = "r2";
+  r2.payload = makeTextPayload("r2");
   promise2.setValue(std::move(r2));
 }
 
@@ -574,7 +575,7 @@ TEST_F(RPCStateTest, perRowWindowShrinksOnOverload) {
   for (int i = 0; i < 4; ++i) {
     RPCResponse response;
     response.rowId = i;
-    response.result = "x";
+    response.payload = makeTextPayload("x");
     promises[i].setValue(std::move(response));
   }
 }
@@ -609,7 +610,7 @@ TEST_F(RPCStateTest, perRowWindowRecoversViaSamples) {
   for (int i = 0; i < 4; ++i) {
     RPCResponse response;
     response.rowId = i;
-    response.result = "x";
+    response.payload = makeTextPayload("x");
     promises[i].setValue(std::move(response));
   }
 }
@@ -757,7 +758,7 @@ TEST_F(RPCStateTest, batchRttExcludesPollDelay) {
 
   // Complete immediately (dispatch->completion is ~microseconds here).
   std::vector<RPCResponse> responses(1);
-  responses[0].result = "ok";
+  responses[0].payload = makeTextPayload("ok");
   promise.setValue(std::move(responses));
 
   // Simulate a long poll delay AFTER completion; this is excluded from rttNs.
