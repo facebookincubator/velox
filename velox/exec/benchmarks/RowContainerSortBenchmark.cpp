@@ -61,7 +61,10 @@ facebook::velox::parquet::ParquetReader createReader(
       opts);
 }
 
-std::vector<std::optional<StringView>> getDataFromFile() {
+// Returns the merged strings read from the sample file. The strings are
+// returned by value because a StringView does not own its characters, so the
+// caller has to keep them alive for as long as it uses the views built below.
+std::vector<std::string> getDataFromFile() {
   const std::string sample(getExampleFilePath("str_sort.parquet"));
   auto rowType = ROW({"query_sig", "result_sig"}, {VARCHAR(), VARCHAR()});
   auto pool = memory::memoryManager()->addLeafPool();
@@ -78,17 +81,19 @@ std::vector<std::optional<StringView>> getDataFromFile() {
   auto rowReader = reader.createRowReader(rowReaderOpts);
   auto data = BaseVector::create(rowType, 50000, pool.get());
   rowReader->next(50000, data);
-  auto querySigCol =
-      data->as<RowVector>()->childAt(0)->asFlatVector<StringView>();
-  auto resSigCol =
-      data->as<RowVector>()->childAt(1)->asFlatVector<StringView>();
-  std::vector<std::optional<StringView>> stdVector(querySigCol->size());
-  for (int i = 0; i < querySigCol->size(); i++) {
-    auto merge =
-        querySigCol->valueAt(i).getString() + resSigCol->valueAt(i).getString();
-    stdVector[i] = StringView(merge);
+  // The columns are not necessarily flat, so decode them instead of assuming
+  // an encoding. asFlatVector() returns null for a dictionary encoded column.
+  auto* rowVector = data->as<RowVector>();
+  SelectivityVector rows(rowVector->size());
+  DecodedVector querySigCol(*rowVector->childAt(0), rows);
+  DecodedVector resSigCol(*rowVector->childAt(1), rows);
+
+  std::vector<std::string> merged(rowVector->size());
+  for (auto i = 0; i < rowVector->size(); ++i) {
+    merged[i] = querySigCol.valueAt<StringView>(i).getString() +
+        resSigCol.valueAt<StringView>(i).getString();
   }
-  return stdVector;
+  return merged;
 }
 
 std::vector<char*> store(
@@ -173,7 +178,12 @@ void BM_STR_stdSort(uint32_t iterations) {
   folly::BenchmarkSuspender suspender;
   auto pool = memory::memoryManager()->addLeafPool();
   VectorMaker vectorMaker(pool.get());
-  auto data = getDataFromFile();
+  const auto strings = getDataFromFile();
+  std::vector<std::optional<StringView>> data;
+  data.reserve(strings.size());
+  for (const auto& value : strings) {
+    data.push_back(StringView(value));
+  }
   auto vector =
       vectorMaker.encodedVector<StringView>(VectorEncoding::Simple::FLAT, data);
   DecodedVector decoded(*vector);
@@ -198,7 +208,12 @@ void BM_STR_timSort(uint32_t iterations) {
   folly::BenchmarkSuspender suspender;
   auto pool = memory::memoryManager()->addLeafPool();
   VectorMaker vectorMaker(pool.get());
-  auto data = getDataFromFile();
+  const auto strings = getDataFromFile();
+  std::vector<std::optional<StringView>> data;
+  data.reserve(strings.size());
+  for (const auto& value : strings) {
+    data.push_back(StringView(value));
+  }
   auto vector =
       vectorMaker.encodedVector<StringView>(VectorEncoding::Simple::FLAT, data);
   DecodedVector decoded(*vector);
