@@ -76,6 +76,66 @@ enum class RPCErrorKind {
   kInvalidRequest,
 };
 
+/// A dispatch strategy a backend/model can execute.
+enum class RpcCapabilityMode {
+  /// One RPC per row (synchronous). Every backend supports this.
+  kPerRow = 0,
+  /// Native multi-input batch RPC (synchronous): one request carries many rows
+  /// and returns one response.
+  kNativeBatch = 1,
+  /// Asynchronous offline job: submit -> poll -> fetch. Latency is queue/GPU
+  /// time, not congestion, so the operator bypasses the RTT window for it.
+  kAsyncJob = 2,
+  /// Number of dispatch modes; keep last. Bounds the RpcCapabilityModeSet
+  /// width.
+  kNumModes,
+};
+
+/// A set of RpcCapabilityMode values; kPerRow is always present.
+class RpcCapabilityModeSet {
+  static_assert(
+      static_cast<int>(RpcCapabilityMode::kNumModes) <= 32,
+      "RpcCapabilityMode outgrew the 32-bit set; widen bits_");
+
+ public:
+  constexpr RpcCapabilityModeSet() {
+    add(RpcCapabilityMode::kPerRow);
+  }
+  /* implicit */ constexpr RpcCapabilityModeSet(
+      std::initializer_list<RpcCapabilityMode> modes) {
+    add(RpcCapabilityMode::kPerRow);
+    for (auto mode : modes) {
+      add(mode);
+    }
+  }
+
+  constexpr void add(RpcCapabilityMode mode) {
+    bits_ |= bit(mode);
+  }
+  constexpr bool has(RpcCapabilityMode mode) const {
+    return (bits_ & bit(mode)) != 0;
+  }
+
+ private:
+  static constexpr uint32_t bit(RpcCapabilityMode mode) {
+    return 1u << static_cast<int>(mode);
+  }
+  uint32_t bits_{0};
+};
+
+/// What dispatch strategies a (backend, model) supports. kPerRow is always
+/// supported. Request-size bounds are deliberately not stored here: they are a
+/// property of the transport, not of the mode set, and are read per flush from
+/// AsyncRPCFunction::transportBounds().
+struct RpcCapability {
+  /// Dispatch modes this (backend, model) supports; kPerRow is always included.
+  RpcCapabilityModeSet supportedModes;
+
+  bool hasMode(RpcCapabilityMode mode) const {
+    return supportedModes.has(mode);
+  }
+};
+
 /// Function-owned payload of a response. The framework moves it from the
 /// transport to the owning function's buildOutput() and never inspects it, so
 /// each function defines its own concrete type and casts back on the way out.
