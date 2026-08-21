@@ -1593,6 +1593,27 @@ TEST_P(PrestoSerializerTest, opaqueBatchVectorSerializer) {
   assertEqualVectors(inputRowVector, deserialized);
 }
 
+TEST_P(PrestoSerializerTest, opaqueNestedInRowBatchVectorSerializer) {
+  OpaqueType::registerSerialization<Foo>(
+      "Foo", Foo::serialize, Foo::deserialize);
+  auto opaqueVector = makeFlatVector<std::shared_ptr<void>>(
+      3,
+      [](vector_size_t row) { return Foo::create(row + 10); },
+      [](vector_size_t row) { return row == 1; },
+      OPAQUE<Foo>());
+  // Nesting the opaque column inside an inner row makes deserialization run the
+  // struct-nulls pass, which dispatches through a reader table separate from
+  // the one used to read values.
+  auto inputRowVector = makeRowVector({makeRowVector({opaqueVector})});
+
+  std::ostringstream out;
+  serializeBatch(inputRowVector, &out, nullptr);
+
+  auto rowType = asRowType(inputRowVector->type());
+  auto deserialized = deserialize(rowType, out.str(), nullptr);
+  assertEqualVectors(inputRowVector, deserialized);
+}
+
 TEST_P(PrestoSerializerTest, opaqueInteractiveVectorSerializer) {
   OpaqueType::registerSerialization<Foo>(
       "Foo", Foo::serialize, Foo::deserialize);
