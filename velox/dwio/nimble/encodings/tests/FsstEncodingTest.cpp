@@ -17,6 +17,7 @@
 
 #include <fmt/core.h>
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <limits>
 #include <random>
 
@@ -120,6 +121,39 @@ class FsstEncodingTest : public ::testing::Test {
     for (size_t i = 0; i < values.size(); ++i) {
       EXPECT_EQ(decoded[i], values[i]) << "mismatch at row " << i;
     }
+  }
+
+  void expectMalformedHeaderFromAllApis(
+      std::string_view malformed,
+      const char* expectedMessage) {
+    const auto expectMalformed = [&](const char* api, auto&& operation) {
+      SCOPED_TRACE(api);
+      try {
+        operation();
+        ADD_FAILURE() << "Expected malformed FSST header to be rejected";
+      } catch (const NimbleException& exception) {
+        EXPECT_NE(
+            exception.errorMessage().find(expectedMessage), std::string::npos)
+            << "Expected error message to contain '" << expectedMessage
+            << "', but received '" << exception.errorMessage() << "'.";
+      }
+    };
+
+    expectMalformed("lengthsEncoding", [&] {
+      static_cast<void>(FsstEncoding::lengthsEncoding(malformed));
+    });
+    expectMalformed("constructor", [&] {
+      static_cast<void>(EncodingFactory({}).create(
+          *pool_, malformed, createStringBufferFactory()));
+    });
+    expectMalformed("slice", [&] {
+      Buffer sliceBuffer{*pool_};
+      static_cast<void>(FsstEncoding::slice(
+          malformed,
+          /*offset=*/0,
+          /*length=*/1,
+          sliceBuffer));
+    });
   }
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;
@@ -330,6 +364,195 @@ TEST_F(FsstEncodingTest, capturesLengthsLayoutWithVarintHeaderSizes) {
   EXPECT_EQ(
       captured.child(EncodingIdentifiers::Fsst::Lengths)->encodingType(),
       EncodingType::Trivial);
+}
+
+TEST_F(FsstEncodingTest, rejectsTruncatedHeadersBeforeExternalConsumers) {
+  std::vector<std::string> storage;
+  storage.reserve(256);
+  for (uint32_t i = 0; i < 256; ++i) {
+    storage.emplace_back(fmt::format("common/fsst/header/value/{:04}", i));
+  }
+  std::vector<std::string_view> values;
+  values.reserve(storage.size());
+  for (const auto& value : storage) {
+    values.push_back(value);
+  }
+
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+
+  const auto headerOffset = EncodingPrefix::prefixSize(encoded, false);
+  const char* cursor = encoded.data() + headerOffset;
+  const auto symbolTableSize = varint::readVarint32(&cursor);
+  const auto symbolTableOffset = static_cast<size_t>(cursor - encoded.data());
+  const auto symbolTableEnd = symbolTableOffset + symbolTableSize;
+  cursor = encoded.data() + symbolTableEnd;
+  const auto lengthsSizeOffset = symbolTableEnd;
+  const auto lengthsSize = varint::readVarint32(&cursor);
+  const auto lengthsOffset = static_cast<size_t>(cursor - encoded.data());
+  const auto blobOffset = lengthsOffset + lengthsSize;
+
+  ASSERT_LT(blobOffset, encoded.size());
+
+  struct Case {
+    size_t size;
+    const char* message;
+  };
+  std::vector<Case> cases{
+      {headerOffset, "Truncated FSST header varint."},
+      {symbolTableEnd - 1, "FSST symbol table exceeds encoding bounds."},
+      {symbolTableEnd, "Truncated FSST header varint."},
+      {blobOffset - 1, "FSST lengths encoding exceeds encoding bounds."},
+  };
+  if (symbolTableOffset - headerOffset > 1) {
+    cases.push_back({headerOffset + 1, "Truncated FSST header varint."});
+  }
+  if (lengthsOffset - lengthsSizeOffset > 1) {
+    cases.push_back({lengthsSizeOffset + 1, "Truncated FSST header varint."});
+  }
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testing::Message() << "size=" << testCase.size);
+    expectMalformedHeaderFromAllApis(
+        {encoded.data(), testCase.size}, testCase.message);
+  }
+}
+
+TEST_F(FsstEncodingTest, rejectsOverlongHeaderVarints) {
+  const std::vector<std::string_view> values{
+      "common/fsst/header/value/0000",
+      "common/fsst/header/value/0001",
+      "common/fsst/header/value/0002",
+  };
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+
+  const auto headerOffset = EncodingPrefix::prefixSize(encoded, false);
+  const char* cursor = encoded.data() + headerOffset;
+  const auto symbolTableSize = varint::readVarint32(&cursor);
+  const auto symbolTableOffset = static_cast<size_t>(cursor - encoded.data());
+  const auto symbolTableEnd = symbolTableOffset + symbolTableSize;
+  cursor = encoded.data() + symbolTableEnd;
+  varint::readVarint32(&cursor);
+  const auto lengthsOffset = static_cast<size_t>(cursor - encoded.data());
+
+  const auto replaceHeaderField =
+      [&](size_t begin, size_t end, std::initializer_list<char> bytes) {
+        std::vector<char> malformed{encoded.begin(), encoded.begin() + begin};
+        malformed.insert(malformed.end(), bytes);
+        malformed.insert(malformed.end(), encoded.begin() + end, encoded.end());
+        return malformed;
+      };
+
+  const std::vector<std::vector<char>> malformedHeaders{
+      replaceHeaderField(
+          headerOffset,
+          symbolTableOffset,
+          {static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           0}),
+      replaceHeaderField(
+          headerOffset,
+          symbolTableOffset,
+          {static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x10),
+           0}),
+      replaceHeaderField(
+          headerOffset, symbolTableOffset, {static_cast<char>(0x80), 0, 0}),
+      replaceHeaderField(
+          symbolTableEnd,
+          lengthsOffset,
+          {static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           0}),
+  };
+
+  for (const auto& malformed : malformedHeaders) {
+    NIMBLE_ASSERT_THROW(
+        FsstEncoding::lengthsEncoding({malformed.data(), malformed.size()}),
+        "Overlong FSST header varint.");
+  }
+}
+
+TEST_F(FsstEncodingTest, rejectsHeaderSizesOutsideEncoding) {
+  const std::vector<std::string_view> values{
+      "common/fsst/header/value/0000",
+      "common/fsst/header/value/0001",
+      "common/fsst/header/value/0002",
+  };
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+  const auto headerOffset = EncodingPrefix::prefixSize(encoded, false);
+
+  std::vector<char> symbolTableBacking(128, 0);
+  std::copy_n(encoded.data(), headerOffset, symbolTableBacking.data());
+  char* cursor = symbolTableBacking.data() + headerOffset;
+  varint::writeVarint(uint32_t{64}, &cursor);
+  const auto shortSymbolTableSize =
+      static_cast<size_t>(cursor - symbolTableBacking.data()) + 8;
+  NIMBLE_ASSERT_THROW(
+      FsstEncoding::lengthsEncoding(
+          {symbolTableBacking.data(), shortSymbolTableSize}),
+      "FSST symbol table exceeds encoding bounds.");
+
+  std::vector<char> lengthsBacking(128, 0);
+  std::copy_n(encoded.data(), headerOffset, lengthsBacking.data());
+  cursor = lengthsBacking.data() + headerOffset;
+  varint::writeVarint(uint32_t{1}, &cursor);
+  *cursor++ = 0;
+  varint::writeVarint(uint32_t{64}, &cursor);
+  const auto shortLengthsSize =
+      static_cast<size_t>(cursor - lengthsBacking.data()) + 8;
+  NIMBLE_ASSERT_THROW(
+      FsstEncoding::lengthsEncoding({lengthsBacking.data(), shortLengthsSize}),
+      "FSST lengths encoding exceeds encoding bounds.");
+
+  std::vector<char> oversizedSymbolTable(headerOffset + FSST_MAXHEADER + 16, 0);
+  std::copy_n(encoded.data(), headerOffset, oversizedSymbolTable.data());
+  cursor = oversizedSymbolTable.data() + headerOffset;
+  varint::writeVarint(static_cast<uint32_t>(FSST_MAXHEADER + 1), &cursor);
+  cursor += FSST_MAXHEADER + 1;
+  varint::writeVarint(uint32_t{1}, &cursor);
+  *cursor++ = 0;
+  NIMBLE_ASSERT_THROW(
+      FsstEncoding::lengthsEncoding(
+          {oversizedSymbolTable.data(),
+           static_cast<size_t>(cursor - oversizedSymbolTable.data())}),
+      "FSST symbol table size exceeds FSST_MAXHEADER.");
+
+  std::vector<char> emptySectionHeader(headerOffset + 4, 0);
+  std::copy_n(encoded.data(), headerOffset, emptySectionHeader.data());
+  cursor = emptySectionHeader.data() + headerOffset;
+  varint::writeVarint(uint32_t{0}, &cursor);
+  varint::writeVarint(uint32_t{1}, &cursor);
+  *cursor++ = 0;
+  NIMBLE_ASSERT_THROW(
+      FsstEncoding::lengthsEncoding(
+          {emptySectionHeader.data(),
+           static_cast<size_t>(cursor - emptySectionHeader.data())}),
+      "FSST symbol table size must be positive.");
+
+  cursor = emptySectionHeader.data() + headerOffset;
+  varint::writeVarint(uint32_t{1}, &cursor);
+  *cursor++ = 0;
+  varint::writeVarint(uint32_t{0}, &cursor);
+  NIMBLE_ASSERT_THROW(
+      FsstEncoding::lengthsEncoding(
+          {emptySectionHeader.data(),
+           static_cast<size_t>(cursor - emptySectionHeader.data())}),
+      "FSST lengths encoding size must be positive.");
 }
 
 TEST_F(FsstEncodingTest, invalidSliceRange) {
@@ -605,6 +828,103 @@ TEST_F(FsstEncodingTest, resetAndRematerialize) {
   for (size_t i = 0; i < values.size(); ++i) {
     EXPECT_EQ(decoded1[i], values[i]);
     EXPECT_EQ(decoded2[i], values[i]);
+  }
+}
+
+TEST_F(FsstEncodingTest, resetReusesMultipleStringBufferPages) {
+  constexpr uint32_t kValueCount = 48;
+  constexpr size_t kValueSize = 20 * 1024;
+
+  std::vector<std::string> storage;
+  storage.reserve(kValueCount);
+  for (uint32_t i = 0; i < kValueCount; ++i) {
+    std::string value(kValueSize, static_cast<char>('a' + i % 8));
+    value.append(fmt::format("/{:04}", i));
+    storage.push_back(std::move(value));
+  }
+
+  std::vector<std::string_view> values;
+  values.reserve(storage.size());
+  for (const auto& value : storage) {
+    values.push_back(value);
+  }
+
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+
+  std::vector<velox::BufferPtr> pages;
+  uint64_t allocatedBytes{0};
+  auto encoding =
+      EncodingFactory({}).create(*pool_, encoded, [&](uint32_t bytes) -> void* {
+        allocatedBytes += bytes;
+        auto& page = pages.emplace_back(
+            velox::AlignedBuffer::allocate<char>(bytes, pool_.get()));
+        return page->asMutable<void>();
+      });
+
+  std::vector<std::string_view> decoded(values.size());
+  encoding->materialize(values.size(), decoded.data());
+  ASSERT_EQ(values, decoded);
+  const auto stablePageCount = pages.size();
+  const auto stableAllocatedBytes = allocatedBytes;
+  ASSERT_GT(stablePageCount, 2);
+  ASSERT_GT(stableAllocatedBytes, 0);
+
+  auto decodeAll = [&](bool fragmented) {
+    encoding->reset();
+    if (!fragmented) {
+      encoding->materialize(values.size(), decoded.data());
+    } else {
+      uint32_t offset{0};
+      while (offset < values.size()) {
+        const uint32_t count =
+            std::min<uint32_t>(1 + offset % 7, values.size() - offset);
+        encoding->materialize(count, decoded.data() + offset);
+        offset += count;
+      }
+    }
+    ASSERT_EQ(values, decoded);
+  };
+
+  std::vector<std::string_view> selected(values.size());
+  auto decodeSkipTrace = [&] {
+    encoding->reset();
+    uint32_t cursor{0};
+    uint32_t outputIndex{0};
+    while (cursor < values.size()) {
+      const uint32_t skip =
+          std::min<uint32_t>(2 + cursor % 5, values.size() - cursor);
+      encoding->skip(skip);
+      cursor += skip;
+      if (cursor == values.size()) {
+        break;
+      }
+      const uint32_t count =
+          std::min<uint32_t>(1 + cursor % 3, values.size() - cursor);
+      encoding->materialize(count, selected.data() + outputIndex);
+      for (uint32_t i = 0; i < count; ++i) {
+        ASSERT_EQ(values[cursor + i], selected[outputIndex + i]);
+      }
+      cursor += count;
+      outputIndex += count;
+    }
+    ASSERT_GT(outputIndex, 0);
+  };
+
+  for (uint32_t round = 0; round < 100; ++round) {
+    decodeAll(false);
+    ASSERT_EQ(stablePageCount, pages.size()) << "dense round=" << round;
+    ASSERT_EQ(stableAllocatedBytes, allocatedBytes) << "dense round=" << round;
+
+    decodeAll(true);
+    ASSERT_EQ(stablePageCount, pages.size()) << "fragmented round=" << round;
+    ASSERT_EQ(stableAllocatedBytes, allocatedBytes)
+        << "fragmented round=" << round;
+
+    decodeSkipTrace();
+    ASSERT_EQ(stablePageCount, pages.size()) << "skip round=" << round;
+    ASSERT_EQ(stableAllocatedBytes, allocatedBytes) << "skip round=" << round;
   }
 }
 

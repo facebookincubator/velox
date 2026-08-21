@@ -43,9 +43,15 @@ class ReaderBase {
   /// schemas. The tablet's metadata (footer, stripes, ClusterIndex) is shared
   /// across all ReaderBase instances using the same tablet. Each ReaderBase
   /// still owns its own BufferedInput for data IO.
+  ///
+  /// Takes the entry by shared_ptr and retains it: the returned ReaderBase
+  /// aliases its tablet pointer onto the entry, so the entry cannot retire
+  /// while this reader is still reading through it. There is one
+  /// CachedTabletReader per file, shared by every consumer, so moving members
+  /// out of it would empty it for everyone else.
   static std::shared_ptr<ReaderBase> create(
       std::unique_ptr<velox::dwio::common::BufferedInput> input,
-      CachedTabletReader&& cachedTablet,
+      const std::shared_ptr<CachedTabletReader>& cachedTablet,
       const velox::dwio::common::ReaderOptions& options);
 
   velox::dwio::common::BufferedInput& input() {

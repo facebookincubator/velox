@@ -234,6 +234,7 @@ TabletReader::TabletReader(
         // provided.
         if (options.cacheMetadata && options.fileHandle != nullptr) {
           NIMBLE_CHECK_NOT_NULL(options.cache, "cacheMetadata requires cache");
+          metadataOptions.maxCacheEntrySize = options.maxCacheEntrySize;
           metadataOptions.fileHandle = options.fileHandle;
           metadataOptions.cache = options.cache;
         }
@@ -341,11 +342,11 @@ void TabletReader::loadFooter(
           static_cast<int64_t>(footerIoSize - requiredSize);
     }
 
-    const uint64_t footerOffset =
+    const uint64_t footerBufOffset =
         footerIoSize - Postscript::kSize - ps_.footerSize();
     footer_ = std::make_unique<MetadataBuffer>(MetadataBuffer::decompress(
         std::string_view{
-            footerBuf->as<char>() + footerOffset, ps_.footerSize()},
+            footerBuf->as<char>() + footerBufOffset, ps_.footerSize()},
         ps_.footerCompressionType(),
         pool_));
   } else {

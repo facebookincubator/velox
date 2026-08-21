@@ -18,6 +18,7 @@
 
 #include "folly/String.h"
 #include "folly/json/json.h"
+#include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
