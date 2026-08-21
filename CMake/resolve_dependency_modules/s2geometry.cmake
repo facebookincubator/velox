@@ -38,6 +38,22 @@ block()
 
   velox_resolve_dependency_url(S2GEOMETRY)
 
+  set(
+    VELOX_S2GEOMETRY_PATCHES
+    ${CMAKE_CURRENT_LIST_DIR}/s2geometry/s2geometry-gcc12-max.patch
+  )
+  # On Apple platforms folly defines `nallocx` as a null function pointer
+  # because weak symbols cannot be left undefined in Mach-O. That data symbol
+  # wins over s2's weak function definition, so s2's call jumps into __DATA and
+  # crashes with SIGBUS.
+  if(APPLE)
+    list(
+      APPEND
+      VELOX_S2GEOMETRY_PATCHES
+      ${CMAKE_CURRENT_LIST_DIR}/s2geometry/s2geometry-apple-nallocx.patch
+    )
+  endif()
+
   FetchContent_Declare(
     s2geometry
     URL ${VELOX_S2GEOMETRY_SOURCE_URL}
@@ -45,7 +61,7 @@ block()
     OVERRIDE_FIND_PACKAGE
     SYSTEM
     EXCLUDE_FROM_ALL
-    PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/s2geometry/s2geometry-gcc12-max.patch
+    PATCH_COMMAND git apply ${VELOX_S2GEOMETRY_PATCHES}
   )
 
   list(APPEND CMAKE_MODULE_PATH "${s2geometry_SOURCE_DIR}/cmake")

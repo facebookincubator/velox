@@ -1,0 +1,32 @@
+Avoid the bare `nallocx` symbol on Apple platforms.
+
+s2geometry declares `nallocx` as a function and ships a weak definition that
+simply returns the requested size. On Apple platforms a weak symbol cannot be
+left undefined in Mach-O, so folly builds with FOLLY_HAVE_WEAK_SYMBOLS=0 and
+instead defines `size_t (*nallocx)(size_t, int) = nullptr;` -- a null function
+pointer in the global namespace. When both libraries are linked, s2's call
+binds to folly's data symbol, jumps into __DATA and crashes with SIGBUS.
+
+Using the requested size directly is exactly what s2's own weak implementation
+does, so behaviour is unchanged where the allocator gives no size feedback.
+
+--- a/src/s2/util/gtl/compact_array.h
++++ b/src/s2/util/gtl/compact_array.h
+@@ -390,7 +390,17 @@
+     if (n <= old_capacity) return;
+     size_type new_n = n;
+     if (new_n > kInlined) {
++#if defined(__APPLE__)
++      // Do not reference the global `nallocx` symbol on Apple platforms. folly
++      // defines it as a null function pointer there (FOLLY_HAVE_WEAK_SYMBOLS=0
++      // because Mach-O cannot leave a weak symbol undefined), and that data
++      // symbol wins over s2's weak function, so the call jumps into __DATA and
++      // crashes with SIGBUS. Using the requested size matches s2's own default
++      // weak implementation of nallocx.
++      new_n = n;
++#else
+       new_n = nallocx(n * sizeof(T), 0) / sizeof(T);
++#endif
+     }
+     set_capacity(new_n);
+     if (MayBeInlined()) {
