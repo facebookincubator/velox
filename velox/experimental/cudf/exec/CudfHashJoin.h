@@ -268,6 +268,15 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   /// host-synchronized all-false init state with no pending GPU work.
   std::optional<rmm::cuda_stream_view> lastProbeStream_;
 
+  /// Last CUDA stream this instance used to read build/filter state
+  /// (hashObject_'s tables, rightMatchedFlags_, scalars_, tree_,
+  /// filterEvaluator_), set unconditionally on every doGetOutput() call
+  /// (unlike lastProbeStream_ above, which is right/full-join-only). Synced
+  /// in doClose() and isFinished() before releasing that state, so a
+  /// stream-ordered free triggered by dropping this instance's reference
+  /// can't race a read still in flight on this instance's last-used stream.
+  std::optional<rmm::cuda_stream_view> lastGetOutputStream_;
+
   static constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
 
   struct JoinOutput {
