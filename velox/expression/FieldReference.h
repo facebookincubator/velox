@@ -46,7 +46,8 @@ class FieldReference : public SpecialForm {
             false, /* supportsFlatNoNullsFastPath */
             false /* trackCpuUsage */),
         field_(inputs.at(0)->type()->asRow().nameOf(index)),
-        index_(index) {}
+        index_(index),
+        isOrdinalReference_(true) {}
 
   const std::string& field() const {
     return field_;
@@ -88,7 +89,23 @@ class FieldReference : public SpecialForm {
   void
   apply(const SelectivityVector& rows, EvalCtx& context, VectorPtr& result);
 
+  // Resolves 'index_' from 'field_' on first use for name-based references
+  // and validates the index against 'rowType'. Ordinal references skip name
+  // validation because the stored position is authoritative and the field
+  // name is informational (empty for unnamed structs). Checks the child type
+  // only when 'validateChildType' is true; the common eval path skips it to
+  // avoid per-batch overhead. Returns the validated child index.
+  int32_t resolveAndValidateIndex(
+      const RowType& rowType,
+      bool validateChildType);
+
   const std::string field_;
   int32_t index_ = -1;
+
+  // True when created from an ordinal (DereferenceTypedExpr); 'index_' is
+  // then authoritative and never re-resolved by name, since the input row
+  // type may be an unnamed struct whose field names are all empty. Non-empty
+  // duplicate field names are never allowed.
+  const bool isOrdinalReference_{false};
 };
 } // namespace facebook::velox::exec

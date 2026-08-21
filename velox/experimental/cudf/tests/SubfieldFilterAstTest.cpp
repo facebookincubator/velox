@@ -166,7 +166,7 @@ class SubfieldFilterAstTest : public OperatorTestBase {
 };
 
 // Basic AST generation tests
-TEST_F(SubfieldFilterAstTest, Int32RangeInclusive) {
+TEST_F(SubfieldFilterAstTest, int32RangeInclusive) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, INTEGER()}});
   auto filter =
@@ -186,7 +186,7 @@ TEST_F(SubfieldFilterAstTest, Int32RangeInclusive) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, DoubleRange) {
+TEST_F(SubfieldFilterAstTest, doubleRange) {
   const std::string columnName = "c1";
   auto rowType = ROW({{columnName, DOUBLE()}});
   auto filter = std::make_unique<common::DoubleRange>(
@@ -206,7 +206,7 @@ TEST_F(SubfieldFilterAstTest, DoubleRange) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, StringInList) {
+TEST_F(SubfieldFilterAstTest, stringInList) {
   const std::string columnName = "c2";
   auto rowType = ROW({{columnName, VARCHAR()}});
   // Manually construct a VARCHAR column so IN-list values are guaranteed.
@@ -231,7 +231,7 @@ TEST_F(SubfieldFilterAstTest, StringInList) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, StringNotInList) {
+TEST_F(SubfieldFilterAstTest, stringNotInList) {
   const std::string columnName = "c2";
   auto rowType = ROW({{columnName, VARCHAR()}});
   // Manually construct a VARCHAR column and a NOT IN list.
@@ -256,7 +256,7 @@ TEST_F(SubfieldFilterAstTest, StringNotInList) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, StringRange) {
+TEST_F(SubfieldFilterAstTest, stringRange) {
   const std::string columnName = "c2";
   auto rowType = ROW({{columnName, VARCHAR()}});
   auto filter = std::make_unique<common::BytesRange>(
@@ -283,7 +283,7 @@ TEST_F(SubfieldFilterAstTest, StringRange) {
 }
 
 // Single value string range test
-TEST_F(SubfieldFilterAstTest, StringRangeSingleValue) {
+TEST_F(SubfieldFilterAstTest, stringRangeSingleValue) {
   const std::string columnName = "c2";
   auto rowType = ROW({{columnName, VARCHAR()}});
 
@@ -314,7 +314,7 @@ TEST_F(SubfieldFilterAstTest, StringRangeSingleValue) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, BoolValue) {
+TEST_F(SubfieldFilterAstTest, boolValue) {
   const std::string columnName = "flag";
   auto rowType = ROW({{columnName, BOOLEAN()}});
   auto filter =
@@ -335,7 +335,7 @@ TEST_F(SubfieldFilterAstTest, BoolValue) {
 }
 
 // Single value range tests
-TEST_F(SubfieldFilterAstTest, BigintRangeSingleValue) {
+TEST_F(SubfieldFilterAstTest, bigintRangeSingleValue) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, BIGINT()}});
   auto filter =
@@ -358,7 +358,7 @@ TEST_F(SubfieldFilterAstTest, BigintRangeSingleValue) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, Int32SingleValue) {
+TEST_F(SubfieldFilterAstTest, int32SingleValue) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, INTEGER()}}); // 32-bit int
   auto filter =
@@ -382,7 +382,7 @@ TEST_F(SubfieldFilterAstTest, Int32SingleValue) {
 
 // Single value that is outside the column's type range.
 // For an INT32 column, pick a 64-bit value greater than INT32_MAX.
-TEST_F(SubfieldFilterAstTest, Int32SingleValueOutOfRange) {
+TEST_F(SubfieldFilterAstTest, int32SingleValueOutOfRange) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, INTEGER()}}); // 32-bit int column
 
@@ -412,7 +412,7 @@ TEST_F(SubfieldFilterAstTest, Int32SingleValueOutOfRange) {
 
 // Single value at the exact type boundary (INT32_MAX on INTEGER column).
 // The value is representable so the filter should match.
-TEST_F(SubfieldFilterAstTest, Int32SingleValueAtMax) {
+TEST_F(SubfieldFilterAstTest, int32SingleValueAtMax) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, INTEGER()}});
   const int64_t value = std::numeric_limits<int32_t>::max();
@@ -434,7 +434,7 @@ TEST_F(SubfieldFilterAstTest, Int32SingleValueAtMax) {
 }
 
 // Single value at the exact type boundary (INT32_MIN on INTEGER column).
-TEST_F(SubfieldFilterAstTest, Int32SingleValueAtMin) {
+TEST_F(SubfieldFilterAstTest, int32SingleValueAtMin) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, INTEGER()}});
   const int64_t value = std::numeric_limits<int32_t>::min();
@@ -456,7 +456,7 @@ TEST_F(SubfieldFilterAstTest, Int32SingleValueAtMin) {
 }
 
 // Single value at TINYINT boundary (127 on TINYINT column).
-TEST_F(SubfieldFilterAstTest, TinyIntSingleValueAtMax) {
+TEST_F(SubfieldFilterAstTest, tinyIntSingleValueAtMax) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, TINYINT()}});
   const int64_t value = std::numeric_limits<int8_t>::max();
@@ -478,7 +478,7 @@ TEST_F(SubfieldFilterAstTest, TinyIntSingleValueAtMax) {
 }
 
 // Type boundary tests
-TEST_F(SubfieldFilterAstTest, IntegerOverflowBounds) {
+TEST_F(SubfieldFilterAstTest, integerOverflowBounds) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, INTEGER()}}); // 32-bit int
   auto filter = std::make_unique<common::BigintRange>(
@@ -503,7 +503,7 @@ TEST_F(SubfieldFilterAstTest, IntegerOverflowBounds) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, PartialBoundsOutsideTypeRange) {
+TEST_F(SubfieldFilterAstTest, partialBoundsOutsideTypeRange) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, INTEGER()}}); // 32-bit int
   auto filter = std::make_unique<common::BigintRange>(
@@ -526,7 +526,7 @@ TEST_F(SubfieldFilterAstTest, PartialBoundsOutsideTypeRange) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, SmallIntTypeBounds) {
+TEST_F(SubfieldFilterAstTest, smallIntTypeBounds) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, SMALLINT()}}); // 16-bit int
   auto filter = std::make_unique<common::BigintRange>(
@@ -549,7 +549,7 @@ TEST_F(SubfieldFilterAstTest, SmallIntTypeBounds) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, DecimalRange) {
+TEST_F(SubfieldFilterAstTest, decimalRange) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, DECIMAL(20, 2)}});
   // Range [1.23, 4.56] encoded as unscaled integer values.
@@ -567,7 +567,7 @@ TEST_F(SubfieldFilterAstTest, DecimalRange) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, DecimalInList) {
+TEST_F(SubfieldFilterAstTest, decimalInList) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, DECIMAL(20, 2)}});
   // Values [1.23, 4.56] encoded as unscaled integer values.
@@ -585,7 +585,7 @@ TEST_F(SubfieldFilterAstTest, DecimalInList) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, EmptyInListHandling) {
+TEST_F(SubfieldFilterAstTest, emptyInListHandling) {
   auto rowType = ROW({{"c0", BIGINT()}});
   std::vector<int64_t> emptyVals = {};
 
@@ -603,7 +603,7 @@ TEST_F(SubfieldFilterAstTest, EmptyInListHandling) {
       VeloxException);
 }
 
-TEST_F(SubfieldFilterAstTest, MultipleSubfieldFilters) {
+TEST_F(SubfieldFilterAstTest, multipleSubfieldFilters) {
   // Schema with multiple columns to filter on.
   auto rowType = ROW({
       {"c0", INTEGER()},
@@ -743,7 +743,7 @@ static TypePtr buildTypeForKind(TypeKind kind) {
   }
 }
 
-TEST_P(IntInListParamTest, InListParam) {
+TEST_P(IntInListParamTest, inListParam) {
   const auto& p = GetParam();
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, buildTypeForKind(p.kind)}});
@@ -809,7 +809,7 @@ class BigintMultiRangeParamTest
     : public SubfieldFilterAstTest,
       public ::testing::WithParamInterface<BigintMultiRangeCase> {};
 
-TEST_P(BigintMultiRangeParamTest, BigintMultiRange) {
+TEST_P(BigintMultiRangeParamTest, bigintMultiRange) {
   const auto& p = GetParam();
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, buildTypeForKind(p.kind)}});
@@ -862,7 +862,7 @@ INSTANTIATE_TEST_SUITE_P(
 // MultiRange tests (FilterKind::kMultiRange)
 // MultiRange wraps arbitrary sub-filters with OR semantics. Common use case:
 // not-equal predicates represented as (< X) OR (> X).
-TEST_F(SubfieldFilterAstTest, MultiRangeDoubleNotEqual) {
+TEST_F(SubfieldFilterAstTest, multiRangeDoubleNotEqual) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, DOUBLE()}});
 
@@ -906,7 +906,7 @@ TEST_F(SubfieldFilterAstTest, MultiRangeDoubleNotEqual) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, MultiRangeBytesNotEqual) {
+TEST_F(SubfieldFilterAstTest, multiRangeBytesNotEqual) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, VARCHAR()}});
 
@@ -952,7 +952,7 @@ TEST_F(SubfieldFilterAstTest, MultiRangeBytesNotEqual) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, MultiRangeSingleFilter) {
+TEST_F(SubfieldFilterAstTest, multiRangeSingleFilter) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, DOUBLE()}});
 
@@ -985,7 +985,7 @@ TEST_F(SubfieldFilterAstTest, MultiRangeSingleFilter) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, MultiRangeMixedFilters) {
+TEST_F(SubfieldFilterAstTest, multiRangeMixedFilters) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, REAL()}});
 
@@ -1036,7 +1036,7 @@ TEST_F(SubfieldFilterAstTest, MultiRangeMixedFilters) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, EmptyMultiRangeThrows) {
+TEST_F(SubfieldFilterAstTest, emptyMultiRangeThrows) {
   auto rowType = ROW({{"c0", DOUBLE()}});
 
   // MultiRange with empty filter list should throw.
@@ -1087,7 +1087,7 @@ TYPED_TEST(NegatedBigintRangeTypedTest, rejectsRange) {
   this->testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, NegatedBigintRangeSingleValue) {
+TEST_F(SubfieldFilterAstTest, negatedBigintRangeSingleValue) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, BIGINT()}});
 
@@ -1110,7 +1110,7 @@ TEST_F(SubfieldFilterAstTest, NegatedBigintRangeSingleValue) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-TEST_F(SubfieldFilterAstTest, NegatedBigintRangeAtBounds) {
+TEST_F(SubfieldFilterAstTest, negatedBigintRangeAtBounds) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, INTEGER()}});
 
@@ -1141,7 +1141,7 @@ TEST_F(SubfieldFilterAstTest, NegatedBigintRangeAtBounds) {
 
 // Null column values must be excluded and non-null rows must still match the
 // CPU filter, including through the negating NOT(...) wrapper.
-TEST_F(SubfieldFilterAstTest, NegatedBigintRangeWithNulls) {
+TEST_F(SubfieldFilterAstTest, negatedBigintRangeWithNulls) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, BIGINT()}});
 

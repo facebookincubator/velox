@@ -249,6 +249,50 @@ TEST_F(ParquetReaderTest, parquetFieldIdColumnMapping) {
       *leafPool_);
 }
 
+// Regression test for isChildMissing incorrectly using the channel-index
+// guard (channel >= fileType->size) in kParquetFieldId mode.
+//
+// When a new column is inserted before existing ones (e.g. ADD COLUMN z FIRST),
+// the output channel of the trailing columns shifts up.  For a file written
+// with [a(fid=1), b(fid=2)] and read with requested schema
+// [z(fid=3), a(fid=1), b(fid=2)], b lands at output channel 2.  The file has
+// only 2 columns, so channel(b)=2 >= fileSize=2 would incorrectly mark b as
+// missing.  The fix extends the name-based path (containsChild) to cover
+// kParquetFieldId, which correctly identifies z as absent and a/b as present.
+TEST_F(ParquetReaderTest, parquetFieldIdInsertedColumnNotNullFilled) {
+  // Write [a(fid=1), b(fid=2)] — two rows.
+  auto writeType = ROW({"a", "b"}, {INTEGER(), VARCHAR()});
+  auto data = makeRowVector(
+      writeType->names(),
+      {makeFlatVector<int32_t>({1, 2}),
+       makeFlatVector<std::string>({"x", "y"})});
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetFieldIds = {
+      ParquetFieldId{1, {}}, ParquetFieldId{2, {}}};
+  auto* sink = write(data, writerOptions);
+
+  // Read back with output schema [z(fid=3), a(fid=1), b(fid=2)].
+  // z has no matching field id in the file → null-fill.
+  // a and b are present → must carry their original values.
+  const auto outputType =
+      ROW({"z", "a", "b"}, {INTEGER(), INTEGER(), VARCHAR()});
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(outputType);
+  readerOptions.setColumnMappingMode(ColumnMappingMode::kParquetFieldId);
+  readerOptions.setFieldIds(
+      {ParquetFieldId{3, {}}, ParquetFieldId{1, {}}, ParquetFieldId{2, {}}});
+
+  auto readerBundle =
+      readerBuilder(*sink, outputType).options(readerOptions).build();
+  auto expected = makeRowVector(
+      outputType->names(),
+      {makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+       makeFlatVector<int32_t>({1, 2}),
+       makeFlatVector<std::string>({"x", "y"})});
+  assertReadWithReaderAndExpected(
+      outputType, *readerBundle.rowReader, expected, *leafPool_);
+}
+
 TEST_F(ParquetReaderTest, nestedNameColumnMapping) {
   auto data = makeRowVector(
       {"nested"},
@@ -1452,6 +1496,50 @@ TEST_F(ParquetReaderTest, readVarbinaryFromFLBA) {
           ->valueAt(0));
 }
 
+// Regression test for skipping FIXED_LEN_BYTE_ARRAY values under a filter on a
+// sibling column. See flba_skip.parquet in examples/README.md for the fixture.
+TEST_F(ParquetReaderTest, fixedLenByteArraySkipWithFilter) {
+  const std::string filename("flba_skip.parquet");
+  const auto fileSchema = ROW({"key", "value"}, {INTEGER(), VARBINARY()});
+
+  constexpr int32_t kNumRows = 40;
+  std::vector<int64_t> evenKeys;
+  for (int64_t i = 0; i < kNumRows; i += 2) {
+    evenKeys.push_back(i);
+  }
+  const auto kNumSelected = static_cast<vector_size_t>(evenKeys.size());
+  FilterMap filters;
+  filters.insert(
+      {"key",
+       std::make_unique<common::BigintValuesUsingBitmask>(
+           0, kNumRows - 2, std::move(evenKeys), false)});
+
+  // Backing storage for the expected 4-byte big-endian values.
+  std::vector<std::string> valueStore;
+  for (int32_t i = 0; i < kNumRows; i += 2) {
+    const auto u = static_cast<uint32_t>(i);
+    std::string bytes(4, '\0');
+    bytes[0] = static_cast<char>((u >> 24) & 0xffU);
+    bytes[1] = static_cast<char>((u >> 16) & 0xffU);
+    bytes[2] = static_cast<char>((u >> 8) & 0xffU);
+    bytes[3] = static_cast<char>(u & 0xffU);
+    valueStore.push_back(std::move(bytes));
+  }
+  auto expected = makeRowVector(
+      {"key", "value"},
+      {
+          makeFlatVector<int32_t>(
+              kNumSelected, [](auto row) { return row * 2; }),
+          makeFlatVector<StringView>(
+              kNumSelected,
+              [&](auto row) { return StringView(valueStore[row]); },
+              nullptr,
+              VARBINARY()),
+      });
+
+  assertReadWithFilters(filename, fileSchema, std::move(filters), expected);
+}
+
 TEST_F(ParquetReaderTest, readBinaryAsStringFromNation) {
   const std::string filename("nation.parquet");
 
@@ -2424,4 +2512,38 @@ TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
   }
 
   EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
+}
+
+TEST_F(ParquetReaderTest, byteStreamSplitFloat) {
+  // bss_float.parquet: 100 rows of REQUIRED float encoded with
+  // BYTE_STREAM_SPLIT, no compression, data page v1. The values were generated
+  // with numpy's default RNG (seed 42) and stored as float32.
+  auto schema = ROW({"float_val"}, {REAL()});
+  auto readerBundle = readerBuilder("bss_float.parquet", schema).build();
+  EXPECT_EQ(readerBundle.reader->numberOfRows().value(), 100ULL);
+
+  auto result = BaseVector::create(schema, 0, leafPool_.get());
+  EXPECT_TRUE(readerBundle.rowReader->next(100, result));
+  EXPECT_EQ(result->size(), 100);
+
+  auto* floatColumn = result->as<RowVector>()
+                          ->childAt(0)
+                          ->loadedVector()
+                          ->asFlatVector<float>();
+  ASSERT_TRUE(floatColumn != nullptr);
+  ASSERT_EQ(floatColumn->size(), 100);
+
+  // Spot-check decoded values across the page to confirm the split byte
+  // streams are reassembled in the correct order.
+  const std::vector<std::pair<vector_size_t, float>> expected = {
+      {0, 0.49671414494514465f},
+      {1, -0.13826429843902588f},
+      {2, 0.6476885676383972f},
+      {50, 0.32408398389816284f},
+      {74, -2.6197450160980225f},
+      {99, -0.23458713293075562f}};
+  for (const auto& [index, value] : expected) {
+    EXPECT_FALSE(floatColumn->isNullAt(index));
+    EXPECT_FLOAT_EQ(floatColumn->valueAt(index), value);
+  }
 }

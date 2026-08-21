@@ -684,3 +684,125 @@ TEST_F(IcebergDeletionVectorSinkTest, dictionaryWrappedRowIdStructFlatPath) {
       pool_.get());
   EXPECT_EQ(deleted, (std::vector<uint64_t>{1, 3}));
 }
+
+TEST_F(IcebergDeletionVectorSinkTest, rejectsUnsupportedInputType) {
+  auto tempDir = TempDirectoryPath::create();
+  auto handle = makeDeletionVectorHandle(tempDir->getPath());
+
+  // Neither the flat (file_path, pos) shape nor a ROW whose first two fields
+  // are (VARCHAR, BIGINT), so the sink cannot locate the row-id.
+  VELOX_ASSERT_USER_THROW(
+      IcebergDeletionVectorSink(
+          ROW({"a", "b"}, {BIGINT(), BIGINT()}),
+          handle,
+          connectorQueryCtx_.get(),
+          connector::CommitStrategy::kNoCommit,
+          hiveConfig_),
+      "IcebergDeletionVectorSink expects a two-column (file_path, pos) input");
+}
+
+TEST_F(IcebergDeletionVectorSinkTest, appendDataIgnoresNullAndEmptyPages) {
+  auto tempDir = TempDirectoryPath::create();
+  auto handle = makeDeletionVectorHandle(tempDir->getPath());
+
+  IcebergDeletionVectorSink sink(
+      ROW({"file_path", "pos"}, {VARCHAR(), BIGINT()}),
+      handle,
+      connectorQueryCtx_.get(),
+      connector::CommitStrategy::kNoCommit,
+      hiveConfig_);
+
+  sink.appendData(nullptr);
+  sink.appendData(makePositionDeleteRows({}, {}));
+
+  // Neither page created per-file state, so nothing is written.
+  EXPECT_TRUE(sink.finish());
+  EXPECT_TRUE(sink.close().empty());
+  EXPECT_EQ(sink.stats().numWrittenFiles, 0u);
+}
+
+TEST_F(IcebergDeletionVectorSinkTest, rowIdStructSkipsNullRowId) {
+  auto tempDir = TempDirectoryPath::create();
+  auto handle = makeDeletionVectorHandle(tempDir->getPath());
+  const std::string dataFile = tempDir->getPath() + "/A.parquet";
+
+  IcebergDeletionVectorSink sink(
+      ROW({"$row_id"},
+          {ROW(
+              {"_file", "_pos", "_spec_id", "partition_data"},
+              {VARCHAR(), BIGINT(), INTEGER(), VARCHAR()})}),
+      handle,
+      connectorQueryCtx_.get(),
+      connector::CommitStrategy::kNoCommit,
+      hiveConfig_);
+
+  // A null row-id carries no (file_path, pos) to delete and must be skipped
+  // rather than dereferenced.
+  auto page = makeRowIdStructDeletePage(
+      dataFile, {10, 20, 30}, {0, 1, 2}, /*filePathConstant=*/true);
+  auto rowIdWithNull = page->childAt(0);
+  rowIdWithNull->setNull(1, true);
+
+  sink.appendData(page);
+  EXPECT_TRUE(sink.finish());
+
+  auto messages = sink.close();
+  ASSERT_EQ(messages.size(), 1);
+  const auto parsed = folly::parseJson(messages[0]);
+  // Positions 10 and 30 survive; the null row at index 1 contributes nothing.
+  EXPECT_EQ(parsed["metrics"]["recordCount"].asInt(), 2);
+}
+
+TEST_F(IcebergDeletionVectorSinkTest, finishAndAbortAreIdempotent) {
+  auto tempDir = TempDirectoryPath::create();
+  auto handle = makeDeletionVectorHandle(tempDir->getPath());
+
+  IcebergDeletionVectorSink sink(
+      ROW({"file_path", "pos"}, {VARCHAR(), BIGINT()}),
+      handle,
+      connectorQueryCtx_.get(),
+      connector::CommitStrategy::kNoCommit,
+      hiveConfig_);
+
+  sink.appendData(
+      makePositionDeleteRows({tempDir->getPath() + "/A.parquet"}, {5}));
+
+  EXPECT_TRUE(sink.finish());
+  const auto statsAfterFirstFinish = sink.stats();
+
+  // A second finish() must not re-write the Puffin file or duplicate the
+  // commit message.
+  EXPECT_TRUE(sink.finish());
+  EXPECT_EQ(
+      sink.stats().numWrittenFiles, statsAfterFirstFinish.numWrittenFiles);
+  EXPECT_EQ(sink.close().size(), 1);
+
+  // abort() after finish() is a no-op rather than clearing committed state.
+  sink.abort();
+  sink.abort();
+  EXPECT_EQ(sink.close().size(), 1);
+}
+
+TEST_F(IcebergDeletionVectorSinkTest, puffinPathFallsBackToTargetPath) {
+  auto tempDir = TempDirectoryPath::create();
+  auto handle = makeDeletionVectorHandle(tempDir->getPath());
+
+  IcebergDeletionVectorSink sink(
+      ROW({"file_path", "pos"}, {VARCHAR(), BIGINT()}),
+      handle,
+      connectorQueryCtx_.get(),
+      connector::CommitStrategy::kNoCommit,
+      hiveConfig_);
+
+  // A data-file name with no '/' has no parent directory to co-locate with,
+  // so the Puffin lands in the location handle's target path instead.
+  sink.appendData(makePositionDeleteRows({"bare-name.parquet"}, {1}));
+  EXPECT_TRUE(sink.finish());
+
+  auto messages = sink.close();
+  ASSERT_EQ(messages.size(), 1);
+  const auto parsed = folly::parseJson(messages[0]);
+  const auto puffinPath = parsed["path"].asString();
+  EXPECT_EQ(puffinPath.rfind(tempDir->getPath() + "/dv-", 0), 0)
+      << "puffin path should sit under the target path: " << puffinPath;
+}

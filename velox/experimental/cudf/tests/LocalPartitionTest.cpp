@@ -162,6 +162,35 @@ TEST_F(LocalPartitionTest, partition) {
       queryBuilder.assertResults("SELECT c0, max(c0) FROM tmp GROUP BY 1");
 }
 
+// The hive partition function spec is not one that
+// CudfLocalPartition::shouldReplace accepts, so the LocalPartition stays on
+// CPU and enqueues host RowVectors. The consuming LocalExchange must report
+// host output so that CudfFromVelox is inserted ahead of the GPU TopN.
+// Otherwise CudfTopN::doAddInput receives a host RowVector and fails the
+// CudfVector cast with INVALID_STATE. This is the mixed GPU/CPU pipeline
+// failure seen with Spark/Gluten on TPC-H q18 and q22.
+TEST_F(LocalPartitionTest, unsupportedPartitionSpecIntoTopN) {
+  std::vector<RowVectorPtr> vectors = {
+      makeRowVector({makeFlatSequence<int32_t>(0, 100)}),
+      makeRowVector({makeFlatSequence<int32_t>(53, 100)}),
+      makeRowVector({makeFlatSequence<int32_t>(-71, 100)}),
+  };
+
+  createDuckDbTable(vectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto op = PlanBuilder(planNodeIdGenerator)
+                .values(vectors)
+                .localPartition(4, {0}, {})
+                .topN({"c0 DESC NULLS LAST"}, 10, false)
+                .planNode();
+
+  AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  queryBuilder.maxDrivers(2);
+  queryBuilder.assertResults("SELECT c0 FROM tmp ORDER BY c0 DESC LIMIT 10");
+}
+
 TEST_F(LocalPartitionTest, unionAllLocalExchange) {
   auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
   auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
@@ -476,6 +505,40 @@ TEST_F(LocalPartitionTest, roundRobinDistributionVerification) {
   ASSERT_EQ(partitionCounts[0], 1);
   ASSERT_EQ(partitionCounts[1], 1);
   ASSERT_EQ(partitionCounts[2], 1);
+}
+
+TEST_F(LocalPartitionTest, gpuBytesTriggerBackpressure) {
+  std::vector<RowVectorPtr> vectors = {makeRowVector(
+      {makeFlatSequence<int64_t>(0, 1'024),
+       makeFlatSequence<int64_t>(0, 1'024)})};
+  createDuckDbTable(vectors);
+
+  for (const int32_t numDrivers : {1, 2}) {
+    SCOPED_TRACE(fmt::format("numDrivers: {}", numDrivers));
+    core::PlanNodeId localPartitionId;
+    auto plan = PlanBuilder()
+                    .values(vectors)
+                    .partialAggregation({"c0"}, {"max(c1)"})
+                    .localPartition({"c0"})
+                    .capturePlanNodeId(localPartitionId)
+                    .finalAggregation()
+                    .planNode();
+
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .maxDrivers(numDrivers)
+            .config(
+                core::QueryConfig::kMaxLocalExchangePartitionCount, numDrivers)
+            .config(core::QueryConfig::kMaxLocalExchangeBufferSize, 4'096)
+            .assertResults("SELECT c0, max(c1) FROM tmp GROUP BY c0");
+
+    const auto stats = exec::toPlanStats(task->taskStats());
+    ASSERT_GT(
+        stats.at(localPartitionId)
+            .customStats.at("blockedWaitForConsumerTimes")
+            .sum,
+        0);
+  }
 }
 
 } // namespace

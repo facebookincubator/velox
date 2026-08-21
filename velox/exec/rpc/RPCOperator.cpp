@@ -781,9 +781,16 @@ bool RPCOperator::startDrain() {
 void RPCOperator::close() {
   recordRuntimeStats();
 
-  // Release resources explicitly. RPCState may be held alive by in-flight
-  // RPC callbacks (via shared_ptr capture), but we release our reference
-  // so that input batch memory can be freed as soon as possible.
+  // Release resources explicitly. RPCState may be held alive by in-flight RPC
+  // callbacks (via shared_ptr capture), so dropping our reference is not enough
+  // to free the input vectors: those belong to upstream operators' memory pools
+  // and must be released here, on the driver thread, while those pools are
+  // still alive. Otherwise the retained reservation makes the arbitrator's
+  // reservedBytes() == 0 check throw from ~MemoryPoolImpl() and terminate the
+  // worker, or a late callback frees into pools that are already gone.
+  if (state_ != nullptr) {
+    state_->releaseAllInputBatches();
+  }
   state_.reset();
   function_.reset();
   claimedRows_.clear();

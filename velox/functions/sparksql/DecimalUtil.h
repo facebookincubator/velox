@@ -109,7 +109,7 @@ class DecimalUtil {
     return value;
   }
 
-  /// Returns the minumum number of leading zeros after scaling up two inputs
+  /// Returns the minimum number of leading zeros after scaling up two inputs
   /// for certain scales. Inputs are decimal values of bigint or hugeint type.
   template <typename A, typename B>
   inline static uint32_t

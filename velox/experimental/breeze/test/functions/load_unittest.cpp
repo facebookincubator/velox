@@ -34,7 +34,7 @@ using TestTypes =
 
 TYPED_TEST_SUITE(FunctionTest, TestTypes);
 
-TYPED_TEST(FunctionTest, Load) {
+TYPED_TEST(FunctionTest, load) {
   TypeParam src[] = {1, 2, 3, 4, 5, 6, 7, 8};
 
   std::vector<TypeParam> in(std::begin(src), std::end(src));
@@ -45,7 +45,7 @@ TYPED_TEST(FunctionTest, Load) {
   EXPECT_EQ(in, out);
 }
 
-TYPED_TEST(FunctionTest, LoadFewItems) {
+TYPED_TEST(FunctionTest, loadFewItems) {
   TypeParam src[] = {1, 2, 3};
 
   std::vector<TypeParam> in(std::begin(src), std::end(src));
@@ -56,7 +56,7 @@ TYPED_TEST(FunctionTest, LoadFewItems) {
   EXPECT_EQ(in, out);
 }
 
-TYPED_TEST(FunctionTest, LoadIf) {
+TYPED_TEST(FunctionTest, loadIf) {
   TypeParam src[] = {1, 2, 3, 4, 5, 6, 7, 8};
   int src_selection_flags[] = {0, 1, 1, 0, 0, 1, 0, 0};
 
@@ -73,7 +73,7 @@ TYPED_TEST(FunctionTest, LoadIf) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, LoadIfFewItems) {
+TYPED_TEST(FunctionTest, loadIfFewItems) {
   TypeParam src[] = {1, 2, 3};
   int src_selection_flags[] = {0, 1, 0};
 
@@ -90,7 +90,7 @@ TYPED_TEST(FunctionTest, LoadIfFewItems) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, LoadFrom) {
+TYPED_TEST(FunctionTest, loadFrom) {
   TypeParam src[] = {1, 2, 3, 4, 5, 6, 7, 8};
   int src_offsets[] = {7, 6, 5, 4, 3, 2, 1, 0};
 
@@ -106,7 +106,7 @@ TYPED_TEST(FunctionTest, LoadFrom) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, LoadFromFewItems) {
+TYPED_TEST(FunctionTest, loadFromFewItems) {
   TypeParam src[] = {1, 2, 3};
   int src_offsets[] = {2, 1, 0};
 
