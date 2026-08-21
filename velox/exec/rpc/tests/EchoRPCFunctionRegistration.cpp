@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-/// Static registration of DemoAsyncRPCFunction with the
+/// Static registration of EchoAsyncRPCFunction with the
 /// AsyncRPCFunctionRegistry.
 
-#include "velox/exec/rpc/tests/DemoRPCFunction.h"
+#include "velox/exec/rpc/tests/EchoRPCFunction.h"
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 
 using namespace facebook::velox::exec::rpc;
 
-VELOX_REGISTER_RPC_FUNCTION(demo_rpc, DemoAsyncRPCFunction);
+VELOX_REGISTER_RPC_FUNCTION(echo_rpc, EchoAsyncRPCFunction);

@@ -66,11 +66,10 @@ velox_add_library(
 velox_link_libraries(velox_rpc_plan_node_translator velox_rpc_operator velox_exec)
 
 if(${VELOX_BUILD_TESTING})
-  velox_add_library(velox_demo_rpc_function tests/DemoRPCFunction.cpp)
+  velox_add_library(velox_echo_rpc_function tests/EchoRPCFunction.cpp)
 
   velox_link_libraries(
-    velox_demo_rpc_function
-    velox_mock_rpc_client
+    velox_echo_rpc_function
     velox_expression_functions
     velox_async_rpc_function
   )
