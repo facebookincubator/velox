@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-/// DemoRPCFunctionTest - End-to-end test for the reference AsyncRPCFunction
+/// EchoRPCFunctionTest - End-to-end test for the reference AsyncRPCFunction
 /// implementation.
 ///
 /// Exercises the full lifecycle: initialize -> dispatchPerRow -> buildOutput,
-/// verifying that DemoAsyncRPCFunction correctly follows the AsyncRPCFunction
+/// verifying that EchoAsyncRPCFunction correctly follows the AsyncRPCFunction
 /// contract.
 
-#include "velox/exec/rpc/tests/DemoRPCFunction.h"
+#include "velox/exec/rpc/tests/EchoRPCFunction.h"
 
 #include <gtest/gtest.h>
 
@@ -32,25 +32,25 @@
 namespace facebook::velox::exec::rpc {
 namespace {
 
-class DemoRPCFunctionTest : public testing::Test {
+class EchoRPCFunctionTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
     memory::MemoryManager::testingSetInstance({});
   }
 
   void SetUp() override {
-    function_ = std::make_shared<DemoAsyncRPCFunction>();
+    function_ = std::make_shared<EchoAsyncRPCFunction>();
     pool_ = memory::memoryManager()->addLeafPool();
 
     // Follow the lifecycle: initialize() before any dispatch.
     function_->initialize(core::QueryConfig{{}}, {}, {});
   }
 
-  std::shared_ptr<DemoAsyncRPCFunction> function_;
+  std::shared_ptr<EchoAsyncRPCFunction> function_;
   std::shared_ptr<memory::MemoryPool> pool_;
 };
 
-TEST_F(DemoRPCFunctionTest, endToEnd) {
+TEST_F(EchoRPCFunctionTest, endToEnd) {
   // Build input vector.
   std::vector<std::string> prompts = {"hello world", "test prompt"};
   const auto numRows = static_cast<vector_size_t>(prompts.size());
@@ -84,12 +84,13 @@ TEST_F(DemoRPCFunctionTest, endToEnd) {
   auto* flat = result->asFlatVector<StringView>();
   EXPECT_FALSE(flat->isNullAt(0));
   EXPECT_FALSE(flat->isNullAt(1));
-  // MockRPCClient returns "Response for: <payload>".
-  EXPECT_EQ(flat->valueAt(0).str(), "Response for: hello world");
-  EXPECT_EQ(flat->valueAt(1).str(), "Response for: test prompt");
+  // Output must depend on the input: a dispatch that dropped or misrouted a
+  // row cannot produce these.
+  EXPECT_EQ(flat->valueAt(0).str(), "echo: hello world");
+  EXPECT_EQ(flat->valueAt(1).str(), "echo: test prompt");
 }
 
-TEST_F(DemoRPCFunctionTest, nullInput) {
+TEST_F(EchoRPCFunctionTest, nullInput) {
   // Build input with a null row.
   auto input =
       BaseVector::create<FlatVector<StringView>>(VARCHAR(), 2, pool_.get());
@@ -114,12 +115,12 @@ TEST_F(DemoRPCFunctionTest, nullInput) {
   EXPECT_EQ(resp1.error.value(), "null_input");
 }
 
-TEST_F(DemoRPCFunctionTest, errorResponse) {
+TEST_F(EchoRPCFunctionTest, errorResponse) {
   // Build output from a response with an error.
   std::vector<RPCResponse> responses;
   RPCResponse ok;
   ok.rowId = 0;
-  ok.result = "good result";
+  ok.payload = makeTextPayload("good result");
   responses.push_back(std::move(ok));
 
   RPCResponse err;
@@ -135,15 +136,15 @@ TEST_F(DemoRPCFunctionTest, errorResponse) {
   EXPECT_TRUE(flat->isNullAt(1));
 }
 
-TEST_F(DemoRPCFunctionTest, signatures) {
-  auto sigs = DemoAsyncRPCFunction::signatures();
+TEST_F(EchoRPCFunctionTest, signatures) {
+  auto sigs = EchoAsyncRPCFunction::signatures();
   ASSERT_EQ(sigs.size(), 1);
-  // demo_rpc(varchar) -> varchar
+  // echo_rpc(varchar) -> varchar
   EXPECT_EQ(sigs[0]->argumentTypes().size(), 1);
 }
 
-TEST_F(DemoRPCFunctionTest, metadata) {
-  EXPECT_EQ(function_->name(), "demo_rpc");
+TEST_F(EchoRPCFunctionTest, metadata) {
+  EXPECT_EQ(function_->name(), "echo_rpc");
   EXPECT_EQ(function_->resultType()->kind(), TypeKind::VARCHAR);
   EXPECT_EQ(function_->tierKey(), "");
 }

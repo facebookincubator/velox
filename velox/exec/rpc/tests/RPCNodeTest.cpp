@@ -29,21 +29,21 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
-#include "velox/common/rpc/clients/MockRPCClient.h"
+#include "velox/exec/rpc/tests/ResponseSimulator.h"
 #include "velox/expression/rpc/AsyncRPCFunction.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::exec::rpc {
 
-using velox::rpc::MockRPCClient;
+using exec::rpc::test::ResponseSimulator;
 
 namespace {
 
 /// Mock implementation of AsyncRPCFunction for testing.
 class MockAsyncRPCFunction : public AsyncRPCFunction {
  public:
-  explicit MockAsyncRPCFunction(std::shared_ptr<MockRPCClient> client)
-      : client_(std::move(client)) {}
+  explicit MockAsyncRPCFunction(std::shared_ptr<ResponseSimulator> simulator)
+      : simulator_(std::move(simulator)) {}
 
   std::string name() const override {
     return "mock_rpc_function";
@@ -51,6 +51,10 @@ class MockAsyncRPCFunction : public AsyncRPCFunction {
 
   TypePtr resultType() const override {
     return VARCHAR();
+  }
+
+  RpcCapability capabilities() const override {
+    return {.supportedModes = {RpcCapabilityMode::kPerRow}};
   }
 
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
@@ -74,22 +78,36 @@ class MockAsyncRPCFunction : public AsyncRPCFunction {
         results.emplace_back(
             row,
             folly::makeSemiFuture<RPCResponse>(RPCResponse{
-                .rowId = static_cast<int64_t>(row),
-                .result = "",
-                .metadata = {},
-                .error = "null_input"}));
+                .rowId = static_cast<int64_t>(row), .error = "null_input"}));
         return;
       }
-      RPCRequest request;
-      request.payload = promptVector->valueAt(row).str();
-      results.emplace_back(row, client_->call(request));
+      std::string prompt = promptVector->valueAt(row).str();
+      results.emplace_back(
+          row,
+          simulator_->nextCall().deferValue(
+              [prompt = std::move(prompt)](velox::rpc::RPCErrorKind kind) {
+                RPCResponse response;
+                if (kind != velox::rpc::RPCErrorKind::kNone) {
+                  response.error = "simulated failure";
+                  response.errorKind = kind;
+                  return response;
+                }
+                response.payload = makeTextPayload("mock: " + prompt);
+                return response;
+              }));
     });
 
     return results;
   }
 
+  VectorPtr buildOutput(
+      const std::vector<RPCResponse>& responses,
+      memory::MemoryPool* pool) const override {
+    return buildTextOutput(responses, pool);
+  }
+
  private:
-  std::shared_ptr<MockRPCClient> client_;
+  std::shared_ptr<ResponseSimulator> simulator_;
 };
 
 class RPCNodeTest : public testing::Test {
@@ -99,13 +117,13 @@ class RPCNodeTest : public testing::Test {
   }
 
   void SetUp() override {
-    client_ =
-        std::make_shared<MockRPCClient>(std::chrono::milliseconds(10), 0.0);
-    function_ = std::make_shared<MockAsyncRPCFunction>(client_);
+    simulator_ =
+        std::make_shared<ResponseSimulator>(std::chrono::milliseconds(10), 0.0);
+    function_ = std::make_shared<MockAsyncRPCFunction>(simulator_);
     pool_ = memory::memoryManager()->addLeafPool();
   }
 
-  std::shared_ptr<MockRPCClient> client_;
+  std::shared_ptr<ResponseSimulator> simulator_;
   std::shared_ptr<MockAsyncRPCFunction> function_;
   std::shared_ptr<memory::MemoryPool> pool_;
 };
@@ -173,7 +191,7 @@ TEST_F(RPCNodeTest, functionDispatchPerRow) {
   for (auto& [rowIdx, future] : futures) {
     auto response = std::move(future).get();
     EXPECT_FALSE(response.hasError());
-    EXPECT_FALSE(response.result.empty());
+    EXPECT_FALSE(responseAs<TextPayload>(response).text.empty());
   }
 }
 
@@ -182,7 +200,7 @@ TEST_F(RPCNodeTest, functionBuildOutput) {
   for (int i = 0; i < 3; ++i) {
     RPCResponse resp;
     resp.rowId = i;
-    resp.result = "Response for prompt " + std::to_string(i);
+    resp.payload = makeTextPayload("Response for prompt " + std::to_string(i));
     responses.push_back(std::move(resp));
   }
 
