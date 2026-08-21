@@ -16,6 +16,8 @@
 
 #include <gtest/gtest.h>
 #include <array>
+#include <cctype>
+#include <cstdlib>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/geospatial/GeometryConstants.h"
 #include "velox/common/testutil/OptionalEmpty.h"
@@ -2280,6 +2282,49 @@ TEST_F(GeometryFunctionsTest, testStDimension) {
   assertResult<int8_t>("ST_Dimension", "POINT (1 4))", 0);
 }
 
+namespace {
+// Compares two WKT strings, allowing coordinates to differ slightly. Buffer
+// coordinates come out of transcendental routines whose last digits are not
+// identical across platforms, so an exact text comparison is not portable.
+void assertWktNearlyEqual(
+    const std::string& actual,
+    const std::string& expected) {
+  const auto startsNumber = [](const char* p) {
+    if (std::isdigit(static_cast<unsigned char>(*p))) {
+      return true;
+    }
+    return (*p == '-' || *p == '+' || *p == '.') &&
+        std::isdigit(static_cast<unsigned char>(p[1]));
+  };
+
+  const char* actualPos = actual.c_str();
+  const char* expectedPos = expected.c_str();
+  while (*actualPos != '\0' && *expectedPos != '\0') {
+    if (startsNumber(actualPos) && startsNumber(expectedPos)) {
+      // strtod consumes the whole numeric token, including any exponent.
+      char* actualEnd = nullptr;
+      char* expectedEnd = nullptr;
+      const double actualValue = std::strtod(actualPos, &actualEnd);
+      const double expectedValue = std::strtod(expectedPos, &expectedEnd);
+      ASSERT_NEAR(
+          actualValue,
+          expectedValue,
+          std::max(1e-12, std::abs(expectedValue) * 1e-12))
+          << "actual:   " << actual << "\nexpected: " << expected;
+      actualPos = actualEnd;
+      expectedPos = expectedEnd;
+    } else {
+      ASSERT_EQ(*actualPos, *expectedPos)
+          << "actual:   " << actual << "\nexpected: " << expected;
+      ++actualPos;
+      ++expectedPos;
+    }
+  }
+  ASSERT_EQ(*actualPos, '\0') << "actual:   " << actual;
+  ASSERT_EQ(*expectedPos, '\0') << "expected: " << expected;
+}
+} // namespace
+
 TEST_F(GeometryFunctionsTest, testStBuffer) {
   const auto testStBufferFunc =
       [&](const std::optional<std::string>& wkt,
@@ -2290,7 +2335,7 @@ TEST_F(GeometryFunctionsTest, testStBuffer) {
 
         if (expected.has_value()) {
           ASSERT_TRUE(result.has_value());
-          ASSERT_EQ(result.value(), expected.value());
+          assertWktNearlyEqual(result.value(), expected.value());
         } else {
           ASSERT_FALSE(result.has_value());
         }
