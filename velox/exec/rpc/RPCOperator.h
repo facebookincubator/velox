@@ -222,6 +222,16 @@ class RPCOperator : public exec::Operator {
   // > 0 = fire flushBatch() every N rows during addInput().
   int32_t dispatchBatchSize_{0};
 
+  // Whether this call's round-trip time is a usable congestion sample. False
+  // for an async offline job, whose RTT measures job completion and queueing
+  // rather than contention, so feeding it to the per-driver latency gradient
+  // would read a slow queue as an overloaded backend. Derived once in
+  // initialize() from the resolved mode and the backend's capability; see
+  // there. Gates the per-driver window on both the per-row and batch paths, so
+  // the predicate holds wherever it is set. Per-backend admission is unaffected
+  // either way.
+  bool latencyIsCongestionSignal_{true};
+
   // Max rows per output vector, from QueryConfig::preferredOutputBatchRows (set
   // in initialize()). The kPerRow path drains at most this many ready rows per
   // getOutput() call.
@@ -235,10 +245,9 @@ class RPCOperator : public exec::Operator {
   // Whether we've detected the finish condition.
   bool finished_{false};
 
-  // Timeout for batch RPC calls (30 minutes).
-  // This is a ceiling — the operator returns as soon as results are ready.
-  // Batch LLM inference can take many minutes due to MetaGen queuing
-  // and GPU scheduling, so the timeout needs generous headroom.
+  // Ceiling for batch RPC calls; the operator returns as soon as results are
+  // ready. An offline batch job can take many minutes in backend queueing and
+  // scheduling, so this needs generous headroom.
   static constexpr auto kBatchRpcTimeout = std::chrono::milliseconds(3'600'000);
 
   // Block wait time tracking for runtime stats.

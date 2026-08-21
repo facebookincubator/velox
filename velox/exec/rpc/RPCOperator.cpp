@@ -110,6 +110,17 @@ void RPCOperator::initialize() {
       operatorCtx_->driverCtx()->queryConfig(), inputTypes, constantInputs);
 
   tierKey_ = function_->tierKey();
+  // An async offline job (submit -> poll -> fetch) runs only in BATCH mode. Its
+  // round-trip time measures job completion and queueing rather than
+  // contention, so the per-driver latency gradient must not sample it or it
+  // reads a slow queue as an overloaded backend. Per-backend admission still
+  // bounds concurrency either way. Combining the planned mode with the
+  // backend's declared capability is the operator's job: it is the only place
+  // that holds both.
+  latencyIsCongestionSignal_ =
+      !(rpcNode_->streamingMode() == RPCStreamingMode::kBatch &&
+        function_->capabilities().supportedModes.has(
+            RpcCapabilityMode::kAsyncJob));
 
   const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
 
@@ -548,12 +559,16 @@ RowVectorPtr RPCOperator::getOutput() {
     // latency.
     const auto signal = function_->evaluateCongestion(responses);
     if (signal == AsyncRPCFunction::CongestionSignal::kOverloaded) {
-      state_->onUnitError();
+      if (latencyIsCongestionSignal_) {
+        state_->onUnitError();
+      }
       admission_->onOutcome(BackendAdmission::Outcome::kOverload, 0);
     } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
       // Feed the whole drained batch of successful RTTs to the gradient in one
       // lock acquisition; its size is the success count driving AIMD recovery.
-      state_->onUnitSamples(roundTripTimesNs);
+      if (latencyIsCongestionSignal_) {
+        state_->onUnitSamples(roundTripTimesNs);
+      }
       admission_->onOutcome(
           BackendAdmission::Outcome::kSuccess,
           static_cast<int64_t>(roundTripTimesNs.size()));
@@ -596,12 +611,16 @@ RowVectorPtr RPCOperator::getOutput() {
     // the cap on overload and recovers on success.
     const auto signal = function_->evaluateCongestion(claimedBatch_->responses);
     if (signal == AsyncRPCFunction::CongestionSignal::kOverloaded) {
-      state_->onUnitError();
+      if (latencyIsCongestionSignal_) {
+        state_->onUnitError();
+      }
       admission_->onOutcome(BackendAdmission::Outcome::kOverload, 0);
     } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
       // Feed the measured round-trip latency to the gradient window so it
       // learns the in-flight-batch sweet spot without a fixed ceiling.
-      state_->onUnitSample(claimedBatch_->rttNs);
+      if (latencyIsCongestionSignal_) {
+        state_->onUnitSample(claimedBatch_->rttNs);
+      }
       // Successful rows in this batch drive AIMD recovery of the per-tier cap.
       admission_->onOutcome(
           BackendAdmission::Outcome::kSuccess, numRows - batchErrors);
