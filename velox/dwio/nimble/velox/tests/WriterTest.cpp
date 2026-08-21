@@ -1665,6 +1665,102 @@ TEST_F(WriterTest, memoryReclaimPath) {
   ASSERT_TRUE(reclaimEntered.load());
 }
 
+namespace {
+// A spill config is what makes the writer reclaimable at all, so the tests
+// below set one rather than short-circuiting on the null check.
+velox::common::SpillConfig makeReclaimSpillConfig() {
+  velox::common::SpillConfig spillConfig;
+  spillConfig.writerFlushThresholdSize = 1 << 20;
+  return spillConfig;
+}
+
+// Mirrors what SharedArbitrator does when it walks a task's pools: ask every
+// child that carries a reclaimer how much it could free. Returns the number of
+// reclaimers queried.
+int32_t queryChildReclaimers(velox::memory::MemoryPool& parent) {
+  int32_t queried = 0;
+  parent.visitChildren([&](velox::memory::MemoryPool* child) {
+    auto* reclaimer = child->reclaimer();
+    if (reclaimer != nullptr) {
+      uint64_t reclaimableBytes{1};
+      EXPECT_FALSE(reclaimer->reclaimableBytes(*child, reclaimableBytes));
+      EXPECT_EQ(reclaimableBytes, 0);
+      ++queried;
+    }
+    return true;
+  });
+  return queried;
+}
+} // namespace
+
+// The writer installs its reclaimer while `pool_` is initialized, several
+// members before the state that reclaimer reads. Arbitration triggered by any
+// allocation in between -- the writer's own context allocates a 1MB Buffer, and
+// a concurrent driver can arbitrate at any moment -- reaches the reclaimer
+// first. Drives that through the reclaimer factory, which the writer invokes
+// for `encodingMemoryPool_` and for the context: after the reclaimer is live on
+// the pool, before the writer is built.
+TEST_F(WriterTest, reclaimableBytesDuringConstruction) {
+  auto rootPool = velox::memory::memoryManager()->addRootPool(
+      "reclaimDuringConstruction",
+      64L << 20,
+      velox::memory::MemoryReclaimer::create());
+  auto writerPool = rootPool->addAggregateChild(
+      "writer", velox::memory::MemoryReclaimer::create());
+
+  auto type = velox::ROW({{"simple_int", velox::INTEGER()}});
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+
+  const auto spillConfig = makeReclaimSpillConfig();
+  int32_t queriedDuringConstruction = 0;
+  nimble::WriterOptions writerOptions{
+      .reclaimerFactory =
+          [&]() -> std::unique_ptr<velox::memory::MemoryReclaimer> {
+        queriedDuringConstruction += queryChildReclaimers(*writerPool);
+        return nullptr;
+      },
+      .spillConfig = &spillConfig};
+
+  nimble::Writer writer(
+      type, std::move(writeFile), *writerPool, std::move(writerOptions));
+
+  // The first factory call happens before the pool exists; the later ones see
+  // it, and are the ones that matter.
+  EXPECT_GT(queriedDuringConstruction, 0);
+  writer.close();
+}
+
+// A closed writer has no stripe left to flush, so it must stop advertising its
+// reserved bytes as reclaimable -- otherwise the arbitrator picks the pool as a
+// candidate, suspends the driver, and reclaimBytes() turns it away. Also covers
+// the teardown ordering: `context_` is destroyed ahead of `pool_`, so anything
+// the reclaimer reads has to outlive the writer's members.
+TEST_F(WriterTest, reclaimableBytesAfterClose) {
+  auto rootPool = velox::memory::memoryManager()->addRootPool(
+      "reclaimAfterClose", 64L << 20, velox::memory::MemoryReclaimer::create());
+  auto writerPool = rootPool->addAggregateChild(
+      "writer", velox::memory::MemoryReclaimer::create());
+
+  auto type = velox::ROW({{"simple_int", velox::INTEGER()}});
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+
+  const auto spillConfig = makeReclaimSpillConfig();
+  nimble::Writer writer(
+      type,
+      std::move(writeFile),
+      *writerPool,
+      nimble::WriterOptions{.spillConfig = &spillConfig});
+  for (const auto& batch :
+       generateBatches(type, 2, 100, 20221110, *leafPool_)) {
+    writer.write(batch);
+  }
+  writer.close();
+
+  EXPECT_GT(queryChildReclaimers(*writerPool), 0);
+}
+
 TEST_F(WriterTest, flushHugeStrings) {
   nimble::WriterOptions writerOptions{.flushPolicyFactory = []() {
     return std::make_unique<nimble::StripeRawSizeFlushPolicy>(1 * 1024 * 1024);
@@ -4324,6 +4420,63 @@ TEST_F(WriterTest, chunkSizeStatsPopulatedWhenChunkingTriggered) {
   EXPECT_GT(chunkSizeBytes.count, 0);
   EXPECT_GT(chunkSizeBytes.sum, 0);
   EXPECT_LE(chunkSizeBytes.min, chunkSizeBytes.max);
+}
+
+TEST_F(WriterTest, smallMaxChunkSizeProducesMultipleChunks) {
+  const auto type =
+      velox::ROW({{"c0", velox::BIGINT()}, {"c1", velox::VARCHAR()}});
+
+  nimble::WriterOptions options{
+      .enableChunkIndex = true,
+      .minStreamChunkRawSize = 0,
+      .maxStreamChunkRawSize = 2048,
+      .flushPolicyFactory = []() -> std::unique_ptr<nimble::FlushPolicy> {
+        return std::make_unique<nimble::StripeRawSizeFlushPolicy>(256ULL << 20);
+      },
+      .enableChunking = true,
+  };
+
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  nimble::Writer writer(
+      type, std::move(writeFile), *rootPool_, std::move(options));
+
+  velox::VectorFuzzer fuzzer(
+      {.vectorSize = 5000, .nullRatio = 0.1, .stringLength = 50},
+      leafPool_.get(),
+      42);
+  for (int i = 0; i < 4; ++i) {
+    writer.write(fuzzer.fuzzInputRow(type));
+  }
+  writer.close();
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = nimble::TabletReader::create(
+      readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+  ASSERT_EQ(1, tablet->stripeCount());
+
+  auto stripeId = tablet->stripeIdentifier(0);
+  const auto streamCount = tablet->streamCount(stripeId);
+  bool foundMultiChunkStream = false;
+  for (uint32_t s = 0; s < streamCount; ++s) {
+    auto streamLoaders = tablet->load(stripeId, std::array<uint32_t, 1>{s});
+    if (streamLoaders.empty() || !streamLoaders[0]) {
+      continue;
+    }
+    nimble::InMemoryChunkedStream chunked{
+        *leafPool_, std::move(streamLoaders[0])};
+    uint32_t chunkCount = 0;
+    while (chunked.hasNext()) {
+      chunked.nextChunk();
+      ++chunkCount;
+    }
+    if (chunkCount > 1) {
+      foundMultiChunkStream = true;
+      LOG(INFO) << "stream " << s << ": " << chunkCount << " chunks";
+    }
+  }
+  EXPECT_TRUE(foundMultiChunkStream)
+      << "Expected at least one stream with multiple chunks at maxStreamChunkRawSize=2048";
 }
 
 TEST_F(WriterTest, chunkSizeStatsEmptyWhenChunkingNotTriggered) {

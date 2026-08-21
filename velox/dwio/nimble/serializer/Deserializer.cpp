@@ -407,32 +407,38 @@ void Deserializer::initialize(
     deserializers_[offset] = decoder.get();
   }
 
-  // Pre-size stream presence-tracking state once. Both vectors are bounded
-  // by maxOffset because every value-stream anchor offset is a Type main
-  // descriptor offset already in deserializerMap_. Sizing here (rather than
-  // grow-on-demand inside createDeserializersForType) avoids repeated
-  // reallocations and lets the per-batch hot path skip a bounds check.
   if (!inMapChildTypes_.empty()) {
     streamPresentFlags_.resize(maxOffset + 1, false);
     valueOffsetToInMap_.resize(maxOffset + 1, kInvalidInMapOffset);
     // Populate the reverse-lookup table: for each top-level FlatMap child,
-    // record its inMap stream offset at every one of its value-stream
+    // record its inMap stream offset at every one of its presence-stream
     // anchors. The per-batch in-map inference reads this to map a present
-    // value anchor back to its owning child without re-walking the schema.
+    // child stream back to its owning child without re-walking the schema.
     //
-    // visitValueStreamLeaves visits ALL value-stream offsets in the child
-    // subtree (Row recurses all children; FlatMap recurses all children).
+    // Value leaves are not enough for omitted in-map inference: a child present
+    // in every row with all-null values may only have null/container/nested
+    // in-map streams to prove an omitted all-true in-map stream. Therefore,
+    // visitPresenceStreamOffsets records all data-bearing offsets in the child
+    // subtree, including Row/FlatMap null streams and nested FlatMap in-map
+    // streams.
     // Relies on RowFieldWriter writing every field over the same
-    // OrderedRanges, so sibling Row children populate in lockstep — if any
+    // OrderedRanges, so sibling Row children populate in lockstep; if any
     // sibling's value stream is present in a batch, all are. If a future
     // writer ever made Row children conditionally absent, the in-map
     // inference below would over-attribute presence to keys whose first
     // child was absent but a sibling was present.
     for (const auto& [inMapOffset, childType] : inMapChildTypes_) {
-      visitValueStreamLeaves(
+      visitPresenceStreamOffsets(
           *childType,
-          [this, _inMapOffset = inMapOffset](offset_size valueOffset) {
-            valueOffsetToInMap_[valueOffset] = _inMapOffset;
+          [this, _inMapOffset = inMapOffset](offset_size presenceOffset) {
+            // This lookup is only indexed by presentStreamOffsets_, which is
+            // populated from decoded streams and therefore bounded by
+            // deserializerMap_. visitPresenceStreamOffsets() walks schema
+            // anchors too, including projected-away streams with no decoder.
+            if (presenceOffset >= valueOffsetToInMap_.size()) {
+              return false;
+            }
+            valueOffsetToInMap_[presenceOffset] = _inMapOffset;
             return false;
           });
     }

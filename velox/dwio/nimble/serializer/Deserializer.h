@@ -314,8 +314,8 @@ class Deserializer {
   static constexpr uint32_t kInvalidInMapOffset =
       std::numeric_limits<uint32_t>::max();
 
-  // Reverse lookup from a FlatMap child value-stream offset to its in-map
-  // stream offset. Entries that are not FlatMap child value streams use
+  // Reverse lookup from a FlatMap child presence-stream offset to its in-map
+  // stream offset. Entries that are not FlatMap child presence streams use
   // kInvalidInMapOffset.
   std::vector<uint32_t> valueOffsetToInMap_;
 
