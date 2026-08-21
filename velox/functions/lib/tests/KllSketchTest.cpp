@@ -412,7 +412,12 @@ TEST_F(KllSketchTest, memoryUsage) {
   for (int i = 1024; i < 8192; ++i) {
     kll.insert(i);
   }
-  EXPECT_LE(alloc.retainedSize() - alloc.freeSpace(), 32840);
+  // The bound guards against the sketch growing with the number of inserted
+  // elements: O(N) would need more than 64KB here, while O(3K) needs about
+  // 32KB. The exact figure depends on how many allocations the standard
+  // library's vector growth performs, which differs between implementations,
+  // so leave a small margin rather than pinning one platform's total.
+  EXPECT_LE(alloc.retainedSize() - alloc.freeSpace(), 33'000);
 }
 
 } // namespace
