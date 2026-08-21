@@ -87,7 +87,9 @@ class BackendAdmission {
     /// High-water in-flight count over the backend's lifetime.
     int64_t peakPending{0};
 
-    /// Lowest capacity ever reached. Zero means capacity never shrank.
+    /// Lowest capacity ever reached, or the ceiling when capacity never
+    /// shrank. Reporting the ceiling rather than a sentinel zero means the
+    /// value is always meaningful, so readers need no special case.
     int64_t lowWaterCapacity{0};
   };
 

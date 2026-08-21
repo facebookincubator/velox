@@ -278,7 +278,7 @@ BackendAdmission::Stats BackendAdmission::stats() const {
       .capacity = capacityLocked(),
       .pending = pending_.load(),
       .peakPending = peakPending_.load(),
-      .lowWaterCapacity = lowWater_,
+      .lowWaterCapacity = lowWater_ > 0 ? lowWater_ : ceilingLocked(),
   };
 }
 
