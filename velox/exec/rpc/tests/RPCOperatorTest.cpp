@@ -24,8 +24,8 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/rpc/BackendAdmission.h"
 #include "velox/exec/rpc/RPCPlanNodeTranslator.h"
-#include "velox/exec/rpc/RPCRateLimiter.h"
 #include "velox/exec/rpc/tests/DemoBatchRPCFunction.h"
 #include "velox/exec/rpc/tests/EchoRPCFunction.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -103,7 +103,7 @@ class RPCOperatorTest : public OperatorTestBase {
   }
 
   void TearDown() override {
-    RPCRateLimiter::testingResetAllState();
+    BackendRegistry::global().testingReset();
     OperatorTestBase::TearDown();
   }
 
@@ -683,7 +683,7 @@ TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
 /// per-driver window (onUnitError) and the process-global rate limiter
 /// (onRateLimited); on kSuccess the window's latency gradient is fed. Verifies
 /// the query still completes correctly through that path. The controllers'
-/// adjustments are unit-tested in RPCStateTest / RPCRateLimiterTest; here we
+/// adjustments are unit-tested in RPCStateTest / BackendAdmissionTest; here we
 /// guard the operator-level materialization + signal plumbing against
 /// crashes/regressions.
 TEST_F(RPCOperatorTest, perRowCongestionPath) {
