@@ -49,7 +49,8 @@ MmapAllocator::MmapAllocator(const Options& options)
   // and calls madvise() on individual pages, which requires the address and
   // length to line up with the OS's actual page size. NVIDIA's documented
   // recommended default page size for Grace / Grace-Hopper systems is 64KB,
-  // not 4KB (see https://docs.nvidia.com/dccpu/grace-perf-tuning-guide/os-settings.html),
+  // not 4KB (see
+  // https://docs.nvidia.com/dccpu/grace-perf-tuning-guide/os-settings.html),
   // and on such systems madvise() silently fails with EINVAL on sub-64KB
   // regions instead of throwing, which corrupts this allocator's internal
   // page-count accounting rather than surfacing a clear error. This isn't
