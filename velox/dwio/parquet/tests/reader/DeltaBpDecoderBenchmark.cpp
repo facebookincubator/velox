@@ -17,26 +17,21 @@
 // Micro-benchmarks for the Parquet DELTA_BINARY_PACKED decoder.
 // Bypasses the full reader pipeline to isolate decoder performance.
 //
-// Three groups:
+// Two groups:
 //   1. Skip vs decode-and-discard. Skipping is the optimization; decoding then
 //      throwing the values away is the alternative it replaces, so the pair is
 //      a fair in-binary A/B. Reported for constant-delta miniblocks (O(1) skip)
 //      and variable-delta miniblocks (delta summation).
 //   2. Sequential full decode. The no-regression guard for the common read
 //      path; compare across a `main` vs branch build.
-//   3. Dispatch: switch vs fold-expression selection of the per-bit-width
-//      miniblock kernel. Answers how much the jump-table dispatch actually
-//      buys, since dispatch runs once per 32-value miniblock.
 
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <utility>
 #include <vector>
 
-#include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 
@@ -255,198 +250,6 @@ BENCHMARK(SequentialDecode_VariableDelta) {
   DeltaBpDecoder decoder(page.data());
   decoder.readValues(out.data(), kBenchNumValues);
   sink += out[kBenchNumValues - 1];
-  folly::doNotOptimizeAway(sink);
-}
-
-BENCHMARK_DRAW_LINE();
-
-// ===========================================================================
-// 3. Dispatch: switch vs fold-expression
-//
-// A representative per-bit-width miniblock kernel (bit-unpack fused with the
-// prefix sum) selected two ways. Both dispatchers pick the same kernel, so the
-// difference is purely the selection mechanism. Dispatch runs once per 32-value
-// miniblock, so this bounds how much the jump table can help.
-// ===========================================================================
-
-namespace {
-
-template <int kBitWidth>
-FOLLY_ALWAYS_INLINE void decodeKernel(
-    const char* src,
-    int32_t numValues,
-    int64_t minDelta,
-    int64_t& lastValue,
-    int64_t* out) {
-  constexpr uint64_t mask =
-      (kBitWidth == 64) ? ~0ULL : ((1ULL << kBitWidth) - 1);
-  const auto* source = reinterpret_cast<const uint64_t*>(src);
-  uint64_t cumulative = static_cast<uint64_t>(lastValue);
-  const uint64_t step = static_cast<uint64_t>(minDelta);
-  for (int32_t i = 0; i < numValues; ++i) {
-    const uint64_t value =
-        bits::detail::loadBits<uint64_t>(
-            source, static_cast<uint64_t>(i) * kBitWidth, kBitWidth) &
-        mask;
-    cumulative += step + value;
-    out[i] = static_cast<int64_t>(cumulative);
-  }
-  lastValue = static_cast<int64_t>(cumulative);
-}
-
-// Jump-table selection (mirrors DeltaBpDecoder::dispatchSimdMiniBlock).
-bool dispatchSwitch(
-    uint32_t bitWidth,
-    const char* src,
-    int32_t numValues,
-    int64_t minDelta,
-    int64_t& lastValue,
-    int64_t* out) {
-  switch (bitWidth) {
-#define CASE(W)                                                \
-  case W:                                                      \
-    decodeKernel<W>(src, numValues, minDelta, lastValue, out); \
-    return true
-    CASE(1);
-    CASE(2);
-    CASE(3);
-    CASE(4);
-    CASE(5);
-    CASE(6);
-    CASE(7);
-    CASE(8);
-    CASE(9);
-    CASE(10);
-    CASE(11);
-    CASE(12);
-    CASE(13);
-    CASE(14);
-    CASE(15);
-    CASE(16);
-    CASE(17);
-    CASE(18);
-    CASE(19);
-    CASE(20);
-    CASE(21);
-    CASE(22);
-    CASE(23);
-    CASE(24);
-    CASE(25);
-    CASE(26);
-    CASE(27);
-    CASE(28);
-    CASE(29);
-    CASE(30);
-    CASE(31);
-    CASE(32);
-#undef CASE
-    default:
-      return false;
-  }
-}
-
-template <int... Is>
-bool dispatchFoldImpl(
-    std::integer_sequence<int, Is...>,
-    uint32_t bitWidth,
-    const char* src,
-    int32_t numValues,
-    int64_t minDelta,
-    int64_t& lastValue,
-    int64_t* out) {
-  bool done = false;
-  (void)((bitWidth == (Is + 1)
-              ? (decodeKernel<Is + 1>(src, numValues, minDelta, lastValue, out),
-                 done = true)
-              : false) ||
-         ...);
-  return done;
-}
-
-// Fold-expression linear comparison chain over bit widths 1..32.
-bool dispatchFold(
-    uint32_t bitWidth,
-    const char* src,
-    int32_t numValues,
-    int64_t minDelta,
-    int64_t& lastValue,
-    int64_t* out) {
-  return dispatchFoldImpl(
-      std::make_integer_sequence<int, 32>{},
-      bitWidth,
-      src,
-      numValues,
-      minDelta,
-      lastValue,
-      out);
-}
-
-constexpr int kMiniBlockValues = 32;
-constexpr int kNumMiniBlocks = 4096;
-
-// A pool of packed miniblocks with bit widths cycling 1..32, plus the width of
-// each, so the dispatcher's branch is not trivially predictable.
-struct DispatchFixture {
-  std::vector<char> packed;
-  std::vector<uint32_t> widths;
-  std::vector<size_t> offsets;
-};
-
-const DispatchFixture& dispatchFixture() {
-  static const DispatchFixture fixture = [] {
-    DispatchFixture f;
-    for (int m = 0; m < kNumMiniBlocks; ++m) {
-      const uint32_t bitWidth = 1 + (m % 32);
-      f.widths.push_back(bitWidth);
-      f.offsets.push_back(f.packed.size());
-      std::vector<uint64_t> vals(kMiniBlockValues);
-      const uint64_t mask = (bitWidth == 64) ? ~0ULL : ((1ULL << bitWidth) - 1);
-      for (int i = 0; i < kMiniBlockValues; ++i) {
-        vals[i] = (static_cast<uint64_t>(i) * 2654435761u) & mask;
-      }
-      std::vector<uint8_t> tmp;
-      appendPacked(tmp, vals, static_cast<uint8_t>(bitWidth));
-      f.packed.insert(f.packed.end(), tmp.begin(), tmp.end());
-    }
-    f.packed.insert(f.packed.end(), 16, 0); // over-read padding
-    return f;
-  }();
-  return fixture;
-}
-
-} // namespace
-
-BENCHMARK(Dispatch_Switch) {
-  const auto& f = dispatchFixture();
-  int64_t last = 0;
-  int64_t out[kMiniBlockValues];
-  for (int m = 0; m < kNumMiniBlocks; ++m) {
-    dispatchSwitch(
-        f.widths[m],
-        f.packed.data() + f.offsets[m],
-        kMiniBlockValues,
-        1,
-        last,
-        out);
-  }
-  sink += last;
-  folly::doNotOptimizeAway(sink);
-}
-
-BENCHMARK_RELATIVE(Dispatch_Fold) {
-  const auto& f = dispatchFixture();
-  int64_t last = 0;
-  int64_t out[kMiniBlockValues];
-  for (int m = 0; m < kNumMiniBlocks; ++m) {
-    dispatchFold(
-        f.widths[m],
-        f.packed.data() + f.offsets[m],
-        kMiniBlockValues,
-        1,
-        last,
-        out);
-  }
-  sink += last;
   folly::doNotOptimizeAway(sink);
 }
 
