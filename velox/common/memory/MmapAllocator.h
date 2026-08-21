@@ -55,6 +55,15 @@ class MmapAllocator : public MemoryAllocator {
 
   ~MmapAllocator();
 
+  /// Returns true if the system's page size matches
+  /// AllocationTraits::kPageSize, the granularity MmapAllocator assumes for
+  /// its mmap/madvise calls (see the constructor in MmapAllocator.cpp for
+  /// why this can be false). Construct a MallocAllocator instead when it
+  /// is; the constructor enforces this via VELOX_CHECK, so callers that
+  /// want to select an allocator kind without throwing should check this
+  /// first.
+  static bool isPageSizeSupported();
+
   Kind kind() const override {
     return kind_;
   }
