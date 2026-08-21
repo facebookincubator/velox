@@ -246,6 +246,12 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
     elideReadOnlyClones(*graph_, types_);
   }
 
+  // Last of the pre-partition passes: the clone CSE above merges equal values,
+  // which would undo the duplicates this inserts.
+  if (WaveConfig::get().duplicateMetadata) {
+    duplicateMetadataOps(*graph_, types_, *this);
+  }
+
   // Graph outputs (and, for list-typed outputs, their elements) escape the
   // graph, so LaunchData must never release them as per-op intermediates.
   graphOutputIds_.clear();

@@ -35,6 +35,17 @@ namespace torch::wave {
 /// layers. Returns the number elided.
 int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types);
 
+/// Rematerializes each multiply-used metadata getter (sym_size / sym_numel) at
+/// its use sites, so it stops being a shared value the partitioner has to
+/// materialize as a top-level output. Only duplicates a getter whose operand is
+/// already live at every use site, so no new border appears in its place.
+/// Call before partitioning and after any pass that merges equal values, which
+/// would undo it. Returns the number of nodes duplicated.
+int64_t duplicateMetadataOps(
+    nativert::Graph& graph,
+    ValueTypes& types,
+    WaveGraph& waveGraph);
+
 class ParallelNodes {
  public:
   /// Divides 'graph' into consecutive layers where each layer's expressions

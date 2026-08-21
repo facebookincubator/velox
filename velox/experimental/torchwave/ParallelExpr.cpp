@@ -19,6 +19,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <ranges>
 #include <sstream>
 #include <string>
@@ -29,6 +30,7 @@
 #include <vector>
 
 #include <c10/core/MemoryFormat.h>
+#include <c10/core/ScalarType.h>
 #include <fmt/format.h>
 #include <folly/CppAttributes.h>
 #include <folly/ScopeGuard.h>
@@ -1125,6 +1127,289 @@ int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types) {
     LOG(INFO) << "pre-partition clone pass: elided " << elided << " clone(s)";
   }
   return elided;
+}
+
+namespace {
+
+// The ScalarType newScalarValue needs to reproduce a scalar Value's type kind,
+// or nullopt when the kind is not a scalar. Inverse of the mapping in
+// WaveGraph::newScalarValue.
+std::optional<c10::ScalarType> scalarTypeOfKind(nativert::Type::Kind kind) {
+  switch (kind) {
+    case nativert::Type::Kind::SymInt:
+      return c10::ScalarType::Long;
+    case nativert::Type::Kind::SymFloat:
+      return c10::ScalarType::Double;
+    case nativert::Type::Kind::SymBool:
+      return c10::ScalarType::Bool;
+    default:
+      return std::nullopt;
+  }
+}
+
+// An attribute holds a Constant, a variant whose unique_ptr<Graph> alternative
+// makes the whole variant move-only. A getter never carries a subgraph, but
+// check rather than silently duplicating a node without its attributes.
+bool attributesAreCopyable(NodeCP node) {
+  for (const auto& attr : node->attributes()) {
+    if (std::holds_alternative<std::unique_ptr<nativert::Graph>>(attr.value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void copyAttributes(NodeCP from, nativert::Node* to) {
+  for (const auto& attr : from->attributes()) {
+    std::visit(
+        [&](const auto& constant) {
+          using T = std::decay_t<decltype(constant)>;
+          if constexpr (!std::is_same_v<T, std::unique_ptr<nativert::Graph>>) {
+            to->addAttribute({attr.name, constant});
+          }
+        },
+        attr.value);
+  }
+}
+
+// The nodes the partitioner can see. makeParallelNodes seeds from the graph
+// output node and walks back through input producers, so a node reachable only
+// from an _assert_scalar chain is never placed in a ProjectNode and never
+// counts toward a CSE border. Duplicating for such a user would pay a node and
+// remove no boundary. Side-effect edges are deliberately not followed: they
+// only add users, and over-counting is the direction that costs.
+std::unordered_set<NodeCP> reachableFromOutputs(const nativert::Graph& graph) {
+  std::unordered_set<NodeCP> reachable{graph.outputNode()};
+  std::vector<NodeCP> pending{graph.outputNode()};
+  while (!pending.empty()) {
+    NodeCP node = pending.back();
+    pending.pop_back();
+    for (const auto& input : node->inputs()) {
+      if (input.value == nullptr) {
+        continue;
+      }
+      const auto* producer = input.value->producer();
+      if (producer != nullptr && reachable.insert(producer).second) {
+        pending.push_back(producer);
+      }
+    }
+  }
+  return reachable;
+}
+
+// Attaches 'constraint' to a value the pass just created. A rewrite-created
+// value carries nothing by default: types.types is a no-op for a scalar, and a
+// rank left at -1 has produced a rank-0 result before, so copy the original's
+// rank and layout explicitly. graphOutput / externallyOwned are deliberately
+// not carried -- the duplicate is a fresh internal value.
+void setDuplicateConstraint(
+    ValueTypes& types,
+    ValueCP value,
+    const ValueConstraint& constraint) {
+  auto id = value->id();
+  if (id < 0) {
+    return;
+  }
+  if (static_cast<size_t>(id) >= types.constraints.size()) {
+    types.constraints.resize(id + 1);
+  }
+  // Grown to id + 1 just above.
+  // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
+  auto& target = types.constraints[id];
+  target.rank = constraint.rank;
+  target.contiguity = constraint.contiguity;
+  target.zeroStrides = constraint.zeroStrides;
+}
+
+} // namespace
+
+int64_t duplicateMetadataOps(
+    nativert::Graph& graph,
+    ValueTypes& types,
+    WaveGraph& waveGraph) {
+  NodeCP outputNode = graph.outputNode();
+  constexpr int32_t kOutputPos = std::numeric_limits<int32_t>::max();
+  const auto reachable = reachableFromOutputs(graph);
+
+  std::unordered_map<NodeCP, int32_t> pos;
+  int32_t idx = 0;
+  for (const auto& node : graph.nodes()) {
+    pos[&node] = &node == outputNode ? kOutputPos : idx++;
+  }
+
+  // Program position of each value's last live read, from the graph as it is
+  // now. Every decision below is taken against this snapshot: inserting a
+  // duplicate adds a read of the getter's operand, and reading a stale lastUse
+  // is what keeps that from being mistaken for a lifetime extension.
+  folly::F14FastMap<ValueCP, int32_t> lastUse;
+  for (const auto& node : graph.nodes()) {
+    if (reachable.count(&node) == 0) {
+      continue;
+    }
+    const int32_t nodePos = pos.at(&node);
+    for (const auto& input : node.inputs()) {
+      if (input.value == nullptr) {
+        continue;
+      }
+      auto [it, inserted] = lastUse.emplace(input.value, nodePos);
+      if (!inserted) {
+        it->second = std::max(it->second, nodePos);
+      }
+    }
+  }
+  auto lastUseOf = [&](ValueCP value) {
+    auto it = lastUse.find(value);
+    return it == lastUse.end() ? -1 : it->second;
+  };
+  auto reachableUsers = [&](ValueCP value) {
+    int32_t count = 0;
+    for (auto* user : value->users()) {
+      count += reachable.count(user) > 0 ? 1 : 0;
+    }
+    return count;
+  };
+
+  // Snapshot the candidates: duplicating rewires users, and a live walk would
+  // revisit the duplicates it just inserted. Two families qualify as free to
+  // recompute: a getter, whose output is a scalar read out of tensor metadata,
+  // and a view, which is set up host-side from its base's sizes and strides and
+  // allocates nothing.
+  std::vector<NodeCP> candidates;
+  for (const auto& node : graph.nodes()) {
+    const Metadata* meta = Registry::metadata(node.target());
+    if (meta == nullptr || (!meta->isMetadataGetter && !meta->metadataOnly)) {
+      continue;
+    }
+    if (node.outputs().size() != 1 || node.inputs().empty() ||
+        node.outputs()[0] == nullptr || !attributesAreCopyable(&node)) {
+      continue;
+    }
+    const auto kind = node.outputs()[0]->type().kind();
+    const bool isGetter =
+        meta->isMetadataGetter && scalarTypeOfKind(kind).has_value();
+    const bool isViewOp = meta->metadataOnly && meta->isView() &&
+        kind == nativert::Type::Kind::Tensor;
+    if (!isGetter && !isViewOp) {
+      continue;
+    }
+    candidates.push_back(&node);
+  }
+
+  int64_t duplicated = 0;
+  int64_t viewsDuplicated = 0;
+  int64_t bordersRemoved = 0;
+  for (NodeCP node : candidates) {
+    ValueCP out = node->outputs()[0];
+    const bool isViewOp = out->type().kind() == nativert::Type::Kind::Tensor;
+    // A returned size keeps the original: replaceAllUses-style rewiring does
+    // not reach the output node, and it costs nothing to leave it there.
+    bool feedsGraphOutput = false;
+    bool writtenInPlace = false;
+    std::vector<NodeCP> users;
+    for (auto* user : out->users()) {
+      if (user == outputNode) {
+        feedsGraphOutput = true;
+      } else if (reachable.count(user) > 0) {
+        // A view written through by one user and read by another is a single
+        // shared buffer, not two interchangeable aliases: splitting it would
+        // send the write to a copy the readers never see.
+        writtenInPlace |= inPlaceSelf(user) == out;
+        users.push_back(user);
+      }
+    }
+    if (writtenInPlace) {
+      continue;
+    }
+    // The original serves the graph output if there is one, else the first
+    // user. Only a value read more than once is a border worth breaking.
+    const size_t firstToRewire = feedsGraphOutput ? 0 : 1;
+    if (users.size() <= firstToRewire) {
+      continue;
+    }
+
+    // Every operand must already be available at the use sites, so that moving
+    // the read there neither creates a new border nor extends a buffer's
+    // lifetime. Three ways to qualify:
+    //   - producer-less (a graph input, weight or constant): live throughout;
+    //   - a scalar with more than one reachable reader: already a CSE border
+    //     the partitioner materializes, and a SymInt owns no buffer, so reading
+    //     it later costs nothing. This is what admits the dynamic slice bounds
+    //     -- slice(input, item(..), item(..)) with both items already
+    //     materialized -- which the lifetime rule alone would reject;
+    //   - otherwise, it must already outlive this node's own last use, which
+    //     also implies a reader besides this node.
+    const int32_t outLastUse = lastUseOf(out);
+    auto isAvailable = [&](ValueCP value) {
+      if (value == nullptr) {
+        return false;
+      }
+      if (types.externallyOwned(value)) {
+        return true;
+      }
+      const auto kind = value->type().kind();
+      if ((kind == nativert::Type::Kind::SymInt ||
+           kind == nativert::Type::Kind::SymFloat ||
+           kind == nativert::Type::Kind::SymBool) &&
+          reachableUsers(value) > 1) {
+        return true;
+      }
+      return lastUseOf(value) >= outLastUse;
+    };
+    bool operandsAvailable = true;
+    for (const auto& input : node->inputs()) {
+      if (!isAvailable(input.value)) {
+        operandsAvailable = false;
+        break;
+      }
+    }
+    if (!operandsAvailable) {
+      continue;
+    }
+
+    // A view's duplicate needs the same dtype as the original, which for a
+    // tensor lives in the TensorMeta rather than the Value's type kind. Without
+    // a TensorMeta there is nothing to reproduce, so leave the node alone.
+    const nativert::TensorMeta* outMeta =
+        isViewOp && static_cast<size_t>(out->id()) < types.types.size()
+        ? types.types[out->id()]
+        : nullptr;
+    if (isViewOp && outMeta == nullptr) {
+      continue;
+    }
+    const auto dtype =
+        isViewOp ? outMeta->dtype() : *scalarTypeOfKind(out->type().kind());
+    const ValueConstraint constraint =
+        static_cast<size_t>(out->id()) < types.constraints.size()
+        // Bound tested on the line above.
+        // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
+        ? types.constraints[out->id()]
+        : ValueConstraint{};
+    for (size_t i = firstToRewire; i < users.size(); ++i) {
+      auto* user = const_cast<nativert::Node*>(users[i]);
+      auto* duplicate =
+          graph.createNode(std::string(node->target()), node->inputs());
+      copyAttributes(node, duplicate);
+      // Immediately before the user, so the node list stays in program order
+      // (computeSideEffectEdges checks this) and the operands still precede it.
+      graph.insertBefore(duplicate, user);
+      auto* duplicateOut = isViewOp
+          ? waveGraph.newTensorValue(duplicate, out->name(), dtype)
+          : waveGraph.newScalarValue(duplicate, out->name(), dtype);
+      setDuplicateConstraint(types, duplicateOut, constraint);
+      rewireInput(user, out, duplicateOut);
+      ++duplicated;
+      viewsDuplicated += isViewOp ? 1 : 0;
+    }
+    ++bordersRemoved;
+  }
+
+  if (duplicated > 0) {
+    LOG(INFO) << "pre-partition metadata duplication: " << duplicated
+              << " node(s) duplicated (" << viewsDuplicated << " view, "
+              << duplicated - viewsDuplicated << " getter), " << bordersRemoved
+              << " shared value(s) reduced to a single use";
+  }
+  return duplicated;
 }
 
 void ParallelNodes::computeReuseEligibility(
