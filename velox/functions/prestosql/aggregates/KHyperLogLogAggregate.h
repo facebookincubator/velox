@@ -28,8 +28,8 @@ class KHyperLogLogAggregate : public exec::Aggregate {
   using KHllAccumulator = common::hll::KHyperLogLog<TUii, HashStringAllocator>;
 
  public:
-  explicit KHyperLogLogAggregate(const TypePtr& resultType)
-      : exec::Aggregate(resultType) {}
+  KHyperLogLogAggregate(const TypePtr& resultType, bool javaCompat)
+      : exec::Aggregate(resultType), javaCompat_(javaCompat) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(KHllAccumulator);
@@ -197,7 +197,7 @@ class KHyperLogLogAggregate : public exec::Aggregate {
     setAllNulls(groups, indices);
     for (auto i : indices) {
       auto group = groups[i];
-      new (group + offset_) KHllAccumulator(allocator_);
+      new (group + offset_) KHllAccumulator(allocator_, javaCompat_);
     }
   }
 
@@ -206,6 +206,7 @@ class KHyperLogLogAggregate : public exec::Aggregate {
   }
 
  private:
+  const bool javaCompat_;
   DecodedVector decodedValue_;
   DecodedVector decodedUii_;
   DecodedVector decodedIntermediate_;

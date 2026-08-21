@@ -36,13 +36,25 @@ class KHyperLogLog {
   static constexpr int32_t kDefaultHllBuckets = 256;
   static constexpr int32_t kDefaultMaxSize = 4096;
 
-  explicit KHyperLogLog(TAllocator* allocator)
-      : KHyperLogLog(kDefaultMaxSize, kDefaultHllBuckets, allocator) {}
+  /// javaCompat selects Presto Java compatible hashing for add(). It affects
+  /// only how new values are hashed in; the serialized format, merging and
+  /// deserialization are identical either way.
+  explicit KHyperLogLog(TAllocator* allocator, bool javaCompat = false)
+      : KHyperLogLog(
+            kDefaultMaxSize,
+            kDefaultHllBuckets,
+            allocator,
+            javaCompat) {}
 
-  KHyperLogLog(int maxSize, int hllBuckets, TAllocator* allocator)
+  KHyperLogLog(
+      int maxSize,
+      int hllBuckets,
+      TAllocator* allocator,
+      bool javaCompat = false)
       : maxSize_(maxSize),
         hllBuckets_(hllBuckets),
         allocator_(allocator),
+        javaCompat_(javaCompat),
         minhash_(
             TStlAllocator<std::pair<
                 const int64_t,
@@ -156,6 +168,7 @@ class KHyperLogLog {
   int32_t hllBuckets_;
   int8_t indexBitLength_;
   TAllocator* allocator_;
+  bool javaCompat_{false};
 
   std::map<
       int64_t,

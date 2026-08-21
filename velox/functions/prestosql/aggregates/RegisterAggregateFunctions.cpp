@@ -311,6 +311,7 @@ extern void registerApproxWinsorizedMeanAggregate(
     bool overwrite);
 extern void registerKHyperLogLogAggregates(
     const std::vector<std::string>& names,
+    const std::vector<std::string>& javaCompatNames,
     bool withCompanionFunctions,
     bool overwrite);
 extern void registerQDigestAggAggregate(
@@ -477,7 +478,10 @@ void registerAllAggregateFunctions(
   registerNumericHistogramAggregate(
       {prefix + kNumericHistogram}, withCompanionFunctions, overwrite);
   registerKHyperLogLogAggregates(
-      {prefix + kKHyperLogLogAgg}, withCompanionFunctions, overwrite);
+      {prefix + kKHyperLogLogAgg},
+      {prefix + kKHyperLogLogAggJavaCompat},
+      withCompanionFunctions,
+      overwrite);
 }
 
 void registerInternalAggregateFunctions(const std::string& prefix) {
