@@ -123,6 +123,15 @@ class RpcCapabilityModeSet {
   uint32_t bits_{0};
 };
 
+/// Effective bounds for a single dispatch mode. Derived per-flush as
+/// min(transport hard limit, worker memory / estRowBytes, ...). 0 means
+/// unlimited / backend default for that dimension.
+struct RpcEffectiveBounds {
+  int32_t maxBatchRows{0};
+  int64_t maxBatchTokens{0};
+  int64_t maxBatchBytes{0};
+};
+
 /// What dispatch strategies a (backend, model) supports. kPerRow is always
 /// supported. Request-size bounds are deliberately not stored here: they are a
 /// property of the transport, not of the mode set, and are read per flush from
