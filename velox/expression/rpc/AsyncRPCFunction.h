@@ -282,7 +282,15 @@ class AsyncRPCFunction {
   enum class CongestionSignal {
     /// Unit completed cleanly — feed its latency to the gradient window.
     kSuccess,
-    /// Unit showed backend overload — shrink the window.
+    /// Backend shed load (rate limited, or timed out under pressure) — shrink
+    /// the window. Only this signal backs off.
+    kOverloaded,
+    /// Unit failed for reasons the backend is not responsible for, such as a
+    /// malformed request or a bad key. Retrying more slowly does not help, so
+    /// neither controller reacts. Today that makes kError observationally
+    /// identical to kNone at the operator; it is kept separate because "failed,
+    /// but not the backend's fault" and "nothing to evaluate" are different
+    /// facts, and only the former should ever gain an error counter.
     kError,
     /// No congestion evaluation — skip window adjustment.
     kNone,

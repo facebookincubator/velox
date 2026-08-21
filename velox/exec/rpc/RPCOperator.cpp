@@ -514,7 +514,7 @@ RowVectorPtr RPCOperator::getOutput() {
     // error verdict is what makes the per-driver window back off, not just
     // latency.
     const auto signal = function_->evaluateCongestion(responses);
-    if (signal == AsyncRPCFunction::CongestionSignal::kError) {
+    if (signal == AsyncRPCFunction::CongestionSignal::kOverloaded) {
       state_->onUnitError();
       RPCRateLimiter::onRateLimited(tierKey_);
     } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
@@ -561,7 +561,7 @@ RowVectorPtr RPCOperator::getOutput() {
     // the batch RTT to the latency gradient; the rate limiter (global) halves
     // the cap on overload and recovers on success.
     const auto signal = function_->evaluateCongestion(claimedBatch_->responses);
-    if (signal == AsyncRPCFunction::CongestionSignal::kError) {
+    if (signal == AsyncRPCFunction::CongestionSignal::kOverloaded) {
       state_->onUnitError();
       RPCRateLimiter::onRateLimited(tierKey_);
     } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
