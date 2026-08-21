@@ -50,7 +50,6 @@ TEST(FileConfigTest, defaultConfig) {
   EXPECT_FALSE(config.pinMetadata(emptySession.get()));
   EXPECT_FALSE(config.cacheIndex(emptySession.get()));
   EXPECT_FALSE(config.pinIndex(emptySession.get()));
-  EXPECT_FALSE(config.useColumnNames(emptySession.get()));
   EXPECT_EQ(
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 8UL << 20);
   EXPECT_FALSE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
@@ -75,7 +74,6 @@ TEST(FileConfigTest, overrideConfig) {
       {FileConfig::kPinMetadata, "true"},
       {FileConfig::kCacheIndex, "true"},
       {FileConfig::kPinIndex, "true"},
-      {"hive.use-column-names", "true"},
       {FileConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)},
       {FileConfig::kNimbleStringDecoderZeroCopy, "true"},
       {FileConfig::kNimblePreserveDictionaryEncoding, "true"},
@@ -101,7 +99,6 @@ TEST(FileConfigTest, overrideConfig) {
   EXPECT_TRUE(config.pinMetadata(emptySession.get()));
   EXPECT_TRUE(config.cacheIndex(emptySession.get()));
   EXPECT_TRUE(config.pinIndex(emptySession.get()));
-  EXPECT_TRUE(config.useColumnNames(emptySession.get()));
   EXPECT_EQ(
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
   EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
@@ -111,19 +108,6 @@ TEST(FileConfigTest, overrideConfig) {
   // session key contains a dot, so the Presto CLI cannot parse it, and there is
   // no HiveSessionProperties.java entry for it.
   EXPECT_TRUE(config.directBufferedInputSharedAllocation(emptySession.get()));
-}
-
-TEST(FileConfigTest, connectorScopedReaderOptions) {
-  const auto emptySession = std::make_unique<config::ConfigBase>(
-      std::unordered_map<std::string, std::string>());
-  FileConfig config(
-      std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>{
-              {"iceberg.use-column-names", "true"},
-          }),
-      "iceberg.");
-
-  EXPECT_TRUE(config.useColumnNames(emptySession.get()));
 }
 
 TEST(FileConfigTest, overrideSession) {
@@ -144,7 +128,6 @@ TEST(FileConfigTest, overrideSession) {
       {FileConfig::kPinMetadataSession, "true"},
       {FileConfig::kCacheIndexSession, "true"},
       {FileConfig::kPinIndexSession, "true"},
-      {FileConfig::kUseColumnNamesSession, "true"},
       {FileConfig::kNimbleFooterSpeculativeIoSizeSession,
        std::to_string(2UL << 20)},
       {FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
@@ -167,7 +150,6 @@ TEST(FileConfigTest, overrideSession) {
   EXPECT_TRUE(config.pinMetadata(session.get()));
   EXPECT_TRUE(config.cacheIndex(session.get()));
   EXPECT_TRUE(config.pinIndex(session.get()));
-  EXPECT_TRUE(config.useColumnNames(session.get()));
   EXPECT_EQ(config.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
   EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(session.get()));
   EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(session.get()));

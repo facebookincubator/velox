@@ -54,6 +54,37 @@ FormatScopedConfigs makeFormatScopedConfigs(
           dwio::common::formatConfigPrefix(fileFormat, "_")))};
 }
 
+namespace {
+
+bool useColumnNames(
+    const FileConfig& fileConfig,
+    const config::ConfigBase& sessionProperties,
+    dwio::common::FileFormat fileFormat) {
+  switch (fileFormat) {
+#ifdef VELOX_ENABLE_PARQUET
+    case dwio::common::FileFormat::PARQUET: {
+      auto formatScopedConfigs =
+          makeFormatScopedConfigs(fileConfig, sessionProperties, fileFormat);
+      return parquet::ParquetConfig::useColumnNames(
+          formatScopedConfigs.connectorConfig,
+          formatScopedConfigs.sessionProperties);
+    }
+#endif
+    case dwio::common::FileFormat::DWRF:
+    case dwio::common::FileFormat::ORC: {
+      auto formatScopedConfigs =
+          makeFormatScopedConfigs(fileConfig, sessionProperties, fileFormat);
+      return dwrf::Config::useColumnNames(
+          formatScopedConfigs.connectorConfig,
+          formatScopedConfigs.sessionProperties);
+    }
+    default:
+      return false;
+  }
+}
+
+} // namespace
+
 void configureReaderOptions(
     const std::shared_ptr<const FileConfig>& fileConfig,
     const ConnectorQueryCtx* connectorQueryCtx,
@@ -78,6 +109,16 @@ void configureReaderOptions(
     dwio::common::ReaderOptions& readerOptions) {
   auto sessionProperties = connectorQueryCtx->sessionProperties();
   VELOX_CHECK_NOT_NULL(sessionProperties, "Session properties are null");
+  if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
+    VELOX_CHECK(
+        readerOptions.fileFormat() == fileSplit->fileFormat,
+        "HiveDataSource received splits of different formats: {} and {}",
+        dwio::common::FileFormatName::toName(readerOptions.fileFormat()),
+        dwio::common::FileFormatName::toName(fileSplit->fileFormat));
+  } else {
+    readerOptions.setFileFormat(fileSplit->fileFormat);
+  }
+
   readerOptions.setLoadQuantum(fileConfig->loadQuantum(sessionProperties));
   readerOptions.setDirectBufferedInputSharedAllocation(
       fileConfig->directBufferedInputSharedAllocation(sessionProperties));
@@ -89,7 +130,7 @@ void configureReaderOptions(
       fileConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
   readerOptions.setAllowEmptyFile(true);
   readerOptions.setColumnMappingMode(
-      fileConfig->useColumnNames(sessionProperties)
+      useColumnNames(*fileConfig, *sessionProperties, fileSplit->fileFormat)
           ? dwio::common::ColumnMappingMode::kName
           : dwio::common::ColumnMappingMode::kPosition);
   readerOptions.setFileSchema(fileSchema);
@@ -141,16 +182,6 @@ void configureReaderOptions(
       readerOptions.setFooterSpeculativeIoSize(
           fileConfig->orcFooterSpeculativeIoSize(sessionProperties));
       break;
-  }
-
-  if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
-    VELOX_CHECK(
-        readerOptions.fileFormat() == fileSplit->fileFormat,
-        "HiveDataSource received splits of different formats: {} and {}",
-        dwio::common::FileFormatName::toName(readerOptions.fileFormat()),
-        dwio::common::FileFormatName::toName(fileSplit->fileFormat));
-  } else {
-    readerOptions.setFileFormat(fileSplit->fileFormat);
   }
 
   if (!dwio::common::hasReaderFactory(fileSplit->fileFormat)) {

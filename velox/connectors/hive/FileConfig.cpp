@@ -29,7 +29,6 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
     VELOX_HIVE_CONFIG_REGISTER(kReadTimestampPartitionValueAsLocalTimeSession);
     VELOX_HIVE_CONFIG_REGISTER(kPreserveFlatMapsInMemorySession);
     VELOX_HIVE_CONFIG_REGISTER(kReaderCollectColumnCpuMetricsSession);
-    VELOX_HIVE_CONFIG_REGISTER(kUseColumnNamesSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleFooterSpeculativeIoSizeSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleStringDecoderZeroCopySession);
     VELOX_HIVE_CONFIG_REGISTER(kNimblePreserveDictionaryEncodingSession);

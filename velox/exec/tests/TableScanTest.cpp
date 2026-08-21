@@ -39,6 +39,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
@@ -69,6 +70,13 @@ DECLARE_int32(cache_prefetch_min_pct);
 namespace facebook::velox::exec {
 using namespace facebook::velox::common::testutil;
 namespace {
+
+const std::string& orcUseColumnNamesSessionProperty() {
+  static const std::string property = dwio::common::formatSessionProperty(
+      dwio::common::FileFormat::ORC, dwrf::Config::kOrcUseColumnNamesSession);
+  return property;
+}
+
 void verifyCacheStats(
     const FileHandleCacheStats& cacheStats,
     size_t curSize,
@@ -1248,9 +1256,7 @@ TEST_F(TableScanTest, structMatchByName) {
             PlanBuilder().tableScan(outputType, {}, remainingFilter).planNode();
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .connectorSessionProperty(
-                kHiveConnectorId,
-                connector::hive::FileConfig::kUseColumnNamesSession,
-                "true")
+                kHiveConnectorId, orcUseColumnNamesSessionProperty(), "true")
             .split(makeHiveConnectorSplit(filePath))
             .assertResults(sql);
       };
@@ -1356,9 +1362,7 @@ TEST_F(TableScanTest, structMatchByName) {
       const auto result =
           AssertQueryBuilder(op)
               .connectorSessionProperty(
-                  kHiveConnectorId,
-                  connector::hive::FileConfig::kUseColumnNamesSession,
-                  "true")
+                  kHiveConnectorId, orcUseColumnNamesSessionProperty(), "true")
               .split(split)
               .copyResults(pool());
       const auto rows = result->as<RowVector>();
@@ -1390,9 +1394,7 @@ TEST_F(TableScanTest, structMatchByName) {
         PlanBuilder().tableScan(rowType, {}, "", rowType).planNode();
     AssertQueryBuilder(op, duckDbQueryRunner_)
         .connectorSessionProperty(
-            kHiveConnectorId,
-            connector::hive::FileConfig::kUseColumnNamesSession,
-            "true")
+            kHiveConnectorId, orcUseColumnNamesSessionProperty(), "true")
         .connectorSessionProperty(
             kHiveConnectorId,
             connector::hive::HiveConfig::kFileColumnNamesReadAsLowerCaseSession,
@@ -5097,9 +5099,7 @@ TEST_F(TableScanTest, readMissingFieldsInMap) {
   split = makeHiveConnectorSplit(filePath->getPath());
   result = AssertQueryBuilder(op)
                .connectorSessionProperty(
-                   kHiveConnectorId,
-                   connector::hive::FileConfig::kUseColumnNamesSession,
-                   "true")
+                   kHiveConnectorId, orcUseColumnNamesSessionProperty(), "true")
                .split(split)
                .copyResults(pool());
 
@@ -5359,9 +5359,7 @@ TEST_F(TableScanTest, readMissingFieldsWithMoreColumns) {
   split = makeHiveConnectorSplit(filePath->getPath());
   result = AssertQueryBuilder(op)
                .connectorSessionProperty(
-                   kHiveConnectorId,
-                   connector::hive::FileConfig::kUseColumnNamesSession,
-                   "true")
+                   kHiveConnectorId, orcUseColumnNamesSessionProperty(), "true")
                .split(split)
                .copyResults(pool());
 
