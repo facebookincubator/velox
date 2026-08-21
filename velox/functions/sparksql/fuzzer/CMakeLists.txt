@@ -131,5 +131,6 @@ velox_add_library(
   DivideArgTypesGenerator.h
   MakeTimestampArgTypesGenerator.h
   MultiplyArgTypesGenerator.h
+  PadArgValuesGenerator.h
   UnscaledValueArgTypesGenerator.h
 )
