@@ -52,6 +52,7 @@
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Schema.h"
+#include "velox/dwio/parquet/writer/arrow/SizeStatistics.h"
 #include "velox/dwio/parquet/writer/arrow/Statistics.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
@@ -481,7 +482,7 @@ class SerializedPageWriter : public PageWriter {
 
     /// Collect page index.
     if (columnIndexBuilder_ != nullptr) {
-      columnIndexBuilder_->addPage(page.statistics());
+      columnIndexBuilder_->addPage(page.statistics(), page.sizeStatistics());
     }
     if (offsetIndexBuilder_ != nullptr) {
       const int64_t compressedSize = outputDataLen + headerSize;
@@ -497,7 +498,8 @@ class SerializedPageWriter : public PageWriter {
       offsetIndexBuilder_->addPage(
           startPos,
           static_cast<int32_t>(compressedSize),
-          *page.firstRowIndex());
+          *page.firstRowIndex(),
+          page.sizeStatistics().unencodedByteArrayDataBytes);
     }
 
     totalUncompressedSize_ += uncompressedSize + headerSize;
@@ -936,11 +938,17 @@ class ColumnWriterImpl {
   // Serializes Dictionary Page if enabled.
   virtual void writeDictionaryPage() = 0;
 
-  // Plain-encoded statistics of the current page.
-  virtual EncodedStatistics getPageStatistics() = 0;
+  // A convenience struct to combine the encoded statistics and size statistics.
+  struct StatisticsPair {
+    EncodedStatistics encodedStats;
+    SizeStatistics sizeStats;
+  };
 
-  // Plain-encoded statistics of the whole chunk.
-  virtual EncodedStatistics getChunkStatistics() = 0;
+  // Statistics of the current page.
+  virtual StatisticsPair getPageStatistics() = 0;
+
+  // Statistics of the whole chunk.
+  virtual StatisticsPair getChunkStatistics() = 0;
 
   // Merges page statistics into chunk statistics, then resets the values.
   virtual void resetPageStatistics() = 0;
@@ -1174,7 +1182,7 @@ void ColumnWriterImpl::buildDataPageV1(
       values,
       uncompressedData_->mutable_data());
 
-  EncodedStatistics pageStats = getPageStatistics();
+  auto [pageStats, pageSizeStats] = getPageStatistics();
   pageStats.applyStatSizeLimits(properties_->maxStatisticsSize(descr_->path()));
   pageStats.setIsSigned(SortOrder::kSigned == descr_->sortOrder());
   resetPageStatistics();
@@ -1205,7 +1213,8 @@ void ColumnWriterImpl::buildDataPageV1(
         Encoding::kRle,
         uncompressedSize,
         pageStats,
-        firstRowIndex);
+        firstRowIndex,
+        std::move(pageSizeStats));
     totalCompressedBytes_ +=
         pagePtr->size() + sizeof(facebook::velox::parquet::thrift::PageHeader);
 
@@ -1219,7 +1228,8 @@ void ColumnWriterImpl::buildDataPageV1(
         Encoding::kRle,
         uncompressedSize,
         pageStats,
-        firstRowIndex);
+        firstRowIndex,
+        std::move(pageSizeStats));
     writeDataPage(page);
   }
 }
@@ -1251,7 +1261,7 @@ void ColumnWriterImpl::buildDataPageV2(
       compressedValues,
       combined->mutable_data());
 
-  EncodedStatistics pageStats = getPageStatistics();
+  auto [pageStats, pageSizeStats] = getPageStatistics();
   pageStats.applyStatSizeLimits(properties_->maxStatisticsSize(descr_->path()));
   pageStats.setIsSigned(SortOrder::kSigned == descr_->sortOrder());
   resetPageStatistics();
@@ -1284,7 +1294,8 @@ void ColumnWriterImpl::buildDataPageV2(
         uncompressedSize,
         pager_->hasCompressor(),
         pageStats,
-        firstRowIndex);
+        firstRowIndex,
+        std::move(pageSizeStats));
     totalCompressedBytes_ +=
         pagePtr->size() + sizeof(facebook::velox::parquet::thrift::PageHeader);
     dataPages_.push_back(std::move(pagePtr));
@@ -1300,7 +1311,8 @@ void ColumnWriterImpl::buildDataPageV2(
         uncompressedSize,
         pager_->hasCompressor(),
         pageStats,
-        firstRowIndex);
+        firstRowIndex,
+        std::move(pageSizeStats));
     writeDataPage(page);
   }
 }
@@ -1314,7 +1326,7 @@ int64_t ColumnWriterImpl::close() {
 
     flushBufferedDataPages();
 
-    EncodedStatistics chunkStatistics = getChunkStatistics();
+    auto [chunkStatistics, chunkSizeStatistics] = getChunkStatistics();
     chunkStatistics.applyStatSizeLimits(
         properties_->maxStatisticsSize(descr_->path()));
     chunkStatistics.setIsSigned(SortOrder::kSigned == descr_->sortOrder());
@@ -1322,6 +1334,9 @@ int64_t ColumnWriterImpl::close() {
     // Write stats only if the column has at least one row written.
     if (rowsWritten_ > 0 && chunkStatistics.isSet()) {
       metadata_->setStatistics(chunkStatistics);
+    }
+    if (rowsWritten_ > 0 && chunkSizeStatistics.isSet()) {
+      metadata_->setSizeStatistics(chunkSizeStatistics);
     }
     pager_->close(hasDictionary_, fallback_);
   }
@@ -1478,6 +1493,12 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
         (SortOrder::kUnknown != descr_->sortOrder())) {
       pageStatistics_ = makeStatistics<DType>(descr_, allocator_);
       chunkStatistics_ = makeStatistics<DType>(descr_, allocator_);
+    }
+    if (properties->sizeStatisticsLevel() == SizeStatisticsLevel::ColumnChunk ||
+        properties->sizeStatisticsLevel() ==
+            SizeStatisticsLevel::PageAndColumnChunk) {
+      pageSizeStatistics_ = SizeStatistics::make(descr_);
+      chunkSizeStatistics_ = SizeStatistics::make(descr_);
     }
     pagesChangeOnRecordBoundaries_ =
         properties->dataPageVersion() == ParquetDataPageVersion::V2 ||
@@ -1680,17 +1701,27 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
     totalBytesWritten_ += pager_->writeDictionaryPage(page);
   }
 
-  EncodedStatistics getPageStatistics() override {
-    EncodedStatistics result;
-    if (pageStatistics_)
-      result = pageStatistics_->encode();
+  StatisticsPair getPageStatistics() override {
+    StatisticsPair result;
+    if (pageStatistics_) {
+      result.encodedStats = pageStatistics_->encode();
+    }
+    if (properties_->sizeStatisticsLevel() ==
+        SizeStatisticsLevel::PageAndColumnChunk) {
+      VELOX_DCHECK_NOT_NULL(pageSizeStatistics_);
+      result.sizeStats = *pageSizeStatistics_;
+    }
     return result;
   }
 
-  EncodedStatistics getChunkStatistics() override {
-    EncodedStatistics result;
-    if (chunkStatistics_)
-      result = chunkStatistics_->encode();
+  StatisticsPair getChunkStatistics() override {
+    StatisticsPair result;
+    if (chunkStatistics_) {
+      result.encodedStats = chunkStatistics_->encode();
+    }
+    if (chunkSizeStatistics_) {
+      result.sizeStats = *chunkSizeStatistics_;
+    }
     return result;
   }
 
@@ -1698,6 +1729,10 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
     if (chunkStatistics_ != nullptr) {
       chunkStatistics_->merge(*pageStatistics_);
       pageStatistics_->reset();
+    }
+    if (pageSizeStatistics_ != nullptr) {
+      chunkSizeStatistics_->merge(*pageSizeStatistics_);
+      pageSizeStatistics_->reset();
     }
   }
 
@@ -1746,6 +1781,8 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
   std::shared_ptr<TypedStats> pageStatistics_;
   std::shared_ptr<TypedStats> chunkStatistics_;
   bool pagesChangeOnRecordBoundaries_;
+  std::unique_ptr<SizeStatistics> pageSizeStatistics_;
+  std::unique_ptr<SizeStatistics> chunkSizeStatistics_;
 
   // If writing a sequence of ::arrow::DictionaryArray to the writer, we keep
   // the dictionary passed to DictEncoder<T>::putDictionary so we can check
@@ -1757,6 +1794,9 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
       int64_t numValues,
       const int16_t* defLevels,
       const int16_t* repLevels) {
+    // Update histograms now, to maximize cache efficiency.
+    updateLevelHistogram(numValues, defLevels, repLevels);
+
     int64_t valuesToWrite = 0;
     // If the field is required and non-repeated, there are no definition
     // levels.
@@ -1866,6 +1906,9 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
       int64_t numLevels,
       const int16_t* defLevels,
       const int16_t* repLevels) {
+    // Update histograms now, to maximize cache efficiency.
+    updateLevelHistogram(numLevels, defLevels, repLevels);
+
     // If the field is required and non-repeated, there are no definition
     // levels.
     if (descr_->maxDefinitionLevel() > 0) {
@@ -1886,6 +1929,49 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
       // Each value is exactly one row.
       rowsWritten_ += numLevels;
       numBufferedRows_ += numLevels;
+    }
+  }
+
+  void updateLevelHistogram(
+      int64_t numLevels,
+      const int16_t* defLevels,
+      const int16_t* repLevels) const {
+    if (pageSizeStatistics_ == nullptr) {
+      return;
+    }
+
+    auto addLevels = [](std::vector<int64_t>& levelHistogram,
+                        const int16_t* levels,
+                        int64_t numLevels,
+                        int16_t maxLevel) {
+      if (maxLevel == 0) {
+        return;
+      }
+      VELOX_DCHECK_EQ(static_cast<size_t>(maxLevel) + 1, levelHistogram.size());
+      std::span<const int16_t> levelSpan{
+          levels, static_cast<size_t>(numLevels)};
+      arrow::updateLevelHistogram(levelSpan, levelHistogram);
+    };
+
+    addLevels(
+        pageSizeStatistics_->definitionLevelHistogram,
+        defLevels,
+        numLevels,
+        descr_->maxDefinitionLevel());
+    addLevels(
+        pageSizeStatistics_->repetitionLevelHistogram,
+        repLevels,
+        numLevels,
+        descr_->maxRepetitionLevel());
+  }
+
+  // Update the unencoded data bytes for ByteArray only per the specification.
+  void updateUnencodedDataBytes() {
+    if constexpr (std::is_same_v<T, ByteArray>) {
+      if (pageSizeStatistics_ != nullptr) {
+        pageSizeStatistics_->incrementUnencodedByteArrayDataBytes(
+            currentEncoder_->reportUnencodedDataBytes());
+      }
     }
   }
 
@@ -1949,6 +2035,7 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
     if (pageStatistics_ != nullptr) {
       pageStatistics_->update(values, numValues, numNulls);
     }
+    updateUnencodedDataBytes();
   }
 
   /// \brief Write values with spaces and update page statistics accordingly.
@@ -1990,6 +2077,7 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
           numValues,
           numNulls);
     }
+    updateUnencodedDataBytes();
   }
 };
 
@@ -2106,6 +2194,7 @@ Status TypedColumnWriterImpl<DType>::writeArrowDictionary(
             writeableIndices,
             maybeReplaceValidity(writeableIndices, nullCount, ctx->memoryPool));
         dictEncoder->putIndices(*writeableIndices);
+        updateUnencodedDataBytes();
         commitWriteAndCheckPageLimit(
             batchSize, batchNumValues, nullCount, checkPage);
         valueOffset += batchNumSpacedValues;
@@ -2692,6 +2781,7 @@ Status TypedColumnWriterImpl<ByteArrayType>::writeArrowDense(
       pageStatistics_->incrementNullCount(batchSize - nonNull);
       pageStatistics_->incrementNumValues(nonNull);
     }
+    updateUnencodedDataBytes();
     commitWriteAndCheckPageLimit(
         batchSize, batchNumValues, batchSize - nonNull, checkPage);
     checkDictionarySizeLimit();

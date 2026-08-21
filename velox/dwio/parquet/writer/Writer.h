@@ -142,6 +142,7 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   std::optional<int64_t> dataPageSize;
   std::optional<int64_t> dictionaryPageSizeLimit;
   std::optional<bool> enableDictionary;
+  std::optional<arrow::SizeStatisticsLevel> sizeStatisticsLevel;
   /// Controls how DECIMAL values are stored by the Writer.
   /// - If unset, the Writer defaults to storing as integer (true),
   /// using INT32/INT64 for short DECIMAL precisions; higher precisions are
@@ -152,7 +153,7 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   std::optional<bool> useParquetDataPageV2;
   /// Whether to write the Parquet page index (column index and offset index).
   /// When enabled, per-page statistics are stored in the page index rather than
-  /// the data page headers. Defaults to false.
+  /// the data page headers. Defaults to true.
   std::optional<bool> enableWritePageIndex;
   std::optional<std::string> createdBy;
 
