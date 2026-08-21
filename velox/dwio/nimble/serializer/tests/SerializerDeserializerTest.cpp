@@ -1128,7 +1128,11 @@ SerializationTest::SerializeResult SerializationTest::serializeTablet(
 
     // Build kTablet: [header][raw stream data...][trailer].
     auto headerIOBuf = serde::createTabletChunkHeader(
-        {.rowCount = stripeRows, .rowRange = RowRange{0, stripeRows}});
+        {.rowCount = stripeRows,
+         .streamEncodingUsesVarintRowCount =
+             tablet->features().compactRowCountEncoding(),
+         .streamHasChunkHeader = true,
+         .rowRange = RowRange{0, stripeRows}});
     std::string headerBuf(
         reinterpret_cast<const char*>(headerIOBuf.data()),
         headerIOBuf.length());
@@ -2614,8 +2618,8 @@ TEST_F(SerializationTest, serializerRejectsFixedStreamRowCountEncoding) {
   SerializerOptions options{
       .version = SerializationVersion::kSerialization,
       .streamIndicesEncodingType = EncodingType::Trivial,
-      .encodingOptions = Encoding::Options{.useVarintRowCount = false},
       .streamSizesEncodingType = EncodingType::Trivial,
+      .encodingOptions = Encoding::Options{.useVarintRowCount = false},
   };
   Serializer serializer{options, type, pool_.get()};
   NIMBLE_ASSERT_THROW(
@@ -2645,7 +2649,8 @@ TEST_F(SerializationTest, deserializesInputWithoutStreamVarintRowCountFlag) {
   serialized[sizeof(uint8_t) + varint::varintSize(kRows)] =
       static_cast<char>(serde::detail::makeFlagsByte(
           /*requiresNullBarrier=*/false,
-          /*streamEncodingUsesVarintRowCount=*/false));
+          /*streamEncodingUsesVarintRowCount=*/false,
+          /*streamHasChunkHeader=*/false));
 
   Deserializer deserializer{
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
@@ -5014,7 +5019,11 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxHighParallelism) {
     const auto stripeRows = tablet->stripeRowCount(stripeIdx);
 
     auto headerIOBuf = serde::createTabletChunkHeader(
-        {.rowCount = stripeRows, .rowRange = RowRange{0, stripeRows}});
+        {.rowCount = stripeRows,
+         .streamEncodingUsesVarintRowCount =
+             tablet->features().compactRowCountEncoding(),
+         .streamHasChunkHeader = true,
+         .rowRange = RowRange{0, stripeRows}});
     std::string headerBuf(
         reinterpret_cast<const char*>(headerIOBuf.data()),
         headerIOBuf.length());
@@ -5126,7 +5135,11 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxConcurrentDeserializers) {
       const auto stripeRows = tablet->stripeRowCount(si);
 
       auto headerIOBuf = serde::createTabletChunkHeader(
-          {.rowCount = stripeRows, .rowRange = RowRange{0, stripeRows}});
+          {.rowCount = stripeRows,
+           .streamEncodingUsesVarintRowCount =
+               tablet->features().compactRowCountEncoding(),
+           .streamHasChunkHeader = true,
+           .rowRange = RowRange{0, stripeRows}});
       std::string headerBuf(
           reinterpret_cast<const char*>(headerIOBuf.data()),
           headerIOBuf.length());
@@ -5286,7 +5299,11 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxFlatMapWithParallelDecode) {
     const auto stripeRows = tablet->stripeRowCount(stripeIdx);
 
     auto headerIOBuf = serde::createTabletChunkHeader(
-        {.rowCount = stripeRows, .rowRange = RowRange{0, stripeRows}});
+        {.rowCount = stripeRows,
+         .streamEncodingUsesVarintRowCount =
+             tablet->features().compactRowCountEncoding(),
+         .streamHasChunkHeader = true,
+         .rowRange = RowRange{0, stripeRows}});
     std::string headerBuf(
         reinterpret_cast<const char*>(headerIOBuf.data()),
         headerIOBuf.length());
@@ -5396,7 +5413,11 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxRepeatedBatches) {
     const auto stripeRows = tablet->stripeRowCount(stripeIdx);
 
     auto headerIOBuf = serde::createTabletChunkHeader(
-        {.rowCount = stripeRows, .rowRange = RowRange{0, stripeRows}});
+        {.rowCount = stripeRows,
+         .streamEncodingUsesVarintRowCount =
+             tablet->features().compactRowCountEncoding(),
+         .streamHasChunkHeader = true,
+         .rowRange = RowRange{0, stripeRows}});
     std::string headerBuf(
         reinterpret_cast<const char*>(headerIOBuf.data()),
         headerIOBuf.length());
