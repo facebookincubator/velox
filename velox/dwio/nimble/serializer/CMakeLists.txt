@@ -74,6 +74,7 @@ target_link_libraries(
 add_library(nimble_stream_data_parser StreamDataParser.cpp StreamDataParser.h)
 target_link_libraries(
   nimble_stream_data_parser
+  nimble_chunked_stream_payload
   nimble_serialization_header
   nimble_serializer_options
   nimble_encodings
@@ -138,6 +139,7 @@ target_link_libraries(
 add_library(nimble_stream_slicer StreamSlicer.cpp StreamSlicer.h)
 target_link_libraries(
   nimble_stream_slicer
+  nimble_chunked_stream_payload
   nimble_stream_data_parser
   nimble_stream_data_writer
   nimble_serialization_header
