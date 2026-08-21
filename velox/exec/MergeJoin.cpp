@@ -1597,26 +1597,41 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
       }
     }
 
-    // Every time we start a new left key match, `processFilterResult()` will
-    // check if at least one row from the previous match passed the filter. If
-    // none did, it calls onMiss to add a record with null right projections
-    // to the output.
+    // Every time we start a new block of output rows that corresponds to a
+    // new outer-side row, `processFilterResult()` checks if at least one row
+    // from the previous block passed the filter. If none did, it calls
+    // onMiss to add a record with null projections for the other side.
     //
-    // Before we leave the current buffer, since we may not have seen the next
-    // left key match yet, the last key match may still be pending to produce
-    // a row (because `processFilterResult()` was not called yet).
+    // When the output batch ends, the last block may still be pending:
+    // `processFilterResult()` was not called for the next block yet. The
+    // pending state includes 'currentRow_', an output index into THIS batch,
+    // so the decision must be made before the batch is returned unless the
+    // SAME outer-side row continues into the next output batch. Wrongly
+    // deferring the close fires onMiss on a stale index in a later batch: it
+    // appends numRows + 1 dictionary indices (malformed dictionary vector)
+    // and nulls out projections of an unrelated row.
     //
-    // To handle this, we need to call `noMoreFilterResults()` unless the
-    // same current left key match may continue in the next buffer. So there
-    // are two cases to check:
-    //
-    // 1. If leftMatch_ is nullopt, there for sure the next buffer will
-    // contain a different key match.
-    //
-    // 2. leftMatch_ may not be nullopt, but may be related to a different
-    // (subsequent) left key. So we check if the last row in the batch has the
-    // same left row number as the last key match.
-    if (!leftMatch_ || !joinTracker_->isCurrentLeftMatch(numRows - 1)) {
+    // The pending block continues into the next batch only if the row the
+    // in-progress match will emit NEXT is the same outer-side row as the
+    // last row recorded by addMatch. Checking the match's mere presence is
+    // not enough: a match spans all duplicate outer rows of one key, so the
+    // output batch may be cut exactly between two blocks of the same match
+    // (or between two keys while the next match is already in progress), in
+    // which case the last block is complete and must be closed now.
+    bool pendingBlockContinues = false;
+    const auto& outerMatch =
+        (isRightJoin(joinType_) || isRightSemiFilterJoin(joinType_))
+        ? rightMatch_
+        : leftMatch_;
+    if (outerMatch) {
+      const auto& cursor = outerMatch->cursor;
+      const auto& nextBatch = cursor ? outerMatch->inputs[cursor->batchIndex]
+                                     : outerMatch->inputs.front();
+      const auto nextRow =
+          cursor ? cursor->rowIndex : outerMatch->startRowIndex;
+      pendingBlockContinues = joinTracker_->isLastAddedRow(nextBatch, nextRow);
+    }
+    if (!pendingBlockContinues) {
       joinTracker_->noMoreFilterResults(onMiss);
     }
   } else {
