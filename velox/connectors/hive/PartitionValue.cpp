@@ -37,10 +37,26 @@ Variant fromStringImpl(
   using NativeType = typename TypeTraits<kind>::NativeType;
 
   if (type.isDate()) {
-    const auto days = dateMode == PartitionValue::DateMode::kDaysSinceEpoch
-        ? folly::to<int32_t>(value)
-        : DATE()->toDays(value);
-    return Variant(days);
+    if (dateMode == PartitionValue::DateMode::kDaysSinceEpoch) {
+      auto days = folly::tryTo<int32_t>(value);
+      VELOX_USER_CHECK(
+          days.hasValue(),
+          "Failed to parse DATE value '{}' as days since epoch",
+          value);
+      return Variant(days.value());
+    }
+    return Variant(DATE()->toDays(value));
+  }
+
+  if constexpr (kind == TypeKind::TIMESTAMP) {
+    if (timestampMode == PartitionValue::TimestampMode::kMicrosSinceEpoch) {
+      auto micros = folly::tryTo<int64_t>(value);
+      VELOX_USER_CHECK(
+          micros.hasValue(),
+          "Failed to parse TIMESTAMP value '{}' as microseconds since epoch",
+          value);
+      return Variant(Timestamp::fromMicros(micros.value()));
+    }
   }
 
   if constexpr (

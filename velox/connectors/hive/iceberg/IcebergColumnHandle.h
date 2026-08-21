@@ -48,6 +48,12 @@ class IcebergColumnHandle : public HiveColumnHandle {
     return icebergMetadata_;
   }
 
+  /// Initial default value for an Iceberg V3 added column.
+  ///
+  /// The coordinator supplies this using its internal epoch-duration encoding,
+  /// not the Iceberg table metadata JSON literal form: DATE defaults are passed
+  /// as days since epoch and TIMESTAMP/TIMESTAMP_UTC defaults are passed as
+  /// microseconds since epoch, both serialized as decimal strings.
   const std::optional<std::string>& initialDefaultValue() const {
     return initialDefaultValue_;
   }
