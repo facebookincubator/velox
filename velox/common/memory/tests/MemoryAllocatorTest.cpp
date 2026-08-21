@@ -705,11 +705,17 @@ TEST_P(MemoryAllocatorTest, stats) {
   gflags::FlagSaver flagSaver;
   FLAGS_velox_time_allocations = true;
   for (auto i = 0; i < sizes.size(); ++i) {
-    std::unique_ptr<Allocation> allocation = std::make_unique<Allocation>();
     auto size = sizes[i];
-    ASSERT_TRUE(allocate(size, *allocation));
-    ASSERT_GT(instance_->numAllocated(), 0);
-    instance_->freeNonContiguous(*allocation);
+    // A single allocate/free pair can take less than one tick of the hardware
+    // timestamp counter, whose resolution varies by platform (for example it
+    // is far coarser on ARM than the x86 TSC). Repeat so the accumulated time
+    // is measurable everywhere.
+    for (auto repeat = 0; repeat < 64; ++repeat) {
+      std::unique_ptr<Allocation> allocation = std::make_unique<Allocation>();
+      ASSERT_TRUE(allocate(size, *allocation));
+      ASSERT_GT(instance_->numAllocated(), 0);
+      instance_->freeNonContiguous(*allocation);
+    }
     auto stats = instance_->stats();
     ASSERT_LT(0, stats.sizes[i].clocks());
     ASSERT_GE(stats.sizes[i].totalBytes, size * AllocationTraits::kPageSize);
