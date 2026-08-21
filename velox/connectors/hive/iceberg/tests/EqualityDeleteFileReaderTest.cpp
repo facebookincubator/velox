@@ -320,6 +320,97 @@ TEST_F(EqualityDeleteFileReaderTest, equalityColumnNotInProjection) {
   assertEqualResults({expected}, {result});
 }
 
+/// Regression test for a reader tree missing a column the earlier splits never
+/// needed. Every split shares one ScanSpec, whose stable child order used to be
+/// fixed when the first tree was built. Only the second split needs 'id', so
+/// the column reaches the spec only then, and without the refresh that split's
+/// tree has no reader for it and the delete is silently not applied. The third
+/// split needs 'id' resolved even though it has no delete file.
+TEST_F(EqualityDeleteFileReaderTest, equalityColumnAddedBySecondSplit) {
+  auto tableType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
+  // 'id' is outside the projection, so only the delete file puts it in the
+  // scan spec.
+  auto outputType = ROW({"value"}, {VARCHAR()});
+
+  auto firstData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+          makeFlatVector<std::string>({"a", "b", "c", "d", "e"}),
+      });
+  auto firstDataFile = writeDataFile({firstData});
+
+  auto secondData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({5, 6, 7, 8, 9}),
+          makeFlatVector<std::string>({"f", "g", "h", "i", "j"}),
+      });
+  auto secondDataFile = writeDataFile({secondData});
+
+  auto thirdData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({10, 11, 12, 13, 14}),
+          makeFlatVector<std::string>({"k", "l", "m", "n", "o"}),
+      });
+  auto thirdDataFile = writeDataFile({thirdData});
+
+  auto deleteData = makeRowVector(
+      {"id"},
+      {
+          makeFlatVector<int64_t>({6, 8}),
+      });
+  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+  IcebergDeleteFile icebergDeleteFile(
+      FileContent::kEqualityDeletes,
+      eqDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      2,
+      getFileSize(eqDeleteFile->getPath()),
+      /*equalityFieldIds=*/{1});
+
+  auto splits = makeSplits(firstDataFile->getPath());
+  auto secondSplits =
+      makeSplits(secondDataFile->getPath(), {icebergDeleteFile});
+  splits.insert(splits.end(), secondSplits.begin(), secondSplits.end());
+  auto thirdSplits = makeSplits(thirdDataFile->getPath());
+  splits.insert(splits.end(), thirdSplits.begin(), thirdSplits.end());
+
+  // One driver, no preloading, so every split goes through addSplit() on the
+  // data source that read the previous one. That is what makes them share a
+  // ScanSpec, and the shared spec is what carries the stale order forward.
+  auto plan = makeTableScanPlan(outputType, tableType);
+  auto result = AssertQueryBuilder(plan)
+                    .splits(splits)
+                    .maxDrivers(1)
+                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+                    .copyResults(pool());
+
+  // The first and third splits keep every row; the second loses id=6 and
+  // id=8.
+  auto expected = makeRowVector(
+      {"value"},
+      {
+          makeFlatVector<std::string>(
+              {"a",
+               "b",
+               "c",
+               "d",
+               "e",
+               "f",
+               "h",
+               "j",
+               "k",
+               "l",
+               "m",
+               "n",
+               "o"}),
+      });
+
+  assertEqualResults({expected}, {result});
+}
+
 /// Verifies that two equality-delete files referencing the SAME column not in
 /// the user's projection only augment 'scanSpec_' once. Exercises the
 /// de-duplication branch in 'IcebergSplitReader::prepareSplit'.
