@@ -397,19 +397,72 @@ class SplitFunction : public CudfFunction {
   cudf::size_type maxSplitCount_;
 };
 
+namespace {
+
+// Selects how a cast is evaluated. cudf::cast covers the fixed-width casts; the
+// temporal and integer-to-string ones need bespoke libcudf string conversions
+// and, for kStringToTimestamp, a session-timezone shift.
+enum class CastMode {
+  kFixedWidth,
+  kStringToTimestamp,
+  kDateToString,
+  kIntToString,
+};
+
+// Returns the string-kernel mode this cast needs, or kFixedWidth when
+// cudf::cast handles it. FunctionExpression::canEvaluate and CastFunction both
+// route through this, so plan-time eligibility and run-time behavior cannot
+// disagree on which casts the string kernels claim.
+CastMode castModeFor(const TypePtr& srcType, const TypePtr& dstType) {
+  const bool toVarchar = dstType->kind() == TypeKind::VARCHAR;
+  if (srcType->kind() == TypeKind::VARCHAR &&
+      dstType->kind() == TypeKind::TIMESTAMP) {
+    return CastMode::kStringToTimestamp;
+  }
+  if (srcType->isDate() && toVarchar) {
+    return CastMode::kDateToString;
+  }
+  switch (srcType->kind()) {
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+      if (toVarchar) {
+        return CastMode::kIntToString;
+      }
+      break;
+    default:
+      break;
+  }
+  return CastMode::kFixedWidth;
+}
+
+// True when the cast is one the libcudf string kernels claim, i.e. one
+// cudf::is_supported_cast declines but CastFunction can still evaluate.
+bool isStringKernelCast(const TypePtr& srcType, const TypePtr& dstType) {
+  return castModeFor(srcType, dstType) != CastMode::kFixedWidth;
+}
+
+} // namespace
+
 class CastFunction : public CudfFunction {
  public:
   CastFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(expr->inputs().size(), 1, "cast expects exactly 1 input");
 
-    targetCudfType_ = cudf_velox::veloxToCudfDataType(expr->type());
-    auto sourceType =
-        cudf_velox::veloxToCudfDataType(expr->inputs()[0]->type());
-    VELOX_CHECK(
-        cudf::is_supported_cast(sourceType, targetCudfType_),
-        "Cast from {} to {} is not supported",
-        expr->inputs()[0]->type()->toString(),
-        expr->type()->toString());
+    const auto& srcVeloxType = expr->inputs()[0]->type();
+    const auto& dstVeloxType = expr->type();
+    targetCudfType_ = cudf_velox::veloxToCudfDataType(dstVeloxType);
+    castMode_ = castModeFor(srcVeloxType, dstVeloxType);
+
+    if (castMode_ == CastMode::kFixedWidth) {
+      auto sourceType = cudf_velox::veloxToCudfDataType(srcVeloxType);
+      VELOX_CHECK(
+          cudf::is_supported_cast(sourceType, targetCudfType_),
+          "Cast from {} to {} is not supported",
+          srcVeloxType->toString(),
+          dstVeloxType->toString());
+    }
   }
 
   ColumnOrView eval(
@@ -417,10 +470,46 @@ class CastFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::cast(inputCol, targetCudfType_, stream, mr);
+    switch (castMode_) {
+      case CastMode::kStringToTimestamp: {
+        // Presto CAST(varchar AS timestamp) expects "YYYY-MM-DD HH:MM:SS" with
+        // optional fractional seconds. cudf::strings::to_timestamps needs a
+        // fixed format, so parse twice -- with and without ".ffffff" -- and
+        // combine with copy_if_else based on which format matched.
+        static constexpr char kFmtFrac[] = "%Y-%m-%d %H:%M:%S.%6f";
+        static constexpr char kFmtNoFrac[] = "%Y-%m-%d %H:%M:%S";
+        auto stringsView = cudf::strings_column_view(inputCol);
+
+        auto validFrac =
+            cudf::strings::is_timestamp(stringsView, kFmtFrac, stream, mr);
+        auto tsFrac = cudf::strings::to_timestamps(
+            stringsView, targetCudfType_, kFmtFrac, stream, mr);
+        auto tsNoFrac = cudf::strings::to_timestamps(
+            stringsView, targetCudfType_, kFmtNoFrac, stream, mr);
+
+        auto result = cudf::copy_if_else(
+            tsFrac->view(), tsNoFrac->view(), validFrac->view(), stream, mr);
+
+        // cudf::strings::to_timestamps treats the string as UTC, but Presto
+        // reads a bare timestamp in the session timezone, so shift local->UTC.
+        if (context_.appliesSessionTimezone()) {
+          return toUtcTimestamp(
+              result->view(), context_.sessionTimezone, stream, mr);
+        }
+        return result;
+      }
+      case CastMode::kDateToString:
+        return cudf::strings::from_timestamps(
+            inputCol, "%Y-%m-%d", cudf::strings_column_view{}, stream, mr);
+      case CastMode::kIntToString:
+        return cudf::strings::from_integers(inputCol, stream, mr);
+      default:
+        return cudf::cast(inputCol, targetCudfType_, stream, mr);
+    }
   }
 
  private:
+  CastMode castMode_{CastMode::kFixedWidth};
   cudf::data_type targetCudfType_;
 };
 
@@ -2797,7 +2886,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   // TIMESTAMP WITH TIME ZONE function family (from_unixtime, to_unixtime,
   // at_timezone, timezone_hour/minute, to_iso8601, format_datetime,
-  // parse_datetime, from_iso8601_timestamp).
+  // parse_datetime, from_iso8601_timestamp), plus date_format.
   registerTimezoneFunctions(prefix);
 
   // Note: Spark and Presto functions are now registered separately via
@@ -3011,6 +3100,12 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
     const auto& dstType = expr->type();
     if (srcType == nullptr || dstType == nullptr) {
       return false;
+    }
+    // The temporal and integer-to-string casts route through libcudf string
+    // kernels rather than cudf::cast, which does not support them, so answer
+    // for them before asking is_supported_cast.
+    if (isStringKernelCast(srcType, dstType)) {
+      return true;
     }
     auto src = cudf_velox::veloxToCudfDataType(srcType);
     auto dst = cudf_velox::veloxToCudfDataType(dstType);

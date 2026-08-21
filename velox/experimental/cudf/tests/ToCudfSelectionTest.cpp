@@ -205,6 +205,55 @@ TEST_F(ToCudfSelectionTest, parseDatetimeUnsupportedFormatsFallBack) {
   }
 }
 
+// date_format takes MySQL specifiers, of which the GPU claims only those cuDF
+// renders exactly as CPU does. Selection is the only thing that can see this:
+// the value suites force GPU evaluation, so they are blind to a fallback.
+//
+// Every format below is one CPU renders without raising -- a weekday or month
+// name, a week number, and a trailing '%' that CPU drops -- so a fallback runs
+// the projection for real and the assertion is about selection alone.
+TEST_F(ToCudfSelectionTest, dateFormatUnsupportedSpecifierFallsBack) {
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<Timestamp>({Timestamp(1767314700, 0)}, TIMESTAMP())});
+
+  for (const auto* format : {"%W", "%M", "%b", "%v", "%"}) {
+    SCOPED_TRACE(format);
+    auto plan = PlanBuilder()
+                    .values({input})
+                    .project(
+                        {"date_format(event_ts, '" + std::string(format) +
+                         "') AS result"})
+                    .planNode();
+
+    std::shared_ptr<Task> task;
+    AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+    ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+    ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+  }
+}
+
+// A pattern built only from the specifiers cuDF matches stays on the GPU, so
+// the gate above is not simply refusing every format.
+TEST_F(ToCudfSelectionTest, dateFormatSupportedSpecifiersUseCudf) {
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<Timestamp>({Timestamp(1767314700, 0)}, TIMESTAMP())});
+
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .project({"date_format(event_ts, '%Y-%m-%d %H:%i:%s') AS result"})
+          .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
 TEST_F(ToCudfSelectionTest, supportedPrestoDateAddDateUsesCudf) {
   auto input = makeRowVector(
       {"amount", "event_date"},

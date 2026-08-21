@@ -1050,6 +1050,128 @@ class FormatDatetimeFunction : public CudfFunction {
   bool usesTextNames_{false};
 };
 
+// What one walk over a date_format pattern produces. date_format takes MySQL
+// specifiers rather than the Joda letters format_datetime takes, so it needs
+// its own walk; the recorded-error shape is the same, and for the same reason.
+struct DateFormatPattern {
+  // The strftime format cuDF renders with.
+  std::string strftime;
+  // Empty when the pattern is usable, otherwise the message the eval path
+  // raises. Recorded rather than thrown so a canEvaluate can answer false and
+  // leave the whole pattern to CPU, which has a rendering for everything
+  // declined here.
+  std::string error;
+};
+
+// Translates a Presto date_format pattern to the strftime format cuDF renders
+// with. date_format takes MySQL specifiers, and only those whose cuDF rendering
+// matches CPU's exactly are translated. Everything else is recorded as an error
+// so the expression falls back rather than rendering a different string,
+// because CPU renders all of it and none of it raises: a name or week-number
+// specifier has a value cuDF cannot produce without more input than it is
+// given, an unknown specifier becomes the bare character
+// (buildMysqlDateTimeFormatter's default case), and a trailing '%' is dropped.
+// The six specifiers CPU does reject (%D %U %u %V %w %X) are declined here too,
+// leaving CPU to raise the user error.
+DateFormatPattern analyzeDateFormat(const std::string& format) {
+  DateFormatPattern pattern;
+  std::string& out = pattern.strftime;
+  out.reserve(format.size() * 2);
+  for (size_t i = 0; i < format.size(); ++i) {
+    if (format[i] != '%') {
+      out += format[i];
+      continue;
+    }
+    if (i + 1 >= format.size()) {
+      // CPU drops a trailing '%'; cuDF has no such rule.
+      pattern.error =
+          fmt::format("date_format pattern ends with a bare '%': {}", format);
+      return pattern;
+    }
+    ++i;
+    switch (format[i]) {
+      // Specifiers cuDF spells the same way CPU does.
+      case 'Y':
+      case 'y':
+      case 'm':
+      case 'd':
+      case 'H':
+      case 'I':
+      case 'S':
+      case 'f':
+      case 'j':
+        out += '%';
+        out += format[i];
+        break;
+      // MySQL's minute is 'i' where strftime's is 'M', which MySQL uses for the
+      // month name instead.
+      case 'i':
+        out += "%M";
+        break;
+      case 's':
+        out += "%S";
+        break;
+      case 'h':
+        out += "%I";
+        break;
+      case 'T':
+        out += "%H:%M:%S";
+        break;
+      case '%':
+        out += "%%";
+        break;
+      default:
+        pattern.error = fmt::format(
+            "date_format specifier is not supported on GPU: %{}", format[i]);
+        return pattern;
+    }
+  }
+  return pattern;
+}
+
+// Analyses the pattern and raises what the walk recorded. A canEvaluate calls
+// analyzeDateFormat directly, because it has to answer false rather than raise.
+std::string dateFormatToStrftime(const std::string& format) {
+  auto pattern = analyzeDateFormat(format);
+  if (!pattern.error.empty()) {
+    VELOX_NYI("{}", pattern.error);
+  }
+  return std::move(pattern.strftime);
+}
+
+// date_format(timestamp, varchar) -> varchar.
+class DateFormatFunction : public CudfFunction {
+ public:
+  DateFormatFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 2, "date_format expects exactly 2 inputs");
+    strftime_ = dateFormatToStrftime(constStringArg(expr, 1, pool));
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+
+    // Presto renders in the session timezone while
+    // cudf::strings::from_timestamps renders the instant as UTC, so shift to
+    // the local wall clock first.
+    std::unique_ptr<cudf::column> local;
+    if (context_.appliesSessionTimezone()) {
+      local = toLocalTimestamp(inputCol, context_.sessionTimezone, stream, mr);
+      inputCol = local->view();
+    }
+    // No names column: analyzeDateFormat declines every specifier that would
+    // render a month or weekday by name.
+    return cudf::strings::from_timestamps(
+        inputCol, strftime_, cudf::strings_column_view{}, stream, mr);
+  }
+
+ private:
+  std::string strftime_;
+};
+
 // Mirrors the CPU pack() range check: throws if any non-null millis value falls
 // outside [kMinMillisUtc, kMaxMillisUtc]. Without this, from_unixtime would
 // shift an out-of-range instant into the zone-key bits and silently corrupt the
@@ -2069,6 +2191,21 @@ bool formatDatetimeCanEvaluate(const core::TypedExprPtr& expr) {
   return !analyzed.hasUnsupportedFieldWidth;
 }
 
+// Whether the GPU may render this date_format pattern. A specifier cuDF renders
+// differently from CPU, or does not render at all, is left to CPU rather than
+// returning a different string. Unlike format_datetime nothing here is answered
+// as a user error: CPU has a rendering for every pattern this declines, and
+// raises for the few it rejects itself.
+bool dateFormatCanEvaluate(const core::TypedExprPtr& expr) {
+  const auto format = constantVarcharArg(expr, 1);
+  if (!format.has_value()) {
+    // A null format is answered with nulls, and a non-constant one cannot be
+    // inspected -- neither is this predicate's business.
+    return true;
+  }
+  return analyzeDateFormat(*format).error.empty();
+}
+
 // Whether the GPU may parse with this parse_datetime format. Beyond the field
 // widths, cuDF's parser rejects month and weekday names outright, and its
 // two-digit year pivots at 69 where Joda pivots at 70, so `69` would parse to
@@ -2202,6 +2339,27 @@ void registerTimezoneFunctions(const std::string& prefix) {
            .build()},
       /*overwrite=*/true,
       formatDatetimeCanEvaluate);
+
+  registerCudfFunction(
+      prefix + "date_format",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        if (constantArgIsNull(expr, 1)) {
+          return std::shared_ptr<CudfFunction>(
+              std::make_shared<AllNullFunction>(
+                  cudf::data_type{cudf::type_id::STRING}));
+        }
+        return std::shared_ptr<CudfFunction>(
+            std::make_shared<DateFormatFunction>(expr, pool));
+      },
+      {FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("timestamp")
+           .constantArgumentType("varchar")
+           .build()},
+      /*overwrite=*/true,
+      dateFormatCanEvaluate);
 
   registerCudfFunction(
       prefix + "from_unixtime",
