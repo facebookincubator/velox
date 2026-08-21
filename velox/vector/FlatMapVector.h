@@ -170,6 +170,11 @@ class FlatMapVector : public BaseVector {
   ///
   /// This channel can be used to fetch mapValues and inMap buffers. Returns
   /// std::nullopt if there is no key match.
+  ///
+  /// The distinct keys vector may contain the same key more than once, for
+  /// example when it is wrapped in a dictionary with repeated indices. In that
+  /// case the largest channel holding the key is returned, so that the last
+  /// channel that set a key is the one visible through it.
   std::optional<column_index_t> getKeyChannel(
       const VectorPtr& keysVector,
       vector_size_t index) const;
