@@ -6764,7 +6764,13 @@ TEST_F(TableScanTest, parallelUnitLoader) {
 }
 
 TEST_F(TableScanTest, filterColumnHandles) {
-  auto data = makeVectors(1, 10, ROW({"a", "b"}, BIGINT()));
+  // The remaining filter below evaluates to null, and therefore drops the row,
+  // whenever 'a' is null. Use data without nulls so that every row is expected
+  // in the result regardless of what random data would have been generated.
+  std::vector<RowVectorPtr> data{makeRowVector(
+      {"a", "b"},
+      {makeFlatVector<int64_t>(10, folly::identity),
+       makeFlatVector<int64_t>(10, folly::identity)})};
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), data);
   auto split = exec::test::HiveConnectorSplitBuilder(filePath->getPath())
