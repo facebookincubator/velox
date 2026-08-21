@@ -46,10 +46,14 @@ Map Functions
 
 .. spark:function:: map_from_arrays(array(K), array(V)) -> map(K,V)
 
-    Creates a map with a pair of the given key/value arrays. All elements in keys should not be null.
-    If key size != value size will throw exception that key and value must have the same length.::
+    Creates a map by pairing up the given key and value arrays. Returns NULL if either array is
+    NULL. Throws if any key is null, or if the two arrays have different lengths. When a key is
+    repeated, the behavior depends on the ``throw_exception_on_duplicate_map_keys`` configuration
+    property: if true, throws; otherwise the last value wins and the key keeps the position of its
+    first occurrence. ::
 
         SELECT map_from_arrays(array(1.0, 3.0), array('2', '4')); -- {1.0 -> 2, 3.0 -> 4}
+        SELECT map_from_arrays(array(2, 1, 2), array('a', 'b', 'c')); -- {2 -> 'c', 1 -> 'b'}
 
 .. spark:function:: map_from_entries(array(struct(K,V))) -> map(K,V)
 
