@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -34,16 +35,73 @@ namespace facebook::velox::exec::rpc {
 
 // Import core RPC types from velox/common/rpc into this namespace so that
 // existing code in velox/expression/rpc can use them unqualified.
-using velox::rpc::RPCRequest;
+using velox::rpc::RpcCapability;
+using velox::rpc::RpcCapabilityMode;
+using velox::rpc::RpcCapabilityModeSet;
+using velox::rpc::RpcEffectiveBounds;
 using velox::rpc::RPCResponse;
+using velox::rpc::RPCResponsePayload;
 using velox::rpc::RPCStreamingMode;
+
+/// Read a response's payload as the concrete type the function produced.
+///
+/// The cast is unchecked in release builds: a function only ever reads back
+/// the payload type it wrote, so a mismatch is a programming error rather
+/// than a runtime condition. The debug check turns that error into a test
+/// failure instead of undefined behaviour.
+template <typename T>
+const T& responseAs(const RPCResponse& response) {
+  VELOX_DCHECK_NOT_NULL(
+      dynamic_cast<const T*>(response.payload.get()),
+      "Response payload is not of the expected type");
+  return *static_cast<const T*>(response.payload.get());
+}
+
+/// Payload for functions whose backend returns text. Shared by the text
+/// functions via buildTextOutput(); a function with a richer result (an
+/// embedding, a struct) defines its own payload type instead.
+struct TextPayload : RPCResponsePayload {
+  std::string text;
+
+  explicit TextPayload(std::string value) : text(std::move(value)) {}
+};
+
+/// Wrap text as a response payload.
+inline std::shared_ptr<const RPCResponsePayload> makeTextPayload(
+    std::string value) {
+  return std::make_shared<const TextPayload>(std::move(value));
+}
+
+/// Build a VARCHAR output vector from text payloads: errors become SQL NULL,
+/// successes carry their text through.
+///
+/// This is a helper the text functions call from their own buildOutput(), not
+/// a default they inherit. A function that returns something else gets a
+/// compile error for not implementing buildOutput(), rather than a column of
+/// silent NULLs from a default that could not read its payload.
+inline VectorPtr buildTextOutput(
+    const std::vector<RPCResponse>& responses,
+    memory::MemoryPool* pool) {
+  const auto numRows = static_cast<vector_size_t>(responses.size());
+  auto result =
+      BaseVector::create<FlatVector<StringView>>(VARCHAR(), numRows, pool);
+  for (vector_size_t i = 0; i < numRows; ++i) {
+    if (responses[i].hasError()) {
+      result->setNull(i, true);
+    } else {
+      result->set(i, StringView(responseAs<TextPayload>(responses[i]).text));
+    }
+  }
+  return result;
+}
 
 /// Base interface for async RPC functions (business logic layer).
 ///
 /// Lives in velox/expression/rpc/ because it is a function interface — it
 /// defines what an RPC function is (signature, dispatch, response format),
-/// analogous to VectorFunction in velox/expression/. Transport-layer types
-/// (IRPCClient, RPCRequest, RPCResponse) live in velox/common/rpc/.
+/// analogous to VectorFunction in velox/expression/. The framework-visible
+/// response type (RPCResponse) lives in velox/common/rpc/; the concrete
+/// request and response payload types belong to each function.
 /// The execution operator (RPCOperator) that drives async dispatch lives
 /// in velox/exec/rpc/.
 ///
@@ -95,6 +153,18 @@ class AsyncRPCFunction {
   /// Empty string means "no tier configured — uses global default limit."
   virtual std::string tierKey() const {
     return "";
+  }
+
+  /// Dispatch modes this function supports on its resolved backend. Always
+  /// includes kPerRow. A function whose backend is not yet pinned returns the
+  /// conservative per-row-only set.
+  virtual RpcCapability capabilities() const = 0;
+
+  /// The backend's hard limits for a dispatch mode. Returns zeroed bounds when
+  /// the mode is unbounded or unsupported.
+  virtual velox::rpc::RpcEffectiveBounds transportBounds(
+      velox::rpc::RpcCapabilityMode /*mode*/) const {
+    return {};
   }
 
   // ── PER_ROW mode ──────────────────────────────────────────────
@@ -169,27 +239,34 @@ class AsyncRPCFunction {
     return 0;
   }
 
+  /// Largest prefix of the currently-pending rows whose cumulative *estimated*
+  /// serialized size fits within budgetBytes. Called by the operator before a
+  /// flush when the backend's per-request byte bound (from
+  /// transportBounds(kNativeBatch/kAsyncJob).maxBatchBytes) is > 0, so one
+  /// request never exceeds the backend's per-request size cap.
+  ///
+  /// MUST return at least 1 even when the first pending row alone exceeds the
+  /// budget: the caller needs to make progress, and the function fails that
+  /// oversized row loud inside flushBatch() rather than deadlocking the drain
+  /// loop. The estimate should be conservative (round up framing); the operator
+  /// pairs it with headroom in the declared budget. Rows are measured from the
+  /// front of the pending queue, matching flushBatch()'s flush order.
+  ///
+  /// Default: no limit (for functions that do not declare maxBatchBytes).
+  virtual int32_t rowsWithinByteBudget(int64_t /*budgetBytes*/) const {
+    return std::numeric_limits<int32_t>::max();
+  }
+
   // ── Output ────────────────────────────────────────────────────
 
-  /// Build output vector from completed responses.
-  /// Default: VARCHAR FlatVector (errors → SQL NULL, success → string
-  /// value). Override for non-VARCHAR return types (e.g., ARRAY(REAL)
-  /// for embeddings) or custom result processing.
+  /// Build the output vector from completed responses.
+  ///
+  /// Only the function can do this: it is the one that knows what its
+  /// payload contains and how it maps onto resultType(). Functions returning
+  /// text can delegate to buildTextOutput().
   virtual VectorPtr buildOutput(
       const std::vector<RPCResponse>& responses,
-      memory::MemoryPool* pool) const {
-    const auto numRows = static_cast<vector_size_t>(responses.size());
-    auto result =
-        BaseVector::create<FlatVector<StringView>>(VARCHAR(), numRows, pool);
-    for (vector_size_t i = 0; i < numRows; ++i) {
-      if (responses[i].hasError()) {
-        result->setNull(i, true);
-      } else {
-        result->set(i, StringView(responses[i].result));
-      }
-    }
-    return result;
-  }
+      memory::MemoryPool* pool) const = 0;
 
   // ── Congestion Control ───────────────────────────────────────
 
@@ -197,7 +274,15 @@ class AsyncRPCFunction {
   enum class CongestionSignal {
     /// Unit completed cleanly — feed its latency to the gradient window.
     kSuccess,
-    /// Unit showed backend overload — shrink the window.
+    /// Backend shed load (rate limited, or timed out under pressure) — shrink
+    /// the window. Only this signal backs off.
+    kOverloaded,
+    /// Unit failed for reasons the backend is not responsible for, such as a
+    /// malformed request or a bad key. Retrying more slowly does not help, so
+    /// neither controller reacts. Today that makes kError observationally
+    /// identical to kNone at the operator; it is kept separate because "failed,
+    /// but not the backend's fault" and "nothing to evaluate" are different
+    /// facts, and only the former should ever gain an error counter.
     kError,
     /// No congestion evaluation — skip window adjustment.
     kNone,
