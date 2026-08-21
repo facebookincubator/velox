@@ -58,8 +58,12 @@
 #include <cudf/strings/contains.hpp>
 #include <cudf/strings/convert/convert_datetime.hpp>
 #include <cudf/strings/convert/convert_integers.hpp>
+#include <cudf/strings/extract.hpp>
 #include <cudf/strings/find.hpp>
+#include <cudf/strings/padding.hpp>
+#include <cudf/strings/regex/regex_program.hpp>
 #include <cudf/strings/replace.hpp>
+#include <cudf/strings/slice.hpp>
 #include <cudf/strings/split/split.hpp>
 #include <cudf/strings/string_view.hpp>
 #include <cudf/strings/strings_column_view.hpp>
@@ -443,6 +447,106 @@ bool isStringKernelCast(const TypePtr& srcType, const TypePtr& dstType) {
   return castModeFor(srcType, dstType) != CastMode::kFixedWidth;
 }
 
+// The timestamp strings CAST(VARCHAR AS TIMESTAMP) accepts on the GPU, captured
+// as the parts a canonical string is assembled from: the date, an optional
+// " HH:MM", an optional ":SS", and the optional fractional digits.
+//
+// Narrower than the CPU grammar (TimestampParseMode::kPrestoCast), which also
+// takes a partial date ("2024", "2024-03"), a single-digit month, day or hour,
+// a trailing "Z" or zone name, and surrounding spaces. Those arrive here as a
+// non-match and are reported by eval rather than converted, because cuDF's
+// parser has no optional components to express them with.
+//
+// Anchored at both ends on purpose. cuDF's is_timestamp stops at the last
+// format item rather than at the end of the input, so without this a trailing
+// remainder would be ignored where the CPU reads it as a timezone and can
+// reject it.
+// The fraction is unbounded because CPU's is ('.' digit+): any excess digits
+// are truncated below rather than making the whole value unconvertible.
+constexpr char kTimestampShapePattern[] =
+    R"(^(\d{4}-\d{2}-\d{2})(?:( \d{2}:\d{2})(:\d{2})?(?:\.(\d+))?)?$)";
+
+// The single format the canonical strings convert with. Six fractional digits
+// because CPU truncates the fraction to microseconds, Presto's TIMESTAMP
+// precision: a ".123456789" input reads as ".123456" there, so reading all nine
+// digits here would make the GPU the more precise of the two.
+constexpr char kCanonicalTimestampFormat[] = "%Y-%m-%d %H:%M:%S.%6f";
+constexpr cudf::size_type kFractionDigits = 6;
+
+// Rewrites the accepted forms into one fixed shape so a single to_timestamps
+// call converts them all: supplies midnight for a bare date, ":00" for a time
+// without seconds, and pads or truncates the fraction to kFractionDigits.
+//
+// Returns "YYYY-MM-DD HH:MM:SS.fffffffff" per row, null where the input did not
+// match kTimestampShapePattern and where the input itself was null. Callers
+// distinguish those two by the input's own null mask.
+std::unique_ptr<cudf::column> canonicalizeTimestampStrings(
+    const cudf::column_view& input,
+    const cudf::strings::regex_program& shape,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  // One column per capture group: date, " HH:MM", ":SS", fractional digits. A
+  // group the input did not reach is null, which is what the defaults below key
+  // on; a row matching nothing is null in every column, including the date.
+  auto parts = cudf::strings::extract(
+      cudf::strings_column_view(input), shape, stream, mr);
+  auto groups = parts->release();
+  VELOX_CHECK_EQ(groups.size(), 4, "Timestamp shape has 4 capture groups");
+
+  auto time = cudf::replace_nulls(
+      groups[1]->view(),
+      cudf::string_scalar(" 00:00", true, stream, mr),
+      stream,
+      mr);
+  auto seconds = cudf::replace_nulls(
+      groups[2]->view(),
+      cudf::string_scalar(":00", true, stream, mr),
+      stream,
+      mr);
+  auto fraction = cudf::replace_nulls(
+      groups[3]->view(),
+      cudf::string_scalar("0", true, stream, mr),
+      stream,
+      mr);
+  // pad only lengthens, so pad first and then cut to make every fraction
+  // exactly kFractionDigits wide whichever side of it the input fell.
+  auto padded = cudf::strings::pad(
+      cudf::strings_column_view(fraction->view()),
+      kFractionDigits,
+      cudf::strings::side_type::RIGHT,
+      "0",
+      stream,
+      mr);
+  // std::optional rather than plain integers: the overload taking
+  // numeric_scalar is deprecated but still declared, and an int argument is
+  // ambiguous between the two.
+  auto fixedFraction = cudf::strings::slice_strings(
+      cudf::strings_column_view(padded->view()),
+      std::optional<cudf::size_type>(0),
+      std::optional<cudf::size_type>(kFractionDigits),
+      std::nullopt,
+      stream,
+      mr);
+  auto separator = cudf::make_column_from_scalar(
+      cudf::string_scalar(".", true, stream, mr), input.size(), stream, mr);
+
+  // A null narep keeps a non-matching row null rather than concatenating the
+  // defaults around a missing date.
+  auto canonical = cudf::strings::concatenate(
+      cudf::table_view{
+          {groups[0]->view(),
+           time->view(),
+           seconds->view(),
+           separator->view(),
+           fixedFraction->view()}},
+      cudf::string_scalar("", true, stream, mr),
+      cudf::string_scalar("", false, stream, mr),
+      cudf::strings::separator_on_nulls::YES,
+      stream,
+      mr);
+  return canonical;
+}
+
 } // namespace
 
 class CastFunction : public CudfFunction {
@@ -462,6 +566,17 @@ class CastFunction : public CudfFunction {
           "Cast from {} to {} is not supported",
           srcVeloxType->toString(),
           dstVeloxType->toString());
+      return;
+    }
+
+    if (castMode_ == CastMode::kStringToTimestamp) {
+      // try_cast answers null where cast raises, so eval has to tell them
+      // apart.
+      isTryCast_ = expr->isCastKind() &&
+          expr->asUnchecked<core::CastTypedExpr>()->isTryCast();
+      // Compiled once here rather than per batch in eval.
+      shapeProgram_ = cudf::strings::regex_program::create(
+          kTimestampShapePattern, cudf::strings::regex_flags::DEFAULT);
     }
   }
 
@@ -472,23 +587,74 @@ class CastFunction : public CudfFunction {
     auto inputCol = asView(inputColumns[0]);
     switch (castMode_) {
       case CastMode::kStringToTimestamp: {
-        // Presto CAST(varchar AS timestamp) expects "YYYY-MM-DD HH:MM:SS" with
-        // optional fractional seconds. cudf::strings::to_timestamps needs a
-        // fixed format, so parse twice -- with and without ".ffffff" -- and
-        // combine with copy_if_else based on which format matched.
-        static constexpr char kFmtFrac[] = "%Y-%m-%d %H:%M:%S.%6f";
-        static constexpr char kFmtNoFrac[] = "%Y-%m-%d %H:%M:%S";
-        auto stringsView = cudf::strings_column_view(inputCol);
+        const auto boolType = cudf::data_type{cudf::type_id::BOOL8};
+        auto canonical =
+            canonicalizeTimestampStrings(inputCol, *shapeProgram_, stream, mr);
 
-        auto validFrac =
-            cudf::strings::is_timestamp(stringsView, kFmtFrac, stream, mr);
-        auto tsFrac = cudf::strings::to_timestamps(
-            stringsView, targetCudfType_, kFmtFrac, stream, mr);
-        auto tsNoFrac = cudf::strings::to_timestamps(
-            stringsView, targetCudfType_, kFmtNoFrac, stream, mr);
+        // to_timestamps is documented as undefined for input that does not
+        // match the format: it reads whatever digits sit at each field
+        // position, so an out-of-range field rolls over instead of failing.
+        // is_timestamp applies the calendar and range checks conversion skips,
+        // so validate the canonical form before converting it.
+        auto convertible = cudf::strings::is_timestamp(
+            cudf::strings_column_view(canonical->view()),
+            kCanonicalTimestampFormat,
+            stream,
+            mr);
+        // A canonical row is null exactly when the input matched no accepted
+        // shape, and is_timestamp propagates that null. Left as a null the
+        // verdict would be *skipped* by checkAllTrue rather than counted as a
+        // rejection, so unmatched input has to be made explicitly false.
+        auto usable = cudf::replace_nulls(
+            convertible->view(),
+            cudf::numeric_scalar<bool>(false, true, stream, mr),
+            stream,
+            mr);
+        // A null input is not invalid input: it is admitted here and stays null
+        // through the conversion.
+        auto inputIsNull = cudf::is_null(inputCol, stream, mr);
+        auto usableOrNull = cudf::binary_operation(
+            usable->view(),
+            inputIsNull->view(),
+            cudf::binary_operator::BITWISE_OR,
+            boolType,
+            stream,
+            mr);
 
-        auto result = cudf::copy_if_else(
-            tsFrac->view(), tsNoFrac->view(), validFrac->view(), stream, mr);
+        if (!isTryCast_) {
+          // Raises for input the CPU rejects as well as for the accepted-there,
+          // unsupported-here forms kTimestampShapePattern lists; the two are
+          // not distinguished.
+          checkAllTrue(
+              usableOrNull->view(),
+              "Cannot cast value to TIMESTAMP: not a supported timestamp string",
+              stream,
+              mr);
+        }
+
+        auto result = cudf::strings::to_timestamps(
+            cudf::strings_column_view(canonical->view()),
+            targetCudfType_,
+            kCanonicalTimestampFormat,
+            stream,
+            mr);
+
+        if (isTryCast_) {
+          // Nulling before the timezone shift also keeps these rows out of its
+          // spring-forward gap check, which only inspects non-null rows.
+          auto unusable = cudf::make_fixed_width_column(
+              targetCudfType_,
+              inputCol.size(),
+              cudf::mask_state::ALL_NULL,
+              stream,
+              mr);
+          result = cudf::copy_if_else(
+              result->view(),
+              unusable->view(),
+              usableOrNull->view(),
+              stream,
+              mr);
+        }
 
         // cudf::strings::to_timestamps treats the string as UTC, but Presto
         // reads a bare timestamp in the session timezone, so shift local->UTC.
@@ -511,6 +677,11 @@ class CastFunction : public CudfFunction {
  private:
   CastMode castMode_{CastMode::kFixedWidth};
   cudf::data_type targetCudfType_;
+  // kStringToTimestamp only: whether this is try_cast, which answers null where
+  // cast raises.
+  bool isTryCast_{false};
+  // kStringToTimestamp only: the compiled kTimestampShapePattern.
+  std::unique_ptr<cudf::strings::regex_program> shapeProgram_;
 };
 
 class CardinalityFunction : public CudfFunction {

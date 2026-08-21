@@ -2415,6 +2415,55 @@ TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampTimezoneParity) {
   }
 }
 
+// The forms CPU's kPrestoCast grammar accepts beyond a full "YYYY-MM-DD
+// HH:MM:SS": a bare date, a time without seconds, and a fraction of any width.
+// cuDF's parser has no optional components, so eval canonicalises these before
+// converting; each must still equal what CPU produces rather than the
+// rolled-over value an unvalidated parse returns.
+//
+// Space-padded input is deliberately absent. CPU skips a single space after the
+// timestamp and reads any further remainder as a timezone, so "2024-03-14  "
+// fails there as an empty zone name; the GPU declines every padded form instead
+// of trying to reproduce that rule.
+TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampAcceptedForms) {
+  auto input =
+      makeRowVector({makeFlatVector<std::string>(std::vector<std::string>{
+          "2024-03-14 12:30:00",
+          "2024-03-14",
+          "2024-03-14 12:30",
+          "2024-03-14 12:30:00.5",
+          "2024-03-14 12:30:00.123456",
+          "2024-03-14 12:30:00.123456789",
+          "2024-03-14 12:30:00.1234567890",
+      })});
+  assertExpressionMatchesCpu("cast(c0 as timestamp)", input, input->rowType());
+}
+
+// to_timestamps is undefined for input that does not match its format, so
+// without validation a malformed string yields whatever digits sat at each
+// field position. CPU raises instead.
+TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampInvalidThrows) {
+  for (const auto* text : {"garbage", "2024-13-14 12:30:00", "not a date"}) {
+    SCOPED_TRACE(text);
+    VELOX_ASSERT_THROW(
+        (evaluateOnce<Timestamp, std::string>("cast(c0 as timestamp)", text)),
+        "not a supported timestamp string");
+  }
+}
+
+// try_cast answers null for the same input, as CPU does, and leaves the
+// castable rows of the same column alone.
+TEST_F(CudfSimpleFilterProjectTest, tryCastVarcharToTimestampInvalidIsNull) {
+  auto input = makeRowVector({makeNullableFlatVector<std::string>({
+      "2024-03-14 12:30:00",
+      "garbage",
+      std::nullopt,
+      "2024-03-14",
+  })});
+  assertExpressionMatchesCpu(
+      "try_cast(c0 as timestamp)", input, input->rowType());
+}
+
 TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampNull) {
   auto result = evaluateOnce<Timestamp, std::string>(
       "cast(c0 as timestamp)", std::optional<std::string>(std::nullopt));
