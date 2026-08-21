@@ -44,6 +44,15 @@ using velox::rpc::RPCStreamingMode;
 /// This is policy, not limits: how much fits in one call is transportBounds().
 /// Per-row is always available, so the only question is whether a multi-row
 /// call exists and what its latency represents.
+/// Effective bounds for a single dispatch mode. Derived per-flush as
+/// min(transport hard limit, worker memory / estRowBytes, ...). 0 means
+/// unlimited / backend default for that dimension.
+struct RpcEffectiveBounds {
+  int32_t maxBatchRows{0};
+  int64_t maxBatchTokens{0};
+  int64_t maxBatchBytes{0};
+};
+
 struct RpcCapability {
   /// A multi-row call exists: accumulateBatch() followed by flushBatch().
   bool supportsBatch{false};
@@ -177,6 +186,12 @@ class AsyncRPCFunction {
   /// advertising a batch mode the resolved backend may not have would let a
   /// caller size a batch the transport cannot send.
   virtual RpcCapability capabilities() const = 0;
+
+  /// The backend's hard limits for a dispatch mode. Returns zeroed bounds when
+  /// the mode is unbounded or unsupported.
+  virtual RpcEffectiveBounds transportBounds() const {
+    return {};
+  }
 
   // ── PER_ROW mode ──────────────────────────────────────────────
 
