@@ -70,7 +70,7 @@ if(${VELOX_BUILD_TESTING})
 
   velox_link_libraries(
     velox_demo_rpc_function
-    velox_mock_rpc_client
+    velox_mock_transport
     velox_expression_functions
     velox_async_rpc_function
   )

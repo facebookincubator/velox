@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/common/rpc/clients/MockRPCClient.h"
+#include "velox/common/rpc/clients/MockTransport.h"
 
 #include <fmt/format.h>
 #include <folly/futures/Future.h>
@@ -33,7 +33,7 @@ std::mt19937& threadLocalRng() {
 }
 
 // Builds an error response tagged with a typed cause, for the error-burst
-// path. Unlike MockRPCClient::generateResponse(request, /*isError=*/true),
+// path. Unlike MockTransport::generateResponse(request, /*isError=*/true),
 // which leaves errorKind at kNone, this sets errorKind so the congestion path
 // can classify the failure.
 RPCResponse makeErrorResponse(const RPCRequest& request, RPCErrorKind kind) {
@@ -67,14 +67,13 @@ RPCResponse makeErrorResponse(const RPCRequest& request, RPCErrorKind kind) {
   return RPCResponse{
       .rowId = request.rowId,
       .result = "",
-      .metadata = {},
       .error =
           fmt::format("Simulated {} error for row {}", label, request.rowId),
       .errorKind = kind};
 }
 } // namespace
 
-MockRPCClient::MockRPCClient(
+MockTransport::MockTransport(
     std::chrono::milliseconds latency,
     double errorRate,
     std::shared_ptr<folly::CPUThreadPoolExecutor> executor)
@@ -87,35 +86,30 @@ MockRPCClient::MockRPCClient(
   }
 }
 
-MockRPCClient::~MockRPCClient() = default;
+MockTransport::~MockTransport() = default;
 
-RPCResponse MockRPCClient::generateResponse(
+RPCResponse MockTransport::generateResponse(
     const RPCRequest& request,
     bool isError) {
   if (isError) {
     return RPCResponse{
         .rowId = request.rowId,
         .result = "",
-        .metadata = {},
         .error = "Simulated error for row " + std::to_string(request.rowId)};
   }
 
-  // Generate a mock response
-  std::string responseText = "Response for: ";
-  if (request.payload.size() > 30) {
-    responseText += request.payload.substr(0, 30) + "...";
-  } else {
-    responseText += request.payload;
-  }
+  // Generate a mock response — RPCRequest is correlation-only (rowId/isNull),
+  // no payload.
+  std::string responseText =
+      "Response for row " + std::to_string(request.rowId);
 
   return RPCResponse{
       .rowId = request.rowId,
       .result = std::move(responseText),
-      .metadata = {},
       .error = std::nullopt};
 }
 
-void MockRPCClient::setErrorBurst(const ErrorBurst& burst) {
+void MockTransport::setErrorBurst(const ErrorBurst& burst) {
   // Install-once, before dispatch. burstErrorKind() reads errorBurst_ without
   // a lock, so the struct must never be written while a request could be
   // reading it. Rejecting a second install closes the resetCallCount() path:
@@ -134,7 +128,7 @@ void MockRPCClient::setErrorBurst(const ErrorBurst& burst) {
   burstInstalled_.store(true, std::memory_order_release);
 }
 
-RPCErrorKind MockRPCClient::burstErrorKind(int64_t ordinal) const {
+RPCErrorKind MockTransport::burstErrorKind(int64_t ordinal) const {
   // Acquire: pairs with the release store in setErrorBurst(), so the
   // errorBurst_ fields read below are guaranteed visible on this thread.
   // errorBurst_ is never mutated once a burst is installed, so no further
@@ -149,7 +143,7 @@ RPCErrorKind MockRPCClient::burstErrorKind(int64_t ordinal) const {
   return RPCErrorKind::kNone;
 }
 
-folly::SemiFuture<RPCResponse> MockRPCClient::call(const RPCRequest& request) {
+folly::SemiFuture<RPCResponse> MockTransport::call(const RPCRequest& request) {
   const int64_t ordinal = callCount_.fetch_add(1);
   const RPCErrorKind burstKind = burstErrorKind(ordinal);
 
@@ -179,7 +173,7 @@ folly::SemiFuture<RPCResponse> MockRPCClient::call(const RPCRequest& request) {
       });
 }
 
-folly::SemiFuture<std::vector<RPCResponse>> MockRPCClient::callBatch(
+folly::SemiFuture<std::vector<RPCResponse>> MockTransport::callBatch(
     const std::vector<RPCRequest>& requests) {
   // Capture error rate for thread safety
   double errorRate = errorRate_;
