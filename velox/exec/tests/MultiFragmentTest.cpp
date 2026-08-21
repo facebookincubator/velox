@@ -564,7 +564,13 @@ TEST_P(MultiFragmentTest, abortMergeExchange) {
 
   for (auto& task : tasks) {
     task->requestAbort();
-    ASSERT_TRUE(waitForTaskAborted(task.get())) << task->taskId();
+    // A partial sort task can run to completion before it observes the abort
+    // request, in which case it terminates as finished rather than aborted.
+    // Both are terminal states, and what this test needs is only that the task
+    // stopped running and its drivers finished.
+    ASSERT_TRUE(
+        waitForTaskAborted(task.get()) || waitForTaskCompletion(task.get()))
+        << task->toString();
   }
 
   // Ensure that the threads in the executor can gracefully join
