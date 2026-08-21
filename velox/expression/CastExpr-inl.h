@@ -27,6 +27,24 @@
 namespace facebook::velox::exec {
 namespace {
 
+// Unscaled decimal values below this threshold can be cast to double and
+// divided by a power of ten without rounding the unscaled value, matching
+// Spark's BigDecimal-based conversion.
+// Reference:
+// https://github.com/openjdk/jdk8u-dev/blob/20e72d16f569e823a9ecdd9951a742b4397ca978/jdk/src/share/classes/java/math/BigDecimal.java#L3294
+constexpr int64_t kDoubleMaxExact = 1L << 52;
+
+// Powers of 10 which can be represented exactly in double. Only scales up to
+// this size can take the exact fast path; larger scales fall back to the
+// general conversion below.
+constexpr double kDoublePowersOfTen[] = {
+    1.0e0,  1.0e1,  1.0e2,  1.0e3,  1.0e4,  1.0e5,  1.0e6,  1.0e7,
+    1.0e8,  1.0e9,  1.0e10, 1.0e11, 1.0e12, 1.0e13, 1.0e14, 1.0e15,
+    1.0e16, 1.0e17, 1.0e18, 1.0e19, 1.0e20, 1.0e21, 1.0e22};
+
+constexpr size_t kDoublePowersOfTenSize =
+    sizeof(kDoublePowersOfTen) / sizeof(kDoublePowersOfTen[0]);
+
 inline std::string makeErrorMessage(
     const BaseVector& input,
     vector_size_t row,
@@ -408,25 +426,6 @@ void CastExpr::applyVarcharToDecimalCastKernel(
     }
   });
 }
-
-namespace {
-// Unscaled decimal values below this threshold can be cast to double and
-// divided by a power of ten without rounding the unscaled value, matching
-// Spark's BigDecimal-based conversion.
-// Reference:
-// https://github.com/openjdk/jdk8u-dev/blob/20e72d16f569e823a9ecdd9951a742b4397ca978/jdk/src/share/classes/java/math/BigDecimal.java#L3294
-constexpr int64_t kDoubleMaxExact = 1L << 52;
-
-// Powers of 10 which can be represented exactly in double. Only scales up to
-// this size can take the exact fast path; larger scales fall back to the
-// general conversion below.
-constexpr double kDoublePowersOfTen[] = {
-    1.0e0,  1.0e1,  1.0e2,  1.0e3,  1.0e4,  1.0e5,  1.0e6,  1.0e7,
-    1.0e8,  1.0e9,  1.0e10, 1.0e11, 1.0e12, 1.0e13, 1.0e14, 1.0e15,
-    1.0e16, 1.0e17, 1.0e18, 1.0e19, 1.0e20, 1.0e21, 1.0e22};
-constexpr size_t kDoublePowersOfTenSize =
-    sizeof(kDoublePowersOfTen) / sizeof(kDoublePowersOfTen[0]);
-} // namespace
 
 template <typename FromNativeType, TypeKind ToKind>
 VectorPtr CastExpr::applyDecimalToFloatCast(
