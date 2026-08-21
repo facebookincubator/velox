@@ -679,7 +679,7 @@ TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
 }
 
 /// PER_ROW congestion path. On the function's overload verdict
-/// (evaluateCongestion -> kError) both AIMD controllers back off: the
+/// (evaluateCongestion -> kOverloaded) both AIMD controllers back off: the
 /// per-driver window (onUnitError) and the process-global rate limiter
 /// (onRateLimited); on kSuccess the window's latency gradient is fed. Verifies
 /// the query still completes correctly through that path. The controllers'
@@ -687,8 +687,9 @@ TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
 /// guard the operator-level materialization + signal plumbing against
 /// crashes/regressions.
 TEST_F(RPCOperatorTest, perRowCongestionPath) {
-  // EchoAsyncRPCFunction::evaluateCongestion returns kError when a response
-  // result contains "OVERLOAD" (the mock echoes the prompt into the result).
+  // EchoAsyncRPCFunction::evaluateCongestion returns kOverloaded when a
+  // response result contains "OVERLOAD" (the mock echoes the prompt into the
+  // result).
   auto input = makeRowVector(
       {"prompt"},
       {makeFlatVector<StringView>(
