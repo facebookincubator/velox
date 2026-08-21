@@ -35,6 +35,16 @@ namespace torch::wave {
 /// layers. Returns the number elided.
 int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types);
 
+/// Merges nodes that compute the same value from the same operands, to a
+/// fixpoint: merging two nodes can make their consumers congruent in turn. Only
+/// pure nodes participate -- nothing that writes, reads a buffer written
+/// elsewhere in the graph, or escapes as a graph output. Gated per category by
+/// WaveConfig::cseCompute and cseViews; a no-op when both are off.
+/// Call before partitioning, after the rewrites that create the duplicates, and
+/// before duplicateMetadataOps, whose duplicates this would otherwise undo.
+/// Returns the number of nodes merged away.
+int64_t commonSubexpressions(nativert::Graph& graph, const ValueTypes& types);
+
 /// Rematerializes each multiply-used metadata getter (sym_size / sym_numel) at
 /// its use sites, so it stops being a shared value the partitioner has to
 /// materialize as a top-level output. Only duplicates a getter whose operand is

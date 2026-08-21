@@ -202,6 +202,14 @@ DEFINE_bool(
     false,
     "Assume all model inputs, weights, and constants are contiguous in the graph optimizer; executeWave verifies and errors out if any is not contiguous");
 DEFINE_bool(
+    cse_compute,
+    false,
+    "Before partitioning, merge compute nodes that produce the same value from the same operands");
+DEFINE_bool(
+    cse_views,
+    false,
+    "Before partitioning, merge view nodes that produce the same value from the same operands");
+DEFINE_bool(
     mk_select,
     false,
     "In cg mode, expand tw.masked_select_jagged into its multi-kernel stages so the output list is sized to the exact selected count instead of the mask length");
@@ -619,6 +627,8 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().donateBuffers = FLAGS_donate_buffers;
   WaveConfig::get().donationCarryBytes = FLAGS_donation_carry_bytes;
   WaveConfig::get().inputContiguous = FLAGS_input_contiguous;
+  WaveConfig::get().cseCompute = FLAGS_cse_compute;
+  WaveConfig::get().cseViews = FLAGS_cse_views;
   WaveConfig::get().mkSelect = FLAGS_mk_select;
   if (!FLAGS_print_options.empty()) {
     NodePrinter::setDefaults(
