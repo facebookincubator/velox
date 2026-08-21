@@ -37,6 +37,7 @@ namespace facebook::velox::exec::rpc {
 using velox::rpc::RpcCapability;
 using velox::rpc::RpcCapabilityMode;
 using velox::rpc::RpcCapabilityModeSet;
+using velox::rpc::RpcEffectiveBounds;
 using velox::rpc::RPCResponse;
 using velox::rpc::RPCResponsePayload;
 using velox::rpc::RPCStreamingMode;
@@ -157,6 +158,13 @@ class AsyncRPCFunction {
   /// includes kPerRow. A function whose backend is not yet pinned returns the
   /// conservative per-row-only set.
   virtual RpcCapability capabilities() const = 0;
+
+  /// The backend's hard limits for a dispatch mode. Returns zeroed bounds when
+  /// the mode is unbounded or unsupported.
+  virtual velox::rpc::RpcEffectiveBounds transportBounds(
+      velox::rpc::RpcCapabilityMode /*mode*/) const {
+    return {};
+  }
 
   // ── PER_ROW mode ──────────────────────────────────────────────
 
