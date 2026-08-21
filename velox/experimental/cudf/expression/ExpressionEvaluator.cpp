@@ -409,21 +409,50 @@ std::unique_ptr<cudf::column> maybeConvertToSessionLocal(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
+enum class CastMode {
+  kFixedWidth,
+  kStringToTimestamp,
+  kDateToString,
+  kIntToString,
+  kTimestampToTimestampWithTimeZone,
+  kTimestampToString,
+};
+
+// Returns the specialized path for casts that cudf::cast cannot implement.
+// FunctionExpression::canEvaluate and CastFunction both use this result so
+// selection and evaluation cannot disagree.
+CastMode castModeFor(const TypePtr& sourceType, const TypePtr& targetType) {
+  if (sourceType->kind() == TypeKind::TIMESTAMP &&
+      targetType->kind() == TypeKind::VARCHAR) {
+    return CastMode::kTimestampToString;
+  }
+  if (sourceType->kind() == TypeKind::TIMESTAMP &&
+      isTimestampWithTimeZoneType(targetType)) {
+    return CastMode::kTimestampToTimestampWithTimeZone;
+  }
+  if (sourceType->kind() == TypeKind::VARCHAR &&
+      targetType->kind() == TypeKind::TIMESTAMP) {
+    return CastMode::kStringToTimestamp;
+  }
+  if (sourceType->isDate() && targetType->kind() == TypeKind::VARCHAR) {
+    return CastMode::kDateToString;
+  }
+  if (targetType->kind() == TypeKind::VARCHAR) {
+    switch (sourceType->kind()) {
+      case TypeKind::TINYINT:
+      case TypeKind::SMALLINT:
+      case TypeKind::INTEGER:
+      case TypeKind::BIGINT:
+        return CastMode::kIntToString;
+      default:
+        break;
+    }
+  }
+  return CastMode::kFixedWidth;
+}
+
 class CastFunction : public CudfFunction {
  public:
-  // Selects how eval interprets the cast. Only two modes exist on this branch:
-  // the default fixed-width cudf::cast, and the TIMESTAMP -> TIMESTAMP WITH
-  // TIME ZONE pack. The commit this was ported from (perfleap/velox 536467860)
-  // also carried kStringToTimestamp/kDateToString/kIntToString, which belong to
-  // velox#17942 and are deliberately NOT brought over: this base does not
-  // implement those conversions, and declaring them evaluable would make the
-  // AST builder precompute a cast eval() cannot perform.
-  enum class CastMode {
-    kFixedWidth,
-    kTimestampToTimestampWithTimeZone,
-    kTimestampToString,
-  };
-
   CastFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(expr->inputs().size(), 1, "cast expects exactly 1 input");
 
@@ -431,20 +460,8 @@ class CastFunction : public CudfFunction {
     const auto& srcVeloxType = expr->inputs()[0]->type();
     const auto& dstVeloxType = expr->type();
 
-    if (srcVeloxType->kind() == TypeKind::TIMESTAMP &&
-        dstVeloxType->kind() == TypeKind::VARCHAR) {
-      // cudf::is_supported_cast has no timestamp->string path, so this needs
-      // cudf::strings::from_timestamps rather than cudf::cast.
-      castMode_ = CastMode::kTimestampToString;
-    } else if (
-        srcVeloxType->kind() == TypeKind::TIMESTAMP &&
-        isTimestampWithTimeZoneType(dstVeloxType)) {
-      // eval packs UTC millis with the session zone key; the session timezone
-      // and adjust flag live in context_, which is set after construction, so
-      // resolve them there rather than here.
-      castMode_ = CastMode::kTimestampToTimestampWithTimeZone;
-    } else {
-      castMode_ = CastMode::kFixedWidth;
+    castMode_ = castModeFor(srcVeloxType, dstVeloxType);
+    if (castMode_ == CastMode::kFixedWidth) {
       auto sourceType = cudf_velox::veloxToCudfDataType(srcVeloxType);
       VELOX_CHECK(
           cudf::is_supported_cast(sourceType, targetCudfType_),
@@ -467,6 +484,54 @@ class CastFunction : public CudfFunction {
         inputColumns.size(), 1, "cast expects exactly 1 input column");
     auto inputCol = asView(inputColumns[0]);
     switch (castMode_) {
+      case CastMode::kStringToTimestamp: {
+        static constexpr std::string_view kFormatWithFraction =
+            "%Y-%m-%d %H:%M:%S.%6f";
+        static constexpr std::string_view kFormatWithoutFraction =
+            "%Y-%m-%d %H:%M:%S";
+        auto strings = cudf::strings_column_view(inputCol);
+        auto hasFraction = cudf::strings::is_timestamp(
+            strings, kFormatWithFraction, stream, get_temp_mr());
+        auto withFraction = cudf::strings::to_timestamps(
+            strings,
+            targetCudfType_,
+            kFormatWithFraction,
+            stream,
+            get_temp_mr());
+        auto withoutFraction = cudf::strings::to_timestamps(
+            strings,
+            targetCudfType_,
+            kFormatWithoutFraction,
+            stream,
+            get_temp_mr());
+        auto result = cudf::copy_if_else(
+            withFraction->view(),
+            withoutFraction->view(),
+            hasFraction->view(),
+            stream,
+            mr);
+        if (context_.appliesSessionTimezone()) {
+          return toUtcTimestamp(
+              result->view(), context_.sessionTimezone, stream, mr);
+        }
+        return result;
+      }
+      case CastMode::kDateToString: {
+        auto timestampDays = cudf::cast(
+            inputCol,
+            cudf::data_type{cudf::type_id::TIMESTAMP_DAYS},
+            stream,
+            get_temp_mr());
+        return formatTimestamp(
+            timestampDays->view(),
+            "%Y-%m-%d",
+            std::nullopt,
+            cudf::strings_column_view{},
+            stream,
+            mr);
+      }
+      case CastMode::kIntToString:
+        return cudf::strings::from_integers(inputCol, stream, mr);
       case CastMode::kTimestampToTimestampWithTimeZone: {
         // Mirror CPU castFromTimestamp. The session zone is the configured
         // session timezone, or GMT (key 0) when unset. With
@@ -3276,22 +3341,6 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
     if (srcType == nullptr || dstType == nullptr) {
       return false;
     }
-    // TIMESTAMP -> VARCHAR is handled by CastFunction via
-    // cudf::strings::from_timestamps; cudf::cast cannot express it, so
-    // is_supported_cast below would decline it.
-    if (srcType->kind() == TypeKind::TIMESTAMP &&
-        dstType->kind() == TypeKind::VARCHAR) {
-      return true;
-    }
-    // TIMESTAMP -> TIMESTAMP WITH TIME ZONE is handled by CastFunction, which
-    // shifts the wall-clock instant to UTC per the session timezone and packs
-    // the millis with the zone key into the BIGINT-backed physical value.
-    // cudf::cast cannot express it, so report it evaluable here to let the AST
-    // builder precompute the cast instead of failing on it.
-    if (srcType->kind() == TypeKind::TIMESTAMP &&
-        isTimestampWithTimeZoneType(dstType)) {
-      return true;
-    }
     // A cast FROM TIMESTAMP WITH TIME ZONE would fall through to CastFunction's
     // kFixedWidth mode, i.e. cudf::cast over the packed
     // (millis << kMillisShift) | zone_key physical value -- which is not the
@@ -3306,6 +3355,9 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
     // above.
     if (isTimestampWithTimeZoneType(srcType)) {
       return false;
+    }
+    if (castModeFor(srcType, dstType) != CastMode::kFixedWidth) {
+      return true;
     }
     // Everything past this point is evaluated by cudf::cast, which reads a
     // column. FunctionExpression::create omits constant children from eval's
