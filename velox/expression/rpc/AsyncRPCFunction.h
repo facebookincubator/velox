@@ -34,6 +34,9 @@ namespace facebook::velox::exec::rpc {
 
 // Import core RPC types from velox/common/rpc into this namespace so that
 // existing code in velox/expression/rpc can use them unqualified.
+using velox::rpc::RpcCapability;
+using velox::rpc::RpcCapabilityMode;
+using velox::rpc::RpcCapabilityModeSet;
 using velox::rpc::RPCRequest;
 using velox::rpc::RPCResponse;
 using velox::rpc::RPCStreamingMode;
@@ -43,7 +46,7 @@ using velox::rpc::RPCStreamingMode;
 /// Lives in velox/expression/rpc/ because it is a function interface — it
 /// defines what an RPC function is (signature, dispatch, response format),
 /// analogous to VectorFunction in velox/expression/. Transport-layer types
-/// (IRPCClient, RPCRequest, RPCResponse) live in velox/common/rpc/.
+/// (RPCRequest, RPCResponse) live in velox/common/rpc/.
 /// The execution operator (RPCOperator) that drives async dispatch lives
 /// in velox/exec/rpc/.
 ///
@@ -96,6 +99,11 @@ class AsyncRPCFunction {
   virtual std::string tierKey() const {
     return "";
   }
+
+  /// Dispatch modes this function supports on its resolved backend. Always
+  /// includes kPerRow. A function whose backend is not yet pinned returns the
+  /// conservative per-row-only set.
+  virtual RpcCapability capabilities() const = 0;
 
   // ── PER_ROW mode ──────────────────────────────────────────────
 

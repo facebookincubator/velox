@@ -16,7 +16,8 @@
 
 #pragma once
 
-#include <map>
+#include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -24,23 +25,6 @@
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::rpc {
-
-/// Well-known option key constants for RPCRequest.options.
-/// Use these instead of raw string literals to prevent typo bugs.
-namespace keys {
-inline constexpr std::string_view kModel = "model";
-inline constexpr std::string_view kTemperature = "temperature";
-inline constexpr std::string_view kMaxTokens = "max_tokens";
-inline constexpr std::string_view kSystemPrompt = "systemPrompt";
-inline constexpr std::string_view kJsonSchema = "json_schema";
-inline constexpr std::string_view kMetagenKey = "metagen_key";
-inline constexpr std::string_view kTierOverride = "tier_override";
-inline constexpr std::string_view kCatToken = "cat_token";
-inline constexpr std::string_view kPollIntervalMs = "poll_interval_ms";
-inline constexpr std::string_view kOwnerUnixname = "owner_unixname";
-inline constexpr std::string_view kIsQuery = "is_query";
-inline constexpr std::string_view kPrefixDim = "prefix_dim";
-} // namespace keys
 
 /// Streaming mode for RPC execution.
 /// Controls how RPC results are emitted to downstream operators.
@@ -86,12 +70,6 @@ struct RPCRequest {
   /// response so that buildOutput() produces SQL NULL for this row.
   /// Replaces the former "__null_input" magic string in options.
   bool isNull{false};
-
-  /// The request payload (opaque to the framework).
-  std::string payload;
-
-  /// Type-safe options for backend-specific parameters.
-  std::map<std::string, std::string> options;
 };
 
 /// Typed cause of an RPC failure, carried alongside the human-readable error
@@ -122,6 +100,65 @@ enum class RPCErrorKind {
   kInvalidRequest,
 };
 
+/// A dispatch strategy a backend/model can execute.
+enum class RpcCapabilityMode {
+  /// One RPC per row (synchronous). Every backend supports this.
+  kPerRow = 0,
+  /// Native multi-input batch RPC (synchronous): one request carries many rows
+  /// and returns one response.
+  kNativeBatch = 1,
+  /// Asynchronous offline job: submit -> poll -> fetch. Latency is queue/GPU
+  /// time, not congestion, so the operator bypasses the RTT window for it.
+  kAsyncJob = 2,
+  /// Number of dispatch modes; keep last. Bounds the RpcCapabilityModeSet
+  /// width.
+  kNumModes,
+};
+
+/// A set of RpcCapabilityMode values; kPerRow is always present.
+class RpcCapabilityModeSet {
+  static_assert(
+      static_cast<int>(RpcCapabilityMode::kNumModes) <= 32,
+      "RpcCapabilityMode outgrew the 32-bit set; widen bits_");
+
+ public:
+  constexpr RpcCapabilityModeSet() {
+    add(RpcCapabilityMode::kPerRow);
+  }
+  /* implicit */ constexpr RpcCapabilityModeSet(
+      std::initializer_list<RpcCapabilityMode> modes) {
+    add(RpcCapabilityMode::kPerRow);
+    for (auto mode : modes) {
+      add(mode);
+    }
+  }
+
+  constexpr void add(RpcCapabilityMode mode) {
+    bits_ |= bit(mode);
+  }
+  constexpr bool has(RpcCapabilityMode mode) const {
+    return (bits_ & bit(mode)) != 0;
+  }
+
+ private:
+  static constexpr uint32_t bit(RpcCapabilityMode mode) {
+    return 1u << static_cast<int>(mode);
+  }
+  uint32_t bits_{0};
+};
+
+/// What dispatch strategies a (backend, model) supports. kPerRow is always
+/// supported. Request-size bounds are deliberately not stored here: they are a
+/// property of the transport, not of the mode set, and are read per flush from
+/// AsyncRPCFunction::transportBounds().
+struct RpcCapability {
+  /// Dispatch modes this (backend, model) supports; kPerRow is always included.
+  RpcCapabilityModeSet supportedModes;
+
+  bool hasMode(RpcCapabilityMode mode) const {
+    return supportedModes.has(mode);
+  }
+};
 /// Generic response structure from RPC calls.
 /// This is a minimal, domain-agnostic structure that works for any backend.
 struct RPCResponse {
@@ -138,9 +175,6 @@ struct RPCResponse {
 
   /// The response result (opaque to the framework).
   std::string result;
-
-  /// Type-safe metadata from the backend.
-  std::map<std::string, std::string> metadata;
 
   /// Error message if the request failed.
   std::optional<std::string> error;
