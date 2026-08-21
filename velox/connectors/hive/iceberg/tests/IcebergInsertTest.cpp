@@ -15,7 +15,9 @@
  */
 
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
+#include "velox/connectors/hive/iceberg/IcebergFieldMetadata.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -47,6 +49,101 @@ class IcebergInsertTest : public test::IcebergTestBase {
                     .endTableScan()
                     .planNode();
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
+  }
+
+  void icebergAddInputWithDefault(
+      const RowTypePtr& rowType,
+      const std::string& outputPath,
+      const std::vector<std::string>& insertedColumns,
+      const std::unordered_map<std::string, std::string>& writeDefaults,
+      const std::vector<RowVectorPtr>& rows) {
+    auto handle = makeWriteDefaultHandle(
+        rowType, outputPath, insertedColumns, writeDefaults);
+    writeThroughHandle(rowType, handle, rows);
+  }
+
+  // Scans the Iceberg table using the given splits and asserts that the result
+  // matches @p expected.
+  void readFromIcebergTable(
+      const RowTypePtr& rowType,
+      const std::vector<std::shared_ptr<connector::ConnectorSplit>>& splits,
+      const RowVectorPtr& expected) {
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan(test::kIcebergConnectorId)
+                    .outputType(rowType)
+                    .endTableScan()
+                    .planNode();
+    exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(
+        {expected});
+  }
+
+  IcebergInsertTableHandlePtr makeWriteDefaultHandle(
+      const RowTypePtr& rowType,
+      const std::string& outputPath,
+      const std::vector<std::string>& insertedColumns,
+      const std::unordered_map<std::string, std::string>& writeDefaults) {
+    std::vector<IcebergColumnHandlePtr> columnHandles;
+    columnHandles.reserve(rowType->size());
+    for (auto i = 0; i < rowType->size(); ++i) {
+      const auto& name = rowType->nameOf(i);
+      const auto& type = rowType->childAt(i);
+      const parquet::ParquetFieldId field{static_cast<int32_t>(i + 1), {}};
+      const auto it = writeDefaults.find(name);
+      const auto writeDefault = it != writeDefaults.end()
+          ? std::make_optional(it->second)
+          : std::nullopt;
+      columnHandles.push_back(
+          std::make_shared<const IcebergColumnHandle>(
+              name,
+              FileColumnHandle::ColumnType::kRegular,
+              type,
+              field,
+              /*requiredSubfields=*/std::vector<common::Subfield>{},
+              /*initialDefaultValue=*/std::nullopt,
+              /*icebergMetadata=*/IcebergFieldMetadata{},
+              /*postProcessor=*/std::function<void(VectorPtr&)>{},
+              writeDefault));
+    }
+    auto locationHandle = std::make_shared<LocationHandle>(
+        outputPath, outputPath, LocationHandle::TableType::kNew);
+    return std::make_shared<const IcebergInsertTableHandle>(
+        columnHandles,
+        locationHandle,
+        fileFormat_,
+        /*partitionSpec=*/nullptr,
+        common::CompressionKind::CompressionKind_ZSTD,
+        /*serdeParameters=*/std::unordered_map<std::string, std::string>{},
+        IcebergInsertTableHandle::WriteKind::kData,
+        /*existingDeletionVectors=*/
+        std::unordered_map<
+            std::string,
+            IcebergInsertTableHandle::ExistingDeletionVector>{},
+        std::make_shared<const IcebergFileNameGenerator>(),
+        insertedColumns);
+  }
+
+  /// Write @p vectors through a sink built from @p handle and return commit
+  /// tasks. Mirrors createDataSinkAndAppendData but accepts a custom handle.
+  std::vector<std::string> writeThroughHandle(
+      const RowTypePtr& rowType,
+      const IcebergInsertTableHandlePtr& handle,
+      const std::vector<RowVectorPtr>& vectors) {
+    auto sink = std::make_shared<IcebergDataSink>(
+        rowType,
+        handle,
+        connectorQueryCtx_.get(),
+        CommitStrategy::kNoCommit,
+        std::make_shared<HiveConfig>(std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{})),
+        std::make_shared<IcebergConfig>(std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{
+                {IcebergConfig::kFunctionPrefixConfig,
+                 IcebergConfig::kDefaultFunctionPrefix}})));
+    for (const auto& v : vectors) {
+      sink->appendData(v);
+    }
+    EXPECT_TRUE(sink->finish());
+    return sink->close();
   }
 };
 
@@ -302,6 +399,196 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
 
   ASSERT_EQ(writeAndRead("1KB"), kNumBatches);
   ASSERT_EQ(writeAndRead("10MB"), 1);
+}
+
+// Explicit NULL (column in insertedColumns) and omitted column (not in
+// insertedColumns) written to separate files. The explicit NULL must be
+// preserved; the omitted column must receive the write-default.
+TEST_F(IcebergInsertTest, explicitNullPreservedOmittedGetsWriteDefault) {
+  const auto outputDir = TempDirectoryPath::create();
+  const auto rowType = ROW({"id", "status"}, {BIGINT(), VARCHAR()});
+
+  // Rows 2–3: status explicitly set to NULL (column in insertedColumns).
+  icebergAddInputWithDefault(
+      rowType,
+      outputDir->getPath(),
+      /*insertedColumns=*/{"id", "status"},
+      {{"status", "ACTIVE"}},
+      {makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({2, 3}),
+           makeNullableFlatVector<std::string>(
+               {std::nullopt, std::nullopt})})});
+
+  // Rows 4–5: status omitted → write-default 'ACTIVE' must be materialised.
+  icebergAddInputWithDefault(
+      rowType,
+      outputDir->getPath(),
+      /*insertedColumns=*/{"id"},
+      {{"status", "ACTIVE"}},
+      {makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({4, 5}),
+           makeNullableFlatVector<std::string>(
+               {std::nullopt, std::nullopt})})});
+
+  auto splits = createSplitsForDirectory(outputDir->getPath());
+  ASSERT_EQ(splits.size(), 2U);
+  readFromIcebergTable(
+      rowType,
+      splits,
+      makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({2, 3, 4, 5}),
+           makeNullableFlatVector<std::string>(
+               {std::nullopt, std::nullopt, "ACTIVE", "ACTIVE"})}));
+}
+
+// Multiple default columns: only 'id' is in insertedColumns for row 2 (all
+// defaults applied); 'id' and 'country' for row 3 (priority and is_enabled
+// get their defaults, 'country' keeps the explicit value 'UK').
+TEST_F(IcebergInsertTest, multipleWriteDefaultColumns) {
+  const auto outputDir = TempDirectoryPath::create();
+  const auto rowType =
+      ROW({"id", "country", "priority", "is_enabled"},
+          {BIGINT(), VARCHAR(), INTEGER(), BOOLEAN()});
+
+  const std::unordered_map<std::string, std::string> defaults = {
+      {"country", "US"}, {"priority", "10"}, {"is_enabled", "true"}};
+
+  // Rows 2–3: all default columns omitted.
+  icebergAddInputWithDefault(
+      rowType,
+      outputDir->getPath(),
+      /*insertedColumns=*/{"id"},
+      defaults,
+      {makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({2, 3}),
+           makeNullableFlatVector<std::string>({std::nullopt, std::nullopt}),
+           makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+           makeNullableFlatVector<bool>({std::nullopt, std::nullopt})})});
+
+  // Rows 4–5: country explicitly set; priority and is_enabled omitted.
+  icebergAddInputWithDefault(
+      rowType,
+      outputDir->getPath(),
+      /*insertedColumns=*/{"id", "country"},
+      defaults,
+      {makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({4, 5}),
+           makeFlatVector<std::string>({"UK", "FR"}),
+           makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+           makeNullableFlatVector<bool>({std::nullopt, std::nullopt})})});
+
+  auto splits = createSplitsForDirectory(outputDir->getPath());
+  ASSERT_EQ(splits.size(), 2U);
+  readFromIcebergTable(
+      rowType,
+      splits,
+      makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({2, 3, 4, 5}),
+           makeFlatVector<std::string>({"US", "US", "UK", "FR"}),
+           makeFlatVector<int32_t>({10, 10, 10, 10}),
+           makeFlatVector<bool>({true, true, true, true})}));
+}
+
+// All scalar write-default types (VARCHAR, DOUBLE, BIGINT, INTEGER, BOOLEAN)
+// are materialised when their columns are omitted from the INSERT.
+TEST_F(IcebergInsertTest, writeDefaultAllScalarTypes) {
+  const auto outputDir = TempDirectoryPath::create();
+  const auto rowType =
+      ROW({"id", "name", "score", "count", "priority", "active"},
+          {BIGINT(), VARCHAR(), DOUBLE(), BIGINT(), INTEGER(), BOOLEAN()});
+
+  icebergAddInputWithDefault(
+      rowType,
+      outputDir->getPath(),
+      /*insertedColumns=*/{"id"},
+      {{"name", "Unknown"},
+       {"score", "0.0"},
+       {"count", "0"},
+       {"priority", "5"},
+       {"active", "false"}},
+      {makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({2, 3}),
+           makeNullableFlatVector<std::string>({std::nullopt, std::nullopt}),
+           makeNullableFlatVector<double>({std::nullopt, std::nullopt}),
+           makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt}),
+           makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+           makeNullableFlatVector<bool>({std::nullopt, std::nullopt})})});
+
+  auto splits = createSplitsForDirectory(outputDir->getPath());
+  ASSERT_EQ(splits.size(), 1U);
+  readFromIcebergTable(
+      rowType,
+      splits,
+      makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({2, 3}),
+           makeFlatVector<std::string>({"Unknown", "Unknown"}),
+           makeFlatVector<double>({0.0, 0.0}),
+           makeFlatVector<int64_t>({0, 0}),
+           makeFlatVector<int32_t>({5, 5}),
+           makeFlatVector<bool>({false, false})}));
+}
+
+// Simulates ALTER TABLE … SET DEFAULT: two consecutive INSERTs each use a
+// different write-default for 'country' (first 'IN', then 'US').  Reading
+// both files back must return the value that was current at write time.
+TEST_F(IcebergInsertTest, changedWriteDefaultAcrossInserts) {
+  const auto outputDir = TempDirectoryPath::create();
+  const auto rowType =
+      ROW({"id", "amount", "country"}, {BIGINT(), DOUBLE(), VARCHAR()});
+
+  auto omittedCountryRow = [&](int64_t id, double amount) {
+    return makeRowVector(
+        rowType->names(),
+        {makeFlatVector<int64_t>({id}),
+         makeFlatVector<double>({amount}),
+         makeNullableFlatVector<std::string>({std::nullopt})});
+  };
+
+  // INSERT 1: write-default = 'IN', two rows.
+  icebergAddInputWithDefault(
+      rowType,
+      outputDir->getPath(),
+      /*insertedColumns=*/{"id", "amount"},
+      {{"country", "IN"}},
+      {makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({2, 3}),
+           makeFlatVector<double>({200.0, 201.0}),
+           makeNullableFlatVector<std::string>(
+               {std::nullopt, std::nullopt})})});
+
+  // INSERT 2: write-default changed to 'US' (ALTER TABLE … SET DEFAULT 'US').
+  icebergAddInputWithDefault(
+      rowType,
+      outputDir->getPath(),
+      /*insertedColumns=*/{"id", "amount"},
+      {{"country", "US"}},
+      {makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({4, 5}),
+           makeFlatVector<double>({300.0, 301.0}),
+           makeNullableFlatVector<std::string>(
+               {std::nullopt, std::nullopt})})});
+
+  auto splits = createSplitsForDirectory(outputDir->getPath());
+  ASSERT_EQ(splits.size(), 2U);
+  // Rows 2–3 written with default 'IN', rows 4–5 with 'US'.
+  readFromIcebergTable(
+      rowType,
+      splits,
+      makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({2, 3, 4, 5}),
+           makeFlatVector<double>({200.0, 201.0, 300.0, 301.0}),
+           makeFlatVector<std::string>({"IN", "IN", "US", "US"})}));
 }
 
 #endif
