@@ -16,7 +16,9 @@
 
 #pragma once
 
-#include <map>
+#include <cstdint>
+#include <initializer_list>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -24,23 +26,6 @@
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::rpc {
-
-/// Well-known option key constants for RPCRequest.options.
-/// Use these instead of raw string literals to prevent typo bugs.
-namespace keys {
-inline constexpr std::string_view kModel = "model";
-inline constexpr std::string_view kTemperature = "temperature";
-inline constexpr std::string_view kMaxTokens = "max_tokens";
-inline constexpr std::string_view kSystemPrompt = "systemPrompt";
-inline constexpr std::string_view kJsonSchema = "json_schema";
-inline constexpr std::string_view kMetagenKey = "metagen_key";
-inline constexpr std::string_view kTierOverride = "tier_override";
-inline constexpr std::string_view kCatToken = "cat_token";
-inline constexpr std::string_view kPollIntervalMs = "poll_interval_ms";
-inline constexpr std::string_view kOwnerUnixname = "owner_unixname";
-inline constexpr std::string_view kIsQuery = "is_query";
-inline constexpr std::string_view kPrefixDim = "prefix_dim";
-} // namespace keys
 
 /// Streaming mode for RPC execution.
 /// Controls how RPC results are emitted to downstream operators.
@@ -62,37 +47,6 @@ inline RPCStreamingMode parseStreamingMode(const std::string& value) {
   }
   return RPCStreamingMode::kPerRow;
 }
-
-/// Generic request structure for RPC calls.
-/// This is a minimal, domain-agnostic structure that works for any backend.
-/// Domain-specific formatting (e.g., LLM prompts, embedding inputs) is handled
-/// by the plan node's buildRequests() method.
-struct RPCRequest {
-  /// Row ID for tracking which row this request belongs to.
-  /// This is a globally unique ID assigned by the operator.
-  int64_t rowId{0};
-
-  /// Original row index in the input batch.
-  /// This is used to slice the correct row from input columns when storing
-  /// passthrough data. Unlike rowId (which is globally unique across batches),
-  /// this is the index within the current input batch and is set by
-  /// prepareRequests() based on the SelectivityVector iteration.
-  /// CRITICAL: When prepareRequests() skips null rows, originalRowIndex
-  /// tracks the actual input position to avoid slicing mismatch.
-  vector_size_t originalRowIndex{0};
-
-  /// Whether this row has a null primary input.
-  /// When true, the transport should short-circuit and return an error
-  /// response so that buildOutput() produces SQL NULL for this row.
-  /// Replaces the former "__null_input" magic string in options.
-  bool isNull{false};
-
-  /// The request payload (opaque to the framework).
-  std::string payload;
-
-  /// Type-safe options for backend-specific parameters.
-  std::map<std::string, std::string> options;
-};
 
 /// Typed cause of an RPC failure, carried alongside the human-readable error
 /// string so consumers can classify failures without parsing message text.
@@ -122,8 +76,21 @@ enum class RPCErrorKind {
   kInvalidRequest,
 };
 
-/// Generic response structure from RPC calls.
-/// This is a minimal, domain-agnostic structure that works for any backend.
+/// Function-owned payload of a response. The framework moves it from the
+/// transport to the owning function's buildOutput() and never inspects it, so
+/// each function defines its own concrete type and casts back on the way out.
+///
+/// Keeping the payload out of the framework's vocabulary is what lets a
+/// function hand back the representation it already has: an embedding function
+/// carries its vector of floats directly rather than rendering it to text for
+/// a field nothing in the framework reads.
+struct RPCResponsePayload {
+  virtual ~RPCResponsePayload() = default;
+};
+
+/// Framework-visible part of a response: correlation, failure, and the typed
+/// cause a congestion policy needs. Everything a backend actually returns
+/// lives in the function-owned payload.
 struct RPCResponse {
   /// Row ID for correlating response with the original request.
   ///
@@ -136,11 +103,10 @@ struct RPCResponse {
   ///     operator for downstream result tracking.
   int64_t rowId{0};
 
-  /// The response result (opaque to the framework).
-  std::string result;
-
-  /// Type-safe metadata from the backend.
-  std::map<std::string, std::string> metadata;
+  /// Function-owned result. Opaque to the framework: it is moved from the
+  /// transport to the owning function's buildOutput() and never inspected
+  /// here.
+  std::shared_ptr<const RPCResponsePayload> payload;
 
   /// Error message if the request failed.
   std::optional<std::string> error;

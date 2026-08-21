@@ -14,22 +14,21 @@
  * limitations under the License.
  */
 
-#include "velox/exec/rpc/tests/DemoRPCFunction.h"
+#include "velox/exec/rpc/tests/EchoRPCFunction.h"
 
 namespace facebook::velox::exec::rpc {
 
-void DemoAsyncRPCFunction::initialize(
+void EchoAsyncRPCFunction::initialize(
     const core::QueryConfig& /*queryConfig*/,
     const std::vector<TypePtr>& /*inputTypes*/,
-    const std::vector<VectorPtr>& /*constantInputs*/) {
-  // Create and cache the mock client during initialization.
-  client_ = std::make_shared<MockRPCClient>(
-      std::chrono::milliseconds(1), // minimal latency
-      0.0); // no errors
+    const std::vector<VectorPtr>& /*constantInputs*/,
+    velox::rpc::RPCStreamingMode /*mode*/) {
+  simulator_ = std::make_shared<test::ResponseSimulator>(
+      std::chrono::milliseconds(1), 0.0);
 }
 
 std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
-DemoAsyncRPCFunction::dispatchPerRow(
+EchoAsyncRPCFunction::dispatchPerRow(
     const SelectivityVector& rows,
     const std::vector<VectorPtr>& args) {
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>> results;
@@ -45,34 +44,40 @@ DemoAsyncRPCFunction::dispatchPerRow(
 
   rows.applyToSelected([&](vector_size_t row) {
     if (promptVector->isNullAt(row)) {
-      // Null input → immediate error response.
+      RPCResponse response;
+      response.error = "null_input";
+      response.errorKind = velox::rpc::RPCErrorKind::kNullInput;
       results.emplace_back(
-          row,
-          folly::makeSemiFuture<RPCResponse>(RPCResponse{
-              .rowId = 0,
-              .result = "",
-              .metadata = {},
-              .error = "null_input"}));
+          row, folly::makeSemiFuture<RPCResponse>(std::move(response)));
       return;
     }
 
-    // Build RPCRequest for MockRPCClient (test utility still uses payload).
-    RPCRequest request;
-    request.payload = promptVector->valueAt(row).str();
+    Request request{.prompt = promptVector->valueAt(row).str()};
 
-    results.emplace_back(row, client_->call(request));
+    auto future = simulator_->nextCall().deferValue(
+        [request = std::move(request)](velox::rpc::RPCErrorKind kind) {
+          RPCResponse response;
+          if (kind != velox::rpc::RPCErrorKind::kNone) {
+            response.error = "simulated backend failure";
+            response.errorKind = kind;
+            return response;
+          }
+          response.payload = makeTextPayload("echo: " + request.prompt);
+          return response;
+        });
+
+    results.emplace_back(row, std::move(future));
   });
 
   return results;
 }
 
-AsyncRPCFunction::CongestionSignal DemoAsyncRPCFunction::evaluateCongestion(
+AsyncRPCFunction::CongestionSignal EchoAsyncRPCFunction::evaluateCongestion(
     const std::vector<RPCResponse>& responses) const {
-  // Test hook: a non-error response carrying the "OVERLOAD" sentinel simulates
-  // backend congestion so the operator's shrink path is exercised.
   for (const auto& response : responses) {
     if (!response.hasError() &&
-        response.result.find("OVERLOAD") != std::string::npos) {
+        responseAs<TextPayload>(response).text.find("OVERLOAD") !=
+            std::string::npos) {
       return CongestionSignal::kError;
     }
   }
@@ -83,8 +88,7 @@ AsyncRPCFunction::CongestionSignal DemoAsyncRPCFunction::evaluateCongestion(
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>>
-DemoAsyncRPCFunction::signatures() {
-  // 1-argument form: demo_rpc(prompt)
+EchoAsyncRPCFunction::signatures() {
   auto sig = exec::FunctionSignatureBuilder()
                  .returnType("varchar")
                  .argumentType("varchar") // prompt

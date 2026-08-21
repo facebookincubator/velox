@@ -54,7 +54,8 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
   void initialize(
       const core::QueryConfig& queryConfig,
       const std::vector<TypePtr>& inputTypes,
-      const std::vector<VectorPtr>& constantInputs) override;
+      const std::vector<VectorPtr>& constantInputs,
+      velox::rpc::RPCStreamingMode /*mode*/) override;
 
   std::string name() const override {
     return "demo_batch_rpc";
@@ -62,6 +63,11 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
 
   TypePtr resultType() const override {
     return VARCHAR();
+  }
+
+  /// Exercises the native-batch path (accumulateBatch/flushBatch) in tests.
+  RpcCapability capabilities() const override {
+    return {.supportsBatch = true};
   }
 
   /// With failOnError=true, mimics the meta_ai_on_error='fail' policy: any

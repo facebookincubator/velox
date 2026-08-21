@@ -34,16 +34,95 @@ namespace facebook::velox::exec::rpc {
 
 // Import core RPC types from velox/common/rpc into this namespace so that
 // existing code in velox/expression/rpc can use them unqualified.
-using velox::rpc::RPCRequest;
 using velox::rpc::RPCResponse;
+using velox::rpc::RPCResponsePayload;
 using velox::rpc::RPCStreamingMode;
+
+/// Which execution modes are meaningful for a function on its resolved
+/// backend, and what each one means.
+///
+/// This is policy, not limits: how much fits in one call is transportBounds().
+/// Per-row is always available, so the only question is whether a multi-row
+/// call exists and what its latency represents.
+/// Effective bounds for a single dispatch mode. Derived per-flush as
+/// min(transport hard limit, worker memory / estRowBytes, ...). 0 means
+/// unlimited / backend default for that dimension.
+struct RpcEffectiveBounds {
+  int32_t maxBatchRows{0};
+  int64_t maxBatchTokens{0};
+  int64_t maxBatchBytes{0};
+};
+
+struct RpcCapability {
+  /// A multi-row call exists: accumulateBatch() followed by flushBatch().
+  bool supportsBatch{false};
+
+  /// The batch path is an offline job -- submit, poll, fetch. Its latency is
+  /// queue and GPU time rather than a round trip, so it says nothing about
+  /// backend load and a planner should weigh it differently from a native
+  /// batch.
+  bool batchIsAsyncJob{false};
+};
+
+/// Read a response's payload as the concrete type the function produced.
+///
+/// The cast is unchecked in release builds: a function only ever reads back
+/// the payload type it wrote, so a mismatch is a programming error rather
+/// than a runtime condition. The debug check turns that error into a test
+/// failure instead of undefined behaviour.
+template <typename T>
+const T& responseAs(const RPCResponse& response) {
+  VELOX_DCHECK_NOT_NULL(
+      dynamic_cast<const T*>(response.payload.get()),
+      "Response payload is not of the expected type");
+  return *static_cast<const T*>(response.payload.get());
+}
+
+/// Payload for functions whose backend returns text. Shared by the text
+/// functions via buildTextOutput(); a function with a richer result (an
+/// embedding, a struct) defines its own payload type instead.
+struct TextPayload : RPCResponsePayload {
+  std::string text;
+
+  explicit TextPayload(std::string value) : text(std::move(value)) {}
+};
+
+/// Wrap text as a response payload.
+inline std::shared_ptr<const RPCResponsePayload> makeTextPayload(
+    std::string value) {
+  return std::make_shared<const TextPayload>(std::move(value));
+}
+
+/// Build a VARCHAR output vector from text payloads: errors become SQL NULL,
+/// successes carry their text through.
+///
+/// This is a helper the text functions call from their own buildOutput(), not
+/// a default they inherit. A function that returns something else gets a
+/// compile error for not implementing buildOutput(), rather than a column of
+/// silent NULLs from a default that could not read its payload.
+inline VectorPtr buildTextOutput(
+    const std::vector<RPCResponse>& responses,
+    memory::MemoryPool* pool) {
+  const auto numRows = static_cast<vector_size_t>(responses.size());
+  auto result =
+      BaseVector::create<FlatVector<StringView>>(VARCHAR(), numRows, pool);
+  for (vector_size_t i = 0; i < numRows; ++i) {
+    if (responses[i].hasError()) {
+      result->setNull(i, true);
+    } else {
+      result->set(i, StringView(responseAs<TextPayload>(responses[i]).text));
+    }
+  }
+  return result;
+}
 
 /// Base interface for async RPC functions (business logic layer).
 ///
 /// Lives in velox/expression/rpc/ because it is a function interface — it
 /// defines what an RPC function is (signature, dispatch, response format),
-/// analogous to VectorFunction in velox/expression/. Transport-layer types
-/// (IRPCClient, RPCRequest, RPCResponse) live in velox/common/rpc/.
+/// analogous to VectorFunction in velox/expression/. The framework-visible
+/// response type (RPCResponse) lives in velox/common/rpc/; the concrete
+/// request and response payload types belong to each function.
 /// The execution operator (RPCOperator) that drives async dispatch lives
 /// in velox/exec/rpc/.
 ///
@@ -80,10 +159,15 @@ class AsyncRPCFunction {
   /// @param constantInputs Constant values aligned with inputTypes.
   ///        Non-constant arguments are nullptr. Constant arguments are
   ///        single-element ConstantVectors.
+  /// @param mode The execution mode the operator resolved for this query.
+  ///        Fixed for the operator's lifetime. A function that dispatches
+  ///        differently per mode -- a different transport, say -- sets that up
+  ///        here rather than inferring it later from which method is called.
   virtual void initialize(
       const core::QueryConfig& /*queryConfig*/,
       const std::vector<TypePtr>& /*inputTypes*/,
-      const std::vector<VectorPtr>& /*constantInputs*/) {}
+      const std::vector<VectorPtr>& /*constantInputs*/,
+      RPCStreamingMode /*mode*/) {}
 
   /// Return the name of this RPC function.
   virtual std::string name() const = 0;
@@ -95,6 +179,18 @@ class AsyncRPCFunction {
   /// Empty string means "no tier configured — uses global default limit."
   virtual std::string tierKey() const {
     return "";
+  }
+
+  /// Which execution modes are meaningful on this function's resolved
+  /// backend. A function whose backend is not yet pinned reports per-row only:
+  /// advertising a batch mode the resolved backend may not have would let a
+  /// caller size a batch the transport cannot send.
+  virtual RpcCapability capabilities() const = 0;
+
+  /// The backend's hard limits for a dispatch mode. Returns zeroed bounds when
+  /// the mode is unbounded or unsupported.
+  virtual RpcEffectiveBounds transportBounds() const {
+    return {};
   }
 
   // ── PER_ROW mode ──────────────────────────────────────────────
@@ -171,25 +267,14 @@ class AsyncRPCFunction {
 
   // ── Output ────────────────────────────────────────────────────
 
-  /// Build output vector from completed responses.
-  /// Default: VARCHAR FlatVector (errors → SQL NULL, success → string
-  /// value). Override for non-VARCHAR return types (e.g., ARRAY(REAL)
-  /// for embeddings) or custom result processing.
+  /// Build the output vector from completed responses.
+  ///
+  /// Only the function can do this: it is the one that knows what its
+  /// payload contains and how it maps onto resultType(). Functions returning
+  /// text can delegate to buildTextOutput().
   virtual VectorPtr buildOutput(
       const std::vector<RPCResponse>& responses,
-      memory::MemoryPool* pool) const {
-    const auto numRows = static_cast<vector_size_t>(responses.size());
-    auto result =
-        BaseVector::create<FlatVector<StringView>>(VARCHAR(), numRows, pool);
-    for (vector_size_t i = 0; i < numRows; ++i) {
-      if (responses[i].hasError()) {
-        result->setNull(i, true);
-      } else {
-        result->set(i, StringView(responses[i].result));
-      }
-    }
-    return result;
-  }
+      memory::MemoryPool* pool) const = 0;
 
   // ── Congestion Control ───────────────────────────────────────
 
@@ -197,7 +282,15 @@ class AsyncRPCFunction {
   enum class CongestionSignal {
     /// Unit completed cleanly — feed its latency to the gradient window.
     kSuccess,
-    /// Unit showed backend overload — shrink the window.
+    /// Backend shed load (rate limited, or timed out under pressure) — shrink
+    /// the window. Only this signal backs off.
+    kOverloaded,
+    /// Unit failed for reasons the backend is not responsible for, such as a
+    /// malformed request or a bad key. Retrying more slowly does not help, so
+    /// neither controller reacts. Today that makes kError observationally
+    /// identical to kNone at the operator; it is kept separate because "failed,
+    /// but not the backend's fault" and "nothing to evaluate" are different
+    /// facts, and only the former should ever gain an error counter.
     kError,
     /// No congestion evaluation — skip window adjustment.
     kNone,

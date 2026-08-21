@@ -23,7 +23,7 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/exec/Operator.h"
-#include "velox/exec/rpc/RPCRateLimiter.h"
+#include "velox/exec/rpc/BackendAdmission.h"
 #include "velox/exec/rpc/RPCState.h"
 #include "velox/expression/rpc/AsyncRPCFunction.h"
 
@@ -67,9 +67,8 @@ namespace facebook::velox::exec::rpc {
 /// - Async RPC callbacks may run on any thread (transport executor pool).
 ///   All cross-thread coordination goes through RPCState, which is fully
 ///   mutex-protected (see RPCState.h for per-method annotations).
-/// - RPCRateLimiter tokens use RAII: destruction (including from cancelled
-///   futures) automatically decrements the pending count and notifies
-///   waiters.
+/// - BackendAdmission tokens use RAII: destruction (including from cancelled
+///   futures) automatically releases the slot and wakes a parked driver.
 ///
 class RPCOperator : public exec::Operator {
  public:
@@ -118,9 +117,9 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcErrorKindTimeout{"rpcErrorKindTimeout"};
   static inline const std::string kRpcErrorKindBackendError{
       "rpcErrorKindBackendError"};
-  // Process-global per-tier RPCRateLimiter observability (adaptive cap
-  // trajectory), snapshotted at close(). The rpcCongestion* stats above are the
-  // per-DRIVER window; these are the shared rate-limiter cap.
+  // Per-tier BackendAdmission observability (capacity trajectory), snapshotted
+  // at close(). The rpcCongestion* stats above are the per-DRIVER window; these
+  // are the capacity shared by every driver on the tier.
   static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};
   static inline const std::string kRpcRateLimiterPeakPending{
       "rpcRateLimiterPeakPending"};
@@ -166,8 +165,13 @@ class RPCOperator : public exec::Operator {
   std::shared_ptr<RPCState> state_;
   std::shared_ptr<AsyncRPCFunction> function_;
 
-  // Tier key for per-tier rate limiting (from function_->tierKey()).
+  // Tier key for per-tier admission control (from function_->tierKey()).
   std::string tierKey_;
+
+  // Admission control for tierKey_, resolved once in initialize(). Points into
+  // the process-scoped BackendRegistry, which outlives every operator and every
+  // token captured into a continuation.
+  BackendAdmission* admission_{nullptr};
 
   // Precomputed per-argument sources, in call()->inputs() order. Built once in
   // initialize() by walking the RPC call's argument expressions. A
