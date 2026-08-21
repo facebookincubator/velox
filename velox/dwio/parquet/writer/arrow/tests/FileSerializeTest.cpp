@@ -16,30 +16,48 @@
 
 // Adapted from Apache Arrow.
 
-#include <gmock/gmock.h>
+#include <cstring>
+
 #include <gtest/gtest.h>
 
-#include "arrow/testing/gtest_compat.h"
-
-#include "velox/dwio/parquet/writer/arrow/ColumnWriter.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
-#include "velox/dwio/parquet/writer/arrow/tests/ColumnReader.h"
-#include "velox/dwio/parquet/writer/arrow/tests/FileReader.h"
+#include "velox/dwio/parquet/writer/arrow/tests/ParquetTestFile.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::parquet::arrow {
 
 using schema::GroupNode;
-using schema::NodePtr;
 using schema::PrimitiveNode;
-using ::testing::ElementsAre;
+
+using velox::test::assertEqualVectors;
 
 namespace test {
 
+// Returns the Velox row type the reader produces for a file of 'numColumns'
+// columns of TestType, one field per column named as setUpSchema() names it.
 template <typename TestType>
-class TestSerialize : public PrimitiveTypedTest<TestType> {
+RowTypePtr createRowType(int numColumns) {
+  std::vector<std::string> names;
+  names.reserve(numColumns);
+  for (int i = 0; i < numColumns; ++i) {
+    names.push_back(testColumnName(i));
+  }
+  if constexpr (std::is_same_v<TestType, Int96Type>) {
+    return ROW(std::move(names), TIMESTAMP());
+  } else if constexpr (
+      std::is_same_v<TestType, ByteArrayType> ||
+      std::is_same_v<TestType, FLBAType>) {
+    return ROW(std::move(names), VARBINARY());
+  } else {
+    return ROW(std::move(names), CppToType<typename TestType::CType>::create());
+  }
+}
+} // namespace test
+
+template <typename TestType>
+class TestSerialize : public test::PrimitiveTypedTest<TestType> {
  public:
   void SetUp() {
     numColumns_ = 4;
@@ -55,6 +73,94 @@ class TestSerialize : public PrimitiveTypedTest<TestType> {
   int rowsPerRowgroup_;
   int rowsPerBatch_;
 
+  // Builds the values the reader is expected to return for the 'numRows' rows
+  // of the file starting at 'firstRow'. Every row group holds the same
+  // values_, and every column of a row group holds the same values, so row n
+  // of the file holds values_[n % rowsPerRowgroup_] in every column.
+  RowVectorPtr expectedRows(
+      velox::test::VectorMaker& vectorMaker,
+      const RowTypePtr& rowType,
+      int64_t firstRow,
+      vector_size_t numRows) {
+    auto valueIndex = [&](vector_size_t row) {
+      return (firstRow + row) % rowsPerRowgroup_;
+    };
+
+    VectorPtr column;
+    if constexpr (std::is_same_v<TestType, Int96Type>) {
+      // INT96 stores nanoseconds of day in the low 8 bytes and the Julian day
+      // in the high 4. The reader hands both to Timestamp::fromDaysAndNanos(),
+      // which converts the Julian day to the Unix epoch, then truncates to the
+      // precision requested in the reader options, milliseconds by default.
+      column =
+          vectorMaker.flatVector<Timestamp>(numRows, [&](vector_size_t row) {
+            const auto& int96 = this->values_[valueIndex(row)];
+            uint64_t nanosOfDay{0};
+            std::memcpy(&nanosOfDay, int96.value, sizeof(nanosOfDay));
+            return Timestamp::fromDaysAndNanos(
+                       static_cast<int32_t>(int96.value[2]),
+                       static_cast<int64_t>(nanosOfDay))
+                .toPrecision(TimestampPrecision::kMilliseconds);
+          });
+    } else if constexpr (std::is_same_v<TestType, ByteArrayType>) {
+      column = vectorMaker.flatVector<StringView>(
+          numRows,
+          [&](vector_size_t row) {
+            const auto& value = this->values_[valueIndex(row)];
+            return StringView{
+                reinterpret_cast<const char*>(value.ptr),
+                static_cast<int32_t>(value.len)};
+          },
+          nullptr,
+          VARBINARY());
+    } else if constexpr (std::is_same_v<TestType, FLBAType>) {
+      column = vectorMaker.flatVector<StringView>(
+          numRows,
+          [&](vector_size_t row) {
+            return StringView{
+                reinterpret_cast<const char*>(
+                    this->values_[valueIndex(row)].ptr),
+                FLBA_LENGTH};
+          },
+          nullptr,
+          VARBINARY());
+    } else {
+      column = vectorMaker.flatVector<typename TestType::CType>(
+          numRows,
+          [&](vector_size_t row) { return this->values_[valueIndex(row)]; });
+    }
+
+    // Every column holds the same values, so the same vector can back all of
+    // them. assertEqualVectors() only reads the expected side.
+    std::vector<VectorPtr> children(numColumns_, column);
+    return vectorMaker.rowVector(rowType->names(), children);
+  }
+
+  // Reads 'rowReader' to EOF and asserts that every row of every column
+  // matches the values that were written.
+  void assertRoundtrip(
+      dwio::common::RowReader& rowReader,
+      const RowTypePtr& rowType,
+      memory::MemoryPool* pool) {
+    velox::test::VectorMaker vectorMaker{pool};
+    constexpr int kBatchSize = 1000;
+    auto result = BaseVector::create(rowType, 0, pool);
+    int64_t rowsReadSoFar = 0;
+    while (const auto rowsRead = rowReader.next(kBatchSize, result)) {
+      ASSERT_EQ(rowsRead, result->size());
+      ASSERT_NO_FATAL_FAILURE(assertEqualVectors(
+          expectedRows(
+              vectorMaker,
+              rowType,
+              rowsReadSoFar,
+              static_cast<vector_size_t>(rowsRead)),
+          result));
+      rowsReadSoFar += rowsRead;
+    }
+    ASSERT_EQ(
+        static_cast<int64_t>(numRowgroups_) * rowsPerRowgroup_, rowsReadSoFar);
+  }
+
   void fileSerializeTest(Compression::type codecType) {
     fileSerializeTest(codecType, codecType);
   }
@@ -66,7 +172,14 @@ class TestSerialize : public PrimitiveTypedTest<TestType> {
     auto gnode = std::static_pointer_cast<GroupNode>(this->node_);
 
     WriterProperties::Builder propBuilder;
-
+    if constexpr (std::is_same_v<TestType, FLBAType>) {
+      // PageReader::prepareDictionary() handles FIXED_LEN_BYTE_ARRAY only for
+      // decimal, so the reader cannot read a dictionary-encoded FLBA column as
+      // VARBINARY. Every other type is written with the default properties,
+      // which enable dictionary encoding.
+      // TODO: Drop this once the reader supports it.
+      propBuilder.disableDictionary();
+    }
     for (int i = 0; i < numColumns_; ++i) {
       propBuilder.compression(this->schema_.column(i)->name(), codecType);
     }
@@ -134,25 +247,67 @@ class TestSerialize : public PrimitiveTypedTest<TestType> {
 
     PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
 
-    int numRows_ = numRowgroups_ * rowsPerRowgroup_;
+    const int64_t numRows =
+        static_cast<int64_t>(numRowgroups_) * rowsPerRowgroup_;
 
-    auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-    auto fileReader = ParquetFileReader::open(source);
-    ASSERT_EQ(numColumns_, fileReader->metadata()->numColumns());
-    ASSERT_EQ(numRowgroups_, fileReader->metadata()->numRowGroups());
-    ASSERT_EQ(numRows_, fileReader->metadata()->numRows());
+    auto rowType = test::createRowType<TestType>(numColumns_);
+    auto scanSpec = std::make_shared<velox::common::ScanSpec>("");
+    scanSpec->addAllChildFields(*rowType);
+    dwio::common::RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setScanSpec(scanSpec);
+    rowReaderOpts.setRequestedType(rowType);
+
+    auto file = test::ParquetTestFile::open(buffer, "FileSerializeTest");
+    auto& reader = file.reader();
+    ASSERT_EQ(numColumns_, reader.fileMetaData().rowGroup(0).numColumns());
+    ASSERT_EQ(numRowgroups_, reader.fileMetaData().numRowGroups());
+    ASSERT_EQ(numRows, reader.fileMetaData().numRows());
+
+    auto rowReader = reader.createRowReader(rowReaderOpts);
+    ASSERT_NO_FATAL_FAILURE(
+        assertRoundtrip(*rowReader, rowType, file.leafPool()));
 
     for (int rg = 0; rg < numRowgroups_; ++rg) {
-      auto rgReader = fileReader->rowGroup(rg);
-      auto rgMetadata = rgReader->metadata();
-      ASSERT_EQ(numColumns_, rgMetadata->numColumns());
-      ASSERT_EQ(rowsPerRowgroup_, rgMetadata->numRows());
+      auto rowGroupReader = reader.fileMetaData().rowGroup(rg);
+      ASSERT_EQ(numColumns_, rowGroupReader.numColumns());
+      ASSERT_EQ(rowsPerRowgroup_, rowGroupReader.numRows());
+      // There is a difference between
+      // velox/dwio/parquet/writer/arrow/util/Compression.h compression number
+      // and velox/common/compression/Compression.h compression number. Once we
+      // pass in our own compression without arrow writer then the type mismatch
+      // wont happen.
+      auto expectedCompressionKind = common::CompressionKind_NONE;
+      switch (expectedCodecType) {
+        case Compression::type::UNCOMPRESSED:
+          expectedCompressionKind = common::CompressionKind_NONE;
+          break;
+        case Compression::type::SNAPPY:
+          expectedCompressionKind = common::CompressionKind_SNAPPY;
+          break;
+        case Compression::type::GZIP:
+          expectedCompressionKind = common::CompressionKind_GZIP;
+          break;
+        case Compression::type::LZ4:
+          expectedCompressionKind = common::CompressionKind_LZ4;
+          break;
+        case Compression::type::LZ4_HADOOP:
+          expectedCompressionKind = common::CompressionKind_LZ4_HADOOP;
+          break;
+        case Compression::type::ZSTD:
+          expectedCompressionKind = common::CompressionKind_ZSTD;
+          break;
+        default:
+          FAIL() << "The Velox reader has no CompressionKind for codec: "
+                 << util::Codec::getCodecAsString(expectedCodecType);
+      }
       // Check that the specified compression was actually used.
-      ASSERT_EQ(expectedCodecType, rgMetadata->columnChunk(0)->compression());
+      ASSERT_EQ(
+          expectedCompressionKind, rowGroupReader.columnChunk(0).compression());
 
-      const int64_t totalByteSize = rgMetadata->totalByteSize();
-      const int64_t totalCompressedSize = rgMetadata->totalCompressedSize();
-      if (expectedCodecType == Compression::UNCOMPRESSED) {
+      const int64_t totalByteSize = rowGroupReader.totalByteSize();
+      const int64_t totalCompressedSize = rowGroupReader.totalCompressedSize();
+      if (expectedCodecType == Compression::UNCOMPRESSED &&
+          expectedCompressionKind == common::CompressionKind_NONE) {
         ASSERT_EQ(totalByteSize, totalCompressedSize);
       } else {
         ASSERT_NE(totalByteSize, totalCompressedSize);
@@ -162,30 +317,12 @@ class TestSerialize : public PrimitiveTypedTest<TestType> {
       int64_t totalColumnCompressedSize = 0;
 
       for (int i = 0; i < numColumns_; ++i) {
-        int64_t valuesRead;
-        ASSERT_FALSE(rgMetadata->columnChunk(i)->hasIndexPage());
+        ASSERT_FALSE(rowGroupReader.columnChunk(i).hasIndexPage());
         totalColumnByteSize +=
-            rgMetadata->columnChunk(i)->totalUncompressedSize();
+            rowGroupReader.columnChunk(i).totalUncompressedSize();
         totalColumnCompressedSize +=
-            rgMetadata->columnChunk(i)->totalCompressedSize();
-
-        std::vector<int16_t> defLevelsOut(rowsPerRowgroup_);
-        std::vector<int16_t> repLevelsOut(rowsPerRowgroup_);
-        auto colReader = std::static_pointer_cast<TypedColumnReader<TestType>>(
-            rgReader->column(i));
-        this->setupValuesOut(rowsPerRowgroup_);
-        colReader->readBatch(
-            rowsPerRowgroup_,
-            defLevelsOut.data(),
-            repLevelsOut.data(),
-            this->valuesOutPtr_,
-            &valuesRead);
-        this->syncValuesOut();
-        ASSERT_EQ(rowsPerRowgroup_, valuesRead);
-        ASSERT_EQ(this->values_, this->valuesOut_);
-        ASSERT_EQ(this->defLevels_, defLevelsOut);
+            rowGroupReader.columnChunk(i).totalCompressedSize();
       }
-
       ASSERT_EQ(totalByteSize, totalColumnByteSize);
       ASSERT_EQ(totalCompressedSize, totalColumnCompressedSize);
     }
@@ -368,12 +505,6 @@ TYPED_TEST(TestSerialize, SmallFileSnappy) {
   ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::SNAPPY));
 }
 
-#ifdef ARROW_WITH_BROTLI
-TYPED_TEST(TestSerialize, SmallFileBrotli) {
-  ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::BROTLI));
-}
-#endif
-
 TYPED_TEST(TestSerialize, SmallFileGzip) {
   ASSERT_NO_FATAL_FAILURE(this->fileSerializeTest(Compression::GZIP));
 }
@@ -409,14 +540,13 @@ TEST(TestBufferedRowGroupWriter, DisabledDictionary) {
   rgWriter->close();
   fileWriter->close();
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
-
-  auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto fileReader = ParquetFileReader::open(source);
-  ASSERT_EQ(1, fileReader->metadata()->numRowGroups());
-  auto rgReader = fileReader->rowGroup(0);
-  ASSERT_EQ(1, rgReader->metadata()->numColumns());
-  ASSERT_EQ(1, rgReader->metadata()->numRows());
-  ASSERT_FALSE(rgReader->metadata()->columnChunk(0)->hasDictionaryPage());
+  auto file = test::ParquetTestFile::open(buffer, "DisabledDictionary");
+  auto& reader = file.reader();
+  ASSERT_EQ(1, reader.fileMetaData().numRowGroups());
+  auto rowGroup = reader.fileMetaData().rowGroup(0);
+  ASSERT_EQ(1, rowGroup.numColumns());
+  ASSERT_EQ(1, rowGroup.numRows());
+  ASSERT_FALSE(rowGroup.columnChunk(0).hasDictionaryPageOffset());
 }
 
 TEST(TestBufferedRowGroupWriter, MultiPageDisabledDictionary) {
@@ -443,35 +573,37 @@ TEST(TestBufferedRowGroupWriter, MultiPageDisabledDictionary) {
   rgWriter->close();
   fileWriter->close();
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
+  auto rowType = ROW({"col"}, {INTEGER()});
+  auto scanSpec = std::make_shared<common::ScanSpec>("");
+  scanSpec->addAllChildFields(*rowType);
+  dwio::common::RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(scanSpec);
+  rowReaderOpts.setRequestedType(rowType);
 
-  auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto fileReader = ParquetFileReader::open(source);
-  auto fileMetadata = fileReader->metadata();
-  ASSERT_EQ(1, fileReader->metadata()->numRowGroups());
-  std::vector<int32_t> valuesOut(kValueCount);
-  for (int r = 0; r < fileMetadata->numRowGroups(); ++r) {
-    auto rgReader = fileReader->rowGroup(r);
-    ASSERT_EQ(1, rgReader->metadata()->numColumns());
-    ASSERT_EQ(kValueCount, rgReader->metadata()->numRows());
-    int64_t totalValuesRead = 0;
-    std::shared_ptr<ColumnReader> colReader;
-    ASSERT_NO_THROW(colReader = rgReader->column(0));
-    Int32Reader* int32Reader = static_cast<Int32Reader*>(colReader.get());
-    int64_t vn = kValueCount;
-    int32_t* vx = valuesOut.data();
-    while (int32Reader->hasNext()) {
-      int64_t valuesRead;
-      int32Reader->readBatch(vn, nullptr, nullptr, vx, &valuesRead);
-      vn -= valuesRead;
-      vx += valuesRead;
-      totalValuesRead += valuesRead;
-    }
-    ASSERT_EQ(kValueCount, totalValuesRead);
-    ASSERT_EQ(valuesIn, valuesOut);
-  }
+  auto file =
+      test::ParquetTestFile::open(buffer, "MultiPageDisabledDictionary");
+  auto& reader = file.reader();
+  ASSERT_EQ(1, reader.fileMetaData().numRowGroups());
+  auto rowGroup = reader.fileMetaData().rowGroup(0);
+  ASSERT_EQ(1, rowGroup.numColumns());
+  ASSERT_EQ(kValueCount, rowGroup.numRows());
+
+  velox::test::VectorMaker vectorMaker{file.leafPool()};
+  auto expected = vectorMaker.rowVector(
+      {"col"}, {vectorMaker.flatVector<int32_t>(valuesIn)});
+
+  auto rowReader = reader.createRowReader(rowReaderOpts);
+  auto result = BaseVector::create(rowType, 0, file.leafPool());
+  const auto rowsRead = rowReader->next(kValueCount, result);
+  ASSERT_EQ(kValueCount, rowsRead);
+  ASSERT_EQ(kValueCount, result->size());
+  assertEqualVectors(expected, result);
+  // The single row group is fully consumed.
+  ASSERT_EQ(0, rowReader->next(kValueCount, result));
 }
 
 TEST(ParquetRoundtrip, AllNulls) {
+  constexpr int kNumRows = 3;
   auto primitiveNode = PrimitiveNode::make(
       "nulls", Repetition::kOptional, nullptr, Type::kInt32);
   schema::NodeVector columns({primitiveNode});
@@ -486,33 +618,39 @@ TEST(ParquetRoundtrip, AllNulls) {
   auto rowGroupWriter = fileWriter->appendRowGroup();
   auto columnWriter = static_cast<Int32Writer*>(rowGroupWriter->nextColumn());
 
-  int32_t values[3];
-  int16_t defLevels[] = {0, 0, 0};
+  int32_t values[kNumRows];
+  int16_t defLevels[kNumRows] = {0, 0, 0};
 
-  columnWriter->writeBatch(3, defLevels, nullptr, values);
+  columnWriter->writeBatch(kNumRows, defLevels, nullptr, values);
 
   columnWriter->close();
   rowGroupWriter->close();
   fileWriter->close();
 
-  ReaderProperties props = defaultReaderProperties();
-  props.enableBufferedStream();
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
+  auto rowType = ROW({"nulls"}, {INTEGER()});
+  auto scanSpec = std::make_shared<velox::common::ScanSpec>("");
+  scanSpec->addAllChildFields(*rowType);
+  dwio::common::RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(scanSpec);
+  rowReaderOpts.setRequestedType(rowType);
 
-  auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto fileReader = ParquetFileReader::open(source, props);
-  auto RowGroupReader = fileReader->rowGroup(0);
-  auto ColumnReader =
-      std::static_pointer_cast<Int32Reader>(RowGroupReader->column(0));
+  auto file = test::ParquetTestFile::open(buffer, "AllNulls");
+  auto& reader = file.reader();
+  auto rowGroup = reader.fileMetaData().rowGroup(0);
+  ASSERT_EQ(1, rowGroup.numColumns());
+  ASSERT_EQ(kNumRows, rowGroup.numRows());
 
-  int64_t valuesRead;
-  defLevels[0] = -1;
-  defLevels[1] = -1;
-  defLevels[2] = -1;
-  ColumnReader->readBatch(3, defLevels, nullptr, values, &valuesRead);
-  EXPECT_THAT(defLevels, ElementsAre(0, 0, 0));
+  velox::test::VectorMaker vectorMaker{file.leafPool()};
+  auto expected = vectorMaker.rowVector(
+      {"nulls"}, {vectorMaker.allNullFlatVector<int32_t>(kNumRows)});
+
+  auto rowReader = reader.createRowReader(rowReaderOpts);
+  auto result = BaseVector::create(rowType, 0, file.leafPool());
+  ASSERT_EQ(kNumRows, rowReader->next(kNumRows, result));
+  ASSERT_EQ(kNumRows, result->size());
+  assertEqualVectors(expected, result);
+  ASSERT_EQ(0, rowReader->next(kNumRows, result));
 }
-
-} // namespace test
 
 } // namespace facebook::velox::parquet::arrow
