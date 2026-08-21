@@ -413,7 +413,8 @@ TEST_F(ProjectorTestBase, projectsInputWithoutStreamVarintRowCountFlag) {
   serialized[sizeof(uint8_t) + varint::varintSize(vec->size())] =
       static_cast<char>(facebook::nimble::serde::detail::makeFlagsByte(
           /*requiresNullBarrier=*/false,
-          /*streamEncodingUsesVarintRowCount=*/false));
+          /*streamEncodingUsesVarintRowCount=*/false,
+          /*streamHasChunkHeader=*/false));
 
   Projector projector{
       inputSchema,
@@ -441,6 +442,52 @@ TEST_F(ProjectorTestBase, projectsInputWithoutStreamVarintRowCountFlag) {
     EXPECT_EQ(bCol->valueAt(1), 20);
     EXPECT_EQ(bCol->valueAt(2), 30);
   }
+}
+
+// A Projector predating kStreamVarintRowCountFlag leaves the bit clear even
+// though its stream bodies are varint-encoded. Readers must not infer fixed
+// u32 row counts from the cleared bit, or every encoding prefix desyncs.
+TEST_F(
+    ProjectorTestBase,
+    deserializesProjectionWithoutStreamVarintRowCountFlag) {
+  auto type = ROW({
+      {"a", INTEGER()},
+      {"b", BIGINT()},
+  });
+  auto vec = makeSimpleRowVector(
+      {"a", "b"},
+      {
+          makeIntVector<int32_t>({1, 2, 3}),
+          makeIntVector<int64_t>({10, 20, 30}),
+      });
+
+  SerializerOptions serializerOptions{
+      .version = SerializationVersion::kSerialization};
+  auto serialized = serialize(vec, type, serializerOptions);
+  auto inputSchema = getNimbleSchema(type, serializerOptions);
+
+  Projector projector{
+      inputSchema,
+      makeSubfields({"b"}),
+      pool_.get(),
+      Projector::Options{.projectVersion = SerializationVersion::kProjection}};
+  const auto outputSchema = projector.projectedSchema();
+
+  auto projected = projectInput(projector, serialized, /*useIOBuf=*/false);
+  auto projectedStr = toString(projected);
+  projectedStr[sizeof(uint8_t) + varint::varintSize(vec->size())] =
+      static_cast<char>(facebook::nimble::serde::detail::makeFlagsByte(
+          /*requiresNullBarrier=*/false,
+          /*streamEncodingUsesVarintRowCount=*/false,
+          /*streamHasChunkHeader=*/false));
+
+  auto result = deserialize(
+      projectedStr, outputSchema, DeserializerOptions{.hasHeader = true});
+  ASSERT_EQ(result->size(), 3);
+  auto bCol = result->as<RowVector>()->childAt(0)->as<FlatVector<int64_t>>();
+  EXPECT_EQ(bCol->valueAt(0), 10);
+  EXPECT_EQ(bCol->valueAt(1), 20);
+  EXPECT_EQ(bCol->valueAt(2), 30);
 }
 
 // Test projecting multiple columns.

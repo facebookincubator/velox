@@ -111,20 +111,63 @@ size_t sumLengths(std::span<const size_t> lengths) {
   return std::accumulate(lengths.begin(), lengths.end(), size_t{0});
 }
 
+uint32_t readFsstHeaderVarint(std::string_view encoding, size_t& offset) {
+  uint32_t value{0};
+  for (uint32_t byteIndex = 0; byteIndex < 5; ++byteIndex) {
+    NIMBLE_CHECK_LT(offset, encoding.size(), "Truncated FSST header varint.");
+    const auto byte = static_cast<uint8_t>(encoding[offset++]);
+    if (byteIndex == 4) {
+      NIMBLE_CHECK_EQ(byte & 0xf0, 0, "Overlong FSST header varint.");
+    }
+    value |= static_cast<uint32_t>(byte & 0x7f) << (byteIndex * 7);
+    if ((byte & 0x80) == 0) {
+      NIMBLE_CHECK_EQ(
+          byteIndex + 1,
+          varint::varintSize(value),
+          "Overlong FSST header varint.");
+      return value;
+    }
+  }
+  NIMBLE_FAIL("Overlong FSST header varint.");
+}
+
 } // namespace
 
 FsstEncoding::CompressedValues::CompressedValues(
     velox::memory::MemoryPool* pool)
     : compressedBuffer{pool}, compressedLengths{pool}, compressedPtrs{pool} {}
 
-FsstEncoding::Header FsstEncoding::parseHeader(const char* pos) {
+FsstEncoding::Header FsstEncoding::parseHeader(
+    std::string_view encoding,
+    size_t offset) {
+  NIMBLE_CHECK_LE(
+      offset, encoding.size(), "FSST header offset exceeds encoding bounds.");
+
   Header header{};
-  header.symbolTableSize = varint::readVarint32(&pos);
-  header.symbolTable = pos;
-  pos += header.symbolTableSize;
-  header.lengthsSize = varint::readVarint32(&pos);
-  header.lengths = pos;
-  header.blob = pos + header.lengthsSize;
+  header.symbolTableSize = readFsstHeaderVarint(encoding, offset);
+  NIMBLE_CHECK_GT(
+      header.symbolTableSize, 0, "FSST symbol table size must be positive.");
+  NIMBLE_CHECK_LE(
+      header.symbolTableSize,
+      static_cast<uint32_t>(FSST_MAXHEADER),
+      "FSST symbol table size exceeds FSST_MAXHEADER.");
+  NIMBLE_CHECK_LE(
+      static_cast<size_t>(header.symbolTableSize),
+      encoding.size() - offset,
+      "FSST symbol table exceeds encoding bounds.");
+  header.symbolTable = encoding.data() + offset;
+  offset += header.symbolTableSize;
+
+  header.lengthsSize = readFsstHeaderVarint(encoding, offset);
+  NIMBLE_CHECK_GT(
+      header.lengthsSize, 0, "FSST lengths encoding size must be positive.");
+  NIMBLE_CHECK_LE(
+      static_cast<size_t>(header.lengthsSize),
+      encoding.size() - offset,
+      "FSST lengths encoding exceeds encoding bounds.");
+  header.lengths = encoding.data() + offset;
+  offset += header.lengthsSize;
+  header.blob = encoding.data() + offset;
   return header;
 }
 
@@ -238,9 +281,7 @@ FsstEncoding::FsstEncoding(
       stringBufferFactory_{std::move(stringBufferFactory)},
       lengthBuffer_{&pool},
       decompressBuffer_{&pool} {
-  const auto header = parseHeader(data.data() + this->dataOffset());
-  NIMBLE_CHECK_GT(
-      header.symbolTableSize, 0, "FSST symbol table size must be positive.");
+  const auto header = parseHeader(data, this->dataOffset());
   const auto bytesConsumed = nimble_fsst_import(
       &decoder_,
       const_cast<unsigned char*>(
@@ -271,7 +312,7 @@ std::string_view FsstEncoding::lengthsEncoding(
   const auto prefixSize =
       EncodingPrefix::prefixSize(encoding, options.useVarintRowCount);
   NIMBLE_CHECK_GE(encoding.size(), prefixSize, "FSST encoding too small.");
-  const auto header = parseHeader(encoding.data() + prefixSize);
+  const auto header = parseHeader(encoding, prefixSize);
   return {header.lengths, header.lengthsSize};
 }
 
@@ -289,6 +330,15 @@ void FsstEncoding::reset() {
   row_ = 0;
   pos_ = blob_;
   lengths_->reset();
+  pageUsedBytes_ = 0;
+  currentPageIndex_ = 0;
+  if (stringPages_.empty()) {
+    currentPage_ = nullptr;
+    pageCapacityBytes_ = 0;
+  } else {
+    currentPage_ = stringPages_.front().data;
+    pageCapacityBytes_ = stringPages_.front().capacity;
+  }
 }
 
 void FsstEncoding::skip(uint32_t rowCount) {
@@ -351,8 +401,25 @@ void FsstEncoding::ensurePage(size_t requiredBytes) {
     return;
   }
   const auto pageSize = std::max(kStringPageSize, requiredBytes);
-  currentPage_ = static_cast<char*>(stringBufferFactory_(pageSize));
-  pageCapacityBytes_ = pageSize;
+  const size_t nextPageIndex =
+      currentPage_ == nullptr ? 0 : currentPageIndex_ + 1;
+  if (nextPageIndex < stringPages_.size() &&
+      stringPages_[nextPageIndex].capacity >= pageSize) {
+    currentPage_ = stringPages_[nextPageIndex].data;
+    pageCapacityBytes_ = stringPages_[nextPageIndex].capacity;
+  } else {
+    StringPageSlot page{
+        .data = static_cast<char*>(stringBufferFactory_(pageSize)),
+        .capacity = pageSize};
+    if (nextPageIndex < stringPages_.size()) {
+      stringPages_[nextPageIndex] = page;
+    } else {
+      stringPages_.push_back(page);
+    }
+    currentPage_ = page.data;
+    pageCapacityBytes_ = page.capacity;
+  }
+  currentPageIndex_ = nextPageIndex;
   pageUsedBytes_ = 0;
 }
 
@@ -426,8 +493,7 @@ std::string_view FsstEncoding::slice(
   NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
 
   const auto header = parseHeader(
-      encoded.data() +
-      EncodingPrefix::prefixSize(encoded, options.useVarintRowCount));
+      encoded, EncodingPrefix::prefixSize(encoded, options.useVarintRowCount));
   const std::string_view lengths{
       header.lengths, static_cast<size_t>(header.lengthsSize)};
 

@@ -698,6 +698,8 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
   std::vector<velox::BufferPtr> mcDictStringBuffers_;
 };
 
+class ReadWithVisitorNonLegacyTest : public ReadWithVisitorTest {};
+
 // ===========================================================================
 // Test: Dense read, no filter, sequential int64 data (no nulls)
 // Exercises TrivialEncoding / FixedBitWidthEncoding readWithVisitor with
@@ -1334,11 +1336,7 @@ TEST_P(ReadWithVisitorTest, explicitReadWithVisitorIsNotNullNullable) {
   EXPECT_EQ(reader->numValues(), expectedNonNull);
 }
 
-TEST_P(ReadWithVisitorTest, columnReaderAlpFloatAndDouble) {
-  if (!useNonLegacy()) {
-    return;
-  }
-
+TEST_P(ReadWithVisitorNonLegacyTest, columnReaderAlpFloatAndDouble) {
   for (const auto encodedValuesEncodingType :
        {EncodingType::Trivial, EncodingType::Dictionary}) {
     SCOPED_TRACE(
@@ -1350,11 +1348,7 @@ TEST_P(ReadWithVisitorTest, columnReaderAlpFloatAndDouble) {
   }
 }
 
-TEST_P(ReadWithVisitorTest, encodingLevelAlpRandomizedSparse) {
-  if (!useNonLegacy()) {
-    return;
-  }
-
+TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelAlpRandomizedSparse) {
   for (const auto encodedValuesEncodingType :
        {EncodingType::Trivial, EncodingType::Dictionary}) {
     SCOPED_TRACE(
@@ -1589,11 +1583,7 @@ TEST_P(ReadWithVisitorTest, encodingLevelFixedBitWidthBigintRangeSparse) {
   }
 }
 
-TEST_P(ReadWithVisitorTest, encodingLevelAlpFloatingPointRangeSparse) {
-  if (!useNonLegacy()) {
-    return;
-  }
-
+TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelAlpFloatingPointRangeSparse) {
   constexpr int kRows = 120;
   constexpr double kLower = -1.25;
   constexpr double kUpper = 1.25;
@@ -2999,10 +2989,7 @@ TEST_P(ReadWithVisitorTest, encodingLevelDeltaAlwaysTrueDenseSlowPath) {
 
 // ===========================================================================
 // Test: readIndicesWithVisitor at the encoding level.
-TEST_P(ReadWithVisitorTest, readIndicesWithVisitorString) {
-  if (!useNonLegacy()) {
-    GTEST_SKIP() << "readIndicesWithVisitor requires non-legacy encoding";
-  }
+TEST_P(ReadWithVisitorNonLegacyTest, readIndicesWithVisitorString) {
   constexpr int kRows = 50;
   constexpr std::string_view kAlphabet[] = {"alpha", "bravo", "charlie"};
 
@@ -3077,10 +3064,7 @@ TEST_P(ReadWithVisitorTest, readIndicesWithVisitorString) {
 
 // Test: Fuzz readIndicesWithVisitor at the encoding level.
 // Random string data, verifies indices map to correct alphabet entries.
-TEST_P(ReadWithVisitorTest, fuzzReadIndicesWithVisitorString) {
-  if (!useNonLegacy()) {
-    GTEST_SKIP() << "readIndicesWithVisitor requires non-legacy encoding";
-  }
+TEST_P(ReadWithVisitorNonLegacyTest, fuzzReadIndicesWithVisitorString) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -3182,11 +3166,7 @@ TEST_P(ReadWithVisitorTest, fuzzReadIndicesWithVisitorString) {
 // ===========================================================================
 // Test: readIndicesWithVisitor on integer DictionaryEncoding (multiple types).
 // ===========================================================================
-TEST_P(ReadWithVisitorTest, readIndicesWithVisitorInteger) {
-  if (!useNonLegacy()) {
-    GTEST_SKIP() << "readIndicesWithVisitor requires non-legacy encoding";
-  }
-
+TEST_P(ReadWithVisitorNonLegacyTest, readIndicesWithVisitorInteger) {
   auto runForType = [&]<typename T>(T) {
     SCOPED_TRACE(fmt::format("type size = {}", sizeof(T)));
     constexpr int kRows = 50;
@@ -3262,10 +3242,7 @@ TEST_P(ReadWithVisitorTest, readIndicesWithVisitorInteger) {
 // ===========================================================================
 // Test: Fuzz readIndicesWithVisitor on integer DictionaryEncoding.
 // ===========================================================================
-TEST_P(ReadWithVisitorTest, fuzzReadIndicesWithVisitorInteger) {
-  if (!useNonLegacy()) {
-    GTEST_SKIP() << "readIndicesWithVisitor requires non-legacy encoding";
-  }
+TEST_P(ReadWithVisitorNonLegacyTest, fuzzReadIndicesWithVisitorInteger) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -3375,10 +3352,7 @@ TEST_P(ReadWithVisitorTest, fuzzReadIndicesWithVisitorInteger) {
 // ===========================================================================
 // Test: readIndicesWithVisitor on NullableEncoding<DictionaryEncoding<string>>.
 // ===========================================================================
-TEST_P(ReadWithVisitorTest, readIndicesWithVisitorNullable) {
-  if (!useNonLegacy()) {
-    GTEST_SKIP() << "readIndicesWithVisitor requires non-legacy encoding";
-  }
+TEST_P(ReadWithVisitorNonLegacyTest, readIndicesWithVisitorNullable) {
   constexpr int kRows = 50;
   constexpr std::string_view kAlphabet[] = {"alpha", "bravo", "charlie"};
 
@@ -3488,10 +3462,9 @@ TEST_P(ReadWithVisitorTest, readIndicesWithVisitorNullable) {
 // positions (rows 0, 4, 8, ...) and that indices correctly map to the
 // 3-entry non-null alphabet.
 // ===========================================================================
-TEST_P(ReadWithVisitorTest, readIndicesWithVisitorNullableAlphabetValue) {
-  if (!useNonLegacy()) {
-    GTEST_SKIP() << "readIndicesWithVisitor requires non-legacy encoding";
-  }
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    readIndicesWithVisitorNullableAlphabetValue) {
   constexpr int kRows = 20;
   // "delta" appears only at rows 0,4,8,12,16 which are all null.
   // Non-null rows see only "alpha", "bravo", "charlie".
@@ -3610,10 +3583,7 @@ TEST_P(ReadWithVisitorTest, readIndicesWithVisitorNullableAlphabetValue) {
 // ===========================================================================
 // Test: Fuzz readIndicesWithVisitor on NullableEncoding<DictionaryEncoding>.
 // ===========================================================================
-TEST_P(ReadWithVisitorTest, fuzzReadIndicesWithVisitorNullable) {
-  if (!useNonLegacy()) {
-    GTEST_SKIP() << "readIndicesWithVisitor requires non-legacy encoding";
-  }
+TEST_P(ReadWithVisitorNonLegacyTest, fuzzReadIndicesWithVisitorNullable) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -3880,10 +3850,7 @@ TEST_P(ReadWithVisitorTest, fuzzStringDictionaryEncoded) {
 
 // Verifies dictionaryEnabled/dictionarySize/dictionaryEntry on
 // MC<Dict<string>>. The combined alphabet is [innerAlphabet..., commonValue].
-TEST_P(ReadWithVisitorTest, mainlyConstantDictionaryApiString) {
-  if (!useNonLegacy()) {
-    GTEST_SKIP() << "MC dictionary API requires non-legacy encoding";
-  }
+TEST_P(ReadWithVisitorNonLegacyTest, mainlyConstantDictionaryApiString) {
   constexpr int kRows = 100;
   const std::string_view commonValue = "common_value_long_string";
   const std::string_view otherValues[] = {"alpha", "bravo", "charlie"};
@@ -3914,10 +3881,7 @@ TEST_P(ReadWithVisitorTest, mainlyConstantDictionaryApiString) {
 }
 
 // Verifies dictionaryEnabled/dictionarySize/dictionaryEntry on MC<Dict<int64>>.
-TEST_P(ReadWithVisitorTest, mainlyConstantDictionaryApiInteger) {
-  if (!useNonLegacy()) {
-    GTEST_SKIP() << "MC dictionary API requires non-legacy encoding";
-  }
+TEST_P(ReadWithVisitorNonLegacyTest, mainlyConstantDictionaryApiInteger) {
   constexpr int kRows = 100;
   constexpr int64_t commonValue = 42;
 
@@ -3965,10 +3929,9 @@ TEST_P(ReadWithVisitorTest, mainlyConstantNoDictionaryApi) {
 }
 
 // Fuzz readIndicesWithVisitor for MC→Dict string encoding.
-TEST_P(ReadWithVisitorTest, fuzzReadIndicesWithVisitorMainlyConstantString) {
-  if (!useNonLegacy()) {
-    GTEST_SKIP() << "readIndicesWithVisitor requires non-legacy encoding";
-  }
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    fuzzReadIndicesWithVisitorMainlyConstantString) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -4067,10 +4030,7 @@ TEST_P(ReadWithVisitorTest, fuzzReadIndicesWithVisitorMainlyConstantString) {
 // the total row count, not just the inner non-common count. The inner
 // encoding's bulkScan calls addNumValues with the non-common count; MC must
 // adjust to the full count.
-TEST_P(ReadWithVisitorTest, numValuesAfterMainlyConstantReadIndices) {
-  if (!useNonLegacy()) {
-    GTEST_SKIP() << "readIndicesWithVisitor requires non-legacy encoding";
-  }
+TEST_P(ReadWithVisitorNonLegacyTest, numValuesAfterMainlyConstantReadIndices) {
   constexpr int kRows = 50;
   const std::string_view commonValue = "COMMON_VALUE_STRING";
   const std::string_view otherValues[] = {"alpha", "bravo", "charlie"};
@@ -4139,10 +4099,7 @@ TEST_P(ReadWithVisitorTest, numValuesAfterMainlyConstantReadIndices) {
 
 // Verifies that readDenseMaterializedIndices writes correct dictionary indices
 // to rawValues_ and updates visitor state (numValues, rowIndex).
-TEST_P(ReadWithVisitorTest, readDenseMaterializedIndicesNoNulls) {
-  if (!useNonLegacy()) {
-    GTEST_SKIP() << "readDenseMaterializedIndices requires non-legacy encoding";
-  }
+TEST_P(ReadWithVisitorNonLegacyTest, readDenseMaterializedIndicesNoNulls) {
   constexpr int kRows = 100;
   constexpr int64_t kDistinct[] = {10, 20, 30};
 
@@ -4224,10 +4181,7 @@ TEST_P(ReadWithVisitorTest, readDenseMaterializedIndicesNoNulls) {
 // Verifies that readDenseMaterializedIndices correctly scatters indices when
 // a null bitmap is present (every 5th row null). Non-null positions should
 // have correct indices; null positions are gaps.
-TEST_P(ReadWithVisitorTest, readDenseMaterializedIndicesWithNulls) {
-  if (!useNonLegacy()) {
-    GTEST_SKIP() << "readDenseMaterializedIndices requires non-legacy encoding";
-  }
+TEST_P(ReadWithVisitorNonLegacyTest, readDenseMaterializedIndicesWithNulls) {
   constexpr int kRows = 100;
   constexpr int64_t kDistinct[] = {10, 20, 30};
 
@@ -4331,11 +4285,7 @@ TEST_P(ReadWithVisitorTest, readDenseMaterializedIndicesWithNulls) {
 
 // Verifies that readSparseMaterializedIndices materializes and gathers the
 // correct indices for a sparse (non-dense) row set, and updates visitor state.
-TEST_P(ReadWithVisitorTest, readSparseMaterializedIndices) {
-  if (!useNonLegacy()) {
-    GTEST_SKIP()
-        << "readSparseMaterializedIndices requires non-legacy encoding";
-  }
+TEST_P(ReadWithVisitorNonLegacyTest, readSparseMaterializedIndices) {
   constexpr int kTotalRows = 30;
   constexpr int64_t kDistinct[] = {10, 20, 30};
 
@@ -4417,11 +4367,7 @@ TEST_P(ReadWithVisitorTest, readSparseMaterializedIndices) {
 
 // Verifies that readSparseMaterializedIndices correctly skips null rows in a
 // sparse row set. Null rows should not produce output values.
-TEST_P(ReadWithVisitorTest, readSparseMaterializedIndicesWithNulls) {
-  if (!useNonLegacy()) {
-    GTEST_SKIP()
-        << "readSparseMaterializedIndices requires non-legacy encoding";
-  }
+TEST_P(ReadWithVisitorNonLegacyTest, readSparseMaterializedIndicesWithNulls) {
   constexpr int kTotalRows = 30;
   constexpr int64_t kDistinct[] = {10, 20, 30};
 
@@ -5087,6 +5033,14 @@ INSTANTIATE_TEST_SUITE_P(
     NonLegacyAndLegacy,
     ReadWithVisitorTest,
     ::testing::Values(true, false),
+    [](const ::testing::TestParamInfo<bool>& info) {
+      return info.param ? "NonLegacy" : "Legacy";
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    NonLegacyOnly,
+    ReadWithVisitorNonLegacyTest,
+    ::testing::Values(true),
     [](const ::testing::TestParamInfo<bool>& info) {
       return info.param ? "NonLegacy" : "Legacy";
     });

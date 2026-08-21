@@ -56,14 +56,68 @@ class SimdForBitpackEncodingTest : public ::testing::Test {
   }
 
   std::unique_ptr<Encoding> encodeAndCreate(const std::vector<T>& values) {
+    encodedStorage_ = encodeValues(values);
+    return EncodingFactory().create(
+        *pool_, {encodedStorage_.data(), encodedStorage_.size()}, nullptr);
+  }
+
+  std::vector<char> encodeValues(
+      const std::vector<T>& values,
+      const Encoding::Options& options = {}) {
     Buffer buffer{*pool_};
     auto encoded = EncodingFactory::encode<T>(
         createSelectionPolicy(),
         std::span<const T>{values.data(), values.size()},
-        buffer);
-    encodedStorage_.assign(encoded.begin(), encoded.end());
-    return EncodingFactory().create(
-        *pool_, {encodedStorage_.data(), encodedStorage_.size()}, nullptr);
+        buffer,
+        options);
+    return {encoded.begin(), encoded.end()};
+  }
+
+  void expectMalformedDirect(
+      std::string_view encoded,
+      std::string_view expectedMessage,
+      const Encoding::Options& options = {}) {
+    NIMBLE_ASSERT_THROW(
+        (SimdForBitpackEncoding<T>{*pool_, encoded, nullptr, options}),
+        expectedMessage);
+  }
+
+  void expectMalformedFactory(
+      std::string_view encoded,
+      std::string_view expectedMessage,
+      const Encoding::Options& options = {}) {
+    NIMBLE_ASSERT_THROW(
+        (EncodingFactory(options).create(*pool_, encoded, nullptr)),
+        expectedMessage);
+  }
+
+  void expectMalformed(
+      std::string_view encoded,
+      std::string_view expectedMessage,
+      const Encoding::Options& options = {}) {
+    expectMalformedDirect(encoded, expectedMessage, options);
+    expectMalformedFactory(encoded, expectedMessage, options);
+  }
+
+  void expectMalformed(
+      const std::vector<char>& encoded,
+      std::string_view expectedMessage,
+      const Encoding::Options& options = {}) {
+    expectMalformed({encoded.data(), encoded.size()}, expectedMessage, options);
+  }
+
+  size_t bitWidthOffset(
+      const std::vector<char>& encoded,
+      const Encoding::Options& options = {}) {
+    return EncodingPrefix::prefixSize(
+               {encoded.data(), encoded.size()}, options.useVarintRowCount) +
+        sizeof(typename TypeTraits<T>::physicalType);
+  }
+
+  size_t firstGroupRowsOffset(
+      const std::vector<char>& encoded,
+      const Encoding::Options& options = {}) {
+    return bitWidthOffset(encoded, options) + sizeof(uint8_t);
   }
 
   void roundTripAndExpect(const std::vector<T>& values) {
@@ -150,6 +204,172 @@ TYPED_TEST(SimdForBitpackEncodingTest, fullBitWidthRange) {
   }
   values.push_back(std::numeric_limits<TypeParam>::max());
   this->roundTripAndExpect(values);
+}
+
+TYPED_TEST(SimdForBitpackEncodingTest, rejectsInvalidFirstGroupRows) {
+  std::vector<TypeParam> values(16);
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    values[i] = static_cast<TypeParam>(i);
+  }
+  const auto encoded = this->encodeValues(values);
+  const auto firstGroupRowsOffset = this->firstGroupRowsOffset(encoded);
+
+  for (const auto invalidFirstGroupRows : {uint8_t{0}, uint8_t{17}}) {
+    auto malformed = encoded;
+    malformed[firstGroupRowsOffset] = static_cast<char>(invalidFirstGroupRows);
+    this->expectMalformed(
+        malformed, "Invalid SimdForBitpack first group row count.");
+  }
+
+  auto malformed = encoded;
+  malformed[firstGroupRowsOffset] = 33;
+  this->expectMalformed(
+      malformed, "Invalid SimdForBitpack first group row count.");
+}
+
+TYPED_TEST(SimdForBitpackEncodingTest, rejectsInvalidBitWidth) {
+  const auto encoded = this->encodeValues(std::vector<TypeParam>{1, 2, 3});
+  auto malformed = encoded;
+  malformed[this->bitWidthOffset(encoded)] =
+      static_cast<char>(sizeof(TypeParam) * 8 + 1);
+  this->expectMalformed(
+      malformed, "SimdForBitpack bit width exceeds physical type size.");
+}
+
+TYPED_TEST(SimdForBitpackEncodingTest, rejectsTruncatedFixedHeader) {
+  auto malformed = this->encodeValues(std::vector<TypeParam>{1, 2, 3});
+  malformed.resize(EncodingPrefix::kFixedPrefixSize + sizeof(TypeParam) - 1);
+  this->expectMalformed(malformed, "Truncated SimdForBitpack header.");
+}
+
+TYPED_TEST(SimdForBitpackEncodingTest, rejectsEveryTruncatedArtifactSize) {
+  std::vector<TypeParam> values(64);
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    values[i] = static_cast<TypeParam>(i);
+  }
+  const auto encoded = this->encodeValues(values);
+  const std::string storage{encoded.data(), encoded.size()};
+
+  for (size_t truncatedSize = 0; truncatedSize < storage.size();
+       ++truncatedSize) {
+    SCOPED_TRACE(testing::Message() << "truncatedSize=" << truncatedSize);
+    const std::string_view truncated{storage.data(), truncatedSize};
+    this->expectMalformedDirect(truncated, "");
+    // EncodingFactory dispatches on the common type bytes before constructing
+    // an encoding. Its prefix safety below two bytes belongs to a separate
+    // common factory safety change.
+    if (truncatedSize >= EncodingPrefix::kRowCountOffset) {
+      this->expectMalformedFactory(truncated, "");
+    }
+  }
+}
+
+TYPED_TEST(SimdForBitpackEncodingTest, rejectsMalformedRowCountVarint) {
+  const Encoding::Options options{.useVarintRowCount = true};
+  std::vector<TypeParam> values(300);
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    values[i] = static_cast<TypeParam>(i);
+  }
+  const auto encoded = this->encodeValues(values, options);
+  const auto headerOffset = EncodingPrefix::prefixSize(
+      {encoded.data(), encoded.size()}, /*useVarint=*/true);
+
+  this->expectMalformed(
+      std::string_view{
+          encoded.data(), EncodingPrefix::kRowCountOffset + size_t{1}},
+      "Truncated SimdForBitpack varint.",
+      options);
+
+  const auto replaceRowCount = [&](std::initializer_list<char> rowCount) {
+    std::vector<char> malformed{
+        encoded.begin(), encoded.begin() + EncodingPrefix::kRowCountOffset};
+    malformed.insert(malformed.end(), rowCount);
+    malformed.insert(
+        malformed.end(), encoded.begin() + headerOffset, encoded.end());
+    return malformed;
+  };
+
+  for (const auto& malformed :
+       {replaceRowCount(
+            {static_cast<char>(0x80),
+             static_cast<char>(0x80),
+             static_cast<char>(0x80),
+             static_cast<char>(0x80),
+             static_cast<char>(0x80),
+             0}),
+        replaceRowCount(
+            {static_cast<char>(0x80),
+             static_cast<char>(0x80),
+             static_cast<char>(0x80),
+             static_cast<char>(0x80),
+             static_cast<char>(0x10)}),
+        replaceRowCount(
+            {static_cast<char>(0xac), static_cast<char>(0x82), 0})}) {
+    this->expectMalformed(
+        malformed, "Overlong SimdForBitpack varint.", options);
+  }
+}
+
+TYPED_TEST(SimdForBitpackEncodingTest, rejectsInvalidPackedPayloadSize) {
+  std::vector<TypeParam> values(64);
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    values[i] = static_cast<TypeParam>(i);
+  }
+  const auto encoded = this->encodeValues(values);
+
+  auto truncated = encoded;
+  truncated.pop_back();
+  this->expectMalformed(
+      truncated, "Invalid SimdForBitpack packed payload size.");
+
+  auto extended = encoded;
+  extended.push_back(0);
+  this->expectMalformed(
+      extended, "Invalid SimdForBitpack packed payload size.");
+}
+
+TYPED_TEST(SimdForBitpackEncodingTest, sliceRejectsTruncatedPackedPayload) {
+  std::vector<TypeParam> values(64);
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    values[i] = static_cast<TypeParam>(i);
+  }
+  auto malformed = this->encodeValues(values);
+  malformed.pop_back();
+
+  Buffer sliceBuffer{*this->pool_};
+  NIMBLE_ASSERT_THROW(
+      (SimdForBitpackEncoding<TypeParam>::slice(
+          {malformed.data(), malformed.size()},
+          /*offset=*/0,
+          /*length=*/1,
+          sliceBuffer)),
+      "Invalid SimdForBitpack packed payload size.");
+}
+
+TYPED_TEST(SimdForBitpackEncodingTest, rejectsMalformedFirstGroupRowsVarint) {
+  const auto encoded = this->encodeValues(std::vector<TypeParam>{1, 2, 3});
+  const auto firstGroupRowsOffset = this->firstGroupRowsOffset(encoded);
+
+  std::vector<char> truncated{
+      encoded.begin(), encoded.begin() + firstGroupRowsOffset};
+  truncated.push_back(static_cast<char>(0x80));
+  this->expectMalformed(truncated, "Truncated SimdForBitpack varint.");
+
+  std::vector<char> overlong{
+      encoded.begin(), encoded.begin() + firstGroupRowsOffset};
+  overlong.insert(
+      overlong.end(),
+      {static_cast<char>(0x80),
+       static_cast<char>(0x80),
+       static_cast<char>(0x80),
+       static_cast<char>(0x80),
+       static_cast<char>(0x80),
+       0});
+  overlong.insert(
+      overlong.end(),
+      encoded.begin() + firstGroupRowsOffset + 1,
+      encoded.end());
+  this->expectMalformed(overlong, "Overlong SimdForBitpack varint.");
 }
 
 TYPED_TEST(SimdForBitpackEncodingTest, nonZeroBaseline) {

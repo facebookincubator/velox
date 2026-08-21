@@ -187,6 +187,11 @@ class TabletReader {
     ///     such as deciding SSD placement
     const velox::FileHandle* fileHandle{nullptr};
     velox::cache::AsyncDataCache* cache{nullptr};
+
+    /// When cacheMetadata is enabled, metadata entries above this size in
+    /// bytes bypass the async data cache. Defaults to the largest entry an
+    /// SsdRun can describe, so every cached entry can reach SSD.
+    uint32_t maxCacheEntrySize{1U << velox::cache::SsdRun::kSizeBits};
   };
 
   /// Compute checksum from the beginning of the file all the way to footer

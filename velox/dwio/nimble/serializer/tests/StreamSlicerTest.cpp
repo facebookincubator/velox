@@ -41,7 +41,6 @@
 #include "velox/dwio/nimble/serializer/Projector.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
-#include "velox/dwio/nimble/serializer/StreamDataParser.h"
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
 #include "velox/dwio/nimble/serializer/StreamSlicer.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
@@ -75,11 +74,13 @@ std::string makeUncompressedChunk(std::string_view data) {
 
 std::string makeZstdChunk(std::string_view data) {
   const auto maxCompressedSize = ZSTD_compressBound(data.size());
-  std::string compressed(maxCompressedSize, '\0');
+  std::string compressed(sizeof(uint32_t) + maxCompressedSize, '\0');
+  auto* compressedData = compressed.data();
+  encoding::writeUint32(data.size(), compressedData);
   const auto compressedSize = ZSTD_compress(
-      compressed.data(), maxCompressedSize, data.data(), data.size(), 1);
+      compressedData, maxCompressedSize, data.data(), data.size(), 1);
   NIMBLE_CHECK(!ZSTD_isError(compressedSize));
-  compressed.resize(compressedSize);
+  compressed.resize(sizeof(uint32_t) + compressedSize);
 
   std::string output(kChunkHeaderSize, '\0');
   auto* pos = output.data();
@@ -144,6 +145,8 @@ enum class RawStreamKind {
   kSerialization,
   kProjection,
   kTablet,
+  kTabletUncompressedChunk,
+  kTabletZstdChunk,
 };
 
 SerializationVersion streamVersion(RawStreamKind kind) {
@@ -153,6 +156,8 @@ SerializationVersion streamVersion(RawStreamKind kind) {
     case RawStreamKind::kProjection:
       return SerializationVersion::kProjection;
     case RawStreamKind::kTablet:
+    case RawStreamKind::kTabletUncompressedChunk:
+    case RawStreamKind::kTabletZstdChunk:
       return SerializationVersion::kTablet;
   }
 }
@@ -165,7 +170,16 @@ std::string toString(RawStreamKind kind) {
       return "Projection";
     case RawStreamKind::kTablet:
       return "Tablet";
+    case RawStreamKind::kTabletUncompressedChunk:
+      return "TabletUncompressedChunk";
+    case RawStreamKind::kTabletZstdChunk:
+      return "TabletZstdChunk";
   }
+}
+
+bool streamHasChunkHeader(RawStreamKind kind) {
+  return kind == RawStreamKind::kTabletUncompressedChunk ||
+      kind == RawStreamKind::kTabletZstdChunk;
 }
 
 class StreamSlicerTest : public ::testing::Test {
@@ -313,6 +327,7 @@ class StreamSlicerTest : public ::testing::Test {
       bool compressStream = false) {
     auto header = createTabletChunkHeader({
         .rowCount = rowCount,
+        .streamHasChunkHeader = true,
         .rowRange = RowRange{0, rowCount},
     });
     std::string output(
@@ -323,35 +338,6 @@ class StreamSlicerTest : public ::testing::Test {
     output.append(chunkedStream);
     std::vector<uint32_t> streamSizes(streamId + 1, 0);
     streamSizes[streamId] = static_cast<uint32_t>(chunkedStream.size());
-    writeTabletTrailer(streamSizes, output);
-    return output;
-  }
-
-  std::string makeTabletPayload(
-      std::string_view serialized,
-      bool compressStreams) {
-    const DeserializerOptions options{.hasHeader = true};
-    StreamDataParser parser{pool_.get(), options};
-    const auto rowCount = parser.initialize(serialized);
-    auto header = createTabletChunkHeader({
-        .rowCount = rowCount,
-        .requiresNullBarrier = parser.requiresNullBarrier(),
-        .streamEncodingUsesVarintRowCount = true,
-        .rowRange = RowRange{0, rowCount},
-    });
-    std::string output(
-        reinterpret_cast<const char*>(header.data()), header.length());
-    std::vector<uint32_t> streamSizes;
-    parser.iterateStreams([&](uint32_t streamId, std::string_view streamData) {
-      if (streamId >= streamSizes.size()) {
-        streamSizes.resize(streamId + 1, 0);
-      }
-      const auto chunkedStream = compressStreams
-          ? makeZstdChunk(streamData)
-          : makeUncompressedChunk(streamData);
-      streamSizes[streamId] = static_cast<uint32_t>(chunkedStream.size());
-      output.append(chunkedStream);
-    });
     writeTabletTrailer(streamSizes, output);
     return output;
   }
@@ -372,6 +358,9 @@ class StreamSlicerTest : public ::testing::Test {
     };
   }
 
+  // Only the formats the payload overload accepts. Tablet payloads are
+  // rejected there, which `slicesScalarPayload` covers; tablet slicing itself
+  // stays covered through the raw-stream API.
   std::vector<SlicerPayload> makePayloads(
       const std::string& serialized,
       const std::shared_ptr<const nimble::Type>& schema,
@@ -388,16 +377,6 @@ class StreamSlicerTest : public ::testing::Test {
             .kind = SlicerPayloadKind::kProjection,
             .data = std::move(projected),
             .schema = std::move(projectedSchema),
-        },
-        {
-            .kind = SlicerPayloadKind::kTabletUncompressed,
-            .data = makeTabletPayload(serialized, /*compressStreams=*/false),
-            .schema = schema,
-        },
-        {
-            .kind = SlicerPayloadKind::kTabletZstd,
-            .data = makeTabletPayload(serialized, /*compressStreams=*/true),
-            .schema = schema,
         },
     };
   }
@@ -479,6 +458,13 @@ TEST_P(StreamSlicerPayloadVersionTest, slicesScalarPayload) {
   }
 
   StreamSlicer slicer{sliceSchema, pool_.get(), StreamSlicer::Options{}};
+  if (isTabletPayload) {
+    NIMBLE_ASSERT_THROW(
+        slicer.slice(payload, /*offset=*/1, /*length=*/3),
+        "Unsupported StreamSlicer input version");
+    return;
+  }
+
   auto sliced =
       iobufToString(slicer.slice(payload, /*offset=*/1, /*length=*/3));
   const char* pos = sliced.data();
@@ -486,7 +472,7 @@ TEST_P(StreamSlicerPayloadVersionTest, slicesScalarPayload) {
       readSerializationHeader(pos, sliced.data() + sliced.size(), true);
   EXPECT_EQ(header.version, SerializationVersion::kProjection);
   EXPECT_EQ(header.rowCount, 3);
-  EXPECT_EQ(header.flags.streamEncodingUsesVarintRowCount, !isTabletPayload);
+  EXPECT_TRUE(header.flags.streamEncodingUsesVarintRowCount);
   EXPECT_FALSE(header.rowRange.has_value());
 
   auto output = deserialize(sliced, sliceSchema);
@@ -618,16 +604,30 @@ TEST_F(StreamSlicerTest, fuzzesRawStreamApi) {
     for (const auto kind :
          {RawStreamKind::kSerialization,
           RawStreamKind::kProjection,
-          RawStreamKind::kTablet}) {
+          RawStreamKind::kTablet,
+          RawStreamKind::kTabletUncompressedChunk,
+          RawStreamKind::kTabletZstdChunk}) {
       SCOPED_TRACE(toString(kind));
       const auto version = streamVersion(kind);
       const auto useVarintRowCount = !isTabletVersion(version);
       const auto encodedStream = encodeIntStream(values, useVarintRowCount);
+      const auto storedStream = kind == RawStreamKind::kTabletUncompressedChunk
+          ? makeUncompressedChunk(encodedStream)
+          : kind == RawStreamKind::kTabletZstdChunk
+          ? makeZstdChunk(encodedStream)
+          : encodedStream;
       std::vector<std::string_view> inputStreams(streamId + 1);
-      inputStreams[streamId] = encodedStream;
+      inputStreams[streamId] = storedStream;
 
-      StreamSlicer slicer{schema, pool_.get(), StreamSlicer::Options{}};
-      auto sliced = slicer.slice(inputStreams, offset, length, version);
+      const auto options = kind == RawStreamKind::kProjection
+          ? StreamSlicer::Options{}
+          : StreamSlicer::Options{
+                .streamVersion = version,
+                .streamHasChunkHeader = streamHasChunkHeader(kind),
+                .streamsUseVarintRowCount = useVarintRowCount,
+            };
+      StreamSlicer slicer{schema, pool_.get(), options};
+      auto sliced = slicer.slice(inputStreams, offset, length);
       ASSERT_LT(streamId, sliced.streams.size());
       ASSERT_FALSE(sliced.streams[streamId].empty());
 
@@ -824,11 +824,7 @@ TEST_F(StreamSlicerTest, rejectsZeroLengthSlice) {
   NIMBLE_ASSERT_THROW(
       slicer.slice(serialized, 1, 0), "Slice length must be positive");
   NIMBLE_ASSERT_THROW(
-      slicer.slice(
-          std::vector<std::string_view>{},
-          1,
-          0,
-          SerializationVersion::kSerialization),
+      slicer.slice(std::vector<std::string_view>{}, 1, 0),
       "Slice length must be positive");
 }
 
@@ -836,13 +832,19 @@ TEST_F(StreamSlicerTest, rejectsLegacyFormats) {
   auto type = ROW({{"id", INTEGER()}});
   auto input = makeRowVector({"id"}, {makeFlatVector<int32_t>({1})});
   auto [_, schema] = serialize(input, type);
-  StreamSlicer slicer{schema, pool_.get(), StreamSlicer::Options{}};
-
   for (const auto version :
        {SerializationVersion::kLegacy,
         SerializationVersion::kLegacyCompact,
         SerializationVersion::kLegacySerialization}) {
     SCOPED_TRACE(toString(version));
+    StreamSlicer slicer{
+        schema,
+        pool_.get(),
+        StreamSlicer::Options{
+            .streamVersion = version,
+            .streamHasChunkHeader = false,
+            .streamsUseVarintRowCount = false,
+        }};
     const std::string payload{static_cast<char>(version)};
     NIMBLE_ASSERT_THROW(
         slicer.slice(payload, /*offset=*/0, /*length=*/1),
@@ -851,10 +853,35 @@ TEST_F(StreamSlicerTest, rejectsLegacyFormats) {
         slicer.slice(
             std::vector<std::string_view>{},
             /*offset=*/0,
-            /*length=*/1,
-            version),
+            /*length=*/1),
         "StreamSlicer raw streams must be kSerialization, kProjection, or "
         "kTablet encoded");
+  }
+}
+
+TEST_F(StreamSlicerTest, rejectsFixedRowCountOptionForNonTabletFormats) {
+  auto type = ROW({{"id", INTEGER()}});
+  auto input = makeRowVector({"id"}, {makeFlatVector<int32_t>({1})});
+  auto [_, schema] = serialize(input, type);
+  for (const auto version : {
+           SerializationVersion::kSerialization,
+           SerializationVersion::kProjection,
+       }) {
+    SCOPED_TRACE(toString(version));
+    StreamSlicer slicer{
+        schema,
+        pool_.get(),
+        StreamSlicer::Options{
+            .streamVersion = version,
+            .streamHasChunkHeader = false,
+            .streamsUseVarintRowCount = false,
+        }};
+    NIMBLE_ASSERT_THROW(
+        slicer.slice(
+            std::vector<std::string_view>{},
+            /*offset=*/0,
+            /*length=*/1),
+        "Non-tablet streams must use varint row counts");
   }
 }
 

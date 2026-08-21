@@ -19,6 +19,10 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+
 using namespace facebook;
 
 namespace {
@@ -80,4 +84,20 @@ TEST(EncodingPrefixTest, readsVarintRowCountPrefix) {
   EXPECT_EQ(
       nimble::EncodingPrefix::prefixSize(data, /*useVarint=*/true),
       data.size());
+}
+
+TEST(EncodingPrefixTest, factoryRejectsTruncatedTypePrefix) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  const std::string oneByte{static_cast<char>(nimble::EncodingType::Trivial)};
+
+  for (const std::string_view data :
+       {std::string_view{}, std::string_view{oneByte}}) {
+    try {
+      nimble::EncodingFactory{}.create(*pool, data, nullptr);
+      FAIL() << "Expected a truncated prefix to fail";
+    } catch (const nimble::NimbleUserError& error) {
+      EXPECT_EQ(nimble::error_code::CorruptedFile, error.errorCode());
+      EXPECT_EQ("Truncated encoding prefix.", error.errorMessage());
+    }
+  }
 }
