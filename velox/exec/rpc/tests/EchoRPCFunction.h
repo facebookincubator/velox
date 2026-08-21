@@ -62,6 +62,11 @@ class EchoAsyncRPCFunction : public AsyncRPCFunction {
     return VARCHAR();
   }
 
+  /// Per-row only; no batch path.
+  RpcCapability capabilities() const override {
+    return {.supportedModes = {RpcCapabilityMode::kPerRow}};
+  }
+
   /// Dispatch one simulated RPC per active row. Null-input rows short-circuit
   /// to an error response so buildOutput() produces SQL NULL.
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>

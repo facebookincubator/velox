@@ -98,6 +98,11 @@ class BurstRPCFunction : public AsyncRPCFunction {
     return VARCHAR();
   }
 
+  /// Per-row only; the AIMD-under-load test drives the per-row dispatch path.
+  RpcCapability capabilities() const override {
+    return {.supportedModes = {RpcCapabilityMode::kPerRow}};
+  }
+
   std::string tierKey() const override {
     return config_.tier;
   }
