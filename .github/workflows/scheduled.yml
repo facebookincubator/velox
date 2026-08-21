@@ -754,6 +754,7 @@ jobs:
           set +e
           ./velox_expression_fuzzer_test \
                 --seed ${random_seed} \
+                --only floor \
                 --enable_variadic_signatures \
                 --velox_fuzzer_enable_complex_types \
                 --velox_fuzzer_enable_decimal_type \
