@@ -54,6 +54,7 @@ enum class FilterKind {
   kTimestampRange,
   kHugeintValuesUsingHashTable,
   kBigintValuesUsingBloomFilter,
+  kUnknown,
 };
 
 VELOX_DECLARE_ENUM_NAME(FilterKind);
@@ -1744,6 +1745,8 @@ class FloatingPointRange final : public AbstractRange {
             upperExclusive,
             bothNullAllowed);
       }
+      case FilterKind::kUnknown:
+        return other->mergeWith(this);
       default:
         VELOX_UNREACHABLE();
     }

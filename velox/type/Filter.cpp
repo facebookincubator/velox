@@ -55,6 +55,7 @@ const auto& filterKindNames() {
       {FilterKind::kHugeintValuesUsingHashTable, "HugeintValuesUsingHashTable"},
       {FilterKind::kBigintValuesUsingBloomFilter,
        "BigintValuesUsingBloomFilter"},
+      {FilterKind::kUnknown, "Unknown"},
   };
   return kNames;
 }
@@ -1615,6 +1616,8 @@ std::unique_ptr<Filter> MultiRange::mergeWith(const Filter* other) const {
         return std::make_unique<MultiRange>(std::move(merged), bothNullAllowed);
       }
     }
+    case FilterKind::kUnknown:
+      return other->mergeWith(this);
     default:
       VELOX_UNREACHABLE();
   }
@@ -1659,6 +1662,8 @@ std::unique_ptr<Filter> BoolValue::mergeWith(const Filter* other) const {
 
       return nullOrFalse(bothNullAllowed);
     }
+    case FilterKind::kUnknown:
+      return other->mergeWith(this);
     default:
       VELOX_UNREACHABLE();
   }
@@ -1878,6 +1883,8 @@ std::unique_ptr<Filter> BigintRange::mergeWith(const Filter* other) const {
           std::make_unique<common::BigintRange>(lower_, upper_, false));
       return combineRangesAndNegatedValues(rangeList, vals, bothNullAllowed);
     }
+    case FilterKind::kUnknown:
+      return other->mergeWith(this);
     default:
       VELOX_UNREACHABLE();
   }
@@ -1904,6 +1911,8 @@ std::unique_ptr<Filter> TimestampRange::mergeWith(const Filter* other) const {
 
       return nullOrFalse(bothNullAllowed);
     }
+    case FilterKind::kUnknown:
+      return other->mergeWith(this);
     default:
       VELOX_UNREACHABLE();
   }
@@ -2003,6 +2012,8 @@ std::unique_ptr<Filter> NegatedBigintRange::mergeWith(
           negatedValuesToRanges(rejectedValues),
           bothNullAllowed);
     }
+    case FilterKind::kUnknown:
+      return other->mergeWith(this);
     default:
       VELOX_UNREACHABLE();
   }
@@ -2062,6 +2073,8 @@ std::unique_ptr<Filter> BigintValuesUsingHashTable::mergeWith(
     case FilterKind::kNegatedBigintValuesUsingHashTable: {
       return mergeWith(min_, max_, other);
     }
+    case FilterKind::kUnknown:
+      return other->mergeWith(this);
     default:
       VELOX_UNREACHABLE();
   }
@@ -2156,6 +2169,8 @@ std::unique_ptr<Filter> BigintValuesUsingBitmask::mergeWith(
     case FilterKind::kNegatedBigintValuesUsingHashTable: {
       return mergeWith(min_, max_, other);
     }
+    case FilterKind::kUnknown:
+      return other->mergeWith(this);
     default:
       VELOX_UNREACHABLE();
   }
@@ -2210,6 +2225,8 @@ std::unique_ptr<Filter> NegatedBigintValuesUsingHashTable::mergeWith(
     case FilterKind::kNegatedBigintValuesUsingBitmask: {
       return other->mergeWith(this);
     }
+    case FilterKind::kUnknown:
+      return other->mergeWith(this);
     default:
       VELOX_UNREACHABLE();
   }
@@ -2254,6 +2271,8 @@ std::unique_ptr<Filter> NegatedBigintValuesUsingBitmask::mergeWith(
       return combineNegatedBigintLists(
           values(), otherBitmask->values(), bothNullAllowed);
     }
+    case FilterKind::kUnknown:
+      return other->mergeWith(this);
     default:
       VELOX_UNREACHABLE();
   }
@@ -2327,6 +2346,8 @@ std::unique_ptr<Filter> BigintMultiRange::mergeWith(const Filter* other) const {
       bool bothNullAllowed = nullAllowed_ && other->testNull();
       return combineRangesAndNegatedValues(ranges_, rejects, bothNullAllowed);
     }
+    case FilterKind::kUnknown:
+      return other->mergeWith(this);
     default:
       VELOX_UNREACHABLE();
   }
@@ -2391,6 +2412,8 @@ std::unique_ptr<Filter> BigintValuesUsingBloomFilter::mergeWith(
       // correctness.  We can do so if we think merging will not improve
       // performance.
       return other->clone();
+    case FilterKind::kUnknown:
+      return other->mergeWith(this);
     default:
       VELOX_FAIL("Cannot merge {} with {}", kindName(), other->kindName());
   }
@@ -2476,7 +2499,8 @@ std::unique_ptr<Filter> BytesRange::mergeWith(const Filter* other) const {
           upperExclusive,
           bothNullAllowed);
     }
-
+    case FilterKind::kUnknown:
+      return other->mergeWith(this);
     default:
       VELOX_UNREACHABLE();
   }
@@ -2500,6 +2524,8 @@ std::unique_ptr<Filter> NegatedBytesRange::mergeWith(
       // these cases are likely to end up as a MultiRange anyway
       return other->mergeWith(toMultiRange().get());
     }
+    case FilterKind::kUnknown:
+      return other->mergeWith(this);
     default:
       VELOX_UNREACHABLE();
   }
@@ -2611,6 +2637,8 @@ std::unique_ptr<Filter> BytesValues::mergeWith(const Filter* other) const {
       return std::make_unique<BytesValues>(
           std::move(newValues), bothNullAllowed);
     }
+    case FilterKind::kUnknown:
+      return other->mergeWith(this);
     default:
       VELOX_UNREACHABLE();
   }
@@ -2715,6 +2743,8 @@ std::unique_ptr<Filter> NegatedBytesValues::mergeWith(
               false));
       return std::make_unique<MultiRange>(std::move(ranges), bothNullAllowed);
     }
+    case FilterKind::kUnknown:
+      return other->mergeWith(this);
     default:
       VELOX_UNREACHABLE();
   }

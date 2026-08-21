@@ -1633,6 +1633,36 @@ void testMergeWithBytes(Filter* left, Filter* right) {
         << ", merged: " << merged->toString();
   }
 }
+
+class MyFilter final : public Filter {
+ public:
+  MyFilter() : Filter(true, false, FilterKind::kUnknown) {}
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> /*nullAllowed*/ = std::nullopt) const final {
+    return std::make_unique<MyFilter>();
+  }
+
+  bool testingEquals(const Filter& other) const final {
+    return other.kind() == FilterKind::kUnknown;
+  }
+
+  folly::dynamic serialize() const final {
+    return folly::dynamic::object();
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final {
+    lastMergedFilterKind_ = other->kind();
+    return other->clone();
+  }
+
+  std::optional<FilterKind> lastMergedFilterKind() const {
+    return lastMergedFilterKind_;
+  }
+
+ private:
+  mutable std::optional<FilterKind> lastMergedFilterKind_;
+};
 } // namespace
 
 TEST(FilterTest, mergeWithUntyped) {
@@ -1643,6 +1673,34 @@ TEST(FilterTest, mergeWithUntyped) {
     for (const auto& right : filters) {
       testMergeWithUntyped(left.get(), right.get());
     }
+  }
+}
+
+TEST(FilterTest, mergeWithUnknown) {
+  std::vector<std::unique_ptr<Filter>> filters;
+  filters.push_back(std::make_unique<BoolValue>(true, false));
+  filters.push_back(between(1, 10));
+  filters.push_back(betweenDouble(1, 10));
+  filters.push_back(
+      std::make_unique<TimestampRange>(
+          Timestamp(1, 0), Timestamp(10, 0), false));
+  filters.push_back(between("a", "z"));
+
+  std::vector<std::unique_ptr<Filter>> ranges;
+  ranges.push_back(betweenDouble(1, 10));
+  ranges.push_back(betweenDouble(20, 30));
+  filters.push_back(std::make_unique<MultiRange>(std::move(ranges), false));
+
+  for (const auto& filter : filters) {
+    MyFilter unknownRight;
+    auto merged = filter->mergeWith(&unknownRight);
+    EXPECT_EQ(unknownRight.lastMergedFilterKind(), filter->kind());
+    EXPECT_EQ(merged->kind(), filter->kind());
+
+    MyFilter unknownLeft;
+    auto reverseMerged = unknownLeft.mergeWith(filter.get());
+    EXPECT_EQ(unknownLeft.lastMergedFilterKind(), filter->kind());
+    EXPECT_EQ(reverseMerged->kind(), filter->kind());
   }
 }
 
