@@ -16,8 +16,10 @@
 #pragma once
 
 #include <fmt/format.h>
+#include "velox/common/encode/Base64.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/Udf.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -25,7 +27,46 @@
 namespace facebook::velox::functions::sparksql {
 namespace detail {
 static const StringView kNull = "NULL";
+
+/// Style used to render binary values to strings. Mirrors Spark's
+/// `spark.sql.binaryOutputStyle`.
+enum class BinaryOutputStyle {
+  // "[31 32]" -- hex digits separated by spaces and wrapped in square
+  // brackets. Default when the Spark config is unset.
+  kHexDiscrete,
+  // "3132" -- uppercase hex digits with no separators.
+  kHex,
+  // "MTI" -- base64 encoded with no padding.
+  kBase64,
+  // "12" -- raw bytes interpreted as a UTF-8 string.
+  kUtf8,
+  // "[49, 50]" -- decimal byte values separated by ", " and wrapped in square
+  // brackets.
+  kBasic,
+};
+
+inline BinaryOutputStyle parseBinaryOutputStyle(const std::string& style) {
+  if (style.empty() || style == "HEX_DISCRETE") {
+    return BinaryOutputStyle::kHexDiscrete;
+  }
+  if (style == "HEX") {
+    return BinaryOutputStyle::kHex;
+  }
+  if (style == "BASE64") {
+    return BinaryOutputStyle::kBase64;
+  }
+  if (style == "UTF-8") {
+    return BinaryOutputStyle::kUtf8;
+  }
+  if (style == "BASIC") {
+    return BinaryOutputStyle::kBasic;
+  }
+  VELOX_USER_FAIL(
+      "Unsupported value for binary output style: '{}'. "
+      "Expected one of: HEX_DISCRETE, HEX, BASE64, UTF-8, BASIC.",
+      style);
 }
+} // namespace detail
 
 /// to_pretty_string(x) -> varchar
 /// Returns pretty string for int8, int16, int32, int64, bool, Date, Varchar. It
@@ -82,33 +123,131 @@ struct ToPrettyStringFunction {
 /// Returns pretty string for varbinary. It has several differences with
 /// cast(varbinary as string):
 /// 1) It prints null input as "NULL" rather than producing null output.
-/// 2) It prints binary value as hex string representation rather than UTF-8.
-/// The pretty string is composed of the hex digits of bytes and spaces between
-/// them. E.g., the result of to_pretty_string("abc") is "[31 32 33]".
+/// 2) The binary value is rendered according to the Spark session config
+///    `spark.binary_output_style` (see SparkQueryConfig::kBinaryOutputStyle).
+///    Supported values are HEX_DISCRETE (default), HEX, BASE64, UTF-8, and
+///    BASIC. Examples for the bytes [0x31, 0x32, 0x33]:
+///      HEX_DISCRETE: "[31 32 33]"
+///      HEX:          "313233"
+///      BASE64:       "MTIz"
+///      UTF-8:        "123"
+///      BASIC:        "[49, 50, 51]"
 template <typename TExec>
 struct ToPrettyStringVarbinaryFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
+  template <typename A>
+  void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      A* /*a*/) {
+    style_ = detail::parseBinaryOutputStyle(
+        SparkQueryConfig{config}.binaryOutputStyle());
+  }
+
   template <typename TInput>
   void callNullable(out_type<Varchar>& result, const TInput* input) {
-    if (input) {
-      // One byte spares 2 char, and with the spaces and the boxes.
-      // Byte size: 2 * input->size(), spaces size: input->size() - 1, boxes
-      // size: 2, its sum is 1 + 3 * input->size().
-      result.resize(1 + 3 * input->size());
-      char* const startPosition = result.data();
-      char* pos = startPosition;
-      *pos++ = '[';
-      for (auto i = 0; i < input->size(); i++) {
-        fmt::format_to(pos, "{:02X}", static_cast<int>(input->data()[i]));
-        pos += 2;
-        *pos++ = ' ';
-      }
-      *--pos = ']';
-    } else {
+    if (!input) {
       result.setNoCopy(detail::kNull);
+      return;
+    }
+    switch (style_) {
+      case detail::BinaryOutputStyle::kHexDiscrete:
+        writeHexDiscrete(result, *input);
+        return;
+      case detail::BinaryOutputStyle::kHex:
+        writeHex(result, *input);
+        return;
+      case detail::BinaryOutputStyle::kBase64:
+        writeBase64(result, *input);
+        return;
+      case detail::BinaryOutputStyle::kUtf8:
+        result.setNoCopy(*input);
+        return;
+      case detail::BinaryOutputStyle::kBasic:
+        writeBasic(result, *input);
+        return;
     }
   }
+
+ private:
+  template <typename TInput>
+  static void writeHexDiscrete(out_type<Varchar>& result, const TInput& input) {
+    // "[XX XX XX]" -- 2 chars per byte + (size - 1) spaces + 2 brackets.
+    // For empty input the result is just "[]".
+    if (input.size() == 0) {
+      result.resize(2);
+      result.data()[0] = '[';
+      result.data()[1] = ']';
+      return;
+    }
+    result.resize(1 + 3 * input.size());
+    char* pos = result.data();
+    *pos++ = '[';
+    for (size_t i = 0; i < input.size(); ++i) {
+      fmt::format_to(pos, "{:02X}", static_cast<int>(input.data()[i]));
+      pos += 2;
+      *pos++ = ' ';
+    }
+    *--pos = ']';
+  }
+
+  template <typename TInput>
+  static void writeHex(out_type<Varchar>& result, const TInput& input) {
+    // "XXXX..." -- 2 uppercase hex chars per byte, no separators.
+    result.resize(2 * input.size());
+    char* pos = result.data();
+    for (size_t i = 0; i < input.size(); ++i) {
+      fmt::format_to(pos, "{:02X}", static_cast<int>(input.data()[i]));
+      pos += 2;
+    }
+  }
+
+  template <typename TInput>
+  static void writeBase64(out_type<Varchar>& result, const TInput& input) {
+    // Spark uses Base64 encoding without padding. Velox's Base64::encode
+    // always includes padding, so strip the trailing '=' characters.
+    std::string encoded = encoding::Base64::encode(input.data(), input.size());
+    while (!encoded.empty() && encoded.back() == '=') {
+      encoded.pop_back();
+    }
+    result.resize(encoded.size());
+    if (!encoded.empty()) {
+      std::memcpy(result.data(), encoded.data(), encoded.size());
+    }
+  }
+
+  template <typename TInput>
+  static void writeBasic(out_type<Varchar>& result, const TInput& input) {
+    // "[d, d, d]" -- signed decimal byte values separated by ", ".
+    if (input.size() == 0) {
+      result.resize(2);
+      result.data()[0] = '[';
+      result.data()[1] = ']';
+      return;
+    }
+    std::string buffer;
+    buffer.reserve(2 + 5 * input.size());
+    buffer.push_back('[');
+    for (size_t i = 0; i < input.size(); ++i) {
+      if (i > 0) {
+        buffer.append(", ");
+      }
+      // Spark interprets bytes as signed `Byte` (-128..127), so 0xFF
+      // renders as "-1". Cast through int8_t to force signed
+      // interpretation regardless of whether plain `char` is signed on
+      // the target platform.
+      fmt::format_to(
+          std::back_inserter(buffer),
+          "{}",
+          static_cast<int>(static_cast<int8_t>(input.data()[i])));
+    }
+    buffer.push_back(']');
+    result.resize(buffer.size());
+    std::memcpy(result.data(), buffer.data(), buffer.size());
+  }
+
+  detail::BinaryOutputStyle style_{detail::BinaryOutputStyle::kHexDiscrete};
 };
 
 /// Returns pretty string for Timestamp. It has one difference with
