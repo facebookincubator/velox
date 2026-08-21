@@ -30,6 +30,23 @@ using namespace facebook::velox::common;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::parquet;
 
+namespace {
+
+// Returns the file-level runtime metric name.
+std::string metricName(std::string_view name) {
+  return fmt::format(
+      "{}.{}", FileFormatName::toName(FileFormat::PARQUET), name);
+}
+
+// Returns the sum of a file-level Parquet runtime metric.
+int64_t sumOf(
+    const std::unordered_map<std::string, RuntimeMetric>& metrics,
+    std::string_view name) {
+  return metrics.at(metricName(name)).sum;
+}
+
+} // namespace
+
 class ParquetReaderTest : public ParquetTestBase {
  public:
   void assertReadWithExpected(
@@ -2434,13 +2451,10 @@ TEST_F(ParquetReaderTest, thriftMemoryRuntimeStat) {
   rowReader->updateRuntimeStats(stats);
 
   auto metrics = stats.toRuntimeMetricMap();
-  const auto metricName = fmt::format(
-      "{}.{}",
-      FileFormatName::toName(FileFormat::PARQUET),
-      ParquetRuntimeStats::kFooterEstimatedBytes);
-  ASSERT_TRUE(metrics.count(metricName));
-  EXPECT_GT(metrics[metricName].sum, 0);
-  EXPECT_EQ(metrics[metricName].unit, RuntimeCounter::Unit::kBytes);
+  const auto name = metricName(ParquetRuntimeStats::kFooterEstimatedBytes);
+  ASSERT_TRUE(metrics.count(name));
+  EXPECT_GT(metrics[name].sum, 0);
+  EXPECT_EQ(metrics[name].unit, RuntimeCounter::Unit::kBytes);
 }
 
 // Verifies that without tracking the runtime stat stays at zero and
@@ -2456,11 +2470,8 @@ TEST_F(ParquetReaderTest, thriftMemoryRuntimeStatAbsentWithoutTracking) {
   rowReader->updateRuntimeStats(stats);
 
   auto metrics = stats.toRuntimeMetricMap();
-  const auto metricName = fmt::format(
-      "{}.{}",
-      FileFormatName::toName(FileFormat::PARQUET),
-      ParquetRuntimeStats::kFooterEstimatedBytes);
-  EXPECT_EQ(metrics.count(metricName), 0);
+  const auto name = metricName(ParquetRuntimeStats::kFooterEstimatedBytes);
+  EXPECT_EQ(metrics.count(name), 0);
 }
 
 // Verifies that without setting the threshold the tracking path is
@@ -2545,5 +2556,56 @@ TEST_F(ParquetReaderTest, byteStreamSplitFloat) {
   for (const auto& [index, value] : expected) {
     EXPECT_FALSE(floatColumn->isNullAt(index));
     EXPECT_FLOAT_EQ(floatColumn->valueAt(index), value);
+  }
+}
+
+TEST_F(ParquetReaderTest, pageSkipStats) {
+  constexpr int kNumWrittenRows = 100'000;
+  constexpr int kNumResultRows = 200;
+
+  auto rowType = ROW({"a", "b"}, BIGINT());
+
+  auto a = makeFlatVector<int64_t>(kNumWrittenRows, folly::identity);
+  auto b = makeFlatVector<int64_t>(
+      kNumWrittenRows, [](auto i) { return (i * 7919) % kNumWrittenRows; });
+  auto data = makeRowVector({"a", "b"}, {a, b});
+
+  auto run = [&](bool useDataPageV2) {
+    SCOPED_TRACE(fmt::format("useDataPageV2={}", useDataPageV2));
+    ParquetWriterOptions writerOptions;
+    writerOptions.dataPageSize = 256;
+    writerOptions.enableDictionary = false;
+    writerOptions.useParquetDataPageV2 = useDataPageV2;
+
+    auto* sink = write(data, writerOptions);
+    auto reader = createReaderInMemory(*sink);
+
+    auto scanSpec = makeScanSpec(rowType);
+    scanSpec->getOrCreateChild(Subfield("a"))
+        ->setFilter(
+            exec::between(
+                kNumWrittenRows - kNumResultRows, kNumWrittenRows - 1));
+    auto rowReaderOpts = makeRowReaderOpts(rowType);
+    rowReaderOpts.setScanSpec(scanSpec);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    uint64_t totalRows = 0;
+    VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+    while (rowReader->next(1000, result)) {
+      totalRows += result->size();
+      // Load lazy columns to trigger page reads.
+      LazyVector::ensureLoadedRows(result, SelectivityVector(result->size()));
+    }
+    EXPECT_EQ(totalRows, kNumResultRows);
+    dwio::common::RuntimeStats stats;
+    rowReader->updateRuntimeStats(stats);
+    const auto metrics = stats.toRuntimeMetricMap();
+    // Column 'a' processes 98 pages; lazy column 'b' skips 96 and processes 2.
+    EXPECT_EQ(sumOf(metrics, ParquetRuntimeStats::kProcessedPages), 100);
+    EXPECT_EQ(sumOf(metrics, ParquetRuntimeStats::kSkippedPages), 96);
+  };
+
+  for (const auto useDataPageV2 : {false, true}) {
+    run(useDataPageV2);
   }
 }
