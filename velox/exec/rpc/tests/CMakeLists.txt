@@ -68,17 +68,17 @@ target_link_libraries(
 
 add_test(NAME velox_echo_rpc_function_test COMMAND velox_echo_rpc_function_test)
 
-add_executable(velox_rpc_rate_limiter_test RPCRateLimiterTest.cpp)
+add_executable(velox_backend_admission_test BackendAdmissionTest.cpp)
 
 target_link_libraries(
-  velox_rpc_rate_limiter_test
-  velox_rpc_rate_limiter
+  velox_backend_admission_test
+  velox_backend_admission
   GTest::gtest
   GTest::gtest_main
   Folly::folly
 )
 
-add_test(NAME velox_rpc_rate_limiter_test COMMAND velox_rpc_rate_limiter_test)
+add_test(NAME velox_backend_admission_test COMMAND velox_backend_admission_test)
 
 add_executable(velox_rpc_error_classification_test RpcErrorClassificationTest.cpp)
 
