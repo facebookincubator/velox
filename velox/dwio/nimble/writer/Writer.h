@@ -329,6 +329,12 @@ class Writer : public velox::dwio::common::Writer {
   // rebuilds a TypeWithId tree from it to line statistics up with pre-order
   // node ids.
   const velox::RowTypePtr rowType_;
+  // Read by the memory reclaimer, which goes live on `pool_` below before the
+  // rest of the writer is built and stays reachable until `pool_` is
+  // destroyed. Declared ahead of `pool_` so it brackets that whole window;
+  // `context_` does not, and reaching the spill config through it is what let
+  // arbitration fault during construction and teardown.
+  const velox::common::SpillConfig* const spillConfig_;
   MemoryPoolHolder pool_;
   MemoryPoolHolder encodingMemoryPool_;
   const std::unique_ptr<detail::WriterContext> context_;
