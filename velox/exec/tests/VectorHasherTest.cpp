@@ -1031,6 +1031,100 @@ TEST_F(VectorHasherTest, int128BoundaryCollisionsForRows) {
   }
 }
 
+TEST_F(VectorHasherTest, timestampRangePrecision) {
+  auto millisecondsVector = makeFlatVector<Timestamp>(
+      {Timestamp::fromMillis(1), Timestamp::fromMillis(2)});
+  SelectivityVector rows(millisecondsVector->size());
+  raw_vector<uint64_t> result(millisecondsVector->size());
+
+  auto hasher = exec::VectorHasher::create(TIMESTAMP(), 0);
+  hasher->decode(*millisecondsVector, rows);
+  ASSERT_FALSE(hasher->computeValueIds(rows, result));
+
+  uint64_t asRange;
+  uint64_t asDistinct;
+  hasher->cardinality(0, asRange, asDistinct);
+  ASSERT_EQ(3, asRange);
+  ASSERT_EQ(3, asDistinct);
+
+  ASSERT_EQ(3, hasher->enableValueRange(1, 0));
+
+  hasher->decode(*millisecondsVector, rows);
+  ASSERT_TRUE(hasher->computeValueIds(rows, result));
+
+  // Timestamp in range value-id mode must not map sub-millisecond values by
+  // truncating them with toMillis().
+  auto subMillisecondVector =
+      makeFlatVector<Timestamp>({Timestamp::fromMicros(1'001)});
+  SelectivityVector subMillisecondRows(subMillisecondVector->size());
+  result.resize(subMillisecondVector->size());
+  std::fill(result.begin(), result.end(), 0);
+
+  hasher->decode(*subMillisecondVector, subMillisecondRows);
+  EXPECT_FALSE(hasher->computeValueIds(subMillisecondRows, result));
+  EXPECT_FALSE(hasher->mayUseValueIds());
+}
+
+TEST_F(VectorHasherTest, timestampAnalyzePrecision) {
+  constexpr int32_t kValueOffset = 0;
+  constexpr int32_t kNullByte = sizeof(Timestamp);
+  constexpr int32_t kRowSize = sizeof(Timestamp) + 1;
+  constexpr uint8_t kNullMask = 1;
+
+  alignas(Timestamp) std::array<char, kRowSize> rowData;
+  rowData.fill(0);
+  std::vector<char*> groups{rowData.data()};
+
+  auto timestamp = Timestamp::fromMicros(1'001);
+  memcpy(groups[0] + kValueOffset, &timestamp, sizeof(Timestamp));
+
+  // Row-wise analyze must not collect range or distinct stats by truncating
+  // sub-millisecond timestamps with toMillis().
+  auto rowHasher = exec::VectorHasher::create(TIMESTAMP(), 0);
+  rowHasher->analyze(groups.data(), 1, kValueOffset, kNullByte, kNullMask);
+
+  uint64_t asRange;
+  uint64_t asDistinct;
+  rowHasher->cardinality(0, asRange, asDistinct);
+  EXPECT_EQ(VectorHasher::kRangeTooLarge, asRange);
+  EXPECT_EQ(VectorHasher::kRangeTooLarge, asDistinct);
+  EXPECT_FALSE(rowHasher->mayUseValueIds());
+}
+
+TEST_F(VectorHasherTest, timestampMergeOverflow) {
+  auto subMillisecondVector =
+      makeFlatVector<Timestamp>({Timestamp::fromMicros(1'001)});
+  SelectivityVector subMillisecondRows(subMillisecondVector->size());
+  raw_vector<uint64_t> result(subMillisecondVector->size());
+
+  VectorHasher subMillisecondHasher(TIMESTAMP(), 0);
+  subMillisecondHasher.decode(*subMillisecondVector, subMillisecondRows);
+  ASSERT_FALSE(
+      subMillisecondHasher.computeValueIds(subMillisecondRows, result));
+  ASSERT_FALSE(subMillisecondHasher.mayUseValueIds());
+
+  // Precision overflow is not an empty state and must be propagated through
+  // merge().
+  auto millisecondsVector =
+      makeFlatVector<Timestamp>({Timestamp::fromMillis(1)});
+  SelectivityVector millisecondRows(millisecondsVector->size());
+  result.resize(millisecondsVector->size());
+
+  VectorHasher millisecondHasher(TIMESTAMP(), 0);
+  millisecondHasher.decode(*millisecondsVector, millisecondRows);
+  ASSERT_FALSE(millisecondHasher.computeValueIds(millisecondRows, result));
+  ASSERT_TRUE(millisecondHasher.mayUseValueIds());
+
+  millisecondHasher.merge(subMillisecondHasher, VectorHasher::kMaxDistinct);
+
+  uint64_t asRange;
+  uint64_t asDistinct;
+  millisecondHasher.cardinality(0, asRange, asDistinct);
+  EXPECT_EQ(VectorHasher::kRangeTooLarge, asRange);
+  EXPECT_EQ(VectorHasher::kRangeTooLarge, asDistinct);
+  EXPECT_FALSE(millisecondHasher.mayUseValueIds());
+}
+
 TEST_F(VectorHasherTest, computeValueIdsInteger) {
   testComputeValueIds<int32_t>(false);
   testComputeValueIds<int32_t>(true);

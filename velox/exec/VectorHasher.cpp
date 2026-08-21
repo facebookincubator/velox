@@ -664,6 +664,17 @@ void VectorHasher::analyzeValue(int128_t value) {
   }
 }
 
+void VectorHasher::analyzeValue(Timestamp value) {
+  if (FOLLY_UNLIKELY(
+          value.getNanos() % Timestamp::kNanosecondsInMillisecond != 0)) {
+    setRangeOverflow();
+    setDistinctOverflow();
+    return;
+  }
+
+  analyzeValue(value.toMillis());
+}
+
 template <>
 void VectorHasher::analyzeValue(StringView value) {
   int size = value.size();
