@@ -16,9 +16,9 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderIOHelpers.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
-#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderHelpers.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 #include "velox/common/io/IoStatistics.h"
@@ -143,6 +143,21 @@ class CudfSplitReader : public NvtxHelper {
   bool prependRowIndex_{false};
 
  private:
+  // Tracks how far the row group passes of the current split have been read.
+  struct RowGroupPassState {
+    // Row groups to read, one entry per pass, in read order.
+    std::vector<std::vector<std::vector<cudf::size_type>>> passes;
+
+    // The pass being materialized.
+    size_t currentPass{0};
+
+    // Whether the chunked read of the current pass has been set up.
+    bool isChunkingSetup{false};
+
+    // Owns the device data of the current pass.
+    ByteRangeFetch fetch;
+  };
+
   // Clear splitReaders and datasources after split has been fully processed.
   void resetSplit();
 
@@ -165,9 +180,8 @@ class CudfSplitReader : public NvtxHelper {
   // that has not started yet, and set up its chunked read.
   void setupChunkingForCurrentPass(rmm::device_async_resource_ref mr);
 
-  // Release the column chunk data of the current pass, waiting for any reads
-  // already writing into it. A fetch whose reads have not started yet is
-  // dropped rather than waited on.
+  // Release the column chunk data of the current pass, canceling its reads
+  // when they have not started yet and waiting for them otherwise.
   void releaseCurrentPassData();
 
   std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;

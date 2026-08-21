@@ -15,7 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderHelpers.h"
+#include "velox/experimental/cudf/connectors/hive/BufferedInputDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfEqualityDeleteFileReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDeletionHelpers.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"

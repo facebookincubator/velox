@@ -15,8 +15,8 @@
  */
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/connectors/hive/BufferedInputDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
-#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderHelpers.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
@@ -195,7 +195,7 @@ CudfSplitReader::CudfSplitReader(
 
 CudfSplitReader::~CudfSplitReader() {
   // A split abandoned before it is read, e.g. when the task is cancelled while
-  // the preloader prepares it, can still have reads in flight.
+  // the preloader prepares it, can still have reads in flight or queued.
   if (passState_ == nullptr) {
     return;
   }
@@ -328,7 +328,7 @@ void CudfSplitReader::setupChunkingForCurrentPass(
   startCurrentPassFetch();
 
   // Wait for all reads of the pass to complete.
-  passState_->fetch.pending.get();
+  passState_->fetch.wait();
 
   splitReader_->setup_chunking_for_all_columns(
       chunkReadLimit_,
@@ -343,13 +343,8 @@ void CudfSplitReader::setupChunkingForCurrentPass(
 }
 
 void CudfSplitReader::releaseCurrentPassData() {
-  auto& fetch = passState_->fetch;
-  if (fetch.pending.valid() and fetch.writesInFlight) {
-    // Reads still in flight write into the buffers about to be released. A
-    // fetch whose reads have not started yet is dropped instead: waiting on it
-    // would read the whole pass only to discard it.
-    fetch.pending.get();
-  }
+  // Reads still in flight write into the buffers about to be released.
+  passState_->fetch.abandon();
   passState_->fetch = {};
 }
 

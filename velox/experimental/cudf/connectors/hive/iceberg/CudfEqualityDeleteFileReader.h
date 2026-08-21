@@ -20,6 +20,7 @@
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
+#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/vector/ComplexVector.h"
 

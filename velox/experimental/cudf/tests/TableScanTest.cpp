@@ -400,8 +400,8 @@ TEST_F(TableScanTest, preloadSplits) {
       filePaths.size());
 }
 
-// A busy IO thread pool never runs the preload tasks, so the splits are
-// prepared inline on the driver thread when it comes to read them.
+// A busy IO thread pool never runs the queued preload tasks, so every split is
+// prepared inline by the driver that comes to read it.
 TEST_F(TableScanTest, preloadingSplitClose) {
   auto filePaths = makeFilePaths(20);
   auto vectors = makeVectors(20, 100);

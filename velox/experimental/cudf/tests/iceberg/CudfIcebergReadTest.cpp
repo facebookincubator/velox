@@ -586,7 +586,9 @@ TEST_F(CudfIcebergReadTest, multipleSplits) {
 /// files, must produce the same results as splits prepared on the driver.
 TEST_F(CudfIcebergReadTest, preloadSplitsWithPositionalDeletes) {
   constexpr int32_t kNumFiles = 4;
-  constexpr int64_t kRowsPerFile = 1000;
+  constexpr int32_t kRowGroupsPerFile = 4;
+  constexpr int64_t kRowsPerRowGroup = 250;
+  constexpr int64_t kRowsPerFile = kRowGroupsPerFile * kRowsPerRowGroup;
 
   std::vector<RowVectorPtr> dataVectors;
   std::vector<std::shared_ptr<TempFilePath>> dataFiles;
@@ -604,12 +606,18 @@ TEST_F(CudfIcebergReadTest, preloadSplitsWithPositionalDeletes) {
   std::vector<std::shared_ptr<TempFilePath>> deleteFilePaths;
 
   for (auto fileIndex = 0; fileIndex < kNumFiles; ++fileIndex) {
-    const auto startingValue = fileIndex * kRowsPerFile;
-    auto dataVector =
-        makeRowVector({makeFlatVector<int64_t>(makeContinuousIncreasingValues(
-            startingValue, startingValue + kRowsPerFile))});
+    // One vector per row group, holding each row's value as its position in
+    // the file plus the file's offset.
+    std::vector<RowVectorPtr> rowGroups;
+    for (auto rowGroup = 0; rowGroup < kRowGroupsPerFile; ++rowGroup) {
+      const auto startingValue =
+          fileIndex * kRowsPerFile + rowGroup * kRowsPerRowGroup;
+      rowGroups.push_back(
+          makeRowVector({makeFlatVector<int64_t>(makeContinuousIncreasingValues(
+              startingValue, startingValue + kRowsPerRowGroup))}));
+    }
     auto dataFile = TempFilePath::create();
-    writeToFile(dataFile->getPath(), dataVector);
+    writeToFile(dataFile->getPath(), rowGroups);
 
     auto deleteFilePath = TempFilePath::create();
     auto deleteVector = makeRowVector(
@@ -629,7 +637,7 @@ TEST_F(CudfIcebergReadTest, preloadSplitsWithPositionalDeletes) {
         deletePositions.size(),
         getFileSize(deleteFilePath->getPath()));
 
-    dataVectors.push_back(dataVector);
+    dataVectors.insert(dataVectors.end(), rowGroups.begin(), rowGroups.end());
     dataFiles.push_back(dataFile);
     deleteFilePaths.push_back(deleteFilePath);
     auto fileSplits = makeIcebergSplits(dataFile->getPath(), {deleteFile});
@@ -655,11 +663,25 @@ TEST_F(CudfIcebergReadTest, preloadSplitsWithPositionalDeletes) {
     }
   }
 
-  auto task = assertQuery(
-      plan,
-      splits,
-      fmt::format("SELECT * FROM tmp WHERE c0 NOT IN ({})", deletedValues),
-      /*numPrefetchSplit=*/kNumFiles);
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(
+              core::QueryConfig::kMaxSplitPreloadPerDriver,
+              std::to_string(kNumFiles))
+          .connectorSessionProperty(
+              kCudfIcebergConnectorId,
+              cudf_velox::connector::hive::CudfHiveConfig::
+                  kMaxChunkReadLimitSession,
+              "2048")
+          .connectorSessionProperty(
+              kCudfIcebergConnectorId,
+              cudf_velox::connector::hive::CudfHiveConfig::
+                  kMaxPassReadLimitSession,
+              "4096")
+          .splits(splits)
+          .assertResults(
+              fmt::format(
+                  "SELECT * FROM tmp WHERE c0 NOT IN ({})", deletedValues));
 
   auto planStats = toPlanStats(task->taskStats());
   const auto& customStats = planStats.at(plan->id()).customStats;
@@ -671,6 +693,12 @@ TEST_F(CudfIcebergReadTest, preloadSplitsWithPositionalDeletes) {
       customStats
           .at(std::string(facebook::velox::exec::TableScan::kPreloadedSplits))
           .sum,
+      splits.size());
+
+  // More output vectors than splits confirms the splits were read in chunked
+  // manner.
+  EXPECT_GT(
+      planStats.at(plan->id()).operatorStatsFor("TableScan").outputVectors,
       splits.size());
 }
 
