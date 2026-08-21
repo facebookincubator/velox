@@ -15,6 +15,8 @@
  */
 #include <folly/init/Init.h>
 
+#include "common/base/tests/GTestUtils.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
@@ -356,6 +358,58 @@ TEST_F(AverageAggregationTest, avgDecimalCompanionMergeExtract) {
   auto expected = makeRowVector(
       {makeFlatVector<int64_t>(std::vector<int64_t>{2000000}, DECIMAL(16, 5))});
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+DEBUG_ONLY_TEST_F(AverageAggregationTest, abandonPartialAggregation) {
+  constexpr vector_size_t kBatchSize = 100;
+  std::vector<RowVectorPtr> data;
+  for (auto batch = 0; batch < 3; ++batch) {
+    data.push_back(makeRowVector(
+        {"k", "i", "d", "m"},
+        {makeFlatVector<int64_t>(
+             kBatchSize, [&](auto row) { return batch * kBatchSize + row; }),
+         makeFlatVector<int32_t>(
+             kBatchSize,
+             folly::identity,
+             [](auto row) { return row % 5 == 0; }),
+         makeFlatVector<double>(
+             kBatchSize,
+             folly::identity,
+             [](auto row) { return row % 7 == 0; }),
+         makeFlatVector<bool>(
+             kBatchSize, [](auto row) { return row % 3 != 0; })}));
+  }
+  createDuckDbTable(data);
+
+  core::PlanNodeId partialNodeId;
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialAggregation(
+                      {"k"}, {"spark_avg(i)", "spark_avg(d)"}, {"m", "m"})
+                  .capturePlanNodeId(partialNodeId)
+                  .finalAggregation()
+                  .planNode();
+  std::atomic_bool usedToIntermediateFastPath{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Aggregate::toIntermediate",
+      std::function<void(void*)>(
+          [&](void*) { usedToIntermediateFastPath = true; }));
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .assertResults(
+              "SELECT k, avg(i) FILTER (WHERE m), "
+              "avg(d) FILTER (WHERE m) FROM tmp GROUP BY k");
+
+  const auto stats = exec::toPlanStats(task->taskStats());
+  EXPECT_LT(
+      0,
+      stats.at(partialNodeId)
+          .customStats.at("abandonedPartialAggregationRows")
+          .sum);
+  EXPECT_TRUE(usedToIntermediateFastPath);
 }
 
 } // namespace

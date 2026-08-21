@@ -30,6 +30,36 @@ class AverageAggregate
   explicit AverageAggregate(TypePtr resultType)
       : AverageAggregateBase<TInput, TAccumulator, TResult>(resultType) {}
 
+  bool supportsToIntermediate() const override {
+    return true;
+  }
+
+  void toIntermediate(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      VectorPtr& result) const override {
+    VELOX_CHECK_EQ(args.size(), 1);
+    auto* rowVector = result->as<RowVector>();
+    auto* sumVector = rowVector->childAt(0)->asFlatVector<TAccumulator>();
+    auto* countVector = rowVector->childAt(1)->asFlatVector<int64_t>();
+    rowVector->clearAllNulls();
+    sumVector->clearAllNulls();
+    countVector->clearAllNulls();
+
+    auto* rawSums = sumVector->mutableRawValues();
+    auto* rawCounts = countVector->mutableRawValues();
+    std::fill_n(rawSums, rows.size(), TAccumulator{0});
+    std::fill_n(rawCounts, rows.size(), 0);
+
+    DecodedVector decoded(*args[0], rows);
+    rows.applyToSelected([&](vector_size_t row) {
+      if (!decoded.isNullAt(row)) {
+        rawSums[row] = TAccumulator(decoded.valueAt<TInput>(row));
+        rawCounts[row] = 1;
+      }
+    });
+  }
+
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     auto rowVector = (*result)->as<RowVector>();
