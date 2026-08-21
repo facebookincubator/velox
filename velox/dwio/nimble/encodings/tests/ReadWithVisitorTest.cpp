@@ -4302,9 +4302,16 @@ TEST_P(ReadWithVisitorTest, readDenseMaterializedIndicesWithNulls) {
 
   ASSERT_EQ(reader->numValues(), 0);
 
-  // Call the helper with nulls.
+  // Call the helper with nulls. prepareResultNulls must mirror what
+  // ChunkedDecoder wires up in production: the dense index path materializes
+  // nulls into the read-range bitmap only, so it needs an allocated,
+  // output-indexed result-nulls buffer to copy them into whenever
+  // returnReaderNulls_ is false -- as it is here, the scan spec carries a
+  // filter.
   ReadWithVisitorParams params{.numScanned = 0};
-  params.prepareResultNulls = [] {};
+  params.prepareResultNulls = [&] {
+    reader->prepareNulls(rows, /*hasNulls=*/true, /*extraRows=*/8);
+  };
   detail::readDenseMaterializedIndices(
       *encoding,
       visitor,
