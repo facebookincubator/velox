@@ -136,6 +136,28 @@ TEST_F(ArraySplitIntoChunksTest, tooManyChunks) {
           "array_split_into_chunks(c0, 1::INTEGER)", makeRowVector({input})),
       "Cannot split array of size: 12001 into more than 10000 parts.");
 }
+TEST_F(ArraySplitIntoChunksTest, shortDecimal) {
+  auto input = makeNullableArrayVector<int64_t>(
+      {{100, 200, 300, 400, 500}}, ARRAY(DECIMAL(10, 3)));
+  auto result = evaluate(
+      "array_split_into_chunks(c0, 2::INTEGER)", makeRowVector({input}));
+  auto innerArray = makeNullableArrayVector<int64_t>(
+      {{100, 200}, {300, 400}, {500}}, ARRAY(DECIMAL(10, 3)));
+  auto expected = makeArrayVector({0}, innerArray);
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArraySplitIntoChunksTest, longDecimal) {
+  auto input = makeNullableArrayVector<int128_t>(
+      {{1, 2, 3, 4, 5}}, ARRAY(DECIMAL(38, 10)));
+  auto result = evaluate(
+      "array_split_into_chunks(c0, 2::INTEGER)", makeRowVector({input}));
+  auto innerArray = makeNullableArrayVector<int128_t>(
+      {{1, 2}, {3, 4}, {5}}, ARRAY(DECIMAL(38, 10)));
+  auto expected = makeArrayVector({0}, innerArray);
+  assertEqualVectors(expected, result);
+}
+
 } // namespace
 
 } // namespace facebook::velox::functions
