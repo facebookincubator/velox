@@ -183,6 +183,22 @@ class RPCState {
   /// When all rows are released, the batch columns are freed.
   void releaseRows(int32_t batchIndex, int64_t count);
 
+  /// Drop every retained input vector, regardless of activeRowCount.
+  ///
+  /// Called from RPCOperator::close() on the driver thread. In-flight RPC
+  /// callbacks hold a shared_ptr to this object, so it can outlive the
+  /// operator, the Task and the query's memory pools. The input vectors were
+  /// allocated from upstream operators' pools, so holding them past teardown
+  /// leaves a non-zero reservation on those pools; the arbitrator's
+  /// pool->reservedBytes() == 0 check then throws from ~MemoryPoolImpl() and
+  /// terminates the worker. If instead the last callback lands after the pools
+  /// are gone, ~RPCState() frees into freed memory.
+  ///
+  /// Safe to call while RPCs are outstanding: completion callbacks only
+  /// deposit RPCResponse values and never read flatColumns, which is read
+  /// solely by the driver thread when building output.
+  void releaseAllInputBatches();
+
   // ===== PER_ROW mode API =====
 
   /// Add a pending row with its RPC future and location in the input batch.
