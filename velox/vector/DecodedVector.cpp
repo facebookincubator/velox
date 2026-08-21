@@ -269,23 +269,32 @@ void DecodedVector::applyDictionaryWrapper(
       copyNulls(end(rows));
     }
   }
-  auto copiedNulls = copiedNulls_.data();
   auto currentIndices = indices_;
   if (indicesNotCopied()) {
     copiedIndices_.resize(size_);
     indices_ = copiedIndices_.data();
   }
+  auto copiedIndices = copiedIndices_.data();
 
-  applyToRows(rows, [&](vector_size_t row) {
-    if (!nulls_ || !bits::isBitNull(nulls_, row)) {
-      auto wrappedIndex = currentIndices[row];
-      if (newNulls && bits::isBitNull(newNulls, wrappedIndex)) {
-        bits::setNull(copiedNulls, row);
-      } else {
-        copiedIndices_[row] = newIndices[wrappedIndex];
+  if (!nulls_ && !newNulls) {
+    // Fast path: no parent nulls and no new wrapper nulls, so every row is
+    // a plain index remap with no null checks.
+    applyToRows(rows, [&](vector_size_t row) {
+      copiedIndices[row] = newIndices[currentIndices[row]];
+    });
+  } else {
+    auto copiedNulls = copiedNulls_.data();
+    applyToRows(rows, [&](vector_size_t row) {
+      if (!nulls_ || !bits::isBitNull(nulls_, row)) {
+        auto wrappedIndex = currentIndices[row];
+        if (newNulls && bits::isBitNull(newNulls, wrappedIndex)) {
+          bits::setNull(copiedNulls, row);
+        } else {
+          copiedIndices[row] = newIndices[wrappedIndex];
+        }
       }
-    }
-  });
+    });
+  }
 }
 
 void DecodedVector::fillInIndices() const {
@@ -332,14 +341,18 @@ void DecodedVector::setFlatNulls(
       copyNulls(end(rows));
     }
     auto leafNulls = vector.rawNulls();
-    auto copiedNulls = &copiedNulls_[0];
-    applyToRows(rows, [&](vector_size_t row) {
-      if (!bits::isBitNull(nulls_, row) &&
-          (leafNulls && bits::isBitNull(leafNulls, indices_[row]))) {
-        bits::setNull(copiedNulls, row);
-      }
-    });
-    nulls_ = &copiedNulls_[0];
+    // When the leaf vector has no nulls, the loop below can never set a
+    // null, so the entire per-row pass is skipped.
+    if (leafNulls) {
+      auto copiedNulls = copiedNulls_.data();
+      applyToRows(rows, [&](vector_size_t row) {
+        if (!bits::isBitNull(nulls_, row) &&
+            bits::isBitNull(leafNulls, indices_[row])) {
+          bits::setNull(copiedNulls, row);
+        }
+      });
+    }
+    nulls_ = copiedNulls_.data();
   } else {
     nulls_ = vector.rawNulls();
     mayHaveNulls_ = nulls_ != nullptr;
