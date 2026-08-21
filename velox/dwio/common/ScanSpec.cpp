@@ -37,13 +37,20 @@ std::string_view ScanSpec::columnTypeString(ScanSpec::ColumnType columnType) {
 }
 
 ScanSpec* ScanSpec::getOrCreateChild(const std::string& name) {
+  // The lock covers 'stableOrder_' and 'stableChildren_' only; the
+  // declaration carries the contract for the rest.
+  std::lock_guard<std::mutex> l(mutex_);
   if (auto it = this->childByFieldName_.find(name);
       it != this->childByFieldName_.end()) {
     return it->second;
   }
-  this->children_.push_back(std::make_unique<ScanSpec>(name));
+  this->children_.push_back(std::make_shared<ScanSpec>(name));
   auto* child = this->children_.back().get();
+  child->parent_ = this;
   this->childByFieldName_[child->fieldName()] = child;
+  stableOrder_.push_back(child);
+  // A published snapshot is never written to; the next call republishes.
+  stableChildren_.reset();
   return child;
 }
 
@@ -120,8 +127,6 @@ void ScanSpec::reorder() {
   if (children_.empty()) {
     return;
   }
-  // Make sure 'stableChildren_' is initialized.
-  stableChildren();
   std::sort(
       children_.begin(),
       children_.end(),
@@ -132,20 +137,56 @@ void ScanSpec::reorder() {
       });
 }
 
-void ScanSpec::enableFilterInSubTree(bool value) {
-  filterDisabled_ = !value;
+bool ScanSpec::enableFilterInSubTree(bool value) {
+  const bool disabled{!value};
+  bool changed{filterDisabled_ != disabled};
+  filterDisabled_ = disabled;
   for (auto& child : children_) {
-    child->enableFilterInSubTree(value);
+    // Not '||': every descendant has to be visited.
+    changed |= child->enableFilterInSubTree(value);
+  }
+  return changed;
+}
+
+void ScanSpec::resetCachedValuesInTree() {
+  auto* root = this;
+  while (root->parent_ != nullptr) {
+    root = root->parent_;
+  }
+  root->resetCachedValues(false);
+}
+
+bool ScanSpec::setDeltaUpdateWithoutReset(
+    dwio::common::DeltaColumnUpdater* update) {
+  deltaUpdate_ = update;
+  return enableFilterInSubTree(update == nullptr);
+}
+
+void ScanSpec::setDeltaUpdate(dwio::common::DeltaColumnUpdater* update) {
+  if (setDeltaUpdateWithoutReset(update)) {
+    resetCachedValuesInTree();
   }
 }
 
-const std::vector<ScanSpec*>& ScanSpec::stableChildren() {
-  std::lock_guard<std::mutex> l(mutex_);
-  if (stableChildren_.empty()) {
-    stableChildren_.reserve(children_.size());
-    for (auto& child : children_) {
-      stableChildren_.push_back(child.get());
+void ScanSpec::resetDeltaUpdates() {
+  // One reset at the end rather than one per column: each walks the tree.
+  bool changed{false};
+  for (auto& child : children_) {
+    // Only top level columns can have delta updates.
+    if (child->deltaUpdate_ != nullptr) {
+      changed |= child->setDeltaUpdateWithoutReset(nullptr);
     }
+  }
+  if (changed) {
+    resetCachedValuesInTree();
+  }
+}
+
+std::shared_ptr<const std::vector<ScanSpec*>> ScanSpec::stableChildren() {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (stableChildren_ == nullptr) {
+    stableChildren_ =
+        std::make_shared<const std::vector<ScanSpec*>>(stableOrder_);
   }
   return stableChildren_;
 }
@@ -200,20 +241,30 @@ bool ScanSpec::testNull() const {
 void ScanSpec::moveAdaptationFrom(ScanSpec& other) {
   VELOX_CHECK(!filterDisabled_);
   // moves the filters and filter order from 'other'.
+  bool movedFilter{false};
   for (auto& child : children_) {
     auto it = other.childByFieldName_.find(child->fieldName_);
     if (it == other.childByFieldName_.end()) {
       continue;
     }
     auto* otherChild = it->second;
-    if (!child->isConstant() && !otherChild->isConstant()) {
-      // If other child is constant, a possible filter on a
-      // constant will have been evaluated at split start time. If
-      // 'child' is constant there is no adaptation that can be
-      // received.
-      child->filter_ = std::move(otherChild->filter_);
+    // A filter on a constant is evaluated at split start, so a constant on
+    // either side leaves nothing to receive. Not so with filtering disabled:
+    // nothing evaluated the filter.
+    if ((!child->isConstant() && !otherChild->isConstant()) ||
+        child->filterDisabled_) {
+      // A null source filter is no adaptation; it would clear 'child's own.
+      if (otherChild->filter_ != nullptr) {
+        child->filter_ = std::move(otherChild->filter_);
+        movedFilter = true;
+      }
       child->selectivity_ = otherChild->selectivity_;
     }
+  }
+  // The split was prepared before the adaptation arrived, so the memo is
+  // stale.
+  if (movedFilter) {
+    resetCachedValuesInTree();
   }
 }
 
