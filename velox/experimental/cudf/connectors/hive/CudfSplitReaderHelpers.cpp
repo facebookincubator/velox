@@ -71,20 +71,15 @@ void BufferedInputDataSource::enqueueForDevice(
 }
 
 void BufferedInputDataSource::startLoad() {
-  // 'BufferedInput::load' plans the coalesced reads of the enqueued regions
-  // and hands the prefetchable ones to the IO executor without waiting for
-  // them. The reads are drained by 'finishLoad'.
+  // Plans coalesced reads and starts prefetchable ones without waiting.
   input_->load(velox::dwio::common::LogType::FILE);
 }
 
 void BufferedInputDataSource::finishLoad(rmm::cuda_stream_view stream) {
-  // Each load consumes the streams enqueued since the previous one. Replaying
-  // them in a later load would read past the end of their exhausted streams
-  // and overwrite device buffers that no longer belong to this batch.
+  // Consumes each enqueued stream once to avoid rereading exhausted streams.
   const auto pendingLoads = std::exchange(pendingDeviceLoads_, {});
 
-  // Read on the calling thread but outside 'ioBatchMutex()': a read blocks
-  // until its region is in the cache and must not hold up the other drivers.
+  // Reads outside 'ioBatchMutex()' so cache waits do not block other drivers.
   std::vector<std::vector<uint8_t>> hostBuffers;
   hostBuffers.reserve(pendingLoads.size());
   for (const auto& pendingLoad : pendingLoads) {
@@ -93,10 +88,7 @@ void BufferedInputDataSource::finishLoad(rmm::cuda_stream_view stream) {
         reinterpret_cast<char*>(hostBuffer.data()), pendingLoad.size);
   }
 
-  // Launch the copies of a batch back to back so that drivers can move ahead
-  // without waiting for the copies of another driver. The host buffers are
-  // pageable, so each copy has been staged by the time it returns and they can
-  // be freed on return.
+  // Copy data to device. Serializes copies across drivers using the mutex.
   std::lock_guard<std::mutex> lock(ioBatchMutex());
   for (size_t i = 0; i < pendingLoads.size(); ++i) {
     CUDF_CUDA_TRY(cudaMemcpyAsync(
@@ -143,30 +135,6 @@ std::future<size_t> BufferedInputDataSource::host_read_async(
   return std::async(std::launch::deferred, [this, offset, size, dst]() {
     return this->host_read(offset, size, dst);
   });
-}
-
-std::future<size_t> BufferedInputDataSource::device_read_async(
-    size_t offset,
-    size_t size,
-    uint8_t* dst,
-    rmm::cuda_stream_view stream) {
-  // Read on the calling thread rather than on the IO executor: split
-  // preloading prepares readers on that executor, so a task waiting there for
-  // another task on the same executor can deadlock the pool.
-  return std::async(std::launch::deferred, [this, offset, size, dst, stream]() {
-    auto hostBuffer = this->host_read(offset, size);
-    CUDF_CUDA_TRY(cudaMemcpyAsync(
-        dst,
-        hostBuffer->data(),
-        hostBuffer->size(),
-        cudaMemcpyDefault,
-        stream.value()));
-    return hostBuffer->size();
-  });
-}
-
-bool BufferedInputDataSource::supports_device_read() const {
-  return true;
 }
 
 void BufferedInputDataSource::readContiguous(
@@ -274,10 +242,9 @@ ByteRangeFetch fetchByteRangesAsync(
         .buffers = std::move(columnChunkBuffers),
         .data = std::move(columnChunkData),
         .pending =
-            std::async(std::launch::deferred, syncFunction, dataSource, stream),
-        // 'finishLoad' performs the copies into the device buffers, so
-        // nothing writes into them until the fetch is waited on.
-        .writesInFlight = false};
+            std::async(std::launch::async, syncFunction, dataSource, stream),
+        // 'finishLoad' copies into the device buffers asynchronously.
+        .writesInFlight = true};
   }
 
   // KvikIO dataSource: Impl borrowed from `fetch_byte_ranges_to_device_async()`

@@ -149,8 +149,7 @@ class CudfSplitReader : public NvtxHelper {
   // Setup the cuDF reader options
   void setupReaderOptions();
 
-  // Populate the reader's page index, which data page pruning needs. No-op for
-  // files written without a page index.
+  // Setup Parquet column and offset indexes for the cudf split reader.
   void setupPageIndexes();
 
   // Return the row groups to read, grouped into passes bounded by the pass

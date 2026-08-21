@@ -59,31 +59,23 @@ class BufferedInputDataSource : public cudf::io::datasource {
 
   std::future<size_t> host_read_async(size_t offset, size_t size, uint8_t* dst);
 
-  [[nodiscard]] bool supports_device_read() const override;
-
-  std::future<size_t> device_read_async(
-      size_t offset,
-      size_t size,
-      uint8_t* dst,
-      rmm::cuda_stream_view stream) override;
-
   // Use the enqueue API from dwio::common::BufferedInput.
   // Pass a device buffer to copy to after load.
   void enqueueForDevice(uint64_t offset, uint64_t size, uint8_t* dst);
 
-  /// Plans the reads of the regions enqueued since the previous load and
-  /// submits the prefetchable ones to the IO executor. Returns without waiting
-  /// for them, so it is safe to call from a task running on that executor.
+  // Plans the reads of the regions enqueued since the previous load and
+  // submits the prefetchable ones to the IO executor. Returns without waiting
+  // for them, so it is safe to call from a task running on that executor.
   void startLoad();
 
-  /// Drains the regions enqueued since the previous load and copies them to
-  /// the device buffers they were enqueued with. Blocks until every read of
-  /// the batch has completed.
+  // Drains the regions enqueued since the previous load and copies them to
+  // the device buffers they were enqueued with. Blocks until every read of
+  // the batch has completed.
   void finishLoad(rmm::cuda_stream_view stream);
 
  private:
-  // A region enqueued for reading into device memory. 'startLoad()' plans the
-  // read of 'stream' and 'finishLoad()' drains it into 'dst'.
+  // A region enqueued for reading into device memory. `startLoad()` plans the
+  // read of `stream` and `finishLoad()` drains it into `dst`.
   struct PendingDeviceLoad {
     std::shared_ptr<facebook::velox::dwio::common::SeekableInputStream> stream;
     uint8_t* dst;
@@ -97,60 +89,44 @@ class BufferedInputDataSource : public cudf::io::datasource {
   std::vector<PendingDeviceLoad> pendingDeviceLoads_;
 };
 
-/// An in-progress fetch of a set of byte ranges into device memory.
+// Tracks progress of byte ranges being fetched into device memory.
 struct ByteRangeFetch {
-  /// Device buffers holding the fetched data. These must outlive every use of
-  /// 'data'.
+  // Stores physical device data.
   std::vector<rmm::device_buffer> buffers;
 
-  /// Device spans into 'buffers', one per requested byte range.
+  // Device span into `buffers` for each requested byte range.
   std::vector<cudf::device_span<const uint8_t>> data;
 
-  /// Waits for every read of the fetch to complete. Must be waited on before
-  /// 'data' is read from.
+  // Waits for all reads to complete. Must be waited on before using `data`.
   std::future<void> pending;
 
-  /// Whether reads that write into 'buffers' are already in flight. When
-  /// false, waiting on 'pending' is what performs the copies into 'buffers',
-  /// so it can be dropped rather than waited on if the data is not needed
-  /// after all. When true, 'pending' must be waited on before the buffers are
-  /// released.
+  // Indicates whether reads must complete before releasing `buffers`.
   bool writesInFlight{false};
 };
 
-/// Tracks progress of reading the row groups selected for a split as a
-/// sequence of passes, each materialized as one or more table chunks.
+// Tracks row group pass materialization progress for a split.
 struct RowGroupPassState {
-  /// Per-source row group indices of each pass, in read order.
+  // Stores row group pass information in read order.
   std::vector<std::vector<std::vector<cudf::size_type>>> passes;
 
-  /// Index of the pass currently being read.
+  // Tracks the current pass being materialized.
   size_t currentPass{0};
 
-  /// Whether chunking has been set up for the current pass.
+  // Indicates whether chunking is set up for the current pass.
   bool isChunkingSetup{false};
 
-  /// The fetch of the column chunk data of the current pass. Its buffers must
-  /// outlive every table chunk materialized from that pass.
+  // Owns the device data for the current pass.
   ByteRangeFetch fetch;
 };
 
-/// Fetches byte ranges from a data source into device buffers.
-/// Does not necessarily complete reads before returning; see
-/// `ByteRangeFetch::pending`.
-/// @param dataSource Input data source.
-/// @param byteRanges Byte ranges to fetch.
-/// @param stream CUDA stream.
-/// @param mr Device memory resource.
-/// @return Device buffers, spans of the fetched data, and a completion handle.
+// Asynchronously fetches byte ranges from a data source into device buffers.
 ByteRangeFetch fetchByteRangesAsync(
     std::shared_ptr<cudf::io::datasource> dataSource,
     cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
-/// Fetches page-index buffers and returns views into them.
-/// Keeps returned buffers alive while using the views.
+// Asyncronously fetches page-index buffers to host and returns views into them.
 std::pair<
     std::vector<std::unique_ptr<cudf::io::datasource::buffer>>,
     std::vector<cudf::host_span<const uint8_t>>>

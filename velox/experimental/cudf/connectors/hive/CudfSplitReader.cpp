@@ -205,7 +205,7 @@ CudfSplitReader::~CudfSplitReader() {
     // The data of a failed read is being dropped anyway, so the failure must
     // not propagate out of the destructor.
     LOG(ERROR) << fmt::format(
-        "Failed to drain the reads of an abandoned split. Path: {}. Error: {}.",
+        "Failed to discard the reads of an abandoned split. Path: {}. Error: {}.",
         split_ != nullptr ? split_->filePath : "unknown",
         e.what());
   }
@@ -316,7 +316,7 @@ void CudfSplitReader::startCurrentPassFetch() {
           ->all_column_chunks_byte_ranges(rowGroupIndices, readerOptions_)
           .first;
 
-  nvtxRangePush("fetchByteRanges");
+  nvtxRangePush("startColumnChunkFetch");
   passState_->fetch = fetchByteRangesAsync(
       dataSource_, columnChunkByteRanges, stream_, get_temp_mr());
   nvtxRangePop();
@@ -324,7 +324,7 @@ void CudfSplitReader::startCurrentPassFetch() {
 
 void CudfSplitReader::setupChunkingForCurrentPass(
     rmm::device_async_resource_ref mr) {
-  // A no-op when the fetch was already started while preparing the split.
+  // No-op when the fetch was already started while preparing the split.
   startCurrentPassFetch();
 
   // Wait for all reads of the pass to complete.
@@ -569,10 +569,8 @@ void CudfSplitReader::createCudfReader() {
   passReadLimit_ = cudfHiveConfig_->maxPassReadLimitSession(sessionProperties);
 
   // Create a hybrid scan reader over all sources of the split
-  nvtxRangePush("hybridScanMultifileReader");
   splitReader_ =
       std::make_unique<CudfParquetReader>(fileMetaData_, readerOptions_);
-  nvtxRangePop();
 
   // Metadata ingested
   fileMetaData_.clear();
@@ -592,8 +590,8 @@ void CudfSplitReader::createCudfReader() {
 void CudfSplitReader::setupPageIndexes() {
   const auto pageIndexByteRanges = splitReader_->page_index_byte_ranges();
 
-  // Parquet files written without a page index cannot be page pruned.
-  if (std::ranges::any_of(pageIndexByteRanges, [](const auto& byteRange) {
+  // No page index bytes
+  if (std::ranges::all_of(pageIndexByteRanges, [](const auto& byteRange) {
         return byteRange.is_empty();
       })) {
     return;
@@ -629,7 +627,7 @@ CudfSplitReader::selectRowGroupPasses() const {
         return sum + sourceRowGroups.size();
       });
 
-  // Constructing passes requires at least one row group.
+  // No row groups to read.
   if (numRowGroups == 0) {
     return {};
   }
