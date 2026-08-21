@@ -16,7 +16,9 @@
 
 #include <fmt/format.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/RowContainer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -1139,6 +1141,95 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     testing::ValuesIn(getTestParams()));
 
 class MinMaxByComplexTypes : public AggregationTestBase {};
+
+// Drives the aggregate directly so the per-row variable-length counter that
+// RowContainer keeps at 'rowSizeOffset' can be read back. Returns that counter
+// after aggregating 'values'/'comparisons' into a single group.
+uint32_t aggregateAndReadRowSize(
+    memory::MemoryPool* pool,
+    const std::string& name,
+    const TypePtr& valueType,
+    const VectorPtr& values,
+    const VectorPtr& comparisons) {
+  core::QueryConfig queryConfig({});
+  auto fn = exec::Aggregate::create(
+      name,
+      core::AggregationNode::Step::kSingle,
+      std::vector<TypePtr>{valueType, BIGINT()},
+      valueType,
+      queryConfig);
+
+  HashStringAllocator stringAllocator{pool};
+  fn->setAllocator(&stringAllocator);
+
+  const int32_t rowSizeOffset = bits::nbytes(1);
+  int32_t offset = rowSizeOffset + sizeof(uint32_t);
+  offset = bits::roundUp(offset, fn->accumulatorAlignmentSize());
+  fn->setOffsets(
+      offset,
+      exec::RowContainer::nullByte(0),
+      exec::RowContainer::nullMask(0),
+      exec::RowContainer::initializedByte(0),
+      exec::RowContainer::initializedMask(0),
+      rowSizeOffset);
+
+  const auto size = values->size();
+  std::vector<char> group(offset + fn->accumulatorFixedWidthSize());
+  std::vector<char*> groups(size, group.data());
+  std::vector<vector_size_t> indices{0};
+  fn->initializeNewGroups(groups.data(), indices);
+
+  SelectivityVector rows{size};
+  fn->addRawInput(groups.data(), rows, {values, comparisons}, false);
+
+  return *reinterpret_cast<uint32_t*>(group.data() + rowSizeOffset);
+}
+
+TEST_F(MinMaxByComplexTypes, trackRowSize) {
+  // A non-numeric value is held in the HashStringAllocator by
+  // SingleValueAccumulator, with only a Position in the row, so the row's
+  // variable-length size must be tracked. Untracked, RowContainer::rowSize()
+  // reports just the fixed part and Spiller::extractSpillVector sizes its
+  // batches from a number that can be orders of magnitude too small.
+  auto comparisons = makeFlatVector<int64_t>({5, 4, 3, 2, 1});
+
+  // Strings well past the inline StringView limit, so the payload really is
+  // out of line.
+  auto strings = makeFlatVector<StringView>({
+      "a string comfortably longer than the inlined limit 1"_sv,
+      "a string comfortably longer than the inlined limit 2"_sv,
+      "a string comfortably longer than the inlined limit 3"_sv,
+      "a string comfortably longer than the inlined limit 4"_sv,
+      "a string comfortably longer than the inlined limit 5"_sv,
+  });
+  auto arrays = makeArrayVector<int64_t>({
+      {1, 2, 3},
+      {4, 5},
+      {6},
+      {7, 8, 9, 10},
+      {11},
+  });
+  // Numeric value and comparison: the accumulator is genuinely fixed size, so
+  // nothing should be tracked and no tracker should be constructed. This is
+  // also what shows the counter is only ever moved by the tracker.
+  auto numbers = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
+
+  // min_by and max_by share MinMaxByAggregateBase but reach the store through
+  // opposite comparator outcomes, so exercise both.
+  for (const auto& name : {"min_by", "max_by"}) {
+    SCOPED_TRACE(name);
+    EXPECT_GT(
+        aggregateAndReadRowSize(pool(), name, VARCHAR(), strings, comparisons),
+        0);
+    EXPECT_GT(
+        aggregateAndReadRowSize(
+            pool(), name, ARRAY(BIGINT()), arrays, comparisons),
+        0);
+    EXPECT_EQ(
+        aggregateAndReadRowSize(pool(), name, BIGINT(), numbers, comparisons),
+        0);
+  }
+}
 
 TEST_F(MinMaxByComplexTypes, array) {
   auto data = makeRowVector({
