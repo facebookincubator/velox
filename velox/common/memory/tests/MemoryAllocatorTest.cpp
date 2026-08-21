@@ -664,6 +664,30 @@ TEST_P(MemoryAllocatorTest, allocationClass2) {
   allocation->clear();
 }
 
+TEST_P(MemoryAllocatorTest, sizeClassStatsDifference) {
+  SizeClassStats newer;
+  newer.size = 8;
+  newer.allocateClocks = 500;
+  newer.freeClocks = 70;
+  newer.numAllocations = 9;
+  newer.totalBytes = 4'096;
+
+  SizeClassStats older;
+  older.size = 8;
+  older.allocateClocks = 200;
+  older.freeClocks = 20;
+  older.numAllocations = 4;
+  older.totalBytes = 1'024;
+
+  const auto delta = newer - older;
+  EXPECT_EQ(delta.size, 8);
+  EXPECT_EQ(delta.allocateClocks, 300);
+  EXPECT_EQ(delta.freeClocks, 50);
+  EXPECT_EQ(delta.numAllocations, 5);
+  EXPECT_EQ(delta.totalBytes, 3'072);
+  EXPECT_EQ(delta.clocks(), 350);
+}
+
 TEST_P(MemoryAllocatorTest, stats) {
   const std::vector<MachinePageCount>& sizes = instance_->sizeClasses();
   for (auto i = 0; i < sizes.size(); ++i) {
@@ -681,11 +705,17 @@ TEST_P(MemoryAllocatorTest, stats) {
   gflags::FlagSaver flagSaver;
   FLAGS_velox_time_allocations = true;
   for (auto i = 0; i < sizes.size(); ++i) {
-    std::unique_ptr<Allocation> allocation = std::make_unique<Allocation>();
     auto size = sizes[i];
-    ASSERT_TRUE(allocate(size, *allocation));
-    ASSERT_GT(instance_->numAllocated(), 0);
-    instance_->freeNonContiguous(*allocation);
+    // A single allocate/free pair can take less than one tick of the hardware
+    // timestamp counter, whose resolution varies by platform (for example it
+    // is far coarser on ARM than the x86 TSC). Repeat so the accumulated time
+    // is measurable everywhere.
+    for (auto repeat = 0; repeat < 64; ++repeat) {
+      std::unique_ptr<Allocation> allocation = std::make_unique<Allocation>();
+      ASSERT_TRUE(allocate(size, *allocation));
+      ASSERT_GT(instance_->numAllocated(), 0);
+      instance_->freeNonContiguous(*allocation);
+    }
     auto stats = instance_->stats();
     ASSERT_LT(0, stats.sizes[i].clocks());
     ASSERT_GE(stats.sizes[i].totalBytes, size * AllocationTraits::kPageSize);
