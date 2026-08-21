@@ -19,6 +19,8 @@
 
 namespace facebook::velox::filesystems {
 
+class AbfsAsyncRuntime;
+
 /// Implementation of the ABFS (Azure Blob File Storage) filesystem and file
 /// interface. We provide a registration method for reading and writing files so
 /// that the appropriate type of file can be constructed based on a filename.
@@ -74,6 +76,13 @@ class AbfsFileSystem : public FileSystem {
   void rmdir(std::string_view path) override {
     VELOX_UNSUPPORTED("rmdir for abfs not implemented");
   }
+
+ private:
+  // Owns native async read resources when explicitly enabled.
+  std::shared_ptr<AbfsAsyncRuntime> asyncRuntime_;
+
+  // Bounds HTTP connections for each async Blob endpoint.
+  size_t maxAsyncConnectionsPerEndpoint_{32};
 };
 
 } // namespace facebook::velox::filesystems

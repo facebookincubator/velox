@@ -1,0 +1,57 @@
+Stage 5 parallel dynamic-SAS representative commands
+Date: 2026-07-22
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+
+Run all build and test commands from the WSL ext4 repository root. Paths are
+sanitized placeholders.
+
+Ordinary Debug
+cmake --build <ordinary-build> --target \
+  velox_abfs_test velox_abfs_registration_test \
+  velox_abfs_stage1_transport_test velox_abfs_stage2_runtime_test -j 2
+ctest --test-dir <ordinary-build> --output-on-failure \
+  -R '^(velox_abfs_test|velox_abfs_registration_test|velox_abfs_stage1_transport_test|velox_abfs_stage2_runtime_test)$'
+
+Focused runtime auth matrix
+<runtime-test> --gtest_filter='AbfsAsyncRuntimeTest.AuthRefresh*'
+
+Focused dynamic-SAS matrix
+<abfs-test> --gtest_filter='DynamicSasTokenClientProviderTest.asyncClient*'
+<abfs-test> --gtest_filter='AbfsFileSystemTest.nativeAsyncDynamicSasReadFile:AbfsFileSystemTest.dynamicSasRefreshDoesNotBlockWarmSiblingRead:AbfsReadFileTest.dynamicSasDestructionDuringRefreshIsSafe:AbfsReadFileTest.dynamicSasCallerCancellationDuringRefresh:AbfsReadFileTest.asyncAuthResourcesAreBounded'
+
+ASAN
+cmake --build <asan-build> --target \
+  velox_abfs_test velox_abfs_registration_test \
+  velox_abfs_stage1_transport_test velox_abfs_stage2_runtime_test -j 2
+grep -q '#define FOLLY_LIBRARY_SANITIZE_ADDRESS 1' \
+  <asan-build>/_deps/folly-build/folly/folly-config.h
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 \
+  <runtime-test> <auth-lifecycle-filter> \
+  --gtest_repeat=100 --gtest_break_on_failure --gtest_brief=1
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 \
+  <abfs-test> <dynamic-lifetime-filter> \
+  --gtest_repeat=100 --gtest_break_on_failure --gtest_brief=1
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 \
+  ctest --test-dir <asan-build> --output-on-failure \
+  -R '^(velox_abfs_test|velox_abfs_registration_test|velox_abfs_stage1_transport_test|velox_abfs_stage2_runtime_test)$'
+
+TSAN
+cmake --build <tsan-build> --target \
+  velox_abfs_test velox_abfs_registration_test \
+  velox_abfs_stage1_transport_test velox_abfs_stage2_runtime_test -j 2
+TSAN_OPTIONS=halt_on_error=1:abort_on_error=1 \
+  setarch x86_64 -R <runtime-test> <auth-lifecycle-filter> \
+  --gtest_repeat=100 --gtest_break_on_failure --gtest_brief=1
+TSAN_OPTIONS=halt_on_error=1:abort_on_error=1 \
+  setarch x86_64 -R <abfs-test> <dynamic-lifetime-filter> \
+  --gtest_repeat=100 --gtest_break_on_failure --gtest_brief=1
+TSAN_OPTIONS=halt_on_error=1:abort_on_error=1 \
+  setarch x86_64 -R ctest --test-dir <tsan-build> --output-on-failure \
+  -R '^(velox_abfs_test|velox_abfs_registration_test|velox_abfs_stage1_transport_test|velox_abfs_stage2_runtime_test)$'
+
+Source integrity
+clang-format-21.1.2 --dry-run --Werror <13-stage5-cpp-files>
+git diff --check -- velox/connectors/hive/storage_adapters/abfs
+git -C deps-download/azure-sdk-for-cpp diff --check
+cmp <wsl-source> <windows-source>  # repeated for every changed source
+sed -n '/^if($/,/^endif()$/p' <abfs-tests-cmake> | tr -d '\r' | sha256sum

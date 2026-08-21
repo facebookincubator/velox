@@ -1,0 +1,70 @@
+Stage 4 cooperative retry prototype validation
+Date: 2026-07-21
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+Status: C4 IN PROGRESS; SAFETY GATES RETAINED
+
+Azure prototype
+- Source revision: 224332197dcd405f67445e2e2a7105ea62f01496.
+- RetryOptions has an optional delay callback; the absent callback retains the stock sleep path.
+- All 15 RetryPolicy tests pass.
+- A callback exception propagates and prevents a second transport attempt.
+- Existing retry-suite aggregate initializers explicitly initialize the optional callback;
+  the retry test translation unit compiles with warnings treated as errors.
+- The dual-run parity matrix covers 408, 429, 500, 502, 503, 504, 400, 501,
+  transport failures, multiple retries, and terminal response and transport failures.
+- Attempts, final outcome, retry counters, body rewind, retry-scoped query/header reset,
+  and policy order match between stock and callback paths.
+- Pinned Core treats 429 as terminal by default. The matrix also covers retry after
+  explicitly adding 429 to RetryOptions.StatusCodes.
+
+Upstream availability check
+- Azure SDK main at c66422a7db6e04a0680fdd8798830a2d0f5338d3 has no callback
+  and still sleeps the retrying thread.
+- Stable Azure Core 1.16.4 adds RetryPolicyBase but retains the blocking wait.
+- Stable Data Lake 12.16.0 at 1c32f92de06445c467715b55860083202194aee4
+  also retains the blocking wait and has no callback.
+- No matching open Azure SDK issue or pull request was found.
+
+Velox ordinary Debug
+- velox_abfs_test: 33 of 33 pass.
+- velox_abfs_registration_test: 25 of 25 pass.
+- velox_abfs_stage1_transport_test: 59 of 59 pass.
+- velox_abfs_stage2_runtime_test: 19 of 19 pass.
+
+AddressSanitizer Debug
+- Complete four-target matrix: PASS.
+- Folly generated library-ASAN marker: 1 before execution.
+- Retry timer expiry and 100 expiry-versus-shutdown collisions: PASS.
+- Active and queued future cancellation plus 100 three-way cancellation,
+  expiry, and shutdown collisions: PASS.
+- No AddressSanitizer or LeakSanitizer finding.
+
+ThreadSanitizer Debug
+- Complete four-target matrix through setarch x86_64 -R: PASS.
+- Retry timer expiry and 100 expiry-versus-shutdown collisions: PASS.
+- Active and queued future cancellation plus 100 three-way cancellation,
+  expiry, and shutdown collisions: PASS.
+- No ThreadSanitizer finding.
+
+Runtime behavior
+- An unrelated request completes on the same one-thread runtime during Azure retry backoff.
+- Runtime shutdown interrupts a 30-second delay promptly and settles the future once.
+- SemiFuture cancellation independently interrupts a 30-second delay and returns
+  FutureCancellation; queued cancellation removes the request without running it.
+- AbfsReadFile::preadvAsync propagates cancellation through its continuation.
+- Normal timer expiry completes within the documented tolerance.
+- Every timer-expiry/shutdown collision records one completed request and one terminal future result.
+- The sanitized GDB stack at the Baton timed wait contains RetryPolicy::Send,
+  the delay callback, and AbfsAsyncRuntime::waitForRetryDelay, with no
+  std::this_thread::sleep_for frame.
+
+Remaining gates
+- Submit and land the tested delay hook upstream.
+- Consume a released upstream Azure hook through the normal dependency pin update.
+- Rerun complete validation against the released SDK.
+- Keep fs.azure.async-read.disable-retries-for-test=true and native MaxRetries=0 until then.
+
+Azure Core full-suite environment note
+- 317 tests passed in the focused test build.
+- Two unrelated external libcurl/CRL tests failed in this environment.
+- Two auxiliary executables were not built by the focused target.
