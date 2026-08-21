@@ -184,12 +184,12 @@ std::shared_ptr<exec::VectorFunction> create(
   validateType(inputArgs);
   auto elementType = inputArgs.front().type->childAt(0);
 
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
       createTyped, elementType->kind(), inputArgs);
 }
 
 // Define function signature.
-// array(T) -> array(T) where T must be bigint or varchar.
+// array(T) -> array(T) where T must be bigint, varchar or unknown.
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
   return {
       exec::FunctionSignatureBuilder()
@@ -199,6 +199,10 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
       exec::FunctionSignatureBuilder()
           .returnType("array(varchar)")
           .argumentType("array(varchar)")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .returnType("array(unknown)")
+          .argumentType("array(unknown)")
           .build()};
 }
 

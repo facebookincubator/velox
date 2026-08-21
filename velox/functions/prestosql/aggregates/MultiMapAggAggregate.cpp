@@ -623,7 +623,7 @@ void registerMultiMapAggAggregate(
         const auto typeKind = keyType->kind();
 
         if (keyType->providesCustomComparison()) {
-          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
               createMultiMapAggAggregateWithCustomCompare,
               typeKind,
               resultType);

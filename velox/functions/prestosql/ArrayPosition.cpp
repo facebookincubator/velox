@@ -388,7 +388,7 @@ void applyInternal(
       context, *elements, *nestedRows.get());
 
   if (args.size() == 2) {
-    VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+    VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
         applyTypedFirstMatch,
         useCustomComparison,
         args[1]->typeKind(),
@@ -401,7 +401,7 @@ void applyInternal(
     const auto& instanceVector = args[2];
     VELOX_CHECK(instanceVector->type()->isBigint());
 
-    VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+    VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
         applyTypedWithInstance,
         useCustomComparison,
         args[1]->typeKind(),
