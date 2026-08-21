@@ -20,6 +20,7 @@
 #include "velox/common/Casts.h"
 #include "velox/dwio/common/BufferedInput.h"
 
+#include <cudf/detail/utilities/cuda_memcpy.hpp>
 #include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/parquet.hpp>
@@ -39,13 +40,14 @@
 
 namespace {
 
-/**
- * @brief Static mutex to serialize batches of IO operations across drivers
- *
- * Mutex to ensure no interleaving of IO operations across drivers to ensure
- * drivers can move ahead without waiting for other drivers to finish their IO.
- */
-std::mutex& ioBatchMutex() {
+// Serializes each driver's device reads and H2D copy batch.
+std::mutex& deviceReadMutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+// Serializes each driver's host-read submission batch.
+std::mutex& hostReadMutex() {
   static std::mutex mutex;
   return mutex;
 }
@@ -78,8 +80,10 @@ void BufferedInputDataSource::startLoad() {
 void BufferedInputDataSource::finishLoad(rmm::cuda_stream_view stream) {
   // Consumes each enqueued stream once to avoid rereading exhausted streams.
   const auto pendingLoads = std::exchange(pendingDeviceLoads_, {});
+  if (pendingLoads.empty()) {
+    return;
+  }
 
-  // Reads outside 'ioBatchMutex()' so cache waits do not block other drivers.
   std::vector<std::vector<uint8_t>> hostBuffers;
   hostBuffers.reserve(pendingLoads.size());
   for (const auto& pendingLoad : pendingLoads) {
@@ -88,16 +92,32 @@ void BufferedInputDataSource::finishLoad(rmm::cuda_stream_view stream) {
         reinterpret_cast<char*>(hostBuffer.data()), pendingLoad.size);
   }
 
-  // Copy data to device. Serializes copies across drivers using the mutex.
-  std::lock_guard<std::mutex> lock(ioBatchMutex());
+  std::vector<const void*> copySources;
+  std::vector<void*> copyDestinations;
+  std::vector<size_t> copySizes;
+  copySources.reserve(pendingLoads.size());
+  copyDestinations.reserve(pendingLoads.size());
+  copySizes.reserve(pendingLoads.size());
   for (size_t i = 0; i < pendingLoads.size(); ++i) {
-    CUDF_CUDA_TRY(cudaMemcpyAsync(
-        pendingLoads[i].dst,
-        hostBuffers[i].data(),
-        pendingLoads[i].size,
-        cudaMemcpyDefault,
-        stream.value()));
+    copySources.push_back(hostBuffers[i].data());
+    copyDestinations.push_back(pendingLoads[i].dst);
+    copySizes.push_back(pendingLoads[i].size);
   }
+
+  {
+    // Serialize each driver's H2D copy batch.
+    std::scoped_lock<std::mutex> lock(deviceReadMutex());
+    CUDF_CUDA_TRY(
+        cudf::detail::memcpy_batch_async(
+            copyDestinations.data(),
+            copySources.data(),
+            copySizes.data(),
+            copyDestinations.size(),
+            stream));
+  }
+
+  // The source buffers must remain valid until the H2D copies finish.
+  stream.synchronize();
 }
 
 std::unique_ptr<cudf::io::datasource::buffer>
@@ -218,19 +238,23 @@ ByteRangeFetch fetchByteRangesAsync(
           dynamic_cast<BufferedInputDataSource*>(dataSource.get())) {
     auto iter =
         cuda::make_zip_iterator(byteRanges.begin(), columnChunkData.begin());
-    std::for_each(
-        iter, iter + byteRanges.size(), [bufferedInput](const auto& tuple) {
-          const auto& byteRange = cuda::std::get<0>(tuple);
-          const auto& destination = cuda::std::get<1>(tuple);
-          bufferedInput->enqueueForDevice(
-              static_cast<uint64_t>(byteRange.offset()),
-              static_cast<uint64_t>(byteRange.size()),
-              const_cast<uint8_t*>(destination.data()));
-        });
+    {
+      // Submit each driver's reads together to improve pipelining.
+      std::scoped_lock<std::mutex> lock(hostReadMutex());
+      std::for_each(
+          iter, iter + byteRanges.size(), [bufferedInput](const auto& tuple) {
+            const auto& byteRange = cuda::std::get<0>(tuple);
+            const auto& destination = cuda::std::get<1>(tuple);
+            bufferedInput->enqueueForDevice(
+                static_cast<uint64_t>(byteRange.offset()),
+                static_cast<uint64_t>(byteRange.size()),
+                const_cast<uint8_t*>(destination.data()));
+          });
 
-    // Plan the reads and hand the prefetchable ones to the IO executor now so
-    // that they overlap with whatever the caller does before waiting.
-    bufferedInput->startLoad();
+      // Plan the reads and hand the prefetchable ones to the IO executor now
+      // so they overlap with work before the caller waits.
+      bufferedInput->startLoad();
+    }
 
     auto syncFunction = [](std::shared_ptr<cudf::io::datasource> dataSource,
                            rmm::cuda_stream_view stream) {
@@ -285,54 +309,84 @@ ByteRangeFetch fetchByteRangesAsync(
   auto iter = cuda::make_zip_iterator(
       ioOffsets.begin(), ioSizes.begin(), destinations.begin());
 
+  using HostReadBuffer = std::unique_ptr<cudf::io::datasource::buffer>;
+
   std::vector<std::future<size_t>> deviceReadTasks;
-  std::vector<std::future<size_t>> hostReadTasks;
+  std::vector<std::future<HostReadBuffer>> hostReadTasks;
   deviceReadTasks.reserve(ioOffsets.size());
   hostReadTasks.reserve(ioOffsets.size());
 
-  // device_read_async is not guaranteed to follow stream-ordering (see
-  // datasource API docs)
-  stream.synchronize();
+  std::vector<HostReadBuffer> hostBuffers;
+  std::vector<const void*> copySources;
+  std::vector<void*> copyDestinations;
+  std::vector<size_t> copySizes;
+  copyDestinations.reserve(ioOffsets.size());
+  copySizes.reserve(ioOffsets.size());
 
+  // Submit each driver's host reads together to improve pipelining.
   {
-    std::lock_guard<std::mutex> lock(ioBatchMutex());
+    std::lock_guard<std::mutex> lock(hostReadMutex());
 
     std::for_each(iter, iter + ioOffsets.size(), [&](const auto& tuple) {
       const auto ioOffset = cuda::std::get<0>(tuple);
       const auto ioSize = cuda::std::get<1>(tuple);
       const auto dest = cuda::std::get<2>(tuple);
 
-      if (dataSource->supports_device_read() and
-          dataSource->is_device_read_preferred(ioSize)) {
-        deviceReadTasks.emplace_back(
-            dataSource->device_read_async(ioOffset, ioSize, dest, stream));
-      } else {
-        // TODO(mh): We can't yet guarantee (without a safe thread pool) that
-        // all `cudaMemcpyAsync`s will be launched by the time we release the
-        // mutex. That said, this is a rare usecase as host-buffer data should
-        // prefer using a `BufferedInputDataSource` datasource.
+      if (not dataSource->is_device_read_preferred(ioSize)) {
         hostReadTasks.emplace_back(
-            std::async(
-                std::launch::async,
-                [dataSource, ioOffset, ioSize, dest, stream]() {
-                  auto hostBuffer = dataSource->host_read(ioOffset, ioSize);
-                  CUDF_CUDA_TRY(cudaMemcpyAsync(
-                      dest,
-                      hostBuffer->data(),
-                      hostBuffer->size(),
-                      cudaMemcpyDefault,
-                      stream.value()));
-                  return ioSize;
-                }));
+            std::async(std::launch::async, [dataSource, ioOffset, ioSize]() {
+              return dataSource->host_read(ioOffset, ioSize);
+            }));
+        copyDestinations.push_back(dest);
+        copySizes.push_back(ioSize);
       }
     });
   }
 
-  auto syncFunction = [](decltype(hostReadTasks)&& hostReadTasks,
-                         decltype(deviceReadTasks)&& deviceReadTasks) {
+  if (not hostReadTasks.empty()) {
+    copySources.reserve(hostReadTasks.size());
+    hostBuffers.reserve(hostReadTasks.size());
     for (auto& task : hostReadTasks) {
-      task.get();
+      hostBuffers.emplace_back(task.get());
+      copySources.push_back(hostBuffers.back()->data());
     }
+  }
+
+  // device_read_async is not guaranteed to follow stream ordering.
+  stream.synchronize();
+
+  // Submit each driver's device reads together to improve pipelining.
+  {
+    std::lock_guard<std::mutex> lock(deviceReadMutex());
+
+    std::for_each(iter, iter + ioOffsets.size(), [&](const auto& tuple) {
+      const auto ioOffset = cuda::std::get<0>(tuple);
+      const auto ioSize = cuda::std::get<1>(tuple);
+      const auto dest = cuda::std::get<2>(tuple);
+
+      if (dataSource->is_device_read_preferred(ioSize)) {
+        deviceReadTasks.emplace_back(
+            dataSource->device_read_async(ioOffset, ioSize, dest, stream));
+      }
+    });
+
+    if (not hostBuffers.empty()) {
+      CUDF_CUDA_TRY(
+          cudf::detail::memcpy_batch_async(
+              copyDestinations.data(),
+              copySources.data(),
+              copySizes.data(),
+              copyDestinations.size(),
+              stream));
+    }
+  }
+
+  // Ensure host buffers outlive their H2D copies.
+  if (not hostBuffers.empty()) {
+    stream.synchronize();
+  }
+
+  auto syncFunction = [](decltype(deviceReadTasks)&& deviceReadTasks) {
     for (auto& task : deviceReadTasks) {
       task.get();
     }
@@ -344,7 +398,6 @@ ByteRangeFetch fetchByteRangesAsync(
       .pending = std::async(
           std::launch::deferred,
           std::move(syncFunction),
-          std::move(hostReadTasks),
           std::move(deviceReadTasks)),
       // The read tasks were launched above and are already writing into the
       // device buffers, so they must be joined before the buffers are released.
