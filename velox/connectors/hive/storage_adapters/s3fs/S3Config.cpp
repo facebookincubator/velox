@@ -87,16 +87,11 @@ S3Config::S3Config(
 }
 
 std::optional<std::string> S3Config::endpointRegion() const {
-  auto region = config_.find(Keys::kEndpointRegion)->second;
-  if (!region.has_value()) {
-    // If region is not set, try inferring from the endpoint value for AWS
-    // endpoints.
-    auto endpointValue = endpoint();
-    if (endpointValue.has_value()) {
-      region = parseAWSStandardRegionName(endpointValue.value());
-    }
+  auto region = configuredEndpointRegion();
+  if (region.has_value()) {
+    return region;
   }
-  return region;
+  return defaultRegionForEndpoint(endpoint().value_or(""));
 }
 
 size_t S3Config::minPartSize() const {
