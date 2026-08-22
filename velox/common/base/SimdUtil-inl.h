@@ -15,6 +15,9 @@
  */
 
 #include <numeric>
+#ifdef _MSC_VER
+#include <folly/portability/Builtins.h>
+#endif
 
 #if XSIMD_WITH_NEON
 namespace xsimd::types {
@@ -1434,12 +1437,21 @@ struct Crc32<uint64_t, A> {
 
 template <typename T, typename A>
 xsimd::batch<T, A> iota(const A&) {
+#ifdef _MSC_VER
+  static const auto kMemo = [] {
+    constexpr int N = xsimd::batch<T, A>::size;
+    T tmp[N];
+    std::iota(tmp, tmp + N, T{0});
+    return xsimd::load_unaligned(tmp);
+  }();
+#else
   static const auto kMemo = ({
     constexpr int N = xsimd::batch<T, A>::size;
     T tmp[N];
     std::iota(tmp, tmp + N, 0);
     xsimd::load_unaligned(tmp);
   });
+#endif
   return kMemo;
 }
 

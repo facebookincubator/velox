@@ -15,6 +15,9 @@
  */
 
 #include "velox/common/base/ConcurrentCounter.h"
+#ifdef _WIN32
+#include "velox/common/base/windows/FollyConcurrencyCompat.h"
+#endif
 
 #include <fmt/format.h>
 #include <folly/Random.h>
