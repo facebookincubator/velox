@@ -17,9 +17,10 @@
 
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <span>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -30,26 +31,19 @@
 
 namespace facebook::nimble::test {
 
-/// Encodes values and returns an alphabet reading them back. The returned
-/// alphabet owns the buffer holding its encoded bytes, so callers do not have
-/// to keep one alive themselves.
+/// Encodes values and returns an alphabet reading them back.
 template <typename T>
 std::shared_ptr<const SharedDictionaryAlphabet> createSharedDictionaryAlphabet(
     std::span<const T> values,
     std::span<const EncodingType> candidateEncodings,
     velox::memory::MemoryPool* pool) {
-  struct OwnedAlphabet {
-    Buffer buffer;
-    std::optional<SharedDictionaryAlphabet> alphabet;
-
-    explicit OwnedAlphabet(velox::memory::MemoryPool* pool) : buffer{*pool} {}
-  };
-
-  auto owned = std::make_shared<OwnedAlphabet>(pool);
-  const auto encoded = SharedDictionaryAlphabet::encode<T>(
-      values, candidateEncodings, owned->buffer);
-  owned->alphabet.emplace(encoded, Encoding::Options{}, pool);
-  return {owned, &owned->alphabet.value()};
+  Buffer buffer{*pool};
+  const auto encoded =
+      SharedDictionaryAlphabet::encode<T>(values, candidateEncodings, buffer);
+  auto encodedAlphabetOwner = std::make_shared<const std::string>(encoded);
+  const std::string_view encodedAlphabet{*encodedAlphabetOwner};
+  return SharedDictionaryAlphabet::create(
+      encodedAlphabet, std::move(encodedAlphabetOwner), pool);
 }
 
 class TestSharedDictionarySelectionPolicy final
