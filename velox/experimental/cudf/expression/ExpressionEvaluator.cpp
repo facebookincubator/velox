@@ -413,6 +413,7 @@ class CastFunction : public CudfFunction {
   enum class CastMode {
     kFixedWidth,
     kTimestampToTimestampWithTimeZone,
+    kTimestampToString,
   };
 
   CastFunction(const core::TypedExprPtr& expr) {
@@ -423,6 +424,12 @@ class CastFunction : public CudfFunction {
     const auto& dstVeloxType = expr->type();
 
     if (srcVeloxType->kind() == TypeKind::TIMESTAMP &&
+        dstVeloxType->kind() == TypeKind::VARCHAR) {
+      // cudf::is_supported_cast has no timestamp->string path, so this needs
+      // cudf::strings::from_timestamps rather than cudf::cast.
+      castMode_ = CastMode::kTimestampToString;
+    } else if (
+        srcVeloxType->kind() == TypeKind::TIMESTAMP &&
         isTimestampWithTimeZoneType(dstVeloxType)) {
       // eval packs UTC millis with the session zone key; the session timezone
       // and adjust flag live in context_, which is set after construction, so
@@ -496,6 +503,29 @@ class CastFunction : public CudfFunction {
             zoneScalar,
             cudf::binary_operator::BITWISE_OR,
             cudf::data_type{cudf::type_id::INT64},
+            stream,
+            mr);
+      }
+      case CastMode::kTimestampToString: {
+        // Presto renders a TIMESTAMP as "YYYY-MM-DD HH:MM:SS.mmm" -- space
+        // separator, exactly three fractional digits, no zone suffix -- and does
+        // so independently of the session timezone. Measured on CPU across the
+        // fixture's full range (1883 to 2262, including sub-millisecond rows)
+        // under four session zones before writing this.
+        //
+        // Reduce to milliseconds first: the fractional field is fixed at three
+        // digits, so rendering a microsecond- or nanosecond-resolution column
+        // directly would silently drop precision rather than round it the way the
+        // reader does.
+        auto millisTs = cudf::cast(
+            inputCol,
+            cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
+            stream,
+            mr);
+        return cudf::strings::from_timestamps(
+            millisTs->view(),
+            "%Y-%m-%d %H:%M:%S.%3f",
+            cudf::strings_column_view{},
             stream,
             mr);
       }
@@ -3170,6 +3200,13 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
     const auto& dstType = expr->type();
     if (srcType == nullptr || dstType == nullptr) {
       return false;
+    }
+    // TIMESTAMP -> VARCHAR is handled by CastFunction via
+    // cudf::strings::from_timestamps; cudf::cast cannot express it, so
+    // is_supported_cast below would decline it.
+    if (srcType->kind() == TypeKind::TIMESTAMP &&
+        dstType->kind() == TypeKind::VARCHAR) {
+      return true;
     }
     // TIMESTAMP -> TIMESTAMP WITH TIME ZONE is handled by CastFunction, which
     // shifts the wall-clock instant to UTC per the session timezone and packs
