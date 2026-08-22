@@ -20,16 +20,22 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/MetricsLogger.h"
 #include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 #include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
 #include "velox/dwio/nimble/velox/NimbleConfig.h"
+#include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
 #include "velox/dwio/nimble/writer/BufferPolicy.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 
+#include <memory>
+#include <optional>
 #include <set>
+#include <unordered_map>
+#include <vector>
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/type/Type.h"
@@ -58,6 +64,12 @@ struct WriterOptions {
   /// Property bag for storing user metadata in the file.
   std::unordered_map<std::string, std::string> metadata =
       detail::defaultMetadata();
+
+  /// Shared dictionary encoding settings.
+  /// EXPERIMENTAL: Shared dictionary encoding is not production-ready. Do not
+  /// enable for production tables without consulting the Nimble team (oncall:
+  /// dwios).
+  SharedDictionaryEncodingConfig experimentalSharedDictionaryEncoding;
 
   /// Enable column statistics collection. When false, the writer skips
   /// collecting per-column statistics, reducing write CPU cost.

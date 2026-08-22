@@ -17,6 +17,7 @@
 add_library(
   nimble_writer
   ${CMAKE_CURRENT_SOURCE_DIR}/../velox/ChunkedStreamWriter.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../velox/SharedDictionaryConfig.cpp
   BufferPolicy.h
   EncodingLayoutTree.cpp
   EncodingSelectionPolicyFactory.cpp
@@ -53,5 +54,6 @@ target_link_libraries(
   velox_common_io
   velox_dwio_common
   velox_key_encoder
+  velox_type
   Folly::folly
 )

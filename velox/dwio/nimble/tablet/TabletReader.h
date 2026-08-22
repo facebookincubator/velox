@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "folly/Synchronized.h"
+#include "folly/container/F14Map.h"
 #include "velox/common/caching/FileHandle.h"
 #include "velox/common/file/File.h"
 #include "velox/common/io/Options.h"
@@ -66,6 +67,13 @@ namespace facebook::nimble {
 class SharedDictionaryReaderFactory;
 class SharedDictionaryAlphabet;
 class ExternalDictionaryResolver;
+
+/// Nimble-specific reader options carried through Velox common ReaderOptions.
+class NimbleReaderOptions : public velox::dwio::common::FormatSpecificOptions {
+ public:
+  /// Resolves External shared integer dictionaries referenced by this file.
+  std::shared_ptr<const ExternalDictionaryResolver> externalDictionaryResolver;
+};
 
 namespace test {
 class TabletReaderTestHelper;
@@ -200,7 +208,8 @@ class TabletReader {
     uint32_t maxCacheEntrySize{1U << velox::cache::SsdRun::kSizeBits};
 
     /// Resolves External shared integer dictionaries referenced by this file.
-    std::shared_ptr<const ExternalDictionaryResolver> externalResolver;
+    std::shared_ptr<const ExternalDictionaryResolver>
+        externalDictionaryResolver;
   };
 
   /// Compute checksum from the beginning of the file all the way to footer
@@ -396,7 +405,7 @@ class TabletReader {
   StripeIdentifier stripeIdentifier(uint32_t stripeIndex) const;
 
   /// Returns whether any value stream uses a file or external dictionary.
-  bool hasGlobalDictionaries() const;
+  bool hasFileOrExternalDictionaries() const;
 
   /// Returns whether any value stream uses a stripe dictionary.
   bool hasStripeDictionaries() const;
@@ -405,9 +414,9 @@ class TabletReader {
   std::optional<uint32_t> stripeDictionaryStreamId(
       uint32_t valueStreamId) const;
 
-  /// Returns stripe-local dictionary streams for the supplied value streams.
-  /// Returns empty when none uses a stripe dictionary.
-  std::vector<std::optional<uint32_t>> stripeDictionaryStreamIds(
+  /// Returns value stream to stripe-local dictionary stream bindings. Returns
+  /// empty when none of the supplied value streams uses a stripe dictionary.
+  folly::F14FastMap<uint32_t, uint32_t> stripeDictionaryStreamIds(
       std::span<const uint32_t> valueStreamIds) const;
 
   /// Resolves the file or external alphabet bound to a value stream.

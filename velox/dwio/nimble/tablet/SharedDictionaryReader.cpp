@@ -59,22 +59,20 @@ std::optional<uint32_t> SharedDictionaryReaderFactory::dictionaryStreamId(
       : std::optional<uint32_t>{reference->dictionaryId};
 }
 
-std::vector<std::optional<uint32_t>>
+folly::F14FastMap<uint32_t, uint32_t>
 SharedDictionaryReaderFactory::dictionaryStreamIds(
     std::span<const uint32_t> valueStreamIds) const {
   if (catalog_.stripeDictionaryReferences().empty()) {
     return {};
   }
 
-  std::vector<std::optional<uint32_t>> dictionaryStreamIds;
-  for (size_t i = 0; i < valueStreamIds.size(); ++i) {
+  folly::F14FastMap<uint32_t, uint32_t> dictionaryStreamIds;
+  dictionaryStreamIds.reserve(valueStreamIds.size());
+  for (const auto valueStreamId : valueStreamIds) {
     const auto* reference =
-        catalog_.findStripeDictionaryReference(valueStreamIds[i]);
+        catalog_.findStripeDictionaryReference(valueStreamId);
     if (reference != nullptr) {
-      if (dictionaryStreamIds.empty()) {
-        dictionaryStreamIds.resize(valueStreamIds.size());
-      }
-      dictionaryStreamIds[i] = reference->dictionaryId;
+      dictionaryStreamIds.emplace(valueStreamId, reference->dictionaryId);
     }
   }
   return dictionaryStreamIds;

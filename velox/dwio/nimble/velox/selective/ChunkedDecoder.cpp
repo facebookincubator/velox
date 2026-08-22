@@ -20,6 +20,7 @@
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/compression/Compression.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 
@@ -29,6 +30,16 @@ namespace facebook::nimble {
 
 using namespace facebook::velox;
 using velox::common::testutil::TestValue;
+
+void ChunkedDecoder::ensureSharedDictionaryAlphabet() {
+  if (dictionaryAlphabet_ != nullptr) {
+    return;
+  }
+  NIMBLE_CHECK_NOT_NULL(dictionaryAlphabetLoader_);
+  dictionaryAlphabet_ = dictionaryAlphabetLoader_();
+  dictionaryAlphabetLoader_ = nullptr;
+  NIMBLE_CHECK_NOT_NULL(dictionaryAlphabet_);
+}
 
 bool ChunkedDecoder::loadNextChunk(const ChunkBoundaryCallback& onChunkLoaded) {
   auto ret = ensureInput(kChunkHeaderSize);
@@ -76,8 +87,24 @@ bool ChunkedDecoder::loadNextChunk(const ChunkBoundaryCallback& onChunkLoaded) {
   // Copy, not reference.
   auto options = encodingFactory_->options();
   options.decodingStats = decodingStats_;
-  encoding_ =
-      encodingFactory_->create(*pool_, data, stringBufferFactory, options);
+  const auto hasDictionaryBinding =
+      dictionaryAlphabet_ != nullptr || dictionaryAlphabetLoader_ != nullptr;
+  if (hasDictionaryBinding) {
+    NIMBLE_CHECK(
+        stringDecoderZeroCopy_,
+        "Shared dictionary encoding requires non-legacy encoding dispatch.");
+    ensureSharedDictionaryAlphabet();
+    NIMBLE_CHECK_NOT_NULL(dictionaryAlphabet_);
+    options.sharedDictionaryAlphabet = dictionaryAlphabet_;
+    // The legacy factory has no SharedDictionary concrete type. Use the native
+    // factory for dictionary-bound streams so nullable children can also use
+    // the alphabet.
+    encoding_ =
+        EncodingFactory().create(*pool_, data, stringBufferFactory, options);
+  } else {
+    encoding_ =
+        encodingFactory_->create(*pool_, data, stringBufferFactory, options);
+  }
   remainingValues_ = encoding_->rowCount();
   NIMBLE_CHECK_GT(remainingValues_, 0);
   VLOG(1) << encoding_->debugString();
