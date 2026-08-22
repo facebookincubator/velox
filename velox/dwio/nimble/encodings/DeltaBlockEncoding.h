@@ -24,6 +24,7 @@
 #include <type_traits>
 
 #include <fmt/format.h>
+#include <folly/CPortability.h>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -461,7 +462,10 @@ std::string_view DeltaBlockEncoding<T>::encode(
     uint64_t maxDelta{0};
     for (uint32_t i = start + 1; i < end; ++i) {
       const auto curr = DeltaBlockEncoding<T>::toOrdered(values[i]);
-      NIMBLE_CHECK_GE(curr, prev, "DeltaBlock requires non-decreasing values.");
+      if (FOLLY_UNLIKELY(curr < prev)) {
+        NIMBLE_INCOMPATIBLE_ENCODING(
+            "DeltaBlock requires non-decreasing values.");
+      }
       maxDelta = std::max(maxDelta, curr - prev);
       prev = curr;
     }
