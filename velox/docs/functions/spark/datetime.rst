@@ -263,6 +263,32 @@ These functions support TIMESTAMP and DATE input types.
         SELECT make_ym_interval(2); -- 2-0
         SELECT make_ym_interval(); -- 0-0
 
+.. spark:function:: make_interval([years[, months[, weeks[, days[, hours[, mins[, secs]]]]]]]) -> interval
+
+    Make a calendar interval from individual fields. Returns a
+    CalendarInterval (packed int128) with three components: months (int32),
+    days (int32), and microseconds (int64).
+
+    All arguments default to 0. The ``secs`` argument is DECIMAL(p, 6) where
+    the unscaled value represents microseconds.
+
+    Computation:
+      - totalMonths = years * 12 + months
+      - totalDays = weeks * 7 + days
+      - microseconds = hours * MICROS_PER_HOUR + mins * MICROS_PER_MINUTE + secs
+
+    Throws an error when inputs lead to integer overflow. ::
+
+        SELECT make_interval(1, 2, 3, 4, 5, 6, 7.89); -- 1 years 2 months 25 days 5 hours 6 minutes 7.89 seconds
+        SELECT make_interval(1, 6); -- 1 years 6 months
+        SELECT make_interval(); -- 0 seconds
+
+    .. note::
+
+       Date/timestamp arithmetic expressions that consume CalendarInterval
+       (e.g., ``date + make_interval(...)``) are not yet supported natively
+       in Velox and will fall back to Spark execution.
+
 .. spark:function:: minute(timestamp) -> integer
 
     Returns the minutes of ``timestamp``, subject to the session timezone.
