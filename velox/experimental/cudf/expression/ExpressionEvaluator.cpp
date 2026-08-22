@@ -32,6 +32,7 @@
 #include "velox/expression/ExprOptimizer.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
@@ -1421,12 +1422,30 @@ std::unique_ptr<cudf::column> maybeConvertToSessionLocal(
   return toLocalTimestamp(input, context.sessionTimezone, stream, mr);
 }
 
+// The local wall clock to read a datetime field from, for either input type: a
+// packed TIMESTAMP WITH TIME ZONE is shifted by each row's OWN zone key, while a
+// plain TIMESTAMP is shifted by the one session zone. Returns nullptr when no
+// shift is needed (the caller then uses the input column as-is).
+std::unique_ptr<cudf::column> localForFieldExtraction(
+    const cudf::column_view& input,
+    bool inputIsTswtz,
+    const CudfDateTimeContext& context,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (inputIsTswtz) {
+    return tswtzLocalMillisTimestamp(input, stream, mr);
+  }
+  return maybeConvertToSessionLocal(input, context, stream, mr);
+}
+
+
 class ExtractComponentFunction : public CudfFunction {
  public:
   ExtractComponentFunction(
       const core::TypedExprPtr& expr,
       cudf::datetime::datetime_component component)
-      : component_(component) {
+      : component_(component),
+        inputIsTswtz_(isTimestampWithTimeZoneType(expr->inputs()[0]->type())) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 1, "extract expects exactly 1 input column");
   }
@@ -1436,12 +1455,22 @@ class ExtractComponentFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    // second and millisecond are sub-minute fields: every timezone offset is a
-    // whole number of minutes, so they are unaffected by the session timezone.
-    // The CPU path extracts them without applying the timezone, so skip the
-    // conversion here to match.
     std::unique_ptr<cudf::column> local;
-    if (component_ != cudf::datetime::datetime_component::SECOND &&
+    if (inputIsTswtz_) {
+      // A packed TIMESTAMP WITH TIME ZONE carries its own zone key per row, so
+      // the session zone is irrelevant and the instant must be unpacked before
+      // any field can be read. Unlike the TIMESTAMP path below there is no
+      // sub-minute shortcut: the shift is applied even for SECOND/MILLISECOND,
+      // because historical LMT offsets are not always a whole number of minutes
+      // (this fixture reaches 1883 and 1919), so skipping it could shift a
+      // second.
+      local = tswtzLocalMillisTimestamp(inputCol, stream, mr);
+    } else if (
+        // second and millisecond are sub-minute fields: every *modern* timezone
+        // offset is a whole number of minutes, so they are unaffected by the
+        // session timezone. The CPU path extracts them without applying the
+        // timezone, so skip the conversion here to match.
+        component_ != cudf::datetime::datetime_component::SECOND &&
         component_ != cudf::datetime::datetime_component::MILLISECOND) {
       local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
     }
@@ -1451,6 +1480,7 @@ class ExtractComponentFunction : public CudfFunction {
 
  private:
   cudf::datetime::datetime_component component_;
+  bool inputIsTswtz_{false};
 };
 
 // Builds an ExtractComponentFunction for a fixed datetime component, avoiding a
@@ -1468,7 +1498,8 @@ struct ExtractComponentFactory {
 
 class QuarterFunction : public CudfFunction {
  public:
-  explicit QuarterFunction(const core::TypedExprPtr& expr) {
+  explicit QuarterFunction(const core::TypedExprPtr& expr)
+      : inputIsTswtz_(isTimestampWithTimeZoneType(expr->inputs()[0]->type())) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 1, "quarter expects exactly 1 input column");
   }
@@ -1478,15 +1509,20 @@ class QuarterFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    auto local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
+    auto local = localForFieldExtraction(
+        inputCol, inputIsTswtz_, context_, stream, mr);
     return cudf::datetime::extract_quarter(
         local ? local->view() : inputCol, stream, mr);
   }
+
+ private:
+  bool inputIsTswtz_{false};
 };
 
 class DayOfYearFunction : public CudfFunction {
  public:
-  explicit DayOfYearFunction(const core::TypedExprPtr& expr) {
+  explicit DayOfYearFunction(const core::TypedExprPtr& expr)
+      : inputIsTswtz_(isTimestampWithTimeZoneType(expr->inputs()[0]->type())) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 1, "day_of_year expects exactly 1 input column");
   }
@@ -1496,15 +1532,20 @@ class DayOfYearFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    auto local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
+    auto local = localForFieldExtraction(
+        inputCol, inputIsTswtz_, context_, stream, mr);
     return cudf::datetime::day_of_year(
         local ? local->view() : inputCol, stream, mr);
   }
+
+ private:
+  bool inputIsTswtz_{false};
 };
 
 class WeekFunction : public CudfFunction {
  public:
-  explicit WeekFunction(const core::TypedExprPtr& expr) {
+  explicit WeekFunction(const core::TypedExprPtr& expr)
+      : inputIsTswtz_(isTimestampWithTimeZoneType(expr->inputs()[0]->type())) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 1, "week expects exactly 1 input column");
   }
@@ -1514,7 +1555,8 @@ class WeekFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    auto local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
+    auto local = localForFieldExtraction(
+        inputCol, inputIsTswtz_, context_, stream, mr);
     auto weekStrings = cudf::strings::from_timestamps(
         local ? local->view() : inputCol,
         "%V",
@@ -1527,11 +1569,15 @@ class WeekFunction : public CudfFunction {
         stream,
         mr);
   }
+
+ private:
+  bool inputIsTswtz_{false};
 };
 
 class YearOfWeekFunction : public CudfFunction {
  public:
-  explicit YearOfWeekFunction(const core::TypedExprPtr& expr) {
+  explicit YearOfWeekFunction(const core::TypedExprPtr& expr)
+      : inputIsTswtz_(isTimestampWithTimeZoneType(expr->inputs()[0]->type())) {
     VELOX_CHECK_EQ(
         expr->inputs().size(),
         1,
@@ -1543,7 +1589,8 @@ class YearOfWeekFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    auto local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
+    auto local = localForFieldExtraction(
+        inputCol, inputIsTswtz_, context_, stream, mr);
     auto yearStrings = cudf::strings::from_timestamps(
         local ? local->view() : inputCol,
         "%G",
@@ -1556,6 +1603,9 @@ class YearOfWeekFunction : public CudfFunction {
         stream,
         mr);
   }
+
+ private:
+  bool inputIsTswtz_{false};
 };
 
 class LengthFunction : public CudfFunction {
@@ -2250,6 +2300,15 @@ std::shared_ptr<CudfFunction> createCudfFunction(
 bool registerBuiltinFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
+  // Must precede any FunctionSignatureBuilder that names "timestamp with time
+  // zone": build() resolves the type by name and throws
+  // "Type doesn't exist: 'TIMESTAMP WITH TIME ZONE'" if it is not registered yet.
+  // registerTimezoneFunctions() below also calls this, but it runs at the END of
+  // this function -- so the extract family's TSWTZ signature, registered several
+  // hundred lines earlier, aborted the worker at startup before this line
+  // existed. registerCustomType is idempotent, so calling it twice is fine.
+  registerTimestampWithTimeZoneType();
+
   registerCudfFunction(
       prefix + "split",
       [](const std::string&,
@@ -2442,6 +2501,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .constantArgumentType("integer")
            .build()});
 
+  // The TSWTZ entry was missing, so the whole extract family declined on a
+  // TIMESTAMP WITH TIME ZONE argument -- the exact inverse of to_unixtime and
+  // to_iso8601, which were TSWTZ-only. ExtractComponentFunction now unpacks a
+  // packed input via tswtzLocalMillisTimestamp.
   const std::vector<exec::FunctionSignaturePtr> timestampDateIntegerSignatures{
       FunctionSignatureBuilder()
           .returnType("integer")
@@ -2450,6 +2513,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       FunctionSignatureBuilder()
           .returnType("integer")
           .argumentType("date")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("integer")
+          .argumentType("timestamp with time zone")
           .build()};
 
   registerCudfFunction(

@@ -2092,6 +2092,13 @@ bool parseDatetimeCanEvaluate(const core::TypedExprPtr& expr) {
 
 } // namespace
 
+std::unique_ptr<cudf::column> tswtzLocalMillisTimestamp(
+    const cudf::column_view& packed,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  return std::move(localAndOffset(packed, stream, mr).localMillis);
+}
+
 void registerTimezoneFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
