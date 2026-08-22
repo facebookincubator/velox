@@ -284,13 +284,9 @@ std::string_view EncodingFactory::encode(
           selection, castedValues, buffer, options);
     }
     case EncodingType::SharedDictionary: {
-      if constexpr (isIntegralType<T>() && !std::is_same_v<T, bool>) {
-        return SharedDictionaryEncoding<T>::encode(
-            selection, castedValues, buffer, options);
-      }
       NIMBLE_INCOMPATIBLE_ENCODING(
-          "SharedDictionary encoding only supports non-bool integer data types, got {}.",
-          TypeTraits<T>::dataType);
+          "SharedDictionary encoding requires writer-provided dictionary "
+          "indices.");
     }
     case EncodingType::FixedBitWidth: {
       if constexpr (isNumericType<physicalType>()) {

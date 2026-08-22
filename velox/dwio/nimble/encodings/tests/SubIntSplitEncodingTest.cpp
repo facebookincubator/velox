@@ -167,7 +167,10 @@ std::unique_ptr<nimble::Encoding> decodeEncoding(
     std::string_view encoded,
     velox::memory::MemoryPool& pool) {
   return nimble::EncodingFactory().create(
-      pool, encoded, [](uint32_t) { return nullptr; });
+      pool,
+      encoded,
+      [](uint32_t) { return nullptr; },
+      nimble::Encoding::Options{});
 }
 
 template <typename T>
