@@ -136,8 +136,16 @@ CudfHiveDataSource::CudfHiveDataSource(
     // The filter is already optimized and constant folded above, so compile it
     // directly.
     auto const remainingFilterType = getTableRowType();
+    // The connector exposes the session timezone directly rather than through a
+    // QueryConfig.
+    const velox::cudf_velox::CudfDateTimeContext context{
+        connectorQueryCtx_->sessionTimezone(),
+        connectorQueryCtx_->adjustTimestampToTimezone(),
+    };
     cudfRemainingFilterExpression_ = createCudfExpression(
-        optimizedRemainingFilter_, remainingFilterType, pool_);
+        optimizedRemainingFilter_, remainingFilterType, pool_, context);
+    // TODO(kn): Get column names and subfields from remaining filter and add to
+    // readColumnNames_
   }
 
   // Build a combined AST for all subfield filters once. This is query-constant
