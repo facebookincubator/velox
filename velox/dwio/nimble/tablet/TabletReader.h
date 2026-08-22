@@ -63,6 +63,10 @@
 
 namespace facebook::nimble {
 
+class SharedDictionaryReaderFactory;
+class SharedDictionaryAlphabet;
+class ExternalDictionaryResolver;
+
 namespace test {
 class TabletReaderTestHelper;
 } // namespace test
@@ -119,6 +123,8 @@ using index::ClusterIndex;
 ///  the stream identifier provided in the input vector.
 class TabletReader {
  public:
+  ~TabletReader();
+
   /// Options for configuring TabletReader behavior.
   struct Options {
     /// Speculative tail read size (0 = adaptive mode that reads postscript
@@ -192,6 +198,9 @@ class TabletReader {
     /// bytes bypass the async data cache. Defaults to the largest entry an
     /// SsdRun can describe, so every cached entry can reach SSD.
     uint32_t maxCacheEntrySize{1U << velox::cache::SsdRun::kSizeBits};
+
+    /// Resolves External shared integer dictionaries referenced by this file.
+    std::shared_ptr<const ExternalDictionaryResolver> externalResolver;
   };
 
   /// Compute checksum from the beginning of the file all the way to footer
@@ -386,7 +395,28 @@ class TabletReader {
 
   StripeIdentifier stripeIdentifier(uint32_t stripeIndex) const;
 
+  /// Returns whether any value stream uses a file or external dictionary.
+  bool hasGlobalDictionaries() const;
+
+  /// Returns whether any value stream uses a stripe dictionary.
+  bool hasStripeDictionaries() const;
+
+  /// Returns the stripe-local dictionary stream used by a value stream.
+  std::optional<uint32_t> stripeDictionaryStreamId(
+      uint32_t valueStreamId) const;
+
+  /// Returns stripe-local dictionary streams for the supplied value streams.
+  /// Returns empty when none uses a stripe dictionary.
+  std::vector<std::optional<uint32_t>> stripeDictionaryStreamIds(
+      std::span<const uint32_t> valueStreamIds) const;
+
+  /// Resolves the file or external alphabet bound to a value stream.
+  std::shared_ptr<const SharedDictionaryAlphabet> resolveDictionaryAlphabet(
+      uint32_t valueStreamId) const;
+
  private:
+  friend class SharedDictionaryReaderFactory;
+
   TabletReader(
       std::shared_ptr<velox::ReadFile> readFile,
       MemoryPool& pool,
@@ -501,8 +531,10 @@ class TabletReader {
 
   void initFeatures();
 
-  // Returns the list of optional section names to preload: the user-specified
-  // sections plus the index section if present.
+  // Creates dictionary lookup state from the preloaded optional section.
+  void initSharedDictionaries(const Options& options);
+
+  // Returns user-specified and built-in optional sections to preload.
   std::vector<std::string> preloadSectionNames(const Options& options) const;
 
   // Reads and decompresses a metadata section via MetadataInput.
@@ -579,6 +611,9 @@ class TabletReader {
   mutable folly::Synchronized<
       std::unordered_map<std::string, std::unique_ptr<MetadataBuffer>>>
       optionalSectionsCache_;
+
+  std::unique_ptr<const SharedDictionaryReaderFactory>
+      sharedDictionaryReaderFactory_;
 
   friend class TabletHelper;
   friend class test::TabletReaderTestHelper;
