@@ -34,6 +34,7 @@
 #include "velox/common/Casts.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/DataTypeDispatch.h"
+#include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryTypes.h"
@@ -183,11 +184,15 @@ class PreservedDictionaryEncodingSelectionPolicy final
 /// the stream; the rest are decoded once into pool backed storage, so any
 /// encoding can store an alphabet. Alphabets stay uncompressed either way,
 /// because compression is invisible to supportsEncodingView() and would make
-/// that choice unreliable. Like every other Nimble encoding, the alphabet only
-/// views the encoded bytes, so the caller must keep them alive for as long as
-/// the alphabet is used.
+/// that choice unreliable.
 class SharedDictionaryAlphabet {
  public:
+  /// Creates an alphabet backed by bytes kept alive by encodedAlphabetOwner.
+  static std::shared_ptr<const SharedDictionaryAlphabet> create(
+      std::string_view encodedAlphabet,
+      std::shared_ptr<const void> encodedAlphabetOwner,
+      velox::memory::MemoryPool* pool);
+
   /// Serializes alphabet entries into the form the constructor accepts.
   ///
   /// candidateEncodings restricts the encoding selection policy. An empty list
@@ -229,38 +234,6 @@ class SharedDictionaryAlphabet {
     return estimate.value();
   }
 
-  /// Wraps a serialized alphabet in a view that reads entries by index.
-  SharedDictionaryAlphabet(
-      std::string_view encoded,
-      const Encoding::Options& options,
-      velox::memory::MemoryPool* pool)
-      : dataType_{EncodingPrefix::dataType(encoded)},
-        encodingType_{EncodingPrefix::encodingType(encoded)},
-        entryCount_{
-            EncodingPrefix::readRowCount(encoded, options.useVarintRowCount)},
-        entryPayload_{*velox::checkedNotNull(pool)},
-        entries_{nullptr},
-        entryView_{
-            supportsEncodingView(encodingType_)
-                ? createEncodingView(encoded, pool, options)
-                : nullptr} {
-    if (entryView_ != nullptr || entryCount_ == 0) {
-      return;
-    }
-    // No view for this encoding, so decode every entry once and serve lookups
-    // from the decoded buffer instead.
-    auto encoding = EncodingFactory{options}.create(
-        *pool, encoded, [this](uint32_t size) -> void* {
-          return entryPayload_.reserve(size);
-        });
-    NIMBLE_CHECK_EQ(
-        encoding->dataType(),
-        dataType_,
-        "Shared dictionary alphabet has an inconsistent data type.");
-    NIMBLE_DCHECK_EQ(encoding->rowCount(), entryCount_);
-    decodeEntries(*encoding, pool);
-  }
-
   /// Returns the Nimble data type shared by all alphabet entries.
   DataType dataType() const {
     return dataType_;
@@ -275,16 +248,6 @@ class SharedDictionaryAlphabet {
   /// it so a rewritten local dictionary keeps the layout it came from.
   EncodingType encodingType() const {
     return encodingType_;
-  }
-
-  /// Testing hook: true when lookups read directly from an EncodingView.
-  bool testingUsesEncodingView() const {
-    return entryView_ != nullptr;
-  }
-
-  /// Testing hook: true when lookups read from entries decoded up front.
-  bool testingUsesDecodedEntries() const {
-    return entries_ != nullptr;
   }
 
   /// Returns the entry stored at index. T must match dataType().
@@ -321,7 +284,23 @@ class SharedDictionaryAlphabet {
     }
   }
 
+  /// Testing hook: true when lookups read directly from an EncodingView.
+  bool testingUsesEncodingView() const {
+    return entryView_ != nullptr;
+  }
+
+  /// Testing hook: true when lookups read from entries decoded up front.
+  bool testingUsesDecodedEntries() const {
+    return entries_ != nullptr;
+  }
+
  private:
+  SharedDictionaryAlphabet(
+      std::string_view encoded,
+      const Encoding::Options& options,
+      std::shared_ptr<const void> encodedAlphabetOwner,
+      velox::memory::MemoryPool* pool);
+
   void decodeEntries(Encoding& encoding, velox::memory::MemoryPool* pool) {
     NIMBLE_RETURN_BY_DATA_TYPE_OR(
         // The macro's default case handles Undefined.
@@ -395,9 +374,11 @@ class SharedDictionaryAlphabet {
         "Shared dictionary alphabet has unexpected type.");
   }
 
+  // Keeps borrowed encoded bytes alive when create() receives an owner.
+  const std::shared_ptr<const void> encodedAlphabetOwner_;
   const DataType dataType_;
   const EncodingType encodingType_;
-  const uint32_t entryCount_;
+  uint32_t entryCount_{0};
   // entryView_ and entries_ are mutually exclusive lookup modes. entryPayload_
   // is used by decoded entry storage when variable-width values in entries_
   // need owned payload bytes.
@@ -530,7 +511,9 @@ SharedDictionaryEncoding<T>::SharedDictionaryEncoding(
     const Encoding::Options& options)
     : TypedEncoding<T, physicalType>{pool, data, options} {
   static_assert(isIntegralType<T>() && !std::is_same_v<T, bool>);
-  NIMBLE_CHECK_NOT_NULL(options.sharedDictionaryResolver);
+  NIMBLE_CHECK_NOT_NULL(
+      options.sharedDictionaryResolver,
+      "Shared dictionary encoding requires a resolver.");
 
   const char* pos = data.data() + this->dataOffset();
   scope_ = readSharedDictionaryScope(data, pos);
@@ -688,7 +671,9 @@ std::string_view SharedDictionaryEncoding<T>::slice(
   NIMBLE_CHECK_LE(length, sourceRowCount - offset);
   NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
 
-  NIMBLE_CHECK_NOT_NULL(options.sharedDictionaryResolver);
+  NIMBLE_CHECK_NOT_NULL(
+      options.sharedDictionaryResolver,
+      "Shared dictionary slicing requires a resolver.");
   const char* pos = encoded.data() +
       EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
   const auto scope = readSharedDictionaryScope(encoded, pos);

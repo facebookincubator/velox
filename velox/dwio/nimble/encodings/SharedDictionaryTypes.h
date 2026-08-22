@@ -87,12 +87,10 @@ struct SharedDictionaryEncodingInput {
 /// SharedDictionaryEncoding.h, which owns the encoding machinery it needs.
 class SharedDictionaryAlphabet;
 
-/// Resolves a dictionary ID within the current reader or writer context.
+/// Resolves a dictionary ID within the current encoding context.
 ///
-/// File-scope writers use the resolved alphabet as logical dictionary values
-/// and serialize it through Nimble encoding for the file catalog. They do not
-/// accept or reuse resolver-provided encoded bytes. External-scope dictionaries
-/// are resolver-owned and are not serialized into the Nimble file.
+/// Decoders bind this to the file and stripe being read. Writers use it for
+/// prebuilt alphabets supplied outside the value stream being encoded.
 class SharedDictionaryResolver {
  public:
   virtual ~SharedDictionaryResolver() = default;
