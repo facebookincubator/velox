@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
@@ -76,6 +77,7 @@ class CudfAggregationSelectionTest : public ::testing::Test,
     execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
     facebook::velox::functions::prestosql::registerAllScalarFunctions();
     facebook::velox::aggregate::prestosql::registerAllAggregateFunctions();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
 
     rowType_ = ROW({

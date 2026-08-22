@@ -32,6 +32,7 @@ class CudfBatchConcatTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     CudfConfig::getInstance().debugEnabled = true;
+    CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 

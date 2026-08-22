@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -72,6 +73,7 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
 
     velox_filesystems::registerLocalFileSystem();
     velox_filesystems::registerAbfsFileSystem();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
 
     // TODO(mh): Register CudfAbfsDataSource when available

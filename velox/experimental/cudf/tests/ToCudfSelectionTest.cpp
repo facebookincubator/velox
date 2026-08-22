@@ -42,6 +42,7 @@ class ToCudfSelectionTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
     cudf_velox::registerCudf();
     cudf_velox::registerPrestoFunctions(
         cudf_velox::CudfConfig::getInstance().functionNamePrefix);
