@@ -17,34 +17,28 @@
 
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
-#include <cudf/scalar/scalar.hpp>
-
 namespace facebook::velox::cudf_velox::prestosql {
 
-/// plus(DATE, INTERVAL DAY TO SECOND) -> DATE.
-/// Converts the interval from milliseconds to days and adds to the date.
-/// Handles both constant and column interval inputs.
-class DatePlusIntervalFunction : public CudfFunction {
+/// Presto to_unixtime(timestamp) -> double.
+/// Returns seconds since epoch as a double. cuDF TIMESTAMP_MICROSECONDS
+/// are internally int64 us since epoch, so we reinterpret the underlying
+/// data as INT64 (zero-copy) and divide by 1e6 in a single binary operation.
+class ToUnixtimeFunction : public CudfFunction {
  public:
-  DatePlusIntervalFunction(
-      const core::TypedExprPtr& expr,
-      memory::MemoryPool* pool);
+  /// Rejects a constant timestamp argument so a to_unixtime call that
+  /// somehow reaches cuDF function selection without being constant-folded
+  /// falls back to CPU cleanly, instead of eval() indexing into an empty
+  /// inputColumns. See DateAddFunction::canEvaluate / DateTruncFunction::
+  /// canEvaluate for the same defensive pattern.
+  static bool canEvaluate(const core::TypedExprPtr& expr);
+
+  ToUnixtimeFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool);
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      [[maybe_unused]] cudf::size_type numRows,
+      cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override;
-
- private:
-  /// Pre-computed duration scalar for constant interval inputs.
-  std::unique_ptr<cudf::scalar> durationDaysLiteral_;
-  /// Pre-computed kMillisInDay scalar; populated only when the interval is a
-  /// column. Used twice per eval (modulo + division).
-  std::unique_ptr<cudf::numeric_scalar<int64_t>> millisPerDayScalar_;
-  /// Pre-computed zero scalar; populated only when the interval is a column.
-  /// Used to assert (interval % kMillisInDay) == 0.
-  std::unique_ptr<cudf::numeric_scalar<int64_t>> zeroScalar_;
 };
 
 } // namespace facebook::velox::cudf_velox::prestosql
