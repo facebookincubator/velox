@@ -40,7 +40,7 @@ namespace facebook::velox::exec::rpc {
 /// with its own ServiceRouter connections. Cross-worker coordination is
 /// handled by the backend's own admission control.
 ///
-/// The tier key comes from IRPCClient::tierKey(). Empty string means
+/// The tier key comes from AsyncRPCFunction::tierKey(). Empty string means
 /// "no tier configured" and falls back to the global default limit.
 class RPCRateLimiter {
  public:
