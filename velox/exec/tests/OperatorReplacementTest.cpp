@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 #include "velox/exec/JoinBridge.h"
-#include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/exec/Operator.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 using namespace facebook::velox;
@@ -337,10 +339,10 @@ void registerOperatorReplacement() {
 /// driver adapter and usage of custom join bridge for replaced velox
 /// join operators. It uses same custom operators from CustomJoinTest,
 /// which will emit number of input rows.
-class OperatorReplacementTest : public OperatorTestBase {
+class OperatorReplacementTest : public HiveConnectorTestBase {
  protected:
   void SetUp() override {
-    OperatorTestBase::SetUp();
+    HiveConnectorTestBase::SetUp();
     registerOperatorReplacement();
   }
 
@@ -383,4 +385,49 @@ TEST_F(OperatorReplacementTest, basic) {
   auto rightBatch = {makeSimpleRowVector(10)};
   testOperatorReplacement(
       1, leftBatch, rightBatch, "SELECT c0 FROM t LIMIT 10");
+}
+
+TEST_F(OperatorReplacementTest, mixedGroupedExecution) {
+  auto rowType = ROW({"c0"}, {INTEGER()});
+  auto vectors = makeVectors(rowType, 4, 20);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId probeScanNodeId;
+  core::PlanNodeId buildScanNodeId;
+
+  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(rowType)
+                  .capturePlanNodeId(probeScanNodeId)
+                  .hashJoin(
+                      {"c0"},
+                      {"u0"},
+                      PlanBuilder(planNodeIdGenerator, pool_.get())
+                          .tableScan(rowType)
+                          .capturePlanNodeId(buildScanNodeId)
+                          .project({"c0 AS u0"})
+                          .planNode(),
+                      "",
+                      {"c0"})
+                  .planNode();
+
+  constexpr int32_t numSplitGroups = 2;
+  std::vector<Split> probeSplits;
+  probeSplits.reserve(numSplitGroups);
+  for (int32_t i = 0; i < numSplitGroups; ++i) {
+    probeSplits.emplace_back(makeHiveConnectorSplit(filePath->getPath()), i);
+  }
+
+  ASSERT_EQ(
+      AssertQueryBuilder(plan)
+          .splits(probeScanNodeId, std::move(probeSplits))
+          .splits(
+              buildScanNodeId, {makeHiveConnectorSplit(filePath->getPath())})
+          .executionStrategy(core::ExecutionStrategy::kGrouped)
+          .groupedExecutionLeafNodeIds({probeScanNodeId})
+          .numSplitGroups(numSplitGroups)
+          .numConcurrentSplitGroups(1)
+          .countResults(),
+      160);
 }
