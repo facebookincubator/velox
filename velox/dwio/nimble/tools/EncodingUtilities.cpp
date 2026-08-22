@@ -17,9 +17,9 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
-#include "velox/dwio/nimble/encodings/SharedDictionaryTypes.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 
 namespace facebook::nimble::tools {
 namespace {
@@ -332,8 +332,6 @@ void traverseEncodings(
     }
     case EncodingType::SharedDictionary: {
       const char* pos = stream.data() + prefixSize(stream, useVarintRowCount);
-      readSharedDictionaryScope(stream, pos);
-      readSharedDictionaryId(stream, pos);
       const auto indicesOffset = static_cast<size_t>(pos - stream.data());
       NIMBLE_CHECK_LT(
           indicesOffset,
