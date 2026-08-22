@@ -17,7 +17,20 @@
 #include "velox/exec/ContainerRowSerde.h"
 
 namespace facebook::velox::aggregate {
+namespace {
+// Set isKey to false to avoid unnecessary sorting.
+const exec::ContainerRowSerdeOptions& valueSerdeOptions() {
+  static const exec::ContainerRowSerdeOptions kOptions{/*isKey=*/false};
+  return kOptions;
+}
+} // namespace
+
 void ValueList::prepareAppend(HashStringAllocator* allocator) {
+  ensureAllocations(allocator);
+  maybeFlushNullsAtBoundary(allocator);
+}
+
+void ValueList::ensureAllocations(HashStringAllocator* allocator) {
   if (!nullsBegin_) {
     nullsBegin_ = allocator->allocate(HashStringAllocator::kMinAlloc);
     nullsCurrent_ = {nullsBegin_, nullsBegin_->begin()};
@@ -27,7 +40,9 @@ void ValueList::prepareAppend(HashStringAllocator* allocator) {
     dataBegin_ = allocator->allocate(kInitialSize);
     dataCurrent_ = {dataBegin_, dataBegin_->begin()};
   }
+}
 
+void ValueList::maybeFlushNullsAtBoundary(HashStringAllocator* allocator) {
   if (size_ && size_ % 64 == 0) {
     writeLastNulls(allocator);
     lastNulls_ = 0;
@@ -65,9 +80,8 @@ void ValueList::appendNonNull(
   allocator->extendWrite(dataCurrent_, stream);
   // The stream may have a tail of a previous write.
   const auto initialSize = stream.size();
-  // Set isKey to false to avoid unnecessary sorting.
-  static const exec::ContainerRowSerdeOptions kOptions{/*isKey=*/false};
-  exec::ContainerRowSerde::serialize(values, index, stream, kOptions);
+  exec::ContainerRowSerde::serialize(
+      values, index, stream, valueSerdeOptions());
   ++size_;
   bytes_ += stream.size() - initialSize;
 
@@ -87,6 +101,55 @@ void ValueList::appendValue(
   } else {
     appendNonNull(base, decoded.index(index), allocator);
   }
+}
+
+void ValueList::appendValues(
+    const DecodedVector& decoded,
+    const SelectivityVector& rows,
+    HashStringAllocator* allocator) {
+  if (!rows.hasSelections()) {
+    return;
+  }
+  ensureAllocations(allocator);
+
+  auto& base = *decoded.base();
+  const bool mayHaveNulls = decoded.mayHaveNulls();
+
+  // We cannot hold a single data-stream write session open across the entire
+  // loop because maybeFlushNullsAtBoundary -> writeLastNulls opens its own
+  // extendWrite/finishWrite on the same allocator, which resets the
+  // allocator's internal write state.  Instead we close and reopen the data
+  // stream around each null-word boundary flush.
+  ByteOutputStream stream(allocator);
+  allocator->extendWrite(dataCurrent_, stream);
+  auto segmentStart = stream.size();
+
+  rows.applyToSelected([&](vector_size_t row) {
+    if (size_ && size_ % 64 == 0) {
+      bytes_ += stream.size() - segmentStart;
+      dataCurrent_ =
+          allocator->finishWrite(stream, std::clamp(bytes_ / 2, 24, 1024))
+              .second;
+      writeLastNulls(allocator);
+      lastNulls_ = 0;
+      allocator->ensureAvailable(sizeof(int64_t), nullsCurrent_);
+
+      allocator->extendWrite(dataCurrent_, stream);
+      segmentStart = stream.size();
+    }
+
+    if (mayHaveNulls && decoded.isNullAt(row)) {
+      lastNulls_ |= 1UL << (size_ % 64);
+    } else {
+      exec::ContainerRowSerde::serialize(
+          base, decoded.index(row), stream, valueSerdeOptions());
+    }
+    ++size_;
+  });
+
+  bytes_ += stream.size() - segmentStart;
+  dataCurrent_ =
+      allocator->finishWrite(stream, std::clamp(bytes_ / 2, 24, 1024)).second;
 }
 
 void ValueList::appendRange(
