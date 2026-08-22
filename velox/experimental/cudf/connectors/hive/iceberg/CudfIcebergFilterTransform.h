@@ -19,6 +19,7 @@
 #include <cudf/ast/expressions.hpp>
 
 #include <span>
+#include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
@@ -42,6 +43,21 @@ struct TransformedFilter {
   /// Whether the transformed filter retains a decimal literal whose storage
   /// width must match the split.
   bool requiresSplitSpecificDecimalTypes;
+
+  /// Ascending, unique indices of the injected columns whose predicates were
+  /// dropped, in the index space of the input filter.
+  std::vector<cudf::size_type> droppedInjectedColumns;
+
+  /// Whether the input filter is equivalent to `expr` conjoined with the
+  /// predicates on `droppedInjectedColumns`. When true, proving every dropped
+  /// predicate true for a split makes `expr` an exact filter for it, and
+  /// proving one false makes the filter reject every row of the split.
+  ///
+  /// False when a predicate was dropped from a position where it is not a
+  /// conjunct of the filter root, for example under a disjunction, or when
+  /// dropping it also discarded predicates over columns read from the data
+  /// file.
+  bool exactIfDroppedAreTrue;
 };
 
 /// Transforms the input filter into a sub-filter over the columns actually

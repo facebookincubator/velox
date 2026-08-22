@@ -25,6 +25,7 @@
 #include <functional>
 #include <iterator>
 #include <utility>
+#include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
@@ -57,12 +58,19 @@ class InjectedColumnFilterTransformer
   // Returns the transformed filter, handing over the nodes created while
   // transforming.
   TransformedFilter transformedFilter() && {
+    std::sort(droppedInjectedColumns_.begin(), droppedInjectedColumns_.end());
+    droppedInjectedColumns_.erase(
+        std::unique(
+            droppedInjectedColumns_.begin(), droppedInjectedColumns_.end()),
+        droppedInjectedColumns_.end());
     return TransformedFilter{
         .nodes = std::move(nodes_),
         .expr = current_.expr,
         .referencesInjectedColumn = referencesInjectedColumn_,
         .requiresSplitSpecificDecimalTypes =
-            current_.requiresSplitSpecificDecimalTypes};
+            current_.requiresSplitSpecificDecimalTypes,
+        .droppedInjectedColumns = std::move(droppedInjectedColumns_),
+        .exactIfDroppedAreTrue = exactIfDroppedAreTrue_};
   }
 
  private:
@@ -76,11 +84,19 @@ class InjectedColumnFilterTransformer
     // Whether the transformed expr retains a decimal literal whose storage
     // width must match the current split.
     bool requiresSplitSpecificDecimalTypes;
+    // Whether the input subexpression is a function of injected columns and
+    // literals only, so dropping it discards nothing else.
+    bool onlyInjectedColumns;
   };
 
   std::reference_wrapper<const cudf::ast::expression> visit(
       const cudf::ast::literal& expr) override {
-    current_ = {&expr, false, cudf::is_fixed_point(expr.get_data_type())};
+    current_ = {
+        .expr = &expr,
+        .wasRelaxed = false,
+        .requiresSplitSpecificDecimalTypes =
+            cudf::is_fixed_point(expr.get_data_type()),
+        .onlyInjectedColumns = true};
     return expr;
   }
 
@@ -93,10 +109,12 @@ class InjectedColumnFilterTransformer
         columnIndex);
     if (iter != injectedColumnIndices_.end() and *iter == columnIndex) {
       referencesInjectedColumn_ = true;
+      droppedInjectedColumns_.push_back(columnIndex);
       current_ = {
           .expr = nullptr,
           .wasRelaxed = true,
-          .requiresSplitSpecificDecimalTypes = false};
+          .requiresSplitSpecificDecimalTypes = false,
+          .onlyInjectedColumns = true};
       return expr;
     }
 
@@ -106,7 +124,8 @@ class InjectedColumnFilterTransformer
       current_ = {
           .expr = &expr,
           .wasRelaxed = false,
-          .requiresSplitSpecificDecimalTypes = false};
+          .requiresSplitSpecificDecimalTypes = false,
+          .onlyInjectedColumns = false};
       return expr;
     }
 
@@ -117,7 +136,8 @@ class InjectedColumnFilterTransformer
     current_ = {
         .expr = &rebased,
         .wasRelaxed = false,
-        .requiresSplitSpecificDecimalTypes = false};
+        .requiresSplitSpecificDecimalTypes = false,
+        .onlyInjectedColumns = false};
     return rebased;
   }
 
@@ -141,12 +161,18 @@ class InjectedColumnFilterTransformer
         transformedOperands.begin(),
         transformedOperands.end(),
         [](const auto& operand) { return operand.wasRelaxed; });
+    const auto onlyInjectedColumns = std::all_of(
+        transformedOperands.begin(),
+        transformedOperands.end(),
+        [](const auto& operand) { return operand.onlyInjectedColumns; });
 
     if (isLogicalAnd(op)) {
       VELOX_CHECK_EQ(
           operands.size(), 2, "Expected a binary cuDF AST logical AND");
       // A dropped conjunct is always true, so the conjunction reduces to the
-      // other operand, and to always true when both are dropped.
+      // other operand, and to always true when both are dropped. The dropped
+      // conjunct stays a conjunct of the filter root, so the result remains
+      // recoverable by testing it separately.
       const auto* lhs = transformedOperands[0].expr;
       const auto* rhs = transformedOperands[1].expr;
       if (lhs == nullptr or rhs == nullptr) {
@@ -156,28 +182,41 @@ class InjectedColumnFilterTransformer
             .expr = retained.expr,
             .wasRelaxed = wasRelaxed,
             .requiresSplitSpecificDecimalTypes =
-                retained.requiresSplitSpecificDecimalTypes};
+                retained.requiresSplitSpecificDecimalTypes,
+            .onlyInjectedColumns = onlyInjectedColumns};
         return current_.expr == nullptr ? expr : *current_.expr;
       }
     } else if (isLogicalOr(op)) {
       VELOX_CHECK_EQ(
           operands.size(), 2, "Expected a binary cuDF AST logical OR");
+      if (wasRelaxed) {
+        // A relaxed disjunct is not a conjunct of the filter root, so testing
+        // the dropped predicates separately cannot recover the input filter.
+        exactIfDroppedAreTrue_ = false;
+      }
       // A dropped disjunct is always true, and so is the disjunction.
       if (transformedOperands[0].expr == nullptr or
           transformedOperands[1].expr == nullptr) {
         current_ = {
             .expr = nullptr,
             .wasRelaxed = true,
-            .requiresSplitSpecificDecimalTypes = false};
+            .requiresSplitSpecificDecimalTypes = false,
+            .onlyInjectedColumns = onlyInjectedColumns};
         return expr;
       }
     } else if (wasRelaxed) {
       // Any other operator, `NOT` in particular, can turn a relaxed operand
       // into a stricter predicate, so drop the whole subexpression.
+      if (not onlyInjectedColumns) {
+        // Dropping it also discards predicates over columns read from the data
+        // file, which testing the dropped predicates cannot recover.
+        exactIfDroppedAreTrue_ = false;
+      }
       current_ = {
           .expr = nullptr,
           .wasRelaxed = true,
-          .requiresSplitSpecificDecimalTypes = false};
+          .requiresSplitSpecificDecimalTypes = false,
+          .onlyInjectedColumns = onlyInjectedColumns};
       return expr;
     }
 
@@ -198,7 +237,8 @@ class InjectedColumnFilterTransformer
     current_ = {
         .expr = &transformed,
         .wasRelaxed = wasRelaxed,
-        .requiresSplitSpecificDecimalTypes = requiresSplitSpecificDecimalTypes};
+        .requiresSplitSpecificDecimalTypes = requiresSplitSpecificDecimalTypes,
+        .onlyInjectedColumns = onlyInjectedColumns};
     return transformed;
   }
 
@@ -211,6 +251,8 @@ class InjectedColumnFilterTransformer
   cudf::ast::tree nodes_;
   const std::span<const cudf::size_type> injectedColumnIndices_;
   bool referencesInjectedColumn_{false};
+  std::vector<cudf::size_type> droppedInjectedColumns_;
+  bool exactIfDroppedAreTrue_{true};
 
   // Result of the last visited subexpression. visit() returns a reference,
   // which cannot express a dropped subexpression, so its return value is unused
@@ -218,7 +260,8 @@ class InjectedColumnFilterTransformer
   Transformed current_{
       .expr = nullptr,
       .wasRelaxed = false,
-      .requiresSplitSpecificDecimalTypes = false};
+      .requiresSplitSpecificDecimalTypes = false,
+      .onlyInjectedColumns = false};
 };
 
 } // namespace

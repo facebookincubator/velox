@@ -43,7 +43,6 @@
 
 #include <rmm/device_buffer.hpp>
 
-#include <folly/Conv.h>
 #include <folly/lang/Bits.h>
 
 #include <algorithm>
@@ -51,6 +50,7 @@
 #include <limits>
 #include <tuple>
 #include <unordered_set>
+#include <utility>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
@@ -122,6 +122,7 @@ void CudfIcebergSplitReader::resetSplit() {
   splitRowCount_ = 0;
   noColumnsToRead_ = false;
   syntheticTableProduced_ = false;
+  skipSplit_ = false;
   deferSubfieldFilter_ = false;
   transformedPushdownFilter_.reset();
   baseReadOffset_ = 0;
@@ -152,6 +153,13 @@ void CudfIcebergSplitReader::prepareSplitInternal(
   // Reset delete readers and column injection
   resetSplit();
 
+  // Prune the split before any IO when a pushed filter rejects a constant
+  // partition or info column value.
+  skipSplit_ = splitRejectedByConstantColumns();
+  if (skipSplit_) {
+    return;
+  }
+
   // Read file metadata and cache schema information
   cacheSchemaFromMetadata();
 
@@ -172,6 +180,12 @@ void CudfIcebergSplitReader::prepareSplitInternal(
   noColumnsToRead_ = readColumnNames_.empty();
 
   prepareSubfieldFilter();
+
+  // Filters on columns missing from the data file can only be folded once the
+  // file schema is known, so they prune the split here rather than above.
+  if (skipSplit_) {
+    return;
+  }
 
   // Evaluate after the pushed subfield filter is prepared.
   prependRowIndex_ = needPrependedRowIndex();
@@ -238,11 +252,92 @@ void CudfIcebergSplitReader::prepareSubfieldFilter() {
   transformedPushdownFilter_ =
       transformFilterForInjectedColumns(*originalFilter, injectedColumnIndices);
 
-  // Defer the logical filter if it references an injected column, or if a
-  // transformed decimal predicate has no split-specific physical expression.
-  deferSubfieldFilter_ = transformedPushdownFilter_->referencesInjectedColumn or
-      (transformedPushdownFilter_->requiresSplitSpecificDecimalTypes and
-       not hasSplitSpecificPushdownFilter());
+  // A transformed decimal predicate with no split-specific physical expression
+  // is not pushed at all, so the logical filter has to run after the read no
+  // matter what the injected predicates fold to.
+  const bool needsSplitSpecificDecimals =
+      transformedPushdownFilter_->requiresSplitSpecificDecimalTypes and
+      not hasSplitSpecificPushdownFilter();
+
+  if (not transformedPushdownFilter_->referencesInjectedColumn) {
+    deferSubfieldFilter_ = needsSplitSpecificDecimals;
+    return;
+  }
+
+  const auto fold = foldDroppedPredicates();
+  if (fold == ConstantFilterFold::kAlwaysFalse) {
+    skipSplit_ = true;
+    return;
+  }
+
+  // The dropped predicates relax the pushed filter, so the logical filter must
+  // run after the read unless every one of them is satisfied by the constant
+  // its column is materialized with.
+  deferSubfieldFilter_ =
+      fold != ConstantFilterFold::kAlwaysTrue or needsSplitSpecificDecimals;
+}
+
+const common::Filter* CudfIcebergSplitReader::wholeColumnFilter(
+    std::string_view name) const {
+  for (const auto& [subfield, filter] : tableHandle_->subfieldFilters()) {
+    if (filter and subfield.path().size() == 1 and
+        subfield.baseName() == name) {
+      return filter.get();
+    }
+  }
+  return nullptr;
+}
+
+ConstantFilterFold CudfIcebergSplitReader::foldDroppedPredicates() const {
+  // A dropped predicate is decided by testing the subfield filter it was built
+  // from, which requires it to be a conjunct of the filter. Note that a
+  // `PushdownFilterBuilder` may have rebuilt the filter for this split, but it
+  // rebuilds it from the same subfield filters.
+  if (not transformedPushdownFilter_->exactIfDroppedAreTrue) {
+    return ConstantFilterFold::kUnknown;
+  }
+
+  const auto readAsLocalTime = readTimestampAsLocalTime();
+  bool anyUnknown = false;
+
+  for (const auto index : transformedPushdownFilter_->droppedInjectedColumns) {
+    const auto iter = std::lower_bound(
+        injectedColumns_.begin(),
+        injectedColumns_.end(),
+        index,
+        [](const auto& column, cudf::size_type index) {
+          return std::cmp_less(column.outputIndex, index);
+        });
+    VELOX_CHECK(
+        iter != injectedColumns_.end() and
+            std::cmp_equal(iter->outputIndex, index),
+        "Dropped predicate does not belong to an injected column. Index: {}",
+        index);
+
+    const auto* filter = wholeColumnFilter(iter->name);
+    if (filter == nullptr) {
+      anyUnknown = true;
+      continue;
+    }
+
+    switch (foldFilterOnConstant(
+        *filter,
+        iter->veloxType,
+        iter->partitionValue,
+        connectorQueryCtx_->memoryPool(),
+        readAsLocalTime)) {
+      case ConstantFilterFold::kAlwaysFalse:
+        return ConstantFilterFold::kAlwaysFalse;
+      case ConstantFilterFold::kUnknown:
+        anyUnknown = true;
+        break;
+      case ConstantFilterFold::kAlwaysTrue:
+        break;
+    }
+  }
+
+  return anyUnknown ? ConstantFilterFold::kUnknown
+                    : ConstantFilterFold::kAlwaysTrue;
 }
 
 std::unique_ptr<cudf::column> CudfIcebergSplitReader::extractRowIndex(
@@ -309,6 +404,10 @@ std::pair<std::size_t, std::size_t> CudfIcebergSplitReader::rowRange(
 
 std::optional<std::unique_ptr<cudf::table>>
 CudfIcebergSplitReader::readNextChunk() {
+  if (skipSplit_) {
+    return std::nullopt;
+  }
+
   std::unique_ptr<cudf::table> cudfTable;
   if (noColumnsToRead_) {
     if (syntheticTableProduced_) {
@@ -850,25 +949,71 @@ void CudfIcebergSplitReader::adaptColumns() {
   }
 }
 
+bool CudfIcebergSplitReader::readTimestampAsLocalTime() const {
+  return hiveConfig_->readTimestampPartitionValueAsLocalTime(
+      connectorQueryCtx_->sessionProperties());
+}
+
+TypePtr CudfIcebergSplitReader::columnType(std::string_view name) const {
+  if (const auto index = outputType_->getChildIdxIfExists(name)) {
+    return outputType_->childAt(index.value());
+  }
+  const auto& dataColumns = tableHandle_->dataColumns();
+  if (dataColumns and dataColumns->containsChild(name)) {
+    return dataColumns->findChild(name);
+  }
+  return nullptr;
+}
+
+bool CudfIcebergSplitReader::splitRejectedByConstantColumns() const {
+  const auto readAsLocalTime = readTimestampAsLocalTime();
+
+  for (const auto& [subfield, filter] : tableHandle_->subfieldFilters()) {
+    // Only a filter over a whole top-level column can be folded, since that is
+    // the granularity injected columns are constant at.
+    if (not filter or subfield.path().size() != 1) {
+      continue;
+    }
+    const auto& name = subfield.baseName();
+
+    std::optional<std::string> value;
+    if (const auto infoIter = split_->infoColumns.find(name);
+        infoIter != split_->infoColumns.end()) {
+      value = infoIter->second;
+    } else if (const auto partitionIter =
+                   icebergSplit_->partitionKeys.find(name);
+               partitionIter != icebergSplit_->partitionKeys.end()) {
+      value = partitionIter->second;
+    } else {
+      // Read from the data file, so no constant to fold against. Schema
+      // evolution columns are handled once the file schema is known.
+      continue;
+    }
+
+    const auto type = columnType(name);
+    if (type == nullptr) {
+      continue;
+    }
+    if (foldFilterOnConstant(
+            *filter,
+            type,
+            value,
+            connectorQueryCtx_->memoryPool(),
+            readAsLocalTime) == ConstantFilterFold::kAlwaysFalse) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::unique_ptr<cudf::scalar> CudfIcebergSplitReader::makeInjectedScalar(
     const InjectedColumn& col) const {
-  const bool readAsLocalTime =
-      hiveConfig_->readTimestampPartitionValueAsLocalTime(
-          connectorQueryCtx_->sessionProperties());
   try {
-    // DATE values arrive in two format-disjoint encodings: Iceberg-native
-    // days-since-epoch integers (e.g. "20244") or Hive-migrated date strings
-    // (e.g. "2025-06-05"). A bare integer is unambiguously days-since-epoch
-    // (date strings contain '-' separators that fail an integer parse).
-    const bool isDaysSinceEpoch = col.veloxType->isDate() and
-        col.partitionValue.has_value() and
-        folly::tryTo<int32_t>(col.partitionValue.value()).hasValue();
-    const VectorPtr constant = velox::connector::hive::newConstantFromString(
+    const VectorPtr constant = makeInjectedConstant(
         col.veloxType,
         col.partitionValue,
         connectorQueryCtx_->memoryPool(),
-        readAsLocalTime,
-        isDaysSinceEpoch);
+        readTimestampAsLocalTime());
     return cudf_velox::makeScalarFromConstantExpr(
         std::make_shared<core::ConstantTypedExpr>(constant),
         connectorQueryCtx_->memoryPool(),

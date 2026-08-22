@@ -1130,6 +1130,106 @@ TEST_F(CudfIcebergReadTest, physicalFilterRebasedPastInjectedColumn) {
       .assertResults({deletedExpected});
 }
 
+// Filters on injected columns hold the same value for every row of a split, so
+// they are folded against that value: a rejected value skips the split without
+// reading it, and an accepted one leaves the pushed filter exact.
+TEST_F(CudfIcebergReadTest, injectedColumnFilterIsFolded) {
+  auto data = makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+      });
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+
+  // 'country' is a Hive-migrated partition column and 'added' was added after
+  // the file was written, so both are injected rather than read.
+  auto tableType =
+      ROW({"country", "c0", "c1", "added"},
+          {VARCHAR(), BIGINT(), BIGINT(), BIGINT()});
+  facebook::velox::connector::ColumnHandleMap assignments;
+  assignments["country"] = std::make_shared<HiveColumnHandle>(
+      "country",
+      HiveColumnHandle::ColumnType::kPartitionKey,
+      VARCHAR(),
+      VARCHAR(),
+      std::vector<common::Subfield>{});
+  for (const auto& name : {"c0", "c1", "added"}) {
+    assignments[name] = std::make_shared<HiveColumnHandle>(
+        name,
+        HiveColumnHandle::ColumnType::kRegular,
+        BIGINT(),
+        BIGINT(),
+        std::vector<common::Subfield>{});
+  }
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys = {
+      {"country", "US"}};
+
+  const auto scan = [&](const std::vector<std::string>& filters) {
+    return PlanBuilder()
+        .startTableScan()
+        .connectorId(kCudfIcebergConnectorId)
+        .outputType(tableType)
+        .dataColumns(tableType)
+        .assignments(assignments)
+        .subfieldFilters(filters)
+        .endTableScan()
+        .planNode();
+  };
+  const auto splits = makeIcebergSplits(dataFile->getPath(), {}, partitionKeys);
+
+  // The partition value satisfies the filter, so only 'c1 > 20' decides rows.
+  auto expected = makeRowVector(
+      {"country", "c0", "c1", "added"},
+      {
+          makeFlatVector<std::string>({"US", "US", "US"}),
+          makeFlatVector<int64_t>({3, 4, 5}),
+          makeFlatVector<int64_t>({30, 40, 50}),
+          makeNullConstant(TypeKind::BIGINT, 3),
+      });
+  AssertQueryBuilder(scan({"country = 'US'", "c1 > 20"}))
+      .splits(splits)
+      .assertResults({expected});
+
+  // The partition value fails the filter, so the split holds no matching row.
+  AssertQueryBuilder(scan({"country = 'CA'", "c1 > 20"}))
+      .splits(splits)
+      .assertEmptyResults();
+
+  // A column missing from the file is NULL for every row of the split.
+  AssertQueryBuilder(scan({"added IS NULL", "c1 > 20"}))
+      .splits(splits)
+      .assertResults({expected});
+  AssertQueryBuilder(scan({"added > 0"})).splits(splits).assertEmptyResults();
+
+  // A rejected partition value prunes the split before it is opened at all.
+  auto originalBuilder =
+      ::facebook::velox::connector::hive::BufferedInputBuilder::getInstance();
+  auto countingBuilder =
+      std::make_shared<CountingBufferedInputBuilder>(originalBuilder);
+  ::facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
+      countingBuilder);
+  SCOPE_EXIT {
+    ::facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
+        originalBuilder);
+  };
+  const auto assertReadCount = [&](const std::vector<std::string>& filters,
+                                   uint64_t expectedCount) {
+    AssertQueryBuilder(scan(filters))
+        .connectorSessionProperty(
+            kCudfIcebergConnectorId,
+            cudf_velox::connector::hive::CudfHiveConfig::
+                kUseBufferedInputSession,
+            "true")
+        .splits(splits)
+        .copyResults(pool());
+    EXPECT_EQ(countingBuilder->createCount(), expectedCount);
+  };
+  assertReadCount({"country = 'CA'", "c1 > 20"}, 0);
+  assertReadCount({"country = 'US'", "c1 > 20"}, 1);
+}
+
 /// Verifies a deletion vector with an injected-only projection.
 TEST_F(CudfIcebergReadTest, deletionVectorWithInjectedOnlyProjection) {
   auto dataFile = TempFilePath::create();
