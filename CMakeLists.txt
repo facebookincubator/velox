@@ -155,6 +155,11 @@ option(VELOX_ENABLE_TPCH_CONNECTOR "Build TPC-H connector." ON)
 option(VELOX_ENABLE_TPCDS_CONNECTOR "Build TPC-DS connector." ON)
 option(VELOX_ENABLE_PRESTO_FUNCTIONS "Build Presto SQL functions." ON)
 option(VELOX_ENABLE_SPARK_FUNCTIONS "Build Spark SQL functions." ON)
+option(
+  VELOX_ENABLE_XPATH
+  "Build the Spark XPath functions (requires libxml2). Only takes effect when VELOX_ENABLE_SPARK_FUNCTIONS is ON."
+  ON
+)
 option(VELOX_ENABLE_ICEBERG_FUNCTIONS "Build Iceberg functions." ON)
 option(VELOX_ENABLE_EXPRESSION "Build expression." ON)
 option(
@@ -690,6 +695,18 @@ endif()
 
 velox_set_source(simdjson)
 velox_resolve_dependency(simdjson 4.1.0)
+
+# libxml2 backs the Spark XPath functions and is only needed for Spark builds
+# that enable them. Gate the resolve so core / Presto-only builds (or Spark
+# builds with VELOX_ENABLE_XPATH=OFF) never take on libxml2 as a dependency.
+if(VELOX_ENABLE_SPARK_FUNCTIONS AND VELOX_ENABLE_XPATH)
+  velox_set_source(LibXml2)
+  velox_resolve_dependency(LibXml2)
+  # Defined at root scope so it applies to the mono-library `velox` target
+  # (created here at root), which compiles the XPath sources under
+  # VELOX_MONO_LIBRARY builds such as Gluten.
+  add_compile_definitions(VELOX_ENABLE_XPATH)
+endif()
 
 velox_set_source(FastFloat)
 velox_resolve_dependency(FastFloat)
