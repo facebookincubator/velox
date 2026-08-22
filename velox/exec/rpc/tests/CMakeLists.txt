@@ -12,18 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_mock_rpc_client_test MockRPCClientTest.cpp)
-
-target_link_libraries(
-  velox_mock_rpc_client_test
-  velox_mock_rpc_client
-  GTest::gtest
-  GTest::gtest_main
-  Folly::folly
-)
-
-add_test(NAME velox_mock_rpc_client_test COMMAND velox_mock_rpc_client_test)
-
 add_executable(velox_rpc_state_test RPCStateTest.cpp)
 
 target_link_libraries(
@@ -53,7 +41,6 @@ add_executable(velox_rpc_node_test RPCNodeTest.cpp)
 
 target_link_libraries(
   velox_rpc_node_test
-  velox_mock_rpc_client
   velox_core
   velox_memory
   velox_vector
@@ -64,12 +51,12 @@ target_link_libraries(
 
 add_test(NAME velox_rpc_node_test COMMAND velox_rpc_node_test)
 
-add_executable(velox_demo_rpc_function_test DemoRPCFunctionTest.cpp)
-velox_add_test_headers(velox_demo_rpc_function_test DemoRPCFunction.h)
+add_executable(velox_echo_rpc_function_test EchoRPCFunctionTest.cpp)
+velox_add_test_headers(velox_echo_rpc_function_test EchoRPCFunction.h)
 
 target_link_libraries(
-  velox_demo_rpc_function_test
-  velox_demo_rpc_function
+  velox_echo_rpc_function_test
+  velox_echo_rpc_function
   velox_core
   velox_memory
   velox_vector
@@ -78,7 +65,7 @@ target_link_libraries(
   Folly::folly
 )
 
-add_test(NAME velox_demo_rpc_function_test COMMAND velox_demo_rpc_function_test)
+add_test(NAME velox_echo_rpc_function_test COMMAND velox_echo_rpc_function_test)
 
 add_executable(velox_rpc_rate_limiter_test RPCRateLimiterTest.cpp)
 
@@ -109,7 +96,7 @@ add_executable(velox_rpc_operator_test RPCOperatorTest.cpp Main.cpp)
 target_link_libraries(
   velox_rpc_operator_test
   velox_demo_batch_rpc_function
-  velox_demo_rpc_function
+  velox_echo_rpc_function
   velox_rpc_plan_node_translator
   velox_async_rpc_function_registry
   velox_exec_test_lib
@@ -123,7 +110,6 @@ add_executable(velox_rpc_aimd_under_load_test RPCAimdUnderLoadTest.cpp Main.cpp)
 
 target_link_libraries(
   velox_rpc_aimd_under_load_test
-  velox_mock_rpc_client
   velox_rpc_plan_node_translator
   velox_async_rpc_function_registry
   velox_exec_test_lib
