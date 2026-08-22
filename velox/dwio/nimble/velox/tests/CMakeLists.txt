@@ -61,6 +61,7 @@ add_executable(
   RowRangeTest.cpp
   SchemaTest.cpp
   SchemaUtilsTest.cpp
+  SharedDictionaryConfigTest.cpp
   SharedDictionaryWriterTest.cpp
   StreamChunkerTest.cpp
   StreamDataTest.cpp
@@ -94,6 +95,7 @@ target_link_libraries(
   nimble_velox_schema_utils
   nimble_writer_test_utils
   nimble_velox_reader
+  nimble_velox_shared_dictionary_config
   nimble_writer
   nimble_velox_layout_planner
   nimble_velox_stats_fb
