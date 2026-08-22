@@ -2134,10 +2134,24 @@ void registerTimezoneFunctions(const std::string& prefix) {
     const cudf::data_type type_;
   };
 
-// to_iso8601(TIMESTAMP). Measured on CPU: renders the wall clock with a literal
-// "Z" and is session-independent (identical under UTC and Asia/Kolkata), i.e. the
-// TIMESTAMP is read as UTC -- so unlike the TSWTZ overload there is no per-row
-// offset to compute or render.
+// to_iso8601(TIMESTAMP).
+//
+// Two behaviours, and the second was missed until a unit test with
+// adjust_timestamp_to_session_timezone=true caught it:
+//
+//  - adjust OFF (the default, and what the parity clusters run): the TIMESTAMP is
+//    read as UTC and rendered with a literal "Z". Session-independent.
+//  - adjust ON: CPU renders the instant IN the session zone, with that zone's
+//    offset -- 2021-06-15T17:30:00.000+05:30 under Asia/Kolkata where the
+//    adjust-off answer is 2021-06-15T12:00:00.000Z.
+//
+// The second case is delegated rather than reimplemented: pack the instant with
+// the session zone key and render through the same ToIso8601Function the TSWTZ
+// overload uses, so the two spellings cannot drift.
+//
+// Note to_unixtime(TIMESTAMP) is NOT symmetric here -- it stays
+// session-independent under both settings, verified by its own test. Do not
+// "fix" it to match this.
 class ToIso8601FromTimestampFunction : public CudfFunction {
  public:
   explicit ToIso8601FromTimestampFunction(const core::TypedExprPtr& expr) {
@@ -2154,6 +2168,38 @@ class ToIso8601FromTimestampFunction : public CudfFunction {
         cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
         stream,
         mr);
+    if (context_.appliesSessionTimezone()) {
+      // Render in the session zone, with its offset, by packing the instant with
+      // that zone's key and reusing the TSWTZ renderer.
+      const int16_t zoneId = tz::getTimeZoneID(context_.sessionTimezone);
+      auto millisInt = bitcastColumn(millisTs->view(), cudf::type_id::INT64);
+      auto zoneKeys = cudf::make_column_from_scalar(
+          int64Scalar(zoneId & kTimezoneMask, stream),
+          millisInt.size(),
+          stream,
+          mr);
+      auto packed = tswtzPack(millisTs->view(), zoneKeys->view(), stream, mr);
+      auto parts = localAndOffset(packed->view(), stream, mr);
+      auto dateStr = cudf::strings::from_timestamps(
+          parts.localMillis->view(),
+          "%Y-%m-%dT%H:%M:%S.%3f",
+          cudf::strings_column_view{},
+          stream,
+          mr);
+      auto offsetStr = formatOffsetStrings(
+          parts.offsetSeconds->view(),
+          /*includeColon=*/true,
+          std::string("Z"),
+          stream,
+          mr);
+      return cudf::strings::concatenate(
+          cudf::table_view{{dateStr->view(), offsetStr->view()}},
+          cudf::string_scalar("", true, stream),
+          cudf::string_scalar("", false, stream),
+          cudf::strings::separator_on_nulls::YES,
+          stream,
+          mr);
+    }
     return cudf::strings::from_timestamps(
         millisTs->view(),
         "%Y-%m-%dT%H:%M:%S.%3fZ",

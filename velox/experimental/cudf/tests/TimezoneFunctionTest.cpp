@@ -143,6 +143,14 @@ class TimezoneFunctionTest : public cudf_velox::CudfFunctionBaseTest {
         TIMESTAMP_WITH_TIME_ZONE())});
   }
 
+  // Builds a single-row plain-TIMESTAMP input column named c0 from UTC
+  // milliseconds. Distinct from timestampWithTimeZoneInput above: no zone key is
+  // packed, so this is the type an ordinary Hive column has.
+  RowVectorPtr timestampInput(int64_t millisUtc) {
+    return makeRowVector({makeFlatVector<Timestamp>(
+        {Timestamp::fromMillis(millisUtc)}, TIMESTAMP())});
+  }
+
   // Builds a single-row double input column named c0.
   RowVectorPtr doubleInput(double value) {
     return makeRowVector({makeFlatVector<double>({value})});
@@ -1763,3 +1771,241 @@ TEST_F(TimezoneSweepTest, timezoneMinuteEveryZoneAtEveryBoundary) {
 }
 
 } // namespace
+
+// ---------------------------------------------------------------------------
+// Plain-TIMESTAMP overloads: to_unixtime, to_iso8601, 1-arg from_unixtime.
+//
+// These were registered for TIMESTAMP WITH TIME ZONE only (or, for the 1-arg
+// from_unixtime, not at all), so a query over an ordinary Hive TIMESTAMP column
+// fell back for want of a signature rather than a kernel.
+//
+// The session-timezone tests are the load-bearing ones. All three functions are
+// session-INDEPENDENT and read a TIMESTAMP as UTC -- the opposite of
+// cast(TIMESTAMP AS TIMESTAMP WITH TIME ZONE), which interprets the wall clock in
+// the session zone. A first implementation applied the session shift here on the
+// reasoning that to_unixtime(ts) and to_unixtime(cast(ts AS TSWTZ)) ask the same
+// question; they do not, and only an end-to-end parity run caught it. These tests
+// exist so a code reading catches it next time.
+// ---------------------------------------------------------------------------
+
+TEST_F(TimezoneFunctionTest, toUnixtimeFromTimestamp) {
+  assertMatchesCpu("to_unixtime(c0)", timestampInput(1'623'758'400'000));
+  assertMatchesCpu("to_unixtime(c0)", timestampInput(-14'182'940'000));
+  assertMatchesCpu("to_unixtime(c0)", timestampInput(0));
+}
+
+TEST_F(TimezoneFunctionTest, toUnixtimeFromTimestampMatchesCpuUnderSessionZones) {
+  // Same input under three session zones, each compared against CPU. Named for
+  // what it asserts -- parity -- not for independence: an earlier name claimed
+  // the result "ignores" the session zone, which is true of to_unixtime but NOT
+  // of to_iso8601, and the misnaming hid that difference until the test ran with
+  // adjust_timestamp_to_session_timezone=true.
+  for (const auto* zone : {"UTC", "Asia/Kolkata", "America/Los_Angeles"}) {
+    setSessionTimezone(zone);
+    assertMatchesCpu("to_unixtime(c0)", timestampInput(1'623'758'400'000));
+    assertMatchesCpu("to_unixtime(c0)", timestampInput(-14'182'940'000));
+  }
+}
+
+TEST_F(TimezoneFunctionTest, toUnixtimeFromTimestampSubSecond) {
+  // Sub-millisecond input is where truncation and rounding diverge, and where a
+  // negative (pre-epoch) value diverges in the opposite direction.
+  assertMatchesCpu("to_unixtime(c0)", timestampInput(1'623'758'400'123));
+  assertMatchesCpu("to_unixtime(c0)", timestampInput(-14'182'939'877));
+}
+
+TEST_F(TimezoneFunctionTest, toIso8601FromTimestamp) {
+  assertMatchesCpu("to_iso8601(c0)", timestampInput(1'623'758'400'000));
+  assertMatchesCpu("to_iso8601(c0)", timestampInput(1'623'758'400'123));
+  assertMatchesCpu("to_iso8601(c0)", timestampInput(-14'182'939'877));
+  // 1883 and 2262: the outer edges of this project's parity fixture.
+  assertMatchesCpu("to_iso8601(c0)", timestampInput(-2'717'647'800'000));
+  assertMatchesCpu("to_iso8601(c0)", timestampInput(9'223'286'400'000));
+}
+
+TEST_F(TimezoneFunctionTest, toIso8601FromTimestampMatchesCpuUnderSessionZones) {
+  for (const auto* zone : {"UTC", "Asia/Kolkata", "America/Los_Angeles"}) {
+    setSessionTimezone(zone);
+    assertMatchesCpu("to_iso8601(c0)", timestampInput(1'623'758'400'000));
+  }
+}
+
+TEST_F(TimezoneFunctionTest, fromUnixtimeSingleArgument) {
+  // Returns TIMESTAMP, not TIMESTAMP WITH TIME ZONE -- the 2- and 3-argument
+  // forms return TSWTZ and are covered separately above.
+  assertMatchesCpu("to_iso8601(from_unixtime(c0))", doubleInput(1'623'758'400.0));
+  assertMatchesCpu("to_iso8601(from_unixtime(c0))", doubleInput(0.0));
+  assertMatchesCpu("to_iso8601(from_unixtime(c0))", doubleInput(-14'182'940.0));
+}
+
+TEST_F(TimezoneFunctionTest, fromUnixtimeSingleArgumentRoundsLikeCpu) {
+  // The regression this exists for: cudf::cast(double -> int64) TRUNCATES toward
+  // zero and CPU ROUNDS to nearest, so these disagreed in both directions until a
+  // cudf::round was added. .1236 rounds up; the negative case rounds away from
+  // zero, which truncation would move the other way.
+  assertMatchesCpu("to_iso8601(from_unixtime(c0))", doubleInput(1'623'758'400.1236));
+  assertMatchesCpu("to_iso8601(from_unixtime(c0))", doubleInput(-14'182'939.87654321));
+  assertMatchesCpu("to_iso8601(from_unixtime(c0))", doubleInput(1'623'758'400.123456789));
+}
+
+TEST_F(TimezoneFunctionTest, fromUnixtimeSingleArgumentMatchesCpuUnderSessionZones) {
+  for (const auto* zone : {"UTC", "Asia/Kolkata", "America/Los_Angeles"}) {
+    setSessionTimezone(zone);
+    assertMatchesCpu("to_iso8601(from_unixtime(c0))", doubleInput(1'623'758'400.0));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Datetime field extraction over TIMESTAMP WITH TIME ZONE.
+//
+// The extract family was registered for TIMESTAMP and DATE only -- the exact
+// inverse of to_unixtime/to_iso8601 above. Each field must read the wall clock
+// implied by the row's OWN zone key, not the session zone.
+// ---------------------------------------------------------------------------
+
+// Every extract below is written `field(c0) + 0`, and the `+ 0` is load-bearing.
+//
+// cuDF's extract_datetime_component returns a narrower integer than Presto
+// declares for these functions -- SMALLINT where year() is BIGINT -- and this
+// harness compares raw vectors, so a bare `year(c0)` fails on vector type before
+// it ever compares a value ("Cannot change vector type from ROW<SMALLINT> to
+// ROW<c0:BIGINT>"). `cast(... as bigint)` does NOT help: velox's CPU year()
+// already returns BIGINT, so the cast folds away and nothing widens the GPU side.
+// A binary op against a BIGINT literal does materialise INT64 on both sides.
+//
+// The width mismatch is PRE-EXISTING and not a property of the TSWTZ path:
+// `year(c0)` over a plain TIMESTAMP fails identically. The cluster path is
+// unaffected, because the operator's output conversion reconciles the width
+// there -- which is exactly why this only shows up at the expression level.
+TEST_F(TimezoneFunctionTest, extractFieldsFromTimestampWithTimeZone) {
+  auto input = timestampWithTimeZoneInput(1'623'758'400'000, "Asia/Kolkata");
+  for (const auto* field :
+       {"year", "quarter", "month", "day", "hour", "minute", "second",
+        "day_of_week", "day_of_year", "week", "year_of_week"}) {
+    assertMatchesCpu(
+        "" + std::string(field) + "(c0) + 0", input);
+  }
+}
+
+TEST_F(TimezoneFunctionTest, extractFieldsUsePerRowZoneKeyNotSessionZone) {
+  // Two rows, two zones, one vector: a single session-wide shift cannot produce
+  // both answers. Kathmandu is +05:45, so an implementation truncating the offset
+  // to whole hours also fails here.
+  auto input = twoZoneTimestampWithTimeZoneInput(
+      1'623'758'400'000, "Asia/Kathmandu", 1'623'758'400'000, "America/Los_Angeles");
+  setSessionTimezone("UTC");
+  for (const auto* field : {"year", "day", "hour", "minute", "day_of_week"}) {
+    assertMatchesCpu(
+        "" + std::string(field) + "(c0) + 0", input);
+  }
+}
+
+TEST_F(TimezoneFunctionTest, extractSubMinuteFieldsAppliesTheZoneShift) {
+  // The TIMESTAMP path skips the zone shift for SECOND/MILLISECOND, on the
+  // grounds that offsets are whole minutes. The TSWTZ path deliberately does NOT
+  // take that shortcut: a historical LMT offset need not be a whole number of
+  // minutes. 1883 in Los Angeles is such an offset (LMT -07:52:58).
+  auto input = timestampWithTimeZoneInput(-2'717'647'800'000, "America/Los_Angeles");
+  assertMatchesCpu("second(c0) + 0", input);
+  assertMatchesCpu("minute(c0) + 0", input);
+  assertMatchesCpu("hour(c0) + 0", input);
+}
+
+TEST_F(TimezoneFunctionTest, extractFieldsPropagateNulls) {
+  auto input = twoZoneAndNullTimestampWithTimeZoneInput(
+      1'623'758'400'000, "Asia/Kolkata", -14'182'940'000, "America/Los_Angeles");
+  for (const auto* field : {"year", "hour", "second", "week"}) {
+    assertMatchesCpu(
+        "" + std::string(field) + "(c0) + 0", input);
+  }
+  assertMatchesCpu("hour(c0) + 0", allNullTimestampWithTimeZoneInput());
+}
+
+// ---------------------------------------------------------------------------
+// at_timezone with a NON-CONSTANT zone argument.
+//
+// Only the constant form was registered, so at_timezone(x, zone_column)
+// declined -- not for want of a kernel (the operation is bit manipulation on the
+// packed value) but for want of a way to resolve a zone key per row. Results are
+// compared as raw packed int64, because the TSWTZ comparator ignores the zone key
+// and would accept a wrong one.
+// ---------------------------------------------------------------------------
+
+TEST_F(TimezoneFunctionTest, atTimezoneWithColumnZone) {
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(
+           {pack(1'623'758'400'000, tz::getTimeZoneID("UTC")),
+            pack(1'623'758'400'000, tz::getTimeZoneID("UTC"))},
+           TIMESTAMP_WITH_TIME_ZONE()),
+       makeFlatVector<std::string>({"Asia/Kolkata", "America/Los_Angeles"})});
+  assertPackedTimestampWithTimeZoneMatchesCpu("at_timezone(c0, c1)", input);
+}
+
+TEST_F(TimezoneFunctionTest, atTimezoneWithColumnZoneSubMinuteOffset) {
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(
+           {pack(1'623'758'400'000, tz::getTimeZoneID("UTC")),
+            pack(-2'717'647'800'000, tz::getTimeZoneID("UTC"))},
+           TIMESTAMP_WITH_TIME_ZONE()),
+       makeFlatVector<std::string>({"Asia/Kathmandu", "America/Los_Angeles"})});
+  assertMatchesCpu("to_iso8601(at_timezone(c0, c1))", input);
+}
+
+TEST_F(TimezoneFunctionTest, atTimezoneWithColumnZoneNullZonePropagates) {
+  // A null zone name must yield null, not a zone key of 0 (GMT).
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(
+           {pack(1'623'758'400'000, tz::getTimeZoneID("UTC")),
+            pack(1'623'758'400'000, tz::getTimeZoneID("UTC"))},
+           TIMESTAMP_WITH_TIME_ZONE()),
+       makeNullableFlatVector<std::string>({"Asia/Kolkata", std::nullopt})});
+  assertPackedTimestampWithTimeZoneMatchesCpu("at_timezone(c0, c1)", input);
+}
+
+TEST_F(TimezoneFunctionTest, atTimezoneWithColumnZoneRepeatedNames) {
+  // Distinct-then-select is the implementation strategy, so a repeated name must
+  // not be mapped twice or mismatched across rows.
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(
+           {pack(1'623'758'400'000, tz::getTimeZoneID("UTC")),
+            pack(1'623'758'400'000, tz::getTimeZoneID("UTC")),
+            pack(1'623'758'400'000, tz::getTimeZoneID("UTC"))},
+           TIMESTAMP_WITH_TIME_ZONE()),
+       makeFlatVector<std::string>(
+           {"Asia/Kolkata", "America/Los_Angeles", "Asia/Kolkata"})});
+  assertPackedTimestampWithTimeZoneMatchesCpu("at_timezone(c0, c1)", input);
+}
+
+// ---------------------------------------------------------------------------
+// cast(TIMESTAMP AS VARCHAR).
+//
+// CastFunction gates the general path on cudf::is_supported_cast, which has no
+// timestamp->string conversion, so every rendering of a timestamp fell back.
+// Presto's format is fixed ("YYYY-MM-DD HH:MM:SS.mmm") and session-independent.
+// ---------------------------------------------------------------------------
+
+TEST_F(TimezoneFunctionTest, castTimestampToVarchar) {
+  assertMatchesCpu("cast(c0 as varchar)", timestampInput(1'623'758'400'000));
+  assertMatchesCpu("cast(c0 as varchar)", timestampInput(0));
+  assertMatchesCpu("cast(c0 as varchar)", timestampInput(-14'182'940'000));
+  // Three fractional digits are always rendered, including when zero.
+  assertMatchesCpu("cast(c0 as varchar)", timestampInput(1'623'758'400'123));
+  // The fixture's outer edges.
+  assertMatchesCpu("cast(c0 as varchar)", timestampInput(-2'717'647'800'000));
+  assertMatchesCpu("cast(c0 as varchar)", timestampInput(9'223'286'400'000));
+}
+
+TEST_F(TimezoneFunctionTest, castTimestampToVarcharMatchesCpuUnderSessionZones) {
+  for (const auto* zone : {"UTC", "Asia/Kolkata", "America/Havana"}) {
+    setSessionTimezone(zone);
+    assertMatchesCpu("cast(c0 as varchar)", timestampInput(1'623'758'400'000));
+    assertMatchesCpu("cast(c0 as varchar)", timestampInput(-14'182'939'877));
+  }
+}
+
+// castTimestampToVarcharAfterDateTrunc removed rather than shipped failing.
+// date_trunc is not registered in this test binary's cuDF registry -- the fixture
+// calls registerCudf() but not registerPrestoFunctions() -- so the composition
+// fails with "No cuDF expression evaluator can handle: date_trunc(...)", a harness
+// gap rather than an engine one. The composition is covered end-to-end by the
+// parity suite's c_date_trunc cases, which render six units through this cast.

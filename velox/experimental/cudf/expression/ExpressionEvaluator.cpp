@@ -401,6 +401,15 @@ class SplitFunction : public CudfFunction {
   cudf::size_type maxSplitCount_;
 };
 
+// Defined below, next to the datetime field-extraction functions that are its
+// other caller. Declared here because CastFunction needs it for the
+// TIMESTAMP -> VARCHAR rendering and precedes it in this file.
+std::unique_ptr<cudf::column> maybeConvertToSessionLocal(
+    const cudf::column_view& timestamps,
+    const CudfDateTimeContext& context,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
 class CastFunction : public CudfFunction {
  public:
   // Selects how eval interprets the cast. Only two modes exist on this branch:
@@ -517,8 +526,14 @@ class CastFunction : public CudfFunction {
         // digits, so rendering a microsecond- or nanosecond-resolution column
         // directly would silently drop precision rather than round it the way the
         // reader does.
+        // With adjust_timestamp_to_session_timezone ON, CPU renders the instant
+        // IN the session zone: 2021-06-15 17:30:00.000 under Asia/Kolkata where
+        // the adjust-off answer is 12:00:00.000. Unlike to_iso8601 there is no
+        // offset suffix, so only the wall clock shifts. Missed until a unit test
+        // ran with that config; the parity clusters run with it off.
+        auto local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
         auto millisTs = cudf::cast(
-            inputCol,
+            local ? local->view() : inputCol,
             cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
             stream,
             mr);
