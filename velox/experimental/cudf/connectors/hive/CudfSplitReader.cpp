@@ -255,12 +255,9 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
 void CudfSplitReader::setConnectorQueryCtx(
     const ConnectorQueryCtx* connectorQueryCtx) {
   VELOX_CHECK_NOT_NULL(connectorQueryCtx);
-  // The reader keeps buffers and options tied to the memory pool of the
-  // context it was created with, so only contexts sharing that pool can adopt
-  // it.
-  VELOX_CHECK(
-      connectorQueryCtx->memoryPool() == pool_,
-      "Cannot rebind a cuDF split reader to a query context with a different memory pool");
+  // A preloaded split can be adopted by a driver with a different memory pool.
+  // Only the context pointer changes; 'pool_' and its buffers stay with the
+  // pool that allocated them.
   connectorQueryCtx_ = connectorQueryCtx;
 }
 
