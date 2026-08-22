@@ -94,7 +94,6 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
     const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
-    bool useExperimentalCudfReader,
     cudf::ast::expression const* subfieldFilterExpr)
     : CudfSplitReader(
           std::move(split),
@@ -107,7 +106,6 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
           cudfHiveConfig,
           ioStatistics,
           ioStats,
-          useExperimentalCudfReader,
           subfieldFilterExpr),
       icebergSplit_(std::move(icebergSplit)),
       hiveConfig_(hiveConfig) {}
@@ -128,12 +126,6 @@ void CudfIcebergSplitReader::resetSplit() {
   deleteBitmap_ = nullptr;
   deviceBitmap_.reset();
   deleteMask_.reset();
-}
-
-void CudfIcebergSplitReader::setupReader() {
-  if (not noColumnsToRead_) {
-    CudfSplitReader::setupReader();
-  }
 }
 
 cudf::ast::expression const* CudfIcebergSplitReader::pushdownFilter() const {
@@ -181,7 +173,9 @@ void CudfIcebergSplitReader::prepareSplitInternal(
                "columns or unavailable split-specific decimal types.";
   }
 
-  setupReader();
+  if (not noColumnsToRead_) {
+    createCudfReader();
+  }
 }
 
 rmm::device_async_resource_ref

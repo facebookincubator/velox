@@ -15,8 +15,8 @@
  */
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/connectors/hive/BufferedInputDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
-#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderHelpers.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
@@ -33,7 +33,7 @@
 
 #include <cudf/column/column.hpp>
 #include <cudf/io/datasource.hpp>
-#include <cudf/io/experimental/hybrid_scan.hpp>
+#include <cudf/io/experimental/hybrid_scan_multifile.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/parquet_metadata.hpp>
 #include <cudf/io/text/byte_range_info.hpp>
@@ -46,8 +46,8 @@
 #include <cuda_runtime.h>
 #include <nvtx3/nvtx3.hpp>
 
-#include <algorithm>
 #include <memory>
+#include <numeric>
 #include <ranges>
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -170,7 +170,6 @@ CudfSplitReader::CudfSplitReader(
     const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
-    bool useExperimentalCudfReader,
     cudf::ast::expression const* subfieldFilterExpr)
     : NvtxHelper(
           nvtx3::rgb{80, 171, 241},
@@ -187,7 +186,6 @@ CudfSplitReader::CudfSplitReader(
       ioStats_(ioStats),
       cudfHiveConfig_(cudfHiveConfig),
       pool_(connectorQueryCtx->memoryPool()),
-      useExperimentalCudfReader_(useExperimentalCudfReader),
       baseReaderOpts_(pool_),
       subfieldFilterExpr_(subfieldFilterExpr),
       pushdownFilterExpr_(subfieldFilterExpr) {
@@ -195,17 +193,27 @@ CudfSplitReader::CudfSplitReader(
   baseReaderOpts_.setMetadataIoStats(ioStatistics_);
 }
 
-void CudfSplitReader::setupReader() {
-  if (useExperimentalCudfReader_) {
-    createExperimentalReader();
-  } else {
-    createCudfReader();
+CudfSplitReader::~CudfSplitReader() {
+  // A split abandoned before it is read, e.g. when the task is cancelled while
+  // the preloader prepares it, can still have reads in flight or queued.
+  if (passState_ == nullptr) {
+    return;
+  }
+  try {
+    releaseCurrentPassData();
+  } catch (const std::exception& e) {
+    // The data of a failed read is being dropped anyway, so the failure must
+    // not propagate out of the destructor.
+    LOG(ERROR) << fmt::format(
+        "Failed to discard the reads of an abandoned split. Path: {}. Error: {}.",
+        split_ != nullptr ? split_->filePath : "unknown",
+        e.what());
   }
 }
 
 void CudfSplitReader::prepareSplitInternal(
     dwio::common::RuntimeStats& /*runtimeStats*/) {
-  setupReader();
+  createCudfReader();
 }
 
 void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
@@ -244,89 +252,105 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
   return std::move(chunkOpt.value());
 }
 
+void CudfSplitReader::setConnectorQueryCtx(
+    const ConnectorQueryCtx* connectorQueryCtx) {
+  VELOX_CHECK_NOT_NULL(connectorQueryCtx);
+  // A preloaded split can be adopted by a driver with a different memory pool.
+  // Only the context pointer changes; 'pool_' and its buffers stay with the
+  // pool that allocated them.
+  connectorQueryCtx_ = connectorQueryCtx;
+}
+
 std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
-  auto output_mr = determineCudfMemoryResource();
+  VELOX_CHECK_NOT_NULL(splitReader_, "cuDF parquet reader not present");
+  VELOX_CHECK_NOT_NULL(passState_, "Row group pass state not present");
 
-  if (!useExperimentalCudfReader_) {
-    // Read table using the regular cudf parquet reader
-    VELOX_CHECK_NOT_NULL(splitReader_, "cudf parquet reader not present");
+  auto outputMr = determineCudfMemoryResource();
 
-    if (!splitReader_->has_next()) {
-      return std::nullopt;
-    }
-
-    auto tableWithMetadata = splitReader_->read_chunk();
-    return castDecimalColumnsToVeloxTypes(
-        std::move(tableWithMetadata.tbl), outputType_, stream_, output_mr);
-  }
-
-  // Read table using the experimental parquet reader
-  VELOX_CHECK_NOT_NULL(exptSplitReader_, "cuDF hybrid scan reader not present");
-  VELOX_CHECK_NOT_NULL(hybridScanState_, "hybrid scan state not present");
-
-  std::call_once(*hybridScanState_->isHybridScanSetup_, [&]() {
-    auto rowGroupIndices = exptSplitReader_->all_row_groups(readerOptions_);
-
-    // Filter row groups using row group byte ranges
-    if (readerOptions_.get_skip_bytes() > 0 or
-        readerOptions_.get_num_bytes().has_value()) {
-      rowGroupIndices = exptSplitReader_->filter_row_groups_with_byte_range(
-          rowGroupIndices, readerOptions_);
-    }
-
-    // Filter row groups using column chunk statistics
-    if (readerOptions_.get_filter().has_value()) {
-      rowGroupIndices = exptSplitReader_->filter_row_groups_with_stats(
-          rowGroupIndices, readerOptions_, stream_);
-    }
-
-    // Get column chunk byte ranges to fetch
-    const auto columnChunkByteRanges =
-        exptSplitReader_->all_column_chunks_byte_ranges(
-            rowGroupIndices, readerOptions_);
-
-    // Fetch column chunk byte ranges
-    nvtxRangePush("fetchByteRanges");
-
-    // Tuple containing a vector of device buffers, a vector of device spans
-    // for each input byte range, and a future to wait for all reads to
-    // complete
-    auto ioData = fetchByteRangesAsync(
-        dataSource_, columnChunkByteRanges, stream_, get_temp_mr());
-
-    // Wait for all pending reads to complete
-    std::get<2>(ioData).wait();
-    nvtxRangePop();
-
-    // Save state for hybrid scan reader for future calls to `next()`
-    hybridScanState_->columnChunkBuffers_ = std::move(std::get<0>(ioData));
-    hybridScanState_->columnChunkData_ = std::move(std::get<1>(ioData));
-
-    exptSplitReader_->setup_chunking_for_all_columns(
-        cudfHiveConfig_->maxChunkReadLimitSession(
-            connectorQueryCtx_->sessionProperties()),
-        cudfHiveConfig_->maxPassReadLimitSession(
-            connectorQueryCtx_->sessionProperties()),
-        rowGroupIndices,
-        hybridScanState_->columnChunkData_,
-        readerOptions_,
-        stream_,
-        output_mr);
-  });
-
-  if (!exptSplitReader_->has_next_table_chunk()) {
+  if (passState_->currentPass >= passState_->passes.size()) {
     return std::nullopt;
   }
 
-  auto tableWithMetadata = exptSplitReader_->materialize_all_columns_chunk();
-  return castDecimalColumnsToVeloxTypes(
-      std::move(tableWithMetadata.tbl), outputType_, stream_, output_mr);
+  if (not passState_->isChunkingSetup) {
+    setupChunkingForCurrentPass(outputMr);
+    VELOX_CHECK(
+        splitReader_->has_next_table_chunk(),
+        "cuDF row group pass did not produce a table chunk");
+  }
+
+  auto tableWithMetadata = splitReader_->materialize_all_columns_chunk();
+  auto table = castDecimalColumnsToVeloxTypes(
+      std::move(tableWithMetadata.tbl), outputType_, stream_, outputMr);
+
+  // This was the last chunk of the pass. Drop its fetch buffers and begin
+  // I/O for the next pass while the caller consumes this table.
+  if (not splitReader_->has_next_table_chunk()) {
+    releaseCurrentPassData();
+    passState_->isChunkingSetup = false;
+    ++passState_->currentPass;
+    if (passState_->currentPass < passState_->passes.size()) {
+      startCurrentPassFetch();
+    } else {
+      passState_->passes.clear();
+    }
+  }
+
+  return table;
+}
+
+void CudfSplitReader::startCurrentPassFetch() {
+  if (passState_->currentPass >= passState_->passes.size() or
+      passState_->fetch.pending.valid() or passState_->isChunkingSetup) {
+    return;
+  }
+
+  const auto& rowGroupIndices = passState_->passes[passState_->currentPass];
+
+  // Byte ranges are flattened across sources; the source index map is only
+  // needed once a reader spans multiple data sources.
+  const auto columnChunkByteRanges =
+      splitReader_
+          ->all_column_chunks_byte_ranges(rowGroupIndices, readerOptions_)
+          .first;
+
+  nvtxRangePush("startColumnChunkFetch");
+  passState_->fetch = fetchByteRangesAsync(
+      dataSource_, columnChunkByteRanges, stream_, get_temp_mr());
+  nvtxRangePop();
+}
+
+void CudfSplitReader::setupChunkingForCurrentPass(
+    rmm::device_async_resource_ref mr) {
+  // No-op when the fetch was already started while preparing the split.
+  startCurrentPassFetch();
+
+  // Wait for all reads of the pass to complete.
+  passState_->fetch.wait();
+
+  splitReader_->setup_chunking_for_all_columns(
+      chunkReadLimit_,
+      passReadLimit_,
+      passState_->passes[passState_->currentPass],
+      passState_->fetch.data,
+      readerOptions_,
+      stream_,
+      mr);
+
+  passState_->isChunkingSetup = true;
+}
+
+void CudfSplitReader::releaseCurrentPassData() {
+  // Reads still in flight write into the buffers about to be released.
+  passState_->fetch.abandon();
+  passState_->fetch = {};
 }
 
 void CudfSplitReader::resetSplit() {
+  if (passState_ != nullptr) {
+    releaseCurrentPassData();
+  }
   splitReader_.reset();
-  exptSplitReader_.reset();
-  hybridScanState_.reset();
+  passState_.reset();
   dataSource_.reset();
   fileMetaData_.clear();
   pushdownFilterExpr_ = subfieldFilterExpr_;
@@ -524,48 +548,84 @@ void CudfSplitReader::createCudfReader() {
   // Setup reader options
   setupReaderOptions();
 
-  std::vector<std::unique_ptr<cudf::io::datasource>> sources;
-  sources.push_back(cudf::io::datasource::create(dataSource_.get()));
-
-  // Create a parquet reader
-  splitReader_ = std::make_unique<cudf::io::chunked_parquet_reader>(
-      cudfHiveConfig_->maxChunkReadLimitSession(
-          connectorQueryCtx_->sessionProperties()),
-      cudfHiveConfig_->maxPassReadLimitSession(
-          connectorQueryCtx_->sessionProperties()),
-      std::move(sources),
-      std::move(fileMetaData_),
-      readerOptions_,
-      stream_,
-      determineCudfMemoryResource());
-
-  // Metadata ingested
-  fileMetaData_.clear();
-}
-
-void CudfSplitReader::createExperimentalReader() {
-  // Read file metadatas
-  fileMetaDatas();
-
-  // Setup reader options
-  setupReaderOptions();
-
+  // A reader spanning multiple sources also needs the byte range source index
+  // map to fetch column chunks from the matching data source.
   VELOX_CHECK_EQ(
       fileMetaData_.size(),
       1,
-      "cuDF experimental reader requires exactly one parquet metadata");
+      "cuDF parquet reader supports a single parquet metadata per split");
 
-  // Create a hybrid scan reader
-  nvtxRangePush("hybridScanReader");
-  auto reader = std::make_unique<CudfHybridScanReader>(
-      std::move(fileMetaData_.front()), readerOptions_);
-  nvtxRangePop();
+  const auto* sessionProperties = connectorQueryCtx_->sessionProperties();
+  chunkReadLimit_ =
+      cudfHiveConfig_->maxChunkReadLimitSession(sessionProperties);
+  passReadLimit_ = cudfHiveConfig_->maxPassReadLimitSession(sessionProperties);
 
-  exptSplitReader_ = std::move(reader);
-  hybridScanState_ = std::make_unique<HybridScanState>();
+  // Create a hybrid scan reader over all sources of the split
+  splitReader_ =
+      std::make_unique<CudfParquetReader>(fileMetaData_, readerOptions_);
 
   // Metadata ingested
   fileMetaData_.clear();
+
+  setupPageIndexes();
+
+  passState_ = std::make_unique<RowGroupPassState>();
+  passState_->passes = selectRowGroupPasses();
+
+  // Issue the reads of the first pass without waiting for them. When the split
+  // is prepared by the preloader, this overlaps its I/O with the work the
+  // driver is still doing on the previous split, at the cost of holding the
+  // buffers of one pass per preloaded split rather than per driver.
+  startCurrentPassFetch();
+}
+
+void CudfSplitReader::setupPageIndexes() {
+  const auto pageIndexByteRanges = splitReader_->page_index_byte_ranges();
+
+  // No page index bytes
+  if (std::ranges::all_of(pageIndexByteRanges, [](const auto& byteRange) {
+        return byteRange.is_empty();
+      })) {
+    return;
+  }
+
+  [[maybe_unused]] auto [pageIndexBuffers, pageIndexData] =
+      fetchPageIndexes(dataSource_, pageIndexByteRanges);
+  splitReader_->setup_page_indexes(pageIndexData);
+}
+
+std::vector<std::vector<std::vector<cudf::size_type>>>
+CudfSplitReader::selectRowGroupPasses() const {
+  auto rowGroupIndices = splitReader_->all_row_groups(readerOptions_);
+
+  // Filter row groups using row group byte ranges
+  if (readerOptions_.get_skip_bytes() > 0 or
+      readerOptions_.get_num_bytes().has_value()) {
+    rowGroupIndices = splitReader_->filter_row_groups_with_byte_range(
+        rowGroupIndices, readerOptions_);
+  }
+
+  // Filter row groups using column chunk statistics
+  if (readerOptions_.get_filter().has_value()) {
+    rowGroupIndices = splitReader_->filter_row_groups_with_stats(
+        rowGroupIndices, readerOptions_, stream_);
+  }
+
+  const auto numRowGroups = std::accumulate(
+      rowGroupIndices.begin(),
+      rowGroupIndices.end(),
+      std::size_t{0},
+      [](auto sum, const auto& sourceRowGroups) {
+        return sum + sourceRowGroups.size();
+      });
+
+  // No row groups to read.
+  if (numRowGroups == 0) {
+    return {};
+  }
+
+  return splitReader_->construct_row_group_passes(
+      rowGroupIndices, passReadLimit_);
 }
 
 void CudfSplitReader::totalScanTimeCalculator(void* userData) {

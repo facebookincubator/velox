@@ -18,24 +18,16 @@
 
 #include "velox/dwio/common/BufferedInput.h"
 
-#include <cudf/ast/detail/expression_transformer.hpp>
-#include <cudf/ast/detail/operators.hpp>
-#include <cudf/ast/expressions.hpp>
-#include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/io/datasource.hpp>
-#include <cudf/io/parquet.hpp>
-#include <cudf/io/parquet_schema.hpp>
-#include <cudf/io/text/byte_range_info.hpp>
-#include <cudf/io/types.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
-#include <rmm/resource_ref.hpp>
 
+#include <future>
+#include <memory>
 #include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
-// ---------------- Internal helper ----------------
 // A cudf::io::datasource that serves bytes via Velox BufferedInput so that
 // reads benefit from AsyncDataCache / SSD cache and are always returned as
 // contiguous buffers.
@@ -65,55 +57,11 @@ class BufferedInputDataSource : public cudf::io::datasource {
       uint8_t* dst,
       rmm::cuda_stream_view stream) override;
 
-  // Use the enqueue API from dwio::common::BufferedInput.
-  // Pass a device buffer to copy to after load.
-  void enqueueForDevice(uint64_t offset, uint64_t size, uint8_t* dst);
-
-  // loads and copies to device.
-  void load(rmm::cuda_stream_view stream);
-
  private:
   void readContiguous(size_t offset, size_t size, uint8_t* dst);
 
   std::shared_ptr<facebook::velox::dwio::common::BufferedInput> input_;
   const size_t fileSize_;
-  std::vector<std::function<void(rmm::cuda_stream_view stream)>>
-      pendingDeviceLoads_;
 };
-
-/**
- * @brief Hybrid scan reader state
- *
- * This struct is used to store the column chunk data for the hybrid scan reader
- * and a once flag to ensure the setup is only done once.
- */
-struct HybridScanState {
-  HybridScanState() : isHybridScanSetup_(std::make_unique<std::once_flag>()) {}
-
-  std::vector<rmm::device_buffer> columnChunkBuffers_;
-  std::vector<cudf::device_span<const uint8_t>> columnChunkData_;
-  std::unique_ptr<std::once_flag> isHybridScanSetup_;
-};
-
-/**
- * @brief Fetches a list of byte ranges from a host buffer into device buffers
- *
- * @param dataSource Input datasource
- * @param byteRanges Byte ranges to fetch
- * @param stream CUDA stream
- * @param mr Device memory resource
- *
- * @return A tuple containing the device buffers, the device spans of the
- * fetched data, and a future to wait on the read tasks
- */
-std::tuple<
-    std::vector<rmm::device_buffer>,
-    std::vector<cudf::device_span<const uint8_t>>,
-    std::future<void>>
-fetchByteRangesAsync(
-    std::shared_ptr<cudf::io::datasource> dataSource,
-    cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox::connector::hive

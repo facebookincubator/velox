@@ -62,15 +62,11 @@ class CudfIcebergSplitReader : public CudfSplitReader {
       const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
-      bool useExperimentalCudfReader,
       cudf::ast::expression const* subfieldFilterExpr);
 
  protected:
   // Sets up delete file readers and column projection after base state reset.
   void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats) override;
-
-  // Override to only setup cuDF reader if we have columns to read.
-  void setupReader() override;
 
   // Skip Parquet pushdown when the subfield filter must run after reading.
   cudf::ast::expression const* pushdownFilter() const override;

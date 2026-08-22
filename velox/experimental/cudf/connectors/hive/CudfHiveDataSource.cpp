@@ -26,6 +26,7 @@
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/common/Casts.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -153,11 +154,6 @@ CudfHiveDataSource::CudfHiveDataSource(
   // Create empty IOStats and FsStats for later use
   ioStatistics_ = std::make_shared<io::IoStatistics>();
   ioStats_ = std::make_shared<facebook::velox::IoStats>();
-
-  // Whether to use the experimental cuDF reader
-  useExperimentalCudfReader_ =
-      cudfHiveConfig_->useExperimentalCudfReaderSession(
-          connectorQueryCtx_->sessionProperties());
 }
 
 std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
@@ -172,7 +168,6 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       cudfHiveConfig_,
       ioStatistics_,
       ioStats_,
-      useExperimentalCudfReader_,
       subfieldFilterExpr_);
 }
 
@@ -239,6 +234,45 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     LOG(WARNING) << "Failed to get file size for " << split_->filePath << ": "
                  << e.what();
   }
+}
+
+void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
+  auto* preparedSource = checkedPointerCast<CudfHiveDataSource>(source.get());
+
+  split_ = std::move(preparedSource->split_);
+  runtimeStats_.skippedSplits += preparedSource->runtimeStats_.skippedSplits;
+  runtimeStats_.processedSplits +=
+      preparedSource->runtimeStats_.processedSplits;
+  runtimeStats_.skippedSplitBytes +=
+      preparedSource->runtimeStats_.skippedSplitBytes;
+  completedBytes_ += preparedSource->completedBytes_;
+  completedRows_ += preparedSource->completedRows_;
+
+  // Drop the reader of the previous split before replacing the AST storage it
+  // references below.
+  cudfSplitReader_.reset();
+
+  // The reader's Parquet filter references the AST expressions and literal
+  // scalars owned by 'source', which is freed right after this call. Adopt that
+  // storage so the reader keeps pointing at live expressions; the nodes are
+  // heap-allocated, so moving the owners does not move the expressions.
+  subfieldScalars_ = std::move(preparedSource->subfieldScalars_);
+  subfieldTree_ = std::move(preparedSource->subfieldTree_);
+  subfieldFilterExpr_ = preparedSource->subfieldFilterExpr_;
+
+  cudfSplitReader_ = std::move(preparedSource->cudfSplitReader_);
+  VELOX_CHECK_NOT_NULL(cudfSplitReader_);
+
+  // 'source' owns the query context the reader was prepared with and is
+  // freed right after this call.
+  cudfSplitReader_->setConnectorQueryCtx(connectorQueryCtx_);
+
+  // The adopted reader keeps writing I/O statistics to the objects of
+  // 'source', so carry the balance accumulated here over to those.
+  preparedSource->ioStatistics_->merge(*ioStatistics_);
+  ioStatistics_ = std::move(preparedSource->ioStatistics_);
+  preparedSource->ioStats_->merge(*ioStats_);
+  ioStats_ = std::move(preparedSource->ioStats_);
 }
 
 std::optional<RowVectorPtr> CudfHiveDataSource::next(
