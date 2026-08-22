@@ -18,13 +18,16 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Time.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::exec::test {
 
@@ -124,6 +127,84 @@ class ToCudfSelectionTest : public OperatorTestBase {
            VARCHAR()})};
 };
 
+// A datetime format the GPU cannot reproduce exactly must leave the projection
+// on the CPU operator rather than return a different answer. Selection is the
+// only thing that can see this: the value suites force GPU evaluation, so they
+// are blind to a fallback.
+//
+// Joda treats a token's run length as a minimum width while cuDF's specifiers
+// are fixed, so 'y-M-d' prints 2026-1-2 on CPU and pads on the GPU.
+TEST_F(ToCudfSelectionTest, formatDatetimeVariableFieldWidthFallsBack) {
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<int64_t>(
+          {pack(1'609'466'400'000, tz::getTimeZoneID("Asia/Kolkata"))},
+          TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"format_datetime(event_ts, 'y-M-d') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
+// A width the GPU does render identically stays on it, so the gate above is not
+// simply refusing every format.
+TEST_F(ToCudfSelectionTest, formatDatetimeFixedFieldWidthUsesCudf) {
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<int64_t>(
+          {pack(1'609'466'400'000, tz::getTimeZoneID("Asia/Kolkata"))},
+          TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .project({"format_datetime(event_ts, 'yyyy-MM-dd') AS result"})
+          .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+// parse_datetime has three further formats it cannot handle: a two-digit year,
+// because cuDF pivots at 69 and Joda at 70, so '69' would parse to 1969 here
+// and 2069 on CPU; a month or weekday name, which cuDF's parser rejects
+// outright; and a zone name, from which no numeric offset can be recovered.
+TEST_F(ToCudfSelectionTest, parseDatetimeUnsupportedFormatsFallBack) {
+  // Each format needs text it actually matches: falling back means CPU parses
+  // for real, and a mismatched input would fail the query rather than the
+  // selection assertion.
+  for (const auto& [format, text] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"yy-MM-dd", "21-01-02"},
+           {"EEE, dd MMM yyyy", "Sat, 02 Jan 2021"},
+           {"yyyy-MM-dd z", "2021-01-02 UTC"},
+       }) {
+    SCOPED_TRACE(format);
+    auto input = makeRowVector({"text"}, {makeFlatVector<std::string>({text})});
+    auto plan =
+        PlanBuilder()
+            .values({input})
+            .project({"parse_datetime(text, '" + format + "') AS result"})
+            .planNode();
+
+    std::shared_ptr<Task> task;
+    AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+    ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+    ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+  }
+}
+
 TEST_F(ToCudfSelectionTest, supportedPrestoDateAddDateUsesCudf) {
   auto input = makeRowVector(
       {"amount", "event_date"},
@@ -194,7 +275,9 @@ TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
   ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
 }
 
-TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
+TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneUsesCudf) {
+  // date_trunc(timestamp) is timezone-aware on GPU, so it runs on cuDF even
+  // when adjust_timestamp_to_session_timezone is enabled.
   auto input = makeRowVector(
       {"event_ts"},
       {makeFlatVector<Timestamp>(
@@ -212,8 +295,8 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
       .config(QueryConfig::kAdjustTimestampToTimezone, "true")
       .countResults(task);
 
-  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
-  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
 }
 
 TEST_F(ToCudfSelectionTest, prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
@@ -242,7 +325,7 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
 
 TEST_F(
     ToCudfSelectionTest,
-    nestedPrestoDateTruncTimestampAdjustTimezoneFallsBack) {
+    nestedPrestoDateTruncTimestampAdjustTimezoneUsesCudf) {
   auto input = makeRowVector(
       {"event_ts"},
       {makeFlatVector<Timestamp>(
@@ -259,15 +342,17 @@ TEST_F(
   ASSERT_TRUE(wasCudfFilterProjectUsed(cudfTask));
   ASSERT_FALSE(wasDefaultFilterProjectUsed(cudfTask));
 
-  std::shared_ptr<Task> fallbackTask;
+  // A nested timezone-sensitive date_trunc(timestamp) also stays on cuDF under
+  // adjust_timestamp_to_session_timezone now that it is timezone-aware.
+  std::shared_ptr<Task> adjustTask;
   AssertQueryBuilder(plan)
       .config("cudf.enabled", true)
       .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
       .config(QueryConfig::kAdjustTimestampToTimezone, "true")
-      .countResults(fallbackTask);
+      .countResults(adjustTask);
 
-  ASSERT_FALSE(wasCudfFilterProjectUsed(fallbackTask));
-  ASSERT_TRUE(wasDefaultFilterProjectUsed(fallbackTask));
+  ASSERT_TRUE(wasCudfFilterProjectUsed(adjustTask));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(adjustTask));
 }
 
 TEST_F(ToCudfSelectionTest, prestoDateTruncDateAdjustTimezoneUsesCudf) {
@@ -291,6 +376,80 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncDateAdjustTimezoneUsesCudf) {
 
   ASSERT_TRUE(wasCudfFilterProjectUsed(task));
   ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+// now() reaches the GPU as a constant, never as a call. It takes no arguments,
+// so the optimizer's "all inputs are constant" test is vacuously true and
+// expression::optimize always constant folds it (ExprOptimizer.cpp:121-130);
+// every operator optimizes before compiling. The projection CudfFilterProject
+// compiles is therefore a TIMESTAMP WITH TIME ZONE constant.
+//
+// Pin both halves of that, because they can fail independently: the folded
+// value must still be the session start time packed with the session zone, and
+// a constant-only projection of a custom type must still be claimed by the GPU
+// operator. Value parity alone would keep passing if the projection silently
+// fell back to CPU.
+TEST_F(ToCudfSelectionTest, nowFoldsToConstantAndStaysOnGpu) {
+  constexpr int64_t kStartMs = 1'609'466'400'000; // 2021-01-01T02:00:00 UTC.
+  auto input =
+      makeRowVector({"amount"}, {makeFlatVector<int64_t>({1, 2, 3, 4})});
+
+  auto plan =
+      PlanBuilder().values({input}).project({"now() AS result"}).planNode();
+
+  std::shared_ptr<Task> task;
+  auto results =
+      AssertQueryBuilder(plan)
+          .config("cudf.enabled", true)
+          .config(QueryConfig::kSessionTimezone, "America/Los_Angeles")
+          .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+          .config(QueryConfig::kSessionStartTime, std::to_string(kStartMs))
+          .copyResults(pool(), task);
+
+  ASSERT_EQ(results->size(), input->size());
+  const auto& resultColumn = results->childAt(0);
+  ASSERT_TRUE(isTimestampWithTimeZoneType(resultColumn->type()))
+      << "now() must produce TIMESTAMP WITH TIME ZONE, got "
+      << resultColumn->type()->toString();
+  const auto packed = resultColumn->as<SimpleVector<int64_t>>()->valueAt(0);
+  EXPECT_EQ(unpackMillisUtc(packed), kStartMs);
+  EXPECT_EQ(unpackZoneKeyId(packed), tz::getTimeZoneID("America/Los_Angeles"));
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+// now() must fail exactly where CPU fails, and the constant folding above does
+// not weaken that. CPU's CurrentTimestampFunction::initialize fails when
+// getTimeZoneFromConfig returns null, which happens when
+// adjust_timestamp_to_session_timezone is off or the session timezone is empty.
+// Folding runs that same initialize, so the query still fails for both
+// configurations. Pin it here: a GPU path that produced a value where CPU fails
+// would be a silently wrong result, and this is the only check that would catch
+// it.
+TEST_F(ToCudfSelectionTest, nowWithoutAdjustedSessionTimezoneRejected) {
+  auto input =
+      makeRowVector({"amount"}, {makeFlatVector<int64_t>({1, 2, 3, 4})});
+
+  auto plan =
+      PlanBuilder().values({input}).project({"now() AS result"}).planNode();
+
+  // Adjustment enabled, but no session timezone to adjust to.
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .config("cudf.enabled", true)
+          .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+          .copyResults(pool()),
+      "Timezone cannot be null");
+
+  // Session timezone present, but adjustment disabled.
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .config("cudf.enabled", true)
+          .config(QueryConfig::kSessionTimezone, "America/Los_Angeles")
+          .config(QueryConfig::kAdjustTimestampToTimezone, "false")
+          .copyResults(pool()),
+      "Timezone cannot be null");
 }
 
 // Test supported aggregation should use CUDF
