@@ -20,6 +20,7 @@
 #include "velox/common/base/BloomFilter.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::functions::sparksql {
 

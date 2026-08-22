@@ -33,6 +33,7 @@ velox_add_library(
   BitUtil.cpp
   BloomFilter.cpp
   ConcurrentRuntimeStatWriter.cpp
+  CompareFlags.cpp
   Counters.cpp
   Fs.cpp
   PeriodicStatsReporter.cpp
