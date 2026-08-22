@@ -118,9 +118,28 @@ RowVectorPtr CudfFromVelox::doGetOutput() {
 
   finished_ = noMoreInput_ && inputs_.empty();
 
-  if (finished_ or
-      (currentOutputSize_ < targetOutputSize and not noMoreInput_) or
-      inputs_.empty()) {
+  if (finished_ or inputs_.empty()) {
+    return nullptr;
+  }
+
+  // Input that is already device-resident needs no host-to-device conversion
+  // and must not go through mergeRowVectors, which reads host children a
+  // CudfVector does not carry. Pass it through immediately, re-typed to this
+  // operator's output type. GPU batches are already sized upstream, so they
+  // do not wait for host-side accumulation either.
+  if (auto cudfInput = std::dynamic_pointer_cast<CudfVector>(inputs_.front())) {
+    inputs_.erase(inputs_.begin());
+    const auto size = cudfInput->size();
+    currentOutputSize_ -= size;
+    return std::make_shared<CudfVector>(
+        cudfInput->pool(),
+        outputType_,
+        size,
+        cudfInput->release(),
+        cudfInput->stream());
+  }
+
+  if (currentOutputSize_ < targetOutputSize and not noMoreInput_) {
     return nullptr;
   }
 
@@ -130,6 +149,11 @@ RowVectorPtr CudfFromVelox::doGetOutput() {
   auto const maxVectorSize = std::numeric_limits<vector_size_t>::max();
 
   for (const auto& input : inputs_) {
+    // Merge only the host-resident prefix; a device-resident vector is passed
+    // through by the check above on a later call.
+    if (std::dynamic_pointer_cast<CudfVector>(input) != nullptr) {
+      break;
+    }
     if (totalSize + input->size() <= maxVectorSize) {
       selectedInputs.push_back(input);
       totalSize += input->size();
