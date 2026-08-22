@@ -291,8 +291,11 @@ FsstEncoding::FsstEncoding(
       header.symbolTableSize,
       "FSST symbol table import size mismatch.");
 
-  lengths_ = EncodingFactory(options).create(
-      pool, {header.lengths, header.lengthsSize}, stringBufferFactory_);
+  lengths_ = EncodingFactory().create(
+      pool,
+      {header.lengths, header.lengthsSize},
+      stringBufferFactory_,
+      options);
   blob_ = header.blob;
   pos_ = blob_;
 }

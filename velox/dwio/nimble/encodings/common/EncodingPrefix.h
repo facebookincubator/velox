@@ -86,7 +86,7 @@ struct EncodingPrefix {
     if (useVarint) {
       const char* pos = data.data() + kRowCountOffset;
       varint::readVarint32(&pos);
-      return pos - data.data();
+      return static_cast<uint32_t>(pos - data.data());
     }
     return kFixedPrefixSize;
   }

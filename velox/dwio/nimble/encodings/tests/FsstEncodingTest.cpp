@@ -107,8 +107,8 @@ class FsstEncodingTest : public ::testing::Test {
     auto encoded = encodeFsst(values, buffer);
     stringBuffers_.clear();
 
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     ASSERT_EQ(encoding->dataType(), DataType::String);
     ASSERT_EQ(encoding->encodingType(), expectedEncodingType);
@@ -721,7 +721,10 @@ TEST_F(FsstEncodingTest, fsstCompressionTargetRatioFallsBackToTrivial) {
   stringBuffers_.clear();
 
   auto permissiveTargetEncoding = EncodingFactory().create(
-      *pool_, permissiveTargetEncoded, createStringBufferFactory());
+      *pool_,
+      permissiveTargetEncoded,
+      createStringBufferFactory(),
+      Encoding::Options{});
   EXPECT_EQ(permissiveTargetEncoding->encodingType(), EncodingType::Fsst);
 
   Buffer strictTargetBuffer{*pool_};
@@ -733,7 +736,10 @@ TEST_F(FsstEncodingTest, fsstCompressionTargetRatioFallsBackToTrivial) {
   stringBuffers_.clear();
 
   auto strictTargetEncoding = EncodingFactory().create(
-      *pool_, strictTargetEncoded, createStringBufferFactory());
+      *pool_,
+      strictTargetEncoded,
+      createStringBufferFactory(),
+      Encoding::Options{});
 
   EXPECT_EQ(strictTargetEncoded, trivialOnlyEncoded);
   EXPECT_EQ(strictTargetEncoding->encodingType(), EncodingType::Trivial);
@@ -750,8 +756,8 @@ TEST_F(FsstEncodingTest, skipAndMaterialize) {
   auto encoded = encodeFsst(values, buffer);
   stringBuffers_.clear();
 
-  auto encoding =
-      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
   encoding->skip(2);
 
@@ -814,8 +820,8 @@ TEST_F(FsstEncodingTest, resetAndRematerialize) {
   auto encoded = encodeFsst(values, buffer);
   stringBuffers_.clear();
 
-  auto encoding =
-      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
   std::vector<std::string_view> decoded1(3);
   encoding->materialize(3, decoded1.data());
@@ -935,8 +941,8 @@ TEST_F(FsstEncodingTest, materializeOneAtATime) {
   auto encoded = encodeFsst(values, buffer);
   stringBuffers_.clear();
 
-  auto encoding =
-      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
   for (size_t i = 0; i < values.size(); ++i) {
     std::string_view decoded;
@@ -986,8 +992,8 @@ TEST_F(FsstEncodingTest, debugString) {
   auto encoded = encodeFsst(values, buffer);
   stringBuffers_.clear();
 
-  auto encoding =
-      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
   EXPECT_EQ(encoding->debugString(0), "FsstEncoding: 2000 rows");
 }
@@ -1012,8 +1018,8 @@ TEST_F(FsstEncodingTest, lengthsEncodingReturnsNestedLengthsEncoding) {
       EncodingType::Fsst);
 
   const auto lengths = FsstEncoding::lengthsEncoding(encoded);
-  auto lengthsEncoding =
-      EncodingFactory().create(*pool_, lengths, createStringBufferFactory());
+  auto lengthsEncoding = EncodingFactory().create(
+      *pool_, lengths, createStringBufferFactory(), Encoding::Options{});
 
   EXPECT_EQ(lengthsEncoding->dataType(), DataType::Uint32);
   EXPECT_EQ(lengthsEncoding->encodingType(), EncodingType::Trivial);

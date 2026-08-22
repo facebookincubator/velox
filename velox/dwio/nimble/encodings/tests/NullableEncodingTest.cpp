@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
-#include <glog/logging.h>
 #include <gtest/gtest.h>
+#include <array>
 #include <span>
 #include "folly/Random.h"
 #include "velox/common/memory/Memory.h"
@@ -28,6 +28,8 @@
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
 // Tests the Encoding API for all nullable Encoding implementations + data
@@ -354,6 +356,228 @@ TEST_F(NullableEncodingSliceTest, slicesAllNullRange) {
         encoding.materializeNullable(
             2, output.data(), [&]() { return outputNulls.data(); }),
         0);
+  }
+}
+
+TEST_F(NullableEncodingSliceTest, encodeNullableFromSerializedChildren) {
+  for (const bool useVarint : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "useVarint=" << useVarint);
+    const nimble::Encoding::Options options{.useVarintRowCount = useVarint};
+    const auto values = toInt32Vector({10, 20, 30});
+    const auto nulls = toBoolVector({true, false, true, true});
+
+    nimble::Buffer valueChildBuffer{*pool_};
+    const auto serializedValues =
+        nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
+            valueChildBuffer,
+            values,
+            nimble::CompressionType::Uncompressed,
+            options);
+    nimble::Buffer nullChildBuffer{*pool_};
+    const auto serializedNulls =
+        nimble::test::Encoder<nimble::TrivialEncoding<bool>>::encode(
+            nullChildBuffer,
+            nulls,
+            nimble::CompressionType::Uncompressed,
+            options);
+
+    nimble::Buffer outputBuffer{*pool_};
+    const auto encoded = nimble::NullableEncoding<int32_t>::encodeNullable(
+        static_cast<uint32_t>(nulls.size()),
+        serializedValues,
+        serializedNulls,
+        outputBuffer,
+        options);
+    nimble::NullableEncoding<int32_t> encoding{
+        *pool_,
+        encoded,
+        [](uint32_t /*totalLength*/) -> void* { return nullptr; },
+        options};
+
+    EXPECT_EQ(encoding.rowCount(), nulls.size());
+    EXPECT_EQ(encoding.nonNulls()->rowCount(), values.size());
+    const auto expected = spreadNullsIntoData<int32_t>(*pool_, values, nulls);
+    nimble::Vector<int32_t> output{pool_.get(), nulls.size()};
+    encoding.materialize(nulls.size(), output.data());
+    ASSERT_EQ(output.size(), expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+      EXPECT_EQ(output[i], expected[i]);
+    }
+
+    const std::array<uint64_t, 3> physicalInput{{10, 20, 30}};
+    nimble::Vector<uint64_t> physicalValues{pool_.get()};
+    physicalValues.insert(
+        physicalValues.end(), physicalInput.begin(), physicalInput.end());
+    nimble::Buffer physicalValueChildBuffer{*pool_};
+    const auto serializedPhysicalValues =
+        nimble::test::Encoder<nimble::TrivialEncoding<uint64_t>>::encode(
+            physicalValueChildBuffer,
+            physicalValues,
+            nimble::CompressionType::Uncompressed,
+            options);
+
+    nimble::Buffer physicalOutputBuffer{*pool_};
+    const auto physicalEncoded =
+        nimble::NullableEncoding<int64_t>::encodeNullable(
+            static_cast<uint32_t>(nulls.size()),
+            serializedPhysicalValues,
+            serializedNulls,
+            physicalOutputBuffer,
+            options);
+    nimble::NullableEncoding<int64_t> physicalEncoding{
+        *pool_,
+        physicalEncoded,
+        [](uint32_t /*totalLength*/) -> void* { return nullptr; },
+        options};
+    EXPECT_EQ(physicalEncoding.rowCount(), nulls.size());
+    EXPECT_EQ(physicalEncoding.nonNulls()->rowCount(), physicalValues.size());
+  }
+}
+
+TEST_F(NullableEncodingSliceTest, encodeNullableWithDeltaBlockChild) {
+  constexpr uint32_t kRowCount = 256;
+  nimble::Vector<int64_t> values{pool_.get()};
+  nimble::Vector<bool> notNulls{pool_.get()};
+  std::vector<int64_t> expected;
+  expected.reserve(kRowCount);
+
+  for (uint32_t row = 0; row < kRowCount; ++row) {
+    const bool isNotNull = row % 3 != 0;
+    notNulls.push_back(isNotNull);
+    if (isNotNull) {
+      values.push_back(static_cast<int64_t>(row * 11));
+      expected.push_back(static_cast<int64_t>(row * 11));
+    } else {
+      expected.push_back(0);
+    }
+  }
+  ASSERT_EQ(values.size(), 170);
+
+  nimble::ManualEncodingSelectionPolicyFactory factory{
+      {{nimble::EncodingType::DeltaBlock, 1.0}}, std::nullopt};
+  auto policy = std::unique_ptr<nimble::EncodingSelectionPolicy<int64_t>>(
+      static_cast<nimble::EncodingSelectionPolicy<int64_t>*>(
+          factory.createPolicy(nimble::DataType::Int64).release()));
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = false, .deltaBlockSize = 32};
+  nimble::Buffer buffer{*pool_};
+  const auto encoded = nimble::EncodingFactory::encodeNullable<int64_t>(
+      std::move(policy), values, notNulls, buffer, options);
+
+  const char* pos = encoded.data() +
+      nimble::EncodingPrefix::prefixSize(encoded, /*useVarint=*/false);
+  const auto valuesSize = nimble::encoding::readUint32(pos);
+  const std::string_view serializedValues{pos, valuesSize};
+  EXPECT_EQ(
+      nimble::EncodingPrefix::encodingType(serializedValues),
+      nimble::EncodingType::DeltaBlock);
+  EXPECT_EQ(
+      nimble::EncodingPrefix::readRowCount(
+          serializedValues, /*useVarint=*/false),
+      values.size());
+
+  nimble::NullableEncoding<int64_t> encoding{
+      *pool_,
+      encoded,
+      [](uint32_t /*totalLength*/) -> void* { return nullptr; },
+      options};
+  ASSERT_EQ(encoding.rowCount(), kRowCount);
+  ASSERT_EQ(
+      encoding.nonNulls()->encodingType(), nimble::EncodingType::DeltaBlock);
+
+  std::vector<int64_t> output(kRowCount);
+  encoding.materialize(kRowCount, output.data());
+  EXPECT_EQ(output, expected);
+}
+
+TEST_F(
+    NullableEncodingSliceTest,
+    encodeNullableFromSerializedChildrenRejectsInvalidChildTypes) {
+  for (const bool useVarint : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "useVarint=" << useVarint);
+    const nimble::Encoding::Options options{.useVarintRowCount = useVarint};
+
+    const auto values = toInt32Vector({10, 20});
+    const auto nulls = toBoolVector({true, false, true});
+    nimble::Buffer valueChildBuffer{*pool_};
+    const auto serializedValues =
+        nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
+            valueChildBuffer,
+            values,
+            nimble::CompressionType::Uncompressed,
+            options);
+    nimble::Buffer nullChildBuffer{*pool_};
+    const auto serializedNulls =
+        nimble::test::Encoder<nimble::TrivialEncoding<bool>>::encode(
+            nullChildBuffer,
+            nulls,
+            nimble::CompressionType::Uncompressed,
+            options);
+
+    nimble::Buffer outputBuffer{*pool_};
+    NIMBLE_ASSERT_THROW(
+        nimble::NullableEncoding<int32_t>::encodeNullable(
+            static_cast<uint32_t>(nulls.size()),
+            serializedValues,
+            serializedValues,
+            outputBuffer,
+            options),
+        "Nullable null child must be bool.");
+
+    NIMBLE_ASSERT_THROW(
+        nimble::NullableEncoding<int64_t>::encodeNullable(
+            static_cast<uint32_t>(nulls.size()),
+            serializedValues,
+            serializedNulls,
+            outputBuffer,
+            options),
+        "Nullable value child data type must match");
+  }
+}
+
+TEST_F(
+    NullableEncodingSliceTest,
+    encodeNullableFromSerializedChildrenRejectsInvalidRowCounts) {
+  for (const bool useVarint : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "useVarint=" << useVarint);
+    const nimble::Encoding::Options options{.useVarintRowCount = useVarint};
+
+    const auto values = toInt32Vector({10, 20, 30, 40});
+    nimble::Buffer valueChildBuffer{*pool_};
+    const auto serializedValues =
+        nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
+            valueChildBuffer,
+            values,
+            nimble::CompressionType::Uncompressed,
+            options);
+    const auto nulls = toBoolVector({true, false, true});
+    nimble::Buffer nullChildBuffer{*pool_};
+    const auto serializedNulls =
+        nimble::test::Encoder<nimble::TrivialEncoding<bool>>::encode(
+            nullChildBuffer,
+            nulls,
+            nimble::CompressionType::Uncompressed,
+            options);
+
+    nimble::Buffer outputBuffer{*pool_};
+    NIMBLE_ASSERT_THROW(
+        nimble::test::Encoder<nimble::NullableEncoding<int32_t>>::
+            encodeNullable(
+                outputBuffer,
+                values,
+                nulls,
+                nimble::CompressionType::Uncompressed,
+                options),
+        "Nullable value count cannot exceed null count.");
+
+    NIMBLE_ASSERT_THROW(
+        nimble::NullableEncoding<int32_t>::encodeNullable(
+            static_cast<uint32_t>(nulls.size() + 1),
+            serializedValues,
+            serializedNulls,
+            outputBuffer,
+            options),
+        "Nullable null child row count must match parent.");
   }
 }
 

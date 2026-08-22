@@ -29,8 +29,8 @@ TrivialEncoding<std::string_view>::TrivialEncoding(
   auto dataCompressionType =
       static_cast<CompressionType>(encoding::readChar(pos));
   auto lengthsSize = encoding::readUint32(pos);
-  lengths_ =
-      EncodingFactory().create(pool, {pos, lengthsSize}, stringBufferFactory);
+  lengths_ = EncodingFactory().create(
+      pool, {pos, lengthsSize}, stringBufferFactory, Encoding::Options{});
   blob_ = pos + lengthsSize;
 
   if (dataCompressionType != CompressionType::Uncompressed) {

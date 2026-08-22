@@ -170,6 +170,11 @@ class TabletWriter {
   // to decide whether to compress.
   CompressionType writeMetadata(std::string_view metadata);
 
+  // Writes raw data segments contiguously and returns their file offset and
+  // total byte length.
+  std::pair<uint64_t, uint32_t> writeSegments(
+      const std::vector<std::string_view>& segments);
+
   // Write stripe group metadata entry and also add that to footer sections if
   // exceeds metadata flush size.
   void tryWriteStripeGroup(bool force = false);
