@@ -207,7 +207,7 @@ NimbleIndexProjector::NimbleIndexProjector(
               .streamVersion = SerializationVersion::kTablet,
               .streamHasChunkHeader = true,
               .streamsUseVarintRowCount =
-                  tablet_->features().compactRowCountEncoding(),
+                  tablet_->properties().compactRowCountEncoding(),
           })} {
   NIMBLE_CHECK_NOT_NULL(
       clusterIndex_, "NimbleIndexProjector requires a tablet with an index");
@@ -953,7 +953,7 @@ void NimbleIndexProjector::buildResult(Result& result) {
       response.slices.emplace_back(assembleStripeSlice(
           packedStripe.rowRange.numRows(),
           packedStripe.requiresNullBarrier,
-          tablet_->features().compactRowCountEncoding(),
+          tablet_->properties().compactRowCountEncoding(),
           packedStripe.streamHasChunkHeader,
           packedRelativeRange,
           packedStripe.body.cloneAsValue(),

@@ -39,8 +39,8 @@
 #include "velox/dwio/nimble/index/IndexConstants.h"
 #include "velox/dwio/nimble/index/IndexLookup.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
-#include "velox/dwio/nimble/tablet/FileFeatures.h"
 #include "velox/dwio/nimble/tablet/FileLayout.h"
+#include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
 #include "velox/dwio/nimble/tablet/MetadataCache.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
@@ -274,9 +274,9 @@ class TabletReader {
     return clusterIndex_.get();
   }
 
-  /// Returns file-level feature state. Missing section means default features.
-  const FileFeatures& features() const {
-    return features_;
+  /// Returns file-level properties. Missing section means default properties.
+  const FileProperties& properties() const {
+    return properties_;
   }
 
   /// Finds the dense index matching the given columns, or nullptr if none.
@@ -529,7 +529,7 @@ class TabletReader {
   // Parses optional sections metadata from footer into optionalSections_ map.
   void initOptionalSections();
 
-  void initFeatures();
+  void initProperties();
 
   // Creates dictionary lookup state from the preloaded optional section.
   void initSharedDictionaries(const Options& options);
@@ -599,7 +599,7 @@ class TabletReader {
   // Index related fields.
   std::vector<index::IndexDescriptor> indexDescriptors_;
   std::unique_ptr<ClusterIndex> clusterIndex_;
-  FileFeatures features_{false, false, {}};
+  FileProperties properties_{false, false, {}};
 
   std::unique_ptr<index::DenseIndexRegistry> denseIndexRegistry_;
 

@@ -112,7 +112,7 @@ struct WriterOptions {
   bool experimentalOmitClusterIndexKeyColumnStorage{false};
 
   /// Enables compact varint row-count encoding for encoded data streams. The
-  /// value is persisted in file features so readers can select the matching
+  /// value is persisted in file properties so readers can select the matching
   /// decoding behavior.
   /// EXPERIMENTAL: Compact row-count encoding is not production-ready. Do not
   /// enable for production tables without consulting the Nimble team (oncall:

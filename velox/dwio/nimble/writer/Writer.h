@@ -190,7 +190,7 @@ class Writer : public velox::dwio::common::Writer {
   // Adds index keys to all configured index writers.
   void addIndexKey(const velox::VectorPtr& input);
 
-  void writeFeatures(const WriteOptionalSectionFn& writeMetadataFn);
+  void writeProperties(const WriteOptionalSectionFn& writeMetadataFn);
 
   // Returns the vector written to data streams. When cluster index key column
   // storage is omitted, this is a top-level row projection excluding key

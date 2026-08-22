@@ -6373,7 +6373,7 @@ TEST_F(WriterTest, compactRowCountEncodingIsPersistedAsFileFeature) {
         writeWithCompactRowCountEncoding(enabled));
     auto tablet = nimble::TabletReader::create(
         readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
-    EXPECT_EQ(tablet->features().compactRowCountEncoding(), enabled);
+    EXPECT_EQ(tablet->properties().compactRowCountEncoding(), enabled);
   }
 }
 
@@ -6415,9 +6415,9 @@ TEST_P(WriterIndexTest, omitClusterIndexKeyColumnStorage) {
   EXPECT_EQ(
       tablet->clusterIndex()->indexColumns(),
       (std::vector<std::string>{"key_col"}));
-  EXPECT_TRUE(tablet->features().clusterIndexKeyColumnStorageOmitted());
+  EXPECT_TRUE(tablet->properties().clusterIndexKeyColumnStorageOmitted());
   EXPECT_EQ(
-      tablet->features().clusterIndexKeyColumnsWithOmittedStorage(),
+      tablet->properties().clusterIndexKeyColumnsWithOmittedStorage(),
       (std::vector<std::string>{"key_col"}));
 
   auto tabletOptions = makeTestTabletOptions(leafPool_.get());
@@ -6426,9 +6426,10 @@ TEST_P(WriterIndexTest, omitClusterIndexKeyColumnStorage) {
       nimble::TabletReader::create(readFile, leafPool_.get(), tabletOptions);
   EXPECT_EQ(tabletWithoutIndex->clusterIndex(), nullptr);
   EXPECT_TRUE(
-      tabletWithoutIndex->features().clusterIndexKeyColumnStorageOmitted());
+      tabletWithoutIndex->properties().clusterIndexKeyColumnStorageOmitted());
   EXPECT_EQ(
-      tabletWithoutIndex->features().clusterIndexKeyColumnsWithOmittedStorage(),
+      tabletWithoutIndex->properties()
+          .clusterIndexKeyColumnsWithOmittedStorage(),
       (std::vector<std::string>{"key_col"}));
 
   nimble::VeloxReader reader(readFile.get(), *leafPool_);
