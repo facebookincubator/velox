@@ -72,11 +72,15 @@ class CacheTest : public ::testing::Test {
   }
 
   void shutdownCache() {
+    // Join the IO executor before shutting the cache down. Prefetches run on
+    // the executor and pin cache entries, so a task that is still in flight
+    // would otherwise touch a cache that has already been shut down.
+    if (executor_ != nullptr) {
+      executor_->join();
+      executor_.reset();
+    }
     if (cache_ != nullptr) {
       cache_->shutdown();
-    }
-    if (executor_ != nullptr) {
-      executor_.reset();
     }
     if (cache_ != nullptr) {
       auto* ssdCache = cache_->ssdCache();
