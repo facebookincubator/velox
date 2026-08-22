@@ -18,8 +18,11 @@
 #include "velox/experimental/cudf/connectors/hive/BufferedInputDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReaderIOHelpers.h"
 
-#include <cudf/detail/utilities/cuda_memcpy.hpp>
-#include <cudf/detail/utilities/vector_factories.hpp>
+#include "velox/common/base/Exceptions.h"
+
+#include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/futures/Future.h>
+#include <folly/system/HardwareConcurrency.h>
 
 #include <algorithm>
 #include <mutex>
@@ -28,6 +31,45 @@
 #include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive {
+
+namespace {
+
+// Runs blocking fetch region reads outside Velox IO executor with higher
+// concurrency; a few in flight do not saturate storage.
+folly::Executor* regionReadExecutor() {
+  constexpr auto kMaxThreads = size_t{64};
+  static folly::CPUThreadPoolExecutor executor{std::clamp(
+      static_cast<size_t>(folly::available_concurrency()),
+      size_t{1},
+      kMaxThreads)};
+  return &executor;
+}
+
+// Reads pending-load region and records each contiguous span as a copy from
+// BufferedInput-owned buffers, without host staging.
+HostToDeviceCopies collectRegionCopies(
+    const BufferedInputDataSource::PendingDeviceLoad& pendingLoad) {
+  HostToDeviceCopies copies;
+  uint64_t collected = 0;
+  const void* data = nullptr;
+  int32_t size = 0;
+  while (collected < pendingLoad.size and
+         pendingLoad.stream->Next(&data, &size)) {
+    const auto spanSize =
+        std::min<uint64_t>(size, pendingLoad.size - collected);
+    copies.sources.push_back(data);
+    copies.destinations.push_back(pendingLoad.dst + collected);
+    copies.sizes.push_back(spanSize);
+    collected += spanSize;
+  }
+  VELOX_CHECK_EQ(
+      collected,
+      pendingLoad.size,
+      "BufferedInput served fewer bytes than the enqueued region");
+  return copies;
+}
+
+} // namespace
 
 BufferedInputDataSource::BufferedInputDataSource(
     std::shared_ptr<facebook::velox::dwio::common::BufferedInput> input)
@@ -61,52 +103,42 @@ void BufferedInputDataSource::finishLoad(rmm::cuda_stream_view stream) {
     return;
   }
 
-  // Prepare copy destinations and sizes while computing batch size.
-  std::vector<void*> copyDestinations;
-  std::vector<size_t> copySizes;
-  copyDestinations.reserve(pendingLoads.size());
-  copySizes.reserve(pendingLoads.size());
-  const auto totalSize = std::accumulate(
-      pendingLoads.begin(),
-      pendingLoads.end(),
-      size_t{0},
-      [&](auto accumulated, const auto& pendingLoad) {
-        copyDestinations.push_back(pendingLoad.dst);
-        copySizes.push_back(pendingLoad.size);
-        return accumulated + pendingLoad.size;
-      });
-
-  // Allocate single pinned buffer for the whole batch.
-  auto hostBuffer =
-      cudf::detail::make_pinned_vector_async<uint8_t>(totalSize, stream);
-
-  // Read each region into its buffer slice.
-  std::vector<const void*> copySources;
-  copySources.reserve(pendingLoads.size());
-
-  size_t bufferOffset = 0;
+  // One task per region: a single thread does not saturate storage bandwidth.
+  std::vector<folly::Future<HostToDeviceCopies>> reads;
+  reads.reserve(pendingLoads.size());
   for (const auto& pendingLoad : pendingLoads) {
-    auto* copySource = hostBuffer.data() + bufferOffset;
-    pendingLoad.stream->readFully(
-        reinterpret_cast<char*>(copySource), pendingLoad.size);
-    copySources.push_back(copySource);
-    bufferOffset += pendingLoad.size;
+    reads.push_back(folly::via(regionReadExecutor(), [&pendingLoad]() {
+      return collectRegionCopies(pendingLoad);
+    }));
+  }
+
+  // Waits for every read: the running ones reference this frame.
+  auto regionCopies = folly::collectAll(std::move(reads)).get();
+  for (auto& regionCopy : regionCopies) {
+    regionCopy.throwUnlessValue();
+  }
+
+  const auto spans = std::accumulate(
+      regionCopies.begin(),
+      regionCopies.end(),
+      size_t{0},
+      [](auto accumulated, const auto& regionCopy) {
+        return accumulated + regionCopy->sizes.size();
+      });
+  HostToDeviceCopies copies{spans};
+
+  for (auto& regionCopy : regionCopies) {
+    copies.append(std::move(*regionCopy));
   }
 
   {
     // Submit the copies of the batch without interleaving them with the
     // batches of other fetches.
     std::scoped_lock<std::mutex> lock(deviceReadMutex());
-    CUDF_CUDA_TRY(
-        cudf::detail::memcpy_batch_async(
-            copyDestinations.data(),
-            copySources.data(),
-            copySizes.data(),
-            copyDestinations.size(),
-            stream));
+    copies.submitAsync(stream);
   }
 
-  // The staging buffer must remain valid until the copies finish.
+  // The source buffers must remain valid until the copies finish.
   stream.synchronize();
 }
 

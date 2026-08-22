@@ -74,6 +74,22 @@ struct ByteRangeFetch {
   void abandon();
 };
 
+// A batch of host to device copies, laid out as the batched copy API takes it.
+struct HostToDeviceCopies {
+  HostToDeviceCopies() = default;
+  explicit HostToDeviceCopies(size_t capacity);
+
+  // Append copies to this batch
+  void append(HostToDeviceCopies&& other);
+
+  // Submits the batch on 'stream'.
+  void submitAsync(rmm::cuda_stream_view stream) const;
+
+  std::vector<const void*> sources;
+  std::vector<void*> destinations;
+  std::vector<size_t> sizes;
+};
+
 // Serializes device-read and host-to-device copy batches across fetches.
 std::mutex& deviceReadMutex();
 

@@ -40,7 +40,8 @@ namespace {
 
 // Runs fetch reads off-thread with a bounded number of in-flight batches.
 folly::CPUThreadPoolExecutor& asyncReadExecutor() {
-  constexpr size_t kMaxThreads{8};
+  // TODO(mh): We may need to adjust this or make it configurable.
+  constexpr auto kMaxThreads = size_t{8};
   static folly::CPUThreadPoolExecutor executor{std::clamp(
       static_cast<size_t>(folly::available_concurrency()),
       size_t{1},
@@ -100,9 +101,7 @@ void readByteRangesToDevice(
     rmm::cuda_stream_view stream) {
   // Schedule host reads for this caller threads with no interleaving
   std::vector<std::unique_ptr<cudf::io::datasource::buffer>> hostBuffers;
-  std::vector<const void*> copySources;
-  std::vector<void*> copyDestinations;
-  std::vector<size_t> copySizes;
+  HostToDeviceCopies copies{reads.size()};
   {
     std::lock_guard<std::mutex> lock(hostReadMutex());
     for (const auto& read : reads) {
@@ -110,9 +109,9 @@ void readByteRangesToDevice(
         continue;
       }
       hostBuffers.push_back(dataSource.host_read(read.offset, read.size));
-      copySources.push_back(hostBuffers.back()->data());
-      copyDestinations.push_back(read.destination);
-      copySizes.push_back(read.size);
+      copies.sources.push_back(hostBuffers.back()->data());
+      copies.destinations.push_back(read.destination);
+      copies.sizes.push_back(read.size);
     }
   }
 
@@ -134,15 +133,7 @@ void readByteRangesToDevice(
       }
     }
 
-    if (not hostBuffers.empty()) {
-      CUDF_CUDA_TRY(
-          cudf::detail::memcpy_batch_async(
-              copyDestinations.data(),
-              copySources.data(),
-              copySizes.data(),
-              copyDestinations.size(),
-              stream));
-    }
+    copies.submitAsync(stream);
   }
 
   // Wait for all device reads to complete.
@@ -189,6 +180,41 @@ void ByteRangeFetch::abandon() {
   }
 
   pending.get();
+}
+
+HostToDeviceCopies::HostToDeviceCopies(size_t capacity) {
+  sources.reserve(capacity);
+  destinations.reserve(capacity);
+  sizes.reserve(capacity);
+}
+
+void HostToDeviceCopies::append(HostToDeviceCopies&& other) {
+  sources.insert(
+      sources.end(),
+      std::make_move_iterator(other.sources.begin()),
+      std::make_move_iterator(other.sources.end()));
+  destinations.insert(
+      destinations.end(),
+      std::make_move_iterator(other.destinations.begin()),
+      std::make_move_iterator(other.destinations.end()));
+  sizes.insert(
+      sizes.end(),
+      std::make_move_iterator(other.sizes.begin()),
+      std::make_move_iterator(other.sizes.end()));
+  other = {};
+}
+
+void HostToDeviceCopies::submitAsync(rmm::cuda_stream_view stream) const {
+  if (sizes.empty()) {
+    return;
+  }
+  CUDF_CUDA_TRY(
+      cudf::detail::memcpy_batch_async(
+          destinations.data(),
+          sources.data(),
+          sizes.data(),
+          sizes.size(),
+          stream));
 }
 
 std::mutex& deviceReadMutex() {
@@ -274,11 +300,11 @@ ByteRangeFetch fetchByteRangesAsync(
           dynamic_cast<BufferedInputDataSource*>(dataSource.get())) {
     {
       std::scoped_lock<std::mutex> lock(hostReadMutex());
-      for (size_t range = 0; range < byteRanges.size(); ++range) {
+      // Adjacent ranges share a contiguous destination, so enqueue them as one
+      // region to minimize the reads and copies of the batch.
+      for (const auto& read : coalesceByteRanges(byteRanges, byteRangeData)) {
         bufferedInput->enqueueForDevice(
-            static_cast<uint64_t>(byteRanges[range].offset()),
-            static_cast<uint64_t>(byteRanges[range].size()),
-            const_cast<uint8_t*>(byteRangeData[range].data()));
+            read.offset, read.size, read.destination);
       }
       bufferedInput->startLoad();
     }

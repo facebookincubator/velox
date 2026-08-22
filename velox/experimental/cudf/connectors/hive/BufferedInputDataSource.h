@@ -65,7 +65,6 @@ class BufferedInputDataSource : public cudf::io::datasource {
   // destination buffers are released before loading.
   void discardPendingLoads();
 
- private:
   // A region enqueued for reading into device memory. `startLoad()` plans the
   // read of `stream` and `finishLoad()` drains it into `dst`.
   struct PendingDeviceLoad {
@@ -74,6 +73,7 @@ class BufferedInputDataSource : public cudf::io::datasource {
     uint64_t size;
   };
 
+ private:
   void readContiguous(size_t offset, size_t size, uint8_t* dst);
 
   std::shared_ptr<facebook::velox::dwio::common::BufferedInput> input_;
