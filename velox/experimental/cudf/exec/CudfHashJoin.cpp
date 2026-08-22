@@ -1500,7 +1500,8 @@ CudfHashJoinProbe::leftSemiFilterJoin(
       cudf::filtered_join filter_join(
           rightTableView.select(rightKeyIndices_),
           cudf::null_equality::UNEQUAL,
-          stream);
+          stream,
+          get_temp_mr());
       leftJoinIndices = filter_join.semi_join(
           leftTableView.select(leftKeyIndices_), stream, get_temp_mr());
     }
@@ -2067,7 +2068,8 @@ CudfHashJoinProbe::rightSemiFilterJoin(
     cudf::filtered_join filter_join(
         leftTableView.select(leftKeyIndices_),
         cudf::null_equality::UNEQUAL,
-        stream);
+        stream,
+        get_temp_mr());
     rightJoinIndices = filter_join.semi_join(
         rightTableView.select(rightKeyIndices_), stream, get_temp_mr());
   }
@@ -2142,7 +2144,8 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::antiJoin(
       cudf::filtered_join filter_join(
           rightTableView.select(rightKeyIndices_),
           cudf::null_equality::UNEQUAL,
-          stream);
+          stream,
+          get_temp_mr());
       leftJoinIndices = filter_join.anti_join(
           leftTableView.select(leftKeyIndices_), stream, get_temp_mr());
     }
