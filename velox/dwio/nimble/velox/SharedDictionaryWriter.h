@@ -15,100 +15,35 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <span>
-#include <string_view>
+#include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "folly/ScopeGuard.h"
 #include "velox/common/Casts.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/DataTypeDispatch.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
-#include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/Vector.h"
-#include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryBuilder.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
-#include "velox/dwio/nimble/encodings/SharedDictionaryTypes.h"
-#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
-#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
+#include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
-#include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
 #include "velox/dwio/nimble/tablet/Chunk.h"
+#include "velox/dwio/nimble/tablet/SharedDictionaryReader.h"
+#include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
 #include "velox/dwio/nimble/velox/StreamData.h"
 
 namespace facebook::nimble {
 
-/// Selects SharedDictionary at the root using writer-provided indices, while
-/// delegating nested index streams to the writer's regular selection policy.
-template <typename T>
-class SharedDictionaryEncodingSelectionPolicy final
-    : public EncodingSelectionPolicy<T> {
- public:
-  using physicalType = typename TypeTraits<T>::physicalType;
-
-  using Mapping = typename SharedDictionaryBuilder<T>::Mapping;
-
-  SharedDictionaryEncodingSelectionPolicy(
-      SharedDictionaryScope scope,
-      uint32_t dictionaryId,
-      Mapping mapping,
-      EncodingSelectionPolicyCreator nestedPolicyCreator)
-      : mapping_{std::move(mapping)},
-        sharedDictionaryInput_{
-            .scope = scope,
-            .dictionaryId = dictionaryId,
-            .indices = mapping_.indices()},
-        nestedPolicyCreator_{std::move(nestedPolicyCreator)} {
-    NIMBLE_CHECK_NOT_NULL(
-        nestedPolicyCreator_,
-        "Shared dictionary encoding selection requires nested policy creator.");
-  }
-
-  EncodingSelectionResult select(
-      std::span<const physicalType> /*values*/,
-      const Statistics<physicalType>& /*statistics*/,
-      const Encoding::Options& /*options*/) final {
-    return {
-        .encodingType = EncodingType::SharedDictionary,
-        .sharedDictionaryInput = sharedDictionaryInput_};
-  }
-
-  EncodingSelectionResult selectNullable(
-      std::span<const physicalType> /*values*/,
-      std::span<const bool> /*nulls*/,
-      const Statistics<physicalType>& /*statistics*/,
-      const Encoding::Options& /*options*/) final {
-    // Nullable would delegate the values to the nested policy and silently drop
-    // the shared dictionary the caller already committed to, so callers wrap
-    // this policy in a nullable encoding instead of routing nulls through it.
-    NIMBLE_UNREACHABLE(
-        "Shared dictionary encoding selection does not support nullable "
-        "values.");
-  }
-
- private:
-  std::unique_ptr<EncodingSelectionPolicyBase> createImpl(
-      EncodingType /*parentEncodingType*/,
-      NestedEncodingIdentifier /*nestedEncodingIdentifier*/,
-      DataType nestedDataType) final {
-    auto policy = nestedPolicyCreator_(nestedDataType);
-    NIMBLE_CHECK_NOT_NULL(policy);
-    return policy;
-  }
-
-  // Owns the indices sharedDictionaryInput_ points at, so the policy stays
-  // valid for as long as the encoding that reads them.
-  const Mapping mapping_;
-  const SharedDictionaryEncodingInput sharedDictionaryInput_;
-  const EncodingSelectionPolicyCreator nestedPolicyCreator_;
-};
-
-template <typename T>
+/// Type-erased owner API for shared dictionary writers.
 class SharedDictionaryWriter {
  public:
   /// Shared dictionary writer configuration and services.
@@ -122,19 +57,20 @@ class SharedDictionaryWriter {
     /// - External: id passed through to the external resolver.
     /// The sentinel default catches accidental use before the writer assigns an
     /// id in the selected scope.
-    uint32_t dictionaryId{kInvalidSharedDictionaryId};
+    uint32_t dictionaryId{};
 
-    /// Uses a prebuilt logical alphabet from the configured resolver instead
-    /// of growing it while encoding values. External-scope dictionaries always
-    /// use a prebuilt alphabet; file-scope dictionaries use one when this is
-    /// set, then serialize it through Nimble encoding for file storage.
-    bool usesPrebuiltAlphabet{false};
+    /// Uses an externally resolved logical alphabet instead of growing one
+    /// while encoding values. External-scope dictionaries always resolve their
+    /// alphabet this way; file-scope dictionaries use one when this is set,
+    /// then store the resolved encoded alphabet as-is in the file.
+    bool useExternalAlphabet{false};
 
     /// Restricts the encodings considered for the stored dictionary alphabet,
     /// as described by SharedDictionaryAlphabet::encode(). External
-    /// dictionaries do not store an alphabet in the file, so this only affects
-    /// stripe/file-owned alphabets.
-    std::vector<EncodingType> alphabetEncodingCandidates;
+    /// dictionaries do not store an alphabet in the file. File dictionaries
+    /// with useExternalAlphabet store the resolved encoded alphabet as-is, so
+    /// this only affects stripe/file-owned alphabets.
+    std::vector<EncodingType> alphabetEncodings;
 
     /// Creates encoding selection policies for nested index streams and stored
     /// alphabets.
@@ -142,13 +78,42 @@ class SharedDictionaryWriter {
 
     Encoding::Options encodingOptions;
 
-    /// Resolves prebuilt logical alphabets keyed by scope, dictionary id, and
-    /// data type. Required for external dictionaries, and for file
-    /// dictionaries when usesPrebuiltAlphabet is set.
-    std::shared_ptr<const SharedDictionaryResolver> resolver;
+    /// Resolves external logical alphabets keyed by dictionary id and data
+    /// type. Required for external dictionaries, and for file dictionaries when
+    /// useExternalAlphabet is set.
+    std::shared_ptr<const ExternalDictionaryResolver> resolver;
   };
 
-  SharedDictionaryWriter(
+  virtual ~SharedDictionaryWriter() = default;
+
+  /// Returns where the dictionary alphabet is stored or resolved.
+  virtual SharedDictionaryScope scope() const = 0;
+
+  /// Returns whether the active scope committed to shared dictionary encoding.
+  virtual bool usesDictionary() const = 0;
+
+  /// Returns whether any chunk used the shared dictionary.
+  virtual bool hasUsedDictionary() const = 0;
+
+  /// Returns the alphabet bytes when the selected scope stores one.
+  virtual std::optional<Chunk> encodeAlphabet(Buffer& buffer) = 0;
+
+  /// Returns the dictionary id within scope().
+  virtual uint32_t dictionaryId() const = 0;
+
+  /// Returns the logical value type encoded by this shared dictionary.
+  virtual DataType dataType() const = 0;
+};
+
+/// Typed shared dictionary writer state used after scalar value encoding.
+template <typename T>
+class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
+ public:
+  using Options = SharedDictionaryWriter::Options;
+
+  static_assert(isIntegralType<T>() && !std::is_same_v<T, bool>);
+
+  TypedSharedDictionaryWriter(
       velox::memory::MemoryPool* pool,
       const Options& options)
       : pool_{velox::checkedNotNull(pool)},
@@ -160,58 +125,41 @@ class SharedDictionaryWriter {
         "creator.");
   }
 
-  /// Encodes one non-null value-stream chunk through SharedDictionaryEncoding,
-  /// as opposed to encodeAlphabet(), which serializes the dictionary itself.
-  ///
-  /// stripeIndex selects the stripe-local dictionary state to use and resets
-  /// stripe-scoped dictionaries at stripe boundaries. buffer owns any bytes
-  /// appended by shared dictionary encoding. streamData must provide the raw
-  /// non-null scalar values and stream metadata used for error messages.
-  /// Encoding options, including the optional buffer pool, are captured in
-  /// Options.
-  std::string_view encodeValues(
-      size_t stripeIndex,
-      Buffer& buffer,
-      const StreamData& streamData) {
-    // Nullable encodings should wrap this non-null value stream in the caller.
-    // Checked before ensureBuilder() so a rejected stream leaves the stripe
-    // dictionary state untouched.
-    NIMBLE_CHECK(
-        !streamData.hasNullValues(),
-        "Shared dictionary writer expects a non-null value stream.");
-    NIMBLE_CHECK_GT(
-        streamData.rowCount(),
-        0,
-        "{} shared dictionary {} cannot encode an empty value stream.",
-        options_.scope,
-        options_.dictionaryId);
-    ensureBuilder(stripeIndex);
-
-    const auto values = physicalValues(streamData);
-    return EncodingFactory::encode<T>(
-        createEncodingPolicy(values, options_.encodingOptions),
-        logicalValues(values),
-        buffer,
-        options_.encodingOptions);
+  /// Creates an encoding selection policy backed by this writer's dictionary
+  /// state for one value-stream chunk.
+  std::unique_ptr<::facebook::nimble::EncodingSelectionPolicy<T>>
+  createEncodingPolicy(size_t stripeIndex) {
+    return std::make_unique<DictionaryEncodingSelectionPolicy>(
+        this, stripeIndex);
   }
 
   /// Returns where the dictionary alphabet is stored or resolved.
-  SharedDictionaryScope scope() const {
+  SharedDictionaryScope scope() const final {
     return options_.scope;
   }
 
   /// Returns the dictionary id within the namespace defined by scope().
-  uint32_t dictionaryId() const {
+  uint32_t dictionaryId() const final {
     return options_.dictionaryId;
   }
 
   /// Returns the logical value type encoded by this shared dictionary.
-  DataType dataType() const {
+  DataType dataType() const final {
     return TypeTraits<T>::dataType;
   }
 
-  /// Serializes the alphabet this writer owns, ready for the caller to store
-  /// as a stripe auxiliary stream or a file catalog entry.
+  /// Returns whether the active scope committed to shared dictionary encoding.
+  bool usesDictionary() const final {
+    return useDictionary_.value_or(false);
+  }
+
+  /// Returns whether any chunk used the shared dictionary.
+  bool hasUsedDictionary() const final {
+    return hasUsedDictionary_;
+  }
+
+  /// Returns alphabet bytes, ready for the caller to store as a stripe
+  /// auxiliary stream or a file catalog entry.
   ///
   /// This consumes the current builder state. Stripe-scoped callers must call
   /// this at every stripe boundary before encoding the next stripe. File-scoped
@@ -219,23 +167,27 @@ class SharedDictionaryWriter {
   /// encoded.
   ///
   /// Returns nullopt when there is nothing to store: a stripe that fell back to
-  /// direct encoding, a scope that has not encoded a value yet, or an external
-  /// dictionary, whose alphabet the resolver owns and the file never stores.
+  /// non-shared encoding or a scope that has not encoded a value yet. Throws
+  /// for external dictionaries, whose alphabets are resolver-owned and never
+  /// encoded into the file.
   /// Throws when the scope committed to shared dictionary encoding but holds no
   /// entries, which would produce a stream no reader could resolve, or when the
   /// active stripe/file dictionary was already finalized.
-  std::optional<Chunk> encodeAlphabet(Buffer& buffer) {
+  std::optional<Chunk> encodeAlphabet(Buffer& buffer) final {
+    NIMBLE_CHECK_NE(
+        options_.scope,
+        SharedDictionaryScope::External,
+        "External shared dictionary {} cannot encode an alphabet; its "
+        "resolver owns the alphabet.",
+        options_.dictionaryId);
+
     checkAlphabetNotFinalized();
 
     SCOPE_EXIT {
       builder_.reset();
-      useSharedDictionary_.reset();
+      useDictionary_.reset();
     };
 
-    // External alphabets are resolver owned and never stored in the file.
-    if (options_.scope == SharedDictionaryScope::External) {
-      return std::nullopt;
-    }
     SCOPE_EXIT {
       recordAlphabetFinalized();
     };
@@ -256,6 +208,13 @@ class SharedDictionaryWriter {
           options_.scope,
           options_.dictionaryId);
     }
+    if (options_.useExternalAlphabet) {
+      NIMBLE_CHECK_EQ(options_.scope, SharedDictionaryScope::File);
+      NIMBLE_CHECK_NOT_NULL(externalAlphabet_);
+      return Chunk{
+          .rowCount = externalAlphabet_->entryCount(),
+          .content = {externalAlphabet_->encodedAlphabet()}};
+    }
     NIMBLE_CHECK_NOT_NULL(builder_);
     // Committing to shared dictionary encoding with nothing to store would
     // leave the encoded stream pointing at a dictionary the reader can never
@@ -270,9 +229,9 @@ class SharedDictionaryWriter {
     const auto rowCount = static_cast<uint32_t>(alphabet.size());
     const auto encoded = SharedDictionaryAlphabet::encode<T>(
         alphabet,
-        options_.alphabetEncodingCandidates,
+        options_.alphabetEncodings,
         buffer,
-        options_.encodingOptions);
+        alphabetEncodingOptions());
     return Chunk{.rowCount = rowCount, .content = {encoded}};
   }
 
@@ -280,9 +239,165 @@ class SharedDictionaryWriter {
   using physicalType = typename TypeTraits<T>::physicalType;
   using BuilderMapping = typename SharedDictionaryBuilder<T>::Mapping;
 
+  class DictionaryEncodingSelectionPolicy final
+      : public ::facebook::nimble::EncodingSelectionPolicy<T> {
+   public:
+    DictionaryEncodingSelectionPolicy(
+        TypedSharedDictionaryWriter* writer,
+        size_t stripeIndex)
+        : writer_{velox::checkedNotNull(writer)}, stripeIndex_{stripeIndex} {}
+
+    EncodingSelectionResult select(
+        std::span<const physicalType> values,
+        const Statistics<physicalType>& statistics,
+        const Encoding::Options& options) final {
+      NIMBLE_CHECK_GT(
+          values.size(),
+          0,
+          "{} shared dictionary {} cannot encode an empty value stream.",
+          writer_->options_.scope,
+          writer_->options_.dictionaryId);
+      return selectValues(values, statistics, options, std::nullopt);
+    }
+
+    EncodingSelectionResult selectNullable(
+        std::span<const physicalType> values,
+        std::span<const bool> notNulls,
+        const Statistics<physicalType>& statistics,
+        const Encoding::Options& options) final {
+      NIMBLE_CHECK_GT(
+          notNulls.size(),
+          0,
+          "{} shared dictionary {} cannot encode an empty value stream.",
+          writer_->options_.scope,
+          writer_->options_.dictionaryId);
+      return selectValues(values, statistics, options, notNulls);
+    }
+
+   private:
+    EncodingSelectionResult selectValues(
+        std::span<const physicalType> values,
+        const Statistics<physicalType>& statistics,
+        const Encoding::Options& options,
+        std::optional<std::span<const bool>> notNulls) {
+      if (notNulls.has_value() && values.empty()) {
+        return selectNonSharedEncoding(values, statistics, options, notNulls);
+      }
+
+      const std::span<const T> logicalValues{
+          reinterpret_cast<const T*>(values.data()), values.size()};
+      writer_->ensureBuilder(stripeIndex_);
+
+      if (writer_->options_.scope != SharedDictionaryScope::Stripe) {
+        return selectDictionary(logicalValues);
+      }
+      if (writer_->useDictionary_.has_value()) {
+        if (!writer_->useDictionary_.value()) {
+          return selectNonSharedEncoding(values, statistics, options, notNulls);
+        }
+        return selectDictionary(logicalValues);
+      }
+
+      // Decide against the regular value encoding, not the nullable wrapper.
+      const auto nonSharedSelection =
+          selectNonSharedEncoding(values, statistics, options);
+      if (nonSharedSelection.encodingType != EncodingType::Dictionary) {
+        writer_->abandonStripeDictionary();
+        if (notNulls.has_value()) {
+          return selectNonSharedEncoding(values, statistics, options, notNulls);
+        }
+        return nonSharedSelection;
+      }
+      return selectDictionary(logicalValues);
+    }
+
+    EncodingSelectionResult selectNonSharedEncoding(
+        std::span<const physicalType> values,
+        const Statistics<physicalType>& statistics,
+        const Encoding::Options& options,
+        std::optional<std::span<const bool>> notNulls = std::nullopt) {
+      auto policy =
+          writer_->createNonSharedEncodingPolicy(TypeTraits<T>::dataType);
+      nonSharedEncodingPolicy_ =
+          std::unique_ptr<::facebook::nimble::EncodingSelectionPolicy<T>>(
+              static_cast<::facebook::nimble::EncodingSelectionPolicy<T>*>(
+                  policy.release()));
+      writer_->validateNonSharedValuePolicy(*nonSharedEncodingPolicy_);
+      auto selection = notNulls.has_value()
+          ? nonSharedEncodingPolicy_->selectNullable(
+                values, *notNulls, statistics, options)
+          : nonSharedEncodingPolicy_->select(values, statistics, options);
+      NIMBLE_CHECK_NE(
+          selection.encodingType,
+          EncodingType::SharedDictionary,
+          "Regular encoding selection must not select SharedDictionary.");
+      return selection;
+    }
+
+    EncodingSelectionResult selectDictionary(std::span<const T> logicalValues) {
+      writer_->selectDictionary();
+      mapping_ = writer_->builder().lookup(logicalValues);
+      NIMBLE_CHECK_EQ(
+          mapping_->indices().size(),
+          logicalValues.size(),
+          "Shared dictionary index count differs from value count.");
+      return {
+          .encodingType = EncodingType::SharedDictionary,
+          .sharedDictionaryInput =
+              SharedDictionaryEncodingInput{.indices = mapping_->indices()}};
+    }
+
+    std::unique_ptr<EncodingSelectionPolicyBase> createImpl(
+        EncodingType parentEncodingType,
+        NestedEncodingIdentifier nestedEncodingIdentifier,
+        DataType nestedDataType) final {
+      if (parentEncodingType == EncodingType::SharedDictionary) {
+        NIMBLE_CHECK_EQ(
+            nestedEncodingIdentifier,
+            EncodingIdentifiers::SharedDictionary::Indices);
+        NIMBLE_CHECK_EQ(nestedDataType, DataType::Uint32);
+        return writer_->createNonSharedEncodingPolicy(nestedDataType);
+      }
+      if (parentEncodingType == EncodingType::Nullable) {
+        if (nestedEncodingIdentifier == EncodingIdentifiers::Nullable::Data) {
+          return createNestedNonSharedEncodingPolicy(
+              parentEncodingType, nestedEncodingIdentifier, nestedDataType);
+        }
+        NIMBLE_CHECK_EQ(
+            nestedEncodingIdentifier, EncodingIdentifiers::Nullable::Nulls);
+        NIMBLE_CHECK_EQ(nestedDataType, DataType::Bool);
+        // Nulls are an independent bitmap stream, not a child of the selected
+        // value encoding policy.
+        return writer_->createNonSharedEncodingPolicy(nestedDataType);
+      }
+      return createNestedNonSharedEncodingPolicy(
+          parentEncodingType, nestedEncodingIdentifier, nestedDataType);
+    }
+
+    std::unique_ptr<EncodingSelectionPolicyBase>
+    createNestedNonSharedEncodingPolicy(
+        EncodingType parentEncodingType,
+        NestedEncodingIdentifier nestedEncodingIdentifier,
+        DataType nestedDataType) {
+      NIMBLE_CHECK_NOT_NULL(
+          nonSharedEncodingPolicy_,
+          "Non-shared nested encoding policy requires a selected value "
+          "encoding policy.");
+      NIMBLE_RETURN_BY_DATA_TYPE(
+          nestedDataType,
+          NestedT,
+          nonSharedEncodingPolicy_->template create<NestedT>(
+              parentEncodingType, nestedEncodingIdentifier));
+    }
+
+    TypedSharedDictionaryWriter* const writer_;
+    const size_t stripeIndex_;
+    std::unique_ptr<EncodingSelectionPolicy<T>> nonSharedEncodingPolicy_;
+    std::optional<BuilderMapping> mapping_;
+  };
+
   // Updates the active stripe and creates the builder when this chunk can use
-  // one. Direct-abandoned and alphabet-emitted stripes intentionally keep no
-  // builder.
+  // one. Non-shared and alphabet-emitted stripes intentionally keep no builder.
   void ensureBuilder(size_t stripeIndex) {
     checkValuesNotFinalized(stripeIndex);
     if (stripeIndex_ == stripeIndex) {
@@ -298,7 +413,7 @@ class SharedDictionaryWriter {
           options_.scope,
           options_.dictionaryId);
       NIMBLE_CHECK(
-          !useSharedDictionary_.has_value(),
+          !useDictionary_.has_value(),
           "{} shared dictionary {} reached a stripe boundary with an active "
           "encoding decision.",
           options_.scope,
@@ -311,7 +426,7 @@ class SharedDictionaryWriter {
           options_.scope,
           options_.dictionaryId);
       NIMBLE_CHECK(
-          useSharedDictionary_.value_or(false),
+          useDictionary_.value_or(false),
           "{} shared dictionary {} reached a stripe boundary without an active "
           "encoding decision.",
           options_.scope,
@@ -330,16 +445,14 @@ class SharedDictionaryWriter {
     stripeIndex_ = stripeIndex;
 
     if (builder_ != nullptr) {
+      NIMBLE_CHECK_NE(options_.scope, SharedDictionaryScope::Stripe);
       return;
     }
     builder_ = createBuilder();
   }
 
-  // Returns whether the active scope committed to the shared dictionary.
-  bool usesDictionary() const {
-    return useSharedDictionary_.value_or(false);
-  }
-
+  // Once an owned alphabet is emitted, more values would produce streams that
+  // reference dictionary entries missing from the encoded alphabet.
   void checkValuesNotFinalized(size_t stripeIndex) const {
     if (!lastFinalizedStripe_.has_value()) {
       return;
@@ -365,23 +478,21 @@ class SharedDictionaryWriter {
   // Rejects repeated alphabet finalization for the same active stripe. File
   // scope records the value stripe that finalized the one file-level alphabet.
   void checkAlphabetNotFinalized() const {
-    if (options_.scope == SharedDictionaryScope::External ||
-        !stripeIndex_.has_value() || lastFinalizedStripe_ != stripeIndex_) {
+    if (!stripeIndex_.has_value() || lastFinalizedStripe_ != stripeIndex_) {
       return;
     }
-    if (options_.scope == SharedDictionaryScope::File) {
-      NIMBLE_FAIL(
-          "{} shared dictionary {} already finalized its alphabet.",
-          options_.scope,
-          options_.dictionaryId);
-    }
     NIMBLE_FAIL(
-        "{} shared dictionary {} already finalized its alphabet for stripe {}.",
+        "{} shared dictionary {} already finalized its alphabet{}.",
         options_.scope,
         options_.dictionaryId,
-        *stripeIndex_);
+        options_.scope == SharedDictionaryScope::Stripe
+            ? " for stripe " + std::to_string(*stripeIndex_)
+            : "");
   }
 
+  // Records that the active stripe/file dictionary can no longer accept value
+  // chunks. Non-shared stripes record this too even though they emit no
+  // alphabet.
   void recordAlphabetFinalized() {
     if (!stripeIndex_.has_value()) {
       return;
@@ -389,160 +500,60 @@ class SharedDictionaryWriter {
     lastFinalizedStripe_ = stripeIndex_;
   }
 
-  // Picks between shared dictionary and direct encoding for one chunk. The
-  // first stripe-scope chunk decides for the whole stripe; file and external
-  // dictionaries always use the shared dictionary.
-  std::unique_ptr<EncodingSelectionPolicy<T>> createEncodingPolicy(
-      std::span<const physicalType> values,
-      const Encoding::Options& options) {
-    const auto lookupValues = logicalValues(values);
-    // File and external dictionaries never fall back to direct encoding.
-    if (options_.scope != SharedDictionaryScope::Stripe) {
-      return selectSharedDictionaryPolicy(builder().lookup(lookupValues));
-    }
-    // A stripe decides on its first chunk and the rest of the stripe follows.
-    if (useSharedDictionary_.has_value()) {
-      if (!useSharedDictionary_.value()) {
-        return createTypedPolicy(TypeTraits<T>::dataType);
-      }
-      return selectSharedDictionaryPolicy(builder().lookup(lookupValues));
-    }
-
-    auto& dictionaryBuilder = builder();
-    auto mapping = dictionaryBuilder.lookup(lookupValues);
-    auto directPolicy = createTypedPolicy(TypeTraits<T>::dataType);
-    const auto statistics = Statistics<physicalType>::create(values);
-    const auto directSelection =
-        directPolicy->select(values, statistics, options);
-    const auto directEstimate = detail::EncodingSizeEstimation<T>::estimateSize(
-        directSelection.encodingType, values, statistics, options);
-    const auto sharedEstimate =
-        estimateSharedDictionarySize(dictionaryBuilder, mapping, options);
-
-    // Ties go to direct encoding, which needs no alphabet stream. A direct
-    // encoding nobody can size keeps the shared dictionary, whose cost is then
-    // the only one to compare.
-    if (directEstimate.has_value() &&
-        directEstimate.value() <= sharedEstimate) {
-      // Releasing the builder drops the entries this lookup inserted.
-      abandonStripeDictionary();
-      return createTypedPolicy(TypeTraits<T>::dataType);
-    }
-    return selectSharedDictionaryPolicy(std::move(mapping));
-  }
-
-  static std::span<const physicalType> physicalValues(
-      const StreamData& streamData) {
-    static_assert(sizeof(T) == sizeof(physicalType));
-    NIMBLE_CHECK_EQ(
-        streamData.data().size() % sizeof(T),
-        0,
-        "Shared dictionary writer value stream has incomplete values.");
-    return {
-        reinterpret_cast<const physicalType*>(streamData.data().data()),
-        streamData.data().size() / sizeof(T)};
-  }
-
-  static std::span<const T> logicalValues(
-      std::span<const physicalType> values) {
-    static_assert(sizeof(T) == sizeof(physicalType));
-    return {
-        reinterpret_cast<const T*>(values.data()),
-        values.size(),
-    };
-  }
-
-  static std::span<const physicalType> physicalValues(
-      std::span<const T> values) {
-    static_assert(sizeof(T) == sizeof(physicalType));
-    return {
-        reinterpret_cast<const physicalType*>(values.data()),
-        values.size(),
-    };
-  }
-
   // Marks the active scope as committed to shared dictionary encoding.
   void selectDictionary() {
-    useSharedDictionary_ = true;
+    useDictionary_ = true;
+    hasUsedDictionary_ = true;
   }
 
-  // Drops lookup-inserted stripe entries when the first chunk chooses direct
-  // encoding; the rest of the stripe stays direct.
+  // Drops lookup-inserted stripe entries when the first chunk chooses
+  // non-shared encoding; the rest of the stripe stays non-shared.
   void abandonStripeDictionary() {
     NIMBLE_CHECK_EQ(options_.scope, SharedDictionaryScope::Stripe);
     NIMBLE_CHECK_NOT_NULL(builder_);
     builder_.reset();
-    useSharedDictionary_ = false;
+    useDictionary_ = false;
   }
 
-  uint64_t estimateSharedDictionarySize(
-      const SharedDictionaryBuilder<T>& builder,
-      const BuilderMapping& mapping,
-      const Encoding::Options& options) const {
-    // Indices address the alphabet, so their bit width follows the entry
-    // count. This mirrors how DictionaryEncoding sizes its own index stream,
-    // and avoids building Statistics over every index just to size them.
-    const auto indices = mapping.indices();
-    const auto entryCount = builder.alphabet().size();
-    NIMBLE_CHECK_GT(
-        entryCount,
-        0,
-        "{} shared dictionary {} has no entries to size.",
-        options_.scope,
-        options_.dictionaryId);
-    const auto indexEstimate = FixedBitWidthEncoding<uint32_t>::estimateSize(
-        indices.size(),
-        /*minValue=*/0,
-        entryCount - 1,
-        options);
-    return EncodingPrefix::serializedSize(
-               static_cast<uint32_t>(indices.size()),
-               options.useVarintRowCount) +
-        sizeof(uint8_t) + varint::varintSize(options_.dictionaryId) +
-        indexEstimate + estimateNewEntrySize(builder, mapping, options);
+  Encoding::Options alphabetEncodingOptions() const {
+    auto options = options_.encodingOptions;
+    // Stored alphabet streams do not carry the row-count encoding mode.
+    // SharedDictionaryAlphabet::create() decodes them with default options.
+    options.useVarintRowCount = false;
+    return options;
   }
 
-  uint64_t estimateNewEntrySize(
-      const SharedDictionaryBuilder<T>& builder,
-      const BuilderMapping& mapping,
-      const Encoding::Options& options) const {
-    const auto newEntryCount = mapping.newEntryCount();
-    if (newEntryCount == 0) {
-      return 0;
-    }
-    // Streaming builders append new entries, so they are the alphabet's tail.
-    return SharedDictionaryAlphabet::estimateSize<T>(
-        builder.alphabet().last(newEntryCount),
-        options_.alphabetEncodingCandidates,
-        options);
-  }
-
-  // Creates the root policy that dispatches to SharedDictionaryEncoding.
-  std::unique_ptr<EncodingSelectionPolicy<T>> selectSharedDictionaryPolicy(
-      BuilderMapping mapping) {
-    selectDictionary();
-    return std::make_unique<SharedDictionaryEncodingSelectionPolicy<T>>(
-        options_.scope,
-        options_.dictionaryId,
-        std::move(mapping),
-        options_.encodingSelectionPolicyCreator);
-  }
-
-  // Creates a root policy for a nested stream and checks the writer supplied
-  // policy creator did not return null.
-  std::unique_ptr<EncodingSelectionPolicyBase> createPolicy(
+  std::unique_ptr<EncodingSelectionPolicyBase> createNonSharedEncodingPolicy(
       DataType dataType) const {
     auto policy = options_.encodingSelectionPolicyCreator(dataType);
     NIMBLE_CHECK_NOT_NULL(policy);
     return policy;
   }
 
-  // Creates a typed root policy for this writer's value type.
-  std::unique_ptr<EncodingSelectionPolicy<T>> createTypedPolicy(
-      DataType dataType) const {
-    return std::unique_ptr<EncodingSelectionPolicy<T>>(
-        static_cast<EncodingSelectionPolicy<T>*>(
-            createPolicy(dataType).release()));
+  // Stripe scope can select shared dictionary only when regular value
+  // selection can choose Dictionary. Manual policies expose that candidate set,
+  // so fail early for manual configs that remove this path.
+  template <typename PolicyT>
+  void validateNonSharedValuePolicy(
+      const ::facebook::nimble::EncodingSelectionPolicy<PolicyT>& policy)
+      const {
+    if (options_.scope != SharedDictionaryScope::Stripe) {
+      return;
+    }
+    const auto* manualPolicy =
+        dynamic_cast<const ManualEncodingSelectionPolicy<PolicyT>*>(&policy);
+    if (manualPolicy == nullptr) {
+      return;
+    }
+    for (const auto& readFactor :
+         manualPolicy->candidateEncodingReadFactors()) {
+      if (readFactor.first == EncodingType::Dictionary) {
+        return;
+      }
+    }
+    NIMBLE_USER_FAIL(
+        "Stripe shared dictionary selection requires regular Dictionary in "
+        "the non-shared value encoding candidates.");
   }
 
   SharedDictionaryBuilder<T>& builder() {
@@ -555,116 +566,92 @@ class SharedDictionaryWriter {
   }
 
   // Selects the builder implementation based on dictionary scope and whether
-  // the file-scope alphabet is prebuilt.
+  // the file-scope alphabet is resolved externally.
   std::unique_ptr<SharedDictionaryBuilder<T>> createBuilder() {
     if (options_.scope == SharedDictionaryScope::External) {
-      return createResolvedDictionaryBuilder(
-          options_.resolver.get(), SharedDictionaryScope::External);
+      return createExternalBuilder(SharedDictionaryScope::External);
     }
-    if (options_.usesPrebuiltAlphabet) {
+    if (options_.useExternalAlphabet) {
       NIMBLE_USER_CHECK_EQ(
           options_.scope,
           SharedDictionaryScope::File,
-          "Prebuilt shared dictionary alphabets require file scope.");
-      return createResolvedDictionaryBuilder(
-          options_.resolver.get(), SharedDictionaryScope::File);
+          "External shared dictionary alphabets require file scope.");
+      return createExternalBuilder(SharedDictionaryScope::File);
     }
     return std::make_unique<StreamingSharedDictionaryBuilder<T>>(
         options_.scope, options_.dictionaryId, pool_);
   }
 
-  // Resolves a prebuilt logical alphabet and dispatches to the file or external
-  // builder setup.
-  std::unique_ptr<SharedDictionaryBuilder<T>> createResolvedDictionaryBuilder(
-      const SharedDictionaryResolver* resolver,
+  // Resolves an external logical alphabet. The resolver key is
+  // scope-independent; scope only controls how the writer stores or references
+  // the resolved alphabet.
+  std::unique_ptr<SharedDictionaryBuilder<T>> createExternalBuilder(
       SharedDictionaryScope scope) {
     NIMBLE_USER_CHECK_NOT_NULL(
-        resolver,
-        "{} shared dictionary {} requires a writer resolver.",
+        options_.resolver,
+        "{} shared dictionary {} requires a dictionary resolver.",
         scope,
         options_.dictionaryId);
-    prebuiltAlphabet_ = resolver->resolve(
-        scope, options_.dictionaryId, TypeTraits<T>::dataType);
+    externalAlphabet_ = options_.resolver->resolve(
+        options_.dictionaryId, TypeTraits<T>::dataType);
     NIMBLE_USER_CHECK_NOT_NULL(
-        prebuiltAlphabet_,
+        externalAlphabet_,
         "{} shared dictionary {} was not found.",
         scope,
         options_.dictionaryId);
     NIMBLE_USER_CHECK_EQ(
-        prebuiltAlphabet_->dataType(),
+        externalAlphabet_->dataType(),
         TypeTraits<T>::dataType,
         "{} shared dictionary {} has the wrong type.",
         scope,
         options_.dictionaryId);
-    if (scope == SharedDictionaryScope::File) {
-      return createFilePrebuiltBuilder(*prebuiltAlphabet_);
-    }
-    return createExternalPrebuiltBuilder(*prebuiltAlphabet_);
-  }
-
-  // Creates a file-scope fixed builder and keeps the materialized logical
-  // alphabet alive for later Nimble file-catalog serialization.
-  std::unique_ptr<SharedDictionaryBuilder<T>> createFilePrebuiltBuilder(
-      const SharedDictionaryAlphabet& alphabet) {
-    materializeAlphabet(alphabet, materializedAlphabet_);
-    const std::span<const T> materializedAlphabet{
-        materializedAlphabet_.data(), materializedAlphabet_.size()};
-    auto dictionaryIndex = buildDictionaryIndex(materializedAlphabet);
-    return std::make_unique<FixedSharedDictionaryBuilder<T>>(
-        materializedAlphabet,
-        std::move(dictionaryIndex),
-        SharedDictionaryScope::File,
+    NIMBLE_CHECK(
+        materializedAlphabet_.empty(),
+        "{} shared dictionary {} already materialized its external alphabet.",
+        options_.scope,
+        options_.dictionaryId);
+    externalAlphabet_->template materializeAll<T>(materializedAlphabet_);
+    NIMBLE_USER_CHECK(
+        !materializedAlphabet_.empty(),
+        "{} shared dictionary {} has an empty external alphabet.",
+        scope,
+        options_.dictionaryId);
+    return std::make_unique<ExternalSharedDictionaryBuilder<T>>(
+        scope,
+        std::span<const T>{
+            materializedAlphabet_.data(), materializedAlphabet_.size()},
         options_.dictionaryId,
         pool_);
-  }
-
-  // Creates an external builder from a value-to-index map without keeping
-  // serialized alphabet entries in the writer.
-  std::unique_ptr<SharedDictionaryBuilder<T>> createExternalPrebuiltBuilder(
-      const SharedDictionaryAlphabet& alphabet) const {
-    Vector<T> externalValues{pool_};
-    materializeAlphabet(alphabet, externalValues);
-    auto dictionaryIndex = buildDictionaryIndex(
-        std::span<const T>{externalValues.data(), externalValues.size()});
-    return std::make_unique<ExternalSharedDictionaryBuilder<T>>(
-        std::move(dictionaryIndex), options_.dictionaryId, pool_);
-  }
-
-  // Copies alphabet entries into writer logical value storage.
-  void materializeAlphabet(
-      const SharedDictionaryAlphabet& alphabet,
-      Vector<T>& values) const {
-    // SharedDictionaryAlphabet materializes encoding physical values; builders
-    // store logical writer values.
-    values.resize(alphabet.entryCount());
-    for (uint32_t i = 0; i < alphabet.entryCount(); ++i) {
-      values[i] = EncodingPhysicalType<T>::asEncodingLogicalType(
-          alphabet.template physicalValueAt<T>(i));
-    }
   }
 
   // Allocates writer-owned vectors and materialized alphabet values.
   velox::memory::MemoryPool* const pool_;
   // Immutable writer configuration captured at construction.
   const Options options_;
-  // Owns materialized prebuilt alphabets for file-scope builders. The builder
+  // Keeps resolver-returned alphabet storage alive for external builders whose
+  // values may reference its backing bytes.
+  std::shared_ptr<const SharedDictionaryAlphabet> externalAlphabet_;
+  // Owns materialized external alphabets for resolved builders. The builder
   // keeps a non-owning view into this vector to avoid another copy.
   Vector<T> materializedAlphabet_;
-  // Keeps resolver-returned alphabet storage alive for prebuilt builders whose
-  // values may reference its backing bytes.
-  std::shared_ptr<const SharedDictionaryAlphabet> prebuiltAlphabet_;
   // Maps input values to dictionary indices for the active dictionary scope.
   std::unique_ptr<SharedDictionaryBuilder<T>> builder_;
   // Stripe currently being encoded; unset until the first encode() call.
   std::optional<size_t> stripeIndex_;
-  // Active value stripe whose encodeAlphabet() call already completed. For
-  // file scope, this marks the single file-level alphabet as finalized.
+  // Active value stripe whose alphabet was finalized. For non-shared stripes,
+  // finalization emits no alphabet but still closes the stripe.
   std::optional<size_t> lastFinalizedStripe_;
   // Encoding the active scope committed to, unset until its first chunk picks
-  // one. True keeps the shared dictionary; false stays direct for the rest of
-  // the stripe and emits no stripe alphabet. Stripe-scope dictionaries clear it
-  // at each stripe boundary, while file and external dictionaries decide once.
-  std::optional<bool> useSharedDictionary_;
+  // one. True keeps the shared dictionary; false stays non-shared for the rest
+  // of the stripe and emits no stripe alphabet. Stripe-scope dictionaries clear
+  // it at each stripe boundary, while file and external dictionaries decide
+  // once.
+  std::optional<bool> useDictionary_;
+  // True once any chunk uses the dictionary. For stripe scope, this survives
+  // per-stripe resets so final file metadata emits a binding when at least one
+  // stripe used the dictionary and omits it when every stripe stayed
+  // non-shared.
+  bool hasUsedDictionary_{false};
 };
 
 } // namespace facebook::nimble

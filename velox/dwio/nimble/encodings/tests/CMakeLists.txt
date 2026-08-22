@@ -65,7 +65,6 @@ add_executable(
   SentinelEncodingTest.cpp
   SharedDictionaryBuilderTest.cpp
   SharedDictionaryEncodingTest.cpp
-  SharedDictionaryTypesTest.cpp
   SimdForBitpackEncodingViewTest.cpp
   SliceEncodingTest.cpp
   SparseBoolEncodingViewTest.cpp

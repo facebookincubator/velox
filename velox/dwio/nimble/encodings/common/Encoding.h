@@ -74,7 +74,7 @@ struct DecodingStats;
 namespace facebook::nimble {
 
 class EncodingBufferPool;
-class SharedDictionaryResolver;
+class SharedDictionaryAlphabet;
 
 template <typename T, typename Filter, typename ExtractValues, bool kIsDense>
 using DecoderVisitor =
@@ -160,9 +160,9 @@ class Encoding {
     /// Per-column decoding statistics for timing decompression.
     velox::dwio::common::DecodingStats* decodingStats = nullptr;
 
-    /// Resolves alphabets referenced by SharedDictionary encodings. The
-    /// resolver is bound to the current file and stripe decode context.
-    std::shared_ptr<const SharedDictionaryResolver> sharedDictionaryResolver{};
+    /// Direct alphabet for SharedDictionary encodings when the read path has
+    /// already resolved the dictionary bound to this value stream.
+    std::shared_ptr<const SharedDictionaryAlphabet> sharedDictionaryAlphabet;
 
     velox::io::IoCounter* decompressCounter() const {
       return decodingStats != nullptr ? &decodingStats->decompressCPUTimeNanos

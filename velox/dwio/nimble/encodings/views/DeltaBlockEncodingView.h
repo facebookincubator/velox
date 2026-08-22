@@ -41,8 +41,7 @@ class DeltaBlockEncodingView final : public TypedEncodingView<T> {
       std::string_view data,
       velox::memory::MemoryPool* pool,
       const Encoding::Options& options)
-      : TypedEncodingView<
-            T>{data, pool, DeltaBlockEncoding<T>::prefixOptions(options)},
+      : TypedEncodingView<T>{data, pool, options},
         blockBases_{this->template getVectorBuffer<physicalType>()},
         bitWidths_{this->template getVectorBuffer<uint8_t>()},
         blockOffsets_{this->template getVectorBuffer<uint32_t>()} {

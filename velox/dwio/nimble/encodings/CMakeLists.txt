@@ -31,7 +31,8 @@ add_library(
   MainlyConstantEncoding.cpp
   PrefixEncoding.cpp
   RLEEncoding.cpp
-  SharedDictionaryTypes.cpp
+  SharedDictionaryCatalog.cpp
+  SharedDictionaryEncoding.cpp
   SparseBoolEncoding.cpp
   TrivialEncoding.cpp
   common/Encoding.cpp
@@ -81,7 +82,6 @@ add_library(
   SubIntSplitConfig.h
   SparseBoolEncoding.h
   SimdForBitpackEncoding.h
-  SharedDictionaryTypes.h
   SharedDictionaryEncoding.h
   SharedDictionaryBuilder.h
   SentinelEncoding.h
@@ -120,10 +120,30 @@ target_compile_definitions(
     fsst_decompress=nimble_fsst_decompress
 )
 
+build_flatbuffers(
+  "${CMAKE_CURRENT_SOURCE_DIR}/SharedDictionary.fbs"
+  ""
+  nimble_shared_dictionary_schema_fb
+  ""
+  "${CMAKE_CURRENT_BINARY_DIR}"
+  ""
+  ""
+)
+add_library(nimble_shared_dictionary_fb INTERFACE)
+target_include_directories(
+  nimble_shared_dictionary_fb
+  INTERFACE ${PROJECT_BINARY_DIR} ${FLATBUFFERS_INCLUDE_DIR}
+)
+add_dependencies(
+  nimble_shared_dictionary_fb
+  nimble_shared_dictionary_schema_fb
+)
+
 target_link_libraries(
   nimble_encodings
   nimble_compression
   nimble_common
+  nimble_shared_dictionary_fb
   velox_common_base
   velox_fastpforlib
   fsst

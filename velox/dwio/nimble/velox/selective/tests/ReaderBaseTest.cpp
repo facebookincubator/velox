@@ -18,11 +18,17 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+#include <optional>
+#include <set>
+#include <vector>
+
 #include "folly/executors/CPUThreadPoolExecutor.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/tests/TestUtils.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/tablet/FileLayout.h"
 #include "velox/dwio/nimble/tablet/TabletReaderCache.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
@@ -37,6 +43,10 @@ using namespace facebook;
 namespace {
 
 enum class CreationMode { kDirect, kCached };
+
+int32_t sharedDictionaryValue(velox::vector_size_t row) {
+  return row % 2 == 0 ? 0 : std::numeric_limits<int32_t>::max();
+}
 
 } // namespace
 
@@ -89,7 +99,11 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
   }
 
   std::shared_ptr<ReaderBase> createReaderBase() {
-    auto readFile = std::make_shared<velox::InMemoryReadFile>(fileData_);
+    return createReaderBase(fileData_);
+  }
+
+  std::shared_ptr<ReaderBase> createReaderBase(const std::string& fileData) {
+    auto readFile = std::make_shared<velox::InMemoryReadFile>(fileData);
     auto readerOpts = makeReaderOptions();
 
     switch (GetParam()) {
@@ -105,11 +119,70 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
 
         auto input = std::make_unique<velox::dwio::common::BufferedInput>(
             readFile, *pool_);
-        return ReaderBase::create(
-            std::move(input), std::move(cached), readerOpts);
+        return ReaderBase::create(std::move(input), cached, readerOpts);
       }
     }
     VELOX_UNREACHABLE();
+  }
+
+  std::string writeSharedDictionaryFile(SharedDictionaryScope scope) {
+    std::string file;
+    velox::test::VectorMaker vectorMaker(pool_.get());
+    auto vector = vectorMaker.rowVector(
+        {"shared", "plain"},
+        {vectorMaker.mapVector<int64_t, int32_t>(
+             2'000,
+             [](auto /*row*/) { return 1; },
+             [](auto /*idx*/) { return 10; },
+             sharedDictionaryValue),
+         vectorMaker.flatVector<int32_t>(
+             2'000, [](auto row) { return row + 10'000; })});
+
+    WriterOptions writerOptions;
+    writerOptions.maxStreamChunkRawSize = 512;
+    writerOptions.minStreamChunkRawSize = 1;
+    writerOptions.encodingSelectionPolicyCreator = [](DataType dataType) {
+      std::vector<std::pair<EncodingType, float>> readFactors;
+      if (dataType == DataType::Uint32) {
+        readFactors = {{EncodingType::FixedBitWidth, 1.0}};
+      } else if (dataType == DataType::Int32) {
+        readFactors = {
+            {EncodingType::Trivial, 1.0}, {EncodingType::Dictionary, 1.0}};
+      } else {
+        readFactors = {{EncodingType::Trivial, 1.0}};
+      }
+      return ManualEncodingSelectionPolicyFactory{
+          std::move(readFactors), /*compressionOptions=*/std::nullopt}
+          .createPolicy(dataType);
+    };
+    writerOptions.flatMapColumns.emplace("shared", std::set<std::string>{});
+    writerOptions.experimentalSharedDictionaryEncoding =
+        SharedDictionaryEncodingConfig::builder()
+            .addFlatmapValueDictionary(
+                "shared",
+                /*key=*/10,
+                SharedDictionaryConfig{.scope = scope})
+            .build();
+
+    auto writer = std::make_unique<Writer>(
+        vector->type(),
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *pool_,
+        std::move(writerOptions));
+    writer->write(vector);
+    writer->close();
+    return file;
+  }
+
+  uint32_t sharedDictionaryStreamId(const ReaderBase& reader) const {
+    const auto& flatMap =
+        reader.nimbleSchema()->asRow().childAt(0)->asFlatMap();
+    auto child = flatMap.findChild("10");
+    NIMBLE_CHECK(child.has_value());
+    return flatMap.childAt(child.value())
+        ->asScalar()
+        .scalarDescriptor()
+        .offset();
   }
 
   void ensureCache() {
@@ -227,7 +300,7 @@ TEST_P(ReaderBaseTest, equivalentAcrossModes) {
   auto inputCached =
       std::make_unique<velox::dwio::common::BufferedInput>(readFile, *pool_);
   auto fromCache =
-      ReaderBase::create(std::move(inputCached), std::move(cached), readerOpts);
+      ReaderBase::create(std::move(inputCached), cached, readerOpts);
 
   EXPECT_TRUE(direct->fileSchema()->equivalent(*fromCache->fileSchema()));
   EXPECT_EQ(
@@ -253,6 +326,7 @@ TEST_P(ReaderBaseTest, locateStreams) {
   };
 
   std::vector<uint32_t> allStreamIds;
+  allStreamIds.reserve(numStreams);
   for (uint32_t i = 0; i < numStreams; ++i) {
     allStreamIds.push_back(i);
   }
@@ -276,6 +350,75 @@ TEST_P(ReaderBaseTest, locateStreams) {
       }
     }
   }
+}
+
+TEST_P(ReaderBaseTest, fileDictionaryAlphabetLoader) {
+  const auto fileData = writeSharedDictionaryFile(SharedDictionaryScope::File);
+  auto reader = createReaderBase(fileData);
+  StripeStreams streams(reader);
+  streams.setStripe(0);
+
+  const auto& row = reader->nimbleSchema()->asRow();
+  const auto sharedStreamId = sharedDictionaryStreamId(*reader);
+  const auto plainStreamId =
+      row.childAt(1)->asScalar().scalarDescriptor().offset();
+
+  EXPECT_TRUE(reader->tablet().hasFileOrExternalDictionaries());
+  EXPECT_FALSE(
+      reader->tablet().stripeDictionaryStreamId(sharedStreamId).has_value());
+  const auto expectedAlphabet =
+      reader->tablet().resolveDictionaryAlphabet(sharedStreamId);
+  ASSERT_NE(expectedAlphabet, nullptr);
+  ASSERT_EQ(
+      reader->tablet().resolveDictionaryAlphabet(sharedStreamId).get(),
+      expectedAlphabet.get());
+
+  auto loader = streams.dictionaryAlphabetLoader(sharedStreamId);
+  ASSERT_TRUE(loader);
+  EXPECT_EQ(loader(), expectedAlphabet);
+  EXPECT_EQ(loader(), expectedAlphabet);
+
+  EXPECT_EQ(reader->tablet().resolveDictionaryAlphabet(plainStreamId), nullptr);
+  auto plainLoader = streams.dictionaryAlphabetLoader(plainStreamId);
+  EXPECT_FALSE(plainLoader);
+}
+
+TEST_P(ReaderBaseTest, stripeDictionaryAlphabetLoader) {
+  const auto fileData =
+      writeSharedDictionaryFile(SharedDictionaryScope::Stripe);
+  auto reader = createReaderBase(fileData);
+  StripeStreams streams(reader);
+  streams.setStripe(0);
+
+  const auto& row = reader->nimbleSchema()->asRow();
+  const auto sharedStreamId = sharedDictionaryStreamId(*reader);
+  const auto plainStreamId =
+      row.childAt(1)->asScalar().scalarDescriptor().offset();
+
+  EXPECT_TRUE(reader->tablet().hasStripeDictionaries());
+  const auto stripeDictionaryStreamId =
+      reader->tablet().stripeDictionaryStreamId(sharedStreamId);
+  ASSERT_TRUE(stripeDictionaryStreamId.has_value());
+  ASSERT_TRUE(
+      streams.hasStream(static_cast<int>(stripeDictionaryStreamId.value())));
+
+  auto valueInput = streams.enqueue(sharedStreamId);
+  ASSERT_NE(valueInput, nullptr);
+  streams.load();
+
+  auto loader = streams.dictionaryAlphabetLoader(sharedStreamId);
+  ASSERT_TRUE(loader);
+  const auto alphabet = loader();
+  ASSERT_NE(alphabet, nullptr);
+  EXPECT_EQ(alphabet->entryCount(), 2);
+  EXPECT_EQ(alphabet->physicalValueAt<int32_t>(0), 0);
+  EXPECT_EQ(
+      alphabet->physicalValueAt<int32_t>(1),
+      std::numeric_limits<int32_t>::max());
+  EXPECT_FALSE(streams.dictionaryAlphabetLoader(sharedStreamId));
+
+  auto plainLoader = streams.dictionaryAlphabetLoader(plainStreamId);
+  EXPECT_FALSE(plainLoader);
 }
 
 INSTANTIATE_TEST_CASE_P(

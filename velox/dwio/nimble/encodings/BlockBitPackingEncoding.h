@@ -704,8 +704,8 @@ void BlockBitPackingEncoding<T>::readMetadataStream(
     const std::function<void*(uint32_t)>& stringBufferFactory,
     const Encoding::Options& options) const {
   NIMBLE_CHECK_GT(numBlocks_, 0);
-  EncodingFactory(options)
-      .create(pool, encoded, stringBufferFactory)
+  EncodingFactory()
+      .create(pool, encoded, stringBufferFactory, options)
       ->materialize(numBlocks_, output.data());
 }
 

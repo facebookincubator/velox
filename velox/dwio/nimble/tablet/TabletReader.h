@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "folly/Synchronized.h"
+#include "folly/container/F14Map.h"
 #include "velox/common/caching/FileHandle.h"
 #include "velox/common/file/File.h"
 #include "velox/common/io/Options.h"
@@ -62,6 +63,17 @@
 /// will be the same size as the raw data.
 
 namespace facebook::nimble {
+
+class SharedDictionaryReaderFactory;
+class SharedDictionaryAlphabet;
+class ExternalDictionaryResolver;
+
+/// Nimble-specific reader options carried through Velox common ReaderOptions.
+class NimbleReaderOptions : public velox::dwio::common::FormatSpecificOptions {
+ public:
+  /// Resolves External shared integer dictionaries referenced by this file.
+  std::shared_ptr<const ExternalDictionaryResolver> externalDictionaryResolver;
+};
 
 namespace test {
 class TabletReaderTestHelper;
@@ -119,6 +131,8 @@ using index::ClusterIndex;
 ///  the stream identifier provided in the input vector.
 class TabletReader {
  public:
+  ~TabletReader();
+
   /// Options for configuring TabletReader behavior.
   struct Options {
     /// Speculative tail read size (0 = adaptive mode that reads postscript
@@ -192,6 +206,10 @@ class TabletReader {
     /// bytes bypass the async data cache. Defaults to the largest entry an
     /// SsdRun can describe, so every cached entry can reach SSD.
     uint32_t maxCacheEntrySize{1U << velox::cache::SsdRun::kSizeBits};
+
+    /// Resolves External shared integer dictionaries referenced by this file.
+    std::shared_ptr<const ExternalDictionaryResolver>
+        externalDictionaryResolver;
   };
 
   /// Compute checksum from the beginning of the file all the way to footer
@@ -386,7 +404,28 @@ class TabletReader {
 
   StripeIdentifier stripeIdentifier(uint32_t stripeIndex) const;
 
+  /// Returns whether any value stream uses a file or external dictionary.
+  bool hasFileOrExternalDictionaries() const;
+
+  /// Returns whether any value stream uses a stripe dictionary.
+  bool hasStripeDictionaries() const;
+
+  /// Returns the stripe-local dictionary stream used by a value stream.
+  std::optional<uint32_t> stripeDictionaryStreamId(
+      uint32_t valueStreamId) const;
+
+  /// Returns value stream to stripe-local dictionary stream bindings. Returns
+  /// empty when none of the supplied value streams uses a stripe dictionary.
+  folly::F14FastMap<uint32_t, uint32_t> stripeDictionaryStreamIds(
+      std::span<const uint32_t> valueStreamIds) const;
+
+  /// Resolves the file or external alphabet bound to a value stream.
+  std::shared_ptr<const SharedDictionaryAlphabet> resolveDictionaryAlphabet(
+      uint32_t valueStreamId) const;
+
  private:
+  friend class SharedDictionaryReaderFactory;
+
   TabletReader(
       std::shared_ptr<velox::ReadFile> readFile,
       MemoryPool& pool,
@@ -501,8 +540,10 @@ class TabletReader {
 
   void initFeatures();
 
-  // Returns the list of optional section names to preload: the user-specified
-  // sections plus the index section if present.
+  // Creates dictionary lookup state from the preloaded optional section.
+  void initSharedDictionaries(const Options& options);
+
+  // Returns user-specified and built-in optional sections to preload.
   std::vector<std::string> preloadSectionNames(const Options& options) const;
 
   // Reads and decompresses a metadata section via MetadataInput.
@@ -579,6 +620,9 @@ class TabletReader {
   mutable folly::Synchronized<
       std::unordered_map<std::string, std::unique_ptr<MetadataBuffer>>>
       optionalSectionsCache_;
+
+  std::unique_ptr<const SharedDictionaryReaderFactory>
+      sharedDictionaryReaderFactory_;
 
   friend class TabletHelper;
   friend class test::TabletReaderTestHelper;
