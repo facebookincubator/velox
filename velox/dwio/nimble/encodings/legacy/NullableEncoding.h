@@ -102,13 +102,17 @@ NullableEncoding<T>::NullableEncoding(
   const EncodingFactory factory;
   const char* pos = data.data() + EncodingPrefix::kFixedPrefixSize;
   const uint32_t nonNullsBytes = encoding::readUint32(pos);
-  nonNullValues_ =
-      factory.create(*this->pool_, {pos, nonNullsBytes}, stringBufferFactory);
+  nonNullValues_ = factory.create(
+      *this->pool_,
+      {pos, nonNullsBytes},
+      stringBufferFactory,
+      Encoding::Options{});
   pos += nonNullsBytes;
   nulls_ = factory.create(
       *this->pool_,
       {pos, static_cast<size_t>(data.end() - pos)},
-      stringBufferFactory);
+      stringBufferFactory,
+      Encoding::Options{});
   NIMBLE_DCHECK_EQ(
       Encoding::rowCount(), nulls_->rowCount(), "Nulls count mismatch.");
 }

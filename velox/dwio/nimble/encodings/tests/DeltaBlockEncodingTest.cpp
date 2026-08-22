@@ -28,6 +28,8 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/encodings/common/Encoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
 using namespace facebook;
@@ -290,7 +292,7 @@ TEST_F(DeltaBlockEncodingTest, estimateRejectsUnsortedValues) {
       std::nullopt);
 }
 
-TEST_F(DeltaBlockEncodingTest, estimateUsesVarintPrefixSize) {
+TEST_F(DeltaBlockEncodingTest, estimateUsesConfiguredPrefixSize) {
   const std::vector<uint32_t> input{1, 2, 5, 9, 10};
   const auto values = toVector(input);
   const auto physicalValues = std::span<const uint32_t>{
@@ -305,7 +307,38 @@ TEST_F(DeltaBlockEncodingTest, estimateUsesVarintPrefixSize) {
 
   ASSERT_TRUE(fixedPrefixSize.has_value());
   ASSERT_TRUE(varintPrefixSize.has_value());
-  EXPECT_EQ(fixedPrefixSize.value(), varintPrefixSize.value());
+  EXPECT_EQ(
+      fixedPrefixSize.value() - varintPrefixSize.value(),
+      nimble::EncodingPrefix::serializedSize(
+          static_cast<uint32_t>(input.size()), /*useVarint=*/false) -
+          nimble::EncodingPrefix::serializedSize(
+              static_cast<uint32_t>(input.size()), /*useVarint=*/true));
+}
+
+TEST_F(DeltaBlockEncodingTest, encodeUsesConfiguredPrefixSize) {
+  std::vector<uint32_t> input;
+  input.reserve(170);
+  for (uint32_t i = 0; i < 170; ++i) {
+    input.push_back(i * 3);
+  }
+
+  for (const bool useVarint : {false, true}) {
+    SCOPED_TRACE(fmt::format("useVarint={}", useVarint));
+    const auto values = toVector(input);
+    const nimble::Encoding::Options options{
+        .useVarintRowCount = useVarint, .deltaBlockSize = 32};
+    const auto encoded =
+        nimble::test::Encoder<nimble::DeltaBlockEncoding<uint32_t>>::encode(
+            *buffer_, values, nimble::CompressionType::Uncompressed, options);
+
+    EXPECT_EQ(
+        nimble::EncodingPrefix::readRowCount(encoded, useVarint), input.size());
+    if (!useVarint) {
+      EXPECT_NE(
+          nimble::EncodingPrefix::readRowCount(encoded, /*useVarint=*/true),
+          input.size());
+    }
+  }
 }
 
 TEST_F(DeltaBlockEncodingTest, encodeRejectsUnsortedValues) {

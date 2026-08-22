@@ -16,10 +16,11 @@
 #pragma once
 
 #include <cstdint>
-#include <limits>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -28,15 +29,13 @@
 #include "absl/container/flat_hash_map.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Vector.h"
-#include "velox/dwio/nimble/encodings/SharedDictionaryTypes.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 
 #include "velox/common/Casts.h"
 #include "velox/common/memory/Memory.h"
 
 namespace facebook::nimble {
-
-inline constexpr uint64_t kMaxDictionaryEntryCount =
-    std::numeric_limits<uint32_t>::max();
 
 /// Maps dictionary values to their encoded shared dictionary indices.
 template <typename T>
@@ -46,7 +45,7 @@ template <typename T>
 DictionaryIndexType<T> buildDictionaryIndex(std::span<const T> alphabet) {
   NIMBLE_USER_CHECK_LE(
       alphabet.size(),
-      kMaxDictionaryEntryCount,
+      kMaxSharedDictionarySize,
       "Shared dictionary size exceeds maximum.");
   DictionaryIndexType<T> dictionaryIndex;
   dictionaryIndex.reserve(alphabet.size());
@@ -61,25 +60,23 @@ template <typename T>
 class StreamingSharedDictionaryBuilder;
 
 template <typename T>
-class FixedSharedDictionaryBuilder;
-
-template <typename T>
 class ExternalSharedDictionaryBuilder;
 
 /// Builds stable indices for one shared dictionary.
 template <typename T>
 class SharedDictionaryBuilder {
+  static_assert(
+      !std::is_same_v<T, std::string>,
+      "Shared dictionary string values must use std::string_view.");
+
  public:
   /// Identifies how a writer-side shared dictionary builder owns or resolves
   /// its alphabet.
   enum class Kind : uint8_t {
     /// Builds an alphabet by inserting missing values during lookup.
     Streaming = 0,
-    /// Uses a fixed alphabet supplied at construction time.
-    Fixed = 1,
-    /// Uses an externally supplied value-to-index map without file alphabet
-    /// data.
-    External = 2,
+    /// Uses an externally supplied alphabet and value-to-index map.
+    External = 1,
   };
 
   virtual ~SharedDictionaryBuilder() = default;
@@ -98,14 +95,13 @@ class SharedDictionaryBuilder {
 
     /// Returns how many distinct values lookup() inserted into a streaming
     /// dictionary. Streaming builders append them, so they are the last
-    /// entries of alphabet(); fixed and external builders never insert.
+    /// entries of alphabet(); external builders never insert.
     uint32_t newEntryCount() const {
       return newEntryCount_;
     }
 
    private:
     friend class StreamingSharedDictionaryBuilder<T>;
-    friend class FixedSharedDictionaryBuilder<T>;
     friend class ExternalSharedDictionaryBuilder<T>;
 
     // One dictionary index per input value.
@@ -122,8 +118,6 @@ class SharedDictionaryBuilder {
     switch (kind) {
       case Kind::Streaming:
         return "Streaming";
-      case Kind::Fixed:
-        return "Fixed";
       case Kind::External:
         return "External";
     }
@@ -141,20 +135,20 @@ class SharedDictionaryBuilder {
   }
 
   /// Maps values to dictionary indices. Streaming builders insert missing
-  /// values immediately; fixed and external builders throw because their
-  /// alphabet is prebuilt and cannot grow.
+  /// values immediately; external builders throw because their alphabet is
+  /// prebuilt and cannot grow.
   Mapping lookup(std::span<const T> values) {
     return lookupImpl(values);
   }
 
   /// Clears stripe-owned alphabet state before values from the next stripe are
-  /// looked up. Fixed file/external builders do not reset because their
-  /// dictionaries are prebuilt.
+  /// looked up. External builders do not reset because their dictionaries are
+  /// prebuilt.
   void reset() {
     resetImpl();
   }
 
-  /// Returns the alphabet entries when the writer owns and serializes them.
+  /// Returns the current alphabet entries.
   virtual std::span<const T> alphabet() const = 0;
 
  protected:
@@ -192,7 +186,7 @@ class StreamingSharedDictionaryBuilder final
       SharedDictionaryScope scope,
       uint32_t dictionaryId,
       velox::memory::MemoryPool* pool)
-      : SharedDictionaryBuilder<T>{scope, dictionaryId, pool} {
+      : SharedDictionaryBuilder<T>{scope, dictionaryId, pool}, alphabet_{pool} {
     NIMBLE_CHECK_NE(
         scope,
         SharedDictionaryScope::External,
@@ -213,8 +207,8 @@ class StreamingSharedDictionaryBuilder final
     mapping.indices_.reserve(values.size());
 
     for (const auto& value : values) {
-      const auto it = alphabetMapping_.find(value);
-      if (it != alphabetMapping_.end()) {
+      const auto it = alphabetIndex_.find(value);
+      if (it != alphabetIndex_.end()) {
         mapping.indices_.push_back(it->second);
         continue;
       }
@@ -222,12 +216,17 @@ class StreamingSharedDictionaryBuilder final
       const auto index = alphabet_.size();
       NIMBLE_USER_CHECK_LT(
           index,
-          kMaxDictionaryEntryCount,
+          kMaxSharedDictionarySize,
           "Shared dictionary size exceeds maximum.");
       const auto dictionaryIndex = static_cast<uint32_t>(index);
-      const auto [_, inserted] =
-          alphabetMapping_.emplace(value, dictionaryIndex);
-      NIMBLE_CHECK(inserted, "Shared dictionary mapping insertion failed.");
+      const auto [alphabetIndexIt, inserted] =
+          alphabetIndex_.emplace(value, dictionaryIndex);
+      NIMBLE_CHECK(
+          inserted,
+          "Shared dictionary mapping insertion failed because the value already exists: value={}, existingIndex={}, newIndex={}.",
+          value,
+          alphabetIndexIt->second,
+          dictionaryIndex);
       alphabet_.push_back(value);
       ++mapping.newEntryCount_;
       mapping.indices_.push_back(dictionaryIndex);
@@ -237,40 +236,33 @@ class StreamingSharedDictionaryBuilder final
 
   void resetImpl() final {
     alphabet_.clear();
-    alphabetMapping_.clear();
+    alphabetIndex_.clear();
   }
 
  private:
-  std::vector<T> alphabet_;
-  DictionaryIndexType<T> alphabetMapping_;
+  Vector<T> alphabet_;
+  DictionaryIndexType<T> alphabetIndex_;
 };
 
-/// Fixed dictionary builder backed by a prebuilt alphabet. The caller keeps the
-/// alphabet alive and unchanged for the builder's lifetime; the builder only
-/// stores a view so the prebuilt alphabet is not copied again.
+/// Builder for externally supplied dictionaries.
 template <typename T>
-class FixedSharedDictionaryBuilder final : public SharedDictionaryBuilder<T> {
+class ExternalSharedDictionaryBuilder final
+    : public SharedDictionaryBuilder<T> {
  public:
   using Mapping = typename SharedDictionaryBuilder<T>::Mapping;
   using Kind = typename SharedDictionaryBuilder<T>::Kind;
 
-  FixedSharedDictionaryBuilder(
-      std::span<const T> alphabet,
-      DictionaryIndexType<T> dictionaryIndex,
+  ExternalSharedDictionaryBuilder(
       SharedDictionaryScope scope,
+      std::span<const T> alphabet,
       uint32_t dictionaryId,
       velox::memory::MemoryPool* pool)
-      : SharedDictionaryBuilder<T>{scope, dictionaryId, pool},
+      : SharedDictionaryBuilder<T>{checkScope(scope), dictionaryId, pool},
         alphabet_{alphabet},
-        dictionaryIndex_{std::move(dictionaryIndex)} {
-    NIMBLE_CHECK_NE(
-        scope,
-        SharedDictionaryScope::External,
-        "Fixed shared dictionary builder cannot use external scope.");
-  }
+        dictionaryIndex_{buildDictionaryIndex(alphabet)} {}
 
   Kind kind() const final {
-    return Kind::Fixed;
+    return Kind::External;
   }
 
   std::span<const T> alphabet() const final {
@@ -297,68 +289,19 @@ class FixedSharedDictionaryBuilder final : public SharedDictionaryBuilder<T> {
 
   void resetImpl() final {
     NIMBLE_UNSUPPORTED(
-        "{} shared dictionary builder does not support reset().",
-        SharedDictionaryBuilder<T>::kindString(this->kind()));
+        "{} shared dictionary builder does not support reset().", this->kind());
   }
 
  private:
+  static SharedDictionaryScope checkScope(SharedDictionaryScope scope) {
+    NIMBLE_CHECK(
+        scope == SharedDictionaryScope::File ||
+            scope == SharedDictionaryScope::External,
+        "External shared dictionary builder requires file or external scope.");
+    return scope;
+  }
+
   const std::span<const T> alphabet_;
-  const DictionaryIndexType<T> dictionaryIndex_;
-};
-
-/// Lookup-only builder for externally owned dictionaries. It maps values to
-/// indices, but does not expose dictionary entries because external alphabets
-/// are not serialized into the Nimble file.
-template <typename T>
-class ExternalSharedDictionaryBuilder final
-    : public SharedDictionaryBuilder<T> {
- public:
-  using Mapping = typename SharedDictionaryBuilder<T>::Mapping;
-  using Kind = typename SharedDictionaryBuilder<T>::Kind;
-
-  ExternalSharedDictionaryBuilder(
-      DictionaryIndexType<T> dictionaryIndex,
-      uint32_t dictionaryId,
-      velox::memory::MemoryPool* pool)
-      : SharedDictionaryBuilder<
-            T>{SharedDictionaryScope::External, dictionaryId, pool},
-        dictionaryIndex_{std::move(dictionaryIndex)} {}
-
-  Kind kind() const final {
-    return Kind::External;
-  }
-
-  std::span<const T> alphabet() const final {
-    NIMBLE_UNSUPPORTED(
-        "{} shared dictionary builder does not expose an alphabet.",
-        SharedDictionaryBuilder<T>::kindString(this->kind()));
-  }
-
- protected:
-  Mapping lookupImpl(std::span<const T> values) final {
-    Mapping mapping{this->pool()};
-    mapping.indices_.reserve(values.size());
-
-    for (const auto& value : values) {
-      const auto it = dictionaryIndex_.find(value);
-      NIMBLE_USER_CHECK(
-          it != dictionaryIndex_.end(),
-          "{} shared dictionary {} does not contain value {}.",
-          this->scope(),
-          this->dictionaryId(),
-          value);
-      mapping.indices_.push_back(it->second);
-    }
-    return mapping;
-  }
-
-  void resetImpl() final {
-    NIMBLE_UNSUPPORTED(
-        "{} shared dictionary builder does not support reset().",
-        SharedDictionaryBuilder<T>::kindString(this->kind()));
-  }
-
- private:
   const DictionaryIndexType<T> dictionaryIndex_;
 };
 

@@ -75,11 +75,12 @@ SparseBoolEncoding::SparseBoolEncoding(
     : TypedEncoding<bool, bool>{pool, data, options},
       sparseValue_{static_cast<bool>(data[this->dataOffset()])},
       indicesUncompressed_{&pool},
-      indices_{EncodingFactory(options).create(
+      indices_{EncodingFactory().create(
           pool,
           {data.data() + this->dataOffset() + kPrefixSize,
            data.size() - this->dataOffset() - kPrefixSize},
-          stringBufferFactory)} {
+          stringBufferFactory,
+          options)} {
   reset();
 }
 

@@ -17,6 +17,7 @@ add_executable(
   FileFeaturesTest.cpp
   FileLayoutTest.cpp
   MetadataBufferTest.cpp
+  SharedDictionaryReaderTest.cpp
   TabletTest.cpp
   TabletTestUtils.h
 )
