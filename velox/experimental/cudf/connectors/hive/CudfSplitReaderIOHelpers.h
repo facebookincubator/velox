@@ -24,30 +24,11 @@
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
 
-#include <atomic>
-#include <functional>
 #include <future>
 #include <memory>
-#include <mutex>
 #include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive {
-
-// Arbitrates reads between the reading and abandoning threads. Only one of
-// 'tryStart()' and 'tryCancel()' succeeds and owns the destination buffers.
-class ByteRangeReadGuard {
- public:
-  // Claims reads. Returns false if canceled; do not access destination buffers.
-  bool tryStart();
-
-  // Cancels reads. Returns true if they have not started; release buffers.
-  bool tryCancel();
-
- private:
-  enum class State : uint8_t { kPending, kReading, kCancelled };
-
-  std::atomic<State> state_{State::kPending};
-};
 
 // Owns device buffers and tracks reads filling them.
 struct ByteRangeFetch {
@@ -60,44 +41,15 @@ struct ByteRangeFetch {
   // Completes when reads finish. Invalid without an in-flight fetch.
   std::future<void> pending;
 
-  // Shared with reads for pre-start cancellation.
-  std::shared_ptr<ByteRangeReadGuard> readGuard;
-
-  // Releases read-owned resources after cancellation.
-  std::function<void()> cancelCleanup;
-
   // Waits for reads and rethrows any failure. No-op when complete.
   void wait();
 
-  // Cancels pending reads or waits for active ones. On return, nothing writes
-  // to 'buffers'.
+  // Waits for active reads before releasing their destination buffers.
   void abandon();
 };
 
-// A batch of host to device copies, laid out as the batched copy API takes it.
-struct HostToDeviceCopies {
-  HostToDeviceCopies() = default;
-  explicit HostToDeviceCopies(size_t capacity);
-
-  // Append copies to this batch
-  void append(HostToDeviceCopies&& other);
-
-  // Submits the batch on 'stream'.
-  void submitAsync(rmm::cuda_stream_view stream) const;
-
-  std::vector<const void*> sources;
-  std::vector<void*> destinations;
-  std::vector<size_t> sizes;
-};
-
-// Serializes device-read and host-to-device copy batches across fetches.
-std::mutex& deviceReadMutex();
-
-// Serializes host-read batches across fetches.
-std::mutex& hostReadMutex();
-
-// Reads byte ranges from 'dataSource' into device memory on a bounded thread
-// pool. Wait for returned fetch before using its data.
+// Starts cuDF's asynchronous byte-range fetch. Wait for returned fetch before
+// using its data.
 ByteRangeFetch fetchByteRangesAsync(
     std::shared_ptr<cudf::io::datasource> dataSource,
     cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,

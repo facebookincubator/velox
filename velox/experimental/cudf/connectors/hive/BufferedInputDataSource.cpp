@@ -16,17 +16,16 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/BufferedInputDataSource.h"
-#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderIOHelpers.h"
 
 #include "velox/common/base/Exceptions.h"
 
-#include <folly/executors/CPUThreadPoolExecutor.h>
-#include <folly/futures/Future.h>
-#include <folly/system/HardwareConcurrency.h>
+#include <folly/Executor.h>
 
 #include <algorithm>
+#include <functional>
+#include <future>
+#include <memory>
 #include <mutex>
-#include <numeric>
 #include <utility>
 #include <vector>
 
@@ -34,39 +33,22 @@ namespace facebook::velox::cudf_velox::connector::hive {
 
 namespace {
 
-// Runs blocking fetch region reads outside Velox IO executor with higher
-// concurrency; a few in flight do not saturate storage.
-folly::Executor* regionReadExecutor() {
-  constexpr auto kMaxThreads = size_t{64};
-  static folly::CPUThreadPoolExecutor executor{std::clamp(
-      static_cast<size_t>(folly::available_concurrency()),
-      size_t{1},
-      kMaxThreads)};
-  return &executor;
-}
-
-// Reads pending-load region and records each contiguous span as a copy from
-// BufferedInput-owned buffers, without host staging.
-HostToDeviceCopies collectRegionCopies(
-    const BufferedInputDataSource::PendingDeviceLoad& pendingLoad) {
-  HostToDeviceCopies copies;
-  uint64_t collected = 0;
-  const void* data = nullptr;
-  int32_t size = 0;
-  while (collected < pendingLoad.size and
-         pendingLoad.stream->Next(&data, &size)) {
-    const auto spanSize =
-        std::min<uint64_t>(size, pendingLoad.size - collected);
-    copies.sources.push_back(data);
-    copies.destinations.push_back(pendingLoad.dst + collected);
-    copies.sizes.push_back(spanSize);
-    collected += spanSize;
-  }
-  VELOX_CHECK_EQ(
-      collected,
-      pendingLoad.size,
-      "BufferedInput served fewer bytes than the enqueued region");
-  return copies;
+// Launches the `read` task on the IO executor or waiting thread, whichever
+// starts first.
+std::future<size_t> submitDeviceRead(
+    folly::Executor* executor,
+    std::function<size_t()> read) {
+  auto task = std::make_shared<std::packaged_task<size_t()>>(std::move(read));
+  auto result = task->get_future();
+  auto once = std::make_shared<std::once_flag>();
+  auto run = [once, task]() { std::call_once(*once, [task]() { (*task)(); }); };
+  executor->add(run);
+  return std::async(
+      std::launch::deferred,
+      [run = std::move(run), result = std::move(result)]() mutable {
+        run();
+        return result.get();
+      });
 }
 
 } // namespace
@@ -77,69 +59,6 @@ BufferedInputDataSource::BufferedInputDataSource(
 
 size_t BufferedInputDataSource::size() const {
   return fileSize_;
-}
-
-void BufferedInputDataSource::enqueueForDevice(
-    uint64_t offset,
-    uint64_t size,
-    uint8_t* dst) {
-  pendingDeviceLoads_.push_back(
-      {.stream = input_->enqueue({offset, size}), .dst = dst, .size = size});
-}
-
-void BufferedInputDataSource::startLoad() {
-  // Plans coalesced reads and starts prefetchable ones without waiting.
-  input_->load(velox::dwio::common::LogType::FILE);
-}
-
-void BufferedInputDataSource::discardPendingLoads() {
-  pendingDeviceLoads_.clear();
-}
-
-void BufferedInputDataSource::finishLoad(rmm::cuda_stream_view stream) {
-  // Consumes each enqueued stream once to avoid rereading exhausted streams.
-  const auto pendingLoads = std::exchange(pendingDeviceLoads_, {});
-  if (pendingLoads.empty()) {
-    return;
-  }
-
-  // One task per region: a single thread does not saturate storage bandwidth.
-  std::vector<folly::Future<HostToDeviceCopies>> reads;
-  reads.reserve(pendingLoads.size());
-  for (const auto& pendingLoad : pendingLoads) {
-    reads.push_back(folly::via(regionReadExecutor(), [&pendingLoad]() {
-      return collectRegionCopies(pendingLoad);
-    }));
-  }
-
-  // Waits for every read: the running ones reference this frame.
-  auto regionCopies = folly::collectAll(std::move(reads)).get();
-  for (auto& regionCopy : regionCopies) {
-    regionCopy.throwUnlessValue();
-  }
-
-  const auto spans = std::accumulate(
-      regionCopies.begin(),
-      regionCopies.end(),
-      size_t{0},
-      [](auto accumulated, const auto& regionCopy) {
-        return accumulated + regionCopy->sizes.size();
-      });
-  HostToDeviceCopies copies{spans};
-
-  for (auto& regionCopy : regionCopies) {
-    copies.append(std::move(*regionCopy));
-  }
-
-  {
-    // Submit the copies of the batch without interleaving them with the
-    // batches of other fetches.
-    std::scoped_lock<std::mutex> lock(deviceReadMutex());
-    copies.submitAsync(stream);
-  }
-
-  // The source buffers must remain valid until the copies finish.
-  stream.synchronize();
 }
 
 std::unique_ptr<cudf::io::datasource::buffer>
@@ -177,6 +96,29 @@ std::future<size_t> BufferedInputDataSource::host_read_async(
   return std::async(std::launch::deferred, [this, offset, size, dst]() {
     return this->host_read(offset, size, dst);
   });
+}
+
+std::future<size_t> BufferedInputDataSource::device_read_async(
+    size_t offset,
+    size_t size,
+    uint8_t* dst,
+    rmm::cuda_stream_view stream) {
+  VELOX_CHECK(input_->executor() != nullptr, "IO executor is not initialized");
+  return submitDeviceRead(
+      input_->executor(), [this, offset, size, dst, stream]() {
+        auto hostBuffer = host_read(offset, size);
+        CUDF_CUDA_TRY(cudaMemcpyAsync(
+            dst,
+            hostBuffer->data(),
+            hostBuffer->size(),
+            cudaMemcpyDefault,
+            stream.value()));
+        return hostBuffer->size();
+      });
+}
+
+bool BufferedInputDataSource::supports_device_read() const {
+  return true;
 }
 
 void BufferedInputDataSource::readContiguous(

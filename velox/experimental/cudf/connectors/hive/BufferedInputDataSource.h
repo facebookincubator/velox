@@ -49,36 +49,19 @@ class BufferedInputDataSource : public cudf::io::datasource {
 
   std::future<size_t> host_read_async(size_t offset, size_t size, uint8_t* dst);
 
-  // Enqueues a region for next load into 'dst'. Uses
-  // dwio::common::BufferedInput's enqueue API to coalesce reads across a batch.
-  void enqueueForDevice(uint64_t offset, uint64_t size, uint8_t* dst);
+  [[nodiscard]] bool supports_device_read() const override;
 
-  // Plans regions since previous load and submits prefetchable reads to the IO
-  // executor. Does not wait, so it is safe from an executor task.
-  void startLoad();
-
-  // Drains regions since previous load into their device buffers. Blocks until
-  // all batch reads and copies complete.
-  void finishLoad(rmm::cuda_stream_view stream);
-
-  // Drops regions since previous load without reading them. Used when
-  // destination buffers are released before loading.
-  void discardPendingLoads();
-
-  // A region enqueued for reading into device memory. `startLoad()` plans the
-  // read of `stream` and `finishLoad()` drains it into `dst`.
-  struct PendingDeviceLoad {
-    std::shared_ptr<facebook::velox::dwio::common::SeekableInputStream> stream;
-    uint8_t* dst;
-    uint64_t size;
-  };
+  std::future<size_t> device_read_async(
+      size_t offset,
+      size_t size,
+      uint8_t* dst,
+      rmm::cuda_stream_view stream) override;
 
  private:
   void readContiguous(size_t offset, size_t size, uint8_t* dst);
 
   std::shared_ptr<facebook::velox::dwio::common::BufferedInput> input_;
   const size_t fileSize_;
-  std::vector<PendingDeviceLoad> pendingDeviceLoads_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive
