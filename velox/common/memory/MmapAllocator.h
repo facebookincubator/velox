@@ -130,6 +130,34 @@ class MmapAllocator : public MemoryAllocator {
 
   std::string toString() const override;
 
+ protected:
+  // Implement admission-capacity handling for the corresponding
+  // *WithoutRetry() overrides. Call only when forwarding those overrides; all
+  // other callers must use the public allocation APIs, which own validation,
+  // reservation, retry, and cleanup. These functions limit net increases in
+  // allocated and mapped pages while allowing existing usage to remain above a
+  // reduced capacity until memory is freed. Values above the configured
+  // capacity are clamped. Derived allocators used with a cache must override
+  // capacity() to reflect their admission policy without reporting less than
+  // allocated usage, so that cache headroom calculations neither underflow nor
+  // bypass eviction.
+  bool allocateNonContiguousWithCapacity(
+      const SizeMix& sizeMix,
+      Allocation& out,
+      MachinePageCount admissionCapacity);
+
+  bool allocateContiguousWithCapacity(
+      MachinePageCount numPages,
+      Allocation* collateral,
+      ContiguousAllocation& allocation,
+      MachinePageCount maxPages,
+      MachinePageCount admissionCapacity);
+
+  bool growContiguousWithCapacity(
+      MachinePageCount increment,
+      ContiguousAllocation& allocation,
+      MachinePageCount admissionCapacity);
+
  private:
   static constexpr uint64_t kAllSet = 0xffffffffffffffff;
 
@@ -311,7 +339,8 @@ class MmapAllocator : public MemoryAllocator {
       MachinePageCount numPages,
       Allocation* collateral,
       ContiguousAllocation& allocation,
-      MachinePageCount maxPages);
+      MachinePageCount maxPages,
+      MachinePageCount admissionCapacity);
 
   void freeContiguousImpl(ContiguousAllocation& allocation);
 
@@ -329,14 +358,14 @@ class MmapAllocator : public MemoryAllocator {
   // NOTE: 'alignment' must be power of two and >= kMinAlignment.
   void* allocateBytesWithoutRetry(uint64_t bytes, uint16_t alignment) override;
 
-  // Ensures that there are at least 'newMappedNeeded' pages that are
-  // not backing any existing allocation. If capacity_ - numMapped_ <
-  // newMappedNeeded, advises away enough pages backing freed slots in
-  // the size classes to make sure that the new pages can be used
-  // while staying within 'capacity"'.
-  // success. Returns false if cannot advise away enough free but backed pages
-  // from the size classes.
-  bool ensureEnoughMappedPages(int32_t newMappedNeeded);
+  // Ensures that there are at least 'newMappedNeeded' pages that are not
+  // backing any existing allocation. Advises away pages backing freed slots
+  // in the size classes toward the greater of 'admissionCapacity' and the
+  // current allocated pages. Returns false only if reclaim falls short and
+  // the current mapped-page count still exceeds that fresh effective bound.
+  bool ensureEnoughMappedPages(
+      int32_t newMappedNeeded,
+      MachinePageCount admissionCapacity);
 
   // Frees 'allocation and returns the number of freed pages. Does not
   // update 'numAllocated'.
