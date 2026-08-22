@@ -349,6 +349,12 @@ void registerCudf() {
 }
 
 void unregisterCudf() {
+  if (!tryResetCudfExchangeMemoryResource()) {
+    LOG(WARNING)
+        << "Retaining active or in-use cuDF UCX exchange memory resources; "
+           "they become reclaimable after their queries and packed buffers "
+           "are released";
+  }
   output_mr_.reset();
   mr_.reset();
   exec::DriverFactory::adapters.erase(

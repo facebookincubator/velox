@@ -37,10 +37,6 @@ class CudfOrderBy : public CudfOperatorBase {
     return !finished_;
   }
 
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
-    return exec::BlockingReason::kNotBlocked;
-  }
-
   bool isFinished() override {
     return finished_;
   }
