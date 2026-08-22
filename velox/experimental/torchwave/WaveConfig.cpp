@@ -86,6 +86,8 @@ std::string WaveConfig::toString() const {
   addBool("scanOutputReturnBarrier", &WaveConfig::scanOutputReturnBarrier);
   addBool("freeIntermediates", &WaveConfig::freeIntermediates);
   addBool("inputContiguous", &WaveConfig::inputContiguous);
+  addBool("cseCompute", &WaveConfig::cseCompute);
+  addBool("cseViews", &WaveConfig::cseViews);
   addBool("mkSelect", &WaveConfig::mkSelect);
   addBool("stepLastUse", &WaveConfig::stepLastUse);
   addBool("syncEachStep", &WaveConfig::syncEachStep);

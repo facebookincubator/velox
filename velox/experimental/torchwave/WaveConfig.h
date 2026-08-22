@@ -238,6 +238,14 @@ struct WaveConfig {
   // actually contiguous and throws otherwise. Off by default.
   bool inputContiguous{false};
 
+  // Merge nodes that compute the same thing from the same operands, before
+  // partitioning. Split in two because the two halves pay off differently: the
+  // compute half removes real work, while the view half only removes graph
+  // nodes -- and duplicating views per consumer is something duplicateMetadata
+  // does on purpose, so merging them can work against the partitioner.
+  bool cseCompute{false};
+  bool cseViews{false};
+
   // If true, cooperative-grid mode expands tw.masked_select_jagged into its
   // multi-kernel stages instead of the single-node cg form. The stages reserve
   // the output list to the exact selected count, which the cg form cannot do:
