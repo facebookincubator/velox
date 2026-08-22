@@ -88,12 +88,15 @@ template <typename T>
 void TypedVectorizedStatistic<T>::deserializeFrom(
     std::string_view payload,
     velox::memory::MemoryPool& pool) {
-  auto encoding =
-      EncodingFactory().create(pool, payload, [&](uint32_t totalLength) {
+  auto encoding = EncodingFactory().create(
+      pool,
+      payload,
+      [&](uint32_t totalLength) {
         auto& buffer = stringBuffers_.emplace_back(
             velox::AlignedBuffer::allocate<char>(totalLength, &pool));
         return buffer->template asMutable<void>();
-      });
+      },
+      Encoding::Options{});
   NIMBLE_CHECK_NOT_NULL(encoding);
   const auto& rowCount = encoding->rowCount();
   velox::BufferPtr nullsBuffer =
@@ -141,12 +144,15 @@ template <>
 inline void TypedVectorizedStatistic<std::string_view>::deserializeFrom(
     std::string_view payload,
     velox::memory::MemoryPool& pool) {
-  auto encoding =
-      EncodingFactory().create(pool, payload, [&](uint32_t totalLength) {
+  auto encoding = EncodingFactory().create(
+      pool,
+      payload,
+      [&](uint32_t totalLength) {
         auto& buffer = stringBuffers_.emplace_back(
             velox::AlignedBuffer::allocate<char>(totalLength, &pool));
         return buffer->template asMutable<void>();
-      });
+      },
+      Encoding::Options{});
   NIMBLE_CHECK_NOT_NULL(encoding);
   const auto rowCount = encoding->rowCount();
   velox::BufferPtr nullsBuffer =

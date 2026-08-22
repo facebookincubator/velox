@@ -132,12 +132,12 @@ class ALPEncoding final
     exceptionCount_ = header.hasExceptions ? varint::readVarint32(&pos) : 0;
     const uint32_t encodedValuesSize = varint::readVarint32(&pos);
 
-    const EncodingFactory encodingFactory(options);
     auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
-    encodedValuesEncoding_ = encodingFactory.create(
+    encodedValuesEncoding_ = EncodingFactory().create(
         *this->pool_,
         std::string_view(pos, encodedValuesSize),
-        noStringBufferFactory);
+        noStringBufferFactory,
+        options);
     pos += encodedValuesSize;
 
     encodedBuffer_.resize(this->rowCount());
@@ -146,17 +146,19 @@ class ALPEncoding final
 
     if (exceptionCount_ > 0) {
       const uint32_t exceptionPositionsSize = varint::readVarint32(&pos);
-      auto exceptionPositionsEncoding = encodingFactory.create(
+      auto exceptionPositionsEncoding = EncodingFactory().create(
           *this->pool_,
           std::string_view(pos, exceptionPositionsSize),
-          noStringBufferFactory);
+          noStringBufferFactory,
+          options);
       pos += exceptionPositionsSize;
 
       const uint32_t exceptionValuesSize = varint::readVarint32(&pos);
-      auto exceptionValuesEncoding = encodingFactory.create(
+      auto exceptionValuesEncoding = EncodingFactory().create(
           *this->pool_,
           std::string_view(pos, exceptionValuesSize),
-          noStringBufferFactory);
+          noStringBufferFactory,
+          options);
       pos += exceptionValuesSize;
 
       exceptionPositionsBuffer_.resize(exceptionCount_);

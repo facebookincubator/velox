@@ -33,7 +33,6 @@ add_library(
   RLEEncoding.cpp
   SharedDictionaryCatalog.cpp
   SharedDictionaryEncoding.cpp
-  SharedDictionaryTypes.cpp
   SparseBoolEncoding.cpp
   TrivialEncoding.cpp
   common/Encoding.cpp
@@ -83,7 +82,6 @@ add_library(
   SubIntSplitConfig.h
   SparseBoolEncoding.h
   SimdForBitpackEncoding.h
-  SharedDictionaryTypes.h
   SharedDictionaryEncoding.h
   SharedDictionaryBuilder.h
   SentinelEncoding.h
