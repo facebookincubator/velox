@@ -16,7 +16,25 @@
 
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 
+#include "folly/container/F14Map.h"
+#include "velox/common/EnumDefine.h"
+
 namespace facebook::nimble {
+
+namespace {
+const auto& sharedDictionaryScopeNames() {
+  static const folly::F14FastMap<SharedDictionaryScope, std::string_view>
+      kNames = {
+          {SharedDictionaryScope::Stripe, "Stripe"},
+          {SharedDictionaryScope::File, "File"},
+          {SharedDictionaryScope::External, "External"},
+      };
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(SharedDictionaryScope, sharedDictionaryScopeNames)
 
 SharedDictionaryAlphabet::SharedDictionaryAlphabet(
     std::string_view encoded,

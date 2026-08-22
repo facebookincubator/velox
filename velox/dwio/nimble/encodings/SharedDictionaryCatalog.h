@@ -21,7 +21,7 @@
 #include <vector>
 
 #include "folly/container/F14Map.h"
-#include "velox/dwio/nimble/encodings/SharedDictionaryTypes.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 
 namespace facebook::nimble {
 
