@@ -22,6 +22,7 @@
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryTypes.h"
+#include "velox/dwio/nimble/encodings/SubIntSplitConfig.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
@@ -196,11 +197,59 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::Prefix:
     case EncodingType::DeltaBlock:
     case EncodingType::SimdForBitpack:
-    case EncodingType::SubIntSplit:
     case EncodingType::FrequencyPartition:
     case EncodingType::Huffman:
       // Non nested encodings have zero children
       break;
+    case EncodingType::SubIntSplit: {
+      // SubIntSplit decomposes its input into per-section bit-range
+      // sub-streams. Read the section headers, recursively capture each
+      // section's nested encoding as a child, and preserve the recovered
+      // bit boundaries in the encoding config so the same split layout can
+      // be replayed (see ReplayedEncodingSelectionPolicy).
+      const char* pos = encoding.data() + prefixSize;
+      const uint8_t splitCount = encoding::read<uint8_t>(pos);
+      encoding::read<uint8_t>(pos); // reserved
+
+      struct SectionMeta {
+        uint8_t bitStart;
+        uint8_t bitEnd;
+        uint32_t encodedSize;
+      };
+
+      std::vector<SectionMeta> sectionMeta;
+      sectionMeta.reserve(splitCount);
+      for (uint8_t s = 0; s < splitCount; ++s) {
+        SectionMeta meta{};
+        meta.bitStart = encoding::read<uint8_t>(pos);
+        meta.bitEnd = encoding::read<uint8_t>(pos);
+        meta.encodedSize = encoding::readUint32(pos);
+        sectionMeta.push_back(meta);
+      }
+
+      children.reserve(splitCount);
+      for (uint8_t s = 0; s < splitCount; ++s) {
+        children.emplace_back(EncodingLayoutCapture::capture(
+            {pos, sectionMeta[s].encodedSize}, options));
+        pos += sectionMeta[s].encodedSize;
+      }
+
+      std::vector<detail::subintsplit::SegmentPlan> boundaryPlans;
+      boundaryPlans.reserve(splitCount);
+      for (uint8_t s = 0; s < splitCount; ++s) {
+        detail::subintsplit::SegmentPlan segment{};
+        segment.bitStart = static_cast<int>(sectionMeta[s].bitStart);
+        segment.bitEnd = static_cast<int>(sectionMeta[s].bitEnd);
+        boundaryPlans.push_back(segment);
+      }
+
+      return {
+          EncodingType::SubIntSplit,
+          EncodingLayout::Config{
+              detail::subintsplit::makePreserveSplitConfig(boundaryPlans)},
+          compressionType,
+          std::move(children)};
+    }
     case EncodingType::ALP: {
       const char* pos = encoding.data() + prefixSize;
       const auto header = detail::alp::readHeader(pos);
