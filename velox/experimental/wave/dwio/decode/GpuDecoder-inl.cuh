@@ -634,6 +634,8 @@ inline __device__ T randomAccessDecode(const GpuDecode* op, int32_t idx) {
       }
     }
   }
+  assert(false);
+  return T{};
 }
 
 template <typename T, WaveFilterKind kFilterKind, bool kFixedFilter = true>
@@ -740,7 +742,6 @@ template <
 __device__ void decodeSelective(GpuDecode* op) {
   using namespace breeze::utils;
   int32_t nthLoop = 0;
-  constexpr bool kAlwaysDict = !std::is_same_v<T, IndexT>;
   switch (op->nullMode) {
     case NullMode::kDenseNonNull: {
       if (kFilterKind == WaveFilterKind::kAlwaysTrue) {
@@ -838,7 +839,6 @@ __device__ void decodeSelective(GpuDecode* op) {
       break;
     case NullMode::kDenseNullable: {
       int32_t maxRow = op->maxRow;
-      int32_t dataIdx = 0;
       auto* state = reinterpret_cast<NonNullState*>(op->temp);
       if (threadIdx.x == 0 && op->isNullsBitmap) {
         state->nonNullsBelow = op->nthBlock == 0
@@ -861,11 +861,10 @@ __device__ void decodeSelective(GpuDecode* op) {
             dataIdx = nonNullIndex256(
                 op->nulls, base, min(kBlockSize, maxRow - base), state);
           } else {
-            dataIdx = base + threadIdx.x < maxRow
-                ? (op->nulls[base + threadIdx.x] ? base + threadIdx.x : -1)
-                : -1;
+            auto row = base + static_cast<int32_t>(threadIdx.x);
+            dataIdx = row < maxRow ? (op->nulls[row] ? row : -1) : -1;
           }
-          filterPass = base + threadIdx.x < maxRow;
+          filterPass = base + static_cast<int32_t>(threadIdx.x) < maxRow;
           if (filterPass) {
             if (dataIdx == -1) {
               if (!op->nullsAllowed) {
@@ -976,6 +975,7 @@ findRow(const int32_t* rows, int32_t size, int32_t row, GpuDecode* op) {
   }
   printf("Expecting to find  row %d in findRow() size %d %p\n", row, size, op);
   assert(false);
+  return -1;
 }
 
 template <typename T, int32_t kBlockSize>
@@ -1327,7 +1327,7 @@ template <int kBlockSize>
 __global__ void decodeGlobal(GpuDecode* plan) {
 #ifdef PARAM_SMEM
   constexpr int32_t kOpSize = 1 + sizeof(GpuDecode) / 8;
-  __shared__ int64_t shared[kOpSize + 8];
+  __shared__ int64_t shared[kOpSize + kBlockSize / 2];
   if (threadIdx.x == 0) {
     auto op = (int64_t*)&plan[blockIdx.x];
     for (auto i = 0; i < kOpSize; ++i) {

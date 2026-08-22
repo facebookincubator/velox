@@ -88,7 +88,7 @@ __device__ __forceinline__ bool operandOrNull(
     int32_t blockBase,
     T& value) {
   auto op = operands[opIdx];
-  auto index = threadIdx.x;
+  auto index = static_cast<int32_t>(threadIdx.x);
   if (auto indicesInOp = op->indices) {
     auto indices = indicesInOp[blockBase / kBlockSize];
     if (indices) {
@@ -116,7 +116,7 @@ bool __device__ __forceinline__ valueOrNull(
     int32_t blockBase,
     T& value) {
   auto op = operands[opIdx];
-  auto index = threadIdx.x;
+  auto index = static_cast<int32_t>(threadIdx.x);
   if (!kMayWrap) {
     index = (index + blockBase) & op->indexMask;
     if (op->nulls && op->nulls[index] == kNull) {
