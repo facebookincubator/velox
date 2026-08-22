@@ -1004,6 +1004,209 @@ return(%r)
   EXPECT_GT(countSteps(*standaloneGraph), fusedSteps)
       << standalonePlan.describe();
 }
+// True when the node producing %<name> reads the same value twice, i.e. its
+// two operands were merged. Asking the consumer rather than counting nodes is
+// what keeps the answer independent of whether the merged-away node is later
+// swept from the graph.
+bool operandsMerged(nativert::Graph& graph, std::string_view name) {
+  for (const auto& node : graph.nodes()) {
+    for (const auto* out : node.outputs()) {
+      if (out != nullptr && out->name() == name) {
+        EXPECT_EQ(node.inputs().size(), 2u) << name;
+        return node.inputs()[0].value == node.inputs()[1].value;
+      }
+    }
+  }
+  ADD_FAILURE() << "no node produces %" << name;
+  return false;
+}
+
+// Common-subexpression elimination, gated separately for compute and views.
+//
+// The graph pairs one duplicated add (compute) with one duplicated transpose
+// (a view), plus a third transpose whose dims differ. Each consumer takes the
+// two candidates as its two operands, so "were they merged" reduces to "are
+// this node's operands now the same value" -- which, unlike counting nodes,
+// does not depend on whether the merged-away node is later swept from the
+// graph.
+TEST_F(CompileTest, commonSubexpressions) {
+  auto f = [] { return makeTensorMeta(c10::ScalarType::Float, 2); };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"a", f()},
+      {"b", f()},
+      {"s1", f()},
+      {"s2", f()},
+      {"m", f()},
+      {"t1", f()},
+      {"t2", f()},
+      {"t3", f()},
+      {"v", f()},
+      {"w", f()},
+      {"r", f()},
+      {"out", f()}};
+  const char* graphStr = R"(graph(%a, %b):
+%s1 = torch.ops.aten.add.Tensor(self=%a, other=%b)
+%s2 = torch.ops.aten.add.Tensor(self=%a, other=%b)
+%m = torch.ops.aten.add.Tensor(self=%s1, other=%s2)
+%t1 = torch.ops.aten.transpose.int(self=%b, dim0=0, dim1=1)
+%t2 = torch.ops.aten.transpose.int(self=%b, dim0=0, dim1=1)
+%t3 = torch.ops.aten.transpose.int(self=%b, dim0=1, dim1=0)
+%v = torch.ops.aten.add.Tensor(self=%t1, other=%t2)
+%w = torch.ops.aten.add.Tensor(self=%t1, other=%t3)
+%r = torch.ops.aten.add.Tensor(self=%v, other=%w)
+%out = torch.ops.aten.add.Tensor(self=%m, other=%r)
+return(%out)
+)";
+
+  auto savedCompute = WaveConfig::get().cseCompute;
+  auto savedViews = WaveConfig::get().cseViews;
+  auto restore = folly::makeGuard([&] {
+    WaveConfig::get().cseCompute = savedCompute;
+    WaveConfig::get().cseViews = savedViews;
+  });
+
+  struct Case {
+    bool compute;
+    bool views;
+  };
+  for (const Case c :
+       {Case{false, false},
+        Case{true, false},
+        Case{false, true},
+        Case{true, true}}) {
+    SCOPED_TRACE(fmt::format("cseCompute={} cseViews={}", c.compute, c.views));
+    WaveConfig::get().cseCompute = c.compute;
+    WaveConfig::get().cseViews = c.views;
+
+    auto waveGraph = compileGraphString(graphStr, meta);
+    ASSERT_NE(waveGraph, nullptr);
+    auto& graph = *waveGraph->graph();
+
+    // The duplicated add collapses only under cseCompute, the duplicated
+    // transpose only under cseViews: each flag governs its own category.
+    EXPECT_EQ(operandsMerged(graph, "m"), c.compute);
+    EXPECT_EQ(operandsMerged(graph, "v"), c.views);
+
+    // %t3 transposes the same tensor to the same result but spells its dims the
+    // other way round. The key compares attributes verbatim, so it never merges
+    // with %t1 -- this pass claims syntactic identity, not equivalence.
+    EXPECT_FALSE(operandsMerged(graph, "w"));
+
+    // The survivor must be the earlier of the two in program order. Keeping the
+    // later one leaves the earlier one's consumers reading a value produced
+    // after them, which makeParallelNodes rejects outright -- and user lists,
+    // which is what the pass walks, are not in program order.
+    for (const auto& node : graph.nodes()) {
+      size_t consumerPos = 0;
+      size_t pos = 0;
+      for (const auto& other : graph.nodes()) {
+        if (&other == &node) {
+          consumerPos = pos;
+          break;
+        }
+        ++pos;
+      }
+      for (const auto& input : node.inputs()) {
+        if (input.value == nullptr || input.value->producer() == nullptr) {
+          continue;
+        }
+        size_t producerPos = 0;
+        bool found = false;
+        pos = 0;
+        for (const auto& other : graph.nodes()) {
+          if (&other == input.value->producer()) {
+            producerPos = pos;
+            found = true;
+            break;
+          }
+          ++pos;
+        }
+        EXPECT_TRUE(!found || producerPos < consumerPos)
+            << node.target() << " reads %" << input.value->id()
+            << " produced later by " << input.value->producer()->target();
+      }
+    }
+  }
+}
+
+// Two nodes that compute the same thing from the same operands are still not
+// interchangeable if a buffer either of them touches is written in place: the
+// second one reads what the write left behind, and the first does not. The
+// pass compares identity, not position, so it refuses on the whole buffer --
+// a write anywhere in the graph disqualifies every node that reads or produces
+// it, whether or not the write falls between the two candidates.
+//
+// Three graphs, because the rule has to hold from both ends of a node and the
+// negative cases alone would be satisfied by a pass that merged nothing:
+//   operand   %c is written, and %c is an operand of both adds
+//   output    %s1 is written, and %s1 is what one of the adds produces
+//   unrelated %d is written, and neither add goes near it -- the control
+TEST_F(CompileTest, commonSubexpressionsMutation) {
+  auto savedCompute = WaveConfig::get().cseCompute;
+  auto savedViews = WaveConfig::get().cseViews;
+  auto restore = folly::makeGuard([&] {
+    WaveConfig::get().cseCompute = savedCompute;
+    WaveConfig::get().cseViews = savedViews;
+  });
+  WaveConfig::get().cseCompute = true;
+  WaveConfig::get().cseViews = true;
+
+  auto f = [] { return makeTensorMeta(c10::ScalarType::Float, 2); };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"b", f()},
+      {"c", f()},
+      {"d", f()},
+      {"s1", f()},
+      {"s2", f()},
+      {"mut", f()},
+      {"out", f()}};
+
+  // %c is an operand of both adds and is written between them.
+  const char* operandStr = R"(graph(%b, %c, %d):
+%s1 = torch.ops.aten.add.Tensor(self=%b, other=%c)
+%mut = torch.ops.aten.add_.Tensor(self=%c, other=%b)
+%s2 = torch.ops.aten.add.Tensor(self=%b, other=%c)
+%out = torch.ops.aten.add.Tensor(self=%s1, other=%s2)
+return(%out)
+)";
+
+  // %s1 is what the first add produces, and it is written before the consumer
+  // reads either value. Merging would repoint %s2's reader at a buffer the
+  // write has since changed.
+  const char* outputStr = R"(graph(%b, %c, %d):
+%s1 = torch.ops.aten.add.Tensor(self=%b, other=%c)
+%s2 = torch.ops.aten.add.Tensor(self=%b, other=%c)
+%mut = torch.ops.aten.add_.Tensor(self=%s1, other=%b)
+%out = torch.ops.aten.add.Tensor(self=%s1, other=%s2)
+return(%out)
+)";
+
+  // The write lands on a buffer neither add reads or produces, so the two are
+  // interchangeable and must still merge. Without this case the two above
+  // would pass on a pass that had stopped merging altogether.
+  const char* unrelatedStr = R"(graph(%b, %c, %d):
+%s1 = torch.ops.aten.add.Tensor(self=%b, other=%c)
+%mut = torch.ops.aten.add_.Tensor(self=%d, other=%b)
+%s2 = torch.ops.aten.add.Tensor(self=%b, other=%c)
+%out = torch.ops.aten.add.Tensor(self=%s1, other=%s2)
+return(%out)
+)";
+
+  struct Case {
+    const char* name;
+    const char* graphStr;
+    bool merges;
+  };
+  for (const Case c :
+       {Case{"operand", operandStr, false},
+        Case{"output", outputStr, false},
+        Case{"unrelated", unrelatedStr, true}}) {
+    SCOPED_TRACE(c.name);
+    auto waveGraph = compileGraphString(c.graphStr, meta);
+    ASSERT_NE(waveGraph, nullptr);
+    EXPECT_EQ(operandsMerged(*waveGraph->graph(), "out"), c.merges);
+  }
+}
 } // namespace
 } // namespace torch::wave
 
