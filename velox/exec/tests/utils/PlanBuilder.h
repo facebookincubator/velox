@@ -532,11 +532,11 @@ class PlanBuilder {
       return *this;
     }
 
-    /// @param insertHandle TableInsertHandle (optional). Other builder
-    /// arguments such as the `connectorId`, `outputDirectoryPath`, `fileFormat`
-    /// and so on will be ignored.
+    /// @param insertHandle Connector-specific write request (optional). Other
+    /// builder arguments describing it, such as `outputDirectoryPath`,
+    /// `fileFormat` and so on, will be ignored.
     TableWriterBuilder& insertHandle(
-        std::shared_ptr<core::InsertTableHandle> insertHandle) {
+        connector::ConnectorInsertTableHandlePtr insertHandle) {
       insertHandle_ = std::move(insertHandle);
       return *this;
     }
@@ -618,6 +618,13 @@ class PlanBuilder {
       return *this;
     }
 
+    /// @param notNullColumns Target columns that must not contain nulls.
+    TableWriterBuilder& notNullColumns(
+        folly::F14FastSet<std::string> notNullColumns) {
+      notNullColumns_ = std::move(notNullColumns);
+      return *this;
+    }
+
     /// Stop the TableWriterBuilder.
     PlanBuilder& endTableWriter() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -633,7 +640,7 @@ class PlanBuilder {
     std::string outputDirectoryPath_;
     std::string outputFileName_;
     std::string connectorId_{kHiveDefaultConnectorId};
-    std::shared_ptr<core::InsertTableHandle> insertHandle_;
+    connector::ConnectorInsertTableHandlePtr insertHandle_;
 
     std::vector<std::string> partitionBy_;
     int32_t bucketCount_{0};
@@ -651,6 +658,7 @@ class PlanBuilder {
     bool ensureFiles_{false};
     connector::CommitStrategy commitStrategy_{
         connector::CommitStrategy::kNoCommit};
+    folly::F14FastSet<std::string> notNullColumns_;
   };
 
   /// Start a TableWriterBuilder.
@@ -878,10 +886,9 @@ class PlanBuilder {
   /// create a file even if there is no data.
   /// @param commitStrategy The commit strategy to use for the table write
   /// operation, default is kNoCommit.
-  /// @param insertTableHandle Encapsulates information needed to write data
-  /// to a table through a connector. If not specified, tableWrite will build
-  /// a HiveInsertTableHandle with columnHandles, bucketProperty and
-  /// locationHandle.
+  /// @param insertTableHandle Connector-specific write request. If not
+  /// specified, tableWrite will build a HiveInsertTableHandle with
+  /// columnHandles, bucketProperty and locationHandle.
   PlanBuilder& tableWrite(
       const std::string& outputDirectoryPath,
       const std::vector<std::string>& partitionBy,
@@ -901,7 +908,7 @@ class PlanBuilder {
       const bool ensureFiles = false,
       const connector::CommitStrategy commitStrategy =
           connector::CommitStrategy::kNoCommit,
-      std::shared_ptr<core::InsertTableHandle> insertTableHandle = nullptr);
+      connector::ConnectorInsertTableHandlePtr insertTableHandle = nullptr);
 
   /// Add a TableWriteMergeNode. Derives the ColumnStatsSpec from the
   /// TableWriteNode in the plan tree and applies the given step.

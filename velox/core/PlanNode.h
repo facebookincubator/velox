@@ -16,6 +16,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <folly/container/F14Set.h>
 
 #include <utility>
 
@@ -57,12 +58,12 @@ struct TransportKind {
 /// Generic representation of InsertTable
 struct InsertTableHandle {
  public:
+  /// @param notNullColumns Throws a user error if any name is empty.
   InsertTableHandle(
       const std::string& connectorId,
       const connector::ConnectorInsertTableHandlePtr&
-          connectorInsertTableHandle)
-      : connectorId_(connectorId),
-        connectorInsertTableHandle_(connectorInsertTableHandle) {}
+          connectorInsertTableHandle,
+      folly::F14FastSet<std::string> notNullColumns);
 
   const std::string& connectorId() const {
     return connectorId_;
@@ -73,12 +74,19 @@ struct InsertTableHandle {
     return connectorInsertTableHandle_;
   }
 
+  /// Target columns that must not contain nulls. Empty if unconstrained.
+  const folly::F14FastSet<std::string>& notNullColumns() const {
+    return notNullColumns_;
+  }
+
  private:
   // Connector ID
   const std::string connectorId_;
 
   // Write request to a DataSink of that connector type
   const connector::ConnectorInsertTableHandlePtr connectorInsertTableHandle_;
+
+  const folly::F14FastSet<std::string> notNullColumns_;
 };
 
 class SortOrder {
@@ -1559,7 +1567,8 @@ class TableWriteNode : public PlanNode {
   ///   - grouping keys must be a subset of 'columns' (partition columns).
   ///   - grouping keys must not contain duplicates.
   /// @param insertTableHandle Connector-specific handle identifying the
-  /// target table and write operation.
+  /// target table and write operation. Its notNullColumns() must be a subset
+  /// of 'columnNames'.
   /// @param hasPartitioningScheme Whether a partitioning scheme is configured
   /// for shuffles. Controls which query config determines the number of
   /// writer operator instances: 'task_partitioned_writer_count' if true,

@@ -415,7 +415,7 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
 
   // If insertHandle_ is not specified, build a HiveInsertTableHandle along with
   // columnHandles, bucketProperty and locationHandle.
-  if (!insertHandle_) {
+  if (insertHandle_ == nullptr) {
     // Create column handles.
     std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
         columnHandles;
@@ -446,7 +446,7 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
           targetColumns, bucketCount_, bucketedBy_, sortBy_);
     }
 
-    auto hiveHandle = std::make_shared<connector::hive::HiveInsertTableHandle>(
+    insertHandle_ = std::make_shared<connector::hive::HiveInsertTableHandle>(
         columnHandles,
         locationHandle,
         fileFormat_,
@@ -455,10 +455,9 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
         serdeParameters_,
         options_,
         ensureFiles_);
-
-    insertHandle_ =
-        std::make_shared<core::InsertTableHandle>(connectorId_, hiveHandle);
   }
+  const auto insertTableHandle = std::make_shared<core::InsertTableHandle>(
+      connectorId_, insertHandle_, notNullColumns_);
 
   std::optional<core::ColumnStatsSpec> columnStatsSpec;
   if (!aggregates_.empty()) {
@@ -482,7 +481,7 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
       targetColumns,
       targetColumns->names(),
       columnStatsSpec,
-      insertHandle_,
+      insertTableHandle,
       false,
       TableWriteTraits::outputType(columnStatsSpec),
       commitStrategy_,
@@ -803,7 +802,7 @@ PlanBuilder& PlanBuilder::tableWrite(
     const RowTypePtr& schema,
     const bool ensureFiles,
     const connector::CommitStrategy commitStrategy,
-    std::shared_ptr<core::InsertTableHandle> insertTableHandle) {
+    connector::ConnectorInsertTableHandlePtr insertTableHandle) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .outputFileName(outputFileName)
