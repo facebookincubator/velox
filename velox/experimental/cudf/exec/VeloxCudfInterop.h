@@ -26,7 +26,15 @@
 
 namespace facebook::velox::cudf_velox {
 
+/// Returns the cuDF data type for \p type, or std::nullopt if the type
+/// (or any child type for ARRAY/ROW) cannot be represented in cuDF.
+std::optional<cudf::data_type> tryVeloxToCudfDataType(const TypePtr& type);
+
+/// Returns the cuDF data type for \p type.  Throws on unsupported types.
 cudf::data_type veloxToCudfDataType(const TypePtr& type);
+
+/// Returns true if every leaf type in \p type can be represented in cuDF.
+bool isTypeSupportedByCudf(const TypePtr& type);
 
 namespace with_arrow {
 
