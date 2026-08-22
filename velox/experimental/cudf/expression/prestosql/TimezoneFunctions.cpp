@@ -803,6 +803,91 @@ class ToUnixtimeFunction : public CudfFunction {
 };
 
 // at_timezone(timestamp with time zone, varchar) -> timestamp with time zone.
+// at_timezone(TSWTZ, <varchar COLUMN>). The constant-zone form below resolves
+// one key at construction; this resolves a key per row.
+//
+// Zone name -> key is host-side (tz::getTimeZoneID), so the mapping is done on the
+// DISTINCT names only -- a handful in practice -- and selected back per row with
+// copy_if_else, rather than moving every row's string to the host. This is the
+// same per-distinct-zone select idiom distinctZones() exists to drive for the
+// opposite direction.
+//
+// A null zone name leaves the key null, so the final BITWISE_OR yields null --
+// which is what Presto returns and what e_mixed_zone_with_null asserts.
+class AtTimezoneColumnZoneFunction : public CudfFunction {
+ public:
+  explicit AtTimezoneColumnZoneFunction(const core::TypedExprPtr& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 2, "at_timezone expects exactly 2 inputs");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto packed = asView(inputColumns[0]);
+    auto names = asView(inputColumns[1]);
+
+    // Distinct zone names present, brought to the host one small element at a
+    // time. Nulls are skipped: a null name must stay null, not map to a zone.
+    auto unique = cudf::distinct(
+        cudf::table_view{{names}},
+        {0},
+        cudf::duplicate_keep_option::KEEP_ANY,
+        cudf::null_equality::EQUAL,
+        cudf::nan_equality::ALL_EQUAL,
+        stream,
+        mr);
+    auto uniqueNames = unique->view().column(0);
+
+    // Start all-null; every row whose name matches a known zone is overwritten.
+    auto keys = cudf::make_fixed_width_column(
+        int64Type(),
+        names.size(),
+        cudf::mask_state::ALL_NULL,
+        stream,
+        mr);
+    for (cudf::size_type i = 0; i < uniqueNames.size(); ++i) {
+      auto element = cudf::get_element(uniqueNames, i, stream, mr);
+      if (!element->is_valid(stream)) {
+        continue;
+      }
+      const auto name =
+          static_cast<cudf::string_scalar*>(element.get())->to_string(stream);
+      const int16_t zoneId = tz::getTimeZoneID(name);
+      auto matches = cudf::binary_operation(
+          names,
+          cudf::string_scalar(name, true, stream),
+          cudf::binary_operator::EQUAL,
+          cudf::data_type{cudf::type_id::BOOL8},
+          stream,
+          mr);
+      keys = cudf::copy_if_else(
+          int64Scalar(zoneId & kTimezoneMask, stream),
+          keys->view(),
+          matches->view(),
+          stream,
+          mr);
+    }
+
+    // Keep the UTC millis bits, replace the low 12 zone bits with the per-row key.
+    auto cleared = binaryOp(
+        packed,
+        int64Scalar(~static_cast<int64_t>(kTimezoneMask), stream),
+        cudf::binary_operator::BITWISE_AND,
+        int64Type(),
+        stream,
+        mr);
+    return cudf::binary_operation(
+        cleared->view(),
+        keys->view(),
+        cudf::binary_operator::BITWISE_OR,
+        int64Type(),
+        stream,
+        mr);
+  }
+};
+
 class AtTimezoneFunction : public CudfFunction {
  public:
   AtTimezoneFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
@@ -2282,18 +2367,28 @@ class FromUnixtimeToTimestampFunction : public CudfFunction {
       prefix + "at_timezone",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
-        if (constantArgIsNull(expr, 1)) {
-          return std::shared_ptr<CudfFunction>(
-              std::make_shared<AllNullFunction>(int64Type()));
+         memory::MemoryPool* pool) -> std::shared_ptr<CudfFunction> {
+        // A non-constant zone gets the per-row implementation. Previously only
+        // the constant form was registered, so `at_timezone(x, zone_column)`
+        // declined -- not for want of a kernel (the operation is bit
+        // manipulation) but for want of a way to resolve a key per row.
+        if (expr->inputs()[1]->kind() != core::ExprKind::kConstant) {
+          return std::make_shared<AtTimezoneColumnZoneFunction>(expr);
         }
-        return std::shared_ptr<CudfFunction>(
-            std::make_shared<AtTimezoneFunction>(expr, pool));
+        if (constantArgIsNull(expr, 1)) {
+          return std::make_shared<AllNullFunction>(int64Type());
+        }
+        return std::make_shared<AtTimezoneFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("timestamp with time zone")
            .argumentType("timestamp with time zone")
            .constantArgumentType("varchar")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("timestamp with time zone")
+           .argumentType("timestamp with time zone")
+           .argumentType("varchar")
            .build()});
 
   registerCudfFunction(
