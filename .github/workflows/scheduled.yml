@@ -258,6 +258,7 @@ jobs:
             -DVELOX_BUILD_SHARED=ON
             -DVELOX_BUILD_PYTHON_PACKAGE=ON
             -DVELOX_PYTHON_LEGACY_ONLY=ON
+            -DVELOX_ENABLE_LOCAL_RUNNER_SERVICE=ON
             ${{ inputs.extraCMakeFlags }}
         run: |
           make python-venv
@@ -452,6 +453,149 @@ jobs:
           path: velox/_build/debug/lib/libvelox.so
           retention-days: ${{ env.RETENTION }}
 
+  compile-baseline-local-runner:
+    name: Build LocalRunnerService
+    if: ${{ github.repository == 'facebookincubator/velox' }}
+    runs-on: 32-core-ubuntu
+    container: ghcr.io/facebookincubator/velox-dev:centos9
+    timeout-minutes: 120
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/ccache
+      NUM_THREADS: ${{ inputs.numThreads || 32 }}
+      MAX_HIGH_MEM_JOBS: ${{ inputs.maxHighMemJobs || 8 }}
+      MAX_LINK_JOBS: ${{ inputs.maxLinkJobs || 6 }}
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+      BASELINE_DIR: ${{ github.workspace }}/baseline-local-runner
+      # Bump to invalidate every cached baseline binary. Required whenever
+      # EXTRA_CMAKE_FLAGS, the built target, or the container image changes,
+      # since none of those are part of the cache key.
+      BASELINE_CACHE_VERSION: v1
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: velox_main
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      # Resolves the commit the baseline is built from. On push this is the
+      # landed commit itself, not its parent: that commit is the merge base
+      # future PRs will resolve to, so building it here warms the cache for
+      # them.
+      - name: Get baseline commit
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_REF: ${{ inputs.ref || 'main' }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
+        id: get-merge-base
+        run: |
+          source .github/scripts/gh-api-retry.sh
+          if [ '${{ github.event_name == 'push' }}' == "true" ]; then
+            head_main='${{ github.sha }}'
+          elif [ '${{ github.event_name == 'pull_request' }}' == "true" ]; then
+            head_main=$(gh_api -q '.merge_base_commit.sha' \
+              /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_OWNER:$HEAD_REF \
+            )
+          else
+            # Resolve to an immutable SHA; a branch name would make the cache
+            # key mutable and serve a stale baseline forever.
+            head_main=$(gh_api -q '.sha' "/repos/facebookincubator/velox/commits/$INPUT_REF")
+          fi
+          echo "Determined SHA: $head_main"
+          echo "head_main=$head_main" >> $GITHUB_OUTPUT
+
+      # Exact-match key only, no restore-keys prefix fallback: restoring a
+      # binary built from a different commit would compare the contender
+      # against the wrong baseline and report phantom regressions.
+      - name: Restore baseline LocalRunnerService
+        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        id: get-baseline
+        with:
+          path: ${{ env.BASELINE_DIR }}
+          key: local-runner-service-${{ env.BASELINE_CACHE_VERSION }}-${{ runner.arch }}-${{ steps.get-merge-base.outputs.head_main }}
+
+      - name: Restore ccache
+        if: ${{ steps.get-baseline.outputs.stash-hit != 'true' }}
+        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-baseline-local-runner-centos
+
+      - name: Fix git permissions
+        if: ${{ steps.get-baseline.outputs.stash-hit != 'true' }}
+        working-directory: ${{ github.workspace }}
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox_main
+
+      - name: Ensure Stash Dirs Exists
+        if: ${{ steps.get-baseline.outputs.stash-hit != 'true' }}
+        working-directory: ${{ github.workspace }}
+        run: mkdir -p '$CCACHE_DIR'
+
+      - name: Checkout Main
+        if: ${{ steps.get-baseline.outputs.stash-hit != 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.get-merge-base.outputs.head_main || 'main' }}
+          path: velox_main
+          persist-credentials: false
+
+      # Every step below that inherits working-directory: velox_main has to
+      # carry the cache-miss guard as well, since velox_main is not checked
+      # out on a hit.
+      - name: Zero Ccache Statistics
+        if: ${{ steps.get-baseline.outputs.stash-hit != 'true' }}
+        run: ccache -sz
+
+      - name: Build LocalRunnerService
+        if: ${{ steps.get-baseline.outputs.stash-hit != 'true' }}
+        env:
+          EXTRA_CMAKE_FLAGS: >
+            -DVELOX_ENABLE_ARROW=ON
+            -DVELOX_ENABLE_GEO=ON
+            -DVELOX_ENABLE_REMOTE_FUNCTIONS=ON
+            -DVELOX_ENABLE_LOCAL_RUNNER_SERVICE=ON
+            ${{ inputs.extraCMakeFlags }}
+        run: |
+          make cmake BUILD_DIR=debug BUILD_TYPE=Debug
+          cmake --build _build/debug -j ${NUM_THREADS} --target \
+            velox_local_runner_service_runner
+          mkdir -p "${BASELINE_DIR}"
+          cp _build/debug/velox/exec/fuzzer/velox_local_runner_service_runner \
+            "${BASELINE_DIR}/"
+
+      - name: Ccache after
+        if: ${{ steps.get-baseline.outputs.stash-hit != 'true' }}
+        run: ccache -s
+
+      - name: Save ccache
+        continue-on-error: true
+        if: ${{ steps.get-baseline.outputs.stash-hit != 'true' && github.event_name != 'schedule' }}
+        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-baseline-local-runner-centos
+
+      - name: Save baseline LocalRunnerService
+        if: ${{ steps.get-baseline.outputs.stash-hit != 'true' }}
+        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          path: ${{ env.BASELINE_DIR }}
+          key: local-runner-service-${{ env.BASELINE_CACHE_VERSION }}-${{ runner.arch }}-${{ steps.get-merge-base.outputs.head_main }}
+
+      - name: Upload baseline local runner service
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: baseline_local_runner_service_runner
+          path: ${{ env.BASELINE_DIR }}/velox_local_runner_service_runner
+          retention-days: ${{ env.RETENTION }}
+
   presto-fuzzer-run:
     name: Presto Fuzzer
     if: ${{ needs.compile.outputs.presto_bias  != 'true' }}
@@ -532,6 +676,114 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: presto-fuzzer-failure-artifacts
+          path: |
+            /tmp/fuzzer_repro
+
+  presto-fuzzer-with-local-runner-run:
+    name: Regression Fuzzer
+    runs-on: 4-core-ubuntu
+    container: ghcr.io/facebookincubator/velox-dev:centos9
+    needs: [compile, compile-baseline-local-runner]
+    timeout-minutes: 120
+    # Soft launch: this job is being monitored for signal quality and must not
+    # gate the workflow. Remove once the results are trusted.
+    continue-on-error: true
+    steps:
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        if: github.event_name == 'pull_request'
+        id: changes
+        with:
+          filters: |
+            presto:
+              - 'velox/expression/!(test)**'
+              - 'velox/exec/!(test)**'
+              - 'velox/common/!(test)**'
+              - 'velox/core/!(test)**'
+              - 'velox/vector/!(test)**'
+
+      - name: Set presto specific fuzzer duration
+        env:
+          pr_duration: ${{ steps.changes.outputs.presto == 'true' && 600 || 300 }}
+          other_duration: ${{ inputs.duration || (github.event_name == 'push' && 600 || 1200) }}
+          is_pr: ${{ github.event_name == 'pull_request' }}
+        run: |
+          if [ "$is_pr" == "true" ]; then
+            duration=$pr_duration
+          else
+            duration=$other_duration
+          fi
+
+          echo "DURATION=$duration" >> $GITHUB_ENV
+
+      - name: Download presto fuzzer
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: presto
+
+      - name: Download baseline local runner service
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: baseline_local_runner_service_runner
+
+      - name: Download libvelox
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: libvelox
+
+      - name: Run Regression Fuzzer
+        run: |
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          mkdir -p /tmp/fuzzer_repro/logs/
+          chmod -R 777 /tmp/fuzzer_repro
+          chmod +x velox_expression_fuzzer_test
+          chmod +x velox_local_runner_service_runner
+          # Start LocalRunnerService in the background
+          ./velox_local_runner_service_runner > /tmp/fuzzer_repro/logs/local_runner_service.log 2>&1 &
+          LOCAL_RUNNER_PID=$!
+          # Stop the LocalRunnerService
+          trap 'kill $LOCAL_RUNNER_PID || true' EXIT
+          echo "Started LocalRunnerService with PID: ${LOCAL_RUNNER_PID}"
+          # Sleep for 10 seconds to allow service to start
+          sleep 10
+          random_seed=${RANDOM}
+          echo "Duration: $DURATION"
+          echo "Random seed: ${random_seed}"
+          # Soft launch: swallow the fuzzer's exit code so a real regression
+          # surfaces as a log annotation instead of a red check. Remove along
+          # with continue-on-error once the results are trusted.
+          set +e
+          ./velox_expression_fuzzer_test \
+                --seed ${random_seed} \
+                --only floor \
+                --enable_variadic_signatures \
+                --velox_fuzzer_enable_complex_types \
+                --velox_fuzzer_enable_decimal_type \
+                --lazy_vector_generation_ratio 0.2 \
+                --common_dictionary_wraps_generation_ratio=0.3 \
+                --velox_fuzzer_enable_column_reuse \
+                --velox_fuzzer_enable_expression_reuse \
+                --max_expression_trees_per_step 2 \
+                --retry_with_try \
+                --enable_dereference \
+                --duration_sec $DURATION \
+                --minloglevel=0 \
+                --stderrthreshold=2 \
+                --log_dir=/tmp/fuzzer_repro/logs \
+                --repro_persist_path=/tmp/fuzzer_repro \
+                --velox_runner_url=http://127.0.0.1:9091
+          fuzzer_status=$?
+          set -e
+          if [ "${fuzzer_status}" -eq 0 ]; then
+            echo -e "\n\nFuzzer run finished successfully."
+          else
+            echo "::warning title=Regression Fuzzer::Fuzzer exited with status ${fuzzer_status}. Soft launch: not failing the workflow. Check the run logs and the uploaded repro artifacts."
+          fi
+
+      - name: Archive production artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: presto-fuzzer-with-local-runner-failure-artifacts
           path: |
             /tmp/fuzzer_repro
 
