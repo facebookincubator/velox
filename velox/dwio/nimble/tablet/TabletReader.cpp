@@ -327,7 +327,7 @@ void TabletReader::init(const Options& options) {
   loadSections(sections);
 
   initStripes(footerView, footerOffset);
-  initFeatures();
+  initProperties();
   initSharedDictionaries(options);
   initIndexDescriptors();
   initClusterIndex();
@@ -454,7 +454,7 @@ bool TabletReader::initFromCache(const Options& options) {
   loadSections(sections);
 
   initStripes();
-  initFeatures();
+  initProperties();
   initSharedDictionaries(options);
   initIndexDescriptors();
   initClusterIndex();
@@ -512,9 +512,10 @@ void TabletReader::cacheMetadata(
     cacheSection(toMetadataSection(stripeGroups->Get(0)));
   }
 
-  if (auto featuresIt = optionalSections_.find(std::string{kFeaturesSection});
-      featuresIt != optionalSections_.end()) {
-    cacheSection(featuresIt->second);
+  if (auto propertiesIt =
+          optionalSections_.find(std::string{kPropertiesSection});
+      propertiesIt != optionalSections_.end()) {
+    cacheSection(propertiesIt->second);
   }
 
   if (sharedDictionaryReaderFactory_ != nullptr) {
@@ -739,14 +740,14 @@ void TabletReader::initOptionalSections() {
   }
 }
 
-void TabletReader::initFeatures() {
+void TabletReader::initProperties() {
   auto section =
-      loadOptionalSection(std::string{kFeaturesSection}, /*keepCache=*/true);
+      loadOptionalSection(std::string{kPropertiesSection}, /*keepCache=*/true);
   if (!section.has_value()) {
     return;
   }
 
-  features_ = FileFeatures::deserialize(section->content());
+  properties_ = FileProperties::deserialize(section->content());
 }
 
 void TabletReader::initSharedDictionaries(const Options& options) {
@@ -778,7 +779,7 @@ std::vector<std::string> TabletReader::preloadSectionNames(
   if (options.loadClusterIndex || options.loadDenseIndexes) {
     addName(std::string{kIndexSection});
   }
-  addName(std::string{kFeaturesSection});
+  addName(std::string{kPropertiesSection});
   addName(std::string{kSharedDictionarySection});
   return names;
 }

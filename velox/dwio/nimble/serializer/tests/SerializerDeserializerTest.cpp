@@ -1130,7 +1130,7 @@ SerializationTest::SerializeResult SerializationTest::serializeTablet(
     auto headerIOBuf = serde::createTabletChunkHeader(
         {.rowCount = stripeRows,
          .streamEncodingUsesVarintRowCount =
-             tablet->features().compactRowCountEncoding(),
+             tablet->properties().compactRowCountEncoding(),
          .streamHasChunkHeader = true,
          .rowRange = RowRange{0, stripeRows}});
     std::string headerBuf(
@@ -5021,7 +5021,7 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxHighParallelism) {
     auto headerIOBuf = serde::createTabletChunkHeader(
         {.rowCount = stripeRows,
          .streamEncodingUsesVarintRowCount =
-             tablet->features().compactRowCountEncoding(),
+             tablet->properties().compactRowCountEncoding(),
          .streamHasChunkHeader = true,
          .rowRange = RowRange{0, stripeRows}});
     std::string headerBuf(
@@ -5137,7 +5137,7 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxConcurrentDeserializers) {
       auto headerIOBuf = serde::createTabletChunkHeader(
           {.rowCount = stripeRows,
            .streamEncodingUsesVarintRowCount =
-               tablet->features().compactRowCountEncoding(),
+               tablet->properties().compactRowCountEncoding(),
            .streamHasChunkHeader = true,
            .rowRange = RowRange{0, stripeRows}});
       std::string headerBuf(
@@ -5301,7 +5301,7 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxFlatMapWithParallelDecode) {
     auto headerIOBuf = serde::createTabletChunkHeader(
         {.rowCount = stripeRows,
          .streamEncodingUsesVarintRowCount =
-             tablet->features().compactRowCountEncoding(),
+             tablet->properties().compactRowCountEncoding(),
          .streamHasChunkHeader = true,
          .rowRange = RowRange{0, stripeRows}});
     std::string headerBuf(
@@ -5415,7 +5415,7 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxRepeatedBatches) {
     auto headerIOBuf = serde::createTabletChunkHeader(
         {.rowCount = stripeRows,
          .streamEncodingUsesVarintRowCount =
-             tablet->features().compactRowCountEncoding(),
+             tablet->properties().compactRowCountEncoding(),
          .streamHasChunkHeader = true,
          .rowRange = RowRange{0, stripeRows}});
     std::string headerBuf(
