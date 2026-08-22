@@ -244,13 +244,16 @@ void expectAlphabetEntries(
       alphabetChunk.rowCount, static_cast<uint32_t>(expectedValues.size()));
   ASSERT_EQ(alphabetChunk.content.size(), 1);
 
-  const SharedDictionaryAlphabet alphabet{
-      alphabetChunk.content.front(), Encoding::Options{}, pool};
+  auto encodedAlphabetOwner =
+      std::make_shared<const std::string>(alphabetChunk.content.front());
+  const std::string_view encodedAlphabet{*encodedAlphabetOwner};
+  const auto alphabet = SharedDictionaryAlphabet::create(
+      encodedAlphabet, std::move(encodedAlphabetOwner), pool);
   std::vector<uint32_t> alphabetIndices(expectedValues.size());
   std::iota(alphabetIndices.begin(), alphabetIndices.end(), 0);
   std::vector<TypeTraits<int32_t>::physicalType> entries(
       alphabetIndices.size());
-  alphabet.materialize<int32_t>(alphabetIndices, entries.data());
+  alphabet->materialize<int32_t>(alphabetIndices, entries.data());
   EXPECT_EQ(entries, physicalValues(expectedValues));
 }
 
@@ -532,15 +535,18 @@ TEST_F(SharedDictionaryWriterTest, stripeAlphabetRoundTripsThroughReader) {
     ASSERT_TRUE(encodedAlphabet.has_value());
     ASSERT_EQ(encodedAlphabet->content.size(), 1);
 
-    const SharedDictionaryAlphabet alphabet{
-        encodedAlphabet->content.front(), Encoding::Options{}, pool_.get()};
-    EXPECT_EQ(alphabet.dataType(), DataType::Int32);
-    EXPECT_EQ(alphabet.entryCount(), pattern.size());
+    auto encodedAlphabetOwner =
+        std::make_shared<const std::string>(encodedAlphabet->content.front());
+    const std::string_view encodedAlphabetView{*encodedAlphabetOwner};
+    const auto alphabet = SharedDictionaryAlphabet::create(
+        encodedAlphabetView, std::move(encodedAlphabetOwner), pool_.get());
+    EXPECT_EQ(alphabet->dataType(), DataType::Int32);
+    EXPECT_EQ(alphabet->entryCount(), pattern.size());
 
     std::vector<uint32_t> indices(pattern.size());
     std::iota(indices.begin(), indices.end(), 0);
     std::vector<TypeTraits<int32_t>::physicalType> entries(indices.size());
-    alphabet.materialize<int32_t>(indices, entries.data());
+    alphabet->materialize<int32_t>(indices, entries.data());
 
     const std::vector<TypeTraits<int32_t>::physicalType> expected{
         pattern.begin(), pattern.end()};
