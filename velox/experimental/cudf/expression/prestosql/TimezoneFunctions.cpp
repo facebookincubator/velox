@@ -37,6 +37,7 @@
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/strings/attributes.hpp>
+#include <cudf/round.hpp>
 #include <cudf/strings/combine.hpp>
 #include <cudf/strings/contains.hpp>
 #include <cudf/strings/convert/convert_datetime.hpp>
@@ -2128,14 +2129,147 @@ void registerTimezoneFunctions(const std::string& prefix) {
     const cudf::data_type type_;
   };
 
+// to_iso8601(TIMESTAMP). Measured on CPU: renders the wall clock with a literal
+// "Z" and is session-independent (identical under UTC and Asia/Kolkata), i.e. the
+// TIMESTAMP is read as UTC -- so unlike the TSWTZ overload there is no per-row
+// offset to compute or render.
+class ToIso8601FromTimestampFunction : public CudfFunction {
+ public:
+  explicit ToIso8601FromTimestampFunction(const core::TypedExprPtr& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "to_iso8601 expects exactly 1 input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto millisTs = cudf::cast(
+        asView(inputColumns[0]),
+        cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
+        stream,
+        mr);
+    return cudf::strings::from_timestamps(
+        millisTs->view(),
+        "%Y-%m-%dT%H:%M:%S.%3fZ",
+        cudf::strings_column_view{},
+        stream,
+        mr);
+  }
+};
+
+class ToUnixtimeFromTimestampFunction : public CudfFunction {
+ public:
+  explicit ToUnixtimeFromTimestampFunction(const core::TypedExprPtr& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "to_unixtime expects exactly 1 input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    // NO session-timezone shift, deliberately, and this was measured rather
+    // than assumed: on CPU under session Asia/Kolkata, `to_unixtime(ts)`
+    // returns -14182940 while `to_unixtime(cast(ts AS TIMESTAMP WITH TIME
+    // ZONE))` returns -14202740. to_unixtime reads the wall clock as UTC; only
+    // the cast interprets it in the session zone. An earlier version of this
+    // function shifted, on the reasoning that the two spellings of "the same
+    // question" must agree -- they must not, and the parity suite caught it
+    // under two non-UTC session zones.
+    auto utcMs = cudf::cast(
+        asView(inputColumns[0]),
+        cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
+        stream,
+        mr);
+    auto millisDouble = cudf::cast(
+        bitcastColumn(utcMs->view(), cudf::type_id::INT64),
+        cudf::data_type{cudf::type_id::FLOAT64},
+        stream,
+        mr);
+    return cudf::binary_operation(
+        millisDouble->view(),
+        cudf::numeric_scalar<double>(1000.0, true, stream),
+        cudf::binary_operator::DIV,
+        cudf::data_type{cudf::type_id::FLOAT64},
+        stream,
+        mr);
+  }
+};
+
+// One-argument from_unixtime(double) -> TIMESTAMP. The two- and three-argument
+// forms return TIMESTAMP WITH TIME ZONE and are registered separately below;
+// this form was not registered at all, so `to_iso8601(from_unixtime(x))` fell
+// back for want of a signature rather than for want of a kernel.
+class FromUnixtimeToTimestampFunction : public CudfFunction {
+ public:
+  explicit FromUnixtimeToTimestampFunction(const core::TypedExprPtr& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "from_unixtime expects exactly 1 input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto millisDouble = cudf::binary_operation(
+        asView(inputColumns[0]),
+        cudf::numeric_scalar<double>(1000.0, true, stream),
+        cudf::binary_operator::MUL,
+        cudf::data_type{cudf::type_id::FLOAT64},
+        stream,
+        mr);
+    // Round to nearest before narrowing, NOT truncate. cudf::cast(double ->
+    // int64) truncates toward zero, and CPU rounds: measured on the two
+    // sub-second fixture rows added 2026-08-22, CPU renders
+    // 1623758400.1236 -> .124 (truncation gives .123) and
+    // -14182939.87654321 -> .123 (truncation toward zero gives .124, since the
+    // millis value is negative). Truncating disagreed with CPU in BOTH
+    // directions, which is why rounding is required rather than a floor.
+    //
+    // Not covered: an input landing exactly on .5, where HALF_UP and Java's
+    // Math.round differ for negative values. No fixture row does.
+    auto rounded = cudf::round(
+        millisDouble->view(),
+        /*decimal_places=*/0,
+        cudf::rounding_method::HALF_UP,
+        stream,
+        mr);
+    auto millisInt = cudf::cast(rounded->view(), int64Type(), stream, mr);
+    // Own the reinterpreted timestamp: bitcastColumn yields a non-owning view.
+    auto utcTs = std::make_unique<cudf::column>(
+        bitcastColumn(millisInt->view(), cudf::type_id::TIMESTAMP_MILLISECONDS),
+        stream,
+        mr);
+    // No session shift: measured on CPU, `from_unixtime(epoch)` renders the
+    // same wall clock under session UTC and under Asia/Kolkata (2021-06-15
+    // 12:00:00 for 1623758400, which is 12:00 UTC), so the returned TIMESTAMP
+    // is the UTC wall clock of the instant, session-independent -- the mirror
+    // image of to_unixtime(TIMESTAMP) above.
+    return utcTs;
+  }
+};
+
+  // Two signatures, one name. The TIMESTAMP overload was missing entirely, so
+  // `to_unixtime(ts)` on a Hive column fell back for want of a signature -- while
+  // `to_unixtime(cast(ts AS TIMESTAMP WITH TIME ZONE))`, the same question, ran on
+  // GPU. Dispatching here rather than registering twice keeps the two forms from
+  // drifting apart.
   registerCudfFunction(
       prefix + "to_unixtime",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) {
+         memory::MemoryPool*) -> std::shared_ptr<CudfFunction> {
+        if (expr->inputs()[0]->type()->kind() == TypeKind::TIMESTAMP) {
+          return std::make_shared<ToUnixtimeFromTimestampFunction>(expr);
+        }
         return std::make_shared<ToUnixtimeFunction>(expr);
       },
-      {twtzArgSignature("double")});
+      {twtzArgSignature("double"),
+       exec::FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("timestamp")
+           .build()});
 
   registerCudfFunction(
       prefix + "at_timezone",
@@ -2177,10 +2311,17 @@ void registerTimezoneFunctions(const std::string& prefix) {
       prefix + "to_iso8601",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) {
+         memory::MemoryPool*) -> std::shared_ptr<CudfFunction> {
+        if (expr->inputs()[0]->type()->kind() == TypeKind::TIMESTAMP) {
+          return std::make_shared<ToIso8601FromTimestampFunction>(expr);
+        }
         return std::make_shared<ToIso8601Function>(expr);
       },
-      {twtzArgSignature("varchar")});
+      {twtzArgSignature("varchar"),
+       exec::FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("timestamp")
+           .build()});
 
   registerCudfFunction(
       prefix + "format_datetime",
@@ -2202,6 +2343,21 @@ void registerTimezoneFunctions(const std::string& prefix) {
            .build()},
       /*overwrite=*/true,
       formatDatetimeCanEvaluate);
+
+  // One-argument form: returns TIMESTAMP, not TIMESTAMP WITH TIME ZONE. It had
+  // no registration at all, so to_iso8601(from_unixtime(x)) fell back on the
+  // inner call.
+  registerCudfFunction(
+      prefix + "from_unixtime",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
+        return std::make_shared<FromUnixtimeToTimestampFunction>(expr);
+      },
+      {exec::FunctionSignatureBuilder()
+           .returnType("timestamp")
+           .argumentType("double")
+           .build()});
 
   registerCudfFunction(
       prefix + "from_unixtime",
