@@ -27,6 +27,7 @@
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
+#include "velox/connectors/hive/iceberg/IcebergGeometryConverter.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSessionCredentials.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -417,6 +418,36 @@ void IcebergSplitReader::prepareSplit(
     }
   }
 
+  // Resolve the Iceberg geometry output channels once per split. The Iceberg
+  // table schema is the only signal used: 'readerOutputType_' is derived from
+  // the Iceberg column assignments, so a channel typed GEOMETRY means the
+  // Iceberg schema declares the column 'geometry' and therefore, per the
+  // Iceberg spec, the file bytes are WKB. Empty for every table without a
+  // geometry column, which keeps next() free of extra work. See
+  // IcebergGeometryConverter.h for the conversion ownership contract.
+  geometryOutputChannels_.clear();
+  for (column_index_t channel = 0; channel < readerOutputType_->size();
+       ++channel) {
+    if (containsGeometry(readerOutputType_->childAt(channel))) {
+#ifndef VELOX_ENABLE_GEO
+      VELOX_USER_FAIL(
+          "Reading the Iceberg geometry column '{}' requires a build with geospatial support (VELOX_ENABLE_GEO=ON)",
+          readerOutputType_->nameOf(channel));
+#endif
+      geometryOutputChannels_.push_back(channel);
+    }
+  }
+  // Iceberg also defines an ORC mapping for geometry (binary +
+  // iceberg.binary-type=GEOMETRY, also WKB) and the converter is
+  // format-agnostic, but only the Parquet path is covered by a test fixture.
+  // Refuse the others rather than return values from an unverified path.
+  if (!geometryOutputChannels_.empty()) {
+    VELOX_USER_CHECK_EQ(
+        icebergSplit_->fileFormat,
+        dwio::common::FileFormat::PARQUET,
+        "Reading Iceberg geometry columns is only supported for Parquet files");
+  }
+
   if (checkIfSplitIsEmpty(runtimeStats)) {
     VELOX_CHECK(emptySplit_);
     return;
@@ -782,6 +813,28 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
   auto rowsScanned = baseRowReader_->next(actualSize, output, &mutation);
 
   auto* pool = connectorQueryCtx_->memoryPool();
+
+#ifdef VELOX_ENABLE_GEO
+  // Re-encode Iceberg geometry columns from the on-disk WKB to Velox's internal
+  // geometry encoding. Done here, immediately after the read and before any
+  // other post-processing, so every later stage (row lineage, equality deletes,
+  // the operator output) sees GEOMETRY-typed vectors with Velox-encoded values.
+  // This is the single conversion point for the native path: the format-generic
+  // readers deliver the column as VARBINARY and never touch GEOMETRY.
+  if (rowsScanned > 0 && !geometryOutputChannels_.empty()) {
+    auto* rowOutput = output->as<RowVector>();
+    VELOX_CHECK_NOT_NULL(
+        rowOutput, "Expected RowVector output from table scan");
+    for (const auto channel : geometryOutputChannels_) {
+      auto& child = rowOutput->childAt(channel);
+      child = convertIcebergGeometry(
+          child,
+          readerOutputType_->childAt(channel),
+          pool,
+          readerOutputType_->nameOf(channel));
+    }
+  }
+#endif
 
   if (rowsScanned > 0 &&
       (lastUpdatedSeqNumOutputIndex_.has_value() ||
