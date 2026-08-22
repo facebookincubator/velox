@@ -30,6 +30,7 @@
 #include "velox/type/DecimalUtil.h"
 
 #include <cudf/column/column_factories.hpp>
+#include <cudf/concatenate.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/utilities/default_stream.hpp>
@@ -1279,6 +1280,80 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStatePartialNullCompact) {
   EXPECT_EQ(outCount[0], 1);
   EXPECT_EQ(outSum[2], static_cast<__int128_t>(300));
   EXPECT_EQ(outCount[2], 2);
+}
+
+// Reproduces the TPC-DS Q1 failure in CudfGroupbyFINAL: the streaming final
+// aggregation concatenates its buffered result -- which came straight from
+// serializeDecimalSumState and so keeps a 32-byte payload for null rows -- with
+// each newly arrived batch, which was round tripped through velox and so has
+// its null rows compacted to 0 bytes. The concatenated state column mixes both
+// encodings, so its payload size is neither numRows * 32 nor
+// (numRows - nullCount) * 32 and a two-way equality check rejects it.
+TEST_F(CudfDecimalTest, decimalDeserializeSumStateMixedNullEncodings) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  auto serialize = [&](const std::vector<int64_t>& sums,
+                       const std::vector<int64_t>& counts,
+                       const std::vector<bool>& sumValid) {
+    auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
+    auto countCol = makeInt64Column(counts, nullptr, stream);
+    return serializeDecimalSumState(
+        sumCol->view(), countCol->view(), stream, mr);
+  };
+
+  // Buffered side: row 1 is null and keeps its 32-byte payload.
+  auto fullState = serialize({100, 0, 300}, {1, 0, 2}, {true, false, true});
+
+  // Incoming side: same shape, but the velox round trip compacts its null row
+  // to a 0-byte payload.
+  auto incomingState = serialize({400, 0, 600}, {3, 0, 4}, {true, false, true});
+  auto veloxRow = with_arrow::toVeloxColumn(
+      cudf::table_view{{incomingState->view()}},
+      pool(),
+      ROW({{"s", VARBINARY()}}),
+      "s",
+      stream,
+      mr);
+  auto compactTable = with_arrow::toCudfTable(veloxRow, pool(), stream, mr);
+
+  auto mixed = cudf::concatenate(
+      std::vector<cudf::column_view>{
+          fullState->view(), compactTable->view().column(0)},
+      stream,
+      mr);
+
+  // Four non-null rows, plus the one null payload the buffered side kept: the
+  // payload size sits strictly between the compact and full extremes.
+  cudf::strings_column_view mixedStrings(mixed->view());
+  auto const numRows = static_cast<int64_t>(mixed->size());
+  auto const nullCount = static_cast<int64_t>(mixed->null_count());
+  EXPECT_EQ(numRows, 6);
+  EXPECT_EQ(nullCount, 2);
+  EXPECT_GT(
+      mixedStrings.chars_size(stream),
+      (numRows - nullCount) * 32); // 32 == kDecimalSumStateSize
+  EXPECT_LT(mixedStrings.chars_size(stream), numRows * 32);
+
+  auto result = deserializeDecimalSumState(mixed->view(), 2, stream);
+
+  auto outSum = copyColumnData<__int128_t>(result.sum->view(), stream);
+  auto outCount = copyColumnData<int64_t>(result.count->view(), stream);
+  auto outMask = copyNullMask(result.sum->view(), stream);
+
+  EXPECT_FALSE(isValidAt(outMask, 1));
+  EXPECT_FALSE(isValidAt(outMask, 4));
+  for (auto row : {0, 2, 3, 5}) {
+    EXPECT_TRUE(isValidAt(outMask, row));
+  }
+  EXPECT_EQ(outSum[0], static_cast<__int128_t>(100));
+  EXPECT_EQ(outCount[0], 1);
+  EXPECT_EQ(outSum[2], static_cast<__int128_t>(300));
+  EXPECT_EQ(outCount[2], 2);
+  EXPECT_EQ(outSum[3], static_cast<__int128_t>(400));
+  EXPECT_EQ(outCount[3], 3);
+  EXPECT_EQ(outSum[5], static_cast<__int128_t>(600));
+  EXPECT_EQ(outCount[5], 4);
 }
 
 // Trailing null: the offset for the last row equals chars_size, so the kernel

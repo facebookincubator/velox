@@ -82,17 +82,26 @@ DecimalSumStateColumns deserializeDecimalSumState(
 
   auto const nullCount = stateCol.nullable() ? stateCol.null_count() : 0;
   auto const payloadSize = strings.chars_size(stream);
-  // serializeDecimalSumState writes 32 bytes for every row (including nulls),
-  // but an Arrow round-trip compacts null rows to 0 bytes. Accept both.
+  // A null row's payload width is path dependent. serializeDecimalSumState
+  // writes kDecimalSumStateSize bytes for every row including nulls, while a
+  // velox/Arrow round trip compacts null rows to 0 bytes. Both encodings can
+  // occur in the same column: the streaming final aggregation concatenates its
+  // buffered (serialized) result with each newly arrived (round tripped) batch,
+  // so the payload size lands anywhere between the two extremes. Non-null rows
+  // are always kDecimalSumStateSize wide, and that is all
+  // unpackDecimalSumState requires -- it skips null rows and addresses payloads
+  // through the per-row offsets rather than a fixed stride.
   auto const fullPayloadSize =
       static_cast<int64_t>(numRows) * detail::kDecimalSumStateSize;
   auto const compactPayloadSize =
       static_cast<int64_t>(numRows - nullCount) * detail::kDecimalSumStateSize;
   VELOX_CHECK(
-      payloadSize == fullPayloadSize || payloadSize == compactPayloadSize,
-      "Decimal sum state requires payload size {} or {} (got {})",
-      fullPayloadSize,
+      payloadSize >= compactPayloadSize && payloadSize <= fullPayloadSize &&
+          payloadSize % detail::kDecimalSumStateSize == 0,
+      "Decimal sum state requires a payload size that is a multiple of {} between {} and {} (got {})",
+      detail::kDecimalSumStateSize,
       compactPayloadSize,
+      fullPayloadSize,
       payloadSize);
 
   auto offsetsView = strings.offsets();
