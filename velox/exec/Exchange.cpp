@@ -56,6 +56,7 @@ std::unique_ptr<folly::IOBuf> mergePages(
   }
   return mergedBufs;
 }
+
 } // namespace
 
 Exchange::Exchange(

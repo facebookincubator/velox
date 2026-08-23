@@ -20,6 +20,51 @@
 
 namespace facebook::velox::exec {
 
+InMemoryExchangeClient::InMemoryExchangeClient(
+    std::string taskId,
+    int destination,
+    int64_t maxQueuedBytes,
+    int32_t numberOfConsumers,
+    uint64_t minOutputBatchBytes,
+    memory::MemoryPool* pool,
+    folly::Executor* executor,
+    int32_t requestDataSizesMaxWaitSec,
+    bool skipRequestDataSizeWithSingleSource,
+    bool lazyFetching)
+    : taskId_{std::move(taskId)},
+      destination_(destination),
+      maxQueuedBytes_{maxQueuedBytes},
+      requestDataSizesMaxWaitSec_{requestDataSizesMaxWaitSec},
+      pool_(pool),
+      executor_(executor),
+      queue_(
+          std::make_shared<ExchangeQueue>(
+              numberOfConsumers,
+              minOutputBatchBytes)),
+      // See comment in 'pickSourcesToRequestLocked' for why this is needed
+      // for 'minOutputBatchBytes_'. Note: ExchangeQueue does not need max(1,
+      // minOutputBatchBytes) because for 'MergeExchangeSource', we want
+      // ExchangeQueue 'minOutputBatchBytes' to be 0 so that it always
+      // unblocks. In short, 0 has a special meaning for ExchangeQueue
+      minOutputBatchBytes_(
+          std::max(static_cast<uint64_t>(1), minOutputBatchBytes)),
+      skipRequestDataSizeWithSingleSource_(skipRequestDataSizeWithSingleSource),
+      lazyFetching_(lazyFetching) {
+  VELOX_CHECK_NOT_NULL(pool_);
+  VELOX_CHECK_NOT_NULL(executor_);
+  // NOTE: the executor is used to run async response callback from the
+  // exchange source. The provided executor must not be
+  // folly::InlineLikeExecutor, otherwise it might cause potential deadlock as
+  // the response callback in exchange client might call back into the
+  // exchange source under uncertain execution context. For instance, the
+  // exchange client might inline close the exchange source from a background
+  // thread of the exchange source, and the close needs to wait for this
+  // background thread to complete first.
+  VELOX_CHECK_NULL(dynamic_cast<const folly::InlineLikeExecutor*>(executor_));
+  VELOX_CHECK_GE(
+      destination, 0, "Exchange client destination must not be negative");
+}
+
 void InMemoryExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
   std::vector<RequestSpec> requestSpecs;
   std::shared_ptr<ExchangeSource> toClose;
