@@ -1416,13 +1416,17 @@ class FromUnixtimeWithZoneFunction : public CudfFunction {
   FromUnixtimeRounding rounding_;
 };
 
-// now() / current_timestamp -> timestamp with time zone. Emits a constant
-// column packing the session start time with the session zone, matching CPU's
-// CurrentTimestampFunction (the value is not compared against a live CPU now(),
-// which is non-deterministic). Rejects like CPU when the session zone is
-// unusable: getTimeZoneFromConfig returns null when
-// adjust_timestamp_to_session_timezone is off or the session timezone is empty,
-// and CPU then throws "Timezone cannot be null".
+// now() / current_timestamp have no cuDF function here, deliberately. They take
+// no arguments, so expression::optimize -- which constant-folds any subtree
+// whose inputs are all constant, and a nullary call satisfies that trivially --
+// evaluates the CPU CurrentTimestampFunction and replaces the call with a
+// TIMESTAMP WITH TIME ZONE constant before any cuDF code sees the tree. That
+// runs on every path into the evaluator, CudfFilterProject included, so a cuDF
+// now() would be unreachable. An earlier revision of this file registered one;
+// it was dropped when eval() lost its numRows parameter, which a nullary
+// function needs to size its result, and nothing regressed because the folded
+// constant is what actually gets evaluated.
+
 // parse_datetime(varchar, varchar) -> timestamp with time zone.
 class ParseDatetimeFunction : public CudfFunction {
  public:

@@ -459,6 +459,13 @@ class CastFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
+    // A cast reads a column, and FunctionExpression::create drops constant
+    // children from this vector, so a constant operand leaves it empty.
+    // canEvaluate declines that shape, which is what keeps such a cast off the
+    // GPU; this check is what turns a future regression into an error instead of
+    // a read past the end of the vector, which segfaults.
+    VELOX_CHECK_EQ(
+        inputColumns.size(), 1, "cast expects exactly 1 input column");
     auto inputCol = asView(inputColumns[0]);
     switch (castMode_) {
       case CastMode::kTimestampToTimestampWithTimeZone: {
@@ -3232,8 +3239,30 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
         isTimestampWithTimeZoneType(dstType)) {
       return true;
     }
+    // Everything past this point is evaluated by cudf::cast, which reads a
+    // column. FunctionExpression::create omits constant children from eval's
+    // argument vector -- a function taking a constant argument reads it out of
+    // the expression tree at construction time instead -- so a cast whose
+    // operand is a constant would reach eval with nothing to cast.
+    // expression::optimize normally folds such a cast into a constant before it
+    // gets here, but it leaves the subtree alone when folding throws, so decline
+    // rather than depend on that.
+    if (expr->inputs()[0]->isConstantKind()) {
+      return false;
+    }
     auto src = cudf_velox::veloxToCudfDataType(srcType);
     auto dst = cudf_velox::veloxToCudfDataType(dstType);
+    // cudf::cast is defined only over fixed-width types, but
+    // is_supported_cast(STRING, INT64) reports true, so it cannot be the only
+    // gate: it would admit the cast that a TIMESTAMP WITH TIME ZONE constant
+    // serializes to (Expr::toSql renders one as
+    // '<raw packed int64>'::TIMESTAMP WITH TIME ZONE, which reparses as
+    // cast(VARCHAR as TIMESTAMP WITH TIME ZONE)) and CastFunction has no such
+    // conversion. Require both sides fixed-width; the two conversions cudf::cast
+    // cannot express are already returned above.
+    if (!cudf::is_fixed_width(src) || !cudf::is_fixed_width(dst)) {
+      return false;
+    }
     return cudf::is_supported_cast(src, dst);
   }
 

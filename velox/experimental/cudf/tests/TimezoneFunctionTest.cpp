@@ -1331,15 +1331,22 @@ TEST_F(TimezoneFunctionTest, castTimestampToTimestampWithTimeZoneAdjustOn) {
 // non-deterministic -- a live CPU now() and a separate GPU now() observe
 // different instants -- so this cannot assert CPU == GPU against a live clock.
 // Instead it pins the deterministic contract CPU's CurrentTimestampFunction
-// implements: pack(sessionStartTimeMs, sessionZone). The GPU must emit a
-// TIMESTAMP WITH TIME ZONE whose UTC millis are the session start time and
-// whose zone key is the session zone. A dummy column sizes the batch.
+// implements: pack(sessionStartTimeMs, sessionZone). A dummy column sizes the
+// batch.
+//
+// The typed-expression overload is what makes this a real measurement, and the
+// ExprSet overload cannot be used here. That overload round-trips through
+// Expr::toSql(), and velox renders a TIMESTAMP WITH TIME ZONE constant as
+// '<raw packed int64>'::TIMESTAMP WITH TIME ZONE -- a literal that does not
+// reparse to the value it came from, on CPU either. Going through the typed
+// expression instead is also the path a cluster takes: CudfFilterProject hands
+// the evaluator the plan's TypedExpr directly.
 TEST_F(TimezoneFunctionTest, nowUsesSessionStartTimeAndTimezone) {
   constexpr int64_t kStartMs = 1'609'466'400'000; // 2021-01-01T02:00:00 UTC.
   setSessionStartTimeAndTimeZone(kStartMs, "America/Los_Angeles");
   auto input = doubleInput(0.0);
-  auto exprSet = compileExpression("now()", asRowType(input->type()));
-  auto result = evaluate(*exprSet, input);
+  const auto rowType = asRowType(input->type());
+  auto result = evaluate(makeTypedExpr("now()", rowType), input);
   ASSERT_NE(result, nullptr);
   ASSERT_EQ(result->size(), input->size());
   ASSERT_TRUE(isTimestampWithTimeZoneType(result->type()))
@@ -1348,6 +1355,36 @@ TEST_F(TimezoneFunctionTest, nowUsesSessionStartTimeAndTimezone) {
   const auto packed = result->as<SimpleVector<int64_t>>()->valueAt(0);
   EXPECT_EQ(unpackMillisUtc(packed), kStartMs);
   EXPECT_EQ(unpackZoneKeyId(packed), tz::getTimeZoneID("America/Los_Angeles"));
+}
+
+// The shape the ExprSet round-trip above produces -- cast(<VARCHAR constant> as
+// TIMESTAMP WITH TIME ZONE) -- must be declined, not evaluated. Two things made
+// it a SIGSEGV rather than a decline: cudf::is_supported_cast(STRING, INT64)
+// reports true, so canEvaluate admitted a conversion CastFunction does not
+// implement, and the operand being a constant meant FunctionExpression omitted
+// it from eval's argument vector, so the cast indexed an empty vector.
+TEST_F(TimezoneFunctionTest, castVarcharConstantToTimestampWithTimeZoneDeclined) {
+  auto input = doubleInput(0.0);
+  const auto rowType = asRowType(input->type());
+  auto expr =
+      makeTypedExpr("cast('6592374374401825' as timestamp with time zone)",
+                    rowType);
+  EXPECT_FALSE(FunctionExpression::canEvaluate(
+      expression::optimize(expr, execCtx_.queryCtx(), execCtx_.pool())));
+}
+
+// A cast of any constant is declined for the same structural reason, whatever
+// the types: the operand never reaches eval. Asserted before optimize(), which
+// would fold this tree into a constant and leave no cast to check. A cast whose
+// operand is itself a cast is a different shape and stays evaluable -- the inner
+// cast becomes a subexpression that does produce a column.
+TEST_F(TimezoneFunctionTest, castOfConstantIsDeclined) {
+  auto input = doubleInput(0.0);
+  const auto rowType = asRowType(input->type());
+  EXPECT_FALSE(
+      FunctionExpression::canEvaluate(makeTypedExpr("cast(1 as bigint)", rowType)));
+  EXPECT_TRUE(FunctionExpression::canEvaluate(
+      makeTypedExpr("cast(cast(c0 as integer) as bigint)", rowType)));
 }
 
 // Year-only and year-month: CPU -> start-of-period midnight GMT.
