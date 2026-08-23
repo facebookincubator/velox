@@ -2034,3 +2034,156 @@ TEST_F(TimezoneFunctionTest, castTimestampToVarcharMatchesCpuUnderSessionZones) 
 // fails with "No cuDF expression evaluator can handle: date_trunc(...)", a harness
 // gap rather than an engine one. The composition is covered end-to-end by the
 // parity suite's c_date_trunc cases, which render six units through this cast.
+
+// ---------------------------------------------------------------------------
+// Comparison on TIMESTAMP WITH TIME ZONE.
+//
+// The type's comparator is defined on the INSTANT alone -- TimestampWithTimeZone
+// Type::compare and ::hash both read unpackMillisUtc, via the type's
+// ProvideCustomComparison hook -- so two values for the same moment in different
+// zones are EQUAL. cuDF has no type-level hook and saw a bare INT64, so the zone
+// key decided every comparison whose instants tied, and nothing carrying
+// different zones ever compared equal.
+//
+// Every test below uses ONE vector holding the same instant under two different
+// zone keys, which is the only input on which the two semantics differ: with a
+// uniform zone key a packed comparison agrees with an instant comparison,
+// because the millis occupy the high bits. That is why the parity suite's
+// literal-comparison cases passed throughout.
+//
+// Pacific/Kiritimati (+14) and Pacific/Midway (-11) are the extremes of the
+// offset range, so their zone keys are far apart as well as their offsets.
+//
+// Three of the six tests detect the defect and three are regression guards, and
+// the split is deliberate. Verified by disabling the normalization: comparison
+// UsesInstantNotZoneKey, comparisonUsesInstantForPreEpochInstants and
+// betweenUsesInstantNotZoneKey FAIL without it. The other three
+// (StillOrdersDistinctInstants, SeparatesAdjacentMillis, PropagatesNulls) pass
+// either way by design -- they exist to catch a normalization that goes too far,
+// clearing more than kMillisShift bits or swallowing nulls, and a fix that broke
+// them would be as wrong as no fix at all.
+// ---------------------------------------------------------------------------
+
+// Two rows, same instant, different zone key: eq must be true on both.
+TEST_F(TimezoneFunctionTest, comparisonUsesInstantNotZoneKey) {
+  const int64_t millis = 1'623'758'400'000;
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Kiritimati")),
+           pack(millis, tz::getTimeZoneID("Pacific/Midway"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Midway")),
+           pack(millis, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  // Both orderings of the pair, so a fix that only worked one way round fails.
+  assertMatchesCpu("c0 = c1", input);
+  assertMatchesCpu("c0 <> c1", input);
+  assertMatchesCpu("c0 < c1", input);
+  assertMatchesCpu("c0 <= c1", input);
+  assertMatchesCpu("c0 > c1", input);
+  assertMatchesCpu("c0 >= c1", input);
+}
+
+// A pre-epoch instant, where clearing the zone key must floor rather than
+// truncate toward zero: pack(-14182940000, 1953) / 4096 lands a millisecond late,
+// while masking the low bits (as the fix does) does not.
+TEST_F(TimezoneFunctionTest, comparisonUsesInstantForPreEpochInstants) {
+  const int64_t millis = -14'182'940'000;
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Kiritimati")),
+           pack(millis, 0)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, 0),
+           pack(millis, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  assertMatchesCpu("c0 = c1", input);
+  assertMatchesCpu("c0 < c1", input);
+  assertMatchesCpu("c0 >= c1", input);
+}
+
+// Different instants must still compare by instant, so the fix cannot have
+// collapsed everything to equal. The zone keys are chosen to oppose the instant
+// order: the EARLIER instant carries the HIGHER zone key, so an implementation
+// comparing packed values still gets these right and an implementation that
+// masked too much (e.g. clearing more than kMillisShift bits) gets them wrong.
+TEST_F(TimezoneFunctionTest, comparisonStillOrdersDistinctInstants) {
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(1'623'758'400'000, tz::getTimeZoneID("Pacific/Midway")),
+           pack(-14'182'940'000, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(-14'182'940'000, tz::getTimeZoneID("Pacific/Kiritimati")),
+           pack(1'623'758'400'000, tz::getTimeZoneID("Pacific/Midway"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  assertMatchesCpu("c0 = c1", input);
+  assertMatchesCpu("c0 < c1", input);
+  assertMatchesCpu("c0 > c1", input);
+}
+
+// Adjacent instants one millisecond apart must NOT be conflated. This is the
+// test that fails if the normalization masks the wrong number of bits, or
+// truncates instead of flooring: the two rows differ by exactly 1 in millis, so
+// any over-wide mask makes them equal.
+TEST_F(TimezoneFunctionTest, comparisonSeparatesAdjacentMillis) {
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(1'623'758'400'000, tz::getTimeZoneID("Pacific/Kiritimati")),
+           pack(-14'182'940'001, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(1'623'758'400'001, 0), pack(-14'182'940'000, 0)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  assertMatchesCpu("c0 = c1", input);
+  assertMatchesCpu("c0 < c1", input);
+  assertMatchesCpu("c0 > c1", input);
+}
+
+// NULL must stay NULL through the normalization rather than masking to a value.
+TEST_F(TimezoneFunctionTest, comparisonPropagatesNulls) {
+  const int64_t millis = 1'623'758'400'000;
+  auto input = makeRowVector({
+      makeNullableFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Kiritimati")),
+           std::nullopt,
+           std::nullopt},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeNullableFlatVector<int64_t>(
+          {std::nullopt,
+           pack(millis, tz::getTimeZoneID("Pacific/Midway")),
+           std::nullopt},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  assertMatchesCpu("c0 = c1", input);
+  assertMatchesCpu("c0 < c1", input);
+}
+
+// BETWEEN lowers to two comparisons through its own branch of the tree builder,
+// so it needs its own coverage: the bound rows carry a different zone key from
+// the value row, and the value is exactly ON both bounds.
+TEST_F(TimezoneFunctionTest, betweenUsesInstantNotZoneKey) {
+  const int64_t millis = 1'623'758'400'000;
+  const auto kiritimati = tz::getTimeZoneID("Pacific/Kiritimati");
+  const auto midway = tz::getTimeZoneID("Pacific/Midway");
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, kiritimati), pack(millis, midway)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, midway), pack(millis, kiritimati)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, midway), pack(millis, kiritimati)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  // Degenerate range [x, x] where x is the same instant in another zone: the
+  // value is simultaneously >= lower and <= upper, so CPU says true.
+  assertMatchesCpu("c0 between c1 and c2", input);
+}
