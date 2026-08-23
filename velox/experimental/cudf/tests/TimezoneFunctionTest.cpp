@@ -1900,27 +1900,17 @@ TEST_F(TimezoneFunctionTest, fromUnixtimeSingleArgumentMatchesCpuUnderSessionZon
 // implied by the row's OWN zone key, not the session zone.
 // ---------------------------------------------------------------------------
 
-// Every extract below is written `field(c0) + 0`, and the `+ 0` is load-bearing.
-//
 // cuDF's extract_datetime_component returns a narrower integer than Presto
-// declares for these functions -- SMALLINT where year() is BIGINT -- and this
-// harness compares raw vectors, so a bare `year(c0)` fails on vector type before
-// it ever compares a value ("Cannot change vector type from ROW<SMALLINT> to
-// ROW<c0:BIGINT>"). `cast(... as bigint)` does NOT help: velox's CPU year()
-// already returns BIGINT, so the cast folds away and nothing widens the GPU side.
-// A binary op against a BIGINT literal does materialise INT64 on both sides.
-//
-// The width mismatch is PRE-EXISTING and not a property of the TSWTZ path:
-// `year(c0)` over a plain TIMESTAMP fails identically. The cluster path is
-// unaffected, because the operator's output conversion reconciles the width
-// there -- which is exactly why this only shows up at the expression level.
+// declares for these functions -- SMALLINT where year() is BIGINT. The
+// reconciling cast lives in FunctionExpression::eval behind its finalize flag,
+// which CudfFunctionBaseTest now passes exactly as CudfFilterProject does, so
+// these assert the declared BIGINT result directly.
 TEST_F(TimezoneFunctionTest, extractFieldsFromTimestampWithTimeZone) {
   auto input = timestampWithTimeZoneInput(1'623'758'400'000, "Asia/Kolkata");
   for (const auto* field :
        {"year", "quarter", "month", "day", "hour", "minute", "second",
         "day_of_week", "day_of_year", "week", "year_of_week"}) {
-    assertMatchesCpu(
-        "" + std::string(field) + "(c0) + 0", input);
+    assertMatchesCpu(std::string(field) + "(c0)", input);
   }
 }
 
@@ -1932,8 +1922,7 @@ TEST_F(TimezoneFunctionTest, extractFieldsUsePerRowZoneKeyNotSessionZone) {
       1'623'758'400'000, "Asia/Kathmandu", 1'623'758'400'000, "America/Los_Angeles");
   setSessionTimezone("UTC");
   for (const auto* field : {"year", "day", "hour", "minute", "day_of_week"}) {
-    assertMatchesCpu(
-        "" + std::string(field) + "(c0) + 0", input);
+    assertMatchesCpu(std::string(field) + "(c0)", input);
   }
 }
 
@@ -1943,19 +1932,18 @@ TEST_F(TimezoneFunctionTest, extractSubMinuteFieldsAppliesTheZoneShift) {
   // take that shortcut: a historical LMT offset need not be a whole number of
   // minutes. 1883 in Los Angeles is such an offset (LMT -07:52:58).
   auto input = timestampWithTimeZoneInput(-2'717'647'800'000, "America/Los_Angeles");
-  assertMatchesCpu("second(c0) + 0", input);
-  assertMatchesCpu("minute(c0) + 0", input);
-  assertMatchesCpu("hour(c0) + 0", input);
+  assertMatchesCpu("second(c0)", input);
+  assertMatchesCpu("minute(c0)", input);
+  assertMatchesCpu("hour(c0)", input);
 }
 
 TEST_F(TimezoneFunctionTest, extractFieldsPropagateNulls) {
   auto input = twoZoneAndNullTimestampWithTimeZoneInput(
       1'623'758'400'000, "Asia/Kolkata", -14'182'940'000, "America/Los_Angeles");
   for (const auto* field : {"year", "hour", "second", "week"}) {
-    assertMatchesCpu(
-        "" + std::string(field) + "(c0) + 0", input);
+    assertMatchesCpu(std::string(field) + "(c0)", input);
   }
-  assertMatchesCpu("hour(c0) + 0", allNullTimestampWithTimeZoneInput());
+  assertMatchesCpu("hour(c0)", allNullTimestampWithTimeZoneInput());
 }
 
 // ---------------------------------------------------------------------------
