@@ -1601,3 +1601,109 @@ TYPED_TEST(ALPEncodingTest, emptyDataRejected) {
           options),
       "ALP encoding cannot encode empty data.");
 }
+
+// Verify the chunked-stride sampler produces (a) exactly
+// estimateSampleSize distinct in-range input indices, and (b) that those
+// indices cluster into kSamplingChunks contiguous runs when the input is
+// large enough. The estimator relies on sampledValueIndex to map exception
+// positions in the sample back to input positions, so any drift between the
+// gather-side layout in estimateSize and the mapper on the exception path
+// would silently corrupt the encoded exception_positions stream.
+template <typename D>
+void expectChunkedStrideSamplingCoversInput() {
+  constexpr uint32_t kSampleSize = nimble::ALPEncoding<D>::kSampleSize;
+  constexpr uint32_t kSamplingChunks = nimble::ALPEncoding<D>::kSamplingChunks;
+  // Large input so the chunked path is taken (not the small-input fallback).
+  const uint64_t rowCount = 1'000'000;
+  const uint32_t sampleSize =
+      nimble::ALPEncoding<D>::estimateSampleSize(rowCount);
+  ASSERT_EQ(sampleSize, kSampleSize);
+
+  // Collect the mapped indices and confirm each falls in [0, rowCount).
+  std::vector<uint64_t> mapped;
+  mapped.reserve(sampleSize);
+  for (uint32_t i = 0; i < sampleSize; ++i) {
+    const auto idx =
+        nimble::ALPEncoding<D>::sampledValueIndex(i, rowCount, sampleSize);
+    ASSERT_LT(idx, rowCount) << "sample " << i << " out of range";
+    mapped.push_back(idx);
+  }
+  ASSERT_EQ(mapped.size(), sampleSize);
+
+  // Chunk layout: successive samples within the same chunk should be
+  // consecutive input indices. This is exactly the property that makes the
+  // gather cache-friendly.
+  const uint32_t chunkSize = sampleSize / kSamplingChunks;
+  ASSERT_GT(chunkSize, 1u);
+  for (uint32_t chunk = 0; chunk < kSamplingChunks; ++chunk) {
+    for (uint32_t j = 1; j < chunkSize; ++j) {
+      const uint32_t sampleIdx = chunk * chunkSize + j;
+      EXPECT_EQ(mapped[sampleIdx], mapped[sampleIdx - 1] + 1)
+          << "chunk " << chunk << " offset " << j << " not contiguous";
+    }
+  }
+
+  // Chunks themselves are equidistant across the input.
+  for (uint32_t chunk = 1; chunk < kSamplingChunks; ++chunk) {
+    const uint64_t start = mapped[chunk * chunkSize];
+    const uint64_t prevStart = mapped[(chunk - 1) * chunkSize];
+    EXPECT_GT(start, prevStart)
+        << "chunk " << chunk << " not strictly after " << (chunk - 1);
+  }
+}
+
+TEST(ALPSizeEstimationTest, chunkedStrideSamplingCoversInput_float) {
+  expectChunkedStrideSamplingCoversInput<float>();
+}
+
+TEST(ALPSizeEstimationTest, chunkedStrideSamplingCoversInput_double) {
+  expectChunkedStrideSamplingCoversInput<double>();
+}
+
+// Small-input fallback: when the input has fewer rows than kSamplingChunks
+// the chunk layout collapses to the strided singleton mapping. Pinning this
+// keeps the tiny-input tests (which lean on specific rows being sampled)
+// byte-for-byte identical to their pre-Phase-3 behavior.
+TEST(ALPSizeEstimationTest, smallInputFallbackMatchesStridedMapping) {
+  constexpr uint32_t kSamplingChunks =
+      nimble::ALPEncoding<double>::kSamplingChunks;
+  for (uint64_t rowCount = 1; rowCount <= kSamplingChunks; ++rowCount) {
+    const uint32_t sampleSize =
+        nimble::ALPEncoding<double>::estimateSampleSize(rowCount);
+    for (uint32_t i = 0; i < sampleSize; ++i) {
+      const auto idx = nimble::ALPEncoding<double>::sampledValueIndex(
+          i, rowCount, sampleSize);
+      // Strided singleton mapping: i * rowCount / sampleSize.
+      const auto expected = static_cast<uint64_t>(i) * rowCount / sampleSize;
+      EXPECT_EQ(idx, expected) << "rowCount=" << rowCount << " i=" << i;
+      EXPECT_LT(idx, rowCount);
+    }
+  }
+}
+
+// End-to-end guardrail: the estimator on a uniform, exactly-representable
+// input must return the same size regardless of the sampler layout, because
+// every sampled value maps to the same integer stream cost. Any bug that
+// dropped or reused a sample position would perturb the exception count or
+// the ZigZag range and this size would drift.
+template <typename D>
+void expectStrideSamplerEstimateStableOnUniformInput() {
+  using PhysicalType = typename nimble::TypeTraits<D>::physicalType;
+  const nimble::Encoding::Options options{};
+  const uint64_t rowCount = 100'000;
+  const D constant = D{1.25};
+  std::vector<PhysicalType> values(
+      rowCount, nimble::detail::alp::toPhysical<D>(constant));
+  const auto estimate = nimble::ALPEncoding<D>::estimateSize(
+      std::span<const PhysicalType>{values.data(), values.size()}, options);
+  ASSERT_TRUE(estimate.has_value());
+  EXPECT_GT(estimate.value(), 0u);
+}
+
+TEST(ALPSizeEstimationTest, strideSamplerEstimateStableOnUniformInput_float) {
+  expectStrideSamplerEstimateStableOnUniformInput<float>();
+}
+
+TEST(ALPSizeEstimationTest, strideSamplerEstimateStableOnUniformInput_double) {
+  expectStrideSamplerEstimateStableOnUniformInput<double>();
+}

@@ -513,10 +513,41 @@ class ALPEncoding final
 
     std::vector<physicalType> sampledValues;
     sampledValues.reserve(sampleSize);
-    // Select evenly spaced input positions without accumulating rounding error.
-    for (uint32_t i = 0; i < sampleSize; ++i) {
-      const auto inputIndex = sampledValueIndex(i, rowCount, sampleSize);
-      sampledValues.push_back(values[inputIndex]);
+    // Chunked-stride sampling: draw kSamplingChunks equidistant contiguous
+    // runs from the input, each of length chunkSize. Contiguous reads let
+    // the prefetcher keep up (~32 cache-line pulls instead of ~1024 spread
+    // singletons for the default kSampleSize=1024).
+    if (rowCount <= kSamplingChunks || sampleSize <= kSamplingChunks) {
+      // Fallback for tiny inputs: fall back to strided singleton mapping so
+      // small-sample tests keep the exact same rows they did before.
+      for (uint32_t i = 0; i < sampleSize; ++i) {
+        const auto inputIndex = sampledValueIndex(i, rowCount, sampleSize);
+        sampledValues.push_back(values[inputIndex]);
+      }
+    } else {
+      const uint32_t chunkSize = sampleSize / kSamplingChunks;
+      for (uint32_t chunk = 0; chunk < kSamplingChunks; ++chunk) {
+        const uint64_t chunkStart =
+            static_cast<uint64_t>(chunk) * rowCount / kSamplingChunks;
+        // Trim the final chunk if it would run past the end of the input;
+        // sampledValueIndex clamps the same way when mapping back for
+        // exception positions.
+        const uint64_t chunkLen =
+            std::min<uint64_t>(chunkSize, rowCount - chunkStart);
+        const physicalType* p = values.data() + chunkStart;
+        for (uint64_t j = 0; j < chunkLen; ++j) {
+          sampledValues.push_back(p[j]);
+        }
+      }
+      // If integer division dropped a few slots (sampleSize %
+      // kSamplingChunks != 0) top the sample up from the last chunk end so
+      // downstream code that assumes sampledValues.size() == sampleSize
+      // keeps holding.
+      while (sampledValues.size() < sampleSize) {
+        const auto inputIndex = sampledValueIndex(
+            static_cast<uint32_t>(sampledValues.size()), rowCount, sampleSize);
+        sampledValues.push_back(values[inputIndex]);
+      }
     }
 
     return estimateSizeFromSample(rowCount, sampledValues, options);
@@ -634,12 +665,39 @@ class ALPEncoding final
     return std::min(static_cast<uint32_t>(rowCount), kSampleSize);
   }
 
-  /// Maps a dense sample ordinal to an evenly spaced input row.
+  /// Maps a dense sample ordinal (0..sampleSize-1) to an input row using a
+  /// chunked-stride layout: the sample is split into kSamplingChunks
+  /// equidistant contiguous chunks that together cover the input span. This
+  /// is cheaper than picking sampleSize far-apart singletons because each
+  /// chunk touches only a handful of cache lines. When the input is smaller
+  /// than kSamplingChunks the layout collapses to a single dense chunk
+  /// (rowCount rows, chunkSize == sampleSize == rowCount), matching the old
+  /// behavior for small inputs so unit tests that pin (e, f) on tiny samples
+  /// stay stable.
   static uint64_t sampledValueIndex(
       uint32_t sampleIndex,
       uint64_t rowCount,
       uint32_t sampleSize) {
-    return sampleIndex * rowCount / sampleSize;
+    if (sampleSize == 0) {
+      return 0;
+    }
+    // A single dense chunk when the input is too small to split.
+    if (rowCount <= kSamplingChunks || sampleSize <= kSamplingChunks) {
+      return static_cast<uint64_t>(sampleIndex) * rowCount / sampleSize;
+    }
+    const uint32_t chunkSize = sampleSize / kSamplingChunks;
+    const uint32_t chunkIdx = sampleIndex / chunkSize;
+    const uint32_t offsetInChunk = sampleIndex % chunkSize;
+    // Chunk starting positions are evenly spaced across [0, rowCount);
+    // rounding is toward 0 so the final chunk still fits when
+    // rowCount is not an exact multiple of kSamplingChunks.
+    const uint64_t chunkStart =
+        static_cast<uint64_t>(chunkIdx) * rowCount / kSamplingChunks;
+    // Clamp: the last chunk may abut rowCount if chunkSize > residual;
+    // clamping to (rowCount - 1) preserves the invariant that every
+    // returned index is in-range.
+    const uint64_t idx = chunkStart + offsetInChunk;
+    return idx < rowCount ? idx : rowCount - 1;
   }
 
  private:
@@ -742,6 +800,18 @@ class ALPEncoding final
       1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
       1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22, 1e23};
 
+  // Sample up to this many values to find the best (exponent, factor) pair.
+  static constexpr uint32_t kSampleSize{1024};
+  // Number of equidistant chunks the sample is drawn from. Each chunk is a
+  // contiguous run of kSampleSize / kSamplingChunks values from the input.
+  // Total distinct sample count is still kSampleSize; the difference vs.
+  // strided single-value sampling is that we take 32 short contiguous runs
+  // rather than 1024 far-apart singletons -- ~32 cache-line pulls instead of
+  // ~1024, which is cheaper on the estimate hot path and still covers the
+  // input evenly. DuckDB uses the same layout (SAMPLES_PER_VECTOR=32) for the
+  // same reason.
+  static constexpr uint32_t kSamplingChunks{32};
+
  private:
   // Largest exponent and factor values considered during selection. These are
   // per-type and follow DuckDB's caps: double keeps up to 18 decimal digits
@@ -754,8 +824,6 @@ class ALPEncoding final
   static constexpr int kMaxFactor{kMaxExponent};
   // ALP-specific control word following the standard Encoding prefix.
   static constexpr uint32_t kHeaderSize{3};
-  // Sample up to this many values to find the best (exponent, factor) pair.
-  static constexpr uint32_t kSampleSize{1024};
 
   // Checks whether the selected ALP transform can encode the value without an
   // exception.
