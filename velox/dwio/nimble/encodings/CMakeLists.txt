@@ -32,6 +32,7 @@ add_library(
   PrefixEncoding.cpp
   RLEEncoding.cpp
   SharedDictionaryCatalog.cpp
+  SharedDictionaryCatalog.h
   SharedDictionaryEncoding.cpp
   SparseBoolEncoding.cpp
   TrivialEncoding.cpp
@@ -134,10 +135,7 @@ target_include_directories(
   nimble_shared_dictionary_fb
   INTERFACE ${PROJECT_BINARY_DIR} ${FLATBUFFERS_INCLUDE_DIR}
 )
-add_dependencies(
-  nimble_shared_dictionary_fb
-  nimble_shared_dictionary_schema_fb
-)
+add_dependencies(nimble_shared_dictionary_fb nimble_shared_dictionary_schema_fb)
 
 target_link_libraries(
   nimble_encodings
