@@ -49,7 +49,9 @@ class Exchange : public SourceOperator {
   /// 'exchangeClient' is the concrete in-memory client rather than the abstract
   /// ExchangeClient, because this operator reads pages off the in-memory
   /// exchange queue, which belongs to that client's data plane and not to the
-  /// abstract control plane.
+  /// abstract control plane. ExchangeTransportRegistry binds each transport's
+  /// operator builder to its own client type, so the pairing holds without a
+  /// runtime cast here.
   Exchange(
       int32_t operatorId,
       DriverCtx* driverCtx,

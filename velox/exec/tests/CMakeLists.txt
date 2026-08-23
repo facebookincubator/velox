@@ -52,7 +52,8 @@ target_link_libraries(
 #   MergeJoinTest 111s, AggregationTest 105s,
 #   DefaultOutputBufferManagerTest 98s, ScaleWriterLocalPartitionTest 96s,
 #   OrderByTest 71s, TopNRowNumberTest 64s,
-#   HashTableTest 60s, StreamingAggregationTest 58s, InMemoryExchangeClientTest 54s,
+#   HashTableTest 60s, StreamingAggregationTest 58s,
+#   InMemoryExchangeClientTest 54s,
 #   RowNumberTest 42s.
 #
 # Max group ~784s (bounded by IndexLookupJoinTest.cpp).
@@ -462,6 +463,22 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_link_libraries(velox_adaptive_prefetch_test GTest::gtest GTest::gtest_main)
+
+add_executable(
+  velox_exchange_transport_registry_test ExchangeTransportRegistryTest.cpp
+)
+add_test(
+  NAME velox_exchange_transport_registry_test
+  COMMAND velox_exchange_transport_registry_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+  velox_exchange_transport_registry_test
+  velox_exec
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
+)
 
 add_executable(velox_output_transport_registry_test OutputTransportRegistryTest.cpp)
 add_test(

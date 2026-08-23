@@ -17,6 +17,11 @@
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
+#include "velox/core/PlanNode.h"
+#include "velox/core/QueryConfig.h"
+#include "velox/exec/Exchange.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
+#include "velox/exec/Merge.h"
 
 namespace facebook::velox::exec {
 
@@ -63,6 +68,50 @@ InMemoryExchangeClient::InMemoryExchangeClient(
   VELOX_CHECK_NULL(dynamic_cast<const folly::InlineLikeExecutor*>(executor_));
   VELOX_CHECK_GE(
       destination, 0, "Exchange client destination must not be negative");
+}
+
+// static
+std::shared_ptr<ExchangeTransportEntry>
+InMemoryExchangeClient::makeDefaultTransportEntry() {
+  return ExchangeTransportEntry::make<InMemoryExchangeClient>(
+      [](const ExchangeClientContext& context) {
+        // The two byte limits come from the context, not from 'queryConfig':
+        // the caller may be sizing a per-source merge budget rather than a
+        // whole-node one.
+        const auto& queryConfig = context.queryConfig;
+        return std::make_shared<InMemoryExchangeClient>(
+            context.taskId,
+            context.destination,
+            context.maxExchangeBufferSize,
+            context.numberOfConsumers,
+            context.minExchangeOutputBatchBytes,
+            context.pool,
+            context.executor,
+            queryConfig.requestDataSizesMaxWaitSec(),
+            queryConfig.singleSourceExchangeOptimizationEnabled(),
+            queryConfig.exchangeLazyFetchingEnabled());
+      },
+      [](int32_t operatorId,
+         DriverCtx* ctx,
+         const std::shared_ptr<const core::ExchangeNode>& node,
+         const std::shared_ptr<InMemoryExchangeClient>& client)
+          -> std::unique_ptr<Operator> {
+        return std::make_unique<Exchange>(operatorId, ctx, node, client);
+      },
+      [](int32_t operatorId,
+         DriverCtx* ctx,
+         const std::shared_ptr<const core::ExchangeNode>& node,
+         const std::shared_ptr<InMemoryExchangeClient>& /*client*/)
+          -> std::unique_ptr<Operator> {
+        const auto mergeExchangeNode =
+            std::dynamic_pointer_cast<const core::MergeExchangeNode>(node);
+        VELOX_CHECK_NOT_NULL(
+            mergeExchangeNode,
+            "MergeExchange requires a MergeExchangeNode, plan node: {}",
+            node->id());
+        return std::make_unique<MergeExchange>(
+            operatorId, ctx, mergeExchangeNode);
+      });
 }
 
 void InMemoryExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
@@ -341,9 +390,9 @@ InMemoryExchangeClient::pickSourcesToRequestLocked() {
     //    transfer. Let the transfer happen in this case to avoid getting stuck.
     //
     // 2. We have some data in the queue that is not big enough for consumers,
-    //    and it is big enough to not allow InMemoryExchangeClient to initiate
-    //    request for more data. Let transfer happen in this case to avoid this
-    //    deadlock situation.
+    //    and it is big enough to not allow ExchangeClient to initiate request
+    //    for more data. Let transfer happen in this case to avoid this deadlock
+    //    situation.
     auto& source = producingSources_.front().source;
     auto requestBytes = producingSources_.front().remainingBytes.at(0);
     LOG(INFO) << "Requesting large single page " << requestBytes
