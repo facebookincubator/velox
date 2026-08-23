@@ -270,8 +270,8 @@ std::unique_ptr<nimble::Encoding> createEncoding(
         velox::AlignedBuffer::allocate<char>(totalLength, pool));
     return stringBuffer->template asMutable<void>();
   };
-  return nimble::EncodingFactory(options).create(
-      *pool, serialized, stringBufferFactory);
+  return nimble::EncodingFactory().create(
+      *pool, serialized, stringBufferFactory, options);
 }
 
 template <typename D>
@@ -728,8 +728,8 @@ TYPED_TEST(ALPEncodingTest, manualSelectionUsesAlpEstimate) {
         velox::AlignedBuffer::allocate<char>(totalLength, this->pool_.get()));
     return buf->template asMutable<void>();
   };
-  auto encoding = nimble::EncodingFactory(options).create(
-      *this->pool_, serialized, stringBufferFactory);
+  auto encoding = nimble::EncodingFactory().create(
+      *this->pool_, serialized, stringBufferFactory, options);
 
   nimble::Vector<D> result(this->pool_.get(), values.size());
   encoding->materialize(values.size(), result.data());
@@ -803,8 +803,8 @@ TYPED_TEST(ALPEncodingTest, dictionaryAlphabetUsesNestedAlpWhenEnabled) {
         velox::AlignedBuffer::allocate<char>(totalLength, this->pool_.get()));
     return buf->template asMutable<void>();
   };
-  auto encoding = nimble::EncodingFactory(options).create(
-      *this->pool_, serialized, stringBufferFactory);
+  auto encoding = nimble::EncodingFactory().create(
+      *this->pool_, serialized, stringBufferFactory, options);
 
   nimble::Vector<D> result(this->pool_.get(), values.size());
   encoding->materialize(values.size(), result.data());
@@ -879,8 +879,8 @@ TYPED_TEST(ALPEncodingTest, rleRunValuesUseNestedAlpWhenEnabled) {
         velox::AlignedBuffer::allocate<char>(totalLength, this->pool_.get()));
     return buf->template asMutable<void>();
   };
-  auto encoding = nimble::EncodingFactory(options).create(
-      *this->pool_, serialized, stringBufferFactory);
+  auto encoding = nimble::EncodingFactory().create(
+      *this->pool_, serialized, stringBufferFactory, options);
 
   nimble::Vector<D> result(this->pool_.get(), values.size());
   encoding->materialize(values.size(), result.data());
@@ -957,8 +957,8 @@ TYPED_TEST(ALPEncodingTest, mainlyConstantOtherValuesUseNestedAlpWhenEnabled) {
         velox::AlignedBuffer::allocate<char>(totalLength, this->pool_.get()));
     return buf->template asMutable<void>();
   };
-  auto encoding = nimble::EncodingFactory(options).create(
-      *this->pool_, serialized, stringBufferFactory);
+  auto encoding = nimble::EncodingFactory().create(
+      *this->pool_, serialized, stringBufferFactory, options);
 
   nimble::Vector<D> result(this->pool_.get(), values.size());
   encoding->materialize(values.size(), result.data());

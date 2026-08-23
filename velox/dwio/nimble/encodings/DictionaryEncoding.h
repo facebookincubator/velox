@@ -197,20 +197,20 @@ DictionaryEncoding<T>::DictionaryEncoding(
     const Encoding::Options& options)
     : TypedEncoding<T, physicalType>{pool, data, options},
       alphabet_{this->pool_} {
-  const EncodingFactory factory{options};
   const auto* pos = data.data() + this->dataOffset();
   const uint32_t alphabetSize = encoding::readUint32(pos);
-  alphabetEncoding_ =
-      factory.create(*this->pool_, {pos, alphabetSize}, stringBufferFactory);
+  alphabetEncoding_ = EncodingFactory().create(
+      *this->pool_, {pos, alphabetSize}, stringBufferFactory, options);
   const uint32_t alphabetCount = alphabetEncoding_->rowCount();
   alphabet_.resize(alphabetCount);
   alphabetEncoding_->materialize(alphabetCount, alphabet_.data());
 
   pos += alphabetSize;
-  indicesEncoding_ = factory.create(
+  indicesEncoding_ = EncodingFactory().create(
       *this->pool_,
       {pos, static_cast<size_t>(data.end() - pos)},
-      stringBufferFactory);
+      stringBufferFactory,
+      options);
 }
 
 template <typename T>
