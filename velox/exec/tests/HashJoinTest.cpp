@@ -2213,5 +2213,376 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
       return TestParamToName(info.param);
     });
 
+// Test that hash join spill uses the hash_join_spill_file_create_config when
+// set, and other spillable operators use the default spill_file_create_config.
+DEBUG_ONLY_TEST_P(HashJoinTest, hashJoinSpillFileCreateConfig) {
+  const auto rowType =
+      ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
+  const auto probeVectors = createVectors(rowType, 128, 10);
+  const auto buildVectors = createVectors(rowType, 128, 10);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // Build a plan with hash join and orderBy. Hash join operators should use
+  // hash_join_spill_file_create_config and orderBy should use the default
+  // spill_file_create_config.
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(probeVectors, true)
+                  .hashJoin(
+                      {"c0"},
+                      {"u0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(buildVectors, true)
+                          .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                          .planNode(),
+                      "",
+                      {"c0", "c1", "c2"},
+                      core::JoinType::kInner)
+                  .orderBy({"c0 ASC NULLS LAST"}, false)
+                  .planNode();
+
+  auto spillDirectory = TempDirectoryPath::create();
+
+  std::atomic_bool hashJoinConfigVerified{false};
+  std::atomic_bool defaultConfigVerified{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::isBlocked",
+      std::function<void(exec::Operator*)>([&](exec::Operator* op) {
+        const auto* spillConfig = op->testingSpillConfig();
+        if (spillConfig == nullptr) {
+          return;
+        }
+        const auto& opType = op->operatorType();
+        if (opType == "HashBuild" || opType == "HashProbe") {
+          // Hash join operators should use hash_join_spill_file_create_config.
+          ASSERT_EQ(spillConfig->fileCreateConfig, "test_hashjoin_config")
+              << "Operator: " << opType;
+          hashJoinConfigVerified = true;
+        } else {
+          // Other spillable operators (e.g., OrderBy) should use the default
+          // spill_file_create_config.
+          ASSERT_EQ(spillConfig->fileCreateConfig, "test_default_config")
+              << "Operator: " << opType;
+          defaultConfigVerified = true;
+        }
+      }));
+
+  TestScopedSpillInjection scopedSpillInjection(100);
+  AssertQueryBuilder(plan)
+      .spillDirectory(spillDirectory->getPath())
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(core::QueryConfig::kJoinSpillEnabled, true)
+      .config(core::QueryConfig::kOrderBySpillEnabled, true)
+      .config(core::QueryConfig::kSpillFileCreateConfig, "test_default_config")
+      .config(
+          core::QueryConfig::kHashJoinSpillFileCreateConfig,
+          "test_hashjoin_config")
+      .copyResults(pool_.get());
+
+  ASSERT_TRUE(hashJoinConfigVerified.load());
+  ASSERT_TRUE(defaultConfigVerified.load());
+}
+
+/// Verifies that HashProbe combines low-selectivity filter results across
+/// multiple listJoinResults iterations into fewer output batches instead of
+/// emitting many small vectors.
+TEST_P(HashJoinTest, outputBatchCombine) {
+  // Build data: 5000 rows with integer keys 0..4999 and values.
+  auto buildVectors = makeRowVector(
+      {"u0", "u1"},
+      {
+          makeFlatVector<int32_t>(5'000, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(
+              5'000,
+              [](auto row) { return -1000 + (row / 5) * 10; },
+              nullEvery(300)),
+      });
+
+  // Probe data: 10000 rows with keys 0..9999 and values.
+  auto probeVectors = makeRowVector(
+      {"t0", "t1"},
+      {
+          makeFlatVector<int32_t>(10'000, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(
+              10'000,
+              [](auto row) { return -1000 + (row / 5) * 10; },
+              nullEvery(300)),
+      });
+
+  std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
+  writeToFile(probeFile->getPath(), {probeVectors});
+
+  std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
+  writeToFile(buildFile->getPath(), {buildVectors});
+
+  createDuckDbTable("t", {probeVectors});
+  createDuckDbTable("u", {buildVectors});
+  core::PlanNodeId probeScanId;
+  core::PlanNodeId buildScanId;
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto verifyJoinResult = [&](core::JoinType joinType,
+                              const std::string& refQuery,
+                              bool nullAware = false,
+                              bool flipJoinSide = false) {
+    std::vector<std::string> output = {"t0", "t1"};
+    if (joinType == core::JoinType::kLeftSemiProject) {
+      output.emplace_back("match");
+    }
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .tableScan(asRowType(probeVectors->type()))
+                    .capturePlanNodeId(probeScanId)
+                    .hashJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .tableScan(asRowType(buildVectors->type()))
+                            .capturePlanNodeId(buildScanId)
+                            .planNode(),
+                        "(t1 + u1) % 3 = 0",
+                        output,
+                        joinType,
+                        nullAware)
+                    .planNode();
+
+    SplitPath splitPaths = {
+        {probeScanId, {probeFile->getPath()}},
+        {buildScanId, {buildFile->getPath()}},
+    };
+    if (flipJoinSide) {
+      plan = flipJoinSides(plan);
+    }
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .inputSplits(splitPaths)
+        .checkSpillStats(false)
+        .config(core::QueryConfig::kPreferredOutputBatchRows, "1000")
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, "6000")
+        .referenceQuery(refQuery)
+        .run();
+  };
+  {
+    SCOPED_TRACE("inner join");
+    verifyJoinResult(
+        core::JoinType::kInner,
+        "SELECT t0, t1 FROM t, u WHERE t0 = u0 AND (t1 + u1) % 3 = 0");
+  }
+  {
+    SCOPED_TRACE("full join");
+    verifyJoinResult(
+        core::JoinType::kFull,
+        "SELECT t0, t1 FROM t FULL OUTER JOIN u ON t0 = u0 AND (t1 + u1) % 3 = 0");
+  }
+  {
+    SCOPED_TRACE("left join");
+    verifyJoinResult(
+        core::JoinType::kLeft,
+        "SELECT t0, t1 FROM t LEFT JOIN u ON t0 = u0 AND (t1 + u1) % 3 = 0");
+  }
+  {
+    SCOPED_TRACE("semi project join");
+    verifyJoinResult(
+        core::JoinType::kLeftSemiProject,
+        "SELECT t0, t1, EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0) FROM t");
+    verifyJoinResult(
+        core::JoinType::kLeftSemiProject,
+        "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0) FROM t",
+        true);
+    verifyJoinResult(
+        core::JoinType::kLeftSemiProject,
+        "SELECT t0, t1, EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0) FROM t",
+        false,
+        true);
+  }
+  {
+    SCOPED_TRACE("semi filter join");
+    verifyJoinResult(
+        core::JoinType::kLeftSemiFilter,
+        "SELECT t0, t1 FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0)");
+    verifyJoinResult(
+        core::JoinType::kLeftSemiFilter,
+        "SELECT t0, t1 FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0)",
+        false,
+        true);
+  }
+  {
+    SCOPED_TRACE("anti join");
+    verifyJoinResult(
+        core::JoinType::kAnti,
+        "SELECT t0, t1 FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0)");
+    verifyJoinResult(
+        core::JoinType::kAnti,
+        "SELECT t0, t1 FROM t WHERE t0 NOT IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)",
+        true);
+  }
+}
+
+/// Regression test for the dictionary vector corruption bug that caused
+/// PR #12711 to revert the original batch-combine implementation. The original
+/// approach modified evalFilter to accept a buffer offset, which corrupted
+/// dictionary-encoded output vectors when accumulating across multiple
+/// listJoinResults iterations. This test exercises: RIGHT JOIN + filter +
+/// VARCHAR columns (dictionary-encoded) + small output batch to force multiple
+/// iterations + high selectivity filter to trigger buffer reuse conflicts.
+TEST_P(HashJoinTest, outputBatchCombineWithDictionary) {
+  // Build side: string keys with duplicates to create multi-row chains.
+  std::vector<RowVectorPtr> buildVectors = makeBatches(1, [&](auto) {
+    return makeRowVector(
+        {"u0", "u1", "u2"},
+        {
+            makeFlatVector<int32_t>(2'000, [](auto row) { return row % 500; }),
+            makeFlatVector<StringView>(
+                2'000,
+                [](auto row) {
+                  return StringView::makeInline(fmt::format("bv{}", row % 100));
+                }),
+            makeFlatVector<int64_t>(
+                2'000, [](auto row) { return row * 10; }, nullEvery(50)),
+        });
+  });
+
+  // Probe side: dictionary-encoded columns including a bool filter column,
+  // matching the production scenario where the filter evaluation flattens a
+  // dictionary-encoded bool vector.
+  std::vector<RowVectorPtr> probeVectors = makeBatches(1, [&](auto) {
+    auto indices = makeIndices(3'000, [](auto row) { return row; });
+    auto reversedIndices =
+        makeIndices(3'000, [](auto row) { return 2'999 - row; });
+    return makeRowVector(
+        {"t0", "t1", "t2", "t3"},
+        {
+            wrapInDictionary(
+                indices,
+                3'000,
+                makeFlatVector<int32_t>(
+                    3'000, [](auto row) { return row % 700; })),
+            wrapInDictionary(
+                indices,
+                3'000,
+                makeFlatVector<StringView>(
+                    3'000,
+                    [](auto row) {
+                      return StringView::makeInline(
+                          fmt::format("pv{}", row % 200));
+                    })),
+            wrapInDictionary(
+                reversedIndices,
+                3'000,
+                makeFlatVector<int64_t>(
+                    3'000, [](auto row) { return row * 7; }, nullEvery(30))),
+            wrapInDictionary(
+                reversedIndices,
+                3'000,
+                makeFlatVector<bool>(
+                    3'000, [](auto row) { return row % 5 != 0; })),
+        });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  // Small batch size forces multiple iterations, stressing buffer management.
+  // The filter is selective enough to trigger accumulation.
+  auto runTest = [&](core::JoinType joinType, const std::string& refQuery) {
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .probeVectors(std::vector<RowVectorPtr>(probeVectors))
+        .buildVectors(std::vector<RowVectorPtr>(buildVectors))
+        .probeKeys({"t0"})
+        .buildKeys({"u0"})
+        .joinType(joinType)
+        .joinFilter("t3 AND (t2 + u2) % 7 = 0")
+        .joinOutputLayout({"t0", "t1", "u1"})
+        .config(core::QueryConfig::kPreferredOutputBatchRows, "100")
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+        .referenceQuery(refQuery)
+        .checkSpillStats(false)
+        .run();
+  };
+
+  {
+    SCOPED_TRACE("right join with filter and string columns");
+    runTest(
+        core::JoinType::kRight,
+        "SELECT t0, t1, u1 FROM t RIGHT JOIN u ON t0 = u0 AND t3 AND (t2 + u2) % 7 = 0");
+  }
+  {
+    SCOPED_TRACE("left join with filter and string columns");
+    runTest(
+        core::JoinType::kLeft,
+        "SELECT t0, t1, u1 FROM t LEFT JOIN u ON t0 = u0 AND t3 AND (t2 + u2) % 7 = 0");
+  }
+  {
+    SCOPED_TRACE("full join with filter and string columns");
+    runTest(
+        core::JoinType::kFull,
+        "SELECT t0, t1, u1 FROM t FULL OUTER JOIN u ON t0 = u0 AND t3 AND (t2 + u2) % 7 = 0");
+  }
+  {
+    SCOPED_TRACE("inner join with filter and string columns");
+    runTest(
+        core::JoinType::kInner,
+        "SELECT t0, t1, u1 FROM t, u WHERE t0 = u0 AND t3 AND (t2 + u2) % 7 = 0");
+  }
+}
+
+// Verifies that null-aware left semi project join with a low-selectivity
+// filter combines results correctly across multiple iterations. Exercises
+// the accumulation of 'match' column null flags across iterations.
+TEST_P(HashJoinTest, outputBatchCombineWithNullAwareLeftSemiProject) {
+  // Build side: 2'000 rows with null join keys to enable the null-aware path.
+  auto buildVectors = makeBatches(1, [&](auto) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+            makeFlatVector<int32_t>(
+                2'000, [](auto row) { return row % 500; }, nullEvery(50)),
+            makeFlatVector<int64_t>(
+                2'000, [](auto row) { return row * 3; }, nullEvery(70)),
+        });
+  });
+
+  // Probe side: 3'000 rows, dictionary-encoded join key, no null keys. Null
+  // semantics come from the null keys on the build side.
+  auto probeVectors = makeBatches(1, [&](auto) {
+    auto indices = makeIndices(3'000, [](auto row) { return row; });
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            wrapInDictionary(
+                indices,
+                3'000,
+                makeFlatVector<int32_t>(
+                    3'000, [](auto row) { return row % 700; })),
+            makeFlatVector<int64_t>(
+                3'000, [](auto row) { return row * 7; }, nullEvery(30)),
+        });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  // Small batch size forces multiple iterations, stressing buffer management.
+  // The filter is selective enough to trigger accumulation.
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .probeVectors(std::vector<RowVectorPtr>(probeVectors))
+      .buildVectors(std::vector<RowVectorPtr>(buildVectors))
+      .probeKeys({"t0"})
+      .buildKeys({"u0"})
+      .joinType(core::JoinType::kLeftSemiProject)
+      .nullAware(true)
+      .joinFilter("u0 IS NULL OR (t1 + u1) % 7 = 0")
+      .joinOutputLayout({"t0", "t1", "match"})
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "100")
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .referenceQuery(
+          "SELECT t0, t1, CASE WHEN EXISTS (SELECT 1 FROM u WHERE u0 = t0 AND "
+          "(u0 IS NULL OR (t1 + u1) % 7 = 0)) THEN true "
+          "WHEN EXISTS (SELECT 1 FROM u WHERE u0 IS NULL) THEN NULL "
+          "ELSE false END FROM t")
+      .checkSpillStats(false)
+      .run();
+}
+
 } // namespace
 } // namespace facebook::velox::exec
