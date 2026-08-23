@@ -15,6 +15,25 @@ add_library(nimble_tools_common EncodingUtilities.cpp EncodingUtilities.h)
 
 target_link_libraries(nimble_tools_common nimble_common nimble_tablet_reader nimble_column_stats)
 
+build_flatbuffers(
+  "${CMAKE_CURRENT_SOURCE_DIR}/ExternalDictionary.fbs"
+  ""
+  nimble_external_dictionary_schema_fb
+  ""
+  "${CMAKE_CURRENT_BINARY_DIR}"
+  ""
+  ""
+)
+add_library(nimble_external_dictionary_fb INTERFACE)
+target_include_directories(
+  nimble_external_dictionary_fb
+  INTERFACE ${PROJECT_BINARY_DIR} ${FLATBUFFERS_INCLUDE_DIR}
+)
+add_dependencies(
+  nimble_external_dictionary_fb
+  nimble_external_dictionary_schema_fb
+)
+
 add_library(nimble_dump_lib NimbleDumpLib.cpp NimbleDumpLib.h)
 target_link_libraries(
   nimble_dump_lib
@@ -52,6 +71,17 @@ target_link_libraries(
   nimble_column_stats
   velox_file
   velox_memory
+)
+
+add_library(nimble_external_dictionary_builder ExternalDictionaryBuilder.cpp)
+target_link_libraries(
+  nimble_external_dictionary_builder
+  nimble_external_dictionary_fb
+  nimble_common
+  nimble_encodings
+  velox_file
+  velox_memory
+  Folly::folly
 )
 
 # Only the libraries are built. The command line front-ends (NimbleDump.cpp,
