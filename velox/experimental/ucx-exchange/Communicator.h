@@ -26,10 +26,6 @@
 #include "velox/experimental/ucx-exchange/CommElement.h"
 #include "velox/experimental/ucx-exchange/WorkQueue.h"
 
-#include <gflags/gflags.h>
-
-DECLARE_bool(velox_ucx_exchange);
-
 namespace facebook::velox::ucx_exchange {
 
 struct HostPort {

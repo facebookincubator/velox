@@ -50,6 +50,14 @@ struct CudfConfig {
   static constexpr const char* kCudfConcatOptimizationEnabled{
       "cudf.concat_optimization_enabled"};
   static constexpr const char* kCudfTimestampUnit{"cudf.timestamp_unit"};
+  static constexpr const char* kUcxExchange{"cudf.exchange"};
+  static constexpr const char* kUcxxErrorHandling{"ucxx.error_handling"};
+  static constexpr const char* kUcxIntraNodeExchange{
+      "cudf.intra_node_exchange"};
+  static constexpr const char* kUcxxBlockingPolling{"ucxx.blocking_polling"};
+  static constexpr const char* kUcxExchangeLogLevel{"cudf.exchange_log_level"};
+  static constexpr const char* kUcxPartitionedOutputBatchRows{
+      "cudf.partitioned_output_batch_rows"};
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
 
@@ -69,6 +77,27 @@ struct CudfConfig {
 
   /// Allow fallback to CPU operators if GPU operator replacement fails.
   bool allowCpuFallback{true};
+
+  /// Enable GPU exchange operators (UcxExchange / UcxPartitionedOutput).
+  bool exchange{false};
+
+  /// Whether to enable error handling in UCXX endpoints.
+  bool ucxxErrorHandling{true};
+
+  /// Whether intra-node exchange optimization is enabled.
+  bool intraNodeExchange{false};
+
+  /// Whether to use blocking polling in UCXX.
+  bool ucxxBlockingPolling{true};
+
+  /// VLOG level for ucx-exchange source files.
+  int32_t exchangeLogLevel{0};
+
+  /// Minimum number of rows to accumulate in UCX partitioned output before
+  /// flushing. Small inputs are buffered and concatenated when this threshold
+  /// is reached, avoiding pathologically small exchange chunks. Set to 0 to
+  /// disable accumulation.
+  int64_t partitionedOutputBatchRows{10'000};
 
   /// Memory resource for cuDF.
   /// Possible values are (cuda, pool, async, arena, managed, managed_pool).
