@@ -509,60 +509,61 @@ class ALPEncoding final
     for (const auto value : sampledValues) {
       logicalValues.push_back(detail::alp::toLogical<cppDataType>(value));
     }
+    const std::span<const cppDataType> logicalSpan{
+        logicalValues.data(), logicalValues.size()};
 
-    const auto [exponent, factor] = findBestExponentFactorBySize(
-        std::span<const cppDataType>{
-            logicalValues.data(), logicalValues.size()},
-        options);
+    // Pick (exponent, factor) with the shared selector, then re-score the
+    // winner over the same sample to recover its ZigZag min/max and exception
+    // count.  Re-scoring costs one extra pass out of the O(kMaxE * kMaxF) grid
+    // the selector already visited -- negligible -- and guarantees the
+    // integer-stream cost model here is byte-identical to what the selector
+    // saw when it chose (exponent, factor).  This eliminates the earlier
+    // duplicate "encodedValues + Statistics<uint64_t>" scan that was subtly
+    // inconsistent with the selector's min/max view.
+    const auto [exponent, factor] =
+        findBestExponentFactorBySize(logicalSpan, options);
+    const uint32_t scoreSampleSize =
+        std::min<uint32_t>(static_cast<uint32_t>(sampleSize), kSampleSize);
+    const auto winnerScore = scoreCombination(
+        logicalSpan.subspan(0, scoreSampleSize), exponent, factor, options);
 
-    std::vector<uint64_t> encodedValues;
-    encodedValues.reserve(sampleSize);
+    // Collect exception positions/values so their per-stream FBW/Trivial cost
+    // is exact.  Sized to the known exception count from scoreCombination --
+    // no over-reservation -- but iterating the sample once is unavoidable
+    // because the exception *values* and their *input positions* (via
+    // sampledValueIndex) are what those two nested streams encode.
     std::vector<uint32_t> exceptionPositions;
-    exceptionPositions.reserve(sampleSize);
     std::vector<physicalType> exceptionValues;
-    exceptionValues.reserve(sampleSize);
+    exceptionPositions.reserve(winnerScore.exceptionCount);
+    exceptionValues.reserve(winnerScore.exceptionCount);
     uint64_t sampleExceptionCount{0};
-    // Mirror encodeWithExponentFactor's placeholder policy so this estimate
-    // tracks the real encoded size: exception slots are back-filled with the
-    // first representable value's ZigZag encoding rather than 0, keeping the
-    // frame-of-reference min/bit-width identical to what encoding produces.
-    bool hasPlaceholder = false;
-    uint64_t placeholder = 0;
-    std::vector<uint32_t> exceptionSlots;
-    for (auto i = 0; i < sampleSize; ++i) {
+    for (uint64_t i = 0; i < sampleSize; ++i) {
       if (!canRepresentExactly(
               logicalValues[i],
               sampledValues[static_cast<size_t>(i)],
               exponent,
               factor)) {
-        exceptionSlots.push_back(static_cast<uint32_t>(encodedValues.size()));
-        encodedValues.push_back(0);
         exceptionPositions.push_back(
-            sampledValueIndex(i, rowCount, sampleSize));
+            static_cast<uint32_t>(sampledValueIndex(
+                static_cast<uint32_t>(i),
+                rowCount,
+                static_cast<uint32_t>(sampleSize))));
         exceptionValues.push_back(sampledValues[static_cast<size_t>(i)]);
         ++sampleExceptionCount;
-        continue;
-      }
-
-      const auto encoded =
-          encodeValue(static_cast<double>(logicalValues[i]), exponent, factor);
-      encodedValues.push_back(velox::ZigZag::encode(encoded));
-      if (!hasPlaceholder) {
-        placeholder = encodedValues.back();
-        hasPlaceholder = true;
       }
     }
-    for (const uint32_t slot : exceptionSlots) {
-      encodedValues[slot] = placeholder;
-    }
 
-    const auto encodedStats = Statistics<uint64_t>::create(
-        std::span<const uint64_t>{encodedValues.data(), encodedValues.size()});
-    // Model the inexpensive scalar candidates without recursively estimating
-    // complex nested encodings.
+    // Integer stream: use the selector's ZigZag range directly.  Because
+    // encodeWithExponentFactor back-fills exception slots with the first
+    // representable value's ZigZag encoding (never 0), the min/max over the
+    // full encoded stream equal the min/max over the representable subset --
+    // exactly what scoreCombination computed above.  When every sampled value
+    // is an exception, winnerScore.estimatedBytes == kUnusableScore and both
+    // min/max come back as 0, producing a zero-range integer stream sized to
+    // rowCount -- same behavior as the pre-unification code path.
     const uint64_t nestedEncodedValuesSize = std::min(
         FixedBitWidthEncoding<uint64_t>::estimateSize(
-            rowCount, encodedStats, options),
+            rowCount, winnerScore.zigZagMin, winnerScore.zigZagMax, options),
         TrivialEncoding<uint64_t>::estimateSize(rowCount));
     const uint64_t exceptionCount =
         (sampleExceptionCount * rowCount + sampleSize - 1) / sampleSize;
@@ -762,6 +763,13 @@ class ALPEncoding final
     // kUnusable when the candidate produces no representable values.
     uint64_t estimatedBytes;
     uint32_t exceptionCount;
+    // ZigZag range over the representable-value stream. Undefined when the
+    // combination is unusable (representableCount == 0). Reusing these in
+    // estimateSizeFromSample avoids a second scan of the sample and keeps the
+    // selector's byte estimate byte-identical to the estimator's integer
+    // stream sizing.
+    uint64_t zigZagMin;
+    uint64_t zigZagMax;
   };
 
   static constexpr uint64_t kUnusableScore =
@@ -797,7 +805,7 @@ class ALPEncoding final
 
     if (representableCount == 0) {
       // Every sampled value is an exception; this combination cannot be used.
-      return {kUnusableScore, exceptionCount};
+      return {kUnusableScore, exceptionCount, 0, 0};
     }
 
     // Bit-packing operates on the ZigZag-encoded integers, so the FOR bit width
@@ -808,7 +816,11 @@ class ALPEncoding final
         TrivialEncoding<uint64_t>::estimateSize(sampleSize));
     const uint64_t exceptionBytes = static_cast<uint64_t>(exceptionCount) *
         (sizeof(uint32_t) + sizeof(physicalType));
-    return {integerStreamBytes + exceptionBytes, exceptionCount};
+    return {
+        integerStreamBytes + exceptionBytes,
+        exceptionCount,
+        zigZagMin,
+        zigZagMax};
   }
 
   // Selects the (exponent, factor) pair with the smallest estimated encoded

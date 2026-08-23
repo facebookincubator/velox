@@ -385,6 +385,84 @@ TYPED_TEST(ALPEncodingTest, scoreCombinationUnusableWhenAllExceptions) {
   EXPECT_EQ(score.estimatedBytes, nimble::ALPEncoding<D>::kUnusableScore);
 }
 
+// After the estimator unification lands, `estimateSizeFromSample` no longer
+// rebuilds its own ZigZag min/max on the encoded stream -- it takes them
+// directly from `scoreCombination`'s return. That coupling only stays
+// byte-exact if the two paths size their integer stream with the same
+// `(min, max)` inputs. This test asserts that byte-exact contract on the
+// chosen `(e, f)` for an all-representable sample (zero exceptions), so the
+// exception-payload branch drops out and the integer-stream subtotal alone
+// drives the estimate:
+//
+//   estimateSizeFromSample(rowCount=sampleSize) == prefix + metadata
+//     + min(FBW::estimateSize(N, zzMin, zzMax), Trivial::estimateSize(N))
+//
+// with zzMin/zzMax coming from scoreCombination(sample, e, f).zigZagMin/Max
+// on the chosen (e, f). If a future refactor drifts the two, this test
+// fails on the exact byte before any benchmark regression shows up.
+TYPED_TEST(ALPEncodingTest, scoreCombinationMatchesEstimator) {
+  using D = typename TypeParam::data_type;
+  using PhysicalType = typename nimble::TypeTraits<D>::physicalType;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+
+  // All two-decimal values -- exactly representable at (e=2, f=0). The
+  // size-based selector will pick some (e, f) that yields zero exceptions;
+  // we don't hard-code which pair it picks, only that the sample has that
+  // property so the shared code path is exercised end-to-end.
+  const std::array<D, 8> raw{
+      D{0.00}, D{0.01}, D{0.50}, D{0.99}, D{1.00}, D{1.25}, D{1.50}, D{2.00}};
+  std::vector<PhysicalType> sampledValues;
+  sampledValues.reserve(raw.size());
+  for (const auto value : raw) {
+    sampledValues.push_back(nimble::detail::alp::toPhysical<D>(value));
+  }
+  const std::span<const PhysicalType> physicalSpan{
+      sampledValues.data(), sampledValues.size()};
+
+  // Setting rowCount == sampleSize eliminates the estimator's rowCount
+  // scale-up so byte totals directly compare.
+  const uint64_t rowCount = sampledValues.size();
+  const auto estimate = nimble::ALPEncoding<D>::estimateSizeFromSample(
+      rowCount, physicalSpan, options);
+  ASSERT_TRUE(estimate.has_value());
+
+  // Rebuild the estimator's integer-stream expectation from scoreCombination's
+  // ZigZag range on the (e, f) the selector chose.
+  std::vector<D> logicalValues;
+  logicalValues.reserve(sampledValues.size());
+  for (const auto v : sampledValues) {
+    logicalValues.push_back(nimble::detail::alp::toLogical<D>(v));
+  }
+  const std::span<const D> logicalSpan{
+      logicalValues.data(), logicalValues.size()};
+  const auto [chosenE, chosenF] =
+      nimble::ALPEncoding<D>::findBestExponentFactorBySize(
+          logicalSpan, options);
+  const auto score = nimble::ALPEncoding<D>::scoreCombination(
+      logicalSpan, chosenE, chosenF, options);
+  ASSERT_NE(score.estimatedBytes, nimble::ALPEncoding<D>::kUnusableScore);
+  ASSERT_EQ(score.exceptionCount, 0u)
+      << "Test setup expects zero exceptions on chosen (e, f).";
+
+  const uint64_t integerStreamBytes = std::min(
+      nimble::FixedBitWidthEncoding<uint64_t>::estimateSize(
+          rowCount, score.zigZagMin, score.zigZagMax, options),
+      nimble::TrivialEncoding<uint64_t>::estimateSize(rowCount));
+
+  // exceptionCount == 0 → no exception-count varint, no per-stream varints,
+  // no exception-payload bytes. Just prefix + header + int-stream size varint
+  // + integer stream.
+  constexpr uint64_t kHeaderSize = 3;
+  const uint64_t metadataSize =
+      kHeaderSize + nimble::varint::varintSize(integerStreamBytes);
+  const uint64_t expected =
+      nimble::EncodingPrefix::serializedSize(
+          static_cast<uint32_t>(rowCount), options.useVarintRowCount) +
+      metadataSize + integerStreamBytes;
+  EXPECT_EQ(*estimate, expected);
+}
+
 TEST(ALPSizeEstimationTest, invalidSampleRejected) {
   const std::vector<uint32_t> sample = {0, 1};
 
