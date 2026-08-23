@@ -706,8 +706,13 @@ class PlanBuilder {
   /// splits.
   ///
   /// @param outputType The type of the data coming in and out of the exchange.
-  /// @param serdekind The kind of seralized data format.
-  PlanBuilder& exchange(const RowTypePtr& outputType, std::string serdekind);
+  /// @param serdeKind The kind of seralized data format.
+  /// @param transportKind The transport the data is received over; see
+  /// core::TransportKind.
+  PlanBuilder& exchange(
+      const RowTypePtr& outputType,
+      std::string serdeKind,
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Add a MergeExchangeNode using specified ORDER BY clauses.
   ///
@@ -720,7 +725,8 @@ class PlanBuilder {
   PlanBuilder& mergeExchange(
       const RowTypePtr& outputType,
       const std::vector<std::string>& keys,
-      std::string serdekind);
+      std::string serdeKind,
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Add a ProjectNode using specified SQL expressions.
   ///

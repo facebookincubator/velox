@@ -731,7 +731,8 @@ TEST_F(PlanNodeToStringTest, exchange) {
 
     ASSERT_EQ("-- Exchange[0]\n", plan->toString());
     ASSERT_EQ(
-        fmt::format("-- Exchange[0][{}] -> a:BIGINT, b:VARCHAR\n", serdeKind),
+        fmt::format(
+            "-- Exchange[0][{} in-memory] -> a:BIGINT, b:VARCHAR\n", serdeKind),
         plan->toString(true, false));
   }
 }
@@ -750,7 +751,7 @@ TEST_F(PlanNodeToStringTest, mergeExchange) {
     ASSERT_EQ("-- MergeExchange[0]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- MergeExchange[0][a ASC NULLS LAST, {}] -> a:BIGINT, b:VARCHAR\n",
+            "-- MergeExchange[0][a ASC NULLS LAST, {} in-memory] -> a:BIGINT, b:VARCHAR\n",
             serdeKind),
         plan->toString(true, false));
   }

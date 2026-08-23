@@ -520,10 +520,14 @@ PlanBuilder& PlanBuilder::traceScan(
 
 PlanBuilder& PlanBuilder::exchange(
     const RowTypePtr& outputType,
-    std::string serdeKind) {
+    std::string serdeKind,
+    std::string transportKind) {
   VELOX_CHECK_NULL(planNode_, "Exchange must be the source node");
   planNode_ = std::make_shared<core::ExchangeNode>(
-      nextPlanNodeId(), outputType, serdeKind);
+      nextPlanNodeId(),
+      outputType,
+      std::move(serdeKind),
+      std::move(transportKind));
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
 }
@@ -560,13 +564,19 @@ parseOrderByClauses(
 PlanBuilder& PlanBuilder::mergeExchange(
     const RowTypePtr& outputType,
     const std::vector<std::string>& keys,
-    std::string serdeKind) {
+    std::string serdeKind,
+    std::string transportKind) {
   VELOX_CHECK_NULL(planNode_, "MergeExchange must be the source node");
   auto [sortingKeys, sortingOrders] =
       parseOrderByClauses(keys, outputType, pool_);
 
   planNode_ = std::make_shared<core::MergeExchangeNode>(
-      nextPlanNodeId(), outputType, sortingKeys, sortingOrders, serdeKind);
+      nextPlanNodeId(),
+      outputType,
+      sortingKeys,
+      sortingOrders,
+      std::move(serdeKind),
+      std::move(transportKind));
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
 }
