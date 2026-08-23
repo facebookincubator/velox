@@ -115,6 +115,276 @@ nimble::EncodingSelectionPolicyCreator unusedNestedPolicyCreator() {
   };
 }
 
+// On a dataset engineered to expose the count-vs-size gap -- 980 clean
+// two-decimal values (exactly representable at a low exponent with a tiny
+// integer domain) plus 20 four-decimal, large-magnitude outliers (only
+// exactly representable at a higher exponent, and whose scaled integers span
+// many bits) -- the size-based estimator's winning score must never lose to
+// what the count-based winner would score at. That is the property
+// `findBestExponentFactorBySize` actually enforces (it iterates every (e, f)
+// and picks the smallest estimated bytes).
+//
+// The looser property "actual encoded bytes of size-based choice < actual
+// bytes of count-based choice" only holds once the exception-placeholder
+// change lands so that estimator bytes track real bytes on all tie-break
+// candidates. Today the estimator can tie two (e, f)s that produce different
+// real bytes -- notably for float, where precision loss at the (e=17, f=15)
+// tie-break winner inflates the real bit-width beyond what the estimator
+// saw. We check actual-bytes reduction as a soft signal (LE on float, LT on
+// double), and gate the strict assertion on double.
+// TODO(alp): tighten to EXPECT_LT for float once encode() writes a non-zero
+// placeholder for exception slots (see scoreCombination header comment).
+TYPED_TEST(ALPEncodingTest, sizeBeatsCountOnHighRangeOutliers) {
+  using D = typename TypeParam::data_type;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+
+  // 980 clean two-decimal values in [0, 100): exactly representable at e=2
+  // with a tiny integer domain. 20 four-decimal, large-magnitude values: only
+  // exactly representable at e>=4, and their scaled integers span >=30 bits.
+  constexpr uint32_t kCleanCount = 980;
+  constexpr uint32_t kOutlierCount = 20;
+  nimble::Vector<D> values{this->pool_.get()};
+  values.reserve(kCleanCount + kOutlierCount);
+  for (uint32_t i = 0; i < kCleanCount; ++i) {
+    values.push_back(static_cast<D>(i % 10'000) / static_cast<D>(100));
+  }
+  for (uint32_t i = 0; i < kOutlierCount; ++i) {
+    values.push_back(
+        static_cast<D>(987'000) + static_cast<D>(i) + static_cast<D>(0.4321));
+  }
+
+  const std::span<const D> logical{values.data(), values.size()};
+
+  const auto [countExp, countFactor] =
+      nimble::ALPEncoding<D>::findBestExponentFactorByCount(logical);
+  const auto [sizeExp, sizeFactor] =
+      nimble::ALPEncoding<D>::findBestExponentFactorBySize(logical, options);
+
+  // Core guarantee at the layer this changes: the size-based winner's
+  // *estimated* bytes must be <= the count-based winner's estimated bytes.
+  // This is what `findBestExponentFactorBySize` optimizes for.
+  const auto countScore = nimble::ALPEncoding<D>::scoreCombination(
+      logical, countExp, countFactor, options);
+  const auto sizeScore = nimble::ALPEncoding<D>::scoreCombination(
+      logical, sizeExp, sizeFactor, options);
+  EXPECT_LE(sizeScore.estimatedBytes, countScore.estimatedBytes)
+      << "count (" << int(countExp) << "," << int(countFactor)
+      << ") est=" << countScore.estimatedBytes << "; size (" << int(sizeExp)
+      << "," << int(sizeFactor) << ") est=" << sizeScore.estimatedBytes;
+
+  // Sanity-log actual encoded bytes with `realNestedSelection=true` so the
+  // nested uint64 stream is picked by the real cost-based factory (matches
+  // what production selection would emit). Under the default test policy the
+  // nested stream is forced to Trivial and the FOR bit-width advantage the
+  // size-based scorer weighs is invisible.
+  nimble::Buffer countBuffer{*this->pool_};
+  nimble::Buffer sizeBuffer{*this->pool_};
+  const auto countEncoded =
+      nimble::test::Encoder<nimble::ALPEncoding<D>>::encodeWithExponentFactor(
+          countBuffer,
+          values,
+          countExp,
+          countFactor,
+          nimble::CompressionType::Uncompressed,
+          options,
+          /*realNestedSelection=*/true);
+  const auto sizeEncoded =
+      nimble::test::Encoder<nimble::ALPEncoding<D>>::encodeWithExponentFactor(
+          sizeBuffer,
+          values,
+          sizeExp,
+          sizeFactor,
+          nimble::CompressionType::Uncompressed,
+          options,
+          /*realNestedSelection=*/true);
+
+  LOG(INFO) << "ALP selection A/B: count (" << int(countExp) << ","
+            << int(countFactor) << ") est=" << countScore.estimatedBytes
+            << " real=" << countEncoded.size() << "; size (" << int(sizeExp)
+            << "," << int(sizeFactor) << ") est=" << sizeScore.estimatedBytes
+            << " real=" << sizeEncoded.size();
+
+  // With the exception placeholder in place (encode() writes the first
+  // representable value's ZigZag into exception slots instead of 0), the
+  // estimator's bit-width model matches encode time, so the estimate no longer
+  // over-counts and selection is trustworthy. For double the size-based choice
+  // is strictly smaller. For float, count-based selection already lands on a
+  // byte-optimal (e, f) for this data and size-based selection ties along the
+  // precision diagonal (e.g. (2,0) vs (10,8) both at 2001 real bytes), so the
+  // guarantee here is no-regression rather than strict improvement.
+  if constexpr (std::is_same_v<D, double>) {
+    EXPECT_LT(sizeEncoded.size(), countEncoded.size());
+  } else {
+    EXPECT_LE(sizeEncoded.size(), countEncoded.size());
+  }
+
+  // Sanity: the size-based encoding must still round-trip losslessly.
+  std::vector<velox::BufferPtr> stringBuffers;
+  const auto stringBufferFactory = [&](uint32_t totalLength) {
+    auto& buf = stringBuffers.emplace_back(
+        velox::AlignedBuffer::allocate<char>(totalLength, this->pool_.get()));
+    return buf->template asMutable<void>();
+  };
+  auto encoding = nimble::test::Encoder<nimble::ALPEncoding<D>>::createEncoding(
+      *this->buffer_,
+      values,
+      stringBufferFactory,
+      nimble::CompressionType::Uncompressed,
+      options);
+  nimble::Vector<D> result{this->pool_.get(), values.size()};
+  encoding->materialize(values.size(), result.data());
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    EXPECT_TRUE(nimble::NimbleCompare<D>::equals(result[i], values[i]));
+  }
+}
+
+// When every value is exactly representable at a small (exponent, factor), the
+// size-based strategy must not regress on encoded byte count relative to
+// count-based selection. (The two strategies do NOT necessarily return the
+// same (e, f) on such data: any (e, f) with the same `e - f` produces the
+// same scaled integers and therefore ties in bytes, so size-based selection
+// legitimately drifts along the diagonal to the largest (e, f) — DuckDB's
+// tie-break rule for preserving out-of-sample precision. What must hold is
+// that the encoded output is byte-equal, i.e., no regression on "easy" data.)
+TYPED_TEST(ALPEncodingTest, sizeSelectionNoRegressionOnExactlyRepresentable) {
+  using D = typename TypeParam::data_type;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+
+  // Two-decimal values in [0, 100): count-based picks (e=2, f=0), size-based
+  // may pick any (e, f) with e - f == 2. All such combinations produce the
+  // same integer stream and therefore the same encoded byte count.
+  nimble::Vector<D> values{this->pool_.get()};
+  values.reserve(512);
+  for (uint32_t i = 0; i < 512; ++i) {
+    values.push_back(static_cast<D>(i % 10'000) / static_cast<D>(100));
+  }
+  const std::span<const D> logical{values.data(), values.size()};
+
+  const auto [countExp, countFactor] =
+      nimble::ALPEncoding<D>::findBestExponentFactorByCount(logical);
+  const auto [sizeExp, sizeFactor] =
+      nimble::ALPEncoding<D>::findBestExponentFactorBySize(logical, options);
+
+  nimble::Buffer countBuffer{*this->pool_};
+  nimble::Buffer sizeBuffer{*this->pool_};
+  const auto countEncoded =
+      nimble::test::Encoder<nimble::ALPEncoding<D>>::encodeWithExponentFactor(
+          countBuffer,
+          values,
+          countExp,
+          countFactor,
+          nimble::CompressionType::Uncompressed,
+          options,
+          /*realNestedSelection=*/true);
+  const auto sizeEncoded =
+      nimble::test::Encoder<nimble::ALPEncoding<D>>::encodeWithExponentFactor(
+          sizeBuffer,
+          values,
+          sizeExp,
+          sizeFactor,
+          nimble::CompressionType::Uncompressed,
+          options,
+          /*realNestedSelection=*/true);
+  EXPECT_LE(sizeEncoded.size(), countEncoded.size());
+}
+
+// DuckDB's tie-break rule: on equal estimated bytes, prefer the LARGER
+// (exponent, factor) so more decimal precision is preserved for values not
+// seen in the sample. `findBestExponentFactorBySize` iterates (e, f) in
+// ascending order and uses `<=` on the score, so the last-scored equal
+// candidate wins — the largest (e, f). This test picks a constant value that
+// is exactly representable at every (e, f) considered and produces the same
+// tiny integer domain regardless (both the FOR bit width and the exception
+// count are constant), so every candidate ties in bytes.
+TYPED_TEST(ALPEncodingTest, sizeSelectionPrefersLargerExponentOnTie) {
+  using D = typename TypeParam::data_type;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+
+  // Value 0 encodes to the same integer 0 at every (e, f), so zigZagMin ==
+  // zigZagMax == 0, exceptionCount == 0, and estimatedBytes is identical for
+  // every candidate. The tie-break rule picks the largest (e, f).
+  nimble::Vector<D> values{this->pool_.get(), 64};
+  values.fill(D{0});
+  const std::span<const D> logical{values.data(), values.size()};
+
+  const auto [exp, factor] =
+      nimble::ALPEncoding<D>::findBestExponentFactorBySize(logical, options);
+  // The loop upper bound is the per-type `kMaxExponent` (float=10, double=18,
+  // matching DuckDB's caps), and factor is bounded by exponent, so the
+  // largest-(e,f) winner is (kMaxExponent, kMaxExponent).
+  constexpr int kExpectedMax = std::is_same_v<D, float> ? 10 : 18;
+  EXPECT_EQ(exp, kExpectedMax);
+  EXPECT_EQ(factor, kExpectedMax);
+}
+
+// White-box coverage for `scoreCombination`: a hand-computed sample whose
+// expected `estimatedBytes` matches the closed-form
+//   min(FixedBitWidthEncoding<uint64>::estimateSize(sampleSize, zzMin, zzMax,
+//       options),
+//       TrivialEncoding<uint64>::estimateSize(sampleSize))
+//   + exceptionCount * (sizeof(uint32_t) + sizeof(physicalType))
+// and a separate sample where every value is an exception, asserting
+// `kUnusableScore`.
+TYPED_TEST(ALPEncodingTest, scoreCombinationBytesMatchClosedForm) {
+  using D = typename TypeParam::data_type;
+  using physicalType = typename nimble::TypeTraits<D>::physicalType;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+
+  // All values exactly representable at (e=2, f=0). Their ZigZag-encoded
+  // integers span the small range [0, 200], so bitWidth(200 - 0) = 8. With
+  // fixedBitWidthUseExactBits = false (the default), the width is rounded up
+  // to a byte — here 8 bits already. Zero exceptions → exceptionBytes == 0.
+  constexpr uint32_t kSize = 8;
+  const std::array<D, kSize> raw{
+      D{0.00}, D{0.01}, D{0.50}, D{0.99}, D{1.00}, D{1.25}, D{1.50}, D{2.00}};
+  std::span<const D> sample{raw.data(), raw.size()};
+
+  const auto score = nimble::ALPEncoding<D>::scoreCombination(
+      sample, /*e=*/2, /*f=*/0, options);
+  EXPECT_EQ(score.exceptionCount, 0u);
+
+  // Hand-compute the expected byte count. ZigZag(x) for non-negative x is 2*x,
+  // so zzMin = ZigZag(0) = 0 and zzMax = ZigZag(200) = 400. bitsRequired(400)
+  // = 9, rounded up to 16 (two bytes) when fixedBitWidthUseExactBits is off.
+  const uint64_t zzMin = 0;
+  const uint64_t zzMax = 400;
+  const uint64_t expectedFixed =
+      nimble::FixedBitWidthEncoding<uint64_t>::estimateSize(
+          kSize, zzMin, zzMax, options);
+  const uint64_t expectedTrivial =
+      nimble::TrivialEncoding<uint64_t>::estimateSize(kSize);
+  const uint64_t expectedBytes = std::min(expectedFixed, expectedTrivial);
+  EXPECT_EQ(score.estimatedBytes, expectedBytes);
+
+  // Sanity: `exceptionCount * (sizeof(uint32_t) + sizeof(physicalType))`
+  // contributes 0 when exceptionCount is 0. Guard against accidental sign or
+  // offset drift by asserting the exception term explicitly.
+  EXPECT_EQ(
+      score.estimatedBytes - expectedBytes,
+      0u * (sizeof(uint32_t) + sizeof(physicalType)));
+}
+
+TYPED_TEST(ALPEncodingTest, scoreCombinationUnusableWhenAllExceptions) {
+  using D = typename TypeParam::data_type;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+
+  // At (e=0, f=0), the encoded integer equals llround(v). Non-integer values
+  // like 0.5 round to 1, restore to 1.0, which does not equal 0.5 — every
+  // element is an exception. representableCount == 0 → kUnusableScore.
+  const std::array<D, 4> raw{D{0.5}, D{1.5}, D{2.5}, D{3.5}};
+  std::span<const D> sample{raw.data(), raw.size()};
+
+  const auto score = nimble::ALPEncoding<D>::scoreCombination(
+      sample, /*e=*/0, /*f=*/0, options);
+  EXPECT_EQ(score.exceptionCount, sample.size());
+  EXPECT_EQ(score.estimatedBytes, nimble::ALPEncoding<D>::kUnusableScore);
+}
+
 TEST(ALPSizeEstimationTest, invalidSampleRejected) {
   const std::vector<uint32_t> sample = {0, 1};
 

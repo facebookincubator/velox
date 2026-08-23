@@ -165,6 +165,20 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::folly
     velox_memory
   )
+
+  # A/B benchmark: count-based vs size-based (exponent, factor) selection
+  # for ALP encoding. Not a folly-benchmark; runs once and prints a comparison
+  # table.
+  add_executable(nimble_alp_selection_ab_benchmark ALPSelectionABBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_alp_selection_ab_benchmark
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    velox_memory
+    Folly::folly
+  )
 endif()
 
 if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)

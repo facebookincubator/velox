@@ -234,26 +234,63 @@ class ALPEncoding final
       NIMBLE_INCOMPATIBLE_ENCODING("ALP encoding cannot encode empty data.");
     }
 
-    const uint32_t rowCount = values.size();
     auto* pool = &buffer.getMemoryPool();
 
-    ScopedVector<cppDataType> logicalValues{rowCount, pool, options.bufferPool};
-    for (uint32_t i = 0; i < rowCount; ++i) {
+    ScopedVector<cppDataType> logicalValues{
+        values.size(), pool, options.bufferPool};
+    for (uint32_t i = 0; i < values.size(); ++i) {
       logicalValues[i] = detail::alp::toLogical<cppDataType>(values[i]);
     }
+
+    const auto [exponent, factor] = findBestExponentFactorBySize(
+        std::span<const cppDataType>{
+            logicalValues.data(), logicalValues.size()},
+        options);
+
+    return encodeWithExponentFactor(
+        selection,
+        values,
+        std::span<const cppDataType>{
+            logicalValues.data(), logicalValues.size()},
+        exponent,
+        factor,
+        buffer,
+        options);
+  }
+
+  // Encodes with a caller-supplied (exponent, factor). Split out from encode()
+  // so tests can drive an arbitrary combination end-to-end (e.g. to compare the
+  // actual encoded size of count-based vs size-based selection).
+  static std::string_view encodeWithExponentFactor(
+      EncodingSelection<physicalType>& selection,
+      std::span<const physicalType> values,
+      std::span<const cppDataType> logicalValues,
+      uint8_t exponent,
+      uint8_t factor,
+      Buffer& buffer,
+      const Encoding::Options& options = {}) {
+    const uint32_t rowCount = values.size();
+    auto* pool = &buffer.getMemoryPool();
 
     ScopedVector<uint64_t> encodedValues{rowCount, pool, options.bufferPool};
     ScopedVector<uint32_t> exceptionPositions{
         /*size=*/0, pool, options.bufferPool};
     ScopedVector<physicalType> exceptionValues{
         /*size=*/0, pool, options.bufferPool};
-    const auto [exponent, factor] = findBestExponentFactor(
-        std::span<const cppDataType>{
-            logicalValues.data(), logicalValues.size()});
 
+    // Track the first exactly-representable value's ZigZag encoding so that
+    // exception slots can be back-filled with it rather than 0. Writing 0 into
+    // exception slots would pollute the frame-of-reference min (and thus the
+    // bit-width) of the nested integer encoding, making the real encoded size
+    // diverge from the sample-based estimate (see estimateSizeFromSample) and
+    // regressing selection quality. This mirrors DuckDB's ALP, which patches
+    // exception positions with the first non-exception value. The placeholder
+    // is always overwritten by the true value on decode, so correctness is
+    // unaffected regardless of which representable value is chosen.
+    bool hasPlaceholder = false;
+    uint64_t placeholder = 0;
     for (uint32_t i = 0; i < rowCount; ++i) {
       if (!canRepresentExactly(logicalValues[i], values[i], exponent, factor)) {
-        encodedValues[i] = 0;
         exceptionPositions.push_back(i);
         exceptionValues.push_back(values[i]);
         continue;
@@ -262,6 +299,17 @@ class ALPEncoding final
       const auto encoded =
           encodeValue(static_cast<double>(logicalValues[i]), exponent, factor);
       encodedValues[i] = velox::ZigZag::encode(encoded);
+      if (!hasPlaceholder) {
+        placeholder = encodedValues[i];
+        hasPlaceholder = true;
+      }
+    }
+
+    // Back-fill exception slots with the placeholder. When every value is an
+    // exception (no representable value exists) the placeholder stays 0, which
+    // is fine: the nested stream is uniform and the exception path dominates.
+    for (const uint32_t position : exceptionPositions) {
+      encodedValues[position] = placeholder;
     }
 
     const uint32_t exceptionCount = exceptionPositions.size();
@@ -462,9 +510,10 @@ class ALPEncoding final
       logicalValues.push_back(detail::alp::toLogical<cppDataType>(value));
     }
 
-    const auto [exponent, factor] = findBestExponentFactor(
+    const auto [exponent, factor] = findBestExponentFactorBySize(
         std::span<const cppDataType>{
-            logicalValues.data(), logicalValues.size()});
+            logicalValues.data(), logicalValues.size()},
+        options);
 
     std::vector<uint64_t> encodedValues;
     encodedValues.reserve(sampleSize);
@@ -473,12 +522,20 @@ class ALPEncoding final
     std::vector<physicalType> exceptionValues;
     exceptionValues.reserve(sampleSize);
     uint64_t sampleExceptionCount{0};
+    // Mirror encodeWithExponentFactor's placeholder policy so this estimate
+    // tracks the real encoded size: exception slots are back-filled with the
+    // first representable value's ZigZag encoding rather than 0, keeping the
+    // frame-of-reference min/bit-width identical to what encoding produces.
+    bool hasPlaceholder = false;
+    uint64_t placeholder = 0;
+    std::vector<uint32_t> exceptionSlots;
     for (auto i = 0; i < sampleSize; ++i) {
       if (!canRepresentExactly(
               logicalValues[i],
               sampledValues[static_cast<size_t>(i)],
               exponent,
               factor)) {
+        exceptionSlots.push_back(static_cast<uint32_t>(encodedValues.size()));
         encodedValues.push_back(0);
         exceptionPositions.push_back(
             sampledValueIndex(i, rowCount, sampleSize));
@@ -490,6 +547,13 @@ class ALPEncoding final
       const auto encoded =
           encodeValue(static_cast<double>(logicalValues[i]), exponent, factor);
       encodedValues.push_back(velox::ZigZag::encode(encoded));
+      if (!hasPlaceholder) {
+        placeholder = encodedValues.back();
+        hasPlaceholder = true;
+      }
+    }
+    for (const uint32_t slot : exceptionSlots) {
+      encodedValues[slot] = placeholder;
     }
 
     const auto encodedStats = Statistics<uint64_t>::create(
@@ -646,9 +710,15 @@ class ALPEncoding final
       1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22, 1e23};
 
  private:
-  // Largest exponent and factor values backed by kPow10Double.
-  static constexpr int kMaxExponent{23};
-  static constexpr int kMaxFactor{23};
+  // Largest exponent and factor values considered during selection. These are
+  // per-type and follow DuckDB's caps: double keeps up to 18 decimal digits
+  // (10^18 is the largest power of ten that fits in int64), float keeps up to
+  // 10 (~7 significant decimal digits of precision). Capping float lower stops
+  // the size-based tie-break from drifting toward float's precision limit,
+  // where nearly every value becomes an exception. Both stay within
+  // kPow10Double's bounds (indices 0..23) and the 5-bit header field.
+  static constexpr int kMaxExponent{std::is_same_v<T, float> ? 10 : 18};
+  static constexpr int kMaxFactor{kMaxExponent};
   // ALP-specific control word following the standard Encoding prefix.
   static constexpr uint32_t kHeaderSize{3};
   // Sample up to this many values to find the best (exponent, factor) pair.
@@ -680,8 +750,105 @@ class ALPEncoding final
                static_cast<cppDataType>(restored)) == physicalValue;
   }
 
+  // Estimated encoded footprint of a single (exponent, factor) candidate over
+  // the supplied sample. Estimating bytes -- rather than counting exactly
+  // representable values -- lets selection weigh the FOR/bit-packing cost of a
+  // larger integer domain against a lower exception rate, matching the ALP
+  // paper and DuckDB. This is the single source of truth shared by size-based
+  // selection and estimateSizeFromSample.
+ public:
+  struct CombinationScore {
+    // Estimated total bytes for the integer stream plus exception payload.
+    // kUnusable when the candidate produces no representable values.
+    uint64_t estimatedBytes;
+    uint32_t exceptionCount;
+  };
+
+  static constexpr uint64_t kUnusableScore =
+      std::numeric_limits<uint64_t>::max();
+
+  static CombinationScore scoreCombination(
+      std::span<const cppDataType> logicalValues,
+      int exponent,
+      int factor,
+      const Encoding::Options& options) {
+    const uint64_t sampleSize = logicalValues.size();
+    uint64_t zigZagMin = std::numeric_limits<uint64_t>::max();
+    uint64_t zigZagMax = 0;
+    uint32_t exceptionCount = 0;
+    uint32_t representableCount = 0;
+
+    for (uint64_t i = 0; i < sampleSize; ++i) {
+      const auto logical = logicalValues[i];
+      if (!canRepresentExactly(
+              logical,
+              detail::alp::toPhysical<cppDataType>(logical),
+              exponent,
+              factor)) {
+        ++exceptionCount;
+        continue;
+      }
+      const uint64_t zigZag = velox::ZigZag::encode(
+          encodeValue(static_cast<double>(logical), exponent, factor));
+      zigZagMin = std::min(zigZagMin, zigZag);
+      zigZagMax = std::max(zigZagMax, zigZag);
+      ++representableCount;
+    }
+
+    if (representableCount == 0) {
+      // Every sampled value is an exception; this combination cannot be used.
+      return {kUnusableScore, exceptionCount};
+    }
+
+    // Bit-packing operates on the ZigZag-encoded integers, so the FOR bit width
+    // must be derived from their min/max (mirrors estimateSizeFromSample).
+    const uint64_t integerStreamBytes = std::min(
+        FixedBitWidthEncoding<uint64_t>::estimateSize(
+            sampleSize, zigZagMin, zigZagMax, options),
+        TrivialEncoding<uint64_t>::estimateSize(sampleSize));
+    const uint64_t exceptionBytes = static_cast<uint64_t>(exceptionCount) *
+        (sizeof(uint32_t) + sizeof(physicalType));
+    return {integerStreamBytes + exceptionBytes, exceptionCount};
+  }
+
+  // Selects the (exponent, factor) pair with the smallest estimated encoded
+  // footprint. Ties prefer the larger exponent, then the larger factor
+  // (DuckDB's tie-break rule). This is the production selection strategy.
+  static std::pair<uint8_t, uint8_t> findBestExponentFactorBySize(
+      std::span<const cppDataType> values,
+      const Encoding::Options& options) {
+    const uint32_t sampleSize =
+        std::min(static_cast<uint32_t>(values.size()), kSampleSize);
+    const std::span<const cppDataType> sample{values.data(), sampleSize};
+
+    uint8_t bestExponent = 0;
+    uint8_t bestFactor = 0;
+    uint64_t bestBytes = kUnusableScore;
+
+    for (int e = 0; e <= kMaxExponent; ++e) {
+      for (int f = 0; f <= std::min(e, kMaxFactor); ++f) {
+        const auto score = scoreCombination(sample, e, f, options);
+        if (score.estimatedBytes == kUnusableScore) {
+          continue;
+        }
+        // Strictly smaller wins outright; iterating exponent and factor in
+        // ascending order with <= lets the largest (exponent, factor) among
+        // equal-cost candidates win, matching DuckDB's tie-break rule (keep
+        // more decimal precision so out-of-sample values stay representable).
+        if (score.estimatedBytes <= bestBytes) {
+          bestBytes = score.estimatedBytes;
+          bestExponent = static_cast<uint8_t>(e);
+          bestFactor = static_cast<uint8_t>(f);
+        }
+      }
+    }
+    return {bestExponent, bestFactor};
+  }
+
   // Selects the sampled (exponent, factor) pair that preserves the most values.
-  static std::pair<uint8_t, uint8_t> findBestExponentFactor(
+  // Retained for A/B comparison against the size-based strategy; production
+  // paths use findBestExponentFactorBySize.
+  static std::pair<uint8_t, uint8_t> findBestExponentFactorByCount(
       std::span<const cppDataType> values) {
     const uint32_t sampleSize =
         std::min(static_cast<uint32_t>(values.size()), kSampleSize);
@@ -737,6 +904,7 @@ class ALPEncoding final
     return {bestExponent, bestFactor};
   }
 
+ private:
   // Converts a floating-point value to the integer stored by ALP.
   static int64_t encodeValue(double value, int exponent, int factor) {
     const double scaled = value * kPow10Double[exponent];

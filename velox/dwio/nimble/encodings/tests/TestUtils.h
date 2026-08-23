@@ -312,6 +312,46 @@ class Encoder {
     return E::encode(selection, physicalValues, buffer, options);
   }
 
+  // Encodes with an explicit (exponent, factor), bypassing selection. Used to
+  // measure the actual encoded size of a specific combination (e.g. to compare
+  // count-based vs size-based selection). Only meaningful for ALPEncoding.
+  static std::string_view encodeWithExponentFactor(
+      nimble::Buffer& buffer,
+      const nimble::Vector<T>& values,
+      uint8_t exponent,
+      uint8_t factor,
+      CompressionType compressionType = CompressionType::Uncompressed,
+      const nimble::Encoding::Options& options = {},
+      bool realNestedSelection = false) {
+    using physicalType = typename nimble::TypeTraits<T>::physicalType;
+
+    auto physicalValues = std::span<const physicalType>(
+        reinterpret_cast<const physicalType*>(values.data()), values.size());
+    nimble::EncodingSelection<physicalType> selection{
+        {.encodingType = EncodingTypeTraits<E>::encodingType,
+         .compressionPolicyFactory =
+             [compressionType]() {
+               return std::make_unique<TestCompressPolicy>(compressionType);
+             }},
+        nimble::Statistics<physicalType>::create(physicalValues),
+        std::make_unique<TestTrivialEncodingSelectionPolicy<T>>(
+            compressionType, realNestedSelection)};
+
+    std::vector<T> logicalValues(values.size());
+    for (size_t i = 0; i < values.size(); ++i) {
+      logicalValues[i] = nimble::detail::alp::toLogical<T>(physicalValues[i]);
+    }
+
+    return E::encodeWithExponentFactor(
+        selection,
+        physicalValues,
+        std::span<const T>{logicalValues.data(), logicalValues.size()},
+        exponent,
+        factor,
+        buffer,
+        options);
+  }
+
   static std::string_view encodeNullable(
       nimble::Buffer& buffer,
       const nimble::Vector<T>& values,
