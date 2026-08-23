@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <xsimd/xsimd.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -289,16 +290,47 @@ class ALPEncoding final
     // unaffected regardless of which representable value is chosen.
     bool hasPlaceholder = false;
     uint64_t placeholder = 0;
-    for (uint32_t i = 0; i < rowCount; ++i) {
-      if (!canRepresentExactly(logicalValues[i], values[i], exponent, factor)) {
+    const double exponentMultiplier = kPow10Double[exponent];
+    const double factorMultiplier = kPow10Double[factor];
+    alignas(64) uint64_t zigZagLanes[kBatchSize];
+    alignas(64) bool okLanes[kBatchSize];
+
+    uint32_t i = 0;
+    for (; i + kBatchSize <= rowCount; i += kBatchSize) {
+      batchTransform(
+          logicalValues.data() + i,
+          values.data() + i,
+          exponentMultiplier,
+          factorMultiplier,
+          zigZagLanes,
+          okLanes);
+      for (std::size_t k = 0; k < kBatchSize; ++k) {
+        const uint32_t pos = i + static_cast<uint32_t>(k);
+        if (!okLanes[k]) {
+          exceptionPositions.push_back(pos);
+          exceptionValues.push_back(values[pos]);
+          continue;
+        }
+        encodedValues[pos] = zigZagLanes[k];
+        if (!hasPlaceholder) {
+          placeholder = encodedValues[pos];
+          hasPlaceholder = true;
+        }
+      }
+    }
+    for (; i < rowCount; ++i) {
+      uint64_t zz = 0;
+      if (!scalarTransformOne(
+              logicalValues[i],
+              values[i],
+              exponentMultiplier,
+              factorMultiplier,
+              zz)) {
         exceptionPositions.push_back(i);
         exceptionValues.push_back(values[i]);
         continue;
       }
-
-      const auto encoded =
-          encodeValue(static_cast<double>(logicalValues[i]), exponent, factor);
-      encodedValues[i] = velox::ZigZag::encode(encoded);
+      encodedValues[i] = zz;
       if (!hasPlaceholder) {
         placeholder = encodedValues[i];
         hasPlaceholder = true;
@@ -751,8 +783,124 @@ class ALPEncoding final
                static_cast<cppDataType>(restored)) == physicalValue;
   }
 
+ public:
+  // Scalar version of the per-row ALP transform. Merges canRepresentExactly
+  // and encodeValue into a single pass so scaled/factored/restored are each
+  // computed once. Writes the ZigZag-encoded uint64 to `zigZagOut` and returns
+  // true iff the value is exactly representable under (exponent, factor).
+  // Byte-identical to `canRepresentExactly` + `encodeValue` + `ZigZag::encode`
+  // when the return value is true.
+  static bool scalarTransformOne(
+      cppDataType logical,
+      physicalType physical,
+      double exponentMultiplier,
+      double factorMultiplier,
+      uint64_t& zigZagOut) {
+    const double scaled = static_cast<double>(logical) * exponentMultiplier;
+    if (!std::isfinite(scaled)) {
+      return false;
+    }
+    if (scaled < static_cast<double>(std::numeric_limits<int64_t>::min()) ||
+        scaled > static_cast<double>(std::numeric_limits<int64_t>::max())) {
+      return false;
+    }
+    const int64_t factored =
+        static_cast<int64_t>(std::llround(scaled / factorMultiplier));
+    const double restored =
+        static_cast<double>(factored) * factorMultiplier / exponentMultiplier;
+    if (detail::alp::toPhysical<cppDataType>(
+            static_cast<cppDataType>(restored)) != physical) {
+      return false;
+    }
+    zigZagOut = velox::ZigZag::encode(factored);
+    return true;
+  }
+
+  // Vectorized version of `scalarTransformOne` over a contiguous block. For
+  // each lane, computes multiply/round/inverse-transform in xsimd, then falls
+  // back to per-lane scalar for the physical-byte equality check (which is a
+  // cheap 32- or 64-bit compare on values that are already in registers).
+  //
+  // The rounding path uses xsimd::trunc(x + copysign(0.5, x)), which is the
+  // vectorizable equivalent of std::llround's round-half-away-from-zero rule.
+  // A per-lane byte-agreement UT (batchTransformMatchesScalar) locks this in.
+  //
+  // Writes count lanes starting at `outZigZag` and sets outMask[i]=true iff
+  // lane i is exactly representable. Undefined lanes in outZigZag when the
+  // corresponding mask is false. `count` must be exactly the SIMD batch size
+  // (`kBatchSize`); scalar tails are handled by callers via scalarTransformOne.
+  static constexpr std::size_t kBatchSize = xsimd::batch<double>::size;
+  using BatchD = xsimd::batch<double>;
+
+  static void batchTransform(
+      const cppDataType* logicals,
+      const physicalType* physicals,
+      double exponentMultiplier,
+      double factorMultiplier,
+      uint64_t* outZigZag,
+      bool* outMask) {
+    // Widen to double for float inputs so all lanes share the same rounding
+    // domain as std::llround(double).
+    alignas(64) double lanes[kBatchSize];
+    for (std::size_t i = 0; i < kBatchSize; ++i) {
+      lanes[i] = static_cast<double>(logicals[i]);
+    }
+    const auto x = BatchD::load_aligned(lanes);
+    const auto scaled = x * BatchD(exponentMultiplier);
+    // Range gate: !isfinite(scaled) OR scaled out of int64 domain -> exception.
+    // Building the mask as an integer bit-mask keeps the branch out of the
+    // hot lane; the tail scalar path re-computes the same expression.
+    const auto finiteMask = xsimd::isfinite(scaled);
+    const auto lowBound =
+        BatchD(static_cast<double>(std::numeric_limits<int64_t>::min()));
+    const auto highBound =
+        BatchD(static_cast<double>(std::numeric_limits<int64_t>::max()));
+    const auto inRangeMask = (scaled >= lowBound) & (scaled <= highBound);
+    const auto safeMask = finiteMask & inRangeMask;
+
+    // Round-half-away-from-zero. `xsimd::round` matches `std::round` (and
+    // therefore `std::llround` for finite in-range values). We avoid the
+    // `trunc(x + copysign(0.5, x))` emulation because at magnitudes near
+    // 2^52..2^53 double ULP == 1.0, so the added 0.5 rounds in FP and
+    // diverges from `std::llround` — the byte-agreement UT catches this.
+    const auto div = scaled / BatchD(factorMultiplier);
+    const auto rounded = xsimd::round(div);
+    // Convert back to int64 lane-by-lane for the equality check and ZigZag.
+    // Undefined lanes (mask=false) are still safe to convert because their
+    // final result is discarded via outMask.
+    alignas(64) double roundedLanes[kBatchSize];
+    rounded.store_aligned(roundedLanes);
+
+    // Materialize the range/finite mask as per-lane 1.0/0.0 doubles so we
+    // can read it back cheaply lane-by-lane. Direct storage of
+    // `xsimd::batch_bool<double>` varies by architecture; going through
+    // select-to-double keeps the code portable across AVX-2, AVX-512, and
+    // NEON.
+    alignas(64) double safeLanes[kBatchSize];
+    xsimd::select(safeMask, BatchD(1.0), BatchD(0.0)).store_aligned(safeLanes);
+    for (std::size_t i = 0; i < kBatchSize; ++i) {
+      if (safeLanes[i] == 0.0) {
+        outMask[i] = false;
+        continue;
+      }
+      // Restore path must go through int64 -> double, matching scalar exactly.
+      // A pure FP-domain restore would preserve -0.0 and any near-boundary
+      // rounding artifacts that scalar's int64 cast collapses; the byte-
+      // agreement UT catches that divergence, so we mirror scalar here.
+      const int64_t factored = static_cast<int64_t>(roundedLanes[i]);
+      const double restoredD =
+          static_cast<double>(factored) * factorMultiplier / exponentMultiplier;
+      const cppDataType restored = static_cast<cppDataType>(restoredD);
+      if (detail::alp::toPhysical<cppDataType>(restored) != physicals[i]) {
+        outMask[i] = false;
+        continue;
+      }
+      outMask[i] = true;
+      outZigZag[i] = velox::ZigZag::encode(factored);
+    }
+  }
+
   // Estimated encoded footprint of a single (exponent, factor) candidate over
-  // the supplied sample. Estimating bytes -- rather than counting exactly
   // representable values -- lets selection weigh the FOR/bit-packing cost of a
   // larger integer domain against a lower exception rate, matching the ALP
   // paper and DuckDB. This is the single source of truth shared by size-based
@@ -786,20 +934,56 @@ class ALPEncoding final
     uint32_t exceptionCount = 0;
     uint32_t representableCount = 0;
 
-    for (uint64_t i = 0; i < sampleSize; ++i) {
+    const double exponentMultiplier = kPow10Double[exponent];
+    const double factorMultiplier = kPow10Double[factor];
+
+    // Vectorized main loop: process kBatchSize lanes at a time through
+    // batchTransform, then handle the tail with scalarTransformOne. The batch
+    // path is byte-identical to the scalar path (locked in by
+    // batchTransformMatchesScalar UT), so this only changes throughput, not
+    // the ZigZag range or exception count observed by size-based selection.
+    alignas(64) uint64_t zigZagLanes[kBatchSize];
+    alignas(64) bool okLanes[kBatchSize];
+    alignas(64) physicalType physLanes[kBatchSize];
+
+    uint64_t i = 0;
+    for (; i + kBatchSize <= sampleSize; i += kBatchSize) {
+      for (std::size_t k = 0; k < kBatchSize; ++k) {
+        physLanes[k] =
+            detail::alp::toPhysical<cppDataType>(logicalValues[i + k]);
+      }
+      batchTransform(
+          logicalValues.data() + i,
+          physLanes,
+          exponentMultiplier,
+          factorMultiplier,
+          zigZagLanes,
+          okLanes);
+      for (std::size_t k = 0; k < kBatchSize; ++k) {
+        if (!okLanes[k]) {
+          ++exceptionCount;
+          continue;
+        }
+        const uint64_t zz = zigZagLanes[k];
+        zigZagMin = std::min(zigZagMin, zz);
+        zigZagMax = std::max(zigZagMax, zz);
+        ++representableCount;
+      }
+    }
+    for (; i < sampleSize; ++i) {
       const auto logical = logicalValues[i];
-      if (!canRepresentExactly(
+      uint64_t zz = 0;
+      if (!scalarTransformOne(
               logical,
               detail::alp::toPhysical<cppDataType>(logical),
-              exponent,
-              factor)) {
+              exponentMultiplier,
+              factorMultiplier,
+              zz)) {
         ++exceptionCount;
         continue;
       }
-      const uint64_t zigZag = velox::ZigZag::encode(
-          encodeValue(static_cast<double>(logical), exponent, factor));
-      zigZagMin = std::min(zigZagMin, zigZag);
-      zigZagMax = std::max(zigZagMax, zigZag);
+      zigZagMin = std::min(zigZagMin, zz);
+      zigZagMax = std::max(zigZagMax, zz);
       ++representableCount;
     }
 

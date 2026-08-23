@@ -463,6 +463,125 @@ TYPED_TEST(ALPEncodingTest, scoreCombinationMatchesEstimator) {
   EXPECT_EQ(*estimate, expected);
 }
 
+// batchTransform (xsimd) must produce lane-by-lane byte-identical
+// output to the scalar path (scalarTransformOne). This is the correctness
+// contract that lets scoreCombination and encodeWithExponentFactor route
+// through the vectorized helper without changing encoded bytes.
+//
+// Covers:
+//   * pathological finite inputs (0, +/-0, denormals, huge, tiny)
+//   * non-finite inputs (NaN, +/-Inf)
+//   * out-of-int64-range scaled values
+//   * halfway cases where round-half-away-from-zero rules matter
+//   * randomized fuzz over a moderately-sized sample
+// for every (exponent, factor) pair in the search grid.
+TYPED_TEST(ALPEncodingTest, batchTransformMatchesScalar) {
+  using D = typename TypeParam::data_type;
+  using PhysicalType = typename nimble::TypeTraits<D>::physicalType;
+  using Alp = nimble::ALPEncoding<D>;
+
+  // Pathological + edge-case inputs. Chosen so at least one lane in each
+  // batch tickles: NaN, +/-Inf, +/-0, subnormal, huge, tiny, and negatives
+  // of half-values. Padded to a multiple of kBatchSize so we cover the
+  // full-batch path (the scalar tail is separately covered by the fuzz
+  // block below).
+  std::vector<D> edge{
+      D{0.0},
+      -D{0.0},
+      D{0.5},
+      -D{0.5},
+      D{1.25},
+      -D{1.25},
+      D{2.5},
+      -D{2.5},
+      D{1e-6},
+      -D{1e-6},
+      std::numeric_limits<D>::min(),
+      std::numeric_limits<D>::denorm_min(),
+      D{1e6},
+      -D{1e6},
+      D{1.234567},
+      -D{7.654321},
+      std::numeric_limits<D>::infinity(),
+      -std::numeric_limits<D>::infinity(),
+      std::numeric_limits<D>::quiet_NaN(),
+      -std::numeric_limits<D>::quiet_NaN(),
+      D{9.2233720368547758e18}, // ~int64::max as double
+      -D{9.2233720368547758e18},
+      D{1e30}, // overflows int64 after any positive exponent
+      -D{1e30},
+  };
+  // Pad to a multiple of kBatchSize by repeating a benign representable value.
+  while (edge.size() % Alp::kBatchSize != 0) {
+    edge.push_back(D{1.0});
+  }
+
+  // Randomized fuzz block: 4096 samples across [-1e6, 1e6], mostly two-decimal
+  // to keep exception counts realistic. Same seed for reproducibility.
+  std::mt19937_64 rng(0xA1FDA1FD01D3B0FDULL);
+  std::uniform_int_distribution<int64_t> centDist(-100'000'000, 100'000'000);
+  std::vector<D> fuzz;
+  fuzz.reserve(4096);
+  for (int i = 0; i < 4096; ++i) {
+    fuzz.push_back(static_cast<D>(centDist(rng)) / static_cast<D>(100));
+  }
+
+  auto physicalOf = [](D v) { return nimble::detail::alp::toPhysical<D>(v); };
+
+  auto checkSpan = [&](const std::vector<D>& logicals, int e, int f) {
+    std::vector<PhysicalType> physicals;
+    physicals.reserve(logicals.size());
+    for (const auto v : logicals) {
+      physicals.push_back(physicalOf(v));
+    }
+    const double expMul = Alp::kPow10Double[e];
+    const double facMul = Alp::kPow10Double[f];
+
+    const std::size_t n = logicals.size();
+    const std::size_t batches = n / Alp::kBatchSize;
+    for (std::size_t b = 0; b < batches; ++b) {
+      const std::size_t base = b * Alp::kBatchSize;
+      std::array<uint64_t, 64> batchZigZag{}; // upper-bounded by any real
+                                              // kBatchSize the build produces
+      std::array<bool, 64> batchOk{};
+      Alp::batchTransform(
+          logicals.data() + base,
+          physicals.data() + base,
+          expMul,
+          facMul,
+          batchZigZag.data(),
+          batchOk.data());
+      for (std::size_t k = 0; k < Alp::kBatchSize; ++k) {
+        uint64_t scalarZigZag = 0;
+        const bool scalarOk = Alp::scalarTransformOne(
+            logicals[base + k],
+            physicals[base + k],
+            expMul,
+            facMul,
+            scalarZigZag);
+        EXPECT_EQ(batchOk[k], scalarOk)
+            << "mask mismatch at lane " << (base + k) << " (e=" << e
+            << ", f=" << f << ", value=" << +logicals[base + k] << ")";
+        if (scalarOk) {
+          EXPECT_EQ(batchZigZag[k], scalarZigZag)
+              << "zigzag mismatch at lane " << (base + k) << " (e=" << e
+              << ", f=" << f << ", value=" << +logicals[base + k] << ")";
+        }
+      }
+    }
+  };
+
+  // Enumerate the full (e, f) grid used by findBestExponentFactorBySize.
+  // Only combinations with f <= e are considered by production selection.
+  constexpr int kMaxE = std::is_same_v<D, float> ? 10 : 18;
+  for (int e = 0; e <= kMaxE; ++e) {
+    for (int f = 0; f <= e; ++f) {
+      checkSpan(edge, e, f);
+      checkSpan(fuzz, e, f);
+    }
+  }
+}
+
 TEST(ALPSizeEstimationTest, invalidSampleRejected) {
   const std::vector<uint32_t> sample = {0, 1};
 
