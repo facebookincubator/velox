@@ -35,6 +35,11 @@ class LocalPartitionTest : public HiveConnectorTestBase {
     cudf_velox::registerCudf();
   }
 
+  void TearDown() override {
+    cudf_velox::unregisterCudf();
+    HiveConnectorTestBase::TearDown();
+  }
+
   template <typename T>
   FlatVectorPtr<T> makeFlatSequence(T start, vector_size_t size) {
     return makeFlatVector<T>(size, [start](auto row) { return start + row; });

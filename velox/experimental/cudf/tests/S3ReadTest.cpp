@@ -67,6 +67,7 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
     filesystems::finalizeS3FileSystem();
     facebook::velox::connector::ConnectorRegistry::global().erase(
         kCudfHiveConnectorId);
+    facebook::velox::cudf_velox::unregisterCudf();
     S3Test::TearDown();
   }
 };
