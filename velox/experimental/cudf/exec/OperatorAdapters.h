@@ -78,8 +78,13 @@ class OperatorAdapter {
     return props;
   }
 
-  /// Create replacement GPU operator(s). Returns a vector of replacement
-  /// operators (empty if operator should be kept).
+  /// Create the GPU operator(s) this adapter contributes to the driver.
+  /// When keepOperator() is false they replace 'op', and returning none means
+  /// the operator could not be replaced. When keepOperator() is true they are
+  /// inserted after 'op', which is how a plan node that expands into several
+  /// operators is described; returning none then simply keeps 'op' alone.
+  /// Either way the caller renumbers the driver's operator ids afterwards, so
+  /// 'operatorId' need not be unique across the returned operators.
   virtual std::vector<std::unique_ptr<exec::Operator>> createReplacements(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
@@ -87,7 +92,11 @@ class OperatorAdapter {
       int32_t operatorId) const = 0;
 
   /// Check if the original operator should be kept (not replaced). Returns
-  /// true if the original operator should be kept, false otherwise.
+  /// true if the original operator should be kept, in which case anything
+  /// createReplacements() returns runs after it rather than instead of it. The
+  /// decision is a property of the adapter and the plan, not of per-query
+  /// state: the transport an exchange uses is resolved from the plan node
+  /// through the transport registries before this runs.
   virtual bool keepOperator() const {
     return false;
   }
