@@ -34,11 +34,15 @@ class UcxPartitionedOutput : public exec::Operator,
   // QueryConfig::kUcxPartitionedOutputBatchRows.
   static constexpr int64_t kDefaultTargetRowsPerChunk = 10'000;
 
+  /// @param queueManager Output queue manager the partitions are enqueued to.
+  /// Comes from the same exec::OutputTransportEntry that builds this operator,
+  /// so the operator and the manager can never diverge. Held weakly, matching
+  /// exec::PartitionedOutput.
   UcxPartitionedOutput(
       int32_t operatorId,
       exec::DriverCtx* ctx,
       const std::shared_ptr<const core::PartitionedOutputNode>& planNode,
-      bool eagerFlush);
+      const std::shared_ptr<UcxOutputQueueManager>& queueManager);
 
   void addInput(RowVectorPtr input) override;
 
@@ -87,9 +91,53 @@ class UcxPartitionedOutput : public exec::Operator,
       std::vector<cudf::size_type> offsets,
       rmm::cuda_stream_view stream);
 
+  // Routes the table to destinations by partition, hashing on the partition
+  // keys when they are known and splitting into equal sizes otherwise.
+  // 'numRows' is the logical row count of 'tableView', which a table with no
+  // columns cannot report for itself.
+  void partitionAndEnqueue(
+      cudf::table_view tableView,
+      vector_size_t numRows,
+      rmm::cuda_stream_view stream);
+
+  // Splits a column-less payload across the destinations by row count alone.
+  // There is no GPU data to move and no partition key to hash, so each
+  // destination receives its own packed empty table plus its share of the
+  // rows, using the same boundaries equalPartition() would have used.
+  void equalPartitionRowCountOnly(
+      cudf::table_view tableView,
+      vector_size_t numRows,
+      rmm::cuda_stream_view stream);
+
+  // Sends the rows that must reach every destination -- rows with a null
+  // partition key, plus one arbitrary row over the lifetime of this operator --
+  // to all destinations, then routes the remaining rows by partition.
+  void replicateNullsAndAnyThenPartition(
+      cudf::table_view tableView,
+      vector_size_t numRows,
+      rmm::cuda_stream_view stream);
+
+  // Packs the table separately for each destination and enqueues one private
+  // copy per destination. A shared packed_columns cannot be used: the
+  // intra-node transfer path moves its members out, which would corrupt the
+  // data for every other destination.
+  void packAndEnqueueToAllDestinations(
+      cudf::table_view tableView,
+      rmm::cuda_stream_view stream);
+
   const std::weak_ptr<UcxOutputQueueManager> queueManager_;
   std::vector<column_index_t> partitionKeyIndices_;
   const size_t numPartitions_;
+
+  // True when rows with a null partition key, plus one arbitrary row, must
+  // reach every destination. Mirrors
+  // core::PartitionedOutputNode::isReplicateNullsAndAny().
+  const bool replicateNullsAndAny_;
+
+  // Set once the arbitrary row has been replicated. Matches
+  // exec::PartitionedOutput::replicatedAny_: the arbitrary row is replicated
+  // once per operator instance, not once per flush.
+  bool replicatedAnyRow_{false};
 
   const int pipelineId_;
   const int driverId_;
