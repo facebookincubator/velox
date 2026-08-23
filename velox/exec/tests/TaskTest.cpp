@@ -29,6 +29,8 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
+#include "velox/exec/Exchange.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -811,6 +813,77 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
   VELOX_ASSERT_THROW(
       valuesTask->addSplit("0", exec::Split(folly::copy(connectorSplit))),
       errorMessage)
+}
+
+TEST_F(TaskTest, errorsOnUnregisteredExchangeTransport) {
+  // An ExchangeNode naming a transport with no registered client is a
+  // misconfiguration: resolution fails fast rather than silently receiving over
+  // another transport.
+  const std::string transportKind{"ucx-unregistered"};
+  ASSERT_EQ(ExchangeTransportRegistry::tryGet(transportKind), nullptr);
+
+  auto plan = PlanBuilder()
+                  .exchange(ROW({"a"}, {BIGINT()}), "Presto", transportKind)
+                  .planFragment();
+
+  auto task = Task::create(
+      "task-exchange-transport-unregistered",
+      std::move(plan),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  VELOX_ASSERT_USER_THROW(
+      task->start(1, 1),
+      "No exchange client registered for transport 'ucx-unregistered'");
+}
+
+TEST_F(TaskTest, errorsOnExchangeTransportWithoutMergeSupport) {
+  // A transport may register no merge exchange builder. A MergeExchangeNode
+  // naming it must fail rather than fall back to another transport's operator.
+  const std::string transportKind{"no-merge-transport"};
+  ExchangeTransportRegistry::global().insert(
+      transportKind,
+      ExchangeTransportEntry::make<InMemoryExchangeClient>(
+          [](const ExchangeClientContext& context) {
+            return std::make_shared<InMemoryExchangeClient>(
+                context.taskId,
+                context.destination,
+                context.maxExchangeBufferSize,
+                context.numberOfConsumers,
+                context.minExchangeOutputBatchBytes,
+                context.pool,
+                context.executor);
+          },
+          [](int32_t operatorId,
+             DriverCtx* ctx,
+             const std::shared_ptr<const core::ExchangeNode>& node,
+             const std::shared_ptr<InMemoryExchangeClient>& client)
+              -> std::unique_ptr<Operator> {
+            return std::make_unique<Exchange>(operatorId, ctx, node, client);
+          }),
+      /*overwrite=*/true);
+  SCOPE_EXIT {
+    ExchangeTransportRegistry::global().erase(transportKind);
+  };
+
+  auto plan =
+      PlanBuilder()
+          .mergeExchange(ROW({"a"}, {BIGINT()}), {"a"}, "Presto", transportKind)
+          .planFragment();
+
+  auto task = Task::create(
+      "task-exchange-transport-without-merge",
+      std::move(plan),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  VELOX_ASSERT_USER_THROW(
+      task->start(1, 1),
+      "Exchange transport does not support merge exchange: no-merge-transport");
 }
 
 TEST_F(TaskTest, duplicatePlanNodeIds) {
