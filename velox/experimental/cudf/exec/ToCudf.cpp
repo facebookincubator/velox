@@ -194,6 +194,18 @@ bool CompileState::compile(bool allowCpuFallback) {
         // operator. so this CPU operators is allowed even if fallback is
         // disabled.
         isPureCpuOperator = false;
+        if (planNode && thisOpProps.canRunOnGPU) {
+          // A kept operator may still describe operators that have to run
+          // after it. That is how one plan node expanding into several
+          // operators is expressed: the replaceOperators() call below inserts
+          // them behind the kept operator and renumbers the whole driver, so
+          // the expansion needs no operator ids of its own.
+          auto replacements =
+              adapter->createReplacements(oper, planNode, ctx, id);
+          for (auto& r : replacements) {
+            replaceOp.push_back(std::move(r));
+          }
+        }
       }
     } else {
       // special case for CudfOperator
