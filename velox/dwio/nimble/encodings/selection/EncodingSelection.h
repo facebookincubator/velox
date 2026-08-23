@@ -16,17 +16,20 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include "velox/dwio/nimble/common/Constants.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/compression/CompressionPolicy.h"
-#include "velox/dwio/nimble/encodings/SharedDictionaryTypes.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
+#include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
 #include "velox/dwio/nimble/encodings/selection/Statistics.h"
 
@@ -80,9 +83,6 @@ struct EncodingSelectionResult {
   /// Estimated serialized size for encodingType, when the policy computed one
   /// while selecting the encoding.
   std::optional<uint64_t> estimatedSize{};
-  /// SharedDictionary-specific encoding data supplied by the writer-side
-  /// selection policy.
-  std::optional<SharedDictionaryEncodingInput> sharedDictionaryInput{};
   std::function<std::unique_ptr<CompressionPolicy>()> compressionPolicyFactory =
       []() { return std::make_unique<NoCompressionPolicy>(); };
 };
@@ -112,12 +112,6 @@ class EncodingSelection {
   std::unique_ptr<CompressionPolicy> compressionPolicy() const noexcept {
     auto policy = selectionResult_.compressionPolicyFactory();
     return policy;
-  }
-
-  /// Returns SharedDictionary-specific input supplied by the selection policy.
-  std::optional<SharedDictionaryEncodingInput> sharedDictionaryInput()
-      const noexcept {
-    return selectionResult_.sharedDictionaryInput;
   }
 
   template <typename NestedT>

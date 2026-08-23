@@ -21,10 +21,10 @@
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
-#include "velox/dwio/nimble/encodings/SharedDictionaryTypes.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 
 namespace facebook::nimble {
 
@@ -325,8 +325,6 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::SharedDictionary: {
       children.reserve(1);
       const char* pos = encoding.data() + prefixSize;
-      readSharedDictionaryScope(encoding, pos);
-      readSharedDictionaryId(encoding, pos);
       const auto indicesOffset = static_cast<size_t>(pos - encoding.data());
       NIMBLE_CHECK_LT(
           indicesOffset,

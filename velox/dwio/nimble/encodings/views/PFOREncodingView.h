@@ -54,8 +54,11 @@ class PFOREncodingView final : public TypedEncodingView<T> {
           "Empty Pfor exception positions stream has data.");
     } else {
       auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
-      auto exceptionPositions = EncodingFactory(options).create(
-          *this->pool_, {pos, exceptionPositionsSize}, noStringBufferFactory);
+      auto exceptionPositions = EncodingFactory().create(
+          *this->pool_,
+          {pos, exceptionPositionsSize},
+          noStringBufferFactory,
+          options);
       NIMBLE_CHECK_NOT_NULL(exceptionPositions);
       exceptionPositions_.resize(numExceptions_);
       exceptionPositions->materialize(
@@ -71,8 +74,11 @@ class PFOREncodingView final : public TypedEncodingView<T> {
           "Empty Pfor exception values stream has data.");
     } else {
       auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
-      auto exceptionValues = EncodingFactory(options).create(
-          *this->pool_, {pos, exceptionValuesSize}, noStringBufferFactory);
+      auto exceptionValues = EncodingFactory().create(
+          *this->pool_,
+          {pos, exceptionValuesSize},
+          noStringBufferFactory,
+          options);
       NIMBLE_CHECK_NOT_NULL(exceptionValues);
       exceptionValues_.resize(numExceptions_);
       exceptionValues->materialize(numExceptions_, exceptionValues_.data());
