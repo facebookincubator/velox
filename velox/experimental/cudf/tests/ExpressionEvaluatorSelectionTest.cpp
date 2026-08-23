@@ -509,10 +509,13 @@ TEST_F(CudfExpressionSelectionTest, signatureCastsInDivide) {
 
 TEST_F(CudfExpressionSelectionTest, signatureVarargsHashWithSeed) {
   facebook::velox::functions::sparksql::registerFunctions();
+  // canExprRunOnGpu reads this setting directly; no driver re-registration is
+  // needed.
+  CudfConfig::getInstance().allowCpuFallback = true;
+  SCOPE_EXIT {
+    CudfConfig::getInstance().allowCpuFallback = false;
+  };
 
-  // canExprRunOnGpu is a pure capability check that does not consult
-  // allowCpuFallback, so the assertions below are independent of the
-  // fallback setting configured in SetUp().
   // TODO: Assert TRUE after https://github.com/rapidsai/cudf/issues/21720.
   // Multi-column hash_with_seed cannot be evaluated by cudf because cudf's
   // murmurhash3_x86_32 combines columns via hash_combine(h(col0, seed),

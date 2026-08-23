@@ -175,6 +175,15 @@ TEST_F(LocalPartitionTest, partition) {
 // CudfVector cast with INVALID_STATE. This is the mixed GPU/CPU pipeline
 // failure seen with Spark/Gluten on TPC-H q18 and q22.
 TEST_F(LocalPartitionTest, unsupportedPartitionSpecIntoTopN) {
+  cudf_velox::unregisterCudf();
+  cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
+  cudf_velox::registerCudf();
+  SCOPE_EXIT {
+    cudf_velox::unregisterCudf();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::registerCudf();
+  };
+
   std::vector<RowVectorPtr> vectors = {
       makeRowVector({makeFlatSequence<int32_t>(0, 100)}),
       makeRowVector({makeFlatSequence<int32_t>(53, 100)}),
