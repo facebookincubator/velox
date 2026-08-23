@@ -310,5 +310,12 @@ TEST_F(DeltaBlockEncodingTest, estimateUsesVarintPrefixSize) {
 
 TEST_F(DeltaBlockEncodingTest, encodeRejectsUnsortedValues) {
   const std::vector<int32_t> input{-1, -2};
-  EXPECT_THROW(createEncoding(input), nimble::NimbleException);
+  try {
+    createEncoding(input);
+    FAIL() << "DeltaBlockEncoding should reject unsorted values.";
+  } catch (const nimble::NimbleUserError& error) {
+    EXPECT_EQ(error.errorCode(), nimble::error_code::IncompatibleEncoding);
+    EXPECT_EQ(
+        error.errorMessage(), "DeltaBlock requires non-decreasing values.");
+  }
 }
