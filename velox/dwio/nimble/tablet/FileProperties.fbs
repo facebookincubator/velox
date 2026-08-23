@@ -23,9 +23,9 @@ table CompactEncoding {
   row_count:bool = false;
 }
 
-/// File-level feature state needed by readers before feature-specific optional
-/// metadata is loaded.
-table Features {
+/// File-level properties needed by readers before other optional metadata is
+/// loaded.
+table FileProperties {
   /// Whether cluster index key columns were omitted from normal data storage.
   cluster_index_key_column_storage_omitted:bool = false;
 
@@ -36,4 +36,4 @@ table Features {
   compact_encoding:CompactEncoding;
 }
 
-root_type Features;
+root_type FileProperties;

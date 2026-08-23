@@ -41,7 +41,7 @@
 #include "velox/dwio/nimble/index/IndexSerialization.h"
 #include "velox/dwio/nimble/index/SortedIndexWriter.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
-#include "velox/dwio/nimble/tablet/FileFeatures.h"
+#include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/IndexGenerated.h"
 #include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
 #include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
@@ -1250,7 +1250,7 @@ Writer::Writer(
                    const WriteDataFn& writeDataFn,
                    const CreateMetadataSectionFn& createMetadataFn,
                    const WriteOptionalSectionFn& writeMetadataFn) {
-                 writeFeatures(writeMetadataFn);
+                 writeProperties(writeMetadataFn);
                  writeIndexes(writeDataFn, createMetadataFn, writeMetadataFn);
                }})},
       bufferPolicy_{
@@ -1492,7 +1492,7 @@ void Writer::addIndexKey(const velox::VectorPtr& input) {
   }
 }
 
-void Writer::writeFeatures(const WriteOptionalSectionFn& writeMetadataFn) {
+void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
   const bool compactRowCountEncoding =
       context_->options().experimentalCompactRowCountEncoding;
   bool clusterIndexKeyColumnStorageOmitted{false};
@@ -1508,12 +1508,12 @@ void Writer::writeFeatures(const WriteOptionalSectionFn& writeMetadataFn) {
   }
 
   const auto serialized =
-      FileFeatures{
+      FileProperties{
           compactRowCountEncoding,
           clusterIndexKeyColumnStorageOmitted,
           std::move(clusterIndexKeyColumnsWithOmittedStorage)}
           .serialize();
-  writeMetadataFn(std::string(kFeaturesSection), serialized);
+  writeMetadataFn(std::string(kPropertiesSection), serialized);
 }
 
 void Writer::writeIndexes(

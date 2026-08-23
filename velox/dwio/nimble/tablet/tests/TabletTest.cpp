@@ -4250,10 +4250,10 @@ TEST_P(TabletTest, features) {
 
   auto tablet = createTabletReader(file);
 
-  EXPECT_TRUE(tablet->features().compactRowCountEncoding());
-  EXPECT_TRUE(tablet->features().clusterIndexKeyColumnStorageOmitted());
+  EXPECT_TRUE(tablet->properties().compactRowCountEncoding());
+  EXPECT_TRUE(tablet->properties().clusterIndexKeyColumnStorageOmitted());
   EXPECT_EQ(
-      tablet->features().clusterIndexKeyColumnsWithOmittedStorage(),
+      tablet->properties().clusterIndexKeyColumnsWithOmittedStorage(),
       (std::vector<std::string>{"id"}));
 }
 
