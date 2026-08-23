@@ -179,6 +179,37 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_memory
     Folly::folly
   )
+
+  # End-to-end write/read benchmark: encodes each dataset with count-based and
+  # size-based (exponent, factor) selection, round-trips through materialize(),
+  # reports encoded bytes / compression ratio / wall / CPU / RSS delta /
+  # correctness.
+  add_executable(nimble_alp_e2e_benchmark ALPWriteReadE2EBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_alp_e2e_benchmark
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    velox_memory
+    Folly::folly
+  )
+
+  # Mini-benchmark for Dictionary+ALP / RLE+ALP nested selection paths.
+  # Drives the real EncodingFactory with allowNestedAlpSelection={off,on} over
+  # dict-friendly and RLE-friendly float/double columns and reports encoded
+  # bytes, encode/decode wall/cpu, RSS delta, and correctness.
+  add_executable(nimble_alp_nested_benchmark ALPNestedBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_alp_nested_benchmark
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    nimble_tools_common
+    velox_memory
+    Folly::folly
+  )
 endif()
 
 if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
