@@ -25,6 +25,8 @@
 #include <string_view>
 #include <unordered_set>
 
+#include "velox/vector/TypeAliases.h"
+
 namespace facebook::velox::ucx_exchange {
 
 /// @brief Key for identifying intra-node transfer entries in the registry.
@@ -46,6 +48,10 @@ struct IntraNodeTransferKey {
 /// @brief Result from intra-node transfer containing data and end marker.
 struct IntraNodeTransferResult {
   std::shared_ptr<cudf::packed_columns> data;
+  /// Logical rows in 'data'. Carried explicitly for the same reason the remote
+  /// path puts a row count on the wire: a packed table with no columns cannot
+  /// report its own row count.
+  vector_size_t numRows{0};
   bool atEnd{false}; // True if this is the end-of-stream marker
 };
 
@@ -55,6 +61,8 @@ struct IntraNodeTransferResult {
 /// promise on retrieval.
 struct IntraNodeTransferEntry {
   std::shared_ptr<cudf::packed_columns> data;
+  vector_size_t numRows{
+      0}; // Logical rows in 'data'; see IntraNodeTransferResult.
   bool atEnd{false}; // True if this is the end-of-stream marker
   std::promise<void> retrievedPromise; // Server waits on this after publishing
   std::mutex entryMutex;
@@ -85,11 +93,13 @@ class IntraNodeTransferRegistry {
   /// so that the GPU data is ready when the consumer reads it.
   /// @param key The unique key identifying this transfer (taskId, dest, seq)
   /// @param data The packed_columns data to share (nullptr for atEnd)
+  /// @param numRows Logical rows in 'data'; 0 for atEnd
   /// @param atEnd True if this is the end-of-stream marker
   /// @return A future that completes when source has retrieved the data
   [[nodiscard]] std::future<void> publish(
       const IntraNodeTransferKey& key,
       std::shared_ptr<cudf::packed_columns> data,
+      vector_size_t numRows,
       bool atEnd);
 
   /// @brief Non-blocking poll for intra-node transfer data.

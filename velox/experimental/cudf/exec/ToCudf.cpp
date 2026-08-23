@@ -415,6 +415,25 @@ void CudfConfig::initialize(
   if (config.find(kCudfAllowCpuFallback) != config.end()) {
     allowCpuFallback = folly::to<bool>(config[kCudfAllowCpuFallback]);
   }
+  if (config.find(kUcxExchange) != config.end()) {
+    exchange = folly::to<bool>(config[kUcxExchange]);
+  }
+  if (config.find(kUcxxErrorHandling) != config.end()) {
+    ucxxErrorHandling = folly::to<bool>(config[kUcxxErrorHandling]);
+  }
+  if (config.find(kUcxIntraNodeExchange) != config.end()) {
+    intraNodeExchange = folly::to<bool>(config[kUcxIntraNodeExchange]);
+  }
+  if (config.find(kUcxxBlockingPolling) != config.end()) {
+    ucxxBlockingPolling = folly::to<bool>(config[kUcxxBlockingPolling]);
+  }
+  if (config.find(kUcxExchangeLogLevel) != config.end()) {
+    exchangeLogLevel = folly::to<int32_t>(config[kUcxExchangeLogLevel]);
+  }
+  if (config.find(kUcxPartitionedOutputBatchRows) != config.end()) {
+    partitionedOutputBatchRows =
+        folly::to<int64_t>(config[kUcxPartitionedOutputBatchRows]);
+  }
   if (config.find(kCudfLogFallback) != config.end()) {
     logFallback = folly::to<bool>(config[kCudfLogFallback]);
   }

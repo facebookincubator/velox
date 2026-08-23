@@ -131,6 +131,7 @@ void UcxExchangeServer::process() {
           partitionKey_.destination,
           [weakQueue](
               std::shared_ptr<cudf::packed_columns> data,
+              vector_size_t numRows,
               std::vector<int64_t> remainingBytes) {
             auto self = weakQueue.lock();
             if (!self) {
@@ -153,6 +154,7 @@ void UcxExchangeServer::process() {
             VELOX_CHECK_NULL(
                 self->dataPtr_, "Data pointer exists: Illegal state!");
             self->dataPtr_ = std::move(data);
+            self->dataNumRows_ = numRows;
             self->setState(ServerState::DataReady);
             self->communicator_->addToWorkQueue(self);
           });
@@ -281,8 +283,9 @@ void UcxExchangeServer::sendData() {
       // dataPtr_ is already a shared_ptr, pass directly to share ownership.
       intraNodeRetrieveFuture_ =
           IntraNodeTransferRegistry::getInstance()->publish(
-              key, dataPtr_, /*atEnd=*/false);
+              key, dataPtr_, dataNumRows_, /*atEnd=*/false);
       dataPtr_.reset();
+      dataNumRows_ = 0;
       intraNodeAtEndPublished_ = false;
 
       // Transition to WaitingForIntraNodeRetrieve state
@@ -299,7 +302,7 @@ void UcxExchangeServer::sendData() {
           partitionKey_.taskId, partitionKey_.destination, sequenceNumber_};
       intraNodeRetrieveFuture_ =
           IntraNodeTransferRegistry::getInstance()->publish(
-              key, nullptr, /*atEnd=*/true);
+              key, nullptr, /*numRows=*/0, /*atEnd=*/true);
       intraNodeAtEndPublished_ = true;
 
       queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);
@@ -319,6 +322,7 @@ void UcxExchangeServer::sendData() {
       metadataMsg->cudfMetadata =
           std::make_unique<std::vector<uint8_t>>(*dataPtr_->metadata);
       metadataMsg->dataSizeBytes = dataPtr_->gpu_data->size();
+      metadataMsg->numRows = dataNumRows_;
       metadataMsg->remainingBytes = {};
       metadataMsg->atEnd = false;
     } else {
@@ -326,6 +330,7 @@ void UcxExchangeServer::sendData() {
               << partitionKey_.toString();
       metadataMsg->cudfMetadata = nullptr;
       metadataMsg->dataSizeBytes = 0;
+      metadataMsg->numRows = 0;
       metadataMsg->remainingBytes = {};
       metadataMsg->atEnd = true;
     }
@@ -472,6 +477,7 @@ void UcxExchangeServer::sendComplete(
 
     this->sequenceNumber_++;
     dataPtr_.reset(); // release memory.
+    dataNumRows_ = 0;
     VLOG(3) << "@" << partitionKey_.taskId
             << " Releasing dataPtr_ in sendComplete.";
     setState(ServerState::ReadyToTransfer);

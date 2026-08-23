@@ -22,20 +22,34 @@
 #include <cudf/structs/structs_column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 #include <folly/Executor.h>
+#include <folly/Synchronized.h>
+#include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/synchronization/EventCount.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
+#include <algorithm>
 #include <chrono>
+#include <functional>
 #include <future>
+#include <limits>
 #include <memory>
 #include <sstream>
+#include <utility>
 #include <vector>
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/PortUtil.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeProtocol.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
@@ -44,6 +58,8 @@
 #include "velox/experimental/ucx-exchange/tests/UcxPartitionedOutputMock.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestData.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
+#include "velox/serializers/PrestoSerializer.h"
+#include "velox/vector/FlatVector.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -130,7 +146,18 @@ struct ExchangeTestParamsPrinter {
 
 class UcxExchangeTest : public testing::TestWithParam<ExchangeTestParams> {
  protected:
-  static constexpr uint16_t kCommunicatorPort = 21346;
+  // Chosen per process in SetUpTestCase() rather than hardcoded. The
+  // communicator opens a listener on this port without address reuse, so two
+  // runs of this binary in quick succession fail the second with
+  // "bind(0.0.0.0:21346) failed: Address already in use" while the first port
+  // is still in TIME_WAIT.
+  static uint16_t communicatorPort_;
+
+  // UcxExchangeSource computes the UCX port as the split URL's port + 3
+  // (UcxExchangeSource.cpp), so remoteSplit() advertises this much below the
+  // communicator's port for the round trip to land back on it.
+  static constexpr int kSplitUrlPortOffset = 3;
+
   static constexpr auto kUnusedCoordinatorUrl =
       std::string_view("http://localhost:12345/bla");
 
@@ -164,10 +191,18 @@ class UcxExchangeTest : public testing::TestWithParam<ExchangeTestParams> {
     VLOG(0) << "setup test case, creating queue manager, communicator, etc..";
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
 
+    // UcxExchangeSource derives the UCX port as the split URL's port + 3, and
+    // remoteSplit() advertises communicatorPort_ - 3 to match, so the offset
+    // must stay below the chosen port.
+    const auto freePort = exec::test::getFreePort();
+    ASSERT_GT(freePort, kSplitUrlPortOffset);
+    ASSERT_LE(freePort, std::numeric_limits<uint16_t>::max());
+    communicatorPort_ = static_cast<uint16_t>(freePort);
+
     queueManager_ = UcxOutputQueueManager::getInstanceRef();
     ContinueFuture future;
     communicator_ = facebook::velox::ucx_exchange::Communicator::initAndGet(
-        kCommunicatorPort, std::string(kUnusedCoordinatorUrl), &future);
+        communicatorPort_, std::string(kUnusedCoordinatorUrl), &future);
     if (communicator_) {
       communicatorThread_ = std::make_shared<std::thread>(
           &facebook::velox::ucx_exchange::Communicator::run,
@@ -194,7 +229,7 @@ class UcxExchangeTest : public testing::TestWithParam<ExchangeTestParams> {
   exec::Split remoteSplit(std::string_view taskId, int partitionId) {
     std::string remoteUrl = fmt::format(
         "http://127.0.0.1:{}/v1/task/{}/results/{}",
-        kCommunicatorPort - 3,
+        communicatorPort_ - kSplitUrlPortOffset,
         taskId,
         partitionId);
     return exec::Split(
@@ -1420,7 +1455,7 @@ TEST_P(UcxExchangeTest, batchAccumulationTest) {
 
     // Pass custom threshold via QueryConfig.
     std::unordered_map<std::string, std::string> extraConfig{
-        {core::QueryConfig::kUcxPartitionedOutputBatchRows,
+        {cudf_velox::CudfConfig::kUcxPartitionedOutputBatchRows,
          std::to_string(customThreshold)}};
 
     auto srcTask = createPartitionedOutputTask(
@@ -1574,5 +1609,6 @@ std::shared_ptr<UcxOutputQueueManager> UcxExchangeTest::queueManager_;
 std::shared_ptr<std::thread> UcxExchangeTest::communicatorThread_;
 std::shared_ptr<Communicator> UcxExchangeTest::communicator_;
 std::atomic<uint32_t> UcxExchangeTest::testCounter_{0};
+uint16_t UcxExchangeTest::communicatorPort_{0};
 
 } // namespace facebook::velox::ucx_exchange
