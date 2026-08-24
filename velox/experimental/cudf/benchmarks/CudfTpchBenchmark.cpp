@@ -96,7 +96,7 @@ void CudfTpchBenchmark::initialize() {
         std::to_string(true);
     cudfHiveConfigurationValues
         [cudf_velox::connector::hive::CudfHiveConfig::kUseBufferedInput] =
-        std::to_string(FLAGS_cudf_hive_use_buffered_input);
+            std::to_string(FLAGS_cudf_hive_use_buffered_input);
     auto cudfHiveProperties = std::make_shared<const config::ConfigBase>(
         std::move(cudfHiveConfigurationValues));
 
