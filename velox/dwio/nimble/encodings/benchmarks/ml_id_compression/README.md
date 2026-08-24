@@ -151,6 +151,26 @@ them from a scratch directory.
 | `--mlidc_output_csv` | per-driver | CSV output path |
 | `--mlidc_output_manifest` | mlidc_manifest.json | Run manifest path |
 
+## Where the shared code lives
+
+`BenchCommon.h` holds the bench targets, the encoder and dataset suites, and
+outer compression. `ResultWriter.h` holds the CSV writer and the run manifest.
+`SubstreamCompression.h` holds the encode path described above.
+
+`DriverSweep.h` holds the scaffolding every sweep driver repeats: building the
+encoder and dataset suites (`makeSweepContext`), encoding one dataset with skip
+handling (`makeTargetOrSkip`), preparing the cache for one measurement cell
+(`makeCellCache`), and the CSV setters for the columns every driver writes.
+
+Each driver keeps its own measurement call and its own CSV columns inline. That
+is the part worth reading when opening a driver, so it deliberately did not move
+into the shared header.
+
+Two drivers do not use all of it. `MlIdEncodeBenchmark.cpp` times the encode
+itself, so the factory call sits inside its measurement lambda and cannot use
+`makeTargetOrSkip`. `MlIdCompressionBenchmark.cpp` and `MlIdEncodeBenchmark.cpp`
+do no cache sweep, so they build their context with a fixed hot cache state.
+
 ## Interpreting results
 
 Two regimes are worth knowing before reading a table.

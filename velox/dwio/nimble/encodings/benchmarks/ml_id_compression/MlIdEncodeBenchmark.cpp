@@ -25,7 +25,7 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/OpenZLBenchTarget.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 
@@ -41,6 +41,8 @@ constexpr size_t kElemSize = sizeof(Elem);
 } // namespace
 } // namespace facebook::nimble::mlidc
 
+constexpr std::string_view kDriver = "bench_encode";
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   facebook::velox::memory::MemoryManager::initialize({});
@@ -51,22 +53,26 @@ int main(int argc, char** argv) {
   const size_t iters = static_cast<size_t>(FLAGS_mlidc_iters);
   const uint64_t seed = static_cast<uint64_t>(FLAGS_mlidc_seed);
 
-  auto encoders = buildDefaultEncoders<Elem>();
-  encoders.push_back(buildOpenZLEncoder<Elem>());
-  auto datasets = defaultInt64Datasets<Elem>();
+  // No cache sweep here, so the state is fixed at hot.
+  auto contextOrNull =
+      makeSweepContext<Elem>(/*withOpenZL=*/true, CacheState::Hot, n);
+  if (!contextOrNull.has_value()) {
+    return 1;
+  }
+  const auto& context = *contextOrNull;
 
   const CacheTopology topo = CacheTopology::detect();
 
-  std::cout << "bench_encode: " << encoders.size() << " encoders x "
-            << datasets.size() << " datasets, N=" << n
+  std::cout << "bench_encode: " << context.encoders.size() << " encoders x "
+            << context.datasets.size() << " datasets, N=" << n
             << ", iters=" << iters << "\n  " << topo.describe() << "\n\n";
 
   if (FLAGS_dry_run) {
     std::cout << "Encoders:\n";
-    for (const auto& e : encoders)
+    for (const auto& e : context.encoders)
       std::cout << "  " << e.name << " [" << e.family << "]\n";
     std::cout << "\nDatasets:\n";
-    for (const auto& d : datasets)
+    for (const auto& d : context.datasets)
       std::cout << "  " << d.name << "\n";
     return 0;
   }
@@ -96,12 +102,12 @@ int main(int argc, char** argv) {
   hotPolicy.state = CacheState::Hot;
   EvictionTargets emptyTargets;
 
-  for (const auto& ds : datasets) {
+  for (const auto& ds : context.datasets) {
     std::cout << "== Dataset: " << ds.name << " ==\n";
     auto data = ds.generate(n, seed);
     const size_t rawBytes = static_cast<size_t>(n) * kElemSize;
 
-    for (const auto& enc : encoders) {
+    for (const auto& enc : context.encoders) {
       facebook::nimble::Encoding::Options opts;
       std::unique_ptr<NimbleBenchTargetBase<Elem>> target;
 
@@ -139,21 +145,12 @@ int main(int argc, char** argv) {
                   << " Melem/s\n";
 
         csv.beginRow();
-        csv.set("driver", "bench_encode");
-        csv.set("dataset", ds.name);
-        csv.set("encoding", enc.name);
-        csv.set("family", enc.family);
-        csv.set("variant", enc.variant);
-        csv.set("is_sequential", enc.isSequential ? int64_t{1} : int64_t{0});
+        setIdentityColumns<Elem>(csv, kDriver, ds.name, enc);
         csv.set("N", static_cast<int64_t>(n));
         csv.set("seed", static_cast<int64_t>(seed));
-        csv.set("payload_bytes", static_cast<int64_t>(payloadBytes));
-        csv.set("compression_ratio", ratio);
-        csv.set("iterations", static_cast<int64_t>(iters));
-        csv.set("warmup", static_cast<int64_t>(spec.warmup));
-        csv.set("time_ns", result.time.median_ns);
-        csv.set("time_p90_ns", result.time.p90_ns);
-        csv.set("time_min_ns", result.time.min_ns);
+        setPayloadColumns(csv, payloadBytes, context.rawBytes());
+        setMeasureColumns(csv, spec);
+        setTimingColumns(csv, result);
         csv.set("encode_Meps", meps);
         csv.set("encode_MBps", mbps);
         csv.set("skipped", int64_t{0});

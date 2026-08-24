@@ -25,7 +25,7 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/OpenZLBenchTarget.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
 
 DEFINE_bool(validate, false, "Round-trip check after each encode");
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");
@@ -39,6 +39,8 @@ constexpr size_t kElemSize = sizeof(Elem);
 } // namespace
 } // namespace facebook::nimble::mlidc
 
+constexpr std::string_view kDriver = "bench_compression";
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   facebook::velox::memory::MemoryManager::initialize({});
@@ -47,19 +49,23 @@ int main(int argc, char** argv) {
   const uint32_t n = static_cast<uint32_t>(FLAGS_mlidc_rows);
   const uint64_t seed = static_cast<uint64_t>(FLAGS_mlidc_seed);
 
-  auto encoders = buildDefaultEncoders<Elem>();
-  encoders.push_back(buildOpenZLEncoder<Elem>());
-  auto datasets = defaultInt64Datasets<Elem>();
+  // No cache sweep here, so the state is fixed at hot.
+  auto contextOrNull =
+      makeSweepContext<Elem>(/*withOpenZL=*/true, CacheState::Hot, n);
+  if (!contextOrNull.has_value()) {
+    return 1;
+  }
+  const auto& context = *contextOrNull;
 
-  std::cout << "bench_compression: " << encoders.size() << " encoders x "
-            << datasets.size() << " datasets, N=" << n << "\n\n";
+  std::cout << "bench_compression: " << context.encoders.size() << " encoders x "
+            << context.datasets.size() << " datasets, N=" << n << "\n\n";
 
   if (FLAGS_dry_run) {
     std::cout << "Encoders:\n";
-    for (const auto& e : encoders)
+    for (const auto& e : context.encoders)
       std::cout << "  " << e.name << " [" << e.family << "]\n";
     std::cout << "\nDatasets:\n";
-    for (const auto& d : datasets)
+    for (const auto& d : context.datasets)
       std::cout << "  " << d.name << "\n";
     return 0;
   }
@@ -79,35 +85,18 @@ int main(int argc, char** argv) {
 
   int validateFailures = 0;
 
-  for (const auto& ds : datasets) {
+  for (const auto& ds : context.datasets) {
     std::cout << "== Dataset: " << ds.name << " ==\n";
     auto data = ds.generate(n, seed);
     const size_t rawBytes = static_cast<size_t>(n) * kElemSize;
 
-    for (const auto& enc : encoders) {
-      facebook::nimble::Encoding::Options opts;
-      std::unique_ptr<NimbleBenchTargetBase<Elem>> target;
-      bool skipped = false;
-      try {
-        target = enc.factory(data, opts);
-      } catch (const std::exception& ex) {
-        std::cerr << "  [SKIP] " << enc.name << ": " << ex.what() << "\n";
-        skipped = true;
-      }
-      if (skipped) {
-        csv.beginRow();
-        csv.set("driver", "bench_compression");
-        csv.set("dataset", ds.name);
-        csv.set("encoding", enc.name);
-        csv.set("skipped", int64_t{1});
-        csv.endRow();
+    for (const auto& enc : context.encoders) {
+      auto target = makeTargetOrSkip<Elem>(enc, data, csv, kDriver, ds.name);
+      if (target == nullptr) {
         continue;
       }
 
       const size_t payloadBytes = target->payloadSize();
-      const double ratio = rawBytes > 0
-          ? static_cast<double>(payloadBytes) / static_cast<double>(rawBytes)
-          : 0.0;
       const double bpe = n > 0
           ? static_cast<double>(payloadBytes) * 8.0 / static_cast<double>(n)
           : 0.0;
@@ -140,17 +129,11 @@ int main(int argc, char** argv) {
                 << std::fixed << std::setprecision(2) << bpe << " bpe\n";
 
       csv.beginRow();
-      csv.set("driver", "bench_compression");
-      csv.set("dataset", ds.name);
-      csv.set("encoding", enc.name);
-      csv.set("family", enc.family);
-      csv.set("variant", enc.variant);
-      csv.set("is_sequential", enc.isSequential ? int64_t{1} : int64_t{0});
+      setIdentityColumns<Elem>(csv, kDriver, ds.name, enc);
       csv.set("N", static_cast<int64_t>(n));
       csv.set("seed", static_cast<int64_t>(seed));
-      csv.set("payload_bytes", static_cast<int64_t>(payloadBytes));
+      setPayloadColumns(csv, payloadBytes, context.rawBytes());
       csv.set("raw_bytes", static_cast<int64_t>(rawBytes));
-      csv.set("compression_ratio", ratio);
       csv.set("bits_per_elem", bpe);
       csv.set("skipped", int64_t{0});
       csv.endRow();

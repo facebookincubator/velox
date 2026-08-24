@@ -28,7 +28,7 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/OpenZLBenchTarget.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/PointTraceGen.h"
@@ -47,6 +47,8 @@ constexpr size_t kElemSize = sizeof(Elem);
 } // namespace
 } // namespace facebook::nimble::mlidc
 
+constexpr std::string_view kDriver = "bench_decode_point";
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   facebook::velox::memory::MemoryManager::initialize({});
@@ -64,34 +66,25 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  auto encoders = buildDefaultEncoders<Elem>();
-  // Serves partial reads by decompressing the whole column, which is the
-  // comparison these drivers exist to make.
-  encoders.push_back(buildOpenZLEncoder<Elem>());
-  auto datasets = defaultInt64Datasets<Elem>();
-  const CacheTopology topo = CacheTopology::detect();
-
-  CachePolicy policy;
-  policy.state = cacheState;
-  try {
-    CacheController(policy, topo);
-  } catch (const std::exception& e) {
-    std::cerr << "ERROR: " << e.what() << "\n";
+  auto contextOrNull =
+      makeSweepContext<Elem>(/*withOpenZL=*/true, cacheState, n);
+  if (!contextOrNull.has_value()) {
     return 1;
   }
+  const auto& context = *contextOrNull;
 
-  std::cout << "bench_decode_point: " << encoders.size() << " encoders x "
-            << datasets.size() << " datasets, N=" << n
+  std::cout << "bench_decode_point: " << context.encoders.size() << " encoders x "
+            << context.datasets.size() << " datasets, N=" << n
             << ", probes=" << probes << ", iters=" << iters
             << ", cache=" << cacheStateName(cacheState) << "\n  "
-            << topo.describe() << "\n\n";
+            << context.topology.describe() << "\n\n";
 
   if (FLAGS_dry_run) {
     std::cout << "Encoders:\n";
-    for (const auto& e : encoders)
+    for (const auto& e : context.encoders)
       std::cout << "  " << e.name << " [" << e.family << "]\n";
     std::cout << "\nDatasets:\n";
-    for (const auto& d : datasets) std::cout << "  " << d.name << "\n";
+    for (const auto& d : context.datasets) std::cout << "  " << d.name << "\n";
     return 0;
   }
 
@@ -125,31 +118,16 @@ int main(int argc, char** argv) {
   spec.iterations = iters;
   spec.warmup = 2;
 
-  auto writeSkipRow = [&](const std::string& ds, const std::string& enc) {
-    csv.beginRow();
-    csv.set("driver", "bench_decode_point");
-    csv.set("dataset", ds);
-    csv.set("encoding", enc);
-    csv.set("skipped", int64_t{1});
-    csv.endRow();
-  };
-
-  for (const auto& ds : datasets) {
+  for (const auto& ds : context.datasets) {
     std::cout << "== Dataset: " << ds.name << " ==\n";
     auto data = ds.generate(n, seed);
     const size_t rawBytes = static_cast<size_t>(n) * kElemSize;
 
-    for (const auto& enc : encoders) {
-      facebook::nimble::Encoding::Options opts;
-      std::unique_ptr<NimbleBenchTargetBase<Elem>> target;
-      bool skipped = false;
-      try {
-        target = enc.factory(data, opts);
-      } catch (const std::exception& ex) {
-        std::cerr << "  [SKIP] " << enc.name << ": " << ex.what() << "\n";
-        skipped = true;
+    for (const auto& enc : context.encoders) {
+      auto target = makeTargetOrSkip<Elem>(enc, data, csv, kDriver, ds.name);
+      if (target == nullptr) {
+        continue;
       }
-      if (skipped) { writeSkipRow(ds.name, enc.name); continue; }
 
       // Block codecs decompress everything per read; cap their iterations so
       // the sweep finishes in reasonable time.
@@ -174,21 +152,14 @@ int main(int argc, char** argv) {
           std::cerr << "  [VALIDATE FAIL] " << enc.name << " / " << ds.name
                     << "\n";
           ++validateFailures;
-          writeSkipRow(ds.name, enc.name);
+          writeSkipRow<Elem>(csv, kDriver, ds.name, enc);
           continue;
         }
       }
 
-      CachePolicy cellPolicy;
-      cellPolicy.state = cacheState;
-      CacheController controller(cellPolicy, topo);
-      auto bufs = target->internalBuffers();
-      EvictionTargets targets;
-      if (!bufs.empty()) targets.payload = bufs[0];
-      targets.sink = std::span<std::byte>(
-          reinterpret_cast<std::byte*>(&sink), kElemSize);
-      if (bufs.size() > 1)
-        targets.codecInternal.assign(bufs.begin() + 1, bufs.end());
+      auto cell = makeCellCache<Elem>(
+          context.cacheState, context.topology, *target,
+          std::span<std::byte>(reinterpret_cast<std::byte*>(&sink), kElemSize));
 
       // Every probe against a whole-payload codec decompresses the entire
       // column, so the full probe count would take hours. Per-probe cost is
@@ -199,7 +170,7 @@ int main(int argc, char** argv) {
                 static_cast<size_t>(std::max(1, FLAGS_mlidc_block_codec_probes)))
           : probes;
 
-      auto result = measure(encSpec, controller, targets, [&]() {
+      auto result = measure(encSpec, cell.controller, cell.targets, [&]() {
         for (size_t i = 0; i < encProbes; ++i)
           target->materializeRange(
               static_cast<uint32_t>(trace.indices[i]), 1, &sink);
@@ -213,28 +184,19 @@ int main(int argc, char** argv) {
           : 0.0;
 
       csv.beginRow();
-      csv.set("driver", "bench_decode_point");
-      csv.set("dataset", ds.name);
-      csv.set("encoding", enc.name);
-      csv.set("family", enc.family);
-      csv.set("variant", enc.variant);
-      csv.set("is_sequential", enc.isSequential ? int64_t{1} : int64_t{0});
+      setIdentityColumns<Elem>(csv, kDriver, ds.name, enc);
       csv.set("N", static_cast<int64_t>(n));
       csv.set("seed", static_cast<int64_t>(seed));
       csv.set("cache_state",
-          std::string(cacheStateName(controller.effectivePolicy().state)));
+          std::string(cacheStateName(cell.controller.effectivePolicy().state)));
       csv.set("evict_method", std::string(
-          evictMethodName(controller.effectivePolicy().method)));
-      csv.set("payload_bytes", static_cast<int64_t>(payloadBytes));
-      csv.set("compression_ratio", ratio);
-      csv.set("iterations", static_cast<int64_t>(encSpec.iterations));
-      csv.set("warmup", static_cast<int64_t>(encSpec.warmup));
+          evictMethodName(cell.controller.effectivePolicy().method)));
+      setPayloadColumns(csv, payloadBytes, context.rawBytes());
+      setMeasureColumns(csv, encSpec);
       csv.set("probes", static_cast<int64_t>(encProbes));
       csv.set("distinct_probes", static_cast<int64_t>(trace.distinctIndices));
       csv.set("distinct_fraction", trace.distinctFraction);
-      csv.set("time_ns", result.time.median_ns);
-      csv.set("time_p90_ns", result.time.p90_ns);
-      csv.set("time_min_ns", result.time.min_ns);
+      setTimingColumns(csv, result);
       csv.set("ns_per_probe", nsPerProbe);
       csv.set("Mprobes_ps", mProbesPerSec);
       csv.set("clock_overhead_ns", clockOverhead.median_ns);
