@@ -16,6 +16,9 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
+#include "velox/experimental/cudf/exec/KeyNormalization.h"
+
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
@@ -144,6 +147,14 @@ CudfLocalPartition::CudfLocalPartition(
       partitionFunctionType_ == PartitionFunctionType::kRoundRobin ||
       partitionFunctionType_ == PartitionFunctionType::kRoundRobinRow);
 
+  partitionKeyIsTswtz_.reserve(partitionKeyIndices_.size());
+  for (const auto channel : partitionKeyIndices_) {
+    partitionKeyIsTswtz_.push_back(
+        isTimestampWithTimeZoneType(planNode->outputType()->childAt(channel)));
+  }
+  partitionKeysNeedNormalization_ =
+      anyKeyNeedsNormalization(planNode->outputType(), partitionKeyIndices_);
+
   // Since we're replacing the LocalPartition with CudfLocalPartition, the
   // number of producers is already set. Adding producer only adds to a counter
   // which we don't have to do again.
@@ -204,6 +215,9 @@ void CudfLocalPartition::doAddInput(RowVectorPtr input) {
       enqueuePartition(partition, cudfVector);
       return;
     }
+    // Declared outside the lambda so the columns it owns outlive the
+    // hash_partition call that reads them; see the comment at its use below.
+    NormalizedKeys normalizedKeys;
     auto [partitionedTable, partitionOffsets] = [&]() {
       auto tableView = cudfVector->getTableView();
       // Use cudf hash partitioning
@@ -213,9 +227,37 @@ void CudfLocalPartition::doAddInput(RowVectorPtr input) {
           partitionKeyIndices.push_back(static_cast<cudf::size_type>(idx));
         }
 
+        if (!partitionKeysNeedNormalization_) {
+          return cudf::hash_partition(
+              tableView,
+              partitionKeyIndices,
+              numPartitions_,
+              cudf::hash_id::HASH_MURMUR3,
+              cudf::DEFAULT_HASH_SEED,
+              stream,
+              get_temp_mr());
+        }
+
+        // A TIMESTAMP WITH TIME ZONE partition key must be hashed on its instant
+        // alone: it is physically (millis << 12) | zone_key, Velox's hash for the
+        // type reads unpackMillisUtc only, and murmur3 over the raw int64 sends
+        // two values for the same moment in different zones to DIFFERENT
+        // partitions. A partitioned aggregation or join then never brings them
+        // together, so the rows are silently lost to each other -- with
+        // numPartitions_ counting consumer drivers, this happens on a single
+        // worker.
+        //
+        // The keys-table overload is what keeps this a pure key change: `input`
+        // stays the untouched payload, so every emitted row keeps its real zone
+        // key, and there is no shadow column to strip or index to remap.
+        normalizedKeys = normalizeKeyColumns(
+            tableView.select(partitionKeyIndices),
+            partitionKeyIsTswtz_,
+            stream,
+            get_temp_mr());
         return cudf::hash_partition(
             tableView,
-            partitionKeyIndices,
+            normalizedKeys.view,
             numPartitions_,
             cudf::hash_id::HASH_MURMUR3,
             cudf::DEFAULT_HASH_SEED,
