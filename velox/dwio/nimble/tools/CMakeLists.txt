@@ -90,6 +90,8 @@ target_link_libraries(
 # instrumentation include Meta-internal headers that are not part of the OSS
 # export, so they have no OSS build.
 
+add_subdirectory(encoding)
+
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
