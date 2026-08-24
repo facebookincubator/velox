@@ -135,8 +135,10 @@ Status unmappableCharacter(const StringView& charset) {
 // Charset.forName, so Spark rejects them. Compare against ICU's canonical name
 // to catch every alias that maps to one of these converters.
 bool isJavaUnsupportedCharset(const char* canonicalName) {
+  // Entries must be upper case: equalsIgnoreCase upper-cases the candidate and
+  // compares it against these literals verbatim.
   static constexpr std::string_view kIcuOnlyCharsets[] = {
-      "UTF-7", "IMAP-mailbox-name", "BOCU-1", "SCSU"};
+      "UTF-7", "IMAP-MAILBOX-NAME", "BOCU-1", "SCSU"};
   const StringView name{canonicalName};
   for (const auto& unsupported : kIcuOnlyCharsets) {
     if (equalsIgnoreCase(name, unsupported)) {
