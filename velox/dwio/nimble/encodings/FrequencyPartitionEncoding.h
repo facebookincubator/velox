@@ -125,9 +125,11 @@ class FrequencyPartitionEncoding
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
   // Statistics-only size estimate for encoding selection. Uses
   // consecutiveRepeatCount as a proxy for top-tier coverage (high repetition
-  // → values concentrate in the 1-bit tier → cheaper FPE). Assumes
-  // PerTierBitmaps index (2 index bits/value) since that is what
-  // SubIntSplitEncoding overrides for segment children.
+  // → values concentrate in the 1-bit tier → cheaper FPE). Assumes a
+  // PerTierBitmaps index sized for the number of tiers `encode()` would
+  // actually create for the observed unique count (see getCapacity/
+  // keyBitOptions above) -- a fixed 2-tier assumption undercounts the index
+  // whenever uniqueCount exceeds the 2-tier capacity of 6.
   static uint64_t estimateSize(
       uint64_t rowCount,
       const Statistics<physicalType>& statistics) {
@@ -147,11 +149,34 @@ class FrequencyPartitionEncoding
     const double keyCostBytes =
         (tier0Frac * n * 1.0 + fallbackFrac * n * kFallbackBitsPerValue) /
         8.0;
-    // PerTierBitmaps index: 2 tiers × 1 bit/value/tier.
-    const double indexBytes = 2.0 * n / 8.0;
-    // Tier sub-stream headers + outer encoding prefix.
-    constexpr double kOverheadBytes = 6.0 + 4.0 + 4.0 + 4.0 + 4.0 * 7.0;
-    return static_cast<uint64_t>(kOverheadBytes + keyCostBytes + indexBytes);
+
+    // Number of tiers encode() would create, mirroring its keyBitOptions loop.
+    const uint64_t uniqueCount = statistics.uniqueCounts().has_value()
+        ? statistics.uniqueCounts().value().size()
+        : uint64_t{1};
+    constexpr uint32_t keyBitOptions[] = {1, 2, 4, 8, 16, 32};
+    constexpr uint32_t maxKeyBits = getMaxKeyBits();
+    uint64_t assigned = 0;
+    uint32_t numTiers = 0;
+    for (uint32_t keyBits : keyBitOptions) {
+      if (keyBits > maxKeyBits || assigned >= uniqueCount) {
+        break;
+      }
+      ++numTiers;
+      assigned += getCapacity(keyBits);
+    }
+    numTiers = std::max(numTiers, 1u);
+
+    // PerTierBitmaps index: one N-bit bitmap per active tier, plus a 4-byte
+    // bitmapByteCount prefix per tier (see the "Index payload layout
+    // (PerTierBitmaps)" comment above).
+    const double bitmapBits = std::ceil(n / 64.0) * 64.0 + 32.0;
+    const double indexBytes = static_cast<double>(numTiers) * bitmapBits / 8.0;
+    // One dictionary + one key stream per active tier, each a nested
+    // sub-encoding with a ~7-byte header, plus the outer encoding prefix.
+    const double overheadBytes =
+        6.0 + 4.0 + 4.0 + static_cast<double>(numTiers) * 2.0 * 7.0;
+    return static_cast<uint64_t>(overheadBytes + keyCostBytes + indexBytes);
   }
 #endif // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 
