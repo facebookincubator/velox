@@ -24,23 +24,31 @@ namespace {
 
 template <TypeKind TValueKind, TypeKind TUiiKind>
 std::unique_ptr<exec::Aggregate> createKHyperLogLogAggregate(
-    const TypePtr& resultType) {
+    const TypePtr& resultType,
+    bool javaCompat) {
   using TValue = typename TypeTraits<TValueKind>::NativeType;
   using TUii = typename TypeTraits<TUiiKind>::NativeType;
-  return std::make_unique<KHyperLogLogAggregate<TValue, TUii>>(resultType);
+  return std::make_unique<KHyperLogLogAggregate<TValue, TUii>>(
+      resultType, javaCompat);
 }
 
 template <TypeKind TJoinKeyKind>
 std::unique_ptr<exec::Aggregate> dispatchOnUiiType(
     TypeKind uiiKind,
-    const TypePtr& resultType) {
+    const TypePtr& resultType,
+    bool javaCompat) {
   return VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
-      createKHyperLogLogAggregate, TJoinKeyKind, uiiKind, resultType);
+      createKHyperLogLogAggregate,
+      TJoinKeyKind,
+      uiiKind, // NOLINT(clang-diagnostic-switch-enum)
+      resultType,
+      javaCompat);
 }
 
 /// Registration for khyperloglog_agg aggregate function.
 std::vector<exec::AggregateRegistrationResult> registerKHyperLogLogAgg(
     const std::vector<std::string>& names,
+    bool javaCompat,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
@@ -75,7 +83,7 @@ std::vector<exec::AggregateRegistrationResult> registerKHyperLogLogAgg(
   return exec::registerAggregateFunction(
       names,
       signatures,
-      [names](
+      [names, javaCompat](
           core::AggregationNode::Step /*step*/,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
@@ -91,8 +99,9 @@ std::vector<exec::AggregateRegistrationResult> registerKHyperLogLogAgg(
         auto uiiKind = argTypes[1]->kind();
 
         // First dispatch on JoinKey type, then on UII type.
+        // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            dispatchOnUiiType, joinKeyKind, uiiKind, resultType);
+            dispatchOnUiiType, joinKeyKind, uiiKind, resultType, javaCompat);
       },
       withCompanionFunctions,
       overwrite);
@@ -101,9 +110,13 @@ std::vector<exec::AggregateRegistrationResult> registerKHyperLogLogAgg(
 
 void registerKHyperLogLogAggregates(
     const std::vector<std::string>& names,
+    const std::vector<std::string>& javaCompatNames,
     bool withCompanionFunctions,
     bool overwrite) {
-  registerKHyperLogLogAgg(names, withCompanionFunctions, overwrite);
+  registerKHyperLogLogAgg(
+      names, /*javaCompat=*/false, withCompanionFunctions, overwrite);
+  registerKHyperLogLogAgg(
+      javaCompatNames, /*javaCompat=*/true, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

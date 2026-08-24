@@ -18,7 +18,11 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/IOUtils.h"
+#include "velox/common/base/XxHashInline.h"
 #include "velox/common/hyperloglog/Murmur3Hash128.h"
+// Included so this header is self contained. KHyperLogLog.h includes this file
+// at the bottom; #pragma once makes the cycle a no-op.
+#include "velox/functions/lib/KHyperLogLog.h"
 #include "velox/type/HugeInt.h"
 
 namespace facebook::velox::common::hll {
@@ -29,31 +33,85 @@ constexpr int64_t kHashOutputHalfRange = INT64_MAX;
 constexpr size_t kHeaderSize = sizeof(uint8_t) // version
     + 4 * sizeof(int32_t); // maxSize, hllBuckets, minhashSize, hllsTotalSize;
 
+// Hashes the MinHash join key. When javaCompat is true the hash matches
+// Presto Java exactly; otherwise the long-standing Velox behaviour is kept so
+// that already-persisted khyperloglog_agg sketches stay readable and
+// reproducible.
 template <typename TJoinKey>
-static int64_t hashKey(TJoinKey joinKey) {
+static int64_t hashKey(TJoinKey joinKey, bool javaCompat) {
   int64_t result;
   if constexpr (std::is_same_v<TJoinKey, Timestamp>) {
     result = joinKey.toMillis();
   } else if constexpr (
       std::is_same_v<TJoinKey, int128_t> ||
       std::is_same_v<TJoinKey, uint128_t>) {
-    return Murmur3Hash128::hash64(&joinKey, sizeof(joinKey), 0);
+    return javaCompat
+        ? Murmur3Hash128::hash64JavaCompat(&joinKey, sizeof(joinKey), 0)
+        : Murmur3Hash128::hash64(&joinKey, sizeof(joinKey), 0);
   } else if constexpr (std::is_integral_v<TJoinKey>) {
     result = static_cast<int64_t>(joinKey);
   } else if constexpr (std::is_same_v<TJoinKey, float>) {
-    // Cast to double first, then extract bits, based on implicit coercion
-    double dbl = static_cast<double>(joinKey);
-    std::memcpy(&result, &dbl, sizeof(result));
+    // Presto Java does NOT widen REAL to DOUBLE here. A REAL is carried as its
+    // Float.floatToIntBits() pattern and reaches KHyperLogLog.add(long, ...)
+    // sign extended, so hashing the double bits would pick a different key.
+    // Verified against Presto Java: khyperloglog_agg(CAST(x AS REAL), ...) is
+    // byte identical to khyperloglog_agg(CAST(floatToIntBits(x) AS BIGINT),
+    // ...) for both positive and negative x.
+    int32_t bits;
+    std::memcpy(&bits, &joinKey, sizeof(bits));
+    result = static_cast<int64_t>(bits);
   } else if constexpr (std::is_same_v<TJoinKey, double>) {
     std::memcpy(&result, &joinKey, sizeof(result));
   } else if constexpr (std::is_same_v<TJoinKey, StringView>) {
-    result =
-        common::hll::Murmur3Hash128::hash64(joinKey.data(), joinKey.size(), 0);
+    const auto size = static_cast<int32_t>(joinKey.size());
+    if (javaCompat) {
+      // KHyperLogLog.add(Slice, long) hashes the bytes once; unlike the
+      // numeric overloads there is no second pass through the long hash.
+      return Murmur3Hash128::hash64JavaCompat(joinKey.data(), size, 0);
+    }
+    result = Murmur3Hash128::hash64(joinKey.data(), size, 0);
   } else {
     VELOX_UNREACHABLE("Unsupported input type: {}", typeid(TJoinKey).name());
   }
 
-  return Murmur3Hash128::hash64(&result, sizeof(result), 0);
+  // Presto Java uses the dedicated long overload here. It is equivalent to
+  // hashing the 8 bytes with correctly masked tail bytes.
+  return javaCompat ? Murmur3Hash128::hash64ForLong(result, 0)
+                    : Murmur3Hash128::hash64(&result, sizeof(result), 0);
+}
+
+// Hashes the unique-identifier value that feeds the per-key HLL.
+//
+// Presto Java widens the uii to a long and adds that long to the HLL: a
+// varchar/varbinary uii is pre-hashed with XxHash64 first. Plain approx_set
+// adds the raw bytes instead, which is why this cannot live in
+// HllAccumulator's hashOne(). When javaCompat is false the existing Velox
+// behaviour is preserved.
+template <typename TUii>
+static uint64_t hashUii(const TUii& uii, bool javaCompat) {
+  if (!javaCompat) {
+    return hashOne<TUii, true>(uii);
+  }
+
+  if constexpr (std::is_same_v<TUii, StringView>) {
+    return Murmur3Hash128::hash64ForLong(
+        static_cast<int64_t>(XXH64(uii.data(), uii.size(), 0)), 0);
+  } else if constexpr (std::is_same_v<TUii, Timestamp>) {
+    return Murmur3Hash128::hash64ForLong(uii.toMillis(), 0);
+  } else if constexpr (std::is_same_v<TUii, float>) {
+    // REAL is not widened to DOUBLE; see the matching branch in hashKey().
+    int32_t bits;
+    std::memcpy(&bits, &uii, sizeof(bits));
+    return Murmur3Hash128::hash64ForLong(static_cast<int64_t>(bits), 0);
+  } else if constexpr (std::is_same_v<TUii, double>) {
+    int64_t bits;
+    std::memcpy(&bits, &uii, sizeof(bits));
+    return Murmur3Hash128::hash64ForLong(bits, 0);
+  } else if constexpr (std::is_integral_v<TUii>) {
+    return Murmur3Hash128::hash64ForLong(static_cast<int64_t>(uii), 0);
+  } else {
+    return hashOne<TUii, true>(uii);
+  }
 }
 } // namespace detail
 
@@ -203,7 +261,7 @@ size_t KHyperLogLog<TUii, TAllocator>::estimatedSerializedSize() const {
 template <typename TUii, typename TAllocator>
 template <typename TJoinKey>
 void KHyperLogLog<TUii, TAllocator>::add(TJoinKey joinKey, TUii uii) {
-  update(detail::hashKey(joinKey), uii);
+  update(detail::hashKey(joinKey, javaCompat_), uii);
 }
 
 template <typename TUii, typename TAllocator>
@@ -226,7 +284,7 @@ void KHyperLogLog<TUii, TAllocator>::update(int64_t hash, TUii uii) {
     decreaseTotalHllSize(*hll);
   }
 
-  hll->append(uii);
+  hll->insertHash(detail::hashUii(uii, javaCompat_));
 
   increaseTotalHllSize(*hll);
   removeOverflowEntries();
