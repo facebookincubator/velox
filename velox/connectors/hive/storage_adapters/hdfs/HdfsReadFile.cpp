@@ -118,6 +118,14 @@ class HdfsReadFile::Impl {
         filePath_(path),
         maxReadAttempts_(maxReadAttempts),
         retryBaseDelayMs_(retryBaseDelayMs) {
+    // maxReadAttempts_ counts the initial read plus any retries, so it must be
+    // at least 1. Reject non-positive values up front; otherwise the retry
+    // budget check below would produce a confusing "after 0 attempts" message.
+    VELOX_USER_CHECK_GE(
+        maxReadAttempts_,
+        1,
+        "hive.hdfs.read-max-attempts must be at least 1, got {}",
+        maxReadAttempts_);
     fileInfo_ = driver_->GetPathInfo(hdfsClient_, filePath_.data());
     if (fileInfo_ == nullptr) {
       auto error = fmt::format(

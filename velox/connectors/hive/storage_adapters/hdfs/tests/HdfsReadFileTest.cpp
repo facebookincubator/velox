@@ -130,6 +130,16 @@ TEST_F(HdfsReadFileRetryTest, failFastByDefault) {
   EXPECT_EQ(gReadCalls, 1);
 }
 
+// A non-positive maxReadAttempts (e.g. a misconfigured
+// hive.hdfs.read-max-attempts) is rejected at construction with a user error,
+// rather than silently producing a confusing "after 0 attempts" message on the
+// first read failure.
+TEST_F(HdfsReadFileRetryTest, rejectsNonPositiveMaxAttempts) {
+  VELOX_ASSERT_THROW(
+      HdfsReadFile(&shim_, kFakeFs, "/mock", /*maxReadAttempts=*/0),
+      "hive.hdfs.read-max-attempts must be at least 1");
+}
+
 // Two transient errors, then success: the read recovers and returns the full
 // payload. Exactly three Read() calls (2 failed + 1 success) confirms the retry
 // loop re-issued the read rather than giving up or double-counting.
