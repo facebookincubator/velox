@@ -41,7 +41,7 @@ enum class MetricFlag : uint32_t {
   UniqueCount = 1u << 2, // uniqueCount (raw, capped)
   DominantValue = 1u << 3, // dominantCount (most-frequent value's frequency)
   BitWidthHistogram = 1u << 4, // bitWidthBuckets
-  DeltaStats = 1u << 5, // sumAbsDelta, monotonicCount
+  DeltaStats = 1u << 5, // sumAbsDelta, monotonicCount, maxDelta
   FrequencyTiers = 1u << 6, // topKCoverage (requires UniqueCount)
   All = (1u << 7) - 1,
 };
@@ -86,6 +86,13 @@ struct SegmentMetrics {
   // average step size and the monotonic-non-decreasing fraction.
   uint64_t sumAbsDelta{0};
   size_t monotonicCount{0};
+
+  // Max of (v[i] - v[i-1]) over non-decreasing pairs only -- i.e. the largest
+  // delta DeltaEncoding would actually have to bit-pack (decreasing pairs are
+  // restated, not delta-encoded). A fixed-width packed array must be sized to
+  // this max, not the average; using the average alone underestimates the
+  // required bit width whenever the delta distribution is right-skewed.
+  uint64_t maxDelta{0};
 
   // Cumulative fraction of values covered by the top-1/2/4/8 most-frequent
   // distinct values. Only valid when FrequencyTiers was requested AND
@@ -187,6 +194,7 @@ class MetricCollector {
         out.sumAbsDelta += (v >= prev) ? (v - prev) : (prev - v);
         if (v >= prev) {
           ++out.monotonicCount;
+          out.maxDelta = std::max(out.maxDelta, v - prev);
         }
       }
       prev = v;
