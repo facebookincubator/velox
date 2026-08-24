@@ -29,10 +29,7 @@ target_include_directories(
   nimble_external_dictionary_fb
   INTERFACE ${PROJECT_BINARY_DIR} ${FLATBUFFERS_INCLUDE_DIR}
 )
-add_dependencies(
-  nimble_external_dictionary_fb
-  nimble_external_dictionary_schema_fb
-)
+add_dependencies(nimble_external_dictionary_fb nimble_external_dictionary_schema_fb)
 
 add_library(nimble_dump_lib NimbleDumpLib.cpp NimbleDumpLib.h)
 target_link_libraries(
@@ -73,7 +70,11 @@ target_link_libraries(
   velox_memory
 )
 
-add_library(nimble_external_dictionary_builder ExternalDictionaryBuilder.cpp)
+add_library(
+  nimble_external_dictionary_builder
+  ExternalDictionaryBuilder.cpp
+  ExternalDictionaryBuilder.h
+)
 target_link_libraries(
   nimble_external_dictionary_builder
   nimble_external_dictionary_fb

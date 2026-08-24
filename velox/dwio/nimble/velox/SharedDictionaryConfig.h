@@ -37,7 +37,7 @@ struct SharedDictionaryConfig {
   /// Resolves a provided alphabet instead of building one from written values.
   bool useExternalAlphabet{false};
   /// Candidate encodings for alphabets stored in this file.
-  std::vector<EncodingType> alphabetEncodings;
+  std::vector<EncodingType> alphabetEncodings{};
 };
 
 /// Shared dictionary settings for one regular column value stream.

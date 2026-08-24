@@ -14,7 +14,11 @@
 add_library(nimble_velox_common SchemaUtils.cpp SchemaUtils.h)
 target_link_libraries(nimble_velox_common nimble_common velox_type Folly::folly fmt::fmt)
 
-add_library(nimble_velox_shared_dictionary_config SharedDictionaryConfig.cpp)
+add_library(
+  nimble_velox_shared_dictionary_config
+  SharedDictionaryConfig.cpp
+  SharedDictionaryConfig.h
+)
 target_link_libraries(
   nimble_velox_shared_dictionary_config
   nimble_common
