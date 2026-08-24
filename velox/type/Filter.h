@@ -972,6 +972,8 @@ class HugeintRange final : public Filter {
     return upper_;
   }
 
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
   std::string toString() const override {
     return fmt::format(
         "HugeintRange: [{}, {}] {}",
@@ -1203,6 +1205,8 @@ class HugeintValuesUsingHashTable final : public Filter {
   bool testInt128(const int128_t& value) const final;
 
   bool testingEquals(const Filter& other) const final;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   int128_t min() const {
     return min_;

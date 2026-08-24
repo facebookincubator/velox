@@ -1909,6 +1909,66 @@ std::unique_ptr<Filter> TimestampRange::mergeWith(const Filter* other) const {
   }
 }
 
+std::unique_ptr<Filter> HugeintRange::mergeWith(const Filter* other) const {
+  switch (other->kind()) {
+    case FilterKind::kAlwaysTrue:
+    case FilterKind::kAlwaysFalse:
+    case FilterKind::kIsNull:
+      return other->mergeWith(this);
+    case FilterKind::kIsNotNull:
+      return this->clone(false);
+    case FilterKind::kHugeintRange: {
+      const bool bothNullAllowed = nullAllowed_ && other->testNull();
+      auto* otherRange = static_cast<const HugeintRange*>(other);
+
+      const auto lower = std::max(lower_, otherRange->lower_);
+      const auto upper = std::min(upper_, otherRange->upper_);
+
+      if (lower > upper) {
+        return nullOrFalse(bothNullAllowed);
+      }
+
+      return std::make_unique<HugeintRange>(lower, upper, bothNullAllowed);
+    }
+    case FilterKind::kHugeintValuesUsingHashTable:
+      return other->mergeWith(this);
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
+std::unique_ptr<Filter> HugeintValuesUsingHashTable::mergeWith(
+    const Filter* other) const {
+  switch (other->kind()) {
+    case FilterKind::kAlwaysTrue:
+    case FilterKind::kAlwaysFalse:
+    case FilterKind::kIsNull:
+      return other->mergeWith(this);
+    case FilterKind::kIsNotNull:
+      return std::make_unique<HugeintValuesUsingHashTable>(*this, false);
+    case FilterKind::kHugeintRange:
+    case FilterKind::kHugeintValuesUsingHashTable: {
+      const bool bothNullAllowed = nullAllowed_ && other->testNull();
+
+      std::vector<int128_t> valuesToKeep;
+      valuesToKeep.reserve(values_.size());
+      for (const auto value : values_) {
+        if (other->testInt128(value)) {
+          valuesToKeep.push_back(value);
+        }
+      }
+
+      if (valuesToKeep.empty()) {
+        return nullOrFalse(bothNullAllowed);
+      }
+
+      return createHugeintValues(valuesToKeep, bothNullAllowed);
+    }
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
 std::unique_ptr<Filter> NegatedBigintRange::mergeWith(
     const Filter* other) const {
   switch (other->kind()) {

@@ -1520,6 +1520,38 @@ void testMergeWithBigint(Filter* left, Filter* right) {
           right->testInt64(0xdeadbeefbadefeedL));
 }
 
+// Values straddling the boundaries of the HUGEINT filters used in
+// mergeWithHugeint, including both halves of the int128_t representation.
+std::vector<int128_t> hugeintTestValues() {
+  std::vector<int128_t> values;
+  for (int64_t upper = 0; upper <= 3; ++upper) {
+    for (int64_t lower = 0; lower <= 3; ++lower) {
+      values.push_back(HugeInt::build(upper, lower));
+      values.push_back(-HugeInt::build(upper, lower));
+    }
+  }
+  values.push_back(DecimalUtil::kLongDecimalMin);
+  values.push_back(DecimalUtil::kLongDecimalMax);
+  return values;
+}
+
+void testMergeWithHugeint(Filter* left, Filter* right) {
+  auto merged = left->mergeWith(right);
+
+  ASSERT_EQ(merged->testNull(), left->testNull() && right->testNull())
+      << "left: " << left->toString() << ", right: " << right->toString()
+      << ", merged: " << merged->toString();
+
+  for (const auto value : hugeintTestValues()) {
+    ASSERT_EQ(
+        merged->testInt128(value),
+        left->testInt128(value) && right->testInt128(value))
+        << "at " << fmt::format("{}", value) << ", left: " << left->toString()
+        << ", right: " << right->toString()
+        << ", merged: " << merged->toString();
+  }
+}
+
 void testMergeWithDouble(Filter* left, Filter* right) {
   auto merged = left->mergeWith(right);
   ASSERT_EQ(merged->testNull(), left->testNull() && right->testNull());
@@ -2151,6 +2183,41 @@ TEST(FilterTest, mergeWithBytesMultiRange) {
   for (const auto& left : filters) {
     for (const auto& right : filters) {
       testMergeWithBytes(left.get(), right.get());
+    }
+  }
+}
+
+TEST(FilterTest, mergeWithHugeint) {
+  const auto max = DecimalUtil::kLongDecimalMax;
+
+  std::vector<std::unique_ptr<Filter>> filters;
+  addUntypedFilters(filters);
+
+  // Equality.
+  filters.push_back(equalHugeint(HugeInt::build(1, 1)));
+  filters.push_back(equalHugeint(HugeInt::build(1, 1), true));
+
+  // Between.
+  filters.push_back(betweenHugeint(HugeInt::build(0, 1), HugeInt::build(2, 2)));
+  filters.push_back(
+      betweenHugeint(HugeInt::build(0, 1), HugeInt::build(2, 2), true));
+  filters.push_back(
+      betweenHugeint(-HugeInt::build(1, 0), HugeInt::build(1, 0)));
+  filters.push_back(betweenHugeint(HugeInt::build(3, 0), max));
+
+  // IN-list.
+  const std::vector<int128_t> values{
+      HugeInt::build(1, 1), HugeInt::build(1, 2), HugeInt::build(2, 0)};
+  filters.push_back(createHugeintValues(values, false));
+  filters.push_back(createHugeintValues(values, true));
+  filters.push_back(createHugeintValues({HugeInt::build(0, 3), max}, false));
+  filters.push_back(createHugeintValues(
+      {-HugeInt::build(2, 2), HugeInt::build(1, 1)}, false));
+  filters.push_back(createHugeintValues({HugeInt::build(1, 1)}, false));
+
+  for (const auto& left : filters) {
+    for (const auto& right : filters) {
+      testMergeWithHugeint(left.get(), right.get());
     }
   }
 }

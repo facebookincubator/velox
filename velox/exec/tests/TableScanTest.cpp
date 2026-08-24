@@ -7144,6 +7144,84 @@ TEST_F(TableScanTest, longDecimalFilter) {
   assertQuery(op, createSplit(), "SELECT b FROM tmp WHERE a is null");
 }
 
+// A long-decimal equi-join makes HashProbe push a HugeintValuesUsingHashTable
+// dynamic filter onto the probe scan, which TableScan::createDataSource() then
+// merges with the scan's static filters on the same column.
+TEST_F(TableScanTest, longDecimalDynamicFilter) {
+  std::vector<std::optional<int128_t>> longValues = {
+      HugeInt::parse("123456789123456789123456789" + std::string(9, '0')),
+      HugeInt::parse("987654321123456789" + std::string(9, '0')),
+      std::nullopt,
+      HugeInt::parse("2" + std::string(37, '0')),
+      HugeInt::parse("5" + std::string(37, '0')),
+      HugeInt::parse("987654321987654321987654321" + std::string(9, '0')),
+      HugeInt::parse("1" + std::string(26, '0')),
+      HugeInt::parse("123000000012345678" + std::string(10, '0')),
+      HugeInt::parse("120000000123456789" + std::string(9, '0')),
+      HugeInt::parse("9" + std::string(37, '0'))};
+
+  auto rowVector = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(longValues.size(), folly::identity),
+          makeNullableFlatVector<int128_t>(longValues, DECIMAL(38, 18)),
+      });
+  createDuckDbTable("t", {rowVector});
+
+  // A subset of the non-null probe-side keys.
+  auto buildVector = makeRowVector(
+      {"u_b"},
+      {makeFlatVector<int128_t>(
+          {longValues[3].value(), longValues[4].value(), longValues[9].value()},
+          DECIMAL(38, 18))});
+  createDuckDbTable("u", {buildVector});
+
+  auto filePath = facebook::velox::test::getDataFilePath(
+      "velox/exec/tests", "data/decimal.orc");
+  auto createSplit = [&]() {
+    return exec::test::HiveConnectorSplitBuilder(filePath)
+        .start(0)
+        .length(fs::file_size(filePath))
+        .fileFormat(dwio::common::FileFormat::ORC)
+        .build();
+  };
+
+  auto outputType = ROW({"b"}, {DECIMAL(38, 18)});
+  auto dataColumns = ROW({"a", "b"}, {DECIMAL(18, 6), DECIMAL(38, 18)});
+
+  // Joins the scan, carrying 'subfieldFilter' as its static filter, against the
+  // build side so that the two filters have to be merged on column 'b'.
+  auto assertJoin = [&](const std::string& subfieldFilter,
+                        const std::string& duckDbPredicate) {
+    SCOPED_TRACE(subfieldFilter);
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto buildSide = PlanBuilder(planNodeIdGenerator, pool_.get())
+                         .values({buildVector})
+                         .planNode();
+    core::PlanNodeId scanId;
+    auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                    .tableScan(outputType, {subfieldFilter}, "", dataColumns)
+                    .capturePlanNodeId(scanId)
+                    .hashJoin({"b"}, {"u_b"}, buildSide, "", {"b"})
+                    .planNode();
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .split(scanId, exec::Split(createSplit()))
+        .assertResults(
+            fmt::format(
+                "SELECT t.b FROM t, u WHERE t.b = u.u_b AND {}",
+                duckDbPredicate));
+  };
+
+  // IsNotNull is the static filter Spark adds for a join key. Merging it with
+  // the dynamic filter previously threw VELOX_UNSUPPORTED.
+  assertJoin("b is not null", "t.b IS NOT NULL");
+
+  // HugeintRange, which exercises intersecting the dynamic filter's values.
+  assertJoin(
+      "b < 60000000000000000000.0::DECIMAL(38, 18)",
+      "t.b < 60000000000000000000.0");
+}
+
 TEST_F(TableScanTest, fileFormatRuntimeStats) {
   auto vectors = makeVectors(3, 1'000);
 
