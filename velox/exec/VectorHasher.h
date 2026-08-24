@@ -297,7 +297,6 @@ class VectorHasher {
 
   void resetStats() {
     clearDistinctValues();
-    hasHugeintValue_ = false;
   }
 
   // Sets 'this' to range mode and adds 'reservePct' values to the
@@ -362,9 +361,11 @@ class VectorHasher {
 
   // true if no values have been added.
   bool empty() const {
-    const bool hasSeenValue =
-        typeKind_ == TypeKind::HUGEINT ? hasHugeintValue_ : hasRange_;
-    return !hasSeenValue && numDistinct() == 0;
+    // Distinct value overflow clears the distinct values.
+    if (typeSupportsValueIds() && distinctOverflow_) {
+      return false;
+    }
+    return !hasRange_ && numDistinct() == 0;
   }
 
   std::string toString() const;
@@ -664,10 +665,6 @@ class VectorHasher {
 
   // True if 'min_' and 'max_' are initialized.
   bool hasRange_ = false;
-
-  // True if at least one HUGEINT value has been observed. This stays true even
-  // after distinct values overflow and uniqueHugeintValues_ is cleared.
-  bool hasHugeintValue_ = false;
 
   // True when range or distinct mapping is not possible or practical.
   bool rangeOverflow_ = false;

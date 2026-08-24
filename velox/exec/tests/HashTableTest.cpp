@@ -913,6 +913,51 @@ TEST_P(HashTableTest, regularHashingTableSize) {
   }
 }
 
+TEST_P(HashTableTest, prepareJoinTableOtherOverflowsOnAnalyze) {
+  // Builds a join table without duplicate keys from 150K distinct keys spread
+  // evenly over [0, maxKey). There are too many keys to map by distinct
+  // values, so the table maps them by range, padded by the reserve.
+  auto makeDedupTable = [&](int64_t maxKey) {
+    constexpr int32_t kNumKeys = 150'000;
+    std::vector<std::unique_ptr<VectorHasher>> hashers;
+    hashers.push_back(std::make_unique<VectorHasher>(BIGINT(), 0));
+    auto table = HashTable<true>::createForJoin(
+        std::move(hashers),
+        /*dependentTypes=*/{},
+        /*allowDuplicates=*/false,
+        /*hasProbedFlag=*/false,
+        /*hasCountFlag=*/false,
+        /*minTableSizeForParallelJoinBuild=*/1'000,
+        pool());
+    auto input = makeRowVector({makeFlatVector<int64_t>(
+        kNumKeys, [&](auto row) { return row * (maxKey / kNumKeys); })});
+    SelectivityVector rows(kNumKeys);
+    HashLookup lookup(table->hashers(), pool());
+    table->prepareForGroupProbe(
+        lookup, input, rows, BaseHashTable::kNoSpillInputStartPartitionBit);
+    table->groupProbe(lookup, BaseHashTable::kNoSpillInputStartPartitionBit);
+    return table;
+  };
+
+  auto table = makeDedupTable(10'000'000);
+  // The keys of 'otherTable' span more than half of the maximum range. When
+  // prepareJoinTable() analyzes the table again, its padded range is too large.
+  auto otherTable = makeDedupTable(VectorHasher::kMaxRange / 10 * 6);
+  ASSERT_EQ(table->hashMode(), BaseHashTable::HashMode::kNormalizedKey);
+  ASSERT_EQ(otherTable->hashMode(), BaseHashTable::HashMode::kNormalizedKey);
+
+  std::vector<std::unique_ptr<BaseHashTable>> otherTables;
+  otherTables.push_back(std::move(otherTable));
+  table->prepareJoinTable(
+      std::move(otherTables),
+      BaseHashTable::kNoSpillInputStartPartitionBit,
+      /*vectorHasherMaxNumDistinct=*/1'000'000,
+      /*dropDuplicates=*/true,
+      executor_.get());
+  // The merged keys fit neither by range nor by distinct values.
+  EXPECT_EQ(table->hashMode(), BaseHashTable::HashMode::kHash);
+}
+
 TEST_P(HashTableTest, listJoinResultsSize) {
   baseString_ =
       "If you count carefully, you will notice there are exactly 105 characters"
