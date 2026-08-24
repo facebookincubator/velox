@@ -21,8 +21,8 @@
 #include <cstdint>
 #include <vector>
 
-#include "velox/dwio/nimble/ML_ID_Compression/CachePolicy.h"
-#include "velox/dwio/nimble/ML_ID_Compression/TimingStats.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/TimingStats.h"
 
 namespace facebook::nimble::mlidc {
 

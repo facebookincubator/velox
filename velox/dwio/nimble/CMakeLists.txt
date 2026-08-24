@@ -80,10 +80,6 @@ add_subdirectory(writer)
 add_subdirectory(serializer)
 add_subdirectory(tools)
 
-if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
-  add_subdirectory(ML_ID_Compression)
-endif()
-
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(fuzzer)
 endif()

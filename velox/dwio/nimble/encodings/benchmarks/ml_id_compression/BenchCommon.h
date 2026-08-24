@@ -37,7 +37,7 @@
 
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Vector.h"
-#include "velox/dwio/nimble/ML_ID_Compression/CachePolicy.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/BenchmarkUtils.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
@@ -46,7 +46,7 @@
 // CLI flags shared across benchmark binaries
 // ---------------------------------------------------------------------------
 
-// Defined in BenchCommonFlags.cpp; link nimble_mlidc_common to get them.
+// Defined in MlIdBenchmarkFlags.cpp; link nimble_ml_id_benchmark_common to get them.
 DECLARE_string(mlidc_output_csv);
 DECLARE_string(mlidc_output_manifest);
 DECLARE_int32(mlidc_rows);

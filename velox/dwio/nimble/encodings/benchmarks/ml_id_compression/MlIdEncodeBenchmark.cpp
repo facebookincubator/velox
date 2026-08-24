@@ -24,10 +24,10 @@
 
 #include <gflags/gflags.h>
 
-#include "velox/dwio/nimble/ML_ID_Compression/BenchCommon.h"
-#include "velox/dwio/nimble/ML_ID_Compression/OpenZLBenchTarget.h"
-#include "velox/dwio/nimble/ML_ID_Compression/CachePolicy.h"
-#include "velox/dwio/nimble/ML_ID_Compression/MeasureLoop.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/OpenZLBenchTarget.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 
 DEFINE_bool(validate, false, "Round-trip check after encoding");
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");

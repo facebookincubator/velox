@@ -38,7 +38,7 @@
 
 #include <gflags/gflags.h>
 
-#include "velox/dwio/nimble/ML_ID_Compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
 
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"

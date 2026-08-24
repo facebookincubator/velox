@@ -23,7 +23,7 @@
 #include <string>
 #include <vector>
 
-#include "velox/dwio/nimble/ML_ID_Compression/SelectiveTraceGen.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/SelectiveTraceGen.h"
 
 namespace facebook::nimble::mlidc {
 

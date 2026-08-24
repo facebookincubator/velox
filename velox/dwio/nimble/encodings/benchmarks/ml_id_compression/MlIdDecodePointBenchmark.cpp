@@ -27,10 +27,10 @@
 
 #include <gflags/gflags.h>
 
-#include "velox/dwio/nimble/ML_ID_Compression/BenchCommon.h"
-#include "velox/dwio/nimble/ML_ID_Compression/CachePolicy.h"
-#include "velox/dwio/nimble/ML_ID_Compression/MeasureLoop.h"
-#include "velox/dwio/nimble/ML_ID_Compression/PointTraceGen.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/PointTraceGen.h"
 
 DEFINE_int32(probes, 65536, "Number of point lookups per measurement");
 DEFINE_string(cache_state, "hot", "hot | cold-payload | cold-all");

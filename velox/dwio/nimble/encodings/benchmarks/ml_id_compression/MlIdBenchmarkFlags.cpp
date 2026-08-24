@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// Defines the gflags shared across all ML_ID_Compression benchmark drivers.
+// Defines the gflags shared across all ML ID compression benchmark drivers.
 // Declared in BenchCommon.h; defined here in exactly one TU.
 
 #include <gflags/gflags.h>

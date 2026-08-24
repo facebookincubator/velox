@@ -16,21 +16,21 @@
 
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <iomanip>
 #include <iostream>
 #include <string>
 #include <vector>
 
 #include <gflags/gflags.h>
 
-#include "velox/dwio/nimble/ML_ID_Compression/Axes.h"
-#include "velox/dwio/nimble/ML_ID_Compression/BenchCommon.h"
-#include "velox/dwio/nimble/ML_ID_Compression/CachePolicy.h"
-#include "velox/dwio/nimble/ML_ID_Compression/GatherTraceGen.h"
-#include "velox/dwio/nimble/ML_ID_Compression/MeasureLoop.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 
-DEFINE_int32(selectivity_steps, 8, "Steps in the selectivity axis");
-DEFINE_int32(run_length_steps, 6, "Steps in the run-length axis");
+DEFINE_int32(grid, 16, "Grid resolution per axis; ~grid^2/2 cells in triangle");
 DEFINE_string(cache_state, "hot", "hot | cold-payload | cold-all");
 DEFINE_bool(validate, false, "Round-trip check before measuring");
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");
@@ -41,13 +41,16 @@ namespace {
 using Elem = int64_t;
 constexpr size_t kElemSize = sizeof(Elem);
 
-std::vector<std::pair<uint32_t, uint32_t>> toRanges(const GatherTrace& t) {
-  std::vector<std::pair<uint32_t, uint32_t>> ranges;
-  ranges.reserve(t.ranges.size());
-  for (const auto& r : t.ranges)
-    ranges.emplace_back(
-        static_cast<uint32_t>(r.begin), static_cast<uint32_t>(r.size()));
-  return ranges;
+struct Cell { size_t a{}; size_t b{}; };
+
+Cell resolveCell(double aFrac, double bFrac, size_t n) {
+  Cell c;
+  c.a = static_cast<size_t>(std::llround(aFrac * static_cast<double>(n)));
+  c.b = std::max<size_t>(
+      1, static_cast<size_t>(std::llround(bFrac * static_cast<double>(n))));
+  if (c.a >= n) c.a = n - 1;
+  if (c.a + c.b > n) c.b = n - c.a;
+  return c;
 }
 
 } // namespace
@@ -61,6 +64,7 @@ int main(int argc, char** argv) {
   const uint32_t n = static_cast<uint32_t>(FLAGS_mlidc_rows);
   const size_t iters = static_cast<size_t>(FLAGS_mlidc_iters);
   const uint64_t seed = static_cast<uint64_t>(FLAGS_mlidc_seed);
+  const size_t grid = static_cast<size_t>(std::max(1, FLAGS_grid));
 
   CacheState cacheState{};
   if (!parseCacheState(FLAGS_cache_state, cacheState)) {
@@ -69,10 +73,15 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const auto selectivityAxis =
-      linSpaced(0.05, 1.0, static_cast<size_t>(FLAGS_selectivity_steps));
-  const auto runLengthAxis = logSpaced(
-      1, std::max<size_t>(1, n / 4), static_cast<size_t>(FLAGS_run_length_steps));
+  std::vector<double> aFracs, bFracs;
+  for (size_t i = 0; i < grid; ++i)
+    aFracs.push_back(static_cast<double>(i) / static_cast<double>(grid));
+  for (size_t j = 1; j <= grid; ++j)
+    bFracs.push_back(static_cast<double>(j) / static_cast<double>(grid));
+  size_t cellCount = 0;
+  for (double a : aFracs)
+    for (double b : bFracs)
+      if (a + b <= 1.0 + 1e-9) ++cellCount;
 
   auto encoders = buildDefaultEncoders<Elem>();
   auto datasets = defaultInt64Datasets<Elem>();
@@ -87,30 +96,32 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  std::cout << "bench_decode_gather: " << encoders.size() << " encoders x "
-            << datasets.size() << " datasets, N=" << n
-            << ", selectivity_steps=" << selectivityAxis.size()
-            << ", run_length_steps=" << runLengthAxis.size()
-            << ", iters=" << iters << ", cache=" << cacheStateName(cacheState)
-            << "\n  " << topo.describe() << "\n\n";
+  std::cout << "bench_decode_range: " << encoders.size() << " encoders x "
+            << datasets.size() << " datasets, N=" << n << ", grid=" << grid
+            << " (" << cellCount << " cells), iters=" << iters
+            << ", cache=" << cacheStateName(cacheState) << "\n  "
+            << topo.describe() << "\n\n";
 
   if (FLAGS_dry_run) {
     std::cout << "Encoders:\n";
-    for (const auto& e : encoders) std::cout << "  " << e.name << "\n";
-    std::cout << "Datasets:\n";
+    for (const auto& e : encoders)
+      std::cout << "  " << e.name << " [" << e.family << "]\n";
+    std::cout << "\nDatasets:\n";
     for (const auto& d : datasets) std::cout << "  " << d.name << "\n";
     return 0;
   }
 
   std::vector<std::string> csvColumns = {
-      "driver", "dataset", "encoding", "family", "variant", "is_sequential",
-      "N", "seed", "cache_state", "evict_method", "evict_ns",
-      "payload_bytes", "compression_ratio", "iterations", "warmup",
-      "selectivity", "run_length", "selectivity_achieved", "range_count",
-      "selected_rows", "gap_model", "time_ns", "time_p90_ns", "time_min_ns",
-      "gather_Meps", "skipped"};
+      "driver",      "dataset",     "encoding",       "family",
+      "variant",     "is_sequential", "fast_skip",    "random_access",
+      "N",           "seed",        "cache_state",    "evict_method",
+      "evict_ns",    "payload_bytes", "compression_ratio",
+      "iterations",  "warmup",      "contract",       "A_frac",
+      "B_frac",      "A",           "B",              "time_ns",
+      "time_p90_ns", "time_min_ns", "elem_Meps",      "input_MBps",
+      "skipped"};
   std::string csvPath = FLAGS_mlidc_output_csv.empty()
-      ? "bench_decode_gather.csv"
+      ? "bench_decode_range.csv"
       : FLAGS_mlidc_output_csv;
   CsvResultWriter csv(csvPath, csvColumns);
   if (!FLAGS_mlidc_output_manifest.empty())
@@ -124,7 +135,7 @@ int main(int argc, char** argv) {
 
   auto writeSkipRow = [&](const std::string& ds, const std::string& enc) {
     csv.beginRow();
-    csv.set("driver", "bench_decode_gather");
+    csv.set("driver", "bench_decode_range");
     csv.set("dataset", ds);
     csv.set("encoding", enc);
     csv.set("skipped", int64_t{1});
@@ -132,6 +143,7 @@ int main(int argc, char** argv) {
   };
 
   for (const auto& ds : datasets) {
+    std::cout << "== Dataset: " << ds.name << " ==\n";
     auto data = ds.generate(n, seed);
     const size_t rawBytes = static_cast<size_t>(n) * kElemSize;
 
@@ -153,18 +165,18 @@ int main(int argc, char** argv) {
           : 0.0;
 
       if (FLAGS_validate && enc.variant != "fpe_noindex") {
-        GatherAccessParams vp{
-            .start = 0, .span = n, .selectivity = 0.3, .runLength = 4,
-            .gapModel = GapModel::UniformDeterministic, .seed = seed};
-        auto trace = buildGatherTrace(n, vp);
-        auto ranges = toRanges(trace);
-        std::vector<Elem> check(trace.selectedRows);
-        target->skipThenMaterialize(ranges, check.data());
         bool ok = true;
-        size_t idx = 0;
-        for (const auto& r : trace.ranges)
-          for (size_t i = r.begin; i < r.end; ++i, ++idx)
-            if (check[idx] != data[i]) ok = false;
+        std::vector<Elem> check;
+        for (double aFrac : aFracs) {
+          Cell c = resolveCell(aFrac, bFracs.front(), n);
+          check.assign(c.b, Elem{});
+          target->materializeRange(
+              static_cast<uint32_t>(c.a), static_cast<uint32_t>(c.b),
+              check.data());
+          for (size_t i = 0; i < c.b && ok; ++i)
+            ok = check[i] == data[c.a + i];
+          if (!ok) break;
+        }
         if (!ok) {
           std::cerr << "  [VALIDATE FAIL] " << enc.name << " / " << ds.name
                     << "\n";
@@ -186,31 +198,36 @@ int main(int argc, char** argv) {
       if (bufs.size() > 1)
         targets.codecInternal.assign(bufs.begin() + 1, bufs.end());
 
-      for (double sigma : selectivityAxis) {
-        for (size_t rl : runLengthAxis) {
-          GatherAccessParams p{
-              .start = 0, .span = n, .selectivity = sigma, .runLength = rl,
-              .gapModel = GapModel::UniformDeterministic, .seed = seed};
-          auto trace = buildGatherTrace(n, p);
-          if (trace.selectedRows == 0) continue;
-          auto ranges = toRanges(trace);
+      for (double aFrac : aFracs) {
+        for (double bFrac : bFracs) {
+          if (aFrac + bFrac > 1.0 + 1e-9) continue;
+          const Cell c = resolveCell(aFrac, bFrac, n);
 
           auto result = measure(spec, controller, targets, [&]() {
-            target->skipThenMaterialize(ranges, sink.data());
+            target->materializeRange(
+                static_cast<uint32_t>(c.a), static_cast<uint32_t>(c.b),
+                sink.data());
           });
 
           const double timeNs = static_cast<double>(result.time.median_ns);
-          const double meps = timeNs > 0.0
-              ? static_cast<double>(trace.selectedRows) / timeNs * 1e3
-              : 0.0;
+          const double elemMeps =
+              timeNs > 0.0 ? static_cast<double>(c.b) / timeNs * 1e3 : 0.0;
+          const double inputBytes = enc.isSequential
+              ? static_cast<double>(payloadBytes)
+              : static_cast<double>(c.b) * static_cast<double>(payloadBytes) /
+                  static_cast<double>(n);
+          const double inputMBps =
+              timeNs > 0.0 ? inputBytes / timeNs * 1e3 : 0.0;
 
           csv.beginRow();
-          csv.set("driver", "bench_decode_gather");
+          csv.set("driver", "bench_decode_range");
           csv.set("dataset", ds.name);
           csv.set("encoding", enc.name);
           csv.set("family", enc.family);
           csv.set("variant", enc.variant);
           csv.set("is_sequential", enc.isSequential ? int64_t{1} : int64_t{0});
+          csv.set("fast_skip", enc.fastSkip ? int64_t{1} : int64_t{0});
+          csv.set("random_access", enc.randomAccess ? int64_t{1} : int64_t{0});
           csv.set("N", static_cast<int64_t>(n));
           csv.set("seed", static_cast<int64_t>(seed));
           csv.set("cache_state",
@@ -222,25 +239,27 @@ int main(int argc, char** argv) {
           csv.set("compression_ratio", ratio);
           csv.set("iterations", static_cast<int64_t>(iters));
           csv.set("warmup", static_cast<int64_t>(spec.warmup));
-          csv.set("selectivity", sigma);
-          csv.set("run_length", static_cast<int64_t>(rl));
-          csv.set("selectivity_achieved", trace.selectivityAchieved);
-          csv.set("range_count", static_cast<int64_t>(trace.rangeCount));
-          csv.set("selected_rows", static_cast<int64_t>(trace.selectedRows));
-          csv.set("gap_model", std::string(gapModelName(p.gapModel)));
+          csv.set("contract", std::string("range_into"));
+          csv.set("A_frac", aFrac);
+          csv.set("B_frac", bFrac);
+          csv.set("A", static_cast<int64_t>(c.a));
+          csv.set("B", static_cast<int64_t>(c.b));
           csv.set("time_ns", result.time.median_ns);
           csv.set("time_p90_ns", result.time.p90_ns);
           csv.set("time_min_ns", result.time.min_ns);
-          csv.set("gather_Meps", meps);
+          csv.set("elem_Meps", elemMeps);
+          csv.set("input_MBps", inputMBps);
           csv.set("skipped", int64_t{0});
           csv.endRow();
         }
       }
       csv.flush();
+      std::cout << "  " << enc.name << ": " << payloadBytes << " B, "
+                << cellCount << " cells swept\n";
     }
   }
 
-  std::cout << "Results written to: " << csvPath << "\n";
+  std::cout << "\nResults written to: " << csvPath << "\n";
   if (validateFailures > 0) {
     std::cerr << validateFailures << " validation failure(s)\n";
     return 2;
@@ -253,7 +272,7 @@ int main(int argc, char** argv) {
 #include <iostream>
 int main() {
   std::cerr
-      << "bench_decode_gather requires NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS\n";
+      << "bench_decode_range requires NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS\n";
   return 1;
 }
 
