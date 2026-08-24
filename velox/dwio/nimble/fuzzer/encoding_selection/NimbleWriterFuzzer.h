@@ -271,6 +271,9 @@ class NimbleWriterFuzzer {
   /// as covered.
   void logPairCoverage() const;
 
+  /// Logs the physical chunk and metadata shapes validated by the run.
+  void logChunkStatsCoverage() const;
+
   /// Candidate encodings that were never applied to a single chunk, either
   /// because no iteration drew a schema they accept or because every stream
   /// fell back to Trivial. A non-empty result means the run verified fewer
@@ -294,7 +297,36 @@ class NimbleWriterFuzzer {
   /// either way.
   std::vector<EncodingPair> unappliedPairs() const;
 
+  /// Names of required chunk-stats metadata shapes not observed by the run.
+  std::vector<std::string_view> uncoveredChunkStatsShapes() const;
+
  private:
+  // Counts physical stream and metadata shapes validated during the run.
+  struct ChunkStatsVerificationCoverage {
+    // Counts files whose chunk stats were enabled or disabled.
+    uint64_t numIndexedFiles{0};
+    uint64_t numUnindexedFiles{0};
+    // Counts indexed groups and stripes.
+    uint64_t numStripeGroups{0};
+    uint64_t numStripes{0};
+    // Counts present scalar-value streams, structural streams emitted for
+    // complex types, and streams split into multiple chunks.
+    uint64_t numScalarStreams{0};
+    uint64_t numStructuralStreams{0};
+    uint64_t numMultiChunkStreams{0};
+    // Counts chunk positions within their streams.
+    uint64_t numFirstChunks{0};
+    uint64_t numMiddleChunks{0};
+    uint64_t numFinalChunks{0};
+    // Counts decoded null distributions.
+    uint64_t numZeroNullChunks{0};
+    uint64_t numPartiallyNullChunks{0};
+    uint64_t numFullyNullChunks{0};
+    // Counts physical chunk-wrapper compression states.
+    uint64_t numCompressedChunks{0};
+    uint64_t numUncompressedChunks{0};
+  };
+
   // Writes 'batches', returning the file bytes. When 'encodingType' is set,
   // that is the only candidate offered to the random policy; otherwise the
   // policy chooses from its full default set. The write type is taken from
@@ -303,6 +335,12 @@ class NimbleWriterFuzzer {
       const std::vector<velox::VectorPtr>& batches,
       std::optional<EncodingType> encodingType,
       uint64_t iterationSeed);
+
+  // Validates the chunk-stats section against independently parsed and decoded
+  // physical chunks, and records which metadata shapes were exercised.
+  void verifyChunkStatsMetadata(
+      const std::string& file,
+      bool chunkStatsEnabled);
 
   // Reads 'file' through 'readerPath' and compares every row against
   // 'batches'. Throws on the first difference.
@@ -336,6 +374,7 @@ class NimbleWriterFuzzer {
   std::map<EncodingType, EncodingCoverage> coverage_;
   std::map<EncodingPair, PairCoverage> pairCoverage_;
   uint64_t numUnfilteredFilesWritten_{0};
+  ChunkStatsVerificationCoverage chunkStatsCoverage_;
   // DataTypes some stream actually carried. Bounds what unappliedPairs() may
   // demand, and is deliberately observed rather than derived from the schema:
   // the writer emits Uint32 length streams, Bool null streams and the Uint16
