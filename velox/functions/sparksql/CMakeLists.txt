@@ -37,6 +37,7 @@ velox_add_library(
   DecimalArithmetic.cpp
   DecimalCeil.cpp
   DecimalCompare.cpp
+  EncodeFunction.cpp
   FilterFunction.cpp
   FormatNumber.cpp
   GetJsonObject.cpp
@@ -116,6 +117,7 @@ velox_link_libraries(
   velox_functions_spark_specialforms
   velox_functions_util
   Folly::folly
+  ICU::uc
   simdjson::simdjson
 )
 

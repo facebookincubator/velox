@@ -57,6 +57,14 @@ namespace facebook::velox::functions {
 int32_t
 tryGetUtf8CharLength(const char* input, int64_t size, int32_t& codePoint);
 
+/// Decodes the next UTF-8 code point, replacing malformed input with U+FFFD
+/// using Java's malformed-input grouping. Returns the number of input bytes
+/// consumed and always sets codePoint.
+int32_t decodeUtf8CodePointOrReplacement(
+    const char* input,
+    int64_t size,
+    int32_t& codePoint);
+
 /// Return the length in byte of the next UTF-8 encoded character at the
 /// beginning of `string`. If the beginning of `string` is not valid UTF-8
 /// encoding, return -1.
