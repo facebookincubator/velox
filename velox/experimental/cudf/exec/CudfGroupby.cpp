@@ -17,6 +17,9 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
+#include "velox/experimental/cudf/exec/KeyNormalization.h"
+
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -978,6 +981,20 @@ void CudfGroupby::initialize() {
   setupGroupingKeyChannelProjections(
       *aggregationNode_, groupingKeyInputChannels_, groupingKeyOutputChannels_);
 
+  // Recorded by key POSITION, not channel, because doGroupByAggregation is called
+  // with groupingKeyInputChannels_ on the input pass and
+  // groupingKeyOutputChannels_ on the compaction passes; both list the same keys
+  // in the same order, so one vector serves every caller.
+  groupingKeyIsTswtz_.reserve(groupingKeyInputChannels_.size());
+  for (const auto channel : groupingKeyInputChannels_) {
+    groupingKeyIsTswtz_.push_back(
+        isTimestampWithTimeZoneType(inputType_->asRow().childAt(channel)));
+  }
+  groupingKeysNeedNormalization_ = std::any_of(
+      groupingKeyIsTswtz_.begin(), groupingKeyIsTswtz_.end(), [](bool b) {
+        return b;
+      });
+
   // Velox CPU does optimizations related to pre-grouped keys. This can be
   // done in cudf by passing sort information to cudf::groupby() constructor.
   // We're postponing this for now.
@@ -1208,10 +1225,22 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
   auto groupbyKeyView =
       tableView.select(groupByKeys.begin(), groupByKeys.end());
 
+  // A TIMESTAMP WITH TIME ZONE grouping key must group on its instant alone: it is
+  // physically (millis << 12) | zone_key and Velox's hash and compare for the type
+  // read unpackMillisUtc only, so grouping on the raw value splits every set of
+  // rows that share a moment across zones into one group per zone.
+  //
+  // The normalized keys can only drive the GROUPING. cudf::groupby::aggregate
+  // RETURNS the unique key rows, and those become this operator's output, so
+  // emitting them would rewrite every zone key to UTC downstream. The original
+  // packed value is recovered per group below.
+  auto normalizedKeys = normalizeKeyColumns(
+      groupbyKeyView, groupingKeyIsTswtz_, stream, get_temp_mr());
+
   // TODO: All other args to groupby are related to sort groupby. We don't
   // support optimizations related to it yet.
   cudf::groupby::groupby groupByOwner(
-      groupbyKeyView,
+      normalizedKeys.view,
       ignoreNullKeys_ ? cudf::null_policy::EXCLUDE
                       : cudf::null_policy::INCLUDE);
 
@@ -1220,12 +1249,55 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
     aggregator->addGroupbyRequest(tableView, requests, stream, get_temp_mr());
   }
 
+  // Key-recovery requests are appended AFTER every aggregator's, so the result
+  // indices the aggregators recorded stay valid.
+  //
+  // MIN over the original packed column, not NTH_ELEMENT: cuDF's
+  // is_hash_aggregation (src/groupby/common/utils.hpp) admits SUM, MIN, MAX,
+  // COUNT, ARGMIN, ARGMAX, MEAN, M2, STD and VARIANCE and nothing else, so an
+  // NTH_ELEMENT request would make can_use_hash_groupby false and push every
+  // TSWTZ group-by onto the sort path. MIN yields the group's numerically
+  // smallest packed value, which is a real zone key from one of its own rows --
+  // matching CPU, where RowContainer keeps the packed value of whichever row
+  // created the group. Which of the tied zone keys survives is unspecified on
+  // both engines.
+  std::vector<size_t> keyRecoveryRequest(groupByKeys.size(), 0);
+  if (normalizedKeys.normalizedAny()) {
+    for (size_t i = 0; i < groupByKeys.size(); ++i) {
+      if (!groupingKeyIsTswtz_[i]) {
+        continue;
+      }
+      std::vector<std::unique_ptr<cudf::groupby_aggregation>> aggregation;
+      aggregation.push_back(
+          cudf::make_min_aggregation<cudf::groupby_aggregation>());
+      keyRecoveryRequest[i] = requests.size();
+      requests.push_back(cudf::groupby::aggregation_request{
+          tableView.column(static_cast<cudf::size_type>(groupByKeys[i])),
+          std::move(aggregation)});
+    }
+  }
+
   auto [groupKeys, results] = groupByOwner.aggregate(requests, stream, mr);
   // flatten the results
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
 
   // first fill the grouping keys
   auto groupKeysColumns = groupKeys->release();
+
+  // Replace each normalized key with the original packed value recovered above,
+  // so the emitted TIMESTAMP WITH TIME ZONE carries a real zone key rather than
+  // the UTC the normalization would have left.
+  if (normalizedKeys.normalizedAny()) {
+    for (size_t i = 0; i < groupByKeys.size(); ++i) {
+      if (!groupingKeyIsTswtz_[i]) {
+        continue;
+      }
+      auto& recovered = results[keyRecoveryRequest[i]].results;
+      VELOX_CHECK_EQ(
+          recovered.size(), 1, "Key recovery expects exactly one result column");
+      groupKeysColumns[i] = std::move(recovered[0]);
+    }
+  }
   resultColumns.insert(
       resultColumns.begin(),
       std::make_move_iterator(groupKeysColumns.begin()),
