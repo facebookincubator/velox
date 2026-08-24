@@ -129,10 +129,19 @@ class ParquetConfig {
       "writer_enable_page_index",
       "writer.enable-page-index",
       bool,
-      false,
+      true,
       "Write the Parquet page index (column index and offset index) in the "
       "Parquet writer. When enabled, per-page statistics are stored in the "
       "page index instead of the data page headers.")
+  VELOX_FORMAT_CONFIG_PROPERTY(
+      kWriterSizeStatisticsLevelSession,
+      kWriterSizeStatisticsLevel,
+      "writer_size_statistics_level",
+      "writer.size-statistics-level",
+      std::string_view,
+      "PAGE_AND_COLUMN_CHUNK",
+      "Level of size statistics written by the Parquet writer. Supported "
+      "values are NONE, COLUMN_CHUNK, and PAGE_AND_COLUMN_CHUNK.")
   static constexpr std::string_view kWriterCreatedBy = "writer.created-by";
 
   // Writer config accessors expect format-scoped configs. Connector prefixes
@@ -200,6 +209,15 @@ class ParquetConfig {
         kWriterEnablePageIndexSession, connectorConfig, kWriterEnablePageIndex);
   }
 
+  static std::optional<std::string> writerSizeStatisticsLevel(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) {
+    return session.getLegacyWithFallback<std::string>(
+        kWriterSizeStatisticsLevelSession,
+        connectorConfig,
+        kWriterSizeStatisticsLevel);
+  }
+
   static std::optional<std::string> writerCreatedBy(
       const config::ConfigBase& connectorConfig) {
     return connectorConfig.get<std::string>(std::string(kWriterCreatedBy));
@@ -245,6 +263,8 @@ class ParquetConfig {
         properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<
         kWriterEnablePageIndexSessionProperty>(properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<
+        kWriterSizeStatisticsLevelSessionProperty>(properties, sessionPrefix);
   }
 };
 
