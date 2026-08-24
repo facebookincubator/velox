@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <algorithm>
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -32,6 +34,24 @@ struct MeasureSpec {
   size_t iterations{5};
   size_t warmup{2};
 };
+
+// Caps iterations for an encoder where every read decompresses the whole
+// payload, such as a block codec. The fine-grained range and gather sweeps run
+// hundreds of cells, and a full decompress per cell would otherwise dominate
+// wall-clock time. Warmup is dropped for the same reason, which makes these
+// timings noisier than the rest.
+inline MeasureSpec specFor(
+    const MeasureSpec& base,
+    bool wholePayloadCodec,
+    size_t blockCodecIters) {
+  if (!wholePayloadCodec) {
+    return base;
+  }
+  MeasureSpec spec = base;
+  spec.iterations = std::max<size_t>(1, std::min(base.iterations, blockCodecIters));
+  spec.warmup = 0;
+  return spec;
+}
 
 struct MeasureResult {
   TimingSummary time;

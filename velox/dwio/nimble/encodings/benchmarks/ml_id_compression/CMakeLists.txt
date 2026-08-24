@@ -83,6 +83,7 @@ target_link_libraries(
   nimble_ml_id_benchmark_common
   nimble_encodings
   nimble_common
+  openzl_cpp
   Folly::folly
   velox_memory
   gflags
@@ -114,6 +115,7 @@ target_link_libraries(
   nimble_ml_id_benchmark_common
   nimble_encodings
   nimble_common
+  openzl_cpp
   Folly::folly
   velox_memory
   gflags
@@ -129,6 +131,7 @@ target_link_libraries(
   nimble_ml_id_benchmark_common
   nimble_encodings
   nimble_common
+  openzl_cpp
   Folly::folly
   velox_memory
   gflags

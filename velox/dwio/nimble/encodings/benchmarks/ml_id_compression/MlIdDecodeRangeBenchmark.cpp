@@ -27,6 +27,7 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/OpenZLBenchTarget.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 
@@ -84,6 +85,9 @@ int main(int argc, char** argv) {
       if (a + b <= 1.0 + 1e-9) ++cellCount;
 
   auto encoders = buildDefaultEncoders<Elem>();
+  // Serves partial reads by decompressing the whole column, which is the
+  // comparison these drivers exist to make.
+  encoders.push_back(buildOpenZLEncoder<Elem>());
   auto datasets = defaultInt64Datasets<Elem>();
   const CacheTopology topo = CacheTopology::detect();
 
@@ -159,6 +163,12 @@ int main(int argc, char** argv) {
       }
       if (skipped) { writeSkipRow(ds.name, enc.name); continue; }
 
+      // Block codecs decompress everything per read; cap their iterations so
+      // the sweep finishes in reasonable time.
+      const MeasureSpec encSpec = specFor(
+          spec, enc.wholePayloadCodec,
+          static_cast<size_t>(FLAGS_mlidc_block_codec_iters));
+
       const size_t payloadBytes = target->payloadSize();
       const double ratio = rawBytes > 0
           ? static_cast<double>(payloadBytes) / static_cast<double>(rawBytes)
@@ -203,7 +213,7 @@ int main(int argc, char** argv) {
           if (aFrac + bFrac > 1.0 + 1e-9) continue;
           const Cell c = resolveCell(aFrac, bFrac, n);
 
-          auto result = measure(spec, controller, targets, [&]() {
+          auto result = measure(encSpec, controller, targets, [&]() {
             target->materializeRange(
                 static_cast<uint32_t>(c.a), static_cast<uint32_t>(c.b),
                 sink.data());
@@ -237,8 +247,8 @@ int main(int argc, char** argv) {
           csv.set("evict_ns", result.evict.median_ns);
           csv.set("payload_bytes", static_cast<int64_t>(payloadBytes));
           csv.set("compression_ratio", ratio);
-          csv.set("iterations", static_cast<int64_t>(iters));
-          csv.set("warmup", static_cast<int64_t>(spec.warmup));
+          csv.set("iterations", static_cast<int64_t>(encSpec.iterations));
+          csv.set("warmup", static_cast<int64_t>(encSpec.warmup));
           csv.set("contract", std::string("range_into"));
           csv.set("A_frac", aFrac);
           csv.set("B_frac", bFrac);

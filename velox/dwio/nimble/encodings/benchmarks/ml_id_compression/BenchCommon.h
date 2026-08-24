@@ -18,6 +18,7 @@
 
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <fstream>
@@ -36,8 +37,10 @@
 #include <glog/logging.h>
 
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/compression/Compression.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/SubstreamCompression.h"
 #include "velox/dwio/nimble/encodings/benchmarks/BenchmarkUtils.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
@@ -52,6 +55,13 @@ DECLARE_string(mlidc_output_manifest);
 DECLARE_int32(mlidc_rows);
 DECLARE_int32(mlidc_iters);
 DECLARE_int64(mlidc_seed);
+DECLARE_string(mlidc_file);
+DECLARE_string(mlidc_dataset_name);
+DECLARE_string(mlidc_substream_compression);
+DECLARE_string(mlidc_outer_compression);
+DECLARE_int32(mlidc_block_codec_iters);
+DECLARE_string(mlidc_datasets);
+DECLARE_int32(mlidc_block_codec_probes);
 
 namespace facebook::nimble::mlidc {
 
@@ -76,9 +86,15 @@ class NimbleBenchTarget {
       const Encoding::Options& options = {},
       bool realNestedSelection = false) {
     Buffer buf{*pool_};
+    // Not test::Encoder::encode: its policy silently redirects any compressor
+    // other than Zstd, and leaves nested sub-streams on the default one. See
+    // SubstreamCompression.h.
     encoded_ = std::string(
-        test::Encoder<EncodingT>::encode(
-            buf, data, CompressionType::Uncompressed, options,
+        encodeWithCompression<EncodingT, T>(
+            buf,
+            data,
+            parseCompressionType(FLAGS_mlidc_substream_compression),
+            options,
             realNestedSelection));
     // Construct the Encoding directly from the encoded bytes rather than
     // re-encoding via createEncoding(), which would silently drop
@@ -310,10 +326,18 @@ inline void writeRunManifest(const std::string& path) {
 #endif
 
   // Reproduce key flags.
+  // The compression flags belong here as much as the sizes: two runs that
+  // differ only in compressor produce different numbers under the same
+  // encoder names, so a result set is not interpretable without them.
   manifest["flags"] = folly::dynamic::object(
       "mlidc_rows", FLAGS_mlidc_rows)(
       "mlidc_iters", FLAGS_mlidc_iters)(
-      "mlidc_seed", FLAGS_mlidc_seed);
+      "mlidc_seed", FLAGS_mlidc_seed)(
+      "mlidc_file", FLAGS_mlidc_file)(
+      "mlidc_dataset_name", FLAGS_mlidc_dataset_name)(
+      "mlidc_substream_compression", FLAGS_mlidc_substream_compression)(
+      "mlidc_outer_compression", FLAGS_mlidc_outer_compression)(
+      "mlidc_block_codec_iters", FLAGS_mlidc_block_codec_iters);
 
   auto json = folly::toPrettyJson(manifest);
   if (folly::writeFile(json, path.c_str())) {
@@ -376,6 +400,10 @@ struct EncoderEntry {
   bool isSequential{true};
   bool fastSkip{false};
   bool randomAccess{false};
+  // True when every read, however small, must first decompress the entire
+  // payload. Drivers use this to cap iterations so a block codec does not
+  // dominate wall-clock time on the fine-grained access sweeps.
+  bool wholePayloadCodec{false};
 
   // Factory: construct a fresh target and encode the given data.
   std::function<std::unique_ptr<NimbleBenchTargetBase<T>>(
@@ -408,6 +436,147 @@ EncoderEntry<typename EncodingT::cppDataType> makeEncoderEntry(
   };
   return entry;
 }
+
+// ---------------------------------------------------------------------------
+// Outer (whole-payload) compression
+// ---------------------------------------------------------------------------
+
+// Wraps an encoded column in a single block compressor, modelling shipping the
+// whole encoded payload through a codec such as OpenZL.
+//
+// The point of measuring this separately is the read cost. A block codec has
+// no addressable interior, so every access, including a one-element point
+// lookup, must first decompress the entire payload. Any skip-based advantage
+// the inner encoding has is therefore erased while the payload stays
+// compressed, which is what the decode drivers are meant to expose.
+//
+// Decorates NimbleBenchTargetBase so it composes with any inner encoding
+// without those encodings knowing about it.
+template <typename T>
+class OuterCompressedTarget : public NimbleBenchTargetBase<T> {
+ public:
+  // Takes an inner target that the encoder entry's factory has already
+  // encoded, and compresses its payload.
+  OuterCompressedTarget(
+      std::unique_ptr<NimbleBenchTargetBase<T>> inner,
+      CompressionType compressionType)
+      : inner_{std::move(inner)}, compressionType_{compressionType} {
+    compressInner();
+  }
+
+  void encode(const Vector<T>& data, const Encoding::Options& opts) override {
+    inner_->encode(data, opts);
+    compressInner();
+  }
+  void materializeAll(T* dst, uint32_t n) override {
+    decompressAll();
+    inner_->materializeAll(dst, n);
+  }
+
+  void materializeRange(uint32_t begin, uint32_t count, T* dst) override {
+    decompressAll();
+    inner_->materializeRange(begin, count, dst);
+  }
+
+  void skipThenMaterialize(
+      const std::vector<std::pair<uint32_t, uint32_t>>& ranges,
+      T* dst) override {
+    decompressAll();
+    inner_->skipThenMaterialize(ranges, dst);
+  }
+
+  // The stored size, which is what an outer codec is chosen for.
+  size_t payloadSize() const override {
+    return compressed_.size();
+  }
+
+  std::vector<std::span<const std::byte>> internalBuffers() const override {
+    return {
+        {reinterpret_cast<const std::byte*>(compressed_.data()),
+         compressed_.size()}};
+  }
+
+ private:
+  void compressInner() {
+    // payloadBytes() is not on the base interface; internalBuffers() exposes
+    // the same bytes and is.
+    auto buffers = inner_->internalBuffers();
+    NIMBLE_CHECK(!buffers.empty(), "Inner target exposed no payload buffer");
+    std::string_view view{
+        reinterpret_cast<const char*>(buffers.front().data()),
+        buffers.front().size()};
+
+    BenchCompressPolicy policy{compressionType_};
+    auto result = Compression::compress(
+        *pool_, view, DataType::Int8, /*bitWidth=*/8, policy);
+
+    // A compressor may decline, in which case the payload is stored as is and
+    // reads skip the decompress step.
+    if (result.buffer.has_value()) {
+      compressed_.assign(result.buffer->data(), result.buffer->size());
+      storedType_ = result.compressionType;
+    } else {
+      compressed_.assign(view.data(), view.size());
+      storedType_ = CompressionType::Uncompressed;
+    }
+  }
+
+  // Charged to every access, as it would be in a reader holding only the
+  // compressed block.
+  //
+  // This times the decompression but discards the output: the inner target
+  // still holds the payload it encoded, so decoding stays correct without
+  // re-parsing. A real reader would also rebuild the Encoding from the
+  // decompressed bytes, so the penalty measured here is a lower bound.
+  void decompressAll() {
+    if (storedType_ == CompressionType::Uncompressed) {
+      return;
+    }
+    auto buffer = Compression::uncompress(
+        *pool_,
+        storedType_,
+        DataType::Int8,
+        std::string_view{compressed_.data(), compressed_.size()},
+        /*decompressCounter=*/nullptr);
+    // Kept so the compiler cannot elide the decompression.
+    lastDecompressed_ = std::move(buffer);
+  }
+
+  std::shared_ptr<velox::memory::MemoryPool> pool_{benchmarks::benchmarkPool()};
+  std::unique_ptr<NimbleBenchTargetBase<T>> inner_;
+  CompressionType compressionType_;
+  CompressionType storedType_{CompressionType::Uncompressed};
+  std::string compressed_;
+  velox::BufferPtr lastDecompressed_;
+};
+
+// Wraps entry's factory so every target it builds carries the outer codec.
+// Returns the entry unchanged when no outer compression is configured.
+template <typename T>
+EncoderEntry<T> withOuterCompression(
+    EncoderEntry<T> entry,
+    CompressionType compressionType) {
+  if (compressionType == CompressionType::Uncompressed) {
+    return entry;
+  }
+  entry.name += "+outer:" + nimble::toString(compressionType);
+  // An outer block codec removes any interior addressability the inner
+  // encoding had.
+  entry.fastSkip = false;
+  entry.randomAccess = false;
+  entry.wholePayloadCodec = true;
+  auto inner = std::move(entry.factory);
+  entry.factory = [inner = std::move(inner), compressionType](
+                      const Vector<T>& data, const Encoding::Options& opts) {
+    auto target = std::make_unique<OuterCompressedTarget<T>>(
+        inner(data, opts), compressionType);
+    // The constructor compresses the payload the inner factory just encoded;
+    // calling encode() here would encode a second time.
+    return std::unique_ptr<NimbleBenchTargetBase<T>>(std::move(target));
+  };
+  return entry;
+}
+
 
 // ---------------------------------------------------------------------------
 // DatasetEntry and default int64 datasets
@@ -518,6 +687,40 @@ Vector<T> makeRunLengthSeeded(uint32_t n, uint64_t seed) {
   return data;
 }
 
+
+// Loads a real-data column from a text file holding one int64 per line, the
+// format read by the --file flag of velox/dwio/nimble/tools/encoding_bench, so
+// the same column dump feeds both tools. Reads exactly the first n values and
+// throws if the file is missing or shorter than requested: a silently short
+// read would be indistinguishable from a legitimate benchmark result.
+template <typename T>
+Vector<T> loadInt64Lines(const std::string& path, uint32_t n) {
+  std::ifstream file(path);
+  if (!file) {
+    throw std::runtime_error("Cannot open data file: " + path);
+  }
+
+  auto& pool = benchmarks::benchmarkPool();
+  Vector<T> data{pool.get()};
+  data.resize(n);
+
+  std::string line;
+  uint32_t count = 0;
+  while (count < n && std::getline(file, line)) {
+    if (!line.empty()) {
+      data[count++] = static_cast<T>(std::stoll(line));
+    }
+  }
+
+  if (count < n) {
+    throw std::runtime_error(
+        "Data file has fewer values than requested. Path: " + path +
+        ", available: " + std::to_string(count) +
+        ", requested: " + std::to_string(n));
+  }
+  return data;
+}
+
 } // namespace detail
 
 // Default dataset suite for int64 — covers the main distribution shapes
@@ -549,6 +752,36 @@ std::vector<DatasetEntry<T>> defaultInt64Datasets() {
   out.push_back({"run-length", [](uint32_t n, uint64_t seed) {
                    return detail::makeRunLengthSeeded<T>(n, seed);
                  }});
+
+  // Real-data column supplied at run time. Unlike the synthetic generators
+  // above this is not regenerated per seed, so the seed is ignored.
+  if (!FLAGS_mlidc_file.empty()) {
+    out.push_back(
+        {FLAGS_mlidc_dataset_name, [](uint32_t n, uint64_t /*seed*/) {
+           return detail::loadInt64Lines<T>(FLAGS_mlidc_file, n);
+         }});
+  }
+
+  // Applied last so a real-data dataset can be selected by name too.
+  if (!FLAGS_mlidc_datasets.empty()) {
+    std::vector<DatasetEntry<T>> filtered;
+    std::stringstream names(FLAGS_mlidc_datasets);
+    std::string want;
+    while (std::getline(names, want, ',')) {
+      if (want.empty()) {
+        continue;
+      }
+      auto it = std::find_if(out.begin(), out.end(), [&](const auto& entry) {
+        return entry.name == want;
+      });
+      // A typo would otherwise run nothing and look like a clean empty result.
+      if (it == out.end()) {
+        throw std::runtime_error("Unknown dataset name: " + want);
+      }
+      filtered.push_back(*it);
+    }
+    out = std::move(filtered);
+  }
 
   return out;
 }
@@ -611,6 +844,12 @@ std::vector<EncoderEntry<T>> buildDefaultEncoders() {
       return std::unique_ptr<NimbleBenchTargetBase<T>>(std::move(impl));
     };
     encoders.push_back(std::move(entry));
+  }
+
+  // Applied last so it wraps whatever the entries above produced.
+  const auto outerType = parseCompressionType(FLAGS_mlidc_outer_compression);
+  for (auto& entry : encoders) {
+    entry = withOuterCompression<T>(std::move(entry), outerType);
   }
 
   return encoders;

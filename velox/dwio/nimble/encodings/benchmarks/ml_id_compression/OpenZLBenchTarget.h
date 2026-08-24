@@ -69,14 +69,25 @@ class OpenZLBenchTarget : public NimbleBenchTargetBase<T> {
         {compressed_.data(), compressed_.size()});
   }
 
-  void materializeRange(uint32_t, uint32_t, T*) override {
-    LOG(FATAL) << "OpenZL does not support partial decode";
+  // OpenZL has no addressable interior, so a partial read is served the only
+  // way a block codec can: decompress the whole column, then copy out the rows
+  // that were asked for. This is the cost a reader actually pays, and it is
+  // the comparison the decode drivers exist to make. It is not a limitation
+  // being worked around; reporting it as unsupported would simply leave the
+  // comparison unmeasured.
+  void materializeRange(uint32_t begin, uint32_t count, T* dst) override {
+    decompressAll();
+    std::copy_n(scratch_.data() + begin, count, dst);
   }
 
   void skipThenMaterialize(
-      const std::vector<std::pair<uint32_t, uint32_t>>&,
-      T*) override {
-    LOG(FATAL) << "OpenZL does not support partial decode";
+      const std::vector<std::pair<uint32_t, uint32_t>>& ranges,
+      T* dst) override {
+    decompressAll();
+    for (const auto& [begin, count] : ranges) {
+      std::copy_n(scratch_.data() + begin, count, dst);
+      dst += count;
+    }
   }
 
   size_t payloadSize() const override {
@@ -89,8 +100,19 @@ class OpenZLBenchTarget : public NimbleBenchTargetBase<T> {
   }
 
  private:
+  // Charged on every partial read, never cached across calls: a reader holding
+  // a compressed block pays this each time it needs rows.
+  void decompressAll() {
+    scratch_.resize(count_);
+    openzl::DCtx dctx;
+    openzl::Output output =
+        openzl::Output::wrapNumeric(scratch_.data(), sizeof(T), count_);
+    dctx.decompressOne(output, {compressed_.data(), compressed_.size()});
+  }
+
   uint32_t count_{0};
   std::vector<char> compressed_;
+  std::vector<T> scratch_;
 };
 
 template <typename T>
@@ -102,6 +124,9 @@ EncoderEntry<T> buildOpenZLEncoder() {
   entry.isSequential = true;
   entry.fastSkip = false;
   entry.randomAccess = false;
+  // Every partial read decompresses the whole payload, so drivers bound the
+  // iteration count for this entry.
+  entry.wholePayloadCodec = true;
   entry.factory = [](const Vector<T>& data, const Encoding::Options& opts) {
     auto target = std::make_unique<OpenZLBenchTarget<T>>();
     target->encode(data, opts);

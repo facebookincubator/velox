@@ -25,6 +25,7 @@
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/Axes.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/OpenZLBenchTarget.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/GatherTraceGen.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
@@ -75,6 +76,9 @@ int main(int argc, char** argv) {
       1, std::max<size_t>(1, n / 4), static_cast<size_t>(FLAGS_run_length_steps));
 
   auto encoders = buildDefaultEncoders<Elem>();
+  // Serves partial reads by decompressing the whole column, which is the
+  // comparison these drivers exist to make.
+  encoders.push_back(buildOpenZLEncoder<Elem>());
   auto datasets = defaultInt64Datasets<Elem>();
   const CacheTopology topo = CacheTopology::detect();
 
@@ -147,6 +151,12 @@ int main(int argc, char** argv) {
       }
       if (skipped) { writeSkipRow(ds.name, enc.name); continue; }
 
+      // Block codecs decompress everything per read; cap their iterations so
+      // the sweep finishes in reasonable time.
+      const MeasureSpec encSpec = specFor(
+          spec, enc.wholePayloadCodec,
+          static_cast<size_t>(FLAGS_mlidc_block_codec_iters));
+
       const size_t payloadBytes = target->payloadSize();
       const double ratio = rawBytes > 0
           ? static_cast<double>(payloadBytes) / static_cast<double>(rawBytes)
@@ -195,7 +205,7 @@ int main(int argc, char** argv) {
           if (trace.selectedRows == 0) continue;
           auto ranges = toRanges(trace);
 
-          auto result = measure(spec, controller, targets, [&]() {
+          auto result = measure(encSpec, controller, targets, [&]() {
             target->skipThenMaterialize(ranges, sink.data());
           });
 
@@ -220,8 +230,8 @@ int main(int argc, char** argv) {
           csv.set("evict_ns", result.evict.median_ns);
           csv.set("payload_bytes", static_cast<int64_t>(payloadBytes));
           csv.set("compression_ratio", ratio);
-          csv.set("iterations", static_cast<int64_t>(iters));
-          csv.set("warmup", static_cast<int64_t>(spec.warmup));
+          csv.set("iterations", static_cast<int64_t>(encSpec.iterations));
+          csv.set("warmup", static_cast<int64_t>(encSpec.warmup));
           csv.set("selectivity", sigma);
           csv.set("run_length", static_cast<int64_t>(rl));
           csv.set("selectivity_achieved", trace.selectivityAchieved);

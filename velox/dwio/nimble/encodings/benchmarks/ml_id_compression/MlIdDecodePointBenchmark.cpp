@@ -28,6 +28,7 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/OpenZLBenchTarget.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/PointTraceGen.h"
@@ -64,6 +65,9 @@ int main(int argc, char** argv) {
   }
 
   auto encoders = buildDefaultEncoders<Elem>();
+  // Serves partial reads by decompressing the whole column, which is the
+  // comparison these drivers exist to make.
+  encoders.push_back(buildOpenZLEncoder<Elem>());
   auto datasets = defaultInt64Datasets<Elem>();
   const CacheTopology topo = CacheTopology::detect();
 
@@ -147,6 +151,12 @@ int main(int argc, char** argv) {
       }
       if (skipped) { writeSkipRow(ds.name, enc.name); continue; }
 
+      // Block codecs decompress everything per read; cap their iterations so
+      // the sweep finishes in reasonable time.
+      const MeasureSpec encSpec = specFor(
+          spec, enc.wholePayloadCodec,
+          static_cast<size_t>(FLAGS_mlidc_block_codec_iters));
+
       const size_t payloadBytes = target->payloadSize();
       const double ratio = rawBytes > 0
           ? static_cast<double>(payloadBytes) / static_cast<double>(rawBytes)
@@ -180,16 +190,26 @@ int main(int argc, char** argv) {
       if (bufs.size() > 1)
         targets.codecInternal.assign(bufs.begin() + 1, bufs.end());
 
-      auto result = measure(spec, controller, targets, [&]() {
-        for (size_t idx : trace.indices)
-          target->materializeRange(static_cast<uint32_t>(idx), 1, &sink);
+      // Every probe against a whole-payload codec decompresses the entire
+      // column, so the full probe count would take hours. Per-probe cost is
+      // constant, so a prefix of the trace yields the same ns_per_probe.
+      const size_t encProbes = enc.wholePayloadCodec
+          ? std::min<size_t>(
+                probes,
+                static_cast<size_t>(std::max(1, FLAGS_mlidc_block_codec_probes)))
+          : probes;
+
+      auto result = measure(encSpec, controller, targets, [&]() {
+        for (size_t i = 0; i < encProbes; ++i)
+          target->materializeRange(
+              static_cast<uint32_t>(trace.indices[i]), 1, &sink);
       });
 
       const double timeNs = static_cast<double>(result.time.median_ns);
       const double nsPerProbe =
-          probes > 0 ? timeNs / static_cast<double>(probes) : 0.0;
+          encProbes > 0 ? timeNs / static_cast<double>(encProbes) : 0.0;
       const double mProbesPerSec = timeNs > 0.0
-          ? static_cast<double>(probes) / timeNs * 1e3
+          ? static_cast<double>(encProbes) / timeNs * 1e3
           : 0.0;
 
       csv.beginRow();
@@ -207,9 +227,9 @@ int main(int argc, char** argv) {
           evictMethodName(controller.effectivePolicy().method)));
       csv.set("payload_bytes", static_cast<int64_t>(payloadBytes));
       csv.set("compression_ratio", ratio);
-      csv.set("iterations", static_cast<int64_t>(iters));
-      csv.set("warmup", static_cast<int64_t>(spec.warmup));
-      csv.set("probes", static_cast<int64_t>(probes));
+      csv.set("iterations", static_cast<int64_t>(encSpec.iterations));
+      csv.set("warmup", static_cast<int64_t>(encSpec.warmup));
+      csv.set("probes", static_cast<int64_t>(encProbes));
       csv.set("distinct_probes", static_cast<int64_t>(trace.distinctIndices));
       csv.set("distinct_fraction", trace.distinctFraction);
       csv.set("time_ns", result.time.median_ns);
