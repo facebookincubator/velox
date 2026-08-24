@@ -36,7 +36,7 @@ namespace {
 
 Encoding::Options encodingOptions(const TabletReader& tablet) {
   Encoding::Options options;
-  options.useVarintRowCount = tablet.features().compactRowCountEncoding();
+  options.useVarintRowCount = tablet.properties().compactRowCountEncoding();
   return options;
 }
 

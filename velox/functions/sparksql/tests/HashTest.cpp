@@ -68,7 +68,7 @@ class HashTest : public SparkFunctionBaseTest {
   }
 };
 
-TEST_F(HashTest, String) {
+TEST_F(HashTest, string) {
   EXPECT_EQ(hash<std::string>("Spark"), 228093765);
   EXPECT_EQ(hash<std::string>(""), 142593372);
   EXPECT_EQ(hash<std::string>("abcdefghijklmnopqrstuvwxyz"), -1990933474);
@@ -88,11 +88,11 @@ TEST_F(HashTest, longDecimal) {
 
 // Spark CLI select timestamp_micros(12345678) to get the Timestamp.
 // select hash(Timestamp("1970-01-01 00:00:12.345678")) to get the hash value.
-TEST_F(HashTest, Timestamp) {
+TEST_F(HashTest, timestamp) {
   EXPECT_EQ(hash<Timestamp>(Timestamp::fromMicros(12345678)), 1402875301);
 }
 
-TEST_F(HashTest, Int64) {
+TEST_F(HashTest, int64) {
   EXPECT_EQ(hash<int64_t>(0xcafecafedeadbeef), -256235155);
   EXPECT_EQ(hash<int64_t>(0xdeadbeefcafecafe), 673261790);
   EXPECT_EQ(hash<int64_t>(INT64_MAX), -1604625029);
@@ -103,7 +103,7 @@ TEST_F(HashTest, Int64) {
   EXPECT_EQ(hash<int64_t>(std::nullopt), 42);
 }
 
-TEST_F(HashTest, Int32) {
+TEST_F(HashTest, int32) {
   EXPECT_EQ(hash<int32_t>(0xdeadbeef), 141248195);
   EXPECT_EQ(hash<int32_t>(0xcafecafe), 638354558);
   EXPECT_EQ(hash<int32_t>(1), -559580957);
@@ -112,27 +112,27 @@ TEST_F(HashTest, Int32) {
   EXPECT_EQ(hash<int32_t>(std::nullopt), 42);
 }
 
-TEST_F(HashTest, Int16) {
+TEST_F(HashTest, int16) {
   EXPECT_EQ(hash<int16_t>(1), -559580957);
   EXPECT_EQ(hash<int16_t>(0), 933211791);
   EXPECT_EQ(hash<int16_t>(-1), -1604776387);
   EXPECT_EQ(hash<int16_t>(std::nullopt), 42);
 }
 
-TEST_F(HashTest, Int8) {
+TEST_F(HashTest, int8) {
   EXPECT_EQ(hash<int8_t>(1), -559580957);
   EXPECT_EQ(hash<int8_t>(0), 933211791);
   EXPECT_EQ(hash<int8_t>(-1), -1604776387);
   EXPECT_EQ(hash<int8_t>(std::nullopt), 42);
 }
 
-TEST_F(HashTest, Bool) {
+TEST_F(HashTest, bool) {
   EXPECT_EQ(hash<bool>(false), 933211791);
   EXPECT_EQ(hash<bool>(true), -559580957);
   EXPECT_EQ(hash<bool>(std::nullopt), 42);
 }
 
-TEST_F(HashTest, StringInt32) {
+TEST_F(HashTest, stringInt32) {
   auto hash = [&](std::optional<std::string> a, std::optional<int32_t> b) {
     return evaluateOnce<int32_t>("hash(c0, c1)", a, b);
   };
@@ -143,7 +143,7 @@ TEST_F(HashTest, StringInt32) {
   EXPECT_EQ(hash("", 0), 1143746540);
 }
 
-TEST_F(HashTest, Double) {
+TEST_F(HashTest, double) {
   using limits = std::numeric_limits<double>;
 
   EXPECT_EQ(hash<double>(std::nullopt), 42);
@@ -155,7 +155,7 @@ TEST_F(HashTest, Double) {
   EXPECT_EQ(hash<double>(-limits::infinity()), 461104036);
 }
 
-TEST_F(HashTest, Float) {
+TEST_F(HashTest, float) {
   using limits = std::numeric_limits<float>;
 
   EXPECT_EQ(hash<float>(std::nullopt), 42);

@@ -181,6 +181,43 @@ Invalid examples
   SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as smallint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as tinyint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
+Cast to Floating-Point Types
+----------------------------
+
+From strings
+^^^^^^^^^^^^
+
+*(ANSI compliant)*
+
+Casting a string to ``REAL`` or ``DOUBLE`` accepts decimal and scientific
+notation, an optional leading sign, and the case-insensitive special literals
+``nan``, ``inf``, ``infinity`` (optionally signed). Values that overflow the
+target type produce ``Infinity`` rather than an error, matching Spark.
+
+Casting from invalid strings returns NULL when ANSI mode is disabled; throws an
+error otherwise.
+
+Valid examples
+
+::
+
+  SELECT cast('1.5' as double); -- 1.5
+  SELECT cast('-3.14E-2' as real); -- -0.0314
+  SELECT cast('1.5e10' as double); -- 1.5E10
+  SELECT cast('nan' as double); -- NaN (case insensitive)
+  SELECT cast('-Infinity' as double); -- -Infinity (case insensitive)
+  SELECT cast('1e39' as real); -- Infinity (overflow)
+  SELECT cast('1e309' as double); -- Infinity (overflow)
+
+Invalid examples
+
+::
+
+  SELECT cast('abc' as double); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1.2a' as double); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1.2.3' as real); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('' as double); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+
 Cast to Boolean
 ---------------
 
@@ -634,7 +671,10 @@ From strings
 
 Casting from strings to timestamp uses Spark-compatible timestamp parsing.
 The parser accepts date-only values, both ``' '`` and ``'T'`` as date-time
-separators, fractional seconds, and leading or trailing spaces.
+separators, fractional seconds, and leading or trailing spaces. Both ``' '``
+and ``'T'`` date-time separators must be followed immediately by a digit.
+Outer whitespace is trimmed before the parser runs, so a bare trailing
+separator such as ``"2015-03-18 "`` is handled as a date-only value.
 
 Casting from invalid strings returns NULL when ANSI mode is disabled and throws
 an error when ANSI mode is enabled.
@@ -655,6 +695,9 @@ Invalid examples
 
   SELECT cast('INVALID' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('2012-Oct-01' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('2015-03-18T' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('2015-03-18T 12:00:00' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('2015-03-18 Z' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 From boolean
 ^^^^^^^^^^^^

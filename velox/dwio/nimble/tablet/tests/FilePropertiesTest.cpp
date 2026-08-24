@@ -13,12 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/dwio/nimble/tablet/FileFeatures.h"
+#include "velox/dwio/nimble/tablet/FileProperties.h"
 
 #include <gtest/gtest.h>
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
-#include "velox/dwio/nimble/tablet/FeaturesGenerated.h"
+#include "velox/dwio/nimble/tablet/FilePropertiesGenerated.h"
 
 #include "flatbuffers/flatbuffers.h"
 
@@ -27,24 +27,24 @@
 namespace facebook::nimble {
 namespace {
 
-TEST(FileFeaturesTest, basic) {
-  FileFeatures features{/*compactRowCountEncoding=*/false,
-                        /*clusterIndexKeyColumnStorageOmitted=*/false,
-                        /*clusterIndexKeyColumnsWithOmittedStorage=*/{}};
+TEST(FilePropertiesTest, basic) {
+  FileProperties features{/*compactRowCountEncoding=*/false,
+                          /*clusterIndexKeyColumnStorageOmitted=*/false,
+                          /*clusterIndexKeyColumnsWithOmittedStorage=*/{}};
 
-  const auto decoded = FileFeatures::deserialize(features.serialize());
+  const auto decoded = FileProperties::deserialize(features.serialize());
   EXPECT_FALSE(decoded.compactRowCountEncoding());
   EXPECT_FALSE(decoded.clusterIndexKeyColumnStorageOmitted());
   EXPECT_TRUE(decoded.clusterIndexKeyColumnsWithOmittedStorage().empty());
 }
 
-TEST(FileFeaturesTest, roundTripKeyColumnsWithOmittedStorage) {
-  FileFeatures features{
+TEST(FilePropertiesTest, roundTripKeyColumnsWithOmittedStorage) {
+  FileProperties features{
       /*compactRowCountEncoding=*/false,
       /*clusterIndexKeyColumnStorageOmitted=*/true,
       /*clusterIndexKeyColumnsWithOmittedStorage=*/{"key0", "key1"}};
 
-  const auto decoded = FileFeatures::deserialize(features.serialize());
+  const auto decoded = FileProperties::deserialize(features.serialize());
   EXPECT_FALSE(decoded.compactRowCountEncoding());
   EXPECT_TRUE(decoded.clusterIndexKeyColumnStorageOmitted());
   EXPECT_EQ(
@@ -52,39 +52,39 @@ TEST(FileFeaturesTest, roundTripKeyColumnsWithOmittedStorage) {
       (std::vector<std::string>{"key0", "key1"}));
 }
 
-TEST(FileFeaturesTest, roundTripCompactRowCountEncoding) {
-  FileFeatures enabled{/*compactRowCountEncoding=*/true,
-                       /*clusterIndexKeyColumnStorageOmitted=*/false,
-                       /*clusterIndexKeyColumnsWithOmittedStorage=*/{}};
+TEST(FilePropertiesTest, roundTripCompactRowCountEncoding) {
+  FileProperties enabled{/*compactRowCountEncoding=*/true,
+                         /*clusterIndexKeyColumnStorageOmitted=*/false,
+                         /*clusterIndexKeyColumnsWithOmittedStorage=*/{}};
 
-  auto decoded = FileFeatures::deserialize(enabled.serialize());
+  auto decoded = FileProperties::deserialize(enabled.serialize());
   EXPECT_TRUE(decoded.compactRowCountEncoding());
 
-  FileFeatures disabled{/*compactRowCountEncoding=*/false,
-                        /*clusterIndexKeyColumnStorageOmitted=*/false,
-                        /*clusterIndexKeyColumnsWithOmittedStorage=*/{}};
+  FileProperties disabled{/*compactRowCountEncoding=*/false,
+                          /*clusterIndexKeyColumnStorageOmitted=*/false,
+                          /*clusterIndexKeyColumnsWithOmittedStorage=*/{}};
 
-  decoded = FileFeatures::deserialize(disabled.serialize());
+  decoded = FileProperties::deserialize(disabled.serialize());
   EXPECT_FALSE(decoded.compactRowCountEncoding());
 }
 
-TEST(FileFeaturesTest, rejectsConstructedOmittedStorageWithoutColumns) {
+TEST(FilePropertiesTest, rejectsConstructedOmittedStorageWithoutColumns) {
   NIMBLE_ASSERT_THROW(
-      FileFeatures(
+      FileProperties(
           /*compactRowCountEncoding=*/false,
           /*clusterIndexKeyColumnStorageOmitted=*/true,
           /*clusterIndexKeyColumnsWithOmittedStorage=*/{}),
       "clusterIndexKeyColumnStorageOmitted must match clusterIndexKeyColumnsWithOmittedStorage presence");
 
   NIMBLE_ASSERT_THROW(
-      FileFeatures(
+      FileProperties(
           /*compactRowCountEncoding=*/false,
           /*clusterIndexKeyColumnStorageOmitted=*/false,
           /*clusterIndexKeyColumnsWithOmittedStorage=*/{"key0"}),
       "clusterIndexKeyColumnStorageOmitted must match clusterIndexKeyColumnsWithOmittedStorage presence");
 }
 
-TEST(FileFeaturesTest, rejectsOmittedStorageWithoutColumns) {
+TEST(FilePropertiesTest, rejectsOmittedStorageWithoutColumns) {
   auto serialized =
       [](bool clusterIndexKeyColumnStorageOmitted,
          std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage) {
@@ -98,7 +98,7 @@ TEST(FileFeaturesTest, rejectsOmittedStorageWithoutColumns) {
                       clusterIndexKeyColumnsWithOmittedStorage[i]);
                 });
         builder.Finish(
-            serialization::CreateFeatures(
+            serialization::CreateFileProperties(
                 builder,
                 clusterIndexKeyColumnStorageOmitted,
                 columns,
@@ -119,7 +119,7 @@ TEST(FileFeaturesTest, rejectsOmittedStorageWithoutColumns) {
         testing::Message() << "clusterIndexKeyColumnStorageOmitted="
                            << testCase.clusterIndexKeyColumnStorageOmitted);
     NIMBLE_ASSERT_THROW(
-        FileFeatures::deserialize(serialized(
+        FileProperties::deserialize(serialized(
             testCase.clusterIndexKeyColumnStorageOmitted,
             testCase.clusterIndexKeyColumnsWithOmittedStorage)),
         "cluster_index_key_column_storage_omitted must match cluster_index_key_columns_with_omitted_storage presence");

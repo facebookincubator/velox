@@ -108,20 +108,28 @@ std::shared_ptr<ReaderBase> ReaderBase::create(
 
 std::shared_ptr<ReaderBase> ReaderBase::create(
     std::unique_ptr<velox::dwio::common::BufferedInput> input,
-    CachedTabletReader&& cachedTablet,
+    const std::shared_ptr<CachedTabletReader>& cachedTablet,
     const velox::dwio::common::ReaderOptions& options) {
+  NIMBLE_CHECK_NOT_NULL(cachedTablet);
   auto* pool = &options.memoryPool();
   const auto& randomSkip = options.randomSkip();
   const auto& scanSpec = options.scanSpec();
   auto fileSchema =
-      asRowType(getFileSchema(options, std::move(cachedTablet.veloxSchema)));
+      asRowType(getFileSchema(options, cachedTablet->veloxSchema()));
+
+  // Aliased onto the entry so this ReaderBase owns it, not just the tablet.
+  // The entry owns the IoStatistics the tablet writes its metadata and index
+  // reads into, and retiring it stops those totals being watched, so an entry
+  // that retired while this reader was still going would lose the rest.
+  auto tablet =
+      std::shared_ptr<TabletReader>(cachedTablet, cachedTablet->tablet().get());
 
   return std::shared_ptr<ReaderBase>(new ReaderBase(
       std::move(input),
-      std::move(cachedTablet.tablet),
+      std::move(tablet),
       randomSkip,
       scanSpec,
-      std::move(cachedTablet.nimbleSchema),
+      cachedTablet->nimbleSchema(),
       std::move(fileSchema),
       pool));
 }

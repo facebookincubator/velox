@@ -29,6 +29,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
@@ -100,7 +101,10 @@ class PFOREncodingTest : public ::testing::Test {
         buffer);
     encodedStorage_.assign(encoded.begin(), encoded.end());
     return EncodingFactory().create(
-        *pool_, {encodedStorage_.data(), encodedStorage_.size()}, nullptr);
+        *pool_,
+        {encodedStorage_.data(), encodedStorage_.size()},
+        nullptr,
+        Encoding::Options{});
   }
 
   void roundTripAndExpect(const std::vector<T>& values) {
@@ -131,6 +135,25 @@ TYPED_TEST_SUITE(PFOREncodingTest, PFORTypes);
 TYPED_TEST(PFOREncodingTest, singleElement) {
   using T = TypeParam;
   this->roundTripAndExpect({T{42}});
+}
+
+TYPED_TEST(PFOREncodingTest, readerFactoriesDecodeExistingData) {
+  using T = TypeParam;
+  const std::vector<T> values{T{1}, T{2}, T{3}, T{100}, T{5}};
+  Buffer buffer{*this->pool_};
+  const auto encoded =
+      EncodingFactory::encode<T>(this->createSelectionPolicy(), values, buffer);
+
+  for (const auto useLegacyReader : {false, true}) {
+    SCOPED_TRACE(fmt::format("legacy={}", useLegacyReader));
+    std::unique_ptr<Encoding> encoding = useLegacyReader
+        ? legacy::EncodingFactory{}.create(*this->pool_, encoded, nullptr)
+        : EncodingFactory{}.create(*this->pool_, encoded, nullptr);
+    std::vector<T> decoded(values.size());
+    encoding->materialize(
+        static_cast<uint32_t>(decoded.size()), decoded.data());
+    EXPECT_EQ(decoded, values);
+  }
 }
 
 TYPED_TEST(PFOREncodingTest, allSameValues) {
@@ -302,7 +325,7 @@ TEST_P(PforBitWidthStorageTest, storesExpectedBasePayloadWidth) {
           values.size(), GetParam().expectedBaseBitWidth));
 
   auto encoding =
-      EncodingFactory(options).create(*pool, encodedStorage, nullptr);
+      EncodingFactory().create(*pool, encodedStorage, nullptr, options);
   std::vector<uint32_t> decoded(values.size());
   encoding->materialize(static_cast<uint32_t>(decoded.size()), decoded.data());
   EXPECT_EQ(decoded, values);
@@ -585,7 +608,10 @@ class PFOREncodingFuzzerTest : public ::testing::Test {
           buffer);
       std::vector<char> storage(encoded.begin(), encoded.end());
       auto encoding = EncodingFactory().create(
-          *pool_, {storage.data(), storage.size()}, nullptr);
+          *pool_,
+          {storage.data(), storage.size()},
+          nullptr,
+          Encoding::Options{});
 
       ASSERT_EQ(encoding->encodingType(), EncodingType::PFOR);
       ASSERT_EQ(encoding->dataType(), TypeTraits<T>::dataType);

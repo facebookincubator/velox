@@ -21,11 +21,11 @@
 
 namespace facebook::nimble {
 
-/// File-level feature state that readers need before loading feature-specific
-/// optional metadata.
-class FileFeatures {
+/// File-level properties that readers need before loading other optional
+/// metadata.
+class FileProperties {
  public:
-  FileFeatures(
+  FileProperties(
       bool compactRowCountEncoding,
       bool clusterIndexKeyColumnStorageOmitted,
       std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage);
@@ -46,11 +46,12 @@ class FileFeatures {
     return clusterIndexKeyColumnsWithOmittedStorage_;
   }
 
-  /// Serializes file features into the `columnar.features` optional section.
+  /// Serializes file properties into the `columnar.properties` optional
+  /// section.
   std::string serialize() const;
 
-  /// Deserializes the `columnar.features` optional section.
-  static FileFeatures deserialize(std::string_view data);
+  /// Deserializes the `columnar.properties` optional section.
+  static FileProperties deserialize(std::string_view data);
 
  private:
   bool compactRowCountEncoding_{false};
