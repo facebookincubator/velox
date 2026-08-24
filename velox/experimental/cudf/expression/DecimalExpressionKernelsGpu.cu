@@ -19,6 +19,7 @@
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_device_view.cuh>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/detail/device_scalar.hpp>
 #include <cudf/detail/operators/checked_arithmetic.cuh>
 #include <cudf/detail/utilities/grid_1d.cuh>
 #include <cudf/errc.hpp>
@@ -32,8 +33,6 @@
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
-
-#include <rmm/device_scalar.hpp>
 
 #include <cuda_runtime.h>
 
@@ -295,7 +294,7 @@ int32_t launchOverflowChecked(
   if (size == 0) {
     return 0;
   }
-  rmm::device_scalar<int32_t> overflowFlag{0, stream};
+  cudf::detail::device_scalar<int32_t> overflowFlag{0, stream};
   auto op = buildOp();
   cudf::detail::grid_1d const grid{size, kOverflowCheckedBlockSize};
   overflowCheckedKernel<<<
