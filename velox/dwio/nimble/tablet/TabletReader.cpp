@@ -25,6 +25,7 @@
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FooterGenerated.h"
 #include "velox/dwio/nimble/tablet/IndexGenerated.h"
+#include "velox/dwio/nimble/tablet/SharedDictionaryReader.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 
 #include "flatbuffers/flatbuffers.h"
@@ -234,6 +235,7 @@ TabletReader::TabletReader(
         // provided.
         if (options.cacheMetadata && options.fileHandle != nullptr) {
           NIMBLE_CHECK_NOT_NULL(options.cache, "cacheMetadata requires cache");
+          metadataOptions.maxCacheEntrySize = options.maxCacheEntrySize;
           metadataOptions.fileHandle = options.fileHandle;
           metadataOptions.cache = options.cache;
         }
@@ -254,6 +256,39 @@ TabletReader::TabletReader(
       static_cast<const void*>(pool_),
       "ioOptions pool must match the provided pool");
   init(options);
+}
+
+TabletReader::~TabletReader() = default;
+
+bool TabletReader::hasGlobalDictionaries() const {
+  return sharedDictionaryReaderFactory_ != nullptr &&
+      sharedDictionaryReaderFactory_->hasGlobalDictionaries();
+}
+
+bool TabletReader::hasStripeDictionaries() const {
+  return sharedDictionaryReaderFactory_ != nullptr &&
+      sharedDictionaryReaderFactory_->hasStripeDictionaries();
+}
+
+std::optional<uint32_t> TabletReader::stripeDictionaryStreamId(
+    uint32_t valueStreamId) const {
+  return sharedDictionaryReaderFactory_ == nullptr
+      ? std::nullopt
+      : sharedDictionaryReaderFactory_->dictionaryStreamId(valueStreamId);
+}
+
+std::vector<std::optional<uint32_t>> TabletReader::stripeDictionaryStreamIds(
+    std::span<const uint32_t> valueStreamIds) const {
+  return sharedDictionaryReaderFactory_ == nullptr
+      ? std::vector<std::optional<uint32_t>>{}
+      : sharedDictionaryReaderFactory_->dictionaryStreamIds(valueStreamIds);
+}
+
+std::shared_ptr<const SharedDictionaryAlphabet>
+TabletReader::resolveDictionaryAlphabet(uint32_t valueStreamId) const {
+  return sharedDictionaryReaderFactory_ == nullptr
+      ? nullptr
+      : sharedDictionaryReaderFactory_->resolveAlphabet(valueStreamId);
 }
 
 void TabletReader::init(const Options& options) {
@@ -292,7 +327,8 @@ void TabletReader::init(const Options& options) {
   loadSections(sections);
 
   initStripes(footerView, footerOffset);
-  initFeatures();
+  initProperties();
+  initSharedDictionaries(options);
   initIndexDescriptors();
   initClusterIndex();
   initChunkStats(footerView, footerOffset);
@@ -341,11 +377,11 @@ void TabletReader::loadFooter(
           static_cast<int64_t>(footerIoSize - requiredSize);
     }
 
-    const uint64_t footerOffset =
+    const uint64_t footerBufOffset =
         footerIoSize - Postscript::kSize - ps_.footerSize();
     footer_ = std::make_unique<MetadataBuffer>(MetadataBuffer::decompress(
         std::string_view{
-            footerBuf->as<char>() + footerOffset, ps_.footerSize()},
+            footerBuf->as<char>() + footerBufOffset, ps_.footerSize()},
         ps_.footerCompressionType(),
         pool_));
   } else {
@@ -418,7 +454,8 @@ bool TabletReader::initFromCache(const Options& options) {
   loadSections(sections);
 
   initStripes();
-  initFeatures();
+  initProperties();
+  initSharedDictionaries(options);
   initIndexDescriptors();
   initClusterIndex();
   initChunkStats();
@@ -475,9 +512,17 @@ void TabletReader::cacheMetadata(
     cacheSection(toMetadataSection(stripeGroups->Get(0)));
   }
 
-  if (auto featuresIt = optionalSections_.find(std::string{kFeaturesSection});
-      featuresIt != optionalSections_.end()) {
-    cacheSection(featuresIt->second);
+  if (auto propertiesIt =
+          optionalSections_.find(std::string{kPropertiesSection});
+      propertiesIt != optionalSections_.end()) {
+    cacheSection(propertiesIt->second);
+  }
+
+  if (sharedDictionaryReaderFactory_ != nullptr) {
+    auto sharedDictionaryIt =
+        optionalSections_.find(std::string{kSharedDictionarySection});
+    NIMBLE_CHECK(sharedDictionaryIt != optionalSections_.end());
+    cacheSection(sharedDictionaryIt->second);
   }
 
   if (clusterIndex_ != nullptr || denseIndexRegistry_ != nullptr) {
@@ -695,20 +740,34 @@ void TabletReader::initOptionalSections() {
   }
 }
 
-void TabletReader::initFeatures() {
+void TabletReader::initProperties() {
   auto section =
-      loadOptionalSection(std::string{kFeaturesSection}, /*keepCache=*/true);
+      loadOptionalSection(std::string{kPropertiesSection}, /*keepCache=*/true);
   if (!section.has_value()) {
     return;
   }
 
-  features_ = FileFeatures::deserialize(section->content());
+  properties_ = FileProperties::deserialize(section->content());
+}
+
+void TabletReader::initSharedDictionaries(const Options& options) {
+  auto section = loadOptionalSection(
+      std::string{kSharedDictionarySection}, /*keepCache=*/false);
+  if (!section.has_value()) {
+    return;
+  }
+
+  sharedDictionaryReaderFactory_ = SharedDictionaryReaderFactory::create(
+      section->content(),
+      options.externalResolver,
+      /*tabletReader=*/this,
+      /*pool=*/pool_);
 }
 
 std::vector<std::string> TabletReader::preloadSectionNames(
     const Options& options) const {
   std::vector<std::string> names;
-  names.reserve(options.preloadOptionalSections.size() + 2);
+  names.reserve(options.preloadOptionalSections.size() + 3);
   auto addName = [&names](std::string name) {
     if (std::find(names.begin(), names.end(), name) == names.end()) {
       names.emplace_back(std::move(name));
@@ -720,7 +779,8 @@ std::vector<std::string> TabletReader::preloadSectionNames(
   if (options.loadClusterIndex || options.loadDenseIndexes) {
     addName(std::string{kIndexSection});
   }
-  addName(std::string{kFeaturesSection});
+  addName(std::string{kPropertiesSection});
+  addName(std::string{kSharedDictionarySection});
   return names;
 }
 

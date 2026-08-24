@@ -19,6 +19,7 @@
 #include <limits>
 #include <optional>
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
@@ -255,8 +256,8 @@ void test(std::span<const T> values, std::vector<EncodingDetails> expected) {
         velox::AlignedBuffer::allocate<char>(totalLength, pool.get()));
     return stringBuffer->asMutable<void>();
   };
-  auto encoding = nimble::EncodingFactory(options).create(
-      *pool, serialized, stringBufferFactory);
+  auto encoding = nimble::EncodingFactory().create(
+      *pool, serialized, stringBufferFactory, options);
   nimble::Vector<T> result{pool.get()};
   result.resize(values.size());
   encoding->materialize(values.size(), result.data());
@@ -1494,9 +1495,12 @@ TEST(ReplayedEncodingSelectionPolicyTest, encodingRoundTrip) {
 
     // Decode and verify round-trip correctness.
     auto encoding = nimble::EncodingFactory().create(
-        *pool, encoded, [&](uint32_t totalLength) -> void* {
+        *pool,
+        encoded,
+        [&](uint32_t totalLength) -> void* {
           return pool->allocate(totalLength);
-        });
+        },
+        nimble::Encoding::Options{});
     EXPECT_EQ(encoding->encodingType(), testData.encodingType);
     EXPECT_EQ(encoding->dataType(), nimble::DataType::Uint32);
     EXPECT_EQ(encoding->rowCount(), testData.data.size());
@@ -1586,9 +1590,12 @@ TEST(ManualEncodingSelectionPolicyTest, nestedEncodingCompressionType) {
 
     // Verify round-trip correctness.
     auto encoding = nimble::EncodingFactory().create(
-        *pool, encoded, [&](uint32_t totalLength) -> void* {
+        *pool,
+        encoded,
+        [&](uint32_t totalLength) -> void* {
           return pool->allocate(totalLength);
-        });
+        },
+        nimble::Encoding::Options{});
     EXPECT_EQ(encoding->rowCount(), data.size());
 
     std::vector<uint32_t> decoded(data.size());
@@ -1681,9 +1688,12 @@ TEST(ReplayedEncodingSelectionPolicyTest, nestedEncodingCompressionType) {
 
     // Verify round-trip correctness.
     auto encoding = nimble::EncodingFactory().create(
-        *pool, encoded, [&](uint32_t totalLength) -> void* {
+        *pool,
+        encoded,
+        [&](uint32_t totalLength) -> void* {
           return pool->allocate(totalLength);
-        });
+        },
+        nimble::Encoding::Options{});
     EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Dictionary);
     EXPECT_EQ(encoding->rowCount(), data.size());
 
@@ -1798,9 +1808,12 @@ TEST(ManualEncodingSelectionPolicyTest, compressionTypeRoundTrip) {
       std::move(policy), std::span<const uint32_t>(data), buffer);
 
   auto encoding = nimble::EncodingFactory().create(
-      *pool, encoded, [&](uint32_t totalLength) -> void* {
+      *pool,
+      encoded,
+      [&](uint32_t totalLength) -> void* {
         return pool->allocate(totalLength);
-      });
+      },
+      nimble::Encoding::Options{});
   EXPECT_EQ(encoding->rowCount(), data.size());
 
   std::vector<uint32_t> decoded(data.size());
@@ -1860,6 +1873,13 @@ TEST(ManualEncodingSelectionPolicyFactoryTest, fsstRequiresExplicitOptIn) {
           "Fsst=1.0"),
       (std::vector<std::pair<nimble::EncodingType, float>>{
           {nimble::EncodingType::Fsst, 1.0}}));
+}
+
+TEST(ManualEncodingSelectionPolicyFactoryTest, rejectsReadOnlyEncodings) {
+  NIMBLE_ASSERT_THROW(
+      nimble::ManualEncodingSelectionPolicyFactory::parseEncodingReadFactors(
+          "PFOR=1.0"),
+      "Encoding is read-only and cannot be used for new writes: PFOR");
 }
 
 TEST(
@@ -1948,8 +1968,8 @@ TEST(EncodingSelectionFloatSignTest, mixedSignedZeroPreservesBitsWithoutAlp) {
   auto serialized = nimble::EncodingFactory::encode<T>(
       std::move(policy), values, buffer, options);
 
-  auto encoding = nimble::EncodingFactory(options).create(
-      *pool, serialized, [](uint32_t) -> void* { return nullptr; });
+  auto encoding = nimble::EncodingFactory().create(
+      *pool, serialized, [](uint32_t) -> void* { return nullptr; }, options);
   // Distinct sign bits must not collapse into a single Constant value.
   EXPECT_NE(encoding->encodingType(), nimble::EncodingType::Constant);
 
@@ -1981,8 +2001,8 @@ TEST(EncodingSelectionFloatSignTest, mixedSignedZeroCollapsesWithAlp) {
   auto serialized = nimble::EncodingFactory::encode<T>(
       std::move(policy), values, buffer, options);
 
-  auto encoding = nimble::EncodingFactory(options).create(
-      *pool, serialized, [](uint32_t) -> void* { return nullptr; });
+  auto encoding = nimble::EncodingFactory().create(
+      *pool, serialized, [](uint32_t) -> void* { return nullptr; }, options);
   EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Constant);
 
   nimble::Vector<T> result{pool.get()};

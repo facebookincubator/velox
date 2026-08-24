@@ -165,6 +165,10 @@ enum class EncodingType {
 std::string toString(EncodingType encodingType);
 /// Returns the encoding type for 'name'. Throws if 'name' is unknown.
 EncodingType toEncodingType(std::string_view name);
+/// Returns true if the encoding is retained only for reading existing data.
+bool isReadOnlyEncoding(EncodingType encodingType);
+/// Returns true if the name identifies a read-only encoding.
+bool isReadOnlyEncoding(std::string_view name);
 std::ostream& operator<<(std::ostream& out, EncodingType encodingType);
 
 enum class DataType : uint8_t {

@@ -32,10 +32,9 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
-#include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
-#include "velox/dwio/nimble/encodings/SharedDictionaryTypes.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
@@ -47,7 +46,7 @@
 namespace facebook::nimble {
 namespace {
 
-using TestSharedDictionaryWriter = SharedDictionaryWriter<int32_t>;
+using TestSharedDictionaryWriter = TypedSharedDictionaryWriter<int32_t>;
 
 EncodingSelectionPolicyCreator testEncodingSelectionPolicyCreator() {
   return [](DataType dataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
@@ -63,46 +62,47 @@ EncodingSelectionPolicyCreator testEncodingSelectionPolicyCreator() {
 TestSharedDictionaryWriter::Options writerOptions(
     SharedDictionaryScope scope,
     uint32_t dictionaryId,
-    std::shared_ptr<const SharedDictionaryResolver> resolver = nullptr,
-    std::vector<EncodingType> alphabetEncodingCandidates = {},
-    bool usesPrebuiltAlphabet = false) {
+    std::shared_ptr<const ExternalDictionaryResolver> resolver = nullptr,
+    std::vector<EncodingType> alphabetEncodings = {},
+    bool useExternalAlphabet = false) {
   return TestSharedDictionaryWriter::Options{
       .scope = scope,
       .dictionaryId = dictionaryId,
-      .usesPrebuiltAlphabet = usesPrebuiltAlphabet,
-      .alphabetEncodingCandidates = std::move(alphabetEncodingCandidates),
+      .useExternalAlphabet = useExternalAlphabet,
+      .alphabetEncodings = std::move(alphabetEncodings),
       .encodingSelectionPolicyCreator = testEncodingSelectionPolicyCreator(),
       .encodingOptions = {},
       .resolver = std::move(resolver)};
 }
 
-class TestSharedDictionaryResolver final : public SharedDictionaryResolver {
+TestSharedDictionaryWriter createTestWriter(
+    velox::memory::MemoryPool* pool,
+    const TestSharedDictionaryWriter::Options& options) {
+  return TestSharedDictionaryWriter{pool, options};
+}
+
+class TestDictionaryResolver final : public ExternalDictionaryResolver {
  public:
-  TestSharedDictionaryResolver(
-      SharedDictionaryScope scope,
+  TestDictionaryResolver(
       uint32_t dictionaryId,
       std::span<const int32_t> values,
       velox::memory::MemoryPool* pool)
-      : scope_{scope},
-        dictionaryId_{dictionaryId},
+      : dictionaryId_{dictionaryId},
         alphabet_{test::createSharedDictionaryAlphabet<int32_t>(
             values,
             /*candidateEncodings=*/{},
             pool)} {}
 
   std::shared_ptr<const SharedDictionaryAlphabet> resolve(
-      SharedDictionaryScope scope,
       uint32_t dictionaryId,
       DataType dataType) const final {
-    if (scope != scope_ || dictionaryId != dictionaryId_ ||
-        dataType != DataType::Int32) {
+    if (dictionaryId != dictionaryId_ || dataType != DataType::Int32) {
       return nullptr;
     }
     return alphabet_;
   }
 
  private:
-  const SharedDictionaryScope scope_;
   const uint32_t dictionaryId_;
   const std::shared_ptr<const SharedDictionaryAlphabet> alphabet_;
 };
@@ -118,6 +118,19 @@ StreamDataView streamView(
     std::span<const int32_t> values) {
   return StreamDataView{
       descriptor, bytesOf(values), static_cast<uint32_t>(values.size())};
+}
+
+StreamDataView nullableStreamView(
+    const StreamDescriptorBuilder& descriptor,
+    std::span<const int32_t> nonNullValues,
+    std::span<const bool> notNulls) {
+  return StreamDataView{
+      descriptor,
+      bytesOf(nonNullValues),
+      static_cast<uint32_t>(notNulls.size()),
+      notNulls,
+      static_cast<uint32_t>(
+          std::count(notNulls.begin(), notNulls.end(), false))};
 }
 
 std::vector<int32_t> repeatedValues(
@@ -151,6 +164,42 @@ std::vector<uint32_t> repeatedIndices(
     indices.insert(indices.end(), pattern.begin(), pattern.end());
   }
   return indices;
+}
+
+struct NullableValues {
+  std::vector<int32_t> nonNullValues;
+  std::vector<int32_t> materializedValues;
+  std::unique_ptr<bool[]> notNulls;
+  size_t rowCount{};
+  uint32_t nullCount{};
+
+  std::span<const bool> notNullsSpan() const {
+    return {notNulls.get(), rowCount};
+  }
+};
+
+NullableValues repeatedNullableValues(
+    std::span<const std::optional<int32_t>> pattern,
+    size_t repeatCount) {
+  NullableValues values;
+  values.rowCount = pattern.size() * repeatCount;
+  values.notNulls = std::make_unique<bool[]>(values.rowCount);
+  values.materializedValues.reserve(values.rowCount);
+
+  size_t row{0};
+  for (size_t i = 0; i < repeatCount; ++i) {
+    for (const auto& value : pattern) {
+      values.notNulls[row++] = value.has_value();
+      if (value.has_value()) {
+        values.nonNullValues.push_back(*value);
+        values.materializedValues.push_back(*value);
+        continue;
+      }
+      ++values.nullCount;
+      values.materializedValues.push_back(0);
+    }
+  }
+  return values;
 }
 
 struct ExpectedStripeDictionary {
@@ -196,12 +245,9 @@ ExpectedStripeDictionary generatedStripeDictionary(size_t stripeIndex) {
   return expectedStripeDictionary(std::move(values));
 }
 
-// Verifies the shared-dictionary envelope and decodes the nested index stream
-// after the scope and dictionary id header.
+// Verifies the shared-dictionary envelope and decodes the nested index stream.
 std::vector<uint32_t> sharedDictionaryIndices(
     std::string_view encoded,
-    SharedDictionaryScope scope,
-    uint32_t dictionaryId,
     uint32_t rowCount,
     velox::memory::MemoryPool* pool) {
   const auto encodingType = EncodingPrefix::encodingType(encoded);
@@ -215,10 +261,6 @@ std::vector<uint32_t> sharedDictionaryIndices(
 
   const char* pos =
       encoded.data() + EncodingPrefix::prefixSize(encoded, /*useVarint=*/false);
-  EXPECT_LT(pos, encoded.end());
-  EXPECT_EQ(toSharedDictionaryScope(static_cast<uint8_t>(*pos++)), scope);
-  EXPECT_LT(pos, encoded.end());
-  EXPECT_EQ(varint::readVarint32(&pos), dictionaryId);
   EXPECT_LE(pos, encoded.end());
   const std::string_view encodedIndices{
       pos, static_cast<size_t>(encoded.end() - pos)};
@@ -236,6 +278,25 @@ std::vector<uint32_t> sharedDictionaryIndices(
   return indices;
 }
 
+std::unique_ptr<Encoding> createEncoding(
+    std::string_view encoded,
+    velox::memory::MemoryPool* pool,
+    const Encoding::Options& options = {}) {
+  return EncodingFactory{options}.create(
+      *pool, encoded, [](uint32_t /*size*/) -> void* { return nullptr; });
+}
+
+const Encoding* nullableValuesChild(const Encoding& encoding) {
+  EXPECT_EQ(encoding.encodingType(), EncodingType::Nullable);
+  const auto* nullableEncoding =
+      dynamic_cast<const NullableEncoding<int32_t>*>(&encoding);
+  EXPECT_NE(nullableEncoding, nullptr);
+  if (nullableEncoding == nullptr) {
+    return nullptr;
+  }
+  return nullableEncoding->nonNulls();
+}
+
 void expectAlphabetEntries(
     const Chunk& alphabetChunk,
     std::span<const int32_t> expectedValues,
@@ -244,13 +305,16 @@ void expectAlphabetEntries(
       alphabetChunk.rowCount, static_cast<uint32_t>(expectedValues.size()));
   ASSERT_EQ(alphabetChunk.content.size(), 1);
 
-  const SharedDictionaryAlphabet alphabet{
-      alphabetChunk.content.front(), Encoding::Options{}, pool};
+  auto encodedAlphabetOwner =
+      std::make_shared<const std::string>(alphabetChunk.content.front());
+  const std::string_view encodedAlphabet{*encodedAlphabetOwner};
+  const auto alphabet = SharedDictionaryAlphabet::create(
+      encodedAlphabet, std::move(encodedAlphabetOwner), pool);
   std::vector<uint32_t> alphabetIndices(expectedValues.size());
   std::iota(alphabetIndices.begin(), alphabetIndices.end(), 0);
   std::vector<TypeTraits<int32_t>::physicalType> entries(
       alphabetIndices.size());
-  alphabet.materialize<int32_t>(alphabetIndices, entries.data());
+  alphabet->materialize<int32_t>(alphabetIndices, entries.data());
   EXPECT_EQ(entries, physicalValues(expectedValues));
 }
 
@@ -321,25 +385,20 @@ TEST_F(SharedDictionaryWriterTest, stripeScope) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.testName);
-    TestSharedDictionaryWriter writer{
+    auto writer = createTestWriter(
         pool_.get(),
-        writerOptions(SharedDictionaryScope::Stripe, /*dictionaryId=*/7)};
+        writerOptions(SharedDictionaryScope::Stripe, /*dictionaryId=*/7));
     Buffer buffer{*pool_};
 
     for (size_t i = 0; i < testData.stripes.size(); ++i) {
       SCOPED_TRACE(fmt::format("stripe={}", i));
       const auto& stripe = testData.stripes[i];
       const auto encoded = writer.encodeValues(
-          /*stripeIndex=*/i, buffer, streamView(descriptor_, stripe.values));
+          /*stripeIndex=*/i, streamView(descriptor_, stripe.values), buffer);
 
       EXPECT_FALSE(encoded.empty());
       EXPECT_EQ(
-          sharedDictionaryIndices(
-              encoded,
-              SharedDictionaryScope::Stripe,
-              /*dictionaryId=*/7,
-              stripe.values.size(),
-              pool_.get()),
+          sharedDictionaryIndices(encoded, stripe.values.size(), pool_.get()),
           stripe.expectedIndices);
 
       const auto alphabetChunk = writer.encodeAlphabet(buffer);
@@ -356,17 +415,84 @@ TEST_F(SharedDictionaryWriterTest, stripeScope) {
   }
 }
 
+TEST_F(SharedDictionaryWriterTest, nullableStripeScope) {
+  auto writer = createTestWriter(
+      pool_.get(),
+      writerOptions(SharedDictionaryScope::Stripe, /*dictionaryId=*/7));
+  Buffer buffer{*pool_};
+
+  const auto values = repeatedNullableValues(
+      std::array<std::optional<int32_t>, 6>{
+          10, std::nullopt, 20, 10, std::nullopt, 20},
+      256);
+  const auto encoded = writer.encodeValues(
+      /*stripeIndex=*/0,
+      nullableStreamView(
+          descriptor_, values.nonNullValues, values.notNullsSpan()),
+      buffer);
+
+  EXPECT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Nullable);
+
+  const auto alphabet = writer.encodeAlphabet(buffer);
+  ASSERT_TRUE(alphabet.has_value());
+  expectAlphabetEntries(*alphabet, std::array<int32_t, 2>{10, 20}, pool_.get());
+
+  Encoding::Options options;
+  auto encodedAlphabetOwner =
+      std::make_shared<const std::string>(alphabet->content.front());
+  const std::string_view encodedAlphabet{*encodedAlphabetOwner};
+  options.sharedDictionaryAlphabet = SharedDictionaryAlphabet::create(
+      encodedAlphabet, std::move(encodedAlphabetOwner), pool_.get());
+
+  auto encoding = createEncoding(encoded, pool_.get(), options);
+  const auto* nonNullValuesEncoding = nullableValuesChild(*encoding);
+  ASSERT_NE(nonNullValuesEncoding, nullptr);
+  EXPECT_EQ(
+      nonNullValuesEncoding->encodingType(), EncodingType::SharedDictionary);
+
+  std::vector<int32_t> materialized(encoding->rowCount());
+  encoding->materialize(encoding->rowCount(), materialized.data());
+  EXPECT_EQ(materialized, values.materializedValues);
+}
+
+TEST_F(SharedDictionaryWriterTest, nullableStripeScopeAbandon) {
+  auto writer = createTestWriter(
+      pool_.get(),
+      writerOptions(SharedDictionaryScope::Stripe, /*dictionaryId=*/7));
+  Buffer buffer{*pool_};
+
+  const auto values = repeatedNullableValues(
+      std::array<std::optional<int32_t>, 8>{
+          1, std::nullopt, 2, 3, std::nullopt, 4, 5, 6},
+      1);
+  const auto encoded = writer.encodeValues(
+      /*stripeIndex=*/0,
+      nullableStreamView(
+          descriptor_, values.nonNullValues, values.notNullsSpan()),
+      buffer);
+
+  EXPECT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Nullable);
+  auto encoding = createEncoding(encoded, pool_.get());
+  const auto* nonNullValuesEncoding = nullableValuesChild(*encoding);
+  ASSERT_NE(nonNullValuesEncoding, nullptr);
+  EXPECT_EQ(nonNullValuesEncoding->encodingType(), EncodingType::Trivial);
+  std::vector<int32_t> materialized(encoding->rowCount());
+  encoding->materialize(encoding->rowCount(), materialized.data());
+  EXPECT_EQ(materialized, values.materializedValues);
+  EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
+}
+
 TEST_F(
     SharedDictionaryWriterTest,
     stripeScopeRejectsEncodeValuesAfterAlphabetFinalized) {
-  TestSharedDictionaryWriter writer{
+  auto writer = createTestWriter(
       pool_.get(),
-      writerOptions(SharedDictionaryScope::Stripe, /*dictionaryId=*/7)};
+      writerOptions(SharedDictionaryScope::Stripe, /*dictionaryId=*/7));
   Buffer buffer{*pool_};
 
   const auto values = repeatedValues(std::array<int32_t, 2>{10, 20}, 512);
   writer.encodeValues(
-      /*stripeIndex=*/0, buffer, streamView(descriptor_, values));
+      /*stripeIndex=*/0, streamView(descriptor_, values), buffer);
 
   const auto alphabet = writer.encodeAlphabet(buffer);
   ASSERT_TRUE(alphabet.has_value());
@@ -378,21 +504,17 @@ TEST_F(
 
   NIMBLE_ASSERT_THROW(
       writer.encodeValues(
-          /*stripeIndex=*/0, buffer, streamView(descriptor_, values)),
+          /*stripeIndex=*/0, streamView(descriptor_, values), buffer),
       "Stripe shared dictionary 7 cannot encode values after its alphabet was "
       "finalized for stripe 0.");
 
   const auto nextStripeValues = repeatedValues(std::array<int32_t, 1>{30}, 512);
   const auto nextStripeEncoded = writer.encodeValues(
-      /*stripeIndex=*/1, buffer, streamView(descriptor_, nextStripeValues));
+      /*stripeIndex=*/1, streamView(descriptor_, nextStripeValues), buffer);
 
   EXPECT_EQ(
       sharedDictionaryIndices(
-          nextStripeEncoded,
-          SharedDictionaryScope::Stripe,
-          /*dictionaryId=*/7,
-          nextStripeValues.size(),
-          pool_.get()),
+          nextStripeEncoded, nextStripeValues.size(), pool_.get()),
       repeatedIndices(std::array<uint32_t, 1>{0}, 512));
 
   const auto nextStripeAlphabet = writer.encodeAlphabet(buffer);
@@ -409,80 +531,80 @@ TEST_F(
     SharedDictionaryWriterTest,
     stripeScopeRequiresEncodeAlphabetBeforeNextStripe) {
   {
-    TestSharedDictionaryWriter writer{
+    auto writer = createTestWriter(
         pool_.get(),
-        writerOptions(SharedDictionaryScope::Stripe, /*dictionaryId=*/7)};
+        writerOptions(SharedDictionaryScope::Stripe, /*dictionaryId=*/7));
     Buffer buffer{*pool_};
 
     const auto values = repeatedValues(std::array<int32_t, 2>{10, 20}, 512);
     writer.encodeValues(
-        /*stripeIndex=*/0, buffer, streamView(descriptor_, values));
+        /*stripeIndex=*/0, streamView(descriptor_, values), buffer);
 
     NIMBLE_ASSERT_THROW(
         writer.encodeValues(
-            /*stripeIndex=*/1, buffer, streamView(descriptor_, values)),
+            /*stripeIndex=*/1, streamView(descriptor_, values), buffer),
         "Stripe shared dictionary 7 reached a stripe boundary before encoding "
         "its alphabet.");
   }
 
   {
-    TestSharedDictionaryWriter writer{
+    auto writer = createTestWriter(
         pool_.get(),
-        writerOptions(SharedDictionaryScope::Stripe, /*dictionaryId=*/7)};
+        writerOptions(SharedDictionaryScope::Stripe, /*dictionaryId=*/7));
     Buffer buffer{*pool_};
 
     const std::vector<int32_t> values{1, 2, 3, 4, 5, 6};
     writer.encodeValues(
-        /*stripeIndex=*/0, buffer, streamView(descriptor_, values));
+        /*stripeIndex=*/0, streamView(descriptor_, values), buffer);
 
     NIMBLE_ASSERT_THROW(
         writer.encodeValues(
-            /*stripeIndex=*/1, buffer, streamView(descriptor_, values)),
+            /*stripeIndex=*/1, streamView(descriptor_, values), buffer),
         "Stripe shared dictionary 7 reached a stripe boundary with an active "
         "encoding decision.");
   }
 }
 
 TEST_F(SharedDictionaryWriterTest, stripeScopeRejectsBackwardStripeIndex) {
-  TestSharedDictionaryWriter writer{
+  auto writer = createTestWriter(
       pool_.get(),
-      writerOptions(SharedDictionaryScope::Stripe, /*dictionaryId=*/7)};
+      writerOptions(SharedDictionaryScope::Stripe, /*dictionaryId=*/7));
   Buffer buffer{*pool_};
 
   const auto firstStripeValues =
       repeatedValues(std::array<int32_t, 2>{10, 20}, 512);
   writer.encodeValues(
-      /*stripeIndex=*/0, buffer, streamView(descriptor_, firstStripeValues));
+      /*stripeIndex=*/0, streamView(descriptor_, firstStripeValues), buffer);
   ASSERT_TRUE(writer.encodeAlphabet(buffer).has_value());
 
   const auto secondStripeValues =
       repeatedValues(std::array<int32_t, 1>{30}, 512);
   writer.encodeValues(
-      /*stripeIndex=*/2, buffer, streamView(descriptor_, secondStripeValues));
+      /*stripeIndex=*/2, streamView(descriptor_, secondStripeValues), buffer);
   ASSERT_TRUE(writer.encodeAlphabet(buffer).has_value());
 
   NIMBLE_ASSERT_THROW(
       writer.encodeValues(
           /*stripeIndex=*/1,
-          buffer,
-          streamView(descriptor_, firstStripeValues)),
+          streamView(descriptor_, firstStripeValues),
+          buffer),
       "Stripe shared dictionary 7 cannot move from stripe 2 back to stripe 1.");
 }
 
 TEST_F(SharedDictionaryWriterTest, stripeScopeUsesForcedAlphabetEncoding) {
-  TestSharedDictionaryWriter writer{
+  auto writer = createTestWriter(
       pool_.get(),
       writerOptions(
           SharedDictionaryScope::Stripe,
           /*dictionaryId=*/7,
           nullptr,
-          {EncodingType::FixedBitWidth})};
+          {EncodingType::FixedBitWidth}));
   Buffer buffer{*pool_};
 
   const std::array<int32_t, 2> pattern{10, 20};
   const auto values = repeatedValues(pattern, 512);
   const auto encoded = writer.encodeValues(
-      /*stripeIndex=*/0, buffer, streamView(descriptor_, values));
+      /*stripeIndex=*/0, streamView(descriptor_, values), buffer);
 
   EXPECT_FALSE(encoded.empty());
   const auto alphabet = writer.encodeAlphabet(buffer);
@@ -496,13 +618,13 @@ TEST_F(SharedDictionaryWriterTest, stripeScopeUsesForcedAlphabetEncoding) {
 TEST_F(SharedDictionaryWriterTest, stripeAlphabetRoundTripsThroughReader) {
   struct TestParam {
     std::string testName;
-    std::vector<EncodingType> alphabetEncodingCandidates;
+    std::vector<EncodingType> alphabetEncodings;
 
     std::string debugString() const {
       return fmt::format(
           "{}, {} alphabet encoding candidates",
           testName,
-          alphabetEncodingCandidates.size());
+          alphabetEncodings.size());
     }
   };
 
@@ -512,13 +634,13 @@ TEST_F(SharedDictionaryWriterTest, stripeAlphabetRoundTripsThroughReader) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    TestSharedDictionaryWriter writer{
+    auto writer = createTestWriter(
         pool_.get(),
         writerOptions(
             SharedDictionaryScope::Stripe,
             /*dictionaryId=*/7,
             nullptr,
-            testData.alphabetEncodingCandidates)};
+            testData.alphabetEncodings));
     Buffer buffer{*pool_};
 
     // Distinct values appear in first-use order, which is the order the
@@ -526,21 +648,24 @@ TEST_F(SharedDictionaryWriterTest, stripeAlphabetRoundTripsThroughReader) {
     const std::array<int32_t, 3> pattern{30, 10, 20};
     const auto values = repeatedValues(pattern, 512);
     writer.encodeValues(
-        /*stripeIndex=*/0, buffer, streamView(descriptor_, values));
+        /*stripeIndex=*/0, streamView(descriptor_, values), buffer);
 
     const auto encodedAlphabet = writer.encodeAlphabet(buffer);
     ASSERT_TRUE(encodedAlphabet.has_value());
     ASSERT_EQ(encodedAlphabet->content.size(), 1);
 
-    const SharedDictionaryAlphabet alphabet{
-        encodedAlphabet->content.front(), Encoding::Options{}, pool_.get()};
-    EXPECT_EQ(alphabet.dataType(), DataType::Int32);
-    EXPECT_EQ(alphabet.entryCount(), pattern.size());
+    auto encodedAlphabetOwner =
+        std::make_shared<const std::string>(encodedAlphabet->content.front());
+    const std::string_view encodedAlphabetView{*encodedAlphabetOwner};
+    const auto alphabet = SharedDictionaryAlphabet::create(
+        encodedAlphabetView, std::move(encodedAlphabetOwner), pool_.get());
+    EXPECT_EQ(alphabet->dataType(), DataType::Int32);
+    EXPECT_EQ(alphabet->entryCount(), pattern.size());
 
     std::vector<uint32_t> indices(pattern.size());
     std::iota(indices.begin(), indices.end(), 0);
     std::vector<TypeTraits<int32_t>::physicalType> entries(indices.size());
-    alphabet.materialize<int32_t>(indices, entries.data());
+    alphabet->materialize<int32_t>(indices, entries.data());
 
     const std::vector<TypeTraits<int32_t>::physicalType> expected{
         pattern.begin(), pattern.end()};
@@ -553,13 +678,13 @@ TEST_F(
     stripeAlphabetRoundTripsThroughReaderAcrossStripes) {
   struct TestParam {
     std::string testName;
-    std::vector<EncodingType> alphabetEncodingCandidates;
+    std::vector<EncodingType> alphabetEncodings;
 
     std::string debugString() const {
       return fmt::format(
           "{}, {} alphabet encoding candidates",
           testName,
-          alphabetEncodingCandidates.size());
+          alphabetEncodings.size());
     }
   };
 
@@ -569,13 +694,13 @@ TEST_F(
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    TestSharedDictionaryWriter writer{
+    auto writer = createTestWriter(
         pool_.get(),
         writerOptions(
             SharedDictionaryScope::Stripe,
             /*dictionaryId=*/7,
             nullptr,
-            testData.alphabetEncodingCandidates)};
+            testData.alphabetEncodings));
     Buffer buffer{*pool_};
 
     for (size_t stripeIndex = 0; stripeIndex < 8; ++stripeIndex) {
@@ -583,15 +708,10 @@ TEST_F(
       const auto expected = generatedStripeDictionary(stripeIndex);
 
       const auto encoded = writer.encodeValues(
-          stripeIndex, buffer, streamView(descriptor_, expected.values));
+          stripeIndex, streamView(descriptor_, expected.values), buffer);
 
       EXPECT_EQ(
-          sharedDictionaryIndices(
-              encoded,
-              SharedDictionaryScope::Stripe,
-              /*dictionaryId=*/7,
-              expected.values.size(),
-              pool_.get()),
+          sharedDictionaryIndices(encoded, expected.values.size(), pool_.get()),
           expected.indices);
 
       const auto encodedAlphabet = writer.encodeAlphabet(buffer);
@@ -613,10 +733,11 @@ TEST_F(SharedDictionaryWriterTest, stripeScopeAbandon) {
     std::vector<int32_t> values;
   };
 
-  TestSharedDictionaryWriter writer{
+  auto writer = createTestWriter(
       pool_.get(),
-      writerOptions(SharedDictionaryScope::Stripe, /*dictionaryId=*/7)};
+      writerOptions(SharedDictionaryScope::Stripe, /*dictionaryId=*/7));
   Buffer buffer{*pool_};
+  EXPECT_FALSE(writer.hasUsedDictionary());
 
   const std::vector<int32_t> directFriendlyValues{1, 2, 3, 4, 5, 6};
   const std::vector<Chunk> chunks{
@@ -637,10 +758,12 @@ TEST_F(SharedDictionaryWriterTest, stripeScopeAbandon) {
   for (const auto& chunk : chunks) {
     SCOPED_TRACE(chunk.testName);
     const auto encoded = writer.encodeValues(
-        /*stripeIndex=*/0, buffer, streamView(descriptor_, chunk.values));
+        /*stripeIndex=*/0, streamView(descriptor_, chunk.values), buffer);
     EXPECT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Trivial);
+    EXPECT_FALSE(writer.hasUsedDictionary());
   }
   EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
+  EXPECT_FALSE(writer.hasUsedDictionary());
   NIMBLE_ASSERT_THROW(
       writer.encodeAlphabet(buffer),
       "Stripe shared dictionary 7 already finalized its alphabet for stripe "
@@ -648,110 +771,95 @@ TEST_F(SharedDictionaryWriterTest, stripeScopeAbandon) {
 
   const auto repeated = repeatedValues(std::array<int32_t, 2>{10, 20}, 512);
   const auto nextStripeEncoded = writer.encodeValues(
-      /*stripeIndex=*/1, buffer, streamView(descriptor_, repeated));
+      /*stripeIndex=*/1, streamView(descriptor_, repeated), buffer);
 
   const std::array<uint32_t, 2> expectedIndices{0, 1};
   EXPECT_EQ(
-      sharedDictionaryIndices(
-          nextStripeEncoded,
-          SharedDictionaryScope::Stripe,
-          /*dictionaryId=*/7,
-          repeated.size(),
-          pool_.get()),
+      sharedDictionaryIndices(nextStripeEncoded, repeated.size(), pool_.get()),
       repeatedIndices(expectedIndices, 512));
+  EXPECT_TRUE(writer.hasUsedDictionary());
   const auto alphabet = writer.encodeAlphabet(buffer);
   ASSERT_TRUE(alphabet.has_value());
   EXPECT_EQ(alphabet->rowCount, 2);
+  EXPECT_TRUE(writer.hasUsedDictionary());
 
   const std::vector<uint32_t> directFriendlyIndices{0, 1, 2, 3, 4, 5};
   {
     SCOPED_TRACE("file scope enforces shared dictionary");
-    TestSharedDictionaryWriter fileWriter{
+    auto fileWriter = createTestWriter(
         pool_.get(),
-        writerOptions(SharedDictionaryScope::File, /*dictionaryId=*/17)};
+        writerOptions(SharedDictionaryScope::File, /*dictionaryId=*/17));
     Buffer fileBuffer{*pool_};
 
     const auto encoded = fileWriter.encodeValues(
         /*stripeIndex=*/0,
-        fileBuffer,
-        streamView(descriptor_, directFriendlyValues));
+        streamView(descriptor_, directFriendlyValues),
+        fileBuffer);
 
     EXPECT_EQ(
         sharedDictionaryIndices(
-            encoded,
-            SharedDictionaryScope::File,
-            /*dictionaryId=*/17,
-            directFriendlyValues.size(),
-            pool_.get()),
+            encoded, directFriendlyValues.size(), pool_.get()),
         directFriendlyIndices);
+    EXPECT_TRUE(fileWriter.hasUsedDictionary());
     const auto fileAlphabet = fileWriter.encodeAlphabet(fileBuffer);
     ASSERT_TRUE(fileAlphabet.has_value());
     expectAlphabetEntries(*fileAlphabet, directFriendlyValues, pool_.get());
+    EXPECT_TRUE(fileWriter.hasUsedDictionary());
   }
 
   {
-    SCOPED_TRACE("file scope prebuilt dictionary enforces shared dictionary");
-    auto resolver = std::make_shared<TestSharedDictionaryResolver>(
-        SharedDictionaryScope::File,
-        /*dictionaryId=*/23,
-        directFriendlyValues,
-        pool_.get());
-    TestSharedDictionaryWriter prebuiltFileWriter{
+    SCOPED_TRACE("file scope external alphabet enforces shared dictionary");
+    auto resolver = std::make_shared<TestDictionaryResolver>(
+        /*dictionaryId=*/23, directFriendlyValues, pool_.get());
+    auto externalAlphabetFileWriter = createTestWriter(
         pool_.get(),
         writerOptions(
             SharedDictionaryScope::File,
             /*dictionaryId=*/23,
             resolver,
-            /*alphabetEncodingCandidates=*/{},
-            /*usesPrebuiltAlphabet=*/true)};
-    Buffer prebuiltFileBuffer{*pool_};
+            /*alphabetEncodings=*/{},
+            /*useExternalAlphabet=*/true));
+    Buffer externalAlphabetFileBuffer{*pool_};
 
-    const auto encoded = prebuiltFileWriter.encodeValues(
+    const auto encoded = externalAlphabetFileWriter.encodeValues(
         /*stripeIndex=*/0,
-        prebuiltFileBuffer,
-        streamView(descriptor_, directFriendlyValues));
+        streamView(descriptor_, directFriendlyValues),
+        externalAlphabetFileBuffer);
 
     EXPECT_EQ(
         sharedDictionaryIndices(
-            encoded,
-            SharedDictionaryScope::File,
-            /*dictionaryId=*/23,
-            directFriendlyValues.size(),
-            pool_.get()),
+            encoded, directFriendlyValues.size(), pool_.get()),
         directFriendlyIndices);
+    EXPECT_TRUE(externalAlphabetFileWriter.hasUsedDictionary());
     const auto fileAlphabet =
-        prebuiltFileWriter.encodeAlphabet(prebuiltFileBuffer);
+        externalAlphabetFileWriter.encodeAlphabet(externalAlphabetFileBuffer);
     ASSERT_TRUE(fileAlphabet.has_value());
     expectAlphabetEntries(*fileAlphabet, directFriendlyValues, pool_.get());
+    EXPECT_TRUE(externalAlphabetFileWriter.hasUsedDictionary());
   }
 
   {
     SCOPED_TRACE("external scope enforces shared dictionary");
-    auto resolver = std::make_shared<TestSharedDictionaryResolver>(
-        SharedDictionaryScope::External,
-        /*dictionaryId=*/29,
-        directFriendlyValues,
-        pool_.get());
-    TestSharedDictionaryWriter externalWriter{
+    auto resolver = std::make_shared<TestDictionaryResolver>(
+        /*dictionaryId=*/29, directFriendlyValues, pool_.get());
+    auto externalWriter = createTestWriter(
         pool_.get(),
         writerOptions(
-            SharedDictionaryScope::External, /*dictionaryId=*/29, resolver)};
+            SharedDictionaryScope::External, /*dictionaryId=*/29, resolver));
     Buffer externalBuffer{*pool_};
 
     const auto encoded = externalWriter.encodeValues(
         /*stripeIndex=*/0,
-        externalBuffer,
-        streamView(descriptor_, directFriendlyValues));
+        streamView(descriptor_, directFriendlyValues),
+        externalBuffer);
 
     EXPECT_EQ(
         sharedDictionaryIndices(
-            encoded,
-            SharedDictionaryScope::External,
-            /*dictionaryId=*/29,
-            directFriendlyValues.size(),
-            pool_.get()),
+            encoded, directFriendlyValues.size(), pool_.get()),
         directFriendlyIndices);
+    EXPECT_TRUE(externalWriter.hasUsedDictionary());
     EXPECT_FALSE(externalWriter.encodeAlphabet(externalBuffer).has_value());
+    EXPECT_TRUE(externalWriter.hasUsedDictionary());
   }
 }
 
@@ -759,15 +867,15 @@ TEST_F(SharedDictionaryWriterTest, encodeValuesRejectsEmptyValues) {
   struct TestParam {
     SharedDictionaryScope scope;
     uint32_t dictionaryId;
-    bool usesPrebuiltAlphabet;
+    bool useExternalAlphabet;
     bool usesResolver;
 
     std::string debugString() const {
       return fmt::format(
-          "scope {}, dictionary {}, usesPrebuiltAlphabet {}, usesResolver {}",
+          "scope {}, dictionary {}, useExternalAlphabet {}, usesResolver {}",
           scope,
           dictionaryId,
-          usesPrebuiltAlphabet,
+          useExternalAlphabet,
           usesResolver);
     }
   };
@@ -781,28 +889,25 @@ TEST_F(SharedDictionaryWriterTest, encodeValuesRejectsEmptyValues) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    const std::vector<int32_t> prebuiltAlphabet{10, 20};
+    const std::vector<int32_t> externalAlphabet{10, 20};
     auto resolver = testData.usesResolver
-        ? std::make_shared<TestSharedDictionaryResolver>(
-              testData.scope,
-              testData.dictionaryId,
-              prebuiltAlphabet,
-              pool_.get())
+        ? std::make_shared<TestDictionaryResolver>(
+              testData.dictionaryId, externalAlphabet, pool_.get())
         : nullptr;
-    TestSharedDictionaryWriter writer{
+    auto writer = createTestWriter(
         pool_.get(),
         writerOptions(
             testData.scope,
             testData.dictionaryId,
             resolver,
-            /*alphabetEncodingCandidates=*/{},
-            testData.usesPrebuiltAlphabet)};
+            /*alphabetEncodings=*/{},
+            testData.useExternalAlphabet));
     Buffer buffer{*pool_};
 
     const std::vector<int32_t> values;
     NIMBLE_ASSERT_THROW(
         writer.encodeValues(
-            /*stripeIndex=*/0, buffer, streamView(descriptor_, values)),
+            /*stripeIndex=*/0, streamView(descriptor_, values), buffer),
         fmt::format(
             "{} shared dictionary {} cannot encode an empty value stream.",
             testData.scope,
@@ -811,14 +916,9 @@ TEST_F(SharedDictionaryWriterTest, encodeValuesRejectsEmptyValues) {
     const auto validValues =
         repeatedValues(std::array<int32_t, 3>{10, 20, 10}, 512);
     const auto encoded = writer.encodeValues(
-        /*stripeIndex=*/0, buffer, streamView(descriptor_, validValues));
+        /*stripeIndex=*/0, streamView(descriptor_, validValues), buffer);
     EXPECT_EQ(
-        sharedDictionaryIndices(
-            encoded,
-            testData.scope,
-            testData.dictionaryId,
-            validValues.size(),
-            pool_.get()),
+        sharedDictionaryIndices(encoded, validValues.size(), pool_.get()),
         repeatedIndices(std::array<uint32_t, 3>{0, 1, 0}, 512));
     if (testData.scope == SharedDictionaryScope::External) {
       EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
@@ -835,9 +935,9 @@ TEST_F(SharedDictionaryWriterTest, fileScope) {
     std::vector<uint32_t> expectedIndices;
   };
 
-  TestSharedDictionaryWriter writer{
+  auto writer = createTestWriter(
       pool_.get(),
-      writerOptions(SharedDictionaryScope::File, /*dictionaryId=*/17)};
+      writerOptions(SharedDictionaryScope::File, /*dictionaryId=*/17));
   Buffer buffer{*pool_};
 
   // File scope builds one dictionary for all chunks, so new entries append to
@@ -863,15 +963,10 @@ TEST_F(SharedDictionaryWriterTest, fileScope) {
   for (const auto& chunk : chunks) {
     SCOPED_TRACE(fmt::format("stripe={}", chunk.stripeIndex));
     const auto encoded = writer.encodeValues(
-        chunk.stripeIndex, buffer, streamView(descriptor_, chunk.values));
+        chunk.stripeIndex, streamView(descriptor_, chunk.values), buffer);
 
     EXPECT_EQ(
-        sharedDictionaryIndices(
-            encoded,
-            SharedDictionaryScope::File,
-            /*dictionaryId=*/17,
-            chunk.values.size(),
-            pool_.get()),
+        sharedDictionaryIndices(encoded, chunk.values.size(), pool_.get()),
         chunk.expectedIndices);
   }
 
@@ -885,33 +980,30 @@ TEST_F(SharedDictionaryWriterTest, fileScope) {
   NIMBLE_ASSERT_THROW(
       writer.encodeValues(
           /*stripeIndex=*/1,
-          buffer,
-          streamView(descriptor_, chunks.front().values)),
+          streamView(descriptor_, chunks.front().values),
+          buffer),
       "File shared dictionary 17 cannot encode values after its alphabet was "
       "finalized.");
 }
 
-TEST_F(SharedDictionaryWriterTest, fileScopeWithPrebuilt) {
+TEST_F(SharedDictionaryWriterTest, fileScopeWithExternalAlphabet) {
   struct ChunkInput {
     size_t stripeIndex;
     std::vector<int32_t> values;
     std::vector<uint32_t> expectedIndices;
   };
 
-  const std::vector<int32_t> prebuiltAlphabet{7, 11, 13, 17};
-  auto resolver = std::make_shared<TestSharedDictionaryResolver>(
-      SharedDictionaryScope::File,
-      /*dictionaryId=*/23,
-      prebuiltAlphabet,
-      pool_.get());
-  TestSharedDictionaryWriter writer{
+  const std::vector<int32_t> externalAlphabet{7, 11, 13, 17};
+  auto resolver = std::make_shared<TestDictionaryResolver>(
+      /*dictionaryId=*/23, externalAlphabet, pool_.get());
+  auto writer = createTestWriter(
       pool_.get(),
       writerOptions(
           SharedDictionaryScope::File,
           /*dictionaryId=*/23,
           resolver,
           {EncodingType::FixedBitWidth},
-          /*usesPrebuiltAlphabet=*/true)};
+          /*useExternalAlphabet=*/true));
   Buffer buffer{*pool_};
 
   // Nothing has been encoded yet, so there is no alphabet to store.
@@ -938,15 +1030,10 @@ TEST_F(SharedDictionaryWriterTest, fileScopeWithPrebuilt) {
   for (const auto& chunk : chunks) {
     SCOPED_TRACE(fmt::format("stripe={}", chunk.stripeIndex));
     const auto encoded = writer.encodeValues(
-        chunk.stripeIndex, buffer, streamView(descriptor_, chunk.values));
+        chunk.stripeIndex, streamView(descriptor_, chunk.values), buffer);
 
     EXPECT_EQ(
-        sharedDictionaryIndices(
-            encoded,
-            SharedDictionaryScope::File,
-            /*dictionaryId=*/23,
-            chunk.values.size(),
-            pool_.get()),
+        sharedDictionaryIndices(encoded, chunk.values.size(), pool_.get()),
         chunk.expectedIndices);
   }
 
@@ -956,27 +1043,27 @@ TEST_F(SharedDictionaryWriterTest, fileScopeWithPrebuilt) {
   EXPECT_EQ(
       EncodingPrefix::encodingType(alphabet->content.front()),
       EncodingType::FixedBitWidth);
-  expectAlphabetEntries(*alphabet, prebuiltAlphabet, pool_.get());
+  expectAlphabetEntries(*alphabet, externalAlphabet, pool_.get());
   NIMBLE_ASSERT_THROW(
       writer.encodeAlphabet(buffer),
       "File shared dictionary 23 already finalized its alphabet.");
   NIMBLE_ASSERT_THROW(
       writer.encodeValues(
           /*stripeIndex=*/3,
-          buffer,
-          streamView(descriptor_, chunks.front().values)),
+          streamView(descriptor_, chunks.front().values),
+          buffer),
       "File shared dictionary 23 cannot encode values after its alphabet was "
       "finalized.");
 }
 
-TEST_F(SharedDictionaryWriterTest, prebuiltDictionaryRejectsUnknownValue) {
+TEST_F(SharedDictionaryWriterTest, externalAlphabetRejectsUnknownValue) {
   struct TestParam {
     SharedDictionaryScope scope;
-    bool usesPrebuiltAlphabet;
+    bool useExternalAlphabet;
 
     std::string debugString() const {
       return fmt::format(
-          "scope {}, usesPrebuiltAlphabet {}", scope, usesPrebuiltAlphabet);
+          "scope {}, useExternalAlphabet {}", scope, useExternalAlphabet);
     }
   };
 
@@ -986,28 +1073,25 @@ TEST_F(SharedDictionaryWriterTest, prebuiltDictionaryRejectsUnknownValue) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    const std::vector<int32_t> prebuiltAlphabet{10, 20, 30};
-    auto resolver = std::make_shared<TestSharedDictionaryResolver>(
-        testData.scope,
-        /*dictionaryId=*/29,
-        prebuiltAlphabet,
-        pool_.get());
-    TestSharedDictionaryWriter writer{
+    const std::vector<int32_t> externalAlphabet{10, 20, 30};
+    auto resolver = std::make_shared<TestDictionaryResolver>(
+        /*dictionaryId=*/29, externalAlphabet, pool_.get());
+    auto writer = createTestWriter(
         pool_.get(),
         writerOptions(
             testData.scope,
             /*dictionaryId=*/29,
             resolver,
-            /*alphabetEncodingCandidates=*/{},
-            testData.usesPrebuiltAlphabet)};
+            /*alphabetEncodings=*/{},
+            testData.useExternalAlphabet));
     Buffer buffer{*pool_};
 
-    // A prebuilt alphabet cannot grow, so an unseen value is a writer input
+    // An external alphabet cannot grow, so an unseen value is a writer input
     // error rather than a new dictionary entry.
     const std::vector<int32_t> values{10, 99};
     NIMBLE_ASSERT_USER_THROW(
         writer.encodeValues(
-            /*stripeIndex=*/0, buffer, streamView(descriptor_, values)),
+            /*stripeIndex=*/0, streamView(descriptor_, values), buffer),
         fmt::format(
             "{} shared dictionary 29 does not contain value 99.",
             testData.scope));
@@ -1022,17 +1106,14 @@ TEST_F(SharedDictionaryWriterTest, externalScope) {
   };
 
   const std::vector<int32_t> externalAlphabet{10, 20, 30, 40};
-  auto resolver = std::make_shared<TestSharedDictionaryResolver>(
-      SharedDictionaryScope::External,
-      /*dictionaryId=*/29,
-      externalAlphabet,
-      pool_.get());
-  TestSharedDictionaryWriter writer{
+  auto resolver = std::make_shared<TestDictionaryResolver>(
+      /*dictionaryId=*/29, externalAlphabet, pool_.get());
+  auto writer = createTestWriter(
       pool_.get(),
       writerOptions(
           SharedDictionaryScope::External,
           /*dictionaryId=*/29,
-          resolver)};
+          resolver));
   Buffer buffer{*pool_};
 
   const std::vector<ChunkInput> chunks{
@@ -1056,28 +1137,23 @@ TEST_F(SharedDictionaryWriterTest, externalScope) {
   for (const auto& chunk : chunks) {
     SCOPED_TRACE(fmt::format("stripe={}", chunk.stripeIndex));
     const auto encoded = writer.encodeValues(
-        chunk.stripeIndex, buffer, streamView(descriptor_, chunk.values));
+        chunk.stripeIndex, streamView(descriptor_, chunk.values), buffer);
 
     EXPECT_EQ(
-        sharedDictionaryIndices(
-            encoded,
-            SharedDictionaryScope::External,
-            /*dictionaryId=*/29,
-            chunk.values.size(),
-            pool_.get()),
+        sharedDictionaryIndices(encoded, chunk.values.size(), pool_.get()),
         chunk.expectedIndices);
   }
   EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
 }
 
-TEST_F(SharedDictionaryWriterTest, prebuiltScopeRequiresResolver) {
+TEST_F(SharedDictionaryWriterTest, externalAlphabetRequiresResolver) {
   struct TestParam {
     SharedDictionaryScope scope;
-    bool usesPrebuiltAlphabet;
+    bool useExternalAlphabet;
 
     std::string debugString() const {
       return fmt::format(
-          "scope {}, usesPrebuiltAlphabet {}", scope, usesPrebuiltAlphabet);
+          "scope {}, useExternalAlphabet {}", scope, useExternalAlphabet);
     }
   };
 
@@ -1088,14 +1164,14 @@ TEST_F(SharedDictionaryWriterTest, prebuiltScopeRequiresResolver) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    TestSharedDictionaryWriter writer{
+    auto writer = createTestWriter(
         pool_.get(),
         writerOptions(
             testData.scope,
             /*dictionaryId=*/29,
             nullptr,
-            /*alphabetEncodingCandidates=*/{},
-            testData.usesPrebuiltAlphabet)};
+            /*alphabetEncodings=*/{},
+            testData.useExternalAlphabet));
     Buffer buffer{*pool_};
 
     EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
@@ -1103,9 +1179,9 @@ TEST_F(SharedDictionaryWriterTest, prebuiltScopeRequiresResolver) {
     const std::vector<int32_t> values{10};
     NIMBLE_ASSERT_USER_THROW(
         writer.encodeValues(
-            /*stripeIndex=*/0, buffer, streamView(descriptor_, values)),
+            /*stripeIndex=*/0, streamView(descriptor_, values), buffer),
         fmt::format(
-            "{} shared dictionary 29 requires a writer resolver.",
+            "{} shared dictionary 29 requires a dictionary resolver.",
             testData.scope));
   }
 }

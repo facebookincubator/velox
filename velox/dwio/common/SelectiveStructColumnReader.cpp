@@ -16,6 +16,8 @@
 
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 
+#include <numeric>
+
 #include "velox/dwio/common/ColumnLoader.h"
 
 namespace facebook::velox::dwio::common {
@@ -328,10 +330,26 @@ void SelectiveStructColumnReaderBase::next(
   if (hasDeletion_) {
     fillOutputRowsFromMutation(numValues);
     numValues = outputRows_.size();
+  } else if (useOutputRows()) {
+    // Nothing on this path populates 'outputRows_', but useOutputRows() is also
+    // true when the scan spec has a filter, so outputRows() would return an
+    // empty set while the result carries 'numValues' rows. Callers rely on the
+    // two agreeing -- the synthesized fields below, and
+    // RowReader::readWithRowNumber -- so keep the invariant here rather than at
+    // each use. No row is eliminated on this path: with no child readers the
+    // only filters are on constant columns, and those are all-or-nothing and
+    // handled below.
+    outputRows_.resize(numValues);
+    std::iota(outputRows_.begin(), outputRows_.end(), 0);
   }
   for (const auto& childSpec : scanSpec_->children()) {
     if (isChildConstant(*childSpec) && !testFilterOnConstant(*childSpec)) {
       outputRows_.clear();
+      // A constant column's filter is not counted by ScanSpec::hasFilter(), so
+      // useOutputRows() can be false here; clear 'inputRows_' too, otherwise
+      // outputRows() would fall back to it and report rows that were filtered
+      // out.
+      inputRows_ = {};
       numValues = 0;
       break;
     }
@@ -558,10 +576,16 @@ bool SelectiveStructColumnReaderBase::isChildMissing(
            TypeKind::MAP // If this is the case it means this is a flat map,
                          // so it can't have "missing" fields.
        ) &&
-      // Name-based missing-field check applies only to row types, not flat
-      // maps.
+      // Name-based missing-field check applies to row types when the mapping
+      // mode resolves columns by name or by Parquet field ID.  In field-ID
+      // mode getParquetColumnInfo() renames each file column to match the
+      // requested name, so containsChild() correctly identifies missing ones.
+      // Channel-based detection is only reliable for kPosition mode, where
+      // channel i maps directly to file column i.
       ((fileType_->type()->isRow() &&
-        columnReaderOptions_.columnMappingMode_ == ColumnMappingMode::kName)
+        (columnReaderOptions_.columnMappingMode_ == ColumnMappingMode::kName ||
+         columnReaderOptions_.columnMappingMode_ ==
+             ColumnMappingMode::kParquetFieldId))
            ? !asRowType(fileType_->type())->containsChild(childSpec.fieldName())
            : childSpec.channel() >= fileType_->size());
 }

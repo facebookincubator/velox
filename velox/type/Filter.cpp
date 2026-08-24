@@ -1116,6 +1116,13 @@ std::unique_ptr<Filter> createBigintValues(
 std::unique_ptr<Filter> createHugeintValues(
     const std::vector<int128_t>& values,
     bool nullAllowed) {
+  if (values.empty()) {
+    if (nullAllowed) {
+      return std::make_unique<IsNull>();
+    }
+    return std::make_unique<AlwaysFalse>();
+  }
+
   int128_t min = *std::min_element(values.begin(), values.end());
   int128_t max = *std::max_element(values.begin(), values.end());
 

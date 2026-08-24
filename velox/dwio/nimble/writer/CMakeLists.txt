@@ -25,7 +25,7 @@ add_library(
   StreamChunker.cpp
   Writer.cpp
   WriterDefaultMetadataOSS.cpp
-  WriterMemoryReclaimerOSS.cpp
+  WriterMemoryReclaimer.cpp
   WriterOptions.h
   WriterFactory.h
   Writer.h
@@ -52,6 +52,7 @@ target_link_libraries(
   raw_size_utils
   velox_common_io
   velox_dwio_common
+  velox_exec
   velox_key_encoder
   Folly::folly
 )

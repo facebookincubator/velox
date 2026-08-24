@@ -30,7 +30,7 @@ class Multimap(dict):
             self[key].append(value)
 
 
-def git_changed_lines(commit):
+def git_changed_lines(commit, exclude_dirs=None):
     file = ""
     changed_lines = Multimap()
 
@@ -56,6 +56,9 @@ def git_changed_lines(commit):
                 and "wave/" not in matched_file
                 and "ucx-exchange/" not in matched_file
                 and "velox/dwio/nimble/" not in matched_file
+                and not any(
+                    exclude_dir in matched_file for exclude_dir in (exclude_dirs or [])
+                )
                 and not matched_file.endswith("-inl.h")
             ):
                 file = matched_file
@@ -82,6 +85,11 @@ def check_output(output):
 
 def tidy(args):
     files = util.input_files(args.files)
+    files = [
+        file
+        for file in files
+        if not any(exclude_dir in file for exclude_dir in args.exclude_dirs)
+    ]
     files = [file for file in files if re.match(r".*(\.cpp|\.h|\.hpp)$", file)]
 
     # Exclude files in cudf, wave, and torchwave directories
@@ -98,7 +106,7 @@ def tidy(args):
     files = [file for file in files if not file.endswith("-inl.h")]
 
     in_gha = os.environ.get("GITHUB_ACTIONS") is not None
-    changed_lines = git_changed_lines(args.commit)
+    changed_lines = git_changed_lines(args.commit, args.exclude_dirs)
 
     line_filter = json.dumps(
         [{"name": key, "lines": value} for key, value in changed_lines.items()]
@@ -164,6 +172,13 @@ def parse_args():
     parser.add_argument("--fix")
     parser.add_argument("-p", help="Path containing 'compile_commands.json'")
 
+    parser.add_argument(
+        "--exclude-dir",
+        action="append",
+        default=[],
+        dest="exclude_dirs",
+        help="Additional path substring to exclude from clang-tidy.",
+    )
     parser.add_argument("files", metavar="FILES", nargs="+", help="files to process")
 
     return parser.parse_args()

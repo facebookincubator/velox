@@ -67,6 +67,8 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     if (values.empty()) {
       return {
           .encodingType = EncodingType::Trivial,
+          .encodingConfig = {},
+          .estimatedSize = std::nullopt,
       };
     }
 
@@ -87,6 +89,8 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     if (compatibleEncodings.empty()) {
       return {
           .encodingType = EncodingType::Trivial,
+          .encodingConfig = {},
+          .estimatedSize = std::nullopt,
       };
     }
 
@@ -98,12 +102,18 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     const auto selectedEncoding = compatibleEncodings[distribution(generator)];
 
     if (!compressionOptions_.has_value()) {
-      return {.encodingType = selectedEncoding};
+      return {
+          .encodingType = selectedEncoding,
+          .encodingConfig = {},
+          .estimatedSize = std::nullopt,
+      };
     }
     // Encoding selection optimizes the in-memory layout. Compression is still
     // attempted for leaf data streams to reduce persistent storage size.
     return {
         .encodingType = selectedEncoding,
+        .encodingConfig = {},
+        .estimatedSize = std::nullopt,
         .compressionPolicyFactory = [compressionOptions =
                                          compressionOptions_.value(),
                                      selectedEncoding]() {
@@ -119,6 +129,8 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       const Encoding::Options& /* options */) override {
     return {
         .encodingType = EncodingType::Nullable,
+        .encodingConfig = {},
+        .estimatedSize = std::nullopt,
     };
   }
 

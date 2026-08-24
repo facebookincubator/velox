@@ -815,6 +815,8 @@ class TabletTest : public ::testing::TestWithParam<BufferedInputMode> {
       rootPool_->addLeafChild("TabletTest")};
 };
 
+class TabletCacheTest : public TabletTest {};
+
 // --- TabletTest parameterized tests ---
 
 TEST_P(TabletTest, emptyWrite) {
@@ -1926,6 +1928,8 @@ class TabletWithIndexTest : public TabletTest {
     }
   }
 };
+
+class TabletWithIndexCacheTest : public TabletWithIndexTest {};
 
 TEST_P(TabletWithIndexTest, stripeIdentifier) {
   // Test that stripeIdentifier returns both stripe group and cluster index.
@@ -4246,10 +4250,10 @@ TEST_P(TabletTest, features) {
 
   auto tablet = createTabletReader(file);
 
-  EXPECT_TRUE(tablet->features().compactRowCountEncoding());
-  EXPECT_TRUE(tablet->features().clusterIndexKeyColumnStorageOmitted());
+  EXPECT_TRUE(tablet->properties().compactRowCountEncoding());
+  EXPECT_TRUE(tablet->properties().clusterIndexKeyColumnStorageOmitted());
   EXPECT_EQ(
-      tablet->features().clusterIndexKeyColumnsWithOmittedStorage(),
+      tablet->properties().clusterIndexKeyColumnsWithOmittedStorage(),
       (std::vector<std::string>{"id"}));
 }
 
@@ -4637,13 +4641,10 @@ TEST_P(TabletWithIndexTest, fileLayoutOrdering) {
       << "Footer + postscript should end at file size";
 }
 
-TEST_P(TabletWithIndexTest, cacheWarmPath) {
+TEST_P(TabletWithIndexCacheTest, cacheWarmPath) {
   // Test that a second TabletReader on an indexed file initializes from
   // AsyncDataCache with zero file IO, and that index data is also served
   // from cache on the warm path.
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Cache warm path only applies to CachedBufferedInput";
-  }
 
   // Write a file with multiple stripes and index.
   std::string file;
@@ -5320,11 +5321,7 @@ TEST_P(TabletTest, rowToStripeSingleStripe) {
       tablet->rowToStripe(tablet->tabletRowCount()), "exceeds total row count");
 }
 
-TEST_P(TabletTest, cacheWarmPath) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Cache warm path only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheWarmPath) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -5409,11 +5406,7 @@ TEST_P(TabletTest, cacheWarmPath) {
 // even when the on-disk metadata is Zstd-compressed. Before the fix,
 // cacheMetadata() stored compressed bytes, causing size mismatches on
 // subsequent reads (RAM: evict-and-recreate; SSD: crash).
-TEST_P(TabletTest, cacheMetadataCompressedRoundtrip) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataCompressedRoundtrip) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -5497,11 +5490,7 @@ TEST_P(TabletTest, cacheMetadataCompressedRoundtrip) {
 
 // Same as above but exercises the SSD path: forces RAM eviction so entries
 // go to SSD, then verifies a warm reader can load them back without crash.
-TEST_P(TabletTest, cacheMetadataCompressedSsdRoundtrip) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataCompressedSsdRoundtrip) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -5606,11 +5595,7 @@ TEST_P(TabletTest, cacheMetadataCompressedSsdRoundtrip) {
 
 // Verifies that compressed metadata content survives the cache round-trip:
 // warm reader must produce identical stripe metadata as the cold reader.
-TEST_P(TabletTest, cacheMetadataCompressedContentVerification) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataCompressedContentVerification) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -5684,11 +5669,7 @@ TEST_P(TabletTest, cacheMetadataCompressedContentVerification) {
 
 // Verifies that multiple sequential warm readers all get cache hits
 // with zero file IO and zero evictions.
-TEST_P(TabletTest, cacheMetadataCompressedMultipleWarmReaders) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataCompressedMultipleWarmReaders) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -5762,11 +5743,7 @@ TEST_P(TabletTest, cacheMetadataCompressedMultipleWarmReaders) {
 // Verifies cacheMetadata works with a small uncompressed file (below
 // compression threshold). Ensures the uncompressed fast-path in
 // cacheSection doesn't regress.
-TEST_P(TabletTest, cacheMetadataUncompressedRoundtrip) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataUncompressedRoundtrip) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -5832,11 +5809,7 @@ TEST_P(TabletTest, cacheMetadataUncompressedRoundtrip) {
 
 // Verifies cacheMetadata with a single stripe (edge case: no stripe group
 // is flushed separately, all metadata is in the footer).
-TEST_P(TabletTest, cacheMetadataSingleStripe) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataSingleStripe) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -5895,11 +5868,7 @@ TEST_P(TabletTest, cacheMetadataSingleStripe) {
 
 // Verifies warm reader produces identical per-stripe metadata (row counts,
 // stream counts, stream offsets) as cold reader for compressed metadata.
-TEST_P(TabletTest, cacheMetadataCompressedStripeConsistency) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataCompressedStripeConsistency) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -5981,11 +5950,7 @@ TEST_P(TabletTest, cacheMetadataCompressedStripeConsistency) {
 
 // Verifies that after cache eviction, a third reader correctly re-reads
 // from file (no stale/corrupt data from previous cache population).
-TEST_P(TabletTest, cacheMetadataCompressedEvictAndReread) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataCompressedEvictAndReread) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -6062,11 +6027,7 @@ TEST_P(TabletTest, cacheMetadataCompressedEvictAndReread) {
 
 // Verifies that two different files sharing the same cache don't
 // cross-contaminate metadata.
-TEST_P(TabletTest, cacheMetadataTwoFileIsolation) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataTwoFileIsolation) {
   allocator_ = std::make_shared<velox::memory::MallocAllocator>(
       velox::memory::MemoryAllocator::Options{
           .capacity = 1UL << 30, .reservationByteLimit = 0});
@@ -6174,11 +6135,7 @@ TEST_P(TabletTest, cacheMetadataTwoFileIsolation) {
 
 // Verifies cache warm path with many stripes (enough that the stripes
 // FlatBuffer section itself exceeds the 64KB compression threshold).
-TEST_P(TabletTest, cacheMetadataCompressedStripesSection) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataCompressedStripesSection) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -6244,11 +6201,7 @@ TEST_P(TabletTest, cacheMetadataCompressedStripesSection) {
 // on the warm path. cacheMetadata() only caches group 0 — groups 1+ must
 // be loaded via MetadataInput::load() which hits the cache for group 0 but
 // falls through to file IO for the rest.
-TEST_P(TabletTest, cacheMetadataCompressedStripeGroupBeyondZero) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataCompressedStripeGroupBeyondZero) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -6318,11 +6271,7 @@ TEST_P(TabletTest, cacheMetadataCompressedStripeGroupBeyondZero) {
 // Verifies that the compressed footer is correctly cached and loaded
 // on the warm path. The footer is cached at the synthetic offset fileSize_
 // as decompressed content + serialized postscript.
-TEST_P(TabletTest, cacheMetadataCompressedFooter) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataCompressedFooter) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -6391,11 +6340,7 @@ TEST_P(TabletTest, cacheMetadataCompressedFooter) {
 
 // Verifies that optional sections (written via writeOptionalSection) are
 // correctly preloaded and served from cache on the warm path.
-TEST_P(TabletTest, cacheMetadataWithOptionalSections) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataWithOptionalSections) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -6484,11 +6429,7 @@ TEST_P(TabletTest, cacheMetadataWithOptionalSections) {
 
 // Verifies rowToStripe and stripeRowCount work correctly on a warm reader
 // initialized entirely from cached metadata.
-TEST_P(TabletTest, cacheMetadataRowToStripeNavigation) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataRowToStripeNavigation) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -6560,11 +6501,7 @@ TEST_P(TabletTest, cacheMetadataRowToStripeNavigation) {
 }
 
 // Verifies cache behavior with an empty file (zero stripes).
-TEST_P(TabletTest, cacheMetadataEmptyFile) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataEmptyFile) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
 
@@ -6602,11 +6539,7 @@ TEST_P(TabletTest, cacheMetadataEmptyFile) {
 // Verifies cache behavior with a small maxFooterIoBytes that doesn't cover
 // all metadata. cacheMetadata should cache whatever fits in the speculative
 // buffer; the rest is loaded from file.
-TEST_P(TabletTest, cacheMetadataSmallFooterIoBytes) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataSmallFooterIoBytes) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -6674,11 +6607,7 @@ TEST_P(TabletTest, cacheMetadataSmallFooterIoBytes) {
 // Verifies cache warm path with multiple stripe groups where stripe group
 // metadata is large enough to be Zstd-compressed. The warm reader must find
 // decompressed entries in cache for each stripe group without file IO.
-TEST_P(TabletTest, cacheMetadataCompressedMultipleStripeGroups) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletCacheTest, cacheMetadataCompressedMultipleStripeGroups) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -7006,11 +6935,7 @@ TEST_P(TabletTest, footerReadTrackedInMetadataIoStats) {
 // FlatBuffer serialization — without it, resolveUncompressedSize() returns
 // nullopt for chunk stats groups, causing orphaned cache entries and
 // unnecessary file IO on warm reads.
-TEST_P(TabletWithIndexTest, cacheWarmPathCompressedChunkIndex) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(TabletWithIndexCacheTest, cacheWarmPathCompressedChunkIndex) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
@@ -7109,11 +7034,9 @@ TEST_P(TabletWithIndexTest, cacheWarmPathCompressedChunkIndex) {
 // uncompressed_size in the footer (simulating old Nimble format) can still
 // be read correctly through the cache path. Both cold and warm readers
 // should produce correct metadata.
-TEST_P(TabletTest, cacheMetadataBackwardCompatOldFileWithoutUncompressedSize) {
-  if (GetParam() != BufferedInputMode::kCachedBufferedInput) {
-    GTEST_SKIP() << "Only applies to CachedBufferedInput";
-  }
-
+TEST_P(
+    TabletCacheTest,
+    cacheMetadataBackwardCompatOldFileWithoutUncompressedSize) {
   // Write a file with compressed metadata (500 streams triggers Zstd).
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
@@ -7259,5 +7182,21 @@ TEST_P(TabletTest, cacheMetadataBackwardCompatOldFileWithoutUncompressedSize) {
     }
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    CachedBufferedInputMode,
+    TabletCacheTest,
+    ::testing::Values(BufferedInputMode::kCachedBufferedInput),
+    [](const ::testing::TestParamInfo<BufferedInputMode>& info) {
+      return bufferedInputModeToString(info.param);
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    CachedBufferedInputMode,
+    TabletWithIndexCacheTest,
+    ::testing::Values(BufferedInputMode::kCachedBufferedInput),
+    [](const ::testing::TestParamInfo<BufferedInputMode>& info) {
+      return bufferedInputModeToString(info.param);
+    });
 
 } // namespace

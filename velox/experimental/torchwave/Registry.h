@@ -91,6 +91,8 @@ enum class StandaloneShortcut {
   kSplitWithSizes,
   kSqueezeDim,
   kExpand,
+  kSymSize,
+  kSymNumel,
 };
 
 /// Specifies which arguments determine the number of elements a kernel

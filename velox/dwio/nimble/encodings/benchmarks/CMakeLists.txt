@@ -11,20 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# These drivers link Folly::follybenchmark, which is only resolved when Velox's
-# benchmarks are enabled. The directory is now also entered under
-# NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS for ml_id_compression below, so they
-# need the switch guarded explicitly rather than relying on the parent.
-if(VELOX_ENABLE_BENCHMARKS)
-  add_executable(
-    nimble_fixed_bit_width_benchmark
-    FixedBitWidthBenchmark.cpp
-    BenchmarkUtils.h
-    DeltaBenchmarkData.h
-    FixedBitWidthBenchmarkData.h
-    NimbleEncodingRunner.h
-    SparseBoolBenchmarkData.h
-  )
+add_executable(
+  nimble_fixed_bit_width_benchmark
+  FixedBitWidthBenchmark.cpp
+  BenchmarkUtils.h
+  DeltaBenchmarkData.h
+  FixedBitWidthBenchmarkData.h
+  NimbleEncodingRunner.h
+  SparseBoolBenchmarkData.h
+  VarintBenchmarkData.h
+)
 
   target_link_libraries(
     nimble_fixed_bit_width_benchmark
@@ -35,7 +31,11 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_memory
   )
 
-  add_executable(nimble_block_bit_packing_encoding_benchmark BlockBitPackingEncodingBenchmark.cpp)
+add_executable(
+  nimble_block_bit_packing_encoding_benchmark
+  BlockBitPackingEncodingBenchmark.cpp
+  BlockBitPackingBenchmarkData.h
+)
 
   target_link_libraries(
     nimble_block_bit_packing_encoding_benchmark
@@ -69,7 +69,7 @@ if(VELOX_ENABLE_BENCHMARKS)
     fsst
   )
 
-  add_executable(nimble_huffman_benchmark HuffmanBenchmark.cpp)
+add_executable(nimble_huffman_benchmark HuffmanBenchmark.cpp HuffmanBenchmarkData.h)
 
   target_link_libraries(
     nimble_huffman_benchmark
@@ -94,20 +94,64 @@ if(VELOX_ENABLE_BENCHMARKS)
     fmt::fmt
   )
 
-  add_executable(nimble_simd_for_bitpack_benchmark SimdForBitpackBenchmark.cpp)
+add_executable(
+  nimble_simd_for_bitpack_benchmark
+  SimdForBitpackBenchmark.cpp
+  SimdForBitpackBenchmarkData.h
+)
 
-  target_link_libraries(
-    nimble_simd_for_bitpack_benchmark
-    nimble_encodings_tests_utils
-    nimble_encodings
-    nimble_common
-    Folly::follybenchmark
-    Folly::folly
-    velox_common_base
-    velox_memory
-  )
-endif()
+target_link_libraries(
+  nimble_simd_for_bitpack_benchmark
+  nimble_encodings_tests_utils
+  nimble_encodings
+  nimble_common
+  Folly::follybenchmark
+  Folly::folly
+  velox_common_base
+  velox_memory
+)
 
-if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
-  add_subdirectory(ml_id_compression)
-endif()
+add_executable(nimble_pfor_encoding_benchmark PFOREncodingBenchmark.cpp PFOREncodingBenchmarkData.h)
+
+target_link_libraries(
+  nimble_pfor_encoding_benchmark
+  nimble_encodings
+  nimble_common
+  Folly::follybenchmark
+  Folly::folly
+  velox_memory
+)
+
+add_executable(
+  nimble_fsst_encoding_benchmark
+  FsstEncodingBenchmark.cpp
+  FsstBenchmarkData.h
+  StringBenchmarkCorpus.h
+)
+
+target_link_libraries(
+  nimble_fsst_encoding_benchmark
+  nimble_encodings
+  nimble_common
+  Folly::follybenchmark
+  Folly::folly
+  velox_memory
+  fsst
+  fmt::fmt
+)
+
+add_executable(
+  nimble_prefix_encoding_benchmark
+  PrefixEncodingBenchmark.cpp
+  PrefixBenchmarkData.h
+  StringBenchmarkCorpus.h
+)
+
+target_link_libraries(
+  nimble_prefix_encoding_benchmark
+  nimble_encodings
+  nimble_common
+  Folly::follybenchmark
+  Folly::folly
+  velox_memory
+)

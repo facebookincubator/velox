@@ -48,6 +48,10 @@
 // debug_single_ops is now WaveConfig::debugSingleOps
 
 DEFINE_bool(print_timing, false, "Print timing for wave graph execution");
+DEFINE_bool(
+    per_op_standalone_timing,
+    false,
+    "Time each eager standalone separately by syncing the torch stream after every one. That sync is what makes per-op numbers possible and is also the largest perturbation: it serializes the standalones against each other and against the wave stream, so per-step device times and GPU idle stop reflecting an untraced run");
 DEFINE_int32(num_repeats, 1, "Number of timed repetitions for each run type");
 DEFINE_bool(
     standalone_kernels,
@@ -162,9 +166,49 @@ DEFINE_bool(
     false,
     "Release each ProjectNode's last-use value tensors right after its composite invocation executes, instead of at end-of-graph");
 DEFINE_bool(
+    step_last_use,
+    true,
+    "With --free_intermediates, release each last-use value after the last step that reads it instead of after the node's last step");
+DEFINE_bool(
+    sync_each_step,
+    false,
+    "Drain both streams at the end of every step, so freed buffers are back in the allocator before the next step allocates (serializes the pipeline; for measuring peak memory)");
+DEFINE_bool(
+    defer_d2h,
+    false,
+    "Do not wait for a step's device-to-host transfer at the step that issues it; parse its pinned buffer at the first later step that reads one of the returned values");
+DEFINE_bool(
+    run_ahead,
+    false,
+    "Drop the host stream waits that are not a real data or memory dependency (the per-node default-stream drain), so the host can queue steps arbitrarily far ahead of the device");
+DEFINE_int64(
+    max_delayed_free,
+    1LL << 30,
+    "Ceiling in bytes on freeable memory sitting in already-issued but incomplete steps; exceeding it drains both streams before the next allocation. 0 disables");
+DEFINE_bool(
+    donate_buffers,
+    false,
+    "Hold a released wave-kernel buffer and hand it to a later wave kernel needing exactly the same byte size, instead of returning it to the caching allocator");
+DEFINE_int64(
+    donation_carry_bytes,
+    64LL << 20,
+    "Bytes of donatable buffers carried between executions; the pool is trimmed to this at the end of each run");
+DEFINE_bool(
+    duplicate_metadata,
+    false,
+    "Rematerialize each multiply-used sym_size / sym_numel at its use sites before partitioning, so it stops being a top-level output of a ProjectNode");
+DEFINE_bool(
     input_contiguous,
     false,
     "Assume all model inputs, weights, and constants are contiguous in the graph optimizer; executeWave verifies and errors out if any is not contiguous");
+DEFINE_bool(
+    cse_compute,
+    false,
+    "Before partitioning, merge compute nodes that produce the same value from the same operands");
+DEFINE_bool(
+    cse_views,
+    false,
+    "Before partitioning, merge view nodes that produce the same value from the same operands");
 DEFINE_bool(
     mk_select,
     false,
@@ -548,6 +592,7 @@ void ExecutorTestBase::SetUpTestSuite() {
   }
 
   WaveConfig::get().printTiming = FLAGS_print_timing;
+  WaveConfig::get().perOpStandaloneTiming = FLAGS_per_op_standalone_timing;
   WaveConfig::get().allStandalone = FLAGS_standalone_kernels;
   WaveConfig::get().blockSize = FLAGS_block_dim;
   WaveConfig::get().trace = FLAGS_trace;
@@ -573,7 +618,17 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().enableReuse = FLAGS_enable_reuse;
   WaveConfig::get().elideClones = FLAGS_elide_clones;
   WaveConfig::get().freeIntermediates = FLAGS_free_intermediates;
+  WaveConfig::get().stepLastUse = FLAGS_step_last_use;
+  WaveConfig::get().syncEachStep = FLAGS_sync_each_step;
+  WaveConfig::get().deferD2h = FLAGS_defer_d2h;
+  WaveConfig::get().runAhead = FLAGS_run_ahead;
+  WaveConfig::get().maxDelayedFree = FLAGS_max_delayed_free;
+  WaveConfig::get().duplicateMetadata = FLAGS_duplicate_metadata;
+  WaveConfig::get().donateBuffers = FLAGS_donate_buffers;
+  WaveConfig::get().donationCarryBytes = FLAGS_donation_carry_bytes;
   WaveConfig::get().inputContiguous = FLAGS_input_contiguous;
+  WaveConfig::get().cseCompute = FLAGS_cse_compute;
+  WaveConfig::get().cseViews = FLAGS_cse_views;
   WaveConfig::get().mkSelect = FLAGS_mk_select;
   if (!FLAGS_print_options.empty()) {
     NodePrinter::setDefaults(

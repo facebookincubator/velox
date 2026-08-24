@@ -128,6 +128,68 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
   std::unique_ptr<TabletReaderCache> cache_;
 };
 
+// A ReaderBase built through the cache has to keep the cache ENTRY alive, not
+// just the tablet. The entry owns the IoStatistics the tablet writes its
+// metadata and index reads into, and retiring it hands those totals off and
+// stops watching them -- so an entry retiring under a live reader would leave
+// the rest of its IO reported by nobody. Holding only tablet() would not keep
+// the entry alive, because the tablet has its own reference to the statistics.
+class ReaderBaseCacheLifetimeTest : public ReaderBaseTest {
+ protected:
+  // InMemoryReadFile reports the same name for every instance, and the cache
+  // keys on the name, so distinct entries need distinct names.
+  class NamedReadFile : public velox::InMemoryReadFile {
+   public:
+    NamedReadFile(std::string name, std::string_view data)
+        : velox::InMemoryReadFile(data), name_{std::move(name)} {}
+
+    std::string getName() const override {
+      return name_;
+    }
+
+   private:
+    const std::string name_;
+  };
+};
+
+TEST_F(ReaderBaseCacheLifetimeTest, evictionDoesNotRetireEntryUnderLiveReader) {
+  bool released = false;
+  TabletReaderCache::Options cacheOpts;
+  cacheOpts.numShards = 1;
+  // One slot, so opening a second file evicts the first.
+  cacheOpts.maxEntries = 1;
+  cacheOpts.executor = executor_;
+  cacheOpts.onCreate = [](const CachedTabletReader&) {};
+  cacheOpts.onRelease = [&](const CachedTabletReader&) { released = true; };
+  // Outlives every entry: a TabletReader frees its metadata buffers back to a
+  // pool the cache owns, so an entry must never outlive the cache.
+  TabletReaderCache cache(cacheOpts);
+
+  auto readerOpts = makeReaderOptions();
+  auto readFile = std::make_shared<NamedReadFile>("file0", fileData_);
+  std::shared_ptr<ReaderBase> reader;
+  {
+    auto cached =
+        cache.get(readFile, TabletReader::configureOptions(readerOpts));
+    auto input =
+        std::make_unique<velox::dwio::common::BufferedInput>(readFile, *pool_);
+    reader = ReaderBase::create(std::move(input), cached, readerOpts);
+  }
+  EXPECT_FALSE(released);
+
+  // Evicts file0. The cache's reference was the only other one, so unless the
+  // reader owns the entry this retires it while the reader is still usable.
+  auto other = std::make_shared<NamedReadFile>("file1", fileData_);
+  auto evicting = cache.get(other, TabletReader::configureOptions(readerOpts));
+  EXPECT_FALSE(released)
+      << "the reader must own the entry, not just the tablet";
+  // Still usable, which is the point: more stripe reads can happen through it.
+  EXPECT_GT(reader->tablet().stripeCount(), 0);
+
+  reader.reset();
+  EXPECT_TRUE(released);
+}
+
 TEST_P(ReaderBaseTest, basic) {
   auto reader = createReaderBase();
 

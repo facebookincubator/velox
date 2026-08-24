@@ -201,6 +201,23 @@ class SimdForBitpackEncoding final
     };
   }
 
+  // Rejects truncated prefixes before the base encoding constructor reads
+  // their type, data type, and row count fields.
+  static std::string_view validateEncodedPrefix(
+      std::string_view encoded,
+      const Encoding::Options& options);
+
+  // Reads one canonical uint32 varint without advancing beyond the stream.
+  static uint32_t readBoundedVarint32(
+      const char*& cursor,
+      const char* encodedEnd);
+
+  // Reads the row count and leaves the cursor at the encoding-specific header.
+  static uint32_t readPrefixRowCount(
+      const char*& cursor,
+      const char* encodedEnd,
+      bool useVarintRowCount);
+
   static Header parseHeader(
       std::string_view encoded,
       const Encoding::Options& options);
@@ -250,7 +267,10 @@ SimdForBitpackEncoding<T>::SimdForBitpackEncoding(
     std::string_view data,
     const std::function<void*(uint32_t)>& /* stringBufferFactory */,
     const Encoding::Options& options)
-    : TypedEncoding<T, physicalType>{pool, data, options} {
+    : TypedEncoding<T, physicalType>{
+          pool,
+          validateEncodedPrefix(data, options),
+          options} {
   if constexpr (!isIntegralType<physicalType>()) {
     NIMBLE_INCOMPATIBLE_ENCODING(
         "SimdForBitpack encoding only supports integral data types.");
@@ -272,33 +292,93 @@ void SimdForBitpackEncoding<T>::skip(uint32_t rowCount) {
 }
 
 template <typename T>
+std::string_view SimdForBitpackEncoding<T>::validateEncodedPrefix(
+    std::string_view encoded,
+    const Encoding::Options& options) {
+  NIMBLE_CHECK_FILE(
+      encoded.size() >= EncodingPrefix::kRowCountOffset,
+      "Truncated SimdForBitpack prefix.");
+  const char* cursor = encoded.data() + EncodingPrefix::kRowCountOffset;
+  readPrefixRowCount(cursor, encoded.end(), options.useVarintRowCount);
+  return encoded;
+}
+
+template <typename T>
+uint32_t SimdForBitpackEncoding<T>::readBoundedVarint32(
+    const char*& cursor,
+    const char* encodedEnd) {
+  uint32_t value{0};
+  for (uint32_t byteIndex = 0; byteIndex < 5; ++byteIndex) {
+    NIMBLE_CHECK_FILE(cursor < encodedEnd, "Truncated SimdForBitpack varint.");
+    const auto byte = static_cast<uint8_t>(*cursor++);
+    if (byteIndex == 4) {
+      NIMBLE_CHECK_FILE((byte & 0xf0) == 0, "Overlong SimdForBitpack varint.");
+    }
+    value |= static_cast<uint32_t>(byte & 0x7f) << (byteIndex * 7);
+    if ((byte & 0x80) == 0) {
+      NIMBLE_CHECK_FILE(
+          byteIndex + 1 == varint::varintSize(value),
+          "Overlong SimdForBitpack varint.");
+      return value;
+    }
+  }
+  NIMBLE_CHECK_FILE(false, "Overlong SimdForBitpack varint.");
+  return 0;
+}
+
+template <typename T>
+uint32_t SimdForBitpackEncoding<T>::readPrefixRowCount(
+    const char*& cursor,
+    const char* encodedEnd,
+    bool useVarintRowCount) {
+  if (useVarintRowCount) {
+    return readBoundedVarint32(cursor, encodedEnd);
+  }
+  NIMBLE_CHECK_FILE(
+      static_cast<size_t>(encodedEnd - cursor) >= sizeof(uint32_t),
+      "Truncated SimdForBitpack prefix.");
+  uint32_t rowCount;
+  std::memcpy(&rowCount, cursor, sizeof(rowCount));
+  cursor += sizeof(rowCount);
+  return rowCount;
+}
+
+template <typename T>
 typename SimdForBitpackEncoding<T>::Header
 SimdForBitpackEncoding<T>::parseHeader(
     std::string_view encoded,
     const Encoding::Options& options) {
+  validateEncodedPrefix(encoded, options);
   Header header;
+  const char* cursor = encoded.data() + EncodingPrefix::kRowCountOffset;
+  const char* const encodedEnd = encoded.end();
   header.rowCount =
-      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-  NIMBLE_CHECK_GT(
-      header.rowCount, 0, "SimdForBitpack stream must contain rows.");
-  const char* pos = encoded.data() +
-      EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
-  header.baseline = encoding::read<physicalType>(pos);
-  header.bitWidth = static_cast<uint8_t>(encoding::readChar(pos));
-  header.firstGroupRows = varint::readVarint32(&pos);
-  NIMBLE_CHECK_GT(
-      header.firstGroupRows, 0, "First group row count must be set.");
-  NIMBLE_CHECK_LE(
-      header.firstGroupRows,
-      kGroupSize,
+      readPrefixRowCount(cursor, encodedEnd, options.useVarintRowCount);
+  NIMBLE_CHECK_FILE(
+      header.rowCount > 0, "SimdForBitpack stream must contain rows.");
+  NIMBLE_CHECK_FILE(
+      static_cast<size_t>(encodedEnd - cursor) >= fixedHeaderSize(),
+      "Truncated SimdForBitpack header.");
+  std::memcpy(&header.baseline, cursor, sizeof(header.baseline));
+  cursor += sizeof(header.baseline);
+  header.bitWidth = static_cast<uint8_t>(*cursor++);
+  header.firstGroupRows = readBoundedVarint32(cursor, encodedEnd);
+  NIMBLE_CHECK_FILE(
+      header.firstGroupRows > 0 &&
+          header.firstGroupRows <=
+              std::min(header.rowCount, static_cast<uint32_t>(kGroupSize)),
       "Invalid SimdForBitpack first group row count.");
-  populateGroupCounts(header);
   constexpr uint8_t kMaxBits = static_cast<uint8_t>(sizeof(physicalType) * 8);
-  NIMBLE_CHECK_LE(
-      header.bitWidth,
-      kMaxBits,
+  NIMBLE_CHECK_FILE(
+      header.bitWidth <= kMaxBits,
       "SimdForBitpack bit width exceeds physical type size.");
-  header.packedData = pos;
+  populateGroupCounts(header);
+  const auto expectedPackedSize =
+      packedDataSize(header.numGroups, header.bitWidth);
+  NIMBLE_CHECK_FILE(
+      static_cast<uint64_t>(encodedEnd - cursor) == expectedPackedSize,
+      "Invalid SimdForBitpack packed payload size.");
+  header.packedData = cursor;
   return header;
 }
 
@@ -618,13 +698,12 @@ std::string_view SimdForBitpackEncoding<T>::slice(
     uint32_t length,
     Buffer& buffer,
     const Encoding::Options& options) {
-  const auto sourceRowCount =
-      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
+  const auto sourceHeader = parseHeader(encoded, options);
+  const auto sourceRowCount = sourceHeader.rowCount;
   NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
   NIMBLE_CHECK_LE(offset, sourceRowCount);
   NIMBLE_CHECK_LE(length, sourceRowCount - offset);
 
-  const auto sourceHeader = parseHeader(encoded, options);
   const auto firstGroup = groupInfo(sourceHeader, offset);
   Header sliceHeader;
   sliceHeader.rowCount = length;
