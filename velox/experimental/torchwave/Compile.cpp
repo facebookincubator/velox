@@ -1783,6 +1783,19 @@ std::string cudaAttrType(const nativert::Constant& c) {
 
 namespace {
 
+// A C++ type spelling reduced to something usable inside an identifier, so a
+// shared declaration's variable can be made unique per type. Anything that is
+// not alphanumeric becomes an underscore, which keeps distinct types distinct
+// without needing to understand the spelling.
+std::string identifierSuffix(std::string_view type) {
+  std::string out;
+  out.reserve(type.size());
+  for (char c : type) {
+    out += std::isalnum(static_cast<unsigned char>(c)) ? c : '_';
+  }
+  return out;
+}
+
 void declareAttributesImpl(
     NodeCP node,
     const KernelOperation& op,
@@ -2047,16 +2060,30 @@ std::string CompileCtx::makeCall(
     }
   }
 
-  // Shared declarations: declare in the kernel and pass as arguments.
+  // Shared declarations: declare in the kernel and pass as arguments. The name
+  // is suffixed by the type, as the dynamic form below already does, because
+  // two ops fused into one kernel can ask for the same name at different
+  // types: masked_select_jagged wants a uint32_t 'counter' and
+  // group_length_guard_head an int64_t one. Emitting both unsuffixed put two
+  // conflicting declarations of 'counter' in one scope. nvcc calls that a
+  // redeclaration; NVRTC segfaults inside nvrtcCompileProgram, before the
+  // program log is readable, so it surfaces as a broken promise for the
+  // compiled module rather than as a compile error.
+  //
+  // Deduplication cannot fix this on its own: addSharedDeclaration matches on
+  // the whole declaration string, and even matching on the name would be wrong,
+  // since the two ops need storage of different types rather than one shared
+  // variable.
   for (const auto& [type, name] : meta->sharedDecls) {
+    auto varName = name + "_" + identifierSuffix(type);
     std::string decl = "  __shared__ ";
     decl += type;
     decl += " ";
-    decl += name;
+    decl += varName;
     decl += ";\n";
     op.addSharedDeclaration(decl);
     comma();
-    ss << name;
+    ss << varName;
   }
 
   // Dynamic shared declarations: type from input dtype, name suffixed by type.
