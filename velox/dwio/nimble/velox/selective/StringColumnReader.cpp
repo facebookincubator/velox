@@ -479,8 +479,8 @@ bool StringColumnReader::readWithDictionary(
     // readDictionaryIndices returns false when the onChunkBoundary callback
     // returns false (new chunk is not dict-compatible), meaning the
     // dictionary path must be abandoned for the remaining rows.
-    abandonDictionary =
-        !decoder_.readDictionaryIndices(dictVisitor, onChunkBoundary);
+    abandonDictionary = !decoder_.readDictionaryIndices<std::string_view>(
+        dictVisitor, onChunkBoundary);
 
     // Offset the final chunk's indices into the merged alphabet.
     updateDictionaryIndices(alphabetOffset, valueOffset);
