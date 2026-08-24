@@ -117,6 +117,19 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_memory
   )
 
+  add_executable(nimble_subint_split_benchmark SubIntSplitBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_subint_split_benchmark
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_common_base
+    velox_memory
+  )
+
   add_executable(
     nimble_pfor_encoding_benchmark
     PFOREncodingBenchmark.cpp
