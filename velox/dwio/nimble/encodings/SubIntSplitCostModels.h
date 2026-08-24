@@ -25,9 +25,12 @@
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
+#include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
+#include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitMetrics.h"
+#include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/Statistics.h"
 
 // Per-segment cost models for SubIntSplitEncoding's DP selector.
@@ -124,6 +127,11 @@ inline double constantCostBits(
 // MainlyConstant: store one dominant value, a SparseBool mask marking the
 // exception rows, and the exception values as a FixedBitWidth child. Effective
 // when one value dominates the segment (say >=50%).
+// Delegates the otherValues and isCommon sub-costs directly to
+// FixedBitWidthEncoding::estimateSize / SparseBoolEncoding::estimateSize --
+// the same calls MainlyConstantEncoding::estimateSize itself makes (see
+// MainlyConstantEncoding.h) -- instead of a separate hand-rolled formula, so
+// the two estimators cannot drift apart.
 // Required: DominantValue, MinMax
 inline double mainlyConstantCostBits(
     const SegmentMetrics& m,
@@ -139,38 +147,48 @@ inline double mainlyConstantCostBits(
   }
 
   const double storageBits = static_cast<double>(storageWidthBits(bitWidth));
-  const double storageBytes = storageBits / 8.0;
-  const size_t uncommonCount =
-      m.dominantCount >= numValues ? 0 : numValues - m.dominantCount;
+  const auto rowCount = static_cast<uint64_t>(numValues);
+  const uint64_t uncommonCount =
+      m.dominantCount >= numValues ? 0 : rowCount - m.dominantCount;
 
   // Outer: prefix(6) + two child-size fields(4 each) + the common value.
   const double outerBits = (6.0 + 4.0 + 4.0) * 8.0 + storageBits;
 
-  // otherValues: FixedBitWidth over the uncommon values (observed range),
-  // packed bits rounded up to a byte boundary.
-  const uint8_t rangeWidth =
-      m.range == 0 ? uint8_t{0} : static_cast<uint8_t>(std::bit_width(m.range));
-  const uint8_t packedBits = static_cast<uint8_t>(
-      (std::min<uint8_t>(static_cast<uint8_t>(bitWidth), rangeWidth) + 7u) &
-      ~7u);
+  uint64_t otherValuesBytes;
+  switch (storageWidthBits(bitWidth)) {
+    case 8:
+      otherValuesBytes = FixedBitWidthEncoding<uint8_t>::estimateSize(
+          uncommonCount, m.min, m.max, Encoding::Options{});
+      break;
+    case 16:
+      otherValuesBytes = FixedBitWidthEncoding<uint16_t>::estimateSize(
+          uncommonCount, m.min, m.max, Encoding::Options{});
+      break;
+    case 32:
+      otherValuesBytes = FixedBitWidthEncoding<uint32_t>::estimateSize(
+          uncommonCount, m.min, m.max, Encoding::Options{});
+      break;
+    default:
+      otherValuesBytes = FixedBitWidthEncoding<uint64_t>::estimateSize(
+          uncommonCount, m.min, m.max, Encoding::Options{});
+      break;
+  }
 
-  const double otherHeaderBits = (7.0 + storageBytes + 1.0) * 8.0;
-  const double otherValuesBits = otherHeaderBits +
-      static_cast<double>(packedBits) * static_cast<double>(uncommonCount);
+  const uint64_t isCommonBytes =
+      SparseBoolEncoding::estimateSize(rowCount, uncommonCount, Encoding::Options{});
 
-  const uint32_t indexWidth =
-      numValues <= 1 ? 1u : static_cast<uint32_t>(std::bit_width(numValues));
-  const double roundedIndexBits = static_cast<double>((indexWidth + 7u) & ~7u);
-  // SparseBool: prefix(6) + tag(1) + FixedBitWidth header(7 + uint32 baseline +
-  // 1)
-  const double sparseHeaderBits = (6.0 + 1.0 + 7.0 + 4.0 + 1.0) * 8.0;
-  const double isCommonBits = sparseHeaderBits +
-      roundedIndexBits * static_cast<double>(uncommonCount + 1);
-
-  return outerBits + otherValuesBits + isCommonBits;
+  return outerBits + static_cast<double>(otherValuesBytes) * 8.0 +
+      static_cast<double>(isCommonBytes) * 8.0;
 }
 
 // Dictionary: unique value table + bit-packed indices.
+// Delegates both nested streams directly to the same estimators
+// DictionaryEncoding::estimateSize uses (see DictionaryEncoding.h): the
+// indices stream via FixedBitWidthEncoding<uint32_t>::estimateSize(rowCount,
+// 0, uniqueCount-1), and the alphabet via
+// min(TrivialEncoding, FixedBitWidthEncoding)::estimateSize(uniqueCount, min,
+// max). Only the numeric path is modeled; SIS operates on raw uint64_t
+// bit-range slices, never strings.
 // Uses observed uniqueCount directly (no HLL blending). Directionally correct
 // for the DP's purposes.
 // Required: UniqueCount, MinMax
@@ -181,26 +199,45 @@ inline double dictionaryCostBits(
   if (m.uniqueCount == 0 || numValues == 0) {
     return 0.0;
   }
-  const size_t uniques = m.uniqueCount;
-  const uint8_t valueBits = storageWidthBits(bitWidth);
-  const double dictBits =
-      static_cast<double>(uniques) * static_cast<double>(valueBits);
-  // Index width: ceil(log2(uniques)), clamped to 32
-  const uint32_t indexWidth = (uniques <= 1)
-      ? 1u
-      : std::min(32u, static_cast<uint32_t>(std::bit_width(uniques - 1)));
-  // Bit-packed indices rounded up to byte boundary
-  const double roundedIndexBits = static_cast<double>((indexWidth + 7u) & ~7u);
-  const double indexBits = roundedIndexBits * static_cast<double>(numValues);
-  // prefix(6) + alphabetSize(4) + nested header overhead (~15 bytes)
-  const double headerBits = (6.0 + 4.0 + 15.0) * 8.0;
+  const uint64_t uniques = static_cast<uint64_t>(m.uniqueCount);
+  const auto rowCount = static_cast<uint64_t>(numValues);
+  const Encoding::Options options{};
 
-  // Penalise when index width ≥ value width (dictionary doesn't compress).
-  const double penalty = (indexWidth >= valueBits)
-      ? 1.0 + 0.15 * (static_cast<double>(indexWidth) / valueBits - 1.0)
-      : 1.0;
+  const uint64_t indicesBytes = FixedBitWidthEncoding<uint32_t>::estimateSize(
+      rowCount, /*minValue=*/0, uniques - 1, options);
 
-  return headerBits + penalty * (dictBits + indexBits);
+  uint64_t alphabetBytes;
+  switch (storageWidthBits(bitWidth)) {
+    case 8:
+      alphabetBytes = std::min(
+          TrivialEncoding<uint8_t>::estimateSize(uniques),
+          FixedBitWidthEncoding<uint8_t>::estimateSize(
+              uniques, m.min, m.max, options));
+      break;
+    case 16:
+      alphabetBytes = std::min(
+          TrivialEncoding<uint16_t>::estimateSize(uniques),
+          FixedBitWidthEncoding<uint16_t>::estimateSize(
+              uniques, m.min, m.max, options));
+      break;
+    case 32:
+      alphabetBytes = std::min(
+          TrivialEncoding<uint32_t>::estimateSize(uniques),
+          FixedBitWidthEncoding<uint32_t>::estimateSize(
+              uniques, m.min, m.max, options));
+      break;
+    default:
+      alphabetBytes = std::min(
+          TrivialEncoding<uint64_t>::estimateSize(uniques),
+          FixedBitWidthEncoding<uint64_t>::estimateSize(
+              uniques, m.min, m.max, options));
+      break;
+  }
+
+  // Outer: prefix(6) + alphabetSize(4), matching DictionaryEncoding's layout.
+  const double outerBits = (6.0 + 4.0) * 8.0;
+  return outerBits + static_cast<double>(alphabetBytes) * 8.0 +
+      static_cast<double>(indicesBytes) * 8.0;
 }
 
 // RLE: run values + bit-packed run lengths.
@@ -442,12 +479,14 @@ inline double deltaCostBits(
     return std::numeric_limits<double>::infinity();
   }
 
-  const double avgAbsDelta = static_cast<double>(m.sumAbsDelta) /
-      static_cast<double>(numValues - 1);
-  const uint8_t deltaBitWidth = avgAbsDelta < 1.0
+  // Sized to the largest kept (non-decreasing) delta, not the average: a
+  // fixed-width packed array must cover every value it stores, and a
+  // right-skewed delta distribution makes the average a severe
+  // underestimate of the width actually required (see SegmentMetrics::
+  // maxDelta). Matches FixedBitWidthEncoding's own exact-bits sizing.
+  const uint8_t deltaBitWidth = m.maxDelta == 0
       ? uint8_t{0}
-      : static_cast<uint8_t>(
-            std::bit_width(static_cast<uint64_t>(avgAbsDelta)));
+      : static_cast<uint8_t>(std::bit_width(m.maxDelta));
   // Round up to byte boundary, matching nested encodings' FixedBitWidth-style
   // packing.
   const uint8_t roundedDeltaBits = (deltaBitWidth + 7u) & ~7u;
@@ -521,6 +560,29 @@ forCostBits(const SegmentMetrics& m, size_t numValues, int bitWidth) noexcept {
       packedBits;
 }
 
+// Number of PerTierBitmaps tiers FrequencyPartitionEncoding::encode would
+// create for `uniqueCount` distinct values, mirroring its tier-capacity table
+// (FrequencyPartitionEncoding.h: keyBitOptions = {1,2,4,8,16,32} bits with
+// capacities 2/4/16/256/65280/~4.29B). Each tier created needs its own N-bit
+// bitmap in the index payload (FrequencyPartitionEncoding.h's "Index payload
+// layout (PerTierBitmaps)"), so this directly drives indexBits below.
+// Assuming a fixed 2 tiers regardless of uniqueCount -- rather than the 3-5
+// tiers typical for a segment near the 1024-unique cap -- was the single
+// largest source of FPE's cost underestimate.
+inline uint32_t frequencyPartitionNumTiers(uint64_t uniqueCount) noexcept {
+  constexpr uint64_t kCapacities[] = {2, 4, 16, 256, 65280, 4294901760ull};
+  uint64_t assigned = 0;
+  uint32_t tiers = 0;
+  for (uint64_t capacity : kCapacities) {
+    if (assigned >= uniqueCount) {
+      break;
+    }
+    ++tiers;
+    assigned += capacity;
+  }
+  return std::max(tiers, 1u);
+}
+
 // FrequencyPartition: tier-based dictionary encoding where the top-K
 // most-frequent values are stored with narrow (1/2-bit) keys. Requires an
 // indexed mode (PerTierBitmaps) that preserves original row order; without an
@@ -551,12 +613,17 @@ inline double frequencyPartitionCostBits(
       tier1Coverage * n * 2.0 +
       fallbackCoverage * n * static_cast<double>(storageWidthBits(bitWidth));
 
-  // PerTierBitmaps index: ~1 bit per value per active tier (2 tiers assumed).
-  const double indexBits = 2.0 * n;
+  // PerTierBitmaps index: one N-bit bitmap per active tier (4-byte
+  // bitmapByteCount prefix + numValues bits rounded to a 64-bit word), not a
+  // fixed 2 tiers -- see frequencyPartitionNumTiers.
+  const uint32_t numTiers = frequencyPartitionNumTiers(m.uniqueCount);
+  const double bitmapBits = std::ceil(n / 64.0) * 64.0 + 32.0;
+  const double indexBits = static_cast<double>(numTiers) * bitmapBits;
 
-  // ~2 tier dictionaries + 2 key streams, each a nested sub-encoding with a
-  // ~7-byte header.
-  constexpr double kTierOverheadBits = 4.0 * 7.0 * 8.0;
+  // One dictionary + one key stream per active tier, each a nested
+  // sub-encoding with a ~7-byte header.
+  const double kTierOverheadBits =
+      static_cast<double>(numTiers) * 2.0 * 7.0 * 8.0;
 
   // Outer prefix + numPartitions + nested partitionOffsets/partitionSizes.
   constexpr double kOuterHeaderBits = (6.0 + 4.0 + 4.0 + 4.0 + 2.0 * 7.0) * 8.0;

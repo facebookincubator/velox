@@ -62,6 +62,37 @@ std::vector<T> makeStructuredValues() {
   return values;
 }
 
+// 300 values with a constant high prefix and a low-cardinality, non-monotonic
+// low section (cycling through 5 distinct values). Unlike
+// makeStructuredValues's unit-step low section -- which plain Delta already
+// encodes optimally as a single, unsplit stream -- this low section is not
+// monotonic, so encoding the full value directly is comparatively expensive
+// and splitting off the constant high prefix (leaving a cheap
+// Dictionary/MainlyConstant-friendly low segment) is unambiguously smaller.
+// Used to exercise SubIntSplit's multi-segment capture/replay path
+// independent of any single candidate's cost-model tuning.
+template <typename T>
+std::vector<T> makeStructuredValuesWithLowCardinalityNoise() {
+  std::vector<T> values;
+  values.reserve(300);
+
+  UnsignedPhysicalType<T> prefix{};
+  if constexpr (sizeof(PhysicalType<T>) == 4) {
+    prefix = static_cast<UnsignedPhysicalType<T>>(0x12340000u);
+  } else {
+    prefix = static_cast<UnsignedPhysicalType<T>>(0x1234567890000000ULL);
+  }
+
+  constexpr UnsignedPhysicalType<T> kLowValues[] = {3, 7, 1, 9, 3, 3, 5, 3};
+  for (size_t i = 0; i < 300; ++i) {
+    const auto bits = static_cast<UnsignedPhysicalType<T>>(
+        prefix + kLowValues[i % 8]);
+    values.push_back(std::bit_cast<T>(bits));
+  }
+
+  return values;
+}
+
 // 300 values whose unsigned physical representation is strictly
 // monotonically increasing with a constant, wide step (so consecutive
 // values' low-order bit-range segments are also roughly monotonic with a
@@ -407,7 +438,7 @@ TYPED_TEST_CASE(SubIntSplitEncodingTest, SubIntSplitEncodingTypes);
 
 TYPED_TEST(SubIntSplitEncodingTest, recomputeRoundTripAndReplay) {
   using T = TypeParam;
-  const auto values = makeStructuredValues<T>();
+  const auto values = makeStructuredValuesWithLowCardinalityNoise<T>();
 
   const auto encoded =
       encodeWithNonRecursiveSubIntSplit<T>(values, *this->buffer_);
