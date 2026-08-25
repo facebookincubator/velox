@@ -14,13 +14,18 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfDistinct.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/KeyNormalization.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/HashAggregation.h"
 
+#include <cudf/copying.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/stream_compaction.hpp>
@@ -56,6 +61,12 @@ void CudfDistinct::initialize() {
   inputType_ = aggregationNode_->sources()[0]->outputType();
   setupGroupingKeyChannelProjections(
       *aggregationNode_, groupingKeyInputChannels_, groupingKeyOutputChannels_);
+
+  groupingKeyIsTswtz_.reserve(groupingKeyInputChannels_.size());
+  for (const auto channel : groupingKeyInputChannels_) {
+    groupingKeyIsTswtz_.push_back(
+        isTimestampWithTimeZoneType(inputType_->asRow().childAt(channel)));
+  }
 
   aggregationNode_.reset();
 }
@@ -123,14 +134,50 @@ CudfVectorPtr CudfDistinct::getDistinctKeys(
     cudf::table_view tableView,
     std::vector<column_index_t> const& groupByKeys,
     rmm::cuda_stream_view stream) {
-  auto result = cudf::distinct(
-      tableView.select(groupByKeys.begin(), groupByKeys.end()),
-      {groupingKeyOutputChannels_.begin(), groupingKeyOutputChannels_.end()},
-      cudf::duplicate_keep_option::KEEP_FIRST,
-      cudf::null_equality::EQUAL,
-      cudf::nan_equality::ALL_EQUAL,
-      stream,
-      get_output_mr());
+  auto keysView = tableView.select(groupByKeys.begin(), groupByKeys.end());
+
+  // A TIMESTAMP WITH TIME ZONE key must deduplicate on its instant alone: it is
+  // physically (millis << 12) | zone_key and Velox's hash and compare for the type
+  // read unpackMillisUtc only, so deduplicating on the raw value keeps one row per
+  // zone instead of one per moment.
+  //
+  // It cannot be done by normalizing in place, because the table cudf::distinct
+  // returns IS this operator's output -- the call passes only the key columns as
+  // its input, so emitting the normalized values would rewrite every zone key to
+  // UTC downstream. Instead take the indices of the distinct rows from the
+  // normalized keys and gather the ORIGINAL columns by them, so each surviving row
+  // keeps its own real zone key. Which row of a tied set survives is
+  // KEEP_FIRST either way, and unspecified in SQL.
+  //
+  // This is the idiom CudfMarkDistinct already uses (distinct_indices + gather).
+  auto normalizedKeys = normalizeKeyColumns(
+      keysView, groupingKeyIsTswtz_, stream, get_temp_mr());
+
+  std::unique_ptr<cudf::table> result;
+  if (normalizedKeys.normalizedAny()) {
+    auto distinctIndices = cudf::distinct_indices(
+        normalizedKeys.view,
+        cudf::duplicate_keep_option::KEEP_FIRST,
+        cudf::null_equality::EQUAL,
+        cudf::nan_equality::ALL_EQUAL,
+        stream,
+        get_temp_mr());
+    result = cudf::gather(
+        keysView,
+        distinctIndices->view(),
+        cudf::out_of_bounds_policy::DONT_CHECK,
+        stream,
+        get_output_mr());
+  } else {
+    result = cudf::distinct(
+        keysView,
+        {groupingKeyOutputChannels_.begin(), groupingKeyOutputChannels_.end()},
+        cudf::duplicate_keep_option::KEEP_FIRST,
+        cudf::null_equality::EQUAL,
+        cudf::nan_equality::ALL_EQUAL,
+        stream,
+        get_output_mr());
+  }
 
   auto numRows = result->num_rows();
 
