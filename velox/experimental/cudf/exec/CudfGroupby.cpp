@@ -17,12 +17,10 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
-#include "velox/experimental/cudf/exec/KeyNormalization.h"
-
-#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/KeyNormalization.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
@@ -32,6 +30,7 @@
 #include "velox/exec/HashAggregation.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -981,10 +980,10 @@ void CudfGroupby::initialize() {
   setupGroupingKeyChannelProjections(
       *aggregationNode_, groupingKeyInputChannels_, groupingKeyOutputChannels_);
 
-  // Recorded by key POSITION, not channel, because doGroupByAggregation is called
-  // with groupingKeyInputChannels_ on the input pass and
-  // groupingKeyOutputChannels_ on the compaction passes; both list the same keys
-  // in the same order, so one vector serves every caller.
+  // Recorded by key POSITION, not channel, because doGroupByAggregation is
+  // called with groupingKeyInputChannels_ on the input pass and
+  // groupingKeyOutputChannels_ on the compaction passes; both list the same
+  // keys in the same order, so one vector serves every caller.
   groupingKeyIsTswtz_.reserve(groupingKeyInputChannels_.size());
   for (const auto channel : groupingKeyInputChannels_) {
     groupingKeyIsTswtz_.push_back(
@@ -1225,10 +1224,10 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
   auto groupbyKeyView =
       tableView.select(groupByKeys.begin(), groupByKeys.end());
 
-  // A TIMESTAMP WITH TIME ZONE grouping key must group on its instant alone: it is
-  // physically (millis << 12) | zone_key and Velox's hash and compare for the type
-  // read unpackMillisUtc only, so grouping on the raw value splits every set of
-  // rows that share a moment across zones into one group per zone.
+  // A TIMESTAMP WITH TIME ZONE grouping key must group on its instant alone: it
+  // is physically (millis << 12) | zone_key and Velox's hash and compare for
+  // the type read unpackMillisUtc only, so grouping on the raw value splits
+  // every set of rows that share a moment across zones into one group per zone.
   //
   // The normalized keys can only drive the GROUPING. cudf::groupby::aggregate
   // RETURNS the unique key rows, and those become this operator's output, so
@@ -1271,9 +1270,10 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
       aggregation.push_back(
           cudf::make_min_aggregation<cudf::groupby_aggregation>());
       keyRecoveryRequest[i] = requests.size();
-      requests.push_back(cudf::groupby::aggregation_request{
-          tableView.column(static_cast<cudf::size_type>(groupByKeys[i])),
-          std::move(aggregation)});
+      requests.push_back(
+          cudf::groupby::aggregation_request{
+              tableView.column(static_cast<cudf::size_type>(groupByKeys[i])),
+              std::move(aggregation)});
     }
   }
 
@@ -1294,7 +1294,9 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
       }
       auto& recovered = results[keyRecoveryRequest[i]].results;
       VELOX_CHECK_EQ(
-          recovered.size(), 1, "Key recovery expects exactly one result column");
+          recovered.size(),
+          1,
+          "Key recovery expects exactly one result column");
       groupKeysColumns[i] = std::move(recovered[0]);
     }
   }

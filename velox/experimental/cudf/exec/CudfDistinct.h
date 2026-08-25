@@ -61,9 +61,9 @@ class CudfDistinct : public CudfOperatorBase {
   std::vector<column_index_t> groupingKeyInputChannels_;
   std::vector<column_index_t> groupingKeyOutputChannels_;
 
-  // Which grouping keys are TIMESTAMP WITH TIME ZONE, by KEY POSITION rather than
-  // channel, so the one vector serves getDistinctKeys whichever channel vector it
-  // is called with -- both list the same keys in the same order.
+  // Which grouping keys are TIMESTAMP WITH TIME ZONE, by KEY POSITION rather
+  // than channel, so the one vector serves getDistinctKeys whichever channel
+  // vector it is called with -- both list the same keys in the same order.
   std::vector<bool> groupingKeyIsTswtz_;
 
   std::shared_ptr<const core::AggregationNode> aggregationNode_;

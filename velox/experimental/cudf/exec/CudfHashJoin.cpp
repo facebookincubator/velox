@@ -17,10 +17,8 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
-#include "velox/experimental/cudf/exec/KeyNormalization.h"
-
-#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/KeyNormalization.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
@@ -31,6 +29,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Task.h" // NOLINT(misc-unused-headers)
 #include "velox/expression/ExprOptimizer.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/TypeUtil.h"
 
 #include <cudf/aggregation.hpp>
@@ -395,14 +394,15 @@ void CudfHashJoinBuild::doNoMoreInput() {
        joinNode_->isLeftSemiProjectJoin());
 
   // A TIMESTAMP WITH TIME ZONE join key must match on its instant alone: it is
-  // physically (millis << 12) | zone_key and Velox's hash and compare for the type
-  // read unpackMillisUtc only, so hashing the raw value means no two values
-  // carrying different zones ever match and the join silently returns nothing.
+  // physically (millis << 12) | zone_key and Velox's hash and compare for the
+  // type read unpackMillisUtc only, so hashing the raw value means no two
+  // values carrying different zones ever match and the join silently returns
+  // nothing.
   //
   // Both sides must be normalized or neither. A one-sided fix would compare
-  // normalized keys against packed ones and make EVERY TSWTZ join empty for every
-  // zone, including the ones that work today -- worse than the bug. The probe side
-  // is normalized in probeKeys() below; this is the build side.
+  // normalized keys against packed ones and make EVERY TSWTZ join empty for
+  // every zone, including the ones that work today -- worse than the bug. The
+  // probe side is normalized in probeKeys() below; this is the build side.
   std::vector<bool> buildKeyIsTswtz;
   buildKeyIsTswtz.reserve(buildKeyIndices.size());
   for (size_t i = 0; i < buildKeyIndices.size(); i++) {
@@ -414,11 +414,11 @@ void CudfHashJoinBuild::doNoMoreInput() {
   std::vector<std::shared_ptr<cudf::hash_join>> hashObjects;
   for (auto i = 0; i < tbls.size(); i++) {
     // The hash object views the key table it is built from and outlives this
-    // function, so a normalized key table has to be owned by the bridge alongside
-    // it rather than by a local.
+    // function, so a normalized key table has to be owned by the bridge
+    // alongside it rather than by a local.
     auto buildKeyView = tbls[i]->view().select(buildKeyIndices);
-    auto normalized =
-        normalizeKeyColumns(buildKeyView, buildKeyIsTswtz, stream, get_temp_mr());
+    auto normalized = normalizeKeyColumns(
+        buildKeyView, buildKeyIsTswtz, stream, get_temp_mr());
     if (normalized.normalizedAny()) {
       auto owned = std::make_shared<cudf::table>(std::move(normalized.owned));
       // Rebuild the view over the owned copy: normalized.view referenced the
@@ -464,10 +464,11 @@ void CudfHashJoinBuild::doNoMoreInput() {
   cudfHashJoinBridge->setBuildStream(stream);
   cudfHashJoinBridge->setBuildReadyEvent(std::move(buildReadyEvent));
   cudfHashJoinBridge->setHashTable(
-      std::make_optional(CudfHashJoinBridge::BuildState{
-          std::move(shared_tbls),
-          std::move(hashObjects),
-          std::move(normalizedBuildKeys)}));
+      std::make_optional(
+          CudfHashJoinBridge::BuildState{
+              std::move(shared_tbls),
+              std::move(hashObjects),
+              std::move(normalizedBuildKeys)}));
 }
 
 exec::BlockingReason CudfHashJoinBuild::isBlocked(ContinueFuture* future) {
@@ -538,8 +539,8 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     VELOX_CHECK_LT(rightKeyIndices_[i], buildTableNumColumns);
   }
 
-  // Recorded once: which key columns are TIMESTAMP WITH TIME ZONE and so must be
-  // matched on their instant rather than their packed value.
+  // Recorded once: which key columns are TIMESTAMP WITH TIME ZONE and so must
+  // be matched on their instant rather than their packed value.
   leftKeyIsTswtz_.reserve(leftKeyIndices_.size());
   for (const auto idx : leftKeyIndices_) {
     leftKeyIsTswtz_.push_back(isTimestampWithTimeZoneType(
@@ -1031,14 +1032,11 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::innerJoin(
 
     // left = probe, right = build
     VELOX_CHECK_NOT_NULL(hb);
-    // Probe keys normalized to match the build side, which was normalized when hb
-    // was constructed. Kept in a named local so it outlives the call.
+    // Probe keys normalized to match the build side, which was normalized when
+    // hb was constructed. Kept in a named local so it outlives the call.
     auto probeKeyTable = probeKeys(leftTableView, stream);
-    auto [leftJoinIndices, rightJoinIndices] = hb->inner_join(
-        probeKeyTable.view,
-        std::nullopt,
-        stream,
-        get_temp_mr());
+    auto [leftJoinIndices, rightJoinIndices] =
+        hb->inner_join(probeKeyTable.view, std::nullopt, stream, get_temp_mr());
 
     auto leftIndicesSpan =
         cudf::device_span<cudf::size_type const>{*leftJoinIndices};
@@ -1215,14 +1213,11 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::leftJoin(
     // Use inner_join to get only real matched pairs. Unmatched probe rows are
     // emitted separately after the loop.
     VELOX_CHECK_NOT_NULL(hb);
-    // Probe keys normalized to match the build side, which was normalized when hb
-    // was constructed. Kept in a named local so it outlives the call.
+    // Probe keys normalized to match the build side, which was normalized when
+    // hb was constructed. Kept in a named local so it outlives the call.
     auto probeKeyTable = probeKeys(leftTableView, stream);
-    auto [leftJoinIndices, rightJoinIndices] = hb->inner_join(
-        probeKeyTable.view,
-        std::nullopt,
-        stream,
-        get_temp_mr());
+    auto [leftJoinIndices, rightJoinIndices] =
+        hb->inner_join(probeKeyTable.view, std::nullopt, stream, get_temp_mr());
 
     if (leftJoinIndices->size() == 0) {
       continue;
@@ -1285,14 +1280,11 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::rightJoin(
     auto& hb = hbs[i];
 
     VELOX_CHECK_NOT_NULL(hb);
-    // Probe keys normalized to match the build side, which was normalized when hb
-    // was constructed. Kept in a named local so it outlives the call.
+    // Probe keys normalized to match the build side, which was normalized when
+    // hb was constructed. Kept in a named local so it outlives the call.
     auto probeKeyTable = probeKeys(leftTableView, stream);
-    auto [leftJoinIndices, rightJoinIndices] = hb->inner_join(
-        probeKeyTable.view,
-        std::nullopt,
-        stream,
-        get_temp_mr());
+    auto [leftJoinIndices, rightJoinIndices] =
+        hb->inner_join(probeKeyTable.view, std::nullopt, stream, get_temp_mr());
     if (!joinNode_->filter()) {
       // Mark matched build rows by checking which row indices appear in
       // rightJoinIndices. Use contains to avoid scatter with duplicate indices.
@@ -1460,14 +1452,11 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
     // emitted separately after the loop. Unmatched build rows are emitted in
     // doGetOutput via rightMatchedFlags_.
     VELOX_CHECK_NOT_NULL(hb);
-    // Probe keys normalized to match the build side, which was normalized when hb
-    // was constructed. Kept in a named local so it outlives the call.
+    // Probe keys normalized to match the build side, which was normalized when
+    // hb was constructed. Kept in a named local so it outlives the call.
     auto probeKeyTable = probeKeys(leftTableView, stream);
-    auto [leftJoinIndices, rightJoinIndices] = hb->inner_join(
-        probeKeyTable.view,
-        std::nullopt,
-        stream,
-        get_temp_mr());
+    auto [leftJoinIndices, rightJoinIndices] =
+        hb->inner_join(probeKeyTable.view, std::nullopt, stream, get_temp_mr());
 
     if (leftJoinIndices->size() == 0) {
       continue;
@@ -1780,14 +1769,11 @@ CudfHashJoinProbe::leftSemiProjectJoin(
     // Step 1: Inner join to get (probe_idx, build_idx) pairs where keys match.
     // Unlike left_join, inner_join only returns valid pairs (no JoinNoMatch).
     VELOX_CHECK_NOT_NULL(hb);
-    // Probe keys normalized to match the build side, which was normalized when hb
-    // was constructed. Kept in a named local so it outlives the call.
+    // Probe keys normalized to match the build side, which was normalized when
+    // hb was constructed. Kept in a named local so it outlives the call.
     auto probeKeyTable = probeKeys(leftTableView, stream);
-    auto [leftJoinIndices, rightJoinIndices] = hb->inner_join(
-        probeKeyTable.view,
-        std::nullopt,
-        stream,
-        get_temp_mr());
+    auto [leftJoinIndices, rightJoinIndices] =
+        hb->inner_join(probeKeyTable.view, std::nullopt, stream, get_temp_mr());
 
     if (leftJoinIndices->size() == 0) {
       continue; // No matches from this build table

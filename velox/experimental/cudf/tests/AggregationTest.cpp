@@ -2004,15 +2004,15 @@ TEST_F(AggregationTest, zeroColumnThroughCudfFromVelox) {
       .assertResults("SELECT count(*) FROM tmp WHERE c0 > 0");
 }
 
-
 // ---------------------------------------------------------------------------
 // Grouping on a TIMESTAMP WITH TIME ZONE key.
 //
 // The type is physically (millis << 12) | zone_key and Velox groups it on the
 // INSTANT alone -- TimestampWithTimeZoneType::hash and ::compare read
-// unpackMillisUtc, via the type's ProvideCustomComparison hook. Two values for the
-// same moment in different zones are therefore ONE group. cuDF sees a bare INT64,
-// so before the key-normalization fix it produced one group per zone key.
+// unpackMillisUtc, via the type's ProvideCustomComparison hook. Two values for
+// the same moment in different zones are therefore ONE group. cuDF sees a bare
+// INT64, so before the key-normalization fix it produced one group per zone
+// key.
 //
 // These assert on the unpacked result rather than through assertQuery, because
 // DuckDB has no TIMESTAMP WITH TIME ZONE to compare against.
@@ -2050,9 +2050,9 @@ TEST_F(AggregationTest, groupByTimestampWithTimeZoneCollapsesZoneKeys) {
   std::map<int64_t, int64_t> countByInstant;
   for (auto i = 0; i < result->size(); ++i) {
     // The surviving zone key is unspecified, but it must be a REAL one from the
-    // group's own rows -- never 0 from a normalized key leaking into the output.
-    // Both groups here are all-non-UTC except the second, so assert membership
-    // rather than a fixed value.
+    // group's own rows -- never 0 from a normalized key leaking into the
+    // output. Both groups here are all-non-UTC except the second, so assert
+    // membership rather than a fixed value.
     countByInstant[unpackMillisUtc(keys->valueAt(i))] = counts->valueAt(i);
   }
   EXPECT_EQ(countByInstant[millis], 3);
@@ -2082,7 +2082,8 @@ TEST_F(AggregationTest, groupByTimestampWithTimeZoneEmitsARealZoneKey) {
   EXPECT_EQ(unpackMillisUtc(key), millis);
   const auto zone = unpackZoneKeyId(key);
   EXPECT_TRUE(zone == kolkata || zone == kathmandu)
-      << "the group key must keep a zone key from one of its rows, got " << zone;
+      << "the group key must keep a zone key from one of its rows, got "
+      << zone;
   EXPECT_NE(zone, 0) << "zone 0 would mean a normalized key reached the output";
 }
 
@@ -2116,11 +2117,12 @@ TEST_F(AggregationTest, groupByTimestampWithTimeZoneKeepsNullsSeparate) {
   }
 }
 
-// SELECT DISTINCT on a TIMESTAMP WITH TIME ZONE key. A distinct aggregation (grouping
-// keys, no aggregates) routes to CudfDistinct rather than CudfGroupby, and that
-// operator returns its KEY columns as its output -- so the fix there had to take the
-// indices of the distinct rows from normalized keys and gather the ORIGINAL columns,
-// rather than deduplicate normalized values and emit them.
+// SELECT DISTINCT on a TIMESTAMP WITH TIME ZONE key. A distinct aggregation
+// (grouping keys, no aggregates) routes to CudfDistinct rather than
+// CudfGroupby, and that operator returns its KEY columns as its output -- so
+// the fix there had to take the indices of the distinct rows from normalized
+// keys and gather the ORIGINAL columns, rather than deduplicate normalized
+// values and emit them.
 TEST_F(AggregationTest, distinctTimestampWithTimeZoneCollapsesZoneKeys) {
   const int64_t millis = 1'623'758'400'000;
   const int64_t other = -14'182'940'000;
@@ -2168,21 +2170,22 @@ TEST_F(AggregationTest, distinctTimestampWithTimeZoneEmitsARealZoneKey) {
   EXPECT_NE(zone, 0) << "zone 0 would mean a normalized key reached the output";
 }
 
-// count(DISTINCT ts) is deliberately NOT asserted here. That plan shape is DECLINED
-// by cuDF, and this fixture sets allowCpuFallback = false, so the test would fail on
-// "Replacement with cuDF operator failed" rather than on the deduplication. Allowing
-// fallback instead would assert CPU's answer and prove nothing about the GPU. It is the
-// reason the parity suite's n_tswtz_count_distinct_across_zones case sets
-// gpu_claimed: false and is measured on the PERMISSIVE cluster, where the shape runs
-// partly on GPU and the wrong count is observable -- a strict-mode raise alone does not
-// establish that a shape is safely declined.
+// count(DISTINCT ts) is deliberately NOT asserted here. That plan shape is
+// DECLINED by cuDF, and this fixture sets allowCpuFallback = false, so the test
+// would fail on "Replacement with cuDF operator failed" rather than on the
+// deduplication. Allowing fallback instead would assert CPU's answer and prove
+// nothing about the GPU. It is the reason the parity suite's
+// n_tswtz_count_distinct_across_zones case sets gpu_claimed: false and is
+// measured on the PERMISSIVE cluster, where the shape runs partly on GPU and
+// the wrong count is observable -- a strict-mode raise alone does not establish
+// that a shape is safely declined.
 
-// The same grouping across a hash-partitioned local exchange, which is the shape
-// a real plan takes and the reason this needed two fixes rather than one:
-// CudfLocalPartition murmur3-hashed the packed value, so same-instant rows went to
-// different drivers and the final aggregation could not merge them even once the
-// group-by itself compared instants. maxDrivers > 1 is what makes numPartitions_
-// exceed 1 and put CudfLocalPartition in the plan at all.
+// The same grouping across a hash-partitioned local exchange, which is the
+// shape a real plan takes and the reason this needed two fixes rather than one:
+// CudfLocalPartition murmur3-hashed the packed value, so same-instant rows went
+// to different drivers and the final aggregation could not merge them even once
+// the group-by itself compared instants. maxDrivers > 1 is what makes
+// numPartitions_ exceed 1 and put CudfLocalPartition in the plan at all.
 TEST_F(AggregationTest, groupByTimestampWithTimeZoneAcrossPartitionedExchange) {
   const int64_t millis = 1'623'758'400'000;
   auto rows = [&](const char* zone) {
@@ -2198,17 +2201,18 @@ TEST_F(AggregationTest, groupByTimestampWithTimeZoneAcrossPartitionedExchange) {
         .partialAggregation({"c0"}, {"count(1)"})
         .planNode();
   };
-  auto plan = PlanBuilder(idGenerator)
-                  .localPartition(
-                      {"c0"},
-                      {source("Pacific/Kiritimati"), source("Pacific/Midway")})
-                  .finalAggregation()
-                  .planNode();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .localPartition(
+              {"c0"}, {source("Pacific/Kiritimati"), source("Pacific/Midway")})
+          .finalAggregation()
+          .planNode();
 
-  auto result = AssertQueryBuilder(plan)
-                    .maxDrivers(2)
-                    .config(core::QueryConfig::kMaxLocalExchangePartitionCount, "2")
-                    .copyResults(pool());
+  auto result =
+      AssertQueryBuilder(plan)
+          .maxDrivers(2)
+          .config(core::QueryConfig::kMaxLocalExchangePartitionCount, "2")
+          .copyResults(pool());
 
   // Two instants, each present under both zones: two groups of two.
   ASSERT_EQ(result->size(), 2);
@@ -2221,6 +2225,5 @@ TEST_F(AggregationTest, groupByTimestampWithTimeZoneAcrossPartitionedExchange) {
   EXPECT_EQ(countByInstant[millis], 2);
   EXPECT_EQ(countByInstant[millis + 1], 2);
 }
-
 
 } // namespace facebook::velox::exec::test

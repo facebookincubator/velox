@@ -139,8 +139,8 @@ class CudfGroupby : public CudfOperatorBase {
 
   std::vector<column_index_t> groupingKeyInputChannels_;
 
-  // Which grouping keys are TIMESTAMP WITH TIME ZONE, by KEY POSITION rather than
-  // by channel, so the one vector serves both the input pass (which passes
+  // Which grouping keys are TIMESTAMP WITH TIME ZONE, by KEY POSITION rather
+  // than by channel, so the one vector serves both the input pass (which passes
   // groupingKeyInputChannels_) and the compaction passes (which pass
   // groupingKeyOutputChannels_) -- both list the same keys in the same order.
   std::vector<bool> groupingKeyIsTswtz_;
