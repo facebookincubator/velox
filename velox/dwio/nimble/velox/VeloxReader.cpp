@@ -67,6 +67,13 @@ std::map<std::string, std::string> loadMetadata(
   return result;
 }
 
+Encoding::Options encodingOptions(const TabletReader& tabletReader) {
+  Encoding::Options options;
+  options.useVarintRowCount =
+      tabletReader.properties().compactRowCountEncoding();
+  return options;
+}
+
 class NimbleUnit : public velox::dwio::common::LoadUnit {
  public:
   NimbleUnit(
@@ -375,11 +382,11 @@ VeloxReadParams::StreamEncodingFactory VeloxReader::createStreamEncodingFactory(
   // written consistently as shared-dictionary streams.
   return [dictionaryStreamOwner =
               std::shared_ptr<const StreamLoader>{std::move(dictionaryStream)},
-          _dictionaryAlphabet = std::move(dictionaryAlphabet)](
+          _dictionaryAlphabet = std::move(dictionaryAlphabet),
+          options = encodingOptions(*tabletReader_)](
              velox::memory::MemoryPool& pool,
              std::string_view data,
              std::function<void*(uint32_t)> stringBufferFactory) mutable {
-    Encoding::Options options;
     if (_dictionaryAlphabet == nullptr) {
       NIMBLE_CHECK_NOT_NULL(
           dictionaryStreamOwner,

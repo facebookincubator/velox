@@ -1247,6 +1247,55 @@ TEST_P(SharedDictionaryE2EInputTypeTest, fileScopeRoundTrip) {
   verifyRoundTrip(file, inputType, stripeValueTypes);
 }
 
+TEST_F(SharedDictionaryE2ETest, fileScopeCompactRowCountRoundTrip) {
+  const std::vector<StripeValueType> stripeValueTypes{
+      StripeValueType::Dictionary, StripeValueType::Direct};
+  auto options = makeSharedDictionaryWriterOptions();
+  options.experimentalCompactRowCountEncoding = true;
+  addDictionary(
+      options,
+      InputType::FlatMapScalar,
+      sharedDictionaryConfig(SharedDictionaryScope::File, /*dictionaryId=*/7));
+
+  std::vector<velox::RowVectorPtr> stripeInputs;
+  stripeInputs.reserve(stripeValueTypes.size());
+  for (const auto stripeValueType : stripeValueTypes) {
+    stripeInputs.push_back(
+        makeStripe(InputType::FlatMapScalar, stripeValueType));
+  }
+  const auto file = writeInput(stripeInputs, std::move(options));
+
+  auto tablet = openTablet(file);
+  EXPECT_TRUE(tablet->properties().compactRowCountEncoding());
+  const auto valueStreamIds =
+      sharedDictionaryValueStreamIds(*tablet, InputType::FlatMapScalar);
+  ASSERT_EQ(valueStreamIds.size(), 1);
+
+  VeloxReadParams params;
+  const Encoding::Options encodingOptions{.useVarintRowCount = true};
+  params.encodingFactory =
+      [encodingOptions](
+          velox::memory::MemoryPool& pool,
+          std::string_view data,
+          std::function<void*(uint32_t)> stringBufferFactory)
+      -> std::unique_ptr<Encoding> {
+    return EncodingFactory{encodingOptions}.create(
+        pool, data, std::move(stringBufferFactory));
+  };
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  VeloxReader reader{readFile, *leafPool_, nullptr, std::move(params)};
+  velox::VectorPtr output;
+  for (const auto stripeValueType : stripeValueTypes) {
+    ASSERT_TRUE(reader.next(kStripeRows, output));
+    auto expected = makeStripe(InputType::FlatMapScalar, stripeValueType);
+    ASSERT_EQ(output->size(), expected->size());
+    for (velox::vector_size_t i = 0; i < output->size(); ++i) {
+      ASSERT_TRUE(output->equalValueAt(expected.get(), i, i));
+    }
+  }
+  EXPECT_FALSE(reader.next(kStripeRows, output));
+}
+
 TEST_P(SharedDictionaryE2EFlatMapRowValueSubfieldsTest, roundTrip) {
   const auto scope = GetParam();
   const std::vector<StripeValueType> stripeValueTypes{
