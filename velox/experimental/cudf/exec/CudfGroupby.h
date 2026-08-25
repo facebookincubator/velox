@@ -196,7 +196,7 @@ class CudfGroupby : public CudfOperatorBase {
   const bool isSingleStep_;
   // Streaming aggregation is disabled if companion aggregates are present.
   bool streamingEnabled_{true};
-  bool streamingGroupbyApiEnabled_{false};
+  bool nativeStreamingEnabled_{false};
   const int64_t maxPartialAggregationMemoryUsage_;
   int64_t numInputRows_ = 0;
 

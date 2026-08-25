@@ -195,8 +195,6 @@ struct StreamingGroupbyAverageAggregator final : StreamingGroupbyAggregator {
   size_t countResultIndex_;
 };
 
-#undef DEFINE_SIMPLE_STREAMING_GROUPBY_AGGREGATOR
-
 #define DEFINE_SIMPLE_GROUPBY_AGGREGATOR(Name, name, KIND)               \
   struct Groupby##Name##Aggregator : GroupbyAggregator {                 \
     Groupby##Name##Aggregator(                                           \
@@ -1216,7 +1214,7 @@ void CudfGroupby::computeFinalGroupbyWithStreamingApi(CudfVectorPtr input) {
   // If the first batch cannot satisfy libcudf's signed size_type encoding
   // bound, use the existing groupby path before creating any persistent state.
   if (!streamingGroupby_ && inputRows > safeCapacity) {
-    streamingGroupbyApiEnabled_ = false;
+    nativeStreamingEnabled_ = false;
     computeFinalGroupbyStreaming(std::move(input));
     return;
   }
@@ -1400,7 +1398,7 @@ void CudfGroupby::initialize() {
     }
   }
 
-  streamingGroupbyApiEnabled_ =
+  nativeStreamingEnabled_ =
       initializeStreamingGroupbyApi(inputRowSchema, aggregationInput.constants);
 
   // Check that aggregate result type match the output type.
@@ -1549,7 +1547,7 @@ void CudfGroupby::doAddInput(RowVectorPtr input) {
   auto cudfInput = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput);
 
-  if (streamingGroupbyApiEnabled_) {
+  if (nativeStreamingEnabled_) {
     computeFinalGroupbyWithStreamingApi(std::move(cudfInput));
     return;
   }
@@ -1674,7 +1672,7 @@ RowVectorPtr CudfGroupby::doGetOutput() {
     return nullptr;
   }
 
-  if (streamingGroupbyApiEnabled_) {
+  if (nativeStreamingEnabled_) {
     finished_ = true;
     return finalizeStreamingGroupby();
   }
