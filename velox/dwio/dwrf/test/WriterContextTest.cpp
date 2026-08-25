@@ -31,40 +31,27 @@ class WriterContextTest : public testing::Test {
   }
 };
 
-TEST_F(WriterContextTest, GetIntDictionaryEncoder) {
+TEST_F(WriterContextTest, getIntDictionaryEncoder) {
   auto config = std::make_shared<Config>();
   WriterContext context{
       config, memory::memoryManager()->addRootPool("GetIntDictionaryEncoder")};
 
-  EXPECT_EQ(0, context.dictEncoders_.size());
+  auto& dictionaryPool = context.getMemoryPool(MemoryUsageCategory::DICTIONARY);
+  auto& generalPool = context.getMemoryPool(MemoryUsageCategory::GENERAL);
   auto& intEncoder_1_0 = context.getIntDictionaryEncoder<int32_t>(
-      {1, 0}, *context.dictionaryPool_, *context.generalPool_);
-  EXPECT_EQ(1, context.dictEncoders_.size());
-  ASSERT_EQ(1, intEncoder_1_0.refCount_);
+      {1, 0}, dictionaryPool, generalPool);
 
   auto& duplicateCallResult_1_0 = context.getIntDictionaryEncoder<int32_t>(
-      {1, 0}, *context.dictionaryPool_, *context.generalPool_);
-  EXPECT_EQ(1, context.dictEncoders_.size());
+      {1, 0}, dictionaryPool, generalPool);
   EXPECT_EQ(&intEncoder_1_0, &duplicateCallResult_1_0);
-  EXPECT_EQ(2, intEncoder_1_0.refCount_);
 
-  for (size_t i = 0; i < 40; ++i) {
-    context.getIntDictionaryEncoder<int32_t>(
-        {1, 0}, *context.dictionaryPool_, *context.generalPool_);
-  }
-  EXPECT_EQ(42, intEncoder_1_0.refCount_);
-
-  // Ignore the mismatched type request.
-  context.getIntDictionaryEncoder<int64_t>(
-      {1, 0}, *context.dictionaryPool_, *context.generalPool_);
-  EXPECT_EQ(1, context.dictEncoders_.size());
-
-  context.getIntDictionaryEncoder<int32_t>(
-      {2, 0}, *context.dictionaryPool_, *context.generalPool_);
-  EXPECT_EQ(2, context.dictEncoders_.size());
+  auto& intEncoder_2_0 = context.getIntDictionaryEncoder<int32_t>(
+      {2, 0}, dictionaryPool, generalPool);
+  EXPECT_NE(&intEncoder_1_0, &intEncoder_2_0);
+  EXPECT_EQ(0, intEncoder_2_0.size());
 }
 
-TEST_F(WriterContextTest, RemoveIntDictionaryEncoderForNode) {
+TEST_F(WriterContextTest, removeIntDictionaryEncoderForNode) {
   auto config = std::make_shared<Config>();
   config->set(Config::MAP_FLAT_DICT_SHARE, false);
   WriterContext context{
@@ -72,49 +59,29 @@ TEST_F(WriterContextTest, RemoveIntDictionaryEncoderForNode) {
       memory::memoryManager()->addRootPool(
           "RemoveIntDictionaryEncoderForNode")};
 
-  context.getIntDictionaryEncoder<int32_t>(
-      {1, 1}, *context.dictionaryPool_, *context.generalPool_);
-  context.getIntDictionaryEncoder<int32_t>(
-      {1, 2}, *context.dictionaryPool_, *context.generalPool_);
-  context.getIntDictionaryEncoder<int32_t>(
-      {1, 4}, *context.dictionaryPool_, *context.generalPool_);
-  context.getIntDictionaryEncoder<int32_t>(
-      {1, 5}, *context.dictionaryPool_, *context.generalPool_);
-  EXPECT_EQ(4, context.dictEncoders_.size());
+  auto& dictionaryPool = context.getMemoryPool(MemoryUsageCategory::DICTIONARY);
+  auto& generalPool = context.getMemoryPool(MemoryUsageCategory::GENERAL);
+  const std::vector<EncodingKey> keys{
+      {1, 1}, {1, 2}, {1, 4}, {1, 5}, {2, 0}, {3, 1}, {3, 3}};
+  for (const auto& key : keys) {
+    context.getIntDictionaryEncoder<int32_t>(key, dictionaryPool, generalPool);
+  }
 
-  context.getIntDictionaryEncoder<int32_t>(
-      {2, 0}, *context.dictionaryPool_, *context.generalPool_);
-  context.getIntDictionaryEncoder<int32_t>(
-      {3, 1}, *context.dictionaryPool_, *context.generalPool_);
-  context.getIntDictionaryEncoder<int32_t>(
-      {3, 3}, *context.dictionaryPool_, *context.generalPool_);
-  EXPECT_EQ(7, context.dictEncoders_.size());
+  const auto removeAndCollectNodes = [&](uint32_t nodeToRemove) {
+    std::vector<uint32_t> visitedNodes;
+    context.removeAllIntDictionaryEncodersOnNode([&](uint32_t nodeId) {
+      visitedNodes.push_back(nodeId);
+      return nodeId == nodeToRemove;
+    });
+    std::sort(visitedNodes.begin(), visitedNodes.end());
+    return visitedNodes;
+  };
 
-  context.removeAllIntDictionaryEncodersOnNode(
-      [](uint32_t nodeId) { return nodeId == 1; });
-  EXPECT_EQ(3, context.dictEncoders_.size());
-  EXPECT_EQ(0, context.dictEncoders_.count(EncodingKey{1, 1}));
-  EXPECT_EQ(0, context.dictEncoders_.count(EncodingKey{1, 2}));
-  EXPECT_EQ(0, context.dictEncoders_.count(EncodingKey{1, 4}));
-  EXPECT_EQ(0, context.dictEncoders_.count(EncodingKey{1, 5}));
-  EXPECT_EQ(1, context.dictEncoders_.count(EncodingKey{2, 0}));
-  EXPECT_EQ(1, context.dictEncoders_.count(EncodingKey{3, 1}));
-  EXPECT_EQ(1, context.dictEncoders_.count(EncodingKey{3, 3}));
-
-  context.removeAllIntDictionaryEncodersOnNode(
-      [](uint32_t nodeId) { return nodeId == 3; });
-  EXPECT_EQ(1, context.dictEncoders_.size());
-  EXPECT_EQ(0, context.dictEncoders_.count(EncodingKey{1, 1}));
-  EXPECT_EQ(0, context.dictEncoders_.count(EncodingKey{1, 2}));
-  EXPECT_EQ(0, context.dictEncoders_.count(EncodingKey{1, 4}));
-  EXPECT_EQ(0, context.dictEncoders_.count(EncodingKey{1, 5}));
-  EXPECT_EQ(1, context.dictEncoders_.count(EncodingKey{2, 0}));
-  EXPECT_EQ(0, context.dictEncoders_.count(EncodingKey{3, 1}));
-  EXPECT_EQ(0, context.dictEncoders_.count(EncodingKey{3, 3}));
-
-  context.removeAllIntDictionaryEncodersOnNode(
-      [](uint32_t nodeId) { return nodeId == 2; });
-  EXPECT_EQ(0, context.dictEncoders_.size());
+  EXPECT_EQ(
+      (std::vector<uint32_t>{1, 1, 1, 1, 2, 3, 3}), removeAndCollectNodes(1));
+  EXPECT_EQ((std::vector<uint32_t>{2, 3, 3}), removeAndCollectNodes(3));
+  EXPECT_EQ((std::vector<uint32_t>{2}), removeAndCollectNodes(2));
+  EXPECT_TRUE(removeAndCollectNodes(0).empty());
 }
 
 TEST_F(WriterContextTest, buildPhysicalSizeAggregators) {

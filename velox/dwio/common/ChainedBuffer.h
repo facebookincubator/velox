@@ -17,7 +17,6 @@
 #pragma once
 
 #include <bitset>
-#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/DataBuffer.h"
 
 namespace facebook::velox::dwio::common {
@@ -28,6 +27,25 @@ constexpr uint32_t DEFAULT_MAX_PAGE_BYTES = 256 * 1024;
 constexpr uint32_t DEFAULT_INITIAL_CAPACITY = 1024;
 
 } // namespace
+
+namespace detail {
+
+inline size_t bitCount(uint32_t val) {
+  return std::bitset<64>(val).count();
+}
+
+inline uint8_t trailingZeros(uint32_t val) {
+  VELOX_CHECK_GT(val, 0);
+  uint8_t ret = 0;
+  val = (val ^ (val - 1)) >> 1;
+  while (val) {
+    val >>= 1;
+    ++ret;
+  }
+  return ret;
+}
+
+} // namespace detail
 
 template <typename T>
 class ChainedBuffer {
@@ -41,11 +59,15 @@ class ChainedBuffer {
         capacity_{0},
         initialCapacity_{initialCapacity},
         maxPageCapacity_{maxPageBytes / static_cast<uint32_t>(sizeof(T))},
-        bits_{trailingZeros(maxPageCapacity_)},
+        bits_{detail::trailingZeros(maxPageCapacity_)},
         mask_{~(~0ull << bits_)} {
     VELOX_CHECK_EQ(
-        bitCount(maxPageBytes), 1, "must be power of 2: {}", maxPageBytes);
-    VELOX_CHECK_EQ(bitCount(sizeof(T)), 1, "must be power of 2: {}", sizeof(T));
+        detail::bitCount(maxPageBytes),
+        1,
+        "must be power of 2: {}",
+        maxPageBytes);
+    VELOX_CHECK_EQ(
+        detail::bitCount(sizeof(T)), 1, "must be power of 2: {}", sizeof(T));
 
     while (capacity_ < initialCapacity_) {
       addPage(std::min(initialCapacity_, maxPageCapacity_));
@@ -96,6 +118,10 @@ class ChainedBuffer {
 
   uint64_t size() const {
     return size_;
+  }
+
+  size_t pageCount() const {
+    return pages_.size();
   }
 
   /// If 'all' is true, clear all pages. Otherwise, clear all the pages except
@@ -178,21 +204,6 @@ class ChainedBuffer {
     return index & mask_;
   }
 
-  static size_t bitCount(uint32_t val) {
-    return std::bitset<64>(val).count();
-  }
-
-  static uint8_t trailingZeros(uint32_t val) {
-    VELOX_CHECK_GT(val, 0);
-    uint8_t ret = 0;
-    val = (val ^ (val - 1)) >> 1;
-    while (val) {
-      val >>= 1;
-      ++ret;
-    }
-    return ret;
-  }
-
   static uint32_t nextPowOf2(uint32_t val) {
     val -= 1;
     val |= (val >> 1);
@@ -212,17 +223,6 @@ class ChainedBuffer {
   const uint32_t maxPageCapacity_;
   const uint8_t bits_;
   const uint64_t mask_;
-
-  VELOX_FRIEND_TEST(ChainedBufferTests, testCreate);
-  VELOX_FRIEND_TEST(ChainedBufferTests, testReserve);
-  VELOX_FRIEND_TEST(ChainedBufferTests, testAppend);
-  VELOX_FRIEND_TEST(ChainedBufferTests, testClear);
-  VELOX_FRIEND_TEST(ChainedBufferTests, testGetPage);
-  VELOX_FRIEND_TEST(ChainedBufferTests, testGetPageIndex);
-  VELOX_FRIEND_TEST(ChainedBufferTests, testGetPageOffset);
-  VELOX_FRIEND_TEST(ChainedBufferTests, testBitCount);
-  VELOX_FRIEND_TEST(ChainedBufferTests, testTrailingZeros);
-  VELOX_FRIEND_TEST(ChainedBufferTests, testClearAll);
 };
 
 } // namespace facebook::velox::dwio::common

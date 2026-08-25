@@ -235,13 +235,13 @@ void Base64::encodeImpl(
       *outputPointer++ = charset[(inputBlock >> 12) & 0x3f];
       *outputPointer++ = charset[(inputBlock >> 6) & 0x3f];
       if (includePadding) {
-        *outputPointer = kPadding;
+        *outputPointer = detail::kPadding;
       }
     } else {
       *outputPointer++ = charset[(inputBlock >> 12) & 0x3f];
       if (includePadding) {
-        *outputPointer++ = kPadding;
-        *outputPointer = kPadding;
+        *outputPointer++ = detail::kPadding;
+        *outputPointer = detail::kPadding;
       }
     }
   }
@@ -376,7 +376,7 @@ Expected<size_t> Base64::calculateDecodedSize(
   }
 
   // Check if the input string is padded
-  if (isPadded(input, inputSize)) {
+  if (detail::isPadded(input, inputSize)) {
     // If padded, ensure that the string length is a multiple of the encoded
     // block size
     if (inputSize % kEncodedBlockByteSize != 0) {
@@ -388,7 +388,7 @@ Expected<size_t> Base64::calculateDecodedSize(
 
     auto decodedSize =
         (inputSize * kBinaryBlockByteSize) / kEncodedBlockByteSize;
-    auto paddingCount = numPadding(input, inputSize);
+    auto paddingCount = detail::numPadding(input, inputSize);
     inputSize -= paddingCount;
 
     // Adjust the needed size by deducting the bytes corresponding to the
@@ -567,10 +567,11 @@ Status Base64::decodeMime(const char* input, size_t inputSize, char* output) {
     int val = kBase64ReverseIndexTable[c];
 
     // Padding character.
-    if (c == kPadding) {
+    if (c == detail::kPadding) {
       // If we see '=' too early or only one '=' when two are needed → error.
       if (bitsNeeded == 18 ||
-          (bitsNeeded == 6 && (idx == inputSize || input[idx++] != kPadding))) {
+          (bitsNeeded == 6 &&
+           (idx == inputSize || input[idx++] != detail::kPadding))) {
         return Status::UserError(
             "Input byte array has wrong 4-byte ending unit.");
       }
@@ -639,7 +640,7 @@ Expected<size_t> Base64::calculateMimeDecodedSize(
   // Compute how many true Base64 chars.
   for (size_t i = 0; i < inputSize; ++i) {
     auto c = input[i];
-    if (c == kPadding) {
+    if (c == detail::kPadding) {
       decodedSize -= inputSize - i;
       break;
     }
@@ -710,14 +711,14 @@ void Base64::encodeMime(const char* input, size_t inputSize, char* output) {
     if (remaining == 1) {
       // Only one byte remains: produce two chars + two '=' paddings.
       *writePtr++ = kBase64Charset[(b0 & 0x03) << 4];
-      *writePtr++ = kPadding;
-      *writePtr = kPadding;
+      *writePtr++ = detail::kPadding;
+      *writePtr = detail::kPadding;
     } else {
       // Two bytes remain: produce three chars + one '=' padding.
       uint8_t b1 = static_cast<uint8_t>(*readPtr);
       *writePtr++ = kBase64Charset[((b0 & 0x03) << 4) | (b1 >> 4)];
       *writePtr++ = kBase64Charset[(b1 & 0x0F) << 2];
-      *writePtr = kPadding;
+      *writePtr = detail::kPadding;
     }
   }
 }

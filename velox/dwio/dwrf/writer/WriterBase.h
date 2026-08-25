@@ -21,7 +21,6 @@
 #include <utility>
 #include <vector>
 
-#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/Arena.h"
 #include "velox/dwio/dwrf/writer/WriterContext.h"
 #include "velox/dwio/dwrf/writer/WriterSink.h"
@@ -200,7 +199,6 @@ class WriterBase {
   std::unique_ptr<google::protobuf::Arena> arena_;
 
   friend class WriterTest;
-  VELOX_FRIEND_TEST(WriterBaseTest, FlushWriterSinkUponClose);
 };
 
 } // namespace facebook::velox::dwrf

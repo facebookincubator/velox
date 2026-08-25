@@ -91,14 +91,14 @@ TEST_F(Base64Test, calculateDecodedSizeProperSize) {
 }
 
 TEST_F(Base64Test, checksPadding) {
-  EXPECT_TRUE(Base64::isPadded("ABC=", 4));
-  EXPECT_FALSE(Base64::isPadded("ABC", 3));
+  EXPECT_TRUE(detail::isPadded("ABC=", 4));
+  EXPECT_FALSE(detail::isPadded("ABC", 3));
 }
 
 TEST_F(Base64Test, countsPaddingCorrectly) {
-  EXPECT_EQ(0, Base64::numPadding("ABC", 3));
-  EXPECT_EQ(1, Base64::numPadding("ABC=", 4));
-  EXPECT_EQ(2, Base64::numPadding("AB==", 4));
+  EXPECT_EQ(0, detail::numPadding("ABC", 3));
+  EXPECT_EQ(1, detail::numPadding("ABC=", 4));
+  EXPECT_EQ(2, detail::numPadding("AB==", 4));
 }
 
 TEST_F(Base64Test, calculateMimeDecodedSize) {
