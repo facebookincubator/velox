@@ -1455,6 +1455,50 @@ TEST_F(TimezoneFunctionTest, fromIso8601OutOfRangeFieldsThrowLikeCpu) {
   }
 }
 
+// The extreme-year check has TWO regex alternations -- "[+-][0-9]{4,}" for a signed
+// year and "[0-9]{5,}" for an unsigned long one -- and until 2026-08-25 only the
+// second was exercised, by "+12021". A SIGNED FOUR-DIGIT year matches the first and
+// only the first, so this is what distinguishes them: tightening that branch to
+// "[+-][0-9]{5,}", or dropping the sign class, would leave "-0500" falling through to
+// the ordinary parse, where cudf::strings::to_timestamps would mis-parse it into an
+// int16 %Y instead of raising. Every case here is CPU-valid, so a silent mis-parse
+// would be a wrong answer rather than an error.
+//
+// This is deliberately NOT the same defect family as the out-of-range INSTANTS raised
+// in review on PR 17899 and fixed in 1d4ee1c12: those were the offset lookup in
+// TimezoneConversion.cpp, where a year-12000 instant already exists and only its
+// zone offset is in question. Here the parser cannot get a year out of the string at
+// all, which is a cuDF format limit rather than a table horizon.
+TEST_F(TimezoneFunctionTest, fromIso8601SignedYearIsAnUnsupportedYearNotMalformed) {
+  for (const auto& extreme : std::vector<std::string>{
+           "-0500-01-01T00:00:00", // signed, FOUR digits: the untested branch
+           "+0500-01-01T00:00:00", // signed positive, also four digits
+           "-12021-01-01T00:00:00", // signed AND five digits
+           "+12021-01-01T00:00:00", // the branch that was already covered
+           "12021-01-01T00:00:00", // unsigned five digits
+       }) {
+    SCOPED_TRACE(extreme);
+    auto input = varcharInput(extreme);
+    auto exprSet = compileExpression(
+        "from_iso8601_timestamp(c0)", asRowType(input->type()));
+    // CPU accepts every one of these, so the GPU must RAISE rather than answer:
+    // measured on a cluster, CPU returns -0500-01-01T00:00:00.000Z for the first.
+    EXPECT_NO_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+    VELOX_ASSERT_THROW(
+        evaluate(*exprSet, input),
+        "from_iso8601_timestamp does not support years outside [0000, 9999] on GPU");
+  }
+}
+
+// A four-digit unsigned year is ordinary and must still parse, so the sign class in
+// the regex cannot be widened into something that swallows normal input.
+TEST_F(TimezoneFunctionTest, fromIso8601OrdinaryYearIsUnaffected) {
+  assertMatchesCpu(
+      "from_iso8601_timestamp(c0)", varcharInput("0500-01-01T00:00:00"));
+  assertMatchesCpu(
+      "from_iso8601_timestamp(c0)", varcharInput("9999-12-31T23:59:59"));
+}
+
 // A malformed field in a string whose year is out of range must be reported as
 // a parse error, not as an unsupported year. Both programs carry the same tail,
 // so such a string matches neither and is malformed -- which is what CPU calls
