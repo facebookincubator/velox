@@ -39,6 +39,8 @@
 #include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
 
+#include <cuda/std/numeric>
+
 #include <limits>
 
 namespace {
@@ -65,13 +67,6 @@ size_t streamingGroupbySafeCapacity() {
   // signed cudf::size_type. Keeping both operands at or below half of the
   // maximum also bounds the physical cuco table used by streaming_groupby.
   return static_cast<size_t>(std::numeric_limits<cudf::size_type>::max()) / 2;
-}
-
-size_t saturatingAdd(size_t lhs, size_t rhs) {
-  if (lhs > std::numeric_limits<size_t>::max() - rhs) {
-    return std::numeric_limits<size_t>::max();
-  }
-  return lhs + rhs;
 }
 
 std::unique_ptr<cudf::column> castStreamingOutput(
@@ -1254,7 +1249,9 @@ void CudfGroupby::computeFinalGroupbyWithStreamingApi(CudfVectorPtr input) {
       // this 2x logical headroom corresponds to roughly 4x first-batch rows in
       // hash slots while avoiding the old branch's roughly 8x allocation.
       streamingGroupbyCapacity_ = std::max<size_t>(
-          std::min(saturatingAdd(inputRows, inputRows), safeCapacity), 1);
+          std::min(
+              cuda::std::saturating_add(inputRows, inputRows), safeCapacity),
+          1);
       streamingGroupby_ = createStreamingGroupby(streamingGroupbyCapacity_);
       streamingGroupby_->aggregate(preparedInput, stateStream);
       auto lockedStats = stats_.wlock();
@@ -1263,7 +1260,8 @@ void CudfGroupby::computeFinalGroupbyWithStreamingApi(CudfVectorPtr input) {
     } else {
       const auto distinctKeys =
           static_cast<size_t>(streamingGroupby_->distinct_keys());
-      const auto requiredCapacity = saturatingAdd(distinctKeys, inputRows);
+      const auto requiredCapacity =
+          cuda::std::saturating_add(distinctKeys, inputRows);
       VELOX_CHECK_LE(
           requiredCapacity,
           safeCapacity,
@@ -1273,7 +1271,7 @@ void CudfGroupby::computeFinalGroupbyWithStreamingApi(CudfVectorPtr input) {
           inputRows);
 
       if (requiredCapacity > streamingGroupbyCapacity_) {
-        const auto geometricCapacity = saturatingAdd(
+        const auto geometricCapacity = cuda::std::saturating_add(
             streamingGroupbyCapacity_,
             std::max<size_t>(streamingGroupbyCapacity_ / 2, 1));
         const auto newCapacity = std::min(
