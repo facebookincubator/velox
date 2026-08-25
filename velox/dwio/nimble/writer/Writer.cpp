@@ -18,12 +18,17 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <span>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "folly/container/F14Map.h"
 #include "velox/common/base/Counters.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/memory/MemoryArbitrator.h"
@@ -33,6 +38,8 @@
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryCatalog.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
@@ -52,11 +59,14 @@
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SchemaTypes.h"
+
+#include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
 #include "velox/dwio/nimble/velox/StatsGenerated.h"
 #include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/StreamChunker.h"
+#include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
 namespace facebook::nimble {
@@ -70,6 +80,7 @@ class WriterContext : public FieldWriterContext {
   WriterContext(velox::memory::MemoryPool& memoryPool, WriterOptions options)
       : FieldWriterContext{memoryPool, options.reclaimerFactory(), options.vectorDecoderVisitor},
         options_{std::move(options)},
+        hasStripeDictionaryConfig_{hasStripeDictionaryConfig(options_)},
         logger_{
             this->options_.metricsLogger == nullptr
                 ? std::make_shared<MetricsLogger>()
@@ -90,6 +101,10 @@ class WriterContext : public FieldWriterContext {
 
   const WriterOptions& options() const {
     return options_;
+  }
+
+  bool hasStripeDictionaryConfig() const {
+    return hasStripeDictionaryConfig_;
   }
 
   velox::CpuWallTiming& encodingTiming() {
@@ -214,7 +229,26 @@ class WriterContext : public FieldWriterContext {
   }
 
  private:
+  static bool hasStripeDictionaryConfig(const WriterOptions& options) {
+    for (const auto& columnDictionary :
+         options.experimentalSharedDictionaryEncoding.columns) {
+      if (columnDictionary.dictionary.scope == SharedDictionaryScope::Stripe) {
+        return true;
+      }
+    }
+    for (const auto& flatMap :
+         options.experimentalSharedDictionaryEncoding.flatMaps) {
+      for (const auto& flatMapKey : flatMap.keys) {
+        if (flatMapKey.dictionary.scope == SharedDictionaryScope::Stripe) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   const WriterOptions options_;
+  const bool hasStripeDictionaryConfig_;
   velox::CpuWallTiming encodingTiming_;
   velox::CpuWallTiming writeTiming_;
   velox::CpuWallTiming ingestionTiming_;
@@ -442,14 +476,15 @@ WriterOptions storedWriterOptions(
         *options.encodingLayoutTree, storedInputColumnIndices));
   }
 
-  if (!options.featureReordering.has_value()) {
+  const bool hasFeatureReordering = options.featureReordering.has_value();
+  if (!hasFeatureReordering) {
     return options;
   }
 
   // Field writers and the layout planner are built from storedDataType().
   // When key columns are omitted, stored column ordinals can differ from input
-  // ordinals, so feature reordering must be translated to stored ordinals
-  // before it reaches the layout planner.
+  // ordinals, so ordinal-based feature reordering configs must be translated to
+  // stored ordinals before they reach the writer internals.
   folly::F14FastMap<velox::column_index_t, size_t> storedIndexByInputIndex;
   storedIndexByInputIndex.reserve(storedInputColumnIndices.size());
   for (auto storedIndex = 0; storedIndex < storedInputColumnIndices.size();
@@ -572,6 +607,10 @@ class WriterStreamContext : public StreamContext {
     isInMapStream_ = value;
   }
 
+  void setFlatMapValueStreamOffsets(std::vector<offset_size> offsets) {
+    flatMapValueStreamOffsets_ = std::move(offsets);
+  }
+
   // The layout to replay for this stream: overlaid from the EncodingLayoutTree
   // at setup, or captured from this stream's first encode when
   // encoding-selection caching is enabled. Empty until one of those populates
@@ -584,24 +623,400 @@ class WriterStreamContext : public StreamContext {
     encoding_.emplace(std::move(value));
   }
 
+  // Stores the shared dictionary configuration selected for this value stream.
+  void setSharedDictionaryConfig(const SharedDictionaryConfig& config) {
+    sharedDictionaryConfig_ = config;
+  }
+
+  // Returns the shared dictionary configuration, if this stream is configured
+  // to use one.
+  const std::optional<SharedDictionaryConfig>& sharedDictionaryConfig() const {
+    return sharedDictionaryConfig_;
+  }
+
+  SharedDictionaryWriter* sharedDictionaryWriter() const {
+    return sharedDictionaryWriter_.get();
+  }
+
+  void setSharedDictionaryWriter(
+      std::unique_ptr<SharedDictionaryWriter> writer) const {
+    NIMBLE_CHECK_NULL(
+        sharedDictionaryWriter_, "Shared dictionary writer already exists.");
+    sharedDictionaryWriter_ = std::move(writer);
+  }
+
  private:
   bool isNullStream_{false};
   bool isInMapStream_{false};
+  // Value stream descriptor offsets for this in-map stream's flat-map field.
+  // Empty for non in-map streams and flat-map values with no reader-visible
+  // value stream.
+  std::vector<offset_size> flatMapValueStreamOffsets_;
   std::optional<EncodingLayout> encoding_;
+  std::optional<SharedDictionaryConfig> sharedDictionaryConfig_;
+  mutable std::unique_ptr<SharedDictionaryWriter> sharedDictionaryWriter_;
 };
 
+// Context attached to one FlatMap TypeBuilder node. It carries the per-key
+// encoding layouts and value dictionary configs that are applied later when the
+// writer materializes children for specific flat-map keys.
 class FlatmapEncodingLayoutContext : public TypeBuilderContext {
  public:
-  explicit FlatmapEncodingLayoutContext(
-      folly::F14FastMap<std::string_view, const EncodingLayoutTree&>
-          keyEncodings)
-      : keyEncodings{std::move(keyEncodings)} {}
+  using KeyEncodingMap =
+      folly::F14FastMap<std::string_view, const EncodingLayoutTree*>;
 
-  const folly::F14FastMap<std::string_view, const EncodingLayoutTree&>
-      keyEncodings;
+  struct ValueDictionaryConfig {
+    // Relative subfield below the materialized flat-map key value. Empty
+    // selects the key value itself.
+    std::string valueSubfield;
+    SharedDictionaryConfig dictionary;
+  };
+
+  // Keyed by the materialized flat-map key name, e.g. "10" or "feature_a".
+  using ValueDictionaryMap =
+      folly::F14FastMap<std::string, std::vector<ValueDictionaryConfig>>;
+
+  explicit FlatmapEncodingLayoutContext(
+      KeyEncodingMap keyEncodings = {},
+      ValueDictionaryMap valueDictionaries = {})
+      : keyEncodings{std::move(keyEncodings)},
+        valueDictionaries{std::move(valueDictionaries)} {}
+
+  const KeyEncodingMap keyEncodings;
+  const ValueDictionaryMap valueDictionaries;
 };
 
 WriterStreamContext& streamContext(const StreamDescriptorBuilder& descriptor);
+
+Encoding::Options makeEncodingOptions(
+    const WriterOptions& writerOptions,
+    velox::BufferPool* encodingScratchBufferPool,
+    EncodingBufferPool* encodingBufferPool) {
+  // WriterOptions carries file-format and selection settings; the scratch
+  // pools are per encode call and must be threaded into nested encoders.
+  auto encodingOptions = writerOptions.buildEncodingOptions();
+  encodingOptions.bufferPool = encodingScratchBufferPool;
+  encodingOptions.encodingBufferPool = encodingBufferPool;
+  return encodingOptions;
+}
+
+bool hasDictionaryConfig(const StreamData& streamData) {
+  const auto* streamContext =
+      streamData.descriptor().context<WriterStreamContext>();
+  return streamContext != nullptr &&
+      streamContext->sharedDictionaryConfig().has_value();
+}
+
+bool isSharedDictionaryValueType(DataType dataType) {
+  switch (dataType) {
+    case DataType::Int8:
+    case DataType::Uint8:
+    case DataType::Int16:
+    case DataType::Uint16:
+    case DataType::Int32:
+    case DataType::Uint32:
+    case DataType::Int64:
+    case DataType::Uint64:
+      return true;
+    case DataType::Undefined:
+    case DataType::Float:
+    case DataType::Double:
+    case DataType::Bool:
+    case DataType::String:
+      return false;
+  }
+  NIMBLE_UNREACHABLE("Unsupported data type {}.", dataType);
+}
+
+template <typename T>
+// NOLINTNEXTLINE(facebook-hte-NullableReturn)
+TypedSharedDictionaryWriter<T>* sharedDictionaryWriter(
+    const StreamData& streamData,
+    detail::WriterContext& context,
+    Buffer& buffer,
+    velox::BufferPool* encodingScratchBufferPool,
+    EncodingBufferPool* encodingBufferPool) {
+  auto* streamContext = streamData.descriptor().context<WriterStreamContext>();
+  if (streamContext == nullptr) {
+    return nullptr;
+  }
+
+  // Chunked writes revisit the same value stream, so the writer is cached in
+  // the stream context. The type check guards against reusing that state with
+  // a different physical value type.
+  if (auto* dictionaryWriter = streamContext->sharedDictionaryWriter()) {
+    NIMBLE_CHECK_EQ(
+        dictionaryWriter->dataType(),
+        TypeTraits<T>::dataType,
+        "Shared dictionary writer has unexpected value type.");
+    return velox::checkedPointerCast<TypedSharedDictionaryWriter<T>>(
+        dictionaryWriter);
+  }
+
+  const auto& config = streamContext->sharedDictionaryConfig();
+  if (!config.has_value()) {
+    return nullptr;
+  }
+  const auto& writerOptions = context.options();
+  auto encodingOptions = makeEncodingOptions(
+      writerOptions, encodingScratchBufferPool, encodingBufferPool);
+  SharedDictionaryWriter::Options dictionaryOptions{
+      .scope = config->scope,
+      .dictionaryId = config->dictionaryId,
+      .useExternalAlphabet = config->useExternalAlphabet,
+      .alphabetEncodings = config->alphabetEncodings,
+      .encodingSelectionPolicyCreator =
+          writerOptions.encodingSelectionPolicyCreator,
+      .encodingOptions = std::move(encodingOptions),
+      .resolver =
+          writerOptions.experimentalSharedDictionaryEncoding.externalResolver,
+  };
+  auto writer = std::make_unique<TypedSharedDictionaryWriter<T>>(
+      &buffer.getMemoryPool(), dictionaryOptions);
+  auto* writerPtr = writer.get();
+  streamContext->setSharedDictionaryWriter(std::move(writer));
+  return writerPtr;
+}
+
+template <typename T>
+std::unique_ptr<EncodingSelectionPolicy<T>> makeEncodingPolicy(
+    bool hasEncodingLayout,
+    std::optional<EncodingLayout> encodingLayout,
+    detail::WriterContext& context,
+    Buffer& buffer,
+    velox::BufferPool* encodingScratchBufferPool,
+    EncodingBufferPool* encodingBufferPool,
+    const StreamData& streamData) {
+  if (hasDictionaryConfig(streamData)) {
+    NIMBLE_USER_CHECK(
+        isSharedDictionaryValueType(TypeTraits<T>::dataType),
+        "Shared dictionary encoding only supports non-bool integer streams, "
+        "got {}.",
+        TypeTraits<T>::dataType);
+    if constexpr (isIntegralType<T>() && !std::is_same_v<T, bool>) {
+      auto* dictionaryWriter = sharedDictionaryWriter<T>(
+          streamData,
+          context,
+          buffer,
+          encodingScratchBufferPool,
+          encodingBufferPool);
+      NIMBLE_CHECK_NOT_NULL(dictionaryWriter);
+      return dictionaryWriter->createEncodingPolicy(context.getStripeIndex());
+    } else {
+      NIMBLE_UNREACHABLE(
+          "Shared dictionary type validation accepted unsupported {}.",
+          TypeTraits<T>::dataType);
+    }
+  }
+  if (hasEncodingLayout) {
+    return std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
+        std::move(encodingLayout.value()),
+        context.options().compressionOptions,
+        context.options().encodingSelectionPolicyCreator);
+  }
+  return std::unique_ptr<EncodingSelectionPolicy<T>>(
+      static_cast<EncodingSelectionPolicy<T>*>(
+          context.options()
+              .encodingSelectionPolicyCreator(TypeTraits<T>::dataType)
+              .release()));
+}
+
+void configureDictionary(
+    const TypeBuilder& typeBuilder,
+    SharedDictionaryConfig config,
+    SchemaBuilder& schemaBuilder) {
+  switch (typeBuilder.kind()) {
+    case Kind::Scalar: {
+      const auto& scalar = typeBuilder.asScalar();
+      NIMBLE_USER_CHECK(
+          isIntegerScalarKind(scalar.scalarDescriptor().scalarKind()),
+          "Shared dictionary value must be an integer scalar, got {}.",
+          scalar.scalarDescriptor().scalarKind());
+      if (config.scope == SharedDictionaryScope::Stripe) {
+        NIMBLE_USER_CHECK_EQ(
+            config.dictionaryId,
+            0,
+            "Stripe shared dictionary config must leave dictionaryId unset.");
+        config.dictionaryId = schemaBuilder.createSharedDictionaryStream(
+            scalar.scalarDescriptor().offset());
+      }
+      streamContext(scalar.scalarDescriptor())
+          .setSharedDictionaryConfig(config);
+      return;
+    }
+    case Kind::Array:
+      configureDictionary(
+          typeBuilder.asArray().elements(), std::move(config), schemaBuilder);
+      return;
+    case Kind::ArrayWithOffsets:
+      configureDictionary(
+          typeBuilder.asArrayWithOffsets().elements(),
+          std::move(config),
+          schemaBuilder);
+      return;
+    case Kind::Map:
+      configureDictionary(
+          typeBuilder.asMap().values(), std::move(config), schemaBuilder);
+      return;
+    case Kind::SlidingWindowMap:
+      configureDictionary(
+          typeBuilder.asSlidingWindowMap().values(),
+          std::move(config),
+          schemaBuilder);
+      return;
+    case Kind::TimestampMicroNano:
+    case Kind::Row:
+    case Kind::FlatMap:
+      NIMBLE_USER_FAIL(
+          "Shared dictionary value must resolve to an integer scalar, array "
+          "element, or map value, got {}.",
+          typeBuilder.kind());
+  }
+}
+
+// Resolves [*] to the selected array element or map value type.
+const TypeBuilder& allSubscriptValueType(
+    const TypeBuilder& typeBuilder,
+    std::string_view subfield) {
+  switch (typeBuilder.kind()) {
+    case Kind::Array:
+      return typeBuilder.asArray().elements();
+    case Kind::ArrayWithOffsets:
+      return typeBuilder.asArrayWithOffsets().elements();
+    case Kind::Map:
+      return typeBuilder.asMap().values();
+    case Kind::SlidingWindowMap:
+      return typeBuilder.asSlidingWindowMap().values();
+    case Kind::Scalar:
+    case Kind::TimestampMicroNano:
+    case Kind::Row:
+    case Kind::FlatMap:
+      NIMBLE_USER_FAIL(
+          "Shared dictionary value subfield '{}' cannot apply [*] to {}.",
+          subfield,
+          typeBuilder.kind());
+  }
+  NIMBLE_UNREACHABLE("Unknown schema kind: {}.", typeBuilder.kind());
+}
+
+const TypeBuilder& resolveFieldPath(
+    const TypeBuilder& root,
+    const std::string& fieldPath) {
+  if (fieldPath.empty()) {
+    return root;
+  }
+  const velox::common::Subfield subfield{fieldPath};
+  const auto& path = subfield.path();
+  const TypeBuilder* current = &root;
+  for (const auto& pathElement : path) {
+    if (pathElement->is(velox::common::SubfieldKind::kAllSubscripts)) {
+      current = &allSubscriptValueType(*current, fieldPath);
+      continue;
+    }
+    const auto& childName =
+        pathElement->asChecked<velox::common::Subfield::NestedField>()->name();
+    current = &current->asRow().findChild(childName);
+  }
+  return *current;
+}
+
+void maybeAddFileDictionaryId(
+    const SharedDictionaryConfig& config,
+    folly::F14FastSet<uint32_t>& fileDictionaryIds) {
+  if (config.scope != SharedDictionaryScope::File) {
+    return;
+  }
+  const bool inserted = fileDictionaryIds.insert(config.dictionaryId).second;
+  NIMBLE_USER_CHECK(
+      inserted,
+      "File shared dictionary ID {} is configured for multiple streams. "
+      "Cross-stream domains are not supported yet.",
+      config.dictionaryId);
+}
+
+// Resolves [*] to the selected array element or map value type.
+const TypeWithId& allSubscriptValueType(
+    const TypeWithId& type,
+    const std::string& fieldPath) {
+  switch (type.type()->kind()) {
+    case velox::TypeKind::ARRAY:
+      return *type.childAt(0);
+    case velox::TypeKind::MAP:
+      return *type.childAt(1);
+    case velox::TypeKind::BOOLEAN:
+    case velox::TypeKind::TINYINT:
+    case velox::TypeKind::SMALLINT:
+    case velox::TypeKind::INTEGER:
+    case velox::TypeKind::BIGINT:
+    case velox::TypeKind::REAL:
+    case velox::TypeKind::DOUBLE:
+    case velox::TypeKind::VARCHAR:
+    case velox::TypeKind::VARBINARY:
+    case velox::TypeKind::TIMESTAMP:
+    case velox::TypeKind::HUGEINT:
+    case velox::TypeKind::ROW:
+    case velox::TypeKind::UNKNOWN:
+    case velox::TypeKind::FUNCTION:
+    case velox::TypeKind::OPAQUE:
+    case velox::TypeKind::INVALID:
+      NIMBLE_USER_FAIL(
+          "Shared dictionary path '{}' cannot apply [*] to {}.",
+          fieldPath,
+          type.type()->toString());
+  }
+  VELOX_UNREACHABLE();
+}
+
+const TypeWithId& resolveFieldPath(
+    const TypeWithId& root,
+    const std::string& fieldPath) {
+  const velox::common::Subfield subfield{fieldPath};
+  const TypeWithId* current = &root;
+  for (const auto& pathElement : subfield.path()) {
+    if (pathElement->is(velox::common::SubfieldKind::kAllSubscripts)) {
+      current = &allSubscriptValueType(*current, fieldPath);
+      continue;
+    }
+    const auto& childName =
+        pathElement->asChecked<velox::common::Subfield::NestedField>()->name();
+    current = current->childByName(childName).get();
+  }
+  return *current;
+}
+
+const TypeWithId& resolveDictionaryValueType(
+    const TypeWithId& type,
+    const std::string& fieldPath) {
+  switch (type.type()->kind()) {
+    case velox::TypeKind::ARRAY:
+      return resolveDictionaryValueType(*type.childAt(0), fieldPath);
+    case velox::TypeKind::MAP:
+      return resolveDictionaryValueType(*type.childAt(1), fieldPath);
+    case velox::TypeKind::TINYINT:
+    case velox::TypeKind::SMALLINT:
+    case velox::TypeKind::INTEGER:
+    case velox::TypeKind::BIGINT:
+      return type;
+    case velox::TypeKind::BOOLEAN:
+    case velox::TypeKind::REAL:
+    case velox::TypeKind::DOUBLE:
+    case velox::TypeKind::VARCHAR:
+    case velox::TypeKind::VARBINARY:
+    case velox::TypeKind::TIMESTAMP:
+    case velox::TypeKind::HUGEINT:
+    case velox::TypeKind::ROW:
+    case velox::TypeKind::UNKNOWN:
+    case velox::TypeKind::FUNCTION:
+    case velox::TypeKind::OPAQUE:
+    case velox::TypeKind::INVALID:
+      NIMBLE_USER_FAIL(
+          "Shared dictionary column '{}' must resolve to an integer scalar, "
+          "array element, or map value, got {}.",
+          fieldPath,
+          type.type()->toString());
+  }
+  VELOX_UNREACHABLE();
+}
 
 template <typename T>
 std::string_view encode(
@@ -629,24 +1044,17 @@ std::string_view encode(
   velox::common::testutil::TestValue::adjust(
       "facebook::nimble::encode", const_cast<bool*>(&hasEncodingLayout));
 
-  std::unique_ptr<EncodingSelectionPolicy<T>> policy;
-  if (hasEncodingLayout) {
-    policy = std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
-        std::move(encodingLayout.value()),
-        context.options().compressionOptions,
-        context.options().encodingSelectionPolicyCreator);
+  auto policy = makeEncodingPolicy<T>(
+      hasEncodingLayout,
+      std::move(encodingLayout),
+      context,
+      buffer,
+      encodingScratchBufferPool,
+      encodingBufferPool,
+      streamData);
 
-  } else {
-    policy = std::unique_ptr<EncodingSelectionPolicy<T>>(
-        static_cast<EncodingSelectionPolicy<T>*>(
-            context.options()
-                .encodingSelectionPolicyCreator(TypeTraits<T>::dataType)
-                .release()));
-  }
-
-  auto encodingOptions = context.options().buildEncodingOptions();
-  encodingOptions.bufferPool = encodingScratchBufferPool;
-  encodingOptions.encodingBufferPool = encodingBufferPool;
+  auto encodingOptions = makeEncodingOptions(
+      context.options(), encodingScratchBufferPool, encodingBufferPool);
   velox::common::testutil::TestValue::adjust(
       "facebook::nimble::Writer::encode", &encodingOptions);
 
@@ -687,8 +1095,8 @@ std::string_view encodeWithFallback(
         streamData);
   } catch (const std::exception&) {
     // A saved layout can fail to apply to this chunk's data in ways beyond a
-    // clean IncompatibleEncoding, so retry on any error rather than keying off
-    // a specific (unreliable) error code.
+    // clean IncompatibleEncoding, so retry on any error rather than keying
+    // off a specific (unreliable) error code.
     return encode<T>(
         std::nullopt,
         context,
@@ -708,12 +1116,14 @@ std::string_view encodeStreamTyped(
     const StreamData& streamData) {
   const auto* writerStreamContext =
       streamData.descriptor().context<WriterStreamContext>();
+  const bool hasDictionary = hasDictionaryConfig(streamData);
 
   // Replay an externally provided (EncodingLayoutTree) or previously captured
   // layout, falling back to a fresh selection if it no longer fits the data.
   // TODO: Replace the exception-based best-effort replay in encodeWithFallback
   // with a non-throwing compatibility check before the replay attempt.
-  if (writerStreamContext && writerStreamContext->encoding()) {
+  if (!hasDictionary && writerStreamContext &&
+      writerStreamContext->encoding()) {
     return encodeWithFallback<T>(
         writerStreamContext->encoding(),
         context,
@@ -737,7 +1147,7 @@ std::string_view encodeStreamTyped(
   // already strips any Nullable/Sentinel wrapper, so the cached layout is the
   // data encoding alone — Nimble re-applies per-chunk nullability at encode
   // time, so it stays valid regardless of a later chunk's nulls.
-  if (context.options().enableEncodingSelectionCache) {
+  if (!hasDictionary && context.options().enableEncodingSelectionCache) {
     streamContext(streamData.descriptor())
         .setEncoding(
             EncodingLayoutCapture::capture(
@@ -845,6 +1255,210 @@ void findNodeIds(
   }
 }
 
+void collectFlatMapValueStreamOffsets(
+    const TypeBuilder& type,
+    std::vector<offset_size>& offsets) {
+  switch (type.kind()) {
+    case Kind::Scalar:
+      offsets.push_back(type.asScalar().scalarDescriptor().offset());
+      return;
+    case Kind::TimestampMicroNano:
+      offsets.push_back(
+          type.asTimestampMicroNano().microsDescriptor().offset());
+      offsets.push_back(type.asTimestampMicroNano().nanosDescriptor().offset());
+      return;
+    case Kind::Array:
+      offsets.push_back(type.asArray().lengthsDescriptor().offset());
+      collectFlatMapValueStreamOffsets(type.asArray().elements(), offsets);
+      return;
+    case Kind::ArrayWithOffsets:
+      offsets.push_back(type.asArrayWithOffsets().offsetsDescriptor().offset());
+      offsets.push_back(type.asArrayWithOffsets().lengthsDescriptor().offset());
+      collectFlatMapValueStreamOffsets(
+          type.asArrayWithOffsets().elements(), offsets);
+      return;
+    case Kind::Map:
+      offsets.push_back(type.asMap().lengthsDescriptor().offset());
+      collectFlatMapValueStreamOffsets(type.asMap().keys(), offsets);
+      collectFlatMapValueStreamOffsets(type.asMap().values(), offsets);
+      return;
+    case Kind::SlidingWindowMap:
+      offsets.push_back(type.asSlidingWindowMap().offsetsDescriptor().offset());
+      offsets.push_back(type.asSlidingWindowMap().lengthsDescriptor().offset());
+      collectFlatMapValueStreamOffsets(
+          type.asSlidingWindowMap().keys(), offsets);
+      collectFlatMapValueStreamOffsets(
+          type.asSlidingWindowMap().values(), offsets);
+      return;
+    case Kind::Row: {
+      const auto& row = type.asRow();
+      offsets.push_back(row.nullsDescriptor().offset());
+      for (size_t i = 0; i < row.childrenCount(); ++i) {
+        collectFlatMapValueStreamOffsets(row.childAt(i), offsets);
+      }
+      return;
+    }
+    case Kind::FlatMap: {
+      const auto& flatMap = type.asFlatMap();
+      offsets.push_back(flatMap.nullsDescriptor().offset());
+      for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
+        offsets.push_back(flatMap.inMapDescriptorAt(i).offset());
+        collectFlatMapValueStreamOffsets(flatMap.childAt(i), offsets);
+      }
+      return;
+    }
+    default:
+      NIMBLE_UNREACHABLE("Unsupported type kind {}", type.kind());
+  }
+}
+
+FlatmapEncodingLayoutContext::KeyEncodingMap keyEncodingsForFlatMap(
+    const EncodingLayoutTree& encodingLayoutTree) {
+  FlatmapEncodingLayoutContext::KeyEncodingMap keyEncodings;
+  keyEncodings.reserve(encodingLayoutTree.childrenCount());
+  for (auto i = 0; i < encodingLayoutTree.childrenCount(); ++i) {
+    const auto& child = encodingLayoutTree.child(i);
+    keyEncodings.emplace(child.name(), &child);
+  }
+  return keyEncodings;
+}
+
+folly::F14FastMap<uint32_t, FlatmapEncodingLayoutContext::KeyEncodingMap>
+collectFlatMapKeyEncodings(
+    const TypeWithId& type,
+    const detail::WriterContext& context) {
+  folly::F14FastMap<uint32_t, FlatmapEncodingLayoutContext::KeyEncodingMap>
+      flatMapKeyEncodings;
+  if (!context.options().encodingLayoutTree.has_value() ||
+      context.options().flatMapColumns.empty()) {
+    return flatMapKeyEncodings;
+  }
+
+  const auto& encodingLayoutTree = context.options().encodingLayoutTree.value();
+  NIMBLE_CHECK_EQ(
+      encodingLayoutTree.schemaKind(),
+      Kind::Row,
+      "Incompatible encoding layout node. Expecting row node.");
+  NIMBLE_CHECK_EQ(
+      type.type()->kind(),
+      velox::TypeKind::ROW,
+      "Flat-map encoding layout collection requires row root type, got {}.",
+      type.type()->toString());
+  const auto& rowType = type.type()->as<velox::TypeKind::ROW>();
+  for (const auto& [columnName, _] : context.options().flatMapColumns) {
+    const auto child = type.childByName(columnName);
+    for (uint32_t i = 0;
+         i < rowType.size() && i < encodingLayoutTree.childrenCount();
+         ++i) {
+      if (rowType.nameOf(i) != columnName) {
+        continue;
+      }
+      const auto& childLayout = encodingLayoutTree.child(i);
+      if (childLayout.schemaKind() == Kind::Map) {
+        // Schema evolution - If a map is converted to flatmap, we should not
+        // fail, but also not try to replay captured encodings.
+        break;
+      }
+      NIMBLE_CHECK_EQ(
+          childLayout.schemaKind(),
+          Kind::FlatMap,
+          "Incompatible encoding layout node. Expecting flatmap node.");
+      const auto nodeId = static_cast<uint32_t>(child->id());
+      flatMapKeyEncodings.emplace(nodeId, keyEncodingsForFlatMap(childLayout));
+      break;
+    }
+  }
+  return flatMapKeyEncodings;
+}
+
+struct DictionaryConfigs {
+  folly::F14FastMap<uint32_t, SharedDictionaryConfig> columns;
+  folly::F14FastMap<uint32_t, FlatmapEncodingLayoutContext::ValueDictionaryMap>
+      flatMaps;
+};
+
+// Resolves shared dictionary configs to writer schema targets. Flat-map value
+// stream assignment is deferred until each configured key is materialized.
+DictionaryConfigs collectDictionaryConfigs(
+    const TypeWithId& type,
+    const detail::WriterContext& context) {
+  DictionaryConfigs configs;
+  const auto& dictionaryEncodingConfig =
+      context.options().experimentalSharedDictionaryEncoding;
+  if (dictionaryEncodingConfig.empty()) {
+    return configs;
+  }
+
+  NIMBLE_USER_CHECK_EQ(
+      type.type()->kind(),
+      velox::TypeKind::ROW,
+      "Shared dictionary encoding requires a row root type, got {}.",
+      type.type()->toString());
+  folly::F14FastSet<uint32_t> fileDictionaryIds;
+  folly::F14FastSet<uint32_t> columnValueNodeIds;
+  configs.columns.reserve(dictionaryEncodingConfig.columns.size());
+  for (const auto& columnDictionary : dictionaryEncodingConfig.columns) {
+    const auto& fieldType = resolveFieldPath(type, columnDictionary.fieldPath);
+    const auto& valueType =
+        resolveDictionaryValueType(fieldType, columnDictionary.fieldPath);
+    const auto valueNodeId = static_cast<uint32_t>(valueType.id());
+    const auto insertedValueNode =
+        columnValueNodeIds.insert(valueNodeId).second;
+    NIMBLE_USER_CHECK(
+        insertedValueNode,
+        "Duplicate shared dictionary column configuration for schema value "
+        "node {}.",
+        valueNodeId);
+    NIMBLE_USER_CHECK(
+        valueType.type()->isInteger(),
+        "Shared dictionary column '{}' must resolve to an integer scalar, "
+        "array element, or map value, got {}.",
+        columnDictionary.fieldPath,
+        valueType.type()->toString());
+    maybeAddFileDictionaryId(columnDictionary.dictionary, fileDictionaryIds);
+    const auto nodeId = static_cast<uint32_t>(fieldType.id());
+    const auto inserted =
+        configs.columns.emplace(nodeId, columnDictionary.dictionary).second;
+    NIMBLE_USER_CHECK(
+        inserted,
+        "Duplicate shared dictionary column configuration for schema node {}.",
+        nodeId);
+  }
+
+  configs.flatMaps.reserve(dictionaryEncodingConfig.flatMaps.size());
+  for (const auto& flatMap : dictionaryEncodingConfig.flatMaps) {
+    const velox::common::Subfield subfield{flatMap.fieldPath};
+    NIMBLE_USER_CHECK_EQ(
+        subfield.path().size(),
+        1,
+        "Shared dictionary flat-map path '{}' must be a top-level writer input "
+        "column.",
+        flatMap.fieldPath);
+    const auto& fieldType = resolveFieldPath(type, flatMap.fieldPath);
+    NIMBLE_USER_CHECK_EQ(
+        fieldType.type()->kind(),
+        velox::TypeKind::MAP,
+        "Flat-map dictionary column '{}' must be a map, got {}.",
+        flatMap.fieldPath,
+        fieldType.type()->toString());
+    NIMBLE_USER_CHECK(
+        context.hasFlatMapNodeId(fieldType.id()),
+        "Flat-map dictionary column '{}' is not configured as a flat map.",
+        flatMap.fieldPath);
+
+    const auto nodeId = static_cast<uint32_t>(fieldType.id());
+    auto& flatMapKeys = configs.flatMaps[nodeId];
+    for (const auto& flatMapKey : flatMap.keys) {
+      const auto& config = flatMapKey.dictionary;
+      maybeAddFileDictionaryId(config, fileDictionaryIds);
+      flatMapKeys[std::to_string(flatMapKey.key)].push_back(
+          FlatmapEncodingLayoutContext::ValueDictionaryConfig{
+              .valueSubfield = flatMapKey.valueSubfield, .dictionary = config});
+    }
+  }
+  return configs;
+}
+
 WriterStreamContext& streamContext(const StreamDescriptorBuilder& descriptor) {
   auto* context = descriptor.context<WriterStreamContext>();
   if (context != nullptr) {
@@ -852,6 +1466,51 @@ WriterStreamContext& streamContext(const StreamDescriptorBuilder& descriptor) {
   }
   descriptor.setContext(std::make_unique<WriterStreamContext>());
   return *descriptor.context<WriterStreamContext>();
+}
+
+// Applies writer context that depends on the TypeBuilder node just created.
+// FlatMap value configs live on the parent FlatMap node so the key-add handler
+// can apply them when each keyed value stream is materialized.
+void configureAddedType(
+    detail::WriterContext& context,
+    TypeBuilder& type,
+    uint32_t nodeId,
+    const DictionaryConfigs& dictionaryConfigs,
+    const folly::
+        F14FastMap<uint32_t, FlatmapEncodingLayoutContext::KeyEncodingMap>&
+            flatMapKeyEncodingLayouts) {
+  if (type.kind() == Kind::Row) {
+    streamContext(type.asRow().nullsDescriptor()).setIsNullStream(true);
+  } else if (type.kind() == Kind::FlatMap) {
+    streamContext(type.asFlatMap().nullsDescriptor()).setIsNullStream(true);
+    FlatmapEncodingLayoutContext::KeyEncodingMap keyEncodings;
+    auto keyEncodingIt = flatMapKeyEncodingLayouts.find(nodeId);
+    if (keyEncodingIt != flatMapKeyEncodingLayouts.end()) {
+      keyEncodings = keyEncodingIt->second;
+    }
+    FlatmapEncodingLayoutContext::ValueDictionaryMap valueDictionaries;
+    auto dictionaryIt = dictionaryConfigs.flatMaps.find(nodeId);
+    if (dictionaryIt != dictionaryConfigs.flatMaps.end()) {
+      valueDictionaries = dictionaryIt->second;
+    }
+    if (!keyEncodings.empty() || !valueDictionaries.empty()) {
+      type.setContext(
+          std::make_unique<FlatmapEncodingLayoutContext>(
+              std::move(keyEncodings), std::move(valueDictionaries)));
+    }
+  }
+
+  auto columnDictionaryIt = dictionaryConfigs.columns.find(nodeId);
+  if (columnDictionaryIt != dictionaryConfigs.columns.end()) {
+    configureDictionary(
+        type, columnDictionaryIt->second, context.schemaBuilder());
+  }
+
+  const auto& schemaAttributes = context.options().schemaAttributes;
+  auto attribute = schemaAttributes.find(nodeId);
+  if (attribute != schemaAttributes.end()) {
+    type.setAttributes(attribute->second);
+  }
 }
 
 std::unique_ptr<FieldWriter> createRootFieldWriter(
@@ -899,19 +1558,22 @@ std::unique_ptr<FieldWriter> createRootFieldWriter(
   // id. schemaAttributes uses the same TypeWithId::id() numbering the handler
   // receives, so the lookup is a direct O(1) hit as each TypeBuilder is
   // constructed. Ids with no matching node are simply never looked up.
+  auto flatMapKeyEncodingLayouts = collectFlatMapKeyEncodings(*type, context);
+  auto dictionaryConfigs = collectDictionaryConfigs(*type, context);
+
   return FieldWriter::create(
-      context, type, [&context](TypeBuilder& type, uint32_t nodeId) {
-        if (type.kind() == Kind::Row) {
-          streamContext(type.asRow().nullsDescriptor()).setIsNullStream(true);
-        } else if (type.kind() == Kind::FlatMap) {
-          streamContext(type.asFlatMap().nullsDescriptor())
-              .setIsNullStream(true);
-        }
-        const auto& schemaAttributes = context.options().schemaAttributes;
-        auto it = schemaAttributes.find(nodeId);
-        if (it != schemaAttributes.end()) {
-          type.setAttributes(it->second);
-        }
+      context,
+      type,
+      [&context,
+       _flatMapKeyEncodingLayouts = std::move(flatMapKeyEncodingLayouts),
+       _dictionaryConfigs = std::move(dictionaryConfigs)](
+          TypeBuilder& type, uint32_t nodeId) {
+        configureAddedType(
+            context,
+            type,
+            nodeId,
+            _dictionaryConfigs,
+            _flatMapKeyEncodingLayouts);
       });
 }
 
@@ -935,18 +1597,7 @@ void initializeEncodingLayouts(
           encodingLayoutTree.schemaKind(),
           Kind::FlatMap,
           "Incompatible encoding layout node. Expecting flatmap node.");
-      folly::F14FastMap<std::string_view, const EncodingLayoutTree&>
-          keyEncodings;
-      keyEncodings.reserve(encodingLayoutTree.childrenCount());
-      for (auto i = 0; i < encodingLayoutTree.childrenCount(); ++i) {
-        auto& child = encodingLayoutTree.child(i);
-        keyEncodings.emplace(child.name(), child);
-      }
       const auto& mapBuilder = typeBuilder.asFlatMap();
-      mapBuilder.setContext(
-          std::make_unique<FlatmapEncodingLayoutContext>(
-              std::move(keyEncodings)));
-
       SET_STREAM_CONTEXT(mapBuilder, nullsDescriptor, FlatMap::NullsStream);
       return;
     }
@@ -1084,6 +1735,43 @@ void initializeEncodingLayouts(
 #undef SET_STREAM_CONTEXT
   }
 }
+
+void configureAddedFlatMapField(
+    detail::WriterContext& context,
+    const TypeBuilder& flatmap,
+    std::string_view fieldKey,
+    const TypeBuilder& fieldType) {
+  auto& flatmapBuilder = flatmap.asFlatMap();
+  auto& inMapContext = streamContext(
+      flatmapBuilder.inMapDescriptorAt(flatmapBuilder.childrenCount() - 1));
+  inMapContext.setIsInMapStream(true);
+  std::vector<offset_size> valueStreamOffsets;
+  collectFlatMapValueStreamOffsets(fieldType, valueStreamOffsets);
+  inMapContext.setFlatMapValueStreamOffsets(std::move(valueStreamOffsets));
+
+  auto* flatMapContext = flatmap.context<FlatmapEncodingLayoutContext>();
+  if (flatMapContext == nullptr) {
+    return;
+  }
+
+  if (context.options().encodingLayoutTree.has_value()) {
+    auto it = flatMapContext->keyEncodings.find(fieldKey);
+    if (it != flatMapContext->keyEncodings.end()) {
+      initializeEncodingLayouts(fieldType, *it->second);
+    }
+  }
+
+  auto it = flatMapContext->valueDictionaries.find(std::string{fieldKey});
+  if (it == flatMapContext->valueDictionaries.end()) {
+    return;
+  }
+  for (const auto& valueDictionary : it->second) {
+    configureDictionary(
+        resolveFieldPath(fieldType, valueDictionary.valueSubfield),
+        valueDictionary.dictionary,
+        context.schemaBuilder());
+  }
+}
 } // namespace
 
 std::unique_ptr<index::IndexWriter> Writer::createClusterIndexWriter(
@@ -1213,9 +1901,7 @@ Writer::Writer(
           file_.get(),
           *encodingMemoryPool_,
           {.layoutPlanner = std::make_unique<DefaultLayoutPlanner>(
-               [&schemaBuilder = context_->schemaBuilder()]() {
-                 return schemaBuilder.root();
-               },
+               &context_->schemaBuilder(),
                context_->options().featureReordering),
            .metadataCompressionThreshold =
                context_->options().metadataCompressionThreshold.value_or(
@@ -1250,6 +1936,7 @@ Writer::Writer(
                    const WriteDataFn& writeDataFn,
                    const CreateMetadataSectionFn& createMetadataFn,
                    const WriteOptionalSectionFn& writeMetadataFn) {
+                 writeDictionarySection(writeDataFn, writeMetadataFn);
                  writeProperties(writeMetadataFn);
                  writeIndexes(writeDataFn, createMetadataFn, writeMetadataFn);
                }})},
@@ -1265,22 +1952,7 @@ Writer::Writer(
                                                  const TypeBuilder& flatmap,
                                                  std::string_view fieldKey,
                                                  const TypeBuilder& fieldType) {
-    // Mark the newly added child's in-map stream descriptor.
-    auto& flatmapBuilder = flatmap.asFlatMap();
-    streamContext(
-        flatmapBuilder.inMapDescriptorAt(flatmapBuilder.childrenCount() - 1))
-        .setIsInMapStream(true);
-
-    // Handle encoding layout if configured.
-    if (context_->options().encodingLayoutTree.has_value()) {
-      auto* ctx = flatmap.context<FlatmapEncodingLayoutContext>();
-      if (ctx != nullptr) {
-        auto it = ctx->keyEncodings.find(fieldKey);
-        if (it != ctx->keyEncodings.end()) {
-          initializeEncodingLayouts(fieldType, it->second);
-        }
-      }
-    }
+    configureAddedFlatMapField(*context_, flatmap, fieldKey, fieldType);
   });
 
   rootWriter_ = createRootFieldWriter(schema_, *context_);
@@ -1481,6 +2153,106 @@ void Writer::writeSchema() {
   tabletWriter_->writeOptionalSection(
       std::string(kSchemaSection),
       serializer.serialize(context_->schemaBuilder()));
+}
+
+void Writer::writeStripeDictionaryStreams() {
+  if (!context_->hasStripeDictionaryConfig()) {
+    return;
+  }
+  for (const auto& [_, streamData] : context_->streams()) {
+    const auto* streamContext =
+        streamData->descriptor().context<WriterStreamContext>();
+    if (streamContext == nullptr) {
+      continue;
+    }
+    auto* writer = streamContext->sharedDictionaryWriter();
+    if (writer == nullptr) {
+      continue;
+    }
+    if (writer->scope() != SharedDictionaryScope::Stripe) {
+      continue;
+    }
+    auto alphabetChunk = writer->encodeAlphabet(*encodingBuffer_);
+    if (!alphabetChunk.has_value()) {
+      continue;
+    }
+    const auto streamId = writer->dictionaryId();
+    NIMBLE_CHECK_LT(streamId, encodedStreams_.size());
+    auto& dictionaryStream = encodedStreams_[streamId];
+    NIMBLE_CHECK(dictionaryStream.chunks.empty());
+    dictionaryStream.offset = streamId;
+    dictionaryStream.chunks.push_back(std::move(alphabetChunk.value()));
+  }
+}
+
+void Writer::writeDictionarySection(
+    const WriteDataFn& writeDataFn,
+    const WriteOptionalSectionFn& writeMetadataFn) {
+  if (context_->options().experimentalSharedDictionaryEncoding.empty()) {
+    return;
+  }
+
+  std::vector<SharedDictionaryReference> stripeDictionaryReferences;
+  std::vector<SharedDictionaryReference> fileDictionaryReferences;
+  std::vector<SharedDictionaryReference> externalDictionaryReferences;
+  std::vector<FileDictionary> fileDictionaries;
+  for (const auto& [_, streamData] : context_->streams()) {
+    const auto* streamContext =
+        streamData->descriptor().context<WriterStreamContext>();
+    if (streamContext == nullptr) {
+      continue;
+    }
+    auto* writer = streamContext->sharedDictionaryWriter();
+    if (writer == nullptr) {
+      continue;
+    }
+    if (!writer->hasUsedDictionary()) {
+      continue;
+    }
+    if (writer->scope() == SharedDictionaryScope::File) {
+      auto alphabet = writer->encodeAlphabet(*encodingBuffer_);
+      NIMBLE_CHECK(
+          alphabet.has_value(),
+          "File shared dictionary {} used shared dictionary encoding but "
+          "produced no alphabet.",
+          writer->dictionaryId());
+      const auto [offset, length] = writeDataFn(alphabet->content);
+      fileDictionaries.push_back({
+          .dictionaryId = writer->dictionaryId(),
+          .dataType = writer->dataType(),
+          .offset = offset,
+          .length = length,
+      });
+    }
+    const SharedDictionaryReference reference{
+        .valueStreamId = streamData->descriptor().offset(),
+        .dictionaryId = writer->dictionaryId(),
+        .dataType = writer->dataType(),
+    };
+    switch (writer->scope()) {
+      case SharedDictionaryScope::Stripe:
+        stripeDictionaryReferences.push_back(reference);
+        break;
+      case SharedDictionaryScope::File:
+        fileDictionaryReferences.push_back(reference);
+        break;
+      case SharedDictionaryScope::External:
+        externalDictionaryReferences.push_back(reference);
+        break;
+    }
+  }
+  if (stripeDictionaryReferences.empty() && fileDictionaryReferences.empty() &&
+      externalDictionaryReferences.empty()) {
+    return;
+  }
+
+  writeMetadataFn(
+      std::string(kDictionarySection),
+      SharedDictionaryCatalog::serialize(
+          stripeDictionaryReferences,
+          fileDictionaryReferences,
+          externalDictionaryReferences,
+          fileDictionaries));
 }
 
 void Writer::addIndexKey(const velox::VectorPtr& input) {
@@ -2317,6 +3089,8 @@ bool Writer::writeStripe() {
   } else {
     writeStreams();
   }
+
+  writeStripeDictionaryStreams();
 
   uint64_t stripeSize{0};
   {

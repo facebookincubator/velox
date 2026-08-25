@@ -30,6 +30,9 @@ class EncodingSelection;
 template <typename T>
 class EncodingSelectionPolicy;
 
+template <typename T>
+class SharedDictionaryEncoding;
+
 class EncodingFactory {
  public:
   explicit EncodingFactory(Encoding::Options options = {})
@@ -118,6 +121,8 @@ class EncodingFactory {
   friend class EncodingSelection<double>;
   friend class EncodingSelection<bool>;
   friend class EncodingSelection<std::string_view>;
+  template <typename T>
+  friend class SharedDictionaryEncoding;
 };
 
 } // namespace facebook::nimble

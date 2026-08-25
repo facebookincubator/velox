@@ -162,8 +162,8 @@ class Encoding {
 
     /// Direct alphabet for SharedDictionary encodings when the read path has
     /// already resolved the dictionary bound to this value stream.
-    std::shared_ptr<const SharedDictionaryAlphabet> sharedDictionaryAlphabet =
-        nullptr;
+    std::shared_ptr<const SharedDictionaryAlphabet> sharedDictionaryAlphabet{
+        nullptr};
 
     velox::io::IoCounter* decompressCounter() const {
       return decodingStats != nullptr ? &decodingStats->decompressCPUTimeNanos
