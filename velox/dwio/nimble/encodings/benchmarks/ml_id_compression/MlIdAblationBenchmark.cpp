@@ -34,6 +34,7 @@
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/AblationPolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitSampler.h"
 
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");
@@ -41,7 +42,6 @@ DEFINE_bool(dry_run, false, "Print sweep plan and exit");
 namespace facebook::nimble::mlidc {
 namespace {
 
-using Elem = int64_t;
 using namespace facebook::nimble::detail::subintsplit;
 
 std::string encodingTypeName(EncodingType t) {
@@ -70,16 +70,19 @@ std::string formatPlan(const std::vector<SegmentPlan>& segments) {
 } // namespace
 } // namespace facebook::nimble::mlidc
 
-int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  facebook::velox::memory::MemoryManager::initialize({});
-  using namespace facebook::nimble::mlidc;
+namespace facebook::nimble::mlidc {
+namespace {
+
+// The whole driver body, templated on the element type. main() picks the
+// type from --mlidc_dtype and dispatches here.
+template <typename Elem>
+int runBenchmark() {
   using namespace facebook::nimble::detail::subintsplit;
 
   const uint32_t n = static_cast<uint32_t>(FLAGS_mlidc_rows);
   const uint64_t seed = static_cast<uint64_t>(FLAGS_mlidc_seed);
 
-  auto datasets = defaultInt64Datasets<Elem>();
+  auto datasets = defaultDatasets<Elem>();
   auto ladder = combinedLadder();
 
   std::cout << "bench_ablation: " << ladder.size() << " rungs x "
@@ -99,6 +102,7 @@ int main(int argc, char** argv) {
 
   std::vector<std::string> csvColumns = {
       "driver",
+      "dtype",
       "dataset",
       "N",
       "seed",
@@ -128,9 +132,18 @@ int main(int argc, char** argv) {
     std::cout << "== Dataset: " << ds.name << " ==\n";
     auto data = ds.generate(n, seed);
 
+    // Sample the physical bit pattern, not the logical value. sampleIntoU64
+    // names its parameter `physicalType` (SubIntSplitSampler.h:57), and that is
+    // what SubIntSplit itself splits into bit ranges. Passing the logical type
+    // is bit-preserving for the integer types but would be a *value*
+    // conversion for float and double, which would analyse the wrong bits.
+    // Same view the encodings take of their input (TestUtils.h:298-301).
+    using Phys = typename TypeTraits<Elem>::physicalType;
+    auto physical = std::span<const Phys>(
+        reinterpret_cast<const Phys*>(data.data()), n);
+
     std::vector<uint64_t> samples;
-    sampleIntoU64(
-        std::span<const Elem>(data.data(), n), samples, samplerCfg);
+    sampleIntoU64(physical, samples, samplerCfg);
 
     if (samples.empty()) {
       std::cerr << "  [SKIP] empty sample\n";
@@ -153,6 +166,7 @@ int main(int argc, char** argv) {
       if (skipped) {
         csv.beginRow();
         csv.set("driver", "bench_ablation");
+        csv.set("dtype", elemTypeName<Elem>());
         csv.set("dataset", ds.name);
         csv.set("rung_name", rung.name);
         csv.set("rung_index", static_cast<int64_t>(ri));
@@ -177,6 +191,7 @@ int main(int argc, char** argv) {
 
       csv.beginRow();
       csv.set("driver", "bench_ablation");
+      csv.set("dtype", elemTypeName<Elem>());
       csv.set("dataset", ds.name);
       csv.set("N", static_cast<int64_t>(n));
       csv.set("seed", static_cast<int64_t>(seed));
@@ -202,6 +217,18 @@ int main(int argc, char** argv) {
 
   std::cout << "\nResults written to: " << csvPath << "\n";
   return 0;
+}
+
+} // namespace
+} // namespace facebook::nimble::mlidc
+
+int main(int argc, char** argv) {
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  facebook::velox::memory::MemoryManager::initialize({});
+  using namespace facebook::nimble::mlidc;
+  return dispatchElemType(
+      parseElemDataType(FLAGS_mlidc_dtype),
+      [&]<typename T>() { return runBenchmark<T>(); });
 }
 
 #else

@@ -39,162 +39,74 @@ target_link_libraries(
   PUBLIC
     gflags
 )
-
 # ---------------------------------------------------------------------------
+# Every driver in this suite links the same set: the shared flag library, the
+# encodings under test, and the benchmark harness. Only whether the driver
+# exercises OpenZL varies, so the link set is declared once here rather than
+# repeated per target. Pass OPENZL for the drivers that sweep it as a
+# black-box codec.
+# ---------------------------------------------------------------------------
+function(nimble_add_ml_id_benchmark NAME SOURCE)
+  cmake_parse_arguments(ARG "OPENZL" "" "" ${ARGN})
+
+  add_executable(${NAME} ${SOURCE})
+
+  target_link_libraries(
+    ${NAME}
+    nimble_ml_id_benchmark_common
+    nimble_encodings
+    nimble_common
+    Folly::folly
+    velox_memory
+    gflags
+  )
+
+  if(ARG_OPENZL)
+    target_link_libraries(${NAME} openzl_cpp)
+  endif()
+endfunction()
+
 # MlIdCompressionBenchmark: encodes a column of ML IDs under every candidate
 # encoding and reports compressed size + round-trip latency.
-# ---------------------------------------------------------------------------
-add_executable(nimble_ml_id_compression_benchmark MlIdCompressionBenchmark.cpp)
+nimble_add_ml_id_benchmark(
+  nimble_ml_id_compression_benchmark MlIdCompressionBenchmark.cpp OPENZL)
 
-target_link_libraries(
-  nimble_ml_id_compression_benchmark
-  nimble_ml_id_benchmark_common
-  nimble_encodings
-  nimble_common
-  openzl_cpp
-  Folly::folly
-  velox_memory
-  gflags
-)
-
-# ---------------------------------------------------------------------------
 # MlIdDecodeBulkBenchmark: full-materialization decode throughput.
-# ---------------------------------------------------------------------------
-add_executable(nimble_ml_id_decode_bulk_benchmark MlIdDecodeBulkBenchmark.cpp)
+nimble_add_ml_id_benchmark(
+  nimble_ml_id_decode_bulk_benchmark MlIdDecodeBulkBenchmark.cpp OPENZL)
 
-target_link_libraries(
-  nimble_ml_id_decode_bulk_benchmark
-  nimble_ml_id_benchmark_common
-  nimble_encodings
-  nimble_common
-  openzl_cpp
-  Folly::folly
-  velox_memory
-  gflags
-)
+# MlIdDecodeRangeBenchmark: contiguous-range decode across (start, length).
+nimble_add_ml_id_benchmark(
+  nimble_ml_id_decode_range_benchmark MlIdDecodeRangeBenchmark.cpp OPENZL)
 
-# ---------------------------------------------------------------------------
-# MlIdDecodeRangeBenchmark: contiguous-range decode throughput heatmap.
-# ---------------------------------------------------------------------------
-add_executable(nimble_ml_id_decode_range_benchmark MlIdDecodeRangeBenchmark.cpp)
+# MlIdEncodeBenchmark: encode-side throughput and selection cost.
+nimble_add_ml_id_benchmark(
+  nimble_ml_id_encode_benchmark MlIdEncodeBenchmark.cpp OPENZL)
 
-target_link_libraries(
-  nimble_ml_id_decode_range_benchmark
-  nimble_ml_id_benchmark_common
-  nimble_encodings
-  nimble_common
-  openzl_cpp
-  Folly::folly
-  velox_memory
-  gflags
-)
+# MlIdDecodePointBenchmark: single-row random access latency.
+nimble_add_ml_id_benchmark(
+  nimble_ml_id_decode_point_benchmark MlIdDecodePointBenchmark.cpp OPENZL)
 
-# ---------------------------------------------------------------------------
-# MlIdEncodeBenchmark: encode throughput per encoder/dataset pair.
-# ---------------------------------------------------------------------------
-add_executable(nimble_ml_id_encode_benchmark MlIdEncodeBenchmark.cpp)
+# MlIdDecodeGatherBenchmark: scattered multi-range gather, the TableScan skip
+# pattern.
+nimble_add_ml_id_benchmark(
+  nimble_ml_id_decode_gather_benchmark MlIdDecodeGatherBenchmark.cpp OPENZL)
 
-target_link_libraries(
-  nimble_ml_id_encode_benchmark
-  nimble_ml_id_benchmark_common
-  nimble_encodings
-  nimble_common
-  openzl_cpp
-  Folly::folly
-  velox_memory
-  gflags
-)
-
-# ---------------------------------------------------------------------------
-# MlIdDecodePointBenchmark: single-probe point-lookup latency.
-# ---------------------------------------------------------------------------
-add_executable(nimble_ml_id_decode_point_benchmark MlIdDecodePointBenchmark.cpp)
-
-target_link_libraries(
-  nimble_ml_id_decode_point_benchmark
-  nimble_ml_id_benchmark_common
-  nimble_encodings
-  nimble_common
-  openzl_cpp
-  Folly::folly
-  velox_memory
-  gflags
-)
-
-# ---------------------------------------------------------------------------
-# MlIdDecodeGatherBenchmark: gather-pattern decode throughput.
-# ---------------------------------------------------------------------------
-add_executable(nimble_ml_id_decode_gather_benchmark MlIdDecodeGatherBenchmark.cpp)
-
-target_link_libraries(
-  nimble_ml_id_decode_gather_benchmark
-  nimble_ml_id_benchmark_common
-  nimble_encodings
-  nimble_common
-  openzl_cpp
-  Folly::folly
-  velox_memory
-  gflags
-)
-
-# ---------------------------------------------------------------------------
 # MlIdCostModelOracleBenchmark: validates SubIntSplit's DP cost model against an
 # oracle that actually encodes each candidate bit range.
-# ---------------------------------------------------------------------------
-add_executable(nimble_ml_id_cost_model_oracle_benchmark MlIdCostModelOracleBenchmark.cpp)
+nimble_add_ml_id_benchmark(
+  nimble_ml_id_cost_model_oracle_benchmark MlIdCostModelOracleBenchmark.cpp)
 
-target_link_libraries(
-  nimble_ml_id_cost_model_oracle_benchmark
-  nimble_ml_id_benchmark_common
-  nimble_encodings
-  nimble_common
-  Folly::folly
-  velox_memory
-  gflags
-)
-
-# ---------------------------------------------------------------------------
 # MlIdIndexOracleBenchmark: sweeps FPE index types, Pareto frontier, scalarised
 # oracle.
-# ---------------------------------------------------------------------------
-add_executable(nimble_ml_id_index_oracle_benchmark MlIdIndexOracleBenchmark.cpp)
+nimble_add_ml_id_benchmark(
+  nimble_ml_id_index_oracle_benchmark MlIdIndexOracleBenchmark.cpp)
 
-target_link_libraries(
-  nimble_ml_id_index_oracle_benchmark
-  nimble_ml_id_benchmark_common
-  nimble_encodings
-  nimble_common
-  Folly::folly
-  velox_memory
-  gflags
-)
-
-# ---------------------------------------------------------------------------
 # MlIdAblationBenchmark: progressive encoding-set restriction for SIS sections.
-# ---------------------------------------------------------------------------
-add_executable(nimble_ml_id_ablation_benchmark MlIdAblationBenchmark.cpp)
+nimble_add_ml_id_benchmark(
+  nimble_ml_id_ablation_benchmark MlIdAblationBenchmark.cpp)
 
-target_link_libraries(
-  nimble_ml_id_ablation_benchmark
-  nimble_ml_id_benchmark_common
-  nimble_encodings
-  nimble_common
-  Folly::folly
-  velox_memory
-  gflags
-)
-
-# ---------------------------------------------------------------------------
-# MlIdSmokeBenchmark: encode + decode correctness check (no timing).
-# ---------------------------------------------------------------------------
-add_executable(nimble_ml_id_smoke_benchmark MlIdSmokeBenchmark.cpp)
-
-target_link_libraries(
-  nimble_ml_id_smoke_benchmark
-  nimble_ml_id_benchmark_common
-  nimble_encodings
-  nimble_common
-  Folly::folly
-  velox_memory
-  gflags
-)
+# MlIdSmokeBenchmark: encode + decode correctness check (no timing). Sweeps
+# every supported element type, so it is also the compile-coverage gate.
+nimble_add_ml_id_benchmark(
+  nimble_ml_id_smoke_benchmark MlIdSmokeBenchmark.cpp)

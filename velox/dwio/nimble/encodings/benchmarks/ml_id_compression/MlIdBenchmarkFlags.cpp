@@ -30,8 +30,9 @@ DEFINE_int64(mlidc_seed, 42, "Base random seed for dataset generators");
 DEFINE_string(
     mlidc_file,
     "",
-    "Text file with one int64 per line, added as a real-data dataset alongside "
-    "the synthetic ones. Empty disables. Same format as the --file flag of "
+    "Text file with one value per line, parsed as --mlidc_dtype, added as a "
+    "real-data dataset alongside the synthetic ones. Empty disables. The int64 "
+    "case is the same format as the --file flag of "
     "velox/dwio/nimble/tools/encoding_bench, so a column dump feeds both.");
 DEFINE_string(
     mlidc_substream_compression,
@@ -77,3 +78,10 @@ DEFINE_string(
     mlidc_dataset_name,
     "twitter-snowflake",
     "Name reported for the --mlidc_file dataset");
+DEFINE_string(
+    mlidc_dtype,
+    "int64",
+    "Element type to benchmark: int32, uint32, int64, uint64, float, double. "
+    "The 8- and 16-bit types are excluded because SubIntSplitEncoding only "
+    "supports 32- and 64-bit types. With --mlidc_file, the column is parsed as "
+    "this type.");

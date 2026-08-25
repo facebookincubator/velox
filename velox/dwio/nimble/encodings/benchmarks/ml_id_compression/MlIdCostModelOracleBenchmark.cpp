@@ -39,6 +39,7 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
@@ -60,9 +61,6 @@ namespace {
 
 using namespace facebook::nimble::detail::subintsplit;
 
-using Elem = int64_t;
-constexpr int kBits = 64;
-
 struct CandidateEncoding {
   std::string name;
   EncodingType type;
@@ -70,7 +68,7 @@ struct CandidateEncoding {
 
 // Try to encode `sectionData` with EncodingT; return byte count, or SIZE_MAX
 // on failure (throws, e.g. Constant on non-constant data).
-template <typename EncodingT>
+template <typename EncodingT, typename Elem>
 size_t tryEncode(const Vector<Elem>& sectionData) {
   try {
     auto& pool = benchmarks::benchmarkPool();
@@ -85,22 +83,23 @@ size_t tryEncode(const Vector<Elem>& sectionData) {
 }
 
 // Dispatch oracle encode by EncodingType (only the 7 candidates we track).
+template <typename Elem>
 size_t oracleEncodeBytes(EncodingType type, const Vector<Elem>& sectionData) {
   switch (type) {
     case EncodingType::Trivial:
-      return tryEncode<TrivialEncoding<Elem>>(sectionData);
+      return tryEncode<TrivialEncoding<Elem>, Elem>(sectionData);
     case EncodingType::FixedBitWidth:
-      return tryEncode<FixedBitWidthEncoding<Elem>>(sectionData);
+      return tryEncode<FixedBitWidthEncoding<Elem>, Elem>(sectionData);
     case EncodingType::Constant:
-      return tryEncode<ConstantEncoding<Elem>>(sectionData);
+      return tryEncode<ConstantEncoding<Elem>, Elem>(sectionData);
     case EncodingType::MainlyConstant:
-      return tryEncode<MainlyConstantEncoding<Elem>>(sectionData);
+      return tryEncode<MainlyConstantEncoding<Elem>, Elem>(sectionData);
     case EncodingType::Dictionary:
-      return tryEncode<DictionaryEncoding<Elem>>(sectionData);
+      return tryEncode<DictionaryEncoding<Elem>, Elem>(sectionData);
     case EncodingType::RLE:
-      return tryEncode<RLEEncoding<Elem>>(sectionData);
+      return tryEncode<RLEEncoding<Elem>, Elem>(sectionData);
     case EncodingType::Varint:
-      return tryEncode<VarintEncoding<Elem>>(sectionData);
+      return tryEncode<VarintEncoding<Elem>, Elem>(sectionData);
     default:
       return std::numeric_limits<size_t>::max();
   }
@@ -222,18 +221,22 @@ OracleDpResult oracleDp(
 } // namespace
 } // namespace facebook::nimble::mlidc
 
-int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  facebook::velox::memory::MemoryManager::initialize({});
+namespace facebook::nimble::mlidc {
+namespace {
 
-  using namespace facebook::nimble;
-  using namespace facebook::nimble::mlidc;
-  using namespace facebook::nimble::detail::subintsplit;
+// The whole driver body, templated on the element type. main() picks the
+// type from --mlidc_dtype and dispatches here.
+template <typename Elem>
+int runBenchmark() {
+  // SubIntSplit splits the physical bit pattern, so the bit grid is as wide as
+  // the physical type: 32 bits for the 4-byte types, not a fixed 64.
+  using Phys = typename TypeTraits<Elem>::physicalType;
+  constexpr int kBits = sizeof(Phys) * 8;
 
   const uint32_t n = static_cast<uint32_t>(FLAGS_mlidc_rows);
   const uint64_t seed = static_cast<uint64_t>(FLAGS_mlidc_seed);
 
-  auto datasets = defaultInt64Datasets<Elem>();
+  auto datasets = defaultDatasets<Elem>();
   auto candidates = candidateEncodings();
 
   std::cout << "bench_costmodel_oracle: " << datasets.size()
@@ -253,6 +256,7 @@ int main(int argc, char** argv) {
 
   std::vector<std::string> csvColumns = {
       "driver",
+      "dtype",
       "dataset",
       "N",
       "seed",
@@ -297,9 +301,14 @@ int main(int argc, char** argv) {
     std::cout << "== Dataset: " << ds.name << " ==\n";
     auto data = ds.generate(n, seed);
 
+    // Sample the physical bit pattern; see the note in
+    // MlIdAblationBenchmark.cpp. Bit-range analysis is only meaningful over
+    // the bits the encoding actually splits.
+    auto physical = std::span<const Phys>(
+        reinterpret_cast<const Phys*>(data.data()), data.size());
+
     std::vector<uint64_t> samples;
-    sampleIntoU64(
-        std::span<const Elem>(data.data(), data.size()), samples, samplerCfg);
+    sampleIntoU64(physical, samples, samplerCfg);
     const size_t sampleSize = samples.size();
     if (sampleSize == 0) {
       std::cerr << "  [SKIP] empty sample\n";
@@ -332,11 +341,16 @@ int main(int argc, char** argv) {
         const std::vector<uint64_t>& sectionU64 = extractor.values();
         const int width = r - l + 1;
 
-        // Convert to Vector<int64_t> for oracle encoding.
+        // Convert to Vector<Elem> for oracle encoding. A bit-range slice is a
+        // bit pattern, not a value: static_cast<Elem> would reinterpret it
+        // numerically and produce nonsense for float and double. Narrow to the
+        // physical type and reinterpret, which is what the decode path does
+        // (Encoding.h:475).
         Vector<Elem> sectionData{pool.get()};
         sectionData.resize(sectionU64.size());
         for (size_t i = 0; i < sectionU64.size(); ++i) {
-          sectionData[i] = static_cast<Elem>(sectionU64[i]);
+          sectionData[i] = facebook::nimble::detail::castFromPhysicalType<Elem>(
+              static_cast<Phys>(sectionU64[i]));
         }
 
         // Cost model metrics + per-encoding estimates.
@@ -450,6 +464,7 @@ int main(int argc, char** argv) {
 
           csv.beginRow();
           csv.set("driver", "bench_costmodel_oracle");
+          csv.set("dtype", elemTypeName<Elem>());
           csv.set("dataset", ds.name);
           csv.set("N", static_cast<int64_t>(n));
           csv.set("seed", static_cast<int64_t>(seed));
@@ -551,6 +566,7 @@ int main(int argc, char** argv) {
 
       csv.beginRow();
       csv.set("driver", "bench_costmodel_oracle");
+      csv.set("dtype", elemTypeName<Elem>());
       csv.set("dataset", ds.name);
       csv.set("N", static_cast<int64_t>(n));
       csv.set("seed", static_cast<int64_t>(seed));
@@ -576,6 +592,7 @@ int main(int argc, char** argv) {
     for (const auto& seg : oracleResult.segments) {
       csv.beginRow();
       csv.set("driver", "bench_costmodel_oracle");
+      csv.set("dtype", elemTypeName<Elem>());
       csv.set("dataset", ds.name);
       csv.set("N", static_cast<int64_t>(n));
       csv.set("seed", static_cast<int64_t>(seed));
@@ -601,6 +618,7 @@ int main(int argc, char** argv) {
     // Summary row for this dataset.
     csv.beginRow();
     csv.set("driver", "bench_costmodel_oracle");
+    csv.set("dtype", elemTypeName<Elem>());
     csv.set("dataset", ds.name);
     csv.set("N", static_cast<int64_t>(n));
     csv.set("seed", static_cast<int64_t>(seed));
@@ -627,6 +645,18 @@ int main(int argc, char** argv) {
 
   std::cout << "\nResults written to: " << csvPath << "\n";
   return 0;
+}
+
+} // namespace
+} // namespace facebook::nimble::mlidc
+
+int main(int argc, char** argv) {
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  facebook::velox::memory::MemoryManager::initialize({});
+  using namespace facebook::nimble::mlidc;
+  return dispatchElemType(
+      parseElemDataType(FLAGS_mlidc_dtype),
+      [&]<typename T>() { return runBenchmark<T>(); });
 }
 
 #else

@@ -16,6 +16,7 @@
 
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <string>
@@ -24,25 +25,20 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 
 namespace facebook::nimble::mlidc {
 namespace {
 
-using Elem = int64_t;
-
-} // namespace
-} // namespace facebook::nimble::mlidc
-
-int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  facebook::velox::memory::MemoryManager::initialize({});
-  using namespace facebook::nimble::mlidc;
-
-  const uint32_t n = static_cast<uint32_t>(FLAGS_mlidc_rows);
-  const uint64_t seed = static_cast<uint64_t>(FLAGS_mlidc_seed);
+// Round-trips every encoder against every dataset for one element type.
+// Returns the number of failures so the caller can total them across types.
+template <typename Elem>
+int runSmoke(uint32_t n, uint64_t seed) {
   auto encoders = buildDefaultEncoders<Elem>();
-  auto datasets = defaultInt64Datasets<Elem>();
+  auto datasets = defaultDatasets<Elem>();
   int failures = 0;
+
+  std::cout << "== dtype: " << elemTypeName<Elem>() << " ==\n";
 
   for (const auto& ds : datasets) {
     auto data = ds.generate(n, seed);
@@ -59,23 +55,58 @@ int main(int argc, char** argv) {
         target->materializeAll(out.data(), n);
         bool ok = true;
         for (uint32_t i = 0; i < n; ++i) {
+          // Exact equality is the right test even for float and double: the
+          // encodings preserve the bit pattern, and the generators produce no
+          // NaN, which would compare unequal to itself.
           if (out[i] != data[i]) {
             ok = false;
             break;
           }
         }
         if (!ok) {
-          std::cerr << "FAIL: " << enc.name << " / " << ds.name << "\n";
+          std::cerr << "FAIL: " << elemTypeName<Elem>() << " / " << enc.name
+                    << " / " << ds.name << "\n";
           ++failures;
         } else {
           std::cout << "  OK: " << enc.name << " / " << ds.name << "\n";
         }
       } catch (const std::exception& ex) {
-        std::cerr << "EXCEPTION: " << enc.name << " / " << ds.name << ": "
-                  << ex.what() << "\n";
+        std::cerr << "EXCEPTION: " << elemTypeName<Elem>() << " / " << enc.name
+                  << " / " << ds.name << ": " << ex.what() << "\n";
         ++failures;
       }
     }
+  }
+  return failures;
+}
+
+} // namespace
+} // namespace facebook::nimble::mlidc
+
+int main(int argc, char** argv) {
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  facebook::velox::memory::MemoryManager::initialize({});
+  using namespace facebook::nimble::mlidc;
+
+  const uint32_t n = static_cast<uint32_t>(FLAGS_mlidc_rows);
+  const uint64_t seed = static_cast<uint64_t>(FLAGS_mlidc_seed);
+
+  // Unlike the other drivers this one ignores --mlidc_dtype and sweeps every
+  // supported type: it is the gate proving the suite instantiates and round
+  // trips for all of them, so running one type at a time would defeat it.
+  using facebook::nimble::DataType;
+  const std::array<DataType, 6> dtypes = {
+      DataType::Int32,
+      DataType::Uint32,
+      DataType::Int64,
+      DataType::Uint64,
+      DataType::Float,
+      DataType::Double};
+
+  int failures = 0;
+  for (const auto dtype : dtypes) {
+    failures += dispatchElemType(
+        dtype, [&]<typename T>() { return runSmoke<T>(n, seed); });
   }
 
   std::cout << (failures == 0 ? "All passed.\n" : "FAILURES detected.\n");

@@ -46,6 +46,7 @@ DECLARE_string(mlidc_dataset_name);
 DECLARE_string(mlidc_substream_compression);
 DECLARE_string(mlidc_outer_compression);
 DECLARE_int32(mlidc_block_codec_iters);
+DECLARE_string(mlidc_dtype);
 DECLARE_int32(mlidc_block_codec_probes);
 DECLARE_string(mlidc_datasets);
 
@@ -224,7 +225,8 @@ inline void writeRunManifest(const std::string& path) {
       "mlidc_dataset_name", FLAGS_mlidc_dataset_name)(
       "mlidc_substream_compression", FLAGS_mlidc_substream_compression)(
       "mlidc_outer_compression", FLAGS_mlidc_outer_compression)(
-      "mlidc_block_codec_iters", FLAGS_mlidc_block_codec_iters);
+      "mlidc_block_codec_iters", FLAGS_mlidc_block_codec_iters)(
+      "mlidc_dtype", FLAGS_mlidc_dtype);
 
   auto json = folly::toPrettyJson(manifest);
   if (folly::writeFile(json, path.c_str())) {

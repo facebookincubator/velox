@@ -20,13 +20,16 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <functional>
 #include <map>
+#include <limits>
 #include <span>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <folly/FileUtil.h>
@@ -64,6 +67,7 @@ DECLARE_int32(mlidc_block_codec_iters);
 DECLARE_string(mlidc_datasets);
 DECLARE_bool(mlidc_dump_encoding);
 DECLARE_int32(mlidc_block_codec_probes);
+DECLARE_string(mlidc_dtype);
 
 namespace facebook::nimble::mlidc {
 
@@ -412,7 +416,7 @@ EncoderEntry<T> withOuterCompression(
 
 
 // ---------------------------------------------------------------------------
-// DatasetEntry and default int64 datasets
+// DatasetEntry and the default dataset suites
 // ---------------------------------------------------------------------------
 
 template <typename T>
@@ -521,13 +525,156 @@ Vector<T> makeRunLengthSeeded(uint32_t n, uint64_t seed) {
 }
 
 
-// Loads a real-data column from a text file holding one int64 per line, the
-// format read by the --file flag of velox/dwio/nimble/tools/encoding_bench, so
-// the same column dump feeds both tools. Reads exactly the first n values and
+// ---------------------------------------------------------------------------
+// Float generators
+// ---------------------------------------------------------------------------
+// The integer generators above build values in the bit domain: they mask and
+// shift a raw LCG word. That is meaningless for float and double, and
+// makeNarrowSeeded does not even compile for them, because std::make_unsigned_t
+// is ill-formed on a floating point type.
+//
+// These are value-domain analogues carrying the same six names, so the same
+// --mlidc_datasets selection works whatever --mlidc_dtype is set to, and a
+// float row lines up with the int64 row of the same dataset. They deliberately
+// produce ordinary finite values with fractional parts rather than reusing the
+// integer bit patterns: bit-casting random words into floats yields mostly NaNs
+// and denormals, which compress unlike any real float column.
+
+// Advances the shared LCG and returns a value in [0, 1).
+inline double nextUnitDouble(uint64_t& state) {
+  state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+  // Top 53 bits: one full double mantissa, so the result is uniform.
+  return static_cast<double>(state >> 11) / 9007199254740992.0;
+}
+
+template <typename T>
+Vector<T> makeFloatUniformSeeded(uint32_t n, uint64_t seed) {
+  auto& pool = benchmarks::benchmarkPool();
+  Vector<T> data{pool.get()};
+  data.resize(n);
+  uint64_t state = seed ^ 0x9e3779b97f4a7c15ULL;
+  for (uint32_t i = 0; i < n; ++i) {
+    // Spread over a wide signed range, the float counterpart of a full-width
+    // integer draw.
+    data[i] = static_cast<T>((nextUnitDouble(state) - 0.5) * 2.0e9);
+  }
+  return data;
+}
+
+// Values whose integral part spans `bitWidth` bits, plus a fractional part.
+// The bit width is what the integer suite varies, so keeping it as the knob
+// makes the narrow-20bit and narrow-40bit rows comparable across dtypes.
+template <typename T>
+Vector<T> makeFloatNarrowSeeded(int bitWidth, uint32_t n, uint64_t seed) {
+  auto& pool = benchmarks::benchmarkPool();
+  Vector<T> data{pool.get()};
+  data.resize(n);
+  const double range = std::exp2(static_cast<double>(bitWidth));
+  uint64_t state = seed ^ 0x9e3779b97f4a7c15ULL;
+  for (uint32_t i = 0; i < n; ++i) {
+    data[i] = static_cast<T>(nextUnitDouble(state) * range);
+  }
+  return data;
+}
+
+template <typename T>
+Vector<T> makeFloatIncreasingSeeded(uint32_t n, uint64_t seed) {
+  auto& pool = benchmarks::benchmarkPool();
+  Vector<T> data{pool.get()};
+  data.resize(n);
+  uint64_t state = seed ^ 0x9e3779b97f4a7c15ULL;
+  double val = 0.0;
+  for (uint32_t i = 0; i < n; ++i) {
+    val += nextUnitDouble(state) * 8.0; // delta in [0,8), mirrors [1,8]
+    data[i] = static_cast<T>(val);
+  }
+  return data;
+}
+
+template <typename T>
+Vector<T> makeFloatLowCardinalitySeeded(
+    uint32_t cardinality,
+    uint32_t n,
+    uint64_t seed) {
+  auto& pool = benchmarks::benchmarkPool();
+  Vector<T> data{pool.get()};
+  data.resize(n);
+  // Draw from a fixed palette so the value count is exactly `cardinality`;
+  // scaling a random draw would leave it approximate.
+  std::vector<T> palette(cardinality);
+  uint64_t paletteState = seed ^ 0x9e3779b97f4a7c15ULL;
+  for (uint32_t c = 0; c < cardinality; ++c) {
+    palette[c] = static_cast<T>(nextUnitDouble(paletteState) * 1000.0);
+  }
+  uint64_t state = seed ^ 0xa5a5a5a5a5a5a5a5ULL;
+  for (uint32_t i = 0; i < n; ++i) {
+    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+    data[i] = palette[(state >> 33) % cardinality];
+  }
+  return data;
+}
+
+template <typename T>
+Vector<T> makeFloatRunLengthSeeded(uint32_t n, uint64_t seed) {
+  auto& pool = benchmarks::benchmarkPool();
+  Vector<T> data{pool.get()};
+  data.resize(n);
+  uint64_t state = seed ^ 0x9e3779b97f4a7c15ULL;
+  uint32_t i = 0;
+  while (i < n) {
+    const T val = static_cast<T>(nextUnitDouble(state) * 1000.0);
+    uint32_t runLen = static_cast<uint32_t>(10 + (state >> 33) % 50);
+    runLen = std::min(runLen, n - i);
+    for (uint32_t j = 0; j < runLen; ++j) {
+      data[i + j] = val;
+    }
+    i += runLen;
+  }
+  return data;
+}
+
+// Parses one value of T from a line of the real-data file.
+//
+// std::stoll stops at the '.', so parsing a float column with it would load
+// 1.5 as 1: a wrong value that looks exactly like a legitimate benchmark
+// result. Each type gets the parser that matches it, and the narrower integer
+// types are range-checked rather than silently truncated by a static_cast.
+template <typename T>
+T parseColumnValue(const std::string& line) {
+  if constexpr (std::is_same_v<T, float>) {
+    return std::stof(line);
+  } else if constexpr (std::is_same_v<T, double>) {
+    return std::stod(line);
+  } else if constexpr (std::is_unsigned_v<T>) {
+    const unsigned long long raw = std::stoull(line);
+    if (raw > static_cast<unsigned long long>(std::numeric_limits<T>::max())) {
+      throw std::runtime_error(
+          "Value out of range for the selected --mlidc_dtype: " + line);
+    }
+    return static_cast<T>(raw);
+  } else {
+    const long long raw = std::stoll(line);
+    if (raw < static_cast<long long>(std::numeric_limits<T>::min()) ||
+        raw > static_cast<long long>(std::numeric_limits<T>::max())) {
+      throw std::runtime_error(
+          "Value out of range for the selected --mlidc_dtype: " + line);
+    }
+    return static_cast<T>(raw);
+  }
+}
+
+// Loads a real-data column from a text file holding one value per line, parsed
+// as the type selected by --mlidc_dtype. Reads exactly the first n values and
 // throws if the file is missing or shorter than requested: a silently short
 // read would be indistinguishable from a legitimate benchmark result.
+//
+// The int64 path is the format read by the --file flag of
+// velox/dwio/nimble/tools/encoding_bench, so the same column dump feeds both
+// tools and the results cross-check. That tool parses int64 only
+// (tools/encoding_bench/EncodingBench.cpp:121), so the other types are an
+// extension this suite makes alone.
 template <typename T>
-Vector<T> loadInt64Lines(const std::string& path, uint32_t n) {
+Vector<T> loadColumnLines(const std::string& path, uint32_t n) {
   std::ifstream file(path);
   if (!file) {
     throw std::runtime_error("Cannot open data file: " + path);
@@ -541,7 +688,7 @@ Vector<T> loadInt64Lines(const std::string& path, uint32_t n) {
   uint32_t count = 0;
   while (count < n && std::getline(file, line)) {
     if (!line.empty()) {
-      data[count++] = static_cast<T>(std::stoll(line));
+      data[count++] = parseColumnValue<T>(line);
     }
   }
 
@@ -556,42 +703,80 @@ Vector<T> loadInt64Lines(const std::string& path, uint32_t n) {
 
 } // namespace detail
 
-// Default dataset suite for int64 — covers the main distribution shapes
-// expected for ML ID workloads.
+// Default dataset suite: the main distribution shapes expected for ML ID
+// workloads, plus any real-data column supplied at run time.
+//
+// Both the integer and float suites carry the same six names, so a
+// --mlidc_datasets selection means the same thing at every --mlidc_dtype and
+// rows for different types line up dataset by dataset.
 template <typename T>
-std::vector<DatasetEntry<T>> defaultInt64Datasets() {
+std::vector<DatasetEntry<T>> defaultDatasets() {
   std::vector<DatasetEntry<T>> out;
 
-  out.push_back({"uniform-64bit", [](uint32_t n, uint64_t seed) {
-                   return detail::makeRandomSeeded<T>(n, seed);
-                 }});
+  if constexpr (std::is_floating_point_v<T>) {
+    out.push_back({"uniform-full", [](uint32_t n, uint64_t seed) {
+                     return detail::makeFloatUniformSeeded<T>(n, seed);
+                   }});
 
-  out.push_back({"narrow-20bit", [](uint32_t n, uint64_t seed) {
-                   return detail::makeNarrowSeeded<T>(20, n, seed);
-                 }});
+    out.push_back({"narrow-20bit", [](uint32_t n, uint64_t seed) {
+                     return detail::makeFloatNarrowSeeded<T>(20, n, seed);
+                   }});
 
-  out.push_back({"narrow-40bit", [](uint32_t n, uint64_t seed) {
-                   return detail::makeNarrowSeeded<T>(40, n, seed);
-                 }});
+    // Only for 8-byte types: see the integer branch below.
+    if constexpr (sizeof(T) == 8) {
+      out.push_back({"narrow-40bit", [](uint32_t n, uint64_t seed) {
+                       return detail::makeFloatNarrowSeeded<T>(40, n, seed);
+                     }});
+    }
 
-  out.push_back({"increasing-small-delta", [](uint32_t n, uint64_t seed) {
-                   return detail::makeIncreasingSeeded<T>(n, seed);
-                 }});
+    out.push_back({"increasing-small-delta", [](uint32_t n, uint64_t seed) {
+                     return detail::makeFloatIncreasingSeeded<T>(n, seed);
+                   }});
 
-  out.push_back({"low-cardinality-256", [](uint32_t n, uint64_t seed) {
-                   return detail::makeLowCardinalitySeeded<T>(256, n, seed);
-                 }});
+    out.push_back({"low-cardinality-256", [](uint32_t n, uint64_t seed) {
+                     return detail::makeFloatLowCardinalitySeeded<T>(
+                         256, n, seed);
+                   }});
 
-  out.push_back({"run-length", [](uint32_t n, uint64_t seed) {
-                   return detail::makeRunLengthSeeded<T>(n, seed);
-                 }});
+    out.push_back({"run-length", [](uint32_t n, uint64_t seed) {
+                     return detail::makeFloatRunLengthSeeded<T>(n, seed);
+                   }});
+  } else {
+    out.push_back({"uniform-full", [](uint32_t n, uint64_t seed) {
+                     return detail::makeRandomSeeded<T>(n, seed);
+                   }});
+
+    out.push_back({"narrow-20bit", [](uint32_t n, uint64_t seed) {
+                     return detail::makeNarrowSeeded<T>(20, n, seed);
+                   }});
+
+    // A 40-bit draw has no meaning in a 32-bit type, and makeNarrowSeeded
+    // would shift by more than the width of T, which is undefined behaviour.
+    if constexpr (sizeof(T) == 8) {
+      out.push_back({"narrow-40bit", [](uint32_t n, uint64_t seed) {
+                       return detail::makeNarrowSeeded<T>(40, n, seed);
+                     }});
+    }
+
+    out.push_back({"increasing-small-delta", [](uint32_t n, uint64_t seed) {
+                     return detail::makeIncreasingSeeded<T>(n, seed);
+                   }});
+
+    out.push_back({"low-cardinality-256", [](uint32_t n, uint64_t seed) {
+                     return detail::makeLowCardinalitySeeded<T>(256, n, seed);
+                   }});
+
+    out.push_back({"run-length", [](uint32_t n, uint64_t seed) {
+                     return detail::makeRunLengthSeeded<T>(n, seed);
+                   }});
+  }
 
   // Real-data column supplied at run time. Unlike the synthetic generators
   // above this is not regenerated per seed, so the seed is ignored.
   if (!FLAGS_mlidc_file.empty()) {
     out.push_back(
         {FLAGS_mlidc_dataset_name, [](uint32_t n, uint64_t /*seed*/) {
-           return detail::loadInt64Lines<T>(FLAGS_mlidc_file, n);
+           return detail::loadColumnLines<T>(FLAGS_mlidc_file, n);
          }});
   }
 

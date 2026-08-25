@@ -35,6 +35,7 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/PointTraceGen.h"
@@ -49,8 +50,6 @@ DEFINE_bool(dry_run, false, "Print sweep plan and exit");
 namespace facebook::nimble::mlidc {
 namespace {
 
-using Elem = int64_t;
-constexpr size_t kElemSize = sizeof(Elem);
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 struct IndexTypeEntry {
@@ -116,10 +115,14 @@ void computeParetoFrontier(std::vector<Cell>& cells) {
 } // namespace
 } // namespace facebook::nimble::mlidc
 
-int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  facebook::velox::memory::MemoryManager::initialize({});
-  using namespace facebook::nimble::mlidc;
+namespace facebook::nimble::mlidc {
+namespace {
+
+// The whole driver body, templated on the element type. main() picks the
+// type from --mlidc_dtype and dispatches here.
+template <typename Elem>
+int runBenchmark() {
+  constexpr size_t kElemSize = sizeof(Elem);
   using facebook::nimble::FrequencyPartitionEncoding;
 
   const uint32_t n = static_cast<uint32_t>(FLAGS_mlidc_rows);
@@ -134,7 +137,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  auto datasets = defaultInt64Datasets<Elem>();
+  auto datasets = defaultDatasets<Elem>();
   const std::vector<double> lambdas = buildLambdaSweep();
   const CacheTopology topo = CacheTopology::detect();
 
@@ -171,7 +174,8 @@ int main(int argc, char** argv) {
   }
 
   std::vector<std::string> csvColumns = {
-      "driver",         "dataset",           "index_type",   "N",
+      "driver",
+      "dtype",         "dataset",           "index_type",   "N",
       "seed",           "cache_state",       "payload_bytes", "random_access",
       "viable",         "bulk_ns",           "point_ns",     "probes",
       "on_pareto_frontier", "lambda_ns_per_byte", "objective_J", "oracle_pick",
@@ -231,6 +235,7 @@ int main(int argc, char** argv) {
         cells.push_back(cell);
         csv.beginRow();
         csv.set("driver", "bench_index_oracle");
+        csv.set("dtype", elemTypeName<Elem>());
         csv.set("dataset", ds.name);
         csv.set("index_type", it.name);
         csv.set("skipped", int64_t{1});
@@ -260,6 +265,7 @@ int main(int argc, char** argv) {
           cells.push_back(cell);
           csv.beginRow();
           csv.set("driver", "bench_index_oracle");
+          csv.set("dtype", elemTypeName<Elem>());
           csv.set("dataset", ds.name);
           csv.set("index_type", it.name);
           csv.set("skipped", int64_t{1});
@@ -389,6 +395,7 @@ int main(int argc, char** argv) {
 
         csv.beginRow();
         csv.set("driver", "bench_index_oracle");
+        csv.set("dtype", elemTypeName<Elem>());
         csv.set("dataset", ds.name);
         csv.set("index_type", c.indexTypeName);
         csv.set("N", static_cast<int64_t>(n));
@@ -419,6 +426,18 @@ int main(int argc, char** argv) {
     return 2;
   }
   return 0;
+}
+
+} // namespace
+} // namespace facebook::nimble::mlidc
+
+int main(int argc, char** argv) {
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  facebook::velox::memory::MemoryManager::initialize({});
+  using namespace facebook::nimble::mlidc;
+  return dispatchElemType(
+      parseElemDataType(FLAGS_mlidc_dtype),
+      [&]<typename T>() { return runBenchmark<T>(); });
 }
 
 #else

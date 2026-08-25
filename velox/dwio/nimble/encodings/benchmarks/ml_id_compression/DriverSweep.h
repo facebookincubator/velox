@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/OpenZLBenchTarget.h"
@@ -80,7 +81,7 @@ std::optional<SweepContext<T>> makeSweepContext(
     // comparison the decode drivers exist to make.
     context.encoders.push_back(buildOpenZLEncoder<T>());
   }
-  context.datasets = defaultInt64Datasets<T>();
+  context.datasets = defaultDatasets<T>();
   context.topology = CacheTopology::detect();
 
   // Construct a controller up front so an unsupported eviction policy is
@@ -105,6 +106,7 @@ void setIdentityColumns(
     const std::string& dataset,
     const EncoderEntry<T>& encoder) {
   csv.set("driver", std::string(driver));
+  csv.set("dtype", elemTypeName<T>());
   csv.set("dataset", dataset);
   csv.set("encoding", encoder.name);
   csv.set("family", encoder.family);
@@ -126,6 +128,7 @@ void writeSkipRow(
     const EncoderEntry<T>& encoder) {
   csv.beginRow();
   csv.set("driver", std::string(driver));
+  csv.set("dtype", elemTypeName<T>());
   csv.set("dataset", dataset);
   csv.set("encoding", encoder.name);
   csv.set("skipped", int64_t{1});

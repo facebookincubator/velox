@@ -27,6 +27,7 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
@@ -38,9 +39,6 @@ DEFINE_bool(dry_run, false, "Print sweep plan and exit");
 
 namespace facebook::nimble::mlidc {
 namespace {
-
-using Elem = int64_t;
-constexpr size_t kElemSize = sizeof(Elem);
 
 struct Cell { size_t a{}; size_t b{}; };
 
@@ -59,10 +57,14 @@ Cell resolveCell(double aFrac, double bFrac, size_t n) {
 
 constexpr std::string_view kDriver = "bench_decode_range";
 
-int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  facebook::velox::memory::MemoryManager::initialize({});
-  using namespace facebook::nimble::mlidc;
+namespace facebook::nimble::mlidc {
+namespace {
+
+// The whole driver body, templated on the element type. main() picks the
+// type from --mlidc_dtype and dispatches here.
+template <typename Elem>
+int runBenchmark() {
+  constexpr size_t kElemSize = sizeof(Elem);
 
   const uint32_t n = static_cast<uint32_t>(FLAGS_mlidc_rows);
   const size_t iters = static_cast<size_t>(FLAGS_mlidc_iters);
@@ -109,7 +111,8 @@ int main(int argc, char** argv) {
   }
 
   std::vector<std::string> csvColumns = {
-      "driver",      "dataset",     "encoding",       "family",
+      "driver",
+      "dtype",      "dataset",     "encoding",       "family",
       "variant",     "is_sequential", "fast_skip",    "random_access",
       "N",           "seed",        "cache_state",    "evict_method",
       "evict_ns",    "payload_bytes", "compression_ratio",
@@ -234,6 +237,18 @@ int main(int argc, char** argv) {
     return 2;
   }
   return 0;
+}
+
+} // namespace
+} // namespace facebook::nimble::mlidc
+
+int main(int argc, char** argv) {
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  facebook::velox::memory::MemoryManager::initialize({});
+  using namespace facebook::nimble::mlidc;
+  return dispatchElemType(
+      parseElemDataType(FLAGS_mlidc_dtype),
+      [&]<typename T>() { return runBenchmark<T>(); });
 }
 
 #else

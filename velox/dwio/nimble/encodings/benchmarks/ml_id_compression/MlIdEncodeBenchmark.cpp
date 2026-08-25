@@ -25,6 +25,7 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
@@ -32,22 +33,16 @@
 DEFINE_bool(validate, false, "Round-trip check after encoding");
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");
 
+constexpr std::string_view kDriver = "bench_encode";
+
 namespace facebook::nimble::mlidc {
 namespace {
 
-using Elem = int64_t;
-constexpr size_t kElemSize = sizeof(Elem);
-
-} // namespace
-} // namespace facebook::nimble::mlidc
-
-constexpr std::string_view kDriver = "bench_encode";
-
-int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  facebook::velox::memory::MemoryManager::initialize({});
-
-  using namespace facebook::nimble::mlidc;
+// The whole driver body, templated on the element type. main() picks the
+// type from --mlidc_dtype and dispatches here.
+template <typename Elem>
+int runBenchmark() {
+  constexpr size_t kElemSize = sizeof(Elem);
 
   const uint32_t n = static_cast<uint32_t>(FLAGS_mlidc_rows);
   const size_t iters = static_cast<size_t>(FLAGS_mlidc_iters);
@@ -78,7 +73,8 @@ int main(int argc, char** argv) {
   }
 
   std::vector<std::string> csvColumns = {
-      "driver",     "dataset",       "encoding",    "family",
+      "driver",
+      "dtype",     "dataset",       "encoding",    "family",
       "variant",    "is_sequential", "N",           "seed",
       "payload_bytes", "compression_ratio", "iterations", "warmup",
       "time_ns",    "time_p90_ns",   "time_min_ns", "encode_Meps",
@@ -162,6 +158,7 @@ int main(int argc, char** argv) {
         }
         csv.beginRow();
         csv.set("driver", "bench_encode");
+        csv.set("dtype", elemTypeName<Elem>());
         csv.set("dataset", ds.name);
         csv.set("encoding", enc.name);
         csv.set("skipped", int64_t{1});
@@ -178,6 +175,18 @@ int main(int argc, char** argv) {
     return 2;
   }
   return 0;
+}
+
+} // namespace
+} // namespace facebook::nimble::mlidc
+
+int main(int argc, char** argv) {
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  facebook::velox::memory::MemoryManager::initialize({});
+  using namespace facebook::nimble::mlidc;
+  return dispatchElemType(
+      parseElemDataType(FLAGS_mlidc_dtype),
+      [&]<typename T>() { return runBenchmark<T>(); });
 }
 
 #else

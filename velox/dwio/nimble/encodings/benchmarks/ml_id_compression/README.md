@@ -23,18 +23,50 @@ sources compile to a stub `main` that exits non-zero.
 
 ## Datasets
 
-Six synthetic datasets are always present: `uniform-64bit`, `narrow-20bit`,
+Six synthetic datasets are always present: `uniform-full`, `narrow-20bit`,
 `narrow-40bit`, `increasing-small-delta`, `low-cardinality-256`, `run-length`.
 
+`narrow-40bit` appears only for the 8-byte types. A 40-bit draw has no meaning
+in a 32-bit element, so for `int32`, `uint32` and `float` the suite is five
+datasets rather than six.
+
+The same six names are used whatever `--mlidc_dtype` is set to, so one
+`--mlidc_datasets` selection works across types and rows line up dataset by
+dataset. For `float` and `double` the generators work in the value domain
+rather than the bit domain: they produce ordinary finite values with fractional
+parts, because bit-casting random words into floats yields mostly NaNs and
+denormals, which compress unlike any real float column.
+
 A real column is added with `--mlidc_file`, which takes **a text file with one
-int64 per line**. This is deliberately the same format as the `--file` flag of
+value per line**, parsed as the type named by `--mlidc_dtype`. The `int64` case
+is deliberately the same format as the `--file` flag of
 `velox/dwio/nimble/tools/encoding_bench`, so one column dump feeds both tools and
-results can be cross-checked. `--mlidc_dataset_name` sets the name it reports
-under. With the flag unset, behaviour is exactly the six synthetic datasets, so
-nothing changes for anyone without the file.
+results can be cross-checked; that tool reads int64 only, so the other types are
+an extension this suite makes alone. `--mlidc_dataset_name` sets the name it
+reports under. With the flag unset, behaviour is exactly the synthetic datasets,
+so nothing changes for anyone without the file.
 
 No dataset is committed. To benchmark a production column, dump it to that format
 and point the flag at it.
+
+## Element types
+
+Every driver runs one element type per invocation, chosen by `--mlidc_dtype`.
+The supported set is `int32`, `uint32`, `int64`, `uint64`, `float`, `double`.
+
+That set is a ceiling, not a preference. It is exactly what
+`SubIntSplitEncoding` documents and what its own typed-test suite covers:
+SubIntSplit static_asserts that the physical type is 4 or 8 bytes, so the 8- and
+16-bit types cannot be instantiated at all while it is in the encoder suite.
+
+Float and double reach the encodings through their physical type
+(`TypeTraits<float>::physicalType` is `uint32_t`), so what gets compressed is
+the bit pattern. The drivers that hand samples to the SubIntSplit sampler view
+the column as that physical type for the same reason: a bit-range analysis is
+only meaningful over the bits the encoding actually splits.
+
+`nimble_ml_id_smoke_benchmark` ignores the flag and sweeps every supported type,
+which makes it the round-trip and compile-coverage gate for the suite.
 
 ## Compression axes
 
@@ -138,10 +170,11 @@ them from a scratch directory.
 
 | Flag | Default | Meaning |
 |---|---|---|
+| `--mlidc_dtype` | int64 | Element type: `int32`, `uint32`, `int64`, `uint64`, `float`, `double` |
 | `--mlidc_rows` | 100000 | Rows per dataset |
 | `--mlidc_iters` | 5 | Iterations per (encoder, dataset) cell |
 | `--mlidc_seed` | 42 | Seed for the synthetic generators |
-| `--mlidc_file` | "" | Text file, one int64 per line, added as a dataset |
+| `--mlidc_file` | "" | Text file, one value per line, parsed as `--mlidc_dtype`, added as a dataset |
 | `--mlidc_dataset_name` | twitter-snowflake | Name for that dataset |
 | `--mlidc_substream_compression` | Uncompressed | Per-stream codec, sub-streams included |
 | `--mlidc_outer_compression` | Uncompressed | Whole-payload codec |
@@ -155,7 +188,10 @@ them from a scratch directory.
 
 `BenchCommon.h` holds the bench targets, the encoder and dataset suites, and
 outer compression. `ResultWriter.h` holds the CSV writer and the run manifest.
-`SubstreamCompression.h` holds the encode path described above.
+`SubstreamCompression.h` holds the encode path described above. `ElemType.h`
+holds the element-type vocabulary: parsing `--mlidc_dtype`, the name reported in
+the `dtype` column, and the dispatch that turns the runtime choice into the
+static type each driver body is templated on.
 
 `DriverSweep.h` holds the scaffolding every sweep driver repeats: building the
 encoder and dataset suites (`makeSweepContext`), encoding one dataset with skip
@@ -165,6 +201,11 @@ handling (`makeTargetOrSkip`), preparing the cache for one measurement cell
 Each driver keeps its own measurement call and its own CSV columns inline. That
 is the part worth reading when opening a driver, so it deliberately did not move
 into the shared header.
+
+Each driver body is a `runBenchmark<Elem>` template; `main` parses
+`--mlidc_dtype` and dispatches into it. The `dtype` CSV column is set in
+`DriverSweep.h` alongside the other identity columns, so every sweep driver
+reports it without repeating the call.
 
 Two drivers do not use all of it. `MlIdEncodeBenchmark.cpp` times the encode
 itself, so the factory call sits inside its measurement lambda and cannot use
