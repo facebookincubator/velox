@@ -125,6 +125,9 @@ class CudfSplitReader : public NvtxHelper {
       tableHandle_;
   const RowTypePtr outputType_;
   std::vector<std::string> readColumnNames_;
+  // Logical types corresponding one-to-one with readColumnNames_. Unlike
+  // outputType_, this includes filter-only and equality-delete key columns.
+  std::vector<TypePtr> readColumnTypes_;
 
   FileHandleFactory* fileHandleFactory_;
   folly::Executor* executor_;

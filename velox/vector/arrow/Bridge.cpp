@@ -1397,7 +1397,7 @@ void exportToArrowImpl(
 
 // Parses the velox decimal format from the given arrow format.
 // The input format string should be in the form "d:precision,scale<,bitWidth>".
-// bitWidth is optional and may be 64 or 128 if provided.
+// bitWidth is optional and may be 32, 64, or 128 if provided.
 
 int32_t parseDecimalBitWidthOrDefault(const std::string_view format) {
   auto firstCommaIdx = format.find(',', 2);
@@ -1432,16 +1432,16 @@ TypePtr parseDecimalFormat(const std::string_view format) {
     int precision = std::stoi(&format[2], &sz);
     int scale = std::stoi(&format[firstCommaIdx + 1], &sz);
     if (secondCommaIdx != std::string_view::npos) {
-      // BitWidth is provided. We only support 64 or 128.
+      // BitWidth is provided. We only support 32, 64, or 128.
       int bitWidth = std::stoi(&format[secondCommaIdx + 1], &sz);
       // Return type depends on bitWidth.
-      if (bitWidth == 64) {
+      if (bitWidth == 32 || bitWidth == 64) {
         return std::make_shared<ShortDecimalType>(precision, scale);
       } else if (bitWidth == 128) {
         return std::make_shared<LongDecimalType>(precision, scale);
       }
       VELOX_USER_FAIL(
-          "Conversion failed for '{}'. Only 64-bit and 128-bit decimal types are supported.",
+          "Conversion failed for '{}'. Only 32-bit, 64-bit, and 128-bit decimal types are supported.",
           format);
     }
     // Otherwise return type depends on precision.
@@ -2242,6 +2242,32 @@ VectorPtr createShortDecimalVector(
       nullCount);
 }
 
+VectorPtr createShortDecimalVectorFromInt32Decimals(
+    memory::MemoryPool* pool,
+    const TypePtr& type,
+    BufferPtr nulls,
+    const int32_t* input,
+    vector_size_t length,
+    int64_t nullCount) {
+  auto values = AlignedBuffer::allocate<int64_t>(length, pool);
+  auto* rawValues = values->asMutable<int64_t>();
+  if (nulls == nullptr) {
+    for (vector_size_t i = 0; i < length; ++i) {
+      rawValues[i] = static_cast<int64_t>(input[i]);
+    }
+  } else if (length > nullCount) {
+    const auto* rawNulls = nulls->as<const uint64_t>();
+    for (vector_size_t i = 0; i < length; ++i) {
+      if (!bits::isBitNull(rawNulls, i)) {
+        rawValues[i] = static_cast<int64_t>(input[i]);
+      }
+    }
+  }
+
+  return createFlatVector<TypeKind::BIGINT>(
+      pool, type, std::move(nulls), length, values, nullCount);
+}
+
 VectorPtr createShortDecimalVectorFromLongDecimals(
     memory::MemoryPool* pool,
     const TypePtr& type,
@@ -2409,6 +2435,15 @@ VectorPtr importFromArrowImpl(
   } else if (type->isShortDecimal()) {
     // Validate the format bitWidth.
     const auto bitWidth = parseDecimalBitWidthOrDefault(arrowSchema.format);
+    if (bitWidth == 32) {
+      return createShortDecimalVectorFromInt32Decimals(
+          pool,
+          type,
+          nulls,
+          static_cast<const int32_t*>(arrowArray.buffers[1]),
+          arrowArray.length,
+          arrowArray.null_count);
+    }
     if (bitWidth == 64) {
       return createShortDecimalVector(
           pool,

@@ -144,15 +144,21 @@ std::unique_ptr<cudf::column> castDecimalColumns(
 
 std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
     std::unique_ptr<cudf::table>&& table,
-    const RowTypePtr& rowType,
+    const std::vector<TypePtr>& columnTypes,
+    size_t leadingColumns,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  auto numColumns =
-      std::min<size_t>(table->view().num_columns(), rowType->size());
+  VELOX_CHECK_LE(
+      leadingColumns,
+      table->view().num_columns(),
+      "Leading columns exceed the cuDF table width");
+  const auto numColumns = std::min<size_t>(
+      table->view().num_columns() - leadingColumns, columnTypes.size());
   auto columns = table->release();
   for (size_t i = 0; i < numColumns; ++i) {
-    columns[i] = castDecimalColumns(
-        std::move(columns[i]), rowType->childAt(i), stream, mr);
+    const auto columnIndex = leadingColumns + i;
+    columns[columnIndex] = castDecimalColumns(
+        std::move(columns[columnIndex]), columnTypes[i], stream, mr);
   }
   return std::make_unique<cudf::table>(std::move(columns));
 }
@@ -180,6 +186,7 @@ CudfSplitReader::CudfSplitReader(
       tableHandle_(std::move(tableHandle)),
       outputType_(outputType),
       readColumnNames_(readColumnNames),
+      readColumnTypes_(outputType->children()),
       fileHandleFactory_(fileHandleFactory),
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
@@ -191,6 +198,24 @@ CudfSplitReader::CudfSplitReader(
       baseReaderOpts_(pool_),
       subfieldFilterExpr_(subfieldFilterExpr),
       pushdownFilterExpr_(subfieldFilterExpr) {
+  VELOX_CHECK_GE(
+      readColumnNames_.size(),
+      readColumnTypes_.size(),
+      "Read columns must include all output columns");
+  if (readColumnNames_.size() > readColumnTypes_.size()) {
+    const auto& dataColumns = tableHandle_->dataColumns();
+    VELOX_CHECK_NOT_NULL(
+        dataColumns,
+        "Table schema is required to resolve filter-only column types");
+    for (size_t i = readColumnTypes_.size(); i < readColumnNames_.size(); ++i) {
+      const auto& name = readColumnNames_[i];
+      VELOX_CHECK(
+          dataColumns->containsChild(name),
+          "Read column missing from table schema: {}",
+          name);
+      readColumnTypes_.push_back(dataColumns->findChild(name));
+    }
+  }
   baseReaderOpts_.setDataIoStats(ioStatistics_);
   baseReaderOpts_.setMetadataIoStats(ioStatistics_);
 }
@@ -257,7 +282,11 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
 
     auto tableWithMetadata = splitReader_->read_chunk();
     return castDecimalColumnsToVeloxTypes(
-        std::move(tableWithMetadata.tbl), outputType_, stream_, output_mr);
+        std::move(tableWithMetadata.tbl),
+        readColumnTypes_,
+        prependRowIndex_ ? 1 : 0,
+        stream_,
+        output_mr);
   }
 
   // Read table using the experimental parquet reader
@@ -320,7 +349,11 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
 
   auto tableWithMetadata = exptSplitReader_->materialize_all_columns_chunk();
   return castDecimalColumnsToVeloxTypes(
-      std::move(tableWithMetadata.tbl), outputType_, stream_, output_mr);
+      std::move(tableWithMetadata.tbl),
+      readColumnTypes_,
+      prependRowIndex_ ? 1 : 0,
+      stream_,
+      output_mr);
 }
 
 void CudfSplitReader::resetSplit() {

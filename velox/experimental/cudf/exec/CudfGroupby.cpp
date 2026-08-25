@@ -43,7 +43,7 @@
 namespace {
 
 using namespace facebook::velox;
-using cudf_velox::castDecimal64InputToDecimal128;
+using cudf_velox::castDecimalInputToDecimal128;
 using cudf_velox::CountInputKind;
 using cudf_velox::finalizeDecimalAverage;
 using cudf_velox::get_output_mr;
@@ -195,7 +195,7 @@ void addDecimalRawPartialSingleSumRequest(
     rmm::cuda_stream_view stream,
     uint32_t& sumIdx,
     std::unique_ptr<cudf::column>& castedInput) {
-  auto inputView = castDecimal64InputToDecimal128(input, castedInput, stream);
+  auto inputView = castDecimalInputToDecimal128(input, castedInput, stream);
   auto& request = requests.emplace_back();
   sumIdx = requests.size() - 1;
   request.values = inputView;

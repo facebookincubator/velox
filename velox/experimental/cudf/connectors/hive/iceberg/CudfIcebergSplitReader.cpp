@@ -731,6 +731,9 @@ void CudfIcebergSplitReader::setupEqualityColumnKeys() {
       readColumnNames_.end(),
       extraEqualityColumns_.begin(),
       extraEqualityColumns_.end());
+  for (const auto& name : extraEqualityColumns_) {
+    readColumnTypes_.push_back(dataColumns->findChild(name));
+  }
 }
 
 void CudfIcebergSplitReader::cacheSchemaFromMetadata() {
@@ -795,25 +798,17 @@ void CudfIcebergSplitReader::adaptColumns() {
       readColumnNames_.size(),
       extraEqualityColumns_.size(),
       "Column projection must at least include the equality delete keys");
+  VELOX_CHECK_EQ(
+      readColumnNames_.size(),
+      readColumnTypes_.size(),
+      "Read column names and types must remain aligned");
   const size_t schemaSize =
       readColumnNames_.size() - extraEqualityColumns_.size();
 
   std::unordered_set<std::string> injectedNames;
   for (size_t i = 0; i < schemaSize; ++i) {
     const auto& fieldName = readColumnNames_[i];
-    const TypePtr veloxType = [&]() -> TypePtr {
-      if (i < outputType_->size()) {
-        VELOX_DCHECK_EQ(fieldName, outputType_->nameOf(i));
-        return outputType_->childAt(i);
-      }
-      // Filter-only column beyond the output projection.
-      const auto& dataColumns = tableHandle_->dataColumns();
-      VELOX_CHECK(
-          dataColumns and dataColumns->containsChild(fieldName),
-          "Filter-only column missing from table schema: {}",
-          fieldName);
-      return dataColumns->findChild(fieldName);
-    }();
+    const auto& veloxType = readColumnTypes_[i];
 
     if (auto iter = split_->infoColumns.find(fieldName);
         iter != split_->infoColumns.end()) {
@@ -835,11 +830,22 @@ void CudfIcebergSplitReader::adaptColumns() {
     }
   }
 
-  // Remove all injected columns from readColumnNames_
+  // Remove all injected columns while keeping names and types aligned.
   if (not injectedColumns_.empty()) {
-    std::erase_if(readColumnNames_, [&injectedNames](const auto& name) {
-      return injectedNames.contains(name);
-    });
+    size_t outputIndex = 0;
+    for (size_t inputIndex = 0; inputIndex < readColumnNames_.size();
+         ++inputIndex) {
+      if (injectedNames.contains(readColumnNames_[inputIndex])) {
+        continue;
+      }
+      if (outputIndex != inputIndex) {
+        readColumnNames_[outputIndex] = std::move(readColumnNames_[inputIndex]);
+        readColumnTypes_[outputIndex] = std::move(readColumnTypes_[inputIndex]);
+      }
+      ++outputIndex;
+    }
+    readColumnNames_.resize(outputIndex);
+    readColumnTypes_.resize(outputIndex);
     // Sort injected columns by assembled-table index once here
     std::sort(
         injectedColumns_.begin(),
