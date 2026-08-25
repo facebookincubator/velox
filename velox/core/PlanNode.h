@@ -65,6 +65,16 @@ struct InsertTableHandle {
           connectorInsertTableHandle,
       folly::F14FastSet<std::string> notNullColumns);
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Legacy constructor. Prefer the overload above, which takes the NOT NULL
+  /// columns. Removed once all callers have migrated.
+  InsertTableHandle(
+      const std::string& connectorId,
+      const connector::ConnectorInsertTableHandlePtr&
+          connectorInsertTableHandle)
+      : InsertTableHandle(connectorId, connectorInsertTableHandle, {}) {}
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
+
   const std::string& connectorId() const {
     return connectorId_;
   }
