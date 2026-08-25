@@ -58,6 +58,7 @@ velox_add_library(
   Tokenizer.h
   Tree.h
   Type.h
+  TypeKind.h
   TypeCoercer.h
   TypeEncodingUtil.h
   TypeSerde.h

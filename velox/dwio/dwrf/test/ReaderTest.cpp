@@ -1688,7 +1688,7 @@ TEST_F(TestReader, fileColumnNamesReadAsLowerCaseComplexStruct) {
   EXPECT_EQ(col0_1_1_0_0->childByName("ccint3"), col0_1_1_0_0_0);
 }
 
-TEST_F(TestReader, TestStripeSizeCallback) {
+TEST_F(TestReader, testStripeSizeCallback) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -1718,7 +1718,7 @@ TEST_F(TestReader, TestStripeSizeCallback) {
   EXPECT_EQ(numCalls, 1);
 }
 
-TEST_F(TestReader, TestStripeSizeCallbackLimitsOneStripe) {
+TEST_F(TestReader, testStripeSizeCallbackLimitsOneStripe) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -1749,7 +1749,7 @@ TEST_F(TestReader, TestStripeSizeCallbackLimitsOneStripe) {
   EXPECT_EQ(numCalls, 1);
 }
 
-TEST_F(TestReader, TestStripeSizeCallbackLimitsTwoStripe) {
+TEST_F(TestReader, testStripeSizeCallbackLimitsTwoStripe) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);

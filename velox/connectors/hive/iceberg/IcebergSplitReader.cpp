@@ -81,6 +81,32 @@ void fillNullsWithInt64(
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
 
+// Indexes IcebergColumnHandles by their underlying data-column name.
+// Covers output-projected handles (columnHandles) and, when tableHandle is
+// non-null, filter-only handles (tableHandle->filterColumnHandles()) too.
+std::unordered_map<std::string, const IcebergColumnHandle*>
+buildIcebergHandleByName(
+    const ColumnHandleMap* columnHandles,
+    const FileTableHandle* tableHandle = nullptr) {
+  std::unordered_map<std::string, const IcebergColumnHandle*> handleByName;
+  const auto addHandle = [&handleByName](const auto& handle) {
+    if (auto* h = dynamic_cast<const IcebergColumnHandle*>(handle.get())) {
+      handleByName.emplace(h->name(), h);
+    }
+  };
+  if (columnHandles) {
+    for (const auto& [_, handle] : *columnHandles) {
+      addHandle(handle);
+    }
+  }
+  if (tableHandle) {
+    for (const auto& handle : tableHandle->filterColumnHandles()) {
+      addHandle(handle);
+    }
+  }
+  return handleByName;
+}
+
 /// Returns true if a delete/update file should be skipped based on sequence
 /// number conflict resolution. Per the Iceberg spec (V2+):
 ///   - Equality deletes apply when deleteSeqNum > dataSeqNum (i.e., skip when
@@ -166,28 +192,22 @@ std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
     const {
   std::vector<dwio::common::ParquetFieldId> fieldIds;
   const auto& dataColumns = tableHandle_->dataColumns();
-  if (dataColumns == nullptr || columnHandles_ == nullptr) {
+  if (dataColumns == nullptr) {
     return fieldIds;
   }
+
+  const auto* hiveTableHandle =
+      dynamic_cast<const HiveTableHandle*>(tableHandle_.get());
+  const auto* dataColumnFieldIds = hiveTableHandle != nullptr
+      ? &hiveTableHandle->dataColumnFieldIds()
+      : nullptr;
+
   // Column handles are keyed by output alias; index them by the underlying
   // data-column name so we can align to dataColumns() order.
-  std::unordered_map<std::string, const IcebergColumnHandle*> handleByName;
-  const auto addIcebergHandle = [&handleByName](const auto& handle) {
-    if (auto* icebergHandle =
-            dynamic_cast<const IcebergColumnHandle*>(handle.get())) {
-      handleByName.emplace(icebergHandle->name(), icebergHandle);
-    }
-  };
-  for (const auto& columnHandle : *columnHandles_) {
-    addIcebergHandle(columnHandle.second);
-  }
-  // Remaining filters can add columns to the reader output that are not
-  // projected by the table scan. Include those handles so filter-only columns
-  // are still matched by Iceberg field ID.
-  for (const auto& handle : tableHandle_->filterColumnHandles()) {
-    addIcebergHandle(handle);
-  }
-  if (handleByName.empty()) {
+  const auto handleByName =
+      buildIcebergHandleByName(columnHandles_.get(), tableHandle_.get());
+  if (handleByName.empty() &&
+      (dataColumnFieldIds == nullptr || dataColumnFieldIds->empty())) {
     return fieldIds;
   }
 
@@ -197,6 +217,9 @@ std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
     auto it = handleByName.find(dataColumns->nameOf(static_cast<uint32_t>(i)));
     if (it != handleByName.end()) {
       fieldIds.push_back(it->second->field());
+    } else if (dataColumnFieldIds != nullptr && !dataColumnFieldIds->empty()) {
+      fieldIds.push_back(
+          dwio::common::ParquetFieldId{dataColumnFieldIds->at(i), {}});
     } else {
       fieldIds.push_back(dwio::common::ParquetFieldId{sentinelFieldId--, {}});
     }
@@ -248,13 +271,7 @@ void IcebergSplitReader::prepareSplit(
       // IcebergColumnHandle's field-id tree (per-input-column).
       // Column handles are keyed by output alias; index them by physical name
       // to mirror buildFieldIds() and support renamed columns.
-      std::unordered_map<std::string, const IcebergColumnHandle*> handleByName;
-      for (const auto& [outputName, handle] : *columnHandles_) {
-        if (auto* icebergHandle =
-                dynamic_cast<const IcebergColumnHandle*>(handle.get())) {
-          handleByName.emplace(icebergHandle->name(), icebergHandle);
-        }
-      }
+      const auto handleByName = buildIcebergHandleByName(columnHandles_.get());
       std::vector<dwio::common::ParquetFieldId> fieldIds;
       fieldIds.reserve(fileSchema->size());
       bool allResolved = true;
@@ -405,23 +422,25 @@ void IcebergSplitReader::prepareSplit(
     return;
   }
 
-  // Inject a row-number column when filters, random-skip, or positional
+  // Inject a row-number column when filters, random-skip, or row-skipping
   // deletes make the output-to-file-position mapping non-contiguous.
   // Check split metadata rather than positionalDeleteFileReaders_ because
   // the row reader must be configured before delete files are opened. Both
   // _row_id and $target_table_row_id need accurate file-absolute positions,
-  // so request injection when either is projected.
-  const bool hasPositionalDeletes = std::any_of(
+  // so request injection when either is projected. Deletion vectors skip rows
+  // exactly like V2 positional deletes and must be counted here too.
+  const bool hasRowSkippingDeletes = std::any_of(
       icebergSplit_->deleteFiles.begin(),
       icebergSplit_->deleteFiles.end(),
       [](const IcebergDeleteFile& deleteFile) {
-        return deleteFile.content == FileContent::kPositionalDeletes &&
+        return (deleteFile.content == FileContent::kPositionalDeletes ||
+                deleteFile.content == FileContent::kDeletionVector) &&
             deleteFile.recordCount > 0;
       });
   useRowNumberColumn_ = (rowIdOutputIndex_.has_value() ||
                          targetTableRowIdOutputIndex_.has_value()) &&
       (scanSpec_->hasFilter() || baseReaderOpts_.randomSkip() != nullptr ||
-       hasPositionalDeletes);
+       hasRowSkippingDeletes);
   if (useRowNumberColumn_) {
     dwio::common::RowNumberColumnInfo rowNumInfo;
     rowNumInfo.insertPosition = readerOutputType_->size();
@@ -560,7 +579,7 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
   std::vector<std::string> extraNames;
   std::vector<TypePtr> extraTypes;
   const auto& deleteFiles = icebergSplit_->deleteFiles;
-  const auto& splitPartitionKeys = icebergSplit_->partitionKeys;
+  const auto& identityPartitionKeys = icebergSplit_->identityPartitionKeys;
 
   for (const auto& deleteFile : deleteFiles) {
     if (deleteFile.content != FileContent::kEqualityDeletes ||
@@ -606,14 +625,21 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
           static_cast<column_index_t>(
               readerOutputType_->size() + extraEqualityColumns.size()));
 
-      // For partition columns set the partition value directly as a constant
-      // on the scan-spec child. This is independent of whether the data file
-      // contains the partition column physically. With the constant set
-      // up-front, 'adaptColumns' does not need any special-case logic for
-      // augmented partition columns and the read does not depend on the
-      // writer's choice of including the partition column in the file.
-      auto partitionIt = splitPartitionKeys.find(name);
-      if (partitionIt != splitPartitionKeys.end()) {
+      // Substitute the partition value for the source column only when the
+      // Iceberg partition spec explicitly marks this equality field's source
+      // column as an identity partition field. Identity is the only transform
+      // whose stored partition value equals the source column value; a
+      // bucket, truncate, or temporal value is a transform result, and a
+      // 'void' value is always null while keeping the source column's name.
+      // Keying by the delete file's own Iceberg field ID (rather than by
+      // column name) also keeps this correct across column renames.
+      //
+      // Anything else -- a transformed field, a spec that could not be
+      // parsed, or a split with no identity metadata at all -- leaves no
+      // constant installed, so the column is read from the data file.
+      const auto identityIt =
+          identityPartitionKeys.find(deleteFile.equalityFieldIds[i]);
+      if (identityIt != identityPartitionKeys.end()) {
         // Iceberg encodes DATE partition values as the integer number of
         // days since the Unix epoch (e.g. "19345"). The standard
         // 'setPartitionValue' helper learns this from the planner-supplied
@@ -624,7 +650,7 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
         const bool isDaysSinceEpoch = equalityColumnTypes[i]->isDate();
         auto constant = newConstantFromString(
             equalityColumnTypes[i],
-            partitionIt->second,
+            identityIt->second,
             connectorQueryCtx_->memoryPool(),
             fileConfig_->readTimestampPartitionValueAsLocalTime(
                 connectorQueryCtx_->sessionProperties()),
@@ -671,18 +697,35 @@ IcebergSplitReader::resolveEqualityColumns(
       "Iceberg equality delete file '{}' cannot be processed because "
       "table data columns are not available in HiveTableHandle.",
       deleteFile.filePath);
-  for (const auto& eqFieldId : deleteFile.equalityFieldIds) {
-    // Field IDs are 1-based sequential for non-evolved schemas.
-    auto colIdx = static_cast<uint32_t>(eqFieldId - 1);
+  std::unordered_map<int32_t, uint32_t> columnIndexByFieldId;
+  if (const auto* hiveTableHandle =
+          dynamic_cast<const HiveTableHandle*>(tableHandle_.get())) {
+    const auto& dataColumnFieldIds = hiveTableHandle->dataColumnFieldIds();
+    columnIndexByFieldId.reserve(dataColumnFieldIds.size());
+    for (uint32_t i = 0; i < dataColumnFieldIds.size(); ++i) {
+      columnIndexByFieldId.emplace(dataColumnFieldIds[i], i);
+    }
+  }
+
+  for (const auto& equalityFieldId : deleteFile.equalityFieldIds) {
+    VELOX_CHECK_GT(
+        equalityFieldId,
+        0,
+        "Equality delete field ID must be positive: {}",
+        equalityFieldId);
+    const auto fieldIdIt = columnIndexByFieldId.find(equalityFieldId);
+    // Older plans and tests may not carry full-schema field IDs. Preserve the
+    // legacy ordinal lookup when metadata is unavailable or incomplete.
+    const auto columnIndex = fieldIdIt != columnIndexByFieldId.end()
+        ? fieldIdIt->second
+        : static_cast<uint32_t>(equalityFieldId - 1);
     VELOX_CHECK_LT(
-        colIdx,
+        columnIndex,
         dataColumns->size(),
-        "Equality delete field ID {} out of range. This may indicate "
-        "schema evolution with non-sequential field IDs, which is "
-        "not yet supported.",
-        eqFieldId);
-    equalityColumnNames.push_back(dataColumns->nameOf(colIdx));
-    equalityColumnTypes.push_back(dataColumns->childAt(colIdx));
+        "Equality delete field ID cannot be resolved against table columns: {}",
+        equalityFieldId);
+    equalityColumnNames.push_back(dataColumns->nameOf(columnIndex));
+    equalityColumnTypes.push_back(dataColumns->childAt(columnIndex));
   }
   return {std::move(equalityColumnNames), std::move(equalityColumnTypes)};
 }
@@ -925,6 +968,12 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
   const bool readTimestampAsLocalTime =
       fileConfig_->readTimestampPartitionValueAsLocalTime(
           connectorQueryCtx_->sessionProperties());
+
+  // Index all Iceberg column handles by data-column name for O(1) default-value
+  // lookup inside the loop.
+  const auto handleByName =
+      buildIcebergHandleByName(columnHandles_.get(), tableHandle_.get());
+
   // Iceberg table stores all column's data in data file.
   for (const auto& childSpec : childrenSpecs) {
     const std::string& fieldName = childSpec->fieldName();
@@ -1045,40 +1094,21 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
                    partitionIt != fileSplit_->partitionKeys.end()) {
           setPartitionValue(childSpec.get(), fieldName, partitionIt->second);
         } else {
-          // Check if column has an initial-default value (Iceberg V3)
-          bool hasDefaultValue = false;
-          // The columnHandles_ map is keyed by output name (which may be an
-          // alias). We need to find the column handle where the handle's name()
-          // matches fieldName. fieldName is the table column name from
-          // readerOutputType_.
-          for (const auto& [outputName, handle] : *columnHandles_) {
-            if (handle->name() == fieldName) {
-              auto icebergColumnHandle =
-                  std::dynamic_pointer_cast<const IcebergColumnHandle>(handle);
-              if (icebergColumnHandle &&
-                  icebergColumnHandle->initialDefaultValue().has_value()) {
-                // Use initial-default value for schema evolution.
-                auto columnType = tableSchema->findChild(fieldName);
-                VELOX_CHECK_NOT_NULL(
-                    columnType,
-                    "Column '{}' not found in table schema",
-                    fieldName);
-                auto constant = newConstantFromString(
-                    columnType,
-                    icebergColumnHandle->initialDefaultValue().value(),
-                    connectorQueryCtx_->memoryPool(),
-                    readTimestampAsLocalTime,
-                    false);
-                childSpec->setConstantValue(constant);
-                hasDefaultValue = true;
-                break;
-              }
-            }
-          }
-
-          // Fall back to NULL if no default value
-          if (!hasDefaultValue) {
-            auto columnType = tableSchema->findChild(fieldName);
+          // Check if column has an initial-default value (Iceberg V3).
+          // Use the pre-built handleByName map that covers both output
+          // column handles and filter column handles.
+          auto it = handleByName.find(fieldName);
+          auto columnType = tableSchema->findChild(fieldName);
+          if (it != handleByName.end() &&
+              it->second->initialDefaultValue().has_value()) {
+            childSpec->setConstantValue(newConstantFromString(
+                columnType,
+                it->second->initialDefaultValue().value(),
+                connectorQueryCtx_->memoryPool(),
+                readTimestampAsLocalTime,
+                false));
+          } else {
+            // Fall back to NULL if no default value.
             VELOX_CHECK_NOT_NULL(
                 columnType, "Column '{}' not found in table schema", fieldName);
             childSpec->setConstantValue(
