@@ -487,9 +487,6 @@ inline double deltaCostBits(
   const uint8_t deltaBitWidth = m.maxDelta == 0
       ? uint8_t{0}
       : static_cast<uint8_t>(std::bit_width(m.maxDelta));
-  // Round up to byte boundary, matching nested encodings' FixedBitWidth-style
-  // packing.
-  const uint8_t roundedDeltaBits = (deltaBitWidth + 7u) & ~7u;
 
   const double restatementFraction = 1.0 - monotonicFraction;
   // At least one restatement (the leading value) is always present.
@@ -503,12 +500,20 @@ inline double deltaCostBits(
   constexpr double kOuterHeaderBits = (6.0 + 4.0 + 4.0) * 8.0;
 
   const double deltasBits = kNestedHeaderBits +
-      static_cast<double>(numValues) * static_cast<double>(roundedDeltaBits);
+      static_cast<double>(numValues) * static_cast<double>(deltaBitWidth);
   const double restatementsBits = kNestedHeaderBits +
       numRestatements * static_cast<double>(storageWidthBits(bitWidth));
-  // isRestatements is a bool stream, bit-packed to ~1 bit/value.
+  // isRestatements is a bool stream that is true only at restatement
+  // positions -- nested-encoded, so delegate to SparseBoolEncoding's own
+  // estimator (as the MainlyConstant/Dictionary fixes above do) instead of
+  // charging a flat 1 bit/value, which drastically overestimates when
+  // restatements are rare (the common case for mostly-monotonic data).
   const double isRestatementsBits =
-      kNestedHeaderBits + static_cast<double>(numValues);
+      static_cast<double>(SparseBoolEncoding::estimateSize(
+          static_cast<uint64_t>(numValues),
+          static_cast<uint64_t>(numRestatements),
+          Encoding::Options{})) *
+      8.0;
 
   return kOuterHeaderBits + deltasBits + restatementsBits +
       isRestatementsBits;
