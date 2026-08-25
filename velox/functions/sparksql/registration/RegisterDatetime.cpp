@@ -16,8 +16,19 @@
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/sparksql/DateTimeFunctions.h"
+#include "velox/functions/sparksql/ToTimestampNtz.h"
 
 namespace facebook::velox::functions::sparksql {
+
+namespace {
+
+template <typename T>
+using GetTimestampWithTimestamp = GetTimestampFunction<T, Timestamp>;
+
+template <typename T>
+using GetTimestampWithTimestampUtc = GetTimestampFunction<T, TimestampUtc>;
+
+} // namespace
 
 void registerDatetimeFunctions(const std::string& prefix) {
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
@@ -73,8 +84,15 @@ void registerDatetimeFunctions(const std::string& prefix) {
   registerFunction<MonthFunction, int32_t, Date>({prefix + "month"});
   registerFunction<MonthNameFunction, Varchar, Date>({prefix + "monthname"});
   registerFunction<NextDayFunction, Date, Date, Varchar>({prefix + "next_day"});
-  registerFunction<GetTimestampFunction, Timestamp, Varchar, Varchar>(
+  registerFunction<GetTimestampWithTimestamp, Timestamp, Varchar, Varchar>(
       {prefix + "get_timestamp"});
+  registerFunction<ToTimestampNtzFunction, TimestampUtc, Varchar>(
+      {prefix + "to_timestamp_ntz"});
+  registerFunction<
+      GetTimestampWithTimestampUtc,
+      TimestampUtc,
+      Varchar,
+      Varchar>({prefix + "to_timestamp_ntz"});
   registerFunction<
       ParameterBinder<HourFunction, Timestamp>,
       int32_t,
