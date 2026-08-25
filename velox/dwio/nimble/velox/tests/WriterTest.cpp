@@ -3444,6 +3444,19 @@ TEST_F(WriterTest, chunkStatsAbsentWhenChunkIndexDisabled) {
       << "no chunk stats section should be written when the index is disabled";
 }
 
+TEST_F(WriterTest, chunkIndexRequiresChunking) {
+  auto type = velox::ROW({{"c1", velox::INTEGER()}});
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  NIMBLE_ASSERT_USER_THROW(
+      nimble::Writer(
+          type,
+          std::move(writeFile),
+          *rootPool_,
+          {.enableChunkIndex = true, .enableChunking = false}),
+      "Chunk stats require chunking to be enabled.");
+}
+
 TEST_F(WriterTest, chunkedStreamsRowNoNullsNoChunks) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
 
