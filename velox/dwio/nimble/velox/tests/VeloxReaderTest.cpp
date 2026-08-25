@@ -411,13 +411,14 @@ size_t streamsReadCount(
       makeTestTabletOptions(&pool));
   NIMBLE_CHECK_GE(tablet->stripeCount(), 1);
   auto stripeIdentifier = tablet->stripeIdentifier(0);
-  std::vector<uint32_t> offsets(tablet->streamCount(stripeIdentifier));
-  tablet->streamOffsets(stripeIdentifier, offsets);
+  std::vector<nimble::TabletReader::StreamLocation> locations(
+      tablet->streamCount(stripeIdentifier));
+  tablet->streamLocations(stripeIdentifier, locations);
   std::unordered_set<uint32_t> streamOffsets;
-  LOG(INFO) << "Number of streams: " << offsets.size();
-  for (auto offset : offsets) {
-    LOG(INFO) << "Stream offset: " << offset;
-    streamOffsets.insert(offset);
+  LOG(INFO) << "Number of streams: " << locations.size();
+  for (const auto& location : locations) {
+    LOG(INFO) << "Stream offset: " << location.offset;
+    streamOffsets.insert(location.offset);
   }
   size_t readCount = 0;
   auto fileSize = readFile->size();
@@ -446,11 +447,12 @@ std::unordered_set<nimble::offset_size> existingStreamOffsets(
   NIMBLE_CHECK_LT(stripeIndex, tablet->stripeCount(), "Stripe out of range");
   auto stripeId = tablet->stripeIdentifier(stripeIndex);
   const auto streamCount = tablet->streamCount(stripeId);
-  std::vector<uint32_t> streamSizes(streamCount);
-  tablet->streamSizes(stripeId, streamSizes);
+  std::vector<nimble::TabletReader::StreamLocation> streamLocations(
+      streamCount);
+  tablet->streamLocations(stripeId, streamLocations);
   std::unordered_set<nimble::offset_size> result;
   for (nimble::offset_size i = 0; i < streamCount; ++i) {
-    if (streamSizes[i] > 0) {
+    if (streamLocations[i].size > 0) {
       result.insert(i);
     }
   }

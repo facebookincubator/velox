@@ -520,24 +520,22 @@ void NimbleIndexProjector::locateStripeStreams(StripePlan& stripePlan) {
   stripePlan.numRows = stripeRowCount(stripePlan.stripeIndex);
 
   const auto stripeId = tablet_->stripeIdentifier(stripePlan.stripeIndex);
-  const auto streamCount = tablet_->streamCount(stripeId);
   const auto stripeOffset = tablet_->stripeOffset(stripePlan.stripeIndex);
 
+  std::vector<TabletReader::StreamLocation> streamLocations(
+      projection_->streamOffsets.size());
+  tablet_->streamLocations(
+      stripeId, projection_->streamOffsets, streamLocations);
   stripePlan.projectedStreams.resize(projection_->streamOffsets.size());
-  for (size_t i = 0; i < projection_->streamOffsets.size(); ++i) {
-    const auto streamId = projection_->streamOffsets[i];
-    if (streamId >= streamCount) {
+  for (size_t i = 0; i < streamLocations.size(); ++i) {
+    const auto& streamLocation = streamLocations[i];
+    if (streamLocation.size == 0) {
       continue;
     }
-    const auto streamSize = tablet_->streamSize(stripeId, streamId);
-    if (streamSize == 0) {
-      continue;
-    }
-    const auto streamOffset = tablet_->streamOffset(stripeId, streamId);
-    stripePlan.projectedStreams[i] =
-        velox::common::Region{stripeOffset + streamOffset, streamSize};
+    stripePlan.projectedStreams[i] = velox::common::Region{
+        stripeOffset + streamLocation.offset, streamLocation.size};
     ++stripePlan.numStreams;
-    stripePlan.projectedBytes += streamSize;
+    stripePlan.projectedBytes += streamLocation.size;
     if (projection_->rowOrFlatMapNullStreams[i]) {
       // A present Row/FlatMap null stream means the slice may carry nulls.
       stripePlan.requiresNullBarrier = true;

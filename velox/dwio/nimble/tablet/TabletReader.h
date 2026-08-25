@@ -388,15 +388,22 @@ class TabletReader {
   /// stream does not exist in this stripe. O(1) point read.
   uint32_t streamSize(const StripeIdentifier& stripe, uint32_t streamId) const;
 
-  /// Bulk decode of all `streamCount(stripe)` byte offsets for `stripe` into
-  /// the caller-provided buffer. Intended for cold-path callers (file layout
-  /// dump tools) that need to scan every stream.
-  void streamOffsets(const StripeIdentifier& stripe, std::span<uint32_t> out)
-      const;
+  /// Relative byte location of one stream within a stripe. A zero size means
+  /// the stream is absent.
+  using StreamLocation = StripeGroup::StreamLocation;
 
-  /// Bulk decode of all `streamCount(stripe)` byte sizes for `stripe`.
-  void streamSizes(const StripeIdentifier& stripe, std::span<uint32_t> out)
-      const;
+  /// Reads locations for all `streamCount(stripe)` streams into the caller-
+  /// provided buffer.
+  void streamLocations(
+      const StripeIdentifier& stripe,
+      std::span<StreamLocation> locations) const;
+
+  /// Reads locations for selected streams. Stream IDs beyond
+  /// `streamCount(stripe)` and streams with zero size produce absent locations.
+  void streamLocations(
+      const StripeIdentifier& stripe,
+      std::span<const uint32_t> streamIds,
+      std::span<StreamLocation> locations) const;
 
   /// Returns the schema's leaf-stream count at the time `stripe`'s stripe
   /// group was written. May be less than the final schema's node count.

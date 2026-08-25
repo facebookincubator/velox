@@ -1390,10 +1390,9 @@ TEST_F(WriterTest, featureReorderingStreamCollocation) {
 
     auto stripeId = tablet->stripeIdentifier(0);
     const auto streamCount = tablet->streamCount(stripeId);
-    std::vector<uint32_t> offsets(streamCount);
-    std::vector<uint32_t> sizes(streamCount);
-    tablet->streamOffsets(stripeId, offsets);
-    tablet->streamSizes(stripeId, sizes);
+    std::vector<nimble::TabletReader::StreamLocation> streamLocations(
+        streamCount);
+    tablet->streamLocations(stripeId, streamLocations);
 
     nimble::VeloxReader reader(readFile.get(), *leafPool_);
     const auto& flatMap =
@@ -1409,7 +1408,7 @@ TEST_F(WriterTest, featureReorderingStreamCollocation) {
     // constant-encoded and deduplicated when all keys are present in every
     // row.
     auto diskPosition = [&](const std::string& key) -> uint32_t {
-      return offsets[keyToValueStreamId.at(key)];
+      return streamLocations[keyToValueStreamId.at(key)].offset;
     };
 
     // Verify reordered keys appear in the specified order on disk.
@@ -1428,7 +1427,9 @@ TEST_F(WriterTest, featureReorderingStreamCollocation) {
       auto prevStreamId = keyToValueStreamId.at(prevKey);
       auto currStreamId = keyToValueStreamId.at(currKey);
       EXPECT_EQ(
-          offsets[prevStreamId] + sizes[prevStreamId], offsets[currStreamId])
+          streamLocations[prevStreamId].offset +
+              streamLocations[prevStreamId].size,
+          streamLocations[currStreamId].offset)
           << "Key " << prevKey << " value stream should be adjacent to key "
           << currKey;
     }
@@ -1553,10 +1554,9 @@ TEST_F(WriterTest, featureReorderingSharedDictionaryStreamCollocation) {
 
     const auto stripeId = tablet->stripeIdentifier(0);
     const auto streamCount = tablet->streamCount(stripeId);
-    std::vector<uint32_t> offsets(streamCount);
-    std::vector<uint32_t> sizes(streamCount);
-    tablet->streamOffsets(stripeId, offsets);
-    tablet->streamSizes(stripeId, sizes);
+    std::vector<nimble::TabletReader::StreamLocation> streamLocations(
+        streamCount);
+    tablet->streamLocations(stripeId, streamLocations);
 
     nimble::VeloxReader reader(readFile.get(), *leafPool_);
     const auto& flatMap =
@@ -1584,10 +1584,10 @@ TEST_F(WriterTest, featureReorderingSharedDictionaryStreamCollocation) {
       ASSERT_TRUE(dictionaryStreamId.has_value())
           << "Missing shared dictionary stream for key " << key;
 
-      ASSERT_LT(valueStreamId, offsets.size());
-      ASSERT_LT(dictionaryStreamId.value(), offsets.size());
-      EXPECT_GT(sizes[valueStreamId], 0);
-      EXPECT_GT(sizes[dictionaryStreamId.value()], 0);
+      ASSERT_LT(valueStreamId, streamLocations.size());
+      ASSERT_LT(dictionaryStreamId.value(), streamLocations.size());
+      EXPECT_GT(streamLocations[valueStreamId].size, 0);
+      EXPECT_GT(streamLocations[dictionaryStreamId.value()].size, 0);
 
       auto streams =
           tablet->load(stripeId, std::vector<uint32_t>{valueStreamId});
@@ -1599,11 +1599,12 @@ TEST_F(WriterTest, featureReorderingSharedDictionaryStreamCollocation) {
           nimble::EncodingType::SharedDictionary)
           << "Key " << key << " value stream should use SharedDictionary";
 
-      const auto valueBegin = offsets[valueStreamId];
-      const auto valueEnd = valueBegin + sizes[valueStreamId];
-      const auto dictionaryBegin = offsets[dictionaryStreamId.value()];
+      const auto valueBegin = streamLocations[valueStreamId].offset;
+      const auto valueEnd = valueBegin + streamLocations[valueStreamId].size;
+      const auto dictionaryBegin =
+          streamLocations[dictionaryStreamId.value()].offset;
       const auto dictionaryEnd =
-          dictionaryBegin + sizes[dictionaryStreamId.value()];
+          dictionaryBegin + streamLocations[dictionaryStreamId.value()].size;
       EXPECT_TRUE(valueEnd == dictionaryBegin || dictionaryEnd == valueBegin)
           << "Key " << key
           << " dictionary stream should be adjacent to its value stream";
@@ -1677,10 +1678,9 @@ TEST_F(
 
   auto stripeId = tablet->stripeIdentifier(0);
   const auto streamCount = tablet->streamCount(stripeId);
-  std::vector<uint32_t> offsets(streamCount);
-  std::vector<uint32_t> sizes(streamCount);
-  tablet->streamOffsets(stripeId, offsets);
-  tablet->streamSizes(stripeId, sizes);
+  std::vector<nimble::TabletReader::StreamLocation> streamLocations(
+      streamCount);
+  tablet->streamLocations(stripeId, streamLocations);
 
   nimble::VeloxReader reader(readFile.get(), *leafPool_);
   const auto& rowSchema = reader.schema()->asRow();
@@ -1700,7 +1700,9 @@ TEST_F(
     const auto prevStreamId = keyToValueStreamId.at(prevKey);
     const auto currStreamId = keyToValueStreamId.at(currKey);
     EXPECT_EQ(
-        offsets[prevStreamId] + sizes[prevStreamId], offsets[currStreamId])
+        streamLocations[prevStreamId].offset +
+            streamLocations[prevStreamId].size,
+        streamLocations[currStreamId].offset)
         << "Key " << prevKey << " value stream should be adjacent to key "
         << currKey;
   }
@@ -6290,17 +6292,16 @@ class WriterIndexTest : public WriterTest,
          ++stripeIndex) {
       const auto stripeIdentifier = tablet.stripeIdentifier(stripeIndex);
       const auto streamCount = tablet.streamCount(stripeIdentifier);
-      std::vector<uint32_t> offsets(streamCount);
-      std::vector<uint32_t> sizes(streamCount);
-      tablet.streamOffsets(stripeIdentifier, offsets);
-      tablet.streamSizes(stripeIdentifier, sizes);
+      std::vector<nimble::TabletReader::StreamLocation> streamLocations(
+          streamCount);
+      tablet.streamLocations(stripeIdentifier, streamLocations);
 
       std::map<std::pair<uint32_t, uint32_t>, uint64_t> duplicateGroups;
-      for (size_t streamIndex = 0; streamIndex < sizes.size(); ++streamIndex) {
-        if (sizes[streamIndex] == 0) {
+      for (const auto& streamLocation : streamLocations) {
+        if (streamLocation.size == 0) {
           continue;
         }
-        ++duplicateGroups[{offsets[streamIndex], sizes[streamIndex]}];
+        ++duplicateGroups[{streamLocation.offset, streamLocation.size}];
       }
 
       for (const auto& [offsetAndSize, count] : duplicateGroups) {
