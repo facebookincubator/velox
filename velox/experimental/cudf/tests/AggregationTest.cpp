@@ -2116,6 +2116,67 @@ TEST_F(AggregationTest, groupByTimestampWithTimeZoneKeepsNullsSeparate) {
   }
 }
 
+// SELECT DISTINCT on a TIMESTAMP WITH TIME ZONE key. A distinct aggregation (grouping
+// keys, no aggregates) routes to CudfDistinct rather than CudfGroupby, and that
+// operator returns its KEY columns as its output -- so the fix there had to take the
+// indices of the distinct rows from normalized keys and gather the ORIGINAL columns,
+// rather than deduplicate normalized values and emit them.
+TEST_F(AggregationTest, distinctTimestampWithTimeZoneCollapsesZoneKeys) {
+  const int64_t millis = 1'623'758'400'000;
+  const int64_t other = -14'182'940'000;
+  auto data = makeRowVector({makeFlatVector<int64_t>(
+      {packAt(millis, "Pacific/Kiritimati"),
+       packAt(millis, "Pacific/Midway"),
+       packAt(other, "Asia/Kolkata"),
+       packAt(millis, "UTC")},
+      TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto plan =
+      PlanBuilder().values({data}).singleAggregation({"c0"}, {}).planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 2) << "two instants, not four packed values";
+  auto keys = result->childAt(0)->as<SimpleVector<int64_t>>();
+  std::set<int64_t> instants;
+  for (auto i = 0; i < result->size(); ++i) {
+    instants.insert(unpackMillisUtc(keys->valueAt(i)));
+  }
+  EXPECT_EQ(instants, (std::set<int64_t>{millis, other}));
+}
+
+// The surviving row must keep its own zone key. Every row is non-UTC, so a
+// normalized key reaching the output shows up as zone 0 -- which the test above
+// cannot detect, because there UTC is one of the legitimate answers.
+TEST_F(AggregationTest, distinctTimestampWithTimeZoneEmitsARealZoneKey) {
+  const int64_t millis = 1'623'758'400'000;
+  const auto kolkata = tz::getTimeZoneID("Asia/Kolkata");
+  const auto kathmandu = tz::getTimeZoneID("Asia/Kathmandu");
+  auto data = makeRowVector({makeFlatVector<int64_t>(
+      {pack(millis, kolkata), pack(millis, kathmandu)},
+      TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto plan =
+      PlanBuilder().values({data}).singleAggregation({"c0"}, {}).planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  const auto key = result->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0);
+  EXPECT_EQ(unpackMillisUtc(key), millis);
+  const auto zone = unpackZoneKeyId(key);
+  EXPECT_TRUE(zone == kolkata || zone == kathmandu)
+      << "the surviving row must keep a zone key from the input, got " << zone;
+  EXPECT_NE(zone, 0) << "zone 0 would mean a normalized key reached the output";
+}
+
+// count(DISTINCT ts) is deliberately NOT asserted here. That plan shape is DECLINED
+// by cuDF, and this fixture sets allowCpuFallback = false, so the test would fail on
+// "Replacement with cuDF operator failed" rather than on the deduplication. Allowing
+// fallback instead would assert CPU's answer and prove nothing about the GPU. It is the
+// reason the parity suite's n_tswtz_count_distinct_across_zones case sets
+// gpu_claimed: false and is measured on the PERMISSIVE cluster, where the shape runs
+// partly on GPU and the wrong count is observable -- a strict-mode raise alone does not
+// establish that a shape is safely declined.
+
 // The same grouping across a hash-partitioned local exchange, which is the shape
 // a real plan takes and the reason this needed two fixes rather than one:
 // CudfLocalPartition murmur3-hashed the packed value, so same-instant rows went to
