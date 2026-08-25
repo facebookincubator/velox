@@ -1046,6 +1046,13 @@ Parquet Options (prefix ``hive.parquet.``)
      - bool
      - false
      - Allow reading INT32 Parquet columns as a narrower integer type. Session: ``parquet_allow_int32_narrowing``.
+   * - ``null-struct-if-all-fields-missing``
+     - bool
+     - false
+     - When name-based mapping is enabled and all requested fields of a struct
+       are missing in a Parquet file, return a NULL struct instead of preserving
+       the parent struct nullness and returning a non-null struct with all-null
+       children. Session: ``parquet_null_struct_if_all_fields_missing``.
    * - ``footer-memory-tracking-threshold``
      - integer
      - disabled (max uint64)
