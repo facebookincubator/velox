@@ -21,31 +21,50 @@
 #include <cudf/groupby.hpp>
 
 #include <optional>
+#include <utility>
 
 namespace facebook::velox::cudf_velox {
 
 class CudaEvent;
 
-struct StreamingGroupbyPreparedColumn {
+// Type-specific adapter between Velox final-aggregation state and libcudf's
+// flattened streaming_groupby request/result interface.
+struct StreamingGroupbyAggregator {
   column_index_t inputIndex;
-  std::optional<column_index_t> childIndex;
-  TypePtr type;
-};
+  TypePtr resultType;
 
-struct StreamingGroupbyRequestSpec {
-  column_index_t preparedInputIndex;
-  cudf::aggregation::Kind kind;
-};
+  virtual void prepareInput(
+      cudf::table_view input,
+      std::vector<cudf::column_view>& preparedColumns) = 0;
 
-struct StreamingGroupbyOutputSpec {
-  enum class Kind {
-    kDirect,
-    kAverage,
-  };
+  virtual void addStreamingRequest(
+      std::vector<cudf::groupby::streaming_aggregation_request>& requests) = 0;
 
-  Kind kind;
-  TypePtr type;
-  std::vector<size_t> resultIndices;
+  virtual std::unique_ptr<cudf::column> makeOutputColumn(
+      std::vector<cudf::groupby::aggregation_result>& results,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) = 0;
+
+  virtual ~StreamingGroupbyAggregator() = default;
+
+ protected:
+  StreamingGroupbyAggregator(column_index_t inputIndex, TypePtr resultType)
+      : inputIndex(inputIndex), resultType(std::move(resultType)) {}
+
+  column_index_t prepareColumn(
+      cudf::table_view input,
+      std::vector<cudf::column_view>& preparedColumns,
+      std::optional<column_index_t> childIndex = std::nullopt) const {
+    VELOX_CHECK_LT(inputIndex, input.num_columns());
+    auto column = input.column(inputIndex);
+    if (childIndex.has_value()) {
+      VELOX_CHECK_LT(*childIndex, column.num_children());
+      column = column.child(*childIndex);
+    }
+    VELOX_CHECK_EQ(column.size(), input.num_rows());
+    preparedColumns.push_back(column);
+    return static_cast<column_index_t>(preparedColumns.size() - 1);
+  }
 };
 
 struct GroupbyAggregator {
@@ -84,6 +103,14 @@ std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
     core::AggregationNode::Step step,
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants);
+
+std::optional<std::vector<std::unique_ptr<StreamingGroupbyAggregator>>>
+toStreamingGroupbyAggregators(
+    const core::AggregationNode& aggregationNode,
+    const RowTypePtr& inputType,
+    const std::vector<column_index_t>& aggregationInputChannels,
+    const TypePtr& outputType,
+    const std::vector<VectorPtr>& constants);
 
 // Groupby-specific validation
 bool canGroupbyBeEvaluatedByCudf(
@@ -140,10 +167,10 @@ class CudfGroupby : public CudfOperatorBase {
       const RowTypePtr& inputRowSchema,
       const std::vector<VectorPtr>& constants);
 
-  cudf::table_view makeStreamingGroupbyInputView(cudf::table_view input) const;
+  cudf::table_view makeStreamingGroupbyInputView(cudf::table_view input);
 
   std::unique_ptr<cudf::groupby::streaming_groupby> createStreamingGroupby(
-      size_t capacity) const;
+      size_t capacity);
 
   void computeFinalGroupbyWithStreamingApi(CudfVectorPtr input);
 
@@ -182,9 +209,8 @@ class CudfGroupby : public CudfOperatorBase {
   RowTypePtr bufferedResultType_;
   CudfVectorPtr bufferedResult_;
 
-  std::vector<StreamingGroupbyPreparedColumn> streamingPreparedColumns_;
-  std::vector<StreamingGroupbyRequestSpec> streamingRequestSpecs_;
-  std::vector<StreamingGroupbyOutputSpec> streamingOutputSpecs_;
+  std::vector<std::unique_ptr<StreamingGroupbyAggregator>>
+      streamingGroupbyAggregators_;
   std::unique_ptr<cudf::groupby::streaming_groupby> streamingGroupby_;
   std::optional<rmm::cuda_stream_view> streamingGroupbyStream_;
   std::unique_ptr<CudaEvent> streamingGroupbyEvent_;

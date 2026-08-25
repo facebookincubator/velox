@@ -1142,6 +1142,42 @@ TEST_F(
 
 TEST_F(
     StreamingGroupbyApiAggregationTest,
+    initialCapacityCoversTwoHighCardinalityBatches) {
+  constexpr int32_t kBatchRows = 8;
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t batch = 0; batch < 2; ++batch) {
+    const auto offset = static_cast<int64_t>(batch) * kBatchRows;
+    vectors.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kBatchRows, [offset](auto row) { return offset + row; }),
+        makeFlatVector<int64_t>(kBatchRows, [](auto /*row*/) { return 1; }),
+    }));
+  }
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId finalAggId;
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, kBatchRows)
+          .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+          .plan(
+              PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"c0"}, {"sum(c1)"})
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .planNode())
+          .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+
+  EXPECT_TRUE(
+      hasStreamingGroupbyStat(task, finalAggId, "streamingGroupbyApiUsed"));
+  EXPECT_EQ(
+      streamingGroupbyStatSum(task, finalAggId, "streamingGroupbyApiRebuilds"),
+      0);
+}
+
+TEST_F(
+    StreamingGroupbyApiAggregationTest,
     growsBeforeInsertingAnotherHighCardinalityBatch) {
   constexpr int32_t kBatchRows = 8;
   constexpr int32_t kNumBatches = 8;
