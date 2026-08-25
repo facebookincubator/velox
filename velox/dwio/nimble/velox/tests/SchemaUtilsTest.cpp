@@ -104,7 +104,7 @@ void expectSameType(const Type& a, const Type& b, const std::string& path) {
 
 // --- convertToVeloxType tests ---
 
-TEST(SchemaUtilsTest, ConvertScalarToVelox) {
+TEST(SchemaUtilsTest, convertScalarToVelox) {
   struct TestCase {
     ScalarKind scalarKind;
     velox::TypeKind expectedVeloxKind;
@@ -135,7 +135,7 @@ TEST(SchemaUtilsTest, ConvertScalarToVelox) {
   }
 }
 
-TEST(SchemaUtilsTest, ConvertUnsupportedScalarToVeloxThrows) {
+TEST(SchemaUtilsTest, convertUnsupportedScalarToVeloxThrows) {
   std::vector<ScalarKind> unsupported = {
       ScalarKind::UInt8,
       ScalarKind::UInt16,
@@ -156,7 +156,7 @@ TEST(SchemaUtilsTest, ConvertUnsupportedScalarToVeloxThrows) {
   }
 }
 
-TEST(SchemaUtilsTest, ConvertTimestampMicroNanoToVelox) {
+TEST(SchemaUtilsTest, convertTimestampMicroNanoToVelox) {
   SchemaBuilder schemaBuilder;
   NIMBLE_SCHEMA(
       schemaBuilder, NIMBLE_ROW({{"ts", NIMBLE_TIMESTAMPMICRONANO()}}));
@@ -166,7 +166,7 @@ TEST(SchemaUtilsTest, ConvertTimestampMicroNanoToVelox) {
   EXPECT_EQ(velox::TypeKind::TIMESTAMP, veloxType->kind());
 }
 
-TEST(SchemaUtilsTest, ConvertRowToVelox) {
+TEST(SchemaUtilsTest, convertRowToVelox) {
   SchemaBuilder schemaBuilder;
   NIMBLE_SCHEMA(
       schemaBuilder,
@@ -182,7 +182,7 @@ TEST(SchemaUtilsTest, ConvertRowToVelox) {
   EXPECT_EQ(velox::TypeKind::BIGINT, veloxRow.childAt(1)->kind());
 }
 
-TEST(SchemaUtilsTest, ConvertArrayToVelox) {
+TEST(SchemaUtilsTest, convertArrayToVelox) {
   SchemaBuilder schemaBuilder;
   NIMBLE_SCHEMA(
       schemaBuilder, NIMBLE_ROW({{"arr", NIMBLE_ARRAY(NIMBLE_BIGINT())}}));
@@ -194,7 +194,7 @@ TEST(SchemaUtilsTest, ConvertArrayToVelox) {
       velox::TypeKind::BIGINT, veloxType->asArray().elementType()->kind());
 }
 
-TEST(SchemaUtilsTest, ConvertArrayWithOffsetsToVelox) {
+TEST(SchemaUtilsTest, convertArrayWithOffsetsToVelox) {
   SchemaBuilder schemaBuilder;
   NIMBLE_SCHEMA(
       schemaBuilder, NIMBLE_ROW({{"oa", NIMBLE_OFFSETARRAY(NIMBLE_BIGINT())}}));
@@ -206,7 +206,7 @@ TEST(SchemaUtilsTest, ConvertArrayWithOffsetsToVelox) {
       velox::TypeKind::BIGINT, veloxType->asArray().elementType()->kind());
 }
 
-TEST(SchemaUtilsTest, ConvertMapToVelox) {
+TEST(SchemaUtilsTest, convertMapToVelox) {
   SchemaBuilder schemaBuilder;
   NIMBLE_SCHEMA(
       schemaBuilder,
@@ -219,7 +219,7 @@ TEST(SchemaUtilsTest, ConvertMapToVelox) {
   EXPECT_EQ(velox::TypeKind::INTEGER, veloxType->asMap().valueType()->kind());
 }
 
-TEST(SchemaUtilsTest, ConvertSlidingWindowMapToVelox) {
+TEST(SchemaUtilsTest, convertSlidingWindowMapToVelox) {
   SchemaBuilder schemaBuilder;
   NIMBLE_SCHEMA(
       schemaBuilder,
@@ -234,7 +234,7 @@ TEST(SchemaUtilsTest, ConvertSlidingWindowMapToVelox) {
   EXPECT_EQ(velox::TypeKind::INTEGER, veloxType->asMap().valueType()->kind());
 }
 
-TEST(SchemaUtilsTest, ConvertFlatMapToVelox) {
+TEST(SchemaUtilsTest, convertFlatMapToVelox) {
   SchemaBuilder schemaBuilder;
   test::FlatMapChildAdder adder;
   NIMBLE_SCHEMA(
@@ -251,7 +251,7 @@ TEST(SchemaUtilsTest, ConvertFlatMapToVelox) {
 
 // --- convertToNimbleType tests ---
 
-TEST(SchemaUtilsTest, ConvertVeloxScalarToNimble) {
+TEST(SchemaUtilsTest, convertVeloxScalarToNimble) {
   struct TestCase {
     velox::TypePtr veloxType;
     ScalarKind expectedScalarKind;
@@ -279,12 +279,12 @@ TEST(SchemaUtilsTest, ConvertVeloxScalarToNimble) {
   }
 }
 
-TEST(SchemaUtilsTest, ConvertVeloxTimestampToNimble) {
+TEST(SchemaUtilsTest, convertVeloxTimestampToNimble) {
   auto nimbleType = convertToNimbleType(*velox::TIMESTAMP());
   ASSERT_EQ(Kind::TimestampMicroNano, nimbleType->kind());
 }
 
-TEST(SchemaUtilsTest, ConvertVeloxArrayToNimble) {
+TEST(SchemaUtilsTest, convertVeloxArrayToNimble) {
   auto vType = velox::ARRAY(velox::BIGINT());
   auto nimbleType = convertToNimbleType(*vType);
   ASSERT_EQ(Kind::Array, nimbleType->kind());
@@ -295,7 +295,7 @@ TEST(SchemaUtilsTest, ConvertVeloxArrayToNimble) {
       arr.elements()->asScalar().scalarDescriptor().scalarKind());
 }
 
-TEST(SchemaUtilsTest, ConvertVeloxMapToNimble) {
+TEST(SchemaUtilsTest, convertVeloxMapToNimble) {
   auto vType = velox::MAP(velox::VARCHAR(), velox::INTEGER());
   auto nimbleType = convertToNimbleType(*vType);
   ASSERT_EQ(Kind::Map, nimbleType->kind());
@@ -308,7 +308,7 @@ TEST(SchemaUtilsTest, ConvertVeloxMapToNimble) {
       map.values()->asScalar().scalarDescriptor().scalarKind());
 }
 
-TEST(SchemaUtilsTest, ConvertVeloxRowToNimble) {
+TEST(SchemaUtilsTest, convertVeloxRowToNimble) {
   auto vType = velox::ROW({"x", "y"}, {velox::TINYINT(), velox::DOUBLE()});
   auto nimbleType = convertToNimbleType(*vType);
   ASSERT_EQ(Kind::Row, nimbleType->kind());
@@ -326,7 +326,7 @@ TEST(SchemaUtilsTest, ConvertVeloxRowToNimble) {
 
 // --- Round-trip tests ---
 
-TEST(SchemaUtilsTest, RoundTripScalarTypes) {
+TEST(SchemaUtilsTest, roundTripScalarTypes) {
   std::vector<velox::TypePtr> scalarTypes = {
       velox::BOOLEAN(),
       velox::TINYINT(),
@@ -348,28 +348,28 @@ TEST(SchemaUtilsTest, RoundTripScalarTypes) {
   }
 }
 
-TEST(SchemaUtilsTest, RoundTripTimestamp) {
+TEST(SchemaUtilsTest, roundTripTimestamp) {
   auto vType = velox::TIMESTAMP();
   auto nimbleType = convertToNimbleType(*vType);
   auto roundTripped = convertToVeloxType(*nimbleType);
   EXPECT_TRUE(vType->equivalent(*roundTripped));
 }
 
-TEST(SchemaUtilsTest, RoundTripArray) {
+TEST(SchemaUtilsTest, roundTripArray) {
   auto vType = velox::ARRAY(velox::INTEGER());
   auto nimbleType = convertToNimbleType(*vType);
   auto roundTripped = convertToVeloxType(*nimbleType);
   EXPECT_TRUE(vType->equivalent(*roundTripped)) << roundTripped->toString();
 }
 
-TEST(SchemaUtilsTest, RoundTripMap) {
+TEST(SchemaUtilsTest, roundTripMap) {
   auto vType = velox::MAP(velox::VARCHAR(), velox::BIGINT());
   auto nimbleType = convertToNimbleType(*vType);
   auto roundTripped = convertToVeloxType(*nimbleType);
   EXPECT_TRUE(vType->equivalent(*roundTripped)) << roundTripped->toString();
 }
 
-TEST(SchemaUtilsTest, RoundTripRow) {
+TEST(SchemaUtilsTest, roundTripRow) {
   auto vType = velox::ROW({"a", "b"}, {velox::TINYINT(), velox::DOUBLE()});
   auto nimbleType = convertToNimbleType(*vType);
   auto roundTripped = convertToVeloxType(*nimbleType);
@@ -974,7 +974,7 @@ TEST(SchemaUtilsTest, nestedFlatMapProjectionFails) {
       "FlatMap projection is supported only for top-level columns");
 }
 
-TEST(SchemaUtilsTest, projectionEncodingHints_SlidingWindowMap) {
+TEST(SchemaUtilsTest, projectionEncodingHintsSlidingWindowMap) {
   // Exercise `deriveColumnEncodings` + `emitOffsets` SlidingWindowMap branch
   // at the buildProjectedNimbleType(const Type*) level. No Projector test
   // serializes a
@@ -1023,7 +1023,7 @@ TEST(SchemaUtilsTest, projectionEncodingHints_SlidingWindowMap) {
       std::vector<bool>({true, false, false, false, false, false}));
 }
 
-TEST(SchemaUtilsTest, projectionEncodingHints_Mixed) {
+TEST(SchemaUtilsTest, projectionEncodingHintsMixed) {
   // Combine all three encoding-bearing top-level Kinds (ArrayWithOffsets,
   // SlidingWindowMap, FlatMap) plus a plain Scalar, with one missing FlatMap
   // key to exercise the UINT32_MAX placeholder path of `emitOffsets`
