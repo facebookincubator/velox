@@ -1459,6 +1459,13 @@ Spark-specific Configuration
      - bool
      - true
      - If true, Spark ``collect_list`` aggregate function ignores nulls in the input.
+   * - spark.decimal_to_float_high_precision_cast_enabled
+     - bool
+     - false
+     - If true, casts from ``DECIMAL`` to ``REAL``/``DOUBLE`` use a high-precision conversion
+       (via an intermediate string) for values that cannot be represented exactly by floating
+       point arithmetic, aligning the result with Spark. Disabled by default due to the
+       significant performance regression; users sensitive to precision loss can enable it.
 
 Tracing
 --------

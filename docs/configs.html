@@ -1853,6 +1853,14 @@ var_samp, covar_samp and corr will return NaN instead of NULL when dividing by z
 <td><p>true</p></td>
 <td><p>If true, Spark <code class="docutils literal notranslate"><span class="pre">collect_list</span></code> aggregate function ignores nulls in the input.</p></td>
 </tr>
+<tr class="row-even"><td><p>spark.decimal_to_float_high_precision_cast_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, casts from <code class="docutils literal notranslate"><span class="pre">DECIMAL</span></code> to <code class="docutils literal notranslate"><span class="pre">REAL</span></code>/<code class="docutils literal notranslate"><span class="pre">DOUBLE</span></code> use a high-precision conversion
+(via an intermediate string) for values that cannot be represented exactly by floating
+point arithmetic, aligning the result with Spark. Disabled by default due to the
+significant performance regression; users sensitive to precision loss can enable it.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
