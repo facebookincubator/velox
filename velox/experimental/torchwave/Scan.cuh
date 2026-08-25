@@ -380,7 +380,10 @@ __device__ void cumsum(
     TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
         val, nullptr, static_cast<TOut*>(temp));
     if (idx < size) {
-      out[idx] = sum;
+      // The output's stride matters for the same reason the input's does:
+      // fused as a cat or stack operand producer, this writes a strided slice
+      // of the concatenation, not a contiguous buffer.
+      out[complexIdx(output->contiguous, output, idx)] = sum;
     }
     if (threadIdx.x == blockDim.x - 1) {
       counter = sum;
@@ -462,7 +465,9 @@ __device__ void cumsum_final(
     TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
         val, nullptr, static_cast<TOut*>(temp));
     if (idx < size) {
-      out[idx] = sum;
+      // And the output's, for the strided slice a fused cat or stack hands
+      // this stage to fill. See the single-block cumsum.
+      out[complexIdx(output->contiguous, output, idx)] = sum;
     }
     blockIdx += block.numBlocksInOp;
   }
@@ -488,11 +493,12 @@ __device__ void exclusive_sum(
   TIn* in = storage<TIn>(input);
   TOut* out = storage<TOut>(output);
   if (threadIdx.x == 0) {
-    out[0] = TOut(0);
+    out[complexIdx(output->contiguous, output, 0)] = TOut(0);
   }
   for (uint32_t idx = threadIdx.x; idx < rounded; idx += blockDim.x) {
     // Honor the input's stride (non-contiguous select-column views), matching
-    // the single-block cumsum.
+    // the single-block cumsum. The output's stride matters too, for the
+    // strided slice a fused cat or stack hands this to fill.
     TOut val = (idx < size)
         ? static_cast<TOut>(in[complexIdx(input->contiguous, input, idx)])
         : TOut(0);
@@ -502,7 +508,7 @@ __device__ void exclusive_sum(
     TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
         val, nullptr, static_cast<TOut*>(temp));
     if (idx < size) {
-      out[idx + 1] = sum;
+      out[complexIdx(output->contiguous, output, idx + 1)] = sum;
     }
     if (threadIdx.x == blockDim.x - 1) {
       counter = sum;
@@ -678,19 +684,21 @@ __device__ void exclusive_sum_final(
        idx += block.numBlocksInOp * blockDim.x) {
     // Honor the input's stride (non-contiguous select-column views), matching
     // cumsum_final. exclusive_sum_head reads through complexIdx, so a flat read
-    // here would sum the wrong storage for a strided input.
+    // here would sum the wrong storage for a strided input. The output's
+    // stride matters too, for the strided slice a fused cat or stack hands
+    // this stage to fill.
     TOut val = (idx < size)
         ? static_cast<TOut>(in[complexIdx(input->contiguous, input, idx)])
         : TOut(0);
     TOut base = (blockIdx == 0 || cnt == nullptr) ? TOut(0) : cnt[blockIdx - 1];
     if (threadIdx.x == 0) {
       val += base;
-      out[idx] = base;
+      out[complexIdx(output->contiguous, output, idx)] = base;
     }
     TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
         val, nullptr, static_cast<TOut*>(temp));
     if (idx < size) {
-      out[idx + 1] = sum;
+      out[complexIdx(output->contiguous, output, idx + 1)] = sum;
     }
     blockIdx += block.numBlocksInOp;
   }
@@ -845,6 +853,15 @@ __device__ void repeat_interleave_final(
   for (int i = 0; i < decomp->rank; ++i) {
     div[i].init(static_cast<unsigned int>(decomp->dims[decomp->rank - 1 - i]));
   }
+  // The output is not necessarily a buffer of its own: fused as the operand
+  // producer of a cat or stack, it is the slice of the concatenation this
+  // operand occupies, which is pitched for every join axis but the outermost
+  // (a stack on dim 1 gives a rank-1 slice stride 2). Writing out[lin] would
+  // fill that slice densely, overwriting the neighbouring operand and leaving
+  // its own tail unset. isContiguous() reads only rank/dims/strides, so unlike
+  // the tensor's cached 'contiguous' it needs no index-calculator init, which
+  // this standalone kernel deliberately does without.
+  const bool outContiguous = output->isContiguous();
   for (uint32_t lin = block.blockInOp * blockDim.x + threadIdx.x; lin < size;
        lin += block.numBlocksInOp * blockDim.x) {
     if (flatten) {
@@ -859,7 +876,11 @@ __device__ void repeat_interleave_final(
         offset += static_cast<int64_t>(remainder) *
             input->strides[input->rank - 1 - i];
       }
-      out[lin] = in[offset];
+      // Flattening always produces a rank-1 output, so its slice is a single
+      // strided run and the position maps through one stride.
+      out[outContiguous ? static_cast<int64_t>(lin)
+                        : static_cast<int64_t>(lin) * output->strides[0]] =
+          in[offset];
     } else {
       int32_t coord[kMaxDims];
       uint32_t rem = lin;
@@ -875,7 +896,14 @@ __device__ void repeat_interleave_final(
         int32_t axisCoord = (d == dim) ? seg : coord[d];
         offset += static_cast<int64_t>(axisCoord) * input->strides[d];
       }
-      out[lin] = in[offset];
+      int64_t outOffset = lin;
+      if (!outContiguous) {
+        outOffset = 0;
+        for (int d = 0; d < output->rank; ++d) {
+          outOffset += static_cast<int64_t>(coord[d]) * output->strides[d];
+        }
+      }
+      out[outOffset] = in[offset];
     }
   }
 }

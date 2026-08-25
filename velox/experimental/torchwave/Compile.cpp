@@ -1176,9 +1176,13 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     if (thisContext == Context::kFused && producer &&
         producer->target() == "prim.ListPack") {
       const bool hostShapes = concatNeedsHostShapes(node, types_);
+      const bool parallelFill = concatFillsInParallel(node, types_);
       for (const auto& listInput : producer->inputs()) {
         if (hostShapes) {
           breakDeviceSizedProducers(listInput.value);
+        }
+        if (parallelFill) {
+          breakConcatOperandIntoOwnKernel(listInput.value, node->outputs()[0]);
         }
         placeInput(listInput.value, isScalarSize);
       }
@@ -1193,6 +1197,15 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     }
     pushdownStandalone(node);
     return thisContext;
+  }
+  // A concat whose operands fill it from ops of their own ends its kernel. The
+  // operands write the result in the previous step, so a reader of the result
+  // has to be in a later kernel; keeping it fused would instead need an
+  // opBarrier on top of every operand's op, which the fusion path has no way to
+  // express.
+  if (concatFillsInParallel(node, types_)) {
+    pushdownFused(node);
+    return Context::kFusedBreak;
   }
   if (meta->isKernelBreak(
           isSingleBlock_,
@@ -1307,6 +1320,24 @@ void CompileCtx::breakDeviceSizedProducers(ValueCP value) {
   }
   if (setsSizeOnDevice(producer)) {
     breakProducerIntoOwnKernel(producer);
+  }
+}
+
+void CompileCtx::breakConcatOperandIntoOwnKernel(
+    ValueCP operand,
+    ValueCP concatOutput) {
+  auto* producer = operand->producer();
+  if (!producer || placed_.count(producer) ||
+      (inputs_ && inputs_->count(producer))) {
+    // Nothing of this operand is computed here: it is a graph input or a value
+    // an earlier step already materialized, so there is no producing expression
+    // to push down. The concat still copies it in.
+    return;
+  }
+  const size_t before = kernelOpStorage_.size();
+  breakProducerIntoOwnKernel(producer);
+  for (size_t i = before; i < kernelOpStorage_.size(); ++i) {
+    kernelOpStorage_[i]->addOrderingOutput(concatOutput->id());
   }
 }
 

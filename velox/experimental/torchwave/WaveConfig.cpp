@@ -97,6 +97,9 @@ std::string WaveConfig::toString() const {
   addBool("duplicateMetadata", &WaveConfig::duplicateMetadata);
   addBool("donateBuffers", &WaveConfig::donateBuffers);
   addInt("donationCarryBytes", &WaveConfig::donationCarryBytes);
+  addBool("enableAllocGroup", &WaveConfig::enableAllocGroup);
+  addBool("enableConcatAllocGroup", &WaveConfig::enableConcatAllocGroup);
+  addBool("parallelConcatFill", &WaveConfig::parallelConcatFill);
 
   if (parts.empty()) {
     return "defaults";
