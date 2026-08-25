@@ -33,10 +33,10 @@ by Velox. See details on bundling below.
 | simdjson          | 4.1.0           | Yes      ||
 | faiss             | 1.11.0          | Yes      ||
 | folly             | v2026.01.05.00  | Yes      ||
-| fizz              | v2026.01.05.00  | No       ||
-| wangle            | v2026.01.05.00  | No       ||
-| mvfst             | v2026.01.05.00  | No       ||
-| fbthrift          | v2026.01.05.00  | No       ||
+| fizz              | v2026.01.05.00  | Yes      ||
+| wangle            | v2026.01.05.00  | Yes      ||
+| mvfst             | v2026.01.05.00  | Yes      ||
+| fbthrift          | v2026.01.05.00  | Yes      ||
 | libstemmer        | 2.2.0           | Yes      ||
 | DuckDB (testing)  | 0.8.1           | Yes      ||
 | arrow             | 15.0.0          | Yes      ||

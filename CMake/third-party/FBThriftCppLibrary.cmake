@@ -105,6 +105,14 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
     "-I;$<JOIN:$<TARGET_PROPERTY:${LIB_NAME}.thrift_includes,INTERFACE_INCLUDE_DIRECTORIES>,;-I;>"
   )
 
+  if(TARGET FBThrift::thrift1)
+    set(fbthrift_compiler_command "$<TARGET_FILE:FBThrift::thrift1>")
+    set(fbthrift_compiler_dependency FBThrift::thrift1)
+  else()
+    set(fbthrift_compiler_command "${FBTHRIFT_COMPILER}")
+    set(fbthrift_compiler_dependency "${FBTHRIFT_COMPILER}")
+  endif()
+
   # Emit the rule to run the thrift compiler
   add_custom_command(
     OUTPUT
@@ -115,7 +123,7 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
       "${CMAKE_COMMAND}" -E make_directory "${output_dir}"
     COMMAND
       "${CMAKE_COMMAND}" -E env "LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:$ENV{LD_LIBRARY_PATH}"
-      "${FBTHRIFT_COMPILER}"
+      "${fbthrift_compiler_command}"
       --legacy-strict
       --gen "mstch_cpp2:${GEN_ARG_STR}"
       "${thrift_include_options}"
@@ -128,7 +136,7 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
       "${THRIFT_FILE}"
     DEPENDS
       ${ARG_DEPENDS}
-      "${FBTHRIFT_COMPILER}"
+      "${fbthrift_compiler_dependency}"
   )
 
   add_library("${LIB_NAME}" STATIC ${generated_sources})
