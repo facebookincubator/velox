@@ -133,6 +133,7 @@ void ParquetWriterOptions::merge(
   mergeIfSet(enableWritePageIndex, parquetOverrides->enableWritePageIndex);
   mergeIfSet(dataPageSize, parquetOverrides->dataPageSize);
   mergeIfSet(batchSize, parquetOverrides->batchSize);
+  mergeIfSet(dataPageRowLimit, parquetOverrides->dataPageRowLimit);
   mergeIfSet(createdBy, parquetOverrides->createdBy);
 }
 
@@ -218,6 +219,10 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   properties = properties->encoding(parquetOptions.encoding);
   properties = properties->dataPagesize(parquetOptions.dataPageSize.value_or(
       facebook::velox::parquet::arrow::kDefaultDataPageSize));
+  if (parquetOptions.dataPageRowLimit.has_value()) {
+    properties =
+        properties->dataPageRowLimit(parquetOptions.dataPageRowLimit.value());
+  }
   properties = properties->writeBatchSize(parquetOptions.batchSize.value_or(
       facebook::velox::parquet::arrow::DEFAULT_WRITE_BATCH_SIZE));
   properties = properties->maxRowGroupLength(
@@ -392,15 +397,16 @@ std::optional<bool> toBoolConfigValue(
   }
 }
 
-std::optional<int64_t> toParquetBatchSize(
-    std::optional<std::string> batchSize) {
-  if (!batchSize) {
+std::optional<int64_t> toInt64ConfigValue(
+    std::optional<std::string> value,
+    const char* optionName) {
+  if (!value) {
     return std::nullopt;
   }
   try {
-    return folly::to<int64_t>(*batchSize);
+    return folly::to<int64_t>(*value);
   } catch (const std::exception& e) {
-    VELOX_USER_FAIL("Invalid parquet writer batch size: {}", e.what());
+    VELOX_USER_FAIL("Invalid parquet writer {}: {}", optionName, e.what());
   }
 }
 
@@ -840,8 +846,11 @@ ParquetWriterFactory::createFormatOptions(
       "enable write page index");
   parquetOptions->dataPageSize = toParquetPageSize(
       ParquetConfig::writerPageSize(connectorConfig, session));
-  parquetOptions->batchSize = toParquetBatchSize(
-      ParquetConfig::writerBatchSize(connectorConfig, session));
+  parquetOptions->batchSize = toInt64ConfigValue(
+      ParquetConfig::writerBatchSize(connectorConfig, session), "batch size");
+  parquetOptions->dataPageRowLimit = toInt64ConfigValue(
+      ParquetConfig::writerPageRowLimit(connectorConfig, session),
+      "data page row limit");
   parquetOptions->createdBy = ParquetConfig::writerCreatedBy(connectorConfig);
   return parquetOptions;
 }
