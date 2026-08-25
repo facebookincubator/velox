@@ -70,8 +70,21 @@ std::unique_ptr<Encoding> createEncoding(
 }
 
 Encoding::Options streamEncodingOptions(
+    bool useVarintRowCount,
+    velox::BufferPool* bufferPool,
+    EncodingBufferPool* encodingBufferPool) {
+  Encoding::Options options;
+  options.useVarintRowCount = useVarintRowCount;
+  options.bufferPool = bufferPool;
+  options.encodingBufferPool = encodingBufferPool;
+  return options;
+}
+
+Encoding::Options streamEncodingOptions(
     SerializationVersion version,
-    bool streamsUseVarintRowCount) {
+    bool streamsUseVarintRowCount,
+    velox::BufferPool* bufferPool,
+    EncodingBufferPool* encodingBufferPool) {
   NIMBLE_CHECK(
       version == SerializationVersion::kSerialization ||
           version == SerializationVersion::kProjection ||
@@ -82,11 +95,8 @@ Encoding::Options streamEncodingOptions(
   NIMBLE_CHECK(
       isTabletVersion(version) || streamsUseVarintRowCount,
       "Non-tablet streams must use varint row counts");
-  return {.useVarintRowCount = streamsUseVarintRowCount};
-}
-
-Encoding::Options streamEncodingOptions(bool useVarintRowCount) {
-  return {.useVarintRowCount = useVarintRowCount};
+  return streamEncodingOptions(
+      streamsUseVarintRowCount, bufferPool, encodingBufferPool);
 }
 
 std::string_view nullableNullsStream(
@@ -262,6 +272,8 @@ StreamSlicer::StreamSlicer(
       pool_{pool},
       options_{std::move(options)},
       streamCount_{streamCount(schema_)},
+      bufferPool_{velox::BufferPool::kDefaultCapacity},
+      encodingBufferPool_{pool_},
       strippedStreamBufferPool_{pool_, /*maxCachedBuffers=*/1},
       headerBuffer_{pool_},
       trailerBuffer_{pool_} {
@@ -299,7 +311,10 @@ folly::IOBuf StreamSlicer::slice(
       inputStreams_,
       {.offset = offset, .length = length},
       outputBuffer,
-      streamEncodingOptions(parser.streamEncodingUsesVarintRowCount()));
+      streamEncodingOptions(
+          parser.streamEncodingUsesVarintRowCount(),
+          &bufferPool_,
+          &encodingBufferPool_));
 
   streamSizes_.assign(slicedStreams.streams.size(), 0);
   for (uint32_t i = 0; i < slicedStreams.streams.size(); ++i) {
@@ -346,7 +361,10 @@ StreamSlicer::SlicedStreams StreamSlicer::slice(
         {.offset = offset, .length = length},
         outputBuffer,
         streamEncodingOptions(
-            options_.streamVersion, options_.streamsUseVarintRowCount));
+            options_.streamVersion,
+            options_.streamsUseVarintRowCount,
+            &bufferPool_,
+            &encodingBufferPool_));
   }
 
   ScopedEncodingBuffer strippedStreamBuffer{pool_, &strippedStreamBufferPool_};
@@ -365,7 +383,10 @@ StreamSlicer::SlicedStreams StreamSlicer::slice(
       {.offset = offset, .length = length},
       outputBuffer,
       streamEncodingOptions(
-          options_.streamVersion, options_.streamsUseVarintRowCount));
+          options_.streamVersion,
+          options_.streamsUseVarintRowCount,
+          &bufferPool_,
+          &encodingBufferPool_));
 }
 
 StreamSlicer::SlicedStreams StreamSlicer::sliceStreams(

@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "folly/io/IOBuf.h"
+#include "velox/buffer/BufferPool.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Vector.h"
@@ -161,6 +162,10 @@ class StreamSlicer {
   velox::memory::MemoryPool* const pool_;
   const Options options_;
   const uint32_t streamCount_;
+  // Scratch Velox buffers reused by temporary Vector materialization.
+  mutable velox::BufferPool bufferPool_;
+  // Scratch arenas reused by nested EncodingFactory::slice() calls.
+  mutable EncodingBufferPool encodingBufferPool_;
   mutable EncodingBufferPool strippedStreamBufferPool_;
   mutable std::vector<std::string_view> inputStreams_;
   mutable std::vector<uint32_t> streamSizes_;
