@@ -20,6 +20,7 @@
 
 #include <cudf/column/column.hpp>
 #include <cudf/table/table_view.hpp>
+
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/resource_ref.hpp>
 
@@ -31,9 +32,9 @@ namespace facebook::velox::cudf_velox {
 /// A key table whose TIMESTAMP WITH TIME ZONE columns have had their zone key
 /// cleared, plus the columns backing the rewritten ones.
 ///
-/// `owned` holds only the columns this normalization created; every other column
-/// in `view` still refers to the caller's input. So `owned` must outlive `view`,
-/// and `view` must not outlive the table it was built from.
+/// `owned` holds only the columns this normalization created; every other
+/// column in `view` still refers to the caller's input. So `owned` must outlive
+/// `view`, and `view` must not outlive the table it was built from.
 struct NormalizedKeys {
   cudf::table_view view;
   std::vector<std::unique_ptr<cudf::column>> owned;
@@ -45,18 +46,19 @@ struct NormalizedKeys {
   }
 };
 
-/// Rewrites the TIMESTAMP WITH TIME ZONE columns of a key table so that hashing,
-/// equality and ordering over the result match Velox's semantics for the type.
+/// Rewrites the TIMESTAMP WITH TIME ZONE columns of a key table so that
+/// hashing, equality and ordering over the result match Velox's semantics for
+/// the type.
 ///
 /// Why this is needed. A TIMESTAMP WITH TIME ZONE is physically one int64,
 /// (millis << kMillisShift) | zone_key, and Velox compares it on the INSTANT
 /// alone -- TimestampWithTimeZoneType::compare and ::hash both read
-/// unpackMillisUtc, reached through the type's ProvideCustomComparison hook. Two
-/// values for the same moment in different zones are therefore EQUAL, and must
-/// group together, deduplicate to one, join to each other and hash to the same
-/// partition. cuDF has no type-level hook: veloxToCudfDataType maps the type to
-/// INT64, so every cuDF primitive that hashes or compares the column uses all 64
-/// bits and the zone key decides.
+/// unpackMillisUtc, reached through the type's ProvideCustomComparison hook.
+/// Two values for the same moment in different zones are therefore EQUAL, and
+/// must group together, deduplicate to one, join to each other and hash to the
+/// same partition. cuDF has no type-level hook: veloxToCudfDataType maps the
+/// type to INT64, so every cuDF primitive that hashes or compares the column
+/// uses all 64 bits and the zone key decides.
 ///
 /// What it does. Clears the low kMillisShift bits, which computes
 /// (v >> kMillisShift) << kMillisShift. That is monotone and collapses exactly
@@ -73,16 +75,17 @@ struct NormalizedKeys {
 ///
 /// WHAT THIS IS NOT FOR. A normalized value is equivalent for EQUALITY and
 /// ORDERING ONLY. It must never be emitted as an operator's output: the packed
-/// value is what a projection has to carry and what to_iso8601 and timezone_hour
-/// have to read, so a normalized value flowing downstream would silently rewrite
-/// every zone key to UTC. Callers whose primitive RETURNS its key columns
-/// (cudf::groupby, and cudf::distinct as it is called in CudfDistinct) must
-/// therefore not hand the result of this function on as output -- they need to
-/// recover the original packed value separately.
+/// value is what a projection has to carry and what to_iso8601 and
+/// timezone_hour have to read, so a normalized value flowing downstream would
+/// silently rewrite every zone key to UTC. Callers whose primitive RETURNS its
+/// key columns (cudf::groupby, and cudf::distinct as it is called in
+/// CudfDistinct) must therefore not hand the result of this function on as
+/// output -- they need to recover the original packed value separately.
 ///
 /// @param keys       the key columns, already selected in key order
 /// @param rowType    the Velox row type the key columns came from
-/// @param keyChannels index into `rowType` for each column of `keys`, in the same
+/// @param keyChannels index into `rowType` for each column of `keys`, in the
+/// same
 ///                   order; must be the same length as `keys`
 /// @param stream, mr  the stream and resource any rewritten column is built on
 NormalizedKeys normalizeKeyColumns(

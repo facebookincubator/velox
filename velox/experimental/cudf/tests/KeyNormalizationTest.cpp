@@ -22,8 +22,8 @@
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/copying.hpp>
-#include <cudf/utilities/default_stream.hpp>
 #include <cudf/utilities/bit.hpp>
+#include <cudf/utilities/default_stream.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <rmm/device_buffer.hpp>
@@ -40,8 +40,8 @@ using namespace facebook::velox::cudf_velox;
 
 namespace {
 
-// The two zones used throughout: the extremes of the offset range, so their zone
-// keys differ as widely as their offsets (Kiritimati 2137, Midway 2142).
+// The two zones used throughout: the extremes of the offset range, so their
+// zone keys differ as widely as their offsets (Kiritimati 2137, Midway 2142).
 constexpr const char* kKiritimati = "Pacific/Kiritimati";
 constexpr const char* kMidway = "Pacific/Midway";
 
@@ -84,8 +84,7 @@ class KeyNormalizationTest : public testing::Test {
     }
     // Built by hand rather than with cudf::detail::valid_if, which lives in a
     // .cuh and so is unavailable to a .cpp translation unit.
-    const auto maskBytes =
-        cudf::bitmask_allocation_size_bytes(values.size());
+    const auto maskBytes = cudf::bitmask_allocation_size_bytes(values.size());
     std::vector<cudf::bitmask_type> hostMask(
         maskBytes / sizeof(cudf::bitmask_type), 0);
     cudf::size_type nullCount = 0;
@@ -96,8 +95,7 @@ class KeyNormalizationTest : public testing::Test {
         ++nullCount;
       }
     }
-    rmm::device_buffer maskBuffer(
-        hostMask.data(), maskBytes, stream(), mr());
+    rmm::device_buffer maskBuffer(hostMask.data(), maskBytes, stream(), mr());
     column->set_null_mask(std::move(maskBuffer), nullCount);
     return column;
   }
@@ -116,8 +114,8 @@ class KeyNormalizationTest : public testing::Test {
   }
 
   // "UTC" resolves to zone key 0 (see TimeZoneMap.cpp:60), which is the
-  // interesting boundary: a UTC-keyed value has no low bits to clear, so it must
-  // come out of normalization unchanged.
+  // interesting boundary: a UTC-keyed value has no low bits to clear, so it
+  // must come out of normalization unchanged.
   int64_t packed(int64_t millis, const char* zone) {
     return pack(millis, tz::getTimeZoneID(zone));
   }
@@ -130,9 +128,12 @@ class KeyNormalizationTest : public testing::Test {
 TEST_F(KeyNormalizationTest, sameInstantDifferentZonesBecomeIdentical) {
   const int64_t millis = 1'623'758'400'000;
   auto column = int64Column(
-      {packed(millis, kKiritimati), packed(millis, kMidway), packed(millis, "UTC")});
+      {packed(millis, kKiritimati),
+       packed(millis, kMidway),
+       packed(millis, "UTC")});
   auto raw = toHost(column->view());
-  // Precondition: the inputs really do differ, so the test cannot pass trivially.
+  // Precondition: the inputs really do differ, so the test cannot pass
+  // trivially.
   EXPECT_NE(raw[0], raw[1]);
   EXPECT_NE(raw[1], raw[2]);
 
@@ -184,8 +185,8 @@ TEST_F(KeyNormalizationTest, adjacentMillisStayDistinct) {
   EXPECT_NE(out[2], out[3]);
 }
 
-// Ordering is preserved, which is what makes the same helper usable for sort and
-// TopN keys and not only for hashing.
+// Ordering is preserved, which is what makes the same helper usable for sort
+// and TopN keys and not only for hashing.
 TEST_F(KeyNormalizationTest, orderingIsPreserved) {
   auto column = int64Column(
       {packed(-14'182'940'000, kMidway),
@@ -227,7 +228,8 @@ TEST_F(KeyNormalizationTest, nonTswtzColumnsArePassedThroughUnchanged) {
   ASSERT_EQ(normalized.view.num_columns(), 2);
   // Exactly one column was rewritten, so exactly one is owned.
   EXPECT_EQ(normalized.owned.size(), 1);
-  EXPECT_EQ(normalized.view.column(1).data<int64_t>(), plain->view().data<int64_t>())
+  EXPECT_EQ(
+      normalized.view.column(1).data<int64_t>(), plain->view().data<int64_t>())
       << "a non-TSWTZ key column must be referenced, not copied";
   EXPECT_EQ(toHost(normalized.view.column(1))[0], 1'623'758'400'123);
 }
@@ -242,19 +244,23 @@ TEST_F(KeyNormalizationTest, noTswtzKeyIsANoOp) {
   auto normalized = normalizeKeyColumns(keys, {false, false}, stream(), mr());
   EXPECT_FALSE(normalized.normalizedAny());
   EXPECT_TRUE(normalized.owned.empty());
-  EXPECT_EQ(normalized.view.column(0).data<int64_t>(), a->view().data<int64_t>());
-  EXPECT_EQ(normalized.view.column(1).data<int64_t>(), b->view().data<int64_t>());
+  EXPECT_EQ(
+      normalized.view.column(0).data<int64_t>(), a->view().data<int64_t>());
+  EXPECT_EQ(
+      normalized.view.column(1).data<int64_t>(), b->view().data<int64_t>());
 }
 
-// The row-type overload must derive the same flags the explicit one takes, so an
-// operator can pass its channels rather than precomputing.
+// The row-type overload must derive the same flags the explicit one takes, so
+// an operator can pass its channels rather than precomputing.
 TEST_F(KeyNormalizationTest, rowTypeOverloadDerivesTheFlags) {
   const int64_t millis = 1'623'758'400'000;
-  auto tswtz = int64Column({packed(millis, kKiritimati), packed(millis, kMidway)});
+  auto tswtz =
+      int64Column({packed(millis, kKiritimati), packed(millis, kMidway)});
   auto plain = int64Column({7, 8});
   auto keys = cudf::table_view{{tswtz->view(), plain->view()}};
 
-  auto rowType = ROW({"a", "t", "b"}, {BIGINT(), TIMESTAMP_WITH_TIME_ZONE(), BIGINT()});
+  auto rowType =
+      ROW({"a", "t", "b"}, {BIGINT(), TIMESTAMP_WITH_TIME_ZONE(), BIGINT()});
   // Key channels deliberately out of order and not starting at 0, so a fix that
   // assumed channel == column position would fail here.
   const std::vector<column_index_t> keyChannels{1, 2};

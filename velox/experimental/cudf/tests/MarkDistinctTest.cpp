@@ -323,17 +323,17 @@ TEST_F(CudfMarkDistinctTest, persistentStateAcrossInputStreams) {
 // TIMESTAMP WITH TIME ZONE distinct keys.
 //
 // The type is physically (millis << 12) | zone_key and Velox compares it on the
-// INSTANT alone, so two values for the same moment in different zones are the SAME
-// key: the second is a duplicate. Before the key-normalization fix cuDF compared
-// all 64 bits and marked both distinct.
+// INSTANT alone, so two values for the same moment in different zones are the
+// SAME key: the second is a duplicate. Before the key-normalization fix cuDF
+// compared all 64 bits and marked both distinct.
 //
 // The single-batch and multi-batch cases are both needed. MarkDistinct is a
 // streaming operator: the first batch seeds seenKeys_ and the persistent
 // filtered_join, and later batches probe it. Normalizing only the within-batch
 // distinct_indices and not the stored keys would compare normalized against
-// unnormalized and mark EVERY row distinct, for every key type -- worse than the
-// bug -- so the multi-batch case is what proves the normalization is applied
-// consistently across the operator's state.
+// unnormalized and mark EVERY row distinct, for every key type -- worse than
+// the bug -- so the multi-batch case is what proves the normalization is
+// applied consistently across the operator's state.
 // ---------------------------------------------------------------------------
 namespace {
 int64_t packAtZone(int64_t millis, const char* zone) {
@@ -350,17 +350,16 @@ TEST_F(CudfMarkDistinctTest, timestampWithTimeZoneSameInstantIsADuplicate) {
        packAtZone(millis, "Asia/Kolkata")},
       TIMESTAMP_WITH_TIME_ZONE())});
 
-  auto plan = PlanBuilder()
-                  .values({batch})
-                  .markDistinct("m", {"c0"})
-                  .planNode();
+  auto plan =
+      PlanBuilder().values({batch}).markDistinct("m", {"c0"}).planNode();
   auto result = AssertQueryBuilder(plan).copyResults(pool());
 
   ASSERT_EQ(4, result->size());
   auto markers = result->childAt(1)->asFlatVector<bool>();
   ASSERT_NE(nullptr, markers);
   EXPECT_TRUE(markers->valueAt(0)) << "first occurrence of the instant";
-  EXPECT_FALSE(markers->valueAt(1)) << "same instant, different zone: duplicate";
+  EXPECT_FALSE(markers->valueAt(1))
+      << "same instant, different zone: duplicate";
   EXPECT_TRUE(markers->valueAt(2)) << "one millisecond later: a new instant";
   EXPECT_FALSE(markers->valueAt(3)) << "same instant, third zone: duplicate";
 }
@@ -391,20 +390,20 @@ TEST_F(CudfMarkDistinctTest, timestampWithTimeZoneAcrossBatches) {
   ASSERT_NE(nullptr, markers);
   EXPECT_TRUE(markers->valueAt(0)) << "batch1: first instant";
   EXPECT_TRUE(markers->valueAt(1)) << "batch1: second instant";
-  EXPECT_FALSE(markers->valueAt(2)) << "batch2: instant 1 seen under another zone";
+  EXPECT_FALSE(markers->valueAt(2))
+      << "batch2: instant 1 seen under another zone";
   EXPECT_TRUE(markers->valueAt(3)) << "batch2: a genuinely new instant";
-  EXPECT_FALSE(markers->valueAt(4)) << "batch2: instant 2 seen under another zone";
+  EXPECT_FALSE(markers->valueAt(4))
+      << "batch2: instant 2 seen under another zone";
 }
 
-// A non-TSWTZ key must be unaffected. This is the guard against the normalization
-// being applied where it should not be, which for a plain BIGINT would collapse
-// values 4096 apart.
+// A non-TSWTZ key must be unaffected. This is the guard against the
+// normalization being applied where it should not be, which for a plain BIGINT
+// would collapse values 4096 apart.
 TEST_F(CudfMarkDistinctTest, bigintKeyIsUnaffectedByNormalization) {
   auto batch = makeRowVector({makeFlatVector<int64_t>({1, 4096, 1, 8192})});
-  auto plan = PlanBuilder()
-                  .values({batch})
-                  .markDistinct("m", {"c0"})
-                  .planNode();
+  auto plan =
+      PlanBuilder().values({batch}).markDistinct("m", {"c0"}).planNode();
   auto result = AssertQueryBuilder(plan).copyResults(pool());
 
   ASSERT_EQ(4, result->size());

@@ -34,8 +34,8 @@ cudf::data_type int64Type() {
 // extract the zone; this ANDs with its complement to drop it.
 //
 // binary_operation propagates the input's null mask, so a null row stays null
-// rather than masking to a value -- which matters because a null key must remain
-// distinct from a real one under cudf::null_equality::UNEQUAL.
+// rather than masking to a value -- which matters because a null key must
+// remain distinct from a real one under cudf::null_equality::UNEQUAL.
 std::unique_ptr<cudf::column> clearZoneKey(
     const cudf::column_view& packed,
     rmm::cuda_stream_view stream,
@@ -43,7 +43,12 @@ std::unique_ptr<cudf::column> clearZoneKey(
   const cudf::numeric_scalar<int64_t> mask(
       ~static_cast<int64_t>(kTimezoneMask), true, stream);
   return cudf::binary_operation(
-      packed, mask, cudf::binary_operator::BITWISE_AND, int64Type(), stream, mr);
+      packed,
+      mask,
+      cudf::binary_operator::BITWISE_AND,
+      int64Type(),
+      stream,
+      mr);
 }
 
 } // namespace
@@ -103,8 +108,7 @@ NormalizedKeys normalizeKeyColumns(
   std::vector<bool> isTswtz;
   isTswtz.reserve(keyChannels.size());
   for (const auto channel : keyChannels) {
-    isTswtz.push_back(
-        isTimestampWithTimeZoneType(rowType->childAt(channel)));
+    isTswtz.push_back(isTimestampWithTimeZoneType(rowType->childAt(channel)));
   }
   return normalizeKeyColumns(keys, isTswtz, stream, mr);
 }

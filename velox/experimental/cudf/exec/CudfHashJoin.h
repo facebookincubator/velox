@@ -70,10 +70,11 @@ class CudfHashJoinBridge : public exec::JoinBridge {
   /// case the join objects view the build tables directly as before.
   ///
   /// The columns are kept HERE rather than appended to the build tables, which
-  /// would have been a smaller change but is not safe: the probe's AST filter is
-  /// evaluated against the joined column layout, and cachedExtendedRightViews_
-  /// appends the filter's precompute columns after the build table's own, so extra
-  /// build columns would shift the precompute indices the filter references.
+  /// would have been a smaller change but is not safe: the probe's AST filter
+  /// is evaluated against the joined column layout, and
+  /// cachedExtendedRightViews_ appends the filter's precompute columns after
+  /// the build table's own, so extra build columns would shift the precompute
+  /// indices the filter references.
   struct BuildState {
     std::vector<std::shared_ptr<cudf::table>> tables;
     std::vector<std::shared_ptr<cudf::hash_join>> joins;
@@ -228,8 +229,8 @@ class CudfHashJoinProbe : public CudfOperatorBase {
 
   /** @brief Column indices for join keys in left (probe) table */
   // Selects the probe (or build) key columns and clears any TIMESTAMP WITH TIME
-  // ZONE zone key, so a join matches on the instant. Returns the owning value: the
-  // caller must keep it alive for as long as the returned view is read.
+  // ZONE zone key, so a join matches on the instant. Returns the owning value:
+  // the caller must keep it alive for as long as the returned view is read.
   //
   // Both sides go through normalization or neither -- a one-sided fix compares
   // normalized keys against packed ones and empties every TSWTZ join, including
