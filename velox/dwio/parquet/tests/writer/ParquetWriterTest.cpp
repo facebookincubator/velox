@@ -601,6 +601,72 @@ TEST_F(ParquetWriterTest, compressionRoundTripAcrossPages) {
   }
 }
 
+TEST_F(ParquetWriterTest, writerCompressionCodecConfig) {
+  constexpr int64_t kRows = 1'000;
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>(kRows, [](auto row) { return row; }),
+  });
+
+  // Writes 'data' with 'codec' set via the connector (useSession == false) or
+  // session (useSession == true) Parquet writer config, then returns the
+  // compression kind and total compressed size recorded in the first column
+  // chunk.
+  const auto writeWithCodec = [&](const std::string& codec, bool useSession) {
+    std::unordered_map<std::string, std::string> configFromFile;
+    std::unordered_map<std::string, std::string> sessionProperties;
+    if (useSession) {
+      sessionProperties[std::string(
+          ParquetConfig::kWriterCompressionCodecSession)] = codec;
+    } else {
+      configFromFile[std::string(ParquetConfig::kWriterCompressionCodec)] =
+          codec;
+    }
+    // Disable dictionary so the values take the PLAIN path and the codec's
+    // effect shows up in the column chunk size.
+    configFromFile[std::string(ParquetConfig::kWriterEnableDictionary)] =
+        "false";
+    auto* sinkPtr = write(data, configFromFile, sessionProperties);
+    auto reader = createReaderInMemory(*sinkPtr);
+    EXPECT_EQ(reader->numberOfRows(), kRows);
+    const auto columnChunk = reader->fileMetaData().rowGroup(0).columnChunk(0);
+    return std::make_pair(
+        columnChunk.compression(), columnChunk.totalCompressedSize());
+  };
+
+  const auto [noneKind, uncompressedSize] = writeWithCodec("none", false);
+  EXPECT_EQ(noneKind, CompressionKind_NONE);
+
+  const auto [zstdKind, zstdSize] = writeWithCodec("zstd", false);
+  EXPECT_EQ(zstdKind, CompressionKind_ZSTD);
+  EXPECT_LT(zstdSize, uncompressedSize);
+
+  // Session-level config takes effect the same way as connector-level config.
+  const auto [snappyKind, snappySize] = writeWithCodec("snappy", true);
+  EXPECT_EQ(snappyKind, CompressionKind_SNAPPY);
+  EXPECT_LT(snappySize, uncompressedSize);
+
+  // An unknown codec is rejected.
+  VELOX_ASSERT_THROW(
+      writeWithCodec("invalid_codec", false),
+      "Not support compression kind invalid_codec");
+
+  // The base WriterOptions compression (set from the insert table handle) wins
+  // over the Parquet writer config, which is only a fallback.
+  {
+    dwio::common::WriterOptions options;
+    options.memoryPool = rootPool_.get();
+    options.compressionKind = CompressionKind_ZSTD;
+    ParquetWriterOptions writerOptions;
+    writerOptions.enableDictionary = false;
+    writerOptions.compressionKind = CompressionKind_SNAPPY;
+    auto* sinkPtr = write(data, options, writerOptions);
+    auto reader = createReaderInMemory(*sinkPtr);
+    EXPECT_EQ(
+        reader->fileMetaData().rowGroup(0).columnChunk(0).compression(),
+        CompressionKind_ZSTD);
+  }
+}
+
 TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   constexpr int64_t kRows = 10'000;
   const auto data = makeSmallintTestData(kRows);

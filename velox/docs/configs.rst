@@ -1134,6 +1134,13 @@ Parquet Options (prefix ``hive.parquet.``)
        Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
        index instead of the data page headers, letting readers skip pages that cannot match a filter.
        Session: ``hive.parquet.writer.enable_page_index``.
+   * - ``writer.compression-codec``
+     - string
+     -
+     - Compression codec used when writing into Parquet. Supported values are ``none``, ``snappy``,
+       ``zstd``, ``lz4``, ``gzip``, and ``lz4_hadoop``. Applied as a fallback when the compression is
+       not already set on the insert table handle.
+       Session: ``hive.parquet.writer.compression_codec``.
 
 Nimble Options (prefix ``hive.nimble.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

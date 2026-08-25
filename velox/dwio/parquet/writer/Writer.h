@@ -130,6 +130,10 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   std::shared_ptr<CodecOptions> codecOptions;
   std::unordered_map<std::string, common::CompressionKind>
       columnCompressionsMap;
+  /// Compression codec derived from the Parquet writer config. Used as a
+  /// fallback when the base WriterOptions::compressionKind (set from the
+  /// insert table handle) is not specified.
+  std::optional<common::CompressionKind> compressionKind;
 
   /// Timestamp unit for Parquet write through Arrow bridge.
   /// Default if not specified: TimestampPrecision::kNanoseconds (9).
