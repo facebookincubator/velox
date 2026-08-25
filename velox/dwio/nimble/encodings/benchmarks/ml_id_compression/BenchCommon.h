@@ -62,6 +62,7 @@ DECLARE_string(mlidc_substream_compression);
 DECLARE_string(mlidc_outer_compression);
 DECLARE_int32(mlidc_block_codec_iters);
 DECLARE_string(mlidc_datasets);
+DECLARE_bool(mlidc_dump_encoding);
 DECLARE_int32(mlidc_block_codec_probes);
 
 namespace facebook::nimble::mlidc {
@@ -180,6 +181,12 @@ struct NimbleBenchTargetBase {
       T* dst) = 0;
   virtual size_t payloadSize() const = 0;
   virtual std::vector<std::span<const std::byte>> internalBuffers() const = 0;
+  /// Returns the encoding tree, for reporting which nested encodings a
+  /// selection policy actually chose. Empty for targets that are not Nimble
+  /// encodings and so have no tree to show.
+  virtual std::string describe() {
+    return {};
+  }
 };
 
 template <typename EncodingT>
@@ -207,6 +214,10 @@ struct NimbleBenchTargetImpl : NimbleBenchTargetBase<typename EncodingT::cppData
   }
   std::vector<std::span<const std::byte>> internalBuffers() const override {
     return target.internalBuffers();
+  }
+  std::string describe() override {
+    auto* encoding = target.encoding();
+    return encoding != nullptr ? encoding->debugString(0) : std::string{};
   }
 };
 
@@ -312,6 +323,10 @@ class OuterCompressedTarget : public NimbleBenchTargetBase<T> {
     return {
         {reinterpret_cast<const std::byte*>(compressed_.data()),
          compressed_.size()}};
+  }
+
+  std::string describe() override {
+    return inner_->describe();
   }
 
  private:

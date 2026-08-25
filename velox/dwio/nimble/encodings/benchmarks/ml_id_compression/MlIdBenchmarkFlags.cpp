@@ -54,6 +54,11 @@ DEFINE_int32(
     "whole payload. Each probe costs one full decompress, so the default 65536 "
     "probes would take hours. Per-probe cost is constant, so a small sample "
     "gives the same ns_per_probe.");
+DEFINE_bool(
+    mlidc_dump_encoding,
+    false,
+    "Print the encoding tree each encoder selected, including the bit ranges "
+    "SubIntSplit split into and the encoding chosen for each section.");
 DEFINE_string(
     mlidc_datasets,
     "",

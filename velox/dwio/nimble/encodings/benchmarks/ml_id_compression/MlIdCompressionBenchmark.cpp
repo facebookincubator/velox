@@ -96,6 +96,14 @@ int main(int argc, char** argv) {
         continue;
       }
 
+      if (FLAGS_mlidc_dump_encoding) {
+        auto tree = target->describe();
+        if (!tree.empty()) {
+          std::cout << "  --- " << enc.name << " encoding tree ---\n"
+                    << tree << "\n";
+        }
+      }
+
       const size_t payloadBytes = target->payloadSize();
       const double bpe = n > 0
           ? static_cast<double>(payloadBytes) * 8.0 / static_cast<double>(n)
