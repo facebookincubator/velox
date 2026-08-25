@@ -81,10 +81,11 @@ TEST_F(AdapterOperatorTest, fromVeloxPassesThroughDeviceInput) {
       {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
        makeFlatVector<StringView>({"a", "bb", "ccc", "dd", "e"})});
 
-  // Two device-resident batches force CudfFromVelox to merge its queued
-  // inputs, which reads host children a CudfVector does not carry.
+  // The same batch is emitted twice: it forces CudfFromVelox to merge its
+  // queued inputs, and it must survive being consumed on the first round.
+  auto deviceBatch = uploadToDevice(batch);
   auto plan = PlanBuilder()
-                  .values({uploadToDevice(batch), uploadToDevice(batch)})
+                  .values({deviceBatch, deviceBatch})
                   .project({"c0 * 2 as x", "c1"})
                   .planNode();
 
