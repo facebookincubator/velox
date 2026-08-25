@@ -17,6 +17,9 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/KeyNormalization.h"
+
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -391,11 +394,43 @@ void CudfHashJoinBuild::doNoMoreInput() {
        joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
        joinNode_->isLeftSemiProjectJoin());
 
+  // A TIMESTAMP WITH TIME ZONE join key must match on its instant alone: it is
+  // physically (millis << 12) | zone_key and Velox's hash and compare for the type
+  // read unpackMillisUtc only, so hashing the raw value means no two values
+  // carrying different zones ever match and the join silently returns nothing.
+  //
+  // Both sides must be normalized or neither. A one-sided fix would compare
+  // normalized keys against packed ones and make EVERY TSWTZ join empty for every
+  // zone, including the ones that work today -- worse than the bug. The probe side
+  // is normalized in probeKeys() below; this is the build side.
+  std::vector<bool> buildKeyIsTswtz;
+  buildKeyIsTswtz.reserve(buildKeyIndices.size());
+  for (size_t i = 0; i < buildKeyIndices.size(); i++) {
+    buildKeyIsTswtz.push_back(isTimestampWithTimeZoneType(
+        buildType->childAt(static_cast<uint32_t>(buildKeyIndices[i]))));
+  }
+
+  std::vector<std::shared_ptr<cudf::table>> normalizedBuildKeys;
   std::vector<std::shared_ptr<cudf::hash_join>> hashObjects;
   for (auto i = 0; i < tbls.size(); i++) {
+    // The hash object views the key table it is built from and outlives this
+    // function, so a normalized key table has to be owned by the bridge alongside
+    // it rather than by a local.
+    auto buildKeyView = tbls[i]->view().select(buildKeyIndices);
+    auto normalized =
+        normalizeKeyColumns(buildKeyView, buildKeyIsTswtz, stream, get_temp_mr());
+    if (normalized.normalizedAny()) {
+      auto owned = std::make_shared<cudf::table>(std::move(normalized.owned));
+      // Rebuild the view over the owned copy: normalized.view referenced the
+      // vector we just moved out of.
+      normalizedBuildKeys.push_back(owned);
+      buildKeyView = owned->view();
+    } else {
+      normalizedBuildKeys.push_back(nullptr);
+    }
     hashObjects.push_back(
         (buildHashJoin) ? std::make_shared<cudf::hash_join>(
-                              tbls[i]->view().select(buildKeyIndices),
+                              buildKeyView,
                               cudf::null_equality::UNEQUAL,
                               stream,
                               get_temp_mr())
@@ -429,8 +464,10 @@ void CudfHashJoinBuild::doNoMoreInput() {
   cudfHashJoinBridge->setBuildStream(stream);
   cudfHashJoinBridge->setBuildReadyEvent(std::move(buildReadyEvent));
   cudfHashJoinBridge->setHashTable(
-      std::make_optional(
-          std::make_pair(std::move(shared_tbls), std::move(hashObjects))));
+      std::make_optional(CudfHashJoinBridge::BuildState{
+          std::move(shared_tbls),
+          std::move(hashObjects),
+          std::move(normalizedBuildKeys)}));
 }
 
 exec::BlockingReason CudfHashJoinBuild::isBlocked(ContinueFuture* future) {
@@ -499,6 +536,19 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     rightKeyIndices_[i] = static_cast<cudf::size_type>(
         buildType_->getChildIdx(rightKeys[i]->name()));
     VELOX_CHECK_LT(rightKeyIndices_[i], buildTableNumColumns);
+  }
+
+  // Recorded once: which key columns are TIMESTAMP WITH TIME ZONE and so must be
+  // matched on their instant rather than their packed value.
+  leftKeyIsTswtz_.reserve(leftKeyIndices_.size());
+  for (const auto idx : leftKeyIndices_) {
+    leftKeyIsTswtz_.push_back(isTimestampWithTimeZoneType(
+        probeType_->childAt(static_cast<uint32_t>(idx))));
+  }
+  rightKeyIsTswtz_.reserve(rightKeyIndices_.size());
+  for (const auto idx : rightKeyIndices_) {
+    rightKeyIsTswtz_.push_back(isTimestampWithTimeZoneType(
+        buildType_->childAt(static_cast<uint32_t>(idx))));
   }
 
   auto outputType = joinNode_->outputType();
@@ -826,6 +876,26 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::unfilteredOutput(
   return {std::make_unique<cudf::table>(std::move(joinedCols)), numRows};
 }
 
+NormalizedKeys CudfHashJoinProbe::probeKeys(
+    cudf::table_view probeTableView,
+    rmm::cuda_stream_view stream) const {
+  return normalizeKeyColumns(
+      probeTableView.select(leftKeyIndices_),
+      leftKeyIsTswtz_,
+      stream,
+      get_temp_mr());
+}
+
+NormalizedKeys CudfHashJoinProbe::buildKeys(
+    cudf::table_view buildTableView,
+    rmm::cuda_stream_view stream) const {
+  return normalizeKeyColumns(
+      buildTableView.select(rightKeyIndices_),
+      rightKeyIsTswtz_,
+      stream,
+      get_temp_mr());
+}
+
 CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::filteredOutput(
     cudf::table_view leftTableView,
     cudf::column_view leftIndicesCol,
@@ -930,8 +1000,8 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::innerJoin(
     rmm::cuda_stream_view stream) {
   std::vector<JoinOutput> cudfOutputs;
 
-  auto& rightTables = hashObject_.value().first;
-  auto& hbs = hashObject_.value().second;
+  auto& rightTables = hashObject_.value().tables;
+  auto& hbs = hashObject_.value().joins;
 
   // Precompute left (probe) table columns if needed (once, outside loop)
   std::vector<ColumnOrView> leftPrecomputed;
@@ -961,8 +1031,11 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::innerJoin(
 
     // left = probe, right = build
     VELOX_CHECK_NOT_NULL(hb);
+    // Probe keys normalized to match the build side, which was normalized when hb
+    // was constructed. Kept in a named local so it outlives the call.
+    auto probeKeyTable = probeKeys(leftTableView, stream);
     auto [leftJoinIndices, rightJoinIndices] = hb->inner_join(
-        leftTableView.select(leftKeyIndices_),
+        probeKeyTable.view,
         std::nullopt,
         stream,
         get_temp_mr());
@@ -1022,8 +1095,8 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::leftJoin(
     rmm::cuda_stream_view stream) {
   std::vector<JoinOutput> cudfOutputs;
 
-  auto& rightTables = hashObject_.value().first;
-  auto& hbs = hashObject_.value().second;
+  auto& rightTables = hashObject_.value().tables;
+  auto& hbs = hashObject_.value().joins;
   auto numProbeRows = leftTableView.num_rows();
 
   // Track which probe rows matched in any build batch so that unmatched probe
@@ -1142,8 +1215,11 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::leftJoin(
     // Use inner_join to get only real matched pairs. Unmatched probe rows are
     // emitted separately after the loop.
     VELOX_CHECK_NOT_NULL(hb);
+    // Probe keys normalized to match the build side, which was normalized when hb
+    // was constructed. Kept in a named local so it outlives the call.
+    auto probeKeyTable = probeKeys(leftTableView, stream);
     auto [leftJoinIndices, rightJoinIndices] = hb->inner_join(
-        leftTableView.select(leftKeyIndices_),
+        probeKeyTable.view,
         std::nullopt,
         stream,
         get_temp_mr());
@@ -1201,16 +1277,19 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::rightJoin(
     rmm::cuda_stream_view stream) {
   std::vector<JoinOutput> cudfOutputs;
 
-  auto& rightTables = hashObject_.value().first;
-  auto& hbs = hashObject_.value().second;
+  auto& rightTables = hashObject_.value().tables;
+  auto& hbs = hashObject_.value().joins;
 
   for (auto i = 0; i < rightTables.size(); i++) {
     auto rightTableView = rightTables[i]->view();
     auto& hb = hbs[i];
 
     VELOX_CHECK_NOT_NULL(hb);
+    // Probe keys normalized to match the build side, which was normalized when hb
+    // was constructed. Kept in a named local so it outlives the call.
+    auto probeKeyTable = probeKeys(leftTableView, stream);
     auto [leftJoinIndices, rightJoinIndices] = hb->inner_join(
-        leftTableView.select(leftKeyIndices_),
+        probeKeyTable.view,
         std::nullopt,
         stream,
         get_temp_mr());
@@ -1337,8 +1416,8 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
     rmm::cuda_stream_view stream) {
   std::vector<JoinOutput> cudfOutputs;
 
-  auto& rightTables = hashObject_.value().first;
-  auto& hbs = hashObject_.value().second;
+  auto& rightTables = hashObject_.value().tables;
+  auto& hbs = hashObject_.value().joins;
   auto numProbeRows = leftTableView.num_rows();
 
   // For now, AST support is necessary to filter join output
@@ -1381,8 +1460,11 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
     // emitted separately after the loop. Unmatched build rows are emitted in
     // doGetOutput via rightMatchedFlags_.
     VELOX_CHECK_NOT_NULL(hb);
+    // Probe keys normalized to match the build side, which was normalized when hb
+    // was constructed. Kept in a named local so it outlives the call.
+    auto probeKeyTable = probeKeys(leftTableView, stream);
     auto [leftJoinIndices, rightJoinIndices] = hb->inner_join(
-        leftTableView.select(leftKeyIndices_),
+        probeKeyTable.view,
         std::nullopt,
         stream,
         get_temp_mr());
@@ -1475,7 +1557,7 @@ CudfHashJoinProbe::leftSemiFilterJoin(
     rmm::cuda_stream_view stream) {
   std::vector<JoinOutput> cudfOutputs;
 
-  auto& rightTables = hashObject_.value().first;
+  auto& rightTables = hashObject_.value().tables;
   auto numProbeRows = leftTableView.num_rows();
 
   // Track which probe rows matched across all build chunks so that each
@@ -1645,8 +1727,8 @@ CudfHashJoinProbe::leftSemiProjectJoin(
     VELOX_NYI("Left semi project join requires AST support for filtering");
   }
 
-  auto& rightTables = hashObject_.value().first;
-  auto& hbs = hashObject_.value().second;
+  auto& rightTables = hashObject_.value().tables;
+  auto& hbs = hashObject_.value().joins;
   auto numProbeRows = leftTableView.num_rows();
 
   const bool isNullAware = joinNode_->isNullAware();
@@ -1698,8 +1780,11 @@ CudfHashJoinProbe::leftSemiProjectJoin(
     // Step 1: Inner join to get (probe_idx, build_idx) pairs where keys match.
     // Unlike left_join, inner_join only returns valid pairs (no JoinNoMatch).
     VELOX_CHECK_NOT_NULL(hb);
+    // Probe keys normalized to match the build side, which was normalized when hb
+    // was constructed. Kept in a named local so it outlives the call.
+    auto probeKeyTable = probeKeys(leftTableView, stream);
     auto [leftJoinIndices, rightJoinIndices] = hb->inner_join(
-        leftTableView.select(leftKeyIndices_),
+        probeKeyTable.view,
         std::nullopt,
         stream,
         get_temp_mr());
@@ -2044,7 +2129,7 @@ CudfHashJoinProbe::rightSemiFilterJoin(
     rmm::cuda_stream_view stream) {
   std::vector<JoinOutput> cudfOutputs;
 
-  auto& rightTables = hashObject_.value().first;
+  auto& rightTables = hashObject_.value().tables;
   auto rightTableView = rightTables[0]->view();
 
   VELOX_CHECK_EQ(
@@ -2090,7 +2175,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::antiJoin(
     cudf::table_view leftTableViewParam,
     rmm::cuda_stream_view stream) {
   std::vector<JoinOutput> cudfOutputs;
-  auto& rightTables = hashObject_.value().first;
+  auto& rightTables = hashObject_.value().tables;
 
   VELOX_CHECK_EQ(
       rightTables.size(),
@@ -2170,7 +2255,7 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
     // If no more input, emit unmatched-right rows if needed.
     if ((joinNode_->isRightJoin() || joinNode_->isFullJoin()) && noMoreInput_ &&
         !finished_ && isLastDriver_) {
-      auto& rightTables = hashObject_.value().first;
+      auto& rightTables = hashObject_.value().tables;
       auto stream = cudfGlobalStreamPool().get_stream();
       std::vector<std::unique_ptr<cudf::table>> toConcat;
       vector_size_t unmatchedRows = 0;
@@ -2260,8 +2345,8 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
     VLOG(1) << "Probe table number of rows: " << leftTableView.num_rows();
   }
 
-  auto& rightTables = hashObject_.value().first;
-  auto& hbs = hashObject_.value().second;
+  auto& rightTables = hashObject_.value().tables;
+  auto& hbs = hashObject_.value().joins;
   for (auto i = 0; i < rightTables.size(); i++) {
     auto& rightTable = rightTables[i];
     auto& hb = hbs[i];
@@ -2385,7 +2470,7 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
 
   // Lazy initialize matched flags only when build side is done
   if (joinNode_->isRightJoin() || joinNode_->isFullJoin()) {
-    auto& rightTablesInit = hashObject_.value().first;
+    auto& rightTablesInit = hashObject_.value().tables;
     rightMatchedFlags_.clear();
     rightMatchedFlags_.reserve(rightTablesInit.size());
     auto initStream = cudfGlobalStreamPool().get_stream();
@@ -2403,7 +2488,7 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
 
   // Precompute right table columns if filter exists (once when build is done)
   if (joinNode_->filter() && !rightPrecomputeInstructions_.empty()) {
-    auto& rightTablesInit = hashObject_.value().first;
+    auto& rightTablesInit = hashObject_.value().tables;
     cachedRightPrecomputed_.clear();
     cachedExtendedRightViews_.clear();
     cachedRightPrecomputed_.reserve(rightTablesInit.size());
@@ -2431,7 +2516,7 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
   // Check if build side has any null keys (needed for null-aware left semi
   // project)
   if (joinNode_->isLeftSemiProjectJoin() && joinNode_->isNullAware()) {
-    auto& rightTablesInit = hashObject_.value().first;
+    auto& rightTablesInit = hashObject_.value().tables;
     buildSideHasNullKeys_ = false;
     for (auto& rt : rightTablesInit) {
       auto keyView = rt->view().select(rightKeyIndices_);
@@ -2447,7 +2532,7 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
     }
   }
 
-  auto& rightTables = hashObject_.value().first;
+  auto& rightTables = hashObject_.value().tables;
   // should be rightTable->numDistinct() but it needs compute,
   // so we use num_rows()
   if (rightTables[0]->num_rows() == 0) {

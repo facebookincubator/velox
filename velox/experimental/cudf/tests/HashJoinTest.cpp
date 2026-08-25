@@ -21,6 +21,8 @@
 
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/tz/TimeZoneMap.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -9691,6 +9693,113 @@ TEST_F(HashJoinTest, mixedGroupedExecution) {
           .numConcurrentSplitGroups(1)
           .countResults(),
       0);
+}
+
+// ---------------------------------------------------------------------------
+// TIMESTAMP WITH TIME ZONE join keys.
+//
+// The type is physically (millis << 12) | zone_key and Velox matches it on the
+// INSTANT alone, so two values for the same moment in different zones are the SAME
+// key and must join. Before the key-normalization fix cuDF hashed all 64 bits, so
+// no two values carrying different zones ever matched and such a join returned
+// nothing at all -- silently, with no error.
+//
+// Only the join types that build a cudf::hash_join are covered here: inner, left,
+// right, full and left-semi-project. The semi/anti FILTER variants build their own
+// hash tables from raw views through mixed_left_semi_join / filtered_join and are a
+// separate mechanism, still to be fixed.
+// ---------------------------------------------------------------------------
+namespace {
+// Kiritimati (+14) and Midway (-11) are the extremes of the offset range.
+int64_t packJoinKey(int64_t millis, const char* zone) {
+  return pack(millis, tz::getTimeZoneID(zone));
+}
+} // namespace
+
+TEST_F(HashJoinTest, innerJoinTimestampWithTimeZoneMatchesOnInstant) {
+  const int64_t a = 1'623'758'400'000;
+  const int64_t b = -14'182'940'000;
+  // Same instants on both sides, but every probe row carries a different zone key
+  // from its build counterpart, so nothing matches on the packed value.
+  auto probe = makeRowVector(
+      {"k"},
+      {makeFlatVector<int64_t>(
+          {packJoinKey(a, "Pacific/Kiritimati"),
+           packJoinKey(b, "Pacific/Kiritimati")},
+          TIMESTAMP_WITH_TIME_ZONE())});
+  auto build = makeRowVector(
+      {"u_k"},
+      {makeFlatVector<int64_t>(
+          {packJoinKey(a, "Pacific/Midway"), packJoinKey(b, "Asia/Kolkata")},
+          TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto plan =
+      countStarOverZeroColumnHashJoinPlan(probe, build, core::JoinType::kInner);
+  auto expected = makeRowVector({makeFlatVector<int64_t>({2})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// A left join is the shape where the defect is quietest: instead of an empty
+// result it produces the right ROW COUNT with every build column null, which looks
+// like "no matches" rather than a bug.
+TEST_F(HashJoinTest, leftJoinTimestampWithTimeZoneMatchesOnInstant) {
+  const int64_t a = 1'623'758'400'000;
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto probe = makeRowVector(
+      {"k"},
+      {makeFlatVector<int64_t>(
+          {packJoinKey(a, "Pacific/Kiritimati"),
+           packJoinKey(a + 1, "Pacific/Kiritimati")},
+          TIMESTAMP_WITH_TIME_ZONE())});
+  // Only the first instant is present on the build side.
+  auto build = makeRowVector(
+      {"u_k"},
+      {makeFlatVector<int64_t>(
+          {packJoinKey(a, "Pacific/Midway")}, TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probe})
+                  .hashJoin(
+                      {"k"},
+                      {"u_k"},
+                      PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                      "",
+                      {"k", "u_k"},
+                      core::JoinType::kLeft)
+                  .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 2);
+  auto buildSide = result->childAt(1)->as<SimpleVector<int64_t>>();
+  int matched = 0;
+  for (auto i = 0; i < result->size(); ++i) {
+    if (!buildSide->isNullAt(i)) {
+      ++matched;
+      EXPECT_EQ(unpackMillisUtc(buildSide->valueAt(i)), a);
+    }
+  }
+  EXPECT_EQ(matched, 1) << "the shared instant must match across zone keys";
+}
+
+// Instants one millisecond apart must NOT join, which is what fails if the
+// normalization ever clears more than the zone-key bits.
+TEST_F(HashJoinTest, innerJoinTimestampWithTimeZoneSeparatesAdjacentMillis) {
+  const int64_t a = 1'623'758'400'000;
+  auto probe = makeRowVector(
+      {"k"},
+      {makeFlatVector<int64_t>(
+          {packJoinKey(a, "Pacific/Kiritimati")}, TIMESTAMP_WITH_TIME_ZONE())});
+  auto build = makeRowVector(
+      {"u_k"},
+      {makeFlatVector<int64_t>(
+          {packJoinKey(a + 1, "Pacific/Midway"),
+           packJoinKey(a - 1, "Pacific/Midway")},
+          TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto plan =
+      countStarOverZeroColumnHashJoinPlan(probe, build, core::JoinType::kInner);
+  auto expected = makeRowVector({makeFlatVector<int64_t>({0})});
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 } // namespace

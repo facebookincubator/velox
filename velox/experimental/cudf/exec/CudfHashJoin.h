@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/KeyNormalization.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -59,9 +60,26 @@ class CudfHashJoinBridge : public exec::JoinBridge {
   // constructed from them to the probe operator
   /** @brief Hash tables paired with their corresponding join objects for
    * batched processing */
-  using hash_type = std::pair<
-      std::vector<std::shared_ptr<cudf::table>>,
-      std::vector<std::shared_ptr<cudf::hash_join>>>;
+  /// Build-side state handed to the probe operators.
+  ///
+  /// normalizedBuildKeys carries the key columns of each build table with any
+  /// TIMESTAMP WITH TIME ZONE zone key cleared, and exists purely for LIFETIME:
+  /// cudf::hash_join views the key table it was built from and must not outlive
+  /// it (hash_join.hpp), so the normalized columns have to live as long as the
+  /// join object. It is empty when no build key needed normalization, in which
+  /// case the join objects view the build tables directly as before.
+  ///
+  /// The columns are kept HERE rather than appended to the build tables, which
+  /// would have been a smaller change but is not safe: the probe's AST filter is
+  /// evaluated against the joined column layout, and cachedExtendedRightViews_
+  /// appends the filter's precompute columns after the build table's own, so extra
+  /// build columns would shift the precompute indices the filter references.
+  struct BuildState {
+    std::vector<std::shared_ptr<cudf::table>> tables;
+    std::vector<std::shared_ptr<cudf::hash_join>> joins;
+    std::vector<std::shared_ptr<cudf::table>> normalizedBuildKeys;
+  };
+  using hash_type = BuildState;
 
   void setHashTable(std::optional<hash_type> hashObject);
 
@@ -209,6 +227,23 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   ContinueFuture future_{ContinueFuture::makeEmpty()};
 
   /** @brief Column indices for join keys in left (probe) table */
+  // Selects the probe (or build) key columns and clears any TIMESTAMP WITH TIME
+  // ZONE zone key, so a join matches on the instant. Returns the owning value: the
+  // caller must keep it alive for as long as the returned view is read.
+  //
+  // Both sides go through normalization or neither -- a one-sided fix compares
+  // normalized keys against packed ones and empties every TSWTZ join, including
+  // the single-zone ones that work today.
+  NormalizedKeys probeKeys(
+      cudf::table_view probeTableView,
+      rmm::cuda_stream_view stream) const;
+  NormalizedKeys buildKeys(
+      cudf::table_view buildTableView,
+      rmm::cuda_stream_view stream) const;
+
+  std::vector<bool> leftKeyIsTswtz_;
+  std::vector<bool> rightKeyIsTswtz_;
+
   std::vector<cudf::size_type> leftKeyIndices_;
   /** @brief Column indices for join keys in right (build) table */
   std::vector<cudf::size_type> rightKeyIndices_;
