@@ -20,6 +20,7 @@
 #include "velox/common/file/File.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/Reader.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
@@ -30,6 +31,52 @@ using namespace facebook::velox;
 
 namespace {
 const std::string kSchemaSectionString(kSchemaSection);
+
+class SeekableStreamLoader final : public StreamLoader {
+ public:
+  SeekableStreamLoader(
+      std::unique_ptr<dwio::common::SeekableInputStream> input,
+      uint64_t size,
+      memory::MemoryPool* pool)
+      : input_{std::move(input)} {
+    const void* data;
+    int32_t length;
+    const bool hasData = input_->Next(&data, &length);
+    NIMBLE_CHECK(hasData, "Shared dictionary stream ended early.");
+    NIMBLE_CHECK_GT(length, 0);
+    const auto contiguousSize = static_cast<uint64_t>(length);
+    NIMBLE_CHECK_LE(contiguousSize, size);
+    if (contiguousSize == size) {
+      stream_ = {static_cast<const char*>(data), size};
+      return;
+    }
+
+    buffer_ = AlignedBuffer::allocateExact<char>(size, pool);
+    std::memcpy(buffer_->asMutable<char>(), data, contiguousSize);
+    uint64_t copied{contiguousSize};
+    while (copied < size) {
+      const bool hasMoreData = input_->Next(&data, &length);
+      NIMBLE_CHECK(hasMoreData, "Shared dictionary stream ended early.");
+      NIMBLE_CHECK_GT(length, 0);
+      const auto chunkSize = static_cast<uint64_t>(length);
+      NIMBLE_CHECK_LE(copied + chunkSize, size);
+      std::memcpy(buffer_->asMutable<char>() + copied, data, chunkSize);
+      copied += chunkSize;
+    }
+    stream_ = {buffer_->as<char>(), buffer_->size()};
+  }
+
+  const std::string_view getStream() const final {
+    return stream_;
+  }
+
+ private:
+  // Keeps a contiguous range returned by Next() alive.
+  const std::unique_ptr<dwio::common::SeekableInputStream> input_;
+  // Allocated only when the input spans multiple ranges.
+  BufferPtr buffer_;
+  std::string_view stream_;
+};
 
 std::shared_ptr<const facebook::nimble::Type> loadSchema(
     const TabletReader& tablet) {
@@ -203,7 +250,65 @@ std::unique_ptr<dwio::common::SeekableInputStream> StripeStreams::enqueue(
   dwio::common::StreamIdentifier sid(streamId);
   auto& input =
       lazyColumnIo ? *lazyInput_->bufferedInput() : readerBase_->input();
-  return input.enqueue(*region, &sid);
+  auto valueInput = input.enqueue(*region, &sid);
+
+  const auto dictionaryStreamId =
+      readerBase_->tablet().stripeDictionaryStreamId(streamId);
+  if (!dictionaryStreamId.has_value()) {
+    return valueInput;
+  }
+  const auto dictionaryStreamOffset = dictionaryStreamId.value();
+  const auto dictionaryStreamRegion =
+      streamRegion(static_cast<int>(dictionaryStreamOffset));
+  // A value stream can use a stripe dictionary in some stripes and direct
+  // encoding in others. Direct-encoded stripes omit the dictionary stream.
+  if (!dictionaryStreamRegion.has_value()) {
+    return valueInput;
+  }
+  // Each projected value stream is enqueued once and owns a distinct stripe
+  // dictionary stream.
+  const auto valueStreamId = static_cast<uint32_t>(streamId);
+  NIMBLE_DCHECK(
+      !dictionaryInputs_.contains(valueStreamId),
+      "Stripe dictionary stream is already enqueued.");
+  dwio::common::StreamIdentifier dictionarySid{
+      static_cast<int>(dictionaryStreamOffset)};
+  dictionaryInputs_.emplace(
+      valueStreamId,
+      DictionaryInput{
+          input.enqueue(*dictionaryStreamRegion, &dictionarySid),
+          dictionaryStreamRegion->length});
+  return valueInput;
+}
+
+DictionaryAlphabetLoader StripeStreams::dictionaryAlphabetLoader(
+    uint32_t valueStreamId) {
+  NIMBLE_CHECK(stripeIdentifier_.has_value());
+  auto inputIt = dictionaryInputs_.find(valueStreamId);
+  if (inputIt != dictionaryInputs_.end()) {
+    auto dictionaryInput = std::move(inputIt->second);
+    dictionaryInputs_.erase(inputIt);
+    return [_dictionaryInput = std::move(dictionaryInput),
+            readerBase = readerBase_]() mutable {
+      std::shared_ptr<const StreamLoader> dictionaryStreamOwner =
+          std::make_shared<SeekableStreamLoader>(
+              std::move(_dictionaryInput.input),
+              _dictionaryInput.size,
+              readerBase->pool());
+      return SharedDictionaryAlphabet::create(
+          dictionaryStreamOwner->getStream(),
+          dictionaryStreamOwner,
+          readerBase->pool());
+    };
+  }
+  auto dictionaryAlphabet =
+      readerBase_->tablet().resolveDictionaryAlphabet(valueStreamId);
+  if (dictionaryAlphabet == nullptr) {
+    return nullptr;
+  }
+  return [_dictionaryAlphabet = std::move(dictionaryAlphabet)] {
+    return _dictionaryAlphabet;
+  };
 }
 
 std::vector<std::optional<StreamLocation>> StripeStreams::locateStreams(

@@ -19,6 +19,7 @@
 
 #include <folly/Random.h>
 
+#include <memory>
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
