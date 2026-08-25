@@ -2231,3 +2231,178 @@ TEST_F(TimezoneFunctionTest, betweenUsesInstantNotZoneKey) {
   // value is simultaneously >= lower and <= upper, so CPU says true.
   assertMatchesCpu("c0 between c1 and c2", input);
 }
+
+// --- Arithmetic and casts over the PACKED value: declined, never computed -----
+//
+// TIMESTAMP WITH TIME ZONE is (millis << kMillisShift) | zone_key, and
+// veloxToCudfDataType maps it to a plain INT64. The AST therefore could not tell it
+// from an ordinary integer, and both arithmetic and casts silently operated on the
+// packed bits. Measured on a live cluster before the guard, with GPU-strict and
+// GPU-permissive agreeing with each other and disagreeing with CPU:
+//
+//   t - TIMESTAMP '2000-01-01 00:00:00 UTC'
+//       CPU -11121 03:42:20   GPU -45552248 09:57:20  (larger by 2^kMillisShift)
+//   ka - mi, one instant keyed to two zones
+//       CPU 0                 GPU -0 00:00:00.005     (the zone-key delta)
+//   cast(ka AS time)
+//       CPU 15:07:40.000      GPU 19:56:10.137
+//
+// and two shapes that aborted at RUNTIME inside CudfFilterProject -- past the point
+// where cudf.allow_cpu_fallback can rescue a query, so GPU-permissive failed too:
+//
+//   cast(t AS date)        cast_ops.cu "Timestamps cannot be converted to numeric"
+//   t - INTERVAL '1' HOUR  expression_parser.cpp "non-matching operand types"
+//
+// The contract these tests pin is that the GPU DECLINES each shape, so the operator
+// falls back and the CPU answers. Correctness of that fallback is asserted
+// end-to-end by the tz_parity suite (cases/o_tswtz_function_surface.yaml); what a
+// unit test can show is that nothing on the GPU path claims the expression.
+//
+// Comparisons must NOT be declined -- masking the zone key off both operands makes
+// them correct, which is what 6b0c57b75 does. comparisonUsesInstantNotZoneKey and
+// betweenUsesInstantNotZoneKey above are the positive controls for a guard drawn too
+// wide, and comparisonsAreStillEvaluatedOnGpuAfterTheArithmeticGuard below asserts
+// the stronger property those two cannot: that the comparison still runs on the GPU
+// rather than merely agreeing with CPU from a silent fallback.
+
+TEST_F(TimezoneFunctionTest, subtractingTwoTimestampWithTimeZonesIsDeclined) {
+  const int64_t millis = 1'623'758'400'000;
+  const auto kiritimati = tz::getTimeZoneID("Pacific/Kiritimati");
+  const auto midway = tz::getTimeZoneID("Pacific/Midway");
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, kiritimati), pack(millis, midway)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, midway), pack(millis, kiritimati)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  const auto rowType = asRowType(input->type());
+  // Presto registers TSWTZ - TSWTZ -> INTERVAL DAY TO SECOND, so this expression is
+  // real and does reach the evaluator. Before the guard the AST accepted it as SUB
+  // over two INT64s and returned the packed difference.
+  VELOX_ASSERT_THROW(
+      evaluate(makeTypedExpr("c0 - c1", rowType), input),
+      "No cuDF expression evaluator can handle");
+}
+
+TEST_F(TimezoneFunctionTest, addingAnIntervalToATimestampWithTimeZoneIsDeclined) {
+  // TSWTZ + TSWTZ is not a Presto signature -- velox rejects it before the evaluator
+  // sees it. The real shapes, from the rejection's own signature list, are
+  // (timestamp with time zone, interval day to second) and its YEAR TO MONTH
+  // sibling, PLUS both reversed: (interval ..., timestamp with time zone). The
+  // reversed forms are why the guard scans every operand instead of checking the
+  // first: written as "is operand 0 a TSWTZ", `INTERVAL '1' HOUR + t` would still
+  // have reached the AST.
+  const int64_t millis = 1'623'758'400'000;
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>({3'600'000}, INTERVAL_DAY_TIME()),
+  });
+  const auto rowType = asRowType(input->type());
+  VELOX_ASSERT_THROW(
+      evaluate(makeTypedExpr("c0 + c1", rowType), input),
+      "No cuDF expression evaluator can handle");
+  // Reversed operand order, same expression semantically.
+  VELOX_ASSERT_THROW(
+      evaluate(makeTypedExpr("c1 + c0", rowType), input),
+      "No cuDF expression evaluator can handle");
+  // And the subtraction form, which is what the parity suite's
+  // o_tswtz_minus_interval_day_second case exercises end to end.
+  VELOX_ASSERT_THROW(
+      evaluate(makeTypedExpr("c0 - c1", rowType), input),
+      "No cuDF expression evaluator can handle");
+}
+
+TEST_F(TimezoneFunctionTest, subtractingAPreEpochTimestampWithTimeZoneIsDeclined) {
+  // Pre-epoch: a negative packed value carries the shift exactly as a positive one
+  // does, so the defect is not confined to instants after 1970.
+  const int64_t millis = -14'182'940'000;
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Midway"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  const auto rowType = asRowType(input->type());
+  VELOX_ASSERT_THROW(
+      evaluate(makeTypedExpr("c0 - c1", rowType), input),
+      "No cuDF expression evaluator can handle");
+}
+
+TEST_F(TimezoneFunctionTest, castingTimestampWithTimeZoneToDateIsDeclined) {
+  const int64_t millis = 1'623'758'400'000;
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  const auto rowType = asRowType(input->type());
+  // DATE is TypeKind::INTEGER, which maps to TIMESTAMP_DAYS, and
+  // is_supported_cast(INT64, TIMESTAMP_DAYS) reports true -- so canEvaluate admitted
+  // the cast and cudf::cast then aborted at runtime on the packed value. Both gates
+  // are asserted: canEvaluate is the precompute path, createCudfExpression covers
+  // the AST path, and the defect needed closing in both.
+  EXPECT_FALSE(FunctionExpression::canEvaluate(expression::optimize(
+      makeTypedExpr("cast(c0 as date)", rowType),
+      execCtx_.queryCtx(),
+      execCtx_.pool())));
+  VELOX_ASSERT_THROW(
+      evaluate(makeTypedExpr("cast(c0 as date)", rowType), input),
+      "No cuDF expression evaluator can handle");
+}
+
+TEST_F(TimezoneFunctionTest, castingTimestampWithTimeZoneToBigintIsDeclined) {
+  const int64_t millis = 1'623'758'400'000;
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  const auto rowType = asRowType(input->type());
+  // The starkest form of the same defect: BIGINT is what the packed value already
+  // is, so the AST's CAST_TO_INT64 was a literal identity that would have handed the
+  // physical representation out as if it were the instant.
+  EXPECT_FALSE(FunctionExpression::canEvaluate(expression::optimize(
+      makeTypedExpr("cast(c0 as bigint)", rowType),
+      execCtx_.queryCtx(),
+      execCtx_.pool())));
+}
+
+TEST_F(
+    TimezoneFunctionTest,
+    comparisonsAreStillEvaluatedOnGpuAfterTheArithmeticGuard) {
+  // The guard must cover the arithmetic operators only. Widened to every binary
+  // operator over the type, every TSWTZ comparison would fall back to CPU -- and the
+  // parity suite would stay GREEN on values while quietly losing the GPU path
+  // 6b0c57b75 exists to make correct. Asserting that the expression still COMPILES
+  // for the GPU is what separates those two outcomes; matching CPU does not.
+  const int64_t millis = 1'623'758'400'000;
+  const auto kiritimati = tz::getTimeZoneID("Pacific/Kiritimati");
+  const auto midway = tz::getTimeZoneID("Pacific/Midway");
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, kiritimati), pack(millis, midway)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, midway), pack(millis, kiritimati)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  const auto rowType = asRowType(input->type());
+  for (const auto* expr : {"c0 = c1", "c0 < c1", "c0 >= c1"}) {
+    auto optimized = expression::optimize(
+        makeTypedExpr(expr, rowType), execCtx_.queryCtx(), execCtx_.pool());
+    EXPECT_NO_THROW(createCudfExpression(
+        optimized,
+        rowType,
+        pool_.get(),
+        contextFromConfig(execCtx_.queryCtx()->queryConfig())))
+        << "comparison " << expr << " must still compile for the GPU";
+  }
+  assertMatchesCpu("c0 = c1", input);
+  assertMatchesCpu("c0 < c1", input);
+}

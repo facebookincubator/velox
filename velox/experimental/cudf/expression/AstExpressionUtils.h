@@ -177,9 +177,13 @@ const std::unordered_map<std::string, Op> binaryOps = [] {
 }();
 
 // The comparison subset of binaryOps, as distinct from the arithmetic and
-// logical entries in the same map. Only these need the TIMESTAMP WITH TIME ZONE
-// normalization in normalizeForComparison: arithmetic on a packed value is not a
-// valid Presto expression, and the logical operators take booleans.
+// logical entries in the same map. Only these can be MADE correct for TIMESTAMP
+// WITH TIME ZONE by normalizeForComparison masking the zone key off both operands.
+//
+// An earlier version of this comment claimed arithmetic on a packed value "is not a
+// valid Presto expression". That was wrong, and the mistake is what left the hole
+// arithmeticOps below now closes: Presto registers TSWTZ - TSWTZ -> INTERVAL and
+// TSWTZ +/- INTERVAL -> TSWTZ, so such expressions do reach here.
 const std::unordered_set<Op> comparisonOps = {
     Op::EQUAL,
     Op::NOT_EQUAL,
@@ -188,6 +192,52 @@ const std::unordered_set<Op> comparisonOps = {
     Op::LESS_EQUAL,
     Op::GREATER_EQUAL,
 };
+
+// The arithmetic subset, which needs the OPPOSITE treatment from comparisonOps:
+// a comparison over TIMESTAMP WITH TIME ZONE is made correct by masking the zone
+// key off, and arithmetic cannot be made correct that way at all.
+const std::unordered_set<Op> arithmeticOps = {
+    Op::ADD,
+    Op::SUB,
+    Op::MUL,
+    Op::DIV,
+    Op::MOD,
+};
+
+// True if any direct operand of `expr` is a TIMESTAMP WITH TIME ZONE.
+//
+// The type is physically (millis << kMillisShift) | zone_key and
+// veloxToCudfDataType maps it to a plain INT64, so the AST cannot tell it from an
+// ordinary integer and will do integer arithmetic on the packed bits. Measured on a
+// live cluster before this guard existed:
+//
+//   t - TIMESTAMP '2000-01-01 00:00:00 UTC'
+//     CPU -11121 03:42:20   GPU -45552248 09:57:20
+//     -- larger by exactly 4096 = 2^kMillisShift, the packed difference carrying
+//        the shift.
+//   ka - mi, one instant keyed to two zones
+//     CPU 0                 GPU -0 00:00:00.005
+//     -- the two zone keys differing, leaked straight out of the low bits.
+//
+// Neither error raised: both engines returned rows and the values differed.
+//
+// Masking the zone key off does not rescue this the way it rescues a comparison,
+// because the operands are on different scales: the packed value counts 2^12 units
+// per millisecond and an INTERVAL literal counts one. Declining sends the expression
+// to the CPU, which is correct. Implementing it on the GPU is possible -- for
+// INTERVAL DAY TO SECOND, packed + (delta << kMillisShift) is exact, since the low
+// bits of the shifted delta are zero and no carry reaches the zone key -- but
+// INTERVAL YEAR TO MONTH is calendar arithmetic and TSWTZ - TSWTZ needs an unpack,
+// so that is a feature and not this fix.
+bool anyOperandIsTimestampWithTimeZone(const core::TypedExprPtr& expr) {
+  for (const auto& input : expr->inputs()) {
+    if (input != nullptr && input->type() != nullptr &&
+        isTimestampWithTimeZoneType(input->type())) {
+      return true;
+    }
+  }
+  return false;
+}
 
 const std::unordered_map<std::string, Op> prestoUnaryOps = {
     {"not", Op::NOT},
@@ -348,8 +398,17 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
     // Binary operations.  Velox parsers always lower AND/OR into binary
     // chains, so a single isOpAndInputsSupported check covers them too.
     if (binaryOps.find(name) != binaryOps.end()) {
-      return len == 2 &&
-          isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
+      const auto op = binaryOps.at(name);
+      // Arithmetic over a packed TIMESTAMP WITH TIME ZONE is wrong and, unlike a
+      // comparison, cannot be normalized into correctness -- see
+      // anyOperandIsTimestampWithTimeZone for the measured values. Comparisons are
+      // NOT declined here: they stay on the GPU and
+      // AstContext::normalizeForComparison masks the zone key off each operand.
+      if (arithmeticOps.count(op) != 0 &&
+          anyOperandIsTimestampWithTimeZone(expr)) {
+        return false;
+      }
+      return len == 2 && isOpAndInputsSupported(op, inputCudfDataTypes);
     }
 
     // Unary operations (includes both unaryOps and "isnotnull")
@@ -379,6 +438,19 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
   }
 
   if (expr->isCastKind()) {
+    // A cast of -- or to -- TIMESTAMP WITH TIME ZONE is never the identity the AST
+    // would make of it. DATE is TypeKind::INTEGER and Presto's TIME is
+    // BIGINT-backed, so cast(TSWTZ AS DATE) and cast(TSWTZ AS TIME) both arrive
+    // looking like CAST_TO_INT64 on an INT64: an identity on the packed value.
+    // Measured before this guard, with no error on either side:
+    //   cast(ka AS time)   CPU 15:07:40.000   GPU 19:56:10.137
+    // The reverse direction (TIMESTAMP -> TSWTZ) is a real conversion implemented by
+    // CastFunction on the precompute path, not by the AST, so declining here does
+    // not remove it.
+    if (isTimestampWithTimeZoneType(expr->type()) ||
+        anyOperandIsTimestampWithTimeZone(expr)) {
+      return false;
+    }
     // Cast operations: only INTEGER, BIGINT, DOUBLE supported in pure AST
     const auto outputKind = expr->type()->kind();
     if (outputKind == TypeKind::INTEGER || outputKind == TypeKind::BIGINT) {

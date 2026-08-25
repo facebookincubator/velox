@@ -2808,7 +2808,25 @@ bool registerBuiltinFunctions(const std::string& prefix) {
              .argumentType("double")
              .argumentType("double")
              .build(),
-         decimalBinarySignature()});
+         decimalBinarySignature()},
+        /*overwrite=*/true,
+        // Never arithmetic over a packed TIMESTAMP WITH TIME ZONE. The AST gate in
+        // isAstExprSupported declines this shape too, and this is the second half of
+        // the same guard rather than a duplicate: signature matching runs through
+        // SignatureBinder with TypeCoercer::defaults(), so it cannot be assumed to
+        // reject a BIGINT-backed custom type against a `double` argument. If it
+        // bound, BinaryFunction would difference the packed values in floating point
+        // -- a different wrong answer from the one the AST gate removes, and just as
+        // silent. Declining here sends the expression to CPU, which is correct.
+        [](const core::TypedExprPtr& expr) {
+          for (const auto& input : expr->inputs()) {
+            if (input != nullptr && input->type() != nullptr &&
+                isTimestampWithTimeZoneType(input->type())) {
+              return false;
+            }
+          }
+          return true;
+        });
   };
 
   registerBinaryOp(
@@ -3238,6 +3256,20 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
     if (srcType->kind() == TypeKind::TIMESTAMP &&
         isTimestampWithTimeZoneType(dstType)) {
       return true;
+    }
+    // A cast FROM TIMESTAMP WITH TIME ZONE would fall through to CastFunction's
+    // kFixedWidth mode, i.e. cudf::cast over the packed
+    // (millis << kMillisShift) | zone_key physical value -- which is not the logical
+    // value, so no destination type makes that meaningful. None of these conversions
+    // is implemented, and is_supported_cast cannot be the gate: it reports true for
+    // INT64 -> TIMESTAMP_DAYS, which is how cast(TSWTZ AS DATE) reached eval and
+    // aborted inside CudfFilterProject at
+    // cast_ops.cu "Timestamps cannot be converted to numeric". That abort is a
+    // RUNTIME failure, past the point where cudf.allow_cpu_fallback can rescue the
+    // query, so GPU-permissive failed too -- which is what makes declining here the
+    // fix rather than a tidy-up. The reverse direction is allowed just above.
+    if (isTimestampWithTimeZoneType(srcType)) {
+      return false;
     }
     // Everything past this point is evaluated by cudf::cast, which reads a
     // column. FunctionExpression::create omits constant children from eval's
