@@ -16,8 +16,11 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
+#include "velox/experimental/cudf/exec/KeyNormalization.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
@@ -50,6 +53,8 @@ CudfMarkDistinct::CudfMarkDistinct(
   for (const auto& key : planNode->distinctKeys()) {
     auto idx = inputType->getChildIdx(key->name());
     distinctKeyIndices_.push_back(static_cast<cudf::size_type>(idx));
+    distinctKeyIsTswtz_.push_back(
+        isTimestampWithTimeZoneType(inputType->childAt(idx)));
   }
 }
 
@@ -88,7 +93,30 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
   }
 
   // Extract key columns from the input batch.
-  auto batchKeys = tableView.select(distinctKeyIndices_);
+  //
+  // A TIMESTAMP WITH TIME ZONE key is compared on its INSTANT alone: it is
+  // physically (millis << 12) | zone_key and Velox's hash and compare for the type
+  // read unpackMillisUtc only, so comparing the raw value marks one row distinct
+  // per zone instead of one per moment.
+  //
+  // Normalizing here covers all four uses at once, and that is deliberate rather
+  // than incidental. batchKeys feeds the within-batch distinct_indices, the
+  // first-batch seenKeys_, the per-batch uniqueBatchKeys, and through those the
+  // persistent filter -- and normalizing only some of them would compare
+  // normalized keys against unnormalized ones, making EVERY row look new and every
+  // row distinct, for every key type. That is a far worse regression than the bug,
+  // so the normalization has to happen at the single point where the keys are
+  // taken.
+  //
+  // Safe to store normalized: seenKeys_ and seenFilter_ are internal state. The
+  // output is the original input columns plus the marker column (see the end of
+  // this function), so no normalized value can reach a consumer.
+  auto normalizedKeys = normalizeKeyColumns(
+      tableView.select(distinctKeyIndices_),
+      distinctKeyIsTswtz_,
+      stream,
+      tempMr);
+  auto batchKeys = normalizedKeys.view;
 
   // Create marker column (all false initially).
   cudf::numeric_scalar<bool> falseScalar(false, true, stream, tempMr);
