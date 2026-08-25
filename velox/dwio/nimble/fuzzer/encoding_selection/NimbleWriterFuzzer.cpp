@@ -56,6 +56,8 @@
 #include "velox/dwio/nimble/velox/ChunkedStream.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/VeloxReader.h"
+#include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
+#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/writer/EncodingSelectionPolicyFactory.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
@@ -986,6 +988,10 @@ std::string NimbleWriterFuzzer::writeFile(
   auto file = test::createNimbleFile(
       rootPool_, batches, std::move(writerOptions), /*flushAfterWrite=*/false);
   verifyChunkStatsMetadata(file, chunkStatsEnabled);
+  verifyColumnStatistics(
+      file,
+      std::dynamic_pointer_cast<const velox::RowType>(batches[0]->type()),
+      batches);
   return file;
 }
 
@@ -1216,6 +1222,281 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
     }
   }
   chunkStatsCoverage_.numStripeGroups += stripeGroups.size();
+}
+
+namespace {
+
+/// Accumulated expected stats per schema node, built across all batches.
+struct ExpectedNodeStats {
+  uint64_t valueCount{0};
+  uint64_t nullCount{0};
+  std::optional<int64_t> integralMin;
+  std::optional<int64_t> integralMax;
+  std::optional<double> floatingMin;
+  std::optional<double> floatingMax;
+  std::optional<std::string> stringMin;
+  std::optional<std::string> stringMax;
+};
+
+/// Accumulates expected stats for one batch into the per-node vector.
+/// 'validRows' are row indices where all ancestors are non-null.
+void accumulateNodeStats(
+    const VectorPtr& vector,
+    const std::vector<velox::vector_size_t>& validRows,
+    std::vector<ExpectedNodeStats>& nodeStats,
+    uint32_t& nodeId) {
+  if (nodeId >= nodeStats.size()) {
+    return;
+  }
+  auto& stats = nodeStats[nodeId];
+  ++nodeId;
+
+  std::vector<velox::vector_size_t> nonNullRows;
+  nonNullRows.reserve(validRows.size());
+  for (const auto row : validRows) {
+    if (vector->isNullAt(row)) {
+      ++stats.nullCount;
+    } else {
+      nonNullRows.push_back(row);
+    }
+  }
+  stats.valueCount += nonNullRows.size();
+
+  if (vector->typeKind() == velox::TypeKind::ROW) {
+    auto rowVector = vector->as<velox::RowVector>();
+    for (velox::column_index_t col = 0; col < rowVector->childrenSize();
+         ++col) {
+      accumulateNodeStats(
+          rowVector->childAt(col), nonNullRows, nodeStats, nodeId);
+    }
+    return;
+  }
+
+  if (vector->typeKind() == velox::TypeKind::ARRAY) {
+    auto arrayVector = vector->as<velox::ArrayVector>();
+    std::vector<velox::vector_size_t> elementRows;
+    for (const auto row : nonNullRows) {
+      auto offset = arrayVector->offsetAt(row);
+      auto size = arrayVector->sizeAt(row);
+      for (velox::vector_size_t i = 0; i < size; ++i) {
+        elementRows.push_back(offset + i);
+      }
+    }
+    accumulateNodeStats(
+        arrayVector->elements(), elementRows, nodeStats, nodeId);
+    return;
+  }
+
+  if (vector->typeKind() == velox::TypeKind::MAP) {
+    auto mapVector = vector->as<velox::MapVector>();
+    std::vector<velox::vector_size_t> entryRows;
+    for (const auto row : nonNullRows) {
+      auto offset = mapVector->offsetAt(row);
+      auto size = mapVector->sizeAt(row);
+      for (velox::vector_size_t i = 0; i < size; ++i) {
+        entryRows.push_back(offset + i);
+      }
+    }
+    accumulateNodeStats(mapVector->mapKeys(), entryRows, nodeStats, nodeId);
+    accumulateNodeStats(mapVector->mapValues(), entryRows, nodeStats, nodeId);
+    return;
+  }
+
+  if (!vector->type()->isPrimitiveType()) {
+    return;
+  }
+
+  for (const auto row : nonNullRows) {
+    switch (vector->typeKind()) {
+      case velox::TypeKind::BOOLEAN:
+      case velox::TypeKind::TINYINT:
+      case velox::TypeKind::SMALLINT:
+      case velox::TypeKind::INTEGER:
+      case velox::TypeKind::BIGINT:
+      case velox::TypeKind::TIMESTAMP: {
+        int64_t value;
+        switch (vector->typeKind()) {
+          case velox::TypeKind::BOOLEAN:
+            value =
+                vector->as<velox::SimpleVector<bool>>()->valueAt(row) ? 1 : 0;
+            break;
+          case velox::TypeKind::TINYINT:
+            value = vector->as<velox::SimpleVector<int8_t>>()->valueAt(row);
+            break;
+          case velox::TypeKind::SMALLINT:
+            value = vector->as<velox::SimpleVector<int16_t>>()->valueAt(row);
+            break;
+          case velox::TypeKind::INTEGER:
+            value = vector->as<velox::SimpleVector<int32_t>>()->valueAt(row);
+            break;
+          case velox::TypeKind::BIGINT:
+            value = vector->as<velox::SimpleVector<int64_t>>()->valueAt(row);
+            break;
+          case velox::TypeKind::TIMESTAMP:
+            value = vector->as<velox::SimpleVector<velox::Timestamp>>()
+                        ->valueAt(row)
+                        .toMicros();
+            break;
+          default:
+            NIMBLE_UNREACHABLE("Unexpected integral type.");
+        }
+        stats.integralMin = stats.integralMin.has_value()
+            ? std::min(*stats.integralMin, value)
+            : value;
+        stats.integralMax = stats.integralMax.has_value()
+            ? std::max(*stats.integralMax, value)
+            : value;
+        break;
+      }
+      case velox::TypeKind::REAL: {
+        double value = static_cast<double>(
+            vector->as<velox::SimpleVector<float>>()->valueAt(row));
+        stats.floatingMin = stats.floatingMin.has_value()
+            ? std::min(*stats.floatingMin, value)
+            : value;
+        stats.floatingMax = stats.floatingMax.has_value()
+            ? std::max(*stats.floatingMax, value)
+            : value;
+        break;
+      }
+      case velox::TypeKind::DOUBLE: {
+        double value = vector->as<velox::SimpleVector<double>>()->valueAt(row);
+        stats.floatingMin = stats.floatingMin.has_value()
+            ? std::min(*stats.floatingMin, value)
+            : value;
+        stats.floatingMax = stats.floatingMax.has_value()
+            ? std::max(*stats.floatingMax, value)
+            : value;
+        break;
+      }
+      case velox::TypeKind::VARCHAR:
+      case velox::TypeKind::VARBINARY: {
+        auto sv =
+            vector->as<velox::SimpleVector<velox::StringView>>()->valueAt(row);
+        std::string value(sv.data(), sv.size());
+        stats.stringMin = stats.stringMin.has_value()
+            ? std::min(*stats.stringMin, value)
+            : value;
+        stats.stringMax = stats.stringMax.has_value()
+            ? std::max(*stats.stringMax, value)
+            : value;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+}
+
+} // namespace
+
+void NimbleWriterFuzzer::verifyColumnStatistics(
+    const std::string& file,
+    const RowTypePtr& schema,
+    const std::vector<VectorPtr>& batches) {
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = TabletReader::create(
+      readFile, leafPool_.get(), test::makeTestTabletOptions(leafPool_.get()));
+
+  auto statsSection =
+      tablet->loadOptionalSection(std::string(kVectorizedStatsSection));
+  if (!statsSection.has_value()) {
+    return;
+  }
+
+  auto vectorizedStats =
+      VectorizedFileStats::deserialize(statsSection->content(), *leafPool_);
+
+  auto schemaSection = tablet->loadOptionalSection(std::string(kSchemaSection));
+  NIMBLE_CHECK(schemaSection.has_value(), "Schema not found.");
+  auto nimbleSchema = SchemaDeserializer::deserialize(schemaSection->content());
+
+  auto columnStats = vectorizedStats->toColumnStatistics(schema, nimbleSchema);
+
+  NIMBLE_CHECK_GT(
+      columnStats.size(),
+      0,
+      "Column stats vector is empty (seed {}).",
+      options_.seed);
+
+  std::vector<ExpectedNodeStats> expected(columnStats.size());
+  for (const auto& batch : batches) {
+    std::vector<velox::vector_size_t> allRows(batch->size());
+    std::iota(allRows.begin(), allRows.end(), 0);
+    uint32_t nodeId = 0;
+    accumulateNodeStats(batch, allRows, expected, nodeId);
+  }
+
+  for (uint32_t node = 0; node < columnStats.size(); ++node) {
+    const auto& actual = columnStats[node];
+    if (actual == nullptr) {
+      continue;
+    }
+    const auto& exp = expected[node];
+    NIMBLE_CHECK_EQ(
+        actual->getValueCount(),
+        exp.valueCount,
+        "Node {} value count mismatch (seed {}).",
+        node,
+        options_.seed);
+    NIMBLE_CHECK_EQ(
+        actual->getNullCount(),
+        exp.nullCount,
+        "Node {} null count mismatch (seed {}).",
+        node,
+        options_.seed);
+
+    if (actual->getType() == StatType::INTEGRAL &&
+        exp.integralMin.has_value()) {
+      auto* integral = actual->as<const IntegralStatistics>();
+      NIMBLE_CHECK(integral != nullptr);
+      NIMBLE_CHECK_EQ(
+          *integral->getMin(),
+          *exp.integralMin,
+          "Node {} integral min mismatch (seed {}).",
+          node,
+          options_.seed);
+      NIMBLE_CHECK_EQ(
+          *integral->getMax(),
+          *exp.integralMax,
+          "Node {} integral max mismatch (seed {}).",
+          node,
+          options_.seed);
+    } else if (
+        actual->getType() == StatType::FLOATING_POINT &&
+        exp.floatingMin.has_value()) {
+      auto* fp = actual->as<const FloatingPointStatistics>();
+      NIMBLE_CHECK(fp != nullptr);
+      NIMBLE_CHECK_EQ(
+          *fp->getMin(),
+          *exp.floatingMin,
+          "Node {} floating-point min mismatch (seed {}).",
+          node,
+          options_.seed);
+      NIMBLE_CHECK_EQ(
+          *fp->getMax(),
+          *exp.floatingMax,
+          "Node {} floating-point max mismatch (seed {}).",
+          node,
+          options_.seed);
+    } else if (
+        actual->getType() == StatType::STRING && exp.stringMin.has_value()) {
+      auto* str = actual->as<const StringStatistics>();
+      NIMBLE_CHECK(str != nullptr);
+      NIMBLE_CHECK_EQ(
+          *str->getMin(),
+          *exp.stringMin,
+          "Node {} string min mismatch (seed {}).",
+          node,
+          options_.seed);
+      NIMBLE_CHECK_EQ(
+          *str->getMax(),
+          *exp.stringMax,
+          "Node {} string max mismatch (seed {}).",
+          node,
+          options_.seed);
+    }
+  }
 }
 
 void NimbleWriterFuzzer::readAndVerify(
