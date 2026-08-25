@@ -29,7 +29,7 @@ namespace facebook::velox::functions {
   struct Name {                                                \
     VELOX_DEFINE_FUNCTION_TYPES(T);                            \
     template <typename TInput>                                 \
-    FOLLY_ALWAYS_INLINE void                                   \
+    VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void              \
     call(bool& result, const TInput& lhs, const TInput& rhs) { \
       if constexpr (std::is_floating_point_v<TInput>) {        \
         result = (ExprForFloats);                              \
@@ -146,7 +146,7 @@ struct NeqFunction {
 template <typename TExec>
 struct BetweenFunction {
   template <typename T>
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(bool& result, const T& value, const T& low, const T& high) {
     if constexpr (std::is_floating_point_v<T>) {
       result =

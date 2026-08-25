@@ -56,11 +56,43 @@
 // is called by host code using real Velox types.
 #pragma once
 
+// Faithful to real Folly. It deliberately does NOT imply __host__ __device__:
+// blanket-promoting every annotated function to device code forced nvcc to
+// compile bodies nothing calls, and turned this shadow into an ODR hazard for
+// any real Folly header that reached it. Functions GPU code actually calls
+// carry VELOX_GPU_COMPATIBLE at their definition instead.
 #ifndef FOLLY_ALWAYS_INLINE
-#ifdef __CUDACC__
-#define FOLLY_ALWAYS_INLINE __host__ __device__ inline
-#else
 #define FOLLY_ALWAYS_INLINE inline
+#endif
+
+// Feature-detection macros, defined exactly as real Folly defines them.
+//
+// Unlike FOLLY_ALWAYS_INLINE, these carry no GPU meaning; they are here
+// because a Velox header that reaches a *real* Folly header (Traits.h,
+// CheckedMath.h, ...) leaves that header expanding `#if FOLLY_HAS_BUILTIN(x)`
+// against this shadow. Omitting them does not disable a feature, it produces
+// "missing binary operator before token" at the use site.
+#ifndef FOLLY_HAS_BUILTIN
+#if defined(__has_builtin)
+#define FOLLY_HAS_BUILTIN(...) __has_builtin(__VA_ARGS__)
+#else
+#define FOLLY_HAS_BUILTIN(...) 0
+#endif
+#endif
+
+#ifndef FOLLY_HAS_FEATURE
+#if defined(__has_feature)
+#define FOLLY_HAS_FEATURE(...) __has_feature(__VA_ARGS__)
+#else
+#define FOLLY_HAS_FEATURE(...) 0
+#endif
+#endif
+
+#ifndef FOLLY_HAS_WARNING
+#if defined(__has_warning)
+#define FOLLY_HAS_WARNING(...) __has_warning(__VA_ARGS__)
+#else
+#define FOLLY_HAS_WARNING(...) 0
 #endif
 #endif
 

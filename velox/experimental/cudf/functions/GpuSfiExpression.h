@@ -65,7 +65,8 @@ class GpuSfiExpression : public CudfExpression {
       std::vector<std::shared_ptr<CudfExpression>> subexpressions);
 
   /// True when the call names a simple function registered for these argument
-  /// types. Only the node itself is examined; children pick their own evaluator.
+  /// types. Only the node itself is examined; children pick their own
+  /// evaluator.
   static bool canEvaluate(const core::TypedExprPtr& expr);
 
   static std::shared_ptr<CudfExpression> create(

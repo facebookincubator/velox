@@ -16,54 +16,66 @@
 
 // GPU shadow for velox/type/SimpleFunctionApi.h.
 //
-// Mirrors only the type variable tags, decimal parameter aliases, and the
-// `Generic<>` wrapper that `Fn<TExec>::call()` bodies and their template
-// signatures reference. Drops the heavier function-signature machinery
-// (`FunctionSignature`, `SignatureBuilder`, simple-function reflection
-// utilities) that lives in the real header but is host-only.
+// The real header is two things stacked: the type tags a call() body names, and
+// the function-signature machinery (FunctionSignature, SignatureBuilder, the
+// simple-function reflection utilities) that is host-only. Only the first half
+// is wanted here.
 //
-// The `getId()` accessors on `TypeVariable` / `IntegerVariable` and the
-// deleted-constructor / `static_assert` on `Generic` are omitted because
-// they aren't called from `call()` bodies; if a downstream PR needs them,
-// they can be added back without functional impact.
+// The tags themselves are no longer restated. SimpleFunctionTags.h holds them
+// and parses under nvcc on its own, so it is included directly -- one
+// definition of Date and Generic<> rather than a copy that can drift from it.
+// What remains is the SimpleTypeTrait specialisations, which live in the real
+// SimpleFunctionApi.h above the host-only half and so cannot be reached
+// without it. They are reproduced verbatim; registration reads
+// SimpleTypeTrait<T>::name to build the signature strings the host bridge
+// matches against, so a divergence here would show up as a function that
+// silently never resolves.
 #pragma once
 
-#include <cstddef>
+#include "velox/type/SimpleFunctionTags.h"
 
 namespace facebook::velox {
 
-// A type that can be used in simple function to represent any type.
-// Two Generics with the same type variables should bound to the same type.
-template <size_t id>
-struct TypeVariable {};
+/// SimpleTypeTrait template.
 
-using T1 = TypeVariable<1>;
-using T2 = TypeVariable<2>;
-using T3 = TypeVariable<3>;
-using T4 = TypeVariable<4>;
+template <typename P, typename S>
+struct SimpleTypeTrait<ShortDecimal<P, S>>
+    : public TypeTraits<TypeKind::BIGINT> {};
 
-// Integer-valued template parameter (used by ShortDecimal / LongDecimal to
-// carry compile-time precision and scale).
-template <size_t id>
-struct IntegerVariable {};
+template <typename P, typename S>
+struct SimpleTypeTrait<LongDecimal<P, S>>
+    : public TypeTraits<TypeKind::HUGEINT> {};
 
-using P1 = IntegerVariable<1>;
-using P2 = IntegerVariable<2>;
-using P3 = IntegerVariable<3>;
-using P4 = IntegerVariable<4>;
-using S1 = IntegerVariable<5>;
-using S2 = IntegerVariable<6>;
-using S3 = IntegerVariable<7>;
-using S4 = IntegerVariable<8>;
+template <>
+struct SimpleTypeTrait<Varchar> : public TypeTraits<TypeKind::VARCHAR> {};
 
-struct AnyType {};
+template <>
+struct SimpleTypeTrait<Varbinary> : public TypeTraits<TypeKind::VARBINARY> {};
 
-// Generic represents a polymorphic type in a Velox function signature. The
-// concrete instantiation is determined by the type binding rules of the
-// signature itself.
-template <typename T = AnyType, bool comparable = false, bool orderable = false>
-struct Generic {};
+template <>
+struct SimpleTypeTrait<Date> : public TypeTraits<TypeKind::INTEGER> {
+  static constexpr const char* name = "DATE";
+};
 
-using Any = Generic<>;
+template <>
+struct SimpleTypeTrait<IntervalDayTime> : public TypeTraits<TypeKind::BIGINT> {
+  static constexpr const char* name = "INTERVAL DAY TO SECOND";
+};
+
+template <>
+struct SimpleTypeTrait<IntervalYearMonth>
+    : public TypeTraits<TypeKind::INTEGER> {
+  static constexpr const char* name = "INTERVAL YEAR TO MONTH";
+};
+
+template <>
+struct SimpleTypeTrait<Time> : public TypeTraits<TypeKind::BIGINT> {
+  static constexpr const char* name = "TIME";
+};
+
+// SimpleTypeTrait<TimeMicroUtc> is the one specialisation not carried over:
+// unlike the tags above, TimeMicroUtc is declared in Type.h rather than
+// SimpleFunctionTags.h, so the type does not exist in a device translation unit
+// to specialise on. A function taking one cannot be registered here anyway.
 
 } // namespace facebook::velox

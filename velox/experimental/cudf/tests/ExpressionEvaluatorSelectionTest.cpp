@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
+#include "velox/experimental/cudf/functions/GpuSfiExpression.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
@@ -62,6 +63,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
         {"b", BIGINT()},
         {"c", INTEGER()},
         {"name", VARCHAR()},
+        {"d", DOUBLE()},
         {"date", DATE()},
         {"c", INTEGER()},
     });
@@ -107,6 +109,209 @@ TEST_F(CudfExpressionSelectionTest, functionRoot) {
   auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
+}
+
+// GPU SFI sits at priority 75, between the function tier (50) and AST (100),
+// so it only wins where neither of the others can represent the call.
+// bitwise_and is such a case: cudf::ast has no operator for it and no
+// CudfFunction implements it, but Velox has a simple function whose call()
+// body compiles for the device.
+TEST_F(CudfExpressionSelectionTest, gpuSfiClaimsWhatOtherEvaluatorsCannot) {
+  auto expr = optimizeTypedExpr(
+      "bitwise_and(a, b)", rowType_, queryCtx_.get(), execCtx_.get());
+  ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  EXPECT_NE(dynamic_cast<GpuSfiExpression*>(cudfExpr.get()), nullptr);
+}
+
+// registerCudf() is what puts the evaluator in the running, and it is easy to
+// add an evaluator that is never registered -- that is precisely the state this
+// work started from. Assert it is present, and at the configured priority.
+TEST_F(CudfExpressionSelectionTest, gpuSfiIsRegisteredAtItsConfiguredPriority) {
+  const auto& registry = getCudfExpressionEvaluatorRegistry();
+  const auto it = registry.find(kGpuSfiEvaluatorName);
+  ASSERT_NE(it, registry.end()) << "GPU SFI evaluator was never registered";
+  EXPECT_EQ(it->second.priority, CudfConfig::getInstance().gpuSfiExpressionPriority);
+}
+
+// GPU SFI only recognises calls, so the node kinds that are not calls -- a
+// bare column reference, a literal -- have to be picked up by some other
+// evaluator. Left uncovered they would fail the whole operator, so pin the
+// behaviour down rather than assume it.
+TEST_F(CudfExpressionSelectionTest, nonCallRootsAreStillCovered) {
+  for (const auto& sql : {"a", "42", "a + 1"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
+    EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+    EXPECT_NE(createCudfExpression(expr, rowType_, pool_.get()), nullptr);
+  }
+}
+
+// round and truncate each expose one call() with a defaulted trailing
+// parameter, which upstream uses to serve both arities from a single body. Both
+// arities have to be registered separately for either to resolve.
+TEST_F(CudfExpressionSelectionTest, gpuSfiMatchesBothRoundArities) {
+  // The decimal-places argument is INTEGER, and an integer literal parses as
+  // BIGINT, so the cast is what a real plan would arrive with after coercion.
+  for (const auto& sql :
+       {"round(d)",
+        "round(d, cast(2 as integer))",
+        "truncate(d)",
+        "truncate(d, cast(2 as integer))"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
+    EXPECT_TRUE(GpuSfiExpression::canEvaluate(expr));
+  }
+
+  // round covers the integral widths too, matching registerUnaryNumeric
+  // upstream. truncate does not, because upstream registers it for floating
+  // point only -- the asymmetry is Velox's, not ours.
+  auto roundBigint =
+      optimizeTypedExpr("round(a)", rowType_, queryCtx_.get(), execCtx_.get());
+  EXPECT_TRUE(GpuSfiExpression::canEvaluate(roundBigint));
+
+  auto truncateBigint = std::make_shared<core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a")},
+      "truncate");
+  EXPECT_FALSE(GpuSfiExpression::canEvaluate(truncateBigint));
+}
+
+// Integral arithmetic binds the Checked* structs, matching how Presto binds
+// these names on the CPU. Overflow does not raise yet -- see the TODO at the
+// registration site -- so the pairing that matters is that the checked struct
+// is what got registered, ready to become faithful when the error path lands,
+// rather than the plain struct that has no check to enable.
+TEST_F(CudfExpressionSelectionTest, gpuSfiClaimsCheckedIntegerArithmetic) {
+  for (const auto& sql : {"a + b", "a - b", "a * b", "negate(a)", "a / b"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
+    EXPECT_TRUE(GpuSfiExpression::canEvaluate(expr));
+  }
+
+  auto doubles = std::make_shared<core::CallTypedExpr>(
+      DOUBLE(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "d"),
+          std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "d")},
+      "plus");
+  EXPECT_TRUE(GpuSfiExpression::canEvaluate(doubles));
+}
+
+// A chained AND arrives flattened -- `a AND b AND c` is one three-argument call,
+// not nested pairs -- so a fixed-arity registration would match the two-term
+// case and silently miss every longer one. These are registered with a variadic
+// tail, which is what makes the arity irrelevant.
+TEST_F(CudfExpressionSelectionTest, gpuSfiMatchesVariadicConjunctions) {
+  for (const auto& sql :
+       {"a > 1 AND b > 2",
+        "a > 1 AND b > 2 AND c > 3",
+        "a > 1 AND b > 2 AND c > 3 AND a < 9",
+        "a > 1 OR b > 2",
+        "a > 1 OR b > 2 OR c > 3"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
+    EXPECT_TRUE(GpuSfiExpression::canEvaluate(expr));
+  }
+}
+
+// A variadic tail must not turn into a wildcard: it still has an element type,
+// and arguments of another type have to be refused.
+TEST_F(CudfExpressionSelectionTest, variadicTailStillChecksElementType) {
+  auto expr =
+      optimizeTypedExpr("not(a > 1)", rowType_, queryCtx_.get(), execCtx_.get());
+  EXPECT_TRUE(GpuSfiExpression::canEvaluate(expr));
+
+  // and() takes booleans; a bigint pack is not a match despite the same shape.
+  auto wrongElement = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a"),
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "b")},
+      "and");
+  EXPECT_FALSE(GpuSfiExpression::canEvaluate(wrongElement));
+}
+
+// DATE is INTEGER underneath, so signature matching has to read the logical
+// type name rather than the physical kind. Matching on the kind would let
+// year(date) bind to an integer expression and vice versa, and neither
+// mismatch is visible in the result type.
+TEST_F(CudfExpressionSelectionTest, gpuSfiExtractsDateFields) {
+  for (const auto& sql :
+       {"year(date)",
+        "month(date)",
+        "day(date)",
+        "quarter(date)",
+        "day_of_year(date)",
+        "day_of_week(date)"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
+    EXPECT_TRUE(GpuSfiExpression::canEvaluate(expr));
+  }
+
+  // DATE is INTEGER physically, so a matcher comparing physical kinds would
+  // bind this to the date overload and read an integer as a day count.
+  auto onInteger = std::make_shared<core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c")},
+      "year");
+  EXPECT_FALSE(GpuSfiExpression::canEvaluate(onInteger));
+
+  // The same extractors on a TIMESTAMP read a session timezone, which is host
+  // state, so those overloads are deliberately absent.
+  auto onTimestamp = optimizeTypedExpr(
+      "year(cast(date as timestamp))",
+      rowType_,
+      queryCtx_.get(),
+      execCtx_.get());
+  EXPECT_FALSE(GpuSfiExpression::canEvaluate(onTimestamp));
+}
+
+// A null literal argument is something GPU SFI cannot handle: the kernel reads
+// element 0 of a one-row column, and there is no value there. It has to say so
+// from canEvaluate(), where declining hands the node to another evaluator.
+// Refusing later, from create(), would instead throw and take down the whole
+// operator for an expression the function tier can evaluate perfectly well.
+TEST_F(CudfExpressionSelectionTest, gpuSfiDeclinesNullLiteralsRatherThanThrow) {
+  auto expr = optimizeTypedExpr(
+      "bitwise_and(a, cast(null as bigint))",
+      rowType_,
+      queryCtx_.get(),
+      execCtx_.get());
+
+  EXPECT_FALSE(GpuSfiExpression::canEvaluate(expr));
+
+  // bitwise_and is GPU SFI's alone, so declining leaves nothing to claim the
+  // node. The right outcome is the operator reporting itself ineligible and
+  // running on CPU -- reached through the plan-time gate, not by throwing out
+  // of expression compilation.
+  EXPECT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+}
+
+// Where another evaluator does support the call, declining is a hand-off
+// rather than a fallback: the expression still runs on GPU.
+TEST_F(CudfExpressionSelectionTest, nullLiteralFallsThroughToAnotherEvaluator) {
+  auto expr = optimizeTypedExpr(
+      "a + cast(null as bigint)", rowType_, queryCtx_.get(), execCtx_.get());
+  EXPECT_FALSE(GpuSfiExpression::canEvaluate(expr));
+  EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  EXPECT_NE(createCudfExpression(expr, rowType_, pool_.get()), nullptr);
+}
+
+// AST outranks GPU SFI, so a call both can handle must still go to AST. This
+// is what keeps the priority ordering meaningful rather than incidental.
+TEST_F(CudfExpressionSelectionTest, astStillOutranksGpuSfi) {
+  auto expr =
+      optimizeTypedExpr("a + c", rowType_, queryCtx_.get(), execCtx_.get());
+  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  EXPECT_EQ(dynamic_cast<GpuSfiExpression*>(cudfExpr.get()), nullptr);
 }
 
 TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {

@@ -17,16 +17,18 @@
 // Host side of the GPU simple-function evaluator. Compiled against real Velox
 // with no shadow include path; it reaches device code only through GpuLaunchFn.
 
-#include "velox/experimental/cudf/functions/GpuSfiExpression.h"
-
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
+#include "velox/experimental/cudf/functions/GpuFunctionLookup.h"
+#include "velox/experimental/cudf/functions/GpuSfiExpression.h"
+#include "velox/expression/SignatureBinder.h"
+#include "velox/type/TypeCoercer.h"
 
 #include <cudf/column/column_factories.hpp>
 
 #include <algorithm>
-#include <cctype>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -34,24 +36,26 @@ namespace {
 using gpu_sfi::GpuArgView;
 using gpu_sfi::GpuLaunchFn;
 
-/// Velox type name in the form registration recorded it. Registration derives
-/// its strings from SimpleTypeTrait<T>::name lowercased, which is the same
-/// source Velox's own TypeAnalysis reads, so the two agree by construction.
-///
-/// Direct comparison suffices while every registered signature is concrete. If
-/// generic signatures arrive -- Variadic, Generic<T>, decimal precision
-/// variables -- this becomes exec::SignatureBinder, which is what the CPU
-/// registry uses.
-std::string typeName(const TypePtr& type) {
-  std::string name{type->kindName()};
-  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return name;
+/// A null literal has no value for the kernel to read: constants are held as a
+/// one-row column that every row indexes at element 0. Nothing here can
+/// represent "that element is absent", so such a call has to be declined.
+bool hasNullLiteralArgument(const core::TypedExprPtr& expr) {
+  for (const auto& input : expr->inputs()) {
+    if (input->isConstantKind() &&
+        input->asUnchecked<core::ConstantTypedExpr>()->isNull()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 const gpu_sfi::GpuFunctionEntry* resolve(const core::TypedExprPtr& expr) {
   if (expr->kind() != core::ExprKind::kCall) {
+    return nullptr;
+  }
+  // Declined here rather than in create(): create() throwing would abort the
+  // operator, where declining lets a lower-priority evaluator take the node.
+  if (hasNullLiteralArgument(expr)) {
     return nullptr;
   }
   const auto& name = expr->asUnchecked<core::CallTypedExpr>()->name();
@@ -62,20 +66,28 @@ const gpu_sfi::GpuFunctionEntry* resolve(const core::TypedExprPtr& expr) {
     return nullptr;
   }
 
+  std::vector<TypePtr> argumentTypes;
+  argumentTypes.reserve(expr->inputs().size());
+  for (const auto& input : expr->inputs()) {
+    argumentTypes.push_back(input->type());
+  }
+
+  // Overload resolution is exec::SignatureBinder, the matcher
+  // SimpleFunctionRegistry::resolveFunction uses, so a GPU overload is chosen by
+  // the same rules as its CPU counterpart. Coercions are deliberately not
+  // requested: the CPU registry only allows them on an explicit second pass, and
+  // silently widening an argument would make the GPU result disagree with the
+  // CPU one for the same query.
   for (const auto& entry : entries->second) {
-    const auto& signature = entry.signature;
-    if (signature.argumentTypes.size() != expr->inputs().size() ||
-        signature.returnType != typeName(expr->type())) {
+    exec::SignatureBinder binder(
+        *entry.signature, argumentTypes, TypeCoercer::defaults());
+    if (!binder.tryBind()) {
       continue;
     }
-    bool matches = true;
-    for (size_t i = 0; i < signature.argumentTypes.size(); ++i) {
-      if (signature.argumentTypes[i] != typeName(expr->inputs()[i]->type())) {
-        matches = false;
-        break;
-      }
-    }
-    if (matches) {
+    // Binding proves the arguments fit; the return type still has to be the one
+    // the plan expects, since a bound generic could resolve to something else.
+    const auto returnType = binder.tryResolveReturnType();
+    if (returnType != nullptr && returnType->equivalent(*expr->type())) {
       return &entry;
     }
   }
@@ -124,18 +136,31 @@ std::shared_ptr<CudfExpression> GpuSfiExpression::create(
   std::vector<std::shared_ptr<CudfExpression>> subexpressions;
   arguments.reserve(expr->inputs().size());
 
+  // Compile time, so there is no operator stream to inherit. cuDF is built
+  // with the default-stream and default-mr arguments rejected, so both have to
+  // be named; the rest of the backend opts in the same way when materialising
+  // literals outside eval().
+  const auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+  const auto mr = get_output_mr();
+
   for (const auto& input : expr->inputs()) {
     if (input->isConstantKind()) {
       // One row is enough: the kernel reads element 0 for a constant.
-      auto scalar = makeScalarFromConstantExpr(input, pool);
-      VELOX_USER_CHECK(
-          scalar->is_valid(),
-          "Null literal argument to {} is not supported on GPU",
+      auto scalar =
+          makeScalarFromConstantExpr(input, pool, std::nullopt, stream);
+      // An invariant, not a user error: canEvaluate() already declined any
+      // call with a null literal, so reaching here means the two disagree.
+      VELOX_CHECK(
+          scalar->is_valid(stream),
+          "Null literal argument to {} reached create(); canEvaluate() should "
+          "have declined it",
           expr->toString());
-      constants.push_back(cudf::make_column_from_scalar(*scalar, 1));
+      constants.push_back(
+          cudf::make_column_from_scalar(*scalar, 1, stream, mr));
       arguments.push_back(
-          Argument{Argument::Source::kConstant,
-                   static_cast<int32_t>(constants.size() - 1)});
+          Argument{
+              Argument::Source::kConstant,
+              static_cast<int32_t>(constants.size() - 1)});
       continue;
     }
 
@@ -143,19 +168,20 @@ std::shared_ptr<CudfExpression> GpuSfiExpression::create(
             std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(input);
         field != nullptr && field->isInputColumn()) {
       arguments.push_back(
-          Argument{Argument::Source::kInputColumn,
-                   static_cast<int32_t>(inputRowSchema->getChildIdx(
-                       field->name()))});
+          Argument{
+              Argument::Source::kInputColumn,
+              static_cast<int32_t>(
+                  inputRowSchema->getChildIdx(field->name()))});
       continue;
     }
 
     // Anything this evaluator does not model itself is delegated, the way AST
     // delegates a subtree it cannot represent.
-    subexpressions.push_back(
-        createCudfExpression(input, inputRowSchema, pool));
+    subexpressions.push_back(createCudfExpression(input, inputRowSchema, pool));
     arguments.push_back(
-        Argument{Argument::Source::kSubexpression,
-                 static_cast<int32_t>(subexpressions.size() - 1)});
+        Argument{
+            Argument::Source::kSubexpression,
+            static_cast<int32_t>(subexpressions.size() - 1)});
   }
 
   return std::make_shared<GpuSfiExpression>(
@@ -198,8 +224,8 @@ ColumnOrView GpuSfiExpression::eval(
         break;
       }
       case Argument::Source::kConstant:
-        argViews.push_back(
-            toArgView(constants_.at(argument.index)->view(), /*isConstant=*/true));
+        argViews.push_back(toArgView(
+            constants_.at(argument.index)->view(), /*isConstant=*/true));
         break;
     }
   }

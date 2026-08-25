@@ -29,6 +29,7 @@
 // include path.
 
 #include "velox/experimental/cudf/functions/GpuExec.h"
+#include "velox/experimental/cudf/functions/GpuVariadicView.h"
 #include "velox/experimental/cudf/functions/GpuFunctionRegistry.h"
 
 #include "velox/core/Metaprogramming.h"
@@ -39,6 +40,7 @@
 #include <cudf/transform.hpp>
 #include <cudf/utilities/bit.hpp>
 #include <cudf/utilities/memory_resource.hpp>
+
 #include <rmm/device_uvector.hpp>
 
 #include <algorithm>
@@ -68,6 +70,75 @@ inline std::string lowercase(const char* name) {
   return result;
 }
 
+template <typename T>
+struct isVariadicArg : std::false_type {};
+
+template <typename T>
+struct isVariadicArg<Variadic<T>> : std::true_type {};
+
+/// How one declared type appears in a signature.
+///
+/// The device-side counterpart of Velox's TypeAnalysis, and specialised for the
+/// same reason: for most types the signature string is just the type name, but
+/// a parameterised type spells out its parameters and has to declare them as
+/// variables alongside. Reading SimpleTypeTrait<T>::name unconditionally gets
+/// that wrong precisely where it matters -- SimpleTypeTrait<ShortDecimal<P, S>>
+/// inherits TypeTraits<BIGINT>, so a decimal function would register as taking
+/// a bigint and never match a decimal call.
+template <typename T>
+struct SignatureType {
+  static std::string name() {
+    return lowercase(SimpleTypeTrait<T>::name);
+  }
+  static void collectVariables(std::vector<std::string>&) {}
+};
+
+template <typename P, typename S>
+struct SignatureType<ShortDecimal<P, S>> {
+  static std::string name() {
+    return "decimal(" + P::name() + "," + S::name() + ")";
+  }
+  static void collectVariables(std::vector<std::string>& variables) {
+    variables.push_back(P::name());
+    variables.push_back(S::name());
+  }
+};
+
+template <typename P, typename S>
+struct SignatureType<LongDecimal<P, S>> {
+  static std::string name() {
+    return "decimal(" + P::name() + "," + S::name() + ")";
+  }
+  static void collectVariables(std::vector<std::string>& variables) {
+    variables.push_back(P::name());
+    variables.push_back(S::name());
+  }
+};
+
+/// A pack contributes its element type, not itself: Velox writes a variadic
+/// signature as the element type plus a variableArity() flag, and matching then
+/// compares the element type against however many arguments arrive.
+template <typename T>
+struct SignatureType<Variadic<T>> {
+  static std::string name() {
+    return SignatureType<T>::name();
+  }
+  static void collectVariables(std::vector<std::string>& variables) {
+    SignatureType<T>::collectVariables(variables);
+  }
+};
+
+/// Every variable named anywhere in the signature, in declaration order.
+/// Duplicates are expected -- decimal(i1,i5) as both an argument and the return
+/// type names i1 twice -- and are dropped on the host side, where the builder
+/// rejects a redeclaration.
+template <typename... T>
+std::vector<std::string> signatureVariables() {
+  std::vector<std::string> variables;
+  (SignatureType<T>::collectVariables(variables), ...);
+  return variables;
+}
+
 } // namespace detail
 
 /// Resolves which entry point a simple function defines and adapts them to one
@@ -89,6 +160,15 @@ struct GpuUDFHolder {
   template <typename T>
   using exec_null_free_arg_type =
       typename gpu::GpuExec::resolver<T>::null_free_in_type;
+
+  /// How an argument reaches callNullable(). A scalar arrives as a pointer so
+  /// that null can be spelled; a variadic pack arrives as the view itself,
+  /// which reports nullity per element and is never absent as a whole.
+  template <typename T>
+  using exec_nullable_arg_type = std::conditional_t<
+      isGpuVariadicView<exec_arg_type<T>>::value,
+      exec_arg_type<T>,
+      const exec_arg_type<T>*>;
 
   DECLARE_METHOD_RESOLVER(call_resolver, call);
   DECLARE_METHOD_RESOLVER(call_nullable_resolver, callNullable);
@@ -127,14 +207,14 @@ struct GpuUDFHolder {
       call_nullable_resolver,
       void,
       exec_return_type&,
-      const exec_arg_type<TArgs>*...>::value;
+      exec_nullable_arg_type<TArgs>...>::value;
 
   static constexpr bool hasCallNullableBool = util::has_method<
       Fn,
       call_nullable_resolver,
       bool,
       exec_return_type&,
-      const exec_arg_type<TArgs>*...>::value;
+      exec_nullable_arg_type<TArgs>...>::value;
 
   static constexpr bool hasCall = hasCallVoid || hasCallBool;
   static constexpr bool hasCallNullFree =
@@ -157,8 +237,8 @@ struct GpuUDFHolder {
   /// True when the function cannot decline a row. Its output validity is then
   /// just the AND of the input masks, which cudf computes in one pass, so the
   /// launcher can skip building validity per row.
-  static constexpr bool alwaysSucceeds = isDefaultNullBehavior &&
-      !hasCallBool && !hasCallNullFreeBool;
+  static constexpr bool alwaysSucceeds =
+      isDefaultNullBehavior && !hasCallBool && !hasCallNullFreeBool;
 
   __device__ static bool invoke(
       exec_return_type& out,
@@ -179,7 +259,7 @@ struct GpuUDFHolder {
 
   __device__ static bool invokeNullable(
       exec_return_type& out,
-      const exec_arg_type<TArgs>*... args) {
+      exec_nullable_arg_type<TArgs>... args) {
     Fn fn;
     if constexpr (hasCallNullableBool) {
       return fn.callNullable(out, args...);
@@ -192,56 +272,101 @@ struct GpuUDFHolder {
   /// The signature Velox would derive from the same template arguments.
   static GpuFunctionSignature signature() {
     return GpuFunctionSignature{
-        detail::lowercase(SimpleTypeTrait<TReturn>::name),
-        {detail::lowercase(SimpleTypeTrait<TArgs>::name)...}};
+        detail::SignatureType<TReturn>::name(),
+        {detail::SignatureType<TArgs>::name()...},
+        (detail::isVariadicArg<TArgs>::value || ...),
+        detail::signatureVariables<TReturn, TArgs...>()};
   }
 };
 
 namespace detail {
 
-/// Row-to-element mapping for one argument. A constant resolves to element 0
-/// for every row, which is the same indirection DecodedVector performs on the
-/// CPU side and the reason a literal argument needs no special case here.
-__device__ inline cudf::size_type
-argIndex(const GpuArgView& argument, cudf::size_type row) {
-  return argument.isConstant ? 0 : row + argument.offset;
+/// True when the argument at slot I is null at this row.
+///
+/// A variadic slot is never itself null -- the view always exists -- so it
+/// answers false and leaves per-element nullity to the function, which is the
+/// only party that knows what a null element means for it.
+template <typename TIn>
+__device__ inline bool slotIsNull(
+    const GpuArgView* arguments,
+    std::size_t i,
+    cudf::size_type row) {
+  if constexpr (isGpuVariadicView<TIn>::value) {
+    return false;
+  } else {
+    return argIsNull(arguments[i], row);
+  }
 }
 
-__device__ inline bool argIsNull(
-    const GpuArgView& argument,
+/// The argument to pass for slot I to call() or callNullFree(), which take
+/// references and are never shown a null.
+///
+/// Variadic is last in a Velox signature, so the pack is exactly the tail of
+/// the descriptor array from this slot onward. That is why the count can be
+/// recovered as numArgs - i rather than having to be carried separately.
+///
+/// decltype(auto) because the two branches return differently and both are
+/// right: a scalar yields a reference into the column, while a view is a handle
+/// built here and so must come back by value.
+template <typename TIn>
+__device__ inline decltype(auto) slotArg(
+    const GpuArgView* arguments,
+    int32_t numArgs,
+    std::size_t i,
     cudf::size_type row) {
-  return argument.nullMask != nullptr &&
-      !cudf::bit_is_set(argument.nullMask, argIndex(argument, row));
+  if constexpr (isGpuVariadicView<TIn>::value) {
+    return TIn{arguments + i, numArgs - static_cast<int32_t>(i), row};
+  } else {
+    return argValue<TIn>(arguments[i], row);
+  }
 }
 
-template <typename T>
-__device__ inline const T& argValue(
-    const GpuArgView& argument,
+/// The argument to pass for slot I to callNullable(), where a null scalar is a
+/// null pointer. A variadic pack has no absent form to express, so it is passed
+/// by value exactly as it is to call().
+template <typename TIn>
+__device__ inline auto slotNullableArg(
+    const GpuArgView* arguments,
+    int32_t numArgs,
+    std::size_t i,
     cudf::size_type row) {
-  return static_cast<const T*>(argument.data)[argIndex(argument, row)];
+  if constexpr (isGpuVariadicView<TIn>::value) {
+    return TIn{arguments + i, numArgs - static_cast<int32_t>(i), row};
+  } else {
+    return argIsNull(arguments[i], row) ? static_cast<const TIn*>(nullptr)
+                                        : &argValue<TIn>(arguments[i], row);
+  }
 }
 
 /// Evaluates one row. `valid` is null only when no argument can be null and the
 /// function cannot decline a row, in which case there is nothing to record.
+///
+/// Both entry-point conventions go through slotValue(), which yields a pointer
+/// for a scalar argument and a view for a variadic one. call() takes references
+/// so its pointers are dereferenced on the way in; callNullable() takes
+/// pointers and passes them through, a null pointer meaning a null input. A
+/// view is passed by value in either case -- there is no "absent pack" for a
+/// pointer to express.
 template <typename Holder, typename TOut, typename... TIn, std::size_t... I>
 __device__ void evaluateRow(
     TOut* out,
     bool* valid,
     const GpuArgView* arguments,
+    int32_t numArgs,
     cudf::size_type row,
     std::index_sequence<I...>) {
   TOut result{};
 
   if constexpr (Holder::isDefaultNullBehavior) {
     // call() and callNullFree() are never shown a null.
-    if ((argIsNull(arguments[I], row) || ...)) {
+    if ((slotIsNull<TIn>(arguments, I, row) || ...)) {
       if (valid != nullptr) {
         valid[row] = false;
       }
       return;
     }
     bool const ok =
-        Holder::invoke(result, argValue<TIn>(arguments[I], row)...);
+        Holder::invoke(result, slotArg<TIn>(arguments, numArgs, I, row)...);
     if (ok) {
       out[row] = result;
     }
@@ -251,9 +376,7 @@ __device__ void evaluateRow(
   } else {
     // callNullable() asked to see nulls, which arrive as null pointers.
     bool const ok = Holder::invokeNullable(
-        result,
-        (argIsNull(arguments[I], row) ? nullptr
-                                      : &argValue<TIn>(arguments[I], row))...);
+        result, slotNullableArg<TIn>(arguments, numArgs, I, row)...);
     if (ok) {
       out[row] = result;
     }
@@ -268,6 +391,7 @@ __global__ void simpleFunctionKernel(
     TOut* out,
     bool* valid,
     const GpuArgView* arguments,
+    int32_t numArgs,
     cudf::size_type numRows) {
   auto const row = static_cast<cudf::size_type>(
       blockIdx.x * static_cast<unsigned>(blockDim.x) + threadIdx.x);
@@ -275,7 +399,7 @@ __global__ void simpleFunctionKernel(
     return;
   }
   evaluateRow<Holder, TOut, TIn...>(
-      out, valid, arguments, row, std::index_sequence_for<TIn...>{});
+      out, valid, arguments, numArgs, row, std::index_sequence_for<TIn...>{});
 }
 
 } // namespace detail
@@ -311,19 +435,19 @@ struct GpuSimpleFunctionAdapter {
     auto const needsValidity = anyNullable || !Holder::alwaysSucceeds;
 
     rmm::device_uvector<bool> valid(
-        needsValidity ? numRows : 0, stream, cudf::get_current_device_resource_ref());
+        needsValidity ? numRows : 0,
+        stream,
+        cudf::get_current_device_resource_ref());
 
     detail::simpleFunctionKernel<
         Holder,
         TOut,
         typename gpu::GpuExec::resolver<TArgs>::in_type...>
-        <<<detail::gridSize(numRows),
-           detail::kBlockSize,
-           0,
-           stream.value()>>>(
+        <<<detail::gridSize(numRows), detail::kBlockSize, 0, stream.value()>>>(
             out->mutable_view().template data<TOut>(),
             needsValidity ? valid.data() : nullptr,
             deviceArguments.data(),
+            static_cast<int32_t>(arguments.size()),
             numRows);
 
     if (needsValidity) {

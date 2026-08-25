@@ -518,6 +518,15 @@ if(ENABLE_ALL_WARNINGS)
 endif()
 
 if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
+  # nvcc picks its host compiler from PATH, which is not necessarily the one
+  # CMake selected for C++. When the two differ, the host pass of every .cu
+  # gets a different standard library than the rest of the build. That shows up
+  # far from its cause: with CMAKE_CXX_COMPILER at GCC 14 but /usr/bin/g++ at
+  # GCC 11, cuDF fails on a missing <format>. Must be set before
+  # enable_language(CUDA), which is when the value is read.
+  if(NOT DEFINED CMAKE_CUDA_HOST_COMPILER)
+    set(CMAKE_CUDA_HOST_COMPILER "${CMAKE_CXX_COMPILER}")
+  endif()
   enable_language(CUDA)
   # Use same C++ standard throughout
   set(CMAKE_CUDA_STANDARD ${CMAKE_CXX_STANDARD})
