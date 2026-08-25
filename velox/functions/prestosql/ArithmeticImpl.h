@@ -44,7 +44,7 @@ namespace facebook::velox::functions {
 /// We are trying to minimize the loss of precision by using the best path for
 /// the number, but the journey is likely not over yet.
 template <typename TNum, typename TDecimals, bool alwaysRoundNegDec = false>
-FOLLY_ALWAYS_INLINE TNum
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE TNum
 round(const TNum& number, const TDecimals& decimals = 0) {
   static_assert(!std::is_same_v<TNum, bool> && "round not supported for bool");
 
@@ -194,7 +194,9 @@ VELOX_GPU_COMPATIBLE T ceil(const T& arg) {
   return results;
 }
 
-FOLLY_ALWAYS_INLINE double truncate(double number, int32_t decimals) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE double truncate(
+    double number,
+    int32_t decimals) {
   const bool decNegative = (decimals < 0);
   const auto log10Size = DoubleUtil::kNumPowersOfTen; // 309
   if (decNegative && decimals <= -log10Size) {

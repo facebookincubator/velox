@@ -30,16 +30,17 @@
 // FunctionSignatureBuilder().returnType("double") -- so the host bridge can
 // rebuild a real FunctionSignature without the device side ever naming one.
 
+#include <cudf/column/column.hpp>
+#include <cudf/column/column_view.hpp>
+#include <cudf/types.hpp>
+
+#include <rmm/cuda_stream_view.hpp>
+#include <rmm/resource_ref.hpp>
+
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
-
-#include <cudf/column/column.hpp>
-#include <cudf/column/column_view.hpp>
-#include <cudf/types.hpp>
-#include <rmm/cuda_stream_view.hpp>
-#include <rmm/resource_ref.hpp>
 
 namespace facebook::velox::cudf_velox::gpu_sfi {
 
@@ -79,11 +80,15 @@ using GpuLaunchFn = std::unique_ptr<cudf::column> (*)(
 struct GpuFunctionSignature {
   std::string returnType;
   std::vector<std::string> argumentTypes;
-};
-
-struct GpuFunctionEntry {
-  GpuFunctionSignature signature;
-  GpuLaunchFn launch;
+  /// When true the last entry of argumentTypes is the element type of a
+  /// variadic pack rather than a single argument, so a call matches with any
+  /// number of trailing arguments of that type -- including none. Velox spells
+  /// the same thing as FunctionSignatureBuilder::variableArity().
+  bool variadicTail{false};
+  /// Integer variables named by the type strings above, such as the i1 and i5
+  /// in "decimal(i1,i5)". They have to be declared before the signature can be
+  /// built; may contain duplicates.
+  std::vector<std::string> integerVariables;
 };
 
 /// Registers `launch` under each alias.
@@ -93,23 +98,22 @@ struct GpuFunctionEntry {
 /// otherwise, in which case this returns false. Entries differing in signature
 /// coexist as overloads. Dialects therefore separate exactly as they do on the
 /// CPU side -- by registered name, by prefix, and by who registers last.
+/// The strings are parsed into an exec::FunctionSignature on the host side of
+/// the boundary; see GpuFunctionLookup.h for the resulting entry, and for why
+/// the registry is read through a separate header.
 bool registerGpuKernel(
     const std::vector<std::string>& aliases,
     GpuFunctionSignature signature,
     GpuLaunchFn launch,
     bool overwrite = true);
 
-/// Every registration made so far, keyed by lowercased function name. The host
-/// bridge walks this to publish each entry into the cuDF function registry.
-const std::unordered_map<std::string, std::vector<GpuFunctionEntry>>&
-gpuFunctionRegistry();
-
-/// Test support: drops all registrations.
-void clearGpuFunctionRegistry();
-
 /// Registers the PrestoSQL simple functions compiled for GPU. Defined in a .cu
 /// translation unit; declared here so host code can call it without seeing
 /// anything behind the shadow boundary.
 void registerPrestoGpuFunctions(const std::string& prefix);
+
+/// The SparkSQL counterpart. A separate translation unit because each dialect
+/// instantiates its own Fn<GpuExec>, which is what lets the two disagree.
+void registerSparkGpuFunctions(const std::string& prefix);
 
 } // namespace facebook::velox::cudf_velox::gpu_sfi

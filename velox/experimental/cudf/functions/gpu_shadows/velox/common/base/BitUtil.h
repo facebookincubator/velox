@@ -31,12 +31,13 @@
 #pragma once
 
 #include "folly/CPortability.h"
+#include "velox/common/base/Macros.h"
 
 #include <cstdint>
 
 namespace facebook::velox::bits {
 
-FOLLY_ALWAYS_INLINE int32_t popcount64(uint64_t value) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int32_t popcount64(uint64_t value) {
   return __builtin_popcountll(value);
 }
 
@@ -50,7 +51,7 @@ FOLLY_ALWAYS_INLINE int32_t popcount64(uint64_t value) {
 // treated as an empty range and yield 0; signed-right-shift of a
 // negative operand is implementation-defined and would otherwise sneak
 // through to the word-index math below.
-FOLLY_ALWAYS_INLINE int32_t
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int32_t
 countBits(const uint64_t* bits, int32_t begin, int32_t end) {
   if (begin < 0 || end <= begin) {
     return 0;

@@ -29,6 +29,7 @@
 #include "folly/CPortability.h"
 #include "velox/common/base/Doubles.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/ArithmeticImpl.h"
 
@@ -51,7 +52,7 @@ namespace {
 template <typename T>
 struct PlusFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(TInput& result, const TInput& a, const TInput& b) {
     result = plus(a, b);
   }
@@ -60,7 +61,7 @@ struct PlusFunction {
 template <typename T>
 struct MinusFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(TInput& result, const TInput& a, const TInput& b) {
     result = minus(a, b);
   }
@@ -69,7 +70,7 @@ struct MinusFunction {
 template <typename T>
 struct MultiplyFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(TInput& result, const TInput& a, const TInput& b) {
     result = multiply(a, b);
   }
@@ -127,7 +128,7 @@ struct IntervalMultiplyFunction {
 template <typename T>
 struct DivideFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(TInput& result, const TInput& a, const TInput& b)
 // depend on compiler have correct behaviour for divide by zero
 #if defined(__has_feature)
@@ -185,7 +186,7 @@ struct IntervalDivideFunction {
 template <typename T>
 struct ModulusFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(TInput& result, const TInput& a, const TInput& b) {
     result = modulus(a, b);
   }
@@ -233,7 +234,9 @@ struct PModFloatFunction {
 template <typename T>
 struct CeilFunction {
   template <typename TOutput, typename TInput = TOutput>
-  FOLLY_ALWAYS_INLINE void call(TOutput& result, const TInput& a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      TOutput& result,
+      const TInput& a) {
     if constexpr (std::is_integral_v<TInput>) {
       result = a;
     } else {
@@ -245,7 +248,9 @@ struct CeilFunction {
 template <typename T>
 struct FloorFunction {
   template <typename TOutput, typename TInput = TOutput>
-  FOLLY_ALWAYS_INLINE void call(TOutput& result, const TInput& a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      TOutput& result,
+      const TInput& a) {
     if constexpr (std::is_integral_v<TInput>) {
       result = a;
     } else {
@@ -257,7 +262,7 @@ struct FloorFunction {
 template <typename TExec>
 struct AbsFunction {
   template <typename T>
-  FOLLY_ALWAYS_INLINE void call(T& result, const T& a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(T& result, const T& a) {
     result = abs(a);
   }
 };
@@ -282,7 +287,9 @@ struct DecimalAbsFunction {
 template <typename T>
 struct NegateFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, const TInput& a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      TInput& result,
+      const TInput& a) {
     result = negate(a);
   }
 };
@@ -290,7 +297,7 @@ struct NegateFunction {
 template <typename T>
 struct RoundFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(TInput& result, const TInput& a, const int32_t b = 0) {
     result = round(a, b);
   }
@@ -299,7 +306,7 @@ struct RoundFunction {
 template <typename T>
 struct PowerFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(double& result, const TInput& a, const TInput& b) {
     result =
         std::isnan(b) ? std::numeric_limits<double>::quiet_NaN() : pow(a, b);
@@ -308,7 +315,7 @@ struct PowerFunction {
 
 template <typename T>
 struct ExpFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(double& result, double a) {
     result = std::exp(a);
   }
 };
@@ -325,7 +332,7 @@ struct MinFunction {
 template <typename T>
 struct ClampFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(TInput& result, const TInput& v, const TInput& lo, const TInput& hi) {
     // std::clamp emits less efficient ASM
     const TInput& a = v < lo ? lo : v;
@@ -335,21 +342,21 @@ struct ClampFunction {
 
 template <typename T>
 struct LnFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(double& result, double a) {
     result = std::log(a);
   }
 };
 
 template <typename T>
 struct Log2Function {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(double& result, double a) {
     result = std::log2(a);
   }
 };
 
 template <typename T>
 struct Log10Function {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(double& result, double a) {
     result = std::log10(a);
   }
 };
@@ -357,7 +364,7 @@ struct Log10Function {
 template <typename T>
 struct CosFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::cos(a);
   }
 };
@@ -365,7 +372,7 @@ struct CosFunction {
 template <typename T>
 struct CoshFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::cosh(a);
   }
 };
@@ -373,7 +380,7 @@ struct CoshFunction {
 template <typename T>
 struct AcosFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::acos(a);
   }
 };
@@ -381,7 +388,7 @@ struct AcosFunction {
 template <typename T>
 struct SinFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::sin(a);
   }
 };
@@ -389,7 +396,7 @@ struct SinFunction {
 template <typename T>
 struct AsinFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::asin(a);
   }
 };
@@ -397,7 +404,7 @@ struct AsinFunction {
 template <typename T>
 struct TanFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::tan(a);
   }
 };
@@ -405,7 +412,7 @@ struct TanFunction {
 template <typename T>
 struct TanhFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::tanh(a);
   }
 };
@@ -413,7 +420,7 @@ struct TanhFunction {
 template <typename T>
 struct AtanFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::atan(a);
   }
 };
@@ -421,21 +428,22 @@ struct AtanFunction {
 template <typename T>
 struct Atan2Function {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput y, TInput x) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
+  call(TInput& result, TInput y, TInput x) {
     result = std::atan2(y, x);
   }
 };
 
 template <typename T>
 struct SqrtFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(double& result, double a) {
     result = std::sqrt(a);
   }
 };
 
 template <typename T>
 struct CbrtFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(double& result, double a) {
     result = std::cbrt(a);
   }
 };
@@ -486,14 +494,14 @@ struct WidthBucketFunction {
 
 template <typename T>
 struct RadiansFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(double& result, double a) {
     result = a * (M_PI / 180);
   }
 };
 
 template <typename T>
 struct DegreesFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(double& result, double a) {
     result = a * (180 / M_PI);
   }
 };
@@ -501,7 +509,9 @@ struct DegreesFunction {
 template <typename T>
 struct SignFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, const TInput& a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      TInput& result,
+      const TInput& a) {
     if constexpr (std::is_floating_point<TInput>::value) {
       if (std::isnan(a)) {
         result = std::numeric_limits<TInput>::quiet_NaN();
@@ -523,21 +533,21 @@ struct InfinityFunction {
 
 template <typename T>
 struct IsFiniteFunction {
-  FOLLY_ALWAYS_INLINE void call(bool& result, double a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(bool& result, double a) {
     result = std::isfinite(a);
   }
 };
 
 template <typename T>
 struct IsInfiniteFunction {
-  FOLLY_ALWAYS_INLINE void call(bool& result, double a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(bool& result, double a) {
     result = std::isinf(a);
   }
 };
 
 template <typename T>
 struct IsNanFunction {
-  FOLLY_ALWAYS_INLINE void call(bool& result, double a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(bool& result, double a) {
     result = std::isnan(a);
   }
 };
@@ -655,19 +665,21 @@ struct EulerConstantFunction {
 
 template <typename TExec>
 struct TruncateFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(double& result, double a) {
     result = std::trunc(a);
   }
 
-  FOLLY_ALWAYS_INLINE void call(float& result, float a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(float& result, float a) {
     result = std::trunc(a);
   }
 
-  FOLLY_ALWAYS_INLINE void call(double& result, double a, int32_t n) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
+  call(double& result, double a, int32_t n) {
     result = truncate(a, n);
   }
 
-  FOLLY_ALWAYS_INLINE void call(float& result, float a, int32_t n) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
+  call(float& result, float a, int32_t n) {
     result = truncate(a, n);
   }
 };

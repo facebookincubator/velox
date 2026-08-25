@@ -24,85 +24,24 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/common/base/Status.h"
+#include "velox/type/DecimalArithmetic.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
 
 /// A static class that holds helper functions for DECIMAL type.
-class DecimalUtil {
+///
+/// The scalar arithmetic -- powers of ten, range checks, divideWithRoundUp --
+/// lives in DecimalArithmetic so that it can be used without the runtime type
+/// system. Inheriting brings those names in unqualified, so DecimalUtil::
+/// call sites are unaffected by the split.
+class DecimalUtil : public DecimalArithmetic {
  public:
-  static constexpr int128_t kPowersOfTen[LongDecimalType::kMaxPrecision + 1] = {
-      1,
-      10,
-      100,
-      1'000,
-      10'000,
-      100'000,
-      1'000'000,
-      10'000'000,
-      100'000'000,
-      1'000'000'000,
-      10'000'000'000,
-      100'000'000'000,
-      1'000'000'000'000,
-      10'000'000'000'000,
-      100'000'000'000'000,
-      1'000'000'000'000'000,
-      10'000'000'000'000'000,
-      100'000'000'000'000'000,
-      1'000'000'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)10,
-      1'000'000'000'000'000'000 * (int128_t)100,
-      1'000'000'000'000'000'000 * (int128_t)1'000,
-      1'000'000'000'000'000'000 * (int128_t)10'000,
-      1'000'000'000'000'000'000 * (int128_t)100'000,
-      1'000'000'000'000'000'000 * (int128_t)1'000'000,
-      1'000'000'000'000'000'000 * (int128_t)10'000'000,
-      1'000'000'000'000'000'000 * (int128_t)100'000'000,
-      1'000'000'000'000'000'000 * (int128_t)1'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)10'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)100'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)10'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)100'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)10'000'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)100'000'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000,
-      1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000 *
-          (int128_t)10,
-      1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000 *
-          (int128_t)100};
-
-  static constexpr int128_t kLongDecimalMin =
-      -kPowersOfTen[LongDecimalType::kMaxPrecision] + 1;
-  static constexpr int128_t kLongDecimalMax =
-      kPowersOfTen[LongDecimalType::kMaxPrecision] - 1;
-  static constexpr int128_t kShortDecimalMin =
-      -kPowersOfTen[ShortDecimalType::kMaxPrecision] + 1;
-  static constexpr int128_t kShortDecimalMax =
-      kPowersOfTen[ShortDecimalType::kMaxPrecision] - 1;
-
   /// Scale threshold for scientific notation.
   static constexpr int32_t kMinScientificNotationScale = 6;
 
   static constexpr uint64_t kInt64Mask = ~(static_cast<uint64_t>(1) << 63);
   static constexpr uint128_t kInt128Mask = (static_cast<uint128_t>(1) << 127);
-
-  FOLLY_ALWAYS_INLINE static void valueInRange(int128_t value) {
-    VELOX_USER_CHECK(
-        (value >= kLongDecimalMin && value <= kLongDecimalMax),
-        "Decimal overflow. Value '{}' is not in the range of Decimal Type",
-        value);
-  }
-
-  // Returns true if the precision can represent the value.
-  template <typename T>
-  FOLLY_ALWAYS_INLINE static bool valueInPrecisionRange(
-      T value,
-      uint8_t precision) {
-    return value < kPowersOfTen[precision] && value > -kPowersOfTen[precision];
-  }
 
   /// Helper function to convert a decimal value to string.
   static std::string toString(int128_t value, const Type& type);
@@ -302,39 +241,6 @@ class DecimalUtil {
     }
     output = rescaledValue;
     return Status::OK();
-  }
-
-  template <typename R, typename A, typename B>
-  inline static R divideWithRoundUp(
-      R& r,
-      A a,
-      B b,
-      bool noRoundUp,
-      uint8_t aRescale,
-      uint8_t /*bRescale*/) {
-    VELOX_USER_CHECK_NE(b, 0, "Division by zero");
-    int resultSign = 1;
-    R unsignedDividendRescaled(a);
-    if (a < 0) {
-      resultSign = -1;
-      unsignedDividendRescaled *= -1;
-    }
-    B unsignedDivisor(b);
-    if (b < 0) {
-      resultSign *= -1;
-      unsignedDivisor *= -1;
-    }
-    unsignedDividendRescaled = checkedMultiply<R>(
-        unsignedDividendRescaled,
-        R(DecimalUtil::kPowersOfTen[aRescale]),
-        "Decimal");
-    R quotient = unsignedDividendRescaled / unsignedDivisor;
-    R remainder = unsignedDividendRescaled % unsignedDivisor;
-    if (!noRoundUp && static_cast<const B>(remainder) * 2 >= unsignedDivisor) {
-      ++quotient;
-    }
-    r = quotient * resultSign;
-    return remainder * resultSign;
   }
 
   /// Returns the max required size to convert the decimal of this precision and

@@ -18,6 +18,7 @@
 #include <functional>
 #include <limits>
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/CheckedArithmeticImpl.h"
 
@@ -26,7 +27,7 @@ namespace facebook::velox::functions {
 template <typename T>
 struct CheckedPlusFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(TInput& result, const TInput& a, const TInput& b) {
     result = checkedPlus(a, b);
   }
@@ -35,7 +36,7 @@ struct CheckedPlusFunction {
 template <typename T>
 struct CheckedMinusFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(TInput& result, const TInput& a, const TInput& b) {
     result = checkedMinus(a, b);
   }
@@ -44,7 +45,7 @@ struct CheckedMinusFunction {
 template <typename T>
 struct CheckedMultiplyFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(TInput& result, const TInput& a, const TInput& b) {
     result = checkedMultiply(a, b);
   }
@@ -53,7 +54,7 @@ struct CheckedMultiplyFunction {
 template <typename T>
 struct CheckedDivideFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(TInput& result, const TInput& a, const TInput& b) {
     result = checkedDivide(a, b);
   }
@@ -62,7 +63,7 @@ struct CheckedDivideFunction {
 template <typename T>
 struct CheckedModulusFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(TInput& result, const TInput& a, const TInput& b) {
     result = checkedModulus(a, b);
   }
@@ -71,7 +72,7 @@ struct CheckedModulusFunction {
 template <typename T>
 struct CheckedNegateFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, const TInput& a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(TInput& result, const TInput& a) {
     result = checkedNegate(a);
   }
 };
