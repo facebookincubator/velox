@@ -1627,6 +1627,23 @@ TEST_P(SpillTest, gatherMerge) {
   gatherMergeTest(1234, 10, 100, true);
 }
 
+TEST_P(SpillTest, splitSingleWriteByWriteBufferSize) {
+  constexpr uint64_t kWriteBufferSize = 1 << 10;
+  constexpr int32_t kNumInputBatches = 2;
+  constexpr int32_t kNumRowsPerBatch = 1'000;
+
+  setupSpillState(
+      genPartitionIdSet(1),
+      kGB,
+      kWriteBufferSize,
+      kNumInputBatches,
+      kNumRowsPerBatch);
+
+  // Each input batch is larger than writeBufferSize and must produce multiple
+  // serialized pages instead of overshooting the limit in a single append.
+  ASSERT_GT(spillStats_.spillWrites, kNumInputBatches);
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     SpillTestSuite,
     SpillTest,

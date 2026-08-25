@@ -150,7 +150,7 @@ uint64_t SerializedPageFileWriter::write(
   checkNotFinished();
 
   uint64_t timeNs{0};
-  {
+  auto append = [&](const folly::Range<IndexRange*>& ranges) {
     NanosecondWallTimer timer(&timeNs);
     if (batch_ == nullptr) {
       batch_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
@@ -159,13 +159,34 @@ uint64_t SerializedPageFileWriter::write(
           1'000,
           serdeOptions_.get());
     }
-    batch_->append(rows, indices);
+    batch_->append(rows, ranges);
+  };
+
+  uint64_t writtenBytes{0};
+  if (writeBufferSize_ == 0) {
+    append(indices);
+    writtenBytes += flush();
+  } else {
+    VELOX_CHECK(!rows->containsLazyNotLoaded());
+    const auto batchSize = std::max<vector_size_t>(
+        1,
+        static_cast<vector_size_t>(
+            (static_cast<long double>(writeBufferSize_) * rows->size()) /
+            rows->estimateFlatSize()));
+    for (const auto& range : indices) {
+      for (vector_size_t offset = 0; offset < range.size; offset += batchSize) {
+        IndexRange chunk{
+            range.begin + offset, std::min(batchSize, range.size - offset)};
+        append(folly::Range(&chunk, 1));
+        if (batch_->size() >= writeBufferSize_) {
+          writtenBytes += flush();
+        }
+      }
+    }
   }
+
   updateAppendStats(rows->size(), timeNs);
-  if (batch_->size() < writeBufferSize_) {
-    return 0;
-  }
-  return flush();
+  return writtenBytes;
 }
 
 void SerializedPageFileWriter::finishFile() {
