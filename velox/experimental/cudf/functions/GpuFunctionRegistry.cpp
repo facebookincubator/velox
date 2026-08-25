@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/functions/GpuFunctionRegistry.h"
+#include "velox/experimental/cudf/functions/GpuFunctionLookup.h"
 
 #include <algorithm>
 #include <cctype>
 #include <mutex>
+#include <unordered_set>
 
 namespace facebook::velox::cudf_velox::gpu_sfi {
 namespace {
@@ -45,11 +46,32 @@ std::string sanitizeName(const std::string& name) {
   return result;
 }
 
-bool sameSignature(
-    const GpuFunctionSignature& lhs,
-    const GpuFunctionSignature& rhs) {
-  return lhs.returnType == rhs.returnType &&
-      lhs.argumentTypes == rhs.argumentTypes;
+/// Turns the strings that crossed the device boundary into the signature Velox
+/// would have built for the same function.
+///
+/// This is the one place the two worlds are stitched together, and it is a
+/// direct translation because the device side derives its strings from
+/// SimpleTypeTrait<T>::name -- the same source Velox's TypeAnalysis reads when
+/// it builds a signature for the CPU registration of that function.
+exec::FunctionSignaturePtr toVeloxSignature(
+    const GpuFunctionSignature& signature) {
+  exec::FunctionSignatureBuilder builder;
+  // Declared before use, and deduplicated because the builder treats a repeat
+  // as an error while a type naming the same variable twice is normal.
+  std::unordered_set<std::string> declared;
+  for (const auto& variable : signature.integerVariables) {
+    if (declared.insert(variable).second) {
+      builder.integerVariable(variable);
+    }
+  }
+  builder.returnType(signature.returnType);
+  for (const auto& argumentType : signature.argumentTypes) {
+    builder.argumentType(argumentType);
+  }
+  if (signature.variadicTail) {
+    builder.variableArity();
+  }
+  return builder.build();
 }
 
 } // namespace
@@ -59,15 +81,20 @@ bool registerGpuKernel(
     GpuFunctionSignature signature,
     GpuLaunchFn launch,
     bool overwrite) {
+  auto veloxSignature = toVeloxSignature(signature);
+
   std::lock_guard<std::mutex> guard(registryMutex());
 
   bool registeredAll = true;
   for (const auto& alias : aliases) {
     auto& entries = registry()[sanitizeName(alias)];
 
+    // FunctionSignature::operator== compares argument types, return type and
+    // variable arity together, so an overload differing only in arity is
+    // correctly a different entry rather than a replacement.
     auto existing = std::find_if(
         entries.begin(), entries.end(), [&](const GpuFunctionEntry& entry) {
-          return sameSignature(entry.signature, signature);
+          return *entry.signature == *veloxSignature;
         });
 
     if (existing != entries.end()) {
@@ -79,7 +106,7 @@ bool registerGpuKernel(
       continue;
     }
 
-    entries.push_back(GpuFunctionEntry{signature, launch});
+    entries.push_back(GpuFunctionEntry{veloxSignature, launch});
   }
   return registeredAll;
 }

@@ -36,7 +36,13 @@ target_include_directories(
 # as StringView resolve to GPU substitutes with different layouts. Its exported
 # surface is GpuSimpleFunctionLaunch.h, which names only cudf, rmm, and standard
 # library types so that nothing shadowed reaches a real-Velox translation unit.
-add_library(velox_cudf_gpu_simple_functions GpuPrestoFunctions.cu)
+set(VELOX_CUDF_GPU_SIMPLE_FUNCTION_SOURCES GpuPrestoFunctions.cu)
+if(${VELOX_ENABLE_SPARK_FUNCTIONS})
+  list(APPEND VELOX_CUDF_GPU_SIMPLE_FUNCTION_SOURCES GpuSparkFunctions.cu)
+endif()
+add_library(
+  velox_cudf_gpu_simple_functions ${VELOX_CUDF_GPU_SIMPLE_FUNCTION_SOURCES}
+)
 
 target_include_directories(
   velox_cudf_gpu_simple_functions
@@ -44,30 +50,45 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/gpu_shadows
 )
 
+# --diag-error=20011 promotes "calling a __host__ function from a __host__
+# __device__ function" from a warning to an error. nvcc only warns when the
+# call sits in a template instantiated for both, and then emits a kernel that
+# silently computes garbage rather than failing to launch -- so without this,
+# a simple function whose body reaches a host-only helper compiles clean and
+# returns wrong answers. Every diagnosis of that failure mode has cost hours;
+# the compiler can just tell us.
 target_compile_options(
   velox_cudf_gpu_simple_functions
-  PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
 )
 
+# Whole-program device compilation. The kernels live in
+# GpuSimpleFunctionAdapter.cuh and are instantiated here, so no device function
+# in this library calls one in another translation unit -- the host/device
+# boundary is GpuLaunchFn, an ordinary function pointer. Separable compilation
+# would only add a device-link step, and having two consumers each perform it
+# left GpuPrestoFunctions' __cudaRegisterLinkedBinary unresolved at link time.
 set_target_properties(
-  velox_cudf_gpu_simple_functions PROPERTIES CUDA_SEPARABLE_COMPILATION ON
-                                             POSITION_INDEPENDENT_CODE ON
+  velox_cudf_gpu_simple_functions
+  PROPERTIES CUDA_SEPARABLE_COMPILATION OFF POSITION_INDEPENDENT_CODE ON
 )
 
-target_link_libraries(
-  velox_cudf_gpu_simple_functions PRIVATE cudf::cudf velox_cudf_gpu_shadows
-)
+target_link_libraries(velox_cudf_gpu_simple_functions PRIVATE cudf::cudf velox_cudf_gpu_shadows)
 
 # Host side. Deliberately a separate target with no shadow include path, so it
 # sees real Velox headers and can name Velox types. It reaches the device code
 # above only through GpuLaunchFn, a function pointer over cudf and rmm types.
 # Keeping the two apart is what makes the boundary a build-level guarantee
 # rather than a convention.
-add_library(velox_cudf_gpu_function_bridge GpuFunctionRegistry.cpp
-                                           GpuSfiExpression.cpp)
+add_library(velox_cudf_gpu_function_bridge GpuFunctionRegistry.cpp GpuSfiExpression.cpp)
 
+# cudf is PUBLIC because GpuFunctionRegistry.h -- a header consumers include --
+# names cudf::column_view and cudf::data_type in GpuLaunchFn. Linking it
+# privately compiled here but left every consumer without cudf's include path.
 target_link_libraries(
   velox_cudf_gpu_function_bridge
-  PUBLIC velox_cudf_gpu_simple_functions
-  PRIVATE cudf::cudf velox_cudf_expression velox_cudf_expression_registry
+  PUBLIC velox_cudf_gpu_simple_functions cudf::cudf
+  PRIVATE velox_cudf_expression velox_cudf_expression_registry
 )
