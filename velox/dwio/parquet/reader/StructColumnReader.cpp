@@ -16,6 +16,7 @@
 
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 
+#include <algorithm>
 #include <optional>
 #include <tuple>
 
@@ -199,6 +200,8 @@ StructColumnReader::StructColumnReader(
 
     childSpecs[i]->setSubscript(children_.size() - 1);
   }
+  applyMissingFieldPolicy(
+      columnReaderOptions, params.nullStructIfAllFieldsMissing());
   ensureSyntheticRepDefSource(columnReaderOptions, params);
   auto type = reinterpret_cast<const ParquetTypeWithId*>(fileType_.get());
   if (type->parent()) {
@@ -208,6 +211,36 @@ StructColumnReader::StructColumnReader(
         repDefSourceLevelMode(*type, repDefSourceType(*repDefSourceReader_));
   }
   VELOX_DCHECK_EQ(type->parent() == nullptr, repDefSourceReader_ == nullptr);
+}
+
+void StructColumnReader::applyMissingFieldPolicy(
+    const dwio::common::ColumnReaderOptions& columnReaderOptions,
+    bool nullStructIfAllFieldsMissing) {
+  if (!nullStructIfAllFieldsMissing) {
+    return;
+  }
+
+  auto& childSpecs = scanSpec_->stableChildren();
+  if (childSpecs.empty()) {
+    scanSpec_->setConstantValue(
+        BaseVector::createNullConstant(requestedType_, 1, pool_));
+    return;
+  }
+
+  const bool useColumnNames = columnReaderOptions.columnMappingMode_ ==
+      dwio::common::ColumnMappingMode::kName;
+  if (useColumnNames &&
+      std::all_of(childSpecs.begin(), childSpecs.end(), [&](auto* childSpec) {
+        return childSpec->columnType() ==
+            common::ScanSpec::ColumnType::kRegular &&
+            isChildMissing(*childSpec);
+      })) {
+    scanSpec_->setConstantValue(
+        BaseVector::createNullConstant(requestedType_, 1, pool_));
+    return;
+  }
+
+  scanSpec_->setConstantValue(nullptr);
 }
 
 void StructColumnReader::ensureSyntheticRepDefSource(
@@ -349,6 +382,13 @@ void StructColumnReader::setNullsFromRepDefs(PageReader& pageReader) {
       nullptr,
       nullsInReadRange()->asMutable<uint64_t>(),
       0);
+  // Repeated parents still need rep/def levels to determine the number of
+  // structs. Preserve that count, but mark every struct null when schema
+  // evolution synthesized this field as a null constant.
+  if (scanSpec_->isConstant() && scanSpec_->constantValue()->isNullAt(0)) {
+    bits::fillBits(
+        nullsInReadRange()->asMutable<uint64_t>(), 0, numStructs, bits::kNull);
+  }
   formatData_->as<ParquetData>().setNulls(nullsInReadRange(), numStructs);
 }
 

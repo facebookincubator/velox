@@ -94,6 +94,10 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       const dwio::common::ColumnReaderOptions& columnReaderOptions,
       ParquetParams& params);
 
+  void applyMissingFieldPolicy(
+      const dwio::common::ColumnReaderOptions& columnReaderOptions,
+      bool nullStructIfAllFieldsMissing);
+
   dwio::common::SelectiveColumnReader* FOLLY_NONNULL findBestLeaf();
 
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
