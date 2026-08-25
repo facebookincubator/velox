@@ -249,6 +249,50 @@ TEST_F(ParquetReaderTest, parquetFieldIdColumnMapping) {
       *leafPool_);
 }
 
+// Regression test for isChildMissing incorrectly using the channel-index
+// guard (channel >= fileType->size) in kParquetFieldId mode.
+//
+// When a new column is inserted before existing ones (e.g. ADD COLUMN z FIRST),
+// the output channel of the trailing columns shifts up.  For a file written
+// with [a(fid=1), b(fid=2)] and read with requested schema
+// [z(fid=3), a(fid=1), b(fid=2)], b lands at output channel 2.  The file has
+// only 2 columns, so channel(b)=2 >= fileSize=2 would incorrectly mark b as
+// missing.  The fix extends the name-based path (containsChild) to cover
+// kParquetFieldId, which correctly identifies z as absent and a/b as present.
+TEST_F(ParquetReaderTest, parquetFieldIdInsertedColumnNotNullFilled) {
+  // Write [a(fid=1), b(fid=2)] — two rows.
+  auto writeType = ROW({"a", "b"}, {INTEGER(), VARCHAR()});
+  auto data = makeRowVector(
+      writeType->names(),
+      {makeFlatVector<int32_t>({1, 2}),
+       makeFlatVector<std::string>({"x", "y"})});
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetFieldIds = {
+      ParquetFieldId{1, {}}, ParquetFieldId{2, {}}};
+  auto* sink = write(data, writerOptions);
+
+  // Read back with output schema [z(fid=3), a(fid=1), b(fid=2)].
+  // z has no matching field id in the file → null-fill.
+  // a and b are present → must carry their original values.
+  const auto outputType =
+      ROW({"z", "a", "b"}, {INTEGER(), INTEGER(), VARCHAR()});
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(outputType);
+  readerOptions.setColumnMappingMode(ColumnMappingMode::kParquetFieldId);
+  readerOptions.setFieldIds(
+      {ParquetFieldId{3, {}}, ParquetFieldId{1, {}}, ParquetFieldId{2, {}}});
+
+  auto readerBundle =
+      readerBuilder(*sink, outputType).options(readerOptions).build();
+  auto expected = makeRowVector(
+      outputType->names(),
+      {makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+       makeFlatVector<int32_t>({1, 2}),
+       makeFlatVector<std::string>({"x", "y"})});
+  assertReadWithReaderAndExpected(
+      outputType, *readerBundle.rowReader, expected, *leafPool_);
+}
+
 TEST_F(ParquetReaderTest, nestedNameColumnMapping) {
   auto data = makeRowVector(
       {"nested"},
@@ -1687,7 +1731,7 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyStructValue) {
   }
 }
 
-TEST_F(ParquetReaderTest, struct_of_array_of_array) {
+TEST_F(ParquetReaderTest, structOfArrayOfArray) {
   //  The Schema is of type
   //  message hive_schema {
   //    optional group test {

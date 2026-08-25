@@ -29,6 +29,7 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <folly/Random.h>
+#include <folly/container/F14Set.h>
 #include <folly/hash/Hash.h>
 #include <glog/logging.h>
 
@@ -40,16 +41,20 @@
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/FixedBitArray.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
 #include "velox/dwio/nimble/velox/ChunkedStream.h"
+#include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/VeloxReader.h"
 #include "velox/dwio/nimble/writer/EncodingSelectionPolicyFactory.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
@@ -64,6 +69,11 @@ using ::facebook::velox::RowTypePtr;
 using ::facebook::velox::TypePtr;
 using ::facebook::velox::VectorPtr;
 using ::facebook::velox::fuzzer::FuzzerGenerator;
+
+// Writable encodings that this fuzzer target intentionally does not force.
+// This is not a global unsupported-encoding list.
+constexpr auto kExcludedFuzzerCandidateEncodings =
+    std::to_array({EncodingType::SubIntSplit});
 
 // Scalar types the Nimble writer round-trips with type identity.
 // FieldWriter::create dispatches on the physical TypeKind, so DATE, TIME,
@@ -141,7 +151,6 @@ bool isNumericCompatible(EncodingType encodingType) {
       return true;
     // Gated on isIntegralType<physicalType>(), which holds for float and
     // double as well since their physical types are uint32_t and uint64_t.
-    case EncodingType::PFOR:
     case EncodingType::SimdForBitpack:
     case EncodingType::Huffman:
       return true;
@@ -266,7 +275,8 @@ void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
       : (uint64_t{1} << folly::Random::rand32(14, rng));
   options.maxStreamChunkRawSize = uint64_t{1}
       << (10 + folly::Random::rand32(12, rng));
-  options.enableChunkIndex = folly::Random::oneIn(2, rng);
+  options.enableChunkIndex =
+      options.enableChunking && folly::Random::oneIn(2, rng);
   options.enableStreamDeduplication = folly::Random::oneIn(2, rng);
   options.fixedBitWidthUseExactBits = folly::Random::oneIn(2, rng);
   options.allowNestedAlpSelection = folly::Random::oneIn(2, rng);
@@ -324,6 +334,143 @@ uint64_t totalRows(const std::vector<VectorPtr>& batches) {
     rows += batch->size();
   }
   return rows;
+}
+
+// Identifies stream IDs whose values have special meaning when validating
+// chunk null counts and recording scalar-versus-structural coverage.
+struct PhysicalStreamRoles {
+  // Streams that store parent validity as Boolean values.
+  folly::F14FastSet<uint32_t> nullStreams;
+  // Streams that directly store scalar column values.
+  folly::F14FastSet<uint32_t> scalarStreams;
+};
+
+// Collects the physical stream roles represented by a serialized schema.
+void collectPhysicalStreamRoles(const Type& type, PhysicalStreamRoles& roles) {
+  switch (type.kind()) {
+    case Kind::Scalar:
+      roles.scalarStreams.insert(type.asScalar().scalarDescriptor().offset());
+      return;
+    case Kind::TimestampMicroNano: {
+      const auto& timestamp = type.asTimestampMicroNano();
+      roles.scalarStreams.insert(timestamp.microsDescriptor().offset());
+      roles.scalarStreams.insert(timestamp.nanosDescriptor().offset());
+      return;
+    }
+    case Kind::Row: {
+      const auto& row = type.asRow();
+      roles.nullStreams.insert(row.nullsDescriptor().offset());
+      for (size_t i = 0; i < row.childrenCount(); ++i) {
+        collectPhysicalStreamRoles(*row.childAt(i), roles);
+      }
+      return;
+    }
+    case Kind::Array:
+      collectPhysicalStreamRoles(*type.asArray().elements(), roles);
+      return;
+    case Kind::ArrayWithOffsets:
+      collectPhysicalStreamRoles(*type.asArrayWithOffsets().elements(), roles);
+      return;
+    case Kind::Map: {
+      const auto& map = type.asMap();
+      collectPhysicalStreamRoles(*map.keys(), roles);
+      collectPhysicalStreamRoles(*map.values(), roles);
+      return;
+    }
+    case Kind::SlidingWindowMap: {
+      const auto& map = type.asSlidingWindowMap();
+      collectPhysicalStreamRoles(*map.keys(), roles);
+      collectPhysicalStreamRoles(*map.values(), roles);
+      return;
+    }
+    case Kind::FlatMap: {
+      const auto& flatMap = type.asFlatMap();
+      roles.nullStreams.insert(flatMap.nullsDescriptor().offset());
+      for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
+        collectPhysicalStreamRoles(*flatMap.childAt(i), roles);
+      }
+      return;
+    }
+  }
+  NIMBLE_UNREACHABLE("Unsupported schema kind: {}.", type.kind());
+}
+
+/// Materializes a nullable encoding and counts null entries in the bitmap.
+template <typename T>
+uint32_t materializedNullCount(
+    Encoding& encoding,
+    velox::memory::MemoryPool* pool) {
+  const auto rowCount = encoding.rowCount();
+  Vector<T> values{pool, rowCount};
+  Vector<char> nonNulls{
+      pool, static_cast<uint32_t>(FixedBitArray::bufferSize(rowCount, 1))};
+  nonNulls.zero_out();
+  const auto returnedNonNullCount = encoding.materializeNullable(
+      rowCount, values.data(), [&]() { return nonNulls.data(); });
+
+  uint32_t bitmapNonNullCount{0};
+  for (uint32_t row = 0; row < rowCount; ++row) {
+    bitmapNonNullCount += velox::bits::isBitSet(
+        reinterpret_cast<const uint8_t*>(nonNulls.data()), row);
+  }
+  NIMBLE_CHECK_EQ(
+      returnedNonNullCount,
+      bitmapNonNullCount,
+      "Nullable encoding returned a non-null count inconsistent with its bitmap.");
+  return rowCount - bitmapNonNullCount;
+}
+
+/// Returns the null count for a chunk by decoding its content independently.
+/// Null-only streams count false Boolean values; nullable typed streams
+/// materialize the bitmap; non-nullable streams return 0.
+uint32_t decodedNullCount(
+    Encoding& encoding,
+    bool isNullStream,
+    velox::memory::MemoryPool* pool) {
+  if (isNullStream) {
+    NIMBLE_CHECK_EQ(
+        encoding.dataType(),
+        DataType::Bool,
+        "Null-only stream must contain Boolean validity values.");
+    Vector<bool> nonNulls{pool, encoding.rowCount()};
+    encoding.materialize(encoding.rowCount(), nonNulls.data());
+    return static_cast<uint32_t>(
+        std::count(nonNulls.begin(), nonNulls.end(), false));
+  }
+
+  if (!encoding.isNullable()) {
+    return 0;
+  }
+
+  switch (encoding.dataType()) {
+    case DataType::Bool:
+      return materializedNullCount<bool>(encoding, pool);
+    case DataType::Int8:
+      return materializedNullCount<int8_t>(encoding, pool);
+    case DataType::Uint8:
+      return materializedNullCount<uint8_t>(encoding, pool);
+    case DataType::Int16:
+      return materializedNullCount<int16_t>(encoding, pool);
+    case DataType::Uint16:
+      return materializedNullCount<uint16_t>(encoding, pool);
+    case DataType::Int32:
+      return materializedNullCount<int32_t>(encoding, pool);
+    case DataType::Uint32:
+      return materializedNullCount<uint32_t>(encoding, pool);
+    case DataType::Int64:
+      return materializedNullCount<int64_t>(encoding, pool);
+    case DataType::Uint64:
+      return materializedNullCount<uint64_t>(encoding, pool);
+    case DataType::Float:
+      return materializedNullCount<float>(encoding, pool);
+    case DataType::Double:
+      return materializedNullCount<double>(encoding, pool);
+    case DataType::String:
+      return materializedNullCount<std::string_view>(encoding, pool);
+    case DataType::Undefined:
+      NIMBLE_UNREACHABLE("Nullable encoding has undefined data type.");
+  }
+  NIMBLE_UNREACHABLE("Unknown data type: {}.", encoding.dataType());
 }
 
 const std::vector<EncodingType>& unfilteredCandidateEncodings() {
@@ -730,23 +877,16 @@ std::string_view toString(ReaderPath readerPath) {
 }
 
 std::vector<EncodingType> allCandidateEncodings() {
-  return {
-      EncodingType::Constant,
-      EncodingType::Trivial,
-      EncodingType::FixedBitWidth,
-      EncodingType::MainlyConstant,
-      EncodingType::SparseBool,
-      EncodingType::Dictionary,
-      EncodingType::RLE,
-      EncodingType::Varint,
-      EncodingType::ALP,
-      EncodingType::BlockBitPacking,
-      EncodingType::Fsst,
-      EncodingType::DeltaBlock,
-      EncodingType::PFOR,
-      EncodingType::SimdForBitpack,
-      EncodingType::Huffman,
-  };
+  // The fuzzer's repair phase forces each candidate through
+  // `nimble.encoding_selection_config` using the `encodings:` key. Keep this
+  // list derived from the same writable-encoding source as that parser, so
+  // deprecating an encoding for new writes does not leave the fuzzer forcing a
+  // config string production code now rejects.
+  auto encodings = ManualEncodingSelectionPolicyFactory::possibleEncodings();
+  for (const auto encodingType : kExcludedFuzzerCandidateEncodings) {
+    std::erase(encodings, encodingType);
+  }
+  return encodings;
 }
 
 bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
@@ -760,8 +900,8 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
     return isStringCompatible(encodingType);
   }
 
-  // Gated on isFloatingPointType<T>() / isIntegralType<T>(), which unlike the
-  // PFOR family test the logical type, so these two split cleanly.
+  // Gated on isFloatingPointType<T>() / isIntegralType<T>(), which test the
+  // logical type, so these two split cleanly.
   if (encodingType == EncodingType::ALP) {
     return isFloatingPointDataType(dataType);
   }
@@ -779,7 +919,6 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
 
 bool isIntegralOnlyEncoding(EncodingType encodingType) {
   return encodingType == EncodingType::DeltaBlock ||
-      encodingType == EncodingType::PFOR ||
       encodingType == EncodingType::SimdForBitpack ||
       encodingType == EncodingType::Huffman;
 }
@@ -830,9 +969,9 @@ std::string NimbleWriterFuzzer::writeFile(
       selectionConfig);
   EncodingSelectionPolicyCreator policyCreator = std::move(*parsedCreator);
 
-  // The write-side gate admits floating point directly for PFOR, SimdForBitpack
-  // and Huffman. A Nullable float's nested policy can also admit DeltaBlock
-  // after the logical type becomes its Uint32/Uint64 physical type.
+  // The write-side gate admits floating point directly for SimdForBitpack and
+  // Huffman. A Nullable float's nested policy can also admit DeltaBlock after
+  // the logical type becomes its Uint32/Uint64 physical type.
   writerOptions.encodingSelectionPolicyCreator = encodingType.has_value()
       ? gateFloatingPointStreams(
             std::move(policyCreator),
@@ -843,8 +982,240 @@ std::string NimbleWriterFuzzer::writeFile(
   // flushAfterWrite=false leaves stripe boundaries to the flush policy; the
   // helper's default would cut a stripe after every batch and make every flush
   // regime identical.
-  return test::createNimbleFile(
+  const bool chunkStatsEnabled = writerOptions.enableChunkIndex;
+  auto file = test::createNimbleFile(
       rootPool_, batches, std::move(writerOptions), /*flushAfterWrite=*/false);
+  verifyChunkStatsMetadata(file, chunkStatsEnabled);
+  return file;
+}
+
+void NimbleWriterFuzzer::verifyChunkStatsMetadata(
+    const std::string& file,
+    bool chunkStatsEnabled) {
+  struct PhysicalChunk {
+    uint32_t offset;
+    uint32_t size;
+    CompressionType compressionType;
+  };
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = TabletReader::create(
+      readFile, leafPool_.get(), test::makeTestTabletOptions(leafPool_.get()));
+
+  auto schemaSection = tablet->loadOptionalSection(std::string(kSchemaSection));
+  NIMBLE_CHECK(schemaSection.has_value(), "Schema not found.");
+  const auto nimbleSchema =
+      SchemaDeserializer::deserialize(schemaSection->content());
+  PhysicalStreamRoles roles;
+  collectPhysicalStreamRoles(*nimbleSchema, roles);
+
+  if (chunkStatsEnabled) {
+    ++chunkStatsCoverage_.numIndexedFiles;
+  } else {
+    ++chunkStatsCoverage_.numUnindexedFiles;
+  }
+
+  folly::F14FastSet<uint32_t> stripeGroups;
+  for (uint32_t stripe = 0; stripe < tablet->stripeCount(); ++stripe) {
+    const auto stripeIdentifier = tablet->stripeIdentifier(stripe);
+    const auto& chunkStats = stripeIdentifier.chunkStats();
+    if (!chunkStatsEnabled) {
+      NIMBLE_CHECK_NULL(
+          chunkStats,
+          "Chunk stats present in stripe {} but chunk index is disabled (seed {}).",
+          stripe,
+          options_.seed);
+    }
+    if (!chunkStats) {
+      continue;
+    }
+    ++chunkStatsCoverage_.numStripes;
+
+    index::test::ChunkStatsTestHelper chunkHelper(chunkStats.get());
+    stripeGroups.insert(chunkHelper.firstStripe());
+    const uint32_t stripeOffset = stripe - chunkHelper.firstStripe();
+    NIMBLE_CHECK_LT(stripeOffset, chunkHelper.stripeCount());
+
+    const uint32_t streamCount = tablet->streamCount(stripeIdentifier);
+    NIMBLE_CHECK_EQ(streamCount, chunkHelper.streamCount());
+    std::vector<uint32_t> streamIdentifiers(streamCount);
+    std::iota(streamIdentifiers.begin(), streamIdentifiers.end(), 0);
+    auto streams = tablet->load(stripeIdentifier, streamIdentifiers);
+
+    for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
+      auto streamStats = chunkHelper.streamStats(streamId);
+      NIMBLE_CHECK_EQ(
+          streamStats.chunkCounts.size(), chunkHelper.stripeCount());
+      NIMBLE_CHECK_EQ(
+          streamStats.chunkRows.size(), streamStats.chunkOffsets.size());
+      NIMBLE_CHECK_EQ(
+          streamStats.chunkRows.size(), streamStats.chunkNullCounts.size());
+      const uint32_t beginChunk =
+          stripeOffset == 0 ? 0 : streamStats.chunkCounts[stripeOffset - 1];
+      const uint32_t endChunk = streamStats.chunkCounts[stripeOffset];
+      NIMBLE_CHECK_LE(beginChunk, endChunk);
+      NIMBLE_CHECK_LE(endChunk, streamStats.chunkRows.size());
+      const uint32_t chunkCount = endChunk - beginChunk;
+
+      auto& stream = streams[streamId];
+      std::string_view rawStream;
+      if (stream != nullptr) {
+        rawStream = stream->getStream();
+      }
+      NIMBLE_CHECK_EQ(
+          rawStream.size(), tablet->streamSize(stripeIdentifier, streamId));
+      NIMBLE_CHECK_LE(rawStream.size(), std::numeric_limits<uint32_t>::max());
+
+      std::vector<PhysicalChunk> physicalChunks;
+      uint32_t offset{0};
+      while (offset < rawStream.size()) {
+        NIMBLE_CHECK_LE(
+            kChunkHeaderSize,
+            rawStream.size() - offset,
+            "Truncated chunk header in stripe {}, stream {}.",
+            stripe,
+            streamId);
+        const char* cursor = rawStream.data() + offset;
+        const auto header = readChunkHeader(cursor);
+        const uint64_t size = uint64_t{kChunkHeaderSize} + header.length;
+        NIMBLE_CHECK_LE(
+            size,
+            rawStream.size() - offset,
+            "Chunk exceeds stripe {}, stream {} boundary.",
+            stripe,
+            streamId);
+        physicalChunks.push_back(
+            {offset, static_cast<uint32_t>(size), header.compressionType});
+        offset += size;
+      }
+      NIMBLE_CHECK_EQ(offset, rawStream.size());
+      NIMBLE_CHECK_EQ(
+          chunkCount,
+          physicalChunks.size(),
+          "Chunk count mismatch in stripe {}, stream {} (seed {}).",
+          stripe,
+          streamId,
+          options_.seed);
+
+      if (chunkCount == 0) {
+        NIMBLE_CHECK_NULL(stream);
+        continue;
+      }
+      NIMBLE_CHECK_NOT_NULL(stream);
+
+      if (roles.scalarStreams.contains(streamId)) {
+        ++chunkStatsCoverage_.numScalarStreams;
+      } else {
+        ++chunkStatsCoverage_.numStructuralStreams;
+      }
+      if (chunkCount > 1) {
+        ++chunkStatsCoverage_.numMultiChunkStreams;
+      }
+
+      auto streamIndex = chunkStats->createStreamIndex(
+          stripe, streamId, static_cast<uint32_t>(rawStream.size()));
+      NIMBLE_CHECK_EQ(streamIndex != nullptr, chunkCount > 1);
+
+      InMemoryChunkedStream chunkedStream{*leafPool_, std::move(stream)};
+      Buffer stringBuffer{*leafPool_};
+      auto stringBufferFactory = [&stringBuffer](uint32_t size) -> void* {
+        return stringBuffer.reserve(size);
+      };
+      uint32_t previousRowBoundary{0};
+      for (uint32_t chunk = 0; chunk < chunkCount; ++chunk) {
+        const uint32_t metadataChunk = beginChunk + chunk;
+        const auto& physicalChunk = physicalChunks.at(chunk);
+        NIMBLE_CHECK_EQ(
+            streamStats.chunkOffsets[metadataChunk], physicalChunk.offset);
+
+        const uint32_t nextOffset = chunk + 1 < chunkCount
+            ? streamStats.chunkOffsets[metadataChunk + 1]
+            : static_cast<uint32_t>(rawStream.size());
+        NIMBLE_CHECK_EQ(nextOffset - physicalChunk.offset, physicalChunk.size);
+
+        const uint32_t rowBoundary = streamStats.chunkRows[metadataChunk];
+        NIMBLE_CHECK_GT(rowBoundary, previousRowBoundary);
+        const uint32_t chunkRows = rowBoundary - previousRowBoundary;
+        NIMBLE_CHECK(chunkedStream.hasNext());
+        auto encoding = EncodingFactory().create(
+            *leafPool_, chunkedStream.nextChunk(), stringBufferFactory);
+        NIMBLE_CHECK_NOT_NULL(encoding);
+        NIMBLE_CHECK_EQ(
+            encoding->rowCount(),
+            chunkRows,
+            "Chunk row count mismatch in stripe {}, stream {}, chunk {}.",
+            stripe,
+            streamId,
+            chunk);
+
+        const auto expectedNullCount = decodedNullCount(
+            *encoding, roles.nullStreams.contains(streamId), leafPool_.get());
+        const auto indexedNullCount =
+            streamStats.chunkNullCounts[metadataChunk];
+        NIMBLE_CHECK_EQ(
+            indexedNullCount,
+            expectedNullCount,
+            "Chunk null count mismatch in stripe {}, stream {}, chunk {} (seed {}).",
+            stripe,
+            streamId,
+            chunk,
+            options_.seed);
+        NIMBLE_CHECK_EQ(indexedNullCount > 0, expectedNullCount > 0);
+
+        if (indexedNullCount == 0) {
+          ++chunkStatsCoverage_.numZeroNullChunks;
+        } else if (indexedNullCount == chunkRows) {
+          ++chunkStatsCoverage_.numFullyNullChunks;
+        } else {
+          ++chunkStatsCoverage_.numPartiallyNullChunks;
+        }
+        if (physicalChunk.compressionType == CompressionType::Uncompressed) {
+          ++chunkStatsCoverage_.numUncompressedChunks;
+        } else {
+          ++chunkStatsCoverage_.numCompressedChunks;
+        }
+        if (chunk == 0) {
+          ++chunkStatsCoverage_.numFirstChunks;
+        }
+        if (chunk + 1 == chunkCount) {
+          ++chunkStatsCoverage_.numFinalChunks;
+        }
+        if (chunk > 0 && chunk + 1 < chunkCount) {
+          ++chunkStatsCoverage_.numMiddleChunks;
+        }
+
+        if (streamIndex) {
+          const auto first = streamIndex->lookupChunk(previousRowBoundary);
+          const auto last = streamIndex->lookupChunk(rowBoundary - 1);
+          NIMBLE_CHECK_EQ(first.chunkOffset, physicalChunk.offset);
+          NIMBLE_CHECK_EQ(first.chunkSize, physicalChunk.size);
+          NIMBLE_CHECK_EQ(first.rowOffset, previousRowBoundary);
+          NIMBLE_CHECK_EQ(last.chunkIndex, first.chunkIndex);
+          NIMBLE_CHECK_EQ(last.chunkOffset, first.chunkOffset);
+          const auto lookupNullCount =
+              streamIndex->chunkNullCount(first.chunkIndex);
+          NIMBLE_CHECK(
+              lookupNullCount.has_value(),
+              "Chunk {} of stripe {}, stream {} has no indexed null count.",
+              chunk,
+              stripe,
+              streamId);
+          NIMBLE_CHECK_EQ(*lookupNullCount, indexedNullCount);
+          if (chunk + 1 < chunkCount) {
+            const auto next = streamIndex->lookupChunk(rowBoundary);
+            NIMBLE_CHECK_NE(next.chunkIndex, first.chunkIndex);
+            NIMBLE_CHECK_EQ(next.chunkOffset, physicalChunks[chunk + 1].offset);
+          }
+        }
+        previousRowBoundary = rowBoundary;
+      }
+      NIMBLE_CHECK(!chunkedStream.hasNext());
+      if (streamIndex) {
+        NIMBLE_CHECK_EQ(streamIndex->rowCount(), previousRowBoundary);
+      }
+    }
+  }
+  chunkStatsCoverage_.numStripeGroups += stripeGroups.size();
 }
 
 void NimbleWriterFuzzer::readAndVerify(
@@ -1414,7 +1785,7 @@ void NimbleWriterFuzzer::logPairCoverage() const {
     std::vector<std::string> unapplied;
     std::vector<std::string> incompatible;
     for (const auto encodingType : allCandidateEncodings()) {
-      // The integral-only four are withheld from floating point on purpose
+      // Integral-only encodings are withheld from floating point on purpose
       // (T283330065), so for those streams they are unusable rather than
       // merely unapplied.
       if (!isTypeCompatible(encodingType, dataType) ||
@@ -1482,6 +1853,58 @@ void NimbleWriterFuzzer::logCoverage() const {
         stats.numForcedChunksFellBack,
         stats.numChunksApplied == 0 ? "   <-- NEVER APPLIED" : "");
   }
+}
+
+void NimbleWriterFuzzer::logChunkStatsCoverage() const {
+  LOG(WARNING) << fmt::format(
+      "Chunk-index coverage: files(indexed={},unindexed={}) groups={} stripes={} streams(scalar={},structural={},multiChunk={}) chunks(first={},middle={},final={},zeroNull={},partialNull={},fullNull={},compressed={},uncompressed={})",
+      chunkStatsCoverage_.numIndexedFiles,
+      chunkStatsCoverage_.numUnindexedFiles,
+      chunkStatsCoverage_.numStripeGroups,
+      chunkStatsCoverage_.numStripes,
+      chunkStatsCoverage_.numScalarStreams,
+      chunkStatsCoverage_.numStructuralStreams,
+      chunkStatsCoverage_.numMultiChunkStreams,
+      chunkStatsCoverage_.numFirstChunks,
+      chunkStatsCoverage_.numMiddleChunks,
+      chunkStatsCoverage_.numFinalChunks,
+      chunkStatsCoverage_.numZeroNullChunks,
+      chunkStatsCoverage_.numPartiallyNullChunks,
+      chunkStatsCoverage_.numFullyNullChunks,
+      chunkStatsCoverage_.numCompressedChunks,
+      chunkStatsCoverage_.numUncompressedChunks);
+}
+
+std::vector<std::string_view> NimbleWriterFuzzer::uncoveredChunkStatsShapes()
+    const {
+  std::vector<std::string_view> uncovered;
+  auto require = [&](bool covered, std::string_view name) {
+    if (!covered) {
+      uncovered.push_back(name);
+    }
+  };
+  require(chunkStatsCoverage_.numIndexedFiles > 0, "indexed file");
+  require(chunkStatsCoverage_.numUnindexedFiles > 0, "unindexed file");
+  // TabletWithIndexTest.multipleGroups deterministically covers multiple
+  // stripe groups. WriterOptions does not expose the tablet metadata flush
+  // threshold, so requiring that layout here would be unreachable.
+  require(
+      chunkStatsCoverage_.numStripes > chunkStatsCoverage_.numStripeGroups,
+      "multiple stripes per group");
+  require(chunkStatsCoverage_.numScalarStreams > 0, "scalar stream");
+  require(chunkStatsCoverage_.numStructuralStreams > 0, "structural stream");
+  require(chunkStatsCoverage_.numMultiChunkStreams > 0, "multi-chunk stream");
+  require(chunkStatsCoverage_.numFirstChunks > 0, "first chunk");
+  require(chunkStatsCoverage_.numMiddleChunks > 0, "middle chunk");
+  require(chunkStatsCoverage_.numFinalChunks > 0, "final chunk");
+  require(chunkStatsCoverage_.numZeroNullChunks > 0, "zero-null chunk");
+  require(
+      chunkStatsCoverage_.numPartiallyNullChunks > 0, "partially-null chunk");
+  // Fully-null chunks are generated deterministically by
+  // WriterTest.chunkNullCountsForStructNullStream. Requiring a random schema
+  // and chunk boundary to align around one here would make CI probabilistic.
+  require(chunkStatsCoverage_.numUncompressedChunks > 0, "uncompressed chunk");
+  return uncovered;
 }
 
 } // namespace facebook::nimble::fuzzer

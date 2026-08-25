@@ -413,7 +413,8 @@ TEST_F(ProjectorTestBase, projectsInputWithoutStreamVarintRowCountFlag) {
   serialized[sizeof(uint8_t) + varint::varintSize(vec->size())] =
       static_cast<char>(facebook::nimble::serde::detail::makeFlagsByte(
           /*requiresNullBarrier=*/false,
-          /*streamEncodingUsesVarintRowCount=*/false));
+          /*streamEncodingUsesVarintRowCount=*/false,
+          /*streamHasChunkHeader=*/false));
 
   Projector projector{
       inputSchema,
@@ -441,6 +442,52 @@ TEST_F(ProjectorTestBase, projectsInputWithoutStreamVarintRowCountFlag) {
     EXPECT_EQ(bCol->valueAt(1), 20);
     EXPECT_EQ(bCol->valueAt(2), 30);
   }
+}
+
+// A Projector predating kStreamVarintRowCountFlag leaves the bit clear even
+// though its stream bodies are varint-encoded. Readers must not infer fixed
+// u32 row counts from the cleared bit, or every encoding prefix desyncs.
+TEST_F(
+    ProjectorTestBase,
+    deserializesProjectionWithoutStreamVarintRowCountFlag) {
+  auto type = ROW({
+      {"a", INTEGER()},
+      {"b", BIGINT()},
+  });
+  auto vec = makeSimpleRowVector(
+      {"a", "b"},
+      {
+          makeIntVector<int32_t>({1, 2, 3}),
+          makeIntVector<int64_t>({10, 20, 30}),
+      });
+
+  SerializerOptions serializerOptions{
+      .version = SerializationVersion::kSerialization};
+  auto serialized = serialize(vec, type, serializerOptions);
+  auto inputSchema = getNimbleSchema(type, serializerOptions);
+
+  Projector projector{
+      inputSchema,
+      makeSubfields({"b"}),
+      pool_.get(),
+      Projector::Options{.projectVersion = SerializationVersion::kProjection}};
+  const auto outputSchema = projector.projectedSchema();
+
+  auto projected = projectInput(projector, serialized, /*useIOBuf=*/false);
+  auto projectedStr = toString(projected);
+  projectedStr[sizeof(uint8_t) + varint::varintSize(vec->size())] =
+      static_cast<char>(facebook::nimble::serde::detail::makeFlagsByte(
+          /*requiresNullBarrier=*/false,
+          /*streamEncodingUsesVarintRowCount=*/false,
+          /*streamHasChunkHeader=*/false));
+
+  auto result = deserialize(
+      projectedStr, outputSchema, DeserializerOptions{.hasHeader = true});
+  ASSERT_EQ(result->size(), 3);
+  auto bCol = result->as<RowVector>()->childAt(0)->as<FlatVector<int64_t>>();
+  EXPECT_EQ(bCol->valueAt(0), 10);
+  EXPECT_EQ(bCol->valueAt(1), 20);
+  EXPECT_EQ(bCol->valueAt(2), 30);
 }
 
 // Test projecting multiple columns.
@@ -2301,7 +2348,7 @@ TEST_F(ProjectorTest, flatMapMissingKeyDeserializesAsNullField) {
 // All-missing-keys projection on a FlatMap whose value subtree is a Row.
 // Exercises the `emitPlaceholderOffsets` Row branch end-to-end (Row.nulls +
 // 2 inner scalars = 3 UINT32_MAX value slots + 1 inMap slot per missing key).
-TEST_F(ProjectorTest, projectFlatMapNonExistentKey_RowValue) {
+TEST_F(ProjectorTest, projectFlatMapNonExistentKeyRowValue) {
   auto valueRowType = ROW({{"a", INTEGER()}, {"b", VARCHAR()}});
   auto type =
       ROW({{"id", BIGINT()}, {"features", MAP(INTEGER(), valueRowType)}});
@@ -2398,7 +2445,7 @@ TEST_F(ProjectorTest, projectFlatMapNonExistentKey_RowValue) {
 // All-missing-keys projection on a FlatMap whose value subtree is an Array.
 // Exercises the `emitPlaceholderOffsets` Array branch end-to-end (Array
 // lengths + 1 element scalar = 2 UINT32_MAX value slots + 1 inMap per key).
-TEST_F(ProjectorTest, projectFlatMapNonExistentKey_ArrayValue) {
+TEST_F(ProjectorTest, projectFlatMapNonExistentKeyArrayValue) {
   auto valueArrayType = ARRAY(INTEGER());
   auto type =
       ROW({{"id", BIGINT()}, {"features", MAP(INTEGER(), valueArrayType)}});

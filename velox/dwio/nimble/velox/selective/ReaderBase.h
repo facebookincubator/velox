@@ -16,10 +16,13 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
 
+#include "folly/Function.h"
+#include "folly/container/F14Map.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
@@ -33,6 +36,12 @@
 
 namespace facebook::nimble {
 
+class SharedDictionaryAlphabet;
+
+/// Loads a shared dictionary alphabet when its first encoded chunk is read.
+using DictionaryAlphabetLoader =
+    folly::Function<std::shared_ptr<const SharedDictionaryAlphabet>()>;
+
 class ReaderBase {
  public:
   static std::shared_ptr<ReaderBase> create(
@@ -43,9 +52,15 @@ class ReaderBase {
   /// schemas. The tablet's metadata (footer, stripes, ClusterIndex) is shared
   /// across all ReaderBase instances using the same tablet. Each ReaderBase
   /// still owns its own BufferedInput for data IO.
+  ///
+  /// Takes the entry by shared_ptr and retains it: the returned ReaderBase
+  /// aliases its tablet pointer onto the entry, so the entry cannot retire
+  /// while this reader is still reading through it. There is one
+  /// CachedTabletReader per file, shared by every consumer, so moving members
+  /// out of it would empty it for everyone else.
   static std::shared_ptr<ReaderBase> create(
       std::unique_ptr<velox::dwio::common::BufferedInput> input,
-      CachedTabletReader&& cachedTablet,
+      const std::shared_ptr<CachedTabletReader>& cachedTablet,
       const velox::dwio::common::ReaderOptions& options);
 
   velox::dwio::common::BufferedInput& input() {
@@ -182,6 +197,7 @@ class StripeStreams {
   void setStripe(int stripe) {
     stripe_ = stripe;
     lazyInput_.reset();
+    dictionaryInputs_.clear();
     // Keep previous stripe's shared_ptrs (StripeGroup, ChunkStatsGroup)
     // alive while loading the new stripe. This prevents the weak-pointer
     // cache entries from expiring when consecutive stripes share the same
@@ -231,7 +247,19 @@ class StripeStreams {
 
   std::shared_ptr<index::StreamIndex> streamIndex(int streamId) const;
 
+  /// Returns a lazy alphabet loader for a value stream, or nullptr if it has
+  /// no dictionary binding in the current stripe.
+  DictionaryAlphabetLoader dictionaryAlphabetLoader(uint32_t valueStreamId);
+
  private:
+  struct DictionaryInput {
+    // Enqueued stripe dictionary stream held until its alphabet is first
+    // requested.
+    std::unique_ptr<velox::dwio::common::SeekableInputStream> input;
+    // Serialized byte length of the dictionary stream.
+    uint64_t size{};
+  };
+
   std::optional<velox::common::Region> streamRegion(int streamId) const;
 
   const std::shared_ptr<ReaderBase> readerBase_;
@@ -242,6 +270,8 @@ class StripeStreams {
   // guarded by the numReads_ version check.
   std::unique_ptr<LazyInput> lazyInput_;
   std::optional<StripeIdentifier> stripeIdentifier_;
+  // Inputs awaiting alphabet creation, keyed by projected value stream ID.
+  folly::F14FastMap<uint32_t, DictionaryInput> dictionaryInputs_;
 };
 
 } // namespace facebook::nimble

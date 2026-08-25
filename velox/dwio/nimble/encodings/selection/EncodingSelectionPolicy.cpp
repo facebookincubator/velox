@@ -66,6 +66,10 @@ ManualEncodingSelectionPolicyFactory::parseEncodingReadFactors(
         part);
     bool found = false;
     const auto key = folly::trimWhitespace(kv[0]);
+    NIMBLE_USER_CHECK(
+        !isReadOnlyEncoding(key),
+        "Encoding is read-only and cannot be used for new writes: {}",
+        key);
     for (auto i = 0; i < possibleEncodings.size(); ++i) {
       auto encoding = possibleEncodings[i];
       // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
@@ -159,7 +163,6 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       // enable for production tables without consulting the Nimble team
       // (oncall: dwios).
       EncodingType::ALP,
-      EncodingType::PFOR,
       EncodingType::SimdForBitpack,
       EncodingType::SubIntSplit,
       EncodingType::BlockBitPacking,

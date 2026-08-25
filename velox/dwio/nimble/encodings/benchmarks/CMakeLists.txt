@@ -19,6 +19,7 @@ add_executable(
   FixedBitWidthBenchmarkData.h
   NimbleEncodingRunner.h
   SparseBoolBenchmarkData.h
+  VarintBenchmarkData.h
 )
 
 target_link_libraries(
@@ -30,7 +31,11 @@ target_link_libraries(
   velox_memory
 )
 
-add_executable(nimble_block_bit_packing_encoding_benchmark BlockBitPackingEncodingBenchmark.cpp)
+add_executable(
+  nimble_block_bit_packing_encoding_benchmark
+  BlockBitPackingEncodingBenchmark.cpp
+  BlockBitPackingBenchmarkData.h
+)
 
 target_link_libraries(
   nimble_block_bit_packing_encoding_benchmark
@@ -64,7 +69,7 @@ target_link_libraries(
   fsst
 )
 
-add_executable(nimble_huffman_benchmark HuffmanBenchmark.cpp)
+add_executable(nimble_huffman_benchmark HuffmanBenchmark.cpp HuffmanBenchmarkData.h)
 
 target_link_libraries(
   nimble_huffman_benchmark
@@ -89,7 +94,11 @@ target_link_libraries(
   fmt::fmt
 )
 
-add_executable(nimble_simd_for_bitpack_benchmark SimdForBitpackBenchmark.cpp)
+add_executable(
+  nimble_simd_for_bitpack_benchmark
+  SimdForBitpackBenchmark.cpp
+  SimdForBitpackBenchmarkData.h
+)
 
 target_link_libraries(
   nimble_simd_for_bitpack_benchmark
@@ -99,5 +108,50 @@ target_link_libraries(
   Folly::follybenchmark
   Folly::folly
   velox_common_base
+  velox_memory
+)
+
+add_executable(nimble_pfor_encoding_benchmark PFOREncodingBenchmark.cpp PFOREncodingBenchmarkData.h)
+
+target_link_libraries(
+  nimble_pfor_encoding_benchmark
+  nimble_encodings
+  nimble_common
+  Folly::follybenchmark
+  Folly::folly
+  velox_memory
+)
+
+add_executable(
+  nimble_fsst_encoding_benchmark
+  FsstEncodingBenchmark.cpp
+  FsstBenchmarkData.h
+  StringBenchmarkCorpus.h
+)
+
+target_link_libraries(
+  nimble_fsst_encoding_benchmark
+  nimble_encodings
+  nimble_common
+  Folly::follybenchmark
+  Folly::folly
+  velox_memory
+  fsst
+  fmt::fmt
+)
+
+add_executable(
+  nimble_prefix_encoding_benchmark
+  PrefixEncodingBenchmark.cpp
+  PrefixBenchmarkData.h
+  StringBenchmarkCorpus.h
+)
+
+target_link_libraries(
+  nimble_prefix_encoding_benchmark
+  nimble_encodings
+  nimble_common
+  Folly::follybenchmark
+  Folly::folly
   velox_memory
 )

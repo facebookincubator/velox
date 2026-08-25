@@ -3161,10 +3161,8 @@ TEST_P(NimbleIndexProjectorTest, featureReorderingStorageReads) {
 
     auto stripeId = tablet->stripeIdentifier(0);
     const auto streamCount = tablet->streamCount(stripeId);
-    std::vector<uint32_t> offsets(streamCount);
-    std::vector<uint32_t> sizes(streamCount);
-    tablet->streamOffsets(stripeId, offsets);
-    tablet->streamSizes(stripeId, sizes);
+    std::vector<TabletReader::StreamLocation> streamLocations(streamCount);
+    tablet->streamLocations(stripeId, streamLocations);
 
     VeloxReader reader(readFile.get(), *leafPool_);
     const auto& flatMap = reader.schema()->asRow().childAt(1)->asFlatMap();
@@ -3176,7 +3174,8 @@ TEST_P(NimbleIndexProjectorTest, featureReorderingStorageReads) {
     }
 
     auto diskPosition = [&](int64_t key) -> uint32_t {
-      return offsets[keyToValueStreamId.at(folly::to<std::string>(key))];
+      return streamLocations[keyToValueStreamId.at(folly::to<std::string>(key))]
+          .offset;
     };
 
     // Verify projected keys appear in reordering order on disk.
@@ -3194,7 +3193,9 @@ TEST_P(NimbleIndexProjectorTest, featureReorderingStorageReads) {
       auto currStreamId =
           keyToValueStreamId.at(folly::to<std::string>(projectedKeys[i]));
       EXPECT_EQ(
-          offsets[prevStreamId] + sizes[prevStreamId], offsets[currStreamId])
+          streamLocations[prevStreamId].offset +
+              streamLocations[prevStreamId].size,
+          streamLocations[currStreamId].offset)
           << "Key " << projectedKeys[i - 1]
           << " value stream should be adjacent to key " << projectedKeys[i];
     }

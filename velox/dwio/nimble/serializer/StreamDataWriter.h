@@ -784,7 +784,10 @@ void StreamDataWriter<T>::close(uint32_t nodeCount) {
         options_.encodingOptions.useVarintRowCount,
         "Non-tablet writers must use varint stream row counts");
     outputBuffer_.data()[headerFlagsOffset_] =
-        static_cast<char>(detail::makeFlagsByte(requiresNullBarrier_));
+        static_cast<char>(detail::makeFlagsByte(
+            requiresNullBarrier_,
+            /*streamEncodingUsesVarintRowCount=*/true,
+            /*streamHasChunkHeader=*/false));
   }
 
   detail::writeTrailer(

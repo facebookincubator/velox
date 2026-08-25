@@ -516,6 +516,102 @@ TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyFails) {
           /*asLocalTime=*/false));
 }
 
+// A constant decides the filter even when the data file carries the column.
+// The reader built from the scan spec has no 'typeWithId()' subtree for it, so
+// reading its statistics dereferences null.
+TEST_F(FileConnectorUtilTest, testFiltersConstantOverridingFileColumn) {
+  auto batch =
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto filePath = writeDataFile(batch);
+
+  // Tests 'filter' on a scan that returns 'constant' for 'c0'.
+  auto keepsSplit = [&](const VectorPtr& constant,
+                        std::shared_ptr<common::Filter> filter) {
+    auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+    auto* child = scanSpec->addField("c0", 0);
+    child->setConstantValue(constant);
+    child->setFilter(std::move(filter));
+
+    dwio::common::ReaderOptions readerOpts(pool_.get());
+    readerOpts.setFileFormat(dwio::common::FileFormat::DWRF);
+    readerOpts.setScanSpec(scanSpec);
+    auto reader = dwrf::DwrfReader::create(
+        std::make_unique<dwio::common::BufferedInput>(
+            std::make_shared<LocalReadFile>(filePath), readerOpts.memoryPool()),
+        readerOpts);
+
+    return hive::testFilters(
+        scanSpec.get(),
+        reader.get(),
+        filePath,
+        /*partitionKeys=*/{},
+        /*partitionKeysHandle=*/{},
+        /*asLocalTime=*/false);
+  };
+
+  // The file holds 0 through 99: statistics would keep the split for both.
+  auto constant = makeConstant<int64_t>(1'000, 1);
+  EXPECT_FALSE(keepsSplit(
+      constant, std::make_shared<common::BigintRange>(0, 99, false)));
+  EXPECT_TRUE(keepsSplit(
+      constant, std::make_shared<common::BigintRange>(1'000, 1'000, false)));
+
+  // A null constant decides from testNull() alone. The file holds no null, so
+  // statistics would answer the other way for both.
+  auto nullConstant = BaseVector::createNullConstant(BIGINT(), 1, pool_.get());
+  EXPECT_FALSE(keepsSplit(nullConstant, std::make_shared<common::IsNotNull>()));
+  EXPECT_TRUE(keepsSplit(nullConstant, std::make_shared<common::IsNull>()));
+}
+
+// Every filtered partition key has to be tested, not just the first. Nothing
+// downstream re-checks them: testFilterOnConstant() accepts any non-null
+// constant.
+TEST_F(FileConnectorUtilTest, testFiltersSecondPartitionKeyFails) {
+  auto batch =
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto filePath = writeDataFile(batch);
+  auto reader = makeReader(filePath);
+
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  scanSpec->addField("c0", 0);
+  // 'ds' comes first and passes, so stopping at the first key misses 'hour'.
+  scanSpec->addField("ds", 1)->setFilter(
+      std::make_unique<common::BytesValues>(
+          std::vector<std::string>{"2024-01-01"}, false));
+  scanSpec->addField("hour", 2)->setFilter(
+      std::make_unique<common::BigintRange>(0, 11, false));
+
+  const std::unordered_map<std::string, std::optional<std::string>>
+      partitionKeys = {
+          {"ds", "2024-01-01"},
+          {"hour", "23"},
+      };
+  const std::unordered_map<std::string, hive::FileColumnHandlePtr>
+      partitionKeysHandle = {
+          {"ds",
+           std::make_shared<hive::HiveColumnHandle>(
+               "ds",
+               hive::HiveColumnHandle::ColumnType::kPartitionKey,
+               VARCHAR(),
+               VARCHAR())},
+          {"hour",
+           std::make_shared<hive::HiveColumnHandle>(
+               "hour",
+               hive::HiveColumnHandle::ColumnType::kPartitionKey,
+               BIGINT(),
+               BIGINT())},
+      };
+
+  EXPECT_FALSE(
+      hive::testFilters(
+          scanSpec.get(),
+          reader.get(),
+          filePath,
+          partitionKeys,
+          partitionKeysHandle,
+          /*asLocalTime=*/false));
+}
+
 TEST_F(FileConnectorUtilTest, testFiltersNullPartitionKeyRejectsNotNull) {
   auto rowType = ROW({"c0"}, {BIGINT()});
   auto batch =

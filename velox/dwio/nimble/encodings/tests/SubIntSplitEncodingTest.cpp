@@ -167,7 +167,10 @@ std::unique_ptr<nimble::Encoding> decodeEncoding(
     std::string_view encoded,
     velox::memory::MemoryPool& pool) {
   return nimble::EncodingFactory().create(
-      pool, encoded, [](uint32_t) { return nullptr; });
+      pool,
+      encoded,
+      [](uint32_t) { return nullptr; },
+      nimble::Encoding::Options{});
 }
 
 template <typename T>
@@ -237,7 +240,7 @@ void expectSameLayout(
 
 } // namespace
 
-TEST(SubIntSplitConfigTests, BoundarySerializationAndParsing) {
+TEST(SubIntSplitConfigTests, boundarySerializationAndParsing) {
   const std::vector<nimble::detail::subintsplit::SegmentPlan> segments{
       {.bitStart = 0, .bitEnd = 7},
       {.bitStart = 8, .bitEnd = 15},
@@ -282,7 +285,7 @@ using SubIntSplitEncodingTypes =
 
 TYPED_TEST_CASE(SubIntSplitEncodingTest, SubIntSplitEncodingTypes);
 
-TYPED_TEST(SubIntSplitEncodingTest, RecomputeRoundTripAndReplay) {
+TYPED_TEST(SubIntSplitEncodingTest, recomputeRoundTripAndReplay) {
   using T = TypeParam;
   const auto values = makeStructuredValues<T>();
 
@@ -329,7 +332,7 @@ TYPED_TEST(SubIntSplitEncodingTest, RecomputeRoundTripAndReplay) {
   expectBitwiseEqual(values, fullRoundTrip);
 }
 
-TYPED_TEST(SubIntSplitEncodingTest, PreserveRoundTripExplicitBoundaries) {
+TYPED_TEST(SubIntSplitEncodingTest, preserveRoundTripExplicitBoundaries) {
   using T = TypeParam;
   const auto values = makeStructuredValues<T>();
   const auto segments = makePreserveSegments<T>();
@@ -359,7 +362,7 @@ TYPED_TEST(SubIntSplitEncodingTest, PreserveRoundTripExplicitBoundaries) {
   expectBitwiseEqual(values, decoded);
 }
 
-TEST(SubIntSplitEncodingTests, PreserveModeRequiresBoundaries) {
+TEST(SubIntSplitEncodingTests, preserveModeRequiresBoundaries) {
   const std::vector<int64_t> values{
       0x1234567890000000LL, 0x1234567890000001LL, 0x1234567890000002LL};
 
@@ -384,7 +387,7 @@ TEST(SubIntSplitEncodingTests, PreserveModeRequiresBoundaries) {
       nimble::NimbleInternalError);
 }
 
-TEST(SubIntSplitEncodingTests, FullWidthSingleSectionRoundTrip) {
+TEST(SubIntSplitEncodingTests, fullWidthSingleSectionRoundTrip) {
   const std::vector<uint64_t> values{
       0x1234567890000000ULL,
       0x1234567890000001ULL,

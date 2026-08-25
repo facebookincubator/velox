@@ -407,32 +407,38 @@ void Deserializer::initialize(
     deserializers_[offset] = decoder.get();
   }
 
-  // Pre-size stream presence-tracking state once. Both vectors are bounded
-  // by maxOffset because every value-stream anchor offset is a Type main
-  // descriptor offset already in deserializerMap_. Sizing here (rather than
-  // grow-on-demand inside createDeserializersForType) avoids repeated
-  // reallocations and lets the per-batch hot path skip a bounds check.
   if (!inMapChildTypes_.empty()) {
     streamPresentFlags_.resize(maxOffset + 1, false);
     valueOffsetToInMap_.resize(maxOffset + 1, kInvalidInMapOffset);
     // Populate the reverse-lookup table: for each top-level FlatMap child,
-    // record its inMap stream offset at every one of its value-stream
+    // record its inMap stream offset at every one of its presence-stream
     // anchors. The per-batch in-map inference reads this to map a present
-    // value anchor back to its owning child without re-walking the schema.
+    // child stream back to its owning child without re-walking the schema.
     //
-    // visitValueStreamLeaves visits ALL value-stream offsets in the child
-    // subtree (Row recurses all children; FlatMap recurses all children).
+    // Value leaves are not enough for omitted in-map inference: a child present
+    // in every row with all-null values may only have null/container/nested
+    // in-map streams to prove an omitted all-true in-map stream. Therefore,
+    // visitPresenceStreamOffsets records all data-bearing offsets in the child
+    // subtree, including Row/FlatMap null streams and nested FlatMap in-map
+    // streams.
     // Relies on RowFieldWriter writing every field over the same
-    // OrderedRanges, so sibling Row children populate in lockstep — if any
+    // OrderedRanges, so sibling Row children populate in lockstep; if any
     // sibling's value stream is present in a batch, all are. If a future
     // writer ever made Row children conditionally absent, the in-map
     // inference below would over-attribute presence to keys whose first
     // child was absent but a sibling was present.
     for (const auto& [inMapOffset, childType] : inMapChildTypes_) {
-      visitValueStreamLeaves(
+      visitPresenceStreamOffsets(
           *childType,
-          [this, _inMapOffset = inMapOffset](offset_size valueOffset) {
-            valueOffsetToInMap_[valueOffset] = _inMapOffset;
+          [this, _inMapOffset = inMapOffset](offset_size presenceOffset) {
+            // This lookup is only indexed by presentStreamOffsets_, which is
+            // populated from decoded streams and therefore bounded by
+            // deserializerMap_. visitPresenceStreamOffsets() walks schema
+            // anchors too, including projected-away streams with no decoder.
+            if (presenceOffset >= valueOffsetToInMap_.size()) {
+              return false;
+            }
+            valueOffsetToInMap_[presenceOffset] = _inMapOffset;
             return false;
           });
     }
@@ -630,7 +636,7 @@ void Deserializer::appendStreamSegments(
 
 uint32_t Deserializer::appendBatch(
     std::string_view batch,
-    std::optional<nimble::RowRange> rowRange,
+    folly::Range<const nimble::RowRange*> rowRanges,
     DecodeRun& run,
     velox::VectorPtr& output) const {
   const auto rowCount = parser_->initialize(batch);
@@ -641,34 +647,51 @@ uint32_t Deserializer::appendBatch(
 
   // Rows this batch exposes: the parser's rowRange (kTablet header) or the
   // whole batch if the header didn't encode one.
-  nimble::RowRange range =
+  const nimble::RowRange exposed =
       parser_->rowRange().value_or(nimble::RowRange{0, rowCount});
+
   // A caller range narrows within what the batch exposes rather than
-  // replacing it, so it is relative to `range.startRow`. For a kTablet
+  // replacing it, so it is relative to `exposed.startRow`. For a kTablet
   // batch windowed to [500, 600), caller [0, 50) selects [500, 550). For
-  // every other version `range` starts at 0, so the two coincide.
-  if (rowRange.has_value()) {
+  // every other version `exposed` starts at 0, so the two coincide.
+  uint32_t previousEnd = 0;
+  uint32_t outputRows = 0;
+  for (const auto& rowRange : rowRanges) {
     NIMBLE_USER_CHECK_LE(
-        rowRange->startRow,
-        rowRange->endRow,
+        rowRange.startRow,
+        rowRange.endRow,
         "rowRange startRow must be <= endRow");
     NIMBLE_USER_CHECK_LE(
-        rowRange->endRow,
-        range.numRows(),
+        rowRange.endRow,
+        exposed.numRows(),
         "rowRange endRow exceeds the rows this batch exposes");
-    range = nimble::RowRange{
-        range.startRow + rowRange->startRow, range.startRow + rowRange->endRow};
+    NIMBLE_USER_CHECK_LE(
+        previousEnd,
+        rowRange.startRow,
+        "rowRanges must be sorted ascending and non-overlapping");
+    previousEnd = rowRange.endRow;
+    outputRows += rowRange.numRows();
   }
 
   appendStreamSegments(rowCount, /*startRow=*/run.rows, requiresBarrier);
-  runRanges_.push_back({run.rows + range.startRow, run.rows + range.endRow});
+  if (rowRanges.empty()) {
+    runRanges_.push_back(
+        {run.rows + exposed.startRow, run.rows + exposed.endRow});
+    outputRows = exposed.numRows();
+  } else {
+    for (const auto& rowRange : rowRanges) {
+      runRanges_.push_back(
+          {run.rows + exposed.startRow + rowRange.startRow,
+           run.rows + exposed.startRow + rowRange.endRow});
+    }
+  }
   run.rows += rowCount;
   ++run.batches;
   if (FOLLY_UNLIKELY(requiresBarrier)) {
     decodeRun(run, output);
     parser_->reset();
   }
-  return range.numRows();
+  return outputRows;
 }
 
 void Deserializer::deserialize(
@@ -686,6 +709,28 @@ void Deserializer::deserialize(
       folly::Range<const nimble::RowRange*>(rowRanges.data(), rowRanges.size()),
       output,
       /*outputRowCounts=*/nullptr);
+}
+
+void Deserializer::deserialize(
+    std::string_view data,
+    const std::vector<nimble::RowRange>& rowRanges,
+    velox::VectorPtr& output) const {
+  NIMBLE_CHECK(
+      runRanges_.empty(), "runRanges_ must be empty on deserialize entry");
+  SCOPE_EXIT {
+    runRanges_.clear();
+  };
+
+  output = nullptr;
+  DecodeRun run;
+  runRanges_.reserve(rowRanges.size());
+  appendBatch(
+      data,
+      folly::Range<const nimble::RowRange*>(rowRanges.data(), rowRanges.size()),
+      run,
+      output);
+  decodeRun(run, output);
+  parser_->reset();
 }
 
 void Deserializer::deserializeImpl(
@@ -716,11 +761,9 @@ void Deserializer::deserializeImpl(
   DecodeRun run;
   runRanges_.reserve(data.size());
   for (size_t i = 0; i < data.size(); ++i) {
-    std::optional<nimble::RowRange> rowRange;
-    if (!rowRanges.empty()) {
-      rowRange = rowRanges[i];
-    }
-    const auto outputRows = appendBatch(data[i], rowRange, run, output);
+    const auto outputRows = rowRanges.empty()
+        ? appendBatch(data[i], {}, run, output)
+        : appendBatch(data[i], rowRanges.subpiece(i, 1), run, output);
     if (outputRowCounts != nullptr) {
       outputRowCounts->emplace_back(outputRows);
     }

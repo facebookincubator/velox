@@ -29,6 +29,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/serializer/ChunkedStreamPayload.h"
 #include "velox/dwio/nimble/serializer/Options.h"
 #include "velox/dwio/nimble/serializer/legacy/TrailerReader.h"
 #include "velox/dwio/nimble/velox/RowRange.h"
@@ -135,10 +136,13 @@ class StreamDataParser {
         const uint32_t streamSize = streamSizes_[entryIdx];
         std::string_view streamData(
             bodyBase + streamOffsets_[entryIdx], streamSize);
-        // kTablet stream data includes tablet chunk headers:
-        // [chunkSize:u32][compressionType:1B][encoded_data...]. Strip headers
-        // and decompress if needed before handing off.
-        callback(streamId, stripChunkHeaders(streamData));
+        if (streamHasChunkHeader_) {
+          callback(
+              streamId,
+              stripChunkHeaders(streamData, ensureStrippedStreamBuffer()));
+        } else {
+          callback(streamId, streamData);
+        }
       }
       pos_ = end_; // Skip past trailer.
     } else if (nonLegacyFormat(version_)) {
@@ -213,7 +217,7 @@ class StreamDataParser {
   /// current initialized blob cursor/header because callers may initialize the
   /// next batch before flushing the previous run.
   void reset() {
-    strippedStreamBuffers_.clear();
+    strippedStreamBuffer_.reset();
   }
 
   /// Returns the row range embedded in the per-slice header for kTablet
@@ -225,41 +229,8 @@ class StreamDataParser {
   }
 
  private:
-  // Strips tablet chunk headers from stream data for kTablet format.
-  // Each chunk is: [chunkSize:u32][compressionType:1B][encoded_data...]
-  // Returns a view into the original data for single uncompressed chunks
-  // (zero-copy), or a view into strippedStreamBuffers_ for compressed/
-  // multi-chunk streams. Retained buffers are not cleared by initialize()
-  // because callers may append streams from multiple initialized batches
-  // before decoding the stored views.
-  std::string_view stripChunkHeaders(std::string_view streamData);
-
-  // Slow path: decompress/concatenate all chunks into an owned buffer.
-  std::string_view slowChunkHeaderStrip(const char* pos, const char* end);
-
-  // Returns a zero-copy view if the stream is a single uncompressed chunk.
-  // Returns std::nullopt if decompression or concatenation is needed.
-  std::optional<std::string_view> tryFastChunkHeaderStrip(
-      const char* pos,
-      const char* end);
-
-  // Returns the payload bytes needed after removing per-chunk headers and
-  // expanding compressed chunks.
-  size_t strippedStreamSize(const char* pos, const char* end);
-
-  // Returns the uncompressed byte size for a single chunk payload.
-  size_t decodedChunkSize(
-      CompressionType compression,
-      const char* data,
-      uint32_t length);
-
-  // Copies or decompresses one chunk into output and advances output past the
-  // appended bytes.
-  void appendChunkData(
-      CompressionType compression,
-      const char* data,
-      uint32_t length,
-      char*& output);
+  // Lazily acquires the arena backing stripped tablet stream payloads.
+  Buffer& ensureStrippedStreamBuffer();
 
   const DeserializerOptions& options_;
   velox::memory::MemoryPool* const pool_;
@@ -273,16 +244,18 @@ class StreamDataParser {
   bool requiresNullBarrier_{false};
   // Encoding stream row-count format read from the serialization header.
   bool streamEncodingUsesVarintRowCount_{true};
+  // True when kTablet streams retain their storage chunk framing.
+  bool streamHasChunkHeader_{false};
   // Per-request row range embedded in the kTablet header (post-rowCount,
   // before stream data). nullopt for non-kTablet formats or when the
   // producer did not embed a row range.
   std::optional<RowRange> rowRange_;
   const char* pos_{nullptr};
   const char* end_{nullptr};
-  // Owns slow-stripped kTablet stream payloads returned as string_views.
-  // A deserializer can append several batches before materializing the run,
-  // so each slow-stripped stream gets a stable backing allocation.
-  std::vector<velox::BufferPtr> strippedStreamBuffers_;
+  // Owns slow-stripped kTablet stream payloads until the current decode run is
+  // materialized. The arena may span several appended batches.
+  EncodingBufferPool strippedStreamBufferPool_;
+  std::unique_ptr<ScopedEncodingBuffer> strippedStreamBuffer_;
   // Reusable parallel buffers for the per-blob trailer. Refilled by
   // iterateStreams(): streamIds_ holds the ids of non-zero stream slots (sorted
   // ascending) and streamSizes_ their byte sizes. For kTablet,

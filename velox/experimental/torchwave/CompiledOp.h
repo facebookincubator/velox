@@ -34,6 +34,7 @@ namespace torch::wave {
 
 class OpInvocation;
 struct StepVectors;
+struct StepEvents;
 
 /// Represents launch of a single KernelOperation or standalone Node.
 struct Launch {
@@ -312,6 +313,15 @@ struct LaunchData {
 
   std::vector<TensorListParam> tensorLists;
 
+  /// Executed-step index of the latest step whose device-to-host transfer
+  /// produced a value this launch reads -- directly, through a chain of
+  /// metadata-only shortcuts, or through a host-side view operand of an output
+  /// descriptor. -1 when the launch reads nothing that came back over a
+  /// transfer, which is what makes it safe to size, allocate and fill while an
+  /// earlier step's transfer is still in flight. Set by markD2hDependencies
+  /// before the step runs.
+  int32_t d2hProducer{-1};
+
   float costAdjustFactor{1};
   float expectedFraction{0};
 };
@@ -324,6 +334,7 @@ class CompositeInvocation {
       std::deque<c10::IValue> ivalueStorage,
       int32_t sequenceNumber,
       std::vector<nativert::ValueId> lastUseIds,
+      std::vector<std::vector<int32_t>> lastUseReaderOps = {},
       std::vector<nativert::ValueId> reusableIds = {},
       std::vector<Launch> prePassStandalones = {},
       std::vector<std::pair<nativert::ValueId, int32_t>> elidedCloneInputs =
@@ -349,33 +360,123 @@ class CompositeInvocation {
   /// 'betweenLaunchAndSync' is called after the kernel launch (and D2H
   /// scheduling if any) but before the stream sync, to overlap host work
   /// with the GPU. In debug mode it is called after all block-by-block
-  /// launches and transfers.
+  /// launches and transfers. With 'deferReturn', the host wait that makes the
+  /// returned data readable is left to the caller, which records the transfer
+  /// in ExecutionState::pendingReturns instead.
   void launch(
       int32_t numBlocks,
       int32_t blockSize,
       uint8_t* pinnedBase,
       uint8_t* deviceBase,
-      int64_t totalPinnedBytes,
+      int64_t h2dBytes,
       int32_t returnBegin,
       int32_t returnEnd,
       DebugInfo* deviceDebugBase,
       facebook::velox::wave::Stream* stream,
       const StepVectors& sv,
       int32_t stepIdx,
-      std::function<void()> betweenLaunchAndSync = nullptr);
+      bool deferReturn,
+      const std::function<void()>& betweenLaunchAndSync = nullptr,
+      StepEvents* events = nullptr);
 
-  /// Collects LaunchData from all OpInvocations at the given step index.
+  /// Reserves a param slot for every kernel launch any grid variant of any op
+  /// can put at 'stepIdx', each sized for the largest variant, and fills
+  /// sv.slotOffsets / sv.opSlotBegin / sv.paramRegionBytes. Also fills
+  /// sv.readIds. Idempotent: both depend only on the compiled grids, so they
+  /// are built once per step.
+  void layoutParamSlots(int32_t stepIdx, StepVectors& sv);
+
+  /// Why an op's setup was left for the second pass.
+  enum class DeferReason {
+    /// Reads a value whose device-to-host transfer has not landed.
+    kTransfer,
+    /// Allocating it would push past WaveConfig::maxDelayedFree.
+    kMemory,
+  };
+
+  /// Running position over the three parallel per-launch arrays a step fills:
+  /// sv.kernels, sv.standalones and sv.shortcutStandalones. It advances over a
+  /// deferred op as well, whose launches keep their indices so that deferring
+  /// one op cannot move a later op's parameter offsets.
+  struct LaunchCursor {
+    int32_t kernel{0};
+    int32_t standalone{0};
+    int32_t shortcut{0};
+  };
+
+  /// Picks the grid variant 'data' should launch under -- single-block,
+  /// multi-block or cooperative -- from its element count, and rebuilds 'data'
+  /// and 'largestId' from the new variant if the choice moved. Returns true if
+  /// it moved, in which case the caller re-reads the grid and step it cached.
+  /// Only meaningful for a launch whose op isGridChoice().
+  bool chooseGridVariant(
+      ExecutionState& state,
+      GridChoice& gridChoice,
+      OpInvocation& op,
+      int32_t stepIdx,
+      size_t launchIndex,
+      bool hasByLargestInput,
+      LaunchData& data,
+      nativert::ValueId& largestId);
+
+  /// Zeroes 'data.numElements' when a tensor the launch reads or writes but
+  /// does not produce itself is still None, which makes makeGrid give it no
+  /// blocks. Under a cooperative grid, where the whole step launches as one
+  /// kernel and an op therefore cannot be skipped, recovers a grid size from
+  /// the static input shapes instead.
+  void sizeForUnreadyOperands(
+      LaunchData& data,
+      const Launch& launch,
+      nativert::ExecutionFrame& frame);
+
+  /// Fills 'data's parameter block at 'paramOffset', patches its TensorList
+  /// pointers to device addresses, and folds the offsets of the return values
+  /// it writes into 'returnBegin' / 'returnEnd'.
+  void fillLaunchParamBlock(
+      LaunchData& data,
+      nativert::ExecutionFrame& frame,
+      uint8_t* pinnedBase,
+      uint8_t* deviceBase,
+      int64_t paramOffset,
+      int32_t& returnBegin,
+      int32_t& returnEnd);
+
+  /// Sets up the ops at 'stepIdx' that can be set up now: sizes them, allocates
+  /// their outputs and fills their parameter blocks, all in one pass per op so
+  /// each is touched once and tested for dependencies once.
+  ///
+  /// An op that reads a value a pending transfer has not delivered, or that
+  /// would allocate past the delayed-free ceiling, is skipped and appended to
+  /// 'deferred'; run the pass again with 'deferredOnly' after resolving what
+  /// they need. The LaunchData, parameter offsets and launch indices of every
+  /// op are established on the first pass regardless, so the second pass
+  /// cannot move another op's parameters.
+  ///
+  /// 'returnBegin' / 'returnEnd' accumulate as min/max over absolute offsets
+  /// rather than assuming the ops are filled in ascending order, which the
+  /// two-pass split breaks.
   void gatherLaunches(
-      const ExecutionState& state,
+      ExecutionState& state,
       std::vector<GridChoice>& grids,
       int32_t stepIdx,
-      StepVectors& sv);
-
-  /// Copies return values from the pinned buffer back into the execution frame.
-  void processReturnData(
       StepVectors& sv,
-      nativert::ExecutionFrame& frame,
-      uint8_t* pinnedBase);
+      uint8_t* pinnedBase,
+      uint8_t* deviceBase,
+      bool deferredOnly,
+      std::vector<std::pair<size_t, DeferReason>>& deferred,
+      int32_t& returnBegin,
+      int32_t& returnEnd);
+
+  /// Stamps onto step 'stepIdx' every last-use value not yet released whose
+  /// reading ops have all run out of grid steps, recording the step in
+  /// 'releaseStep' (parallel to lastUseIds_, -1 until released). Called once
+  /// per executed step, after gatherLaunches has settled its grid choices.
+  void releaseLastUseAtStep(
+      ExecutionState& state,
+      const std::vector<GridChoice>& grids,
+      int32_t stepIdx,
+      StepVectors& sv,
+      std::vector<int32_t>& releaseStep);
 
   /// Prints per-step trace: step header and per-launch details.
   void traceStep(
@@ -392,6 +493,12 @@ class CompositeInvocation {
   // outputs excluded). When WaveConfig::freeIntermediates is set, their frame
   // tensors are released at the end of execute().
   std::vector<nativert::ValueId> lastUseIds_;
+
+  // Parallel to lastUseIds_: the indices into ops_ of the ops that read that
+  // value. Under WaveConfig::stepLastUse the value is released at the step
+  // where the last of them runs out of grid steps. Empty means the readers are
+  // unknown, which falls back to releasing at the node's last step.
+  std::vector<std::vector<int32_t>> lastUseReaderOps_;
 
   // Frame value ids whose buffer an elementwise output may reuse in place --
   // reusable last-use boundary inputs and expr-local overwritable temps, from

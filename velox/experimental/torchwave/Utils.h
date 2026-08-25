@@ -84,6 +84,7 @@ class Pool {
 
 using StreamPool = Pool<facebook::velox::wave::Stream>;
 using EventPool = Pool<facebook::velox::wave::Event>;
+using EventP = std::unique_ptr<facebook::velox::wave::Event>;
 
 /// Returns an alias of 'base' with the given shape, strides and element
 /// offset, built straight from the TensorImpl. This is the primitive

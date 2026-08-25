@@ -27,6 +27,7 @@
 #include "velox/dwio/nimble/index/IndexWriter.h"
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/velox/FieldWriter.h"
+#include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
 #include "velox/dwio/nimble/writer/BufferPolicy.h"
 #include "velox/dwio/nimble/writer/NimbleFileMetadata.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
@@ -190,7 +191,7 @@ class Writer : public velox::dwio::common::Writer {
   // Adds index keys to all configured index writers.
   void addIndexKey(const velox::VectorPtr& input);
 
-  void writeFeatures(const WriteOptionalSectionFn& writeMetadataFn);
+  void writeProperties(const WriteOptionalSectionFn& writeMetadataFn);
 
   // Returns the vector written to data streams. When cluster index key column
   // storage is omitted, this is a top-level row projection excluding key
@@ -286,9 +287,23 @@ class Writer : public velox::dwio::common::Writer {
   // them at close still sees consistent deltas.
   void updateIoStatistics();
 
+  // Writes caller-supplied key/value metadata into the optional metadata
+  // section.
   void writeMetadata();
+  // Writes the column statistics section, using the vectorized representation
+  // when enabled and the legacy raw-size section otherwise.
   void writeColumnStats();
+  // Writes the serialized Nimble schema section built from the writer context.
   void writeSchema();
+  // Writes the dictionary catalog and any file-scope alphabet payloads.
+  // File-scope alphabet bytes go through writeDataFn so the catalog can point
+  // at their final file offsets.
+  void writeDictionarySection(
+      const WriteDataFn& writeDataFn,
+      const WriteOptionalSectionFn& writeMetadataFn);
+  // Encodes stripe-scope alphabet chunks into their dedicated dictionary
+  // streams after value streams have chosen shared dictionary encoding.
+  void writeStripeDictionaryStreams();
   // Finalizes and writes all indexes. Called via TabletWriter close callback.
   void writeIndexes(
       const WriteDataFn& writeDataFn,
@@ -329,6 +344,12 @@ class Writer : public velox::dwio::common::Writer {
   // rebuilds a TypeWithId tree from it to line statistics up with pre-order
   // node ids.
   const velox::RowTypePtr rowType_;
+  // Read by the memory reclaimer, which goes live on `pool_` below before the
+  // rest of the writer is built and stays reachable until `pool_` is
+  // destroyed. Declared ahead of `pool_` so it brackets that whole window;
+  // `context_` does not, and reaching the spill config through it is what let
+  // arbitration fault during construction and teardown.
+  const velox::common::SpillConfig* const spillConfig_;
   MemoryPoolHolder pool_;
   MemoryPoolHolder encodingMemoryPool_;
   const std::unique_ptr<detail::WriterContext> context_;
