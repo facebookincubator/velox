@@ -2428,22 +2428,28 @@ TEST_F(WriterTest, openZLCompressionNumericRoundTrip) {
 }
 
 TEST_F(WriterTest, rejectsReadOnlyEncodingLayout) {
-  nimble::WriterOptions options;
-  options.encodingLayoutTree.emplace(
-      nimble::Kind::Row,
-      std::unordered_map<
-          nimble::EncodingLayoutTree::StreamIdentifier,
-          nimble::EncodingLayout>{},
-      "",
-      std::vector<nimble::EncodingLayoutTree>{nimble::EncodingLayoutTree{
-          nimble::Kind::Scalar,
-          {{nimble::EncodingLayoutTree::StreamIdentifiers::Scalar::ScalarStream,
-            nimble::EncodingLayout{
-                nimble::EncodingType::PFOR,
-                {},
-                nimble::CompressionType::Uncompressed,
-                {std::nullopt, std::nullopt}}}},
-          "c0"}});
+  const auto makeOptions = [](nimble::EncodingType encodingType,
+                              uint32_t numChildren) {
+    nimble::WriterOptions options;
+    options.encodingLayoutTree.emplace(
+        nimble::Kind::Row,
+        std::unordered_map<
+            nimble::EncodingLayoutTree::StreamIdentifier,
+            nimble::EncodingLayout>{},
+        "",
+        std::vector<nimble::EncodingLayoutTree>{nimble::EncodingLayoutTree{
+            nimble::Kind::Scalar,
+            {{nimble::EncodingLayoutTree::StreamIdentifiers::Scalar::
+                  ScalarStream,
+              nimble::EncodingLayout{
+                  encodingType,
+                  {},
+                  nimble::CompressionType::Uncompressed,
+                  std::vector<std::optional<const nimble::EncodingLayout>>(
+                      numChildren)}}},
+            "c0"}});
+    return options;
+  };
 
   std::string file;
   NIMBLE_ASSERT_THROW(
@@ -2451,8 +2457,16 @@ TEST_F(WriterTest, rejectsReadOnlyEncodingLayout) {
           velox::ROW({{"c0", velox::BIGINT()}}),
           std::make_unique<velox::InMemoryWriteFile>(&file),
           *rootPool_,
-          std::move(options)),
-      "Encoding is read-only and cannot be used for new writes: PFOR");
+          makeOptions(nimble::EncodingType::FOR, 3)),
+      "Encoding is read-only and cannot be used for new writes: FOR");
+
+  std::string pforFile;
+  EXPECT_NO_THROW(
+      nimble::Writer(
+          velox::ROW({{"c0", velox::BIGINT()}}),
+          std::make_unique<velox::InMemoryWriteFile>(&pforFile),
+          *rootPool_,
+          makeOptions(nimble::EncodingType::PFOR, 2)));
 }
 
 TEST_F(WriterTest, encodingLayoutSchemaMismatch) {

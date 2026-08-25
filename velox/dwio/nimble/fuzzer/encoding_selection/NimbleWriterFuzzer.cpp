@@ -151,6 +151,7 @@ bool isNumericCompatible(EncodingType encodingType) {
       return true;
     // Gated on isIntegralType<physicalType>(), which holds for float and
     // double as well since their physical types are uint32_t and uint64_t.
+    case EncodingType::PFOR:
     case EncodingType::SimdForBitpack:
     case EncodingType::Huffman:
       return true;
@@ -919,6 +920,7 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
 
 bool isIntegralOnlyEncoding(EncodingType encodingType) {
   return encodingType == EncodingType::DeltaBlock ||
+      encodingType == EncodingType::PFOR ||
       encodingType == EncodingType::SimdForBitpack ||
       encodingType == EncodingType::Huffman;
 }
