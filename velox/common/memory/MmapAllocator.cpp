@@ -19,15 +19,31 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <cerrno>
+
+#include <folly/String.h>
+
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/memory/Memory.h"
 
 namespace facebook::velox::memory {
+uint64_t MmapAllocator::systemPageSize() {
+  static const uint64_t pageSize = [] {
+    const long value{::sysconf(_SC_PAGESIZE)};
+    VELOX_CHECK_GT(
+        value,
+        0,
+        "Failed to determine the system page size: {}",
+        folly::errnoStr(errno));
+    return static_cast<uint64_t>(value);
+  }();
+  return pageSize;
+}
+
 bool MmapAllocator::isPageSizeSupported() {
-  return static_cast<uint64_t>(sysconf(_SC_PAGESIZE)) ==
-      AllocationTraits::kPageSize;
+  return systemPageSize() == AllocationTraits::kPageSize;
 }
 
 MmapAllocator::MmapAllocator(const Options& options)
@@ -61,7 +77,7 @@ MmapAllocator::MmapAllocator(const Options& options)
       isPageSizeSupported(),
       "MmapAllocator requires the system page size to match AllocationTraits::kPageSize ({} bytes); system page size is {} bytes. Use MemoryAllocator::Kind::kMalloc on this system instead.",
       AllocationTraits::kPageSize,
-      sysconf(_SC_PAGESIZE));
+      systemPageSize());
 
   for (const auto& size : sizeClassSizes_) {
     sizeClasses_.push_back(std::make_unique<SizeClass>(capacity_ / size, size));
