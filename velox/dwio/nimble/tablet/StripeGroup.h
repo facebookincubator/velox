@@ -109,13 +109,26 @@ class StripeGroup {
   /// `stripeIndex`. Stateless. `streamId` must be less than streamCount().
   uint32_t streamSize(uint32_t stripeIndex, uint32_t streamId) const;
 
-  /// Bulk decode of all `streamCount` byte offsets for `stripeIndex` into the
-  /// caller-provided output buffer. `out.size()` must equal `streamCount`.
-  /// Intended for callers that scan the whole array (file-layout dump tools).
-  void streamOffsets(uint32_t stripeIndex, std::span<uint32_t> out) const;
+  /// Relative byte location of one stream within a stripe. A zero size means
+  /// the stream is absent.
+  struct StreamLocation {
+    uint32_t offset{0};
+    uint32_t size{0};
+  };
 
-  /// Bulk decode of all `streamCount` byte sizes for `stripeIndex`.
-  void streamSizes(uint32_t stripeIndex, std::span<uint32_t> out) const;
+  /// Reads locations for all streams in one stripe. `locations.size()` must
+  /// equal streamCount().
+  void streamLocations(
+      uint32_t stripeIndex,
+      std::span<StreamLocation> locations) const;
+
+  /// Reads locations for selected streams in one stripe. Stream IDs beyond
+  /// this group's stream count and streams with zero size produce absent
+  /// locations. `streamIds` and `locations` must have equal sizes.
+  void streamLocations(
+      uint32_t stripeIndex,
+      std::span<const uint32_t> streamIds,
+      std::span<StreamLocation> locations) const;
 
  private:
   // Maps an absolute stripe index to this group's local [0, stripeCount_)

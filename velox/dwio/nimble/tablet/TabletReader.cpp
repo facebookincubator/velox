@@ -955,18 +955,20 @@ uint32_t TabletReader::streamSize(
   return stripe.stripeGroup()->streamSize(stripe.stripeId(), streamId);
 }
 
-void TabletReader::streamOffsets(
+void TabletReader::streamLocations(
     const StripeIdentifier& stripe,
-    std::span<uint32_t> out) const {
+    std::span<StreamLocation> locations) const {
   NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
-  stripe.stripeGroup()->streamOffsets(stripe.stripeId(), out);
+  stripe.stripeGroup()->streamLocations(stripe.stripeId(), locations);
 }
 
-void TabletReader::streamSizes(
+void TabletReader::streamLocations(
     const StripeIdentifier& stripe,
-    std::span<uint32_t> out) const {
+    std::span<const uint32_t> streamIds,
+    std::span<StreamLocation> locations) const {
   NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
-  stripe.stripeGroup()->streamSizes(stripe.stripeId(), out);
+  stripe.stripeGroup()->streamLocations(
+      stripe.stripeId(), streamIds, locations);
 }
 
 uint32_t TabletReader::streamCount(const StripeIdentifier& stripe) const {
