@@ -63,8 +63,7 @@ class EncodingView {
       : data_{data},
         pool_{pool},
         options_{options},
-        encodingType_{static_cast<EncodingType>(
-            data[EncodingPrefix::kEncodingTypeOffset])},
+        encodingType_{EncodingPrefix::encodingType(data)},
         dataType_{EncodingPrefix::readDataType(data)},
         rowCount_{
             EncodingPrefix::readRowCount(data, options.useVarintRowCount)},

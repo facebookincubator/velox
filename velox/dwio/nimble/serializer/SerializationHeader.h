@@ -42,6 +42,8 @@ struct HeaderFlags {
   bool requiresNullBarrier{false};
   /// Encoding stream prefixes store row counts as varints instead of fixed u32.
   bool streamEncodingUsesVarintRowCount{true};
+  /// Each kTablet stream retains its encoding chunk header.
+  bool streamHasChunkHeader{false};
 };
 
 /// Parsed serialization header common to all versions.
@@ -50,10 +52,12 @@ struct SerializationHeader {
   /// Row/FlatMap null streams with real nulls. Readers treat this as a null
   /// barrier and decode the batch through the per-batch path instead of the
   /// dense concat fast path. bit1 is set when stream encoding row counts use
-  /// varint instead of fixed u32. The remaining bits are reserved for future
-  /// use.
+  /// varint instead of fixed u32. For kTablet, bit2 is set when stream payloads
+  /// include encoding chunk headers. The remaining bits are reserved for
+  /// future use.
   static constexpr uint8_t kNullBarrierRequiredFlag{0x01};
   static constexpr uint8_t kStreamVarintRowCountFlag{0x02};
+  static constexpr uint8_t kStreamChunkHeaderFlag{0x04};
 
   SerializationVersion version{SerializationVersion::kLegacy};
   uint32_t rowCount{0};
@@ -104,12 +108,14 @@ char* extend(T& buffer, uint32_t size) {
 
 inline uint8_t makeFlagsByte(
     bool requiresNullBarrier,
-    bool streamEncodingUsesVarintRowCount = true) {
+    bool streamEncodingUsesVarintRowCount,
+    bool streamHasChunkHeader) {
   return (requiresNullBarrier ? SerializationHeader::kNullBarrierRequiredFlag
                               : 0) |
       (streamEncodingUsesVarintRowCount
            ? SerializationHeader::kStreamVarintRowCountFlag
-           : 0);
+           : 0) |
+      (streamHasChunkHeader ? SerializationHeader::kStreamChunkHeaderFlag : 0);
 }
 
 inline bool nullBarrierRequired(uint8_t flagsByte) {
@@ -120,11 +126,16 @@ inline bool streamEncodingUsesVarintRowCount(uint8_t flagsByte) {
   return (flagsByte & SerializationHeader::kStreamVarintRowCountFlag) != 0;
 }
 
+inline bool streamHasChunkHeader(uint8_t flagsByte) {
+  return (flagsByte & SerializationHeader::kStreamChunkHeaderFlag) != 0;
+}
+
 inline HeaderFlags parseHeaderFlags(uint8_t flagsByte) {
   return {
       .requiresNullBarrier = nullBarrierRequired(flagsByte),
       .streamEncodingUsesVarintRowCount =
           streamEncodingUsesVarintRowCount(flagsByte),
+      .streamHasChunkHeader = streamHasChunkHeader(flagsByte),
   };
 }
 
@@ -132,10 +143,14 @@ inline HeaderFlags parseVersionedHeaderFlags(
     uint8_t flagsByte,
     SerializationVersion version) {
   auto flags = parseHeaderFlags(flagsByte);
-  if (version == SerializationVersion::kSerialization) {
-    // TODO: Remove this compatibility override when kSerialization headers
-    // written before kStreamVarintRowCountFlag no longer need to be supported.
+  if (!isTabletVersion(version)) {
+    // Only kTablet uses fixed u32 stream row counts or per-stream chunk
+    // headers. Producers predating kStreamVarintRowCountFlag leave that bit
+    // clear, so it carries no usable signal for the other formats either.
+    // TODO: Drop the row-count override once no producer predating
+    // kStreamVarintRowCountFlag remains deployed.
     flags.streamEncodingUsesVarintRowCount = true;
+    flags.streamHasChunkHeader = false;
   }
   return flags;
 }
@@ -271,8 +286,10 @@ size_t writeSerializationHeader(
   varint::writeVarint(rowCount, &rowCountPos);
   const size_t flagsOffset = buffer.size();
   auto* flagsPos = detail::extend(buffer, 1);
-  *flagsPos =
-      static_cast<char>(detail::makeFlagsByte(/*requiresNullBarrier=*/false));
+  *flagsPos = static_cast<char>(detail::makeFlagsByte(
+      /*requiresNullBarrier=*/false,
+      /*streamEncodingUsesVarintRowCount=*/true,
+      /*streamHasChunkHeader=*/false));
   return flagsOffset;
 }
 
@@ -298,6 +315,8 @@ struct TabletChunkHeader {
   bool requiresNullBarrier{false};
   /// True when encoding stream prefixes store row counts as varints.
   bool streamEncodingUsesVarintRowCount{false};
+  /// True when each encoding stream retains its tablet chunk header.
+  bool streamHasChunkHeader{false};
   RowRange rowRange;
   std::optional<std::string> resumeKey{};
 };

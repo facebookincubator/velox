@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -23,6 +24,7 @@
 #include <ranges>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -35,6 +37,7 @@
 #include <folly/CppAttributes.h>
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 
 #include "velox/experimental/torchwave/ParallelExpr.h"
 
@@ -1127,6 +1130,289 @@ int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types) {
     LOG(INFO) << "pre-partition clone pass: elided " << elided << " clone(s)";
   }
   return elided;
+}
+
+namespace {
+
+// Appends 'text' as a length-prefixed token. The punctuation cseKey separates
+// its fields with also occurs inside the fields: constantToString renders a
+// string attribute, a device or a list with commas, brackets and equals signs
+// of its own. Concatenated raw, two different nodes could spell the same key
+// and be merged, which rewires readers to the wrong buffer -- a wrong result
+// rather than a missed optimization. A length prefix removes the ambiguity
+// without having to escape anything.
+void appendToken(std::string& key, std::string_view text) {
+  key += std::to_string(text.size());
+  key += ':';
+  key += text;
+}
+
+// Identity of a node for common-subexpression purposes: op, operands in order,
+// attributes, output arity. Output ids are deliberately absent -- they are what
+// a merge rewrites. Empty for a node that must never be merged: one carrying a
+// subgraph attribute, which has no value rendering to compare.
+std::string cseKey(NodeCP node) {
+  std::string key;
+  appendToken(key, node->target());
+  key += '(';
+  for (const auto& input : node->inputs()) {
+    appendToken(key, input.name);
+    key += '=';
+    // An id is digits only, so it needs no length prefix to stay unambiguous.
+    key += input.value != nullptr ? std::to_string(input.value->id()) : "null";
+    key += ',';
+  }
+  // Attribute order is not part of a node's identity, so compare them sorted.
+  // Sorting the already-tokenized rendering keeps the order canonical; which
+  // total order it is does not matter, only that it is deterministic.
+  std::vector<std::string> attrs;
+  attrs.reserve(node->attributes().size());
+  for (const auto& attr : node->attributes()) {
+    if (std::holds_alternative<std::unique_ptr<nativert::Graph>>(attr.value)) {
+      return {};
+    }
+    std::string rendered;
+    appendToken(rendered, attr.name);
+    rendered += '=';
+    appendToken(rendered, constantToString(attr.value));
+    attrs.push_back(std::move(rendered));
+  }
+  std::sort(attrs.begin(), attrs.end());
+  for (const auto& attr : attrs) {
+    key += attr;
+    key += ',';
+  }
+  key += ')';
+  key += std::to_string(node->outputs().size());
+  return key;
+}
+
+// A node is mergeable with an identical one when it is a pure function of its
+// operands. It must write nothing, and no operand's storage may be written
+// anywhere in the graph: a read is interchangeable with an earlier read only if
+// nothing modified the buffer in between, and this pass compares identity, not
+// position. An output that escapes as a graph output is left alone for the same
+// reason clone elision leaves it alone -- the caller would be handed a buffer
+// that other values also read.
+bool cseEligible(
+    NodeCP node,
+    const ValueTypes& types,
+    const folly::F14FastSet<ValueCP>& mutatedBases,
+    bool cseViews,
+    bool cseCompute) {
+  if (node->outputs().empty() || !dataMutatedInputs(node).empty() ||
+      inPlaceSelf(node) != nullptr) {
+    return false;
+  }
+  for (const auto* out : node->outputs()) {
+    if (out == nullptr || types.graphOutput(out)) {
+      return false;
+    }
+    // An output written in place somewhere later is no more interchangeable
+    // than a mutated operand: the survivor's buffer is not what the duplicate's
+    // readers expect once the write has run. The operand loop below does not
+    // cover it, because the write names the output of this node rather than
+    // anything this node reads.
+    if (mutatedBases.count(viewStorageBase(out)) > 0) {
+      return false;
+    }
+    // A TensorList's elements are the outputs of its sole prim.ListUnpack user,
+    // an invariant getListElements asserts on. Merging two list producers
+    // leaves the survivor's list with two users -- its own unpack and the
+    // dup's, which is dead but still counted -- and the next caller to ask for
+    // its elements throws. Sound merging here needs the dead unpack removed,
+    // which this pass does not do.
+    if (out->type().kind() == nativert::Type::Kind::TensorList) {
+      return false;
+    }
+  }
+  for (const auto& input : node->inputs()) {
+    if (input.value == nullptr ||
+        mutatedBases.count(viewStorageBase(input.value)) > 0) {
+      return false;
+    }
+  }
+  const Metadata* meta = Registry::metadata(node->target());
+  return (meta != nullptr && meta->isView()) ? cseViews : cseCompute;
+}
+
+// Points every reader of 'from' at 'to'.
+//
+// Graph::replaceAllUses walks the user list and TORCH_CHECKs that
+// Graph::replace found something to swap in every entry, which two things
+// break. A node reading the value in two argument positions is listed twice,
+// and replace swaps both occurrences on the first visit, so the second visit
+// finds nothing. And the list holds stale entries: nodes an earlier merge
+// repointed without the entry being dropped. Both are common once views merge,
+// where cat(t, t) and chains of repointed readers are the rule rather than the
+// exception. Normalizing the list to the nodes that really do read the value,
+// once each, is what makes the call safe.
+void replaceReaders(nativert::Graph& graph, ValueCP from, nativert::Value* to) {
+  auto* value = const_cast<nativert::Value*>(from);
+  std::vector<nativert::Node*> readers;
+  readers.reserve(value->users().size());
+  for (auto* user : value->users()) {
+    bool reads = false;
+    for (const auto& input : user->inputs()) {
+      if (input.value == value) {
+        reads = true;
+        break;
+      }
+    }
+    if (!reads) {
+      continue;
+    }
+    if (std::find(readers.begin(), readers.end(), user) == readers.end()) {
+      readers.push_back(user);
+    }
+  }
+  if (readers.size() != value->users().size()) {
+    // eraseUser drops every occurrence of a node, so clearing and re-adding
+    // leaves exactly the real readers, one entry apiece.
+    std::vector<nativert::Node*> current(
+        value->users().begin(), value->users().end());
+    for (auto* user : current) {
+      value->eraseUser(user);
+    }
+    for (auto* user : readers) {
+      value->addUser(user);
+    }
+  }
+  graph.replaceAllUses(value, to);
+}
+
+// Points every reader of 'dup's outputs at the matching output of 'keeper',
+// then offers each survivor to 'push' so consumers that only became congruent
+// through this merge get revisited. Returns false, having changed nothing, when
+// the two disagree on output arity: equal cseKeys make that impossible for
+// nodes of the same op, so it means they were never really congruent.
+bool mergeCseNode(
+    nativert::Graph& graph,
+    NodeCP keeper,
+    NodeCP dup,
+    const std::function<void(ValueCP)>& push) {
+  const auto& from = dup->outputs();
+  const auto& to = keeper->outputs();
+  if (from.size() != to.size()) {
+    return false;
+  }
+  // No TensorList output reaches here: cseEligible rejects any node that has
+  // one, so there are never element ids to remap alongside the list value.
+  for (size_t i = 0; i < from.size(); ++i) {
+    replaceReaders(graph, from[i], const_cast<nativert::Value*>(to[i]));
+    push(to[i]);
+  }
+  return true;
+}
+
+} // namespace
+
+int64_t commonSubexpressions(nativert::Graph& graph, const ValueTypes& types) {
+  const bool cseViews = WaveConfig::get().cseViews;
+  const bool cseCompute = WaveConfig::get().cseCompute;
+  if (!cseViews && !cseCompute) {
+    return 0;
+  }
+
+  folly::F14FastSet<ValueCP> mutatedBases;
+  for (const auto& node : graph.nodes()) {
+    for (auto* mutated : dataMutatedInputs(&node)) {
+      if (mutated != nullptr) {
+        mutatedBases.insert(viewStorageBase(mutated));
+      }
+    }
+  }
+
+  std::deque<ValueCP> work;
+  folly::F14FastSet<ValueCP> queued;
+  auto push = [&](ValueCP value) {
+    if (value != nullptr && queued.insert(value).second) {
+      work.push_back(value);
+    }
+  };
+
+  // Program order of every node. The survivor of a merge has to be the earlier
+  // of the two: keeping the later one would leave the earlier one's consumers
+  // reading a value produced after them, which makeParallelNodes rejects. User
+  // lists are not in program order, so the first candidate a bucket sees is not
+  // necessarily the first in the graph.
+  folly::F14FastMap<NodeCP, size_t> order;
+  {
+    size_t index = 0;
+    for (const auto& node : graph.nodes()) {
+      order.emplace(&node, index++);
+    }
+  }
+
+  int64_t merged = 0;
+  auto mergeBucket = [&](folly::F14FastMap<std::string, NodeCP>& firstOf,
+                         NodeCP node) {
+    auto key = cseKey(node);
+    if (key.empty()) {
+      return;
+    }
+    // A value in this graph can be read by a node in a variant subgraph, which
+    // shows up in users() but is not in this graph's node list. Those are not
+    // ours to merge or to order.
+    if (!order.contains(node)) {
+      return;
+    }
+    auto [it, isNew] = firstOf.emplace(key, node);
+    if (isNew) {
+      return;
+    }
+    NodeCP keeper = it->second;
+    NodeCP dup = node;
+    if (order.at(dup) < order.at(keeper)) {
+      std::swap(keeper, dup);
+    }
+    if (mergeCseNode(graph, keeper, dup, push)) {
+      it->second = keeper;
+      ++merged;
+    }
+  };
+
+  // A node with no operands appears in no user list, so nothing would ever
+  // bring two of them together; bucket those once up front. Factory ops
+  // (aten.zeros and friends) are the case that matters.
+  {
+    folly::F14FastMap<std::string, NodeCP> firstOf;
+    for (const auto& node : graph.nodes()) {
+      if (node.inputs().empty() && !isDeadNode(&node) &&
+          cseEligible(&node, types, mutatedBases, cseViews, cseCompute)) {
+        mergeBucket(firstOf, &node);
+      }
+    }
+  }
+
+  // Congruent nodes have identical operands, so both appear in the user list of
+  // every value they read. Walking user lists is therefore complete for any
+  // node with an operand, and never hashes a node that has no possible partner.
+  for (const auto* value : graph.values()) {
+    if (value != nullptr && !value->users().empty()) {
+      push(value);
+    }
+  }
+
+  while (!work.empty()) {
+    ValueCP value = work.front();
+    work.pop_front();
+    queued.erase(value);
+    // Snapshot: merging rewires the list being walked.
+    std::vector<NodeCP> users(value->users().begin(), value->users().end());
+    folly::F14FastMap<std::string, NodeCP> firstOf;
+    for (NodeCP user : users) {
+      if (!isDeadNode(user) &&
+          cseEligible(user, types, mutatedBases, cseViews, cseCompute)) {
+        mergeBucket(firstOf, user);
+      }
+    }
+  }
+
+  if ((WaveConfig::get().trace & WaveConfig::kTiming) && merged > 0) {
+    LOG(INFO) << "pre-partition CSE: merged " << merged << " node(s)";
+  }
+  return merged;
 }
 
 namespace {

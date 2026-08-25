@@ -57,22 +57,25 @@ class BlockBitPackingEncodingView final : public TypedEncodingView<T> {
     numBlocks_ = source.numBlocks;
 
     auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
-    auto baselinesEncoding = EncodingFactory(options).create(
-        *this->pool_, source.encodedBaselines, noStringBufferFactory);
+    auto baselinesEncoding = EncodingFactory().create(
+        *this->pool_, source.encodedBaselines, noStringBufferFactory, options);
     NIMBLE_CHECK_NOT_NULL(baselinesEncoding);
     auto baselines = this->template getVectorBuffer<physicalType>();
     baselines.resize(source.numBlocks);
     baselinesEncoding->materialize(source.numBlocks, baselines.data());
 
-    auto bitWidthsEncoding = EncodingFactory(options).create(
-        *this->pool_, source.encodedBitWidths, noStringBufferFactory);
+    auto bitWidthsEncoding = EncodingFactory().create(
+        *this->pool_, source.encodedBitWidths, noStringBufferFactory, options);
     NIMBLE_CHECK_NOT_NULL(bitWidthsEncoding);
     auto bitWidths = this->template getVectorBuffer<uint8_t>();
     bitWidths.resize(source.numBlocks);
     bitWidthsEncoding->materialize(source.numBlocks, bitWidths.data());
 
-    auto offsetsEncoding = EncodingFactory(options).create(
-        *this->pool_, source.encodedBlockOffsets, noStringBufferFactory);
+    auto offsetsEncoding = EncodingFactory().create(
+        *this->pool_,
+        source.encodedBlockOffsets,
+        noStringBufferFactory,
+        options);
     NIMBLE_CHECK_NOT_NULL(offsetsEncoding);
     auto offsets = this->template getVectorBuffer<uint32_t>();
     offsets.resize(source.numBlocks);

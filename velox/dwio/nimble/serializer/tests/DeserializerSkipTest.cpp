@@ -104,6 +104,7 @@ class DeserializerSkipTest : public ::testing::Test {
         .requiresNullBarrier = parser.requiresNullBarrier(),
         .streamEncodingUsesVarintRowCount =
             parser.streamEncodingUsesVarintRowCount(),
+        .streamHasChunkHeader = false,
         .rowRange = rowRange,
     });
     std::string output(

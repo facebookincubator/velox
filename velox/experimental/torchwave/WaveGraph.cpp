@@ -246,6 +246,12 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
     elideReadOnlyClones(*graph_, types_);
   }
 
+  // Merge equal computations. After the rewrites above, which are what create
+  // most of the duplicates (an op rewritten once per consumer), and before
+  // duplicateMetadataOps below, which deliberately inserts duplicates this
+  // would undo.
+  commonSubexpressions(*graph_, types_);
+
   // Last of the pre-partition passes: the clone CSE above merges equal values,
   // which would undo the duplicates this inserts.
   if (WaveConfig::get().duplicateMetadata) {

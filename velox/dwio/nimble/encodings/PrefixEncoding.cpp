@@ -69,6 +69,15 @@ void PrefixEncoding::reset() {
   currentPos_ = dataStart_;
   currentRow_ = 0;
   decodedValue_.clear();
+  pageUsed_ = 0;
+  currentPageIndex_ = 0;
+  if (stringPages_.empty()) {
+    currentPage_ = nullptr;
+    pageCapacity_ = 0;
+  } else {
+    currentPage_ = stringPages_.front().data;
+    pageCapacity_ = stringPages_.front().capacity;
+  }
 }
 
 void PrefixEncoding::skip(uint32_t rowCount) {
@@ -120,10 +129,27 @@ std::string_view PrefixEncoding::decodeEntry() {
   return std::string_view(decodedValue_.data(), fullLen);
 }
 
-void PrefixEncoding::allocatePage(size_t minSize) {
+void PrefixEncoding::acquireStringPage(size_t minSize) {
   const auto size = std::max(kStringPageSize, minSize);
-  currentPage_ = static_cast<char*>(stringBufferFactory_(size));
-  pageCapacity_ = size;
+  const size_t nextPageIndex =
+      currentPage_ == nullptr ? 0 : currentPageIndex_ + 1;
+  if (nextPageIndex < stringPages_.size() &&
+      stringPages_[nextPageIndex].capacity >= size) {
+    currentPage_ = stringPages_[nextPageIndex].data;
+    pageCapacity_ = stringPages_[nextPageIndex].capacity;
+  } else {
+    StringPageSlot page{
+        .data = static_cast<char*>(stringBufferFactory_(size)),
+        .capacity = size};
+    if (nextPageIndex < stringPages_.size()) {
+      stringPages_[nextPageIndex] = page;
+    } else {
+      stringPages_.push_back(page);
+    }
+    currentPage_ = page.data;
+    pageCapacity_ = page.capacity;
+  }
+  currentPageIndex_ = nextPageIndex;
   pageUsed_ = 0;
 }
 
@@ -133,7 +159,7 @@ std::string_view PrefixEncoding::decodeToStringBuffer() {
     return decoded;
   }
   if (pageUsed_ + decoded.size() > pageCapacity_) {
-    allocatePage(decoded.size());
+    acquireStringPage(decoded.size());
   }
   std::memcpy(currentPage_ + pageUsed_, decoded.data(), decoded.size());
   auto result = std::string_view(currentPage_ + pageUsed_, decoded.size());

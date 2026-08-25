@@ -379,7 +379,10 @@ int main(int argc, char* argv[]) {
       return buffer->asMutable<void>();
     };
     auto encoding = nimble::EncodingFactory().create(
-        *pool, {buffer.data(), buffer.size()}, stringBufferFactory);
+        *pool,
+        {buffer.data(), buffer.size()},
+        stringBufferFactory,
+        nimble::Encoding::Options{});
     auto rowCount = encoding->rowCount();
     printScalarType(std::cout, *pool, *encoding, rowCount);
     return 0;

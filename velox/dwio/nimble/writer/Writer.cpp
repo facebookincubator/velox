@@ -41,7 +41,7 @@
 #include "velox/dwio/nimble/index/IndexSerialization.h"
 #include "velox/dwio/nimble/index/SortedIndexWriter.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
-#include "velox/dwio/nimble/tablet/FileFeatures.h"
+#include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/IndexGenerated.h"
 #include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
 #include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
@@ -1167,6 +1167,7 @@ Writer::Writer(
       // TODO(T283224280): report statistics for omitted cluster index key
       // columns too, instead of leaving them out of the file metadata.
       rowType_{velox::asRowType(storedDataType_)},
+      spillConfig_{options.spillConfig},
       pool_{MemoryPoolHolder::create(
           pool,
           [&](auto& pool) {
@@ -1249,7 +1250,7 @@ Writer::Writer(
                    const WriteDataFn& writeDataFn,
                    const CreateMetadataSectionFn& createMetadataFn,
                    const WriteOptionalSectionFn& writeMetadataFn) {
-                 writeFeatures(writeMetadataFn);
+                 writeProperties(writeMetadataFn);
                  writeIndexes(writeDataFn, createMetadataFn, writeMetadataFn);
                }})},
       bufferPolicy_{
@@ -1293,7 +1294,14 @@ Writer::Writer(
   setState(State::kRunning);
 }
 
-Writer::~Writer() {}
+Writer::~Writer() {
+  // The reclaimer installed on `pool_` outlives every member it reaches, since
+  // `pool_` is destroyed last. Leaving the writer running would let a
+  // concurrent arbitration request flush a writer whose members are gone.
+  if (isRunning()) {
+    setState(State::kAborted);
+  }
+}
 
 void Writer::write(const velox::VectorPtr& input) {
   checkRunning();
@@ -1484,7 +1492,7 @@ void Writer::addIndexKey(const velox::VectorPtr& input) {
   }
 }
 
-void Writer::writeFeatures(const WriteOptionalSectionFn& writeMetadataFn) {
+void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
   const bool compactRowCountEncoding =
       context_->options().experimentalCompactRowCountEncoding;
   bool clusterIndexKeyColumnStorageOmitted{false};
@@ -1500,12 +1508,12 @@ void Writer::writeFeatures(const WriteOptionalSectionFn& writeMetadataFn) {
   }
 
   const auto serialized =
-      FileFeatures{
+      FileProperties{
           compactRowCountEncoding,
           clusterIndexKeyColumnStorageOmitted,
           std::move(clusterIndexKeyColumnsWithOmittedStorage)}
           .serialize();
-  writeMetadataFn(std::string(kFeaturesSection), serialized);
+  writeMetadataFn(std::string(kPropertiesSection), serialized);
 }
 
 void Writer::writeIndexes(
@@ -1663,12 +1671,15 @@ bool Writer::reclaimableBytes(
     const velox::memory::MemoryPool& pool,
     uint64_t& reclaimableBytes) const {
   reclaimableBytes = 0;
-  if (!canReclaim()) {
+  // Only a running writer can flush a stripe, which is the sole way this pool
+  // gives memory back. Reporting bytes in any other state makes the arbitrator
+  // pick this pool as a candidate, suspend the driver, and then be turned away
+  // by the same check in reclaimBytes().
+  if (!canReclaim() || !isRunning()) {
     return false;
   }
   const auto reservedBytes = pool.reservedBytes();
-  if (reservedBytes <
-      context_->options().spillConfig->writerFlushThresholdSize) {
+  if (reservedBytes < spillConfig_->writerFlushThresholdSize) {
     return false;
   }
   reclaimableBytes = reservedBytes;
@@ -1687,8 +1698,7 @@ uint64_t Writer::reclaimBytes(
     return 0;
   }
 
-  const auto flushThreshold =
-      context_->options().spillConfig->writerFlushThresholdSize;
+  const auto flushThreshold = spillConfig_->writerFlushThresholdSize;
   return velox::memory::MemoryReclaimer::run(
       [&]() {
         int64_t reclaimedBytes{0};
@@ -1716,7 +1726,7 @@ uint64_t Writer::reclaimBytes(
 }
 
 bool Writer::canReclaim() const {
-  return context_->options().spillConfig != nullptr;
+  return spillConfig_ != nullptr;
 }
 
 namespace {
@@ -2191,7 +2201,7 @@ bool Writer::writeChunks(
               this->encodingScratchBufferPool(index);
           auto* encodingBufferPool = this->encodingBufferPool(index);
           barrier.add([&,
-                       streamData = streamData.get(),
+                       streamDataPtr = streamData.get(),
                        encodedStream,
                        encodingScratchBufferPool,
                        encodingBufferPool,
@@ -2199,7 +2209,7 @@ bool Writer::writeChunks(
             uint64_t startCpuNs = velox::process::threadCpuNanos();
             uint64_t streamSize = 0;
             if (encodeStreamChunk(
-                    *streamData,
+                    *streamDataPtr,
                     minChunkSize,
                     maxChunkSize,
                     ensureFullChunks,

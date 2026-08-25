@@ -17,6 +17,7 @@
 
 #include <memory>
 #include <span>
+#include <utility>
 
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
@@ -32,7 +33,7 @@ class EncodingSelectionPolicy;
 class EncodingFactory {
  public:
   explicit EncodingFactory(Encoding::Options options = {})
-      : options_{options} {}
+      : options_{std::move(options)} {}
 
   virtual ~EncodingFactory() = default;
 

@@ -482,6 +482,26 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
     return params;
   }
 
+  static std::vector<TestParam> getFsstTestParams() {
+    std::vector<TestParam> params;
+    for (const auto& param : getTestParams()) {
+      if (param.optimizeStringBufferHandling) {
+        params.push_back(param);
+      }
+    }
+    return params;
+  }
+
+  static std::vector<TestParam> getMetadataReuseTestParams() {
+    std::vector<TestParam> params;
+    for (const auto& param : getTestParams()) {
+      if (param.enableCache) {
+        params.push_back(param);
+      }
+    }
+    return params;
+  }
+
  protected:
   static void SetUpTestCase() {
     velox::memory::MemoryManager::testingSetInstance(
@@ -1378,6 +1398,10 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
   uint64_t nextFileId_{0};
 };
 
+class FsstStringBatchReaderTest : public VeloxReaderTest {};
+
+class MetadataReuseTest : public VeloxReaderTest {};
+
 nimble::EncodingLayout makeFsstEncodingLayout() {
   return nimble::EncodingLayout{
       nimble::EncodingType::Fsst,
@@ -1763,11 +1787,7 @@ TEST_P(VeloxReaderTest, lifetime) {
   }
 }
 
-TEST_P(VeloxReaderTest, fsstStringBatchReader) {
-  if (!optimizeStringBufferHandling()) {
-    GTEST_SKIP() << "FSST is only available in the current encoding factory.";
-  }
-
+TEST_P(FsstStringBatchReaderTest, fsstStringBatchReader) {
   constexpr int kRows = 2'000;
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   auto vector = vectorMaker.rowVector(
@@ -7241,11 +7261,7 @@ TEST_P(VeloxReaderTest, timestampLargeRowCount) {
 // does not re-read metadata. The weak-pointer cache retains entries while the
 // tablet is alive, so metadata is always reused regardless of pinMetadata,
 // cacheMetadata, or whether cache infrastructure is provided.
-TEST_P(VeloxReaderTest, metadataReuseWithSameReader) {
-  if (!enableCache()) {
-    GTEST_SKIP() << "Only applicable when cache is enabled";
-  }
-
+TEST_P(MetadataReuseTest, metadataReuseWithSameReader) {
   struct TestCase {
     bool pinMetadata;
     bool cacheMetadata;
@@ -7357,11 +7373,7 @@ TEST_P(VeloxReaderTest, metadataReuseWithSameReader) {
 // Tests metadata reuse across separate TabletReader instances. Only
 // cacheMetadata persists across TabletReader opens via AsyncDataCache.
 // pinMetadata only holds strong references within the same TabletReader.
-TEST_P(VeloxReaderTest, metadataReuseCrossReaders) {
-  if (!enableCache()) {
-    GTEST_SKIP() << "Only applicable when cache is enabled";
-  }
-
+TEST_P(MetadataReuseTest, metadataReuseCrossReaders) {
   struct TestCase {
     bool pinMetadata;
     bool cacheMetadata;
@@ -7854,6 +7866,22 @@ TEST_P(VeloxReaderTest, attributesByColumnEmptyByDefault) {
   EXPECT_TRUE(rowSchema.childAt(0)->attributes().empty());
   EXPECT_TRUE(rowSchema.childAt(1)->attributes().empty());
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    FsstStringBatchReaderTestSuite,
+    FsstStringBatchReaderTest,
+    ::testing::ValuesIn(VeloxReaderTest::getFsstTestParams()),
+    [](const ::testing::TestParamInfo<TestParam>& info) {
+      return info.param.debugString();
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    MetadataReuseTestSuite,
+    MetadataReuseTest,
+    ::testing::ValuesIn(VeloxReaderTest::getMetadataReuseTestParams()),
+    [](const ::testing::TestParamInfo<TestParam>& info) {
+      return info.param.debugString();
+    });
 
 INSTANTIATE_TEST_SUITE_P(
     VeloxReaderTestSuite,

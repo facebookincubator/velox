@@ -3464,6 +3464,29 @@ class MergedFlatMapFieldReader final
 
     auto& elements = arrayValues->elements();
     elements->resize(totalElements);
+    // For arrays-of-arrays values, the per-node copyRanges() below grows the
+    // innermost element buffer incrementally, causing quadratic
+    // reallocate+memcpy. Pre-size it to an upper bound then shrink to 0, which
+    // retains the capacity so each copy stays within it.
+    if (auto* nestedArray = elements->as<velox::ArrayVector>()) {
+      velox::vector_size_t nestedTotal = 0;
+      for (auto& nodeValue : nodeValues_) {
+        auto* sourceArray =
+            nodeValue->wrappedVector()->asUnchecked<velox::ArrayVector>();
+        // This is only an upper-bound estimate for the common unencoded case;
+        // encoded inner elements are skipped and simply fall back to the
+        // incremental growth path.
+        if (auto* sourceNested =
+                sourceArray->elements()->as<velox::ArrayVector>()) {
+          nestedTotal += sourceNested->elements()->size();
+        }
+      }
+      if (nestedTotal > 0) {
+        auto& nestedElements = nestedArray->elements();
+        nestedElements->resize(nestedTotal);
+        nestedElements->resize(0);
+      }
+    }
     auto* valuesOffsets = arrayValues->mutableOffsets(totalMapEntries)
                               ->asMutable<velox::vector_size_t>();
     auto* valuesSizes = arrayValues->mutableSizes(totalMapEntries)

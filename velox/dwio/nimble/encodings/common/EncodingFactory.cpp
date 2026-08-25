@@ -17,6 +17,7 @@
 
 #include <utility>
 
+#include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
@@ -63,6 +64,9 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     velox::memory::MemoryPool& pool,
     std::string_view data,
     std::function<void*(uint32_t)> stringBufferFactory) const {
+  NIMBLE_CHECK_FILE(
+      data.size() >= EncodingPrefix::kRowCountOffset,
+      "Truncated encoding prefix.");
   // Maybe we should have a magic number of encodings too? Hrm.
   const EncodingType encodingType = EncodingPrefix::encodingType(data);
   const DataType dataType = EncodingPrefix::dataType(data);
@@ -280,13 +284,9 @@ std::string_view EncodingFactory::encode(
           selection, castedValues, buffer, options);
     }
     case EncodingType::SharedDictionary: {
-      if constexpr (isIntegralType<T>() && !std::is_same_v<T, bool>) {
-        return SharedDictionaryEncoding<T>::encode(
-            selection, castedValues, buffer, options);
-      }
       NIMBLE_INCOMPATIBLE_ENCODING(
-          "SharedDictionary encoding only supports non-bool integer data types, got {}.",
-          TypeTraits<T>::dataType);
+          "SharedDictionary encoding requires writer-provided dictionary "
+          "indices.");
     }
     case EncodingType::FixedBitWidth: {
       if constexpr (isNumericType<physicalType>()) {
