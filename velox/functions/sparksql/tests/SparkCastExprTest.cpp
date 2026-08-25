@@ -1697,9 +1697,8 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     for (int scale = 0; scale <= 18; ++scale) {
       int64_t unscaledValue = 123456789123456789l;
       const int precision = 18;
-      auto expect = boost::multiprecision::cpp_dec_float_50(unscaledValue);
-      expect /= boost::multiprecision::cpp_dec_float_50(
-          DecimalUtil::kPowersOfTen[scale]);
+      auto expect = boost::multiprecision::cpp_dec_float_50(
+          DecimalUtil::toString(unscaledValue, DECIMAL(precision, scale)));
       testCast(
           makeNullableFlatVector<int64_t>(
               {unscaledValue}, DECIMAL(precision, scale)),
@@ -1710,9 +1709,8 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
       int128_t unscaledValue =
           HugeInt::parse("12345678912345678912345678912345678912");
       const int precision = 38;
-      auto expect = boost::multiprecision::cpp_dec_float_50(unscaledValue);
-      expect /= boost::multiprecision::cpp_dec_float_50(
-          DecimalUtil::kPowersOfTen[scale]);
+      auto expect = boost::multiprecision::cpp_dec_float_50(
+          DecimalUtil::toString(unscaledValue, DECIMAL(precision, scale)));
       testCast(
           makeNullableFlatVector<int128_t>(
               {unscaledValue}, DECIMAL(precision, scale)),
@@ -1727,9 +1725,8 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     for (int scale = 23; scale <= 38; ++scale) {
       int128_t unscaledValue = 1;
       const int precision = 38;
-      auto expect = boost::multiprecision::cpp_dec_float_50(unscaledValue);
-      expect /= boost::multiprecision::cpp_dec_float_50(
-          DecimalUtil::kPowersOfTen[scale]);
+      auto expect = boost::multiprecision::cpp_dec_float_50(
+          DecimalUtil::toString(unscaledValue, DECIMAL(precision, scale)));
       testCast(
           makeNullableFlatVector<int128_t>(
               {unscaledValue}, DECIMAL(precision, scale)),
