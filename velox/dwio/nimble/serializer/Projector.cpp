@@ -96,7 +96,9 @@ inline void setHeaderFlags(
     bool streamEncodingUsesVarintRowCount) {
   NIMBLE_CHECK_LT(flagsOffset, header.length(), "Invalid flags byte offset");
   header.writableData()[flagsOffset] = detail::makeFlagsByte(
-      outputRequiresNullBarrier, streamEncodingUsesVarintRowCount);
+      outputRequiresNullBarrier,
+      streamEncodingUsesVarintRowCount,
+      /*streamHasChunkHeader=*/false);
 }
 
 inline void updateRequiresNullBarrier(

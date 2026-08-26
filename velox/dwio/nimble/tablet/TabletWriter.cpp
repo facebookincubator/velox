@@ -16,6 +16,8 @@
 
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 
+#include <limits>
+
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
@@ -435,17 +437,27 @@ MetadataSection TabletWriter::createMetadataSection(std::string_view metadata) {
   return MetadataSection{offset, size, compressionType, uncompressedSize};
 }
 
+std::pair<uint64_t, uint32_t> TabletWriter::writeSegments(
+    const std::vector<std::string_view>& segments) {
+  checkNotClosed();
+  const auto offset = file_->size();
+  for (const auto segment : segments) {
+    writeWithChecksum(segment);
+  }
+  const auto length = file_->size() - offset;
+  NIMBLE_CHECK_LE(
+      length,
+      std::numeric_limits<uint32_t>::max(),
+      "Raw data section exceeds uint32_t size.");
+  return {offset, static_cast<uint32_t>(length)};
+}
+
 void TabletWriter::invokeCloseCallback() {
   if (options_.closeCallback == nullptr) {
     return;
   }
   auto writeDataFn = [this](const std::vector<std::string_view>& segments) {
-    const auto offset = file_->size();
-    for (const auto& segment : segments) {
-      writeWithChecksum(segment);
-    }
-    return std::make_pair(
-        offset, static_cast<uint32_t>(file_->size() - offset));
+    return writeSegments(segments);
   };
   auto createMetadataFn = [this](std::string_view metadata) {
     return createMetadataSection(metadata);
@@ -461,12 +473,7 @@ void TabletWriter::invokeStripeGroupFlushCallback() {
     return;
   }
   auto writeDataFn = [this](const std::vector<std::string_view>& segments) {
-    const auto offset = file_->size();
-    for (const auto& segment : segments) {
-      writeWithChecksum(segment);
-    }
-    return std::make_pair(
-        offset, static_cast<uint32_t>(file_->size() - offset));
+    return writeSegments(segments);
   };
   auto createMetadataFn = [this](std::string_view metadata) {
     return createMetadataSection(metadata);

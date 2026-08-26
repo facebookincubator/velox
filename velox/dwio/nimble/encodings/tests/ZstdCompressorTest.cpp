@@ -67,12 +67,12 @@ class RejectingCompressionPolicy : public CompressionPolicy {
 
 } // namespace
 
-TEST(ZstdCompressorTest, CompressionType) {
+TEST(ZstdCompressorTest, compressionType) {
   ZstdCompressor compressor;
   EXPECT_EQ(CompressionType::Zstd, compressor.compressionType());
 }
 
-TEST(ZstdCompressorTest, RoundTrip) {
+TEST(ZstdCompressorTest, roundTrip) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   ZstdCompressor compressor;
   TestCompressionPolicy policy;
@@ -98,7 +98,7 @@ TEST(ZstdCompressorTest, RoundTrip) {
       std::memcmp(original.data(), decompressed->as<char>(), original.size()));
 }
 
-TEST(ZstdCompressorTest, UncompressedSize) {
+TEST(ZstdCompressorTest, uncompressedSize) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   ZstdCompressor compressor;
   TestCompressionPolicy policy;
@@ -119,7 +119,7 @@ TEST(ZstdCompressorTest, UncompressedSize) {
   EXPECT_EQ(original.size(), size.value());
 }
 
-TEST(ZstdCompressorTest, IncompressibleData) {
+TEST(ZstdCompressorTest, incompressibleData) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   ZstdCompressor compressor;
   TestCompressionPolicy policy;
@@ -139,7 +139,7 @@ TEST(ZstdCompressorTest, IncompressibleData) {
   EXPECT_FALSE(result.buffer.has_value());
 }
 
-TEST(ZstdCompressorTest, DeclinedByPolicy) {
+TEST(ZstdCompressorTest, declinedByPolicy) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   ZstdCompressor compressor;
   RejectingCompressionPolicy policy;
@@ -157,7 +157,7 @@ TEST(ZstdCompressorTest, DeclinedByPolicy) {
   EXPECT_FALSE(result.buffer.has_value());
 }
 
-TEST(ZstdCompressorTest, RoundTripVariousDataTypes) {
+TEST(ZstdCompressorTest, roundTripVariousDataTypes) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   ZstdCompressor compressor;
   TestCompressionPolicy policy;
@@ -180,7 +180,7 @@ TEST(ZstdCompressorTest, RoundTripVariousDataTypes) {
       0, std::memcmp(input.data(), decompressed->as<char>(), input.size()));
 }
 
-TEST(ZstdCompressorTest, MinCompressionSizeSkipsSmallData) {
+TEST(ZstdCompressorTest, minCompressionSizeSkipsSmallData) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   ZstdCompressor compressor;
 
@@ -193,7 +193,7 @@ TEST(ZstdCompressorTest, MinCompressionSizeSkipsSmallData) {
   EXPECT_EQ(CompressionType::Uncompressed, encoder.compressionType());
 }
 
-TEST(ZstdCompressorTest, AllocateBufferFromPool) {
+TEST(ZstdCompressorTest, allocateBufferFromPool) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   facebook::velox::BufferPool bufferPool{
       facebook::velox::BufferPool::kDefaultCapacity};
@@ -216,7 +216,7 @@ TEST(ZstdCompressorTest, AllocateBufferFromPool) {
   EXPECT_EQ(bufferPool.size(), 0);
 }
 
-TEST(ZstdCompressorTest, AllocateBufferNullPool) {
+TEST(ZstdCompressorTest, allocateBufferNullPool) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
 
   // Null pool — should allocate from MemoryPool.
@@ -226,7 +226,7 @@ TEST(ZstdCompressorTest, AllocateBufferNullPool) {
   EXPECT_EQ(buf->size(), 200);
 }
 
-TEST(ZstdCompressorTest, UncompressWithBufferPool) {
+TEST(ZstdCompressorTest, uncompressWithBufferPool) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   ZstdCompressor compressor;
   TestCompressionPolicy policy;
@@ -264,7 +264,7 @@ TEST(ZstdCompressorTest, UncompressWithBufferPool) {
       std::memcmp(original.data(), decompressed2->as<char>(), original.size()));
 }
 
-TEST(ZstdCompressorTest, BufferPoolReuseAcrossMultipleCycles) {
+TEST(ZstdCompressorTest, bufferPoolReuseAcrossMultipleCycles) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   ZstdCompressor compressor;
   TestCompressionPolicy policy;

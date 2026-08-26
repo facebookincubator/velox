@@ -19,6 +19,7 @@
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/caching/AsyncDataCache.h"
@@ -169,22 +170,6 @@ struct IndexEncodingParam {
     return makeIndexEncodingLayout(
         encodingType, compressionType, prefixRestartInterval);
   }
-};
-
-// Test helper to capture runtime stats.
-class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
- public:
-  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
-      override {
-    stats_.emplace_back(std::string(name), value);
-  }
-
-  const std::vector<std::pair<std::string, RuntimeCounter>>& stats() const {
-    return stats_;
-  }
-
- private:
-  std::vector<std::pair<std::string, RuntimeCounter>> stats_;
 };
 
 class E2EIndexTestBase : public ::testing::Test {
@@ -415,7 +400,7 @@ class E2EIndexTestBase : public ::testing::Test {
     rowReaderOptions.setIndexEnabled(indexEnabled);
 
     // Set up a stat writer to capture runtime stats.
-    TestRuntimeStatWriter statWriter;
+    ConcurrentRuntimeStatWriter statWriter;
     RuntimeStatWriterScopeGuard guard(&statWriter);
 
     auto rowReader = reader.createRowReader(rowReaderOptions);
@@ -430,12 +415,10 @@ class E2EIndexTestBase : public ::testing::Test {
 
     // Get the number of index filter conversions from runtime stats captured
     // by our writer.
-    numIndexFilterConversions = 0;
-    for (const auto& [name, counter] : statWriter.stats()) {
-      if (name == RowReader::kNumIndexFilterConversions) {
-        numIndexFilterConversions += counter.value;
-      }
-    }
+    const auto stats = statWriter.runtimeStats();
+    const auto it =
+        stats.find(std::string(RowReader::kNumIndexFilterConversions));
+    numIndexFilterConversions = it != stats.end() ? it->second.sum : 0;
 
     return results;
   }
@@ -3619,7 +3602,7 @@ TEST_P(E2EIndexTest, filterRestorationAcrossMultipleSplits) {
 
 // Verifies that createIndexReader() throws a clear error (not SIGSEGV) when
 // the Nimble file has no cluster index — both with data and with an empty file.
-TEST_F(E2EIndexTestBase, CreateIndexReaderWithoutClusterIndex) {
+TEST_F(E2EIndexTestBase, createIndexReaderWithoutClusterIndex) {
   auto rowType = ROW({"a", "b"}, {VARCHAR(), INTEGER()});
   auto batch = vectorMaker_->rowVector(
       {"a", "b"},

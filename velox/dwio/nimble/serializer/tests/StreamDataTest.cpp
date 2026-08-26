@@ -432,20 +432,22 @@ class TabletChunkStripTest : public ::testing::Test {
     return chunk;
   }
 
-  // Builds a single zstd-compressed chunk: [length:u32][Zstd:1B][compressed].
+  // Builds a single zstd-compressed chunk.
   static std::string buildCompressedChunk(std::string_view data) {
     const auto maxCompressedSize = ZSTD_compressBound(data.size());
-    std::string compressed(maxCompressedSize, '\0');
+    std::string compressed(sizeof(uint32_t) + maxCompressedSize, '\0');
+    auto* compressedData = compressed.data();
+    encoding::writeUint32(data.size(), compressedData);
     const auto compressedSize = ZSTD_compress(
-        compressed.data(), maxCompressedSize, data.data(), data.size(), 1);
+        compressedData, maxCompressedSize, data.data(), data.size(), 1);
     NIMBLE_CHECK(!ZSTD_isError(compressedSize));
-    compressed.resize(compressedSize);
+    compressed.resize(sizeof(uint32_t) + compressedSize);
 
-    std::string chunk(kChunkHeaderSize + compressedSize, '\0');
+    std::string chunk(kChunkHeaderSize + compressed.size(), '\0');
     auto* pos = chunk.data();
     writeChunkHeader(
-        static_cast<uint32_t>(compressedSize), CompressionType::Zstd, pos);
-    std::memcpy(pos, compressed.data(), compressedSize);
+        static_cast<uint32_t>(compressed.size()), CompressionType::Zstd, pos);
+    std::memcpy(pos, compressed.data(), compressed.size());
     return chunk;
   }
 
@@ -460,10 +462,12 @@ class TabletChunkStripTest : public ::testing::Test {
 
   // Assembles a kTablet buffer from streams and returns the data collected
   // by iterateStreams.
-  // Each entry in 'streams' is the raw stream bytes (with chunk headers).
+  // Each entry in 'streams' is the stored stream bytes in the format selected
+  // by streamHasChunkHeader.
   std::string buildTabletBuffer(
       uint32_t rowCount,
-      const std::vector<std::pair<uint32_t, std::string>>& streams) {
+      const std::vector<std::pair<uint32_t, std::string>>& streams,
+      bool streamHasChunkHeader) {
     // Build dense sizes array.
     uint32_t maxOffset = 0;
     for (const auto& [offset, _] : streams) {
@@ -478,7 +482,9 @@ class TabletChunkStripTest : public ::testing::Test {
 
     // Assemble: [header][stream data][trailer].
     auto headerIOBuf = serde::createTabletChunkHeader(
-        {.rowCount = rowCount, .rowRange = RowRange{0, rowCount}});
+        {.rowCount = rowCount,
+         .streamHasChunkHeader = streamHasChunkHeader,
+         .rowRange = RowRange{0, rowCount}});
     std::string buffer(
         reinterpret_cast<const char*>(headerIOBuf.data()),
         headerIOBuf.length());
@@ -487,10 +493,12 @@ class TabletChunkStripTest : public ::testing::Test {
     return buffer;
   }
 
-  std::vector<std::pair<uint32_t, std::string>> deserializeTablet(
+  std::vector<std::pair<uint32_t, std::string>> parseTablet(
       uint32_t rowCount,
-      const std::vector<std::pair<uint32_t, std::string>>& streams) {
-    const auto buffer = buildTabletBuffer(rowCount, streams);
+      const std::vector<std::pair<uint32_t, std::string>>& streams,
+      bool streamHasChunkHeader) {
+    const auto buffer =
+        buildTabletBuffer(rowCount, streams, streamHasChunkHeader);
 
     // Parse via StreamDataParser.
     DeserializerOptions options{.hasHeader = true};
@@ -502,6 +510,16 @@ class TabletChunkStripTest : public ::testing::Test {
     reader.iterateStreams([&](uint32_t offset, std::string_view data) {
       result.emplace_back(offset, std::string(data));
     });
+    return result;
+  }
+
+  std::vector<std::pair<uint32_t, std::string>> deserializeTablet(
+      uint32_t rowCount,
+      const std::vector<std::pair<uint32_t, std::string>>& chunkedStreams) {
+    const auto result =
+        parseTablet(rowCount, chunkedStreams, /*streamHasChunkHeader=*/true);
+    EXPECT_EQ(
+        parseTablet(rowCount, result, /*streamHasChunkHeader=*/false), result);
     return result;
   }
 
@@ -667,8 +685,10 @@ TEST_F(TabletChunkStripTest, streamViewsRemainStable) {
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(testCase.name);
 
-    const auto firstBatch = buildTabletBuffer(10, testCase.firstStreams);
-    const auto secondBatch = buildTabletBuffer(20, testCase.secondStreams);
+    const auto firstBatch = buildTabletBuffer(
+        10, testCase.firstStreams, /*streamHasChunkHeader=*/true);
+    const auto secondBatch = buildTabletBuffer(
+        20, testCase.secondStreams, /*streamHasChunkHeader=*/true);
 
     DeserializerOptions options{.hasHeader = true};
     StreamDataParser reader(pool_.get(), options);
@@ -773,34 +793,10 @@ class ZstdDCtxReuseTest : public TabletChunkStripTest {
   std::vector<std::pair<uint32_t, std::string>> deserializeTabletWithDCtx(
       uint32_t rowCount,
       const std::vector<std::pair<uint32_t, std::string>>& streams) {
-    uint32_t maxOffset = 0;
-    for (const auto& [offset, _] : streams) {
-      maxOffset = std::max(maxOffset, offset);
-    }
-    std::vector<uint32_t> sizes(streams.empty() ? 0 : maxOffset + 1, 0);
-    std::string streamData;
-    for (const auto& [offset, data] : streams) {
-      sizes[offset] = static_cast<uint32_t>(data.size());
-      streamData.append(data);
-    }
-
-    auto headerIOBuf = serde::createTabletChunkHeader(
-        {.rowCount = rowCount, .rowRange = RowRange{0, rowCount}});
-    std::string buffer(
-        reinterpret_cast<const char*>(headerIOBuf.data()),
-        headerIOBuf.length());
-    buffer.append(streamData);
-    writeTabletTrailer(sizes, buffer);
-
-    DeserializerOptions options{.hasHeader = true};
-    StreamDataParser reader(pool_.get(), options);
-    auto actualRows = reader.initialize(std::string_view(buffer));
-    EXPECT_EQ(actualRows, rowCount);
-
-    std::vector<std::pair<uint32_t, std::string>> result;
-    reader.iterateStreams([&](uint32_t offset, std::string_view data) {
-      result.emplace_back(offset, std::string(data));
-    });
+    const auto result =
+        parseTablet(rowCount, streams, /*streamHasChunkHeader=*/true);
+    EXPECT_EQ(
+        parseTablet(rowCount, result, /*streamHasChunkHeader=*/false), result);
     return result;
   }
 

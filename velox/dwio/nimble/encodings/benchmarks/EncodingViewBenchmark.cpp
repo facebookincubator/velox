@@ -242,8 +242,8 @@ class MaterializedOffsetsStringTrivialView {
     const auto lengthsSize = encoding::readUint32(pos);
 
     auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
-    auto lengths = EncodingFactory(options).create(
-        *pool, {pos, lengthsSize}, noStringBufferFactory);
+    auto lengths = EncodingFactory().create(
+        *pool, {pos, lengthsSize}, noStringBufferFactory, options);
     NIMBLE_CHECK_NOT_NULL(lengths);
     offsets_.resize(rowCount_ + 1);
     offsets_[0] = 0;
@@ -311,8 +311,8 @@ class MaterializedRunEndsRLEView {
     const char* pos = data.data() + dataOffset;
     const auto runLengthsSize = encoding::readUint32(pos);
     auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
-    auto runLengths = EncodingFactory(options).create(
-        *pool, {pos, runLengthsSize}, noStringBufferFactory);
+    auto runLengths = EncodingFactory().create(
+        *pool, {pos, runLengthsSize}, noStringBufferFactory, options);
     NIMBLE_CHECK_NOT_NULL(runLengths);
 
     runEnds_.resize(runLengths->rowCount());

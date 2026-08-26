@@ -25,6 +25,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/serializer/ChunkedStreamPayload.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
@@ -36,10 +37,16 @@ SerializationVersion getInputVersion(std::string_view input) {
   NIMBLE_CHECK(!input.empty(), "Input cannot be empty");
   const auto version =
       static_cast<SerializationVersion>(static_cast<uint8_t>(input.front()));
+  // This overload labels its output kProjection, which always carries varint
+  // stream row counts, while tablet bodies use fixed u32. kTablet does not
+  // describe the output either, because slicing strips the per-stream chunk
+  // headers that kTablet mandates. Neither version states what a tablet-sourced
+  // slice actually is, so reject the input rather than mislabel it.
+  // TODO: Accept kTablet again and emit kTablet with the chunk-header flag
+  // cleared once that flag exists.
   NIMBLE_CHECK(
       version == SerializationVersion::kSerialization ||
-          version == SerializationVersion::kProjection ||
-          version == SerializationVersion::kTablet,
+          version == SerializationVersion::kProjection,
       "Unsupported StreamSlicer input version: {}",
       version);
   return version;
@@ -62,7 +69,22 @@ std::unique_ptr<Encoding> createEncoding(
       options);
 }
 
-Encoding::Options streamEncodingOptions(SerializationVersion version) {
+Encoding::Options streamEncodingOptions(
+    bool useVarintRowCount,
+    velox::BufferPool* bufferPool,
+    EncodingBufferPool* encodingBufferPool) {
+  Encoding::Options options;
+  options.useVarintRowCount = useVarintRowCount;
+  options.bufferPool = bufferPool;
+  options.encodingBufferPool = encodingBufferPool;
+  return options;
+}
+
+Encoding::Options streamEncodingOptions(
+    SerializationVersion version,
+    bool streamsUseVarintRowCount,
+    velox::BufferPool* bufferPool,
+    EncodingBufferPool* encodingBufferPool) {
   NIMBLE_CHECK(
       version == SerializationVersion::kSerialization ||
           version == SerializationVersion::kProjection ||
@@ -70,11 +92,11 @@ Encoding::Options streamEncodingOptions(SerializationVersion version) {
       "StreamSlicer raw streams must be kSerialization, kProjection, or "
       "kTablet encoded. Got: {}",
       version);
-  return {.useVarintRowCount = !isTabletVersion(version)};
-}
-
-Encoding::Options streamEncodingOptions(bool useVarintRowCount) {
-  return {.useVarintRowCount = useVarintRowCount};
+  NIMBLE_CHECK(
+      isTabletVersion(version) || streamsUseVarintRowCount,
+      "Non-tablet streams must use varint row counts");
+  return streamEncodingOptions(
+      streamsUseVarintRowCount, bufferPool, encodingBufferPool);
 }
 
 std::string_view nullableNullsStream(
@@ -250,6 +272,9 @@ StreamSlicer::StreamSlicer(
       pool_{pool},
       options_{std::move(options)},
       streamCount_{streamCount(schema_)},
+      bufferPool_{velox::BufferPool::kDefaultCapacity},
+      encodingBufferPool_{pool_},
+      strippedStreamBufferPool_{pool_, /*maxCachedBuffers=*/1},
       headerBuffer_{pool_},
       trailerBuffer_{pool_} {
   NIMBLE_CHECK_NOT_NULL(pool_, "Memory pool cannot be null");
@@ -286,7 +311,10 @@ folly::IOBuf StreamSlicer::slice(
       inputStreams_,
       {.offset = offset, .length = length},
       outputBuffer,
-      streamEncodingOptions(parser.streamEncodingUsesVarintRowCount()));
+      streamEncodingOptions(
+          parser.streamEncodingUsesVarintRowCount(),
+          &bufferPool_,
+          &encodingBufferPool_));
 
   streamSizes_.assign(slicedStreams.streams.size(), 0);
   for (uint32_t i = 0; i < slicedStreams.streams.size(); ++i) {
@@ -298,7 +326,8 @@ folly::IOBuf StreamSlicer::slice(
       headerBuffer_, SerializationVersion::kProjection, length);
   headerBuffer_[flagsOffset] = static_cast<char>(detail::makeFlagsByte(
       slicedStreams.requiresNullBarrier,
-      parser.streamEncodingUsesVarintRowCount()));
+      parser.streamEncodingUsesVarintRowCount(),
+      /*streamHasChunkHeader=*/false));
 
   trailerBuffer_.resize(0);
   detail::writeTrailer(
@@ -319,15 +348,45 @@ folly::IOBuf StreamSlicer::slice(
 StreamSlicer::SlicedStreams StreamSlicer::slice(
     const std::vector<std::string_view>& inputStreams,
     uint32_t offset,
-    uint32_t length,
-    SerializationVersion streamVersion) const {
+    uint32_t length) const {
   NIMBLE_CHECK_GT(length, 0, "Slice length must be positive");
-  Buffer outputBuffer{*pool_, totalBytes(inputStreams)};
+  NIMBLE_CHECK(
+      !options_.streamHasChunkHeader || isTabletVersion(options_.streamVersion),
+      "Chunk headers are only supported for kTablet streams");
+
+  if (!options_.streamHasChunkHeader) {
+    Buffer outputBuffer{*pool_, totalBytes(inputStreams)};
+    return sliceStreams(
+        inputStreams,
+        {.offset = offset, .length = length},
+        outputBuffer,
+        streamEncodingOptions(
+            options_.streamVersion,
+            options_.streamsUseVarintRowCount,
+            &bufferPool_,
+            &encodingBufferPool_));
+  }
+
+  ScopedEncodingBuffer strippedStreamBuffer{pool_, &strippedStreamBufferPool_};
+  inputStreams_.resize(inputStreams.size());
+  for (size_t i = 0; i < inputStreams.size(); ++i) {
+    if (inputStreams[i].empty()) {
+      inputStreams_[i] = {};
+      continue;
+    }
+    inputStreams_[i] =
+        stripChunkHeaders(inputStreams[i], strippedStreamBuffer.get());
+  }
+  Buffer outputBuffer{*pool_, totalBytes(inputStreams_)};
   return sliceStreams(
-      inputStreams,
+      inputStreams_,
       {.offset = offset, .length = length},
       outputBuffer,
-      streamEncodingOptions(streamVersion));
+      streamEncodingOptions(
+          options_.streamVersion,
+          options_.streamsUseVarintRowCount,
+          &bufferPool_,
+          &encodingBufferPool_));
 }
 
 StreamSlicer::SlicedStreams StreamSlicer::sliceStreams(
@@ -600,7 +659,7 @@ bool StreamSlicer::hasStream(
 bool StreamSlicer::hasFlatMapValues(
     const Type& type,
     const std::vector<std::string_view>& inputStreams) const {
-  return visitValueStreamLeaves(type, [&](offset_size offset) {
+  return visitPresenceStreamOffsets(type, [&](offset_size offset) {
     return offset < inputStreams.size() && !inputStreams[offset].empty();
   });
 }

@@ -343,8 +343,25 @@ CachedMetadataInput::CachedMetadataInput(
     velox::StringIdLease fileId,
     velox::cache::AsyncDataCache* cache,
     const Options& options)
-    : MetadataInput(file, options), cache_{cache}, fileId_{std::move(fileId)} {
+    : MetadataInput(file, options),
+      cache_{cache},
+      fileId_{std::move(fileId)},
+      maxCacheEntrySize_{options.maxCacheEntrySize} {
   NIMBLE_CHECK_NOT_NULL(cache_);
+
+  // SsdRun packs the entry size into kSizeBits bits, so a larger entry can
+  // never be written to SSD.
+  if (cache_->ssdCache() != nullptr && maxCacheEntrySize_.has_value()) {
+    NIMBLE_CHECK_LE(
+        maxCacheEntrySize_.value(),
+        1U << velox::cache::SsdRun::kSizeBits,
+        "MetadataInput::Options::maxCacheEntrySize must not exceed the Velox "
+        "SSD cache maximum entry size when an SSD cache is configured");
+  }
+}
+
+bool CachedMetadataInput::cacheable(uint64_t size) const {
+  return !maxCacheEntrySize_ || size <= *maxCacheEntrySize_;
 }
 
 velox::cache::CachePin CachedMetadataInput::acquireCachePin(
@@ -436,6 +453,12 @@ void CachedMetadataInput::loadFromSsd(
   auto& ssdFile = ssdCache->file(fileId_.id());
   for (const auto index : loadIndices) {
     auto& loaded = sections[index];
+    const auto uncompressedSize = resolveUncompressedSize(loaded.section);
+    if (uncompressedSize.has_value() && !cacheable(uncompressedSize.value())) {
+      remainingLoadIndices.emplace_back(index);
+      continue;
+    }
+
     const velox::cache::RawFileCacheKey key{
         fileId_.id(), loaded.section.offset()};
 
@@ -446,12 +469,15 @@ void CachedMetadataInput::loadFromSsd(
     }
 
     const auto ssdSize = ssdPin.run().size();
-    const auto uncompressedSize = resolveUncompressedSize(loaded.section);
     if (uncompressedSize.has_value()) {
       NIMBLE_CHECK_EQ(
           ssdSize,
           uncompressedSize.value(),
           "SSD entry size mismatch with expected uncompressed size");
+    }
+    if (!cacheable(ssdSize)) {
+      remainingLoadIndices.emplace_back(index);
+      continue;
     }
 
     velox::cache::CachePin pin;
@@ -508,7 +534,7 @@ std::vector<uint32_t> CachedMetadataInput::loadFromCache(
     const velox::cache::RawFileCacheKey key{fileId_.id(), section.offset()};
     const auto uncompressedSize = resolveUncompressedSize(section);
 
-    if (uncompressedSize.has_value()) {
+    if (uncompressedSize.has_value() && cacheable(uncompressedSize.value())) {
       auto pin = acquireCachePin(key, uncompressedSize.value());
       auto buffer = tryCacheHit(uncompressedSize.value(), pin);
       if (buffer != nullptr) {
@@ -575,8 +601,10 @@ void CachedMetadataInput::processLoadedBuffers(
           promoteCachePin(loaded.section, std::move(*pin), ioStats_->read());
     } else {
       NIMBLE_CHECK(
-          !loaded.section.uncompressedSize().has_value(),
-          "Section without cache pin should not have uncompressed size set");
+          !loaded.section.uncompressedSize().has_value() ||
+              !cacheable(loaded.section.uncompressedSize().value()),
+          "Section without cache pin must have an unknown or oversized "
+          "uncompressed size");
       loaded.buffer =
           decompressAndStore(loaded.section, std::move(readBuffers.buffers[i]));
     }
@@ -606,10 +634,13 @@ std::vector<std::shared_ptr<MetadataBuffer>> CachedMetadataInput::load(
 std::shared_ptr<MetadataBuffer> CachedMetadataInput::store(
     const MetadataSection& section,
     velox::BufferPtr&& decompressed) {
-  // NOTE: This path handles sections without pre-claimed cache pins (old files
-  // without uncompressed_size). Sections with pins are handled directly in
-  // loadFromFile. This will be deprecated once all nimble metadata sections
-  // include uncompressed size.
+  // This path handles sections without pre-claimed cache pins: old files
+  // without uncompressed_size and sections too large to cache. Cacheable
+  // sections with known sizes are handled directly in loadFromFile.
+  if (!cacheable(decompressed->size())) {
+    return std::make_shared<MetadataBuffer>(std::move(decompressed));
+  }
+
   const velox::cache::RawFileCacheKey key{fileId_.id(), section.offset()};
   auto pin = acquireCachePin(key, decompressed->size());
   auto buffer = tryCacheHit(decompressed->size(), pin);
@@ -651,7 +682,7 @@ std::unique_ptr<MetadataBuffer> CachedMetadataInput::findCachedMetadata(
       continue;
     }
     auto* entry = pin.checkedEntry();
-    if (!entry->isShared()) {
+    if (!entry->isShared() || !cacheable(entry->size())) {
       return nullptr;
     }
     NIMBLE_CHECK(
@@ -668,6 +699,10 @@ void CachedMetadataInput::cacheMetadata(
   for (const auto& range : ranges) {
     totalSize += range.size();
   }
+  if (!cacheable(totalSize)) {
+    return;
+  }
+
   const velox::cache::RawFileCacheKey key{fileId_.id(), cacheOffset};
   auto pin = acquireCachePin(key, totalSize);
   velox::common::testutil::TestValue::adjust(

@@ -264,10 +264,18 @@ TypePtr resolveTypeInt(
     const auto& conditionType = argTypes[i * 2];
     const auto& thenType = argTypes[i * 2 + 1];
 
-    VELOX_CHECK_EQ(
-        conditionType->kind(),
-        TypeKind::BOOLEAN,
-        "Condition of  SWITCH statement is not bool");
+    if (!conditionType->isBoolean()) {
+      VELOX_CHECK(
+          allowedCoercions,
+          "Condition of  SWITCH statement is not bool: {}",
+          conditionType->toString());
+      // A null literal condition types as UNKNOWN, which coerces to boolean.
+      VELOX_CHECK(
+          coercer.coerce(conditionType, BOOLEAN()).has_value(),
+          "Condition of  SWITCH statement is not coercible to bool: {}",
+          conditionType->toString());
+      coercions[i * 2] = BOOLEAN();
+    }
 
     if (*thenType != *resultType) {
       const auto common = allowedCoercions

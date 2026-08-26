@@ -1176,9 +1176,13 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     if (thisContext == Context::kFused && producer &&
         producer->target() == "prim.ListPack") {
       const bool hostShapes = concatNeedsHostShapes(node, types_);
+      const bool parallelFill = concatFillsInParallel(node, types_);
       for (const auto& listInput : producer->inputs()) {
         if (hostShapes) {
           breakDeviceSizedProducers(listInput.value);
+        }
+        if (parallelFill) {
+          breakConcatOperandIntoOwnKernel(listInput.value, node->outputs()[0]);
         }
         placeInput(listInput.value, isScalarSize);
       }
@@ -1193,6 +1197,15 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     }
     pushdownStandalone(node);
     return thisContext;
+  }
+  // A concat whose operands fill it from ops of their own ends its kernel. The
+  // operands write the result in the previous step, so a reader of the result
+  // has to be in a later kernel; keeping it fused would instead need an
+  // opBarrier on top of every operand's op, which the fusion path has no way to
+  // express.
+  if (concatFillsInParallel(node, types_)) {
+    pushdownFused(node);
+    return Context::kFusedBreak;
   }
   if (meta->isKernelBreak(
           isSingleBlock_,
@@ -1307,6 +1320,24 @@ void CompileCtx::breakDeviceSizedProducers(ValueCP value) {
   }
   if (setsSizeOnDevice(producer)) {
     breakProducerIntoOwnKernel(producer);
+  }
+}
+
+void CompileCtx::breakConcatOperandIntoOwnKernel(
+    ValueCP operand,
+    ValueCP concatOutput) {
+  auto* producer = operand->producer();
+  if (!producer || placed_.count(producer) ||
+      (inputs_ && inputs_->count(producer))) {
+    // Nothing of this operand is computed here: it is a graph input or a value
+    // an earlier step already materialized, so there is no producing expression
+    // to push down. The concat still copies it in.
+    return;
+  }
+  const size_t before = kernelOpStorage_.size();
+  breakProducerIntoOwnKernel(producer);
+  for (size_t i = before; i < kernelOpStorage_.size(); ++i) {
+    kernelOpStorage_[i]->addOrderingOutput(concatOutput->id());
   }
 }
 
@@ -1783,6 +1814,19 @@ std::string cudaAttrType(const nativert::Constant& c) {
 
 namespace {
 
+// A C++ type spelling reduced to something usable inside an identifier, so a
+// shared declaration's variable can be made unique per type. Anything that is
+// not alphanumeric becomes an underscore, which keeps distinct types distinct
+// without needing to understand the spelling.
+std::string identifierSuffix(std::string_view type) {
+  std::string out;
+  out.reserve(type.size());
+  for (char c : type) {
+    out += std::isalnum(static_cast<unsigned char>(c)) ? c : '_';
+  }
+  return out;
+}
+
 void declareAttributesImpl(
     NodeCP node,
     const KernelOperation& op,
@@ -2047,16 +2091,30 @@ std::string CompileCtx::makeCall(
     }
   }
 
-  // Shared declarations: declare in the kernel and pass as arguments.
+  // Shared declarations: declare in the kernel and pass as arguments. The name
+  // is suffixed by the type, as the dynamic form below already does, because
+  // two ops fused into one kernel can ask for the same name at different
+  // types: masked_select_jagged wants a uint32_t 'counter' and
+  // group_length_guard_head an int64_t one. Emitting both unsuffixed put two
+  // conflicting declarations of 'counter' in one scope. nvcc calls that a
+  // redeclaration; NVRTC segfaults inside nvrtcCompileProgram, before the
+  // program log is readable, so it surfaces as a broken promise for the
+  // compiled module rather than as a compile error.
+  //
+  // Deduplication cannot fix this on its own: addSharedDeclaration matches on
+  // the whole declaration string, and even matching on the name would be wrong,
+  // since the two ops need storage of different types rather than one shared
+  // variable.
   for (const auto& [type, name] : meta->sharedDecls) {
+    auto varName = name + "_" + identifierSuffix(type);
     std::string decl = "  __shared__ ";
     decl += type;
     decl += " ";
-    decl += name;
+    decl += varName;
     decl += ";\n";
     op.addSharedDeclaration(decl);
     comma();
-    ss << name;
+    ss << varName;
   }
 
   // Dynamic shared declarations: type from input dtype, name suffixed by type.
@@ -2368,6 +2426,47 @@ void addDuplicateExtraBindings(
   }
 }
 
+// Returns every actual frame value 'op' may read, over all of its grid
+// variants. Used to decide at which step a last-use value can be released, so
+// this has to err on the side of listing too much: a reader missed here is a
+// buffer freed while a later step still reads it. orderingInputs is the right
+// source for a kernel launch -- it is the set the scheduler orders the launch
+// against, and so already includes the host-side view operands that are inputs
+// of no fused node. The subgraph leaves cover an op whose grid is empty.
+std::unordered_set<nativert::ValueId> opReadSet(const OpInvocation& op) {
+  const auto& bindings = op.bindings();
+  auto toActual = [&](nativert::ValueId formalId) {
+    auto it = bindings.find(formalId);
+    return it != bindings.end() ? it->second : formalId;
+  };
+  std::unordered_set<nativert::ValueId> ids;
+  auto* projectOp = op.projectOp();
+  for (const auto* grid :
+       {&projectOp->grid(),
+        &projectOp->singleBlockGrid(),
+        &projectOp->cgGrid()}) {
+    for (const auto& step : *grid) {
+      for (const auto& launch : step) {
+        if (launch.op != nullptr) {
+          for (auto id : launch.op->orderingInputs()) {
+            ids.insert(toActual(id));
+          }
+        } else if (launch.standalone != nullptr) {
+          for (const auto& input : launch.standalone->inputs()) {
+            if (input.value != nullptr) {
+              ids.insert(toActual(input.value->id()));
+            }
+          }
+        }
+      }
+    }
+  }
+  for (const auto* input : projectOp->subgraph().inputs) {
+    ids.insert(toActual(input->id()));
+  }
+  return ids;
+}
+
 bool isAllViews(
     NodeCP node,
     const std::unordered_set<NodeCP>& placed,
@@ -2505,8 +2604,31 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
   // WaveConfig::freeIntermediates releases their frame tensors after execute().
   std::vector<nativert::ValueId> lastUseIds;
   lastUseIds.reserve(project.lastUse.size());
+  // For each of them, the ops_ indices that read it, which is what lets the
+  // executor release the value after the last step those ops occupy instead of
+  // after the node's last step. Left empty -- meaning "release at the node's
+  // last step" -- for a value produced inside this node: its producer writes
+  // the frame slot at a step this reader-based bound knows nothing about.
+  std::vector<std::vector<int32_t>> lastUseReaderOps;
+  lastUseReaderOps.reserve(project.lastUse.size());
+  std::vector<std::unordered_set<nativert::ValueId>> readSets;
+  readSets.reserve(ops_.size());
+  for (const auto& op : ops_) {
+    readSets.push_back(opReadSet(op));
+  }
+  const std::unordered_set<NodeCP> layerNodes(nodes.begin(), nodes.end());
   for (auto* value : project.lastUse) {
     lastUseIds.push_back(value->id());
+    std::vector<int32_t> readers;
+    const auto* producer = value->producer();
+    if (producer == nullptr || layerNodes.count(producer) == 0) {
+      for (size_t i = 0; i < readSets.size(); ++i) {
+        if (readSets[i].count(value->id()) != 0) {
+          readers.push_back(static_cast<int32_t>(i));
+        }
+      }
+    }
+    lastUseReaderOps.push_back(std::move(readers));
   }
   // Values whose buffer an elementwise op may reuse in place for its output:
   // reusable last-use boundary inputs and expr-local overwritable temps. Only
@@ -2562,6 +2684,7 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
       std::move(ivalueStorage_),
       waveGraph_.nextCompositeInvocationId(),
       std::move(lastUseIds),
+      std::move(lastUseReaderOps),
       std::move(reusableIds),
       std::vector<Launch>{},
       std::move(elidedCloneInputs));

@@ -84,6 +84,7 @@ class Pool {
 
 using StreamPool = Pool<facebook::velox::wave::Stream>;
 using EventPool = Pool<facebook::velox::wave::Event>;
+using EventP = std::unique_ptr<facebook::velox::wave::Event>;
 
 /// Returns an alias of 'base' with the given shape, strides and element
 /// offset, built straight from the TensorImpl. This is the primitive
@@ -93,11 +94,36 @@ using EventPool = Pool<facebook::velox::wave::Event>;
 /// is rebuilt per launch. Wave buffers are inference-only, so the skipped view
 /// tracking is unused. The caller owns the argument conditioning and bounds
 /// checks the dispatched ops would have done.
+/// Microseconds this thread has spent inside device allocator calls, monotonic
+/// over the thread's life; read a pair and subtract. The allocation phase of a
+/// step also computes shapes and builds the views over what it allocated, and
+/// those cost differently and are fixed differently -- a bigger arena or a
+/// coarser grouping moves the first, a cheaper view primitive moves the second
+/// -- so the report separates them and this is the part it can measure
+/// directly. Only accumulated under the kTiming trace bit.
+int64_t threadAllocCallUs();
+
+/// Charges the enclosed allocator call to threadAllocCallUs. Wraps only the
+/// call itself, never the surrounding shape arithmetic.
+class ScopedAllocCall {
+ public:
+  ScopedAllocCall();
+  ~ScopedAllocCall();
+
+  ScopedAllocCall(const ScopedAllocCall&) = delete;
+  ScopedAllocCall& operator=(const ScopedAllocCall&) = delete;
+
+ private:
+  const bool timing_;
+  const uint64_t start_;
+};
+
 at::Tensor aliasTensor(
     const at::Tensor& base,
     c10::IntArrayRef sizes,
     c10::IntArrayRef strides,
-    int64_t storageOffset);
+    int64_t storageOffset,
+    std::optional<c10::ScalarType> dtype = std::nullopt);
 
 /// Parses a qualified op name (e.g. "torch.ops.aten.add.Tensor") and looks up
 /// its FunctionSchema from the dispatcher. Returns nullptr if not found.

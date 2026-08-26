@@ -267,8 +267,8 @@ PFOREncoding<T>::PFOREncoding(
       if (numExceptions_ == 0) {
         NIMBLE_CHECK_EQ(size, 0, "Empty Pfor exception stream has data.");
       } else {
-        auto subEncoding = EncodingFactory(options).create(
-            pool, {pos, size}, stringBufferFactory);
+        auto subEncoding = EncodingFactory().create(
+            pool, {pos, size}, stringBufferFactory, options);
         subEncoding->materialize(numExceptions_, subStream.data());
       }
       pos += size;

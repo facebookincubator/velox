@@ -13,18 +13,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/dwio/nimble/writer/Writer.h"
 
-namespace facebook::nimble {
+namespace facebook.nimble.serialization;
 
-// The internal counterpart returns a reclaimer derived from
-// velox::exec::MemoryReclaimer, which additionally suspends the Velox Driver
-// for the duration of an arbitration request. velox/exec is not part of
-// VELOX_BUILD_MINIMAL_WITH_DWIO, which is what Nimble's open source build
-// configures, so no reclaimer is installed here and the writer does not
-// participate in memory arbitration.
-std::unique_ptr<velox::memory::MemoryReclaimer> Writer::makeMemoryReclaimer() {
-  return nullptr;
+/// Standalone external dictionary artifact produced by the build tool.
+table ExternalDictionary {
+  /// Nimble DataType of the dictionary values.
+  data_type:uint8;
+
+  /// Root encoding type used by encoded_alphabet.
+  alphabet_encoding_type:uint8;
+
+  /// Whether the builder sorted unique values before encoding the alphabet.
+  sort_values:bool;
+
+  /// Number of unique values encoded in encoded_alphabet.
+  value_count:uint64;
+
+  /// Nimble-encoded dictionary alphabet bytes.
+  encoded_alphabet:[ubyte];
 }
 
-} // namespace facebook::nimble
+root_type ExternalDictionary;

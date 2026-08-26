@@ -36,7 +36,9 @@ target_link_libraries(
   nimble_velox_selective
   nimble_common_file_writer
   nimble_encoding_layout_test_helper
+  nimble_encodings_tests_utils
   nimble_index_test_base
+  nimble_shared_dictionary_test_utils
   velox_vector_test_lib
   velox_vector_fuzzer
   # See also the above VELOX_BUILD_TEST_UTILS=ON comment.

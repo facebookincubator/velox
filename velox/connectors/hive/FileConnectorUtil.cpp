@@ -54,6 +54,33 @@ FormatScopedConfigs makeFormatScopedConfigs(
           dwio::common::formatConfigPrefix(fileFormat, "_")))};
 }
 
+namespace {
+
+void validateColumnMappingMode(
+    dwio::common::ColumnMappingMode mode,
+    dwio::common::FileFormat fileFormat) {
+  // kParquetFieldId is format-specific: it matches requested columns against
+  // physical Parquet schema field_id metadata. Other readers don't have that
+  // metadata, so reject it at split setup time instead of letting a later
+  // reader path interpret it as a generic field-id or name/position mode.
+  VELOX_USER_CHECK(
+      mode != dwio::common::ColumnMappingMode::kParquetFieldId ||
+          fileFormat == dwio::common::FileFormat::PARQUET,
+      "Column mapping mode {} is not supported for file format {}",
+      mode,
+      dwio::common::FileFormatName::toName(fileFormat));
+}
+
+dwio::common::ColumnMappingMode sessionColumnMappingMode(
+    const FileConfig& fileConfig,
+    const config::ConfigBase* sessionProperties) {
+  return fileConfig.useColumnNames(sessionProperties)
+      ? dwio::common::ColumnMappingMode::kName
+      : dwio::common::ColumnMappingMode::kPosition;
+}
+
+} // namespace
+
 void configureReaderOptions(
     const std::shared_ptr<const FileConfig>& fileConfig,
     const ConnectorQueryCtx* connectorQueryCtx,
@@ -79,6 +106,8 @@ void configureReaderOptions(
   auto sessionProperties = connectorQueryCtx->sessionProperties();
   VELOX_CHECK_NOT_NULL(sessionProperties, "Session properties are null");
   readerOptions.setLoadQuantum(fileConfig->loadQuantum(sessionProperties));
+  readerOptions.setDirectBufferedInputSharedAllocation(
+      fileConfig->directBufferedInputSharedAllocation(sessionProperties));
   readerOptions.setMaxCoalesceBytes(
       fileConfig->maxCoalescedBytes(sessionProperties));
   readerOptions.setMaxCoalesceDistance(
@@ -86,10 +115,10 @@ void configureReaderOptions(
   readerOptions.setFileColumnNamesReadAsLowerCase(
       fileConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
   readerOptions.setAllowEmptyFile(true);
-  readerOptions.setColumnMappingMode(
-      fileConfig->useColumnNames(sessionProperties)
-          ? dwio::common::ColumnMappingMode::kName
-          : dwio::common::ColumnMappingMode::kPosition);
+  const auto columnMappingMode = fileSplit->columnMappingMode.value_or(
+      sessionColumnMappingMode(*fileConfig, sessionProperties));
+  validateColumnMappingMode(columnMappingMode, fileSplit->fileFormat);
+  readerOptions.setColumnMappingMode(columnMappingMode);
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());
@@ -262,22 +291,34 @@ bool testFilters(
       // By design, the partition key columns for Iceberg tables are included in
       // the data files to facilitate partition transform and partition
       // evolution, so we need to test both cases.
-      if (!rowType->containsChild(name) || iter != partitionKeys.end()) {
+      //
+      // A constant decides the column even when the file carries it:
+      // 'fileTypeWithId' has no subtree for it, so there are no statistics.
+      if (child->isConstant() || !rowType->containsChild(name) ||
+          iter != partitionKeys.end()) {
         if (iter != partitionKeys.end() && iter->second.has_value()) {
           const auto handlesIter = partitionKeysHandle.find(name);
           VELOX_CHECK(handlesIter != partitionKeysHandle.end());
 
-          // This is a non-null partition key
-          return applyPartitionFilter(
-              handlesIter->second->dataType(),
-              iter->second.value(),
-              handlesIter->second->isPartitionDateValueDaysSinceEpoch(),
-              child->filter(),
-              asLocalTime);
+          // A later column may still exclude the split, so keep going.
+          if (!applyPartitionFilter(
+                  handlesIter->second->dataType(),
+                  iter->second.value(),
+                  handlesIter->second->isPartitionDateValueDaysSinceEpoch(),
+                  child->filter(),
+                  asLocalTime)) {
+            VLOG(1) << "Skipping " << filePath
+                    << " because the partition value failed the filter for "
+                       "column "
+                    << name;
+            return false;
+          }
+          continue;
         }
-        // Column is missing from the file. If it has a constant value (e.g.,
-        // an initial-default from schema evolution), test the filter against
-        // it. Otherwise treat the column as NULL.
+        // The value does not come from the file. Filter on the constant if
+        // there is one (an initial-default from schema evolution), otherwise
+        // treat the column as NULL. Nothing downstream re-checks it:
+        // testFilterOnConstant() accepts any non-null constant.
         bool filterMatchedConstant = false;
         if (child->isConstant()) {
           auto constantVec = child->constantValue();
