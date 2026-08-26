@@ -16,9 +16,11 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
+#include "velox/experimental/cudf/expression/TimestampWithTimeZoneColumn.h"
 #include "velox/experimental/cudf/expression/TimezoneConversion.h"
 
 #include "velox/functions/lib/TimeUtils.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -70,12 +72,13 @@ bool DateTruncFunction::canEvaluate(const core::TypedExprPtr& expr) {
   const auto& inputType = expr->inputs()[1]->type();
   const bool isTimestamp = inputType->isTimestamp();
   const bool isDate = inputType->isDate();
-  if (!isTimestamp && !isDate) {
+  const bool isTswtz = isTimestampWithTimeZoneType(inputType);
+  if (!isTimestamp && !isDate && !isTswtz) {
     return false;
   }
   if (*unit == DateTimeUnit::kSecond || *unit == DateTimeUnit::kMinute ||
       *unit == DateTimeUnit::kHour) {
-    return isTimestamp;
+    return isTimestamp || isTswtz;
   }
   if (*unit == DateTimeUnit::kDay || *unit == DateTimeUnit::kWeek ||
       *unit == DateTimeUnit::kMonth || *unit == DateTimeUnit::kQuarter ||
@@ -96,18 +99,21 @@ DateTruncFunction::DateTruncFunction(
   auto inputType = expr->inputs()[1]->type();
   const bool isTimestamp = inputType->isTimestamp();
   const bool isDate = inputType->isDate();
+  isTimestampWithTimeZone_ = isTimestampWithTimeZoneType(inputType);
   VELOX_CHECK(
-      isTimestamp || isDate,
-      "date_trunc only supports date or timestamp inputs");
+      isTimestamp || isDate || isTimestampWithTimeZone_,
+      "date_trunc only supports date, timestamp, or timestamp with time zone inputs");
   auto parsed = functions::fromDateTimeUnitString(*unitString, true);
   VELOX_CHECK(parsed.has_value(), "Invalid date_trunc unit: {}", *unitString);
   unit_ = *parsed;
 
-  // Validate time-only units require timestamp input.
+  // Validate time-only units require an instant (timestamp or TSWTZ) input.
   if (unit_ == DateTimeUnit::kSecond || unit_ == DateTimeUnit::kMinute ||
       unit_ == DateTimeUnit::kHour) {
     VELOX_CHECK(
-        isTimestamp, "date_trunc {} requires timestamp input", *unitString);
+        isTimestamp || isTimestampWithTimeZone_,
+        "date_trunc {} requires timestamp input",
+        *unitString);
   }
 
   auto stream = cudf::get_default_stream(cudf::allow_default_stream);
@@ -265,6 +271,53 @@ ColumnOrView DateTruncFunction::eval(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
   VELOX_CHECK_EQ(inputColumns.size(), 1, "date_trunc expects one column input");
+
+  if (isTimestampWithTimeZone_) {
+    // TIMESTAMP WITH TIME ZONE carries its own zone per row; truncate on each
+    // row's embedded wall clock (per-row multi-zone), independent of the
+    // session zone. Matches CPU DateTruncFunction::call(TSWTZ).
+    auto packed = asView(inputColumns[0]);
+    auto zoneKey = tswtzZoneKey(packed, stream, mr);
+    auto distinct = tswtzDistinctZoneKeys(zoneKey->view(), stream, mr);
+    auto local = tswtzLocalWallClock(packed, stream, mr);
+
+    std::unique_ptr<cudf::column> truncatedUtcMillis;
+    if (unit_ == DateTimeUnit::kSecond || unit_ == DateTimeUnit::kMinute ||
+        unit_ == DateTimeUnit::kHour) {
+      // unit < day: take the local-to-truncated delta and subtract it from the
+      // UTC instant. Whole-minute offsets make this exact for second/minute,
+      // and it is the DST-safe form for the hour branch.
+      ColumnOrView flooredLocal = truncateOnColumn(local->view(), stream, mr);
+      auto delta = cudf::binary_operation(
+          local->view(),
+          asView(flooredLocal),
+          cudf::binary_operator::SUB,
+          cudf::data_type(cudf::type_id::DURATION_MILLISECONDS),
+          stream,
+          mr);
+      auto utcInstant = tswtzUtcInstant(packed, stream, mr);
+      truncatedUtcMillis = cudf::binary_operation(
+          utcInstant->view(),
+          delta->view(),
+          cudf::binary_operator::SUB,
+          cudf::data_type(cudf::type_id::TIMESTAMP_MILLISECONDS),
+          stream,
+          mr);
+    } else {
+      // day and above: truncate the local wall clock, then convert back to UTC
+      // per row's zone (a spring-forward gap throws, matching toGMT).
+      ColumnOrView truncatedLocal = truncateOnColumn(local->view(), stream, mr);
+      truncatedUtcMillis = tswtzLocalToUtc(
+          asView(truncatedLocal),
+          zoneKey->view(),
+          distinct,
+          /*correctForward=*/false,
+          stream,
+          mr);
+    }
+    return tswtzPack(truncatedUtcMillis->view(), zoneKey->view(), stream, mr);
+  }
+
   auto inputCol = asView(inputColumns[0]);
   const auto outputType = inputCol.type();
 

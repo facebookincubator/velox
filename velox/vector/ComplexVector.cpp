@@ -477,14 +477,14 @@ BaseVector* RowVector::loadedVector() {
       hasLazy = true;
     }
   }
-  containsLazyNotLoaded_.store(hasLazy ? 1 : 0, std::memory_order_relaxed);
+  containsLazyNotLoaded_ = hasLazy ? 1 : 0;
   childrenLoaded_ = true;
   return this;
 }
 
 void RowVector::invalidateContainsLazyNotLoaded() const {
   childrenLoaded_ = false;
-  containsLazyNotLoaded_.store(-1, std::memory_order_relaxed);
+  containsLazyNotLoaded_ = -1;
 }
 
 void RowVector::computeContainsLazyNotLoaded() const {
@@ -495,14 +495,14 @@ void RowVector::computeContainsLazyNotLoaded() const {
       break;
     }
   }
-  containsLazyNotLoaded_.store(result, std::memory_order_relaxed);
+  containsLazyNotLoaded_ = result;
 }
 
 bool RowVector::containsLazyNotLoaded() const {
-  if (containsLazyNotLoaded_.load(std::memory_order_relaxed) < 0) {
+  if (containsLazyNotLoaded_ < 0) {
     computeContainsLazyNotLoaded();
   }
-  return containsLazyNotLoaded_.load(std::memory_order_relaxed) == 1;
+  return containsLazyNotLoaded_ == 1;
 }
 
 void ArrayVectorBase::copyRangesImpl(

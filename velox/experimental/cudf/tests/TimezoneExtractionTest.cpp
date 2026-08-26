@@ -32,12 +32,12 @@
 // and not a pre-existing extraction bug.
 //
 // The plan/operator path is used here rather than
-// CudfFunctionBaseTest::assertExpressionMatchesCpu because that lightweight
-// harness evaluates the expression with finalize=false and cannot relabel a
-// narrow cuDF result (e.g. extract_datetime_component returns SMALLINT) to the
-// Velox BIGINT result type. The operator path applies the finalizing cast, the
-// same way a real query does, and is already exercised by
-// FilterProjectTest.extractTimestampComponents.
+// CudfFunctionBaseTest::assertExpressionMatchesCpu so the extraction is checked
+// through a real plan, including the scan and the operator's own type handling,
+// as FilterProjectTest.extractTimestampComponents does. The lightweight harness
+// would also work now that it finalizes results the way CudfFilterProject does;
+// before that it could not relabel a narrow cuDF result
+// (extract_datetime_component returns SMALLINT) to the declared BIGINT.
 //
 // These tests require a GPU and are labeled cuda_driver; they will not run in a
 // CPU-only environment.

@@ -26,8 +26,10 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Time.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 #include <folly/ScopeGuard.h>
 
@@ -1359,6 +1361,69 @@ TEST_F(CudfFilterProjectTest, dateTruncTimestampUnits) {
       "date_trunc('year', event_ts) AS year"};
 
   assertProjectMatchesVelox(vectors, projections);
+}
+
+// date_trunc(timestamp with time zone) truncates on each row's embedded zone
+// (independent of the session zone), matching CPU
+// DateTruncFunction::call(TSWTZ).
+TEST_F(CudfFilterProjectTest, dateTruncTimestampWithTimeZoneUnits) {
+  // 2025-01-15 20:01:01.123 UTC == 12:01:01.123 America/Los_Angeles.
+  auto input = makeRowVector({makeFlatVector<int64_t>(
+      {pack(1'736'971'261'123, tz::getTimeZoneID("America/Los_Angeles"))},
+      TIMESTAMP_WITH_TIME_ZONE())});
+  const std::vector<std::string> projections{
+      "date_trunc('second', c0) AS s",
+      "date_trunc('minute', c0) AS mi",
+      "date_trunc('hour', c0) AS h",
+      "date_trunc('day', c0) AS d",
+      "date_trunc('week', c0) AS w",
+      "date_trunc('month', c0) AS mo",
+      "date_trunc('quarter', c0) AS q",
+      "date_trunc('year', c0) AS y"};
+  assertProjectMatchesVelox({input}, projections);
+}
+
+// A fractional-offset zone (+05:30) exercises the sub-day delta and the day+
+// local->UTC round-trip on a non-whole-hour offset.
+TEST_F(CudfFilterProjectTest, dateTruncTimestampWithTimeZoneFractionalOffset) {
+  auto input = makeRowVector({makeFlatVector<int64_t>(
+      {pack(1'736'971'261'123, tz::getTimeZoneID("Asia/Kolkata"))},
+      TIMESTAMP_WITH_TIME_ZONE())});
+  const std::vector<std::string> projections{
+      "date_trunc('hour', c0) AS h",
+      "date_trunc('day', c0) AS d",
+      "date_trunc('month', c0) AS mo"};
+  assertProjectMatchesVelox({input}, projections);
+}
+
+// Each row truncates on its own embedded zone.
+TEST_F(CudfFilterProjectTest, dateTruncTimestampWithTimeZoneMixedZones) {
+  auto input = makeRowVector({makeFlatVector<int64_t>(
+      {pack(1'736'971'261'123, tz::getTimeZoneID("America/Los_Angeles")),
+       pack(1'736'971'261'123, tz::getTimeZoneID("Asia/Kolkata"))},
+      TIMESTAMP_WITH_TIME_ZONE())});
+  assertProjectMatchesVelox(
+      {input}, {"date_trunc('day', c0) AS d", "date_trunc('hour', c0) AS h"});
+}
+
+// A null row stays null through the TSWTZ path.
+TEST_F(CudfFilterProjectTest, dateTruncTimestampWithTimeZoneNull) {
+  auto input = makeRowVector({makeNullableFlatVector<int64_t>(
+      {pack(1'736'971'261'123, tz::getTimeZoneID("Asia/Kolkata")),
+       std::nullopt},
+      TIMESTAMP_WITH_TIME_ZONE())});
+  assertProjectMatchesVelox({input}, {"date_trunc('month', c0) AS mo"});
+}
+
+// A fall-back overlap: day-trunc crosses the ambiguous local midnight; the
+// local->UTC conversion must resolve to the earliest instant (matches toGMT).
+TEST_F(CudfFilterProjectTest, dateTruncTimestampWithTimeZoneDstFallBack) {
+  // 2024-11-03 08:30:00 UTC == 01:30 America/Los_Angeles during the fall-back
+  // overlap.
+  auto input = makeRowVector({makeFlatVector<int64_t>(
+      {pack(1'730'622'600'000, tz::getTimeZoneID("America/Los_Angeles"))},
+      TIMESTAMP_WITH_TIME_ZONE())});
+  assertProjectMatchesVelox({input}, {"date_trunc('day', c0) AS d"});
 }
 
 TEST_F(CudfFilterProjectTest, dateTruncDateUnits) {

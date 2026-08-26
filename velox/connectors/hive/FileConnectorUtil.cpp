@@ -24,6 +24,7 @@
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileTableHandle.h"
+#include "velox/connectors/hive/PartitionValue.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/dwrf/common/Config.h"
@@ -78,6 +79,8 @@ void configureReaderOptions(
   auto sessionProperties = connectorQueryCtx->sessionProperties();
   VELOX_CHECK_NOT_NULL(sessionProperties, "Session properties are null");
   readerOptions.setLoadQuantum(fileConfig->loadQuantum(sessionProperties));
+  readerOptions.setDirectBufferedInputSharedAllocation(
+      fileConfig->directBufferedInputSharedAllocation(sessionProperties));
   readerOptions.setMaxCoalesceBytes(
       fileConfig->maxCoalescedBytes(sessionProperties));
   readerOptions.setMaxCoalesceDistance(
@@ -213,50 +216,14 @@ bool applyPartitionFilter(
     bool isPartitionDateDaysSinceEpoch,
     const common::Filter* filter,
     bool asLocalTime) {
-  if (type->isDate()) {
-    int32_t result = 0;
-    // days_since_epoch partition values are integers in string format. Eg.
-    // Iceberg partition values.
-    if (isPartitionDateDaysSinceEpoch) {
-      result = folly::to<int32_t>(partitionValue);
-    } else {
-      result = DATE()->toDays(partitionValue);
-    }
-    return applyFilter(*filter, result);
-  }
-
-  switch (type->kind()) {
-    case TypeKind::BIGINT:
-    case TypeKind::INTEGER:
-    case TypeKind::SMALLINT:
-    case TypeKind::TINYINT: {
-      return applyFilter(*filter, folly::to<int64_t>(partitionValue));
-    }
-    case TypeKind::REAL:
-    case TypeKind::DOUBLE: {
-      return applyFilter(*filter, folly::to<double>(partitionValue));
-    }
-    case TypeKind::BOOLEAN: {
-      return applyFilter(*filter, folly::to<bool>(partitionValue));
-    }
-    case TypeKind::TIMESTAMP: {
-      VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
-      auto result = util::fromTimestampString(
-          StringView(partitionValue), util::TimestampParseMode::kPrestoCast);
-      VELOX_CHECK(!result.hasError());
-      if (asLocalTime) {
-        result.value().toGMT(Timestamp::defaultTimezone());
-      }
-      return applyFilter(*filter, result.value());
-    }
-    case TypeKind::VARCHAR:
-    case TypeKind::VARBINARY: {
-      return applyFilter(*filter, partitionValue);
-    }
-    default:
-      VELOX_FAIL(
-          "Bad type {} for partition value: {}", type->kind(), partitionValue);
-  }
+  const auto value = PartitionValue::fromString(
+      partitionValue,
+      *type,
+      asLocalTime ? PartitionValue::TimestampMode::kLocalTime
+                  : PartitionValue::TimestampMode::kUtc,
+      isPartitionDateDaysSinceEpoch ? PartitionValue::DateMode::kDaysSinceEpoch
+                                    : PartitionValue::DateMode::kIsoString);
+  return applyFilter(*filter, value);
 }
 
 template <TypeKind kind>
@@ -297,22 +264,34 @@ bool testFilters(
       // By design, the partition key columns for Iceberg tables are included in
       // the data files to facilitate partition transform and partition
       // evolution, so we need to test both cases.
-      if (!rowType->containsChild(name) || iter != partitionKeys.end()) {
+      //
+      // A constant decides the column even when the file carries it:
+      // 'fileTypeWithId' has no subtree for it, so there are no statistics.
+      if (child->isConstant() || !rowType->containsChild(name) ||
+          iter != partitionKeys.end()) {
         if (iter != partitionKeys.end() && iter->second.has_value()) {
           const auto handlesIter = partitionKeysHandle.find(name);
           VELOX_CHECK(handlesIter != partitionKeysHandle.end());
 
-          // This is a non-null partition key
-          return applyPartitionFilter(
-              handlesIter->second->dataType(),
-              iter->second.value(),
-              handlesIter->second->isPartitionDateValueDaysSinceEpoch(),
-              child->filter(),
-              asLocalTime);
+          // A later column may still exclude the split, so keep going.
+          if (!applyPartitionFilter(
+                  handlesIter->second->dataType(),
+                  iter->second.value(),
+                  handlesIter->second->isPartitionDateValueDaysSinceEpoch(),
+                  child->filter(),
+                  asLocalTime)) {
+            VLOG(1) << "Skipping " << filePath
+                    << " because the partition value failed the filter for "
+                       "column "
+                    << name;
+            return false;
+          }
+          continue;
         }
-        // Column is missing from the file. If it has a constant value (e.g.,
-        // an initial-default from schema evolution), test the filter against
-        // it. Otherwise treat the column as NULL.
+        // The value does not come from the file. Filter on the constant if
+        // there is one (an initial-default from schema evolution), otherwise
+        // treat the column as NULL. Nothing downstream re-checks it:
+        // testFilterOnConstant() accepts any non-null constant.
         bool filterMatchedConstant = false;
         if (child->isConstant()) {
           auto constantVec = child->constantValue();

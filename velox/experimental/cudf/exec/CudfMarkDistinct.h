@@ -69,6 +69,7 @@ class CudfMarkDistinct : public CudfOperatorBase {
  protected:
   void doAddInput(RowVectorPtr input) override;
   RowVectorPtr doGetOutput() override;
+  void doClose() override;
 
  private:
   /// Column indices in the input schema that form the distinct key.

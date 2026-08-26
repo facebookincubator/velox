@@ -32,5 +32,4 @@ namespace facebook::velox::cudf_velox {
 /// expression::optimize always constant folds them before an evaluator is
 /// chosen, and a GPU implementation could never be reached.
 void registerTimezoneFunctions(const std::string& prefix);
-
 } // namespace facebook::velox::cudf_velox

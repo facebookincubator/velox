@@ -391,7 +391,10 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
         dataColumns_,
         indexColumns_,
         /*tableParameters=*/std::unordered_map<std::string, std::string>{},
-        filterColumnHandles_);
+        filterColumnHandles_,
+        sampleRate_,
+        /*dbName=*/"",
+        dataColumnFieldIds_);
   }
   core::PlanNodePtr result = std::make_shared<core::TableScanNode>(
       id, outputType_, tableHandle_, assignments_);
@@ -408,9 +411,10 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
   auto upstreamNode = planBuilder_.planNode();
   VELOX_CHECK_NOT_NULL(upstreamNode, "TableWrite cannot be the source node");
 
-  // If outputType wasn't explicit specified, fallback to use the output of the
-  // upstream operator.
-  auto outputType = outputType_ ? outputType_ : upstreamNode->outputType();
+  // If targetColumns wasn't explicit specified, fallback to use the output of
+  // the upstream operator.
+  auto targetColumns =
+      targetColumns_ ? targetColumns_ : upstreamNode->outputType();
 
   // If insertHandle_ is not specified, build a HiveInsertTableHandle along with
   // columnHandles, bucketProperty and locationHandle.
@@ -418,8 +422,8 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
     // Create column handles.
     std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
         columnHandles;
-    for (auto i = 0; i < outputType->size(); ++i) {
-      const auto column = outputType->nameOf(i);
+    for (auto i = 0; i < targetColumns->size(); ++i) {
+      const auto column = targetColumns->nameOf(i);
       const bool isPartitionKey =
           std::find(partitionBy_.begin(), partitionBy_.end(), column) !=
           partitionBy_.end();
@@ -429,8 +433,8 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
               isPartitionKey
                   ? connector::hive::FileColumnHandle::ColumnType::kPartitionKey
                   : connector::hive::FileColumnHandle::ColumnType::kRegular,
-              outputType->childAt(i),
-              outputType->childAt(i)));
+              targetColumns->childAt(i),
+              targetColumns->childAt(i)));
     }
 
     auto locationHandle = std::make_shared<connector::hive::LocationHandle>(
@@ -442,7 +446,7 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
     std::shared_ptr<HiveBucketProperty> bucketProperty;
     if (bucketCount_ != 0) {
       bucketProperty = buildHiveBucketProperty(
-          outputType, bucketCount_, bucketedBy_, sortBy_);
+          targetColumns, bucketCount_, bucketedBy_, sortBy_);
     }
 
     auto hiveHandle = std::make_shared<connector::hive::HiveInsertTableHandle>(
@@ -468,7 +472,7 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
     for (const auto& partitionBy : partitionBy_) {
       groupingKeys.push_back(
           std::make_shared<core::FieldAccessTypedExpr>(
-              outputType->findChild(partitionBy), partitionBy));
+              targetColumns->findChild(partitionBy), partitionBy));
     }
     columnStatsSpec = core::ColumnStatsSpec(
         std::move(groupingKeys),
@@ -478,8 +482,8 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
   }
   const auto writeNode = std::make_shared<core::TableWriteNode>(
       id,
-      outputType,
-      outputType->names(),
+      targetColumns,
+      targetColumns->names(),
       columnStatsSpec,
       insertHandle_,
       false,
@@ -806,7 +810,7 @@ PlanBuilder& PlanBuilder::tableWrite(
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .outputFileName(outputFileName)
-      .outputType(schema)
+      .targetColumns(schema)
       .partitionBy(partitionBy)
       .bucketCount(bucketCount)
       .bucketedBy(bucketedBy)

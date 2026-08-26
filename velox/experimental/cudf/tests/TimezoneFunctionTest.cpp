@@ -143,6 +143,14 @@ class TimezoneFunctionTest : public cudf_velox::CudfFunctionBaseTest {
         TIMESTAMP_WITH_TIME_ZONE())});
   }
 
+  // Builds a single-row plain-TIMESTAMP input column named c0 from UTC
+  // milliseconds. Distinct from timestampWithTimeZoneInput above: no zone key
+  // is packed, so this is the type an ordinary Hive column has.
+  RowVectorPtr timestampInput(int64_t millisUtc) {
+    return makeRowVector({makeFlatVector<Timestamp>(
+        {Timestamp::fromMillis(millisUtc)}, TIMESTAMP())});
+  }
+
   // Builds a single-row double input column named c0.
   RowVectorPtr doubleInput(double value) {
     return makeRowVector({makeFlatVector<double>({value})});
@@ -168,6 +176,47 @@ class TimezoneFunctionTest : public cudf_velox::CudfFunctionBaseTest {
         {core::QueryConfig::kSessionTimezone, zone},
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
     });
+  }
+
+  // Sets the session start time (consumed by now()/current_timestamp) and the
+  // session timezone, with adjust-to-session-timezone on, for subsequent
+  // evaluate() calls. testingOverrideConfigUnsafe replaces the whole config, so
+  // all three keys are set together.
+  void setSessionStartTimeAndTimeZone(
+      int64_t startTimeMs,
+      const std::string& zone) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionStartTime, std::to_string(startTimeMs)},
+        {core::QueryConfig::kSessionTimezone, zone},
+        {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+    });
+  }
+
+  // Evaluates a TIMESTAMP WITH TIME ZONE-producing expression on GPU and CPU
+  // and asserts the packed results are bit-identical. assertEqualVectors
+  // compares TIMESTAMP WITH TIME ZONE by unpacked instant only
+  // (TimestampWithTimeZoneType::compare), so it would accept a wrong zone key;
+  // comparing the raw int64 checks both the instant and the zone key.
+  void assertPackedTimestampWithTimeZoneMatchesCpu(
+      const std::string& expr,
+      const RowVectorPtr& input) {
+    auto exprSet = compileExpression(expr, asRowType(input->type()));
+    auto expected =
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+    auto actual = evaluate(*exprSet, input);
+    ASSERT_TRUE(isTimestampWithTimeZoneType(actual->type()))
+        << "expected TIMESTAMP WITH TIME ZONE, got "
+        << actual->type()->toString();
+    ASSERT_EQ(actual->size(), expected->size());
+    auto* expectedInts = expected->as<SimpleVector<int64_t>>();
+    auto* actualInts = actual->as<SimpleVector<int64_t>>();
+    for (auto row = 0; row < expected->size(); ++row) {
+      ASSERT_EQ(expectedInts->isNullAt(row), actualInts->isNullAt(row));
+      if (!expectedInts->isNullAt(row)) {
+        EXPECT_EQ(expectedInts->valueAt(row), actualInts->valueAt(row))
+            << "row " << row;
+      }
+    }
   }
 };
 
@@ -1219,6 +1268,129 @@ TEST_F(TimezoneFunctionTest, fromIso8601TrailingT) {
   assertMatchesCpu("from_iso8601_timestamp(c0)", varcharInput("2021-01-01T"));
 }
 
+// Guards against the Apptio q51 crash: CAST(<TIMESTAMP column> AS TIMESTAMP
+// WITH TIME ZONE) used inside a pushed-down comparison. The comparison is
+// AST-supported because both operands are the BIGINT-backed TIMESTAMP WITH TIME
+// ZONE, so the GPU takes the pure-AST path and recurses into the cast. The cast
+// is not AST-representable (its input is TIMESTAMP, which the AST/JIT path
+// rejects), so it must instead be precomputed on device; before the fix
+// FunctionExpression::canEvaluate returned false for TIMESTAMP -> TIMESTAMP
+// WITH TIME ZONE and the AST builder aborted with "Unsupported expression:
+// cast" (AstExpressionUtils.h). The cast is now GPU-evaluable, so the
+// comparison runs entirely on device with no CPU fallback. With no session
+// timezone the cast packs the UTC millis with the GMT zone key (0), matching
+// CPU's castFromTimestamp.
+TEST_F(TimezoneFunctionTest, castTimestampToTimestampWithTimeZone) {
+  auto input = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<Timestamp>(
+           {Timestamp(1000, 0), Timestamp(3000, 0)}, TIMESTAMP()),
+       makeFlatVector<int64_t>(
+           {pack(2'000'000, 0), pack(2'000'000, 0)},
+           TIMESTAMP_WITH_TIME_ZONE())});
+  // The cast instants (1'000'000 and 3'000'000 ms) straddle the 2'000'000 ms
+  // threshold and carry the threshold's zone key, so the GPU's raw int64
+  // comparison agrees with CPU's instant-only TIMESTAMP WITH TIME ZONE compare.
+  assertMatchesCpu("cast(c0 as timestamp with time zone) >= c1", input);
+}
+
+// Verifies that with adjust_timestamp_to_session_timezone off, CAST(TIMESTAMP
+// AS TIMESTAMP WITH TIME ZONE) reads the TIMESTAMP as wall time in the session
+// zone and shifts it to UTC (Timestamp::toGMT), then packs with the session
+// zone key. America/Los_Angeles is a fixed -08:00 in January (no DST), so the
+// conversion is exact and independent of the DST machinery. The GPU cast
+// applies the same session-zone shift; the raw-int64 check also guards the
+// packed zone key, which the CPU vs GPU compare would otherwise ignore.
+TEST_F(
+    TimezoneFunctionTest,
+    castTimestampToTimestampWithTimeZoneAppliesSessionZone) {
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
+  });
+  // 2021-01-01 12:00:00 as wall time in Los_Angeles -> 20:00:00 UTC on CPU.
+  auto input = makeRowVector(
+      {makeFlatVector<Timestamp>({Timestamp(1'609'502'400, 0)}, TIMESTAMP())});
+  assertPackedTimestampWithTimeZoneMatchesCpu(
+      "cast(c0 as timestamp with time zone)", input);
+}
+
+// Verifies that with adjust_timestamp_to_session_timezone on, CAST treats the
+// TIMESTAMP as already being the UTC instant, so it packs the millis unchanged
+// with the session zone key -- no shift. The GPU cast honors the adjust flag by
+// skipping the shift while still stamping the session zone key.
+TEST_F(TimezoneFunctionTest, castTimestampToTimestampWithTimeZoneAdjustOn) {
+  setSessionTimezone("America/Los_Angeles"); // adjust on.
+  auto input = makeRowVector(
+      {makeFlatVector<Timestamp>({Timestamp(1'609'502'400, 0)}, TIMESTAMP())});
+  assertPackedTimestampWithTimeZoneMatchesCpu(
+      "cast(c0 as timestamp with time zone)", input);
+}
+
+// now()/current_timestamp -> timestamp with time zone. now() is
+// non-deterministic -- a live CPU now() and a separate GPU now() observe
+// different instants -- so this cannot assert CPU == GPU against a live clock.
+// Instead it pins the deterministic contract CPU's CurrentTimestampFunction
+// implements: pack(sessionStartTimeMs, sessionZone). A dummy column sizes the
+// batch.
+//
+// The typed-expression overload is what makes this a real measurement, and the
+// ExprSet overload cannot be used here. That overload round-trips through
+// Expr::toSql(), and velox renders a TIMESTAMP WITH TIME ZONE constant as
+// '<raw packed int64>'::TIMESTAMP WITH TIME ZONE -- a literal that does not
+// reparse to the value it came from, on CPU either. Going through the typed
+// expression instead is also the path a cluster takes: CudfFilterProject hands
+// the evaluator the plan's TypedExpr directly.
+TEST_F(TimezoneFunctionTest, nowUsesSessionStartTimeAndTimezone) {
+  constexpr int64_t kStartMs = 1'609'466'400'000; // 2021-01-01T02:00:00 UTC.
+  setSessionStartTimeAndTimeZone(kStartMs, "America/Los_Angeles");
+  auto input = doubleInput(0.0);
+  const auto rowType = asRowType(input->type());
+  auto result = evaluate(makeTypedExpr("now()", rowType), input);
+  ASSERT_NE(result, nullptr);
+  ASSERT_EQ(result->size(), input->size());
+  ASSERT_TRUE(isTimestampWithTimeZoneType(result->type()))
+      << "now() must produce TIMESTAMP WITH TIME ZONE, got "
+      << result->type()->toString();
+  const auto packed = result->as<SimpleVector<int64_t>>()->valueAt(0);
+  EXPECT_EQ(unpackMillisUtc(packed), kStartMs);
+  EXPECT_EQ(unpackZoneKeyId(packed), tz::getTimeZoneID("America/Los_Angeles"));
+}
+
+// The shape the ExprSet round-trip above produces -- cast(<VARCHAR constant> as
+// TIMESTAMP WITH TIME ZONE) -- must be declined, not evaluated. Two things made
+// it a SIGSEGV rather than a decline: cudf::is_supported_cast(STRING, INT64)
+// reports true, so canEvaluate admitted a conversion CastFunction does not
+// implement, and the operand being a constant meant FunctionExpression omitted
+// it from eval's argument vector, so the cast indexed an empty vector.
+TEST_F(
+    TimezoneFunctionTest,
+    castVarcharConstantToTimestampWithTimeZoneDeclined) {
+  auto input = doubleInput(0.0);
+  const auto rowType = asRowType(input->type());
+  auto expr = makeTypedExpr(
+      "cast('6592374374401825' as timestamp with time zone)", rowType);
+  EXPECT_FALSE(
+      FunctionExpression::canEvaluate(
+          expression::optimize(expr, execCtx_.queryCtx(), execCtx_.pool())));
+}
+
+// A cast of any constant is declined for the same structural reason, whatever
+// the types: the operand never reaches eval. Asserted before optimize(), which
+// would fold this tree into a constant and leave no cast to check. A cast whose
+// operand is itself a cast is a different shape and stays evaluable -- the
+// inner cast becomes a subexpression that does produce a column.
+TEST_F(TimezoneFunctionTest, castOfConstantIsDeclined) {
+  auto input = doubleInput(0.0);
+  const auto rowType = asRowType(input->type());
+  EXPECT_FALSE(
+      FunctionExpression::canEvaluate(
+          makeTypedExpr("cast(1 as bigint)", rowType)));
+  EXPECT_TRUE(
+      FunctionExpression::canEvaluate(
+          makeTypedExpr("cast(cast(c0 as integer) as bigint)", rowType)));
+}
+
 // Year-only and year-month: CPU -> start-of-period midnight GMT.
 TEST_F(TimezoneFunctionTest, fromIso8601YearOnly) {
   assertMatchesCpu("from_iso8601_timestamp(c0)", varcharInput("2021"));
@@ -1285,6 +1457,58 @@ TEST_F(TimezoneFunctionTest, fromIso8601OutOfRangeFieldsThrowLikeCpu) {
         evaluate(*exprSet, input),
         "Unable to parse timestamp value in from_iso8601_timestamp");
   }
+}
+
+// The extreme-year check has TWO regex alternations -- "[+-][0-9]{4,}" for a
+// signed year and "[0-9]{5,}" for an unsigned long one -- and until 2026-08-25
+// only the second was exercised, by "+12021". A SIGNED FOUR-DIGIT year matches
+// the first and only the first, so this is what distinguishes them: tightening
+// that branch to
+// "[+-][0-9]{5,}", or dropping the sign class, would leave "-0500" falling
+// through to the ordinary parse, where cudf::strings::to_timestamps would
+// mis-parse it into an int16 %Y instead of raising. Every case here is
+// CPU-valid, so a silent mis-parse would be a wrong answer rather than an
+// error.
+//
+// This is deliberately NOT the same defect family as the out-of-range INSTANTS
+// raised in review on PR 17899 and fixed in 1d4ee1c12: those were the offset
+// lookup in TimezoneConversion.cpp, where a year-12000 instant already exists
+// and only its zone offset is in question. Here the parser cannot get a year
+// out of the string at all, which is a cuDF format limit rather than a table
+// horizon.
+TEST_F(
+    TimezoneFunctionTest,
+    fromIso8601SignedYearIsAnUnsupportedYearNotMalformed) {
+  for (const auto& extreme : std::vector<std::string>{
+           "-0500-01-01T00:00:00", // signed, FOUR digits: the untested branch
+           "+0500-01-01T00:00:00", // signed positive, also four digits
+           "-12021-01-01T00:00:00", // signed AND five digits
+           "+12021-01-01T00:00:00", // the branch that was already covered
+           "12021-01-01T00:00:00", // unsigned five digits
+       }) {
+    SCOPED_TRACE(extreme);
+    auto input = varcharInput(extreme);
+    auto exprSet = compileExpression(
+        "from_iso8601_timestamp(c0)", asRowType(input->type()));
+    // CPU accepts every one of these, so the GPU must RAISE rather than answer:
+    // measured on a cluster, CPU returns -0500-01-01T00:00:00.000Z for the
+    // first.
+    EXPECT_NO_THROW(
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+    VELOX_ASSERT_THROW(
+        evaluate(*exprSet, input),
+        "from_iso8601_timestamp does not support years outside [0000, 9999] on GPU");
+  }
+}
+
+// A four-digit unsigned year is ordinary and must still parse, so the sign
+// class in the regex cannot be widened into something that swallows normal
+// input.
+TEST_F(TimezoneFunctionTest, fromIso8601OrdinaryYearIsUnaffected) {
+  assertMatchesCpu(
+      "from_iso8601_timestamp(c0)", varcharInput("0500-01-01T00:00:00"));
+  assertMatchesCpu(
+      "from_iso8601_timestamp(c0)", varcharInput("9999-12-31T23:59:59"));
 }
 
 // A malformed field in a string whose year is out of range must be reported as
@@ -1640,3 +1864,604 @@ TEST_F(TimezoneSweepTest, timezoneMinuteEveryZoneAtEveryBoundary) {
 }
 
 } // namespace
+
+// ---------------------------------------------------------------------------
+// Plain-TIMESTAMP overloads: to_unixtime, to_iso8601, 1-arg from_unixtime.
+//
+// These were registered for TIMESTAMP WITH TIME ZONE only (or, for the 1-arg
+// from_unixtime, not at all), so a query over an ordinary Hive TIMESTAMP column
+// fell back for want of a signature rather than a kernel.
+//
+// The session-timezone tests are the load-bearing ones. All three functions are
+// session-INDEPENDENT and read a TIMESTAMP as UTC -- the opposite of
+// cast(TIMESTAMP AS TIMESTAMP WITH TIME ZONE), which interprets the wall clock
+// in the session zone. A first implementation applied the session shift here on
+// the reasoning that to_unixtime(ts) and to_unixtime(cast(ts AS TSWTZ)) ask the
+// same question; they do not, and only an end-to-end parity run caught it.
+// These tests exist so a code reading catches it next time.
+// ---------------------------------------------------------------------------
+
+TEST_F(TimezoneFunctionTest, toUnixtimeFromTimestamp) {
+  assertMatchesCpu("to_unixtime(c0)", timestampInput(1'623'758'400'000));
+  assertMatchesCpu("to_unixtime(c0)", timestampInput(-14'182'940'000));
+  assertMatchesCpu("to_unixtime(c0)", timestampInput(0));
+}
+
+TEST_F(
+    TimezoneFunctionTest,
+    toUnixtimeFromTimestampMatchesCpuUnderSessionZones) {
+  // Same input under three session zones, each compared against CPU. Named for
+  // what it asserts -- parity -- not for independence: an earlier name claimed
+  // the result "ignores" the session zone, which is true of to_unixtime but NOT
+  // of to_iso8601, and the misnaming hid that difference until the test ran
+  // with adjust_timestamp_to_session_timezone=true.
+  for (const auto* zone : {"UTC", "Asia/Kolkata", "America/Los_Angeles"}) {
+    setSessionTimezone(zone);
+    assertMatchesCpu("to_unixtime(c0)", timestampInput(1'623'758'400'000));
+    assertMatchesCpu("to_unixtime(c0)", timestampInput(-14'182'940'000));
+  }
+}
+
+TEST_F(TimezoneFunctionTest, toUnixtimeFromTimestampSubSecond) {
+  // Sub-millisecond input is where truncation and rounding diverge, and where a
+  // negative (pre-epoch) value diverges in the opposite direction.
+  assertMatchesCpu("to_unixtime(c0)", timestampInput(1'623'758'400'123));
+  assertMatchesCpu("to_unixtime(c0)", timestampInput(-14'182'939'877));
+}
+
+TEST_F(TimezoneFunctionTest, toIso8601FromTimestamp) {
+  assertMatchesCpu("to_iso8601(c0)", timestampInput(1'623'758'400'000));
+  assertMatchesCpu("to_iso8601(c0)", timestampInput(1'623'758'400'123));
+  assertMatchesCpu("to_iso8601(c0)", timestampInput(-14'182'939'877));
+  // 1883 and 2262: the outer edges of this project's parity fixture.
+  assertMatchesCpu("to_iso8601(c0)", timestampInput(-2'717'647'800'000));
+  assertMatchesCpu("to_iso8601(c0)", timestampInput(9'223'286'400'000));
+}
+
+TEST_F(
+    TimezoneFunctionTest,
+    toIso8601FromTimestampMatchesCpuUnderSessionZones) {
+  for (const auto* zone : {"UTC", "Asia/Kolkata", "America/Los_Angeles"}) {
+    setSessionTimezone(zone);
+    assertMatchesCpu("to_iso8601(c0)", timestampInput(1'623'758'400'000));
+  }
+}
+
+TEST_F(TimezoneFunctionTest, fromUnixtimeSingleArgument) {
+  // Returns TIMESTAMP, not TIMESTAMP WITH TIME ZONE -- the 2- and 3-argument
+  // forms return TSWTZ and are covered separately above.
+  assertMatchesCpu(
+      "to_iso8601(from_unixtime(c0))", doubleInput(1'623'758'400.0));
+  assertMatchesCpu("to_iso8601(from_unixtime(c0))", doubleInput(0.0));
+  assertMatchesCpu("to_iso8601(from_unixtime(c0))", doubleInput(-14'182'940.0));
+}
+
+TEST_F(TimezoneFunctionTest, fromUnixtimeSingleArgumentRoundsLikeCpu) {
+  // The regression this exists for: cudf::cast(double -> int64) TRUNCATES
+  // toward zero and CPU ROUNDS to nearest, so these disagreed in both
+  // directions until a cudf::round was added. .1236 rounds up; the negative
+  // case rounds away from zero, which truncation would move the other way.
+  assertMatchesCpu(
+      "to_iso8601(from_unixtime(c0))", doubleInput(1'623'758'400.1236));
+  assertMatchesCpu(
+      "to_iso8601(from_unixtime(c0))", doubleInput(-14'182'939.87654321));
+  assertMatchesCpu(
+      "to_iso8601(from_unixtime(c0))", doubleInput(1'623'758'400.123456789));
+}
+
+TEST_F(
+    TimezoneFunctionTest,
+    fromUnixtimeSingleArgumentMatchesCpuUnderSessionZones) {
+  for (const auto* zone : {"UTC", "Asia/Kolkata", "America/Los_Angeles"}) {
+    setSessionTimezone(zone);
+    assertMatchesCpu(
+        "to_iso8601(from_unixtime(c0))", doubleInput(1'623'758'400.0));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Datetime field extraction over TIMESTAMP WITH TIME ZONE.
+//
+// The extract family was registered for TIMESTAMP and DATE only -- the exact
+// inverse of to_unixtime/to_iso8601 above. Each field must read the wall clock
+// implied by the row's OWN zone key, not the session zone.
+// ---------------------------------------------------------------------------
+
+// cuDF's extract_datetime_component returns a narrower integer than Presto
+// declares for these functions -- SMALLINT where year() is BIGINT. The
+// reconciling cast lives in FunctionExpression::eval behind its finalize flag,
+// which CudfFunctionBaseTest now passes exactly as CudfFilterProject does, so
+// these assert the declared BIGINT result directly.
+TEST_F(TimezoneFunctionTest, extractFieldsFromTimestampWithTimeZone) {
+  auto input = timestampWithTimeZoneInput(1'623'758'400'000, "Asia/Kolkata");
+  for (const auto* field :
+       {"year",
+        "quarter",
+        "month",
+        "day",
+        "hour",
+        "minute",
+        "second",
+        "day_of_week",
+        "day_of_year",
+        "week",
+        "year_of_week"}) {
+    assertMatchesCpu(std::string(field) + "(c0)", input);
+  }
+}
+
+TEST_F(TimezoneFunctionTest, extractFieldsUsePerRowZoneKeyNotSessionZone) {
+  // Two rows, two zones, one vector: a single session-wide shift cannot produce
+  // both answers. Kathmandu is +05:45, so an implementation truncating the
+  // offset to whole hours also fails here.
+  auto input = twoZoneTimestampWithTimeZoneInput(
+      1'623'758'400'000,
+      "Asia/Kathmandu",
+      1'623'758'400'000,
+      "America/Los_Angeles");
+  setSessionTimezone("UTC");
+  for (const auto* field : {"year", "day", "hour", "minute", "day_of_week"}) {
+    assertMatchesCpu(std::string(field) + "(c0)", input);
+  }
+}
+
+TEST_F(TimezoneFunctionTest, extractSubMinuteFieldsAppliesTheZoneShift) {
+  // The TIMESTAMP path skips the zone shift for SECOND/MILLISECOND, on the
+  // grounds that offsets are whole minutes. The TSWTZ path deliberately does
+  // NOT take that shortcut: a historical LMT offset need not be a whole number
+  // of minutes. 1883 in Los Angeles is such an offset (LMT -07:52:58).
+  auto input =
+      timestampWithTimeZoneInput(-2'717'647'800'000, "America/Los_Angeles");
+  assertMatchesCpu("second(c0)", input);
+  assertMatchesCpu("minute(c0)", input);
+  assertMatchesCpu("hour(c0)", input);
+}
+
+TEST_F(TimezoneFunctionTest, extractFieldsPropagateNulls) {
+  auto input = twoZoneAndNullTimestampWithTimeZoneInput(
+      1'623'758'400'000,
+      "Asia/Kolkata",
+      -14'182'940'000,
+      "America/Los_Angeles");
+  for (const auto* field : {"year", "hour", "second", "week"}) {
+    assertMatchesCpu(std::string(field) + "(c0)", input);
+  }
+  assertMatchesCpu("hour(c0)", allNullTimestampWithTimeZoneInput());
+}
+
+// ---------------------------------------------------------------------------
+// at_timezone with a NON-CONSTANT zone argument.
+//
+// Only the constant form was registered, so at_timezone(x, zone_column)
+// declined -- not for want of a kernel (the operation is bit manipulation on
+// the packed value) but for want of a way to resolve a zone key per row.
+// Results are compared as raw packed int64, because the TSWTZ comparator
+// ignores the zone key and would accept a wrong one.
+// ---------------------------------------------------------------------------
+
+TEST_F(TimezoneFunctionTest, atTimezoneWithColumnZone) {
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(
+           {pack(1'623'758'400'000, tz::getTimeZoneID("UTC")),
+            pack(1'623'758'400'000, tz::getTimeZoneID("UTC"))},
+           TIMESTAMP_WITH_TIME_ZONE()),
+       makeFlatVector<std::string>({"Asia/Kolkata", "America/Los_Angeles"})});
+  assertPackedTimestampWithTimeZoneMatchesCpu("at_timezone(c0, c1)", input);
+}
+
+TEST_F(TimezoneFunctionTest, atTimezoneWithColumnZoneSubMinuteOffset) {
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(
+           {pack(1'623'758'400'000, tz::getTimeZoneID("UTC")),
+            pack(-2'717'647'800'000, tz::getTimeZoneID("UTC"))},
+           TIMESTAMP_WITH_TIME_ZONE()),
+       makeFlatVector<std::string>({"Asia/Kathmandu", "America/Los_Angeles"})});
+  assertMatchesCpu("to_iso8601(at_timezone(c0, c1))", input);
+}
+
+TEST_F(TimezoneFunctionTest, atTimezoneWithColumnZoneNullZonePropagates) {
+  // A null zone name must yield null, not a zone key of 0 (GMT).
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(
+           {pack(1'623'758'400'000, tz::getTimeZoneID("UTC")),
+            pack(1'623'758'400'000, tz::getTimeZoneID("UTC"))},
+           TIMESTAMP_WITH_TIME_ZONE()),
+       makeNullableFlatVector<std::string>({"Asia/Kolkata", std::nullopt})});
+  assertPackedTimestampWithTimeZoneMatchesCpu("at_timezone(c0, c1)", input);
+}
+
+TEST_F(TimezoneFunctionTest, atTimezoneWithColumnZoneRepeatedNames) {
+  // Distinct-then-select is the implementation strategy, so a repeated name
+  // must not be mapped twice or mismatched across rows.
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(
+           {pack(1'623'758'400'000, tz::getTimeZoneID("UTC")),
+            pack(1'623'758'400'000, tz::getTimeZoneID("UTC")),
+            pack(1'623'758'400'000, tz::getTimeZoneID("UTC"))},
+           TIMESTAMP_WITH_TIME_ZONE()),
+       makeFlatVector<std::string>(
+           {"Asia/Kolkata", "America/Los_Angeles", "Asia/Kolkata"})});
+  assertPackedTimestampWithTimeZoneMatchesCpu("at_timezone(c0, c1)", input);
+}
+
+// ---------------------------------------------------------------------------
+// cast(TIMESTAMP AS VARCHAR).
+//
+// CastFunction gates the general path on cudf::is_supported_cast, which has no
+// timestamp->string conversion, so every rendering of a timestamp fell back.
+// Presto's format is fixed ("YYYY-MM-DD HH:MM:SS.mmm") and session-independent.
+// ---------------------------------------------------------------------------
+
+TEST_F(TimezoneFunctionTest, castTimestampToVarchar) {
+  assertMatchesCpu("cast(c0 as varchar)", timestampInput(1'623'758'400'000));
+  assertMatchesCpu("cast(c0 as varchar)", timestampInput(0));
+  assertMatchesCpu("cast(c0 as varchar)", timestampInput(-14'182'940'000));
+  // Three fractional digits are always rendered, including when zero.
+  assertMatchesCpu("cast(c0 as varchar)", timestampInput(1'623'758'400'123));
+  // The fixture's outer edges.
+  assertMatchesCpu("cast(c0 as varchar)", timestampInput(-2'717'647'800'000));
+  assertMatchesCpu("cast(c0 as varchar)", timestampInput(9'223'286'400'000));
+}
+
+TEST_F(
+    TimezoneFunctionTest,
+    castTimestampToVarcharMatchesCpuUnderSessionZones) {
+  for (const auto* zone : {"UTC", "Asia/Kolkata", "America/Havana"}) {
+    setSessionTimezone(zone);
+    assertMatchesCpu("cast(c0 as varchar)", timestampInput(1'623'758'400'000));
+    assertMatchesCpu("cast(c0 as varchar)", timestampInput(-14'182'939'877));
+  }
+}
+
+// castTimestampToVarcharAfterDateTrunc removed rather than shipped failing.
+// date_trunc is not registered in this test binary's cuDF registry -- the
+// fixture calls registerCudf() but not registerPrestoFunctions() -- so the
+// composition fails with "No cuDF expression evaluator can handle:
+// date_trunc(...)", a harness gap rather than an engine one. The composition is
+// covered end-to-end by the parity suite's c_date_trunc cases, which render six
+// units through this cast.
+
+// ---------------------------------------------------------------------------
+// Comparison on TIMESTAMP WITH TIME ZONE.
+//
+// The type's comparator is defined on the INSTANT alone --
+// TimestampWithTimeZone Type::compare and ::hash both read unpackMillisUtc, via
+// the type's ProvideCustomComparison hook -- so two values for the same moment
+// in different zones are EQUAL. cuDF has no type-level hook and saw a bare
+// INT64, so the zone key decided every comparison whose instants tied, and
+// nothing carrying different zones ever compared equal.
+//
+// Every test below uses ONE vector holding the same instant under two different
+// zone keys, which is the only input on which the two semantics differ: with a
+// uniform zone key a packed comparison agrees with an instant comparison,
+// because the millis occupy the high bits. That is why the parity suite's
+// literal-comparison cases passed throughout.
+//
+// Pacific/Kiritimati (+14) and Pacific/Midway (-11) are the extremes of the
+// offset range, so their zone keys are far apart as well as their offsets.
+//
+// Three of the six tests detect the defect and three are regression guards, and
+// the split is deliberate. Verified by disabling the normalization: comparison
+// UsesInstantNotZoneKey, comparisonUsesInstantForPreEpochInstants and
+// betweenUsesInstantNotZoneKey FAIL without it. The other three
+// (StillOrdersDistinctInstants, SeparatesAdjacentMillis, PropagatesNulls) pass
+// either way by design -- they exist to catch a normalization that goes too
+// far, clearing more than kMillisShift bits or swallowing nulls, and a fix that
+// broke them would be as wrong as no fix at all.
+// ---------------------------------------------------------------------------
+
+// Two rows, same instant, different zone key: eq must be true on both.
+TEST_F(TimezoneFunctionTest, comparisonUsesInstantNotZoneKey) {
+  const int64_t millis = 1'623'758'400'000;
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Kiritimati")),
+           pack(millis, tz::getTimeZoneID("Pacific/Midway"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Midway")),
+           pack(millis, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  // Both orderings of the pair, so a fix that only worked one way round fails.
+  assertMatchesCpu("c0 = c1", input);
+  assertMatchesCpu("c0 <> c1", input);
+  assertMatchesCpu("c0 < c1", input);
+  assertMatchesCpu("c0 <= c1", input);
+  assertMatchesCpu("c0 > c1", input);
+  assertMatchesCpu("c0 >= c1", input);
+}
+
+// A pre-epoch instant, where clearing the zone key must floor rather than
+// truncate toward zero: pack(-14182940000, 1953) / 4096 lands a millisecond
+// late, while masking the low bits (as the fix does) does not.
+TEST_F(TimezoneFunctionTest, comparisonUsesInstantForPreEpochInstants) {
+  const int64_t millis = -14'182'940'000;
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Kiritimati")),
+           pack(millis, 0)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, 0),
+           pack(millis, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  assertMatchesCpu("c0 = c1", input);
+  assertMatchesCpu("c0 < c1", input);
+  assertMatchesCpu("c0 >= c1", input);
+}
+
+// Different instants must still compare by instant, so the fix cannot have
+// collapsed everything to equal. The zone keys are chosen to oppose the instant
+// order: the EARLIER instant carries the HIGHER zone key, so an implementation
+// comparing packed values still gets these right and an implementation that
+// masked too much (e.g. clearing more than kMillisShift bits) gets them wrong.
+TEST_F(TimezoneFunctionTest, comparisonStillOrdersDistinctInstants) {
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(1'623'758'400'000, tz::getTimeZoneID("Pacific/Midway")),
+           pack(-14'182'940'000, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(-14'182'940'000, tz::getTimeZoneID("Pacific/Kiritimati")),
+           pack(1'623'758'400'000, tz::getTimeZoneID("Pacific/Midway"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  assertMatchesCpu("c0 = c1", input);
+  assertMatchesCpu("c0 < c1", input);
+  assertMatchesCpu("c0 > c1", input);
+}
+
+// Adjacent instants one millisecond apart must NOT be conflated. This is the
+// test that fails if the normalization masks the wrong number of bits, or
+// truncates instead of flooring: the two rows differ by exactly 1 in millis, so
+// any over-wide mask makes them equal.
+TEST_F(TimezoneFunctionTest, comparisonSeparatesAdjacentMillis) {
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(1'623'758'400'000, tz::getTimeZoneID("Pacific/Kiritimati")),
+           pack(-14'182'940'001, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(1'623'758'400'001, 0), pack(-14'182'940'000, 0)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  assertMatchesCpu("c0 = c1", input);
+  assertMatchesCpu("c0 < c1", input);
+  assertMatchesCpu("c0 > c1", input);
+}
+
+// NULL must stay NULL through the normalization rather than masking to a value.
+TEST_F(TimezoneFunctionTest, comparisonPropagatesNulls) {
+  const int64_t millis = 1'623'758'400'000;
+  auto input = makeRowVector({
+      makeNullableFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Kiritimati")),
+           std::nullopt,
+           std::nullopt},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeNullableFlatVector<int64_t>(
+          {std::nullopt,
+           pack(millis, tz::getTimeZoneID("Pacific/Midway")),
+           std::nullopt},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  assertMatchesCpu("c0 = c1", input);
+  assertMatchesCpu("c0 < c1", input);
+}
+
+// BETWEEN lowers to two comparisons through its own branch of the tree builder,
+// so it needs its own coverage: the bound rows carry a different zone key from
+// the value row, and the value is exactly ON both bounds.
+TEST_F(TimezoneFunctionTest, betweenUsesInstantNotZoneKey) {
+  const int64_t millis = 1'623'758'400'000;
+  const auto kiritimati = tz::getTimeZoneID("Pacific/Kiritimati");
+  const auto midway = tz::getTimeZoneID("Pacific/Midway");
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, kiritimati), pack(millis, midway)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, midway), pack(millis, kiritimati)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, midway), pack(millis, kiritimati)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  // Degenerate range [x, x] where x is the same instant in another zone: the
+  // value is simultaneously >= lower and <= upper, so CPU says true.
+  assertMatchesCpu("c0 between c1 and c2", input);
+}
+
+// --- Arithmetic and casts over the PACKED value: declined, never computed
+// -----
+//
+// TIMESTAMP WITH TIME ZONE is (millis << kMillisShift) | zone_key, and
+// veloxToCudfDataType maps it to a plain INT64. The AST therefore could not
+// tell it from an ordinary integer, and both arithmetic and casts silently
+// operated on the packed bits. Measured on a live cluster before the guard,
+// with GPU-strict and GPU-permissive agreeing with each other and disagreeing
+// with CPU:
+//
+//   t - TIMESTAMP '2000-01-01 00:00:00 UTC'
+//       CPU -11121 03:42:20   GPU -45552248 09:57:20  (larger by
+//       2^kMillisShift)
+//   ka - mi, one instant keyed to two zones
+//       CPU 0                 GPU -0 00:00:00.005     (the zone-key delta)
+//   cast(ka AS time)
+//       CPU 15:07:40.000      GPU 19:56:10.137
+//
+// and two shapes that aborted at RUNTIME inside CudfFilterProject -- past the
+// point where cudf.allow_cpu_fallback can rescue a query, so GPU-permissive
+// failed too:
+//
+//   cast(t AS date)        cast_ops.cu "Timestamps cannot be converted to
+//   numeric" t - INTERVAL '1' HOUR  expression_parser.cpp "non-matching operand
+//   types"
+//
+// The contract these tests pin is that the GPU DECLINES each shape, so the
+// operator falls back and the CPU answers. Correctness of that fallback is
+// asserted end-to-end by the tz_parity suite
+// (cases/o_tswtz_function_surface.yaml); what a unit test can show is that
+// nothing on the GPU path claims the expression.
+//
+// Comparisons must NOT be declined -- masking the zone key off both operands
+// makes them correct, which is what 6b0c57b75 does.
+// comparisonUsesInstantNotZoneKey and betweenUsesInstantNotZoneKey above are
+// the positive controls for a guard drawn too wide, and
+// comparisonsAreStillEvaluatedOnGpuAfterTheArithmeticGuard below asserts the
+// stronger property those two cannot: that the comparison still runs on the GPU
+// rather than merely agreeing with CPU from a silent fallback.
+
+TEST_F(TimezoneFunctionTest, subtractingTwoTimestampWithTimeZonesIsDeclined) {
+  const int64_t millis = 1'623'758'400'000;
+  const auto kiritimati = tz::getTimeZoneID("Pacific/Kiritimati");
+  const auto midway = tz::getTimeZoneID("Pacific/Midway");
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, kiritimati), pack(millis, midway)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, midway), pack(millis, kiritimati)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  const auto rowType = asRowType(input->type());
+  // Presto registers TSWTZ - TSWTZ -> INTERVAL DAY TO SECOND, so this
+  // expression is real and does reach the evaluator. Before the guard the AST
+  // accepted it as SUB over two INT64s and returned the packed difference.
+  VELOX_ASSERT_THROW(
+      evaluate(makeTypedExpr("c0 - c1", rowType), input),
+      "No cuDF expression evaluator can handle");
+}
+
+TEST_F(
+    TimezoneFunctionTest,
+    addingAnIntervalToATimestampWithTimeZoneIsDeclined) {
+  // TSWTZ + TSWTZ is not a Presto signature -- velox rejects it before the
+  // evaluator sees it. The real shapes, from the rejection's own signature
+  // list, are (timestamp with time zone, interval day to second) and its YEAR
+  // TO MONTH sibling, PLUS both reversed: (interval ..., timestamp with time
+  // zone). The reversed forms are why the guard scans every operand instead of
+  // checking the first: written as "is operand 0 a TSWTZ", `INTERVAL '1' HOUR +
+  // t` would still have reached the AST.
+  const int64_t millis = 1'623'758'400'000;
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>({3'600'000}, INTERVAL_DAY_TIME()),
+  });
+  const auto rowType = asRowType(input->type());
+  VELOX_ASSERT_THROW(
+      evaluate(makeTypedExpr("c0 + c1", rowType), input),
+      "No cuDF expression evaluator can handle");
+  // Reversed operand order, same expression semantically.
+  VELOX_ASSERT_THROW(
+      evaluate(makeTypedExpr("c1 + c0", rowType), input),
+      "No cuDF expression evaluator can handle");
+  // And the subtraction form, which is what the parity suite's
+  // o_tswtz_minus_interval_day_second case exercises end to end.
+  VELOX_ASSERT_THROW(
+      evaluate(makeTypedExpr("c0 - c1", rowType), input),
+      "No cuDF expression evaluator can handle");
+}
+
+TEST_F(
+    TimezoneFunctionTest,
+    subtractingAPreEpochTimestampWithTimeZoneIsDeclined) {
+  // Pre-epoch: a negative packed value carries the shift exactly as a positive
+  // one does, so the defect is not confined to instants after 1970.
+  const int64_t millis = -14'182'940'000;
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Midway"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  const auto rowType = asRowType(input->type());
+  VELOX_ASSERT_THROW(
+      evaluate(makeTypedExpr("c0 - c1", rowType), input),
+      "No cuDF expression evaluator can handle");
+}
+
+TEST_F(TimezoneFunctionTest, castingTimestampWithTimeZoneToDateIsDeclined) {
+  const int64_t millis = 1'623'758'400'000;
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  const auto rowType = asRowType(input->type());
+  // DATE is TypeKind::INTEGER, which maps to TIMESTAMP_DAYS, and
+  // is_supported_cast(INT64, TIMESTAMP_DAYS) reports true -- so canEvaluate
+  // admitted the cast and cudf::cast then aborted at runtime on the packed
+  // value. Both gates are asserted: canEvaluate is the precompute path,
+  // createCudfExpression covers the AST path, and the defect needed closing in
+  // both.
+  EXPECT_FALSE(
+      FunctionExpression::canEvaluate(
+          expression::optimize(
+              makeTypedExpr("cast(c0 as date)", rowType),
+              execCtx_.queryCtx(),
+              execCtx_.pool())));
+  VELOX_ASSERT_THROW(
+      evaluate(makeTypedExpr("cast(c0 as date)", rowType), input),
+      "No cuDF expression evaluator can handle");
+}
+
+TEST_F(TimezoneFunctionTest, castingTimestampWithTimeZoneToBigintIsDeclined) {
+  const int64_t millis = 1'623'758'400'000;
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, tz::getTimeZoneID("Pacific/Kiritimati"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  const auto rowType = asRowType(input->type());
+  // The starkest form of the same defect: BIGINT is what the packed value
+  // already is, so the AST's CAST_TO_INT64 was a literal identity that would
+  // have handed the physical representation out as if it were the instant.
+  EXPECT_FALSE(
+      FunctionExpression::canEvaluate(
+          expression::optimize(
+              makeTypedExpr("cast(c0 as bigint)", rowType),
+              execCtx_.queryCtx(),
+              execCtx_.pool())));
+}
+
+TEST_F(
+    TimezoneFunctionTest,
+    comparisonsAreStillEvaluatedOnGpuAfterTheArithmeticGuard) {
+  // The guard must cover the arithmetic operators only. Widened to every binary
+  // operator over the type, every TSWTZ comparison would fall back to CPU --
+  // and the parity suite would stay GREEN on values while quietly losing the
+  // GPU path 6b0c57b75 exists to make correct. Asserting that the expression
+  // still COMPILES for the GPU is what separates those two outcomes; matching
+  // CPU does not.
+  const int64_t millis = 1'623'758'400'000;
+  const auto kiritimati = tz::getTimeZoneID("Pacific/Kiritimati");
+  const auto midway = tz::getTimeZoneID("Pacific/Midway");
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, kiritimati), pack(millis, midway)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, midway), pack(millis, kiritimati)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  const auto rowType = asRowType(input->type());
+  for (const auto* expr : {"c0 = c1", "c0 < c1", "c0 >= c1"}) {
+    auto optimized = expression::optimize(
+        makeTypedExpr(expr, rowType), execCtx_.queryCtx(), execCtx_.pool());
+    EXPECT_NO_THROW(createCudfExpression(
+        optimized,
+        rowType,
+        pool_.get(),
+        contextFromConfig(execCtx_.queryCtx()->queryConfig())))
+        << "comparison " << expr << " must still compile for the GPU";
+  }
+  assertMatchesCpu("c0 = c1", input);
+  assertMatchesCpu("c0 < c1", input);
+}

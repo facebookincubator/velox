@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/TimestampWithTimeZoneColumn.h"
 #include "velox/experimental/cudf/expression/TimezoneConversion.h"
 #include "velox/experimental/cudf/expression/prestosql/TimezoneFunctions.h"
 
@@ -33,6 +34,7 @@
 #include <cudf/datetime.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/replace.hpp>
+#include <cudf/round.hpp>
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/stream_compaction.hpp>
@@ -219,47 +221,8 @@ DistinctZones distinctZones(
     const cudf::column_view& packed,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  auto perRowKey = binaryOp(
-      packed,
-      int64Scalar(kTimezoneMask, stream),
-      cudf::binary_operator::BITWISE_AND,
-      int64Type(),
-      stream,
-      mr);
-
-  auto unique = cudf::distinct(
-      cudf::table_view{{perRowKey->view()}},
-      {0},
-      cudf::duplicate_keep_option::KEEP_ANY,
-      cudf::null_equality::EQUAL,
-      cudf::nan_equality::ALL_EQUAL,
-      stream,
-      mr);
-  auto uniqueKeys = unique->view().column(0);
-  auto uniqueValid = cudf::is_valid(uniqueKeys, stream, mr);
-  std::vector<int64_t> hostKeys(uniqueKeys.size());
-  std::vector<int8_t> hostValid(uniqueKeys.size());
-  CUDF_CUDA_TRY(cudaMemcpyAsync(
-      hostKeys.data(),
-      uniqueKeys.data<int64_t>(),
-      hostKeys.size() * sizeof(int64_t),
-      cudaMemcpyDeviceToHost,
-      stream.value()));
-  CUDF_CUDA_TRY(cudaMemcpyAsync(
-      hostValid.data(),
-      uniqueValid->view().data<int8_t>(),
-      hostValid.size() * sizeof(int8_t),
-      cudaMemcpyDeviceToHost,
-      stream.value()));
-  stream.synchronize();
-
-  std::vector<int16_t> keys;
-  keys.reserve(uniqueKeys.size());
-  for (cudf::size_type i = 0; i < uniqueKeys.size(); ++i) {
-    if (hostValid[i]) { // Skip the null zone key.
-      keys.push_back(static_cast<int16_t>(hostKeys[i]));
-    }
-  }
+  auto perRowKey = tswtzZoneKey(packed, stream, mr);
+  auto keys = tswtzDistinctZoneKeys(perRowKey->view(), stream, mr);
   return {std::move(perRowKey), std::move(keys)};
 }
 
@@ -272,31 +235,7 @@ std::unique_ptr<cudf::column> perRowOffsetSeconds(
     const cudf::column_view& packed,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  auto millis = unpackMillis(packed, stream, mr);
-  auto millisTs =
-      bitcastColumn(millis->view(), cudf::type_id::TIMESTAMP_MILLISECONDS);
-  auto zones = distinctZones(packed, stream, mr);
-
-  // Start all-null; fill each zone's rows. A null key matches no real key, so
-  // its rows keep the null default (CPU propagates null).
-  auto result = cudf::make_numeric_column(
-      int64Type(), packed.size(), cudf::mask_state::ALL_NULL, stream, mr);
-  for (const auto zoneKey : zones.keys) {
-    auto offsetDuration =
-        utcOffsetSeconds(millisTs, tz::getTimeZoneName(zoneKey), stream, mr);
-    auto offsetSeconds = std::make_unique<cudf::column>(
-        bitcastColumn(offsetDuration->view(), kInt64), stream, mr);
-    auto isThisZone = binaryOp(
-        zones.perRowKey->view(),
-        int64Scalar(zoneKey, stream),
-        cudf::binary_operator::EQUAL,
-        cudf::data_type{kBool8},
-        stream,
-        mr);
-    result = cudf::copy_if_else(
-        offsetSeconds->view(), result->view(), isThisZone->view(), stream, mr);
-  }
-  return result;
+  return tswtzOffsetSeconds(packed, stream, mr);
 }
 
 // Per-row zone *name* (STRING) for a packed column that may mix zone keys, for
@@ -491,27 +430,9 @@ LocalAndOffset localAndOffset(
     const cudf::column_view& packed,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  auto millis = unpackMillis(packed, stream, mr);
-  auto offsetSeconds = perRowOffsetSeconds(packed, stream, mr);
-  auto offsetMillis = binaryOp(
-      offsetSeconds->view(),
-      int64Scalar(1'000, stream),
-      cudf::binary_operator::MUL,
-      int64Type(),
-      stream,
-      mr);
-  auto localMillis = cudf::binary_operation(
-      millis->view(),
-      offsetMillis->view(),
-      cudf::binary_operator::ADD,
-      int64Type(),
-      stream,
-      mr);
-  auto localTs =
-      bitcastColumn(localMillis->view(), cudf::type_id::TIMESTAMP_MILLISECONDS);
   return {
-      std::make_unique<cudf::column>(localTs, stream, mr),
-      std::move(offsetSeconds)};
+      tswtzLocalWallClock(packed, stream, mr),
+      tswtzOffsetSeconds(packed, stream, mr)};
 }
 
 // Classifies the trailing Joda time-zone token so the caller can render it: an
@@ -802,6 +723,88 @@ class ToUnixtimeFunction : public CudfFunction {
 };
 
 // at_timezone(timestamp with time zone, varchar) -> timestamp with time zone.
+// at_timezone(TSWTZ, <varchar COLUMN>). The constant-zone form below resolves
+// one key at construction; this resolves a key per row.
+//
+// Zone name -> key is host-side (tz::getTimeZoneID), so the mapping is done on
+// the DISTINCT names only -- a handful in practice -- and selected back per row
+// with copy_if_else, rather than moving every row's string to the host. This is
+// the same per-distinct-zone select idiom distinctZones() exists to drive for
+// the opposite direction.
+//
+// A null zone name leaves the key null, so the final BITWISE_OR yields null --
+// which is what Presto returns and what e_mixed_zone_with_null asserts.
+class AtTimezoneColumnZoneFunction : public CudfFunction {
+ public:
+  explicit AtTimezoneColumnZoneFunction(const core::TypedExprPtr& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 2, "at_timezone expects exactly 2 inputs");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto packed = asView(inputColumns[0]);
+    auto names = asView(inputColumns[1]);
+
+    // Distinct zone names present, brought to the host one small element at a
+    // time. Nulls are skipped: a null name must stay null, not map to a zone.
+    auto unique = cudf::distinct(
+        cudf::table_view{{names}},
+        {0},
+        cudf::duplicate_keep_option::KEEP_ANY,
+        cudf::null_equality::EQUAL,
+        cudf::nan_equality::ALL_EQUAL,
+        stream,
+        mr);
+    auto uniqueNames = unique->view().column(0);
+
+    // Start all-null; every row whose name matches a known zone is overwritten.
+    auto keys = cudf::make_fixed_width_column(
+        int64Type(), names.size(), cudf::mask_state::ALL_NULL, stream, mr);
+    for (cudf::size_type i = 0; i < uniqueNames.size(); ++i) {
+      auto element = cudf::get_element(uniqueNames, i, stream, mr);
+      if (!element->is_valid(stream)) {
+        continue;
+      }
+      const auto name =
+          static_cast<cudf::string_scalar*>(element.get())->to_string(stream);
+      const int16_t zoneId = tz::getTimeZoneID(name);
+      auto matches = cudf::binary_operation(
+          names,
+          cudf::string_scalar(name, true, stream),
+          cudf::binary_operator::EQUAL,
+          cudf::data_type{cudf::type_id::BOOL8},
+          stream,
+          mr);
+      keys = cudf::copy_if_else(
+          int64Scalar(zoneId & kTimezoneMask, stream),
+          keys->view(),
+          matches->view(),
+          stream,
+          mr);
+    }
+
+    // Keep the UTC millis bits, replace the low 12 zone bits with the per-row
+    // key.
+    auto cleared = binaryOp(
+        packed,
+        int64Scalar(~static_cast<int64_t>(kTimezoneMask), stream),
+        cudf::binary_operator::BITWISE_AND,
+        int64Type(),
+        stream,
+        mr);
+    return cudf::binary_operation(
+        cleared->view(),
+        keys->view(),
+        cudf::binary_operator::BITWISE_OR,
+        int64Type(),
+        stream,
+        mr);
+  }
+};
+
 class AtTimezoneFunction : public CudfFunction {
  public:
   AtTimezoneFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
@@ -1532,13 +1535,17 @@ class FromUnixtimeWithZoneFunction : public CudfFunction {
   FromUnixtimeRounding rounding_;
 };
 
-// now() / current_timestamp -> timestamp with time zone. Emits a constant
-// column packing the session start time with the session zone, matching CPU's
-// CurrentTimestampFunction (the value is not compared against a live CPU now(),
-// which is non-deterministic). Rejects like CPU when the session zone is
-// unusable: getTimeZoneFromConfig returns null when
-// adjust_timestamp_to_session_timezone is off or the session timezone is empty,
-// and CPU then throws "Timezone cannot be null".
+// now() / current_timestamp have no cuDF function here, deliberately. They take
+// no arguments, so expression::optimize -- which constant-folds any subtree
+// whose inputs are all constant, and a nullary call satisfies that trivially --
+// evaluates the CPU CurrentTimestampFunction and replaces the call with a
+// TIMESTAMP WITH TIME ZONE constant before any cuDF code sees the tree. That
+// runs on every path into the evaluator, CudfFilterProject included, so a cuDF
+// now() would be unreachable. An earlier revision of this file registered one;
+// it was dropped when eval() lost its numRows parameter, which a nullary
+// function needs to size its result, and nothing regressed because the folded
+// constant is what actually gets evaluated.
+
 // parse_datetime(varchar, varchar) -> timestamp with time zone.
 class ParseDatetimeFunction : public CudfFunction {
  public:
@@ -2265,31 +2272,224 @@ void registerTimezoneFunctions(const std::string& prefix) {
     const cudf::data_type type_;
   };
 
+  // to_iso8601(TIMESTAMP).
+  //
+  // Two behaviours, and the second was missed until a unit test with
+  // adjust_timestamp_to_session_timezone=true caught it:
+  //
+  //  - adjust OFF (the default, and what the parity clusters run): the
+  //  TIMESTAMP is
+  //    read as UTC and rendered with a literal "Z". Session-independent.
+  //  - adjust ON: CPU renders the instant IN the session zone, with that zone's
+  //    offset -- 2021-06-15T17:30:00.000+05:30 under Asia/Kolkata where the
+  //    adjust-off answer is 2021-06-15T12:00:00.000Z.
+  //
+  // The second case is delegated rather than reimplemented: pack the instant
+  // with the session zone key and render through the same ToIso8601Function the
+  // TSWTZ overload uses, so the two spellings cannot drift.
+  //
+  // Note to_unixtime(TIMESTAMP) is NOT symmetric here -- it stays
+  // session-independent under both settings, verified by its own test. Do not
+  // "fix" it to match this.
+  class ToIso8601FromTimestampFunction : public CudfFunction {
+   public:
+    explicit ToIso8601FromTimestampFunction(const core::TypedExprPtr& expr) {
+      VELOX_CHECK_EQ(
+          expr->inputs().size(), 1, "to_iso8601 expects exactly 1 input");
+    }
+
+    ColumnOrView eval(
+        std::vector<ColumnOrView>& inputColumns,
+        rmm::cuda_stream_view stream,
+        rmm::device_async_resource_ref mr) const override {
+      auto millisTs = cudf::cast(
+          asView(inputColumns[0]),
+          cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
+          stream,
+          mr);
+      if (context_.appliesSessionTimezone()) {
+        // Render in the session zone, with its offset, by packing the instant
+        // with that zone's key and reusing the TSWTZ renderer.
+        const int16_t zoneId = tz::getTimeZoneID(context_.sessionTimezone);
+        auto millisInt = bitcastColumn(millisTs->view(), cudf::type_id::INT64);
+        auto zoneKeys = cudf::make_column_from_scalar(
+            int64Scalar(zoneId & kTimezoneMask, stream),
+            millisInt.size(),
+            stream,
+            mr);
+        auto packed = tswtzPack(millisTs->view(), zoneKeys->view(), stream, mr);
+        auto parts = localAndOffset(packed->view(), stream, mr);
+        auto dateStr = cudf::strings::from_timestamps(
+            parts.localMillis->view(),
+            "%Y-%m-%dT%H:%M:%S.%3f",
+            cudf::strings_column_view{},
+            stream,
+            mr);
+        auto offsetStr = formatOffsetStrings(
+            parts.offsetSeconds->view(),
+            /*includeColon=*/true,
+            std::string("Z"),
+            stream,
+            mr);
+        return cudf::strings::concatenate(
+            cudf::table_view{{dateStr->view(), offsetStr->view()}},
+            cudf::string_scalar("", true, stream),
+            cudf::string_scalar("", false, stream),
+            cudf::strings::separator_on_nulls::YES,
+            stream,
+            mr);
+      }
+      return cudf::strings::from_timestamps(
+          millisTs->view(),
+          "%Y-%m-%dT%H:%M:%S.%3fZ",
+          cudf::strings_column_view{},
+          stream,
+          mr);
+    }
+  };
+
+  class ToUnixtimeFromTimestampFunction : public CudfFunction {
+   public:
+    explicit ToUnixtimeFromTimestampFunction(const core::TypedExprPtr& expr) {
+      VELOX_CHECK_EQ(
+          expr->inputs().size(), 1, "to_unixtime expects exactly 1 input");
+    }
+
+    ColumnOrView eval(
+        std::vector<ColumnOrView>& inputColumns,
+        rmm::cuda_stream_view stream,
+        rmm::device_async_resource_ref mr) const override {
+      // NO session-timezone shift, deliberately, and this was measured rather
+      // than assumed: on CPU under session Asia/Kolkata, `to_unixtime(ts)`
+      // returns -14182940 while `to_unixtime(cast(ts AS TIMESTAMP WITH TIME
+      // ZONE))` returns -14202740. to_unixtime reads the wall clock as UTC;
+      // only the cast interprets it in the session zone. An earlier version of
+      // this function shifted, on the reasoning that the two spellings of "the
+      // same question" must agree -- they must not, and the parity suite caught
+      // it under two non-UTC session zones.
+      auto utcMs = cudf::cast(
+          asView(inputColumns[0]),
+          cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
+          stream,
+          mr);
+      auto millisDouble = cudf::cast(
+          bitcastColumn(utcMs->view(), cudf::type_id::INT64),
+          cudf::data_type{cudf::type_id::FLOAT64},
+          stream,
+          mr);
+      return cudf::binary_operation(
+          millisDouble->view(),
+          cudf::numeric_scalar<double>(1000.0, true, stream),
+          cudf::binary_operator::DIV,
+          cudf::data_type{cudf::type_id::FLOAT64},
+          stream,
+          mr);
+    }
+  };
+
+  // One-argument from_unixtime(double) -> TIMESTAMP. The two- and
+  // three-argument forms return TIMESTAMP WITH TIME ZONE and are registered
+  // separately below; this form was not registered at all, so
+  // `to_iso8601(from_unixtime(x))` fell back for want of a signature rather
+  // than for want of a kernel.
+  class FromUnixtimeToTimestampFunction : public CudfFunction {
+   public:
+    explicit FromUnixtimeToTimestampFunction(const core::TypedExprPtr& expr) {
+      VELOX_CHECK_EQ(
+          expr->inputs().size(), 1, "from_unixtime expects exactly 1 input");
+    }
+
+    ColumnOrView eval(
+        std::vector<ColumnOrView>& inputColumns,
+        rmm::cuda_stream_view stream,
+        rmm::device_async_resource_ref mr) const override {
+      auto millisDouble = cudf::binary_operation(
+          asView(inputColumns[0]),
+          cudf::numeric_scalar<double>(1000.0, true, stream),
+          cudf::binary_operator::MUL,
+          cudf::data_type{cudf::type_id::FLOAT64},
+          stream,
+          mr);
+      // Round to nearest before narrowing, NOT truncate. cudf::cast(double ->
+      // int64) truncates toward zero, and CPU rounds: measured on the two
+      // sub-second fixture rows added 2026-08-22, CPU renders
+      // 1623758400.1236 -> .124 (truncation gives .123) and
+      // -14182939.87654321 -> .123 (truncation toward zero gives .124, since
+      // the millis value is negative). Truncating disagreed with CPU in BOTH
+      // directions, which is why rounding is required rather than a floor.
+      //
+      // Not covered: an input landing exactly on .5, where HALF_UP and Java's
+      // Math.round differ for negative values. No fixture row does.
+      auto rounded = cudf::round(
+          millisDouble->view(),
+          /*decimal_places=*/0,
+          cudf::rounding_method::HALF_UP,
+          stream,
+          mr);
+      auto millisInt = cudf::cast(rounded->view(), int64Type(), stream, mr);
+      // Own the reinterpreted timestamp: bitcastColumn yields a non-owning
+      // view.
+      auto utcTs = std::make_unique<cudf::column>(
+          bitcastColumn(
+              millisInt->view(), cudf::type_id::TIMESTAMP_MILLISECONDS),
+          stream,
+          mr);
+      // No session shift: measured on CPU, `from_unixtime(epoch)` renders the
+      // same wall clock under session UTC and under Asia/Kolkata (2021-06-15
+      // 12:00:00 for 1623758400, which is 12:00 UTC), so the returned TIMESTAMP
+      // is the UTC wall clock of the instant, session-independent -- the mirror
+      // image of to_unixtime(TIMESTAMP) above.
+      return utcTs;
+    }
+  };
+
+  // Two signatures, one name. The TIMESTAMP overload was missing entirely, so
+  // `to_unixtime(ts)` on a Hive column fell back for want of a signature --
+  // while `to_unixtime(cast(ts AS TIMESTAMP WITH TIME ZONE))`, the same
+  // question, ran on GPU. Dispatching here rather than registering twice keeps
+  // the two forms from drifting apart.
   registerCudfFunction(
       prefix + "to_unixtime",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) {
+         memory::MemoryPool*) -> std::shared_ptr<CudfFunction> {
+        if (expr->inputs()[0]->type()->kind() == TypeKind::TIMESTAMP) {
+          return std::make_shared<ToUnixtimeFromTimestampFunction>(expr);
+        }
         return std::make_shared<ToUnixtimeFunction>(expr);
       },
-      {twtzArgSignature("double")});
+      {twtzArgSignature("double"),
+       exec::FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("timestamp")
+           .build()});
 
   registerCudfFunction(
       prefix + "at_timezone",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
-        if (constantArgIsNull(expr, 1)) {
-          return std::shared_ptr<CudfFunction>(
-              std::make_shared<AllNullFunction>(int64Type()));
+         memory::MemoryPool* pool) -> std::shared_ptr<CudfFunction> {
+        // A non-constant zone gets the per-row implementation. Previously only
+        // the constant form was registered, so `at_timezone(x, zone_column)`
+        // declined -- not for want of a kernel (the operation is bit
+        // manipulation) but for want of a way to resolve a key per row.
+        if (expr->inputs()[1]->kind() != core::ExprKind::kConstant) {
+          return std::make_shared<AtTimezoneColumnZoneFunction>(expr);
         }
-        return std::shared_ptr<CudfFunction>(
-            std::make_shared<AtTimezoneFunction>(expr, pool));
+        if (constantArgIsNull(expr, 1)) {
+          return std::make_shared<AllNullFunction>(int64Type());
+        }
+        return std::make_shared<AtTimezoneFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("timestamp with time zone")
            .argumentType("timestamp with time zone")
            .constantArgumentType("varchar")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("timestamp with time zone")
+           .argumentType("timestamp with time zone")
+           .argumentType("varchar")
            .build()});
 
   registerCudfFunction(
@@ -2314,10 +2514,17 @@ void registerTimezoneFunctions(const std::string& prefix) {
       prefix + "to_iso8601",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool*) {
+         memory::MemoryPool*) -> std::shared_ptr<CudfFunction> {
+        if (expr->inputs()[0]->type()->kind() == TypeKind::TIMESTAMP) {
+          return std::make_shared<ToIso8601FromTimestampFunction>(expr);
+        }
         return std::make_shared<ToIso8601Function>(expr);
       },
-      {twtzArgSignature("varchar")});
+      {twtzArgSignature("varchar"),
+       exec::FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("timestamp")
+           .build()});
 
   registerCudfFunction(
       prefix + "format_datetime",
@@ -2339,6 +2546,21 @@ void registerTimezoneFunctions(const std::string& prefix) {
            .build()},
       /*overwrite=*/true,
       formatDatetimeCanEvaluate);
+
+  // One-argument form: returns TIMESTAMP, not TIMESTAMP WITH TIME ZONE. It had
+  // no registration at all, so to_iso8601(from_unixtime(x)) fell back on the
+  // inner call.
+  registerCudfFunction(
+      prefix + "from_unixtime",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
+        return std::make_shared<FromUnixtimeToTimestampFunction>(expr);
+      },
+      {exec::FunctionSignatureBuilder()
+           .returnType("timestamp")
+           .argumentType("double")
+           .build()});
 
   registerCudfFunction(
       prefix + "date_format",

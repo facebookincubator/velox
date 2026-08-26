@@ -2187,13 +2187,17 @@ TEST_P(HashJoinTest, spillFileSize) {
 }
 
 TEST_P(HashJoinTest, spillPartitionBitsOverlap) {
+  // Use enough rows so the hash table exits array mode and sizeBits exceeds
+  // spillStartPartitionBit. checkHashBitsOverlap is skipped in array mode.
+  // folly::xoshiro256pp_32 produces different sequences on ARM64 vs x86,
+  // and narrower key distributions can keep the table in array mode.
   auto builder =
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .numDrivers(numDrivers_)
           .parallelizeJoinBuildRows(parallelBuildSideRowsEnabled_)
           .keyTypes({BIGINT(), BIGINT()})
-          .probeVectors(2'000, 3)
-          .buildVectors(2'000, 3)
+          .probeVectors(5'000, 3)
+          .buildVectors(5'000, 3)
           .referenceQuery(
               "SELECT t_k0, t_k1, t_data, u_k0, u_k1, u_data FROM t, u WHERE t_k0 = u_k0 and t_k1 = u_k1")
           .config(core::QueryConfig::kSpillStartPartitionBit, "8")
