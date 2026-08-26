@@ -168,8 +168,8 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
             "ALP encoding only supports float and double data types, got {}.",
             encoding.dataType());
       }
-    // SubIntSplit integration (re-enabled for
-    // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS; was commented out by #636):
+      // SubIntSplit integration (re-enabled for
+      // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS; was commented out by #636):
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
     case EncodingType::SubIntSplit:
       if constexpr (isNumericType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
@@ -179,8 +179,8 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
         NIMBLE_UNREACHABLE("{}", encoding.dataType());
       }
 #endif
-    // FOR and FrequencyPartition integration (re-enabled for
-    // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS; was commented out by #636):
+      // FOR and FrequencyPartition integration (re-enabled for
+      // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS; was commented out by #636):
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
     case EncodingType::FOR:
       if constexpr (std::is_integral_v<T> && !std::is_same_v<T, bool>) {
@@ -190,8 +190,9 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
       }
     case EncodingType::FrequencyPartition:
       if constexpr (!std::is_same_v<T, bool>) {
-        return f(static_cast<
-                 ::facebook::nimble::FrequencyPartitionEncoding<T>&>(encoding));
+        return f(
+            static_cast<::facebook::nimble::FrequencyPartitionEncoding<T>&>(
+                encoding));
       } else {
         NIMBLE_UNREACHABLE(toString(encoding.dataType()));
       }

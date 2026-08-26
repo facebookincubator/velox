@@ -28,8 +28,8 @@ ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors() {
       {EncodingType::Dictionary, 1.0},
       {EncodingType::RLE, 1.0},
       {EncodingType::Varint, 1.0},
-      // SubIntSplit integration (re-enabled for
-      // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS; was commented out by #636):
+  // SubIntSplit integration (re-enabled for
+  // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS; was commented out by #636):
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
       {EncodingType::SubIntSplit, 0.85},
 #endif

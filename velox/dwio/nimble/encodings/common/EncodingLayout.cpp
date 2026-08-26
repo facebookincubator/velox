@@ -235,8 +235,9 @@ EncodingLayout EncodingLayoutCapture::capture(
 
       children.reserve(splitCount);
       for (uint8_t s = 0; s < splitCount; ++s) {
-        children.emplace_back(EncodingLayoutCapture::capture(
-            {pos, sectionMeta[s].encodedSize}, options));
+        children.emplace_back(
+            EncodingLayoutCapture::capture(
+                {pos, sectionMeta[s].encodedSize}, options));
         pos += sectionMeta[s].encodedSize;
       }
 
