@@ -209,7 +209,8 @@ class BlockBitPackingEncoding final
         FixedBitArray::bufferSize(rowCount, typicalBitWidth);
     const auto baselinesSize =
         TrivialEncoding<physicalType>::estimateSize(numBlocks);
-    const auto bitWidthsSize = TrivialEncoding<uint8_t>::estimateSize(numBlocks);
+    const auto bitWidthsSize =
+        TrivialEncoding<uint8_t>::estimateSize(numBlocks);
     const auto offsetsSize = TrivialEncoding<uint32_t>::estimateSize(numBlocks);
     const auto firstBlockRows =
         std::min<uint32_t>(blockSize, static_cast<uint32_t>(rowCount));

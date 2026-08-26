@@ -125,7 +125,7 @@ std::vector<uint64_t> makeZipfianValues() {
   };
   push(0, 1, 256); // 512 values: 256× each of 0 and 1
   push(0, 2, 128); // 256 values: 128× each of 0 and 2
-  push(0, 3, 64);  // 128 values: 64× each of 0 and 3
+  push(0, 3, 64); // 128 values: 64× each of 0 and 3
   for (uint64_t j = 4; j < 36; ++j) {
     push(0, j, 1); // 64 values: 1× each of 0 and j
   }
@@ -161,22 +161,27 @@ std::vector<uint64_t> makeMainlyConstantValues() {
 TEST(SubIntSplitCostModelsTest, PforBeatsFixedBitWidthForBaselinePlusOutliers) {
   const std::vector<uint64_t> values = makePforFriendlyValues();
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 16;
   const double pfor = pforCostBits(m, values.size(), kBitWidth);
-  const double fixedBitWidth = fixedBitWidthCostBits(m, values.size(), kBitWidth);
+  const double fixedBitWidth =
+      fixedBitWidthCostBits(m, values.size(), kBitWidth);
 
   EXPECT_LT(pfor, fixedBitWidth);
 }
 
-TEST(SubIntSplitCostModelsTest, HuffmanIsFiniteAndCheaperThanPforForLowCardinalityBaselinePlusOutliers) {
+TEST(
+    SubIntSplitCostModelsTest,
+    HuffmanIsFiniteAndCheaperThanPforForLowCardinalityBaselinePlusOutliers) {
   // Same data as makePforFriendlyValues: 17 distinct values total (16
   // baseline + 1 outlier). Huffman's exact per-symbol code length beats
   // PFOR's fixed-base-bit-width approximation for this small an alphabet.
   const std::vector<uint64_t> values = makePforFriendlyValues();
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 16;
   const double huffman = huffmanCostBits(values, values.size());
@@ -201,10 +206,13 @@ TEST(SubIntSplitCostModelsTest, HuffmanCostBitsInfiniteWhenAlphabetTooLarge) {
   EXPECT_TRUE(std::isinf(huffman));
 }
 
-TEST(SubIntSplitCostModelsTest, DeltaBlockIsFiniteAndCheaperThanDeltaForConstantStepData) {
+TEST(
+    SubIntSplitCostModelsTest,
+    DeltaBlockIsFiniteAndCheaperThanDeltaForConstantStepData) {
   const std::vector<uint64_t> values = makeDeltaFriendlyValues();
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 28; // bit_width(199800000) == 28
   const double deltaBlock = deltaBlockCostBits(values, values.size());
@@ -215,7 +223,9 @@ TEST(SubIntSplitCostModelsTest, DeltaBlockIsFiniteAndCheaperThanDeltaForConstant
   EXPECT_LT(deltaBlock, delta);
 }
 
-TEST(SubIntSplitCostModelsTest, DeltaBlockCostBitsInfiniteWhenBlockContainsADecrease) {
+TEST(
+    SubIntSplitCostModelsTest,
+    DeltaBlockCostBitsInfiniteWhenBlockContainsADecrease) {
   // A single decrease within a deltaBlockSize (default 256) window makes the
   // whole block ineligible for DeltaBlock's non-decreasing-only design.
   std::vector<uint64_t> values;
@@ -235,11 +245,13 @@ TEST(
     BlockBitPackingBeatsFixedBitWidthForLocallyClusteredData) {
   const std::vector<uint64_t> values = makeBlockClusteredValues();
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 20; // bit_width(750015) == 20
   const double blockBitPacking = blockBitPackingCostBits(values, values.size());
-  const double fixedBitWidth = fixedBitWidthCostBits(m, values.size(), kBitWidth);
+  const double fixedBitWidth =
+      fixedBitWidthCostBits(m, values.size(), kBitWidth);
 
   EXPECT_LT(blockBitPacking, fixedBitWidth);
 }
@@ -254,10 +266,12 @@ TEST(SubIntSplitCostModelsTest, SimdForBitpackIsFiniteAndCheaperThanTrivial) {
     values.push_back(static_cast<uint64_t>(i % 64)); // bit_width <= 6
   }
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 8;
-  const double simdForBitpack = simdForBitpackCostBits(m, values.size(), kBitWidth);
+  const double simdForBitpack =
+      simdForBitpackCostBits(m, values.size(), kBitWidth);
   const double trivial = trivialCostBits(m, values.size(), kBitWidth);
 
   EXPECT_TRUE(std::isfinite(simdForBitpack));
@@ -273,7 +287,8 @@ TEST(
   // fixed-base-bit-width approximation for this small an alphabet.
   const std::vector<uint64_t> values = makePforFriendlyValues();
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 16;
   EncodingType bestEncoding = EncodingType::Trivial;
@@ -306,7 +321,8 @@ TEST(
     values.push_back(65535);
   }
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 16;
   EncodingType bestEncoding = EncodingType::Trivial;
@@ -322,7 +338,8 @@ TEST(
     BestCostBitsSelectsBlockBitPackingForLocallyClusteredData) {
   const std::vector<uint64_t> values = makeBlockClusteredValues();
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 20;
   EncodingType bestEncoding = EncodingType::Trivial;
@@ -336,11 +353,13 @@ TEST(
 TEST(SubIntSplitCostModelsTest, DeltaCostBitsFiniteForMonotonicData) {
   const std::vector<uint64_t> values = makeDeltaFriendlyValues();
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 28; // bit_width(199800000) == 28
   const double delta = deltaCostBits(m, values.size(), kBitWidth);
-  const double fixedBitWidth = fixedBitWidthCostBits(m, values.size(), kBitWidth);
+  const double fixedBitWidth =
+      fixedBitWidthCostBits(m, values.size(), kBitWidth);
 
   EXPECT_TRUE(std::isfinite(delta));
   EXPECT_GT(delta, 0.0);
@@ -350,7 +369,8 @@ TEST(SubIntSplitCostModelsTest, DeltaCostBitsFiniteForMonotonicData) {
 TEST(SubIntSplitCostModelsTest, DeltaCostBitsInfiniteForNonMonotonicData) {
   const std::vector<uint64_t> values = makeAlternatingValues();
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 10; // bit_width(1000) == 10
   const double delta = deltaCostBits(m, values.size(), kBitWidth);
@@ -361,11 +381,13 @@ TEST(SubIntSplitCostModelsTest, DeltaCostBitsInfiniteForNonMonotonicData) {
 TEST(SubIntSplitCostModelsTest, ForCostBitsFiniteAndPositive) {
   const std::vector<uint64_t> values = makeForFriendlyValues();
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 10; // bit_width(999) == 10
   const double forCost = forCostBits(m, values.size(), kBitWidth);
-  const double fixedBitWidth = fixedBitWidthCostBits(m, values.size(), kBitWidth);
+  const double fixedBitWidth =
+      fixedBitWidthCostBits(m, values.size(), kBitWidth);
 
   EXPECT_TRUE(std::isfinite(forCost));
   EXPECT_GT(forCost, 0.0);
@@ -382,7 +404,8 @@ TEST(
   // cost keeps scaling with the (now exact, not byte-rounded) deltaBitWidth.
   const std::vector<uint64_t> values = makeDeltaFriendlyValues();
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 28; // bit_width(199800000) == 28
   EncodingType bestEncoding = EncodingType::Trivial;
@@ -400,7 +423,8 @@ TEST(
   // (mostly) zero-width deltas beats FOR's per-frame local-range estimate.
   const std::vector<uint64_t> values = makeForFriendlyValues();
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 10; // bit_width(999) == 10
   EncodingType bestEncoding = EncodingType::Trivial;
@@ -429,7 +453,8 @@ TEST(
   }
   values[10] = 0;
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 10; // bit_width(999) == 10
   EncodingType bestEncoding = EncodingType::Trivial;
@@ -445,13 +470,16 @@ TEST(
     FrequencyPartitionCostBitsFiniteForZipfianData) {
   const std::vector<uint64_t> values = makeZipfianValues();
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   // Values 0..67 require 7 bits; FPE should be finite and beat fixed-bit-width
   // thanks to the skewed distribution (value 0 covers 50% of entries).
   constexpr int kBitWidth = 7; // bit_width(67) == 7
-  const double fpeCost = frequencyPartitionCostBits(m, values.size(), kBitWidth);
-  const double fixedBitWidth = fixedBitWidthCostBits(m, values.size(), kBitWidth);
+  const double fpeCost =
+      frequencyPartitionCostBits(m, values.size(), kBitWidth);
+  const double fixedBitWidth =
+      fixedBitWidthCostBits(m, values.size(), kBitWidth);
 
   EXPECT_TRUE(std::isfinite(fpeCost));
   EXPECT_GT(fpeCost, 0.0);
@@ -463,7 +491,8 @@ TEST(
     BestCostBitsSelectsFrequencyPartitionForZipfianData) {
   const std::vector<uint64_t> values = makeZipfianValues();
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 7; // bit_width(67) == 7
   EncodingType bestEncoding = EncodingType::Trivial;
@@ -474,18 +503,18 @@ TEST(
   EXPECT_EQ(bestEncoding, EncodingType::FrequencyPartition);
 }
 
-TEST(
-    SubIntSplitCostModelsTest,
-    MainlyConstantCostBitsFiniteForDominantData) {
+TEST(SubIntSplitCostModelsTest, MainlyConstantCostBitsFiniteForDominantData) {
   const std::vector<uint64_t> values = makeMainlyConstantValues();
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   // bit_width(227) == 8; MainlyConstant should be finite and beat FixedBitWidth
   // (~8072 bits) at this dominance level (900/1000 = 90% dominant value).
   constexpr int kBitWidth = 8;
   const double mc = mainlyConstantCostBits(m, values.size(), kBitWidth);
-  const double fixedBitWidth = fixedBitWidthCostBits(m, values.size(), kBitWidth);
+  const double fixedBitWidth =
+      fixedBitWidthCostBits(m, values.size(), kBitWidth);
 
   EXPECT_TRUE(std::isfinite(mc));
   EXPECT_GT(mc, 0.0);
@@ -497,7 +526,8 @@ TEST(
     BestCostBitsSelectsMainlyConstantForDominantData) {
   const std::vector<uint64_t> values = makeMainlyConstantValues();
   MetricCollector collector;
-  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+  const SegmentMetrics m =
+      collector.compute(values, allCostModelRequiredFlags());
 
   constexpr int kBitWidth = 8; // bit_width(227) == 8
   EncodingType bestEncoding = EncodingType::Trivial;

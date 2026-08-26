@@ -129,8 +129,7 @@ class MetricCollector {
     const bool doDominant = hasFlag(flags, MetricFlag::DominantValue);
     const bool doFreqTiers = hasFlag(flags, MetricFlag::FrequencyTiers);
     // FrequencyTiers requires frequency counts, which subsumes UniqueCount.
-    const bool doUniq =
-        hasFlag(flags, MetricFlag::UniqueCount) || doFreqTiers;
+    const bool doUniq = hasFlag(flags, MetricFlag::UniqueCount) || doFreqTiers;
     // Unique count and dominant value share a single frequency map pass.
     const bool doFreq = doUniq || doDominant;
     const bool doHist = hasFlag(flags, MetricFlag::BitWidthHistogram);

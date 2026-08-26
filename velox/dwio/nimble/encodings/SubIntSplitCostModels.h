@@ -65,8 +65,8 @@ inline constexpr uint8_t storageWidthBits(int bw) noexcept {
 // Union of MetricFlags needed across all cost models below.
 inline MetricFlags allCostModelRequiredFlags() noexcept {
   return MetricFlag::MinMax | MetricFlag::RunStats | MetricFlag::UniqueCount |
-      MetricFlag::DominantValue | MetricFlag::BitWidthHistogram | MetricFlag::DeltaStats |
-      MetricFlag::FrequencyTiers;
+      MetricFlag::DominantValue | MetricFlag::BitWidthHistogram |
+      MetricFlag::DeltaStats | MetricFlag::FrequencyTiers;
 }
 
 // Trivial: store each value at its native storage width.
@@ -174,8 +174,8 @@ inline double mainlyConstantCostBits(
       break;
   }
 
-  const uint64_t isCommonBytes =
-      SparseBoolEncoding::estimateSize(rowCount, uncommonCount, Encoding::Options{});
+  const uint64_t isCommonBytes = SparseBoolEncoding::estimateSize(
+      rowCount, uncommonCount, Encoding::Options{});
 
   return outerBits + static_cast<double>(otherValuesBytes) * 8.0 +
       static_cast<double>(isCommonBytes) * 8.0;
@@ -313,15 +313,11 @@ inline double simdForBitpackCostBits(
       break;
     case 16:
       bytes = SimdForBitpackEncoding<uint16_t>::estimateSize(
-          rowCount,
-          static_cast<uint16_t>(m.min),
-          static_cast<uint16_t>(m.max));
+          rowCount, static_cast<uint16_t>(m.min), static_cast<uint16_t>(m.max));
       break;
     case 32:
       bytes = SimdForBitpackEncoding<uint32_t>::estimateSize(
-          rowCount,
-          static_cast<uint32_t>(m.min),
-          static_cast<uint32_t>(m.max));
+          rowCount, static_cast<uint32_t>(m.min), static_cast<uint32_t>(m.max));
       break;
     default:
       bytes = SimdForBitpackEncoding<uint64_t>::estimateSize(
@@ -381,9 +377,8 @@ pforCostBits(const SegmentMetrics& m, size_t numValues, int bitWidth) noexcept {
   const double positionsBits = numExceptions == 0
       ? 0.0
       : kNestedHeaderBits + static_cast<double>(numExceptions) * 32.0;
-  const double valuesBits = numExceptions == 0
-      ? 0.0
-      : kNestedHeaderBits +
+  const double valuesBits = numExceptions == 0 ? 0.0
+                                               : kNestedHeaderBits +
           static_cast<double>(numExceptions) *
               static_cast<double>(storageWidthBits(bitWidth));
 
@@ -452,8 +447,8 @@ inline double deltaBlockCostBits(
     return 0.0;
   }
   const std::span<const uint64_t> values(segValues.data(), numValues);
-  const auto bytes = DeltaBlockEncoding<uint64_t>::estimateSize(
-      values, options);
+  const auto bytes =
+      DeltaBlockEncoding<uint64_t>::estimateSize(values, options);
   if (!bytes.has_value()) {
     return std::numeric_limits<double>::infinity();
   }
@@ -515,8 +510,7 @@ inline double deltaCostBits(
           Encoding::Options{})) *
       8.0;
 
-  return kOuterHeaderBits + deltasBits + restatementsBits +
-      isRestatementsBits;
+  return kOuterHeaderBits + deltasBits + restatementsBits + isRestatementsBits;
 }
 
 // FOR (Frame of Reference): fixed-size frames, each bit-packed against a
@@ -535,16 +529,14 @@ forCostBits(const SegmentMetrics& m, size_t numValues, int bitWidth) noexcept {
       static_cast<uint32_t>((numValues + kForFrameSize - 1) / kForFrameSize);
 
   const double avgAbsDelta = numValues > 1
-      ? static_cast<double>(m.sumAbsDelta) /
-          static_cast<double>(numValues - 1)
+      ? static_cast<double>(m.sumAbsDelta) / static_cast<double>(numValues - 1)
       : 0.0;
   const double localRange = std::min(
       static_cast<double>(m.range),
       avgAbsDelta * static_cast<double>(kForFrameSize) / 2.0);
   const uint8_t localBits = localRange < 1.0
       ? uint8_t{0}
-      : static_cast<uint8_t>(
-            std::bit_width(static_cast<uint64_t>(localRange)));
+      : static_cast<uint8_t>(std::bit_width(static_cast<uint64_t>(localRange)));
 
   // prefix(6) + compressionType(1) + frameSize(4) + numFrames(4) +
   // enableBitOffsets(1)
@@ -614,8 +606,7 @@ inline double frequencyPartitionCostBits(
       std::max(0.0, m.topKCoverage[3] - m.topKCoverage[1]); // next → 2-bit
   const double fallbackCoverage = std::max(0.0, 1.0 - m.topKCoverage[3]);
 
-  const double keyCostBits = tier0Coverage * n * 1.0 +
-      tier1Coverage * n * 2.0 +
+  const double keyCostBits = tier0Coverage * n * 1.0 + tier1Coverage * n * 2.0 +
       fallbackCoverage * n * static_cast<double>(storageWidthBits(bitWidth));
 
   // PerTierBitmaps index: one N-bit bitmap per active tier (4-byte
@@ -689,8 +680,7 @@ inline double bestCostBits(
       m.uniqueCount <= HuffmanEncoding<uint64_t>::kMaxSymbols) {
     consider(huffmanCostBits(segValues, numValues), EncodingType::Huffman);
   }
-  consider(
-      deltaBlockCostBits(segValues, numValues), EncodingType::DeltaBlock);
+  consider(deltaBlockCostBits(segValues, numValues), EncodingType::DeltaBlock);
   return best;
 }
 
