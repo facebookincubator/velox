@@ -192,8 +192,9 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
 
  private:
   rmm::device_async_resource_ref tempMemoryResource() const {
-    return tempMemoryResource_.has_value() ? *tempMemoryResource_
-                                           : get_temp_mr();
+    return tempMemoryResource_.has_value()
+        ? *tempMemoryResource_
+        : rmm::device_async_resource_ref{mr_.value()};
   }
 
   rmm::device_async_resource_ref outputMemoryResource() const {
