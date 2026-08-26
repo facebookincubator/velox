@@ -200,11 +200,14 @@ struct CountMinSketchAccumulator {
   // Hash function for integral types matching Spark's CountMinSketchImpl.hash.
   // Uses unsigned arithmetic to avoid signed overflow UB (Java wraps; C++ UB).
   int32_t hashLong(int64_t item, int32_t i) const {
-    int64_t hash = static_cast<int64_t>(
-        static_cast<uint64_t>(hashA_[i]) * static_cast<uint64_t>(item));
+    // Perform every step in uint64_t to reproduce Java's wrapping long
+    // arithmetic; signed int64_t overflow (in the multiply and the addition
+    // below) is undefined behavior in C++.
+    uint64_t hash =
+        static_cast<uint64_t>(hashA_[i]) * static_cast<uint64_t>(item);
     hash += hash >> 32;
-    hash &= kPrimeModulus;
-    return static_cast<int32_t>(hash) % width_;
+    hash &= static_cast<uint64_t>(kPrimeModulus);
+    return static_cast<int32_t>(hash % static_cast<uint64_t>(width_));
   }
 
   // Hash function for binary/string types matching Spark's
