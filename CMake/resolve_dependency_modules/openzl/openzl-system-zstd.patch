@@ -1,0 +1,96 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c6c7743..0784f1a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -24,6 +24,7 @@ option(OPENZL_ALLOW_INTROSPECTION "Allow introspection" ON)
+ option(OPENZL_INSTALL "Install OpenZL" ON)
+ option(OPENZL_CPP_INSTALL "Install C++ bindings" ${OPENZL_INSTALL})
+ option(OPENZL_BUILD_PYTHON_DEMO "Build openzl_demo Python extension" ${OPENZL_BUILD_ALL})
++option(OPENZL_USE_SYSTEM_ZSTD "Use system-installed zstd instead of bundled" OFF)
+
+ # Fine-grained control of build directories that can be disabled.
+ # NOTE: Disabling some but not all of these may break the build, use with caution.
+diff --git a/build-scripts/cmake/openzl-config.cmake.in b/build-scripts/cmake/openzl-config.cmake.in
+index 6c8a0df..fce9ef2 100644
+--- a/build-scripts/cmake/openzl-config.cmake.in
++++ b/build-scripts/cmake/openzl-config.cmake.in
+@@ -14,6 +14,25 @@
+
+ include(CMakeFindDependencyMacro)
+
++if(@OPENZL_USE_SYSTEM_ZSTD@)
++  if(NOT TARGET zstd::zstd)
++    find_package(zstd QUIET)
++  endif()
++  if(NOT TARGET zstd::zstd)
++    if(TARGET zstd::libzstd)
++      add_library(zstd::zstd ALIAS zstd::libzstd)
++    elseif(TARGET zstd::libzstd_static)
++      add_library(zstd::zstd ALIAS zstd::libzstd_static)
++    elseif(TARGET zstd::libzstd_shared)
++      add_library(zstd::zstd ALIAS zstd::libzstd_shared)
++    else()
++      find_package(PkgConfig REQUIRED)
++      pkg_check_modules(OPENZL_ZSTD REQUIRED IMPORTED_TARGET GLOBAL libzstd)
++      add_library(zstd::zstd ALIAS PkgConfig::OPENZL_ZSTD)
++    endif()
++  endif()
++endif()
++
+ set_and_check(OPENZL_INCLUDE_DIR "@PACKAGE_OPENZL_INSTALL_INCLUDEDIR@")
+ set_and_check(OPENZL_CMAKE_DIR "@PACKAGE_OPENZL_INSTALL_CMAKEDIR@")
+
+diff --git a/build-scripts/cmake/openzl-deps.cmake b/build-scripts/cmake/openzl-deps.cmake
+index 62c1229..c7e86a2 100644
+--- a/build-scripts/cmake/openzl-deps.cmake
++++ b/build-scripts/cmake/openzl-deps.cmake
+@@ -18,6 +18,25 @@ endif()
+
+ set(ZSTD_LEGACY_SUPPORT OFF)
+
++if(OPENZL_USE_SYSTEM_ZSTD)
++    if(NOT TARGET zstd::zstd)
++        find_package(zstd QUIET)
++    endif()
++    if(NOT TARGET zstd::zstd)
++        if(TARGET zstd::libzstd)
++            add_library(zstd::zstd ALIAS zstd::libzstd)
++        elseif(TARGET zstd::libzstd_static)
++            add_library(zstd::zstd ALIAS zstd::libzstd_static)
++        elseif(TARGET zstd::libzstd_shared)
++            add_library(zstd::zstd ALIAS zstd::libzstd_shared)
++        else()
++            find_package(PkgConfig REQUIRED)
++            pkg_check_modules(OPENZL_ZSTD REQUIRED IMPORTED_TARGET GLOBAL libzstd)
++            add_library(zstd::zstd ALIAS PkgConfig::OPENZL_ZSTD)
++        endif()
++    endif()
++    list(APPEND OPENZL_LINK_LIBRARIES zstd::zstd)
++else()
+ # Two-tier zstd dependency resolution with automated hash verification
+ # 1. Git submodule (matches Makefile behavior)
+ # 2. FetchContent + URL (no git required, cryptographically verified)
+@@ -107,6 +126,7 @@ set(ZSTD_BUILD_TESTS OFF CACHE BOOL "")
+ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/deps/zstd/build/cmake" zstd_build)
+ # Note: find_package not needed when using add_subdirectory - targets are directly available
+ list(APPEND OPENZL_LINK_LIBRARIES libzstd)
++endif()
+
+ # Same two-tier lz4 dependency resolution with automated hash verification
+ set(LZ4_VERSION "1.10.0")
+diff --git a/tools/parquet/CMakeLists.txt b/tools/parquet/CMakeLists.txt
+index 68675ef..5e2ffee 100644
+--- a/tools/parquet/CMakeLists.txt
++++ b/tools/parquet/CMakeLists.txt
+@@ -3,8 +3,9 @@
+ if (OPENZL_BUILD_PARQUET_TOOLS)
+   set(ARROW_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
+
+-  # Point arrow to the zstd build directory
+-  list(APPEND CMAKE_PREFIX_PATH "${zstd_BINARY_DIR}")
++  if(NOT OPENZL_USE_SYSTEM_ZSTD)
++    list(APPEND CMAKE_PREFIX_PATH "${zstd_BINARY_DIR}")
++  endif()
+
+   set(ARROW_CMAKE_ARGS
+       -DARROW_PARQUET=ON

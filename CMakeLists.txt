@@ -886,13 +886,6 @@ if(VELOX_ENABLE_GEO)
   velox_resolve_dependency(s2geometry)
 endif()
 
-# Resolved last, after every other dependency. OpenZL vendors its own copy of
-# zstd, whose CMake defines an `uninstall` target. GEOS defines one too, but
-# without the `if(NOT TARGET uninstall)` guard that zstd has, so GEOS fails
-# outright if anything claimed the name first. Ordering Nimble after GEOS lets
-# GEOS win the race and zstd skip, which is the only arrangement in which a
-# BUNDLED build of both succeeds. Nothing between here and add_subdirectory()
-# needs these targets.
 if(VELOX_ENABLE_NIMBLE)
   # Nimble is the only consumer of both, so they are resolved here rather than
   # unconditionally. FlatBuffers supplies both the runtime library and the flatc

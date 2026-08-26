@@ -48,10 +48,11 @@ COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
 COPY CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch /
 COPY CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch /
 COPY CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch /
+COPY CMake/resolve_dependency_modules/openzl/openzl-system-zstd.patch /
 
 ENV VELOX_ARROW_CMAKE_PATCH="/cmake-compatibility.patch /arrow-testing-boost.patch" \
     VELOX_FBTHRIFT_CMAKE_PATCH="/compactv1-protocol-refiller.patch" \
-    VELOX_OPENZL_CMAKE_PATCH="/openzl-cxx-standard.patch" \
+    VELOX_OPENZL_CMAKE_PATCH="/openzl-cxx-standard.patch /openzl-system-zstd.patch" \
     UV_TOOL_BIN_DIR=/usr/local/bin \
     UV_INSTALL_DIR=/usr/local/bin
 

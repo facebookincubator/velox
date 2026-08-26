@@ -46,6 +46,7 @@ COPY CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch /
 COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
 COPY CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch /
 COPY CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch /
+COPY CMake/resolve_dependency_modules/openzl/openzl-system-zstd.patch /
 
 ARG VELOX_BUILD_SHARED=ON
 # Building libvelox.so requires folly and gflags to be built shared as well for now
@@ -72,7 +73,7 @@ ENV UV_TOOL_BIN_DIR=/usr/local/bin \
 ENV CMAKE_POLICY_VERSION_MINIMUM="3.5" \
     VELOX_ARROW_CMAKE_PATCH="/arrow-testing-boost.patch /cmake-compatibility.patch" \
     VELOX_FBTHRIFT_CMAKE_PATCH="/compactv1-protocol-refiller.patch" \
-    VELOX_OPENZL_CMAKE_PATCH="/openzl-cxx-standard.patch"
+    VELOX_OPENZL_CMAKE_PATCH="/openzl-cxx-standard.patch /openzl-system-zstd.patch"
 
 # Ensure libraries installed to INSTALL_PREFIX are found at runtime (e.g.
 # thrift1 needs libgflags.so.2.2 when folly links gflags statically but
@@ -138,7 +139,8 @@ FROM base-image AS pyvelox
 
 RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/velox_deps.conf \
  && echo "/usr/local/lib64" >> /etc/ld.so.conf.d/velox_deps.conf \
- && ldconfig
+ && ldconfig \
+ && test ! -e /usr/local/lib64/libzstd.so.1
 
 ########################
 # Stage: Adapters Build#
@@ -223,7 +225,8 @@ COPY --from=adapters-build /deps /usr/local
 # thrift1 requires shared libraries copied from /deps to /usr/local.
 RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/velox_deps.conf \
  && echo "/usr/local/lib64" >> /etc/ld.so.conf.d/velox_deps.conf \
- && ldconfig
+ && ldconfig \
+ && test ! -e /usr/local/lib64/libzstd.so.1
 
 COPY scripts/setup-classpath.sh /
 ENTRYPOINT ["/bin/bash", "-c", "source /setup-classpath.sh && source /opt/rh/gcc-toolset-12/enable && exec \"$@\"", "--"]
