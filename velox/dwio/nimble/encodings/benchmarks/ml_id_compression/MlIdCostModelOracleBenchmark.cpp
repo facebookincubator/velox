@@ -136,9 +136,7 @@ struct ModelCell {
 // Spearman rank correlation between two equal-length rank vectors (1-based
 // dense ranks are fine; ties broken by encounter order, matching the
 // playground's approach).
-double spearmanRho(
-    const std::vector<double>& a,
-    const std::vector<double>& b) {
+double spearmanRho(const std::vector<double>& a, const std::vector<double>& b) {
   const size_t n = a.size();
   if (n < 3) {
     return std::numeric_limits<double>::quiet_NaN();
@@ -146,8 +144,9 @@ double spearmanRho(
   auto rankOf = [n](const std::vector<double>& v) {
     std::vector<size_t> idx(n);
     std::iota(idx.begin(), idx.end(), 0);
-    std::sort(
-        idx.begin(), idx.end(), [&](size_t i, size_t j) { return v[i] < v[j]; });
+    std::sort(idx.begin(), idx.end(), [&](size_t i, size_t j) {
+      return v[i] < v[j];
+    });
     std::vector<double> rank(n);
     for (size_t r = 0; r < n; ++r) {
       rank[idx[r]] = static_cast<double>(r);
@@ -354,7 +353,8 @@ int runBenchmark() {
         }
 
         // Cost model metrics + per-encoding estimates.
-        const SegmentMetrics metrics = collector.compute(sectionU64, requiredFlags);
+        const SegmentMetrics metrics =
+            collector.compute(sectionU64, requiredFlags);
         EncodingType modelBestEnc = EncodingType::Trivial;
         const double modelBestBits =
             bestCostBits(metrics, sampleSize, width, modelBestEnc);
@@ -438,9 +438,10 @@ int runBenchmark() {
         // Compute ranks for CSV emission (1 = best/lowest).
         std::vector<size_t> modelOrder(candidates.size());
         std::iota(modelOrder.begin(), modelOrder.end(), 0);
-        std::sort(modelOrder.begin(), modelOrder.end(), [&](size_t a, size_t b) {
-          return mc.estBits[a] < mc.estBits[b];
-        });
+        std::sort(
+            modelOrder.begin(), modelOrder.end(), [&](size_t a, size_t b) {
+              return mc.estBits[a] < mc.estBits[b];
+            });
         std::vector<int> modelRank(candidates.size(), -1);
         for (size_t rk = 0; rk < modelOrder.size(); ++rk) {
           modelRank[modelOrder[rk]] = static_cast<int>(rk) + 1;
@@ -481,8 +482,7 @@ int runBenchmark() {
             csv.set("est_bits", mc.estBits[ci]);
           }
           if (oracleOk) {
-            csv.set(
-                "actual_bytes", static_cast<int64_t>(oc.results[ci].bytes));
+            csv.set("actual_bytes", static_cast<int64_t>(oc.results[ci].bytes));
             const double bitsPerElem = sampleSize > 0
                 ? static_cast<double>(oc.results[ci].bytes) * 8.0 /
                     static_cast<double>(sampleSize)

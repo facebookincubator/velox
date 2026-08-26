@@ -25,9 +25,9 @@
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/Axes.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/GatherTraceGen.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 
@@ -77,7 +77,9 @@ int runBenchmark() {
   const auto selectivityAxis =
       linSpaced(0.05, 1.0, static_cast<size_t>(FLAGS_selectivity_steps));
   const auto runLengthAxis = logSpaced(
-      1, std::max<size_t>(1, n / 4), static_cast<size_t>(FLAGS_run_length_steps));
+      1,
+      std::max<size_t>(1, n / 4),
+      static_cast<size_t>(FLAGS_run_length_steps));
 
   auto contextOrNull =
       makeSweepContext<Elem>(/*withOpenZL=*/true, cacheState, n);
@@ -86,29 +88,52 @@ int runBenchmark() {
   }
   const auto& context = *contextOrNull;
 
-  std::cout << "bench_decode_gather: " << context.encoders.size() << " encoders x "
-            << context.datasets.size() << " datasets, N=" << n
+  std::cout << "bench_decode_gather: " << context.encoders.size()
+            << " encoders x " << context.datasets.size() << " datasets, N=" << n
             << ", selectivity_steps=" << selectivityAxis.size()
             << ", run_length_steps=" << runLengthAxis.size()
-            << ", iters=" << iters << ", cache=" << cacheStateName(context.cacheState)
-            << "\n  " << context.topology.describe() << "\n\n";
+            << ", iters=" << iters
+            << ", cache=" << cacheStateName(context.cacheState) << "\n  "
+            << context.topology.describe() << "\n\n";
 
   if (FLAGS_dry_run) {
     std::cout << "Encoders:\n";
-    for (const auto& e : context.encoders) std::cout << "  " << e.name << "\n";
+    for (const auto& e : context.encoders)
+      std::cout << "  " << e.name << "\n";
     std::cout << "Datasets:\n";
-    for (const auto& d : context.datasets) std::cout << "  " << d.name << "\n";
+    for (const auto& d : context.datasets)
+      std::cout << "  " << d.name << "\n";
     return 0;
   }
 
   std::vector<std::string> csvColumns = {
       "driver",
-      "dtype", "dataset", "encoding", "family", "variant", "is_sequential",
-      "N", "seed", "cache_state", "evict_method", "evict_ns",
-      "payload_bytes", "compression_ratio", "iterations", "warmup",
-      "selectivity", "run_length", "selectivity_achieved", "range_count",
-      "selected_rows", "gap_model", "time_ns", "time_p90_ns", "time_min_ns",
-      "gather_Meps", "skipped"};
+      "dtype",
+      "dataset",
+      "encoding",
+      "family",
+      "variant",
+      "is_sequential",
+      "N",
+      "seed",
+      "cache_state",
+      "evict_method",
+      "evict_ns",
+      "payload_bytes",
+      "compression_ratio",
+      "iterations",
+      "warmup",
+      "selectivity",
+      "run_length",
+      "selectivity_achieved",
+      "range_count",
+      "selected_rows",
+      "gap_model",
+      "time_ns",
+      "time_p90_ns",
+      "time_min_ns",
+      "gather_Meps",
+      "skipped"};
   std::string csvPath = FLAGS_mlidc_output_csv.empty()
       ? "bench_decode_gather.csv"
       : FLAGS_mlidc_output_csv;
@@ -134,15 +159,20 @@ int runBenchmark() {
       // Block codecs decompress everything per read; cap their iterations so
       // the sweep finishes in reasonable time.
       const MeasureSpec encSpec = specFor(
-          spec, enc.wholePayloadCodec,
+          spec,
+          enc.wholePayloadCodec,
           static_cast<size_t>(FLAGS_mlidc_block_codec_iters));
 
       const size_t payloadBytes = target->payloadSize();
 
       if (FLAGS_validate && enc.variant != "fpe_noindex") {
         GatherAccessParams vp{
-            .start = 0, .span = n, .selectivity = 0.3, .runLength = 4,
-            .gapModel = GapModel::UniformDeterministic, .seed = seed};
+            .start = 0,
+            .span = n,
+            .selectivity = 0.3,
+            .runLength = 4,
+            .gapModel = GapModel::UniformDeterministic,
+            .seed = seed};
         auto trace = buildGatherTrace(n, vp);
         auto ranges = toRanges(trace);
         std::vector<Elem> check(trace.selectedRows);
@@ -151,7 +181,8 @@ int runBenchmark() {
         size_t idx = 0;
         for (const auto& r : trace.ranges)
           for (size_t i = r.begin; i < r.end; ++i, ++idx)
-            if (check[idx] != data[i]) ok = false;
+            if (check[idx] != data[i])
+              ok = false;
         if (!ok) {
           std::cerr << "  [VALIDATE FAIL] " << enc.name << " / " << ds.name
                     << "\n";
@@ -162,7 +193,9 @@ int runBenchmark() {
       }
 
       auto cell = makeCellCache<Elem>(
-          context.cacheState, context.topology, *target,
+          context.cacheState,
+          context.topology,
+          *target,
           std::span<std::byte>(
               reinterpret_cast<std::byte*>(sink.data()),
               static_cast<size_t>(n) * kElemSize));
@@ -170,10 +203,15 @@ int runBenchmark() {
       for (double sigma : selectivityAxis) {
         for (size_t rl : runLengthAxis) {
           GatherAccessParams p{
-              .start = 0, .span = n, .selectivity = sigma, .runLength = rl,
-              .gapModel = GapModel::UniformDeterministic, .seed = seed};
+              .start = 0,
+              .span = n,
+              .selectivity = sigma,
+              .runLength = rl,
+              .gapModel = GapModel::UniformDeterministic,
+              .seed = seed};
           auto trace = buildGatherTrace(n, p);
-          if (trace.selectedRows == 0) continue;
+          if (trace.selectedRows == 0)
+            continue;
           auto ranges = toRanges(trace);
 
           auto result = measure(encSpec, cell.controller, cell.targets, [&]() {

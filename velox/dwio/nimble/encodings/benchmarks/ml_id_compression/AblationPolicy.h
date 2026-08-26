@@ -42,10 +42,14 @@ enum class AccessClass : uint8_t {
 
 inline const char* accessClassName(AccessClass c) {
   switch (c) {
-    case AccessClass::PureRA: return "PureRA";
-    case AccessClass::HybridRA: return "HybridRA";
-    case AccessClass::BoundedSeq: return "BoundedSeq";
-    case AccessClass::PureSeq: return "PureSeq";
+    case AccessClass::PureRA:
+      return "PureRA";
+    case AccessClass::HybridRA:
+      return "HybridRA";
+    case AccessClass::BoundedSeq:
+      return "BoundedSeq";
+    case AccessClass::PureSeq:
+      return "PureSeq";
   }
   return "Unknown";
 }
@@ -63,7 +67,9 @@ inline const std::vector<EncodingInfo>& encodingInventory() {
       {EncodingType::FixedBitWidth, "FixedBitWidth", AccessClass::PureRA, true},
       {EncodingType::Constant, "Constant", AccessClass::PureRA, true},
       {EncodingType::Dictionary, "Dictionary", AccessClass::PureRA, true},
-      {EncodingType::MainlyConstant, "MainlyConstant", AccessClass::PureSeq,
+      {EncodingType::MainlyConstant,
+       "MainlyConstant",
+       AccessClass::PureSeq,
        true},
       {EncodingType::RLE, "RLE", AccessClass::PureSeq, true},
       {EncodingType::Varint, "Varint", AccessClass::PureSeq, true},
@@ -73,7 +79,8 @@ inline const std::vector<EncodingInfo>& encodingInventory() {
 
 inline AccessClass accessClassOf(EncodingType t) {
   for (const auto& e : encodingInventory()) {
-    if (e.type == t) return e.accessClass;
+    if (e.type == t)
+      return e.accessClass;
   }
   return AccessClass::PureSeq;
 }
@@ -89,23 +96,26 @@ inline std::vector<AblationRung> combinedLadder() {
   std::vector<AblationRung> rungs;
 
   rungs.push_back(
-      {"trivial_only",
-       {EncodingType::Trivial},
-       AccessClass::PureRA,
-       true});
+      {"trivial_only", {EncodingType::Trivial}, AccessClass::PureRA, true});
 
   rungs.push_back(
       {"pure_ra",
-       {EncodingType::Trivial, EncodingType::FixedBitWidth,
-        EncodingType::Constant, EncodingType::Dictionary},
+       {EncodingType::Trivial,
+        EncodingType::FixedBitWidth,
+        EncodingType::Constant,
+        EncodingType::Dictionary},
        AccessClass::PureRA,
        true});
 
   rungs.push_back(
       {"full_set",
-       {EncodingType::Trivial, EncodingType::FixedBitWidth,
-        EncodingType::Constant, EncodingType::Dictionary,
-        EncodingType::MainlyConstant, EncodingType::RLE, EncodingType::Varint},
+       {EncodingType::Trivial,
+        EncodingType::FixedBitWidth,
+        EncodingType::Constant,
+        EncodingType::Dictionary,
+        EncodingType::MainlyConstant,
+        EncodingType::RLE,
+        EncodingType::Varint},
        AccessClass::PureSeq,
        true});
 
@@ -154,7 +164,10 @@ inline SelectorResult selectSplitsRestricted(
     const SelectorConfig& cfg,
     const std::unordered_set<EncodingType>& allowed) {
   return selectSplitsImpl(
-      samples, kBits, fullCount, cfg,
+      samples,
+      kBits,
+      fullCount,
+      cfg,
       [&allowed](
           const SegmentMetrics& m,
           size_t numValues,
