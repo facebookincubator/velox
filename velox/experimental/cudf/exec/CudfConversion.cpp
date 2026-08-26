@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -27,6 +28,7 @@
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
 
+#include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
 #include <cudf/utilities/default_stream.hpp>
 
@@ -106,9 +108,12 @@ void CudfFromVelox::doAddInput(RowVectorPtr input) {
     }
     input->loadedVector();
 
-    // Accumulate inputs
+    // Accumulate inputs. Device-resident inputs are passed through rather than
+    // host-merged, so they do not count toward the accumulation threshold.
     inputs_.push_back(input);
-    currentOutputSize_ += input->size();
+    if (std::dynamic_pointer_cast<CudfVector>(input) == nullptr) {
+      currentOutputSize_ += input->size();
+    }
   }
 }
 
@@ -124,19 +129,26 @@ RowVectorPtr CudfFromVelox::doGetOutput() {
 
   // Input that is already device-resident needs no host-to-device conversion
   // and must not go through mergeRowVectors, which reads host children a
-  // CudfVector does not carry. Pass it through immediately, re-typed to this
+  // CudfVector does not carry. Re-wrap it immediately, typed to this
   // operator's output type. GPU batches are already sized upstream, so they
   // do not wait for host-side accumulation either.
   if (auto cudfInput = std::dynamic_pointer_cast<CudfVector>(inputs_.front())) {
+    if (CudfConfig::getInstance().debugEnabled) {
+      VLOG(2) << "CudfFromVelox: device-resident input, skipping host "
+                 "conversion";
+    }
     inputs_.erase(inputs_.begin());
-    const auto size = cudfInput->size();
-    currentOutputSize_ -= size;
+    // The producer may still hold 'cudfInput', and downstream operators
+    // release() their input's table, so copy it instead of stealing it.
+    auto stream = cudfInput->stream();
+    auto table = std::make_unique<cudf::table>(
+        cudfInput->getTableView(), stream, get_output_mr());
     return std::make_shared<CudfVector>(
         cudfInput->pool(),
         outputType_,
-        size,
-        cudfInput->release(),
-        cudfInput->stream());
+        cudfInput->size(),
+        std::move(table),
+        stream);
   }
 
   if (currentOutputSize_ < targetOutputSize and not noMoreInput_) {

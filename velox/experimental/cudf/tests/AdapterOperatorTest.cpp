@@ -95,6 +95,26 @@ TEST_F(AdapterOperatorTest, fromVeloxPassesThroughDeviceInput) {
        makeFlatVector<StringView>({"a", "bb", "ccc", "dd", "e"})});
   AssertQueryBuilder(plan).assertResults(
       std::vector<RowVectorPtr>{expected, expected});
+
+  // CudfVector::release() zeroes the flat size, so a non-zero size here means
+  // the operator left the producer's table alone.
+  EXPECT_GT(deviceBatch->estimateFlatSize(), 0);
+}
+
+TEST_F(AdapterOperatorTest, fromVeloxKeepsDeviceBatchesDistinct) {
+  auto first = uploadToDevice(
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}));
+  auto second = uploadToDevice(
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({4, 5, 6})}));
+
+  // Distinct data per batch, so corrupting either one shows up in the result
+  // even though the comparison is order-insensitive.
+  auto plan =
+      PlanBuilder().values({first, second}).project({"c0 + 1 as x"}).planNode();
+
+  auto expected =
+      makeRowVector({"x"}, {makeFlatVector<int64_t>({2, 3, 4, 5, 6, 7})});
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 TEST_F(AdapterOperatorTest, fromVeloxMergesHostInputsAheadOfDeviceInput) {
@@ -111,5 +131,23 @@ TEST_F(AdapterOperatorTest, fromVeloxMergesHostInputsAheadOfDeviceInput) {
 
   auto expected =
       makeRowVector({"x"}, {makeFlatVector<int64_t>({11, 12, 13, 14, 15, 16})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(AdapterOperatorTest, fromVeloxResumesHostMergeAfterDeviceInput) {
+  auto hostHead = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto deviceBatch = uploadToDevice(
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({4, 5, 6})}));
+  auto hostTail = makeRowVector({"c0"}, {makeFlatVector<int64_t>({7, 8, 9})});
+
+  // The trailing host batch is only reachable once the device batch has been
+  // emitted, so it covers the merge loop resuming past a device input.
+  auto plan = PlanBuilder()
+                  .values({hostHead, deviceBatch, hostTail})
+                  .project({"c0 + 10 as x"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"x"}, {makeFlatVector<int64_t>({11, 12, 13, 14, 15, 16, 17, 18, 19})});
   AssertQueryBuilder(plan).assertResults(expected);
 }
