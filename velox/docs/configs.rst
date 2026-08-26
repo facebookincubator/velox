@@ -1136,7 +1136,7 @@ Parquet Options (prefix ``hive.parquet.``)
        Session: ``hive.parquet.writer.enable_page_index``.
    * - ``writer.compression-codec``
      - string
-     -
+     - none
      - Compression codec used when writing into Parquet. Supported values are ``none``, ``snappy``,
        ``zstd``, ``lz4``, ``gzip``, and ``lz4_hadoop``. Applied as a fallback when the compression is
        not already set on the insert table handle.
