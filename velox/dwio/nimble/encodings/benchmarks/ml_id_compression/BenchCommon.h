@@ -47,6 +47,7 @@
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ResultWriter.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/SubstreamCompression.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
+#include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
 // ---------------------------------------------------------------------------
@@ -221,6 +222,106 @@ struct NimbleBenchTargetImpl
     auto* encoding = target.encoding();
     return encoding != nullptr ? encoding->debugString(0) : std::string{};
   }
+};
+
+// ---------------------------------------------------------------------------
+// NimbleViewBenchTargetImpl<EncodingT>
+// ---------------------------------------------------------------------------
+// Encodes exactly as NimbleBenchTargetImpl does, then reads through an
+// EncodingView instead of an Encoding.
+//
+// The two differ only in how a read is addressed. An Encoding carries a
+// sequential cursor, so reaching row i means traversing from wherever the
+// cursor is; a view is addressed by index. Pairing each view entry with its
+// sequential twin in the encoder list makes that the only variable between
+// them, since the encoded bytes are identical.
+template <typename EncodingT>
+class NimbleViewBenchTargetImpl
+    : public NimbleBenchTargetBase<typename EncodingT::cppDataType> {
+ public:
+  using T = typename EncodingT::cppDataType;
+
+  void encode(const Vector<T>& data, const Encoding::Options& opts) override {
+    encodeWith(data, opts, /*realNestedSelection=*/false);
+  }
+
+  void encodeWith(
+      const Vector<T>& data,
+      const Encoding::Options& opts,
+      bool realNestedSelection) {
+    Buffer buf{*pool_};
+    encoded_ = std::string(encodeWithCompression<EncodingT, T>(
+        buf,
+        data,
+        parseCompressionType(FLAGS_mlidc_substream_compression),
+        opts,
+        realNestedSelection));
+    options_ = opts;
+    view_ = createEncodingView(std::string_view(encoded_), pool_.get(), opts);
+    NIMBLE_CHECK_NOT_NULL(view_);
+  }
+
+  void materializeAll(T* dst, uint32_t n) override {
+    view_->read(0, n, dst);
+  }
+
+  // A single-row read goes through readAt rather than a length-1 range: that is
+  // the API a point lookup would actually use, and the one the point driver is
+  // meant to be measuring.
+  void materializeRange(uint32_t begin, uint32_t count, T* dst) override {
+    if (count == 1) {
+      view_->readAt(begin, dst);
+    } else {
+      view_->read(begin, count, dst);
+    }
+  }
+
+  // No cursor, so no skip: each range is resolved from its own index. That is
+  // the whole point of a view on a gather workload.
+  void skipThenMaterialize(
+      const std::vector<std::pair<uint32_t, uint32_t>>& ranges,
+      T* dst) override {
+    for (const auto& [begin, count] : ranges) {
+      if (count == 1) {
+        view_->readAt(begin, dst);
+      } else {
+        view_->read(begin, count, dst);
+      }
+      dst += count;
+    }
+  }
+
+  size_t payloadSize() const override {
+    return encoded_.size();
+  }
+
+  std::vector<std::span<const std::byte>> internalBuffers() const override {
+    // The view's own index structures (a run-end array, say) are private to it,
+    // so eviction reaches the payload only. Cache-state rows for view encoders
+    // are therefore a lower bound on a genuinely cold read.
+    return {
+        {reinterpret_cast<const std::byte*>(encoded_.data()), encoded_.size()}};
+  }
+
+  // A view has no debugString, so build the encoding just to report its tree.
+  // Only --mlidc_dump_encoding calls this, always outside a timed region.
+  std::string describe() override {
+    if (encoded_.empty()) {
+      return {};
+    }
+    EncodingT encoding{
+        *pool_,
+        std::string_view(encoded_),
+        benchmarks::nullFactory(),
+        options_};
+    return encoding.debugString(0);
+  }
+
+ private:
+  std::shared_ptr<velox::memory::MemoryPool> pool_{benchmarks::benchmarkPool()};
+  std::string encoded_;
+  Encoding::Options options_;
+  std::unique_ptr<EncodingView> view_;
 };
 
 template <typename T>
@@ -817,6 +918,25 @@ std::vector<EncoderEntry<T>> buildDefaultEncoders() {
       makeEncoderEntry<RLEEncoding<T>>(
           "RLE", "Baseline", "rle", true, true, false));
 
+  // Read-path variants. Each encodes byte-for-byte identically to the entry it
+  // shadows and differs only in reading by index rather than by cursor, so the
+  // pair isolates what indexed access is worth.
+  {
+    EncoderEntry<T> entry;
+    entry.name = "RLE/view";
+    entry.family = "Baseline";
+    entry.variant = "rle_view";
+    entry.isSequential = false;
+    entry.fastSkip = true;
+    entry.randomAccess = true;
+    entry.factory = [](const Vector<T>& data, const Encoding::Options& opts) {
+      auto impl = std::make_unique<NimbleViewBenchTargetImpl<RLEEncoding<T>>>();
+      impl->encode(data, opts);
+      return std::unique_ptr<NimbleBenchTargetBase<T>>(std::move(impl));
+    };
+    encoders.push_back(std::move(entry));
+  }
+
   const std::array<std::string, 4> fpeNames = {
       "fpe_noindex", "fpe_pertier", "fpe_tagtag", "fpe_elias"};
   const std::array<bool, 4> fpeRA = {false, true, true, true};
@@ -854,6 +974,23 @@ std::vector<EncoderEntry<T>> buildDefaultEncoders() {
       auto impl =
           std::make_unique<NimbleBenchTargetImpl<SubIntSplitEncoding<T>>>();
       impl->target.encode(data, opts, /*realNestedSelection=*/true);
+      return std::unique_ptr<NimbleBenchTargetBase<T>>(std::move(impl));
+    };
+    encoders.push_back(std::move(entry));
+  }
+
+  {
+    EncoderEntry<T> entry;
+    entry.name = "SIS/realNested+view";
+    entry.family = "SubIntSplit";
+    entry.variant = "real_nested_view";
+    entry.isSequential = false;
+    entry.fastSkip = true;
+    entry.randomAccess = true;
+    entry.factory = [](const Vector<T>& data, const Encoding::Options& opts) {
+      auto impl = std::make_unique<
+          NimbleViewBenchTargetImpl<SubIntSplitEncoding<T>>>();
+      impl->encodeWith(data, opts, /*realNestedSelection=*/true);
       return std::unique_ptr<NimbleBenchTargetBase<T>>(std::move(impl));
     };
     encoders.push_back(std::move(entry));
