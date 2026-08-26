@@ -24,7 +24,8 @@ namespace facebook::nimble {
 
 namespace {
 constexpr static uint16_t kVectorizedStatsVersion = 0;
-}
+constexpr static uint16_t kVectorizedStripeStatsVersion = 0;
+} // namespace
 
 template <typename T>
 void TypedVectorizedStatistic<T>::append(std::optional<T> value) {
@@ -844,6 +845,128 @@ VectorizedFileStats::toColumnStatistics(
   auto schemaInfo = getSchemaInfo(schema, nimbleType);
   traverseSchema(schema, schemaInfo, statStreams_, statTypeCounts, columnStats);
   return columnStats;
+}
+
+VectorizedStripeStats::VectorizedStripeStats(
+    const std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>&
+        stripeStats,
+    velox::memory::MemoryPool* pool)
+    : numStripes_{static_cast<uint32_t>(stripeStats.size())},
+      numColumns_{
+          numStripes_ == 0
+              ? 0
+              : static_cast<uint32_t>(stripeStats.front().size())} {
+  stripeFileStats_.reserve(numStripes_);
+  for (const auto& stripe : stripeStats) {
+    NIMBLE_CHECK_EQ(stripe.size(), numColumns_);
+    std::vector<ColumnStatistics*> columnStats;
+    columnStats.reserve(stripe.size());
+    for (const auto& stat : stripe) {
+      columnStats.push_back(stat.get());
+    }
+    stripeFileStats_.push_back(
+        std::make_unique<VectorizedFileStats>(columnStats, pool));
+  }
+}
+
+VectorizedStripeStats::VectorizedStripeStats(
+    uint32_t numStripes,
+    uint32_t numColumns,
+    std::vector<std::unique_ptr<VectorizedFileStats>> stripeFileStats)
+    : numStripes_{numStripes},
+      numColumns_{numColumns},
+      stripeFileStats_{std::move(stripeFileStats)} {}
+
+std::string_view VectorizedStripeStats::serialize(nimble::Buffer& buffer) {
+  Buffer statsBuffer{buffer.getMemoryPool()};
+  std::vector<std::string_view> stripePayloads;
+  stripePayloads.reserve(stripeFileStats_.size());
+  uint64_t totalLength = sizeof(uint16_t) + (2 * sizeof(uint32_t)) +
+      (stripeFileStats_.size() * sizeof(uint64_t));
+  for (auto& stripeFileStats : stripeFileStats_) {
+    auto payload = stripeFileStats->serialize(statsBuffer);
+    stripePayloads.push_back(payload);
+    totalLength += payload.size();
+  }
+
+  auto writeBuffer = buffer.reserve(totalLength);
+  auto pos = writeBuffer;
+  encoding::write<uint16_t>(kVectorizedStripeStatsVersion, pos);
+  encoding::write<uint32_t>(numStripes_, pos);
+  encoding::write<uint32_t>(numColumns_, pos);
+  for (const auto payload : stripePayloads) {
+    encoding::writeUint64(payload.size(), pos);
+  }
+  for (const auto payload : stripePayloads) {
+    std::memcpy(pos, payload.data(), payload.size());
+    pos += payload.size();
+  }
+  NIMBLE_CHECK_EQ(pos - writeBuffer, totalLength);
+  return {writeBuffer, totalLength};
+}
+
+std::unique_ptr<VectorizedStripeStats> VectorizedStripeStats::deserialize(
+    std::string_view payload,
+    velox::memory::MemoryPool& pool) {
+  const auto* pos = payload.data();
+  const auto* const end = pos + payload.size();
+
+  constexpr size_t kHeaderSize = sizeof(uint16_t) + (2 * sizeof(uint32_t));
+  NIMBLE_CHECK(
+      payload.size() >= kHeaderSize,
+      "Stripe stats payload too small for header");
+  const auto version = encoding::read<uint16_t>(pos);
+  NIMBLE_CHECK_EQ(version, kVectorizedStripeStatsVersion);
+  const auto numStripes = encoding::read<uint32_t>(pos);
+  const auto numColumns = encoding::read<uint32_t>(pos);
+
+  const size_t lengthsSize = static_cast<size_t>(numStripes) * sizeof(uint64_t);
+  NIMBLE_CHECK(
+      static_cast<size_t>(end - pos) >= lengthsSize,
+      "Stripe stats payload too small for stripe lengths");
+  std::vector<uint64_t> stripePayloadLengths;
+  stripePayloadLengths.reserve(numStripes);
+  for (uint32_t stripe = 0; stripe < numStripes; ++stripe) {
+    stripePayloadLengths.push_back(encoding::readUint64(pos));
+  }
+  std::vector<std::unique_ptr<VectorizedFileStats>> stripeFileStats;
+  stripeFileStats.reserve(numStripes);
+  for (const auto payloadLength : stripePayloadLengths) {
+    NIMBLE_CHECK(
+        static_cast<size_t>(end - pos) >= payloadLength,
+        "Stripe stats payload too small for stripe content");
+    stripeFileStats.push_back(
+        VectorizedFileStats::deserialize(
+            {pos, static_cast<size_t>(payloadLength)}, pool));
+    pos += payloadLength;
+  }
+  return std::unique_ptr<VectorizedStripeStats>(new VectorizedStripeStats(
+      numStripes, numColumns, std::move(stripeFileStats)));
+}
+
+const std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>&
+VectorizedStripeStats::toStripeColumnStatistics(
+    const velox::TypePtr& schema,
+    const std::shared_ptr<const nimble::Type>& nimbleType) {
+  if (!stripeStats_.empty()) {
+    return stripeStats_;
+  }
+  NIMBLE_CHECK_EQ(stripeFileStats_.size(), numStripes_);
+  stripeStats_.reserve(numStripes_);
+  for (auto& stripeFileStats : stripeFileStats_) {
+    auto columnStats = stripeFileStats->toColumnStatistics(schema, nimbleType);
+    NIMBLE_CHECK_EQ(columnStats.size(), numColumns_);
+    stripeStats_.push_back(std::move(columnStats));
+  }
+  return stripeStats_;
+}
+
+std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>
+VectorizedStripeStats::takeStripeColumnStatistics(
+    const velox::TypePtr& schema,
+    const std::shared_ptr<const nimble::Type>& nimbleType) {
+  toStripeColumnStatistics(schema, nimbleType);
+  return std::move(stripeStats_);
 }
 
 } // namespace facebook::nimble

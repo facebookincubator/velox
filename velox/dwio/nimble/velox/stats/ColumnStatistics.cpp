@@ -76,6 +76,11 @@ StatType ColumnStatistics::getType() const {
   return StatType::DEFAULT;
 }
 
+std::unique_ptr<ColumnStatistics> ColumnStatistics::clone() const {
+  return std::make_unique<ColumnStatistics>(
+      getValueCount(), getNullCount(), getLogicalSize(), getPhysicalSize());
+}
+
 std::unique_ptr<velox::dwio::common::ColumnStatistics>
 ColumnStatistics::toCommonStatistics() const {
   const auto valueCount = std::make_optional<uint64_t>(getValueCount());
@@ -154,6 +159,16 @@ StatType StringStatistics::getType() const {
   return StatType::STRING;
 }
 
+std::unique_ptr<ColumnStatistics> StringStatistics::clone() const {
+  return std::make_unique<StringStatistics>(
+      getValueCount(),
+      getNullCount(),
+      getLogicalSize(),
+      getPhysicalSize(),
+      getMin(),
+      getMax());
+}
+
 IntegralStatistics::IntegralStatistics(
     uint64_t valueCount,
     uint64_t nullCount,
@@ -175,6 +190,16 @@ std::optional<int64_t> IntegralStatistics::getMax() const {
 
 StatType IntegralStatistics::getType() const {
   return StatType::INTEGRAL;
+}
+
+std::unique_ptr<ColumnStatistics> IntegralStatistics::clone() const {
+  return std::make_unique<IntegralStatistics>(
+      getValueCount(),
+      getNullCount(),
+      getLogicalSize(),
+      getPhysicalSize(),
+      getMin(),
+      getMax());
 }
 
 FloatingPointStatistics::FloatingPointStatistics(
@@ -200,11 +225,30 @@ StatType FloatingPointStatistics::getType() const {
   return StatType::FLOATING_POINT;
 }
 
+std::unique_ptr<ColumnStatistics> FloatingPointStatistics::clone() const {
+  return std::make_unique<FloatingPointStatistics>(
+      getValueCount(),
+      getNullCount(),
+      getLogicalSize(),
+      getPhysicalSize(),
+      getMin(),
+      getMax());
+}
+
 DeduplicatedColumnStatistics::DeduplicatedColumnStatistics(
     ColumnStatistics* baseStatistics,
     uint64_t dedupedCount,
     uint64_t dedupedLogicalSize)
     : baseStatistics_{baseStatistics},
+      dedupedCount_{dedupedCount},
+      dedupedLogicalSize_{dedupedLogicalSize} {}
+
+DeduplicatedColumnStatistics::DeduplicatedColumnStatistics(
+    std::unique_ptr<ColumnStatistics> baseStatistics,
+    uint64_t dedupedCount,
+    uint64_t dedupedLogicalSize)
+    : ownedBaseStatistics_{std::move(baseStatistics)},
+      baseStatistics_{ownedBaseStatistics_.get()},
       dedupedCount_{dedupedCount},
       dedupedLogicalSize_{dedupedLogicalSize} {}
 
@@ -234,6 +278,14 @@ uint64_t DeduplicatedColumnStatistics::getDedupedLogicalSize() const {
 
 StatType DeduplicatedColumnStatistics::getType() const {
   return StatType::DEDUPLICATED;
+}
+
+std::unique_ptr<ColumnStatistics> DeduplicatedColumnStatistics::clone() const {
+  return std::make_unique<DeduplicatedColumnStatistics>(
+      baseStatistics_ == nullptr ? std::make_unique<ColumnStatistics>()
+                                 : baseStatistics_->clone(),
+      getDedupedCount(),
+      getDedupedLogicalSize());
 }
 
 ColumnStatistics* DeduplicatedColumnStatistics::getBaseStatistics() {
@@ -301,6 +353,10 @@ void StatisticsCollector::merge(const StatisticsCollector& other) {
   stats_->physicalSize_ += otherStats->getPhysicalSize();
 }
 
+void StatisticsCollector::reset() {
+  stats_ = std::make_unique<ColumnStatistics>();
+}
+
 /* static */ std::unique_ptr<StatisticsCollector> StatisticsCollector::create(
     const std::shared_ptr<const velox::dwio::common::TypeWithId>& type) {
   switch (type->type()->kind()) {
@@ -355,6 +411,10 @@ void IntegralStatisticsCollector::addValues(std::span<T> values) {
   if (!stats->max_.has_value() || max > *stats->max_) {
     stats->max_ = max;
   }
+}
+
+void IntegralStatisticsCollector::reset() {
+  stats_ = std::make_unique<IntegralStatistics>();
 }
 
 void IntegralStatisticsCollector::merge(const StatisticsCollector& other) {
@@ -425,6 +485,10 @@ void FloatingPointStatisticsCollector::addValues(std::span<T> values) {
   }
 }
 
+void FloatingPointStatisticsCollector::reset() {
+  stats_ = std::make_unique<FloatingPointStatistics>();
+}
+
 void FloatingPointStatisticsCollector::merge(const StatisticsCollector& other) {
   auto* otherStats = other.getStatsView();
   NIMBLE_CHECK(
@@ -485,6 +549,10 @@ void StringStatisticsCollector::addValues(std::span<std::string_view> values) {
   }
 }
 
+void StringStatisticsCollector::reset() {
+  stats_ = std::make_unique<StringStatistics>();
+}
+
 void StringStatisticsCollector::merge(const StatisticsCollector& other) {
   auto* otherStats = other.getStatsView();
   NIMBLE_CHECK(
@@ -528,21 +596,34 @@ DeduplicatedStatisticsCollector::wrap(
 }
 
 ColumnStatistics* DeduplicatedStatisticsCollector::getStatsView() {
-  // Return this as DeduplicatedColumnStatistics to resolve diamond ambiguity
+  NIMBLE_DCHECK_NOT_NULL(baseCollector_);
+  // Return this as DeduplicatedColumnStatistics to resolve diamond ambiguity.
   return stats_.get();
 }
 
 const ColumnStatistics* DeduplicatedStatisticsCollector::getStatsView() const {
+  NIMBLE_DCHECK_NOT_NULL(baseCollector_);
   return stats_.get();
 }
 
 StatisticsCollector* DeduplicatedStatisticsCollector::getBaseCollector() const {
+  NIMBLE_DCHECK_NOT_NULL(baseCollector_);
   return baseCollector_.get();
+}
+
+std::unique_ptr<StatisticsCollector>
+DeduplicatedStatisticsCollector::releaseBaseCollector() {
+  auto released = std::move(baseCollector_);
+  dedupedStats_ = nullptr;
+  stats_.reset();
+  return released;
 }
 
 void DeduplicatedStatisticsCollector::recordDeduplicatedStats(
     uint64_t count,
     uint64_t deduplicatedSize) {
+  NIMBLE_DCHECK_NOT_NULL(baseCollector_);
+  NIMBLE_DCHECK_NOT_NULL(dedupedStats_);
   dedupedStats_->dedupedCount_ += count;
   dedupedStats_->dedupedLogicalSize_ += deduplicatedSize;
 }
@@ -550,14 +631,17 @@ void DeduplicatedStatisticsCollector::recordDeduplicatedStats(
 void DeduplicatedStatisticsCollector::addCounts(
     uint64_t totalCount,
     uint64_t nullCount) {
+  NIMBLE_DCHECK_NOT_NULL(baseCollector_);
   baseCollector_->addCounts(totalCount, nullCount);
 }
 
 void DeduplicatedStatisticsCollector::addLogicalSize(uint64_t logicalSize) {
+  NIMBLE_DCHECK_NOT_NULL(baseCollector_);
   baseCollector_->addLogicalSize(logicalSize);
 }
 
 void DeduplicatedStatisticsCollector::addPhysicalSize(uint64_t physicalSize) {
+  NIMBLE_DCHECK_NOT_NULL(baseCollector_);
   baseCollector_->addPhysicalSize(physicalSize);
 }
 
@@ -573,6 +657,13 @@ void DeduplicatedStatisticsCollector::merge(const StatisticsCollector& other) {
   const auto& otherDedup =
       dynamic_cast<const DeduplicatedStatisticsCollector&>(other);
   baseCollector_->merge(*otherDedup.baseCollector_);
+}
+
+void DeduplicatedStatisticsCollector::reset() {
+  baseCollector_->reset();
+  stats_ = std::make_unique<DeduplicatedColumnStatistics>(
+      baseCollector_->getStatsView(), 0, 0);
+  dedupedStats_ = stats_->as<DeduplicatedColumnStatistics>();
 }
 
 SharedStatisticsCollector::SharedStatisticsCollector(
@@ -653,6 +744,11 @@ void SharedStatisticsCollector::updateBaseCollector(
 void SharedStatisticsCollector::merge(const StatisticsCollector& other) {
   std::lock_guard<std::mutex> l{mutex_};
   baseCollector_->merge(other);
+}
+
+void SharedStatisticsCollector::reset() {
+  std::lock_guard<std::mutex> l{mutex_};
+  baseCollector_->reset();
 }
 
 } // namespace facebook::nimble

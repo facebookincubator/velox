@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <cmath>
 #include <set>
 
 #include <folly/Executor.h>
@@ -299,20 +300,17 @@ class FieldWriterContext {
   }
 
   inline std::vector<ColumnStatistics*> columnStats() {
-    if (!statsFinalized_) {
-      return {};
-    }
-    // TODO: add a build method for this pattern.
     std::vector<ColumnStatistics*> statsViews;
-    statsViews.reserve(statsCollectors_.size());
-    for (auto& collector : statsCollectors_) {
-      // FIXME: don't need this branching.
-      statsViews.push_back(
-          collector->shared()
-              ? collector->as<SharedStatisticsCollector>()->getBaseStatistics()
-              : collector->getStatsView());
+    statsViews.reserve(fileStats_.size());
+    for (auto& stat : fileStats_) {
+      statsViews.push_back(stat.get());
     }
     return statsViews;
+  }
+
+  inline const std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>&
+  stripeStats() const {
+    return stripeStats_;
   }
 
   void handleFlatmapFieldAddEvent(
@@ -479,10 +477,45 @@ class FieldWriterContext {
   // 1. roll up logical and physical sizes
   // 2. wrap all ancestors of deduplicated types
   // 3. backfill both known and newly wrapped deduplicated stats
-  void finalizeStatsCollectors() {
+  /// Finalizes the current stripe's collectors, snapshots their statistics
+  /// into stripeStats_, and resets the collectors for the next stripe.
+  void finalizeStripeStatsCollectors() {
     NIMBLE_CHECK(!statsFinalized_);
     finalizeStatsCollector(schemaWithId_);
     statsFinalized_ = true;
+    snapshotStripeStats();
+    resetStatsCollectors();
+  }
+
+  /// Rebuilds file-level column statistics by merging every per-stripe
+  /// snapshot in stripeStats_. Falls back to finalizing the live collectors
+  /// directly when no stripe snapshots were taken (single-stripe file).
+  void finalizeFileStatsFromStripes() {
+    fileStats_.clear();
+    if (stripeStats_.empty()) {
+      if (!statsFinalized_) {
+        finalizeStatsCollector(schemaWithId_);
+        statsFinalized_ = true;
+      }
+      fileStats_.reserve(statsCollectors_.size());
+      for (auto& collector : statsCollectors_) {
+        auto* stats = collector->shared()
+            ? collector->as<SharedStatisticsCollector>()->getBaseStatistics()
+            : collector->getStatsView();
+        fileStats_.push_back(stats->clone());
+      }
+      return;
+    }
+    fileStats_.reserve(stripeStats_.front().size());
+    for (const auto& stat : stripeStats_.front()) {
+      fileStats_.push_back(stat->clone());
+    }
+    for (size_t stripe = 1; stripe < stripeStats_.size(); ++stripe) {
+      NIMBLE_CHECK_EQ(stripeStats_[stripe].size(), fileStats_.size());
+      for (size_t column = 0; column < fileStats_.size(); ++column) {
+        mergeColumnStats(*fileStats_[column], *stripeStats_[stripe][column]);
+      }
+    }
   }
 
  protected:
@@ -513,6 +546,168 @@ class FieldWriterContext {
       [](TypeBuilder&, uint32_t) {}};
 
  private:
+  // Merges min/max from source into target for a scalar statistics subclass
+  // (Integral/FloatingPoint/String). Keeps the widest range across stripes.
+  template <typename StatsT>
+  static void mergeMinMax(
+      ColumnStatistics& target,
+      const ColumnStatistics& source) {
+    auto* targetStats = target.as<StatsT>();
+    const auto* sourceStats = source.as<StatsT>();
+    if (sourceStats->getMin().has_value() &&
+        (!targetStats->getMin().has_value() ||
+         *sourceStats->getMin() < *targetStats->getMin())) {
+      targetStats->min_ = sourceStats->getMin();
+    }
+    if (sourceStats->getMax().has_value() &&
+        (!targetStats->getMax().has_value() ||
+         *sourceStats->getMax() > *targetStats->getMax())) {
+      targetStats->max_ = sourceStats->getMax();
+    }
+  }
+
+  // NaN-aware min selection: returns true when source's min should replace
+  // target's. A present value always beats a missing one, and a real value
+  // beats NaN so NaN never wins as the minimum; otherwise the smaller value
+  // wins. NaN is handled explicitly because IEEE comparisons against NaN are
+  // always false.
+  static bool shouldUseSourceFloatingPointMin(
+      const FloatingPointStatistics& target,
+      const FloatingPointStatistics& source) {
+    if (!source.getMin().has_value()) {
+      return false;
+    }
+    if (!target.getMin().has_value()) {
+      return true;
+    }
+    if (std::isnan(*target.getMin())) {
+      return false;
+    }
+    if (std::isnan(*source.getMin())) {
+      return true;
+    }
+    return *source.getMin() < *target.getMin();
+  }
+
+  // Mirror of shouldUseSourceFloatingPointMin for the maximum: a real value
+  // beats NaN so NaN never wins as the maximum; otherwise the larger value
+  // wins.
+  static bool shouldUseSourceFloatingPointMax(
+      const FloatingPointStatistics& target,
+      const FloatingPointStatistics& source) {
+    if (!source.getMax().has_value()) {
+      return false;
+    }
+    if (!target.getMax().has_value()) {
+      return true;
+    }
+    if (std::isnan(*target.getMax())) {
+      return false;
+    }
+    if (std::isnan(*source.getMax())) {
+      return true;
+    }
+    return *source.getMax() > *target.getMax();
+  }
+
+  static void mergeFloatingPointMinMax(
+      ColumnStatistics& target,
+      const ColumnStatistics& source) {
+    auto* targetStats = target.as<FloatingPointStatistics>();
+    const auto* sourceStats = source.as<FloatingPointStatistics>();
+    if (shouldUseSourceFloatingPointMin(*targetStats, *sourceStats)) {
+      targetStats->min_ = sourceStats->getMin();
+    }
+    if (shouldUseSourceFloatingPointMax(*targetStats, *sourceStats)) {
+      targetStats->max_ = sourceStats->getMax();
+    }
+  }
+
+  static void mergeColumnStats(
+      ColumnStatistics& target,
+      const ColumnStatistics& source) {
+    NIMBLE_CHECK(
+        target.getType() == source.getType(),
+        "Merging stats with mismatched types: {} vs {}.",
+        static_cast<uint8_t>(target.getType()),
+        static_cast<uint8_t>(source.getType()));
+    // Deduplicated stats delegate their base metrics (value/null count, sizes)
+    // to the wrapped base statistics, so merge into that base rather than
+    // target's own (unused) member fields, and accumulate the dedup-specific
+    // counters separately.
+    if (target.getType() == StatType::DEDUPLICATED) {
+      auto* targetStats = target.as<DeduplicatedColumnStatistics>();
+      const auto* sourceStats = source.as<DeduplicatedColumnStatistics>();
+      targetStats->dedupedCount_ += sourceStats->getDedupedCount();
+      targetStats->dedupedLogicalSize_ += sourceStats->getDedupedLogicalSize();
+      auto* targetBase = targetStats->getBaseStatistics();
+      const auto* sourceBase = sourceStats->getBaseStatistics();
+      NIMBLE_CHECK(
+          (targetBase == nullptr) == (sourceBase == nullptr),
+          "Mismatched deduplicated stats structure during merge.");
+      if (targetBase != nullptr && sourceBase != nullptr) {
+        mergeColumnStats(*targetBase, *sourceBase);
+      }
+      return;
+    }
+
+    target.valueCount_ += source.getValueCount();
+    target.nullCount_ += source.getNullCount();
+    target.logicalSize_ += source.getLogicalSize();
+    target.physicalSize_ += source.getPhysicalSize();
+    switch (target.getType()) {
+      case StatType::INTEGRAL:
+        mergeMinMax<IntegralStatistics>(target, source);
+        break;
+      case StatType::FLOATING_POINT:
+        mergeFloatingPointMinMax(target, source);
+        break;
+      case StatType::STRING:
+        mergeMinMax<StringStatistics>(target, source);
+        break;
+      case StatType::DEFAULT:
+        break;
+      case StatType::DEDUPLICATED:
+        NIMBLE_UNREACHABLE("Deduplicated stats are handled above.");
+    }
+  }
+
+  // Clones the current per-column statistics into a new per-stripe snapshot
+  // appended to stripeStats_. Uses the deduplicated base statistics for shared
+  // collectors so each snapshot mirrors the file-level column layout.
+  void snapshotStripeStats() {
+    auto& stripe = stripeStats_.emplace_back();
+    stripe.reserve(statsCollectors_.size());
+    for (auto& collector : statsCollectors_) {
+      auto* stats = collector->shared()
+          ? collector->as<SharedStatisticsCollector>()->getBaseStatistics()
+          : collector->getStatsView();
+      stripe.push_back(stats->clone());
+    }
+  }
+
+  void resetStatsCollectors() {
+    // finalizeStatsCollector() wraps ancestors of deduplicated nodes into a
+    // DeduplicatedStatisticsCollector in place. That wrapping must be undone
+    // between stripes; otherwise the next stripe's finalization would take the
+    // "already deduplicated" branch and skip rolling child logical/physical
+    // sizes up into the ancestor, corrupting the file-level stats
+    // reconstruction. Genuine deduplicated nodes (configured at init via
+    // dictionary array / deduplicated map ids) must remain wrapped.
+    for (uint32_t id = 0; id < statsCollectors_.size(); ++id) {
+      auto& collector = statsCollectors_[id];
+      if (collector->getType() == StatType::DEDUPLICATED &&
+          !hasDictionaryArrayNodeId(id) && !hasDeduplicatedMapNodeId(id)) {
+        collector = collector->asChecked<DeduplicatedStatisticsCollector>()
+                        ->releaseBaseCollector();
+      }
+    }
+    for (auto& collector : statsCollectors_) {
+      collector->reset();
+    }
+    statsFinalized_ = false;
+  }
+
   void finalizeStatsCollector(
       const std::shared_ptr<const velox::dwio::common::TypeWithId>& type) {
     auto statsCollector = statsCollectors_[type->id()].get();
@@ -627,6 +822,8 @@ class FieldWriterContext {
   std::vector<std::pair<uint32_t, std::unique_ptr<StreamData>>> streams_;
   std::shared_ptr<const velox::dwio::common::TypeWithId> schemaWithId_;
   std::vector<std::unique_ptr<StatisticsCollector>> statsCollectors_;
+  std::vector<std::vector<std::unique_ptr<ColumnStatistics>>> stripeStats_;
+  std::vector<std::unique_ptr<ColumnStatistics>> fileStats_;
   bool statsFinalized_{false};
 };
 

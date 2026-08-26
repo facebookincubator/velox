@@ -73,6 +73,8 @@ class ColumnStatistics {
 
   virtual StatType getType() const;
 
+  virtual std::unique_ptr<ColumnStatistics> clone() const;
+
   /// Converts this nimble ColumnStatistics to dwio::common::ColumnStatistics
   /// for use in file-level filter pushdown.
   std::unique_ptr<velox::dwio::common::ColumnStatistics> toCommonStatistics()
@@ -92,6 +94,7 @@ class ColumnStatistics {
 
  protected:
   friend class StatisticsCollector;
+  friend class FieldWriterContext;
 
   uint64_t valueCount_{0};
   uint64_t nullCount_{0};
@@ -115,8 +118,11 @@ class StringStatistics : public ColumnStatistics {
 
   StatType getType() const override;
 
+  std::unique_ptr<ColumnStatistics> clone() const override;
+
  protected:
   friend class StringStatisticsCollector;
+  friend class FieldWriterContext;
 
   std::optional<std::string> min_;
   std::optional<std::string> max_;
@@ -138,8 +144,11 @@ class IntegralStatistics : public ColumnStatistics {
 
   StatType getType() const override;
 
+  std::unique_ptr<ColumnStatistics> clone() const override;
+
  protected:
   friend class IntegralStatisticsCollector;
+  friend class FieldWriterContext;
 
   std::optional<int64_t> min_;
   std::optional<int64_t> max_;
@@ -161,8 +170,11 @@ class FloatingPointStatistics : public ColumnStatistics {
 
   StatType getType() const override;
 
+  std::unique_ptr<ColumnStatistics> clone() const override;
+
  protected:
   friend class FloatingPointStatisticsCollector;
+  friend class FieldWriterContext;
 
   std::optional<double> min_;
   std::optional<double> max_;
@@ -181,6 +193,10 @@ class DeduplicatedColumnStatistics : public virtual ColumnStatistics {
       ColumnStatistics* baseStatistics,
       uint64_t dedupedCount,
       uint64_t dedupedLogicalSize);
+  DeduplicatedColumnStatistics(
+      std::unique_ptr<ColumnStatistics> baseStatistics,
+      uint64_t dedupedCount,
+      uint64_t dedupedLogicalSize);
 
   // Getters delegate to baseStatistics_ for base metrics
   uint64_t getValueCount() const override;
@@ -193,13 +209,19 @@ class DeduplicatedColumnStatistics : public virtual ColumnStatistics {
 
   StatType getType() const override;
 
+  std::unique_ptr<ColumnStatistics> clone() const override;
+
   // Access the wrapped base statistics (e.g., to get min/max for
   // IntegralStatistics)
   ColumnStatistics* getBaseStatistics();
   const ColumnStatistics* getBaseStatistics() const;
 
+ private:
+  std::unique_ptr<ColumnStatistics> ownedBaseStatistics_;
+
  protected:
   friend class DeduplicatedStatisticsCollector;
+  friend class FieldWriterContext;
 
   ColumnStatistics* baseStatistics_;
   uint64_t dedupedCount_{0};
@@ -264,6 +286,7 @@ class StatisticsCollector {
   virtual void addPhysicalSize(uint64_t physicalSize);
 
   virtual void merge(const StatisticsCollector& other);
+  virtual void reset();
 
  protected:
   std::unique_ptr<ColumnStatistics> stats_;
@@ -277,6 +300,7 @@ class IntegralStatisticsCollector : public StatisticsCollector {
   void addValues(std::span<T> values);
 
   void merge(const StatisticsCollector& other) override;
+  void reset() override;
 
  private:
   // Helper to access stats_ as IntegralStatistics
@@ -291,6 +315,7 @@ class FloatingPointStatisticsCollector : public StatisticsCollector {
   void addValues(std::span<T> values);
 
   void merge(const StatisticsCollector& other) override;
+  void reset() override;
 
  private:
   // Helper to access stats_ as FloatingPointStatistics
@@ -303,6 +328,7 @@ class StringStatisticsCollector : public StatisticsCollector {
 
   void addValues(std::span<std::string_view> values);
   void merge(const StatisticsCollector& other) override;
+  void reset() override;
 
  private:
   // Helper to access stats_ as StringStatistics
@@ -327,9 +353,15 @@ class DeduplicatedStatisticsCollector : public StatisticsCollector {
   void addPhysicalSize(uint64_t physicalSize) override;
 
   StatisticsCollector* getBaseCollector() const;
+  // Releases ownership of the wrapped base collector. Used to undo an ancestor
+  // deduplicated wrapping that was applied during finalization so per-stripe
+  // finalization can start from an identical collector structure. After this
+  // call the deduplicated wrapper must be discarded.
+  std::unique_ptr<StatisticsCollector> releaseBaseCollector();
   void recordDeduplicatedStats(uint64_t count, uint64_t deduplicatedSize);
 
   void merge(const StatisticsCollector& other) override;
+  void reset() override;
 
  private:
   std::unique_ptr<StatisticsCollector> baseCollector_;
@@ -369,6 +401,7 @@ class SharedStatisticsCollector : public StatisticsCollector {
       std::function<void(StatisticsCollector*)> updateFunc);
 
   void merge(const StatisticsCollector& other) override;
+  void reset() override;
 
  private:
   mutable std::mutex mutex_;
