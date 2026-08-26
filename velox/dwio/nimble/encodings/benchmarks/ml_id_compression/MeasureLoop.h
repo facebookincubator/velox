@@ -28,7 +28,9 @@
 
 namespace facebook::nimble::mlidc {
 
-inline void clobber(const void* p) { asm volatile("" : : "r"(p) : "memory"); }
+inline void clobber(const void* p) {
+  asm volatile("" : : "r"(p) : "memory");
+}
 
 struct MeasureSpec {
   size_t iterations{5};
@@ -48,7 +50,8 @@ inline MeasureSpec specFor(
     return base;
   }
   MeasureSpec spec = base;
-  spec.iterations = std::max<size_t>(1, std::min(base.iterations, blockCodecIters));
+  spec.iterations =
+      std::max<size_t>(1, std::min(base.iterations, blockCodecIters));
   spec.warmup = 0;
   return spec;
 }

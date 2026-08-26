@@ -25,9 +25,9 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 
 DEFINE_bool(validate, false, "Round-trip check after encoding");
@@ -74,14 +74,27 @@ int runBenchmark() {
 
   std::vector<std::string> csvColumns = {
       "driver",
-      "dtype",     "dataset",       "encoding",    "family",
-      "variant",    "is_sequential", "N",           "seed",
-      "payload_bytes", "compression_ratio", "iterations", "warmup",
-      "time_ns",    "time_p90_ns",   "time_min_ns", "encode_Meps",
-      "encode_MBps", "skipped"};
+      "dtype",
+      "dataset",
+      "encoding",
+      "family",
+      "variant",
+      "is_sequential",
+      "N",
+      "seed",
+      "payload_bytes",
+      "compression_ratio",
+      "iterations",
+      "warmup",
+      "time_ns",
+      "time_p90_ns",
+      "time_min_ns",
+      "encode_Meps",
+      "encode_MBps",
+      "skipped"};
 
-  std::string csvPath =
-      FLAGS_mlidc_output_csv.empty() ? "bench_encode.csv" : FLAGS_mlidc_output_csv;
+  std::string csvPath = FLAGS_mlidc_output_csv.empty() ? "bench_encode.csv"
+                                                       : FLAGS_mlidc_output_csv;
   CsvResultWriter csv(csvPath, csvColumns);
 
   if (!FLAGS_mlidc_output_manifest.empty()) {
@@ -132,13 +145,11 @@ int runBenchmark() {
         const double timeNs = static_cast<double>(result.time.median_ns);
         const double meps =
             timeNs > 0.0 ? static_cast<double>(n) / timeNs * 1e3 : 0.0;
-        const double mbps = timeNs > 0.0
-            ? static_cast<double>(rawBytes) / timeNs * 1e3
-            : 0.0;
+        const double mbps =
+            timeNs > 0.0 ? static_cast<double>(rawBytes) / timeNs * 1e3 : 0.0;
 
         std::cout << "  " << enc.name << ": " << payloadBytes << " B, "
-                  << std::fixed << std::setprecision(1) << meps
-                  << " Melem/s\n";
+                  << std::fixed << std::setprecision(1) << meps << " Melem/s\n";
 
         csv.beginRow();
         setIdentityColumns<Elem>(csv, kDriver, ds.name, enc);
