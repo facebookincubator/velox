@@ -36,6 +36,7 @@
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
+#include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 
@@ -157,24 +158,8 @@ struct EncodingSizeEstimation {
         if constexpr (
             isNumericType<physicalType>() &&
             (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
-          constexpr uint64_t kTypeWidthBits =
-              static_cast<uint64_t>(sizeof(physicalType)) * 8u;
-          const uint64_t rangeBits =
-              velox::bits::bitsRequired(statistics.max() - statistics.min());
-          if (rangeBits > (kTypeWidthBits * 3) / 4) {
-            return std::nullopt;
-          }
-          const auto fbwEst = estimateNumericSize(
-              EncodingType::FixedBitWidth, entryCount, statistics, options);
-          if (!fbwEst.has_value()) {
-            return std::nullopt;
-          }
-          constexpr uint64_t kOverheadBytes = 6u + 2u + 4u * 6u + 4u * 8u;
-          const uint64_t estimate =
-              static_cast<uint64_t>(
-                  static_cast<double>(fbwEst.value()) * 0.90) +
-              kOverheadBytes;
-          return estimate;
+          return SubIntSplitEncoding<T>::estimateSize(
+              entryCount, statistics, options);
         } else {
           return std::nullopt;
         }
