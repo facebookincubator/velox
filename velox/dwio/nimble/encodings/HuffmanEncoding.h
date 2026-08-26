@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <queue>
 #include <span>
@@ -68,11 +69,20 @@ class HuffmanEncoding final
   static constexpr uint32_t kCheckpointStride{256};
   // OpenZL's standard Huffman codec supports 256 symbols with a maximum
   // 12-bit table. Its Large Huffman codec supports 65,536 symbols with a
-  // maximum 20-bit table and length-limits deeper trees. Nimble keeps the
-  // 12-bit table but supports up to 4,096 integral symbols, falling back when
-  // a skewed distribution would require a deeper tree.
-  static constexpr uint32_t kMaxSymbols{4096};
-  static constexpr uint8_t kMaxCodeBits{12};
+  // maximum 20-bit table and length-limits deeper trees. Nimble supports up to
+  // 65,536 integral symbols with a 16-bit table, length-limiting the tree to
+  // kMaxCodeBits so a skewed distribution never requires a deeper tree.
+  //
+  // 65,536 is the max addressable by the uint16_t alphabet index in
+  // DecodeEntry, and 2^16 == kMaxSymbols leaves enough code space for every
+  // symbol; 16-bit canonical codes still fit the uint16_t code storage.
+  static constexpr uint32_t kMaxSymbols{65536};
+  static constexpr uint8_t kMaxCodeBits{16};
+
+  // Working maximum tree depth for the encoder. Leaves deeper than this are
+  // capped so per-symbol lengths always fit uint8_t; overflow beyond
+  // kMaxCodeBits is repaired into a valid length-limited prefix code.
+  static constexpr uint8_t kMaxTreeDepth{64};
 
   HuffmanEncoding(
       velox::memory::MemoryPool& pool,
@@ -150,23 +160,22 @@ class HuffmanEncoding final
     return reversed;
   }
 
-  // Derive leaf depths for canonical code construction. Distributions that
-  // exceed the bounded decoder table are rejected as incompatible.
+  // Derive leaf depths for canonical code construction. Depths are clamped at
+  // kMaxTreeDepth so lengths stay within uint8_t even for degenerate trees; the
+  // caller length-limits any leaf deeper than kMaxCodeBits into a valid code.
   static void assignCodeLengths(
       const Vector<TreeNode>& nodes,
       int32_t node,
       uint8_t depth,
       Vector<uint8_t>& lengths) {
     if (nodes[node].symbol >= 0) {
-      if (depth > kMaxCodeBits) {
-        NIMBLE_INCOMPATIBLE_ENCODING(
-            "Huffman tree exceeds the {}-bit limit", kMaxCodeBits);
-      }
       lengths[nodes[node].symbol] = std::max<uint8_t>(1, depth);
       return;
     }
-    assignCodeLengths(nodes, nodes[node].left, depth + 1, lengths);
-    assignCodeLengths(nodes, nodes[node].right, depth + 1, lengths);
+    const uint8_t childDepth =
+        depth < kMaxTreeDepth ? static_cast<uint8_t>(depth + 1) : kMaxTreeDepth;
+    assignCodeLengths(nodes, nodes[node].left, childDepth, lengths);
+    assignCodeLengths(nodes, nodes[node].right, childDepth, lengths);
   }
 
   physicalType decodeValue(uint32_t row) const;
@@ -383,7 +392,64 @@ std::string_view HuffmanEncoding<T>::encode(
 
   Vector<uint8_t> lengths{pool, alphabet.size()};
   assignCodeLengths(nodes, queue.top().node, /*depth=*/0, lengths);
-  const uint8_t tableLog = *std::max_element(lengths.begin(), lengths.end());
+  uint8_t maxLen = *std::max_element(lengths.begin(), lengths.end());
+
+  // Length-limit the code so no code exceeds kMaxCodeBits. A Huffman tree can
+  // produce codes deeper than kMaxCodeBits for skewed distributions; fold the
+  // overflow into kMaxCodeBits, repair the Kraft sum so the canonical code
+  // stays a valid prefix code, then reassign lengths by frequency. When the
+  // tree already fits, the optimal tree-derived lengths are kept as-is.
+  if (maxLen > kMaxCodeBits) {
+    constexpr uint8_t L = kMaxCodeBits;
+
+    // Symbols per code length, indexed by bit length (0..maxLen).
+    std::array<uint32_t, kMaxTreeDepth + 1> blCount{};
+    for (const auto length : lengths) {
+      ++blCount[length];
+    }
+
+    // Fold every overlong code down to length L.
+    for (uint8_t len = L + 1; len <= maxLen; ++len) {
+      blCount[L] += blCount[len];
+      blCount[len] = 0;
+    }
+
+    // Repair the Kraft sum: while it exceeds the L-bit code space, lengthen the
+    // deepest available code by one bit. Each move reduces the sum by
+    // 2^(L-d-1); it terminates because N <= 2^L guarantees a valid assignment.
+    uint64_t kraft = 0;
+    for (uint8_t len = 1; len <= L; ++len) {
+      kraft += static_cast<uint64_t>(blCount[len]) << (L - len);
+    }
+    const uint64_t kraftMax = 1ULL << L;
+    while (kraft > kraftMax) {
+      uint8_t d = L - 1;
+      while (d >= 1 && blCount[d] == 0) {
+        --d;
+      }
+      --blCount[d];
+      ++blCount[d + 1];
+      kraft -= 1ULL << (L - d - 1);
+    }
+
+    // Reassign lengths so the most frequent symbols get the shortest codes,
+    // matching the repaired length distribution. Ties break on symbol index so
+    // the assignment is deterministic.
+    Vector<uint32_t> order{pool, alphabet.size()};
+    std::iota(order.begin(), order.end(), 0u);
+    std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+      return frequencies[a] != frequencies[b] ? frequencies[a] > frequencies[b]
+                                              : a < b;
+    });
+    size_t index = 0;
+    for (uint8_t len = 1; len <= L; ++len) {
+      for (uint32_t remaining = blCount[len]; remaining > 0; --remaining) {
+        lengths[order[index++]] = len;
+      }
+    }
+    maxLen = L;
+  }
+  const uint8_t tableLog = maxLen;
 
   // Number of symbols assigned to each code length, indexed by bit length.
   std::array<uint16_t, kMaxCodeBits + 1> counts{};
