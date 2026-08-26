@@ -42,8 +42,7 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
     velox::memory::MemoryPool* pool,
     const Encoding::Options& options) {
   using physicalType = typename TypeTraits<T>::physicalType;
-  const auto encodingType =
-      static_cast<EncodingType>(data[EncodingPrefix::kEncodingTypeOffset]);
+  const auto encodingType = EncodingPrefix::encodingType(data);
   switch (encodingType) {
     case EncodingType::Constant:
       return std::make_unique<ConstantEncodingView<T>>(data, pool, options);

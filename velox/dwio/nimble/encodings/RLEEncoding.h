@@ -116,12 +116,13 @@ class RLEEncodingBase
       std::function<void*(uint32_t)> stringBufferFactory,
       const Encoding::Options& options = {})
       : TypedEncoding<T, physicalType>(pool, data, options),
-        materializedRunLengths_{EncodingFactory(options).create(
+        materializedRunLengths_{EncodingFactory().create(
             pool,
             {data.data() + this->dataOffset() + 4,
              *reinterpret_cast<const uint32_t*>(
                  data.data() + this->dataOffset())},
-            stringBufferFactory)} {}
+            stringBufferFactory,
+            options)} {}
 
   void reset() override {
     materializedRunLengths_.reset();
@@ -829,7 +830,7 @@ RLEEncoding<T>::RLEEncoding(
           data.end() -
           internal::RLEEncodingBase<T, RLEEncoding<T>>::getValuesStart())};
   valuesEncoding_ =
-      EncodingFactory(options).create(pool, valuesView, stringBufferFactory);
+      EncodingFactory().create(pool, valuesView, stringBufferFactory, options);
   if (!isStringType<physicalType>() || !valuesEncoding_->dictionaryEnabled()) {
     ensureValues();
   }

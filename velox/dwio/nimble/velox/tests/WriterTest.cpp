@@ -17,8 +17,12 @@
 #include <folly/system/HardwareConcurrency.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <limits>
 #include <map>
+#include <optional>
 #include <set>
+#include <unordered_map>
 
 #include "velox/common/testutil/TestValue.h"
 
@@ -35,9 +39,10 @@
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
-#include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/KeyEncoding.h"
@@ -49,6 +54,7 @@
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
+#include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
 #include "velox/dwio/nimble/velox/StatsGenerated.h"
 #include "velox/dwio/nimble/velox/VeloxReader.h"
 #include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
@@ -163,6 +169,69 @@ class WriterTest : public ::testing::Test {
       }
     }
     return chunkLayouts;
+  }
+
+  std::vector<nimble::EncodingLayout> captureFlatMapKeyChunkLayouts(
+      const std::shared_ptr<velox::InMemoryReadFile>& readFile,
+      int columnIndex,
+      std::string_view key,
+      uint32_t expectedStripeCount) {
+    auto tablet = nimble::TabletReader::create(
+        readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+    auto section =
+        tablet->loadOptionalSection(std::string(nimble::kSchemaSection));
+    NIMBLE_CHECK(section.has_value(), "Schema not found.");
+    auto schema =
+        nimble::SchemaDeserializer::deserialize(section->content().data());
+    const auto& flatMap = schema->asRow().childAt(columnIndex)->asFlatMap();
+    auto child = flatMap.findChild(key);
+    NIMBLE_CHECK(child.has_value());
+    auto offset =
+        flatMap.childAt(child.value())->asScalar().scalarDescriptor().offset();
+
+    EXPECT_EQ(tablet->stripeCount(), expectedStripeCount);
+    std::vector<nimble::EncodingLayout> chunkLayouts;
+    for (uint32_t stripe = 0; stripe < tablet->stripeCount(); ++stripe) {
+      auto streams = tablet->load(
+          tablet->stripeIdentifier(stripe), std::vector<uint32_t>{offset});
+      nimble::InMemoryChunkedStream chunkedStream{
+          *leafPool_, std::move(streams[0])};
+      while (chunkedStream.hasNext()) {
+        chunkLayouts.push_back(
+            nimble::EncodingLayoutCapture::capture(
+                chunkedStream.nextChunk(), nimble::Encoding::Options{}));
+      }
+    }
+    return chunkLayouts;
+  }
+
+  static std::unique_ptr<nimble::EncodingSelectionPolicyBase>
+  sharedDictionaryFeatureSelectionPolicy(nimble::DataType dataType) {
+    std::vector<std::pair<nimble::EncodingType, float>> readFactors;
+    switch (dataType) {
+      case nimble::DataType::Int32:
+        readFactors = {{nimble::EncodingType::Dictionary, 1.0}};
+        break;
+      case nimble::DataType::Uint32:
+        readFactors = {{nimble::EncodingType::FixedBitWidth, 1.0}};
+        break;
+      case nimble::DataType::Undefined:
+      case nimble::DataType::Int8:
+      case nimble::DataType::Uint8:
+      case nimble::DataType::Int16:
+      case nimble::DataType::Uint16:
+      case nimble::DataType::Int64:
+      case nimble::DataType::Uint64:
+      case nimble::DataType::Float:
+      case nimble::DataType::Double:
+      case nimble::DataType::Bool:
+      case nimble::DataType::String:
+        readFactors = {{nimble::EncodingType::Trivial, 1.0}};
+        break;
+    }
+    nimble::ManualEncodingSelectionPolicyFactory factory{
+        readFactors, /*compressionOptions=*/std::nullopt};
+    return factory.createPolicy(dataType);
   }
 
   // Structurally compares two captured EncodingLayouts, recursing into every
@@ -1104,7 +1173,7 @@ TEST_F(WriterTest, schemaGrowthExtraSubField) {
   }
 }
 
-TEST_F(WriterTest, FeatureReorderingNonFlatmapColumnIgnoresMismatchedConfig) {
+TEST_F(WriterTest, featureReorderingNonFlatmapColumnIgnoresMismatchedConfig) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   auto vector = vectorMaker.rowVector(
       {"map", "flatmap"},
@@ -1137,7 +1206,7 @@ TEST_F(WriterTest, FeatureReorderingNonFlatmapColumnIgnoresMismatchedConfig) {
 }
 
 // A single write whose map has more distinct keys than maxFlatMapKeys fails.
-TEST_F(WriterTest, FlatMapKeyLimitExceededInSingleWriteThrows) {
+TEST_F(WriterTest, flatMapKeyLimitExceededInSingleWriteThrows) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   // One row with 10 distinct BIGINT keys against a limit of 4.
   auto vector = vectorMaker.rowVector(
@@ -1163,7 +1232,7 @@ TEST_F(WriterTest, FlatMapKeyLimitExceededInSingleWriteThrows) {
 }
 
 // A map whose distinct key count is at/under maxFlatMapKeys writes fine.
-TEST_F(WriterTest, FlatMapKeyLimitWithinLimitSucceeds) {
+TEST_F(WriterTest, flatMapKeyLimitWithinLimitSucceeds) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   // 5 distinct keys, well under the limit of 100.
   auto vector = vectorMaker.rowVector(
@@ -1193,7 +1262,7 @@ TEST_F(WriterTest, FlatMapKeyLimitWithinLimitSucceeds) {
 
 // The limit is file-wide: distinct keys accumulate across write() calls even
 // when no single write exceeds it.
-TEST_F(WriterTest, FlatMapKeyLimitAccumulatesAcrossWrites) {
+TEST_F(WriterTest, flatMapKeyLimitAccumulatesAcrossWrites) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   // Each batch has 8 distinct keys (< limit 10), but the two batches use
   // disjoint key ranges, so the file-wide count (16) exceeds the limit.
@@ -1229,7 +1298,7 @@ TEST_F(WriterTest, FlatMapKeyLimitAccumulatesAcrossWrites) {
 }
 
 // A maxFlatMapKeys of 0 disables the cap (unlimited keys).
-TEST_F(WriterTest, FlatMapKeyLimitZeroMeansUnlimited) {
+TEST_F(WriterTest, flatMapKeyLimitZeroMeansUnlimited) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   // 50 distinct keys, which would exceed any small positive limit.
   auto vector = vectorMaker.rowVector(
@@ -1321,10 +1390,9 @@ TEST_F(WriterTest, featureReorderingStreamCollocation) {
 
     auto stripeId = tablet->stripeIdentifier(0);
     const auto streamCount = tablet->streamCount(stripeId);
-    std::vector<uint32_t> offsets(streamCount);
-    std::vector<uint32_t> sizes(streamCount);
-    tablet->streamOffsets(stripeId, offsets);
-    tablet->streamSizes(stripeId, sizes);
+    std::vector<nimble::TabletReader::StreamLocation> streamLocations(
+        streamCount);
+    tablet->streamLocations(stripeId, streamLocations);
 
     nimble::VeloxReader reader(readFile.get(), *leafPool_);
     const auto& flatMap =
@@ -1340,7 +1408,7 @@ TEST_F(WriterTest, featureReorderingStreamCollocation) {
     // constant-encoded and deduplicated when all keys are present in every
     // row.
     auto diskPosition = [&](const std::string& key) -> uint32_t {
-      return offsets[keyToValueStreamId.at(key)];
+      return streamLocations[keyToValueStreamId.at(key)].offset;
     };
 
     // Verify reordered keys appear in the specified order on disk.
@@ -1359,7 +1427,9 @@ TEST_F(WriterTest, featureReorderingStreamCollocation) {
       auto prevStreamId = keyToValueStreamId.at(prevKey);
       auto currStreamId = keyToValueStreamId.at(currKey);
       EXPECT_EQ(
-          offsets[prevStreamId] + sizes[prevStreamId], offsets[currStreamId])
+          streamLocations[prevStreamId].offset +
+              streamLocations[prevStreamId].size,
+          streamLocations[currStreamId].offset)
           << "Key " << prevKey << " value stream should be adjacent to key "
           << currKey;
     }
@@ -1371,6 +1441,186 @@ TEST_F(WriterTest, featureReorderingStreamCollocation) {
       EXPECT_GT(diskPosition(leftoverKey), lastReorderedPos)
           << "Leftover key " << leftoverKey
           << " should appear after last reordered key " << lastReorderedKey;
+    }
+  }
+}
+
+TEST_F(WriterTest, featureReorderingSharedDictionaryStreamCollocation) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+
+  const std::vector<int64_t> reorderedKeys = {4, 2, 0};
+  constexpr int kNumRows = 1'000;
+
+  for (bool enableIndex : {false, true}) {
+    SCOPED_TRACE(fmt::format("enableIndex={}", enableIndex));
+
+    auto keyAt = [](auto, auto mapIndex) {
+      return static_cast<int64_t>(mapIndex);
+    };
+    // Keep each configured feature's value stream physically distinct so
+    // stream deduplication does not mask the layout being checked below.
+    auto valueAt = [](auto row, auto mapIndex) {
+      const auto cardinality = static_cast<int32_t>(mapIndex + 2);
+      return static_cast<int32_t>(mapIndex * 100 + (row + 1) % cardinality);
+    };
+    auto vector = enableIndex
+        ? vectorMaker.rowVector(
+              {"key", "flatmap"},
+              {vectorMaker.flatVector<int64_t>(
+                   kNumRows,
+                   [](auto row) { return static_cast<int64_t>(row); }),
+               vectorMaker.mapVector<int64_t, int32_t>(
+                   kNumRows,
+                   [](auto) { return 5; },
+                   keyAt,
+                   valueAt,
+                   [](auto) { return false; })})
+        : vectorMaker.rowVector(
+              {"flatmap"},
+              {vectorMaker.mapVector<int64_t, int32_t>(
+                  kNumRows,
+                  [](auto) { return 5; },
+                  keyAt,
+                  valueAt,
+                  [](auto) { return false; })});
+
+    const size_t flatmapOrdinal = enableIndex ? 1 : 0;
+
+    std::string file;
+    {
+      auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+      nimble::WriterOptions options;
+      options.flatMapColumns = {{"flatmap", {}}};
+      options.featureReordering =
+          std::vector<std::tuple<size_t, std::vector<int64_t>>>{
+              {flatmapOrdinal, reorderedKeys}};
+      options.encodingSelectionPolicyCreator = [](nimble::DataType dataType) {
+        return sharedDictionaryFeatureSelectionPolicy(dataType);
+      };
+      options.experimentalSharedDictionaryEncoding =
+          nimble::SharedDictionaryEncodingConfig::builder(
+              std::move(options.experimentalSharedDictionaryEncoding))
+              .addFlatmapValueDictionary(
+                  "flatmap",
+                  4,
+                  nimble::SharedDictionaryConfig{
+                      .scope = nimble::SharedDictionaryScope::Stripe})
+              .addFlatmapValueDictionary(
+                  "flatmap",
+                  2,
+                  nimble::SharedDictionaryConfig{
+                      .scope = nimble::SharedDictionaryScope::Stripe})
+              .addFlatmapValueDictionary(
+                  "flatmap",
+                  0,
+                  nimble::SharedDictionaryConfig{
+                      .scope = nimble::SharedDictionaryScope::Stripe})
+              .build();
+
+      if (enableIndex) {
+        options.clusterIndexConfig =
+            nimble::index::ClusterIndexConfigBuilder{}
+                .withKeyColumns({"key"})
+                .withSortOrders({nimble::SortOrder{.ascending = true}})
+                .withEnforceKeyOrder(true)
+                .build();
+      }
+
+      nimble::Writer writer(
+          vector->type(), std::move(writeFile), *rootPool_, std::move(options));
+      writer.write(vector);
+      writer.close();
+    }
+
+    auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+    {
+      nimble::VeloxReader reader(readFile.get(), *leafPool_);
+      velox::VectorPtr result;
+      ASSERT_TRUE(reader.next(kNumRows, result));
+      ASSERT_EQ(result->size(), vector->size());
+      for (velox::vector_size_t row = 0; row < vector->size(); ++row) {
+        EXPECT_TRUE(vector->equalValueAt(result.get(), row, row))
+            << "Content mismatch at row " << row;
+      }
+      ASSERT_FALSE(reader.next(1, result));
+    }
+
+    auto tablet = nimble::TabletReader::create(
+        readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+    ASSERT_GE(tablet->stripeCount(), 1);
+    if (enableIndex) {
+      ASSERT_NE(tablet->clusterIndex(), nullptr) << "Cluster index must exist";
+    }
+
+    const auto stripeId = tablet->stripeIdentifier(0);
+    const auto streamCount = tablet->streamCount(stripeId);
+    std::vector<nimble::TabletReader::StreamLocation> streamLocations(
+        streamCount);
+    tablet->streamLocations(stripeId, streamLocations);
+
+    nimble::VeloxReader reader(readFile.get(), *leafPool_);
+    const auto& flatMap =
+        reader.schema()->asRow().childAt(flatmapOrdinal)->asFlatMap();
+
+    std::unordered_map<std::string, uint32_t> keyToValueStreamId;
+    for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
+      keyToValueStreamId[flatMap.nameAt(i)] =
+          flatMap.childAt(i)->asScalar().scalarDescriptor().offset();
+    }
+
+    struct FeatureStreamSpan {
+      std::string key;
+      uint32_t begin;
+      uint32_t end;
+    };
+
+    std::vector<FeatureStreamSpan> featureStreamSpans;
+    featureStreamSpans.reserve(reorderedKeys.size());
+    for (const auto reorderedKey : reorderedKeys) {
+      const auto key = folly::to<std::string>(reorderedKey);
+      const auto valueStreamId = keyToValueStreamId.at(key);
+      const auto dictionaryStreamId =
+          tablet->stripeDictionaryStreamId(valueStreamId);
+      ASSERT_TRUE(dictionaryStreamId.has_value())
+          << "Missing shared dictionary stream for key " << key;
+
+      ASSERT_LT(valueStreamId, streamLocations.size());
+      ASSERT_LT(dictionaryStreamId.value(), streamLocations.size());
+      EXPECT_GT(streamLocations[valueStreamId].size, 0);
+      EXPECT_GT(streamLocations[dictionaryStreamId.value()].size, 0);
+
+      auto streams =
+          tablet->load(stripeId, std::vector<uint32_t>{valueStreamId});
+      nimble::InMemoryChunkedStream chunkedStream{
+          *leafPool_, std::move(streams[0])};
+      ASSERT_TRUE(chunkedStream.hasNext());
+      EXPECT_EQ(
+          nimble::EncodingPrefix::encodingType(chunkedStream.nextChunk()),
+          nimble::EncodingType::SharedDictionary)
+          << "Key " << key << " value stream should use SharedDictionary";
+
+      const auto valueBegin = streamLocations[valueStreamId].offset;
+      const auto valueEnd = valueBegin + streamLocations[valueStreamId].size;
+      const auto dictionaryBegin =
+          streamLocations[dictionaryStreamId.value()].offset;
+      const auto dictionaryEnd =
+          dictionaryBegin + streamLocations[dictionaryStreamId.value()].size;
+      EXPECT_TRUE(valueEnd == dictionaryBegin || dictionaryEnd == valueBegin)
+          << "Key " << key
+          << " dictionary stream should be adjacent to its value stream";
+
+      featureStreamSpans.push_back({
+          key,
+          std::min(valueBegin, dictionaryBegin),
+          std::max(valueEnd, dictionaryEnd),
+      });
+    }
+
+    for (size_t i = 1; i < featureStreamSpans.size(); ++i) {
+      EXPECT_EQ(featureStreamSpans[i - 1].end, featureStreamSpans[i].begin)
+          << "Key " << featureStreamSpans[i - 1].key << " and key "
+          << featureStreamSpans[i].key
+          << " value/dictionary streams should be adjacent on disk";
     }
   }
 }
@@ -1428,10 +1678,9 @@ TEST_F(
 
   auto stripeId = tablet->stripeIdentifier(0);
   const auto streamCount = tablet->streamCount(stripeId);
-  std::vector<uint32_t> offsets(streamCount);
-  std::vector<uint32_t> sizes(streamCount);
-  tablet->streamOffsets(stripeId, offsets);
-  tablet->streamSizes(stripeId, sizes);
+  std::vector<nimble::TabletReader::StreamLocation> streamLocations(
+      streamCount);
+  tablet->streamLocations(stripeId, streamLocations);
 
   nimble::VeloxReader reader(readFile.get(), *leafPool_);
   const auto& rowSchema = reader.schema()->asRow();
@@ -1451,7 +1700,9 @@ TEST_F(
     const auto prevStreamId = keyToValueStreamId.at(prevKey);
     const auto currStreamId = keyToValueStreamId.at(currKey);
     EXPECT_EQ(
-        offsets[prevStreamId] + sizes[prevStreamId], offsets[currStreamId])
+        streamLocations[prevStreamId].offset +
+            streamLocations[prevStreamId].size,
+        streamLocations[currStreamId].offset)
         << "Key " << prevKey << " value stream should be adjacent to key "
         << currKey;
   }
@@ -1589,7 +1840,7 @@ class StripeRawSizeFlushPolicyTest
     : public WriterTest,
       public ::testing::WithParamInterface<StripeRawSizeFlushPolicyTestCase> {};
 
-TEST_P(StripeRawSizeFlushPolicyTest, StripeRawSizeFlushPolicy) {
+TEST_P(StripeRawSizeFlushPolicyTest, stripeRawSizeFlushPolicy) {
   auto type = velox::ROW({{"simple", velox::INTEGER()}});
   nimble::WriterOptions writerOptions{.flushPolicyFactory = []() {
     // Buffering 256MB data before encoding stripes.
@@ -1663,6 +1914,102 @@ TEST_F(WriterTest, memoryReclaimPath) {
       },
       velox::VeloxException);
   ASSERT_TRUE(reclaimEntered.load());
+}
+
+namespace {
+// A spill config is what makes the writer reclaimable at all, so the tests
+// below set one rather than short-circuiting on the null check.
+velox::common::SpillConfig makeReclaimSpillConfig() {
+  velox::common::SpillConfig spillConfig;
+  spillConfig.writerFlushThresholdSize = 1 << 20;
+  return spillConfig;
+}
+
+// Mirrors what SharedArbitrator does when it walks a task's pools: ask every
+// child that carries a reclaimer how much it could free. Returns the number of
+// reclaimers queried.
+int32_t queryChildReclaimers(velox::memory::MemoryPool& parent) {
+  int32_t queried = 0;
+  parent.visitChildren([&](velox::memory::MemoryPool* child) {
+    auto* reclaimer = child->reclaimer();
+    if (reclaimer != nullptr) {
+      uint64_t reclaimableBytes{1};
+      EXPECT_FALSE(reclaimer->reclaimableBytes(*child, reclaimableBytes));
+      EXPECT_EQ(reclaimableBytes, 0);
+      ++queried;
+    }
+    return true;
+  });
+  return queried;
+}
+} // namespace
+
+// The writer installs its reclaimer while `pool_` is initialized, several
+// members before the state that reclaimer reads. Arbitration triggered by any
+// allocation in between -- the writer's own context allocates a 1MB Buffer, and
+// a concurrent driver can arbitrate at any moment -- reaches the reclaimer
+// first. Drives that through the reclaimer factory, which the writer invokes
+// for `encodingMemoryPool_` and for the context: after the reclaimer is live on
+// the pool, before the writer is built.
+TEST_F(WriterTest, reclaimableBytesDuringConstruction) {
+  auto rootPool = velox::memory::memoryManager()->addRootPool(
+      "reclaimDuringConstruction",
+      64L << 20,
+      velox::memory::MemoryReclaimer::create());
+  auto writerPool = rootPool->addAggregateChild(
+      "writer", velox::memory::MemoryReclaimer::create());
+
+  auto type = velox::ROW({{"simple_int", velox::INTEGER()}});
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+
+  const auto spillConfig = makeReclaimSpillConfig();
+  int32_t queriedDuringConstruction = 0;
+  nimble::WriterOptions writerOptions{
+      .reclaimerFactory =
+          [&]() -> std::unique_ptr<velox::memory::MemoryReclaimer> {
+        queriedDuringConstruction += queryChildReclaimers(*writerPool);
+        return nullptr;
+      },
+      .spillConfig = &spillConfig};
+
+  nimble::Writer writer(
+      type, std::move(writeFile), *writerPool, std::move(writerOptions));
+
+  // The first factory call happens before the pool exists; the later ones see
+  // it, and are the ones that matter.
+  EXPECT_GT(queriedDuringConstruction, 0);
+  writer.close();
+}
+
+// A closed writer has no stripe left to flush, so it must stop advertising its
+// reserved bytes as reclaimable -- otherwise the arbitrator picks the pool as a
+// candidate, suspends the driver, and reclaimBytes() turns it away. Also covers
+// the teardown ordering: `context_` is destroyed ahead of `pool_`, so anything
+// the reclaimer reads has to outlive the writer's members.
+TEST_F(WriterTest, reclaimableBytesAfterClose) {
+  auto rootPool = velox::memory::memoryManager()->addRootPool(
+      "reclaimAfterClose", 64L << 20, velox::memory::MemoryReclaimer::create());
+  auto writerPool = rootPool->addAggregateChild(
+      "writer", velox::memory::MemoryReclaimer::create());
+
+  auto type = velox::ROW({{"simple_int", velox::INTEGER()}});
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+
+  const auto spillConfig = makeReclaimSpillConfig();
+  nimble::Writer writer(
+      type,
+      std::move(writeFile),
+      *writerPool,
+      nimble::WriterOptions{.spillConfig = &spillConfig});
+  for (const auto& batch :
+       generateBatches(type, 2, 100, 20221110, *leafPool_)) {
+    writer.write(batch);
+  }
+  writer.close();
+
+  EXPECT_GT(queryChildReclaimers(*writerPool), 0);
 }
 
 TEST_F(WriterTest, flushHugeStrings) {
@@ -2080,6 +2427,48 @@ TEST_F(WriterTest, openZLCompressionNumericRoundTrip) {
   ASSERT_FALSE(reader.next(1, result));
 }
 
+TEST_F(WriterTest, rejectsReadOnlyEncodingLayout) {
+  const auto makeOptions = [](nimble::EncodingType encodingType,
+                              uint32_t numChildren) {
+    nimble::WriterOptions options;
+    options.encodingLayoutTree.emplace(
+        nimble::Kind::Row,
+        std::unordered_map<
+            nimble::EncodingLayoutTree::StreamIdentifier,
+            nimble::EncodingLayout>{},
+        "",
+        std::vector<nimble::EncodingLayoutTree>{nimble::EncodingLayoutTree{
+            nimble::Kind::Scalar,
+            {{nimble::EncodingLayoutTree::StreamIdentifiers::Scalar::
+                  ScalarStream,
+              nimble::EncodingLayout{
+                  encodingType,
+                  {},
+                  nimble::CompressionType::Uncompressed,
+                  std::vector<std::optional<const nimble::EncodingLayout>>(
+                      numChildren)}}},
+            "c0"}});
+    return options;
+  };
+
+  std::string file;
+  NIMBLE_ASSERT_THROW(
+      nimble::Writer(
+          velox::ROW({{"c0", velox::BIGINT()}}),
+          std::make_unique<velox::InMemoryWriteFile>(&file),
+          *rootPool_,
+          makeOptions(nimble::EncodingType::FOR, 3)),
+      "Encoding is read-only and cannot be used for new writes: FOR");
+
+  std::string pforFile;
+  EXPECT_NO_THROW(
+      nimble::Writer(
+          velox::ROW({{"c0", velox::BIGINT()}}),
+          std::make_unique<velox::InMemoryWriteFile>(&pforFile),
+          *rootPool_,
+          makeOptions(nimble::EncodingType::PFOR, 2)));
+}
+
 TEST_F(WriterTest, encodingLayoutSchemaMismatch) {
   nimble::EncodingLayoutTree expected{
       nimble::Kind::Row,
@@ -2415,7 +2804,7 @@ TEST_F(WriterTest, combineMultipleLayersOfDictionaries) {
   nimble::VeloxReadParams params;
   params.readFlatMapFieldAsStruct = {"c0"};
   params.flatMapFeatureSelector["c0"].features = {"c0"};
-  nimble::VeloxReader reader(&readFile, *leafPool_, nullptr, std::move(params));
+  nimble::VeloxReader reader(&readFile, *leafPool_, nullptr, params);
   VectorPtr result;
   ASSERT_TRUE(reader.next(4, result));
   ASSERT_EQ(result->size(), 4);
@@ -3750,7 +4139,7 @@ class ChunkFlushPolicyTest
     : public WriterTest,
       public ::testing::WithParamInterface<ChunkFlushPolicyTestCase> {};
 
-TEST_P(ChunkFlushPolicyTest, ChunkFlushPolicyIntegration) {
+TEST_P(ChunkFlushPolicyTest, chunkFlushPolicyIntegration) {
   const auto type = velox::ROW(
       {{"BIGINT", velox::BIGINT()}, {"SMALLINT", velox::SMALLINT()}});
   nimble::WriterOptions writerOptions{
@@ -4001,7 +4390,7 @@ class TimestampEdgeCaseTest
       public ::testing::WithParamInterface<TimestampTestCase> {};
 
 // We rely on fuzz tests in VeloxReaderTests for more complex data shapes.
-TEST_P(TimestampEdgeCaseTest, RoundTrip) {
+TEST_P(TimestampEdgeCaseTest, roundTrip) {
   auto testCase = GetParam();
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
 
@@ -4033,7 +4422,7 @@ TEST_P(TimestampEdgeCaseTest, RoundTrip) {
 // Test that timestamps exceeding Nimble's microsecond range cause overflow.
 // Nimble stores timestamps as int64 microseconds, so seconds values beyond
 // INT64_MAX/1'000'000 or INT64_MIN/1'000'000 will overflow during conversion.
-TEST_F(WriterTest, TimestampOverflowMax) {
+TEST_F(WriterTest, timestampOverflowMax) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
 
   auto overflowVector = vectorMaker.rowVector(
@@ -4048,7 +4437,7 @@ TEST_F(WriterTest, TimestampOverflowMax) {
   EXPECT_THROW(writer.write(overflowVector), nimble::NimbleUserError);
 }
 
-TEST_F(WriterTest, TimestampOverflowMin) {
+TEST_F(WriterTest, timestampOverflowMin) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
 
   auto overflowVector = vectorMaker.rowVector(
@@ -4296,6 +4685,63 @@ TEST_F(WriterTest, chunkSizeStatsPopulatedWhenChunkingTriggered) {
   EXPECT_GT(chunkSizeBytes.count, 0);
   EXPECT_GT(chunkSizeBytes.sum, 0);
   EXPECT_LE(chunkSizeBytes.min, chunkSizeBytes.max);
+}
+
+TEST_F(WriterTest, smallMaxChunkSizeProducesMultipleChunks) {
+  const auto type =
+      velox::ROW({{"c0", velox::BIGINT()}, {"c1", velox::VARCHAR()}});
+
+  nimble::WriterOptions options{
+      .enableChunkIndex = true,
+      .minStreamChunkRawSize = 0,
+      .maxStreamChunkRawSize = 2048,
+      .flushPolicyFactory = []() -> std::unique_ptr<nimble::FlushPolicy> {
+        return std::make_unique<nimble::StripeRawSizeFlushPolicy>(256ULL << 20);
+      },
+      .enableChunking = true,
+  };
+
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  nimble::Writer writer(
+      type, std::move(writeFile), *rootPool_, std::move(options));
+
+  velox::VectorFuzzer fuzzer(
+      {.vectorSize = 5000, .nullRatio = 0.1, .stringLength = 50},
+      leafPool_.get(),
+      42);
+  for (int i = 0; i < 4; ++i) {
+    writer.write(fuzzer.fuzzInputRow(type));
+  }
+  writer.close();
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = nimble::TabletReader::create(
+      readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+  ASSERT_EQ(1, tablet->stripeCount());
+
+  auto stripeId = tablet->stripeIdentifier(0);
+  const auto streamCount = tablet->streamCount(stripeId);
+  bool foundMultiChunkStream = false;
+  for (uint32_t s = 0; s < streamCount; ++s) {
+    auto streamLoaders = tablet->load(stripeId, std::array<uint32_t, 1>{s});
+    if (streamLoaders.empty() || !streamLoaders[0]) {
+      continue;
+    }
+    nimble::InMemoryChunkedStream chunked{
+        *leafPool_, std::move(streamLoaders[0])};
+    uint32_t chunkCount = 0;
+    while (chunked.hasNext()) {
+      chunked.nextChunk();
+      ++chunkCount;
+    }
+    if (chunkCount > 1) {
+      foundMultiChunkStream = true;
+      LOG(INFO) << "stream " << s << ": " << chunkCount << " chunks";
+    }
+  }
+  EXPECT_TRUE(foundMultiChunkStream)
+      << "Expected at least one stream with multiple chunks at maxStreamChunkRawSize=2048";
 }
 
 TEST_F(WriterTest, chunkSizeStatsEmptyWhenChunkingNotTriggered) {
@@ -5436,6 +5882,87 @@ DEBUG_ONLY_TEST_F(WriterTest, cachedEncodingLayoutSelectionCount) {
   }
 }
 
+DEBUG_ONLY_TEST_F(WriterTest, cachedEncodingLayoutSkipsSharedDictionary) {
+  velox::common::testutil::TestValue::enable();
+
+  constexpr int kChunkCount = 4;
+  constexpr int kRowsPerChunk = 512;
+  const auto type =
+      velox::ROW({{"c0", velox::MAP(velox::BIGINT(), velox::INTEGER())}});
+
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  std::vector<velox::RowVectorPtr> batches;
+  batches.reserve(kChunkCount);
+  for (int chunk = 0; chunk < kChunkCount; ++chunk) {
+    batches.push_back(vectorMaker.rowVector(
+        {"c0"},
+        {vectorMaker.mapVector<int64_t, int32_t>(
+            kRowsPerChunk,
+            [](auto /*row*/) { return 1; },
+            [](auto /*idx*/) { return 10; },
+            [chunk](auto row) {
+              return static_cast<int32_t>((row + chunk) % 4);
+            })}));
+  }
+
+  int fullSelectionCount = 0;
+  int replayCount = 0;
+  SCOPED_TESTVALUE_SET(
+      "facebook::nimble::encode",
+      std::function<void(const bool*)>([&](const bool* hasEncodingLayout) {
+        if (*hasEncodingLayout) {
+          ++replayCount;
+        } else {
+          ++fullSelectionCount;
+        }
+      }));
+
+  nimble::WriterOptions options;
+  options.enableEncodingSelectionCache = true;
+  options.enableChunking = true;
+  options.minStreamChunkRawSize = 0;
+  options.flushPolicyFactory = [] {
+    return std::make_unique<nimble::LambdaFlushPolicy>(
+        /*flushLambda=*/[](auto&) { return false; },
+        /*chunkLambda=*/[](auto&) { return true; });
+  };
+  options.flatMapColumns.emplace("c0", std::set<std::string>{});
+  options.experimentalSharedDictionaryEncoding =
+      nimble::SharedDictionaryEncodingConfig::builder()
+          .addFlatmapValueDictionary(
+              "c0",
+              /*key=*/10,
+              nimble::SharedDictionaryConfig{
+                  .scope = nimble::SharedDictionaryScope::File,
+                  .dictionaryId = 17})
+          .build();
+
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  nimble::Writer writer{
+      type, std::move(writeFile), *rootPool_, std::move(options)};
+  for (const auto& batch : batches) {
+    writer.write(batch);
+  }
+  writer.close();
+
+  // The shared-dictionary value stream still runs fresh selection for every
+  // chunk. The flat-map in-map bool stream is not dictionary-configured, so it
+  // captures once and replays for the remaining chunks.
+  EXPECT_EQ(fullSelectionCount, kChunkCount + 1);
+  EXPECT_EQ(replayCount, kChunkCount - 1);
+
+  auto layouts = captureFlatMapKeyChunkLayouts(
+      std::make_shared<velox::InMemoryReadFile>(file),
+      /*columnIndex=*/0,
+      /*key=*/"10",
+      /*expectedStripeCount=*/1);
+  ASSERT_EQ(layouts.size(), static_cast<size_t>(kChunkCount));
+  for (const auto& layout : layouts) {
+    EXPECT_EQ(layout.encodingType(), nimble::EncodingType::SharedDictionary);
+  }
+}
+
 // Parameterized test fixture for index tests.
 // When enableChunking is false, sets very high minChunkRawSize and
 // maxChunkRawSize to prevent chunking (one chunk per stream).
@@ -5708,12 +6235,15 @@ class WriterIndexTest : public WriterTest,
             const auto chunkData = chunkedStream.nextChunk();
             std::vector<velox::BufferPtr> stringBuffers;
             auto encoding = nimble::EncodingFactory().create(
-                *leafPool_, chunkData, [&](uint32_t totalLength) {
+                *leafPool_,
+                chunkData,
+                [&](uint32_t totalLength) {
                   auto& buffer = stringBuffers.emplace_back(
                       velox::AlignedBuffer::allocate<char>(
                           totalLength, leafPool_.get()));
                   return buffer->asMutable<void>();
-                });
+                },
+                nimble::Encoding::Options{});
             EXPECT_EQ(encoding->rowCount(), expectedChunkRowCounts[chunkIndex])
                 << "Stripe " << stripeIdx << " stream " << streamId << " chunk "
                 << chunkIndex << " row count mismatch (sequential)";
@@ -5751,12 +6281,15 @@ class WriterIndexTest : public WriterTest,
           auto encodingData = chunkDecoder.decode();
           std::vector<velox::BufferPtr> stringBuffers;
           auto encoding = nimble::EncodingFactory().create(
-              *leafPool_, encodingData, [&](uint32_t totalLength) {
+              *leafPool_,
+              encodingData,
+              [&](uint32_t totalLength) {
                 auto& buffer = stringBuffers.emplace_back(
                     velox::AlignedBuffer::allocate<char>(
                         totalLength, leafPool_.get()));
                 return buffer->asMutable<void>();
-              });
+              },
+              nimble::Encoding::Options{});
 
           EXPECT_EQ(encoding->rowCount(), expectedChunkRowCounts[i])
               << "Stripe " << stripeIdx << " stream " << streamId << " chunk "
@@ -5773,17 +6306,16 @@ class WriterIndexTest : public WriterTest,
          ++stripeIndex) {
       const auto stripeIdentifier = tablet.stripeIdentifier(stripeIndex);
       const auto streamCount = tablet.streamCount(stripeIdentifier);
-      std::vector<uint32_t> offsets(streamCount);
-      std::vector<uint32_t> sizes(streamCount);
-      tablet.streamOffsets(stripeIdentifier, offsets);
-      tablet.streamSizes(stripeIdentifier, sizes);
+      std::vector<nimble::TabletReader::StreamLocation> streamLocations(
+          streamCount);
+      tablet.streamLocations(stripeIdentifier, streamLocations);
 
       std::map<std::pair<uint32_t, uint32_t>, uint64_t> duplicateGroups;
-      for (size_t streamIndex = 0; streamIndex < sizes.size(); ++streamIndex) {
-        if (sizes[streamIndex] == 0) {
+      for (const auto& streamLocation : streamLocations) {
+        if (streamLocation.size == 0) {
           continue;
         }
-        ++duplicateGroups[{offsets[streamIndex], sizes[streamIndex]}];
+        ++duplicateGroups[{streamLocation.offset, streamLocation.size}];
       }
 
       for (const auto& [offsetAndSize, count] : duplicateGroups) {
@@ -6192,7 +6724,7 @@ TEST_F(WriterTest, compactRowCountEncodingIsPersistedAsFileFeature) {
         writeWithCompactRowCountEncoding(enabled));
     auto tablet = nimble::TabletReader::create(
         readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
-    EXPECT_EQ(tablet->features().compactRowCountEncoding(), enabled);
+    EXPECT_EQ(tablet->properties().compactRowCountEncoding(), enabled);
   }
 }
 
@@ -6234,9 +6766,9 @@ TEST_P(WriterIndexTest, omitClusterIndexKeyColumnStorage) {
   EXPECT_EQ(
       tablet->clusterIndex()->indexColumns(),
       (std::vector<std::string>{"key_col"}));
-  EXPECT_TRUE(tablet->features().clusterIndexKeyColumnStorageOmitted());
+  EXPECT_TRUE(tablet->properties().clusterIndexKeyColumnStorageOmitted());
   EXPECT_EQ(
-      tablet->features().clusterIndexKeyColumnsWithOmittedStorage(),
+      tablet->properties().clusterIndexKeyColumnsWithOmittedStorage(),
       (std::vector<std::string>{"key_col"}));
 
   auto tabletOptions = makeTestTabletOptions(leafPool_.get());
@@ -6245,9 +6777,10 @@ TEST_P(WriterIndexTest, omitClusterIndexKeyColumnStorage) {
       nimble::TabletReader::create(readFile, leafPool_.get(), tabletOptions);
   EXPECT_EQ(tabletWithoutIndex->clusterIndex(), nullptr);
   EXPECT_TRUE(
-      tabletWithoutIndex->features().clusterIndexKeyColumnStorageOmitted());
+      tabletWithoutIndex->properties().clusterIndexKeyColumnStorageOmitted());
   EXPECT_EQ(
-      tabletWithoutIndex->features().clusterIndexKeyColumnsWithOmittedStorage(),
+      tabletWithoutIndex->properties()
+          .clusterIndexKeyColumnsWithOmittedStorage(),
       (std::vector<std::string>{"key_col"}));
 
   nimble::VeloxReader reader(readFile.get(), *leafPool_);
@@ -7026,12 +7559,15 @@ TEST_F(WriterTest, customPrefixRestartInterval) {
     // Decode the key encoding
     std::vector<velox::BufferPtr> stringBuffers;
     auto keyEncoding = nimble::EncodingFactory().create(
-        *leafPool_, encodingData, [&](uint32_t totalLength) {
+        *leafPool_,
+        encodingData,
+        [&](uint32_t totalLength) {
           auto& buf = stringBuffers.emplace_back(
               velox::AlignedBuffer::allocate<char>(
                   totalLength, leafPool_.get()));
           return buf->asMutable<void>();
-        });
+        },
+        nimble::Encoding::Options{});
 
     // Verify the restart interval through debugString()
     const std::string debug = keyEncoding->debugString(0);
@@ -7209,7 +7745,10 @@ nimble::VeloxReadParams nonLegacyReadParams() {
          std::function<void*(uint32_t)> stringBufferFactory)
       -> std::unique_ptr<nimble::Encoding> {
     return nimble::EncodingFactory().create(
-        pool, data, std::move(stringBufferFactory));
+        pool,
+        data,
+        std::move(stringBufferFactory),
+        nimble::Encoding::Options{});
   };
   return params;
 }

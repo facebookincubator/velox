@@ -15,6 +15,7 @@
  */
 #include "velox/dwio/nimble/common/Types.h"
 
+#include <algorithm>
 #include <array>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -49,6 +50,10 @@ constexpr auto kEncodingTypes =
         {EncodingType::SharedDictionary, "SharedDictionary"},
     });
 
+constexpr auto kReadOnlyEncodingTypes = std::to_array<EncodingType>({
+    EncodingType::FOR,
+});
+
 constexpr auto kCompressionTypes =
     std::to_array<std::pair<CompressionType, std::string_view>>({
         {CompressionType::Uncompressed, "Uncompressed"},
@@ -81,6 +86,22 @@ EncodingType toEncodingType(std::string_view name) {
     }
   }
   NIMBLE_USER_FAIL("Unknown encoding type: {}", name);
+}
+
+bool isReadOnlyEncoding(EncodingType encodingType) {
+  return std::find(
+             kReadOnlyEncodingTypes.begin(),
+             kReadOnlyEncodingTypes.end(),
+             encodingType) != kReadOnlyEncodingTypes.end();
+}
+
+bool isReadOnlyEncoding(std::string_view name) {
+  return std::any_of(
+      kReadOnlyEncodingTypes.begin(),
+      kReadOnlyEncodingTypes.end(),
+      [name](const auto encodingType) {
+        return name == toString(encodingType);
+      });
 }
 
 std::ostream& operator<<(std::ostream& out, DataType dataType) {

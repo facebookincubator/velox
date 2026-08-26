@@ -114,6 +114,26 @@ std::string makeEncodingData() {
   return data;
 }
 
+TEST(EncodingPrefixTest, readsEncodingType) {
+  constexpr uint32_t rowCount = 513;
+  for (const bool useVarint : {false, true}) {
+    SCOPED_TRACE(fmt::format("useVarint={}", useVarint));
+    std::string data(
+        nimble::EncodingPrefix::serializedSize(rowCount, useVarint), '\0');
+    auto* pos = data.data();
+    nimble::EncodingPrefix::serialize(
+        nimble::EncodingType::SharedDictionary,
+        nimble::DataType::Int64,
+        rowCount,
+        useVarint,
+        pos);
+
+    EXPECT_EQ(
+        nimble::EncodingPrefix::encodingType(data),
+        nimble::EncodingType::SharedDictionary);
+  }
+}
+
 class TestEncoding : public nimble::Encoding {
  public:
   TestEncoding(
@@ -1122,18 +1142,22 @@ class DictionaryApiTypedTest : public ::testing::Test {
           stringBuffers_.push_back(
               velox::AlignedBuffer::allocate<char>(size, pool_.get()));
           return stringBuffers_.back()->asMutable<void>();
-        });
+        },
+        nimble::Encoding::Options{});
   }
 
   /// Creates an Encoding from serialized bytes using EncodingFactory.
   std::unique_ptr<nimble::Encoding> decodeEncoding(std::string_view data) {
     nimble::Encoding::Options options{};
-    return nimble::EncodingFactory(options).create(
-        *pool_, data, [this](uint32_t size) {
+    return nimble::EncodingFactory().create(
+        *pool_,
+        data,
+        [this](uint32_t size) {
           stringBuffers_.push_back(
               velox::AlignedBuffer::allocate<char>(size, pool_.get()));
           return stringBuffers_.back()->asMutable<void>();
-        });
+        },
+        options);
   }
 
   /// Serializes values as MainlyConstant wrapping Constant into outputBuffer.
@@ -3371,11 +3395,14 @@ TEST_F(DictionaryApiTest, unsupportedEncodings) {
     auto encoded =
         nimble::TrivialEncoding<std::string_view>::encode(sel, span, *buffer_);
     auto enc = nimble::EncodingFactory().create(
-        *pool_, encoded, [this](uint32_t size) {
+        *pool_,
+        encoded,
+        [this](uint32_t size) {
           stringBuffers_.push_back(
               velox::AlignedBuffer::allocate<char>(size, pool_.get()));
           return stringBuffers_.back()->asMutable<void>();
-        });
+        },
+        nimble::Encoding::Options{});
     verifyUnsupported(*enc, "Trivial");
   }
 
@@ -3389,7 +3416,8 @@ TEST_F(DictionaryApiTest, unsupportedEncodings) {
         std::make_unique<TestTrivialEncodingSelectionPolicy<uint32_t>>(
             false, false)};
     auto encoded = nimble::RLEEncoding<uint32_t>::encode(sel, span, *buffer_);
-    auto enc = nimble::EncodingFactory().create(*pool_, encoded, nullptr);
+    auto enc = nimble::EncodingFactory().create(
+        *pool_, encoded, nullptr, nimble::Encoding::Options{});
     verifyUnsupported(*enc, "RLE");
   }
 
@@ -3404,7 +3432,8 @@ TEST_F(DictionaryApiTest, unsupportedEncodings) {
             false, false)};
     auto encoded =
         nimble::FixedBitWidthEncoding<uint32_t>::encode(sel, span, *buffer_);
-    auto enc = nimble::EncodingFactory().create(*pool_, encoded, nullptr);
+    auto enc = nimble::EncodingFactory().create(
+        *pool_, encoded, nullptr, nimble::Encoding::Options{});
     verifyUnsupported(*enc, "FixedBitWidth");
   }
 
@@ -3420,7 +3449,8 @@ TEST_F(DictionaryApiTest, unsupportedEncodings) {
             false, false)};
     auto encoded =
         nimble::MainlyConstantEncoding<uint32_t>::encode(sel, span, *buffer_);
-    auto enc = nimble::EncodingFactory().create(*pool_, encoded, nullptr);
+    auto enc = nimble::EncodingFactory().create(
+        *pool_, encoded, nullptr, nimble::Encoding::Options{});
     verifyUnsupported(*enc, "MainlyConstant");
   }
 
@@ -3437,7 +3467,8 @@ TEST_F(DictionaryApiTest, unsupportedEncodings) {
         std::make_unique<TestTrivialEncodingSelectionPolicy<bool>>(
             false, false)};
     auto encoded = nimble::SparseBoolEncoding::encode(sel, span, *buffer_);
-    auto enc = nimble::EncodingFactory().create(*pool_, encoded, nullptr);
+    auto enc = nimble::EncodingFactory().create(
+        *pool_, encoded, nullptr, nimble::Encoding::Options{});
     verifyUnsupported(*enc, "SparseBool");
   }
 
@@ -3452,7 +3483,8 @@ TEST_F(DictionaryApiTest, unsupportedEncodings) {
             false, false)};
     auto encoded =
         nimble::VarintEncoding<uint64_t>::encode(sel, span, *buffer_);
-    auto enc = nimble::EncodingFactory().create(*pool_, encoded, nullptr);
+    auto enc = nimble::EncodingFactory().create(
+        *pool_, encoded, nullptr, nimble::Encoding::Options{});
     verifyUnsupported(*enc, "Varint");
   }
 
@@ -3466,7 +3498,8 @@ TEST_F(DictionaryApiTest, unsupportedEncodings) {
         std::make_unique<TestTrivialEncodingSelectionPolicy<uint32_t>>(
             false, false)};
     auto encoded = nimble::DeltaEncoding<uint32_t>::encode(sel, span, *buffer_);
-    auto enc = nimble::EncodingFactory().create(*pool_, encoded, nullptr);
+    auto enc = nimble::EncodingFactory().create(
+        *pool_, encoded, nullptr, nimble::Encoding::Options{});
     verifyUnsupported(*enc, "Delta");
   }
 }

@@ -24,7 +24,7 @@ namespace {
 using DecodingContext = facebook::nimble::DecodingContextPool::DecodingContext;
 using DecodingContextPool = facebook::nimble::DecodingContextPool;
 
-TEST(DeocodingContextPoolTest, VectorDecoderVisitorMissingThrows) {
+TEST(DeocodingContextPoolTest, vectorDecoderVisitorMissingThrows) {
   try {
     auto pool = DecodingContextPool{/* vectorDecoderVisitor*/ nullptr};
     FAIL();
@@ -33,7 +33,7 @@ TEST(DeocodingContextPoolTest, VectorDecoderVisitorMissingThrows) {
   }
 }
 
-TEST(DecodingContextPoolTest, ReserveAddPair) {
+TEST(DecodingContextPoolTest, reserveAddPair) {
   DecodingContextPool pool;
   EXPECT_EQ(pool.size(), 0);
   {
@@ -45,7 +45,7 @@ TEST(DecodingContextPoolTest, ReserveAddPair) {
   EXPECT_EQ(pool.size(), 1);
 }
 
-TEST(DecodingContextPoolTest, FillPool) {
+TEST(DecodingContextPoolTest, fillPool) {
   DecodingContextPool pool;
   EXPECT_EQ(pool.size(), 0);
 
@@ -60,7 +60,7 @@ TEST(DecodingContextPoolTest, FillPool) {
   EXPECT_EQ(pool.size(), 4);
 }
 
-TEST(DecodingContextPoolTest, ParallelFillPool) {
+TEST(DecodingContextPoolTest, parallelFillPool) {
   auto parallelismFactor = folly::available_concurrency();
   auto executor = folly::CPUThreadPoolExecutor{parallelismFactor};
 

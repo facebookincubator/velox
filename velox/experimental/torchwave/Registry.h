@@ -91,6 +91,8 @@ enum class StandaloneShortcut {
   kSplitWithSizes,
   kSqueezeDim,
   kExpand,
+  kSymSize,
+  kSymNumel,
 };
 
 /// Specifies which arguments determine the number of elements a kernel
@@ -171,6 +173,20 @@ struct ArgumentMeta {
   /// is present with a non-None value. Absent arguments and None-valued
   /// attributes both produce false.
   bool hasPresentTemplateParam{false};
+
+  /// For an output: the kernel maps its writes through the output tensor's
+  /// strides rather than indexing its storage linearly, so it stays correct
+  /// when the output is a pitched view. This is what lets a concat hand the
+  /// producer a strided band of the result to write in place; a producer
+  /// without it gets a dense buffer of its own and the concat copies it in.
+  ///
+  /// It is the output-side dual of Metadata::layoutAgnostic, which is about the
+  /// strides an op READS, and it is not implied by an output's contiguity
+  /// ValueConstraint -- that states what the value IS, not what its writer
+  /// could cope with.
+  ///
+  /// On a TensorList (or a list of lists) it applies to every element.
+  bool mayWriteStrided{false};
 
   SizeShortcut sizeShortcut{SizeShortcut::kNone};
 
@@ -587,6 +603,11 @@ class MetadataBuilder {
   MetadataBuilder& defaultInputMeta();
   MetadataBuilder& returnMeta(std::vector<ArgumentMeta> meta);
   MetadataBuilder& defaultOutputMeta();
+
+  /// Marks every output as one the kernel writes through the output's strides,
+  /// so a concat may hand it a pitched band of the result instead of a dense
+  /// buffer to be copied in. See ArgumentMeta::mayWriteStrided.
+  MetadataBuilder& mayWriteStrided(bool val = true);
   MetadataBuilder& hasBarrier(bool val = true);
   MetadataBuilder& singleBlockIfFused(bool val = true);
   MetadataBuilder& inputFromPreviousKernel(int32_t ordinal);
@@ -681,5 +702,17 @@ class MetadataBuilder {
 };
 
 void registerBuiltins();
+
+/// True if the kernel that produces 'value' maps its writes through the output
+/// tensor's strides, so it stays correct when handed a pitched view. A concat
+/// uses this to decide whether an operand can be given a strided band of the
+/// result to fill directly, or whether it needs a dense buffer of its own that
+/// the concat then copies in.
+///
+/// False -- the conservative answer -- for a value with no producer, a producer
+/// with no registered metadata, and any op that has not declared
+/// ArgumentMeta::mayWriteStrided. A value that is an element of a TensorList
+/// output takes the flag from the list, since the flag covers every element.
+bool producerMayWriteStrided(ValueCP value);
 
 } // namespace torch::wave

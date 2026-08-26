@@ -68,18 +68,25 @@ struct VeloxReadParams : public FieldReaderParams {
   // If nullptr we'll use the default one, that doesn't pre-load stripes.
   std::shared_ptr<velox::dwio::common::UnitLoaderFactory> unitLoaderFactory{};
 
+  /// Resolves External shared integer dictionaries referenced by the file.
+  std::shared_ptr<const ExternalDictionaryResolver> externalDictionaryResolver;
+
+  /// Creates an encoding for one serialized stream chunk.
+  using StreamEncodingFactory = std::function<std::unique_ptr<Encoding>(
+      velox::memory::MemoryPool&,
+      std::string_view,
+      std::function<void*(uint32_t)>)>;
+
   // Used strictly for backward compatible migrations where the Encoding
   // implementations might have different read implementations, but
   // identical/backward compatible write behavior.
-  std::function<std::unique_ptr<Encoding>(
-      velox::memory::MemoryPool&,
-      std::string_view,
-      std::function<void*(uint32_t)>)>
-      encodingFactory = [](velox::memory::MemoryPool& pool,
-                           std::string_view data,
-                           std::function<void*(uint32_t)> stringBufferFactory)
+  StreamEncodingFactory encodingFactory =
+      [](velox::memory::MemoryPool& pool,
+         std::string_view data,
+         const std::function<void*(uint32_t)>& stringBufferFactory)
       -> std::unique_ptr<Encoding> {
-    return legacy::EncodingFactory().create(pool, data, stringBufferFactory);
+    return legacy::EncodingFactory().create(
+        pool, data, stringBufferFactory, Encoding::Options{});
   };
 };
 
@@ -92,14 +99,14 @@ class VeloxReader {
       velox::memory::MemoryPool& pool,
       std::shared_ptr<const velox::dwio::common::ColumnSelector> selector =
           nullptr,
-      VeloxReadParams params = {});
+      const VeloxReadParams& params = {});
 
   VeloxReader(
       std::shared_ptr<velox::ReadFile> file,
       velox::memory::MemoryPool& pool,
       std::shared_ptr<const velox::dwio::common::ColumnSelector> selector =
           nullptr,
-      VeloxReadParams params = {});
+      const VeloxReadParams& params = {});
 
   VeloxReader(
       std::shared_ptr<const TabletReader> tabletReader,
@@ -158,6 +165,11 @@ class VeloxReader {
  private:
   // Loads the next stripe's streams.
   void loadNextStripe();
+
+  // Returns the base encoding factory unless the stream has an alphabet.
+  VeloxReadParams::StreamEncodingFactory createStreamEncodingFactory(
+      uint32_t valueStreamId,
+      std::unique_ptr<StreamLoader> dictionaryStream) const;
 
   // True if the file contain zero rows.
   bool isEmptyFile() const {

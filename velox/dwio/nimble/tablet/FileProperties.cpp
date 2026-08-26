@@ -13,10 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/dwio/nimble/tablet/FileFeatures.h"
+#include "velox/dwio/nimble/tablet/FileProperties.h"
 
 #include "velox/dwio/nimble/common/Exceptions.h"
-#include "velox/dwio/nimble/tablet/FeaturesGenerated.h"
+#include "velox/dwio/nimble/tablet/FilePropertiesGenerated.h"
 
 #include "flatbuffers/flatbuffers.h"
 
@@ -24,7 +24,7 @@
 
 namespace facebook::nimble {
 
-FileFeatures::FileFeatures(
+FileProperties::FileProperties(
     bool compactRowCountEncoding,
     bool clusterIndexKeyColumnStorageOmitted,
     std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage)
@@ -38,7 +38,7 @@ FileFeatures::FileFeatures(
       "clusterIndexKeyColumnStorageOmitted must match clusterIndexKeyColumnsWithOmittedStorage presence");
 }
 
-std::string FileFeatures::serialize() const {
+std::string FileProperties::serialize() const {
   flatbuffers::FlatBufferBuilder builder;
 
   flatbuffers::Offset<serialization::CompactEncoding> compactEncodingOffset;
@@ -56,7 +56,7 @@ std::string FileFeatures::serialize() const {
           });
 
   builder.Finish(
-      serialization::CreateFeatures(
+      serialization::CreateFileProperties(
           builder,
           clusterIndexKeyColumnStorageOmitted_,
           clusterIndexKeyColumnsWithOmittedStorage,
@@ -67,8 +67,8 @@ std::string FileFeatures::serialize() const {
       builder.GetSize()};
 }
 
-FileFeatures FileFeatures::deserialize(std::string_view data) {
-  const auto* serialized = flatbuffers::GetRoot<serialization::Features>(
+FileProperties FileProperties::deserialize(std::string_view data) {
+  const auto* serialized = flatbuffers::GetRoot<serialization::FileProperties>(
       reinterpret_cast<const uint8_t*>(data.data()));
 
   bool compactRowCountEncoding{false};
@@ -88,7 +88,7 @@ FileFeatures FileFeatures::deserialize(std::string_view data) {
       serialized->cluster_index_key_column_storage_omitted(),
       !clusterIndexKeyColumnsWithOmittedStorage.empty(),
       "cluster_index_key_column_storage_omitted must match cluster_index_key_columns_with_omitted_storage presence");
-  return FileFeatures{
+  return FileProperties{
       compactRowCountEncoding,
       serialized->cluster_index_key_column_storage_omitted(),
       std::move(clusterIndexKeyColumnsWithOmittedStorage)};

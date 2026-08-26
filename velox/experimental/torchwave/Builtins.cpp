@@ -663,6 +663,37 @@ bool viewHasDynamicShapeArgs(NodeCP node, const ValueTypes& /*types*/) {
   return node->inputs().size() > 1;
 }
 
+// A metadata getter (sym_size / sym_numel) is worth running on the host exactly
+// when it would otherwise be an expression of its own. The host already holds
+// every tensor, so reading a size there is a field access; a kernel op has to
+// pass the tensor's metadata in, compute one scalar, and read it back out. When
+// the getter instead feeds a single fusable consumer it is a subexpression of
+// that consumer's kernel, where the value is wanted on the device anyway, so it
+// stays fused.
+//
+// Consulting the consumer's isStandalone cannot recurse back here: a getter
+// takes a tensor and yields a scalar, so a getter is never the user of a
+// getter.
+// Unused while the isStandaloneFunc call sites below are disabled.
+[[maybe_unused]] bool metadataGetterIsAlone(
+    NodeCP node,
+    const ValueTypes& types) {
+  if (node->outputs().empty() || node->outputs()[0] == nullptr) {
+    return false;
+  }
+  ValueCP out = node->outputs()[0];
+  if (types.graphOutput(out)) {
+    return true;
+  }
+  const auto& users = out->users();
+  if (users.size() != 1) {
+    // Unused, or shared -- either way it is materialized on its own.
+    return true;
+  }
+  const Metadata* userMeta = Registry::metadata(users[0]->target());
+  return userMeta == nullptr || userMeta->isStandalone(users[0], types);
+}
+
 std::vector<std::vector<Dim>> sizeAttrReserveShape(
     NodeCP /*node*/,
     nativert::ExecutionFrame& frame,
@@ -1961,6 +1992,8 @@ void registerBuiltins() {
           {{.isRegister = false, .wholeTensor = true}, {.isRegister = true}})
       .returnMeta({{.isRegister = true}})
       .metadataGetter()
+      .metadataOnly()
+      // TEMP-AB-DISABLED .isStandaloneFunc(metadataGetterIsAlone)
       .isScalarElementwise()
       .registerOp();
 
@@ -1972,6 +2005,8 @@ void registerBuiltins() {
       .argumentMeta({{.isRegister = false, .wholeTensor = true}})
       .returnMeta({{.isRegister = true}})
       .metadataGetter()
+      .metadataOnly()
+      // TEMP-AB-DISABLED .isStandaloneFunc(metadataGetterIsAlone)
       .isScalarElementwise()
       .registerOp();
 
@@ -4501,6 +4536,9 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .returnMeta(
           {{.isRegister = false, .reserveShape = repeatInterleaveFinalReserve}})
+      // The gather decomposes the output index and maps it through the
+      // output's strides, so it fills a pitched concat band correctly.
+      .mayWriteStrided()
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
       .deviceFunc("repeat_interleave_final")
@@ -4576,6 +4614,10 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .returnMeta(
           {{.isRegister = false, .reserveShape = repeatInterleaveFinalReserve}})
+      // No mayWriteStrided: unlike repeat_interleave_final, this one writes the
+      // run of repeated indices as out[j] for j in [start, end), a linear walk
+      // that ignores the output's strides. A pitched concat band would land in
+      // the wrong places, silently, since a placed operand is not copied in.
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
       .deviceFunc("repeat_interleave_index_final")

@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -97,6 +98,16 @@ struct EncodingArtifactVerification {
   /// Fingerprints the verified artifact bytes.
   std::string artifactDigest;
 };
+
+namespace detail {
+
+/// Exposes the canonical string-value digest for runner conformance tests.
+std::string semanticStringDigestForTesting(
+    std::span<const std::string_view> values,
+    std::span<const bool> nonNulls,
+    std::string_view dataType = "string");
+
+} // namespace detail
 
 /// Runs one operation and optionally consumes a pristine canonical artifact.
 EncodingRunnerMeasurement runEncodingBenchmark(

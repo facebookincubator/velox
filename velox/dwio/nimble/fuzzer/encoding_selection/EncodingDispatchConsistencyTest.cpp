@@ -288,6 +288,7 @@ TEST_F(
   options.seed = 1;
   options.randomizeWriterConfig = false;
   NimbleWriterFuzzer fuzzer(options, *rootPool_);
+
   for (const auto encodingType :
        {EncodingType::DeltaBlock,
         EncodingType::PFOR,

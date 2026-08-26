@@ -86,7 +86,7 @@ TEST(StatisticsTest, runValues) {
   EXPECT_TRUE(nimble::Statistics<int32_t>::create(empty).runValues().empty());
 }
 
-TYPED_TEST(StatisticsNumericTests, Create) {
+TYPED_TEST(StatisticsNumericTests, create) {
   using T = TypeParam;
   using ValueType = typename T::valueType;
 
@@ -186,7 +186,7 @@ TYPED_TEST(StatisticsNumericTests, Create) {
   }
 }
 
-TYPED_TEST(StatisticsBoolTests, Create) {
+TYPED_TEST(StatisticsBoolTests, create) {
   using T = TypeParam;
   constexpr auto trueCount = 100;
   constexpr auto falseCount = 230;
@@ -380,7 +380,7 @@ void verifyString(
   }
 }
 
-TYPED_TEST(StatisticsStringTests, Create) {
+TYPED_TEST(StatisticsStringTests, create) {
   using T = TypeParam;
 
   constexpr auto uniqueStrings = 10;
@@ -442,7 +442,7 @@ TYPED_TEST(StatisticsStringTests, Create) {
   }
 }
 
-TYPED_TEST(StatisticsNumericTests, Repeat) {
+TYPED_TEST(StatisticsNumericTests, repeat) {
   using T = TypeParam;
   using ValueType = typename T::valueType;
 
@@ -481,7 +481,7 @@ TYPED_TEST(StatisticsNumericTests, Repeat) {
   }
 }
 
-TYPED_TEST(StatisticsIntegerTests, Buckets) {
+TYPED_TEST(StatisticsIntegerTests, buckets) {
   using T = TypeParam;
   using ValueType = typename T::valueType;
   using UnsignedValueType = typename std::make_unsigned<ValueType>::type;

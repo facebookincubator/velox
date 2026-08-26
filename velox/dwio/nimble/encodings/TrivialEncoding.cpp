@@ -107,8 +107,8 @@ TrivialEncoding<std::string_view>::TrivialEncoding(
       row_{0},
       buffer_{&pool} {
   const auto payload = readStringPayload(data, this->dataOffset());
-  lengths_ = EncodingFactory(options).create(
-      pool, payload.lengths, stringBufferFactory);
+  lengths_ = EncodingFactory().create(
+      pool, payload.lengths, stringBufferFactory, options);
   blob_ = payload.blob.data();
 
   if (payload.compressionType != CompressionType::Uncompressed) {

@@ -48,6 +48,23 @@ target_link_libraries(
   gtest_main
 )
 
+add_library(
+  nimble_shared_dictionary_test_utils
+  SharedDictionaryTestUtils.cpp
+  SharedDictionaryTestUtils.h
+)
+target_link_libraries(
+  nimble_shared_dictionary_test_utils
+  nimble_common
+  nimble_encodings
+  nimble_velox_shared_dictionary_config
+  nimble_writer
+  velox_file
+  velox_memory
+  velox_vector
+  velox_vector_test_lib
+)
+
 add_executable(
   nimble_velox_tests
   BufferGrowthPolicyTest.cpp
@@ -61,6 +78,8 @@ add_executable(
   RowRangeTest.cpp
   SchemaTest.cpp
   SchemaUtilsTest.cpp
+  SharedDictionaryConfigTest.cpp
+  SharedDictionaryE2ETest.cpp
   SharedDictionaryWriterTest.cpp
   StreamChunkerTest.cpp
   StreamDataTest.cpp
@@ -92,8 +111,10 @@ target_link_libraries(
   nimble_velox_tests
   nimble_velox_common
   nimble_velox_schema_utils
+  nimble_shared_dictionary_test_utils
   nimble_writer_test_utils
   nimble_velox_reader
+  nimble_velox_shared_dictionary_config
   nimble_writer
   nimble_velox_layout_planner
   nimble_velox_stats_fb

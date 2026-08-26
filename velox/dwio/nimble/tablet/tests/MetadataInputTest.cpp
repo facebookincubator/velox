@@ -26,6 +26,7 @@
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/caching/SsdFile.h"
+#include "velox/common/caching/tests/CacheTestUtil.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/io/IoStatistics.h"
@@ -613,7 +614,8 @@ class CachedMetadataInputTest : public MetadataInputTestBase,
   std::unique_ptr<nimble::MetadataInput> createCachedInput(
       velox::ReadFile* readFile,
       int32_t maxCoalesceDistance = 1 << 20,
-      int64_t maxCoalesceBytes = 128 << 20) {
+      int64_t maxCoalesceBytes = 128 << 20,
+      std::optional<uint32_t> maxCacheEntrySize = std::nullopt) {
     fileHandle_ = std::make_unique<velox::FileHandle>();
     fileHandle_->file = std::shared_ptr<velox::ReadFile>(
         std::shared_ptr<velox::ReadFile>{}, readFile);
@@ -621,6 +623,7 @@ class CachedMetadataInputTest : public MetadataInputTestBase,
         velox::StringIdLease(velox::fileIds(), "CachedMetadataInputTest");
     auto options =
         makeMetadataInputOptions(maxCoalesceDistance, maxCoalesceBytes);
+    options.maxCacheEntrySize = maxCacheEntrySize;
     options.fileHandle = fileHandle_.get();
     options.cache = cache_.get();
     return nimble::MetadataInput::create(readFile, options);
@@ -1129,6 +1132,52 @@ DEBUG_ONLY_TEST_P(CachedMetadataInputTest, ssdIoError) {
   }
 }
 
+// SsdRun packs an entry's size into kSizeBits bits, so a larger metadata
+// section can never be written to SSD. Queueing one anyway either spins in
+// SsdFile::getSpace() above kRegionSize or throws when the SsdRun is
+// constructed below it, so oversized sections must bypass the cache.
+TEST_P(CachedMetadataInputTest, oversizedSectionIsNotCached) {
+  velox::cache::test::AsyncDataCacheTestHelper cacheHelper{cache_.get()};
+
+  // Counts entries of exactly 'size'. cache_->clear() leaves freed entry
+  // shells behind, so a bare entry count would also see earlier sections.
+  const auto countCachedOfSize = [&](uint32_t size) {
+    const auto entries = cacheHelper.cacheEntries();
+    return std::count_if(
+        entries.begin(), entries.end(), [&](const auto* entry) {
+          return entry != nullptr &&
+              entry->size() == static_cast<int32_t>(size);
+        });
+  };
+
+  const auto loadSectionOfSize = [&](uint32_t size, uint32_t limit) {
+    const std::string data(size, 'x');
+    const nimble::MetadataSection section{
+        /*offset=*/0,
+        size,
+        nimble::CompressionType::Uncompressed,
+        /*uncompressedSize=*/size,
+    };
+    const auto fileContent = buildFileContent({section}, {data});
+    auto readFile = std::make_shared<velox::InMemoryReadFile>(fileContent);
+    auto input = createCachedInput(
+        readFile.get(),
+        /*maxCoalesceDistance=*/1 << 20,
+        /*maxCoalesceBytes=*/128 << 20,
+        limit);
+    auto results = input->load(std::array{section});
+    EXPECT_EQ(results[0]->content().size(), size);
+    // 'results' still holds any pin, so a cached section is visible here.
+    return countCachedOfSize(size);
+  };
+
+  constexpr uint32_t kLimit = 1U << velox::cache::SsdRun::kSizeBits;
+
+  // Distinct sizes so each case is distinguishable from earlier residue.
+  EXPECT_EQ(loadSectionOfSize(kLimit + (1 << 20), kLimit), 0);
+  EXPECT_EQ(loadSectionOfSize(kLimit / 2, kLimit), 1);
+}
+
 TEST_P(CachedMetadataInputTest, cachePinRetention) {
   const std::string data = "pin-retention-test-data";
   nimble::MetadataSection section{
@@ -1217,6 +1266,129 @@ TEST_P(CachedMetadataInputTest, cacheAndFindMetadata) {
   ASSERT_NE(result, nullptr);
   EXPECT_EQ(result->content().size(), data1.size() + data2.size());
   EXPECT_EQ(result->content(), std::string_view("helloworld"));
+}
+
+TEST_P(CachedMetadataInputTest, cacheAndFindMetadataRespectsSizeLimit) {
+  auto readFile =
+      std::make_shared<velox::InMemoryReadFile>(std::string(100, 'x'));
+  constexpr uint32_t kLimit = 1 << 10;
+  auto input = createCachedInput(
+      readFile.get(),
+      /*maxCoalesceDistance=*/1 << 20,
+      /*maxCoalesceBytes=*/128 << 20,
+      kLimit);
+
+  const std::string cacheableData(kLimit, 'a');
+  std::array<std::string_view, 1> cacheableRanges{cacheableData};
+  input->cacheMetadata(42, cacheableRanges);
+  EXPECT_NE(input->findCachedMetadata(42), nullptr);
+
+  const std::string oversizedData(kLimit + 1, 'b');
+  std::array<std::string_view, 1> oversizedRanges{oversizedData};
+  input->cacheMetadata(84, oversizedRanges);
+  EXPECT_EQ(input->findCachedMetadata(84), nullptr);
+}
+
+TEST_P(CachedMetadataInputTest, loweredLimitIgnoresExistingRamEntry) {
+  auto readFile =
+      std::make_shared<velox::InMemoryReadFile>(std::string(100, 'x'));
+  constexpr uint32_t kLowerLimit = 1 << 10;
+  const std::string data(kLowerLimit + 1, 'a');
+  std::array<std::string_view, 1> ranges{data};
+
+  {
+    auto input = createCachedInput(readFile.get());
+    input->cacheMetadata(42, ranges);
+    EXPECT_NE(input->findCachedMetadata(42), nullptr);
+  }
+
+  auto input = createCachedInput(
+      readFile.get(),
+      /*maxCoalesceDistance=*/1 << 20,
+      /*maxCoalesceBytes=*/128 << 20,
+      kLowerLimit);
+  EXPECT_EQ(input->findCachedMetadata(42), nullptr);
+}
+
+TEST_P(CachedMetadataInputTest, unsetLimitPreservesExistingBehavior) {
+  constexpr uint32_t kSize = (1U << velox::cache::SsdRun::kSizeBits) + 1;
+  const std::string data(kSize, 'x');
+  const nimble::MetadataSection section{
+      /*offset=*/0,
+      kSize,
+      nimble::CompressionType::Uncompressed,
+      /*uncompressedSize=*/kSize,
+  };
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(data);
+  auto input = createCachedInput(readFile.get());
+
+  auto results = input->load(std::array{section});
+  EXPECT_EQ(results[0]->content(), data);
+  auto cached = input->findCachedMetadata(0);
+  ASSERT_NE(cached, nullptr);
+  EXPECT_EQ(cached->content(), data);
+}
+
+// A limit above the SsdRun ceiling would queue entries that can never be
+// written to SSD, so it is rejected when the SSD cache is enabled.
+TEST_P(CachedMetadataInputTest, ssdCacheRejectsOversizedLimit) {
+  auto readFile =
+      std::make_shared<velox::InMemoryReadFile>(std::string(100, 'x'));
+  const auto createOversized = [&]() {
+    return createCachedInput(
+        readFile.get(),
+        /*maxCoalesceDistance=*/1 << 20,
+        /*maxCoalesceBytes=*/128 << 20,
+        (1U << velox::cache::SsdRun::kSizeBits) + 1);
+  };
+
+  if (enableSsd()) {
+    NIMBLE_ASSERT_THROW(
+        createOversized(),
+        "MetadataInput::Options::maxCacheEntrySize must not exceed the Velox "
+        "SSD cache maximum entry size when an SSD cache is configured");
+  } else {
+    EXPECT_NE(createOversized(), nullptr);
+  }
+}
+
+TEST_P(CachedMetadataInputTest, loweredLimitSkipsExistingSsdEntry) {
+  if (!enableSsd()) {
+    GTEST_SKIP() << "Requires SSD cache";
+  }
+
+  constexpr uint32_t kLowerLimit = 1 << 10;
+  const std::string data(kLowerLimit + 1, 'a');
+  const nimble::MetadataSection section{
+      /*offset=*/0,
+      static_cast<uint32_t>(data.size()),
+      nimble::CompressionType::Uncompressed,
+      /*uncompressedSize=*/static_cast<uint32_t>(data.size()),
+  };
+  const auto fileContent = buildFileContent({section}, {data});
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(fileContent);
+
+  {
+    auto input = createCachedInput(readFile.get());
+    auto results = input->load(std::array{section});
+    EXPECT_EQ(results[0]->content(), data);
+  }
+  ASSERT_TRUE(cache_->ssdCache()->startWrite());
+  cache_->saveToSsd(/*saveAll=*/true);
+  cache_->ssdCache()->waitForWriteToFinish();
+  cache_->clear();
+
+  const auto rawBytesBefore = metadataIoStats_->rawBytesRead();
+  const auto ssdReadBefore = metadataIoStats_->ssdRead().count();
+  auto input = createCachedInput(
+      readFile.get(),
+      /*maxCoalesceDistance=*/1 << 20,
+      /*maxCoalesceBytes=*/128 << 20,
+      kLowerLimit);
+  auto results = input->load(std::array{section});
+  EXPECT_EQ(results[0]->content(), data);
+  EXPECT_GT(metadataIoStats_->rawBytesRead(), rawBytesBefore);
+  EXPECT_EQ(metadataIoStats_->ssdRead().count(), ssdReadBefore);
 }
 
 DEBUG_ONLY_TEST_P(CachedMetadataInputTest, concurrentCacheAndFind) {

@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "folly/io/IOBuf.h"
+#include "velox/buffer/BufferPool.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Vector.h"
@@ -38,10 +39,18 @@ namespace facebook::nimble::serde {
 /// materializing values into Velox vectors.
 class StreamSlicer {
  public:
-  /// Controls the trailer encodings used for sliced output.
+  /// Controls raw-stream input and sliced output formats.
   struct Options {
+    /// Encoding used for output stream indices.
     EncodingType streamIndicesEncodingType{EncodingType::FixedBitWidth};
+    /// Encoding used for output stream sizes.
     EncodingType streamSizesEncodingType{EncodingType::FixedBitWidth};
+    /// Serialization format used by each raw input stream.
+    SerializationVersion streamVersion{SerializationVersion::kProjection};
+    /// Whether each raw input stream retains tablet storage chunk framing.
+    bool streamHasChunkHeader{false};
+    /// Whether encoding prefixes store row counts as varints.
+    bool streamsUseVarintRowCount{true};
   };
 
   /// Creates a slicer for payloads that use the supplied Nimble schema.
@@ -67,12 +76,12 @@ class StreamSlicer {
   };
 
   /// Returns compact raw streams containing rows [offset, offset + length).
-  /// `streamVersion` selects the row-count format used by each encoded stream.
+  /// The raw-stream input format is configured in Options. The returned
+  /// streams never contain chunk headers.
   SlicedStreams slice(
       const std::vector<std::string_view>& inputStreams,
       uint32_t offset,
-      uint32_t length,
-      SerializationVersion streamVersion) const;
+      uint32_t length) const;
 
  private:
   // Top-level row range in the current stream's row domain.
@@ -153,6 +162,11 @@ class StreamSlicer {
   velox::memory::MemoryPool* const pool_;
   const Options options_;
   const uint32_t streamCount_;
+  // Scratch Velox buffers reused by temporary Vector materialization.
+  mutable velox::BufferPool bufferPool_;
+  // Scratch arenas reused by nested EncodingFactory::slice() calls.
+  mutable EncodingBufferPool encodingBufferPool_;
+  mutable EncodingBufferPool strippedStreamBufferPool_;
   mutable std::vector<std::string_view> inputStreams_;
   mutable std::vector<uint32_t> streamSizes_;
   mutable Vector<char> headerBuffer_;

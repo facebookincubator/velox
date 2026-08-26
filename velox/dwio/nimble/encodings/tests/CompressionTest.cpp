@@ -121,7 +121,7 @@ using TestTypes = ::testing::Types<TYPES>;
 
 TYPED_TEST_CASE(CompressionTests, TestTypes);
 
-TYPED_TEST(CompressionTests, MinCompressibleSizeMetaInternal) {
+TYPED_TEST(CompressionTests, minCompressibleSizeMetaInternal) {
 #ifdef DISABLE_META_INTERNAL_COMPRESSOR
   GTEST_SKIP() << "The Meta internal compressor has no OSS implementation.";
 #endif
@@ -131,19 +131,19 @@ TYPED_TEST(CompressionTests, MinCompressibleSizeMetaInternal) {
       nimble::kMetaInternalMinCompressionSize);
 }
 
-TYPED_TEST(CompressionTests, MinCompressibleSizeZstd) {
+TYPED_TEST(CompressionTests, minCompressibleSizeZstd) {
   using T = TypeParam;
   assertMinCompressibleSizeMetaInternal<T>(
       nimble::CompressionType::Zstd, nimble::kZstdMinCompressionSize);
 }
 
-TYPED_TEST(CompressionTests, MinCompressibleSizeLz4) {
+TYPED_TEST(CompressionTests, minCompressibleSizeLz4) {
   using T = TypeParam;
   assertMinCompressibleSizeMetaInternal<T>(
       nimble::CompressionType::Lz4, nimble::kLz4MinCompressionSize);
 }
 
-TEST(CompressionTests, VerifyDefaultMinCompressionSize) {
+TEST(CompressionTests, verifyDefaultMinCompressionSize) {
   nimble::CompressionOptions compressionOptions{};
   EXPECT_EQ(
       compressionOptions.internalMinCompressionSize,
@@ -155,7 +155,7 @@ TEST(CompressionTests, VerifyDefaultMinCompressionSize) {
       compressionOptions.lz4MinCompressionSize, nimble::kLz4MinCompressionSize);
 }
 
-TEST(CompressionTests, NoCompressionPolicy) {
+TEST(CompressionTests, noCompressionPolicy) {
   nimble::NoCompressionPolicy policy;
 
   EXPECT_EQ(
@@ -166,7 +166,7 @@ TEST(CompressionTests, NoCompressionPolicy) {
       /*compressedSize=*/1));
 }
 
-TEST(CompressionTests, ConfiguredCompressionPolicy) {
+TEST(CompressionTests, configuredCompressionPolicy) {
   auto checkCompressionType = [](nimble::CompressionType type) {
     nimble::ConfiguredCompressionPolicy policy{
         nimble::CompressionOptions{.compressionType = type},
@@ -180,7 +180,7 @@ TEST(CompressionTests, ConfiguredCompressionPolicy) {
   checkCompressionType(nimble::CompressionType::MetaInternal);
 }
 
-TEST(CompressionTests, ConfiguredCompressionPolicyUsesCompressionOptions) {
+TEST(CompressionTests, configuredCompressionPolicyUsesCompressionOptions) {
   nimble::CompressionOptions options{
       .compressionType = nimble::CompressionType::Zstd,
       .zstdMinCompressionSize = 123,
@@ -196,7 +196,7 @@ TEST(CompressionTests, ConfiguredCompressionPolicyUsesCompressionOptions) {
   EXPECT_EQ(compression.parameters.zstd.compressionLevel, 7);
 }
 
-TEST(CompressionTests, ConfiguredCompressionPolicyAcceptRatioOverride) {
+TEST(CompressionTests, configuredCompressionPolicyAcceptRatioOverride) {
   nimble::ConfiguredCompressionPolicy blockBitPackingPolicy{
       nimble::CompressionOptions{}, nimble::EncodingType::BlockBitPacking};
 
@@ -218,7 +218,7 @@ TEST(CompressionTests, ConfiguredCompressionPolicyAcceptRatioOverride) {
       /*compressedSize=*/80));
 }
 
-TEST(CompressionTests, MinCompresssionSizeIsApplied) {
+TEST(CompressionTests, minCompresssionSizeIsApplied) {
 #ifdef DISABLE_META_INTERNAL_COMPRESSOR
   GTEST_SKIP() << "The Meta internal compressor has no OSS implementation.";
 #endif

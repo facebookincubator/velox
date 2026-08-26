@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -32,20 +33,61 @@
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/Casts.h"
+#include "velox/common/EnumDeclare.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/DataTypeDispatch.h"
-#include "velox/dwio/nimble/common/Varint.h"
+#include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
-#include "velox/dwio/nimble/encodings/SharedDictionaryTypes.h"
+#include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 
 namespace facebook::nimble {
+
+/// Identifies where an alphabet is stored or resolved, and the dictionary id
+/// namespace to use. The scope controls both dictionary lifetime and whether
+/// the reader loads an in-stripe auxiliary stream, the file catalog, or an
+/// external catalog.
+enum class SharedDictionaryScope : uint8_t {
+  /// Alphabet is stored as an auxiliary stream in the current stripe, and its
+  /// dictionary id is local to that stripe.
+  Stripe = 0,
+  /// Alphabet is stored once in the file shared dictionary catalog, and its
+  /// dictionary id is local to that file. Value 1 is reserved so unknown
+  /// historical values remain invalid.
+  File = 2,
+  /// Alphabet is resolved from an external catalog, and its dictionary id is
+  /// interpreted by the configured resolver.
+  External = 3,
+};
+
+VELOX_DECLARE_ENUM_NAME(SharedDictionaryScope);
+
+inline SharedDictionaryScope toSharedDictionaryScope(uint8_t value) {
+  const auto scope = static_cast<SharedDictionaryScope>(value);
+  switch (scope) {
+    case SharedDictionaryScope::Stripe:
+    case SharedDictionaryScope::File:
+    case SharedDictionaryScope::External:
+      return scope;
+  }
+  NIMBLE_UNSUPPORTED(
+      "Unsupported shared dictionary scope {}.", static_cast<int>(value));
+}
+
+inline constexpr uint32_t kMaxSharedDictionarySize =
+    std::numeric_limits<uint32_t>::max();
+
+inline constexpr uint32_t kInvalidSharedDictionaryId =
+    std::numeric_limits<uint32_t>::max();
 
 namespace detail {
 
@@ -61,7 +103,11 @@ class FixedEncodingSelectionPolicy final : public EncodingSelectionPolicy<T> {
       std::span<const physicalType> /* values */,
       const Statistics<physicalType>& /* statistics */,
       const Encoding::Options& /* options */) final {
-    return {.encodingType = encodingType_};
+    return {
+        .encodingType = encodingType_,
+        .encodingConfig = {},
+        .estimatedSize = std::nullopt,
+    };
   }
 
   EncodingSelectionResult selectNullable(
@@ -120,7 +166,11 @@ class PreservedDictionaryEncodingSelectionPolicy final
       std::span<const physicalType> /* values */,
       const Statistics<physicalType>& /* statistics */,
       const Encoding::Options& /* options */) final {
-    return {.encodingType = EncodingType::Dictionary};
+    return {
+        .encodingType = EncodingType::Dictionary,
+        .encodingConfig = {},
+        .estimatedSize = std::nullopt,
+    };
   }
 
   EncodingSelectionResult selectNullable(
@@ -183,11 +233,15 @@ class PreservedDictionaryEncodingSelectionPolicy final
 /// the stream; the rest are decoded once into pool backed storage, so any
 /// encoding can store an alphabet. Alphabets stay uncompressed either way,
 /// because compression is invisible to supportsEncodingView() and would make
-/// that choice unreliable. Like every other Nimble encoding, the alphabet only
-/// views the encoded bytes, so the caller must keep them alive for as long as
-/// the alphabet is used.
+/// that choice unreliable.
 class SharedDictionaryAlphabet {
  public:
+  /// Creates an alphabet backed by bytes kept alive by encodedAlphabetOwner.
+  static std::shared_ptr<const SharedDictionaryAlphabet> create(
+      std::string_view encodedAlphabet,
+      std::shared_ptr<const void> encodedAlphabetOwner,
+      velox::memory::MemoryPool* pool);
+
   /// Serializes alphabet entries into the form the constructor accepts.
   ///
   /// candidateEncodings restricts the encoding selection policy. An empty list
@@ -229,38 +283,6 @@ class SharedDictionaryAlphabet {
     return estimate.value();
   }
 
-  /// Wraps a serialized alphabet in a view that reads entries by index.
-  SharedDictionaryAlphabet(
-      std::string_view encoded,
-      const Encoding::Options& options,
-      velox::memory::MemoryPool* pool)
-      : dataType_{EncodingPrefix::dataType(encoded)},
-        encodingType_{EncodingPrefix::encodingType(encoded)},
-        entryCount_{
-            EncodingPrefix::readRowCount(encoded, options.useVarintRowCount)},
-        entryPayload_{*velox::checkedNotNull(pool)},
-        entries_{nullptr},
-        entryView_{
-            supportsEncodingView(encodingType_)
-                ? createEncodingView(encoded, pool, options)
-                : nullptr} {
-    if (entryView_ != nullptr || entryCount_ == 0) {
-      return;
-    }
-    // No view for this encoding, so decode every entry once and serve lookups
-    // from the decoded buffer instead.
-    auto encoding = EncodingFactory{options}.create(
-        *pool, encoded, [this](uint32_t size) -> void* {
-          return entryPayload_.reserve(size);
-        });
-    NIMBLE_CHECK_EQ(
-        encoding->dataType(),
-        dataType_,
-        "Shared dictionary alphabet has an inconsistent data type.");
-    NIMBLE_DCHECK_EQ(encoding->rowCount(), entryCount_);
-    decodeEntries(*encoding, pool);
-  }
-
   /// Returns the Nimble data type shared by all alphabet entries.
   DataType dataType() const {
     return dataType_;
@@ -277,14 +299,9 @@ class SharedDictionaryAlphabet {
     return encodingType_;
   }
 
-  /// Testing hook: true when lookups read directly from an EncodingView.
-  bool testingUsesEncodingView() const {
-    return entryView_ != nullptr;
-  }
-
-  /// Testing hook: true when lookups read from entries decoded up front.
-  bool testingUsesDecodedEntries() const {
-    return entries_ != nullptr;
+  /// Returns the encoded alphabet stream passed to create().
+  std::string_view encodedAlphabet() const {
+    return encodedAlphabet_;
   }
 
   /// Returns the entry stored at index. T must match dataType().
@@ -321,7 +338,31 @@ class SharedDictionaryAlphabet {
     }
   }
 
+  /// Copies every entry into output in alphabet order. T must match dataType().
+  template <typename T>
+  void materializeAll(Vector<T>& output) const {
+    checkEntryType<T>();
+    output.resize(entryCount_);
+    if (entryCount_ == 0) {
+      return;
+    }
+    auto physicalOutput = EncodingPhysicalType<T>::asEncodingPhysicalTypeSpan(
+        std::span<T>{output.data(), output.size()});
+    if (entryView_ != nullptr) {
+      entryView_->read(/*offset=*/0, entryCount_, physicalOutput.data());
+      return;
+    }
+    const auto entries = decodedEntries<T>();
+    std::copy(entries.begin(), entries.end(), physicalOutput.begin());
+  }
+
  private:
+  SharedDictionaryAlphabet(
+      std::string_view encoded,
+      const Encoding::Options& options,
+      std::shared_ptr<const void> encodedAlphabetOwner,
+      velox::memory::MemoryPool* pool);
+
   void decodeEntries(Encoding& encoding, velox::memory::MemoryPool* pool) {
     NIMBLE_RETURN_BY_DATA_TYPE_OR(
         // The macro's default case handles Undefined.
@@ -395,9 +436,12 @@ class SharedDictionaryAlphabet {
         "Shared dictionary alphabet has unexpected type.");
   }
 
+  // Keeps borrowed encoded bytes alive when create() receives an owner.
+  const std::shared_ptr<const void> encodedAlphabetOwner_;
+  const std::string_view encodedAlphabet_;
   const DataType dataType_;
   const EncodingType encodingType_;
-  const uint32_t entryCount_;
+  uint32_t entryCount_{0};
   // entryView_ and entries_ are mutually exclusive lookup modes. entryPayload_
   // is used by decoded entry storage when variable-width values in entries_
   // need owned payload bytes.
@@ -409,8 +453,9 @@ class SharedDictionaryAlphabet {
   const std::unique_ptr<EncodingView> entryView_;
 };
 
-/// The layout for a shared dictionary encoding is:
-/// Encoding prefix, one-byte scope, varint dictionary ID, encoded indices.
+/// The layout for a shared dictionary encoding is an encoding prefix followed
+/// by encoded indices. The value stream's catalog binding supplies the
+/// alphabet.
 template <typename T>
 class SharedDictionaryEncoding
     : public TypedEncoding<T, typename TypeTraits<T>::physicalType> {
@@ -459,17 +504,16 @@ class SharedDictionaryEncoding
     return alphabet_->entryCount();
   }
 
-  SharedDictionaryScope scope() const {
-    return scope_;
-  }
-
-  uint32_t dictionaryId() const {
-    return dictionaryId_;
-  }
-
   static std::string_view encode(
-      EncodingSelection<physicalType>& selection,
+      std::span<const uint32_t> indices,
+      const EncodingSelectionPolicyCreator& nestedPolicyCreator,
+      Buffer& buffer,
+      const Encoding::Options& options = {});
+
+  static std::string_view encodeNullable(
+      EncodingSelection<physicalType>&& selection,
       std::span<const physicalType> values,
+      std::span<const bool> nulls,
       Buffer& buffer,
       const Encoding::Options& options = {});
 
@@ -483,11 +527,9 @@ class SharedDictionaryEncoding
   std::string debugString(int offset) const final;
 
  private:
-  static constexpr uint32_t kScopeSize = sizeof(uint8_t);
-
   static std::string_view encodeIndices(
-      EncodingSelection<physicalType>& selection,
       std::span<const uint32_t> indices,
+      const EncodingSelectionPolicyCreator& nestedPolicyCreator,
       Buffer& buffer,
       const Encoding::Options& options = {});
 
@@ -515,8 +557,6 @@ class SharedDictionaryEncoding
     return indicesBuffer_->asMutable<uint32_t>();
   }
 
-  SharedDictionaryScope scope_;
-  uint32_t dictionaryId_;
   std::shared_ptr<const SharedDictionaryAlphabet> alphabet_;
   std::unique_ptr<Encoding> indicesEncoding_;
   velox::BufferPtr indicesBuffer_;
@@ -530,24 +570,22 @@ SharedDictionaryEncoding<T>::SharedDictionaryEncoding(
     const Encoding::Options& options)
     : TypedEncoding<T, physicalType>{pool, data, options} {
   static_assert(isIntegralType<T>() && !std::is_same_v<T, bool>);
-  NIMBLE_CHECK_NOT_NULL(options.sharedDictionaryResolver);
+  NIMBLE_CHECK_NOT_NULL(
+      options.sharedDictionaryAlphabet,
+      "Shared dictionary encoding requires an alphabet.");
 
   const char* pos = data.data() + this->dataOffset();
-  scope_ = readSharedDictionaryScope(data, pos);
-  dictionaryId_ = readSharedDictionaryId(data, pos);
   const auto indicesOffset = static_cast<size_t>(pos - data.data());
   NIMBLE_CHECK_LT(
       indicesOffset,
       data.size(),
       "Shared dictionary encoding is missing its indices.");
-  alphabet_ = options.sharedDictionaryResolver->resolve(
-      scope_, dictionaryId_, TypeTraits<T>::dataType);
+  alphabet_ = options.sharedDictionaryAlphabet;
   NIMBLE_CHECK_NOT_NULL(alphabet_);
   NIMBLE_CHECK_EQ(
       alphabet_->dataType(),
       TypeTraits<T>::dataType,
-      "Shared dictionary {} has unexpected type.",
-      dictionaryId_);
+      "Shared dictionary alphabet has unexpected type.");
 
   indicesEncoding_ = EncodingFactory().create(
       *this->pool_,
@@ -609,36 +647,22 @@ void SharedDictionaryEncoding<T>::readWithVisitor(
 
 template <typename T>
 std::string_view SharedDictionaryEncoding<T>::encode(
-    EncodingSelection<physicalType>& selection,
-    std::span<const physicalType> values,
+    std::span<const uint32_t> indices,
+    const EncodingSelectionPolicyCreator& nestedPolicyCreator,
     Buffer& buffer,
     const Encoding::Options& options) {
   static_assert(isIntegralType<T>() && !std::is_same_v<T, bool>);
-  const auto sharedDictionaryInput = selection.sharedDictionaryInput();
-  NIMBLE_CHECK(
-      sharedDictionaryInput.has_value(),
-      "Shared dictionary encoding requires input from selection.");
-  NIMBLE_CHECK_EQ(
-      sharedDictionaryInput->indices.size(),
-      values.size(),
-      "Shared dictionary index count differs from value count.");
-  NIMBLE_CHECK_NE(
-      sharedDictionaryInput->dictionaryId,
-      kInvalidSharedDictionaryId,
-      "Shared dictionary encoding requires a valid dictionary id.");
 
   ScopedEncodingBuffer scopedBuffer{
       &buffer.getMemoryPool(), options.encodingBufferPool};
-  const auto encodedIndices = encodeIndices(
-      selection, sharedDictionaryInput->indices, scopedBuffer.get(), options);
+  const auto encodedIndices =
+      encodeIndices(indices, nestedPolicyCreator, scopedBuffer.get(), options);
 
-  const auto rowCount =
-      static_cast<uint32_t>(sharedDictionaryInput->indices.size());
-  const auto dictionaryId = sharedDictionaryInput->dictionaryId;
+  const auto rowCount = static_cast<uint32_t>(indices.size());
   const uint64_t encodingSize =
       static_cast<uint64_t>(
           Encoding::serializePrefixSize(rowCount, options.useVarintRowCount)) +
-      kScopeSize + varint::varintSize(dictionaryId) + encodedIndices.size();
+      encodedIndices.size();
   char* reserved = buffer.reserve(encodingSize);
   char* pos = reserved;
   Encoding::serializePrefix(
@@ -647,9 +671,6 @@ std::string_view SharedDictionaryEncoding<T>::encode(
       rowCount,
       options.useVarintRowCount,
       pos);
-  encoding::write<uint8_t>(
-      static_cast<uint8_t>(sharedDictionaryInput->scope), pos);
-  varint::writeVarint(dictionaryId, &pos);
   encoding::writeBytes(encodedIndices, pos);
   NIMBLE_CHECK_EQ(
       static_cast<uint64_t>(pos - reserved),
@@ -660,9 +681,37 @@ std::string_view SharedDictionaryEncoding<T>::encode(
 }
 
 template <typename T>
+std::string_view SharedDictionaryEncoding<T>::encodeNullable(
+    EncodingSelection<physicalType>&& selection,
+    std::span<const physicalType> values,
+    std::span<const bool> nulls,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  static_assert(isIntegralType<T>() && !std::is_same_v<T, bool>);
+
+  auto nullsPolicy = selection.template createNestedPolicy<bool>(
+      EncodingType::Nullable, EncodingIdentifiers::Nullable::Nulls);
+  NIMBLE_CHECK_NOT_NULL(nullsPolicy);
+  auto typedNullsPolicy = std::unique_ptr<EncodingSelectionPolicy<bool>>(
+      static_cast<EncodingSelectionPolicy<bool>*>(nullsPolicy.release()));
+  auto* pool = &buffer.getMemoryPool();
+  ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
+  const auto serializedValues = EncodingFactory::encode<T>(
+      std::move(selection), values, scopedBuffer.get(), options);
+  const auto serializedNulls = EncodingFactory::encode<bool>(
+      std::move(typedNullsPolicy), nulls, scopedBuffer.get(), options);
+  return NullableEncoding<T>::encodeNullable(
+      static_cast<uint32_t>(nulls.size()),
+      serializedValues,
+      serializedNulls,
+      buffer,
+      options);
+}
+
+template <typename T>
 std::string_view SharedDictionaryEncoding<T>::encodeIndices(
-    EncodingSelection<physicalType>& selection,
     std::span<const uint32_t> indices,
+    const EncodingSelectionPolicyCreator& nestedPolicyCreator,
     Buffer& buffer,
     const Encoding::Options& options) {
   static_assert(isIntegralType<T>() && !std::is_same_v<T, bool>);
@@ -670,8 +719,17 @@ std::string_view SharedDictionaryEncoding<T>::encodeIndices(
       indices.size(),
       kMaxSharedDictionarySize,
       "Shared dictionary index count exceeds maximum.");
-  return selection.template encodeNested<uint32_t>(
-      EncodingIdentifiers::SharedDictionary::Indices, indices, buffer, options);
+  NIMBLE_CHECK_NOT_NULL(
+      nestedPolicyCreator,
+      "Shared dictionary encoding requires nested policy creator.");
+  auto policy = nestedPolicyCreator(DataType::Uint32);
+  NIMBLE_CHECK_NOT_NULL(policy);
+  return EncodingFactory::encode<uint32_t>(
+      std::unique_ptr<EncodingSelectionPolicy<uint32_t>>(
+          static_cast<EncodingSelectionPolicy<uint32_t>*>(policy.release())),
+      indices,
+      buffer,
+      options);
 }
 
 template <typename T>
@@ -688,11 +746,11 @@ std::string_view SharedDictionaryEncoding<T>::slice(
   NIMBLE_CHECK_LE(length, sourceRowCount - offset);
   NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
 
-  NIMBLE_CHECK_NOT_NULL(options.sharedDictionaryResolver);
+  NIMBLE_CHECK_NOT_NULL(
+      options.sharedDictionaryAlphabet,
+      "Shared dictionary slicing requires an alphabet.");
   const char* pos = encoded.data() +
       EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
-  const auto scope = readSharedDictionaryScope(encoded, pos);
-  const auto dictionaryId = readSharedDictionaryId(encoded, pos);
   const auto indicesOffset = static_cast<size_t>(pos - encoded.data());
   NIMBLE_CHECK_LT(
       indicesOffset,
@@ -700,14 +758,12 @@ std::string_view SharedDictionaryEncoding<T>::slice(
       "Shared dictionary encoding is missing its indices.");
   const std::string_view encodedIndices{pos, encoded.size() - indicesOffset};
 
-  const auto alphabet = options.sharedDictionaryResolver->resolve(
-      scope, dictionaryId, TypeTraits<T>::dataType);
+  const auto alphabet = options.sharedDictionaryAlphabet;
   NIMBLE_CHECK_NOT_NULL(alphabet);
   NIMBLE_CHECK_EQ(
       alphabet->dataType(),
       TypeTraits<T>::dataType,
-      "Shared dictionary {} has unexpected type.",
-      dictionaryId);
+      "Shared dictionary alphabet has unexpected type.");
 
   return encodeMaterializedDictionarySlice(
       *alphabet, encodedIndices, offset, length, buffer, options);
@@ -841,14 +897,30 @@ std::string_view SharedDictionaryEncoding<T>::encodeMaterializedDictionarySlice(
 template <typename T>
 std::string SharedDictionaryEncoding<T>::debugString(int offset) const {
   return fmt::format(
-      "{}\n{}scope={} dictionaryId={} entries={}\n{}indices child:\n{}",
+      "{}\n{}entries={}\n{}indices child:\n{}",
       Encoding::debugString(offset),
       std::string(offset + 2, ' '),
-      scope_,
-      dictionaryId_,
       dictionarySize(),
       std::string(offset, ' '),
       indicesEncoding_->debugString(offset + 2));
 }
 
 } // namespace facebook::nimble
+
+template <>
+struct fmt::formatter<facebook::nimble::SharedDictionaryScope>
+    : fmt::formatter<std::string_view> {
+  auto format(
+      facebook::nimble::SharedDictionaryScope scope,
+      format_context& ctx) const {
+    switch (scope) {
+      case facebook::nimble::SharedDictionaryScope::Stripe:
+      case facebook::nimble::SharedDictionaryScope::File:
+      case facebook::nimble::SharedDictionaryScope::External:
+        return fmt::formatter<std::string_view>::format(
+            facebook::nimble::SharedDictionaryScopeName::toName(scope), ctx);
+    }
+    return fmt::formatter<std::string_view>::format(
+        fmt::format("Unknown({})", static_cast<int>(scope)), ctx);
+  }
+};

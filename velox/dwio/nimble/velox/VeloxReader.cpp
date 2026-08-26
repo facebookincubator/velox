@@ -14,14 +14,19 @@
  * limitations under the License.
  */
 #include "velox/dwio/nimble/velox/VeloxReader.h"
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
+#include "fmt/core.h"
+#include "folly/container/F14Map.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/common/OnDemandUnitLoader.h"
 #include "velox/dwio/common/UnitLoader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/velox/ChunkedStreamDecoder.h"
 #include "velox/dwio/nimble/velox/MetadataGenerated.h"
@@ -62,19 +67,29 @@ std::map<std::string, std::string> loadMetadata(
   return result;
 }
 
+Encoding::Options encodingOptions(const TabletReader& tabletReader) {
+  Encoding::Options options;
+  options.useVarintRowCount =
+      tabletReader.properties().compactRowCountEncoding();
+  return options;
+}
+
 class NimbleUnit : public velox::dwio::common::LoadUnit {
  public:
   NimbleUnit(
       uint32_t stripeId,
       const TabletReader& tabletReader,
       std::shared_ptr<const Type> schema,
-      std::shared_ptr<StreamLabels> streamLabels,
-      const std::vector<uint32_t>& streamIdentifiers)
+      std::shared_ptr<StreamLabels> valueStreamLabels,
+      const std::vector<uint32_t>& valueStreamIdentifiers)
       : tabletReader_{tabletReader},
         schema_{std::move(schema)},
-        streamLabels_{std::move(streamLabels)},
+        valueStreamLabels_{std::move(valueStreamLabels)},
         stripeId_{stripeId},
-        streamIdentifiers_{streamIdentifiers} {}
+        valueStreamIdentifiers_{valueStreamIdentifiers},
+        loadStreamIdentifiers_{valueStreamIdentifiers} {
+    addDictionaryStreams();
+  }
 
   // Perform the IO (read)
   void load() override;
@@ -94,16 +109,29 @@ class NimbleUnit : public velox::dwio::common::LoadUnit {
     return std::move(streamLoaders_);
   }
 
+  const folly::F14FastMap<uint32_t, uint32_t>& dictionaryStreamIds() const {
+    return dictionaryStreamIds_;
+  }
+
   const StripeLoadMetrics& getMetrics() const {
     return metrics_;
   }
 
  private:
+  // Appends projected dictionary streams.
+  void addDictionaryStreams();
+
   const TabletReader& tabletReader_;
   std::shared_ptr<const Type> schema_;
-  std::shared_ptr<StreamLabels> streamLabels_;
+  std::shared_ptr<StreamLabels> valueStreamLabels_;
   uint32_t stripeId_;
-  const std::vector<uint32_t>& streamIdentifiers_;
+  const std::vector<uint32_t>& valueStreamIdentifiers_;
+  // Projected value streams followed by auxiliary stripe dictionary streams.
+  std::vector<uint32_t> loadStreamIdentifiers_;
+  // Projected value stream IDs mapped to auxiliary dictionary stream IDs.
+  folly::F14FastMap<uint32_t, uint32_t> dictionaryStreamIds_;
+  // Dictionary stream labels keyed by auxiliary dictionary stream ID.
+  folly::F14FastMap<uint32_t, std::string> dictionaryStreamLabels_;
 
   // Lazy
   std::optional<uint64_t> ioSize_;
@@ -114,6 +142,35 @@ class NimbleUnit : public velox::dwio::common::LoadUnit {
   StripeLoadMetrics metrics_;
 };
 
+void NimbleUnit::addDictionaryStreams() {
+  NIMBLE_CHECK_EQ(
+      loadStreamIdentifiers_.size(),
+      valueStreamIdentifiers_.size(),
+      "Load streams must initially match projected streams.");
+  if (!tabletReader_.hasStripeDictionaries()) {
+    return;
+  }
+  NIMBLE_CHECK(dictionaryStreamIds_.empty());
+  dictionaryStreamIds_ =
+      tabletReader_.stripeDictionaryStreamIds(valueStreamIdentifiers_);
+  if (dictionaryStreamIds_.empty()) {
+    return;
+  }
+  size_t dictionaryLoaderIndex = loadStreamIdentifiers_.size();
+  const auto dictionaryStreamCount = dictionaryStreamIds_.size();
+  loadStreamIdentifiers_.resize(dictionaryLoaderIndex + dictionaryStreamCount);
+  for (const auto& entry : dictionaryStreamIds_) {
+    // TODO: Deduplicate equal dictionary stream IDs if value streams are
+    // allowed to share a stripe dictionary.
+    loadStreamIdentifiers_[dictionaryLoaderIndex++] = entry.second;
+    dictionaryStreamLabels_.emplace(
+        entry.second,
+        fmt::format(
+            "shared dictionary for {}",
+            valueStreamLabels_->streamLabel(entry.first)));
+  }
+}
+
 void NimbleUnit::load() {
   velox::CpuWallTiming timing{};
   {
@@ -123,9 +180,14 @@ void NimbleUnit::load() {
     }
     streamLoaders_ = tabletReader_.load(
         stripeIdentifier_.value(),
-        streamIdentifiers_,
-        [this](offset_size offset) {
-          return streamLabels_->streamLabel(offset);
+        loadStreamIdentifiers_,
+        [this](offset_size offset) -> std::string_view {
+          const auto dictionaryIt =
+              dictionaryStreamLabels_.find(static_cast<uint32_t>(offset));
+          if (dictionaryIt != dictionaryStreamLabels_.end()) {
+            return dictionaryIt->second;
+          }
+          return valueStreamLabels_->streamLabel(offset);
         });
   }
   metrics_.cpuUsec = timing.cpuNanos / 1000;
@@ -145,19 +207,21 @@ uint64_t NimbleUnit::getIoSize() {
     stripeIdentifier_ = tabletReader_.stripeIdentifier(stripeId_);
   }
   ioSize_ = tabletReader_.totalStreamSize(
-      stripeIdentifier_.value(), streamIdentifiers_);
+      stripeIdentifier_.value(), loadStreamIdentifiers_);
   return ioSize_.value();
 }
 
-// Default `TabletReader::Options` used by `VeloxReader`'s convenience
-// constructors: preload the schema section and attach a fresh `IoStatistics`.
-TabletReader::Options defaultTabletReaderOptions(
-    velox::memory::MemoryPool* pool) {
+// Builds `TabletReader::Options` for `VeloxReader`'s convenience constructors.
+TabletReader::Options tabletReaderOptions(
+    velox::memory::MemoryPool* pool,
+    std::shared_ptr<const ExternalDictionaryResolver>
+        externalDictionaryResolver) {
   TabletReader::Options options;
   options.preloadOptionalSections = {std::string(kSchemaSection)};
   options.ioOptions.emplace(pool)
       .setMetadataIoStats(std::make_shared<velox::io::IoStatistics>())
       .setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
+  options.externalDictionaryResolver = std::move(externalDictionaryResolver);
   return options;
 }
 
@@ -167,29 +231,29 @@ VeloxReader::VeloxReader(
     velox::ReadFile* file,
     velox::memory::MemoryPool& pool,
     std::shared_ptr<const velox::dwio::common::ColumnSelector> selector,
-    VeloxReadParams params)
+    const VeloxReadParams& params)
     : VeloxReader(
           TabletReader::create(
               std::shared_ptr<velox::ReadFile>(file, [](auto*) {}),
               &pool,
-              defaultTabletReaderOptions(&pool)),
+              tabletReaderOptions(&pool, params.externalDictionaryResolver)),
           pool,
           std::move(selector),
-          std::move(params)) {}
+          params) {}
 
 VeloxReader::VeloxReader(
     std::shared_ptr<velox::ReadFile> file,
     velox::memory::MemoryPool& pool,
     std::shared_ptr<const velox::dwio::common::ColumnSelector> selector,
-    VeloxReadParams params)
+    const VeloxReadParams& params)
     : VeloxReader(
           TabletReader::create(
               std::move(file),
               &pool,
-              defaultTabletReaderOptions(&pool)),
+              tabletReaderOptions(&pool, params.externalDictionaryResolver)),
           pool,
           std::move(selector),
-          std::move(params)) {}
+          params) {}
 
 VeloxReader::VeloxReader(
     std::shared_ptr<const TabletReader> tabletReader,
@@ -296,6 +360,46 @@ void VeloxReader::loadStripeIfAny() {
   }
 }
 
+VeloxReadParams::StreamEncodingFactory VeloxReader::createStreamEncodingFactory(
+    uint32_t valueStreamId,
+    std::unique_ptr<StreamLoader> dictionaryStream) const {
+  if (dictionaryStream == nullptr &&
+      !tabletReader_->hasFileOrExternalDictionaries()) {
+    return parameters_.encodingFactory;
+  }
+
+  std::shared_ptr<const SharedDictionaryAlphabet> dictionaryAlphabet;
+  if (dictionaryStream == nullptr) {
+    dictionaryAlphabet =
+        tabletReader_->resolveDictionaryAlphabet(valueStreamId);
+    if (dictionaryAlphabet == nullptr) {
+      return parameters_.encodingFactory;
+    }
+  }
+
+  // Match the selective reader path: resolve the per-stream alphabet directly
+  // when the first chunk is decoded. Streams with dictionary bindings are
+  // written consistently as shared-dictionary streams.
+  return [dictionaryStreamOwner =
+              std::shared_ptr<const StreamLoader>{std::move(dictionaryStream)},
+          _dictionaryAlphabet = std::move(dictionaryAlphabet),
+          options = encodingOptions(*tabletReader_)](
+             velox::memory::MemoryPool& pool,
+             std::string_view data,
+             std::function<void*(uint32_t)> stringBufferFactory) mutable {
+    if (_dictionaryAlphabet == nullptr) {
+      NIMBLE_CHECK_NOT_NULL(
+          dictionaryStreamOwner,
+          "Shared dictionary requires a stripe dictionary stream.");
+      _dictionaryAlphabet = SharedDictionaryAlphabet::create(
+          dictionaryStreamOwner->getStream(), dictionaryStreamOwner, &pool);
+    }
+    options.sharedDictionaryAlphabet = _dictionaryAlphabet;
+    return EncodingFactory().create(
+        pool, data, std::move(stringBufferFactory), options);
+  };
+}
+
 void VeloxReader::loadNextStripe() {
   if (loadedStripe_.has_value() && loadedStripe_.value() == nextStripe_) {
     // We are not reloading the current stripe, but we expect all
@@ -328,9 +432,20 @@ void VeloxReader::loadNextStripe() {
       metrics.totalStreamSize = nimbleUnit->getIoSize();
 
       auto streams = nimbleUnit->extractStreamLoaders();
-      decoders_.reserve(streams.size());
-      for (uint32_t i = 0; i < streams.size(); ++i) {
-        if (!streams[i]) {
+      const auto& dictionaryStreamIds = nimbleUnit->dictionaryStreamIds();
+      NIMBLE_CHECK_GE(streams.size(), offsets_.size());
+      folly::F14FastMap<uint32_t, uint32_t> dictionaryLoaderIndices;
+      if (!dictionaryStreamIds.empty()) {
+        dictionaryLoaderIndices.reserve(dictionaryStreamIds.size());
+        uint32_t dictionaryLoaderIndex = static_cast<uint32_t>(offsets_.size());
+        for (const auto& entry : dictionaryStreamIds) {
+          dictionaryLoaderIndices.emplace(entry.first, dictionaryLoaderIndex++);
+        }
+      }
+      decoders_.reserve(offsets_.size());
+      for (uint32_t i = 0; i < offsets_.size(); ++i) {
+        auto& stream = streams.at(i);
+        if (stream == nullptr) {
           // As this stream is not present in current stripe (might be present
           // in previous one) we set to nullptr, One of the case is where you
           // are projecting more fields in FlatMap than the stripe actually
@@ -338,11 +453,19 @@ void VeloxReader::loadNextStripe() {
           decoders_[offsets_[i]] = nullptr;
         } else {
           ++metrics.streamCount;
+          std::unique_ptr<StreamLoader> dictionaryStream;
+          const auto dictionaryIt = dictionaryLoaderIndices.find(offsets_[i]);
+          if (dictionaryIt != dictionaryLoaderIndices.end()) {
+            // Direct-encoded stripes can omit the dictionary stream even when
+            // the value stream has a stripe dictionary binding.
+            dictionaryStream = std::move(streams.at(dictionaryIt->second));
+          }
+          auto streamEncodingFactory = createStreamEncodingFactory(
+              offsets_[i], std::move(dictionaryStream));
           auto decoder = std::make_unique<ChunkedStreamDecoder>(
               pool_,
-              std::make_unique<InMemoryChunkedStream>(
-                  pool_, std::move(streams[i])),
-              parameters_.encodingFactory,
+              std::make_unique<InMemoryChunkedStream>(pool_, std::move(stream)),
+              std::move(streamEncodingFactory),
               parameters_.optimizeStringBufferHandling,
               *logger_);
           decoder->ensureLoaded();
@@ -543,11 +666,11 @@ std::unique_ptr<velox::dwio::common::UnitLoader> VeloxReader::getUnitLoader() {
 
   std::vector<std::unique_ptr<velox::dwio::common::LoadUnit>> units;
   units.reserve(lastStripe_ - firstStripe_);
-  const auto streamLabels = std::make_shared<StreamLabels>(schema_);
+  const auto valueStreamLabels = std::make_shared<StreamLabels>(schema_);
   for (uint32_t stripe = firstStripe_; stripe < lastStripe_; ++stripe) {
     units.push_back(
         std::make_unique<NimbleUnit>(
-            stripe, *tabletReader_, schema_, streamLabels, offsets_));
+            stripe, *tabletReader_, schema_, valueStreamLabels, offsets_));
   }
 
   if (parameters_.unitLoaderFactory) {

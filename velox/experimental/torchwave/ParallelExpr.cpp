@@ -16,12 +16,15 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <ranges>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -29,10 +32,12 @@
 #include <vector>
 
 #include <c10/core/MemoryFormat.h>
+#include <c10/core/ScalarType.h>
 #include <fmt/format.h>
 #include <folly/CppAttributes.h>
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 
 #include "velox/experimental/torchwave/ParallelExpr.h"
 
@@ -1125,6 +1130,572 @@ int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types) {
     LOG(INFO) << "pre-partition clone pass: elided " << elided << " clone(s)";
   }
   return elided;
+}
+
+namespace {
+
+// Appends 'text' as a length-prefixed token. The punctuation cseKey separates
+// its fields with also occurs inside the fields: constantToString renders a
+// string attribute, a device or a list with commas, brackets and equals signs
+// of its own. Concatenated raw, two different nodes could spell the same key
+// and be merged, which rewires readers to the wrong buffer -- a wrong result
+// rather than a missed optimization. A length prefix removes the ambiguity
+// without having to escape anything.
+void appendToken(std::string& key, std::string_view text) {
+  key += std::to_string(text.size());
+  key += ':';
+  key += text;
+}
+
+// Identity of a node for common-subexpression purposes: op, operands in order,
+// attributes, output arity. Output ids are deliberately absent -- they are what
+// a merge rewrites. Empty for a node that must never be merged: one carrying a
+// subgraph attribute, which has no value rendering to compare.
+std::string cseKey(NodeCP node) {
+  std::string key;
+  appendToken(key, node->target());
+  key += '(';
+  for (const auto& input : node->inputs()) {
+    appendToken(key, input.name);
+    key += '=';
+    // An id is digits only, so it needs no length prefix to stay unambiguous.
+    key += input.value != nullptr ? std::to_string(input.value->id()) : "null";
+    key += ',';
+  }
+  // Attribute order is not part of a node's identity, so compare them sorted.
+  // Sorting the already-tokenized rendering keeps the order canonical; which
+  // total order it is does not matter, only that it is deterministic.
+  std::vector<std::string> attrs;
+  attrs.reserve(node->attributes().size());
+  for (const auto& attr : node->attributes()) {
+    if (std::holds_alternative<std::unique_ptr<nativert::Graph>>(attr.value)) {
+      return {};
+    }
+    std::string rendered;
+    appendToken(rendered, attr.name);
+    rendered += '=';
+    appendToken(rendered, constantToString(attr.value));
+    attrs.push_back(std::move(rendered));
+  }
+  std::sort(attrs.begin(), attrs.end());
+  for (const auto& attr : attrs) {
+    key += attr;
+    key += ',';
+  }
+  key += ')';
+  key += std::to_string(node->outputs().size());
+  return key;
+}
+
+// A node is mergeable with an identical one when it is a pure function of its
+// operands. It must write nothing, and no operand's storage may be written
+// anywhere in the graph: a read is interchangeable with an earlier read only if
+// nothing modified the buffer in between, and this pass compares identity, not
+// position. An output that escapes as a graph output is left alone for the same
+// reason clone elision leaves it alone -- the caller would be handed a buffer
+// that other values also read.
+bool cseEligible(
+    NodeCP node,
+    const ValueTypes& types,
+    const folly::F14FastSet<ValueCP>& mutatedBases,
+    bool cseViews,
+    bool cseCompute) {
+  if (node->outputs().empty() || !dataMutatedInputs(node).empty() ||
+      inPlaceSelf(node) != nullptr) {
+    return false;
+  }
+  for (const auto* out : node->outputs()) {
+    if (out == nullptr || types.graphOutput(out)) {
+      return false;
+    }
+    // An output written in place somewhere later is no more interchangeable
+    // than a mutated operand: the survivor's buffer is not what the duplicate's
+    // readers expect once the write has run. The operand loop below does not
+    // cover it, because the write names the output of this node rather than
+    // anything this node reads.
+    if (mutatedBases.count(viewStorageBase(out)) > 0) {
+      return false;
+    }
+    // A TensorList's elements are the outputs of its sole prim.ListUnpack user,
+    // an invariant getListElements asserts on. Merging two list producers
+    // leaves the survivor's list with two users -- its own unpack and the
+    // dup's, which is dead but still counted -- and the next caller to ask for
+    // its elements throws. Sound merging here needs the dead unpack removed,
+    // which this pass does not do.
+    if (out->type().kind() == nativert::Type::Kind::TensorList) {
+      return false;
+    }
+  }
+  for (const auto& input : node->inputs()) {
+    if (input.value == nullptr ||
+        mutatedBases.count(viewStorageBase(input.value)) > 0) {
+      return false;
+    }
+  }
+  const Metadata* meta = Registry::metadata(node->target());
+  return (meta != nullptr && meta->isView()) ? cseViews : cseCompute;
+}
+
+// Points every reader of 'from' at 'to'.
+//
+// Graph::replaceAllUses walks the user list and TORCH_CHECKs that
+// Graph::replace found something to swap in every entry, which two things
+// break. A node reading the value in two argument positions is listed twice,
+// and replace swaps both occurrences on the first visit, so the second visit
+// finds nothing. And the list holds stale entries: nodes an earlier merge
+// repointed without the entry being dropped. Both are common once views merge,
+// where cat(t, t) and chains of repointed readers are the rule rather than the
+// exception. Normalizing the list to the nodes that really do read the value,
+// once each, is what makes the call safe.
+void replaceReaders(nativert::Graph& graph, ValueCP from, nativert::Value* to) {
+  auto* value = const_cast<nativert::Value*>(from);
+  std::vector<nativert::Node*> readers;
+  readers.reserve(value->users().size());
+  for (auto* user : value->users()) {
+    bool reads = false;
+    for (const auto& input : user->inputs()) {
+      if (input.value == value) {
+        reads = true;
+        break;
+      }
+    }
+    if (!reads) {
+      continue;
+    }
+    if (std::find(readers.begin(), readers.end(), user) == readers.end()) {
+      readers.push_back(user);
+    }
+  }
+  if (readers.size() != value->users().size()) {
+    // eraseUser drops every occurrence of a node, so clearing and re-adding
+    // leaves exactly the real readers, one entry apiece.
+    std::vector<nativert::Node*> current(
+        value->users().begin(), value->users().end());
+    for (auto* user : current) {
+      value->eraseUser(user);
+    }
+    for (auto* user : readers) {
+      value->addUser(user);
+    }
+  }
+  graph.replaceAllUses(value, to);
+}
+
+// Points every reader of 'dup's outputs at the matching output of 'keeper',
+// then offers each survivor to 'push' so consumers that only became congruent
+// through this merge get revisited. Returns false, having changed nothing, when
+// the two disagree on output arity: equal cseKeys make that impossible for
+// nodes of the same op, so it means they were never really congruent.
+bool mergeCseNode(
+    nativert::Graph& graph,
+    NodeCP keeper,
+    NodeCP dup,
+    const std::function<void(ValueCP)>& push) {
+  const auto& from = dup->outputs();
+  const auto& to = keeper->outputs();
+  if (from.size() != to.size()) {
+    return false;
+  }
+  // No TensorList output reaches here: cseEligible rejects any node that has
+  // one, so there are never element ids to remap alongside the list value.
+  for (size_t i = 0; i < from.size(); ++i) {
+    replaceReaders(graph, from[i], const_cast<nativert::Value*>(to[i]));
+    push(to[i]);
+  }
+  return true;
+}
+
+} // namespace
+
+int64_t commonSubexpressions(nativert::Graph& graph, const ValueTypes& types) {
+  const bool cseViews = WaveConfig::get().cseViews;
+  const bool cseCompute = WaveConfig::get().cseCompute;
+  if (!cseViews && !cseCompute) {
+    return 0;
+  }
+
+  folly::F14FastSet<ValueCP> mutatedBases;
+  for (const auto& node : graph.nodes()) {
+    for (auto* mutated : dataMutatedInputs(&node)) {
+      if (mutated != nullptr) {
+        mutatedBases.insert(viewStorageBase(mutated));
+      }
+    }
+  }
+
+  std::deque<ValueCP> work;
+  folly::F14FastSet<ValueCP> queued;
+  auto push = [&](ValueCP value) {
+    if (value != nullptr && queued.insert(value).second) {
+      work.push_back(value);
+    }
+  };
+
+  // Program order of every node. The survivor of a merge has to be the earlier
+  // of the two: keeping the later one would leave the earlier one's consumers
+  // reading a value produced after them, which makeParallelNodes rejects. User
+  // lists are not in program order, so the first candidate a bucket sees is not
+  // necessarily the first in the graph.
+  folly::F14FastMap<NodeCP, size_t> order;
+  {
+    size_t index = 0;
+    for (const auto& node : graph.nodes()) {
+      order.emplace(&node, index++);
+    }
+  }
+
+  int64_t merged = 0;
+  auto mergeBucket = [&](folly::F14FastMap<std::string, NodeCP>& firstOf,
+                         NodeCP node) {
+    auto key = cseKey(node);
+    if (key.empty()) {
+      return;
+    }
+    // A value in this graph can be read by a node in a variant subgraph, which
+    // shows up in users() but is not in this graph's node list. Those are not
+    // ours to merge or to order.
+    if (!order.contains(node)) {
+      return;
+    }
+    auto [it, isNew] = firstOf.emplace(key, node);
+    if (isNew) {
+      return;
+    }
+    NodeCP keeper = it->second;
+    NodeCP dup = node;
+    if (order.at(dup) < order.at(keeper)) {
+      std::swap(keeper, dup);
+    }
+    if (mergeCseNode(graph, keeper, dup, push)) {
+      it->second = keeper;
+      ++merged;
+    }
+  };
+
+  // A node with no operands appears in no user list, so nothing would ever
+  // bring two of them together; bucket those once up front. Factory ops
+  // (aten.zeros and friends) are the case that matters.
+  {
+    folly::F14FastMap<std::string, NodeCP> firstOf;
+    for (const auto& node : graph.nodes()) {
+      if (node.inputs().empty() && !isDeadNode(&node) &&
+          cseEligible(&node, types, mutatedBases, cseViews, cseCompute)) {
+        mergeBucket(firstOf, &node);
+      }
+    }
+  }
+
+  // Congruent nodes have identical operands, so both appear in the user list of
+  // every value they read. Walking user lists is therefore complete for any
+  // node with an operand, and never hashes a node that has no possible partner.
+  for (const auto* value : graph.values()) {
+    if (value != nullptr && !value->users().empty()) {
+      push(value);
+    }
+  }
+
+  while (!work.empty()) {
+    ValueCP value = work.front();
+    work.pop_front();
+    queued.erase(value);
+    // Snapshot: merging rewires the list being walked.
+    std::vector<NodeCP> users(value->users().begin(), value->users().end());
+    folly::F14FastMap<std::string, NodeCP> firstOf;
+    for (NodeCP user : users) {
+      if (!isDeadNode(user) &&
+          cseEligible(user, types, mutatedBases, cseViews, cseCompute)) {
+        mergeBucket(firstOf, user);
+      }
+    }
+  }
+
+  if ((WaveConfig::get().trace & WaveConfig::kTiming) && merged > 0) {
+    LOG(INFO) << "pre-partition CSE: merged " << merged << " node(s)";
+  }
+  return merged;
+}
+
+namespace {
+
+// The ScalarType newScalarValue needs to reproduce a scalar Value's type kind,
+// or nullopt when the kind is not a scalar. Inverse of the mapping in
+// WaveGraph::newScalarValue.
+std::optional<c10::ScalarType> scalarTypeOfKind(nativert::Type::Kind kind) {
+  switch (kind) {
+    case nativert::Type::Kind::SymInt:
+      return c10::ScalarType::Long;
+    case nativert::Type::Kind::SymFloat:
+      return c10::ScalarType::Double;
+    case nativert::Type::Kind::SymBool:
+      return c10::ScalarType::Bool;
+    default:
+      return std::nullopt;
+  }
+}
+
+// An attribute holds a Constant, a variant whose unique_ptr<Graph> alternative
+// makes the whole variant move-only. A getter never carries a subgraph, but
+// check rather than silently duplicating a node without its attributes.
+bool attributesAreCopyable(NodeCP node) {
+  for (const auto& attr : node->attributes()) {
+    if (std::holds_alternative<std::unique_ptr<nativert::Graph>>(attr.value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void copyAttributes(NodeCP from, nativert::Node* to) {
+  for (const auto& attr : from->attributes()) {
+    std::visit(
+        [&](const auto& constant) {
+          using T = std::decay_t<decltype(constant)>;
+          if constexpr (!std::is_same_v<T, std::unique_ptr<nativert::Graph>>) {
+            to->addAttribute({attr.name, constant});
+          }
+        },
+        attr.value);
+  }
+}
+
+// The nodes the partitioner can see. makeParallelNodes seeds from the graph
+// output node and walks back through input producers, so a node reachable only
+// from an _assert_scalar chain is never placed in a ProjectNode and never
+// counts toward a CSE border. Duplicating for such a user would pay a node and
+// remove no boundary. Side-effect edges are deliberately not followed: they
+// only add users, and over-counting is the direction that costs.
+std::unordered_set<NodeCP> reachableFromOutputs(const nativert::Graph& graph) {
+  std::unordered_set<NodeCP> reachable{graph.outputNode()};
+  std::vector<NodeCP> pending{graph.outputNode()};
+  while (!pending.empty()) {
+    NodeCP node = pending.back();
+    pending.pop_back();
+    for (const auto& input : node->inputs()) {
+      if (input.value == nullptr) {
+        continue;
+      }
+      const auto* producer = input.value->producer();
+      if (producer != nullptr && reachable.insert(producer).second) {
+        pending.push_back(producer);
+      }
+    }
+  }
+  return reachable;
+}
+
+// Attaches 'constraint' to a value the pass just created. A rewrite-created
+// value carries nothing by default: types.types is a no-op for a scalar, and a
+// rank left at -1 has produced a rank-0 result before, so copy the original's
+// rank and layout explicitly. graphOutput / externallyOwned are deliberately
+// not carried -- the duplicate is a fresh internal value.
+void setDuplicateConstraint(
+    ValueTypes& types,
+    ValueCP value,
+    const ValueConstraint& constraint) {
+  auto id = value->id();
+  if (id < 0) {
+    return;
+  }
+  if (static_cast<size_t>(id) >= types.constraints.size()) {
+    types.constraints.resize(id + 1);
+  }
+  // Grown to id + 1 just above.
+  // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
+  auto& target = types.constraints[id];
+  target.rank = constraint.rank;
+  target.contiguity = constraint.contiguity;
+  target.zeroStrides = constraint.zeroStrides;
+}
+
+} // namespace
+
+int64_t duplicateMetadataOps(
+    nativert::Graph& graph,
+    ValueTypes& types,
+    WaveGraph& waveGraph) {
+  NodeCP outputNode = graph.outputNode();
+  constexpr int32_t kOutputPos = std::numeric_limits<int32_t>::max();
+  const auto reachable = reachableFromOutputs(graph);
+
+  std::unordered_map<NodeCP, int32_t> pos;
+  int32_t idx = 0;
+  for (const auto& node : graph.nodes()) {
+    pos[&node] = &node == outputNode ? kOutputPos : idx++;
+  }
+
+  // Program position of each value's last live read, from the graph as it is
+  // now. Every decision below is taken against this snapshot: inserting a
+  // duplicate adds a read of the getter's operand, and reading a stale lastUse
+  // is what keeps that from being mistaken for a lifetime extension.
+  folly::F14FastMap<ValueCP, int32_t> lastUse;
+  for (const auto& node : graph.nodes()) {
+    if (reachable.count(&node) == 0) {
+      continue;
+    }
+    const int32_t nodePos = pos.at(&node);
+    for (const auto& input : node.inputs()) {
+      if (input.value == nullptr) {
+        continue;
+      }
+      auto [it, inserted] = lastUse.emplace(input.value, nodePos);
+      if (!inserted) {
+        it->second = std::max(it->second, nodePos);
+      }
+    }
+  }
+  auto lastUseOf = [&](ValueCP value) {
+    auto it = lastUse.find(value);
+    return it == lastUse.end() ? -1 : it->second;
+  };
+  auto reachableUsers = [&](ValueCP value) {
+    int32_t count = 0;
+    for (auto* user : value->users()) {
+      count += reachable.count(user) > 0 ? 1 : 0;
+    }
+    return count;
+  };
+
+  // Snapshot the candidates: duplicating rewires users, and a live walk would
+  // revisit the duplicates it just inserted. Two families qualify as free to
+  // recompute: a getter, whose output is a scalar read out of tensor metadata,
+  // and a view, which is set up host-side from its base's sizes and strides and
+  // allocates nothing.
+  std::vector<NodeCP> candidates;
+  for (const auto& node : graph.nodes()) {
+    const Metadata* meta = Registry::metadata(node.target());
+    if (meta == nullptr || (!meta->isMetadataGetter && !meta->metadataOnly)) {
+      continue;
+    }
+    if (node.outputs().size() != 1 || node.inputs().empty() ||
+        node.outputs()[0] == nullptr || !attributesAreCopyable(&node)) {
+      continue;
+    }
+    const auto kind = node.outputs()[0]->type().kind();
+    const bool isGetter =
+        meta->isMetadataGetter && scalarTypeOfKind(kind).has_value();
+    const bool isViewOp = meta->metadataOnly && meta->isView() &&
+        kind == nativert::Type::Kind::Tensor;
+    if (!isGetter && !isViewOp) {
+      continue;
+    }
+    candidates.push_back(&node);
+  }
+
+  int64_t duplicated = 0;
+  int64_t viewsDuplicated = 0;
+  int64_t bordersRemoved = 0;
+  for (NodeCP node : candidates) {
+    ValueCP out = node->outputs()[0];
+    const bool isViewOp = out->type().kind() == nativert::Type::Kind::Tensor;
+    // A returned size keeps the original: replaceAllUses-style rewiring does
+    // not reach the output node, and it costs nothing to leave it there.
+    bool feedsGraphOutput = false;
+    bool writtenInPlace = false;
+    std::vector<NodeCP> users;
+    for (auto* user : out->users()) {
+      if (user == outputNode) {
+        feedsGraphOutput = true;
+      } else if (reachable.count(user) > 0) {
+        // A view written through by one user and read by another is a single
+        // shared buffer, not two interchangeable aliases: splitting it would
+        // send the write to a copy the readers never see.
+        writtenInPlace |= inPlaceSelf(user) == out;
+        users.push_back(user);
+      }
+    }
+    if (writtenInPlace) {
+      continue;
+    }
+    // The original serves the graph output if there is one, else the first
+    // user. Only a value read more than once is a border worth breaking.
+    const size_t firstToRewire = feedsGraphOutput ? 0 : 1;
+    if (users.size() <= firstToRewire) {
+      continue;
+    }
+
+    // Every operand must already be available at the use sites, so that moving
+    // the read there neither creates a new border nor extends a buffer's
+    // lifetime. Three ways to qualify:
+    //   - producer-less (a graph input, weight or constant): live throughout;
+    //   - a scalar with more than one reachable reader: already a CSE border
+    //     the partitioner materializes, and a SymInt owns no buffer, so reading
+    //     it later costs nothing. This is what admits the dynamic slice bounds
+    //     -- slice(input, item(..), item(..)) with both items already
+    //     materialized -- which the lifetime rule alone would reject;
+    //   - otherwise, it must already outlive this node's own last use, which
+    //     also implies a reader besides this node.
+    const int32_t outLastUse = lastUseOf(out);
+    auto isAvailable = [&](ValueCP value) {
+      if (value == nullptr) {
+        return false;
+      }
+      if (types.externallyOwned(value)) {
+        return true;
+      }
+      const auto kind = value->type().kind();
+      if ((kind == nativert::Type::Kind::SymInt ||
+           kind == nativert::Type::Kind::SymFloat ||
+           kind == nativert::Type::Kind::SymBool) &&
+          reachableUsers(value) > 1) {
+        return true;
+      }
+      return lastUseOf(value) >= outLastUse;
+    };
+    bool operandsAvailable = true;
+    for (const auto& input : node->inputs()) {
+      if (!isAvailable(input.value)) {
+        operandsAvailable = false;
+        break;
+      }
+    }
+    if (!operandsAvailable) {
+      continue;
+    }
+
+    // A view's duplicate needs the same dtype as the original, which for a
+    // tensor lives in the TensorMeta rather than the Value's type kind. Without
+    // a TensorMeta there is nothing to reproduce, so leave the node alone.
+    const nativert::TensorMeta* outMeta =
+        isViewOp && static_cast<size_t>(out->id()) < types.types.size()
+        ? types.types[out->id()]
+        : nullptr;
+    if (isViewOp && outMeta == nullptr) {
+      continue;
+    }
+    const auto dtype =
+        isViewOp ? outMeta->dtype() : *scalarTypeOfKind(out->type().kind());
+    const ValueConstraint constraint =
+        static_cast<size_t>(out->id()) < types.constraints.size()
+        // Bound tested on the line above.
+        // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
+        ? types.constraints[out->id()]
+        : ValueConstraint{};
+    for (size_t i = firstToRewire; i < users.size(); ++i) {
+      auto* user = const_cast<nativert::Node*>(users[i]);
+      auto* duplicate =
+          graph.createNode(std::string(node->target()), node->inputs());
+      copyAttributes(node, duplicate);
+      // Immediately before the user, so the node list stays in program order
+      // (computeSideEffectEdges checks this) and the operands still precede it.
+      graph.insertBefore(duplicate, user);
+      auto* duplicateOut = isViewOp
+          ? waveGraph.newTensorValue(duplicate, out->name(), dtype)
+          : waveGraph.newScalarValue(duplicate, out->name(), dtype);
+      setDuplicateConstraint(types, duplicateOut, constraint);
+      rewireInput(user, out, duplicateOut);
+      ++duplicated;
+      viewsDuplicated += isViewOp ? 1 : 0;
+    }
+    ++bordersRemoved;
+  }
+
+  if (duplicated > 0) {
+    LOG(INFO) << "pre-partition metadata duplication: " << duplicated
+              << " node(s) duplicated (" << viewsDuplicated << " view, "
+              << duplicated - viewsDuplicated << " getter), " << bordersRemoved
+              << " shared value(s) reduced to a single use";
+  }
+  return duplicated;
 }
 
 void ParallelNodes::computeReuseEligibility(
