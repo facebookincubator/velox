@@ -1255,11 +1255,38 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
   // is_hash_aggregation (src/groupby/common/utils.hpp) admits SUM, MIN, MAX,
   // COUNT, ARGMIN, ARGMAX, MEAN, M2, STD and VARIANCE and nothing else, so an
   // NTH_ELEMENT request would make can_use_hash_groupby false and push every
-  // TSWTZ group-by onto the sort path. MIN yields the group's numerically
-  // smallest packed value, which is a real zone key from one of its own rows --
-  // matching CPU, where RowContainer keeps the packed value of whichever row
-  // created the group. Which of the tied zone keys survives is unspecified on
-  // both engines.
+  // TSWTZ group-by onto the sort path.
+  //
+  // What this guarantees, and what it does not:
+  //
+  // GUARANTEED -- the emitted key carries the group's correct INSTANT. Grouping
+  // runs on the normalized keys, so every row of a group has identical high
+  // bits and the packed values differ only in the low kTimezoneMask bits. A MIN
+  // over them therefore returns a value belonging to one of the group's own
+  // rows: never a fabricated value, never another group's instant, and never
+  // the bare UTC that normalization alone would leave.
+  //
+  // NOT GUARANTEED -- WHICH of the tied zone keys is emitted. All rows of a
+  // group are equal values, because this type's comparator is defined on the
+  // instant alone, so any of them is a valid representative and SQL does not
+  // define which one a GROUP BY returns.
+  //
+  // An earlier version of this comment claimed MIN "matches CPU, where
+  // RowContainer keeps the packed value of whichever row created the group".
+  // That is wrong and was never measured. On a live cluster, grouping one
+  // instant keyed to Pacific/Kiritimati and Pacific/Midway, the surviving zone
+  // differs between the engines AND is unstable on each of them: CPU returned
+  // -11:00 on three consecutive runs and +14:00 at task_concurrency=2, while
+  // this path returned +14:00 then -11:00 on otherwise identical runs. MIN is
+  // deterministic within a single aggregation, but the plan has partial and
+  // final stages behind a hash exchange, and which representative survives that
+  // merge follows scheduling.
+  //
+  // So do not rely on the emitted zone key, and do not "fix" a difference in it
+  // by chasing CPU -- CPU is not stable either. Any query that renders the
+  // group key with its offset (to_iso8601, cast to varchar, timezone_hour,
+  // format_datetime) can therefore differ run to run on both engines. The
+  // instant is the part that is contractual.
   std::vector<size_t> keyRecoveryRequest(groupByKeys.size(), 0);
   if (normalizedKeys.normalizedAny()) {
     for (size_t i = 0; i < groupByKeys.size(); ++i) {
