@@ -31,7 +31,7 @@ std::optional<std::string> S3Config::configValue(
     return value;
   }
   // Fall back to the deprecated "hive.s3." prefix.
-  VELOX_DCHECK(
+  VELOX_CHECK(
       configKey.substr(0, std::string_view(kS3Prefix).size()) == kS3Prefix,
       "S3 config key must be prefixed with '{}': {}",
       kS3Prefix,
