@@ -2465,3 +2465,45 @@ TEST_F(
   assertMatchesCpu("c0 = c1", input);
   assertMatchesCpu("c0 < c1", input);
 }
+
+// --- to_unixtime(TIMESTAMP) below a millisecond
+// -------------------------------
+//
+// CPU computes `seconds + nanos / 1e9` (DateTimeImpl.h toUnixtime), so its
+// result is a double of SECONDS and carries the full nanosecond. The GPU cast
+// the input to TIMESTAMP_MILLISECONDS and divided by 1000, truncating
+// everything finer.
+//
+// Nothing caught it, and the reason is structural rather than an oversight:
+// every existing to_unixtime(TIMESTAMP) case goes through timestampInput(),
+// i.e. Timestamp::fromMillis, whose nanos are always a multiple of 1e6. The
+// parity suite cannot see it either -- its clusters run
+// parquet.reader.timestamp_type=14, pinning the reader to milliseconds, which
+// the report records as a known limit of the measurement. The defect lived
+// exactly in that blind spot.
+//
+// Note this is specific to to_unixtime. The neighbouring truncations are
+// correct because their output cannot represent sub-millisecond: to_iso8601
+// renders through Joda "yyyy-MM-dd'T'HH:mm:ss.SSSZZ" (three fractional digits),
+// and everything that produces a TIMESTAMP WITH TIME ZONE is bounded by that
+// type's own millis encoding. The question that separates them is simply
+// whether the OUTPUT type can hold it.
+
+TEST_F(TimezoneFunctionTest, toUnixtimeKeepsSubMillisecondPrecision) {
+  // Nanos deliberately not a multiple of 1e6, so a millisecond cast loses them.
+  auto input = makeRowVector({makeFlatVector<Timestamp>(
+      {Timestamp(1'623'758'400, 123'456'789),
+       Timestamp(0, 999),
+       Timestamp(-1, 500'000'001)},
+      TIMESTAMP())});
+  assertMatchesCpu("to_unixtime(c0)", input);
+}
+
+TEST_F(TimezoneFunctionTest, toUnixtimeSubMillisecondIsSessionIndependent) {
+  // The sub-millisecond fix must not disturb the session-independence that
+  // toUnixtimeFromTimestampIgnoresSessionTimezone pins: to_unixtime reads the
+  // wall clock as UTC whatever the session zone is.
+  auto input = makeRowVector({makeFlatVector<Timestamp>(
+      {Timestamp(1'623'758'400, 123'456'789)}, TIMESTAMP())});
+  assertMatchesCpu("to_unixtime(c0)", input);
+}

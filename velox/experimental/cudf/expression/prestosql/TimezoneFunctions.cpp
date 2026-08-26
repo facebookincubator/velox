@@ -2165,6 +2165,12 @@ void registerTimezoneFunctions(const std::string& prefix) {
         std::vector<ColumnOrView>& inputColumns,
         rmm::cuda_stream_view stream,
         rmm::device_async_resource_ref mr) const override {
+      // Truncating to milliseconds here is CORRECT, unlike the superficially
+      // identical cast to_unixtime used to do. CPU renders through the fixed
+      // Joda pattern "yyyy-MM-dd'T'HH:mm:ss.SSSZZ" -- three fractional digits
+      // -- so no sub-millisecond value can reach the output either way. What
+      // separates the two cases is whether the OUTPUT type can represent it: a
+      // double of seconds can, a .SSS string cannot.
       auto millisTs = cudf::cast(
           asView(inputColumns[0]),
           cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
@@ -2230,21 +2236,93 @@ void registerTimezoneFunctions(const std::string& prefix) {
       // this function shifted, on the reasoning that the two spellings of "the
       // same question" must agree -- they must not, and the parity suite caught
       // it under two non-UTC session zones.
-      auto utcMs = cudf::cast(
-          asView(inputColumns[0]),
-          cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
+      // The tick rate comes from the column's OWN unit, not from a cast to
+      // milliseconds. CPU computes `seconds + nanos / 1e9` (DateTimeImpl.h
+      // toUnixtime), so the double result carries sub-millisecond precision,
+      // and this used to cast to TIMESTAMP_MILLISECONDS and divide by 1000 --
+      // truncating it. CudfConfig::timestampUnit defaults to nanoseconds, so
+      // that was wrong by default, not only under an unusual configuration.
+      const auto input = asView(inputColumns[0]);
+      int64_t ticksPerSecond;
+      switch (input.type().id()) {
+        case cudf::type_id::TIMESTAMP_SECONDS:
+          ticksPerSecond = 1;
+          break;
+        case cudf::type_id::TIMESTAMP_MILLISECONDS:
+          ticksPerSecond = 1'000;
+          break;
+        case cudf::type_id::TIMESTAMP_MICROSECONDS:
+          ticksPerSecond = 1'000'000;
+          break;
+        case cudf::type_id::TIMESTAMP_NANOSECONDS:
+          ticksPerSecond = 1'000'000'000;
+          break;
+        default:
+          VELOX_FAIL(
+              "to_unixtime got an unexpected timestamp resolution: {}",
+              static_cast<int32_t>(input.type().id()));
+      }
+
+      // Split into whole seconds and sub-second ticks, then combine in double.
+      // Dividing the total tick count in double instead would lose low bits: a
+      // nanosecond timestamp near 2021 is ~1.6e18 ticks, well past the 2^53 a
+      // double holds exactly.
+      //
+      // The split has to FLOOR rather than truncate, because it must reproduce
+      // velox's own decomposition: Timestamp keeps (seconds, nanos) with nanos
+      // NON-NEGATIVE, and CPU then adds seconds + nanos/1e9. For a pre-epoch
+      // instant the two differ in the last bit, which is enough to fail an
+      // equality assertion -- Timestamp(-1, 500'000'001) is -499'999'999 ns,
+      // and CPU computes -1 + 0.500000001 = -0.49999999900000003, where
+      // truncating DIV/MOD give 0 + (-0.499999999) = -0.499999999. The same
+      // real number, rounded differently.
+      //
+      // PYMOD returns a remainder carrying the sign of the divisor, so for a
+      // positive tick rate it yields exactly the non-negative "nanos" velox
+      // stores. Whole seconds then follow from (ticks - remainder) / rate, an
+      // exact integer division that rounds nothing.
+      auto ticksInt = bitcastColumn(input, cudf::type_id::INT64);
+      const auto doubleType = cudf::data_type{cudf::type_id::FLOAT64};
+      const auto int64Type = cudf::data_type{cudf::type_id::INT64};
+      auto perSecond = int64Scalar(ticksPerSecond, stream);
+      auto subSecondTicks = cudf::binary_operation(
+          ticksInt,
+          perSecond,
+          cudf::binary_operator::PYMOD,
+          int64Type,
           stream,
           mr);
-      auto millisDouble = cudf::cast(
-          bitcastColumn(utcMs->view(), cudf::type_id::INT64),
-          cudf::data_type{cudf::type_id::FLOAT64},
+      auto flooredTicks = cudf::binary_operation(
+          ticksInt,
+          subSecondTicks->view(),
+          cudf::binary_operator::SUB,
+          int64Type,
+          stream,
+          mr);
+      auto wholeSeconds = cudf::binary_operation(
+          flooredTicks->view(),
+          perSecond,
+          cudf::binary_operator::DIV,
+          int64Type,
+          stream,
+          mr);
+      auto secondsDouble =
+          cudf::cast(wholeSeconds->view(), doubleType, stream, mr);
+      auto subSecondDouble =
+          cudf::cast(subSecondTicks->view(), doubleType, stream, mr);
+      auto fraction = cudf::binary_operation(
+          subSecondDouble->view(),
+          cudf::numeric_scalar<double>(
+              static_cast<double>(ticksPerSecond), true, stream),
+          cudf::binary_operator::DIV,
+          doubleType,
           stream,
           mr);
       return cudf::binary_operation(
-          millisDouble->view(),
-          cudf::numeric_scalar<double>(1000.0, true, stream),
-          cudf::binary_operator::DIV,
-          cudf::data_type{cudf::type_id::FLOAT64},
+          secondsDouble->view(),
+          fraction->view(),
+          cudf::binary_operator::ADD,
+          doubleType,
           stream,
           mr);
     }
