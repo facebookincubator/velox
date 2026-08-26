@@ -29,6 +29,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/encodings/SubIntSplitAccumulate.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitConfig.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitSampler.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitSelector.h"
@@ -139,50 +140,28 @@ class SubIntSplitEncoding
 
   // Return the storage byte width for a section of the given bit width.
   static constexpr uint8_t sectionStorageBytes(int bitWidth) noexcept {
-    if (bitWidth <= 8)
-      return 1;
-    if (bitWidth <= 16)
-      return 2;
-    if (bitWidth <= 32)
-      return 4;
-    return 8;
+    return detail::subIntSplitSectionStorageBytes(bitWidth);
   }
 
-  // Number of output elements processed per chunk in materialize(). Chosen so
-  // that the output slice (kMaterializeChunkSize * sizeof(physicalType)) and
-  // the scratch buffer (kMaterializeChunkSize * storageBytes) together fit
-  // comfortably in L2 cache across all sections for a given chunk.
-  //   uint64 output + uint64 scratch: 4096 * 8 * 2 = 64 KB  (fits 256 KB L2)
-  //   uint64 output + uint8  scratch: 4096 * 8 + 4096 * 1 = 36 KB (fits L1)
-  static constexpr uint32_t kMaterializeChunkSize = 4096;
+  // Number of output elements processed per chunk in materialize().
+  static constexpr uint32_t kMaterializeChunkSize = detail::kSubIntSplitChunkSize;
 
-  // Accumulate one section's decoded values into the output buffer.
-  // IsFirst=true: pure write (initialises the output element).
-  // IsFirst=false: read-modify-write OR into the existing output element.
-  // __restrict__ informs the compiler that src and dst do not alias, enabling
-  // auto-vectorisation for same-width cases and providing correct alias
-  // semantics for the AVX2 widening paths below.
+  // Forwards to the kernel shared with SubIntSplitEncodingView.
   template <typename SectionT, bool IsFirst>
   static void accumulateSection(
       const SectionT* __restrict__ src,
       physicalType* __restrict__ dst,
       uint32_t count,
       uint64_t mask,
-      int shift) noexcept;
+      int shift) noexcept {
+    detail::accumulateSubIntSplitSection<physicalType, SectionT, IsFirst>(
+        src, dst, count, mask, shift);
+  }
 };
 
 //
 // End of public API. Implementation follows.
 //
-
-namespace detail {
-inline constexpr uint32_t kSubIntSplitSectionHeaderSize =
-    6; // bitStart+bitEnd+size
-
-inline uint32_t subIntSplitSpecificHeaderSize(uint8_t splitCount) noexcept {
-  return 2u + static_cast<uint32_t>(splitCount) * kSubIntSplitSectionHeaderSize;
-}
-} // namespace detail
 
 template <typename T>
 SubIntSplitEncoding<T>::SubIntSplitEncoding(
@@ -194,34 +173,18 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
       sections_{},
       scratchBuf_{&pool},
       decodeBuf_{&pool} {
-  const auto* pos = data.data() + this->dataOffset();
+  const auto parsed =
+      detail::parseSubIntSplitSections(data, this->dataOffset());
 
-  const uint8_t splitCount = encoding::read<uint8_t>(pos);
-  encoding::read<uint8_t>(pos); // reserved order byte
-
-  struct SectionMeta {
-    uint8_t bitStart;
-    uint8_t bitEnd;
-    uint32_t encodedSize;
-  };
-  std::vector<SectionMeta> meta(splitCount);
-  for (uint8_t s = 0; s < splitCount; ++s) {
-    meta[s].bitStart = encoding::read<uint8_t>(pos);
-    meta[s].bitEnd = encoding::read<uint8_t>(pos);
-    meta[s].encodedSize = encoding::readUint32(pos);
-  }
-
-  sections_.resize(splitCount);
-  for (uint8_t s = 0; s < splitCount; ++s) {
+  sections_.resize(parsed.size());
+  for (size_t s = 0; s < parsed.size(); ++s) {
     auto& sec = sections_[s];
-    sec.bitStart = meta[s].bitStart;
-    sec.bitEnd = meta[s].bitEnd;
-    const int width = sec.bitEnd - sec.bitStart + 1;
-    sec.mask = (width >= 64) ? ~uint64_t{0} : ((uint64_t{1} << width) - 1);
-    sec.storageBytes = sectionStorageBytes(width);
+    sec.bitStart = parsed[s].bitStart;
+    sec.bitEnd = parsed[s].bitEnd;
+    sec.mask = parsed[s].mask;
+    sec.storageBytes = parsed[s].storageBytes;
     sec.encoding = EncodingFactory().create(
-        *this->pool_, {pos, meta[s].encodedSize}, stringBufferFactory, options);
-    pos += meta[s].encodedSize;
+        *this->pool_, parsed[s].stream, stringBufferFactory, options);
   }
 }
 
@@ -239,212 +202,6 @@ void SubIntSplitEncoding<T>::skip(uint32_t rowCount) {
     sec.encoding->skip(rowCount);
   }
   row_ += rowCount;
-}
-
-// accumulateSection: widen narrow section values into the physicalType output.
-//
-// For narrow→wide cases (SectionT smaller than physicalType) an AVX2 path uses
-// zero-extending widening intrinsics (_mm256_cvtepu*_epi*) followed by a
-// variable left-shift and optional OR-accumulate.  An L2 prefetch hint keeps
-// both src and dst warm across successive section loops in a chunk.
-//
-// For same-width cases (SectionT == physicalType) the __restrict__ qualifiers
-// and the compile-time IsFirst branch produce auto-vectoriser-friendly loops.
-template <typename T>
-template <typename SectionT, bool IsFirst>
-void SubIntSplitEncoding<T>::accumulateSection(
-    const SectionT* __restrict__ src,
-    physicalType* __restrict__ dst,
-    uint32_t count,
-    uint64_t mask,
-    int shift) noexcept {
-  const SectionT narrowMask = static_cast<SectionT>(mask);
-
-#ifdef __AVX2__
-  if constexpr (sizeof(SectionT) < sizeof(physicalType)) {
-    if constexpr (sizeof(physicalType) == 8) {
-      // ----------------------------------------------------------------
-      // Widening into 64-bit output
-      // ----------------------------------------------------------------
-      const __m128i vshift = _mm_cvtsi64_si128(static_cast<int64_t>(shift));
-      const __m256i vmask = _mm256_set1_epi64x(static_cast<int64_t>(mask));
-
-      if constexpr (sizeof(SectionT) == 1) {
-        // uint8 → uint64: _mm256_cvtepu8_epi64 processes 4 elements.
-        uint32_t i = 0;
-        for (; i + 4 <= count; i += 4) {
-          _mm_prefetch(
-              reinterpret_cast<const char*>(src + i + 32), _MM_HINT_T1);
-          _mm_prefetch(
-              reinterpret_cast<const char*>(dst + i + 32), _MM_HINT_T1);
-          int32_t tmp;
-          std::memcpy(&tmp, src + i, 4);
-          __m256i vs = _mm256_cvtepu8_epi64(_mm_cvtsi32_si128(tmp));
-          vs = _mm256_and_si256(vs, vmask);
-          if (shift)
-            vs = _mm256_sll_epi64(vs, vshift);
-          if constexpr (IsFirst) {
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + i), vs);
-          } else {
-            __m256i vd =
-                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dst + i));
-            _mm256_storeu_si256(
-                reinterpret_cast<__m256i*>(dst + i), _mm256_or_si256(vd, vs));
-          }
-        }
-        for (; i < count; ++i) {
-          if constexpr (IsFirst)
-            dst[i] = static_cast<physicalType>(src[i] & narrowMask) << shift;
-          else
-            dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
-        }
-        return;
-
-      } else if constexpr (sizeof(SectionT) == 2) {
-        // uint16 → uint64: _mm256_cvtepu16_epi64 processes 4 elements.
-        uint32_t i = 0;
-        for (; i + 4 <= count; i += 4) {
-          _mm_prefetch(
-              reinterpret_cast<const char*>(src + i + 32), _MM_HINT_T1);
-          _mm_prefetch(
-              reinterpret_cast<const char*>(dst + i + 32), _MM_HINT_T1);
-          __m256i vs = _mm256_cvtepu16_epi64(
-              _mm_loadl_epi64(reinterpret_cast<const __m128i*>(src + i)));
-          vs = _mm256_and_si256(vs, vmask);
-          if (shift)
-            vs = _mm256_sll_epi64(vs, vshift);
-          if constexpr (IsFirst) {
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + i), vs);
-          } else {
-            __m256i vd =
-                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dst + i));
-            _mm256_storeu_si256(
-                reinterpret_cast<__m256i*>(dst + i), _mm256_or_si256(vd, vs));
-          }
-        }
-        for (; i < count; ++i) {
-          if constexpr (IsFirst)
-            dst[i] = static_cast<physicalType>(src[i] & narrowMask) << shift;
-          else
-            dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
-        }
-        return;
-
-      } else if constexpr (sizeof(SectionT) == 4) {
-        // uint32 → uint64: _mm256_cvtepu32_epi64 processes 4 elements.
-        uint32_t i = 0;
-        for (; i + 4 <= count; i += 4) {
-          _mm_prefetch(
-              reinterpret_cast<const char*>(src + i + 16), _MM_HINT_T1);
-          _mm_prefetch(
-              reinterpret_cast<const char*>(dst + i + 32), _MM_HINT_T1);
-          __m256i vs = _mm256_cvtepu32_epi64(
-              _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i)));
-          vs = _mm256_and_si256(vs, vmask);
-          if (shift)
-            vs = _mm256_sll_epi64(vs, vshift);
-          if constexpr (IsFirst) {
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + i), vs);
-          } else {
-            __m256i vd =
-                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dst + i));
-            _mm256_storeu_si256(
-                reinterpret_cast<__m256i*>(dst + i), _mm256_or_si256(vd, vs));
-          }
-        }
-        for (; i < count; ++i) {
-          if constexpr (IsFirst)
-            dst[i] = static_cast<physicalType>(src[i] & narrowMask) << shift;
-          else
-            dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
-        }
-        return;
-      }
-
-    } else if constexpr (sizeof(physicalType) == 4) {
-      // ----------------------------------------------------------------
-      // Widening into 32-bit output
-      // ----------------------------------------------------------------
-      const __m128i vshift = _mm_cvtsi32_si128(static_cast<int32_t>(shift));
-      const __m256i vmask = _mm256_set1_epi32(static_cast<int32_t>(mask));
-
-      if constexpr (sizeof(SectionT) == 1) {
-        // uint8 → uint32: _mm256_cvtepu8_epi32 processes 8 elements.
-        uint32_t i = 0;
-        for (; i + 8 <= count; i += 8) {
-          _mm_prefetch(
-              reinterpret_cast<const char*>(src + i + 64), _MM_HINT_T1);
-          _mm_prefetch(
-              reinterpret_cast<const char*>(dst + i + 32), _MM_HINT_T1);
-          int64_t tmp;
-          std::memcpy(&tmp, src + i, 8);
-          __m256i vs = _mm256_cvtepu8_epi32(_mm_cvtsi64_si128(tmp));
-          vs = _mm256_and_si256(vs, vmask);
-          if (shift)
-            vs = _mm256_sll_epi32(vs, vshift);
-          if constexpr (IsFirst) {
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + i), vs);
-          } else {
-            __m256i vd =
-                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dst + i));
-            _mm256_storeu_si256(
-                reinterpret_cast<__m256i*>(dst + i), _mm256_or_si256(vd, vs));
-          }
-        }
-        for (; i < count; ++i) {
-          if constexpr (IsFirst)
-            dst[i] = static_cast<physicalType>(src[i] & narrowMask) << shift;
-          else
-            dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
-        }
-        return;
-
-      } else if constexpr (sizeof(SectionT) == 2) {
-        // uint16 → uint32: _mm256_cvtepu16_epi32 processes 8 elements.
-        uint32_t i = 0;
-        for (; i + 8 <= count; i += 8) {
-          _mm_prefetch(
-              reinterpret_cast<const char*>(src + i + 32), _MM_HINT_T1);
-          _mm_prefetch(
-              reinterpret_cast<const char*>(dst + i + 32), _MM_HINT_T1);
-          __m256i vs = _mm256_cvtepu16_epi32(
-              _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i)));
-          vs = _mm256_and_si256(vs, vmask);
-          if (shift)
-            vs = _mm256_sll_epi32(vs, vshift);
-          if constexpr (IsFirst) {
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + i), vs);
-          } else {
-            __m256i vd =
-                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dst + i));
-            _mm256_storeu_si256(
-                reinterpret_cast<__m256i*>(dst + i), _mm256_or_si256(vd, vs));
-          }
-        }
-        for (; i < count; ++i) {
-          if constexpr (IsFirst)
-            dst[i] = static_cast<physicalType>(src[i] & narrowMask) << shift;
-          else
-            dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
-        }
-        return;
-      }
-    }
-  }
-#endif // __AVX2__
-
-  // Scalar path: same-width sections (SectionT == physicalType), or builds
-  // without AVX2, or narrow cases not covered by the AVX2 specialisations
-  // above.
-  // __restrict__ on the parameters allows the compiler to auto-vectorise this
-  // loop for same-width cases (e.g. uint32_t → uint32_t, uint64_t → uint64_t).
-  if constexpr (IsFirst) {
-    for (uint32_t i = 0; i < count; ++i)
-      dst[i] = static_cast<physicalType>(src[i] & narrowMask) << shift;
-  } else {
-    for (uint32_t i = 0; i < count; ++i)
-      dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
-  }
 }
 
 template <typename T>
