@@ -85,8 +85,8 @@ std::vector<T> makeStructuredValuesWithLowCardinalityNoise() {
 
   constexpr UnsignedPhysicalType<T> kLowValues[] = {3, 7, 1, 9, 3, 3, 5, 3};
   for (size_t i = 0; i < 300; ++i) {
-    const auto bits = static_cast<UnsignedPhysicalType<T>>(
-        prefix + kLowValues[i % 8]);
+    const auto bits =
+        static_cast<UnsignedPhysicalType<T>>(prefix + kLowValues[i % 8]);
     values.push_back(std::bit_cast<T>(bits));
   }
 
@@ -142,7 +142,7 @@ std::vector<T> makeZipfianValues() {
   };
   push(0, 1, 256); // 512 values
   push(0, 2, 128); // 256 values
-  push(0, 3, 64);  // 128 values
+  push(0, 3, 64); // 128 values
   for (uint64_t j = 4; j < 36; ++j) {
     push(0, j, 1); // 64 values
   }
@@ -565,7 +565,9 @@ TEST(SubIntSplitEncodingTests, fullWidthSingleSectionRoundTrip) {
   expectBitwiseEqual(values, decoded);
 }
 
-TEST(SubIntSplitEncodingTests, CreateImplExtendsCandidatesForSubIntSplitChildren) {
+TEST(
+    SubIntSplitEncodingTests,
+    CreateImplExtendsCandidatesForSubIntSplitChildren) {
   nimble::ManualEncodingSelectionPolicy<uint64_t> policy{
       nimble::ManualEncodingSelectionPolicyFactory::
           defaultEncodingReadFactors(),
@@ -623,8 +625,7 @@ TYPED_TEST(SubIntSplitEncodingTest, ExtendedCandidatesRoundTrip) {
   using T = TypeParam;
   const auto values = makeStructuredValues<T>();
 
-  const auto encoded =
-      encodeWithExtendedSubIntSplit<T>(values, *this->buffer_);
+  const auto encoded = encodeWithExtendedSubIntSplit<T>(values, *this->buffer_);
   const auto captured = nimble::EncodingLayoutCapture::capture(
       encoded, nimble::Encoding::Options{});
   ASSERT_EQ(captured.encodingType(), nimble::EncodingType::SubIntSplit);
@@ -642,8 +643,7 @@ TYPED_TEST(SubIntSplitEncodingTest, WideRangeMonotonicRoundTrip) {
   using T = TypeParam;
   const auto values = makeWideRangeMonotonicValues<T>();
 
-  const auto encoded =
-      encodeWithExtendedSubIntSplit<T>(values, *this->buffer_);
+  const auto encoded = encodeWithExtendedSubIntSplit<T>(values, *this->buffer_);
   const auto captured = nimble::EncodingLayoutCapture::capture(
       encoded, nimble::Encoding::Options{});
   ASSERT_EQ(captured.encodingType(), nimble::EncodingType::SubIntSplit);
@@ -667,8 +667,7 @@ TYPED_TEST(SubIntSplitEncodingTest, ZipfianRoundTrip) {
   using T = TypeParam;
   const auto values = makeZipfianValues<T>();
 
-  const auto encoded =
-      encodeWithExtendedSubIntSplit<T>(values, *this->buffer_);
+  const auto encoded = encodeWithExtendedSubIntSplit<T>(values, *this->buffer_);
   const auto captured = nimble::EncodingLayoutCapture::capture(
       encoded, nimble::Encoding::Options{});
   ASSERT_EQ(captured.encodingType(), nimble::EncodingType::SubIntSplit);

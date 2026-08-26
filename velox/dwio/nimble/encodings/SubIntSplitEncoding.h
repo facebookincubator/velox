@@ -133,8 +133,9 @@ class SubIntSplitEncoding
     if (rangeBits > (kTypeWidthBits * 3) / 4) {
       return std::nullopt;
     }
-    const uint64_t fbwEstimate = FixedBitWidthEncoding<physicalType>::
-        estimateSize(rowCount, statistics, options);
+    const uint64_t fbwEstimate =
+        FixedBitWidthEncoding<physicalType>::estimateSize(
+            rowCount, statistics, options);
     // Outer prefix(6) + compressionType(2) + up to 4 sections' worth of
     // per-section prefix(6) + relative offset(8) overhead.
     constexpr uint64_t kOverheadBytes = 6u + 2u + 4u * 6u + 4u * 8u;
@@ -816,7 +817,8 @@ std::string_view SubIntSplitEncoding<T>::encode(
   // segment from sibling segments at decode time. Override to PerTierBitmaps
   // (1) so materialize() preserves original row order for all sub-encodings
   // that read this field.
-  sectionOptions.frequencyPartitionIndex = 1u; // FreqPartIndexType::PerTierBitmaps
+  sectionOptions.frequencyPartitionIndex =
+      1u; // FreqPartIndexType::PerTierBitmaps
 
   for (uint8_t s = 0; s < splitCount; ++s) {
     const auto& seg = segments[s];

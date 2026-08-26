@@ -139,7 +139,7 @@ class FrequencyPartitionEncoding
     const double n = static_cast<double>(rowCount);
     const double repeatFraction = (rowCount > 1)
         ? static_cast<double>(statistics.consecutiveRepeatCount()) /
-              static_cast<double>(rowCount - 1)
+            static_cast<double>(rowCount - 1)
         : 0.0;
     constexpr double kFallbackBitsPerValue =
         static_cast<double>(sizeof(physicalType) * 8u);
@@ -147,8 +147,7 @@ class FrequencyPartitionEncoding
     const double fallbackFrac = 1.0 - tier0Frac;
     // Key cost: top-tier values get 1-bit codes, remainder get full-width.
     const double keyCostBytes =
-        (tier0Frac * n * 1.0 + fallbackFrac * n * kFallbackBitsPerValue) /
-        8.0;
+        (tier0Frac * n * 1.0 + fallbackFrac * n * kFallbackBitsPerValue) / 8.0;
 
     // Number of tiers encode() would create, mirroring its keyBitOptions loop.
     const uint64_t uniqueCount = statistics.uniqueCounts().has_value()
