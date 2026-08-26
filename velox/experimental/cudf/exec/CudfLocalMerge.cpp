@@ -203,7 +203,6 @@ RowVectorPtr CudfLocalMerge::mergeSources() {
       inputs.push_back(std::move(tbl));
     }
   }
-  sourceData_.clear();
 
   cudf::detail::join_streams(inputStreams, stream);
   auto mergedTable =
