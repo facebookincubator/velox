@@ -1070,7 +1070,7 @@ Parquet Options (prefix ``hive.parquet.``)
        silently over-consuming. The reservation shrinks as row groups are
        skipped by filterRowGroups and is released in full when the reader
        is destroyed. When tracking engages, the estimate is also surfaced
-       per scan via the runtime stat ``parquetFooterEstimatedBytes`` so
+       per scan via the runtime stat ``parquet.footerEstimatedBytes`` so
        operators can compare it against actual pool usage. Session: ``parquet_footer_memory_tracking_threshold``.
    * - ``writer.max-target-file-size``
      - capacity
@@ -1127,6 +1127,13 @@ Parquet Options (prefix ``hive.parquet.``)
      - Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
        When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.
        Session: ``hive.parquet.writer.enable_store_decimal_as_integer``.
+   * - ``writer.enable-page-index``
+     - bool
+     - false
+     - Whether to write the Parquet page index (column index and offset index) when writing into
+       Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
+       index instead of the data page headers, letting readers skip pages that cannot match a filter.
+       Session: ``hive.parquet.writer.enable_page_index``.
 
 Nimble Options (prefix ``hive.nimble.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1452,6 +1459,13 @@ Spark-specific Configuration
      - bool
      - true
      - If true, Spark ``collect_list`` aggregate function ignores nulls in the input.
+   * - spark.decimal_to_float_high_precision_cast_enabled
+     - bool
+     - false
+     - If true, casts from ``DECIMAL`` to ``REAL``/``DOUBLE`` use a high-precision conversion
+       (via an intermediate string) for values that cannot be represented exactly by floating
+       point arithmetic, aligning the result with Spark. Disabled by default due to the
+       significant performance regression; users sensitive to precision loss can enable it.
 
 Tracing
 --------

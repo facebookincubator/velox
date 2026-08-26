@@ -18,7 +18,9 @@
 
 #include <fmt/format.h>
 #include <folly/CppAttributes.h>
+#include <chrono>
 #include <limits>
+#include <string>
 #include <string_view>
 
 namespace facebook::velox {
@@ -72,6 +74,9 @@ struct RuntimeMetric {
 
   void printMetric(std::ostream& stream) const;
 
+  /// Merges 'value' into this metric. Both must have the same unit.
+  void merge(const RuntimeCounter& value);
+
   void merge(const RuntimeMetric& other);
 
   std::string toString() const;
@@ -92,6 +97,22 @@ class BaseRuntimeStatWriter {
   virtual void setRuntimeStat(
       std::string_view /* name */,
       const RuntimeMetric& /* metric */) {}
+
+  /// Adds a wall or cpu duration sample under 'name', tagged as nanoseconds.
+  void addTiming(std::string_view name, std::chrono::nanoseconds duration) {
+    addRuntimeStat(
+        name, RuntimeCounter(duration.count(), RuntimeCounter::Unit::kNanos));
+  }
+
+  /// Adds a unitless count sample under 'name'.
+  void addCount(std::string_view name, int64_t value) {
+    addRuntimeStat(name, RuntimeCounter(value));
+  }
+
+  /// Adds a size sample under 'name', tagged as bytes.
+  void addBytes(std::string_view name, int64_t bytes) {
+    addRuntimeStat(name, RuntimeCounter(bytes, RuntimeCounter::Unit::kBytes));
+  }
 };
 
 /// Setting a concrete runtime stats writer on the thread will ensure that any
