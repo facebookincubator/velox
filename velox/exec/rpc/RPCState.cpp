@@ -31,8 +31,9 @@ namespace facebook::velox::exec::rpc {
 
 namespace {
 // Safety ceiling for the BATCH latency-gradient window. The gradient backs off
-// as soon as queueing lifts RTT, well before this bound, so it caps
-// pathological growth rather than tuning throughput.
+// whenever queueing lifts RTT above the baseline, but the baseline EMA absorbs
+// sustained elevation and the window then resumes probing upward, so against a
+// backend that never visibly slows down this bound is what stops growth.
 constexpr int64_t kBatchMaxWindow = 256;
 
 // Monotonic now() in nanos for RTT measurement. steady_clock (not wall-clock)
