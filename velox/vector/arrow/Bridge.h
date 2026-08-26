@@ -32,17 +32,21 @@ enum class TimestampUnit : uint8_t {
   kNano = 9 /*10^9 nanoseconds are equal to 1 second*/
 };
 
+/// Physical layout used to export variable-width values to Arrow.
+enum class VarTypeLayout : uint8_t {
+  kDefault, // 32-bit offsets (Arrow String/Binary)
+  kStringView, // Arrow StringView
+  kLargeVarTypes // 64-bit offsets (Arrow LargeString/LargeBinary)
+};
+
 struct ArrowOptions {
   bool flattenDictionary{false};
   // NOTE: flattenConstant is only supported for scalar types.
   bool flattenConstant{false};
   TimestampUnit timestampUnit = TimestampUnit::kNano;
   std::optional<std::string> timestampTimeZone{std::nullopt};
-  // Export VARCHAR and VARBINARY to Arrow 15 StringView format
-  bool exportToStringView = false;
-  // Export VARCHAR and VARBINARY with 64-bit offsets (Arrow
-  // LargeUtf8/LargeBinary).
-  bool exportToLargeVarTypes = false;
+  // Layout used for VARCHAR and VARBINARY.
+  VarTypeLayout varTypeLayout{VarTypeLayout::kDefault};
   // Export VARBINARY as UTF-8 string (for consumers that lack binary support).
   bool exportVarbinaryAsString = false;
   /// Respect the width component of decimal type format string on export.

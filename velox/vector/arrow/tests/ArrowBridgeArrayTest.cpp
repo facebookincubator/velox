@@ -49,7 +49,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
-  template <typename T, typename TOffsets = int32_t>
+  template <typename T>
   void testFlatVector(
       const std::vector<std::optional<T>>& inputData,
       const TypePtr& type = CppToType<T>::create()) {
@@ -57,7 +57,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     ArrowArray arrowArray;
     velox::exportToArrow(flatVector, arrowArray, pool_.get(), options_);
 
-    validateArray<T, TOffsets>(inputData, arrowArray);
+    validateArray(inputData, arrowArray);
 
     arrowArray.release(&arrowArray);
     EXPECT_EQ(nullptr, arrowArray.release);
@@ -135,7 +135,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
   // Helper functions for verification.
 
-  template <typename T, typename TOffsets = int32_t>
+  template <typename T>
   void validateArray(
       const std::vector<std::optional<T>>& inputData,
       const ArrowArray& arrowArray) {
@@ -155,7 +155,11 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
     // Validate array contents.
     if constexpr (isString) {
-      validateStringArray<T, TOffsets>(inputData, arrowArray);
+      if (options_.varTypeLayout == VarTypeLayout::kLargeVarTypes) {
+        validateStringArray<T, int64_t>(inputData, arrowArray);
+      } else {
+        validateStringArray<T, int32_t>(inputData, arrowArray);
+      }
     } else if constexpr (isUnknownType) {
       validateNullArray(arrowArray);
     } else {
@@ -623,17 +627,17 @@ TEST_F(ArrowBridgeArrayExportTest, flatString) {
       std::nullopt,
   };
 
-  testFlatVector<std::string, int32_t>(inputData);
+  testFlatVector(inputData);
 
-  options_.exportToLargeVarTypes = true;
-  testFlatVector<std::string, int64_t>(inputData);
+  options_.varTypeLayout = VarTypeLayout::kLargeVarTypes;
+  testFlatVector(inputData);
 
   // Empty vector.
-  options_.exportToLargeVarTypes = false;
-  testFlatVector<std::string, int32_t>({});
+  options_.varTypeLayout = VarTypeLayout::kDefault;
+  testFlatVector<std::string>({});
 
-  options_.exportToLargeVarTypes = true;
-  testFlatVector<std::string, int64_t>({});
+  options_.varTypeLayout = VarTypeLayout::kLargeVarTypes;
+  testFlatVector<std::string>({});
 }
 
 TEST_F(ArrowBridgeArrayExportTest, rowVector) {
@@ -1950,7 +1954,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
           ASSERT_EQ(*vec.type(), *VARCHAR());
           EXPECT_EQ(vec.size(), 12);
         },
-        ArrowOptions{.exportToStringView = true});
+        ArrowOptions{.varTypeLayout = VarTypeLayout::kStringView});
   }
 
   void testImportREE() {

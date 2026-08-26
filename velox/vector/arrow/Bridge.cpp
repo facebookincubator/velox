@@ -400,23 +400,24 @@ const char* exportArrowFormatStr(
       return "f"; // float32
     case TypeKind::DOUBLE:
       return "g"; // float64
-    // We always map VARCHAR and VARBINARY to the "small" version (lower case
-    // format string).
     case TypeKind::VARCHAR:
-      if (options.exportToStringView) {
-        return "vu";
+      switch (options.varTypeLayout) {
+        case VarTypeLayout::kDefault:
+          return "u";
+        case VarTypeLayout::kStringView:
+          return "vu";
+        case VarTypeLayout::kLargeVarTypes:
+          return "U";
       }
-      return options.exportToLargeVarTypes ? "U" : "u"; // utf-8 string
     case TypeKind::VARBINARY:
-      if (options.exportVarbinaryAsString) {
-        return options.exportToLargeVarTypes
-            ? "U"
-            : "u"; // utf-8 string (binary payload)
+      switch (options.varTypeLayout) {
+        case VarTypeLayout::kDefault:
+          return options.exportVarbinaryAsString ? "u" : "z";
+        case VarTypeLayout::kStringView:
+          return options.exportVarbinaryAsString ? "vu" : "vz";
+        case VarTypeLayout::kLargeVarTypes:
+          return options.exportVarbinaryAsString ? "U" : "Z";
       }
-      if (options.exportToStringView) {
-        return "vz";
-      }
-      return options.exportToLargeVarTypes ? "Z" : "z"; // binary
     case TypeKind::UNKNOWN:
       return "n"; // NullType
     case TypeKind::TIMESTAMP:
@@ -1054,28 +1055,31 @@ void exportFlat(
       break;
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
-      if (options.exportToStringView) {
-        exportValues(vec, rows, options, out, pool, holder);
-        exportViews(
-            *vec.asUnchecked<FlatVector<StringView>>(),
-            rows,
-            out,
-            pool,
-            holder);
-      } else if (options.exportToLargeVarTypes) {
-        exportStrings<int64_t>(
-            *vec.asUnchecked<FlatVector<StringView>>(),
-            rows,
-            out,
-            pool,
-            holder);
-      } else {
-        exportStrings(
-            *vec.asUnchecked<FlatVector<StringView>>(),
-            rows,
-            out,
-            pool,
-            holder);
+      switch (options.varTypeLayout) {
+        case VarTypeLayout::kDefault:
+          exportStrings(
+              *vec.asUnchecked<FlatVector<StringView>>(),
+              rows,
+              out,
+              pool,
+              holder);
+          break;
+        case VarTypeLayout::kStringView:
+          exportValues(vec, rows, options, out, pool, holder);
+          exportViews(
+              *vec.asUnchecked<FlatVector<StringView>>(),
+              rows,
+              out,
+              pool,
+              holder);
+          break;
+        case VarTypeLayout::kLargeVarTypes:
+          exportStrings<int64_t>(
+              *vec.asUnchecked<FlatVector<StringView>>(),
+              rows,
+              out,
+              pool,
+              holder);
       }
       break;
     default:

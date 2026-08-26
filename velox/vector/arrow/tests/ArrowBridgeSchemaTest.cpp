@@ -209,12 +209,27 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
 
   testScalarType(VARCHAR(), "u");
   testScalarType(VARBINARY(), "z");
-  testScalarType(VARCHAR(), "U", {.exportToLargeVarTypes = true});
-  testScalarType(VARBINARY(), "Z", {.exportToLargeVarTypes = true});
+  testScalarType(
+      VARCHAR(), "U", {.varTypeLayout = VarTypeLayout::kLargeVarTypes});
+  testScalarType(
+      VARBINARY(), "Z", {.varTypeLayout = VarTypeLayout::kLargeVarTypes});
 
-  testScalarType(VARCHAR(), "vu", {.exportToStringView = true});
-  testScalarType(VARBINARY(), "vz", {.exportToStringView = true});
+  testScalarType(
+      VARCHAR(), "vu", {.varTypeLayout = VarTypeLayout::kStringView});
+  testScalarType(
+      VARBINARY(), "vz", {.varTypeLayout = VarTypeLayout::kStringView});
 
+  testScalarType(VARBINARY(), "u", {.exportVarbinaryAsString = true});
+  testScalarType(
+      VARBINARY(),
+      "U",
+      {.varTypeLayout = VarTypeLayout::kLargeVarTypes,
+       .exportVarbinaryAsString = true});
+  testScalarType(
+      VARBINARY(),
+      "vu",
+      {.varTypeLayout = VarTypeLayout::kStringView,
+       .exportVarbinaryAsString = true});
   {
     struct TimestampCase {
       TimestampUnit unit;
@@ -323,7 +338,7 @@ TEST_F(ArrowBridgeSchemaExportTest, constant) {
   testConstant(BOOLEAN(), "b");
   testConstant(DOUBLE(), "g");
   testConstant(VARCHAR(), "u");
-  testConstant(VARCHAR(), "vu", {.exportToStringView = true});
+  testConstant(VARCHAR(), "vu", {.varTypeLayout = VarTypeLayout::kStringView});
   testConstant(DATE(), "tdD");
   testConstant(INTERVAL_YEAR_MONTH(), "tiM");
   testConstant(UNKNOWN(), "n");
@@ -612,7 +627,7 @@ class ArrowBridgeSchemaTest : public testing::Test {
 TEST_F(ArrowBridgeSchemaTest, roundtrip) {
   roundtripTest(BOOLEAN());
   roundtripTest(VARCHAR());
-  roundtripTest(VARCHAR(), {.exportToStringView = true});
+  roundtripTest(VARCHAR(), {.varTypeLayout = VarTypeLayout::kStringView});
   roundtripTest(REAL());
   roundtripTest(TIMESTAMP());
   roundtripTest(TIMESTAMP_UTC());
@@ -657,7 +672,8 @@ TEST_F(ArrowBridgeSchemaTest, validateInArrow) {
             << ta->ToString();
     ArrowSchema schema;
     ta == arrow::utf8_view()
-        ? exportToArrow(tv, schema, {.exportToStringView = true})
+        ? exportToArrow(
+              tv, schema, {.varTypeLayout = VarTypeLayout::kStringView})
         : exportToArrow(tv, schema);
     ASSERT_OK_AND_ASSIGN(auto actual, arrow::ImportType(&schema));
     ASSERT_FALSE(schema.release);
