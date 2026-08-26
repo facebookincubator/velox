@@ -34,10 +34,25 @@
 # ---------------------------------------------------------------------------
 add_library(nimble_ml_id_benchmark_common MlIdBenchmarkFlags.cpp)
 
-target_link_libraries(
+target_link_libraries(nimble_ml_id_benchmark_common PUBLIC gflags)
+
+# The suite's headers are shared by every driver, so they are tracked on the
+# common library rather than repeated per executable.
+velox_add_test_headers(
   nimble_ml_id_benchmark_common
-  PUBLIC
-    gflags
+  AblationPolicy.h
+  Axes.h
+  CachePolicy.h
+  DriverSweep.h
+  ElemType.h
+  GatherTraceGen.h
+  MeasureLoop.h
+  OpenZLBenchTarget.h
+  PointTraceGen.h
+  ResultWriter.h
+  SelectiveTraceGen.h
+  SubstreamCompression.h
+  TimingStats.h
 )
 # ---------------------------------------------------------------------------
 # Every driver in this suite links the same set: the shared flag library, the
@@ -69,44 +84,54 @@ endfunction()
 # MlIdCompressionBenchmark: encodes a column of ML IDs under every candidate
 # encoding and reports compressed size + round-trip latency.
 nimble_add_ml_id_benchmark(
-  nimble_ml_id_compression_benchmark MlIdCompressionBenchmark.cpp OPENZL)
+  nimble_ml_id_compression_benchmark MlIdCompressionBenchmark.cpp OPENZL
+)
 
 # MlIdDecodeBulkBenchmark: full-materialization decode throughput.
 nimble_add_ml_id_benchmark(
-  nimble_ml_id_decode_bulk_benchmark MlIdDecodeBulkBenchmark.cpp OPENZL)
+  nimble_ml_id_decode_bulk_benchmark MlIdDecodeBulkBenchmark.cpp OPENZL
+)
 
 # MlIdDecodeRangeBenchmark: contiguous-range decode across (start, length).
 nimble_add_ml_id_benchmark(
-  nimble_ml_id_decode_range_benchmark MlIdDecodeRangeBenchmark.cpp OPENZL)
+  nimble_ml_id_decode_range_benchmark MlIdDecodeRangeBenchmark.cpp OPENZL
+)
 
 # MlIdEncodeBenchmark: encode-side throughput and selection cost.
 nimble_add_ml_id_benchmark(
-  nimble_ml_id_encode_benchmark MlIdEncodeBenchmark.cpp OPENZL)
+  nimble_ml_id_encode_benchmark MlIdEncodeBenchmark.cpp OPENZL
+)
 
 # MlIdDecodePointBenchmark: single-row random access latency.
 nimble_add_ml_id_benchmark(
-  nimble_ml_id_decode_point_benchmark MlIdDecodePointBenchmark.cpp OPENZL)
+  nimble_ml_id_decode_point_benchmark MlIdDecodePointBenchmark.cpp OPENZL
+)
 
 # MlIdDecodeGatherBenchmark: scattered multi-range gather, the TableScan skip
 # pattern.
 nimble_add_ml_id_benchmark(
-  nimble_ml_id_decode_gather_benchmark MlIdDecodeGatherBenchmark.cpp OPENZL)
+  nimble_ml_id_decode_gather_benchmark MlIdDecodeGatherBenchmark.cpp OPENZL
+)
 
 # MlIdCostModelOracleBenchmark: validates SubIntSplit's DP cost model against an
 # oracle that actually encodes each candidate bit range.
 nimble_add_ml_id_benchmark(
-  nimble_ml_id_cost_model_oracle_benchmark MlIdCostModelOracleBenchmark.cpp)
+  nimble_ml_id_cost_model_oracle_benchmark MlIdCostModelOracleBenchmark.cpp
+)
 
 # MlIdIndexOracleBenchmark: sweeps FPE index types, Pareto frontier, scalarised
 # oracle.
 nimble_add_ml_id_benchmark(
-  nimble_ml_id_index_oracle_benchmark MlIdIndexOracleBenchmark.cpp)
+  nimble_ml_id_index_oracle_benchmark MlIdIndexOracleBenchmark.cpp
+)
 
 # MlIdAblationBenchmark: progressive encoding-set restriction for SIS sections.
 nimble_add_ml_id_benchmark(
-  nimble_ml_id_ablation_benchmark MlIdAblationBenchmark.cpp)
+  nimble_ml_id_ablation_benchmark MlIdAblationBenchmark.cpp
+)
 
 # MlIdSmokeBenchmark: encode + decode correctness check (no timing). Sweeps
 # every supported element type, so it is also the compile-coverage gate.
 nimble_add_ml_id_benchmark(
-  nimble_ml_id_smoke_benchmark MlIdSmokeBenchmark.cpp)
+  nimble_ml_id_smoke_benchmark MlIdSmokeBenchmark.cpp
+)
