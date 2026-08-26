@@ -209,9 +209,26 @@ class PrefixSort {
 
   void sortInternal(std::vector<char*, memory::StlAllocator<char*>>& rows);
 
+  // Sorts 'numRows' encoded prefix entries in 'prefixBuffer' in place.
+  void sortPrefixBuffer(char* prefixBuffer, uint64_t numRows);
+
+  template <int32_t kNumKeyWords>
+  void sortFixedSizeEntries(char* prefixBuffer, uint64_t numRows);
+
+  // True when the prefix does not cover all the sort keys, so that entries with
+  // equal prefixes need comparing on the remaining keys.
+  bool needsTieBreak() const {
+    return sortLayout_.hasNonNormalizedKey ||
+        sortLayout_.nonPrefixSortStartIndex < sortLayout_.numNormalizedKeys;
+  }
+
   int compareAllNormalizedKeys(char* left, char* right);
 
   int comparePartNormalizedKeys(char* left, char* right);
+
+  // Compares the sort keys that the prefix does not cover, using the row
+  // addresses stored in the prefix entries.
+  int compareNonPrefixKeys(char* left, char* right);
 
   void extractRowAndEncodePrefixKeys(char* row, char* prefixBuffer);
 
