@@ -37,6 +37,21 @@ rmm::device_async_resource_ref get_temp_mr();
 /// Returns the memory resource designated for output vector allocations.
 rmm::device_async_resource_ref get_output_mr();
 
+/// Creates the process-wide cuDF resource used for APIs that still allocate
+/// temporary storage through cudf::get_current_device_resource_ref(). While a
+/// ScopedCudfMemoryResources is active, allocations and deallocations are
+/// dispatched to its temporary resource. Outside a scope they use 'fallback'.
+///
+/// This is a transitional bridge until every cuDF API accepts temp_mr. Only
+/// operational allocations whose allocation call occurs inside the cuDF API
+/// scope may use this resource. The selected resource is remembered for
+/// deallocation on any thread, but remains non-owning and must outlive the
+/// allocation. Returned columns and tables must use the explicit owning output
+/// resource instead.
+[[nodiscard]] cuda::mr::any_resource<cuda::mr::device_accessible>
+createThreadLocalTemporaryMemoryResource(
+    cuda::mr::any_resource<cuda::mr::device_accessible> fallback);
+
 /// Installs per-call temporary and output resources for helpers that use
 /// get_temp_mr() and get_output_mr(). The selected resource objects themselves
 /// carry accounting identity, so allocations remain correctly attributed when
