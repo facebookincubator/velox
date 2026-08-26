@@ -4377,7 +4377,7 @@ using OrderByNodePtr = std::shared_ptr<const OrderByNode>;
 /// check (either "no" or "maybe"), and the actual predicate must be
 /// checked for each candidate.
 ///
-/// Currently only INNER joins are supported, but LEFT joins are planned.
+/// INNER and LEFT joins are supported.
 class SpatialJoinNode : public PlanNode {
  public:
   SpatialJoinNode(
