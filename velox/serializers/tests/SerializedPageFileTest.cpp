@@ -182,7 +182,7 @@ TEST_P(SerializedPageFileTest, serializedPageFileMultipleWrites) {
 
 TEST_P(SerializedPageFileTest, serializedPageFileWriterBasicOperations) {
   const std::string pathPrefix = getTestFilePath();
-  const uint64_t kTargetFileSize = 1024;
+  const uint64_t kTargetFileSize = 1 * 1024 * 1024; // 1MB
   const uint64_t kWriteBufferSize = 512;
   const uint32_t kRowCount = 100;
 
@@ -255,7 +255,7 @@ TEST_P(SerializedPageFileTest, serializedPageFileWriterMultipleBatches) {
 
 TEST_P(SerializedPageFileTest, serializedPageFileWriterFinishMultipleTimes) {
   const std::string pathPrefix = getTestFilePath();
-  const uint64_t kTargetFileSize = 1024;
+  const uint64_t kTargetFileSize = 1 * 1024 * 1024; // 1MB
   const uint64_t kWriteBufferSize = 512;
   const uint32_t kRowCount = 10;
 
@@ -283,7 +283,7 @@ TEST_P(SerializedPageFileTest, serializedPageFileWriterFinishMultipleTimes) {
 }
 
 TEST_P(SerializedPageFileTest, serializedPageRoundTripBasic) {
-  constexpr uint64_t kTargetFileSize = 2048;
+  constexpr uint64_t kTargetFileSize = 1 * 1024 * 1024; // 1MB
   constexpr uint64_t kWriteBufferSize = 512;
   constexpr uint64_t kReadBufferSize = 1024;
 
@@ -308,7 +308,7 @@ TEST_P(SerializedPageFileTest, serializedPageRoundTripBasic) {
   auto fileInfos = writer.finish();
 
   // Since we only write once with a small vector (100 rows) and large target
-  // file size (2048 bytes), there should be exactly one file created
+  // file size (1MB), there should be exactly one file created.
   ASSERT_EQ(fileInfos.size(), 1);
 
   const auto& filePath = fileInfos[0].path;
@@ -321,16 +321,17 @@ TEST_P(SerializedPageFileTest, serializedPageRoundTripBasic) {
       pool(),
       /*ioStats=*/nullptr);
 
+  // Read all data split due to the small write buffer size.
+  std::vector<RowVectorPtr> readVectors;
   RowVectorPtr readVector;
-  bool hasData = reader.nextBatch(readVector);
-  EXPECT_TRUE(hasData);
+  while (reader.nextBatch(readVector)) {
+    ASSERT_NE(readVector, nullptr);
+    readVectors.push_back(readVector);
+  }
 
   // Verify that the data content is identical
-  test::assertEqualVectors(originalVector, readVector);
-
-  // Verify there's no more data after the first batch
-  hasData = reader.nextBatch(readVector);
-  EXPECT_FALSE(hasData);
+  test::assertEqualVectors(
+      originalVector, fuzzer::mergeRowVectors(readVectors, pool()));
 }
 
 TEST_P(SerializedPageFileTest, serializedPageRoundTripMultipleBatches) {
