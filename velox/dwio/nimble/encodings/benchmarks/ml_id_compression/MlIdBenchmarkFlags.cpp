@@ -25,7 +25,10 @@ DEFINE_string(
     "mlidc_manifest.json",
     "JSON manifest sidecar path");
 DEFINE_int32(mlidc_rows, 100000, "Number of rows per dataset instance");
-DEFINE_int32(mlidc_iters, 5, "Benchmark iterations per (encoder, dataset) pair");
+DEFINE_int32(
+    mlidc_iters,
+    5,
+    "Benchmark iterations per (encoder, dataset) pair");
 DEFINE_int64(mlidc_seed, 42, "Base random seed for dataset generators");
 DEFINE_string(
     mlidc_file,

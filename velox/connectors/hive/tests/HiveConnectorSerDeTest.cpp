@@ -119,6 +119,7 @@ class HiveConnectorSerDeTest : public exec::test::HiveConnectorTestBase {
     } else {
       ASSERT_FALSE(clone->properties.has_value());
     }
+    ASSERT_EQ(split.columnMappingMode, clone->columnMappingMode);
   }
 };
 
@@ -304,7 +305,9 @@ TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
       cacheable,
       infoColumns,
       properties,
-      rowIdProperties);
+      rowIdProperties,
+      std::nullopt,
+      dwio::common::ColumnMappingMode::kName);
   ASSERT_EQ(split1.cacheable, cacheable);
   testSerde(split1);
 

@@ -77,7 +77,9 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<const hive::FileConnectorSplit> makeSplit(
       dwio::common::FileFormat format = dwio::common::FileFormat::DWRF,
       const std::string& path = "/tmp/testfile",
-      bool cacheable = true) {
+      bool cacheable = true,
+      std::optional<dwio::common::ColumnMappingMode> columnMappingMode =
+          std::nullopt) {
     return std::make_shared<hive::FileConnectorSplit>(
         "testConnectorId",
         path,
@@ -85,7 +87,10 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
         /*_start=*/0,
         /*_length=*/std::numeric_limits<uint64_t>::max(),
         /*splitWeight=*/0,
-        cacheable);
+        cacheable,
+        std::nullopt,
+        std::unordered_map<std::string, std::optional<std::string>>{},
+        columnMappingMode);
   }
 
   std::string writeDataFile(const RowVectorPtr& data) {
@@ -162,6 +167,53 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
         dwio::common::ColumnMappingMode::kName);
     EXPECT_EQ(readerOptions.maxCoalesceDistance(), 3 << 20);
     EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 128UL << 10);
+  }
+
+  // Split-level column mapping mode overrides the shared session property.
+  {
+    auto holder = makeConnectorQueryCtx(
+        {{hive::FileConfig::kUseColumnNamesSession, "true"}});
+    auto split = makeSplit(
+        dwio::common::FileFormat::ORC,
+        "/tmp/testfile",
+        true,
+        dwio::common::ColumnMappingMode::kPosition);
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    hive::configureReaderOptions(
+        fileConfig,
+        holder.ctx.get(),
+        /*fileSchema=*/nullptr,
+        split,
+        /*tableParameters=*/{},
+        readerOptions);
+
+    EXPECT_EQ(
+        readerOptions.columnMappingMode(),
+        dwio::common::ColumnMappingMode::kPosition);
+  }
+
+  // Parquet field-id matching is only valid for Parquet files.
+  {
+    auto holder = makeConnectorQueryCtx();
+    auto split = makeSplit(
+        dwio::common::FileFormat::ORC,
+        "/tmp/testfile",
+        true,
+        dwio::common::ColumnMappingMode::kParquetFieldId);
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    VELOX_ASSERT_THROW(
+        hive::configureReaderOptions(
+            fileConfig,
+            holder.ctx.get(),
+            /*fileSchema=*/nullptr,
+            split,
+            /*tableParameters=*/{},
+            readerOptions),
+        "not supported for file format orc");
   }
 
   // Test format mismatch throws.

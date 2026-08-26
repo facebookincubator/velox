@@ -25,8 +25,8 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 
 DEFINE_bool(validate, false, "Round-trip check after each encode");
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");
@@ -53,8 +53,9 @@ int runBenchmark() {
   }
   const auto& context = *contextOrNull;
 
-  std::cout << "bench_compression: " << context.encoders.size() << " encoders x "
-            << context.datasets.size() << " datasets, N=" << n << "\n\n";
+  std::cout << "bench_compression: " << context.encoders.size()
+            << " encoders x " << context.datasets.size() << " datasets, N=" << n
+            << "\n\n";
 
   if (FLAGS_dry_run) {
     std::cout << "Encoders:\n";
@@ -68,13 +69,21 @@ int runBenchmark() {
 
   std::vector<std::string> csvColumns = {
       "driver",
-      "dtype",     "dataset",    "encoding",   "family",
-      "variant",    "is_sequential", "N",        "seed",
-      "payload_bytes", "raw_bytes", "compression_ratio",
-      "bits_per_elem", "skipped"};
-  std::string csvPath = FLAGS_mlidc_output_csv.empty()
-      ? "bench_compression.csv"
-      : FLAGS_mlidc_output_csv;
+      "dtype",
+      "dataset",
+      "encoding",
+      "family",
+      "variant",
+      "is_sequential",
+      "N",
+      "seed",
+      "payload_bytes",
+      "raw_bytes",
+      "compression_ratio",
+      "bits_per_elem",
+      "skipped"};
+  std::string csvPath = FLAGS_mlidc_output_csv.empty() ? "bench_compression.csv"
+                                                       : FLAGS_mlidc_output_csv;
   CsvResultWriter csv(csvPath, csvColumns);
   if (!FLAGS_mlidc_output_manifest.empty()) {
     writeRunManifest(FLAGS_mlidc_output_manifest);
