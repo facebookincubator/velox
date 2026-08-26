@@ -299,6 +299,24 @@ TEST_F(HuffmanEncodingTest, estimateRejectsUnsupportedCardinality) {
       std::nullopt);
 }
 
+TEST_F(HuffmanEncodingTest, estimateRejectsCodeTreePastLimit) {
+  constexpr std::array<uint32_t, 14> kFrequencies = {
+      1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377};
+  Vector<uint32_t> values{pool_.get()};
+  for (uint32_t symbol = 0; symbol < kFrequencies.size(); ++symbol) {
+    for (uint32_t count = 0; count < kFrequencies[symbol]; ++count) {
+      values.push_back(symbol);
+    }
+  }
+
+  const std::span<const uint32_t> input{values.data(), values.size()};
+  NIMBLE_ASSERT_THROW(encode(values), "Huffman tree exceeds");
+  EXPECT_EQ(
+      HuffmanEncoding<uint32_t>::estimateSize(
+          input, Statistics<uint32_t>::create(input)),
+      std::nullopt);
+}
+
 TEST_F(HuffmanEncodingTest, estimateSizeIncludesCodesAndCheckpoints) {
   std::vector<uint32_t> values;
   values.insert(values.end(), 128, 0);
