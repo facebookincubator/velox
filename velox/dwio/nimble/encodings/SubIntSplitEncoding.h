@@ -23,12 +23,14 @@
 #include <string_view>
 #include <vector>
 
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/DecoderUtil.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitConfig.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitSampler.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitSelector.h"
@@ -110,6 +112,36 @@ class SubIntSplitEncoding
       std::span<const physicalType> values,
       Buffer& buffer,
       const Encoding::Options& options = {});
+
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  /// Statistics-only size estimate for general encoding selection, where
+  /// only `Statistics<physicalType>` -- not the raw values -- is available.
+  /// Approximates the split-section layout as a single FixedBitWidth-packed
+  /// stream over the full value range, discounted by 10% for the bit
+  /// savings sectioning typically achieves, plus a fixed per-section header
+  /// overhead (assumes the default 4-section split). Returns nullopt when
+  /// the value range is too wide for sectioning to be worthwhile, so
+  /// encoding selection skips it instead of picking a poor split.
+  static std::optional<uint64_t> estimateSize(
+      uint64_t rowCount,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options) {
+    constexpr uint64_t kTypeWidthBits =
+        static_cast<uint64_t>(sizeof(physicalType)) * 8u;
+    const uint64_t rangeBits =
+        velox::bits::bitsRequired(statistics.max() - statistics.min());
+    if (rangeBits > (kTypeWidthBits * 3) / 4) {
+      return std::nullopt;
+    }
+    const uint64_t fbwEstimate = FixedBitWidthEncoding<physicalType>::
+        estimateSize(rowCount, statistics, options);
+    // Outer prefix(6) + compressionType(2) + up to 4 sections' worth of
+    // per-section prefix(6) + relative offset(8) overhead.
+    constexpr uint64_t kOverheadBytes = 6u + 2u + 4u * 6u + 4u * 8u;
+    return static_cast<uint64_t>(static_cast<double>(fbwEstimate) * 0.90) +
+        kOverheadBytes;
+  }
+#endif
 
   std::string debugString(int offset) const final;
 
