@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/caching/FileIds.h"
 #include "velox/dwio/common/BufferedInput.h"
 
 #include <cudf/ast/detail/expression_transformer.hpp>
@@ -34,6 +36,71 @@
 #include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive {
+
+/// Wraps another cudf::io::datasource and serves its reads out of Velox's
+/// AsyncDataCache.
+///
+/// On a miss the bytes are fetched with the wrapped source's *host* read into
+/// the cache entry, then staged through a pinned buffer to the device.
+///
+/// Reads are cached under the exact byte range requested. The reader issues the
+/// same ranges for a given (file, column set, filter), so repeated queries hit,
+/// and differently shaped requests over the same bytes miss.
+///
+/// If no AsyncDataCache is configured the wrapper forwards everything to the
+/// wrapped source unchanged.
+class CachingDataSource : public cudf::io::datasource {
+ public:
+  CachingDataSource(
+      std::unique_ptr<cudf::io::datasource> delegate,
+      const std::string& path,
+      folly::Executor* executor);
+
+  ~CachingDataSource() override;
+
+  [[nodiscard]] size_t size() const override;
+
+  std::unique_ptr<datasource::buffer> host_read(size_t offset, size_t size)
+      override;
+
+  size_t host_read(size_t offset, size_t size, uint8_t* dst) override;
+
+  [[nodiscard]] bool supports_device_read() const override;
+
+  [[nodiscard]] bool is_device_read_preferred(size_t size) const override;
+
+  std::future<size_t> device_read_async(
+      size_t offset,
+      size_t size,
+      uint8_t* dst,
+      rmm::cuda_stream_view stream) override;
+
+  size_t device_read(
+      size_t offset,
+      size_t size,
+      uint8_t* dst,
+      rmm::cuda_stream_view stream) override;
+
+  std::unique_ptr<datasource::buffer> device_read(
+      size_t offset,
+      size_t size,
+      rmm::cuda_stream_view stream) override;
+
+ private:
+  // Returns a shared pin covering [offset, offset + size) on cache hit, and an
+  // empty pin if the cache cannot admit it.
+  velox::cache::CachePin pinRange(uint64_t offset, uint64_t size);
+
+  // Fills 'dst' (host memory) with [offset, offset + size), from the cache when
+  // possible and through 'delegate_' otherwise.
+  void readThroughCache(size_t offset, size_t size, uint8_t* dst);
+
+  std::unique_ptr<cudf::io::datasource> delegate_;
+  const size_t fileSize_;
+  folly::Executor* executor_;
+  velox::cache::AsyncDataCache* cache_;
+  StringIdLease fileNum_;
+};
 
 // ---------------- Internal helper ----------------
 // A cudf::io::datasource that serves bytes via Velox BufferedInput so that
