@@ -15,6 +15,9 @@
  */
 
 #include <cmath>
+#include <cstdio>
+#include <limits>
+#include <string>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -65,6 +68,37 @@ class CountMinSketchAggregateTest
     int32_t depth = readBE32(buf);
     int32_t width = readBE32(buf);
     return {depth, width, totalCount};
+  }
+
+  // Serializes a global count_min_sketch(eps=0.5, confidence=0.5, seed=1) over
+  // the single-column input and returns the raw sketch bytes. Used to assert
+  // byte-for-byte parity of the narrower value types against bigint.
+  std::string serializeSketch(const VectorPtr& column) {
+    auto vectors = {makeRowVector({column})};
+    auto planNode =
+        exec::test::PlanBuilder(pool())
+            .values(vectors)
+            .singleAggregation({}, {"count_min_sketch(c0, 0.5, 0.5, 1)"})
+            .planNode();
+    auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
+    EXPECT_EQ(result->size(), 1);
+    auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
+    EXPECT_FALSE(resultFlat->isNullAt(0));
+    auto sv = resultFlat->valueAt(0);
+    return std::string(sv.data(), sv.size());
+  }
+
+  // Returns the uppercase hex encoding of a serialized sketch, matching the
+  // format of Spark's hex(count_min_sketch(...)) reference output.
+  std::string toHex(const StringView& sv) {
+    std::string hex;
+    for (size_t i = 0; i < sv.size(); ++i) {
+      char byteHex[3];
+      snprintf(
+          byteHex, sizeof(byteHex), "%02X", static_cast<uint8_t>(sv.data()[i]));
+      hex += byteHex;
+    }
+    return hex;
   }
 };
 
@@ -151,6 +185,60 @@ TEST_F(CountMinSketchAggregateTest, smallintInput) {
   EXPECT_EQ(totalCount, 5);
 }
 
+TEST_F(CountMinSketchAggregateTest, tinyintInput) {
+  auto vectors = {makeRowVector({makeFlatVector<int8_t>({1, 2, 3, 4, 5})})};
+
+  auto planNode =
+      exec::test::PlanBuilder(pool())
+          .values(vectors)
+          .singleAggregation({}, {"count_min_sketch(c0, 0.5, 0.5, 1)"})
+          .planNode();
+  auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
+  ASSERT_FALSE(resultFlat->isNullAt(0));
+  auto sv = resultFlat->valueAt(0);
+
+  auto [depth, width, totalCount] = parseSketch(sv);
+  EXPECT_EQ(depth, 1);
+  EXPECT_EQ(width, 4);
+  EXPECT_EQ(totalCount, 5);
+}
+
+TEST_F(CountMinSketchAggregateTest, integralTypeSignExtension) {
+  // The tinyint/smallint/integer branches widen the value to int64 before
+  // hashing, exactly as Spark widens TINYINT / SMALLINT / INT to long. A sketch
+  // over the narrow type must therefore be byte-identical to the bigint sketch
+  // of the same values. Cover negatives and the type min/max, where a missing
+  // or wrong sign extension would diverge.
+  EXPECT_EQ(
+      serializeSketch(
+          makeFlatVector<int8_t>(
+              {int8_t(-128), int8_t(127), int8_t(-1), int8_t(0)})),
+      serializeSketch(makeFlatVector<int64_t>({-128, 127, -1, 0})));
+
+  EXPECT_EQ(
+      serializeSketch(
+          makeFlatVector<int16_t>(
+              {int16_t(-32768), int16_t(32767), int16_t(-1), int16_t(0)})),
+      serializeSketch(makeFlatVector<int64_t>({-32768, 32767, -1, 0})));
+
+  EXPECT_EQ(
+      serializeSketch(
+          makeFlatVector<int32_t>(
+              {std::numeric_limits<int32_t>::min(),
+               std::numeric_limits<int32_t>::max(),
+               -1,
+               0})),
+      serializeSketch(
+          makeFlatVector<int64_t>(
+              {std::numeric_limits<int32_t>::min(),
+               std::numeric_limits<int32_t>::max(),
+               -1,
+               0})));
+}
+
 TEST_F(CountMinSketchAggregateTest, varcharInput) {
   auto vectors = {
       makeRowVector({makeFlatVector<StringView>({"hello", "world", "hello"})})};
@@ -171,6 +259,38 @@ TEST_F(CountMinSketchAggregateTest, varcharInput) {
   EXPECT_EQ(totalCount, 3);
 }
 
+TEST_F(CountMinSketchAggregateTest, varcharGoldenParity) {
+  // Byte-for-byte parity of the string (addBinary / murmurHash3) path against a
+  // reference sketch produced by Spark's own
+  // org.apache.spark.util.sketch.CountMinSketch (spark-sketch 4.1.1):
+  //   CountMinSketch.create(0.5, 0.5, 42);
+  //   addString("hello"); addString("world"); addString("hello");
+  //   .toByteArray()
+  // This locks Spark's hashUnsafeBytes murmur3 (signed-byte tail mixing),
+  // double hashing and Math.abs(hash % width) bucketing, complementing the
+  // long-path golden covered by the bigintInput test.
+  auto vectors = {
+      makeRowVector({makeFlatVector<StringView>({"hello", "world", "hello"})})};
+
+  auto planNode =
+      exec::test::PlanBuilder(pool())
+          .values(vectors)
+          .singleAggregation({}, {"count_min_sketch(c0, 0.5, 0.5, 42)"})
+          .planNode();
+  auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
+  ASSERT_FALSE(resultFlat->isNullAt(0));
+  auto sv = resultFlat->valueAt(0);
+
+  std::string expectedHex =
+      "000000010000000000000003000000010000000400000000"
+      "5D20CE9A00000000000000020000000000000000000000000000000100000000"
+      "00000000";
+  EXPECT_EQ(toHex(sv), expectedHex);
+}
+
 TEST_F(CountMinSketchAggregateTest, varbinaryInput) {
   auto vectors = {makeRowVector({makeFlatVector<StringView>(
       {StringView("\x01\x02"), StringView("\x03\x04")}, VARBINARY())})};
@@ -189,6 +309,21 @@ TEST_F(CountMinSketchAggregateTest, varbinaryInput) {
 
   auto [depth, width, totalCount] = parseSketch(sv);
   EXPECT_EQ(totalCount, 2);
+}
+
+TEST_F(CountMinSketchAggregateTest, varbinaryMatchesVarchar) {
+  // The varbinary branch shares the addBinary / murmurHash3 path with varchar,
+  // so hashing the same raw bytes (including a 0x00 and a high byte >= 0x80)
+  // must yield a byte-identical sketch. This locks the binary path to the
+  // Spark-verified varchar golden above.
+  std::vector<std::string> raw = {
+      std::string("\x00\x01\x80\xFF", 4), std::string("hi", 2)};
+  auto varbinary = makeFlatVector<StringView>(
+      {StringView(raw[0]), StringView(raw[1])}, VARBINARY());
+  auto varchar =
+      makeFlatVector<StringView>({StringView(raw[0]), StringView(raw[1])});
+
+  EXPECT_EQ(serializeSketch(varbinary), serializeSketch(varchar));
 }
 
 TEST_F(CountMinSketchAggregateTest, nullInputsSkipped) {
