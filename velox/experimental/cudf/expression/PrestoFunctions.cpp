@@ -15,22 +15,38 @@
  */
 
 #include "velox/experimental/cudf/expression/CommonFunctions.h"
+#include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#include "velox/experimental/cudf/expression/prestosql/DateAddFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/DatePlusIntervalFunction.h"
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/SimpleVector.h"
 
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/strings/slice.hpp>
 
 #include <memory>
+#include <optional>
 
 namespace facebook::velox::cudf_velox {
 namespace {
+
+// Reads the scalar value of a constant expression, materialising the constant
+// vector via pool when the ConstantTypedExpr does not already hold one.
+template <typename T>
+T constantScalarValue(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
+  const auto* constExpr = expr->asUnchecked<core::ConstantTypedExpr>();
+  const auto vector = constExpr->hasValueVector()
+      ? constExpr->valueVector()
+      : constExpr->toConstantVector(pool);
+  return vector->template as<SimpleVector<T>>()->valueAt(0);
+}
 
 void registerPrestoArrayAccessFunctions(const std::string& prefix) {
   // Presto element_at is 1-based, allows negative indices from the end, and
@@ -60,18 +76,14 @@ void registerPrestoArrayAccessFunctions(const std::string& prefix) {
 
 class SubstrFunction : public CudfFunction {
  public:
-  explicit SubstrFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    using velox::exec::ConstantExpr;
-
+  SubstrFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
     VELOX_CHECK_GE(
         expr->inputs().size(), 2, "substr expects at least 2 inputs");
     VELOX_CHECK_LE(expr->inputs().size(), 3, "substr expects at most 3 inputs");
 
-    auto startExpr = std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
-    VELOX_CHECK_NOT_NULL(startExpr, "substr start must be a constant");
-
-    auto startValue =
-        startExpr->value()->as<SimpleVector<int64_t>>()->valueAt(0);
+    VELOX_CHECK(
+        expr->inputs()[1]->isConstantKind(), "substr start must be a constant");
+    auto startValue = constantScalarValue<int64_t>(expr->inputs()[1], pool);
     start_ = static_cast<cudf::size_type>(startValue);
     if (startValue >= 1) {
       // cuDF indexing starts at 0.
@@ -81,12 +93,10 @@ class SubstrFunction : public CudfFunction {
     }
 
     if (expr->inputs().size() > 2) {
-      auto lengthExpr =
-          std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[2]);
-      VELOX_CHECK_NOT_NULL(lengthExpr, "substr length must be a constant");
-
-      auto lengthValue =
-          lengthExpr->value()->as<SimpleVector<int64_t>>()->valueAt(0);
+      VELOX_CHECK(
+          expr->inputs()[2]->isConstantKind(),
+          "substr length must be a constant");
+      auto lengthValue = constantScalarValue<int64_t>(expr->inputs()[2], pool);
       // cuDF uses indices [begin, end).
       // Presto uses length as the length of the substring.
       // We compute the end as start + length.
@@ -100,12 +110,11 @@ class SubstrFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    cudf::numeric_scalar<cudf::size_type> startScalar(start_, true, stream, mr);
-    cudf::numeric_scalar<cudf::size_type> endScalar(
-        hasEnd_ ? end_ : 0, hasEnd_, stream, mr);
-    cudf::numeric_scalar<cudf::size_type> stepScalar(1, true, stream, mr);
-    return cudf::strings::slice_strings(
-        inputCol, startScalar, endScalar, stepScalar, stream, mr);
+    const auto start = std::optional<cudf::size_type>{start_};
+    const auto end =
+        hasEnd_ ? std::optional<cudf::size_type>{end_} : std::nullopt;
+    const auto step = std::optional<cudf::size_type>{1};
+    return cudf::strings::slice_strings(inputCol, start, end, step, stream, mr);
   }
 
  private:
@@ -123,8 +132,10 @@ void registerPrestoFunctions(const std::string& prefix) {
 
   registerCudfFunctions(
       {prefix + "substr", prefix + "substring"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<SubstrFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<SubstrFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("varchar")
@@ -140,14 +151,53 @@ void registerPrestoFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "plus",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<prestosql::DatePlusIntervalFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<prestosql::DatePlusIntervalFunction>(
+            expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("date")
            .argumentType("date")
            .argumentType("interval day to second")
            .build()});
+
+  registerCudfFunction(
+      prefix + "date_add",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<prestosql::DateAddFunction>(expr, pool);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("date")
+           .constantArgumentType("varchar")
+           .argumentType("bigint")
+           .argumentType("date")
+           .build()},
+      true,
+      prestosql::DateAddFunction::canEvaluate);
+
+  registerCudfFunction(
+      prefix + "date_trunc",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<DateTruncFunction>(expr, pool);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("timestamp")
+           .constantArgumentType("varchar")
+           .argumentType("timestamp")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("date")
+           .constantArgumentType("varchar")
+           .argumentType("date")
+           .build()},
+      true,
+      DateTruncFunction::canEvaluate);
 }
 
 } // namespace facebook::velox::cudf_velox

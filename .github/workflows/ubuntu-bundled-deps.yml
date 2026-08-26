@@ -13,8 +13,13 @@
 # limitations under the License.
 
 # Tests the BUNDLED dependency resolution path on a plain Ubuntu runner
-# (no container). Triggered on PRs that change dependency scripts or
-# CMake modules, and on a nightly schedule.
+# (no container). Triggered on PRs that change dependency scripts, CMake
+# modules or Nimble, and on a nightly schedule.
+#
+# This is the only job that sets VELOX_ENABLE_NIMBLE=ON, so it is also the
+# only place Nimble is compiled at all. velox/dwio/nimble is listed below
+# because without it a pull request touching only Nimble reports a fully
+# green board without a single line of it having been built.
 
 name: Ubuntu Bundled Dependencies
 
@@ -30,6 +35,7 @@ on:
       - scripts/setup-helper-functions.sh
       - CMake/**
       - CMakeLists.txt
+      - velox/dwio/nimble/**
       - .github/workflows/ubuntu-bundled-deps.yml
 
 permissions:
@@ -63,7 +69,7 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: velox
           persist-credentials: false

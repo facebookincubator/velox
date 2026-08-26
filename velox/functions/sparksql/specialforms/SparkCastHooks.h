@@ -30,7 +30,8 @@ class SparkCastHooks : public exec::CastHooks {
 
   // TODO: Spark hook allows more string patterns than Presto.
   Expected<Timestamp> castStringToTimestamp(
-      const StringView& view) const override;
+      const StringView& view,
+      bool adjustTimezone) const override;
 
   /// When casting integral value as timestamp, the input is treated as the
   /// number of seconds since the epoch (1970-01-01 00:00:00 UTC).
@@ -47,6 +48,19 @@ class SparkCastHooks : public exec::CastHooks {
   /// non-standard cast mode to cast from string to date.
   Expected<int32_t> castStringToDate(
       const StringView& dateString) const override;
+
+  /// Casts string to TIME (microseconds since midnight as BIGINT).
+  /// Supports format: H:m[:s[.SSSSSS]] where:
+  ///   - H is hour (0-23)
+  ///   - m is minute (0-59)
+  ///   - s is an optional second (0-59); omitted seconds default to zero
+  ///   - SSSSSS is optional fractional seconds (up to 6 digits for
+  ///   microseconds)
+  /// Expects timeString to be trimmed by CastExpr::removeWhiteSpaces.
+  Expected<int64_t> castStringToTime(
+      StringView timeString,
+      const tz::TimeZone* timeZone,
+      int64_t sessionStartTimeMs) const override;
 
   // Allows casting 'NaN', 'Infinity', '-Infinity', 'Inf', '-Inf', and these
   // strings with different letter cases to real.
@@ -78,6 +92,8 @@ class SparkCastHooks : public exec::CastHooks {
     return true;
   }
 
+  bool decimalToFloatHighPrecisionCastEnabled() const override;
+
   exec::PolicyType getPolicy() const override;
 
   // Spark supports TIMESTAMP_UTC casts.
@@ -98,7 +114,7 @@ class SparkCastHooks : public exec::CastHooks {
   // seconds since the epoch (1970-01-01 00:00:00 UTC).
   // Supports integer and floating-point types.
   template <typename T>
-  Expected<Timestamp> castNumberToTimestamp(T seconds) const;
+  Expected<Timestamp> castNumberToTimestamp(T value, bool allowOverflow) const;
 
   const core::QueryConfig& config_;
 

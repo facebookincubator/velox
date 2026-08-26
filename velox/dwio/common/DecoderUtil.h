@@ -17,6 +17,11 @@
 #pragma once
 
 #include <algorithm>
+#include <cstring>
+#include <type_traits>
+
+#include <folly/lang/Bits.h>
+
 #include "velox/common/base/Portability.h"
 #include "velox/common/memory/RawVector.h"
 #include "velox/common/process/ProcessBase.h"
@@ -95,20 +100,13 @@ int32_t filterDictionaryRunSimd(
     } else {
       cache = simd::gather<int32_t, int32_t, 1>(base, indices);
     }
-#ifdef SVE_BITS
+    // The cache byte ends up in the high byte (bits 24-31) of each
+    // gathered int32.  Extract unknowns via bit 30 (kUnknown 0x40) and
+    // passed via the sign bit (kSuccess 0x80).
     auto unknowns = simd::toBitMask(
-        simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1) !=
-        xsimd::batch<uint32_t>(0));
-    auto passed = simd::toBitMask(
-        (simd::reinterpretBatch<uint32_t>(cache) & xsimd::batch<uint32_t>(1)) !=
-        xsimd::batch<uint32_t>(0));
-#else
-    auto unknowns = simd::toBitMask(
-        xsimd::batch_bool<int32_t>(
-            simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1)));
-    auto passed = simd::toBitMask(
-        xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
-#endif
+        (cache & xsimd::batch<int32_t>(kUnknown << 24)) !=
+        xsimd::batch<int32_t>(0));
+    auto passed = simd::toBitMask(cache < xsimd::batch<int32_t>(0));
     if (UNLIKELY(unknowns)) {
       uint16_t bits = unknowns;
       while (bits) {
@@ -152,12 +150,26 @@ inline int32_t firstNullIndex(const uint64_t* nulls, int32_t numRows) {
   return first;
 }
 
+// Returns raw bytes because fixed-width page data may be unaligned.
+template <typename T>
+const char*
+fixedWidthValueBytes(const T* buffer, int32_t row, int32_t rowOffset) {
+  return reinterpret_cast<const char*>(buffer) + (row - rowOffset) * sizeof(T);
+}
+
 template <typename T, typename Any>
 void scatterDense(
     const Any* data,
     const int32_t* indices,
     int32_t size,
     T* target) {
+  if constexpr (std::is_same_v<Any, char>) {
+    for (auto i = 0; i < size; ++i) {
+      target[indices[i]] = folly::loadUnaligned<T>(data + i * sizeof(T));
+    }
+    return;
+  }
+
   auto source = reinterpret_cast<const T*>(data);
   if (source >= target && source < target + indices[size - 1]) {
     for (int32_t i = size - 1; i >= 0; --i) {
@@ -316,7 +328,7 @@ void fixedWidthScan(
           if (isDense(&rows[rowIndex], numRowsInBuffer)) {
             std::memcpy(
                 rawValues + numValues,
-                buffer + rows[rowIndex] - rowOffset,
+                fixedWidthValueBytes<T>(buffer, rows[rowIndex], rowOffset),
                 sizeof(T) * numRowsInBuffer);
             numValues += numRowsInBuffer;
             return;
@@ -329,23 +341,19 @@ void fixedWidthScan(
             [&](int32_t rowIndex) {
               auto firstRow = rows[rowIndex];
               if (!hasFilter) {
+                auto* firstValue =
+                    fixedWidthValueBytes<T>(buffer, firstRow, rowOffset);
                 if (hasHook) {
-                  hook.addValues(
-                      scatterRows + rowIndex,
-                      buffer + firstRow - rowOffset,
-                      kStep);
+                  T values[kStep];
+                  std::memcpy(values, firstValue, sizeof(T) * kStep);
+                  hook.addValues(scatterRows + rowIndex, values, kStep);
                 } else {
                   if (scatter) {
                     scatterDense(
-                        buffer + firstRow - rowOffset,
-                        scatterRows + rowIndex,
-                        kStep,
-                        rawValues);
+                        firstValue, scatterRows + rowIndex, kStep, rawValues);
                   } else {
                     FOLLY_BUILTIN_MEMCPY(
-                        rawValues + numValues,
-                        buffer + firstRow - rowOffset,
-                        sizeof(T) * kStep);
+                        rawValues + numValues, firstValue, sizeof(T) * kStep);
                   }
                 }
                 numValues += kStep;

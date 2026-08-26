@@ -28,7 +28,8 @@ class PrestoCastHooks : public CastHooks {
 
   // Uses the default implementation of 'castFromDateString'.
   Expected<Timestamp> castStringToTimestamp(
-      const StringView& view) const override;
+      const StringView& view,
+      bool adjustTimezone) const override;
 
   Expected<Timestamp> castIntToTimestamp(int64_t seconds) const override;
 
@@ -42,6 +43,11 @@ class PrestoCastHooks : public CastHooks {
   // Uses standard cast mode to cast from string to date.
   Expected<int32_t> castStringToDate(
       const StringView& dateString) const override;
+
+  Expected<int64_t> castStringToTime(
+      StringView timeString,
+      const tz::TimeZone* timeZone,
+      int64_t sessionStartTimeMs) const override;
 
   // Allows casting 'NaN', 'Infinity', and '-Infinity' to real, but not 'Inf' or
   // these strings with different letter cases.

@@ -17,6 +17,7 @@
 #include "velox/common/Casts.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/Mutation.h"
+#include "velox/dwio/parquet/common/ParquetRuntimeStats.h"
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 #include "velox/dwio/parquet/reader/SemanticVersion.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
@@ -55,7 +56,7 @@ class ParquetReaderTest : public ParquetTestBase {
   dwio::common::ReaderOptions makeThriftTrackingReaderOptions() {
     auto readerOptions = makeDefaultReaderOptions();
     auto parquetOptions = std::make_shared<ParquetReaderOptions>();
-    parquetOptions->footerMemoryTrackingThreshold = 1;
+    parquetOptions->setFooterMemoryTrackingThreshold(1);
     readerOptions.setFormatSpecificOptions(std::move(parquetOptions));
     return readerOptions;
   }
@@ -63,13 +64,10 @@ class ParquetReaderTest : public ParquetTestBase {
 
 TEST_F(ParquetReaderTest, createFormatOptions) {
   config::ConfigBase connectorConfig({
-      {std::string(ParquetConfig::kUseColumnNames), "true"},
-      {std::string(ParquetConfig::kFooterSpeculativeIoSize), "99"},
       {std::string(ParquetConfig::kAllowInt32Narrowing), "false"},
       {std::string(ParquetConfig::kFooterMemoryTrackingThreshold), "99"},
   });
   config::ConfigBase session({
-      {std::string(ParquetConfig::kFooterSpeculativeIoSizeSession), "2"},
       {std::string(ParquetConfig::kAllowInt32NarrowingSession), "true"},
       {std::string(ParquetConfig::kFooterMemoryTrackingThresholdSession), "1"},
   });
@@ -77,10 +75,8 @@ TEST_F(ParquetReaderTest, createFormatOptions) {
   ParquetReaderFactory factory;
   auto parquetOptions = checkedPointerCast<ParquetReaderOptions>(
       factory.createFormatOptions(connectorConfig, session));
-  EXPECT_EQ(parquetOptions->columnMappingMode, ColumnMappingMode::kName);
-  EXPECT_EQ(parquetOptions->footerSpeculativeIoSize, 2);
-  EXPECT_TRUE(parquetOptions->allowInt32Narrowing);
-  EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold, 1);
+  EXPECT_TRUE(parquetOptions->allowInt32Narrowing());
+  EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold(), 1);
 }
 
 TEST_F(ParquetReaderTest, parseSample) {
@@ -110,13 +106,220 @@ TEST_F(ParquetReaderTest, parseSample) {
       sampleSchema(), *readerBundle.rowReader, expected, *leafPool_);
 }
 
-TEST_F(ParquetReaderTest, parquetFieldIdColumnMappingNotImplemented) {
-  auto readerOptions = makeDefaultReaderOptions();
-  readerOptions.setColumnMappingMode(ColumnMappingMode::kParquetFieldId);
+TEST_F(ParquetReaderTest, parquetFieldIdColumnMapping) {
+  const auto itemWriteType = ROW({"name", "quantity"}, {VARCHAR(), BIGINT()});
+  const auto attributeWriteType = ROW({"name", "score"}, {VARCHAR(), BIGINT()});
+  const auto writeType =
+      ROW({"id", "flag", "ignored", "items", "attributes"},
+          {BIGINT(),
+           BOOLEAN(),
+           VARCHAR(),
+           ARRAY(itemWriteType),
+           MAP(VARCHAR(), attributeWriteType)});
+  const auto itemValues = makeRowVector(
+      itemWriteType->names(),
+      {makeFlatVector<std::string>({"apple", "banana", "pear"}),
+       makeFlatVector<int64_t>({5, 7, 11})});
+  const auto attributeValues = makeRowVector(
+      attributeWriteType->names(),
+      {makeFlatVector<std::string>({"first", "second"}),
+       makeFlatVector<int64_t>({101, 202})});
+  auto data = makeRowVector(
+      writeType->names(),
+      {makeFlatVector<int64_t>({10, 20}),
+       makeFlatVector<bool>({true, false}),
+       makeFlatVector<std::string>({"skip-a", "skip-b"}),
+       makeArrayVector({0, 2}, itemValues),
+       makeMapVector(
+           {0, 1},
+           makeFlatVector<std::string>({"left", "right"}),
+           attributeValues)});
 
-  VELOX_ASSERT_THROW(
-      createReader("sample.parquet", readerOptions),
-      "Parquet field ID column mapping is not implemented yet.");
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetFieldIds = {
+      ParquetFieldId{10, {}},
+      ParquetFieldId{20, {}},
+      ParquetFieldId{30, {}},
+      ParquetFieldId{
+          40,
+          {ParquetFieldId{
+              41, {ParquetFieldId{42, {}}, ParquetFieldId{43, {}}}}}},
+      ParquetFieldId{
+          50,
+          {ParquetFieldId{51, {}},
+           ParquetFieldId{
+               52, {ParquetFieldId{53, {}}, ParquetFieldId{54, {}}}}}},
+  };
+  auto* sink = write(data, writerOptions);
+
+  const auto itemReadType = ROW({"amount", "label"}, {BIGINT(), VARCHAR()});
+  const auto attributeReadType =
+      ROW({"points", "title"}, {BIGINT(), VARCHAR()});
+  const auto outputType =
+      ROW({"enabled", "items", "attributes", "id"},
+          {BOOLEAN(),
+           ARRAY(itemReadType),
+           MAP(VARCHAR(), attributeReadType),
+           BIGINT()});
+
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(outputType);
+  readerOptions.setColumnMappingMode(ColumnMappingMode::kParquetFieldId);
+  readerOptions.setFieldIds({
+      ParquetFieldId{20, {}},
+      ParquetFieldId{
+          40,
+          {ParquetFieldId{
+              41, {ParquetFieldId{43, {}}, ParquetFieldId{42, {}}}}}},
+      ParquetFieldId{
+          50,
+          {ParquetFieldId{51, {}},
+           ParquetFieldId{
+               52, {ParquetFieldId{54, {}}, ParquetFieldId{53, {}}}}}},
+      ParquetFieldId{10, {}},
+  });
+
+  auto readerBundle =
+      readerBuilder(*sink, outputType).options(readerOptions).build();
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 2ULL);
+  auto type = readerBundle.reader->typeWithId();
+  EXPECT_EQ(type->size(), 4ULL);
+  EXPECT_EQ(type->childByName("enabled")->type()->kind(), TypeKind::BOOLEAN);
+  EXPECT_EQ(type->childByName("items")->type()->kind(), TypeKind::ARRAY);
+  EXPECT_EQ(type->childByName("attributes")->type()->kind(), TypeKind::MAP);
+  EXPECT_EQ(type->childByName("id")->type()->kind(), TypeKind::BIGINT);
+
+  const auto expectedItemValues = makeRowVector(
+      itemReadType->names(),
+      {makeFlatVector<int64_t>({5, 7, 11}),
+       makeFlatVector<std::string>({"apple", "banana", "pear"})});
+  const auto expectedAttributeValues = makeRowVector(
+      attributeReadType->names(),
+      {makeFlatVector<int64_t>({101, 202}),
+       makeFlatVector<std::string>({"first", "second"})});
+  auto expected = makeRowVector(
+      outputType->names(),
+      {makeFlatVector<bool>({true, false}),
+       makeArrayVector({0, 2}, expectedItemValues),
+       makeMapVector(
+           {0, 1},
+           makeFlatVector<std::string>({"left", "right"}),
+           expectedAttributeValues),
+       makeFlatVector<int64_t>({10, 20})});
+  assertReadWithReaderAndExpected(
+      outputType, *readerBundle.rowReader, expected, *leafPool_);
+
+  const auto projectedItemReadType = ROW({"amount"}, {BIGINT()});
+  const auto projectedAttributeReadType = ROW({"points"}, {BIGINT()});
+  const auto projectedOutputType =
+      ROW({"items", "attributes"},
+          {ARRAY(projectedItemReadType),
+           MAP(VARCHAR(), projectedAttributeReadType)});
+  auto projectedReaderOptions = makeDefaultReaderOptions();
+  projectedReaderOptions.setFileSchema(projectedOutputType);
+  projectedReaderOptions.setColumnMappingMode(
+      ColumnMappingMode::kParquetFieldId);
+  projectedReaderOptions.setFieldIds({
+      ParquetFieldId{40, {ParquetFieldId{41, {ParquetFieldId{43, {}}}}}},
+      ParquetFieldId{
+          50,
+          {ParquetFieldId{51, {}},
+           ParquetFieldId{52, {ParquetFieldId{54, {}}}}}},
+  });
+
+  auto projectedReaderBundle = readerBuilder(*sink, projectedOutputType)
+                                   .options(projectedReaderOptions)
+                                   .build();
+  const auto projectedExpectedItemValues = makeRowVector(
+      projectedItemReadType->names(), {makeFlatVector<int64_t>({5, 7, 11})});
+  const auto projectedExpectedAttributeValues = makeRowVector(
+      projectedAttributeReadType->names(),
+      {makeFlatVector<int64_t>({101, 202})});
+  auto projectedExpected = makeRowVector(
+      projectedOutputType->names(),
+      {makeArrayVector({0, 2}, projectedExpectedItemValues),
+       makeMapVector(
+           {0, 1},
+           makeFlatVector<std::string>({"left", "right"}),
+           projectedExpectedAttributeValues)});
+  assertReadWithReaderAndExpected(
+      projectedOutputType,
+      *projectedReaderBundle.rowReader,
+      projectedExpected,
+      *leafPool_);
+}
+
+// Regression test for isChildMissing incorrectly using the channel-index
+// guard (channel >= fileType->size) in kParquetFieldId mode.
+//
+// When a new column is inserted before existing ones (e.g. ADD COLUMN z FIRST),
+// the output channel of the trailing columns shifts up.  For a file written
+// with [a(fid=1), b(fid=2)] and read with requested schema
+// [z(fid=3), a(fid=1), b(fid=2)], b lands at output channel 2.  The file has
+// only 2 columns, so channel(b)=2 >= fileSize=2 would incorrectly mark b as
+// missing.  The fix extends the name-based path (containsChild) to cover
+// kParquetFieldId, which correctly identifies z as absent and a/b as present.
+TEST_F(ParquetReaderTest, parquetFieldIdInsertedColumnNotNullFilled) {
+  // Write [a(fid=1), b(fid=2)] — two rows.
+  auto writeType = ROW({"a", "b"}, {INTEGER(), VARCHAR()});
+  auto data = makeRowVector(
+      writeType->names(),
+      {makeFlatVector<int32_t>({1, 2}),
+       makeFlatVector<std::string>({"x", "y"})});
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetFieldIds = {
+      ParquetFieldId{1, {}}, ParquetFieldId{2, {}}};
+  auto* sink = write(data, writerOptions);
+
+  // Read back with output schema [z(fid=3), a(fid=1), b(fid=2)].
+  // z has no matching field id in the file → null-fill.
+  // a and b are present → must carry their original values.
+  const auto outputType =
+      ROW({"z", "a", "b"}, {INTEGER(), INTEGER(), VARCHAR()});
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(outputType);
+  readerOptions.setColumnMappingMode(ColumnMappingMode::kParquetFieldId);
+  readerOptions.setFieldIds(
+      {ParquetFieldId{3, {}}, ParquetFieldId{1, {}}, ParquetFieldId{2, {}}});
+
+  auto readerBundle =
+      readerBuilder(*sink, outputType).options(readerOptions).build();
+  auto expected = makeRowVector(
+      outputType->names(),
+      {makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+       makeFlatVector<int32_t>({1, 2}),
+       makeFlatVector<std::string>({"x", "y"})});
+  assertReadWithReaderAndExpected(
+      outputType, *readerBundle.rowReader, expected, *leafPool_);
+}
+
+TEST_F(ParquetReaderTest, nestedNameColumnMapping) {
+  auto data = makeRowVector(
+      {"nested"},
+      {makeRowVector(
+          // Make positional and name-based mapping disagree.
+          {"padding", "present"},
+          {makeFlatVector<int32_t>({10, 20, 30}),
+           makeFlatVector<int32_t>({1, 2, 3})})});
+  auto* sink = write(data);
+
+  const auto outputNestedType = ROW({"present", "missing"}, INTEGER());
+  const auto outputType = ROW("nested", outputNestedType);
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(outputType);
+  readerOptions.setColumnMappingMode(ColumnMappingMode::kName);
+
+  auto readerBundle =
+      readerBuilder(*sink, outputType).options(readerOptions).build();
+  auto expected = makeRowVector(
+      {"nested"},
+      {makeRowVector(
+          {"present", "missing"},
+          {makeFlatVector<int32_t>({1, 2, 3}),
+           makeNullableFlatVector<int32_t>(
+               {std::nullopt, std::nullopt, std::nullopt})})});
+  assertReadWithReaderAndExpected(
+      outputType, *readerBundle.rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parseEmptyNestedList) {
@@ -382,6 +585,35 @@ TEST_F(ParquetReaderTest, parseArrayOfRowHiveReservedKeywords) {
           arrayElement->childAt(2))
           ->name_,
       "price");
+}
+
+TEST_F(ParquetReaderTest, parseArrayOfRowWithPositionMapping) {
+  // Covers kPosition when requested names differ from physical names for a
+  // legacy LIST layout. The LIST shape must still be inferred from the physical
+  // repeated-node names, not the requested positional names.
+  const auto itemType =
+      ROW({"renamed_name", "renamed_quantity", "renamed_price"},
+          {VARCHAR(), INTEGER(), DOUBLE()});
+  const auto outputType =
+      ROW({"renamed_id", "renamed_items"}, {INTEGER(), ARRAY(itemType)});
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(outputType);
+  readerOptions.setColumnMappingMode(ColumnMappingMode::kPosition);
+  auto readerBundle =
+      readerBuilder("array_of_row_hive_reserved_keywords.parquet", outputType)
+          .options(readerOptions)
+          .build();
+
+  EXPECT_EQ(readerBundle.reader->rowType()->toString(), outputType->toString());
+  auto type = readerBundle.reader->typeWithId();
+  ASSERT_EQ(type->size(), 2ULL);
+
+  auto items = type->childByName("renamed_items");
+  ASSERT_EQ(items->type()->kind(), TypeKind::ARRAY);
+  ASSERT_EQ(items->size(), 1ULL);
+  auto arrayElement = items->childAt(0);
+  EXPECT_EQ(arrayElement->type()->kind(), TypeKind::ROW);
+  EXPECT_EQ(arrayElement->type()->toString(), itemType->toString());
 }
 
 TEST_F(ParquetReaderTest, parseSampleRange1) {
@@ -1264,6 +1496,50 @@ TEST_F(ParquetReaderTest, readVarbinaryFromFLBA) {
           ->valueAt(0));
 }
 
+// Regression test for skipping FIXED_LEN_BYTE_ARRAY values under a filter on a
+// sibling column. See flba_skip.parquet in examples/README.md for the fixture.
+TEST_F(ParquetReaderTest, fixedLenByteArraySkipWithFilter) {
+  const std::string filename("flba_skip.parquet");
+  const auto fileSchema = ROW({"key", "value"}, {INTEGER(), VARBINARY()});
+
+  constexpr int32_t kNumRows = 40;
+  std::vector<int64_t> evenKeys;
+  for (int64_t i = 0; i < kNumRows; i += 2) {
+    evenKeys.push_back(i);
+  }
+  const auto kNumSelected = static_cast<vector_size_t>(evenKeys.size());
+  FilterMap filters;
+  filters.insert(
+      {"key",
+       std::make_unique<common::BigintValuesUsingBitmask>(
+           0, kNumRows - 2, std::move(evenKeys), false)});
+
+  // Backing storage for the expected 4-byte big-endian values.
+  std::vector<std::string> valueStore;
+  for (int32_t i = 0; i < kNumRows; i += 2) {
+    const auto u = static_cast<uint32_t>(i);
+    std::string bytes(4, '\0');
+    bytes[0] = static_cast<char>((u >> 24) & 0xffU);
+    bytes[1] = static_cast<char>((u >> 16) & 0xffU);
+    bytes[2] = static_cast<char>((u >> 8) & 0xffU);
+    bytes[3] = static_cast<char>(u & 0xffU);
+    valueStore.push_back(std::move(bytes));
+  }
+  auto expected = makeRowVector(
+      {"key", "value"},
+      {
+          makeFlatVector<int32_t>(
+              kNumSelected, [](auto row) { return row * 2; }),
+          makeFlatVector<StringView>(
+              kNumSelected,
+              [&](auto row) { return StringView(valueStore[row]); },
+              nullptr,
+              VARBINARY()),
+      });
+
+  assertReadWithFilters(filename, fileSchema, std::move(filters), expected);
+}
+
 TEST_F(ParquetReaderTest, readBinaryAsStringFromNation) {
   const std::string filename("nation.parquet");
 
@@ -1455,7 +1731,7 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyStructValue) {
   }
 }
 
-TEST_F(ParquetReaderTest, struct_of_array_of_array) {
+TEST_F(ParquetReaderTest, structOfArrayOfArray) {
   //  The Schema is of type
   //  message hive_schema {
   //    optional group test {
@@ -1657,6 +1933,78 @@ TEST_F(ParquetReaderTest, readerWithSchema) {
   EXPECT_EQ(reader.rowType()->toString(), schema->toString());
 }
 
+// Test that loadFileMetaData rejects a Parquet trailer whose 4-byte
+// footerLength is near UINT32_MAX. The validation footerLength + 12 must be
+// computed in 64-bit; a 32-bit computation wraps to a tiny value that passes
+// the file-length check and drives an out-of-bounds read while reassembling
+// the footer.
+TEST_F(ParquetReaderTest, corruptFooterLengthWraps) {
+  // Trailer layout: [padding][4-byte footerLength][PAR1]. Choosing a
+  // footerLength close to UINT32_MAX makes footerLength + 12 wrap to 4 in
+  // 32-bit arithmetic, which trivially satisfies the wrapped guard.
+  std::string dataBuf(8, '\0');
+  const uint32_t corruptFooterLength = 0xFFFFFFF8;
+  dataBuf.append(
+      reinterpret_cast<const char*>(&corruptFooterLength), sizeof(uint32_t));
+  dataBuf.append("PAR1");
+
+  auto readerOptions = makeDefaultReaderOptions();
+  auto file = std::make_shared<InMemoryReadFile>(std::move(dataBuf));
+  auto buffer = std::make_unique<dwio::common::BufferedInput>(
+      file, readerOptions.memoryPool());
+
+  VELOX_ASSERT_THROW(
+      ParquetReader(std::move(buffer), readerOptions),
+      "is inconsistent with file length");
+}
+
+// Regression test for the BooleanDecoder dense fast path. A dense read whose
+// row count is not a multiple of 8 must preserve the unread bits of the
+// current byte so a subsequent read resumes at the correct bit. Reading a
+// plain-encoded boolean page in two dense chunks split at row 3 (a
+// non-multiple of 8) previously dropped the remaining 5 bits of the first
+// byte and misaligned every following value.
+TEST_F(ParquetReaderTest, booleanDenseReadSplitAcrossByte) {
+  const auto rowType = ROW({"b"}, {BOOLEAN()});
+  // 40 rows span 5 encoded bytes; the pattern is non-periodic over a byte so
+  // a misaligned resume produces observably wrong values.
+  constexpr int32_t kNumRows = 40;
+  auto values = makeFlatVector<bool>(
+      kNumRows, [](auto row) { return (row % 3) == 0 || (row % 7) == 0; });
+  auto data = makeRowVector({"b"}, {values});
+
+  auto* sink = write(data);
+  auto readerBundle = readerBuilder(*sink, rowType).build();
+  ASSERT_EQ(readerBundle.reader->numberOfRows(), kNumRows);
+
+  auto& rowReader = *readerBundle.rowReader;
+  auto result = BaseVector::create(rowType, 0, leafPool_.get());
+
+  // First dense chunk: 3 rows, ending mid first byte (non-multiple of 8).
+  ASSERT_EQ(rowReader.next(3, result), 3);
+  {
+    auto* flat = result->as<RowVector>()
+                     ->childAt(0)
+                     ->loadedVector()
+                     ->asFlatVector<bool>();
+    for (int32_t i = 0; i < 3; ++i) {
+      EXPECT_EQ(flat->valueAt(i), values->valueAt(i)) << "row " << i;
+    }
+  }
+
+  // Second dense chunk: the remaining rows must resume at row 3.
+  ASSERT_EQ(rowReader.next(kNumRows, result), kNumRows - 3);
+  {
+    auto* flat = result->as<RowVector>()
+                     ->childAt(0)
+                     ->loadedVector()
+                     ->asFlatVector<bool>();
+    for (int32_t i = 0; i < kNumRows - 3; ++i) {
+      EXPECT_EQ(flat->valueAt(i), values->valueAt(i + 3)) << "row " << (i + 3);
+    }
+  }
+}
+
 TEST_F(ParquetReaderTest, columnStatistics) {
   auto data = makeRowVector(
       {"a", "b", "c"},
@@ -1773,6 +2121,54 @@ TEST_F(ParquetReaderTest, columnStatisticsMultipleRowGroups) {
   // Global min/max across all row groups.
   EXPECT_EQ(intStats->getMinimum(), 1);
   EXPECT_EQ(intStats->getMaximum(), 50);
+}
+
+TEST_F(ParquetReaderTest, readNullTypeWithRequestedSchema) {
+  constexpr vector_size_t kRows = 7;
+  const auto rowType =
+      ROW({"unknown", "struct_unknown", "array_unknown", "map_unknown"},
+          {UNKNOWN(),
+           ROW({"n"}, {UNKNOWN()}),
+           ARRAY(UNKNOWN()),
+           MAP(VARCHAR(), UNKNOWN())});
+
+  auto unknownVector =
+      BaseVector::createNullConstant(UNKNOWN(), kRows, pool_.get());
+  auto structUnknownVector = makeRowVector(
+      {"n"},
+      {BaseVector::createNullConstant(UNKNOWN(), kRows, pool_.get())},
+      [](vector_size_t row) { return row == 3; });
+  auto arrayUnknownVector = makeArrayVector(
+      {0, 2, 2, 3, 3, 6, 6},
+      BaseVector::createNullConstant(UNKNOWN(), 6, pool_.get()),
+      {1});
+  auto mapUnknownVector = makeMapVector(
+      {0, 1, 1, 3, 3, 4, 4},
+      makeFlatVector<std::string>({"a", "b", "c", "d"}),
+      BaseVector::createNullConstant(UNKNOWN(), 4, pool_.get()),
+      {1, 5});
+
+  auto data = makeRowVector(
+      rowType->names(),
+      {unknownVector,
+       structUnknownVector,
+       arrayUnknownVector,
+       mapUnknownVector});
+
+  auto* sink = write(data);
+  auto reader = createReaderInMemory(*sink);
+
+  EXPECT_EQ(reader->numberOfRows(), kRows);
+  EXPECT_EQ(reader->rowType()->toString(), rowType->toString());
+
+  auto scanSpec = makeScanSpec(rowType);
+  scanSpec->getOrCreateChild(facebook::velox::common::Subfield("unknown"))
+      ->setFilter(exec::isNull());
+  auto rowReaderOpts = makeRowReaderOpts(rowType);
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, columnStatisticsTimestamp) {
@@ -2034,18 +2430,17 @@ TEST_F(ParquetReaderTest, thriftMemoryRuntimeStat) {
   rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
-  dwio::common::RuntimeStatistics stats;
+  dwio::common::RuntimeStats stats;
   rowReader->updateRuntimeStats(stats);
-  EXPECT_GT(stats.parquetFooterEstimatedBytes, 0);
 
   auto metrics = stats.toRuntimeMetricMap();
-  ASSERT_TRUE(metrics.count("parquetFooterEstimatedBytes"));
-  EXPECT_EQ(
-      metrics["parquetFooterEstimatedBytes"].sum,
-      stats.parquetFooterEstimatedBytes);
-  EXPECT_EQ(
-      metrics["parquetFooterEstimatedBytes"].unit,
-      RuntimeCounter::Unit::kBytes);
+  const auto metricName = fmt::format(
+      "{}.{}",
+      FileFormatName::toName(FileFormat::PARQUET),
+      ParquetRuntimeStats::kFooterEstimatedBytes);
+  ASSERT_TRUE(metrics.count(metricName));
+  EXPECT_GT(metrics[metricName].sum, 0);
+  EXPECT_EQ(metrics[metricName].unit, RuntimeCounter::Unit::kBytes);
 }
 
 // Verifies that without tracking the runtime stat stays at zero and
@@ -2057,12 +2452,15 @@ TEST_F(ParquetReaderTest, thriftMemoryRuntimeStatAbsentWithoutTracking) {
   rowReaderOpts.setScanSpec(makeScanSpec(sampleSchema()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
-  dwio::common::RuntimeStatistics stats;
+  dwio::common::RuntimeStats stats;
   rowReader->updateRuntimeStats(stats);
-  EXPECT_EQ(stats.parquetFooterEstimatedBytes, 0);
 
   auto metrics = stats.toRuntimeMetricMap();
-  EXPECT_EQ(metrics.count("parquetFooterEstimatedBytes"), 0);
+  const auto metricName = fmt::format(
+      "{}.{}",
+      FileFormatName::toName(FileFormat::PARQUET),
+      ParquetRuntimeStats::kFooterEstimatedBytes);
+  EXPECT_EQ(metrics.count(metricName), 0);
 }
 
 // Verifies that without setting the threshold the tracking path is
@@ -2114,4 +2512,38 @@ TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
   }
 
   EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
+}
+
+TEST_F(ParquetReaderTest, byteStreamSplitFloat) {
+  // bss_float.parquet: 100 rows of REQUIRED float encoded with
+  // BYTE_STREAM_SPLIT, no compression, data page v1. The values were generated
+  // with numpy's default RNG (seed 42) and stored as float32.
+  auto schema = ROW({"float_val"}, {REAL()});
+  auto readerBundle = readerBuilder("bss_float.parquet", schema).build();
+  EXPECT_EQ(readerBundle.reader->numberOfRows().value(), 100ULL);
+
+  auto result = BaseVector::create(schema, 0, leafPool_.get());
+  EXPECT_TRUE(readerBundle.rowReader->next(100, result));
+  EXPECT_EQ(result->size(), 100);
+
+  auto* floatColumn = result->as<RowVector>()
+                          ->childAt(0)
+                          ->loadedVector()
+                          ->asFlatVector<float>();
+  ASSERT_TRUE(floatColumn != nullptr);
+  ASSERT_EQ(floatColumn->size(), 100);
+
+  // Spot-check decoded values across the page to confirm the split byte
+  // streams are reassembled in the correct order.
+  const std::vector<std::pair<vector_size_t, float>> expected = {
+      {0, 0.49671414494514465f},
+      {1, -0.13826429843902588f},
+      {2, 0.6476885676383972f},
+      {50, 0.32408398389816284f},
+      {74, -2.6197450160980225f},
+      {99, -0.23458713293075562f}};
+  for (const auto& [index, value] : expected) {
+    EXPECT_FALSE(floatColumn->isNullAt(index));
+    EXPECT_FLOAT_EQ(floatColumn->valueAt(index), value);
+  }
 }

@@ -461,7 +461,7 @@ build impact analysis and selective builds.
   call.  This is particularly a problem for longer signatures with repeated
   types or constant arguments. For example, `phrobinicate(/*elements=*/{1, 2},
   /*startOffset=*/0, /*length=*/2)`
-* Use the /*argName=*/value format (note the lack of spaces). Clang-tidy
+* Use the `/*argName=*/value` format (note the lack of spaces). Clang-tidy
   supports checking the given argument name against the declaration when this
   format is used.
 
@@ -554,6 +554,41 @@ using ContinuePromise = VeloxPromise<bool>;
 * **Never use `friend`, `FRIEND_TEST`, or any friend declarations.** If a test
   needs access to private members, redesign the API or test through public
   methods instead.
+
+### Breaking API changes and `VELOX_ENABLE_BACKWARD_COMPATIBILITY`
+
+Velox is synced into Meta's internal repository. Prestissimo's copy there is
+read-only — its source of truth is the Presto GitHub repo — so it cannot be
+updated in the same change as a breaking Velox API change. To let it keep
+compiling, Velox can carry the old signature behind the
+`VELOX_ENABLE_BACKWARD_COMPATIBILITY` macro. Only Prestissimo's internal build
+defines it; CMake and every open-source build see the new API alone.
+
+* **Additive only.** The old and new signatures must coexist in one binary.
+  Never select between them with `#ifdef`/`#else` — a change that alters a
+  return type or a virtual's signature gives different translation units
+  different vtable layouts, which is an ODR violation rather than a
+  compatibility shim. A change that cannot be made additive cannot use the
+  macro.
+* **Define the legacy form inline in the header,** delegating to the new one.
+  Prestissimo's build compiles the header, so an out-of-line definition would
+  not reach it.
+* **It is temporary.** Name the replacement on the legacy declaration and
+  delete the guarded block once Prestissimo has migrated. The macro is a
+  bridge, not a deprecation mechanism — do not reach for it to spare callers
+  you can update yourself, and never for callers that live in this repository.
+
+```cpp
+  // Current API.
+  ExchangeNode(const PlanNodeId& id, RowTypePtr type, std::string serdeKind);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Legacy constructor. Prefer the std::string overload above. Removed once
+  /// all callers have migrated.
+  ExchangeNode(const PlanNodeId& id, RowTypePtr type, VectorSerde::Kind kind)
+      : ExchangeNode(id, std::move(type), VectorSerde::kindName(kind)) {}
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
+```
 
 ## Tests
 

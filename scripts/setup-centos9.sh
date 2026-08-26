@@ -61,7 +61,7 @@ function install_build_prerequisites {
     llvm ninja-build python3-pip python3-devel wget which
 
   install_uv
-  uv_install cmake@3.31.1
+  uv_install --force cmake@4.3.2
 
   if [[ ${USE_CLANG} != "false" ]]; then
     install_clang15
@@ -112,6 +112,8 @@ function install_velox_deps {
   run_and_time install_protobuf
   run_and_time install_fmt
   run_and_time install_fast_float
+  run_and_time install_flatbuffers
+  run_and_time install_openzl
   run_and_time install_folly
   run_and_time install_fizz
   run_and_time install_wangle

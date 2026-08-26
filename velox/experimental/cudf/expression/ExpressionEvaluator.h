@@ -16,7 +16,9 @@
 
 #pragma once
 
-#include "velox/expression/Expr.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
+
+#include "velox/core/Expressions.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/type/Type.h"
 
@@ -25,9 +27,17 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
+
+namespace facebook::velox::core {
+class QueryCtx;
+} // namespace facebook::velox::core
 
 namespace facebook::velox::cudf_velox {
 
@@ -61,6 +71,15 @@ inline std::vector<cudf::column_view> tableViewToColumnViews(
   return result;
 }
 
+// Throws a VeloxUserError with userMessage if any non-null entry of cond is
+// false. cond must be a BOOL8 column. Does nothing for empty or all-null
+// columns.
+void checkAllTrue(
+    cudf::column_view cond,
+    std::string_view userMessage,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
 class CudfFunction {
  public:
   virtual ~CudfFunction() = default;
@@ -72,14 +91,14 @@ class CudfFunction {
 
 using CudfFunctionFactory = std::function<std::shared_ptr<CudfFunction>(
     const std::string& name,
-    const std::shared_ptr<velox::exec::Expr>& expr)>;
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool)>;
 
 // Optional function-specific eligibility check applied after signature
 // matching. Use this for semantic restrictions that cannot be expressed by a
 // FunctionSignature. Both FunctionExpression::canEvaluate and
 // createCudfFunction apply this filter.
-using CudfCanEvaluate =
-    std::function<bool(const std::shared_ptr<velox::exec::Expr>& expr)>;
+using CudfCanEvaluate = std::function<bool(const core::TypedExprPtr& expr)>;
 
 struct CudfFunctionSpec {
   CudfFunctionFactory factory;
@@ -107,7 +126,8 @@ void registerCudfFunctions(
 /// signature.
 std::shared_ptr<CudfFunction> createCudfFunction(
     const std::string& name,
-    const std::shared_ptr<velox::exec::Expr>& expr);
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool);
 
 bool registerBuiltinFunctions(const std::string& prefix);
 
@@ -127,34 +147,12 @@ class CudfExpression {
 
 using CudfExpressionPtr = std::shared_ptr<CudfExpression>;
 
-using CudfExpressionEvaluatorCanEvaluate =
-    std::function<bool(std::shared_ptr<velox::exec::Expr> expr)>;
-using CudfExpressionEvaluatorCreate =
-    std::function<std::shared_ptr<CudfExpression>(
-        std::shared_ptr<velox::exec::Expr> expr,
-        const RowTypePtr& inputRowSchema)>;
-
-// Register a CudfExpression evaluator.
-// - name: unique identifier (e.g., "ast", "function", "my_custom").
-// - priority: higher number = higher priority.
-// - canEvaluate: shallow check whether evaluator can handle current expr root.
-// - create: factory to build the evaluator node.
-// - overwrite: replace existing registration with the same name if true.
-bool registerCudfExpressionEvaluator(
-    const std::string& name,
-    int priority,
-    CudfExpressionEvaluatorCanEvaluate canEvaluate,
-    CudfExpressionEvaluatorCreate create,
-    bool overwrite = true);
-
 class FunctionExpression : public CudfExpression {
  public:
   static std::shared_ptr<FunctionExpression> create(
-      const std::shared_ptr<velox::exec::Expr>& expr,
-      const RowTypePtr& inputRowSchema);
-
-  // TODO (dm): A storage for keeping results in case this is a multiply
-  // referenced subexpression (to do CSE)
+      const core::TypedExprPtr& expr,
+      const RowTypePtr& inputRowSchema,
+      memory::MemoryPool* pool);
 
   ColumnOrView eval(
       std::vector<cudf::column_view> inputColumnViews,
@@ -164,9 +162,9 @@ class FunctionExpression : public CudfExpression {
 
   void close() override;
 
-  // Check if this specific operation can be evaluated by FunctionExpression
-  // (does not recursively check children)
-  static bool canEvaluate(std::shared_ptr<velox::exec::Expr> expr);
+  /// Check if this specific operation can be evaluated by FunctionExpression.
+  /// Does not recursively check children.
+  static bool canEvaluate(const core::TypedExprPtr& expr);
 
  private:
   static std::unique_ptr<cudf::column> makeStructChildColumn(
@@ -175,27 +173,50 @@ class FunctionExpression : public CudfExpression {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr);
 
-  std::shared_ptr<velox::exec::Expr> expr_;
+  core::TypedExprPtr expr_;
   std::shared_ptr<CudfFunction> function_;
   std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
-  // TODO: Remove once FieldReference can resolve index directly from RowType.
+  // Index of the dereferenced field inside its parent ROW for nested
+  // FieldAccess/Dereference expressions. -1 for non-nested or non-field
+  // expressions.
   int32_t fieldIndex_{-1};
 
   RowTypePtr inputRowSchema_;
 };
 
+/// Create a CudfExpression from a TypedExpr, selecting the best evaluator.
+/// Does not apply expression-level optimization; callers that need
+/// optimization should run expression::optimize at the top-level entry point
+/// first.
 std::shared_ptr<CudfExpression> createCudfExpression(
-    std::shared_ptr<velox::exec::Expr> expr,
-    const RowTypePtr& inputRowSchema);
+    const core::TypedExprPtr& expr,
+    const RowTypePtr& inputRowSchema,
+    memory::MemoryPool* pool);
 
-/// Lightweight check if an expression tree is supported by any CUDF evaluator
-/// without initializing CudfExpression objects.
-/// \param expr Expression to check
-/// \param deep If true, recursively check all children in the expression tree;
-///             if false, only check if the top-level operation is supported
-///             (useful when delegating to subexpressions)
-bool canBeEvaluatedByCudf(
-    std::shared_ptr<velox::exec::Expr> expr,
-    bool deep = true);
+/// Plan-time GPU eligibility for a top-level operator expression, as invoked by
+/// the OperatorAdapters and the aggregation validators. Optimizes the
+/// expression (constant folding and rewrites) with `pool` so the check sees the
+/// same form the operator compiles at runtime; e.g. cast(<literal> as DECIMAL)
+/// folds to a plain decimal constant that the structural check accepts, rather
+/// than a live decimal-target cast that it would reject. Then applies the
+/// query-context-dependent timezone fallback (a timezone-sensitive date_trunc
+/// under adjust_timestamp_to_session_timezone must stay on CPU) and a
+/// structural support check on the optimized expression. When
+/// `queryCtx` or `pool` is null, skips optimization and checks `expr` directly.
+/// \param pool Leaf pool used for constant folding during optimization,
+///             typically the operator's own pool.
+bool canExprRunOnGpu(
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
+
+/// Extract the full field path from a field access / dereference chain.
+/// Returns nullopt for non-field expressions.
+std::optional<std::vector<std::string>> extractFieldPath(
+    const core::TypedExprPtr& expr);
+
+/// Return the set of top-level input field names referenced by the expression.
+std::unordered_set<std::string> referencedInputFields(
+    const core::TypedExprPtr& expr);
 
 } // namespace facebook::velox::cudf_velox

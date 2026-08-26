@@ -721,6 +721,49 @@ TEST_P(HashJoinTest, dynamicFilters) {
           })
           .run();
     }
+
+    // Right anti join.
+    op = PlanBuilder(planNodeIdGenerator, pool_.get())
+             .tableScan(probeType)
+             .capturePlanNodeId(probeScanId)
+             .hashJoin(
+                 {"c0"},
+                 {"u_c0"},
+                 buildSide,
+                 "",
+                 {"u_c0", "u_c1"},
+                 core::JoinType::kRightAnti)
+             .capturePlanNodeId(joinId)
+             .project({"u_c0", "u_c1 + 1"})
+             .planNode();
+    {
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .makeInputSplits(makeInputSplits(probeScanId))
+          .referenceQuery(
+              "SELECT u.c0, u.c1 + 1 FROM u WHERE NOT EXISTS (SELECT 1 FROM t WHERE t.c0 = u.c0)")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            auto planStats = toPlanStats(task->taskStats());
+            if (hasSpill) {
+              // Dynamic filtering should be disabled with spilling triggered.
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_EQ(
+                  planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                  std::unordered_set<core::PlanNodeId>({joinId}));
+            }
+          })
+          .run();
+    }
   }
 
   // Basic push-down with column names projected out of the table scan
@@ -2144,13 +2187,17 @@ TEST_P(HashJoinTest, spillFileSize) {
 }
 
 TEST_P(HashJoinTest, spillPartitionBitsOverlap) {
+  // Use enough rows so the hash table exits array mode and sizeBits exceeds
+  // spillStartPartitionBit. checkHashBitsOverlap is skipped in array mode.
+  // folly::xoshiro256pp_32 produces different sequences on ARM64 vs x86,
+  // and narrower key distributions can keep the table in array mode.
   auto builder =
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .numDrivers(numDrivers_)
           .parallelizeJoinBuildRows(parallelBuildSideRowsEnabled_)
           .keyTypes({BIGINT(), BIGINT()})
-          .probeVectors(2'000, 3)
-          .buildVectors(2'000, 3)
+          .probeVectors(5'000, 3)
+          .buildVectors(5'000, 3)
           .referenceQuery(
               "SELECT t_k0, t_k1, t_data, u_k0, u_k1, u_data FROM t, u WHERE t_k0 = u_k0 and t_k1 = u_k1")
           .config(core::QueryConfig::kSpillStartPartitionBit, "8")

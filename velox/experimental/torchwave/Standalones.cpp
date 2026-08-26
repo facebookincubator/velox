@@ -16,11 +16,39 @@
 
 #include "velox/experimental/torchwave/Standalones.h"
 
+#include <algorithm>
+#include <limits>
+#include <optional>
+
 #include <ATen/ATen.h>
+#include <c10/core/WrapDimMinimal.h>
 
 #include "velox/experimental/torchwave/Registry.h"
+#include "velox/experimental/torchwave/Utils.h"
 
 namespace torch::wave {
+
+namespace {
+
+// Shape and strides of 'self', in buffers the caller can edit before handing
+// them to aliasTensor. Rank is bounded by kMaxDims in practice, but a shortcut
+// can also run on a graph value the kernels never see, so this is not fixed.
+using DimVector = c10::SmallVector<int64_t, 5>;
+
+struct Geometry {
+  DimVector sizes;
+  DimVector strides;
+};
+
+Geometry geometryOf(const at::Tensor& self) {
+  const auto sizes = self.sizes();
+  const auto strides = self.strides();
+  return {
+      DimVector(sizes.begin(), sizes.end()),
+      DimVector(strides.begin(), strides.end())};
+}
+
+} // namespace
 
 void runStandaloneShortcut(
     const LaunchData& data,
@@ -30,13 +58,39 @@ void runStandaloneShortcut(
 
   // Reads operand 'i' as a tensor from the frame.
   auto tensorAt = [&](size_t i) -> at::Tensor {
-    return frame.getIValue(args[i]->id()).toTensor();
+    const auto& iv = frame.getIValue(args[i]->id());
+    TORCH_CHECK(
+        iv.isTensor(),
+        "runStandaloneShortcut: shortcut ",
+        static_cast<int>(data.launch->standaloneShortcut),
+        " operand ",
+        i,
+        " value %",
+        args[i]->id(),
+        " is not a tensor (tag=",
+        static_cast<int>(iv.tag),
+        ")");
+    return iv.toTensor();
   };
   // Reads operand 'i' as an integer: a dynamic value (args[i] set) is read from
-  // the frame; a constant comes from intArgs.
+  // the frame; a constant comes from intArgs. A dynamic bound may be a SymInt
+  // (a data-dependent size from item()/sym_size), which is not a plain Int
+  // IValue, so read it through the SymInt.
   auto intAt = [&](size_t i) -> int64_t {
-    return args[i] != nullptr ? frame.getIValue(args[i]->id()).toInt()
-                              : static_cast<int64_t>(intArgs[i]);
+    if (args[i] == nullptr) {
+      return static_cast<int64_t>(intArgs[i]);
+    }
+    const auto& iv = frame.getIValue(args[i]->id());
+    return iv.isSymInt() ? iv.toSymInt().guard_int(__FILE__, __LINE__)
+                         : iv.toInt();
+  };
+  // Reads an optional int operand for slice start/end: a None value (an omitted
+  // bound, e.g. from t[:end]) becomes nullopt; otherwise as intAt.
+  auto optIntAt = [&](size_t i) -> std::optional<int64_t> {
+    if (args[i] != nullptr && frame.getIValue(args[i]->id()).isNone()) {
+      return std::nullopt;
+    }
+    return intAt(i);
   };
   auto setOutput = [&](c10::IValue value) {
     frame.setIValue(data.actualOutputs[0], std::move(value));
@@ -56,15 +110,66 @@ void runStandaloneShortcut(
       break;
     }
     case StandaloneShortcut::kSlice: {
-      // (Tensor self, int dim, int? start, int? end, int step).
+      // (Tensor self, int dim, int? start, int? end, int step). start/end are
+      // optional (None) and may be data-dependent SymInts (e.g. t[:end] where
+      // end is a runtime value), so the clamping below is load-bearing, not a
+      // formality -- it is aten's slice() semantics reproduced verbatim.
       auto self = tensorAt(0);
-      setOutput(at::slice(self, intAt(1), intAt(2), intAt(3), intAt(4)));
+      const auto rank = self.dim();
+      TORCH_CHECK_INDEX(
+          rank > 0, "slice() cannot be applied to a 0-dim tensor.");
+      const auto dim = c10::maybe_wrap_dim(intAt(1), rank);
+      const auto step = intAt(4);
+      TORCH_CHECK(step > 0, "slice step must be positive");
+      auto geometry = geometryOf(self);
+      const auto extent = geometry.sizes[dim];
+      // An omitted end is aten's open-ended INT64_MAX, which the clamp below
+      // turns into 'extent'; it must not be confused with a negative bound.
+      auto start = optIntAt(2).value_or(0);
+      auto end = optIntAt(3).value_or(std::numeric_limits<int64_t>::max());
+      if (start < 0) {
+        start += extent;
+      }
+      if (end < 0) {
+        end += extent;
+      }
+      start = std::clamp<int64_t>(start, 0, extent);
+      end = std::clamp<int64_t>(end, start, extent);
+      const auto storageOffset =
+          self.storage_offset() + start * geometry.strides[dim];
+      geometry.sizes[dim] = (end - start + step - 1) / step; // round up
+      geometry.strides[dim] *= step;
+      setOutput(
+          aliasTensor(self, geometry.sizes, geometry.strides, storageOffset));
       break;
     }
     case StandaloneShortcut::kSelectInt: {
-      // (Tensor self, int dim, int index).
+      // (Tensor self, int dim, int index). Selecting drops 'dim'.
       auto self = tensorAt(0);
-      setOutput(at::select(self, intAt(1), intAt(2)));
+      const auto rank = self.dim();
+      TORCH_CHECK_INDEX(
+          rank > 0, "select() cannot be applied to a 0-dim tensor.");
+      const auto dim = c10::maybe_wrap_dim(intAt(1), rank);
+      auto geometry = geometryOf(self);
+      const auto extent = geometry.sizes[dim];
+      auto index = intAt(2);
+      if (index < 0) {
+        index += extent;
+      }
+      TORCH_CHECK_INDEX(
+          index >= 0 && index < extent,
+          "select(): index ",
+          intAt(2),
+          " out of range for tensor of size ",
+          self.sizes(),
+          " at dimension ",
+          dim);
+      const auto storageOffset =
+          self.storage_offset() + index * geometry.strides[dim];
+      geometry.sizes.erase(geometry.sizes.begin() + dim);
+      geometry.strides.erase(geometry.strides.begin() + dim);
+      setOutput(
+          aliasTensor(self, geometry.sizes, geometry.strides, storageOffset));
       break;
     }
     case StandaloneShortcut::kUnsqueeze: {
@@ -80,18 +185,245 @@ void runStandaloneShortcut(
       break;
     }
     case StandaloneShortcut::kNarrow: {
-      // (Tensor self, int dim, int start, int length).
+      // (Tensor self, int dim, int start, int length). Unlike slice, narrow
+      // rejects an out-of-range range instead of clamping it.
       auto self = tensorAt(0);
-      setOutput(at::narrow(self, intAt(1), intAt(2), intAt(3)));
+      const auto rank = self.dim();
+      TORCH_CHECK(rank > 0, "narrow() cannot be applied to a 0-dim tensor.");
+      const auto dim = c10::maybe_wrap_dim(intAt(1), rank);
+      auto geometry = geometryOf(self);
+      const auto extent = geometry.sizes[dim];
+      const auto length = intAt(3);
+      auto start = intAt(2);
+      TORCH_CHECK(length >= 0, "narrow(): length must be non-negative.");
+      TORCH_CHECK_INDEX(
+          -extent <= start && start <= extent,
+          "start out of range (expected to be in range of [",
+          -extent,
+          ", ",
+          extent,
+          "], but got ",
+          start,
+          ")");
+      if (start < 0) {
+        start += extent;
+      }
+      TORCH_CHECK(
+          start <= extent - length,
+          "start (",
+          start,
+          ") + length (",
+          length,
+          ") exceeds dimension size (",
+          extent,
+          ").");
+      const auto storageOffset =
+          self.storage_offset() + start * geometry.strides[dim];
+      geometry.sizes[dim] = length;
+      setOutput(
+          aliasTensor(self, geometry.sizes, geometry.strides, storageOffset));
+      break;
+    }
+    case StandaloneShortcut::kUnbind: {
+      // (Tensor self, int dim=0) -> Tensor[]. Every element is a select() view
+      // at a different offset along 'dim', so the whole op is 'extent' alias
+      // constructions and no device work.
+      auto self = tensorAt(0);
+      const auto rank = self.dim();
+      TORCH_CHECK_INDEX(
+          rank > 0, "unbind() cannot be applied to a 0-dim tensor.");
+      const auto dim = c10::maybe_wrap_dim(intAt(1), rank);
+      auto geometry = geometryOf(self);
+      const auto extent = geometry.sizes[dim];
+      const auto stride = geometry.strides[dim];
+      geometry.sizes.erase(geometry.sizes.begin() + dim);
+      geometry.strides.erase(geometry.strides.begin() + dim);
+      c10::List<at::Tensor> list;
+      list.reserve(extent);
+      for (int64_t i = 0; i < extent; ++i) {
+        list.push_back(aliasTensor(
+            self,
+            geometry.sizes,
+            geometry.strides,
+            self.storage_offset() + i * stride));
+      }
+      setOutput(c10::IValue(std::move(list)));
+      break;
+    }
+    case StandaloneShortcut::kSplitWithSizes: {
+      // (Tensor self, SymInt[] split_sizes, int dim=0) -> Tensor[]. The chunks
+      // tile 'dim' in order, so each is a narrow() view at a running offset.
+      auto self = tensorAt(0);
+      const auto rank = self.dim();
+      TORCH_CHECK(
+          rank > 0, "split_with_sizes() cannot be applied to a 0-dim tensor.");
+      const auto dim = c10::maybe_wrap_dim(intAt(2), rank);
+      auto geometry = geometryOf(self);
+      const auto stride = geometry.strides[dim];
+      const auto extent = geometry.sizes[dim];
+      int64_t start = 0;
+      c10::List<at::Tensor> list;
+      auto emit = [&](int64_t length) {
+        TORCH_CHECK(
+            length >= 0 && start + length <= extent,
+            "split_with_sizes(): split sizes overrun dimension ",
+            dim,
+            " of size ",
+            extent);
+        geometry.sizes[dim] = length;
+        list.push_back(aliasTensor(
+            self,
+            geometry.sizes,
+            geometry.strides,
+            self.storage_offset() + start * stride));
+        start += length;
+      };
+      if (!data.intList.empty()) {
+        list.reserve(data.intList.size());
+        for (auto length : data.intList) {
+          emit(length);
+        }
+      } else {
+        TORCH_CHECK(
+            args[1] != nullptr, "split_with_sizes(): missing split_sizes");
+        auto sizes = frame.getIValue(args[1]->id()).toIntList();
+        list.reserve(sizes.size());
+        for (auto length : sizes) {
+          emit(length);
+        }
+      }
+      setOutput(c10::IValue(std::move(list)));
+      break;
+    }
+    case StandaloneShortcut::kSqueezeDim: {
+      // (Tensor self, int dim). Drops 'dim' only when it has extent 1; on any
+      // other extent aten returns the tensor unchanged.
+      auto self = tensorAt(0);
+      const auto rank = self.dim();
+      auto geometry = geometryOf(self);
+      if (rank > 0) {
+        const auto dim = c10::maybe_wrap_dim(intAt(1), rank);
+        if (geometry.sizes[dim] == 1) {
+          geometry.sizes.erase(geometry.sizes.begin() + dim);
+          geometry.strides.erase(geometry.strides.begin() + dim);
+        }
+      }
+      setOutput(aliasTensor(
+          self, geometry.sizes, geometry.strides, self.storage_offset()));
+      break;
+    }
+    case StandaloneShortcut::kExpand: {
+      // (Tensor self, SymInt[] size, *, bool implicit=False). A broadcast is a
+      // pure view: an expanded dim gets stride 0, so nothing is copied. 'size'
+      // is right-aligned with self's dims and may prepend new ones; -1 keeps
+      // the existing extent.
+      auto self = tensorAt(0);
+      DimVector target;
+      if (!data.intList.empty()) {
+        target.assign(data.intList.begin(), data.intList.end());
+      } else {
+        TORCH_CHECK(args[1] != nullptr, "expand(): missing size");
+        auto list = frame.getIValue(args[1]->id()).toIntList();
+        target.assign(list.begin(), list.end());
+      }
+      const auto rank = self.dim();
+      const auto outRank = static_cast<int64_t>(target.size());
+      TORCH_CHECK(
+          outRank >= rank,
+          "expand(): the number of sizes provided (",
+          outRank,
+          ") must be greater or equal to the number of dimensions in the "
+          "tensor (",
+          rank,
+          ")");
+      const auto source = geometryOf(self);
+      Geometry geometry;
+      geometry.sizes.resize(outRank);
+      geometry.strides.resize(outRank);
+      const auto lead = outRank - rank;
+      for (int64_t d = 0; d < outRank; ++d) {
+        const auto sourceDim = d - lead;
+        if (sourceDim < 0) {
+          TORCH_CHECK(
+              target[d] >= 0,
+              "expand(): the expanded size of a new dimension cannot be -1");
+          geometry.sizes[d] = target[d];
+          geometry.strides[d] = 0;
+          continue;
+        }
+        const auto extent = source.sizes[sourceDim];
+        if (target[d] == -1 || target[d] == extent) {
+          geometry.sizes[d] = extent;
+          geometry.strides[d] = source.strides[sourceDim];
+          continue;
+        }
+        TORCH_CHECK(
+            extent == 1,
+            "expand(): the expanded size (",
+            target[d],
+            ") must match the existing size (",
+            extent,
+            ") at dimension ",
+            sourceDim);
+        geometry.sizes[d] = target[d];
+        geometry.strides[d] = 0;
+      }
+      setOutput(aliasTensor(
+          self, geometry.sizes, geometry.strides, self.storage_offset()));
+      break;
+    }
+    case StandaloneShortcut::kListUnpack: {
+      // (Tensor[] list) -> Tensor, ... The elements are already built; this
+      // only moves them into their own frame slots.
+      const auto& iv = frame.getIValue(args[0]->id());
+      TORCH_CHECK(
+          iv.isTensorList(),
+          "runStandaloneShortcut: kListUnpack operand %",
+          args[0]->id(),
+          " is not a tensor list (tag=",
+          static_cast<int>(iv.tag),
+          ")");
+      auto list = iv.toTensorList();
+      TORCH_CHECK(
+          list.size() == data.actualOutputs.size(),
+          "runStandaloneShortcut: kListUnpack list has ",
+          list.size(),
+          " elements but the node has ",
+          data.actualOutputs.size(),
+          " outputs");
+      for (size_t i = 0; i < data.actualOutputs.size(); ++i) {
+        frame.setIValue(data.actualOutputs[i], list.get(i));
+      }
       break;
     }
     case StandaloneShortcut::kListPack: {
       c10::List<at::Tensor> list;
       list.reserve(args.size());
       for (auto* value : args) {
-        list.push_back(frame.getIValue(value->id()).toTensor());
+        const auto& iv = frame.getIValue(value->id());
+        TORCH_CHECK(
+            iv.isTensor(),
+            "runStandaloneShortcut: kListPack element %",
+            value->id(),
+            " is not a tensor (tag=",
+            static_cast<int>(iv.tag),
+            ")");
+        list.push_back(iv.toTensor());
       }
       setOutput(c10::IValue(std::move(list)));
+      break;
+    }
+    case StandaloneShortcut::kSymSize: {
+      // (Tensor self, int dim) -> SymInt. The frame already holds the tensor,
+      // so this is a field read. The D2H path writes a plain Int IValue for a
+      // SymInt-typed kernel return, so produce the same thing here.
+      auto self = tensorAt(0);
+      const auto dim = c10::maybe_wrap_dim(intAt(1), self.dim());
+      setOutput(c10::IValue(self.size(dim)));
+      break;
+    }
+    case StandaloneShortcut::kSymNumel: {
+      setOutput(c10::IValue(tensorAt(0).numel()));
       break;
     }
     case StandaloneShortcut::kNone:

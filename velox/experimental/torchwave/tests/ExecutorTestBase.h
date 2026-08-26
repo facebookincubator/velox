@@ -30,8 +30,11 @@
 #include <torch/nativert/executor/Weights.h>
 #include <torch/nativert/kernels/KernelFactory.h>
 
+#include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Executor.h"
+#include "velox/experimental/torchwave/GraphPrep.h"
 #include "velox/experimental/torchwave/Pt2Load.h"
+#include "velox/experimental/torchwave/tests/CompiledPlan.h"
 #include "velox/experimental/torchwave/tests/DataGen.h"
 
 namespace torch::wave {
@@ -91,25 +94,6 @@ std::vector<c10::IValue> loadReferenceValues(const std::string& path);
 /// Returns the device tensors and the transfer time in microseconds.
 std::pair<std::vector<c10::IValue>, int64_t> inputsToDevice(
     std::vector<c10::IValue>& inputs);
-
-/// Inserts an `aten._to_copy(self, device=cpu)` node before every input
-/// argument flagged `cpuOnly` in its wave Metadata (e.g. the indices of
-/// `aten.tensor_split.tensor_indices_or_sections`), repointing just that edge.
-/// This lets the generic nativert executor run the graph on GPU: tensor_split
-/// reads its indices on the host and returns views of `self`, so `self` and the
-/// outputs stay on GPU and no move-back is needed. Mutates `graph` in place, so
-/// call it on a clone reserved for the nativert-GPU run (wave handles cpuOnly
-/// args itself at runtime and must keep its own copy-free graph). Returns the
-/// number of nodes inserted.
-int32_t insertCpuOnlyCopies(nativert::Graph& graph);
-
-/// Rewrites ops that have no CUDA implementation to a CUDA-capable equivalent
-/// so the generic nativert executor can run the graph on GPU. Currently
-/// rewrites `fb.simple_1d_concat` (CUDA registration is a throwing dummy) to
-/// `aten.cat.default(dim=0)`, mirroring wave's MoreBuiltins rewrite. Mutates
-/// `graph`; call on the nativert-GPU clone. Returns the number of nodes
-/// rewritten.
-int32_t rewriteGpuIncompatibleOps(nativert::Graph& graph);
 
 /// Snapshots a frame: returns a map from value id to shape string (e.g.
 /// "[3,4]") for tensors, "scalar" for scalars. None slots are omitted.
@@ -201,11 +185,16 @@ class ExecutorTestBase : public ::testing::Test {
       const std::string& label = "");
 
   /// Executes a pre-filled frame node by node using the given kernels,
-  /// tracing values in trace_values. Returns the user outputs.
+  /// tracing values in trace_values. Returns the user outputs. When
+  /// 'captureRefOutputs' is true, deep-copies every node output to CPU into
+  /// capturedRefOutputs_ the instant it is produced (before nativert can free
+  /// it or an in-place op can overwrite it), so a reference frame saved from
+  /// those copies covers all intermediates.
   std::vector<c10::IValue> executeSerialWithTrace(
       const nativert::Graph& graph,
       nativert::ExecutionFrame& frame,
-      std::vector<std::unique_ptr<nativert::OpKernel>> nodeKernels);
+      std::vector<std::unique_ptr<nativert::OpKernel>> nodeKernels,
+      bool captureRefOutputs);
 
   virtual std::string dataDir() const {
     return "velox/experimental/torchwave/tests";
@@ -240,6 +229,17 @@ class ExecutorTestBase : public ::testing::Test {
       const std::string& path,
       std::optional<uint64_t> seed = std::nullopt);
 
+  /// Like runSynthetic, but sweeps every wave execution mode (auto /
+  /// cooperative / multi-block / single-block) with intermediate freeing off
+  /// and on. Runs the nativert-GPU reference once and reuses it for all
+  /// configs; compiles every config's executor in parallel (each under its own
+  /// WaveConfig override) and then executes them serially so only one config's
+  /// intermediates are resident at a time. A failure in one config is recorded
+  /// but does not stop the others.
+  void runSyntheticSweep(
+      const std::string& path,
+      std::optional<uint64_t> seed = std::nullopt);
+
   /// Runs 'fixture' through the nativert serial executor on GPU with explicit
   /// 'inputs' (not loadSampleInputs). Applies applySyntheticGraphRewrites, then
   /// GPU placement (setGraphDevice / rewriteGpuIncompatibleOps /
@@ -260,6 +260,18 @@ class ExecutorTestBase : public ::testing::Test {
       std::vector<c10::IValue> inputs,
       const std::vector<c10::IValue>& expected,
       const std::string& refFramePath);
+
+  /// Executes an already-built wave executor on 'deviceInputs' and compares its
+  /// outputs against 'expected' (tensors only, non-fatal, counting mismatches),
+  /// prefixing log/failure messages with 'label'. 'haveRefFrame' controls the
+  /// reference-frame summary log. Shared by runWaveWithInputs and
+  /// runSyntheticSweep.
+  void executeAndCompareWave(
+      WaveGraphExecutor& waveExec,
+      const std::vector<c10::IValue>& deviceInputs,
+      const std::vector<c10::IValue>& expected,
+      const std::string& label,
+      bool haveRefFrame);
 
   /// Counters copied from WaveGraphExecutor after runWave.
   int64_t lastRefTensorsChecked_{0};
@@ -293,6 +305,25 @@ class ExecutorTestBase : public ::testing::Test {
       const std::vector<c10::IValue>& outputs,
       const std::vector<c10::IValue>& expected,
       const std::string& label);
+
+  /// A CompiledPlan per grid variant, for asserting how ops are placed into
+  /// kernels and steps and how that placement differs across modes.
+  struct ModePlans {
+    CompiledPlan multiKernel;
+    CompiledPlan singleBlock;
+    CompiledPlan cg;
+  };
+
+  /// Compiles 'pt2File' and returns a CompiledPlan for each grid variant. Only
+  /// the multi-kernel grid contains every op; the single-block and cg grids
+  /// hold only the ops that have such a variant (e.g. masked_select).
+  ModePlans compilePlans(const std::string& pt2File);
+
+  /// Compiles 'pt2File' in the cooperative grid and returns what the
+  /// allocation-group pass makes of it, so a test can assert on the plan --
+  /// which concats are placed ahead of their operands, what the lifetime
+  /// grouping folds -- without running the graph.
+  AllocGroupStats allocGroupStats(const std::string& pt2File);
 };
 
 } // namespace torch::wave

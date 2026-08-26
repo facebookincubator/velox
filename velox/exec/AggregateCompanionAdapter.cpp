@@ -124,6 +124,18 @@ void AggregateCompanionFunctionBase::extractAccumulators(
   fn_->extractAccumulators(groups, numGroups, result);
 }
 
+bool AggregateCompanionAdapter::PartialFunction::supportsToIntermediate()
+    const {
+  return fn_->supportsToIntermediate();
+}
+
+void AggregateCompanionAdapter::PartialFunction::toIntermediate(
+    const SelectivityVector& rows,
+    std::vector<VectorPtr>& args,
+    VectorPtr& result) const {
+  fn_->toIntermediate(rows, args, result);
+}
+
 void AggregateCompanionAdapter::PartialFunction::extractValues(
     char** groups,
     int32_t numGroups,

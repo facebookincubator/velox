@@ -18,6 +18,7 @@ velox_add_library(
   CacheTTLController.cpp
   FileHandle.cpp
   FileIds.cpp
+  FileProperties.cpp
   ScanTracker.cpp
   SsdCache.cpp
   SsdFile.cpp

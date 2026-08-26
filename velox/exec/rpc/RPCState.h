@@ -59,7 +59,8 @@ struct InputBatchRef {
 ///
 /// Thread safety: All public methods are thread-safe. The mutex_ protects
 /// all mutable state. Completion callbacks from the RPC client's executor
-/// threads call notifyWaitersLocked() to wake the driver thread.
+/// threads take the waiter promises under the lock (takeWaitersLocked) and
+/// fulfill them after releasing it to wake the driver thread.
 ///
 /// Two streaming modes:
 /// - PER_ROW: Rows are emitted as they complete individually (out-of-order).
@@ -181,6 +182,22 @@ class RPCState {
   /// Release rows from an input batch. Thread-safe.
   /// When all rows are released, the batch columns are freed.
   void releaseRows(int32_t batchIndex, int64_t count);
+
+  /// Drop every retained input vector, regardless of activeRowCount.
+  ///
+  /// Called from RPCOperator::close() on the driver thread. In-flight RPC
+  /// callbacks hold a shared_ptr to this object, so it can outlive the
+  /// operator, the Task and the query's memory pools. The input vectors were
+  /// allocated from upstream operators' pools, so holding them past teardown
+  /// leaves a non-zero reservation on those pools; the arbitrator's
+  /// pool->reservedBytes() == 0 check then throws from ~MemoryPoolImpl() and
+  /// terminates the worker. If instead the last callback lands after the pools
+  /// are gone, ~RPCState() frees into freed memory.
+  ///
+  /// Safe to call while RPCs are outstanding: completion callbacks only
+  /// deposit RPCResponse values and never read flatColumns, which is read
+  /// solely by the driver thread when building output.
+  void releaseAllInputBatches();
 
   // ===== PER_ROW mode API =====
 
@@ -315,8 +332,14 @@ class RPCState {
       RPCResponse response,
       int64_t rttNs);
 
-  /// Fulfill all waiting promises and clear. Called under lock.
-  void notifyWaitersLocked();
+  // Extract the pending waiter promises and clear the queue, returning them
+  // so the caller can fulfill them AFTER releasing mutex_. Must be called with
+  // mutex_ held. Promises must not be fulfilled under mutex_: setValue() runs
+  // any inline future continuation synchronously (e.g. Driver::setResume ->
+  // Operator::recordBlockingTime, which takes the Operator stats lock), which
+  // would acquire that lock under mutex_ and invert lock order against the
+  // driver thread (a potential deadlock TSAN flags).
+  [[nodiscard]] std::vector<ContinuePromise> takeWaitersLocked();
 
   /// Extract the ready batch referenced by `it`: compute its round-trip
   /// latency, move out the responses (capturing any error), erase the entry,

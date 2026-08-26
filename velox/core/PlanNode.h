@@ -35,6 +35,25 @@ class PlanNodeVisitorContext;
 
 using PlanNodeId = std::string;
 
+/// Well-known transport identifiers for exchange between workers. A
+/// PartitionedOutputNode names the transport it sends its results over, and the
+/// runtime resolves the matching output buffer manager and operator from the
+/// registry. In-memory buffering is the default. Other applications may define
+/// additional identifiers without modifying this header.
+struct TransportKind {
+  /// In-memory output buffering (the default). How the buffered bytes are
+  /// delivered is decided by the layer above -- read locally, fetched over
+  /// HTTP, or written to a shuffle service.
+  static constexpr std::string_view kInMemory{"in-memory"};
+  /// Materialized output buffering backed by an application-provided durable
+  /// exchange implementation.
+  static constexpr std::string_view kMaterialized{"materialized"};
+  /// UCX-based RDMA exchange for high-bandwidth GPU transfers between workers.
+  static constexpr std::string_view kUcx{"UCX"};
+  /// Deprecated source-compat alias for kInMemory; prefer kInMemory.
+  static constexpr std::string_view kHttp{kInMemory};
+};
+
 /// Generic representation of InsertTable
 struct InsertTableHandle {
  public:
@@ -2709,26 +2728,122 @@ class PartitionedOutputNode : public PlanNode {
       PartitionFunctionSpecPtr partitionFunctionSpec,
       RowTypePtr outputType,
       std::string serdeKind,
+      std::string transportKind,
+      std::string transportOptions,
       PlanNodePtr source);
+
+  PartitionedOutputNode(
+      const PlanNodeId& id,
+      Kind kind,
+      const std::vector<TypedExprPtr>& keys,
+      int numPartitions,
+      bool replicateNullsAndAny,
+      PartitionFunctionSpecPtr partitionFunctionSpec,
+      RowTypePtr outputType,
+      std::string serdeKind,
+      std::string transportKind,
+      PlanNodePtr source)
+      : PartitionedOutputNode(
+            id,
+            kind,
+            keys,
+            numPartitions,
+            replicateNullsAndAny,
+            std::move(partitionFunctionSpec),
+            std::move(outputType),
+            std::move(serdeKind),
+            std::move(transportKind),
+            {},
+            std::move(source)) {}
+
+  // Backward-compatible ctor without an explicit transport; defaults to the
+  // in-memory transport. Prefer the ctor above.
+  PartitionedOutputNode(
+      const PlanNodeId& id,
+      Kind kind,
+      const std::vector<TypedExprPtr>& keys,
+      int numPartitions,
+      bool replicateNullsAndAny,
+      PartitionFunctionSpecPtr partitionFunctionSpec,
+      RowTypePtr outputType,
+      std::string serdeKind,
+      PlanNodePtr source)
+      : PartitionedOutputNode(
+            id,
+            kind,
+            keys,
+            numPartitions,
+            replicateNullsAndAny,
+            std::move(partitionFunctionSpec),
+            std::move(outputType),
+            std::move(serdeKind),
+            std::string{TransportKind::kInMemory},
+            std::move(source)) {}
 
   static std::shared_ptr<PartitionedOutputNode> broadcast(
       const PlanNodeId& id,
       int numPartitions,
       RowTypePtr outputType,
       std::string serdeKind,
+      std::string transportKind,
       PlanNodePtr source);
 
   static std::shared_ptr<PartitionedOutputNode> arbitrary(
       const PlanNodeId& id,
       RowTypePtr outputType,
       std::string serdeKind,
+      std::string transportKind,
       PlanNodePtr source);
 
   static std::shared_ptr<PartitionedOutputNode> single(
       const PlanNodeId& id,
       RowTypePtr outputType,
       std::string serdeKind,
+      std::string transportKind,
       PlanNodePtr source);
+
+  // Backward-compatible factory overloads without an explicit transport;
+  // default to the in-memory transport. Prefer the overloads above.
+  static std::shared_ptr<PartitionedOutputNode> broadcast(
+      const PlanNodeId& id,
+      int numPartitions,
+      RowTypePtr outputType,
+      std::string serdeKind,
+      PlanNodePtr source) {
+    return broadcast(
+        id,
+        numPartitions,
+        std::move(outputType),
+        std::move(serdeKind),
+        std::string{TransportKind::kInMemory},
+        std::move(source));
+  }
+
+  static std::shared_ptr<PartitionedOutputNode> arbitrary(
+      const PlanNodeId& id,
+      RowTypePtr outputType,
+      std::string serdeKind,
+      PlanNodePtr source) {
+    return arbitrary(
+        id,
+        std::move(outputType),
+        std::move(serdeKind),
+        std::string{TransportKind::kInMemory},
+        std::move(source));
+  }
+
+  static std::shared_ptr<PartitionedOutputNode> single(
+      const PlanNodeId& id,
+      RowTypePtr outputType,
+      std::string serdeKind,
+      PlanNodePtr source) {
+    return single(
+        id,
+        std::move(outputType),
+        std::move(serdeKind),
+        std::string{TransportKind::kInMemory},
+        std::move(source));
+  }
 
   class Builder {
    public:
@@ -2743,6 +2858,8 @@ class PartitionedOutputNode : public PlanNode {
       partitionFunctionSpec_ = other.partitionFunctionSpecPtr();
       outputType_ = other.outputType();
       serdeKind_ = other.serdeKind();
+      transportKind_ = other.transportKind();
+      transportOptions_ = other.transportOptions();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
     }
@@ -2787,6 +2904,16 @@ class PartitionedOutputNode : public PlanNode {
       return *this;
     }
 
+    Builder& transportKind(std::string transportKind) {
+      transportKind_ = std::move(transportKind);
+      return *this;
+    }
+
+    Builder& transportOptions(std::string transportOptions) {
+      transportOptions_ = std::move(transportOptions);
+      return *this;
+    }
+
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
       return *this;
@@ -2813,6 +2940,9 @@ class PartitionedOutputNode : public PlanNode {
       VELOX_USER_CHECK(
           serdeKind_.has_value(), "PartitionedOutputNode serdeKind is not set");
       VELOX_USER_CHECK(
+          transportKind_.has_value(),
+          "PartitionedOutputNode transportKind is not set");
+      VELOX_USER_CHECK(
           source_.has_value(), "PartitionedOutputNode source is not set");
 
       return std::make_shared<PartitionedOutputNode>(
@@ -2824,6 +2954,8 @@ class PartitionedOutputNode : public PlanNode {
           partitionFunctionSpec_.value(),
           outputType_.value(),
           serdeKind_.value(),
+          transportKind_.value(),
+          transportOptions_.value_or(std::string{}),
           source_.value());
     }
 
@@ -2836,6 +2968,8 @@ class PartitionedOutputNode : public PlanNode {
     std::optional<PartitionFunctionSpecPtr> partitionFunctionSpec_;
     std::optional<RowTypePtr> outputType_;
     std::optional<std::string> serdeKind_;
+    std::optional<std::string> transportKind_;
+    std::optional<std::string> transportOptions_;
     std::optional<PlanNodePtr> source_;
   };
 
@@ -2882,6 +3016,16 @@ class PartitionedOutputNode : public PlanNode {
     return serdeKind_;
   }
 
+  /// Transport this node's output is sent over; see TransportKind.
+  const std::string& transportKind() const {
+    return transportKind_;
+  }
+
+  /// Opaque configuration interpreted by the selected output transport.
+  const std::string& transportOptions() const {
+    return transportOptions_;
+  }
+
   /// Returns true if an arbitrary row and all rows with null keys must be
   /// replicated to all destinations. This is used to ensure correct results
   /// for anti-join which requires all nodes to know whether combined build
@@ -2917,6 +3061,8 @@ class PartitionedOutputNode : public PlanNode {
   const bool replicateNullsAndAny_;
   const PartitionFunctionSpecPtr partitionFunctionSpec_;
   const std::string serdeKind_;
+  const std::string transportKind_;
+  const std::string transportOptions_;
   const RowTypePtr outputType_;
 };
 
@@ -3010,7 +3156,13 @@ enum class JoinType {
   // EXCEPT ALL semantics.
   kCountingAnti = 10,
 
-  kNumJoinTypes = 11,
+  // Opposite of kAnti. Return each row from the right side that has no
+  // left-side match. Output includes only right-side columns. Only regular anti
+  // join (NOT EXISTS) is supported; null-aware (NOT IN) is rejected because it
+  // would require materializing the entire probe side.
+  kRightAnti = 11,
+
+  kNumJoinTypes = 12,
 };
 
 VELOX_DECLARE_ENUM_NAME(JoinType);
@@ -3049,6 +3201,10 @@ inline bool isRightSemiProjectJoin(JoinType joinType) {
 
 inline bool isAntiJoin(JoinType joinType) {
   return joinType == JoinType::kAnti;
+}
+
+inline bool isRightAntiJoin(JoinType joinType) {
+  return joinType == JoinType::kRightAnti;
 }
 
 inline bool isCountingAntiJoin(JoinType joinType) {
@@ -3207,6 +3363,10 @@ class AbstractJoinNode : public PlanNode {
 
   bool isAntiJoin() const {
     return joinType_ == JoinType::kAnti;
+  }
+
+  bool isRightAntiJoin() const {
+    return joinType_ == JoinType::kRightAnti;
   }
 
   bool isCountingAntiJoin() const {
@@ -4746,6 +4906,7 @@ class UnnestNode : public PlanNode {
       unnestVariables_ = other.unnestVariables();
       unnestNames_ = other.unnestNames_;
       ordinalityName_ = other.ordinalityName_;
+      markerName_ = other.markerName_;
       splitOutput_ = other.splitOutput_;
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
@@ -5833,7 +5994,8 @@ using MarkSortedNodePtr = std::shared_ptr<const MarkSortedNode>;
 /// Optimized version of a WindowNode for a single row_number, rank or
 /// dense_rank function with a limit over sorted partitions. The output of this
 /// node contains all input columns followed by an optional
-/// 'rowNumberColumnName' BIGINT column.
+/// 'rowNumberColumnName' BIGINT column, with rows within each partition emitted
+/// in ascending order of sorting keys (matching WindowNode).
 /// TODO: This node will be renamed to TopNRank or TopNRowNode once all the
 /// support for handling rank and dense_rank is committed to Velox.
 class TopNRowNumberNode : public PlanNode {
@@ -6318,17 +6480,21 @@ class PlanNodeVisitor {
 
 /// Plan node for async RPC execution (e.g., LLM inference, embeddings).
 ///
-/// Stores the function name, result type, argument columns, and streaming
-/// mode. The RPCNode does NOT evaluate argument expressions — a ProjectNode
-/// inserted before this node by the plan rewriter computes argument columns.
+/// Stores the RPC call (function name, result type, and argument expressions)
+/// and streaming mode. Each call argument is either a FieldAccessTypedExpr (an
+/// input column read from the source) or a ConstantTypedExpr (a literal). A
+/// ProjectNode inserted before this node by the plan rewriter computes any
+/// non-constant argument columns; the RPCNode does NOT evaluate argument
+/// expressions itself.
 ///
 /// Architecture:
 ///   SQL: SELECT rpc_function(col1, 'model_name') FROM table
 ///            |
 ///            v (Plan Rewriter)
-///     ProjectNode (__rpc_arg_0 = col1, __rpc_arg_1 = 'model_name')
+///     ProjectNode (__rpc_arg_0 = col1)
 ///           |
-///        RPCNode (argumentColumns = [__rpc_arg_0, __rpc_arg_1])
+///        RPCNode (call = rpc_function(
+///                     FieldAccess(__rpc_arg_0), Constant('model_name')))
 ///           |
 ///       source[0]
 ///           |
@@ -6337,33 +6503,27 @@ class RPCNode : public PlanNode {
  public:
   /// @param id Unique identifier for this plan node.
   /// @param source Data source (the only source).
-  /// @param functionName Name of the registered AsyncRPCFunction.
-  /// @param functionResultType Velox type of the RPC result column.
+  /// @param call The RPC call. Its name() is the registered AsyncRPCFunction,
+  ///        its type() is the Velox type of the RPC result column, and its
+  ///        inputs() are the call arguments in order. Each argument is either a
+  ///        FieldAccessTypedExpr (an input column read from the source at
+  ///        runtime) or a ConstantTypedExpr (a literal materialized by the
+  ///        operator). Their types are passed to
+  ///        AsyncRPCFunction::initialize().
   /// @param outputColumn Name of the output column for RPC responses.
   /// @param outputType Explicit output type. Must contain outputColumn
   ///        and any passthrough source columns needed by downstream.
   ///        Specified explicitly (like AbstractJoinNode) to support column
   ///        pruning.
-  /// @param argumentColumns Names of input columns containing pre-evaluated
-  ///        argument values. RPCOperator reads these columns in addInput().
-  /// @param argumentTypes Types of each argument (aligned with
-  ///        argumentColumns). Passed to AsyncRPCFunction::initialize().
-  /// @param constantInputs Constant argument values (aligned with
-  ///        argumentColumns). nullptr for non-constant args, single-element
-  ///        ConstantVectors for constant args. Passed to initialize().
   /// @param streamingMode The streaming mode for RPC execution.
   /// @param dispatchBatchSize For BATCH mode pipelining: fire callBatch()
   ///        every N rows during addInput() instead of collecting all rows.
   RPCNode(
       const PlanNodeId& id,
       PlanNodePtr source,
-      std::string functionName,
-      TypePtr functionResultType,
+      core::CallTypedExprPtr call,
       std::string outputColumn,
       RowTypePtr outputType,
-      std::vector<std::string> argumentColumns,
-      std::vector<TypePtr> argumentTypes,
-      std::vector<VectorPtr> constantInputs,
       rpc::RPCStreamingMode streamingMode = rpc::RPCStreamingMode::kPerRow,
       int32_t dispatchBatchSize = 0);
 
@@ -6371,28 +6531,21 @@ class RPCNode : public PlanNode {
     return sources_[0];
   }
 
+  /// The RPC call: function name, result type, and argument expressions.
+  const core::CallTypedExprPtr& call() const {
+    return call_;
+  }
+
   const std::string& functionName() const {
-    return functionName_;
+    return call_->name();
   }
 
   const TypePtr& rpcResultType() const {
-    return resultType_;
+    return call_->type();
   }
 
   const std::string& outputColumn() const {
     return outputColumn_;
-  }
-
-  const std::vector<std::string>& argumentColumns() const {
-    return argumentColumns_;
-  }
-
-  const std::vector<TypePtr>& argumentTypes() const {
-    return argumentTypes_;
-  }
-
-  const std::vector<VectorPtr>& constantInputs() const {
-    return constantInputs_;
   }
 
   rpc::RPCStreamingMode streamingMode() const {
@@ -6423,13 +6576,9 @@ class RPCNode : public PlanNode {
   void addDetails(std::stringstream& stream) const override;
 
   std::vector<PlanNodePtr> sources_;
-  std::string functionName_;
-  TypePtr resultType_;
+  core::CallTypedExprPtr call_;
   std::string outputColumn_;
   RowTypePtr outputType_;
-  std::vector<std::string> argumentColumns_;
-  std::vector<TypePtr> argumentTypes_;
-  std::vector<VectorPtr> constantInputs_;
   rpc::RPCStreamingMode streamingMode_;
   int32_t dispatchBatchSize_{0};
 };

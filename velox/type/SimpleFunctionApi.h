@@ -120,11 +120,9 @@ template <typename T, bool comparable, bool orderable>
 struct isGenericType<Generic<T, comparable, orderable>>
     : public std::true_type {};
 
-template <typename>
-struct isOpaqueType : public std::false_type {};
-
+// std::shared_ptr<T> is the C++ representation of the OPAQUE type.
 template <typename T>
-struct isOpaqueType<std::shared_ptr<T>> : public std::true_type {};
+struct isOpaqueType : public is_shared_ptr<T> {};
 
 template <typename KEY, typename VALUE>
 struct Map {

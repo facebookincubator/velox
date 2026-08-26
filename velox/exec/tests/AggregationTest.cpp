@@ -37,6 +37,7 @@
 #include "velox/exec/prefixsort/PrefixSortEncoder.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/BackpressureTestNode.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -5231,5 +5232,87 @@ TEST_F(AggregationTest, barrierExecutionSpillEnabledAggregationUnsupported) {
               HiveConnectorTestBase::makeHiveConnectorSplit(file->getPath()))
           .copyResults(pool()),
       "Barrier drain is not supported for spilled hash aggregation");
+}
+
+// Regression test for the distinct-mode buffer: a partial distinct aggregation
+// stores the input batch in input_ whenever the batch produced new groups, and
+// emits those groups from the following getOutput(). Distinct output is
+// produced purely incrementally -- there is no final table scan when nothing
+// spilled -- so a batch whose input_ is overwritten before it is drained loses
+// its rows permanently. Every key is unique, so a correct run emits exactly one
+// row per input row.
+TEST_F(AggregationTest, distinctNoRowLossWithBackpressuringDownstream) {
+  Operator::registerOperator(std::make_unique<BackpressureTranslator>());
+
+  const int32_t numBatches = 200;
+  const int32_t rowsPerBatch = 100;
+  const vector_size_t totalRows = numBatches * rowsPerBatch;
+  // One globally unique key per row, so a correct distinct aggregation emits
+  // exactly one row per input row.
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(numBatches);
+  for (int32_t i = 0; i < numBatches; ++i) {
+    batches.push_back(makeRowVector({makeFlatVector<int64_t>(
+        rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; })}));
+  }
+
+  auto plan = PlanBuilder()
+                  .values(batches)
+                  .partialAggregation({"c0"}, {})
+                  .addNode([](const std::string& id, core::PlanNodePtr input) {
+                    return std::make_shared<BackpressureNode>(
+                        id, /*delayCycles=*/3, std::move(input));
+                  })
+                  .planNode();
+
+  // Single driver so the aggregation and the back-pressuring downstream share a
+  // pipeline.
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  EXPECT_EQ(result->size(), totalRows);
+}
+
+// Regression test for the abandoned-partial-aggregation buffer: once a partial
+// aggregation gives up (too little reduction at the memory ceiling), addInput()
+// stops aggregating and just parks the batch in input_ for getOutput() to pass
+// through via toIntermediate(). Capping both the partial and the extended
+// partial aggregation memory forces that state. Every key is unique, so the
+// aggregation is 1:1 both before and after it is abandoned, and a correct run
+// emits exactly one row per input row.
+TEST_F(
+    AggregationTest,
+    abandonedPartialAggNoRowLossWithBackpressuringDownstream) {
+  Operator::registerOperator(std::make_unique<BackpressureTranslator>());
+
+  const int32_t numBatches = 200;
+  const int32_t rowsPerBatch = 100;
+  const vector_size_t totalRows = numBatches * rowsPerBatch;
+  // One globally unique key per row, so the aggregation is 1:1 both before and
+  // after it is abandoned and must emit exactly one row per input row.
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(numBatches);
+  for (int32_t i = 0; i < numBatches; ++i) {
+    batches.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(
+             rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; }),
+         makeFlatVector<int64_t>(
+             rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; })}));
+  }
+
+  auto plan = PlanBuilder()
+                  .values(batches)
+                  .partialAggregation({"c0"}, {"sum(c1)"})
+                  .addNode([](const std::string& id, core::PlanNodePtr input) {
+                    return std::make_shared<BackpressureNode>(
+                        id, /*delayCycles=*/3, std::move(input));
+                  })
+                  .planNode();
+
+  auto result =
+      AssertQueryBuilder(plan)
+          .maxDrivers(1)
+          .config(QueryConfig::kMaxPartialAggregationMemory, "4096")
+          .config(QueryConfig::kMaxExtendedPartialAggregationMemory, "4096")
+          .copyResults(pool());
+  EXPECT_EQ(result->size(), totalRows);
 }
 } // namespace facebook::velox::exec::test

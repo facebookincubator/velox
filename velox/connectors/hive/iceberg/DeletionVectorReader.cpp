@@ -18,8 +18,9 @@
 
 #include "velox/connectors/hive/iceberg/DeletionVectorFormat.h"
 
-#include <folly/hash/Checksum.h>
+#include <folly/json.h>
 #include <folly/lang/Bits.h>
+#include <zlib.h>
 
 #include <cstring>
 #include <string_view>
@@ -39,6 +40,146 @@ uint32_t readBigEndian32(const char* data) {
   uint32_t value;
   std::memcpy(&value, data, sizeof(value));
   return folly::Endian::big(value);
+}
+
+uint32_t readLittleEndian32(const char* data) {
+  uint32_t value;
+  std::memcpy(&value, data, sizeof(value));
+  return folly::Endian::little(value);
+}
+
+// Byte range of a blob inside a Puffin file.
+struct BlobLocation {
+  uint64_t offset;
+  uint64_t length;
+};
+
+// Reads the Puffin magic that both opens the file and brackets the footer.
+bool startsWithPuffinMagic(ReadFile& file) {
+  if (file.size() < kPuffinMagicSize) {
+    return false;
+  }
+  std::string magic(kPuffinMagicSize, '\0');
+  file.pread(0, kPuffinMagicSize, magic.data());
+  return std::string_view(magic) ==
+      std::string_view(kPuffinMagic, kPuffinMagicSize);
+}
+
+// Locates the deletion-vector blob by parsing the Puffin footer, for files
+// whose manifest entry carried no blob offset or length. The footer is:
+//   Magic FooterPayload FooterPayloadSize Flags Magic
+// with FooterPayloadSize and Flags each 4 bytes little-endian, read backwards
+// from end of file. 'referencedDataFile' disambiguates when the file holds
+// vectors for several data files; an empty value requires a single candidate.
+BlobLocation locateBlobFromPuffinFooter(
+    ReadFile& file,
+    const std::string& referencedDataFile) {
+  // FooterPayloadSize + Flags + trailing Magic.
+  constexpr uint64_t kTrailerSize = 4 + 4 + kPuffinMagicSize;
+  // Leading Magic and the Magic that opens the footer bracket any payload.
+  constexpr uint64_t kMinFileSize = kTrailerSize + 2 * kPuffinMagicSize;
+
+  const uint64_t fileSize = file.size();
+  VELOX_CHECK_GE(
+      fileSize,
+      kMinFileSize,
+      "Puffin file is too small to contain a footer: {} bytes.",
+      fileSize);
+
+  std::string trailer(kTrailerSize, '\0');
+  file.pread(fileSize - kTrailerSize, kTrailerSize, trailer.data());
+  const std::string_view puffinMagic(kPuffinMagic, kPuffinMagicSize);
+  VELOX_CHECK_EQ(
+      std::string_view(trailer).substr(8),
+      puffinMagic,
+      "Puffin file does not end with the expected magic.");
+
+  const uint32_t flags = readLittleEndian32(trailer.data() + 4);
+  // Bit 0 of the first flag byte marks a compressed footer payload. Deletion
+  // vectors are always written uncompressed, so this is unreachable for files
+  // we produce and unsupported for files we do not.
+  VELOX_CHECK_EQ(
+      flags & 1u, 0u, "Compressed Puffin footer payloads are not supported.");
+
+  // payloadOffset must leave room for the leading magic and the magic that
+  // opens the footer, so payloadSize + kMinFileSize must fit within the file.
+  const uint64_t payloadSize = readLittleEndian32(trailer.data());
+  VELOX_CHECK_LE(
+      payloadSize + kMinFileSize,
+      fileSize,
+      "Puffin footer payload size {} does not fit in a {}-byte file.",
+      payloadSize,
+      fileSize);
+
+  const uint64_t payloadOffset = fileSize - kTrailerSize - payloadSize;
+  std::string footerMagic(kPuffinMagicSize, '\0');
+  file.pread(
+      payloadOffset - kPuffinMagicSize, kPuffinMagicSize, footerMagic.data());
+  VELOX_CHECK_EQ(
+      std::string_view(footerMagic),
+      puffinMagic,
+      "Puffin footer payload is not preceded by the expected magic.");
+
+  std::string payload(payloadSize, '\0');
+  file.pread(payloadOffset, payloadSize, payload.data());
+
+  folly::dynamic footer;
+  try {
+    footer = folly::parseJson(payload);
+  } catch (const std::exception& e) {
+    VELOX_FAIL("Failed to parse Puffin footer payload: {}", e.what());
+  }
+
+  const auto* blobs = footer.get_ptr("blobs");
+  VELOX_CHECK(
+      blobs != nullptr && blobs->isArray(),
+      "Puffin footer has no \"blobs\" array.");
+
+  std::optional<BlobLocation> found;
+  for (const auto& blob : *blobs) {
+    const auto* type = blob.get_ptr("type");
+    if (type == nullptr || !type->isString() ||
+        type->asString() != kDeletionVectorBlobType) {
+      continue;
+    }
+    if (!referencedDataFile.empty()) {
+      const auto* properties = blob.get_ptr("properties");
+      const auto* referenced = properties == nullptr
+          ? nullptr
+          : properties->get_ptr("referenced-data-file");
+      if (referenced == nullptr || !referenced->isString() ||
+          referenced->asString() != referencedDataFile) {
+        continue;
+      }
+    }
+    const auto* offset = blob.get_ptr("offset");
+    const auto* length = blob.get_ptr("length");
+    VELOX_CHECK(
+        offset != nullptr && offset->isInt() && length != nullptr &&
+            length->isInt(),
+        "Puffin blob metadata is missing a numeric offset or length.");
+    // Both are widened to uint64_t below, where a negative value would wrap to
+    // a huge offset. The file-bounds check downstream would still reject it,
+    // but only after reporting an absurd number, so reject it here instead.
+    VELOX_CHECK_GE(
+        offset->asInt(), 0, "Puffin blob metadata has a negative offset.");
+    VELOX_CHECK_GE(
+        length->asInt(), 0, "Puffin blob metadata has a negative length.");
+    VELOX_CHECK(
+        !found.has_value(),
+        "Puffin file has multiple deletion vectors and no referenced data "
+        "file to disambiguate them.");
+    found = BlobLocation{
+        static_cast<uint64_t>(offset->asInt()),
+        static_cast<uint64_t>(length->asInt())};
+  }
+
+  VELOX_CHECK(
+      found.has_value(),
+      "Puffin footer has no deletion-vector blob for data file: {}",
+      referencedDataFile.empty() ? std::string_view{"(unspecified)"}
+                                 : std::string_view{referencedDataFile});
+  return found.value();
 }
 
 // Unwraps the Iceberg deletion-vector-v1 blob frame
@@ -70,9 +211,14 @@ std::string_view unframeDeletionVector(const std::string& blob) {
 
   const uint32_t storedCrc =
       readBigEndian32(blob.data() + kLengthSize + magicAndVectorLength);
-  const uint32_t computedCrc = folly::crc32(
-      reinterpret_cast<const uint8_t*>(blob.data() + kLengthSize),
-      magicAndVectorLength);
+  // Iceberg stores the standard CRC-32 (java.util.zip.CRC32) over magic +
+  // bitmap. zlib's crc32 is that same finalized IEEE 802.3 CRC-32.
+  uLong crc = crc32(0L, Z_NULL, 0);
+  crc = crc32(
+      crc,
+      reinterpret_cast<const Bytef*>(blob.data() + kLengthSize),
+      static_cast<uInt>(magicAndVectorLength));
+  const auto computedCrc = static_cast<uint32_t>(crc);
   VELOX_CHECK_EQ(storedCrc, computedCrc, "Deletion-vector-v1 CRC-32 mismatch.");
 
   return std::string_view(blob).substr(
@@ -115,12 +261,16 @@ void DeletionVectorReader::loadBitmap() {
   uint64_t blobLength = dvFile_.contentLength > 0
       ? static_cast<uint64_t>(dvFile_.contentLength)
       : dvFile_.fileSizeInBytes;
+  bool haveBlobLocation = dvFile_.contentLength > 0;
 
   if (dvFile_.contentLength == 0) {
+    bool haveOffset = false;
+    bool haveLength = false;
     if (auto it = dvFile_.lowerBounds.find(kDvOffsetFieldId);
         it != dvFile_.lowerBounds.end()) {
       try {
         blobOffset = std::stoull(it->second);
+        haveOffset = true;
       } catch (const std::exception& e) {
         VELOX_FAIL(
             "Failed to parse DV blob offset from bounds map: {}", e.what());
@@ -130,11 +280,16 @@ void DeletionVectorReader::loadBitmap() {
         it != dvFile_.upperBounds.end()) {
       try {
         blobLength = std::stoull(it->second);
+        haveLength = true;
       } catch (const std::exception& e) {
         VELOX_FAIL(
             "Failed to parse DV blob length from bounds map: {}", e.what());
       }
     }
+    // A legacy bounds-map location is usable only when both offset and length
+    // are present. A partial entry falls through to Puffin-footer parsing
+    // rather than unframing at a wrong offset/length.
+    haveBlobLocation = haveOffset && haveLength;
   }
 
   // Pass the connector config (e.g. hive.manifold.* credentials) so
@@ -151,6 +306,17 @@ void DeletionVectorReader::loadBitmap() {
       readFile, "Failed to open deletion vector file: {}", dvFile_.filePath);
 
   auto fileSize = readFile->size();
+
+  // Nothing in the manifest located the blob. A Puffin file describes its own
+  // blobs, so parse the footer rather than guessing. Non-Puffin inputs keep
+  // the legacy whole-file behaviour, which is how raw roaring blobs are read.
+  if (!haveBlobLocation && startsWithPuffinMagic(*readFile)) {
+    const auto location =
+        locateBlobFromPuffinFooter(*readFile, dvFile_.referencedDataFile);
+    blobOffset = location.offset;
+    blobLength = location.length;
+  }
+
   VELOX_CHECK_LE(
       blobOffset,
       fileSize,
@@ -226,6 +392,13 @@ void DeletionVectorReader::deserializeRoaring64Bitmap(std::string_view data) {
     std::memcpy(&highBits, ptr, sizeof(uint32_t));
     highBits = folly::Endian::little(highBits);
     ptr += sizeof(uint32_t);
+
+    VELOX_CHECK_LE(
+        highBits,
+        kMaxRoaring64GroupKey,
+        "Roaring64Bitmap group key exceeds the maximum the Iceberg "
+        "deletion-vector format can represent: {}",
+        highBits);
 
     int64_t highBitsOffset = static_cast<int64_t>(highBits) << 32;
 

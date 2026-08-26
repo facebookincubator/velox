@@ -27,6 +27,14 @@ bool isIntegralType(const TypePtr& type) {
       type == BIGINT();
 }
 
+bool isFloatingPointType(const TypePtr& type) {
+  return type == REAL() || type == DOUBLE();
+}
+
+bool isNumericType(const TypePtr& type) {
+  return isIntegralType(type) || isFloatingPointType(type);
+}
+
 exec::ExprPtr makeSparkCastExpr(
     const TypePtr& type,
     exec::ExprPtr&& input,
@@ -108,7 +116,8 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
     const TypePtr& fromType,
     const TypePtr& toType) {
   if (fromType->isVarchar()) {
-    if (toType->isBoolean() || toType->isDate() || toType->isDecimal()) {
+    if (toType->isBoolean() || toType->isTimestamp() || toType->isDate() ||
+        toType->isDecimal() || toType->isTime()) {
       return true;
     }
     if (isIntegralType(toType)) {
@@ -116,8 +125,36 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
       // decimal points) instead of returning NULL.
       return true;
     }
+    if (isFloatingPointType(toType)) {
+      return true;
+    }
   }
   if (fromType->isTimestamp() && isIntegralType(toType)) {
+    return true;
+  }
+
+  if (toType->isDecimal()) {
+    if (fromType->isDecimal()) {
+      return true;
+    }
+    if (isIntegralType(fromType)) {
+      return true;
+    }
+    if (fromType->isReal() || fromType->isDouble()) {
+      return true;
+    }
+    if (fromType->isBoolean()) {
+      return true;
+    }
+  }
+
+  // Numeric types (integral + floating point) to integral types support ANSI
+  // mode.
+  if (isNumericType(fromType) && isIntegralType(toType)) {
+    return true;
+  }
+
+  if (toType->isTimestamp() && (fromType->isReal() || fromType->isDouble())) {
     return true;
   }
 
@@ -136,22 +173,19 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
       compiledChildren.size());
 
   const auto& fromType = compiledChildren[0]->type();
-
   // In Spark SQL (with ANSI mode off), both CAST and TRY_CAST behave like
   // Velox's try_cast, so we set 'isTryCast' to true when ANSI is disabled or
   // the specific cast operation doesn't support ANSI mode.
   const bool isTryCast = !SparkQueryConfig{config}.ansiEnabled() ||
       !isAnsiSupported(fromType, type);
 
-  // For ANSI-supported casts, CAST mirrors TRY_CAST when ANSI is disabled.
-  // The distinction is controlled by the 'allowOverflow' flag in
-  // SparkCastHooks.
-  return std::make_shared<SparkCastExpr>(
+  return makeSparkCastExpr(
       type,
       std::move(compiledChildren[0]),
       trackCpuUsage,
       isTryCast,
-      std::make_shared<SparkCastHooks>(config, isTryCast));
+      isTryCast,
+      config);
 }
 
 exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
@@ -166,12 +200,8 @@ exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
       compiledChildren.size());
 
   // TRY_CAST always uses allowOverflow=false to return NULL on cast failures.
-  return std::make_shared<SparkCastExpr>(
-      type,
-      std::move(compiledChildren[0]),
-      trackCpuUsage,
-      true,
-      std::make_shared<SparkCastHooks>(config, false));
+  return makeSparkCastExpr(
+      type, std::move(compiledChildren[0]), trackCpuUsage, true, false, config);
 }
 
 void registerSparkCastModeSpecialForms() {

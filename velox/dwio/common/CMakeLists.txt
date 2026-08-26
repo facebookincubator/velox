@@ -60,7 +60,7 @@ velox_add_library(
   SelectiveRepeatedColumnReader.cpp
   SelectiveStructColumnReader.cpp
   SortingWriter.cpp
-  SortingWriter.h
+  Statistics.cpp
   StatisticsBuilder.cpp
   Throttler.cpp
   TypeUtils.cpp
@@ -94,6 +94,7 @@ velox_add_library(
   FilterNode.h
   FlatMapHelper.h
   FlushPolicy.h
+  FormatConfig.h
   FormatData.h
   InputStream.h
   IntCodecCommon.h
@@ -124,6 +125,7 @@ velox_add_library(
   SelectiveIntegerColumnReader.h
   SelectiveRepeatedColumnReader.h
   SelectiveStructColumnReader.h
+  SortingWriter.h
   Statistics.h
   StatisticsBuilder.h
   StreamIdentifier.h

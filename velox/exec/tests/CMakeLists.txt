@@ -52,7 +52,7 @@ target_link_libraries(
 #   MergeJoinTest 111s, AggregationTest 105s,
 #   DefaultOutputBufferManagerTest 98s, ScaleWriterLocalPartitionTest 96s,
 #   OrderByTest 71s, TopNRowNumberTest 64s,
-#   HashTableTest 60s, StreamingAggregationTest 58s, ExchangeClientTest 54s,
+#   HashTableTest 60s, StreamingAggregationTest 58s, InMemoryExchangeClientTest 54s,
 #   RowNumberTest 42s.
 #
 # Max group ~784s (bounded by IndexLookupJoinTest.cpp).
@@ -143,7 +143,7 @@ set(
   IndexLookupJoinTestExtra.cpp
   MergeJoinTest.cpp
   ScaleWriterLocalPartitionTest.cpp
-  ExchangeClientTest.cpp
+  InMemoryExchangeClientTest.cpp
   NestedLoopJoinTest.cpp
   UnorderedStreamReaderTest.cpp
   PlanNodeToStringTest.cpp
@@ -222,6 +222,7 @@ add_executable(
   GroupedExecutionTest.cpp
   Main.cpp
   OperatorUtilsTest.cpp
+  OutputTransportTest.cpp
   PlanBuilderTest.cpp
   PrestoQueryRunnerTest.cpp
   QueryAssertionsTest.cpp
@@ -461,5 +462,41 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_link_libraries(velox_adaptive_prefetch_test GTest::gtest GTest::gtest_main)
+
+add_executable(velox_output_transport_registry_test OutputTransportRegistryTest.cpp)
+add_test(
+  NAME velox_output_transport_registry_test
+  COMMAND velox_output_transport_registry_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+  velox_output_transport_registry_test
+  velox_exec
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
+)
+
+add_executable(materialized_output_buffer_test MaterializedOutputBufferTest.cpp)
+add_test(materialized_output_buffer_test materialized_output_buffer_test)
+target_link_libraries(
+  materialized_output_buffer_test
+  velox_exec
+  fmt::fmt
+  Folly::folly
+  GTest::gtest
+  GTest::gtest_main
+)
+
+add_executable(materialized_partitioned_output_test MaterializedPartitionedOutputTest.cpp Main.cpp)
+add_test(materialized_partitioned_output_test materialized_partitioned_output_test)
+target_link_libraries(
+  materialized_partitioned_output_test
+  velox_exec
+  velox_exec_test_lib
+  fmt::fmt
+  Folly::folly
+  GTest::gtest
+)
 
 velox_add_library(velox_aggregate_registry_util INTERFACE HEADERS AggregateRegistryTestUtil.h)

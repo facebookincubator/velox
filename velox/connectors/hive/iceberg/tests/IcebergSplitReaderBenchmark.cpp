@@ -33,7 +33,8 @@ void IcebergSplitReaderBenchmark::writeToFile(
   auto path = fileFolder_->getPath() + "/" + fileName_;
   auto localWriteFile = std::make_unique<LocalWriteFile>(path, true, false);
   auto sink = std::make_unique<WriteFileSink>(std::move(localWriteFile), path);
-  dwrf::WriterOptions options;
+  dwio::common::WriterOptions options;
+  options.formatSpecificOptions = std::make_shared<dwrf::DwrfWriterOptions>();
   options.memoryPool = rootPool_.get();
   options.schema = batches[0]->type();
   dwrf::Writer dataFilewriter{std::move(sink), options};
@@ -51,7 +52,8 @@ void IcebergSplitReaderBenchmark::writeToPositionDeleteFile(
       std::make_unique<LocalWriteFile>(filePath, true, false);
   auto posDeletesink =
       std::make_unique<WriteFileSink>(std::move(localPosWriteFile), filePath);
-  dwrf::WriterOptions options;
+  dwio::common::WriterOptions options;
+  options.formatSpecificOptions = std::make_shared<dwrf::DwrfWriterOptions>();
   options.memoryPool = rootPool_.get();
   options.schema = vectors[0]->type();
   dwrf::Writer posDeletewriter{std::move(posDeletesink), options};
@@ -233,7 +235,7 @@ int IcebergSplitReaderBenchmark::read(
     const RowTypePtr& rowType,
     uint32_t nextSize,
     std::unique_ptr<IcebergSplitReader> icebergSplitReader) {
-  runtimeStats_ = RuntimeStatistics();
+  runtimeStats_ = RuntimeStats();
   icebergSplitReader->resetFilterCaches();
   int resultSize = 0;
   auto result = BaseVector::create(rowType, 0, leafPool_.get());

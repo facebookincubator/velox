@@ -26,6 +26,10 @@
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
+namespace facebook::velox::tz {
+class TimeZone;
+}
+
 namespace facebook::velox::exec {
 
 enum PolicyType {
@@ -44,8 +48,13 @@ class CastHooks {
  public:
   virtual ~CastHooks() = default;
 
+  /// Parses a string to a timestamp. When 'adjustTimezone' is true, applies
+  /// the session timezone to the parsed result. When false, the parsed
+  /// timestamp fields are stored as-is, not subject to session timezone
+  /// adjustment (used for TIMESTAMP UTC casts).
   virtual Expected<Timestamp> castStringToTimestamp(
-      const StringView& view) const = 0;
+      const StringView& view,
+      bool adjustTimezone) const = 0;
 
   virtual Expected<Timestamp> castIntToTimestamp(int64_t seconds) const = 0;
 
@@ -82,6 +91,17 @@ class CastHooks {
   virtual Expected<int32_t> castStringToDate(
       const StringView& dateString) const = 0;
 
+  /// Casts string to TIME. The accepted format and precision depend on the
+  /// policy (e.g., Presto uses milliseconds; Spark uses microseconds).
+  /// @param timeString The time string to parse
+  /// @param timeZone The timezone for conversion (can be nullptr)
+  /// @param sessionStartTimeMs Session start time in milliseconds for DST
+  /// handling
+  virtual Expected<int64_t> castStringToTime(
+      StringView timeString,
+      const tz::TimeZone* timeZone,
+      int64_t sessionStartTimeMs) const = 0;
+
   /// 'data' is guaranteed to be non-empty and has been processed by
   /// removeWhiteSpaces.
   virtual Expected<float> castStringToReal(const StringView& data) const = 0;
@@ -108,6 +128,13 @@ class CastHooks {
   /// level. E.g. if true, an element inside an array would be null rather than
   /// the entire array if the cast of that element fails.
   virtual bool applyTryCastRecursively() const = 0;
+
+  /// Returns whether decimal to floating point casts should use high precision
+  /// conversion for values that cannot be represented exactly by floating point
+  /// arithmetic.
+  virtual bool decimalToFloatHighPrecisionCastEnabled() const {
+    return false;
+  }
 
   virtual PolicyType getPolicy() const = 0;
 

@@ -16,6 +16,14 @@
 
 #pragma once
 
+#include <cstdint>
+#include <string_view>
+
+#include <folly/lang/Bits.h>
+
+#include "velox/common/base/Nulls.h"
+#include "velox/common/base/SimdUtil.h"
+
 namespace facebook::velox::parquet {
 
 class StringDecoder {
@@ -24,6 +32,13 @@ class StringDecoder {
       : bufferStart_(start),
         lastSafeWord_(end - simd::kPadding),
         fixedLength_(fixedLength) {}
+
+  /// Reset to decode from a new page buffer without reallocating.
+  void reset(const char* start, const char* end, int fixedLength = -1) {
+    bufferStart_ = start;
+    lastSafeWord_ = end - simd::kPadding;
+    fixedLength_ = fixedLength;
+  }
 
   void skip(uint64_t numValues) {
     skip<false>(numValues, 0, nullptr);
@@ -34,8 +49,16 @@ class StringDecoder {
     if (hasNulls) {
       numValues = bits::countNonNulls(nulls, current, current + numValues);
     }
-    for (auto i = 0; i < numValues; ++i) {
-      bufferStart_ += lengthAt(bufferStart_) + sizeof(int32_t);
+    if (fixedLength_ > 0) {
+      // FIXED_LEN_BYTE_ARRAY values carry no length prefix, so the byte
+      // offset is a constant multiple of the fixed width. This is both an
+      // O(1) skip and a correctness fix: the variable-length branch below
+      // would read the value bytes as a bogus 4-byte length.
+      bufferStart_ += static_cast<int64_t>(numValues) * fixedLength_;
+    } else {
+      for (auto i = 0; i < numValues; ++i) {
+        bufferStart_ += lengthAt(bufferStart_) + sizeof(int32_t);
+      }
     }
   }
 
@@ -87,7 +110,7 @@ class StringDecoder {
 
  private:
   int32_t lengthAt(const char* buffer) {
-    return *reinterpret_cast<const int32_t*>(buffer);
+    return folly::loadUnaligned<int32_t>(buffer);
   }
 
   std::string_view readString() {
@@ -102,8 +125,8 @@ class StringDecoder {
   }
 
   const char* bufferStart_;
-  const char* const lastSafeWord_;
-  const int fixedLength_;
+  const char* lastSafeWord_;
+  int fixedLength_;
 };
 
 } // namespace facebook::velox::parquet
