@@ -15,7 +15,8 @@
  */
 #pragma once
 
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
+#include "velox/common/EnumDefine.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/exec/Exchange.h"
 #include "velox/experimental/ucx-exchange/CommElement.h"
@@ -33,7 +34,6 @@
 #include <rmm/cuda_stream_pool.hpp>
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/mr/cuda_memory_resource.hpp>
-#include <rmm/mr/device_memory_resource.hpp>
 #include <rmm/mr/pool_memory_resource.hpp>
 
 namespace facebook::velox::ucx_exchange {
@@ -71,6 +71,7 @@ class UcxExchangeSource
     ReadyToReceive,
     WaitingForMetadata,
     WaitingForData,
+    WaitingForDecompression,
     WaitingForIntraNodeData,
     Done,
   };
@@ -198,6 +199,20 @@ class UcxExchangeSource
   /// @param status indication by transport layer of transfer status
   /// @param arg
   void onData(ucs_status_t status, std::shared_ptr<void> arg);
+
+  /// Returns true when this received chunk should be decoded away from the
+  /// UCXX progress thread.
+  bool shouldPipelineDecompression(const DataAndMetadata& data) const;
+
+  /// Submit decompression of a received chunk to the bounded codec executor.
+  void startDecompression(std::shared_ptr<DataAndMetadata> data);
+
+  /// Decode, construct the packed table, and enqueue it for the query consumer.
+  /// May run on either the communicator thread or the codec executor.
+  void decodeAndEnqueue(std::shared_ptr<DataAndMetadata> data);
+
+  /// Report a decode failure without unwinding the UCXX progress thread.
+  void failDecompression(const std::string& message);
 
   /// @brief Initiates receiving the HandshakeResponse from server.
   void receiveHandshakeResponse();

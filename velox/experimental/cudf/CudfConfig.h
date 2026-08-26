@@ -50,6 +50,24 @@ struct CudfConfig {
   static constexpr const char* kCudfConcatOptimizationEnabled{
       "cudf.concat_optimization_enabled"};
   static constexpr const char* kCudfTimestampUnit{"cudf.timestamp_unit"};
+  static constexpr const char* kUcxExchange{"cudf.exchange"};
+  static constexpr const char* kUcxxErrorHandling{"ucxx.error_handling"};
+  static constexpr const char* kUcxIntraNodeExchange{
+      "cudf.intra_node_exchange"};
+  static constexpr const char* kUcxxBlockingPolling{"ucxx.blocking_polling"};
+  static constexpr const char* kUcxExchangeLogLevel{"cudf.exchange_log_level"};
+  static constexpr const char* kUcxPartitionedOutputBatchRows{
+      "cudf.partitioned_output_batch_rows"};
+  static constexpr const char* kUcxExchangeCompression{
+      "cudf.exchange_compression"};
+  static constexpr const char* kUcxExchangeCompressionPipeline{
+      "cudf.exchange_compression_pipeline"};
+  static constexpr const char* kUcxExchangeCompressionPipelineThreads{
+      "cudf.exchange_compression_pipeline_threads"};
+  static constexpr const char* kUcxExchangeCompressionMinBytes{
+      "cudf.exchange_compression_min_bytes"};
+  static constexpr const char* kUcxExchangeCompressionSafetyMargin{
+      "cudf.exchange_compression_safety_margin"};
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
 
@@ -69,6 +87,53 @@ struct CudfConfig {
 
   /// Allow fallback to CPU operators if GPU operator replacement fails.
   bool allowCpuFallback{true};
+
+  /// Enable GPU exchange operators (UcxExchange / UcxPartitionedOutput).
+  bool exchange{false};
+
+  /// Whether to enable error handling in UCXX endpoints.
+  bool ucxxErrorHandling{true};
+
+  /// Whether intra-node exchange optimization is enabled.
+  bool intraNodeExchange{false};
+
+  /// Whether to use blocking polling in UCXX.
+  bool ucxxBlockingPolling{true};
+
+  /// VLOG level for ucx-exchange source files.
+  int32_t exchangeLogLevel{0};
+
+  /// Minimum rows accumulated per UCX partition before flushing.
+  int64_t partitionedOutputBatchRows{10'000};
+
+  /// GPU codec for the UCX exchange payload. "column-adaptive" runs the same
+  /// per-column codec as "column", but uses fused real encode/send/decode
+  /// samples to bypass work for query stages where it does not pay.
+  /// "column-adaptive-freq-pfor-min128" additionally enables dictionary-PFOR,
+  /// frequency-PFOR, and delta-frequency-PFOR candidates for numeric regions of
+  /// at least 128 MiB. Non-adaptive and legacy policy names remain available
+  /// for controlled comparisons.
+  std::string exchangeCompression{"none"};
+
+  /// Run exchange compression/decompression away from the single UCXX
+  /// communicator thread so transport progress can overlap the GPU codec.
+  /// Disabled by default to preserve the synchronous baseline for A/B testing.
+  bool exchangeCompressionPipeline{false};
+
+  /// Maximum number of codec tasks executing concurrently per worker process.
+  /// Start with one because individual codec kernels already approach full-SM
+  /// occupancy and excess concurrency can reduce overall efficiency.
+  int32_t exchangeCompressionPipelineThreads{1};
+
+  /// Send smaller exchange chunks without attempting the GPU codec. Zero
+  /// preserves the existing behavior. This is an absolute-size complement to
+  /// the codec's post-encode percentage-gain check.
+  int64_t exchangeCompressionMinBytes{0};
+
+  /// Require estimated transfer savings to exceed measured codec cost by this
+  /// factor before adaptive compression is selected. Values above one reserve
+  /// headroom for the codec's opportunity cost on concurrent query kernels.
+  double exchangeCompressionSafetyMargin{1.10};
 
   /// Memory resource for cuDF.
   /// Possible values are (cuda, pool, async, arena, managed, managed_pool).
