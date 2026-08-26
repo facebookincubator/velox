@@ -27,7 +27,9 @@ namespace facebook::nimble::mlidc {
 struct RowRange {
   size_t begin{0};
   size_t end{0};
-  size_t size() const { return end > begin ? end - begin : 0; }
+  size_t size() const {
+    return end > begin ? end - begin : 0;
+  }
 };
 using RowRangeList = std::vector<RowRange>;
 
@@ -39,9 +41,11 @@ struct SelectiveTraceParams {
 };
 
 inline RowRangeList makeSelectiveTrace(
-    size_t n, const SelectiveTraceParams& p) {
+    size_t n,
+    const SelectiveTraceParams& p) {
   RowRangeList ranges;
-  if (n == 0 || p.selectivity <= 0.0) return ranges;
+  if (n == 0 || p.selectivity <= 0.0)
+    return ranges;
   if (p.selectivity >= 1.0) {
     ranges.push_back({0, n});
     return ranges;
@@ -57,8 +61,10 @@ inline RowRangeList makeSelectiveTrace(
     size_t runLen = std::min(runDist(rng) + 1, n - pos);
     ranges.push_back({pos, pos + runLen});
     pos += runLen;
-    if (pos >= n) break;
-    if (p.maxRanges && ranges.size() >= p.maxRanges) break;
+    if (pos >= n)
+      break;
+    if (p.maxRanges && ranges.size() >= p.maxRanges)
+      break;
     size_t gapLen = std::min(gapDist(rng) + 1, n - pos);
     pos += gapLen;
   }

@@ -58,9 +58,7 @@ namespace facebook::nimble::mlidc {
 
 class CsvResultWriter {
  public:
-  CsvResultWriter(
-      const std::string& path,
-      std::vector<std::string> columns)
+  CsvResultWriter(const std::string& path, std::vector<std::string> columns)
       : path_(path), columns_(std::move(columns)) {
     file_.open(path_, std::ios::out | std::ios::trunc);
     NIMBLE_CHECK(file_.is_open(), "Cannot open CSV output: " + path_);
@@ -183,8 +181,7 @@ inline folly::dynamic cacheTopology() {
 }
 
 inline std::string scalingGovernor() {
-  return readFile(
-      "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor");
+  return readFile("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor");
 }
 
 inline std::string hostname() {
@@ -217,10 +214,8 @@ inline void writeRunManifest(const std::string& path) {
   // The compression flags belong here as much as the sizes: two runs that
   // differ only in compressor produce different numbers under the same
   // encoder names, so a result set is not interpretable without them.
-  manifest["flags"] = folly::dynamic::object(
-      "mlidc_rows", FLAGS_mlidc_rows)(
-      "mlidc_iters", FLAGS_mlidc_iters)(
-      "mlidc_seed", FLAGS_mlidc_seed)(
+  manifest["flags"] = folly::dynamic::object("mlidc_rows", FLAGS_mlidc_rows)(
+      "mlidc_iters", FLAGS_mlidc_iters)("mlidc_seed", FLAGS_mlidc_seed)(
       "mlidc_file", FLAGS_mlidc_file)(
       "mlidc_dataset_name", FLAGS_mlidc_dataset_name)(
       "mlidc_substream_compression", FLAGS_mlidc_substream_compression)(

@@ -39,8 +39,7 @@ inline int64_t percentileOf(std::vector<int64_t>& v, double p) {
     return 0;
   }
   const double clamped = std::clamp(p, 0.0, 1.0);
-  size_t idx =
-      static_cast<size_t>(clamped * static_cast<double>(v.size() - 1));
+  size_t idx = static_cast<size_t>(clamped * static_cast<double>(v.size() - 1));
   idx = std::min(idx, v.size() - 1);
   auto nth = v.begin() + static_cast<std::ptrdiff_t>(idx);
   std::nth_element(v.begin(), nth, v.end());
@@ -103,8 +102,7 @@ inline MomentSummary momentSummary(const std::vector<double>& values) {
     for (double v : values) {
       sqSum += (v - s.mean) * (v - s.mean);
     }
-    s.stddev =
-        std::sqrt(sqSum / static_cast<double>(values.size() - 1));
+    s.stddev = std::sqrt(sqSum / static_cast<double>(values.size() - 1));
   }
   return s;
 }

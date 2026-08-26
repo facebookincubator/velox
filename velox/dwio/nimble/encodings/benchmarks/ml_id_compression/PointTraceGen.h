@@ -55,7 +55,9 @@ inline PointTrace buildPointTrace(const PointTraceParams& p) {
   while (t.indices.size() < p.probes) {
     const size_t take = std::min(n, p.probes - t.indices.size());
     t.indices.insert(
-        t.indices.end(), perm.begin(), perm.begin() + static_cast<std::ptrdiff_t>(take));
+        t.indices.end(),
+        perm.begin(),
+        perm.begin() + static_cast<std::ptrdiff_t>(take));
     if (t.indices.size() < p.probes) {
       std::shuffle(perm.begin(), perm.end(), rng);
     }

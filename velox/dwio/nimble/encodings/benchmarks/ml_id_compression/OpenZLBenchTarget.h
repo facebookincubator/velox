@@ -25,7 +25,6 @@
 
 #include <glog/logging.h>
 
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
 #include "openzl/cpp/CCtx.hpp"
 #include "openzl/cpp/Compressor.hpp"
 #include "openzl/cpp/DCtx.hpp"
@@ -33,6 +32,7 @@
 #include "openzl/cpp/Output.hpp"
 #include "openzl/zl_graphs.h"
 #include "openzl/zl_version.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
 
 namespace facebook::nimble::mlidc {
 
@@ -56,17 +56,15 @@ class OpenZLBenchTarget : public NimbleBenchTargetBase<T> {
     openzl::Input input = openzl::Input::refNumeric(data.data(), count_);
     compressed_.resize(openzl::compressBound(srcBytes));
 
-    size_t compressedSize = cctx.compressOne(
-        {compressed_.data(), compressed_.size()}, input);
+    size_t compressedSize =
+        cctx.compressOne({compressed_.data(), compressed_.size()}, input);
     compressed_.resize(compressedSize);
   }
 
   void materializeAll(T* dst, uint32_t n) override {
     openzl::DCtx dctx;
     openzl::Output output = openzl::Output::wrapNumeric(dst, sizeof(T), n);
-    dctx.decompressOne(
-        output,
-        {compressed_.data(), compressed_.size()});
+    dctx.decompressOne(output, {compressed_.data(), compressed_.size()});
   }
 
   // OpenZL has no addressable interior, so a partial read is served the only
@@ -95,8 +93,9 @@ class OpenZLBenchTarget : public NimbleBenchTargetBase<T> {
   }
 
   std::vector<std::span<const std::byte>> internalBuffers() const override {
-    return {{reinterpret_cast<const std::byte*>(compressed_.data()),
-             compressed_.size()}};
+    return {
+        {reinterpret_cast<const std::byte*>(compressed_.data()),
+         compressed_.size()}};
   }
 
  private:

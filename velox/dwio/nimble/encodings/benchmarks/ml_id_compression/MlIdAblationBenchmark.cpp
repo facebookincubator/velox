@@ -32,10 +32,10 @@
 
 #include <gflags/gflags.h>
 
+#include "velox/dwio/nimble/encodings/SubIntSplitSampler.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/AblationPolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
-#include "velox/dwio/nimble/encodings/SubIntSplitSampler.h"
 
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");
 
@@ -46,21 +46,30 @@ using namespace facebook::nimble::detail::subintsplit;
 
 std::string encodingTypeName(EncodingType t) {
   switch (t) {
-    case EncodingType::Trivial: return "Trivial";
-    case EncodingType::FixedBitWidth: return "FixedBitWidth";
-    case EncodingType::Constant: return "Constant";
-    case EncodingType::Dictionary: return "Dictionary";
-    case EncodingType::MainlyConstant: return "MainlyConstant";
-    case EncodingType::RLE: return "RLE";
-    case EncodingType::Varint: return "Varint";
-    default: return "Other";
+    case EncodingType::Trivial:
+      return "Trivial";
+    case EncodingType::FixedBitWidth:
+      return "FixedBitWidth";
+    case EncodingType::Constant:
+      return "Constant";
+    case EncodingType::Dictionary:
+      return "Dictionary";
+    case EncodingType::MainlyConstant:
+      return "MainlyConstant";
+    case EncodingType::RLE:
+      return "RLE";
+    case EncodingType::Varint:
+      return "Varint";
+    default:
+      return "Other";
   }
 }
 
 std::string formatPlan(const std::vector<SegmentPlan>& segments) {
   std::ostringstream oss;
   for (size_t i = 0; i < segments.size(); ++i) {
-    if (i > 0) oss << ";";
+    if (i > 0)
+      oss << ";";
     oss << segments[i].bitStart << "-" << segments[i].bitEnd << ":"
         << encodingTypeName(segments[i].encoding);
   }
@@ -96,7 +105,8 @@ int runBenchmark() {
                 << accessClassName(ladder[i].worstAllowed) << ")\n";
     }
     std::cout << "\nDatasets:\n";
-    for (const auto& d : datasets) std::cout << "  " << d.name << "\n";
+    for (const auto& d : datasets)
+      std::cout << "  " << d.name << "\n";
     return 0;
   }
 
@@ -117,9 +127,8 @@ int runBenchmark() {
       "cost_model_consistent",
       "segment_plan",
       "skipped"};
-  std::string csvPath = FLAGS_mlidc_output_csv.empty()
-      ? "bench_ablation.csv"
-      : FLAGS_mlidc_output_csv;
+  std::string csvPath = FLAGS_mlidc_output_csv.empty() ? "bench_ablation.csv"
+                                                       : FLAGS_mlidc_output_csv;
   CsvResultWriter csv(csvPath, csvColumns);
   if (!FLAGS_mlidc_output_manifest.empty()) {
     writeRunManifest(FLAGS_mlidc_output_manifest);
@@ -139,8 +148,8 @@ int runBenchmark() {
     // conversion for float and double, which would analyse the wrong bits.
     // Same view the encodings take of their input (TestUtils.h:298-301).
     using Phys = typename TypeTraits<Elem>::physicalType;
-    auto physical = std::span<const Phys>(
-        reinterpret_cast<const Phys*>(data.data()), n);
+    auto physical =
+        std::span<const Phys>(reinterpret_cast<const Phys*>(data.data()), n);
 
     std::vector<uint64_t> samples;
     sampleIntoU64(physical, samples, samplerCfg);
@@ -181,8 +190,10 @@ int runBenchmark() {
       bool allRA = true;
       for (const auto& seg : result.segments) {
         AccessClass ac = accessClassOf(seg.encoding);
-        if (ac > worst) worst = ac;
-        if (ac != AccessClass::PureRA) allRA = false;
+        if (ac > worst)
+          worst = ac;
+        if (ac != AccessClass::PureRA)
+          allRA = false;
       }
 
       std::cout << "  " << rung.name << ": " << result.segments.size()
@@ -198,9 +209,7 @@ int runBenchmark() {
       csv.set("sample_size", static_cast<int64_t>(samples.size()));
       csv.set("rung_name", rung.name);
       csv.set("rung_index", static_cast<int64_t>(ri));
-      csv.set(
-          "segment_count",
-          static_cast<int64_t>(result.segments.size()));
+      csv.set("segment_count", static_cast<int64_t>(result.segments.size()));
       csv.set("total_est_bits", result.totalCost);
       csv.set("bits_per_elem_est", bpe);
       csv.set("all_sections_ra", allRA ? int64_t{1} : int64_t{0});
