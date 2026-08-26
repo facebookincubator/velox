@@ -26,7 +26,6 @@ String Functions
         SELECT bit_length('123'); -- 24
 
 .. spark:function:: btrim(string) -> varchar
-   :noindex:
 
     Alias for ``trim(string) -> varchar``.
 
