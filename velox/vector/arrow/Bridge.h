@@ -36,9 +36,12 @@ enum class TimestampUnit : uint8_t {
 struct ArrowOptions {
   /// Physical layout used to export variable-width values to Arrow.
   enum class VarTypeLayout : uint8_t {
-    kDefault, // 32-bit offsets (Arrow String/Binary)
-    kStringView, // Arrow StringView
-    kLarge // 64-bit offsets (Arrow LargeString/LargeBinary)
+    /// 32-bit offsets (Arrow String/Binary).
+    kDefault,
+    /// Arrow StringView.
+    kStringView,
+    /// 64-bit offsets (Arrow LargeString/LargeBinary).
+    kLarge,
   };
 
   VELOX_DECLARE_EMBEDDED_ENUM_NAME(VarTypeLayout);
