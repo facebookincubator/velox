@@ -4046,6 +4046,53 @@ TEST_P(VeloxReaderTest, flatMapSkipAllTrueInMapStream) {
   }
 }
 
+TEST_P(VeloxReaderTest, DISABLED_flatMapAllTrueInMapWithAllNullValues) {
+  auto type =
+      velox::ROW({{"flat_map", velox::MAP(velox::INTEGER(), velox::BIGINT())}});
+
+  facebook::velox::test::VectorMaker vectorMaker(leafPool_.get());
+  auto keys = vectorMaker.flatVector<int32_t>({1, 1, 1, 1});
+  auto values = vectorMaker.flatVectorNullable<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  auto vector = vectorMaker.rowVector(
+      {"flat_map"}, {vectorMaker.mapVector({0, 1, 2, 3}, keys, values)});
+
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  auto writerOptions = createFlatMapWriterOptions();
+  writerOptions.enableChunking = true;
+  writerOptions.flatMapColumns["flat_map"];
+  nimble::Writer writer(
+      type, std::move(writeFile), *rootPool_, std::move(writerOptions));
+  writer.write(vector);
+  writer.close();
+
+  {
+    velox::InMemoryReadFile readFile(file);
+    auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
+    nimble::VeloxReader reader(
+        &readFile, *leafPool_, std::move(selector), createReadParams());
+    const auto& flatMap = reader.schema()->asRow().childAt(0)->asFlatMap();
+    ASSERT_EQ(flatMap.childrenCount(), 1);
+    EXPECT_TRUE(existingStreamOffsets(*leafPool_, &readFile, 0)
+                    .count(flatMap.inMapDescriptorAt(0).offset()));
+  }
+
+  {
+    velox::InMemoryReadFile readFile(file);
+    auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
+    nimble::VeloxReader reader(
+        &readFile, *leafPool_, std::move(selector), createReadParams());
+    velox::VectorPtr output;
+    uint64_t rowCount = 4;
+    ASSERT_TRUE(reader.next(rowCount, output));
+    ASSERT_EQ(output->size(), 4);
+    for (auto i = 0; i < 4; ++i) {
+      EXPECT_TRUE(vectorEquals(vector, output, i)) << "Mismatch at row " << i;
+    }
+  }
+}
+
 // Verify mixed in-map streams: some keys present in all rows (all-true,
 // skipped), some keys present in only some rows (not all-true, written).
 TEST_P(VeloxReaderTest, flatMapSkipAllTrueInMapStreamMixed) {
