@@ -519,6 +519,20 @@ TEST_F(PlanNodeBuilderTest, exchangeNode) {
   verify(node2);
 }
 
+TEST_F(PlanNodeBuilderTest, exchangeNodeTransportKindNotSet) {
+  // The backward-compatible constructor and deserialization both default a
+  // missing transport to in-memory. Builder does not: it requires the
+  // transport explicitly, the same way it requires id, outputType and
+  // serdeKind.
+  VELOX_ASSERT_THROW(
+      ExchangeNode::Builder()
+          .id("exchange_node_id")
+          .outputType(ROW({"c0"}, {BIGINT()}))
+          .serdeKind("Presto")
+          .build(),
+      "ExchangeNode transportKind is not set");
+}
+
 TEST_F(PlanNodeBuilderTest, mergeExchangeNode) {
   const PlanNodeId id = "merge_exchange_node_id";
   const RowTypePtr type = ROW({"c0"}, {BIGINT()});
@@ -549,6 +563,18 @@ TEST_F(PlanNodeBuilderTest, mergeExchangeNode) {
 
   const auto node2 = MergeExchangeNode::Builder(*node).build();
   verify(node2);
+}
+
+TEST_F(PlanNodeBuilderTest, mergeExchangeNodeTransportKindNotSet) {
+  VELOX_ASSERT_THROW(
+      MergeExchangeNode::Builder()
+          .id("merge_exchange_node_id")
+          .outputType(ROW({"c0"}, {BIGINT()}))
+          .sortingKeys({std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c1")})
+          .sortingOrders({SortOrder(true, false)})
+          .serdeKind("Presto")
+          .build(),
+      "MergeExchangeNode transportKind is not set");
 }
 
 TEST_F(PlanNodeBuilderTest, localMergeNode) {

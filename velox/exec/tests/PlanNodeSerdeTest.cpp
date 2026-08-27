@@ -315,6 +315,34 @@ TEST_F(PlanNodeSerdeTest, mergeExchangeTransportKindDefaultsWhenMissing) {
       std::string{core::TransportKind::kInMemory});
 }
 
+TEST_F(PlanNodeSerdeTest, exchangeTransportKindDefaultsInLegacyConstructor) {
+  // The pre-existing constructor, kept for source compatibility with callers
+  // built before ExchangeNode carried a transport, must keep defaulting to
+  // in-memory.
+  const core::ExchangeNode node(
+      "exchangeNodeId",
+      ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+      "Presto");
+  ASSERT_EQ(node.transportKind(), std::string{core::TransportKind::kInMemory});
+}
+
+TEST_F(
+    PlanNodeSerdeTest,
+    mergeExchangeTransportKindDefaultsInLegacyConstructor) {
+  const std::vector<core::FieldAccessTypedExprPtr> sortingKeys = {
+      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a")};
+  const std::vector<core::SortOrder> sortingOrders = {
+      core::SortOrder(true, true)};
+
+  const core::MergeExchangeNode node(
+      "mergeExchangeNodeId",
+      ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+      sortingKeys,
+      sortingOrders,
+      "Presto");
+  ASSERT_EQ(node.transportKind(), std::string{core::TransportKind::kInMemory});
+}
+
 TEST_F(PlanNodeSerdeTest, filter) {
   auto plan = PlanBuilder().values({data_}).filter("c0 > 100").planNode();
   testSerde(plan);

@@ -2195,7 +2195,10 @@ class ExchangeNode : public PlanNode {
         transportKind_(std::move(transportKind)) {}
 
   /// Backward-compatible constructor without an explicit transport; defaults
-  /// to the in-memory transport. Prefer the constructor above.
+  /// to the in-memory transport. Prefer the constructor above. This default
+  /// does not extend to Builder: Builder::build() requires transportKind to
+  /// be set explicitly, the same as it requires id, outputType and
+  /// serdeKind.
   ExchangeNode(const PlanNodeId& id, RowTypePtr type, std::string serdeKind)
       : ExchangeNode(
             id,
@@ -2314,7 +2317,10 @@ class MergeExchangeNode : public ExchangeNode {
       std::string transportKind);
 
   /// Backward-compatible constructor without an explicit transport; defaults
-  /// to the in-memory transport. Prefer the constructor above.
+  /// to the in-memory transport. Prefer the constructor above. This default
+  /// does not extend to Builder: Builder::build() requires transportKind to
+  /// be set explicitly, the same as it requires id, outputType and
+  /// serdeKind.
   MergeExchangeNode(
       const PlanNodeId& id,
       const RowTypePtr& type,
