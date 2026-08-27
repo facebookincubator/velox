@@ -16,12 +16,26 @@
 
 #pragma once
 
+#include <stdexcept>
 #include "velox/common/compression/Compression.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/encryption/Encryption.h"
 
 namespace facebook::velox::dwio::common::compression {
+
+/// Thrown by ZstdDecompressor when the destination buffer is too small to hold
+/// the decompressed output. This happens when a Parquet/ORC compressed block
+/// decompresses to more bytes than getDecompressedLength() returned (e.g. a
+/// ZSTD frame whose content-size header is missing/streaming, or a block made
+/// of multiple ZSTD frames whose combined size exceeds the size reported for
+/// the first frame). Carries the required buffer size so the caller can grow
+/// and retry.
+struct ZstdDestBufferTooSmall : public std::runtime_error {
+  ZstdDestBufferTooSmall(int64_t requiredSize, const std::string& what)
+      : std::runtime_error(what), requiredSize{requiredSize} {}
+  const int64_t requiredSize;
+};
 
 class Compressor {
  public:
