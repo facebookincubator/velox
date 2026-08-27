@@ -69,12 +69,8 @@ struct SubIntSplitSection {
 // {bitStart, bitEnd, encodedSize} triple per section, then the section payloads
 // back to back in LSB-first order.
 //
-// Shared so that the encoding and the view agree on the wire format by
-// construction. They read the sections by different routes -- one builds an
-// Encoding per section, the other an EncodingView -- but a format change must
-// not be able to reach only one of them.
-//
-// `data` is the whole encoded stream and `dataOffset` its prefix size.
+// Shared by the encoding and the view so a wire format change cannot reach only
+// one of them. `data` is the whole stream, `dataOffset` its prefix size.
 inline std::vector<SubIntSplitSection> parseSubIntSplitSections(
     std::string_view data,
     uint32_t dataOffset) {

@@ -31,16 +31,13 @@ namespace detail {
 
 /// Serves an encoding by index after decoding it once into an owned array.
 ///
-/// This is the fallback for a sub-stream that createTypedEncodingView() cannot
-/// wrap, which in practice means a compressed stream or a Varint one. It is
-/// worth having rather than falling back to a sequential cursor because
-/// decompression in Nimble is eager and private: an Encoding decompresses into
-/// its own buffer in its constructor (TrivialEncoding.h), and
-/// Compression::uncompress yields the values body rather than a self-describing
-/// stream, so there is no decompressed form for a real view to attach to.
-/// Decoding once into an array recovers indexed access at the cost of holding
-/// the section decoded, which is the same trade SharedDictionaryAlphabet makes
-/// for a non-viewable alphabet (SharedDictionaryEncoding.cpp).
+/// The fallback for a stream createTypedEncodingView() cannot wrap: a
+/// compressed one, or an encoding with no view. Construction is not cheap and
+/// the decoded array costs rowCount * sizeof(physicalType).
+///
+/// Nothing here is SubIntSplit-specific. SharedDictionaryAlphabet hand-rolls the
+/// same fallback and could be simplified by this class; move it to views/ if
+/// that is done.
 template <typename T>
 class MaterializedEncodingView final : public TypedEncodingView<T> {
  public:
@@ -86,18 +83,13 @@ class MaterializedEncodingView final : public TypedEncodingView<T> {
 
 /// Random-access view over a SubIntSplit stream.
 ///
-/// SubIntSplitEncoding splits each value into contiguous bit ranges and encodes
-/// each range as its own sub-stream. Reading row i therefore only needs row i of
-/// every section, but the encoding holds its sections as Encoding objects, whose
-/// only read API is a sequential cursor -- so a point lookup costs a traversal
-/// from row zero. This view holds one indexed accessor per section instead, and
-/// reassembles the word from the pieces.
+/// Holds one indexed accessor per bit-range section and reassembles the word
+/// from them, where SubIntSplitEncoding holds an Encoding per section and can
+/// only reach row i by traversing from row zero.
 ///
-/// The sections a real selection produces are overwhelmingly viewable: of the
-/// eight encodings in the default nested inventory, Varint alone has no view.
-/// Anything that is not viewable, and any section whose sub-stream is
-/// compressed, falls back to MaterializedEncodingView, so indexed access
-/// survives either way.
+/// Sections that cannot be viewed fall back to MaterializedEncodingView, so
+/// indexed access survives whatever the selection picked. Of the eight
+/// encodings in the default nested inventory only Varint has no view.
 template <typename T>
 class SubIntSplitEncodingView final : public TypedEncodingView<T> {
  public:
@@ -117,35 +109,41 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
       : TypedEncodingView<T>{data, pool, options} {
     NIMBLE_CHECK_EQ(this->encodingType_, EncodingType::SubIntSplit);
 
-    for (const auto& parsed :
-         detail::parseSubIntSplitSections(data, this->dataOffset_)) {
+    const auto parsed =
+        detail::parseSubIntSplitSections(data, this->dataOffset_);
+    NIMBLE_CHECK(!parsed.empty(), "SubIntSplit stream has no sections.");
+
+    for (const auto& meta : parsed) {
       Section section;
-      section.bitStart = parsed.bitStart;
-      section.mask = parsed.mask;
-      section.storageBytes = parsed.storageBytes;
-      switch (section.storageBytes) {
+      switch (meta.storageBytes) {
         case 1:
-          section.view = makeSectionView<uint8_t>(parsed.stream, pool, options);
+          section = makeSection<uint8_t>(meta, pool, options);
           break;
         case 2:
-          section.view =
-              makeSectionView<uint16_t>(parsed.stream, pool, options);
+          section = makeSection<uint16_t>(meta, pool, options);
           break;
         case 4:
-          section.view =
-              makeSectionView<uint32_t>(parsed.stream, pool, options);
+          section = makeSection<uint32_t>(meta, pool, options);
           break;
         case 8:
-          section.view =
-              makeSectionView<uint64_t>(parsed.stream, pool, options);
+          section = makeSection<uint64_t>(meta, pool, options);
           break;
         default:
           NIMBLE_UNREACHABLE("Invalid SubIntSplit section storage width.");
       }
       NIMBLE_CHECK_EQ(section.view->rowCount(), this->rowCount_);
+
+      // A Constant section contributes the same bits to every row, so resolve
+      // it now and keep it out of the per-row work entirely.
+      if (this->rowCount_ > 0 &&
+          section.view->encodingType() == EncodingType::Constant) {
+        constantBits_ |= static_cast<physicalType>(
+                             section.valueAt(*section.view, 0) & section.mask)
+            << section.bitStart;
+        continue;
+      }
       sections_.push_back(std::move(section));
     }
-    NIMBLE_CHECK(!sections_.empty(), "SubIntSplit stream has no sections.");
   }
 
  private:
@@ -154,18 +152,33 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
     uint64_t mask{0};
     uint8_t storageBytes{8};
     std::unique_ptr<EncodingView> view;
+    // Resolved from the storage width at construction. The chunked path
+    // switches instead, so that the accumulate kernel stays inlinable.
+    uint64_t (*valueAt)(const EncodingView&, uint32_t){nullptr};
   };
 
-  // Prefers a real view over the section's sub-stream, and decodes the section
-  // once when it cannot have one.
+  template <typename SectionT>
+  static Section makeSection(
+      const detail::SubIntSplitSection& meta,
+      velox::memory::MemoryPool* pool,
+      const Encoding::Options& options) {
+    Section section;
+    section.bitStart = meta.bitStart;
+    section.mask = meta.mask;
+    section.storageBytes = meta.storageBytes;
+    section.view = makeSectionView<SectionT>(meta.stream, pool, options);
+    section.valueAt = &readValueAt<SectionT>;
+    return section;
+  }
+
+  // Prefers a view over the section's sub-stream, decoding once when it cannot
+  // have one.
   //
-  // Whether a stream is compressed is not visible from the outside -- each
-  // encoding stores its compression type at its own offset, and
-  // supportsEncodingView() sees only the encoding type -- so the attempt is the
-  // test. createTypedEncodingView() throws on a compressed stream and on a type
-  // it has no view for, and both are exactly the cases the fallback exists to
-  // serve. A stream that is genuinely malformed still fails, because the
-  // fallback decodes it through EncodingFactory and lets that error escape.
+  // Attempting construction is the only available test. A predicate cannot
+  // replace it: compression nests, so an RLE stream reports viewable while its
+  // run values are compressed a level down, and views signal both that and an
+  // incompatible type by throwing. See the
+  // compressionNestsBelowTheOuterEncoding test.
   template <typename SectionT>
   static std::unique_ptr<EncodingView> makeSectionView(
       std::string_view stream,
@@ -182,50 +195,49 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
         stream, pool, options);
   }
 
+  // readAt() writes exactly the section's storage width, so the value is read
+  // into that width rather than through a wider one, which would depend on byte
+  // order.
+  template <typename SectionT>
+  static uint64_t readValueAt(const EncodingView& view, uint32_t index) {
+    SectionT value;
+    view.readAt(index, &value);
+    return value;
+  }
+
+  template <typename SectionT>
+  static void readSectionChunk(
+      const Section& section,
+      uint32_t offset,
+      uint32_t count,
+      physicalType* output,
+      bool isFirst,
+      uint8_t* scratch) {
+    auto* values = reinterpret_cast<SectionT*>(scratch);
+    section.view->read(offset, count, values);
+    if (isFirst) {
+      detail::accumulateSubIntSplitSection<physicalType, SectionT, true>(
+          values, output, count, section.mask, section.bitStart);
+    } else {
+      detail::accumulateSubIntSplitSection<physicalType, SectionT, false>(
+          values, output, count, section.mask, section.bitStart);
+    }
+  }
+
   T readTypedAt(uint32_t index) const final {
     NIMBLE_CHECK_LT(index, this->rowCount_);
-    physicalType value{0};
+    physicalType value = constantBits_;
     for (const auto& section : sections_) {
       value |= static_cast<physicalType>(
-                   sectionValueAt(section, index) & section.mask)
+                   section.valueAt(*section.view, index) & section.mask)
           << section.bitStart;
     }
     return detail::castFromPhysicalType<T>(value);
   }
 
-  // Reads one section's raw value. The width switch is explicit rather than
-  // writing through a uint64_t, because readAt() writes exactly the section's
-  // storage width and reading the rest back would depend on byte order.
-  static uint64_t sectionValueAt(const Section& section, uint32_t index) {
-    switch (section.storageBytes) {
-      case 1: {
-        uint8_t v;
-        section.view->readAt(index, &v);
-        return v;
-      }
-      case 2: {
-        uint16_t v;
-        section.view->readAt(index, &v);
-        return v;
-      }
-      case 4: {
-        uint32_t v;
-        section.view->readAt(index, &v);
-        return v;
-      }
-      default: {
-        uint64_t v;
-        section.view->readAt(index, &v);
-        return v;
-      }
-    }
-  }
-
-  // Chunked the same way as SubIntSplitEncoding::materialize, and for the same
-  // reason: with the chunk on the outside and the sections on the inside, the
-  // output slice and the scratch buffer both stay resident across the whole
-  // section loop. Only the source of each section's values differs -- an
-  // indexed read here against a sequential one there.
+  // Chunked the same way as SubIntSplitEncoding::materialize: with the chunk on
+  // the outside and the sections on the inside, the output slice and the
+  // scratch both stay resident across the section loop.
   void readPhysical(uint32_t offset, uint32_t length, physicalType* output)
       const final {
     this->checkReadRange(offset, length);
@@ -233,12 +245,15 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
       return;
     }
 
-    // One chunk of one section's values, on the stack because a view is read
-    // concurrently and so cannot hold scratch of its own. kViewChunkSize is
-    // smaller than the encoding's chunk for the same reason it exists at all:
-    // at 1024 the scratch and the output slice together are 16 KB and stay in
-    // L1 across the whole section loop.
+    // On the stack because a view is read concurrently and so cannot hold
+    // scratch of its own. At 1024 rows this and the output slice together are
+    // 16 KB and stay in L1 across the section loop.
     alignas(64) uint8_t scratch[kViewChunkSize * sizeof(physicalType)];
+
+    // Section 0 initialises each output element and the rest OR into it, which
+    // avoids a separate fill pass. That only works when there is nothing to
+    // seed with, so a non-zero constant contribution is filled first instead.
+    const bool seedWithConstant = constantBits_ != 0 || sections_.empty();
 
     for (uint32_t chunkStart = 0; chunkStart < length;
          chunkStart += kViewChunkSize) {
@@ -246,10 +261,16 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
       physicalType* chunkOutput = output + chunkStart;
       const uint32_t sourceOffset = offset + chunkStart;
 
+      if (seedWithConstant) {
+        std::fill(chunkOutput, chunkOutput + chunkCount, constantBits_);
+      }
       for (size_t s = 0; s < sections_.size(); ++s) {
         const auto& section = sections_[s];
-        // Section 0 initialises each output element; the rest OR into it.
-        const bool isFirst = (s == 0);
+        const bool isFirst = !seedWithConstant && s == 0;
+        // Switched rather than called through section.readChunk, which costs
+        // 4% of bulk throughput: an indirect call stops the compiler inlining
+        // the AVX2 accumulate kernel into the loop. The switch itself is noise
+        // at one per chunk per section.
         switch (section.storageBytes) {
           case 1:
             readSectionChunk<uint8_t>(
@@ -278,29 +299,15 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
     }
   }
 
-  template <typename SectionT>
-  static void readSectionChunk(
-      const Section& section,
-      uint32_t sourceOffset,
-      uint32_t count,
-      physicalType* chunkOutput,
-      bool isFirst,
-      uint8_t* scratch) {
-    auto* values = reinterpret_cast<SectionT*>(scratch);
-    section.view->read(sourceOffset, count, values);
-    if (isFirst) {
-      detail::accumulateSubIntSplitSection<physicalType, SectionT, true>(
-          values, chunkOutput, count, section.mask, section.bitStart);
-    } else {
-      detail::accumulateSubIntSplitSection<physicalType, SectionT, false>(
-          values, chunkOutput, count, section.mask, section.bitStart);
-    }
-  }
-
-  // Rows per chunk in readPhysical. See the scratch declaration there.
+  // Rows per chunk in readPhysical. Smaller than the encoding's chunk because
+  // the scratch is on the stack, which is what keeps the view const and safe to
+  // read concurrently.
   static constexpr uint32_t kViewChunkSize = 1024;
 
+  // Sections that vary per row. Constant sections are folded into constantBits_
+  // at construction and do not appear here.
   std::vector<Section> sections_;
+  physicalType constantBits_{0};
 };
 
 } // namespace facebook::nimble
