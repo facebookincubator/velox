@@ -2433,6 +2433,53 @@ TEST_F(ParquetTableScanTest, fileFormatRuntimeStats) {
   waitForAllTasksToBeDeleted();
 }
 
+TEST_F(ParquetTableScanTest, structSkipNulls) {
+  constexpr vector_size_t kNumRows = 500;
+
+  auto id = makeFlatVector<int64_t>(
+      kNumRows, [](auto row) { return static_cast<int64_t>(row); });
+  // A struct that is null for every row -- read for its null-ness only.
+  auto structColumn = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+      },
+      [](vector_size_t /*row*/) { return true; });
+
+  auto data = makeRowVector({"id", "s"}, {id, structColumn});
+  auto dataType = asRowType(data->type());
+
+  auto filePath = TempFilePath::create();
+  ParquetWriterOptions options;
+  writeToParquetFile(filePath->getPath(), {data}, options);
+  loadData(dataType, data);
+
+  parse::ParseOptions parseOptions;
+  parseOptions.parseDecimalAsDouble = false;
+  auto plan = PlanBuilder(pool_.get())
+                  .setParseOptions(parseOptions)
+                  .tableScan(
+                      dataType,
+                      {"id >= 200", "s IS NULL"},
+                      /*remainingFilter=*/"",
+                      /*dataColumns=*/nullptr,
+                      /*assignments=*/{})
+                  .planNode();
+
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits = {
+      makeSplit(filePath->getPath())};
+
+  // Small read batch: the leading rows (id < 200) fill whole batches that
+  // 'id >= 200' filters out entirely, so the nulls-only 's' column lags and is
+  // then skipped forward.
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "64")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "64")
+      .splits(splits)
+      .assertResults("SELECT id, s FROM tmp WHERE id >= 200 AND s IS NULL");
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv, false};
