@@ -36,7 +36,8 @@ HiveIcebergSplit::HiveIcebergSplit(
     std::optional<FileProperties> properties,
     int64_t dataSequenceNumber,
     const std::unordered_map<int32_t, std::optional<std::string>>&
-        identityPartitionKeys)
+        identityPartitionKeys,
+    std::optional<dwio::common::ColumnMappingMode> columnMappingMode)
     : HiveConnectorSplit(
           connectorId,
           filePath,
@@ -53,7 +54,8 @@ HiveIcebergSplit::HiveIcebergSplit(
           infoColumns,
           properties,
           std::nullopt,
-          std::nullopt),
+          std::nullopt,
+          columnMappingMode),
       dataSequenceNumber(dataSequenceNumber),
       identityPartitionKeys(identityPartitionKeys) {
   // TODO: Deserialize _extraFileInfo to get deleteFiles;
@@ -77,7 +79,8 @@ HiveIcebergSplit::HiveIcebergSplit(
     std::optional<FileProperties> properties,
     int64_t dataSequenceNumber,
     const std::unordered_map<int32_t, std::optional<std::string>>&
-        identityPartitionKeys)
+        identityPartitionKeys,
+    std::optional<dwio::common::ColumnMappingMode> columnMappingMode)
     : HiveConnectorSplit(
           connectorId,
           filePath,
@@ -94,7 +97,8 @@ HiveIcebergSplit::HiveIcebergSplit(
           infoColumns,
           properties,
           std::nullopt,
-          std::nullopt),
+          std::nullopt,
+          columnMappingMode),
       deleteFiles(std::move(deletes)),
       dataSequenceNumber(dataSequenceNumber),
       identityPartitionKeys(identityPartitionKeys) {}
@@ -115,6 +119,7 @@ std::shared_ptr<HiveIcebergSplit> IcebergSplitBuilder::build() const {
       infoColumns_,
       std::nullopt,
       dataSequenceNumber_,
-      identityPartitionKeys_);
+      identityPartitionKeys_,
+      columnMappingMode_);
 }
 } // namespace facebook::velox::connector::hive::iceberg

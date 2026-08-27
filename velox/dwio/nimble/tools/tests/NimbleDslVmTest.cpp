@@ -28,55 +28,55 @@ namespace {
 
 // ===== Compile tests =====
 
-TEST(CompileTest, EmptyTokens) {
+TEST(CompileTest, emptyTokens) {
   auto result = compile({});
   EXPECT_FALSE(result.error.empty());
   EXPECT_TRUE(result.program.empty());
 }
 
-TEST(CompileTest, Quit) {
+TEST(CompileTest, quit) {
   auto result = compile({"quit"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::Quit);
 }
 
-TEST(CompileTest, QuitCaseInsensitive) {
+TEST(CompileTest, quitCaseInsensitive) {
   auto result = compile({"QUIT"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::Quit);
 }
 
-TEST(CompileTest, Exit) {
+TEST(CompileTest, exit) {
   auto result = compile({"EXIT"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::Quit);
 }
 
-TEST(CompileTest, Help) {
+TEST(CompileTest, help) {
   auto result = compile({"help"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::Help);
 }
 
-TEST(CompileTest, Describe) {
+TEST(CompileTest, describe) {
   auto result = compile({"DESCRIBE"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::Describe);
 }
 
-TEST(CompileTest, DescribeCaseInsensitive) {
+TEST(CompileTest, describeCaseInsensitive) {
   auto result = compile({"describe"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::Describe);
 }
 
-TEST(CompileTest, SelectStar) {
+TEST(CompileTest, selectStar) {
   auto result = compile({"SELECT", "*"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
@@ -88,7 +88,7 @@ TEST(CompileTest, SelectStar) {
   EXPECT_FALSE(ops.stripeId.has_value());
 }
 
-TEST(CompileTest, SelectColumns) {
+TEST(CompileTest, selectColumns) {
   auto result = compile({"SELECT", "col1", "col2"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
@@ -97,21 +97,21 @@ TEST(CompileTest, SelectColumns) {
   EXPECT_EQ(ops.columns, expected);
 }
 
-TEST(CompileTest, SelectWithLimit) {
+TEST(CompileTest, selectWithLimit) {
   auto result = compile({"SELECT", "*", "LIMIT", "5"});
   EXPECT_TRUE(result.error.empty());
   const auto& ops = std::get<SelectOperands>(result.program[0].operands);
   EXPECT_EQ(ops.limit, 5);
 }
 
-TEST(CompileTest, SelectWithOffset) {
+TEST(CompileTest, selectWithOffset) {
   auto result = compile({"SELECT", "*", "OFFSET", "10"});
   EXPECT_TRUE(result.error.empty());
   const auto& ops = std::get<SelectOperands>(result.program[0].operands);
   EXPECT_EQ(ops.offset, 10);
 }
 
-TEST(CompileTest, SelectWithStripe) {
+TEST(CompileTest, selectWithStripe) {
   auto result = compile({"SELECT", "*", "STRIPE", "2"});
   EXPECT_TRUE(result.error.empty());
   const auto& ops = std::get<SelectOperands>(result.program[0].operands);
@@ -119,7 +119,7 @@ TEST(CompileTest, SelectWithStripe) {
   EXPECT_EQ(*ops.stripeId, 2);
 }
 
-TEST(CompileTest, SelectWithAllClauses) {
+TEST(CompileTest, selectWithAllClauses) {
   auto result = compile(
       {"select", "name", "age", "LIMIT", "50", "OFFSET", "10", "STRIPE", "3"});
   EXPECT_TRUE(result.error.empty());
@@ -132,42 +132,42 @@ TEST(CompileTest, SelectWithAllClauses) {
   EXPECT_EQ(*ops.stripeId, 3);
 }
 
-TEST(CompileTest, SelectWithFrom) {
+TEST(CompileTest, selectWithFrom) {
   auto result = compile({"SELECT", "*", "FROM", "table1"});
   EXPECT_TRUE(result.error.empty());
   const auto& ops = std::get<SelectOperands>(result.program[0].operands);
   EXPECT_TRUE(ops.columns.empty());
 }
 
-TEST(CompileTest, ShowSchema) {
+TEST(CompileTest, showSchema) {
   auto result = compile({"SHOW", "SCHEMA"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::ShowSchema);
 }
 
-TEST(CompileTest, ShowInfo) {
+TEST(CompileTest, showInfo) {
   auto result = compile({"show", "info"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::ShowInfo);
 }
 
-TEST(CompileTest, ShowStats) {
+TEST(CompileTest, showStats) {
   auto result = compile({"SHOW", "STATS"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::ShowStats);
 }
 
-TEST(CompileTest, ShowStripes) {
+TEST(CompileTest, showStripes) {
   auto result = compile({"SHOW", "STRIPES"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::ShowStripes);
 }
 
-TEST(CompileTest, ShowStreams) {
+TEST(CompileTest, showStreams) {
   auto result = compile({"SHOW", "STREAMS"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
@@ -176,7 +176,7 @@ TEST(CompileTest, ShowStreams) {
   EXPECT_FALSE(ops.stripeId.has_value());
 }
 
-TEST(CompileTest, ShowStreamsWithStripe) {
+TEST(CompileTest, showStreamsWithStripe) {
   auto result = compile({"SHOW", "STREAMS", "STRIPE", "1"});
   EXPECT_TRUE(result.error.empty());
   const auto& ops = std::get<ShowStreamsOperands>(result.program[0].operands);
@@ -184,7 +184,7 @@ TEST(CompileTest, ShowStreamsWithStripe) {
   EXPECT_EQ(*ops.stripeId, 1);
 }
 
-TEST(CompileTest, ShowEncoding) {
+TEST(CompileTest, showEncoding) {
   auto result = compile({"SHOW", "ENCODING"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
@@ -193,7 +193,7 @@ TEST(CompileTest, ShowEncoding) {
   EXPECT_FALSE(ops.stripeId.has_value());
 }
 
-TEST(CompileTest, ShowEncodingWithStripe) {
+TEST(CompileTest, showEncodingWithStripe) {
   auto result = compile({"SHOW", "ENCODING", "STRIPE", "1"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
@@ -203,14 +203,14 @@ TEST(CompileTest, ShowEncodingWithStripe) {
   EXPECT_EQ(*ops.stripeId, 1);
 }
 
-TEST(CompileTest, ShowIndex) {
+TEST(CompileTest, showIndex) {
   auto result = compile({"SHOW", "INDEX"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::ShowIndex);
 }
 
-TEST(CompileTest, ShowHistogram) {
+TEST(CompileTest, showHistogram) {
   auto result = compile({"SHOW", "HISTOGRAM"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
@@ -220,7 +220,7 @@ TEST(CompileTest, ShowHistogram) {
   EXPECT_FALSE(ops.stripeId.has_value());
 }
 
-TEST(CompileTest, ShowHistogramTop) {
+TEST(CompileTest, showHistogramTop) {
   auto result = compile({"SHOW", "HISTOGRAM", "TOP"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
@@ -229,7 +229,7 @@ TEST(CompileTest, ShowHistogramTop) {
   EXPECT_TRUE(ops.topLevel);
 }
 
-TEST(CompileTest, ShowHistogramWithStripe) {
+TEST(CompileTest, showHistogramWithStripe) {
   auto result = compile({"SHOW", "HISTOGRAM", "STRIPE", "2"});
   EXPECT_TRUE(result.error.empty());
   const auto& ops = std::get<ShowHistogramOperands>(result.program[0].operands);
@@ -237,7 +237,7 @@ TEST(CompileTest, ShowHistogramWithStripe) {
   EXPECT_EQ(*ops.stripeId, 2);
 }
 
-TEST(CompileTest, ShowHistogramTopWithStripe) {
+TEST(CompileTest, showHistogramTopWithStripe) {
   auto result = compile({"SHOW", "HISTOGRAM", "TOP", "STRIPE", "1"});
   EXPECT_TRUE(result.error.empty());
   const auto& ops = std::get<ShowHistogramOperands>(result.program[0].operands);
@@ -246,7 +246,7 @@ TEST(CompileTest, ShowHistogramTopWithStripe) {
   EXPECT_EQ(*ops.stripeId, 1);
 }
 
-TEST(CompileTest, ShowContent) {
+TEST(CompileTest, showContent) {
   auto result = compile({"SHOW", "CONTENT", "5"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
@@ -256,7 +256,7 @@ TEST(CompileTest, ShowContent) {
   EXPECT_FALSE(ops.stripeId.has_value());
 }
 
-TEST(CompileTest, ShowContentWithStripe) {
+TEST(CompileTest, showContentWithStripe) {
   auto result = compile({"SHOW", "CONTENT", "3", "STRIPE", "1"});
   EXPECT_TRUE(result.error.empty());
   const auto& ops = std::get<ShowContentOperands>(result.program[0].operands);
@@ -265,61 +265,61 @@ TEST(CompileTest, ShowContentWithStripe) {
   EXPECT_EQ(*ops.stripeId, 1);
 }
 
-TEST(CompileTest, ShowContentMissingStreamId) {
+TEST(CompileTest, showContentMissingStreamId) {
   auto result = compile({"SHOW", "CONTENT"});
   EXPECT_FALSE(result.error.empty());
 }
 
-TEST(CompileTest, ShowFileLayout) {
+TEST(CompileTest, showFileLayout) {
   auto result = compile({"SHOW", "FILE", "LAYOUT"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::ShowFileLayout);
 }
 
-TEST(CompileTest, ShowStripesMetadata) {
+TEST(CompileTest, showStripesMetadata) {
   auto result = compile({"SHOW", "STRIPES", "METADATA"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::ShowStripesMetadata);
 }
 
-TEST(CompileTest, ShowStripesStillWorks) {
+TEST(CompileTest, showStripesStillWorks) {
   auto result = compile({"SHOW", "STRIPES"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::ShowStripes);
 }
 
-TEST(CompileTest, ShowStripeGroups) {
+TEST(CompileTest, showStripeGroups) {
   auto result = compile({"SHOW", "STRIPE", "GROUPS"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::ShowStripeGroups);
 }
 
-TEST(CompileTest, ShowOptionalSections) {
+TEST(CompileTest, showOptionalSections) {
   auto result = compile({"SHOW", "OPTIONAL", "SECTIONS"});
   EXPECT_TRUE(result.error.empty());
   ASSERT_EQ(result.program.size(), 1);
   EXPECT_EQ(result.program[0].opcode, OpCode::ShowOptionalSections);
 }
 
-TEST(CompileTest, UnknownCommand) {
+TEST(CompileTest, unknownCommand) {
   auto result = compile({"FOOBAR"});
   EXPECT_FALSE(result.error.empty());
   EXPECT_TRUE(result.program.empty());
   EXPECT_NE(result.error.find("FOOBAR"), std::string::npos);
 }
 
-TEST(CompileTest, UnknownShowSubcommand) {
+TEST(CompileTest, unknownShowSubcommand) {
   auto result = compile({"SHOW", "BANANAS"});
   EXPECT_FALSE(result.error.empty());
   EXPECT_TRUE(result.program.empty());
   EXPECT_NE(result.error.find("BANANAS"), std::string::npos);
 }
 
-TEST(CompileTest, ShowAlone) {
+TEST(CompileTest, showAlone) {
   // "SHOW" with no subcommand is an unknown command.
   auto result = compile({"SHOW"});
   EXPECT_FALSE(result.error.empty());
@@ -328,63 +328,63 @@ TEST(CompileTest, ShowAlone) {
 
 // ===== Tokenize tests =====
 
-TEST(TokenizeTest, SimpleTokens) {
+TEST(TokenizeTest, simpleTokens) {
   auto tokens = tokenize("SELECT * FROM table1");
   const std::vector<std::string> expected{"SELECT", "*", "FROM", "table1"};
   EXPECT_EQ(tokens, expected);
 }
 
-TEST(TokenizeTest, StripsSemicolons) {
+TEST(TokenizeTest, stripsSemicolons) {
   auto tokens = tokenize("SELECT *;");
   const std::vector<std::string> expected{"SELECT", "*"};
   EXPECT_EQ(tokens, expected);
 }
 
-TEST(TokenizeTest, StripsCommas) {
+TEST(TokenizeTest, stripsCommas) {
   auto tokens = tokenize("SELECT col1, col2, col3");
   const std::vector<std::string> expected{"SELECT", "col1", "col2", "col3"};
   EXPECT_EQ(tokens, expected);
 }
 
-TEST(TokenizeTest, EmptyInput) {
+TEST(TokenizeTest, emptyInput) {
   auto tokens = tokenize("");
   EXPECT_TRUE(tokens.empty());
 }
 
-TEST(TokenizeTest, WhitespaceOnly) {
+TEST(TokenizeTest, whitespaceOnly) {
   auto tokens = tokenize("   \t  ");
   EXPECT_TRUE(tokens.empty());
 }
 
 // ===== Trim tests =====
 
-TEST(TrimTest, Basic) {
+TEST(TrimTest, basic) {
   EXPECT_EQ(trim("  hello  "), "hello");
 }
 
-TEST(TrimTest, NoTrimNeeded) {
+TEST(TrimTest, noTrimNeeded) {
   EXPECT_EQ(trim("hello"), "hello");
 }
 
-TEST(TrimTest, Empty) {
+TEST(TrimTest, empty) {
   EXPECT_EQ(trim(""), "");
 }
 
-TEST(TrimTest, WhitespaceOnly) {
+TEST(TrimTest, whitespaceOnly) {
   EXPECT_EQ(trim("   "), "");
 }
 
 // ===== ToUpper tests =====
 
-TEST(ToUpperTest, Basic) {
+TEST(ToUpperTest, basic) {
   EXPECT_EQ(toUpper("hello"), "HELLO");
 }
 
-TEST(ToUpperTest, AlreadyUpper) {
+TEST(ToUpperTest, alreadyUpper) {
   EXPECT_EQ(toUpper("HELLO"), "HELLO");
 }
 
-TEST(ToUpperTest, Mixed) {
+TEST(ToUpperTest, mixed) {
   EXPECT_EQ(toUpper("HeLLo"), "HELLO");
 }
 
@@ -407,7 +407,7 @@ class NimbleDslVmTest : public ::testing::Test {
   std::shared_ptr<velox::memory::MemoryPool> leafPool_;
 };
 
-TEST_F(NimbleDslVmTest, QuitReturnsFalse) {
+TEST_F(NimbleDslVmTest, quitReturnsFalse) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -424,7 +424,7 @@ TEST_F(NimbleDslVmTest, QuitReturnsFalse) {
   EXPECT_FALSE(vm.execute(program));
 }
 
-TEST_F(NimbleDslVmTest, HelpPrintsOutput) {
+TEST_F(NimbleDslVmTest, helpPrintsOutput) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -442,7 +442,7 @@ TEST_F(NimbleDslVmTest, HelpPrintsOutput) {
   EXPECT_NE(out.str().find("Commands"), std::string::npos);
 }
 
-TEST_F(NimbleDslVmTest, DescribeDispatches) {
+TEST_F(NimbleDslVmTest, describeDispatches) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector = maker.rowVector(
       {"id", "name"},
@@ -463,7 +463,7 @@ TEST_F(NimbleDslVmTest, DescribeDispatches) {
   EXPECT_NE(out.str().find("name"), std::string::npos);
 }
 
-TEST_F(NimbleDslVmTest, SelectDispatches) {
+TEST_F(NimbleDslVmTest, selectDispatches) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector = maker.rowVector(
       {"x", "y"},
@@ -485,7 +485,7 @@ TEST_F(NimbleDslVmTest, SelectDispatches) {
   EXPECT_NE(out.str().find("(2 rows)"), std::string::npos);
 }
 
-TEST_F(NimbleDslVmTest, ShowSchemaDispatches) {
+TEST_F(NimbleDslVmTest, showSchemaDispatches) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -503,7 +503,7 @@ TEST_F(NimbleDslVmTest, ShowSchemaDispatches) {
   EXPECT_NE(out.str().find("col"), std::string::npos);
 }
 
-TEST_F(NimbleDslVmTest, ShowInfoDispatches) {
+TEST_F(NimbleDslVmTest, showInfoDispatches) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -521,7 +521,7 @@ TEST_F(NimbleDslVmTest, ShowInfoDispatches) {
   EXPECT_NE(out.str().find("Nimble File"), std::string::npos);
 }
 
-TEST_F(NimbleDslVmTest, ShowStripesDispatches) {
+TEST_F(NimbleDslVmTest, showStripesDispatches) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -539,7 +539,7 @@ TEST_F(NimbleDslVmTest, ShowStripesDispatches) {
   EXPECT_NE(out.str().find("Stripe Id"), std::string::npos);
 }
 
-TEST_F(NimbleDslVmTest, ShowStreamsDispatches) {
+TEST_F(NimbleDslVmTest, showStreamsDispatches) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -558,7 +558,7 @@ TEST_F(NimbleDslVmTest, ShowStreamsDispatches) {
   EXPECT_NE(out.str().find("Stream Id"), std::string::npos);
 }
 
-TEST_F(NimbleDslVmTest, ShowEncodingDispatches) {
+TEST_F(NimbleDslVmTest, showEncodingDispatches) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -577,7 +577,7 @@ TEST_F(NimbleDslVmTest, ShowEncodingDispatches) {
   EXPECT_NE(out.str().find("Encoding"), std::string::npos);
 }
 
-TEST_F(NimbleDslVmTest, ShowIndexDispatches) {
+TEST_F(NimbleDslVmTest, showIndexDispatches) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -595,7 +595,7 @@ TEST_F(NimbleDslVmTest, ShowIndexDispatches) {
   EXPECT_NE(out.str().find("Not configured"), std::string::npos);
 }
 
-TEST_F(NimbleDslVmTest, ShowHistogramDispatches) {
+TEST_F(NimbleDslVmTest, showHistogramDispatches) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -614,7 +614,7 @@ TEST_F(NimbleDslVmTest, ShowHistogramDispatches) {
   EXPECT_NE(out.str().find("Encoding Type"), std::string::npos);
 }
 
-TEST_F(NimbleDslVmTest, ShowContentDispatches) {
+TEST_F(NimbleDslVmTest, showContentDispatches) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -634,7 +634,7 @@ TEST_F(NimbleDslVmTest, ShowContentDispatches) {
   EXPECT_FALSE(out.str().empty());
 }
 
-TEST_F(NimbleDslVmTest, ShowFileLayoutDispatches) {
+TEST_F(NimbleDslVmTest, showFileLayoutDispatches) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -652,7 +652,7 @@ TEST_F(NimbleDslVmTest, ShowFileLayoutDispatches) {
   EXPECT_NE(out.str().find("File Footer"), std::string::npos);
 }
 
-TEST_F(NimbleDslVmTest, ShowStripesMetadataDispatches) {
+TEST_F(NimbleDslVmTest, showStripesMetadataDispatches) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -670,7 +670,7 @@ TEST_F(NimbleDslVmTest, ShowStripesMetadataDispatches) {
   EXPECT_FALSE(out.str().empty());
 }
 
-TEST_F(NimbleDslVmTest, ShowStripeGroupsDispatches) {
+TEST_F(NimbleDslVmTest, showStripeGroupsDispatches) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -688,7 +688,7 @@ TEST_F(NimbleDslVmTest, ShowStripeGroupsDispatches) {
   EXPECT_FALSE(out.str().empty());
 }
 
-TEST_F(NimbleDslVmTest, ShowOptionalSectionsDispatches) {
+TEST_F(NimbleDslVmTest, showOptionalSectionsDispatches) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -706,7 +706,7 @@ TEST_F(NimbleDslVmTest, ShowOptionalSectionsDispatches) {
   EXPECT_FALSE(out.str().empty());
 }
 
-TEST_F(NimbleDslVmTest, EndToEndShowHistogram) {
+TEST_F(NimbleDslVmTest, endToEndShowHistogram) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -725,7 +725,7 @@ TEST_F(NimbleDslVmTest, EndToEndShowHistogram) {
   EXPECT_NE(out.str().find("Encoding Type"), std::string::npos);
 }
 
-TEST_F(NimbleDslVmTest, EndToEndShowFileLayout) {
+TEST_F(NimbleDslVmTest, endToEndShowFileLayout) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -744,7 +744,7 @@ TEST_F(NimbleDslVmTest, EndToEndShowFileLayout) {
   EXPECT_NE(out.str().find("File Footer"), std::string::npos);
 }
 
-TEST_F(NimbleDslVmTest, EmptyProgramReturnsTrue) {
+TEST_F(NimbleDslVmTest, emptyProgramReturnsTrue) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -759,7 +759,7 @@ TEST_F(NimbleDslVmTest, EmptyProgramReturnsTrue) {
   EXPECT_TRUE(vm.execute({}));
 }
 
-TEST_F(NimbleDslVmTest, EndToEndCompileAndExecute) {
+TEST_F(NimbleDslVmTest, endToEndCompileAndExecute) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector = maker.rowVector(
       {"name"}, {maker.flatVector<velox::StringView>({"Alice", "Bob"})});

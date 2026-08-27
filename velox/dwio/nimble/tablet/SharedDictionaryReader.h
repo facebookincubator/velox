@@ -19,8 +19,8 @@
 #include <optional>
 #include <span>
 #include <string_view>
-#include <vector>
 
+#include "folly/container/F14Map.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryCatalog.h"
 #include "velox/dwio/nimble/tablet/MetadataCache.h"
@@ -50,7 +50,7 @@ class SharedDictionaryReaderFactory {
       velox::memory::MemoryPool* pool);
 
   /// Returns whether the tablet contains file or external dictionaries.
-  bool hasGlobalDictionaries() const {
+  bool hasFileOrExternalDictionaries() const {
     return !catalog_.fileDictionaryReferences().empty() ||
         !catalog_.externalDictionaryReferences().empty();
   }
@@ -63,9 +63,9 @@ class SharedDictionaryReaderFactory {
   /// Returns the stripe dictionary stream for a value stream, if any.
   std::optional<uint32_t> dictionaryStreamId(uint32_t valueStreamId) const;
 
-  /// Returns stripe dictionary streams for value streams. Returns empty when
-  /// none of the supplied streams uses a stripe dictionary.
-  std::vector<std::optional<uint32_t>> dictionaryStreamIds(
+  /// Returns value stream to stripe dictionary stream bindings. Returns empty
+  /// when none of the supplied streams uses a stripe dictionary.
+  folly::F14FastMap<uint32_t, uint32_t> dictionaryStreamIds(
       std::span<const uint32_t> valueStreamIds) const;
 
   /// Returns the file or external alphabet for a value stream, if any.
