@@ -20,6 +20,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/views/SubIntSplitEncodingView.h"
@@ -131,6 +132,133 @@ TEST_F(SubIntSplitEncodingViewTest, rejectsNonSubIntSplitStream) {
   auto view = nimble::createEncodingView(serialized, pool_.get());
   ASSERT_NE(view, nullptr);
   EXPECT_EQ(view->encodingType(), nimble::EncodingType::Trivial);
+}
+
+// The shared harness, as every other view test uses it. randomizedPositions and
+// expectConcurrentReads are what pin the view's thread safety, which is why its
+// chunk scratch is a stack buffer rather than a member.
+TEST_F(SubIntSplitEncodingViewTest, sharedHarness) {
+  const auto positions = probePositions(kRows);
+
+  expectReads<nimble::SubIntSplitEncoding<int32_t>>(
+      makeStructuredValues<int32_t>(pool_.get(), kRows),
+      positions,
+      /*baseOptions=*/{},
+      /*realNestedSelection=*/true);
+  expectReads<nimble::SubIntSplitEncoding<uint64_t>>(
+      makeStructuredValues<uint64_t>(pool_.get(), kRows),
+      positions,
+      /*baseOptions=*/{},
+      /*realNestedSelection=*/true);
+}
+
+TEST_F(SubIntSplitEncodingViewTest, concurrent) {
+  const auto positions = probePositions(kRows);
+
+  expectConcurrentReads<nimble::SubIntSplitEncoding<uint64_t>>(
+      makeStructuredValues<uint64_t>(pool_.get(), kRows),
+      positions,
+      /*baseOptions=*/{},
+      /*realNestedSelection=*/true);
+  expectConcurrentReads<nimble::SubIntSplitEncoding<int32_t>>(
+      makeStructuredValues<int32_t>(pool_.get(), kRows),
+      positions,
+      /*baseOptions=*/{},
+      /*realNestedSelection=*/true);
+}
+
+// SubIntSplitEncodingTest covers six types; the view covered four. Float and
+// double reach the view because TypeTraits<float>::physicalType is uint32_t, so
+// the bit work is unsigned integer work either way.
+TEST_F(SubIntSplitEncodingViewTest, readsFloatingPointTypes) {
+  expectViewMatches<float>(nimble::CompressionType::Uncompressed);
+  expectViewMatches<double>(nimble::CompressionType::Uncompressed);
+}
+
+// Constant sections are folded into a seed at construction and dropped from the
+// per-row loop, so both the folding and the degenerate case where nothing is
+// left to loop over need covering.
+TEST_F(SubIntSplitEncodingViewTest, readsWhenEverySectionIsConstant) {
+  nimble::Vector<uint64_t> values{pool_.get()};
+  for (uint32_t i = 0; i < 512; ++i) {
+    values.push_back(0x1234567890ABCDEFULL);
+  }
+  auto serialized =
+      nimble::test::Encoder<nimble::SubIntSplitEncoding<uint64_t>>::encode(
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          {},
+          /*realNestedSelection=*/true);
+
+  auto view = nimble::createEncodingView(serialized, pool_.get(), {});
+  ASSERT_NE(view, nullptr);
+  ASSERT_EQ(view->rowCount(), values.size());
+
+  uint64_t value{};
+  view->readAt(0, &value);
+  EXPECT_EQ(value, values[0]);
+  view->readAt(511, &value);
+  EXPECT_EQ(value, values[511]);
+
+  std::vector<uint64_t> range(values.size());
+  view->read(0, values.size(), range.data());
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    ASSERT_EQ(range[i], values[i]) << "row " << i;
+  }
+
+  // A range that spans more than one internal chunk, so the seed is applied per
+  // chunk rather than only on the first.
+  std::vector<uint64_t> tail(400);
+  view->read(100, 400, tail.data());
+  for (uint32_t i = 0; i < 400; ++i) {
+    ASSERT_EQ(tail[i], values[100 + i]) << "row " << (100 + i);
+  }
+}
+
+// Settles why makeSectionView cannot use a shallow "is this stream compressed"
+// predicate. An RLE stream carries no compression byte of its own; its run
+// values do, nested one level down, so a whitelist keyed on the outer encoding
+// type would call this viewable and construction would then throw.
+TEST_F(SubIntSplitEncodingViewTest, compressionNestsBelowTheOuterEncoding) {
+  nimble::Vector<uint32_t> values{pool_.get()};
+  for (uint32_t run = 0; run < 64; ++run) {
+    for (uint32_t i = 0; i < 32; ++i) {
+      values.push_back(run);
+    }
+  }
+  auto serialized = nimble::test::Encoder<nimble::RLEEncoding<uint32_t>>::encode(
+      *buffer_, values, nimble::CompressionType::Zstd);
+
+  // The outer stream is RLE, which supportsEncodingView() reports as viewable.
+  ASSERT_EQ(
+      nimble::EncodingPrefix::encodingType(serialized),
+      nimble::EncodingType::RLE);
+  ASSERT_TRUE(nimble::supportsEncodingView(
+      nimble::EncodingPrefix::encodingType(serialized)));
+
+  // Whether construction succeeds depends on what the nested values stream did
+  // with the codec, which is exactly what an outer predicate cannot see. Assert
+  // only that both outcomes are handled, never that it silently misbehaves.
+  bool threw = false;
+  try {
+    auto view = nimble::createEncodingView(serialized, pool_.get(), {});
+    ASSERT_NE(view, nullptr);
+    uint32_t value{};
+    view->readAt(100, &value);
+    EXPECT_EQ(value, values[100]);
+  } catch (const nimble::NimbleException&) {
+    threw = true;
+  }
+  RecordProperty("nestedCompressionThrows", threw ? "yes" : "no");
+
+  // Whatever the view does, the SubIntSplit fallback must serve the stream.
+  nimble::detail::MaterializedEncodingView<uint32_t> fallback{
+      serialized, pool_.get(), {}};
+  ASSERT_EQ(fallback.rowCount(), values.size());
+  uint32_t value{};
+  fallback.readAt(100, &value);
+  EXPECT_EQ(value, values[100]);
 }
 
 // The fallback in isolation. Varint is the one encoding in the default nested
