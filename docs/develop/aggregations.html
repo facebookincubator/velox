@@ -393,6 +393,9 @@ accumulators.</p>
 <p>Runtime statistic <cite>abandonedPartialAggregationRows</cite> counts rows that bypassed
 partial aggregation after it was abandoned. A value greater than 0 indicates
 that partial aggregation was abandoned.</p>
+<p>Runtime statistic <cite>toIntermediateFastPathCalls</cite> counts calls to aggregate
+functions that use the <cite>toIntermediate()</cite> fast path after partial aggregation
+is abandoned.</p>
 </section>
 </section>
 
