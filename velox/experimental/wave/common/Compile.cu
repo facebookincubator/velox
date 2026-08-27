@@ -29,6 +29,13 @@
 #include "velox/external/jitify/jitify.hpp"
 DEFINE_bool(cuda_G, false, "Enable -G for NVRTC");
 
+DEFINE_bool(
+    cuda_lineinfo,
+    false,
+    "Enable -lineinfo for NVRTC so compute-sanitizer and the profiler can "
+    "attribute a fault to a source line. Unlike -G this keeps optimization on, "
+    "so it can be used with the default -O3 (ptxas rejects -G with -O>0).");
+
 DEFINE_int32(
     cuda_O,
 #ifndef NDEBUG
@@ -272,6 +279,10 @@ void ensureInit() {
   }
   if (FLAGS_cuda_G) {
     waveNvrtcFlags.push_back("-G");
+  } else if (FLAGS_cuda_lineinfo) {
+    // -G subsumes -lineinfo and the two are mutually exclusive; -G also
+    // requires -O0, so only reach for -lineinfo when -G is off.
+    waveNvrtcFlags.push_back("-lineinfo");
   }
   getNvrtcOptions(waveNvrtcFlags);
   auto device = currentDevice();

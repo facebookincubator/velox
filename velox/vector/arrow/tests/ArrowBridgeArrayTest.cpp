@@ -2145,7 +2145,7 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, timestampUtc) {
   testTimestampUtcRoundtrip();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, without_nulls_buffer) {
+TEST_F(ArrowBridgeArrayImportAsViewerTest, withoutNullsBuffer) {
   std::vector<std::optional<int64_t>> inputValues = {1, 2, 3, 4, 5};
   testImportWithoutNullsBuffer<int64_t>(inputValues, "l");
   testImportWithoutNullsBuffer<Timestamp>(inputValues, "tsn:");
@@ -2264,7 +2264,7 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, timestampUtc) {
   testTimestampUtcRoundtrip();
 }
 
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, without_nulls_buffer) {
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, withoutNullsBuffer) {
   std::vector<std::optional<int64_t>> inputValues = {1, 2, 3, 4, 5};
   testImportWithoutNullsBuffer<int64_t>(inputValues, "l");
   testImportWithoutNullsBuffer<Timestamp>(inputValues, "tsn:");

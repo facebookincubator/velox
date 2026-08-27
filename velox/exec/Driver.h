@@ -37,7 +37,7 @@
 namespace facebook::velox::exec {
 
 class Driver;
-class ExchangeClient;
+class InMemoryExchangeClient;
 class Operator;
 struct OperatorStats;
 class Task;
@@ -824,10 +824,12 @@ struct DriverFactory {
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeHashJoinNodeIds;
   /// Same as 'mixedExecutionModeHashJoinNodeIds' but for Nested Loop Joins.
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeNestedLoopJoinNodeIds;
+  /// Same as 'mixedExecutionModeHashJoinNodeIds' but for custom join bridges.
+  folly::F14FastSet<core::PlanNodeId> mixedExecutionModeCustomJoinNodeIds;
 
   std::shared_ptr<Driver> createDriver(
       std::unique_ptr<DriverCtx> ctx,
-      std::shared_ptr<ExchangeClient> exchangeClient,
+      std::shared_ptr<InMemoryExchangeClient> exchangeClient,
       const PartitionedOutputFactory& outputOperatorFactory,
       std::shared_ptr<PipelinePushdownFilters> filters,
       std::function<int(int pipelineId)> numDrivers);
@@ -920,6 +922,11 @@ struct DriverFactory {
   /// Returns plan node IDs for which IndexLookupJoin Bridges must be created
   /// based on this pipeline.
   std::vector<core::PlanNodeId> needsIndexLookupJoinBridges() const;
+
+  /// Returns plan node IDs for which custom join bridges must be created
+  /// based on this pipeline.  Mirrors needsHashJoinBridges(): ungrouped
+  /// pipelines include mixed-mode join nodes, grouped pipelines exclude them.
+  std::vector<core::PlanNodeId> needsCustomJoinBridges() const;
 
   static std::vector<DriverAdapter> adapters;
 };

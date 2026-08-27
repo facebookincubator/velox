@@ -58,7 +58,7 @@ if(VELOX_ENABLE_ABFS)
     SOURCES
       Main.cpp
       AbfsReadTest.cpp
-      ${CMAKE_SOURCE_DIR}/velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../../../connectors/hive/storage_adapters/abfs/tests/AzuriteServer.cpp
     LIBS
       velox_cudf_exec_test_lib
       velox_cudf_hive_connector
@@ -105,6 +105,12 @@ velox_add_cudf_test(
   NAME velox_cudf_config_test
   SOURCES Main.cpp ConfigTest.cpp
   LIBS velox_cudf_exec Folly::folly
+)
+
+velox_add_cudf_test(
+  NAME velox_cudf_split_reader_test
+  SOURCES Main.cpp CudfSplitReaderTest.cpp
+  LIBS velox_cudf_exec_test_lib velox_cudf_hive_connector
 )
 
 velox_add_cudf_test(
@@ -279,6 +285,12 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_topn_test
   SOURCES Main.cpp TopNTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
+)
+
+velox_add_cudf_test(
+  NAME velox_cudf_topnrownumber_test
+  SOURCES Main.cpp TopNRowNumberTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
 )
 

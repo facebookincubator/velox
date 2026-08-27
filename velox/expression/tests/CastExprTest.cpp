@@ -3358,7 +3358,7 @@ TEST_F(CastExprTest, varcharToTimeCast) {
     // Should throw error for microseconds
     VELOX_ASSERT_THROW(
         evaluate(castExpr, makeRowVector({varcharVector})),
-        "Microsecond precision not supported");
+        "fractional precision exceeds 3 digits");
 
     // Test with try_cast - should return null for microseconds
     auto tryCastExpr = makeCastExpr(inputField, TIME(), true);

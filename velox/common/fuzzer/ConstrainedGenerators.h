@@ -63,8 +63,7 @@ class RandomInputGenerator : public AbstractInputGenerator {
       return variant(randDate(rng_));
     }
     if (type_->isTime()) {
-      VELOX_DCHECK(type_->equivalent(*TIME()));
-      return variant(randTime(rng_));
+      return variant(randTime(rng_, type_));
     }
     return variant(rand<T>(rng_));
   }
@@ -583,9 +582,9 @@ class QDigestInputGenerator : public AbstractInputGenerator {
 
     auto makeDist = []() {
       if constexpr (std::is_integral_v<T>) {
-        return std::uniform_int_distribution<T>(0, 10000);
+        return std::uniform_int_distribution<T>(-10'000, 10'000);
       } else {
-        return std::uniform_real_distribution<T>(0.0, 10000.0);
+        return std::uniform_real_distribution<T>(-10'000.0, 10'000.0);
       }
     };
 

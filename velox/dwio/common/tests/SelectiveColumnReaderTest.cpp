@@ -97,7 +97,7 @@ class StubFormatData : public FormatData {
 // Minimal FormatParams stub that produces a StubFormatData.
 class StubFormatParams : public FormatParams {
  public:
-  StubFormatParams(memory::MemoryPool& pool, ColumnReaderStatistics& stats)
+  StubFormatParams(memory::MemoryPool& pool, SplitStats& stats)
       : FormatParams(pool, stats) {}
 
   std::unique_ptr<FormatData> toFormatData(
@@ -176,7 +176,7 @@ class GetFlatValuesTest : public ::testing::Test {
 
   void SetUp() override {
     pool_ = memory::memoryManager()->addLeafPool("GetFlatValuesTest");
-    stats_ = std::make_unique<ColumnReaderStatistics>();
+    stats_ = std::make_unique<SplitStats>(FileFormat::DWRF);
     params_ = std::make_unique<StubFormatParams>(*pool_, *stats_);
     scanSpec_ = std::make_unique<velox::common::ScanSpec>("test");
     scanSpec_->setProjectOut(true);
@@ -216,7 +216,7 @@ class GetFlatValuesTest : public ::testing::Test {
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;
-  std::unique_ptr<ColumnReaderStatistics> stats_;
+  std::unique_ptr<SplitStats> stats_;
   std::unique_ptr<StubFormatParams> params_;
   std::unique_ptr<velox::common::ScanSpec> scanSpec_;
 };

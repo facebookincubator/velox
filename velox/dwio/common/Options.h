@@ -109,8 +109,8 @@ enum class ColumnMappingMode {
   /// reordered, deleted, or added back later with the same name but a different
   /// type.
   ///
-  /// The caller must provide ReaderOptions::parquetFieldIds() ordered to match
-  /// ReaderOptions::fileSchema() at every row-typed level. Each ParquetFieldId
+  /// The caller must provide ReaderOptions::fieldIds() ordered to match
+  /// ReaderOptions::fileSchema() at every row-typed level. Each field-id
   /// entry describes the table field ID for the corresponding requested column,
   /// and nested children describe field IDs below structs, arrays, and maps.
   ///
@@ -989,15 +989,15 @@ class ReaderOptions : public io::ReaderOptions {
     preloadIndex_ = value;
   }
 
-  /// Whether to load and initialize the chunk index during file open.
-  /// When true, the chunk index section is preloaded and the structured
-  /// ChunkIndex object is created. Default true.
-  bool loadChunkIndex() const {
-    return loadChunkIndex_;
+  /// Whether to load and initialize the chunk stats during file open.
+  /// When true, the chunk stats section is preloaded and the structured
+  /// ChunkStats object is created. Default true.
+  bool loadChunkStats() const {
+    return loadChunkStats_;
   }
 
-  void setLoadChunkIndex(bool value) {
-    loadChunkIndex_ = value;
+  void setLoadChunkStats(bool value) {
+    loadChunkStats_ = value;
   }
 
   bool allowEmptyFile() const {
@@ -1046,6 +1046,7 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t footerSpeculativeIoSize_{kDefaultFooterSpeculativeIoSize};
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
+  // Controls how physical file columns are matched to requested schema columns.
   ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
@@ -1060,7 +1061,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool cacheData_{true};
   bool loadClusterIndex_{false};
   bool preloadIndex_{false};
-  bool loadChunkIndex_{true};
+  bool loadChunkStats_{true};
   bool allowEmptyFile_{false};
   const FileHandle* fileHandle_{nullptr};
   cache::AsyncDataCache* cache_{nullptr};

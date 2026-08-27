@@ -30,6 +30,10 @@
 #include <unordered_set>
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
 
+namespace facebook::velox::connector::hive {
+struct HiveConnectorSplit;
+}
+
 namespace facebook::velox::exec::test {
 
 class TableEvolutionFuzzer {
@@ -49,6 +53,16 @@ class TableEvolutionFuzzer {
         dwio::common::FileFormat,
         FuzzerGenerator&)>
         extraWriteSerdeParams;
+
+    /// Returns a pair of connector session property maps, one per scan task in
+    /// a query shape. The two maps may differ so that the pushdown and
+    /// reference scans exercise different read-side configs (e.g. dictionary
+    /// preservation on vs off), turning the existing result comparison into a
+    /// cross-config correctness check. Called once per query shape.
+    std::function<std::pair<
+        std::unordered_map<std::string, std::string>,
+        std::unordered_map<std::string, std::string>>(FuzzerGenerator&)>
+        extraReadSessionProperties;
   };
 
   /// Per-batch raw-byte target and clamp bounds for adaptive batch sizing. A
@@ -110,6 +124,27 @@ class TableEvolutionFuzzer {
       const folly::F14FastSet<std::string>& droppedColumns);
 
   void run();
+
+  /// An already written file to run query shapes against, in place of one this
+  /// fuzzer generates and writes.
+  struct InputFile {
+    std::string path;
+    dwio::common::FileFormat format;
+  };
+
+  /// Runs the same query shapes as run(), but against 'inputFile'.
+  ///
+  /// The schema comes from the file, so there is nothing to evolve and no
+  /// write. Both the pushdown plan and the reference plan read that one file,
+  /// which narrows the comparison to the plan difference alone -- run() varies
+  /// the files as well, so a mismatch there does not say which axis caused it.
+  /// The flip side is that a decode bug returning the same wrong value to both
+  /// plans cannot be caught here.
+  ///
+  /// Remaining filters are not generated: the expression fuzzer invents columns
+  /// and relies on schema evolution to add them, which a fixed file schema
+  /// cannot accommodate.
+  void runOnInputFile(const InputFile& inputFile);
 
   virtual ~TableEvolutionFuzzer() = default;
 
@@ -185,7 +220,9 @@ class TableEvolutionFuzzer {
       bool useFiltersAsNode,
       bool insertProjectToBlockPushdown,
       const RowTypePtr& fullOutSchema,
-      const std::vector<std::string>& outputColumnNames);
+      const std::vector<std::string>& outputColumnNames,
+      const std::unordered_map<std::string, std::string>&
+          readSessionProperties);
 
   /// Builds schema for flatmap as struct reading by converting selected map
   /// columns to struct types.
@@ -254,10 +291,40 @@ class TableEvolutionFuzzer {
       const std::unordered_map<std::string, std::string>& columnNameMapping,
       folly::Executor& executor);
 
+  /// Opens 'inputFile' far enough to read its schema.
+  RowTypePtr readInputFileSchema(const InputFile& inputFile) const;
+
+  /// Scans up to 'maxRows' rows of 'inputFile' with no filters, for subfield
+  /// filter generation to pick bounds from. A bounded prefix is enough: the
+  /// generator narrows a reference row set as a byproduct and this consumer
+  /// discards it, so only the values that shape the filters matter.
+  RowVectorPtr readInputFileSample(
+      const InputFile& inputFile,
+      const RowTypePtr& schema,
+      int32_t maxRows) const;
+
+  /// One split over 'inputFile', honouring --input_file_max_bytes.
+  std::shared_ptr<connector::hive::HiveConnectorSplit> makeInputFileSplit(
+      const InputFile& inputFile) const;
+
+  /// Both plans read the same file, so the two split vectors are identical.
+  std::pair<std::vector<Split>, std::vector<Split>> makeInputFileSplits(
+      const InputFile& inputFile) const;
+
   const Config config_;
   VectorFuzzer vectorFuzzer_;
+  /// Set only for the duration of runOnInputFile, which makes runQueryShape
+  /// build its splits from the file rather than from write results.
+  const InputFile* inputFile_ = nullptr;
   unsigned currentSeed_;
   FuzzerGenerator rng_;
+  /// Per-query-shape read-side connector session properties for the pushdown
+  /// scan (first) and the reference scan (second). Computed once per shape in
+  /// runQueryShape() and passed to makeScanTask(); logged on failure.
+  std::pair<
+      std::unordered_map<std::string, std::string>,
+      std::unordered_map<std::string, std::string>>
+      readSessionProperties_;
   int64_t sequenceNumber_ = 0;
 };
 

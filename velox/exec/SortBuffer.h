@@ -101,6 +101,12 @@ class SortBuffer {
 
   void getOutputWithSpill();
 
+  // Frees the accumulated rows once all of them have been returned as output. A
+  // driver closes its operators only after the last one finishes, so a sort
+  // that feeds another blocking operator in the same pipeline would otherwise
+  // hold its rows until the whole task completes.
+  void releaseRows();
+
   // Spill during input stage.
   void spillInput();
 

@@ -18,7 +18,7 @@
 
 #include <gtest/gtest.h>
 #ifdef VELOX_ENABLE_NIMBLE
-#include "dwio/nimble/velox/writer/fb/NimbleWriter.h"
+#include "velox/dwio/nimble/writer/WriterFactory.h"
 #endif
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"

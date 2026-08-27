@@ -17,6 +17,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -26,6 +27,7 @@
 #include <vector>
 
 #include <folly/container/F14Map.h>
+#include <folly/synchronization/CallOnce.h>
 
 #include <torch/nativert/executor/OpKernel.h>
 #include <torch/nativert/graph/Graph.h>
@@ -46,17 +48,39 @@ class CompileCtx;
 class Optimizer;
 struct ExecutionState;
 
+/// Compile-time knowledge of a value's memory layout.
+enum class Contiguity : int8_t {
+  /// Layout not known -- conservative default (treat as possibly strided).
+  kUnknown = 0,
+  /// Known row-major contiguous (dense, standard strides).
+  kContiguous = 1,
+  /// Known NOT contiguous -- a strided view (transpose, diagonal, expand,
+  /// step>1 or inner-dim slice, ...).
+  kNoncontiguous = 2,
+};
+
 /// Rank and layout constraints for a graph value, used during optimization.
 struct ValueConstraint {
   int8_t rank{-1};
-  /// True when the value is known at compile time to be row-major contiguous
-  /// (dense, standard strides). Defaults to false: a wrong `true` could let a
-  /// kernel read a strided tensor as dense and corrupt results, whereas a
-  /// conservative `false` only costs an unnecessary copy. Set true for ops that
-  /// always materialize a fresh dense output (elementwise, cumsum, masked
-  /// select, cat, clone, contiguous, factory ops, ...) and propagated by view
-  /// and reshape; computed per PyTorch semantics for slice/select.
-  bool contiguous{false};
+  /// 3-state layout knowledge. kUnknown (default) is conservative: a wrong
+  /// kContiguous could let a kernel read a strided tensor as dense and corrupt
+  /// results, whereas kUnknown only costs an unnecessary copy. Set kContiguous
+  /// for ops that always materialize a fresh dense output (elementwise, cumsum,
+  /// masked select, cat, clone, contiguous, factory ops, ...); set
+  /// kNoncontiguous for views known to be strided (transpose, diagonal,
+  /// expand); propagated by view/reshape; computed per PyTorch semantics for
+  /// slice/select.
+  Contiguity contiguity{Contiguity::kUnknown};
+  /// True when the value has a zero stride in some dim (expand/broadcast): it
+  /// has fewer physical than logical elements, so an in-place write into it is
+  /// ill-defined.
+  bool zeroStrides{false};
+  /// True when the value is externally owned / persistent -- a graph input,
+  /// weight, or constant (producer-less) -- so it is not a writable
+  /// intermediate.
+  bool externallyOwned{false};
+  /// True when the value is a graph output.
+  bool graphOutput{false};
 };
 
 /// Per-value tensor metadata and constraints for a WaveGraph.
@@ -75,13 +99,52 @@ struct ValueTypes {
   }
 
   /// Whether 'value' is known to be contiguous. Returns false (conservative)
-  /// for values with no tracked constraint.
+  /// for values with unknown layout or no tracked constraint.
   bool contiguous(ValueCP value) const {
+    return contiguity(value) == Contiguity::kContiguous;
+  }
+
+  /// Whether 'value' is known to be NOT contiguous (a strided view). Returns
+  /// false for unknown layout or no tracked constraint.
+  bool noncontiguous(ValueCP value) const {
+    return contiguity(value) == Contiguity::kNoncontiguous;
+  }
+
+  /// The 3-state layout knowledge for 'value' (kUnknown if untracked).
+  Contiguity contiguity(ValueCP value) const {
+    auto id = value->id();
+    if (id < 0 || static_cast<size_t>(id) >= constraints.size()) {
+      return Contiguity::kUnknown;
+    }
+    return constraints[id].contiguity;
+  }
+
+  /// Whether 'value' has a zero stride (expand/broadcast). False if untracked.
+  bool zeroStrides(ValueCP value) const {
     auto id = value->id();
     if (id < 0 || static_cast<size_t>(id) >= constraints.size()) {
       return false;
     }
-    return constraints[id].contiguous;
+    return constraints[id].zeroStrides;
+  }
+
+  /// Whether 'value' is externally owned (input/weight/constant). False if
+  /// untracked.
+  bool externallyOwned(ValueCP value) const {
+    auto id = value->id();
+    if (id < 0 || static_cast<size_t>(id) >= constraints.size()) {
+      return false;
+    }
+    return constraints[id].externallyOwned;
+  }
+
+  /// Whether 'value' is a graph output. False if untracked.
+  bool graphOutput(ValueCP value) const {
+    auto id = value->id();
+    if (id < 0 || static_cast<size_t>(id) >= constraints.size()) {
+      return false;
+    }
+    return constraints[id].graphOutput;
   }
 };
 
@@ -191,6 +254,15 @@ class WaveGraph {
 
   const std::vector<std::unique_ptr<CompiledNode>>& nodes() const {
     return nodes_;
+  }
+
+  /// Runs 'build' the first time any execution of this graph asks for the
+  /// allocation-group plans, and never again. The plans are derived from the
+  /// compiled grids, so they are the same for every execution, but the mode
+  /// they serve is a runtime choice -- and concurrent executions of one graph
+  /// would otherwise each build and install their own.
+  void ensureAllocGroupPlans(const std::function<void()>& build) {
+    folly::call_once(allocGroupPlanOnce_, build);
   }
 
   ValueTypes& types() {
@@ -318,6 +390,35 @@ class WaveGraph {
     return graphOutputIds_.count(id) != 0;
   }
 
+  /// Records that 'id' was the input of a clone the in-place pass elided, so an
+  /// in-place writer now overwrites its buffer. Called at compile time from
+  /// each ProjectNode's elidedCloneCounts.
+  void addElidedCloneInput(nativert::ValueId id) {
+    elidedCloneInputIds_.insert(id);
+  }
+
+  /// True if 'id' is the input of an elided clone. Its buffer is deliberately
+  /// overwritten in place, so it no longer holds the value the reference frame
+  /// recorded for it and must not be compared against the reference.
+  bool isElidedCloneInput(nativert::ValueId id) const {
+    return elidedCloneInputIds_.count(id) != 0;
+  }
+
+  /// Records that a concat group places 'id': it is either a concat result or
+  /// an operand carved out of one. Called at compile time from
+  /// installGraphAllocGroupPlans.
+  void addConcatPlaced(nativert::ValueId id) {
+    concatPlacedIds_.insert(id);
+  }
+
+  /// True if a concat group places 'id'. Such a value is a band of the concat
+  /// result and its producer writes the concat in place, so it must not be
+  /// given a buffer from anywhere else: doing so leaves the band unwritten and
+  /// the concat does not copy it in, having counted the operand as placed.
+  bool isConcatPlaced(nativert::ValueId id) const {
+    return concatPlacedIds_.count(id) != 0;
+  }
+
   /// Returns the ModelContext, or nullptr if none was provided.
   ModelContext* modelContext() const {
     return modelContext_;
@@ -426,9 +527,19 @@ class WaveGraph {
   // start of compile, read at execution time by LaunchData.
   std::unordered_set<nativert::ValueId> graphOutputIds_;
 
+  // Inputs of the clones the in-place pass elided. Their buffers are written
+  // in place by the rewired writer, so they diverge from the reference frame by
+  // design. Populated at compile time, read by the reference-frame checks.
+  std::unordered_set<nativert::ValueId> elidedCloneInputIds_;
+  std::unordered_set<nativert::ValueId> concatPlacedIds_;
+
   // Alive during construction only. Retains visited set so multikernel
   // variant nodes reuse the main-graph pass.
   std::unique_ptr<Optimizer> optimizer_;
+
+  // Guards the one-time build of the allocation-group plans held by the
+  // CompiledNodes.
+  folly::once_flag allocGroupPlanOnce_;
 
   // Pool of reusable ExecutionState objects.
   std::mutex statePoolMutex_;
