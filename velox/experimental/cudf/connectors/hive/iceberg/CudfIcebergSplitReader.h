@@ -114,7 +114,10 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Decides whether the subfield filter is pushed into the data-file reader as
   // is, pushed as a filter over the columns read from the data file, or
   // deferred to post table read.
-  void prepareSubfieldFilter();
+  //
+  // @param injectedFold How the pushed filters over injected columns folded
+  // against the constants those columns are materialized with.
+  void prepareSubfieldFilter(ConstantFilterFold injectedFold);
 
   // Removes and returns the prepended row-index column.
   std::unique_ptr<cudf::column> extractRowIndex(
@@ -194,27 +197,18 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Whether a TIMESTAMP partition value is a local time to convert to GMT.
   bool readTimestampAsLocalTime() const;
 
-  // Returns whether a pushed subfield filter rejects the constant value of a
-  // partition or info column, in which case the split holds no matching row.
-  // Reads no file data, so it can run before any IO.
-  bool splitRejectedByConstantColumns() const;
+  // Returns the injected column of that name, `nullptr` when no column is
+  // injected under it.
+  const InjectedColumn* injectedColumn(std::string_view name) const;
 
-  // Resolves the type of a projected or filter-only column, `nullptr` when the
-  // name belongs to neither.
-  TypePtr columnType(std::string_view name) const;
-
-  // Returns the pushed filter over the whole named column, `nullptr` when no
-  // filter was pushed for it or it was pushed on a subfield of it.
-  const common::Filter* wholeColumnFilter(std::string_view name) const;
-
-  // Folds the predicates the transform dropped against the constants their
-  // columns are materialized with, by testing the subfield filters they were
-  // built from.
+  // Folds the pushed subfield filters over injected columns against the
+  // constants those columns are materialized with.
   //
-  // `kAlwaysTrue` means the pushed filter is exact for this split,
-  // `kAlwaysFalse` that the split holds no matching row, and `kUnknown` that at
-  // least one dropped predicate could not be decided.
-  ConstantFilterFold foldDroppedPredicates() const;
+  // `kAlwaysFalse` means the split holds no matching row. `kAlwaysTrue` means
+  // no predicate on an injected column rejects any row of the split.
+  // `kUnknown` means at least one could not be decided and must be evaluated
+  // over the materialized column.
+  ConstantFilterFold foldInjectedColumnFilters() const;
 
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;

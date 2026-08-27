@@ -1166,8 +1166,9 @@ TEST_F(CudfIcebergReadTest, injectedColumnFilterIsFolded) {
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys = {
       {"country", "US"}};
 
+  // The pool lets the plan builder parse the IN-list literal below.
   const auto scan = [&](const std::vector<std::string>& filters) {
-    return PlanBuilder()
+    return PlanBuilder(pool())
         .startTableScan()
         .connectorId(kCudfIcebergConnectorId)
         .outputType(tableType)
@@ -1203,31 +1204,14 @@ TEST_F(CudfIcebergReadTest, injectedColumnFilterIsFolded) {
       .assertResults({expected});
   AssertQueryBuilder(scan({"added > 0"})).splits(splits).assertEmptyResults();
 
-  // A rejected partition value prunes the split before it is opened at all.
-  auto originalBuilder =
-      ::facebook::velox::connector::hive::BufferedInputBuilder::getInstance();
-  auto countingBuilder =
-      std::make_shared<CountingBufferedInputBuilder>(originalBuilder);
-  ::facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
-      countingBuilder);
-  SCOPE_EXIT {
-    ::facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
-        originalBuilder);
-  };
-  const auto assertReadCount = [&](const std::vector<std::string>& filters,
-                                   uint64_t expectedCount) {
-    AssertQueryBuilder(scan(filters))
-        .connectorSessionProperty(
-            kCudfIcebergConnectorId,
-            cudf_velox::connector::hive::CudfHiveConfig::
-                kUseBufferedInputSession,
-            "true")
-        .splits(splits)
-        .copyResults(pool());
-    EXPECT_EQ(countingBuilder->createCount(), expectedCount);
-  };
-  assertReadCount({"country = 'CA'", "c1 > 20"}, 0);
-  assertReadCount({"country = 'US'", "c1 > 20"}, 1);
+  // An IN-list folds as well, though it reaches the pushed expression as a
+  // disjunction rather than as a conjunct that can be tested on its own.
+  AssertQueryBuilder(scan({"country IN ('CA', 'MX')", "c1 > 20"}))
+      .splits(splits)
+      .assertEmptyResults();
+  AssertQueryBuilder(scan({"country IN ('US', 'MX')", "c1 > 20"}))
+      .splits(splits)
+      .assertResults({expected});
 }
 
 /// Verifies a deletion vector with an injected-only projection.

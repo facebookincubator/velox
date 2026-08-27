@@ -50,7 +50,6 @@
 #include <limits>
 #include <tuple>
 #include <unordered_set>
-#include <utility>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
@@ -153,13 +152,6 @@ void CudfIcebergSplitReader::prepareSplitInternal(
   // Reset delete readers and column injection
   resetSplit();
 
-  // Prune the split before any IO when a pushed filter rejects a constant
-  // partition or info column value.
-  skipSplit_ = splitRejectedByConstantColumns();
-  if (skipSplit_) {
-    return;
-  }
-
   // Read file metadata and cache schema information
   cacheSchemaFromMetadata();
 
@@ -179,13 +171,15 @@ void CudfIcebergSplitReader::prepareSplitInternal(
   // Determine if there are no columns to read.
   noColumnsToRead_ = readColumnNames_.empty();
 
-  prepareSubfieldFilter();
-
-  // Filters on columns missing from the data file can only be folded once the
-  // file schema is known, so they prune the split here rather than above.
-  if (skipSplit_) {
+  // Which columns are injected, and with what constant, is known only now, so
+  // this is the earliest point a filter over one of them can prune the split.
+  const auto injectedFold = foldInjectedColumnFilters();
+  if (injectedFold == ConstantFilterFold::kAlwaysFalse) {
+    skipSplit_ = true;
     return;
   }
+
+  prepareSubfieldFilter(injectedFold);
 
   // Evaluate after the pushed subfield filter is prepared.
   prependRowIndex_ = needPrependedRowIndex();
@@ -223,7 +217,8 @@ bool CudfIcebergSplitReader::needPrependedRowIndex() const {
   return pushdownFilter() != nullptr;
 }
 
-void CudfIcebergSplitReader::prepareSubfieldFilter() {
+void CudfIcebergSplitReader::prepareSubfieldFilter(
+    ConstantFilterFold injectedFold) {
   auto* originalFilter = CudfSplitReader::pushdownFilter();
   if (originalFilter == nullptr) {
     return;
@@ -264,66 +259,53 @@ void CudfIcebergSplitReader::prepareSubfieldFilter() {
     return;
   }
 
-  const auto fold = foldDroppedPredicates();
-  if (fold == ConstantFilterFold::kAlwaysFalse) {
-    skipSplit_ = true;
-    return;
-  }
-
   // The dropped predicates relax the pushed filter, so the logical filter must
-  // run after the read unless every one of them is satisfied by the constant
-  // its column is materialized with.
-  deferSubfieldFilter_ =
-      fold != ConstantFilterFold::kAlwaysTrue or needsSplitSpecificDecimals;
+  // run after the read unless every one of them holds for the whole split and
+  // the transform left them recoverable as conjuncts of the filter root. Note
+  // that a `PushdownFilterBuilder` may have rebuilt the pushed filter for this
+  // split, but it rebuilds it from the same subfield filters.
+  const bool droppedAreTrue =
+      injectedFold == ConstantFilterFold::kAlwaysTrue and
+      transformedPushdownFilter_->exactIfDroppedAreTrue;
+  deferSubfieldFilter_ = not droppedAreTrue or needsSplitSpecificDecimals;
 }
 
-const common::Filter* CudfIcebergSplitReader::wholeColumnFilter(
-    std::string_view name) const {
-  for (const auto& [subfield, filter] : tableHandle_->subfieldFilters()) {
-    if (filter and subfield.path().size() == 1 and
-        subfield.baseName() == name) {
-      return filter.get();
-    }
-  }
-  return nullptr;
+const CudfIcebergSplitReader::InjectedColumn*
+CudfIcebergSplitReader::injectedColumn(std::string_view name) const {
+  const auto iter = std::find_if(
+      injectedColumns_.begin(),
+      injectedColumns_.end(),
+      [&](const InjectedColumn& column) { return column.name == name; });
+  return iter == injectedColumns_.end() ? nullptr : &*iter;
 }
 
-ConstantFilterFold CudfIcebergSplitReader::foldDroppedPredicates() const {
-  // A dropped predicate is decided by testing the subfield filter it was built
-  // from, which requires it to be a conjunct of the filter. Note that a
-  // `PushdownFilterBuilder` may have rebuilt the filter for this split, but it
-  // rebuilds it from the same subfield filters.
-  if (not transformedPushdownFilter_->exactIfDroppedAreTrue) {
-    return ConstantFilterFold::kUnknown;
-  }
-
+ConstantFilterFold CudfIcebergSplitReader::foldInjectedColumnFilters() const {
   const auto readAsLocalTime = readTimestampAsLocalTime();
   bool anyUnknown = false;
 
-  for (const auto index : transformedPushdownFilter_->droppedInjectedColumns) {
-    const auto iter = std::lower_bound(
-        injectedColumns_.begin(),
-        injectedColumns_.end(),
-        index,
-        [](const auto& column, cudf::size_type index) {
-          return std::cmp_less(column.outputIndex, index);
-        });
-    VELOX_CHECK(
-        iter != injectedColumns_.end() and
-            std::cmp_equal(iter->outputIndex, index),
-        "Dropped predicate does not belong to an injected column. Index: {}",
-        index);
-
-    const auto* filter = wholeColumnFilter(iter->name);
-    if (filter == nullptr) {
+  // Subfield filters are conjuncts of the scan filter, so one that rejects the
+  // constant of its column rejects every row of the split, whatever shape the
+  // pushed expression built from them has.
+  for (const auto& [subfield, filter] : tableHandle_->subfieldFilters()) {
+    if (not filter) {
+      continue;
+    }
+    const auto* column = injectedColumn(subfield.baseName());
+    if (column == nullptr) {
+      // Read from the data file, so there is no constant to fold against.
+      continue;
+    }
+    // Only a filter over a whole column can be folded, since that is the
+    // granularity an injected column is constant at.
+    if (subfield.path().size() != 1) {
       anyUnknown = true;
       continue;
     }
 
     switch (foldFilterOnConstant(
         *filter,
-        iter->veloxType,
-        iter->partitionValue,
+        column->veloxType,
+        column->partitionValue,
         connectorQueryCtx_->memoryPool(),
         readAsLocalTime)) {
       case ConstantFilterFold::kAlwaysFalse:
@@ -952,58 +934,6 @@ void CudfIcebergSplitReader::adaptColumns() {
 bool CudfIcebergSplitReader::readTimestampAsLocalTime() const {
   return hiveConfig_->readTimestampPartitionValueAsLocalTime(
       connectorQueryCtx_->sessionProperties());
-}
-
-TypePtr CudfIcebergSplitReader::columnType(std::string_view name) const {
-  if (const auto index = outputType_->getChildIdxIfExists(name)) {
-    return outputType_->childAt(index.value());
-  }
-  const auto& dataColumns = tableHandle_->dataColumns();
-  if (dataColumns and dataColumns->containsChild(name)) {
-    return dataColumns->findChild(name);
-  }
-  return nullptr;
-}
-
-bool CudfIcebergSplitReader::splitRejectedByConstantColumns() const {
-  const auto readAsLocalTime = readTimestampAsLocalTime();
-
-  for (const auto& [subfield, filter] : tableHandle_->subfieldFilters()) {
-    // Only a filter over a whole top-level column can be folded, since that is
-    // the granularity injected columns are constant at.
-    if (not filter or subfield.path().size() != 1) {
-      continue;
-    }
-    const auto& name = subfield.baseName();
-
-    std::optional<std::string> value;
-    if (const auto infoIter = split_->infoColumns.find(name);
-        infoIter != split_->infoColumns.end()) {
-      value = infoIter->second;
-    } else if (const auto partitionIter =
-                   icebergSplit_->partitionKeys.find(name);
-               partitionIter != icebergSplit_->partitionKeys.end()) {
-      value = partitionIter->second;
-    } else {
-      // Read from the data file, so no constant to fold against. Schema
-      // evolution columns are handled once the file schema is known.
-      continue;
-    }
-
-    const auto type = columnType(name);
-    if (type == nullptr) {
-      continue;
-    }
-    if (foldFilterOnConstant(
-            *filter,
-            type,
-            value,
-            connectorQueryCtx_->memoryPool(),
-            readAsLocalTime) == ConstantFilterFold::kAlwaysFalse) {
-      return true;
-    }
-  }
-  return false;
 }
 
 std::unique_ptr<cudf::scalar> CudfIcebergSplitReader::makeInjectedScalar(

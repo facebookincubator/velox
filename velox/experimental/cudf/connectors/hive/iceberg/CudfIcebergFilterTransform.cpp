@@ -58,18 +58,12 @@ class InjectedColumnFilterTransformer
   // Returns the transformed filter, handing over the nodes created while
   // transforming.
   TransformedFilter transformedFilter() && {
-    std::sort(droppedInjectedColumns_.begin(), droppedInjectedColumns_.end());
-    droppedInjectedColumns_.erase(
-        std::unique(
-            droppedInjectedColumns_.begin(), droppedInjectedColumns_.end()),
-        droppedInjectedColumns_.end());
     return TransformedFilter{
         .nodes = std::move(nodes_),
         .expr = current_.expr,
         .referencesInjectedColumn = referencesInjectedColumn_,
         .requiresSplitSpecificDecimalTypes =
             current_.requiresSplitSpecificDecimalTypes,
-        .droppedInjectedColumns = std::move(droppedInjectedColumns_),
         .exactIfDroppedAreTrue = exactIfDroppedAreTrue_};
   }
 
@@ -109,7 +103,6 @@ class InjectedColumnFilterTransformer
         columnIndex);
     if (iter != injectedColumnIndices_.end() and *iter == columnIndex) {
       referencesInjectedColumn_ = true;
-      droppedInjectedColumns_.push_back(columnIndex);
       current_ = {
           .expr = nullptr,
           .wasRelaxed = true,
@@ -251,7 +244,6 @@ class InjectedColumnFilterTransformer
   cudf::ast::tree nodes_;
   const std::span<const cudf::size_type> injectedColumnIndices_;
   bool referencesInjectedColumn_{false};
-  std::vector<cudf::size_type> droppedInjectedColumns_;
   bool exactIfDroppedAreTrue_{true};
 
   // Result of the last visited subexpression. visit() returns a reference,

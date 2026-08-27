@@ -62,7 +62,6 @@ TEST(CudfIcebergFilterTransformTest, logicalAnd) {
       expression, std::array<cudf::size_type, 1>{0});
 
   EXPECT_TRUE(result.referencesInjectedColumn);
-  EXPECT_THAT(result.droppedInjectedColumns, ElementsAre(0));
   EXPECT_TRUE(result.exactIfDroppedAreTrue);
   const auto* transformed =
       dynamic_cast<const cudf::ast::column_reference*>(result.expr);
@@ -123,7 +122,6 @@ TEST(CudfIcebergFilterTransformTest, nestedLogicalAndRetainsOr) {
       expression, std::array<cudf::size_type, 1>{0});
 
   EXPECT_TRUE(result.referencesInjectedColumn);
-  EXPECT_THAT(result.droppedInjectedColumns, ElementsAre(0));
   EXPECT_TRUE(result.exactIfDroppedAreTrue);
   const auto* transformed =
       dynamic_cast<const cudf::ast::operation*>(result.expr);
@@ -170,7 +168,6 @@ TEST(CudfIcebergFilterTransformTest, rebasesMultiplePhysicalColumns) {
       expression, std::array<cudf::size_type, 2>{0, 2});
 
   EXPECT_FALSE(result.referencesInjectedColumn);
-  EXPECT_THAT(result.droppedInjectedColumns, testing::IsEmpty());
   EXPECT_TRUE(result.exactIfDroppedAreTrue);
   const auto* transformed =
       dynamic_cast<const cudf::ast::operation*>(result.expr);
@@ -284,7 +281,6 @@ TEST(CudfIcebergFilterTransformTest, isNullOnInjectedColumnIsNotPushed) {
       expression, std::array<cudf::size_type, 1>{1});
 
   EXPECT_TRUE(result.referencesInjectedColumn);
-  EXPECT_THAT(result.droppedInjectedColumns, ElementsAre(1));
   // The whole filter is the dropped predicate, so testing it decides the split.
   EXPECT_TRUE(result.exactIfDroppedAreTrue);
   EXPECT_EQ(result.expr, nullptr);
@@ -305,7 +301,6 @@ TEST(CudfIcebergFilterTransformTest, comparisonOnInjectedColumnStaysExact) {
   const auto result = transformFilterForInjectedColumns(
       expression, std::array<cudf::size_type, 1>{0});
 
-  EXPECT_THAT(result.droppedInjectedColumns, ElementsAre(0));
   EXPECT_TRUE(result.exactIfDroppedAreTrue);
   const auto* transformed =
       dynamic_cast<const cudf::ast::column_reference*>(result.expr);
@@ -330,11 +325,10 @@ TEST(CudfIcebergFilterTransformTest, negatedInjectedOnlyPredicateStaysExact) {
   const auto result = transformFilterForInjectedColumns(
       expression, std::array<cudf::size_type, 1>{0});
 
-  EXPECT_THAT(result.droppedInjectedColumns, ElementsAre(0));
   EXPECT_TRUE(result.exactIfDroppedAreTrue);
 }
 
-TEST(CudfIcebergFilterTransformTest, dropsEveryInjectedColumnOnce) {
+TEST(CudfIcebergFilterTransformTest, dropsEveryInjectedColumn) {
   cudf::ast::tree tree;
   const auto& firstInjected = tree.push(cudf::ast::column_reference{2});
   const auto& secondInjected = tree.push(cudf::ast::column_reference{0});
@@ -351,7 +345,6 @@ TEST(CudfIcebergFilterTransformTest, dropsEveryInjectedColumnOnce) {
   const auto result = transformFilterForInjectedColumns(
       expression, std::array<cudf::size_type, 2>{0, 2});
 
-  EXPECT_THAT(result.droppedInjectedColumns, ElementsAre(0, 2));
   EXPECT_TRUE(result.exactIfDroppedAreTrue);
   const auto* transformed =
       dynamic_cast<const cudf::ast::column_reference*>(result.expr);
