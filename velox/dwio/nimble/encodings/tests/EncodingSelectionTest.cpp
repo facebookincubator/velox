@@ -1878,8 +1878,14 @@ TEST(ManualEncodingSelectionPolicyFactoryTest, fsstRequiresExplicitOptIn) {
 TEST(ManualEncodingSelectionPolicyFactoryTest, rejectsReadOnlyEncodings) {
   NIMBLE_ASSERT_THROW(
       nimble::ManualEncodingSelectionPolicyFactory::parseEncodingReadFactors(
+          "FOR=1.0"),
+      "Encoding is read-only and cannot be used for new writes: FOR");
+
+  EXPECT_EQ(
+      nimble::ManualEncodingSelectionPolicyFactory::parseEncodingReadFactors(
           "PFOR=1.0"),
-      "Encoding is read-only and cannot be used for new writes: PFOR");
+      (std::vector<std::pair<nimble::EncodingType, float>>{
+          {nimble::EncodingType::PFOR, 1.0}}));
 }
 
 TEST(

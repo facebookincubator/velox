@@ -162,8 +162,8 @@ class Encoding {
 
     /// Direct alphabet for SharedDictionary encodings when the read path has
     /// already resolved the dictionary bound to this value stream.
-    std::shared_ptr<const SharedDictionaryAlphabet> sharedDictionaryAlphabet =
-        nullptr;
+    std::shared_ptr<const SharedDictionaryAlphabet> sharedDictionaryAlphabet{
+        nullptr};
 
     velox::io::IoCounter* decompressCounter() const {
       return decodingStats != nullptr ? &decodingStats->decompressCPUTimeNanos
@@ -528,6 +528,25 @@ void readDenseMaterializedIndices(
       /*sourceBegin=*/valueOutputOffset,
       rawOuterNonNullRows,
       rawOutputValues);
+
+  // Nulls were materialized into the reader's read-range bitmap only.
+  // `resultNulls()' hands that bitmap back while `returnReaderNulls_' holds,
+  // but `setReturnNullsMode' clears the flag whenever `useBulkPath()' is false
+  // -- notably on a platform without AVX2, where every read takes that branch.
+  // `resultNulls()' then returns the output-indexed `resultNulls_', which
+  // nothing on this path writes, so the output would silently lose its nulls.
+  // Copy the read-range nulls across, mirroring what
+  // `readSparseMaterializedIndices' does for the sparse row set.
+  if (!visitor.reader().returnReaderNulls()) {
+    auto* rawResultNulls = visitor.reader().rawResultNulls();
+    NIMBLE_CHECK_NOT_NULL(
+        rawResultNulls,
+        "prepareResultNulls must allocate result nulls before the dense index "
+        "path writes them");
+    velox::bits::copyBits(
+        rawNulls, readOffset, rawResultNulls, valueOutputOffset, numReadRows);
+    visitor.reader().setHasNulls();
+  }
   visitor.addNumValues(numReadRows);
   visitor.setRowIndex(visitor.numRows());
 }

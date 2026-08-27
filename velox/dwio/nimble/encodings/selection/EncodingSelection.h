@@ -71,6 +71,12 @@ namespace facebook::nimble {
 
 class EncodingSelectionPolicyBase;
 
+/// Writer-provided input for shared dictionary value-stream encoding.
+struct SharedDictionaryEncodingInput {
+  /// One dictionary index for each non-null input value.
+  std::span<const uint32_t> indices;
+};
+
 /// Type representing a selected encoding.
 /// This is the result type returned from the select() method of an encoding
 /// selection policy. Also provides access to the compression policies for
@@ -85,6 +91,8 @@ struct EncodingSelectionResult {
   std::optional<uint64_t> estimatedSize{};
   std::function<std::unique_ptr<CompressionPolicy>()> compressionPolicyFactory =
       []() { return std::make_unique<NoCompressionPolicy>(); };
+  /// Additional input required when encodingType is SharedDictionary.
+  std::optional<SharedDictionaryEncodingInput> sharedDictionaryInput{};
 };
 
 /// The EncodingSelection class is passed in to the encode() method of each
@@ -112,6 +120,11 @@ class EncodingSelection {
   std::unique_ptr<CompressionPolicy> compressionPolicy() const noexcept {
     auto policy = selectionResult_.compressionPolicyFactory();
     return policy;
+  }
+
+  const std::optional<SharedDictionaryEncodingInput>& sharedDictionaryInput()
+      const noexcept {
+    return selectionResult_.sharedDictionaryInput;
   }
 
   template <typename NestedT>

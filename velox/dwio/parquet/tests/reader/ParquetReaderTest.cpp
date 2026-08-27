@@ -1731,7 +1731,7 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyStructValue) {
   }
 }
 
-TEST_F(ParquetReaderTest, struct_of_array_of_array) {
+TEST_F(ParquetReaderTest, structOfArrayOfArray) {
   //  The Schema is of type
   //  message hive_schema {
   //    optional group test {

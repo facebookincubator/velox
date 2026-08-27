@@ -50,8 +50,9 @@ constexpr auto kEncodingTypes =
         {EncodingType::SharedDictionary, "SharedDictionary"},
     });
 
-constexpr auto kReadOnlyEncodingTypes =
-    std::to_array<EncodingType>({EncodingType::PFOR});
+constexpr auto kReadOnlyEncodingTypes = std::to_array<EncodingType>({
+    EncodingType::FOR,
+});
 
 constexpr auto kCompressionTypes =
     std::to_array<std::pair<CompressionType, std::string_view>>({

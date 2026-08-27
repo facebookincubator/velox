@@ -959,9 +959,12 @@ Common Options
    * - ``use-column-names``
      - bool
      - false
-     - Map table fields to file fields using names instead of indices for all
-       file formats. The connector property is scoped by connector ID, for
-       example ``hive.use-column-names`` or ``iceberg.use-column-names``.
+     - Map table fields to file fields using names instead of indices. This is
+       a connector/session-level default column matching policy and applies
+       uniformly to all file formats read by the connector, for example ORC,
+       DWRF, and Parquet. Split-specific column mapping mode, when present,
+       takes precedence over this setting. The connector property is scoped by
+       connector ID, for example ``hive.use-column-names`` or ``iceberg.use-column-names``.
        Session: ``use_column_names``.
 
 ORC Options (prefix ``hive.orc.``)
@@ -1459,6 +1462,13 @@ Spark-specific Configuration
      - bool
      - true
      - If true, Spark ``collect_list`` aggregate function ignores nulls in the input.
+   * - spark.decimal_to_float_high_precision_cast_enabled
+     - bool
+     - false
+     - If true, casts from ``DECIMAL`` to ``REAL``/``DOUBLE`` use a high-precision conversion
+       (via an intermediate string) for values that cannot be represented exactly by floating
+       point arithmetic, aligning the result with Spark. Disabled by default due to the
+       significant performance regression; users sensitive to precision loss can enable it.
 
 Tracing
 --------
