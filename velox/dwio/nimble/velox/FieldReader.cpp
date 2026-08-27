@@ -3374,7 +3374,26 @@ class MergedFlatMapFieldReader final
     }
 
     velox::VectorPtr& valuesVector = vector->mapValues();
+    // The key vector holds one entry per map entry, but VectorInitializer above
+    // sized it from rowCount, which shrinks its values buffer to
+    // rowCount * sizeof(T). The resize below is what puts that back -- except
+    // FlatVector::resize returns early when handed the size the vector already
+    // has, which happens whenever two consecutive batches carry the same entry
+    // count. The vector is then left claiming totalMapEntries entries over a
+    // rowCount-sized buffer. Nothing notices on a plain read, because only
+    // wrapping the vector in a dictionary -- what a filtered read does when it
+    // drops rows -- ever validates it, and only in a debug build.
+    //
+    // Dropping to zero first makes the growth path always run. Capacity
+    // survives the shrink, so this costs no allocation.
+    //
+    // The zero-entry case is deliberately left alone: a batch with no entries
+    // keeps the previous batch's key length, which is the same inconsistency in
+    // miniature. Clearing it here regresses flat map feature projection
+    // (koski's NimbleTableTest.FeatureProjection*), so it needs its own
+    // investigation rather than a drive-by fix.
     if (totalMapEntries > 0) {
+      keysVector->resize(0, false);
       keysVector->resize(totalMapEntries, false);
       velox::BaseVector::prepareForReuse(valuesVector, totalMapEntries);
     }
