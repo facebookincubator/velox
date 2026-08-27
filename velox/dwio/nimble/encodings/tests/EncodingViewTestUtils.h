@@ -57,14 +57,22 @@ class EncodingViewTest : public ::testing::Test {
   void expectReads(
       const nimble::Vector<typename Encoding::cppDataType>& values,
       const std::vector<uint32_t>& positions,
-      nimble::Encoding::Options baseOptions = {}) {
+      nimble::Encoding::Options baseOptions = {},
+      // Nested encodings are forced to Trivial by default. Encodings whose
+      // point is the sub-encodings they select, such as SubIntSplit, need the
+      // real policy to produce a representative stream.
+      bool realNestedSelection = false) {
     using T = typename Encoding::cppDataType;
     for (const auto useVarint : {false, true}) {
       SCOPED_TRACE(fmt::format("useVarint={}", useVarint));
       auto options = baseOptions;
       options.useVarintRowCount = useVarint;
       auto serialized = nimble::test::Encoder<Encoding>::encode(
-          *buffer_, values, nimble::CompressionType::Uncompressed, options);
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          options,
+          realNestedSelection);
       auto view = nimble::createEncodingView(serialized, pool_.get(), options);
       ASSERT_NE(view, nullptr);
       for (const auto position : positions) {
@@ -89,14 +97,22 @@ class EncodingViewTest : public ::testing::Test {
   void expectConcurrentReads(
       const nimble::Vector<typename Encoding::cppDataType>& values,
       const std::vector<uint32_t>& positions,
-      nimble::Encoding::Options baseOptions = {}) {
+      nimble::Encoding::Options baseOptions = {},
+      // Nested encodings are forced to Trivial by default. Encodings whose
+      // point is the sub-encodings they select, such as SubIntSplit, need the
+      // real policy to produce a representative stream.
+      bool realNestedSelection = false) {
     using T = typename Encoding::cppDataType;
     for (const auto useVarint : {false, true}) {
       SCOPED_TRACE(fmt::format("useVarint={}", useVarint));
       auto options = baseOptions;
       options.useVarintRowCount = useVarint;
       auto serialized = nimble::test::Encoder<Encoding>::encode(
-          *buffer_, values, nimble::CompressionType::Uncompressed, options);
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          options,
+          realNestedSelection);
       auto view = nimble::createEncodingView(serialized, pool_.get(), options);
       ASSERT_NE(view, nullptr);
 
