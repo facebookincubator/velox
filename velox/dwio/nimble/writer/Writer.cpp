@@ -1945,6 +1945,10 @@ Writer::Writer(
               ? context_->options().bufferPolicyFactory()
               : nullptr} {
   NIMBLE_CHECK_NOT_NULL(file_);
+  NIMBLE_USER_CHECK(
+      !context_->options().enableChunkIndex ||
+          context_->options().enableChunking,
+      "Chunk stats require chunking to be enabled.");
 
   // Register handler for dynamically discovered FlatMap keys before creating
   // the writer tree, so that predefined keys also trigger the handler.
