@@ -25,6 +25,9 @@
 #include <lz4.h>
 #include <snappy.h>
 #include <zlib.h>
+// Expose ZSTD static APIs (e.g. ZSTD_decompressBound) used to size the output
+// buffer when a compressed block decompresses to more than expected.
+#define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
 #include <zstd_errors.h>
 
@@ -418,16 +421,42 @@ uint64_t ZstdDecompressor::decompress(
     uint64_t srcLength,
     char* dest,
     uint64_t destLength) {
-  // Reuse 'ZSTD_DCtx' per-thread to avoid repeated allocations.
-  thread_local std::unique_ptr<ZSTD_DCtx, size_t (*)(ZSTD_DCtx*)> ctx{
-      ZSTD_createDCtx(), ZSTD_freeDCtx};
-  auto ret = ZSTD_decompressDCtx(ctx.get(), dest, destLength, src, srcLength);
-  DWIO_ENSURE_FMT(
-      !ZSTD_isError(ret),
-      "ZSTD returned an error: {} Info: {}",
-      ZSTD_getErrorName(ret),
-      streamDebugInfo_);
-  return ret;
+  // A single compressed block may contain multiple concatenated ZSTD frames
+  // (e.g. large string columns written by splitting the raw data across several
+  // frames). ZSTD_decompressDCtx() only decompresses the first frame, leaving
+  // the rest undecoded and downstream reads corrupted. Use streaming
+  // decompression so every frame in the block is consumed.
+  //
+  // Ask ZSTD for the upper bound across all frames; if it does not fit the
+  // caller's destination buffer, throw so the caller can grow and retry. Guard
+  // against nonsensical sizes from corrupt/hostile input.
+  const auto required = ZSTD_decompressBound(src, srcLength);
+  if (required != ZSTD_CONTENTSIZE_ERROR && required > destLength) {
+    constexpr int64_t kZstdMaxDecompressed = 1LL << 30; // 1 GiB
+    if (required > kZstdMaxDecompressed) {
+      DWIO_ENSURE_FMT(
+          false,
+          "ZSTD block requires too large a buffer ({} bytes). Info: {}",
+          required,
+          streamDebugInfo_);
+    }
+    throw ZstdDestBufferTooSmall(required, streamDebugInfo_);
+  }
+
+  thread_local std::unique_ptr<ZSTD_DStream, size_t (*)(ZSTD_DStream*)> stream{
+      ZSTD_createDStream(), ZSTD_freeDStream};
+  ZSTD_initDStream(stream.get());
+  ZSTD_inBuffer in{src, srcLength, 0};
+  ZSTD_outBuffer out{dest, destLength, 0};
+  while (in.pos < in.size) {
+    const auto code = ZSTD_decompressStream(stream.get(), &out, &in);
+    DWIO_ENSURE_FMT(
+        !ZSTD_isError(code),
+        "ZSTD returned an error: {} Info: {}",
+        ZSTD_getErrorName(code),
+        streamDebugInfo_);
+  }
+  return out.pos;
 }
 
 std::pair<int64_t, bool> ZstdDecompressor::getDecompressedLength(
