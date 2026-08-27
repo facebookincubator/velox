@@ -64,6 +64,12 @@ endpoint, such as a remote TCP or RDMA endpoint, is eligible. If UCP cannot
 report the endpoint transports, the implementation fails closed and sends raw
 data.
 
+When UCX exchange is enabled, worker startup registers the UCX output queue
+manager and its GPU partitioned-output operator as one Velox output transport.
+The matching exchange adapters keep incoming UCX buffers on the GPU. This
+registration is required by current Velox even when the codec itself is
+disabled with `cudf.exchange_compression=none`.
+
 ## Configuration
 
 The worker's native configuration accepts these properties:
@@ -125,6 +131,14 @@ Run the codec and cost-model tests on a CUDA-capable host:
 ```bash
 _build/release/velox/experimental/ucx-exchange/tests/ucx_exchange_test \
   --gtest_filter='UcxCompressionTest.*:UcxCompressionCostModelTest.*'
+```
+
+The CPU-only registration test verifies that enabling UCX installs the paired
+manager and output operator in Velox's output transport registry:
+
+```bash
+_build/release/velox/experimental/cudf/tests/velox_cudf_config_test \
+  --gtest_filter='ConfigTest.ucxTransportRegistration'
 ```
 
 The GPU tests cover skipped inputs, whole-buffer rANS round trips, descriptor

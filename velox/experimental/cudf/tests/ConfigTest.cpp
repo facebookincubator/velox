@@ -15,6 +15,9 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/OperatorAdapters.h"
+#include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
+#include "velox/exec/OutputTransportRegistry.h"
 
 #include <gtest/gtest.h>
 
@@ -59,5 +62,25 @@ TEST(ConfigTest, cudfConfig) {
   ASSERT_EQ(config.exchangeCompressionPipelineThreads, 2);
   ASSERT_EQ(config.exchangeCompressionMinBytes, 268435456);
   ASSERT_DOUBLE_EQ(config.exchangeCompressionSafetyMargin, 1.5);
+}
+
+TEST(ConfigTest, ucxTransportRegistration) {
+  auto& config = CudfConfig::getInstance();
+  std::unordered_map<std::string, std::string> options = {
+      {CudfConfig::kCudfEnabled, "true"},
+      {CudfConfig::kUcxExchange, "true"}};
+  config.initialize(std::move(options));
+
+  exec::OutputTransportRegistry::unregisterAll();
+  registerAllOperatorAdapters();
+
+  auto entry = exec::OutputTransportRegistry::tryGet(
+      std::string{core::TransportKind::kUcx});
+  ASSERT_NE(entry, nullptr);
+  EXPECT_NE(
+      std::dynamic_pointer_cast<ucx_exchange::UcxOutputQueueManager>(
+          entry->manager),
+      nullptr);
+  exec::OutputTransportRegistry::unregisterAll();
 }
 } // namespace facebook::velox::cudf_velox::test

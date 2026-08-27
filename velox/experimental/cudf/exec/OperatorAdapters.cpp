@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
+#include <mutex>
+#include <unordered_map>
 #include "velox/experimental/cudf/CudfConfig.h"
+
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
@@ -36,15 +39,21 @@
 #include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/ucx-exchange/UcxExchange.h"
+#include "velox/experimental/ucx-exchange/UcxPartitionedOutput.h"
 
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/core/QueryConfig.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/EnforceSingleRow.h"
+#include "velox/exec/Exchange.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/GroupId.h"
 #include "velox/exec/HashAggregation.h"
@@ -53,9 +62,12 @@
 #include "velox/exec/Limit.h"
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/MarkDistinct.h"
+#include "velox/exec/Merge.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/NestedLoopJoinProbe.h"
 #include "velox/exec/OrderBy.h"
+#include "velox/exec/OutputTransportRegistry.h"
+#include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/Task.h"
@@ -1140,12 +1152,274 @@ class GroupIdAdapter : public OperatorAdapter {
   }
 };
 
+using TaskPipelineKey = std::string;
+using UcxExchangeClientMap = std::unordered_map<
+    TaskPipelineKey,
+    std::weak_ptr<ucx_exchange::UcxExchangeClient>>;
+
+UcxExchangeClientMap& getUcxExchangeClientMap() {
+  static UcxExchangeClientMap instance;
+  return instance;
+}
+
+std::mutex& getUcxExchangeClientMapMutex() {
+  static std::mutex instance;
+  return instance;
+}
+
+namespace {
+// Exchange input nodes do not carry the source output's transport annotation.
+// Select UCX from the query config and the registered transport capability.
+bool usesUcxTransport(exec::DriverCtx* ctx) {
+  const auto& config = ctx->task->queryCtx()->queryConfig();
+  return config.get<bool>(
+             CudfConfig::kCudfEnabled,
+             CudfConfig::getInstance().enabled) &&
+      config.get<bool>(
+          CudfConfig::kUcxExchange,
+          CudfConfig::getInstance().exchange) &&
+      exec::OutputTransportRegistry::tryGet(
+          *ctx->task->queryCtx(), std::string{core::TransportKind::kUcx}) !=
+      nullptr;
+}
+} // namespace
+
+/// ExchangeAdapter - Replaces with UcxExchange for UCX transport.
+class ExchangeAdapter : public OperatorAdapter {
+ public:
+  ExchangeAdapter() : OperatorAdapter("Exchange") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return CudfConfig::getInstance().exchange &&
+        dynamic_cast<const exec::Exchange*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* ctx) const override {
+    return usesUcxTransport(ctx);
+  }
+
+  bool acceptsGpuInput() const override {
+    return false;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* op,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    auto key = op->taskId() + ":" + std::to_string(ctx->pipelineId);
+    std::shared_ptr<facebook::velox::ucx_exchange::UcxExchangeClient> client =
+        nullptr;
+    {
+      std::lock_guard<std::mutex> lock(getUcxExchangeClientMapMutex());
+      auto& clientMap = getUcxExchangeClientMap();
+      auto clientIter = clientMap.find(key);
+      if (clientIter != clientMap.end()) {
+        client = clientIter->second.lock();
+        if (!client) {
+          clientMap.erase(clientIter);
+        }
+      }
+      if (!client) {
+        client =
+            std::make_shared<facebook::velox::ucx_exchange::UcxExchangeClient>(
+                op->taskId(),
+                ctx->task->destination(),
+                ctx->task->numDrivers(ctx->driver));
+        clientMap[key] = client;
+      }
+    }
+    result.push_back(
+        std::make_unique<facebook::velox::ucx_exchange::UcxExchange>(
+            operatorId, ctx, planNode, client));
+    return result;
+  }
+
+  bool keepOperator() const override {
+    return !CudfConfig::getInstance().exchange;
+  }
+
+  bool keepOperator(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* ctx) const override {
+    return !usesUcxTransport(ctx);
+  }
+};
+
+/// MergeExchangeAdapter - Replaces with UcxExchange+CudfOrderBy for UCX
+/// transport.
+class MergeExchangeAdapter : public OperatorAdapter {
+ public:
+  MergeExchangeAdapter() : OperatorAdapter("MergeExchange") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return CudfConfig::getInstance().exchange &&
+        dynamic_cast<const exec::MergeExchange*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* ctx) const override {
+    return usesUcxTransport(ctx);
+  }
+
+  bool acceptsGpuInput() const override {
+    return false;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* op,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<facebook::velox::ucx_exchange::UcxExchange>(
+            operatorId, ctx, planNode, nullptr));
+    result.push_back(std::make_unique<CudfOrderBy>(operatorId, ctx, planNode));
+    return result;
+  }
+
+  bool keepOperator() const override {
+    return !CudfConfig::getInstance().exchange;
+  }
+
+  bool keepOperator(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* ctx) const override {
+    return !usesUcxTransport(ctx);
+  }
+};
+
+/// UcxPartitionedOutputAdapter - Preserves the GPU output operator created by
+/// OutputTransportRegistry and exposes its input boundary to the cuDF rewrite.
+class UcxPartitionedOutputAdapter : public OperatorAdapter {
+ public:
+  UcxPartitionedOutputAdapter() : OperatorAdapter("UcxPartitionedOutput") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return dynamic_cast<const ucx_exchange::UcxPartitionedOutput*>(op) !=
+        nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/) const override {
+    return true;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return false;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/,
+      int32_t /*operatorId*/) const override {
+    return {};
+  }
+
+  bool keepOperator() const override {
+    return true;
+  }
+};
+
+/// InMemoryPartitionedOutputAdapter - Preserves the built-in CPU result sink.
+///
+/// Unlike UcxPartitionedOutput, the stock PartitionedOutput serializes Velox
+/// vectors into Presto's in-memory output buffers. Marking both sides of this
+/// operator as CPU makes the rewrite insert CudfToVelox before the sink while
+/// keeping this intentional terminal boundary valid when fallback is disabled.
+class InMemoryPartitionedOutputAdapter : public OperatorAdapter {
+ public:
+  InMemoryPartitionedOutputAdapter()
+      : OperatorAdapter("InMemoryPartitionedOutput") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return dynamic_cast<const exec::PartitionedOutput*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/) const override {
+    return false;
+  }
+
+  bool acceptsGpuInput() const override {
+    return false;
+  }
+
+  bool producesGpuOutput() const override {
+    return false;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/,
+      int32_t /*operatorId*/) const override {
+    return {};
+  }
+
+  bool keepOperator() const override {
+    return true;
+  }
+};
+
 /// Registration Function
 void registerAllOperatorAdapters() {
   auto& registry = OperatorAdapterRegistry::getInstance();
 
   // Clear any existing adapters
   registry.clear();
+
+  // Register the UCX manager and matching output operator as one transport
+  // entry. Current Velox resolves this entry from PartitionedOutputNode.
+  if (CudfConfig::getInstance().exchange) {
+    auto manager =
+        ucx_exchange::UcxOutputQueueManager::getInstanceRef();
+    auto entry =
+        exec::OutputTransportEntry::make<
+            ucx_exchange::UcxOutputQueueManager>(
+            manager,
+            [](int32_t operatorId,
+               exec::DriverCtx* ctx,
+               const std::shared_ptr<const core::PartitionedOutputNode>& node,
+               bool eagerFlush,
+               const std::shared_ptr<
+                   ucx_exchange::UcxOutputQueueManager>& /*boundManager*/)
+                -> std::unique_ptr<exec::Operator> {
+              return std::make_unique<
+                  ucx_exchange::UcxPartitionedOutput>(
+                  operatorId, ctx, node, eagerFlush);
+            });
+    exec::OutputTransportRegistry::global().insert(
+        std::string{core::TransportKind::kUcx},
+        std::move(entry),
+        /*overwrite=*/true);
+  }
 
   // Register all adapters
   registry.registerAdapter(std::make_unique<TableScanAdapter>());
@@ -1168,6 +1442,11 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<ValuesAdapter>());
   registry.registerAdapter(std::make_unique<CallbackSinkAdapter>());
   registry.registerAdapter(std::make_unique<WindowAdapter>());
+  registry.registerAdapter(std::make_unique<ExchangeAdapter>());
+  registry.registerAdapter(std::make_unique<MergeExchangeAdapter>());
+  registry.registerAdapter(std::make_unique<UcxPartitionedOutputAdapter>());
+  registry.registerAdapter(
+      std::make_unique<InMemoryPartitionedOutputAdapter>());
 }
 
 } // namespace facebook::velox::cudf_velox

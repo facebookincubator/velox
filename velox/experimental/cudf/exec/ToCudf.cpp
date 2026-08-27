@@ -176,7 +176,7 @@ bool CompileState::compile(bool allowCpuFallback) {
     bool isPureCpuOperator = true;
 
     if (adapter) {
-      keepOperator = adapter->keepOperator();
+      keepOperator = adapter->keepOperator(oper, planNode, ctx);
       if (keepOperator == 0) {
         if (planNode && thisOpProps.canRunOnGPU) {
           auto replacements =
