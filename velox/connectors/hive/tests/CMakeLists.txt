@@ -19,6 +19,7 @@ add_executable(
   FileConnectorSplitTest.cpp
   FileConnectorUtilTest.cpp
   FileHandleTest.cpp
+  FileSplitReaderTest.cpp
   HiveConfigTest.cpp
   HiveDataSinkTest.cpp
   HiveConnectorTest.cpp

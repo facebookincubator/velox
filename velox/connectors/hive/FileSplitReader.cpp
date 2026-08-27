@@ -16,6 +16,8 @@
 
 #include "velox/connectors/hive/FileSplitReader.h"
 
+#include <folly/Conv.h>
+
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/FileConfig.h"
@@ -23,8 +25,48 @@
 #include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/connectors/hive/PartitionValue.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/TimestampConversion.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::connector::hive {
+namespace {
+
+// Parses a TIMESTAMP WITH TIME ZONE value with the same semantics as
+// CAST(varchar AS TIMESTAMP WITH TIME ZONE) and returns its UTC milliseconds
+// packed with its time zone key. A value naming a zone or carrying an offset is
+// shifted to UTC and recorded with that zone; a value with no zone is taken as
+// already UTC. Sub-millisecond precision is truncated, since the packed layout
+// has no room for it.
+//
+// Returns nullopt if 'value' is not a timestamp string at all, leaving the
+// caller to decide how to interpret it.
+std::optional<int64_t> tryPackTimestampWithTimeZone(std::string_view value) {
+  auto parsed = util::fromTimestampWithTimezoneString(
+      StringView(value), util::TimestampParseMode::kPrestoCast);
+  if (parsed.hasError()) {
+    return std::nullopt;
+  }
+
+  auto [timestamp, timeZone, offsetMillis] = std::move(parsed).value();
+  if (timeZone == nullptr) {
+    // An offset outside the range covered by named zones parses but has no key
+    // to pack with, so reject it rather than record the instant under a
+    // different zone.
+    VELOX_USER_CHECK(
+        !offsetMillis.has_value(),
+        "Unknown timezone in TIMESTAMP WITH TIME ZONE value: {}",
+        value);
+    // The string carries no zone, so the value is already UTC.
+    static const TimeZoneKey kUtcKey = tz::getTimeZoneID("UTC");
+    return pack(timestamp.toMillis(), kUtcKey);
+  }
+
+  timestamp.toGMT(*timeZone);
+  return pack(timestamp.toMillis(), timeZone->id());
+}
+
+} // namespace
 
 VectorPtr newConstantFromString(
     const TypePtr& type,
@@ -35,6 +77,22 @@ VectorPtr newConstantFromString(
   if (!value.has_value()) {
     return BaseVector::createNullConstant(type, 1, pool);
   }
+
+  if (isTimestampWithTimeZoneType(type)) {
+    if (const auto packed = tryPackTimestampWithTimeZone(value.value())) {
+      return BaseVector::createConstant(type, Variant(*packed), 1, pool);
+    }
+    // Not a timestamp string. An already packed integer is accepted too, so
+    // that a table can store pre-packed values, matching how an unannotated
+    // INT64 column read as this type passes its values through.
+    const auto packed = folly::tryTo<int64_t>(value.value());
+    VELOX_USER_CHECK(
+        packed.hasValue(),
+        "Cannot convert value to TIMESTAMP WITH TIME ZONE: {}",
+        value.value());
+    return BaseVector::createConstant(type, Variant(packed.value()), 1, pool);
+  }
+
   return BaseVector::createConstant(
       type,
       PartitionValue::fromString(
