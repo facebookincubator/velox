@@ -17,7 +17,6 @@
 #include <mutex>
 #include <unordered_map>
 #include "velox/experimental/cudf/CudfConfig.h"
-
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
@@ -1168,16 +1167,16 @@ std::mutex& getUcxExchangeClientMapMutex() {
 }
 
 namespace {
-// Exchange input nodes do not carry the source output's transport annotation.
-// Select UCX from the query config and the registered transport capability.
-bool usesUcxTransport(exec::DriverCtx* ctx) {
+bool usesUcxTransport(const core::PlanNodePtr& planNode, exec::DriverCtx* ctx) {
+  const auto exchangeNode =
+      std::dynamic_pointer_cast<const core::ExchangeNode>(planNode);
   const auto& config = ctx->task->queryCtx()->queryConfig();
-  return config.get<bool>(
-             CudfConfig::kCudfEnabled,
-             CudfConfig::getInstance().enabled) &&
+  return exchangeNode != nullptr &&
+      exchangeNode->transportKind() == core::TransportKind::kUcx &&
       config.get<bool>(
-          CudfConfig::kUcxExchange,
-          CudfConfig::getInstance().exchange) &&
+          CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled) &&
+      config.get<bool>(
+          CudfConfig::kUcxExchange, CudfConfig::getInstance().exchange) &&
       exec::OutputTransportRegistry::tryGet(
           *ctx->task->queryCtx(), std::string{core::TransportKind::kUcx}) !=
       nullptr;
@@ -1196,9 +1195,9 @@ class ExchangeAdapter : public OperatorAdapter {
 
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
-      const core::PlanNodePtr& /*planNode*/,
+      const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx) const override {
-    return usesUcxTransport(ctx);
+    return usesUcxTransport(planNode, ctx);
   }
 
   bool acceptsGpuInput() const override {
@@ -1249,9 +1248,9 @@ class ExchangeAdapter : public OperatorAdapter {
 
   bool keepOperator(
       const exec::Operator* /*op*/,
-      const core::PlanNodePtr& /*planNode*/,
+      const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx) const override {
-    return !usesUcxTransport(ctx);
+    return !usesUcxTransport(planNode, ctx);
   }
 };
 
@@ -1268,9 +1267,9 @@ class MergeExchangeAdapter : public OperatorAdapter {
 
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
-      const core::PlanNodePtr& /*planNode*/,
+      const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx) const override {
-    return usesUcxTransport(ctx);
+    return usesUcxTransport(planNode, ctx);
   }
 
   bool acceptsGpuInput() const override {
@@ -1300,9 +1299,9 @@ class MergeExchangeAdapter : public OperatorAdapter {
 
   bool keepOperator(
       const exec::Operator* /*op*/,
-      const core::PlanNodePtr& /*planNode*/,
+      const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx) const override {
-    return !usesUcxTransport(ctx);
+    return !usesUcxTransport(planNode, ctx);
   }
 };
 

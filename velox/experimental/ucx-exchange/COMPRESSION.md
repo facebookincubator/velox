@@ -66,9 +66,10 @@ data.
 
 When UCX exchange is enabled, worker startup registers the UCX output queue
 manager and its GPU partitioned-output operator as one Velox output transport.
-The matching exchange adapters keep incoming UCX buffers on the GPU. This
-registration is required by current Velox even when the codec itself is
-disabled with `cudf.exchange_compression=none`.
+Each input exchange carries the transport selected by the coordinator. The GPU
+adapters replace only UCX inputs, leaving HTTP inputs on Velox's default path.
+This per-node choice supports hybrid plans and is required even when the codec
+itself is disabled with `cudf.exchange_compression=none`.
 
 ## Configuration
 
