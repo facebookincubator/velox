@@ -208,8 +208,8 @@ bool PagedInputStream::readOrSkip(const void** data, int32_t* size) {
         }
       };
       prepareOutputBuffer(decompressedLength);
-      outputBufferLength_ =
-          withDecompressStats(decompressCounter_, [&] { return doDecompress(); });
+      outputBufferLength_ = withDecompressStats(
+          decompressCounter_, [&] { return doDecompress(); });
       if (data) {
         *data = outputBuffer_->data();
       }
