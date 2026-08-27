@@ -37,10 +37,17 @@ class TimestampWithTimeZoneTest : public ParquetTestBase {
       const RowVectorPtr& data,
       const RowTypePtr& readType,
       TimestampPrecision writePrecision = TimestampPrecision::kMicroseconds,
-      bool writeInt96 = false) {
+      bool writeInt96 = false,
+      bool utcNormalized = true) {
     ParquetWriterOptions parquetOptions;
     parquetOptions.writeInt96AsTimestamp = writeInt96;
     parquetOptions.parquetWriteTimestampUnit = writePrecision;
+    // The writer derives the logical type's isAdjustedToUTC flag from whether a
+    // time zone is set here, and only a UTC-normalized column can be read as
+    // TIMESTAMP WITH TIME ZONE.
+    if (utcNormalized) {
+      parquetOptions.parquetWriteTimestampTimeZone = "UTC";
+    }
     dwio::common::WriterOptions options;
     options.memoryPool = rootPool_.get();
     options.formatSpecificOptions =
@@ -310,6 +317,35 @@ TEST_F(TimestampWithTimeZoneTest, nullFiltersArePushedDown) {
           std::nullopt,
           std::make_unique<common::IsNull>()),
       {std::nullopt});
+}
+
+// A column the file does not declare UTC normalized holds wall clock readings
+// in a zone the file does not record, so there is no instant to pack.
+TEST_F(TimestampWithTimeZoneTest, notUtcNormalizedIsRejected) {
+  const auto data =
+      makeRowVector({makeFlatVector<Timestamp>({Timestamp(0, 0)})});
+
+  auto reader = writeAndCreateReader(
+      data,
+      readType_,
+      TimestampPrecision::kMicroseconds,
+      /*writeInt96=*/false,
+      /*utcNormalized=*/false);
+  VELOX_ASSERT_USER_THROW(
+      read(*reader, readType_),
+      "Cannot read a Parquet timestamp that is not UTC-normalized as TIMESTAMP WITH TIME ZONE");
+
+  // The same column still reads as plain TIMESTAMP.
+  const auto timestampType = ROW({"ts"}, {TIMESTAMP()});
+  auto timestampReader = writeAndCreateReader(
+      data,
+      timestampType,
+      TimestampPrecision::kMicroseconds,
+      /*writeInt96=*/false,
+      /*utcNormalized=*/false);
+  auto values = read(*timestampReader, timestampType);
+  ASSERT_EQ(values->type()->kind(), TypeKind::TIMESTAMP);
+  EXPECT_EQ(values->as<FlatVector<Timestamp>>()->valueAt(0), Timestamp(0, 0));
 }
 
 // A plain, unannotated INT64 column read as TIMESTAMP WITH TIME ZONE keeps

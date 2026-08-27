@@ -101,15 +101,21 @@ class TimestampColumnReader : public IntegerColumnReader {
       common::ScanSpec& scanSpec)
       : IntegerColumnReader(requestedType, fileType, params, scanSpec),
         requestedPrecision_(params.timestampPrecision()) {
+    // Whether the file declares the values normalized to UTC. Int96 carries no
+    // such flag, and a converted type without a logical type is UTC normalized
+    // by definition, so both default to true.
+    bool isAdjustedToUtc = true;
+
     if constexpr (std::is_same_v<T, int64_t>) {
       const auto typeWithId =
           std::static_pointer_cast<const ParquetTypeWithId>(fileType_);
       if (auto logicalType = typeWithId->logicalType_) {
         VELOX_CHECK(
             logicalType->getType() == thrift::LogicalType::Type::TIMESTAMP);
+        isAdjustedToUtc = *logicalType->get_TIMESTAMP().isAdjustedToUTC();
         auto unit = logicalType->get_TIMESTAMP().unit();
-        const auto unitType = unit->getType();
-        if (unitType == thrift::TimeUnit::Type::MILLIS) {
+        const auto unittype = unit->gettype();
+        if (unittype == thrift::timeunit::type::millis) {
           filePrecision_ = TimestampPrecision::kMilliseconds;
         } else if (unitType == thrift::TimeUnit::Type::MICROS) {
           filePrecision_ = TimestampPrecision::kMicroseconds;
@@ -135,6 +141,14 @@ class TimestampColumnReader : public IntegerColumnReader {
     }
 
     if (isTimestampWithTimeZoneType(requestedType_)) {
+      // A column that is not UTC normalized holds local wall clock readings in
+      // a zone the file does not record, so there is no instant to pack. Fail
+      // rather than stamp UTC and silently shift every value.
+      VELOX_USER_CHECK(
+          isAdjustedToUtc,
+          "Cannot read a Parquet timestamp that is not UTC-normalized as TIMESTAMP WITH TIME ZONE: {}",
+          fileType_->fullName());
+
       // Checked here as well as in read() because the reader is built before
       // row group pruning, which would otherwise be the first to see the
       // filter and would report a less clear error from the statistics path.
