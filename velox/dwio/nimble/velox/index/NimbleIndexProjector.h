@@ -25,6 +25,7 @@
 #include "velox/common/caching/FileHandle.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/time/CpuWallTimer.h"
+#include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/tablet/DataInput.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
@@ -279,6 +280,8 @@ class NimbleIndexProjector {
     std::vector<bool> requiresNullBarriers;
     // Number of projected streams present in each planned stripe.
     std::vector<uint32_t> numStreams;
+    // Total logical bytes across all projected streams in each planned stripe.
+    std::vector<uint64_t> projectedBytes;
     // File offsets for stripe stream payloads.
     std::vector<uint64_t> stripeFileOffsets;
     // Flat reusable storage for all per-stripe projected stream slots. Each
@@ -334,6 +337,23 @@ class NimbleIndexProjector {
   // and finalizes the result.
   Result processStripes();
 
+  // Computes per-stripe pack ranges and returns the upper-bound byte estimate
+  // used to allocate the sliced-output arena. Returns 0 when no stripe will be
+  // sliced.
+  uint64_t prepareStripePackRanges();
+
+  // Estimates sliced stream bytes for a partial stripe pack.
+  uint64_t estimateSlicedStripeBytes(
+      size_t stripeOffset,
+      const RowRange& packRange) const;
+
+  // Returns the per-project() sliced-output arena.
+  Buffer& sliceOutputBuffer();
+
+  // Transfers sliced-output arena chunks to the shared owner referenced by the
+  // packed stripe IOBufs.
+  void finalizeSliceOutputBuffer();
+
   // Loaded projected stream views and optional source deduplication metadata.
   struct StripeStreamViews {
     void clear() {
@@ -367,7 +387,7 @@ class NimbleIndexProjector {
   };
 
   // Selects full or partial packing based on the requested stripe range.
-  PackedStripe packStripe(size_t stripeOffset);
+  PackedStripe packStripe(size_t stripeOffset, const RowRange& packRange);
 
   // Packs a full stripe zero-copy while preserving source stream deduplication.
   PackedStripe packFullStripe(size_t stripeOffset);
@@ -421,7 +441,7 @@ class NimbleIndexProjector {
     StripeRanges stripeRanges;
     // Populated by prepareStripes().
     ScanPlan plan;
-    // Per-request flag: true if the request has ranges in any StripePlan.
+    // Per-request flag: true if the request has ranges in any planned stripe.
     // Set by prepareStripes(), used by setResumeKeys().
     std::vector<bool> hasStripeRanges;
     // Per-request resume keys set when a request reaches maxRowsPerRequest and
@@ -433,13 +453,21 @@ class NimbleIndexProjector {
     std::vector<std::optional<uint32_t>> dataInputIndices;
     // Handle keeping loaded data alive for zero-copy BufferRefs.
     DataInput::Handle dataHandle;
-    // Serialized stripe bodies and metadata, one per StripePlan. Populated by
-    // processStripes(), consumed during buildResult().
+    // Serialized stripe bodies and metadata, one per planned stripe. Populated
+    // by processStripes(), consumed during buildResult().
     std::vector<PackedStripe> packedStripes;
+    // Per planned stripe row range selected for packing. Full-stripe ranges use
+    // zero-copy packing; narrower ranges use StreamSlicer.
+    std::vector<RowRange> stripePackRanges;
     // Reusable per-request vectors.
     std::vector<uint64_t> rowsPerRequest;
     std::vector<size_t> sliceCounts;
     std::vector<size_t> emittedSlices;
+    // Shared arena for all sliced stream bytes produced by one project() call.
+    // The arena is transferred into sliceOutputChunks after all sliced stripes
+    // have been packed, letting result IOBufs share the same chunk owner.
+    std::unique_ptr<Buffer> sliceOutputBuffer;
+    std::shared_ptr<std::vector<velox::BufferPtr>> sliceOutputChunks;
 
     // Reusable per-stripe inputs for the kTablet trailer. packStripe()
     // rebuilds these vectors for each stripe and clears them on exit to avoid
