@@ -457,7 +457,11 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
         compressionKind_,
         serdeParameters_,
         options_,
-        ensureFiles_);
+        ensureFiles_,
+        // Repeats the constructor's default so that storageParameters, which
+        // follows it positionally, can be passed.
+        std::make_shared<const connector::hive::HiveInsertFileNameGenerator>(),
+        storageParameters_);
 
     insertHandle_ =
         std::make_shared<core::InsertTableHandle>(connectorId_, hiveHandle);
@@ -806,7 +810,8 @@ PlanBuilder& PlanBuilder::tableWrite(
     const RowTypePtr& schema,
     const bool ensureFiles,
     const connector::CommitStrategy commitStrategy,
-    std::shared_ptr<core::InsertTableHandle> insertTableHandle) {
+    std::shared_ptr<core::InsertTableHandle> insertTableHandle,
+    const std::unordered_map<std::string, std::string>& storageParameters) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .outputFileName(outputFileName)
@@ -819,6 +824,7 @@ PlanBuilder& PlanBuilder::tableWrite(
       .aggregates(aggregates)
       .connectorId(connectorId)
       .serdeParameters(serdeParameters)
+      .storageParameters(storageParameters)
       .options(options)
       .compressionKind(compressionKind)
       .ensureFiles(ensureFiles)
