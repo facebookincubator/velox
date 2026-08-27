@@ -19,6 +19,8 @@
 #include "velox/dwio/parquet/reader/IntegerColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::parquet {
 namespace {
@@ -34,6 +36,13 @@ Timestamp toInt64Timestamp(int64_t value, TimestampPrecision filePrecision) {
     default:
       VELOX_UNREACHABLE();
   }
+}
+
+// Zone key that every Parquet instant is stamped with, resolved once instead of
+// hardcoding its numeric value.
+TimeZoneKey utcTimeZoneKey() {
+  static const TimeZoneKey kUtc = tz::getTimeZoneID("UTC");
+  return kUtc;
 }
 
 Timestamp toInt96Timestamp(const int128_t& value) {
@@ -124,6 +133,13 @@ class TimestampColumnReader : public IntegerColumnReader {
         needsConversion_ = true;
       }
     }
+
+    if (isTimestampWithTimeZoneType(requestedType_)) {
+      // Checked here as well as in read() because the reader is built before
+      // row group pruning, which would otherwise be the first to see the
+      // filter and would report a less clear error from the statistics path.
+      checkNoValueFilter(scanSpec.filter());
+    }
   }
 
   bool hasBulkPath() const override {
@@ -131,6 +147,11 @@ class TimestampColumnReader : public IntegerColumnReader {
   }
 
   void getValues(const RowSet& rows, VectorPtr* result) override {
+    if (isTimestampWithTimeZoneType(requestedType_)) {
+      getTimestampWithTimeZoneValues(rows, result);
+      return;
+    }
+
     getFlatValues<Timestamp, Timestamp>(rows, result, requestedType_);
     if (allNull_) {
       return;
@@ -218,6 +239,10 @@ class TimestampColumnReader : public IntegerColumnReader {
       int64_t offset,
       const RowSet& rows,
       const uint64_t* /*incomingNulls*/) override {
+    if (isTimestampWithTimeZoneType(requestedType_)) {
+      checkNoValueFilter(scanSpec_->filter());
+    }
+
     // Use int128_t as a workaround. Timestamp in Velox is of 16-byte length.
     prepareRead<int128_t>(offset, rows, nullptr);
     readCommon<TimestampColumnReader, true>(rows);
@@ -225,6 +250,194 @@ class TimestampColumnReader : public IntegerColumnReader {
   }
 
  private:
+  // Rejects a pushed down filter that inspects values of a TIMESTAMP WITH TIME
+  // ZONE column.
+  //
+  // A filter on such a column is built from its physical BIGINT kind, so its
+  // bounds are packed millis-plus-zone-key values while the column reader sees
+  // raw file values. Rewriting the bounds is not possible: the packed domain is
+  // neither order- nor equality-isomorphic to the instant domain, because two
+  // values denoting the same instant in different zones pack differently yet
+  // compare equal under TimestampWithTimeZoneType. Failing loudly is the only
+  // honest option; the alternative is silently dropping rows.
+  //
+  // Called from read() as well as from the constructor, because
+  // FileDataSource::addDynamicFilter() installs join-pushed filters on the
+  // ScanSpec after the reader is built.
+  static void checkNoValueFilter(const velox::common::Filter* filter) {
+    if (filter == nullptr) {
+      return;
+    }
+    switch (filter->kind()) {
+      // These never inspect a value, so they are safe to push down.
+      case velox::common::FilterKind::kAlwaysTrue:
+      case velox::common::FilterKind::kAlwaysFalse:
+      case velox::common::FilterKind::kIsNull:
+      case velox::common::FilterKind::kIsNotNull:
+        return;
+      default:
+        VELOX_NYI(
+            "Filter pushdown on TIMESTAMP WITH TIME ZONE is not supported by the Parquet reader: {}",
+            filter->toString());
+    }
+  }
+
+  // Converts the raw Parquet value at 'source[index]' to UTC milliseconds.
+  // 'kDivisor' is the number of file units in one millisecond, and is unused
+  // for Int96, which carries days and nanos instead of a single scaled
+  // integer.
+  template <int64_t kDivisor>
+  static int64_t toMillis(const Timestamp* source, vector_size_t index) {
+    if constexpr (std::is_same_v<T, int64_t>) {
+      const auto value = static_cast<int64_t>(
+          reinterpret_cast<const int128_t&>(source[index]));
+      if constexpr (kDivisor == 1) {
+        return value;
+      } else {
+        // Timestamp floors when splitting into seconds and nanos, while integer
+        // division truncates toward zero. The two differ for pre-epoch values,
+        // hence the correction term.
+        return value / kDivisor - ((value % kDivisor) < 0);
+      }
+    } else {
+      return toInt96Timestamp(reinterpret_cast<const int128_t&>(source[index]))
+          .toMillisAllowOverflow();
+    }
+  }
+
+  // True if 'millis' is outside the range TimestampWithTimeZone can represent.
+  static bool millisOutOfRange(int64_t millis) {
+    return millis > kMaxMillisUtc || millis < kMinMillisUtc;
+  }
+
+  // Converts the raw Parquet values in 'source' to UTC milliseconds, packs each
+  // with 'timeZoneBits' and writes the result to 'packed'. 'kHasNulls' skips
+  // converting null rows; instantiating it as false leaves the loop branch-free
+  // so the compiler can vectorize it.
+  //
+  // Returns a non-zero value if any converted timestamp falls outside the range
+  // TimestampWithTimeZone can represent. Reporting is deferred to the caller so
+  // that the loop stays free of anything that can throw.
+  template <int64_t kDivisor, bool kHasNulls>
+  static int64_t packMillisLoop(
+      const Timestamp* __restrict source,
+      int64_t* __restrict packed,
+      vector_size_t size,
+      const uint64_t* nulls,
+      int64_t timeZoneBits) {
+    int64_t outOfRange = 0;
+    for (vector_size_t i = 0; i < size; ++i) {
+      if constexpr (kHasNulls) {
+        if (!bits::isBitSet(nulls, i)) {
+          // Write a defined value rather than skipping the row. The reader may
+          // be handed a recycled buffer, and leaving the slot alone would
+          // surface the previous batch's value to anything that copies whole
+          // ranges without consulting the null flags.
+          packed[i] = 0;
+          continue;
+        }
+      }
+
+      const auto millis = toMillis<kDivisor>(source, i);
+      outOfRange |= millisOutOfRange(millis);
+      // Shift as unsigned. An out-of-range value overflows here, and signed
+      // overflow would be undefined behavior before 'outOfRange' is consulted.
+      packed[i] =
+          static_cast<int64_t>(static_cast<uint64_t>(millis) << kMillisShift) |
+          timeZoneBits;
+    }
+    return outOfRange;
+  }
+
+  // Selects the null-handling variant of packMillisLoop for 'source'.
+  template <int64_t kDivisor>
+  static int64_t packMillis(
+      const FlatVector<Timestamp>& source,
+      int64_t* packed,
+      vector_size_t size,
+      int64_t timeZoneBits) {
+    if (source.mayHaveNulls()) {
+      return packMillisLoop<kDivisor, true>(
+          source.rawValues(), packed, size, source.rawNulls(), timeZoneBits);
+    }
+    return packMillisLoop<kDivisor, false>(
+        source.rawValues(), packed, size, nullptr, timeZoneBits);
+  }
+
+  // Reports the first value that does not fit TimestampWithTimeZone. Only
+  // reached on the error path, so it can afford to rescan.
+  template <int64_t kDivisor>
+  void failOnOutOfRange(const FlatVector<Timestamp>& source) const {
+    for (vector_size_t i = 0; i < source.size(); ++i) {
+      if (source.isNullAt(i)) {
+        continue;
+      }
+      const auto millis = toMillis<kDivisor>(source.rawValues(), i);
+      VELOX_USER_CHECK(
+          !millisOutOfRange(millis),
+          "Timestamp is out of the range TIMESTAMP WITH TIME ZONE can represent: {} ms in column {}",
+          millis,
+          fileType_->fullName());
+    }
+    VELOX_UNREACHABLE();
+  }
+
+  // Reads the column as TIMESTAMP WITH TIME ZONE, whose physical
+  // representation is an int64 packing UTC milliseconds with a time zone key.
+  void getTimestampWithTimeZoneValues(const RowSet& rows, VectorPtr* result) {
+    // Materialize as TIMESTAMP first. prepareRead() lays values out in 16-byte
+    // slots, and getFlatValues() compacts values and nulls down to the
+    // selected rows.
+    VectorPtr timestamps;
+    getFlatValues<Timestamp, Timestamp>(rows, &timestamps, TIMESTAMP());
+    const auto size = timestamps->size();
+    if (allNull_) {
+      *result = BaseVector::createNullConstant(requestedType_, size, pool_);
+      return;
+    }
+
+    const auto& source = *timestamps->asUnchecked<FlatVector<Timestamp>>();
+    if (*result != nullptr &&
+        (*result)->encoding() == VectorEncoding::Simple::FLAT &&
+        (*result)->type()->equivalent(*requestedType_)) {
+      BaseVector::prepareForReuse(*result, size);
+    } else {
+      *result = BaseVector::create(requestedType_, size, pool_);
+    }
+    auto* target = (*result)->asUnchecked<FlatVector<int64_t>>();
+    target->setNulls(source.nulls());
+
+    // Parquet stores instants in UTC, so every value carries the UTC key.
+    const int64_t timeZoneBits = utcTimeZoneKey() & kTimezoneMask;
+
+    auto* packed = target->mutableRawValues();
+    if constexpr (std::is_same_v<T, int128_t>) {
+      if (packMillis<1>(source, packed, size, timeZoneBits) != 0) {
+        failOnOutOfRange<1>(source);
+      }
+    } else {
+      switch (filePrecision_) {
+        case TimestampPrecision::kMilliseconds:
+          if (packMillis<1>(source, packed, size, timeZoneBits) != 0) {
+            failOnOutOfRange<1>(source);
+          }
+          break;
+        case TimestampPrecision::kMicroseconds:
+          if (packMillis<1'000>(source, packed, size, timeZoneBits) != 0) {
+            failOnOutOfRange<1'000>(source);
+          }
+          break;
+        case TimestampPrecision::kNanoseconds:
+          if (packMillis<1'000'000>(source, packed, size, timeZoneBits) != 0) {
+            failOnOutOfRange<1'000'000>(source);
+          }
+          break;
+        default:
+          VELOX_UNREACHABLE();
+      }
+    }
+  }
+
   // The requested precision can be specified from HiveConfig to read timestamp
   // from Parquet.
   const TimestampPrecision requestedPrecision_;
