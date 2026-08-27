@@ -1693,9 +1693,13 @@ void testMergeWithBytes(Filter* left, Filter* right) {
   }
 }
 
-class MyFilter final : public Filter {
+class MyFilter final : public UserDefinedFilter {
  public:
-  MyFilter() : Filter(true, false, FilterKind::kUnknown) {}
+  MyFilter() : UserDefinedFilter(true, false) {}
+
+  std::string_view serializedName() const final {
+    return "MyFilter";
+  }
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> /*nullAllowed*/ = std::nullopt) const final {
@@ -1703,11 +1707,11 @@ class MyFilter final : public Filter {
   }
 
   bool testingEquals(const Filter& other) const final {
-    return other.kind() == FilterKind::kUnknown;
+    return other.kind() == FilterKind::kUserDefined;
   }
 
   folly::dynamic serialize() const final {
-    return folly::dynamic::object();
+    return serializeBase();
   }
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final {
@@ -1735,7 +1739,9 @@ TEST(FilterTest, mergeWithUntyped) {
   }
 }
 
-TEST(FilterTest, mergeWithUnknown) {
+TEST(FilterTest, mergeWithUserDefined) {
+  EXPECT_EQ(MyFilter().serialize()["name"], "MyFilter");
+
   std::vector<std::unique_ptr<Filter>> filters;
   filters.push_back(std::make_unique<BoolValue>(true, false));
   filters.push_back(between(1, 10));
