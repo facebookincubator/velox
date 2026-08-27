@@ -185,6 +185,9 @@ target_link_libraries(raw_size_utils nimble_common velox_vector velox_dwio_commo
 
 add_subdirectory(index)
 add_subdirectory(selective)
+# Must follow selective: nimble_velox_reader_factory links
+# nimble_velox_selective.
+add_subdirectory(reader)
 add_subdirectory(stats)
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(tests)
