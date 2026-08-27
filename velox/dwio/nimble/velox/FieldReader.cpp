@@ -798,6 +798,9 @@ class LegacyStringFieldReader final : public FieldReader {
         scatterBitmap);
     size_t totalLength = 0;
     const bool hasNulls = (nonNullCount != rowCount);
+    // A column that is entirely null over this batch would make both passes
+    // over |rowCount| below run only to move nothing.
+    const bool allNull = (nonNullCount == 0);
     if (!hasNulls) {
       vector->resetNulls();
       for (uint32_t i = 0; i < rowCount; ++i) {
@@ -805,9 +808,11 @@ class LegacyStringFieldReader final : public FieldReader {
       }
     } else {
       vector->setNullCount(rowCount - nonNullCount);
-      for (uint32_t i = 0; i < rowCount; ++i) {
-        if (!vector->isNullAt(i)) {
-          totalLength += buffer_[i].length();
+      if (!allNull) {
+        for (uint32_t i = 0; i < rowCount; ++i) {
+          if (!vector->isNullAt(i)) {
+            totalLength += buffer_[i].length();
+          }
         }
       }
     }
@@ -824,7 +829,7 @@ class LegacyStringFieldReader final : public FieldReader {
             velox::StringView(dataPtr + currentOffset, buffer_[i].length());
         currentOffset += buffer_[i].length();
       }
-    } else {
+    } else if (!allNull) {
       for (uint32_t i = 0; i < rowCount; ++i) {
         if (!vector->isNullAt(i)) {
           std::copy(
