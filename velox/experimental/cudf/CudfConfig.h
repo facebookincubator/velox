@@ -54,7 +54,7 @@ struct CudfConfig {
   static constexpr const char* kUcxxErrorHandling{"ucxx.error_handling"};
   static constexpr const char* kUcxIntraNodeExchange{
       "cudf.intra_node_exchange"};
-  static constexpr const char* kUcxxBlockingPolling{"ucxx.blocking_polling"};
+  static constexpr const char* kUcxxBlockingProgress{"ucxx.blocking_progress"};
   static constexpr const char* kUcxExchangeLogLevel{"cudf.exchange_log_level"};
   static constexpr const char* kUcxPartitionedOutputBatchRows{
       "cudf.partitioned_output_batch_rows"};
@@ -87,8 +87,17 @@ struct CudfConfig {
   /// Whether intra-node exchange optimization is enabled.
   bool intraNodeExchange{false};
 
-  /// Whether to use blocking polling in UCXX.
-  bool ucxxBlockingPolling{true};
+  /// Whether the UCX worker is set up for UCXX blocking progress mode: the
+  /// wakeup feature on the context plus an epoll file descriptor on the worker,
+  /// which is also what lets enqueueing work signal it. False creates a
+  /// tag/active-message-only worker that the progress loop polls.
+  ///
+  /// Requesting a feature the fabric cannot provide removes that transport from
+  /// UCX's selection instead of failing, so setting this on a fabric without
+  /// wakeup support silently costs RDMA. Tested with this and
+  /// kUcxxErrorHandling both true on InfiniBand / A100, and both false on AWS
+  /// SRD, which supports neither and otherwise stops using RDMA.
+  bool ucxxBlockingProgress{true};
 
   /// VLOG level for ucx-exchange source files.
   int32_t exchangeLogLevel{0};

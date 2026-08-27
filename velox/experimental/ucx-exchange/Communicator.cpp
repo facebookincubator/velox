@@ -110,7 +110,7 @@ void Communicator::run() {
   VLOG(3) << "Using error handling mode: "
           << CudfConfig::getInstance().ucxxErrorHandling << std::endl;
   VLOG(3) << "Using blocking progress mode: "
-          << CudfConfig::getInstance().ucxxBlockingPolling << std::endl;
+          << CudfConfig::getInstance().ucxxBlockingProgress << std::endl;
 
   running_.store(true);
   // Force CUDA context creation.
@@ -121,7 +121,7 @@ void Communicator::run() {
       cudaGetErrorString(cudaStatus));
 
   // create the UCXX context, worker, listener-context etc.
-  if (CudfConfig::getInstance().ucxxBlockingPolling) {
+  if (CudfConfig::getInstance().ucxxBlockingProgress) {
     context_ = ucxx::createContext({}, ucxx::Context::defaultFeatureFlags);
   } else {
     context_ = ucxx::createContext({}, UCP_FEATURE_TAG | UCP_FEATURE_AM);
@@ -129,7 +129,7 @@ void Communicator::run() {
 
   worker_ = context_->createWorker();
 
-  if (CudfConfig::getInstance().ucxxBlockingPolling) {
+  if (CudfConfig::getInstance().ucxxBlockingProgress) {
     // Communicator is using blocking progress mode.
     worker_->initBlockingProgressMode();
   }
@@ -145,7 +145,7 @@ void Communicator::run() {
   promise_.setValue();
 
   VLOG(3) << "Communicator running.";
-  const bool blockingMode = CudfConfig::getInstance().ucxxBlockingPolling;
+  const bool blockingMode = CudfConfig::getInstance().ucxxBlockingProgress;
   while (running_) {
     try {
       // Periodic heartbeat for diagnostic logging.
@@ -269,7 +269,7 @@ void Communicator::registerCommElement(std::shared_ptr<CommElement> comms) {
 }
 
 void Communicator::signalWorker() {
-  if (worker_ && CudfConfig::getInstance().ucxxBlockingPolling) {
+  if (worker_ && CudfConfig::getInstance().ucxxBlockingProgress) {
     worker_->signal();
   }
 }

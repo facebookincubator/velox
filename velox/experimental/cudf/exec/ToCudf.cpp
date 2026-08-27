@@ -422,8 +422,8 @@ void CudfConfig::initialize(
   if (config.find(kUcxIntraNodeExchange) != config.end()) {
     intraNodeExchange = folly::to<bool>(config[kUcxIntraNodeExchange]);
   }
-  if (config.find(kUcxxBlockingPolling) != config.end()) {
-    ucxxBlockingPolling = folly::to<bool>(config[kUcxxBlockingPolling]);
+  if (config.find(kUcxxBlockingProgress) != config.end()) {
+    ucxxBlockingProgress = folly::to<bool>(config[kUcxxBlockingProgress]);
   }
   if (config.find(kUcxExchangeLogLevel) != config.end()) {
     exchangeLogLevel = folly::to<int32_t>(config[kUcxExchangeLogLevel]);
