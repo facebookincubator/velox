@@ -1216,9 +1216,12 @@ Useful for performance analysis and identifying slow columns. Session: <code cla
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">use-column-names</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
-<td><p>Map table fields to file fields using names instead of indices for all
-file formats. The connector property is scoped by connector ID, for
-example <code class="docutils literal notranslate"><span class="pre">hive.use-column-names</span></code> or <code class="docutils literal notranslate"><span class="pre">iceberg.use-column-names</span></code>.
+<td><p>Map table fields to file fields using names instead of indices. This is
+a connector/session-level default column matching policy and applies
+uniformly to all file formats read by the connector, for example ORC,
+DWRF, and Parquet. Split-specific column mapping mode, when present,
+takes precedence over this setting. The connector property is scoped by
+connector ID, for example <code class="docutils literal notranslate"><span class="pre">hive.use-column-names</span></code> or <code class="docutils literal notranslate"><span class="pre">iceberg.use-column-names</span></code>.
 Session: <code class="docutils literal notranslate"><span class="pre">use_column_names</span></code>.</p></td>
 </tr>
 </tbody>
