@@ -69,8 +69,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
 
  protected:
   // Sets up delete file readers and column projection after base state reset.
-  void prepareSplitInternal(
-      dwio::common::RuntimeStatistics& runtimeStats) override;
+  void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats) override;
 
   // Override to only setup cuDF reader if we have columns to read.
   void setupReader() override;
@@ -92,7 +91,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // and deletion vectors.
   // @param runtimeStats DataSource's runtime statistics, passed to delete
   // file readers for accumulation.
-  void setupDeleteFileReaders(dwio::common::RuntimeStatistics& runtimeStats);
+  void setupDeleteFileReaders(dwio::common::RuntimeStats& runtimeStats);
 
   // Applies deletion vector (V3).
   void applyDeletionVector(cudf::column_view rowIndex);

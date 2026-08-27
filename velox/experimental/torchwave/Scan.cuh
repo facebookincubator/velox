@@ -380,7 +380,10 @@ __device__ void cumsum(
     TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
         val, nullptr, static_cast<TOut*>(temp));
     if (idx < size) {
-      out[idx] = sum;
+      // The output's stride matters for the same reason the input's does:
+      // fused as a cat or stack operand producer, this writes a strided slice
+      // of the concatenation, not a contiguous buffer.
+      out[complexIdx(output->contiguous, output, idx)] = sum;
     }
     if (threadIdx.x == blockDim.x - 1) {
       counter = sum;
@@ -462,7 +465,9 @@ __device__ void cumsum_final(
     TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
         val, nullptr, static_cast<TOut*>(temp));
     if (idx < size) {
-      out[idx] = sum;
+      // And the output's, for the strided slice a fused cat or stack hands
+      // this stage to fill. See the single-block cumsum.
+      out[complexIdx(output->contiguous, output, idx)] = sum;
     }
     blockIdx += block.numBlocksInOp;
   }
@@ -488,11 +493,12 @@ __device__ void exclusive_sum(
   TIn* in = storage<TIn>(input);
   TOut* out = storage<TOut>(output);
   if (threadIdx.x == 0) {
-    out[0] = TOut(0);
+    out[complexIdx(output->contiguous, output, 0)] = TOut(0);
   }
   for (uint32_t idx = threadIdx.x; idx < rounded; idx += blockDim.x) {
     // Honor the input's stride (non-contiguous select-column views), matching
-    // the single-block cumsum.
+    // the single-block cumsum. The output's stride matters too, for the
+    // strided slice a fused cat or stack hands this to fill.
     TOut val = (idx < size)
         ? static_cast<TOut>(in[complexIdx(input->contiguous, input, idx)])
         : TOut(0);
@@ -502,7 +508,7 @@ __device__ void exclusive_sum(
     TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
         val, nullptr, static_cast<TOut*>(temp));
     if (idx < size) {
-      out[idx + 1] = sum;
+      out[complexIdx(output->contiguous, output, idx + 1)] = sum;
     }
     if (threadIdx.x == blockDim.x - 1) {
       counter = sum;
@@ -537,7 +543,7 @@ __device__ void lengths_to_offsets(
     // Unlike exclusive_sum (output size + 1), this output has exactly 'size'
     // elements, so an empty input yields an empty output; guard the out[0]
     // write to avoid an out-of-bounds store on a zero-length output.
-    out[0] = TOut(0);
+    out[complexIdx(output->contiguous, output, 0)] = TOut(0);
   }
   for (uint32_t idx = threadIdx.x; idx < rounded; idx += blockDim.x) {
     // Honor the input's stride (non-contiguous select-column views), matching
@@ -551,8 +557,11 @@ __device__ void lengths_to_offsets(
     TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
         val, nullptr, static_cast<TOut*>(temp));
     // Drop the final total: write out[i+1] only while i+1 stays in range.
+    // The output's stride matters for the same reason the input's does: fused
+    // as a cat or stack operand producer, this writes a strided slice of the
+    // concatenation, not a contiguous buffer.
     if (idx + 1 < size) {
-      out[idx + 1] = sum;
+      out[complexIdx(output->contiguous, output, idx + 1)] = sum;
     }
     if (threadIdx.x == blockDim.x - 1) {
       counter = sum;
@@ -569,6 +578,11 @@ __device__ void lengths_to_offsets(
 // Embarrassingly parallel grid-stride loop, one thread per segment; the grid
 // may be sized larger than N (kMax over inputs includes values), so the loop is
 // bounded by N.
+// Honors both tensors' strides: fusing this op as the operand producer of a cat
+// or stack makes 'output' a strided slice of the concatenation (a stack along
+// dim 1 gives it stride 2), and a select-column offsets input is strided the
+// same way. Writing out[idx] would fill that slice contiguously, overwriting
+// the neighbouring operand's elements and leaving its own tail unset.
 template <int32_t kBlockSize, typename T>
 __device__ void offsets_to_lengths(
     Tensor* offsets,
@@ -582,22 +596,28 @@ __device__ void offsets_to_lengths(
   for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x;
        idx < static_cast<uint32_t>(n);
        idx += block.numBlocksInOp * blockDim.x) {
-    int64_t start = static_cast<int64_t>(off[idx]);
+    int64_t start = static_cast<int64_t>(
+        off[complexIdx(offsets->contiguous, offsets, idx)]);
     int64_t end = (static_cast<int64_t>(idx) + 1 < n)
-        ? static_cast<int64_t>(off[idx + 1])
+        ? static_cast<int64_t>(
+              off[complexIdx(offsets->contiguous, offsets, idx + 1)])
         : total;
-    out[idx] = static_cast<T>(end - start);
+    out[complexIdx(output->contiguous, output, idx)] =
+        static_cast<T>(end - start);
   }
 }
 
-// fb.offsets_to_ranges: builds a fresh [N, 1, 2] int32 ranges tensor from a 1-D
+// fb.offsets_to_ranges: builds a [N, 1, 2] int32 ranges tensor from a 1-D
 // offsets tensor of N segments. Row i is (start, length) = (offsets[i],
 // offsets[i+1] - offsets[i]); the last length extends to values->numEl,
 // matching the eager kernel (offsets_to_ranges_kernel in
-// offsets_to_ranges_cuda.cu). The output is contiguous, so segment i writes
-// out[2*i] (start) and out[2*i+1] (length). Output is always int32 regardless
-// of the offsets dtype; TOff is the offsets element type. One thread per
-// segment, grid-stride, bounded by N.
+// offsets_to_ranges_cuda.cu). Segment i occupies output elements 2*i (start)
+// and 2*i+1 (length) in row-major order, mapped through the output's layout:
+// fused as the operand producer of a cat or stack, the output is a strided
+// slice of the concatenation (joining [N,1,2] tensors on dim 1 gives it row
+// stride 4), and writing out[2*i] directly would fill that slice densely.
+// Output is always int32 regardless of the offsets dtype; TOff is the offsets
+// element type. One thread per segment, grid-stride, bounded by N.
 template <int32_t kBlockSize, typename TOff>
 __device__ void offsets_to_ranges(
     Tensor* offsets,
@@ -611,12 +631,16 @@ __device__ void offsets_to_ranges(
   for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x;
        idx < static_cast<uint32_t>(n);
        idx += block.numBlocksInOp * blockDim.x) {
-    int64_t start = static_cast<int64_t>(off[idx]);
+    int64_t start = static_cast<int64_t>(
+        off[complexIdx(offsets->contiguous, offsets, idx)]);
     int64_t end = (static_cast<int64_t>(idx) + 1 < n)
-        ? static_cast<int64_t>(off[idx + 1])
+        ? static_cast<int64_t>(
+              off[complexIdx(offsets->contiguous, offsets, idx + 1)])
         : total;
-    out[2 * idx] = static_cast<int32_t>(start);
-    out[2 * idx + 1] = static_cast<int32_t>(end - start);
+    out[complexIdx(output->contiguous, output, 2 * idx)] =
+        static_cast<int32_t>(start);
+    out[complexIdx(output->contiguous, output, 2 * idx + 1)] =
+        static_cast<int32_t>(end - start);
   }
 }
 
@@ -660,19 +684,21 @@ __device__ void exclusive_sum_final(
        idx += block.numBlocksInOp * blockDim.x) {
     // Honor the input's stride (non-contiguous select-column views), matching
     // cumsum_final. exclusive_sum_head reads through complexIdx, so a flat read
-    // here would sum the wrong storage for a strided input.
+    // here would sum the wrong storage for a strided input. The output's
+    // stride matters too, for the strided slice a fused cat or stack hands
+    // this stage to fill.
     TOut val = (idx < size)
         ? static_cast<TOut>(in[complexIdx(input->contiguous, input, idx)])
         : TOut(0);
     TOut base = (blockIdx == 0 || cnt == nullptr) ? TOut(0) : cnt[blockIdx - 1];
     if (threadIdx.x == 0) {
       val += base;
-      out[idx] = base;
+      out[complexIdx(output->contiguous, output, idx)] = base;
     }
     TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
         val, nullptr, static_cast<TOut*>(temp));
     if (idx < size) {
-      out[idx + 1] = sum;
+      out[complexIdx(output->contiguous, output, idx + 1)] = sum;
     }
     blockIdx += block.numBlocksInOp;
   }
@@ -719,55 +745,182 @@ __device__ void repeat_interleave_head(
   }
 }
 
-// repeat_interleave final stage: for each element i in self, writes self[i]
-// into output[prefix[i-1]..prefix[i]). prefix is the inclusive prefix sum of
-// the repeats tensor. T is the element type of input and output.
-template <int32_t kBlockSize, typename T>
+// repeat_interleave head for a broadcast (0-dim / single-element) repeat count:
+// every source segment is repeated the same 'r' times, so the inclusive prefix
+// sums are simply (i+1)*r. 'prefix' is pre-sized by the host reserve to the
+// segment count (size(input, dim), or numEl(input) when flattening), so the
+// count is read from its length. 'input' is passed only so the host reserve can
+// size 'prefix'; it is unused on device. TRepeats is the repeats element type.
+template <int32_t kBlockSize, typename TRepeats>
+__device__ void repeat_interleave_bcast_head(
+    Tensor* repeats,
+    Tensor* /*input*/,
+    Tensor* prefix,
+    int32_t* total,
+    BlockInfo& block) {
+  const int32_t segments = static_cast<int32_t>(numEl(*prefix));
+  const int64_t repeatCount =
+      static_cast<int64_t>(storage<TRepeats>(repeats)[0]);
+  int32_t* pfx = storage<int32_t>(prefix);
+  // The prefix sums are int32 throughout the scan pipeline, but segments *
+  // repeatCount is computed in 64 bits: in the flatten case segments is
+  // numEl(input), so a moderate repeat count overflows an int32 product.
+  // assert() would be compiled out under NDEBUG and let a release build
+  // truncate silently. Saturating keeps the prefix bounded so nothing indexes
+  // wild memory before the error surfaces, and debugInfo records it -- but that
+  // record is diagnostic only (errorString() is gated on keepStatsOnThread and
+  // never throws), so the condition is what actually rejects the launch:
+  // repeatInterleaveFinalReserve refuses a 'total' at INT32_MAX on the host.
+  const int64_t totalSum = static_cast<int64_t>(segments) * repeatCount;
+  if (totalSum > INT32_MAX && block.blockInOp == 0 && threadIdx.x == 0 &&
+      block.debugInfo) {
+    block.debugInfo->line = __LINE__;
+    block.debugInfo->extra[0] = segments;
+    block.debugInfo->extra[1] = repeatCount;
+    SET_MSG(block.debugInfo, "RI ovflw");
+  }
+  for (uint32_t i = block.blockInOp * blockDim.x + threadIdx.x;
+       i < static_cast<uint32_t>(segments);
+       i += block.numBlocksInOp * blockDim.x) {
+    const int64_t sum = static_cast<int64_t>(i + 1) * repeatCount;
+    pfx[i] = static_cast<int32_t>(sum > INT32_MAX ? INT32_MAX : sum);
+  }
+  if (block.blockInOp == 0 && threadIdx.x == 0 && total) {
+    *total = static_cast<int32_t>(totalSum > INT32_MAX ? INT32_MAX : totalSum);
+  }
+}
+
+// upper_bound over the inclusive prefix sums: the smallest segment index i with
+// prefix[i] > pos. Maps an output position 'pos' along the interleave axis back
+// to the source segment it was expanded from.
+__device__ inline int32_t
+repeatInterleaveSegment(const int32_t* prefix, int32_t nSeg, int32_t pos) {
+  int32_t lo = 0;
+  int32_t hi = nSeg;
+  while (lo < hi) {
+    int32_t mid = lo + ((hi - lo) >> 1);
+    if (prefix[mid] <= pos) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+// repeat_interleave final stage (gather): for each OUTPUT element, decompose
+// its linear index into per-dim coordinates using the output's magic dividers,
+// map the coordinate along the interleave axis back to its source segment via
+// an upper_bound on the inclusive prefix sums, keep every other coordinate, and
+// read the source element at the strided offset. Supports arbitrary rank
+// (<= kMaxDims) and non-contiguous inputs. kDim is the interleave axis,
+// resolved to a non-negative value by the host; kDim < 0 is the dim=None
+// flatten case, where the whole tensor is one 1-D run. The axis cannot be
+// re-derived on device by comparing input and output shapes: when the repeats
+// sum back to size(input, dim) (any zero repeat balanced by a larger one) no
+// dimension changes length and the search finds nothing. prefix is the
+// inclusive prefix sum of the (per-segment) repeats. T is the element type of
+// input and output.
+template <int32_t kBlockSize, typename T, int32_t kDim>
 __device__ void repeat_interleave_final(
     Tensor* input,
     Tensor* prefix,
     int32_t* /*total*/,
     Tensor* output,
     uint32_t& size,
-    uint32_t& rounded,
     BlockInfo& block) {
+  constexpr bool flatten = kDim < 0;
+  constexpr int32_t dim = flatten ? 0 : kDim;
   if (threadIdx.x == 0) {
-    size = numEl(*input);
-    rounded = roundUpPwr2(size, kBlockSize);
+    size = numEl(*output);
   }
   __syncthreads();
+  if (numEl(*output) == 0) {
+    return;
+  }
   T* in = storage<T>(input);
-  int32_t* pfx = storage<int32_t>(prefix);
+  const int32_t* pfx = storage<int32_t>(prefix);
   T* out = storage<T>(output);
-  auto outputSize = numEl(*output);
-  for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
-       idx += block.numBlocksInOp * blockDim.x) {
-    if (idx < size) {
-      int32_t start = idx == 0 ? 0 : pfx[idx - 1];
-      int32_t end = pfx[idx];
-      T val = in[idx];
-      for (int32_t j = start; j < end; ++j) {
-        assert(static_cast<uint32_t>(j) < outputSize);
-        out[j] = val;
+  const int32_t nSeg =
+      flatten ? static_cast<int32_t>(numEl(*input)) : input->dims[dim];
+  // Per-thread magic dividers to decompose a row-major linear index into
+  // per-dim coordinates (innermost dim first). Kept thread-local (rather than
+  // the tensor's shared sizes[]) so this standalone kernel needs no cross-block
+  // index-calculator init. Non-flatten decomposes the output index; flatten
+  // decomposes the flattened source index (to honor a strided source).
+  const Tensor* decomp = flatten ? input : output;
+  IntDivider div[kMaxDims];
+  for (int i = 0; i < decomp->rank; ++i) {
+    div[i].init(static_cast<unsigned int>(decomp->dims[decomp->rank - 1 - i]));
+  }
+  // The output is not necessarily a buffer of its own: fused as the operand
+  // producer of a cat or stack, it is the slice of the concatenation this
+  // operand occupies, which is pitched for every join axis but the outermost
+  // (a stack on dim 1 gives a rank-1 slice stride 2). Writing out[lin] would
+  // fill that slice densely, overwriting the neighbouring operand and leaving
+  // its own tail unset. isContiguous() reads only rank/dims/strides, so unlike
+  // the tensor's cached 'contiguous' it needs no index-calculator init, which
+  // this standalone kernel deliberately does without.
+  const bool outContiguous = output->isContiguous();
+  for (uint32_t lin = block.blockInOp * blockDim.x + threadIdx.x; lin < size;
+       lin += block.numBlocksInOp * blockDim.x) {
+    if (flatten) {
+      int32_t seg =
+          repeatInterleaveSegment(pfx, nSeg, static_cast<int32_t>(lin));
+      uint32_t rem = static_cast<uint32_t>(seg);
+      int64_t offset = 0;
+      for (int i = 0; i < input->rank; ++i) {
+        unsigned int quotient, remainder;
+        div[i].divmod(rem, quotient, remainder);
+        rem = quotient;
+        offset += static_cast<int64_t>(remainder) *
+            input->strides[input->rank - 1 - i];
       }
+      // Flattening always produces a rank-1 output, so its slice is a single
+      // strided run and the position maps through one stride.
+      out[outContiguous ? static_cast<int64_t>(lin)
+                        : static_cast<int64_t>(lin) * output->strides[0]] =
+          in[offset];
+    } else {
+      int32_t coord[kMaxDims];
+      uint32_t rem = lin;
+      for (int i = 0; i < output->rank; ++i) {
+        unsigned int quotient, remainder;
+        div[i].divmod(rem, quotient, remainder);
+        coord[output->rank - 1 - i] = static_cast<int32_t>(remainder);
+        rem = quotient;
+      }
+      int32_t seg = repeatInterleaveSegment(pfx, nSeg, coord[dim]);
+      int64_t offset = 0;
+      for (int d = 0; d < input->rank; ++d) {
+        int32_t axisCoord = (d == dim) ? seg : coord[d];
+        offset += static_cast<int64_t>(axisCoord) * input->strides[d];
+      }
+      int64_t outOffset = lin;
+      if (!outContiguous) {
+        outOffset = 0;
+        for (int d = 0; d < output->rank; ++d) {
+          outOffset += static_cast<int64_t>(coord[d]) * output->strides[d];
+        }
+      }
+      out[outOffset] = in[offset];
     }
   }
 }
 
 // Multi-block variant of repeat_interleave_final with an op barrier at the
 // end for cooperative/multi-kernel grids.
-template <int32_t kBlockSize, typename T>
+template <int32_t kBlockSize, typename T, int32_t kDim>
 __device__ void repeat_interleave_final_cg(
     Tensor* input,
     Tensor* prefix,
     int32_t* total,
     Tensor* output,
     uint32_t& size,
-    uint32_t& rounded,
     int32_t bar0,
     BlockInfo& block) {
-  repeat_interleave_final<kBlockSize, T>(
-      input, prefix, total, output, size, rounded, block);
+  repeat_interleave_final<kBlockSize, T, kDim>(
+      input, prefix, total, output, size, block);
   opBarrier(block, bar0);
 }
 
@@ -828,6 +981,17 @@ __device__ void tw_reduce_head(
   __syncthreads();
   TIn* in = storage<TIn>(input);
   TOut* out = storage<TOut>(output);
+  if (size == 0) {
+    // Empty input: the loop below runs zero iterations, so this block's partial
+    // slot would keep whatever the buffer already held and the final stage
+    // would reduce over that. The host reserves the slot expecting this write
+    // (numBlocksShape in Builtins.cpp), so write the identity -- the same guard
+    // masked_select_head needs, for the same reason.
+    if (threadIdx.x == 0) {
+      out[block.blockInOp] = Op::identity();
+    }
+    return;
+  }
   uint32_t blockIdx = block.blockInOp;
   for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
        idx += block.numBlocksInOp * blockDim.x) {

@@ -21,6 +21,7 @@
 #include <optional>
 
 #include <velox/type/DecimalUtil.h>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Filter.h"
 
@@ -256,6 +257,77 @@ TEST(FilterTest, hugeintRangeBoundaryOverflow) {
   EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
   EXPECT_FALSE(filter->testInt128(std::numeric_limits<int128_t>::min()));
   EXPECT_FALSE(filter->testInt128(0));
+}
+
+TEST(FilterTest, createHugeintValuesEmpty) {
+  auto filter = createHugeintValues({}, false);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
+  EXPECT_FALSE(filter->testNull());
+  EXPECT_FALSE(filter->testInt128(0));
+
+  filter = createHugeintValues({}, true);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kIsNull);
+  EXPECT_TRUE(filter->testNull());
+  EXPECT_FALSE(filter->testInt128(0));
+}
+
+TEST(FilterTest, mergeWithHugeintValuesUsingHashTable) {
+  auto valueAt = [](uint64_t highBits) {
+    return HugeInt::build(highBits, /*lowBits=*/42);
+  };
+
+  const auto value1 = valueAt(1);
+  const auto value2 = valueAt(2);
+  const auto value3 = valueAt(3);
+  const auto value4 = valueAt(4);
+
+  auto test =
+      [](const Filter& left, const Filter& right, const Filter& expected) {
+        auto merged = left.mergeWith(&right);
+        ASSERT_TRUE(merged->testingEquals(expected));
+        auto reverseMerged = right.mergeWith(&left);
+        ASSERT_TRUE(reverseMerged->testingEquals(expected));
+      };
+
+  {
+    SCOPED_TRACE("HugeintValuesUsingHashTable");
+    auto left = createHugeintValues({value1, value2, value3}, true);
+    auto right = createHugeintValues({value2, value4}, false);
+    auto expected = createHugeintValues({value2}, false);
+    test(*left, *right, *expected);
+  }
+
+  {
+    SCOPED_TRACE("HugeintRange");
+    auto values = createHugeintValues({value1, value2, value3}, true);
+    auto range = betweenHugeint(value2, value4, true);
+    auto expected = createHugeintValues({value2, value3}, true);
+    test(*values, *range, *expected);
+  }
+
+  {
+    SCOPED_TRACE("HugeintRange intersection");
+    auto left = betweenHugeint(value1, value3, true);
+    auto right = betweenHugeint(value2, value4, false);
+    auto expected = betweenHugeint(value2, value3, false);
+    test(*left, *right, *expected);
+  }
+
+  {
+    SCOPED_TRACE("Disjoint ranges with nulls");
+    auto left = betweenHugeint(value1, value1, true);
+    auto right = betweenHugeint(value2, value4, true);
+    IsNull expected;
+    test(*left, *right, expected);
+  }
+
+  {
+    SCOPED_TRACE("Disjoint values with nulls");
+    auto left = createHugeintValues({value1}, true);
+    auto right = createHugeintValues({value2}, true);
+    IsNull expected;
+    test(*left, *right, expected);
+  }
 }
 
 TEST(FilterTest, negatedBigintRange) {
@@ -2230,6 +2302,47 @@ TEST(FilterTest, dateRange) {
       between(DATE()->toDays("1970-01-01"), DATE()->toDays("1980-01-01"));
   EXPECT_TRUE(applyFilter(*filter, DATE()->toDays("1970-06-01")));
   EXPECT_FALSE(applyFilter(*filter, DATE()->toDays("1980-06-01")));
+}
+
+TEST(FilterTest, applyFilterToVariant) {
+  const BigintRange bigintFilter(10, 20, /*nullAllowed=*/false);
+  EXPECT_TRUE(applyFilter(bigintFilter, Variant(int64_t{15})));
+  EXPECT_FALSE(applyFilter(bigintFilter, Variant(int64_t{25})));
+
+  // Every integer width reaches testInt64.
+  EXPECT_TRUE(applyFilter(bigintFilter, Variant(int32_t{15})));
+  EXPECT_TRUE(applyFilter(bigintFilter, Variant(int16_t{15})));
+
+  const auto huge = HugeInt::parse("1234567890123456789012");
+  const HugeintRange hugeintFilter(huge, huge, /*nullAllowed=*/false);
+  EXPECT_TRUE(applyFilter(hugeintFilter, Variant(huge)));
+
+  const BoolValue boolFilter(true, /*nullAllowed=*/false);
+  EXPECT_TRUE(applyFilter(boolFilter, Variant(true)));
+  EXPECT_FALSE(applyFilter(boolFilter, Variant(false)));
+
+  const FloatRange floatFilter(
+      1.0f,
+      /*lowerUnbounded=*/false,
+      /*lowerExclusive=*/false,
+      2.0f,
+      /*upperUnbounded=*/false,
+      /*upperExclusive=*/false,
+      /*nullAllowed=*/false);
+  EXPECT_TRUE(applyFilter(floatFilter, Variant(1.25f)));
+  EXPECT_FALSE(applyFilter(floatFilter, Variant(2.5f)));
+
+  const Timestamp ts(10, 123000000);
+  const TimestampRange timestampFilter(ts, ts, /*nullAllowed=*/false);
+  EXPECT_TRUE(applyFilter(timestampFilter, Variant(ts)));
+
+  const auto bytesFilter = equal("abc");
+  EXPECT_TRUE(applyFilter(*bytesFilter, Variant(std::string("abc"))));
+  EXPECT_FALSE(applyFilter(*bytesFilter, Variant(std::string("abd"))));
+
+  VELOX_ASSERT_USER_THROW(
+      applyFilter(bigintFilter, Variant::null(TypeKind::BIGINT)),
+      "Filter cannot be applied to a null value");
 }
 
 TEST(FilterTest, timestampRange) {

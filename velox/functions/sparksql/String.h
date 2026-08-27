@@ -18,6 +18,7 @@
 #include "folly/ssl/OpenSSLHash.h"
 
 #include <string>
+#include "velox/expression/StringWriter.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/string/StringCore.h"
@@ -1183,7 +1184,7 @@ struct ConvFunction {
       toChars(result, unsignedValue, toBase, resultSize);
     }
 
-    // Converts to uppper case, consistent with Spark.
+    // Converts to upper case, consistent with Spark.
     if (std::abs(toBase) > 10) {
       toUpper(result.data(), result.size());
     }

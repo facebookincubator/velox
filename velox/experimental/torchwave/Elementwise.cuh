@@ -809,6 +809,21 @@ __device__ inline T __index_put_elt_three(
   return T();
 }
 
+// aten.copy with its result in memory instead of a register. The register form
+// is an expression the consumer inlines, which is wrong when the source aliases
+// the buffer the consumer writes back into: the read of one lane and the write
+// of another then race inside a single loop. Writing 'out' here makes the copy
+// its own expression over its own buffer, so the whole read completes before
+// any consumer runs. The loop is sized by the copy's output, so 'idx' indexes
+// both it and 'out' directly. T is the destination dtype, so this is also where
+// the copy's cast happens.
+template <typename T, typename TValue>
+__device__ inline T __copy_out(uint32_t idx, TValue value, Tensor* out) {
+  T converted = static_cast<T>(value);
+  storage<T>(out)[idx] = converted;
+  return converted;
+}
+
 // Fused in-place slice_scatter along 'dim'. The elementwise loop is sized by
 // 'src' (the values written, passed per element as 'value'), so 'idx' is the
 // row-major offset of one src element and the device function scatters it into
@@ -1088,6 +1103,39 @@ __index_elt_one_default(Tensor* source, int32_t idx0, U deflt) {
   return static_cast<T>(deflt);
 }
 
+// aten.pad in constant mode when the pad list covers only the last dimension.
+// That case is an index-with-default along that dimension: output column 'col'
+// takes self's column 'col - left', and 'deflt' where that falls outside self.
+// The output's last extent is self.size(-1) + left + right, recomputed here
+// rather than read from an output tensor so the op does not depend on being
+// the root of its elementwise subgraph. The leading coordinates are decomposed
+// against self's OWN dims and strides, so a non-contiguous self is read at its
+// real layout.
+template <typename T, typename U>
+__device__ inline T __pad_last_dim(
+    uint32_t idx,
+    Tensor* self,
+    int64_t left,
+    int64_t right,
+    U deflt) {
+  const int32_t rank = self->rank;
+  const int32_t width = self->dims[rank - 1];
+  const int32_t outWidth =
+      width + static_cast<int32_t>(left) + static_cast<int32_t>(right);
+  const int32_t linear = static_cast<int32_t>(idx);
+  const int32_t col = linear % outWidth - static_cast<int32_t>(left);
+  if (col < 0 || col >= width) {
+    return static_cast<T>(deflt);
+  }
+  int32_t row = linear / outWidth;
+  int32_t offset = col * self->strides[rank - 1];
+  for (int32_t d = rank - 2; d >= 0; --d) {
+    offset += (row % self->dims[d]) * self->strides[d];
+    row /= self->dims[d];
+  }
+  return storage<T>(self)[offset];
+}
+
 template <typename T>
 __device__ inline T
 __index_elt_two(Tensor* source, int32_t idx0, int32_t idx1, BlockInfo& block) {
@@ -1229,6 +1277,24 @@ __device__ inline T __index_select(
       offset += static_cast<int64_t>(c) * source->strides[d];
     }
   }
+  // 'pos' comes from decomposing the enclosing expression's output index, so a
+  // shape the broadcast right-alignment above does not describe (a reshaping
+  // view between the gather and the expression output, say) puts it past the
+  // end of 'index'. Reading there is an out-of-bounds access whose value then
+  // fails the bounds check below as a bogus 'selected', so check it first.
+  if (pos < 0 || static_cast<uint32_t>(pos) >= index->numEl) {
+    if (block.debugInfo) {
+      block.debugInfo->line = __LINE__;
+      block.debugInfo->extra[0] = dim;
+      block.debugInfo->extra[1] = -1;
+      block.debugInfo->extra[2] = source->dims[dim];
+      block.debugInfo->extra[3] = pos;
+      block.debugInfo->extra[4] = index->numEl;
+      block.debugInfo->extra[5] = out->numEl;
+      SET_MSG(block.debugInfo, "Bad pos\0");
+    }
+    return T();
+  }
   int64_t selected = index->elementType == kScalarTypeLong
       ? storage<int64_t>(index)[pos * index->strides[0]]
       : static_cast<int64_t>(storage<int32_t>(index)[pos * index->strides[0]]);
@@ -1240,6 +1306,10 @@ __device__ inline T __index_select(
       block.debugInfo->line = __LINE__;
       block.debugInfo->extra[0] = dim;
       block.debugInfo->extra[1] = selected;
+      block.debugInfo->extra[2] = source->dims[dim];
+      block.debugInfo->extra[3] = pos;
+      block.debugInfo->extra[4] = index->numEl;
+      block.debugInfo->extra[5] = out->numEl;
       SET_MSG(block.debugInfo, "Bad idx\0");
     }
     return T();

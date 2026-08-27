@@ -769,6 +769,202 @@ TEST_F(NestedLoopJoinTest, smallBuildSideJoins) {
   assertLeftSemiProject(singleRowBuild, "u_single_row");
 }
 
+TEST_F(NestedLoopJoinTest, antiAndLeftSemiFilter) {
+  // kAnti (NOT EXISTS) and kLeftSemiFilter (EXISTS) both output the probe
+  // columns only (no build columns, no match column). Cross-check the full
+  // correctness matrix against DuckDB across the {=, <, <=, <>} comparison set:
+  // matching / non-matching probe rows, NULLs in the join keys, empty build,
+  // empty probe and no join condition. Mirrors the createPlan /
+  // assertLeftSemiProject helpers in smallBuildSideJoins but parameterizes
+  // probe, build and condition so one pair of helpers drives the whole matrix.
+  const auto createProbeOnlyPlan = [&](const RowVectorPtr& probeVector,
+                                       const RowVectorPtr& buildVector,
+                                       const std::string& joinCondition,
+                                       core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values({probeVector})
+        .nestedLoopJoin(
+            PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
+            joinCondition,
+            {"t0", "t1"},
+            joinType)
+        .planNode();
+  };
+
+  // Left-semi-filter emits each probe row matching >= 1 build row. Oracle: the
+  // probe rows for which a satisfying build row EXISTS.
+  const auto assertLeftSemiFilter = [&](const RowVectorPtr& probeVector,
+                                        const RowVectorPtr& buildVector,
+                                        const std::string& comparison) {
+    createDuckDbTable("t", {probeVector});
+    createDuckDbTable("u", {buildVector});
+    AssertQueryBuilder(
+        createProbeOnlyPlan(
+            probeVector,
+            buildVector,
+            fmt::format("t0 {} u0", comparison),
+            core::JoinType::kLeftSemiFilter),
+        duckDbQueryRunner_)
+        .assertResults(
+            fmt::format(
+                "SELECT t0, t1 FROM t WHERE EXISTS "
+                "(SELECT 1 FROM u WHERE t0 {} u0)",
+                comparison));
+  };
+
+  // Anti emits each probe row matching no build row (a NULL condition is a
+  // non-match). Oracle: the probe rows for which no satisfying build row
+  // EXISTS.
+  const auto assertAnti = [&](const RowVectorPtr& probeVector,
+                              const RowVectorPtr& buildVector,
+                              const std::string& comparison) {
+    createDuckDbTable("t", {probeVector});
+    createDuckDbTable("u", {buildVector});
+    AssertQueryBuilder(
+        createProbeOnlyPlan(
+            probeVector,
+            buildVector,
+            fmt::format("t0 {} u0", comparison),
+            core::JoinType::kAnti),
+        duckDbQueryRunner_)
+        .assertResults(
+            fmt::format(
+                "SELECT t0, t1 FROM t WHERE NOT EXISTS "
+                "(SELECT 1 FROM u WHERE t0 {} u0)",
+                comparison));
+  };
+
+  // Probe rows with matches, non-matches and a NULL join key.
+  const auto probe = makeRowVector(
+      {"t0", "t1"},
+      {
+          makeNullableFlatVector<int64_t>({1, 8, 6, std::nullopt, 7, 4}),
+          makeFlatVector<StringView>({"a", "b", "c", "d", "e", "f"}),
+      });
+  // Build with matches for some probe rows and a NULL join key.
+  const auto build = makeRowVector(
+      {"u0", "u1"},
+      {
+          makeNullableFlatVector<int64_t>({4, 6, std::nullopt}),
+          makeFlatVector<StringView>({"z", "x", "y"}),
+      });
+  // Build whose keys are all NULL, so the condition is NULL for every build
+  // row.
+  const auto allNullBuild = makeRowVector(
+      {"u0", "u1"},
+      {
+          makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt}),
+          makeFlatVector<StringView>({"z", "x"}),
+      });
+  const auto emptyBuild = makeRowVector(
+      {"u0", "u1"},
+      {makeFlatVector<int64_t>({}), makeFlatVector<StringView>({})});
+  const auto emptyProbe = makeRowVector(
+      {"t0", "t1"},
+      {makeFlatVector<int64_t>({}), makeFlatVector<StringView>({})});
+
+  for (const auto& comparison : comparisons_) {
+    SCOPED_TRACE(fmt::format("comparison: {}", comparison));
+
+    // Probe rows that match / don't match, including a NULL probe key.
+    assertLeftSemiFilter(probe, build, comparison);
+    assertAnti(probe, build, comparison);
+
+    // Condition is NULL for every build row: left-semi-filter emits none, anti
+    // emits every probe row.
+    assertLeftSemiFilter(probe, allNullBuild, comparison);
+    assertAnti(probe, allNullBuild, comparison);
+
+    // Empty build: left-semi-filter emits none, anti emits all probe rows.
+    assertLeftSemiFilter(probe, emptyBuild, comparison);
+    assertAnti(probe, emptyBuild, comparison);
+
+    // Empty probe: both emit nothing.
+    assertLeftSemiFilter(emptyProbe, build, comparison);
+    assertAnti(emptyProbe, build, comparison);
+  }
+
+  // No join condition. With a non-empty build every probe row trivially
+  // matches, so left-semi-filter emits all probe rows and anti emits none; with
+  // an empty build the two are reversed.
+  const auto assertNoConditionLeftSemiFilter =
+      [&](const RowVectorPtr& buildVector) {
+        createDuckDbTable("t", {probe});
+        createDuckDbTable("u", {buildVector});
+        AssertQueryBuilder(
+            createProbeOnlyPlan(
+                probe, buildVector, "", core::JoinType::kLeftSemiFilter),
+            duckDbQueryRunner_)
+            .assertResults(
+                "SELECT t0, t1 FROM t WHERE EXISTS (SELECT 1 FROM u)");
+      };
+  const auto assertNoConditionAnti = [&](const RowVectorPtr& buildVector) {
+    createDuckDbTable("t", {probe});
+    createDuckDbTable("u", {buildVector});
+    AssertQueryBuilder(
+        createProbeOnlyPlan(probe, buildVector, "", core::JoinType::kAnti),
+        duckDbQueryRunner_)
+        .assertResults(
+            "SELECT t0, t1 FROM t WHERE NOT EXISTS (SELECT 1 FROM u)");
+  };
+
+  assertNoConditionLeftSemiFilter(build);
+  assertNoConditionAnti(build);
+  assertNoConditionLeftSemiFilter(emptyBuild);
+  assertNoConditionAnti(emptyBuild);
+}
+
+TEST_F(NestedLoopJoinTest, leftSemiFilterAndProjectEmitOnceOverflow) {
+  // C1 regression: with a single build row, probeRowCount_ equals the probe
+  // batch size, so a probe batch whose matching-row count exceeds the output
+  // batch size drives the emit-once short-circuit (kLeftSemiFilter /
+  // kLeftSemiProject) past the output-batch boundary. Guards against
+  // rawProbeOutputIndices_ overflowing its outputBatchSize_ capacity.
+  const vector_size_t numProbeRows = 2'048;
+  const auto probeVector = makeRowVector(
+      {"t0"},
+      {makeFlatVector<int64_t>(numProbeRows, [](auto row) { return row; })});
+  // Single build row for which every probe row matches (t0 < u0), so the whole
+  // probe batch is emitted in one short-circuited pass.
+  const auto buildVector =
+      makeRowVector({"u0"}, {makeFlatVector<int64_t>({numProbeRows})});
+
+  createDuckDbTable("t", {probeVector});
+  createDuckDbTable("u", {buildVector});
+
+  const auto assertEmitOnce = [&](const std::vector<std::string>& outputLayout,
+                                  core::JoinType joinType,
+                                  const std::string& duckDbSql) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values({probeVector})
+                    .nestedLoopJoin(
+                        PlanBuilder(planNodeIdGenerator)
+                            .values({buildVector})
+                            .planNode(),
+                        "t0 < u0",
+                        outputLayout,
+                        joinType)
+                    .planNode();
+    // Output batch far smaller than the probe batch forces the single
+    // short-circuited pass to span multiple output batches.
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .config(core::QueryConfig::kPreferredOutputBatchRows, "128")
+        .config(core::QueryConfig::kMaxOutputBatchRows, "128")
+        .assertResults(duckDbSql);
+  };
+
+  assertEmitOnce(
+      {"t0"},
+      core::JoinType::kLeftSemiFilter,
+      "SELECT t0 FROM t WHERE EXISTS (SELECT 1 FROM u WHERE t0 < u0)");
+  assertEmitOnce(
+      {"t0", "match"},
+      core::JoinType::kLeftSemiProject,
+      "SELECT t0, EXISTS(SELECT 1 FROM u WHERE t0 < u0) AS match FROM t");
+}
+
 TEST_F(NestedLoopJoinTest, mergeBuildVectors) {
   const std::vector<RowVectorPtr> buildVectors = {
       makeRowVector({makeFlatVector<int64_t>({1, 2})}),

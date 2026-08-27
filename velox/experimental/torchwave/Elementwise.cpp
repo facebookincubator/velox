@@ -39,9 +39,10 @@ void CompileCtx::collectSubgraphInputs(
     // When a placed prim.ListPack has isRegister in the consumer's
     // argument meta, expand to its individual tensor elements so they
     // appear in the ElementExpr parameter set.
+    const auto* listArgMeta = argMetaForInput(meta, node, i);
     if (producer && placed_.count(producer) &&
-        producer->target() == "prim.ListPack" && meta &&
-        i < meta->argumentMeta.size() && meta->argumentMeta[i].isRegister) {
+        producer->target() == "prim.ListPack" && listArgMeta &&
+        listArgMeta->isRegister) {
       for (auto& listInput : producer->inputs()) {
         auto* lv = listInput.value;
         auto* lp = lv->producer();
@@ -316,8 +317,7 @@ void CompileCtx::generateElementwise(
     const auto& inputs = node->inputs();
     for (size_t i = 0; i < inputs.size(); ++i) {
       auto* v = inputs[i].value;
-      const ArgumentMeta* am =
-          (i < meta->argumentMeta.size()) ? &meta->argumentMeta[i] : nullptr;
+      const ArgumentMeta* am = argMetaForInput(meta, node, i);
       if (am && am->wholeTensor) {
         wholeTensorValues.insert(v);
       }
@@ -682,11 +682,17 @@ void CompileCtx::generateElementwise(
         auto id = it - allInputs.begin();
         if (resultSpecs[s].value->type().kind() ==
             nativert::Type::Kind::Tensor) {
-          auto bitIdx = fastPathBitIndex_[id];
-          code_ << "        " << storageRef(id) << "[complexIdx(isFastPath"
-                << bitIdx / kBitsPerWord << " & (1 << " << bitIdx % kBitsPerWord
-                << "), " << param(resultSpecs[s].value, op)
-                << ", idx)] = " << resultVar << ";\n";
+          // The output's own contiguity, read from its descriptor, not a
+          // bit of isFastPath. That bitmask is indexed by position in
+          // leafInputs, and an output sits past the end of it in allInputs --
+          // so the bit taken here belonged to some unrelated input, or to no
+          // tensor at all. A contiguous input then made a strided output be
+          // written linearly, which fills the first numEl slots of a pitched
+          // band and leaves the rest of it untouched.
+          code_ << "        " << storageRef(id) << "[complexIdx("
+                << param(resultSpecs[s].value, op) << "->contiguous, "
+                << param(resultSpecs[s].value, op) << ", idx)] = " << resultVar
+                << ";\n";
         } else {
           code_ << "        " << storageRef(id) << "[0] = " << resultVar
                 << ";\n";
@@ -723,11 +729,12 @@ void CompileCtx::generateElementwise(
         auto id = it - allInputs.begin();
         if (resultSpecs[s].value->type().kind() ==
             nativert::Type::Kind::Tensor) {
-          auto bitIdx = fastPathBitIndex_[id];
-          code_ << "      " << storageRef(id) << "[complexIdx(isFastPath"
-                << bitIdx / kBitsPerWord << " & (1 << " << bitIdx % kBitsPerWord
-                << "), " << param(resultSpecs[s].value, op)
-                << ", idx)] = " << resultVar << ";\n";
+          // See the store above: the output is not a leaf input, so it has
+          // no bit in isFastPath. Its own descriptor carries its contiguity.
+          code_ << "      " << storageRef(id) << "[complexIdx("
+                << param(resultSpecs[s].value, op) << "->contiguous, "
+                << param(resultSpecs[s].value, op) << ", idx)] = " << resultVar
+                << ";\n";
         } else {
           code_ << "      " << storageRef(id) << "[0] = " << resultVar << ";\n";
         }

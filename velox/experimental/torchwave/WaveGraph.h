@@ -17,6 +17,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -26,6 +27,7 @@
 #include <vector>
 
 #include <folly/container/F14Map.h>
+#include <folly/synchronization/CallOnce.h>
 
 #include <torch/nativert/executor/OpKernel.h>
 #include <torch/nativert/graph/Graph.h>
@@ -254,6 +256,15 @@ class WaveGraph {
     return nodes_;
   }
 
+  /// Runs 'build' the first time any execution of this graph asks for the
+  /// allocation-group plans, and never again. The plans are derived from the
+  /// compiled grids, so they are the same for every execution, but the mode
+  /// they serve is a runtime choice -- and concurrent executions of one graph
+  /// would otherwise each build and install their own.
+  void ensureAllocGroupPlans(const std::function<void()>& build) {
+    folly::call_once(allocGroupPlanOnce_, build);
+  }
+
   ValueTypes& types() {
     return types_;
   }
@@ -393,6 +404,21 @@ class WaveGraph {
     return elidedCloneInputIds_.count(id) != 0;
   }
 
+  /// Records that a concat group places 'id': it is either a concat result or
+  /// an operand carved out of one. Called at compile time from
+  /// installGraphAllocGroupPlans.
+  void addConcatPlaced(nativert::ValueId id) {
+    concatPlacedIds_.insert(id);
+  }
+
+  /// True if a concat group places 'id'. Such a value is a band of the concat
+  /// result and its producer writes the concat in place, so it must not be
+  /// given a buffer from anywhere else: doing so leaves the band unwritten and
+  /// the concat does not copy it in, having counted the operand as placed.
+  bool isConcatPlaced(nativert::ValueId id) const {
+    return concatPlacedIds_.count(id) != 0;
+  }
+
   /// Returns the ModelContext, or nullptr if none was provided.
   ModelContext* modelContext() const {
     return modelContext_;
@@ -505,10 +531,15 @@ class WaveGraph {
   // in place by the rewired writer, so they diverge from the reference frame by
   // design. Populated at compile time, read by the reference-frame checks.
   std::unordered_set<nativert::ValueId> elidedCloneInputIds_;
+  std::unordered_set<nativert::ValueId> concatPlacedIds_;
 
   // Alive during construction only. Retains visited set so multikernel
   // variant nodes reuse the main-graph pass.
   std::unique_ptr<Optimizer> optimizer_;
+
+  // Guards the one-time build of the allocation-group plans held by the
+  // CompiledNodes.
+  folly::once_flag allocGroupPlanOnce_;
 
   // Pool of reusable ExecutionState objects.
   std::mutex statePoolMutex_;

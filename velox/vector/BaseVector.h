@@ -954,7 +954,7 @@ class BaseVector {
 
   FOLLY_ALWAYS_INLINE static std::optional<int32_t>
   compareNulls(bool thisNull, bool otherNull, CompareFlags flags) {
-    DCHECK(thisNull || otherNull);
+    VELOX_DCHECK(thisNull || otherNull);
     switch (flags.nullHandlingMode) {
       case CompareFlags::NullHandlingMode::kNullAsIndeterminate:
         if (flags.equalsOnly) {

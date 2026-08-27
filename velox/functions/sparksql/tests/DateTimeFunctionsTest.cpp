@@ -1508,7 +1508,7 @@ TEST_F(DateTimeFunctionsTest, trunc) {
 
   // Date(19576) is 2023-08-07, which is Monday, should return Monday.
   EXPECT_EQ(19576, trunc(19576, "week"));
-  // Date(19579) is 2023-08-10, Thur, should return Monday.
+  // Date(19579) is 2023-08-10, Thursday, should return Monday.
   EXPECT_EQ(19576, trunc(19579, "week"));
   // Date(18297) is 2020-02-05.
   EXPECT_EQ(18293, trunc(18297, "month"));

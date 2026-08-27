@@ -1,0 +1,65 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+include "Footer.fbs";
+
+namespace facebook.nimble.serialization;
+
+/// Cluster index data for a partition (group of stripes).
+/// A partition corresponds to one stripe group flush.
+/// Contains chunk-level search boundaries for key lookups.
+table ClusterIndexPartition {
+  /// File offset of the key stream blob for this partition.
+  key_stream_offset:uint64;
+  /// Total size of the key stream blob in bytes.
+  key_stream_size:uint32;
+
+  /// Accumulated row counts per chunk (prefix sum, partition-wide).
+  chunk_rows:[uint32];
+  /// Byte offset of each chunk within the key stream blob.
+  /// Chunk size is derived: offset[i+1] - offset[i], with key_stream_size
+  /// as the sentinel for the last chunk.
+  chunk_offsets:[uint32];
+  /// Last key of each chunk (binary search boundary).
+  chunk_keys:[string];
+}
+
+/// Root index table for the built-in Nimble cluster index implementation.
+/// Referenced by IndexDescriptor name "nimble.cluster.v1".
+table ClusterIndex {
+  /// Names of columns used for indexing.
+  index_columns:[string];
+  /// Sort orders for each index column.
+  /// Each string is serialized from velox::core::SortOrder
+  /// (e.g., "ASC NULLS FIRST", "DESC NULLS LAST").
+  /// Size must equal index_columns size.
+  sort_orders:[string];
+
+  /// Metadata sections for each partition's index.
+  index_partitions:[MetadataSection];
+
+  /// Keys for root-level binary search across all partitions.
+  /// Layout: [firstKey, lastKey0, lastKey1, ..., lastKeyN]
+  /// One lastKey per partition. firstKey enables early pruning when
+  /// query key < minimum key.
+  partition_keys:[string];
+
+  /// Row count per partition. Used to compute partition-level row ranges
+  /// without external stripe info. Size equals number of partitions.
+  partition_row_counts:[uint32];
+}
+
+root_type ClusterIndex;

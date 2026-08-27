@@ -286,19 +286,26 @@ HiveTableHandle::HiveTableHandle(
     const std::unordered_map<std::string, std::string>& tableParameters,
     std::vector<HiveColumnHandlePtr> filterColumnHandles,
     double sampleRate,
-    std::string dbName)
+    std::string dbName,
+    std::vector<int32_t> dataColumnFieldIds)
     : FileTableHandle(std::move(connectorId)),
       tableName_(tableName),
       subfieldFilters_(std::move(subfieldFilters)),
       remainingFilter_(remainingFilter),
       sampleRate_(sampleRate),
       dataColumns_(dataColumns),
+      dataColumnFieldIds_(std::move(dataColumnFieldIds)),
       indexColumns_(std::move(indexColumns)),
       tableParameters_(tableParameters),
       filterColumnHandles_(std::move(filterColumnHandles)),
       dbName_(std::move(dbName)) {
   VELOX_CHECK_GT(sampleRate_, 0.0, "Sample rate must be positive");
   VELOX_CHECK_LE(sampleRate_, 1.0, "Sample rate must not exceed 1.0");
+  VELOX_CHECK(
+      dataColumnFieldIds_.empty() ||
+          (dataColumns_ != nullptr &&
+           dataColumnFieldIds_.size() == dataColumns_->size()),
+      "Data column field IDs must be empty or aligned to data columns");
 }
 
 HiveTableHandle::HiveTableHandle(
@@ -404,6 +411,13 @@ folly::dynamic HiveTableHandle::serialize() const {
   if (dataColumns_) {
     obj["dataColumns"] = dataColumns_->serialize();
   }
+  if (!dataColumnFieldIds_.empty()) {
+    folly::dynamic dataColumnFieldIds = folly::dynamic::array;
+    for (const auto fieldId : dataColumnFieldIds_) {
+      dataColumnFieldIds.push_back(fieldId);
+    }
+    obj["dataColumnFieldIds"] = std::move(dataColumnFieldIds);
+  }
   folly::dynamic tableParameters = folly::dynamic::object;
   for (const auto& param : tableParameters_) {
     tableParameters[param.first] = param.second;
@@ -463,6 +477,14 @@ ConnectorTableHandlePtr HiveTableHandle::create(
     dataColumns = ISerializable::deserialize<RowType>(it->second, context);
   }
 
+  std::vector<int32_t> dataColumnFieldIds;
+  if (auto it = obj.find("dataColumnFieldIds"); it != obj.items().end()) {
+    dataColumnFieldIds.reserve(it->second.size());
+    for (const auto& fieldId : it->second) {
+      dataColumnFieldIds.push_back(fieldId.asInt());
+    }
+  }
+
   std::unordered_map<std::string, std::string> tableParameters{};
   const auto& tableParametersObj = obj["tableParameters"];
   for (const auto& key : tableParametersObj.keys()) {
@@ -500,7 +522,8 @@ ConnectorTableHandlePtr HiveTableHandle::create(
       tableParameters,
       std::move(filterColumnHandles),
       sampleRate,
-      std::move(dbName));
+      std::move(dbName),
+      std::move(dataColumnFieldIds));
 }
 
 void HiveTableHandle::registerSerDe() {
