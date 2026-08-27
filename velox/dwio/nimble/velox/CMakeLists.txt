@@ -14,7 +14,11 @@
 add_library(nimble_velox_common SchemaUtils.cpp SchemaUtils.h)
 target_link_libraries(nimble_velox_common nimble_common velox_type Folly::folly fmt::fmt)
 
-add_library(nimble_velox_shared_dictionary_config SharedDictionaryConfig.cpp)
+add_library(
+  nimble_velox_shared_dictionary_config
+  SharedDictionaryConfig.cpp
+  SharedDictionaryConfig.h
+)
 target_link_libraries(
   nimble_velox_shared_dictionary_config
   nimble_common
@@ -181,6 +185,9 @@ target_link_libraries(raw_size_utils nimble_common velox_vector velox_dwio_commo
 
 add_subdirectory(index)
 add_subdirectory(selective)
+# Must follow selective: nimble_velox_reader_factory links
+# nimble_velox_selective.
+add_subdirectory(reader)
 add_subdirectory(stats)
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(tests)

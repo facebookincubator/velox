@@ -37,13 +37,14 @@ struct SharedDictionaryConfig {
   /// Resolves a provided alphabet instead of building one from written values.
   bool useExternalAlphabet{false};
   /// Candidate encodings for alphabets stored in this file.
-  std::vector<EncodingType> alphabetEncodings;
+  std::vector<EncodingType> alphabetEncodings{};
 };
 
 /// Shared dictionary settings for one regular column value stream.
 struct ColumnDictionary {
   /// Velox subfield from the writer input root to the configured value stream.
-  /// Use `[*]` to traverse array elements or map values.
+  /// When the path resolves to an array or map, the dictionary applies to the
+  /// element or value stream recursively.
   std::string fieldPath;
 
   /// Dictionary encoding settings for the resolved value stream.
@@ -55,9 +56,9 @@ struct FlatmapKeyDictionary {
   /// Flat-map key to configure.
   int64_t key{};
 
-  /// Velox subfield below the keyed flat-map value. Empty selects the key
-  /// value itself. Non-empty paths start with a field name; use `[*]` to
-  /// traverse array elements or map values below that field.
+  /// Velox subfield below the keyed flat-map value. Empty selects the keyed
+  /// value itself; if that value is an array or map, the dictionary applies to
+  /// its element or value stream recursively.
   std::string valueSubfield;
 
   /// Dictionary encoding settings for the key value stream.
@@ -77,20 +78,20 @@ struct FlatmapColumnDictionary {
 /// Shared dictionary writer configuration for regular columns and flat-map
 /// value streams in a file.
 struct SharedDictionaryEncodingConfig {
-  /// Regular columns eligible for shared dictionary encoding. Paths may use
-  /// `[*]` to select array elements or map values before a nested field. The
-  /// resolved value must be an integer scalar, or an array whose element is an
-  /// integer scalar. For File scope, callers are responsible for assigning a
-  /// unique dictionaryId per configured value stream.
+  /// Regular columns eligible for shared dictionary encoding. The resolved
+  /// value must be an integer scalar, an array with an integer element stream,
+  /// or a map with an integer value stream. For File scope, callers are
+  /// responsible for assigning a unique dictionaryId per configured value
+  /// stream.
   std::vector<ColumnDictionary> columns;
 
   /// Top-level flat-map columns eligible for shared dictionary encoding.
-  /// Non-empty valueSubfield paths start with a field name and may use `[*]`
-  /// below that field to select array elements or map values. The configured
-  /// value stream must resolve to an integer scalar, or an array whose element
-  /// is an integer scalar. For File scope, callers are responsible for
-  /// assigning a unique dictionaryId per configured key value stream.
-  std::vector<FlatmapColumnDictionary> flatMapColumns;
+  /// valueSubfield paths resolve below the keyed value. The configured value
+  /// stream must be an integer scalar, an array with an integer element stream,
+  /// or a map with an integer value stream. For File scope, callers are
+  /// responsible for assigning a unique dictionaryId per configured key value
+  /// stream.
+  std::vector<FlatmapColumnDictionary> flatMaps;
 
   /// Supplies external alphabets for External shared dictionary configurations
   /// and File configurations that set useExternalAlphabet.
@@ -98,7 +99,7 @@ struct SharedDictionaryEncodingConfig {
 
   /// Returns true when no value streams request shared dictionary encoding.
   bool empty() const {
-    return columns.empty() && flatMapColumns.empty();
+    return columns.empty() && flatMaps.empty();
   }
 
   /// Creates a builder, optionally seeded from an existing config.

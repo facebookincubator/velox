@@ -661,7 +661,7 @@ class MainlyConstantEncodingBase
     auto encoding = EncodingFactory{options}.create(
         *pool, encoded, [](uint32_t /*size*/) -> void* { return nullptr; });
 
-    Vector<bool> values{pool, rowEnd};
+    ScopedVector<bool> values{rowEnd, pool, options.bufferPool};
     encoding->materialize(rowEnd, values.data());
     const auto sliceBegin = values.begin() + offset;
     return {

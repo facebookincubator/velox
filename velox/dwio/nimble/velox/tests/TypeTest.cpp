@@ -41,7 +41,7 @@ class TypeTests : public ::testing::Test {
   std::shared_ptr<velox::memory::MemoryPool> leafPool_;
 };
 
-TEST_F(TypeTests, MatchingSchema) {
+TEST_F(TypeTests, matchingSchema) {
   const uint32_t batchSize = 10;
 
   auto type = velox::ROW({
@@ -87,7 +87,7 @@ TEST_F(TypeTests, MatchingSchema) {
   }
 }
 
-TEST_F(TypeTests, ExtraColumnWithRename) {
+TEST_F(TypeTests, extraColumnWithRename) {
   const uint32_t batchSize = 10;
   auto fileType = velox::ROW({
       {"simple", velox::TINYINT()},
@@ -166,7 +166,7 @@ TEST_F(TypeTests, ExtraColumnWithRename) {
   }
 }
 
-TEST_F(TypeTests, SameTypeWithProjection) {
+TEST_F(TypeTests, sameTypeWithProjection) {
   const uint32_t batchSize = 10;
   auto type = velox::ROW({
       {"simple", velox::TINYINT()},
@@ -223,7 +223,7 @@ TEST_F(TypeTests, SameTypeWithProjection) {
   }
 }
 
-TEST_F(TypeTests, ProjectingNewColumn) {
+TEST_F(TypeTests, projectingNewColumn) {
   const uint32_t batchSize = 10;
   auto fileType = velox::ROW({
       {"simple", velox::TINYINT()},
@@ -309,7 +309,7 @@ TEST_F(TypeTests, ProjectingNewColumn) {
   }
 }
 
-TEST_F(TypeTests, FlatMapFeatureSelection) {
+TEST_F(TypeTests, flatMapFeatureSelection) {
   const uint32_t batchSize = 200;
   auto type = velox::ROW({
       {"map", velox::MAP(velox::INTEGER(), velox::BIGINT())},

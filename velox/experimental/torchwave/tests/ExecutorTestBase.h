@@ -30,6 +30,7 @@
 #include <torch/nativert/executor/Weights.h>
 #include <torch/nativert/kernels/KernelFactory.h>
 
+#include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/GraphPrep.h"
 #include "velox/experimental/torchwave/Pt2Load.h"
@@ -317,6 +318,12 @@ class ExecutorTestBase : public ::testing::Test {
   /// the multi-kernel grid contains every op; the single-block and cg grids
   /// hold only the ops that have such a variant (e.g. masked_select).
   ModePlans compilePlans(const std::string& pt2File);
+
+  /// Compiles 'pt2File' in the cooperative grid and returns what the
+  /// allocation-group pass makes of it, so a test can assert on the plan --
+  /// which concats are placed ahead of their operands, what the lifetime
+  /// grouping folds -- without running the graph.
+  AllocGroupStats allocGroupStats(const std::string& pt2File);
 };
 
 } // namespace torch::wave

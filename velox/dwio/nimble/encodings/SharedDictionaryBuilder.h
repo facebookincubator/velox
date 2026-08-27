@@ -289,7 +289,8 @@ class ExternalSharedDictionaryBuilder final
 
   void resetImpl() final {
     NIMBLE_UNSUPPORTED(
-        "{} shared dictionary builder does not support reset().", this->kind());
+        "{} shared dictionary builder does not support reset().",
+        SharedDictionaryBuilder<T>::kindString(this->kind()));
   }
 
  private:

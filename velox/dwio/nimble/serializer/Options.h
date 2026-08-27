@@ -241,10 +241,17 @@ struct SerializerOptions {
   /// FixedBitWidth.
   EncodingType streamIndicesEncodingType{EncodingType::FixedBitWidth};
 
+  /// Returns the default per-encoding options used by Serializer writes.
+  static Encoding::Options defaultEncodingOptions() {
+    Encoding::Options options;
+    options.useVarintRowCount = true;
+    return options;
+  }
+
   /// Per-encoding options passed to EncodingFactory::encode(). Controls
   /// format-level settings (varint row count) and per-encoding config
   /// (e.g., BlockBitPacking block size).
-  Encoding::Options encodingOptions{.useVarintRowCount = true};
+  Encoding::Options encodingOptions{defaultEncodingOptions()};
 
   /// Maximum number of scratch buffers retained by the serializer-owned
   /// nested encoding buffer pool. 0 disables nested encoding buffer caching.

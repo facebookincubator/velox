@@ -175,7 +175,7 @@ class EncodingUtilitiesTest : public ::testing::Test {
 
 // --- operator<< for EncodingPropertyType ---
 
-TEST_F(EncodingUtilitiesTest, EncodingPropertyTypeStreamOperator) {
+TEST_F(EncodingUtilitiesTest, encodingPropertyTypeStreamOperator) {
   {
     std::ostringstream ss;
     ss << EncodingPropertyType::Compression;
@@ -190,7 +190,7 @@ TEST_F(EncodingUtilitiesTest, EncodingPropertyTypeStreamOperator) {
 
 // --- getEncodingLabel ---
 
-TEST_F(EncodingUtilitiesTest, GetEncodingLabelTrivial) {
+TEST_F(EncodingUtilitiesTest, getEncodingLabelTrivial) {
   auto stream = buildTrivialUint32Stream({10, 20, 30});
   auto label = getEncodingLabel(stream);
   // Should contain "Trivial" and "Uint32"
@@ -200,7 +200,7 @@ TEST_F(EncodingUtilitiesTest, GetEncodingLabelTrivial) {
   EXPECT_NE(label.find("Uncompressed"), std::string::npos);
 }
 
-TEST_F(EncodingUtilitiesTest, GetEncodingLabelConstant) {
+TEST_F(EncodingUtilitiesTest, getEncodingLabelConstant) {
   auto stream = buildConstantUint32Stream(42, 100);
   auto label = getEncodingLabel(stream);
   EXPECT_NE(label.find("Constant"), std::string::npos);
@@ -209,7 +209,7 @@ TEST_F(EncodingUtilitiesTest, GetEncodingLabelConstant) {
 
 // --- traverseEncodings ---
 
-TEST_F(EncodingUtilitiesTest, TraverseEncodingsTrivialVisitor) {
+TEST_F(EncodingUtilitiesTest, traverseEncodingsTrivialVisitor) {
   auto stream = buildTrivialUint32Stream({1, 2, 3});
   int visitCount = 0;
   EncodingType visitedType = EncodingType::Constant; // init to something else
@@ -243,7 +243,7 @@ TEST_F(EncodingUtilitiesTest, TraverseEncodingsTrivialVisitor) {
   EXPECT_EQ(visitedType, EncodingType::Trivial);
 }
 
-TEST_F(EncodingUtilitiesTest, TraverseEncodingsConstantVisitor) {
+TEST_F(EncodingUtilitiesTest, traverseEncodingsConstantVisitor) {
   auto stream = buildConstantUint32Stream(99, 50);
   int visitCount = 0;
 
@@ -273,7 +273,7 @@ TEST_F(EncodingUtilitiesTest, TraverseEncodingsConstantVisitor) {
   EXPECT_EQ(visitCount, 1);
 }
 
-TEST_F(EncodingUtilitiesTest, TraverseEncodingsEarlyStop) {
+TEST_F(EncodingUtilitiesTest, traverseEncodingsEarlyStop) {
   auto stream = buildTrivialUint32Stream({1, 2, 3});
   int visitCount = 0;
 
@@ -293,7 +293,7 @@ TEST_F(EncodingUtilitiesTest, TraverseEncodingsEarlyStop) {
   EXPECT_EQ(visitCount, 1);
 }
 
-TEST_F(EncodingUtilitiesTest, TraverseEncodingsEncodedSizeValue) {
+TEST_F(EncodingUtilitiesTest, traverseEncodingsEncodedSizeValue) {
   auto stream = buildTrivialUint32Stream({10, 20});
   std::string encodedSize;
 
@@ -319,7 +319,7 @@ TEST_F(EncodingUtilitiesTest, TraverseEncodingsEncodedSizeValue) {
 
 // --- Test with real encoder (using test utilities) ---
 
-TEST_F(EncodingUtilitiesTest, GetEncodingLabelWithRealTrivialEncoding) {
+TEST_F(EncodingUtilitiesTest, getEncodingLabelWithRealTrivialEncoding) {
   nimble::Buffer buffer(*pool_);
   nimble::Vector<uint32_t> values(pool_.get());
   for (uint32_t i = 0; i < 10; ++i) {
@@ -334,7 +334,7 @@ TEST_F(EncodingUtilitiesTest, GetEncodingLabelWithRealTrivialEncoding) {
   EXPECT_NE(label.find("Uint32"), std::string::npos);
 }
 
-TEST_F(EncodingUtilitiesTest, GetEncodingLabelWithRealConstantEncoding) {
+TEST_F(EncodingUtilitiesTest, getEncodingLabelWithRealConstantEncoding) {
   nimble::Buffer buffer(*pool_);
   nimble::Vector<uint32_t> values(pool_.get());
   for (uint32_t i = 0; i < 5; ++i) {
@@ -351,7 +351,7 @@ TEST_F(EncodingUtilitiesTest, GetEncodingLabelWithRealConstantEncoding) {
 
 // --- PFOR nested exception sub-streams ---
 
-TEST_F(EncodingUtilitiesTest, TraverseEncodingsPforChildren) {
+TEST_F(EncodingUtilitiesTest, traverseEncodingsPforChildren) {
   auto positions = buildTrivialUint32Stream({0, 5});
   auto values = buildTrivialUint32Stream({100, 200});
   auto stream = buildPforUint32Stream(/* numExceptions */ 2, positions, values);
@@ -381,7 +381,7 @@ TEST_F(EncodingUtilitiesTest, TraverseEncodingsPforChildren) {
   EXPECT_EQ(nestedVisits, expected);
 }
 
-TEST_F(EncodingUtilitiesTest, TraverseEncodingsPforNoExceptions) {
+TEST_F(EncodingUtilitiesTest, traverseEncodingsPforNoExceptions) {
   // With zero exceptions both sub-streams are empty and must be skipped rather
   // than traversed (which would read past the end of the stream).
   auto stream = buildPforUint32Stream(
@@ -406,7 +406,7 @@ TEST_F(EncodingUtilitiesTest, TraverseEncodingsPforNoExceptions) {
   EXPECT_EQ(nestedVisitCount, 0);
 }
 
-TEST_F(EncodingUtilitiesTest, GetEncodingLabelPfor) {
+TEST_F(EncodingUtilitiesTest, getEncodingLabelPfor) {
   // The rendered label surfaces the picked sub-encodings for the exception
   // side-channels, e.g. PFOR<Uint32>[ExceptionPositions:Trivial<...>,
   // ExceptionValues:Trivial<...>].
@@ -422,7 +422,7 @@ TEST_F(EncodingUtilitiesTest, GetEncodingLabelPfor) {
 
 // --- BlockBitPacking nested metadata sub-streams ---
 
-TEST_F(EncodingUtilitiesTest, TraverseEncodingsBlockBitPackingChildren) {
+TEST_F(EncodingUtilitiesTest, traverseEncodingsBlockBitPackingChildren) {
   auto baselines =
       buildTrivialUint32Stream({0, 64}, /*useVarintRowCount=*/false);
   auto bitWidths =
@@ -455,7 +455,7 @@ TEST_F(EncodingUtilitiesTest, TraverseEncodingsBlockBitPackingChildren) {
   EXPECT_EQ(nestedNames, expected);
 }
 
-TEST_F(EncodingUtilitiesTest, GetEncodingLabelBlockBitPacking) {
+TEST_F(EncodingUtilitiesTest, getEncodingLabelBlockBitPacking) {
   // The rendered label surfaces the picked sub-encodings for the per-block
   // metadata, e.g. BlockBitPacking<Uint32>[Baselines:Trivial<...>,
   // BitWidths:Trivial<...>,DataOffsets:Trivial<...>].

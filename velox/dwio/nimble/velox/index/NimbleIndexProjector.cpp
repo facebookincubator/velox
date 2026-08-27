@@ -17,7 +17,6 @@
 #include "velox/dwio/nimble/velox/index/NimbleIndexProjector.h"
 
 #include <algorithm>
-#include <cmath>
 
 #include "folly/ScopeGuard.h"
 #include "velox/common/base/SuccinctPrinter.h"
@@ -48,14 +47,21 @@ void validateReaderOptions(const velox::dwio::common::ReaderOptions& options) {
 
 std::string NimbleIndexProjector::Stats::toString() const {
   return fmt::format(
-      "Stats(numReadStripes={}, numReadRows={}, numProjectedRows={}, "
+      "Stats(numReadStripes={}, numSlicedStripes={}, "
+      "slicedStripePct={:.2f}%, numReadRows={}, numProjectedRows={}, "
       "numOutputBytes={}, "
-      "lookupTiming=[{}], scanTiming=[{}], projectionTiming=[{}])",
+      "lookupTiming=[{}], prepareTiming=[{}], scanTiming=[{}], "
+      "projectionTiming=[{}])",
       numReadStripes,
+      numSlicedStripes,
+      numReadStripes == 0
+          ? 0.0
+          : 100.0 * static_cast<double>(numSlicedStripes) / numReadStripes,
       numReadRows,
       numProjectedRows,
       velox::succinctBytes(numOutputBytes),
       lookupTiming.toString(),
+      prepareTiming.toString(),
       scanTiming.toString(),
       projectionTiming.toString());
 }
@@ -235,18 +241,6 @@ NimbleIndexProjector::Result NimbleIndexProjector::project(
   return processStripes();
 }
 
-void NimbleIndexProjector::pruneStripeRanges(
-    std::vector<StripeRange>& stripeRanges,
-    const std::vector<uint64_t>& rowsPerRequest) {
-  const auto maxRowsPerRequest = ctx_.options->maxRowsPerRequest;
-  if (maxRowsPerRequest == 0) {
-    return;
-  }
-  std::erase_if(stripeRanges, [&](const auto& range) {
-    return rowsPerRequest[range.requestIndex] >= maxRowsPerRequest;
-  });
-}
-
 void NimbleIndexProjector::setResumeKey(
     uint32_t requestIndex,
     uint32_t stripeOffset,
@@ -279,35 +273,51 @@ void NimbleIndexProjector::setResumeKey(
 }
 
 void NimbleIndexProjector::prepareStripes() {
+  velox::CpuWallTimer timer(stats_.prepareTiming);
   uint64_t totalRows{0};
   uint64_t totalBytes{0};
   const auto maxRowsPerRequest = ctx_.options->maxRowsPerRequest;
   const auto needResumeKey = ctx_.options->needResumeKey;
-  std::vector<uint64_t> rowsPerRequest(ctx_.numRequests, 0);
+  auto& rowsPerRequest = ctx_.rowsPerRequest;
+  rowsPerRequest.assign(ctx_.numRequests, 0);
   ctx_.hasStripeRanges.assign(ctx_.numRequests, false);
   ctx_.resumeKeys.assign(ctx_.numRequests, std::nullopt);
+  ctx_.plan.stripeIndices.reserve(ctx_.stripeRanges.numStripes);
+  ctx_.plan.numRows.reserve(ctx_.stripeRanges.numStripes);
+  ctx_.plan.requiresNullBarriers.reserve(ctx_.stripeRanges.numStripes);
+  ctx_.plan.numStreams.reserve(ctx_.stripeRanges.numStripes);
+  ctx_.plan.stripeFileOffsets.reserve(ctx_.stripeRanges.numStripes);
+  ctx_.plan.stripeRangeOffsets.reserve(ctx_.stripeRanges.numStripes + 1);
+  ctx_.plan.projectedStreams.reserve(
+      static_cast<size_t>(ctx_.stripeRanges.numStripes) *
+      projection_->streamOffsets.size());
+  ctx_.plan.stripeRanges.reserve(ctx_.stripeRanges.ranges.size());
 
   for (uint32_t offset = 0; offset < ctx_.stripeRanges.numStripes; ++offset) {
     auto spanRanges = ctx_.stripeRanges.getRanges(offset);
-    std::vector<StripeRange> stripeRanges(spanRanges.begin(), spanRanges.end());
-    pruneStripeRanges(stripeRanges, rowsPerRequest);
-    if (stripeRanges.empty()) {
-      continue;
-    }
-
     const uint32_t stripeIndex = ctx_.stripeRanges.startStripe + offset;
 
+    const auto rangeOffset = ctx_.plan.stripeRanges.size();
+    uint32_t numStripeRanges{0};
+
     uint64_t stripeRows{0};
-    for (auto& stripeRange : stripeRanges) {
+    for (const auto& range : spanRanges) {
+      auto stripeRange = range;
       const auto requestIndex = stripeRange.requestIndex;
       const auto numRows =
           static_cast<uint64_t>(stripeRange.rowRange.numRows());
       if (maxRowsPerRequest == 0) {
         rowsPerRequest[requestIndex] += numRows;
         stripeRows += numRows;
+        ctx_.hasStripeRanges[requestIndex] = true;
+        ctx_.plan.stripeRanges.push_back(stripeRange);
+        ++numStripeRanges;
         continue;
       }
 
+      if (rowsPerRequest[requestIndex] >= maxRowsPerRequest) {
+        continue;
+      }
       const auto remaining = maxRowsPerRequest - rowsPerRequest[requestIndex];
       const auto rowsToRead = std::min(numRows, remaining);
       rowsPerRequest[requestIndex] += rowsToRead;
@@ -327,26 +337,24 @@ void NimbleIndexProjector::prepareStripes() {
         setResumeKey(
             requestIndex, offset, stripeRange.rowRange.endRow, partialRead);
       }
+      ctx_.hasStripeRanges[requestIndex] = true;
+      ctx_.plan.stripeRanges.push_back(stripeRange);
+      ++numStripeRanges;
     }
 
-    for (const auto& range : stripeRanges) {
-      ctx_.hasStripeRanges[range.requestIndex] = true;
+    if (numStripeRanges == 0) {
+      continue;
     }
-
-    StripePlan stripePlan;
-    stripePlan.stripeIndex = stripeIndex;
-    stripePlan.stripeRanges = std::move(stripeRanges);
-    locateStripeStreams(stripePlan);
 
     totalRows += stripeRows;
-    totalBytes += stripePlan.projectedBytes;
-    ctx_.plan.stripePlans.push_back(std::move(stripePlan));
+    totalBytes += appendStripePlan(stripeIndex, rangeOffset);
     if ((ctx_.options->maxRows > 0 && totalRows >= ctx_.options->maxRows) ||
         (ctx_.options->maxBytes > 0 && totalBytes >= ctx_.options->maxBytes)) {
       ctx_.plan.truncated = true;
       break;
     }
   }
+  ctx_.plan.stripeRangeOffsets.push_back(ctx_.plan.stripeRanges.size());
 }
 
 void NimbleIndexProjector::initRequest(
@@ -371,14 +379,25 @@ void NimbleIndexProjector::clearRequest() {
   ctx_.options = nullptr;
   ctx_.numRequests = 0;
   ctx_.stripeRanges.clear();
-  ctx_.plan.stripePlans.clear();
+  ctx_.plan.stripeIndices.clear();
+  ctx_.plan.numRows.clear();
+  ctx_.plan.requiresNullBarriers.clear();
+  ctx_.plan.numStreams.clear();
+  ctx_.plan.stripeFileOffsets.clear();
+  ctx_.plan.projectedStreams.clear();
+  ctx_.plan.stripeRangeOffsets.clear();
+  ctx_.plan.stripeRanges.clear();
   ctx_.plan.truncated = false;
   ctx_.hasStripeRanges.clear();
   ctx_.resumeKeys.clear();
   ctx_.dataInputIndices.clear();
   ctx_.dataHandle.reset();
   ctx_.packedStripes.clear();
+  ctx_.rowsPerRequest.clear();
+  ctx_.sliceCounts.clear();
+  ctx_.emittedSlices.clear();
   ctx_.packScratch.clear();
+  ctx_.streamViewsScratch.clear();
   dataInput_->clear();
 }
 
@@ -467,32 +486,33 @@ void NimbleIndexProjector::lookupStripes() {
 }
 
 void NimbleIndexProjector::loadStripes() {
-  const auto& stripePlans = ctx_.plan.stripePlans;
-  if (stripePlans.empty()) {
+  const auto numPlannedStripes = ctx_.plan.stripeIndices.size();
+  if (numPlannedStripes == 0) {
     return;
   }
   velox::CpuWallTimer timer(stats_.scanTiming);
 
   uint32_t totalStreams = 0;
-  for (const auto& plan : stripePlans) {
-    totalStreams += plan.numStreams;
+  for (const auto numStreams : ctx_.plan.numStreams) {
+    totalStreams += numStreams;
   }
   dataInput_->reserve(totalStreams);
 
   const auto numProjectedStreams = projection_->streamOffsets.size();
-  ctx_.dataInputIndices.resize(stripePlans.size() * numProjectedStreams);
-  for (size_t stripeOffset = 0; stripeOffset < stripePlans.size();
+  ctx_.dataInputIndices.resize(numPlannedStripes * numProjectedStreams);
+  for (size_t stripeOffset = 0; stripeOffset < numPlannedStripes;
        ++stripeOffset) {
     dataInput_->startGroup();
     const auto dataInputBase = stripeOffset * numProjectedStreams;
-    const auto& streams = stripePlans[stripeOffset].projectedStreams;
+    const auto streams = stripeProjectedStreams(stripeOffset);
+    const auto stripeFileOffset = ctx_.plan.stripeFileOffsets[stripeOffset];
     for (size_t streamIndex = 0; streamIndex < streams.size(); ++streamIndex) {
       const auto& stream = streams[streamIndex];
-      if (!stream.has_value()) {
+      if (stream.size == 0) {
         continue;
       }
-      ctx_.dataInputIndices[dataInputBase + streamIndex] =
-          dataInput_->enqueue(*stream);
+      ctx_.dataInputIndices[dataInputBase + streamIndex] = dataInput_->enqueue(
+          velox::common::Region{stripeFileOffset + stream.offset, stream.size});
     }
   }
   ctx_.dataHandle = dataInput_->load();
@@ -502,9 +522,9 @@ NimbleIndexProjector::Result NimbleIndexProjector::processStripes() {
   velox::CpuWallTimer timer(stats_.projectionTiming);
   Result result;
   result.responses.resize(ctx_.numRequests);
-  ctx_.packedStripes.resize(ctx_.plan.stripePlans.size());
+  ctx_.packedStripes.resize(ctx_.plan.stripeIndices.size());
 
-  for (size_t i = 0; i < ctx_.plan.stripePlans.size(); ++i) {
+  for (size_t i = 0; i < ctx_.plan.stripeIndices.size(); ++i) {
     ++stats_.numReadStripes;
     ctx_.packedStripes[i] = packStripe(i);
   }
@@ -513,60 +533,97 @@ NimbleIndexProjector::Result NimbleIndexProjector::processStripes() {
   return result;
 }
 
-void NimbleIndexProjector::locateStripeStreams(StripePlan& stripePlan) {
-  NIMBLE_CHECK(
-      stripePlan.projectedStreams.empty() && stripePlan.projectedBytes == 0,
-      "StripePlan already has located streams");
-  stripePlan.numRows = stripeRowCount(stripePlan.stripeIndex);
+uint64_t NimbleIndexProjector::appendStripePlan(
+    uint32_t stripeIndex,
+    size_t rangeOffset) {
+  auto& plan = ctx_.plan;
+  const auto stripeOffset = plan.stripeIndices.size();
+  const auto numProjectedStreams = projection_->streamOffsets.size();
+  plan.stripeIndices.push_back(stripeIndex);
+  plan.numRows.push_back(stripeRowCount(stripeIndex));
+  plan.requiresNullBarriers.push_back(false);
+  plan.numStreams.push_back(0);
+  plan.stripeFileOffsets.push_back(tablet_->stripeOffset(stripeIndex));
+  plan.stripeRangeOffsets.push_back(rangeOffset);
+  plan.projectedStreams.resize((stripeOffset + 1) * numProjectedStreams);
 
-  const auto stripeId = tablet_->stripeIdentifier(stripePlan.stripeIndex);
-  const auto streamCount = tablet_->streamCount(stripeId);
-  const auto stripeOffset = tablet_->stripeOffset(stripePlan.stripeIndex);
+  const auto stripeId = tablet_->stripeIdentifier(stripeIndex);
+  auto projectedStreams = std::span{plan.projectedStreams}.subspan(
+      stripeOffset * numProjectedStreams, numProjectedStreams);
+  tablet_->streamLocations(
+      stripeId, projection_->streamOffsets, projectedStreams);
 
-  stripePlan.projectedStreams.resize(projection_->streamOffsets.size());
-  for (size_t i = 0; i < projection_->streamOffsets.size(); ++i) {
-    const auto streamId = projection_->streamOffsets[i];
-    if (streamId >= streamCount) {
+  uint64_t projectedBytes{0};
+  for (size_t i = 0; i < projectedStreams.size(); ++i) {
+    const auto& stream = projectedStreams[i];
+    if (stream.size == 0) {
       continue;
     }
-    const auto streamSize = tablet_->streamSize(stripeId, streamId);
-    if (streamSize == 0) {
-      continue;
-    }
-    const auto streamOffset = tablet_->streamOffset(stripeId, streamId);
-    stripePlan.projectedStreams[i] =
-        velox::common::Region{stripeOffset + streamOffset, streamSize};
-    ++stripePlan.numStreams;
-    stripePlan.projectedBytes += streamSize;
+    ++plan.numStreams.back();
+    projectedBytes += stream.size;
     if (projection_->rowOrFlatMapNullStreams[i]) {
       // A present Row/FlatMap null stream means the slice may carry nulls.
-      stripePlan.requiresNullBarrier = true;
+      plan.requiresNullBarriers.back() = true;
     }
   }
+  return projectedBytes;
 }
 
-RowRange NimbleIndexProjector::stripeRowRangeToPack(
-    const StripePlan& stripePlan) const {
-  const RowRange stripeRange{0, stripePlan.numRows};
+std::span<const StripeGroup::StreamLocation>
+NimbleIndexProjector::stripeProjectedStreams(size_t stripeOffset) const {
+  const auto numProjectedStreams = projection_->streamOffsets.size();
+  const auto projectedStreamsOffset = stripeOffset * numProjectedStreams;
+  NIMBLE_CHECK_LE(
+      projectedStreamsOffset + numProjectedStreams,
+      ctx_.plan.projectedStreams.size(),
+      "Stripe projected stream range exceeds plan storage");
+  return std::span{ctx_.plan.projectedStreams}.subspan(
+      projectedStreamsOffset, numProjectedStreams);
+}
+
+std::span<const NimbleIndexProjector::StripeRange>
+NimbleIndexProjector::plannedStripeRanges(size_t stripeOffset) const {
+  NIMBLE_CHECK_LT(
+      stripeOffset,
+      ctx_.plan.stripeIndices.size(),
+      "Stripe offset out of range");
+  NIMBLE_CHECK_LT(
+      stripeOffset + 1,
+      ctx_.plan.stripeRangeOffsets.size(),
+      "Stripe range offsets must include a final sentinel");
+  const auto beginOffset = ctx_.plan.stripeRangeOffsets[stripeOffset];
+  const auto endOffset = ctx_.plan.stripeRangeOffsets[stripeOffset + 1];
+  NIMBLE_CHECK_LE(
+      endOffset,
+      ctx_.plan.stripeRanges.size(),
+      "Stripe request range exceeds plan storage");
+  return std::span{ctx_.plan.stripeRanges}.subspan(
+      beginOffset, endOffset - beginOffset);
+}
+
+RowRange NimbleIndexProjector::stripeRowRangeToPack(size_t stripeOffset) const {
+  const RowRange stripeRange{0, ctx_.plan.numRows[stripeOffset]};
   if (ctx_.options->maxOverfetchRowsRatio >= 1.0) {
     return stripeRange;
   }
 
-  uint32_t startRow = stripePlan.numRows;
+  uint32_t startRow = ctx_.plan.numRows[stripeOffset];
   uint32_t endRow = 0;
-  for (const auto& range : stripePlan.stripeRanges) {
+  for (const auto& range : plannedStripeRanges(stripeOffset)) {
     startRow = std::min(startRow, range.rowRange.startRow);
     endRow = std::max(endRow, range.rowRange.endRow);
   }
-  NIMBLE_CHECK_LT(startRow, endRow, "StripePlan must have non-empty ranges");
+  NIMBLE_CHECK_LT(
+      startRow, endRow, "Planned stripe must have non-empty ranges");
   const RowRange requestedRange{startRow, endRow};
   if (requestedRange == stripeRange) {
     return stripeRange;
   }
 
-  const auto overfetchRows = stripePlan.numRows - requestedRange.numRows();
+  const auto overfetchRows =
+      ctx_.plan.numRows[stripeOffset] - requestedRange.numRows();
   const auto overfetchRowsRatio =
-      static_cast<double>(overfetchRows) / stripePlan.numRows;
+      static_cast<double>(overfetchRows) / ctx_.plan.numRows[stripeOffset];
   return overfetchRowsRatio > ctx_.options->maxOverfetchRowsRatio
       ? requestedRange
       : stripeRange;
@@ -574,27 +631,28 @@ RowRange NimbleIndexProjector::stripeRowRangeToPack(
 
 NimbleIndexProjector::PackedStripe NimbleIndexProjector::packStripe(
     size_t stripeOffset) {
-  const auto& stripePlan = ctx_.plan.stripePlans[stripeOffset];
   const auto numProjectedStreams = projection_->streamOffsets.size();
   auto& packScratch = ctx_.packScratch;
   SCOPE_EXIT {
     packScratch.clear();
   };
   packScratch.reserve(numProjectedStreams);
-  const RowRange stripeRange{0, stripePlan.numRows};
-  const auto packRange = stripeRowRangeToPack(stripePlan);
-  return packRange == stripeRange ? packFullStripe(stripeOffset)
-                                  : packPartialStripe(stripeOffset, packRange);
+  const RowRange stripeRange{0, ctx_.plan.numRows[stripeOffset]};
+  const auto packRange = stripeRowRangeToPack(stripeOffset);
+  if (packRange == stripeRange) {
+    return packFullStripe(stripeOffset);
+  }
+  ++stats_.numSlicedStripes;
+  return packPartialStripe(stripeOffset, packRange);
 }
 
 NimbleIndexProjector::PackedStripe NimbleIndexProjector::packFullStripe(
     size_t stripeOffset) {
-  const auto& stripePlan = ctx_.plan.stripePlans[stripeOffset];
   const auto numProjectedStreams = projection_->streamOffsets.size();
   auto& packScratch = ctx_.packScratch;
-  const auto loadedStreams =
+  const auto& loadedStreams =
       collectStripeStreamViews(stripeOffset, /*resolveCanonicalStreams=*/true);
-  const auto numRows = stripePlan.numRows;
+  const auto numRows = ctx_.plan.numRows[stripeOffset];
   const RowRange stripeRange{0, numRows};
 
   // Each unique stream is wrapped zero-copy into the output chain. Streams that
@@ -631,8 +689,8 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packFullStripe(
   };
 
   uint32_t bodyOffset{0};
-  std::vector<std::optional<uint32_t>> streamSizeIndexByProjected(
-      numProjectedStreams);
+  auto& canonicalStreamSizeIndices = packScratch.canonicalStreamSizeIndices;
+  canonicalStreamSizeIndices.assign(numProjectedStreams, std::nullopt);
   for (const auto projectedIndex : loadedStreams.presentIndices) {
     const auto streamData = loadedStreams.streams[projectedIndex];
     NIMBLE_CHECK_GT(streamData.size(), 0, "Projected stream must not be empty");
@@ -642,18 +700,18 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packFullStripe(
         *loadedStreams.canonicalIndices[projectedIndex];
     if (canonicalProjectedIndex != projectedIndex) {
       NIMBLE_CHECK(
-          streamSizeIndexByProjected[canonicalProjectedIndex].has_value(),
+          canonicalStreamSizeIndices[canonicalProjectedIndex].has_value(),
           "Duplicate stream must refer to an earlier stream in the stripe");
       packScratch.streamSizeIndices.emplace_back(
-          *streamSizeIndexByProjected[canonicalProjectedIndex]);
-      streamSizeIndexByProjected[projectedIndex] =
-          streamSizeIndexByProjected[canonicalProjectedIndex];
+          *canonicalStreamSizeIndices[canonicalProjectedIndex]);
+      canonicalStreamSizeIndices[projectedIndex] =
+          canonicalStreamSizeIndices[canonicalProjectedIndex];
       continue;
     }
     const auto streamSize = static_cast<uint32_t>(streamData.size());
     const auto streamSizeIndex =
         static_cast<uint32_t>(packScratch.uniqueStreamSizes.size());
-    streamSizeIndexByProjected[projectedIndex] = streamSizeIndex;
+    canonicalStreamSizeIndices[projectedIndex] = streamSizeIndex;
     packScratch.streamSizeIndices.emplace_back(streamSizeIndex);
     packScratch.uniqueStreamSizes.emplace_back(streamSize);
     bodyOffset += streamSize;
@@ -696,31 +754,29 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packFullStripe(
   return {
       .body = std::move(*chain),
       .rowRange = stripeRange,
-      .requiresNullBarrier = stripePlan.requiresNullBarrier,
+      .requiresNullBarrier = ctx_.plan.requiresNullBarriers[stripeOffset],
       .streamHasChunkHeader = true,
   };
 }
 
-NimbleIndexProjector::StripeStreamViews
+NimbleIndexProjector::StripeStreamViews&
 NimbleIndexProjector::collectStripeStreamViews(
     size_t stripeOffset,
-    bool resolveCanonicalStreams) const {
-  const auto& stripePlan = ctx_.plan.stripePlans[stripeOffset];
+    bool resolveCanonicalStreams) {
+  const auto projectedStreams = stripeProjectedStreams(stripeOffset);
   const auto numProjectedStreams = projection_->streamOffsets.size();
-  StripeStreamViews loadedStreams{
-      .streams = std::vector<std::string_view>(numProjectedStreams),
-      .presentIndices = {},
-      .canonicalIndices = {},
-  };
+  auto& loadedStreams = ctx_.streamViewsScratch;
+  loadedStreams.clear();
+  loadedStreams.streams.assign(numProjectedStreams, {});
   if (resolveCanonicalStreams) {
-    loadedStreams.presentIndices.reserve(stripePlan.numStreams);
+    loadedStreams.presentIndices.reserve(ctx_.plan.numStreams[stripeOffset]);
     loadedStreams.canonicalIndices.resize(numProjectedStreams);
   }
 
   uint32_t streamEnqueueBase{0};
   const auto dataInputBase = stripeOffset * numProjectedStreams;
   for (size_t i = 0; i < numProjectedStreams; ++i) {
-    if (!stripePlan.projectedStreams[i].has_value()) {
+    if (projectedStreams[i].size == 0) {
       continue;
     }
     NIMBLE_CHECK(
@@ -730,11 +786,11 @@ NimbleIndexProjector::collectStripeStreamViews(
     if (loadedStreams.presentIndices.empty()) {
       streamEnqueueBase = enqueueIndex;
     }
-    const auto& streamRegion = *stripePlan.projectedStreams[i];
+    const auto& streamLocation = projectedStreams[i];
     const auto& bufferRef = dataInput_->bufferRef(enqueueIndex);
     NIMBLE_CHECK_EQ(
         bufferRef.length,
-        streamRegion.length,
+        streamLocation.size,
         "Loaded stream length must match projected stream length");
     loadedStreams.streams[i] =
         std::string_view(bufferRef.data, bufferRef.length);
@@ -773,34 +829,34 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packPartialStripe(
     const RowRange& packRange) {
   NIMBLE_CHECK_GT(
       packRange.numRows(), 0, "Partial stripe range must not be empty");
-  auto loadedStreams =
+  const auto& loadedStreams =
       collectStripeStreamViews(stripeOffset, /*resolveCanonicalStreams=*/false);
   auto sliced = streamSlicer_->slice(
       loadedStreams.streams, packRange.startRow, packRange.numRows());
 
   size_t bodySize{0};
   auto& packScratch = ctx_.packScratch;
-  for (size_t projectedIndex = 0; projectedIndex < sliced.streams.size();
+  for (uint32_t projectedIndex{0}; projectedIndex < sliced.streams.size();
        ++projectedIndex) {
-    const auto streamData = sliced.streams[projectedIndex];
-    if (streamData.empty()) {
+    const auto stream = sliced.streams[projectedIndex];
+    if (stream.empty()) {
       continue;
     }
-    packScratch.streamIds.emplace_back(static_cast<uint32_t>(projectedIndex));
+    packScratch.streamIds.emplace_back(projectedIndex);
     packScratch.streamSizeIndices.emplace_back(
         static_cast<uint32_t>(packScratch.uniqueStreamSizes.size()));
     packScratch.uniqueStreamSizes.emplace_back(
-        static_cast<uint32_t>(streamData.size()));
-    bodySize += streamData.size();
+        static_cast<uint32_t>(stream.size()));
+    bodySize += stream.size();
   }
-  NIMBLE_CHECK_EQ(
-      bodySize,
-      sliced.data.computeChainDataLength(),
-      "Sliced stream sizes must match the sliced body");
   NIMBLE_CHECK_GT(
       bodySize, 0, "Non-empty partial stripe must produce a sliced body");
 
   auto chain = std::make_unique<folly::IOBuf>(std::move(sliced.data));
+  NIMBLE_CHECK_EQ(
+      bodySize,
+      chain->computeChainDataLength(),
+      "Sliced stream sizes must match the sliced body");
 
   const auto estimatedTrailerSize = estimateTabletTrailerSize(
       packScratch.streamIds.size(), packScratch.uniqueStreamSizes.size());
@@ -814,8 +870,7 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packPartialStripe(
   bodySize += trailer->length();
   chain->appendToChain(std::move(trailer));
 
-  const auto& stripePlan = ctx_.plan.stripePlans[stripeOffset];
-  stats_.numReadRows += stripePlan.numRows;
+  stats_.numReadRows += ctx_.plan.numRows[stripeOffset];
   stats_.numOutputBytes += bodySize;
   return {
       .body = std::move(*chain),
@@ -837,9 +892,9 @@ void NimbleIndexProjector::setResumeKeys(Result& result) {
   if (!ctx_.plan.truncated) {
     return;
   }
-  const auto& lastPlan = ctx_.plan.stripePlans.back();
-  const auto stripeIndex = lastPlan.stripeIndex;
-  const auto& stripeRanges = lastPlan.stripeRanges;
+  const auto lastStripeOffset = ctx_.plan.stripeIndices.size() - 1;
+  const auto stripeIndex = ctx_.plan.stripeIndices[lastStripeOffset];
+  const auto stripeRanges = plannedStripeRanges(lastStripeOffset);
 
   // No next stripe in the range map — all mapped requests end at this stripe.
   const auto nextStripe = stripeIndex + 1;
@@ -917,9 +972,10 @@ folly::IOBuf assembleStripeSlice(
 
 void NimbleIndexProjector::buildResult(Result& result) {
   // Build per-response slice counts for reserve.
-  std::vector<size_t> sliceCounts(ctx_.numRequests, 0);
-  for (size_t i = 0; i < ctx_.plan.stripePlans.size(); ++i) {
-    for (const auto& range : ctx_.plan.stripePlans[i].stripeRanges) {
+  auto& sliceCounts = ctx_.sliceCounts;
+  sliceCounts.assign(ctx_.numRequests, 0);
+  for (size_t i = 0; i < ctx_.plan.stripeIndices.size(); ++i) {
+    for (const auto& range : plannedStripeRanges(i)) {
       ++sliceCounts[range.requestIndex];
     }
   }
@@ -929,13 +985,13 @@ void NimbleIndexProjector::buildResult(Result& result) {
 
   // Track per-response how many slices have been emitted so we know when
   // we're at the last one (for embedding the resume key).
-  std::vector<size_t> slicesEmitted(ctx_.numRequests, 0);
+  auto& emittedSlices = ctx_.emittedSlices;
+  emittedSlices.assign(ctx_.numRequests, 0);
 
-  for (size_t i = 0; i < ctx_.plan.stripePlans.size(); ++i) {
-    const auto& stripePlan = ctx_.plan.stripePlans[i];
+  for (size_t i = 0; i < ctx_.plan.stripeIndices.size(); ++i) {
     auto& packedStripe = ctx_.packedStripes[i];
 
-    for (const auto& range : stripePlan.stripeRanges) {
+    for (const auto& range : plannedStripeRanges(i)) {
       NIMBLE_CHECK(!range.rowRange.empty());
       NIMBLE_CHECK(
           packedStripe.rowRange.contains(range.rowRange),
@@ -946,9 +1002,9 @@ void NimbleIndexProjector::buildResult(Result& result) {
           range.rowRange.startRow - packedStripe.rowRange.startRow,
           range.rowRange.endRow - packedStripe.rowRange.startRow};
       stats_.numProjectedRows += range.rowRange.numRows();
-      ++slicesEmitted[range.requestIndex];
+      ++emittedSlices[range.requestIndex];
       const bool isLastSlice =
-          slicesEmitted[range.requestIndex] == sliceCounts[range.requestIndex];
+          emittedSlices[range.requestIndex] == sliceCounts[range.requestIndex];
       auto& response = result.responses[range.requestIndex];
       response.slices.emplace_back(assembleStripeSlice(
           packedStripe.rowRange.numRows(),

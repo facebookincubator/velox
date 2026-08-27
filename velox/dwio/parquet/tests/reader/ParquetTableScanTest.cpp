@@ -15,6 +15,7 @@
  */
 
 #include <folly/init/Init.h>
+#include <algorithm>
 #include <memory>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -24,6 +25,7 @@
 #include "velox/dwio/parquet/RegisterParquetReader.h" // @manual
 #include "velox/dwio/parquet/reader/PageReader.h" // @manual
 #include "velox/dwio/parquet/reader/ParquetReader.h" // @manual=//velox/connectors/hive:velox_hive_connector_parquet
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h" // @manual
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -40,6 +42,23 @@ using namespace facebook::velox::exec::test;
 using namespace facebook::velox::parquet;
 using namespace facebook::velox::test;
 using namespace facebook::velox::common::testutil;
+
+namespace {
+
+void assertDynamicFilterProduced(
+    const std::shared_ptr<Task>& task,
+    const core::PlanNodeId& probeScanId,
+    const core::PlanNodeId& joinId) {
+  const auto planStats = toPlanStats(task->taskStats());
+  ASSERT_EQ(
+      planStats.at(joinId).customStats.at("dynamicFiltersProduced").sum, 1);
+  ASSERT_EQ(
+      planStats.at(probeScanId)
+          .dynamicFilterStats.producerNodeIds.count(joinId),
+      1);
+}
+
+} // namespace
 
 class ParquetTableScanTest : public HiveConnectorTestBase {
  protected:
@@ -2083,6 +2102,179 @@ TEST_F(ParquetTableScanTest, inFilter) {
       .split(makeSplit(filePath->getPath()))
       .assertResults(
           "SELECT name FROM tmp where name not in ('alex', 'leo', 'mary', null, 'victor')");
+}
+
+TEST_F(ParquetTableScanTest, longDecimalDynamicFilterPushdown) {
+  const auto decimalType = DECIMAL(38, 2);
+  constexpr uint64_t kLowBits = 42;
+  auto keyAt = [](int32_t keyIndex) {
+    return HugeInt::build(/*hi=*/keyIndex + 1, kLowBits);
+  };
+
+  constexpr vector_size_t kNumRows = 20;
+  std::vector<int128_t> factKeys;
+  std::vector<int64_t> payloads;
+  factKeys.reserve(kNumRows);
+  payloads.reserve(kNumRows);
+  for (auto row = 0; row < kNumRows; ++row) {
+    factKeys.push_back(keyAt(row % 10));
+    payloads.push_back(row);
+  }
+
+  const std::vector<int32_t> buildKeyIndexes = {1, 3, 6, 9};
+  std::vector<int128_t> buildKeys;
+  std::vector<int64_t> buildPayloads;
+  buildKeys.reserve(buildKeyIndexes.size());
+  buildPayloads.reserve(buildKeyIndexes.size());
+  for (const auto keyIndex : buildKeyIndexes) {
+    buildKeys.push_back(keyAt(keyIndex));
+    buildPayloads.push_back(100 + keyIndex);
+  }
+  auto containsBuildKeyIndex = [&](int32_t keyIndex) {
+    return std::find(
+               buildKeyIndexes.begin(), buildKeyIndexes.end(), keyIndex) !=
+        buildKeyIndexes.end();
+  };
+
+  auto fact = makeRowVector(
+      {"k", "payload"},
+      {
+          makeFlatVector<int128_t>(factKeys, decimalType),
+          makeFlatVector<int64_t>(payloads),
+      });
+  auto build = makeRowVector(
+      {"dk", "dim_payload"},
+      {
+          makeFlatVector<int128_t>(buildKeys, decimalType),
+          makeFlatVector<int64_t>(buildPayloads),
+      });
+
+  std::vector<int128_t> expectedKeys;
+  std::vector<int64_t> expectedPayloads;
+  std::vector<int64_t> expectedBuildPayloads;
+  for (auto row = 0; row < kNumRows; ++row) {
+    const auto keyIndex = row % 10;
+    if (containsBuildKeyIndex(keyIndex)) {
+      expectedKeys.push_back(factKeys[row]);
+      expectedPayloads.push_back(payloads[row]);
+      expectedBuildPayloads.push_back(100 + keyIndex);
+    }
+  }
+  auto expected = makeRowVector(
+      {"k", "payload", "dim_payload"},
+      {
+          makeFlatVector<int128_t>(expectedKeys, decimalType),
+          makeFlatVector<int64_t>(expectedPayloads),
+          makeFlatVector<int64_t>(expectedBuildPayloads),
+      });
+
+  auto filePath = TempFilePath::create();
+  ParquetWriterOptions options;
+  writeToParquetFile(filePath->getPath(), {fact}, options);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId probeScanId;
+  core::PlanNodeId joinId;
+  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(asRowType(fact->type()))
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"k"},
+                      {"dk"},
+                      PlanBuilder(planNodeIdGenerator, pool_.get())
+                          .values({build})
+                          .planNode(),
+                      "",
+                      {"k", "payload", "dim_payload"})
+                  .capturePlanNodeId(joinId)
+                  .planNode();
+
+  auto task = AssertQueryBuilder(plan)
+                  .split(probeScanId, makeSplit(filePath->getPath()))
+                  .assertResults(expected);
+  assertDynamicFilterProduced(task, probeScanId, joinId);
+}
+
+TEST_F(ParquetTableScanTest, longDecimalDynamicFilterReplacement) {
+  const auto decimalType = DECIMAL(38, 2);
+  constexpr uint64_t kLowBits = 17;
+  auto keyAt = [](int32_t keyIndex) {
+    return HugeInt::build(/*hi=*/keyIndex + 1, kLowBits);
+  };
+
+  constexpr vector_size_t kNumRows = 20;
+  std::vector<int128_t> factKeys;
+  factKeys.reserve(kNumRows);
+  for (auto row = 0; row < kNumRows; ++row) {
+    factKeys.push_back(keyAt(row % 10));
+  }
+
+  const std::vector<int32_t> buildKeyIndexes = {0, 2, 5, 8};
+  std::vector<int128_t> buildKeys;
+  buildKeys.reserve(buildKeyIndexes.size());
+  for (const auto keyIndex : buildKeyIndexes) {
+    buildKeys.push_back(keyAt(keyIndex));
+  }
+  auto containsBuildKeyIndex = [&](int32_t keyIndex) {
+    return std::find(
+               buildKeyIndexes.begin(), buildKeyIndexes.end(), keyIndex) !=
+        buildKeyIndexes.end();
+  };
+
+  auto fact = makeRowVector(
+      {"k"},
+      {
+          makeFlatVector<int128_t>(factKeys, decimalType),
+      });
+  auto build = makeRowVector(
+      {"dk"},
+      {
+          makeFlatVector<int128_t>(buildKeys, decimalType),
+      });
+
+  std::vector<int128_t> expectedKeys;
+  for (auto row = 0; row < kNumRows; ++row) {
+    const auto keyIndex = row % 10;
+    if (containsBuildKeyIndex(keyIndex)) {
+      expectedKeys.push_back(factKeys[row]);
+    }
+  }
+  auto expected = makeRowVector(
+      {"k"},
+      {
+          makeFlatVector<int128_t>(expectedKeys, decimalType),
+      });
+
+  auto filePath = TempFilePath::create();
+  ParquetWriterOptions options;
+  writeToParquetFile(filePath->getPath(), {fact}, options);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId probeScanId;
+  core::PlanNodeId joinId;
+  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(asRowType(fact->type()))
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"k"},
+                      {"dk"},
+                      PlanBuilder(planNodeIdGenerator, pool_.get())
+                          .values({build})
+                          .planNode(),
+                      "",
+                      {"k"})
+                  .capturePlanNodeId(joinId)
+                  .planNode();
+
+  auto task = AssertQueryBuilder(plan)
+                  .split(probeScanId, makeSplit(filePath->getPath()))
+                  .assertResults(expected);
+  assertDynamicFilterProduced(task, probeScanId, joinId);
+
+  const auto planStats = toPlanStats(task->taskStats());
+  ASSERT_EQ(
+      planStats.at(joinId).customStats.at("replacedWithDynamicFilterRows").sum,
+      expectedKeys.size());
 }
 
 TEST_F(ParquetTableScanTest, reusedLazyVectors) {

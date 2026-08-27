@@ -95,6 +95,14 @@ TabletReader::Options TabletReader::configureOptions(
   tabletOptions.fileHandle = options.fileHandle();
   tabletOptions.cache = options.cache();
   tabletOptions.ioOptions = options;
+  if (const auto& formatOptions = options.formatSpecificOptions()) {
+    if (auto nimbleOptions =
+            std::dynamic_pointer_cast<const NimbleReaderOptions>(
+                formatOptions)) {
+      tabletOptions.externalDictionaryResolver =
+          nimbleOptions->externalDictionaryResolver;
+    }
+  }
 
   // TODO(T272495998): Temporary shim. Remove once HiveDataSource plumbs a
   // real `metadataIoStats` through `ReaderOptions` that the operator /
@@ -260,9 +268,9 @@ TabletReader::TabletReader(
 
 TabletReader::~TabletReader() = default;
 
-bool TabletReader::hasGlobalDictionaries() const {
+bool TabletReader::hasFileOrExternalDictionaries() const {
   return sharedDictionaryReaderFactory_ != nullptr &&
-      sharedDictionaryReaderFactory_->hasGlobalDictionaries();
+      sharedDictionaryReaderFactory_->hasFileOrExternalDictionaries();
 }
 
 bool TabletReader::hasStripeDictionaries() const {
@@ -277,10 +285,10 @@ std::optional<uint32_t> TabletReader::stripeDictionaryStreamId(
       : sharedDictionaryReaderFactory_->dictionaryStreamId(valueStreamId);
 }
 
-std::vector<std::optional<uint32_t>> TabletReader::stripeDictionaryStreamIds(
+folly::F14FastMap<uint32_t, uint32_t> TabletReader::stripeDictionaryStreamIds(
     std::span<const uint32_t> valueStreamIds) const {
   return sharedDictionaryReaderFactory_ == nullptr
-      ? std::vector<std::optional<uint32_t>>{}
+      ? folly::F14FastMap<uint32_t, uint32_t>{}
       : sharedDictionaryReaderFactory_->dictionaryStreamIds(valueStreamIds);
 }
 
@@ -520,7 +528,7 @@ void TabletReader::cacheMetadata(
 
   if (sharedDictionaryReaderFactory_ != nullptr) {
     auto sharedDictionaryIt =
-        optionalSections_.find(std::string{kSharedDictionarySection});
+        optionalSections_.find(std::string{kDictionarySection});
     NIMBLE_CHECK(sharedDictionaryIt != optionalSections_.end());
     cacheSection(sharedDictionaryIt->second);
   }
@@ -751,15 +759,15 @@ void TabletReader::initProperties() {
 }
 
 void TabletReader::initSharedDictionaries(const Options& options) {
-  auto section = loadOptionalSection(
-      std::string{kSharedDictionarySection}, /*keepCache=*/false);
+  auto section =
+      loadOptionalSection(std::string{kDictionarySection}, /*keepCache=*/false);
   if (!section.has_value()) {
     return;
   }
 
   sharedDictionaryReaderFactory_ = SharedDictionaryReaderFactory::create(
       section->content(),
-      options.externalResolver,
+      options.externalDictionaryResolver,
       /*tabletReader=*/this,
       /*pool=*/pool_);
 }
@@ -780,7 +788,7 @@ std::vector<std::string> TabletReader::preloadSectionNames(
     addName(std::string{kIndexSection});
   }
   addName(std::string{kPropertiesSection});
-  addName(std::string{kSharedDictionarySection});
+  addName(std::string{kDictionarySection});
   return names;
 }
 
@@ -947,18 +955,20 @@ uint32_t TabletReader::streamSize(
   return stripe.stripeGroup()->streamSize(stripe.stripeId(), streamId);
 }
 
-void TabletReader::streamOffsets(
+void TabletReader::streamLocations(
     const StripeIdentifier& stripe,
-    std::span<uint32_t> out) const {
+    std::span<StreamLocation> locations) const {
   NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
-  stripe.stripeGroup()->streamOffsets(stripe.stripeId(), out);
+  stripe.stripeGroup()->streamLocations(stripe.stripeId(), locations);
 }
 
-void TabletReader::streamSizes(
+void TabletReader::streamLocations(
     const StripeIdentifier& stripe,
-    std::span<uint32_t> out) const {
+    std::span<const uint32_t> streamIds,
+    std::span<StreamLocation> locations) const {
   NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
-  stripe.stripeGroup()->streamSizes(stripe.stripeId(), out);
+  stripe.stripeGroup()->streamLocations(
+      stripe.stripeId(), streamIds, locations);
 }
 
 uint32_t TabletReader::streamCount(const StripeIdentifier& stripe) const {

@@ -37,7 +37,7 @@ TEST(SharedDictionaryConfigTest, defaultValues) {
   SharedDictionaryEncodingConfig config;
   EXPECT_TRUE(config.empty());
   EXPECT_TRUE(config.columns.empty());
-  EXPECT_TRUE(config.flatMapColumns.empty());
+  EXPECT_TRUE(config.flatMaps.empty());
   EXPECT_EQ(config.externalResolver, nullptr);
 }
 
@@ -65,11 +65,16 @@ TEST(SharedDictionaryConfigTest, config) {
                   .useExternalAlphabet = true,
                   .alphabetEncodings = {EncodingType::FixedBitWidth}},
               "items[*].score")
+          .addFlatmapValueDictionary(
+              "features",
+              /*key=*/43,
+              SharedDictionaryConfig{
+                  .scope = SharedDictionaryScope::File, .dictionaryId = 18})
           .build();
 
   EXPECT_FALSE(config.empty());
   ASSERT_EQ(config.columns.size(), 3);
-  ASSERT_EQ(config.flatMapColumns.size(), 1);
+  ASSERT_EQ(config.flatMaps.size(), 1);
   EXPECT_EQ(config.externalResolver, nullptr);
 
   EXPECT_EQ(config.columns[0].fieldPath, "value");
@@ -85,9 +90,9 @@ TEST(SharedDictionaryConfigTest, config) {
   EXPECT_EQ(config.columns[2].dictionary.scope, SharedDictionaryScope::File);
   EXPECT_EQ(config.columns[2].dictionary.dictionaryId, 11);
 
-  const auto& columnDictionary = config.flatMapColumns[0];
+  const auto& columnDictionary = config.flatMaps[0];
   EXPECT_EQ(columnDictionary.fieldPath, "features");
-  ASSERT_EQ(columnDictionary.keys.size(), 1);
+  ASSERT_EQ(columnDictionary.keys.size(), 2);
   const auto& keyDictionary = columnDictionary.keys[0];
   EXPECT_EQ(keyDictionary.key, 42);
   EXPECT_EQ(keyDictionary.valueSubfield, "items[*].score");
@@ -97,6 +102,12 @@ TEST(SharedDictionaryConfigTest, config) {
   EXPECT_EQ(
       keyDictionary.dictionary.alphabetEncodings,
       std::vector<EncodingType>{EncodingType::FixedBitWidth});
+
+  const auto& arrayKeyDictionary = columnDictionary.keys[1];
+  EXPECT_EQ(arrayKeyDictionary.key, 43);
+  EXPECT_EQ(arrayKeyDictionary.valueSubfield, "");
+  EXPECT_EQ(arrayKeyDictionary.dictionary.scope, SharedDictionaryScope::File);
+  EXPECT_EQ(arrayKeyDictionary.dictionary.dictionaryId, 18);
 }
 
 TEST(SharedDictionaryConfigTest, builderSeedsExistingConfig) {
@@ -119,7 +130,7 @@ TEST(SharedDictionaryConfigTest, builderSeedsExistingConfig) {
           .build();
 
   ASSERT_EQ(config.columns.size(), seedConfig.columns.size());
-  ASSERT_EQ(config.flatMapColumns.size(), 1);
+  ASSERT_EQ(config.flatMaps.size(), 1);
   EXPECT_EQ(config.columns[0].fieldPath, seedConfig.columns[0].fieldPath);
   EXPECT_EQ(
       config.columns[0].dictionary.scope,
@@ -127,10 +138,10 @@ TEST(SharedDictionaryConfigTest, builderSeedsExistingConfig) {
   EXPECT_EQ(
       config.columns[0].dictionary.dictionaryId,
       seedConfig.columns[0].dictionary.dictionaryId);
-  EXPECT_TRUE(seedConfig.flatMapColumns.empty());
-  EXPECT_EQ(config.flatMapColumns[0].fieldPath, "features");
-  ASSERT_EQ(config.flatMapColumns[0].keys.size(), 1);
-  EXPECT_EQ(config.flatMapColumns[0].keys[0].key, 10);
+  EXPECT_TRUE(seedConfig.flatMaps.empty());
+  EXPECT_EQ(config.flatMaps[0].fieldPath, "features");
+  ASSERT_EQ(config.flatMaps[0].keys.size(), 1);
+  EXPECT_EQ(config.flatMaps[0].keys[0].key, 10);
 }
 
 TEST(SharedDictionaryConfigTest, builderRejectsDuplicateTargets) {
@@ -176,7 +187,7 @@ TEST(SharedDictionaryConfigTest, builderRejectsInvalidPaths) {
           .name = "empty column path",
           .fieldPath = "",
           .flatMap = false,
-          .expectedMessage = "Shared dictionary column path must not be empty.",
+          .expectedMessage = "Shared dictionary path must not be empty.",
       },
       {
           .name = "column path with subscript",
@@ -190,8 +201,7 @@ TEST(SharedDictionaryConfigTest, builderRejectsInvalidPaths) {
           .name = "empty flat-map path",
           .fieldPath = "",
           .flatMap = true,
-          .expectedMessage =
-              "Shared dictionary flat-map column path must not be empty.",
+          .expectedMessage = "Shared dictionary path must not be empty.",
       },
       {
           .name = "nested flat-map path",
@@ -247,11 +257,17 @@ TEST(SharedDictionaryConfigTest, builderRejectsInvalidValueSubfields) {
               "elements.",
       },
       {
-          .name = "leading wildcard",
-          .valueSubfield = "[*].value",
+          .name = "leading key subscript",
+          .valueSubfield = "[10].value",
           .expectedMessage =
-              "Shared dictionary flat-map value subfield path '[*].value' "
-              "must start with a field name.",
+              "Shared dictionary path '[10].value' must start with a field "
+              "name.",
+      },
+      {
+          .name = "leading all subscript",
+          .valueSubfield = "[*]",
+          .expectedMessage =
+              "Shared dictionary path '[*]' must start with a field name.",
       },
   };
 

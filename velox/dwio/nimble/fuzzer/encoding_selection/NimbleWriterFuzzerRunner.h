@@ -26,7 +26,8 @@ void setUpFuzzerEnvironments();
 /// elapses, re-seeding each iteration. At least one iteration always runs. The
 /// per-encoding coverage tally is logged on the way out whether or not an
 /// iteration threw, and with --nimble_writer_fuzzer_require_coverage the run
-/// also fails if any candidate encoding was never applied.
+/// also fails if any candidate encoding or required chunk-stats metadata shape
+/// was not exercised.
 ///
 /// Parameters come from the nimble_writer_fuzzer_ gflags (seed, duration_sec,
 /// max_schema_depth, batch_size, num_batches, require_coverage); when the seed
