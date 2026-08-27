@@ -16,8 +16,12 @@
 
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 
+#include <optional>
+#include <tuple>
+
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
+#include "velox/dwio/parquet/reader/ParquetData.h"
 #include "velox/dwio/parquet/reader/RepeatedColumnReader.h"
 
 namespace facebook::velox::common {
@@ -25,6 +29,140 @@ class ScanSpec;
 }
 
 namespace facebook::velox::parquet {
+namespace {
+
+struct PhysicalLeafCost {
+  const ParquetTypeWithId* type;
+  bool hasCompleteMetadata{true};
+  uint64_t readBytes{0};
+  uint64_t uncompressedBytes{0};
+  uint64_t numValues{0};
+
+  bool operator<(const PhysicalLeafCost& other) const {
+    if (hasCompleteMetadata != other.hasCompleteMetadata) {
+      // Prefer a leaf with metadata for every non-empty row group. Partial
+      // metadata can underestimate its cost and may make the leaf unreadable.
+      return hasCompleteMetadata;
+    }
+    if (!hasCompleteMetadata) {
+      // Neither cost is reliable. Use schema order as a deterministic fallback.
+      return type->column() < other.type->column();
+    }
+    // Minimize bytes fetched first, then bytes decompressed and levels decoded.
+    // Use schema order to make costs deterministic.
+    return std::tuple{readBytes, uncompressedBytes, numValues, type->column()} <
+        std::tuple{
+            other.readBytes,
+            other.uncompressedBytes,
+            other.numValues,
+            other.type->column()};
+  }
+};
+
+PhysicalLeafCost physicalLeafCost(
+    const ParquetTypeWithId& type,
+    const FileMetaDataPtr& fileMetaData) {
+  PhysicalLeafCost cost{.type = &type};
+  // The source reader is fixed before row-group filtering. Use all non-empty
+  // row groups as a whole-file cost estimate; an individual split may have a
+  // different cheapest leaf for its subset of row groups.
+  for (auto i = 0; i < fileMetaData.numRowGroups(); ++i) {
+    auto rowGroup = fileMetaData.rowGroup(i);
+    if (rowGroup.numRows() == 0) {
+      continue;
+    }
+    if (type.column() >= static_cast<uint32_t>(rowGroup.numColumns())) {
+      cost.hasCompleteMetadata = false;
+      return cost;
+    }
+    auto chunk = rowGroup.columnChunk(type.column());
+    if (!chunk.hasMetadata()) {
+      cost.hasCompleteMetadata = false;
+      return cost;
+    }
+    const auto readSize = chunk.readSize();
+    if (readSize == 0) {
+      // Size metadata is optional. A non-empty row group cannot have a
+      // zero-byte column chunk, so zero means the read cost is unknown.
+      cost.hasCompleteMetadata = false;
+      return cost;
+    }
+    cost.readBytes += readSize;
+    cost.uncompressedBytes +=
+        static_cast<uint64_t>(chunk.totalUncompressedSize());
+    cost.numValues += static_cast<uint64_t>(chunk.numValues());
+  }
+  return cost;
+}
+
+std::optional<PhysicalLeafCost> findCheapestPhysicalLeafImpl(
+    const ParquetTypeWithId& type,
+    const FileMetaDataPtr& fileMetaData) {
+  if (type.getChildren().empty()) {
+    if (type.isLeaf()) {
+      return physicalLeafCost(type, fileMetaData);
+    }
+    return std::nullopt;
+  }
+
+  std::optional<PhysicalLeafCost> best;
+  for (auto i = 0; i < type.getChildren().size(); ++i) {
+    auto candidate =
+        findCheapestPhysicalLeafImpl(type.parquetChildAt(i), fileMetaData);
+    if (candidate && (!best || *candidate < *best)) {
+      best = std::move(candidate);
+    }
+  }
+  return best;
+}
+
+const ParquetTypeWithId& findCheapestPhysicalLeaf(
+    const ParquetTypeWithId& type,
+    const FileMetaDataPtr& fileMetaData) {
+  auto best = findCheapestPhysicalLeafImpl(type, fileMetaData);
+  VELOX_CHECK(
+      best.has_value(),
+      "Cannot source repetition/definition levels for nested struct: {}",
+      type.fullName());
+  return *best->type;
+}
+
+LevelMode repDefSourceLevelMode(
+    const ParquetTypeWithId& structType,
+    const ParquetTypeWithId& sourceType) {
+  const auto* node = &sourceType;
+  while (node != &structType) {
+    if (node->type()->kind() == TypeKind::ARRAY ||
+        node->type()->kind() == TypeKind::MAP) {
+      return LevelMode::kStructOverLists;
+    }
+    node = node->parquetParent();
+  }
+  return LevelMode::kNulls;
+}
+
+const ParquetTypeWithId& repDefSourceType(
+    const dwio::common::SelectiveColumnReader& reader) {
+  const auto* source = &reader;
+  while (source->fileType().type()->kind() == TypeKind::ROW) {
+    source =
+        static_cast<const StructColumnReader*>(source)->repDefSourceReader();
+  }
+  return *reinterpret_cast<const ParquetTypeWithId*>(&source->fileType());
+}
+
+} // namespace
+
+struct StructColumnReader::SyntheticRepDefSource {
+  // Members are destroyed in reverse declaration order. Keep the ScanSpec
+  // alive until after the reader that references it is destroyed.
+  std::unique_ptr<common::ScanSpec> scanSpec;
+
+  // Reads repetition and definition levels without producing values.
+  std::unique_ptr<dwio::common::SelectiveColumnReader> reader;
+};
+
+StructColumnReader::~StructColumnReader() = default;
 
 StructColumnReader::StructColumnReader(
     const dwio::common::ColumnReaderOptions& columnReaderOptions,
@@ -61,33 +199,50 @@ StructColumnReader::StructColumnReader(
 
     childSpecs[i]->setSubscript(children_.size() - 1);
   }
+  ensureSyntheticRepDefSource(columnReaderOptions, params);
   auto type = reinterpret_cast<const ParquetTypeWithId*>(fileType_.get());
   if (type->parent()) {
-    levelMode_ = reinterpret_cast<const ParquetTypeWithId*>(fileType_.get())
-                     ->makeLevelInfo(levelInfo_);
-    childForRepDefs_ = findBestLeaf();
-    // Set mode to struct over lists if the child for repdefs has a list between
-    // this and the child.
-    auto child = childForRepDefs_;
-    for (;;) {
-      assert(child);
-      if (child->fileType().type()->kind() == TypeKind::ARRAY ||
-          child->fileType().type()->kind() == TypeKind::MAP) {
-        levelMode_ = LevelMode::kStructOverLists;
-        break;
-      }
-      if (child->fileType().type()->kind() == TypeKind::ROW) {
-        child = reinterpret_cast<StructColumnReader*>(child)->childForRepDefs();
-        continue;
-      }
-      levelMode_ = LevelMode::kNulls;
-      break;
-    }
+    type->makeLevelInfo(levelInfo_);
+    repDefSourceReader_ = findBestLeaf();
+    levelMode_ =
+        repDefSourceLevelMode(*type, repDefSourceType(*repDefSourceReader_));
   }
+  VELOX_DCHECK_EQ(type->parent() == nullptr, repDefSourceReader_ == nullptr);
+}
+
+void StructColumnReader::ensureSyntheticRepDefSource(
+    const dwio::common::ColumnReaderOptions& columnReaderOptions,
+    ParquetParams& params) {
+  auto type = reinterpret_cast<const ParquetTypeWithId*>(fileType_.get());
+  if (!type->parent() || !children_.empty()) {
+    return;
+  }
+
+  const auto* leafType =
+      &findCheapestPhysicalLeaf(*type, params.fileMetaData());
+  std::shared_ptr<const dwio::common::TypeWithId> leafFileType(
+      fileType_, leafType);
+
+  // Struct nullness can be derived from any leaf under the struct. Keep the
+  // least expensive physical leaf solely as the repetition/definition source.
+  auto repDefSource = std::make_unique<SyntheticRepDefSource>();
+  repDefSource->scanSpec = std::make_unique<common::ScanSpec>(leafType->name_);
+  repDefSource->scanSpec->setProjectOut(false);
+  repDefSource->reader = ParquetColumnReader::build(
+      columnReaderOptions,
+      leafFileType->type(),
+      leafFileType,
+      params,
+      *repDefSource->scanSpec);
+  syntheticRepDefSource_ = std::move(repDefSource);
 }
 
 dwio::common::SelectiveColumnReader* FOLLY_NONNULL
 StructColumnReader::findBestLeaf() {
+  if (children_.empty()) {
+    return syntheticRepDefSource_->reader.get();
+  }
+
   SelectiveColumnReader* best = nullptr;
   for (auto i = 0; i < children_.size(); ++i) {
     auto child = children_[i];
@@ -107,7 +262,6 @@ StructColumnReader::findBestLeaf() {
       best = child;
     }
   }
-  assert(best);
   return best;
 }
 
@@ -143,17 +297,7 @@ bool StructColumnReader::isRowGroupBuffered(
 void StructColumnReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {
-  for (auto& child : children_) {
-    if (auto structChild = dynamic_cast<StructColumnReader*>(child)) {
-      structChild->enqueueRowGroup(index, input);
-    } else if (auto listChild = dynamic_cast<ListColumnReader*>(child)) {
-      listChild->enqueueRowGroup(index, input);
-    } else if (auto mapChild = dynamic_cast<MapColumnReader*>(child)) {
-      mapChild->enqueueRowGroup(index, input);
-    } else {
-      child->formatData().as<ParquetData>().enqueueRowGroup(index, input);
-    }
-  }
+  enqueueRowGroupRecursive(*this, index, input);
 }
 
 void StructColumnReader::seekToRowGroup(int64_t index) {
@@ -163,6 +307,10 @@ void StructColumnReader::seekToRowGroup(int64_t index) {
   readOffset_ = 0;
   for (auto& child : children_) {
     child->seekToRowGroup(index);
+  }
+  // Keep the rep/def source in sync when switching row groups.
+  if (syntheticRepDefSource_) {
+    syntheticRepDefSource_->reader->seekToRowGroup(index);
   }
 }
 

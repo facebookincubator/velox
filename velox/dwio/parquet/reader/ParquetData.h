@@ -50,6 +50,10 @@ class ParquetParams : public dwio::common::FormatParams {
     return timestampPrecision_;
   }
 
+  const FileMetaDataPtr& fileMetaData() const {
+    return metaData_;
+  }
+
  private:
   const FileMetaDataPtr metaData_;
   const tz::TimeZone* sessionTimezone_;

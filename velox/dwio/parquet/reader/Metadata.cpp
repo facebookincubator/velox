@@ -516,6 +516,13 @@ int64_t ColumnChunkMetaDataPtr::totalUncompressedSize() const {
            ->total_uncompressed_size());
 }
 
+uint64_t ColumnChunkMetaDataPtr::readSize() const {
+  return static_cast<uint64_t>(
+      compression() == common::CompressionKind::CompressionKind_NONE
+          ? totalUncompressedSize()
+          : totalCompressedSize());
+}
+
 FOLLY_ALWAYS_INLINE const thrift::RowGroup* thriftRowGroupPtr(
     const void* metadata) {
   return reinterpret_cast<const thrift::RowGroup*>(metadata);
