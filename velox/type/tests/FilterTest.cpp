@@ -271,6 +271,65 @@ TEST(FilterTest, createHugeintValuesEmpty) {
   EXPECT_FALSE(filter->testInt128(0));
 }
 
+TEST(FilterTest, mergeWithHugeintValuesUsingHashTable) {
+  auto valueAt = [](uint64_t highBits) {
+    return HugeInt::build(highBits, /*lowBits=*/42);
+  };
+
+  const auto value1 = valueAt(1);
+  const auto value2 = valueAt(2);
+  const auto value3 = valueAt(3);
+  const auto value4 = valueAt(4);
+
+  auto test =
+      [](const Filter& left, const Filter& right, const Filter& expected) {
+        auto merged = left.mergeWith(&right);
+        ASSERT_TRUE(merged->testingEquals(expected));
+        auto reverseMerged = right.mergeWith(&left);
+        ASSERT_TRUE(reverseMerged->testingEquals(expected));
+      };
+
+  {
+    SCOPED_TRACE("HugeintValuesUsingHashTable");
+    auto left = createHugeintValues({value1, value2, value3}, true);
+    auto right = createHugeintValues({value2, value4}, false);
+    auto expected = createHugeintValues({value2}, false);
+    test(*left, *right, *expected);
+  }
+
+  {
+    SCOPED_TRACE("HugeintRange");
+    auto values = createHugeintValues({value1, value2, value3}, true);
+    auto range = betweenHugeint(value2, value4, true);
+    auto expected = createHugeintValues({value2, value3}, true);
+    test(*values, *range, *expected);
+  }
+
+  {
+    SCOPED_TRACE("HugeintRange intersection");
+    auto left = betweenHugeint(value1, value3, true);
+    auto right = betweenHugeint(value2, value4, false);
+    auto expected = betweenHugeint(value2, value3, false);
+    test(*left, *right, *expected);
+  }
+
+  {
+    SCOPED_TRACE("Disjoint ranges with nulls");
+    auto left = betweenHugeint(value1, value1, true);
+    auto right = betweenHugeint(value2, value4, true);
+    IsNull expected;
+    test(*left, *right, expected);
+  }
+
+  {
+    SCOPED_TRACE("Disjoint values with nulls");
+    auto left = createHugeintValues({value1}, true);
+    auto right = createHugeintValues({value2}, true);
+    IsNull expected;
+    test(*left, *right, expected);
+  }
+}
+
 TEST(FilterTest, negatedBigintRange) {
   auto filter = notEqual(1, false);
   EXPECT_FALSE(filter->testNull());

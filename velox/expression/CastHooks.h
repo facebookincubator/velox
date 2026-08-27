@@ -129,6 +129,13 @@ class CastHooks {
   /// the entire array if the cast of that element fails.
   virtual bool applyTryCastRecursively() const = 0;
 
+  /// Returns whether decimal to floating point casts should use high precision
+  /// conversion for values that cannot be represented exactly by floating point
+  /// arithmetic.
+  virtual bool decimalToFloatHighPrecisionCastEnabled() const {
+    return false;
+  }
+
   virtual PolicyType getPolicy() const = 0;
 
   /// Returns true if TIMESTAMP_UTC casts are supported.

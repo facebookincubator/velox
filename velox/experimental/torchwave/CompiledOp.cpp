@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/torchwave/CompiledOp.h"
+#include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Compile.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/NodePrinter.h"
@@ -971,6 +972,8 @@ CompositeInvocation::CompositeInvocation(
       reusableIds_(reusableIds.begin(), reusableIds.end()),
       prePassStandalones_(std::move(prePassStandalones)),
       elidedCloneInputs_(std::move(elidedCloneInputs)) {}
+
+CompositeInvocation::~CompositeInvocation() = default;
 
 namespace {
 
@@ -1955,6 +1958,51 @@ void ensureCudaTensor(
     const std::string& sizeKey = std::string("dyn"),
     ExecutionState* state = nullptr) {
   auto& existing = frame.getIValue(actualId);
+  // Allocation groups carve every member out of one buffer once the whole
+  // group has been sized, so a member only reports its shape here; its frame
+  // slot is written later, by materializeAllocGroup. Checked ahead of the
+  // resize/keep path below because a pooled frame can still hold the previous
+  // execution's tensor for this value, and keeping that would leave the member
+  // outside the group its lifetime was planned around.
+  //
+  // Not, however, when the slot already holds a tensor a second frame slot
+  // shares: that is the output of an in-place op whose reserve function has
+  // just aliased it to the argument it mutates (tw.masked_put_ and the other
+  // scatters). Its buffer is deliberately somebody else's, and carving it a
+  // slot of its own would drop the mutation on the floor. Left out of the
+  // group, which materializeAllocGroup tolerates. Same ownership test the
+  // freeing path uses to tell an alias from a solely-owned buffer.
+  const bool sharedWithAnotherValue = existing.isTensor() &&
+      existing.toTensor().defined() && existing.toTensor().use_count() > 1;
+  // The frame already holds a tensor of exactly this shape, so the ordinary
+  // path below would keep it rather than allocate. Then this is not this
+  // launch's buffer -- something else produced the value and the sizing only
+  // checks it -- and carving it a slot would replace what that something wrote.
+  const bool wouldKeep = existing.isTensor() && existing.toTensor().defined() &&
+      existing.toTensor().is_cuda() && existing.toTensor().sizes() == dims;
+  if (auto* collector = currentAllocCollector();
+      !sharedWithAnotherValue && !wouldKeep) {
+    if (collector != nullptr && collector->capture(actualId, dims)) {
+      // The group's buffer does not exist until every member has been sized,
+      // but the rest of the step's sizing reads shapes out of the frame -- size
+      // expressions, reserve functions, the grid choice. Leave a shape-only
+      // tensor behind so all of those see the shape they need;
+      // materializeAllocGroup replaces it with the real slot. Reaching for the
+      // data rather than the shape throws on a meta tensor, which is the
+      // failure worth having.
+      const auto* typeMeta = types.types.at(actualId);
+      frame.setIValue(
+          actualId,
+          at::empty(
+              dims,
+              at::TensorOptions()
+                  .dtype(
+                      typeMeta != nullptr ? typeMeta->dtype()
+                                          : c10::ScalarType::Float)
+                  .device(at::kMeta)));
+      return;
+    }
+  }
   // Bytes the output needs, for the allocation trace. Computed only when the
   // trace is on: it is a multiply per dim in the per-op path otherwise.
   auto requestedBytes = [&](c10::ScalarType dtype) {
@@ -1972,7 +2020,10 @@ void ensureCudaTensor(
         logKeyedAllocEvent(
             "resize", actualId, requestedBytes(tensor.scalar_type()), sizeKey);
       }
-      tensor.resize_(dims);
+      {
+        ScopedAllocCall timed;
+        tensor.resize_(dims);
+      }
     } else {
       traceTensor(actualId, dims, "keep");
       if (allocTraceEnabled()) {
@@ -2006,8 +2057,12 @@ void ensureCudaTensor(
         evictDonatable(*state, limit);
       }
     }
-    auto tensor = at::empty(
-        dims, at::TensorOptions().dtype(meta->dtype()).device(at::kCUDA));
+    at::Tensor tensor;
+    {
+      ScopedAllocCall timed;
+      tensor = at::empty(
+          dims, at::TensorOptions().dtype(meta->dtype()).device(at::kCUDA));
+    }
     frame.setIValue(actualId, std::move(tensor));
   }
 }
@@ -2124,6 +2179,16 @@ void allocateLaunchOutputs(
         largestIv.isTensor() && largestIv.toTensor().is_cuda() &&
         largestIv.toTensor().is_contiguous() &&
         reusableIds.count(largestId) > 0;
+    // Not over a concat group's band. Reuse trades an output allocation for an
+    // in-place write, but a placed output has no allocation to trade: its
+    // buffer is a region of the concat result, which the concat no longer
+    // copies into. Taking the input's buffer instead would leave that region
+    // unwritten. Nor may the input be a band: its region belongs to a result
+    // that outlives it, and this op's output would overwrite it.
+    if (tryReuse && state != nullptr && state->waveGraph != nullptr &&
+        state->waveGraph->isConcatPlaced(largestId)) {
+      tryReuse = false;
+    }
     // Do not reuse largestId's buffer if any OTHER kernel input aliases its
     // storage (e.g. a fused view/slice of it): writing the output in place
     // would clobber that operand's reads and corrupt the result.
@@ -2179,7 +2244,9 @@ void allocateLaunchOutputs(
           continue;
         }
       }
-      if (tryReuse && actualId != largestId) {
+      if (tryReuse && actualId != largestId &&
+          !(state != nullptr && state->waveGraph != nullptr &&
+            state->waveGraph->isConcatPlaced(actualId))) {
         auto* meta = types.types.at(actualId);
         if (meta && meta->dtype() == largestIv.toTensor().scalar_type()) {
           traceTensor(actualId, dims, "reuse");
@@ -2671,10 +2738,19 @@ void CompositeInvocation::sizeForUnreadyOperands(
     }
   }
   if (data.numElements > 0) {
+    auto* collector = currentAllocCollector();
     for (size_t oi = 0; oi < data.actualOutputs.size(); ++oi) {
       if (oi < data.actualOutputTypes.size() &&
           data.actualOutputTypes[oi] == nativert::Type::Kind::Tensor) {
-        const auto& oiv = frame.getIValue(data.actualOutputs[oi]);
+        const auto outputId = data.actualOutputs[oi];
+        // A member of one of this step's allocation groups has no tensor until
+        // the group is carved, which is after this pass. That None is not the
+        // one below: the value is produced right here, and zeroing the launch
+        // over it would starve the op to a block.
+        if (collector != nullptr && collector->owns(outputId)) {
+          continue;
+        }
+        const auto& oiv = frame.getIValue(outputId);
         // A None output comes from a later PN -- its tensor is not
         // materialized, so the kernel must not launch yet. An empty (0-element)
         // output is handled in device code (the elementwise size head sets
@@ -2916,6 +2992,7 @@ void CompositeInvocation::gatherLaunches(
         // deliberately not counted: those come from a preallocated arena and
         // cost nothing.
         const uint64_t tAlloc = doTiming ? folly::hardware_timestamp() : 0;
+        const int64_t allocCallBefore = threadAllocCallUs();
         allocateLaunchOutputs(
             data,
             &state,
@@ -2929,6 +3006,7 @@ void CompositeInvocation::gatherLaunches(
           sv.allocUs += static_cast<int64_t>(
               static_cast<double>(folly::hardware_timestamp() - tAlloc) /
               tscTicksPerMicro());
+          sv.allocCallUs += threadAllocCallUs() - allocCallBefore;
         }
         sizeForUnreadyOperands(data, launch, *state.frame);
         if (!launch.op->barrierCounters().empty()) {
@@ -2938,19 +3016,28 @@ void CompositeInvocation::gatherLaunches(
         // tensors are still in cache, instead of in a second sweep over
         // sv.kernels. The block's offset comes from the slot reservation, so it
         // does not move when a later op switches grid variant or is deferred.
-        const uint64_t tFill = doTiming ? folly::hardware_timestamp() : 0;
-        fillLaunchParamBlock(
-            data,
-            *state.frame,
-            pinnedBase,
-            deviceBase,
-            sv.paramOffsets.at(cursor.kernel),
-            returnBegin,
-            returnEnd);
-        if (doTiming) {
-          sv.fillUs += static_cast<int64_t>(
-              static_cast<double>(folly::hardware_timestamp() - tFill) /
-              tscTicksPerMicro());
+        //
+        // Skipped under an installed collector: there, a launch's outputs are
+        // members of a group that does not exist until every one of its members
+        // has been sized, so there is no tensor to read yet and fillStepParams
+        // sweeps the step once the groups are materialized. Keyed on the
+        // collector rather than the config so a step that groups nothing still
+        // fills inline.
+        if (currentAllocCollector() == nullptr) {
+          const uint64_t tFill = doTiming ? folly::hardware_timestamp() : 0;
+          fillLaunchParamBlock(
+              data,
+              *state.frame,
+              pinnedBase,
+              deviceBase,
+              sv.paramOffsets.at(cursor.kernel),
+              returnBegin,
+              returnEnd);
+          if (doTiming) {
+            sv.fillUs += static_cast<int64_t>(
+                static_cast<double>(folly::hardware_timestamp() - tFill) /
+                tscTicksPerMicro());
+          }
         }
         ++cursor.kernel;
       } else if (launch.standaloneShortcut != StandaloneShortcut::kNone) {
@@ -3246,8 +3333,30 @@ void resizeTensorFromDevice(
   auto* t = reinterpret_cast<const Tensor*>(pinnedBase + absOffset);
   auto& tensor = frame.getIValue(id).toTensor();
   std::vector<int64_t> newDims(t->rank);
+  int64_t newNumel = 1;
   for (int d = 0; d < t->rank; ++d) {
     newDims[d] = t->dims[d];
+    newNumel *= newDims[d];
+  }
+  // An allocation-group slot is a view into a buffer it shares with the rest of
+  // its group. resize_ past the end of that buffer reallocates the storage,
+  // which would move it out from under every other slot -- so a grow is refused
+  // for a tensor that does not own its storage outright. The device reports a
+  // count at or below the reserved one, so this can only trip on a kernel that
+  // has already overrun its output.
+  if (tensor.has_storage() && newNumel > tensor.numel()) {
+    const int64_t capacity =
+        static_cast<int64_t>(tensor.storage().nbytes()) / tensor.element_size();
+    TORCH_CHECK(
+        (tensor.storage_offset() == 0 && capacity == tensor.numel()) ||
+            tensor.storage_offset() + newNumel <= capacity,
+        "Value ",
+        id,
+        " came back from the device with ",
+        newNumel,
+        " elements, past the end of the shared buffer its ",
+        tensor.numel(),
+        " element slot was carved from");
   }
   tensor.resize_(newDims);
   if (trace) {
@@ -3457,6 +3566,57 @@ void checkNoReleasedReads(
 
 } // namespace
 
+void CompositeInvocation::fillStepParams(
+    ExecutionState& state,
+    StepVectors& sv,
+    uint8_t* pinnedBase,
+    uint8_t* deviceBase,
+    int32_t& returnBegin,
+    int32_t& returnEnd) {
+  const bool doTiming = WaveConfig::get().printTiming ||
+      (WaveConfig::get().trace & WaveConfig::kTiming);
+  const uint64_t tFill = doTiming ? folly::hardware_timestamp() : 0;
+  for (size_t i = 0; i < sv.kernels.size(); ++i) {
+    auto& data = sv.kernels[i];
+    const auto paramOffset = sv.paramOffsets[i];
+    int32_t launchReturnBegin = -1;
+    int32_t launchReturnEnd = -1;
+    fillLaunchParams(
+        data,
+        *state.frame,
+        pinnedBase + paramOffset,
+        launchReturnBegin,
+        launchReturnEnd);
+    patchTensorListPointers(
+        data, pinnedBase + paramOffset, deviceBase + paramOffset);
+    if (launchReturnBegin >= 0) {
+      const auto begin = static_cast<int32_t>(paramOffset + launchReturnBegin);
+      const auto end = static_cast<int32_t>(paramOffset + launchReturnEnd);
+      returnBegin = returnBegin < 0 ? begin : std::min(returnBegin, begin);
+      returnEnd = std::max(returnEnd, end);
+    }
+  }
+  if (doTiming) {
+    sv.fillUs += static_cast<int64_t>(
+        (folly::hardware_timestamp() - tFill) / tscTicksPerMicro());
+  }
+}
+
+bool CompositeInvocation::stepLevelRelease() const {
+  // Releasing a value at the last step that reads it, rather than at the node's
+  // last step, needs a reader set per value. Without one -- or with a pre-pass
+  // standalone, which runs outside the grids the reader set is built from --
+  // every value falls back to the node's last step.
+  return WaveConfig::get().freeIntermediates && WaveConfig::get().stepLastUse &&
+      !lastUseIds_.empty() && lastUseReaderOps_.size() == lastUseIds_.size() &&
+      prePassStandalones_.empty();
+}
+
+void CompositeInvocation::setAllocGroupPlan(
+    std::unique_ptr<AllocGroupPlan> plan) {
+  allocGroupPlan_ = std::move(plan);
+}
+
 void CompositeInvocation::releaseLastUseAtStep(
     ExecutionState& state,
     const std::vector<GridChoice>& grids,
@@ -3499,6 +3659,10 @@ void CompositeInvocation::releaseLastUseAtStep(
 // the CUDA kernel, transfers return values D2H, and verifies against
 // the reference frame if set.
 void CompositeInvocation::execute(ExecutionState& state) {
+  if (allocGroupEnabled()) {
+    executeAllocGroups(state);
+    return;
+  }
   Timer ex("comp inv execute", WaveConfig::get().printTiming);
   auto& frame = *state.frame;
   const int64_t reuseCount0 = gElementwiseReuseCount;
@@ -3566,14 +3730,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
     }
   };
 
-  // Release each last-use value at the last step that reads it instead of at
-  // the node's last step. Needs a reader set per value; without one (or with a
-  // pre-pass standalone, which runs outside the grids the reader set is built
-  // from) every value falls back to the node's last step.
-  const bool stepLastUse = WaveConfig::get().freeIntermediates &&
-      WaveConfig::get().stepLastUse && !lastUseIds_.empty() &&
-      lastUseReaderOps_.size() == lastUseIds_.size() &&
-      prePassStandalones_.empty();
+  const bool stepLastUse = stepLevelRelease();
   std::vector<int32_t> lastUseReleaseStep(
       stepLastUse ? lastUseIds_.size() : 0, -1);
 
@@ -3646,7 +3803,12 @@ void CompositeInvocation::execute(ExecutionState& state) {
     {
       auto t0 = Clock::now();
       sv.allocUs = 0;
+      sv.allocCallUs = 0;
       sv.fillUs = 0;
+      // Pooled across executions, so last run's groups would otherwise add to
+      // this one's.
+      sv.allocGroups = 0;
+      sv.allocGroupTensors = 0;
       gatherLaunches(
           state,
           currentGridChoices,
@@ -3676,6 +3838,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
         returnBegin = -1;
         returnEnd = -1;
         sv.allocUs = 0;
+        sv.allocCallUs = 0;
         sv.fillUs = 0;
         gatherLaunches(
             state,
@@ -4163,6 +4326,643 @@ void CompositeInvocation::execute(ExecutionState& state) {
 
   // Per-node elementwise input-reuse summary (alongside the alloc traces
   // above).
+  if ((WaveConfig::get().trace & WaveConfig::kTiming) &&
+      gElementwiseReuseCount > reuseCount0) {
+    std::cout << "  node " << sequenceNumber_ << " elementwise input reuse: "
+              << (gElementwiseReuseCount - reuseCount0) << " tensors, "
+              << (gElementwiseReuseBytes - reuseBytes0) / 1024
+              << " KB written in place" << std::endl;
+  }
+}
+
+// The allocation-group execute path.
+//
+// Defined here rather than in AllocGroup.cpp, where the rest of the mode lives,
+// because the step loop is built almost entirely out of this file's internal
+// helpers -- getStepVectors, the buffer arena, the pending-return machinery,
+// the event bookkeeping -- none of which is declared in a header. Moving them
+// out to move this out would be a much larger change than the mode. Everything
+// that does not need them (the plan, the grouping, the collector, the buffer
+// carving) is in AllocGroup.cpp.
+//
+// Differs from execute() only in how a step's outputs are allocated:
+//
+//   1. The grid is taken as fixed. execute() starts every op on the multi-block
+//      default and lets gatherLaunches switch it; here the cooperative grid is
+//      chosen up front, because the plan's step indices are indices into it and
+//      a switch would silently renumber them.
+//   2. A collector is installed for the step's groups, which diverts their
+//      members' allocations into shape records and suppresses the inline
+//      parameter fill.
+//   3. Groups are carved as they complete: the sync-free ones after the first
+//      pass, before the host waits on anything, and the rest after the deferred
+//      pass has run.
+//   4. The parameters are filled in one sweep at the end, once every output
+//      tensor exists.
+void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
+  Timer ex("comp inv execute allocgroup", WaveConfig::get().printTiming);
+  auto& frame = *state.frame;
+  const int64_t reuseCount0 = gElementwiseReuseCount;
+  const int64_t reuseBytes0 = gElementwiseReuseBytes;
+
+  if (WaveConfig::get().trace & (WaveConfig::kNodes | WaveConfig::kLaunches)) {
+    std::cout << "==== Node " << sequenceNumber_ << " (alloc groups)"
+              << std::endl;
+  }
+
+  auto& sv0 = getStepVectors(state.stepVectors, sequenceNumber_, 0);
+  auto& gridChoices = sv0.gridChoices;
+  gridChoices.clear();
+  for (auto& op : ops_) {
+    // Fixed at the cooperative grid, not the multi-block default that
+    // gatherLaunches would switch away from. An op with no cooperative variant
+    // keeps its own grid; the plan was built from the same choice, so the two
+    // agree.
+    auto& cg = op.projectOp()->cgGrid();
+    gridChoices.push_back(
+        {0, false, cg.empty() ? &op.projectOp()->grid() : &cg});
+  }
+
+  // A lifetime crosses nodes: the node that allocates a value is rarely the one
+  // whose last use releases it, so the grouping is decided for the graph as a
+  // whole and each node is handed the groups it allocates. Built on the first
+  // execution that reaches this, since the mode is a runtime choice, and shared
+  // by every later one -- the compiled grids it reads do not change.
+  if (allocGroupPlan_ == nullptr) {
+    state.waveGraph->ensureAllocGroupPlans([&] {
+      installGraphAllocGroupPlans(*state.waveGraph, *state.valueTypes);
+    });
+    TORCH_CHECK(
+        allocGroupPlan_ != nullptr,
+        "Node ",
+        sequenceNumber_,
+        " got no allocation-group plan; it is not one of the compiled nodes the "
+        "graph-wide plan was built from");
+  }
+  const auto& plan = *allocGroupPlan_;
+
+  using Clock = std::chrono::high_resolution_clock;
+  const bool doTiming = WaveConfig::get().printTiming ||
+      (WaveConfig::get().trace & WaveConfig::kTiming);
+  const bool doEventTiming =
+      (WaveConfig::get().trace & WaveConfig::kTiming) != 0;
+  auto elapsed = [](Clock::time_point start) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               Clock::now() - start)
+        .count();
+  };
+
+  bool ranStandalones = false;
+
+  const bool countElidedClones =
+      (WaveConfig::get().trace & WaveConfig::kTiming) &&
+      !elidedCloneInputs_.empty();
+  std::vector<bool> elidedCounted(
+      countElidedClones ? elidedCloneInputs_.size() : 0, false);
+  auto addElidedCloneBytes = [&](StepVectors& sv) {
+    for (size_t i = 0; i < elidedCloneInputs_.size(); ++i) {
+      if (elidedCounted[i]) {
+        continue;
+      }
+      const auto& [valueId, numClones] = elidedCloneInputs_[i];
+      const auto& ivalue = frame.getIValue(valueId);
+      if (!ivalue.isTensor() || !ivalue.toTensor().defined()) {
+        continue;
+      }
+      const auto& tensor = ivalue.toTensor();
+      sv.elidedCloneBytes += tensor.numel() * tensor.element_size() * numClones;
+      elidedCounted[i] = true;
+    }
+  };
+
+  const bool stepLastUse = stepLevelRelease();
+  std::vector<int32_t> lastUseReleaseStep(
+      stepLastUse ? lastUseIds_.size() : 0, -1);
+
+  int32_t blockSize;
+  int32_t lastExecStep = -1;
+  for (int32_t stepIdx = 0;; ++stepIdx) {
+    auto& sv = getStepVectors(state.stepVectors, sequenceNumber_, stepIdx);
+    drainBeforeStepIfRequested(state);
+    enforceDelayedFreeLimit(state);
+    auto& currentGridChoices =
+        state.stepVectors.at(sequenceNumber_).at(0).gridChoices;
+
+    layoutParamSlots(stepIdx, sv);
+    sv.blockInfoOffset = roundUp(sv.paramRegionBytes, int64_t{16});
+    const int64_t totalPinnedBytes = sv.blockInfoOffset +
+        static_cast<int64_t>(sv.blockCapacity) *
+            static_cast<int64_t>(sizeof(BlockInfo));
+    const int64_t totalAllocBytes = totalPinnedBytes +
+        static_cast<int64_t>(sv.blockCapacity) *
+            static_cast<int64_t>(sizeof(DebugInfo));
+    uint8_t* pinnedBase = getOrAllocateBuffer(
+                              state.pinnedBuffers,
+                              sequenceNumber_,
+                              stepIdx,
+                              totalAllocBytes,
+                              state.pinnedArena,
+                              WaveConfig::get().debugSingleOps
+                                  ? std::function<void(void*, int64_t)>(
+                                        [](void* ptr, int64_t bytes) {
+                                          memset(ptr, 0xaa, bytes);
+                                        })
+                                  : nullptr)
+                              ->as<uint8_t>();
+    uint8_t* deviceBase = getOrAllocateBuffer(
+                              state.deviceBuffers,
+                              sequenceNumber_,
+                              stepIdx,
+                              totalAllocBytes,
+                              state.deviceArena)
+                              ->as<uint8_t>();
+
+    int32_t returnBegin = -1;
+    int32_t returnEnd = -1;
+    std::vector<std::pair<size_t, DeferReason>> deferred;
+
+    // The step's groups. Empty is the common case for a step whose outputs all
+    // escape, and installing an empty collector anyway is what keeps the fill
+    // suppression uniform across every step of the mode.
+    std::vector<const AllocGroup*> stepGroups;
+    if (stepIdx < static_cast<int32_t>(plan.groupsByStep.size())) {
+      for (auto g : plan.groupsByStep[stepIdx]) {
+        stepGroups.push_back(&plan.groups[g]);
+      }
+    }
+    AllocGroupCollector collector(stepGroups);
+
+    // Carves the step's groups. Called once before the host waits -- which is
+    // what picks up the sync-free ones -- and again after the deferred pass;
+    // groups already carved are skipped the second time.
+    //
+    // Before the wait only a group all of whose members are sized can be
+    // carved: an unsized member may simply be one a deferred op has not reached
+    // yet. After the deferred pass the step's sizing is over, so what is still
+    // unsized never will be -- the plan proposed a member the sizing path
+    // allocates some other way -- and the group is carved without it.
+    auto materializeReady = [&](bool afterWait) {
+      for (size_t g = 0; g < collector.numGroups(); ++g) {
+        if (collector.materialized(g) ||
+            (!afterWait && !collector.complete(g))) {
+          continue;
+        }
+        // A concat group is laid out by the shape of the result rather than by
+        // packing slots, and its members are the regions of that result. A
+        // member the sizing pass never reached is not dropped the way an
+        // ordinary group's is: the layout still has to account for its extent,
+        // so it is measured from the frame and simply not carved.
+        const auto* concat = collector.concatLayout(g);
+        int32_t numCarved = 0;
+        AllocGroupBuffer buffer;
+        const uint64_t tAlloc = doTiming ? folly::hardware_timestamp() : 0;
+        const int64_t allocCallBefore = threadAllocCallUs();
+        if (concat != nullptr) {
+          buffer = materializeConcatGroup(
+              *concat, collector.requests(g), collector.sizedMask(g), frame);
+          for (const auto& slot : buffer.slots) {
+            numCarved += slot.defined() ? 1 : 0;
+          }
+        } else {
+          auto requests = collector.sizedRequests(g);
+          if (requests.empty()) {
+            collector.markMaterialized(g);
+            continue;
+          }
+          buffer = materializeAllocGroup(requests, frame);
+          numCarved = static_cast<int32_t>(requests.size());
+        }
+        collector.markMaterialized(g);
+        ++sv.allocGroups;
+        sv.allocGroupTensors += numCarved;
+        if (doTiming) {
+          sv.allocUs += static_cast<int64_t>(
+              (folly::hardware_timestamp() - tAlloc) / tscTicksPerMicro());
+          sv.allocCallUs += threadAllocCallUs() - allocCallBefore;
+        }
+        if (allocTraceEnabled()) {
+          logAllocEvent("allocgroup", -1, buffer.totalBytes);
+        }
+      }
+    };
+
+    {
+      auto t0 = Clock::now();
+      sv.allocUs = 0;
+      sv.allocCallUs = 0;
+      sv.fillUs = 0;
+      // Pooled across executions, so last run's groups would otherwise add to
+      // this one's.
+      sv.allocGroups = 0;
+      sv.allocGroupTensors = 0;
+      gatherLaunches(
+          state,
+          currentGridChoices,
+          stepIdx,
+          sv,
+          pinnedBase,
+          deviceBase,
+          /*deferredOnly=*/false,
+          deferred,
+          returnBegin,
+          returnEnd);
+      // The grid was fixed before the loop, so nothing can have switched it.
+      // If it ever did, the plan's step indices would no longer name the steps
+      // the groups were built from and a group could outlive its buffer.
+      TORCH_CHECK(
+          !sv.gridChanged,
+          "Grid variant switched at node ",
+          sequenceNumber_,
+          " step ",
+          stepIdx,
+          " in allocation-group mode, where the grid is fixed before execution");
+      if (doTiming) {
+        sv.gatherUs = elapsed(t0) - sv.allocUs - sv.fillUs;
+      }
+    }
+    // Everything sizeable without blocking is sized, so the groups that need no
+    // transfer are complete: carve them before the host waits on anything.
+    materializeReady(/*afterWait=*/false);
+
+    sv.refCheckUs = 0;
+    sv.elidedCloneBytes = 0;
+    if (sv.kernels.empty() && sv.standalones.empty() &&
+        sv.shortcutStandalones.empty()) {
+      break;
+    }
+    lastExecStep = stepIdx;
+    sampleRunAhead(state);
+
+    if (!deferred.empty()) {
+      bool forMemory = false;
+      int32_t throughStep = -1;
+      for (const auto& [opIndex, reason] : deferred) {
+        if (reason == DeferReason::kMemory) {
+          forMemory = true;
+        } else {
+          throughStep = std::max(
+              throughStep, neededPendingStep(state, sv.opReadIds[opIndex]));
+        }
+      }
+      if (forMemory) {
+        enforceDelayedFreeLimit(state);
+        resolveAllPendingReturns(state);
+      } else {
+        resolvePendingReturns(state, throughStep);
+      }
+      auto t0 = Clock::now();
+      const auto allocBefore = sv.allocUs;
+      const auto fillBefore = sv.fillUs;
+      gatherLaunches(
+          state,
+          currentGridChoices,
+          stepIdx,
+          sv,
+          pinnedBase,
+          deviceBase,
+          /*deferredOnly=*/true,
+          deferred,
+          returnBegin,
+          returnEnd);
+      if (doTiming) {
+        sv.gatherUs +=
+            elapsed(t0) - (sv.allocUs - allocBefore) - (sv.fillUs - fillBefore);
+        state.numDeferredOps += static_cast<int32_t>(deferred.size());
+        ++state.numDeferredSteps;
+      }
+    }
+    // The transfers have landed, so the groups that were waiting on a returned
+    // count are sized now.
+    materializeReady(/*afterWait=*/true);
+
+    // What the plan claimed and the sizing pass did not deliver. Not an error
+    // -- those values were allocated the ordinary way -- but it is the gap
+    // between the grouping and what the mode can actually fold, so it is worth
+    // seeing on a measured run.
+    if (doTiming) {
+      for (size_t g = 0; g < collector.numGroups(); ++g) {
+        const auto notSized = collector.missing(g);
+        if (!notSized.empty()) {
+          std::cout << "  node " << sequenceNumber_ << " step " << stepIdx
+                    << " group " << g << ": " << notSized.size() << " of "
+                    << collector.requests(g).size()
+                    << " values were not sized by any launch and were left to "
+                       "the ordinary path"
+                    << std::endl;
+        }
+      }
+    }
+
+    // Every output tensor exists now, so the parameter blocks can be filled --
+    // the one sweep that replaces the per-launch fill the ordinary path does.
+    fillStepParams(state, sv, pinnedBase, deviceBase, returnBegin, returnEnd);
+
+    markD2hDependencies(state, sv);
+    if (!state.pendingReturns.empty()) {
+      checkNoPendingReads(state, sv, sequenceNumber_, stepIdx);
+    }
+    if (doTiming) {
+      countD2hDependencies(state, sv);
+    }
+    recordD2hProducers(state, sv);
+    if (WaveConfig::get().trace & WaveConfig::kFrame) {
+      checkNoReleasedReads(state, sv, sequenceNumber_, stepIdx);
+    }
+    sv.executedStep = state.executedSteps;
+    ++state.executedSteps;
+    if (stepLastUse) {
+      releaseLastUseAtStep(
+          state, currentGridChoices, stepIdx, sv, lastUseReleaseStep);
+    }
+
+    if (sv.kernels.empty()) {
+      if (WaveConfig::get().trace &
+          (WaveConfig::kNodes | WaveConfig::kLaunches)) {
+        traceStep(stepIdx, sv, currentGridChoices);
+      }
+      runShortcutStandalones(
+          sv.shortcutStandalones, state, doTiming, sv.shortcutUs);
+      auto& stepEvents = newStepEvents(state, sequenceNumber_, stepIdx);
+      if (sv.hasGpuStandalones) {
+        if (state.lastWaveDone != nullptr) {
+          state.lastWaveDone->wait(torchStream());
+        }
+        if (doEventTiming) {
+          stepEvents.standaloneBegin->record(torchStream());
+        }
+      }
+      auto tStandalone = doTiming ? Clock::now() : Clock::time_point{};
+      runStandalones(
+          sv.standalones,
+          state,
+          *state.kernelMap,
+          *state.standaloneIndices,
+          *state.standaloneStats,
+          doTiming);
+      if (sv.hasGpuStandalones) {
+        stepEvents.standaloneDone->record(torchStream());
+        state.lastStandaloneDone = stepEvents.standaloneDone.get();
+      }
+      if (doTiming) {
+        sv.standaloneUs = elapsed(tStandalone);
+        sv.currentBytes = currentAllocatedBytes();
+      }
+      if (countElidedClones) {
+        addElidedCloneBytes(sv);
+      }
+      ranStandalones = true;
+      state.launchDebugInfos.push_back(
+          {nullptr, nullptr, 0, sequenceNumber_, stepIdx});
+      {
+        bool timeRefCheck = doTiming && WaveConfig::get().referenceFrame;
+        if (timeRefCheck) {
+          syncWaveStream(state);
+          syncTorchDefaultStream();
+        }
+        if (WaveConfig::get().referenceFrame != nullptr) {
+          resolveAllPendingReturns(state);
+        }
+        auto tRefCheck = timeRefCheck ? Clock::now() : Clock::time_point{};
+        verifyAgainstReference(sv.shortcutStandalones, frame, state);
+        verifyAgainstReference(sv.standalones, frame, state);
+        if (timeRefCheck) {
+          sv.refCheckUs += elapsed(tRefCheck);
+        }
+      }
+      sv.executionStage = ExecutionStage::kAllocated;
+      continue;
+    }
+
+    if (!state.traceState.empty()) {
+      for (const auto& launch : sv.kernels) {
+        traceFrameValues("input", launch.actualInputs, frame, state.traceState);
+      }
+    }
+
+    auto* deviceDebugBase =
+        reinterpret_cast<DebugInfo*>(deviceBase + totalPinnedBytes);
+    if (doTiming) {
+      sv.inputBytes = 0;
+      sv.outputBytes = 0;
+      for (size_t i = 0; i < sv.kernels.size(); ++i) {
+        for (size_t j = 0; j < sv.kernels[i].tensorsInFrame.size(); ++j) {
+          auto off = sv.kernels[i].tensorOffsets[j];
+          auto* t =
+              reinterpret_cast<Tensor*>(pinnedBase + sv.paramOffsets[i] + off);
+          auto bytes = static_cast<int64_t>(t->numEl) * t->elementSize;
+          if (sv.kernels[i].shapeOnlyTensorIndices.count(j)) {
+            continue;
+          }
+          if (j < static_cast<size_t>(sv.kernels[i].launch->op->numInputs())) {
+            sv.inputBytes += bytes;
+          } else {
+            sv.outputBytes += bytes;
+          }
+        }
+      }
+    }
+
+    {
+      auto t0 = Clock::now();
+      if (gridSizesMatch(sv.kernels, sv)) {
+        blockSize = sv.cachedBlockSize;
+      } else {
+        blockSize =
+            makeGrid(sv.kernels, sv, kernel_->kernelInfo().maxOccupancy0);
+        TORCH_CHECK(
+            (blockSize & (blockSize - 1)) == 0,
+            "Block size must be a power of two, got ",
+            blockSize);
+        sv.cachedBlockSize = blockSize;
+        updateGridSizeBounds(sv.kernels, sv);
+      }
+      if (doTiming) {
+        sv.gridUs = elapsed(t0);
+      }
+    }
+
+    auto numBlocks = sv.blocks.size();
+    TORCH_CHECK(
+        numBlocks <= static_cast<size_t>(sv.blockCapacity),
+        "makeGrid produced ",
+        numBlocks,
+        " blocks for node ",
+        sequenceNumber_,
+        " step ",
+        stepIdx,
+        " but the buffer was reserved for ",
+        sv.blockCapacity);
+    {
+      auto t0 = Clock::now();
+      auto* pinnedBlocks =
+          reinterpret_cast<BlockInfo*>(pinnedBase + sv.blockInfoOffset);
+      if (!sv.blocks.empty()) {
+        memcpy(pinnedBlocks, sv.blocks.data(), numBlocks * sizeof(BlockInfo));
+      }
+      for (size_t b = 0; b < numBlocks; ++b) {
+        auto idx = sv.launchIndices[b];
+        pinnedBlocks[b].params = deviceBase + sv.paramOffsets[idx];
+        pinnedBlocks[b].debugInfo = deviceDebugBase + b;
+      }
+      if (doTiming) {
+        sv.fillUs += elapsed(t0);
+      }
+    }
+
+    if (WaveConfig::get().trace &
+        (WaveConfig::kNodes | WaveConfig::kLaunches)) {
+      traceStep(stepIdx, sv, currentGridChoices);
+    }
+
+    state.launchDebugInfos.push_back(
+        {reinterpret_cast<DebugInfo*>(pinnedBase + totalPinnedBytes),
+         deviceDebugBase,
+         static_cast<int32_t>(numBlocks),
+         sequenceNumber_,
+         stepIdx});
+
+    auto& stepEvents = newStepEvents(state, sequenceNumber_, stepIdx);
+    int64_t standaloneElapsed = 0;
+    auto runStepStandalones = [&]() {
+      if (!sv.shortcutStandalones.empty()) {
+        runShortcutStandalones(
+            sv.shortcutStandalones, state, doTiming, sv.shortcutUs);
+      }
+      if (!sv.standalones.empty()) {
+        if (state.lastWaveDone != nullptr) {
+          state.lastWaveDone->wait(torchStream());
+        }
+        if (doEventTiming) {
+          stepEvents.standaloneBegin->record(torchStream());
+        }
+        auto tStandalone = doTiming ? Clock::now() : Clock::time_point{};
+        runStandalones(
+            sv.standalones,
+            state,
+            *state.kernelMap,
+            *state.standaloneIndices,
+            *state.standaloneStats,
+            doTiming);
+        stepEvents.standaloneDone->record(torchStream());
+        state.lastStandaloneDone = stepEvents.standaloneDone.get();
+        if (doTiming) {
+          standaloneElapsed = elapsed(tStandalone);
+        }
+        ranStandalones = true;
+      }
+    };
+
+    if (state.lastStandaloneDone != nullptr) {
+      state.lastStandaloneDone->wait(*state.stream);
+    }
+    if (doEventTiming) {
+      stepEvents.waveBegin->record(*state.stream);
+    }
+
+    const bool deferReturn = WaveConfig::get().deferD2h && returnBegin >= 0 &&
+        !WaveConfig::get().debugSingleOps;
+    {
+      auto tLaunch = Clock::now();
+      launch(
+          static_cast<int32_t>(numBlocks),
+          blockSize,
+          pinnedBase,
+          deviceBase,
+          sv.blockInfoOffset +
+              static_cast<int64_t>(numBlocks) *
+                  static_cast<int64_t>(sizeof(BlockInfo)),
+          returnBegin,
+          returnEnd,
+          deviceDebugBase,
+          state.stream.get(),
+          sv,
+          stepIdx,
+          deferReturn,
+          runStepStandalones,
+          &stepEvents);
+      state.lastWaveDone = stepEvents.waveDone.get();
+      advanceCompletedStages(state);
+
+      if (deferReturn) {
+        state.pendingReturns.push_back(
+            {sequenceNumber_,
+             stepIdx,
+             sv.executedStep,
+             stepEvents.waveDone.get()});
+      } else if (returnBegin >= 0) {
+        processReturnData(sv, frame, pinnedBase);
+      }
+      if (doTiming) {
+        sv.kernelUs = elapsed(tLaunch);
+        sv.standaloneUs = standaloneElapsed;
+        sv.standaloneBound = standaloneElapsed > sv.kernelUs;
+        sv.noDtoH = (returnBegin < 0);
+        sv.currentBytes = currentAllocatedBytes();
+      }
+      if (countElidedClones) {
+        addElidedCloneBytes(sv);
+      }
+    }
+
+    if (!state.traceState.empty()) {
+      syncWaveStream(state);
+      resolveAllPendingReturns(state);
+      for (const auto& launch : sv.kernels) {
+        traceFrameValues(
+            "output", launch.actualOutputs, frame, state.traceState);
+      }
+    }
+
+    {
+      bool timeRefCheck = doTiming && WaveConfig::get().referenceFrame;
+      if (timeRefCheck) {
+        syncWaveStream(state);
+        syncTorchDefaultStream();
+      }
+      if (WaveConfig::get().referenceFrame != nullptr) {
+        resolveAllPendingReturns(state);
+      }
+      auto tRefCheck = timeRefCheck ? Clock::now() : Clock::time_point{};
+      verifyAgainstReference(sv.shortcutStandalones, frame, state);
+      verifyAgainstReference(sv.standalones, frame, state);
+      verifyAgainstReference(sv.kernels, frame, state);
+      if (timeRefCheck) {
+        sv.refCheckUs += elapsed(tRefCheck);
+      }
+    }
+    sv.executionStage = ExecutionStage::kAllocated;
+  }
+
+  if (ranStandalones && !WaveConfig::get().runAhead) {
+    syncTorchDefaultStream();
+  }
+
+  if (WaveConfig::get().freeIntermediates && lastExecStep >= 0 &&
+      !lastUseIds_.empty()) {
+    auto& lastSv =
+        getStepVectors(state.stepVectors, sequenceNumber_, lastExecStep);
+    std::vector<nativert::ValueId> atNodeEnd;
+    for (size_t i = 0; i < lastUseIds_.size(); ++i) {
+      const int32_t releasedAt = stepLastUse ? lastUseReleaseStep[i] : -1;
+      if (releasedAt < 0) {
+        atNodeEnd.push_back(lastUseIds_[i]);
+      }
+      if (releasedAt < 0 || releasedAt == lastExecStep) {
+        ++state.numLastUseAtNodeEnd;
+      } else {
+        ++state.numLastUseEarly;
+      }
+    }
+    if (lastSv.executionStage == ExecutionStage::kSynced) {
+      resolvePendingReturns(state, lastSv.executedStep);
+      freeLastUseNow(state, atNodeEnd);
+    } else {
+      for (auto id : atNodeEnd) {
+        addLastUseId(state, lastSv, id);
+      }
+    }
+  }
+
   if ((WaveConfig::get().trace & WaveConfig::kTiming) &&
       gElementwiseReuseCount > reuseCount0) {
     std::cout << "  node " << sequenceNumber_ << " elementwise input reuse: "

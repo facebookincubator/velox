@@ -106,7 +106,7 @@ class NimbleWriterPassthroughFlatmapRaceTest
   }
 };
 
-TEST_F(NimbleWriterPassthroughFlatmapRaceTest, ConcurrentPassthroughNewKeys) {
+TEST_F(NimbleWriterPassthroughFlatmapRaceTest, concurrentPassthroughNewKeys) {
   const auto schema = makeBatch()->type();
   uint32_t corrupt = 0;
 

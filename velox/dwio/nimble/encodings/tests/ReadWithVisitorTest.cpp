@@ -4238,9 +4238,16 @@ TEST_P(ReadWithVisitorNonLegacyTest, readDenseMaterializedIndicesWithNulls) {
 
   ASSERT_EQ(reader->numValues(), 0);
 
-  // Call the helper with nulls.
+  // Call the helper with nulls. prepareResultNulls must mirror what
+  // ChunkedDecoder wires up in production: the dense index path materializes
+  // nulls into the read-range bitmap only, so it needs an allocated,
+  // output-indexed result-nulls buffer to copy them into whenever
+  // returnReaderNulls_ is false -- as it is here, the scan spec carries a
+  // filter.
   ReadWithVisitorParams params{.numScanned = 0};
-  params.prepareResultNulls = [] {};
+  params.prepareResultNulls = [&] {
+    reader->prepareNulls(rows, /*hasNulls=*/true, /*extraRows=*/8);
+  };
   detail::readDenseMaterializedIndices(
       *encoding,
       visitor,
@@ -4542,7 +4549,7 @@ TEST_P(ReadWithVisitorTest, encodingLevelSimdForBitpackBigintRangeSparse) {
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_AlwaysTrue_Dense_Int32_FastPath) {
+    encodingLevelBlockBitPackingAlwaysTrueDenseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kRows = kChunkSize * 3 + 500;
 
@@ -4618,7 +4625,7 @@ TEST_P(
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_AlwaysTrue_Sparse_Int32_FastPath) {
+    encodingLevelBlockBitPackingAlwaysTrueSparseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kTotalRows = kChunkSize * 3;
 
@@ -4693,7 +4700,7 @@ TEST_P(
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_BigintRange_Dense_Int32_FastPath) {
+    encodingLevelBlockBitPackingBigintRangeDenseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kRows = kChunkSize * 2;
 
@@ -4763,7 +4770,7 @@ TEST_P(
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_AlwaysTrue_VerySparse_Int32_FastPath) {
+    encodingLevelBlockBitPackingAlwaysTrueVerySparseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kTotalRows = kChunkSize * 4;
 

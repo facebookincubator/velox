@@ -186,6 +186,7 @@ add_library(
   nimble_tablet_reader
   FileLayout.cpp
   SharedDictionaryReader.cpp
+  SharedDictionaryReader.h
   StripeGroup.cpp
   TabletReader.cpp
   TabletReader.h

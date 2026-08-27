@@ -92,6 +92,8 @@ class SparkCastHooks : public exec::CastHooks {
     return true;
   }
 
+  bool decimalToFloatHighPrecisionCastEnabled() const override;
+
   exec::PolicyType getPolicy() const override;
 
   // Spark supports TIMESTAMP_UTC casts.

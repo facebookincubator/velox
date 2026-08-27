@@ -29,7 +29,7 @@ namespace facebook::nimble {
 
 class ChunkFlushPolicyTest : public ::testing::Test {};
 
-TEST_F(ChunkFlushPolicyTest, InitialNoMemoryPressure) {
+TEST_F(ChunkFlushPolicyTest, initialNoMemoryPressure) {
   ChunkFlushPolicy policy(
       ChunkFlushPolicyConfig{
           .writerMemoryHighThresholdBytes = 1000,
@@ -60,7 +60,7 @@ TEST_F(ChunkFlushPolicyTest, InitialNoMemoryPressure) {
   ;
 }
 
-TEST_F(ChunkFlushPolicyTest, MemoryPressureChunkingLifecycle) {
+TEST_F(ChunkFlushPolicyTest, memoryPressureChunkingLifecycle) {
   ChunkFlushPolicy policy(
       ChunkFlushPolicyConfig{
           .writerMemoryHighThresholdBytes = 1000,
@@ -102,7 +102,7 @@ TEST_F(ChunkFlushPolicyTest, MemoryPressureChunkingLifecycle) {
   EXPECT_FALSE(policy.shouldChunk(progress4));
 }
 
-TEST_F(ChunkFlushPolicyTest, MemoryPressureTriggersFlush) {
+TEST_F(ChunkFlushPolicyTest, memoryPressureTriggersFlush) {
   ChunkFlushPolicy policy(
       ChunkFlushPolicyConfig{
           .writerMemoryHighThresholdBytes = 1000,
@@ -121,7 +121,7 @@ TEST_F(ChunkFlushPolicyTest, MemoryPressureTriggersFlush) {
   EXPECT_TRUE(policy.shouldFlush(progress));
 }
 
-TEST_F(ChunkFlushPolicyTest, StripeSizeTriggersFlush) {
+TEST_F(ChunkFlushPolicyTest, stripeSizeTriggersFlush) {
   ChunkFlushPolicy policy(
       ChunkFlushPolicyConfig{
           .writerMemoryHighThresholdBytes = 2000,
@@ -146,7 +146,7 @@ TEST_F(ChunkFlushPolicyTest, StripeSizeTriggersFlush) {
   ;
 }
 
-TEST_F(ChunkFlushPolicyTest, ZeroEncodedSize) {
+TEST_F(ChunkFlushPolicyTest, zeroEncodedSize) {
   ChunkFlushPolicy policy(
       ChunkFlushPolicyConfig{
           .writerMemoryHighThresholdBytes = 1000,
@@ -170,7 +170,7 @@ TEST_F(ChunkFlushPolicyTest, ZeroEncodedSize) {
   ;
 }
 
-TEST(FlushPolicyTest, StripeRawSizeFlushPolicyTest) {
+TEST(FlushPolicyTest, stripeRawSizeFlushPolicyTest) {
   StripeRawSizeFlushPolicy policy(/*stripeRawSize=*/1000);
 
   StripeProgress progress{
@@ -189,7 +189,7 @@ TEST(FlushPolicyTest, StripeRawSizeFlushPolicyTest) {
   EXPECT_FALSE(policy.shouldFlush(progress2));
 }
 
-TEST(FlushPolicyTest, LambdaFlushPolicyTest) {
+TEST(FlushPolicyTest, lambdaFlushPolicyTest) {
   LambdaFlushPolicy policy(
       /*flushLambda_=*/
       [](const StripeProgress& progress) {
@@ -223,7 +223,7 @@ TEST(FlushPolicyTest, LambdaFlushPolicyTest) {
   EXPECT_TRUE(policy.shouldFlush(stripeProgress));
 }
 
-TEST(FlushPolicyTest, LambdaFlushPolicyDefaultLambdas) {
+TEST(FlushPolicyTest, lambdaFlushPolicyDefaultLambdas) {
   LambdaFlushPolicy policy;
 
   StripeProgress progress{

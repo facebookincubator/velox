@@ -57,10 +57,10 @@ class ExternalDictionaryBuilder {
 
     /// Optional forced alphabet encoding. When unset, readFactors or default
     /// encoding selection picks the alphabet encoding.
-    std::optional<EncodingType> alphabetEncoding;
+    std::optional<EncodingType> alphabetEncoding{};
 
     /// Optional parsed manual read factors used by encoding selection.
-    std::vector<std::pair<EncodingType, float>> readFactors;
+    std::vector<std::pair<EncodingType, float>> readFactors{};
   };
 
   explicit ExternalDictionaryBuilder(velox::memory::MemoryPool* pool);

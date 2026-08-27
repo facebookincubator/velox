@@ -636,7 +636,7 @@ void Deserializer::appendStreamSegments(
 
 uint32_t Deserializer::appendBatch(
     std::string_view batch,
-    std::optional<nimble::RowRange> rowRange,
+    folly::Range<const nimble::RowRange*> rowRanges,
     DecodeRun& run,
     velox::VectorPtr& output) const {
   const auto rowCount = parser_->initialize(batch);
@@ -647,34 +647,51 @@ uint32_t Deserializer::appendBatch(
 
   // Rows this batch exposes: the parser's rowRange (kTablet header) or the
   // whole batch if the header didn't encode one.
-  nimble::RowRange range =
+  const nimble::RowRange exposed =
       parser_->rowRange().value_or(nimble::RowRange{0, rowCount});
+
   // A caller range narrows within what the batch exposes rather than
-  // replacing it, so it is relative to `range.startRow`. For a kTablet
+  // replacing it, so it is relative to `exposed.startRow`. For a kTablet
   // batch windowed to [500, 600), caller [0, 50) selects [500, 550). For
-  // every other version `range` starts at 0, so the two coincide.
-  if (rowRange.has_value()) {
+  // every other version `exposed` starts at 0, so the two coincide.
+  uint32_t previousEnd = 0;
+  uint32_t outputRows = 0;
+  for (const auto& rowRange : rowRanges) {
     NIMBLE_USER_CHECK_LE(
-        rowRange->startRow,
-        rowRange->endRow,
+        rowRange.startRow,
+        rowRange.endRow,
         "rowRange startRow must be <= endRow");
     NIMBLE_USER_CHECK_LE(
-        rowRange->endRow,
-        range.numRows(),
+        rowRange.endRow,
+        exposed.numRows(),
         "rowRange endRow exceeds the rows this batch exposes");
-    range = nimble::RowRange{
-        range.startRow + rowRange->startRow, range.startRow + rowRange->endRow};
+    NIMBLE_USER_CHECK_LE(
+        previousEnd,
+        rowRange.startRow,
+        "rowRanges must be sorted ascending and non-overlapping");
+    previousEnd = rowRange.endRow;
+    outputRows += rowRange.numRows();
   }
 
   appendStreamSegments(rowCount, /*startRow=*/run.rows, requiresBarrier);
-  runRanges_.push_back({run.rows + range.startRow, run.rows + range.endRow});
+  if (rowRanges.empty()) {
+    runRanges_.push_back(
+        {run.rows + exposed.startRow, run.rows + exposed.endRow});
+    outputRows = exposed.numRows();
+  } else {
+    for (const auto& rowRange : rowRanges) {
+      runRanges_.push_back(
+          {run.rows + exposed.startRow + rowRange.startRow,
+           run.rows + exposed.startRow + rowRange.endRow});
+    }
+  }
   run.rows += rowCount;
   ++run.batches;
   if (FOLLY_UNLIKELY(requiresBarrier)) {
     decodeRun(run, output);
     parser_->reset();
   }
-  return range.numRows();
+  return outputRows;
 }
 
 void Deserializer::deserialize(
@@ -692,6 +709,28 @@ void Deserializer::deserialize(
       folly::Range<const nimble::RowRange*>(rowRanges.data(), rowRanges.size()),
       output,
       /*outputRowCounts=*/nullptr);
+}
+
+void Deserializer::deserialize(
+    std::string_view data,
+    const std::vector<nimble::RowRange>& rowRanges,
+    velox::VectorPtr& output) const {
+  NIMBLE_CHECK(
+      runRanges_.empty(), "runRanges_ must be empty on deserialize entry");
+  SCOPE_EXIT {
+    runRanges_.clear();
+  };
+
+  output = nullptr;
+  DecodeRun run;
+  runRanges_.reserve(rowRanges.size());
+  appendBatch(
+      data,
+      folly::Range<const nimble::RowRange*>(rowRanges.data(), rowRanges.size()),
+      run,
+      output);
+  decodeRun(run, output);
+  parser_->reset();
 }
 
 void Deserializer::deserializeImpl(
@@ -722,11 +761,9 @@ void Deserializer::deserializeImpl(
   DecodeRun run;
   runRanges_.reserve(data.size());
   for (size_t i = 0; i < data.size(); ++i) {
-    std::optional<nimble::RowRange> rowRange;
-    if (!rowRanges.empty()) {
-      rowRange = rowRanges[i];
-    }
-    const auto outputRows = appendBatch(data[i], rowRange, run, output);
+    const auto outputRows = rowRanges.empty()
+        ? appendBatch(data[i], {}, run, output)
+        : appendBatch(data[i], rowRanges.subpiece(i, 1), run, output);
     if (outputRowCounts != nullptr) {
       outputRowCounts->emplace_back(outputRows);
     }
