@@ -19,6 +19,7 @@
 #include <cstring>
 
 #include "velox/buffer/Buffer.h"
+#include "velox/common/EnumDefine.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
@@ -27,6 +28,22 @@
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 #include "velox/vector/arrow/Abi.h"
+
+namespace {
+
+const auto& varTypeLayoutNames() {
+  static const folly::F14FastMap<ArrowOptions::VarTypeLayout, std::string_view>
+      kNames = {
+          {ArrowOptions::VarTypeLayout::kDefault, "Default"},
+          {ArrowOptions::VarTypeLayout::kStringView, "StringView"},
+          {ArrowOptions::VarTypeLayout::kLarge, "Large"},
+      };
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(ArrowOptions, VarTypeLayout, varTypeLayoutNames)
 
 namespace facebook::velox {
 
@@ -401,23 +418,19 @@ const char* exportArrowFormatStr(
     case TypeKind::DOUBLE:
       return "g"; // float64
     case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY: {
+      const bool asString =
+          type->kind() == TypeKind::VARCHAR || options.exportVarbinaryAsString;
       switch (options.varTypeLayout) {
-        case VarTypeLayout::kDefault:
-          return "u";
-        case VarTypeLayout::kStringView:
-          return "vu";
-        case VarTypeLayout::kLargeVarTypes:
-          return "U";
+        case ArrowOptions::VarTypeLayout::kDefault:
+          return asString ? "u" : "z";
+        case ArrowOptions::VarTypeLayout::kStringView:
+          return asString ? "vu" : "vz";
+        case ArrowOptions::VarTypeLayout::kLarge:
+          return asString ? "U" : "Z";
       }
-    case TypeKind::VARBINARY:
-      switch (options.varTypeLayout) {
-        case VarTypeLayout::kDefault:
-          return options.exportVarbinaryAsString ? "u" : "z";
-        case VarTypeLayout::kStringView:
-          return options.exportVarbinaryAsString ? "vu" : "vz";
-        case VarTypeLayout::kLargeVarTypes:
-          return options.exportVarbinaryAsString ? "U" : "Z";
-      }
+      VELOX_UNREACHABLE();
+    }
     case TypeKind::UNKNOWN:
       return "n"; // NullType
     case TypeKind::TIMESTAMP:
@@ -1054,34 +1067,22 @@ void exportFlat(
       // Keep out.n_children = 0 for UNKNOWN type.
       break;
     case TypeKind::VARCHAR:
-    case TypeKind::VARBINARY:
+    case TypeKind::VARBINARY: {
+      const auto& stringVector = *vec.asUnchecked<FlatVector<StringView>>();
       switch (options.varTypeLayout) {
-        case VarTypeLayout::kDefault:
-          exportStrings(
-              *vec.asUnchecked<FlatVector<StringView>>(),
-              rows,
-              out,
-              pool,
-              holder);
+        case ArrowOptions::VarTypeLayout::kDefault:
+          exportStrings(stringVector, rows, out, pool, holder);
           break;
-        case VarTypeLayout::kStringView:
+        case ArrowOptions::VarTypeLayout::kStringView:
           exportValues(vec, rows, options, out, pool, holder);
-          exportViews(
-              *vec.asUnchecked<FlatVector<StringView>>(),
-              rows,
-              out,
-              pool,
-              holder);
+          exportViews(stringVector, rows, out, pool, holder);
           break;
-        case VarTypeLayout::kLargeVarTypes:
-          exportStrings<int64_t>(
-              *vec.asUnchecked<FlatVector<StringView>>(),
-              rows,
-              out,
-              pool,
-              holder);
+        case ArrowOptions::VarTypeLayout::kLarge:
+          exportStrings<int64_t>(stringVector, rows, out, pool, holder);
+          break;
       }
       break;
+    }
     default:
       VELOX_NYI(
           "Conversion of FlatVector of {} is not supported yet.",

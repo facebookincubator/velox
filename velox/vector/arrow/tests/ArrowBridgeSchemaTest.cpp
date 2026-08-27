@@ -210,25 +210,29 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(VARCHAR(), "u");
   testScalarType(VARBINARY(), "z");
   testScalarType(
-      VARCHAR(), "U", {.varTypeLayout = VarTypeLayout::kLargeVarTypes});
+      VARCHAR(), "U", {.varTypeLayout = ArrowOptions::VarTypeLayout::kLarge});
   testScalarType(
-      VARBINARY(), "Z", {.varTypeLayout = VarTypeLayout::kLargeVarTypes});
+      VARBINARY(), "Z", {.varTypeLayout = ArrowOptions::VarTypeLayout::kLarge});
 
   testScalarType(
-      VARCHAR(), "vu", {.varTypeLayout = VarTypeLayout::kStringView});
+      VARCHAR(),
+      "vu",
+      {.varTypeLayout = ArrowOptions::VarTypeLayout::kStringView});
   testScalarType(
-      VARBINARY(), "vz", {.varTypeLayout = VarTypeLayout::kStringView});
+      VARBINARY(),
+      "vz",
+      {.varTypeLayout = ArrowOptions::VarTypeLayout::kStringView});
 
   testScalarType(VARBINARY(), "u", {.exportVarbinaryAsString = true});
   testScalarType(
       VARBINARY(),
       "U",
-      {.varTypeLayout = VarTypeLayout::kLargeVarTypes,
+      {.varTypeLayout = ArrowOptions::VarTypeLayout::kLarge,
        .exportVarbinaryAsString = true});
   testScalarType(
       VARBINARY(),
       "vu",
-      {.varTypeLayout = VarTypeLayout::kStringView,
+      {.varTypeLayout = ArrowOptions::VarTypeLayout::kStringView,
        .exportVarbinaryAsString = true});
   {
     struct TimestampCase {
@@ -338,7 +342,10 @@ TEST_F(ArrowBridgeSchemaExportTest, constant) {
   testConstant(BOOLEAN(), "b");
   testConstant(DOUBLE(), "g");
   testConstant(VARCHAR(), "u");
-  testConstant(VARCHAR(), "vu", {.varTypeLayout = VarTypeLayout::kStringView});
+  testConstant(
+      VARCHAR(),
+      "vu",
+      {.varTypeLayout = ArrowOptions::VarTypeLayout::kStringView});
   testConstant(DATE(), "tdD");
   testConstant(INTERVAL_YEAR_MONTH(), "tiM");
   testConstant(UNKNOWN(), "n");
@@ -627,7 +634,10 @@ class ArrowBridgeSchemaTest : public testing::Test {
 TEST_F(ArrowBridgeSchemaTest, roundtrip) {
   roundtripTest(BOOLEAN());
   roundtripTest(VARCHAR());
-  roundtripTest(VARCHAR(), {.varTypeLayout = VarTypeLayout::kStringView});
+  roundtripTest(
+      VARCHAR(), {.varTypeLayout = ArrowOptions::VarTypeLayout::kStringView});
+  roundtripTest(
+      VARCHAR(), {.varTypeLayout = ArrowOptions::VarTypeLayout::kLarge});
   roundtripTest(REAL());
   roundtripTest(TIMESTAMP());
   roundtripTest(TIMESTAMP_UTC());
@@ -651,6 +661,7 @@ TEST_F(ArrowBridgeSchemaTest, validateInArrow) {
       {BOOLEAN(), arrow::boolean()},
       {VARCHAR(), arrow::utf8()},
       {VARCHAR(), arrow::utf8_view()},
+      {VARCHAR(), arrow::large_utf8()},
 #if ARROW_VERSION_MAJOR >= 18
       // Type arrow::decimal is deprecated, use arrow::decimal128.
       {DECIMAL(10, 4), arrow::decimal128(10, 4)},
@@ -671,10 +682,17 @@ TEST_F(ArrowBridgeSchemaTest, validateInArrow) {
     VLOG(1) << "Validating conversion between " << tv->toString() << " and "
             << ta->ToString();
     ArrowSchema schema;
-    ta == arrow::utf8_view()
-        ? exportToArrow(
-              tv, schema, {.varTypeLayout = VarTypeLayout::kStringView})
-        : exportToArrow(tv, schema);
+    if (ta == arrow::utf8_view()) {
+      exportToArrow(
+          tv,
+          schema,
+          {.varTypeLayout = ArrowOptions::VarTypeLayout::kStringView});
+    } else if (ta == arrow::large_utf8()) {
+      exportToArrow(
+          tv, schema, {.varTypeLayout = ArrowOptions::VarTypeLayout::kLarge});
+    } else {
+      exportToArrow(tv, schema);
+    }
     ASSERT_OK_AND_ASSIGN(auto actual, arrow::ImportType(&schema));
     ASSERT_FALSE(schema.release);
     EXPECT_EQ(*actual, *ta);

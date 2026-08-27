@@ -155,7 +155,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
     // Validate array contents.
     if constexpr (isString) {
-      if (options_.varTypeLayout == VarTypeLayout::kLargeVarTypes) {
+      if (options_.varTypeLayout == ArrowOptions::VarTypeLayout::kLarge) {
         validateStringArray<T, int64_t>(inputData, arrowArray);
       } else {
         validateStringArray<T, int32_t>(inputData, arrowArray);
@@ -627,17 +627,15 @@ TEST_F(ArrowBridgeArrayExportTest, flatString) {
       std::nullopt,
   };
 
-  testFlatVector(inputData);
+  for (auto layout :
+       {ArrowOptions::VarTypeLayout::kDefault,
+        ArrowOptions::VarTypeLayout::kLarge}) {
+    options_.varTypeLayout = layout;
+    testFlatVector(inputData);
 
-  options_.varTypeLayout = VarTypeLayout::kLargeVarTypes;
-  testFlatVector(inputData);
-
-  // Empty vector.
-  options_.varTypeLayout = VarTypeLayout::kDefault;
-  testFlatVector<std::string>({});
-
-  options_.varTypeLayout = VarTypeLayout::kLargeVarTypes;
-  testFlatVector<std::string>({});
+    // Empty vector.
+    testFlatVector<std::string>({});
+  }
 }
 
 TEST_F(ArrowBridgeArrayExportTest, rowVector) {
@@ -1954,7 +1952,8 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
           ASSERT_EQ(*vec.type(), *VARCHAR());
           EXPECT_EQ(vec.size(), 12);
         },
-        ArrowOptions{.varTypeLayout = VarTypeLayout::kStringView});
+        ArrowOptions{
+            .varTypeLayout = ArrowOptions::VarTypeLayout::kStringView});
   }
 
   void testImportREE() {

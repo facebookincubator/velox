@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/vector/BaseVector.h"
 
@@ -32,14 +33,16 @@ enum class TimestampUnit : uint8_t {
   kNano = 9 /*10^9 nanoseconds are equal to 1 second*/
 };
 
-/// Physical layout used to export variable-width values to Arrow.
-enum class VarTypeLayout : uint8_t {
-  kDefault, // 32-bit offsets (Arrow String/Binary)
-  kStringView, // Arrow StringView
-  kLargeVarTypes // 64-bit offsets (Arrow LargeString/LargeBinary)
-};
-
 struct ArrowOptions {
+  /// Physical layout used to export variable-width values to Arrow.
+  enum class VarTypeLayout : uint8_t {
+    kDefault, // 32-bit offsets (Arrow String/Binary)
+    kStringView, // Arrow StringView
+    kLarge // 64-bit offsets (Arrow LargeString/LargeBinary)
+  };
+
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(VarTypeLayout);
+
   bool flattenDictionary{false};
   // NOTE: flattenConstant is only supported for scalar types.
   bool flattenConstant{false};
