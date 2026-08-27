@@ -16,10 +16,12 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string_view>
 #include <vector>
 
+#include "folly/container/F14Map.h"
 #include "folly/io/IOBuf.h"
 #include "velox/buffer/BufferPool.h"
 #include "velox/common/memory/Memory.h"
@@ -63,12 +65,12 @@ class StreamSlicer {
   folly::IOBuf slice(std::string_view input, uint32_t offset, uint32_t length)
       const;
 
-  /// Sliced stream-set result backed by an owned IOBuf chain.
+  /// Sliced stream-set result.
   struct SlicedStreams {
     /// Owns the encoded bytes referenced by streams.
     folly::IOBuf data;
 
-    /// Views into data ordered by stream offset.
+    /// Views ordered by stream offset, backed by data.
     std::vector<std::string_view> streams;
 
     /// Indicates whether the stream set needs a row null-barrier on read.
@@ -95,8 +97,7 @@ class StreamSlicer {
       const Type& type,
       Range range,
       const std::vector<std::string_view>& inputStreams,
-      std::vector<std::string_view>& outputStreams,
-      bool& outputRequiresNullBarrier,
+      SlicedStreams& outputStreams,
       Buffer& outputBuffer,
       const Encoding::Options& encodingOptions) const;
 
@@ -105,9 +106,8 @@ class StreamSlicer {
       const StreamDescriptor& descriptor,
       Range range,
       const std::vector<std::string_view>& inputStreams,
-      std::vector<std::string_view>& outputStreams,
       bool isRowOrFlatMapNullStream,
-      bool& outputRequiresNullBarrier,
+      SlicedStreams& outputStreams,
       Buffer& outputBuffer,
       const Encoding::Options& encodingOptions) const;
 
@@ -127,6 +127,38 @@ class StreamSlicer {
   bool hasFlatMapValues(
       const Type& type,
       const std::vector<std::string_view>& inputStreams) const;
+
+  // Hashes stream views by backing storage identity, not by contents.
+  struct StreamViewIdentityHash {
+    size_t operator()(std::string_view stream) const {
+      const auto dataHash = std::hash<const void*>{}(stream.data());
+      const auto sizeHash = std::hash<size_t>{}(stream.size());
+      return dataHash ^
+          (sizeHash + 0x9e3779b9 + (dataHash << 6) + (dataHash >> 2));
+    }
+  };
+
+  // Compares stream views by backing pointer and length.
+  struct StreamViewIdentityEqual {
+    bool operator()(std::string_view lhs, std::string_view rhs) const {
+      return lhs.data() == rhs.data() && lhs.size() == rhs.size();
+    }
+  };
+
+  using StrippedStreamCache = folly::F14FastMap<
+      std::string_view,
+      std::string_view,
+      StreamViewIdentityHash,
+      StreamViewIdentityEqual>;
+
+  // Removes tablet chunk headers from the input stream set into
+  // strippedStreams. Reuses stripped views for aliased physical stream bytes
+  // within one slice.
+  static void stripChunkHeaders(
+      const std::vector<std::string_view>& inputStreams,
+      Buffer& strippedStreamBuffer,
+      std::vector<std::string_view>& strippedStreams,
+      StrippedStreamCache& strippedStreamCache);
 
   // Maps a nullable stream range to its non-null child-value range.
   Range nonNullRange(
@@ -166,7 +198,10 @@ class StreamSlicer {
   mutable velox::BufferPool bufferPool_;
   // Scratch arenas reused by nested EncodingFactory::slice() calls.
   mutable EncodingBufferPool encodingBufferPool_;
+  // Scratch arena used while removing tablet chunk headers before slicing.
   mutable EncodingBufferPool strippedStreamBufferPool_;
+  // Per-call cache for duplicate projected streams backed by the same bytes.
+  mutable StrippedStreamCache strippedStreamCache_;
   mutable std::vector<std::string_view> inputStreams_;
   mutable std::vector<uint32_t> streamSizes_;
   mutable Vector<char> headerBuffer_;
