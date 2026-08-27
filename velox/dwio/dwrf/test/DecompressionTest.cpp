@@ -953,18 +953,18 @@ class TestSeek : public ::testing::Test {
   std::shared_ptr<MemoryPool> pool_ = memory::memoryManager()->addLeafPool();
 };
 
-TEST_F(TestSeek, Zlib) {
+TEST_F(TestSeek, zlib) {
   auto codec = zlib::getCodec(
       zlib::Options(zlib::Options::Format::RAW), COMPRESSION_LEVEL_DEFAULT);
   runTest(*codec, CompressionKind_ZLIB);
 }
 
-TEST_F(TestSeek, Zstd) {
+TEST_F(TestSeek, zstd) {
   auto codec = getCodec(CodecType::ZSTD);
   runTest(*codec, CompressionKind_ZSTD);
 }
 
-TEST_F(TestSeek, Snappy) {
+TEST_F(TestSeek, snappy) {
   auto codec = getCodec(CodecType::SNAPPY);
   runTest(*codec, CompressionKind_SNAPPY);
 }

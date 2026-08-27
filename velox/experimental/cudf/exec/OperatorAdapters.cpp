@@ -792,11 +792,30 @@ class LocalExchangeAdapter : public OperatorAdapter {
     return dynamic_cast<const exec::LocalExchange*>(op) != nullptr;
   }
 
+  // LocalExchange consumes whatever the producing pipeline enqueued, so it
+  // only yields device-resident vectors when that pipeline's LocalPartition
+  // was replaced by CudfLocalPartition. Both operators are built from the same
+  // LocalPartitionNode, so the producer's predicate can be evaluated directly
+  // here. Claiming GPU output unconditionally would suppress the CudfFromVelox
+  // insertion in front of downstream GPU operators, which then receive host
+  // RowVectors and fail on the CudfVector cast.
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
-      const core::PlanNodePtr& /*planNode*/,
+      const core::PlanNodePtr& planNode,
       exec::DriverCtx* /*ctx*/) const override {
-    return true;
+    auto localPartitionPlanNode =
+        std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode);
+    bool canRun = localPartitionPlanNode &&
+        CudfLocalPartition::shouldReplace(localPartitionPlanNode);
+    if (!canRun) {
+      LOG_FALLBACK(
+          "LocalExchangeAdapter {}, PlanNode id: {}",
+          !localPartitionPlanNode
+              ? "planNode is not LocalPartitionNode"
+              : "CudfLocalPartition::shouldReplace returned false",
+          planNode->id());
+    }
+    return canRun;
   }
 
   bool acceptsGpuInput() const override {

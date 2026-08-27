@@ -172,7 +172,13 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     )
   endif()
 
-  add_executable(velox_hive_iceberg_equality_delete_test EqualityDeleteFileReaderTest.cpp Main.cpp)
+  add_executable(
+    velox_hive_iceberg_equality_delete_test
+    EqualityDeleteFileReaderTest.cpp
+    IcebergTestBase.cpp
+    Main.cpp
+  )
+  velox_add_test_headers(velox_hive_iceberg_equality_delete_test IcebergTestBase.h)
   add_test(velox_hive_iceberg_equality_delete_test velox_hive_iceberg_equality_delete_test)
 
   target_link_libraries(
@@ -181,8 +187,18 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_iceberg_splitreader
     velox_exec_test_lib
     velox_dwio_common_test_utils
+    velox_vector_fuzzer
     GTest::gtest
+    GTest::gtest_main
   )
+
+  if(VELOX_ENABLE_PARQUET)
+    target_link_libraries(
+      velox_hive_iceberg_equality_delete_test
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+    )
+  endif()
 
   add_executable(velox_hive_iceberg_deletion_vector_writer_test DeletionVectorWriterTest.cpp)
   add_test(

@@ -105,9 +105,21 @@ class HiveConnectorSerDeTest : public exec::test::HiveConnectorTestBase {
       ASSERT_EQ(
           split.properties->modificationTime,
           clone->properties->modificationTime);
+      ASSERT_EQ(
+          split.properties->readRangeHint, clone->properties->readRangeHint);
+      if (split.properties->extraFileInfo != nullptr) {
+        ASSERT_NE(clone->properties->extraFileInfo, nullptr);
+        ASSERT_EQ(
+            *split.properties->extraFileInfo,
+            *clone->properties->extraFileInfo);
+      } else {
+        ASSERT_EQ(clone->properties->extraFileInfo, nullptr);
+      }
+      ASSERT_EQ(split.properties->fileReadOps, clone->properties->fileReadOps);
     } else {
       ASSERT_FALSE(clone->properties.has_value());
     }
+    ASSERT_EQ(split.columnMappingMode, clone->columnMappingMode);
   }
 };
 
@@ -270,7 +282,11 @@ TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
   const std::unordered_map<std::string, std::string> infoColumns{
       {"c0", "0"}, {"c1", "1"}};
   FileProperties fileProperties{
-      .fileSize = 2048, .modificationTime = std::nullopt};
+      .fileSize = 2048,
+      .modificationTime = std::nullopt,
+      .readRangeHint = std::nullopt,
+      .extraFileInfo = nullptr,
+      .fileReadOps = {}};
   const auto properties = std::optional<FileProperties>(fileProperties);
   RowIdProperties rowIdProperties{
       .metadataVersion = 2, .partitionId = 3, .tableGuid = "test"};
@@ -289,7 +305,9 @@ TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
       cacheable,
       infoColumns,
       properties,
-      rowIdProperties);
+      rowIdProperties,
+      std::nullopt,
+      dwio::common::ColumnMappingMode::kName);
   ASSERT_EQ(split1.cacheable, cacheable);
   testSerde(split1);
 
@@ -317,6 +335,37 @@ TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
   handles.push_back(makeColumnHandle("c0", INTEGER(), {}));
   split3.bucketConversion = {16, 2, std::move(handles)};
   testSerde(split3);
+}
+
+TEST_F(HiveConnectorSerDeTest, hiveConnectorSplitFileProperties) {
+  std::string descriptor;
+  for (int i = 0; i < 256; ++i) {
+    descriptor.push_back(static_cast<char>(i));
+  }
+
+  auto split = HiveConnectorSplit(
+      "testSerde", "/testSerde/p", dwio::common::FileFormat::DWRF);
+  split.properties = FileProperties{
+      .fileSize = 2048,
+      .modificationTime = 1024,
+      .readRangeHint = 4096,
+      .extraFileInfo = std::make_shared<std::string>(descriptor),
+      .fileReadOps = {{"o0", "0"}, {"o1", "1"}}};
+  testSerde(split);
+
+  // A producer that predates these keys omits them rather than writing nulls.
+  auto obj = split.serialize();
+  obj["properties"].erase("readRangeHint");
+  obj["properties"].erase("extraFileInfo");
+  obj["properties"].erase("fileReadOps");
+
+  const auto clone = ISerializable::deserialize<HiveConnectorSplit>(obj);
+  ASSERT_TRUE(clone->properties.has_value());
+  EXPECT_EQ(clone->properties->fileSize, 2048);
+  EXPECT_EQ(clone->properties->modificationTime, 1024);
+  EXPECT_FALSE(clone->properties->readRangeHint.has_value());
+  EXPECT_EQ(clone->properties->extraFileInfo, nullptr);
+  EXPECT_TRUE(clone->properties->fileReadOps.empty());
 }
 
 } // namespace

@@ -6184,6 +6184,135 @@ TEST_F(TableScanTest, rowNumberInRemainingFilter) {
       .assertResults(expected);
 }
 
+// A scan that projects only columns which are not read from the file has no
+// child readers. If such a scan also has a filter, outputRows() returns the
+// empty outputRows_, and the synthesized row-index column used to come out
+// shorter than the vector containing it.
+TEST_F(TableScanTest, rowIndexWithFilterOnPartitionKeyOnly) {
+  constexpr vector_size_t kNumRows = 10;
+  auto data = makeRowVector(
+      {"c0"},
+      {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+  const auto fileSchema = asRowType(data->type());
+
+  // Neither output column is read from the file: 'row_index' is synthesized and
+  // 'p' is a partition key, so the struct reader ends up with no child readers.
+  auto outputType = ROW({"row_index", "p"}, {BIGINT(), INTEGER()});
+
+  connector::ColumnHandleMap assignments;
+  assignments["row_index"] = std::make_shared<HiveColumnHandle>(
+      "row_index", FileColumnHandle::ColumnType::kRowIndex, BIGINT(), BIGINT());
+  assignments["p"] = makeColumnHandle(
+      "p",
+      INTEGER(),
+      INTEGER(),
+      {},
+      FileColumnHandle::ColumnType::kPartitionKey);
+
+  // The filter is satisfied by this split, so it eliminates no row. Its only
+  // effect is to make ScanSpec::hasFilter() true.
+  common::SubfieldFilters filters;
+  filters.emplace(
+      common::Subfield("p"),
+      std::make_unique<common::BigintRange>(1, 1, /*nullAllowed=*/false));
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(outputType)
+                  .dataColumns(fileSchema)
+                  .subfieldFiltersMap(filters)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys{
+      {"p", "1"}};
+  auto splits = makeHiveConnectorSplits(
+      filePath->getPath(), 1, dwio::common::FileFormat::DWRF, partitionKeys);
+
+  auto result =
+      AssertQueryBuilder(plan)
+          .split(splits[0])
+          .config(core::QueryConfig::kValidateOutputFromOperators, "true")
+          .copyResults(pool());
+
+  ASSERT_EQ(result->size(), kNumRows);
+  ASSERT_EQ(result->childAt(0)->size(), result->size());
+  auto* rowIndex = result->childAt(0)->asFlatVector<int64_t>();
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    EXPECT_FALSE(result->childAt(0)->isNullAt(row));
+    EXPECT_EQ(rowIndex->valueAt(row), row);
+  }
+}
+
+// The same defect reached through a dynamic filter rather than a static one.
+// This is the shape a real engine hits: there is no constant partition
+// predicate anywhere in the query, so nothing could have been resolved during
+// split generation. The filter appears on the scan spec only at runtime, pushed
+// down from the join whose key is the partition column.
+TEST_F(TableScanTest, rowIndexWithDynamicFilterOnPartitionKey) {
+  constexpr vector_size_t kNumRows = 10;
+  auto data = makeRowVector(
+      {"c0"},
+      {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+  const auto fileSchema = asRowType(data->type());
+
+  auto outputType = ROW({"row_index", "p"}, {BIGINT(), INTEGER()});
+
+  connector::ColumnHandleMap assignments;
+  assignments["row_index"] = std::make_shared<HiveColumnHandle>(
+      "row_index", FileColumnHandle::ColumnType::kRowIndex, BIGINT(), BIGINT());
+  assignments["p"] = makeColumnHandle(
+      "p",
+      INTEGER(),
+      INTEGER(),
+      {},
+      FileColumnHandle::ColumnType::kPartitionKey);
+
+  // No subfield filter here. The build side supplies the only filter, and it
+  // matches the partition value, so it eliminates no row.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto build =
+      PlanBuilder(planNodeIdGenerator)
+          .values({makeRowVector(
+              {"bk"}, {makeFlatVector<int32_t>(std::vector<int32_t>{1})})})
+          .planNode();
+
+  core::PlanNodeId scanId;
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .startTableScan()
+                  .outputType(outputType)
+                  .dataColumns(fileSchema)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .capturePlanNodeId(scanId)
+                  .hashJoin({"p"}, {"bk"}, build, "", {"row_index", "p"})
+                  .planNode();
+
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys{
+      {"p", "1"}};
+  auto splits = makeHiveConnectorSplits(
+      filePath->getPath(), 1, dwio::common::FileFormat::DWRF, partitionKeys);
+
+  auto result =
+      AssertQueryBuilder(plan)
+          .split(scanId, splits[0])
+          .config(core::QueryConfig::kValidateOutputFromOperators, "true")
+          .copyResults(pool());
+
+  ASSERT_EQ(result->size(), kNumRows);
+  ASSERT_EQ(result->childAt(0)->size(), result->size());
+  auto* dynamicRowIndex = result->childAt(0)->asFlatVector<int64_t>();
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    EXPECT_FALSE(result->childAt(0)->isNullAt(row));
+    EXPECT_EQ(dynamicRowIndex->valueAt(row), row);
+  }
+}
+
 TEST_F(TableScanTest, hugeStripe) {
   CursorParameters params;
   params.planNode =
@@ -7138,6 +7267,118 @@ TEST_F(TableScanTest, scanBatchCallbackNotSetIsNoOp) {
                     .splits(makeHiveConnectorSplits({filePath}))
                     .copyResults(pool_.get());
   EXPECT_GT(result->size(), 0);
+}
+
+TEST_F(TableScanTest, scanBatchCallbackStorageReadBytes) {
+  auto vectors = makeVectors(3, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  uint64_t summedEventBytes{0};
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->setScanBatchCallback([&](const core::ScanBatchEvent& event) {
+    const auto* fileEvent =
+        dynamic_cast<const connector::hive::FileScanBatchEvent*>(&event);
+    ASSERT_TRUE(fileEvent != nullptr);
+    summedEventBytes += fileEvent->storageReadBytes;
+  });
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(tableScanNode())
+                    .splits(makeHiveConnectorSplits({filePath}))
+                    .queryCtx(queryCtx)
+                    .copyResults(pool_.get(), task);
+  EXPECT_GT(result->size(), 0);
+
+  // Events report deltas of the same counter the operator publishes as
+  // storageReadBytes, so together they must account for all of it. Bytes are
+  // read when a stripe loads, which happens inside addSplit() for a file this
+  // small -- a delta measured only around next() would report zero here.
+  const auto operatorBytes =
+      getTableScanRuntimeStats(task).at("storageReadBytes").sum;
+  EXPECT_GT(operatorBytes, 0);
+  EXPECT_EQ(summedEventBytes, operatorBytes);
+}
+
+TEST_F(TableScanTest, scanBatchCallbackStorageReadBytesMultiStripe) {
+  // A stripe size well below the data size forces many stripes. Note this
+  // does not by itself spread reads across next() calls: at this scale the
+  // reader still loads every stripe during addSplit(), so the bytes arrive in
+  // a single event. Accumulation across next() calls remains uncovered.
+  auto vectors = makeVectors(20, 1'000);
+  auto writeConfig = std::make_shared<dwrf::Config>();
+  writeConfig->set<uint64_t>(dwrf::Config::STRIPE_SIZE, 1'024);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors, writeConfig);
+
+  uint64_t summedEventBytes{0};
+  int32_t eventsCarryingBytes{0};
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->setScanBatchCallback([&](const core::ScanBatchEvent& event) {
+    const auto* fileEvent =
+        dynamic_cast<const connector::hive::FileScanBatchEvent*>(&event);
+    ASSERT_TRUE(fileEvent != nullptr);
+    summedEventBytes += fileEvent->storageReadBytes;
+    if (fileEvent->storageReadBytes > 0) {
+      ++eventsCarryingBytes;
+    }
+  });
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(tableScanNode())
+                    .splits(makeHiveConnectorSplits({filePath}))
+                    .queryCtx(queryCtx)
+                    .copyResults(pool_.get(), task);
+  EXPECT_GT(result->size(), 0);
+
+  const auto stats = getTableScanRuntimeStats(task);
+  // Guards against the file collapsing to a single stripe, which would make
+  // this a duplicate of the test above.
+  ASSERT_GT(stats.at("numStripes").sum, 1);
+  const auto operatorBytes = stats.at("storageReadBytes").sum;
+  EXPECT_GT(operatorBytes, 0);
+  EXPECT_EQ(summedEventBytes, operatorBytes);
+  EXPECT_GT(eventsCarryingBytes, 0);
+  LOG(INFO) << "multiStripe: numStripes=" << stats.at("numStripes").sum
+            << " eventsCarryingBytes=" << eventsCarryingBytes
+            << " bytes=" << operatorBytes;
+}
+
+TEST_F(TableScanTest, scanBatchCallbackStorageReadBytesPreload) {
+  // Preloading prepares the next split on a separate data source, then hands
+  // it over via setFromDataSource(), which merges and swaps the io stats. The
+  // preloading source reads its split's bytes but never fires an event, so the
+  // adopting source must still report them.
+  auto filePaths = makeFilePaths(8);
+  auto vectors = makeVectors(8, 1'000);
+  for (int32_t i = 0; i < vectors.size(); ++i) {
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+  }
+
+  uint64_t summedEventBytes{0};
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->setScanBatchCallback([&](const core::ScanBatchEvent& event) {
+    const auto* fileEvent =
+        dynamic_cast<const connector::hive::FileScanBatchEvent*>(&event);
+    ASSERT_TRUE(fileEvent != nullptr);
+    summedEventBytes += fileEvent->storageReadBytes;
+  });
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(tableScanNode())
+                    .splits(makeHiveConnectorSplits(filePaths))
+                    .queryCtx(queryCtx)
+                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "4")
+                    .maxDrivers(1)
+                    .copyResults(pool_.get(), task);
+  EXPECT_GT(result->size(), 0);
+
+  const auto stats = getTableScanRuntimeStats(task);
+  // Without this the test would silently stop covering the handover path.
+  ASSERT_GT(stats.at("preloadedSplits").sum, 0);
+  const auto operatorBytes = stats.at("storageReadBytes").sum;
+  EXPECT_GT(operatorBytes, 0);
+  EXPECT_EQ(summedEventBytes, operatorBytes);
 }
 
 // --- Column extraction pushdown table scan tests ---

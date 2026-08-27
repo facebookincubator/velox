@@ -32,6 +32,7 @@ velox_add_library(
   AdmissionController.cpp
   BitUtil.cpp
   BloomFilter.cpp
+  ConcurrentRuntimeStatWriter.cpp
   Counters.cpp
   Fs.cpp
   PeriodicStatsReporter.cpp
@@ -53,6 +54,7 @@ velox_add_library(
   ClassName.h
   CoalesceIo.h
   ConcurrentCounter.h
+  ConcurrentRuntimeStatWriter.h
   CountBits.h
   Counters.h
   Crc.h

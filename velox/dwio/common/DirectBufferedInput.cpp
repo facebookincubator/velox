@@ -202,7 +202,8 @@ void DirectBufferedInput::readRegion(
       groupId_.id(),
       requests,
       pool_,
-      options_.loadQuantum());
+      options_.loadQuantum(),
+      options_.directBufferedInputSharedAllocation());
   coalescedLoads_.push_back(load);
   streamToCoalescedLoad_.withWLock([&](auto& loads) {
     for (auto& request : requests) {
@@ -292,20 +293,37 @@ bool duplicateRegion(const LoadRequest& source, const LoadRequest& duplicate) {
       duplicate.region.length == source.region.length;
 }
 
-void copyDuplicateRegion(
+// Gives 'duplicate' its own copy of the source's bytes, unless it can share the
+// source's slice of the shared allocation. Duplicates left uncopied resolve to
+// the source's slice in getData(), which finds the first request at the offset.
+// Gates on 'useSharedAllocation' rather than the source's 'sharedData' so a 3+
+// duplicate chain still copies correctly.
+void maybeCopyDuplicateRegion(
     const LoadRequest& source,
     LoadRequest& duplicate,
-    memory::MemoryPool* pool) {
-  VELOX_CHECK_EQ(source.loadSize, duplicate.loadSize);
-  if (source.data.numPages() > 0) {
+    memory::MemoryPool* pool,
+    bool useSharedAllocation) {
+  if (useSharedAllocation &&
+      duplicate.region.length > DirectBufferedInput::kTinySize) {
+    return;
+  }
+  VELOX_CHECK_EQ(source.buffer.requestBytes, duplicate.buffer.requestBytes);
+  VELOX_CHECK(!source.buffer.empty(), "Duplicate region source is empty");
+  VELOX_CHECK(
+      duplicate.buffer.empty(), "Duplicate region destination is already set");
+  if (source.buffer.ownedData.numPages() > 0) {
     const auto numPages =
-        memory::AllocationTraits::numPages(duplicate.loadSize);
-    pool->allocateNonContiguous(numPages, duplicate.data);
-    memory::Allocation::copy(source.data, duplicate.data, duplicate.loadSize);
+        memory::AllocationTraits::numPages(duplicate.buffer.requestBytes);
+    pool->allocateNonContiguous(numPages, duplicate.buffer.ownedData);
+    memory::Allocation::copy(
+        source.buffer.ownedData,
+        duplicate.buffer.ownedData,
+        duplicate.buffer.requestBytes);
   } else {
     VELOX_CHECK(
-        !source.tinyData.empty(), "Duplicate tiny region source is empty");
-    duplicate.tinyData = source.tinyData;
+        !source.buffer.tinyData.empty(),
+        "Duplicate tiny region source is empty");
+    duplicate.buffer.tinyData = source.buffer.tinyData;
   }
 }
 } // namespace
@@ -375,52 +393,22 @@ std::unique_ptr<SeekableInputStream> DirectBufferedInput::read(
 }
 
 std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
-  std::vector<folly::Range<char*>> buffers;
-  int64_t lastEnd = requests_[0].region.offset;
+  const int64_t overAllocatedBytes = computeLoadSizes();
+
+  // Use the shared allocation only when per-request page-rounding would
+  // over-allocate more than its minimum run; below that its own floor would
+  // over-reserve.
+  constexpr int64_t kMinPaddingBytesToUseSharedAllocation =
+      static_cast<int64_t>(memory::AllocationPool::kMinPages) *
+      static_cast<int64_t>(memory::AllocationTraits::kPageSize);
+  const bool useSharedAllocation = sharedAllocationEnabled_ &&
+      overAllocatedBytes > kMinPaddingBytesToUseSharedAllocation;
+
   int64_t size = 0;
   int64_t overread = 0;
+  const auto buffers = buildReadRanges(useSharedAllocation, size, overread);
 
-  for (size_t i = 0; i < requests_.size(); ++i) {
-    auto& request = requests_[i];
-    const auto& region = request.region;
-    if (i > 0 && duplicateRegion(requests_[i - 1], request)) {
-      const auto& prev = requests_[i - 1];
-      request.loadSize = prev.loadSize;
-      continue;
-    }
-
-    if (region.offset > lastEnd) {
-      buffers.push_back(
-          folly::Range<char*>(
-              nullptr,
-              reinterpret_cast<char*>(
-                  static_cast<uint64_t>(region.offset - lastEnd))));
-      overread += buffers.back().size();
-    }
-
-    if (region.length > DirectBufferedInput::kTinySize) {
-      if (&request != &requests_.back()) {
-        // Case where request is a little over quantum but is followed by
-        // another within the max distance. Coalesces and allows reading the
-        // region of max quantum + max distance in one piece.
-        request.loadSize = region.length;
-      } else {
-        request.loadSize = std::min<int32_t>(region.length, loadQuantum_);
-      }
-      const auto numPages =
-          memory::AllocationTraits::numPages(request.loadSize);
-      pool_->allocateNonContiguous(numPages, request.data);
-      appendRanges(request.data, request.loadSize, buffers);
-    } else {
-      request.loadSize = region.length;
-      request.tinyData.resize(region.length);
-      buffers.push_back(folly::Range(request.tinyData.data(), region.length));
-    }
-    lastEnd = region.offset + request.loadSize;
-    size += request.loadSize;
-  }
-
-  uint64_t usecs = 0;
+  uint64_t usecs{0};
   {
     MicrosecondWallTimer timer(&usecs);
     input_->read(buffers, requests_[0].region.offset, LogType::FILE);
@@ -428,49 +416,147 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
 
   ioStatistics_->read().increment(size + overread);
   ioStatistics_->incRawBytesRead(size);
-  ioStatistics_->incTotalScanTimeNs(usecs * 1'000);
+  ioStatistics_->incTotalScanTimeNs(static_cast<int64_t>(usecs * 1'000));
   ioStatistics_->queryThreadIoLatencyUs().increment(usecs);
   ioStatistics_->storageReadLatencyUs().increment(usecs);
   ioStatistics_->incRawOverreadBytes(overread);
   if (prefetch) {
     ioStatistics_->prefetch().increment(size + overread);
   }
-  for (size_t i = 0; i < requests_.size(); ++i) {
-    auto& request = requests_[i];
-    if (i == 0 || !duplicateRegion(requests_[i - 1], request)) {
-      continue;
-    }
-    copyDuplicateRegion(requests_[i - 1], request, pool_);
-  }
+
+  fillDuplicates(useSharedAllocation);
+
   TestValue::adjust(
       "facebook::velox::cache::DirectCoalescedLoad::loadData", this);
   return {};
 }
 
-int32_t DirectCoalescedLoad::getData(
-    int64_t offset,
-    memory::Allocation& data,
-    std::string& tinyData) {
-  auto it = std::lower_bound(
-      requests_.begin(), requests_.end(), offset, [](auto& x, auto offset) {
-        return x.region.offset < offset;
-      });
-  if (it == requests_.cend() || it->region.offset != offset) {
-    return 0;
+int64_t DirectCoalescedLoad::computeLoadSizes() {
+  int64_t overAllocatedBytes{0};
+  for (size_t i = 0; i < requests_.size(); ++i) {
+    auto& request = requests_[i];
+    const auto& region = request.region;
+    if (i > 0 && duplicateRegion(requests_[i - 1], request)) {
+      request.buffer.requestBytes = requests_[i - 1].buffer.requestBytes;
+      continue;
+    }
+    if (region.length > DirectBufferedInput::kTinySize) {
+      if (&request != &requests_.back()) {
+        // Request is a little over quantum but is followed by another within
+        // the max distance. Coalesce and read the whole region in one piece.
+        // This is the only path that does not clamp to 'loadQuantum_', so it is
+        // the only one where an oversized region could overflow the int32_t
+        // 'requestBytes'. Fail loudly instead of truncating: a wrapped value
+        // makes buildReadRanges() read fewer bytes than the region and hand the
+        // stream silently wrong data.
+        VELOX_CHECK_LE(
+            region.length,
+            static_cast<uint64_t>(std::numeric_limits<int32_t>::max()),
+            "Coalesced region is too large to read in one piece");
+        request.buffer.requestBytes = static_cast<int32_t>(region.length);
+      } else {
+        request.buffer.requestBytes = static_cast<int32_t>(
+            std::min<uint64_t>(region.length, loadQuantum_));
+      }
+      const auto paddedBytes = memory::AllocationTraits::roundUpPageBytes(
+          request.buffer.requestBytes);
+      overAllocatedBytes +=
+          static_cast<int64_t>(paddedBytes) - request.buffer.requestBytes;
+    } else {
+      request.buffer.requestBytes = static_cast<int32_t>(region.length);
+    }
   }
-  // Duplicate regions have the same offset. Skip buffers already handed to
-  // earlier streams so each duplicate stream gets its own copied buffer.
+  return overAllocatedBytes;
+}
+
+std::vector<folly::Range<char*>> DirectCoalescedLoad::buildReadRanges(
+    bool useSharedAllocation,
+    int64_t& size,
+    int64_t& overread) {
+  std::vector<folly::Range<char*>> buffers;
+  uint64_t lastEnd = requests_[0].region.offset;
+  for (size_t i = 0; i < requests_.size(); ++i) {
+    auto& request = requests_[i];
+    const auto& region = request.region;
+    if (i > 0 && duplicateRegion(requests_[i - 1], request)) {
+      // Shares the source's buffer; filled by fillDuplicates() after the read.
+      continue;
+    }
+    if (region.offset > lastEnd) {
+      buffers.emplace_back(
+          nullptr,
+          // NOLINTNEXTLINE(performance-no-int-to-ptr)
+          reinterpret_cast<char*>(
+              static_cast<uint64_t>(region.offset - lastEnd)));
+      overread += static_cast<int64_t>(buffers.back().size());
+    }
+
+    if (region.length <= DirectBufferedInput::kTinySize) {
+      request.buffer.tinyData.resize(region.length);
+      buffers.emplace_back(request.buffer.tinyData.data(), region.length);
+    } else if (useSharedAllocation) {
+      request.buffer.sharedData =
+          sharedAllocation_.allocateFixed(request.buffer.requestBytes);
+      buffers.emplace_back(
+          request.buffer.sharedData, request.buffer.requestBytes);
+    } else {
+      const auto numPages =
+          memory::AllocationTraits::numPages(request.buffer.requestBytes);
+      pool_->allocateNonContiguous(numPages, request.buffer.ownedData);
+      appendRanges(
+          request.buffer.ownedData, request.buffer.requestBytes, buffers);
+    }
+    lastEnd = region.offset + request.buffer.requestBytes;
+    size += request.buffer.requestBytes;
+  }
+  return buffers;
+}
+
+void DirectCoalescedLoad::fillDuplicates(bool useSharedAllocation) {
+  for (size_t i = 0; i < requests_.size(); ++i) {
+    auto& request = requests_[i];
+    if (i == 0 || !duplicateRegion(requests_[i - 1], request)) {
+      continue;
+    }
+    maybeCopyDuplicateRegion(
+        requests_[i - 1], request, pool_, useSharedAllocation);
+  }
+}
+
+LoadedBuffer DirectCoalescedLoad::getData(uint64_t offset) {
+  // A failed read may have partially filled the request buffers. Only publish
+  // them after the complete coalesced load has succeeded.
+  if (state() != CoalescedLoad::State::kLoaded) {
+    return {};
+  }
+  auto it = std::lower_bound(
+      requests_.begin(),
+      requests_.end(),
+      offset,
+      [](const auto& request, uint64_t targetOffset) {
+        return request.region.offset < targetOffset;
+      });
+  if (it == requests_.end() || it->region.offset != offset) {
+    return {};
+  }
+  if (it->buffer.sharedData != nullptr) {
+    // Duplicates backed by the shared allocation share one read-only slice;
+    // nothing is moved.
+    return LoadedBuffer{
+        .requestBytes = it->buffer.requestBytes,
+        .sharedData = it->buffer.sharedData,
+    };
+  }
+  // Skip buffers already handed to earlier duplicate streams.
   while (it != requests_.end() && it->region.offset == offset &&
          it->bufferConsumed) {
     ++it;
   }
-  if (it == requests_.cend() || it->region.offset != offset) {
-    return 0;
+  if (it == requests_.end() || it->region.offset != offset) {
+    return {};
   }
-  data = std::move(it->data);
-  tinyData = std::move(it->tinyData);
   it->bufferConsumed = true;
-  return it->loadSize;
+  return std::move(it->buffer);
 }
 
 } // namespace facebook::velox::dwio::common

@@ -248,6 +248,21 @@ class CompileTest : public ::testing::Test {
   std::vector<std::unique_ptr<nativert::TensorMeta>> metaStore_;
 };
 
+// toString() takes its defaults from a default-constructed config, so a field
+// is reported exactly when it differs from the default the header declares.
+TEST(WaveConfigTest, toStringReportsOnlyNonDefaults) {
+  WaveConfig config;
+  EXPECT_EQ(config.toString(), "defaults");
+
+  config.enableReuse = false;
+  EXPECT_EQ(config.toString(), "enableReuse=false");
+
+  config.enableReuse = true;
+  config.trace = WaveConfig::kTiming;
+  config.freeIntermediates = true;
+  EXPECT_EQ(config.toString(), "trace=16, freeIntermediates=true");
+}
+
 TEST_F(CompileTest, maskedSelectTest) {
   auto waveGraph = loadAndCompile("data/masked_select_test.pt2");
   ASSERT_NE(waveGraph, nullptr);
@@ -364,6 +379,17 @@ TEST_F(CompileTest, planMatchers) {
   EXPECT_TRUE(multi.inLaterStep("tw.add_sizes", "tw.masked_select_head"));
   EXPECT_TRUE(multi.inLaterStep("tw.masked_select_final", "tw.add_sizes"));
 
+  // The cg plan for the SAME graph comes out different from the multi-kernel
+  // plan: cg fuses every stage into one cooperative kernel ordered by an
+  // intra-kernel barrier, whereas multi splits the stages across kernel
+  // boundaries with no barrier. Asserting both guards against the mode
+  // parameter silently ceasing to change the plan.
+  EXPECT_TRUE(multi.kernelBoundaryBetween(
+      "tw.masked_select_head", "tw.masked_select_final"));
+  auto cg = CompiledPlan::from(*graph, CompiledPlan::Mode::kCG);
+  EXPECT_TRUE(cg.fuses({"tw.masked_select_cg", "aten.add.Tensor"}));
+  EXPECT_TRUE(cg.barrierBetween("tw.masked_select_cg", "aten.add.Tensor"));
+
   // Single-block: the whole masked_select fuses into one kernel.
   auto single = CompiledPlan::from(*graph, CompiledPlan::Mode::kSingleBlock);
   EXPECT_TRUE(single.fuses(
@@ -389,18 +415,28 @@ TEST_F(CompileTest, planMatchers) {
       {"tw.masked_select_head", "aten.add.Tensor", "aten.lt.Scalar"}));
 }
 
-// tw.index_select is an all-elementwise op; an elementwise producer of its
-// source/index fuses INTO its kernel and is ordered by an intra-kernel barrier
-// (a barrier within one kernel, not a kernel boundary between two).
-TEST_F(CompileTest, planBarrier) {
+// tw.index_select reads its source and index as whole tensors (argumentMeta
+// wholeTensor). In multi-kernel mode an elementwise producer of a whole-tensor
+// input runs in its own earlier kernel: fusing it in would force an
+// intra-kernel opBarrier, which promotes the launch to cooperative (whole grid
+// resident). So the multi-kernel plan carries no barriers. (A downstream add
+// that merely consumes index_select's register output still fuses with it,
+// harmlessly and without a barrier -- which is why a name-based boundary
+// matcher cannot be used here.)
+TEST_F(CompileTest, planWholeTensorBoundary) {
   auto graph = loadAndCompile("data/index_select_test.pt2");
   ASSERT_NE(graph, nullptr);
 
   auto multi = CompiledPlan::from(*graph, CompiledPlan::Mode::kMultiKernel);
-  LOG(INFO) << multi.describe();
-
-  EXPECT_TRUE(multi.fuses({"tw.index_select", "aten.add.Tensor"}));
-  EXPECT_TRUE(multi.barrierBetween("tw.index_select", "aten.add.Tensor"));
+  int32_t numBarriers = 0;
+  for (const auto& node : multi.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        numBarriers += kernel.numBarriers;
+      }
+    }
+  }
+  EXPECT_EQ(numBarriers, 0) << multi.describe();
 }
 
 // A standalone op inside a cat that is the tensor repeated by
@@ -808,6 +844,369 @@ TEST_F(CompileTest, cloneElisionKeepsForkedInput) {
       << " shared ones";
 }
 
+// The functionalized form of `base[:, 0] = vals`:
+//   s1  = slice(base, dim=0);  col = select(s1, dim=1, index=0)
+//   cp  = copy(col, vals)                      <- reads base's column 0
+//   s2  = slice(base, dim=0);  cl  = clone(s2) <- the defensive clone
+//   ss  = select_scatter(cl, cp, dim=1, index=0)
+//   out = slice_scatter(base, ss, dim=0)
+// The clone's only consumer is the scatter, and base is dead afterwards, so the
+// per-expr last-use test alone would elide the clone. That is wrong: cp is
+// computed from a read of base at a different index path than the value being
+// overwritten, and fusion puts that read in the same kernel as the write, so
+// the read would return post-write data. The clone must be kept.
+TEST_F(CompileTest, cloneElisionKeepsReadOfWriteTarget) {
+  auto rank2 = [] { return makeTensorMeta(c10::ScalarType::Float, 2); };
+  auto rank1 = [] { return makeTensorMeta(c10::ScalarType::Float, 1); };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"inp", rank2()},
+      {"base", rank2()},
+      {"vals", rank1()},
+      {"s1", rank2()},
+      {"col", rank1()},
+      {"cp", rank1()},
+      {"s2", rank2()},
+      {"cl", rank2()},
+      {"ss", rank2()},
+      {"out", rank2()}};
+  // base is produced inside the graph, not a graph input: an externally owned
+  // buffer is rejected for in-place reuse before the read/write check is
+  // reached, which would make this fixture pass for the wrong reason.
+  const char* graphStr =
+      R"(graph(%inp, %vals):
+%base = torch.ops.aten.ones_like.default(self=%inp)
+%s1 = torch.ops.aten.slice.Tensor(self=%base, dim=0, start=0, end=9223372036854775807, step=1)
+%col = torch.ops.aten.select.int(self=%s1, dim=1, index=0)
+%cp = torch.ops.aten.copy.default(self=%col, src=%vals)
+%s2 = torch.ops.aten.slice.Tensor(self=%base, dim=0, start=0, end=9223372036854775807, step=1)
+%cl = torch.ops.aten.clone.default(self=%s2)
+%ss = torch.ops.aten.select_scatter.default(self=%cl, src=%cp, dim=1, index=0)
+%out = torch.ops.aten.slice_scatter.default(self=%base, src=%ss, dim=0, start=0, end=9223372036854775807, step=1)
+return(%out)
+)";
+
+  auto graphOwner = nativert::stringToGraph(graphStr);
+  graphOwner->setTensorValuesMeta(meta);
+  setGraphDevice(graphOwner.get(), /*isCuda=*/true);
+  auto& graph = *graphOwner;
+
+  ValueTypes types;
+  std::vector<std::unique_ptr<nativert::TensorMeta>> metaStore;
+  initValueTypes(graph, types, metaStore);
+  auto waveHolder = WaveGraph::optimizeOnly(graph, types);
+
+  ParallelNodes parallelNodes;
+  auto* last = parallelNodes.makeParallelNodes(graph);
+  ASSERT_NE(last, nullptr);
+
+  std::vector<ValueCP> cloneOutputs;
+  for (auto* v : graph.values()) {
+    if (v != nullptr && v->producer() != nullptr &&
+        v->producer()->target() == "torch.ops.aten.clone.default") {
+      cloneOutputs.push_back(v);
+    }
+  }
+  ASSERT_FALSE(cloneOutputs.empty())
+      << "setup: the scatter's defensive clone should be present";
+  for (ValueCP c : cloneOutputs) {
+    ASSERT_FALSE(c->users().empty())
+        << "setup: clone %" << c->id() << " should have a consumer pre-pass";
+  }
+
+  parallelNodes.rewriteInPlace(graph, waveHolder->types());
+
+  for (ValueCP c : cloneOutputs) {
+    EXPECT_FALSE(c->users().empty())
+        << "clone %" << c->id()
+        << " must be kept: another operand of the scatter is computed from a"
+        << " read of the write target at a different index path";
+  }
+}
+
+// transpose is registered as a view (viewOfArg + metadataOnly) rather than an
+// unconditional standalone, so KernelOperation::setOutputs reaches its
+// meta->isView() branch and gives it an OutputDesc with viewNode set: the view
+// becomes an output of the enclosing kernel op, materialized as host-side
+// metadata at launch, with no step of its own.
+//
+// transpose(a + transpose(b)) + c over 2-D operands: b is transposed into a's
+// layout and the sum is transposed back into c's, so all four ops belong to one
+// expression and compile to a single step. Registered standalone, as it used to
+// be, each transpose is its own launch and the expression splits into four.
+TEST_F(CompileTest, transposeAsFusedView) {
+  auto f = [] { return makeTensorMeta(c10::ScalarType::Float, 2); };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"a", f()},
+      {"b", f()},
+      {"c", f()},
+      {"tb", f()},
+      {"s", f()},
+      {"ts", f()},
+      {"r", f()}};
+  const char* graphStr = R"(graph(%a, %b, %c):
+%tb = torch.ops.aten.transpose.int(self=%b, dim0=0, dim1=1)
+%s = torch.ops.aten.add.Tensor(self=%a, other=%tb)
+%ts = torch.ops.aten.transpose.int(self=%s, dim0=0, dim1=1)
+%r = torch.ops.aten.add.Tensor(self=%ts, other=%c)
+return(%r)
+)";
+
+  auto countSteps = [](WaveGraph& g) {
+    auto plan = CompiledPlan::from(g, CompiledPlan::Mode::kMultiKernel);
+    int32_t steps = 0;
+    for (const auto& node : plan.nodes()) {
+      steps += static_cast<int32_t>(node.steps.size());
+    }
+    return steps;
+  };
+
+  // The registered behavior: the whole expression is one step and neither
+  // transpose is a launch of its own.
+  int32_t fusedSteps = 0;
+  {
+    auto waveGraph = compileGraphString(graphStr, meta);
+    ASSERT_NE(waveGraph, nullptr);
+    fusedSteps = countSteps(*waveGraph);
+    auto plan =
+        CompiledPlan::from(*waveGraph, CompiledPlan::Mode::kMultiKernel);
+    EXPECT_FALSE(plan.standalone("aten.transpose.int")) << plan.describe();
+    EXPECT_EQ(fusedSteps, 1) << plan.describe();
+  }
+
+  // Contrast: re-registered as an unconditional standalone, the same graph
+  // splits. Without this the test would still pass if transpose silently
+  // stopped appearing in the plan at all.
+  auto saved = Registry::unregister("torch.ops.aten.transpose.int");
+  auto restore = folly::makeGuard([&] {
+    Registry::unregister("torch.ops.aten.transpose.int");
+    Registry::restoreRegistry("torch.ops.aten.transpose.int", std::move(saved));
+  });
+  MetadataBuilder("torch.ops.aten.transpose.int")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .viewOfArg(0)
+      .metadataOnly()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            return {
+                {.rank = types.rank(node->inputs()[0].value),
+                 .contiguity = Contiguity::kUnknown}};
+          })
+      .registerOp();
+
+  auto standaloneGraph = compileGraphString(graphStr, meta);
+  ASSERT_NE(standaloneGraph, nullptr);
+  auto standalonePlan =
+      CompiledPlan::from(*standaloneGraph, CompiledPlan::Mode::kMultiKernel);
+  EXPECT_TRUE(standalonePlan.standalone("aten.transpose.int"))
+      << standalonePlan.describe();
+  EXPECT_GT(countSteps(*standaloneGraph), fusedSteps)
+      << standalonePlan.describe();
+}
+// True when the node producing %<name> reads the same value twice, i.e. its
+// two operands were merged. Asking the consumer rather than counting nodes is
+// what keeps the answer independent of whether the merged-away node is later
+// swept from the graph.
+bool operandsMerged(nativert::Graph& graph, std::string_view name) {
+  for (const auto& node : graph.nodes()) {
+    for (const auto* out : node.outputs()) {
+      if (out != nullptr && out->name() == name) {
+        EXPECT_EQ(node.inputs().size(), 2u) << name;
+        return node.inputs()[0].value == node.inputs()[1].value;
+      }
+    }
+  }
+  ADD_FAILURE() << "no node produces %" << name;
+  return false;
+}
+
+// Common-subexpression elimination, gated separately for compute and views.
+//
+// The graph pairs one duplicated add (compute) with one duplicated transpose
+// (a view), plus a third transpose whose dims differ. Each consumer takes the
+// two candidates as its two operands, so "were they merged" reduces to "are
+// this node's operands now the same value" -- which, unlike counting nodes,
+// does not depend on whether the merged-away node is later swept from the
+// graph.
+TEST_F(CompileTest, commonSubexpressions) {
+  auto f = [] { return makeTensorMeta(c10::ScalarType::Float, 2); };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"a", f()},
+      {"b", f()},
+      {"s1", f()},
+      {"s2", f()},
+      {"m", f()},
+      {"t1", f()},
+      {"t2", f()},
+      {"t3", f()},
+      {"v", f()},
+      {"w", f()},
+      {"r", f()},
+      {"out", f()}};
+  const char* graphStr = R"(graph(%a, %b):
+%s1 = torch.ops.aten.add.Tensor(self=%a, other=%b)
+%s2 = torch.ops.aten.add.Tensor(self=%a, other=%b)
+%m = torch.ops.aten.add.Tensor(self=%s1, other=%s2)
+%t1 = torch.ops.aten.transpose.int(self=%b, dim0=0, dim1=1)
+%t2 = torch.ops.aten.transpose.int(self=%b, dim0=0, dim1=1)
+%t3 = torch.ops.aten.transpose.int(self=%b, dim0=1, dim1=0)
+%v = torch.ops.aten.add.Tensor(self=%t1, other=%t2)
+%w = torch.ops.aten.add.Tensor(self=%t1, other=%t3)
+%r = torch.ops.aten.add.Tensor(self=%v, other=%w)
+%out = torch.ops.aten.add.Tensor(self=%m, other=%r)
+return(%out)
+)";
+
+  auto savedCompute = WaveConfig::get().cseCompute;
+  auto savedViews = WaveConfig::get().cseViews;
+  auto restore = folly::makeGuard([&] {
+    WaveConfig::get().cseCompute = savedCompute;
+    WaveConfig::get().cseViews = savedViews;
+  });
+
+  struct Case {
+    bool compute;
+    bool views;
+  };
+  for (const Case c :
+       {Case{false, false},
+        Case{true, false},
+        Case{false, true},
+        Case{true, true}}) {
+    SCOPED_TRACE(fmt::format("cseCompute={} cseViews={}", c.compute, c.views));
+    WaveConfig::get().cseCompute = c.compute;
+    WaveConfig::get().cseViews = c.views;
+
+    auto waveGraph = compileGraphString(graphStr, meta);
+    ASSERT_NE(waveGraph, nullptr);
+    auto& graph = *waveGraph->graph();
+
+    // The duplicated add collapses only under cseCompute, the duplicated
+    // transpose only under cseViews: each flag governs its own category.
+    EXPECT_EQ(operandsMerged(graph, "m"), c.compute);
+    EXPECT_EQ(operandsMerged(graph, "v"), c.views);
+
+    // %t3 transposes the same tensor to the same result but spells its dims the
+    // other way round. The key compares attributes verbatim, so it never merges
+    // with %t1 -- this pass claims syntactic identity, not equivalence.
+    EXPECT_FALSE(operandsMerged(graph, "w"));
+
+    // The survivor must be the earlier of the two in program order. Keeping the
+    // later one leaves the earlier one's consumers reading a value produced
+    // after them, which makeParallelNodes rejects outright -- and user lists,
+    // which is what the pass walks, are not in program order.
+    for (const auto& node : graph.nodes()) {
+      size_t consumerPos = 0;
+      size_t pos = 0;
+      for (const auto& other : graph.nodes()) {
+        if (&other == &node) {
+          consumerPos = pos;
+          break;
+        }
+        ++pos;
+      }
+      for (const auto& input : node.inputs()) {
+        if (input.value == nullptr || input.value->producer() == nullptr) {
+          continue;
+        }
+        size_t producerPos = 0;
+        bool found = false;
+        pos = 0;
+        for (const auto& other : graph.nodes()) {
+          if (&other == input.value->producer()) {
+            producerPos = pos;
+            found = true;
+            break;
+          }
+          ++pos;
+        }
+        EXPECT_TRUE(!found || producerPos < consumerPos)
+            << node.target() << " reads %" << input.value->id()
+            << " produced later by " << input.value->producer()->target();
+      }
+    }
+  }
+}
+
+// Two nodes that compute the same thing from the same operands are still not
+// interchangeable if a buffer either of them touches is written in place: the
+// second one reads what the write left behind, and the first does not. The
+// pass compares identity, not position, so it refuses on the whole buffer --
+// a write anywhere in the graph disqualifies every node that reads or produces
+// it, whether or not the write falls between the two candidates.
+//
+// Three graphs, because the rule has to hold from both ends of a node and the
+// negative cases alone would be satisfied by a pass that merged nothing:
+//   operand   %c is written, and %c is an operand of both adds
+//   output    %s1 is written, and %s1 is what one of the adds produces
+//   unrelated %d is written, and neither add goes near it -- the control
+TEST_F(CompileTest, commonSubexpressionsMutation) {
+  auto savedCompute = WaveConfig::get().cseCompute;
+  auto savedViews = WaveConfig::get().cseViews;
+  auto restore = folly::makeGuard([&] {
+    WaveConfig::get().cseCompute = savedCompute;
+    WaveConfig::get().cseViews = savedViews;
+  });
+  WaveConfig::get().cseCompute = true;
+  WaveConfig::get().cseViews = true;
+
+  auto f = [] { return makeTensorMeta(c10::ScalarType::Float, 2); };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"b", f()},
+      {"c", f()},
+      {"d", f()},
+      {"s1", f()},
+      {"s2", f()},
+      {"mut", f()},
+      {"out", f()}};
+
+  // %c is an operand of both adds and is written between them.
+  const char* operandStr = R"(graph(%b, %c, %d):
+%s1 = torch.ops.aten.add.Tensor(self=%b, other=%c)
+%mut = torch.ops.aten.add_.Tensor(self=%c, other=%b)
+%s2 = torch.ops.aten.add.Tensor(self=%b, other=%c)
+%out = torch.ops.aten.add.Tensor(self=%s1, other=%s2)
+return(%out)
+)";
+
+  // %s1 is what the first add produces, and it is written before the consumer
+  // reads either value. Merging would repoint %s2's reader at a buffer the
+  // write has since changed.
+  const char* outputStr = R"(graph(%b, %c, %d):
+%s1 = torch.ops.aten.add.Tensor(self=%b, other=%c)
+%s2 = torch.ops.aten.add.Tensor(self=%b, other=%c)
+%mut = torch.ops.aten.add_.Tensor(self=%s1, other=%b)
+%out = torch.ops.aten.add.Tensor(self=%s1, other=%s2)
+return(%out)
+)";
+
+  // The write lands on a buffer neither add reads or produces, so the two are
+  // interchangeable and must still merge. Without this case the two above
+  // would pass on a pass that had stopped merging altogether.
+  const char* unrelatedStr = R"(graph(%b, %c, %d):
+%s1 = torch.ops.aten.add.Tensor(self=%b, other=%c)
+%mut = torch.ops.aten.add_.Tensor(self=%d, other=%b)
+%s2 = torch.ops.aten.add.Tensor(self=%b, other=%c)
+%out = torch.ops.aten.add.Tensor(self=%s1, other=%s2)
+return(%out)
+)";
+
+  struct Case {
+    const char* name;
+    const char* graphStr;
+    bool merges;
+  };
+  for (const Case c :
+       {Case{"operand", operandStr, false},
+        Case{"output", outputStr, false},
+        Case{"unrelated", unrelatedStr, true}}) {
+    SCOPED_TRACE(c.name);
+    auto waveGraph = compileGraphString(c.graphStr, meta);
+    ASSERT_NE(waveGraph, nullptr);
+    EXPECT_EQ(operandsMerged(*waveGraph->graph(), "out"), c.merges);
+  }
+}
 } // namespace
 } // namespace torch::wave
 

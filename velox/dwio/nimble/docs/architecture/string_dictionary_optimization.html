@@ -1,0 +1,1313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<base target="_blank">
+<title>StringColumnReader Dictionary Optimization</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f5f7fa;
+  --surface: #ffffff;
+  --text-primary: #0f1a2e;
+  --text-secondary: #4a5568;
+  --text-muted: #8896ab;
+  --border: #dde3ed;
+  --accent: #6366f1;
+  --pass: #22c55e;
+  --kill: #ef4444;
+  --layer-reader: #8b5cf6;
+  --layer-decoder: #0891b2;
+  --layer-encoding: #d97706;
+  --col0: #2563eb;
+  --col2: #7c3aed;
+}
+body.dark-mode {
+  --bg: #0c1220;
+  --surface: #1a2332;
+  --text-primary: #e8ecf4;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --border: #2a3548;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text-primary); line-height:1.55; }
+.container { max-width:1600px; margin:0 auto; padding:2rem; }
+h1 { font-family:'Space Grotesk',sans-serif; font-size:1.85rem; font-weight:700; text-align:center; margin-bottom:0.3rem; }
+.subtitle { text-align:center; color:var(--text-secondary); font-size:0.9rem; margin-bottom:2rem; }
+.section { margin-bottom:2.5rem; }
+.section-head {
+  font-family:'Space Grotesk',sans-serif; font-size:0.65rem; font-weight:600;
+  letter-spacing:0.1em; text-transform:uppercase; color:var(--text-muted);
+  margin-bottom:0.8rem; display:flex; align-items:center; gap:0.5rem;
+}
+.section-head::after { content:''; flex:1; height:1px; background:var(--border); }
+h2 { font-family:'Space Grotesk',sans-serif; font-size:1.15rem; font-weight:600; margin-bottom:0.6rem; }
+h3 { font-family:'Space Grotesk',sans-serif; font-size:0.95rem; font-weight:600; margin-bottom:0.4rem; }
+code, .mono { font-family:'JetBrains Mono',monospace; font-size:0.82rem; }
+.card {
+  background:var(--surface); border:1.5px solid var(--border); border-radius:10px;
+  padding:1.2rem 1.4rem; margin-bottom:1rem;
+}
+.card-sm { padding:0.8rem 1rem; }
+
+/* Architecture layers */
+.arch-stack { display:flex; flex-direction:column; gap:0; align-items:center; margin:1.5rem 0; }
+.arch-layer {
+  width:80%; padding:0.8rem 1.2rem; text-align:center;
+  border:2px solid; border-radius:0; position:relative;
+  font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:0.85rem;
+}
+.arch-layer:first-child { border-radius:10px 10px 0 0; }
+.arch-layer:last-child { border-radius:0 0 10px 10px; }
+.arch-layer .desc { font-family:'DM Sans',sans-serif; font-weight:400; font-size:0.78rem; color:var(--text-secondary); margin-top:0.2rem; }
+.arch-layer.reader { border-color:var(--layer-reader); background:rgba(139,92,246,0.06); }
+.arch-layer.decoder { border-color:var(--layer-decoder); background:rgba(8,145,178,0.06); }
+.arch-layer.encoding { border-color:var(--layer-encoding); background:rgba(217,119,6,0.06); }
+.arch-layer.engine { border-color:var(--border); background:rgba(100,116,139,0.06); }
+.arch-arrow { font-family:'DM Sans',sans-serif; font-size:0.78rem; color:var(--text-muted); padding:0.3rem 0; }
+.arch-arrow { font-size:1.2rem; color:var(--text-muted); line-height:1; }
+
+/* Flow steps */
+.flow { counter-reset:step; }
+.step {
+  position:relative; padding:0.8rem 1rem 0.8rem 3.2rem;
+  border-left:2px solid var(--border); margin-left:1rem; margin-bottom:0;
+}
+.step::before {
+  counter-increment:step; content:counter(step);
+  position:absolute; left:-0.85rem; top:0.7rem;
+  width:1.5rem; height:1.5rem; border-radius:50%;
+  background:var(--surface); border:2px solid var(--border);
+  display:flex; align-items:center; justify-content:center;
+  font-family:'Space Grotesk',sans-serif; font-size:0.7rem; font-weight:700;
+}
+.step:last-child { border-left-color:transparent; }
+.step.step-reader::before { border-color:var(--layer-reader); background:var(--layer-reader); color:white; }
+.step.step-reader { border-left-color:var(--layer-reader); }
+.step.step-decoder::before { border-color:var(--layer-decoder); background:var(--layer-decoder); color:white; }
+.step.step-decoder { border-left-color:var(--layer-decoder); }
+.step.step-encoding::before { border-color:var(--layer-encoding); background:var(--layer-encoding); color:white; }
+.step.step-encoding { border-left-color:var(--layer-encoding); }
+
+.step-title { font-weight:600; font-size:0.88rem; margin-bottom:0.2rem; }
+.step-desc { font-size:0.82rem; color:var(--text-secondary); }
+.step-code {
+  font-family:'JetBrains Mono',monospace; font-size:0.75rem;
+  background:var(--bg); padding:0.4rem 0.6rem; border-radius:6px;
+  margin-top:0.3rem; display:inline-block; border:1px solid var(--border);
+}
+.step.highlight::before { background:var(--accent); border-color:var(--accent); color:white; }
+.step.bug::before { background:var(--kill); border-color:var(--kill); color:white; }
+.step.fix::before { background:var(--pass); border-color:var(--pass); color:white; }
+
+/* Data visualization */
+.data-row { display:flex; gap:2px; margin:0.3rem 0; align-items:center; flex-wrap:wrap; }
+.data-label { font-family:'Space Grotesk',sans-serif; font-size:0.72rem; font-weight:600; width:6rem; flex-shrink:0; }
+.cell {
+  width:2.2rem; height:1.8rem; display:flex; align-items:center; justify-content:center;
+  font-family:'JetBrains Mono',monospace; font-size:0.72rem; font-weight:500;
+  border:1px solid var(--border); border-radius:4px; background:var(--surface);
+}
+.cell.pass { background:#dcfce7; border-color:#86efac; color:#166534; }
+.cell.fail { background:#fee2e2; border-color:#fca5a5; color:#991b1b; }
+.cell.null { background:#f3f4f6; border-color:#d1d5db; color:#9ca3af; font-style:italic; }
+.cell.unknown { background:#fef3c7; border-color:#fcd34d; color:#92400e; }
+.cell.header { background:var(--bg); font-weight:600; border:none; font-size:0.68rem; color:var(--text-muted); }
+.cell.wide { width:4rem; }
+
+/* SIMD visualization */
+.simd-reg {
+  display:flex; gap:0; margin:0.4rem 0; border:2px solid var(--layer-encoding);
+  border-radius:6px; overflow:hidden; width:fit-content;
+}
+.simd-reg .lane {
+  width:3rem; height:2rem; display:flex; align-items:center; justify-content:center;
+  font-family:'JetBrains Mono',monospace; font-size:0.72rem;
+  border-right:1px solid rgba(5,150,105,0.3);
+}
+.simd-reg .lane:last-child { border-right:none; }
+.simd-reg.gather { border-color:var(--layer-decoder); }
+.simd-reg.gather .lane { background:rgba(8,145,178,0.08); }
+.simd-reg.mask .lane.on { background:#dcfce7; font-weight:700; color:#166534; }
+.simd-reg.mask .lane.off { background:#fee2e2; color:#991b1b; }
+.simd-label {
+  font-family:'Space Grotesk',sans-serif; font-size:0.72rem; font-weight:600;
+  color:var(--text-muted); margin-bottom:0.2rem;
+}
+
+/* Tag badges */
+.tag {
+  display:inline-block; font-size:0.65rem; font-weight:600; padding:0.15rem 0.45rem;
+  border-radius:4px; font-family:'Space Grotesk',sans-serif; letter-spacing:0.02em;
+  vertical-align:middle; margin-left:0.3rem;
+}
+.tag.reader { background:rgba(139,92,246,0.12); color:var(--layer-reader); }
+.tag.decoder { background:rgba(8,145,178,0.12); color:var(--layer-decoder); }
+.tag.encoding { background:rgba(5,150,105,0.12); color:var(--layer-encoding); }
+.tag.bug { background:rgba(239,68,68,0.12); color:var(--kill); }
+.tag.fix { background:rgba(34,197,94,0.12); color:var(--pass); }
+
+.note {
+  font-size:0.8rem; color:var(--text-secondary); padding:0.6rem 0.8rem;
+  background:rgba(99,102,241,0.06); border-left:3px solid var(--accent);
+  border-radius:0 6px 6px 0; margin:0.5rem 0;
+}
+.compare-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-top:1rem; }
+@media (max-width:800px) { .compare-grid { grid-template-columns:1fr; } }
+
+.theme-toggle {
+  position:fixed; top:1rem; right:1rem; z-index:10; background:var(--surface);
+  border:1.5px solid var(--border); border-radius:8px; padding:0.4rem 0.7rem;
+  cursor:pointer; font-size:0.8rem;
+}
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="document.body.classList.toggle('dark-mode')">◐ Theme</button>
+<div class="container">
+
+<h1>StringColumnReader Dictionary Optimization</h1>
+<p class="subtitle">How Nimble reads string columns as dictionary indices + post-hoc SIMD filtering</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="section">
+<div class="section-head">Architecture Overview</div>
+
+<h3>Batch Reader vs Selective Reader</h3>
+
+<div class="card">
+<p class="step-desc" style="margin-bottom:0.8rem">
+  Nimble has two completely separate read paths with different class hierarchies,
+  different encoding APIs, and different capabilities.
+  The dictionary optimization only exists in the selective reader path.
+</p>
+
+<div class="compare-grid">
+  <div class="card card-sm">
+    <h3>Batch Reader (<code>nimble/velox/</code>)</h3>
+    <div class="step-code" style="display:block; margin-top:0.3rem; font-size:0.65rem">
+      VeloxReader<br>
+      &nbsp;&nbsp;→ FieldReader tree (one per schema node)<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;→ StringFieldReader (for string columns)<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;→ StructFieldReader, ArrayFieldReader, ...<br>
+      &nbsp;&nbsp;→ Decoder (manages chunks, calls encoding APIs)
+    </div>
+    <div class="step-desc" style="margin-top:0.3rem">Reads <strong>ALL</strong> rows sequentially. No filtering, no row selection, no predicate pushdown.</div>
+    <div class="step-code" style="display:block; margin-top:0.3rem">
+      Decoder::next()
+      &nbsp;&nbsp;→ encoding_-&gt;materialize(n, buf)<br>
+      Decoder::skip()
+      &nbsp;&nbsp;→ encoding_-&gt;skip(n)
+    </div>
+    <div class="step-desc" style="margin-top:0.3rem">
+      Uses <code>materialize</code> (virtual dispatch) — decode all n values into buffer sequentially.
+    </div>
+  </div>
+  <div class="card card-sm">
+    <h3>Selective Reader (<code>nimble/velox/selective/</code>)</h3>
+    <div class="step-code" style="display:block; margin-top:0.3rem; font-size:0.65rem">
+      NimbleRowReader<br>
+      &nbsp;&nbsp;→ SelectiveColumnReader tree (Velox base class)<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;→ <strong>StringColumnReader</strong> (for string columns)<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;→ StructColumnReader, FlatMapColumnReader, ...<br>
+      &nbsp;&nbsp;→ <strong>ChunkedDecoder</strong> (manages chunks, calls encoding APIs)
+    </div>
+    <div class="step-desc" style="margin-top:0.3rem">Reads <strong>SELECTED</strong> rows. Has filters, struct nulls, lazy columns. Used by Prestissimo (Presto's C++ worker).</div>
+    <div class="step-code" style="display:block; margin-top:0.3rem; font-size:0.68rem; white-space:nowrap">
+      ChunkedDecoder::readWithVisitor() → encoding_-&gt;readWithVisitor(visitor)<br>
+      ChunkedDecoder::skip() &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ encoding_-&gt;skip(n)
+    </div>
+    <div class="step-desc" style="margin-top:0.3rem">
+      Uses <code>readWithVisitor</code> (template dispatch via switch + cast) for selective value reading.
+    </div>
+  </div>
+</div>
+
+</div>
+
+<h3 style="margin-top:1.5rem">StringColumnReader — PreserveDictionaryEncoding</h3>
+
+<div class="arch-stack">
+  <div class="arch-layer engine" style="border-radius:10px 10px 0 0">
+    Velox Execution Engine
+    <div class="desc">TableScan operator → RowReader::next(batchSize, result)</div>
+  </div>
+  <div class="arch-arrow">↓ for each column in scanSpec</div>
+  <div class="arch-layer engine">
+    SelectiveColumnReader::readWithVisitor()
+    <div class="desc">Velox base class — dispatches to format-specific reader · computes <code>rows</code> (output row set) and <code>incomingNulls</code> (struct-level nulls)</div>
+  </div>
+  <div class="arch-arrow">↓ virtual dispatch</div>
+</div>
+
+<div class="compare-grid" style="margin-top:0.5rem">
+  <div class="card card-sm" style="border-color:var(--border)">
+    <h3 style="font-size:0.8rem">Other Columns (e.g. IntegerColumnReader)</h3>
+    <div class="step-desc">Always flat — no decision needed, chunks load lazily.</div>
+    <div class="step-code" style="display:block; margin-top:0.3rem; font-size:0.62rem">
+      decoder_.readWithVisitor(visitor)<br>
+      &nbsp;&nbsp;→ remainingValues_==0<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;→ loadNextChunk(<strong>false</strong>) → read<br>
+      &nbsp;&nbsp;→ no pre-load, no inspection
+    </div>
+  </div>
+  <div class="card card-sm" style="border-color:var(--layer-reader)">
+    <h3 style="font-size:0.8rem">StringColumnReader</h3>
+    <div class="step-desc">Must <em>inspect</em> the encoding before reading — pre-loads to decide dict vs flat.</div>
+    <div class="step-code" style="display:block; margin-top:0.3rem; font-size:0.62rem">
+      1. ensureLoaded(<strong>true</strong>) &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← load with flag FIRST<br>
+      2. dictionaryConvertible()? &nbsp;← inspect what we got<br>
+      3. yes → dict path &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← readDictionaryIndices<br>
+      &nbsp;&nbsp; no &nbsp;→ flat path &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← readWithVisitor
+    </div>
+  </div>
+</div>
+
+<div class="arch-stack" style="margin-top:0.5rem">
+  <div class="arch-layer reader" style="border-radius:10px 10px 0 0">
+    StringColumnReader <span class="tag reader">StringColumnReader</span>
+    <div class="desc">Decides dict vs flat path · manages output state (rawValues_, nulls, outputRows_) · applies filter post-hoc</div>
+  </div>
+  <div class="arch-layer decoder">
+    ChunkedDecoder <span class="tag decoder">ChunkedDecoder</span>
+    <div class="desc">Manages chunks · loads next chunk when exhausted · tracks remainingValues_ / rowPosition_</div>
+  </div>
+  <div class="arch-layer encoding">
+    Encoding (Dictionary / RLE / Trivial / …) <span class="tag encoding">ENCODING</span>
+    <div class="desc">Decodes one chunk's data · materializeIndices() for dict indices · readWithVisitor() for flat values</div>
+  </div>
+</div>
+
+<div style="display:flex; gap:1.2rem; margin-top:1rem; flex-wrap:wrap; align-items:flex-start">
+
+<!-- Left: How the Three Layers Interact -->
+<div style="flex:1; min-width:340px">
+<div class="card">
+<h3>How the Three Layers Interact for Dictionary Preservation</h3>
+
+<div class="flow">
+
+<div class="step">
+  <div class="step-title">Session Property Check <span class="tag reader">StringColumnReader</span></div>
+  <div class="step-desc">
+    Only <code>StringColumnReader</code> checks these session properties.
+    Other column readers (Integer, Float, etc.) always read flat.
+  </div>
+  <div class="step-code">
+    StringColumnReader::readWithDictionary():<br>
+    &nbsp;&nbsp;if (valueHook) return false;<br>
+    &nbsp;&nbsp;if (!zeroCopy) return false;<br>
+    &nbsp;&nbsp;if (!preserveDict) return false;
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-title">Load Chunk <span class="tag decoder">ChunkedDecoder</span></div>
+  <div class="step-desc">
+    Pass <code>true</code> optimistically — we don't know yet if the
+    column is dict-convertible (need the encoding loaded to check).
+  </div>
+  <div class="step-code">
+    decoder_.ensureLoaded(preserveDictionaryEncoding=true)<br>
+    &nbsp;&nbsp;→ ChunkedDecoder::loadNextChunk(true)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;→ options.preserveDictionaryEncoding = true<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;→ EncodingFactory::create(pool, data, options)
+  </div>
+</div>
+
+<div class="step step-encoding">
+  <div class="step-title">Flag Propagation <span class="tag encoding">ENCODING</span></div>
+  <div class="step-desc">
+    <code>EncodingFactory::create(options)</code> calls each encoding's constructor
+    with the same <code>options</code>. Each encoding passes the same options to its children.
+    The flag reaches <strong>every node</strong> in the tree unconditionally.
+  </div>
+  <div class="step-code" style="font-size:0.68rem">
+    EncodingFactory::create(options{flag=true})<br>
+    &nbsp;&nbsp;→ NullableEncoding(options) &nbsp;&nbsp;&nbsp;&nbsp;← ignores<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;→ factory.create(options) &nbsp;&nbsp;← same opts<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ RLE&lt;string_view&gt;(opts) ← <strong>checks</strong><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ factory.create(opts) ← run values<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ factory.create(opts) ← run lengths
+  </div>
+  <div class="step-desc" style="margin-top:0.3rem">
+    Only <strong>RLE</strong> checks the flag. All other encodings ignore it.
+    With <code>isStringType</code> fix, only <code>RLE&lt;string_view&gt;</code> acts on it.
+  </div>
+
+  <div style="margin-top:0.5rem; padding:0.5rem; border:1px solid var(--layer-encoding); border-radius:6px; background:rgba(217,119,6,0.04)">
+    <div style="font-weight:600; font-size:0.75rem; color:var(--layer-encoding); margin-bottom:0.3rem">How RLE acts on the flag</div>
+    <div class="step-code" style="font-size:0.65rem">
+      // RLE&lt;T&gt; constructor<br>
+      if (preserveDictionaryEncoding<br>
+      &nbsp;&nbsp;&amp;&amp; isStringType&lt;physicalType&gt;()<br>
+      &nbsp;&nbsp;&amp;&amp; valuesEncoding-&gt;dictionaryEnabled()) {<br>
+      &nbsp;&nbsp;// dict mode: preserve inner dictionary<br>
+      &nbsp;&nbsp;dictValues_ = BufferedDictEncoding(valuesEncoding);<br>
+      &nbsp;&nbsp;values_ = nullptr;<br>
+      } else {<br>
+      &nbsp;&nbsp;// flat mode: consume inner dictionary<br>
+      &nbsp;&nbsp;values_ = BufferedEncoding(valuesEncoding);<br>
+      &nbsp;&nbsp;dictValues_ = nullptr;<br>
+      }
+    </div>
+    <div class="step-desc" style="margin-top:0.3rem; font-size:0.7rem">
+      <strong>Dict mode</strong>: <code>BufferedDictEncoding</code> calls <code>materializeIndices()</code> → raw indices preserved, alphabet stored separately.<br>
+      <strong>Flat mode</strong>: <code>BufferedEncoding</code> calls <code>materialize()</code> → indices resolved into values, dictionary consumed.
+    </div>
+  </div>
+
+  <div style="margin-top:0.5rem; padding:0.5rem; border:1px solid var(--dim); border-radius:6px; background:rgba(100,116,139,0.04)">
+    <div style="font-weight:600; font-size:0.75rem; color:var(--dim); margin-bottom:0.3rem">DictionaryEncoding ignores the flag</div>
+    <div class="step-desc" style="font-size:0.7rem">
+      <code>DictionaryEncoding</code> always supports both <code>materialize()</code> and
+      <code>materializeIndices()</code> regardless of the flag. It never hides its dictionary.
+      The flag only controls whether <strong>RLE on top</strong> preserves or flattens the dictionary
+      that <code>DictionaryEncoding</code> provides.
+    </div>
+  </div>
+</div>
+
+<div style="margin:0.8rem 0 0.8rem 1rem; padding:0.4rem 0.8rem; border-top:2px dashed var(--border); border-bottom:2px dashed var(--border); text-align:center; font-size:0.7rem; color:var(--dim); font-style:italic">
+  ↑ Construction time (what mode to use?) &nbsp;&nbsp;|&nbsp;&nbsp; ↓ Read time (did it work?)
+</div>
+
+<div class="step step-decoder">
+  <div class="step-title">Eligible Check <span class="tag decoder">ChunkedDecoder</span></div>
+  <div class="step-desc">
+    Ask the root encoding: "can you produce raw dictionary indices?"
+    Per-chunk — different chunks can have different encodings.
+  </div>
+  <div class="step-code">
+    bool dictionaryConvertible() const {<br>
+    &nbsp;&nbsp;return encoding_-&gt;dictionaryEnabled();<br>
+    }
+  </div>
+</div>
+
+<div class="step step-reader">
+  <div class="step-title">Dict vs Flat Path <span class="tag reader">StringColumnReader</span></div>
+  <div class="step-desc">
+    Branch based on the eligible check result.
+  </div>
+  <div class="step-code">
+    if (!decoder_.dictionaryConvertible()) {<br>
+    &nbsp;&nbsp;clearDictionaryState();<br>
+    &nbsp;&nbsp;return false; // → flat path (readWithVisitor)<br>
+    }<br>
+    // → dict path (readDictionaryIndices → DictionaryVector)
+  </div>
+</div>
+
+</div>
+</div>
+</div>
+
+<!-- Right: Encoding Catalog + dictionaryEnabled -->
+<div style="flex:1; min-width:340px">
+<div class="card" style="border-color:var(--layer-encoding)">
+<h3><span style="display:inline-block; width:1.4rem; height:1.4rem; line-height:1.4rem; text-align:center; border-radius:50%; background:var(--layer-encoding); color:white; font-size:0.65rem; margin-right:0.3rem">3</span>Encoding Catalog — Leaf vs Nested</h3>
+
+<p class="step-desc" style="margin-bottom:0.5rem">
+  <strong>Leaf encodings</strong> store data directly — no child encodings.
+</p>
+
+<table style="width:100%; border-collapse:collapse; font-size:0.68rem; margin-top:0.3rem">
+  <tr style="border-bottom:2px solid var(--border)">
+    <th style="text-align:left; padding:0.3rem 0.5rem">Encoding</th>
+    <th style="text-align:left; padding:0.3rem 0.5rem">Inline Data</th>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>ConstantEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem">constant value</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>TrivialEncoding&lt;numeric&gt;</code></td>
+    <td style="padding:0.3rem 0.5rem">compression byte + raw packed values</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>TrivialEncoding&lt;bool&gt;</code></td>
+    <td style="padding:0.3rem 0.5rem">compression byte + bit-packed bitmap</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>FixedBitWidth</code></td>
+    <td style="padding:0.3rem 0.5rem">compression byte + baseline + bit width + packed bits</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>PrefixEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem">restart interval + offsets + prefix-compressed entries</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>Varint</code></td>
+    <td style="padding:0.3rem 0.5rem">baseline value + varint-encoded bytes</td>
+  </tr>
+</table>
+
+<p class="step-desc" style="margin-top:0.8rem; margin-bottom:0.5rem">
+  <strong>Nested encodings</strong> have child encodings created via <code>EncodingFactory::create()</code>.
+  The <code>preserveDictionaryEncoding</code> flag propagates through the same <code>options</code> object to <strong style="color:var(--layer-encoding)">all</strong> children.
+</p>
+
+<table style="width:100%; border-collapse:collapse; font-size:0.68rem; margin-top:0.3rem">
+  <tr style="border-bottom:2px solid var(--border)">
+    <th style="text-align:left; padding:0.3rem 0.5rem">Encoding</th>
+    <th style="text-align:left; padding:0.3rem 0.5rem">Same-Type Child</th>
+    <th style="text-align:left; padding:0.3rem 0.5rem">Helper Children</th>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>NullableEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem">non-null values</td>
+    <td style="padding:0.3rem 0.5rem">nulls (bool)</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>MainlyConstantEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem">otherValues</td>
+    <td style="padding:0.3rem 0.5rem">isCommon (bool)</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>SentinelEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem">sentineledData</td>
+    <td style="padding:0.3rem 0.5rem">—</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>RLE&lt;T&gt;</code> (non-bool)</td>
+    <td style="padding:0.3rem 0.5rem">run values</td>
+    <td style="padding:0.3rem 0.5rem">run lengths (uint32_t)</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>RLE&lt;bool&gt;</code></td>
+    <td style="padding:0.3rem 0.5rem">—</td>
+    <td style="padding:0.3rem 0.5rem">run lengths (uint32_t)</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>DictionaryEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem">alphabet</td>
+    <td style="padding:0.3rem 0.5rem">indices (uint32_t)</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>TrivialEncoding&lt;string_view&gt;</code></td>
+    <td style="padding:0.3rem 0.5rem">—</td>
+    <td style="padding:0.3rem 0.5rem">lengths (uint32_t)</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>SparseBool</code></td>
+    <td style="padding:0.3rem 0.5rem">—</td>
+    <td style="padding:0.3rem 0.5rem">indices (uint32_t)</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>Delta</code></td>
+    <td style="padding:0.3rem 0.5rem">deltas + restatements</td>
+    <td style="padding:0.3rem 0.5rem">isRestatements (bool)</td>
+  </tr>
+</table>
+</div>
+
+<div class="card" style="margin-top:0.8rem; border-color:var(--layer-decoder)">
+<h3><span style="display:inline-block; width:1.4rem; height:1.4rem; line-height:1.4rem; text-align:center; border-radius:50%; background:var(--layer-decoder); color:white; font-size:0.65rem; margin-right:0.2rem">4</span><span style="display:inline-block; width:1.4rem; height:1.4rem; line-height:1.4rem; text-align:center; border-radius:50%; background:var(--layer-reader); color:white; font-size:0.65rem; margin-right:0.3rem">5</span><code>dictionaryEnabled()</code> — Delegation Through Same-Type Children</h3>
+
+<p class="step-desc" style="margin-bottom:0.5rem">
+  <code>dictionaryEnabled()</code> only follows same-type children.
+  Helper children (uint32_t lengths, indices, bools) are never queried.
+</p>
+
+<table style="width:100%; border-collapse:collapse; font-size:0.68rem; margin-top:0.3rem">
+  <tr style="border-bottom:2px solid var(--border)">
+    <th style="text-align:left; padding:0.3rem 0.5rem"></th>
+    <th style="text-align:left; padding:0.3rem 0.5rem">Encoding</th>
+    <th style="text-align:left; padding:0.3rem 0.5rem"><code>dictionaryEnabled()</code></th>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border); background:rgba(8,145,178,0.04)">
+    <td rowspan="6" style="padding:0.3rem 0.5rem; border-right:3px solid var(--layer-decoder); font-size:0.6rem; color:var(--dim); writing-mode:vertical-lr; text-align:center; letter-spacing:0.05em">NESTED</td>
+    <td style="padding:0.3rem 0.5rem"><code>ConstantEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem; color:var(--pass)"><code>true</code> (always, size-1 dict)</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border); background:rgba(8,145,178,0.04)">
+    <td style="padding:0.3rem 0.5rem"><code>DictionaryEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem; color:var(--pass)"><code>true</code> (always)</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border); background:rgba(8,145,178,0.04)">
+    <td style="padding:0.3rem 0.5rem"><code>RLE&lt;T&gt;</code> (non-bool)</td>
+    <td style="padding:0.3rem 0.5rem"><code>dictValues_ != nullptr</code></td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border); background:rgba(8,145,178,0.04)">
+    <td style="padding:0.3rem 0.5rem"><code>NullableEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem">delegates to same-type child</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border); background:rgba(8,145,178,0.04)">
+    <td style="padding:0.3rem 0.5rem"><code>MainlyConstantEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem">delegates to same-type child</td>
+  </tr>
+  <tr style="border-bottom:2px solid var(--border); background:rgba(239,68,68,0.04)">
+    <td style="padding:0.3rem 0.5rem"><code>SentinelEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem; color:var(--kill)"><code>false</code> (blocks) <span style="font-size:0.6rem; color:var(--dim)">[dead code]</span></td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border); background:rgba(100,116,139,0.04)">
+    <td rowspan="4" style="padding:0.3rem 0.5rem; border-right:3px solid var(--dim); font-size:0.6rem; color:var(--dim); writing-mode:vertical-lr; text-align:center; letter-spacing:0.05em">LEAF</td>
+    <td style="padding:0.3rem 0.5rem"><code>TrivialEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem"><code>false</code></td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border); background:rgba(100,116,139,0.04)">
+    <td style="padding:0.3rem 0.5rem"><code>FixedBitWidth</code></td>
+    <td style="padding:0.3rem 0.5rem"><code>false</code></td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border); background:rgba(100,116,139,0.04)">
+    <td style="padding:0.3rem 0.5rem"><code>PrefixEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem"><code>false</code></td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border); background:rgba(100,116,139,0.04)">
+    <td style="padding:0.3rem 0.5rem"><code>Varint, SparseBool, Delta, RLE&lt;bool&gt;</code></td>
+    <td style="padding:0.3rem 0.5rem"><code>false</code></td>
+  </tr>
+</table>
+
+<div style="display:flex; gap:1.5rem; margin:0.8rem 0; flex-wrap:wrap; align-items:flex-start">
+
+  <div style="flex:1; min-width:250px">
+    <div style="text-align:center; font-weight:600; font-size:0.72rem; color:var(--pass); margin-bottom:0.4rem">Chain follows same-type children ✓</div>
+    <pre class="mono" style="font-size:0.65rem; line-height:1.5; background:var(--bg); padding:0.6rem; border-radius:6px; border:1px solid var(--pass); margin:0">
+<span style="color:var(--pass)">dictionaryConvertible()?</span>
+  │
+  ▼
+NullableEncoding::dictionaryEnabled()
+  → nonNulls()->dictionaryEnabled()  <span style="color:var(--pass)">← delegates</span>
+  │
+  ▼
+RLE&lt;string_view&gt;::dictionaryEnabled()
+  → dictValues_ != nullptr → <span style="color:var(--pass)">true</span>
+
+  run lengths RLE&lt;uint32_t&gt;?  <span style="color:var(--dim)">← helper child</span>
+    <span style="color:var(--dim)">NEVER CHECKED</span></pre>
+  </div>
+
+  <div style="flex:1; min-width:250px">
+    <div style="text-align:center; font-weight:600; font-size:0.72rem; color:var(--kill); margin-bottom:0.4rem">Chain stops — no same-type child ✗</div>
+    <pre class="mono" style="font-size:0.65rem; line-height:1.5; background:var(--bg); padding:0.6rem; border-radius:6px; border:1px solid var(--kill); margin:0">
+<span style="color:var(--pass)">dictionaryConvertible()?</span>
+  │
+  ▼
+TrivialEncoding::dictionaryEnabled()
+  → <span style="color:var(--kill)">false</span> (no override, no same-type child)
+  │
+  <span style="color:var(--kill)">STOPS HERE</span>
+
+  lengths RLE&lt;uint32_t&gt;?  <span style="color:var(--dim)">← helper child</span>
+    <span style="color:var(--dim)">NEVER CHECKED</span>
+    <span style="color:var(--dim)">(but received preserveDictionaryEncoding=true)</span></pre>
+  </div>
+
+</div>
+</div>
+
+<div class="card" style="margin-top:0.8rem">
+<h3 style="font-size:0.8rem">Two Chains — <code>preserveDictionaryEncoding</code> (Down) vs <code>dictionaryEnabled()</code> (Up)</h3>
+
+<div style="display:flex; gap:1rem; margin:0.5rem 0; flex-wrap:wrap; align-items:stretch">
+
+  <div style="flex:1; min-width:220px">
+    <div style="text-align:center; font-weight:600; font-size:0.68rem; color:var(--col0); margin-bottom:0.3rem">
+      Downward (construction)
+    </div>
+    <div class="step-code" style="display:block; font-size:0.58rem">
+      options{flag=true}<br>
+      &nbsp;&nbsp;↓ same options<br>
+      NullableEncoding(options) &nbsp;&nbsp;&nbsp;← ignores<br>
+      &nbsp;&nbsp;↓ same options<br>
+      RLE&lt;string_view&gt;(options) &nbsp;&nbsp;← <strong>checks → dict mode</strong><br>
+      &nbsp;&nbsp;↓ same options<br>
+      Dictionary&lt;sv&gt;(options) &nbsp;&nbsp;&nbsp;&nbsp;← ignores<br>
+      <br>
+      &nbsp;&nbsp;↓ run lengths<br>
+      RLE&lt;uint32_t&gt;(options) &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← <strong style="color:var(--kill)">checks!</strong><br>
+      <br>
+      Reaches <strong>every node</strong>.
+    </div>
+  </div>
+
+  <div style="flex:1; min-width:220px">
+    <div style="text-align:center; font-weight:600; font-size:0.68rem; color:var(--col2); margin-bottom:0.3rem">
+      Upward (read time)
+    </div>
+    <div class="step-code" style="display:block; font-size:0.58rem">
+      dictionaryConvertible()?<br>
+      &nbsp;&nbsp;↑<br>
+      NullableEncoding → delegates<br>
+      &nbsp;&nbsp;↑<br>
+      RLE&lt;string_view&gt; → true<br>
+      <br>
+      RLE&lt;uint32_t&gt;? &nbsp;<strong style="color:var(--kill)">never checked</strong><br>
+      <br>
+      Only follows <strong>same-type chain</strong>.
+    </div>
+  </div>
+
+</div>
+</div>
+
+</div><!-- end right column -->
+
+</div><!-- end side-by-side flex -->
+
+<h3 style="margin-top:1.5rem">Use Dictionary Encoding</h3>
+
+<div class="card">
+<h3>Dict Path — <code>dictionaryEnabled()</code> and <code>materializeIndices()</code> Come in Pairs</h3>
+<p class="step-desc" style="margin-bottom:0.5rem">
+  Each encoding in the dict chain overrides <code>materializeIndices()</code> (or <code>readIndicesWithVisitor()</code>)
+  and knows how to delegate to its child. If an encoding says "I can produce indices"
+  via <code>dictionaryEnabled()</code>, it must also implement the API to actually produce them.
+  Otherwise the reader calls <code>materializeIndices()</code> and hits <code>NIMBLE_UNREACHABLE</code> in the base class.
+</p>
+
+<table style="width:100%; border-collapse:collapse; font-size:0.68rem; margin-top:0.4rem">
+  <tr style="border-bottom:2px solid var(--border)">
+    <th style="text-align:left; padding:0.3rem 0.5rem">Encoding</th>
+    <th style="text-align:left; padding:0.3rem 0.5rem"><code>dictionaryEnabled()</code></th>
+    <th style="text-align:left; padding:0.3rem 0.5rem">Indices API</th>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>ConstantEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem"><code>true</code> always</td>
+    <td style="padding:0.3rem 0.5rem"><code>materializeIndices()</code> — fills buffer with 0</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>DictionaryEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem"><code>true</code> always</td>
+    <td style="padding:0.3rem 0.5rem"><code>materializeIndices()</code> → <code>indicesEncoding_-&gt;materialize()</code></td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>RLE</code> (dict mode)</td>
+    <td style="padding:0.3rem 0.5rem"><code>dictValues_ != nullptr</code></td>
+    <td style="padding:0.3rem 0.5rem"><code>materializeIndices()</code> → <code>dictValues_-&gt;nextIndex()</code></td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>NullableEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem">delegates to child</td>
+    <td style="padding:0.3rem 0.5rem"><code>readIndicesWithVisitor()</code> → handle nulls → delegate to child</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem"><code>MainlyConstantEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem">delegates to child</td>
+    <td style="padding:0.3rem 0.5rem"><code>materializeIndices()</code> → common rows get common index, others delegate to child</td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border); background:rgba(239,68,68,0.04)">
+    <td style="padding:0.3rem 0.5rem"><code>SentinelEncoding</code></td>
+    <td style="padding:0.3rem 0.5rem"><code>false</code> (no override)</td>
+    <td style="padding:0.3rem 0.5rem">none — base class <code>NIMBLE_UNREACHABLE</code></td>
+  </tr>
+  <tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:0.3rem 0.5rem">Everything else</td>
+    <td style="padding:0.3rem 0.5rem"><code>false</code></td>
+    <td style="padding:0.3rem 0.5rem">none</td>
+  </tr>
+</table>
+
+<p class="step-desc" style="margin-top:0.5rem">
+  The dict path flows through the <strong>same-type value chain</strong> only.
+  Helper children (run lengths, null bitmaps, isCommon bools, indices uint32_t) are always
+  called via <code>materialize()</code>, never <code>materializeIndices()</code>:
+</p>
+
+<div class="step-code" style="display:block; margin-top:0.4rem; font-size:0.65rem">
+  Reader: readDictionaryIndices()<br>
+  &nbsp;&nbsp;│<br>
+  &nbsp;&nbsp;▼ callReadIndicesWithVisitor(*encoding_)<br>
+  NullableEncoding::readIndicesWithVisitor()<br>
+  &nbsp;&nbsp;→ handle nulls (nulls child → <strong>materialize()</strong>, not materializeIndices)<br>
+  &nbsp;&nbsp;→ callReadIndicesWithVisitor(*nonNullValues_) &nbsp;&nbsp;&nbsp;← delegates indices to child<br>
+  &nbsp;&nbsp;│<br>
+  &nbsp;&nbsp;▼<br>
+  RLE&lt;string_view&gt;::readIndicesWithVisitor()<br>
+  &nbsp;&nbsp;→ run lengths → <strong>materialize()</strong> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← helper child, always flat<br>
+  &nbsp;&nbsp;→ dictValues_-&gt;nextIndex() &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← value child, indices path<br>
+  &nbsp;&nbsp;│<br>
+  &nbsp;&nbsp;▼<br>
+  BufferedDictEncoding → DictionaryEncoding::materializeIndices()<br>
+  &nbsp;&nbsp;→ indicesEncoding_-&gt;<strong>materialize()</strong> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← returns raw ints, which ARE the indices<br>
+  &nbsp;&nbsp;→ done — recursion stops here
+</div>
+</div><!-- end Use Dictionary Encoding card -->
+
+<h3 style="margin-top:1.5rem">Dictionary Path Optimization</h3>
+
+<div class="card" style="margin-bottom:1rem">
+<h3>ReadWithVisitorParams — Encoding → Reader Bridge</h3>
+<p class="step-desc" style="margin-bottom:0.8rem">
+  The encoding layer decodes data but can't access the reader's null state directly.
+  <code>ReadWithVisitorParams</code> carries callbacks from the decoder to the encoding,
+  allowing the encoding to modify reader state at the right moment during decoding.
+</p>
+
+<div style="display:flex; align-items:center; gap:1rem; margin:1rem 0; flex-wrap:wrap">
+  <div style="flex:1; min-width:200px; padding:0.6rem; border:2px solid var(--layer-reader); border-radius:8px; text-align:center; background:rgba(139,92,246,0.06)">
+    <div style="font-family:'Space Grotesk',sans-serif; font-size:0.75rem; font-weight:600; color:var(--layer-reader)">StringColumnReader</div>
+    <div style="font-size:0.72rem; color:var(--text-secondary); margin-top:0.2rem">owns anyNulls_, returnReaderNulls_,<br>resultNulls_, nullsInReadRange_</div>
+  </div>
+  <div style="font-size:1.2rem; color:var(--text-muted)">←</div>
+  <div style="flex:1; min-width:200px; padding:0.6rem; border:2px solid var(--layer-decoder); border-radius:8px; text-align:center; background:rgba(8,145,178,0.06)">
+    <div style="font-family:'Space Grotesk',sans-serif; font-size:0.75rem; font-weight:600; color:var(--layer-decoder)">ChunkedDecoder</div>
+    <div style="font-size:0.72rem; color:var(--text-secondary); margin-top:0.2rem">creates ReadWithVisitorParams<br>populates callbacks with lambdas<br>that capture visitor.reader()</div>
+  </div>
+  <div style="font-size:1.2rem; color:var(--text-muted)">→</div>
+  <div style="flex:1; min-width:200px; padding:0.6rem; border:2px solid var(--layer-encoding); border-radius:8px; text-align:center; background:rgba(217,119,6,0.06)">
+    <div style="font-family:'Space Grotesk',sans-serif; font-size:0.75rem; font-weight:600; color:var(--layer-encoding)">Encoding</div>
+    <div style="font-size:0.72rem; color:var(--text-secondary); margin-top:0.2rem">receives params<br>calls callbacks at the right<br>moment during decoding</div>
+  </div>
+</div>
+
+<h3 style="margin-top:1rem">Three Callbacks</h3>
+<table style="width:100%; border-collapse:collapse; font-size:0.8rem; margin-top:0.5rem">
+  <thead>
+    <tr style="border-bottom:2px solid var(--border)">
+      <th style="text-align:left; padding:0.4rem 0.6rem; font-family:'Space Grotesk',sans-serif; font-size:0.72rem">Callback</th>
+      <th style="text-align:left; padding:0.4rem 0.6rem; font-family:'Space Grotesk',sans-serif; font-size:0.72rem">What it does on the Reader</th>
+      <th style="text-align:left; padding:0.4rem 0.6rem; font-family:'Space Grotesk',sans-serif; font-size:0.72rem">Called by Encoding when</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:0.4rem 0.6rem; font-family:'JetBrains Mono',monospace; font-size:0.72rem">makeReaderNulls</td>
+      <td style="padding:0.4rem 0.6rem; font-size:0.75rem">Creates null bitmap buffer, returns writable pointer</td>
+      <td style="padding:0.4rem 0.6rem; font-size:0.75rem">NullableEncoding needs to write column-level nulls</td>
+    </tr>
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:0.4rem 0.6rem; font-family:'JetBrains Mono',monospace; font-size:0.72rem">setReturnNullsMode</td>
+      <td style="padding:0.4rem 0.6rem; font-size:0.75rem">Sets <code>returnReaderNulls_</code> flag (which bitmap <code>resultNulls()</code> returns)</td>
+      <td style="padding:0.4rem 0.6rem; font-size:0.75rem">After NullableEncoding finishes decoding nulls</td>
+    </tr>
+    <tr>
+      <td style="padding:0.4rem 0.6rem; font-family:'JetBrains Mono',monospace; font-size:0.72rem">prepareResultNulls</td>
+      <td style="padding:0.4rem 0.6rem; font-size:0.75rem">Resets <code>anyNulls_</code> / <code>returnReaderNulls_</code>, allocates result nulls buffer</td>
+      <td style="padding:0.4rem 0.6rem; font-size:0.75rem">Before scattering indices for null gaps in <code>readDenseMaterializedIndices</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="note" style="margin-top:0.5rem">
+  All three are <strong>lazy</strong> — guarded by a flag, execute at most once per batch even if called
+  per chunk. They exist because the encoding layer can't access the reader directly;
+  the callbacks bridge the gap via <code>visitor.reader()</code>.
+</div>
+</div>
+
+<p class="step-desc" style="margin-bottom:0.5rem">
+  Example: <code>DictionaryEncoding&lt;string_view&gt;</code> with alphabet <code>["apple","banana","cherry","date"]</code>,
+  8 rows with indices <code>[0, 3, null, 1, 0, null, 2, 3]</code>, filter: <code>name LIKE 'a%'</code>.
+</p>
+
+<div class="compare-grid">
+  <div class="card">
+    <h3>Flat Path (default)</h3>
+    <p class="step-desc" style="margin-bottom:0.5rem">Reads resolved string values. Filter applied per-row during read.</p>
+    <div class="step-code" style="font-size:0.68rem">
+      prepareRead&lt;string_view&gt;(offset, rows)<br>
+      decoder_.readWithVisitor(visitor)<br>
+      &nbsp;&nbsp;→ DictionaryEncoding::readWithVisitor<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;→ materialize(): index 0 → alphabet[0] → "apple"<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;index 3 → alphabet[3] → "date"<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;... resolve each index → copy string<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;→ visitor applies filter per row:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;filter("apple") → PASS, copy "apple"<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;filter("date") &nbsp;→ FAIL, skip<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;filter("banana")→ FAIL, skip<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;filter("apple") → PASS, copy "apple" <strong>again</strong><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;... 8 filter calls, 2 string copies
+    </div>
+    <div class="step-desc" style="margin-top:0.3rem">
+      rawValues_ holds <code>string_view</code> values → <code>FlatVector&lt;StringView&gt;</code>.
+      Every row resolves index → string and copies it.
+    </div>
+  </div>
+  <div class="card">
+    <h3>Dictionary Path (optimization)</h3>
+    <p class="step-desc" style="margin-bottom:0.5rem">Reads raw int32 indices, filters post-hoc with SIMD. Returns DictionaryVector.</p>
+    <div class="step-code" style="font-size:0.68rem">
+      prepareRead&lt;int32_t&gt;(offset, rows)<br>
+      suppress filter<br>
+      decoder_.readDictionaryIndices(visitor)<br>
+      &nbsp;&nbsp;→ DictionaryEncoding::materializeIndices<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;→ raw indices: [0, 3, —, 1, 0, —, 2, 3]<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;no string resolution, no copy<br>
+      restore filter<br>
+      filterDictionaryIndices → <strong>SIMD</strong><br>
+      &nbsp;&nbsp;→ filter("apple") → cache[0]=PASS &nbsp;← <strong>once</strong><br>
+      &nbsp;&nbsp;→ filter("date") &nbsp;→ cache[3]=FAIL &nbsp;← once<br>
+      &nbsp;&nbsp;→ filter("banana")→ cache[1]=FAIL &nbsp;← once<br>
+      &nbsp;&nbsp;→ filter("cherry")→ cache[2]=FAIL &nbsp;← once<br>
+      &nbsp;&nbsp;→ 4 filter calls total (one per unique entry)<br>
+      &nbsp;&nbsp;→ SIMD: gather cache → compress passing indices
+    </div>
+    <div class="step-desc" style="margin-top:0.3rem">
+      rawValues_ holds <code>int32_t</code> indices → <code>DictionaryVector&lt;StringView&gt;</code>.
+      Indices + alphabet pointer. Zero string copy.
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  <strong>Why the dictionary path is faster:</strong><br>
+  &nbsp;&nbsp;• <strong>Filter calls:</strong> flat = N calls (one per row, "apple" tested twice). Dict = K calls (one per unique entry, cached).<br>
+  &nbsp;&nbsp;• <strong>String copies:</strong> flat = copies every passing string into FlatVector. Dict = zero copies (DictionaryVector references alphabet by pointer).<br>
+  &nbsp;&nbsp;• <strong>SIMD:</strong> dict path processes 8 indices per cycle (gather → compare → compress). Flat path is scalar per-row.<br>
+  &nbsp;&nbsp;• For 1M rows with 100 unique strings: flat = 1M filter calls + 1M string copies. Dict = 100 filter calls + 1M int32 SIMD ops.
+</div>
+
+
+<style>
+.phase-card {
+  background:var(--surface); border:1.5px solid var(--border); border-radius:10px;
+  margin-bottom:0.8rem; overflow:hidden;
+}
+.phase-header {
+  padding:0.5rem 1rem; font-family:'Space Grotesk',sans-serif; font-size:0.75rem;
+  font-weight:700; letter-spacing:0.04em; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:0.5rem;
+}
+.phase-header .phase-num {
+  width:1.4rem; height:1.4rem; border-radius:50%; display:flex; align-items:center;
+  justify-content:center; font-size:0.65rem; color:white; flex-shrink:0;
+}
+.phase-body { display:flex; }
+.phase-calls { flex:1; padding:0.6rem 1rem; border-right:1px solid var(--border); min-width:0; }
+.phase-state {
+  width:38%; padding:0.6rem 1rem; background:rgba(99,102,241,0.03); flex-shrink:0;
+}
+.phase-state-title {
+  font-family:'Space Grotesk',sans-serif; font-size:0.62rem; font-weight:600;
+  letter-spacing:0.08em; text-transform:uppercase; color:var(--text-muted);
+  margin-bottom:0.4rem;
+}
+.call-line {
+  font-family:'JetBrains Mono',monospace; font-size:0.75rem;
+  padding:0.2rem 0; display:flex; align-items:baseline; gap:0.4rem;
+}
+.call-line .arrow { color:var(--text-muted); flex-shrink:0; font-size:0.65rem; }
+.call-sub {
+  font-family:'JetBrains Mono',monospace; font-size:0.7rem; color:var(--text-secondary);
+  padding:0.1rem 0 0.1rem 1.2rem;
+}
+.call-note {
+  font-size:0.75rem; color:var(--text-secondary); padding:0.15rem 0 0.15rem 1.2rem;
+  font-family:'DM Sans',sans-serif;
+}
+.sv {
+  font-family:'JetBrains Mono',monospace; font-size:0.72rem;
+  display:flex; gap:0.3rem; align-items:baseline; padding:0.1rem 0;
+}
+.sv .n { color:var(--col2); font-weight:500; min-width:8.5rem; flex-shrink:0; }
+.sv .v { color:var(--text-primary); }
+.sv .v.g { color:var(--pass); font-weight:600; }
+.sv .v.r { color:var(--kill); font-weight:600; }
+.sv .v.m { color:var(--text-muted); }
+.mini-cells { display:flex; gap:2px; margin:0.15rem 0; flex-wrap:wrap; }
+.mc {
+  width:1.5rem; height:1.1rem; display:flex; align-items:center; justify-content:center;
+  font-family:'JetBrains Mono',monospace; font-size:0.6rem; font-weight:500;
+  border:1px solid var(--border); border-radius:3px; background:var(--surface);
+}
+.mc.p { background:#dcfce7; border-color:#86efac; color:#166534; }
+.mc.f { background:#fee2e2; border-color:#fca5a5; color:#991b1b; }
+.mc.nl { background:#f3f4f6; border-color:#d1d5db; color:#9ca3af; }
+.state-note { font-size:0.72rem; color:var(--text-secondary); margin-top:0.3rem; }
+@media (max-width:900px) { .phase-body { flex-direction:column; } .phase-state { width:100%; border-right:none; border-top:1px solid var(--border); } }
+</style>
+
+<p class="step-desc" style="margin-bottom:0.8rem">
+  Example: <code>SELECT name FROM t WHERE name LIKE 'a%'</code> on a dictionary-encoded string column.
+  The optimization reads <strong>int32 indices</strong> instead of strings, filters with <strong>SIMD</strong>, and returns a
+  <strong>DictionaryVector</strong> (zero string copy).
+</p>
+
+<!-- Phase 1: Prepare -->
+<div class="phase-card">
+  <div class="phase-header" style="background:rgba(139,92,246,0.06)">
+    <div class="phase-num" style="background:var(--layer-reader)">1</div>
+    Prepare — Position &amp; Build Alphabet
+  </div>
+  <div class="phase-body">
+    <div class="phase-calls">
+      <div class="call-line"><span class="arrow">▸</span> <span style="color:var(--layer-reader)">prepareRead&lt;int32_t&gt;</span>(offset, rows, incomingNulls)</div>
+      <div class="call-note">Position decoder, read null bitmap, allocate rawValues_ for <strong>int32_t</strong> indices (not strings).</div>
+      <div class="call-line" style="margin-top:0.4rem"><span class="arrow">▸</span> <span style="color:var(--layer-reader)">ensureDictionaryState</span>()</div>
+      <div class="call-note">Cache the alphabet: pointer to the encoding's dictionary table.</div>
+    </div>
+    <div class="phase-state">
+      <div class="phase-state-title">Key insight</div>
+      <div class="state-note">rawValues_ is sized for <code>int32_t</code> (4 bytes/slot), not <code>string_view</code> (16 bytes/slot). The optimization starts here — we never allocate space for strings.</div>
+      <div class="sv" style="margin-top:0.3rem"><span class="n">alphabet</span> <span class="v g">["apple","banana","cherry","date"]</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- Phase 2: Bulk Read -->
+<div class="phase-card">
+  <div class="phase-header" style="background:rgba(8,145,178,0.06)">
+    <div class="phase-num" style="background:var(--layer-decoder)">2</div>
+    Suppress Filter &amp; Bulk Read Indices
+  </div>
+  <div class="phase-body">
+    <div class="phase-calls">
+      <div class="call-line"><span class="arrow">▸</span> scanSpec_->setFilter(<strong>nullptr</strong>)</div>
+      <div class="call-note">Suppress filter — bulk read gets ALL rows unfiltered. Filter applied post-hoc with SIMD.</div>
+      <div class="call-line" style="margin-top:0.4rem"><span class="arrow">▸</span> <span style="color:var(--layer-decoder)">decoder_.readDictionaryIndices</span>(visitor, onChunkBoundary)</div>
+      <div class="call-sub">└→ readDictionaryIndicesImpl → for each chunk:</div>
+      <div class="call-sub">&nbsp;&nbsp;&nbsp;&nbsp;callReadIndicesWithVisitor → encoding.materializeIndices()</div>
+      <div class="call-line" style="margin-top:0.4rem"><span class="arrow">▸</span> scanSpec_->setFilter(std::move(savedFilter))</div>
+      <div class="call-note">Restore filter for post-hoc application.</div>
+    </div>
+    <div class="phase-state">
+      <div class="phase-state-title">Result — raw indices, not strings</div>
+      <div class="sv"><span class="n">rawValues_</span></div>
+      <div class="mini-cells">
+        <div class="mc">0</div><div class="mc">3</div><div class="mc nl">—</div><div class="mc">1</div><div class="mc">0</div><div class="mc nl">—</div><div class="mc">2</div><div class="mc">3</div>
+      </div>
+      <div class="state-note">8 int32 indices instead of 8 string copies. Nulls at positions 2, 5.</div>
+      <div class="state-note" style="margin-top:0.2rem">Resolved: apple, date, null, banana, apple, null, cherry, date</div>
+    </div>
+  </div>
+</div>
+
+<!-- Phase 3: SIMD Filter -->
+<div class="phase-card">
+  <div class="phase-header" style="background:rgba(139,92,246,0.06)">
+    <div class="phase-num" style="background:var(--layer-reader)">3</div>
+    Post-Hoc SIMD Filter
+  </div>
+  <div class="phase-body">
+    <div class="phase-calls">
+      <div class="call-line"><span class="arrow">▸</span> <span style="color:var(--layer-reader)">filterDictionaryIndices</span>(rows, filter)</div>
+      <div class="call-sub">└→ filterByCache → <strong>filterDictionaryRunSimd</strong></div>
+      <div class="call-sub">&nbsp;&nbsp;&nbsp;├→ SIMD gather: cache[idx] for 8 indices at once</div>
+      <div class="call-sub">&nbsp;&nbsp;&nbsp;├→ SIMD compare: pass / fail / unknown masks</div>
+      <div class="call-sub">&nbsp;&nbsp;&nbsp;├→ scalar resolve unknowns: alphabet[idx] → filter.testBytes()</div>
+      <div class="call-sub">&nbsp;&nbsp;&nbsp;└→ SIMD compress: compact passing indices + rows</div>
+      <div class="call-note" style="margin-top:0.3rem">Each dictionary entry tested <strong>at most once</strong> — cached for all subsequent rows with the same index.</div>
+    </div>
+    <div class="phase-state">
+      <div class="phase-state-title">Filter cache (filter: name LIKE 'a%')</div>
+      <div class="mini-cells">
+        <div class="mc p">✓</div><div class="mc f">✗</div><div class="mc f">✗</div><div class="mc f">✗</div>
+      </div>
+      <div class="state-note">[0]=apple ✓ &nbsp;[1]=banana ✗ &nbsp;[2]=cherry ✗ &nbsp;[3]=date ✗</div>
+      <div class="state-note" style="margin-top:0.3rem">Only 4 scalar filter calls for any number of rows — the rest is pure SIMD (gather → compare → compress).</div>
+    </div>
+  </div>
+</div>
+
+<!-- Phase 4: Output -->
+<div class="phase-card">
+  <div class="phase-header" style="background:rgba(217,119,6,0.06)">
+    <div class="phase-num" style="background:var(--layer-encoding)">4</div>
+    Output — DictionaryVector (Zero Copy)
+  </div>
+  <div class="phase-body">
+    <div class="phase-calls">
+      <div class="call-line"><span class="arrow">▸</span> <span style="color:var(--layer-reader)">getValues</span>(rows, &amp;result)</div>
+      <div class="call-note">Wrap surviving indices + alphabet pointer into a DictionaryVector. No string copy at any point.</div>
+    </div>
+    <div class="phase-state">
+      <div class="phase-state-title">Final output</div>
+      <div class="sv"><span class="n">indices</span> <span class="v g">[0, 0]</span></div>
+      <div class="sv"><span class="n">rows</span> <span class="v g">[0, 4]</span></div>
+      <div class="sv"><span class="n">dictionary</span> <span class="v g">["apple","banana","cherry","date"]</span></div>
+      <div class="state-note">→ resolves to ["apple", "apple"] via pointer lookup, not string copy.</div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:1.5rem">
+<h3>SIMD Filtering — filterDictionaryRunSimd (AVX2 — 8 lanes)</h3>
+<p class="step-desc" style="margin-bottom:1rem">
+  The SIMD kernel at <code>velox/dwio/common/DecoderUtil.h:65</code> processes 8 dictionary indices per iteration.
+  The filter is called at most once per unique dictionary entry; results are cached.
+</p>
+
+<h3 style="margin-top:1rem">Cold cache iteration (first encounter)</h3>
+<div style="margin:0.6rem 0">
+  <div class="simd-label">① Load 8 indices</div>
+  <div class="simd-reg">
+    <div class="lane">0</div><div class="lane">3</div><div class="lane">1</div><div class="lane">0</div>
+    <div class="lane">2</div><div class="lane">1</div><div class="lane">3</div><div class="lane">0</div>
+  </div>
+</div>
+<div style="margin:0.6rem 0">
+  <div class="simd-label">② SIMD gather — load 8 cache entries in 1 instruction</div>
+  <div class="simd-reg gather">
+    <div class="lane">?</div><div class="lane">?</div><div class="lane">?</div><div class="lane">?</div>
+    <div class="lane">?</div><div class="lane">?</div><div class="lane">?</div><div class="lane">?</div>
+  </div>
+  <div style="font-size:0.75rem; color:var(--text-muted); margin-top:0.2rem">All kUnknown — cold cache</div>
+</div>
+<div style="margin:0.6rem 0">
+  <div class="simd-label">③ Resolve unknowns — scalar, one per unique entry</div>
+  <div class="step-code" style="display:block; margin:0.3rem 0">
+    filter("apple")  → PASS → cache[0] = ✓<br>
+    filter("date")   → FAIL → cache[3] = ✗<br>
+    filter("banana") → FAIL → cache[1] = ✗<br>
+    filter("cherry") → FAIL → cache[2] = ✗
+  </div>
+  <div style="font-size:0.75rem; color:var(--text-muted)">4 scalar calls total — each entry tested once</div>
+</div>
+<div style="margin:0.6rem 0">
+  <div class="simd-label">④ Pass mask</div>
+  <div class="simd-reg mask">
+    <div class="lane on">1</div><div class="lane off">0</div><div class="lane off">0</div><div class="lane on">1</div>
+    <div class="lane off">0</div><div class="lane off">0</div><div class="lane off">0</div><div class="lane on">1</div>
+  </div>
+</div>
+<div style="margin:0.6rem 0">
+  <div class="simd-label">⑤ SIMD compress — pack 3 passing indices + rows to output</div>
+  <div class="simd-reg" style="border-color:var(--pass)">
+    <div class="lane" style="background:#dcfce7">0</div>
+    <div class="lane" style="background:#dcfce7">0</div>
+    <div class="lane" style="background:#dcfce7">0</div>
+  </div>
+</div>
+
+<h3 style="margin-top:1.5rem">Warm cache iteration (subsequent batch)</h3>
+<div class="note" style="margin:0.5rem 0">
+  All cache entries are known → <strong>zero scalar calls</strong>. Pure SIMD: gather → compare → compress.
+  8 indices processed in ~3 CPU instructions.
+</div>
+</div>
+
+<div class="card" style="margin-top:1.5rem">
+<h3>Multi-Chunk Alphabet Merging</h3>
+<p class="step-desc" style="margin-bottom:0.5rem">
+  When a read spans multiple chunks, each chunk may have its own dictionary alphabet.
+  The <code>onChunkBoundary</code> callback merges alphabets and offsets indices so the reader
+  sees one unified dictionary across the entire read.
+</p>
+
+<div class="step-code" style="display:block; font-size:0.65rem; margin-top:0.5rem">
+  // Chunk 0: alphabet = ["apple", "banana"] &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;indices = [0, 1, 0, 1, ...]<br>
+  // Chunk 1: alphabet = ["cherry", "date"] &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;indices = [0, 1, 0, 0, ...]<br>
+  // Chunk 2: alphabet = ["elderberry"] &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;indices = [0, 0, 0, 0, ...]<br>
+  //<br>
+  // Merged alphabet = ["apple", "banana", "cherry", "date", "elderberry"]<br>
+  // Merged indices &nbsp;= [0, 1, 0, 1, ..., &nbsp;2, 3, 2, 2, ..., &nbsp;4, 4, 4, 4, ...]<br>
+  // &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;↑ chunk 0 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;↑ chunk 1 (+2) &nbsp;&nbsp;&nbsp;↑ chunk 2 (+4)
+</div>
+
+<div style="display:flex; align-items:center; gap:0.5rem; margin:1rem 0; flex-wrap:wrap; justify-content:center">
+  <div style="padding:0.5rem 0.8rem; border:2px solid var(--col0); border-radius:8px; text-align:center; background:rgba(37,99,235,0.06); min-width:140px">
+    <div style="font-weight:600; font-size:0.78rem">Chunk 0</div>
+    <div style="font-size:0.65rem; color:var(--text-secondary)">["apple","banana"]</div>
+  </div>
+  <div style="font-size:0.7rem; color:var(--text-muted)">→ onChunkBoundary →</div>
+  <div style="padding:0.5rem 0.8rem; border:2px solid var(--pass); border-radius:8px; text-align:center; background:rgba(34,197,94,0.06); min-width:140px">
+    <div style="font-weight:600; font-size:0.78rem">Chunk 1</div>
+    <div style="font-size:0.65rem; color:var(--text-secondary)">["cherry","date"]</div>
+  </div>
+  <div style="font-size:0.7rem; color:var(--text-muted)">→ onChunkBoundary →</div>
+  <div style="padding:0.5rem 0.8rem; border:2px solid var(--col2); border-radius:8px; text-align:center; background:rgba(124,58,237,0.06); min-width:140px">
+    <div style="font-weight:600; font-size:0.78rem">Chunk 2</div>
+    <div style="font-size:0.65rem; color:var(--text-secondary)">["elderberry"]</div>
+  </div>
+</div>
+
+<div style="text-align:center; font-size:0.8rem; color:var(--text-muted); margin:0.3rem 0">↓ tryExtendDictionaryAtChunkBoundary()</div>
+
+<div style="padding:0.6rem 1rem; border:2px solid var(--layer-decoder); border-radius:8px; text-align:center; background:rgba(8,145,178,0.06); margin:0 auto; max-width:600px">
+  <div style="font-weight:600; font-size:0.82rem">Merged Alphabet</div>
+  <div style="font-size:0.7rem; color:var(--text-secondary); margin-top:0.2rem">["apple", "banana", "cherry", "date", "elderberry"]</div>
+  <div style="font-size:0.68rem; color:var(--text-muted); margin-top:0.2rem">Each chunk's indices offset by cumulative alphabet size</div>
+</div>
+
+<h3 style="margin-top:1.2rem; font-size:0.82rem">When a chunk is NOT dict-convertible → Abandon</h3>
+
+<div style="display:flex; align-items:center; gap:0.5rem; margin:0.8rem 0; flex-wrap:wrap; justify-content:center">
+  <div style="padding:0.5rem 0.8rem; border:2px solid var(--col0); border-radius:8px; text-align:center; background:rgba(37,99,235,0.06); min-width:120px">
+    <div style="font-weight:600; font-size:0.78rem">Chunk 0</div>
+    <div style="font-size:0.65rem; color:var(--pass)">Dict ✓</div>
+  </div>
+  <div style="font-size:0.7rem; color:var(--text-muted)">→</div>
+  <div style="padding:0.5rem 0.8rem; border:2px solid var(--pass); border-radius:8px; text-align:center; background:rgba(34,197,94,0.06); min-width:120px">
+    <div style="font-weight:600; font-size:0.78rem">Chunk 1</div>
+    <div style="font-size:0.65rem; color:var(--pass)">Dict ✓</div>
+  </div>
+  <div style="font-size:0.7rem; color:var(--text-muted)">→</div>
+  <div style="padding:0.5rem 0.8rem; border:2px solid var(--kill); border-radius:8px; text-align:center; background:rgba(239,68,68,0.06); min-width:120px">
+    <div style="font-weight:600; font-size:0.78rem">Chunk 2</div>
+    <div style="font-size:0.65rem; color:var(--kill)">Trivial ✗</div>
+  </div>
+</div>
+
+<div style="text-align:center; font-size:0.8rem; color:var(--text-muted); margin:0.3rem 0">↓ onChunkBoundary returns false</div>
+
+<div style="padding:0.6rem 1rem; border:2px solid var(--layer-encoding); border-radius:8px; background:rgba(217,119,6,0.06); margin:0 auto; max-width:600px">
+  <div style="font-weight:600; font-size:0.82rem; color:var(--layer-encoding)">Abandon Dictionary</div>
+  <div style="font-size:0.7rem; color:var(--text-secondary); margin-top:0.2rem">
+    Dict indices (chunks 0-1) → filterDictionaryIndices → expandDictionaryToFlat<br>
+    Remaining rows (chunk 2) → flat read via readWithVisitor
+  </div>
+</div>
+</div>
+
+</div><!-- Architecture Overview section -->
+
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="section">
+<div class="section-head">Reading Process — Stripes, Chunks, Batches &amp; the Metadata Contract</div>
+
+<div class="card">
+<h3>Physical Layout</h3>
+<p class="step-desc" style="margin-bottom:0.5rem">
+  A Nimble file is divided into stripes. Each stripe contains multiple streams (one or more per column).
+  Each stream is divided into chunks. Each chunk is a self-contained encoded block.
+</p>
+
+<div class="step-code" style="display:block; font-size:0.65rem">
+  Nimble file:<br>
+  &nbsp;&nbsp;Stripe 0 (stripe metadata: 10,000 rows):<br>
+  &nbsp;&nbsp;&nbsp;&nbsp;Stream 0 (column A values): [Chunk 0: 600 values] [Chunk 1: 400 values]<br>
+  &nbsp;&nbsp;&nbsp;&nbsp;Stream 1 (column B values): [Chunk 0: 1000 values]<br>
+  &nbsp;&nbsp;&nbsp;&nbsp;...<br>
+  &nbsp;&nbsp;Stripe 1 (stripe metadata: 8,000 rows):<br>
+  &nbsp;&nbsp;&nbsp;&nbsp;...
+</div>
+</div>
+
+<div class="card" style="margin-top:0.8rem">
+<h3>Reading a Chunk</h3>
+<p class="step-desc" style="margin-bottom:0.5rem">
+  Each stream has its own <code>ChunkedDecoder</code>. Loading a chunk creates an encoding
+  from the chunk's bytes and sets <code>remainingValues_</code> to the encoding's row count.
+  Reading values decrements <code>remainingValues_</code>. When it reaches 0, the chunk is exhausted.
+</p>
+
+<div class="step-code" style="display:block; font-size:0.62rem">
+  loadNextChunk():<br>
+  &nbsp;&nbsp;read chunk header (4 bytes: size + compression type)<br>
+  &nbsp;&nbsp;decompress if needed<br>
+  &nbsp;&nbsp;encoding_ = EncodingFactory::create(bytes) &nbsp;← e.g. ConstantEncoding("val"), rowCount=22<br>
+  &nbsp;&nbsp;remainingValues_ = encoding_-&gt;rowCount() &nbsp;&nbsp;&nbsp;← e.g. 22<br>
+  <br>
+  Reading:<br>
+  &nbsp;&nbsp;callReadIndicesWithVisitor(*encoding_, visitor, params) → reads N values<br>
+  &nbsp;&nbsp;advancePosition(N) → remainingValues_ -= N<br>
+  <br>
+  When remainingValues_ == 0 → chunk exhausted → load next chunk or done
+</div>
+</div>
+
+<div class="card" style="margin-top:0.8rem">
+<h3>Batch-Driven Loop</h3>
+<p class="step-desc" style="margin-bottom:0.5rem">
+  The reader processes rows in batches (e.g., 1000 rows per batch). The loop runs until
+  <code>visitor.rowIndex()</code> reaches <code>numRows</code> (the batch size). A single batch may
+  span multiple chunks.
+</p>
+
+<div class="step-code" style="display:block; font-size:0.62rem">
+  numRows = visitor.numRows() &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← batch size, e.g. 1000<br>
+  <br>
+  while (visitor.rowIndex() &lt; numRows):<br>
+  &nbsp;&nbsp;if (remainingValues_ == 0):<br>
+  &nbsp;&nbsp;&nbsp;&nbsp;loadNextChunk() &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← cross chunk boundary<br>
+  &nbsp;&nbsp;computeNextRowIndex() &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← how many rows to read from current chunk<br>
+  &nbsp;&nbsp;read values<br>
+  &nbsp;&nbsp;advancePosition(numNonNulls)<br>
+  &nbsp;&nbsp;visitor.rowIndex() += rows processed
+</div>
+</div>
+
+<div class="card" style="margin-top:0.8rem">
+<h3>Metadata Contract — Why Scalar Types Never Overrun</h3>
+<p class="step-desc" style="margin-bottom:0.5rem">
+  For scalar columns, the stripe metadata guarantees that total rows = total values in the stream.
+  The reader distributes the stripe's rows across batches. The loop exits when
+  <code>visitor.rowIndex()</code> reaches <code>numRows</code> — before ever calling
+  <code>loadNextChunk()</code> beyond the last chunk.
+</p>
+
+<div class="step-code" style="display:block; font-size:0.62rem">
+  Scalar column: Stream has Chunk 0 (600 values) + Chunk 1 (400 values) = 1000 total<br>
+  Stripe metadata: 1000 rows. Batch size: 1000.<br>
+  <br>
+  Iteration 1:<br>
+  &nbsp;&nbsp;remainingValues_ = 600 (chunk 0)<br>
+  &nbsp;&nbsp;computeNextRowIndex → numNonNulls = 600 (capped by remainingValues_)<br>
+  &nbsp;&nbsp;read 600, advancePosition(600) → remainingValues_ = 0<br>
+  &nbsp;&nbsp;visitor.rowIndex() = 600<br>
+  <br>
+  Iteration 2:<br>
+  &nbsp;&nbsp;visitor.rowIndex() = 600 &lt; 1000 → enter loop<br>
+  &nbsp;&nbsp;remainingValues_ == 0 → loadNextChunk() → chunk 1, remainingValues_ = 400<br>
+  &nbsp;&nbsp;read 400, advancePosition(400) → remainingValues_ = 0<br>
+  &nbsp;&nbsp;visitor.rowIndex() = 1000<br>
+  <br>
+  Iteration 3:<br>
+  &nbsp;&nbsp;visitor.rowIndex() = 1000 &lt; 1000 → <strong>FALSE → EXIT</strong><br>
+  &nbsp;&nbsp;Loop exits before reaching remainingValues_ == 0 check again.<br>
+  <br>
+  Supply (1000 values) = Demand (1000 rows from stripe metadata) → never overruns.
+</div>
+</div>
+
+<div class="card" style="margin-top:0.8rem">
+<h3>Struct Children — The Contract Breaks</h3>
+<p class="step-desc" style="margin-bottom:0.5rem">
+  For struct children, the writer only writes <strong>non-null values</strong> to the child stream.
+  The struct's null bitmap is a separate stream. So the child stream has fewer values than the
+  stripe has rows — the null bitmap accounts for the difference.
+</p>
+
+<div style="display:flex; gap:1rem; margin:0.5rem 0; flex-wrap:wrap; align-items:stretch">
+  <div style="flex:1; min-width:220px">
+    <div style="text-align:center; font-weight:600; font-size:0.7rem; color:var(--pass); margin-bottom:0.3rem">Scalar Column</div>
+    <div class="step-code" style="display:block; font-size:0.62rem">
+      Stripe: 1000 rows<br>
+      Stream: 1000 values<br>
+      <br>
+      Supply = Demand<br>
+      Loop exits naturally<br>
+      No overrun possible
+    </div>
+  </div>
+  <div style="flex:1; min-width:220px">
+    <div style="text-align:center; font-weight:600; font-size:0.7rem; color:var(--kill); margin-bottom:0.3rem">Struct Child Column</div>
+    <div class="step-code" style="display:block; font-size:0.62rem">
+      Stripe: 20,821 rows<br>
+      Struct null stream: 20,821 bits (22 non-null)<br>
+      Child value stream: 22 values<br>
+      <br>
+      Supply (22) ≠ Demand (20,821 rows)<br>
+      Null bitmap bridges the gap<br>
+      Loop driven by bitmap, not stream size
+    </div>
+  </div>
+</div>
+
+<p class="step-desc" style="margin-top:0.5rem">
+  The read order: struct null stream is read <strong>first</strong> (producing the null bitmap),
+  then the child value stream is read using that bitmap. By the time the child's
+  <code>readDictionaryIndicesImpl</code> runs, the bitmap is fully available.
+</p>
+
+<div class="step-code" style="display:block; font-size:0.62rem; margin-top:0.3rem">
+  StructColumnReader::read(batch of 1000 rows):<br>
+  &nbsp;&nbsp;1. Read struct null stream → bitmap = [0,0,...,0,1,0,...] for this batch<br>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(struct's own ChunkedDecoder, loaded before child reads)<br>
+  &nbsp;&nbsp;2. Call StringColumnReader::read()<br>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ readDictionaryIndicesImpl(visitor, <strong>nulls=bitmap</strong>, ...)<br>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ bitmap already complete for this batch
+</div>
+
+<div class="note" style="margin-top:0.5rem">
+  <strong>The fix:</strong> when <code>remainingValues_ == 0</code>, instead of blindly loading the next chunk
+  (which crashes when none exist), check the null bitmap: <code>countNonNulls(nulls, numScanned, endRow)</code>.
+  If non-nulls remain → load chunk (if it fails, it's corruption).
+  If all remaining rows are null → skip load, process nulls.
+  This is metadata-driven (the bitmap), not stream-peek-driven (<code>hasMoreChunks()</code>).
+</div>
+</div>
+</div>
+
+
+
+</div><!-- container -->
+</body>
+</html>

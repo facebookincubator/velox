@@ -66,6 +66,41 @@ cudf::table_view createExtendedTableView(
   return cudf::table_view(allViews);
 }
 
+// Sums the row counts of zero-column build inputs. A zero-column cuDF table
+// cannot represent its row count (num_rows() is derived from its columns), so
+// the count is tracked separately. Accumulates in int64 and checks the total
+// fits before narrowing to cudf::size_type.
+cudf::size_type zeroColumnBuildRows(const std::vector<CudfVectorPtr>& inputs) {
+  int64_t numRows{0};
+  for (const auto& input : inputs) {
+    numRows += input->size();
+  }
+  VELOX_CHECK_LE(
+      numRows,
+      std::numeric_limits<cudf::size_type>::max(),
+      "Zero-column nested loop join build exceeds cudf::size_type rows: {}",
+      numRows);
+  return static_cast<cudf::size_type>(numRows);
+}
+
+// Returns the cross-join output row count (probe_rows x build_rows), failing if
+// it would overflow cudf::size_type. The product is computed in int64 because
+// both factors are int32.
+cudf::size_type checkedCrossJoinOutputRows(
+    cudf::size_type probeRows,
+    cudf::size_type buildRows) {
+  auto outputRows =
+      static_cast<int64_t>(probeRows) * static_cast<int64_t>(buildRows);
+  VELOX_CHECK_LE(
+      outputRows,
+      std::numeric_limits<cudf::size_type>::max(),
+      "Cross join output exceeds cudf::size_type limit: {} x {} = {} rows",
+      probeRows,
+      buildRows,
+      outputRows);
+  return static_cast<cudf::size_type>(outputRows);
+}
+
 } // namespace
 
 void CudfNestedLoopJoinBridge::setData(
@@ -205,11 +240,19 @@ void CudfNestedLoopJoinBuild::doNoMoreInput() {
   // join output is probe_rows × build_rows regardless of how the build is
   // split.
   auto stream = cudfGlobalStreamPool().get_stream();
+  auto buildType = joinNode_->sources()[1]->outputType();
+  auto inputs = std::exchange(inputs_, {});
+
+  // A zero-column build table reports num_rows() == 0, so track its row count
+  // separately from the concatenated table.
+  cudf::size_type buildRowCount =
+      buildType->size() == 0 ? zeroColumnBuildRows(inputs) : 0;
+
   auto table = getConcatenatedTable(
-      std::exchange(inputs_, {}),
-      joinNode_->sources()[1]->outputType(),
-      stream,
-      get_output_mr());
+      std::move(inputs), buildType, stream, get_output_mr());
+  if (buildType->size() > 0) {
+    buildRowCount = table->num_rows();
+  }
 
   // Record the build-ready event now, immediately after the build table
   // is materialized on `stream` - not lazily on the probe side - so it
@@ -234,7 +277,8 @@ void CudfNestedLoopJoinBuild::doNoMoreInput() {
   bridge->setBuildStream(stream);
   bridge->setData(
       std::make_optional(
-          std::shared_ptr<cudf::table>(std::move(table)))); // Wake probes
+          CudfNestedLoopJoinBridge::build_data_type{
+              std::shared_ptr<cudf::table>(std::move(table)), buildRowCount}));
 }
 
 exec::BlockingReason CudfNestedLoopJoinBuild::isBlocked(
@@ -523,7 +567,7 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
   buildReadyEvent_ = bridge->getBuildReadyEvent();
   buildStream_ = bridge->getBuildStream();
 
-  if (buildData_.value()->num_rows() == 0) {
+  if (buildData_->rowCount == 0) {
     buildEmpty_ = true;
     // For inner/right join, set skipInput_ to consume probe batches without
     // processing (prevents upstream exchange hanging). Match CPU NLJ behavior
@@ -538,7 +582,7 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
   // matches every build row, so flags aren't needed.
   if (isRightOrFullJoin() && hasFilter_ && !buildEmpty_) {
     auto initStream = cudfGlobalStreamPool().get_stream();
-    auto numRows = buildData_.value()->num_rows();
+    auto numRows = buildData_->rowCount;
     auto falseScalar =
         cudf::numeric_scalar<bool>(false, true, initStream, get_temp_mr());
     buildMatchedFlags_ = cudf::make_column_from_scalar(
@@ -551,7 +595,7 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
   if (hasFilter_ && !rightPrecomputeInstructions_.empty() && !buildEmpty_) {
     auto precomputeStream = cudfGlobalStreamPool().get_stream();
     waitForBuildReady(precomputeStream);
-    auto buildColumnViews = tableViewToColumnViews(buildData_.value()->view());
+    auto buildColumnViews = tableViewToColumnViews(buildData_->table->view());
     buildPrecomputed_ = precomputeSubexpressions(
         buildColumnViews,
         rightPrecomputeInstructions_,
@@ -559,7 +603,7 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
         buildType_,
         precomputeStream);
     buildExtendedView_ =
-        createExtendedTableView(buildData_.value()->view(), buildPrecomputed_);
+        createExtendedTableView(buildData_->table->view(), buildPrecomputed_);
     precomputeStream.synchronize();
   }
 
@@ -688,9 +732,31 @@ CudfNestedLoopJoinProbe::crossJoinConditionalIndices(
   return {std::move(probeIndicesCols[0]), std::move(filteredBuildIndicesCol)};
 }
 
+std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::crossJoinZeroColumnBuild(
+    cudf::table_view probeView,
+    cudf::size_type buildRows,
+    rmm::cuda_stream_view stream) {
+  // With no build columns, the cross join only multiplies probe cardinality:
+  // repeat each probe row buildRows times (probe-major, matching
+  // cudf::cross_join's row order). The output is exactly the probe output
+  // columns in order, so the repeated table is the result.
+  auto repeatCounts = cudf::make_column_from_scalar(
+      cudf::numeric_scalar<cudf::size_type>(
+          buildRows, true, stream, get_temp_mr()),
+      probeView.num_rows(),
+      stream,
+      get_temp_mr());
+  return cudf::repeat(
+      probeView.select(probeColumnIndicesToGather_),
+      repeatCounts->view(),
+      stream,
+      get_output_mr());
+}
+
 std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
     cudf::table_view probeTableView,
     cudf::table_view buildView,
+    cudf::size_type buildRows,
     rmm::cuda_stream_view stream) {
   VELOX_NVTX_FUNC_RANGE();
 
@@ -791,7 +857,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
 
     // Track which build rows matched for right/full join mismatch handling.
     if (isRightOrFullJoin()) {
-      auto numBuildRows = buildView.num_rows();
+      auto numBuildRows = buildRows;
       auto buildRowSequence = cudf::sequence(
           numBuildRows,
           cudf::numeric_scalar<cudf::size_type>(0, true, stream, get_temp_mr()),
@@ -845,16 +911,14 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
     return std::make_unique<cudf::table>(std::move(outCols));
   }
 
-  // Unfiltered join using cross_join.
-  auto outputRows = static_cast<int64_t>(probeTableView.num_rows()) *
-      static_cast<int64_t>(buildView.num_rows());
-  VELOX_CHECK_LE(
-      outputRows,
-      std::numeric_limits<cudf::size_type>::max(),
-      "Cross join output exceeds cudf::size_type limit: {} x {} = {} rows",
-      probeTableView.num_rows(),
-      buildView.num_rows(),
-      outputRows);
+  // Cross-join output is probe_rows x build_rows; fail fast if it overflows
+  // cudf::size_type. buildRows is passed separately because a zero-column build
+  // table reports num_rows() == 0.
+  checkedCrossJoinOutputRows(probeTableView.num_rows(), buildRows);
+
+  if (buildView.num_columns() == 0) {
+    return crossJoinZeroColumnBuild(probeTableView, buildRows, stream);
+  }
 
   auto crossResult =
       cudf::cross_join(probeTableView, buildView, stream, get_output_mr());
@@ -951,7 +1015,7 @@ RowVectorPtr CudfNestedLoopJoinProbe::emitBuildMismatchRows(
   }
   // The caller in doGetOutput() already waits for the build-ready event on
   // this stream before calling in here.
-  auto& buildTable = buildData_.value();
+  auto& buildTable = buildData_->table;
   auto numOutputColumns = outputType_->size();
 
   // Select unmatched build rows (deletion mask removes matched rows).
@@ -1079,7 +1143,7 @@ RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
               createExtendedTableView(probeTableView, leftPrecomputed);
         }
         const cudf::table_view& extendedBuildView = buildPrecomputed_.empty()
-            ? buildData_.value()->view()
+            ? buildData_->table->view()
             : buildExtendedView_;
 
         matchedIndicesBuffer = cudf::conditional_left_semi_join(
@@ -1105,7 +1169,7 @@ RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
         auto [probeIndicesForSemiJoin, unusedBuildIndices] =
             crossJoinConditionalIndices(
                 probeTableView,
-                buildData_.value()->view(),
+                buildData_->table->view(),
                 stream,
                 /*needBuildIndices=*/false);
         matchedIndicesColumn = std::move(probeIndicesForSemiJoin);
@@ -1182,7 +1246,10 @@ RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
   if (isLeftOrFullJoin() && hasFilter_ && !buildEmpty_) {
     if (probeMatchedFlags_ == nullptr) {
       auto result = joinWithBuildBatch(
-          cudfInput->getTableView(), buildData_.value()->view(), stream);
+          cudfInput->getTableView(),
+          buildData_->table->view(),
+          buildData_->rowCount,
+          stream);
       if (result->num_rows() > 0) {
         auto size = static_cast<vector_size_t>(result->num_rows());
         return std::make_shared<CudfVector>(
@@ -1210,8 +1277,33 @@ RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
 
   // Join probe against the single build table.
   if (!buildEmpty_) {
+    // A zero-column cudf table cannot carry its logical row count. For an
+    // unfiltered inner cross join, cardinality is probe rows x build rows.
+    // Filtered and outer joins require separate matched/mismatch accounting.
+    // TODO: Add zero-column output support for filtered and outer nested loop
+    // joins.
+    if (joinType_ == core::JoinType::kInner && !hasFilter_ &&
+        outputType_->size() == 0) {
+      auto outputRows = checkedCrossJoinOutputRows(
+          static_cast<cudf::size_type>(cudfInput->size()),
+          buildData_->rowCount);
+      input_.reset();
+      if (outputRows == 0) {
+        return nullptr;
+      }
+      return std::make_shared<CudfVector>(
+          operatorCtx_->pool(),
+          outputType_,
+          outputRows,
+          std::make_unique<cudf::table>(),
+          stream);
+    }
+
     auto result = joinWithBuildBatch(
-        cudfInput->getTableView(), buildData_.value()->view(), stream);
+        cudfInput->getTableView(),
+        buildData_->table->view(),
+        buildData_->rowCount,
+        stream);
     if (result->num_rows() > 0) {
       input_.reset();
       auto size = static_cast<vector_size_t>(result->num_rows());
