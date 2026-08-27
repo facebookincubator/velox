@@ -907,6 +907,44 @@ TEST_P(NimbleIndexProjectorTest, slicesStripeBasedOnOverfetchRatio) {
   }
 }
 
+TEST_P(NimbleIndexProjectorTest, slicesPartialStripesAroundFullStripe) {
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  writeResumeKeyTestData(/*rowsPerBatch=*/100, /*numBatches=*/3);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makeRangeLookup(rowType, {"key"}, 10, 290)};
+  NimbleIndexProjector::Options options;
+  options.maxOverfetchRowsRatio = 0.0;
+  auto result = projector->project(request, options);
+
+  ASSERT_EQ(result.responses.size(), 1);
+  ASSERT_EQ(result.responses[0].slices.size(), 3);
+
+  const auto firstHeader =
+      readEmbeddedTabletChunkHeader(result.responses[0].slices[0]);
+  const auto middleHeader =
+      readEmbeddedTabletChunkHeader(result.responses[0].slices[1]);
+  const auto lastHeader =
+      readEmbeddedTabletChunkHeader(result.responses[0].slices[2]);
+  EXPECT_EQ(firstHeader.rowCount, 90);
+  EXPECT_EQ(firstHeader.rowRange, RowRange(0, 90));
+  EXPECT_FALSE(firstHeader.streamHasChunkHeader);
+  EXPECT_EQ(middleHeader.rowCount, 100);
+  EXPECT_EQ(middleHeader.rowRange, RowRange(0, 100));
+  EXPECT_TRUE(middleHeader.streamHasChunkHeader);
+  EXPECT_EQ(lastHeader.rowCount, 90);
+  EXPECT_EQ(lastHeader.rowRange, RowRange(0, 90));
+  EXPECT_FALSE(lastHeader.streamHasChunkHeader);
+
+  const auto& stats = projector->stats();
+  EXPECT_EQ(stats.numReadStripes, 3);
+  EXPECT_EQ(stats.numSlicedStripes, 2);
+}
+
 TEST_P(NimbleIndexProjectorTest, slicedRequestsShareShiftedBody) {
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
 

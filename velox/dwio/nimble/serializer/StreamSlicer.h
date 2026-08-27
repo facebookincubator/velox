@@ -67,10 +67,12 @@ class StreamSlicer {
 
   /// Sliced stream-set result.
   struct SlicedStreams {
-    /// Owns the encoded bytes referenced by streams.
+    /// Owns the encoded bytes referenced by streams. Empty when slice() writes
+    /// into a caller-provided output buffer.
     folly::IOBuf data;
 
-    /// Views ordered by stream offset, backed by data.
+    /// Views ordered by stream offset, backed by either data or the output
+    /// buffer supplied to slice().
     std::vector<std::string_view> streams;
 
     /// Indicates whether the stream set needs a row null-barrier on read.
@@ -79,11 +81,26 @@ class StreamSlicer {
 
   /// Returns compact raw streams containing rows [offset, offset + length).
   /// The raw-stream input format is configured in Options. The returned
-  /// streams never contain chunk headers.
+  /// streams never contain chunk headers. When outputBuffer is non-null, the
+  /// returned stream views point into it and the caller must keep its chunks
+  /// alive for as long as those views are used.
   SlicedStreams slice(
       const std::vector<std::string_view>& inputStreams,
       uint32_t offset,
-      uint32_t length) const;
+      uint32_t length,
+      Buffer* outputBuffer = nullptr) const;
+
+  /// Returns an IOBuf chain over non-empty streams backed by transferred buffer
+  /// chunks. Empty streams are skipped and adjacent views share one IOBuf node.
+  static folly::IOBuf takeOwnershipAsIOBuf(
+      const std::vector<std::string_view>& streams,
+      Buffer& buffer);
+
+  /// Returns an IOBuf chain over non-empty streams and retains owner on each
+  /// node. Streams may point to other storage that the caller keeps alive.
+  static folly::IOBuf takeOwnershipAsIOBuf(
+      const std::vector<std::string_view>& streams,
+      std::shared_ptr<const void> owner);
 
  private:
   // Top-level row range in the current stream's row domain.
@@ -111,11 +128,12 @@ class StreamSlicer {
       Buffer& outputBuffer,
       const Encoding::Options& encodingOptions) const;
 
-  // Returns sliced stream views backed by an owned output buffer.
+  // Returns sliced streams. When outputBuffer is non-null, stream views are
+  // backed by it. Otherwise data owns the output bytes.
   SlicedStreams sliceStreams(
       const std::vector<std::string_view>& inputStreams,
       Range range,
-      Buffer& outputBuffer,
+      Buffer* outputBuffer,
       const Encoding::Options& encodingOptions) const;
 
   // Returns true when the descriptor points to a present, non-empty stream.
