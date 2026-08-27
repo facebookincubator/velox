@@ -114,15 +114,8 @@ enum class ColumnMappingMode {
   /// entry describes the table field ID for the corresponding requested column,
   /// and nested children describe field IDs below structs, arrays, and maps.
   ///
-  /// Physical Parquet schema nodes that do not have field_id metadata are
-  /// treated as having a missing field ID and therefore do not match positive
-  /// Iceberg field IDs. This is expected for legacy Hive-style Parquet files or
-  /// files written by producers that do not preserve field IDs. In that case,
-  /// kParquetFieldId can still be used, but any requested positive field ID
-  /// without a matching physical field is read as missing and is materialized
-  /// by the connector as null or as the table format's default value. Use kName
-  /// or kPosition instead when reading files whose schema identity must come
-  /// from names or positions.
+  /// Files without field IDs use ParquetFieldId::fallbackNames. Mixed-ID files
+  /// do not use name fallback.
   ///
   /// This is Parquet-specific. Readers for other formats should reject this
   /// mode instead of interpreting it as a generic column identity mechanism.
