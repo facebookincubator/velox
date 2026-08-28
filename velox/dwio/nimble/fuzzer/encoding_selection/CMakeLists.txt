@@ -37,9 +37,22 @@ if(NOT TARGET gflags::gflags)
   endforeach()
 endif()
 
-# Built but deliberately not registered with add_test. These targets exist so the
-# fuzzer sources stay compiling; deciding what to run in CI, and with which
-# iteration counts, is a separate call.
+# The fuzzing targets below are built but deliberately not registered with
+# add_test. They keep the fuzzer sources compiling; deciding what to run in CI,
+# and with which iteration counts, is a separate call.
+add_library(
+  nimble_writer_config_randomizer
+  WriterConfigRandomizer.cpp
+  WriterConfigRandomizer.h
+)
+
+target_link_libraries(
+  nimble_writer_config_randomizer
+  nimble_writer
+  fmt::fmt
+  Folly::folly
+)
+
 add_library(
   nimble_writer_fuzzer_runner
   NimbleWriterFuzzer.cpp
@@ -60,12 +73,25 @@ target_link_libraries(
   nimble_velox_reader
   nimble_velox_selective
   nimble_writer
+  nimble_writer_config_randomizer
   velox_memory
   velox_vector_fuzzer
   gflags::gflags
   glog::glog
   Folly::folly
 )
+
+add_executable(writer_config_randomizer_test WriterConfigRandomizerTest.cpp)
+
+target_link_libraries(
+  writer_config_randomizer_test
+  nimble_random_encoding_selection_policy
+  nimble_writer_config_randomizer
+  nimble_writer
+  gtest_main
+  Folly::folly
+)
+add_test(writer_config_randomizer_test writer_config_randomizer_test)
 
 # Each of these defines its own main() through folly::Init, so they link gtest
 # without gtest_main.
