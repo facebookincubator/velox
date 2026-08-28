@@ -107,6 +107,8 @@ void addOperationStatsToRuntimeStats(
   }
 }
 
+} // namespace
+
 void addIoStatsToRuntimeStats(
     io::IoStatistics& ioStats,
     std::string_view prefix,
@@ -179,8 +181,6 @@ void addIoStatsToRuntimeStats(
       RuntimeCounter::Unit::kBytes,
       res);
 }
-
-} // namespace
 
 void FileDataSource::processColumnHandle(const FileColumnHandlePtr& handle) {
   switch (handle->columnType()) {
