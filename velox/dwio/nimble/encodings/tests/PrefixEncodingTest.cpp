@@ -100,8 +100,8 @@ TEST_F(PrefixEncodingTest, materialize) {
     auto encoded = EncodingFactory::encode<std::string_view>(
         createSelectionPolicy(), testCase.values, buffer);
     stringBuffers_.clear();
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     EXPECT_EQ(encoding->rowCount(), testCase.values.size());
     EXPECT_EQ(encoding->encodingType(), EncodingType::Prefix);
@@ -204,8 +204,8 @@ TEST_F(PrefixEncodingTest, varyingNumRestarts) {
     auto encoded = EncodingFactory::encode<std::string_view>(
         createSelectionPolicy(), values, buffer);
     stringBuffers_.clear();
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     EXPECT_EQ(encoding->rowCount(), values.size());
     EXPECT_EQ(encoding->encodingType(), EncodingType::Prefix);
@@ -317,8 +317,8 @@ TEST_F(PrefixEncodingTest, skipAndMaterializeSteps) {
     auto encoded = EncodingFactory::encode<std::string_view>(
         createSelectionPolicy(), values, buffer);
     stringBuffers_.clear();
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     // Run through steps twice
 
@@ -394,8 +394,8 @@ TEST_F(PrefixEncodingTest, fuzzerMaterialize) {
     auto encoded = EncodingFactory::encode<std::string_view>(
         createSelectionPolicy(), values, buffer);
     stringBuffers_.clear();
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     // Generate random steps
     std::uniform_int_distribution<uint32_t> numStepsDist(1, kMaxNumSteps);
@@ -469,8 +469,8 @@ TEST_F(PrefixEncodingTest, debugString) {
   auto encoded = EncodingFactory::encode<std::string_view>(
       createSelectionPolicy(), values, buffer);
   stringBuffers_.clear();
-  auto encoding =
-      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
   std::string debug = encoding->debugString();
   EXPECT_TRUE(debug.find("Prefix") != std::string::npos);
@@ -518,8 +518,8 @@ TEST_F(PrefixEncodingTest, customRestartInterval) {
     auto encoded = EncodingFactory::encode<std::string_view>(
         std::move(policy), values, buffer);
     stringBuffers_.clear();
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     // Verify restart interval is correctly set from config or default
     const std::string debug = encoding->debugString();
@@ -712,8 +712,8 @@ TEST_F(PrefixEncodingTest, encode) {
     auto encoded = EncodingFactory::encode<std::string_view>(
         createSelectionPolicy(), values, buffer);
     stringBuffers_.clear();
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     // Verify basic properties
     EXPECT_EQ(encoding->rowCount(), values.size());
@@ -844,8 +844,8 @@ TEST_F(PrefixEncodingTest, fuzzerEncode) {
     auto encoded = EncodingFactory::encode<std::string_view>(
         createSelectionPolicy(), values, buffer);
     stringBuffers_.clear();
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     // Verify properties
     EXPECT_EQ(encoding->rowCount(), values.size());
@@ -920,8 +920,8 @@ TEST_F(PrefixEncodingTest, encodeLargeInputRoundTrip) {
                           << elapsed << "s";
 
   stringBuffers_.clear();
-  auto encoding =
-      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
   EXPECT_EQ(encoding->rowCount(), kNumValues);
 
   std::vector<std::string_view> decoded(kNumValues);

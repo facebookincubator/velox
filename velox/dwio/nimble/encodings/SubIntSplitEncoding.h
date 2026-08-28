@@ -194,7 +194,6 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
       sections_{},
       scratchBuf_{&pool},
       decodeBuf_{&pool} {
-  const EncodingFactory factory{options};
   const auto* pos = data.data() + this->dataOffset();
 
   const uint8_t splitCount = encoding::read<uint8_t>(pos);
@@ -220,8 +219,8 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
     const int width = sec.bitEnd - sec.bitStart + 1;
     sec.mask = (width >= 64) ? ~uint64_t{0} : ((uint64_t{1} << width) - 1);
     sec.storageBytes = sectionStorageBytes(width);
-    sec.encoding = factory.create(
-        *this->pool_, {pos, meta[s].encodedSize}, stringBufferFactory);
+    sec.encoding = EncodingFactory().create(
+        *this->pool_, {pos, meta[s].encodedSize}, stringBufferFactory, options);
     pos += meta[s].encodedSize;
   }
 }

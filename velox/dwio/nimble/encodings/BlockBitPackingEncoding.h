@@ -372,17 +372,20 @@ class BlockBitPackingEncoding final
       uint32_t blockCount,
       uint32_t packedDataSize,
       Vector<uint32_t>& output,
-      velox::memory::MemoryPool* pool,
+      Buffer& scratchBuffer,
       const Encoding::Options& options) {
     // Each block size is derived from its start offset and the next block's
     // start offset. For the final source block, the next offset is the packed
     // data size because there is no stored successor offset.
-    NIMBLE_CHECK_NOT_NULL(pool);
     const auto numReadBlocks =
         blockCount + (blockOffset + blockCount < header.numBlocks ? 1 : 0);
-    detail::createTypedEncodingView<uint32_t>(
-        header.encodedBlockOffsets, pool, options)
-        ->read(blockOffset, numReadBlocks, output.data());
+    readMetadataRange(
+        header.encodedBlockOffsets,
+        blockOffset,
+        numReadBlocks,
+        output,
+        scratchBuffer,
+        options);
     if (numReadBlocks == blockCount) {
       output[blockCount] = packedDataSize;
     }
@@ -507,6 +510,15 @@ class BlockBitPackingEncoding final
       velox::memory::MemoryPool& pool,
       const std::function<void*(uint32_t)>& stringBufferFactory,
       const Encoding::Options& options) const;
+
+  template <typename OutputVector>
+  static void readMetadataRange(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t count,
+      OutputVector& output,
+      Buffer& scratchBuffer,
+      const Encoding::Options& options);
 
   uint16_t blockSize_;
   uint16_t numBlocks_;
@@ -704,9 +716,28 @@ void BlockBitPackingEncoding<T>::readMetadataStream(
     const std::function<void*(uint32_t)>& stringBufferFactory,
     const Encoding::Options& options) const {
   NIMBLE_CHECK_GT(numBlocks_, 0);
-  EncodingFactory(options)
-      .create(pool, encoded, stringBufferFactory)
+  EncodingFactory()
+      .create(pool, encoded, stringBufferFactory, options)
       ->materialize(numBlocks_, output.data());
+}
+
+template <typename T>
+template <typename OutputVector>
+void BlockBitPackingEncoding<T>::readMetadataRange(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t count,
+    OutputVector& output,
+    Buffer& scratchBuffer,
+    const Encoding::Options& options) {
+  NIMBLE_CHECK_GE(output.size(), count, "Metadata output buffer is too small.");
+  auto* const pool = &scratchBuffer.getMemoryPool();
+  auto encoding = EncodingFactory{options}.create(
+      *pool, encoded, [&scratchBuffer](uint32_t size) -> void* {
+        return scratchBuffer.reserve(size);
+      });
+  encoding->skip(offset);
+  encoding->materialize(count, output.data());
 }
 
 template <typename T>
@@ -1259,23 +1290,30 @@ std::string_view BlockBitPackingEncoding<T>::slice(
 
   ScopedVector<uint32_t> blockOffsets{
       static_cast<uint64_t>(numBlocks) + 1, pool, options.bufferPool};
+  ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
   readBlockOffsets(
       source,
       firstBlock,
       numBlocks,
       static_cast<uint32_t>(packedData.size()),
       blockOffsets,
-      pool,
+      scopedBuffer.get(),
       options);
 
   const auto getPackedSize = [&](uint32_t blockIndex) {
     const auto blockOffset = blockIndex - firstBlock;
     return blockOffsets[blockOffset + 1] - blockOffsets[blockOffset];
   };
-  const auto bitWidthView = detail::createTypedEncodingView<uint8_t>(
-      source.encodedBitWidths, pool, options);
+  ScopedVector<uint8_t> bitWidths{numBlocks, pool, options.bufferPool};
+  readMetadataRange(
+      source.encodedBitWidths,
+      firstBlock,
+      numBlocks,
+      bitWidths,
+      scopedBuffer.get(),
+      options);
   const auto getBlockBitWidth = [&](uint32_t blockIndex) {
-    return bitWidthView->readAt(blockIndex);
+    return bitWidths[blockIndex - firstBlock];
   };
 
   ScopedVector<BlockSliceInfo> blockSlices{numBlocks, pool, options.bufferPool};
@@ -1315,7 +1353,6 @@ std::string_view BlockBitPackingEncoding<T>::slice(
   sliceOffsets[numBlocks] = totalPackedSize;
   NIMBLE_CHECK_EQ(curRow, endRow);
 
-  ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
   const auto encodedBaselines = EncodingFactory::slice(
       source.encodedBaselines,
       firstBlock,

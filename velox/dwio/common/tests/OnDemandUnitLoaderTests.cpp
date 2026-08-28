@@ -38,31 +38,31 @@ class OnDemandUnitLoaderCommonTests
   }
 };
 
-TEST_F(OnDemandUnitLoaderCommonTests, NoUnitButSkip) {
+TEST_F(OnDemandUnitLoaderCommonTests, noUnitButSkip) {
   testNoUnitButSkip();
 }
 
-TEST_F(OnDemandUnitLoaderCommonTests, InitialSkip) {
+TEST_F(OnDemandUnitLoaderCommonTests, initialSkip) {
   testInitialSkip();
 }
 
-TEST_F(OnDemandUnitLoaderCommonTests, CanRequestUnitMultipleTimes) {
+TEST_F(OnDemandUnitLoaderCommonTests, canRequestUnitMultipleTimes) {
   testCanRequestUnitMultipleTimes();
 }
 
-TEST_F(OnDemandUnitLoaderCommonTests, UnitOutOfRange) {
+TEST_F(OnDemandUnitLoaderCommonTests, unitOutOfRange) {
   testUnitOutOfRange();
 }
 
-TEST_F(OnDemandUnitLoaderCommonTests, SeekOutOfRange) {
+TEST_F(OnDemandUnitLoaderCommonTests, seekOutOfRange) {
   testSeekOutOfRange();
 }
 
-TEST_F(OnDemandUnitLoaderCommonTests, SeekOutOfRangeReaderError) {
+TEST_F(OnDemandUnitLoaderCommonTests, seekOutOfRangeReaderError) {
   testSeekOutOfRangeReaderError();
 }
 
-TEST(OnDemandUnitLoaderTests, LoadsCorrectlyWithReader) {
+TEST(OnDemandUnitLoaderTests, loadsCorrectlyWithReader) {
   size_t blockedOnIoCount = 0;
   OnDemandUnitLoaderFactory factory([&](auto) { ++blockedOnIoCount; });
   ReaderMock readerMock{{10, 20, 30}, {0, 0, 0}, factory, 0};
@@ -99,7 +99,7 @@ TEST(OnDemandUnitLoaderTests, LoadsCorrectlyWithReader) {
   EXPECT_EQ(blockedOnIoCount, 3);
 }
 
-TEST(OnDemandUnitLoaderTests, LoadsCorrectlyWithNoCallback) {
+TEST(OnDemandUnitLoaderTests, loadsCorrectlyWithNoCallback) {
   OnDemandUnitLoaderFactory factory(nullptr);
   ReaderMock readerMock{{10, 20, 30}, {0, 0, 0}, factory, 0};
   EXPECT_EQ(readerMock.unitsLoaded(), std::vector<bool>({false, false, false}));
@@ -127,7 +127,7 @@ TEST(OnDemandUnitLoaderTests, LoadsCorrectlyWithNoCallback) {
   EXPECT_EQ(readerMock.unitsLoaded(), std::vector<bool>({false, false, true}));
 }
 
-TEST(OnDemandUnitLoaderTests, CanSeek) {
+TEST(OnDemandUnitLoaderTests, canSeek) {
   size_t blockedOnIoCount = 0;
   OnDemandUnitLoaderFactory factory([&](auto) { ++blockedOnIoCount; });
   ReaderMock readerMock{{10, 20, 30}, {0, 0, 0}, factory, 0};

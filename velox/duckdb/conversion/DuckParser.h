@@ -31,8 +31,9 @@ struct ParseOptions {
 
   // DuckDB defaults the window frame end bound to CURRENT ROW even when ORDER
   // BY is absent. The SQL standard requires UNBOUNDED FOLLOWING in that case.
-  // When true, corrects this default. Cannot distinguish defaulted from
-  // explicit frames, so an explicit CURRENT ROW may be incorrectly overridden.
+  // When true, corrects this default. An explicit RANGE frame ending at the
+  // current row is corrected as well, since unordered it covers the whole
+  // partition either way. An explicit ROWS frame ends where it says.
   bool correctWindowFrameDefault = false;
 
   /// SQL functions could be registered with different prefixes by the user.

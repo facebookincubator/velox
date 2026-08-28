@@ -33,7 +33,7 @@ class DefaultInputBufferGrowthPolicyTest
       public ::testing::WithParamInterface<
           DefaultInputBufferGrowthPolicyTestCase> {};
 
-TEST_P(DefaultInputBufferGrowthPolicyTest, GetExtendedCapacity) {
+TEST_P(DefaultInputBufferGrowthPolicyTest, getExtendedCapacity) {
   const auto& testCase = GetParam();
   DefaultInputBufferGrowthPolicy policy{testCase.rangedConfigs};
 
@@ -142,7 +142,7 @@ INSTANTIATE_TEST_CASE_P(
 // Regression guard (D111195999): the growth policy stays amortized by default;
 // only lowMemoryMode switches to ExactGrowthPolicy. Spilling writers no longer
 // force lowMemoryMode, so they keep the amortized (O(N)) policy.
-TEST(WriterOptionsGrowthPolicyTest, DefaultUsesAmortizedGrowth) {
+TEST(WriterOptionsGrowthPolicyTest, defaultUsesAmortizedGrowth) {
   WriterOptions options; // lowMemoryMode defaults to false
 
   // Amortized policy leaves headroom above the requested size.
@@ -155,7 +155,7 @@ TEST(WriterOptionsGrowthPolicyTest, DefaultUsesAmortizedGrowth) {
       100u);
 }
 
-TEST(WriterOptionsGrowthPolicyTest, LowMemoryModeForcesExactGrowth) {
+TEST(WriterOptionsGrowthPolicyTest, lowMemoryModeForcesExactGrowth) {
   WriterOptions options;
   options.lowMemoryMode = true;
 

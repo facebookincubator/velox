@@ -4536,6 +4536,9 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .returnMeta(
           {{.isRegister = false, .reserveShape = repeatInterleaveFinalReserve}})
+      // The gather decomposes the output index and maps it through the
+      // output's strides, so it fills a pitched concat band correctly.
+      .mayWriteStrided()
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
       .deviceFunc("repeat_interleave_final")
@@ -4611,6 +4614,10 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .returnMeta(
           {{.isRegister = false, .reserveShape = repeatInterleaveFinalReserve}})
+      // No mayWriteStrided: unlike repeat_interleave_final, this one writes the
+      // run of repeated indices as out[j] for j in [start, end), a linear walk
+      // that ignores the output's strides. A pitched concat band would land in
+      // the wrong places, silently, since a placed operand is not copied in.
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
       .deviceFunc("repeat_interleave_index_final")

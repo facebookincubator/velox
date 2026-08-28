@@ -16,6 +16,7 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -1466,6 +1467,74 @@ TEST_P(TabletTest, stripeGroupEncodingLayouts) {
     EXPECT_ANY_THROW(tablet->streamSize(stripe, streamCount));
   }
 
+  auto expectAllLocations = [](const std::shared_ptr<nimble::TabletReader>&
+                                   tablet,
+                               uint32_t stripeIndex) {
+    const auto stripe = tablet->stripeIdentifier(stripeIndex);
+    const auto streamCount = tablet->streamCount(stripe);
+    std::vector<nimble::TabletReader::StreamLocation> locations(streamCount);
+    tablet->streamLocations(stripe, locations);
+
+    for (uint32_t streamId{0}; streamId < streamCount; ++streamId) {
+      SCOPED_TRACE(fmt::format("stripe={} streamId={}", stripeIndex, streamId));
+      const auto expectedSize = tablet->streamSize(stripe, streamId);
+      if (expectedSize == 0) {
+        EXPECT_EQ(locations[streamId].offset, 0);
+        EXPECT_EQ(locations[streamId].size, 0);
+        continue;
+      }
+      EXPECT_EQ(
+          locations[streamId].offset, tablet->streamOffset(stripe, streamId));
+      EXPECT_EQ(locations[streamId].size, expectedSize);
+    }
+
+    ASSERT_GT(streamCount, 0);
+    std::vector<nimble::TabletReader::StreamLocation> tooFewLocations(
+        streamCount - 1);
+    NIMBLE_ASSERT_THROW(
+        tablet->streamLocations(stripe, tooFewLocations),
+        "locations size must equal streamCount.");
+  };
+
+  auto expectSelectedLocations = [](const std::shared_ptr<nimble::TabletReader>&
+                                        tablet,
+                                    uint32_t stripeIndex) {
+    const auto stripe = tablet->stripeIdentifier(stripeIndex);
+    constexpr size_t kNumStreamIds{5};
+    const std::array<uint32_t, kNumStreamIds> streamIds{2, 1, 999, 0, 3};
+    std::array<nimble::TabletReader::StreamLocation, kNumStreamIds> locations;
+
+    tablet->streamLocations(stripe, streamIds, locations);
+
+    for (size_t i{0}; i < streamIds.size(); ++i) {
+      SCOPED_TRACE(
+          fmt::format("stripe={} streamId={}", stripeIndex, streamIds[i]));
+      if (streamIds[i] >= tablet->streamCount(stripe) ||
+          tablet->streamSize(stripe, streamIds[i]) == 0) {
+        EXPECT_EQ(locations[i].offset, 0);
+        EXPECT_EQ(locations[i].size, 0);
+        continue;
+      }
+      EXPECT_EQ(
+          locations[i].offset, tablet->streamOffset(stripe, streamIds[i]));
+      EXPECT_EQ(locations[i].size, tablet->streamSize(stripe, streamIds[i]));
+    }
+
+    const std::array<uint32_t, 2> mismatchedStreamIds{0, 1};
+    std::array<nimble::TabletReader::StreamLocation, 1> mismatchedLocations;
+    NIMBLE_ASSERT_THROW(
+        tablet->streamLocations(
+            stripe, mismatchedStreamIds, mismatchedLocations),
+        "streamIds and locations sizes must match.");
+  };
+
+  for (const auto& tablet : {rawTablet, streamMajorTablet}) {
+    expectAllLocations(tablet, 0);
+    expectAllLocations(tablet, 1);
+    expectSelectedLocations(tablet, 0);
+    expectSelectedLocations(tablet, 1);
+  }
+
   // The encoded representation must agree with raw on every stripe/stream,
   // via point access and bulk materialize.
   for (const auto& encodedTablet : {streamMajorTablet}) {
@@ -1486,16 +1555,16 @@ TEST_P(TabletTest, stripeGroupEncodingLayouts) {
             encodedTablet->streamSize(encStripe, streamId));
       }
 
-      std::vector<uint32_t> rawOffsets(streamCount);
-      std::vector<uint32_t> encOffsets(streamCount);
-      std::vector<uint32_t> rawSizes(streamCount);
-      std::vector<uint32_t> encSizes(streamCount);
-      rawTablet->streamOffsets(rawStripe, rawOffsets);
-      encodedTablet->streamOffsets(encStripe, encOffsets);
-      rawTablet->streamSizes(rawStripe, rawSizes);
-      encodedTablet->streamSizes(encStripe, encSizes);
-      EXPECT_EQ(rawOffsets, encOffsets);
-      EXPECT_EQ(rawSizes, encSizes);
+      std::vector<nimble::TabletReader::StreamLocation> rawLocations(
+          streamCount);
+      std::vector<nimble::TabletReader::StreamLocation> encLocations(
+          streamCount);
+      rawTablet->streamLocations(rawStripe, rawLocations);
+      encodedTablet->streamLocations(encStripe, encLocations);
+      for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
+        EXPECT_EQ(rawLocations[streamId].offset, encLocations[streamId].offset);
+        EXPECT_EQ(rawLocations[streamId].size, encLocations[streamId].size);
+      }
     }
   }
 }
@@ -1611,16 +1680,16 @@ TEST_P(TabletTest, stripeGroupEncodingLayoutsMultipleGroups) {
             encodedTablet->streamSize(encStripe, streamId));
       }
 
-      std::vector<uint32_t> rawOffsets(streamCount);
-      std::vector<uint32_t> encOffsets(streamCount);
-      std::vector<uint32_t> rawSizes(streamCount);
-      std::vector<uint32_t> encSizes(streamCount);
-      rawTablet->streamOffsets(rawStripe, rawOffsets);
-      encodedTablet->streamOffsets(encStripe, encOffsets);
-      rawTablet->streamSizes(rawStripe, rawSizes);
-      encodedTablet->streamSizes(encStripe, encSizes);
-      EXPECT_EQ(rawOffsets, encOffsets);
-      EXPECT_EQ(rawSizes, encSizes);
+      std::vector<nimble::TabletReader::StreamLocation> rawLocations(
+          streamCount);
+      std::vector<nimble::TabletReader::StreamLocation> encLocations(
+          streamCount);
+      rawTablet->streamLocations(rawStripe, rawLocations);
+      encodedTablet->streamLocations(encStripe, encLocations);
+      for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
+        EXPECT_EQ(rawLocations[streamId].offset, encLocations[streamId].offset);
+        EXPECT_EQ(rawLocations[streamId].size, encLocations[streamId].size);
+      }
     }
   }
 }
@@ -4250,10 +4319,10 @@ TEST_P(TabletTest, features) {
 
   auto tablet = createTabletReader(file);
 
-  EXPECT_TRUE(tablet->features().compactRowCountEncoding());
-  EXPECT_TRUE(tablet->features().clusterIndexKeyColumnStorageOmitted());
+  EXPECT_TRUE(tablet->properties().compactRowCountEncoding());
+  EXPECT_TRUE(tablet->properties().clusterIndexKeyColumnStorageOmitted());
   EXPECT_EQ(
-      tablet->features().clusterIndexKeyColumnsWithOmittedStorage(),
+      tablet->properties().clusterIndexKeyColumnsWithOmittedStorage(),
       (std::vector<std::string>{"id"}));
 }
 

@@ -1098,6 +1098,9 @@ void mergeOutputDesc(OutputDesc& dst, OutputDesc&& src) {
   if (src.viewNode) {
     dst.viewNode = src.viewNode;
   }
+  if (src.concatLayout) {
+    dst.concatLayout = std::move(src.concatLayout);
+  }
 }
 
 bool addOrUpdateOutput(

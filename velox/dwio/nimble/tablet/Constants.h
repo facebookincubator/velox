@@ -38,8 +38,7 @@ constexpr std::string_view kVectorizedStatsSection =
     "columnar.vectorized_stats";
 constexpr std::string_view kIndexSection = "columnar.indexes";
 constexpr std::string_view kChunkStatsSection = "columnar.chunk.stats";
-constexpr std::string_view kFeaturesSection = "columnar.features";
-constexpr std::string_view kSharedDictionarySection =
-    "columnar.shared_dictionaries";
+constexpr std::string_view kPropertiesSection = "columnar.properties";
+constexpr std::string_view kDictionarySection = "columnar.dictionaries";
 
 } // namespace facebook::nimble

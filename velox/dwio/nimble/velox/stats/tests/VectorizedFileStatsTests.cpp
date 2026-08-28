@@ -44,7 +44,7 @@ class VectorizedFileStatsTests : public ::testing::Test {
 
 // Test 1: Constructor tests - basic construction with various column stat types
 
-TEST_F(VectorizedFileStatsTests, ConstructorWithDefaultStats) {
+TEST_F(VectorizedFileStatsTests, constructorWithDefaultStats) {
   // Create basic column statistics
   ColumnStatistics stat1(100, 10, 1000, 500);
   ColumnStatistics stat2(200, 20, 2000, 1000);
@@ -59,7 +59,7 @@ TEST_F(VectorizedFileStatsTests, ConstructorWithDefaultStats) {
   EXPECT_FALSE(serialized.empty());
 }
 
-TEST_F(VectorizedFileStatsTests, ConstructorWithIntegralStats) {
+TEST_F(VectorizedFileStatsTests, constructorWithIntegralStats) {
   IntegralStatistics stat1(100, 10, 1000, 500, -50, 150);
   IntegralStatistics stat2(200, 20, 2000, 1000, std::nullopt, std::nullopt);
 
@@ -72,7 +72,7 @@ TEST_F(VectorizedFileStatsTests, ConstructorWithIntegralStats) {
   EXPECT_FALSE(serialized.empty());
 }
 
-TEST_F(VectorizedFileStatsTests, ConstructorWithFloatingPointStats) {
+TEST_F(VectorizedFileStatsTests, constructorWithFloatingPointStats) {
   FloatingPointStatistics stat1(100, 10, 1000, 500, -1.5, 2.5);
   FloatingPointStatistics stat2(200, 20, 2000, 1000, 0.0, 100.0);
 
@@ -85,7 +85,7 @@ TEST_F(VectorizedFileStatsTests, ConstructorWithFloatingPointStats) {
   EXPECT_FALSE(serialized.empty());
 }
 
-TEST_F(VectorizedFileStatsTests, ConstructorWithStringStats) {
+TEST_F(VectorizedFileStatsTests, constructorWithStringStats) {
   StringStatistics stat1(100, 10, 1000, 500, "aaa", "zzz");
   StringStatistics stat2(200, 20, 2000, 1000, std::nullopt, std::nullopt);
 
@@ -98,7 +98,7 @@ TEST_F(VectorizedFileStatsTests, ConstructorWithStringStats) {
   EXPECT_FALSE(serialized.empty());
 }
 
-TEST_F(VectorizedFileStatsTests, ConstructorWithMixedStats) {
+TEST_F(VectorizedFileStatsTests, constructorWithMixedStats) {
   ColumnStatistics defaultStat(100, 10, 1000, 500);
   IntegralStatistics intStat(200, 20, 2000, 1000, -10, 20);
   FloatingPointStatistics floatStat(300, 30, 3000, 1500, 0.5, 99.5);
@@ -116,7 +116,7 @@ TEST_F(VectorizedFileStatsTests, ConstructorWithMixedStats) {
 
 // Test 2: Round-trip serialize/deserialize stability tests
 
-TEST_F(VectorizedFileStatsTests, RoundTripDefaultStats) {
+TEST_F(VectorizedFileStatsTests, roundTripDefaultStats) {
   ColumnStatistics stat1(100, 10, 1000, 500);
   ColumnStatistics stat2(200, 20, 2000, 1000);
 
@@ -137,7 +137,7 @@ TEST_F(VectorizedFileStatsTests, RoundTripDefaultStats) {
   EXPECT_EQ(serialized.size(), serialized2.size());
 }
 
-TEST_F(VectorizedFileStatsTests, RoundTripIntegralStats) {
+TEST_F(VectorizedFileStatsTests, roundTripIntegralStats) {
   IntegralStatistics stat1(100, 10, 1000, 500, -50, 150);
   IntegralStatistics stat2(200, 20, 2000, 1000, 0, 1000);
   IntegralStatistics stat3(300, 30, 3000, 1500, std::nullopt, std::nullopt);
@@ -158,7 +158,7 @@ TEST_F(VectorizedFileStatsTests, RoundTripIntegralStats) {
   EXPECT_EQ(serialized.size(), serialized2.size());
 }
 
-TEST_F(VectorizedFileStatsTests, RoundTripFloatingPointStats) {
+TEST_F(VectorizedFileStatsTests, roundTripFloatingPointStats) {
   FloatingPointStatistics stat1(100, 10, 1000, 500, -1.5, 2.5);
   FloatingPointStatistics stat2(200, 20, 2000, 1000, 0.0, 100.0);
   FloatingPointStatistics stat3(
@@ -180,7 +180,7 @@ TEST_F(VectorizedFileStatsTests, RoundTripFloatingPointStats) {
   EXPECT_EQ(serialized.size(), serialized2.size());
 }
 
-TEST_F(VectorizedFileStatsTests, RoundTripStringStats) {
+TEST_F(VectorizedFileStatsTests, roundTripStringStats) {
   StringStatistics stat1(100, 10, 1000, 500, "aaa", "zzz");
   StringStatistics stat2(200, 20, 2000, 1000, "hello", "world");
   StringStatistics stat3(300, 30, 3000, 1500, std::nullopt, std::nullopt);
@@ -201,7 +201,7 @@ TEST_F(VectorizedFileStatsTests, RoundTripStringStats) {
   EXPECT_EQ(serialized.size(), serialized2.size());
 }
 
-TEST_F(VectorizedFileStatsTests, RoundTripMixedStats) {
+TEST_F(VectorizedFileStatsTests, roundTripMixedStats) {
   ColumnStatistics defaultStat(100, 10, 1000, 500);
   IntegralStatistics intStat(200, 20, 2000, 1000, -10, 20);
   FloatingPointStatistics floatStat(300, 30, 3000, 1500, 0.5, 99.5);
@@ -224,7 +224,7 @@ TEST_F(VectorizedFileStatsTests, RoundTripMixedStats) {
   EXPECT_EQ(serialized.size(), serialized2.size());
 }
 
-TEST_F(VectorizedFileStatsTests, RoundTripEmptyStats) {
+TEST_F(VectorizedFileStatsTests, roundTripEmptyStats) {
   std::vector<ColumnStatistics*> columnStats{};
 
   VectorizedFileStats fileStats(columnStats, leafPool_.get());
@@ -236,7 +236,7 @@ TEST_F(VectorizedFileStatsTests, RoundTripEmptyStats) {
   EXPECT_NE(deserialized, nullptr);
 }
 
-TEST_F(VectorizedFileStatsTests, RoundTripLargeNumberOfStats) {
+TEST_F(VectorizedFileStatsTests, roundTripLargeNumberOfStats) {
   constexpr int kNumStats = 100;
   std::vector<std::unique_ptr<ColumnStatistics>> ownedStats;
   std::vector<ColumnStatistics*> columnStats;
@@ -272,7 +272,7 @@ TEST_F(VectorizedFileStatsTests, RoundTripLargeNumberOfStats) {
 // Test that VectorizedStatistic::create returns nullptr for unknown types
 TEST_F(
     VectorizedFileStatsTests,
-    VectorizedStatisticCreateReturnsNullForUnknown) {
+    vectorizedStatisticCreateReturnsNullForUnknown) {
   // Cast an invalid enum value to StatStreamType
   auto unknownType = static_cast<StatStreamType>(255);
   auto stat = VectorizedStatistic::create(unknownType, leafPool_.get());
@@ -281,7 +281,7 @@ TEST_F(
 
 // Test TypedVectorizedStatistic append and valueAt
 
-TEST_F(VectorizedFileStatsTests, TypedVectorizedStatisticAppendAndValueAt) {
+TEST_F(VectorizedFileStatsTests, typedVectorizedStatisticAppendAndValueAt) {
   auto stat = VectorizedStatistic::create(
       StatStreamType::INTEGRAL_MIN, leafPool_.get());
   ASSERT_NE(stat, nullptr);
@@ -302,7 +302,7 @@ TEST_F(VectorizedFileStatsTests, TypedVectorizedStatisticAppendAndValueAt) {
   EXPECT_EQ(integralStat->valueAt(3), 100);
 }
 
-TEST_F(VectorizedFileStatsTests, DefaultVectorizedStatisticAppendAndValueAt) {
+TEST_F(VectorizedFileStatsTests, defaultVectorizedStatisticAppendAndValueAt) {
   auto stat =
       VectorizedStatistic::create(StatStreamType::VALUE_COUNT, leafPool_.get());
   ASSERT_NE(stat, nullptr);
@@ -321,7 +321,7 @@ TEST_F(VectorizedFileStatsTests, DefaultVectorizedStatisticAppendAndValueAt) {
 
 TEST_F(
     VectorizedFileStatsTests,
-    FloatingPointVectorizedStatisticAppendAndValueAt) {
+    floatingPointVectorizedStatisticAppendAndValueAt) {
   auto stat = VectorizedStatistic::create(
       StatStreamType::FLOATING_POINT_MIN, leafPool_.get());
   ASSERT_NE(stat, nullptr);
@@ -340,7 +340,7 @@ TEST_F(
 
 // Test VectorizedStatistic::create for all known types
 
-TEST_F(VectorizedFileStatsTests, VectorizedStatisticCreateForAllKnownTypes) {
+TEST_F(VectorizedFileStatsTests, vectorizedStatisticCreateForAllKnownTypes) {
   // Default types (uint64_t)
   EXPECT_NE(
       VectorizedStatistic::create(StatStreamType::VALUE_COUNT, leafPool_.get()),
@@ -396,7 +396,7 @@ TEST_F(VectorizedFileStatsTests, VectorizedStatisticCreateForAllKnownTypes) {
 
 // Test StatStreamType enum values returned correctly
 
-TEST_F(VectorizedFileStatsTests, VectorizedStatisticTypeReturnsCorrectType) {
+TEST_F(VectorizedFileStatsTests, vectorizedStatisticTypeReturnsCorrectType) {
   auto valueStat =
       VectorizedStatistic::create(StatStreamType::VALUE_COUNT, leafPool_.get());
   EXPECT_EQ(valueStat->type(), StatStreamType::VALUE_COUNT);
@@ -457,7 +457,7 @@ void expectStringStatisticsEqual(
 // -> Convert to VectorizedFileStats -> Serialize -> Deserialize ->
 // toColumnStatistics -> Check equivalence
 
-TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripFlatRow) {
+TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripFlatRow) {
   // Create a flat row schema with various primitive types
   auto schema = velox::ROW(
       {{"int_col", velox::BIGINT()},
@@ -508,7 +508,7 @@ TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripFlatRow) {
   expectStringStatisticsEqual(stringStat, *actualStringStat);
 }
 
-TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripNestedRow) {
+TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripNestedRow) {
   // Create a nested row schema
   auto schema = velox::ROW(
       {{"int_col", velox::INTEGER()},
@@ -558,7 +558,7 @@ TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripNestedRow) {
   expectStringStatisticsEqual(nestedStringStat, *actualNestedStringStat);
 }
 
-TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripWithArray) {
+TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripWithArray) {
   // Create a schema with an array type
   auto schema = velox::ROW(
       {{"array_col", velox::ARRAY(velox::BIGINT())},
@@ -594,7 +594,7 @@ TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripWithArray) {
   expectIntegralStatisticsEqual(intColStat, *actualIntColStat);
 }
 
-TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripWithMap) {
+TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripWithMap) {
   // Create a schema with a map type
   auto schema =
       velox::ROW({{"map_col", velox::MAP(velox::VARCHAR(), velox::DOUBLE())}});
@@ -629,7 +629,7 @@ TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripWithMap) {
   expectFloatingPointStatisticsEqual(valueStat, *actualValueStat);
 }
 
-TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripWithNulloptMinMax) {
+TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripWithNulloptMinMax) {
   // Test with nullopt min/max values
   auto schema = velox::ROW(
       {{"int_col", velox::BIGINT()},
@@ -671,7 +671,7 @@ TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripWithNulloptMinMax) {
   expectStringStatisticsEqual(stringStat, *actualStringStat);
 }
 
-TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripWithTimestamp) {
+TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripWithTimestamp) {
   // Test with timestamp type which uses default stats
   auto schema = velox::ROW(
       {{"timestamp_col", velox::TIMESTAMP()}, {"bool_col", velox::BOOLEAN()}});
@@ -698,7 +698,7 @@ TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripWithTimestamp) {
   expectColumnStatisticsEqual(boolStat, *roundTrippedStats[2]);
 }
 
-TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripComplexNested) {
+TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripComplexNested) {
   // Create a complex nested schema with multiple levels
   auto schema = velox::ROW(
       {{"id", velox::BIGINT()},
@@ -774,7 +774,7 @@ TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripComplexNested) {
   expectIntegralStatisticsEqual(metadataValueStat, *actualMetadataValueStat);
 }
 
-TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripAllIntegralTypes) {
+TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripAllIntegralTypes) {
   // Test all integral types to ensure they round-trip correctly
   auto schema = velox::ROW(
       {{"tinyint_col", velox::TINYINT()},
@@ -811,7 +811,7 @@ TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripAllIntegralTypes) {
   }
 }
 
-TEST_F(VectorizedFileStatsTests, SchemaBasedRoundTripAllFloatingPointTypes) {
+TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripAllFloatingPointTypes) {
   // Test all floating point types
   auto schema = velox::ROW(
       {{"real_col", velox::REAL()}, {"double_col", velox::DOUBLE()}});

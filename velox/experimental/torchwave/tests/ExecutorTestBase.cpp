@@ -213,6 +213,22 @@ DEFINE_bool(
     mk_select,
     false,
     "In cg mode, expand tw.masked_select_jagged into its multi-kernel stages so the output list is sized to the exact selected count instead of the mask length");
+DEFINE_bool(
+    enable_alloc_group,
+    true,
+    "Allocate the outputs that share a lifetime out of one buffer instead of one allocator call each. Cooperative grid only, where the step boundaries a lifetime is expressed in are fixed before the first execution");
+DEFINE_bool(
+    enable_concat_alloc_group,
+    true,
+    "Give a fused cat/stack of more than two operands an allocation group of its own: the result is allocated at the step that produces the operands and each operand writes straight into the region it occupies, so the concat copies nothing");
+DEFINE_bool(
+    enable_lifetime_alloc_group,
+    true,
+    "With --enable_alloc_group, also group the outputs that merely share a lifetime. Off leaves only the concat groups, which isolates what the concat grouping costs and saves on its own");
+DEFINE_bool(
+    parallel_concat_fill,
+    false,
+    "Fill a cat/stack of more than two operands entirely in parallel: an operand that cannot write its own region of the result gets a clone of its own to fill it, so no operand is walked through a running offset inside the concat's kernel");
 
 namespace torch::wave {
 
@@ -630,6 +646,11 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().cseCompute = FLAGS_cse_compute;
   WaveConfig::get().cseViews = FLAGS_cse_views;
   WaveConfig::get().mkSelect = FLAGS_mk_select;
+  WaveConfig::get().enableAllocGroup = FLAGS_enable_alloc_group;
+  WaveConfig::get().enableConcatAllocGroup = FLAGS_enable_concat_alloc_group;
+  WaveConfig::get().enableLifetimeAllocGroup =
+      FLAGS_enable_lifetime_alloc_group;
+  WaveConfig::get().parallelConcatFill = FLAGS_parallel_concat_fill;
   if (!FLAGS_print_options.empty()) {
     NodePrinter::setDefaults(
         NodePrinter::parsePrintOptions(FLAGS_print_options));
@@ -988,6 +1009,37 @@ ExecutorTestBase::ModePlans ExecutorTestBase::compilePlans(
       CompiledPlan::from(*wave, CompiledPlan::Mode::kSingleBlock),
       CompiledPlan::from(*wave, CompiledPlan::Mode::kCG),
   };
+}
+
+AllocGroupStats ExecutorTestBase::allocGroupStats(const std::string& pt2File) {
+  auto baseDir = dataDir();
+  auto pt2Path =
+      pt2File[0] == '/' ? pt2File : getDataFilePath(baseDir, pt2File);
+  auto fixture = ModelFixture::load(pt2Path);
+  TORCH_CHECK(fixture != nullptr, "allocGroupStats: failed to load ", pt2Path);
+  setGraphDevice(fixture->model.graph.get(), true);
+  // The plan is expressed in the steps of the cooperative grid, which is also
+  // the only grid the mode runs, so the graph has to be compiled for it before
+  // the footprints mean anything.
+  auto& config = WaveConfig::get();
+  const auto savedCg = config.isCg;
+  const auto savedFree = config.freeIntermediates;
+  const auto savedGroup = config.enableAllocGroup;
+  auto restore = folly::makeGuard([&, savedCg, savedFree, savedGroup] {
+    config.isCg = savedCg;
+    config.freeIntermediates = savedFree;
+    config.enableAllocGroup = savedGroup;
+  });
+  config.isCg = true;
+  config.freeIntermediates = true;
+  config.enableAllocGroup = true;
+
+  WaveGraphExecutor waveExec(fixture->makeModelContext());
+  auto* wave = waveExec.waveGraph();
+  return buildGraphAllocGroupPlan(
+             collectNodeFootprints(
+                 wave->nodes(), wave->idToValue(), wave->types()))
+      .stats;
 }
 
 void ExecutorTestBase::runTestWithFixture(
@@ -1434,6 +1486,17 @@ void ExecutorTestBase::executeAndCompareWave(
   fillFrameFromUserInputs(graph, *pooledFrame, deviceInputs);
   auto waveOutputs = waveExec.executeWithPrefilledFrame(*pooledFrame);
   waveExec.returnFrame(std::move(pooledFrame));
+
+  // The single-shot paths (parity, synthetic) never went through the benchmark
+  // loop that prints this, so the per-step breakdown was only reachable from
+  // the ROO benchmark -- twenty-five minutes a measurement instead of twenty
+  // seconds.
+  if (WaveConfig::get().trace & WaveConfig::kTiming) {
+    const auto& report = waveThreadInfo().perfReport;
+    if (!report.empty()) {
+      std::cout << report << std::endl;
+    }
+  }
 
   lastRefTensorsChecked_ = waveExec.numRefTensorsChecked();
   lastRefNodesChecked_ = waveExec.numRefNodesChecked();

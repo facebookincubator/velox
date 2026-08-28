@@ -207,34 +207,6 @@ std::unique_ptr<SubIntSplitEncoding<T>> makeSubIntSplitEncoding(
       memPool, encoded, [](uint32_t) { return nullptr; });
 }
 
-class Int32SharedDictionaryResolver final : public SharedDictionaryResolver {
- public:
-  Int32SharedDictionaryResolver(
-      uint32_t dictionaryId,
-      std::span<const int32_t> values,
-      velox::memory::MemoryPool* pool)
-      : dictionaryId_{dictionaryId},
-        alphabet_{test::createSharedDictionaryAlphabet<int32_t>(
-            values,
-            /*candidateEncodings=*/{},
-            pool)} {}
-
-  std::shared_ptr<const SharedDictionaryAlphabet> resolve(
-      SharedDictionaryScope scope,
-      uint32_t dictionaryId,
-      DataType dataType) const final {
-    if (scope != SharedDictionaryScope::Stripe ||
-        dictionaryId != dictionaryId_ || dataType != DataType::Int32) {
-      return nullptr;
-    }
-    return alphabet_;
-  }
-
- private:
-  const uint32_t dictionaryId_;
-  const std::shared_ptr<const SharedDictionaryAlphabet> alphabet_;
-};
-
 EncodingLayout makeAlpEncodingLayout(EncodingType encodedValuesEncodingType) {
   const auto encodedValuesLayout = [&] {
     switch (encodedValuesEncodingType) {
@@ -544,9 +516,11 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
       std::string_view encoded,
       velox::memory::MemoryPool& memPool) {
     if (useNonLegacy()) {
-      return EncodingFactory().create(memPool, encoded, nullptr);
+      return EncodingFactory().create(
+          memPool, encoded, nullptr, Encoding::Options{});
     }
-    return legacy::EncodingFactory().create(memPool, encoded, nullptr);
+    return legacy::EncodingFactory().create(
+        memPool, encoded, nullptr, Encoding::Options{});
   }
 
   // Dispatch callReadWithVisitor to the appropriate family.
@@ -660,7 +634,8 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
           mcDictStringBuffers_.push_back(
               velox::AlignedBuffer::allocate<char>(size, pool()));
           return mcDictStringBuffers_.back()->asMutable<void>();
-        });
+        },
+        Encoding::Options{});
   }
 
   // Build root reader, get its first child, call read(), return child.
@@ -2053,9 +2028,9 @@ TEST_P(ReadWithVisitorTest, encodingLevelSharedDictionaryAlwaysTrueDense) {
   Buffer buffer(*pool());
   const auto encoded = test::encodeSharedDictionary(buffer, indices);
   Encoding::Options options;
-  options.sharedDictionaryResolver =
-      std::make_shared<Int32SharedDictionaryResolver>(
-          /*dictionaryId=*/7, alphabet, pool());
+  options.sharedDictionaryAlphabet =
+      test::createSharedDictionaryAlphabet<int32_t>(
+          alphabet, /*candidateEncodings=*/{}, pool());
   SharedDictionaryEncoding<int32_t> encoding{
       *pool(), encoded, [](uint32_t) { return nullptr; }, options};
 
@@ -3420,11 +3395,14 @@ TEST_P(ReadWithVisitorNonLegacyTest, readIndicesWithVisitorNullable) {
 
   std::vector<velox::BufferPtr> stringBuffers;
   auto encoding = nimble::EncodingFactory().create(
-      *pool(), std::string_view(reserved, encodingSize), [&](uint32_t size) {
+      *pool(),
+      std::string_view(reserved, encodingSize),
+      [&](uint32_t size) {
         stringBuffers.push_back(
             velox::AlignedBuffer::allocate<char>(size, pool()));
         return stringBuffers.back()->asMutable<void>();
-      });
+      },
+      nimble::Encoding::Options{});
 
   ASSERT_TRUE(encoding->isNullable());
   ASSERT_TRUE(encoding->dictionaryEnabled());
@@ -3534,11 +3512,14 @@ TEST_P(
 
   std::vector<velox::BufferPtr> stringBuffers;
   auto encoding = nimble::EncodingFactory().create(
-      *pool(), std::string_view(reserved, encodingSize), [&](uint32_t size) {
+      *pool(),
+      std::string_view(reserved, encodingSize),
+      [&](uint32_t size) {
         stringBuffers.push_back(
             velox::AlignedBuffer::allocate<char>(size, pool()));
         return stringBuffers.back()->asMutable<void>();
-      });
+      },
+      nimble::Encoding::Options{});
 
   ASSERT_TRUE(encoding->isNullable());
   ASSERT_TRUE(encoding->dictionaryEnabled());
@@ -3688,7 +3669,8 @@ TEST_P(ReadWithVisitorNonLegacyTest, fuzzReadIndicesWithVisitorNullable) {
           stringBuffers.push_back(
               velox::AlignedBuffer::allocate<char>(size, this->pool()));
           return stringBuffers.back()->asMutable<void>();
-        });
+        },
+        nimble::Encoding::Options{});
 
     ASSERT_TRUE(encoding->isNullable());
     ASSERT_TRUE(encoding->dictionaryEnabled());
@@ -4256,9 +4238,16 @@ TEST_P(ReadWithVisitorNonLegacyTest, readDenseMaterializedIndicesWithNulls) {
 
   ASSERT_EQ(reader->numValues(), 0);
 
-  // Call the helper with nulls.
+  // Call the helper with nulls. prepareResultNulls must mirror what
+  // ChunkedDecoder wires up in production: the dense index path materializes
+  // nulls into the read-range bitmap only, so it needs an allocated,
+  // output-indexed result-nulls buffer to copy them into whenever
+  // returnReaderNulls_ is false -- as it is here, the scan spec carries a
+  // filter.
   ReadWithVisitorParams params{.numScanned = 0};
-  params.prepareResultNulls = [] {};
+  params.prepareResultNulls = [&] {
+    reader->prepareNulls(rows, /*hasNulls=*/true, /*extraRows=*/8);
+  };
   detail::readDenseMaterializedIndices(
       *encoding,
       visitor,
@@ -4560,7 +4549,7 @@ TEST_P(ReadWithVisitorTest, encodingLevelSimdForBitpackBigintRangeSparse) {
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_AlwaysTrue_Dense_Int32_FastPath) {
+    encodingLevelBlockBitPackingAlwaysTrueDenseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kRows = kChunkSize * 3 + 500;
 
@@ -4636,7 +4625,7 @@ TEST_P(
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_AlwaysTrue_Sparse_Int32_FastPath) {
+    encodingLevelBlockBitPackingAlwaysTrueSparseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kTotalRows = kChunkSize * 3;
 
@@ -4711,7 +4700,7 @@ TEST_P(
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_BigintRange_Dense_Int32_FastPath) {
+    encodingLevelBlockBitPackingBigintRangeDenseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kRows = kChunkSize * 2;
 
@@ -4781,7 +4770,7 @@ TEST_P(
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_AlwaysTrue_VerySparse_Int32_FastPath) {
+    encodingLevelBlockBitPackingAlwaysTrueVerySparseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kTotalRows = kChunkSize * 4;
 

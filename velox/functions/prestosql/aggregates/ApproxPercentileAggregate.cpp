@@ -77,6 +77,7 @@ struct PrestoAccuracyPolicy {
     VELOX_USER_CHECK(
         0 < inputAccuracy && inputAccuracy <= 1,
         "Accuracy must be between 0 and 1");
+    functions::kll::kFromEpsilon(inputAccuracy);
     if (accuracy == kMissingNormalizedValue) {
       accuracy = inputAccuracy;
     } else {
