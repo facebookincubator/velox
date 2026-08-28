@@ -19,6 +19,8 @@
 #include <string>
 #include <unordered_map>
 
+#include "velox/buffer/Buffer.h"
+
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
@@ -83,15 +85,35 @@ struct FileContents {
       fieldIndexes;
 };
 
-/// Reader for the JSON file format (JSON Lines, matching Hive
-/// org.apache.hive.hcatalog.data.JsonSerDe). Constructs JsonRowReader
-/// instances that parse records out of the underlying stream.
+/// Reader for the JSON file format (JSON Lines, matching Hive 4.0.0
+/// org.apache.hadoop.hive.serde2.JsonSerDe and its HiveJsonReader).
+/// Constructs JsonRowReader instances that parse records out of the underlying
+/// stream.
+///
+/// The reference implementation is specifically the serde2 SerDe, not the
+/// legacy org.apache.hive.hcatalog.data.JsonSerDe. Through Hive 3.1 the two
+/// differ on type mismatch: HCatalog's reads the token stream with Jackson's
+/// strict numeric accessors, which throw when a column's JSON value has the
+/// wrong token type, whereas serde2's builds a Jackson document and coerces
+/// through JsonNode.asLong()/asBoolean()/asText(), which fall back to a default
+/// instead of throwing. (From Hive 4.0.0 the HCatalog class is a thin wrapper
+/// that delegates to serde2, so both SerDe names behave the same there.) This
+/// reader follows serde2: a leaf whose JSON type does not match its column type
+/// coerces silently (a non-numeric string into BIGINT becomes 0, and a DECIMAL
+/// that has no such default value becomes NULL), and only a container-shape
+/// mismatch — a scalar or the wrong container where ARRAY, MAP, or ROW is
+/// declared — is an error. There is no lenient mode that skips bad records;
+/// every error that is raised throws.
+///
+/// The pin to 4.0.0 matters: Hive has since changed the BOOLEAN and BINARY leaf
+/// rules on its development branch. Divergences are tracked against 4.0.0.
 ///
 /// Known v1 divergence: VARCHAR-formatted JSON numbers may differ in exact
-/// string form from Presto's Hive JSON connector for edge cases involving
-/// trailing zeros and scientific notation (Presto canonicalizes via
-/// BigDecimal; v1 emits the original lexeme). The semantic numeric value is
-/// preserved; only the textual representation may diverge.
+/// string form from the reference for edge cases involving trailing zeros and
+/// scientific notation. The reference stringifies a JSON float through
+/// JsonNode.asText() on a DoubleNode, i.e. Java's String.valueOf(double), so
+/// 1e3 reads back as "1000.0"; v1 emits the original lexeme. The semantic
+/// numeric value is preserved; only the textual representation may diverge.
 class JsonReader : public dwio::common::Reader {
  public:
   JsonReader(
@@ -157,6 +179,14 @@ class JsonRowReader : public dwio::common::RowReader {
   std::optional<size_t> estimatedRowSize() const override;
 
  private:
+  // True once this split is exhausted: past the end of the file, or the next
+  // record would start beyond the split boundary. Note '>' rather than '>=':
+  // a record starting exactly at splitEnd_ is still read in full here, and
+  // the next split skips it via the constructor's first-line skip.
+  bool atSplitEnd() const {
+    return pos_ >= fileLength_ || pos_ > splitEnd_;
+  }
+
   // Reads the next newline-terminated line from the file buffer into
   // lineBuffer_, padded with SIMDJSON_PADDING zero bytes for safe
   // simdjson parsing. Returns false when there are no more lines.
@@ -179,9 +209,10 @@ class JsonRowReader : public dwio::common::RowReader {
   // Caller-supplied row reader options (range, selector, scan spec).
   dwio::common::RowReaderOptions options_;
 
-  // Entire file contents loaded at construction. Reads are restricted to
-  // this reader's split via splitStart_ and splitEnd_ below.
-  std::string fileBuffer_;
+  // Entire file contents loaded at construction, allocated from the memory
+  // pool so bytes are accounted. Reads are restricted to this reader's split
+  // via splitStart_ and splitEnd_ below.
+  BufferPtr fileBuffer_;
 
   // Length of valid bytes in fileBuffer_. fileBuffer_ has additional
   // SIMDJSON_PADDING bytes of zeroes after fileLength_ so the last

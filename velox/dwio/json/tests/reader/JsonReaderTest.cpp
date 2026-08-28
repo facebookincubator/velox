@@ -18,6 +18,7 @@
 
 #include <folly/compression/Compression.h>
 #include <folly/compression/Zlib.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -248,6 +249,12 @@ TEST_F(JsonReaderTest, bigintFromString) {
 }
 
 TEST_F(JsonReaderTest, bigintFromNonNumericString) {
+  // A leaf whose JSON type does not match its column type coerces silently
+  // rather than throwing, following org.apache.hadoop.hive.serde2.JsonSerDe
+  // (Jackson's JsonNode.asLong(), which defaults on an unconvertible value).
+  // Through Hive 3.1 the legacy org.apache.hive.hcatalog.data.JsonSerDe would
+  // fail the query here instead — it is not the reference.
+  //
   // Full-fail to 0, NOT partial-parse.
   // "12abc" -> 0, not 12.
   auto row = read(
@@ -256,6 +263,35 @@ TEST_F(JsonReaderTest, bigintFromNonNumericString) {
   auto col = row->childAt(0)->asFlatVector<int64_t>();
   EXPECT_EQ(col->valueAt(0), 0);
   EXPECT_EQ(col->valueAt(1), 0);
+}
+
+TEST_F(JsonReaderTest, bigintFromFloatingPointString) {
+  // Jackson's NumberInput.parseAsLong is a two-stage parse: on the first
+  // non-digit it retries the whole string as a double and casts, reaching its
+  // default only when that fails too. So a quoted float truncates toward zero
+  // rather than defaulting to 0, and only a string that is not valid float
+  // syntax either (see bigintFromNonNumericString) lands on 0.
+  auto row = read(
+      "{\"a\":\"12.5\"}\n{\"a\":\"-12.5\"}\n{\"a\":\"1e3\"}\n",
+      ROW({{"a", BIGINT()}}));
+  ASSERT_EQ(row->size(), 3);
+  auto col = row->childAt(0)->asFlatVector<int64_t>();
+  EXPECT_EQ(col->valueAt(0), 12);
+  EXPECT_EQ(col->valueAt(1), -12);
+  EXPECT_EQ(col->valueAt(2), 1000);
+}
+
+TEST_F(JsonReaderTest, narrowIntegerFromFloatingPointString) {
+  // The narrower widths share the same coercion, then wrap. The reference
+  // reaches them through NumberInput.parseAsInt, which has the identical
+  // double fallback.
+  auto row = read(
+      "{\"t\":\"1.9\",\"s\":\"2.9\",\"i\":\"3.9\"}\n",
+      ROW({{"t", TINYINT()}, {"s", SMALLINT()}, {"i", INTEGER()}}));
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_EQ(row->childAt(0)->asFlatVector<int8_t>()->valueAt(0), 1);
+  EXPECT_EQ(row->childAt(1)->asFlatVector<int16_t>()->valueAt(0), 2);
+  EXPECT_EQ(row->childAt(2)->asFlatVector<int32_t>()->valueAt(0), 3);
 }
 
 TEST_F(JsonReaderTest, bigintFromBoolean) {
@@ -284,7 +320,7 @@ TEST_F(JsonReaderTest, bigintOverflowWrapsUint64) {
 }
 
 TEST_F(JsonReaderTest, bigintExtremeOverflowDiverges) {
-  // 1e20 is outside [INT64_MIN, 2^64). v1 diverges from Presto/Jackson
+  // 1e20 is outside [INT64_MIN, 2^64). v1 diverges from Jackson
   // here. The contract is only "does
   // not throw"; the exact wrap value is intentionally not asserted.
   EXPECT_NO_THROW(read("{\"a\":1e20}\n", ROW({{"a", BIGINT()}})));
@@ -342,7 +378,7 @@ TEST_F(JsonReaderTest, parseBoolean) {
 
 TEST_F(JsonReaderTest, booleanFromStringStrictLiteral) {
   // Only the exact lowercase "true" is true. "True"/"TRUE" are false —
-  // case-sensitive per the probe.
+  // case-sensitive, matching Jackson's TextNode.asBoolean().
   auto row = read(
       "{\"a\":\"true\"}\n{\"a\":\"True\"}\n{\"a\":\"TRUE\"}\n",
       ROW({{"a", BOOLEAN()}}));
@@ -377,12 +413,13 @@ TEST_F(JsonReaderTest, varcharFromSimpleFloatStringifies) {
 }
 
 TEST_F(JsonReaderTest, varcharFromNumberV1DivergenceDocumented) {
-  // v1 emits the original lexeme rather than Presto's BigDecimal-canonical
-  // form. The semantic value is preserved; the exact textual form may
+  // v1 emits the original lexeme rather than the String.valueOf(double) form
+  // the reference produces via JsonNode.asText() on a DoubleNode, so 1e3 reads
+  // back as "1000.0" there. The semantic value is preserved; the textual may
   // differ (trailing zeros, scientific notation). We assert each output is
   // a valid string parseable back to the input number, NOT bit-for-bit
-  // Presto parity. This is the documented "VARCHAR-from-number v1
-  // divergence".
+  // parity with the reference SerDe. This is the documented
+  // "VARCHAR-from-number v1 divergence".
   auto row = read(
       "{\"a\":1.20}\n{\"a\":1e3}\n{\"a\":100.0}\n", ROW({{"a", VARCHAR()}}));
   ASSERT_EQ(row->size(), 3);
@@ -464,6 +501,70 @@ TEST_F(JsonReaderTest, decimalScaleAndPrecision) {
   ASSERT_EQ(row->size(), 1);
   EXPECT_EQ(row->childAt(0)->asFlatVector<int64_t>()->valueAt(0), 31400);
   EXPECT_EQ(row->childAt(1)->asFlatVector<int64_t>()->valueAt(0), 31400);
+}
+
+TEST_F(JsonReaderTest, decimalUnparseableValueYieldsNull) {
+  // The reference builds decimals with HiveDecimal.create(asText()), which
+  // returns null rather than raising when the text is not a decimal, so an
+  // unparseable leaf is SQL NULL and the row survives. This is the same
+  // coerce-do-not-throw rule the integer leaves follow, except that decimals
+  // have no zero-like fallback value to land on.
+  auto row = read(
+      "{\"a\":\"abc\"}\n{\"a\":\"\"}\n{\"a\":\"12abc\"}\n",
+      ROW({{"a", DECIMAL(10, 2)}}));
+  ASSERT_EQ(row->size(), 3);
+  const auto& column = row->childAt(0);
+  EXPECT_TRUE(column->isNullAt(0));
+  EXPECT_TRUE(column->isNullAt(1));
+  EXPECT_TRUE(column->isNullAt(2));
+}
+
+TEST_F(JsonReaderTest, decimalFromBooleanYieldsNull) {
+  // asText() on a boolean node gives "true"/"false", which HiveDecimal.create
+  // rejects — so a boolean is NULL, not an error.
+  auto row =
+      read("{\"a\":true}\n{\"a\":false}\n", ROW({{"a", DECIMAL(10, 2)}}));
+  ASSERT_EQ(row->size(), 2);
+  EXPECT_TRUE(row->childAt(0)->isNullAt(0));
+  EXPECT_TRUE(row->childAt(0)->isNullAt(1));
+}
+
+TEST_F(JsonReaderTest, decimalExceedingPrecisionYieldsNull) {
+  // 12345 does not fit DECIMAL(3, 0). enforcePrecisionScale returns null for a
+  // value the declared precision cannot hold, so this is NULL rather than an
+  // error or a truncation. Long-decimal (int128) columns take the same path.
+  auto row = read(
+      "{\"a\":12345,\"b\":123456789012345678901234567890123456789}\n",
+      ROW({{"a", DECIMAL(3, 0)}, {"b", DECIMAL(38, 10)}}));
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_TRUE(row->childAt(0)->isNullAt(0));
+  EXPECT_TRUE(row->childAt(1)->isNullAt(0));
+}
+
+TEST_F(JsonReaderTest, decimalNestedInArrayYieldsNullElement) {
+  // A decimal element inside a container follows the same rule, but reaches
+  // NULL through the element vector rather than the pre-nulled top-level cell.
+  auto row =
+      read("{\"a\":[1.5,\"abc\",2.5]}\n", ROW({{"a", ARRAY(DECIMAL(10, 2))}}));
+  ASSERT_EQ(row->size(), 1);
+  auto* array = row->childAt(0)->as<ArrayVector>();
+  ASSERT_EQ(array->sizeAt(0), 3);
+  const auto& elements = array->elements();
+  auto* values = elements->asFlatVector<int64_t>();
+  EXPECT_EQ(values->valueAt(0), 150);
+  EXPECT_TRUE(elements->isNullAt(1));
+  EXPECT_EQ(values->valueAt(2), 250);
+}
+
+TEST_F(JsonReaderTest, decimalShapeMismatchThrows) {
+  // Unparseable scalars degrade to NULL, but a container where a scalar column
+  // is declared stays an error — the same rule every other leaf type follows.
+  VELOX_ASSERT_USER_THROW(
+      read("{\"a\":[1]}\n", ROW({{"a", DECIMAL(10, 2)}})),
+      "JSON parse error at byte offset 0");
+  VELOX_ASSERT_USER_THROW(
+      read("{\"a\":{\"k\":1}}\n", ROW({{"a", DECIMAL(10, 2)}})),
+      "JSON parse error at byte offset 0");
 }
 
 TEST_F(JsonReaderTest, varbinaryFromBase64) {
@@ -566,6 +667,24 @@ TEST_F(JsonReaderTest, arrayElementTypeMismatchCoerces) {
   auto row = read("{\"a\":[1,\"abc\",3]}\n", ROW({{"a", ARRAY(BIGINT())}}));
   auto expected = makeRowVector({makeArrayVector<int64_t>({{1, 0, 3}})});
   test::assertEqualVectors(expected, row);
+}
+
+TEST_F(JsonReaderTest, arrayNullElementIsNullNotZero) {
+  // A JSON null *element* is a NULL element, distinct from the 0 an
+  // unconvertible element coerces to (see arrayElementTypeMismatchCoerces).
+  // The elements vector is grown one slot at a time and has no nulls buffer
+  // until something asks for one, so this NULL has to be written explicitly —
+  // growing the vector does not leave new slots null on its own.
+  auto row = read("{\"a\":[1,null,3]}\n", ROW({{"a", ARRAY(BIGINT())}}));
+  ASSERT_EQ(row->size(), 1);
+  auto* arrays = row->childAt(0)->as<ArrayVector>();
+  ASSERT_EQ(arrays->sizeAt(0), 3);
+  const auto& elements = arrays->elements();
+  EXPECT_FALSE(elements->isNullAt(0));
+  EXPECT_TRUE(elements->isNullAt(1));
+  EXPECT_FALSE(elements->isNullAt(2));
+  EXPECT_EQ(elements->asFlatVector<int64_t>()->valueAt(0), 1);
+  EXPECT_EQ(elements->asFlatVector<int64_t>()->valueAt(2), 3);
 }
 
 TEST_F(JsonReaderTest, arrayNullProducesSqlNull) {
@@ -678,6 +797,40 @@ TEST_F(JsonReaderTest, mapDuplicateKeysLastWriteWinsInsertionOrderPreserved) {
   EXPECT_EQ(values->valueAt(offset + 1), 2);
 }
 
+TEST_F(JsonReaderTest, mapDuplicateKeysNullInterplay) {
+  // Last-write-wins holds across the null boundary in both directions. Null
+  // first then a value un-nulls the slot; a value then null re-nulls it. Both
+  // keep the key at its first-seen position and cardinality 2. The two
+  // directions are carried by different code: the re-null by writeMap's
+  // setNull, which sits outside the inserted-only guard, and the un-null by
+  // FlatVector::set clearing the flag on write.
+  auto row = read(
+      "{\"m\":{\"a\":null,\"b\":2,\"a\":3}}\n"
+      "{\"m\":{\"a\":1,\"b\":2,\"a\":null}}\n",
+      ROW({{"m", MAP(VARCHAR(), BIGINT())}}));
+  ASSERT_EQ(row->size(), 2);
+  auto* map = row->childAt(0)->as<MapVector>();
+  auto keys = map->mapKeys()->asFlatVector<StringView>();
+  auto values = map->mapValues()->asFlatVector<int64_t>();
+
+  ASSERT_FALSE(map->isNullAt(0));
+  EXPECT_EQ(map->sizeAt(0), 2);
+  const auto first = map->offsetAt(0);
+  EXPECT_EQ(keys->valueAt(first), "a"_sv);
+  EXPECT_FALSE(values->isNullAt(first));
+  EXPECT_EQ(values->valueAt(first), 3);
+  EXPECT_EQ(keys->valueAt(first + 1), "b"_sv);
+  EXPECT_EQ(values->valueAt(first + 1), 2);
+
+  ASSERT_FALSE(map->isNullAt(1));
+  EXPECT_EQ(map->sizeAt(1), 2);
+  const auto second = map->offsetAt(1);
+  EXPECT_EQ(keys->valueAt(second), "a"_sv);
+  EXPECT_TRUE(values->isNullAt(second));
+  EXPECT_EQ(keys->valueAt(second + 1), "b"_sv);
+  EXPECT_EQ(values->valueAt(second + 1), 2);
+}
+
 TEST_F(JsonReaderTest, mapDuplicateKeysCaseSensitive) {
   // {"k":1,"K":2} -> two distinct entries, cardinality 2. Distinct from ROW
   // case-insensitive matching: MAP keys are not folded.
@@ -689,6 +842,136 @@ TEST_F(JsonReaderTest, mapDuplicateKeysCaseSensitive) {
   const auto offset = map->offsetAt(0);
   EXPECT_EQ(keys->valueAt(offset), "k"_sv);
   EXPECT_EQ(keys->valueAt(offset + 1), "K"_sv);
+}
+
+TEST_F(JsonReaderTest, mapDuplicateKeysArrayValueGrows) {
+  // A duplicate key whose ARRAY value grows. writeArray takes its offset from
+  // the current tail of the shared elements vector on every call, so the second
+  // occurrence appends past "b" — appended between the two "a"s — and re-points
+  // the entry. An implementation that instead wrote the new elements in place
+  // at "a"'s old offset would run past its old cardinality and corrupt "b",
+  // leaving "a" itself correct. That is why the sibling is asserted here.
+  auto row = read(
+      "{\"m\":{\"a\":[1],\"b\":[9],\"a\":[1,2,3,4,5]}}\n",
+      ROW({{"m", MAP(VARCHAR(), ARRAY(BIGINT()))}}));
+  auto* map = row->childAt(0)->as<MapVector>();
+  auto keys = map->mapKeys()->asFlatVector<StringView>();
+  auto* arrays = map->mapValues()->as<ArrayVector>();
+  auto elements = arrays->elements()->asFlatVector<int64_t>();
+  // Reads an entry's array through its offset and size, which is the only
+  // reachable view: elements orphaned by an overwrite are invisible here.
+  auto arrayAt = [&](vector_size_t entry) {
+    std::vector<int64_t> out;
+    const auto begin = arrays->offsetAt(entry);
+    for (vector_size_t i = 0; i < arrays->sizeAt(entry); ++i) {
+      out.push_back(elements->valueAt(begin + i));
+    }
+    return out;
+  };
+
+  ASSERT_FALSE(map->isNullAt(0));
+  ASSERT_EQ(map->sizeAt(0), 2);
+  const auto offset = map->offsetAt(0);
+  EXPECT_EQ(keys->valueAt(offset), "a"_sv);
+  EXPECT_THAT(arrayAt(offset), testing::ElementsAre(1, 2, 3, 4, 5));
+  EXPECT_EQ(keys->valueAt(offset + 1), "b"_sv);
+  EXPECT_THAT(arrayAt(offset + 1), testing::ElementsAre(9));
+}
+
+TEST_F(JsonReaderTest, mapDuplicateKeysArrayValueShrinks) {
+  // The opposite direction. Asserting the full contents and not just the first
+  // element is what matters here: reusing the old offset without updating the
+  // size would leave "a" reading [7, 2, 3, 4, 5] instead of [7].
+  auto row = read(
+      "{\"m\":{\"a\":[1,2,3,4,5],\"b\":[9],\"a\":[7]}}\n",
+      ROW({{"m", MAP(VARCHAR(), ARRAY(BIGINT()))}}));
+  auto* map = row->childAt(0)->as<MapVector>();
+  auto keys = map->mapKeys()->asFlatVector<StringView>();
+  auto* arrays = map->mapValues()->as<ArrayVector>();
+  auto elements = arrays->elements()->asFlatVector<int64_t>();
+  auto arrayAt = [&](vector_size_t entry) {
+    std::vector<int64_t> out;
+    const auto begin = arrays->offsetAt(entry);
+    for (vector_size_t i = 0; i < arrays->sizeAt(entry); ++i) {
+      out.push_back(elements->valueAt(begin + i));
+    }
+    return out;
+  };
+
+  ASSERT_EQ(map->sizeAt(0), 2);
+  const auto offset = map->offsetAt(0);
+  EXPECT_EQ(keys->valueAt(offset), "a"_sv);
+  EXPECT_EQ(arrays->sizeAt(offset), 1);
+  EXPECT_THAT(arrayAt(offset), testing::ElementsAre(7));
+  EXPECT_EQ(keys->valueAt(offset + 1), "b"_sv);
+  EXPECT_THAT(arrayAt(offset + 1), testing::ElementsAre(9));
+}
+
+TEST_F(JsonReaderTest, mapDuplicateKeysArrayValueEmptyAndNull) {
+  // An overwrite must keep [] and JSON null distinguishable, as a first write
+  // does: [] is a non-null array of cardinality 0, null is SQL NULL. The null
+  // case leaves the entry's stale offset and size in place, so it is the null
+  // flag alone that carries the meaning.
+  auto row = read(
+      "{\"m\":{\"a\":[1,2],\"a\":[]}}\n"
+      "{\"m\":{\"a\":[1,2],\"a\":null}}\n",
+      ROW({{"m", MAP(VARCHAR(), ARRAY(BIGINT()))}}));
+  ASSERT_EQ(row->size(), 2);
+  auto* map = row->childAt(0)->as<MapVector>();
+  auto* arrays = map->mapValues()->as<ArrayVector>();
+
+  ASSERT_EQ(map->sizeAt(0), 1);
+  const auto emptied = map->offsetAt(0);
+  EXPECT_FALSE(arrays->isNullAt(emptied));
+  EXPECT_EQ(arrays->sizeAt(emptied), 0);
+
+  ASSERT_EQ(map->sizeAt(1), 1);
+  const auto nulled = map->offsetAt(1);
+  EXPECT_TRUE(arrays->isNullAt(nulled));
+}
+
+TEST_F(JsonReaderTest, mapDuplicateKeysRowValueRenullsAbsentField) {
+  // ROW values do not append. writeRowObject writes children in place at the
+  // entry index, after setting every child at that index to NULL. That
+  // initialization is what makes an overwrite a replacement rather than a
+  // merge: "y" is present in the first occurrence and absent from the second,
+  // so it must come back NULL. Without it the entry would read {x=9, y=2}.
+  // Jackson replaces the whole ObjectNode, so NULL is the reference behavior.
+  auto row = read(
+      "{\"m\":{\"a\":{\"x\":1,\"y\":2},\"a\":{\"x\":9}}}\n",
+      ROW({{"m", MAP(VARCHAR(), ROW({{"x", BIGINT()}, {"y", BIGINT()}}))}}));
+  auto* map = row->childAt(0)->as<MapVector>();
+  ASSERT_EQ(map->sizeAt(0), 1);
+  const auto offset = map->offsetAt(0);
+  EXPECT_EQ(
+      map->mapKeys()->asFlatVector<StringView>()->valueAt(offset), "a"_sv);
+  auto* rows = map->mapValues()->as<RowVector>();
+  ASSERT_FALSE(rows->isNullAt(offset));
+  EXPECT_EQ(rows->childAt(0)->asFlatVector<int64_t>()->valueAt(offset), 9);
+  EXPECT_TRUE(rows->childAt(1)->isNullAt(offset));
+}
+
+TEST_F(JsonReaderTest, mapDuplicateKeysMapValueReplacedNotMerged) {
+  // A MAP-valued duplicate is replaced whole rather than merged. The nested
+  // writeMap builds a fresh key index per call, so the first occurrence's keys
+  // cannot survive into the second: {"p","q"} then {"r"} yields just {"r"}.
+  auto row = read(
+      "{\"m\":{\"a\":{\"p\":1,\"q\":2},\"a\":{\"r\":3}}}\n",
+      ROW({{"m", MAP(VARCHAR(), MAP(VARCHAR(), BIGINT()))}}));
+  auto* outer = row->childAt(0)->as<MapVector>();
+  ASSERT_EQ(outer->sizeAt(0), 1);
+  const auto offset = outer->offsetAt(0);
+  EXPECT_EQ(
+      outer->mapKeys()->asFlatVector<StringView>()->valueAt(offset), "a"_sv);
+  auto* inner = outer->mapValues()->as<MapVector>();
+  ASSERT_FALSE(inner->isNullAt(offset));
+  ASSERT_EQ(inner->sizeAt(offset), 1);
+  const auto innerOffset = inner->offsetAt(offset);
+  EXPECT_EQ(
+      inner->mapKeys()->asFlatVector<StringView>()->valueAt(innerOffset),
+      "r"_sv);
+  EXPECT_EQ(
+      inner->mapValues()->asFlatVector<int64_t>()->valueAt(innerOffset), 3);
 }
 
 TEST_F(JsonReaderTest, mapJsonNullProducesSqlNull) {
@@ -873,16 +1156,16 @@ TEST_F(JsonReaderTest, splitExhaustiveSweep) {
   // Whole-file read sanity check.
   EXPECT_EQ(ids(readRange(file, schema, 0, file.size())), expected);
 
-  // Partition the file into [0, p) and [p, fileSize) at every byte
-  // offset p. The concatenation must equal the whole-file read with no
-  // dropped or duplicated records. This is the only test that exercises
-  // off-by-one errors at every byte position.
-  for (uint64_t p = 1; p <= file.size(); ++p) {
-    auto left = ids(readRange(file, schema, 0, p));
-    auto right = ids(readRange(file, schema, p, file.size() - p));
+  // Partition the file into [0, splitPoint) and [splitPoint, fileSize) at
+  // every byte offset splitPoint. The concatenation must equal the whole-file
+  // read with no dropped or duplicated records. This is the only test that
+  // exercises off-by-one errors at every byte position.
+  for (uint64_t splitPoint = 1; splitPoint <= file.size(); ++splitPoint) {
+    auto left = ids(readRange(file, schema, 0, splitPoint));
+    auto right = ids(readRange(file, schema, splitPoint, file.size() - splitPoint));
     std::vector<int64_t> combined = left;
     combined.insert(combined.end(), right.begin(), right.end());
-    EXPECT_EQ(combined, expected) << "split point " << p;
+    EXPECT_EQ(combined, expected) << "split point " << splitPoint;
   }
 }
 
@@ -893,9 +1176,9 @@ TEST_F(JsonReaderTest, splitInsideMultibyteUtf8) {
   std::string r0 = "{\"id\":0,\"s\":\"\xC3\xB1\xE2\x82\xAC\"}\n";
   std::string file = r0 + "{\"id\":1}\n";
   // Split one byte into the multibyte run of the first record.
-  uint64_t p = r0.find("\xC3\xB1") + 1;
-  auto left = ids(readRange(file, schema, 0, p));
-  auto right = ids(readRange(file, schema, p, file.size() - p));
+  uint64_t splitPoint = r0.find("\xC3\xB1") + 1;
+  auto left = ids(readRange(file, schema, 0, splitPoint));
+  auto right = ids(readRange(file, schema, splitPoint, file.size() - splitPoint));
   std::vector<int64_t> combined = left;
   combined.insert(combined.end(), right.begin(), right.end());
   EXPECT_EQ(combined, (std::vector<int64_t>{0, 1}));
@@ -907,9 +1190,9 @@ TEST_F(JsonReaderTest, splitInsideJsonStringLiteral) {
   // 'n', two bytes — not a real 0x0A line terminator).
   std::string r0 = "{\"id\":0,\"s\":\"a{b}c\\nd efgh\"}\n";
   std::string file = r0 + "{\"id\":1}\n";
-  uint64_t p = r0.find("b}c");
-  auto left = ids(readRange(file, schema, 0, p));
-  auto right = ids(readRange(file, schema, p, file.size() - p));
+  uint64_t splitPoint = r0.find("b}c");
+  auto left = ids(readRange(file, schema, 0, splitPoint));
+  auto right = ids(readRange(file, schema, splitPoint, file.size() - splitPoint));
   std::vector<int64_t> combined = left;
   combined.insert(combined.end(), right.begin(), right.end());
   EXPECT_EQ(combined, (std::vector<int64_t>{0, 1}));
@@ -921,9 +1204,9 @@ TEST_F(JsonReaderTest, splitAtExactlyNewline) {
   // Split exactly at the newline ending the first record. That record
   // belongs to the left split; the right split skips from the newline
   // forward to the start of the second record.
-  uint64_t nl = file.find('\n');
-  auto left = ids(readRange(file, schema, 0, nl));
-  auto right = ids(readRange(file, schema, nl, file.size() - nl));
+  uint64_t newline = file.find('\n');
+  auto left = ids(readRange(file, schema, 0, newline));
+  auto right = ids(readRange(file, schema, newline, file.size() - newline));
   std::vector<int64_t> combined = left;
   combined.insert(combined.end(), right.begin(), right.end());
   EXPECT_EQ(combined, (std::vector<int64_t>{0, 1, 2}));
@@ -1039,8 +1322,9 @@ TEST_F(JsonReaderTest, errorShapeMismatchThrowsForEachContainer) {
 
 TEST_F(JsonReaderTest, errorTopLevelNonObjectThrows) {
   // A top-level value that is not an object throws a clean user error for every
-  // non-object JSON shape — including null, which Hive's JsonSerDe turns into a
-  // NullPointerException. We match the spec (a clean parse error), not the bug.
+  // non-object JSON shape, including null. This is a deliberate spec choice:
+  // the contract is a clean parse error carrying a byte offset, independent of
+  // how the reference SerDe happens to fail on each shape.
   auto schema = ROW({{"a", BIGINT()}});
   for (const auto* input : {"5\n", "[1,2]\n", "\"str\"\n", "null\n"}) {
     VELOX_ASSERT_USER_THROW(read(input, schema), "JSON parse error at byte offset 0");

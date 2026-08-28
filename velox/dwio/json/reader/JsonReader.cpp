@@ -19,6 +19,7 @@
 #include <cctype>
 #include <cstring>
 #include <limits>
+#include <optional>
 
 #include <folly/Conv.h>
 #include <folly/container/F14Map.h>
@@ -87,11 +88,12 @@ void setCompressionFromName(
   }
 }
 
-// Decompresses the whole file into buffer, padded with SIMDJSON_PADDING zero
-// bytes, and returns the decompressed length. Compressed JSON files are not
-// byte-addressable, so the entire file is materialized at once. Mirrors
-// TextReader's whole-file, raw decompression via createDecompressor.
-size_t decompressWholeFile(FileContents& contents, std::string& buffer) {
+// Decompresses the whole file into a pool-owned AlignedBuffer padded with
+// SIMDJSON_PADDING zero bytes, and returns it. The decompressed length is
+// written into decodedLength. Compressed JSON files are not byte-addressable,
+// so the entire file is materialized at once. Mirrors TextReader's whole-file,
+// raw decompression via createDecompressor.
+BufferPtr decompressWholeFile(FileContents& contents, size_t& decodedLength) {
   const size_t compressedLength = contents.input->getReadFile()->size();
   auto decompressed = dwio::common::compression::createDecompressor(
       contents.compression,
@@ -104,6 +106,9 @@ size_t decompressWholeFile(FileContents& contents, std::string& buffer) {
       /*useRawDecompression=*/true,
       compressedLength);
 
+  // Accumulate chunks into a temporary string — chunks are pointers into the
+  // decompressor's internal buffer and are only valid until the next Next()
+  // call, so they must be copied out immediately.
   std::string decoded;
   const void* chunk = nullptr;
   int32_t length = 0;
@@ -113,34 +118,29 @@ size_t decompressWholeFile(FileContents& contents, std::string& buffer) {
     }
   }
 
-  const size_t decodedLength = decoded.size();
-  buffer.assign(decodedLength + simdjson::SIMDJSON_PADDING, '\0');
-  std::memcpy(buffer.data(), decoded.data(), decodedLength);
-  return decodedLength;
-}
-
-// Lowercases an ASCII string byte by byte.
-std::string asciiLower(std::string_view s) {
-  std::string out;
-  out.reserve(s.size());
-  for (char c : s) {
-    out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-  }
-  return out;
+  // Now the full size is known: allocate a single pool-owned buffer at the
+  // right size and copy in one shot.
+  decodedLength = decoded.size();
+  auto buffer = AlignedBuffer::allocate<char>(
+      decodedLength + simdjson::SIMDJSON_PADDING, &contents.pool);
+  std::memcpy(buffer->asMutable<char>(), decoded.data(), decodedLength);
+  return buffer;
 }
 
 // Lowercases a JSON field name for case-insensitive ROW field matching.
 // Pure-ASCII names take a fast byte-wise
 // path; names carrying non-ASCII bytes fall back to full Unicode lowercasing
-// to match JsonSerDe's String.toLowerCase() semantics. MAP keys do NOT go
-// through here — they are data and pass through with case preserved.
+// to match the serde2 JsonSerDe's String.toLowerCase() semantics. MAP keys do
+// NOT go through here — they are data and pass through with case preserved.
 std::string toLowerKey(std::string_view key) {
   for (char c : key) {
     if (static_cast<unsigned char>(c) >= 0x80) {
       return functions::stringImpl::utf8StrToLowerCopy(std::string{key});
     }
   }
-  return asciiLower(key);
+  std::string out{key};
+  folly::toLowerAscii(out);
+  return out;
 }
 
 // Trims trailing ASCII whitespace from a raw simdjson token. raw_json_token()
@@ -160,7 +160,7 @@ std::string_view trimTrailingWhitespace(std::string_view token) {
 
 // Casts a JSON-parsed double to int64, wrapping through uint64 for values
 // in [2^63, 2^64). Values outside [-2^63, 2^64) are out of representable
-// range and diverge from Presto/Jackson for inputs that exceed 2^64 in
+// range and diverge from Jackson for inputs that exceed 2^64 in
 // magnitude. The v1 contract is "no
 // throw", not "bit-for-bit parity".
 int64_t doubleToInt64Truncating(double d) {
@@ -173,15 +173,16 @@ int64_t doubleToInt64Truncating(double d) {
   if (d >= kInt64MaxPlusOne && d < kUint64MaxPlusOne) {
     return static_cast<int64_t>(static_cast<uint64_t>(d));
   }
-  // Out-of-range input. Velox v1 diverges from Presto/Jackson here.
+  // Out-of-range input. Velox v1 diverges from Jackson here.
   // The test contract is "does not throw".
   return 0;
 }
 
-// Returns the int64 coercion of a JSON scalar value per the empirical table.
-// Throws VELOX_USER_FAIL on container-shape
-// mismatch (object or array). null becomes SQL NULL via the caller's
-// is_null() check before this function is called.
+// Returns the int64 coercion of a JSON scalar value, following the serde2
+// JsonSerDe's leaf handling (Jackson's JsonNode.asLong(), which defaults on a
+// value it cannot convert rather than throwing). Throws VELOX_USER_FAIL on
+// container-shape mismatch (object or array). null becomes SQL NULL via the
+// caller's is_null() check before this function is called.
 int64_t coerceToInt64(simdjson::ondemand::value& value) {
   auto type = unwrap(value.type());
   switch (type) {
@@ -191,7 +192,7 @@ int64_t coerceToInt64(simdjson::ondemand::value& value) {
         case simdjson::ondemand::number_type::signed_integer:
           return num.get_int64();
         case simdjson::ondemand::number_type::unsigned_integer:
-          // [2^63, 2^64) wraps via two's complement to match Presto/Jackson.
+          // [2^63, 2^64) wraps via two's complement to match Jackson.
           return static_cast<int64_t>(num.get_uint64());
         case simdjson::ondemand::number_type::floating_point_number:
           // -3.7 -> -3 (truncate toward zero, not floor).
@@ -201,8 +202,7 @@ int64_t coerceToInt64(simdjson::ondemand::value& value) {
           // uint64. value.get_number() returns NUMBER_OUT_OF_RANGE in
           // that case, so the unwrap above already threw. Floating
           // forms like 1e20 (the test's overflow case) parse as
-          // floating_point_number above and diverge from
-          // Presto/Jackson.
+          // floating_point_number above and diverge from Jackson.
           VELOX_UNREACHABLE();
       }
       VELOX_UNREACHABLE();
@@ -211,10 +211,20 @@ int64_t coerceToInt64(simdjson::ondemand::value& value) {
       return unwrap(value.get_bool()) ? 1 : 0;
     case simdjson::ondemand::json_type::string: {
       auto s = unwrap(value.get_string());
-      // Full-fail to 0 — NOT partial-parse.
-      // "12abc" -> 0, not 12.
       auto parsed = folly::tryTo<int64_t>(s);
-      return parsed.hasValue() ? parsed.value() : 0;
+      if (parsed.hasValue()) {
+        return parsed.value();
+      }
+      // Jackson's NumberInput.parseAsLong is a two-stage parse: when the
+      // integer scan hits a character it cannot use, it retries the whole
+      // string as a double and casts, reaching its default only if that fails
+      // too. So a quoted float truncates toward zero ("12.5" -> 12, "1e3" ->
+      // 1000) instead of defaulting.
+      auto viaDouble = folly::tryTo<double>(s);
+      // Full-fail to 0 — NOT partial-parse. "12abc" is neither integer nor
+      // float syntax, so it yields 0, not 12.
+      return viaDouble.hasValue() ? doubleToInt64Truncating(viaDouble.value())
+                                  : 0;
     }
     case simdjson::ondemand::json_type::object:
     case simdjson::ondemand::json_type::array:
@@ -256,8 +266,12 @@ bool coerceToBool(simdjson::ondemand::value& value) {
     }
     case simdjson::ondemand::json_type::string: {
       auto s = unwrap(value.get_string());
-      // Strict literal match — case-sensitive — per the probe: only the
-      // exact lowercase "true" is true. "True"/"TRUE" are false.
+      // Strict literal match — case-sensitive — matching Hive 4.0.0's
+      // Boolean.valueOf(leafNode.asBoolean()), where TextNode.asBoolean()
+      // defaults to false: only the exact lowercase "true" is true.
+      // "True"/"TRUE" are false. Hive later changed this to asBoolean(true),
+      // which turns every non-"false" string into true; that is a divergence
+      // from post-4.0.0 Hive, not from the pinned reference.
       return s.size() == 4 && std::memcmp(s.data(), "true", 4) == 0;
     }
     case simdjson::ondemand::json_type::object:
@@ -392,12 +406,11 @@ void serializeJsonValue(simdjson::ondemand::value& value, std::string& out) {
 // key order preserved; numbers use a best-effort lexeme. null is handled by
 // the caller's is_null() check.
 //
-// VARCHAR-from-number is a known v1 divergence: Presto/Jackson formats via
-// BigDecimal(input).stripTrailingZeros().toString(), which C++ has no
-// standard equivalent for. v1 emits the original lexeme, so the semantic
-// value is preserved but the exact textual form (trailing zeros, scientific
-// notation case/threshold) may differ. This is the documented
-// VARCHAR-from-number v1 divergence.
+// Numbers emit the original lexeme rather than reformatting, which is the
+// VARCHAR-from-number divergence documented on JsonReader. The reference routes
+// a JSON float through Java's String.valueOf(double), and C++ has no standard
+// equivalent, so the semantic value is preserved but trailing zeros and
+// scientific-notation thresholds may differ.
 std::string coerceToString(simdjson::ondemand::value& value) {
   auto type = unwrap(value.type());
   switch (type) {
@@ -421,6 +434,10 @@ std::string coerceToString(simdjson::ondemand::value& value) {
   VELOX_UNREACHABLE();
 }
 
+// Returns the double coercion of a JSON scalar. The serde2 JsonSerDe reads both
+// DOUBLE and REAL through JsonNode.asDouble(), the same defaulting accessor
+// family the integer types use, so a numeric string coerces and an
+// unconvertible one lands on 0.0 rather than throwing.
 double coerceToDouble(simdjson::ondemand::value& value) {
   auto type = unwrap(value.type());
   switch (type) {
@@ -449,10 +466,24 @@ double coerceToDouble(simdjson::ondemand::value& value) {
 // the original lexeme, NOT through double. Routing a high-precision number
 // through double silently rounds away digits a double cannot hold (a double
 // carries ~15-16 significant decimal digits); the raw lexeme preserves them.
-// Numbers use the raw token; strings use the decoded contents. Throws on a
-// container-shape mismatch or a lexeme the decimal parser rejects.
+// Numbers use the raw token; strings use the decoded contents.
+//
+// Returns nullopt — SQL NULL for the cell — when the lexeme is not a decimal
+// the declared precision and scale can hold. The serde2 JsonSerDe builds
+// decimals with HiveDecimal.create(asText()), which returns null instead of
+// raising on text it cannot parse, and enforcePrecisionScale likewise returns
+// null for a value too large for the declared precision. A boolean takes the
+// same path: asText() on a boolean node yields "true"/"false", which
+// HiveDecimal.create rejects. So a bad decimal leaf is NULL and the row
+// survives, the same coerce-do-not-throw rule the integer leaves follow —
+// decimals just have no zero-like fallback to land on. Only a container-shape
+// mismatch throws.
+//
+// Enforcing precision and scale at all matches Hive's development branch, which
+// wraps the decimal in HiveDecimalUtils.enforcePrecisionScale; 4.0.0 does not
+// enforce either, so an out-of-range value is NULL here and retained there.
 template <typename T>
-T coerceToDecimal(
+std::optional<T> coerceToDecimal(
     simdjson::ondemand::value& value,
     uint8_t precision,
     uint8_t scale) {
@@ -473,7 +504,7 @@ T coerceToDecimal(
       VELOX_USER_FAIL(
           "Container shape mismatch: decimal column received a JSON object or array.");
     case simdjson::ondemand::json_type::boolean:
-      VELOX_USER_FAIL("Cannot coerce a JSON boolean to a decimal column.");
+      return std::nullopt;
     case simdjson::ondemand::json_type::null:
       VELOX_UNREACHABLE();
     case simdjson::ondemand::json_type::unknown:
@@ -487,17 +518,33 @@ T coerceToDecimal(
       scale,
       out);
   if (!status.ok()) {
-    VELOX_USER_FAIL(
-        "Cannot parse decimal from JSON lexeme: {} ({})",
-        lexeme,
-        status.message());
+    return std::nullopt;
   }
   return out;
 }
 
-// Base64-decodes a JSON string into raw bytes for a VARBINARY column. Presto
-// carries binary data base64-encoded in JSON text, so the reader decodes on
-// the way in. Throws on a non-string value or invalid base64.
+// Parses a decimal leaf and writes it into column at rowIndex, mapping an
+// unparseable or out-of-range lexeme to SQL NULL. Shared by the short-decimal
+// (int64) and long-decimal (int128) paths.
+template <typename T>
+void writeDecimal(
+    simdjson::ondemand::value& value,
+    uint8_t precision,
+    uint8_t scale,
+    BaseVector& column,
+    vector_size_t rowIndex) {
+  const auto parsed = coerceToDecimal<T>(value, precision, scale);
+  if (parsed.has_value()) {
+    column.asUnchecked<FlatVector<T>>()->set(rowIndex, parsed.value());
+  } else {
+    column.setNull(rowIndex, true);
+  }
+}
+
+// Base64-decodes a JSON string into raw bytes for a VARBINARY column. JSON text
+// carries binary data base64-encoded, which the serde2 JsonSerDe decodes via
+// Jackson's JsonNode.binaryValue(), so the reader decodes on the way in. Throws
+// on a non-string value or invalid base64.
 std::string coerceToVarbinary(simdjson::ondemand::value& value) {
   auto type = unwrap(value.type());
   if (type != simdjson::ondemand::json_type::string) {
@@ -629,8 +676,8 @@ void writeRowObject(
 // written in order, the current element count is this array's offset.
 //
 // A non-array, non-null JSON value is a container-shape mismatch and throws,
-// matching Presto. Element-level type mismatches coerce rather than
-// throw.
+// matching the serde2 JsonSerDe. Element-level type mismatches coerce rather
+// than throw.
 void writeArray(
     simdjson::ondemand::value& value,
     const TypePtr& type,
@@ -676,7 +723,8 @@ void writeArray(
 // — unlike ROW field names, they are never case-folded.
 //
 // Velox MapVectors require unique keys per row, so duplicate keys are deduped
-// with insertion-order + last-write-wins (JsonSerDe LinkedHashMap semantics):
+// with insertion-order + last-write-wins (the serde2 JsonSerDe builds maps in a
+// LinkedHashMap, which has the same semantics):
 // a repeated key overwrites the value at its first position and does not grow
 // the map. A non-object, non-null JSON value is a container-shape mismatch and
 // throws; value-level type mismatches coerce rather than throw.
@@ -757,11 +805,9 @@ void writeValue(
   if (type->isDecimal()) {
     const auto [precision, scale] = getDecimalPrecisionScale(*type);
     if (type->isShortDecimal()) {
-      column.asUnchecked<FlatVector<int64_t>>()->set(
-          rowIndex, coerceToDecimal<int64_t>(value, precision, scale));
+      writeDecimal<int64_t>(value, precision, scale, column, rowIndex);
     } else {
-      column.asUnchecked<FlatVector<int128_t>>()->set(
-          rowIndex, coerceToDecimal<int128_t>(value, precision, scale));
+      writeDecimal<int128_t>(value, precision, scale, column, rowIndex);
     }
     return;
   }
@@ -1027,7 +1073,7 @@ JsonRowReader::JsonRowReader(
       pos_ = 0; // pos_ >= fileLength_ makes next() return zero rows.
       return;
     }
-    fileLength_ = decompressWholeFile(*contents_, fileBuffer_);
+    fileBuffer_ = decompressWholeFile(*contents_, fileLength_);
     pos_ = 0;
     // The requested byte length refers to compressed bytes and is meaningless
     // after decompression; this split owns every decompressed record.
@@ -1037,12 +1083,13 @@ JsonRowReader::JsonRowReader(
 
   const auto& readFile = contents_->input->getReadFile();
   fileLength_ = readFile->size();
-  // Pad the buffer so the last line can be parsed by simdjson without
-  // copying. Lines other than the last are still copied into lineBuffer_
-  // because simdjson requires padding bytes after the parsed region.
-  fileBuffer_.assign(fileLength_ + simdjson::SIMDJSON_PADDING, '\0');
+  // Allocate a pool-owned buffer so the file bytes are memory-accounted.
+  // Padded with SIMDJSON_PADDING zero bytes so the last line can be parsed
+  // by simdjson in place without an extra copy.
+  fileBuffer_ = AlignedBuffer::allocate<char>(
+      fileLength_ + simdjson::SIMDJSON_PADDING, &contents_->pool);
   if (fileLength_ > 0) {
-    readFile->pread(0, fileLength_, fileBuffer_.data());
+    readFile->pread(0, fileLength_, fileBuffer_->asMutable<char>());
   }
 
   // Position at the first record this split owns. A nonzero split offset
@@ -1051,31 +1098,29 @@ JsonRowReader::JsonRowReader(
   // there. The first split (offset 0) starts at byte 0 and skips nothing.
   pos_ = splitStart_;
   if (splitStart_ != 0 && splitStart_ < fileLength_) {
-    const char* from = fileBuffer_.data() + splitStart_;
-    const char* nl = static_cast<const char*>(
+    const char* from = fileBuffer_->as<char>() + splitStart_;
+    const char* newline = static_cast<const char*>(
         std::memchr(from, '\n', fileLength_ - splitStart_));
     // No newline at or after the offset means the offset falls in the
     // file's final (unterminated) record, which the previous split owns.
-    pos_ = (nl == nullptr) ? fileLength_
-                           : static_cast<size_t>(nl - fileBuffer_.data()) + 1;
+    pos_ = (newline == nullptr) ? fileLength_
+                           : static_cast<size_t>(newline - fileBuffer_->as<char>()) + 1;
   }
 }
 
 bool JsonRowReader::readNextLine() {
-  // Stop at end of file, or once a record would start past this split's
-  // boundary. A record starting at exactly splitEnd_ is still read (the
-  // straddling record); the next split skips it via the constructor's
-  // first-line skip. This is the Presto/Hive line-split convention.
-  if (pos_ >= fileLength_ || pos_ > splitEnd_) {
+  // The one place the split boundary is enforced per record: a batch almost
+  // always crosses it mid-read. Follows the Presto/Hive line-split convention.
+  if (atSplitEnd()) {
     return false;
   }
   // Capture where this record begins before pos_ advances, so a parse error
   // can report the record's byte offset.
   recordStartOffset_ = pos_;
-  const char* start = fileBuffer_.data() + pos_;
+  const char* start = fileBuffer_->as<char>() + pos_;
   size_t remaining = fileLength_ - pos_;
-  const char* nl = static_cast<const char*>(std::memchr(start, '\n', remaining));
-  size_t length = (nl == nullptr) ? remaining : static_cast<size_t>(nl - start);
+  const char* newline = static_cast<const char*>(std::memchr(start, '\n', remaining));
+  size_t length = (newline == nullptr) ? remaining : static_cast<size_t>(newline - start);
 
   // Reserve enough room for the line plus simdjson's required trailing
   // padding. Reuse the buffer across rows; std::string keeps capacity.
@@ -1087,7 +1132,7 @@ bool JsonRowReader::readNextLine() {
   }
   std::memcpy(lineBuffer_.data(), start, length);
   lineLength_ = length;
-  pos_ += length + (nl == nullptr ? 0 : 1);
+  pos_ += length + (newline == nullptr ? 0 : 1);
   return true;
 }
 
@@ -1110,9 +1155,9 @@ void JsonRowReader::writeRow(RowVector& row, vector_size_t rowIndex) {
 
 void JsonRowReader::parseRecord(RowVector& row, vector_size_t rowIndex) {
   // A blank line — empty or whitespace only — is never a valid JSON
-  // record. JsonSerDe rejects these as empty rows; surface a clear error
-  // rather than simdjson's lower-level diagnostic. Blank lines turn up at
-  // split boundaries (leading, trailing, or between records), so the
+  // record. The serde2 JsonSerDe rejects these as empty rows; surface a clear
+  // error rather than simdjson's lower-level diagnostic. Blank lines turn up
+  // at split boundaries (leading, trailing, or between records), so the
   // behavior is pinned here.
   std::string_view line(lineBuffer_.data(), lineLength_);
   if (line.find_first_not_of(" \t\r\n") == std::string_view::npos) {
@@ -1144,7 +1189,10 @@ uint64_t JsonRowReader::next(
     uint64_t size,
     VectorPtr& result,
     const dwio::common::Mutation* /*mutation*/) {
-  if (size == 0 || pos_ >= fileLength_ || pos_ > splitEnd_) {
+  // Guard, not boundary enforcement: readNextLine() would return 0 rows
+  // anyway. Returning early avoids allocating a RowVector and leaves result
+  // untouched at end of split, matching TextRowReader and DwrfRowReader.
+  if (size == 0 || atSplitEnd()) {
     return 0;
   }
 

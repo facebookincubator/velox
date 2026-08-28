@@ -212,20 +212,20 @@ class SerDeOptions {
   ~SerDeOptions() = default;
 };
 
-/// Parse options for the JSON reader (JSON Lines, matching Hive
-/// org.apache.hive.hcatalog.data.JsonSerDe). The reader has no lenient mode —
+/// Parse options for the JSON reader (JSON Lines, matching Hive 4.0.0
+/// org.apache.hadoop.hive.serde2.JsonSerDe). The reader has no lenient mode —
 /// every parse error throws, and leaf type mismatches coerce silently — so no
 /// toggle is needed there. The temporal format strings below are Joda-style
 /// patterns (see velox/functions/lib/DateTimeFormatter.h); SimpleDateFormat
 /// parity is intentionally out of scope for v1.
 struct JsonSerDeOptions {
   /// Joda-style pattern used to parse DATE columns from JSON string values.
-  std::string dateFormat{"yyyy-MM-dd"};
+  std::string_view dateFormat{"yyyy-MM-dd"};
 
   /// Joda-style pattern used to parse TIMESTAMP columns from JSON string
   /// values. A trailing timezone token (e.g. ` ZZ`) is honored when present;
   /// inputs without one are interpreted as UTC.
-  std::string timestampFormat{"yyyy-MM-dd HH:mm:ss"};
+  std::string_view timestampFormat{"yyyy-MM-dd HH:mm:ss"};
 };
 
 struct TableParameter {
