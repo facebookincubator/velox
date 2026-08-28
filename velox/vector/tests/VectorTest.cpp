@@ -1614,6 +1614,48 @@ TEST_F(VectorTest, rowResize) {
       rowWithLazyChild->resize(20), "Resize on a lazy vector is not allowed");
 }
 
+TEST_F(VectorTest, rowSliceWithShortChildAndTrailingNulls) {
+  constexpr vector_size_t inputSize = 512;
+  constexpr vector_size_t nestedSize = 1'000;
+  constexpr vector_size_t childSize = 496;
+
+  auto arrayVector = makeArrayVector<int32_t>(
+      childSize,
+      [](auto /* row */) { return 1; },
+      [](auto row, auto /* index */) { return row; });
+  auto nestedRow = std::make_shared<RowVector>(
+      pool(),
+      ROW({"array"}, {arrayVector->type()}),
+      nullptr,
+      nestedSize,
+      std::vector<VectorPtr>{arrayVector});
+  for (vector_size_t row = childSize; row < nestedSize; ++row) {
+    nestedRow->setNull(row, true);
+  }
+  ASSERT_NO_THROW(nestedRow->validate(VectorValidateOptions{}));
+
+  // Slicing the outer row recursively slices nestedRow. The nested row is
+  // valid even though its ArrayVector child is shorter because its trailing
+  // rows are null.
+  auto outerRow = std::make_shared<RowVector>(
+      pool(),
+      ROW({"nested"}, {nestedRow->type()}),
+      nullptr,
+      inputSize,
+      std::vector<VectorPtr>{nestedRow});
+
+  auto sliced = std::dynamic_pointer_cast<RowVector>(
+      outerRow->slice(0, inputSize));
+  ASSERT_NE(sliced, nullptr);
+  ASSERT_EQ(sliced->size(), inputSize);
+
+  auto slicedNested = sliced->childAt(0)->as<RowVector>();
+  ASSERT_EQ(slicedNested->size(), inputSize);
+  ASSERT_EQ(slicedNested->childAt(0)->size(), childSize);
+  ASSERT_TRUE(slicedNested->isNullAt(childSize));
+  ASSERT_NO_THROW(sliced->validate(VectorValidateOptions{}));
+}
+
 TEST_F(VectorTest, rowPrepareForReuse) {
   const int oldSize = 10;
   for (const int newSize : {10, 20, 5, 0}) {
