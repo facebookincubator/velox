@@ -174,17 +174,15 @@ uint32_t streamCount(const std::shared_ptr<const Type>& schema) {
   return maxStreamOffset(*schema) + 1;
 }
 
-using OwnedBufferChunks = std::vector<velox::BufferPtr>;
+using BufferChunks = std::vector<velox::BufferPtr>;
 
-void freeOwnedBufferChunks(void* /* buf */, void* userData) {
-  delete static_cast<std::shared_ptr<OwnedBufferChunks>*>(userData);
+void freeIOBufOwner(void* /* buf */, void* userData) {
+  delete static_cast<std::shared_ptr<const void>*>(userData);
 }
 
 // transferBuffers() transfers allocation ownership only, so capacity is the
 // valid ownership range for stream views.
-bool isBackedByChunks(
-    std::string_view stream,
-    const OwnedBufferChunks& chunks) {
+bool isBackedByChunks(std::string_view stream, const BufferChunks& chunks) {
   const auto streamBegin = reinterpret_cast<uintptr_t>(stream.data());
   const auto streamEnd = streamBegin + stream.size();
   for (const auto& chunk : chunks) {
@@ -199,7 +197,7 @@ bool isBackedByChunks(
 
 void checkStreamsBackedByChunks(
     const std::vector<std::string_view>& streams,
-    const OwnedBufferChunks& chunks) {
+    const BufferChunks& chunks) {
   for (const auto stream : streams) {
     if (stream.empty()) {
       continue;
@@ -212,9 +210,8 @@ void checkStreamsBackedByChunks(
 
 folly::IOBuf takeOwnershipAsIOBuf(
     const std::vector<std::string_view>& streams,
-    Buffer& buffer) {
-  auto chunks = std::make_shared<OwnedBufferChunks>(buffer.transferBuffers());
-  checkStreamsBackedByChunks(streams, *chunks);
+    std::shared_ptr<const void> owner) {
+  NIMBLE_CHECK_NOT_NULL(owner, "Stream owner must be initialized");
 
   std::unique_ptr<folly::IOBuf> chain;
   const char* runData{nullptr};
@@ -227,8 +224,8 @@ folly::IOBuf takeOwnershipAsIOBuf(
         const_cast<char*>(runData),
         runLength,
         runLength,
-        freeOwnedBufferChunks,
-        new std::shared_ptr<OwnedBufferChunks>(chunks));
+        freeIOBufOwner,
+        new std::shared_ptr<const void>(owner));
     if (chain == nullptr) {
       chain = std::move(node);
     } else {
@@ -281,6 +278,22 @@ StreamSlicer::StreamSlicer(
   NIMBLE_CHECK_NOT_NULL(pool_, "Memory pool cannot be null");
 }
 
+folly::IOBuf StreamSlicer::takeOwnershipAsIOBuf(
+    const std::vector<std::string_view>& streams,
+    Buffer& buffer) {
+  auto chunks = std::make_shared<BufferChunks>(buffer.transferBuffers());
+  checkStreamsBackedByChunks(streams, *chunks);
+  return takeOwnershipAsIOBuf(
+      streams, std::shared_ptr<const void>{std::move(chunks)});
+}
+
+folly::IOBuf StreamSlicer::takeOwnershipAsIOBuf(
+    const std::vector<std::string_view>& streams,
+    std::shared_ptr<const void> owner) {
+  return ::facebook::nimble::serde::takeOwnershipAsIOBuf(
+      streams, std::move(owner));
+}
+
 folly::IOBuf StreamSlicer::slice(
     std::string_view input,
     uint32_t offset,
@@ -299,19 +312,16 @@ folly::IOBuf StreamSlicer::slice(
 
   inputStreams_.clear();
   inputStreams_.reserve(streamCount_);
-  size_t inputBodyBytes{0};
   parser.iterateStreams([&](uint32_t streamId, std::string_view streamData) {
     if (streamId >= inputStreams_.size()) {
       inputStreams_.resize(streamId + 1);
     }
     inputStreams_[streamId] = streamData;
-    inputBodyBytes += streamData.size();
   });
-  Buffer outputBuffer{*pool_, inputBodyBytes};
   auto slicedStreams = sliceStreams(
       inputStreams_,
       {.offset = offset, .length = length},
-      outputBuffer,
+      /*outputBuffer=*/nullptr,
       streamEncodingOptions(
           parser.streamEncodingUsesVarintRowCount(),
           &bufferPool_,
@@ -349,23 +359,21 @@ folly::IOBuf StreamSlicer::slice(
 StreamSlicer::SlicedStreams StreamSlicer::slice(
     const std::vector<std::string_view>& inputStreams,
     uint32_t offset,
-    uint32_t length) const {
+    uint32_t length,
+    Buffer* outputBuffer) const {
   NIMBLE_CHECK_GT(length, 0, "Slice length must be positive");
   NIMBLE_CHECK(
       !options_.streamHasChunkHeader || isTabletVersion(options_.streamVersion),
       "Chunk headers are only supported for kTablet streams");
+  const auto encodingOptions = streamEncodingOptions(
+      options_.streamVersion,
+      options_.streamsUseVarintRowCount,
+      &bufferPool_,
+      &encodingBufferPool_);
+  const Range range{.offset = offset, .length = length};
 
   if (!options_.streamHasChunkHeader) {
-    Buffer outputBuffer{*pool_, totalBytes(inputStreams)};
-    return sliceStreams(
-        inputStreams,
-        {.offset = offset, .length = length},
-        outputBuffer,
-        streamEncodingOptions(
-            options_.streamVersion,
-            options_.streamsUseVarintRowCount,
-            &bufferPool_,
-            &encodingBufferPool_));
+    return sliceStreams(inputStreams, range, outputBuffer, encodingOptions);
   }
 
   ScopedEncodingBuffer strippedStreamBuffer{pool_, &strippedStreamBufferPool_};
@@ -377,27 +385,30 @@ StreamSlicer::SlicedStreams StreamSlicer::slice(
       strippedStreamBuffer.get(),
       inputStreams_,
       strippedStreamCache_);
-  Buffer outputBuffer{*pool_, totalBytes(inputStreams_)};
-  return sliceStreams(
-      inputStreams_,
-      {.offset = offset, .length = length},
-      outputBuffer,
-      streamEncodingOptions(
-          options_.streamVersion,
-          options_.streamsUseVarintRowCount,
-          &bufferPool_,
-          &encodingBufferPool_));
+  return sliceStreams(inputStreams_, range, outputBuffer, encodingOptions);
 }
 
 StreamSlicer::SlicedStreams StreamSlicer::sliceStreams(
     const std::vector<std::string_view>& inputStreams,
     Range range,
-    Buffer& outputBuffer,
+    Buffer* outputBuffer,
     const Encoding::Options& encodingOptions) const {
   SlicedStreams result;
+  if (outputBuffer != nullptr) {
+    sliceType(
+        *schema_, range, inputStreams, result, *outputBuffer, encodingOptions);
+    return result;
+  }
+
+  Buffer ownedOutputBuffer{*pool_, totalBytes(inputStreams)};
   sliceType(
-      *schema_, range, inputStreams, result, outputBuffer, encodingOptions);
-  result.data = takeOwnershipAsIOBuf(result.streams, outputBuffer);
+      *schema_,
+      range,
+      inputStreams,
+      result,
+      ownedOutputBuffer,
+      encodingOptions);
+  result.data = takeOwnershipAsIOBuf(result.streams, ownedOutputBuffer);
   return result;
 }
 

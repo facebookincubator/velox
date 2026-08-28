@@ -17,6 +17,7 @@
 #include "velox/dwio/nimble/velox/index/NimbleIndexProjector.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "folly/ScopeGuard.h"
 #include "velox/common/base/SuccinctPrinter.h"
@@ -286,6 +287,7 @@ void NimbleIndexProjector::prepareStripes() {
   ctx_.plan.numRows.reserve(ctx_.stripeRanges.numStripes);
   ctx_.plan.requiresNullBarriers.reserve(ctx_.stripeRanges.numStripes);
   ctx_.plan.numStreams.reserve(ctx_.stripeRanges.numStripes);
+  ctx_.plan.projectedBytes.reserve(ctx_.stripeRanges.numStripes);
   ctx_.plan.stripeFileOffsets.reserve(ctx_.stripeRanges.numStripes);
   ctx_.plan.stripeRangeOffsets.reserve(ctx_.stripeRanges.numStripes + 1);
   ctx_.plan.projectedStreams.reserve(
@@ -383,6 +385,7 @@ void NimbleIndexProjector::clearRequest() {
   ctx_.plan.numRows.clear();
   ctx_.plan.requiresNullBarriers.clear();
   ctx_.plan.numStreams.clear();
+  ctx_.plan.projectedBytes.clear();
   ctx_.plan.stripeFileOffsets.clear();
   ctx_.plan.projectedStreams.clear();
   ctx_.plan.stripeRangeOffsets.clear();
@@ -393,9 +396,12 @@ void NimbleIndexProjector::clearRequest() {
   ctx_.dataInputIndices.clear();
   ctx_.dataHandle.reset();
   ctx_.packedStripes.clear();
+  ctx_.stripePackRanges.clear();
   ctx_.rowsPerRequest.clear();
   ctx_.sliceCounts.clear();
   ctx_.emittedSlices.clear();
+  ctx_.sliceOutputBuffer.reset();
+  ctx_.sliceOutputChunks.reset();
   ctx_.packScratch.clear();
   ctx_.streamViewsScratch.clear();
   dataInput_->clear();
@@ -523,14 +529,85 @@ NimbleIndexProjector::Result NimbleIndexProjector::processStripes() {
   Result result;
   result.responses.resize(ctx_.numRequests);
   ctx_.packedStripes.resize(ctx_.plan.stripeIndices.size());
+  const auto estimatedSliceOutputBytes = prepareStripePackRanges();
+  const bool hasSlicedStripes = estimatedSliceOutputBytes > 0;
+  if (hasSlicedStripes) {
+    ctx_.sliceOutputBuffer =
+        std::make_unique<Buffer>(*pool_, estimatedSliceOutputBytes);
+    ctx_.sliceOutputChunks = std::make_shared<std::vector<velox::BufferPtr>>();
+  }
 
   for (size_t i = 0; i < ctx_.plan.stripeIndices.size(); ++i) {
     ++stats_.numReadStripes;
-    ctx_.packedStripes[i] = packStripe(i);
+    ctx_.packedStripes[i] = packStripe(i, ctx_.stripePackRanges[i]);
+  }
+  if (hasSlicedStripes) {
+    finalizeSliceOutputBuffer();
   }
   setResumeKeys(result);
   buildResult(result);
   return result;
+}
+
+uint64_t NimbleIndexProjector::prepareStripePackRanges() {
+  uint64_t estimatedSlicedBytes{0};
+  ctx_.stripePackRanges.resize(ctx_.plan.stripeIndices.size());
+  for (size_t stripeOffset{0}; stripeOffset < ctx_.plan.stripeIndices.size();
+       ++stripeOffset) {
+    const RowRange stripeRange{0, ctx_.plan.numRows[stripeOffset]};
+    const auto packRange = stripeRowRangeToPack(stripeOffset);
+    ctx_.stripePackRanges[stripeOffset] = packRange;
+    if (packRange != stripeRange) {
+      // Full-stripe packing reuses loaded stream views; only sliced stripes
+      // need caller-owned output buffer capacity.
+      estimatedSlicedBytes +=
+          estimateSlicedStripeBytes(stripeOffset, packRange);
+    }
+  }
+  return estimatedSlicedBytes;
+}
+
+uint64_t NimbleIndexProjector::estimateSlicedStripeBytes(
+    size_t stripeOffset,
+    const RowRange& packRange) const {
+  NIMBLE_CHECK_LT(
+      stripeOffset,
+      ctx_.plan.stripeIndices.size(),
+      "Stripe offset is out of range");
+  const auto numRows = ctx_.plan.numRows[stripeOffset];
+  NIMBLE_CHECK_GT(numRows, 0, "Stripe must contain rows");
+  NIMBLE_CHECK_LE(
+      packRange.numRows(), numRows, "Pack range cannot exceed stripe rows");
+  const auto scaledBytes = static_cast<uint64_t>(std::ceil(
+      static_cast<double>(ctx_.plan.projectedBytes[stripeOffset]) *
+      packRange.numRows() / numRows));
+  // Sliced stream payload bytes scale with rows, but per-stream metadata and
+  // output-buffer allocation granularity need extra room.
+  const auto estimatedStreamOverheadBytes =
+      static_cast<uint64_t>(ctx_.plan.numStreams[stripeOffset]) * 32 + 4096;
+  return std::max(
+             scaledBytes + scaledBytes / 4,
+             ctx_.plan.projectedBytes[stripeOffset] / 2) +
+      estimatedStreamOverheadBytes;
+}
+
+Buffer& NimbleIndexProjector::sliceOutputBuffer() {
+  NIMBLE_CHECK_NOT_NULL(
+      ctx_.sliceOutputBuffer, "Sliced output buffer must be initialized");
+  return *ctx_.sliceOutputBuffer;
+}
+
+void NimbleIndexProjector::finalizeSliceOutputBuffer() {
+  NIMBLE_CHECK_NOT_NULL(
+      ctx_.sliceOutputBuffer, "Sliced output buffer must be initialized");
+  NIMBLE_CHECK_NOT_NULL(
+      ctx_.sliceOutputChunks, "Sliced output chunk owner must be initialized");
+  // Partial-stripe IOBuf nodes already hold shared_ptr copies to this vector.
+  // Populate it now so those nodes keep the transferred Buffer chunks alive,
+  // then drop the context's reference.
+  *ctx_.sliceOutputChunks = ctx_.sliceOutputBuffer->transferBuffers();
+  ctx_.sliceOutputBuffer.reset();
+  ctx_.sliceOutputChunks.reset();
 }
 
 uint64_t NimbleIndexProjector::appendStripePlan(
@@ -543,6 +620,7 @@ uint64_t NimbleIndexProjector::appendStripePlan(
   plan.numRows.push_back(stripeRowCount(stripeIndex));
   plan.requiresNullBarriers.push_back(false);
   plan.numStreams.push_back(0);
+  plan.projectedBytes.push_back(0);
   plan.stripeFileOffsets.push_back(tablet_->stripeOffset(stripeIndex));
   plan.stripeRangeOffsets.push_back(rangeOffset);
   plan.projectedStreams.resize((stripeOffset + 1) * numProjectedStreams);
@@ -566,6 +644,7 @@ uint64_t NimbleIndexProjector::appendStripePlan(
       plan.requiresNullBarriers.back() = true;
     }
   }
+  plan.projectedBytes.back() = projectedBytes;
   return projectedBytes;
 }
 
@@ -630,7 +709,8 @@ RowRange NimbleIndexProjector::stripeRowRangeToPack(size_t stripeOffset) const {
 }
 
 NimbleIndexProjector::PackedStripe NimbleIndexProjector::packStripe(
-    size_t stripeOffset) {
+    size_t stripeOffset,
+    const RowRange& packRange) {
   const auto numProjectedStreams = projection_->streamOffsets.size();
   auto& packScratch = ctx_.packScratch;
   SCOPE_EXIT {
@@ -638,7 +718,6 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packStripe(
   };
   packScratch.reserve(numProjectedStreams);
   const RowRange stripeRange{0, ctx_.plan.numRows[stripeOffset]};
-  const auto packRange = stripeRowRangeToPack(stripeOffset);
   if (packRange == stripeRange) {
     return packFullStripe(stripeOffset);
   }
@@ -832,7 +911,10 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packPartialStripe(
   const auto& loadedStreams =
       collectStripeStreamViews(stripeOffset, /*resolveCanonicalStreams=*/false);
   auto sliced = streamSlicer_->slice(
-      loadedStreams.streams, packRange.startRow, packRange.numRows());
+      loadedStreams.streams,
+      packRange.startRow,
+      packRange.numRows(),
+      &sliceOutputBuffer());
 
   size_t bodySize{0};
   auto& packScratch = ctx_.packScratch;
@@ -852,7 +934,9 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packPartialStripe(
   NIMBLE_CHECK_GT(
       bodySize, 0, "Non-empty partial stripe must produce a sliced body");
 
-  auto chain = std::make_unique<folly::IOBuf>(std::move(sliced.data));
+  auto slicedBody = serde::StreamSlicer::takeOwnershipAsIOBuf(
+      sliced.streams, std::shared_ptr<const void>{ctx_.sliceOutputChunks});
+  auto chain = std::make_unique<folly::IOBuf>(std::move(slicedBody));
   NIMBLE_CHECK_EQ(
       bodySize,
       chain->computeChainDataLength(),
