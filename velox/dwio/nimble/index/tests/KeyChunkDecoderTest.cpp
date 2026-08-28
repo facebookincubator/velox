@@ -25,7 +25,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/KeyChunkDecoder.h"
-#include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
+#include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
 
 namespace facebook::nimble::index {
 namespace {

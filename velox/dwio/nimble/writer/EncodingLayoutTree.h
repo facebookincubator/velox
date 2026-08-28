@@ -17,8 +17,8 @@
 
 #include <unordered_map>
 #include "folly/CppAttributes.h"
+#include "velox/dwio/nimble/common/SchemaTypes.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
-#include "velox/dwio/nimble/velox/SchemaTypes.h"
 
 namespace facebook::nimble {
 

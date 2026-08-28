@@ -28,7 +28,7 @@
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/IndexGenerated.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
-#include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
+#include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 
 namespace facebook::nimble::index::test {

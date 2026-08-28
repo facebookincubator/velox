@@ -58,7 +58,7 @@ target_link_libraries(
   nimble_index_test_utils
   nimble_tablet_reader
   nimble_tablet_writer
-  nimble_velox_reader
+  nimble_batch_reader
   nimble_writer
   velox_core
   velox_file
@@ -70,4 +70,30 @@ target_link_libraries(
   gtest
   gtest_main
   Folly::folly
+)
+
+# Moved from velox/index/tests/CMakeLists.txt when the nimble/velox/ folder was
+# flattened.
+add_executable(nimble_index_projector_test NimbleIndexProjectorTest.cpp)
+add_test(nimble_index_projector_test nimble_index_projector_test)
+
+target_link_libraries(
+  nimble_index_projector_test
+  nimble_index_projector
+  nimble_tablet_reader_cache
+  nimble_deserializer
+  nimble_serialization_header
+  nimble_serializer
+  nimble_stream_data_writer
+  nimble_velox_common
+  nimble_writer
+  nimble_velox_selective
+  nimble_velox_schema_utils
+  velox_dwio_common
+  velox_key_encoder
+  velox_memory
+  velox_vector_fuzzer
+  velox_vector_test_lib
+  gtest
+  gtest_main
 )

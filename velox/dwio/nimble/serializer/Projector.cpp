@@ -23,12 +23,12 @@
 
 #include "folly/io/Cursor.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
 #include "velox/dwio/nimble/serializer/legacy/TrailerReader.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/type/Type.h"
 
 namespace facebook::nimble::serde {

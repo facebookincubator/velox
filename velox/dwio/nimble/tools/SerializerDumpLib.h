@@ -20,10 +20,10 @@
 #include <string_view>
 #include <vector>
 
+#include "velox/dwio/nimble/common/SchemaReader.h"
+#include "velox/dwio/nimble/common/StreamLabels.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/serializer/Options.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
-#include "velox/dwio/nimble/velox/StreamLabels.h"
 
 namespace facebook::nimble::tools {
 

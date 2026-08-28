@@ -357,7 +357,7 @@ legacy::EncodingFactory()
 
 shared across all columns — default Options{}
 
-velox/dwio/nimble/velox/selective/SelectiveNimbleReader.cpp
+velox/dwio/nimble/selective/SelectiveNimbleReader.cpp
 
 3b
 
@@ -385,7 +385,7 @@ decodingStats\_
 
 all streams for the same column share the same decodingStats\_
 
-velox/dwio/nimble/velox/selective/NimbleData.cpp
+velox/dwio/nimble/selective/NimbleData.cpp
 
 3c
 
@@ -411,7 +411,7 @@ virtual
 
 zeroCopy
 
-velox/dwio/nimble/velox/selective/ChunkedDecoder.cpp
+velox/dwio/nimble/selective/ChunkedDecoder.cpp
 
 3d
 

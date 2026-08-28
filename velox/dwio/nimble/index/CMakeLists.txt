@@ -86,6 +86,25 @@ target_link_libraries(
   Folly::folly
 )
 
+# Moved from velox/index/CMakeLists.txt when the nimble/velox/ folder was
+# flattened.
+add_library(nimble_index_projector NimbleIndexProjector.cpp NimbleIndexProjector.h)
+target_link_libraries(
+  nimble_index_projector
+  nimble_data_input
+  nimble_index
+  nimble_stream_data_writer
+  nimble_stream_slicer
+  nimble_tablet_reader
+  nimble_tablet_reader_cache
+  nimble_velox_common
+  velox_caching
+  velox_time
+  velox_key_encoder
+  velox_type
+  Folly::folly
+)
+
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(tests)
 endif()

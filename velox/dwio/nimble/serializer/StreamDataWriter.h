@@ -32,6 +32,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
+#include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/Zigzag.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -39,8 +40,7 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/serializer/Options.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
-#include "velox/dwio/nimble/velox/RowRange.h"
-#include "velox/dwio/nimble/velox/StreamData.h"
+#include "velox/dwio/nimble/writer/StreamData.h"
 
 namespace facebook::nimble::serde {
 namespace detail {
@@ -549,7 +549,7 @@ std::string_view encodeNullableScalar(
 // StreamDataParser read back.
 //
 // NOTE: `nimble::StreamData` below is the writer-side buffer from
-// velox/dwio/nimble/velox/StreamData.h, NOT `serde::StreamData` from
+// velox/dwio/nimble/writer/StreamData.h, NOT `serde::StreamData` from
 // velox/dwio/nimble/serializer/StreamData.h. Keep every reference explicitly
 // qualified.
 template <typename T>

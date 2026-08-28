@@ -26,20 +26,20 @@
 #include "folly/cli/NestedCommandLineApp.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
+#include "velox/dwio/nimble/common/StatsGenerated.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
+#include "velox/dwio/nimble/reader/BatchReader.h"
+#include "velox/dwio/nimble/stats/ColumnStatistics.h"
+#include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FileLayout.h"
 #include "velox/dwio/nimble/tools/EncodingUtilities.h"
 #include "velox/dwio/nimble/tools/NimbleDumpLib.h"
-#include "velox/dwio/nimble/velox/StatsGenerated.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
-#include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
-#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 
 namespace facebook::nimble::tools {
@@ -491,7 +491,7 @@ void NimbleDumpLib::emitInfo() {
   ostream_ << "Row Count: " << commaSeparated(tablet->tabletRowCount())
            << std::endl;
 
-  VeloxReader reader{tablet, *pool_};
+  BatchReader reader{tablet, *pool_};
 
   auto statsSection = tablet->loadOptionalSection(std::string(kStatsSection));
   ostream_ << "Raw Data Size: ";
@@ -522,7 +522,7 @@ void NimbleDumpLib::emitSchema(bool collapseFlatMap) {
   options.ioOptions.emplace(pool_.get())
       .setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
   auto tablet = TabletReader::create(file_, pool_.get(), options);
-  VeloxReader reader{tablet, *pool_};
+  BatchReader reader{tablet, *pool_};
 
   auto emitOffsets = [](const Type& type) {
     std::string offsets;
@@ -708,12 +708,12 @@ void NimbleDumpLib::emitStreams(
   std::optional<StreamLabels> labels{};
   std::unordered_set<uint32_t> inMapStreams;
   if (showStreamLabels || showInMapStream) {
-    VeloxReader reader{tabletReader, *pool_};
+    BatchReader reader{tabletReader, *pool_};
     if (showStreamLabels) {
       labels.emplace(reader.schema());
     }
     if (showInMapStream) {
-      VeloxReader inMapReader{tabletReader, *pool_};
+      BatchReader inMapReader{tabletReader, *pool_};
       SchemaReader::traverseSchema(
           inMapReader.schema(),
           [&](auto /*level*/, const Type& type, auto /*info*/) {
@@ -1528,7 +1528,7 @@ void NimbleDumpLib::emitStats(bool noHeader) {
     auto fileStats = VectorizedFileStats::deserialize(
         vectorizedStatsSection->content(), *pool_);
 
-    VeloxReader reader{tabletReader, *pool_};
+    BatchReader reader{tabletReader, *pool_};
     auto columnStats =
         fileStats->toColumnStatistics(reader.type(), reader.schema());
 

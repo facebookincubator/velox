@@ -26,6 +26,8 @@
 
 #include "folly/Random.h"
 #include "folly/container/F14Set.h"
+#include "velox/dwio/nimble/common/SchemaBuilder.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
@@ -33,8 +35,6 @@
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
-#include "velox/dwio/nimble/velox/SchemaBuilder.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/type/Subfield.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"

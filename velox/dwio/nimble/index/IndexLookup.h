@@ -28,7 +28,7 @@
 
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
-#include "velox/dwio/nimble/velox/RowRange.h"
+#include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/serializers/KeyEncoder.h"
 
 namespace facebook::nimble {

@@ -29,7 +29,7 @@
 #include "velox/dwio/nimble/index/SortOrder.h"
 #include "velox/dwio/nimble/tablet/Chunk.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
-#include "velox/dwio/nimble/velox/StreamData.h"
+#include "velox/dwio/nimble/writer/StreamData.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::nimble::index {

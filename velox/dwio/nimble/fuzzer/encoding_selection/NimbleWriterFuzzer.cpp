@@ -43,8 +43,10 @@
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
+#include "velox/dwio/nimble/common/ChunkedStream.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
@@ -52,13 +54,11 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
+#include "velox/dwio/nimble/reader/BatchReader.h"
+#include "velox/dwio/nimble/stats/ColumnStatistics.h"
+#include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
-#include "velox/dwio/nimble/velox/ChunkedStream.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
-#include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
-#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/writer/EncodingSelectionPolicyFactory.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
@@ -871,9 +871,9 @@ void compareDecodedChunk(
 std::string_view toString(ReaderPath readerPath) {
   switch (readerPath) {
     case ReaderPath::kLegacyFactory:
-      return "VeloxReader/legacyFactory";
+      return "BatchReader/legacyFactory";
     case ReaderPath::kDefaultFactory:
-      return "VeloxReader/defaultFactory";
+      return "BatchReader/defaultFactory";
     case ReaderPath::kSelectiveLegacyDispatch:
       return "selective/legacyDispatch";
     case ReaderPath::kSelectiveDefaultDispatch:
@@ -1575,7 +1575,7 @@ void NimbleWriterFuzzer::verifySchemaAndStripeGroupConsistency(
 
   // Schema roundtrip: the Velox type reconstructed from the file must match
   // the type that was written.
-  VeloxReader reader(
+  BatchReader reader(
       std::make_shared<velox::InMemoryReadFile>(file), *leafPool_);
   NIMBLE_CHECK(
       schema->equivalent(*reader.type()),
@@ -1724,7 +1724,7 @@ void NimbleWriterFuzzer::readAndVerify(
 
   if (readerPath == ReaderPath::kLegacyFactory ||
       readerPath == ReaderPath::kDefaultFactory) {
-    VeloxReadParams params;
+    BatchReadParams params;
     if (readerPath == ReaderPath::kDefaultFactory) {
       params.encodingFactory =
           [](velox::memory::MemoryPool& pool,
@@ -1733,7 +1733,7 @@ void NimbleWriterFuzzer::readAndVerify(
             return EncodingFactory().create(pool, data, stringBufferFactory);
           };
     }
-    VeloxReader reader(readFile, *leafPool_, /*selector=*/nullptr, params);
+    BatchReader reader(readFile, *leafPool_, /*selector=*/nullptr, params);
     checkSchema(*reader.type());
 
     VectorPtr result;

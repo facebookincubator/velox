@@ -21,11 +21,11 @@
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
+#include "velox/dwio/nimble/reader/Decoder.h"
 #include "velox/dwio/nimble/serializer/BatchedStreamDecoder.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
-#include "velox/dwio/nimble/velox/Decoder.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 
 #include <algorithm>
 #include <limits>
