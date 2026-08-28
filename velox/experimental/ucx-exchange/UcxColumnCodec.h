@@ -51,6 +51,12 @@ enum class RegionCodec : int64_t {
   // The first value travels in the descriptor; delta outliers remain patched
   // exceptions rather than widening every value-bearing byte plane.
   kDeltaFreqPfor = 6,
+  // G-ALP-style exact decimal scaling, FOR bit-packing, and parallel
+  // exception patching for IEEE FP64 columns.
+  kFloat64Alp = 7,
+  // DietGPU byte-rANS over the exponent-bearing planes, with the remaining
+  // FP64 byte planes carried raw for byte-exact reconstruction.
+  kFloat64ExponentRans = 8,
 };
 
 /// One encoded region of the packed blob.
@@ -61,7 +67,9 @@ enum class RegionCodec : int64_t {
 ///                if kDictPfor:
 ///                  dictionarySize, packed uint16 dictionary words,
 ///                if kFreqPfor or kDeltaFreqPfor:
-///                  dictionarySize, exceptionCount]
+///                  dictionarySize, exceptionCount,
+///                if kFloat64Alp:
+///                  alpExponent, alpFactor, alpBitWidth, exceptionCount]
 /// kDictPfor has no rANS segments; its payload is one aligned rank byte per
 /// element. kFreqPfor's payload is:
 ///   [aligned rANS rank planes, aligned uint16 inverse dictionary,
@@ -83,10 +91,14 @@ struct EncodedRegion {
   // counts travel in the descriptor.
   uint32_t dictionarySize{0};
   uint32_t exceptionCount{0};
+  // G-ALP exponent/factor pair and FOR width.
+  uint32_t alpExponent{0};
+  uint32_t alpFactor{0};
+  uint32_t alpBitWidth{0};
 };
 
-/// Codec id for remainingBytes[0]. Version 7 adds kDeltaFreqPfor.
-constexpr int64_t kPerColumnMagic = 7;
+/// Codec id for remainingBytes[0]. Version 8 adds the FP64 codecs.
+constexpr int64_t kPerColumnMagic = 8;
 
 struct PackedCompressResult {
   struct RegionStats {
@@ -106,10 +118,14 @@ struct PackedCompressResult {
     RegionStats dictionaryPfor;
     RegionStats frequencyPfor;
     RegionStats deltaFrequencyPfor;
+    RegionStats float64Alp;
+    RegionStats float64ExponentRans;
     std::size_t residualRansAttempts{0};
     std::size_t residualRansAccepted{0};
     std::size_t residualRansInputBytes{0};
     std::size_t residualRansCandidateBytes{0};
+    std::size_t advancedRegionProbeAttempts{0};
+    std::size_t advancedRegionProbeSkips{0};
   };
 
   bool used{false};
@@ -138,7 +154,11 @@ PackedCompressResult compressPacked(
     rmm::cuda_stream_view stream,
     double minGain = 0.02,
     bool enableAdvancedCodecs = false,
-    std::size_t advancedCodecMinBytes = 0);
+    std::size_t advancedCodecMinBytes = 0,
+    double effectiveLinkBytesPerSecond = 0.0);
+
+/// Clears thread-local adaptive probe history. Intended for focused tests.
+void resetAdvancedProbeCacheForTesting();
 
 /// Reconstructs the packed blob (byte-exact) from encoded regions.
 rmm::device_buffer decompressPacked(

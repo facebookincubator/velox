@@ -115,7 +115,8 @@ void logPackedCompressionAttempt(
   const auto regions = stats.raw.regions + stats.byteRans.regions +
       stats.frameOfReference.regions + stats.deltaFrameOfReference.regions +
       stats.dictionaryPfor.regions + stats.frequencyPfor.regions +
-      stats.deltaFrequencyPfor.regions;
+      stats.deltaFrequencyPfor.regions + stats.float64Alp.regions +
+      stats.float64ExponentRans.regions;
   const auto wireBytes = accepted ? stats.candidateBytes : stats.inputBytes;
   VLOG(1) << "[UCX-CODEC-ATTEMPT] worker=" << workerId << " task=" << taskId
           << " destination=" << destination << " seq=" << sequenceNumber
@@ -123,6 +124,8 @@ void logPackedCompressionAttempt(
           << " accepted=" << accepted << " inputBytes=" << stats.inputBytes
           << " candidateBytes=" << stats.candidateBytes
           << " wireBytes=" << wireBytes << " seconds=" << seconds
+          << " advancedProbeAttempts=" << stats.advancedRegionProbeAttempts
+          << " advancedProbeSkips=" << stats.advancedRegionProbeSkips
           << " regions=" << regions << " rawRegions=" << stats.raw.regions
           << " rawInputBytes=" << stats.raw.inputBytes
           << " rawCandidateBytes=" << stats.raw.candidateBytes
@@ -146,6 +149,14 @@ void logPackedCompressionAttempt(
           << " deltaFreqPforInputBytes=" << stats.deltaFrequencyPfor.inputBytes
           << " deltaFreqPforCandidateBytes="
           << stats.deltaFrequencyPfor.candidateBytes
+          << " float64AlpRegions=" << stats.float64Alp.regions
+          << " float64AlpInputBytes=" << stats.float64Alp.inputBytes
+          << " float64AlpCandidateBytes=" << stats.float64Alp.candidateBytes
+          << " float64ExponentRansRegions=" << stats.float64ExponentRans.regions
+          << " float64ExponentRansInputBytes="
+          << stats.float64ExponentRans.inputBytes
+          << " float64ExponentRansCandidateBytes="
+          << stats.float64ExponentRans.candidateBytes
           << " residualRansAttempts=" << stats.residualRansAttempts
           << " residualRansAccepted=" << stats.residualRansAccepted
           << " residualRansInputBytes=" << stats.residualRansInputBytes
@@ -568,6 +579,13 @@ void UcxExchangeServer::startCompression() {
   const auto destination = partitionKey_.destination;
   const auto sequenceNumber = sequenceNumber_;
   const auto workerId = communicator_->getWorkerId();
+  double effectiveLinkBytesPerSecond = 0.0;
+  if (isAdaptiveCompressionMode(mode)) {
+    const auto observed = compressionDecision().effectiveTransferBytesPerSecond;
+    if (observed > 0.0) {
+      effectiveLinkBytesPerSecond = observed;
+    }
+  }
   submitCodecTask([work,
                    input,
                    mode,
@@ -575,7 +593,8 @@ void UcxExchangeServer::startCompression() {
                    workerId,
                    taskId,
                    destination,
-                   sequenceNumber]() mutable {
+                   sequenceNumber,
+                   effectiveLinkBytesPerSecond]() mutable {
     auto result = std::make_shared<AsyncCompressionResult>();
     PackedCompressResult::Stats packedStats;
     CompressResult::Stats blobStats;
@@ -604,7 +623,8 @@ void UcxExchangeServer::startCompression() {
                                           codecStream.view(),
                                           0.02,
                                           enablesAdvancedCodecs(mode),
-                                          advancedCodecMinBytes(mode));
+                                          advancedCodecMinBytes(mode),
+                                          effectiveLinkBytesPerSecond);
         packedStats = packed.stats;
         accepted = packed.used;
         if (packed.used) {
@@ -793,9 +813,17 @@ void UcxExchangeServer::sendData() {
         const bool blobMode = compressionAllowed && configuredBlob;
         const bool eligible = meetsCompressionMinimum(inputBytes);
         const bool adaptive = isAdaptiveCompressionMode(compressionMode);
-        const bool selectedRaw = adaptive && eligible && inputBytes > 0 &&
-            compressionDecision().action ==
-                UcxCompressionCostModel::Action::kRaw;
+        const auto* decision = adaptive && eligible && inputBytes > 0
+            ? &compressionDecision()
+            : nullptr;
+        const bool selectedRaw = decision != nullptr &&
+            decision->action == UcxCompressionCostModel::Action::kRaw;
+        double effectiveLinkBytesPerSecond = 0.0;
+        if (decision != nullptr &&
+            decision->effectiveTransferBytesPerSecond > 0.0) {
+          effectiveLinkBytesPerSecond =
+              decision->effectiveTransferBytesPerSecond;
+        }
         if (inputBytes > 0 && (!eligible || selectedRaw) &&
             (packedMode || blobMode)) {
           if (packedMode) {
@@ -837,7 +865,8 @@ void UcxExchangeServer::sendData() {
                     columnStream.view(),
                     0.02,
                     enablesAdvancedCodecs(compressionMode),
-                    advancedCodecMinBytes(compressionMode));
+                    advancedCodecMinBytes(compressionMode),
+                    effectiveLinkBytesPerSecond);
           const double encSeconds =
               std::chrono::duration<double>(
                   std::chrono::steady_clock::now() - encodeStart)

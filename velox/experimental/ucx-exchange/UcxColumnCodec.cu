@@ -15,12 +15,15 @@
  */
 #include "velox/experimental/ucx-exchange/UcxColumnCodec.h"
 #include "velox/experimental/ucx-exchange/UcxCompression.h"
+#include "velox/experimental/ucx-exchange/UcxFloat64AlpCodec.h"
+#include "velox/experimental/ucx-exchange/UcxFloat64Codec.h"
 
 #include <algorithm>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <unordered_map>
 
 #include <cuda_runtime.h>
 #include <fmt/format.h>
@@ -63,6 +66,11 @@ constexpr double kFreqPforMinTop256Mass = 0.50;
 constexpr double kFreqPforSelectionRatio = 0.90;
 // Three uint16 dictionary entries fit in a positive int64 descriptor word.
 constexpr std::size_t kDictionaryCodesPerWord = 3;
+constexpr std::size_t kMinFloat64CodecElems = 1u << 20;
+// This fallback sends six of eight FP64 byte planes raw, so its theoretical
+// byte reduction is capped at 25%. Its measured encode/decode cost cannot
+// repay the transfer saving above this conservative link rate.
+constexpr double kFloat64ExponentRansMaxLinkBytesPerSecond = 20e9;
 
 // DietGPU kernels use word loads; every device pointer handed to them must
 // be 16-byte aligned. Planes use an aligned stride; wire segments are placed
@@ -97,6 +105,12 @@ void recordRegionStats(
       break;
     case RegionCodec::kDeltaFreqPfor:
       target = &stats.deltaFrequencyPfor;
+      break;
+    case RegionCodec::kFloat64Alp:
+      target = &stats.float64Alp;
+      break;
+    case RegionCodec::kFloat64ExponentRans:
+      target = &stats.float64ExponentRans;
       break;
     default:
       throw std::runtime_error(
@@ -565,6 +579,78 @@ struct TypedRegion {
   int32_t scale{0}; // cuDF fixed-point exponent; zero for non-decimals
 };
 
+constexpr uint8_t kAdvancedProbeSkipCount = 7;
+constexpr std::size_t kAdvancedProbeCacheLimit = 4096;
+
+// This cache is only a performance hint. A false match skips optional codec
+// candidates without affecting correctness, and every eighth matching region
+// is probed again so a changed distribution can select an advanced codec.
+
+using AdvancedProbeCache = std::unordered_map<uint64_t, uint8_t>;
+
+AdvancedProbeCache& advancedProbeCache() {
+  static thread_local AdvancedProbeCache cache;
+  return cache;
+}
+
+uint64_t mixAdvancedProbeKey(uint64_t hash, uint64_t value) {
+  return hash ^ (value + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2));
+}
+
+uint64_t advancedProbeLayoutHash(const std::vector<TypedRegion>& typed) {
+  uint64_t hash = mixAdvancedProbeKey(0xcbf29ce484222325ULL, typed.size());
+  for (const auto& region : typed) {
+    hash = mixAdvancedProbeKey(hash, static_cast<uint32_t>(region.typeId));
+    hash = mixAdvancedProbeKey(hash, static_cast<uint32_t>(region.scale));
+    hash = mixAdvancedProbeKey(hash, static_cast<uint32_t>(region.width));
+  }
+  return hash;
+}
+
+uint64_t advancedProbeKey(
+    uint64_t layoutHash,
+    std::size_t regionIndex,
+    std::size_t elems) {
+  uint32_t sizeClass = 0;
+  for (auto value = elems; value > 1; value >>= 1) {
+    ++sizeClass;
+  }
+  auto hash = mixAdvancedProbeKey(layoutHash, regionIndex);
+  return mixAdvancedProbeKey(hash, sizeClass);
+}
+
+bool shouldRunAdvancedProbe(uint64_t key) {
+  auto& cache = advancedProbeCache();
+  const auto entry = cache.find(key);
+  if (entry == cache.end()) {
+    return true;
+  }
+  if (entry->second > 0) {
+    --entry->second;
+    return false;
+  }
+  cache.erase(entry);
+  return true;
+}
+
+void recordAdvancedProbeResult(uint64_t key, bool advancedWinner) {
+  auto& cache = advancedProbeCache();
+  if (advancedWinner) {
+    cache.erase(key);
+    return;
+  }
+  if (cache.size() >= kAdvancedProbeCacheLimit &&
+      cache.find(key) == cache.end()) {
+    cache.clear();
+  }
+  cache[key] = kAdvancedProbeSkipCount;
+}
+
+bool isAdvancedIntegerCodec(RegionCodec codec) {
+  return codec == RegionCodec::kDictPfor || codec == RegionCodec::kFreqPfor ||
+      codec == RegionCodec::kDeltaFreqPfor;
+}
+
 // Recursively collects fixed-width numeric data-buffer regions.
 void collectTypedRegions(
     const cudf::column_view& col,
@@ -599,7 +685,9 @@ std::pair<rmm::device_buffer, std::vector<int64_t>> encodePlanes(
     uint32_t stride,
     int width,
     PlaneArena& arena,
-    rmm::cuda_stream_view stream) {
+    rmm::cuda_stream_view stream,
+    const uint32_t* auxiliaryCountDevice = nullptr,
+    uint32_t* auxiliaryCountHost = nullptr) {
   const uint32_t maxComp = alignedStride(dietgpu::getMaxCompressedSize(n));
   rmm::device_buffer scratch(static_cast<std::size_t>(width) * maxComp, stream);
   rmm::device_buffer sizesDev(width * sizeof(uint32_t), stream);
@@ -621,8 +709,19 @@ std::pair<rmm::device_buffer, std::vector<int64_t>> encodePlanes(
       width * sizeof(uint32_t),
       cudaMemcpyDeviceToHost,
       stream.value()));
+  if (auxiliaryCountDevice != nullptr && auxiliaryCountHost != nullptr) {
+    UCX_CUDA_CHECK(cudaMemcpyAsync(
+        pinnedStage().sizes + 63,
+        auxiliaryCountDevice,
+        sizeof(uint32_t),
+        cudaMemcpyDeviceToHost,
+        stream.value()));
+  }
   UCX_CUDA_CHECK(cudaStreamSynchronize(stream.value()));
   std::vector<uint32_t> sizes(pinnedStage().sizes, pinnedStage().sizes + width);
+  if (auxiliaryCountDevice != nullptr && auxiliaryCountHost != nullptr) {
+    *auxiliaryCountHost = pinnedStage().sizes[63];
+  }
 
   std::size_t total = 0;
   for (auto s : sizes) {
@@ -1087,6 +1186,7 @@ DictionaryPforEncoding tryEncodeDecimalLattice(
 }
 
 // Decodes `segSizes.size()` planes of n bytes each into plane-major scratch.
+// Negative segment sizes mark raw planes. Positive sizes use DietGPU rANS.
 rmm::device_buffer decodePlanes(
     const uint8_t* src,
     const std::vector<int64_t>& segSizes,
@@ -1096,32 +1196,255 @@ rmm::device_buffer decodePlanes(
   const auto width = segSizes.size();
   const uint32_t stride = alignedStride(n);
   rmm::device_buffer planes(static_cast<std::size_t>(width) * stride, stream);
-  std::vector<const void*> inPtrs(width);
-  std::vector<void*> outPtrs(width);
-  std::vector<uint32_t> outCaps(width, n);
+  std::vector<const void*> inPtrs;
+  std::vector<void*> outPtrs;
+  std::vector<uint32_t> outCaps;
+  inPtrs.reserve(width);
+  outPtrs.reserve(width);
+  outCaps.reserve(width);
   std::size_t off = 0;
-  for (std::size_t k = 0; k < width; ++k) {
-    inPtrs[k] = src + off;
-    off += roundUp16(segSizes[k]);
-    outPtrs[k] = static_cast<uint8_t*>(planes.data()) + k * stride;
+  std::size_t planeIndex = 0;
+  while (planeIndex < width) {
+    if (segSizes[planeIndex] < 0) {
+      const std::size_t firstRaw = planeIndex;
+      while (planeIndex < width && segSizes[planeIndex] < 0) {
+        if (static_cast<std::size_t>(-segSizes[planeIndex]) != n) {
+          throw std::runtime_error(
+              "ucx-exchange column codec: raw plane size is invalid");
+        }
+        ++planeIndex;
+      }
+      const std::size_t rawBytes = (planeIndex - firstRaw) * stride;
+      UCX_CUDA_CHECK(cudaMemcpyAsync(
+          static_cast<uint8_t*>(planes.data()) + firstRaw * stride,
+          src + off,
+          rawBytes,
+          cudaMemcpyDeviceToDevice,
+          stream.value()));
+      off += rawBytes;
+      continue;
+    }
+
+    const auto segmentSize = static_cast<std::size_t>(segSizes[planeIndex]);
+    inPtrs.push_back(src + off);
+    outPtrs.push_back(
+        static_cast<uint8_t*>(planes.data()) + planeIndex * stride);
+    outCaps.push_back(n);
+    off += roundUp16(segmentSize);
+    ++planeIndex;
   }
-  auto status = dietgpu::ansDecodeBatchPointer(
-      arena.stack,
-      dietgpu::ANSCodecConfig(kProbBits, kUseChecksum),
-      width,
-      inPtrs.data(),
-      outPtrs.data(),
-      outCaps.data(),
-      nullptr,
-      nullptr,
-      stream.value());
-  if (status.error != dietgpu::ANSDecodeError::None) {
-    throw std::runtime_error("ucx-exchange column codec: plane decode failed");
+  if (!inPtrs.empty()) {
+    auto status = dietgpu::ansDecodeBatchPointer(
+        arena.stack,
+        dietgpu::ANSCodecConfig(kProbBits, kUseChecksum),
+        inPtrs.size(),
+        inPtrs.data(),
+        outPtrs.data(),
+        outCaps.data(),
+        nullptr,
+        nullptr,
+        stream.value());
+    if (status.error != dietgpu::ANSDecodeError::None) {
+      throw std::runtime_error(
+          "ucx-exchange column codec: plane decode failed");
+    }
   }
   // The shared per-chunk arena remains alive until decompressPacked performs
   // one final synchronization. Successive regions use the same stream, so
   // scratch reuse remains ordered without a host wait here.
   return planes;
+}
+
+std::pair<rmm::device_buffer, std::vector<int64_t>> encodeAlpPlanes(
+    rmm::device_buffer planes,
+    uint32_t n,
+    uint32_t stride,
+    int width,
+    uint32_t bitWidth,
+    std::unique_ptr<PlaneArena>& arena,
+    rmm::cuda_stream_view stream) {
+  // ALP removes decimal scale and leaves dense integers. Their low bytes are
+  // normally entropy-flat. Apply rANS to the range-limited top byte only when
+  // its bit width bounds the alphabet to 64 symbols or fewer. Otherwise even
+  // ideal entropy coding cannot repay its GPU work on the target link.
+  const uint32_t topBits = bitWidth - 8 * (width - 1);
+  const bool useTopRans = topBits <= 6;
+  const int rawPlanes = useTopRans ? width - 1 : width;
+  uint32_t topSize = 0;
+  rmm::device_buffer scratch;
+  if (useTopRans) {
+    if (!arena) {
+      arena = std::make_unique<PlaneArena>(stream);
+    }
+    const uint32_t maxComp = alignedStride(dietgpu::getMaxCompressedSize(n));
+    scratch = rmm::device_buffer(maxComp, stream);
+    rmm::device_buffer sizeDevice(sizeof(uint32_t), stream);
+    dietgpu::ansEncodeBatchStride(
+        arena->stack,
+        dietgpu::ANSCodecConfig(kProbBits, kUseChecksum),
+        1,
+        static_cast<const uint8_t*>(planes.data()) +
+            static_cast<std::size_t>(rawPlanes) * stride,
+        n,
+        stride,
+        nullptr,
+        scratch.data(),
+        maxComp,
+        static_cast<uint32_t*>(sizeDevice.data()),
+        stream.value());
+    UCX_CUDA_CHECK(cudaMemcpyAsync(
+        pinnedStage().sizes,
+        sizeDevice.data(),
+        sizeof(uint32_t),
+        cudaMemcpyDeviceToHost,
+        stream.value()));
+  }
+  if (useTopRans) {
+    UCX_CUDA_CHECK(cudaStreamSynchronize(stream.value()));
+    topSize = pinnedStage().sizes[0];
+  }
+
+  std::vector<int64_t> sizes(width, -static_cast<int64_t>(n));
+  if (useTopRans) {
+    sizes.back() = topSize;
+  } else {
+    return {std::move(planes), std::move(sizes)};
+  }
+  const std::size_t rawPlaneBytes = roundUp16(n);
+  const std::size_t total =
+      static_cast<std::size_t>(rawPlanes) * rawPlaneBytes +
+      (useTopRans ? roundUp16(topSize) : 0);
+  rmm::device_buffer output(total, stream);
+  std::size_t offset = static_cast<std::size_t>(rawPlanes) * rawPlaneBytes;
+  if (rawPlanes != 0) {
+    UCX_CUDA_CHECK(cudaMemcpyAsync(
+        output.data(),
+        planes.data(),
+        offset,
+        cudaMemcpyDeviceToDevice,
+        stream.value()));
+  }
+  if (useTopRans) {
+    UCX_CUDA_CHECK(cudaMemcpyAsync(
+        static_cast<uint8_t*>(output.data()) + offset,
+        scratch.data(),
+        topSize,
+        cudaMemcpyDeviceToDevice,
+        stream.value()));
+  }
+  return {std::move(output), std::move(sizes)};
+}
+
+void encodeFloat64Region(
+    const uint8_t* blobBase,
+    const TypedRegion& region,
+    rmm::cuda_stream_view stream,
+    std::unique_ptr<PlaneArena>& arena,
+    std::vector<EncodedRegion>& regions,
+    std::vector<rmm::device_buffer>& payloads,
+    double effectiveLinkBytesPerSecond) {
+  const auto* values =
+      reinterpret_cast<const double*>(blobBase + region.offset);
+  const uint32_t numValues = region.elems;
+  const std::size_t rawBytes =
+      static_cast<std::size_t>(numValues) * sizeof(double);
+
+  EncodedRegion output;
+  output.blobOffset = region.offset;
+  output.rawBytes = rawBytes;
+  output.elemWidth = sizeof(double);
+
+  {
+    const uint32_t stride = alignedStride(numValues);
+    auto alp = encodeFloat64AlpPlanes(values, numValues, stride, stream);
+    const uint32_t exceptionCount = alp.exceptionCount;
+    const std::size_t exceptionLowerBound =
+        roundUp16(static_cast<std::size_t>(exceptionCount) * sizeof(uint32_t)) +
+        roundUp16(static_cast<std::size_t>(exceptionCount) * sizeof(uint64_t));
+    if (static_cast<double>(exceptionLowerBound) <= 0.98 * rawBytes) {
+      const int planeWidth = static_cast<int>(alp.planeWidth);
+      rmm::device_buffer planePayload;
+      std::vector<int64_t> planeSizes;
+      finalizeFloat64AlpExceptions(values, exceptionCount, alp, stream);
+      if (planeWidth != 0) {
+        auto encoded = encodeAlpPlanes(
+            std::move(alp.planes),
+            numValues,
+            stride,
+            planeWidth,
+            alp.bitWidth,
+            arena,
+            stream);
+        planePayload = std::move(encoded.first);
+        planeSizes = std::move(encoded.second);
+      }
+
+      const std::size_t candidateBytes =
+          planePayload.size() + alp.exceptionBytes;
+      if (static_cast<double>(candidateBytes) <= 0.98 * rawBytes) {
+        rmm::device_buffer payload;
+        if (alp.exceptionBytes == 0) {
+          payload = std::move(planePayload);
+        } else {
+          payload = rmm::device_buffer(candidateBytes, stream);
+          if (!planeSizes.empty()) {
+            UCX_CUDA_CHECK(cudaMemcpyAsync(
+                payload.data(),
+                planePayload.data(),
+                planePayload.size(),
+                cudaMemcpyDeviceToDevice,
+                stream.value()));
+          }
+        }
+        if (alp.exceptionBytes != 0) {
+          UCX_CUDA_CHECK(cudaMemcpyAsync(
+              static_cast<uint8_t*>(payload.data()) + planePayload.size(),
+              alp.exceptionData.data(),
+              alp.exceptionBytes,
+              cudaMemcpyDeviceToDevice,
+              stream.value()));
+        }
+        output.codec = RegionCodec::kFloat64Alp;
+        output.base = alp.base;
+        output.exceptionCount = alp.exceptionCount;
+        output.alpExponent = alp.exponentIndex;
+        output.alpFactor = alp.factorIndex;
+        output.alpBitWidth = alp.bitWidth;
+        output.segSizes = std::move(planeSizes);
+        payloads.push_back(std::move(payload));
+        regions.push_back(std::move(output));
+        return;
+      }
+    }
+  }
+
+  if (effectiveLinkBytesPerSecond >=
+      kFloat64ExponentRansMaxLinkBytesPerSecond) {
+    output.codec = RegionCodec::kRaw;
+    payloads.emplace_back();
+    regions.push_back(std::move(output));
+    return;
+  }
+
+  constexpr uint32_t kExponentPlanes = 2;
+  if (!arena) {
+    arena = std::make_unique<PlaneArena>(stream);
+  }
+  auto exponent = compressFloat64WithScratch(
+      values, numValues, kExponentPlanes, stream, arena->stack);
+  if (static_cast<double>(exponent.candidateBytes) <= 0.98 * rawBytes) {
+    output.codec = RegionCodec::kFloat64ExponentRans;
+    output.segSizes.assign(
+        exponent.exponentSegmentSizes.begin(),
+        exponent.exponentSegmentSizes.end());
+    payloads.push_back(std::move(exponent.data));
+    regions.push_back(std::move(output));
+    return;
+  }
+
+  output.codec = RegionCodec::kRaw;
+  payloads.emplace_back();
+  regions.push_back(std::move(output));
 }
 
 template <typename T>
@@ -1537,6 +1860,10 @@ void decodeTypedRegion(
 
 } // namespace
 
+void resetAdvancedProbeCacheForTesting() {
+  advancedProbeCache().clear();
+}
+
 PackedCompressResult compressPackedFor(
     const void* gpuData,
     std::size_t size,
@@ -1609,7 +1936,8 @@ PackedCompressResult compressPacked(
     rmm::cuda_stream_view stream,
     double minGain,
     bool enableAdvancedCodecs,
-    std::size_t advancedCodecMinBytes) {
+    std::size_t advancedCodecMinBytes,
+    double effectiveLinkBytesPerSecond) {
   PackedCompressResult result;
   result.stats.attempted = true;
   result.stats.inputBytes = size;
@@ -1626,7 +1954,7 @@ PackedCompressResult compressPacked(
 
   std::vector<EncodedRegion> regions;
   std::vector<rmm::device_buffer> payloads;
-  auto arena = typed.empty() ? nullptr : std::make_unique<PlaneArena>(stream);
+  std::unique_ptr<PlaneArena> arena;
   std::size_t cursor = 0;
 
   auto addResidual = [&](std::size_t offset, std::size_t bytes) {
@@ -1666,13 +1994,62 @@ PackedCompressResult compressPacked(
     regions.push_back(std::move(region));
   };
 
-  for (const auto& region : typed) {
+  const uint64_t probeLayoutHash =
+      enableAdvancedCodecs ? advancedProbeLayoutHash(typed) : 0;
+  for (std::size_t regionIndex = 0; regionIndex < typed.size(); ++regionIndex) {
+    const auto& region = typed[regionIndex];
     const std::size_t regionBytes = region.elems * region.width;
     if (region.offset < cursor) {
       continue; // overlap safety; leave to residual coverage of earlier pass
     }
     addResidual(cursor, region.offset - cursor);
-    if (region.width == 8) {
+    const bool useFloat64Codec = enableAdvancedCodecs &&
+        region.typeId == static_cast<int32_t>(cudf::type_id::FLOAT64) &&
+        region.elems >= kMinFloat64CodecElems;
+    const bool advancedIntegerEligible = enableAdvancedCodecs &&
+        !useFloat64Codec && regionBytes >= advancedCodecMinBytes &&
+        region.elems >= kMinFreqPforElems;
+    const bool float64ProbeEligible = useFloat64Codec &&
+        effectiveLinkBytesPerSecond >=
+            kFloat64ExponentRansMaxLinkBytesPerSecond;
+    const bool advancedProbeEligible =
+        advancedIntegerEligible || float64ProbeEligible;
+    const uint64_t probeKey = advancedProbeEligible
+        ? advancedProbeKey(probeLayoutHash, regionIndex, region.elems)
+        : 0;
+    const bool runAdvancedProbe =
+        !advancedProbeEligible || shouldRunAdvancedProbe(probeKey);
+    if (advancedProbeEligible) {
+      if (runAdvancedProbe) {
+        ++result.stats.advancedRegionProbeAttempts;
+      } else {
+        ++result.stats.advancedRegionProbeSkips;
+      }
+    }
+
+    if (useFloat64Codec) {
+      if (runAdvancedProbe) {
+        encodeFloat64Region(
+            blobBase,
+            region,
+            stream,
+            arena,
+            regions,
+            payloads,
+            effectiveLinkBytesPerSecond);
+      } else {
+        EncodedRegion output;
+        output.blobOffset = region.offset;
+        output.rawBytes = regionBytes;
+        output.elemWidth = region.width;
+        output.codec = RegionCodec::kRaw;
+        payloads.emplace_back();
+        regions.push_back(std::move(output));
+      }
+    } else if (region.width == 8) {
+      if (!arena) {
+        arena = std::make_unique<PlaneArena>(stream);
+      }
       encodeTypedRegion<int64_t>(
           blobBase,
           region,
@@ -1681,9 +2058,12 @@ PackedCompressResult compressPacked(
           regions,
           payloads,
           /*forOnly=*/false,
-          enableAdvancedCodecs,
+          enableAdvancedCodecs && runAdvancedProbe,
           advancedCodecMinBytes);
     } else {
+      if (!arena) {
+        arena = std::make_unique<PlaneArena>(stream);
+      }
       encodeTypedRegion<int32_t>(
           blobBase,
           region,
@@ -1692,8 +2072,14 @@ PackedCompressResult compressPacked(
           regions,
           payloads,
           /*forOnly=*/false,
-          enableAdvancedCodecs,
+          enableAdvancedCodecs && runAdvancedProbe,
           advancedCodecMinBytes);
+    }
+    if (advancedProbeEligible && runAdvancedProbe) {
+      const bool advancedWinner = float64ProbeEligible
+          ? regions.back().codec == RegionCodec::kFloat64Alp
+          : isAdvancedIntegerCodec(regions.back().codec);
+      recordAdvancedProbeResult(probeKey, advancedWinner);
     }
     cursor = region.offset + regionBytes;
   }
@@ -1709,6 +2095,17 @@ PackedCompressResult compressPacked(
   }
   result.stats.candidateBytes = total;
   if (static_cast<double>(total) > (1.0 - minGain) * size) {
+    return result;
+  }
+
+  if (regions.size() == 1 && regions.front().codec != RegionCodec::kRaw &&
+      regions.front().blobOffset == 0 &&
+      static_cast<std::size_t>(regions.front().rawBytes) == size &&
+      payloads.front().size() == total) {
+    result.data = std::move(payloads.front());
+    UCX_CUDA_CHECK(cudaStreamSynchronize(stream.value()));
+    result.regions = std::move(regions);
+    result.used = true;
     return result;
   }
 
@@ -1770,6 +2167,120 @@ rmm::device_buffer decompressPacked(
             region.rawBytes,
             cudaMemcpyDeviceToDevice,
             stream.value()));
+        break;
+      }
+      case RegionCodec::kFloat64Alp: {
+        const auto numValues = static_cast<uint32_t>(
+            region.rawBytes / static_cast<int64_t>(sizeof(double)));
+        if (region.segSizes.empty()) {
+          const std::size_t groups =
+              (static_cast<std::size_t>(numValues) + 31) / 32;
+          encodedBytes =
+              roundUp16(groups * region.alpBitWidth * sizeof(uint32_t));
+          encodedBytes += roundUp16(
+              static_cast<std::size_t>(region.exceptionCount) *
+              sizeof(uint32_t));
+          encodedBytes += roundUp16(
+              static_cast<std::size_t>(region.exceptionCount) *
+              sizeof(uint64_t));
+          decompressFloat64AlpPayloadInto(
+              wire + off,
+              encodedBytes,
+              numValues,
+              region.exceptionCount,
+              region.alpExponent,
+              region.alpFactor,
+              region.alpBitWidth,
+              region.base,
+              reinterpret_cast<double*>(blobBase + region.blobOffset),
+              stream);
+          break;
+        }
+
+        std::size_t planeBytes = 0;
+        for (const auto size : region.segSizes) {
+          planeBytes +=
+              roundUp16(static_cast<std::size_t>(size < 0 ? -size : size));
+        }
+        const std::size_t exceptionBytes = roundUp16(
+            static_cast<std::size_t>(region.exceptionCount) * sizeof(uint32_t));
+        const std::size_t exceptionValueBytes = roundUp16(
+            static_cast<std::size_t>(region.exceptionCount) * sizeof(uint64_t));
+        encodedBytes = planeBytes + exceptionBytes + exceptionValueBytes;
+        const bool allPlanesRaw = std::all_of(
+            region.segSizes.begin(), region.segSizes.end(), [](int64_t size) {
+              return size < 0;
+            });
+        if (allPlanesRaw && region.segSizes.size() <= 4) {
+          reconstructFloat64AlpRawPlanesInto(
+              wire + off,
+              alignedStride(numValues),
+              static_cast<uint32_t>(region.segSizes.size()),
+              region.base,
+              wire + off + planeBytes,
+              numValues,
+              region.exceptionCount,
+              region.alpExponent,
+              region.alpFactor,
+              reinterpret_cast<double*>(blobBase + region.blobOffset),
+              stream);
+          break;
+        }
+        rmm::device_buffer decodedPlanes;
+        const uint8_t* planeData = wire + off;
+        if (!allPlanesRaw) {
+          if (!arena) {
+            arena = std::make_unique<PlaneArena>(stream);
+          }
+          decodedPlanes = decodePlanes(
+              wire + off, region.segSizes, numValues, *arena, stream);
+          planeData = static_cast<const uint8_t*>(decodedPlanes.data());
+        }
+        rmm::device_buffer encodedValues(
+            static_cast<std::size_t>(numValues) * sizeof(int64_t), stream);
+        const int threads = 256;
+        const int blocks = (numValues + threads - 1) / threads;
+        recombAddKernel<int64_t><<<blocks, threads, 0, stream.value()>>>(
+            planeData,
+            region.base,
+            static_cast<int64_t*>(encodedValues.data()),
+            numValues,
+            alignedStride(numValues),
+            region.segSizes.size());
+        UCX_CUDA_CHECK(cudaGetLastError());
+        reconstructFloat64AlpIntegersInto(
+            static_cast<const int64_t*>(encodedValues.data()),
+            wire + off + planeBytes,
+            numValues,
+            region.exceptionCount,
+            region.alpExponent,
+            region.alpFactor,
+            reinterpret_cast<double*>(blobBase + region.blobOffset),
+            stream);
+        break;
+      }
+      case RegionCodec::kFloat64ExponentRans: {
+        const auto numValues = static_cast<uint32_t>(
+            region.rawBytes / static_cast<int64_t>(sizeof(double)));
+        for (const auto size : region.segSizes) {
+          encodedBytes += roundUp16(size);
+        }
+        encodedBytes += (sizeof(double) - region.segSizes.size()) *
+            alignedStride(numValues);
+        std::vector<uint32_t> segmentSizes(
+            region.segSizes.begin(), region.segSizes.end());
+        if (!arena) {
+          arena = std::make_unique<PlaneArena>(stream);
+        }
+        decompressFloat64PayloadIntoWithScratch(
+            wire + off,
+            encodedBytes,
+            segmentSizes,
+            static_cast<uint32_t>(segmentSizes.size()),
+            numValues,
+            reinterpret_cast<double*>(blobBase + region.blobOffset),
+            stream,
+            arena->stack);
         break;
       }
       case RegionCodec::kDictPfor: {
@@ -1874,6 +2385,11 @@ void serializeRegions(
         region.codec == RegionCodec::kDeltaFreqPfor) {
       out.push_back(static_cast<int64_t>(region.dictionarySize));
       out.push_back(static_cast<int64_t>(region.exceptionCount));
+    } else if (region.codec == RegionCodec::kFloat64Alp) {
+      out.push_back(static_cast<int64_t>(region.alpExponent));
+      out.push_back(static_cast<int64_t>(region.alpFactor));
+      out.push_back(static_cast<int64_t>(region.alpBitWidth));
+      out.push_back(static_cast<int64_t>(region.exceptionCount));
     }
   }
 }
@@ -1899,7 +2415,7 @@ bool deserializeRegions(
     region.rawBytes = in[pos++];
     const auto codecValue = in[pos++];
     if (codecValue < static_cast<int64_t>(RegionCodec::kRaw) ||
-        codecValue > static_cast<int64_t>(RegionCodec::kDeltaFreqPfor)) {
+        codecValue > static_cast<int64_t>(RegionCodec::kFloat64ExponentRans)) {
       return false;
     }
     region.codec = static_cast<RegionCodec>(codecValue);
@@ -1916,7 +2432,8 @@ bool deserializeRegions(
     }
     region.segSizes.assign(in.begin() + pos, in.begin() + pos + numSegs);
     pos += numSegs;
-    if (std::any_of(
+    if (region.codec != RegionCodec::kFloat64Alp &&
+        std::any_of(
             region.segSizes.begin(), region.segSizes.end(), [](int64_t size) {
               return size < 0;
             })) {
@@ -1956,6 +2473,44 @@ bool deserializeRegions(
       }
       region.dictionarySize = static_cast<uint32_t>(in[pos++]);
       region.exceptionCount = static_cast<uint32_t>(in[pos++]);
+    } else if (region.codec == RegionCodec::kFloat64Alp) {
+      if (pos + 4 > in.size() || region.elemWidth != 8 ||
+          region.rawBytes % static_cast<int64_t>(sizeof(double)) != 0 ||
+          in[pos] < 0 || in[pos] >= 19 || in[pos + 1] < 0 ||
+          in[pos + 1] > in[pos] || in[pos + 2] < 0 || in[pos + 2] > 64 ||
+          (numSegs != 0 &&
+           numSegs != static_cast<std::size_t>((in[pos + 2] + 7) / 8)) ||
+          std::any_of(
+              region.segSizes.begin(),
+              region.segSizes.end(),
+              [&](int64_t size) {
+                const int64_t rawPlaneMarker =
+                    -region.rawBytes / static_cast<int64_t>(sizeof(double));
+                return size != rawPlaneMarker &&
+                    (size <= 0 ||
+                     static_cast<uint64_t>(size) >
+                         std::numeric_limits<uint32_t>::max());
+              }) ||
+          in[pos + 3] < 0 ||
+          static_cast<uint64_t>(in[pos + 3]) >
+              static_cast<uint64_t>(
+                  region.rawBytes / static_cast<int64_t>(sizeof(double)))) {
+        return false;
+      }
+      region.alpExponent = static_cast<uint32_t>(in[pos++]);
+      region.alpFactor = static_cast<uint32_t>(in[pos++]);
+      region.alpBitWidth = static_cast<uint32_t>(in[pos++]);
+      region.exceptionCount = static_cast<uint32_t>(in[pos++]);
+    } else if (region.codec == RegionCodec::kFloat64ExponentRans) {
+      if ((numSegs != 1 && numSegs != 2) || region.elemWidth != 8 ||
+          region.rawBytes % static_cast<int64_t>(sizeof(double)) != 0 ||
+          std::any_of(
+              region.segSizes.begin(), region.segSizes.end(), [](int64_t size) {
+                return static_cast<uint64_t>(size) >
+                    std::numeric_limits<uint32_t>::max();
+              })) {
+        return false;
+      }
     }
     regions.push_back(std::move(region));
   }

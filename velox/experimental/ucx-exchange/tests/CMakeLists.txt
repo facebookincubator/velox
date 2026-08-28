@@ -15,6 +15,8 @@
 add_executable(
   ucx_exchange_test
   UcxCompressionTest.cpp
+  UcxFloat64CodecTest.cpp
+  UcxFloat64AlpCodecTest.cpp
   UcxCompressionCostModelTest.cpp
   UcxOutputQueueManagerTest.cpp
   UcxExchangeTest.cpp
@@ -24,6 +26,11 @@ add_executable(
   UcxPartitionedOutputMock.cpp
   SinkDriverMock.cpp
   SourceDriverMock.cpp
+)
+
+target_include_directories(
+  ucx_exchange_test
+  PRIVATE ${dietgpu_source_SOURCE_DIR}
 )
 
 add_test(

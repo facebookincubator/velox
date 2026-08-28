@@ -22,7 +22,7 @@ cuDF host metadata unchanged and divides the contiguous GPU data buffer into
 regions:
 
 1. Fixed-width numeric regions are candidates for FOR, delta-FOR,
-   dictionary-PFOR, frequency-PFOR, or delta-frequency-PFOR.
+   dictionary-PFOR, frequency-PFOR, delta-frequency-PFOR, or the FP64 codecs.
 2. The transformed byte planes and residual regions are compressed where useful
    with DietGPU's byte-oriented rANS codec. Dictionary-PFOR rank bytes are sent
    directly.
@@ -35,6 +35,16 @@ ANS is the entropy-coding family. DietGPU implements the range variant, rANS.
 The code therefore uses DietGPU ANS and may refer to the concrete coder as
 rANS. FOR and PFOR are transforms that expose lower-entropy byte planes before
 rANS, not competing entropy-coder libraries.
+
+FP64 regions in the advanced policies first try a GPU G-ALP-style path:
+exact decimal scaling, frame-of-reference bit-packing, and compact exception
+patching. If that path does not save enough bytes, a byte-exact fallback rotates
+the IEEE-754 words and applies DietGPU rANS to the one or two exponent-bearing
+byte planes. The mantissa-bearing planes remain raw, so NaN payloads, signed
+zero, and arbitrary FP64 bit patterns round-trip exactly. The fallback is not
+assumed to be profitable. Its measured cost is included in the adaptive stage
+model, which can select raw transfer on links where the saved bytes do not pay
+for encoding and decoding.
 
 The build fetches a pinned official DietGPU source archive and verifies its
 SHA-256 checksum. Only the byte-rANS sources required by this path are compiled.
@@ -91,7 +101,7 @@ The main policies are:
 | `ans` | Apply DietGPU byte-rANS to fixed-size segments of the whole buffer. This is mainly a diagnostic baseline. |
 | `column` | Always try the basic per-column FOR, delta-FOR, byte-rANS, and raw candidates. |
 | `column-adaptive` | Use the online cost model with the basic per-column candidates. |
-| `column-adaptive-freq-pfor-min128` | Use the online cost model and enable dictionary-PFOR, frequency-PFOR, and delta-frequency-PFOR candidates only on numeric regions of at least 128 MiB. |
+| `column-adaptive-freq-pfor-min128` | Use the online cost model and enable dictionary-PFOR, frequency-PFOR, and delta-frequency-PFOR candidates only on numeric regions of at least 128 MiB. FP64 regions use G-ALP or the exponent-plane fallback from 8 MiB onward. |
 
 The implementation retains non-adaptive and legacy PFOR policy names for
 controlled comparisons. The `*-freq-pfor-min128` policy avoids paying the
@@ -131,7 +141,7 @@ Run the codec and cost-model tests on a CUDA-capable host:
 
 ```bash
 _build/release/velox/experimental/ucx-exchange/tests/ucx_exchange_test \
-  --gtest_filter='UcxCompressionTest.*:UcxCompressionCostModelTest.*'
+  --gtest_filter='UcxCompressionTest.*:UcxFloat64*:UcxCompressionCostModelTest.*'
 ```
 
 The CPU-only registration test verifies that enabling UCX installs the paired
@@ -143,9 +153,10 @@ _build/release/velox/experimental/cudf/tests/velox_cudf_config_test \
 ```
 
 The GPU tests cover skipped inputs, whole-buffer rANS round trips, descriptor
-round trips, frequency-PFOR exception patching, delta reconstruction, and
-byte-exact output. The CPU-only cost-model tests cover warmup, selection,
-safety margin, periodic reprobes, and stage-local/global sampling.
+round trips, frequency-PFOR exception patching, delta reconstruction, FP64
+special values, and byte-exact output. The CPU-only cost-model tests
+cover warmup, selection, safety margin, periodic reprobes, and
+stage-local/global sampling.
 
 For an end-to-end deployment, additionally verify:
 
@@ -159,7 +170,12 @@ For an end-to-end deployment, additionally verify:
 ## Implementation map
 
 - `UcxColumnCodec.*`: region discovery, numeric transforms, rANS residuals,
-  descriptor serialization, and byte-exact reconstruction.
+  descriptor serialization, FP64 codec selection, and byte-exact
+  reconstruction.
+- `UcxFloat64AlpCodec.*`: G-ALP-style GPU FP64 transform, bit-packing, and
+  exception patching.
+- `UcxFloat64Codec.*`: DietGPU exponent-plane rANS fallback for arbitrary
+  FP64 values.
 - `UcxCompression.*`: segmented whole-buffer DietGPU rANS wrapper.
 - `UcxCompressionCostModel.*`: adaptive stage-level selection.
 - `UcxCodecPipeline.h`: bounded off-progress-thread executor.

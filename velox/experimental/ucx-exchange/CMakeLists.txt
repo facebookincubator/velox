@@ -63,6 +63,8 @@ set(
   UCX_EXCHANGE_CUDA_SOURCES
   UcxCompression.cu
   UcxColumnCodec.cu
+  UcxFloat64Codec.cu
+  UcxFloat64AlpCodec.cu
   ${DIETGPU_ROOT}/ans/GpuANSEncode.cu
   ${DIETGPU_ROOT}/ans/GpuANSDecode.cu
   ${DIETGPU_ROOT}/ans/GpuANSInfo.cu
@@ -82,6 +84,8 @@ set_source_files_properties(
 set_source_files_properties(
   UcxCompression.cu
   UcxColumnCodec.cu
+  UcxFloat64Codec.cu
+  UcxFloat64AlpCodec.cu
   PROPERTIES COMPILE_OPTIONS "--diag-suppress=68,186,554"
 )
 
