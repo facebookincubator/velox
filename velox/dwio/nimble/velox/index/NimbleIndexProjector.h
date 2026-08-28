@@ -16,16 +16,19 @@
 
 #pragma once
 
-#include <folly/io/IOBuf.h>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
+
+#include <folly/io/IOBuf.h>
 
 #include "velox/common/caching/FileHandle.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/tablet/DataInput.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
@@ -224,36 +227,30 @@ class NimbleIndexProjector {
 
   // A request index paired with its stripe-relative row range.
   struct StripeRange {
+    // Index into the caller's request vector.
     uint32_t requestIndex{};
     // Stripe-relative row range, already intersected with stripe boundaries.
     RowRange rowRange;
   };
 
-  // CSR (compressed sparse row) layout mapping stripes to request row ranges.
-  // All StripeRange entries are stored in a single flat vector (`entries`),
-  // with `offsets[i]` marking where stripe i's entries begin.
-  struct StripeRanges {
-    uint32_t startStripe{0};
-    uint32_t numStripes{0};
-    // Flat storage of all per-stripe row ranges, grouped by stripe.
-    std::vector<StripeRange> ranges;
-    // offsets[i] = start index in ranges for stripe i (relative to
-    // startStripe). Size = numStripes + 1.
-    std::vector<uint32_t> offsets;
+  // One lookup result mapped to the physical tablet stripes it touches.
+  struct ResolvedRequest {
+    // Index into the caller's request vector.
+    uint32_t requestIndex{};
+    // First physical tablet stripe touched by rowRange.
+    uint32_t startStripe{};
+    // One past the last physical tablet stripe touched by rowRange.
+    uint32_t endStripe{};
+    // File-level row range returned by the cluster index.
+    RowRange rowRange;
+  };
 
-    std::span<const StripeRange> getRanges(uint32_t stripeIndex) const {
-      NIMBLE_CHECK_LT(stripeIndex, numStripes);
-      return {
-          ranges.data() + offsets[stripeIndex],
-          offsets[stripeIndex + 1] - offsets[stripeIndex]};
-    }
-
-    void clear() {
-      startStripe = 0;
-      numStripes = 0;
-      ranges.clear();
-      offsets.clear();
-    }
+  // One request range resolved to a physical tablet stripe before grouping.
+  struct ResolvedStripe {
+    // Physical tablet stripe containing range.
+    uint32_t tabletStripeIndex{};
+    // Request range intersected with tabletStripeIndex.
+    StripeRange range;
   };
 
   // Initializes per-project() state: stores request/options pointers and
@@ -264,64 +261,253 @@ class NimbleIndexProjector {
   // exit so a subsequent project() call starts from a clean slate.
   void clearRequest();
 
-  // Looks up all requests via the cluster index and maps them to stripes.
-  // Populates ctx_.stripeRanges.
+  // Looks up all requests via the cluster index and maps them to plan stripes.
   void lookupStripes();
 
-  // Output of prepareStripes(). Per-stripe vectors are indexed by stripe
-  // offset in the compact plan and only contain stripes retained for
-  // processing.
-  struct ScanPlan {
-    // Absolute stripe indices in processing order.
-    std::vector<uint32_t> stripeIndices;
-    // Total rows in each planned stripe.
-    std::vector<uint32_t> numRows;
-    // Whether each planned stripe needs the Row/FlatMap null-barrier path.
-    std::vector<bool> requiresNullBarriers;
-    // Number of projected streams present in each planned stripe.
-    std::vector<uint32_t> numStreams;
-    // Total logical bytes across all projected streams in each planned stripe.
-    std::vector<uint64_t> projectedBytes;
+  // Output of lookupStripes() and prepareStripes(). Per-stripe vectors are
+  // indexed by plan stripe index: a dense slot over planned tablet stripes.
+  class ScanPlan {
+   public:
+    // Returns the number of tablet stripes selected by index lookup.
+    size_t numLookupStripes() const {
+      return stripeIndices_.size();
+    }
+
+    // Returns the number of lookup stripes kept after applying read limits.
+    size_t numLoadStripes() const {
+      return numLoadStripes_;
+    }
+
+    // Returns the physical tablet stripe id for a dense plan stripe index.
+    uint32_t tabletStripeIndexAt(size_t stripeIndex) const {
+      NIMBLE_CHECK_LT(stripeIndex, stripeIndices_.size());
+      return stripeIndices_[stripeIndex];
+    }
+
+    // Returns request ranges for one plan stripe. Ranges for unprepared stripes
+    // are the original lookup result; ranges for prepared stripes are updated
+    // in place, with pruned entries marked empty.
+    std::span<const StripeRange> rangesAt(size_t stripeIndex) const {
+      NIMBLE_CHECK_LT(stripeIndex, stripeIndices_.size());
+      NIMBLE_CHECK_LT(
+          stripeIndex + 1,
+          stripeRangeOffsets_.size(),
+          "Lookup stripe range offsets must include a final sentinel");
+      const auto beginOffset = stripeRangeOffsets_[stripeIndex];
+      const auto endOffset = stripeRangeOffsets_[stripeIndex + 1];
+      NIMBLE_CHECK_LE(
+          endOffset,
+          stripeRanges_.size(),
+          "Lookup stripe request range exceeds plan storage");
+      return std::span{stripeRanges_}.subspan(
+          beginOffset, endOffset - beginOffset);
+    }
+
+    // Returns mutable request ranges for in-place pruning.
+    std::span<StripeRange> mutableRangesAt(size_t stripeIndex) {
+      NIMBLE_CHECK_LT(stripeIndex, stripeIndices_.size());
+      NIMBLE_CHECK_LT(
+          stripeIndex + 1,
+          stripeRangeOffsets_.size(),
+          "Stripe range offsets must include a final sentinel");
+      const auto beginOffset = stripeRangeOffsets_[stripeIndex];
+      const auto endOffset = stripeRangeOffsets_[stripeIndex + 1];
+      NIMBLE_CHECK_LE(
+          endOffset,
+          stripeRanges_.size(),
+          "Stripe request range exceeds plan storage");
+      return std::span{stripeRanges_}.subspan(
+          beginOffset, endOffset - beginOffset);
+    }
+
+    // Reserves storage for the lookup result grouped by stripe.
+    void reserve(size_t numStripes, size_t numRanges) {
+      stripeIndices_.reserve(numStripes);
+      stripeRanges_.reserve(numRanges);
+      stripeRangeOffsets_.reserve(numStripes + 1);
+    }
+
+    // Appends a tablet stripe id to the planned-stripe mapping.
+    void addStripe(uint32_t tabletStripeIndex) {
+      stripeIndices_.push_back(tabletStripeIndex);
+    }
+
+    // Appends a request range to the current lookup stripe group.
+    void addRange(StripeRange stripeRange) {
+      stripeRanges_.push_back(stripeRange);
+    }
+
+    // Appends a lookup range group boundary.
+    void addRangeOffset(uint32_t offset) {
+      stripeRangeOffsets_.push_back(offset);
+    }
+
+    // Resets read-time state while preserving lookup-time stripe groups.
+    void reset(size_t numProjectedStreams) {
+      const auto numLookupStripes = this->numLookupStripes();
+      numProjectedStreams_ = numProjectedStreams;
+      numLoadStripes_ = 0;
+      numStripeRows_.assign(numLookupStripes, 0);
+      requiresNullBarriers_.assign(numLookupStripes, false);
+      numStripeStreams_.assign(numLookupStripes, 0);
+      projectedStripeBytes_.assign(numLookupStripes, 0);
+      stripeFileOffsets_.assign(numLookupStripes, 0);
+      projectedStreams_.clear();
+      projectedStreams_.resize(numLookupStripes * numProjectedStreams);
+      truncated_ = false;
+    }
+
+    // Marks the plan as stopped by a global row or byte limit.
+    void setTruncated() {
+      truncated_ = true;
+    }
+
+    // Returns whether a global row or byte limit stopped planning early.
+    bool truncated() const {
+      return truncated_;
+    }
+
+    // Initializes per-stripe stream metadata before stream locations are read.
+    void initStripe(size_t stripeIndex, uint32_t numRows, uint64_t fileOffset) {
+      NIMBLE_CHECK_LT(stripeIndex, numStripeRows_.size());
+      numStripeRows_[stripeIndex] = numRows;
+      requiresNullBarriers_[stripeIndex] = false;
+      numStripeStreams_[stripeIndex] = 0;
+      projectedStripeBytes_[stripeIndex] = 0;
+      stripeFileOffsets_[stripeIndex] = fileOffset;
+      numLoadStripes_ = stripeIndex + 1;
+    }
+
+    // Records one present projected stream in a prepared stripe.
+    void addProjectedStream(
+        size_t stripeIndex,
+        uint64_t streamSize,
+        bool requiresNullBarrier) {
+      NIMBLE_CHECK_LT(stripeIndex, numStripeStreams_.size());
+      ++numStripeStreams_[stripeIndex];
+      projectedStripeBytes_[stripeIndex] += streamSize;
+      requiresNullBarriers_[stripeIndex] =
+          requiresNullBarriers_[stripeIndex] || requiresNullBarrier;
+    }
+
+    // Returns the total row count for one prepared stripe.
+    uint32_t numRowsAt(size_t stripeIndex) const {
+      NIMBLE_CHECK_LT(stripeIndex, numStripeRows_.size());
+      return numStripeRows_[stripeIndex];
+    }
+
+    // Returns whether a prepared stripe needs the null-barrier path.
+    bool requiresNullBarrierAt(size_t stripeIndex) const {
+      NIMBLE_CHECK_LT(stripeIndex, requiresNullBarriers_.size());
+      return requiresNullBarriers_[stripeIndex];
+    }
+
+    // Returns the number of present projected streams in one prepared stripe.
+    uint32_t numStreamsAt(size_t stripeIndex) const {
+      NIMBLE_CHECK_LT(stripeIndex, numStripeStreams_.size());
+      return numStripeStreams_[stripeIndex];
+    }
+
+    // Returns the logical projected bytes in one prepared stripe.
+    uint64_t projectedBytesAt(size_t stripeIndex) const {
+      NIMBLE_CHECK_LT(stripeIndex, projectedStripeBytes_.size());
+      return projectedStripeBytes_[stripeIndex];
+    }
+
+    // Returns the file offset for one prepared stripe's stream payload.
+    uint64_t stripeFileOffsetAt(size_t stripeIndex) const {
+      NIMBLE_CHECK_LT(stripeIndex, stripeFileOffsets_.size());
+      return stripeFileOffsets_[stripeIndex];
+    }
+
+    // Returns mutable projected stream locations for one plan stripe.
+    std::span<StripeGroup::StreamLocation> projectedStreamsAt(
+        size_t stripeIndex) {
+      const auto offset = stripeIndex * numProjectedStreams_;
+      NIMBLE_CHECK_LE(
+          offset + numProjectedStreams_,
+          projectedStreams_.size(),
+          "Stripe projected stream range exceeds plan storage");
+      return std::span{projectedStreams_}.subspan(offset, numProjectedStreams_);
+    }
+
+    // Returns projected stream locations for one plan stripe.
+    std::span<const StripeGroup::StreamLocation> projectedStreamsAt(
+        size_t stripeIndex) const {
+      const auto offset = stripeIndex * numProjectedStreams_;
+      NIMBLE_CHECK_LE(
+          offset + numProjectedStreams_,
+          projectedStreams_.size(),
+          "Stripe projected stream range exceeds plan storage");
+      return std::span{projectedStreams_}.subspan(offset, numProjectedStreams_);
+    }
+
+    // Clears lookup-time and read-time state.
+    void clear() {
+      stripeIndices_.clear();
+      stripeRanges_.clear();
+      stripeRangeOffsets_.clear();
+      numLoadStripes_ = 0;
+      numStripeRows_.clear();
+      requiresNullBarriers_.clear();
+      numStripeStreams_.clear();
+      projectedStripeBytes_.clear();
+      stripeFileOffsets_.clear();
+      projectedStreams_.clear();
+      numProjectedStreams_ = 0;
+      truncated_ = false;
+    }
+
+   private:
+    // Tablet stripe ids in ascending planned-stripe order.
+    std::vector<uint32_t> stripeIndices_;
+    // Request ranges grouped by plan stripe. During preparation, ranges are
+    // pruned in place and dropped entries are marked empty so offsets stay
+    // stable for unprepared stripes.
+    std::vector<StripeRange> stripeRanges_;
+    // Start offsets into stripeRanges_ for each plan stripe. The last
+    // entry is the total lookup range count.
+    std::vector<uint32_t> stripeRangeOffsets_;
+    // Lookup-stripe prefix prepared for loading. Earlier slots can have all
+    // ranges pruned when later requests still need reading.
+    size_t numLoadStripes_{0};
+    // Total rows in each plan stripe.
+    std::vector<uint32_t> numStripeRows_;
+    // Whether each plan stripe needs the Row/FlatMap null-barrier path.
+    std::vector<bool> requiresNullBarriers_;
+    // Number of projected streams present in each plan stripe.
+    std::vector<uint32_t> numStripeStreams_;
+    // Total logical bytes across all projected streams in each plan stripe.
+    std::vector<uint64_t> projectedStripeBytes_;
     // File offsets for stripe stream payloads.
-    std::vector<uint64_t> stripeFileOffsets;
+    std::vector<uint64_t> stripeFileOffsets_;
     // Flat reusable storage for all per-stripe projected stream slots. Each
     // stripe occupies projection_->streamOffsets.size() consecutive entries.
-    std::vector<StripeGroup::StreamLocation> projectedStreams;
-    // Start offsets into stripeRanges for each planned stripe. The last entry
-    // is the total range count.
-    std::vector<size_t> stripeRangeOffsets;
-    // Flat reusable storage for all request ranges retained by planned stripes.
-    std::vector<StripeRange> stripeRanges;
-    bool truncated{false};
+    std::vector<StripeGroup::StreamLocation> projectedStreams_;
+    // Number of projected stream slots reserved for each plan stripe.
+    size_t numProjectedStreams_{0};
+    // True when global row or byte limits stop planning before all lookup
+    // stripes are prepared.
+    bool truncated_{false};
   };
 
-  // Returns this stripe's projected stream slots from the flat ScanPlan
-  // storage.
-  std::span<const StripeGroup::StreamLocation> stripeProjectedStreams(
-      size_t stripeOffset) const;
-
-  // Returns this stripe's request ranges from the flat ScanPlan storage.
-  std::span<const StripeRange> plannedStripeRanges(size_t stripeOffset) const;
-
-  // Appends one stripe to the plan and returns its projected byte count.
-  uint64_t appendStripePlan(uint32_t stripeIndex, size_t rangeOffset);
+  // Prepares one stripe for reading and returns its projected byte count.
+  uint64_t prepareStripe(size_t stripeIndex);
 
   // Computes the stripe-relative body range based on request row ranges and
   // Options::maxOverfetchRowsRatio.
-  RowRange stripeRowRangeToPack(size_t stripeOffset) const;
+  RowRange stripeRowRangeToPack(size_t stripeIndex) const;
 
   // Records the resume key for a request that reached its maxRowsPerRequest cap
-  // in the stripe at `stripeOffset` (index relative to
-  // stripeRanges.startStripe, not an absolute stripe index). `readEndRow` is
-  // the request's stripe-relative end row after clipping. When `partialRead` is
-  // true the cap fell inside the stripe, so the key is the row-precise key at
-  // `readEndRow`; otherwise the cap landed on the stripe boundary and the key
-  // resumes from the next stripe still holding this request. The stripe's
-  // absolute start row is derived from `stripeOffset`. Idempotent (no-op once a
-  // key is recorded); callers gate on Options::needResumeKey.
+  // in the stripe at `stripeIndex`. `readEndRow` is the request's
+  // stripe-relative end row after clipping. When `partialRead` is true the cap
+  // fell inside the stripe, so the key is the row-precise key at `readEndRow`;
+  // otherwise the cap landed on the stripe boundary and the key resumes from
+  // the next stripe still holding this request. Idempotent (no-op once a key is
+  // recorded); callers gate on Options::needResumeKey.
   void setResumeKey(
       uint32_t requestIndex,
-      uint32_t stripeOffset,
+      size_t stripeIndex,
       uint32_t readEndRow,
       bool partialRead);
 
@@ -344,7 +530,7 @@ class NimbleIndexProjector {
 
   // Estimates sliced stream bytes for a partial stripe pack.
   uint64_t estimateSlicedStripeBytes(
-      size_t stripeOffset,
+      size_t stripeIndex,
       const RowRange& packRange) const;
 
   // Returns the per-project() sliced-output arena.
@@ -356,12 +542,6 @@ class NimbleIndexProjector {
 
   // Loaded projected stream views and optional source deduplication metadata.
   struct StripeStreamViews {
-    void clear() {
-      streams.clear();
-      presentIndices.clear();
-      canonicalIndices.clear();
-    }
-
     // Indexed by projected stream index; absent streams have empty views.
     std::vector<std::string_view> streams;
     // Present stream indices in projected stream order. Populated only when
@@ -370,12 +550,18 @@ class NimbleIndexProjector {
     // Canonical projected index for each present stream. Populated only when
     // canonical streams are resolved.
     std::vector<std::optional<size_t>> canonicalIndices;
+
+    void clear() {
+      streams.clear();
+      presentIndices.clear();
+      canonicalIndices.clear();
+    }
   };
 
   // Collects loaded stream views for one stripe. Optionally resolves source
   // deduplication and populates the canonical stream metadata.
-  StripeStreamViews& collectStripeStreamViews(
-      size_t stripeOffset,
+  void collectStripeStreamViews(
+      size_t stripeIndex,
       bool resolveCanonicalStreams);
 
   // Serialized stripe body and metadata computed while packing.
@@ -387,15 +573,13 @@ class NimbleIndexProjector {
   };
 
   // Selects full or partial packing based on the requested stripe range.
-  PackedStripe packStripe(size_t stripeOffset, const RowRange& packRange);
+  PackedStripe packStripe(size_t stripeIndex, const RowRange& packRange);
 
   // Packs a full stripe zero-copy while preserving source stream deduplication.
-  PackedStripe packFullStripe(size_t stripeOffset);
+  PackedStripe packFullStripe(size_t stripeIndex);
 
   // Slices and packs a partial stripe without reusing source deduplication.
-  PackedStripe packPartialStripe(
-      size_t stripeOffset,
-      const RowRange& packRange);
+  PackedStripe packPartialStripe(size_t stripeIndex, const RowRange& packRange);
 
   // When Options::needResumeKey is set, attaches resume keys to requests whose
   // results were cut short: per-request keys from maxRowsPerRequest caps, plus
@@ -408,10 +592,6 @@ class NimbleIndexProjector {
   // per-request header with the row range and (on the last slice of a
   // truncated response) the resume key.
   void buildResult(Result& result);
-
-  inline uint32_t stripeRowCount(uint32_t stripe) const {
-    return static_cast<uint32_t>(tablet_->stripeRowCount(stripe));
-  }
 
   // Computes the stripe-relative row range by intersecting the file-level
   // rowRangeLimit with the stripe boundaries.
@@ -436,20 +616,17 @@ class NimbleIndexProjector {
     const Request* request{nullptr};
     const Options* options{nullptr};
     uint32_t numRequests{0};
-    // CSR mapping from stripes to request row ranges. Populated by
-    // lookupStripes(), read-only during stripe processing.
-    StripeRanges stripeRanges;
-    // Populated by prepareStripes().
+    // Populated by lookupStripes() and prepareStripes().
     ScanPlan plan;
-    // Per-request flag: true if the request has ranges in any planned stripe.
+    // Per-request flag set when the request has ranges in any planned stripe.
     // Set by prepareStripes(), used by setResumeKeys().
-    std::vector<bool> hasStripeRanges;
+    std::vector<bool> requestHasRanges;
     // Per-request resume keys set when a request reaches maxRowsPerRequest and
     // Options::needResumeKey is enabled.
     std::vector<std::optional<std::string>> resumeKeys;
     // Flat array of enqueue indices, logically
-    // [stripeOffset * numProjectedStreams + streamIndex]. nullopt for absent
-    // streams. Populated by loadStripes().
+    // [stripeIndex * numProjectedStreams + streamIndex]. nullopt for
+    // absent streams. Populated by loadStripes().
     std::vector<std::optional<uint32_t>> dataInputIndices;
     // Handle keeping loaded data alive for zero-copy BufferRefs.
     DataInput::Handle dataHandle;
@@ -461,6 +638,10 @@ class NimbleIndexProjector {
     std::vector<RowRange> stripePackRanges;
     // Reusable per-request vectors.
     std::vector<uint64_t> rowsPerRequest;
+    // Lookup results that touched rows, mapped to physical tablet stripes.
+    std::vector<ResolvedRequest> resolvedRequests;
+    // Lookup results expanded to one entry per touched physical tablet stripe.
+    std::vector<ResolvedStripe> resolvedStripes;
     std::vector<size_t> sliceCounts;
     std::vector<size_t> emittedSlices;
     // Shared arena for all sliced stream bytes produced by one project() call.
@@ -500,7 +681,7 @@ class NimbleIndexProjector {
     };
     PackScratch packScratch;
     // Reusable loaded-stream views filled while packing one stripe.
-    StripeStreamViews streamViewsScratch;
+    StripeStreamViews loadedStreamViews;
   };
   ProjectionContext ctx_;
 
