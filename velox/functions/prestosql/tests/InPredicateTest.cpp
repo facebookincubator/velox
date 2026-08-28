@@ -1112,7 +1112,7 @@ TEST_F(InPredicateTest, nans) {
   testNaNs<double>();
 }
 
-TEST_F(InPredicateTest, TimestampWithTimeZone) {
+TEST_F(InPredicateTest, timestampWithTimeZone) {
   // The millis ranges from 0-17, but after every 17th row we increment the time
   // zone ID, so that no two rows have the same millis and time zone.  However,
   // by the semantics of TimestampWithTimeZone's comparison, it's the same 17
@@ -1123,7 +1123,7 @@ TEST_F(InPredicateTest, TimestampWithTimeZone) {
   testConstantValues<int64_t>(TIMESTAMP_WITH_TIME_ZONE(), valueAt);
 }
 
-TEST_F(InPredicateTest, BadTimestampsWithTry) {
+TEST_F(InPredicateTest, badTimestampsWithTry) {
   // Test that errors thrown while evaluating the filter are propagated
   // correctly to the TRY.
   // We do this using the maximum possible timestamp value, when evaulating the

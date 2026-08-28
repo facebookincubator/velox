@@ -5994,7 +5994,8 @@ using MarkSortedNodePtr = std::shared_ptr<const MarkSortedNode>;
 /// Optimized version of a WindowNode for a single row_number, rank or
 /// dense_rank function with a limit over sorted partitions. The output of this
 /// node contains all input columns followed by an optional
-/// 'rowNumberColumnName' BIGINT column.
+/// 'rowNumberColumnName' BIGINT column, with rows within each partition emitted
+/// in ascending order of sorting keys (matching WindowNode).
 /// TODO: This node will be renamed to TopNRank or TopNRowNode once all the
 /// support for handling rank and dense_rank is committed to Velox.
 class TopNRowNumberNode : public PlanNode {
@@ -6526,45 +6527,6 @@ class RPCNode : public PlanNode {
       rpc::RPCStreamingMode streamingMode = rpc::RPCStreamingMode::kPerRow,
       int32_t dispatchBatchSize = 0);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Legacy constructor. Prefer the CallTypedExpr constructor above.
-  ///
-  /// Accepts the flattened call fields and builds the CallTypedExpr internally:
-  /// each argument becomes a FieldAccessTypedExpr referencing
-  /// argumentColumns[i] (type argumentTypes[i]), except positions with a
-  /// non-null constantInputs[i], which become a ConstantTypedExpr wrapping that
-  /// constant vector. Defined inline (header-only) so it compiles in the
-  /// read-only-synced Prestissimo build, whose Buck targets define
-  /// VELOX_ENABLE_BACKWARD_COMPATIBILITY; velox and open-source builds never
-  /// do. Removed in the CONTRACT step once all callers use the CallTypedExpr
-  /// constructor.
-  RPCNode(
-      const PlanNodeId& id,
-      PlanNodePtr source,
-      std::string functionName,
-      TypePtr functionResultType,
-      std::string outputColumn,
-      RowTypePtr outputType,
-      std::vector<std::string> argumentColumns,
-      std::vector<TypePtr> argumentTypes,
-      std::vector<VectorPtr> constantInputs,
-      rpc::RPCStreamingMode streamingMode = rpc::RPCStreamingMode::kPerRow,
-      int32_t dispatchBatchSize = 0)
-      : RPCNode(
-            id,
-            std::move(source),
-            rpcCallFromLegacyFields(
-                std::move(functionName),
-                std::move(functionResultType),
-                argumentColumns,
-                argumentTypes,
-                constantInputs),
-            std::move(outputColumn),
-            std::move(outputType),
-            streamingMode,
-            dispatchBatchSize) {}
-#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
-
   const PlanNodePtr& source() const {
     return sources_[0];
   }
@@ -6581,48 +6543,6 @@ class RPCNode : public PlanNode {
   const TypePtr& rpcResultType() const {
     return call_->type();
   }
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Legacy accessors over the folded call, each derived from call()->inputs().
-  /// Retained so pre-migration callers (e.g. the presto-cpp conversion test)
-  /// keep compiling; removed in the CONTRACT step once every caller uses
-  /// call()->inputs() directly. argumentColumns() yields the FieldAccess name
-  /// for column arguments and an empty string for constants; constantInputs()
-  /// yields the constant vector for constant arguments and nullptr for columns.
-  /// Defined inline (header-only) for the read-only-synced Prestissimo build.
-  std::vector<std::string> argumentColumns() const {
-    std::vector<std::string> columns;
-    columns.reserve(call_->inputs().size());
-    for (const auto& input : call_->inputs()) {
-      if (auto* field = input->asUnchecked<FieldAccessTypedExpr>()) {
-        columns.push_back(field->name());
-      } else {
-        columns.emplace_back();
-      }
-    }
-    return columns;
-  }
-  std::vector<TypePtr> argumentTypes() const {
-    std::vector<TypePtr> types;
-    types.reserve(call_->inputs().size());
-    for (const auto& input : call_->inputs()) {
-      types.push_back(input->type());
-    }
-    return types;
-  }
-  std::vector<VectorPtr> constantInputs() const {
-    std::vector<VectorPtr> constants;
-    constants.reserve(call_->inputs().size());
-    for (const auto& input : call_->inputs()) {
-      if (auto* constant = input->asUnchecked<ConstantTypedExpr>()) {
-        constants.push_back(constant->valueVector());
-      } else {
-        constants.push_back(nullptr);
-      }
-    }
-    return constants;
-  }
-#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
   const std::string& outputColumn() const {
     return outputColumn_;
@@ -6653,45 +6573,6 @@ class RPCNode : public PlanNode {
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  // Builds the RPC CallTypedExpr from the legacy flattened call fields, for the
-  // legacy constructor above. Each argument becomes a FieldAccessTypedExpr on
-  // argumentColumns[i], except positions with a non-null constantInputs[i],
-  // which become a ConstantTypedExpr. Header-only for the read-only-synced
-  // Prestissimo build; removed in the CONTRACT step.
-  static core::CallTypedExprPtr rpcCallFromLegacyFields(
-      std::string functionName,
-      TypePtr functionResultType,
-      const std::vector<std::string>& argumentColumns,
-      const std::vector<TypePtr>& argumentTypes,
-      const std::vector<VectorPtr>& constantInputs) {
-    VELOX_CHECK_EQ(
-        argumentColumns.size(),
-        argumentTypes.size(),
-        "RPCNode argumentColumns and argumentTypes must have the same size");
-    VELOX_CHECK_EQ(
-        argumentColumns.size(),
-        constantInputs.size(),
-        "RPCNode argumentColumns and constantInputs must have the same size");
-    std::vector<TypedExprPtr> callInputs;
-    callInputs.reserve(argumentColumns.size());
-    for (size_t i = 0; i < argumentColumns.size(); ++i) {
-      if (constantInputs[i] != nullptr) {
-        callInputs.push_back(
-            std::make_shared<ConstantTypedExpr>(constantInputs[i]));
-      } else {
-        callInputs.push_back(
-            std::make_shared<FieldAccessTypedExpr>(
-                argumentTypes[i], argumentColumns[i]));
-      }
-    }
-    return std::make_shared<CallTypedExpr>(
-        std::move(functionResultType),
-        std::move(callInputs),
-        std::move(functionName));
-  }
-#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
-
   void addDetails(std::stringstream& stream) const override;
 
   std::vector<PlanNodePtr> sources_;

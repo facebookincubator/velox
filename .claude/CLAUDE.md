@@ -116,7 +116,8 @@ or lightweight dependencies, use `add_executable` / `add_test`.
 ## Formatting
 
 ```bash
-make format  # format all changed files
+pre-commit run --files <paths>  # format/lint specific files
+pre-commit run --all-files      # sweep the whole repo
 ```
 
 ## Coding Style

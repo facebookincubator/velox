@@ -627,6 +627,15 @@ void HashAggregation::reclaim(
 }
 
 void HashAggregation::close() {
+  if (groupingSet_) {
+    const auto numToIntermediateFastPathCalls =
+        groupingSet_->numToIntermediateFastPathCalls();
+    if (numToIntermediateFastPathCalls > 0) {
+      addRuntimeStat(
+          std::string(kToIntermediateFastPathCalls),
+          RuntimeCounter(numToIntermediateFastPathCalls));
+    }
+  }
   Operator::close();
 
   output_ = nullptr;
