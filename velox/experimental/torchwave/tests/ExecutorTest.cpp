@@ -1232,6 +1232,14 @@ TEST_F(ExecutorTest, repeatTest) {
 }
 
 TEST_F(ExecutorTest, catTest) {
+  auto& config = WaveConfig::get();
+  const auto savedFree = config.freeIntermediates;
+  auto resetConfig = folly::makeGuard([&, savedFree] {
+    config.useSingleBlock = std::nullopt;
+    config.isCg = std::nullopt;
+    config.freeIntermediates = savedFree;
+  });
+
   WaveConfig::get().useSingleBlock = false;
   runTest("data/cat_test.pt2", "data/cat_test_results.pt", "multi-block");
 
@@ -1241,16 +1249,26 @@ TEST_F(ExecutorTest, catTest) {
   WaveConfig::get().useSingleBlock = std::nullopt;
   WaveConfig::get().isCg = true;
   runTest("data/cat_test.pt2", "data/cat_test_results.pt", "cg");
+
+  // The allocation-group mode. o1 joins five operands, two of which an earlier
+  // node produces, so this is the graph where a concat group places a result
+  // whose operands were written before the concat's kernel ran.
+  config.freeIntermediates = true;
+  runTest("data/cat_test.pt2", "data/cat_test_results.pt", "cg groups");
+  config.freeIntermediates = savedFree;
   WaveConfig::get().isCg = std::nullopt;
 
-  // Plan structure: a masked_select feeding the 1-D cat (o3 = cat([ms1, ms2,
-  // ms3])) fuses into the same kernel as the cat. In the cg and single-block
-  // grids the whole masked_select fuses with the cat; in the multi-kernel grid
-  // the masked_select is decomposed, and its final (compaction) step fuses into
-  // the cat.
+  // Plan structure. o3 = cat([ms1, ms2, ms3]) joins three operands, which is
+  // the allocation group's path: the result is laid out on the host, so every
+  // operand's extent has to be known before the concat sizes anything. A
+  // masked_select settles its extent on device, so it now ends its own kernel
+  // first rather than fusing into the cat -- there is no serial fill to fall
+  // back on that could discover the extent as it goes. The multi-kernel grid
+  // already decomposed it, and its compaction step's extent is read back
+  // before the cat, so that one still fuses.
   auto plans = compilePlans("data/cat_test.pt2");
-  EXPECT_TRUE(plans.cg.fuses({"aten.cat.default", "tw.masked_select_cg"}));
-  EXPECT_TRUE(plans.singleBlock.fuses(
+  EXPECT_FALSE(plans.cg.fuses({"aten.cat.default", "tw.masked_select_cg"}));
+  EXPECT_FALSE(plans.singleBlock.fuses(
       {"aten.cat.default", "aten.masked_select.default"}));
   EXPECT_TRUE(
       plans.multiKernel.fuses({"aten.cat.default", "tw.masked_select_final"}));
@@ -1273,7 +1291,18 @@ TEST_F(ExecutorTest, catTest2) {
 // operand's region of the result contiguous; every other dim makes it a
 // strided band, written either through the host-made view the producing
 // expression fills or by __concatCopy for an operand the kernel only copies.
+// o8's operand is a gather, which decomposes the output index itself instead
+// of writing through the view, so it has to map that index through the band's
+// strides.
 TEST_F(ExecutorTest, catNdTest) {
+  auto& config = WaveConfig::get();
+  const auto savedFree = config.freeIntermediates;
+  auto resetConfig = folly::makeGuard([&, savedFree] {
+    config.useSingleBlock = std::nullopt;
+    config.isCg = std::nullopt;
+    config.freeIntermediates = savedFree;
+  });
+
   WaveConfig::get().useSingleBlock = false;
   runTest("data/cat_nd_test.pt2", "data/cat_nd_test_results.pt", "multi-block");
 
@@ -1284,6 +1313,13 @@ TEST_F(ExecutorTest, catNdTest) {
   WaveConfig::get().useSingleBlock = std::nullopt;
   WaveConfig::get().isCg = true;
   runTest("data/cat_nd_test.pt2", "data/cat_nd_test_results.pt", "cg");
+
+  // The allocation-group mode, which needs the freeing on. o7 joins four
+  // operands on a strided axis, so this is where the wider concats meet the
+  // pass that would place them.
+  config.freeIntermediates = true;
+  runTest("data/cat_nd_test.pt2", "data/cat_nd_test_results.pt", "cg groups");
+  config.freeIntermediates = savedFree;
   WaveConfig::get().isCg = std::nullopt;
 
   // The wider cats are fused rather than handed to the eager op, and an
@@ -1293,10 +1329,78 @@ TEST_F(ExecutorTest, catNdTest) {
   EXPECT_TRUE(plans.multiKernel.fuses({"aten.cat.default", "aten.add.Tensor"}));
 }
 
+// Concats whose operands are produced by kernels of their own -- the shape of
+// the ROO preproc graph's final concat. Each operand would otherwise allocate a
+// buffer that the concat immediately copies into its result; the concat
+// allocation group places the result at the step that makes the operands and
+// hands each of them the region it occupies, so the producing kernel writes in
+// place and __concatCopy finds source and destination already the same memory.
+//
+// The values have to come out the same whether the group runs or not, so the
+// graph is checked on the ordinary path first and on the mode after.
+TEST_F(ExecutorTest, catAllocGroupTest) {
+  auto& config = WaveConfig::get();
+  const auto savedFree = config.freeIntermediates;
+  const auto savedGroup = config.enableAllocGroup;
+  const auto savedConcat = config.enableConcatAllocGroup;
+  auto resetConfig = folly::makeGuard([&, savedFree, savedGroup, savedConcat] {
+    config.useSingleBlock = std::nullopt;
+    config.isCg = std::nullopt;
+    config.freeIntermediates = savedFree;
+    config.enableAllocGroup = savedGroup;
+    config.enableConcatAllocGroup = savedConcat;
+  });
+
+  const std::string pt2 = "data/cat_alloc_group_test.pt2";
+  const std::string results = "data/cat_alloc_group_test_results.pt";
+
+  config.useSingleBlock = false;
+  runTest(pt2, results, "multi-block");
+  config.useSingleBlock = true;
+  runTest(pt2, results, "single-block");
+  config.useSingleBlock = std::nullopt;
+
+  // The mode needs the cooperative grid, which fixes the steps a group's point
+  // is expressed in, and the freeing, without which no group buffer is ever
+  // released.
+  config.isCg = true;
+  config.freeIntermediates = true;
+  config.enableAllocGroup = true;
+
+  config.enableConcatAllocGroup = false;
+  runTest(pt2, results, "cg alloc groups, concat groups off");
+  config.enableConcatAllocGroup = true;
+  runTest(pt2, results, "cg alloc groups, concat groups on");
+
+  // What the pass made of it. 'wide' places all four of its gathers and 'mixed'
+  // the two around the graph input it cannot place, so six operand allocations
+  // and six concat copies go away, and with the two results eight values stop
+  // being the lifetime grouping's to place.
+  auto stats = allocGroupStats(pt2);
+  EXPECT_EQ(stats.numConcatGroups, 2);
+  EXPECT_EQ(stats.numConcatMembers, 6);
+  EXPECT_EQ(stats.numInConcatGroup, stats.numConcatMembers + 2);
+  // 'pair' is below the threshold. 'nd' has every operand computed by the
+  // concat's own kernel behind a reserveShape, so no earlier point knows their
+  // extents and the layout cannot be laid out ahead of them.
+  EXPECT_EQ(stats.numConcatTooFew, 1);
+  EXPECT_EQ(stats.numConcatNoMembers, 0);
+  EXPECT_EQ(stats.numConcatUnplaceableOperand, 1);
+
+  // Nothing is placed with the mode's concat half switched off, which is what
+  // makes the arm above an A/B rather than two runs of the same thing.
+  config.enableConcatAllocGroup = false;
+  auto without = allocGroupStats(pt2);
+  EXPECT_EQ(without.numConcatGroups, 0);
+  EXPECT_EQ(without.numInConcatGroup, 0);
+}
+
 // The same shapes joined along a new dimension instead of an existing one, up
 // to the rank-4 limit of the kernel tensor descriptor. Every stack operand
 // occupies a single position along the new dim, which is a strided slice
-// unless that dim is the outermost.
+// unless that dim is the outermost. o7, o8 and o9 fill such a slice from a
+// gather and from a scan, the two kinds of producer that place their own
+// writes rather than writing through the view they are handed.
 TEST_F(ExecutorTest, stackNdTest) {
   WaveConfig::get().useSingleBlock = false;
   runTest(

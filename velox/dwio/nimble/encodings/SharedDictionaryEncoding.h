@@ -40,6 +40,7 @@
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
+#include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
@@ -298,6 +299,11 @@ class SharedDictionaryAlphabet {
     return encodingType_;
   }
 
+  /// Returns the encoded alphabet stream passed to create().
+  std::string_view encodedAlphabet() const {
+    return encodedAlphabet_;
+  }
+
   /// Returns the entry stored at index. T must match dataType().
   template <typename T>
   typename TypeTraits<T>::physicalType physicalValueAt(uint32_t index) const {
@@ -432,6 +438,7 @@ class SharedDictionaryAlphabet {
 
   // Keeps borrowed encoded bytes alive when create() receives an owner.
   const std::shared_ptr<const void> encodedAlphabetOwner_;
+  const std::string_view encodedAlphabet_;
   const DataType dataType_;
   const EncodingType encodingType_;
   uint32_t entryCount_{0};
@@ -503,6 +510,13 @@ class SharedDictionaryEncoding
       Buffer& buffer,
       const Encoding::Options& options = {});
 
+  static std::string_view encodeNullable(
+      EncodingSelection<physicalType>&& selection,
+      std::span<const physicalType> values,
+      std::span<const bool> nulls,
+      Buffer& buffer,
+      const Encoding::Options& options = {});
+
   static std::string_view slice(
       std::string_view encoded,
       uint32_t offset,
@@ -555,7 +569,7 @@ SharedDictionaryEncoding<T>::SharedDictionaryEncoding(
     std::function<void*(uint32_t)> stringBufferFactory,
     const Encoding::Options& options)
     : TypedEncoding<T, physicalType>{pool, data, options} {
-  static_assert(isIntegralType<T>() && !std::is_same_v<T, bool>);
+  static_assert(isSharedDictionaryType<T>());
   NIMBLE_CHECK_NOT_NULL(
       options.sharedDictionaryAlphabet,
       "Shared dictionary encoding requires an alphabet.");
@@ -637,7 +651,7 @@ std::string_view SharedDictionaryEncoding<T>::encode(
     const EncodingSelectionPolicyCreator& nestedPolicyCreator,
     Buffer& buffer,
     const Encoding::Options& options) {
-  static_assert(isIntegralType<T>() && !std::is_same_v<T, bool>);
+  static_assert(isSharedDictionaryType<T>());
 
   ScopedEncodingBuffer scopedBuffer{
       &buffer.getMemoryPool(), options.encodingBufferPool};
@@ -667,12 +681,40 @@ std::string_view SharedDictionaryEncoding<T>::encode(
 }
 
 template <typename T>
+std::string_view SharedDictionaryEncoding<T>::encodeNullable(
+    EncodingSelection<physicalType>&& selection,
+    std::span<const physicalType> values,
+    std::span<const bool> nulls,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  static_assert(isSharedDictionaryType<T>());
+
+  auto nullsPolicy = selection.template createNestedPolicy<bool>(
+      EncodingType::Nullable, EncodingIdentifiers::Nullable::Nulls);
+  NIMBLE_CHECK_NOT_NULL(nullsPolicy);
+  auto typedNullsPolicy = std::unique_ptr<EncodingSelectionPolicy<bool>>(
+      static_cast<EncodingSelectionPolicy<bool>*>(nullsPolicy.release()));
+  auto* pool = &buffer.getMemoryPool();
+  ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
+  const auto serializedValues = EncodingFactory::encode<T>(
+      std::move(selection), values, scopedBuffer.get(), options);
+  const auto serializedNulls = EncodingFactory::encode<bool>(
+      std::move(typedNullsPolicy), nulls, scopedBuffer.get(), options);
+  return NullableEncoding<T>::encodeNullable(
+      static_cast<uint32_t>(nulls.size()),
+      serializedValues,
+      serializedNulls,
+      buffer,
+      options);
+}
+
+template <typename T>
 std::string_view SharedDictionaryEncoding<T>::encodeIndices(
     std::span<const uint32_t> indices,
     const EncodingSelectionPolicyCreator& nestedPolicyCreator,
     Buffer& buffer,
     const Encoding::Options& options) {
-  static_assert(isIntegralType<T>() && !std::is_same_v<T, bool>);
+  static_assert(isSharedDictionaryType<T>());
   NIMBLE_CHECK_LE(
       indices.size(),
       kMaxSharedDictionarySize,
@@ -697,7 +739,7 @@ std::string_view SharedDictionaryEncoding<T>::slice(
     uint32_t length,
     Buffer& buffer,
     const Encoding::Options& options) {
-  static_assert(isIntegralType<T>() && !std::is_same_v<T, bool>);
+  static_assert(isSharedDictionaryType<T>());
   const auto sourceRowCount =
       EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
   NIMBLE_CHECK_LE(offset, sourceRowCount);
@@ -748,6 +790,15 @@ void SharedDictionaryEncoding<T>::materializeLocalDictionaryIndices(
   }
 }
 
+template <typename ValueType>
+uint64_t getValueSize(const ValueType& value) {
+  if constexpr (isStringType<ValueType>()) {
+    return sizeof(uint32_t) + value.size();
+  } else {
+    return sizeof(ValueType);
+  }
+}
+
 template <typename T>
 std::string_view SharedDictionaryEncoding<T>::encodeMaterializedDictionarySlice(
     const SharedDictionaryAlphabet& alphabet,
@@ -783,7 +834,7 @@ std::string_view SharedDictionaryEncoding<T>::encodeMaterializedDictionarySlice(
   if (uniqueIndices.size() == 1) {
     const uint64_t encodingSize =
         EncodingPrefix::serializedSize(length, options.useVarintRowCount) +
-        sizeof(physicalType);
+        getValueSize(values[0]);
     char* reserved = buffer.reserve(encodingSize);
     char* writePos = reserved;
     EncodingPrefix::serialize(

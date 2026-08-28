@@ -26,7 +26,17 @@ class CatNdTest(nn.Module):
     computed operands (which write their result straight into their band) are
     covered.
 
-    Inputs: a (6x5), b (4x5), c (6x3), d (2x3x4), e (2x3x4), all float.
+    Both the two-operand form and wider ones are covered: two operands are the
+    case a concat allocation group leaves alone, and more than two are the case
+    it looks at.
+
+    The computed operands are of both kinds a fused concat can produce: an
+    elementwise expression, which writes through the view it is handed, and a
+    gather (o8), which decomposes the output index itself and so has to map
+    that index through the band's strides rather than writing it densely.
+
+    Inputs: a (6x5), b (4x5), c (6x3), d (2x3x4), e (2x3x4), all float,
+        and reps (6 longs, summing to 6).
     Outputs:
         o1: cat([a, b], dim=0)               -> 10x5
         o2: cat([a, c], dim=1)               -> 6x8
@@ -34,6 +44,10 @@ class CatNdTest(nn.Module):
         o4: cat([d, e], dim=0)               -> 4x3x4
         o5: cat([d, e*3], dim=1)             -> 2x6x4
         o6: cat([d, e, d+e], dim=2)          -> 2x3x12
+        o7: cat([a, c, a*2, c-1], dim=1)     -> 6x16, four operands mixing ones
+            the concat copies in with ones it computes
+        o8: cat([repeat_interleave(a, reps, dim=0), c, a*2], dim=1) -> 6x13,
+            a gather writing into a strided band
     """
 
     def forward(
@@ -43,11 +57,14 @@ class CatNdTest(nn.Module):
         c: Tensor,
         d: Tensor,
         e: Tensor,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        reps: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         o1 = torch.cat([a, b], dim=0)
         o2 = torch.cat([a, c], dim=1)
         o3 = torch.cat([a * 2.0, c + 1.0, a - 0.5], dim=-1)
         o4 = torch.cat([d, e], dim=0)
         o5 = torch.cat([d, e * 3.0], dim=1)
         o6 = torch.cat([d, e, d + e], dim=2)
-        return o1, o2, o3, o4, o5, o6
+        o7 = torch.cat([a, c, a * 2.0, c - 1.0], dim=1)
+        o8 = torch.cat([torch.repeat_interleave(a, reps, dim=0), c, a * 2.0], dim=1)
+        return o1, o2, o3, o4, o5, o6, o7, o8

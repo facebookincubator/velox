@@ -2348,7 +2348,7 @@ TEST_F(ProjectorTest, flatMapMissingKeyDeserializesAsNullField) {
 // All-missing-keys projection on a FlatMap whose value subtree is a Row.
 // Exercises the `emitPlaceholderOffsets` Row branch end-to-end (Row.nulls +
 // 2 inner scalars = 3 UINT32_MAX value slots + 1 inMap slot per missing key).
-TEST_F(ProjectorTest, projectFlatMapNonExistentKey_RowValue) {
+TEST_F(ProjectorTest, projectFlatMapNonExistentKeyRowValue) {
   auto valueRowType = ROW({{"a", INTEGER()}, {"b", VARCHAR()}});
   auto type =
       ROW({{"id", BIGINT()}, {"features", MAP(INTEGER(), valueRowType)}});
@@ -2445,7 +2445,7 @@ TEST_F(ProjectorTest, projectFlatMapNonExistentKey_RowValue) {
 // All-missing-keys projection on a FlatMap whose value subtree is an Array.
 // Exercises the `emitPlaceholderOffsets` Array branch end-to-end (Array
 // lengths + 1 element scalar = 2 UINT32_MAX value slots + 1 inMap per key).
-TEST_F(ProjectorTest, projectFlatMapNonExistentKey_ArrayValue) {
+TEST_F(ProjectorTest, projectFlatMapNonExistentKeyArrayValue) {
   auto valueArrayType = ARRAY(INTEGER());
   auto type =
       ROW({{"id", BIGINT()}, {"features", MAP(INTEGER(), valueArrayType)}});

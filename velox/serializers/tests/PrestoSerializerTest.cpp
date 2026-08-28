@@ -1593,6 +1593,36 @@ TEST_P(PrestoSerializerTest, opaqueBatchVectorSerializer) {
   assertEqualVectors(inputRowVector, deserialized);
 }
 
+TEST_P(PrestoSerializerTest, opaqueNestedInRowBatchVectorSerializer) {
+  OpaqueType::registerSerialization<Foo>(
+      "Foo", Foo::serialize, Foo::deserialize);
+  auto opaqueVector = makeFlatVector<std::shared_ptr<void>>(
+      3,
+      [](vector_size_t row) { return Foo::create(row + 10); },
+      [](vector_size_t row) { return row == 1; },
+      OPAQUE<Foo>());
+  // Nesting the opaque column inside an inner row makes deserialization run the
+  // struct-nulls pass, which dispatches through a reader table separate from
+  // the one used to read values. The null inner row is omitted from the child
+  // by the serializer, so deserialization has to restore the gap.
+  auto innerRow = makeRowVector({opaqueVector});
+  innerRow->setNull(0, true);
+  auto inputRowVector = makeRowVector({innerRow});
+  auto rowType = asRowType(inputRowVector->type());
+
+  for (const bool nullsFirst : {false, true}) {
+    SCOPED_TRACE(fmt::format("nullsFirst: {}", nullsFirst));
+    serializer::presto::PrestoVectorSerde::PrestoOptions serdeOptions;
+    serdeOptions.nullsFirst = nullsFirst;
+
+    std::ostringstream out;
+    serializeBatch(inputRowVector, &out, &serdeOptions);
+
+    auto deserialized = deserialize(rowType, out.str(), &serdeOptions);
+    assertEqualVectors(inputRowVector, deserialized);
+  }
+}
+
 TEST_P(PrestoSerializerTest, opaqueInteractiveVectorSerializer) {
   OpaqueType::registerSerialization<Foo>(
       "Foo", Foo::serialize, Foo::deserialize);

@@ -108,11 +108,17 @@ struct SelectorResult {
 // `fullCount` is the total element count of the *full* stream; cost model
 // scores are scaled from the sample size to the full stream so the DP
 // produces estimates in the right units.
-inline SelectorResult selectSplits(
+//
+// `costFn` scores a single segment: given (metrics, numValues, bitWidth,
+// outBestEncoding), return the per-sample cost in bits and write the best
+// encoding into the output parameter.  Defaults to `bestCostBits`.
+template <typename CostFn>
+inline SelectorResult selectSplitsImpl(
     const std::vector<uint64_t>& samples,
-    int kBits, // number of bits in the physical type (32 or 64)
+    int kBits,
     size_t fullCount,
-    const SelectorConfig& cfg = defaultSelectorConfig()) {
+    const SelectorConfig& cfg,
+    CostFn&& costFn) {
   if (samples.empty() || kBits <= 0) {
     return {};
   }
@@ -121,14 +127,11 @@ inline SelectorResult selectSplits(
   const MetricFlags requiredFlags = allCostModelRequiredFlags();
   MetricCollector collector;
 
-  // bestCost[l][r] = {min cost in bits for full stream, best EncodingType}
-  // Only lower-triangular (r >= l) entries are valid.
   struct SegmentChoice {
     double cost{std::numeric_limits<double>::infinity()};
     EncodingType encoding{EncodingType::Trivial};
   };
 
-  // Use flat vector for cache friendliness (kBits can be 32 or 64)
   const int sz = kBits;
   std::vector<SegmentChoice> bestCost(sz * sz);
 
@@ -146,9 +149,8 @@ inline SelectorResult selectSplits(
 
       EncodingType bestEnc = EncodingType::Trivial;
       const double perSampleCost =
-          bestCostBits(metrics, numSamples, bitWidth, bestEnc);
+          costFn(metrics, numSamples, bitWidth, bestEnc);
 
-      // Scale to full stream
       const double fullCost = perSampleCost * static_cast<double>(fullCount) /
           static_cast<double>(numSamples);
 
@@ -156,8 +158,6 @@ inline SelectorResult selectSplits(
     }
   }
 
-  // DP over bit positions [0..kBits].
-  // dp[i] = minimum cost to cover bits [0..i).
   std::vector<double> dp(sz + 1, std::numeric_limits<double>::infinity());
   std::vector<int> prev(sz + 1, -1);
   std::vector<EncodingType> chosen(sz + 1, EncodingType::Trivial);
@@ -187,7 +187,6 @@ inline SelectorResult selectSplits(
   result.totalCost = dp[sz];
 
   if (!std::isfinite(result.totalCost)) {
-    // Fallback: single segment covering all bits, Trivial encoding
     SegmentPlan fallback;
     fallback.bitStart = 0;
     fallback.bitEnd = sz - 1;
@@ -198,7 +197,6 @@ inline SelectorResult selectSplits(
     return result;
   }
 
-  // Backtrack to reconstruct segment plan
   int idx = sz;
   while (idx > 0) {
     const int start = prev[idx];
@@ -216,6 +214,14 @@ inline SelectorResult selectSplits(
 
   std::reverse(result.segments.begin(), result.segments.end());
   return result;
+}
+
+inline SelectorResult selectSplits(
+    const std::vector<uint64_t>& samples,
+    int kBits,
+    size_t fullCount,
+    const SelectorConfig& cfg = defaultSelectorConfig()) {
+  return selectSplitsImpl(samples, kBits, fullCount, cfg, bestCostBits);
 }
 
 } // namespace facebook::nimble::detail::subintsplit

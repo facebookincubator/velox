@@ -41,6 +41,8 @@
 namespace facebook::nimble {
 namespace {
 
+constexpr uint64_t kMaxFooterIoBytes{1'024};
+
 class TestDictionaryResolver final : public ExternalDictionaryResolver {
  public:
   explicit TestDictionaryResolver(
@@ -106,13 +108,12 @@ class SharedDictionaryReaderTest : public ::testing::Test {
     velox::InMemoryWriteFile writeFile{file.get()};
     auto writer = TabletWriter::create(&writeFile, *pool_, {});
     if (catalog.has_value()) {
-      writer->writeOptionalSection(
-          std::string{kSharedDictionarySection}, *catalog);
+      writer->writeOptionalSection(std::string{kDictionarySection}, *catalog);
     }
     writer->close();
 
     auto options = test::makeTestTabletOptions(pool_.get());
-    options.externalResolver = std::move(resolver);
+    options.externalDictionaryResolver = std::move(resolver);
     files_.push_back(file);
     auto readFile =
         std::make_shared<testing::InMemoryTrackableReadFile>(*file, true);
@@ -120,6 +121,22 @@ class SharedDictionaryReaderTest : public ::testing::Test {
   }
 
   std::shared_ptr<TabletReader> createTabletWithSharedDictionarySection(
+      std::span<const SharedDictionaryReference> stripeDictionaryReferences,
+      std::span<const SharedDictionaryReference> fileDictionaryReferences,
+      uint32_t fileDictionaryId,
+      std::string_view fileEncodedAlphabet) {
+    return createTabletWithSharedDictionarySectionAndReadFile(
+               stripeDictionaryReferences,
+               fileDictionaryReferences,
+               fileDictionaryId,
+               fileEncodedAlphabet)
+        .first;
+  }
+
+  std::pair<
+      std::shared_ptr<TabletReader>,
+      std::shared_ptr<testing::InMemoryTrackableReadFile>>
+  createTabletWithSharedDictionarySectionAndReadFile(
       std::span<const SharedDictionaryReference> stripeDictionaryReferences,
       std::span<const SharedDictionaryReference> fileDictionaryReferences,
       uint32_t fileDictionaryId,
@@ -143,18 +160,18 @@ class SharedDictionaryReaderTest : public ::testing::Test {
               fileDictionaryReferences,
               {},
               fileDictionaries);
-          writeMetadataFn(std::string{kSharedDictionarySection}, catalog);
+          writeMetadataFn(std::string{kDictionarySection}, catalog);
         };
     auto writer =
         TabletWriter::create(&writeFile, *pool_, std::move(writerOptions));
     writer->close();
 
     auto options = test::makeTestTabletOptions(pool_.get());
+    options.maxFooterIoBytes = kMaxFooterIoBytes;
     files_.push_back(file);
-    return TabletReader::create(
-        std::make_shared<testing::InMemoryTrackableReadFile>(*file, true),
-        pool_.get(),
-        options);
+    auto readFile =
+        std::make_shared<testing::InMemoryTrackableReadFile>(*file, true);
+    return {TabletReader::create(readFile, pool_.get(), options), readFile};
   }
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;
@@ -165,7 +182,7 @@ TEST_F(SharedDictionaryReaderTest, noCatalog) {
   auto tablet = createTablet(std::nullopt);
 
   EXPECT_FALSE(tablet->hasStripeDictionaries());
-  EXPECT_FALSE(tablet->hasGlobalDictionaries());
+  EXPECT_FALSE(tablet->hasFileOrExternalDictionaries());
   EXPECT_FALSE(tablet->stripeDictionaryStreamId(10).has_value());
   EXPECT_TRUE(tablet->stripeDictionaryStreamIds(std::array<uint32_t, 2>{10, 20})
                   .empty());
@@ -201,21 +218,25 @@ TEST_F(SharedDictionaryReaderTest, basic) {
       fileEncodedAlphabet);
 
   EXPECT_TRUE(tablet->hasStripeDictionaries());
-  EXPECT_TRUE(tablet->hasGlobalDictionaries());
+  EXPECT_TRUE(tablet->hasFileOrExternalDictionaries());
   EXPECT_EQ(
       tablet->stripeDictionaryStreamId(kStripeValueStreamId),
       kDictionaryStreamId);
   EXPECT_FALSE(
       tablet->stripeDictionaryStreamId(kFileValueStreamId).has_value());
+  EXPECT_FALSE(tablet->stripeDictionaryStreamId(uint32_t{999}).has_value());
+  const std::array nonStripeValueStreamIds{uint32_t{999}, kFileValueStreamId};
+  EXPECT_TRUE(
+      tablet->stripeDictionaryStreamIds(nonStripeValueStreamIds).empty());
 
   const std::array valueStreamIds{
       uint32_t{999}, kStripeValueStreamId, kFileValueStreamId};
   const auto dictionaryStreamIds =
       tablet->stripeDictionaryStreamIds(valueStreamIds);
-  ASSERT_EQ(dictionaryStreamIds.size(), valueStreamIds.size());
-  EXPECT_FALSE(dictionaryStreamIds[0].has_value());
-  EXPECT_EQ(dictionaryStreamIds[1], kDictionaryStreamId);
-  EXPECT_FALSE(dictionaryStreamIds[2].has_value());
+  ASSERT_EQ(dictionaryStreamIds.size(), 1);
+  EXPECT_FALSE(dictionaryStreamIds.contains(uint32_t{999}));
+  EXPECT_EQ(dictionaryStreamIds.at(kStripeValueStreamId), kDictionaryStreamId);
+  EXPECT_FALSE(dictionaryStreamIds.contains(kFileValueStreamId));
 
   EXPECT_EQ(tablet->resolveDictionaryAlphabet(kStripeValueStreamId), nullptr);
   const auto alphabet = tablet->resolveDictionaryAlphabet(kFileValueStreamId);
@@ -264,19 +285,24 @@ TEST_F(SharedDictionaryReaderTest, cachesFileAlphabet) {
           .dictionaryId = kDictionaryId,
           .dataType = DataType::Int32}};
 
-  auto tablet = createTabletWithSharedDictionarySection(
-      std::span<const SharedDictionaryReference>{},
-      fileDictionaryReferences,
-      kDictionaryId,
-      fileEncodedAlphabet);
+  const auto [tablet, readFile] =
+      createTabletWithSharedDictionarySectionAndReadFile(
+          std::span<const SharedDictionaryReference>{},
+          fileDictionaryReferences,
+          kDictionaryId,
+          fileEncodedAlphabet);
 
   EXPECT_FALSE(tablet->hasStripeDictionaries());
-  EXPECT_TRUE(tablet->hasGlobalDictionaries());
+  EXPECT_TRUE(tablet->hasFileOrExternalDictionaries());
+  readFile->resetChunks();
   const auto alphabet = tablet->resolveDictionaryAlphabet(kValueStreamId);
   ASSERT_NE(alphabet, nullptr);
+  const auto readsAfterFirstResolve = readFile->chunks().size();
+  EXPECT_GT(readsAfterFirstResolve, 0);
   EXPECT_EQ(alphabet->physicalValueAt<int32_t>(0), 40);
   EXPECT_EQ(tablet->resolveDictionaryAlphabet(kValueStreamId), alphabet);
   EXPECT_EQ(tablet->resolveDictionaryAlphabet(kSecondValueStreamId), alphabet);
+  EXPECT_EQ(readFile->chunks().size(), readsAfterFirstResolve);
 }
 
 TEST_F(SharedDictionaryReaderTest, rejectsMissingExternalResolver) {
@@ -309,7 +335,7 @@ TEST_F(SharedDictionaryReaderTest, cachesExternalAlphabet) {
   auto tablet = createTablet(catalog, resolver);
 
   EXPECT_FALSE(tablet->hasStripeDictionaries());
-  EXPECT_TRUE(tablet->hasGlobalDictionaries());
+  EXPECT_TRUE(tablet->hasFileOrExternalDictionaries());
   const auto alphabet = tablet->resolveDictionaryAlphabet(kValueStreamId);
   ASSERT_NE(alphabet, nullptr);
   EXPECT_EQ(alphabet->physicalValueAt<int32_t>(0), 40);
