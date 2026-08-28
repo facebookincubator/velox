@@ -163,7 +163,7 @@ class ParquetData : public dwio::common::FormatData {
     // 'nullsOnly' set and is responsible for reading however many nulls or
     // pages it takes to skip 'numValues' top level rows.
     if (nullsOnly) {
-      VELOX_DCHECK_NOT_NULL(reader_);
+      VELOX_CHECK_NOT_NULL(reader_);
       reader_->skipNullsOnly(numValues);
     }
     if (presetNulls_) {
