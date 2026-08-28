@@ -36,13 +36,16 @@ class PlanNodeVisitorContext;
 using PlanNodeId = std::string;
 
 /// Well-known transport identifiers for exchange between workers. A
-/// PartitionedOutputNode names the transport it sends its results over and an
-/// ExchangeNode the transport it receives over, and the runtime resolves the
-/// matching manager or client plus its operator from the registry. Both ends of
-/// an exchange edge must name the same transport; only the coordinator building
-/// the plan sees both fragments, so it owns that invariant. In-memory buffering
-/// is the default. Other applications may define additional identifiers without
-/// modifying this header.
+/// PartitionedOutputNode names the transport type it uses for sending. An
+/// ExchangeNode the transport type that it uses for receiving.
+/// BufferManager, ExchangeClient, PartitionedOutput operator and Exchange
+/// operator are transport dependent. They are instantiated at runtime, using
+/// the transport types from the plan nodes.
+/// Both ends of an exchange edge must name the same transport. Only the
+/// coordinator building the plan sees both fragments, it is responsible for
+/// generating consistent plan fragments across tasks and workers.
+/// In-memory buffering is the default. Other applications may define additional
+/// identifiers without modifying this header.
 struct TransportKind {
   /// In-memory output buffering (the default). How the buffered bytes are
   /// delivered is decided by the layer above -- read locally, fetched over
@@ -2195,10 +2198,10 @@ class ExchangeNode : public PlanNode {
         transportKind_(std::move(transportKind)) {}
 
   /// Backward-compatible constructor without an explicit transport; defaults
-  /// to the in-memory transport. Prefer the constructor above. This default
-  /// does not extend to Builder: Builder::build() requires transportKind to
-  /// be set explicitly, the same as it requires id, outputType and
-  /// serdeKind.
+  /// to the in-memory transport. Prefer the constructor with an explicit
+  /// transport. This default does not extend to Builder: Builder::build()
+  /// requires transportKind to be set explicitly, the same as it requires id,
+  /// outputType and serdeKind.
   ExchangeNode(const PlanNodeId& id, RowTypePtr type, std::string serdeKind)
       : ExchangeNode(
             id,
