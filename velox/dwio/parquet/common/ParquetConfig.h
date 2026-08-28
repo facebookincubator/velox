@@ -132,7 +132,9 @@ class ParquetConfig {
       0,
       "Data page row-count limit for the Parquet writer. The writer flushes a "
       "data page once it buffers this many rows, even before the byte-size "
-      "page limit is reached. Zero (default) means no limit.")
+      "page limit is reached. A non-zero limit also makes data pages of "
+      "repeated columns end on record boundaries. Zero (default) means no "
+      "limit.")
   VELOX_FORMAT_CONFIG_PROPERTY(
       kWriterEnablePageIndexSession,
       kWriterEnablePageIndex,

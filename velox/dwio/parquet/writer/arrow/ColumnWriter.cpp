@@ -1345,66 +1345,153 @@ void ColumnWriterImpl::flushBufferedDataPages() {
 // TypedColumnWriter.
 
 template <typename Action>
-inline void doInBatches(int64_t total, int64_t batchSize, Action&& action) {
-  int64_t numBatches = static_cast<int>(total / batchSize);
-  for (int round = 0; round < numBatches; round++) {
-    action(round * batchSize, batchSize, true);
-  }
-  // Write the remaining values.
-  if (total % batchSize > 0) {
-    action(numBatches * batchSize, total % batchSize, true);
+inline void doInBatches(
+    int64_t total,
+    int64_t batchSize,
+    int64_t pageRowLimit,
+    const int64_t& numBufferedRows,
+    Action&& action) {
+  int64_t offset = 0;
+  while (offset < total) {
+    int64_t numLevels = std::min(batchSize, total - offset);
+    if (pageRowLimit > 0) {
+      // Split before encoding so that a page cannot exceed the row limit by a
+      // full write batch. Every chunk boundary is a record boundary here, so
+      // the previous chunk always closed a full page. The lower bound of one
+      // level only keeps the loop moving if that ever stops holding.
+      VELOX_DCHECK_LT(numBufferedRows, pageRowLimit);
+      numLevels = std::min(
+          numLevels, std::max<int64_t>(pageRowLimit - numBufferedRows, 1));
+    }
+    action(offset, numLevels, true);
+    offset += numLevels;
   }
 }
 
-template <typename Action>
+// Returns the end of the chunk starting at 'offset': the first record boundary
+// at or after 'offset + batchSize', holding at most 'maxRows' records, and
+// never past 'numLevels'. Zero 'maxRows' means the chunk is bounded by
+// 'batchSize' alone. The chunk always covers at least one record or record
+// fragment, so the caller always makes progress.
+inline int64_t nextChunkEnd(
+    const int16_t* repLevels,
+    int64_t numLevels,
+    int64_t offset,
+    int64_t batchSize,
+    int64_t maxRows) {
+  if (maxRows == 0) {
+    // Without a row bound the records in the chunk do not have to be counted,
+    // so skip over the levels the write batch covers instead of walking them
+    // record by record.
+    int64_t endOffset =
+        std::min(offset + std::max<int64_t>(batchSize, 1), numLevels);
+    while (endOffset < numLevels && repLevels[endOffset] != 0) {
+      ++endOffset;
+    }
+    return endOffset;
+  }
+
+  int64_t endOffset = offset;
+  int64_t numRows = 0;
+  do {
+    // Skip past the record, or trailing record fragment, at 'endOffset'.
+    ++endOffset;
+    while (endOffset < numLevels && repLevels[endOffset] != 0) {
+      ++endOffset;
+    }
+    ++numRows;
+  } while (endOffset < numLevels && endOffset - offset < batchSize &&
+           numRows < maxRows);
+  return endOffset;
+}
+
+// Splits a write into chunks so that pages stay within the configured size and
+// row limits.
+//
+// 'action(offset, numLevels, checkPage)' encodes one chunk and, when
+// 'checkPage' is set, closes the page if it has reached a limit. 'checkPage' is
+// false only for a chunk that may end in the middle of a record, because a page
+// must not begin in the middle of one.
+//
+// 'startNewPage()' closes the current page unconditionally. It is called only
+// at a record boundary, when the page has no room left for another record.
+//
+// 'numBufferedRows' aliases the writer's count of rows buffered in the current
+// page; 'action' and 'startNewPage' both update it.
+template <typename Action, typename StartNewPage>
 inline void doInBatches(
-    const int16_t* defLevels,
     const int16_t* repLevels,
     int64_t numLevels,
     int64_t batchSize,
+    int64_t pageRowLimit,
+    const int64_t& numBufferedRows,
     Action&& action,
+    StartNewPage&& startNewPage,
     bool pagesChangeOnRecordBoundaries) {
-  if (!pagesChangeOnRecordBoundaries || !repLevels) {
-    // If repLevels is null, then we are writing a non-repeated column.
-    // In this case, every record contains only one level.
-    return doInBatches(numLevels, batchSize, std::forward<Action>(action));
+  // If repLevels is null, then we are writing a non-repeated column.
+  // In this case, every record contains only one level.
+  if (!repLevels) {
+    return doInBatches(
+        numLevels,
+        batchSize,
+        pageRowLimit,
+        numBufferedRows,
+        std::forward<Action>(action));
+  }
+
+  // Pages may start in the middle of a record and there is no row budget to
+  // spend, so chunking does not need to look at repetition levels. A row limit
+  // always implies record-aligned pages, because rows cannot be counted across
+  // a page boundary that splits one.
+  if (!pagesChangeOnRecordBoundaries && pageRowLimit == 0) {
+    return doInBatches(
+        numLevels,
+        batchSize,
+        /*pageRowLimit=*/0,
+        numBufferedRows,
+        std::forward<Action>(action));
   }
 
   int64_t offset = 0;
   while (offset < numLevels) {
-    int64_t endOffset = std::min(offset + batchSize, numLevels);
-
-    // Find next record boundary (i.e. repLevel = 0).
-    while (endOffset < numLevels && repLevels[endOffset] != 0) {
-      endOffset++;
+    if (pageRowLimit > 0 && numBufferedRows >= pageRowLimit &&
+        repLevels[offset] == 0) {
+      // The page is full and 'offset' is a record boundary, the only place a
+      // page may be cut. Without this the next record would overflow the limit.
+      startNewPage();
     }
+
+    // A chunk holds at least one record, which may be longer than 'batchSize'.
+    // Without a row limit there is no per-chunk row bound to enforce.
+    const int64_t maxRows = pageRowLimit > 0
+        ? std::max<int64_t>(pageRowLimit - numBufferedRows, 1)
+        : 0;
+    const int64_t endOffset =
+        nextChunkEnd(repLevels, numLevels, offset, batchSize, maxRows);
 
     if (endOffset < numLevels) {
-      // This is not the last chunk of batch and endOffset is a record
+      // This is not the last chunk of the batch and endOffset is a record
       // boundary. It is a good chance to check the page size.
       action(offset, endOffset - offset, true);
-    } else {
-      VELOX_DCHECK_EQ(endOffset, numLevels);
-      // This is the last chunk of batch, and we do not know whether endOffset
-      // is a record boundary. Find the offset to beginning of last record in
-      // this chunk, so we can check page size.
-      int64_t lastRecordBeginOffset = numLevels - 1;
-      while (lastRecordBeginOffset >= offset &&
-             repLevels[lastRecordBeginOffset] != 0) {
-        lastRecordBeginOffset--;
-      }
-
-      if (offset < lastRecordBeginOffset) {
-        // We have found the beginning of last record and can check page size.
-        action(offset, lastRecordBeginOffset - offset, true);
-        offset = lastRecordBeginOffset;
-      }
-
-      // There is no record boundary in this chunk and cannot check page size.
-      action(offset, endOffset - offset, false);
+      offset = endOffset;
+      continue;
     }
 
-    offset = endOffset;
+    // This is the last chunk of the batch, and we do not know whether
+    // 'numLevels' is a record boundary. Emit everything up to the beginning of
+    // the last record first, so the page can still be checked there, then emit
+    // the possibly incomplete last record without a check.
+    int64_t lastRecordBeginOffset = numLevels - 1;
+    while (lastRecordBeginOffset > offset &&
+           repLevels[lastRecordBeginOffset] != 0) {
+      --lastRecordBeginOffset;
+    }
+    if (lastRecordBeginOffset > offset) {
+      action(offset, lastRecordBeginOffset - offset, true);
+      offset = lastRecordBeginOffset;
+    }
+    action(offset, numLevels - offset, false);
+    offset = numLevels;
   }
 }
 
@@ -1521,11 +1608,13 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
       checkDictionarySizeLimit();
     };
     doInBatches(
-        defLevels,
         repLevels,
         numValues,
         properties_->writeBatchSize(),
+        properties_->dataPageRowLimit(),
+        numBufferedRows_,
         writeChunk,
+        [&]() { addDataPage(); },
         pagesChangeOnRecordBoundaries());
     return valueOffset;
   }
@@ -1582,11 +1671,13 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
       checkDictionarySizeLimit();
     };
     doInBatches(
-        defLevels,
         repLevels,
         numValues,
         properties_->writeBatchSize(),
+        properties_->dataPageRowLimit(),
+        numBufferedRows_,
         writeChunk,
+        [&]() { addDataPage(); },
         pagesChangeOnRecordBoundaries());
   }
 
@@ -2138,11 +2229,13 @@ Status TypedColumnWriterImpl<DType>::writeArrowDictionary(
   }
 
   PARQUET_CATCH_NOT_OK(doInBatches(
-      defLevels,
       repLevels,
       numLevels,
       properties_->writeBatchSize(),
+      properties_->dataPageRowLimit(),
+      numBufferedRows_,
       writeIndicesChunk,
+      [&]() { addDataPage(); },
       pagesChangeOnRecordBoundaries()));
   return Status::OK();
 }
@@ -2704,11 +2797,13 @@ Status TypedColumnWriterImpl<ByteArrayType>::writeArrowDense(
   };
 
   PARQUET_CATCH_NOT_OK(doInBatches(
-      defLevels,
       repLevels,
       numLevels,
       properties_->writeBatchSize(),
+      properties_->dataPageRowLimit(),
+      numBufferedRows_,
       writeChunk,
+      [&]() { addDataPage(); },
       pagesChangeOnRecordBoundaries()));
   return Status::OK();
 }

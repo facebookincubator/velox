@@ -399,7 +399,7 @@ std::optional<bool> toBoolConfigValue(
 
 std::optional<int64_t> toInt64ConfigValue(
     std::optional<std::string> value,
-    const char* optionName) {
+    std::string_view optionName) {
   if (!value) {
     return std::nullopt;
   }

@@ -1489,6 +1489,125 @@ TEST(TestColumnWriter, WriteDataPagesChangeOnRecordBoundariesWithSmallBatches) {
   }
 }
 
+TEST(TestColumnWriter, WriteDataPagesRespectRowLimitAcrossWriteBatches) {
+  auto sink = createOutputStream();
+  auto schema = std::static_pointer_cast<GroupNode>(GroupNode::make(
+      "schema",
+      Repetition::kRequired,
+      {schema::int32("repeated", Repetition::kRepeated)}));
+  auto properties = WriterProperties::Builder()
+                        .disableDictionary()
+                        ->dataPageVersion(ParquetDataPageVersion::V2)
+                        ->dataPagesize(std::numeric_limits<int64_t>::max())
+                        ->dataPageRowLimit(1)
+                        ->build();
+  auto fileWriter = ParquetFileWriter::open(sink, schema, properties);
+  auto rowGroupWriter = fileWriter->appendRowGroup();
+  auto writer = static_cast<Int32Writer*>(rowGroupWriter->nextColumn());
+
+  constexpr int64_t kLevelsPerWrite = 100;
+  constexpr int64_t kLevelsPerRow = 150;
+  std::array<int32_t, kLevelsPerWrite> values;
+  values.fill(1024);
+  std::array<int16_t, kLevelsPerWrite> definitionLevels;
+  definitionLevels.fill(1);
+  std::array<int16_t, kLevelsPerWrite> repetitionLevels;
+
+  // Write two 150-level records in three batches. The first and last batches
+  // end in the middle of a record.
+  repetitionLevels.fill(1);
+  repetitionLevels[0] = 0;
+  writer->writeBatch(
+      kLevelsPerWrite,
+      definitionLevels.data(),
+      repetitionLevels.data(),
+      values.data());
+
+  repetitionLevels.fill(1);
+  repetitionLevels[50] = 0;
+  writer->writeBatch(
+      kLevelsPerWrite,
+      definitionLevels.data(),
+      repetitionLevels.data(),
+      values.data());
+
+  repetitionLevels.fill(1);
+  writer->writeBatch(
+      kLevelsPerWrite,
+      definitionLevels.data(),
+      repetitionLevels.data(),
+      values.data());
+
+  ASSERT_NO_THROW(fileWriter->close());
+  ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
+  auto fileReader = ParquetFileReader::open(
+      std::make_shared<::arrow::io::BufferReader>(buffer),
+      defaultReaderProperties());
+  auto pageReader = fileReader->rowGroup(0)->getColumnPageReader(0);
+  for (int pageIndex = 0; pageIndex < 2; ++pageIndex) {
+    auto page = pageReader->nextPage();
+    ASSERT_NE(page, nullptr);
+    auto dataPage = std::static_pointer_cast<DataPageV2>(page);
+    EXPECT_EQ(dataPage->numRows(), 1);
+    EXPECT_EQ(dataPage->numValues(), kLevelsPerRow);
+  }
+  EXPECT_EQ(pageReader->nextPage(), nullptr);
+}
+
+// A write batch that ends exactly on the row limit cannot close the page,
+// because its last record may continue in the next batch. The page must then be
+// closed at the start of the next batch rather than after one more record.
+TEST(TestColumnWriter, WriteDataPagesDoNotExceedRowLimitAcrossWriteBatches) {
+  auto sink = createOutputStream();
+  auto schema = std::static_pointer_cast<GroupNode>(GroupNode::make(
+      "schema",
+      Repetition::kRequired,
+      {schema::int32("repeated", Repetition::kRepeated)}));
+  constexpr int64_t kPageRowLimit = 2;
+  auto properties = WriterProperties::Builder()
+                        .disableDictionary()
+                        ->dataPageVersion(ParquetDataPageVersion::V2)
+                        ->dataPagesize(std::numeric_limits<int64_t>::max())
+                        ->dataPageRowLimit(kPageRowLimit)
+                        ->build();
+  auto fileWriter = ParquetFileWriter::open(sink, schema, properties);
+  auto rowGroupWriter = fileWriter->appendRowGroup();
+  auto writer = static_cast<Int32Writer*>(rowGroupWriter->nextColumn());
+
+  // Each write batch holds exactly two three-level records, so every batch
+  // fills the page exactly and ends on a record boundary the writer cannot see.
+  constexpr int64_t kLevelsPerRow = 3;
+  constexpr int64_t kLevelsPerWrite = kLevelsPerRow * kPageRowLimit;
+  constexpr int64_t kNumWrites = 3;
+  const std::vector<int32_t> values(kLevelsPerWrite, 1024);
+  const std::vector<int16_t> definitionLevels(kLevelsPerWrite, 1);
+  const std::vector<int16_t> repetitionLevels{0, 1, 1, 0, 1, 1};
+
+  for (int64_t i = 0; i < kNumWrites; ++i) {
+    writer->writeBatch(
+        kLevelsPerWrite,
+        definitionLevels.data(),
+        repetitionLevels.data(),
+        values.data());
+  }
+
+  ASSERT_NO_THROW(fileWriter->close());
+  ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
+  auto fileReader = ParquetFileReader::open(
+      std::make_shared<::arrow::io::BufferReader>(buffer),
+      defaultReaderProperties());
+  auto pageReader = fileReader->rowGroup(0)->getColumnPageReader(0);
+  int64_t numPages = 0;
+  std::shared_ptr<Page> page;
+  while ((page = pageReader->nextPage()) != nullptr) {
+    auto dataPage = std::static_pointer_cast<DataPageV2>(page);
+    EXPECT_EQ(dataPage->numRows(), kPageRowLimit);
+    EXPECT_EQ(dataPage->numValues(), kLevelsPerWrite);
+    ++numPages;
+  }
+  EXPECT_EQ(numPages, kNumWrites);
+}
+
 class ColumnWriterTestSizeEstimated : public ::testing::Test {
  public:
   void SetUp() {

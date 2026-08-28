@@ -707,6 +707,72 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
           invalidPageSizeAndBatchSizeValue));
 }
 
+TEST_F(ParquetWriterTest, dataPageRowLimitPrecedesSizeLimit) {
+  constexpr int64_t kRows = 5'000;
+  const auto data = makeSmallintTestData(kRows);
+
+  // Set the row count limit to 1500. The default page size is 1MB, which is
+  // large enough to hold all 5000 rows. A 1000-row batch does not evenly
+  // divide the limit, so the writer must split the second batch after 500 rows
+  // instead of flushing a 2000-row page.
+  const std::unordered_map<std::string, std::string> rowLimitFirstConfig = {
+      {std::string(parquet::ParquetConfig::kWriterPageRowLimit), "1500"},
+      {std::string(parquet::ParquetConfig::kWriterBatchSize), "1000"},
+  };
+  auto* sinkPtr = write(data, rowLimitFirstConfig, {});
+  const auto rowLimitFirstHeader = readPageHeader(sinkPtr, 0);
+
+  EXPECT_EQ(*rowLimitFirstHeader.type(), thrift::PageType::DATA_PAGE);
+  EXPECT_EQ(*rowLimitFirstHeader.data_page_header()->num_values(), 1'500);
+}
+
+TEST_F(ParquetWriterTest, dataPageRowLimitAfterSizeLimit) {
+  constexpr int64_t kRows = 5'000;
+  const auto data = makeSmallintTestData(kRows);
+
+  // Similar to testPageSizeAndBatchSizeConfiguration, 2KB page size cuts at
+  // 1067 rows given batch size 97. If we set row limit to 2000, the byte size
+  // limit should trigger first and the page should be cut at 1067 rows.
+  const std::unordered_map<std::string, std::string> sizeLimitFirstConfig = {
+      {std::string(parquet::ParquetConfig::kWriterPageSize), "2KB"},
+      {std::string(parquet::ParquetConfig::kWriterBatchSize), "97"},
+      {std::string(parquet::ParquetConfig::kWriterPageRowLimit), "2000"},
+  };
+  auto* sinkPtr = write(data, sizeLimitFirstConfig, {});
+  const auto sizeLimitFirstHeader = readPageHeader(sinkPtr, 0);
+
+  EXPECT_EQ(*sizeLimitFirstHeader.type(), thrift::PageType::DATA_PAGE);
+  EXPECT_EQ(*sizeLimitFirstHeader.data_page_header()->num_values(), 1'067);
+}
+
+TEST_F(ParquetWriterTest, toggleDataPageRowLimit) {
+  constexpr int64_t kRows = 1'000;
+  const auto data = makeSmallintTestData(kRows);
+
+  const std::unordered_map<std::string, std::string> configFromFile = {
+      {std::string(parquet::ParquetConfig::kWriterPageRowLimit), "100"},
+      {std::string(parquet::ParquetConfig::kWriterBatchSize), "50"},
+  };
+  const std::unordered_map<std::string, std::string> sessionProps = {
+      {std::string(parquet::ParquetConfig::kWriterPageRowLimitSession), "200"},
+  };
+  auto* sinkPtr = write(data, configFromFile, sessionProps);
+  const auto overrideHeader = readPageHeader(sinkPtr, 0);
+
+  EXPECT_EQ(*overrideHeader.type(), thrift::PageType::DATA_PAGE);
+  EXPECT_EQ(*overrideHeader.data_page_header()->num_values(), 200);
+
+  const std::string invalidConfigValue{"A1B2"};
+  const std::unordered_map<std::string, std::string> incorrectConfigFromFile = {
+      {std::string(parquet::ParquetConfig::kWriterPageRowLimit),
+       invalidConfigValue},
+  };
+
+  VELOX_ASSERT_THROW(
+      write(data, incorrectConfigFromFile, {}),
+      "Invalid parquet writer data page row limit");
+}
+
 TEST_F(ParquetWriterTest, toggleDataPageVersion) {
   const int64_t kRows = 1;
   const auto data = makeRowVector({
@@ -2156,75 +2222,6 @@ TEST_F(ParquetWriterTest, flushEstimationFlatColumns) {
   // The second write triggers a flush because the first batch (~600KB)
   // exceeds the 500KB threshold.
   ASSERT_EQ(reader->fileMetaData().numRowGroups(), 2);
-}
-
-TEST_F(ParquetWriterTest, dataPageRowLimitPrecedesSizeLimit) {
-  constexpr int64_t kRows = 5'000;
-  const auto data = makeSmallintTestData(kRows);
-
-  // Set the row count limit to 1500. The default page size is 1MB, which is
-  // large enough to hold all 5000 rows. With batch size 500, it checks limits
-  // every 500 rows. It should cut exactly at 1500 elements since 1500 < 5000
-  // rows and 1500 smallints < 1MB.
-  const std::unordered_map<std::string, std::string> rowLimitFirstConfig = {
-      {std::string(parquet::ParquetConfig::kWriterPageRowLimit), "1500"},
-      {std::string(parquet::ParquetConfig::kWriterBatchSize), "500"},
-  };
-  auto* sinkPtr = write(data, rowLimitFirstConfig, {});
-  const auto rowLimitFirstHeader = readPageHeader(sinkPtr, 0);
-
-  EXPECT_EQ(*rowLimitFirstHeader.type(), thrift::PageType::DATA_PAGE);
-  EXPECT_EQ(*rowLimitFirstHeader.data_page_header()->num_values(), 1'500);
-}
-
-TEST_F(ParquetWriterTest, dataPageRowLimitAfterSizeLimit) {
-  constexpr int64_t kRows = 5'000;
-  const auto data = makeSmallintTestData(kRows);
-
-  // Similar to testPageSizeAndBatchSizeConfiguration, 2KB page size cuts at
-  // 1067 rows given batch size 97. If we set row limit to 2000, the byte size
-  // limit should trigger first and the page should be cut at 1067 rows.
-  const std::unordered_map<std::string, std::string> sizeLimitFirstConfig = {
-      {std::string(parquet::ParquetConfig::kWriterPageSize), "2KB"},
-      {std::string(parquet::ParquetConfig::kWriterBatchSize), "97"},
-      {std::string(parquet::ParquetConfig::kWriterPageRowLimit), "2000"},
-  };
-  auto* sinkPtr = write(data, sizeLimitFirstConfig, {});
-  const auto sizeLimitFirstHeader = readPageHeader(sinkPtr, 0);
-
-  EXPECT_EQ(*sizeLimitFirstHeader.type(), thrift::PageType::DATA_PAGE);
-  EXPECT_EQ(*sizeLimitFirstHeader.data_page_header()->num_values(), 1'067);
-}
-
-TEST_F(ParquetWriterTest, dataPageRowLimitSessionOverride) {
-  constexpr int64_t kRows = 5'000;
-  const auto data = makeSmallintTestData(kRows);
-
-  const std::unordered_map<std::string, std::string> configFromFile = {
-      {std::string(parquet::ParquetConfig::kWriterPageRowLimit), "1000"},
-      {std::string(parquet::ParquetConfig::kWriterBatchSize), "500"},
-  };
-  const std::unordered_map<std::string, std::string> sessionProps = {
-      {std::string(parquet::ParquetConfig::kWriterPageRowLimitSession), "2000"},
-  };
-  auto* sinkPtr = write(data, configFromFile, sessionProps);
-  const auto overrideHeader = readPageHeader(sinkPtr, 0);
-
-  EXPECT_EQ(*overrideHeader.type(), thrift::PageType::DATA_PAGE);
-  EXPECT_EQ(*overrideHeader.data_page_header()->num_values(), 2'000);
-}
-
-TEST_F(ParquetWriterTest, dataPageRowLimitIncorrectConfig) {
-  constexpr int64_t kRows = 5'000;
-  const auto data = makeSmallintTestData(kRows);
-
-  const std::string invalidConfigValue{"A1B2"};
-  const std::unordered_map<std::string, std::string> incorrectConfigFromFile = {
-      {std::string(parquet::ParquetConfig::kWriterPageRowLimit),
-       invalidConfigValue},
-  };
-
-  VELOX_ASSERT_THROW(write(data, incorrectConfigFromFile, {}), "");
 }
 
 } // namespace
