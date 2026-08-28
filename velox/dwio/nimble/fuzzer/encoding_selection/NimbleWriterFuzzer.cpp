@@ -74,9 +74,11 @@ using ::facebook::velox::VectorPtr;
 using ::facebook::velox::fuzzer::FuzzerGenerator;
 
 // Writable encodings that this fuzzer target intentionally does not force.
-// This is not a global unsupported-encoding list.
+// The unfiltered random policy also omits these; this list keeps the repair
+// phase and coverage gate from adding them back. This is not a global
+// unsupported-encoding list.
 constexpr auto kExcludedFuzzerCandidateEncodings =
-    std::to_array({EncodingType::SubIntSplit});
+    std::to_array({EncodingType::Huffman, EncodingType::SubIntSplit});
 
 // Scalar types the Nimble writer round-trips with type identity.
 // FieldWriter::create dispatches on the physical TypeKind, so DATE, TIME,
@@ -2155,7 +2157,7 @@ void NimbleWriterFuzzer::run() {
       missingEncodings.size(),
       fmt::join(missingEncodingNames, ", "));
 
-  // The default random policy omits the integral-only four because its
+  // The default random policy omits the integral-only candidates because its
   // write-side and read-side floating-point gates disagree (T283330065), so
   // they always reach this repair phase. gateFloatingPointStreams holds them
   // off float streams alone while still exercising integer streams in a mixed
