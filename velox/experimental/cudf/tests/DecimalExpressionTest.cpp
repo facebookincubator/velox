@@ -1921,6 +1921,56 @@ TEST_F(CudfDecimalTest, decimalMultiplyInt64ToInt128PromotionAtBoundary) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
+// The other multiply promotion tests all use scale 0, so nothing covers scale
+// addition across the storage boundary. Multiply derives precision
+// min(38, p1 + p2) and scale s1 + s2, so DECIMAL(18, 2) * DECIMAL(18, 2) is
+// DECIMAL(36, 4): int64-backed operands, an int128-backed result, and an output
+// scale that is neither operand's. MUL is the one checked op whose operands are
+// not pre-rescaled to the output scale, so the product's scale comes from the
+// operand scales while the result width comes from the output type.
+TEST_F(CudfDecimalTest, decimalMultiplyScaledPromotesToLong) {
+  // 10^18 - 1 is the largest DECIMAL(18, 2) magnitude, i.e.
+  // 9999999999999999.99.
+  constexpr int64_t kMaxShort = 999'999'999'999'999'999LL;
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(
+              {kMaxShort, -kMaxShort, 12345}, DECIMAL(18, 2)),
+          makeFlatVector<int64_t>({kMaxShort, kMaxShort, -300}, DECIMAL(18, 2)),
+      });
+
+  auto plan = exec::test::PlanBuilder()
+                  .values({input})
+                  .project({"a * b AS result"})
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  auto gpuType = gpuResult->childAt(0)->type();
+  ASSERT_TRUE(gpuType->equivalent(*DECIMAL(36, 4)))
+      << "expected promoted DECIMAL(36, 4), but got " << gpuType->toString();
+  ASSERT_TRUE(gpuType->isLongDecimal())
+      << "expected int128-backed long decimal, but got " << gpuType->toString();
+
+  // (10^18 - 1)^2 = 10^36 - 2 * 10^18 + 1, which is 36 digits and so exactly
+  // fills precision 36 without overflowing.
+  const auto squared =
+      static_cast<int128_t>(kMaxShort) * static_cast<int128_t>(kMaxShort);
+  auto expected = makeRowVector(
+      {"result"},
+      {makeFlatVector<int128_t>(
+          {squared, -squared, static_cast<int128_t>(-3'703'500)},
+          DECIMAL(36, 4))});
+  facebook::velox::test::assertEqualVectors(expected, cpuResult);
+  facebook::velox::test::assertEqualVectors(expected, gpuResult);
+}
+
 // Guards against false-positive overflow on divide: the dividend is rescaled by
 // 10^2 (9e35 * 1e2 = 9e37 < int128 max) and the quotient 9e35 / 0.01 = 9e37
 // (raw, scale 2) still fits precision 38, so it must succeed and match CPU.
@@ -2374,6 +2424,112 @@ TEST_F(CudfDecimalTest, decimalModuloByNegativeOneNoOverflow) {
           .values({colOnly})
           .project({"a % CAST('-1' AS DECIMAL(38, 0)) AS result"})
           .planNode());
+}
+
+// Modulo is the only checked op whose result precision,
+// min(p1 - s1, p2 - s2) + max(s1, s2), can be narrower than an operand, so it
+// is the only one that reaches the kernel with a DECIMAL128 operand and a
+// DECIMAL64 result. Both decimal(20,0) % decimal(5,2) and its mirror yield
+// decimal(5,2). Dispatching on the operands alone picked an int128 output
+// representation for an int64-backed result column, writing 16 bytes per row at
+// a 16-byte stride into an 8-byte-per-row allocation: neighbouring rows were
+// clobbered and the back half of the rows landed past the end of the buffer.
+// Row counts here are large enough that such a write leaves the allocation.
+TEST_F(CudfDecimalTest, decimalModuloMixedStorageWidths) {
+  constexpr vector_size_t kSize = 1024;
+
+  auto wide = makeFlatVector<int128_t>(
+      kSize,
+      [](auto row) { return static_cast<int128_t>(row) * 7919 + 1; },
+      nullptr,
+      DECIMAL(20, 0));
+  // Divisors stay in [1.05, 2.04] so they are never zero and the remainder
+  // always fits decimal(5,2); any difference from CPU is a storage-width bug,
+  // not an overflow.
+  auto narrow = makeFlatVector<int64_t>(
+      kSize,
+      [](auto row) { return 105 + (row % 100); },
+      nullptr,
+      DECIMAL(5, 2));
+
+  auto assertCpuGpuEqual = [&](const std::string& projection,
+                               const RowVectorPtr& input) {
+    SCOPED_TRACE(projection);
+    auto plan = exec::test::PlanBuilder()
+                    .values({input})
+                    .project({projection})
+                    .planNode();
+    unregisterCudf();
+    auto cpuResult =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
+    registerCudf();
+    auto gpuResult =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
+    facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+  };
+
+  auto colCol = makeRowVector({"wide", "narrow"}, {wide, narrow});
+  // DECIMAL128 lhs, DECIMAL64 rhs, DECIMAL64 result.
+  assertCpuGpuEqual("wide % narrow AS result", colCol);
+  // DECIMAL64 lhs, DECIMAL128 rhs, DECIMAL64 result.
+  assertCpuGpuEqual("narrow % wide AS result", colCol);
+
+  // Scalar operand paths: the scalar is decoded at its own storage width while
+  // the column and result widths differ from it.
+  auto wideOnly = makeRowVector({"wide"}, {wide});
+  assertCpuGpuEqual("wide % CAST('1.07' AS DECIMAL(5, 2)) AS result", wideOnly);
+
+  // The literal is DECIMAL128 by its declared precision, but its magnitude has
+  // to stay under (2^63 - 1) / 10^2: Velox CPU rescales the dividend by the
+  // scale difference in the narrow *result* type, so a larger dividend is a
+  // genuine overflow on both paths and would not exercise the widths.
+  auto narrowOnly = makeRowVector({"narrow"}, {narrow});
+  assertCpuGpuEqual(
+      "CAST('1234567890123456' AS DECIMAL(20, 0)) % narrow AS result",
+      narrowOnly);
+}
+
+// ADD/SUB/MUL promote to a DECIMAL128 result from DECIMAL64 operands, which the
+// kernel now handles by widening on load rather than relying on the caller to
+// cast the operand columns first.
+TEST_F(CudfDecimalTest, decimalPromotingOpsMixedStorageWidths) {
+  constexpr vector_size_t kSize = 512;
+
+  auto narrow = makeFlatVector<int64_t>(
+      kSize,
+      [](auto row) { return 999'999'999'999'999'000LL + row; },
+      nullptr,
+      DECIMAL(18, 0));
+  auto wide = makeFlatVector<int128_t>(
+      kSize,
+      [](auto row) { return static_cast<int128_t>(row) * 1'000'003 + 17; },
+      nullptr,
+      DECIMAL(38, 4));
+
+  auto input = makeRowVector({"narrow", "wide"}, {narrow, wide});
+
+  for (const auto& projection :
+       {"narrow + narrow AS result",
+        "narrow - narrow AS result",
+        "narrow + wide AS result",
+        "wide - narrow AS result"}) {
+    SCOPED_TRACE(projection);
+    auto plan = exec::test::PlanBuilder()
+                    .values({input})
+                    .project({projection})
+                    .planNode();
+    unregisterCudf();
+    auto cpuResult =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
+    registerCudf();
+    auto gpuResult =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
+    facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+  }
 }
 
 } // namespace

@@ -682,27 +682,11 @@ class BinaryFunction : public CudfFunction {
             op_ == cudf::binary_operator::SUB ||
             op_ == cudf::binary_operator::MUL ||
             op_ == cudf::binary_operator::MOD) {
-          // Widen operand storage to the result storage type but keep each
-          // operand's own scale. The overflow-checked kernel rescales
-          // ADD/SUB/MOD operands to the output scale itself, so scale
-          // conversion stays inside the fail-fast path instead of an unchecked
-          // cudf::cast here (MUL keeps operands at their natural scales).
-          std::unique_ptr<cudf::column> lhsCast;
-          std::unique_ptr<cudf::column> rhsCast;
-          if (type_.id() == cudf::type_id::DECIMAL128) {
-            if (lhsView.type().id() == cudf::type_id::DECIMAL64) {
-              auto castType = cudf::data_type{
-                  cudf::type_id::DECIMAL128, lhsView.type().scale()};
-              lhsCast = cudf::cast(lhsView, castType, stream, mr);
-              lhsView = lhsCast->view();
-            }
-            if (rhsView.type().id() == cudf::type_id::DECIMAL64) {
-              auto castType = cudf::data_type{
-                  cudf::type_id::DECIMAL128, rhsView.type().scale()};
-              rhsCast = cudf::cast(rhsView, castType, stream, mr);
-              rhsView = rhsCast->view();
-            }
-          }
+          // Operands keep their own storage width and scale: the
+          // overflow-checked kernel dispatches on the lhs, rhs and output
+          // widths independently and rescales ADD/SUB/MOD operands to the
+          // output scale itself, so both conversions stay inside the fail-fast
+          // path instead of an unchecked cudf::cast here.
           // @TODO Check for divide-by-zero as in the DECIMAL case above?
           return decimalBinaryOperation(
               lhsView, rhsView, op_, type_, decimalPrecision_, stream, mr);
@@ -751,31 +735,10 @@ class BinaryFunction : public CudfFunction {
             op_ == cudf::binary_operator::SUB ||
             op_ == cudf::binary_operator::MUL ||
             op_ == cudf::binary_operator::MOD) {
-          // Storage-only widening; the checked kernel rescales ADD/SUB/MOD
-          // operands to the output scale (see column/column path above).
-          std::unique_ptr<cudf::column> lhsCast;
-          std::unique_ptr<cudf::scalar> rhsScalar;
-          if (type_.id() == cudf::type_id::DECIMAL128) {
-            if (lhsView.type().id() == cudf::type_id::DECIMAL64) {
-              auto castType = cudf::data_type{
-                  cudf::type_id::DECIMAL128, lhsView.type().scale()};
-              lhsCast = cudf::cast(lhsView, castType, stream, mr);
-              lhsView = lhsCast->view();
-            }
-            if (right_->type().id() == cudf::type_id::DECIMAL64) {
-              auto castType = cudf::data_type{
-                  cudf::type_id::DECIMAL128, right_->type().scale()};
-              rhsScalar = castDecimalScalar(*right_, castType, stream, mr);
-            }
-          }
+          // Operand widths and scales are handled by the checked kernel (see
+          // the column/column path above).
           return decimalBinaryOperation(
-              lhsView,
-              rhsScalar ? *rhsScalar : *right_,
-              op_,
-              type_,
-              decimalPrecision_,
-              stream,
-              mr);
+              lhsView, *right_, op_, type_, decimalPrecision_, stream, mr);
         }
       }
       return cudf::binary_operation(
@@ -818,31 +781,10 @@ class BinaryFunction : public CudfFunction {
           op_ == cudf::binary_operator::SUB ||
           op_ == cudf::binary_operator::MUL ||
           op_ == cudf::binary_operator::MOD) {
-        // Storage-only widening; the checked kernel rescales ADD/SUB/MOD
-        // operands to the output scale (see column/column path above).
-        std::unique_ptr<cudf::column> rhsCast;
-        std::unique_ptr<cudf::scalar> lhsScalar;
-        if (type_.id() == cudf::type_id::DECIMAL128) {
-          if (rhsView.type().id() == cudf::type_id::DECIMAL64) {
-            auto castType = cudf::data_type{
-                cudf::type_id::DECIMAL128, rhsView.type().scale()};
-            rhsCast = cudf::cast(rhsView, castType, stream, mr);
-            rhsView = rhsCast->view();
-          }
-          if (left_->type().id() == cudf::type_id::DECIMAL64) {
-            auto castType = cudf::data_type{
-                cudf::type_id::DECIMAL128, left_->type().scale()};
-            lhsScalar = castDecimalScalar(*left_, castType, stream, mr);
-          }
-        }
+        // Operand widths and scales are handled by the checked kernel (see the
+        // column/column path above).
         return decimalBinaryOperation(
-            lhsScalar ? *lhsScalar : *left_,
-            rhsView,
-            op_,
-            type_,
-            decimalPrecision_,
-            stream,
-            mr);
+            *left_, rhsView, op_, type_, decimalPrecision_, stream, mr);
       }
     }
     return cudf::binary_operation(*left_, rhsView, op_, type_, stream, mr);

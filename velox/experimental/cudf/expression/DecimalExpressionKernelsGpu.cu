@@ -472,6 +472,25 @@ namespace {
 
 using errc = cudf::errc;
 
+// Velox maps a decimal precision of at most 18 to a short decimal (DECIMAL64)
+// and anything wider to a long decimal (DECIMAL128), so a storage width implies
+// the largest precision it can hold.
+template <typename Rep>
+constexpr int32_t kMaxPrecisionFor = std::is_same_v<Rep, int64_t> ? 18 : 38;
+
+// Storage width of the arithmetic performed by evalDecimalBinaryRow, given the
+// three storage widths involved. int64_t is only safe when all three are
+// DECIMAL64: the operand rescale, the op itself and check_precision all run at
+// this type, so a narrower type than the output would report a false overflow
+// for a result the output was widened to hold, and would evaluate
+// ipow<Rep, BASE_10>(outPrecision) past its own range.
+template <typename LhsRep, typename RhsRep, typename OutRep>
+using ComputeRepFor = std::conditional_t<
+    std::is_same_v<LhsRep, int64_t> && std::is_same_v<RhsRep, int64_t> &&
+        std::is_same_v<OutRep, int64_t>,
+    int64_t,
+    __int128_t>;
+
 template <typename Rep>
 __device__ cuda::std::expected<numeric::decimal<Rep>, errc> checkedRescale(
     numeric::decimal<Rep> value,
@@ -594,10 +613,16 @@ __device__ void evalDecimalBinaryRow(
   out[idx] = static_cast<OutRep>(precisionChecked.value().value());
 }
 
-template <typename Rep, typename OutRep>
+// Operands are loaded at their own storage width and widened to the compute
+// type. Loading both through one representation would reinterpret a DECIMAL64
+// operand at the wrong width and stride whenever the other operand or the
+// output is DECIMAL128.
+template <typename LhsRep, typename RhsRep, typename OutRep>
 struct DecimalBinaryColColFunctor {
-  const Rep* lhs;
-  const Rep* rhs;
+  using Rep = ComputeRepFor<LhsRep, RhsRep, OutRep>;
+
+  const LhsRep* lhs;
+  const RhsRep* rhs;
   OutRep* out;
   numeric::scale_type lhsScale;
   numeric::scale_type rhsScale;
@@ -611,8 +636,10 @@ struct DecimalBinaryColColFunctor {
       return;
     }
     evalDecimalBinaryRow<Rep, OutRep>(
-        numeric::decimal<Rep>{numeric::scaled_integer<Rep>{lhs[idx], lhsScale}},
-        numeric::decimal<Rep>{numeric::scaled_integer<Rep>{rhs[idx], rhsScale}},
+        numeric::decimal<Rep>{
+            numeric::scaled_integer<Rep>{static_cast<Rep>(lhs[idx]), lhsScale}},
+        numeric::decimal<Rep>{
+            numeric::scaled_integer<Rep>{static_cast<Rep>(rhs[idx]), rhsScale}},
         op,
         outScale,
         outPrecision,
@@ -622,10 +649,12 @@ struct DecimalBinaryColColFunctor {
   }
 };
 
-template <typename Rep, typename OutRep>
+template <typename LhsRep, typename RhsRep, typename OutRep>
 struct DecimalBinaryLhsScalarFunctor {
-  Rep lhsValue;
-  const Rep* rhs;
+  using Rep = ComputeRepFor<LhsRep, RhsRep, OutRep>;
+
+  LhsRep lhsValue;
+  const RhsRep* rhs;
   OutRep* out;
   numeric::scale_type lhsScale;
   numeric::scale_type rhsScale;
@@ -639,8 +668,10 @@ struct DecimalBinaryLhsScalarFunctor {
       return;
     }
     evalDecimalBinaryRow<Rep, OutRep>(
-        numeric::decimal<Rep>{numeric::scaled_integer<Rep>{lhsValue, lhsScale}},
-        numeric::decimal<Rep>{numeric::scaled_integer<Rep>{rhs[idx], rhsScale}},
+        numeric::decimal<Rep>{
+            numeric::scaled_integer<Rep>{static_cast<Rep>(lhsValue), lhsScale}},
+        numeric::decimal<Rep>{
+            numeric::scaled_integer<Rep>{static_cast<Rep>(rhs[idx]), rhsScale}},
         op,
         outScale,
         outPrecision,
@@ -650,10 +681,12 @@ struct DecimalBinaryLhsScalarFunctor {
   }
 };
 
-template <typename Rep, typename OutRep>
+template <typename LhsRep, typename RhsRep, typename OutRep>
 struct DecimalBinaryRhsScalarFunctor {
-  const Rep* lhs;
-  Rep rhsValue;
+  using Rep = ComputeRepFor<LhsRep, RhsRep, OutRep>;
+
+  const LhsRep* lhs;
+  RhsRep rhsValue;
   OutRep* out;
   numeric::scale_type lhsScale;
   numeric::scale_type rhsScale;
@@ -667,8 +700,10 @@ struct DecimalBinaryRhsScalarFunctor {
       return;
     }
     evalDecimalBinaryRow<Rep, OutRep>(
-        numeric::decimal<Rep>{numeric::scaled_integer<Rep>{lhs[idx], lhsScale}},
-        numeric::decimal<Rep>{numeric::scaled_integer<Rep>{rhsValue, rhsScale}},
+        numeric::decimal<Rep>{
+            numeric::scaled_integer<Rep>{static_cast<Rep>(lhs[idx]), lhsScale}},
+        numeric::decimal<Rep>{
+            numeric::scaled_integer<Rep>{static_cast<Rep>(rhsValue), rhsScale}},
         op,
         outScale,
         outPrecision,
@@ -678,7 +713,17 @@ struct DecimalBinaryRhsScalarFunctor {
   }
 };
 
-template <typename InRep, typename OutRep>
+// The output store narrows the compute type to OutRep behind check_precision,
+// which only bounds the value to 10^outPrecision. A precision wider than OutRep
+// can hold would therefore truncate silently.
+template <typename OutRep>
+void checkDecimalOutputPrecision(int32_t outPrecision) {
+  CUDF_EXPECTS(
+      outPrecision > 0 && outPrecision <= kMaxPrecisionFor<OutRep>,
+      "Decimal binop output precision must fit the output storage width");
+}
+
+template <typename LhsRep, typename RhsRep, typename OutRep>
 int32_t launchDecimalBinaryColColKernel(
     cudf::column_view const& lhs,
     cudf::column_view const& rhs,
@@ -686,6 +731,7 @@ int32_t launchDecimalBinaryColColKernel(
     cudf::binary_operator op,
     int32_t outPrecision,
     rmm::cuda_stream_view stream) {
+  checkDecimalOutputPrecision<OutRep>(outPrecision);
   auto const lhsScale = numeric::scale_type{lhs.type().scale()};
   auto const rhsScale = numeric::scale_type{rhs.type().scale()};
   auto const outScale = numeric::scale_type{out.type().scale()};
@@ -693,9 +739,9 @@ int32_t launchDecimalBinaryColColKernel(
   return launchOverflowChecked(
       lhs.size(),
       [&]() {
-        return DecimalBinaryColColFunctor<InRep, OutRep>{
-            lhs.data<InRep>(),
-            rhs.data<InRep>(),
+        return DecimalBinaryColColFunctor<LhsRep, RhsRep, OutRep>{
+            lhs.data<LhsRep>(),
+            rhs.data<RhsRep>(),
             out.data<OutRep>(),
             lhsScale,
             rhsScale,
@@ -707,23 +753,24 @@ int32_t launchDecimalBinaryColColKernel(
       stream);
 }
 
-template <typename InRep, typename OutRep>
+template <typename LhsRep, typename RhsRep, typename OutRep>
 int32_t launchDecimalBinaryRhsScalarKernel(
     cudf::column_view const& lhs,
-    InRep rhsValue,
+    RhsRep rhsValue,
     numeric::scale_type rhsScale,
     cudf::mutable_column_view out,
     cudf::binary_operator op,
     int32_t outPrecision,
     rmm::cuda_stream_view stream) {
+  checkDecimalOutputPrecision<OutRep>(outPrecision);
   auto const lhsScale = numeric::scale_type{lhs.type().scale()};
   auto const outScale = numeric::scale_type{out.type().scale()};
   auto const* nullMask = out.null_mask();
   return launchOverflowChecked(
       lhs.size(),
       [&]() {
-        return DecimalBinaryRhsScalarFunctor<InRep, OutRep>{
-            lhs.data<InRep>(),
+        return DecimalBinaryRhsScalarFunctor<LhsRep, RhsRep, OutRep>{
+            lhs.data<LhsRep>(),
             rhsValue,
             out.data<OutRep>(),
             lhsScale,
@@ -736,24 +783,25 @@ int32_t launchDecimalBinaryRhsScalarKernel(
       stream);
 }
 
-template <typename InRep, typename OutRep>
+template <typename LhsRep, typename RhsRep, typename OutRep>
 int32_t launchDecimalBinaryLhsScalarKernel(
-    InRep lhsValue,
+    LhsRep lhsValue,
     numeric::scale_type lhsScale,
     cudf::column_view const& rhs,
     cudf::mutable_column_view out,
     cudf::binary_operator op,
     int32_t outPrecision,
     rmm::cuda_stream_view stream) {
+  checkDecimalOutputPrecision<OutRep>(outPrecision);
   auto const rhsScale = numeric::scale_type{rhs.type().scale()};
   auto const outScale = numeric::scale_type{out.type().scale()};
   auto const* nullMask = out.null_mask();
   return launchOverflowChecked(
       rhs.size(),
       [&]() {
-        return DecimalBinaryLhsScalarFunctor<InRep, OutRep>{
+        return DecimalBinaryLhsScalarFunctor<LhsRep, RhsRep, OutRep>{
             lhsValue,
-            rhs.data<InRep>(),
+            rhs.data<RhsRep>(),
             out.data<OutRep>(),
             lhsScale,
             rhsScale,
@@ -783,7 +831,7 @@ std::unique_ptr<cudf::column> makeResultColumn(
       outputType, size, std::move(nullMask), nullCount, stream, mr);
 }
 
-template <typename InRep, typename OutRep>
+template <typename LhsRep, typename RhsRep, typename OutRep>
 std::pair<std::unique_ptr<cudf::column>, int32_t>
 decimalBinaryOperationColColImpl(
     cudf::column_view const& lhs,
@@ -799,11 +847,34 @@ decimalBinaryOperationColColImpl(
   auto result = makeResultColumn(
       lhs.size(), outputType, std::move(nullMask), nullCount, stream, mr);
 
-  int32_t const statusFlag = launchDecimalBinaryColColKernel<InRep, OutRep>(
-      lhs, rhs, result->mutable_view(), op, outputPrecision, stream);
+  int32_t const statusFlag =
+      launchDecimalBinaryColColKernel<LhsRep, RhsRep, OutRep>(
+          lhs, rhs, result->mutable_view(), op, outputPrecision, stream);
   return {std::move(result), statusFlag};
 }
 
+// Invokes fn with a value of the storage representation behind `type`, so a
+// runtime decimal width selects a kernel template argument.
+template <typename Fn>
+auto dispatchDecimalRep(cudf::data_type type, Fn&& fn)
+    -> decltype(fn(int64_t{})) {
+  switch (type.id()) {
+    case cudf::type_id::DECIMAL64:
+      return fn(int64_t{});
+    case cudf::type_id::DECIMAL128:
+      return fn(__int128_t{});
+    default:
+      CUDF_FAIL(
+          "Unsupported decimal storage type for overflow-checked execution");
+  }
+}
+
+// The lhs, rhs and output storage widths vary independently, so all three are
+// dispatched on. Velox's modulo result precision is
+// min(p1 - s1, p2 - s2) + max(s1, s2), which unlike ADD/SUB/MUL can be narrower
+// than an operand, and ExpressionEvaluator only widens operands to the result
+// storage when that result is DECIMAL128. A DECIMAL128 operand feeding a
+// DECIMAL64 result is therefore reachable, e.g. decimal(20,0) % decimal(5,2).
 std::pair<std::unique_ptr<cudf::column>, int32_t>
 dispatchDecimalBinaryOperationColCol(
     cudf::column_view const& lhs,
@@ -813,28 +884,82 @@ dispatchDecimalBinaryOperationColCol(
     int32_t outputPrecision,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  bool const inputsAreDecimal64 = lhs.type().id() == cudf::type_id::DECIMAL64 &&
-      rhs.type().id() == cudf::type_id::DECIMAL64;
-  if (inputsAreDecimal64) {
-    if (outputType.id() == cudf::type_id::DECIMAL64) {
-      return decimalBinaryOperationColColImpl<int64_t, int64_t>(
-          lhs, rhs, op, outputType, outputPrecision, stream, mr);
-    }
-    return decimalBinaryOperationColColImpl<int64_t, __int128_t>(
-        lhs, rhs, op, outputType, outputPrecision, stream, mr);
-  }
-  return decimalBinaryOperationColColImpl<__int128_t, __int128_t>(
-      lhs, rhs, op, outputType, outputPrecision, stream, mr);
+  return dispatchDecimalRep(lhs.type(), [&](auto lhsRep) {
+    return dispatchDecimalRep(rhs.type(), [&](auto rhsRep) {
+      return dispatchDecimalRep(outputType, [&](auto outRep) {
+        return decimalBinaryOperationColColImpl<
+            decltype(lhsRep),
+            decltype(rhsRep),
+            decltype(outRep)>(
+            lhs, rhs, op, outputType, outputPrecision, stream, mr);
+      });
+    });
+  });
 }
 
-template <typename InRep>
-InRep getTypedDecimalScalarValue(
+// Decoding at the scalar's own storage width keeps the narrowing from the
+// __int128_t payload exact; the kernel widens to the compute type.
+template <typename ScalarRep>
+ScalarRep getTypedDecimalScalarValue(
     const cudf::scalar& s,
     rmm::cuda_stream_view stream) {
-  if constexpr (std::is_same_v<InRep, int64_t>) {
-    return static_cast<int64_t>(detail::getDecimalScalarValue(s, stream));
-  }
-  return static_cast<InRep>(detail::getDecimalScalarValue(s, stream));
+  return static_cast<ScalarRep>(detail::getDecimalScalarValue(s, stream));
+}
+
+int32_t dispatchDecimalBinaryOperationColScalar(
+    cudf::column_view const& lhs,
+    cudf::scalar const& rhs,
+    cudf::mutable_column_view out,
+    cudf::binary_operator op,
+    int32_t outputPrecision,
+    rmm::cuda_stream_view stream) {
+  auto const rhsScale = numeric::scale_type{rhs.type().scale()};
+  return dispatchDecimalRep(lhs.type(), [&](auto lhsRep) {
+    return dispatchDecimalRep(rhs.type(), [&](auto rhsRep) {
+      return dispatchDecimalRep(out.type(), [&](auto outRep) {
+        using RhsRep = decltype(rhsRep);
+        return launchDecimalBinaryRhsScalarKernel<
+            decltype(lhsRep),
+            RhsRep,
+            decltype(outRep)>(
+            lhs,
+            getTypedDecimalScalarValue<RhsRep>(rhs, stream),
+            rhsScale,
+            out,
+            op,
+            outputPrecision,
+            stream);
+      });
+    });
+  });
+}
+
+int32_t dispatchDecimalBinaryOperationScalarCol(
+    cudf::scalar const& lhs,
+    cudf::column_view const& rhs,
+    cudf::mutable_column_view out,
+    cudf::binary_operator op,
+    int32_t outputPrecision,
+    rmm::cuda_stream_view stream) {
+  auto const lhsScale = numeric::scale_type{lhs.type().scale()};
+  return dispatchDecimalRep(lhs.type(), [&](auto lhsRep) {
+    return dispatchDecimalRep(rhs.type(), [&](auto rhsRep) {
+      return dispatchDecimalRep(out.type(), [&](auto outRep) {
+        using LhsRep = decltype(lhsRep);
+        return launchDecimalBinaryLhsScalarKernel<
+            LhsRep,
+            decltype(rhsRep),
+            decltype(outRep)>(
+            getTypedDecimalScalarValue<LhsRep>(lhs, stream),
+            lhsScale,
+            rhs,
+            out,
+            op,
+            outputPrecision,
+            stream);
+      });
+    });
+  });
 }
 
 } // namespace
@@ -878,40 +1003,8 @@ decimalBinaryOperationWithOverflow(
       stream,
       mr);
 
-  int32_t statusFlag = 0;
-  auto const rhsScale = numeric::scale_type{rhs.type().scale()};
-  if (lhs.type().id() == cudf::type_id::DECIMAL64) {
-    auto const rhsValue = getTypedDecimalScalarValue<int64_t>(rhs, stream);
-    if (outputType.id() == cudf::type_id::DECIMAL64) {
-      statusFlag = launchDecimalBinaryRhsScalarKernel<int64_t, int64_t>(
-          lhs,
-          rhsValue,
-          rhsScale,
-          result->mutable_view(),
-          op,
-          outputPrecision,
-          stream);
-    } else {
-      statusFlag = launchDecimalBinaryRhsScalarKernel<int64_t, __int128_t>(
-          lhs,
-          rhsValue,
-          rhsScale,
-          result->mutable_view(),
-          op,
-          outputPrecision,
-          stream);
-    }
-  } else {
-    auto const rhsValue = getTypedDecimalScalarValue<__int128_t>(rhs, stream);
-    statusFlag = launchDecimalBinaryRhsScalarKernel<__int128_t, __int128_t>(
-        lhs,
-        rhsValue,
-        rhsScale,
-        result->mutable_view(),
-        op,
-        outputPrecision,
-        stream);
-  }
+  int32_t const statusFlag = dispatchDecimalBinaryOperationColScalar(
+      lhs, rhs, result->mutable_view(), op, outputPrecision, stream);
   return {std::move(result), toDecimalBinaryOpStatus(statusFlag)};
 }
 
@@ -939,40 +1032,8 @@ decimalBinaryOperationWithOverflow(
       stream,
       mr);
 
-  int32_t statusFlag = 0;
-  auto const lhsScale = numeric::scale_type{lhs.type().scale()};
-  if (rhs.type().id() == cudf::type_id::DECIMAL64) {
-    auto const lhsValue = getTypedDecimalScalarValue<int64_t>(lhs, stream);
-    if (outputType.id() == cudf::type_id::DECIMAL64) {
-      statusFlag = launchDecimalBinaryLhsScalarKernel<int64_t, int64_t>(
-          lhsValue,
-          lhsScale,
-          rhs,
-          result->mutable_view(),
-          op,
-          outputPrecision,
-          stream);
-    } else {
-      statusFlag = launchDecimalBinaryLhsScalarKernel<int64_t, __int128_t>(
-          lhsValue,
-          lhsScale,
-          rhs,
-          result->mutable_view(),
-          op,
-          outputPrecision,
-          stream);
-    }
-  } else {
-    auto const lhsValue = getTypedDecimalScalarValue<__int128_t>(lhs, stream);
-    statusFlag = launchDecimalBinaryLhsScalarKernel<__int128_t, __int128_t>(
-        lhsValue,
-        lhsScale,
-        rhs,
-        result->mutable_view(),
-        op,
-        outputPrecision,
-        stream);
-  }
+  int32_t const statusFlag = dispatchDecimalBinaryOperationScalarCol(
+      lhs, rhs, result->mutable_view(), op, outputPrecision, stream);
   return {std::move(result), toDecimalBinaryOpStatus(statusFlag)};
 }
 
