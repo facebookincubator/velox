@@ -1442,16 +1442,25 @@ UnnestNode::UnnestNode(
   int unnestIndex = 0;
   for (const auto& variable : unnestVariables_) {
     if (variable->type()->isArray()) {
-      names.emplace_back(unnestNames_[unnestIndex++].value());
-      types.emplace_back(variable->type()->asArray().elementType());
+      if (unnestNames_[unnestIndex].has_value()) {
+        names.emplace_back(unnestNames_[unnestIndex].value());
+        types.emplace_back(variable->type()->asArray().elementType());
+      }
+      ++unnestIndex;
     } else if (variable->type()->isMap()) {
       const auto& mapType = variable->type()->asMap();
 
-      names.emplace_back(unnestNames_[unnestIndex++].value());
-      types.emplace_back(mapType.keyType());
+      if (unnestNames_[unnestIndex].has_value()) {
+        names.emplace_back(unnestNames_[unnestIndex].value());
+        types.emplace_back(mapType.keyType());
+      }
+      ++unnestIndex;
 
-      names.emplace_back(unnestNames_[unnestIndex++].value());
-      types.emplace_back(mapType.valueType());
+      if (unnestNames_[unnestIndex].has_value()) {
+        names.emplace_back(unnestNames_[unnestIndex].value());
+        types.emplace_back(mapType.valueType());
+      }
+      ++unnestIndex;
     } else {
       VELOX_FAIL(
           "Unexpected type of unnest variable. Expected ARRAY or MAP, but got {}.",
