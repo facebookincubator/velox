@@ -35,9 +35,9 @@ namespace detail {
 /// compressed one, or an encoding with no view. Construction is not cheap and
 /// the decoded array costs rowCount * sizeof(physicalType).
 ///
-/// Nothing here is SubIntSplit-specific. SharedDictionaryAlphabet hand-rolls the
-/// same fallback and could be simplified by this class; move it to views/ if
-/// that is done.
+/// Nothing here is SubIntSplit-specific. SharedDictionaryAlphabet hand-rolls
+/// the same fallback and could be simplified by this class; move it to views/
+/// if that is done.
 template <typename T>
 class MaterializedEncodingView final : public TypedEncodingView<T> {
  public:
@@ -274,22 +274,38 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
         switch (section.storageBytes) {
           case 1:
             readSectionChunk<uint8_t>(
-                section, sourceOffset, chunkCount, chunkOutput, isFirst,
+                section,
+                sourceOffset,
+                chunkCount,
+                chunkOutput,
+                isFirst,
                 scratch);
             break;
           case 2:
             readSectionChunk<uint16_t>(
-                section, sourceOffset, chunkCount, chunkOutput, isFirst,
+                section,
+                sourceOffset,
+                chunkCount,
+                chunkOutput,
+                isFirst,
                 scratch);
             break;
           case 4:
             readSectionChunk<uint32_t>(
-                section, sourceOffset, chunkCount, chunkOutput, isFirst,
+                section,
+                sourceOffset,
+                chunkCount,
+                chunkOutput,
+                isFirst,
                 scratch);
             break;
           case 8:
             readSectionChunk<uint64_t>(
-                section, sourceOffset, chunkCount, chunkOutput, isFirst,
+                section,
+                sourceOffset,
+                chunkCount,
+                chunkOutput,
+                isFirst,
                 scratch);
             break;
           default:

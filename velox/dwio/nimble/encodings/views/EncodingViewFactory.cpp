@@ -129,7 +129,8 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       if constexpr (
           isNumericType<physicalType>() &&
           (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
-        return std::make_unique<SubIntSplitEncodingView<T>>(data, pool, options);
+        return std::make_unique<SubIntSplitEncodingView<T>>(
+            data, pool, options);
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "SubIntSplit encoding only supports 32- and 64-bit numeric data types, got {}.",

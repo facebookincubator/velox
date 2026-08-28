@@ -90,8 +90,7 @@ inline std::vector<SubIntSplitSection> parseSubIntSplitSections(
   for (uint8_t s = 0; s < splitCount; ++s) {
     auto& section = sections[s];
     const int width = section.bitEnd - section.bitStart + 1;
-    section.mask =
-        (width >= 64) ? ~uint64_t{0} : ((uint64_t{1} << width) - 1);
+    section.mask = (width >= 64) ? ~uint64_t{0} : ((uint64_t{1} << width) - 1);
     section.storageBytes = subIntSplitSectionStorageBytes(width);
     section.stream = std::string_view{pos, encodedSizes[s]};
     pos += encodedSizes[s];
@@ -113,7 +112,8 @@ inline constexpr uint32_t kSubIntSplitChunkSize = 4096;
 // __restrict__ informs the compiler that src and dst do not alias, enabling
 // auto-vectorisation for same-width cases and providing correct alias
 // semantics for the AVX2 widening paths below.
-// accumulateSubIntSplitSection: widen narrow section values into the PhysicalT output.
+// accumulateSubIntSplitSection: widen narrow section values into the PhysicalT
+// output.
 //
 // For narrow→wide cases (SectionT smaller than PhysicalT) an AVX2 path uses
 // zero-extending widening intrinsics (_mm256_cvtepu*_epi*) followed by a

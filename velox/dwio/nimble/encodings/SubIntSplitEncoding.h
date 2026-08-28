@@ -144,7 +144,8 @@ class SubIntSplitEncoding
   }
 
   // Number of output elements processed per chunk in materialize().
-  static constexpr uint32_t kMaterializeChunkSize = detail::kSubIntSplitChunkSize;
+  static constexpr uint32_t kMaterializeChunkSize =
+      detail::kSubIntSplitChunkSize;
 
   // Forwards to the kernel shared with SubIntSplitEncodingView.
   template <typename SectionT, bool IsFirst>

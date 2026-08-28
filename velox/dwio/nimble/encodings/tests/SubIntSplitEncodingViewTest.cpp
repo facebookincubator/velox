@@ -96,7 +96,8 @@ class SubIntSplitEncodingViewTest : public nimble::test::EncodingViewTest {
 
     // Ranges, including one that spans more than the view's internal chunk so
     // the chunked path is exercised rather than only its first iteration.
-    for (const auto [offset, length] : std::vector<std::pair<uint32_t, uint32_t>>{
+    for (const auto [offset, length] :
+         std::vector<std::pair<uint32_t, uint32_t>>{
              {0, 0}, {kRows, 0}, {0, 1}, {5, 3}, {0, kRows}, {7, kRows - 7}}) {
       SCOPED_TRACE(fmt::format("offset={} length={}", offset, length));
       std::vector<T> actual(length);
@@ -125,8 +126,9 @@ TEST_F(SubIntSplitEncodingViewTest, readsWithCompressedSubStreams) {
 
 TEST_F(SubIntSplitEncodingViewTest, rejectsNonSubIntSplitStream) {
   const auto values = makeStructuredValues<uint64_t>(pool_.get(), 64);
-  auto serialized = nimble::test::Encoder<nimble::TrivialEncoding<uint64_t>>::
-      encode(*buffer_, values);
+  auto serialized =
+      nimble::test::Encoder<nimble::TrivialEncoding<uint64_t>>::encode(
+          *buffer_, values);
   // The factory dispatches on the stream's own type, so a Trivial stream must
   // not come back as a SubIntSplit view.
   auto view = nimble::createEncodingView(serialized, pool_.get());
@@ -227,15 +229,17 @@ TEST_F(SubIntSplitEncodingViewTest, compressionNestsBelowTheOuterEncoding) {
       values.push_back(run);
     }
   }
-  auto serialized = nimble::test::Encoder<nimble::RLEEncoding<uint32_t>>::encode(
-      *buffer_, values, nimble::CompressionType::Zstd);
+  auto serialized =
+      nimble::test::Encoder<nimble::RLEEncoding<uint32_t>>::encode(
+          *buffer_, values, nimble::CompressionType::Zstd);
 
   // The outer stream is RLE, which supportsEncodingView() reports as viewable.
   ASSERT_EQ(
       nimble::EncodingPrefix::encodingType(serialized),
       nimble::EncodingType::RLE);
-  ASSERT_TRUE(nimble::supportsEncodingView(
-      nimble::EncodingPrefix::encodingType(serialized)));
+  ASSERT_TRUE(
+      nimble::supportsEncodingView(
+          nimble::EncodingPrefix::encodingType(serialized)));
 
   // Whether construction succeeds depends on what the nested values stream did
   // with the codec, which is exactly what an outer predicate cannot see. Assert
@@ -272,8 +276,9 @@ TEST_F(SubIntSplitEncodingViewTest, materializedFallbackServesVarint) {
   auto serialized =
       nimble::test::Encoder<nimble::VarintEncoding<uint32_t>>::encode(
           *buffer_, values);
-  ASSERT_FALSE(nimble::supportsEncodingView(
-      nimble::EncodingPrefix::encodingType(serialized)));
+  ASSERT_FALSE(
+      nimble::supportsEncodingView(
+          nimble::EncodingPrefix::encodingType(serialized)));
 
   nimble::detail::MaterializedEncodingView<uint32_t> view{
       serialized, pool_.get(), {}};

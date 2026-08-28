@@ -47,8 +47,8 @@
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ResultWriter.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/SubstreamCompression.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
-#include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
+#include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 
 // ---------------------------------------------------------------------------
 // CLI flags shared across benchmark binaries
@@ -250,12 +250,13 @@ class NimbleViewBenchTargetImpl
       const Encoding::Options& opts,
       bool realNestedSelection) {
     Buffer buf{*pool_};
-    encoded_ = std::string(encodeWithCompression<EncodingT, T>(
-        buf,
-        data,
-        parseCompressionType(FLAGS_mlidc_substream_compression),
-        opts,
-        realNestedSelection));
+    encoded_ = std::string(
+        encodeWithCompression<EncodingT, T>(
+            buf,
+            data,
+            parseCompressionType(FLAGS_mlidc_substream_compression),
+            opts,
+            realNestedSelection));
     options_ = opts;
     view_ = createEncodingView(std::string_view(encoded_), pool_.get(), opts);
     NIMBLE_CHECK_NOT_NULL(view_);
@@ -988,8 +989,8 @@ std::vector<EncoderEntry<T>> buildDefaultEncoders() {
     entry.fastSkip = true;
     entry.randomAccess = true;
     entry.factory = [](const Vector<T>& data, const Encoding::Options& opts) {
-      auto impl = std::make_unique<
-          NimbleViewBenchTargetImpl<SubIntSplitEncoding<T>>>();
+      auto impl =
+          std::make_unique<NimbleViewBenchTargetImpl<SubIntSplitEncoding<T>>>();
       impl->encodeWith(data, opts, /*realNestedSelection=*/true);
       return std::unique_ptr<NimbleBenchTargetBase<T>>(std::move(impl));
     };
