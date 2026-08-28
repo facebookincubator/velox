@@ -29,10 +29,10 @@
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletReaderCache.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
 #include "velox/dwio/nimble/velox/tests/SchemaUtils.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 
@@ -1089,7 +1089,7 @@ TEST_P(NimbleIndexProjectorTest, projectsFlatMapWithoutConstantInMapStream) {
   auto tablet = TabletReader::create(
       readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
   ASSERT_EQ(tablet->stripeCount(), 1);
-  VeloxReader schemaReader(readFile.get(), *leafPool_);
+  BatchReader schemaReader(readFile.get(), *leafPool_);
   const auto& flatMap = schemaReader.schema()->asRow().childAt(1)->asFlatMap();
   ASSERT_EQ(flatMap.childrenCount(), 1);
   ASSERT_EQ(flatMap.nameAt(0), "always");
@@ -1326,7 +1326,7 @@ TEST_P(NimbleIndexProjectorTest, fuzzesFlatMapPartialStripeProjection) {
             readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
         ASSERT_EQ(tablet->stripeCount(), 1);
         const auto stripe = tablet->stripeIdentifier(0);
-        VeloxReader schemaReader(readFile.get(), *leafPool_);
+        BatchReader schemaReader(readFile.get(), *leafPool_);
         const auto& root = schemaReader.schema()->asRow();
         const auto& flatMap = root.childAt(1)->asFlatMap();
         const auto findFlatMapKey = [&](std::string_view key) {
@@ -3845,7 +3845,7 @@ TEST_P(NimbleIndexProjectorTest, featureReorderingStorageReads) {
     std::vector<TabletReader::StreamLocation> streamLocations(streamCount);
     tablet->streamLocations(stripeId, streamLocations);
 
-    VeloxReader reader(readFile.get(), *leafPool_);
+    BatchReader reader(readFile.get(), *leafPool_);
     const auto& flatMap = reader.schema()->asRow().childAt(1)->asFlatMap();
 
     std::unordered_map<std::string, uint32_t> keyToValueStreamId;

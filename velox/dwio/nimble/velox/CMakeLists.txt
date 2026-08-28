@@ -149,18 +149,18 @@ target_link_libraries(
 )
 
 add_library(
-  nimble_velox_reader
+  nimble_batch_reader
   ChunkedStream.cpp
   ChunkedStreamDecoder.cpp
   StreamLabels.cpp
-  VeloxReader.cpp
-  VeloxReader.h
+  BatchReader.cpp
+  BatchReader.h
   StreamLabels.h
   ChunkedStreamDecoder.h
   ChunkedStream.h
 )
 target_link_libraries(
-  nimble_velox_reader
+  nimble_batch_reader
   nimble_velox_common
   nimble_velox_schema
   nimble_velox_schema_serialization
