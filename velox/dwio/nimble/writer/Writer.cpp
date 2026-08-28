@@ -707,25 +707,23 @@ bool hasDictionaryConfig(const StreamData& streamData) {
       streamContext->sharedDictionaryConfig().has_value();
 }
 
-bool isSharedDictionaryValueType(DataType dataType) {
-  switch (dataType) {
-    case DataType::Int8:
-    case DataType::Uint8:
-    case DataType::Int16:
-    case DataType::Uint16:
-    case DataType::Int32:
-    case DataType::Uint32:
-    case DataType::Int64:
-    case DataType::Uint64:
+bool isSharedDictionaryScalarKind(ScalarKind scalarKind) {
+  return isIntegerScalarKind(scalarKind) || scalarKind == ScalarKind::String ||
+      scalarKind == ScalarKind::Binary;
+}
+
+bool isSharedDictionaryVeloxType(const velox::Type& type) {
+  switch (type.kind()) {
+    case velox::TypeKind::TINYINT:
+    case velox::TypeKind::SMALLINT:
+    case velox::TypeKind::INTEGER:
+    case velox::TypeKind::BIGINT:
+    case velox::TypeKind::VARCHAR:
+    case velox::TypeKind::VARBINARY:
       return true;
-    case DataType::Undefined:
-    case DataType::Float:
-    case DataType::Double:
-    case DataType::Bool:
-    case DataType::String:
+    default:
       return false;
   }
-  NIMBLE_UNREACHABLE("Unsupported data type {}.", dataType);
 }
 
 template <typename T>
@@ -789,11 +787,11 @@ std::unique_ptr<EncodingSelectionPolicy<T>> makeEncodingPolicy(
     const StreamData& streamData) {
   if (hasDictionaryConfig(streamData)) {
     NIMBLE_USER_CHECK(
-        isSharedDictionaryValueType(TypeTraits<T>::dataType),
-        "Shared dictionary encoding only supports non-bool integer streams, "
+        isSharedDictionaryType(TypeTraits<T>::dataType),
+        "Shared dictionary encoding only supports integer or string streams, "
         "got {}.",
         TypeTraits<T>::dataType);
-    if constexpr (isIntegralType<T>() && !std::is_same_v<T, bool>) {
+    if constexpr (isSharedDictionaryType<T>()) {
       auto* dictionaryWriter = sharedDictionaryWriter<T>(
           streamData,
           context,
@@ -829,8 +827,9 @@ void configureDictionary(
     case Kind::Scalar: {
       const auto& scalar = typeBuilder.asScalar();
       NIMBLE_USER_CHECK(
-          isIntegerScalarKind(scalar.scalarDescriptor().scalarKind()),
-          "Shared dictionary value must be an integer scalar, got {}.",
+          isSharedDictionaryScalarKind(scalar.scalarDescriptor().scalarKind()),
+          "Shared dictionary value must be an integer or string scalar, got "
+          "{}.",
           scalar.scalarDescriptor().scalarKind());
       if (config.scope == SharedDictionaryScope::Stripe) {
         NIMBLE_USER_CHECK_EQ(
@@ -868,8 +867,8 @@ void configureDictionary(
     case Kind::Row:
     case Kind::FlatMap:
       NIMBLE_USER_FAIL(
-          "Shared dictionary value must resolve to an integer scalar, array "
-          "element, or map value, got {}.",
+          "Shared dictionary value must resolve to an integer or string "
+          "scalar, array element, or map value, got {}.",
           typeBuilder.kind());
   }
 }
@@ -996,12 +995,12 @@ const TypeWithId& resolveDictionaryValueType(
     case velox::TypeKind::SMALLINT:
     case velox::TypeKind::INTEGER:
     case velox::TypeKind::BIGINT:
+    case velox::TypeKind::VARCHAR:
+    case velox::TypeKind::VARBINARY:
       return type;
     case velox::TypeKind::BOOLEAN:
     case velox::TypeKind::REAL:
     case velox::TypeKind::DOUBLE:
-    case velox::TypeKind::VARCHAR:
-    case velox::TypeKind::VARBINARY:
     case velox::TypeKind::TIMESTAMP:
     case velox::TypeKind::HUGEINT:
     case velox::TypeKind::ROW:
@@ -1010,8 +1009,8 @@ const TypeWithId& resolveDictionaryValueType(
     case velox::TypeKind::OPAQUE:
     case velox::TypeKind::INVALID:
       NIMBLE_USER_FAIL(
-          "Shared dictionary column '{}' must resolve to an integer scalar, "
-          "array element, or map value, got {}.",
+          "Shared dictionary column '{}' must resolve to an integer or string "
+          "scalar, array element, or map value, got {}.",
           fieldPath,
           type.type()->toString());
   }
@@ -1410,9 +1409,9 @@ DictionaryConfigs collectDictionaryConfigs(
         "node {}.",
         valueNodeId);
     NIMBLE_USER_CHECK(
-        valueType.type()->isInteger(),
-        "Shared dictionary column '{}' must resolve to an integer scalar, "
-        "array element, or map value, got {}.",
+        isSharedDictionaryVeloxType(*valueType.type()),
+        "Shared dictionary column '{}' must resolve to an integer or string "
+        "scalar, array element, or map value, got {}.",
         columnDictionary.fieldPath,
         valueType.type()->toString());
     maybeAddFileDictionaryId(columnDictionary.dictionary, fileDictionaryIds);

@@ -36,19 +36,22 @@ add_library(nimble_ml_id_benchmark_common MlIdBenchmarkFlags.cpp)
 
 target_link_libraries(nimble_ml_id_benchmark_common PUBLIC gflags)
 
-# Headers shared across most or all drivers in this suite (directly, or
-# transitively via BenchCommon.h/DriverSweep.h/MeasureLoop.h), so they are
-# attached to the common library rather than any single driver target.
+# Header-only pieces of the suite, attached to the shared library so they are
+# tracked by a target.
 velox_add_test_headers(
   nimble_ml_id_benchmark_common
+  AblationPolicy.h
+  Axes.h
   BenchCommon.h
   CachePolicy.h
   DriverSweep.h
   ElemType.h
+  GatherTraceGen.h
   MeasureLoop.h
   OpenZLBenchTarget.h
   PointTraceGen.h
   ResultWriter.h
+  SelectiveTraceGen.h
   SubstreamCompression.h
   TimingStats.h
 )
@@ -110,12 +113,6 @@ nimble_add_ml_id_benchmark(
 nimble_add_ml_id_benchmark(
   nimble_ml_id_decode_gather_benchmark MlIdDecodeGatherBenchmark.cpp OPENZL
 )
-velox_add_test_headers(
-  nimble_ml_id_decode_gather_benchmark
-  Axes.h
-  GatherTraceGen.h
-  SelectiveTraceGen.h
-)
 
 # MlIdCostModelOracleBenchmark: validates SubIntSplit's DP cost model against an
 # oracle that actually encodes each candidate bit range.
@@ -133,7 +130,6 @@ nimble_add_ml_id_benchmark(
 nimble_add_ml_id_benchmark(
   nimble_ml_id_ablation_benchmark MlIdAblationBenchmark.cpp
 )
-velox_add_test_headers(nimble_ml_id_ablation_benchmark AblationPolicy.h)
 
 # MlIdSmokeBenchmark: encode + decode correctness check (no timing). Sweeps
 # every supported element type, so it is also the compile-coverage gate.

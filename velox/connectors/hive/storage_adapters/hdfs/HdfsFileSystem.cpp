@@ -26,10 +26,20 @@ std::string_view HdfsFileSystem::kViewfsScheme("viewfs://");
 
 class HdfsFileSystem::Impl {
  public:
-  // Keep config here for possible use in the future.
   explicit Impl(
       const config::ConfigBase* config,
       const HdfsServiceEndpoint& endpoint) {
+    // Read-retry policy. Defaults preserve the original fail-fast behavior:
+    // maxReadAttempts == 1 means no retries. Retries are opt-in because the
+    // JNI-backed libhdfs.so already retries and fails over internally, whereas
+    // libhdfs3 does not. config may be null (getFileSystem can be called with a
+    // null config), in which case the member defaults are kept.
+    if (config != nullptr) {
+      maxReadAttempts_ = config->get<int32_t>("hive.hdfs.read-max-attempts", 1);
+      retryBaseDelayMs_ =
+          config->get<int32_t>("hive.hdfs.read-retry-delay-ms", 100);
+    }
+
     auto status = filesystems::arrow::io::internal::ConnectLibHdfs(&driver_);
     VELOX_CHECK(
         status.ok(), "Failed to connect to libhdfs: {}", status.ToString());
@@ -89,9 +99,19 @@ class HdfsFileSystem::Impl {
     return driver_;
   }
 
+  int maxReadAttempts() const {
+    return maxReadAttempts_;
+  }
+
+  int retryBaseDelayMs() const {
+    return retryBaseDelayMs_;
+  }
+
  private:
   hdfsFS hdfsClient_{nullptr};
   filesystems::arrow::io::internal::LibHdfsShim* driver_{nullptr};
+  int maxReadAttempts_{1};
+  int retryBaseDelayMs_{100};
   bool closed_{false};
 };
 
@@ -117,7 +137,11 @@ std::unique_ptr<ReadFile> HdfsFileSystem::openFileForRead(
     }
   }
   return std::make_unique<HdfsReadFile>(
-      impl_->hdfsShim(), impl_->hdfsClient(), path);
+      impl_->hdfsShim(),
+      impl_->hdfsClient(),
+      path,
+      impl_->maxReadAttempts(),
+      impl_->retryBaseDelayMs());
 }
 
 std::unique_ptr<WriteFile> HdfsFileSystem::openFileForWrite(
