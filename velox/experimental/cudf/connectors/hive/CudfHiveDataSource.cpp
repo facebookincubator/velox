@@ -27,6 +27,7 @@
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/time/Timer.h"
+#include "velox/connectors/hive/FileDataSource.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -307,6 +308,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
 std::unordered_map<std::string, RuntimeMetric>
 CudfHiveDataSource::getRuntimeStats() {
   auto result = runtimeStats_.toRuntimeMetricMap();
+  addIoStatsToRuntimeStats(*ioStatistics_, "", result);
   result.insert({
       {std::string(connector::hive::HiveDataSource::kTotalScanTime),
        RuntimeMetric(
@@ -317,8 +319,14 @@ CudfHiveDataSource::getRuntimeStats() {
            RuntimeCounter::Unit::kNanos)},
   });
   const auto& ioStats = ioStats_->stats();
-  for (const auto& storageStats : ioStats) {
-    result.emplace(storageStats.first, storageStats.second);
+  for (const auto& [key, value] : ioStats) {
+    // Prefer a ReadFile-layer counter when available because it reflects
+    // actual bytes fetched from storage instead of the DWIO estimate.
+    if (key == FileDataSource::kStorageReadBytes) {
+      result[std::string(key)] = value;
+    } else {
+      result.emplace(key, value);
+    }
   }
   return result;
 }

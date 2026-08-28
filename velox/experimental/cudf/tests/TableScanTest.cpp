@@ -174,9 +174,7 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
 
   static std::unordered_map<std::string, RuntimeMetric>
   getTableScanRuntimeStats(const std::shared_ptr<Task>& task) {
-    VELOX_NYI(
-        "RuntimeStats not yet implemented for the cudf CudfHiveConnector");
-    // return task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
+    return task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
   }
 
   static int64_t getSkippedStridesStat(const std::shared_ptr<Task>& task) {
@@ -421,17 +419,9 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   // files.
   ASSERT_GE(rawInputBytes, 400);
 
-  // TableScan runtime stats not available with CudfHive connector yet
-#if 0
-  auto overreadBytes =
-  getTableScanRuntimeStats(task).at("overreadBytes").sum;
-  ASSERT_EQ(overreadBytes, 13);
-  ASSERT_EQ(
-      getTableScanRuntimeStats(task).at("storageReadBytes").sum,
-      rawInputBytes + overreadBytes);
+  ASSERT_GT(getTableScanRuntimeStats(task).at("storageReadBytes").sum, 0);
   ASSERT_GT(getTableScanRuntimeStats(task)["totalScanTime"].sum, 0);
   ASSERT_GT(getTableScanRuntimeStats(task)["ioWaitWallNanos"].sum, 0);
-#endif
 }
 
 TEST_F(TableScanTest, columnAliases) {
