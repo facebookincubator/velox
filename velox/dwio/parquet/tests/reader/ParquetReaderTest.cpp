@@ -23,6 +23,8 @@
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 using namespace facebook::velox;
@@ -2546,4 +2548,517 @@ TEST_F(ParquetReaderTest, byteStreamSplitFloat) {
     EXPECT_FALSE(floatColumn->isNullAt(index));
     EXPECT_FLOAT_EQ(floatColumn->valueAt(index), value);
   }
+}
+
+// timestamptz_micros.parquet was written by pyiceberg for an Iceberg table:
+//   id     int
+//   label  string
+//   ts     iceberg timestamptz -> INT64 Timestamp(isAdjustedToUTC=true, MICROS)
+//   ts_ntz iceberg timestamp   -> INT64 Timestamp(isAdjustedToUTC=false,
+//   MICROS)
+// 6 rows, including sub-millisecond micros, a pre-epoch instant, a far-future
+// instant and a NULL.
+//
+// Presto reports such a column as TIMESTAMP WITH TIME ZONE, so the scan asks
+// the reader for that type. Velox represents it as a packed BIGINT
+// ((millisUtc << 12) | zoneKey), which is why plain TimestampColumnReader
+// cannot serve it.
+TEST_F(ParquetReaderTest, icebergTimestamptzRequestedAsTimestampWithTimeZone) {
+  // fileSchema is matched to the file by POSITION and describes the whole
+  // table, exactly like HiveTableHandle::dataColumns, which is what prestissimo
+  // builds it from. The projection is passed separately.
+  const auto fileSchema =
+      ROW({"id", "label", "ts", "ts_ntz"},
+          {INTEGER(), VARCHAR(), TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP()});
+  const auto projection =
+      ROW({"id", "ts"}, {INTEGER(), TIMESTAMP_WITH_TIME_ZONE()});
+
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(fileSchema);
+  auto readerBundle = readerBuilder("timestamptz_micros.parquet", projection)
+                          .options(readerOptions)
+                          .build();
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 6ULL);
+  EXPECT_EQ(
+      readerBundle.reader->typeWithId()->childByName("ts")->type(),
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  // Values are packed: (millisUtc << 12) | zoneKey, with zoneKey = UTC because
+  // that is the only zone the file carries. Micros narrow to millis by
+  // truncating toward zero, matching Presto's Java reader
+  // (LongTimestampMicrosColumnReader uses MICROSECONDS.toMillis), so -499'999us
+  // becomes -499ms. Velox's Timestamp would floor to -500ms; a native worker
+  // has to agree with a Java worker reading the same file.
+  const auto utc = tz::getTimeZoneID("UTC");
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+      makeNullableFlatVector<int64_t>(
+          {pack(0, utc),
+           pack(1623758400123, utc),
+           pack(-499, utc),
+           pack(1615705200000, utc),
+           pack(9223372036854, utc),
+           std::nullopt},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  assertReadWithReaderAndExpected(
+      projection, *readerBundle.rowReader, expected, *pool_);
+}
+
+// Backward compatibility: the same UTC-adjusted column requested as a plain
+// TIMESTAMP must keep reading exactly as it did before TIMESTAMP WITH TIME ZONE
+// was accepted here. Accepting the new requested type must not change the type
+// a file column reports when nobody asks for the new one -- otherwise every
+// existing Hive table over UTC-normalised parquet timestamps changes type.
+TEST_F(ParquetReaderTest, icebergTimestamptzRequestedAsPlainTimestamp) {
+  const auto fileSchema =
+      ROW({"id", "label", "ts", "ts_ntz"},
+          {INTEGER(), VARCHAR(), TIMESTAMP(), TIMESTAMP()});
+  const auto projection = ROW({"id", "ts"}, {INTEGER(), TIMESTAMP()});
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(fileSchema);
+  auto readerBundle = readerBuilder("timestamptz_micros.parquet", projection)
+                          .options(readerOptions)
+                          .build();
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 6ULL);
+  EXPECT_EQ(
+      readerBundle.reader->typeWithId()->childByName("ts")->type(),
+      TIMESTAMP());
+
+  // The NULL row must survive on this path too -- it is the control for the
+  // packed read above, which originally dropped it.
+  VectorPtr result = BaseVector::create(projection, 0, pool_.get());
+  readerBundle.rowReader->next(10, result);
+  auto* rowVector = result->as<RowVector>();
+  ASSERT_EQ(rowVector->size(), 6);
+  auto ts = rowVector->childAt(1);
+  EXPECT_FALSE(ts->isNullAt(0));
+  EXPECT_TRUE(ts->isNullAt(5)) << "plain TIMESTAMP path also loses the null";
+}
+
+// A column that is NOT adjusted to UTC has no instant to offer, so requesting
+// TIMESTAMP WITH TIME ZONE over it must fail with a clear error rather than
+// silently labelling local wall-clock readings as UTC.
+TEST_F(ParquetReaderTest, nonUtcAdjustedTimestampRejectsTimestampWithTimeZone) {
+  const auto fileSchema =
+      ROW({"id", "label", "ts", "ts_ntz"},
+          {INTEGER(),
+           VARCHAR(),
+           TIMESTAMP_WITH_TIME_ZONE(),
+           TIMESTAMP_WITH_TIME_ZONE()});
+  const auto projection =
+      ROW({"id", "ts_ntz"}, {INTEGER(), TIMESTAMP_WITH_TIME_ZONE()});
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(fileSchema);
+  VELOX_ASSERT_THROW(
+      readerBuilder("timestamptz_micros.parquet", projection)
+          .options(readerOptions)
+          .build(),
+      "isAdjustedToUTC");
+}
+
+// A pushed-down predicate on a TIMESTAMP WITH TIME ZONE column arrives as a
+// BigintRange over PACKED values, while the reader sees raw Parquet micros.
+// Pushdown must select exactly the rows that the same predicate would select if
+// applied above the scan.
+TEST_F(ParquetReaderTest, icebergTimestamptzFilterPushdownIsExact) {
+  const auto fileSchema =
+      ROW({"id", "label", "ts", "ts_ntz"},
+          {INTEGER(), VARCHAR(), TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP()});
+  const auto projection =
+      ROW({"id", "ts"}, {INTEGER(), TIMESTAMP_WITH_TIME_ZONE()});
+  const auto utc = tz::getTimeZoneID("UTC");
+
+  // ts > 2021-01-01T00:00:00Z keeps ids 2, 4 and 5.
+  const int64_t cutoff = 1609459200000;
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(fileSchema);
+  auto reader = createReader("timestamptz_micros.parquet", readerOptions);
+  FilterMap filters;
+  filters.insert(
+      {"ts",
+       std::make_unique<common::BigintRange>(
+           pack(cutoff, utc) + 1, std::numeric_limits<int64_t>::max(), false)});
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({2, 4, 5}),
+      makeFlatVector<int64_t>(
+          {pack(1623758400123, utc),
+           pack(1615705200000, utc),
+           pack(9223372036854, utc)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  assertReadWithReaderAndFilters(
+      *reader, projection, std::move(filters), expected);
+}
+
+// Equality must land on the exact millisecond: every file value inside that
+// millisecond narrows to the same packed value, and no value outside it does.
+TEST_F(ParquetReaderTest, icebergTimestamptzEqualityPushdownIsExact) {
+  const auto fileSchema =
+      ROW({"id", "label", "ts", "ts_ntz"},
+          {INTEGER(), VARCHAR(), TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP()});
+  const auto projection =
+      ROW({"id", "ts"}, {INTEGER(), TIMESTAMP_WITH_TIME_ZONE()});
+  const auto utc = tz::getTimeZoneID("UTC");
+
+  // id 2 is 2021-06-15T12:00:00.123456Z, which narrows to ...123 ms. Selecting
+  // that packed value must return it, even though the stored micros are not a
+  // whole millisecond.
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(fileSchema);
+  auto reader = createReader("timestamptz_micros.parquet", readerOptions);
+  FilterMap filters;
+  const auto target = pack(1623758400123, utc);
+  filters.insert(
+      {"ts", std::make_unique<common::BigintRange>(target, target, false)});
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>(std::vector<int32_t>{2}),
+      makeFlatVector<int64_t>(
+          std::vector<int64_t>{target}, TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  assertReadWithReaderAndFilters(
+      *reader, projection, std::move(filters), expected);
+}
+
+// Pre-epoch instants are where the narrowing convention shows: -499'999us
+// truncates toward zero to -499ms. Pushdown must agree with that, including at
+// the millisecond-zero boundary, where both -999us and +999us truncate to 0ms.
+TEST_F(ParquetReaderTest, icebergTimestamptzPreEpochPushdown) {
+  const auto fileSchema =
+      ROW({"id", "label", "ts", "ts_ntz"},
+          {INTEGER(), VARCHAR(), TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP()});
+  const auto projection =
+      ROW({"id", "ts"}, {INTEGER(), TIMESTAMP_WITH_TIME_ZONE()});
+  const auto utc = tz::getTimeZoneID("UTC");
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(fileSchema);
+
+  // Everything strictly before the epoch: only id 3.
+  {
+    auto reader = createReader("timestamptz_micros.parquet", readerOptions);
+    FilterMap filters;
+    filters.insert(
+        {"ts",
+         std::make_unique<common::BigintRange>(
+             std::numeric_limits<int64_t>::min(), pack(0, utc) - 1, false)});
+    auto expected = makeRowVector({
+        makeFlatVector<int32_t>(std::vector<int32_t>{3}),
+        makeFlatVector<int64_t>(
+            std::vector<int64_t>{pack(-499, utc)}, TIMESTAMP_WITH_TIME_ZONE()),
+    });
+    assertReadWithReaderAndFilters(
+        *reader, projection, std::move(filters), expected);
+  }
+
+  // Selecting exactly -499ms must find the row stored as -499'999us.
+  {
+    auto reader = createReader("timestamptz_micros.parquet", readerOptions);
+    FilterMap filters;
+    const auto target = pack(-499, utc);
+    filters.insert(
+        {"ts", std::make_unique<common::BigintRange>(target, target, false)});
+    auto expected = makeRowVector({
+        makeFlatVector<int32_t>(std::vector<int32_t>{3}),
+        makeFlatVector<int64_t>(
+            std::vector<int64_t>{target}, TIMESTAMP_WITH_TIME_ZONE()),
+    });
+    assertReadWithReaderAndFilters(
+        *reader, projection, std::move(filters), expected);
+  }
+
+  // Millisecond zero: id 1 is stored as exactly 0us and must be selected.
+  {
+    auto reader = createReader("timestamptz_micros.parquet", readerOptions);
+    FilterMap filters;
+    const auto target = pack(0, utc);
+    filters.insert(
+        {"ts", std::make_unique<common::BigintRange>(target, target, false)});
+    auto expected = makeRowVector({
+        makeFlatVector<int32_t>(std::vector<int32_t>{1}),
+        makeFlatVector<int64_t>(
+            std::vector<int64_t>{target}, TIMESTAMP_WITH_TIME_ZONE()),
+    });
+    assertReadWithReaderAndFilters(
+        *reader, projection, std::move(filters), expected);
+  }
+}
+
+// Kinds with no same-kind rewrite go through PackedFilterAdapter. An IN list is
+// the important case: each packed value corresponds to a whole tick window in
+// the file, so a values set cannot simply have its members rewritten.
+TEST_F(ParquetReaderTest, icebergTimestamptzInListPushdown) {
+  const auto fileSchema =
+      ROW({"id", "label", "ts", "ts_ntz"},
+          {INTEGER(), VARCHAR(), TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP()});
+  const auto projection =
+      ROW({"id", "ts"}, {INTEGER(), TIMESTAMP_WITH_TIME_ZONE()});
+  const auto utc = tz::getTimeZoneID("UTC");
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(fileSchema);
+
+  // IN (epoch, 2021-03-14T07:00Z, 2021-06-15T12:00:00.123Z) -> ids 1, 4, 2.
+  // The last one is stored as .123456us, so the adapter has to narrow before
+  // testing membership.
+  auto reader = createReader("timestamptz_micros.parquet", readerOptions);
+  FilterMap filters;
+  filters.insert(
+      {"ts",
+       common::createBigintValues(
+           {pack(0, utc), pack(1615705200000, utc), pack(1623758400123, utc)},
+           false)});
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 4}),
+      makeFlatVector<int64_t>(
+          {pack(0, utc), pack(1623758400123, utc), pack(1615705200000, utc)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  assertReadWithReaderAndFilters(
+      *reader, projection, std::move(filters), expected);
+}
+
+// An IN list including a pre-epoch instant, where narrowing truncates toward
+// zero: the row stored as -499'999us is selectable only as -499ms.
+TEST_F(ParquetReaderTest, icebergTimestamptzInListPreEpoch) {
+  const auto fileSchema =
+      ROW({"id", "label", "ts", "ts_ntz"},
+          {INTEGER(), VARCHAR(), TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP()});
+  const auto projection =
+      ROW({"id", "ts"}, {INTEGER(), TIMESTAMP_WITH_TIME_ZONE()});
+  const auto utc = tz::getTimeZoneID("UTC");
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(fileSchema);
+
+  auto reader = createReader("timestamptz_micros.parquet", readerOptions);
+  FilterMap filters;
+  filters.insert(
+      {"ts",
+       common::createBigintValues({pack(-499, utc), pack(-500, utc)}, false)});
+  // Only -499 matches; -500 corresponds to no row.
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>(std::vector<int32_t>{3}),
+      makeFlatVector<int64_t>(
+          std::vector<int64_t>{pack(-499, utc)}, TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  assertReadWithReaderAndFilters(
+      *reader, projection, std::move(filters), expected);
+}
+
+// A negated range (ts NOT BETWEEN ...) also has no same-kind rewrite here, so
+// it exercises the adapter's complement handling.
+TEST_F(ParquetReaderTest, icebergTimestamptzNegatedRangePushdown) {
+  const auto fileSchema =
+      ROW({"id", "label", "ts", "ts_ntz"},
+          {INTEGER(), VARCHAR(), TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP()});
+  const auto projection =
+      ROW({"id", "ts"}, {INTEGER(), TIMESTAMP_WITH_TIME_ZONE()});
+  const auto utc = tz::getTimeZoneID("UTC");
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(fileSchema);
+
+  // NOT BETWEEN epoch AND 2021-06-15T12:00:00.123Z removes ids 1, 2 and 4,
+  // leaving the pre-epoch row and the far-future row.
+  auto reader = createReader("timestamptz_micros.parquet", readerOptions);
+  FilterMap filters;
+  filters.insert(
+      {"ts",
+       std::make_unique<common::NegatedBigintRange>(
+           pack(0, utc), pack(1623758400123, utc), false)});
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({3, 5}),
+      makeFlatVector<int64_t>(
+          {pack(-499, utc), pack(9223372036854, utc)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  assertReadWithReaderAndFilters(
+      *reader, projection, std::move(filters), expected);
+}
+
+// Row-group statistics are raw Parquet values, while a pushed-down filter on a
+// TIMESTAMP WITH TIME ZONE column carries PACKED bounds. Comparing the two
+// prunes row groups that do contain matching rows -- and it fails silently, by
+// returning fewer rows rather than an error, which is why this needs its own
+// test.
+//
+// timestamptz_micros_rowgroups.parquet has three row groups, one per year
+// (2019 / 2020 / 2021), with a NULL in the middle group. The packed bound for a
+// 2021 predicate is ~6.6e15 while every group's raw micros maximum is ~1.6e15,
+// so an untranslated comparison finds no overlap anywhere and drops all three
+// groups.
+TEST_F(ParquetReaderTest, icebergTimestamptzRowGroupPruning) {
+  const auto schema =
+      ROW({"id", "ts"}, {INTEGER(), TIMESTAMP_WITH_TIME_ZONE()});
+  const auto utc = tz::getTimeZoneID("UTC");
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(schema);
+
+  // Reads to exhaustion across ALL row groups and returns the surviving rows.
+  // assertReadWithReaderAndExpected cannot be used here: it stops as soon as it
+  // has seen as many rows as expected and then requires EOF, which only holds
+  // when the matches happen to live in the last row group.
+  const auto readSurviving = [&](std::unique_ptr<common::Filter> filter) {
+    auto reader =
+        createReader("timestamptz_micros_rowgroups.parquet", readerOptions);
+    auto scanSpec = makeScanSpec(schema);
+    scanSpec->getOrCreateChild(common::Subfield("ts"))
+        ->setFilter(std::move(filter));
+    auto rowReaderOpts = makeRowReaderOpts(schema);
+    rowReaderOpts.setScanSpec(scanSpec);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    std::vector<int32_t> ids;
+    std::vector<int64_t> packedValues;
+    VectorPtr result = BaseVector::create(schema, 0, leafPool_.get());
+    while (rowReader->next(1000, result) > 0) {
+      // next() reports rows SCANNED, so a row group in which nothing survives
+      // still returns a positive count with an empty batch whose children are
+      // not allocated. Skip those rather than dereferencing them.
+      auto* row = result->as<RowVector>();
+      if (row == nullptr || row->size() == 0) {
+        continue;
+      }
+      auto* idColumn =
+          row->childAt(0)->loadedVector()->as<SimpleVector<int32_t>>();
+      auto* tsColumn =
+          row->childAt(1)->loadedVector()->as<SimpleVector<int64_t>>();
+      // ASSERT_* cannot be used in a value-returning lambda: it expands to a
+      // bare `return`.
+      if (idColumn == nullptr || tsColumn == nullptr) {
+        ADD_FAILURE() << "unexpected vector encoding in the scan output";
+        break;
+      }
+      for (auto i = 0; i < row->size(); ++i) {
+        ids.push_back(idColumn->valueAt(i));
+        packedValues.push_back(tsColumn->valueAt(i));
+      }
+    }
+    return std::make_pair(ids, packedValues);
+  };
+
+  // ts >= 2021-01-01T00:00:00Z: only the last row group qualifies.
+  {
+    auto [ids, values] = readSurviving(
+        std::make_unique<common::BigintRange>(
+            pack(1609459200000, utc),
+            std::numeric_limits<int64_t>::max(),
+            false));
+    EXPECT_EQ(ids, std::vector<int32_t>({7, 8, 9}));
+    EXPECT_EQ(
+        values,
+        std::vector<int64_t>(
+            {pack(1609459200000, utc),
+             pack(1623758400123, utc),
+             pack(1640995199999, utc)}));
+  }
+
+  // ts < 2020-01-01T00:00:00Z: only the FIRST row group qualifies. Pruning in
+  // the other direction, so a guard that merely happened to keep the last group
+  // would not satisfy both halves.
+  {
+    auto [ids, values] = readSurviving(
+        std::make_unique<common::BigintRange>(
+            std::numeric_limits<int64_t>::min(),
+            pack(1577836800000, utc) - 1,
+            false));
+    EXPECT_EQ(ids, std::vector<int32_t>({1, 2, 3}));
+    EXPECT_EQ(
+        values,
+        std::vector<int64_t>(
+            {pack(1546300800000, utc),
+             pack(1560600000000, utc),
+             pack(1577836799999, utc)}));
+  }
+
+  // A middle-group predicate: matches must come from row group 1 only, and the
+  // NULL that lives there must not survive a value predicate.
+  {
+    auto [ids, values] = readSurviving(
+        std::make_unique<common::BigintRange>(
+            pack(1577836800000, utc), pack(1609459199999, utc), false));
+    EXPECT_EQ(ids, std::vector<int32_t>({4, 6}));
+    EXPECT_EQ(
+        values,
+        std::vector<int64_t>(
+            {pack(1577836800000, utc), pack(1609459199999, utc)}));
+  }
+
+  // A predicate that genuinely matches nothing must still return nothing: the
+  // guard declines to prune, it must not turn an empty result into rows.
+  {
+    auto [ids, values] = readSurviving(
+        std::make_unique<common::BigintRange>(
+            pack(1893456000000, utc), // 2030-01-01
+            std::numeric_limits<int64_t>::max(),
+            false));
+    EXPECT_TRUE(ids.empty());
+    EXPECT_TRUE(values.empty());
+  }
+}
+
+// A timestamptz inside a struct, and as an array element. This is where the
+// requested type has to survive the nested schema walk: visitSchemaElement
+// derives each childRequestedType from the parent (by name, by parquet field
+// id, or positionally), and only then does convertType see TIMESTAMP WITH TIME
+// ZONE for the leaf. If that propagation failed, the leaf would quietly read as
+// a plain TIMESTAMP while the plan expects packed values.
+//
+// timestamptz_nested.parquet: 4 rows of
+//   id int, ev struct<ts timestamptz, label string>, tags array<timestamptz>
+// with a NULL inner field (row 2), a NULL struct and NULL array (row 3), and a
+// pre-epoch value (row 4) so the truncate-toward-zero narrowing is visible at
+// depth too.
+TEST_F(ParquetReaderTest, icebergTimestamptzNested) {
+  const auto schema =
+      ROW({"id", "ev", "tags"},
+          {INTEGER(),
+           ROW({"ts", "label"}, {TIMESTAMP_WITH_TIME_ZONE(), VARCHAR()}),
+           ARRAY(TIMESTAMP_WITH_TIME_ZONE())});
+  const auto utc = tz::getTimeZoneID("UTC");
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(schema);
+  auto readerBundle = readerBuilder("timestamptz_nested.parquet", schema)
+                          .options(readerOptions)
+                          .build();
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 4ULL);
+
+  // The nested leaves, not just the root, must carry the type.
+  auto rootType = readerBundle.reader->typeWithId();
+  EXPECT_EQ(
+      rootType->childByName("ev")->childByName("ts")->type(),
+      TIMESTAMP_WITH_TIME_ZONE());
+  EXPECT_EQ(
+      rootType->childByName("tags")->childAt(0)->type(),
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  VectorPtr result = BaseVector::create(schema, 0, leafPool_.get());
+  ASSERT_GT(readerBundle.rowReader->next(100, result), 0);
+  auto* row = result->as<RowVector>();
+  ASSERT_EQ(row->size(), 4);
+
+  // struct field
+  auto* ev = row->childAt(1)->loadedVector()->as<RowVector>();
+  ASSERT_TRUE(ev != nullptr);
+  auto* evTs = ev->childAt(0)->loadedVector()->as<SimpleVector<int64_t>>();
+  ASSERT_TRUE(evTs != nullptr);
+  EXPECT_FALSE(ev->isNullAt(0));
+  EXPECT_EQ(evTs->valueAt(0), pack(1623758400123, utc));
+  EXPECT_FALSE(ev->isNullAt(1)); // struct present, inner value null
+  EXPECT_TRUE(evTs->isNullAt(1));
+  EXPECT_TRUE(ev->isNullAt(2)); // whole struct null
+  EXPECT_FALSE(ev->isNullAt(3));
+  EXPECT_EQ(
+      evTs->valueAt(3), pack(-499, utc)); // -499'999us truncates to -499ms
+
+  // array elements
+  auto* tags = row->childAt(2)->loadedVector()->as<ArrayVector>();
+  ASSERT_TRUE(tags != nullptr);
+  auto* elements =
+      tags->elements()->loadedVector()->as<SimpleVector<int64_t>>();
+  ASSERT_TRUE(elements != nullptr);
+  ASSERT_EQ(tags->sizeAt(0), 2);
+  EXPECT_EQ(elements->valueAt(tags->offsetAt(0)), pack(0, utc));
+  EXPECT_EQ(elements->valueAt(tags->offsetAt(0) + 1), pack(1609459200000, utc));
+  EXPECT_EQ(tags->sizeAt(1), 0); // empty array
+  EXPECT_TRUE(tags->isNullAt(2)); // null array
+  ASSERT_EQ(tags->sizeAt(3), 1);
+  EXPECT_EQ(elements->valueAt(tags->offsetAt(3)), pack(-499, utc));
 }

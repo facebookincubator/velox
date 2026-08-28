@@ -31,6 +31,7 @@
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/functions/lib/string/StringImpl.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::parquet {
 
@@ -131,6 +132,33 @@ void skipParquetSchemaNode(
 // and the requested type is an array, we treat the current schema element as an
 // unannotated array, and returns true if the element type is compatible with
 // the physical type.
+
+// True when the column is a TIMESTAMP logical type whose values are stored as a
+// UTC instant. Iceberg writes `timestamptz` as TIMESTAMP(isAdjustedToUTC=true),
+// which is the only shape that carries the instant contract TIMESTAMP WITH TIME
+// ZONE needs. The legacy ConvertedType spellings do not record the flag at all,
+// so a column annotated only that way is deliberately not accepted: labelling
+// an unflagged column UTC would be a guess, not a conversion.
+bool isUtcAdjustedTimestamp(const thrift::SchemaElement& schemaElement) {
+  // Taken by value: a thrift field_ref must not be const-qualified, and binding
+  // it to a const reference makes operator-> the deprecated const overload.
+  auto logicalType = schemaElement.logicalType();
+  if (!logicalType ||
+      logicalType->getType() != thrift::LogicalType::Type::TIMESTAMP) {
+    return false;
+  }
+  return *logicalType->get_TIMESTAMP().isAdjustedToUTC();
+}
+
+// A Parquet timestamp column may be read either as a wall-clock TIMESTAMP or,
+// if it is a UTC instant, as TIMESTAMP WITH TIME ZONE. Which one you get is
+// decided by the REQUESTED type, never by the file alone: flipping the file
+// type whenever isAdjustedToUTC is set would silently change the type of every
+// existing Hive table over UTC-normalised parquet timestamps.
+bool requestsTimestampWithTimeZone(const TypePtr& requestedType) {
+  return requestedType != nullptr && isTimestampWithTimeZoneType(requestedType);
+}
+
 bool isCompatible(
     const TypePtr& requestedType,
     bool isRepeated,
@@ -1234,12 +1262,22 @@ TypePtr ReaderBase::convertType(
                     requestedType,
                     isRepeated,
                     [](const TypePtr& type) {
-                      return type->kind() == TypeKind::TIMESTAMP;
+                      return type->kind() == TypeKind::TIMESTAMP ||
+                          isTimestampWithTimeZoneType(type);
                     }),
             kTypeMappingErrorFmtStr,
             "TIMESTAMP",
             requestedType->toString(),
             *schemaElement.name());
+        if (requestsTimestampWithTimeZone(requestedType)) {
+          VELOX_USER_CHECK(
+              isUtcAdjustedTimestamp(schemaElement),
+              "Cannot read Parquet column '{}' as TIMESTAMP WITH TIME ZONE: the "
+              "column is not annotated TIMESTAMP(isAdjustedToUTC=true), so it "
+              "carries no UTC instant",
+              *schemaElement.name());
+          return TIMESTAMP_WITH_TIME_ZONE();
+        }
         return TIMESTAMP();
 
       case thrift::ConvertedType::DECIMAL: {
@@ -1410,12 +1448,22 @@ TypePtr ReaderBase::convertType(
                       requestedType,
                       isRepeated,
                       [](const TypePtr& type) {
-                        return type->kind() == TypeKind::TIMESTAMP;
+                        return type->kind() == TypeKind::TIMESTAMP ||
+                            isTimestampWithTimeZoneType(type);
                       }),
               kTypeMappingErrorFmtStr,
               "TIMESTAMP",
               requestedType->toString(),
               *schemaElement.name());
+          if (requestsTimestampWithTimeZone(requestedType)) {
+            VELOX_USER_CHECK(
+                isUtcAdjustedTimestamp(schemaElement),
+                "Cannot read Parquet column '{}' as TIMESTAMP WITH TIME ZONE: "
+                "the column is not annotated TIMESTAMP(isAdjustedToUTC=true), "
+                "so it carries no UTC instant",
+                *schemaElement.name());
+            return TIMESTAMP_WITH_TIME_ZONE();
+          }
           return TIMESTAMP();
         }
         VELOX_CHECK(

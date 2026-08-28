@@ -29,6 +29,7 @@
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/reader/TimeColumnReader.h"
 #include "velox/dwio/parquet/reader/TimestampColumnReader.h"
+#include "velox/dwio/parquet/reader/TimestampWithTimeZoneColumnReader.h"
 #include "velox/dwio/parquet/reader/UnknownColumnReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
@@ -58,6 +59,14 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
   switch (fileType->type()->kind()) {
     case TypeKind::INTEGER:
     case TypeKind::BIGINT:
+      // TIMESTAMP WITH TIME ZONE is BIGINT-backed, so it lands here. It needs
+      // the raw file value narrowed to millis and packed with a zone key, which
+      // IntegerColumnReader does not do.
+      if (isTimestampWithTimeZoneType(fileType->type())) {
+        return std::make_unique<TimestampWithTimeZoneColumnReader>(
+            requestedType, fileType, params, scanSpec);
+      }
+      [[fallthrough]];
     case TypeKind::SMALLINT:
     case TypeKind::TINYINT:
     case TypeKind::HUGEINT:
