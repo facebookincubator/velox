@@ -27,9 +27,9 @@
 #include "velox/common/file/File.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaBuilder.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
-#include "velox/dwio/nimble/velox/SchemaBuilder.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 

@@ -58,3 +58,49 @@ target_link_libraries(
   velox_type
   Folly::folly
 )
+
+# Moved from velox/CMakeLists.txt when the nimble/velox/ folder was flattened.
+
+add_library(nimble_velox_stream_data StreamData.cpp StreamData.h)
+target_link_libraries(nimble_velox_stream_data nimble_velox_schema_builder nimble_common)
+
+add_library(nimble_velox_layout_planner LayoutPlanner.cpp LayoutPlanner.h)
+target_link_libraries(nimble_velox_layout_planner nimble_velox_schema_reader nimble_tablet_writer)
+
+add_library(
+  nimble_velox_field_writer
+  BufferGrowthPolicy.cpp
+  DeduplicationUtils.cpp
+  FieldWriter.cpp
+  ../common/NimbleConfig.cpp
+  VectorAdapters.h
+  SharedDictionaryWriter.h
+  ../common/RowRange.h
+  RawSizeContext.h
+  ../common/OrderedRanges.h
+  ../common/NimbleConfig.h
+  FieldWriter.h
+  DeduplicationUtils.h
+  ../reader/Decoder.h
+  ChunkedStreamWriter.h
+  BufferGrowthPolicy.h
+)
+target_link_libraries(
+  nimble_velox_field_writer
+  nimble_column_stats
+  nimble_column_stats_utils
+  nimble_velox_schema
+  nimble_velox_stream_data
+  nimble_velox_schema_builder
+  velox_test_util
+  Folly::folly
+)
+
+add_library(
+  raw_size_utils
+  RawSizeUtils.cpp
+  DecodedVectorManager.cpp
+  DecodedVectorManager.h
+  RawSizeUtils.h
+)
+target_link_libraries(raw_size_utils nimble_common velox_vector velox_dwio_common)

@@ -26,12 +26,12 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/NimbleException.h"
+#include "velox/dwio/nimble/common/OrderedRanges.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
-#include "velox/dwio/nimble/velox/OrderedRanges.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
 
 namespace facebook::nimble::selection {
 namespace {

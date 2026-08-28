@@ -26,11 +26,11 @@
 #include "folly/io/Cursor.h"
 #include "folly/io/IOBuf.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/serializer/Options.h"
-#include "velox/dwio/nimble/velox/RowRange.h"
 
 namespace facebook::nimble::serde {
 

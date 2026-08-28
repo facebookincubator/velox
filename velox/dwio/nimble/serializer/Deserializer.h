@@ -24,9 +24,9 @@
 
 #include "folly/Range.h"
 #include "folly/container/F14Map.h"
+#include "velox/dwio/nimble/common/RowRange.h"
+#include "velox/dwio/nimble/reader/FieldReader.h"
 #include "velox/dwio/nimble/serializer/Options.h"
-#include "velox/dwio/nimble/velox/FieldReader.h"
-#include "velox/dwio/nimble/velox/RowRange.h"
 #include "velox/type/Subfield.h"
 #include "velox/vector/BaseVector.h"
 

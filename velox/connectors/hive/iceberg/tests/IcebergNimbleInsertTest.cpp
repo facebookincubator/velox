@@ -24,7 +24,7 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
-#include "velox/dwio/nimble/velox/reader/NimbleReaderFactory.h"
+#include "velox/dwio/nimble/reader/NimbleReaderFactory.h"
 #include "velox/dwio/nimble/writer/WriterFactory.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"

@@ -21,9 +21,9 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 
 namespace facebook::nimble {
 

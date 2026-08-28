@@ -18,7 +18,7 @@
 
 #include <algorithm>
 
-#include "velox/dwio/nimble/velox/StreamData.h"
+#include "velox/dwio/nimble/writer/StreamData.h"
 
 namespace facebook::nimble {
 namespace detail {

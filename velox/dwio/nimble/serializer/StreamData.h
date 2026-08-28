@@ -27,9 +27,9 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaTypes.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/serializer/Options.h"
-#include "velox/dwio/nimble/velox/SchemaTypes.h"
 
 namespace facebook::nimble::serde {
 

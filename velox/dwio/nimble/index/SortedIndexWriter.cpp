@@ -30,8 +30,8 @@
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/IndexConstants.h"
 #include "velox/dwio/nimble/tablet/SortedIndexGenerated.h"
-#include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
-#include "velox/dwio/nimble/velox/StreamData.h"
+#include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
+#include "velox/dwio/nimble/writer/StreamData.h"
 
 #include "velox/common/base/BitUtil.h"
 
