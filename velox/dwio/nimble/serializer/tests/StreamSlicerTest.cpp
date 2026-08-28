@@ -661,6 +661,9 @@ TEST_P(StreamSlicerRawStreamApiTest, fuzzesRawStreamApi) {
       EXPECT_EQ(sliced.data.computeChainDataLength() == 0, useOutputBuffer);
       ASSERT_LT(streamId, sliced.streams.size());
       ASSERT_FALSE(sliced.streams[streamId].empty());
+      ASSERT_EQ(sliced.presentStreams.size(), 1);
+      EXPECT_EQ(sliced.presentStreams[0].offset, streamId);
+      EXPECT_EQ(sliced.presentStreams[0].data, sliced.streams[streamId]);
 
       auto encoding =
           EncodingFactory{

@@ -328,8 +328,8 @@ folly::IOBuf StreamSlicer::slice(
           &encodingBufferPool_));
 
   streamSizes_.assign(slicedStreams.streams.size(), 0);
-  for (uint32_t i = 0; i < slicedStreams.streams.size(); ++i) {
-    streamSizes_[i] = static_cast<uint32_t>(slicedStreams.streams[i].size());
+  for (const auto& stream : slicedStreams.presentStreams) {
+    streamSizes_[stream.offset] = static_cast<uint32_t>(stream.data.size());
   }
 
   headerBuffer_.resize(0);
@@ -394,6 +394,7 @@ StreamSlicer::SlicedStreams StreamSlicer::sliceStreams(
     Buffer* outputBuffer,
     const Encoding::Options& encodingOptions) const {
   SlicedStreams result;
+  result.presentStreams.reserve(inputStreams.size());
   if (outputBuffer != nullptr) {
     sliceType(
         *schema_, range, inputStreams, result, *outputBuffer, encodingOptions);
@@ -630,6 +631,13 @@ void StreamSlicer::sliceDescriptor(
       outputBuffer,
       encodingOptions);
   outputStreams.streams[descriptor.offset()] = sliced;
+  if (!sliced.empty()) {
+    outputStreams.presentStreams.emplace_back(
+        StreamSlicer::SlicedStreams::PresentStream{
+            .offset = static_cast<uint32_t>(descriptor.offset()),
+            .data = sliced,
+        });
+  }
   if (isRowOrFlatMapNullStream) {
     NIMBLE_CHECK(!sliced.empty(), "Sliced null stream must not be empty");
     outputStreams.requiresNullBarrier |=

@@ -898,18 +898,13 @@ NimbleIndexProjector::PackedStripe NimbleIndexProjector::packPartialStripe(
 
   size_t bodySize{0};
   auto& packScratch = ctx_.packScratch;
-  for (uint32_t projectedIndex{0}; projectedIndex < sliced.streams.size();
-       ++projectedIndex) {
-    const auto stream = sliced.streams[projectedIndex];
-    if (stream.empty()) {
-      continue;
-    }
-    packScratch.streamIds.emplace_back(projectedIndex);
+  for (const auto& stream : sliced.presentStreams) {
+    packScratch.streamIds.emplace_back(stream.offset);
     packScratch.streamSizeIndices.emplace_back(
         static_cast<uint32_t>(packScratch.uniqueStreamSizes.size()));
     packScratch.uniqueStreamSizes.emplace_back(
-        static_cast<uint32_t>(stream.size()));
-    bodySize += stream.size();
+        static_cast<uint32_t>(stream.data.size()));
+    bodySize += stream.data.size();
   }
   NIMBLE_CHECK_GT(
       bodySize, 0, "Non-empty partial stripe must produce a sliced body");

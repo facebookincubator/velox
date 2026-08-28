@@ -67,6 +67,15 @@ class StreamSlicer {
 
   /// Sliced stream-set result.
   struct SlicedStreams {
+    /// One non-empty sliced stream and its stream offset.
+    struct PresentStream {
+      /// Stream offset in the schema.
+      uint32_t offset{0};
+
+      /// Sliced stream bytes.
+      std::string_view data;
+    };
+
     /// Owns the encoded bytes referenced by streams. Empty when slice() writes
     /// into a caller-provided output buffer.
     folly::IOBuf data;
@@ -74,6 +83,9 @@ class StreamSlicer {
     /// Views ordered by stream offset, backed by either data or the output
     /// buffer supplied to slice().
     std::vector<std::string_view> streams;
+
+    /// Non-empty stream views in schema traversal order.
+    std::vector<PresentStream> presentStreams;
 
     /// Indicates whether the stream set needs a row null-barrier on read.
     bool requiresNullBarrier{false};
