@@ -126,6 +126,17 @@ struct CudfConfig {
 
   /// Optional minimum GPU byte target for concatenation, measured by
   /// CudfVector::estimateFlatSize(). When unset, batchSizeMinThreshold applies.
+  ///
+  /// This bounds the buffered input, not peak GPU usage. Peak is roughly twice
+  /// the target, because the buffered inputs stay resident while
+  /// cudf::concatenate builds the output. Setting batchSizeMaxThreshold adds
+  /// more, since the whole split output set is held until it drains
+  /// downstream.
+  ///
+  /// Keep the target well under 2 GiB when string columns are present, unless
+  /// LIBCUDF_LARGE_STRINGS_ENABLED is set: cuDF rejects a strings column whose
+  /// character data exceeds the 32-bit offset limit, and batchSizeMaxThreshold
+  /// caps rows rather than bytes.
   std::optional<uint64_t> batchSizeMinBytes;
 
   /// Maximum rows allowed in a concatenated batch (user configurable).

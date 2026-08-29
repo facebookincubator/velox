@@ -387,8 +387,11 @@ void CudfConfig::initialize(
     outputMemoryResource = config[kCudfOutputMr];
   }
   if (config.find(kCudfBatchSizeMinThreshold) != config.end()) {
-    batchSizeMinThreshold =
+    const auto targetRows =
         folly::to<int32_t>(config[kCudfBatchSizeMinThreshold]);
+    VELOX_USER_CHECK_GT(
+        targetRows, 0, "cuDF BatchConcat minimum row target must be positive");
+    batchSizeMinThreshold = targetRows;
   }
   if (config.find(kCudfBatchSizeMinBytes) != config.end()) {
     const auto targetBytes =

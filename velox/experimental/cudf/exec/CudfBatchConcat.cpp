@@ -41,7 +41,13 @@ RowTypePtr getConcatOutputType(
   return planNode->sources()[0]->outputType();
 }
 
-std::optional<uint64_t> getBatchSizeMinBytes() {
+// Resolves the byte target for an output carrying 'numColumns' columns.
+// Zero-column vectors own no GPU buffers to measure, so they have no byte
+// target and fall back to counting rows.
+std::optional<uint64_t> getBatchSizeMinBytes(size_t numColumns) {
+  if (numColumns == 0) {
+    return std::nullopt;
+  }
   const auto targetBytes = CudfConfig::getInstance().batchSizeMinBytes;
   if (targetBytes.has_value()) {
     VELOX_CHECK_GT(
@@ -76,9 +82,8 @@ CudfBatchConcat::CudfBatchConcat(
           std::nullopt,
           planNode),
       driverCtx_(driverCtx),
-      targetBytes_(getBatchSizeMinBytes()),
-      usesRowFallback_(!targetBytes_.has_value() || outputType_->size() == 0),
-      targetRows_(usesRowFallback_ ? getBatchSizeMinRows() : 0) {}
+      targetBytes_(getBatchSizeMinBytes(outputType_->size())),
+      targetRows_(getBatchSizeMinRows()) {}
 
 void CudfBatchConcat::doAddInput(RowVectorPtr input) {
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
@@ -88,13 +93,8 @@ void CudfBatchConcat::doAddInput(RowVectorPtr input) {
     return;
   }
 
-  if (usesRowFallback_) {
-    const auto inputRows = static_cast<size_t>(cudfVector->size());
-    VELOX_CHECK_LE(
-        inputRows,
-        std::numeric_limits<size_t>::max() - currentNumRows_,
-        "CudfBatchConcat buffered row count overflow");
-    currentNumRows_ += inputRows;
+  if (usesRowFallback()) {
+    currentNumRows_ += cudfVector->size();
   } else {
     const auto inputBytes = cudfVector->estimateFlatSize();
     VELOX_CHECK_LE(
@@ -149,14 +149,14 @@ RowVectorPtr CudfBatchConcat::doGetOutput() {
     auto& last = outputVectors.back();
     const auto numRows = static_cast<size_t>(last->size());
     const auto lastBytes =
-        usesRowFallback_ ? uint64_t{0} : last->estimateFlatSize();
+        usesRowFallback() ? uint64_t{0} : last->estimateFlatSize();
     const auto retainLast = !noMoreInput_ &&
-        (usesRowFallback_ ? numRows < targetRows_
-                          : lastBytes < targetBytes_.value());
+        (usesRowFallback() ? numRows < targetRows_
+                           : lastBytes < targetBytes_.value());
 
     if (retainLast) {
       currentBytes_ = lastBytes;
-      currentNumRows_ = usesRowFallback_ ? numRows : 0;
+      currentNumRows_ = usesRowFallback() ? numRows : 0;
       buffer_.push_back(std::move(last));
     } else {
       outputQueue_.push(std::move(last));

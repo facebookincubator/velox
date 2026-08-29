@@ -51,10 +51,16 @@ class CudfBatchConcat : public CudfOperatorBase {
   void doClose() override;
 
  private:
+  // Returns true when buffering is measured in logical rows, which happens
+  // when no byte target is configured or the output has no GPU columns.
+  bool usesRowFallback() const {
+    return !targetBytes_.has_value();
+  }
+
   // Returns true when the active byte or row target is met.
   bool targetReached() const {
-    return usesRowFallback_ ? currentNumRows_ >= targetRows_
-                            : currentBytes_ >= targetBytes_.value();
+    return usesRowFallback() ? currentNumRows_ >= targetRows_
+                             : currentBytes_ >= targetBytes_.value();
   }
 
   // Driver context associated with this operator.
@@ -69,15 +75,14 @@ class CudfBatchConcat : public CudfOperatorBase {
   // Estimated GPU bytes currently held in buffer_.
   uint64_t currentBytes_{0};
 
-  // Estimated GPU byte target for column-bearing vectors, when configured.
-  const std::optional<uint64_t> targetBytes_;
-
-  // Whether logical rows are used because no byte target is configured or the
-  // vectors have no GPU columns.
-  const bool usesRowFallback_{false};
-
-  // Logical rows currently buffered while the row target is active.
+  // Logical rows currently buffered while the row fallback is active.
   size_t currentNumRows_{0};
+
+  // Estimated GPU byte target. Empty when the row fallback is active, that is
+  // when no byte target is configured or the output has no GPU columns. Both
+  // targets are resolved from the config alone, so neither depends on the
+  // other's position in this declaration list.
+  const std::optional<uint64_t> targetBytes_;
 
   // Logical row target used while the row fallback is active.
   const size_t targetRows_{0};

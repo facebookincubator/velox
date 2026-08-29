@@ -55,6 +55,26 @@ TEST(ConfigTest, cudfConfig) {
   ASSERT_EQ(config.batchSizeMinBytes.value(), 2'147'483'648);
 }
 
+TEST(ConfigTest, rejectsZeroBatchSizeMinThreshold) {
+  CudfConfig config;
+  std::unordered_map<std::string, std::string> options = {
+      {CudfConfig::kCudfBatchSizeMinThreshold, "0"}};
+
+  VELOX_ASSERT_USER_THROW(
+      config.initialize(std::move(options)),
+      "cuDF BatchConcat minimum row target must be positive");
+}
+
+TEST(ConfigTest, rejectsNegativeBatchSizeMinThreshold) {
+  CudfConfig config;
+  std::unordered_map<std::string, std::string> options = {
+      {CudfConfig::kCudfBatchSizeMinThreshold, "-5"}};
+
+  VELOX_ASSERT_USER_THROW(
+      config.initialize(std::move(options)),
+      "cuDF BatchConcat minimum row target must be positive");
+}
+
 TEST(ConfigTest, rejectsZeroBatchSizeMinBytes) {
   CudfConfig config;
   std::unordered_map<std::string, std::string> options = {

@@ -87,6 +87,15 @@ class CudfBatchConcatTest : public OperatorTestBase {
     config.batchSizeMaxThreshold = maxRows;
   }
 
+  // Configures the default mode, where no byte target is set and buffering is
+  // measured in rows.
+  void updateCudfRowConfig(int32_t minRows, std::optional<int32_t> maxRows) {
+    auto& config = CudfConfig::getInstance();
+    config.batchSizeMinBytes.reset();
+    config.batchSizeMinThreshold = minRows;
+    config.batchSizeMaxThreshold = maxRows;
+  }
+
   CudfVectorPtr toCudfVector(
       const RowVectorPtr& input,
       std::optional<uint64_t> estimatedSizeBytes = std::nullopt) {
@@ -262,10 +271,8 @@ TEST_F(CudfBatchConcatTest, usesRowTargetWhenByteTargetIsNotConfigured) {
   auto first = toCudfVector(input, 1'000'000);
   auto second = toCudfVector(input, 1'000'000);
 
-  auto& config = CudfConfig::getInstance();
-  config.batchSizeMinBytes = {};
-  config.batchSizeMinThreshold = 2 * kRowsPerBatch;
-  config.batchSizeMaxThreshold.reset();
+  updateCudfRowConfig(
+      /*minRows=*/2 * kRowsPerBatch, /*maxRows=*/std::nullopt);
 
   auto plan = createAggregationPlan(input);
   auto task = createTask(plan);
@@ -362,8 +369,9 @@ TEST_F(CudfBatchConcatTest, zeroColumnVectorsUseRowFallback) {
 // the number of batches reaching the aggregation operator.
 TEST_F(CudfBatchConcatTest, concatReducesBatchesBeforeAggregation) {
   // 6 batches of 10 rows each = 60 rows total.
-  // A byte target above their combined size merges them on noMoreInput.
-  updateCudfConfig(/*minBytes=*/1'048'576, /*maxRows=*/std::nullopt);
+  // With min threshold 30, concat should accumulate ~3 batches before flushing,
+  // producing fewer output batches than the 6 it received.
+  updateCudfRowConfig(/*minRows=*/30, /*maxRows=*/std::nullopt);
   CudfConfig::getInstance().concatOptimizationEnabled = true;
 
   std::vector<RowVectorPtr> vectors;
@@ -399,6 +407,49 @@ TEST_F(CudfBatchConcatTest, concatReducesBatchesBeforeAggregation) {
       << "CudfBatchConcat should have received all 6 input batches";
   EXPECT_LT(concatStats.outputVectors, concatStats.inputVectors)
       << "CudfBatchConcat should produce fewer output batches than input";
+}
+
+// Verifies that a byte target below the total input size flushes mid-stream
+// rather than holding everything until noMoreInput.
+TEST_F(CudfBatchConcatTest, concatFlushesMidStreamAtByteTarget) {
+  std::vector<RowVectorPtr> vectors;
+  for (int i = 0; i < 6; ++i) {
+    vectors.push_back(makeRowVector({makeFlatSequence<int64_t>(i * 10, 10)}));
+  }
+  createDuckDbTable(vectors);
+
+  // Derive the target from a measured vector so it does not drift when cuDF
+  // allocation changes. Three batches per flush leaves several output batches.
+  const auto batchBytes = toCudfVector(vectors[0])->estimateFlatSize();
+  ASSERT_GT(batchBytes, 0u);
+  const auto targetBytes = 3 * batchBytes;
+  updateCudfConfig(
+      /*minBytes=*/targetBytes, /*maxRows=*/std::nullopt);
+  CudfConfig::getInstance().concatOptimizationEnabled = true;
+
+  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId aggNodeId;
+
+  auto plan = PlanBuilder(generator)
+                  .addNode([&](auto id, auto pool) {
+                    return createFragmentedSource(vectors, generator);
+                  })
+                  .singleAggregation({}, {"sum(c0)"})
+                  .capturePlanNodeId(aggNodeId)
+                  .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .plan(plan)
+                  .maxDrivers(1)
+                  .assertResults("SELECT sum(c0) FROM tmp");
+
+  auto* concatStats = getConcatStats(task, aggNodeId);
+  ASSERT_NE(concatStats, nullptr);
+  EXPECT_EQ(concatStats->inputVectors, 6);
+  EXPECT_GT(concatStats->outputVectors, 1)
+      << "A byte target below the total input size should flush mid-stream";
+  EXPECT_LT(concatStats->outputVectors, concatStats->inputVectors)
+      << "CudfBatchConcat should still reduce the number of batches";
 }
 
 // Verifies that CudfBatchConcat is not inserted when the optimization is
