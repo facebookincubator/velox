@@ -16,6 +16,8 @@
 
 #include "velox/experimental/torchwave/Executor.h"
 
+#include "velox/experimental/torchwave/AllocGroup.h"
+
 #include <ATen/ATen.h>
 #include <c10/core/CachingDeviceAllocator.h>
 #include <folly/CppAttributes.h>
@@ -169,6 +171,28 @@ double tscTicksPerMicro() {
         static_cast<double>(std::max<int64_t>(1, us));
   }();
   return ticksPerMicro;
+}
+
+namespace {
+// NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
+thread_local int64_t tAllocCallUs = 0;
+} // namespace
+
+int64_t threadAllocCallUs() {
+  return tAllocCallUs;
+}
+
+ScopedAllocCall::ScopedAllocCall()
+    : timing_(
+          WaveConfig::get().printTiming ||
+          (WaveConfig::get().trace & WaveConfig::kTiming)),
+      start_(timing_ ? folly::hardware_timestamp() : 0) {}
+
+ScopedAllocCall::~ScopedAllocCall() {
+  if (timing_) {
+    tAllocCallUs += static_cast<int64_t>(
+        (folly::hardware_timestamp() - start_) / tscTicksPerMicro());
+  }
 }
 
 void initialize() {
@@ -752,11 +776,20 @@ void WaveGraphExecutor::returnFrame(
 std::vector<c10::IValue> WaveGraphExecutor::execute(
     nativert::ExecutionFrame& /*frame*/,
     std::vector<c10::IValue> inputs) {
+  return runInputs(std::move(inputs));
+}
+
+std::vector<c10::IValue> WaveGraphExecutor::runInputs(
+    std::vector<c10::IValue> inputs) {
   auto pooledFrame = getFrame();
+  // Returned on the throwing paths too: a frame that never comes back is gone
+  // from the pool for the process's life, so a caller that retries after an
+  // error drains it one frame per attempt.
+  SCOPE_EXIT {
+    returnFrame(std::move(pooledFrame));
+  };
   fillUserInputs(*pooledFrame, std::move(inputs));
-  auto outputs = executeWithPrefilledFrame(*pooledFrame);
-  returnFrame(std::move(pooledFrame));
-  return outputs;
+  return executeWithPrefilledFrame(*pooledFrame);
 }
 
 std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
@@ -955,8 +988,16 @@ int64_t donationKey(int64_t bytes, c10::ScalarType dtype) {
   return (bytes << 8) | static_cast<int64_t>(dtype);
 }
 
+// Donation hands a freed buffer to the next same-size request, which assumes
+// one allocation per output. Allocation groups carve many outputs out of one
+// buffer, so a group's slots are never solely-owned storages to begin with and
+// the pool would only add bookkeeping to a path built to avoid it.
+bool donationActive() {
+  return WaveConfig::get().donateBuffers && !allocGroupEnabled();
+}
+
 bool donateFreedTensor(ExecutionState& state, const at::Tensor& tensor) {
-  if (!WaveConfig::get().donateBuffers) {
+  if (!donationActive()) {
     return false;
   }
   // Sole ownership is the whole safety argument on the donor side: another
@@ -985,8 +1026,7 @@ at::Tensor takeDonatedTensor(
     c10::IntArrayRef dims) {
   // An empty pool is the common case on the first steps of a run; keep that
   // path down to one branch.
-  if (!WaveConfig::get().donateBuffers || bytes <= 0 ||
-      state.donatable.empty()) {
+  if (!donationActive() || bytes <= 0 || state.donatable.empty()) {
     return {};
   }
   const uint64_t start = folly::hardware_timestamp();
@@ -1962,6 +2002,7 @@ void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
         meta.gatherUs = sv.gatherUs;
         meta.gridUs = sv.gridUs;
         meta.allocUs = sv.allocUs;
+        meta.allocCallUs = sv.allocCallUs;
         meta.fillUs = sv.fillUs;
         meta.kernelUs = sv.kernelUs;
         meta.standaloneUs = sv.standaloneUs;
@@ -1973,6 +2014,8 @@ void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
         meta.currentBytes = sv.currentBytes;
         meta.refCheckUs = sv.refCheckUs;
         meta.elidedCloneBytes = sv.elidedCloneBytes;
+        meta.allocGroups = sv.allocGroups;
+        meta.allocGroupTensors = sv.allocGroupTensors;
         meta.kernelGpuUs = sv.kernelGpuUs;
         meta.standaloneGpuUs = sv.standaloneGpuUs;
         meta.gpuIdleUs = sv.gpuIdleUs;
@@ -2223,6 +2266,23 @@ std::string WaveGraphExecutor::makePerfReport(
         "Grid redos: {} steps changed variant and redid their setup pass\n",
         info.numGridRedos);
   }
+  {
+    // What the grouping actually bought: every group is one allocator call in
+    // place of one per tensor it covers, so the saving is the difference.
+    int64_t groups = 0;
+    int64_t tensors = 0;
+    for (const auto& m : info.launchMeta) {
+      groups += m.allocGroups;
+      tensors += m.allocGroupTensors;
+    }
+    if (groups > 0) {
+      ss << fmt::format(
+          "Alloc groups: {} groups over {} tensors, {} fewer allocator calls\n",
+          groups,
+          tensors,
+          tensors - groups);
+    }
+  }
   if (info.numDeferredSteps > 0) {
     ss << fmt::format(
         "Deferred setup: {} ops over {} steps needed a second pass\n",
@@ -2263,10 +2323,14 @@ std::string WaveGraphExecutor::makePerfReport(
     double kernelUs = 0.0;
     int64_t standaloneUs = 0;
     int64_t interpUs = 0;
+    int64_t allocUs = 0;
+    int64_t allocCallUs = 0;
     int64_t gpuIdleUs = 0;
     for (size_t i = 0; i < info.launchMeta.size(); ++i) {
       const auto& m = info.launchMeta[i];
       interpUs += m.gatherUs + m.gridUs + m.allocUs + m.fillUs;
+      allocUs += m.allocUs;
+      allocCallUs += m.allocCallUs;
       gpuIdleUs += m.gpuIdleUs;
       if (m.standaloneGpuUs > 0) {
         standaloneUs += m.standaloneGpuUs;
@@ -2294,6 +2358,14 @@ std::string WaveGraphExecutor::makePerfReport(
         gpuIdleUs,
         interpUs,
         info.freeUs);
+    // The allocation phase split in two, because the halves are fixed by
+    // different things: the calls by allocating fewer and larger buffers (or a
+    // bigger arena), the setup by cheaper shape arithmetic and view building.
+    ss << fmt::format(
+        "  of which allocation: {} us total = {} us in allocator calls + {} us computing sizes and building views\n",
+        allocUs,
+        allocCallUs,
+        allocUs - allocCallUs);
     if (info.donationHits + info.donationMisses > 0) {
       ss << fmt::format(
           "Buffer donation: {} hits, {} misses ({:.0f}% of kernel allocations), {} evicted, {} us in the pool\n",
@@ -2471,6 +2543,10 @@ std::string WaveGraphExecutor::makePerfReport(
               "  elided copies={}",
               facebook::velox::succinctBytes(m.elidedCloneBytes));
         }
+        if (m.allocGroups > 0) {
+          ss << fmt::format(
+              "  allocGroups={}/{}", m.allocGroups, m.allocGroupTensors);
+        }
         ss << standaloneBreakdown(m.sequenceNumber, m.stepIdx) << "\n";
         continue;
       }
@@ -2493,14 +2569,23 @@ std::string WaveGraphExecutor::makePerfReport(
             "  elided copies={}",
             facebook::velox::succinctBytes(m.elidedCloneBytes));
       }
+      // groups/tensors: the allocator calls this step made for its grouped
+      // outputs, over the calls it would have made without the grouping.
+      if (m.allocGroups > 0) {
+        ss << fmt::format(
+            "  allocGroups={}/{}", m.allocGroups, m.allocGroupTensors);
+      }
       // kernel= is the host cost of issuing the step, gpu= what the device
       // actually spent on it. They diverge once the two streams overlap, and
       // that divergence is the interesting signal.
       ss << fmt::format(
-          "  [gather={} grid={} alloc={} fill={} kernel={} gpu={} idle={}]",
+          "  [gather={} grid={} alloc={}(call={} setup={}) fill={} kernel={} "
+          "gpu={} idle={}]",
           m.gatherUs,
           m.gridUs,
           m.allocUs,
+          m.allocCallUs,
+          m.allocUs - m.allocCallUs,
           m.fillUs,
           m.kernelUs,
           m.kernelGpuUs,

@@ -69,8 +69,10 @@ TEST(TypesTest, toEncodingTypeUnknown) {
 }
 
 TEST(TypesTest, readOnlyEncoding) {
-  EXPECT_TRUE(isReadOnlyEncoding(EncodingType::PFOR));
-  EXPECT_TRUE(isReadOnlyEncoding("PFOR"));
+  EXPECT_FALSE(isReadOnlyEncoding(EncodingType::PFOR));
+  EXPECT_FALSE(isReadOnlyEncoding("PFOR"));
+  EXPECT_TRUE(isReadOnlyEncoding(EncodingType::FOR));
+  EXPECT_TRUE(isReadOnlyEncoding("FOR"));
   EXPECT_FALSE(isReadOnlyEncoding(EncodingType::Trivial));
   EXPECT_FALSE(isReadOnlyEncoding("Trivial"));
   EXPECT_FALSE(isReadOnlyEncoding("unknown"));

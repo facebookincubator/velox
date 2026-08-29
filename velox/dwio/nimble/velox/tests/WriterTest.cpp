@@ -443,13 +443,29 @@ nimble::EncodingSelectionPolicyCreator makeEncodingSelectionPolicyCreator(
   };
 }
 
-nimble::EncodingSelectionPolicyCreator createRandomEncodingSelectionFactory(
-    uint64_t seed) {
-  nimble::testing::RandomEncodingSelectionPolicyFactory factory{seed};
+nimble::EncodingSelectionPolicyCreator makeRandomEncodingSelectionPolicyCreator(
+    uint64_t seed,
+    std::vector<nimble::EncodingType> candidateEncodingTypes = nimble::testing::
+        RandomEncodingSelectionPolicyFactory::defaultEncodingChoices()) {
+  nimble::testing::RandomEncodingSelectionPolicyFactory factory{
+      seed, std::move(candidateEncodingTypes)};
   return [factory = std::move(factory)](nimble::DataType dataType)
              -> std::unique_ptr<nimble::EncodingSelectionPolicyBase> {
     return factory.createPolicy(dataType);
   };
+}
+
+std::string writeWithWriterOptions(
+    velox::memory::MemoryPool& rootPool,
+    const velox::RowVectorPtr& vector,
+    nimble::WriterOptions options) {
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  nimble::Writer writer(
+      vector->type(), std::move(writeFile), rootPool, std::move(options));
+  writer.write(vector);
+  writer.close();
+  return file;
 }
 
 // Writes |vector| to an in-memory Nimble file using |creator| for encoding
@@ -460,13 +476,7 @@ std::string writeWithEncodingSelectionCreator(
     nimble::EncodingSelectionPolicyCreator creator) {
   nimble::WriterOptions options;
   options.encodingSelectionPolicyCreator = std::move(creator);
-  std::string file;
-  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
-  nimble::Writer writer(
-      vector->type(), std::move(writeFile), rootPool, std::move(options));
-  writer.write(vector);
-  writer.close();
-  return file;
+  return writeWithWriterOptions(rootPool, vector, std::move(options));
 }
 
 // A schema spanning the scalar physical types plus array/map/row nesting, so
@@ -2428,22 +2438,28 @@ TEST_F(WriterTest, openZLCompressionNumericRoundTrip) {
 }
 
 TEST_F(WriterTest, rejectsReadOnlyEncodingLayout) {
-  nimble::WriterOptions options;
-  options.encodingLayoutTree.emplace(
-      nimble::Kind::Row,
-      std::unordered_map<
-          nimble::EncodingLayoutTree::StreamIdentifier,
-          nimble::EncodingLayout>{},
-      "",
-      std::vector<nimble::EncodingLayoutTree>{nimble::EncodingLayoutTree{
-          nimble::Kind::Scalar,
-          {{nimble::EncodingLayoutTree::StreamIdentifiers::Scalar::ScalarStream,
-            nimble::EncodingLayout{
-                nimble::EncodingType::PFOR,
-                {},
-                nimble::CompressionType::Uncompressed,
-                {std::nullopt, std::nullopt}}}},
-          "c0"}});
+  const auto makeOptions = [](nimble::EncodingType encodingType,
+                              uint32_t numChildren) {
+    nimble::WriterOptions options;
+    options.encodingLayoutTree.emplace(
+        nimble::Kind::Row,
+        std::unordered_map<
+            nimble::EncodingLayoutTree::StreamIdentifier,
+            nimble::EncodingLayout>{},
+        "",
+        std::vector<nimble::EncodingLayoutTree>{nimble::EncodingLayoutTree{
+            nimble::Kind::Scalar,
+            {{nimble::EncodingLayoutTree::StreamIdentifiers::Scalar::
+                  ScalarStream,
+              nimble::EncodingLayout{
+                  encodingType,
+                  {},
+                  nimble::CompressionType::Uncompressed,
+                  std::vector<std::optional<const nimble::EncodingLayout>>(
+                      numChildren)}}},
+            "c0"}});
+    return options;
+  };
 
   std::string file;
   NIMBLE_ASSERT_THROW(
@@ -2451,8 +2467,16 @@ TEST_F(WriterTest, rejectsReadOnlyEncodingLayout) {
           velox::ROW({{"c0", velox::BIGINT()}}),
           std::make_unique<velox::InMemoryWriteFile>(&file),
           *rootPool_,
-          std::move(options)),
-      "Encoding is read-only and cannot be used for new writes: PFOR");
+          makeOptions(nimble::EncodingType::FOR, 3)),
+      "Encoding is read-only and cannot be used for new writes: FOR");
+
+  std::string pforFile;
+  EXPECT_NO_THROW(
+      nimble::Writer(
+          velox::ROW({{"c0", velox::BIGINT()}}),
+          std::make_unique<velox::InMemoryWriteFile>(&pforFile),
+          *rootPool_,
+          makeOptions(nimble::EncodingType::PFOR, 2)));
 }
 
 TEST_F(WriterTest, encodingLayoutSchemaMismatch) {
@@ -3442,6 +3466,19 @@ TEST_F(WriterTest, chunkStatsAbsentWhenChunkIndexDisabled) {
   auto stripeIdentifier = tablet->stripeIdentifier(0);
   EXPECT_EQ(stripeIdentifier.chunkStats(), nullptr)
       << "no chunk stats section should be written when the index is disabled";
+}
+
+TEST_F(WriterTest, chunkIndexRequiresChunking) {
+  auto type = velox::ROW({{"c1", velox::INTEGER()}});
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  NIMBLE_ASSERT_USER_THROW(
+      nimble::Writer(
+          type,
+          std::move(writeFile),
+          *rootPool_,
+          {.enableChunkIndex = true, .enableChunking = false}),
+      "Chunk stats require chunking to be enabled.");
 }
 
 TEST_F(WriterTest, chunkedStreamsRowNoNullsNoChunks) {
@@ -9270,7 +9307,7 @@ TEST_F(WriterTest, randomEncodingSelectionRoundTrip) {
     auto vector = fuzzer.fuzzInputFlatRow(rowType);
 
     const auto file = writeWithEncodingSelectionCreator(
-        *rootPool_, vector, createRandomEncodingSelectionFactory(seed));
+        *rootPool_, vector, makeRandomEncodingSelectionPolicyCreator(seed));
 
     auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
     nimble::VeloxReader reader(readFile.get(), *leafPool_);
@@ -9285,13 +9322,80 @@ TEST_F(WriterTest, randomEncodingSelectionRoundTrip) {
   }
 }
 
+TEST_F(WriterTest, randomEncodingSelectionVariesByChunkContents) {
+  constexpr int kNumChunks = 16;
+  constexpr int kNumRowsPerChunk = 1'000;
+  constexpr uint64_t kSeed = 42;
+  const auto rowType =
+      velox::ROW({{"c0", velox::BIGINT()}, {"c1", velox::BIGINT()}});
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  std::vector<velox::RowVectorPtr> batches;
+  batches.reserve(kNumChunks);
+  for (int chunkIndex = 0; chunkIndex < kNumChunks; ++chunkIndex) {
+    std::vector<int64_t> values(kNumRowsPerChunk);
+    std::vector<int64_t> otherValues(kNumRowsPerChunk);
+    for (int row = 0; row < kNumRowsPerChunk; ++row) {
+      values[row] = (row + chunkIndex) % (17 + chunkIndex);
+      otherValues[row] = (row * 3 + chunkIndex) % (23 + chunkIndex);
+    }
+    batches.push_back(vectorMaker.rowVector(
+        {"c0", "c1"},
+        {vectorMaker.flatVector<int64_t>(values),
+         vectorMaker.flatVector<int64_t>(otherValues)}));
+  }
+
+  auto makeOptions = [] {
+    nimble::WriterOptions options;
+    options.enableChunking = true;
+    options.minStreamChunkRawSize = 0;
+    options.flushPolicyFactory = [] {
+      return std::make_unique<nimble::LambdaFlushPolicy>(
+          /*flushLambda=*/[](auto&) { return false; },
+          /*chunkLambda=*/[](auto&) { return true; });
+    };
+    options.encodingSelectionPolicyCreator =
+        makeRandomEncodingSelectionPolicyCreator(
+            kSeed,
+            {nimble::EncodingType::Trivial, nimble::EncodingType::Dictionary});
+    return options;
+  };
+
+  const auto options = makeOptions();
+  const auto first = writeAndCaptureChunkLayouts(
+      rowType, batches, options, /*expectedStripeCount=*/1);
+  const auto second = writeAndCaptureChunkLayouts(
+      rowType, batches, options, /*expectedStripeCount=*/1);
+  ASSERT_THAT(first, ::testing::SizeIs(kNumChunks));
+  ASSERT_THAT(second, ::testing::SizeIs(first.size()));
+
+  folly::CPUThreadPoolExecutor executor{2};
+  auto parallelOptions = makeOptions();
+  parallelOptions.encodingExecutor = folly::getKeepAliveToken(executor);
+  parallelOptions.maxEncodeParallelism = 2;
+  parallelOptions.minStreamsPerEncodeUnit = 1;
+  const auto parallel = writeAndCaptureChunkLayouts(
+      rowType, batches, std::move(parallelOptions), /*expectedStripeCount=*/1);
+  ASSERT_THAT(parallel, ::testing::SizeIs(first.size()));
+
+  std::vector<nimble::EncodingType> firstTypes;
+  std::vector<nimble::EncodingType> secondTypes;
+  std::vector<nimble::EncodingType> parallelTypes;
+  for (size_t chunk = 0; chunk < first.size(); ++chunk) {
+    firstTypes.push_back(first[chunk].encodingType());
+    secondTypes.push_back(second[chunk].encodingType());
+    parallelTypes.push_back(parallel[chunk].encodingType());
+  }
+
+  EXPECT_THAT(secondTypes, ::testing::ElementsAreArray(firstTypes));
+  EXPECT_THAT(parallelTypes, ::testing::ElementsAreArray(firstTypes));
+  EXPECT_THAT(firstTypes, ::testing::Contains(nimble::EncodingType::Trivial));
+  EXPECT_THAT(
+      firstTypes, ::testing::Contains(nimble::EncodingType::Dictionary));
+}
+
 // The random layout is reproducible from its seed: identical input + seed
-// yields byte-identical files (Nimble writer output is deterministic for
-// identical input). Concurrency-independence is guaranteed by construction --
-// each policy derives its seed from its structural path, never from encode
-// thread order, and shares no state across the encode executor's threads -- so
-// it is not exercised here (it would depend on the coroutine encode path). A
-// different seed selects a different layout.
+// yields byte-identical files independently of encode thread order. A different
+// seed selects a different layout.
 TEST_F(WriterTest, randomEncodingSelectionDeterministic) {
   const uint32_t seed = FLAGS_writer_tests_seed > 0 ? FLAGS_writer_tests_seed
                                                     : folly::Random::rand32();
@@ -9308,12 +9412,23 @@ TEST_F(WriterTest, randomEncodingSelectionDeterministic) {
   auto vector = fuzzer.fuzzInputFlatRow(rowType);
 
   const auto file = writeWithEncodingSelectionCreator(
-      *rootPool_, vector, createRandomEncodingSelectionFactory(seed));
+      *rootPool_, vector, makeRandomEncodingSelectionPolicyCreator(seed));
   // Same seed reproduces the exact file.
   EXPECT_EQ(
       file,
       writeWithEncodingSelectionCreator(
-          *rootPool_, vector, createRandomEncodingSelectionFactory(seed)));
+          *rootPool_, vector, makeRandomEncodingSelectionPolicyCreator(seed)));
+
+  folly::CPUThreadPoolExecutor executor{4};
+  nimble::WriterOptions parallelOptions;
+  parallelOptions.encodingSelectionPolicyCreator =
+      makeRandomEncodingSelectionPolicyCreator(seed);
+  parallelOptions.encodingExecutor = folly::getKeepAliveToken(executor);
+  parallelOptions.maxEncodeParallelism = 4;
+  parallelOptions.minStreamsPerEncodeUnit = 1;
+  EXPECT_EQ(
+      file,
+      writeWithWriterOptions(*rootPool_, vector, std::move(parallelOptions)));
   // A different seed should be able to select a different layout. For a given
   // fuzzed input some nodes may have a singleton compatible-encoding set, so an
   // individual alternate seed can legitimately reproduce the same file; only
@@ -9326,7 +9441,7 @@ TEST_F(WriterTest, randomEncodingSelectionDeterministic) {
         writeWithEncodingSelectionCreator(
             *rootPool_,
             vector,
-            createRandomEncodingSelectionFactory(seed ^ delta)) != file;
+            makeRandomEncodingSelectionPolicyCreator(seed ^ delta)) != file;
   }
   EXPECT_TRUE(anyDifferent)
       << "no alternate seed produced a different layout for seed " << seed;
