@@ -337,6 +337,7 @@ class RLEEncodingBase
     NIMBLE_CHECK_GT(
         runCount, 0, "Cannot slice a non-empty range from empty RLE runs.");
     auto* pool = &buffer.getMemoryPool();
+
     RLESliceRuns result;
 
     EncodingFactory encodingFactory{options};
@@ -768,6 +769,33 @@ class RLEEncoding<bool> final
 
   void materializeBoolsAsBits(uint32_t rowCount, uint64_t* buffer, int begin)
       final;
+
+  /// True counts before and inside a row range.
+  struct RangeCounts {
+    /// Number of true values before the range offset.
+    uint32_t numTrueBeforeRange{0};
+
+    /// Number of true values inside the range.
+    uint32_t numTrueInRange{0};
+  };
+
+  /// Fills true counts before and inside non-empty rows [offset, offset +
+  /// length).
+  static void countTrue(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t length,
+      Buffer& buffer,
+      RangeCounts& counts,
+      const Encoding::Options& options = {});
+
+  /// Counts true values in non-empty rows [offset, offset + length).
+  static uint32_t countTrue(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t length,
+      Buffer& buffer,
+      const Encoding::Options& options = {});
 
   static uint64_t estimateSize(
       uint64_t /*rowCount*/,
