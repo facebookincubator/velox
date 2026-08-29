@@ -18,148 +18,152 @@
 # need the benchmark switch guarded explicitly rather than relying on the parent.
 if(VELOX_ENABLE_BENCHMARKS)
   add_executable(
-  nimble_fixed_bit_width_benchmark
-  FixedBitWidthBenchmark.cpp
-  BenchmarkUtils.h
-  DeltaBenchmarkData.h
-  FixedBitWidthBenchmarkData.h
-  NimbleEncodingRunner.h
-  SparseBoolBenchmarkData.h
-  VarintBenchmarkData.h
+    nimble_fixed_bit_width_benchmark
+    FixedBitWidthBenchmark.cpp
+    BenchmarkUtils.h
+    DeltaBenchmarkData.h
+    FixedBitWidthBenchmarkData.h
+    NimbleEncodingRunner.h
+    SparseBoolBenchmarkData.h
+    VarintBenchmarkData.h
   )
 
   target_link_libraries(
-  nimble_fixed_bit_width_benchmark
-  nimble_encodings_tests_utils
-  nimble_common
-  Folly::follybenchmark
-  Folly::folly
-  velox_memory
+    nimble_fixed_bit_width_benchmark
+    nimble_encodings_tests_utils
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_memory
   )
 
   add_executable(
-  nimble_block_bit_packing_encoding_benchmark
-  BlockBitPackingEncodingBenchmark.cpp
-  BlockBitPackingBenchmarkData.h
+    nimble_block_bit_packing_encoding_benchmark
+    BlockBitPackingEncodingBenchmark.cpp
+    BlockBitPackingBenchmarkData.h
   )
 
   target_link_libraries(
-  nimble_block_bit_packing_encoding_benchmark
-  nimble_encodings_tests_utils
-  nimble_encodings
-  nimble_common
-  Folly::follybenchmark
-  Folly::folly
-  velox_memory
+    nimble_block_bit_packing_encoding_benchmark
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_memory
   )
 
   add_executable(nimble_exact_bit_width_storage_benchmark ExactBitWidthStorageBenchmark.cpp)
 
   target_link_libraries(
-  nimble_exact_bit_width_storage_benchmark
-  nimble_encodings_tests_utils
-  nimble_encodings
-  nimble_common
-  velox_memory
+    nimble_exact_bit_width_storage_benchmark
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    velox_memory
   )
 
   add_executable(nimble_fsst_benchmark FsstBenchmark.cpp)
 
   target_link_libraries(
-  nimble_fsst_benchmark
-  nimble_encodings
-  nimble_common
-  Folly::follybenchmark
-  Folly::folly
-  velox_memory
-  fsst
+    nimble_fsst_benchmark
+    nimble_encodings
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_memory
+    fsst
   )
 
   add_executable(nimble_huffman_benchmark HuffmanBenchmark.cpp HuffmanBenchmarkData.h)
 
   target_link_libraries(
-  nimble_huffman_benchmark
-  nimble_encodings
-  nimble_common
-  Folly::follybenchmark
-  Folly::folly
-  velox_memory
+    nimble_huffman_benchmark
+    nimble_encodings
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_memory
   )
 
   add_executable(nimble_encoding_view_benchmark EncodingViewBenchmark.cpp)
 
   target_link_libraries(
-  nimble_encoding_view_benchmark
-  nimble_encodings_tests_utils
-  nimble_encodings
-  nimble_common
-  Folly::follybenchmark
-  Folly::folly
-  velox_common_base
-  velox_memory
-  fmt::fmt
+    nimble_encoding_view_benchmark
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_common_base
+    velox_memory
+    fmt::fmt
   )
 
   add_executable(
-  nimble_simd_for_bitpack_benchmark
-  SimdForBitpackBenchmark.cpp
-  SimdForBitpackBenchmarkData.h
+    nimble_simd_for_bitpack_benchmark
+    SimdForBitpackBenchmark.cpp
+    SimdForBitpackBenchmarkData.h
   )
 
   target_link_libraries(
-  nimble_simd_for_bitpack_benchmark
-  nimble_encodings_tests_utils
-  nimble_encodings
-  nimble_common
-  Folly::follybenchmark
-  Folly::folly
-  velox_common_base
-  velox_memory
-  )
-
-  add_executable(nimble_pfor_encoding_benchmark PFOREncodingBenchmark.cpp PFOREncodingBenchmarkData.h)
-
-  target_link_libraries(
-  nimble_pfor_encoding_benchmark
-  nimble_encodings
-  nimble_common
-  Folly::follybenchmark
-  Folly::folly
-  velox_memory
+    nimble_simd_for_bitpack_benchmark
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_common_base
+    velox_memory
   )
 
   add_executable(
-  nimble_fsst_encoding_benchmark
-  FsstEncodingBenchmark.cpp
-  FsstBenchmarkData.h
-  StringBenchmarkCorpus.h
+    nimble_pfor_encoding_benchmark
+    PFOREncodingBenchmark.cpp
+    PFOREncodingBenchmarkData.h
   )
 
   target_link_libraries(
-  nimble_fsst_encoding_benchmark
-  nimble_encodings
-  nimble_common
-  Folly::follybenchmark
-  Folly::folly
-  velox_memory
-  fsst
-  fmt::fmt
+    nimble_pfor_encoding_benchmark
+    nimble_encodings
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_memory
   )
 
   add_executable(
-  nimble_prefix_encoding_benchmark
-  PrefixEncodingBenchmark.cpp
-  PrefixBenchmarkData.h
-  StringBenchmarkCorpus.h
+    nimble_fsst_encoding_benchmark
+    FsstEncodingBenchmark.cpp
+    FsstBenchmarkData.h
+    StringBenchmarkCorpus.h
   )
 
   target_link_libraries(
-  nimble_prefix_encoding_benchmark
-  nimble_encodings
-  nimble_common
-  Folly::follybenchmark
-  Folly::folly
-  velox_memory
+    nimble_fsst_encoding_benchmark
+    nimble_encodings
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_memory
+    fsst
+    fmt::fmt
+  )
+
+  add_executable(
+    nimble_prefix_encoding_benchmark
+    PrefixEncodingBenchmark.cpp
+    PrefixBenchmarkData.h
+    StringBenchmarkCorpus.h
+  )
+
+  target_link_libraries(
+    nimble_prefix_encoding_benchmark
+    nimble_encodings
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_memory
   )
 endif()
 

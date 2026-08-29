@@ -420,3 +420,124 @@ TYPED_TEST(RleEncodingTest, invalidSliceRange) {
           options),
       "");
 }
+
+TEST(RleEncodingBoolTest, countTrue) {
+  auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
+
+  struct Range {
+    uint32_t offset;
+    uint32_t length;
+  };
+  const auto verify = [&](std::initializer_list<bool> input, bool useVarint) {
+    SCOPED_TRACE(testing::Message() << "useVarint=" << useVarint);
+    nimble::Buffer buffer{*pool};
+    nimble::Vector<bool> values{pool.get()};
+    for (const bool value : input) {
+      values.push_back(value);
+    }
+    const nimble::Encoding::Options options{.useVarintRowCount = useVarint};
+    const auto encoded =
+        nimble::test::Encoder<nimble::RLEEncoding<bool>>::encode(
+            buffer, values, nimble::CompressionType::Uncompressed, options);
+
+    for (const auto range :
+         {Range{/*offset=*/0, /*length=*/3},
+          Range{/*offset=*/2, /*length=*/5},
+          Range{/*offset=*/4, /*length=*/4},
+          Range{/*offset=*/7, /*length=*/5}}) {
+      SCOPED_TRACE(
+          testing::Message()
+          << "offset=" << range.offset << ", length=" << range.length);
+      nimble::Buffer scratch{*pool};
+      const auto expected = static_cast<uint32_t>(std::count(
+          values.begin() + range.offset,
+          values.begin() + range.offset + range.length,
+          true));
+      EXPECT_EQ(
+          nimble::RLEEncoding<bool>::countTrue(
+              encoded, range.offset, range.length, scratch, options),
+          expected);
+      nimble::RLEEncoding<bool>::RangeCounts counts;
+      nimble::RLEEncoding<bool>::countTrue(
+          encoded, range.offset, range.length, scratch, counts, options);
+
+      EXPECT_EQ(
+          counts.numTrueBeforeRange,
+          std::count(values.begin(), values.begin() + range.offset, true));
+      EXPECT_EQ(counts.numTrueInRange, expected);
+    }
+  };
+
+  for (const bool useVarint : {false, true}) {
+    verify(
+        {true,
+         true,
+         true,
+         false,
+         false,
+         true,
+         true,
+         false,
+         true,
+         true,
+         true,
+         false},
+        useVarint);
+    verify(
+        {true,
+         true,
+         false,
+         false,
+         true,
+         true,
+         false,
+         false,
+         true,
+         true,
+         false,
+         false},
+        useVarint);
+  }
+}
+
+TEST(RleEncodingBoolTest, invalidCountTrueRange) {
+  auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  for (const bool useVarint : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "useVarint=" << useVarint);
+    nimble::Buffer buffer{*pool};
+    nimble::Vector<bool> values{pool.get()};
+    for (const bool value :
+         {false, false, true, false, true, false, false, true, false, false}) {
+      values.push_back(value);
+    }
+    const nimble::Encoding::Options options{.useVarintRowCount = useVarint};
+    const auto encoded =
+        nimble::test::Encoder<nimble::RLEEncoding<bool>>::encode(
+            buffer, values, nimble::CompressionType::Uncompressed, options);
+
+    auto expectZeroLengthRange = [&](uint32_t offset) {
+      SCOPED_TRACE(testing::Message() << "offset=" << offset);
+      nimble::Buffer scratch{*pool};
+      NIMBLE_ASSERT_THROW(
+          nimble::RLEEncoding<bool>::countTrue(
+              encoded,
+              offset,
+              /*length=*/0,
+              scratch,
+              options),
+          "Cannot count zero rows.");
+      nimble::RLEEncoding<bool>::RangeCounts counts;
+      NIMBLE_ASSERT_THROW(
+          nimble::RLEEncoding<bool>::countTrue(
+              encoded,
+              offset,
+              /*length=*/0,
+              scratch,
+              counts,
+              options),
+          "Cannot count zero rows.");
+    };
+    expectZeroLengthRange(/*offset=*/0);
+    expectZeroLengthRange(/*offset=*/4);
+  }
+}

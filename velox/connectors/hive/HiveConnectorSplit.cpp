@@ -99,6 +99,10 @@ folly::dynamic HiveConnectorSplit::serialize() const {
     rowIdObj["tableGuid"] = rowIdProperties->tableGuid;
     obj["rowIdProperties"] = rowIdObj;
   }
+  if (columnMappingMode.has_value()) {
+    obj["columnMappingMode"] =
+        dwio::common::ColumnMappingModeName::toName(*columnMappingMode);
+  }
 
   return obj;
 }
@@ -178,6 +182,19 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
         .tableGuid = rowIdObj["tableGuid"].asString()};
   }
 
+  std::optional<dwio::common::ColumnMappingMode> columnMappingMode =
+      std::nullopt;
+  if (auto it = obj.find("columnMappingMode"); it != obj.items().end()) {
+    auto parsedColumnMappingMode =
+        dwio::common::ColumnMappingModeName::tryToColumnMappingMode(
+            it->second.asString());
+    VELOX_USER_CHECK(
+        parsedColumnMappingMode.has_value(),
+        "Invalid HiveConnectorSplit column mapping mode: {}",
+        it->second.asString());
+    columnMappingMode = *parsedColumnMappingMode;
+  }
+
   return std::make_shared<HiveConnectorSplit>(
       connectorId,
       filePath,
@@ -194,7 +211,8 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
       infoColumns,
       properties,
       rowIdProperties,
-      bucketConversion);
+      bucketConversion,
+      columnMappingMode);
 }
 
 // static

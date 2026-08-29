@@ -46,9 +46,9 @@ enum class CacheState {
   Hot,
   ColdPayload,
   ColdAll,
-  ColdFileBuffered,  // posix_fadvise DONTNEED then normal pread
-  ColdFileDirect,    // O_DIRECT bypass (caller opens file with O_DIRECT)
-  ColdSystemDrop,    // /proc/sys/vm/drop_caches (root required, opt-in only)
+  ColdFileBuffered, // posix_fadvise DONTNEED then normal pread
+  ColdFileDirect, // O_DIRECT bypass (caller opens file with O_DIRECT)
+  ColdSystemDrop, // /proc/sys/vm/drop_caches (root required, opt-in only)
 };
 enum class EvictMethod { Auto, Clflush, LlcThrash, None };
 
@@ -85,9 +85,18 @@ inline const char* evictMethodName(EvictMethod m) {
 }
 
 inline bool parseCacheState(const std::string& text, CacheState& out) {
-  if (text == "hot") { out = CacheState::Hot; return true; }
-  if (text == "cold-payload") { out = CacheState::ColdPayload; return true; }
-  if (text == "cold-all") { out = CacheState::ColdAll; return true; }
+  if (text == "hot") {
+    out = CacheState::Hot;
+    return true;
+  }
+  if (text == "cold-payload") {
+    out = CacheState::ColdPayload;
+    return true;
+  }
+  if (text == "cold-all") {
+    out = CacheState::ColdAll;
+    return true;
+  }
   return false;
 }
 
@@ -223,9 +232,9 @@ class CacheController {
     for (const auto& b : t.codecInternal)
       acc += touch(b);
     volatileSink_ = acc;
-    lastEvictNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                       Clock::now() - t0)
-                       .count();
+    lastEvictNs_ =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - t0)
+            .count();
   }
 
   void prepare(const EvictionTargets& t) {
@@ -263,9 +272,9 @@ class CacheController {
       case EvictMethod::Auto:
         break;
     }
-    lastEvictNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                       Clock::now() - t0)
-                       .count();
+    lastEvictNs_ =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - t0)
+            .count();
   }
 
   int64_t lastEvictNs() const {
@@ -356,9 +365,9 @@ class CacheController {
         0,
         static_cast<off_t>(t.fileSize.value_or(0)),
         POSIX_FADV_DONTNEED);
-    lastEvictNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                       Clock::now() - t0)
-                       .count();
+    lastEvictNs_ =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - t0)
+            .count();
   }
 
   void prepareColdSystemDrop() {
@@ -375,9 +384,9 @@ class CacheController {
       throw std::runtime_error(
           "Cannot write to /proc/sys/vm/drop_caches (requires root)");
     f << "3" << std::flush;
-    lastEvictNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                       Clock::now() - t0)
-                       .count();
+    lastEvictNs_ =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - t0)
+            .count();
   }
 
   void flushTargets(const EvictionTargets& t) {

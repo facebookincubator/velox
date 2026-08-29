@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <span>
 #include <string>
@@ -219,15 +220,16 @@ class StreamingSharedDictionaryBuilder final
           kMaxSharedDictionarySize,
           "Shared dictionary size exceeds maximum.");
       const auto dictionaryIndex = static_cast<uint32_t>(index);
+      const auto storedValue = storeValue(value);
       const auto [alphabetIndexIt, inserted] =
-          alphabetIndex_.emplace(value, dictionaryIndex);
+          alphabetIndex_.emplace(storedValue, dictionaryIndex);
       NIMBLE_CHECK(
           inserted,
           "Shared dictionary mapping insertion failed because the value already exists: value={}, existingIndex={}, newIndex={}.",
           value,
           alphabetIndexIt->second,
           dictionaryIndex);
-      alphabet_.push_back(value);
+      alphabet_.push_back(storedValue);
       ++mapping.newEntryCount_;
       mapping.indices_.push_back(dictionaryIndex);
     }
@@ -237,11 +239,22 @@ class StreamingSharedDictionaryBuilder final
   void resetImpl() final {
     alphabet_.clear();
     alphabetIndex_.clear();
+    stringValues_.clear();
   }
 
  private:
+  T storeValue(const T& value) {
+    if constexpr (std::is_same_v<T, std::string_view>) {
+      stringValues_.emplace_back(value);
+      return stringValues_.back();
+    } else {
+      return value;
+    }
+  }
+
   Vector<T> alphabet_;
   DictionaryIndexType<T> alphabetIndex_;
+  std::deque<std::string> stringValues_;
 };
 
 /// Builder for externally supplied dictionaries.

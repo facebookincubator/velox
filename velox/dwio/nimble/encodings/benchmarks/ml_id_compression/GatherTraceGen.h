@@ -62,9 +62,10 @@ struct GatherTrace {
   }
 };
 
-inline size_t impliedRangeCount(
-    size_t span, double selectivity, size_t runLength) {
-  if (span == 0) return 0;
+inline size_t
+impliedRangeCount(size_t span, double selectivity, size_t runLength) {
+  if (span == 0)
+    return 0;
   const size_t rl = std::max<size_t>(1, runLength);
   const size_t selected = static_cast<size_t>(std::floor(
       std::clamp(selectivity, 0.0, 1.0) * static_cast<double>(span)));
@@ -74,7 +75,8 @@ inline size_t impliedRangeCount(
 namespace detail {
 
 inline void mergeAdjacent(RowRangeList& ranges) {
-  if (ranges.size() < 2) return;
+  if (ranges.size() < 2)
+    return;
   RowRangeList merged;
   merged.reserve(ranges.size());
   merged.push_back(ranges.front());
@@ -91,7 +93,8 @@ inline void finalize(GatherTrace& t, size_t span) {
   mergeAdjacent(t.ranges);
   t.rangeCount = t.ranges.size();
   t.selectedRows = 0;
-  for (const auto& r : t.ranges) t.selectedRows += r.size();
+  for (const auto& r : t.ranges)
+    t.selectedRows += r.size();
   t.selectivityAchieved = span > 0
       ? static_cast<double>(t.selectedRows) / static_cast<double>(span)
       : 0.0;
@@ -100,14 +103,18 @@ inline void finalize(GatherTrace& t, size_t span) {
 } // namespace detail
 
 inline GatherTrace buildGatherTrace(
-    size_t streamLength, const GatherAccessParams& p) {
+    size_t streamLength,
+    const GatherAccessParams& p) {
   GatherTrace t;
-  if (streamLength == 0 || p.start >= streamLength) return t;
+  if (streamLength == 0 || p.start >= streamLength)
+    return t;
   const size_t start = p.start;
   const size_t span = std::min(p.span, streamLength - start);
-  if (span == 0) return t;
+  if (span == 0)
+    return t;
   const double sigma = std::clamp(p.selectivity, 0.0, 1.0);
-  if (sigma <= 0.0) return t;
+  if (sigma <= 0.0)
+    return t;
   const size_t runLength = std::max<size_t>(1, p.runLength);
 
   if (p.gapModel == GapModel::Geometric) {
@@ -117,20 +124,23 @@ inline GatherTrace buildGatherTrace(
     sp.seed = p.seed;
     sp.maxRanges = p.maxRanges;
     t.ranges = makeSelectiveTrace(span, sp);
-    for (auto& r : t.ranges) { r.begin += start; r.end += start; }
+    for (auto& r : t.ranges) {
+      r.begin += start;
+      r.end += start;
+    }
     t.rangeCountNominal = impliedRangeCount(span, sigma, runLength);
     t.runLengthActual = runLength;
     t.gapLength = static_cast<size_t>(std::llround(
-        static_cast<double>(runLength) *
-        (1.0 / std::max(sigma, 1e-9) - 1.0)));
+        static_cast<double>(runLength) * (1.0 / std::max(sigma, 1e-9) - 1.0)));
     detail::finalize(t, span);
     t.clamped = p.maxRanges != 0 && t.rangeCount >= p.maxRanges;
     return t;
   }
 
-  const size_t selectedTarget = static_cast<size_t>(
-      std::floor(sigma * static_cast<double>(span)));
-  if (selectedTarget == 0) return t;
+  const size_t selectedTarget =
+      static_cast<size_t>(std::floor(sigma * static_cast<double>(span)));
+  if (selectedTarget == 0)
+    return t;
   size_t k = std::max<size_t>(1, selectedTarget / runLength);
   t.rangeCountNominal = k;
   if (p.maxRanges != 0 && k > p.maxRanges) {
@@ -146,12 +156,14 @@ inline GatherTrace buildGatherTrace(
   for (size_t i = 0; i < k; ++i) {
     const size_t begin = start + selBefore(i) + gapBefore(i);
     const size_t end = start + selBefore(i + 1) + gapBefore(i);
-    if (end > begin) t.ranges.push_back({begin, end});
+    if (end > begin)
+      t.ranges.push_back({begin, end});
   }
   detail::finalize(t, span);
   t.runLengthActual = t.rangeCount > 0 ? t.selectedRows / t.rangeCount : 0;
   t.gapLength = k > 1 ? gapTotal / (k - 1) : 0;
-  if (t.rangeCount == 1 && t.selectedRows == selectedTarget) t.clamped = false;
+  if (t.rangeCount == 1 && t.selectedRows == selectedTarget)
+    t.clamped = false;
   return t;
 }
 

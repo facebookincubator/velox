@@ -74,9 +74,11 @@ using ::facebook::velox::VectorPtr;
 using ::facebook::velox::fuzzer::FuzzerGenerator;
 
 // Writable encodings that this fuzzer target intentionally does not force.
-// This is not a global unsupported-encoding list.
+// The unfiltered random policy also omits these; this list keeps the repair
+// phase and coverage gate from adding them back. This is not a global
+// unsupported-encoding list.
 constexpr auto kExcludedFuzzerCandidateEncodings =
-    std::to_array({EncodingType::SubIntSplit});
+    std::to_array({EncodingType::Huffman, EncodingType::SubIntSplit});
 
 // Scalar types the Nimble writer round-trips with type identity.
 // FieldWriter::create dispatches on the physical TypeKind, so DATE, TIME,
@@ -991,10 +993,10 @@ std::string NimbleWriterFuzzer::writeFile(
   auto file = test::createNimbleFile(
       rootPool_, batches, std::move(writerOptions), /*flushAfterWrite=*/false);
   verifyChunkStatsMetadata(file, chunkStatsEnabled);
-  verifyColumnStatistics(
-      file,
-      std::dynamic_pointer_cast<const velox::RowType>(batches[0]->type()),
-      batches);
+  auto schema =
+      std::dynamic_pointer_cast<const velox::RowType>(batches[0]->type());
+  verifyColumnStatistics(file, schema, batches);
+  verifySchemaAndStripeGroupConsistency(file, schema);
   return file;
 }
 
@@ -1520,18 +1522,24 @@ void NimbleWriterFuzzer::verifyColumnStatistics(
             expectedCommon.get());
     if (actualDbl != nullptr && expectedDbl != nullptr &&
         expectedDbl->getMinimum().has_value()) {
-      NIMBLE_CHECK_EQ(
-          *actualDbl->getMinimum(),
-          *expectedDbl->getMinimum(),
-          "Node {} double min mismatch (seed {}).",
-          node,
-          options_.seed);
-      NIMBLE_CHECK_EQ(
-          *actualDbl->getMaximum(),
-          *expectedDbl->getMaximum(),
-          "Node {} double max mismatch (seed {}).",
-          node,
-          options_.seed);
+      // Both bounds are NaN whenever the column carries one, because the
+      // fuzzer generates NaN on purpose. Comparing with == would report those
+      // agreeing statistics as a mismatch, so reuse the round-trip
+      // comparison's NaN handling.
+      const auto checkBound = [&](std::string_view bound,
+                                  double actualValue,
+                                  double expectedValue) {
+        NIMBLE_CHECK(
+            decodedValueEquals(actualValue, expectedValue),
+            "Node {} double {} mismatch ({} vs. {}, seed {}).",
+            node,
+            bound,
+            actualValue,
+            expectedValue,
+            options_.seed);
+      };
+      checkBound("min", *actualDbl->getMinimum(), *expectedDbl->getMinimum());
+      checkBound("max", *actualDbl->getMaximum(), *expectedDbl->getMaximum());
     }
 
     auto* actualStr =
@@ -1556,6 +1564,101 @@ void NimbleWriterFuzzer::verifyColumnStatistics(
           options_.seed);
     }
   }
+}
+
+void NimbleWriterFuzzer::verifySchemaAndStripeGroupConsistency(
+    const std::string& file,
+    const RowTypePtr& schema) {
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = TabletReader::create(
+      readFile, leafPool_.get(), test::makeTestTabletOptions(leafPool_.get()));
+
+  // Schema roundtrip: the Velox type reconstructed from the file must match
+  // the type that was written.
+  VeloxReader reader(
+      std::make_shared<velox::InMemoryReadFile>(file), *leafPool_);
+  NIMBLE_CHECK(
+      schema->equivalent(*reader.type()),
+      "Schema roundtrip mismatch (seed {}): written {} but read {}.",
+      options_.seed,
+      schema->toString(),
+      reader.type()->toString());
+
+  // StripeGroup consistency: per-stream byte ranges must not overlap and must
+  // end before the next stripe or the end of the file.
+  for (uint32_t stripe = 0; stripe < tablet->stripeCount(); ++stripe) {
+    const auto stripeIdentifier = tablet->stripeIdentifier(stripe);
+    const uint32_t streamCount = tablet->streamCount(stripeIdentifier);
+    if (streamCount == 0) {
+      continue;
+    }
+
+    std::vector<TabletReader::StreamLocation> locations(streamCount);
+    tablet->streamLocations(stripeIdentifier, locations);
+    const uint64_t stripeOffset = tablet->stripeOffset(stripe);
+    const uint64_t stripeEnd = stripe + 1 < tablet->stripeCount()
+        ? tablet->stripeOffset(stripe + 1)
+        : tablet->fileSize();
+    NIMBLE_CHECK_LE(
+        stripeOffset,
+        stripeEnd,
+        "Stripe {} has invalid bounds (seed {}).",
+        stripe,
+        options_.seed);
+
+    // Collect non-empty stream ranges and sort by offset.
+    struct StreamRange {
+      uint32_t streamId;
+      uint32_t offset;
+      uint32_t size;
+    };
+    std::vector<StreamRange> ranges;
+    for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
+      const auto& location = locations[streamId];
+      if (location.size > 0) {
+        NIMBLE_CHECK_LE(
+            uint64_t{location.offset} + location.size,
+            stripeEnd - stripeOffset,
+            "Stream {} extends past stripe {} bounds (seed {}).",
+            streamId,
+            stripe,
+            options_.seed);
+        ranges.push_back({streamId, location.offset, location.size});
+      }
+    }
+    std::sort(
+        ranges.begin(), ranges.end(), [](const auto& lhs, const auto& rhs) {
+          return lhs.offset < rhs.offset;
+        });
+
+    // Verify no overlaps, allowing dedup aliases with identical ranges.
+    for (size_t i = 1; i < ranges.size(); ++i) {
+      const auto& prev = ranges[i - 1];
+      const auto& curr = ranges[i];
+      if (prev.offset == curr.offset && prev.size == curr.size) {
+        continue;
+      }
+      NIMBLE_CHECK_LE(
+          uint64_t{prev.offset} + prev.size,
+          curr.offset,
+          "Streams {} and {} overlap in stripe {} (seed {}).",
+          prev.streamId,
+          curr.streamId,
+          stripe,
+          options_.seed);
+    }
+  }
+
+  // Stripe row counts must sum to the tablet's total row count.
+  uint64_t totalRows = 0;
+  for (uint32_t stripe = 0; stripe < tablet->stripeCount(); ++stripe) {
+    totalRows += tablet->stripeRowCount(stripe);
+  }
+  NIMBLE_CHECK_EQ(
+      totalRows,
+      tablet->tabletRowCount(),
+      "Stripe row count sum mismatch (seed {}).",
+      options_.seed);
 }
 
 void NimbleWriterFuzzer::readAndVerify(
@@ -2054,7 +2157,7 @@ void NimbleWriterFuzzer::run() {
       missingEncodings.size(),
       fmt::join(missingEncodingNames, ", "));
 
-  // The default random policy omits the integral-only four because its
+  // The default random policy omits the integral-only candidates because its
   // write-side and read-side floating-point gates disagree (T283330065), so
   // they always reach this repair phase. gateFloatingPointStreams holds them
   // off float streams alone while still exercising integer streams in a mixed
