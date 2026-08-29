@@ -177,31 +177,18 @@ class CudfBatchConcatTest : public OperatorTestBase {
 } // namespace
 
 TEST_F(CudfBatchConcatTest, singleColumnBearingInputPassesThrough) {
-  updateCudfConfig(/*minBytes=*/1, /*maxRows=*/std::nullopt);
+  updateCudfRowConfig(/*minRows=*/4, /*maxRows=*/std::nullopt);
 
   auto input = makeRowVector({makeFlatSequence<int64_t>(0, 4)});
   auto plan = PlanBuilder()
                   .values({input})
                   .singleAggregation({}, {"sum(c0)"})
                   .planNode();
-
-  core::PlanFragment planFragment;
-  planFragment.planNode = plan;
-  auto task = Task::create(
-      "CudfBatchConcatTest_singleColumnBearingInputPassesThrough",
-      std::move(planFragment),
-      0,
-      core::QueryCtx::create(executor_.get()),
-      Task::ExecutionMode::kParallel);
+  auto task = createTask(plan);
   DriverCtx driverCtx(task, 0, 0, 0, 0);
   CudfBatchConcat concat(0, &driverCtx, plan);
 
-  auto stream = cudfGlobalStreamPool().get_stream();
-  auto table = with_arrow::toCudfTable(
-      input, pool(), stream, cudf::get_current_device_resource_ref());
-  auto cudfInput = std::make_shared<CudfVector>(
-      pool(), input->type(), input->size(), std::move(table), stream);
-
+  auto cudfInput = toCudfVector(input);
   concat.addInput(cudfInput);
   auto output = concat.getOutput();
 
@@ -263,6 +250,7 @@ TEST_F(
   ASSERT_NE(tailBatch, nullptr);
   EXPECT_EQ(tailBatch->size(), kRowsPerBatch);
   EXPECT_TRUE(concat.isFinished());
+  concat.close();
 }
 
 TEST_F(CudfBatchConcatTest, usesRowTargetWhenByteTargetIsNotConfigured) {
@@ -288,6 +276,7 @@ TEST_F(CudfBatchConcatTest, usesRowTargetWhenByteTargetIsNotConfigured) {
   auto output = concat.getOutput();
   ASSERT_NE(output, nullptr);
   EXPECT_EQ(output->size(), 2 * kRowsPerBatch);
+  concat.close();
 }
 
 TEST_F(CudfBatchConcatTest, rejectsZeroByteTarget) {
@@ -319,6 +308,7 @@ TEST_F(CudfBatchConcatTest, rejectsBufferedByteOverflow) {
   ASSERT_TRUE(concat.needsInput());
   VELOX_ASSERT_THROW(
       concat.addInput(second), "CudfBatchConcat buffered byte count overflow");
+  concat.close();
 }
 
 TEST_F(CudfBatchConcatTest, zeroColumnVectorsUseRowFallback) {
@@ -363,6 +353,7 @@ TEST_F(CudfBatchConcatTest, zeroColumnVectorsUseRowFallback) {
   ASSERT_NE(tailBatch, nullptr);
   EXPECT_EQ(tailBatch->size(), kRowsPerBatch);
   EXPECT_TRUE(concat.isFinished());
+  concat.close();
 }
 
 // Verifies that CudfBatchConcat is inserted before aggregation and reduces

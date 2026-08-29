@@ -63,9 +63,6 @@ class CudfBatchConcat : public CudfOperatorBase {
                              : currentBytes_ >= targetBytes_.value();
   }
 
-  // Driver context associated with this operator.
-  exec::DriverCtx* const driverCtx_;
-
   // Input vectors awaiting concatenation.
   std::vector<CudfVectorPtr> buffer_;
 
@@ -78,10 +75,7 @@ class CudfBatchConcat : public CudfOperatorBase {
   // Logical rows currently buffered while the row fallback is active.
   size_t currentNumRows_{0};
 
-  // Estimated GPU byte target. Empty when the row fallback is active, that is
-  // when no byte target is configured or the output has no GPU columns. Both
-  // targets are resolved from the config alone, so neither depends on the
-  // other's position in this declaration list.
+  // Estimated GPU byte target. Empty while usesRowFallback() applies.
   const std::optional<uint64_t> targetBytes_;
 
   // Logical row target used while the row fallback is active.
