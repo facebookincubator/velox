@@ -1381,6 +1381,54 @@ TEST_P(SharedDictionaryE2EInputTypeTest, fileScopeRoundTrip) {
   verifyRoundTrip(file, inputType, stripeValueTypes);
 }
 
+// The stripe-scope alphabet stream has no StreamData, so it is written by a
+// separate pass that historically skipped the per-column size accounting. With
+// shared dictionary encoding most of a column's bytes live in that alphabet, so
+// the omission understated the column badly. Pin the invariant that the root
+// column's rolled-up physical size covers every byte the stripe wrote.
+TEST_F(SharedDictionaryE2ETest, sharedStripeDictionaryColumnPhysicalStats) {
+  auto options = makeSharedDictionaryWriterOptions();
+  addDictionary(
+      options,
+      InputType::FlatMapScalar,
+      sharedDictionaryConfig(
+          SharedDictionaryScope::Stripe, /*dictionaryId=*/0));
+
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  auto input =
+      makeStripe(InputType::FlatMapScalar, StripeValueType::Dictionary);
+  Writer writer{input->type(), std::move(writeFile), *rootPool_, options};
+  writer.write(input);
+  writer.close();
+
+  uint64_t reportedPhysicalSize{0};
+  for (const auto* stat : writer.columnStats()) {
+    reportedPhysicalSize =
+        std::max(reportedPhysicalSize, stat->getPhysicalSize());
+  }
+  ASSERT_GT(reportedPhysicalSize, 0);
+
+  // Total bytes actually written across every stream of every stripe.
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tabletOptions = test::makeTestTabletOptions(leafPool_.get());
+  auto tablet = TabletReader::create(readFile, leafPool_.get(), tabletOptions);
+  uint64_t writtenStreamBytes{0};
+  for (uint32_t stripe{0}; stripe < tablet->stripeCount(); ++stripe) {
+    const auto identifier = tablet->stripeIdentifier(stripe);
+    const auto streamCount = tablet->streamCount(identifier);
+    for (uint32_t streamId{0}; streamId < streamCount; ++streamId) {
+      writtenStreamBytes += tablet->streamSize(identifier, streamId);
+    }
+  }
+  ASSERT_GT(writtenStreamBytes, 0);
+
+  EXPECT_GE(reportedPhysicalSize, writtenStreamBytes)
+      << "root physical size " << reportedPhysicalSize << " does not cover the "
+      << writtenStreamBytes
+      << " bytes written; the shared dictionary alphabet is likely unaccounted";
+}
+
 TEST_F(SharedDictionaryE2ETest, fileScopeCompactRowCountRoundTrip) {
   const std::vector<StripeValueType> stripeValueTypes{
       StripeValueType::Dictionary, StripeValueType::Direct};
