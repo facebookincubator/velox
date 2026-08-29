@@ -195,6 +195,32 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::folly
   )
 
+  # Micro-benchmark comparing scalar `scalarTransformOne` vs vectorized
+  # `batchTransform` on identical fixed-(e, f) input. Verifies the SIMD win
+  # of the xsimd-vectorized ALP encode path across exception-rate regimes.
+  add_executable(nimble_alp_batch_transform_benchmark ALPBatchTransformBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_alp_batch_transform_benchmark
+    nimble_encodings
+    nimble_common
+    velox_memory
+    Folly::folly
+  )
+
+  # A/B benchmark comparing legacy strided-singleton sampling to the current
+  # chunked-stride sampler. Verifies that the chunked layout is much cheaper
+  # on the gather stage while picking the same (e, f).
+  add_executable(nimble_alp_sampling_benchmark ALPSamplingBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_alp_sampling_benchmark
+    nimble_encodings
+    nimble_common
+    velox_memory
+    Folly::folly
+  )
+
   # Mini-benchmark for Dictionary+ALP / RLE+ALP nested selection paths.
   # Drives the real EncodingFactory with allowNestedAlpSelection={off,on} over
   # dict-friendly and RLE-friendly float/double columns and reports encoded

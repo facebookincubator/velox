@@ -33,8 +33,11 @@
 // regressions in the selector's output on either write or read side are
 // visible in the same table.
 //
-// Not a folly-benchmark; runs once and prints a markdown table.
+// Not a folly-benchmark; runs once and prints a markdown table via glog
+// `LOG(INFO)`.
 
+#include <folly/init/Init.h>
+#include <glog/logging.h>
 #include <sys/resource.h>
 #include <sys/time.h>
 
@@ -42,9 +45,9 @@
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
-#include <iostream>
 #include <random>
 #include <span>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -350,21 +353,27 @@ RunStats runOne(
 // -----------------------------------------------------------------------------
 
 void printHeader() {
-  std::cout << "\n"
-            << "| " << std::left << std::setw(28) << "dataset" << " | "
-            << std::setw(6) << "dtype" << " | " << std::setw(6) << "strat"
-            << " | " << std::right << std::setw(6) << "(e, f)" << " | "
-            << std::setw(9) << "bytes" << " | " << std::setw(7) << "ratio"
-            << " | " << std::setw(9) << "w-wall" << " | " << std::setw(9)
-            << "w-cpu" << " | " << std::setw(9) << "r-wall" << " | "
-            << std::setw(9) << "r-cpu" << " | " << std::setw(8) << "rss dK"
-            << " | " << std::setw(3) << "ok" << " |\n";
-  std::cout << "|" << std::string(30, '-') << "|" << std::string(8, '-') << "|"
-            << std::string(8, '-') << "|" << std::string(8, '-') << "|"
-            << std::string(11, '-') << "|" << std::string(9, '-') << "|"
-            << std::string(11, '-') << "|" << std::string(11, '-') << "|"
-            << std::string(11, '-') << "|" << std::string(11, '-') << "|"
-            << std::string(10, '-') << "|" << std::string(5, '-') << "|\n";
+  {
+    std::ostringstream oss;
+    oss << "| " << std::left << std::setw(28) << "dataset" << " | "
+        << std::setw(6) << "dtype" << " | " << std::setw(6) << "strat" << " | "
+        << std::right << std::setw(6) << "(e, f)" << " | " << std::setw(9)
+        << "bytes" << " | " << std::setw(7) << "ratio" << " | " << std::setw(9)
+        << "w-wall" << " | " << std::setw(9) << "w-cpu" << " | " << std::setw(9)
+        << "r-wall" << " | " << std::setw(9) << "r-cpu" << " | " << std::setw(8)
+        << "rss dK" << " | " << std::setw(3) << "ok" << " |";
+    LOG(INFO) << oss.str();
+  }
+  {
+    std::ostringstream oss;
+    oss << "|" << std::string(30, '-') << "|" << std::string(8, '-') << "|"
+        << std::string(8, '-') << "|" << std::string(8, '-') << "|"
+        << std::string(11, '-') << "|" << std::string(9, '-') << "|"
+        << std::string(11, '-') << "|" << std::string(11, '-') << "|"
+        << std::string(11, '-') << "|" << std::string(11, '-') << "|"
+        << std::string(10, '-') << "|" << std::string(5, '-') << "|";
+    LOG(INFO) << oss.str();
+  }
 }
 
 template <typename T>
@@ -378,21 +387,20 @@ void printRow(
   const double ratio = rawBytes == 0
       ? 0.0
       : static_cast<double>(s.encodedBytes) / rawBytes * 100.0;
-  std::cout << "| " << std::left << std::setw(28) << dataset << " | "
-            << std::setw(6) << (std::is_same_v<T, float> ? "float" : "double")
-            << " | " << std::setw(6)
-            << (strategy == Strategy::Count ? "count" : "size") << " | "
-            << std::right << "(" << std::setw(2) << int(s.pick.first) << ","
-            << std::setw(2) << int(s.pick.second) << ")" << " | "
-            << std::setw(9) << s.encodedBytes << " | " << std::fixed
-            << std::setprecision(2) << std::setw(6) << ratio << "% | "
-            << std::setw(7) << std::setprecision(1)
-            << (s.writeWallUs / megaVals) << "us | " << std::setw(7)
-            << (s.writeCpuUs / megaVals) << "us | " << std::setw(7)
-            << (s.readWallUs / megaVals) << "us | " << std::setw(7)
-            << (s.readCpuUs / megaVals) << "us | " << std::setw(8)
-            << s.rssDeltaKiB << " | " << std::setw(3)
-            << (s.correct ? "OK" : "BAD") << " |\n";
+  std::ostringstream oss;
+  oss << "| " << std::left << std::setw(28) << dataset << " | " << std::setw(6)
+      << (std::is_same_v<T, float> ? "float" : "double") << " | " << std::setw(6)
+      << (strategy == Strategy::Count ? "count" : "size") << " | "
+      << std::right << "(" << std::setw(2) << int(s.pick.first) << ","
+      << std::setw(2) << int(s.pick.second) << ")" << " | " << std::setw(9)
+      << s.encodedBytes << " | " << std::fixed << std::setprecision(2)
+      << std::setw(6) << ratio << "% | " << std::setw(7) << std::setprecision(1)
+      << (s.writeWallUs / megaVals) << "us | " << std::setw(7)
+      << (s.writeCpuUs / megaVals) << "us | " << std::setw(7)
+      << (s.readWallUs / megaVals) << "us | " << std::setw(7)
+      << (s.readCpuUs / megaVals) << "us | " << std::setw(8) << s.rssDeltaKiB
+      << " | " << std::setw(3) << (s.correct ? "OK" : "BAD") << " |";
+  LOG(INFO) << oss.str();
 }
 
 template <typename T>
@@ -425,6 +433,7 @@ void runAll(uint32_t warmupIters, uint32_t measureIters) {
 } // namespace
 
 int main(int argc, char** argv) {
+  folly::Init init{&argc, &argv};
   facebook::velox::memory::MemoryManager::initialize({});
 
   // Iteration counts kept small by default so the benchmark finishes in a few
@@ -441,25 +450,24 @@ int main(int argc, char** argv) {
     }
   }
 
-  std::cout << "\n=== ALP end-to-end write/read benchmark ===\n"
-            << "rows / dataset: " << kDefaultRows
+  LOG(INFO) << "=== ALP end-to-end write/read benchmark ===";
+  LOG(INFO) << "rows / dataset: " << kDefaultRows
             << ", warmup iters: " << warmupIters
-            << ", measure iters: " << measureIters
-            << "\nnested encoding: production factory "
-               "(realNestedSelection=true)\n"
-            << "write/read times: microseconds per megavalue "
-               "(averaged over measure iters)\n"
-            << "ratio: encoded / (rows * sizeof(T)), lower is better\n"
-            << "rss dK: peak-RSS delta in KiB across encode+decode\n";
+            << ", measure iters: " << measureIters;
+  LOG(INFO) << "nested encoding: production factory "
+               "(realNestedSelection=true)";
+  LOG(INFO) << "write/read times: microseconds per megavalue "
+               "(averaged over measure iters)";
+  LOG(INFO) << "ratio: encoded / (rows * sizeof(T)), lower is better";
+  LOG(INFO) << "rss dK: peak-RSS delta in KiB across encode+decode";
 
   printHeader();
   runAll<double>(warmupIters, measureIters);
   runAll<float>(warmupIters, measureIters);
 
-  std::cout
-      << "\nLegend: strat=count uses findBestExponentFactorByCount, "
-      << "strat=size uses findBestExponentFactorBySize.\n"
-      << "Compare rows pair-wise (same dataset+dtype) to see the size-"
-      << "based selector's effect on read/write paths and encoded size.\n";
+  LOG(INFO) << "Legend: strat=count uses findBestExponentFactorByCount, "
+            << "strat=size uses findBestExponentFactorBySize.";
+  LOG(INFO) << "Compare rows pair-wise (same dataset+dtype) to see the size-"
+            << "based selector's effect on read/write paths and encoded size.";
   return 0;
 }

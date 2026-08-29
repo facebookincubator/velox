@@ -39,8 +39,11 @@
 // vectorization already covers the nested-ALP paths and as a baseline for
 // detecting future regressions there.
 //
-// Not a folly-benchmark; runs once and prints a markdown table.
+// Not a folly-benchmark; runs once and prints a markdown table via glog
+// `LOG(INFO)`.
 
+#include <folly/init/Init.h>
+#include <glog/logging.h>
 #include <sys/resource.h>
 #include <sys/time.h>
 
@@ -48,10 +51,10 @@
 #include <cstdint>
 #include <functional>
 #include <iomanip>
-#include <iostream>
 #include <memory>
 #include <random>
 #include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -403,23 +406,29 @@ const char* encodingLabel(EncodingType t) {
 }
 
 void printHeader() {
-  std::cout << "\n"
-            << "| " << std::left << std::setw(24) << "dataset" << " | "
-            << std::setw(6) << "dtype" << " | " << std::setw(6) << "outer"
-            << " | " << std::setw(4) << "alp?" << " | " << std::setw(10)
-            << "path" << " | " << std::right << std::setw(9) << "bytes"
-            << " | " << std::setw(7) << "ratio" << " | " << std::setw(9)
-            << "w-wall" << " | " << std::setw(9) << "w-cpu" << " | "
-            << std::setw(9) << "r-wall" << " | " << std::setw(9) << "r-cpu"
-            << " | " << std::setw(8) << "rss dK" << " | " << std::setw(3)
-            << "ok" << " |\n";
-  std::cout << "|" << std::string(26, '-') << "|" << std::string(8, '-') << "|"
-            << std::string(8, '-') << "|" << std::string(6, '-') << "|"
-            << std::string(12, '-') << "|" << std::string(11, '-') << "|"
-            << std::string(9, '-') << "|" << std::string(11, '-') << "|"
-            << std::string(11, '-') << "|" << std::string(11, '-') << "|"
-            << std::string(11, '-') << "|" << std::string(10, '-') << "|"
-            << std::string(5, '-') << "|\n";
+  {
+    std::ostringstream oss;
+    oss << "| " << std::left << std::setw(24) << "dataset" << " | "
+        << std::setw(6) << "dtype" << " | " << std::setw(6) << "outer" << " | "
+        << std::setw(4) << "alp?" << " | " << std::setw(10) << "path" << " | "
+        << std::right << std::setw(9) << "bytes" << " | " << std::setw(7)
+        << "ratio" << " | " << std::setw(9) << "w-wall" << " | " << std::setw(9)
+        << "w-cpu" << " | " << std::setw(9) << "r-wall" << " | " << std::setw(9)
+        << "r-cpu" << " | " << std::setw(8) << "rss dK" << " | " << std::setw(3)
+        << "ok" << " |";
+    LOG(INFO) << oss.str();
+  }
+  {
+    std::ostringstream oss;
+    oss << "|" << std::string(26, '-') << "|" << std::string(8, '-') << "|"
+        << std::string(8, '-') << "|" << std::string(6, '-') << "|"
+        << std::string(12, '-') << "|" << std::string(11, '-') << "|"
+        << std::string(9, '-') << "|" << std::string(11, '-') << "|"
+        << std::string(11, '-') << "|" << std::string(11, '-') << "|"
+        << std::string(11, '-') << "|" << std::string(10, '-') << "|"
+        << std::string(5, '-') << "|";
+    LOG(INFO) << oss.str();
+  }
 }
 
 template <typename T>
@@ -438,19 +447,19 @@ void printRow(
   if (s.shape.hasAlp) {
     path += "+ALP";
   }
-  std::cout << "| " << std::left << std::setw(24) << dataset << " | "
-            << std::setw(6) << (std::is_same_v<T, float> ? "float" : "double")
-            << " | " << std::setw(6) << outerLabel(outer) << " | "
-            << std::setw(4) << (allowNestedAlp ? "on" : "off") << " | "
-            << std::setw(10) << path << " | " << std::right << std::setw(9)
-            << s.encodedBytes << " | " << std::fixed << std::setprecision(2)
-            << std::setw(6) << ratio << "% | " << std::setw(7)
-            << std::setprecision(1) << (s.writeWallUs / megaVals) << "us | "
-            << std::setw(7) << (s.writeCpuUs / megaVals) << "us | "
-            << std::setw(7) << (s.readWallUs / megaVals) << "us | "
-            << std::setw(7) << (s.readCpuUs / megaVals) << "us | "
-            << std::setw(8) << s.rssDeltaKiB << " | " << std::setw(3)
-            << (s.correct ? "OK" : "BAD") << " |\n";
+  std::ostringstream oss;
+  oss << "| " << std::left << std::setw(24) << dataset << " | " << std::setw(6)
+      << (std::is_same_v<T, float> ? "float" : "double") << " | " << std::setw(6)
+      << outerLabel(outer) << " | " << std::setw(4)
+      << (allowNestedAlp ? "on" : "off") << " | " << std::setw(10) << path
+      << " | " << std::right << std::setw(9) << s.encodedBytes << " | "
+      << std::fixed << std::setprecision(2) << std::setw(6) << ratio << "% | "
+      << std::setw(7) << std::setprecision(1) << (s.writeWallUs / megaVals)
+      << "us | " << std::setw(7) << (s.writeCpuUs / megaVals) << "us | "
+      << std::setw(7) << (s.readWallUs / megaVals) << "us | " << std::setw(7)
+      << (s.readCpuUs / megaVals) << "us | " << std::setw(8) << s.rssDeltaKiB
+      << " | " << std::setw(3) << (s.correct ? "OK" : "BAD") << " |";
+  LOG(INFO) << oss.str();
 }
 
 template <typename T>
@@ -487,6 +496,7 @@ void runAll(uint32_t warmupIters, uint32_t measureIters) {
 } // namespace
 
 int main(int argc, char** argv) {
+  folly::Init init{&argc, &argv};
   facebook::velox::memory::MemoryManager::initialize({});
 
   uint32_t warmupIters = 2;
@@ -500,25 +510,25 @@ int main(int argc, char** argv) {
     }
   }
 
-  std::cout << "\n=== ALP nested-selection mini-benchmark ===\n"
-            << "rows / dataset: " << kDefaultRows
+  LOG(INFO) << "=== ALP nested-selection mini-benchmark ===";
+  LOG(INFO) << "rows / dataset: " << kDefaultRows
             << ", warmup iters: " << warmupIters
-            << ", measure iters: " << measureIters
-            << "\nalp? column: allowNestedAlpSelection value\n"
-            << "path column: outer encoding chosen by the selector, "
-               "+ALP if any node in the tree is ALP\n"
-            << "write/read times: microseconds per megavalue "
-               "(averaged over measure iters)\n"
-            << "ratio: encoded / (rows * sizeof(T)), lower is better\n"
-            << "rss dK: peak-RSS delta in KiB across encode+decode\n";
+            << ", measure iters: " << measureIters;
+  LOG(INFO) << "alp? column: allowNestedAlpSelection value";
+  LOG(INFO) << "path column: outer encoding chosen by the selector, "
+               "+ALP if any node in the tree is ALP";
+  LOG(INFO) << "write/read times: microseconds per megavalue "
+               "(averaged over measure iters)";
+  LOG(INFO) << "ratio: encoded / (rows * sizeof(T)), lower is better";
+  LOG(INFO) << "rss dK: peak-RSS delta in KiB across encode+decode";
 
   printHeader();
   runAll<double>(warmupIters, measureIters);
   runAll<float>(warmupIters, measureIters);
 
-  std::cout << "\nRead each dataset as a pair (alp?=off vs alp?=on). "
+  LOG(INFO) << "Read each dataset as a pair (alp?=off vs alp?=on). "
             << "On matching path=<outer>+ALP the nested path was taken; "
             << "compare bytes / ratio and w-wall / r-wall to see the "
-            << "vectorized nested-ALP cost profile.\n";
+            << "vectorized nested-ALP cost profile.";
   return 0;
 }

@@ -32,16 +32,32 @@
 //      PFOR / SimdForBitpack) exactly like production;
 //   3. reports the two encoded sizes plus the count-vs-size delta.
 //
+// Estimator-agreement columns:
+//   size est bytes: `ALPEncoding<T>::estimateSize(logical, options)` — the
+//                   size-based estimator's projected full-file bytes. This is
+//                   the same code path production uses when deciding whether
+//                   ALP is a good idea for a stream at all.
+//   est/real:       size est bytes / size real bytes. The byte accounting used
+//                   inside `findBestExponentFactorBySize` and
+//                   `estimateSizeFromSample` is unified, so this ratio should
+//                   track very close to 1.0 on well-behaved inputs. Sampling
+//                   error is the main remaining source of drift on chaotic
+//                   inputs.
+//
 // The build target is a plain executable (not folly-benchmark); it prints a
-// single markdown-friendly table.
+// single markdown-friendly table via glog `LOG(INFO)`.
+
+#include <folly/init/Init.h>
+#include <glog/logging.h>
 
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
-#include <iostream>
+#include <optional>
 #include <random>
 #include <span>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -220,6 +236,10 @@ struct AbResult {
   uint64_t sizeBytes;
   double countMicros;
   double sizeMicros;
+  // Estimator-agreement for the size pick.
+  // std::nullopt means estimateSize declined the dataset (e.g. empty sample);
+  // treated as a blank cell in the report and skipped when averaging.
+  std::optional<uint64_t> sizeEstBytes;
 };
 
 template <typename T>
@@ -258,6 +278,17 @@ AbResult runOne(const std::string& datasetName, const Vector<T>& values) {
       options,
       /*realNestedSelection=*/true);
 
+  // Estimator agreement: the estimator must project the same encoded footprint
+  // the size-based selector's byte model would compute, and both should track
+  // the real encoded size closely. estimateSize runs the same chunked-stride
+  // sample -> scoreCombination -> nested integer stream + exception cost path
+  // the selector uses internally, so any drift here immediately shows a
+  // regression in the shared accounting.
+  const auto sizeEstBytes = ALPEncoding<T>::estimateSize(
+      facebook::nimble::EncodingPhysicalType<T>::asEncodingPhysicalTypeSpan(
+          logical),
+      options);
+
   AbResult r{
       .dataset = datasetName,
       .dtype = std::is_same_v<T, float> ? "float" : "double",
@@ -270,6 +301,7 @@ AbResult runOne(const std::string& datasetName, const Vector<T>& values) {
           std::chrono::duration<double, std::micro>(tCount1 - tCount0).count(),
       .sizeMicros =
           std::chrono::duration<double, std::micro>(tSize1 - tSize0).count(),
+      .sizeEstBytes = sizeEstBytes,
   };
   return r;
 }
@@ -279,29 +311,50 @@ void printRow(const AbResult& r) {
       ? 0.0
       : (static_cast<double>(r.sizeBytes) - static_cast<double>(r.countBytes)) /
           static_cast<double>(r.countBytes) * 100.0;
-  std::cout << "| " << std::left << std::setw(28) << r.dataset << " | "
-            << std::setw(6) << r.dtype << " | " << std::right << std::setw(7)
-            << r.rows << " | (" << std::setw(2) << int(r.countPick.first) << ","
-            << std::setw(2) << int(r.countPick.second) << ") | "
-            << std::setw(10) << r.countBytes << " | (" << std::setw(2)
-            << int(r.sizePick.first) << "," << std::setw(2)
-            << int(r.sizePick.second) << ") | " << std::setw(10) << r.sizeBytes
-            << " | " << std::fixed << std::setprecision(2) << std::setw(7)
-            << delta << "% | " << std::setw(8) << std::setprecision(1)
-            << r.countMicros << " | " << std::setw(8) << r.sizeMicros << " |\n";
+  std::ostringstream oss;
+  oss << "| " << std::left << std::setw(28) << r.dataset << " | "
+      << std::setw(6) << r.dtype << " | " << std::right << std::setw(7)
+      << r.rows << " | (" << std::setw(2) << int(r.countPick.first) << ","
+      << std::setw(2) << int(r.countPick.second) << ") | " << std::setw(10)
+      << r.countBytes << " | (" << std::setw(2) << int(r.sizePick.first)
+      << "," << std::setw(2) << int(r.sizePick.second) << ") | "
+      << std::setw(10) << r.sizeBytes << " | " << std::fixed
+      << std::setprecision(2) << std::setw(7) << delta << "% | ";
+  // est_bytes cell + est/real ratio; blanked when the estimator declined.
+  if (r.sizeEstBytes.has_value() && r.sizeBytes > 0) {
+    const double ratio =
+        static_cast<double>(*r.sizeEstBytes) / static_cast<double>(r.sizeBytes);
+    oss << std::setw(10) << *r.sizeEstBytes << " | " << std::setw(6)
+        << std::setprecision(3) << ratio << " | ";
+  } else {
+    oss << std::setw(10) << "-" << " | " << std::setw(6) << "-" << " | ";
+  }
+  oss << std::setw(8) << std::setprecision(1) << r.countMicros << " | "
+      << std::setw(8) << r.sizeMicros << " |";
+  LOG(INFO) << oss.str();
 }
 
 void printHeader() {
-  std::cout << "| " << std::left << std::setw(28) << "dataset" << " | "
-            << std::setw(6) << "dtype" << " | " << std::right << std::setw(7)
-            << "rows" << " | count (e, f) | count bytes | "
-            << "size (e, f) | size bytes  |   delta | "
-            << "count us | size us  |\n";
-  std::cout << "|" << std::string(30, '-') << "|" << std::string(8, '-') << "|"
-            << std::string(9, '-') << "|" << std::string(14, '-') << "|"
-            << std::string(12, '-') << "|" << std::string(13, '-') << "|"
-            << std::string(13, '-') << "|" << std::string(9, '-') << "|"
-            << std::string(10, '-') << "|" << std::string(10, '-') << "|\n";
+  {
+    std::ostringstream oss;
+    oss << "| " << std::left << std::setw(28) << "dataset" << " | "
+        << std::setw(6) << "dtype" << " | " << std::right << std::setw(7)
+        << "rows" << " | count (e, f) | count bytes | "
+        << "size (e, f) | size bytes  |   delta | "
+        << " est bytes | est/real | "
+        << "count us | size us  |";
+    LOG(INFO) << oss.str();
+  }
+  {
+    std::ostringstream oss;
+    oss << "|" << std::string(30, '-') << "|" << std::string(8, '-') << "|"
+        << std::string(9, '-') << "|" << std::string(14, '-') << "|"
+        << std::string(12, '-') << "|" << std::string(13, '-') << "|"
+        << std::string(13, '-') << "|" << std::string(9, '-') << "|"
+        << std::string(12, '-') << "|" << std::string(10, '-') << "|"
+        << std::string(10, '-') << "|" << std::string(10, '-') << "|";
+    LOG(INFO) << oss.str();
+  }
 }
 
 template <typename T>
@@ -324,22 +377,26 @@ void runAll() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  folly::Init init{&argc, &argv};
   facebook::velox::memory::MemoryManager::initialize({});
 
-  std::cout
-      << "\n=== ALP (exponent, factor) selection A/B, "
-      << "count-based vs size-based ===\n"
-      << "rows per dataset: " << kDefaultRows
-      << "; nested encoding: production factory (realNestedSelection=true)\n\n";
+  LOG(INFO) << "=== ALP (exponent, factor) selection A/B, "
+            << "count-based vs size-based ===";
+  LOG(INFO) << "rows per dataset: " << kDefaultRows
+            << "; nested encoding: production factory "
+               "(realNestedSelection=true)";
 
   printHeader();
   runAll<double>();
   runAll<float>();
 
-  std::cout << "\nLegend: (e, f) = chosen exponent/factor.  "
+  LOG(INFO) << "Legend: (e, f) = chosen exponent/factor.  "
             << "delta = (sizeBytes - countBytes) / countBytes.  "
+            << "est bytes = ALPEncoding::estimateSize(logical, options); "
+            << "est/real = est bytes / size bytes (tracks how well the "
+            << "estimator predicts real encoded footprint).  "
             << "count us / size us: wall-clock of the selector alone "
-            << "(single sample = kSampleSize rows).\n";
+            << "(single sample = kSampleSize rows).";
   return 0;
 }
