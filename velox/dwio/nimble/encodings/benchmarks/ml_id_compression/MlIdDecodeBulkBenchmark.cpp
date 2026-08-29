@@ -26,9 +26,9 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 
 DEFINE_string(cache_state, "hot", "hot | cold-payload | cold-all");
@@ -64,8 +64,8 @@ int runBenchmark() {
   }
   const auto& context = *contextOrNull;
 
-  std::cout << "bench_decode_bulk: " << context.encoders.size() << " encoders x "
-            << context.datasets.size() << " datasets, N=" << n
+  std::cout << "bench_decode_bulk: " << context.encoders.size()
+            << " encoders x " << context.datasets.size() << " datasets, N=" << n
             << ", iters=" << iters << ", cache=" << cacheStateName(cacheState)
             << "\n  " << context.topology.describe() << "\n\n";
 
@@ -80,17 +80,15 @@ int runBenchmark() {
   }
 
   std::vector<std::string> csvColumns = {
-      "driver",
-      "dtype",     "dataset",          "encoding",    "family",
-      "variant",    "is_sequential",    "fast_skip",   "random_access",
-      "N",          "seed",             "cache_state", "evict_method",
-      "evict_ns",   "payload_bytes",    "compression_ratio",
-      "iterations", "warmup",           "time_ns",     "time_p90_ns",
-      "time_min_ns", "decode_Meps",     "decode_MBps", "skipped"};
+      "driver",        "dtype",       "dataset",       "encoding",
+      "family",        "variant",     "is_sequential", "fast_skip",
+      "random_access", "N",           "seed",          "cache_state",
+      "evict_method",  "evict_ns",    "payload_bytes", "compression_ratio",
+      "iterations",    "warmup",      "time_ns",       "time_p90_ns",
+      "time_min_ns",   "decode_Meps", "decode_MBps",   "skipped"};
 
-  std::string csvPath = FLAGS_mlidc_output_csv.empty()
-      ? "bench_decode_bulk.csv"
-      : FLAGS_mlidc_output_csv;
+  std::string csvPath = FLAGS_mlidc_output_csv.empty() ? "bench_decode_bulk.csv"
+                                                       : FLAGS_mlidc_output_csv;
   CsvResultWriter csv(csvPath, csvColumns);
 
   if (!FLAGS_mlidc_output_manifest.empty()) {
@@ -140,7 +138,9 @@ int runBenchmark() {
       }
 
       auto cell = makeCellCache<Elem>(
-          context.cacheState, context.topology, *target,
+          context.cacheState,
+          context.topology,
+          *target,
           std::span<std::byte>(
               reinterpret_cast<std::byte*>(sink.data()),
               static_cast<size_t>(n) * kElemSize));
@@ -202,7 +202,8 @@ int main(int argc, char** argv) {
 
 #include <iostream>
 int main() {
-  std::cerr << "bench_decode_bulk requires NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS\n";
+  std::cerr
+      << "bench_decode_bulk requires NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS\n";
   return 1;
 }
 

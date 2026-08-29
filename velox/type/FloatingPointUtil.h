@@ -31,6 +31,8 @@
 
 #include "velox/common/base/Macros.h"
 
+#include "velox/common/base/Macros.h"
+
 namespace facebook::velox {
 
 /// Custom comparator and hash functors for floating point types. These are

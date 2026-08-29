@@ -400,6 +400,32 @@ constexpr bool isStringType() {
 }
 
 template <typename T>
+constexpr bool isSharedDictionaryType() {
+  return isIntegralType<T>() || std::is_same_v<T, std::string_view>;
+}
+
+constexpr bool isSharedDictionaryType(DataType dataType) {
+  switch (dataType) {
+    case DataType::Int8:
+    case DataType::Uint8:
+    case DataType::Int16:
+    case DataType::Uint16:
+    case DataType::Int32:
+    case DataType::Uint32:
+    case DataType::Int64:
+    case DataType::Uint64:
+    case DataType::String:
+      return true;
+    case DataType::Undefined:
+    case DataType::Float:
+    case DataType::Double:
+    case DataType::Bool:
+      return false;
+  }
+  return false;
+}
+
+template <typename T>
 constexpr bool isBoolType() {
   return std::is_same_v<T, bool>;
 }

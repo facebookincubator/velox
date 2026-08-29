@@ -35,8 +35,8 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/PointTraceGen.h"
 
@@ -133,7 +133,7 @@ int runBenchmark() {
   CacheState cacheState{};
   if (!parseCacheState(FLAGS_cache_state, cacheState)) {
     std::cerr << "Unknown --cache_state: " << FLAGS_cache_state
-               << " (expected hot|cold-payload|cold-all)\n";
+              << " (expected hot|cold-payload|cold-all)\n";
     return 1;
   }
 
@@ -150,17 +150,16 @@ int runBenchmark() {
     return 1;
   }
 
-  std::cout << "bench_index_oracle: " << indexTypes.size()
-             << " index types x " << datasets.size() << " datasets, N=" << n
-             << ", probes=" << probes << ", iters=" << iters
-             << ", cache=" << cacheStateName(cacheState) << "\n  "
-             << topo.describe() << "\n\n";
+  std::cout << "bench_index_oracle: " << indexTypes.size() << " index types x "
+            << datasets.size() << " datasets, N=" << n << ", probes=" << probes
+            << ", iters=" << iters << ", cache=" << cacheStateName(cacheState)
+            << "\n  " << topo.describe() << "\n\n";
 
   if (FLAGS_dry_run) {
     std::cout << "Index types:\n";
     for (const auto& it : indexTypes) {
       std::cout << "  " << it.name << " (idx=" << static_cast<int>(it.idx)
-                 << ", random_access=" << it.randomAccess << ")\n";
+                << ", random_access=" << it.randomAccess << ")\n";
     }
     std::cout << "\nDatasets:\n";
     for (const auto& d : datasets) {
@@ -175,11 +174,25 @@ int runBenchmark() {
 
   std::vector<std::string> csvColumns = {
       "driver",
-      "dtype",         "dataset",           "index_type",   "N",
-      "seed",           "cache_state",       "payload_bytes", "random_access",
-      "viable",         "bulk_ns",           "point_ns",     "probes",
-      "on_pareto_frontier", "lambda_ns_per_byte", "objective_J", "oracle_pick",
-      "regret_bytes",   "regret_ns",         "skipped"};
+      "dtype",
+      "dataset",
+      "index_type",
+      "N",
+      "seed",
+      "cache_state",
+      "payload_bytes",
+      "random_access",
+      "viable",
+      "bulk_ns",
+      "point_ns",
+      "probes",
+      "on_pareto_frontier",
+      "lambda_ns_per_byte",
+      "objective_J",
+      "oracle_pick",
+      "regret_bytes",
+      "regret_ns",
+      "skipped"};
   std::string csvPath = FLAGS_mlidc_output_csv.empty()
       ? "bench_index_oracle.csv"
       : FLAGS_mlidc_output_csv;
@@ -259,7 +272,7 @@ int runBenchmark() {
         }
         if (!ok) {
           std::cerr << "  [VALIDATE FAIL] " << it.name << " / " << ds.name
-                     << "\n";
+                    << "\n";
           ++validateFailures;
           cell.skipped = true;
           cells.push_back(cell);
@@ -325,8 +338,8 @@ int runBenchmark() {
 
       cells.push_back(cell);
       std::cout << "  " << it.name << ": " << cell.payloadBytes << " B, "
-                 << (cell.viable ? std::to_string(cell.pointNs) : "n/a")
-                 << " ns/probe\n";
+                << (cell.viable ? std::to_string(cell.pointNs) : "n/a")
+                << " ns/probe\n";
     }
 
     computeParetoFrontier(cells);
@@ -349,10 +362,13 @@ int runBenchmark() {
         continue;
       }
 
-      const int64_t regretBytes = bestBytes != std::numeric_limits<size_t>::max()
-          ? static_cast<int64_t>(c.payloadBytes) - static_cast<int64_t>(bestBytes)
+      const int64_t regretBytes =
+          bestBytes != std::numeric_limits<size_t>::max()
+          ? static_cast<int64_t>(c.payloadBytes) -
+              static_cast<int64_t>(bestBytes)
           : 0;
-      const double regretNs = (c.viable && bestPointNs != std::numeric_limits<double>::max())
+      const double regretNs =
+          (c.viable && bestPointNs != std::numeric_limits<double>::max())
           ? c.pointNs - bestPointNs
           : kNaN;
 
@@ -368,8 +384,8 @@ int runBenchmark() {
             continue;
           }
           anyViable = true;
-          const double j = static_cast<double>(other.payloadBytes) +
-              lambda * other.pointNs;
+          const double j =
+              static_cast<double>(other.payloadBytes) + lambda * other.pointNs;
           if (j < bestJ) {
             bestJ = j;
             oraclePick = other.indexTypeName;

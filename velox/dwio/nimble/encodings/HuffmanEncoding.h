@@ -133,6 +133,22 @@ class HuffmanEncoding final
         : frequency(frequency), left(left), right(right), symbol(symbol) {}
   };
 
+  struct QueueEntry {
+    uint64_t frequency;
+    int32_t node;
+
+    // Explicit constructor keeps priority_queue::emplace() working on OSS GCC
+    // versions that do not apply parenthesized aggregate initialization here.
+    QueueEntry(uint64_t frequency, int32_t node)
+        : frequency(frequency), node(node) {}
+
+    bool operator>(const QueueEntry& other) const {
+      // Node order makes equal-frequency trees deterministic.
+      return frequency != other.frequency ? frequency > other.frequency
+                                          : node > other.node;
+    }
+  };
+
   // Maps tableLog_ lookahead bits to an alphabet index and the number of bits
   // consumed for that symbol.
   struct DecodeEntry {
@@ -150,23 +166,52 @@ class HuffmanEncoding final
     return reversed;
   }
 
-  // Derive leaf depths for canonical code construction. Distributions that
-  // exceed the bounded decoder table are rejected as incompatible.
-  static void assignCodeLengths(
-      const Vector<TreeNode>& nodes,
+  template <typename NodeContainer, typename LengthContainer>
+  static bool assignCodeLengths(
+      const NodeContainer& nodes,
       int32_t node,
       uint8_t depth,
-      Vector<uint8_t>& lengths) {
+      LengthContainer& lengths) {
     if (nodes[node].symbol >= 0) {
       if (depth > kMaxCodeBits) {
-        NIMBLE_INCOMPATIBLE_ENCODING(
-            "Huffman tree exceeds the {}-bit limit", kMaxCodeBits);
+        return false;
       }
       lengths[nodes[node].symbol] = std::max<uint8_t>(1, depth);
-      return;
+      return true;
     }
-    assignCodeLengths(nodes, nodes[node].left, depth + 1, lengths);
-    assignCodeLengths(nodes, nodes[node].right, depth + 1, lengths);
+    return assignCodeLengths(nodes, nodes[node].left, depth + 1, lengths) &&
+        assignCodeLengths(nodes, nodes[node].right, depth + 1, lengths);
+  }
+
+  template <
+      typename FrequencyContainer,
+      typename NodeContainer,
+      typename LengthContainer>
+  static bool buildCodeLengths(
+      const FrequencyContainer& frequencies,
+      NodeContainer& nodes,
+      LengthContainer& lengths) {
+    std::priority_queue<
+        QueueEntry,
+        std::vector<QueueEntry>,
+        std::greater<QueueEntry>>
+        queue;
+    for (uint32_t symbol = 0; symbol < frequencies.size(); ++symbol) {
+      nodes.emplace_back(
+          frequencies[symbol], -1, -1, static_cast<int32_t>(symbol));
+      queue.emplace(frequencies[symbol], static_cast<int32_t>(symbol));
+    }
+    while (queue.size() > 1) {
+      const auto left = queue.top();
+      queue.pop();
+      const auto right = queue.top();
+      queue.pop();
+      const auto node = static_cast<int32_t>(nodes.size());
+      nodes.emplace_back(
+          left.frequency + right.frequency, left.node, right.node, -1);
+      queue.emplace(left.frequency + right.frequency, node);
+    }
+    return assignCodeLengths(nodes, queue.top().node, 0, lengths);
   }
 
   physicalType decodeValue(uint32_t row) const;
@@ -292,6 +337,24 @@ std::optional<uint64_t> HuffmanEncoding<T>::estimateSize(
     return std::nullopt;
   }
 
+  folly::F14FastMap<physicalType, uint32_t> symbolByValue;
+  std::vector<uint32_t> frequencies;
+  frequencies.reserve(uniqueCounts->size());
+  for (const auto value : values) {
+    auto [it, inserted] =
+        symbolByValue.emplace(value, static_cast<uint32_t>(frequencies.size()));
+    if (inserted) {
+      frequencies.push_back(0);
+    }
+    ++frequencies[it->second];
+  }
+  std::vector<TreeNode> nodes;
+  nodes.reserve(2 * frequencies.size() - 1);
+  std::vector<uint8_t> lengths(frequencies.size());
+  if (!buildCodeLengths(frequencies, nodes, lengths)) {
+    return std::nullopt;
+  }
+
   uint64_t encodedBits = 0;
   const uint64_t rowsMinusOne = values.size() - 1;
   for (const auto& [value, count] : uniqueCounts.value()) {
@@ -343,46 +406,12 @@ std::string_view HuffmanEncoding<T>::encode(
         "Huffman encoding requires at least two symbols");
   }
 
-  struct QueueEntry {
-    uint64_t frequency;
-    int32_t node;
-
-    // Explicit constructor so priority_queue::emplace() works under compilers
-    // that do not apply parenthesized aggregate initialization (P0960) inside
-    // construct_at (e.g. the OSS GCC build).
-    QueueEntry(uint64_t frequency, int32_t node)
-        : frequency(frequency), node(node) {}
-
-    bool operator>(const QueueEntry& other) const {
-      // Node order makes equal-frequency trees deterministic.
-      return frequency != other.frequency ? frequency > other.frequency
-                                          : node > other.node;
-    }
-  };
   Vector<TreeNode> nodes{pool};
-  std::priority_queue<
-      QueueEntry,
-      std::vector<QueueEntry>,
-      std::greater<QueueEntry>>
-      queue;
-  for (uint32_t symbol = 0; symbol < frequencies.size(); ++symbol) {
-    nodes.emplace_back(
-        frequencies[symbol], -1, -1, static_cast<int32_t>(symbol));
-    queue.emplace(frequencies[symbol], static_cast<int32_t>(symbol));
-  }
-  while (queue.size() > 1) {
-    const auto left = queue.top();
-    queue.pop();
-    const auto right = queue.top();
-    queue.pop();
-    const auto node = static_cast<int32_t>(nodes.size());
-    nodes.emplace_back(
-        left.frequency + right.frequency, left.node, right.node, -1);
-    queue.emplace(left.frequency + right.frequency, node);
-  }
-
   Vector<uint8_t> lengths{pool, alphabet.size()};
-  assignCodeLengths(nodes, queue.top().node, /*depth=*/0, lengths);
+  if (!buildCodeLengths(frequencies, nodes, lengths)) {
+    NIMBLE_INCOMPATIBLE_ENCODING(
+        "Huffman tree exceeds the {}-bit limit", kMaxCodeBits);
+  }
   const uint8_t tableLog = *std::max_element(lengths.begin(), lengths.end());
 
   // Number of symbols assigned to each code length, indexed by bit length.

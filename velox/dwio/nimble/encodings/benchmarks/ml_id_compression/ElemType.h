@@ -47,7 +47,8 @@
 
 namespace facebook::nimble::mlidc {
 
-// The --mlidc_dtype values this suite accepts, in the order they are dispatched.
+// The --mlidc_dtype values this suite accepts, in the order they are
+// dispatched.
 inline constexpr std::string_view kElemTypeNames =
     "int32, uint32, int64, uint64, float, double";
 
