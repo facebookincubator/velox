@@ -144,11 +144,16 @@ RowVectorPtr CudfBatchConcat::doGetOutput() {
     }
 
     // Keep a below-target final table buffered while more input can arrive.
+    // Only a split leaves a genuine partial tail. A lone output already met the
+    // target on the input side, and re-buffering it would concatenate it a
+    // second time: byte estimates are not additive, because concatenating
+    // merges the inputs' null masks and drops all but one string offset entry,
+    // so the output can measure less than the inputs it came from.
     auto& last = outputVectors.back();
     const auto numRows = static_cast<size_t>(last->size());
     const auto lastBytes =
         usesRowFallback() ? uint64_t{0} : last->estimateFlatSize();
-    const auto retainLast = !noMoreInput_ &&
+    const auto retainLast = !noMoreInput_ && outputVectors.size() > 1 &&
         (usesRowFallback() ? numRows < targetRows_
                            : lastBytes < targetBytes_.value());
 
