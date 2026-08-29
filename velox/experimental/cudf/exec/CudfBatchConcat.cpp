@@ -41,9 +41,8 @@ RowTypePtr getConcatOutputType(
   return planNode->sources()[0]->outputType();
 }
 
-// Resolves the byte target for an output carrying 'numColumns' columns.
-// Zero-column vectors own no GPU buffers to measure, so they have no byte
-// target and fall back to counting rows.
+// Returns the configured byte target, or nullopt for a zero-column output,
+// which owns no GPU buffers to measure.
 std::optional<uint64_t> getBatchSizeMinBytes(size_t numColumns) {
   if (numColumns == 0) {
     return std::nullopt;
@@ -81,7 +80,6 @@ CudfBatchConcat::CudfBatchConcat(
           NvtxMethodFlag::kAll,
           std::nullopt,
           planNode),
-      driverCtx_(driverCtx),
       targetBytes_(getBatchSizeMinBytes(outputType_->size())),
       targetRows_(getBatchSizeMinRows()) {}
 
@@ -178,6 +176,7 @@ void CudfBatchConcat::doClose() {
   while (!outputQueue_.empty()) {
     outputQueue_.pop();
   }
+  currentBytes_ = 0;
   currentNumRows_ = 0;
   Operator::close();
 }
