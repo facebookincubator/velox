@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/CPortability.h>
 #include <xsimd/xsimd.hpp>
 #include <algorithm>
 #include <array>
@@ -983,7 +984,14 @@ class ALPEncoding final
   static constexpr uint64_t kUnusableScore =
       std::numeric_limits<uint64_t>::max();
 
-  static CombinationScore scoreCombination(
+  // Kept out of line on purpose. Every caller invokes it once per estimate, so
+  // inlining saves nothing, but its body is large enough that inlining it into
+  // estimateSizeFromSample degrades the register allocation and code layout of
+  // the (exponent, factor) search loop that shares that function. On a sample
+  // that never short-circuits the search -- all values unrepresentable, so the
+  // loop runs the full grid -- that penalty is paid ~300K times and costs 17%
+  // of encode wall time.
+  FOLLY_NOINLINE static CombinationScore scoreCombination(
       std::span<const cppDataType> logicalValues,
       int exponent,
       int factor,
