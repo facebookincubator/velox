@@ -204,7 +204,7 @@ TEST_F(ApproxCountDistinctForIntervalsAggregateTest, nanInputsRejected) {
   VELOX_ASSERT_USER_THROW(
       runGlobalAggregation(
           data, "approx_count_distinct_for_intervals(c0, c1, 0.01)", true),
-      "NaN input is not supported for approx_count_distinct_for_intervals");
+      "NaN input is rejected for approx_count_distinct_for_intervals");
 }
 
 TEST_F(ApproxCountDistinctForIntervalsAggregateTest, mergeEquivalence) {

@@ -24,6 +24,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/hyperloglog/DenseHll.h"
 #include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/VectorReaders.h"
@@ -36,10 +37,23 @@
 namespace facebook::velox::functions::aggregate::sparksql {
 namespace {
 
+// Spark hashes values with xxhash64 seeded with 42 before feeding them to
+// HLL++, see HyperLogLogPlusPlusHelper.
 constexpr uint64_t kXxHash64Seed = 42;
+
+using SparkXxHash64 = ::facebook::velox::functions::sparksql::XxHash64;
 
 using HllAccumulator =
     common::hll::HllAccumulator<int64_t, false, HashStringAllocator>;
+
+// Scales a decimal's unscaled value into a DOUBLE.
+template <typename T>
+double decimalToDouble(T unscaledValue, int32_t scale) {
+  const auto scaleFactor = DecimalUtil::kPowersOfTen[scale];
+  auto converted = util::Converter<TypeKind::DOUBLE>::tryCast(unscaledValue);
+  VELOX_USER_CHECK(converted.hasValue(), "Failed to convert decimal to DOUBLE");
+  return converted.value() / scaleFactor;
+}
 
 int8_t computeIndexBitLength(double relativeSD) {
   VELOX_USER_CHECK(
@@ -90,38 +104,31 @@ uint64_t hashValueDispatch(
     const TypePtr& type) {
   using T = typename TypeTraits<kind>::NativeType;
   if constexpr (kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT) {
-    return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
+    return SparkXxHash64::hashInt32(
         static_cast<int32_t>(value.template castTo<T>()), kXxHash64Seed);
   } else if constexpr (kind == TypeKind::INTEGER) {
-    return ::facebook::velox::functions::sparksql::XxHash64::hashInt32(
+    return SparkXxHash64::hashInt32(value.template castTo<T>(), kXxHash64Seed);
+  } else if constexpr (kind == TypeKind::BIGINT) {
+    return SparkXxHash64::hashInt64(value.template castTo<T>(), kXxHash64Seed);
+  } else if constexpr (kind == TypeKind::REAL) {
+    return SparkXxHash64::hashFloat(value.template castTo<T>(), kXxHash64Seed);
+  } else if constexpr (kind == TypeKind::DOUBLE) {
+    return SparkXxHash64::hashDouble(value.template castTo<T>(), kXxHash64Seed);
+  } else if constexpr (kind == TypeKind::TIMESTAMP) {
+    return SparkXxHash64::hashTimestamp(
         value.template castTo<T>(), kXxHash64Seed);
+  } else {
+    VELOX_UNSUPPORTED(
+        "Unsupported type for approx_count_distinct_for_intervals: {}",
+        type->toString());
   }
-  if constexpr (kind == TypeKind::BIGINT) {
-    return ::facebook::velox::functions::sparksql::XxHash64::hashInt64(
-        value.template castTo<T>(), kXxHash64Seed);
-  }
-  if constexpr (kind == TypeKind::REAL) {
-    return ::facebook::velox::functions::sparksql::XxHash64::hashFloat(
-        value.template castTo<T>(), kXxHash64Seed);
-  }
-  if constexpr (kind == TypeKind::DOUBLE) {
-    return ::facebook::velox::functions::sparksql::XxHash64::hashDouble(
-        value.template castTo<T>(), kXxHash64Seed);
-  }
-  if constexpr (kind == TypeKind::TIMESTAMP) {
-    return ::facebook::velox::functions::sparksql::XxHash64::hashTimestamp(
-        value.template castTo<T>(), kXxHash64Seed);
-  }
-  VELOX_UNSUPPORTED(
-      "Unsupported type for approx_count_distinct_for_intervals: {}",
-      type->toString());
 }
 
 template <>
 uint64_t hashValueDispatch<TypeKind::HUGEINT>(
     const exec::GenericView& value,
     const TypePtr& /*type*/) {
-  return ::facebook::velox::functions::sparksql::XxHash64::hashLongDecimal(
+  return SparkXxHash64::hashLongDecimal(
       value.castTo<int128_t>(), kXxHash64Seed);
 }
 
@@ -159,7 +166,11 @@ class ApproxCountDistinctForIntervalsAggregate {
   }
 
   struct AccumulatorType {
-    std::vector<HllAccumulator> hlls;
+    // Allocated through the HashStringAllocator so that the per-group HLL
+    // array is accounted for by the query's memory pool.
+    using HllVector = std::vector<HllAccumulator, StlAllocator<HllAccumulator>>;
+
+    HllVector hlls;
     ApproxCountDistinctForIntervalsAggregate* fn;
 
     static constexpr bool is_fixed_size_ = false;
@@ -167,9 +178,9 @@ class ApproxCountDistinctForIntervalsAggregate {
     static constexpr bool use_external_memory_ = true;
 
     AccumulatorType(
-        HashStringAllocator* /*allocator*/,
+        HashStringAllocator* allocator,
         ApproxCountDistinctForIntervalsAggregate* fn)
-        : fn(fn) {}
+        : hlls{StlAllocator<HllAccumulator>(allocator)}, fn(fn) {}
 
     bool addInput(
         HashStringAllocator* allocator,
@@ -186,7 +197,7 @@ class ApproxCountDistinctForIntervalsAggregate {
       const double inputValue = fn->toDouble(data.value(), fn->inputType_);
       VELOX_USER_CHECK(
           !std::isnan(inputValue),
-          "NaN input is not supported for approx_count_distinct_for_intervals");
+          "NaN input is rejected for approx_count_distinct_for_intervals");
       if (inputValue < fn->endpointsMin_ || inputValue > fn->endpointsMax_) {
         return false;
       }
@@ -248,7 +259,8 @@ class ApproxCountDistinctForIntervalsAggregate {
       std::vector<std::string> serializedHlls;
       serializedHlls.reserve(fn->intervalCount_);
       for (int32_t interval = 0; interval < fn->intervalCount_; ++interval) {
-        if (nonNullGroup && hlls.size() == fn->intervalCount_) {
+        if (nonNullGroup &&
+            hlls.size() == static_cast<size_t>(fn->intervalCount_)) {
           auto& hll = hlls[interval];
           const auto size = hll.serializedSize();
           std::string buffer(size, '\0');
@@ -269,7 +281,8 @@ class ApproxCountDistinctForIntervalsAggregate {
 
       for (int32_t interval = 0; interval < fn->intervalCount_; ++interval) {
         int64_t count = 0;
-        if (nonNullGroup && hlls.size() == fn->intervalCount_) {
+        if (nonNullGroup &&
+            hlls.size() == static_cast<size_t>(fn->intervalCount_)) {
           count = hlls[interval].cardinality();
         }
         if (fn->duplicateIntervals_[interval]) {
@@ -296,7 +309,7 @@ class ApproxCountDistinctForIntervalsAggregate {
         }
         return;
       }
-      VELOX_USER_CHECK_EQ(hlls.size(), targetSize);
+      VELOX_USER_CHECK_EQ(hlls.size(), static_cast<size_t>(targetSize));
     }
   };
 
@@ -468,14 +481,6 @@ class ApproxCountDistinctForIntervalsAggregate {
   }
 
   static double toDouble(const exec::GenericView& value, const TypePtr& type) {
-    const auto decimalToDouble = [](auto decimal, int32_t scale) {
-      const auto scaleFactor = DecimalUtil::kPowersOfTen[scale];
-      auto converted = util::Converter<TypeKind::DOUBLE>::tryCast(decimal);
-      VELOX_USER_CHECK(
-          converted.hasValue(), "Failed to convert decimal to DOUBLE");
-      return converted.value() / scaleFactor;
-    };
-
     if (type->isShortDecimal()) {
       return decimalToDouble(
           value.castTo<int64_t>(), type->asShortDecimal().scale());
@@ -500,7 +505,7 @@ class ApproxCountDistinctForIntervalsAggregate {
     if (type->isIntervalDayTime()) {
       // Spark hashes DayTimeIntervalType's microseconds; Velox's
       // INTERVAL DAY TO SECOND holds milliseconds.
-      return ::facebook::velox::functions::sparksql::XxHash64::hashInt64(
+      return SparkXxHash64::hashInt64(
           value.castTo<int64_t>() * 1000, kXxHash64Seed);
     }
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
