@@ -26,6 +26,7 @@
 #include "velox/common/hyperloglog/SparseHll.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/expression/VectorReaders.h"
 #include "velox/functions/lib/HllAccumulator.h"
 #include "velox/functions/sparksql/XxHash64.h"
 #include "velox/type/Conversions.h"
@@ -163,6 +164,7 @@ class ApproxCountDistinctForIntervalsAggregate {
 
     static constexpr bool is_fixed_size_ = false;
     static constexpr bool is_aligned_ = true;
+    static constexpr bool use_external_memory_ = true;
 
     AccumulatorType(
         HashStringAllocator* /*allocator*/,
@@ -221,18 +223,16 @@ class ApproxCountDistinctForIntervalsAggregate {
           fn->intervalCount_);
 
       for (const auto& entry : hllsArray) {
-        if (entry.has_value()) {
-          fn->maybeSetIndexBitLengthFromSerialized(entry.value());
-          break;
-        }
+        VELOX_USER_CHECK(
+            entry.has_value(),
+            "Serialized HLL entries must not be null for "
+            "approx_count_distinct_for_intervals");
       }
 
+      fn->maybeSetIndexBitLengthFromSerialized(hllsArray[0].value());
       ensureSize(allocator, fn->intervalCount_, fn->indexBitLength_);
       for (size_t i = 0; i < hllsArray.size(); ++i) {
-        const auto& entry = hllsArray[i];
-        if (entry.has_value()) {
-          hlls[i].mergeWith(entry.value(), allocator);
-        }
+        hlls[i].mergeWith(hllsArray[i].value(), allocator);
       }
       return true;
     }
@@ -381,6 +381,7 @@ class ApproxCountDistinctForIntervalsAggregate {
         "approx_count_distinct_for_intervals requires at least 2 endpoints");
 
     DecodedVector decodedElements(*arrayVector->elements());
+    exec::VectorReader<Generic<T2>> elementReader(&decodedElements);
     const auto offset = arrayVector->offsetAt(row);
     std::vector<double> converted;
     converted.reserve(size);
@@ -389,10 +390,8 @@ class ApproxCountDistinctForIntervalsAggregate {
       VELOX_USER_CHECK(
           !decodedElements.isNullAt(elementRow),
           "Endpoints must not contain null values");
-      converted.push_back(vectorValueToDouble(
-          *decodedElements.base(),
-          decodedElements.index(elementRow),
-          endpointsElementType_));
+      converted.push_back(
+          toDouble(elementReader[elementRow], endpointsElementType_));
     }
     setEndpoints(converted);
   }
@@ -485,60 +484,25 @@ class ApproxCountDistinctForIntervalsAggregate {
       return decimalToDouble(
           value.castTo<int128_t>(), type->asLongDecimal().scale());
     }
+    if (type->isIntervalDayTime()) {
+      // Spark's DayTimeIntervalType holds microseconds while Velox's
+      // INTERVAL DAY TO SECOND holds milliseconds.
+      return static_cast<double>(value.castTo<int64_t>() * 1000);
+    }
 
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         toDoubleDispatch, type->kind(), value, type);
   }
 
-  static double vectorValueToDouble(
-      const BaseVector& vector,
-      vector_size_t index,
-      const TypePtr& type) {
-    const auto decimalToDouble = [](auto decimal, int32_t scale) {
-      const auto scaleFactor = DecimalUtil::kPowersOfTen[scale];
-      auto converted = util::Converter<TypeKind::DOUBLE>::tryCast(decimal);
-      VELOX_USER_CHECK(
-          converted.hasValue(), "Failed to convert decimal to DOUBLE");
-      return converted.value() / scaleFactor;
-    };
-
-    if (type->isShortDecimal()) {
-      return decimalToDouble(
-          vector.as<FlatVector<int64_t>>()->valueAt(index),
-          type->asShortDecimal().scale());
-    }
-    if (type->isLongDecimal()) {
-      return decimalToDouble(
-          vector.as<FlatVector<int128_t>>()->valueAt(index),
-          type->asLongDecimal().scale());
-    }
-
-    switch (type->kind()) {
-      case TypeKind::TINYINT:
-        return vector.as<FlatVector<int8_t>>()->valueAt(index);
-      case TypeKind::SMALLINT:
-        return vector.as<FlatVector<int16_t>>()->valueAt(index);
-      case TypeKind::INTEGER:
-        return vector.as<FlatVector<int32_t>>()->valueAt(index);
-      case TypeKind::BIGINT:
-        return vector.as<FlatVector<int64_t>>()->valueAt(index);
-      case TypeKind::REAL:
-        return vector.as<FlatVector<float>>()->valueAt(index);
-      case TypeKind::DOUBLE:
-        return vector.as<FlatVector<double>>()->valueAt(index);
-      case TypeKind::TIMESTAMP:
-        return static_cast<double>(
-            vector.as<FlatVector<Timestamp>>()->valueAt(index).toMicros());
-      default:
-        VELOX_UNSUPPORTED(
-            "Unsupported type for approx_count_distinct_for_intervals: {}",
-            type->toString());
-    }
-  }
-
   static uint64_t hashValue(
       const exec::GenericView& value,
       const TypePtr& type) {
+    if (type->isIntervalDayTime()) {
+      // Spark hashes DayTimeIntervalType's microseconds; Velox's
+      // INTERVAL DAY TO SECOND holds milliseconds.
+      return ::facebook::velox::functions::sparksql::XxHash64::hashInt64(
+          value.castTo<int64_t>() * 1000, kXxHash64Seed);
+    }
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         hashValueDispatch, type->kind(), value, type);
   }

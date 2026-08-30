@@ -109,7 +109,7 @@ TEST_F(ApproxCountDistinctForIntervalsAggregateTest, tooFewEndpoints) {
   auto data = makeRowVector({values, endpoints});
   auto expected = makeRowVector({makeArrayVector<int64_t>({{0}})});
 
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_USER_THROW(
       testAggregations(
           {data},
           {},
@@ -123,7 +123,7 @@ TEST_F(ApproxCountDistinctForIntervalsAggregateTest, endpointsNotSorted) {
   auto endpoints = makeEndpointsVector<double>(values->size(), {0.0, 2.0, 1.0});
   auto data = makeRowVector({values, endpoints});
 
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_USER_THROW(
       testAggregations(
           {data},
           {},
@@ -137,7 +137,7 @@ TEST_F(ApproxCountDistinctForIntervalsAggregateTest, endpointsNonFoldable) {
   auto endpoints = makeArrayVector<double>({{0.0, 1.0}, {0.0, 2.0}});
   auto data = makeRowVector({values, endpoints});
 
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_USER_THROW(
       testAggregations(
           {data},
           {},
@@ -152,7 +152,7 @@ TEST_F(ApproxCountDistinctForIntervalsAggregateTest, relativeSdNonFoldable) {
   auto relativeSd = makeFlatVector<double>({0.01, 0.05});
   auto data = makeRowVector({values, endpoints, relativeSd});
 
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_USER_THROW(
       testAggregations(
           {data},
           {},
@@ -201,7 +201,7 @@ TEST_F(ApproxCountDistinctForIntervalsAggregateTest, nanInputsRejected) {
   auto endpoints = makeEndpointsVector<double>(values->size(), {0.0, 1.0, 2.0});
   auto data = makeRowVector({values, endpoints});
 
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_USER_THROW(
       runGlobalAggregation(
           data, "approx_count_distinct_for_intervals(c0, c1, 0.01)", true),
       "NaN input is not supported for approx_count_distinct_for_intervals");
