@@ -2162,7 +2162,7 @@ void Writer::writeStripeDictionaryStreams() {
   if (!context_->hasStripeDictionaryConfig()) {
     return;
   }
-  for (const auto& [_, streamData] : context_->streams()) {
+  for (const auto& [nodeId, streamData] : context_->streams()) {
     const auto* streamContext =
         streamData->descriptor().context<WriterStreamContext>();
     if (streamContext == nullptr) {
@@ -2184,6 +2184,16 @@ void Writer::writeStripeDictionaryStreams() {
     auto& dictionaryStream = encodedStreams_[streamId];
     NIMBLE_CHECK(dictionaryStream.chunks.empty());
     dictionaryStream.offset = streamId;
+    // The alphabet stream has no StreamData of its own, so it is not visited by
+    // the stream loops that do this accounting. Charge it to the value stream
+    // that owns the dictionary: with shared dictionary encoding most of the
+    // column's bytes live in the alphabet, so leaving it out understates the
+    // column and makes the encoding look cheaper than it is.
+    const auto alphabetBytes = alphabetChunk->contentSize();
+    if (auto statsCollector = context_->getStatsCollector(nodeId)) {
+      statsCollector->addPhysicalSize(alphabetBytes);
+    }
+    context_->updateStripeEncodedPhysicalSize(alphabetBytes);
     dictionaryStream.chunks.push_back(std::move(alphabetChunk.value()));
   }
 }
