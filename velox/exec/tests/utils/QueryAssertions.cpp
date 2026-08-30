@@ -44,6 +44,22 @@ template <TypeKind kind>
   return ::duckdb::Value(vector->as<SimpleVector<T>>()->valueAt(index));
 }
 
+// Forward declarations of the complex-type specializations. Nested complex
+// types dispatch through these before their definitions appear below, so the
+// declarations must precede any such instantiation.
+template <>
+::duckdb::Value duckValueAt<TypeKind::ARRAY>(
+    const VectorPtr& vector,
+    int32_t row);
+template <>
+::duckdb::Value duckValueAt<TypeKind::ROW>(
+    const VectorPtr& vector,
+    int32_t row);
+template <>
+::duckdb::Value duckValueAt<TypeKind::MAP>(
+    const VectorPtr& vector,
+    int32_t row);
+
 template <>
 ::duckdb::Value duckValueAt<TypeKind::TINYINT>(
     const VectorPtr& vector,
@@ -183,7 +199,7 @@ template <>
       array.emplace_back(
           ::duckdb::Value(duckdb::fromVeloxType(elements->type())));
     } else {
-      array.emplace_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      array.emplace_back(VELOX_DYNAMIC_TYPE_DISPATCH(
           duckValueAt, elements->typeKind(), elements, innerRow));
     }
   }
@@ -206,7 +222,7 @@ template <>
     } else {
       fields.push_back(
           {rowType->nameOf(i),
-           VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+           VELOX_DYNAMIC_TYPE_DISPATCH(
                duckValueAt,
                rowType->childAt(i)->kind(),
                rowVector->childAt(i),
@@ -339,17 +355,22 @@ variant nullVariant(const TypePtr& type) {
   return variant(type->kind());
 }
 
+variant arrayVariantAt(const ::duckdb::Value& vector, const TypePtr& arrayType);
+
 variant rowVariantAt(const ::duckdb::Value& vector, const TypePtr& rowType) {
   std::vector<variant> values;
   const auto& structValue = ::duckdb::StructValue::GetChildren(vector);
   for (size_t i = 0; i < structValue.size(); ++i) {
     auto currChild = structValue[i];
     auto currType = rowType->childAt(i);
-    // TODO: Add support for ARRAY and MAP children types.
     if (currChild.IsNull()) {
       values.push_back(nullVariant(currType));
     } else if (currType->kind() == TypeKind::ROW) {
       values.push_back(rowVariantAt(currChild, currType));
+    } else if (currType->kind() == TypeKind::ARRAY) {
+      values.push_back(arrayVariantAt(currChild, currType));
+    } else if (currType->isDecimal()) {
+      values.push_back(duckdb::decimalVariant(currChild));
     } else {
       auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           variantAt, currType->kind(), currChild);
@@ -370,17 +391,22 @@ variant mapVariantAt(const ::duckdb::Value& vector, const TypePtr& mapType) {
 
   const auto& valueList = ::duckdb::ListValue::GetChildren(vector);
   for (int i = 0; i < valueList.size(); i++) {
-    // TODO: Add support for complex key and value types.
     variant variantKey;
     variant variantValue;
     auto value = ::duckdb::StructValue::GetChildren(valueList[i]);
     // Map key cannot be null.
     VELOX_CHECK(!value[0].IsNull());
-    variantKey = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        variantAt, keyType->kind(), value[0]);
+    if (keyType->isDecimal()) {
+      variantKey = duckdb::decimalVariant(value[0]);
+    } else {
+      variantKey = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          variantAt, keyType->kind(), value[0]);
+    }
 
     if (value[1].IsNull()) {
       variantValue = nullVariant(valueType);
+    } else if (valueType->isDecimal()) {
+      variantValue = duckdb::decimalVariant(value[1]);
     } else {
       variantValue = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           variantAt, valueType->kind(), value[1]);
@@ -400,12 +426,15 @@ variant arrayVariantAt(
   auto arrayTypePtr = dynamic_cast<const ArrayType*>(arrayType.get());
   auto elementType = arrayTypePtr->elementType();
   for (int i = 0; i < elementList.size(); i++) {
-    // TODO: Add support for MAP and ROW element types.
     if (elementList[i].IsNull()) {
       array.push_back(nullVariant(elementType));
     } else if (elementType->kind() == TypeKind::ARRAY) {
       array.push_back(
           arrayVariantAt(elementList[i], arrayTypePtr->elementType()));
+    } else if (elementType->kind() == TypeKind::ROW) {
+      array.push_back(rowVariantAt(elementList[i], elementType));
+    } else if (elementType->isDecimal()) {
+      array.push_back(duckdb::decimalVariant(elementList[i]));
     } else {
       auto variant = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           variantAt, elementType->kind(), elementList[i]);
@@ -840,6 +869,13 @@ std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
   return rows;
 }
 
+::duckdb::DuckDB& DuckDbQueryRunner::database() {
+  if (db_ == nullptr) {
+    db_ = std::make_shared<::duckdb::DuckDB>(nullptr);
+  }
+  return *db_;
+}
+
 void DuckDbQueryRunner::createTable(
     const std::string& name,
     const std::vector<RowVectorPtr>& data) {
@@ -847,17 +883,29 @@ void DuckDbQueryRunner::createTable(
   execute(query);
 
   auto& rowType = data[0]->type()->as<TypeKind::ROW>();
-  ::duckdb::Connection con(db_);
+  ::duckdb::Connection con(database());
   auto sql = duckdb::makeCreateTableSql(name, rowType);
   auto res = con.Query(sql);
   verifyDuckDBResult(res, sql);
 
   ::duckdb::Appender appender(con, name);
   for (auto& vector : data) {
+    // Resolve lazy vectors once per batch. duckValueAt casts each column to
+    // SimpleVector, which returns null for a LazyVector, so materialize any
+    // lazy child before the per-row loop.
+    std::vector<VectorPtr> columnVectors;
+    columnVectors.reserve(rowType.size());
+    for (int32_t column = 0; column < rowType.size(); column++) {
+      auto columnVector = vector->childAt(column);
+      if (columnVector->isLazy()) {
+        columnVector = BaseVector::loadedVectorShared(columnVector);
+      }
+      columnVectors.push_back(std::move(columnVector));
+    }
     for (int32_t row = 0; row < vector->size(); row++) {
       appender.BeginRow();
       for (int32_t column = 0; column < rowType.size(); column++) {
-        auto columnVector = vector->childAt(column);
+        const auto& columnVector = columnVectors[column];
         auto type = rowType.childAt(column);
         if (columnVector->isNullAt(row)) {
           appender.Append(nullptr);
@@ -888,7 +936,7 @@ void DuckDbQueryRunner::createTable(
 }
 
 DuckDBQueryResult DuckDbQueryRunner::execute(const std::string& sql) {
-  ::duckdb::Connection con(db_);
+  ::duckdb::Connection con(database());
   // Changing the default null order of NULLS FIRST used by DuckDB. Velox uses
   // NULLS LAST.
   con.Query("PRAGMA default_null_order='NULLS LAST'");

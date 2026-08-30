@@ -42,7 +42,9 @@ TEST(AdaptivePrefetchTest, fastIterationsProduceHighLookAhead) {
   for (int i = 0; i < 16; ++i) {
     prefetch.lookAhead();
   }
-  EXPECT_GT(prefetch.lookAhead(), 4);
+  auto lookAhead = prefetch.lookAhead();
+  EXPECT_GE(lookAhead, 4);
+  EXPECT_LE(lookAhead, 32);
 }
 
 TEST(AdaptivePrefetchTest, returnsZeroNearEnd) {

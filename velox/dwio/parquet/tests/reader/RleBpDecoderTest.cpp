@@ -14,14 +14,19 @@
  * limitations under the License.
  */
 
+#include "velox/dwio/parquet/reader/RleBpDecoder.h"
 #include "velox/dwio/common/BitPackDecoder.h"
 #include "velox/dwio/parquet/common/RleEncodingInternal.h"
+
+#include <algorithm>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio::common;
 
+using facebook::velox::parquet::RleBpDecoder;
 using facebook::velox::parquet::RleEncoder;
 
 template <typename T>
@@ -139,4 +144,37 @@ TEST(RleBpDecoderTest, DISABLED_allOnes) {
   std::vector<uint8_t> allOnesVector(1024, 1);
   RleBpDecoderTest<uint8_t> test;
   test.testDecodeSuppliedData(allOnesVector, 1);
+}
+
+TEST(RleBpDecoderTest, unalignedRepeatingValue) {
+  constexpr int32_t kCount = 3;
+  constexpr int32_t kValue = 0x12345678;
+
+  std::vector<uint8_t> encoded = {
+      static_cast<uint8_t>(kCount << 1),
+      0x78,
+      0x56,
+      0x34,
+      0x12,
+      0,
+      0,
+      0,
+      0,
+  };
+
+  std::vector<uint8_t> unaligned(1 + encoded.size(), 0);
+  std::copy(encoded.begin(), encoded.end(), unaligned.begin() + 1);
+
+  RleBpDecoder decoder(
+      reinterpret_cast<const char*>(unaligned.data() + 1),
+      reinterpret_cast<const char*>(unaligned.data() + unaligned.size()),
+      32);
+
+  std::vector<int32_t> output(kCount);
+  auto* outputPtr = output.data();
+  decoder.next(outputPtr, output.size());
+
+  for (auto value : output) {
+    ASSERT_EQ(value, kValue);
+  }
 }

@@ -237,6 +237,9 @@ struct OperatorStats {
   }
 
   void addRuntimeStat(std::string_view name, const RuntimeCounter& value);
+
+  /// Sets a named runtime metric, replacing any existing value for that name.
+  void setRuntimeStat(std::string_view name, const RuntimeMetric& metric);
   void add(const OperatorStats& other);
   void clear();
 };

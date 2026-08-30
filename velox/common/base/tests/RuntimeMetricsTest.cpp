@@ -16,6 +16,9 @@
 
 #include "velox/common/base/RuntimeMetrics.h"
 #include <gtest/gtest.h>
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
+#include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::velox {
 
@@ -97,6 +100,82 @@ TEST_F(RuntimeMetricsTest, saturateCast) {
   EXPECT_EQ(rm.count, maxUint64);
   EXPECT_EQ(rm.min, maxInt64);
   EXPECT_EQ(rm.max, maxInt64);
+}
+
+TEST_F(RuntimeMetricsTest, mergeCounter) {
+  RuntimeMetric rm(RuntimeCounter::Unit::kBytes);
+
+  rm.merge(RuntimeCounter(10, RuntimeCounter::Unit::kBytes));
+  testMetric(rm, 10, 1, 10, 10);
+
+  rm.merge(RuntimeCounter(30, RuntimeCounter::Unit::kBytes));
+  testMetric(rm, 40, 2, 10, 30);
+
+  VELOX_ASSERT_THROW(
+      rm.merge(RuntimeCounter(1, RuntimeCounter::Unit::kNanos)),
+      "Unit mismatch for runtime stat");
+}
+
+class SetThreadLocalRuntimeStatTest : public testing::Test {};
+
+TEST_F(SetThreadLocalRuntimeStatTest, singleMetric) {
+  ConcurrentRuntimeStatWriter collector;
+  RuntimeStatWriterScopeGuard guard(&collector);
+
+  RuntimeMetric metric(RuntimeCounter::Unit::kNone);
+  metric.addValue(10);
+  metric.addValue(20);
+  metric.addValue(30);
+
+  setThreadLocalRuntimeStat("test.metric", metric);
+
+  const auto stats = collector.runtimeStats();
+  ASSERT_EQ(stats.count("test.metric"), 1);
+  const auto& result = stats.at("test.metric");
+  EXPECT_EQ(result.count, 3);
+  EXPECT_EQ(result.sum, 60);
+  EXPECT_EQ(result.min, 10);
+  EXPECT_EQ(result.max, 30);
+}
+
+TEST_F(SetThreadLocalRuntimeStatTest, existingMetric) {
+  ConcurrentRuntimeStatWriter collector;
+  RuntimeStatWriterScopeGuard guard(&collector);
+
+  RuntimeMetric first(RuntimeCounter::Unit::kNone);
+  first.addValue(100);
+  setThreadLocalRuntimeStat("test.metric", first);
+
+  RuntimeMetric second(RuntimeCounter::Unit::kNone);
+  second.addValue(5);
+  second.addValue(15);
+  setThreadLocalRuntimeStat("test.metric", second);
+
+  const auto stats = collector.runtimeStats();
+  ASSERT_EQ(stats.count("test.metric"), 1);
+  const auto& result = stats.at("test.metric");
+  EXPECT_EQ(result.count, 2);
+  EXPECT_EQ(result.sum, 20);
+  EXPECT_EQ(result.min, 5);
+  EXPECT_EQ(result.max, 15);
+}
+
+TEST_F(SetThreadLocalRuntimeStatTest, emptyMetric) {
+  ConcurrentRuntimeStatWriter collector;
+  RuntimeStatWriterScopeGuard guard(&collector);
+
+  RuntimeMetric empty(RuntimeCounter::Unit::kNone);
+  setThreadLocalRuntimeStat("test.empty", empty);
+
+  const auto stats = collector.runtimeStats();
+  ASSERT_EQ(stats.count("test.empty"), 1);
+  EXPECT_EQ(stats.at("test.empty").count, 0);
+}
+
+TEST_F(SetThreadLocalRuntimeStatTest, noWriter) {
+  RuntimeMetric metric(RuntimeCounter::Unit::kNanos);
+  metric.addValue(42);
+  setThreadLocalRuntimeStat("test.nowriter", metric);
 }
 
 } // namespace facebook::velox

@@ -53,14 +53,17 @@ class ParquetReaderBenchmark {
         std::make_unique<facebook::velox::LocalWriteFile>(path, true, false);
     auto sink = std::make_unique<facebook::velox::dwio::common::WriteFileSink>(
         std::move(localWriteFile), path);
-    facebook::velox::parquet::WriterOptions options;
+    ParquetWriterOptions options;
     if (disableDictionary_) {
       // The parquet file is in plain encoding format.
       options.enableDictionary = false;
     }
-    options.memoryPool = rootPool_.get();
+    dwio::common::WriterOptions writerOptions;
+    writerOptions.memoryPool = rootPool_.get();
+    writerOptions.formatSpecificOptions =
+        std::make_shared<ParquetWriterOptions>(options);
     writer_ = std::make_unique<facebook::velox::parquet::Writer>(
-        std::move(sink), options, rowType);
+        std::move(sink), writerOptions, rowType);
   }
 
   ~ParquetReaderBenchmark() {}
@@ -119,7 +122,7 @@ class ParquetReaderBenchmark {
   std::shared_ptr<facebook::velox::io::IoStatistics> metadataIoStats_ =
       std::make_shared<facebook::velox::io::IoStatistics>();
   std::unique_ptr<facebook::velox::parquet::Writer> writer_;
-  facebook::velox::dwio::common::RuntimeStatistics runtimeStats_;
+  facebook::velox::dwio::common::RuntimeStats runtimeStats_;
 };
 
 void run(

@@ -20,6 +20,7 @@
 #include <vector>
 #include "gtest/gtest.h"
 #include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -246,6 +247,23 @@ class ArrayViewTest : public functions::test::FunctionBaseTest {
         decode(decoded, *arrayVector.get()));
     ASSERT_TRUE(read(reader, 0).empty());
     ASSERT_FALSE(read(reader, 1).empty());
+  }
+
+  void outOfBoundsTest() {
+    auto arrayVector = makeNullableArrayVector<int32_t>({{}, {2, 3}});
+    DecodedVector decoded;
+    exec::VectorReader<Array<int32_t>> reader(
+        decode(decoded, *arrayVector.get()));
+    auto emptyArray = read(reader, 0);
+    ASSERT_TRUE(emptyArray.empty());
+#ifndef NDEBUG
+    // operator[] DCHECKs out-of-bounds access, e.g. element[0] of an empty
+    // array. DCHECKs are compiled out in release builds.
+    VELOX_ASSERT_THROW(emptyArray[0], "Array element access out of bounds.");
+    auto twoElementArray = read(reader, 1);
+    VELOX_ASSERT_THROW(
+        twoElementArray[2], "Array element access out of bounds.");
+#endif
   }
 
   void iteratorSubscriptTest() {
@@ -637,5 +655,13 @@ TEST_F(NullableArrayViewTest, empty) {
 
 TEST_F(NullFreeArrayViewTest, empty) {
   emptyTest();
+}
+
+TEST_F(NullableArrayViewTest, outOfBounds) {
+  outOfBoundsTest();
+}
+
+TEST_F(NullFreeArrayViewTest, outOfBounds) {
+  outOfBoundsTest();
 }
 } // namespace

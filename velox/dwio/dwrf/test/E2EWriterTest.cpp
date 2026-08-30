@@ -97,8 +97,9 @@ class E2EWriterTest : public testing::Test {
         dwio::common::FileSink::Options{.pool = leafPool_.get()});
     auto sinkPtr = sink.get();
 
-    dwrf::WriterOptions options;
-    options.config = config;
+    dwio::common::WriterOptions options;
+    options.formatSpecificOptions =
+        std::make_shared<dwrf::DwrfWriterOptions>(config);
     options.schema = type;
     options.memoryPool = rootPool_.get();
     dwrf::Writer writer{std::move(sink), options};
@@ -154,8 +155,9 @@ class E2EWriterTest : public testing::Test {
         dwio::common::FileSink::Options{.pool = leafPool_.get()});
     auto sinkPtr = sink.get();
 
-    dwrf::WriterOptions options;
-    options.config = config;
+    dwio::common::WriterOptions options;
+    options.formatSpecificOptions =
+        std::make_shared<dwrf::DwrfWriterOptions>(config);
     options.schema = type;
     options.memoryPool = rootPool_.get();
     dwrf::Writer writer{std::move(sink), options};
@@ -281,11 +283,129 @@ class E2EWriterTest : public testing::Test {
   std::shared_ptr<MemoryPool> leafPool_;
 };
 
+// Writes a DWRF file with 'fileSchema' and per-node iceberg.id attributes, then
+// opens it with ColumnMappingMode::kFieldId against 'tableSchema'/'fieldIds'
+// and returns the reader's (field-id-renamed) row type.
+RowTypePtr readWithFieldIds(
+    memory::MemoryPool* rootPool,
+    memory::MemoryPool* leafPool,
+    const RowTypePtr& fileSchema,
+    const std::unordered_map<
+        uint32_t,
+        std::vector<std::pair<std::string, std::string>>>& schemaAttributes,
+    const RowTypePtr& tableSchema,
+    const std::vector<dwio::common::ParquetFieldId>& fieldIds) {
+  auto sink = std::make_unique<MemorySink>(
+      16 * 1024 * 1024, dwio::common::FileSink::Options{.pool = leafPool});
+  auto* sinkPtr = sink.get();
+
+  dwio::common::WriterOptions options;
+  auto dwrfWriterOptions = std::make_shared<dwrf::DwrfWriterOptions>(
+      std::make_shared<dwrf::Config>());
+  dwrfWriterOptions->schemaAttributes = schemaAttributes;
+  options.formatSpecificOptions = dwrfWriterOptions;
+  options.schema = fileSchema;
+  options.memoryPool = rootPool;
+  dwrf::Writer writer{std::move(sink), options};
+  writer.write(BatchMaker::createBatch(fileSchema, 10, *leafPool, nullptr, 0));
+  writer.close();
+
+  dwio::common::ReaderOptions readerOpts(leafPool);
+  readerOpts.setColumnMappingMode(dwio::common::ColumnMappingMode::kFieldId);
+  readerOpts.setFileSchema(tableSchema);
+  readerOpts.setFieldIds(fieldIds);
+  std::string_view data(sinkPtr->data(), sinkPtr->size());
+  auto reader = std::make_unique<dwrf::DwrfReader>(
+      readerOpts,
+      std::make_unique<BufferedInput>(
+          std::make_shared<InMemoryReadFile>(data), readerOpts.memoryPool()));
+  return reader->rowType();
+}
+
+TEST_F(E2EWriterTest, fieldIdMappingRenameReorderDrop) {
+  // File node ids: 0=root, 1=a, 2=b, 3=c.
+  auto fileSchema = ROW({"a", "b", "c"}, {INTEGER(), BIGINT(), VARCHAR()});
+  // Requested: c renamed to c2 (id 3, reordered first), a kept (id 1), b
+  // dropped (id 2 absent), d added (id 9 absent from file).
+  auto tableSchema = ROW({"c2", "a", "d"}, {VARCHAR(), INTEGER(), INTEGER()});
+  auto rowType = readWithFieldIds(
+      rootPool_.get(),
+      leafPool_.get(),
+      fileSchema,
+      {{1, {{"iceberg.id", "1"}}},
+       {2, {{"iceberg.id", "2"}}},
+       {3, {{"iceberg.id", "3"}}}},
+      tableSchema,
+      {{3, {}}, {1, {}}, {9, {}}});
+
+  // File order is preserved; matched columns take the requested name, the
+  // dropped column (id 2) gets a non-colliding sentinel name.
+  ASSERT_EQ(rowType->size(), 3);
+  EXPECT_EQ(rowType->nameOf(0), "a");
+  EXPECT_EQ(rowType->nameOf(1), "$dwrf_unmatched_2");
+  EXPECT_EQ(rowType->nameOf(2), "c2");
+}
+
+TEST_F(E2EWriterTest, rejectWrongFormatSpecificOptions) {
+  auto sink = std::make_unique<MemorySink>(
+      1024, dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  dwio::common::WriterOptions options;
+  options.schema = ROW({"c0"}, {BIGINT()});
+  options.memoryPool = rootPool_.get();
+  options.formatSpecificOptions =
+      std::make_shared<dwio::common::FormatSpecificOptions>();
+  VELOX_ASSERT_THROW(
+      dwrf::Writer(std::move(sink), options), "DwrfWriterOptions");
+}
+
+TEST_F(E2EWriterTest, fieldIdMappingDropReaddSameName) {
+  // File has column c with field id 5; the table dropped it and re-added a new
+  // column c with field id 9. The stale file column must NOT bind to the new c.
+  auto fileSchema = ROW({"c"}, {INTEGER()});
+  auto tableSchema = ROW({"c"}, {INTEGER()});
+  auto rowType = readWithFieldIds(
+      rootPool_.get(),
+      leafPool_.get(),
+      fileSchema,
+      {{1, {{"iceberg.id", "5"}}}},
+      tableSchema,
+      {{9, {}}});
+
+  ASSERT_EQ(rowType->size(), 1);
+  EXPECT_EQ(rowType->nameOf(0), "$dwrf_unmatched_1");
+}
+
+TEST_F(E2EWriterTest, fieldIdMappingNestedStruct) {
+  // File node ids: 0=root, 1=s, 2=s.x, 3=s.y.
+  auto fileSchema = ROW({"s"}, {ROW({"x", "y"}, {INTEGER(), INTEGER()})});
+  // Requested struct reorders children and renames y->y2; ids: s=10, x=11,
+  // y=12.
+  auto tableSchema = ROW({"s"}, {ROW({"y2", "x"}, {INTEGER(), INTEGER()})});
+  std::vector<dwio::common::ParquetFieldId> fieldIds{
+      {10, {{12, {}}, {11, {}}}}};
+  auto rowType = readWithFieldIds(
+      rootPool_.get(),
+      leafPool_.get(),
+      fileSchema,
+      {{1, {{"iceberg.id", "10"}}},
+       {2, {{"iceberg.id", "11"}}},
+       {3, {{"iceberg.id", "12"}}}},
+      tableSchema,
+      fieldIds);
+
+  // Nested children keep file order but take the requested names matched by id.
+  ASSERT_EQ(rowType->size(), 1);
+  auto& nested = rowType->childAt(0)->asRow();
+  ASSERT_EQ(nested.size(), 2);
+  EXPECT_EQ(nested.nameOf(0), "x");
+  EXPECT_EQ(nested.nameOf(1), "y2");
+}
+
 // This test can be run to generate test files. Run it with following command
 // buck test velox/dwio/dwrf/test:velox_dwrf_e2e_writer_tests --
 // DISABLED_TestFileCreation
 // --run-disabled
-TEST_F(E2EWriterTest, DISABLED_TestFileCreation) {
+TEST_F(E2EWriterTest, DISABLED_testFileCreation) {
   const size_t batchCount = 4;
   const size_t batchSize = 200;
 
@@ -346,7 +466,7 @@ VectorPtr createRowVector(
       /*nullCount=*/0);
 }
 
-TEST_F(E2EWriterTest, E2E) {
+TEST_F(E2EWriterTest, e2e) {
   const size_t batchCount = 4;
   // Start with a size larger than stride to cover splitting into
   // strides. Continue with smaller size for faster test.
@@ -390,7 +510,7 @@ TEST_F(E2EWriterTest, E2E) {
 }
 
 // Disabled because test is failing in continuous runs T193531984.
-TEST_F(E2EWriterTest, DISABLED_DisableLinearHeuristics) {
+TEST_F(E2EWriterTest, DISABLED_disableLinearHeuristics) {
   const size_t batchCount = 100;
   size_t batchSize = 3000;
 
@@ -436,7 +556,7 @@ TEST_F(E2EWriterTest, DISABLED_DisableLinearHeuristics) {
 
 // Beside writing larger files, this test also uses regular maps only.
 // Disabled because test is failing in continuous runs T193531984.
-TEST_F(E2EWriterTest, DISABLED_DisableLinearHeuristicsLargeAnalytics) {
+TEST_F(E2EWriterTest, DISABLED_disableLinearHeuristicsLargeAnalytics) {
   const size_t batchCount = 500;
   size_t batchSize = 3000;
 
@@ -478,7 +598,7 @@ TEST_F(E2EWriterTest, DISABLED_DisableLinearHeuristicsLargeAnalytics) {
   dwrf::E2EWriterTestUtil::testWriter(*leafPool_, type, batches, 8, 8, config);
 }
 
-TEST_F(E2EWriterTest, FlatMapDictionaryEncoding) {
+TEST_F(E2EWriterTest, flatMapDictionaryEncoding) {
   const size_t batchCount = 4;
   // Start with a size larger than stride to cover splitting into
   // strides. Continue with smaller size for faster test.
@@ -515,7 +635,7 @@ TEST_F(E2EWriterTest, FlatMapDictionaryEncoding) {
   dwrf::E2EWriterTestUtil::testWriter(*pool, type, batches, 1, 1, config);
 }
 
-TEST_F(E2EWriterTest, MaxFlatMapKeys) {
+TEST_F(E2EWriterTest, maxFlatMapKeys) {
   using keyType = int32_t;
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
@@ -547,7 +667,7 @@ TEST_F(E2EWriterTest, MaxFlatMapKeys) {
       config);
 }
 
-TEST_F(E2EWriterTest, PresentStreamIsSuppressedOnFlatMap) {
+TEST_F(E2EWriterTest, presentStreamIsSuppressedOnFlatMap) {
   using keyType = int32_t;
   using valueType = int64_t;
   using b = MapBuilder<keyType, valueType>;
@@ -597,7 +717,7 @@ TEST_F(E2EWriterTest, PresentStreamIsSuppressedOnFlatMap) {
   }
 }
 
-TEST_F(E2EWriterTest, TooManyFlatMapKeys) {
+TEST_F(E2EWriterTest, tooManyFlatMapKeys) {
   using keyType = int32_t;
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
@@ -631,7 +751,7 @@ TEST_F(E2EWriterTest, TooManyFlatMapKeys) {
       "");
 }
 
-TEST_F(E2EWriterTest, FlatMapBackfill) {
+TEST_F(E2EWriterTest, flatMapBackfill) {
   auto pool = memory::memoryManager()->addLeafPool();
 
   using keyType = int32_t;
@@ -652,7 +772,7 @@ TEST_F(E2EWriterTest, FlatMapBackfill) {
     rows.push_back(b::row{b::pair{1, Random::rand64()}});
   }
 
-  // This row introduces new key, in the middle of a stride and and existing key
+  // This row introduces new key, in the middle of a stride and existing key
   // that wasn't used in this stride. The new key will trigger backfilling based
   // on previous stride rows. But since this is part of a bigger batch, spanning
   // the entire current stride, it will not trigger the partial stride backfill.
@@ -740,7 +860,7 @@ void testFlatMapWithNulls(
       dwrf::E2EWriterTestUtil::simpleFlushPolicyFactory(false));
 }
 
-TEST_F(E2EWriterTest, FlatMapWithNulls) {
+TEST_F(E2EWriterTest, flatMapWithNulls) {
   testFlatMapWithNulls(
       /*firstRowNotNull=*/false, /*enableFlatmapDictionaryEncoding=*/false);
   testFlatMapWithNulls(
@@ -751,7 +871,7 @@ TEST_F(E2EWriterTest, FlatMapWithNulls) {
       /*firstRowNotNull=*/true, /*enableFlatmapDictionaryEncoding=*/true);
 }
 
-TEST_F(E2EWriterTest, FlatMapWithNullsSharedDict) {
+TEST_F(E2EWriterTest, flatMapWithNullsSharedDict) {
   testFlatMapWithNulls(
       /*firstRowNotNull=*/false,
       /*enableFlatmapDictionaryEncoding=*/true,
@@ -762,7 +882,7 @@ TEST_F(E2EWriterTest, FlatMapWithNullsSharedDict) {
       /*shareDictionary=*/true);
 }
 
-TEST_F(E2EWriterTest, FlatMapEmpty) {
+TEST_F(E2EWriterTest, flatMapEmpty) {
   auto pool = memory::memoryManager()->addLeafPool();
 
   using keyType = int32_t;
@@ -803,7 +923,7 @@ TEST_F(E2EWriterTest, FlatMapEmpty) {
       dwrf::E2EWriterTestUtil::simpleFlushPolicyFactory(false));
 }
 
-TEST_F(E2EWriterTest, FlatMapConfigSingleColumn) {
+TEST_F(E2EWriterTest, flatMapConfigSingleColumn) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
@@ -814,7 +934,7 @@ TEST_F(E2EWriterTest, FlatMapConfigSingleColumn) {
   testFlatMapConfig(type, {}, {});
 }
 
-TEST_F(E2EWriterTest, FlatMapConfigMixedTypes) {
+TEST_F(E2EWriterTest, flatMapConfigMixedTypes) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
@@ -826,7 +946,7 @@ TEST_F(E2EWriterTest, FlatMapConfigMixedTypes) {
   testFlatMapConfig(type, {}, {});
 }
 
-TEST_F(E2EWriterTest, FlatMapConfigNestedMap) {
+TEST_F(E2EWriterTest, flatMapConfigNestedMap) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
@@ -838,7 +958,7 @@ TEST_F(E2EWriterTest, FlatMapConfigNestedMap) {
   testFlatMapConfig(type, {}, {});
 }
 
-TEST_F(E2EWriterTest, FlatMapConfigMixedMaps) {
+TEST_F(E2EWriterTest, flatMapConfigMixedMaps) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
@@ -852,7 +972,7 @@ TEST_F(E2EWriterTest, FlatMapConfigMixedMaps) {
   testFlatMapConfig(type, {}, {});
 }
 
-TEST_F(E2EWriterTest, FlatMapConfigNotMapColumn) {
+TEST_F(E2EWriterTest, flatMapConfigNotMapColumn) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
@@ -903,7 +1023,7 @@ TEST_F(E2EWriterTest, mapStatsMultiStrides) {
   testFlatMapFileStats(type, {0, 1, 2, 3, 4, 5}, /*strideSize=*/1000);
 }
 
-TEST_F(E2EWriterTest, PartialStride) {
+TEST_F(E2EWriterTest, partialStride) {
   auto type = ROW({"bool_val"}, {INTEGER()});
 
   size_t batchSize = 1'000;
@@ -914,8 +1034,9 @@ TEST_F(E2EWriterTest, PartialStride) {
       dwio::common::FileSink::Options{.pool = leafPool_.get()});
   auto sinkPtr = sink.get();
 
-  dwrf::WriterOptions options;
-  options.config = config;
+  dwio::common::WriterOptions options;
+  options.formatSpecificOptions =
+      std::make_shared<dwrf::DwrfWriterOptions>(config);
   options.schema = type;
   options.memoryPool = rootPool_.get();
   dwrf::Writer writer{std::move(sink), options};
@@ -963,7 +1084,7 @@ TEST_F(E2EWriterTest, PartialStride) {
   ASSERT_EQ(true, reader->columnStatistics(1)->hasNull().value());
 }
 
-TEST_F(E2EWriterTest, OversizeRows) {
+TEST_F(E2EWriterTest, oversizeRows) {
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
 
   HiveTypeParser parser;
@@ -1001,7 +1122,7 @@ TEST_F(E2EWriterTest, OversizeRows) {
       false);
 }
 
-TEST_F(E2EWriterTest, OversizeBatches) {
+TEST_F(E2EWriterTest, oversizeBatches) {
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
 
   HiveTypeParser parser;
@@ -1049,7 +1170,7 @@ TEST_F(E2EWriterTest, OversizeBatches) {
       false);
 }
 
-TEST_F(E2EWriterTest, OverflowLengthIncrements) {
+TEST_F(E2EWriterTest, overflowLengthIncrements) {
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
 
   HiveTypeParser parser;
@@ -1134,11 +1255,13 @@ class E2EEncryptionTest : public E2EWriterTest {
         16 * 1024 * 1024,
         dwio::common::FileSink::Options{.pool = leafPool_.get()});
     sink_ = sink.get();
-    ::facebook::velox::dwrf::WriterOptions options;
-    options.config = config;
+    dwio::common::WriterOptions options;
+    auto dwrfOptions =
+        std::make_shared<::facebook::velox::dwrf::DwrfWriterOptions>(config);
+    dwrfOptions->encryptionSpec = spec;
+    dwrfOptions->encrypterFactory = std::make_shared<TestEncrypterFactory>();
+    options.formatSpecificOptions = dwrfOptions;
     options.schema = type;
-    options.encryptionSpec = spec;
-    options.encrypterFactory = std::make_shared<TestEncrypterFactory>();
     writer_ =
         std::make_unique<dwrf::Writer>(std::move(sink), options, rootPool_);
 
@@ -1203,7 +1326,7 @@ class E2EEncryptionTest : public E2EWriterTest {
   std::vector<VectorPtr> batches_;
 };
 
-TEST_F(E2EEncryptionTest, EncryptRoot) {
+TEST_F(E2EEncryptionTest, encryptRoot) {
   auto spec =
       std::make_shared<EncryptionSpecification>(EncryptionProvider::Unknown);
   spec->withRootEncryptionProperties(
@@ -1254,7 +1377,7 @@ TEST_F(E2EEncryptionTest, EncryptRoot) {
   validateFileContent(*reader);
 }
 
-TEST_F(E2EEncryptionTest, EncryptSelectedFields) {
+TEST_F(E2EEncryptionTest, encryptSelectedFields) {
   auto spec =
       std::make_shared<EncryptionSpecification>(EncryptionProvider::Unknown);
   spec->withEncryptedField(
@@ -1338,7 +1461,7 @@ TEST_F(E2EEncryptionTest, EncryptSelectedFields) {
   validateFileContent(*reader);
 }
 
-TEST_F(E2EEncryptionTest, EncryptEmptyFile) {
+TEST_F(E2EEncryptionTest, encryptEmptyFile) {
   auto spec =
       std::make_shared<EncryptionSpecification>(EncryptionProvider::Unknown);
   spec->withEncryptedField(
@@ -1353,7 +1476,7 @@ TEST_F(E2EEncryptionTest, EncryptEmptyFile) {
   ASSERT_FALSE(handler.isEncrypted());
 }
 
-TEST_F(E2EEncryptionTest, ReadWithoutKey) {
+TEST_F(E2EEncryptionTest, readWithoutKey) {
   auto spec =
       std::make_shared<EncryptionSpecification>(EncryptionProvider::Unknown);
   spec->withEncryptedField(
@@ -1729,7 +1852,8 @@ TEST_F(E2EWriterTest, memoryConfigError) {
        {"string_val", VARCHAR()},
        {"binary_val", VARBINARY()}});
 
-  dwrf::WriterOptions options;
+  dwio::common::WriterOptions options;
+  options.formatSpecificOptions = std::make_shared<dwrf::DwrfWriterOptions>();
   options.schema = type;
   const common::SpillConfig spillConfig = getSpillConfig(10, 20);
   options.spillConfig = &spillConfig;
@@ -1772,9 +1896,10 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnWrite) {
     config->set<uint64_t>(dwrf::Config::MAX_DICTIONARY_SIZE, 1L << 30);
 
     tsan_atomic<bool> nonReclaimableSection{false};
-    dwrf::WriterOptions options;
+    dwio::common::WriterOptions options;
+    options.formatSpecificOptions =
+        std::make_shared<dwrf::DwrfWriterOptions>(std::move(config));
     options.schema = type;
-    options.config = std::move(config);
     options.nonReclaimableSection = &nonReclaimableSection;
     if (enableReclaim) {
       options.spillConfig = &spillConfig;
@@ -1898,9 +2023,10 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnFlush) {
     config->set<uint64_t>(dwrf::Config::STRIPE_SIZE, 1L << 30);
     config->set<uint64_t>(dwrf::Config::MAX_DICTIONARY_SIZE, 1L << 30);
 
-    dwrf::WriterOptions options;
+    dwio::common::WriterOptions options;
+    options.formatSpecificOptions =
+        std::make_shared<dwrf::DwrfWriterOptions>(std::move(config));
     options.schema = type;
-    options.config = std::move(config);
     tsan_atomic<bool> nonReclaimableSection{false};
     options.nonReclaimableSection = &nonReclaimableSection;
     if (enableReclaim) {
@@ -2002,9 +2128,10 @@ TEST_F(E2EWriterTest, memoryReclaimAfterClose) {
     config->set<uint64_t>(dwrf::Config::STRIPE_SIZE, 1L << 30);
     config->set<uint64_t>(dwrf::Config::MAX_DICTIONARY_SIZE, 1L << 30);
 
-    dwrf::WriterOptions options;
+    dwio::common::WriterOptions options;
+    options.formatSpecificOptions =
+        std::make_shared<dwrf::DwrfWriterOptions>(std::move(config));
     options.schema = type;
-    options.config = std::move(config);
     tsan_atomic<bool> nonReclaimableSection{false};
     options.nonReclaimableSection = &nonReclaimableSection;
     if (testData.canReclaim) {
@@ -2081,9 +2208,10 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimDuringInit) {
     config->set<uint64_t>(dwrf::Config::STRIPE_SIZE, 1L << 30);
     config->set<uint64_t>(dwrf::Config::MAX_DICTIONARY_SIZE, 1L << 30);
 
-    dwrf::WriterOptions options;
+    dwio::common::WriterOptions options;
+    options.formatSpecificOptions =
+        std::make_shared<dwrf::DwrfWriterOptions>(std::move(config));
     options.schema = type;
-    options.config = std::move(config);
     tsan_atomic<bool> nonReclaimableSection{false};
     options.nonReclaimableSection = &nonReclaimableSection;
     if (reclaimable) {
@@ -2170,9 +2298,10 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimThreshold) {
     config->set<uint64_t>(dwrf::Config::STRIPE_SIZE, 1L << 30);
     config->set<uint64_t>(dwrf::Config::MAX_DICTIONARY_SIZE, 1L << 30);
 
-    dwrf::WriterOptions options;
+    dwio::common::WriterOptions options;
+    options.formatSpecificOptions =
+        std::make_shared<dwrf::DwrfWriterOptions>(std::move(config));
     options.schema = type;
-    options.config = std::move(config);
     tsan_atomic<bool> nonReclaimableSection{false};
     options.nonReclaimableSection = &nonReclaimableSection;
     options.spillConfig = &spillConfig;

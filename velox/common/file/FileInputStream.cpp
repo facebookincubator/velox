@@ -57,7 +57,7 @@ void FileInputStream::readNextRange() {
   int32_t readBytes{0};
   uint64_t readTimeNs{0};
   {
-    NanosecondTimer timer{&readTimeNs};
+    NanosecondWallTimer timer{&readTimeNs};
     if (readAheadWait_.valid()) {
       readBytes = std::move(readAheadWait_)
                       .via(&folly::QueuedImmediateExecutor::instance())
@@ -71,7 +71,7 @@ void FileInputStream::readNextRange() {
       readBytes = readSize();
       VELOX_CHECK_LT(
           0, readBytes, "Read past end of FileInputStream {}", fileSize_);
-      NanosecondTimer timer_2{&readTimeNs};
+      NanosecondWallTimer timer_2{&readTimeNs};
       file_->pread(fileOffset_, readBytes, buffer()->asMutable<char>());
     }
   }

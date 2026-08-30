@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <typeinfo>
+
 #include "velox/parse/Expressions.h"
 
 #include "velox/common/EnumDefine.h"
@@ -63,6 +65,15 @@ const auto& kindNames() {
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(IExpr, Kind, kindNames)
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowCallExpr, WindowType, windowTypeNames);
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowCallExpr, BoundType, boundTypeNames);
+
+// static
+const FieldAccessExpr* FieldAccessExpr::tryAsRootColumn(const ExprPtr& expr) {
+  const auto* field = dynamic_cast<const FieldAccessExpr*>(expr.get());
+  if (field == nullptr || !field->isRootColumn()) {
+    return nullptr;
+  }
+  return field;
+}
 
 bool FieldAccessExpr::operator==(const IExpr& other) const {
   if (!other.is(Kind::kFieldAccess)) {
@@ -121,6 +132,14 @@ std::string CallExpr::toString() const {
 
 bool AggregateCallExpr::operator==(const IExpr& other) const {
   if (!other.is(Kind::kAggregate)) {
+    return false;
+  }
+
+  // Require the exact concrete type so equality stays symmetric with subclasses
+  // that carry extra state. Without this a base AggregateCallExpr could compare
+  // equal to a subclass instance while the subclass's operator== returns false
+  // for the reverse comparison.
+  if (typeid(*this) != typeid(other)) {
     return false;
   }
 

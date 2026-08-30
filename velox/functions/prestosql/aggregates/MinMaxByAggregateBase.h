@@ -1049,6 +1049,8 @@ std::unique_ptr<exec::Aggregate> createNArg(
       return std::make_unique<NAggregate<W, float>>(resultType);
     case TypeKind::DOUBLE:
       return std::make_unique<NAggregate<W, double>>(resultType);
+    case TypeKind::VARBINARY:
+      [[fallthrough]];
     case TypeKind::VARCHAR:
       return std::make_unique<NAggregate<W, StringView>>(resultType);
     case TypeKind::TIMESTAMP:
@@ -1156,6 +1158,7 @@ std::vector<exec::AggregateRegistrationResult> registerMinMaxBy(
       "real",
       "double",
       "varchar",
+      "varbinary",
       "date",
       "timestamp"};
 
@@ -1197,7 +1200,7 @@ std::vector<exec::AggregateRegistrationResult> registerMinMaxBy(
         const std::string errorMessage = fmt::format(
             "Unknown input types for {} ({}) aggregation: {}",
             names.front(),
-            mapAggregationStepToName(step),
+            core::AggregationNode::toName(step),
             toString(argTypes));
 
         const bool nAgg = (argTypes.size() == 3) ||

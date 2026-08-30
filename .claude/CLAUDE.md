@@ -116,7 +116,8 @@ or lightweight dependencies, use `add_executable` / `add_test`.
 ## Formatting
 
 ```bash
-make format  # format all changed files
+pre-commit run --files <paths>  # format/lint specific files
+pre-commit run --all-files      # sweep the whole repo
 ```
 
 ## Coding Style
@@ -227,6 +228,12 @@ this list before finishing.
 - **Verify causation before asserting it.** Do not attribute failures to a commit based on its message alone. Verify empirically.
 - **Silently simplifying an approved plan.** If a step is harder than expected, say so and get approval before reducing scope.
 - **Working around infrastructure bugs.** Do not silently work around bugs in shared infrastructure. Report and discuss.
+
+## Commit Messages
+
+Draft commit messages with the `write-commit-message` skill
+(`.claude/skills/write-commit-message/`). The title follows conventional
+commits — see `CONTRIBUTING.md`.
 
 ## Design Documents
 

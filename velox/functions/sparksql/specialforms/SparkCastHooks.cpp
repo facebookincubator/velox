@@ -15,8 +15,16 @@
  */
 
 #include "velox/functions/sparksql/specialforms/SparkCastHooks.h"
+
+#include <cmath>
+#include <exception>
+
+#include "velox/common/base/VeloxException.h"
 #include "velox/functions/lib/string/StringImpl.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
+#include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/TimestampConversion.h"
+#include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -31,14 +39,25 @@ SparkCastHooks::SparkCastHooks(
   }
 }
 
+TimestampToStringOptions SparkCastHooks::timestampUtcToStringOptions() const {
+  auto options = timestampToStringOptions_;
+  options.timeZone = nullptr;
+  return options;
+}
+
 Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
-    const StringView& view) const {
+    const StringView& view,
+    bool adjustTimezone) const {
   auto conversionResult = util::fromTimestampWithTimezoneString(
       view.data(), view.size(), util::TimestampParseMode::kSparkCast);
   if (conversionResult.hasError()) {
     return folly::makeUnexpected(conversionResult.error());
   }
-
+  if (!adjustTimezone) {
+    // For TIMESTAMP UTC, ignore any timezone suffix and store the parsed
+    // timestamp fields as-is, not subject to session timezone adjustment.
+    return conversionResult.value().timestamp;
+  }
   auto sessionTimezone = config_.sessionTimezone().empty()
       ? nullptr
       : tz::locateZone(config_.sessionTimezone());
@@ -47,31 +66,43 @@ Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
 }
 
 template <typename T>
-Expected<Timestamp> SparkCastHooks::castNumberToTimestamp(T seconds) const {
-  // Spark internally use microsecond precision for timestamp.
-  // To avoid overflow, we need to check the range of seconds.
-  static constexpr int64_t maxSeconds =
-      std::numeric_limits<int64_t>::max() / Timestamp::kMicrosecondsInSecond;
-  if (seconds > maxSeconds) {
-    return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::max());
-  }
-  if (seconds < -maxSeconds) {
-    return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::min());
+Expected<Timestamp> SparkCastHooks::castNumberToTimestamp(
+    T value,
+    bool allowOverflow) const {
+  static constexpr long double kMaxTimestampMicros =
+      static_cast<long double>(std::numeric_limits<int64_t>::max());
+  static constexpr long double kMinTimestampMicros =
+      static_cast<long double>(std::numeric_limits<int64_t>::min());
+
+  const long double micros =
+      static_cast<long double>(value) * Timestamp::kMicrosecondsInSecond;
+
+  if (micros > kMaxTimestampMicros) {
+    if (allowOverflow) {
+      return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::max());
+    }
+    return folly::makeUnexpected(
+        Status::UserError(
+            "The value cannot be cast to TIMESTAMP due to an overflow."));
   }
 
-  if constexpr (std::is_floating_point_v<T>) {
-    return Timestamp::fromMicrosNoError(
-        static_cast<int64_t>(seconds * Timestamp::kMicrosecondsInSecond));
+  if (micros < kMinTimestampMicros) {
+    if (allowOverflow) {
+      return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::min());
+    }
+    return folly::makeUnexpected(
+        Status::UserError(
+            "The value cannot be cast to TIMESTAMP due to an overflow."));
   }
 
-  return Timestamp(seconds, 0);
+  return Timestamp::fromMicrosNoError(static_cast<int64_t>(micros));
 }
 
 Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
-  return castNumberToTimestamp(seconds);
+  return castNumberToTimestamp(seconds, true);
 }
 
-Expected<int64_t> SparkCastHooks::castTimestampToInt(
+Expected<int64_t> SparkCastHooks::castTimestampToBigint(
     Timestamp timestamp) const {
   auto micros = timestamp.toMicros();
   if (micros < 0) {
@@ -83,14 +114,35 @@ Expected<int64_t> SparkCastHooks::castTimestampToInt(
 
 Expected<std::optional<Timestamp>> SparkCastHooks::castDoubleToTimestamp(
     double value) const {
-  if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
-    return std::nullopt;
+  if (allowOverflow_) {
+    if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
+      return std::nullopt;
+    }
+
+    auto result = castNumberToTimestamp(value, allowOverflow_);
+    VELOX_DCHECK(!result.hasError());
+    return result.value();
   }
-  return castNumberToTimestamp(value);
+
+  if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
+    return folly::makeUnexpected(
+        Status::UserError(
+            "The value cannot be cast to TIMESTAMP because it is malformed."));
+  }
+
+  auto result = castNumberToTimestamp(value, allowOverflow_);
+  if (result.hasError()) {
+    return folly::makeUnexpected(result.error());
+  }
+  return result.value();
 }
 
 Expected<Timestamp> SparkCastHooks::castBooleanToTimestamp(bool val) const {
   return Timestamp::fromMicrosNoError(val ? 1 : 0);
+}
+
+bool SparkCastHooks::decimalToFloatHighPrecisionCastEnabled() const {
+  return SparkQueryConfig{config_}.decimalToFloatHighPrecisionCastEnabled();
 }
 
 Expected<int32_t> SparkCastHooks::castStringToDate(
@@ -110,6 +162,19 @@ Expected<int32_t> SparkCastHooks::castStringToDate(
       removeWhiteSpaces(dateString), util::ParseMode::kSparkCast);
 }
 
+Expected<int64_t> SparkCastHooks::castStringToTime(
+    StringView timeString,
+    const tz::TimeZone* /*timeZone*/,
+    int64_t /*sessionStartTimeMs*/) const {
+  try {
+    return TIME_MICRO_UTC()->valueToTime(timeString, /*requireSeconds=*/false);
+  } catch (const VeloxException& e) {
+    return folly::makeUnexpected(Status::UserError(e.message()));
+  } catch (const std::exception& e) {
+    return folly::makeUnexpected(Status::UserError(e.what()));
+  }
+}
+
 Expected<float> SparkCastHooks::castStringToReal(const StringView& data) const {
   return util::Converter<TypeKind::REAL>::tryCast(data);
 }
@@ -124,6 +189,12 @@ StringView SparkCastHooks::removeWhiteSpaces(const StringView& view) const {
   stringImpl::trimUnicodeWhiteSpace<true, true, StringView, StringView>(
       output, view);
   return output;
+}
+
+void SparkCastHooks::castDateTimestampToGMT(
+    Timestamp& timestamp,
+    const tz::TimeZone& timeZone) const {
+  toGMTWithGapCorrection(timestamp, timeZone);
 }
 
 exec::PolicyType SparkCastHooks::getPolicy() const {

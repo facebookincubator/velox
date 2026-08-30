@@ -15,6 +15,7 @@
  */
 #pragma once
 #include <memory>
+#include <optional>
 #include <unordered_set>
 #include <vector>
 #include "velox/core/PlanNode.h"
@@ -47,6 +48,14 @@ struct PlanFragment {
 
   /// Contains leaf plan nodes that need to be executed in the grouped mode.
   std::unordered_set<PlanNodeId> groupedExecutionLeafNodeIds;
+
+  /// Identifies this task among all tasks running the same query stage.
+  /// Supplied by the consumer at task creation time. AssignUniqueId packs it
+  /// into the high 24 bits of each generated id and the per-row counter into
+  /// the low 40 bits, so it must fit in 24 bits (0 <= taskUniqueId < 2^24).
+  /// When unset, AssignUniqueId falls back to the value carried on its plan
+  /// node (0 in the canonical construction path).
+  std::optional<int32_t> taskUniqueId{};
 
   /// Returns true if the fragment uses grouped execution strategy meaning that
   /// at least one pipeline has a leaf node that should run grouped execution.

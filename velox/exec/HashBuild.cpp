@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/HashBuild.h"
+#include <fmt/format.h>
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
@@ -142,8 +143,17 @@ bool HashBuild::setupCachedHashTable() {
     return false;
   }
 
-  const auto& queryId = operatorCtx_->task()->queryCtx()->queryId();
-  cacheKey_ = fmt::format("{}:{}", queryId, planNodeId());
+  if (joinNode_->cacheKey().has_value()) {
+    cacheKey_ = joinNode_->cacheKey().value();
+  } else {
+    const auto& queryId = operatorCtx_->task()->queryCtx()->queryId();
+    cacheKey_ = fmt::format("{}:{}", queryId, planNodeId());
+  }
+
+  VELOX_CHECK(
+      !cacheKey_.empty(),
+      "Hash table cache requires a non-empty cache key when "
+      "useHashTableCache is enabled");
 
   // Get or create the cache entry (which includes the pool).
   // If another task is already building, future_ will be set.
@@ -245,8 +255,9 @@ void HashBuild::setupTable() {
   }
   auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   if (joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
-      joinNode_->isRightSemiProjectJoin()) {
-    // Do not ignore null keys.
+      joinNode_->isRightSemiProjectJoin() || joinNode_->isRightAntiJoin()) {
+    // Do not ignore null keys. kRightAnti must retain null keys: a null-keyed
+    // build row never matches and is always returned.
     table_ = HashTable<false>::createForJoin(
         std::move(keyHashers),
         dependentTypes,
@@ -462,8 +473,8 @@ void HashBuild::addInput(RowVectorPtr input) {
   }
 
   if (!isRightJoin(joinType_) && !isFullJoin(joinType_) &&
-      !isRightSemiProjectJoin(joinType_) && !nullAsValue_ &&
-      !isLeftNullAwareJoinWithFilter(joinNode_)) {
+      !isRightSemiProjectJoin(joinType_) && !isRightAntiJoin(joinType_) &&
+      !nullAsValue_ && !isLeftNullAwareJoinWithFilter(joinNode_)) {
     deselectRowsWithNulls(hashers, activeRows_);
     if (nullAware_ && !joinHasNullKeys_ &&
         activeRows_.countSelected() < input->size()) {

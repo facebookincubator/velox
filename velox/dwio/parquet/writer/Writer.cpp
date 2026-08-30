@@ -22,10 +22,11 @@
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
+#include "velox/common/Casts.h"
 #include "velox/common/base/Pointers.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/core/QueryConfig.h"
+#include "velox/dwio/parquet/common/ParquetConfig.h"
 #include "velox/dwio/parquet/writer/arrow/ArrowSchema.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
@@ -80,6 +81,10 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
     return bytesFlushed_ + buffer_.size();
   }
 
+  int64_t bufferedBytes() const {
+    return buffer_.size();
+  }
+
   ::arrow::Status Close() override {
     ARROW_RETURN_NOT_OK(Flush());
     sink_->close();
@@ -102,14 +107,39 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
   int64_t bytesFlushed_ = 0;
 };
 
+void ParquetWriterOptions::merge(
+    const dwio::common::FormatSpecificOptions& overrides) {
+  const auto* parquetOverrides =
+      dynamic_cast<const ParquetWriterOptions*>(&overrides);
+  VELOX_CHECK_NOT_NULL(
+      parquetOverrides,
+      "Cannot merge Parquet writer options with a different "
+      "FormatSpecificOptions type.");
+
+  const auto mergeIfSet = [](auto& value, const auto& overrideValue) {
+    if (overrideValue.has_value()) {
+      value = overrideValue;
+    }
+  };
+  mergeIfSet(
+      parquetWriteTimestampUnit, parquetOverrides->parquetWriteTimestampUnit);
+  mergeIfSet(enableDictionary, parquetOverrides->enableDictionary);
+  mergeIfSet(
+      enableStoreDecimalAsInteger,
+      parquetOverrides->enableStoreDecimalAsInteger);
+  mergeIfSet(
+      dictionaryPageSizeLimit, parquetOverrides->dictionaryPageSizeLimit);
+  mergeIfSet(useParquetDataPageV2, parquetOverrides->useParquetDataPageV2);
+  mergeIfSet(enableWritePageIndex, parquetOverrides->enableWritePageIndex);
+  mergeIfSet(dataPageSize, parquetOverrides->dataPageSize);
+  mergeIfSet(batchSize, parquetOverrides->batchSize);
+  mergeIfSet(createdBy, parquetOverrides->createdBy);
+}
+
 struct ArrowContext {
   std::unique_ptr<FileWriter> writer;
   std::shared_ptr<::arrow::Schema> schema;
   std::shared_ptr<WriterProperties> properties;
-  uint64_t stagingRows = 0;
-  int64_t stagingBytes = 0;
-  // columns, Arrays
-  std::vector<std::vector<std::shared_ptr<::arrow::Array>>> stagingChunks;
 };
 
 Compression::type getArrowParquetCompression(
@@ -123,6 +153,8 @@ Compression::type getArrowParquetCompression(
   } else if (compression == common::CompressionKind_NONE) {
     return Compression::UNCOMPRESSED;
   } else if (compression == common::CompressionKind_LZ4) {
+    return Compression::LZ4;
+  } else if (compression == common::CompressionKind_LZ4_HADOOP) {
     return Compression::LZ4_HADOOP;
   } else {
     VELOX_FAIL("Unsupported compression {}", compression);
@@ -131,16 +163,45 @@ Compression::type getArrowParquetCompression(
 
 namespace {
 
+std::optional<TimestampPrecision> toTimestampPrecision(
+    std::optional<uint8_t> unit) {
+  if (!unit) {
+    return std::nullopt;
+  }
+  VELOX_CHECK(
+      *unit == 3 /*milli*/ || *unit == 6 /*micro*/ || *unit == 9 /*nano*/,
+      "Invalid timestamp unit: {}",
+      *unit);
+  return static_cast<TimestampPrecision>(*unit);
+}
+
+// Converts a string to TimestampPrecision. Accepts numeric values "3" (milli),
+// "6" (micro), or "9" (nano).
+TimestampPrecision stringToTimestampPrecision(const std::string& value) {
+  return toTimestampPrecision(std::optional{folly::to<uint8_t>(value)}).value();
+}
+
+const ParquetWriterOptions& getFormatOptions(
+    const dwio::common::WriterOptions& options) {
+  static const ParquetWriterOptions kDefaultOptions;
+  if (!options.formatSpecificOptions) {
+    return kDefaultOptions;
+  }
+  return *checkedPointerCast<ParquetWriterOptions>(
+      options.formatSpecificOptions);
+}
+
 std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
-    const parquet::WriterOptions& options,
+    const dwio::common::WriterOptions& options,
+    const ParquetWriterOptions& parquetOptions,
     const std::unique_ptr<DefaultFlushPolicy>& flushPolicy) {
   auto builder = WriterProperties::Builder();
   WriterProperties::Builder* properties = &builder;
-  if (options.enableDictionary.value_or(
+  if (parquetOptions.enableDictionary.value_or(
           facebook::velox::parquet::arrow::DEFAULT_IS_DICTIONARY_ENABLED)) {
     properties = properties->enableDictionary();
     properties = properties->dictionaryPagesizeLimit(
-        options.dictionaryPageSizeLimit.value_or(
+        parquetOptions.dictionaryPageSizeLimit.value_or(
             facebook::velox::parquet::arrow::
                 DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT));
   } else {
@@ -148,27 +209,38 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   }
   properties = properties->compression(getArrowParquetCompression(
       options.compressionKind.value_or(common::CompressionKind_NONE)));
-  for (const auto& columnCompressionValues : options.columnCompressionsMap) {
+  for (const auto& columnCompressionValues :
+       parquetOptions.columnCompressionsMap) {
     properties->compression(
         columnCompressionValues.first,
         getArrowParquetCompression(columnCompressionValues.second));
   }
-  properties = properties->encoding(options.encoding);
-  properties = properties->dataPagesize(options.dataPageSize.value_or(
+  properties = properties->encoding(parquetOptions.encoding);
+  properties = properties->dataPagesize(parquetOptions.dataPageSize.value_or(
       facebook::velox::parquet::arrow::kDefaultDataPageSize));
-  properties = properties->writeBatchSize(options.batchSize.value_or(
+  properties = properties->writeBatchSize(parquetOptions.batchSize.value_or(
       facebook::velox::parquet::arrow::DEFAULT_WRITE_BATCH_SIZE));
   properties = properties->maxRowGroupLength(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
-  properties = properties->codecOptions(options.codecOptions);
-  properties = properties->enableStoreDecimalAsInteger();
-  if (options.useParquetDataPageV2.value_or(false)) {
+  properties = properties->codecOptions(parquetOptions.codecOptions);
+  if (parquetOptions.enableStoreDecimalAsInteger.value_or(true)) {
+    properties = properties->enableStoreDecimalAsInteger();
+  } else {
+    properties = properties->disableStoreDecimalAsInteger();
+  }
+  if (parquetOptions.useParquetDataPageV2.value_or(false)) {
     properties = properties->dataPageVersion(arrow::ParquetDataPageVersion::V2);
   } else {
     properties = properties->dataPageVersion(arrow::ParquetDataPageVersion::V1);
   }
-  if (options.createdBy.has_value()) {
-    properties = properties->createdBy(options.createdBy.value());
+  if (parquetOptions.enableWritePageIndex.value_or(
+          facebook::velox::parquet::arrow::DEFAULT_IS_PAGE_INDEX_ENABLED)) {
+    properties = properties->enableWritePageIndex();
+  } else {
+    properties = properties->disableWritePageIndex();
+  }
+  if (parquetOptions.createdBy.has_value()) {
+    properties = properties->createdBy(parquetOptions.createdBy.value());
   }
   return properties->build();
 }
@@ -286,24 +358,6 @@ std::shared_ptr<::arrow::Field> updateFieldNameAndIdRecursive(
   return newField;
 }
 
-std::optional<TimestampPrecision> toTimestampPrecision(
-    std::optional<uint8_t> unit) {
-  if (!unit) {
-    return std::nullopt;
-  }
-  VELOX_CHECK(
-      *unit == 3 /*milli*/ || *unit == 6 /*micro*/ || *unit == 9 /*nano*/,
-      "Invalid timestamp unit: {}",
-      *unit);
-  return static_cast<TimestampPrecision>(*unit);
-}
-
-// Converts a string to TimestampPrecision. Accepts numeric values "3" (milli),
-// "6" (micro), or "9" (nano).
-TimestampPrecision stringToTimestampPrecision(const std::string& value) {
-  return toTimestampPrecision(std::optional{folly::to<uint8_t>(value)}).value();
-}
-
 std::optional<bool> isParquetV2(std::optional<std::string> version) {
   if (!version) {
     return std::nullopt;
@@ -324,16 +378,17 @@ std::optional<int64_t> toParquetPageSize(std::optional<std::string> pageSize) {
   return config::toCapacity(*pageSize, config::CapacityUnit::BYTE);
 }
 
-std::optional<bool> toParquetEnableDictionary(
-    std::optional<std::string> enableDictionary) {
-  if (!enableDictionary) {
+std::optional<bool> toBoolConfigValue(
+    std::optional<std::string> value,
+    const char* optionName) {
+  if (!value) {
     return std::nullopt;
   }
   try {
-    return folly::to<bool>(*enableDictionary);
+    return folly::to<bool>(*value);
   } catch (const std::exception& e) {
     VELOX_USER_FAIL(
-        "Invalid parquet writer enable dictionary option: {}", e.what());
+        "Invalid parquet writer {} option: {}", optionName, e.what());
   }
 }
 
@@ -353,7 +408,7 @@ std::optional<int64_t> toParquetBatchSize(
 
 Writer::Writer(
     std::unique_ptr<dwio::common::FileSink> sink,
-    const WriterOptions& options,
+    const dwio::common::WriterOptions& options,
     std::shared_ptr<memory::MemoryPool> pool,
     RowTypePtr schema)
     : pool_(std::move(pool)),
@@ -362,33 +417,64 @@ Writer::Writer(
           std::make_shared<ArrowDataBufferSink>(
               std::move(sink),
               *generalPool_,
-              options.bufferGrowRatio)),
+              getFormatOptions(options).bufferGrowRatio)),
       arrowContext_(std::make_shared<ArrowContext>()),
+      maxTargetFileSizeBytes_(options.maxTargetFileSizeBytes),
       schema_(std::move(schema)) {
-  validateSchemaRecursive(schema_, options.parquetFieldIds);
+  const auto& parquetWriterOptions = getFormatOptions(options);
+  validateSchemaRecursive(schema_, parquetWriterOptions.parquetFieldIds);
+  auto parquetWriteTimestampUnit =
+      parquetWriterOptions.parquetWriteTimestampUnit;
+  if (const auto serdeTimestampUnitIt = options.serdeParameters.find(
+          std::string(ParquetConfig::kWriterSerdeTimestampUnit));
+      serdeTimestampUnitIt != options.serdeParameters.end()) {
+    parquetWriteTimestampUnit =
+        stringToTimestampPrecision(serdeTimestampUnitIt->second);
+  }
+  auto parquetWriteTimestampTimeZone =
+      parquetWriterOptions.parquetWriteTimestampTimeZone;
+  if (const auto serdeTimestampTimezoneIt = options.serdeParameters.find(
+          std::string(ParquetConfig::kWriterSerdeTimestampTimezone));
+      serdeTimestampTimezoneIt != options.serdeParameters.end()) {
+    parquetWriteTimestampTimeZone = serdeTimestampTimezoneIt->second.empty()
+        ? std::optional<std::string>{std::nullopt}
+        : std::optional<std::string>{serdeTimestampTimezoneIt->second};
+  } else if (
+      !parquetWriteTimestampTimeZone.has_value() &&
+      !options.sessionTimezoneName.empty()) {
+    parquetWriteTimestampTimeZone = options.sessionTimezoneName;
+  }
 
   if (options.flushPolicyFactory) {
     castUniquePointer(options.flushPolicyFactory(), flushPolicy_);
   } else {
     flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
   }
-  options_.timestampUnit =
-      static_cast<TimestampUnit>(options.parquetWriteTimestampUnit.value_or(
-          TimestampPrecision::kNanoseconds));
-  options_.timestampTimeZone = options.parquetWriteTimestampTimeZone;
+  options_.timestampUnit = static_cast<TimestampUnit>(
+      parquetWriteTimestampUnit.value_or(TimestampPrecision::kNanoseconds));
+  options_.timestampTimeZone = parquetWriteTimestampTimeZone;
   common::testutil::TestValue::adjust(
       "facebook::velox::parquet::Writer::Writer", &options_);
   arrowContext_->properties =
-      getArrowParquetWriterOptions(options, flushPolicy_);
+      getArrowParquetWriterOptions(options, parquetWriterOptions, flushPolicy_);
   setMemoryReclaimers();
-  writeInt96AsTimestamp_ = options.writeInt96AsTimestamp;
-  arrowMemoryPool_ = options.arrowMemoryPool;
-  parquetFieldIds_ = std::move(options.parquetFieldIds);
+  writeInt96AsTimestamp_ = parquetWriterOptions.writeInt96AsTimestamp;
+  arrowMemoryPool_ = parquetWriterOptions.arrowMemoryPool;
+  // The Arrow memory pool is optional. When it is not provided, fall back to
+  // Arrow's default pool so the Arrow write path always has a valid allocator.
+  // Dictionary passthrough relies on arrow::compute (Unique/Take) while
+  // computing page statistics, and those kernels dereference the pool; a null
+  // pool aborts in arrow/util/hashing.h ("Check failed: (pool) != (nullptr)").
+  if (arrowMemoryPool_ == nullptr) {
+    arrowMemoryPool_ = std::shared_ptr<::arrow::MemoryPool>(
+        ::arrow::default_memory_pool(), [](::arrow::MemoryPool*) {});
+  }
+  parquetFieldIds_ = parquetWriterOptions.parquetFieldIds;
 }
 
 Writer::Writer(
     std::unique_ptr<dwio::common::FileSink> sink,
-    const WriterOptions& options,
+    const dwio::common::WriterOptions& options,
     RowTypePtr schema)
     : Writer{
           std::move(sink),
@@ -400,61 +486,27 @@ Writer::Writer(
           std::move(schema)} {}
 
 void Writer::flush() {
-  if (arrowContext_->stagingRows > 0) {
-    if (!arrowContext_->writer) {
-      ArrowWriterProperties::Builder builder;
-      if (writeInt96AsTimestamp_) {
-        builder.enableDeprecatedInt96Timestamps();
-      }
-      auto arrowProperties = builder.build();
-      PARQUET_ASSIGN_OR_THROW(
-          arrowContext_->writer,
-          FileWriter::open(
-              *arrowContext_->schema.get(),
-              arrowMemoryPool_.get(),
-              stream_,
-              arrowContext_->properties,
-              arrowProperties));
-    }
-
-    auto fields = arrowContext_->schema->fields();
-    std::vector<std::shared_ptr<::arrow::ChunkedArray>> chunks;
-    for (int colIdx = 0; colIdx < fields.size(); colIdx++) {
-      auto dataType = fields.at(colIdx)->type();
-      auto chunk =
-          ::arrow::ChunkedArray::Make(
-              std::move(arrowContext_->stagingChunks.at(colIdx)), dataType)
-              .ValueOrDie();
-      chunks.push_back(chunk);
-    }
-    auto table = ::arrow::Table::Make(
-        arrowContext_->schema,
-        std::move(chunks),
-        static_cast<int64_t>(arrowContext_->stagingRows));
-    PARQUET_THROW_NOT_OK(arrowContext_->writer->writeTable(
-        *table, static_cast<int64_t>(flushPolicy_->rowsInRowGroup())));
-    PARQUET_THROW_NOT_OK(stream_->Flush());
-    for (auto& chunk : arrowContext_->stagingChunks) {
-      chunk.clear();
-    }
-    arrowContext_->stagingRows = 0;
-    arrowContext_->stagingBytes = 0;
+  if (arrowContext_->writer) {
+    PARQUET_THROW_NOT_OK(arrowContext_->writer->finishRowGroup());
   }
+  PARQUET_THROW_NOT_OK(stream_->Flush());
 }
 
-dwio::common::StripeProgress getStripeProgress(
-    uint64_t stagingRows,
-    int64_t stagingBytes) {
-  return dwio::common::StripeProgress{
-      .stripeRowCount = stagingRows, .stripeSizeEstimate = stagingBytes};
+dwio::common::StripeProgress getStripeProgress(int64_t bufferedBytes) {
+  // Arrow Parquet FileWriter will new row group based on the row number, so
+  // we only check buffered bytes to flush row group here.
+  return dwio::common::StripeProgress{.stripeSizeEstimate = bufferedBytes};
+}
+
+bool stagedBytesReachTargetFileSize(
+    uint64_t maxTargetFileSizeBytes,
+    int64_t streamBytes,
+    int64_t currentRowGroupBytes) {
+  return maxTargetFileSizeBytes > 0 && currentRowGroupBytes > 0 &&
+      streamBytes + currentRowGroupBytes >= maxTargetFileSizeBytes;
 }
 
 /**
- * This method would cache input `ColumnarBatch` to make the size of row group
- * big. It would flush when:
- * - the cached numRows bigger than `rowsInRowGroup_`
- * - the cached bytes bigger than `bytesInRowGroup_`
- *
  * This method assumes each input `ColumnarBatch` have same schema.
  */
 void Writer::write(const VectorPtr& data) {
@@ -462,59 +514,80 @@ void Writer::write(const VectorPtr& data) {
       data->type()->equivalent(*schema_),
       "The file schema type should be equal with the input rowvector type.");
 
-  VectorPtr exportData = data;
-  if (needFlatten(exportData)) {
-    BaseVector::flattenVector(exportData);
-  }
+  VectorPtr exportData = flattenIfNeeded(data);
 
   ArrowArray array;
-  ArrowSchema schema;
   exportToArrow(exportData, array, generalPool_.get(), options_);
-  exportToArrow(exportData, schema, options_);
 
-  // Convert the arrow schema to Schema and then update the column names based
-  // on schema_.
-  auto arrowSchema = ::arrow::ImportSchema(&schema).ValueOrDie();
-  common::testutil::TestValue::adjust(
-      "facebook::velox::parquet::Writer::write", arrowSchema.get());
-  std::vector<std::shared_ptr<::arrow::Field>> newFields;
-  auto childSize = schema_->size();
-  if (!parquetFieldIds_.empty()) {
-    VELOX_CHECK(childSize == parquetFieldIds_.size());
-  }
-  for (auto i = 0; i < childSize; i++) {
-    newFields.push_back(updateFieldNameAndIdRecursive(
-        arrowSchema->fields()[i],
-        *schema_->childAt(i),
-        !parquetFieldIds_.empty() ? &parquetFieldIds_.at(i) : nullptr,
-        schema_->nameOf(i)));
+  if (!arrowContext_->schema) {
+    // First batch: export and fix up the Arrow schema, then cache it.
+    ArrowSchema schema;
+    exportToArrow(exportData, schema, options_);
+
+    auto arrowSchema = ::arrow::ImportSchema(&schema).ValueOrDie();
+    common::testutil::TestValue::adjust(
+        "facebook::velox::parquet::Writer::write", arrowSchema.get());
+    std::vector<std::shared_ptr<::arrow::Field>> newFields;
+    auto childSize = schema_->size();
+    if (!parquetFieldIds_.empty()) {
+      VELOX_CHECK(childSize == parquetFieldIds_.size());
+    }
+    for (auto i = 0; i < childSize; i++) {
+      newFields.push_back(updateFieldNameAndIdRecursive(
+          arrowSchema->fields()[i],
+          *schema_->childAt(i),
+          !parquetFieldIds_.empty() ? &parquetFieldIds_.at(i) : nullptr,
+          schema_->nameOf(i)));
+    }
+
+    arrowContext_->schema = ::arrow::schema(newFields);
   }
 
+  // Import the data array using the cached schema.
   PARQUET_ASSIGN_OR_THROW(
       auto recordBatch,
-      ::arrow::ImportRecordBatch(&array, ::arrow::schema(newFields)));
-  if (!arrowContext_->schema) {
-    arrowContext_->schema = recordBatch->schema();
-    for (int colIdx = 0; colIdx < arrowContext_->schema->num_fields();
-         colIdx++) {
-      arrowContext_->stagingChunks.push_back(
-          std::vector<std::shared_ptr<::arrow::Array>>());
+      ::arrow::ImportRecordBatch(&array, arrowContext_->schema));
+
+  if (recordBatch->num_rows() == 0) {
+    return;
+  }
+
+  if (!arrowContext_->writer) {
+    ArrowWriterProperties::Builder builder;
+    if (writeInt96AsTimestamp_) {
+      builder.enableDeprecatedInt96Timestamps();
     }
+    auto arrowProperties = builder.build();
+    PARQUET_ASSIGN_OR_THROW(
+        arrowContext_->writer,
+        FileWriter::open(
+            *recordBatch->schema(),
+            arrowMemoryPool_.get(),
+            stream_,
+            arrowContext_->properties,
+            arrowProperties));
   }
 
-  auto bytes = data->estimateFlatSize();
-  auto numRows = data->size();
-  if (flushPolicy_->shouldFlush(getStripeProgress(
-          arrowContext_->stagingRows, arrowContext_->stagingBytes))) {
+  PARQUET_THROW_NOT_OK(arrowContext_->writer->writeRecordBatch(*recordBatch));
+
+  const auto currentRowGroupBytes =
+      arrowContext_->writer->currentRowGroupTotalBytes();
+  PARQUET_ASSIGN_OR_THROW(const auto streamBytes, stream_->Tell());
+
+  // Flush as soon as the current write pushes the staged row group past the
+  // row-group target or the file-size target. Otherwise callers that rotate
+  // files based on raw written bytes won't observe the row group until the
+  // next write.
+  if (flushPolicy_->shouldFlush(getStripeProgress(currentRowGroupBytes)) ||
+      stagedBytesReachTargetFileSize(
+          maxTargetFileSizeBytes_, streamBytes, currentRowGroupBytes)) {
     flush();
+  } else if (flushPolicy_->bytesInRowGroup() <= stream_->bufferedBytes()) {
+    // Flush the sink separately so completed row groups don't keep accumulating
+    // in the stream buffer when Arrow keeps starting new row groups before the
+    // current one hits the byte threshold.
+    PARQUET_THROW_NOT_OK(stream_->Flush());
   }
-
-  for (int colIdx = 0; colIdx < recordBatch->num_columns(); colIdx++) {
-    arrowContext_->stagingChunks.at(colIdx).push_back(
-        recordBatch->column(colIdx));
-  }
-  arrowContext_->stagingRows += numRows;
-  arrowContext_->stagingBytes += bytes;
 }
 
 bool Writer::isCodecAvailable(common::CompressionKind compression) {
@@ -522,13 +595,7 @@ bool Writer::isCodecAvailable(common::CompressionKind compression) {
       getArrowParquetCompression(compression));
 }
 
-void Writer::newRowGroup(int32_t numRows) {
-  PARQUET_THROW_NOT_OK(arrowContext_->writer->newRowGroup(numRows));
-}
-
 std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
-  flush();
-
   std::unique_ptr<ParquetFileMetadata> parquetFileMetadata;
   if (arrowContext_->writer) {
     PARQUET_THROW_NOT_OK(arrowContext_->writer->close());
@@ -538,8 +605,6 @@ std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
   }
 
   PARQUET_THROW_NOT_OK(stream_->Close());
-
-  arrowContext_->stagingChunks.clear();
 
   return parquetFileMetadata;
 }
@@ -566,127 +631,219 @@ void Writer::setMemoryReclaimers() {
   generalPool_->setReclaimer(exec::MemoryReclaimer::create());
 }
 
-bool Writer::needFlatten(const VectorPtr& data) const {
+namespace {
+
+// Returns true if 'vector' or any descendant needs flattening before Arrow
+// export. Used to detect dictionary-encoded and non-scalar constant vectors
+// nested inside a top-level complex column (ARRAY/MAP/ROW).
+bool descendantNeedsFlatten(const VectorPtr& vector) {
+  if (vector == nullptr) {
+    return false;
+  }
+  switch (vector->encoding()) {
+    case VectorEncoding::Simple::DICTIONARY:
+      return true;
+    case VectorEncoding::Simple::CONSTANT:
+      return !vector->isScalar();
+    case VectorEncoding::Simple::ROW: {
+      const auto* row = vector->asUnchecked<RowVector>();
+      for (const auto& child : row->children()) {
+        if (descendantNeedsFlatten(child)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    case VectorEncoding::Simple::ARRAY:
+      return descendantNeedsFlatten(
+          vector->asUnchecked<ArrayVector>()->elements());
+    case VectorEncoding::Simple::MAP: {
+      const auto* map = vector->asUnchecked<MapVector>();
+      return descendantNeedsFlatten(map->mapKeys()) ||
+          descendantNeedsFlatten(map->mapValues());
+    }
+    default:
+      return false;
+  }
+}
+
+// Returns true if a single top-level column requires flattening before Arrow
+// export.
+bool childNeedsFlatten(const VectorPtr& child) {
+  auto encoding = child->encoding();
+  if (encoding == VectorEncoding::Simple::DICTIONARY) {
+    auto* innerVector = child->valueVector().get();
+    if (innerVector != nullptr) {
+      // Flatten dictionary wrapping a complex (non-primitive) type. The Arrow
+      // Parquet writer only supports dictionary passthrough for binary-like
+      // scalar types, and updateFieldNameAndIdRecursive cannot traverse
+      // DictionaryType wrapping complex Arrow types.
+      if (!innerVector->type()->isPrimitiveType()) {
+        return true;
+      }
+      // Flatten nested wrapping (e.g., dictionary-of-dictionary,
+      // dictionary-of-constant). Only a dictionary directly wrapping a flat
+      // vector can be exported as an Arrow DictionaryArray.
+      if (!innerVector->isFlatEncoding()) {
+        return true;
+      }
+      // Only VARCHAR and VARBINARY benefit from dictionary passthrough in
+      // Parquet. Arrow's Parquet writer converts non-binary-like dictionary
+      // arrays back to dense anyway, and passing them through as dictionaries
+      // causes schema inconsistency across batches (the cached schema from the
+      // first batch may not match the encoding of subsequent batches).
+      auto typeKind = innerVector->typeKind();
+      if (typeKind != TypeKind::VARCHAR && typeKind != TypeKind::VARBINARY) {
+        return true;
+      }
+      // Arrow's Parquet writer does not support writing DictionaryArray when
+      // the dictionary values contain nulls. Flatten to avoid the
+      // "NotImplemented: Writing DictionaryArray with null encoded in
+      // dictionary type not yet supported" error.
+      if (innerVector->mayHaveNulls()) {
+        return true;
+      }
+    }
+  } else if (encoding == VectorEncoding::Simple::CONSTANT) {
+    // Flatten non-scalar constants since Arrow bridge supports exporting only
+    // scalar constants.
+    if (!child->isScalar()) {
+      return true;
+    }
+    // Flatten constant wrapping a non-flat inner vector
+    // (e.g., constant-of-dictionary).
+    if (child->valueVector() && !child->wrappedVector()->isFlatEncoding()) {
+      return true;
+    }
+  } else if (!child->type()->isPrimitiveType()) {
+    // A flat complex column (ARRAY/MAP/ROW) is not itself flattened. Flatten
+    // the whole column if any descendant needs flattening before Arrow export.
+    return descendantNeedsFlatten(child);
+  }
+  return false;
+}
+
+} // namespace
+
+VectorPtr Writer::flattenIfNeeded(const VectorPtr& data) const {
   auto rowVector = std::dynamic_pointer_cast<RowVector>(data);
   VELOX_CHECK_NOT_NULL(
       rowVector, "Arrow export expects a RowVector as input data.");
 
   const auto& children = rowVector->children();
-  return std::any_of(children.begin(), children.end(), [](const auto& child) {
-    bool isNestedWrapped =
-        (child->encoding() == VectorEncoding::Simple::DICTIONARY ||
-         child->encoding() == VectorEncoding::Simple::CONSTANT) &&
-        child->valueVector() && !child->wrappedVector()->isFlatEncoding();
-    bool isComplex = !child->isScalar();
-    return isNestedWrapped || isComplex;
-  });
+
+  // Decide per-column whether it must be flattened before Arrow export. A
+  // column is flattened when childNeedsFlatten() requires it, or when the
+  // cached schema from an earlier batch expects a non-dictionary type but the
+  // current column is dictionary-encoded (the encoding changed across batches).
+  std::vector<bool> needsFlatten(children.size(), false);
+  bool anyNeedsFlatten = false;
+  for (size_t i = 0; i < children.size(); ++i) {
+    bool flatten = childNeedsFlatten(children[i]);
+    // Schema consistency: if the schema is already cached and expects a
+    // non-dictionary type for this column, flatten any dictionary vector to
+    // avoid import errors from schema/data encoding mismatch across batches.
+    if (!flatten && arrowContext_->schema &&
+        children[i]->encoding() == VectorEncoding::Simple::DICTIONARY &&
+        arrowContext_->schema->field(i)->type()->id() !=
+            ::arrow::Type::DICTIONARY) {
+      flatten = true;
+    }
+    needsFlatten[i] = flatten;
+    anyNeedsFlatten |= flatten;
+  }
+
+  // Reconcile the cached schema with the encoding that will actually be
+  // exported. A column is exported as an Arrow DictionaryArray only when it is
+  // dictionary-encoded AND is not being flattened. For every column that will
+  // NOT be a dictionary but whose cached schema field is still DictionaryType,
+  // rewrite the cached field to the dictionary value type. This covers both a
+  // later batch arriving flat and a later batch arriving as a dictionary that
+  // must be flattened (e.g. dict values gained nulls). Without this,
+  // ImportRecordBatch() would receive flat buffers described by a dictionary
+  // schema (buffer-count mismatch: a dictionary field expects 2 buffers but
+  // flat string data produces 3).
+  if (arrowContext_->schema) {
+    for (size_t i = 0; i < children.size(); ++i) {
+      const bool exportsAsDictionary =
+          children[i]->encoding() == VectorEncoding::Simple::DICTIONARY &&
+          !needsFlatten[i];
+      if (!exportsAsDictionary &&
+          arrowContext_->schema->field(i)->type()->id() ==
+              ::arrow::Type::DICTIONARY) {
+        auto dictType = std::static_pointer_cast<::arrow::DictionaryType>(
+            arrowContext_->schema->field(i)->type());
+        arrowContext_->schema =
+            arrowContext_->schema
+                ->SetField(
+                    i,
+                    arrowContext_->schema->field(i)->WithType(
+                        dictType->value_type()))
+                .ValueOrDie();
+      }
+    }
+  }
+
+  if (!anyNeedsFlatten) {
+    return data;
+  }
+
+  // Selectively flatten only the columns that need it.
+  std::vector<VectorPtr> newChildren(children.size());
+  for (size_t i = 0; i < children.size(); ++i) {
+    newChildren[i] = children[i];
+    if (needsFlatten[i]) {
+      BaseVector::flattenVector(newChildren[i]);
+    }
+  }
+
+  return std::make_shared<RowVector>(
+      rowVector->pool(),
+      rowVector->type(),
+      rowVector->nulls(),
+      rowVector->size(),
+      std::move(newChildren));
 }
 
 std::unique_ptr<dwio::common::Writer> ParquetWriterFactory::createWriter(
     std::unique_ptr<dwio::common::FileSink> sink,
     const std::shared_ptr<dwio::common::WriterOptions>& options) {
-  auto parquetOptions =
-      std::dynamic_pointer_cast<parquet::WriterOptions>(options);
-  VELOX_CHECK_NOT_NULL(
-      parquetOptions,
-      "Parquet writer factory expected a Parquet WriterOptions object.");
   return std::make_unique<Writer>(
-      std::move(sink), *parquetOptions, asRowType(options->schema));
+      std::move(sink), *options, asRowType(options->schema));
 }
 
 std::unique_ptr<dwio::common::WriterOptions>
 ParquetWriterFactory::createWriterOptions() {
-  return std::make_unique<parquet::WriterOptions>();
+  return std::make_unique<dwio::common::WriterOptions>();
 }
 
-void WriterOptions::processConfigs(
+std::shared_ptr<dwio::common::FormatSpecificOptions>
+ParquetWriterFactory::createFormatOptions(
     const config::ConfigBase& connectorConfig,
-    const config::ConfigBase& session) {
-  auto parquetWriterOptions = dynamic_cast<WriterOptions*>(this);
-  VELOX_CHECK_NOT_NULL(
-      parquetWriterOptions, "Expected a Parquet WriterOptions object.");
-
-  // Check serdeParameters for timestamp settings first (highest priority).
-  auto serdeTimestampUnitIt =
-      serdeParameters.find(WriterConfig::kParquetSerdeTimestampUnit);
-  if (serdeTimestampUnitIt != serdeParameters.end()) {
-    parquetWriteTimestampUnit =
-        stringToTimestampPrecision(serdeTimestampUnitIt->second);
-  }
-
-  auto serdeTimestampTimezoneIt =
-      serdeParameters.find(WriterConfig::kParquetSerdeTimestampTimezone);
-  if (serdeTimestampTimezoneIt != serdeParameters.end()) {
-    // Empty string means no timezone conversion (nullopt).
-    if (serdeTimestampTimezoneIt->second.empty()) {
-      parquetWriteTimestampTimeZone = std::nullopt;
-    } else {
-      parquetWriteTimestampTimeZone = serdeTimestampTimezoneIt->second;
-    }
-  }
-
-  if (!parquetWriteTimestampUnit) {
-    parquetWriteTimestampUnit =
-        toTimestampPrecision(session.getWithFallback<uint8_t>(
-            WriterConfig::kParquetSessionWriteTimestampUnit, connectorConfig));
-  }
-  if (!parquetWriteTimestampTimeZone) {
-    parquetWriteTimestampTimeZone = parquetWriterOptions->sessionTimezoneName;
-  }
-
-  if (!enableDictionary) {
-    enableDictionary =
-        toParquetEnableDictionary(session.getWithFallback<std::string>(
-            WriterConfig::kParquetSessionEnableDictionary, connectorConfig));
-  }
-
-  if (!dictionaryPageSizeLimit) {
-    dictionaryPageSizeLimit =
-        toParquetPageSize(session.getWithFallback<std::string>(
-            WriterConfig::kParquetSessionDictionaryPageSizeLimit,
-            connectorConfig));
-  }
-
-  if (!useParquetDataPageV2) {
-    useParquetDataPageV2 = isParquetV2(session.getWithFallback<std::string>(
-        WriterConfig::kParquetSessionDataPageVersion, connectorConfig));
-  }
-
-  if (!dataPageSize) {
-    dataPageSize = toParquetPageSize(session.getWithFallback<std::string>(
-        WriterConfig::kParquetSessionWritePageSize, connectorConfig));
-  }
-
-  if (!batchSize) {
-    batchSize = toParquetBatchSize(session.getWithFallback<std::string>(
-        WriterConfig::kParquetSessionWriteBatchSize, connectorConfig));
-  }
-
-  if (!createdBy) {
-    createdBy = session.getWithFallback<std::string>(
-        WriterConfig::kParquetHiveConnectorCreatedBy, connectorConfig);
-  }
-
-  // Parquet only updates ioStats_->rawBytesWritten() when a row group is
-  // flushed. With the default flush policy (1M rows / 128MB), small
-  // maxTargetFileBytes_ would never trigger rotation because rawBytesWritten()
-  // stays at 0 while data is buffered. To honor maxTargetFileBytes_, cap the
-  // row group byte threshold so we flush earlier and rawBytesWritten() grows
-  // during writes.
-  auto maxTargetFileSize =
-      toParquetPageSize(session.getWithFallback<std::string>(
-          WriterConfig::kParquetSessionMaxTargetFileSize, connectorConfig));
-  if (maxTargetFileSize.has_value()) {
-    if (!flushPolicyFactory) {
-      auto bytesInRowGroup = std::min<int64_t>(
-          DefaultFlushPolicy::kDefaultBytesInRowGroup,
-          maxTargetFileSize.value());
-      flushPolicyFactory = [bytesInRowGroup]() {
-        return std::make_unique<DefaultFlushPolicy>(
-            DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
-      };
-    }
-  }
+    const config::ConfigBase& session) const {
+  auto parquetOptions = std::make_shared<ParquetWriterOptions>();
+  parquetOptions->parquetWriteTimestampUnit = toTimestampPrecision(
+      ParquetConfig::writerTimestampUnit(connectorConfig, session));
+  parquetOptions->enableDictionary = toBoolConfigValue(
+      ParquetConfig::writerEnableDictionary(connectorConfig, session),
+      "enable dictionary");
+  parquetOptions->enableStoreDecimalAsInteger = toBoolConfigValue(
+      ParquetConfig::writerEnableStoreDecimalAsInteger(
+          connectorConfig, session),
+      "enable store decimal as integer");
+  parquetOptions->dictionaryPageSizeLimit = toParquetPageSize(
+      ParquetConfig::writerDictionaryPageSizeLimit(connectorConfig, session));
+  parquetOptions->useParquetDataPageV2 = isParquetV2(
+      ParquetConfig::writerDataPageVersion(connectorConfig, session));
+  parquetOptions->enableWritePageIndex = toBoolConfigValue(
+      ParquetConfig::writerEnablePageIndex(connectorConfig, session),
+      "enable write page index");
+  parquetOptions->dataPageSize = toParquetPageSize(
+      ParquetConfig::writerPageSize(connectorConfig, session));
+  parquetOptions->batchSize = toParquetBatchSize(
+      ParquetConfig::writerBatchSize(connectorConfig, session));
+  parquetOptions->createdBy = ParquetConfig::writerCreatedBy(connectorConfig);
+  return parquetOptions;
 }
 
 } // namespace facebook::velox::parquet

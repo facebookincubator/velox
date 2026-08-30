@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
 
 namespace facebook::velox::dwio::common {
@@ -104,6 +105,11 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
     currentRowNumber_ = value;
   }
 
+  /// Evaluates split-time filtering for a constant field.
+  /// Returns true for non-null constants, or when no filter is present, or when
+  /// the filter allows null values.
+  static bool testFilterOnConstant(const velox::common::ScanSpec& spec);
+
  protected:
   template <typename T, typename KeyNode, typename FormatData>
   friend class SelectiveFlatMapColumnReaderHelper;
@@ -113,6 +119,7 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
   static constexpr int32_t kConstantChildSpecSubscript{-1};
 
   SelectiveStructColumnReaderBase(
+      const dwio::common::ColumnReaderOptions& columnReaderOptions,
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       FormatParams& params,
@@ -120,6 +127,7 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
       bool isRoot = false,
       bool generateLazyChildren = true)
       : SelectiveColumnReader(requestedType, fileType, params, scanSpec),
+        columnReaderOptions_(columnReaderOptions),
         debugString_(
             getExceptionContext().message(VeloxException::Type::kSystem)),
         isRoot_(isRoot),
@@ -129,6 +137,13 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
   bool hasDeletion() const final {
     return hasDeletion_;
   }
+
+  // Reads physical flat-map value streams directly without interpreting the
+  // logical children in the scan spec.
+  void readFlatMapChildren(
+      int64_t offset,
+      const RowSet& rows,
+      const uint64_t* incomingNulls);
 
   // Returns true if the file doesn't have this child (in which case it will be
   // treated as null).
@@ -179,6 +194,8 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
       setOutputRows(rows);
     }
   }
+
+  dwio::common::ColumnReaderOptions columnReaderOptions_;
 
   // Context information obtained from ExceptionContext. Stored here
   // so that LazyVector readers under this can add this to their
@@ -309,40 +326,7 @@ void SelectiveFlatMapColumnReaderHelper<T, KeyNode, FormatData>::read(
     int64_t offset,
     RowSet rows,
     const uint64_t* incomingNulls) {
-  reader_.numReads_ = reader_.scanSpec_->newRead();
-  reader_.prepareRead<char>(offset, rows, incomingNulls);
-  VELOX_DCHECK(!reader_.hasDeletion());
-  auto activeRows = rows;
-  auto* mapNulls = reader_.nullsInReadRange_
-      ? reader_.nullsInReadRange_->as<uint64_t>()
-      : nullptr;
-  if (reader_.scanSpec_->filter()) {
-    auto kind = reader_.scanSpec_->filter()->kind();
-    VELOX_CHECK(
-        kind == velox::common::FilterKind::kIsNull ||
-        kind == velox::common::FilterKind::kIsNotNull);
-    reader_.filterNulls<int32_t>(
-        rows, kind == velox::common::FilterKind::kIsNull, false);
-    if (reader_.outputRows_.empty()) {
-      for (auto* child : reader_.children_) {
-        child->addParentNulls(offset, mapNulls, rows);
-      }
-      reader_.lazyVectorReadOffset_ = offset;
-      reader_.readOffset_ = offset + rows.back() + 1;
-      return;
-    }
-    activeRows = reader_.outputRows_;
-  }
-  // Separate the loop to be cache friendly.
-  for (auto* child : reader_.children_) {
-    reader_.advanceFieldReader(child, offset);
-  }
-  for (auto* child : reader_.children_) {
-    child->readWithTiming(offset, activeRows, mapNulls);
-    child->addParentNulls(offset, mapNulls, rows);
-  }
-  reader_.lazyVectorReadOffset_ = offset;
-  reader_.readOffset_ = offset + rows.back() + 1;
+  reader_.readFlatMapChildren(offset, rows, incomingNulls);
 }
 
 namespace detail {
@@ -506,7 +490,7 @@ void SelectiveFlatMapColumnReaderHelper<T, KeyNode, FormatData>::copyValues(
       flatKeys->addStringBuffer(buf);
       strKeySize = 0;
       for (int k = 0; k < reader_.children_.size(); ++k) {
-        auto& s = keyNodes_[k].key.get();
+        auto s = keyNodes_[k].key.get();
         if (!s.isInline()) {
           memcpy(&rawStrKeyBuffer[strKeySize], s.data(), s.size());
           strKeySize += s.size();

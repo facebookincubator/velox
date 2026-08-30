@@ -19,6 +19,7 @@
 #include <atomic>
 #include <memory>
 #include <string_view>
+#include <unordered_map>
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
@@ -30,12 +31,13 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/exec/BlockingReason.h"
+#include "velox/exec/PartitionedOutputFactory.h"
 #include "velox/exec/trace/TraceCtx.h"
 
 namespace facebook::velox::exec {
 
 class Driver;
-class ExchangeClient;
+class InMemoryExchangeClient;
 class Operator;
 struct OperatorStats;
 class Task;
@@ -261,6 +263,15 @@ struct DriverCtx {
   const trace::TraceCtx* traceCtx() const;
 
   velox::memory::MemoryPool* addOperatorPool(
+      const core::PlanNodeId& planNodeId,
+      const std::string& operatorType);
+
+  /// Creates one leaf operator pool per registered custom root pool on the
+  /// owning task's QueryCtx, mirroring 'addOperatorPool' but under each
+  /// custom root. Returns a map keyed by resource tag. Empty when no custom
+  /// pools are registered.
+  std::unordered_map<std::string, velox::memory::MemoryPool*>
+  addCustomOperatorPools(
       const core::PlanNodeId& planNodeId,
       const std::string& operatorType);
 
@@ -813,10 +824,13 @@ struct DriverFactory {
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeHashJoinNodeIds;
   /// Same as 'mixedExecutionModeHashJoinNodeIds' but for Nested Loop Joins.
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeNestedLoopJoinNodeIds;
+  /// Same as 'mixedExecutionModeHashJoinNodeIds' but for custom join bridges.
+  folly::F14FastSet<core::PlanNodeId> mixedExecutionModeCustomJoinNodeIds;
 
   std::shared_ptr<Driver> createDriver(
       std::unique_ptr<DriverCtx> ctx,
-      std::shared_ptr<ExchangeClient> exchangeClient,
+      std::shared_ptr<InMemoryExchangeClient> exchangeClient,
+      const PartitionedOutputFactory& outputOperatorFactory,
       std::shared_ptr<PipelinePushdownFilters> filters,
       std::function<int(int pipelineId)> numDrivers);
 
@@ -908,6 +922,11 @@ struct DriverFactory {
   /// Returns plan node IDs for which IndexLookupJoin Bridges must be created
   /// based on this pipeline.
   std::vector<core::PlanNodeId> needsIndexLookupJoinBridges() const;
+
+  /// Returns plan node IDs for which custom join bridges must be created
+  /// based on this pipeline.  Mirrors needsHashJoinBridges(): ungrouped
+  /// pipelines include mixed-mode join nodes, grouped pipelines exclude them.
+  std::vector<core::PlanNodeId> needsCustomJoinBridges() const;
 
   static std::vector<DriverAdapter> adapters;
 };

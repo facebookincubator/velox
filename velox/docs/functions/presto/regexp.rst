@@ -99,6 +99,7 @@ limited to 20 different expressions per instance and thread of execution.
         SELECT regexp_replace('[{}]', '\}\]', '\}'); -- '[{}'
 
 .. function:: regexp_replace(string, pattern, function) -> varchar
+   :noindex:
 
     Replaces every instance of the substring matched by the regular expression
     ``pattern`` in ``string`` using ``function``. The lambda expression

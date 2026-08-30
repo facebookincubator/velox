@@ -16,6 +16,8 @@ velox_add_library(
   ApproxCountDistinctForIntervalsAggregate.cpp
   ApproxPercentileAggregate.cpp
   AverageAggregate.cpp
+  BitmapConstructAggAggregate.cpp
+  BitmapOrAggAggregate.cpp
   BitwiseXorAggregate.cpp
   BloomFilterAggAggregate.cpp
   CentralMomentsAggregate.cpp
@@ -34,6 +36,8 @@ velox_add_library(
   ApproxCountDistinctForIntervalsAggregate.h
   ApproxPercentileAggregate.h
   AverageAggregate.h
+  BitmapConstructAggAggregate.h
+  BitmapOrAggAggregate.h
   BitwiseXorAggregate.h
   BloomFilterAggAggregate.h
   CentralMomentsAggregate.h

@@ -21,6 +21,7 @@ source "$SCRIPT_DIR"/setup-versions.sh
 
 VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"}        #Build folly and gflags shared for use in libvelox.so.
 VELOX_ARROW_CMAKE_PATCH=${VELOX_ARROW_CMAKE_PATCH:-""} # avoid error due to +u
+VELOX_OPENZL_CMAKE_PATCH=${VELOX_OPENZL_CMAKE_PATCH:-""}
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 BUILD_GEOS="${BUILD_GEOS:-true}"
@@ -48,7 +49,7 @@ function install_fmt {
 
 function install_folly {
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/"${FB_OS_VERSION}".tar.gz folly
-  local FOLLY_FLAGS=(-DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON)
+  local FOLLY_FLAGS=(-DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
   # When folly is static, use static gflags to avoid dual gflags flag
   # registration when .so plugins are dlopen'd (both the binary and plugin
   # would register the same flags in a shared gflags registry).
@@ -66,6 +67,47 @@ function install_fizz {
 function install_fast_float {
   wget_and_untar https://github.com/fastfloat/fast_float/archive/refs/tags/"${FAST_FLOAT_VERSION}".tar.gz fast_float
   cmake_install_dir fast_float -DBUILD_TESTS=OFF
+}
+
+# Only required for VELOX_ENABLE_NIMBLE=ON. Both the runtime library and the
+# flatc code generator are needed, since Nimble generates C++ headers from .fbs
+# schemas at build time.
+function install_flatbuffers {
+  wget_and_untar https://github.com/google/flatbuffers/archive/refs/tags/v"${FLATBUFFERS_VERSION}".tar.gz flatbuffers
+  cmake_install_dir flatbuffers -DFLATBUFFERS_BUILD_TESTS=OFF -DFLATBUFFERS_BUILD_FLATC=ON -DFLATBUFFERS_BUILD_SHAREDLIB=OFF
+}
+
+# Only required for VELOX_ENABLE_NIMBLE=ON. Only the core library and its C++
+# bindings are consumed; everything else OpenZL can build pulls in dependencies
+# Velox does not otherwise need.
+function install_openzl {
+  wget_and_untar https://github.com/facebook/openzl/archive/"${OPENZL_VERSION}".tar.gz openzl
+  (
+    # OpenZL hard-codes C++17, which would leave openzl_cpp ABI-incompatible
+    # with C++20 Velox. Apply the same patch the BUNDLED CMake resolver uses so
+    # both resolution modes produce a C++20 library.
+    if [ -z "$VELOX_OPENZL_CMAKE_PATCH" ]; then
+      # A different path is needed when building the Dockerfile.
+      ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
+      VELOX_OPENZL_CMAKE_PATCH="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch"
+    fi
+
+    cd "$DEPENDENCY_DIR"/openzl || exit 1
+    if command -v patch >/dev/null 2>&1; then
+      patch -p1 -i "$VELOX_OPENZL_CMAKE_PATCH" || exit 1
+    else
+      git apply "$VELOX_OPENZL_CMAKE_PATCH" || exit 1
+    fi
+  ) || exit 1
+  cmake_install_dir openzl \
+    -DCMAKE_CXX_STANDARD=20 \
+    -DOPENZL_BUILD_CLI=OFF \
+    -DOPENZL_BUILD_EXAMPLES=OFF \
+    -DOPENZL_BUILD_TOOLS=OFF \
+    -DOPENZL_BUILD_CUSTOM_PARSERS=OFF \
+    -DOPENZL_BUILD_TESTS=OFF \
+    -DOPENZL_BUILD_BENCHMARKS=OFF \
+    -DOPENZL_BUILD_PYTHON_EXT=OFF
 }
 
 function install_wangle {
@@ -145,6 +187,14 @@ function install_ranges_v3 {
 }
 
 function install_abseil {
+  # Abseil is a dependency of multiple libraries, so install_abseil can be
+  # invoked more than once per run. Build it only on the first call within a
+  # run.
+  if [ -n "${VELOX_ABSEIL_INSTALLED:-}" ]; then
+    echo "Abseil already installed in this run, skipping."
+    return 0
+  fi
+  VELOX_ABSEIL_INSTALLED=1
   wget_and_untar https://github.com/abseil/abseil-cpp/archive/refs/tags/"${ABSEIL_VERSION}".tar.gz abseil-cpp
   local OS
   OS=$(uname)
@@ -152,7 +202,10 @@ function install_abseil {
     ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
     (
       cd "${DEPENDENCY_DIR}/abseil-cpp" || exit 1
-      git apply $ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/absl/absl-macos.patch
+      PATCH_FILE="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/absl/absl-macos.patch"
+      # Skip applying the patch if it is already applied.
+      git apply --reverse --check "$PATCH_FILE" 2>/dev/null ||
+        git apply "$PATCH_FILE"
     )
   fi
   cmake_install_dir abseil-cpp \
@@ -206,20 +259,28 @@ function install_arrow {
     if [ -z "$VELOX_ARROW_CMAKE_PATCH" ]; then
       # We need to set a different path when building the Dockerfile.
       ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
-      VELOX_ARROW_CMAKE_PATCH="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
+
+      VELOX_ARROW_CMAKE_PATCH="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch"
+      VELOX_ARROW_CMAKE_PATCH+=" $ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
     fi
 
     cd "$DEPENDENCY_DIR"/arrow || exit 1
-    git apply "$VELOX_ARROW_CMAKE_PATCH"
+    for patch in $VELOX_ARROW_CMAKE_PATCH; do
+      # Try patch command first (handles line number offsets), fall back to git apply
+      if command -v patch >/dev/null 2>&1; then
+        patch -p1 -i "$patch" || exit 1
+      else
+        git apply "$patch" || exit 1
+      fi
+    done
     # Presto needs this for Arrow Flight
     if [[ -n $EXTRA_ARROW_PATCH ]]; then
-      git apply "$EXTRA_ARROW_PATCH"
+      git apply "$EXTRA_ARROW_PATCH" || exit 1
     fi
   ) || exit 1
 
   cmake_install_dir arrow/cpp \
     -DARROW_PARQUET=OFF \
-    -DARROW_WITH_THRIFT=ON \
     -DARROW_WITH_LZ4=ON \
     -DARROW_WITH_SNAPPY=ON \
     -DARROW_WITH_ZLIB=ON \
@@ -234,33 +295,6 @@ function install_arrow {
     -DARROW_BUILD_STATIC=ON \
     -DBOOST_ROOT="$INSTALL_PREFIX" \
     $EXTRA_ARROW_OPTIONS
-}
-
-function install_thrift {
-  wget_and_untar https://github.com/apache/thrift/archive/"${THRIFT_VERSION}".tar.gz thrift
-
-  EXTRA_CXXFLAGS="-O3 -fPIC"
-  # Clang will generate warnings and they need to be suppressed, otherwise the build will fail.
-  if [[ ${USE_CLANG} != "false" ]]; then
-    EXTRA_CXXFLAGS="-O3 -fPIC -Wno-inconsistent-missing-override -Wno-unused-but-set-variable"
-  fi
-
-  CXX_FLAGS="$EXTRA_CXXFLAGS" cmake_install_dir thrift \
-    -DBUILD_SHARED_LIBS=OFF \
-    -DBUILD_COMPILER=ON \
-    -DBUILD_EXAMPLES=OFF \
-    -DBUILD_TUTORIALS=OFF \
-    -DCMAKE_DEBUG_POSTFIX= \
-    -DWITH_AS3=OFF \
-    -DWITH_CPP=ON \
-    -DWITH_C_GLIB=OFF \
-    -DWITH_JAVA=OFF \
-    -DWITH_JAVASCRIPT=OFF \
-    -DWITH_LIBEVENT=OFF \
-    -DWITH_NODEJS=OFF \
-    -DWITH_PYTHON=OFF \
-    -DWITH_QT5=OFF \
-    -DWITH_ZLIB=OFF
 }
 
 function install_stemmer {
@@ -412,7 +446,11 @@ function install_azure_storage_sdk_cpp {
 
 function install_hdfs_deps {
   # Dependencies for Hadoop testing
-  wget_and_untar https://dlcdn.apache.org/hadoop/common/hadoop-"${HADOOP_VERSION}"/hadoop-"${HADOOP_VERSION}".tar.gz hadoop
+  local arch
+  arch=$(uname -m)
+  local hadoop_tarball="hadoop-${HADOOP_VERSION}.tar.gz"
+  [[ ${arch} == "aarch64" ]] && hadoop_tarball="hadoop-${HADOOP_VERSION}-aarch64.tar.gz"
+  wget_and_untar "https://dlcdn.apache.org/hadoop/common/hadoop-${HADOOP_VERSION}/${hadoop_tarball}" hadoop
   cp -a "${DEPENDENCY_DIR}"/hadoop "$INSTALL_PREFIX"
   wget "${WGET_OPTS[@]}" -P "$INSTALL_PREFIX"/hadoop/share/hadoop/common/lib/ https://repo1.maven.org/maven2/junit/junit/4.11/junit-4.11.jar
   # Needed for HADOOP 3.3.6 minicluster. Can remove after updating to 3.4.2.
@@ -420,17 +458,22 @@ function install_hdfs_deps {
 }
 
 function install_uv {
+  # Default the uv tool/install dirs to INSTALL_PREFIX only when it is writable.
+  # On bare CI runners INSTALL_PREFIX (/usr/local) is root-owned, so a non-sudo
+  # `uv tool install` cannot symlink there and fails with "Permission denied";
+  # leaving these unset lets uv use its writable default (~/.local/bin).
+  # Container images set UV_TOOL_BIN_DIR via ENV, which is preserved here.
+  if [[ -w "$INSTALL_PREFIX/bin" ]]; then
+    export UV_TOOL_BIN_DIR="${UV_TOOL_BIN_DIR:-$INSTALL_PREFIX/bin}"
+    export UV_INSTALL_DIR="${UV_INSTALL_DIR:-$UV_TOOL_BIN_DIR}"
+  fi
   if command -v uv >/dev/null 2>&1; then
     echo "uv is already installed."
   else
     echo "Installing uv..."
-
-    export UV_TOOL_BIN_DIR="${UV_TOOL_BIN_DIR:-$INSTALL_PREFIX/bin}"
-    export UV_INSTALL_DIR=${UV_INSTALL_DIR:-"$UV_TOOL_BIN_DIR"}
-
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    uv tool update-shell
   fi
+  uv tool update-shell
 }
 
 function uv_install {

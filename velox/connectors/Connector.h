@@ -34,6 +34,7 @@
 #include "velox/vector/ComplexVector.h"
 
 #include <folly/Synchronized.h>
+#include <folly/container/F14Map.h>
 
 namespace facebook::velox {
 class Config;
@@ -63,6 +64,13 @@ struct ConnectorSplit : public ISerializable {
   const std::string connectorId;
   const int64_t splitWeight{0};
   const bool cacheable{true};
+
+  /// Optional hint for the number of rows a TableScan should read per batch
+  /// from this split. When set (> 0), TableScan uses this instead of the
+  /// query-level preferred batch size. This allows split generators (e.g.,
+  /// MixedUnion split iterators) to control per-source read rates by stamping
+  /// each split with a batch size proportional to its share of the union.
+  int32_t batchSizeHint{0};
 
   std::unique_ptr<AsyncSource<DataSource>> dataSource;
 
@@ -207,6 +215,7 @@ class DataSink {
     uint64_t numCompressedBytes{0};
     uint64_t recodeTimeNs{0};
     uint64_t compressionTimeNs{0};
+    folly::F14FastMap<std::string, RuntimeMetric> writerRuntimeStats;
 
     exec::SpillStats spillStats;
 
@@ -294,6 +303,8 @@ class DataSource {
   /// connector-specific fields, and call scanBatchCallback_.
   virtual void fireScanBatchCallback(core::ScanBatchEvent /*event*/) {}
 
+  /// Returns cumulative runtime stats for work completed so far by this data
+  /// source.
   virtual std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() {
     return {};
   }

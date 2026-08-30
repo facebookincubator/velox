@@ -444,7 +444,7 @@ TEST_F(AbfsFileSystemTest, clientProviderFactoryNotRegistered) {
       std::string("abfs://test@test1.dfs.core.windows.net/test");
   VELOX_ASSERT_THROW(
       abfs_->openFileForRead(abfsFile),
-      "No AzureClientProviderFactory registered for account 'test1'.");
+      "No AzureClientProviderFactory registered for account 'test1'");
 }
 
 TEST_F(AbfsFileSystemTest, registerAbfsFileSink) {

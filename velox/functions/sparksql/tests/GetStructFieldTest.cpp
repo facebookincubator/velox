@@ -18,6 +18,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
+#include "velox/functions/sparksql/specialforms/GetStructField.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -28,15 +29,25 @@ namespace {
 
 class GetStructFieldTest : public SparkFunctionBaseTest {
  protected:
+  core::TypedExprPtr makeGetStructFieldExpr(
+      const TypePtr& inputType,
+      const TypePtr& resultType,
+      const std::string& inputName,
+      int32_t ordinal) {
+    return std::make_shared<const core::CallTypedExpr>(
+        resultType,
+        GetStructFieldCallToSpecialForm::kGetStructField,
+        std::make_shared<const core::FieldAccessTypedExpr>(
+            inputType, inputName),
+        std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(ordinal)));
+  }
+
   void testGetStructField(
       const VectorPtr& input,
       int ordinal,
       const VectorPtr& expected) {
-    auto expr = std::make_shared<const core::CallTypedExpr>(
-        expected->type(),
-        "get_struct_field",
-        std::make_shared<const core::FieldAccessTypedExpr>(input->type(), "c0"),
-        std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(ordinal)));
+    auto expr =
+        makeGetStructFieldExpr(input->type(), expected->type(), "c0", ordinal);
 
     // Input is flat.
     auto result = evaluate(expr, makeRowVector({input}));
@@ -104,15 +115,32 @@ TEST_F(GetStructFieldTest, invalidOrdinal) {
   auto data = makeRowVector({colInt, colString, colIntWithNull});
 
   // Get int field.
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_RUNTIME_THROW(
       testGetStructField(data, -1, colInt),
-      "Invalid ordinal. Should be greater than 0.");
+      "Invalid ordinal. Should be greater than or equal to 0.");
 
   // Get string field.
   VELOX_ASSERT_THROW(
       testGetStructField(data, 4, colString),
       fmt::format(
           "(4 vs. 3) Invalid ordinal. Should be smaller than the children size of input row vector."));
+}
+
+TEST_F(GetStructFieldTest, switchWithGetStructFieldInBranches) {
+  auto data = makeRowVector({
+      makeFlatVector<bool>({true, false, true, false}),
+      makeRowVector({makeFlatVector<int32_t>({1, 2, 3, 4})}),
+      makeRowVector({makeFlatVector<int32_t>({10, 20, 30, 40})}),
+  });
+
+  auto switchExpr = std::make_shared<const core::CallTypedExpr>(
+      INTEGER(),
+      "switch",
+      std::make_shared<const core::FieldAccessTypedExpr>(BOOLEAN(), "c0"),
+      makeGetStructFieldExpr(data->childAt(1)->type(), INTEGER(), "c1", 0),
+      makeGetStructFieldExpr(data->childAt(2)->type(), INTEGER(), "c2", 0));
+  auto result = evaluate(switchExpr, data);
+  assertEqualVectors(makeFlatVector<int32_t>({1, 20, 3, 40}), result);
 }
 
 } // namespace

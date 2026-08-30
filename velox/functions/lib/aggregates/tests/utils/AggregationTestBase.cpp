@@ -682,7 +682,8 @@ void writeToFile(
     const std::string& path,
     const VectorPtr& vector,
     memory::MemoryPool* pool) {
-  dwrf::WriterOptions options;
+  dwio::common::WriterOptions options;
+  options.formatSpecificOptions = std::make_shared<dwrf::DwrfWriterOptions>();
   options.schema = vector->type();
   options.memoryPool = pool;
   auto writeFile = std::make_unique<LocalWriteFile>(path, true, false);
@@ -1039,8 +1040,8 @@ void AggregationTestBase::testAggregationsImpl(
     auto partialStats = taskStats.at(partialNodeId).customStats;
     auto intermediateStats = taskStats.at(intermediateNodeId).customStats;
     if (inputVectors > 1) {
-      EXPECT_LT(0, partialStats.at("abandonedPartialAggregation").count);
-      EXPECT_LT(0, intermediateStats.at("abandonedPartialAggregation").count);
+      EXPECT_LT(0, partialStats.at("abandonedPartialAggregationRows").sum);
+      EXPECT_LT(0, intermediateStats.at("abandonedPartialAggregationRows").sum);
     }
   }
 

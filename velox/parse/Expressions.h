@@ -72,6 +72,10 @@ class FieldAccessExpr : public IExpr {
     return input()->is(Kind::kInput);
   }
 
+  /// Returns 'expr' as a FieldAccessExpr if it refers directly to a
+  /// top-level input column; otherwise returns nullptr.
+  static const FieldAccessExpr* tryAsRootColumn(const ExprPtr& expr);
+
   std::string toString() const override;
 
   ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
@@ -209,7 +213,7 @@ class AggregateCallExpr : public CallExpr {
         name(), inputs(), distinct_, filter_, orderBy_, alias);
   }
 
-  ExprPtr dropAlias() const final {
+  ExprPtr dropAlias() const override {
     return std::make_shared<AggregateCallExpr>(
         name(), inputs(), distinct_, filter_, orderBy_, std::nullopt);
   }

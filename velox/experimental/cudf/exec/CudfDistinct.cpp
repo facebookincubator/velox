@@ -222,6 +222,12 @@ void CudfDistinct::doNoMoreInput() {
   }
 }
 
+void CudfDistinct::doClose() {
+  inputs_.clear();
+  bufferedResult_.reset();
+  Operator::close();
+}
+
 bool CudfDistinct::isFinished() {
   return finished_;
 }

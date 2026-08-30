@@ -39,21 +39,31 @@ class AzureClientProviderFactories {
       const std::string& account,
       const AzureClientProviderFactory& factory);
 
-  /// Get the registered AzureClientProviderFactory for the specified
-  /// account. Throws exception if no factory is registered for the account.
+  /// Get the registered AzureClientProviderFactory for the account in
+  /// abfsPath. If no factory is registered, creates a default provider based
+  /// on the auth type specified in the config. The registry is keyed by the
+  /// short account name; the config fallback uses the full
+  /// account-name-with-suffix so non-public Azure clouds and custom endpoints
+  /// resolve the correct auth-type key.
   static AzureClientProviderFactory getClientFactory(
-      const std::string& account);
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config);
+
+  /// Returns a factory for the specified auth type from the default
+  /// provider registry. Returns nullptr if the auth type is not supported.
+  static AzureClientProviderFactory getDefaultProviderFactory(
+      const std::string& authType);
 
   /// Uses the registered AzureClientProviderFactory to create an
-  /// AzureBlobClient for file read operations. Throws exception if no factory
-  /// is registered for the account specified in `abfsPath`.
+  /// AzureBlobClient for file read operations. If no factory is registered
+  /// for the account, creates a default provider based on config.
   static std::unique_ptr<AzureBlobClient> getReadFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);
 
   /// Uses the registered AzureClientProviderFactory to create an
-  /// AzureDataLakeFileClient for file write operations. Throws exception if no
-  /// factory is registered for the account specified in `abfsPath`.
+  /// AzureDataLakeFileClient for file write operations. If no factory is
+  /// registered for the account, creates a default provider based on config.
   static std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);

@@ -67,6 +67,7 @@ Functions
     the range of ``[0.0040625, 0.26000]``.
 
 .. function:: merge(HyperLogLog) -> HyperLogLog
+   :noindex:
 
     Returns the ``HyperLogLog`` of the aggregate union of the individual ``hll``
     HyperLogLog structures.

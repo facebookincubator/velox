@@ -28,6 +28,7 @@
 #include "velox/functions/sparksql/ArrayPrepend.h"
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/SimpleComparisonMatcher.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions {
 
@@ -252,7 +253,12 @@ void registerArrayFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "shuffle",
       arrayShuffleWithCustomSeedSignatures(),
-      makeArrayShuffleWithCustomSeed,
+      [](const std::string& /*name*/,
+         const std::vector<exec::VectorFunctionArg>& inputArgs,
+         const core::QueryConfig& config) {
+        return makeArrayShuffleWithCustomSeed(
+            inputArgs, SparkQueryConfig{config}.partitionId());
+      },
       getMetadataForArrayShuffle());
   registerIntegerSliceFunction(prefix);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_spark_sequence, prefix + "sequence");

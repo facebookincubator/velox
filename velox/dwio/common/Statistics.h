@@ -18,11 +18,10 @@
 
 #include <fmt/format.h>
 #include <folly/Hash.h>
-#include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
 #include <type_traits>
 #include <utility>
-#include "velox/common/time/CpuWallTimer.h"
+#include "velox/common/time/Timer.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/common/UnitLoader.h"
@@ -34,33 +33,25 @@
 
 namespace facebook::velox::dwio::common {
 
-// Common base for writer version information used in interpreting
-// metadata. Needed to have format-independent signatures for
-// format-specific functions. Each format implementation downcasts this to the
-// format-specific metadata.
+/// Provides a common base for writer version information used when
+/// interpreting metadata.
+///
+/// Enables format-independent function signatures while allowing each format
+/// implementation to downcast to its specific metadata context.
 struct StatsContext {
   virtual ~StatsContext() = default;
 };
 
+/// Encodes either an integer or string flat-map key.
 struct KeyInfo {
- public:
   explicit KeyInfo(int64_t intKey)
       : intKey{std::make_optional<int64_t>(intKey)} {}
   explicit KeyInfo(const std::string& bytesKey)
       : bytesKey{std::make_optional<std::string>(bytesKey)} {}
 
-  bool operator==(const KeyInfo& other) const {
-    return intKey == other.intKey && bytesKey == other.bytesKey;
-  }
+  bool operator==(const KeyInfo& other) const;
 
-  std::string toString() const {
-    if (intKey.has_value()) {
-      return folly::to<std::string>(*intKey);
-    } else if (bytesKey.has_value()) {
-      return *bytesKey;
-    }
-    VELOX_UNREACHABLE("Illegal null key info");
-  }
+  std::string toString() const;
   std::optional<int64_t> intKey;
   std::optional<std::string> bytesKey;
 
@@ -68,22 +59,14 @@ struct KeyInfo {
   KeyInfo() {}
 };
 
+/// Hashes a `KeyInfo` using the active key variant.
 struct KeyInfoHash {
   KeyInfoHash() = default;
 
-  size_t operator()(const KeyInfo& keyInfo) const {
-    if (keyInfo.intKey.has_value()) {
-      return folly::Hash{}(*keyInfo.intKey);
-    } else if (keyInfo.bytesKey.has_value()) {
-      return folly::Hash{}(*keyInfo.bytesKey);
-    }
-    VELOX_UNREACHABLE("Illegal null key info");
-  }
+  size_t operator()(const KeyInfo& keyInfo) const;
 };
 
-/**
- * Statistics that are available for all types of columns.
- */
+/// Statistics that are available for all types of columns.
 class ColumnStatistics {
  public:
   ColumnStatistics(
@@ -100,70 +83,46 @@ class ColumnStatistics {
 
   virtual ~ColumnStatistics() = default;
 
-  /**
-   * Get the number of values in this column. It will differ from the number
-   * of rows because of NULL values and repeated (list/map) values.
-   */
+  /// Get the number of values in this column. It will differ from the number
+  /// of rows because of NULL values and repeated (list/map) values.
   std::optional<uint64_t> getNumberOfValues() const {
     return valueCount_;
   }
 
-  /**
-   * Get whether column has null value.
-   *
-   * WARNING: Some writer implementation does not take ancestor nulls into
-   * account, so this value should not be trusted.  Check whether
-   * `getNumberOfValues()' is smaller than the row group size is a more accurate
-   * way.
-   */
+  /// Get whether column has null value.
+  ///
+  /// WARNING: Some writer implementation does not take ancestor nulls into
+  /// account, so this value should not be trusted. Check whether
+  /// `getNumberOfValues()` is smaller than the row group size for a more
+  /// accurate signal.
   std::optional<bool> hasNull() const {
     return hasNull_;
   }
 
-  /**
-   * Get uncompressed size of all data including child
-   */
+  /// Get uncompressed size of all data including child columns.
   std::optional<uint64_t> getRawSize() const {
     return rawSize_;
   }
 
-  /**
-   * Get total length of all streams including child.
-   */
+  /// Get total length of all streams including child columns.
   std::optional<uint64_t> getSize() const {
     return size_;
   }
 
+  /// Returns the number of distinct values when available.
   std::optional<uint64_t> numDistinct() const {
     return numDistinct_;
   }
 
-  void setNumDistinct(int64_t count) {
-    VELOX_CHECK(
-        !numDistinct_.has_value(), "numDistinct_ can be set only once.");
-    numDistinct_ = count;
-  }
+  /// Sets the distinct-value count once when the writer provides it.
+  void setNumDistinct(int64_t count);
 
   /// Returns true if there are no non-null values (value count is known to be
   /// zero).
-  bool isAllNull() const {
-    return valueCount_.has_value() && valueCount_.value() == 0;
-  }
+  bool isAllNull() const;
 
-  /**
-   * return string representation of this stats object
-   */
-  virtual std::string toString() const {
-    return folly::to<std::string>(
-        "RawSize: ",
-        (rawSize_ ? folly::to<std::string>(rawSize_.value()) : "unknown"),
-        ", Size: ",
-        (size_ ? folly::to<std::string>(size_.value()) : "unknown"),
-        ", Values: ",
-        (valueCount_ ? folly::to<std::string>(valueCount_.value()) : "unknown"),
-        ", hasNull: ",
-        (hasNull_ ? (hasNull_.value() ? "yes" : "no") : "unknown"));
-  }
+  /// Return string representation of this stats object.
+  virtual std::string toString() const;
 
  protected:
   ColumnStatistics() {}
@@ -175,9 +134,7 @@ class ColumnStatistics {
   std::optional<uint64_t> numDistinct_;
 };
 
-/**
- * Statistics for binary columns.
- */
+/// Statistics for binary columns.
 class BinaryColumnStatistics : public virtual ColumnStatistics {
  public:
   BinaryColumnStatistics(
@@ -195,20 +152,12 @@ class BinaryColumnStatistics : public virtual ColumnStatistics {
 
   ~BinaryColumnStatistics() override = default;
 
-  /**
-   * get optional total length
-   */
+  /// Get optional total length.
   std::optional<uint64_t> getTotalLength() const {
     return length_;
   }
 
-  std::string toString() const override {
-    return folly::to<std::string>(
-        ColumnStatistics::toString(),
-        ", Length: ",
-        (length_.has_value() ? folly::to<std::string>(length_.value())
-                             : "unknown"));
-  }
+  std::string toString() const override;
 
  protected:
   BinaryColumnStatistics() {}
@@ -216,9 +165,7 @@ class BinaryColumnStatistics : public virtual ColumnStatistics {
   std::optional<uint64_t> length_;
 };
 
-/**
- * Statistics for boolean columns.
- */
+/// Statistics for boolean columns.
 class BooleanColumnStatistics : public virtual ColumnStatistics {
  public:
   BooleanColumnStatistics(
@@ -237,30 +184,15 @@ class BooleanColumnStatistics : public virtual ColumnStatistics {
 
   ~BooleanColumnStatistics() override = default;
 
-  /*
-   * get optional true count
-   */
+  /// Get optional true count.
   std::optional<uint64_t> getTrueCount() const {
     return trueCount_;
   }
 
-  /*
-   * get optional false count
-   */
-  std::optional<uint64_t> getFalseCount() const {
-    auto valueCount = getNumberOfValues();
-    return trueCount_.has_value() && valueCount.has_value()
-        ? valueCount.value() - trueCount_.value()
-        : std::optional<uint64_t>();
-  }
+  /// Get optional false count.
+  std::optional<uint64_t> getFalseCount() const;
 
-  std::string toString() const override {
-    return folly::to<std::string>(
-        ColumnStatistics::toString(),
-        ", trueCount: ",
-        (trueCount_.has_value() ? folly::to<std::string>(trueCount_.value())
-                                : "unknown"));
-  }
+  std::string toString() const override;
 
  protected:
   BooleanColumnStatistics() {}
@@ -268,9 +200,7 @@ class BooleanColumnStatistics : public virtual ColumnStatistics {
   std::optional<uint64_t> trueCount_;
 };
 
-/**
- * Statistics for float and double columns.
- */
+/// Statistics for float and double columns.
 class DoubleColumnStatistics : public virtual ColumnStatistics {
  public:
   DoubleColumnStatistics(
@@ -295,39 +225,24 @@ class DoubleColumnStatistics : public virtual ColumnStatistics {
 
   ~DoubleColumnStatistics() override = default;
 
-  /**
-   * Get optional smallest value in the column. Only defined if
-   * getNumberOfValues is non-zero.
-   */
+  /// Get optional smallest value in the column. Only defined if
+  /// `getNumberOfValues()` is non-zero.
   std::optional<double> getMinimum() const {
     return min_;
   }
 
-  /**
-   * Get optional largest value in the column. Only defined if getNumberOfValues
-   * is non-zero.
-   */
+  /// Get optional largest value in the column. Only defined if
+  /// `getNumberOfValues()` is non-zero.
   std::optional<double> getMaximum() const {
     return max_;
   }
 
-  /**
-   * Get optional sum of the values in the column.
-   */
+  /// Get optional sum of the values in the column.
   std::optional<double> getSum() const {
     return sum_;
   }
 
-  std::string toString() const override {
-    return folly::to<std::string>(
-        ColumnStatistics::toString(),
-        ", min: ",
-        (min_.has_value() ? folly::to<std::string>(min_.value()) : "unknown"),
-        ", max: ",
-        (max_.has_value() ? folly::to<std::string>(max_.value()) : "unknown"),
-        ", sum: ",
-        (sum_.has_value() ? folly::to<std::string>(sum_.value()) : "unknown"));
-  }
+  std::string toString() const override;
 
  protected:
   DoubleColumnStatistics() {}
@@ -337,10 +252,7 @@ class DoubleColumnStatistics : public virtual ColumnStatistics {
   std::optional<double> sum_;
 };
 
-/**
- * Statistics for all of the integer columns, such as byte, short, int, and
- * long.
- */
+/// Statistics for all integer columns, such as byte, short, int, and long.
 class IntegerColumnStatistics : public virtual ColumnStatistics {
  public:
   IntegerColumnStatistics(
@@ -365,40 +277,25 @@ class IntegerColumnStatistics : public virtual ColumnStatistics {
 
   ~IntegerColumnStatistics() override = default;
 
-  /**
-   * Get optional smallest value in the column. Only defined if
-   * getNumberOfValues is non-zero.
-   */
+  /// Get optional smallest value in the column. Only defined if
+  /// `getNumberOfValues()` is non-zero.
   std::optional<int64_t> getMinimum() const {
     return min_;
   }
 
-  /**
-   * Get optional largest value in the column. Only defined if getNumberOfValues
-   * is non-zero.
-   */
+  /// Get optional largest value in the column. Only defined if
+  /// `getNumberOfValues()` is non-zero.
   std::optional<int64_t> getMaximum() const {
     return max_;
   }
 
-  /**
-   * Get optional sum of the column. Only valid if getNumberOfValues is non-zero
-   * and sum doesn't overflow
-   */
+  /// Get optional sum of the column. Only valid if `getNumberOfValues()` is
+  /// non-zero and the sum does not overflow.
   std::optional<int64_t> getSum() const {
     return sum_;
   }
 
-  std::string toString() const override {
-    return folly::to<std::string>(
-        ColumnStatistics::toString(),
-        ", min: ",
-        (min_.has_value() ? folly::to<std::string>(min_.value()) : "unknown"),
-        ", max: ",
-        (max_.has_value() ? folly::to<std::string>(max_.value()) : "unknown"),
-        ", sum: ",
-        (sum_.has_value() ? folly::to<std::string>(sum_.value()) : "unknown"));
-  }
+  std::string toString() const override;
 
  protected:
   IntegerColumnStatistics() {}
@@ -408,9 +305,46 @@ class IntegerColumnStatistics : public virtual ColumnStatistics {
   std::optional<int64_t> sum_;
 };
 
-/**
- * Statistics for string columns.
- */
+/// Statistics for timestamp columns.
+class TimestampColumnStatistics : public virtual ColumnStatistics {
+ public:
+  TimestampColumnStatistics(
+      std::optional<uint64_t> valueCount,
+      std::optional<bool> hasNull,
+      std::optional<uint64_t> rawSize,
+      std::optional<uint64_t> size,
+      std::optional<Timestamp> min,
+      std::optional<Timestamp> max)
+      : ColumnStatistics(valueCount, hasNull, rawSize, size),
+        min_(min),
+        max_(max) {}
+
+  TimestampColumnStatistics(
+      const ColumnStatistics& colStats,
+      std::optional<Timestamp> min,
+      std::optional<Timestamp> max)
+      : ColumnStatistics(colStats), min_(min), max_(max) {}
+
+  ~TimestampColumnStatistics() override = default;
+
+  std::optional<Timestamp> getMinimum() const {
+    return min_;
+  }
+
+  std::optional<Timestamp> getMaximum() const {
+    return max_;
+  }
+
+  std::string toString() const override;
+
+ protected:
+  TimestampColumnStatistics() {}
+
+  std::optional<Timestamp> min_;
+  std::optional<Timestamp> max_;
+};
+
+/// Statistics for string columns.
 class StringColumnStatistics : public virtual ColumnStatistics {
  public:
   StringColumnStatistics(
@@ -435,38 +369,22 @@ class StringColumnStatistics : public virtual ColumnStatistics {
 
   ~StringColumnStatistics() override = default;
 
-  /**
-   * Get optional minimum value for the column.
-   */
+  /// Get optional minimum value for the column.
   const std::optional<std::string>& getMinimum() const {
     return min_;
   }
 
-  /**
-   * Get optional maximum value for the column.
-   */
+  /// Get optional maximum value for the column.
   const std::optional<std::string>& getMaximum() const {
     return max_;
   }
 
-  /**
-   * Get optional total length of all values.
-   */
+  /// Get optional total length of all values.
   std::optional<uint64_t> getTotalLength() const {
     return length_;
   }
 
-  std::string toString() const override {
-    return folly::to<std::string>(
-        ColumnStatistics::toString(),
-        ", min: ",
-        min_.value_or("unknown"),
-        ", max: ",
-        max_.value_or("unknown"),
-        ", length: ",
-        (length_.has_value() ? folly::to<std::string>(length_.value())
-                             : "unknown"));
-  }
+  std::string toString() const override;
 
  protected:
   StringColumnStatistics() {}
@@ -476,9 +394,7 @@ class StringColumnStatistics : public virtual ColumnStatistics {
   std::optional<uint64_t> length_;
 };
 
-/**
- * Statistics for (flat) map columns.
- */
+/// Statistics for (flat) map columns.
 class MapColumnStatistics : public virtual ColumnStatistics {
  public:
   MapColumnStatistics(
@@ -503,21 +419,7 @@ class MapColumnStatistics : public virtual ColumnStatistics {
     return entryStatistics_;
   }
 
-  std::string toString() const override {
-    std::vector<std::string> values{};
-    values.reserve(entryStatistics_.size());
-    for (const auto& entry : entryStatistics_) {
-      auto& stats = *entry.second;
-      values.push_back(
-          fmt::format(
-              "{{ Key: {}, Stats: {},}}",
-              entry.first.toString(),
-              stats.toString()));
-    }
-    std::string repr;
-    folly::join(",", values, repr);
-    return folly::to<std::string>(ColumnStatistics::toString(), repr);
-  }
+  std::string toString() const override;
 
  protected:
   MapColumnStatistics()
@@ -530,33 +432,30 @@ class MapColumnStatistics : public virtual ColumnStatistics {
       entryStatistics_;
 };
 
+/// Exposes column statistics for a file or row group.
 class Statistics {
  public:
   virtual ~Statistics() = default;
 
-  /**
-   * Get the statistics of the given column.
-   * @param colId id of the column
-   * @return one column's statistics
-   */
+  /// Get the statistics of the given column.
   virtual const ColumnStatistics& getColumnStatistics(uint32_t colId) const = 0;
 
-  /**
-   * Get the number of columns
-   * @return the number of columns
-   */
+  /// Get the number of columns.
   virtual uint32_t getNumberOfColumns() const = 0;
 };
 
-/// Runs 'func' and records decompression stats if 'counter' is non-null.
+/// Runs 'func' and records decompression CPU time if 'counter' is non-null.
 template <typename F>
 auto withDecompressStats(io::IoCounter* counter, F&& func)
     -> std::enable_if_t<!std::is_void_v<decltype(func())>, decltype(func())> {
   if (counter) {
-    DeltaCpuWallTimer timer([counter](const CpuWallTiming& timing) {
-      counter->increment(timing.cpuNanos);
-    });
-    return func();
+    uint64_t cpuNanos = 0;
+    auto result = [&] {
+      NanosecondCPUTimer timer{&cpuNanos};
+      return func();
+    }();
+    counter->increment(cpuNanos);
+    return result;
   }
   return func();
 }
@@ -565,10 +464,12 @@ template <typename F>
 auto withDecompressStats(io::IoCounter* counter, F&& func)
     -> std::enable_if_t<std::is_void_v<decltype(func())>> {
   if (counter) {
-    DeltaCpuWallTimer timer([counter](const CpuWallTiming& timing) {
-      counter->increment(timing.cpuNanos);
-    });
-    func();
+    uint64_t cpuNanos = 0;
+    {
+      NanosecondCPUTimer timer{&cpuNanos};
+      func();
+    }
+    counter->increment(cpuNanos);
     return;
   }
   func();
@@ -577,166 +478,89 @@ auto withDecompressStats(io::IoCounter* counter, F&& func)
 /// Per-column statistics counters. Wraps multiple IoCounter instances for
 /// different types of measurements (decompression, encoding, etc.).
 /// Can be used by any file format reader (DWRF, Nimble, Parquet, etc.).
-struct ColumnMetrics {
-  explicit ColumnMetrics(TypeKind type = TypeKind::INVALID) : typeKind(type) {}
-
-  TypeKind typeKind;
+struct DecodingStats {
   io::IoCounter decompressCPUTimeNanos;
   io::IoCounter decodeCPUTimeNanos;
 
-  /// Merges stats from another ColumnMetrics instance.
-  void merge(const ColumnMetrics& other) {
-    decompressCPUTimeNanos.merge(other.decompressCPUTimeNanos);
-    decodeCPUTimeNanos.merge(other.decodeCPUTimeNanos);
-  }
-};
+  /// Merges stats from another DecodingStats instance.
+  void merge(const DecodingStats& other);
 
-/// Thread-safe collection of per-column metrics keyed by nodeId.
-/// Can be used by any file format reader (DWRF, Nimble, Parquet, etc.).
-struct ColumnMetricsSet {
-  /// Gets or creates a ColumnMetrics for a column. Sets typeKind when creating.
-  ColumnMetrics* getOrCreate(
-      uint32_t nodeId,
-      TypeKind typeKind = TypeKind::INVALID) {
-    auto locked = map_.wlock();
-    auto it = locked->find(nodeId);
-    if (it == locked->end()) {
-      it = locked->emplace(nodeId, std::make_unique<ColumnMetrics>(typeKind))
-               .first;
-    }
-    return it->second.get();
-  }
-
-  /// Merges all column metrics from another ColumnMetricsSet instance.
-  void mergeFrom(const ColumnMetricsSet& other) {
-    auto srcLocked = other.map_.rlock();
-    auto dstLocked = map_.wlock();
-    for (const auto& [nodeId, srcStats] : *srcLocked) {
-      auto it = dstLocked->find(nodeId);
-      if (it == dstLocked->end()) {
-        it =
-            dstLocked->emplace(nodeId, std::make_unique<ColumnMetrics>()).first;
-        it->second->typeKind = srcStats->typeKind;
-      }
-      it->second->merge(*srcStats);
-    }
-  }
-
-  /// Exports per-column metrics into the runtime metrics result map.
+  /// Merges non-empty decoding counters into 'result' using 'prefix'.
   void toRuntimeMetrics(
-      std::unordered_map<std::string, RuntimeMetric>& result) const {
-    auto statsLocked = map_.rlock();
-    for (const auto& [nodeId, stats] : *statsLocked) {
-      // Export decompression timing.
-      const auto& decompressCounter = stats->decompressCPUTimeNanos;
-      if (decompressCounter.count() > 0) {
-        result.emplace(
-            fmt::format(
-                "column_{}.{}.decompressCPUTimeNanos",
-                nodeId,
-                TypeKindName::toName(stats->typeKind)),
-            RuntimeMetric{
-                saturateCast(decompressCounter.sum()),
-                decompressCounter.count(),
-                saturateCast(decompressCounter.min()),
-                saturateCast(decompressCounter.max()),
-                RuntimeCounter::Unit::kNanos});
-      }
-      // Export decode timing.
-      const auto& decodeCounter = stats->decodeCPUTimeNanos;
-      if (decodeCounter.count() > 0) {
-        result.emplace(
-            fmt::format(
-                "column_{}.{}.decodeCPUTimeNanos",
-                nodeId,
-                TypeKindName::toName(stats->typeKind)),
-            RuntimeMetric{
-                saturateCast(decodeCounter.sum()),
-                decodeCounter.count(),
-                saturateCast(decodeCounter.min()),
-                saturateCast(decodeCounter.max()),
-                RuntimeCounter::Unit::kNanos});
-      }
-    }
-  }
-
- private:
-  folly::Synchronized<
-      folly::F14FastMap<uint32_t, std::unique_ptr<ColumnMetrics>>>
-      map_;
+      std::string_view prefix,
+      std::unordered_map<std::string, RuntimeMetric>& result) const;
 };
 
-struct ColumnReaderStatistics {
-  // Number of rows returned by string dictionary reader that is flattened
-  // instead of keeping dictionary encoding.
-  int64_t flattenStringDictionaryValues{0};
+/// Collects runtime metrics produced while reading one column.
+struct ColumnRuntimeStats {
+  /// Creates statistics for a column of 'typeKind'.
+  explicit ColumnRuntimeStats(TypeKind typeKind) : typeKind{typeKind} {}
 
-  // Total time spent in loading pages, in nanoseconds.
-  io::IoCounter pageLoadTimeNs;
+  // Logical type of this column.
+  TypeKind typeKind{TypeKind::INVALID};
 
-  // Per-column decompression metrics. Only populated when column stats
-  // collection is enabled.
-  std::optional<ColumnMetricsSet> columnMetricsSet;
+  // Format-specific metrics for this column, keyed by metric name.
+  folly::F14FastMap<std::string, RuntimeMetric> columnMetrics;
 
-  /// Initializes column stats collection for the given schema if enabled in
-  /// options. Recursively registers metrics for all columns in the type tree.
+  // Decoding counters, when collection is enabled.
+  std::optional<DecodingStats> decodingStats;
+
+  /// Adds one sample to a format-specific column metric.
+  void accumulateStat(
+      const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
+      int64_t value);
+
+  /// Merges all stats from another ColumnRuntimeStats instance.
+  void mergeFrom(const ColumnRuntimeStats& other);
+
+  /// Merges this column's metrics into 'result' using 'prefix'.
+  void toRuntimeMetrics(
+      std::string_view prefix,
+      std::unordered_map<std::string, RuntimeMetric>& result) const;
+};
+
+/// Collects format-specific statistics while processing one file split.
+struct SplitStats {
+  /// Creates an accumulator for a split of 'format'.
+  explicit SplitStats(FileFormat format) : format{format} {
+    VELOX_CHECK_NE(format, FileFormat::UNKNOWN);
+  }
+
+  // File format shared by all metrics collected for this split.
+  const FileFormat format;
+
+  // Split-level format-specific metrics, keyed by metric name.
+  folly::F14FastMap<std::string, RuntimeMetric> splitMetrics;
+
+  // Per-column statistics keyed by schema node ID.
+  // TODO(#18171): Use a stable column ID rather than schema node ID
+  //  which is not scan-stable.
+  folly::F14FastMap<uint32_t, ColumnRuntimeStats> columnStats;
+
+  /// Returns the statistics for 'nodeId', creating them if necessary.
+  ColumnRuntimeStats& getOrCreateColumnStats(
+      uint32_t nodeId,
+      TypeKind typeKind);
+
+  /// Returns decoding statistics for 'nodeId', or nullptr if unavailable.
+  DecodingStats* decodingStats(uint32_t nodeId);
+
+  /// Registers every schema node and optionally enables decoding counters.
   void initColumnStatsCollection(
       const TypeWithId& schema,
-      const RowReaderOptions& options) {
-    if (!options.collectColumnCpuMetrics()) {
-      return;
-    }
-    columnMetricsSet.emplace();
-    registerColumnMetricsImpl(schema);
-  }
+      const RowReaderOptions& options);
 
-  /// Merges all stats from another ColumnReaderStatistics instance.
-  void mergeFrom(const ColumnReaderStatistics& other) {
-    flattenStringDictionaryValues += other.flattenStringDictionaryValues;
-    pageLoadTimeNs.merge(other.pageLoadTimeNs);
-    if (other.columnMetricsSet) {
-      if (!columnMetricsSet) {
-        columnMetricsSet.emplace();
-      }
-      columnMetricsSet->mergeFrom(*other.columnMetricsSet);
-    }
-  }
-
-  /// Exports all metrics into the runtime metrics result map.
-  void toRuntimeMetrics(
-      std::unordered_map<std::string, RuntimeMetric>& result) const {
-    if (flattenStringDictionaryValues > 0) {
-      result.emplace(
-          "flattenStringDictionaryValues",
-          RuntimeMetric(flattenStringDictionaryValues));
-    }
-    if (pageLoadTimeNs.sum() > 0) {
-      result.emplace(
-          "pageLoadTimeNs",
-          RuntimeMetric(
-              pageLoadTimeNs.sum(),
-              pageLoadTimeNs.count(),
-              pageLoadTimeNs.min(),
-              pageLoadTimeNs.max(),
-              RuntimeCounter::Unit::kNanos));
-    }
-    if (columnMetricsSet) {
-      columnMetricsSet->toRuntimeMetrics(result);
-    }
-  }
+  /// Adds one sample to a split-level format-specific metric.
+  void accumulateStat(
+      const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
+      int64_t value);
 
  private:
-  void registerColumnMetricsImpl(const TypeWithId& node) {
-    columnMetricsSet->getOrCreate(node.id(), node.type()->kind());
-    for (uint32_t i = 0; i < node.size(); ++i) {
-      if (const auto* child = node.childAt(i).get()) {
-        registerColumnMetricsImpl(*child);
-      }
-    }
-  }
+  void registerColumnStats(const TypeWithId& node, bool collectDecodingStats);
 };
 
-struct RuntimeStatistics {
+/// Aggregates runtime statistics collected while processing a split.
+struct RuntimeStats {
   // Number of splits skipped based on statistics.
   int64_t skippedSplits{0};
 
@@ -752,46 +576,36 @@ struct RuntimeStatistics {
   // Number of strides (row groups) processed based on statistics.
   int64_t processedStrides{0};
 
+  // Records extra bytes read past the ideal footer size.
   int64_t footerBufferOverread{0};
 
+  // Records missing bytes relative to the ideal footer size.
+  int64_t footerBufferUnderread{0};
+
+  // Counts footer cache hits.
+  int64_t footerCacheHit{0};
+
+  // Counts stripes observed in the file.
   int64_t numStripes{0};
 
+  // Stores unit-loader runtime metrics.
   UnitLoaderStats unitLoaderStats;
-  ColumnReaderStatistics columnReaderStats;
 
-  std::unordered_map<std::string, RuntimeMetric> toRuntimeMetricMap() {
-    std::unordered_map<std::string, RuntimeMetric> result;
-    for (const auto& [name, metric] : unitLoaderStats.stats()) {
-      result.emplace(name, RuntimeMetric(metric.sum, metric.unit));
-    }
-    if (skippedSplits > 0) {
-      result.emplace("skippedSplits", RuntimeMetric(skippedSplits));
-    }
-    if (processedSplits > 0) {
-      result.emplace("processedSplits", RuntimeMetric(processedSplits));
-    }
-    if (skippedSplitBytes > 0) {
-      result.emplace(
-          "skippedSplitBytes",
-          RuntimeMetric(skippedSplitBytes, RuntimeCounter::Unit::kBytes));
-    }
-    if (skippedStrides > 0) {
-      result.emplace("skippedStrides", RuntimeMetric(skippedStrides));
-    }
-    if (processedStrides > 0) {
-      result.emplace("processedStrides", RuntimeMetric(processedStrides));
-    }
-    if (footerBufferOverread > 0) {
-      result.emplace(
-          "footerBufferOverread",
-          RuntimeMetric(footerBufferOverread, RuntimeCounter::Unit::kBytes));
-    }
-    if (numStripes > 0) {
-      result.emplace("numStripes", RuntimeMetric(numStripes));
-    }
-    columnReaderStats.toRuntimeMetrics(result);
-    return result;
-  }
+  // Split-level format-specific metrics aggregated by file format.
+  folly::F14FastMap<FileFormat, folly::F14FastMap<std::string, RuntimeMetric>>
+      formatSpecificStats;
+
+  // Per-column statistics aggregated by schema node ID and file format.
+  // TODO(#18171): Use a stable column ID rather than schema node ID
+  //  which is not scan-stable.
+  folly::F14FastMap<uint32_t, folly::F14FastMap<FileFormat, ColumnRuntimeStats>>
+      columnStats;
+
+  /// Merges one split's format-specific and per-column statistics.
+  void mergeFrom(const SplitStats& split);
+
+  // Exports collected counters as runtime metrics.
+  std::unordered_map<std::string, RuntimeMetric> toRuntimeMetricMap() const;
 };
 
 } // namespace facebook::velox::dwio::common

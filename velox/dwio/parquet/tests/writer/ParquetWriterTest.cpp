@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <arrow/io/memory.h>
 #include <arrow/type.h>
 #include <folly/init/Init.h>
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
@@ -26,9 +27,13 @@
 #include "velox/core/QueryCtx.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
+#include "velox/dwio/parquet/common/ParquetConfig.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
+#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
-#include "velox/dwio/parquet/writer/WriterConfig.h"
+#include "velox/dwio/parquet/writer/arrow/PageIndex.h"
+#include "velox/dwio/parquet/writer/arrow/tests/ColumnReader.h"
+#include "velox/dwio/parquet/writer/arrow/tests/FileReader.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -42,6 +47,7 @@ using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::parquet;
 using namespace facebook::velox::common::testutil;
+namespace parquetArrow = facebook::velox::parquet::arrow;
 
 class ParquetWriterTest : public ParquetTestBase {
  protected:
@@ -63,16 +69,6 @@ class ParquetWriterTest : public ParquetTestBase {
     writers_.clear();
   }
 
-  std::unique_ptr<RowReader> createRowReaderWithSchema(
-      const std::unique_ptr<Reader> reader,
-      const RowTypePtr& rowType) {
-    auto rowReaderOpts = getReaderOpts(rowType);
-    auto scanSpec = makeScanSpec(rowType);
-    rowReaderOpts.setScanSpec(scanSpec);
-    auto rowReader = reader->createRowReader(rowReaderOpts);
-    return rowReader;
-  }
-
   RowVectorPtr makeSmallintTestData(int64_t rows) {
     auto data = makeRowVector({
         makeFlatVector<int16_t>(rows, [](auto row) { return row + 1; }),
@@ -86,13 +82,53 @@ class ParquetWriterTest : public ParquetTestBase {
     return data;
   }
 
+  // Builds a dictionary column of 'size' rows over 'values', mapping each row
+  // to values[indexAt(row)], optionally applying a null buffer.
+  VectorPtr makeDictionaryColumn(
+      vector_size_t size,
+      const VectorPtr& values,
+      std::function<vector_size_t(vector_size_t)> indexAt,
+      BufferPtr nulls = nullptr) {
+    return BaseVector::wrapInDictionary(
+        std::move(nulls), makeIndices(size, std::move(indexAt)), size, values);
+  }
+
+  // Returns a flattened copy of 'vector'. Parquet always reads back flat, so
+  // the flattened input is the expected round-trip output.
+  static VectorPtr flatten(const VectorPtr& vector) {
+    VectorPtr flat = vector;
+    BaseVector::flattenVector(flat);
+    return flat;
+  }
+
+  // Writes single-batch 'data' and verifies it round-trips to 'expected'.
+  void assertRoundTrip(
+      const RowVectorPtr& data,
+      const RowVectorPtr& expected,
+      const ParquetWriterOptions& writerOptions = {}) {
+    auto schema = asRowType(data->type());
+    auto* sinkPtr = write(data, writerOptions);
+    auto reader = createReaderInMemory(*sinkPtr);
+    ASSERT_EQ(reader->numberOfRows(), data->size());
+    auto rowReader = createRowReaderFromReader(*reader, schema);
+    assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+  }
+
+  // Writes 'data' and verifies it round-trips, using the flattened form of each
+  // column as the expected output.
+  void assertFlattenedRoundTrip(const RowVectorPtr& data) {
+    std::vector<VectorPtr> expectedChildren;
+    expectedChildren.reserve(data->children().size());
+    for (const auto& child : data->children()) {
+      expectedChildren.push_back(flatten(child));
+    }
+    assertRoundTrip(data, makeRowVector(expectedChildren));
+  }
+
   thrift::PageHeader readPageHeader(
       MemorySink* sinkPtr,
       int64_t offsetFromDataPage) {
-    dwio::common::ReaderOptions readerOptions(leafPool_.get());
-    readerOptions.setDataIoStats(dataIoStats_);
-    readerOptions.setMetadataIoStats(metadataIoStats_);
-    auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+    auto reader = createReaderInMemory(*sinkPtr);
 
     auto colChunkPtr = reader->fileMetaData().rowGroup(0).columnChunk(0);
     std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
@@ -116,7 +152,26 @@ class ParquetWriterTest : public ParquetTestBase {
   }
 
   inline static const std::string kHiveConnectorId = "test-hive";
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
+
+  struct WriterWithSink {
+    std::unique_ptr<facebook::velox::parquet::Writer> writer;
+    MemorySink* sink;
+  };
+
+  WriterWithSink makeWriterWithSink(
+      const RowTypePtr& schema,
+      dwio::common::WriterOptions options,
+      const ParquetWriterOptions& writerOptions) {
+    auto sink = std::make_unique<MemorySink>(
+        200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
+    auto* sinkPtr = sink.get();
+    options.formatSpecificOptions =
+        std::make_shared<ParquetWriterOptions>(writerOptions);
+    auto writer = std::make_unique<facebook::velox::parquet::Writer>(
+        std::move(sink), options, schema);
+    return WriterWithSink{std::move(writer), sinkPtr};
+  }
 };
 
 class ArrowMemoryPool final : public ::arrow::MemoryPool {
@@ -183,8 +238,60 @@ std::vector<CompressionKind> params = {
     CompressionKind::CompressionKind_SNAPPY,
     CompressionKind::CompressionKind_ZSTD,
     CompressionKind::CompressionKind_LZ4,
+    CompressionKind::CompressionKind_LZ4_HADOOP,
     CompressionKind::CompressionKind_GZIP,
 };
+
+TEST_F(ParquetWriterTest, createFormatOptions) {
+  config::ConfigBase rawConnectorConfig({
+      {"hive.parquet.writer.enable-dictionary", "true"},
+      {"hive.parquet.writer.page-size", "2KB"},
+      {"hive.parquet.writer.created-by", "test-writer"},
+      {"hive.parquet.writer.enable-page-index", "true"},
+      {"iceberg.parquet.writer.page-size", "4KB"},
+  });
+  config::ConfigBase session({
+      {"writer_enable_dictionary", "false"},
+      {"writer_batch_size", "97"},
+  });
+
+  ParquetWriterFactory factory;
+  config::ConfigBase connectorConfig(
+      rawConnectorConfig.rawConfigsWithPrefix("hive.parquet."));
+  auto parquetOptions = checkedPointerCast<ParquetWriterOptions>(
+      factory.createFormatOptions(connectorConfig, session));
+
+  ASSERT_TRUE(parquetOptions->enableDictionary.has_value());
+  ASSERT_TRUE(parquetOptions->dataPageSize.has_value());
+  ASSERT_TRUE(parquetOptions->batchSize.has_value());
+  ASSERT_TRUE(parquetOptions->createdBy.has_value());
+  ASSERT_TRUE(parquetOptions->enableWritePageIndex.has_value());
+  EXPECT_FALSE(parquetOptions->enableDictionary.value());
+  EXPECT_EQ(parquetOptions->dataPageSize.value(), 2 * 1024);
+  EXPECT_EQ(parquetOptions->batchSize.value(), 97);
+  EXPECT_EQ(parquetOptions->createdBy.value(), "test-writer");
+  EXPECT_TRUE(parquetOptions->enableWritePageIndex.value());
+
+  // When unset in both connector and session config, the option is left unset
+  // so the writer falls back to its default (page index off).
+  {
+    auto defaultOptions =
+        checkedPointerCast<ParquetWriterOptions>(factory.createFormatOptions(
+            config::ConfigBase{std::unordered_map<std::string, std::string>{}},
+            config::ConfigBase{
+                std::unordered_map<std::string, std::string>{}}));
+    EXPECT_FALSE(defaultOptions->enableWritePageIndex.has_value());
+  }
+
+  config::ConfigBase icebergConnectorConfig(
+      rawConnectorConfig.rawConfigsWithPrefix("iceberg.parquet."));
+  parquetOptions =
+      checkedPointerCast<ParquetWriterOptions>(factory.createFormatOptions(
+          icebergConnectorConfig,
+          config::ConfigBase{std::unordered_map<std::string, std::string>{}}));
+  ASSERT_TRUE(parquetOptions->dataPageSize.has_value());
+  EXPECT_EQ(parquetOptions->dataPageSize.value(), 4 * 1024);
+}
 
 TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
   constexpr int64_t kRows = 10'000;
@@ -217,15 +324,15 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
       testEnableDictionaryAndDictionaryPageSizeToGetPageHeader(
           defaultConfigFromFile, defaultSessionPropertiesFromFile, true);
   // We use the default version of data page (V1)
-  EXPECT_EQ(defaultHeader.type, thrift::PageType::type::DATA_PAGE);
+  EXPECT_EQ(*defaultHeader.type(), thrift::PageType::DATA_PAGE);
   // Dictionary encoding is enabled as default
   EXPECT_EQ(
-      defaultHeader.data_page_header.encoding,
+      *defaultHeader.data_page_header()->encoding(),
       thrift::Encoding::RLE_DICTIONARY);
   // Default dictionary page size is 1MB (same as data page size), so it can
   // contain a dictionary for all values. So all data will be in the first
   // data page
-  EXPECT_EQ(defaultHeader.data_page_header.num_values, kRows);
+  EXPECT_EQ(*defaultHeader.data_page_header()->num_values(), kRows);
 
   // Test normal config
 
@@ -235,16 +342,16 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
   // page size limit, the default is 1MB (same as data page default size) then
   // there will be only one data page contains all data encoded with dictionary
   const std::unordered_map<std::string, std::string> normalConfigFromFile = {
-      {config::ConfigBase::toConfigKey(
-           parquet::WriterConfig::kParquetSessionEnableDictionary),
-       "true"},
-      {config::ConfigBase::toConfigKey(
-           parquet::WriterConfig::kParquetSessionDictionaryPageSizeLimit),
+      {std::string(parquet::ParquetConfig::kWriterEnableDictionary), "true"},
+      {std::string(parquet::ParquetConfig::kWriterDictionaryPageSizeLimit),
        "1B"},
   };
   const std::unordered_map<std::string, std::string> normalSessionProperties = {
-      {parquet::WriterConfig::kParquetSessionEnableDictionary, "true"},
-      {parquet::WriterConfig::kParquetSessionDictionaryPageSizeLimit, "1B"},
+      {std::string(parquet::ParquetConfig::kWriterEnableDictionarySession),
+       "true"},
+      {std::string(
+           parquet::ParquetConfig::kWriterDictionaryPageSizeLimitSession),
+       "1B"},
   };
 
   // Here we are reading the second data page. If we don't set the dictionary
@@ -255,22 +362,22 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
           normalConfigFromFile, normalSessionProperties, false);
 
   // We use the default version of data page (V1)
-  EXPECT_EQ(normalHeader.type, thrift::PageType::type::DATA_PAGE);
+  EXPECT_EQ(*normalHeader.type(), thrift::PageType::DATA_PAGE);
   // The second data page will fall back to PLAIN encoding
-  EXPECT_EQ(normalHeader.data_page_header.encoding, thrift::Encoding::PLAIN);
+  EXPECT_EQ(
+      *normalHeader.data_page_header()->encoding(), thrift::Encoding::PLAIN);
 
   // Test incorrect enable dictionary config
 
   const std::string invalidEnableDictionaryValue{"NaB"};
   const std::unordered_map<std::string, std::string>
       incorrectEnableDictionaryConfigFromFile = {
-          {config::ConfigBase::toConfigKey(
-               parquet::WriterConfig::kParquetSessionEnableDictionary),
+          {std::string(parquet::ParquetConfig::kWriterEnableDictionary),
            invalidEnableDictionaryValue},
       };
   const std::unordered_map<std::string, std::string>
       incorrectEnableDictionarySessionProperties = {
-          {parquet::WriterConfig::kParquetSessionEnableDictionary,
+          {std::string(parquet::ParquetConfig::kWriterEnableDictionarySession),
            invalidEnableDictionaryValue},
       };
 
@@ -289,13 +396,13 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
   const std::string invalidDictionaryPageSizeValue{"NaN"};
   const std::unordered_map<std::string, std::string>
       incorrectDictionaryPageSizeConfigFromFile = {
-          {config::ConfigBase::toConfigKey(
-               parquet::WriterConfig::kParquetSessionDictionaryPageSizeLimit),
+          {std::string(parquet::ParquetConfig::kWriterDictionaryPageSizeLimit),
            invalidDictionaryPageSizeValue},
       };
   const std::unordered_map<std::string, std::string>
       incorrectDictionaryPageSizeSessionProperties = {
-          {parquet::WriterConfig::kParquetSessionDictionaryPageSizeLimit,
+          {std::string(
+               parquet::ParquetConfig::kWriterDictionaryPageSizeLimitSession),
            invalidDictionaryPageSizeValue},
       };
 
@@ -327,13 +434,13 @@ TEST_F(ParquetWriterTest, dictionaryEncodingOff) {
 
   const std::unordered_map<std::string, std::string>
       withoutPageSizeConfigFromFile = {
-          {config::ConfigBase::toConfigKey(
-               parquet::WriterConfig::kParquetSessionEnableDictionary),
+          {std::string(parquet::ParquetConfig::kWriterEnableDictionary),
            "false"},
       };
   const std::unordered_map<std::string, std::string>
       withoutPageSizeSessionProperties = {
-          {parquet::WriterConfig::kParquetSessionEnableDictionary, "false"},
+          {std::string(parquet::ParquetConfig::kWriterEnableDictionarySession),
+           "false"},
       };
 
   const auto withoutPageSizeHeader =
@@ -341,30 +448,32 @@ TEST_F(ParquetWriterTest, dictionaryEncodingOff) {
           withoutPageSizeConfigFromFile, withoutPageSizeSessionProperties);
 
   // We use the default version of data page (V1)
-  EXPECT_EQ(withoutPageSizeHeader.type, thrift::PageType::type::DATA_PAGE);
+  EXPECT_EQ(*withoutPageSizeHeader.type(), thrift::PageType::DATA_PAGE);
   // Since we turn off the dictionary encoding, and the default data page size
   // is 1MB, there is only one page, and its encoding should be PLAIN, which
   // means the configuration is applied
   EXPECT_EQ(
-      withoutPageSizeHeader.data_page_header.encoding, thrift::Encoding::PLAIN);
+      *withoutPageSizeHeader.data_page_header()->encoding(),
+      thrift::Encoding::PLAIN);
   // All rows will be on the only data page, this is a sanity check
-  EXPECT_EQ(withoutPageSizeHeader.data_page_header.num_values, kRows);
+  EXPECT_EQ(*withoutPageSizeHeader.data_page_header()->num_values(), kRows);
 
   // Test dictionary off but with dictionary page size configured
 
   const std::unordered_map<std::string, std::string>
       withPageSizeConfigFromFile = {
-          {config::ConfigBase::toConfigKey(
-               parquet::WriterConfig::kParquetSessionEnableDictionary),
+          {std::string(parquet::ParquetConfig::kWriterEnableDictionary),
            "false"},
-          {config::ConfigBase::toConfigKey(
-               parquet::WriterConfig::kParquetSessionDictionaryPageSizeLimit),
+          {std::string(parquet::ParquetConfig::kWriterDictionaryPageSizeLimit),
            "1B"},
       };
   const std::unordered_map<std::string, std::string>
       withPageSizeSessionProperties = {
-          {parquet::WriterConfig::kParquetSessionEnableDictionary, "false"},
-          {parquet::WriterConfig::kParquetSessionDictionaryPageSizeLimit, "1B"},
+          {std::string(parquet::ParquetConfig::kWriterEnableDictionarySession),
+           "false"},
+          {std::string(
+               parquet::ParquetConfig::kWriterDictionaryPageSizeLimitSession),
+           "1B"},
       };
 
   const auto withPageSizeHeader =
@@ -373,10 +482,11 @@ TEST_F(ParquetWriterTest, dictionaryEncodingOff) {
 
   // Should be the same as without dictionary page size configured, because
   // when the dictionary is disabled, the dictionary page silze is meaningless
-  EXPECT_EQ(withPageSizeHeader.type, thrift::PageType::type::DATA_PAGE);
+  EXPECT_EQ(*withPageSizeHeader.type(), thrift::PageType::DATA_PAGE);
   EXPECT_EQ(
-      withPageSizeHeader.data_page_header.encoding, thrift::Encoding::PLAIN);
-  EXPECT_EQ(withPageSizeHeader.data_page_header.num_values, kRows);
+      *withPageSizeHeader.data_page_header()->encoding(),
+      thrift::Encoding::PLAIN);
+  EXPECT_EQ(*withPageSizeHeader.data_page_header()->num_values(), kRows);
 }
 
 TEST_F(ParquetWriterTest, compression) {
@@ -400,21 +510,19 @@ TEST_F(ParquetWriterTest, compression) {
       makeFlatVector<double>(kRows, [](auto row) { return row - 25; }),
   });
 
-  parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = rootPool_.get();
-  writerOptions.compressionKind = CompressionKind::CompressionKind_SNAPPY;
+  ParquetWriterOptions writerOptions;
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.compressionKind = CompressionKind::CompressionKind_SNAPPY;
 
   const auto& fieldNames = schema->names();
   for (int i = 0; i < params.size(); i++) {
     writerOptions.columnCompressionsMap[fieldNames[i]] = params[i];
   }
 
-  auto* sinkPtr = write(data, writerOptions);
+  auto* sinkPtr = write(data, options, writerOptions);
 
-  dwio::common::ReaderOptions readerOptions(leafPool_.get());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+  auto reader = createReaderInMemory(*sinkPtr);
 
   ASSERT_EQ(reader->numberOfRows(), kRows);
   ASSERT_EQ(*reader->rowType(), *schema);
@@ -426,8 +534,71 @@ TEST_F(ParquetWriterTest, compression) {
                             : CompressionKind::CompressionKind_SNAPPY);
   }
 
-  auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
+  auto rowReader = createRowReaderFromReader(*reader, schema);
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
+}
+
+TEST_F(ParquetWriterTest, compressionRoundTripAcrossPages) {
+  // Writes multi-page data with every writable codec and verifies the values
+  // round-trip. Small data pages force many compressed pages per column, so the
+  // reader's per-codec decompression paths (the Snappy/ZSTD/GZIP direct paths
+  // and the LZ4 stream path with Hadoop framing) are exercised repeatedly and
+  // across page boundaries.
+  auto schema =
+      ROW({"c_int", "c_bigint", "c_double", "c_string"},
+          {INTEGER(), BIGINT(), DOUBLE(), VARCHAR()});
+  constexpr int64_t kRows = 20'000;
+
+  // Stable backing storage for the string column; makeFlatVector copies the
+  // bytes into the vector, but keeping storage alive avoids dangling views.
+  std::vector<std::string> stringStorage(kRows);
+  for (int64_t i = 0; i < kRows; ++i) {
+    stringStorage[i] = fmt::format("velox-parquet-value-{:08d}-padding", i);
+  }
+
+  const auto data = makeRowVector(
+      schema->names(),
+      {
+          makeFlatVector<int32_t>(kRows, [](auto row) { return row * 3 - 7; }),
+          makeFlatVector<int64_t>(
+              kRows, [](auto row) { return row * 1'000'003LL; }),
+          makeFlatVector<double>(
+              kRows, [](auto row) { return row * 0.25 - 3.5; }),
+          makeFlatVector<StringView>(
+              kRows, [&](auto row) { return StringView(stringStorage[row]); }),
+      });
+
+  for (const auto compression :
+       {CompressionKind::CompressionKind_NONE,
+        CompressionKind::CompressionKind_SNAPPY,
+        CompressionKind::CompressionKind_ZSTD,
+        CompressionKind::CompressionKind_GZIP,
+        CompressionKind::CompressionKind_LZ4,
+        CompressionKind::CompressionKind_LZ4_HADOOP}) {
+    if (!parquet::Writer::isCodecAvailable(compression)) {
+      continue;
+    }
+    SCOPED_TRACE(compressionKindToString(compression));
+
+    ParquetWriterOptions writerOptions;
+    // Small pages force multiple compressed data pages per column.
+    writerOptions.dataPageSize = 4 * 1024;
+    // Disable dictionary so string values take the PLAIN path and each page
+    // carries compressed value bytes.
+    writerOptions.enableDictionary = false;
+
+    dwio::common::WriterOptions options;
+    options.memoryPool = rootPool_.get();
+    options.compressionKind = compression;
+
+    auto* sinkPtr = write(data, options, writerOptions);
+
+    auto reader = createReaderInMemory(*sinkPtr);
+    ASSERT_EQ(reader->numberOfRows(), kRows);
+
+    auto rowReader = createRowReaderFromReader(*reader, schema);
+    assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
+  }
 }
 
 TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
@@ -453,16 +624,17 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   const auto defaultHeader = testPageSizeAndBatchSizeToGetPageHeader(
       defaultConfigFromFile, defaultSessionPropertiesFromFile);
   // We use the default version of data page (V1)
-  EXPECT_EQ(defaultHeader.type, thrift::PageType::type::DATA_PAGE);
+  EXPECT_EQ(*defaultHeader.type(), thrift::PageType::DATA_PAGE);
   // We don't use compressor here
   EXPECT_EQ(
-      defaultHeader.uncompressed_page_size, defaultHeader.compressed_page_size);
+      *defaultHeader.uncompressed_page_size(),
+      defaultHeader.compressed_page_size());
   // The default page size is 1MB, which can actually contains all data in one
   // page
-  EXPECT_EQ(defaultHeader.compressed_page_size, 17529);
+  EXPECT_EQ(*defaultHeader.compressed_page_size(), 17529);
   // As mentioned above, the default page size can contain all data in one page
   // so the number of values of the first page equals to the total number
-  EXPECT_EQ(defaultHeader.data_page_header.num_values, kRows);
+  EXPECT_EQ(*defaultHeader.data_page_header()->num_values(), kRows);
 
   // Test normal config
 
@@ -470,41 +642,37 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   // of values in each page can be divided by 97, it means the batch size is
   // applied (default is 1024)
   const std::unordered_map<std::string, std::string> normalConfigFromFile = {
-      {config::ConfigBase::toConfigKey(
-           parquet::WriterConfig::kParquetSessionWritePageSize),
-       "2KB"},
-      {config::ConfigBase::toConfigKey(
-           parquet::WriterConfig::kParquetSessionWriteBatchSize),
-       "97"},
+      {std::string(parquet::ParquetConfig::kWriterPageSize), "2KB"},
+      {std::string(parquet::ParquetConfig::kWriterBatchSize), "97"},
   };
   const std::unordered_map<std::string, std::string> normalSessionProperties = {
-      {parquet::WriterConfig::kParquetSessionWritePageSize, "2KB"},
-      {parquet::WriterConfig::kParquetSessionWriteBatchSize, "97"},
+      {std::string(parquet::ParquetConfig::kWriterPageSizeSession), "2KB"},
+      {std::string(parquet::ParquetConfig::kWriterBatchSizeSession), "97"},
   };
   const auto normalHeader = testPageSizeAndBatchSizeToGetPageHeader(
       normalConfigFromFile, normalSessionProperties);
   // We use the default version of data page (V1)
-  EXPECT_EQ(normalHeader.type, thrift::PageType::type::DATA_PAGE);
+  EXPECT_EQ(*normalHeader.type(), thrift::PageType::DATA_PAGE);
   // We don't use compressor here
   EXPECT_EQ(
-      normalHeader.uncompressed_page_size, normalHeader.compressed_page_size);
+      *normalHeader.uncompressed_page_size(),
+      *normalHeader.compressed_page_size());
   // 1485B < 2KB < 1MB, which means the page size is applied (default is 1MB)
-  EXPECT_EQ(normalHeader.compressed_page_size, 1485);
+  EXPECT_EQ(*normalHeader.compressed_page_size(), 1485);
   // 1067 % 97 == 0, which means the batch size is applied (default is 1024)
-  EXPECT_EQ(normalHeader.data_page_header.num_values, 1067);
+  EXPECT_EQ(*normalHeader.data_page_header()->num_values(), 1067);
 
   // Test incorrect page size config
 
   const std::string invalidPageSizeAndBatchSizeValue{"NaN"};
   const std::unordered_map<std::string, std::string>
       incorrectPageSizeConfigFromFile = {
-          {config::ConfigBase::toConfigKey(
-               parquet::WriterConfig::kParquetSessionWritePageSize),
+          {std::string(parquet::ParquetConfig::kWriterPageSize),
            invalidPageSizeAndBatchSizeValue},
       };
   const std::unordered_map<std::string, std::string>
       incorrectPageSizeSessionPropertiesFromFile = {
-          {parquet::WriterConfig::kParquetSessionWritePageSize,
+          {std::string(parquet::ParquetConfig::kWriterPageSizeSession),
            invalidPageSizeAndBatchSizeValue},
       };
 
@@ -520,13 +688,12 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
 
   const std::unordered_map<std::string, std::string>
       incorrectBatchSizeConfigFromFile = {
-          {config::ConfigBase::toConfigKey(
-               parquet::WriterConfig::kParquetSessionWriteBatchSize),
+          {std::string(parquet::ParquetConfig::kWriterBatchSize),
            invalidPageSizeAndBatchSizeValue},
       };
   const std::unordered_map<std::string, std::string>
       incorrectBatchSizeSessionPropertiesFromFile = {
-          {parquet::WriterConfig::kParquetSessionWriteBatchSize,
+          {std::string(parquet::ParquetConfig::kWriterBatchSizeSession),
            invalidPageSizeAndBatchSizeValue},
       };
 
@@ -550,78 +717,142 @@ TEST_F(ParquetWriterTest, toggleDataPageVersion) {
   // (thrift::PageType::type) used.
   const auto testDataPageVersion =
       [&](std::unordered_map<std::string, std::string> configFromFile,
-          std::unordered_map<std::string, std::string> sessionProperties) {
-        auto* sinkPtr = write(
-            data, std::move(configFromFile), std::move(sessionProperties));
-        return readPageHeader(sinkPtr, 0).type;
-      };
+          std::unordered_map<std::string, std::string> sessionProperties)
+      -> thrift::PageType {
+    auto* sinkPtr =
+        write(data, std::move(configFromFile), std::move(sessionProperties));
+    return *readPageHeader(sinkPtr, 0).type_ref();
+  };
 
   // Test default behavior - DataPage should be V1.
-  ASSERT_EQ(testDataPageVersion({}, {}), thrift::PageType::type::DATA_PAGE);
+  ASSERT_EQ(testDataPageVersion({}, {}), thrift::PageType::DATA_PAGE);
 
   // Simulate setting DataPage version to V2 via Hive config from file.
   std::unordered_map<std::string, std::string> configFromFile = {
-      {config::ConfigBase::toConfigKey(
-           parquet::WriterConfig::kParquetSessionDataPageVersion),
-       "V2"}};
+      {std::string(parquet::ParquetConfig::kWriterDataPageVersion), "V2"}};
 
   ASSERT_EQ(
-      testDataPageVersion(configFromFile, {}),
-      thrift::PageType::type::DATA_PAGE_V2);
+      testDataPageVersion(configFromFile, {}), thrift::PageType::DATA_PAGE_V2);
 
   // Simulate setting DataPage version to V1 via Hive config from file.
   configFromFile = {
-      {config::ConfigBase::toConfigKey(
-           parquet::WriterConfig::kParquetSessionDataPageVersion),
-       "V1"}};
+      {std::string(parquet::ParquetConfig::kWriterDataPageVersion), "V1"}};
 
   ASSERT_EQ(
-      testDataPageVersion(configFromFile, {}),
-      thrift::PageType::type::DATA_PAGE);
+      testDataPageVersion(configFromFile, {}), thrift::PageType::DATA_PAGE);
 
   // Simulate setting DataPage version to V2 via connector session property.
   std::unordered_map<std::string, std::string> sessionProperties = {
-      {parquet::WriterConfig::kParquetSessionDataPageVersion, "V2"}};
+      {std::string(parquet::ParquetConfig::kWriterDataPageVersionSession),
+       "V2"}};
 
   ASSERT_EQ(
       testDataPageVersion({}, sessionProperties),
-      thrift::PageType::type::DATA_PAGE_V2);
+      thrift::PageType::DATA_PAGE_V2);
 
   // Simulate setting DataPage version to V1 via connector session property.
   sessionProperties = {
-      {parquet::WriterConfig::kParquetSessionDataPageVersion, "V1"}};
+      {std::string(parquet::ParquetConfig::kWriterDataPageVersionSession),
+       "V1"}};
 
   ASSERT_EQ(
-      testDataPageVersion({}, sessionProperties),
-      thrift::PageType::type::DATA_PAGE);
+      testDataPageVersion({}, sessionProperties), thrift::PageType::DATA_PAGE);
 
   // Simulate setting DataPage version to V1 via connector session property,
   // and to V2 via Hive config from file. Session property should take
   // precedence.
   sessionProperties = {
-      {parquet::WriterConfig::kParquetSessionDataPageVersion, "V1"}};
+      {std::string(parquet::ParquetConfig::kWriterDataPageVersionSession),
+       "V1"}};
   configFromFile = {
-      {config::ConfigBase::toConfigKey(
-           parquet::WriterConfig::kParquetSessionDataPageVersion),
-       "V2"}};
+      {std::string(parquet::ParquetConfig::kWriterDataPageVersion), "V2"}};
 
   ASSERT_EQ(
-      testDataPageVersion({}, sessionProperties),
-      thrift::PageType::type::DATA_PAGE);
+      testDataPageVersion({}, sessionProperties), thrift::PageType::DATA_PAGE);
 
   // Simulate setting DataPage version to V2 via connector session property,
   // and to V1 via Hive config from file. Session property should take
   // precedence.
   sessionProperties = {
-      {parquet::WriterConfig::kParquetSessionDataPageVersion, "V2"}};
+      {std::string(parquet::ParquetConfig::kWriterDataPageVersionSession),
+       "V2"}};
   configFromFile = {
-      {config::ConfigBase::toConfigKey(
-           parquet::WriterConfig::kParquetSessionDataPageVersion),
-       "V1"}};
+      {std::string(parquet::ParquetConfig::kWriterDataPageVersion), "V1"}};
 
   ASSERT_EQ(
       testDataPageVersion({}, sessionProperties),
-      thrift::PageType::type::DATA_PAGE_V2);
+      thrift::PageType::DATA_PAGE_V2);
+}
+
+TEST_F(ParquetWriterTest, writePageIndex) {
+  const int64_t kRows = 10'000;
+  const auto data = makeRowVector({
+      makeFlatVector<int32_t>(kRows, [](auto row) { return row; }),
+  });
+
+  // Writes 'data' with the page-index option set to 'enable', then returns
+  // whether the written column chunk carries a column index and an offset
+  // index.
+  const auto writeAndReadPageIndex =
+      [&](std::optional<bool> enable) -> std::pair<bool, bool> {
+    ParquetWriterOptions writerOptions;
+    writerOptions.enableWritePageIndex = enable;
+    auto* sinkPtr = write(data, writerOptions);
+    auto reader = createReaderInMemory(*sinkPtr);
+    const auto columnChunk = reader->fileMetaData().rowGroup(0).columnChunk(0);
+    return {columnChunk.hasColumnIndex(), columnChunk.hasOffsetIndex()};
+  };
+
+  // Unset leaves the page index off (default behavior).
+  EXPECT_EQ(writeAndReadPageIndex(std::nullopt), std::make_pair(false, false));
+  // Explicitly disabled leaves the page index off.
+  EXPECT_EQ(writeAndReadPageIndex(false), std::make_pair(false, false));
+  // Enabled writes both the column index and the offset index.
+  EXPECT_EQ(writeAndReadPageIndex(true), std::make_pair(true, true));
+}
+
+TEST_F(ParquetWriterTest, writePageIndexMultiplePages) {
+  // Writes enough rows with a small data page size that the single column chunk
+  // spans multiple data pages, then verifies the written page index describes
+  // one entry per data page rather than a single trivial entry.
+  const int64_t kRows = 50'000;
+  const auto data = makeRowVector({
+      makeFlatVector<int32_t>(kRows, [](auto row) { return row; }),
+  });
+
+  ParquetWriterOptions writerOptions;
+  writerOptions.enableWritePageIndex = true;
+  // Small data page size forces the column chunk to span many data pages.
+  writerOptions.dataPageSize = 4 * 1024;
+  auto* sinkPtr = write(data, writerOptions);
+
+  // The written column chunk carries both a column index and an offset index.
+  auto reader = createReaderInMemory(*sinkPtr);
+  const auto columnChunk = reader->fileMetaData().rowGroup(0).columnChunk(0);
+  ASSERT_TRUE(columnChunk.hasColumnIndex());
+  ASSERT_TRUE(columnChunk.hasOffsetIndex());
+
+  // Read the page index through the Arrow reader and confirm it describes more
+  // than one data page, with the offset index and column index page counts in
+  // agreement.
+  std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
+  auto arrowBufferReader = std::make_shared<::arrow::io::BufferReader>(
+      std::make_shared<::arrow::Buffer>(
+          reinterpret_cast<const uint8_t*>(sinkData.data()), sinkData.size()));
+  auto fileReader = parquetArrow::ParquetFileReader::open(arrowBufferReader);
+  auto pageIndexReader = fileReader->getPageIndexReader();
+  ASSERT_NE(pageIndexReader, nullptr);
+  auto rowGroupIndexReader = pageIndexReader->rowGroup(0);
+  ASSERT_NE(rowGroupIndexReader, nullptr);
+
+  auto offsetIndex = rowGroupIndexReader->getOffsetIndex(0);
+  ASSERT_NE(offsetIndex, nullptr);
+  auto columnIndex = rowGroupIndexReader->getColumnIndex(0);
+  ASSERT_NE(columnIndex, nullptr);
+
+  EXPECT_GT(offsetIndex->pageLocations().size(), 1);
+  EXPECT_EQ(
+      offsetIndex->pageLocations().size(), columnIndex->nullPages().size());
 }
 
 DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromWriterOptions) {
@@ -637,8 +868,7 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromWriterOptions) {
           })));
 
   const auto data = makeTimestampTestData(10'000);
-  parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = rootPool_.get();
+  ParquetWriterOptions writerOptions;
   writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
   writerOptions.parquetWriteTimestampTimeZone = "America/Los_Angeles";
 
@@ -658,8 +888,7 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
           })));
 
   const auto data = makeTimestampTestData(10'000);
-  parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = rootPool_.get();
+  ParquetWriterOptions writerOptions;
   writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
 
   write(data, writerOptions);
@@ -667,29 +896,412 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
 
 TEST_F(ParquetWriterTest, parquetWriteWithArrowMemoryPool) {
   const auto data = makeTimestampTestData(10'000);
-  parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = rootPool_.get();
+  ParquetWriterOptions writerOptions;
   writerOptions.arrowMemoryPool = std::make_shared<ArrowMemoryPool>();
 
   write(data, writerOptions);
 }
 
+TEST_F(ParquetWriterTest, preEpochInt96Timestamp) {
+  auto schema = ROW({"c0"}, {TIMESTAMP()});
+  auto data = makeRowVector({makeFlatVector<Timestamp>({
+      Timestamp(-86'401, 0),
+      Timestamp(-86'400, 0),
+      Timestamp(-3'600, 0),
+      Timestamp(-1, 0),
+      Timestamp(0, 0),
+      Timestamp(1, 0),
+  })});
+
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kNanoseconds;
+  writerOptions.writeInt96AsTimestamp = true;
+
+  auto* sinkPtr = write(data, writerOptions);
+
+  auto reader = createReaderInMemory(*sinkPtr);
+
+  ASSERT_EQ(reader->numberOfRows(), data->size());
+  ASSERT_EQ(*reader->rowType(), *schema);
+
+  auto rowReader = createRowReaderFromReader(*reader, schema);
+  assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
+
+  // Read the Int96 values directly to verify the correctness of the conversion
+  // from Timestamp to Int96.
+  std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
+  auto arrowBufferReader = std::make_shared<::arrow::io::BufferReader>(
+      std::make_shared<::arrow::Buffer>(
+          reinterpret_cast<const uint8_t*>(sinkData.data()), sinkData.size()));
+  auto fileReader = parquetArrow::ParquetFileReader::open(arrowBufferReader);
+  auto int96Reader = std::dynamic_pointer_cast<parquetArrow::Int96Reader>(
+      fileReader->rowGroup(0)->column(0));
+  ASSERT_NE(int96Reader, nullptr);
+
+  std::vector<parquetArrow::Int96> values(data->size());
+  int64_t valuesRead = 0;
+  ASSERT_EQ(
+      int96Reader->readBatch(
+          data->size(), nullptr, nullptr, values.data(), &valuesRead),
+      data->size());
+  ASSERT_EQ(valuesRead, data->size());
+
+  const std::vector<std::pair<int32_t, uint64_t>> expected = {
+      {-2, 86'399'000'000'000},
+      {-1, 0},
+      {-1, 23LL * 3'600 * 1'000'000'000},
+      {-1, 86'399'000'000'000},
+      {0, 0},
+      {0, 1'000'000'000},
+  };
+
+  for (auto i = 0; i < values.size(); ++i) {
+    const auto decoded = parquetArrow::decodeInt96Timestamp(values[i]);
+    EXPECT_EQ(
+        values[i].value[2],
+        static_cast<uint32_t>(
+            parquetArrow::kJulianToUnixEpochDays + expected[i].first));
+    EXPECT_EQ(decoded.nanoseconds, expected[i].second);
+    EXPECT_LT(decoded.nanoseconds, parquetArrow::kNanosecondsPerDay);
+  }
+}
+
+TEST_F(ParquetWriterTest, writerMagic) {
+  const auto data = makeRowVector(
+      {makeFlatVector<int32_t>(20'000, [](auto row) { return row; })});
+
+  ParquetWriterOptions writerOptions;
+
+  const auto* sinkPtr = write(data, writerOptions);
+  const auto fileData = std::string_view(sinkPtr->data(), sinkPtr->size());
+
+  EXPECT_EQ("PAR1", std::string(fileData.data(), 4));
+  EXPECT_EQ("PAR1", std::string(fileData.data() + fileData.size() - 4, 4));
+}
+
+TEST_F(ParquetWriterTest, flushWhenStreamBuffersGrow) {
+  constexpr int64_t kNumRows = 200;
+
+  ParquetWriterOptions writerOptions;
+  dwio::common::WriterOptions options;
+  writerOptions.enableDictionary = false;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory =
+      []() -> std::unique_ptr<dwio::common::FlushPolicy> {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/1,
+        /*bytesInRowGroup=*/4 * 1024);
+  };
+
+  const auto schema = ROW({"c0"}, {BIGINT()});
+  auto writerWithSink = makeWriterWithSink(schema, options, writerOptions);
+  const auto data = makeRowVector(
+      {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
+
+  writerWithSink.writer->write(data);
+
+  // Data should be flushed into the FileSink by acculumated closed row groups.
+  EXPECT_GT(writerWithSink.sink->size(), 0);
+
+  writerWithSink.writer->close();
+
+  const auto reader = createReaderInMemory(*writerWithSink.sink);
+  EXPECT_EQ(kNumRows, reader->numberOfRows());
+  EXPECT_EQ(kNumRows, reader->fileMetaData().numRowGroups());
+}
+
+TEST_F(ParquetWriterTest, flushRowGroupByBufferedSize) {
+  ParquetWriterOptions writerOptions;
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/10'000,
+        /*bytesInRowGroup=*/200);
+  };
+
+  auto rowType = ROW({"c0"}, {INTEGER()});
+  auto testBatches =
+      [&](int numBatches, int expectedNumRowGroups, int expectedNumRows) {
+        std::vector<RowVectorPtr> batches;
+        for (int i = 0; i < numBatches; ++i) {
+          batches.push_back(
+              makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 1, 1})}));
+        }
+
+        const auto* sinkPtr = write(batches, options, writerOptions);
+        const auto reader = createReaderInMemory(*sinkPtr);
+        EXPECT_EQ(expectedNumRowGroups, reader->fileMetaData().numRowGroups());
+        EXPECT_EQ(expectedNumRows, reader->numberOfRows());
+      };
+
+  testBatches(10, 1, 50);
+  testBatches(20, 2, 100);
+}
+
+TEST_F(ParquetWriterTest, flushRowGroupByMaxTargetFileSize) {
+  constexpr int64_t kNumRows = 64;
+  constexpr uint64_t kMaxTargetFileSizeBytes = 8 * 1024;
+
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.compressionKind = CompressionKind::CompressionKind_NONE;
+  options.maxTargetFileSizeBytes = kMaxTargetFileSizeBytes;
+
+  const auto schema = ROW("payload", VARCHAR());
+  ParquetWriterOptions writerOptions;
+  writerOptions.enableDictionary = false;
+  auto writerWithSink = makeWriterWithSink(schema, options, writerOptions);
+
+  const std::string payload(512, 'x');
+  auto batch = makeRowVector({makeFlatVector<std::string>(
+      kNumRows, [&](auto /*row*/) { return payload; })});
+
+  // Verify that maxTargetFileSizeBytes, not the default 128MB row-group
+  // target, closes the current row group so callers can observe file size.
+  // Each batch is roughly 64 * 512B = 32KB: well above the 8KB file-size
+  // target, but far below the default row-group byte target.
+  writerWithSink.writer->write(batch);
+
+  EXPECT_GT(writerWithSink.sink->size(), kMaxTargetFileSizeBytes);
+
+  writerWithSink.writer->write(batch);
+  writerWithSink.writer->close();
+
+  const auto reader = createReaderInMemory(*writerWithSink.sink);
+  EXPECT_EQ(2 * kNumRows, reader->numberOfRows());
+  EXPECT_EQ(2, reader->fileMetaData().numRowGroups());
+}
+
+TEST_F(ParquetWriterTest, flushEmptyRowGroup) {
+  ParquetWriterOptions writerOptions;
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/50,
+        /*bytesInRowGroup=*/128 * 1'024 * 1'024);
+  };
+
+  std::vector<RowVectorPtr> batches;
+  for (int i = 0; i < 10; ++i) {
+    batches.push_back(
+        makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 1, 1})}));
+  }
+
+  const auto* sinkPtr = write(batches, options, writerOptions);
+  const auto reader = createReaderInMemory(*sinkPtr);
+  EXPECT_EQ(1, reader->fileMetaData().numRowGroups());
+  EXPECT_EQ(50, reader->numberOfRows());
+}
+
+TEST_F(ParquetWriterTest, largeMetadata) {
+  const auto data = makeRowVector(
+      {makeFlatVector<int32_t>(1'000, [](auto row) { return row; })});
+
+  ParquetWriterOptions writerOptions;
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/1,
+        /*bytesInRowGroup=*/128 * 1'024 * 1'024);
+  };
+
+  const auto* sinkPtr = write(data, options, writerOptions);
+
+  auto readerOpts = makeDefaultReaderOptions();
+  readerOpts.setFooterSpeculativeIoSize(1024);
+  readerOpts.setFilePreloadThreshold(1024 * 8);
+
+  const auto reader = createReaderInMemory(*sinkPtr, readerOpts);
+  EXPECT_EQ(1'000, reader->numberOfRows());
+  EXPECT_EQ(1'000, reader->fileMetaData().numRowGroups());
+}
+
+TEST_F(ParquetWriterTest, writeDecimalAsInteger) {
+  const auto rowVector = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2}, DECIMAL(8, 2)),
+       makeFlatVector<int64_t>({1, 2}, DECIMAL(10, 2)),
+       makeFlatVector<int128_t>({1, 2}, DECIMAL(19, 2))});
+
+  ParquetWriterOptions writerOptions;
+
+  const auto* sinkPtr = write(rowVector, writerOptions);
+
+  const auto reader = createReaderInMemory(*sinkPtr);
+
+  const auto types = reader->typeWithId()->getChildren();
+  ASSERT_GE(types.size(), 3);
+  const auto c0 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[0]);
+  ASSERT_NE(c0, nullptr);
+  EXPECT_EQ(c0->parquetType_.value(), thrift::Type::INT32);
+  const auto c1 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[1]);
+  ASSERT_NE(c1, nullptr);
+  EXPECT_EQ(c1->parquetType_.value(), thrift::Type::INT64);
+  const auto c2 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[2]);
+  ASSERT_NE(c2, nullptr);
+  EXPECT_EQ(c2->parquetType_.value(), thrift::Type::FIXED_LEN_BYTE_ARRAY);
+}
+
+TEST_F(ParquetWriterTest, configurableWriteSchema) {
+  const auto test = [&](const RowTypePtr& type, const RowTypePtr& newType) {
+    constexpr int32_t kNumBatches = 5;
+    constexpr int32_t kBatchSize = 100;
+    auto batches = createBatches(type, kNumBatches, kBatchSize);
+    constexpr vector_size_t kNumRows = kNumBatches * kBatchSize;
+
+    auto data = std::dynamic_pointer_cast<RowVector>(
+        BaseVector::create(type, kNumRows, pool()));
+    auto expected = std::dynamic_pointer_cast<RowVector>(
+        BaseVector::create(newType, kNumRows, pool()));
+    vector_size_t offset = 0;
+    for (const auto& batch : batches) {
+      data->copy(batch.get(), offset, 0, batch->size());
+      expected->copy(batch.get(), offset, 0, batch->size());
+      offset += batch->size();
+    }
+
+    ParquetWriterOptions writerOptions;
+    const auto* sinkPtr = write(data, writerOptions, newType);
+    auto reader = createReaderInMemory(*sinkPtr);
+
+    ASSERT_EQ(reader->numberOfRows(), kNumRows);
+    EXPECT_EQ(reader->rowType()->toString(), newType->toString());
+
+    auto rowReader = createRowReaderFromReader(*reader, newType);
+    assertReadWithReaderAndExpected(newType, *rowReader, expected, *leafPool_);
+  };
+
+  test(
+      ROW({"a", "b"}, {INTEGER(), ROW({"c"}, {ROW({"d"}, INTEGER())})}),
+      ROW({"aa", "bb"}, {INTEGER(), ROW({"cc"}, {ROW({"dd"}, INTEGER())})}));
+
+  test(
+      ROW({"a", "b"}, {ARRAY(ROW({"c", "d"}, BIGINT())), BIGINT()}),
+      ROW({"aa", "bb"}, {ARRAY(ROW({"cc", "dd"}, BIGINT())), BIGINT()}));
+
+  test(
+      ROW({"a", "b"},
+          {MAP(ROW({"c", "d"}, BIGINT()), ROW({"e", "f"}, BIGINT())),
+           BIGINT()}),
+      ROW({"aa", "bb"},
+          {MAP(ROW({"cc", "dd"}, BIGINT()), ROW({"ee", "ff"}, BIGINT())),
+           BIGINT()}));
+}
+
 TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
   std::unordered_map<std::string, std::string> configFromFile = {
-      {config::ConfigBase::toConfigKey(
-           parquet::WriterConfig::kParquetSessionWriteTimestampUnit),
-       "3"}};
-  const config::ConfigBase connectorConfig(std::move(configFromFile));
-  const config::ConfigBase connectorSessionProperties({});
+      {std::string(parquet::ParquetConfig::kWriterTimestampUnit), "3"}};
+  const std::vector<Timestamp> timestamps = {
+      Timestamp(1, 123'456'789),
+      Timestamp(2, 987'654'321),
+  };
+  const auto data = makeRowVector({makeFlatVector<Timestamp>(timestamps)});
+  const auto expected = makeRowVector({makeFlatVector<Timestamp>({
+      Timestamp::fromMillis(timestamps[0].toMillis()),
+      Timestamp::fromMillis(timestamps[1].toMillis()),
+  })});
 
-  parquet::WriterOptions options;
-  options.compressionKind = facebook::velox::common::CompressionKind_ZLIB;
+  const auto* sinkPtr = write(data, std::move(configFromFile), {});
 
-  options.processConfigs(connectorConfig, connectorSessionProperties);
+  auto reader = createReaderInMemory(*sinkPtr);
 
-  ASSERT_EQ(
-      options.parquetWriteTimestampUnit.value(),
-      TimestampPrecision::kMilliseconds);
+  ASSERT_EQ(reader->numberOfRows(), data->size());
+  ASSERT_EQ(*reader->rowType(), *data->rowType());
+
+  auto rowReaderOpts = makeRowReaderOpts(data->rowType());
+  rowReaderOpts.setScanSpec(makeScanSpec(data->rowType()));
+  rowReaderOpts.setTimestampPrecision(TimestampPrecision::kNanoseconds);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  assertReadWithReaderAndExpected(
+      data->rowType(), *rowReader, expected, *leafPool_);
+}
+
+TEST_F(ParquetWriterTest, enableStoreDecimalAsInteger) {
+  const auto rowType = ROW({
+      {"c0", DECIMAL(8, 2)},
+      {"c1", DECIMAL(10, 2)},
+      {"c2", DECIMAL(19, 2)},
+  });
+  // c1 includes an unscaled value exceeding INT32 range (50000000.00).
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>({100, 99999999}, DECIMAL(8, 2)),
+      makeFlatVector<int64_t>({100, 5000000000LL}, DECIMAL(10, 2)),
+      makeFlatVector<int128_t>({100, 200}, DECIMAL(19, 2)),
+  });
+
+  using PhysicalTypes =
+      std::vector<std::shared_ptr<const ParquetTypeWithId::TypeWithId>>;
+
+  auto expectParquetType = [&](size_t columnIndex,
+                               const PhysicalTypes& types,
+                               thrift::Type expectedType,
+                               std::optional<int32_t> expectedTypeLength =
+                                   std::nullopt) {
+    auto col =
+        std::dynamic_pointer_cast<const ParquetTypeWithId>(types[columnIndex]);
+    ASSERT_NE(col, nullptr);
+    ASSERT_TRUE(col->parquetType_.has_value());
+    EXPECT_EQ(col->parquetType_.value(), expectedType);
+    if (expectedTypeLength.has_value()) {
+      EXPECT_EQ(col->typeLength_, expectedTypeLength.value());
+    }
+  };
+
+  const auto verifyStoredAsInteger = [&](const PhysicalTypes& types) {
+    expectParquetType(0, types, thrift::Type::INT32);
+    expectParquetType(1, types, thrift::Type::INT64);
+    expectParquetType(2, types, thrift::Type::FIXED_LEN_BYTE_ARRAY, 9);
+  };
+
+  const auto verifyStoredAsFixedLenByteArray = [&](const PhysicalTypes& types) {
+    expectParquetType(0, types, thrift::Type::FIXED_LEN_BYTE_ARRAY, 4);
+    expectParquetType(1, types, thrift::Type::FIXED_LEN_BYTE_ARRAY, 5);
+    expectParquetType(2, types, thrift::Type::FIXED_LEN_BYTE_ARRAY, 9);
+  };
+
+  const auto writeReadAndVerify =
+      [&](std::unordered_map<std::string, std::string> configFromFile,
+          std::unordered_map<std::string, std::string> sessionProperties,
+          const std::function<void(const PhysicalTypes&)>&
+              verifyPhysicalTypes) {
+        auto* sinkPtr = write(
+            data, std::move(configFromFile), std::move(sessionProperties));
+
+        auto reader = createReaderInMemory(*sinkPtr);
+        auto& parquetReader = dynamic_cast<ParquetReader&>(*reader);
+
+        const auto& types = parquetReader.typeWithId()->getChildren();
+        ASSERT_EQ(types.size(), 3);
+        verifyPhysicalTypes(types);
+
+        auto rowReader = createRowReaderFromReader(*reader, rowType);
+        assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
+      };
+
+  const auto configKey =
+      std::string(parquet::ParquetConfig::kWriterEnableStoreDecimalAsInteger);
+  const auto sessionKey = std::string(
+      parquet::ParquetConfig::kWriterEnableStoreDecimalAsIntegerSession);
+
+  // Connector session property.
+  writeReadAndVerify({}, {{sessionKey, "true"}}, verifyStoredAsInteger);
+  writeReadAndVerify(
+      {}, {{sessionKey, "false"}}, verifyStoredAsFixedLenByteArray);
+
+  // Hive config from file.
+  writeReadAndVerify({{configKey, "true"}}, {}, verifyStoredAsInteger);
+  writeReadAndVerify(
+      {{configKey, "false"}}, {}, verifyStoredAsFixedLenByteArray);
+
+  // Session property takes precedence over Hive config from file.
+  writeReadAndVerify(
+      {{configKey, "false"}}, {{sessionKey, "true"}}, verifyStoredAsInteger);
+  writeReadAndVerify(
+      {{configKey, "true"}},
+      {{sessionKey, "false"}},
+      verifyStoredAsFixedLenByteArray);
 }
 
 #ifdef VELOX_ENABLE_PARQUET
@@ -716,8 +1328,10 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, timestampUnitAndTimeZone) {
       10'000, [](auto row) { return Timestamp(row, row); })});
   const auto outputDirectory = TempDirectoryPath::create();
 
-  auto writerOptions = std::make_shared<parquet::WriterOptions>();
-  writerOptions->parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  auto parquetOptions = std::make_shared<ParquetWriterOptions>();
+  parquetOptions->parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  auto writerOptions = std::make_shared<dwio::common::WriterOptions>();
+  writerOptions->formatSpecificOptions = parquetOptions;
 
   const auto plan = PlanBuilder()
                         .values({data})
@@ -791,6 +1405,553 @@ TEST_F(ParquetWriterTest, dictionaryEncodedVector) {
   write(data);
 }
 
+// Verifies round-trip correctness when writing DictionaryVector<VARCHAR> with
+// low cardinality.  With flattenDictionary=false the bridge exports a
+// DictionaryArray that the Arrow Parquet writer encodes directly via
+// writeArrowDictionary().
+TEST_F(ParquetWriterTest, dictionaryPassthroughVarcharLowCardinality) {
+  constexpr vector_size_t kSize = 10'000;
+  constexpr int kDictSize = 10;
+
+  // Build a dictionary of 10 strings.
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("val_{}", i);
+  }
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+  auto dictVector = makeDictionaryColumn(
+      kSize, dictionary, [](auto row) { return row % kDictSize; });
+  ASSERT_EQ(dictVector->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  assertFlattenedRoundTrip(makeRowVector({dictVector}));
+}
+
+// Dictionary passthrough must not require the caller to supply an Arrow memory
+// pool. writeArrowDictionary() runs arrow::compute (Unique/Take) to compute
+// page statistics, and those kernels dereference the write context's pool. When
+// no pool is provided the writer must fall back to a valid default; otherwise a
+// null pool aborts in arrow/util/hashing.h ("Check failed: (pool) != nullptr").
+// Uses a low-cardinality dictionary so the writer keeps dictionary encoding
+// active and takes the passthrough path rather than falling back to dense.
+TEST_F(ParquetWriterTest, dictionaryPassthroughWithoutArrowMemoryPool) {
+  constexpr vector_size_t kSize = 10'000;
+  constexpr int kDictSize = 10;
+
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("val_{}", i);
+  }
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+  auto dictVector = makeDictionaryColumn(
+      kSize, dictionary, [](auto row) { return row % kDictSize; });
+
+  // Explicitly leave ParquetWriterOptions::arrowMemoryPool unset (nullptr).
+  ParquetWriterOptions writerOptions;
+  ASSERT_EQ(writerOptions.arrowMemoryPool, nullptr);
+
+  auto data = makeRowVector({dictVector});
+  auto expected = makeRowVector({flatten(dictVector)});
+  assertRoundTrip(data, expected, writerOptions);
+}
+
+// Verifies round-trip correctness when the VARCHAR dictionary alphabet contains
+// duplicate values. Duplicates force the Arrow Parquet writer to abandon
+// dictionary encoding (numEntries() != dictionary->length()) and fall back to
+// PLAIN, but it still flushes a dictionary page first. The page must be sized
+// from the de-duplicated entries, otherwise the reader's exact-consumption
+// check in PageReader::prepareDictionary fails.
+TEST_F(ParquetWriterTest, dictionaryPassthroughVarcharDuplicateValues) {
+  constexpr vector_size_t kSize = 10'000;
+  constexpr int kDictSize = 12;
+
+  // Dictionary alphabet with intentional duplicates: several entries share the
+  // same string value, so numEntries() (distinct) < kDictSize (total).
+  const std::vector<std::string> dictStrings = {
+      "apple",
+      "apple",
+      "banana",
+      "cherry",
+      "cherry",
+      "cherry",
+      "date",
+      "elderberry",
+      "elderberry",
+      "fig",
+      "grape",
+      "grape",
+  };
+  ASSERT_EQ(dictStrings.size(), kDictSize);
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+  auto dictVector = makeDictionaryColumn(
+      kSize, dictionary, [](auto row) { return row % kDictSize; });
+  ASSERT_EQ(dictVector->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  assertFlattenedRoundTrip(makeRowVector({dictVector}));
+}
+
+// Verifies round-trip correctness with high-cardinality VARCHAR dictionary
+// (all unique values).  The Arrow Parquet writer may abandon dictionary
+// encoding and fall back to PLAIN.
+TEST_F(ParquetWriterTest, dictionaryPassthroughVarcharHighCardinality) {
+  constexpr vector_size_t kSize = 10'000;
+
+  // All-unique dictionary (size == kSize).
+  std::vector<std::string> dictStrings(kSize);
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    dictStrings[i] = fmt::format("unique_{}", i);
+  }
+  auto dictionary = makeFlatVector<StringView>(
+      kSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+  auto dictVector =
+      makeDictionaryColumn(kSize, dictionary, [](auto row) { return row; });
+
+  assertFlattenedRoundTrip(makeRowVector({dictVector}));
+}
+
+// Verifies that dictionary-encoded non-string primitive columns (INTEGER,
+// BIGINT, DOUBLE, BOOLEAN) round-trip correctly. These share the same
+// non-VARCHAR/VARBINARY path: childNeedsFlatten() forces flattening because
+// Arrow's Parquet writer only supports dictionary passthrough for binary-like
+// scalar types.
+TEST_F(ParquetWriterTest, dictionaryNonStringPrimitivesFlatten) {
+  constexpr vector_size_t kSize = 10'000;
+
+  auto intDict = makeFlatVector<int32_t>(50, [](auto row) { return row * 7; });
+  auto bigintDict = makeFlatVector<int64_t>(
+      100, [](auto row) { return static_cast<int64_t>(row) * 1'000'000; });
+  auto doubleDict =
+      makeFlatVector<double>(10, [](auto row) { return row * 1.5; });
+  auto boolDict = makeFlatVector<bool>(2, [](auto row) { return row == 1; });
+
+  auto data = makeRowVector({
+      makeDictionaryColumn(kSize, intDict, [](auto row) { return row % 50; }),
+      makeDictionaryColumn(
+          kSize, bigintDict, [](auto row) { return row % 100; }),
+      makeDictionaryColumn(
+          kSize, doubleDict, [](auto row) { return row % 10; }),
+      makeDictionaryColumn(kSize, boolDict, [](auto row) { return row % 2; }),
+  });
+
+  assertFlattenedRoundTrip(data);
+}
+
+// Verifies that writing multiple batches with changing dictionaries works
+// correctly.  Each batch has a different dictionary, testing that the Arrow
+// Parquet writer handles dictionary transitions across write() calls.
+TEST_F(ParquetWriterTest, dictionaryPassthroughMultipleBatches) {
+  constexpr vector_size_t kBatchSize = 2'000;
+  constexpr int kDictSize = 5;
+
+  auto schema = ROW({"c0"}, {VARCHAR()});
+
+  std::vector<RowVectorPtr> batches;
+  for (int batchIdx = 0; batchIdx < 3; ++batchIdx) {
+    std::vector<std::string> dictStrings(kDictSize);
+    for (int i = 0; i < kDictSize; ++i) {
+      dictStrings[i] = fmt::format("batch{}_{}", batchIdx, i);
+    }
+    auto dictionary = makeFlatVector<StringView>(
+        kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+    auto dictVector = makeDictionaryColumn(
+        kBatchSize, dictionary, [](auto row) { return row % kDictSize; });
+    batches.push_back(makeRowVector({dictVector}));
+  }
+
+  ParquetWriterOptions writerOptions;
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.schema = schema;
+  auto* sinkPtr = write(batches, options, writerOptions);
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(
+      reader->numberOfRows(),
+      static_cast<uint64_t>(kBatchSize) * batches.size());
+
+  // Build expected flat output by concatenating all batches.
+  auto totalSize = kBatchSize * batches.size();
+  std::vector<std::string> expectedStrings(totalSize);
+  for (size_t i = 0; i < totalSize; ++i) {
+    int batchIdx = i / kBatchSize;
+    int localIdx = i % kBatchSize;
+    expectedStrings[i] =
+        fmt::format("batch{}_{}", batchIdx, localIdx % kDictSize);
+  }
+  auto expected = makeRowVector({makeFlatVector<StringView>(
+      totalSize, [&](auto row) { return StringView(expectedStrings[row]); })});
+
+  auto rowReader = createRowReaderFromReader(*reader, schema);
+  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+}
+
+// Verifies a multi-batch write where a passthrough VARCHAR dictionary batch is
+// followed by a flat VARCHAR batch. The first batch caches a DictionaryType
+// Arrow schema; flattenIfNeeded() must rewrite the cached field to the value
+// type so the flat second batch imports and writes correctly (a dictionary
+// field expects 2 buffers while flat string data produces 3).
+TEST_F(ParquetWriterTest, multiBatchDictionaryThenFlat) {
+  constexpr vector_size_t kBatchSize = 2'000;
+  constexpr int kDictSize = 8;
+  auto schema = ROW({"c0"}, {VARCHAR()});
+
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("dict_{}", i);
+  }
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+  // Batch 0: passthrough dictionary.
+  auto dictBatch = makeRowVector({makeDictionaryColumn(
+      kBatchSize, dictionary, [](auto row) { return row % kDictSize; })});
+  ASSERT_EQ(
+      dictBatch->childAt(0)->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  // Batch 1: flat.
+  std::vector<std::string> flatStrings(kBatchSize);
+  for (int i = 0; i < kBatchSize; ++i) {
+    flatStrings[i] = fmt::format("flat_{}", i);
+  }
+  auto flatBatch = makeRowVector({makeFlatVector<StringView>(
+      kBatchSize, [&](auto row) { return StringView(flatStrings[row]); })});
+  ASSERT_EQ(flatBatch->childAt(0)->encoding(), VectorEncoding::Simple::FLAT);
+
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.schema = schema;
+  auto* sinkPtr =
+      write({dictBatch, flatBatch}, options, ParquetWriterOptions{});
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), static_cast<uint64_t>(kBatchSize) * 2);
+
+  const auto total = kBatchSize * 2;
+  auto expected =
+      makeRowVector({makeFlatVector<StringView>(total, [&](auto row) {
+        return row < kBatchSize ? StringView(dictStrings[row % kDictSize])
+                                : StringView(flatStrings[row - kBatchSize]);
+      })});
+  auto rowReader = createRowReaderFromReader(*reader, schema);
+  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+}
+
+// Verifies a multi-batch write where a passthrough VARCHAR dictionary batch is
+// followed by a dictionary batch that must be force-flattened (dict-of-dict).
+// The second batch is still DICTIONARY-encoded at the top level, so the reverse
+// schema fixup (which only fires for non-dictionary input) does not apply on
+// its own; flattenIfNeeded() must still rewrite the cached DictionaryType field
+// to the value type because the column is flattened before export. Otherwise
+// ImportRecordBatch() would receive flat buffers described by a dictionary
+// schema.
+TEST_F(ParquetWriterTest, multiBatchDictionaryThenForcedFlattenDictionary) {
+  constexpr vector_size_t kBatchSize = 2'000;
+  constexpr int kDictSize = 8;
+  auto schema = ROW({"c0"}, {VARCHAR()});
+
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("dict_{}", i);
+  }
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+  // Batch 0: passthrough dictionary.
+  auto dictBatch = makeRowVector({makeDictionaryColumn(
+      kBatchSize, dictionary, [](auto row) { return row % kDictSize; })});
+  ASSERT_EQ(
+      dictBatch->childAt(0)->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  // Batch 1: dictionary-of-dictionary. Top-level encoding is DICTIONARY but the
+  // inner vector is not flat, so childNeedsFlatten() forces a flatten while the
+  // top-level encoding stays DICTIONARY.
+  auto innerDict = makeDictionaryColumn(
+      kBatchSize, dictionary, [](auto row) { return row % kDictSize; });
+  auto nestedDict =
+      makeDictionaryColumn(kBatchSize, innerDict, [](auto row) { return row; });
+  auto nestedBatch = makeRowVector({nestedDict});
+  ASSERT_EQ(
+      nestedBatch->childAt(0)->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.schema = schema;
+  auto* sinkPtr =
+      write({dictBatch, nestedBatch}, options, ParquetWriterOptions{});
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), static_cast<uint64_t>(kBatchSize) * 2);
+
+  // Both batches resolve to dictStrings[row % kDictSize].
+  const auto total = kBatchSize * 2;
+  auto expected =
+      makeRowVector({makeFlatVector<StringView>(total, [&](auto row) {
+        return StringView(dictStrings[(row % kBatchSize) % kDictSize]);
+      })});
+  auto rowReader = createRowReaderFromReader(*reader, schema);
+  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+}
+
+// Verifies that DictionaryVector with nulls round-trips correctly.
+TEST_F(ParquetWriterTest, dictionaryPassthroughWithNulls) {
+  constexpr vector_size_t kSize = 5'000;
+  constexpr int kDictSize = 20;
+
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("v_{}", i);
+  }
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+  // Every 3rd element is null.
+  auto dictVector = makeDictionaryColumn(
+      kSize,
+      dictionary,
+      [](auto row) { return row % kDictSize; },
+      makeNulls(kSize, [](auto row) { return row % 3 == 0; }));
+  ASSERT_EQ(dictVector->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  assertFlattenedRoundTrip(makeRowVector({dictVector}));
+}
+
+// Verifies that complex types (MAP, ARRAY, ROW) are written correctly without
+// flattening when they are not wrapped in dictionary encoding.  This tests O2:
+// the removal of the overly conservative isComplex check in needFlatten().
+TEST_F(ParquetWriterTest, complexTypesWithoutFlattening) {
+  constexpr vector_size_t kSize = 1'000;
+
+  // Pre-generate key strings for the map.
+  std::vector<std::string> keyStrings(kSize * 3);
+  for (vector_size_t i = 0; i < static_cast<vector_size_t>(keyStrings.size());
+       ++i) {
+    keyStrings[i] = fmt::format("key_{}", i);
+  }
+
+  auto mapVector = makeMapVector<StringView, int32_t>(
+      kSize,
+      [](auto row) { return row % 3 + 1; },
+      [&](auto row) { return StringView(keyStrings[row]); },
+      [](auto row) { return static_cast<int32_t>(row * 10); });
+
+  auto arrayVector = makeArrayVector<int64_t>(
+      kSize,
+      [](auto row) { return row % 4 + 1; },
+      [](auto row) { return static_cast<int64_t>(row * 100); });
+
+  auto data = makeRowVector({mapVector, arrayVector});
+
+  assertFlattenedRoundTrip(data);
+}
+
+// Verifies that a mix of dictionary-encoded scalar columns and flat complex
+// type columns in the same RowVector round-trips correctly.  This exercises
+// the interaction between O1 (dictionary passthrough for scalars) and O2
+// (no flattening for complex types).
+TEST_F(ParquetWriterTest, mixedDictionaryAndComplexTypes) {
+  constexpr vector_size_t kSize = 2'000;
+  constexpr int kDictSize = 15;
+
+  // Dictionary-encoded VARCHAR column.
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("cat_{}", i);
+  }
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+  auto dictColumn = makeDictionaryColumn(
+      kSize, dictionary, [](auto row) { return row % kDictSize; });
+
+  // Flat ARRAY column.
+  auto arrayColumn = makeArrayVector<int32_t>(
+      kSize,
+      [](auto row) { return row % 3 + 1; },
+      [](auto row) { return static_cast<int32_t>(row); });
+
+  // Flat INTEGER column.
+  auto intColumn = makeFlatVector<int32_t>(kSize, [](auto row) { return row; });
+
+  assertFlattenedRoundTrip(makeRowVector({dictColumn, arrayColumn, intColumn}));
+}
+
+// Verifies that dictionary wrapping a complex type (ARRAY) is correctly
+// flattened before writing.  This exercises the isPrimitiveType() guard in
+// needFlatten() — Arrow cannot handle DictionaryArray of complex types.
+TEST_F(ParquetWriterTest, dictionaryWrappingComplexTypeFlattens) {
+  constexpr vector_size_t kSize = 1'000;
+
+  auto arrayVector = makeArrayVector<int32_t>(
+      kSize,
+      [](auto row) { return row % 3 + 1; },
+      [](auto row) { return static_cast<int32_t>(row); });
+
+  auto dictOfArray =
+      makeDictionaryColumn(kSize, arrayVector, [](auto row) { return row; });
+  ASSERT_EQ(dictOfArray->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  // Expected output is the original unwrapped array (flattening removes the
+  // identity dictionary wrapping).
+  assertRoundTrip(makeRowVector({dictOfArray}), makeRowVector({arrayVector}));
+}
+
+// Verifies that dictionary-of-dictionary (nested wrapping) is correctly
+// flattened.  This exercises the isFlatEncoding() guard in needFlatten().
+TEST_F(ParquetWriterTest, dictionaryOfDictionaryFlattens) {
+  constexpr vector_size_t kSize = 1'000;
+  constexpr int kDictSize = 10;
+
+  auto dictionary =
+      makeFlatVector<int32_t>(kDictSize, [](auto row) { return row * 11; });
+
+  auto innerDict = makeDictionaryColumn(
+      kSize, dictionary, [](auto row) { return row % kDictSize; });
+  // Wrap the dictionary in another dictionary layer.
+  auto dictOfDict =
+      makeDictionaryColumn(kSize, innerDict, [](auto row) { return row; });
+
+  assertFlattenedRoundTrip(makeRowVector({dictOfDict}));
+}
+
+// Verifies that a constant wrapping a dictionary is correctly flattened.
+// wrapInConstant peels the scalar dictionary layers, so to keep a non-flat
+// wrapped vector the dictionary wraps a complex (ARRAY) type. This exercises
+// the CONSTANT branch in childNeedsFlatten(), which flattens a constant whose
+// wrapped vector is not flat.
+TEST_F(ParquetWriterTest, constantWrappingDictionaryFlattens) {
+  constexpr vector_size_t kSize = 500;
+  constexpr int kDictSize = 10;
+
+  auto arrayVector = makeArrayVector<int32_t>(
+      kDictSize,
+      [](auto row) { return row % 3 + 1; },
+      [](auto row) { return static_cast<int32_t>(row); });
+  // Dictionary over the ARRAY, then wrap a single entry as a constant.
+  auto dictOfArray = makeDictionaryColumn(
+      kDictSize, arrayVector, [](auto row) { return row; });
+  auto constColumn = BaseVector::wrapInConstant(kSize, 0, dictOfArray);
+  ASSERT_EQ(constColumn->encoding(), VectorEncoding::Simple::CONSTANT);
+  ASSERT_FALSE(constColumn->wrappedVector()->isFlatEncoding());
+
+  assertFlattenedRoundTrip(makeRowVector({constColumn}));
+}
+
+// Verifies that an empty dictionary vector (0 rows) can be written without
+// crashing.  The Parquet reader rejects empty files, so this test only
+// verifies the write path.
+TEST_F(ParquetWriterTest, dictionaryPassthroughEmptyVector) {
+  constexpr vector_size_t kSize = 0;
+  constexpr int kDictSize = 5;
+
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("v_{}", i);
+  }
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+  auto dictVector =
+      makeDictionaryColumn(kSize, dictionary, [](auto row) { return row; });
+
+  auto data = makeRowVector({dictVector});
+
+  // Write should succeed without crashing.
+  write(data, ParquetWriterOptions{});
+}
+
+// Verifies that a dictionary vector where every element is null round-trips.
+TEST_F(ParquetWriterTest, dictionaryPassthroughAllNulls) {
+  constexpr vector_size_t kSize = 1'000;
+  constexpr int kDictSize = 5;
+
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("v_{}", i);
+  }
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+  // Every element is null.
+  auto dictVector = makeDictionaryColumn(
+      kSize,
+      dictionary,
+      [](auto row) { return row % kDictSize; },
+      makeNulls(kSize, [](auto /*row*/) { return true; }));
+
+  assertFlattenedRoundTrip(makeRowVector({dictVector}));
+}
+
+// Verifies that a complex column that is flat at the top level but contains a
+// dictionary-encoded descendant is flattened before Arrow export. Dictionary
+// passthrough is only safe for top-level scalar VARCHAR/VARBINARY columns, so
+// childNeedsFlatten() recurses into ARRAY/MAP/ROW children to catch nested
+// dictionaries the bridge would otherwise export as DictionaryArrays.
+TEST_F(ParquetWriterTest, flatComplexWithEncodedDescendantFlattens) {
+  constexpr vector_size_t kSize = 1'000;
+  constexpr int kDictSize = 10;
+
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("val_{}", i);
+  }
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+  // ROW column: flat at the top level, with a dictionary-encoded child.
+  auto structColumn = makeRowVector({makeDictionaryColumn(
+      kSize, dictionary, [](auto row) { return row % kDictSize; })});
+  ASSERT_EQ(structColumn->encoding(), VectorEncoding::Simple::ROW);
+
+  // ARRAY column: flat at the top level, with dictionary-encoded elements.
+  // Each row holds two consecutive dictionary entries.
+  auto elements = makeDictionaryColumn(
+      kSize * 2, dictionary, [](auto row) { return row % kDictSize; });
+  std::vector<vector_size_t> offsets(kSize);
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    offsets[i] = i * 2;
+  }
+  auto arrayColumn = makeArrayVector(offsets, elements);
+  ASSERT_EQ(arrayColumn->encoding(), VectorEncoding::Simple::ARRAY);
+
+  assertFlattenedRoundTrip(makeRowVector({structColumn, arrayColumn}));
+}
+
+// Verifies selective per-column flattening: a dict-of-dict column (must
+// flatten) alongside a passthrough dictionary column (must NOT flatten).
+// With blanket flattening, both would be materialized. With selective
+// flattening, only the nested-dict column is flattened while the simple
+// dictionary passes through to Arrow.
+TEST_F(ParquetWriterTest, selectiveFlatteningMixedEncodings) {
+  constexpr vector_size_t kSize = 2'000;
+
+  // Column 0: simple dictionary VARCHAR (should pass through).
+  constexpr int kDictSize = 10;
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("pass_{}", i);
+  }
+  auto dict = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+  auto passthroughCol = makeDictionaryColumn(
+      kSize, dict, [](auto row) { return row % kDictSize; });
+
+  // Column 1: dict-of-dict INTEGER (must flatten).
+  constexpr int kInnerDictSize = 20;
+  auto innerDict =
+      makeFlatVector<int32_t>(kInnerDictSize, [](auto row) { return row * 5; });
+  auto innerDictVec = makeDictionaryColumn(
+      kSize, innerDict, [](auto row) { return row % kInnerDictSize; });
+  auto nestedDictCol =
+      makeDictionaryColumn(kSize, innerDictVec, [](auto row) { return row; });
+
+  assertFlattenedRoundTrip(makeRowVector({passthroughCol, nestedDictCol}));
+}
+
 TEST_F(ParquetWriterTest, allNulls) {
   auto schema = ROW({"c0"}, {INTEGER()});
   const int64_t kRows = 4096;
@@ -808,16 +1969,193 @@ TEST_F(ParquetWriterTest, allNulls) {
 
   auto* sinkPtr = write(data);
 
-  dwio::common::ReaderOptions readerOptions(leafPool_.get());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+  auto reader = createReaderInMemory(*sinkPtr);
 
   ASSERT_EQ(reader->numberOfRows(), kRows);
   ASSERT_EQ(*reader->rowType(), *schema);
 
-  auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
+  auto rowReader = createRowReaderFromReader(*reader, schema);
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
+}
+
+// Verifies that close() without any prior write() does not crash.
+TEST_F(ParquetWriterTest, closeWithoutWrite) {
+  auto schema = ROW({"c0"}, {INTEGER()});
+  auto sink = std::make_unique<dwio::common::MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.formatSpecificOptions = std::make_shared<ParquetWriterOptions>();
+  auto writer =
+      std::make_unique<parquet::Writer>(std::move(sink), options, schema);
+  writer->close();
+}
+
+// Verifies that flush() with no accumulated data is a no-op.
+TEST_F(ParquetWriterTest, flushWithNoData) {
+  auto schema = ROW({"c0"}, {INTEGER()});
+  auto sink = std::make_unique<dwio::common::MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.formatSpecificOptions = std::make_shared<ParquetWriterOptions>();
+  auto writer =
+      std::make_unique<parquet::Writer>(std::move(sink), options, schema);
+  writer->flush();
+
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>(100, [](auto row) { return row; })});
+  writer->write(data);
+  writer->close();
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), 100);
+}
+
+// Verifies that multiple consecutive flush() calls are idempotent.
+TEST_F(ParquetWriterTest, consecutiveFlushCalls) {
+  auto schema = ROW({"c0"}, {INTEGER()});
+  auto sink = std::make_unique<dwio::common::MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.formatSpecificOptions = std::make_shared<ParquetWriterOptions>();
+  auto writer =
+      std::make_unique<parquet::Writer>(std::move(sink), options, schema);
+
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>(100, [](auto row) { return row; })});
+  writer->write(data);
+  writer->flush();
+  writer->flush();
+  writer->flush();
+
+  writer->write(data);
+  writer->close();
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), 200);
+}
+
+// Verifies that a single large batch exceeding maxRowGroupLength is correctly
+// split into multiple row groups by writeRecordBatch.
+TEST_F(ParquetWriterTest, batchExceedingRowGroupSize) {
+  constexpr vector_size_t kSize = 1'000;
+  constexpr int kRowsPerGroup = 100;
+
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>(kSize, [](auto row) { return row; })});
+  auto schema = asRowType(data->type());
+
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory = [kRowsPerGroup]() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/kRowsPerGroup,
+        /*bytesInRowGroup=*/512 * 1'024 * 1'024);
+  };
+  auto* sinkPtr = write(data, options, ParquetWriterOptions{});
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), kSize);
+  ASSERT_EQ(reader->fileMetaData().numRowGroups(), kSize / kRowsPerGroup);
+}
+
+// Verifies that the flush policy uses actual retained size, not flat estimate,
+// for dictionary columns. With estimateFlatSize() the 100K-row dictionary
+// column would appear to be ~6MB (100K * 60-byte strings), exceeding a 2MB
+// bytesInRowGroup threshold and causing multiple row groups. With
+// retainedSize() the actual footprint is ~500KB (dictionary + indices),
+// fitting in a single row group.
+TEST_F(ParquetWriterTest, flushEstimationDictionaryAware) {
+  constexpr vector_size_t kSize = 100'000;
+  constexpr int kDictSize = 10;
+
+  // Dictionary of 10 strings, each ~60 bytes. estimateFlatSize would report
+  // 100K * 60 = 6MB. retainedSize reports ~600 bytes + 400KB indices = ~400KB.
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] =
+        fmt::format("this_is_a_longer_dictionary_value_for_testing_{:04d}", i);
+  }
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+  BufferPtr indices =
+      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    rawIndices[i] = i % kDictSize;
+  }
+  auto dictVector = BaseVector::wrapInDictionary(
+      BufferPtr(nullptr), indices, kSize, dictionary);
+
+  auto data = makeRowVector({dictVector});
+  auto schema = asRowType(data->type());
+
+  // Set bytesInRowGroup to 2MB. With estimateFlatSize (~6MB), this would
+  // produce multiple row groups. With retainedSize (~400KB), it fits in one.
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/1'000'000,
+        /*bytesInRowGroup=*/2 * 1'024 * 1'024);
+  };
+  auto* sinkPtr = write(data, options, ParquetWriterOptions{});
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), kSize);
+  // Should be a single row group because the actual data size is well under
+  // the 2MB threshold.
+  ASSERT_EQ(reader->fileMetaData().numRowGroups(), 1);
+}
+
+// Verifies that flat columns still trigger flush at the correct threshold.
+// This ensures retainedSize() doesn't under-report for non-dictionary data.
+TEST_F(ParquetWriterTest, flushEstimationFlatColumns) {
+  // Write 50K rows of int32 (200KB) + 50K rows of int64 (400KB) = 600KB.
+  // With bytesInRowGroup=500KB, the first batch should trigger a flush before
+  // the second batch.
+  constexpr vector_size_t kBatchSize = 50'000;
+
+  auto batch = makeRowVector({
+      makeFlatVector<int32_t>(kBatchSize, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(
+          kBatchSize, [](auto row) { return static_cast<int64_t>(row); }),
+  });
+  auto schema = asRowType(batch->type());
+
+  auto sink = std::make_unique<dwio::common::MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/1'000'000,
+        /*bytesInRowGroup=*/500 * 1'024);
+  };
+  auto parquetOpts = std::make_shared<ParquetWriterOptions>();
+  options.formatSpecificOptions = parquetOpts;
+  auto writer =
+      std::make_unique<parquet::Writer>(std::move(sink), options, schema);
+
+  writer->write(batch);
+  writer->write(batch);
+  writer->close();
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), kBatchSize * 2);
+  // The second write triggers a flush because the first batch (~600KB)
+  // exceeds the 500KB threshold.
+  ASSERT_EQ(reader->fileMetaData().numRowGroups(), 2);
 }
 
 } // namespace

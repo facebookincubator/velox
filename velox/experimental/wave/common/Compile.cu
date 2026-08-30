@@ -29,6 +29,13 @@
 #include "velox/external/jitify/jitify.hpp"
 DEFINE_bool(cuda_G, false, "Enable -G for NVRTC");
 
+DEFINE_bool(
+    cuda_lineinfo,
+    false,
+    "Enable -lineinfo for NVRTC so compute-sanitizer and the profiler can "
+    "attribute a fault to a source line. Unlike -G this keeps optimization on, "
+    "so it can be used with the default -O3 (ptxas rejects -G with -O>0).");
+
 DEFINE_int32(
     cuda_O,
 #ifndef NDEBUG
@@ -91,6 +98,10 @@ class CompiledModuleImpl : public CompiledModule {
   std::vector<CUfunction> kernels_;
   int64_t compileMs_;
 };
+
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
 
 namespace {
 
@@ -172,16 +183,24 @@ bool readSystemHeaders(std::map<std::string, std::string>& headers) {
 }
 
 void saveSystemHeaders(std::map<std::string, std::string>& map) {
-  std::ofstream out(fmt::format("/tmp/h.{}", getpid()));
-  for (auto& pair : map) {
-    out << pair.first << std::endl
-        << pair.second.size() << std::endl
-        << pair.second;
+  auto tmpPath = fmt::format("/tmp/h.{}", getpid());
+  {
+    std::ofstream out(tmpPath);
+    for (auto& pair : map) {
+      out << pair.first << std::endl
+          << pair.second.size() << std::endl
+          << pair.second;
+    }
   }
-  out.close();
-  system(
-      fmt::format(" mv /tmp/h.{} /tmp/wavesystemheaders.txt", getpid())
-          .c_str());
+  // Use rename(2) instead of system("mv ...") to publish the headers file.
+  // system() calls fork(), and forking from a Wave compile-pool thread inside
+  // a heavyweight host (NCCL/Thrift/folly executors) can deadlock the child
+  // before exec via lock inheritance, hanging warmup() forever (T275179010).
+  // rename is a single atomic syscall within the same filesystem (/tmp).
+  if (std::rename(tmpPath.c_str(), "/tmp/wavesystemheaders.txt") != 0) {
+    LOG(WARNING) << "Failed to rename " << tmpPath
+                 << " to /tmp/wavesystemheaders.txt: " << std::strerror(errno);
+  }
 }
 
 // Adds a trailing zero to make the string.data() a C char*.
@@ -258,6 +277,10 @@ void ensureInit() {
   }
   if (FLAGS_cuda_G) {
     waveNvrtcFlags.push_back("-G");
+  } else if (FLAGS_cuda_lineinfo) {
+    // -G subsumes -lineinfo and the two are mutually exclusive; -G also
+    // requires -O0, so only reach for -lineinfo when -G is off.
+    waveNvrtcFlags.push_back("-lineinfo");
   }
   getNvrtcOptions(waveNvrtcFlags);
   auto device = currentDevice();
@@ -302,6 +325,46 @@ void ensureInit() {
 // static
 void CompiledModule::initialize() {
   ensureInit();
+}
+
+namespace {
+// Order-sensitive hash combiner (boost-style).
+inline size_t mixHash(size_t seed, std::string_view s) {
+  return seed ^
+      (std::hash<std::string_view>{}(s) + 0x9e3779b97f4a7c15ULL + (seed << 6) +
+       (seed >> 2));
+}
+} // namespace
+
+size_t kernelCacheSalt() {
+  ensureInit();
+  // Header contents and target arch are fixed once NVRTC is initialized, so
+  // hash them once. waveNvrtcFlags carries the --gpu-architecture flag, so the
+  // arch is captured here as part of the flag set; we additionally fold the
+  // resolved header name/text pairs that NVRTC pulls in at compile time.
+  static const size_t headersAndArch = [] {
+    size_t h = 0;
+    for (size_t i = 0; i < waveHeaderNameString.size(); ++i) {
+      h = mixHash(h, waveHeaderNameString[i]);
+      h = mixHash(h, waveHeaderTextString[i]);
+    }
+    // The architecture is determined in ensureInit() as a --gpu-architecture
+    // flag; fold those specific flags into the precomputed component.
+    for (const auto& flag : waveNvrtcFlags) {
+      if (flag.find("arch") != std::string::npos) {
+        h = mixHash(h, flag);
+      }
+    }
+    return h;
+  }();
+
+  // Mix the full NVRTC flag set (e.g. -G, -O, -Xptxas) on each call so a change
+  // in compile flags reflects in the key even if headers/arch are unchanged.
+  size_t h = headersAndArch;
+  for (const auto& flag : waveNvrtcFlags) {
+    h = mixHash(h, flag);
+  }
+  return h;
 }
 
 std::shared_ptr<CompiledModule> CompiledModule::create(KernelSpec& spec) {

@@ -42,11 +42,15 @@ void registerMathFunctions(const std::string& prefix) {
   registerFunction<AtanhFunction, double, double>({prefix + "atanh"});
   registerFunction<SecFunction, double, double>({prefix + "sec"});
   registerFunction<CscFunction, double, double>({prefix + "csc"});
+  registerFunction<SinFunction, double, double>({prefix + "sin"});
   registerFunction<SinhFunction, double, double>({prefix + "sinh"});
   registerFunction<CosFunction, double, double>({prefix + "cos"});
   registerFunction<CoshFunction, double, double>({prefix + "cosh"});
   registerFunction<CotFunction, double, double>({prefix + "cot"});
+  registerFunction<TanFunction, double, double>({prefix + "tan"});
+  registerFunction<TanhFunction, double, double>({prefix + "tanh"});
   registerFunction<DegreesFunction, double, double>({prefix + "degrees"});
+  registerFunction<RadiansFunction, double, double>({prefix + "radians"});
   registerFunction<Atan2Function, double, double, double>({prefix + "atan2"});
   registerFunction<Log1pFunction, double, double>({prefix + "log1p"});
   registerFunction<ToBinaryStringFunction, Varchar, int64_t>({prefix + "bin"});
@@ -81,6 +85,7 @@ void registerMathFunctions(const std::string& prefix) {
       {prefix + "floor"});
   registerDecimalFloor(prefix);
   registerFunction<HypotFunction, double, double, double>({prefix + "hypot"});
+  registerFunction<sparksql::LnFunction, double, double>({prefix + "ln"});
   registerFunction<sparksql::Log2Function, double, double>({prefix + "log2"});
   registerFunction<sparksql::Log10Function, double, double>({prefix + "log10"});
   registerFunction<sparksql::LogarithmFunction, double, double, double>(
@@ -99,6 +104,11 @@ void registerMathFunctions(const std::string& prefix) {
       {prefix + "rand", prefix + "random"});
   registerFunction<RandFunction, double, Constant<int64_t>>(
       {prefix + "rand", prefix + "random"});
+  registerFunction<RandnFunction, double>({prefix + "randn"});
+  registerFunction<RandnFunction, double, Constant<int32_t>>(
+      {prefix + "randn"});
+  registerFunction<RandnFunction, double, Constant<int64_t>>(
+      {prefix + "randn"});
   registerFunction<SignFunction, double, double>({prefix + "sign"});
 
   // Operators.
@@ -118,6 +128,32 @@ void registerMathFunctions(const std::string& prefix) {
       UnaryMinusFunction,
       ShortDecimal<P1, S1>,
       ShortDecimal<P1, S1>>({prefix + "unaryminus"});
+  registerFunction<UnaryMinusFunction, IntervalDayTime, IntervalDayTime>(
+      {prefix + "unaryminus"});
+  registerFunction<UnaryMinusFunction, IntervalYearMonth, IntervalYearMonth>(
+      {prefix + "unaryminus"});
+  // Spark ANSI intervals always use exact arithmetic. Register both names to
+  // support legacy plans and plans that route failOnError through checked_*.
+  registerFunction<
+      CheckedAddFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "add", prefix + "checked_add"});
+  registerFunction<
+      CheckedAddFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "add", prefix + "checked_add"});
+  registerFunction<
+      CheckedSubtractFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "subtract", prefix + "checked_subtract"});
+  registerFunction<
+      CheckedSubtractFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "subtract", prefix + "checked_subtract"});
 
   registerDecimalAdd(prefix);
   registerDecimalSubtract(prefix);

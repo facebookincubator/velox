@@ -17,9 +17,18 @@
 #pragma once
 
 #include <cstdint>
-#include <map>
 #include <string>
 #include <vector>
+
+#include "velox/connectors/hive/iceberg/DeletionVectorFormat.h"
+
+namespace facebook::velox::memory {
+class MemoryPool;
+} // namespace facebook::velox::memory
+
+namespace facebook::velox::dwio::common {
+class FileSink;
+} // namespace facebook::velox::dwio::common
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -45,18 +54,42 @@ namespace facebook::velox::connector::hive::iceberg {
 ///   std::string blob = writer.serialize();
 class DeletionVectorWriter {
  public:
+  /// Largest position the Iceberg deletion-vector format can represent.
+  ///
+  /// Iceberg's RoaringPositionBitmap derives this as
+  /// `toPosition(MAX_KEY, Integer.MIN_VALUE)`, i.e.
+  /// `(key << 32) | (pos32 & 0xFFFFFFFF)` with `key = 2147483646`, and rejects
+  /// anything above it. The binding constraint is the Roaring64 group key: it
+  /// is read back as a signed 32-bit int, so a key at or above 2^31 would
+  /// deserialize as negative and be rejected by spec-compliant readers.
+  /// Matching the bound here means we never write a blob Iceberg cannot read.
+  static constexpr int64_t kMaxPosition = 9'223'372'030'412'324'864LL;
+
+  static_assert(
+      (kMaxPosition >> 32) == kMaxRoaring64GroupKey,
+      "Writer position bound and reader group-key bound must agree.");
+
   DeletionVectorWriter() = default;
 
-  /// Adds a deleted row position (0-based file row offset).
+  /// Adds a deleted row position (0-based file row offset). The position must
+  /// be in [0, kMaxPosition].
   void addDeletedPosition(int64_t position);
 
   /// Adds multiple deleted row positions.
   void addDeletedPositions(const std::vector<int64_t>& positions);
 
-  /// Returns the number of deleted positions collected so far.
+  /// Returns the number of deleted positions collected so far, including any
+  /// duplicates. Prefer numDistinctPositions() for the DV blob cardinality.
   size_t numPositions() const {
     return positions_.size();
   }
+
+  /// Returns the number of distinct deleted positions, i.e. the cardinality of
+  /// the bitmap that serialize() emits (which sorts and de-duplicates). Use
+  /// this for the Iceberg deletion-vector-v1 'cardinality' property and the
+  /// commit-message record count, since seeding an existing DV and then adding
+  /// overlapping new deletes can make positions_ contain duplicates.
+  size_t numDistinctPositions() const;
 
   /// Serializes collected positions into a 64-bit roaring bitmap.
   ///
@@ -83,20 +116,33 @@ class DeletionVectorWriter {
   std::vector<int64_t> positions_;
 };
 
-/// Writes a Puffin file containing a single deletion vector blob.
+/// Writes a Puffin file containing a single deletion vector blob to the
+/// provided file sink.
 ///
 /// The Puffin file format consists of:
-///   - 4-byte magic: "PUF1"
-///   - Blob data (the serialized roaring bitmap)
-///   - Footer: blob metadata + footer payload size + magic
+///   - 4-byte magic: "PFA1"
+///   - Blob data: the deletion-vector-v1 frame
+///     [length: 4B BE][magic: D1 D3 39 64][roaring bitmap][CRC-32: 4B BE]
+///   - Footer: magic + blob metadata JSON + footer payload size + flags + magic
 ///
-/// @param filePath Path to write the Puffin file.
-/// @param blobData Serialized roaring bitmap bytes.
+/// The caller owns 'sink' and is responsible for opening it before this call
+/// and closing it after. Routing the bytes through 'sink' lets the puffin
+/// file land on any filesystem (local, warm storage, S3, etc.) that has a
+/// registered FileSink factory — matching how IcebergDataSink writes data
+/// files.
+///
+/// @param sink Opened file sink to write the Puffin bytes into.
+/// @param pool Memory pool used to allocate the in-memory staging buffer.
+/// @param blobData Serialized roaring bitmap bytes (unframed).
 /// @param referencedDataFile Path of the data file this DV applies to.
-/// @return Pair of (blobOffset, blobLength) within the written file.
+/// @param cardinality Number of deleted positions in the vector.
+/// @return Pair of (blobOffset, blobLength) within the written file, where
+///   blobLength is the length of the framed deletion-vector-v1 blob.
 std::pair<uint64_t, uint64_t> writePuffinFile(
-    const std::string& filePath,
+    dwio::common::FileSink& sink,
+    memory::MemoryPool& pool,
     const std::string& blobData,
-    const std::string& referencedDataFile);
+    const std::string& referencedDataFile,
+    int64_t cardinality);
 
 } // namespace facebook::velox::connector::hive::iceberg

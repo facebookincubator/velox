@@ -478,7 +478,7 @@ TEST_F(CastExprTest, realAndDoubleToString) {
           -std::numeric_limits<double>::quiet_NaN(),
       },
       {
-          "12345678901234567000.0",
+          "1.2345678901234567e+19",
           "123456789.01234567",
           "10000000.0",
           "12345.0",
@@ -491,7 +491,7 @@ TEST_F(CastExprTest, realAndDoubleToString) {
           "-12345.0",
           "-10000000.0",
           "-123456789.01234567",
-          "-12345678901234567000.0",
+          "-1.2345678901234567e+19",
           "Infinity",
           "-Infinity",
           "NaN",
@@ -520,7 +520,7 @@ TEST_F(CastExprTest, realAndDoubleToString) {
           -std::numeric_limits<float>::quiet_NaN(),
       },
       {
-          "12345678295994466000.0",
+          "1.2345678295994466e+19",
           "123456784.0",
           "10000000.0",
           "12345.0",
@@ -533,7 +533,7 @@ TEST_F(CastExprTest, realAndDoubleToString) {
           "-12345.0",
           "-10000000.0",
           "-123456784.0",
-          "-12345678295994466000.0",
+          "-1.2345678295994466e+19",
           "Infinity",
           "-Infinity",
           "NaN",
@@ -1839,6 +1839,14 @@ TEST_F(CastExprTest, decimalToDecimal) {
            72'000'000'000},
           DECIMAL(20, 11)));
 
+  // Reinterpret when scale is unchanged.
+  testCast(
+      shortFlat,
+      makeFlatVector<int64_t>({-3, -2, -1, 0, 55, 69, 72}, DECIMAL(18, 2)));
+  testCast(
+      longFlat,
+      makeFlatVector<int128_t>({-201, -109, 0, 105, 208}, DECIMAL(38, 2)));
+
   // short to long, scale down.
   testCast(
       makeFlatVector<int64_t>({-20'500, -190, 12'345, 19'999}, DECIMAL(6, 4)),
@@ -2311,39 +2319,39 @@ TEST_F(CastExprTest, doubleToDecimal) {
       DOUBLE(),
       DECIMAL(10, 2),
       {9999999999999999999999.99},
-      "Cannot cast DOUBLE '1E22' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast DOUBLE '1e+22' to DECIMAL(10, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(10, 2),
       {static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1)},
-      "Cannot cast DOUBLE '9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast DOUBLE '9.223372036854776e+18' to DECIMAL(10, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(10, 2),
       {static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1)},
-      "Cannot cast DOUBLE '-9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast DOUBLE '-9.223372036854776e+18' to DECIMAL(10, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(20, 2),
       {static_cast<double>(DecimalUtil::kLongDecimalMax)},
-      "Cannot cast DOUBLE '1E38' to DECIMAL(20, 2). Result overflows.");
+      "Cannot cast DOUBLE '1e+38' to DECIMAL(20, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(20, 2),
       {static_cast<double>(DecimalUtil::kLongDecimalMin)},
-      "Cannot cast DOUBLE '-1E38' to DECIMAL(20, 2). Result overflows.");
+      "Cannot cast DOUBLE '-1e+38' to DECIMAL(20, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(38, 2),
       {std::numeric_limits<double>::max()},
-      "Cannot cast DOUBLE '1.7976931348623157E308' to DECIMAL(38, 2). Result overflows.");
+      "Cannot cast DOUBLE '1.7976931348623157e+308' to DECIMAL(38, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(38, 2),
       {std::numeric_limits<double>::lowest()},
-      "Cannot cast DOUBLE '-1.7976931348623157E308' to DECIMAL(38, 2). Result overflows.");
+      "Cannot cast DOUBLE '-1.7976931348623157e+308' to DECIMAL(38, 2). Result overflows.");
   testCast(
       makeConstant<double>(std::numeric_limits<double>::min(), 1),
       makeConstant<int128_t>(0, 1, DECIMAL(38, 2)));
@@ -2427,33 +2435,33 @@ TEST_F(CastExprTest, realToDecimal) {
       DECIMAL(10, 2),
       {static_cast<float>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1)},
-      "Cannot cast REAL '9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast REAL '9.223372036854776e+18' to DECIMAL(10, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(10, 2),
       {static_cast<float>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1)},
-      "Cannot cast REAL '-9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast REAL '-9.223372036854776e+18' to DECIMAL(10, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(20, 2),
       {static_cast<float>(DecimalUtil::kLongDecimalMax)},
-      "Cannot cast REAL '9.999999680285692E37' to DECIMAL(20, 2). Result overflows.");
+      "Cannot cast REAL '9.999999680285692e+37' to DECIMAL(20, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(20, 2),
       {static_cast<float>(DecimalUtil::kLongDecimalMin)},
-      "Cannot cast REAL '-9.999999680285692E37' to DECIMAL(20, 2). Result overflows.");
+      "Cannot cast REAL '-9.999999680285692e+37' to DECIMAL(20, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(38, 2),
       {std::numeric_limits<float>::max()},
-      "Cannot cast REAL '3.4028234663852886E38' to DECIMAL(38, 2). Result overflows.");
+      "Cannot cast REAL '3.4028234663852886e+38' to DECIMAL(38, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(38, 2),
       {std::numeric_limits<float>::lowest()},
-      "Cannot cast REAL '-3.4028234663852886E38' to DECIMAL(38, 2). Result overflows.");
+      "Cannot cast REAL '-3.4028234663852886e+38' to DECIMAL(38, 2). Result overflows.");
   testCast(
       makeConstant<float>(std::numeric_limits<float>::min(), 1),
       makeConstant<int128_t>(0, 1, DECIMAL(38, 2)));
@@ -3172,106 +3180,11 @@ TEST_F(CastExprTest, timeToVarcharCast) {
 }
 
 TEST_F(CastExprTest, timeToBigintCast) {
-  {
-    // Test casting TIME to BIGINT
-
-    // Test various TIME values (milliseconds since midnight)
-    // 0 = 00:00:00.000
-    // 3661000 = 01:01:01.000
-    // 43200000 = 12:00:00.000 (noon)
-    // 86399999 = 23:59:59.999
-    auto timeVector =
-        makeFlatVector<int64_t>({0, 3661000, 43200000, 86399999}, TIME());
-
-    auto result = evaluate<FlatVector<int64_t>>(
-        "cast(c0 as bigint)", makeRowVector({timeVector}));
-
-    // Should return the same values since TIME is already stored as int64_t
-    // milliseconds
-    auto expected = makeFlatVector<int64_t>({0, 3661000, 43200000, 86399999});
-
-    assertEqualVectors(expected, result);
-  }
-
-  {
-    // Test casting TIME to BIGINT with nulls
-    auto timeVector = makeNullableFlatVector<int64_t>(
-        {0, std::nullopt, 43200000, std::nullopt}, TIME());
-
-    auto result = evaluate<FlatVector<int64_t>>(
-        "cast(c0 as bigint)", makeRowVector({timeVector}));
-
-    auto expected = makeNullableFlatVector<int64_t>(
-        {0, std::nullopt, 43200000, std::nullopt});
-
-    assertEqualVectors(expected, result);
-  }
-
-  {
-    // Test try_cast for TIME to BIGINT
-    auto timeVector = makeFlatVector<int64_t>({0, 43200000}, TIME());
-
-    auto result = evaluate<FlatVector<int64_t>>(
-        "try_cast(c0 as bigint)", makeRowVector({timeVector}));
-
-    auto expected = makeFlatVector<int64_t>({0, 43200000});
-
-    assertEqualVectors(expected, result);
-  }
-
-  {
-    // Test constant TIME vector cast to BIGINT (non-null)
-    // This tests the optimization path for constant vectors
-    auto constantTimeVector = BaseVector::wrapInConstant(
-        1000, 0, makeFlatVector<int64_t>({43200000}, TIME()));
-
-    auto result =
-        evaluate("cast(c0 as bigint)", makeRowVector({constantTimeVector}));
-
-    // Should return a constant vector with the same value
-    auto expected = BaseVector::wrapInConstant(
-        1000, 0, makeFlatVector<int64_t>({43200000}));
-
-    assertEqualVectors(expected, result);
-    // Verify the result is actually constant-encoded (optimization worked)
-    ASSERT_TRUE(result->isConstantEncoding());
-  }
-
-  {
-    // Test constant TIME vector cast to BIGINT (null)
-    // This tests the optimization path for null constant vectors
-    auto nullTimeVector = BaseVector::createNullConstant(TIME(), 500, pool());
-
-    auto result =
-        evaluate("cast(c0 as bigint)", makeRowVector({nullTimeVector}));
-
-    // Should return a null constant vector
-    auto expected = BaseVector::createNullConstant(BIGINT(), 500, pool());
-
-    assertEqualVectors(expected, result);
-    // Verify the result is actually constant-encoded (optimization worked)
-    ASSERT_TRUE(result->isConstantEncoding());
-    ASSERT_TRUE(result->isNullAt(0));
-  }
-
-  {
-    // Test constant TIME vector cast to BIGINT with different sizes
-    // This ensures the optimization correctly handles different vector sizes
-    for (auto size : {1, 10, 100, 1000}) {
-      auto constantTimeVector = BaseVector::wrapInConstant(
-          size, 0, makeFlatVector<int64_t>({86399999}, TIME()));
-
-      auto result =
-          evaluate("cast(c0 as bigint)", makeRowVector({constantTimeVector}));
-
-      auto expected = BaseVector::wrapInConstant(
-          size, 0, makeFlatVector<int64_t>({86399999}));
-
-      assertEqualVectors(expected, result);
-      ASSERT_TRUE(result->isConstantEncoding());
-      ASSERT_EQ(result->size(), size);
-    }
-  }
+  testCast<int64_t, int64_t>(
+      TIME(),
+      BIGINT(),
+      {0, 3'661'000, 43'200'000, 86'399'999, std::nullopt},
+      {0, 3'661'000, 43'200'000, 86'399'999, std::nullopt});
 }
 
 TEST_F(CastExprTest, varcharToTimeCast) {
@@ -3445,7 +3358,7 @@ TEST_F(CastExprTest, varcharToTimeCast) {
     // Should throw error for microseconds
     VELOX_ASSERT_THROW(
         evaluate(castExpr, makeRowVector({varcharVector})),
-        "Microsecond precision not supported");
+        "fractional precision exceeds 3 digits");
 
     // Test with try_cast - should return null for microseconds
     auto tryCastExpr = makeCastExpr(inputField, TIME(), true);

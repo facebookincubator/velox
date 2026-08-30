@@ -15,7 +15,12 @@
  */
 #pragma once
 
+#include <memory>
+#include <optional>
 #include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -32,6 +37,21 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
   /// sequence number filtering.
   int64_t dataSequenceNumber{0};
 
+  /// Partition values keyed by the Iceberg *source* column field ID, for
+  /// partition fields the serialized spec explicitly marks as the 'identity'
+  /// transform. Only an identity value equals the source column's value, so
+  /// only these entries may be substituted for a read of the source column.
+  ///
+  /// Transformed fields (bucket, truncate, day, void) are never present, even
+  /// when their derived partition-field name happens to collide with a source
+  /// column name. An empty map means no identity provenance was available and
+  /// callers must read source columns from the data file.
+  ///
+  /// Distinct from the inherited name-keyed 'partitionKeys', which carries
+  /// every partition field under its derived 'PartitionField.name()' and
+  /// therefore cannot prove a transform is identity.
+  std::unordered_map<int32_t, std::optional<std::string>> identityPartitionKeys;
+
   HiveIcebergSplit(
       const std::string& connectorId,
       const std::string& filePath,
@@ -46,7 +66,11 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       bool cacheable = true,
       const std::unordered_map<std::string, std::string>& infoColumns = {},
       std::optional<FileProperties> fileProperties = std::nullopt,
-      int64_t dataSequenceNumber = 0);
+      int64_t dataSequenceNumber = 0,
+      const std::unordered_map<int32_t, std::optional<std::string>>&
+          identityPartitionKeys = {},
+      std::optional<dwio::common::ColumnMappingMode> columnMappingMode =
+          std::nullopt);
 
   // For tests only
   HiveIcebergSplit(
@@ -64,7 +88,93 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       std::vector<IcebergDeleteFile> deletes = {},
       const std::unordered_map<std::string, std::string>& infoColumns = {},
       std::optional<FileProperties> fileProperties = std::nullopt,
-      int64_t dataSequenceNumber = 0);
+      int64_t dataSequenceNumber = 0,
+      const std::unordered_map<int32_t, std::optional<std::string>>&
+          identityPartitionKeys = {},
+      std::optional<dwio::common::ColumnMappingMode> columnMappingMode =
+          std::nullopt);
+};
+
+/// Builds Iceberg splits with named parameters.
+class IcebergSplitBuilder {
+ public:
+  explicit IcebergSplitBuilder(std::string filePath)
+      : filePath_{std::move(filePath)} {
+    infoColumns_["$path"] = filePath_;
+  }
+
+  IcebergSplitBuilder& connectorId(std::string id) {
+    connectorId_ = std::move(id);
+    return *this;
+  }
+
+  IcebergSplitBuilder& fileFormat(dwio::common::FileFormat format) {
+    fileFormat_ = format;
+    return *this;
+  }
+
+  IcebergSplitBuilder& start(uint64_t start) {
+    start_ = start;
+    return *this;
+  }
+
+  IcebergSplitBuilder& length(uint64_t length) {
+    length_ = length;
+    return *this;
+  }
+
+  IcebergSplitBuilder& partitionKeys(
+      const std::unordered_map<std::string, std::optional<std::string>>& keys) {
+    partitionKeys_ = keys;
+    return *this;
+  }
+
+  IcebergSplitBuilder& infoColumns(
+      const std::unordered_map<std::string, std::string>& columns) {
+    for (const auto& [name, value] : columns) {
+      infoColumns_[name] = value;
+    }
+    return *this;
+  }
+
+  IcebergSplitBuilder& deleteFiles(std::vector<IcebergDeleteFile> files) {
+    deleteFiles_ = std::move(files);
+    return *this;
+  }
+
+  IcebergSplitBuilder& dataSequenceNumber(int64_t sequenceNumber) {
+    dataSequenceNumber_ = sequenceNumber;
+    return *this;
+  }
+
+  /// Sets identity-transform partition values keyed by source field ID. See
+  /// 'HiveIcebergSplit::identityPartitionKeys'.
+  IcebergSplitBuilder& identityPartitionKeys(
+      const std::unordered_map<int32_t, std::optional<std::string>>& keys) {
+    identityPartitionKeys_ = keys;
+    return *this;
+  }
+
+  IcebergSplitBuilder& columnMappingMode(dwio::common::ColumnMappingMode mode) {
+    columnMappingMode_ = mode;
+    return *this;
+  }
+
+  std::shared_ptr<HiveIcebergSplit> build() const;
+
+ private:
+  const std::string filePath_;
+  std::string connectorId_;
+  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
+  uint64_t start_{0};
+  uint64_t length_{std::numeric_limits<uint64_t>::max()};
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys_;
+  std::unordered_map<std::string, std::string> infoColumns_;
+  std::vector<IcebergDeleteFile> deleteFiles_;
+  int64_t dataSequenceNumber_{0};
+  std::unordered_map<int32_t, std::optional<std::string>>
+      identityPartitionKeys_;
+  std::optional<dwio::common::ColumnMappingMode> columnMappingMode_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

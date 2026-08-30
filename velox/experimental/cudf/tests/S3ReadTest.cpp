@@ -32,6 +32,8 @@
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
+#include <filesystem>
+
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::cudf_velox::exec::test;
 namespace {
@@ -65,12 +67,26 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
     S3Test::TearDown();
   }
 };
+
+// Resolves int.parquet, falling back to a working-directory lookup when the
+// build-time path baked into the binary is unreachable (velox-cudf CI builds
+// and runs the binaries on different hosts).
+std::string resolveIntParquetPath() {
+  const std::string relativePath =
+      "../../../dwio/parquet/tests/examples/int.parquet";
+  auto path =
+      test::getDataFilePath("velox/experimental/cudf/tests", relativePath);
+  if (std::filesystem::exists(path)) {
+    return path;
+  }
+  return (std::filesystem::current_path() / relativePath)
+      .lexically_normal()
+      .string();
+}
 } // namespace
 
 TEST_F(S3ReadTest, s3ReadTest) {
-  const auto sourceFile = test::getDataFilePath(
-      "velox/experimental/cudf/tests",
-      "../../../dwio/parquet/tests/examples/int.parquet");
+  const auto sourceFile = resolveIntParquetPath();
   const char* bucketName = "data";
   const auto destinationFile = S3Test::localPath(bucketName) + "/int.parquet";
   minioServer_->addBucket(bucketName);

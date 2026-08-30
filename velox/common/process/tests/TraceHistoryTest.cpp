@@ -19,6 +19,7 @@
 #include <fmt/format.h>
 #include <folly/synchronization/Baton.h>
 #include <folly/synchronization/Latch.h>
+#include <folly/system/ThreadId.h>
 #include <gtest/gtest.h>
 
 namespace facebook::velox::process {

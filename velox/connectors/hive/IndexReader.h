@@ -120,7 +120,7 @@ class IndexReaderFactoryRegistry {
     VELOX_CHECK(
         inserted,
         "IndexReaderFactory already registered for format: {}",
-        dwio::common::toString(format));
+        dwio::common::FileFormatName::toName(format));
   }
 
   /// Unregisters the factory for the given file format. Returns true if a

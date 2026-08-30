@@ -13,10 +13,10 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_GFLAGS_VERSION 2.2.2)
+set(VELOX_GFLAGS_VERSION 2.3.0)
 set(
   VELOX_GFLAGS_BUILD_SHA256_CHECKSUM
-  34af2f15cf7367513b352bdcd2493ab14ce43692d2dcd9dfc499492966c64dcf
+  f619a51371f41c0ad6837b2a98af9d4643b3371015d873887f7e8d3237320b2f
 )
 string(
   CONCAT
@@ -42,7 +42,15 @@ FetchContent_Declare(
 set(GFLAGS_NAMESPACE "google;gflags")
 
 set(GFLAGS_BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
-set(GFLAGS_BUILD_STATIC_LIBS ${VELOX_BUILD_STATIC})
+# Always build the static target. The pre-installed folly in the
+# velox-dev:ubuntu-22.04 image was linked against gflags_static and its
+# exported config (folly-targets.cmake) keeps `gflags_static` in
+# INTERFACE_LINK_LIBRARIES. When VELOX_BUILD_SHARED=ON,
+# cmake_dependent_option forces VELOX_BUILD_STATIC=OFF, so without this
+# override BUNDLED gflags would only emit the shared variants and CMake
+# would fall back to a literal `-lgflags_static` that the linker can't
+# resolve. Cost is one extra small static archive.
+set(GFLAGS_BUILD_STATIC_LIBS ON)
 
 set(GFLAGS_BUILD_gflags_LIB ON)
 set(GFLAGS_BUILD_gflags_nothreads_LIB ON)

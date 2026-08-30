@@ -62,6 +62,8 @@ class IcebergConnector final : public HiveConnector {
       ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy) override;
 
+  static void registerSerDe();
+
  private:
   const std::shared_ptr<IcebergConfig> icebergConfig_;
 };

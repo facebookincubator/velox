@@ -16,12 +16,15 @@
 
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
 
 namespace facebook::velox::functions::aggregate::sparksql::test {
+
+using functions::sparksql::SparkQueryConfig;
 
 namespace {
 
@@ -43,7 +46,8 @@ class VarianceAggregationTest : public AggregationTestBase {
                     .planNode();
     AssertQueryBuilder(plan)
         .config(
-            core::QueryConfig::kSparkLegacyStatisticalAggregate,
+            SparkQueryConfig::qualify(
+                SparkQueryConfig::kLegacyStatisticalAggregate),
             legacy ? "true" : "false")
         .assertResults({expected});
   }
@@ -91,7 +95,7 @@ TEST_F(VarianceAggregationTest, stddev) {
   testVarianceAggregate("stddev");
 }
 
-TEST_F(VarianceAggregationTest, stddev_samp) {
+TEST_F(VarianceAggregationTest, stddevSamp) {
   testVarianceAggregate("stddev_samp");
 }
 
@@ -99,7 +103,7 @@ TEST_F(VarianceAggregationTest, variance) {
   testVarianceAggregate("variance");
 }
 
-TEST_F(VarianceAggregationTest, var_samp) {
+TEST_F(VarianceAggregationTest, varSamp) {
   testVarianceAggregate("var_samp");
 }
 

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -561,6 +562,54 @@ TEST_F(TypeParserTest, varcharEnumBasic) {
       *parseType(
           "row(c0 test.enum.mood:VarcharEnum(test.enum.mood{\"CURIOUS\":\"ONXW2ZKWMFWHKZI=\", \"HAPPY\":\"ONXW2ZJAOZQWY5LF\" , \"SAD\":\"KNHU2RJAKZAUYVKF\"}))"),
       *ROW({"c0"}, {VARCHAR_ENUM(moodInfo)}));
+}
+
+TEST_F(TypeParserTest, enumKindCaseInsensitive) {
+  registerBigintEnumType();
+  registerVarcharEnumType();
+
+  // The enum kind ("BigintEnum"/"VarcharEnum") is matched case-insensitively,
+  // consistent with the caseless lexer and Presto's case-insensitive
+  // TypeSignature contract. This matters because a serialized signature may be
+  // lowercased before it is parsed back.
+  LongEnumParameter moodInfo("test.enum.mood", {{"CURIOUS", 2}, {"HAPPY", 0}});
+  for (const auto& kind : {"bigintenum", "BIGINTENUM", "BigIntEnum"}) {
+    ASSERT_EQ(
+        *parseType(
+            fmt::format(
+                R"(test.enum.mood:{}(test.enum.mood{{"CURIOUS":2, "HAPPY":0}}))",
+                kind)),
+        *BIGINT_ENUM(moodInfo))
+        << "kind: " << kind;
+  }
+
+  // A fully lowercased signature (kind and keys) parses to the same type:
+  // keys are canonicalized back to uppercase by the parser.
+  ASSERT_EQ(
+      *parseType(
+          R"(test.enum.mood:bigintenum(test.enum.mood{"curious":2, "happy":0}))"),
+      *BIGINT_ENUM(moodInfo));
+
+  // Base32 values reused from varcharEnumBasic: "ONXW2ZKWMFWHKZI=" decodes to
+  // "someValue" and "ONXW2ZJAOZQWY5LF" to "some value".
+  VarcharEnumParameter colorInfo(
+      "test.enum.color", {{"RED", "someValue"}, {"BLUE", "some value"}});
+  for (const auto& kind : {"varcharenum", "VARCHARENUM", "VarCharEnum"}) {
+    ASSERT_EQ(
+        *parseType(
+            fmt::format(
+                R"(test.enum.color:{}(test.enum.color{{"RED":"ONXW2ZKWMFWHKZI=", "BLUE":"ONXW2ZJAOZQWY5LF"}}))",
+                kind)),
+        *VARCHAR_ENUM(colorInfo))
+        << "kind: " << kind;
+  }
+
+  // A fully lowercased varchar signature parses too: the base32 value decoder
+  // is case-insensitive and keys canonicalize to uppercase.
+  ASSERT_EQ(
+      *parseType(
+          R"(test.enum.color:varcharenum(test.enum.color{"red":"onxw2zkwmfwhkzi=", "blue":"onxw2zjaozqwy5lf"}))"),
+      *VARCHAR_ENUM(colorInfo));
 }
 
 TEST_F(TypeParserTest, invalidVarcharEnums) {

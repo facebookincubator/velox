@@ -35,31 +35,6 @@ using facebook::velox::common::testutil::TestValue;
 namespace facebook::velox::exec {
 using IndexSource = connector::IndexSource;
 
-void IndexLookupJoin::IndexStatWriter::addRuntimeStat(
-    std::string_view name,
-    const RuntimeCounter& value) {
-  auto lockedStats = runtimeStats_.wlock();
-  auto it = lockedStats->find(std::string(name));
-  if (it != lockedStats->end()) {
-    it->second.addValue(value.value);
-  } else {
-    RuntimeMetric metric(value.unit);
-    metric.addValue(value.value);
-    lockedStats->emplace(std::string(name), std::move(metric));
-  }
-}
-
-void IndexLookupJoin::IndexStatWriter::setRuntimeStat(
-    const std::string& name,
-    const RuntimeMetric& metric) {
-  runtimeStats_.wlock()->insert_or_assign(name, metric);
-}
-
-std::unordered_map<std::string, RuntimeMetric>
-IndexLookupJoin::IndexStatWriter::runtimeStats() const {
-  return *runtimeStats_.rlock();
-}
-
 namespace {
 
 void duplicateJoinKeyCheck(
@@ -229,7 +204,7 @@ int64_t extractStatSum(
 std::vector<OperatorStats> IndexLookupJoin::splitStats(
     const OperatorStats& combinedStats,
     const core::PlanNodeId& indexSourceNodeId,
-    const IndexStatWriter& indexSourceStatWriter) {
+    const ConcurrentRuntimeStatWriter& indexSourceStatWriter) {
   // Create stats for the IndexSource node from the accumulated index source
   // runtime stats.
   OperatorStats indexSourceStats;
@@ -302,13 +277,16 @@ IndexLookupJoin::IndexLookupJoin(
           operatorId,
           joinNode->id(),
           OperatorType::kIndexLookupJoin),
-      splitOutput_{driverCtx->queryConfig().indexLookupJoinSplitOutput()},
+      splitOutput_{
+          (joinNode->splitOutput().has_value() &&
+           joinNode->splitOutput().value()) ||
+          (!joinNode->splitOutput().has_value() &&
+           driverCtx->queryConfig().indexLookupJoinSplitOutput())},
       // TODO: support to update output batch size with output size stats during
       // the lookup processing.
       outputBatchSize_{
-          driverCtx->queryConfig().indexLookupJoinSplitOutput()
-              ? outputBatchRows()
-              : std::numeric_limits<vector_size_t>::max()},
+          splitOutput_ ? outputBatchRows()
+                       : std::numeric_limits<vector_size_t>::max()},
       joinType_{joinNode->joinType()},
       hasMarker_(joinNode->hasMarker()),
       probeType_{joinNode->sources()[0]->outputType()},
@@ -319,6 +297,7 @@ IndexLookupJoin::IndexLookupJoin(
           joinNode->leftKeys(),
           joinNode->rightKeys(),
           joinNode->joinConditions())},
+      forwardedProbeColumns_(joinNode->forwardedProbeColumns()),
       lookupColumnHandles_(joinNode->lookupSource()->assignments()),
       connectorQueryCtx_{operatorCtx_->createConnectorQueryCtx(
           lookupTableHandle_->connectorId(),
@@ -338,7 +317,7 @@ IndexLookupJoin::IndexLookupJoin(
           1 + driverCtx->queryConfig().indexLookupJoinMaxPrefetchBatches()),
       isIndexSplitCollector_{driverCtx->partitionId == 0},
       joinNode_{joinNode},
-      indexStatWriter_(std::make_shared<IndexStatWriter>()) {
+      indexStatWriter_(std::make_shared<ConcurrentRuntimeStatWriter>()) {
   duplicateJoinKeyCheck(joinNode_->leftKeys());
   duplicateJoinKeyCheck(joinNode_->rightKeys());
 
@@ -532,6 +511,33 @@ void IndexLookupJoin::initLookupInput() {
     }
 
     VELOX_UNSUPPORTED("Unsupported join condition type");
+  }
+
+  // Append the connector's forwarded probe columns after the join-condition
+  // walk. The plan-node constructor has already verified that each forwarded
+  // column exists in the probe input and does not overlap with any leftKey.
+  // Here we additionally throw on overlap with any column the join-condition
+  // walk above already added (e.g. a probe column referenced by a Between
+  // bound), since the caller's intent is ambiguous when the same column
+  // appears in both places.
+  for (const auto& forwardedColumn : forwardedProbeColumns_) {
+    const auto& name = forwardedColumn->name();
+    VELOX_CHECK_EQ(
+        lookupInputColumnSet.count(name),
+        0,
+        "Forwarded probe column {} overlaps with a column already referenced "
+        "by a join condition; remove it from forwardedProbeColumns.",
+        name);
+    const auto channel = probeType_->getChildIdx(name);
+    const auto& type = probeType_->childAt(channel);
+    addLookupInputColumn(
+        name,
+        type,
+        channel,
+        lookupInputNames,
+        lookupInputTypes,
+        lookupInputChannels_,
+        lookupInputColumnSet);
   }
 }
 
@@ -1095,32 +1101,21 @@ void IndexLookupJoin::recordIndexSourceInputStats(
   if (batch.lookupInput == nullptr || batch.lookupInput->size() == 0) {
     return;
   }
-  indexStatWriter_->addRuntimeStat(
-      "inputPositions",
-      RuntimeCounter(
-          static_cast<int64_t>(batch.lookupInput->size()),
-          RuntimeCounter::Unit::kNone));
-  indexStatWriter_->addRuntimeStat(
+  indexStatWriter_->addCount(
+      "inputPositions", static_cast<int64_t>(batch.lookupInput->size()));
+  indexStatWriter_->addBytes(
       "inputBytes",
-      RuntimeCounter(
-          static_cast<int64_t>(batch.lookupInput->estimateFlatSize()),
-          RuntimeCounter::Unit::kBytes));
+      static_cast<int64_t>(batch.lookupInput->estimateFlatSize()));
 }
 
 void IndexLookupJoin::recordIndexSourceOutputStats(
     const InputBatchState& batch) {
-  indexStatWriter_->addRuntimeStat(
-      "outputPositions",
-      RuntimeCounter(
-          static_cast<int64_t>(batch.lookupResult->size()),
-          RuntimeCounter::Unit::kNone));
-  indexStatWriter_->addRuntimeStat(
+  indexStatWriter_->addCount(
+      "outputPositions", static_cast<int64_t>(batch.lookupResult->size()));
+  indexStatWriter_->addBytes(
       "outputBytes",
-      RuntimeCounter(
-          static_cast<int64_t>(batch.lookupResult->output->estimateFlatSize()),
-          RuntimeCounter::Unit::kBytes));
-  indexStatWriter_->addRuntimeStat(
-      "outputVectors", RuntimeCounter(1, RuntimeCounter::Unit::kNone));
+      static_cast<int64_t>(batch.lookupResult->output->estimateFlatSize()));
+  indexStatWriter_->addCount("outputVectors", 1);
 }
 
 void IndexLookupJoin::prepareLookupResult(InputBatchState& batch) {
@@ -1666,27 +1661,21 @@ void IndexLookupJoin::recordConnectorStats() {
   if (connectorStats.count(std::string(kConnectorLookupWallTime)) != 0) {
     const auto& lookupWallTime =
         connectorStats[std::string(kConnectorLookupWallTime)];
-    indexStatWriter_->addRuntimeStat(
-        "lookupCount",
-        RuntimeCounter(
-            static_cast<int64_t>(lookupWallTime.count),
-            RuntimeCounter::Unit::kNone));
-    indexStatWriter_->addRuntimeStat(
+    indexStatWriter_->addCount(
+        "lookupCount", static_cast<int64_t>(lookupWallTime.count));
+    indexStatWriter_->addTiming(
         "lookupWallNanos",
-        RuntimeCounter(
-            static_cast<int64_t>(lookupWallTime.sum),
-            RuntimeCounter::Unit::kNanos));
+        std::chrono::nanoseconds(static_cast<int64_t>(lookupWallTime.sum)));
     // NOTE: lookupCpuNanos may undercount CPU consumed on prefetch worker
     // threads or async I/O completion handlers, since CpuWallTimer measures
     // CPU on the calling thread only.
-    indexStatWriter_->addRuntimeStat(
+    indexStatWriter_->addTiming(
         "lookupCpuNanos",
-        RuntimeCounter(
+        std::chrono::nanoseconds(
             static_cast<int64_t>(
                 connectorStats[std::string(kConnectorResultPrepareTime)].sum +
                 connectorStats[std::string(kClientRequestProcessTime)].sum +
-                connectorStats[std::string(kClientResultProcessTime)].sum),
-            RuntimeCounter::Unit::kNanos));
+                connectorStats[std::string(kClientResultProcessTime)].sum)));
   }
   // Copy index source stats into the operator's own runtimeStats so they are
   // visible through the task-level runtime stats path.

@@ -13,6 +13,8 @@ Nimble's **Cluster Index** bridges this gap. It is a lightweight, hierarchical i
 
 We have integrated the cluster index with **Presto** for analytical index joins and are actively integrating with **ZippyDB** for prefix key scans — both powered by the same underlying index structure, served through Velox.
 
+<!-- truncate -->
+
 ## Motivation
 
 Consider a common pattern in data warehousing: a large fact table needs to be joined with a dimension table on a key column. Traditional hash joins materialize both sides into memory. For selective lookups — where the probe side touches only a fraction of the build side — this is wasteful.

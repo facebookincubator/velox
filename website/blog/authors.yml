@@ -72,6 +72,18 @@ xiaoxmeng:
   url: https://github.com/xiaoxmeng
   image_url: https://github.com/xiaoxmeng.png
 
+shrinidhijoshi:
+  name: Shrinidhi Joshi
+  title: Software Engineer @ Meta
+  url: https://github.com/shrinidhijoshi
+  image_url: https://github.com/shrinidhijoshi.png
+
+JkSelf:
+  name: Ke Jia
+  title: Software Engineer @ IBM
+  url: https://github.com/JkSelf
+  image_url: https://github.com/JkSelf.png
+
 tanjialiang:
   name: Jialiang Tan
   title: Software Engineer @ Meta
@@ -155,3 +167,33 @@ amitkdutta:
   title: Software Engineer @ Meta
   url: https://github.com/amitkdutta
   image_url: https://github.com/amitkdutta.png
+
+jaylisde:
+  name: Shaojie Li
+  title: Software Engineer
+  url: https://github.com/jaylisde
+  image_url: https://github.com/jaylisde.png
+
+rui-mo:
+  name: Rui Mo
+  title: Software Engineer
+  url: https://github.com/rui-mo
+  image_url: https://github.com/rui-mo.png
+
+Victor-C-Zhang:
+  name: Victor Zhang
+  title: Software Engineer @ Meta
+  url: https://github.com/Victor-C-Zhang
+  image_url: https://github.com/Victor-C-Zhang.png
+
+srsuryadev:
+  name: Suryadev Sahadevan Rajesh
+  title: Software Engineer @ Meta
+  url: https://github.com/srsuryadev
+  image_url: https://github.com/srsuryadev.png
+
+zhztheplayer:
+  name: Hongze Zhang
+  title: Software Engineer @ IBM
+  url: https://github.com/zhztheplayer
+  image_url: https://github.com/zhztheplayer.png

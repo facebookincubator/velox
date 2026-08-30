@@ -28,7 +28,7 @@ class QueryConfigProviderTest : public ::testing::Test {
 
 TEST_F(QueryConfigProviderTest, propertiesNotEmpty) {
   auto props = provider_.properties();
-  EXPECT_GT(props.size(), 140);
+  EXPECT_GT(props.size(), 130);
 }
 
 TEST_F(QueryConfigProviderTest, allNamesNonEmpty) {
@@ -85,6 +85,37 @@ TEST_F(QueryConfigProviderTest, knownProperties) {
   ASSERT_TRUE(cpuOverhead.has_value());
   EXPECT_EQ(cpuOverhead->type, ConfigPropertyType::kDouble);
   EXPECT_EQ(cpuOverhead->defaultValue, "1");
+}
+
+TEST(QueryConfigProviderConfigOverridesTest, overridesApplied) {
+  QueryConfigProvider provider(
+      {{QueryConfig::kSpillEnabled, "true"},
+       {QueryConfig::kSessionTimezone, "UTC"}});
+  auto props = provider.properties();
+
+  auto findProp =
+      [&](const std::string& name) -> std::optional<ConfigProperty> {
+    for (const auto& prop : props) {
+      if (prop.name == name) {
+        return prop;
+      }
+    }
+    return std::nullopt;
+  };
+
+  // Overridden properties reflect config-file values.
+  auto spillEnabled = findProp(QueryConfig::kSpillEnabled);
+  ASSERT_TRUE(spillEnabled.has_value());
+  EXPECT_EQ(spillEnabled->defaultValue, "true");
+
+  auto sessionTz = findProp(QueryConfig::kSessionTimezone);
+  ASSERT_TRUE(sessionTz.has_value());
+  EXPECT_EQ(sessionTz->defaultValue, "UTC");
+
+  // Non-overridden properties retain code defaults.
+  auto startTime = findProp(QueryConfig::kSessionStartTime);
+  ASSERT_TRUE(startTime.has_value());
+  EXPECT_EQ(startTime->defaultValue, "0");
 }
 
 TEST_F(QueryConfigProviderTest, normalizePassthrough) {

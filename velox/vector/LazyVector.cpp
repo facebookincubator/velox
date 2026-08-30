@@ -182,7 +182,7 @@ void LazyVector::ensureLoadedRowsImpl(
         decodedChild.decode(*child, baseRows, false);
         ensureLoadedRowsImpl(child, decodedChild, baseRows, childRows);
       }
-      rowVector->updateContainsLazyNotLoaded();
+      rowVector->invalidateContainsLazyNotLoaded();
       vector->loadedVector();
     }
     return;

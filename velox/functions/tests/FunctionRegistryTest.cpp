@@ -27,6 +27,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/IPAddressRegistration.h"
 #include "velox/functions/prestosql/types/IPPrefixRegistration.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/tests/RegistryTestUtil.h"
@@ -91,6 +92,8 @@ class FunctionRegistryTest : public testing::Test {
   FunctionRegistryTest() {
     registerTestFunctions();
     exec::registerFunctionCallToSpecialForms();
+    registerIPAddressType();
+    registerIPPrefixType();
   }
 
   void testResolveVectorFunction(
@@ -210,6 +213,21 @@ class FunctionRegistryTest : public testing::Test {
     }
   }
 
+  // Asserts resolution to 'expectedReturnType' with a coercion applied, without
+  // pinning the coerced types. Use when the overload choice is immaterial.
+  void testCoercionResolvesInt(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const ResolveFuncs& resolveFuncs,
+      const TypePtr& expectedReturnType) {
+    std::vector<TypePtr> coercions;
+    auto type =
+        resolveFuncs.resolveWithCoercionsFunc(name, argTypes, coercions);
+    VELOX_EXPECT_EQ_TYPES(type, expectedReturnType);
+    EXPECT_EQ(coercions.size(), argTypes.size());
+    EXPECT_THAT(coercions, testing::Contains(testing::Ne(nullptr)));
+  }
+
   void testCannotResolveInt(
       const std::string& name,
       const std::vector<TypePtr>& argTypes,
@@ -240,6 +258,14 @@ class FunctionRegistryTest : public testing::Test {
       const std::vector<TypePtr>& argTypes,
       const TypePtr& expectedReturnType) {
     testNoCoercionsInt(
+        name, argTypes, ResolveFuncs::function(), expectedReturnType);
+  }
+
+  void testCoercionResolves(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedReturnType) {
+    testCoercionResolvesInt(
         name, argTypes, ResolveFuncs::function(), expectedReturnType);
   }
 
@@ -805,6 +831,23 @@ struct DummySimpleFunction {
   void call(T&, const T&, const T&) {}
 };
 
+// Two overloads that tie on a bare UNKNOWN argument but return different
+// types.
+template <typename TExec>
+struct TiedComplexReturnFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  void call(int64_t& out, const arg_type<Array<Generic<T1>>>&) {
+    out = 0;
+  }
+
+  void call(
+      out_type<Varchar>& out,
+      const arg_type<Map<Generic<T1>, Generic<T2>>>&) {
+    out.copy_from("0"_sv);
+  }
+};
+
 TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
   removeFunction("foo");
 
@@ -1008,7 +1051,21 @@ TEST_F(FunctionRegistryTest, resolveIfWithCoercions) {
   testSpecialFormNoCoercions(
       "if", {BOOLEAN(), INTEGER(), INTEGER()}, INTEGER());
 
+  // Neither branch coerces to the other: INTEGER widens to DECIMAL(10, 0),
+  // which does not fit DECIMAL(8, 5). Both widen to a decimal that holds
+  // either.
+  testSpecialFormCoercions(
+      "if",
+      {BOOLEAN(), DECIMAL(8, 5), INTEGER()},
+      DECIMAL(15, 5),
+      {nullptr, DECIMAL(15, 5), DECIMAL(15, 5)});
+
   testSpecialFormCannotResolve("if", {BOOLEAN(), INTEGER(), VARCHAR()});
+
+  // Custom types do not reconcile implicitly, matching Presto, which rejects
+  // "Result types for IF must be the same: ipprefix vs ipaddress". IPADDRESS
+  // has a cast rule to IPPREFIX, but it is not implicitly allowed.
+  testSpecialFormCannotResolve("if", {BOOLEAN(), IPPREFIX(), IPADDRESS()});
 }
 
 TEST_F(FunctionRegistryTest, resolveSwitchWithCoercions) {
@@ -1047,6 +1104,66 @@ TEST_F(FunctionRegistryTest, resolveSwitchWithCoercions) {
        BIGINT()},
       BIGINT(),
       {nullptr, BIGINT(), nullptr, BIGINT(), nullptr, BIGINT(), nullptr});
+
+  // Branches that meet only at a common decimal, as Presto resolves them.
+  testSpecialFormCoercions(
+      "switch",
+      {BOOLEAN(), DECIMAL(8, 5), BOOLEAN(), DECIMAL(12, 2), INTEGER()},
+      DECIMAL(15, 5),
+      {nullptr, DECIMAL(15, 5), nullptr, DECIMAL(15, 5), DECIMAL(15, 5)});
+
+  // A null literal condition, which types as UNKNOWN, coerces to boolean.
+  testSpecialFormCoercions(
+      "switch",
+      {UNKNOWN(), BIGINT(), BOOLEAN(), BIGINT(), BIGINT()},
+      BIGINT(),
+      {BOOLEAN(), nullptr, nullptr, nullptr, nullptr});
+
+  // A condition of any other type does not.
+  testSpecialFormCannotResolve("switch", {INTEGER(), BIGINT(), BIGINT()});
+}
+
+TEST_F(FunctionRegistryTest, resolveConjunctWithCoercions) {
+  auto resolve = [](const std::string& name,
+                    const std::vector<TypePtr>& argTypes) {
+    std::vector<TypePtr> coercions;
+    auto type = resolveCallableSpecialFormWithCoercions(
+        name, argTypes, coercions, TypeCoercer::defaults());
+    return std::make_pair(type, coercions);
+  };
+
+  // A null literal argument, which types as UNKNOWN, coerces to boolean.
+  auto [andType, andCoercions] = resolve("and", {UNKNOWN(), BOOLEAN()});
+  VELOX_EXPECT_EQ_TYPES(andType, BOOLEAN());
+  EXPECT_THAT(andCoercions, testing::ElementsAre(BOOLEAN(), nullptr));
+
+  auto [orType, orCoercions] = resolve("or", {BOOLEAN(), UNKNOWN()});
+  VELOX_EXPECT_EQ_TYPES(orType, BOOLEAN());
+  EXPECT_THAT(orCoercions, testing::ElementsAre(nullptr, BOOLEAN()));
+
+  // An argument of any other type does not.
+  testSpecialFormCannotResolve("and", {BOOLEAN(), INTEGER()});
+  testSpecialFormCannotResolve("or", {VARCHAR(), BOOLEAN()});
+}
+
+TEST_F(FunctionRegistryTest, resolveCaseWithCoercions) {
+  // subject, WHEN, THEN, WHEN, THEN, ELSE. The THEN clauses coerce in neither
+  // direction, so they and the ELSE meet at a common decimal.
+  testSpecialFormCoercions(
+      "case",
+      {INTEGER(),
+       INTEGER(),
+       DECIMAL(8, 5),
+       INTEGER(),
+       DECIMAL(12, 2),
+       INTEGER()},
+      DECIMAL(15, 5),
+      {nullptr,
+       nullptr,
+       DECIMAL(15, 5),
+       nullptr,
+       DECIMAL(15, 5),
+       DECIMAL(15, 5)});
 }
 
 TEST_F(FunctionRegistryTest, resolveCoalesceWithCoercions) {
@@ -1056,11 +1173,124 @@ TEST_F(FunctionRegistryTest, resolveCoalesceWithCoercions) {
   testSpecialFormCoercions(
       "coalesce", {BIGINT(), UNKNOWN()}, BIGINT(), {nullptr, BIGINT()});
 
+  // Inputs that coerce in neither direction meet at a common decimal.
+  testSpecialFormCoercions(
+      "coalesce",
+      {DECIMAL(8, 5), INTEGER()},
+      DECIMAL(15, 5),
+      {DECIMAL(15, 5), DECIMAL(15, 5)});
+
   testSpecialFormCoercions(
       "coalesce",
       {SMALLINT(), INTEGER(), BIGINT(), TINYINT()},
       BIGINT(),
       {BIGINT(), BIGINT(), nullptr, BIGINT()});
+}
+
+TEST_F(FunctionRegistryTest, unknownArgToParameterizedFunction) {
+  functions::prestosql::registerAllScalarFunctions();
+
+  // cardinality(UNKNOWN) resolves to bigint. The array(T) and map(K,V)
+  // overloads are interchangeable, so the coerced container is immaterial.
+  testCoercionResolves("cardinality", {UNKNOWN()}, BIGINT());
+
+  // map_keys(UNKNOWN) — bare NULL to map(K,V) -> array(K).
+  testCoercions(
+      "map_keys", {UNKNOWN()}, ARRAY(UNKNOWN()), {MAP(UNKNOWN(), UNKNOWN())});
+
+  // A scalar overload outranks a complex one on a bare null. varbinary (the
+  // highest-cost scalar UNKNOWN coercion) still beats array(T) because
+  // unknownFallbackCost is one above it.
+  {
+    SCOPE_EXIT {
+      removeFunction("foo");
+    };
+
+    exec::registerVectorFunction(
+        "foo",
+        {makeSignature("varbinary", {"varbinary"}),
+         exec::FunctionSignatureBuilder()
+             .typeVariable("T")
+             .returnType("bigint")
+             .argumentType("array(T)")
+             .build()},
+        std::make_unique<DummyVectorFunction>());
+
+    testCoercions("foo", {UNKNOWN()}, VARBINARY(), {VARBINARY()});
+  }
+
+  // A plain-scalar overload outranks a parameterized-scalar one on a bare null.
+  {
+    SCOPE_EXIT {
+      removeFunction("foo");
+    };
+
+    exec::registerVectorFunction(
+        "foo",
+        {makeSignature("bigint", {"bigint"}),
+         makeSignature("bigint", {"decimal(10, 2)"})},
+        std::make_unique<DummyVectorFunction>());
+
+    testCoercions("foo", {UNKNOWN()}, BIGINT(), {BIGINT()});
+  }
+
+  // Vector resolver: differing return types stay ambiguous.
+  {
+    SCOPE_EXIT {
+      removeFunction("foo");
+    };
+
+    exec::registerVectorFunction(
+        "foo",
+        {exec::FunctionSignatureBuilder()
+             .typeVariable("T")
+             .returnType("bigint")
+             .argumentType("array(T)")
+             .build(),
+         exec::FunctionSignatureBuilder()
+             .typeVariable("K")
+             .typeVariable("V")
+             .returnType("varchar")
+             .argumentType("map(K,V)")
+             .build()},
+        std::make_unique<DummyVectorFunction>());
+
+    testCannotResolve("foo", {UNKNOWN()});
+  }
+
+  // Simple-function resolver: differing return types stay ambiguous.
+  {
+    SCOPE_EXIT {
+      removeFunction("foo");
+    };
+
+    registerFunction<TiedComplexReturnFunction, int64_t, Array<Generic<T1>>>(
+        {"foo"});
+    registerFunction<
+        TiedComplexReturnFunction,
+        Varchar,
+        Map<Generic<T1>, Generic<T2>>>({"foo"});
+
+    testCannotResolve("foo", {UNKNOWN()});
+  }
+}
+
+TEST_F(FunctionRegistryTest, nonUnknownTieStaysAmbiguous) {
+  // A cost tie not caused by UNKNOWN arguments stays ambiguous even when the
+  // tied overloads share a return type and are null-on-null.
+  SCOPE_EXIT {
+    removeFunction("foo");
+  };
+
+  exec::registerVectorFunction(
+      "foo",
+      {
+          makeSignature("bigint", {"tinyint", "bigint"}),
+          makeSignature("bigint", {"bigint", "tinyint"}),
+      },
+      std::make_unique<DummyVectorFunction>());
+
+  testCannotResolve("foo", {TINYINT(), TINYINT()});
 }
 
 TEST_F(FunctionRegistryTest, resolveRowConstructor) {
@@ -1128,7 +1358,6 @@ TEST_F(FunctionRegistryOverwriteTest, overwrite) {
 }
 
 TEST_F(FunctionRegistryTest, ipPrefixRegistration) {
-  registerIPPrefixType();
   registerFunction<IPPrefixFunc, IPPrefix, IPPrefix>({"ipprefix_func"});
 
   auto& simpleFunctions = exec::simpleFunctions();

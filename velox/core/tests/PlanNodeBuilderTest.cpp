@@ -15,6 +15,7 @@
  */
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/PlanNode.h"
 #include "velox/core/TableWriteTraits.h"
@@ -613,6 +614,7 @@ TEST_F(PlanNodeBuilderTest, partitionedOutputNode) {
       std::make_shared<GatherPartitionFunctionSpec>();
   const RowTypePtr outputType = ROW({"c0"}, {BIGINT()});
   const auto serdeKind = "Presto";
+  const std::string transportOptions = R"({"exchangeId":"test"})";
 
   const auto verify =
       [&](const std::shared_ptr<const PartitionedOutputNode>& node) {
@@ -623,6 +625,7 @@ TEST_F(PlanNodeBuilderTest, partitionedOutputNode) {
         EXPECT_EQ(node->isReplicateNullsAndAny(), replicateNullsAndAny);
         EXPECT_EQ(node->outputType(), outputType);
         EXPECT_EQ(node->serdeKind(), serdeKind);
+        EXPECT_EQ(node->transportOptions(), transportOptions);
         EXPECT_EQ(node->partitionFunctionSpecPtr(), partitionFunctionSpec);
         EXPECT_EQ(node->sources(), std::vector<PlanNodePtr>{source_});
       };
@@ -636,12 +639,16 @@ TEST_F(PlanNodeBuilderTest, partitionedOutputNode) {
                         .partitionFunctionSpec(partitionFunctionSpec)
                         .outputType(outputType)
                         .serdeKind(serdeKind)
+                        .transportKind(std::string{TransportKind::kInMemory})
+                        .transportOptions(transportOptions)
                         .source(source_)
                         .build();
   verify(node);
 
   const auto node2 = PartitionedOutputNode::Builder(*node).build();
   verify(node2);
+
+  EXPECT_EQ(node->serialize()["transportOptions"], transportOptions);
 }
 
 TEST_F(PlanNodeBuilderTest, hashJoinNode) {
@@ -776,6 +783,7 @@ TEST_F(PlanNodeBuilderTest, indexLookupJoinNode) {
           .assignments({{"c1", std::make_shared<DummyColumnHandle>()}})
           .build();
   const auto outputType = ROW({"c0"}, {BIGINT()});
+  std::optional<bool> splitOutput = true;
 
   const auto verify =
       [&](const std::shared_ptr<const IndexLookupJoinNode>& node) {
@@ -790,6 +798,7 @@ TEST_F(PlanNodeBuilderTest, indexLookupJoinNode) {
         EXPECT_EQ(node->sources()[0], left);
         EXPECT_EQ(node->sources()[1], right);
         EXPECT_EQ(node->outputType(), outputType);
+        EXPECT_EQ(node->splitOutput(), splitOutput);
       };
 
   const auto node = IndexLookupJoinNode::Builder()
@@ -801,6 +810,7 @@ TEST_F(PlanNodeBuilderTest, indexLookupJoinNode) {
                         .left(left)
                         .right(right)
                         .outputType(outputType)
+                        .splitOutput(splitOutput)
                         .build();
   verify(node);
 
@@ -1004,6 +1014,8 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
   std::optional<std::string> ordinalityName =
       std::make_optional<std::string>("ord");
   std::optional<bool> splitOutput = false;
+  std::optional<std::string> markerName =
+      std::make_optional<std::string>("marker");
 
   const auto verify = [&](const std::shared_ptr<const UnnestNode>& node) {
     EXPECT_EQ(node->id(), id);
@@ -1012,19 +1024,24 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
     EXPECT_TRUE(node->hasOrdinality());
     EXPECT_EQ(node->sources()[0], source_);
     EXPECT_EQ(node->splitOutput(), splitOutput);
+    EXPECT_EQ(node->markerName(), markerName);
 
-    for (int i = 0; i < node->outputType()->size(); ++i) {
-      if (i < replicateVariables.size()) {
-        EXPECT_EQ(node->outputType()->nameOf(i), replicateVariables[i]->name());
-      } else if (i < replicateVariables.size() + unnestVariables.size()) {
-        EXPECT_EQ(
-            node->outputType()->nameOf(i),
-            unnestVariables[i - replicateVariables.size()]->name());
-      } else {
-        EXPECT_EQ(i, node->outputType()->size() - 1);
-        EXPECT_EQ(node->outputType()->nameOf(i), ordinalityName.value());
-      }
+    // Output columns: replicate columns, then the unnest names, then the
+    // optional ordinality and marker columns.
+    std::vector<std::string> expectedNames;
+    for (const auto& variable : replicateVariables) {
+      expectedNames.push_back(variable->name());
     }
+    for (const auto& name : unnestNames) {
+      expectedNames.push_back(name);
+    }
+    if (ordinalityName.has_value()) {
+      expectedNames.push_back(ordinalityName.value());
+    }
+    if (markerName.has_value()) {
+      expectedNames.push_back(markerName.value());
+    }
+    EXPECT_EQ(node->outputType()->names(), expectedNames);
   };
 
   const auto node = UnnestNode::Builder()
@@ -1033,6 +1050,7 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
                         .unnestVariables(unnestVariables)
                         .unnestNames(unnestNames)
                         .ordinalityName(ordinalityName)
+                        .markerName(markerName)
                         .source(source_)
                         .splitOutput(splitOutput)
                         .build();
@@ -1040,6 +1058,17 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
 
   const auto node2 = UnnestNode::Builder(*node).build();
   verify(node2);
+
+  // A wrong number of unnest names is rejected: one per array, two per map.
+  VELOX_ASSERT_THROW(
+      UnnestNode::Builder()
+          .id(id)
+          .replicateVariables(replicateVariables)
+          .unnestVariables(unnestVariables)
+          .unnestNames({"b", "extra"})
+          .source(source_)
+          .build(),
+      "one name per array");
 }
 
 TEST_F(PlanNodeBuilderTest, enforceSingleRowNode) {
@@ -1063,13 +1092,11 @@ TEST_F(PlanNodeBuilderTest, enforceSingleRowNode) {
 TEST_F(PlanNodeBuilderTest, assignUniqueIdNode) {
   const PlanNodeId id = "assign_unique_id_id";
   const std::string idName = "unique_id";
-  const int32_t taskUniqueId = 42;
 
   const auto verify =
       [&](const std::shared_ptr<const AssignUniqueIdNode>& node) {
         EXPECT_EQ(node->id(), id);
         EXPECT_EQ(node->outputType()->names().back(), idName);
-        EXPECT_EQ(node->taskUniqueId(), taskUniqueId);
         EXPECT_EQ(node->sources().size(), 1);
         EXPECT_EQ(node->sources()[0], source_);
       };
@@ -1077,7 +1104,6 @@ TEST_F(PlanNodeBuilderTest, assignUniqueIdNode) {
   const auto node = AssignUniqueIdNode::Builder()
                         .id(id)
                         .idName(idName)
-                        .taskUniqueId(taskUniqueId)
                         .source(source_)
                         .build();
   verify(node);
@@ -1180,28 +1206,113 @@ TEST_F(PlanNodeBuilderTest, rowNumberNode) {
 
 TEST_F(PlanNodeBuilderTest, markDistinctNode) {
   const PlanNodeId id = "mark_distinct_node_id";
-  const std::string markerName = "is_distinct";
   const std::vector<FieldAccessTypedExprPtr> distinctKeys{
       std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
 
-  const auto verify = [&](const std::shared_ptr<const MarkDistinctNode>& node) {
-    EXPECT_EQ(node->id(), id);
-    EXPECT_EQ(node->markerName(), markerName);
-    EXPECT_EQ(node->distinctKeys(), distinctKeys);
-    EXPECT_EQ(node->sources().size(), 1);
-    EXPECT_EQ(node->sources()[0], source_);
-  };
+  {
+    SCOPED_TRACE("single-marker");
+    const std::vector<std::string> markerNames{"is_distinct"};
+    const auto verify =
+        [&](const std::shared_ptr<const MarkDistinctNode>& node) {
+          EXPECT_EQ(node->id(), id);
+          EXPECT_EQ(node->markerNames(), markerNames);
+          EXPECT_TRUE(node->masks().empty());
+          EXPECT_EQ(node->distinctKeys(), distinctKeys);
+          EXPECT_EQ(node->sources().size(), 1);
+          EXPECT_EQ(node->sources()[0], source_);
+        };
 
-  const auto node = MarkDistinctNode::Builder()
-                        .id(id)
-                        .markerName(markerName)
-                        .distinctKeys(distinctKeys)
-                        .source(source_)
-                        .build();
-  verify(node);
+    const auto node = MarkDistinctNode::Builder()
+                          .id(id)
+                          .markerNames(markerNames)
+                          .distinctKeys(distinctKeys)
+                          .source(source_)
+                          .build();
+    verify(node);
 
-  const auto node2 = MarkDistinctNode::Builder(*node).build();
-  verify(node2);
+    const auto node2 = MarkDistinctNode::Builder(*node).build();
+    verify(node2);
+  }
+  {
+    SCOPED_TRACE("multi-mask");
+    const std::vector<std::string> markerNames{"nomask", "m0", "m1"};
+    const std::vector<FieldAccessTypedExprPtr> masks{
+        std::make_shared<FieldAccessTypedExpr>(BOOLEAN(), "c1"),
+        std::make_shared<FieldAccessTypedExpr>(BOOLEAN(), "c2")};
+
+    const auto verify =
+        [&](const std::shared_ptr<const MarkDistinctNode>& node) {
+          EXPECT_EQ(node->id(), id);
+          EXPECT_EQ(node->markerNames(), markerNames);
+          EXPECT_EQ(node->masks(), masks);
+          EXPECT_EQ(node->distinctKeys(), distinctKeys);
+          EXPECT_EQ(node->sources().size(), 1);
+          EXPECT_EQ(node->sources()[0], source_);
+        };
+
+    const auto node = MarkDistinctNode::Builder()
+                          .id(id)
+                          .markerNames(markerNames)
+                          .masks(masks)
+                          .distinctKeys(distinctKeys)
+                          .source(source_)
+                          .build();
+    verify(node);
+
+    const auto node2 = MarkDistinctNode::Builder(*node).build();
+    verify(node2);
+  }
+}
+
+TEST_F(PlanNodeBuilderTest, markDistinctNodeMarkerCountMismatch) {
+  const std::vector<FieldAccessTypedExprPtr> distinctKeys{
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+  const std::vector<FieldAccessTypedExprPtr> masks{
+      std::make_shared<FieldAccessTypedExpr>(BOOLEAN(), "c1")};
+
+  VELOX_ASSERT_THROW(
+      MarkDistinctNode::Builder()
+          .id("test_id")
+          .markerNames({"m0", "m1", "m2"})
+          .distinctKeys(distinctKeys)
+          .masks(masks)
+          .source(source_)
+          .build(),
+      "markerNames must have exactly one more entry than masks");
+}
+
+TEST_F(PlanNodeBuilderTest, markDistinctNodeNonBooleanMask) {
+  const std::vector<FieldAccessTypedExprPtr> distinctKeys{
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+  const std::vector<FieldAccessTypedExprPtr> intMasks{
+      std::make_shared<FieldAccessTypedExpr>(INTEGER(), "c1")};
+
+  VELOX_ASSERT_THROW(
+      MarkDistinctNode::Builder()
+          .id("test_id")
+          .markerNames({"nomask", "m0"})
+          .distinctKeys(distinctKeys)
+          .masks(intMasks)
+          .source(source_)
+          .build(),
+      "MarkDistinct mask must be BOOLEAN");
+}
+
+TEST_F(PlanNodeBuilderTest, markDistinctNodeEmptyMarkerName) {
+  const std::vector<FieldAccessTypedExprPtr> distinctKeys{
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+  const std::vector<FieldAccessTypedExprPtr> masks{
+      std::make_shared<FieldAccessTypedExpr>(BOOLEAN(), "c1")};
+
+  VELOX_ASSERT_THROW(
+      MarkDistinctNode::Builder()
+          .id("test_id")
+          .markerNames({"nomask", ""})
+          .distinctKeys(distinctKeys)
+          .masks(masks)
+          .source(source_)
+          .build(),
+      "MarkDistinct marker name cannot be empty");
 }
 
 TEST_F(PlanNodeBuilderTest, topNRowNumberNode) {

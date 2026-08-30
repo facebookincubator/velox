@@ -19,8 +19,9 @@
 
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDataFileStatistics.h"
+#include "velox/connectors/hive/iceberg/IcebergStatsCollector.h"
 #include "velox/dwio/common/FileMetadata.h"
-#include "velox/dwio/parquet/ParquetFieldId.h"
+#include "velox/dwio/common/ParquetFieldId.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -30,7 +31,7 @@ namespace facebook::velox::connector::hive::iceberg {
 /// and reused across all writers; aggregate() is invoked after each Parquet
 /// file is closed. Also exposes the Parquet field IDs for the input columns
 /// so they can be threaded into the writer's column metadata.
-class IcebergParquetStatsCollector {
+class IcebergParquetStatsCollector : public IcebergStatsCollector {
  public:
   explicit IcebergParquetStatsCollector(
       const std::vector<IcebergColumnHandlePtr>& inputColumns);
@@ -49,7 +50,15 @@ class IcebergParquetStatsCollector {
   ///   ARRAY types and all their descendants.
   /// @param fileMetadata The Parquet file metadata to aggregate.
   IcebergDataFileStatisticsPtr aggregate(
-      std::unique_ptr<dwio::common::FileMetadata> fileMetadata);
+      std::unique_ptr<dwio::common::FileMetadata> fileMetadata) const;
+
+  void configureWriterOptions(
+      dwio::common::WriterOptions& options) const override;
+
+  IcebergDataFileStatisticsPtr collect(
+      dwio::common::Writer& writer,
+      std::unique_ptr<dwio::common::FileMetadata>& closeMetadata)
+      const override;
 
   /// TODO: Need to support this config property.
   /// 16 is default value. See DEFAULT_WRITE_METRICS_MODE_DEFAULT in

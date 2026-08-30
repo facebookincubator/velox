@@ -13,8 +13,8 @@
 # limitations under the License.
 
 # Generate Thrift library for LocalRunnerService early since velox_fuzzer_util
-# depends on it when VELOX_ENABLE_REMOTE_FUNCTIONS is enabled.
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+# depends on it when VELOX_ENABLE_LOCAL_RUNNER_SERVICE is enabled.
+if(VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
   include(FBThriftCppLibrary)
   add_fbthrift_cpp_library(
     local_runner_service_thrift
@@ -55,13 +55,12 @@ velox_add_test_headers(
   VeloxQueryRunner.h
 )
 
-# TODO Add VeloxQueryRunner to velox_fuzzer_util to support in
-# ExpressionFuzzerTest. More information can be found here:
-# https://github.com/facebookincubator/velox/issues/15414
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+# VeloxQueryRunner requires LocalRunnerService thrift library
+if(VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
   target_sources(velox_fuzzer_util PRIVATE VeloxQueryRunner.cpp)
   target_link_libraries(velox_fuzzer_util local_runner_service_thrift)
   target_include_directories(velox_fuzzer_util PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+  target_compile_definitions(velox_fuzzer_util PUBLIC VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
 endif()
 
 target_link_libraries(
@@ -171,7 +170,12 @@ target_link_libraries(
 # TopNRowNumber Fuzzer.
 add_executable(velox_topn_row_number_fuzzer TopNRowNumberFuzzerRunner.cpp)
 
-target_link_libraries(velox_topn_row_number_fuzzer velox_topn_row_number_fuzzer_lib)
+target_link_libraries(
+  velox_topn_row_number_fuzzer
+  velox_topn_row_number_fuzzer_lib
+  velox_functions_prestosql
+  velox_window
+)
 
 add_library(velox_mark_distinct_fuzzer_lib MarkDistinctFuzzer.cpp)
 velox_add_test_headers(velox_mark_distinct_fuzzer_lib MarkDistinctFuzzer.h)
@@ -279,8 +283,8 @@ target_link_libraries(
   velox_vector_fuzzer
 )
 
-# LocalRunnerService Library (requires FBThrift support)
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+# LocalRunnerService Library
+if(VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
   add_library(velox_local_runner_service_lib LocalRunnerService.cpp)
   velox_add_test_headers(velox_local_runner_service_lib LocalRunnerService.h)
 

@@ -147,6 +147,7 @@ UcxOutputQueue::UcxOutputQueue(
   if (task_) {
     maxSize_ = task_->queryCtx()->queryConfig().maxOutputBufferSize();
     continueSize_ = (maxSize_ * kContinuePct) / 100;
+    initialized_.store(true, std::memory_order_release);
   } // else: maxSize_ and continueSize_ will be set once the task is created and
     // initialize called.
   // create a queue for each destination.
@@ -172,16 +173,15 @@ bool UcxOutputQueue::initialize(
   task_ = task;
   maxSize_ = task_->queryCtx()->queryConfig().maxOutputBufferSize();
   continueSize_ = (maxSize_ * kContinuePct) / 100;
+  // Publish task metadata before destination queue expansion. Acceptor only
+  // needs task/kind to choose the intra-node path; getData() takes mutex_ and
+  // waits for any queue expansion in this function to finish.
+  initialized_.store(true, std::memory_order_release);
   // create additional queues if there are more destinations.
   for (int i = queues_.size(); i < numDestinations; ++i) {
     // create the destination queues inside the vector using emplace_back.
     queues_.emplace_back(std::make_unique<UcxDestinationQueue>());
   }
-  // Publish the initialized flag last with release semantics. Lock-free
-  // readers (canUseIntraNode → isInitialized) use an acquire load, so
-  // all writes above (kind_, task_, queues_, etc.) are guaranteed visible
-  // once they observe initialized_ == true.
-  initialized_.store(true, std::memory_order_release);
   return true;
 }
 

@@ -991,12 +991,29 @@ void RowContainer::clear() {
 }
 
 void RowContainer::setProbedFlag(char** rows, int32_t numRows) {
-  for (auto i = 0; i < numRows; i++) {
+  const int32_t probedFlagByte = probedFlagOffset_ / 8;
+  const uint8_t probedFlagMask = uint8_t{1} << (probedFlagOffset_ & 7);
+  for (int32_t i = 0; i < numRows; ++i) {
     // Row may be null in case of a FULL join.
     if (rows[i]) {
-      setBit(rows[i], probedFlagOffset_);
+      uint8_t* flagsByte = reinterpret_cast<uint8_t*>(rows[i]) + probedFlagByte;
+      if ((*flagsByte & probedFlagMask) == 0) {
+        *flagsByte |= probedFlagMask;
+      }
     }
   }
+}
+
+bool RowContainer::testAndSetProbedFlag(char* row) {
+  VELOX_DCHECK_NOT_NULL(row);
+  const int32_t probedFlagByte = probedFlagOffset_ / 8;
+  const uint8_t probedFlagMask = uint8_t{1} << (probedFlagOffset_ & 7);
+  uint8_t* flagsByte = reinterpret_cast<uint8_t*>(row) + probedFlagByte;
+  const bool wasSet = (*flagsByte & probedFlagMask) != 0;
+  if (!wasSet) {
+    *flagsByte |= probedFlagMask;
+  }
+  return !wasSet;
 }
 
 void RowContainer::extractProbedFlags(

@@ -84,12 +84,13 @@ function install_build_prerequisites {
     ninja-build \
     checkinstall \
     git \
+    patch \
     pkg-config \
     libtool \
     wget
 
   install_uv
-  uv_install cmake==3.30.4
+  uv_install --force cmake==4.3.2
 
   install_gcc11_if_needed
 
@@ -228,6 +229,10 @@ function install_faiss_deps {
   ${SUDO} apt-get install -y libopenblas-dev libomp-dev
 }
 
+function install_cxl_deps {
+  ${SUDO} apt install -y libnuma-dev
+}
+
 function install_velox_deps {
   run_and_time install_velox_deps_from_apt
   run_and_time install_fmt
@@ -235,6 +240,8 @@ function install_velox_deps {
   run_and_time install_grpc
   run_and_time install_boost
   run_and_time install_fast_float
+  run_and_time install_flatbuffers
+  run_and_time install_openzl
   run_and_time install_folly
   run_and_time install_fizz
   run_and_time install_wangle
@@ -243,7 +250,6 @@ function install_velox_deps {
   run_and_time install_conda
   run_and_time install_duckdb
   run_and_time install_stemmer
-  run_and_time install_thrift
   run_and_time install_arrow
   run_and_time install_xsimd
   run_and_time install_simdjson

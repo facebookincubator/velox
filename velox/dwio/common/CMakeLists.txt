@@ -14,6 +14,7 @@
 add_subdirectory(compression)
 add_subdirectory(encryption)
 add_subdirectory(exception)
+add_subdirectory(Lemire)
 add_subdirectory(wrap)
 
 if(${VELOX_BUILD_TESTING})
@@ -59,7 +60,7 @@ velox_add_library(
   SelectiveRepeatedColumnReader.cpp
   SelectiveStructColumnReader.cpp
   SortingWriter.cpp
-  SortingWriter.h
+  Statistics.cpp
   StatisticsBuilder.cpp
   Throttler.cpp
   TypeUtils.cpp
@@ -93,6 +94,7 @@ velox_add_library(
   FilterNode.h
   FlatMapHelper.h
   FlushPolicy.h
+  FormatConfig.h
   FormatData.h
   InputStream.h
   IntCodecCommon.h
@@ -104,6 +106,7 @@ velox_add_library(
   OnDemandUnitLoader.h
   Options.h
   OutputStream.h
+  ParquetFieldId.h
   ParallelFor.h
   ParallelUnitLoader.h
   PositionProvider.h
@@ -122,6 +125,7 @@ velox_add_library(
   SelectiveIntegerColumnReader.h
   SelectiveRepeatedColumnReader.h
   SelectiveStructColumnReader.h
+  SortingWriter.h
   Statistics.h
   StatisticsBuilder.h
   StreamIdentifier.h

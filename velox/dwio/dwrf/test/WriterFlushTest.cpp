@@ -25,7 +25,7 @@
 using namespace ::testing;
 using facebook::velox::dwrf::MemoryUsageCategory;
 using facebook::velox::dwrf::WriterContext;
-using facebook::velox::dwrf::WriterOptions;
+using WriterOptions = facebook::velox::dwio::common::WriterOptions;
 
 namespace {
 constexpr size_t kSizeKB = 1024;
@@ -100,6 +100,10 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     return allocator_->allocateBytes(size);
   }
 
+  void reportExternalAllocation(int64_t size) override {
+    updateLocalMemoryUsage(size);
+  }
+
   void* allocateZeroFilled(int64_t numEntries, int64_t sizeEach) override {
     updateLocalMemoryUsage(numEntries * sizeEach);
     return allocator_->allocateZeroFilled(numEntries * sizeEach);
@@ -116,6 +120,10 @@ class MockMemoryPool : public velox::memory::MemoryPool {
 
   void free(void* p, int64_t size) override {
     allocator_->freeBytes(p, size);
+    updateLocalMemoryUsage(-size);
+  }
+
+  void reportExternalFree(int64_t size) override {
     updateLocalMemoryUsage(-size);
   }
 
@@ -187,6 +195,10 @@ class MockMemoryPool : public velox::memory::MemoryPool {
       std::unique_ptr<memory::MemoryReclaimer> reclaimer) override {}
 
   memory::MemoryReclaimer* reclaimer() const override {
+    return nullptr;
+  }
+
+  memory::MemoryArbitrator* arbitrator() const override {
     return nullptr;
   }
 
@@ -362,7 +374,8 @@ class WriterFlushTestHelper {
       const std::shared_ptr<MockMemoryPool>& sinkPool,
       int64_t writerMemoryBudget) {
     WriterOptions options;
-    options.config = std::make_shared<Config>();
+    options.formatSpecificOptions =
+        std::make_shared<DwrfWriterOptions>(std::make_shared<Config>());
     options.schema = type::fbhive::HiveTypeParser().parse(
         "struct<int_val:int,string_val:string>");
     // A completely memory pressure based flush policy.
@@ -638,7 +651,7 @@ TEST_F(TestWriterFlush, CheckAgainstMemoryBudget) {
 }
 
 // Tests the number of stripes produced based on random results.
-TEST_F(TestWriterFlush, MemoryBasedFlushRandom) {
+TEST_F(TestWriterFlush, memoryBasedFlushRandom) {
   struct TestCase {
     TestCase(
         uint32_t seed,

@@ -93,6 +93,16 @@ class CastsTest : public ::testing::Test {
   DerivedClass* derivedRawPtr_;
 };
 
+TEST_F(CastsTest, checkedNotNull) {
+  int value = 1;
+  EXPECT_EQ(&value, checkedNotNull(&value));
+
+  const int constValue = 2;
+  EXPECT_EQ(&constValue, checkedNotNull(&constValue));
+
+  VELOX_ASSERT_THROW(checkedNotNull(static_cast<int*>(nullptr)), "");
+}
+
 // Tests for checkedPointerCast with shared_ptr
 TEST_F(CastsTest, checkedPointerCastSharedPtrSuccess) {
   // Cast derived to base (should always work)

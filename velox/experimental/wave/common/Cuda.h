@@ -41,6 +41,7 @@ struct Device {
   int32_t sharedMemPerSM;
   int32_t L2Size;
   int32_t persistingL2MaxSize;
+  int32_t float32To64Ratio{1};
 };
 
 /// Checks that the machine has the right capability and returns the device for
@@ -60,6 +61,22 @@ class Stream {
   Stream(std::unique_ptr<StreamImpl> impl);
 
   Stream();
+
+  /// Creates a stream that does not implicitly synchronize with the legacy
+  /// default stream. A default (blocking) stream waits for previously issued
+  /// stream-0 work and stream 0 waits for it, so work on a blocking stream can
+  /// never overlap work another thread issues to stream 0. Pass true only when
+  /// the caller establishes the ordering it needs explicitly, with events.
+  explicit Stream(bool nonBlocking);
+
+  /// Returns a Stream wrapping an externally owned CUDA stream handle
+  /// ('cudaStream_t' passed as void*; nullptr is the legacy default stream).
+  /// Destroying the returned Stream does not destroy the underlying stream.
+  /// Lets callers that cannot include the CUDA headers -- e.g. a
+  /// CPU-configured translation unit -- record events on and wait for a stream
+  /// they did not create, such as PyTorch's.
+  static std::unique_ptr<Stream> external(void* handle);
+
   virtual ~Stream();
 
   /// Waits  until the stream is completed.
@@ -108,6 +125,9 @@ class Stream {
   std::unique_ptr<StreamImpl> stream_;
   void* userData_{nullptr};
   bool isTransfer_{false};
+  // False for a Stream that only wraps a handle someone else created, so the
+  // destructor leaves the underlying stream alone.
+  bool owned_{true};
 
   friend class Event;
 };
@@ -139,6 +159,20 @@ class Event {
   /// Returns time in ms betweene 'this' and an earlier 'start'. Both events
   /// must enable timing.
   float elapsedTime(const Event& start) const;
+
+  /// True once record() has been called. A pooled event that was never
+  /// re-recorded must not be read back: cudaEventQuery reports success on it
+  /// and cudaEventElapsedTime returns nonsense, so the caller has to track this
+  /// rather than ask CUDA.
+  bool recorded() const {
+    return recorded_;
+  }
+
+  /// Clears recorded(), for an event going back to a pool. Re-recording a
+  /// cudaEvent_t simply overwrites it, so there is nothing else to reset.
+  void reset() {
+    recorded_ = false;
+  }
 
  private:
   std::unique_ptr<EventImpl> event_;
@@ -366,5 +400,17 @@ bool registerHeader(const char* text);
 void getRegisteredHeaders(
     std::vector<const char*>& names,
     std::vector<const char*>& text);
+
+/// Returns a salt that namespaces the kernel cache key. It captures everything
+/// that affects the compiled CUBIN but is NOT part of the generated kernel
+/// source: the resolved header contents (system + registered headers), the
+/// target GPU architecture, and the NVRTC compile flags (e.g. -G). Without it,
+/// editing an included header's body leaves the generated source
+/// byte-identical, so a stale CUBIN would be served from the on-disk cache.
+///
+/// The header + arch component is computed once (on first use, after NVRTC
+/// init) and memoized; the flag component is mixed in on each call so flag
+/// changes (e.g. toggling -G) are reflected. Requires a current device.
+size_t kernelCacheSalt();
 
 } // namespace facebook::velox::wave

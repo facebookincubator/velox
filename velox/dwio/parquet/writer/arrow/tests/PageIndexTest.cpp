@@ -34,44 +34,45 @@ struct PageIndexRanges {
 
 using RowGroupRanges = std::vector<PageIndexRanges>;
 
-/// Creates an FileMetaData object w/ single row group based on data in.
-/// 'Row_group_ranges'. It sets the offsets and sizes of the column index and.
-/// Offset index members of the row group. It doesn't set the member if the.
-/// Input value is -1.
-std::shared_ptr<FileMetaData> constructFakeMetaData(
-    const RowGroupRanges& rowGroupRanges) {
-  facebook::velox::parquet::thrift::RowGroup rowGroup;
-  for (auto& pageIndexRanges : rowGroupRanges) {
-    facebook::velox::parquet::thrift::ColumnChunk colChunk;
-    if (pageIndexRanges.columnIndexOffset != -1) {
-      colChunk.__set_column_index_offset(pageIndexRanges.columnIndexOffset);
+/// Creates an FileMetaData object w/ single row group based on data in
+/// 'row_group_ranges'. It sets the offsets and sizes of the column index and
+/// offset index members of the row group. It doesn't set the member if the
+/// input value is -1.
+std::shared_ptr<FileMetaData> ConstructFakeMetaData(
+    const RowGroupRanges& row_group_ranges) {
+  facebook::velox::parquet::thrift::RowGroup row_group;
+  for (auto& page_index_ranges : row_group_ranges) {
+    facebook::velox::parquet::thrift::ColumnChunk col_chunk;
+    if (page_index_ranges.columnIndexOffset != -1) {
+      col_chunk.column_index_offset() = page_index_ranges.columnIndexOffset;
     }
-    if (pageIndexRanges.columnIndexLength != -1) {
-      colChunk.__set_column_index_length(
-          static_cast<int32_t>(pageIndexRanges.columnIndexLength));
+    if (page_index_ranges.columnIndexLength != -1) {
+      col_chunk.column_index_length() =
+          static_cast<int32_t>(page_index_ranges.columnIndexLength);
     }
-    if (pageIndexRanges.offsetIndexOffset != -1) {
-      colChunk.__set_offset_index_offset(pageIndexRanges.offsetIndexOffset);
+    if (page_index_ranges.offsetIndexOffset != -1) {
+      col_chunk.offset_index_offset() = page_index_ranges.offsetIndexOffset;
     }
-    if (pageIndexRanges.offsetIndexLength != -1) {
-      colChunk.__set_offset_index_length(
-          static_cast<int32_t>(pageIndexRanges.offsetIndexLength));
+    if (page_index_ranges.offsetIndexLength != -1) {
+      col_chunk.offset_index_length() =
+          static_cast<int32_t>(page_index_ranges.offsetIndexLength);
     }
-    rowGroup.columns.push_back(colChunk);
+    col_chunk.meta_data().ensure();
+    row_group.columns()->push_back(col_chunk);
   }
 
   facebook::velox::parquet::thrift::FileMetaData metadata;
-  metadata.row_groups.push_back(rowGroup);
+  metadata.row_groups()->push_back(row_group);
 
-  metadata.schema.emplace_back();
+  metadata.schema()->emplace_back();
   schema::NodeVector fields;
-  for (size_t i = 0; i < rowGroupRanges.size(); ++i) {
+  for (size_t i = 0; i < row_group_ranges.size(); ++i) {
     fields.push_back(schema::int64(std::to_string(i)));
-    metadata.schema.emplace_back();
-    fields.back()->toParquet(&metadata.schema.back());
+    metadata.schema()->emplace_back();
+    fields.back()->toParquet(&metadata.schema()->back());
   }
   schema::GroupNode::make("schema", Repetition::kRepeated, fields)
-      ->toParquet(&metadata.schema.front());
+      ->toParquet(&metadata.schema()->front());
 
   auto sink = createOutputStream();
   ThriftSerializer{}.serialize(&metadata, sink.get());
@@ -92,7 +93,7 @@ void validatePageIndexRange(
     int expectedCiSize,
     int expectedOiStart,
     int expectedOiSize) {
-  auto fileMetadata = constructFakeMetaData(rowGroupRanges);
+  auto fileMetadata = ConstructFakeMetaData(rowGroupRanges);
   auto readRange = PageIndexReader::determinePageIndexRangesInRowGroup(
       *fileMetadata->rowGroup(0), columnIndices);
   ASSERT_EQ(expectedHasColumnIndex, readRange.columnIndex.has_value());
@@ -152,7 +153,7 @@ TEST(PageIndex, determinePageIndexRangesInRowGroup) {
 /// Offsets in them. Then it validates if.
 /// PageIndexReader::DeterminePageIndexRangesInRowGroup() properly computes the.
 /// File range that contains the page index of selected columns.
-TEST(PageIndex, DeterminePageIndexRangesInRowGroupWithPartialColumnsSelected) {
+TEST(PageIndex, determinePageIndexRangesInRowGroupWithPartialColumnsSelected) {
   // No page index at all.
   validatePageIndexRange({{-1, -1, -1, -1}}, {0}, false, false, -1, -1, -1, -1);
   // Page index for single column chunk.
@@ -233,7 +234,7 @@ TEST(PageIndex, DeterminePageIndexRangesInRowGroupWithPartialColumnsSelected) {
 /// Offsets in them. Then it validates if.
 /// PageIndexReader::DeterminePageIndexRangesInRowGroup() properly detects if.
 /// Column index or offset index is missing.
-TEST(PageIndex, DeterminePageIndexRangesInRowGroupWithMissingPageIndex) {
+TEST(PageIndex, determinePageIndexRangesInRowGroupWithMissingPageIndex) {
   // No column index at all.
   validatePageIndexRange({{-1, -1, 15, 5}}, {}, false, true, -1, -1, 15, 5);
   // No offset index at all.
@@ -246,7 +247,7 @@ TEST(PageIndex, DeterminePageIndexRangesInRowGroupWithMissingPageIndex) {
       {{10, 5, -1, -1}, {15, 15, -1, -1}}, {}, true, false, 10, 20, -1, -1);
 }
 
-TEST(PageIndex, WriteOffsetIndex) {
+TEST(PageIndex, writeOffsetIndex) {
   /// Create offset index via the OffsetIndexBuilder interface.
   auto Builder = OffsetIndexBuilder::make();
   const size_t numPages = 5;
@@ -329,7 +330,7 @@ void testWriteTypedColumnIndex(
   }
 }
 
-TEST(PageIndex, WriteInt32ColumnIndex) {
+TEST(PageIndex, writeInt32ColumnIndex) {
   auto encode = [=](int32_t value) {
     return std::string(reinterpret_cast<const char*>(&value), sizeof(int32_t));
   };
@@ -344,7 +345,7 @@ TEST(PageIndex, WriteInt32ColumnIndex) {
       schema::int32("c1"), pageStats, BoundaryOrder::kAscending, true);
 }
 
-TEST(PageIndex, WriteInt64ColumnIndex) {
+TEST(PageIndex, writeInt64ColumnIndex) {
   auto encode = [=](int64_t value) {
     return std::string(reinterpret_cast<const char*>(&value), sizeof(int64_t));
   };
@@ -359,7 +360,7 @@ TEST(PageIndex, WriteInt64ColumnIndex) {
       schema::int64("c1"), pageStats, BoundaryOrder::kDescending, true);
 }
 
-TEST(PageIndex, WriteFloatColumnIndex) {
+TEST(PageIndex, writeFloatColumnIndex) {
   auto encode = [=](float value) {
     return std::string(reinterpret_cast<const char*>(&value), sizeof(float));
   };
@@ -374,7 +375,7 @@ TEST(PageIndex, WriteFloatColumnIndex) {
       schema::floatType("c1"), pageStats, BoundaryOrder::kUnordered, true);
 }
 
-TEST(PageIndex, WriteDoubleColumnIndex) {
+TEST(PageIndex, writeDoubleColumnIndex) {
   auto encode = [=](double value) {
     return std::string(reinterpret_cast<const char*>(&value), sizeof(double));
   };
@@ -389,7 +390,7 @@ TEST(PageIndex, WriteDoubleColumnIndex) {
       schema::doubleType("c1"), pageStats, BoundaryOrder::kUnordered, false);
 }
 
-TEST(PageIndex, WriteByteArrayColumnIndex) {
+TEST(PageIndex, writeByteArrayColumnIndex) {
   // Byte array values with identical min/max.
   std::vector<EncodedStatistics> pageStats(3);
   pageStats.at(0).setMin("bar").setMax("foo");
@@ -400,7 +401,7 @@ TEST(PageIndex, WriteByteArrayColumnIndex) {
       schema::byteArray("c1"), pageStats, BoundaryOrder::kAscending, false);
 }
 
-TEST(PageIndex, WriteFLBAColumnIndex) {
+TEST(PageIndex, writeFLBAColumnIndex) {
   // FLBA values in the ascending order with some null pages.
   std::vector<EncodedStatistics> pageStats(5);
   pageStats.at(0).setMin("abc").setMax("ABC");
@@ -419,7 +420,7 @@ TEST(PageIndex, WriteFLBAColumnIndex) {
       std::move(Node), pageStats, BoundaryOrder::kAscending, false);
 }
 
-TEST(PageIndex, WriteColumnIndexWithAllNullPages) {
+TEST(PageIndex, writeColumnIndexWithAllNullPages) {
   // All values are null.
   std::vector<EncodedStatistics> pageStats(3);
   pageStats.at(0).setNullCount(100).allNullValue = true;
@@ -430,7 +431,7 @@ TEST(PageIndex, WriteColumnIndexWithAllNullPages) {
       schema::int32("c1"), pageStats, BoundaryOrder::kUnordered, true);
 }
 
-TEST(PageIndex, WriteColumnIndexWithInvalidNullCounts) {
+TEST(PageIndex, writeColumnIndexWithInvalidNullCounts) {
   auto encode = [=](int32_t value) {
     return std::string(reinterpret_cast<const char*>(&value), sizeof(int32_t));
   };
@@ -445,7 +446,7 @@ TEST(PageIndex, WriteColumnIndexWithInvalidNullCounts) {
       schema::int32("c1"), pageStats, BoundaryOrder::kAscending, false);
 }
 
-TEST(PageIndex, WriteColumnIndexWithCorruptedStats) {
+TEST(PageIndex, writeColumnIndexWithCorruptedStats) {
   auto encode = [=](int32_t value) {
     return std::string(reinterpret_cast<const char*>(&value), sizeof(int32_t));
   };
@@ -469,7 +470,7 @@ TEST(PageIndex, WriteColumnIndexWithCorruptedStats) {
   EXPECT_EQ(0, buffer->size());
 }
 
-TEST(PageIndex, TestPageIndexBuilderWithZeroRowGroup) {
+TEST(PageIndex, testPageIndexBuilderWithZeroRowGroup) {
   schema::NodeVector fields = {schema::int32("c1"), schema::byteArray("c2")};
   schema::NodePtr root =
       schema::GroupNode::make("schema", Repetition::kRepeated, fields);
@@ -604,7 +605,7 @@ class PageIndexBuilderTest : public ::testing::Test {
   PageIndexLocation pageIndexLocation_;
 };
 
-TEST_F(PageIndexBuilderTest, SingleRowGroup) {
+TEST_F(PageIndexBuilderTest, singleRowGroup) {
   schema::NodePtr root = schema::GroupNode::make(
       "schema",
       Repetition::kRepeated,
@@ -645,7 +646,7 @@ TEST_F(PageIndexBuilderTest, SingleRowGroup) {
   ASSERT_EQ(nullptr, readOffsetIndex(0, 2));
 }
 
-TEST_F(PageIndexBuilderTest, TwoRowGroups) {
+TEST_F(PageIndexBuilderTest, twoRowGroups) {
   schema::NodePtr root = schema::GroupNode::make(
       "schema",
       Repetition::kRepeated,

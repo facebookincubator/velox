@@ -1900,7 +1900,7 @@ class PatternStringIterator {
   // Return true if the cursor is advanced successfully, false otherwise(reached
   // the end of the pattern string).
   bool next() {
-    if (nextStart_ == pattern_.size()) {
+    if (nextStart_ >= pattern_.size()) {
       return false;
     }
 
@@ -1938,9 +1938,18 @@ class PatternStringIterator {
       } else {
         charKind_ = CharKind::kNormal;
 
-        // Unicode.
+        // Unicode. Advance a single byte when the sequence is invalid or
+        // truncated: it must not run past the end of the pattern, and the
+        // bytes that follow can still be pattern syntax, for example the '%'
+        // at the end of '%abc\xf0%'.
         if (currentChar & 0x80) {
-          auto numBytes = unicodeCharLength(pattern_.data() + currentStart_);
+          int numBytes = 1;
+          if (utf8proc_codepoint(
+                  pattern_.data() + currentStart_,
+                  pattern_.data() + pattern_.size(),
+                  numBytes) < 0) {
+            numBytes = 1;
+          }
           nextStart_ = currentStart_ + numBytes;
         } else {
           nextStart_ = currentStart_ + 1;
@@ -2286,10 +2295,15 @@ std::shared_ptr<exec::VectorFunction> makeLike(
 
   PatternMetadata patternMetadata = PatternMetadata::generic();
   try {
-    // Fast path for substrings search.
-    if (!escapeChar.has_value()) {
-      auto substrings =
-          PatternMetadata::parseSubstrings(std::string_view(pattern));
+    // Fast path for substrings search. The escape character can be ignored
+    // when it does not appear in the pattern, so callers that always supply
+    // an escape argument still hit this path as long as the escape character
+    // is not actually used in the pattern.
+    const auto patternView = std::string_view(pattern);
+    const bool escapeIsInert = !escapeChar.has_value() ||
+        patternView.find(escapeChar.value()) == std::string_view::npos;
+    if (escapeIsInert) {
+      auto substrings = PatternMetadata::parseSubstrings(patternView);
       if (substrings.size() > 0) {
         patternMetadata = PatternMetadata::substrings(std::move(substrings));
         return std::make_shared<OptimizedLike<PatternKind::kSubstrings>>(
@@ -2297,8 +2311,7 @@ std::shared_ptr<exec::VectorFunction> makeLike(
       }
     }
 
-    patternMetadata =
-        determinePatternKind(std::string_view(pattern), escapeChar);
+    patternMetadata = determinePatternKind(patternView, escapeChar);
   } catch (...) {
     return std::make_shared<exec::AlwaysFailingVectorFunction>(
         std::current_exception());
@@ -2455,5 +2468,36 @@ regexpReplaceWithLambdaSignatures() {
               .argumentType("varchar")
               .argumentType("function(array(varchar), varchar)")
               .build()};
+}
+
+std::string unescapeReplacement(const std::string& replacement) {
+  std::string result;
+  result.reserve(replacement.size());
+  for (size_t i = 0; i < replacement.size();) {
+    const char current = replacement[i];
+    const bool hasNext = i + 1 < replacement.size();
+    if (current == '\\' && hasNext) {
+      const char following = replacement[i + 1];
+      if (following == '\\' || (following >= '0' && following <= '9')) {
+        // '\\\\' and '\\<digit>' have the same meaning in RE2 and in
+        // java.util.regex; keep them as a two-byte unit.
+        result.push_back(current);
+        result.push_back(following);
+        i += 2;
+      } else {
+        // '\\<other>' in java.util.regex is just <other>; emit the trailing
+        // byte and skip the backslash.
+        result.push_back(following);
+        i += 2;
+      }
+    } else {
+      // Plain byte, or a trailing lone '\\'. The latter is invalid in both
+      // engines; we keep the byte so RE2 surfaces the error later instead of
+      // silently dropping input here.
+      result.push_back(current);
+      ++i;
+    }
+  }
+  return result;
 }
 } // namespace facebook::velox::functions

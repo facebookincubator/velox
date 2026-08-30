@@ -77,6 +77,9 @@ int main(int argc, char** argv) {
   auto prefixUnicodeInput = makeInput(vectorSize, false, true, "你_好_啊");
   auto suffixInput = makeInput(vectorSize, true, false);
   auto suffixUnicodeInput = makeInput(vectorSize, true, false, "你_好_啊");
+  // Strings shaped like 'xxxfooxxxbarxxx' so that '%foo%bar%' matches.
+  auto substringsInput =
+      makeInput(vectorSize, true, true, "foo***bar", "xxxxx");
 
   benchmarkBuilder
       .addBenchmarkSet(
@@ -116,6 +119,19 @@ int main(int argc, char** argv) {
       .addBenchmarkSet(
           "generic", vectorMaker.rowVector({"col0"}, {substringInput}))
       .addExpression("generic", R"(like(col0, '%a%b%c'))");
+
+  // Multi-substring patterns (kSubstrings). All three expressions are
+  // semantically equivalent because the supplied escape character does not
+  // appear in the pattern; the comparison shows that supplying an unused
+  // escape no longer disables the SIMD-backed string::find fast path.
+  benchmarkBuilder
+      .addBenchmarkSet(
+          "substrings", vectorMaker.rowVector({"col0"}, {substringsInput}))
+      .addExpression("substrings_no_escape", R"(like(col0, '%foo%bar%'))")
+      .addExpression(
+          "substrings_inert_default_escape", R"(like(col0, '%foo%bar%', '\'))")
+      .addExpression(
+          "substrings_inert_custom_escape", R"(like(col0, '%foo%bar%', '!'))");
 
   benchmarkBuilder.registerBenchmarks();
   benchmarkBuilder.testBenchmarks();

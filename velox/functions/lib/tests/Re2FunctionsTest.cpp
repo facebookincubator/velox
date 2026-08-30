@@ -736,6 +736,40 @@ TEST_F(Re2FunctionsTest, likeDeterminePatternKindUnicode) {
   testPattern("%%你好%世界", PatternKind::kGeneric, "");
 }
 
+// A pattern built per row, such as '%' || lower(name) || '%', is not constant,
+// so it is parsed by LikeGeneric on every row.
+TEST_F(Re2FunctionsTest, likeTruncatedUnicodePattern) {
+  auto input =
+      makeFlatVector<std::string>({"abc\xc3", "abc", "xxabc\xf0yy", "abcyy"});
+  auto pattern = makeFlatVector<std::string>(
+      {"abc\xc3", "abc\xc3", "%abc\xf0%", "%abc\xf0%"});
+  auto result = evaluate("like(c0, c1)", makeRowVector({input, pattern}));
+  // Rows 1 and 2 differ only in whether the input carries the truncated byte;
+  // likewise rows 3 and 4.
+  assertEqualVectors(makeFlatVector<bool>({true, false, true, false}), result);
+}
+
+TEST_F(Re2FunctionsTest, likeDeterminePatternKindTruncatedUnicode) {
+  auto testPattern = [&](std::string_view pattern,
+                         PatternKind patternKind,
+                         std::string_view fixedPattern) {
+    // Heap-allocate the pattern so ASAN traps a read past its last byte.
+    const std::vector<char> buffer(pattern.begin(), pattern.end());
+    PatternMetadata patternMetadata = determinePatternKind(
+        std::string_view(buffer.data(), buffer.size()), std::nullopt);
+    EXPECT_EQ(patternMetadata.patternKind(), patternKind);
+    EXPECT_EQ(patternMetadata.fixedPattern(), fixedPattern);
+  };
+
+  // Lead byte announces 2 bytes, only 1 byte remains.
+  testPattern("abc\xc3", PatternKind::kFixed, "abc\xc3");
+  // Lead byte announces 3 bytes, only 2 bytes remain.
+  testPattern("abc\xe4\xbd", PatternKind::kFixed, "abc\xe4\xbd");
+  // The trailing '%' stays a wildcard: the truncated sequence consumes a
+  // single byte rather than swallowing what follows it.
+  testPattern("%abc\xf0%", PatternKind::kSubstring, "abc\xf0");
+}
+
 TEST_F(Re2FunctionsTest, likeDeterminePatternKindWithEscapeChar) {
   auto testPattern = [&](std::string_view pattern,
                          PatternKind patternKind,
@@ -1077,6 +1111,20 @@ TEST_F(Re2FunctionsTest, likeSubstringPattern) {
       true);
 }
 
+// Verifies the substrings fast path is taken when an escape character is
+// supplied but does not appear in the pattern. Without this case, callers
+// that always pass an escape argument (e.g. SQL `LIKE ... ESCAPE 'x'` where
+// 'x' is not used in the pattern) would unnecessarily fall back to the RE2
+// engine on patterns like '%foo%bar%'.
+TEST_F(Re2FunctionsTest, likeSubstringPatternWithInertEscape) {
+  testLike("hello special requests today", "%special%requests%", '\\', true);
+  testLike("requests special hello", "%special%requests%", '\\', false);
+  testLike("aXbYcZ", "%a%b%c%", '\\', true);
+  testLike("aXbY", "%a%b%c%", '\\', false);
+  // Custom escape character that does not appear in the pattern.
+  testLike("aXbYcZ", "%a%b%c%", '!', true);
+}
+
 TEST_F(Re2FunctionsTest, nullConstantPatternOrEscape) {
   // Test null pattern.
   ASSERT_TRUE(
@@ -1411,7 +1459,7 @@ TEST_F(Re2FunctionsTest, tryException) {
     auto result = evaluate("try(re2_extract(c0, c1))", input);
     assertEqualVectors(makeNullConstant(TypeKind::VARCHAR, 3), result);
 
-    // Atleast one non null result.
+    // At least one non null result.
     result = evaluate("try(re2_extract(c0, c1))", oneGoodInput);
     assertEqualVectors(
         makeNullableFlatVector<StringView>({std::nullopt, "mno", std::nullopt}),

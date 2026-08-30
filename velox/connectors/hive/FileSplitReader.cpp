@@ -21,68 +21,10 @@
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileConnectorUtil.h"
+#include "velox/connectors/hive/PartitionValue.h"
 #include "velox/dwio/common/ReaderFactory.h"
-#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::connector::hive {
-namespace {
-
-template <TypeKind kind>
-VectorPtr newConstantFromStringImpl(
-    const TypePtr& type,
-    const std::optional<std::string>& value,
-    velox::memory::MemoryPool* pool,
-    bool isLocalTimestamp,
-    bool isDaysSinceEpoch) {
-  using T = typename TypeTraits<kind>::NativeType;
-  if (!value.has_value()) {
-    return std::make_shared<ConstantVector<T>>(pool, 1, true, type, T());
-  }
-
-  if (type->isDate()) {
-    int32_t days = 0;
-    // For Iceberg, the date partition values are already in daysSinceEpoch
-    // form.
-    if (isDaysSinceEpoch) {
-      days = folly::to<int32_t>(value.value());
-    } else {
-      days = DATE()->toDays(value.value());
-    }
-    return std::make_shared<ConstantVector<int32_t>>(
-        pool, 1, false, type, std::move(days));
-  }
-
-  if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
-    if (type->isDecimal()) {
-      T decimalValue = 0;
-      auto [precision, scale] = getDecimalPrecisionScale(*type);
-      auto status = DecimalUtil::castFromString(
-          StringView(value.value()), precision, scale, decimalValue);
-      if (!status.ok()) {
-        VELOX_USER_FAIL(status.message());
-      }
-      return std::make_shared<ConstantVector<T>>(
-          pool, 1, false, type, std::move(decimalValue));
-    }
-  }
-  if constexpr (std::is_same_v<T, StringView>) {
-    return std::make_shared<ConstantVector<StringView>>(
-        pool, 1, false, type, StringView(value.value()));
-  } else {
-    auto copy = velox::util::Converter<kind>::tryCast(value.value())
-                    .thenOrThrow(folly::identity, [&](const Status& status) {
-                      VELOX_USER_FAIL("{}", status.message());
-                    });
-    if constexpr (kind == TypeKind::TIMESTAMP) {
-      if (isLocalTimestamp) {
-        copy.toGMT(Timestamp::defaultTimezone());
-      }
-    }
-    return std::make_shared<ConstantVector<T>>(
-        pool, 1, false, type, std::move(copy));
-  }
-}
-} // namespace
 
 VectorPtr newConstantFromString(
     const TypePtr& type,
@@ -90,14 +32,20 @@ VectorPtr newConstantFromString(
     velox::memory::MemoryPool* pool,
     bool isLocalTimestamp,
     bool isDaysSinceEpoch) {
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
-      newConstantFromStringImpl,
-      type->kind(),
+  if (!value.has_value()) {
+    return BaseVector::createNullConstant(type, 1, pool);
+  }
+  return BaseVector::createConstant(
       type,
-      value,
-      pool,
-      isLocalTimestamp,
-      isDaysSinceEpoch);
+      PartitionValue::fromString(
+          value.value(),
+          *type,
+          isLocalTimestamp ? PartitionValue::TimestampMode::kLocalTime
+                           : PartitionValue::TimestampMode::kUtc,
+          isDaysSinceEpoch ? PartitionValue::DateMode::kDaysSinceEpoch
+                           : PartitionValue::DateMode::kIsoString),
+      1,
+      pool);
 }
 
 std::unique_ptr<FileSplitReader> FileSplitReader::create(
@@ -164,6 +112,11 @@ FileSplitReader::FileSplitReader(
   baseReaderOpts_.setMetadataIoStats(metadataIoStats_);
 }
 
+void FileSplitReader::setRemainingFilterColumns(
+    const folly::F14FastSet<std::string>& columns) {
+  baseRowReaderOpts_.setRemainingFilterColumns(columns);
+}
+
 void FileSplitReader::configureReaderOptions(
     std::shared_ptr<velox::random::RandomSkipTracker> randomSkip) {
   configureBaseReaderOptions();
@@ -183,7 +136,7 @@ void FileSplitReader::configureBaseReaderOptions() {
 
 void FileSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStatistics& runtimeStats,
+    dwio::common::RuntimeStats& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   createReader(fileReadOps);
   if (emptySplit_) {
@@ -232,7 +185,7 @@ int64_t FileSplitReader::estimatedRowSize() const {
 }
 
 void FileSplitReader::updateRuntimeStats(
-    dwio::common::RuntimeStatistics& stats) const {
+    dwio::common::RuntimeStats& stats) const {
   if (baseRowReader_) {
     baseRowReader_->updateRuntimeStats(stats);
   }
@@ -281,6 +234,12 @@ void FileSplitReader::createReader(
   if (!tableHandle_->name().empty()) {
     fileProperties.fileReadOps[kTableNameKey] = tableHandle_->name();
   }
+  // Per-operation counters are attributed to the data source that opened the
+  // file, so they are only meaningful while file handles are not reused across
+  // data sources. A cached handle would both outlive these statistics and
+  // report one data source's reads against another's.
+  fileProperties.ioStatistics =
+      fileHandleFactory_->maxSize() == 0 ? dataIoStats_.get() : nullptr;
 
   try {
     fileHandleCachePtr = fileHandleFactory_->generate(
@@ -303,6 +262,11 @@ void FileSplitReader::createReader(
   if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
     cacheTTLController->addOpenFileInfo(fileHandleCachePtr->uuid.id());
   }
+  if (auto* cache = connectorQueryCtx_->cache()) {
+    baseReaderOpts_.setFileHandle(&(*fileHandleCachePtr));
+    baseReaderOpts_.setCache(cache);
+  }
+
   auto baseFileInput = BufferedInputBuilder::getInstance()->create(
       *fileHandleCachePtr,
       baseReaderOpts_,
@@ -327,7 +291,7 @@ RowTypePtr FileSplitReader::getAdaptedRowType() const {
 }
 
 bool FileSplitReader::filterOnStats(
-    dwio::common::RuntimeStatistics& runtimeStats) const {
+    dwio::common::RuntimeStats& runtimeStats) const {
   if (testFilters(
           scanSpec_.get(),
           baseReader_.get(),
@@ -345,7 +309,7 @@ bool FileSplitReader::filterOnStats(
 }
 
 bool FileSplitReader::checkIfSplitIsEmpty(
-    dwio::common::RuntimeStatistics& runtimeStats) {
+    dwio::common::RuntimeStats& runtimeStats) {
   // emptySplit_ may already be set if the data file is not found. In this case
   // we don't need to test further.
   if (emptySplit_) {

@@ -26,6 +26,11 @@ add_subdirectory(external/date)
 add_subdirectory(external/tzdb)
 add_subdirectory(external/md5)
 add_subdirectory(external/hdfs)
+
+if(VELOX_ENABLE_NIMBLE)
+  # Nimble's string encoding is the only consumer of FSST.
+  add_subdirectory(external/fsst)
+endif()
 #
 
 # examples depend on expression
@@ -76,6 +81,14 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
     add_subdirectory(experimental/wave)
     add_subdirectory(external/jitify)
   endif()
+endif()
+
+if(VELOX_ENABLE_TORCHWAVE)
+  add_subdirectory(experimental/torchwave)
+endif()
+
+if(VELOX_ENABLE_CXL)
+  add_subdirectory(experimental/cxl)
 endif()
 
 if(${VELOX_BUILD_TESTING})

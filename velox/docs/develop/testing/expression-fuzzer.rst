@@ -15,7 +15,11 @@ vector can have random and potentially nested encodings.
 To ensure that evaluation engine and UDFs handle vector encodings correctly, the
 expression fuzzer evaluates each expression twice and asserts the results to be
 the same: using regular evaluation path and using simplified evaluation that
-flattens all input vectors before evaluating an expression.
+normalizes all input vectors -- flattening encodings, compacting array/map
+elements, and clearing garbage behind nulls -- before evaluating an expression.
+This also verifies that results depend only on logical input values, not on
+their physical layout, catching UDFs that read the raw elements buffer or
+otherwise ignore offsets/sizes.
 
 How to integrate
 ---------------------------------------
@@ -149,6 +153,8 @@ Expression Fuzzer supports a number of powerful command line arguments.
 * ``–-batch_size``: The size of input vectors to generate. Default is 100.
 
 * ``--null_ratio``: Chance of adding a null constant to the plan, or null value in a vector (expressed as double from 0 to 1). Default is 0.1.
+
+* ``--velox_fuzzer_non_contiguous_elements``: Lay out array/map elements non-contiguously, leaving random gaps of unreferenced elements between containers, so that expressions/UDFs which ignore offsets/sizes and read the raw elements buffer are caught. Default is false.
 
 * ``--max_num_varargs``: The maximum number of variadic arguments fuzzer will generate for functions that accept variadic arguments. Fuzzer will generate up to max_num_varargs arguments for the variadic list in addition to the required arguments by the function. Default is 10.
 

@@ -65,9 +65,9 @@ class E2EFilterTest : public E2EFilterTestBase,
     auto sink = std::make_unique<MemorySink>(
         200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
     auto* sinkPtr = sink.get();
-    options_.memoryPool = E2EFilterTestBase::rootPool_.get();
+    commonOptions_.memoryPool = E2EFilterTestBase::rootPool_.get();
     int32_t flushCounter = 0;
-    options_.flushPolicyFactory = [&]() {
+    commonOptions_.flushPolicyFactory = [&]() {
       return std::make_unique<LambdaFlushPolicy>(
           rowsInRowGroup_, bytesInRowGroup_, [&]() {
             return forRowGroupSkip
@@ -76,8 +76,10 @@ class E2EFilterTest : public E2EFilterTestBase,
           });
     };
 
+    commonOptions_.formatSpecificOptions =
+        std::make_shared<ParquetWriterOptions>(options_);
     writer_ = std::make_unique<facebook::velox::parquet::Writer>(
-        std::move(sink), options_, asRowType(type));
+        std::move(sink), commonOptions_, asRowType(type));
     for (auto& batch : batches) {
       writer_->write(batch);
     }
@@ -92,27 +94,74 @@ class E2EFilterTest : public E2EFilterTestBase,
     return std::make_unique<ParquetReader>(std::move(input), opts);
   }
 
+  // Returns true if the given encoding appears in the encodings list of the
+  // first column chunk of the first row group of the most recently written
+  // file. Uses ColumnChunkMetaDataPtr::encodings() — no PageReader needed.
+  bool columnChunkUsesEncoding(
+      facebook::velox::parquet::arrow::Encoding::type encoding) {
+    dwio::common::ReaderOptions readerOpts(leafPool_.get());
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
+    auto reader = std::make_unique<ParquetReader>(
+        std::make_unique<dwio::common::BufferedInput>(
+            std::make_shared<InMemoryReadFile>(std::string(sinkData_)),
+            readerOpts.memoryPool()),
+        readerOpts);
+    const auto expected = static_cast<thrift::Encoding>(encoding);
+    for (const auto fileEncoding :
+         reader->fileMetaData().rowGroup(0).columnChunk(0).encodings()) {
+      if (fileEncoding == expected) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Returns the Parquet physical type of the leaf column at 'columnIndex' in
+  // the most recently written file. Used to confirm that a decimal column was
+  // actually stored as INT64 rather than FIXED_LEN_BYTE_ARRAY.
+  thrift::Type leafColumnPhysicalType(int32_t columnIndex) {
+    dwio::common::ReaderOptions readerOpts(leafPool_.get());
+    auto reader = std::make_unique<ParquetReader>(
+        std::make_unique<dwio::common::BufferedInput>(
+            std::make_shared<InMemoryReadFile>(std::string(sinkData_)),
+            readerOpts.memoryPool()),
+        readerOpts);
+    auto column = std::static_pointer_cast<const ParquetTypeWithId>(
+        reader->typeWithId()->childAt(columnIndex));
+    return column->parquetType_.value();
+  }
+
   std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
       std::make_shared<velox::io::IoStatistics>();
   std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
       std::make_shared<velox::io::IoStatistics>();
   std::unique_ptr<facebook::velox::parquet::Writer> writer_;
-  facebook::velox::parquet::WriterOptions options_;
+  dwio::common::WriterOptions commonOptions_;
+  ParquetWriterOptions options_;
   uint64_t rowsInRowGroup_ = 10'000;
   int64_t bytesInRowGroup_ = 128 * 1'024 * 1'024;
 };
 
-TEST_F(E2EFilterTest, writerMagic) {
-  rowType_ = ROW({"c0"}, {INTEGER()});
+TEST_F(E2EFilterTest, unknownType) {
+  rowType_ = ROW({"bigint_val", "unknown_val"}, {BIGINT(), UNKNOWN()});
+  filterGenerator_ = std::make_unique<FilterGenerator>(rowType_, seed_);
+
   std::vector<RowVectorPtr> batches;
-  batches.push_back(
-      std::static_pointer_cast<RowVector>(test::BatchMaker::createBatch(
-          rowType_, 20000, *leafPool_, nullptr, 0)));
+  for (auto batch = 0; batch < batchCount_; ++batch) {
+    auto bigintValues = makeFlatVector<int64_t>(
+        batchSize_, [batch, this](vector_size_t row) -> int64_t {
+          return static_cast<int64_t>(batch) * batchSize_ + row;
+        });
+    auto unknownValues =
+        BaseVector::createNullConstant(UNKNOWN(), batchSize_, leafPool_.get());
+    batches.push_back(makeRowVector(
+        rowType_->names(),
+        std::vector<VectorPtr>{bigintValues, unknownValues}));
+  }
+
   writeToMemory(rowType_, batches, false);
-  auto data = sinkData_.data();
-  auto size = sinkData_.size();
-  EXPECT_EQ("PAR1", std::string(data, 4));
-  EXPECT_EQ("PAR1", std::string(data + size - 4, 4));
+  testNoRowGroupSkip(batches, {"bigint_val"}, 10);
 }
 
 TEST_F(E2EFilterTest, boolean) {
@@ -144,6 +193,7 @@ TEST_F(E2EFilterTest, integerDeltaBinaryPack) {
   options_.enableDictionary = false;
   options_.encoding =
       facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+  const auto expectedEncoding = options_.encoding;
 
   testWithTypes(
       "short_val:smallint,"
@@ -154,6 +204,7 @@ TEST_F(E2EFilterTest, integerDeltaBinaryPack) {
       true,
       {"short_val", "int_val", "long_val"},
       20);
+  EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
 }
 
 TEST_F(E2EFilterTest, compression) {
@@ -168,7 +219,7 @@ TEST_F(E2EFilterTest, compression) {
     }
 
     options_.dataPageSize = 4 * 1024;
-    options_.compressionKind = compression;
+    commonOptions_.compressionKind = compression;
 
     testWithTypes(
         "tinyint_val:tinyint,"
@@ -431,6 +482,41 @@ TEST_F(E2EFilterTest, shortDecimalDirect) {
       20);
 }
 
+TEST_F(E2EFilterTest, shortDecimalStoredAsInt64Direct) {
+  // A short decimal with precision in [10, 18] and dictionary disabled is
+  // written as PLAIN INT64 (8-byte little-endian). This exercises the bulk /
+  // SIMD filter path enabled in IntegerColumnReader::hasBulkPath() for
+  // non-dictionary INT64 decimals. Verify filtering returns the expected rows.
+  options_.enableDictionary = false;
+  options_.enableStoreDecimalAsInteger = true;
+  options_.dataPageSize = 4 * 1024;
+
+  for (const auto& type : {
+           "shortdecimal_val:decimal(10, 5)",
+           "shortdecimal_val:decimal(18, 5)",
+       }) {
+    testWithTypes(
+        type,
+        [&]() {
+          makeIntDistribution<int64_t>(
+              "shortdecimal_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -999, // rareMin
+              30000, // rareMax
+              true);
+        },
+        false,
+        {"shortdecimal_val"},
+        20);
+    // Confirm the column is physically stored as INT64 (not FLBA), so the
+    // bulk path under test is actually taken.
+    EXPECT_EQ(leafColumnPhysicalType(0), thrift::Type::INT64);
+  }
+}
+
 TEST_F(E2EFilterTest, longDecimalDictionary) {
   // decimal(30, 10) maps to 13 bytes FLBA in Parquet.
   // decimal(37, 15) maps to 16 bytes FLBA in Parquet.
@@ -533,6 +619,7 @@ TEST_F(E2EFilterTest, stringDeltaByteArray) {
   options_.enableDictionary = false;
   options_.encoding =
       facebook::velox::parquet::arrow::Encoding::kDeltaByteArray;
+  const auto expectedEncoding = options_.encoding;
 
   testWithTypes(
       "string_val:string,"
@@ -544,12 +631,14 @@ TEST_F(E2EFilterTest, stringDeltaByteArray) {
       true,
       {"string_val", "string_val_2"},
       20);
+  EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
 }
 
 TEST_F(E2EFilterTest, stringDeltaLengthByteArray) {
   options_.enableDictionary = false;
   options_.encoding =
       facebook::velox::parquet::arrow::Encoding::kDeltaLengthByteArray;
+  const auto expectedEncoding = options_.encoding;
 
   testWithTypes(
       "string_val:string,"
@@ -561,6 +650,7 @@ TEST_F(E2EFilterTest, stringDeltaLengthByteArray) {
       true,
       {"string_val", "string_val_2"},
       20);
+  EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
 }
 
 TEST_F(E2EFilterTest, dedictionarize) {
@@ -676,27 +766,6 @@ TEST_F(E2EFilterTest, varbinaryDictionary) {
       20);
 }
 
-TEST_F(E2EFilterTest, largeMetadata) {
-  rowsInRowGroup_ = 1;
-
-  rowType_ = ROW({"c0"}, {INTEGER()});
-  std::vector<RowVectorPtr> batches;
-  batches.push_back(
-      std::static_pointer_cast<RowVector>(test::BatchMaker::createBatch(
-          rowType_, 1000, *leafPool_, nullptr, 0)));
-  writeToMemory(rowType_, batches, false);
-  dwio::common::ReaderOptions readerOpts(leafPool_.get());
-  readerOpts.setDataIoStats(dataIoStats_);
-  readerOpts.setMetadataIoStats(metadataIoStats_);
-  readerOpts.setFooterSpeculativeIoSize(1024);
-  readerOpts.setFilePreloadThreshold(1024 * 8);
-  dwio::common::RowReaderOptions rowReaderOpts;
-  auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
-  auto reader = makeReader(readerOpts, std::move(input));
-  EXPECT_EQ(1000, reader->numberOfRows());
-}
-
 TEST_F(E2EFilterTest, date) {
   testWithTypes(
       "date_val:date",
@@ -759,6 +828,12 @@ TEST_F(E2EFilterTest, time) {
         false,
         {"time_val"},
         20);
+    // kPlain always appears in the encodings list (dictionary pages use PLAIN),
+    // so skip the check for it — it would pass regardless of whether the option
+    // was forwarded.
+    if (testCase.encoding != parquet::arrow::Encoding::kPlain) {
+      EXPECT_TRUE(columnChunkUsesEncoding(testCase.encoding));
+    }
   }
 }
 
@@ -807,6 +882,12 @@ TEST_F(E2EFilterTest, timeMicros) {
         false,
         {"time_val"},
         20);
+    // kPlain always appears in the encodings list (dictionary pages use PLAIN),
+    // so skip the check for it — it would pass regardless of whether the option
+    // was forwarded.
+    if (testCase.encoding != parquet::arrow::Encoding::kPlain) {
+      EXPECT_TRUE(columnChunkUsesEncoding(testCase.encoding));
+    }
   }
 }
 
@@ -851,11 +932,11 @@ TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
   auto rowType = ROW({"s"}, {VARCHAR()});
 
   auto writeAndGetStats = [&](const std::string& createdBy,
-                              RuntimeStatistics& stats) {
-    options_.memoryPool = E2EFilterTestBase::rootPool_.get();
+                              RuntimeStats& stats) {
+    commonOptions_.memoryPool = E2EFilterTestBase::rootPool_.get();
     options_.createdBy = createdBy;
     // Flush after every 5 rows to create separate row groups.
-    options_.flushPolicyFactory = []() {
+    commonOptions_.flushPolicyFactory = []() {
       return std::make_unique<LambdaFlushPolicy>(
           /*rowsInRowGroup=*/5,
           /*bytesInRowGroup=*/1'024 * 1'024,
@@ -865,8 +946,10 @@ TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
     auto sink = std::make_unique<MemorySink>(
         200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
     auto* sinkPtr = sink.get();
-    auto writer =
-        std::make_unique<parquet::Writer>(std::move(sink), options_, rowType);
+    commonOptions_.formatSpecificOptions =
+        std::make_shared<ParquetWriterOptions>(options_);
+    auto writer = std::make_unique<parquet::Writer>(
+        std::move(sink), commonOptions_, rowType);
     // Row group 1: contains the value we will filter for ("360手机助手").
     writer->write(makeRowVector(
         {"s"},
@@ -918,95 +1001,24 @@ TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
   // has min="360手机助手" max="三星应用商店" which contains "360手机助手", so
   // it is read. Row group 2 has min="vivo预装" max="三星应用商店" which does
   // not contain "360手机助手" (it falls below memcmp min), so it is skipped.
-  RuntimeStatistics stats182;
+  RuntimeStats stats182;
   writeAndGetStats("parquet-mr version 1.8.2", stats182);
   EXPECT_EQ(stats182.skippedStrides, 1);
   EXPECT_EQ(stats182.processedStrides, 1);
 
   // parquet-mr 1.8.1: stats are untrusted (signed byte ordering bug), so no
   // row groups are skipped. Both row groups are scanned.
-  RuntimeStatistics stats181;
+  RuntimeStats stats181;
   writeAndGetStats("parquet-mr version 1.8.1", stats181);
   EXPECT_EQ(stats181.skippedStrides, 0);
   EXPECT_EQ(stats181.processedStrides, 2);
-}
-
-TEST_F(E2EFilterTest, writeDecimalAsInteger) {
-  auto rowVector = makeRowVector(
-      {makeFlatVector<int64_t>({1, 2}, DECIMAL(8, 2)),
-       makeFlatVector<int64_t>({1, 2}, DECIMAL(10, 2)),
-       makeFlatVector<int128_t>({1, 2}, DECIMAL(19, 2))});
-  writeToMemory(rowVector->type(), {rowVector}, false);
-  dwio::common::ReaderOptions readerOpts(leafPool_.get());
-  readerOpts.setDataIoStats(dataIoStats_);
-  readerOpts.setMetadataIoStats(metadataIoStats_);
-  auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
-  auto reader = makeReader(readerOpts, std::move(input));
-  auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
-
-  auto types = parquetReader.typeWithId()->getChildren();
-  auto c0 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[0]);
-  EXPECT_EQ(c0->parquetType_.value(), thrift::Type::type::INT32);
-  auto c1 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[1]);
-  EXPECT_EQ(c1->parquetType_.value(), thrift::Type::type::INT64);
-  auto c2 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[2]);
-  EXPECT_EQ(c2->parquetType_.value(), thrift::Type::type::FIXED_LEN_BYTE_ARRAY);
-}
-
-TEST_F(E2EFilterTest, configurableWriteSchema) {
-  auto test = [&](auto& type, auto& newType) {
-    std::vector<RowVectorPtr> batches;
-    for (auto i = 0; i < 5; i++) {
-      auto vector = BaseVector::create(type, 100, pool());
-      auto rowVector = std::dynamic_pointer_cast<RowVector>(vector);
-      batches.push_back(rowVector);
-    }
-
-    writeToMemory(newType, batches, false);
-    dwio::common::ReaderOptions readerOpts(leafPool_.get());
-    readerOpts.setDataIoStats(dataIoStats_);
-    readerOpts.setMetadataIoStats(metadataIoStats_);
-    auto input = std::make_unique<BufferedInput>(
-        std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
-    auto reader = makeReader(readerOpts, std::move(input));
-    auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
-
-    EXPECT_EQ(parquetReader.rowType()->toString(), newType->toString());
-  };
-
-  // ROW(ROW(ROW))
-  auto type =
-      ROW({"a", "b"}, {INTEGER(), ROW({"c"}, {ROW({"d"}, {INTEGER()})})});
-  auto newType =
-      ROW({"aa", "bb"}, {INTEGER(), ROW({"cc"}, {ROW({"dd"}, {INTEGER()})})});
-  test(type, newType);
-
-  // ARRAY(ROW)
-  type =
-      ROW({"a", "b"}, {ARRAY(ROW({"c", "d"}, {BIGINT(), BIGINT()})), BIGINT()});
-  newType = ROW(
-      {"aa", "bb"}, {ARRAY(ROW({"cc", "dd"}, {BIGINT(), BIGINT()})), BIGINT()});
-  test(type, newType);
-
-  // // MAP(ROW)
-  type =
-      ROW({"a", "b"},
-          {MAP(ROW({"c", "d"}, {BIGINT(), BIGINT()}),
-               ROW({"e", "f"}, {BIGINT(), BIGINT()})),
-           BIGINT()});
-  newType =
-      ROW({"aa", "bb"},
-          {MAP(ROW({"cc", "dd"}, {BIGINT(), BIGINT()}),
-               ROW({"ee", "ff"}, {BIGINT(), BIGINT()})),
-           BIGINT()});
-  test(type, newType);
 }
 
 TEST_F(E2EFilterTest, booleanRle) {
   options_.enableDictionary = false;
   options_.encoding = facebook::velox::parquet::arrow::Encoding::kRle;
   options_.useParquetDataPageV2 = true;
+  const auto expectedEncoding = options_.encoding;
 
   testWithTypes(
       "boolean_val:boolean,"
@@ -1015,6 +1027,7 @@ TEST_F(E2EFilterTest, booleanRle) {
       false,
       {"boolean_val"},
       20);
+  EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
 }
 
 // Define main so that gflags get processed.

@@ -75,6 +75,13 @@ void prepareResult(
   // makeOffsetsAndSizes.  Child vectors are handled in child column readers.
 }
 
+// Returns true for the integer key types supported by createBigintValues() and
+// makeCopyRanges().
+bool isIntegralType(const TypePtr& type) {
+  return type->isTinyint() || type->isSmallint() || type->isInteger() ||
+      type->isBigint();
+}
+
 } // namespace
 
 void SelectiveRepeatedColumnReader::ensureAllLengthsBuffer(vector_size_t size) {
@@ -574,6 +581,7 @@ SelectiveMapAsStructColumnReader::SelectiveMapAsStructColumnReader(
   mapScanSpec_.addMapKeyFieldRecursively(*requestedType_->childAt(0));
   mapScanSpec_.addMapValueFieldRecursively(*requestedType_->childAt(1));
   column_index_t maxChannel = 0;
+  std::vector<int64_t> projectedKeys;
   for (auto& childSpec : scanSpec_->children()) {
     auto field = folly::tryTo<int64_t>(childSpec->fieldName());
     VELOX_CHECK(
@@ -582,8 +590,18 @@ SelectiveMapAsStructColumnReader::SelectiveMapAsStructColumnReader(
         childSpec->fieldName());
     keyToIndex_[*field] = childSpec->channel();
     maxChannel = std::max(maxChannel, childSpec->channel());
+    projectedKeys.push_back(*field);
   }
   copyRanges_.resize(maxChannel + 1);
+
+  // Filter the key sub-reader to the projected keys so the element reader skips
+  // decoding unprojected values (otherwise the whole map is decoded per row).
+  if (isIntegralType(requestedType_->childAt(0)) && !projectedKeys.empty()) {
+    mapScanSpec_.childByName(ScanSpec::kMapKeysFieldName)
+        ->setFilter(
+            velox::common::createBigintValues(
+                projectedKeys, /*nullAllowed=*/false));
+  }
 }
 
 void SelectiveMapAsStructColumnReader::getValues(
@@ -597,7 +615,22 @@ void SelectiveMapAsStructColumnReader::getValues(
   BaseVector::prepareForReuse(*result, rows.size());
   auto* resultRow = result->get()->asChecked<RowVector>();
   setComplexNulls(rows, *result);
-  for (auto& child : resultRow->children()) {
+  for (column_index_t i = 0; i < resultRow->childrenSize(); ++i) {
+    auto& child = resultRow->childAt(i);
+    // prepareForReuse() above reuses or reallocates existing children, but it
+    // skips children left as nullptr by prepareResult() in
+    // SelectiveStructColumnReaderBase, which only pre-allocates ROW-typed
+    // children -- the non-ROW value columns of a flat-map-as-struct result are
+    // left null. Unlike a regular struct, this reader scatters into its
+    // children with copyRanges() rather than recreating them per batch, so it
+    // must ensure they exist. Create any missing child here (directly at the
+    // final size); resize the rest, which prepareForReuse() shrank to 0.
+    if (FOLLY_UNLIKELY(!child)) {
+      child =
+          BaseVector::create(resultRow->type()->childAt(i), rows.size(), pool_);
+    } else {
+      child->resize(rows.size());
+    }
     bits::fillBits(child->mutableRawNulls(), 0, rows.size(), bits::kNull);
   }
   numValues_ = rows.size();

@@ -41,50 +41,42 @@ class CustomTypeCoercionTest : public testing::Test {
 };
 
 TEST_F(CustomTypeCoercionTest, timestampWithTimeZone) {
-  auto coercion = TypeCoercer::defaults().coerceTypeBase(
-      TIMESTAMP(), TIMESTAMP_WITH_TIME_ZONE()->name());
+  auto coercion =
+      TypeCoercer::defaults().coerce(TIMESTAMP(), TIMESTAMP_WITH_TIME_ZONE());
   ASSERT_TRUE(coercion.has_value());
   VELOX_EXPECT_EQ_TYPES(coercion->type, TIMESTAMP_WITH_TIME_ZONE());
   EXPECT_EQ(coercion->cost, 1);
 
-  coercion = TypeCoercer::defaults().coerceTypeBase(
-      DATE(), TIMESTAMP_WITH_TIME_ZONE()->name());
+  coercion = TypeCoercer::defaults().coerce(DATE(), TIMESTAMP_WITH_TIME_ZONE());
   ASSERT_TRUE(coercion.has_value());
   VELOX_EXPECT_EQ_TYPES(coercion->type, TIMESTAMP_WITH_TIME_ZONE());
   EXPECT_EQ(coercion->cost, 2);
 
   // Reverse directions are explicit-only, not coercible.
   ASSERT_FALSE(
-      TypeCoercer::defaults().coerceTypeBase(
-          TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP()->name()));
+      TypeCoercer::defaults().coerce(TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP()));
   ASSERT_FALSE(
-      TypeCoercer::defaults().coerceTypeBase(
-          TIMESTAMP_WITH_TIME_ZONE(), DATE()->name()));
+      TypeCoercer::defaults().coerce(TIMESTAMP_WITH_TIME_ZONE(), DATE()));
 }
 
 TEST_F(CustomTypeCoercionTest, timeWithTimeZone) {
-  auto coercion = TypeCoercer::defaults().coerceTypeBase(
-      TIME(), TIME_WITH_TIME_ZONE()->name());
+  auto coercion = TypeCoercer::defaults().coerce(TIME(), TIME_WITH_TIME_ZONE());
   ASSERT_TRUE(coercion.has_value());
   VELOX_EXPECT_EQ_TYPES(coercion->type, TIME_WITH_TIME_ZONE());
 
   // Reverse directions are explicit-only, not coercible.
-  ASSERT_FALSE(
-      TypeCoercer::defaults().coerceTypeBase(
-          TIME_WITH_TIME_ZONE(), TIME()->name()));
-  ASSERT_FALSE(
-      TypeCoercer::defaults().coerceTypeBase(
-          TIME_WITH_TIME_ZONE(), DATE()->name()));
+  ASSERT_FALSE(TypeCoercer::defaults().coerce(TIME_WITH_TIME_ZONE(), TIME()));
+  ASSERT_FALSE(TypeCoercer::defaults().coerce(TIME_WITH_TIME_ZONE(), DATE()));
 }
 
 TEST_F(CustomTypeCoercionTest, digests) {
   EXPECT_FALSE(
       TypeCoercer::defaults()
-          .coerceTypeBase(TDIGEST(DOUBLE()), "QDIGEST")
+          .coerce(TDIGEST(DOUBLE()), QDIGEST(DOUBLE()))
           .has_value());
   EXPECT_FALSE(
       TypeCoercer::defaults()
-          .coerceTypeBase(QDIGEST(DOUBLE()), "TDIGEST")
+          .coerce(QDIGEST(DOUBLE()), TDIGEST(DOUBLE()))
           .has_value());
 }
 

@@ -36,7 +36,18 @@ void WriterBase::writeFooter(const Type& type) {
     pos = writerSink_->size();
   }
 
-  ProtoUtils::writeType(type, *footer_);
+  ProtoUtils::writeType(
+      type,
+      *footer_,
+      /*parent=*/nullptr,
+      [this](
+          uint32_t typeId) -> std::vector<std::pair<std::string, std::string>> {
+        auto it = schemaAttributes_.find(typeId);
+        if (it == schemaAttributes_.end()) {
+          return {};
+        }
+        return it->second;
+      });
   DWIO_ENSURE_EQ(footer_->typesSize(), footer_->statisticsSize());
   auto writerVersion =
       static_cast<uint32_t>(context_->getConfig(Config::WRITER_VERSION));

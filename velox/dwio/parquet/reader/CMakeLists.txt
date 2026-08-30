@@ -29,6 +29,7 @@ velox_add_library(
   HEADERS
   BooleanColumnReader.h
   BooleanDecoder.h
+  ByteStreamSplitDecoder.h
   DeltaBpDecoder.h
   DeltaByteArrayDecoder.h
   FloatingPointColumnReader.h
@@ -50,11 +51,11 @@ velox_add_library(
   StructColumnReader.h
   TimeColumnReader.h
   TimestampColumnReader.h
+  UnknownColumnReader.h
 )
 
 velox_link_libraries(
   velox_dwio_native_parquet_reader
-  velox_dwio_parquet_thrift
   velox_dwio_parquet_common
   velox_type
   velox_dwio_common
@@ -62,6 +63,5 @@ velox_link_libraries(
   fmt::fmt
   arrow
   Snappy::snappy
-  thrift
   zstd::zstd
 )

@@ -23,34 +23,74 @@ on:
       - '!velox/docs/**'
       - CMakeLists.txt
       - CMake/**
+      - Makefile
       - scripts/setup-ubuntu.sh
       - scripts/setup-common.sh
       - scripts/setup-versions.sh
       - scripts/setup-helper-functions.sh
       - .github/workflows/linux-build.yml
       - .github/workflows/linux-build-base.yml
+      - .github/workflows/selective-build-plan.yml
+      - .github/scripts/plan-selective-build.py
+      - .github/scripts/generate-dependency-graph.py
+      - .github/actions/generate-dependency-graph/action.yml
 
   pull_request:
+    # Approving reviews escalate from selective to full via
+    # rerun-on-approval.yml, which uses the GitHub API to re-run this
+    # workflow's most recent run on the PR head SHA. The re-run preserves
+    # the original pull_request triggering context, so check_runs land on
+    # the PR head and plan resolves to full via its standing-approval
+    # check. Adding a label is not a build-impacting event.
+    types: [opened, synchronize, reopened]
     paths:
       - velox/**
       - '!velox/docs/**'
       - CMakeLists.txt
       - CMake/**
+      - Makefile
       - scripts/setup-ubuntu.sh
       - scripts/setup-common.sh
       - scripts/setup-versions.sh
       - scripts/setup-helper-functions.sh
       - .github/workflows/linux-build.yml
       - .github/workflows/linux-build-base.yml
+      - .github/workflows/selective-build-plan.yml
+      - .github/scripts/plan-selective-build.py
+      - .github/scripts/generate-dependency-graph.py
+      - .github/actions/generate-dependency-graph/action.yml
 
 permissions:
   contents: read
+  # selective-build-plan needs `pull-requests: read` (sticky-approval
+  # check, changed-files API) and `actions: read` (locating the cached
+  # dependency-graph artifact). Reusable workflows can't escalate
+  # beyond what the caller grants, so the caller must grant the same.
+  pull-requests: read
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
   cancel-in-progress: true
 
 jobs:
+  # Decide full vs targeted and (when targeted) compute the selective
+  # target list. Uploads the selective-build-comment artifact consumed
+  # by selective-build-comment.yml. Only runs for pull_request events —
+  # push to main always builds full and short-circuits below.
+  plan:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/selective-build-plan.yml
+
+  # Run the build. Defaults to full unless `plan` explicitly returns
+  # 'targeted' — so push to main, plan skipped, or plan failure all
+  # fall through to a full build (fail-open). Skipping instead would
+  # block merge with "required check missing" rather than real CI.
   linux-gcc:
     name: Build with GCC
+    needs: plan
+    if: always() && needs.plan.result != 'cancelled'
     uses: ./.github/workflows/linux-build-base.yml
+    with:
+      is-full-mode: ${{ needs.plan.outputs.mode != 'targeted' }}
+      cmake-targets: ${{ needs.plan.outputs.cmake_targets }}

@@ -64,7 +64,8 @@ class HashTableCache {
       core::QueryCtx* queryCtx,
       ContinueFuture* future);
 
-  /// Stores a built hash table and notifies waiting tasks.
+  /// Stores a built hash table in an entry created by get() and notifies
+  /// waiting tasks.
   void put(
       const std::string& key,
       std::shared_ptr<BaseHashTable> table,
@@ -72,6 +73,22 @@ class HashTableCache {
 
   /// Removes a cache entry.
   void drop(const std::string& key);
+
+  /// Adds an externally built hash table. This is used when an external system
+  /// (e.g., Gluten) pre-builds a hash table and wants Velox tasks to reuse it
+  /// via HashBuild's cache path.
+  ///
+  /// NOTE: Unlike put(), this does not complete an entry reserved by get().
+  /// Instead, it creates a complete entry for an externally built table, so the
+  /// key must not already exist in the cache.
+  std::shared_ptr<HashTableCacheEntry> add(
+      const std::string& key,
+      std::shared_ptr<BaseHashTable> table,
+      bool hasNullKeys,
+      std::shared_ptr<memory::MemoryPool> tablePool);
+
+  /// Returns true if a table exists and build is complete for the given key.
+  bool exist(const std::string& key);
 
  private:
   HashTableCache() = default;

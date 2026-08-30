@@ -1,0 +1,178 @@
+---
+slug: parquet-delta-decoding
+title: "From copyBits to SIMD: Accelerating Parquet DELTA Decoding in Velox"
+date: 2026-06-17
+authors: [jaylisde, mbasmanova, PingLiuPing]
+tags: [tech-blog, performance]
+description: "SIMD-accelerated Parquet DELTA decoding in Velox: from 8× slower than PLAIN to within 1.8×, cutting TPC-H Q12 wall time by 2.9×."
+---
+
+## TL;DR
+
+Velox's Parquet `DELTA_BINARY_PACKED` decoders exhibit approximately 8x higher
+CPU cost relative to the PLAIN and dictionary-encoded paths. On a TPC-H Q12
+scan over a DELTA-encoded `lineitem` table, decoding accounts for approximately
+5.0 s of CPU time, compared with 0.6 s for an equivalent dataset stored under
+PLAIN or dictionary encoding.
+
+To address this performance disparity, two optimizations are contributed: first,
+replacing a general-purpose bit-copy routine with a single unaligned memory
+load, eliminating per-value function-call overhead; second, introducing a
+batched decode path that leverages SIMD bit-unpack kernels to amortize
+instruction costs across multiple values.
+
+Together, these optimizations reduce Q12 scan CPU time from **5.0 s to 1.1 s**
+(a 4.5x improvement) and end-to-end wall-clock time from **1.71 s to 0.59 s**
+(a 2.9x speedup).
+
+
+## Background: DELTA encoding
+
+`DELTA_BINARY_PACKED` is Parquet's delta encoding for integers. Rather than
+storing values, it stores the *differences* between consecutive values, then
+bit-packs them. Because real integer columns are often sorted or slowly varying
+(IDs, timestamps, dates, dictionary keys), the deltas are small and pack into
+very few bits, so DELTA files are compact. The encoding is also reused
+internally: `DELTA_LENGTH_BYTE_ARRAY` decodes string lengths through one delta
+decoder, and `DELTA_BYTE_ARRAY` decodes prefix and suffix lengths through two,
+so the integer decoder sits on the string read path too.
+
+## Problem
+
+Velox's Parquet writer can opt into DELTA
+(`WriterOptions::encoding = arrow::Encoding::kDeltaBinaryPacked`, off by
+default). Re-encoding TPC-H `lineitem` as DELTA and running Q12 at SF10, the
+`lineitem` scan that costs ~0.6 s of CPU on
+PLAIN/dictionary data cost ~5.0 s on DELTA. Profiling pinned ~87% of the scan
+CPU on DELTA decoding itself, making it the clear optimization target.
+
+## Following the profile: a general-purpose bit-copy
+
+The profile pointed straight at `DeltaBpDecoder::readLong`, and specifically at
+the call it used to extract each bit-packed delta:
+
+```cpp
+bits::copyBits(
+    reinterpret_cast<const uint64_t*>(bufferStart_),
+    consumedBits,         // source bit offset
+    reinterpret_cast<uint64_t*>(&value),
+    0,                    // destination bit offset, always 0
+    deltaBitWidth_);      // at most 64
+```
+
+`bits::copyBits` is a fully general bit-range memmove: arbitrary source *and*
+destination offsets, arbitrary length, looping byte by byte. The destination
+offset is always 0 and the width is at most 64, so the call reduces to a single
+unaligned 64-bit load and shift (`bits::detail::loadBits`), plus a low-bits
+mask.
+
+`readLong` runs once per value, so collapsing a byte-loop to one load yields a
+significant improvement:
+on its own it took Q12 scan CPU from **5.0 s to 2.8 s** and wall time
+**1.71 s to 1.02 s**.
+
+## Still 4.5× off: the unpack was still scalar
+
+The single-load fix improved throughput, but DELTA scan CPU was still ~4.5× the
+PLAIN/dictionary baseline. Two costs remained: the bit-unpack still handled one
+value at a time, and the read path called the column visitor's `process()` once
+per row, paying per-row dispatch even when no filter was active. Both required
+separate solutions.
+
+<figure style={{textAlign: 'center'}}>
+  <img src="/img/parquet-delta-scalar-vs-batched.svg" alt="Scalar per-value decoding vs batched SIMD decoding of a miniblock" width="100%" />
+</figure>
+
+### Vectorizing the unpack
+
+Every value in a miniblock shares the same bit width, which makes the unpack a
+tight, predictable loop, a natural SIMD target. The solution is
+`decodeMiniBlockSimd`, a kernel templated on a compile-time `bitWidth` (shifts
+and masks become constants) and dispatched at runtime by an index-sequence fold.
+The strategy depends on the width:
+
+| bit width | strategy |
+|-----------|----------|
+| 0 | constant-delta: prefix-sum of `min_delta` only, no loads |
+| 1–16 | 4 values per iteration from one unaligned 64-bit load (`4 × bw ≤ 64`) |
+| 17–32 | 2 values per iteration via a `__uint128_t` window (lowers to an `SHRD` funnel shift on x86_64) |
+| 33–64 | scalar fallback (a single value can straddle > 64 bits after byte-misalignment; rare in practice) |
+
+The prefix sum is *fused into the unpack*: each kernel keeps a running
+`cumulative` and writes finished values straight out, so there's no second pass
+to turn deltas into values. Per the Parquet spec the arithmetic is unsigned mod
+2⁶⁴, which makes overflow well-defined and lets the compiler vectorize freely.
+
+<figure style={{textAlign: 'center'}}>
+  <img src="/img/parquet-delta-bit-unpack.svg" alt="Bit-unpack strategies: 4-value 64-bit load for widths 1-16, 128-bit funnel shift for widths 17-32" width="100%" />
+</figure>
+
+### Once per chunk invocation
+
+For the dispatch cost, `ColumnVisitor::processRun()`, a bulk variant of
+per-row `process()`, hands a decoded chunk to the visitor at once instead of
+one row at a time. For unfiltered reads the decode writes straight into the
+output with no per-row work; for filtered reads a deterministic comparison runs
+in SIMD batches.
+
+Sparse (filtered) reads decode a batch of 1024 values into a stack buffer and
+index into it by row. DELTA's prefix-sum chain forces every physical value to
+be decoded anyway (random-access to value *N* requires computing 0…*N*), so
+one sequential, cache-friendly pass followed by array indexing outperforms
+per-row seeking.
+
+### The string decoder
+
+Profiling the `DELTA_BYTE_ARRAY` path surfaced three steady-state costs in
+`DeltaByteArrayDecoder`, all removed:
+
+- Devirtualized `readString()` by removing the virtual base class.
+- Replaced `make_unique` child decoders (allocated per page) with
+  `std::optional` + `reset()`, eliminating per-page-boundary allocations.
+- Replaced the `std::string` "last value" with `std::vector<char>` + length,
+  dropping the `std::string::_M_replace` overhead (~6.5% of the string path)
+  from the prefix-share copy.
+
+These improvements were measured on a `DELTA_BYTE_ARRAY`-encoded column and
+are not reflected in the Q12 integer results below.
+
+## Where it landed
+
+TPC-H Q12, SF10, `lineitem` re-encoded as `DELTA_BINARY_PACKED`,
+`num_drivers=4 --num_repeats=5 --warmup_after_clear=true`, 5-run median:
+
+| Configuration                          |    Wall   | `lineitem` scan CPU |
+| -------------------------------------- | --------: | ------------------: |
+| PLAIN / dictionary (no DELTA)          |   0.479 s |             0.614 s |
+| DELTA, original (`copyBits`)           |   1.71 s  |             5.04 s  |
+| DELTA, after the single-load fix       |   1.02 s  |             2.76 s  |
+| **DELTA, after SIMD batched decode**   | **0.594 s** |         **1.11 s** |
+
+The first fix is a **1.7× wall** improvement; the batched SIMD path reduces
+wall time by another **42%** and scan CPU by **60%** on top. The DELTA-vs-PLAIN scan-CPU gap shrank
+from ~8× to ~1.8×. The PLAIN/dictionary path was re-measured throughout and
+stayed within noise; this work is confined to the DELTA decoders.
+
+## Takeaways
+
+- **Let the profile pick the target.** Comparing DELTA against the
+  PLAIN/dictionary scan on the *same* data made both the size of the gap and how
+  much was decoding unambiguous.
+- **General-purpose primitives carry a tax.** `bits::copyBits` is correct for
+  any offset and length; where the offset is 0 and the width ≤ 64 it collapses
+  to one load. Specializing the hot call site was the biggest win per line
+  changed.
+- **Attack each layer of overhead separately.** Batching the visitor call
+  removed per-row dispatch; SIMD kernels removed per-value unpack cost; fusing
+  the prefix sum into the unpack removed a whole pass.
+
+## Acknowledgements
+
+Thanks to <a href="https://github.com/mbasmanova">Masha Basmanova</a> and
+<a href="https://github.com/PingLiuPing">Ping Liu</a> for the detailed reviews
+that shaped the safety invariants and pushed for comprehensive bit-width test
+coverage. In particular, Masha's early performance question on
+<a href="https://github.com/facebookincubator/velox/pull/17633">#17633</a>
+directly motivated the SIMD batched decode work in
+<a href="https://github.com/facebookincubator/velox/pull/17728">#17728</a>
+that brought the gap down to ~1.8x.

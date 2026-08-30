@@ -16,14 +16,19 @@
 
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 
+#include <charconv>
 #include <chrono>
 
+#include <fmt/format.h>
 #include "velox/dwio/common/OnDemandUnitLoader.h"
 #include "velox/dwio/common/ParallelUnitLoader.h"
 #include "velox/dwio/common/TypeUtils.h"
+#include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/StreamLabels.h"
+#include "velox/dwio/dwrf/utils/ProtoUtils.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::dwrf {
@@ -41,7 +46,7 @@ class DwrfUnit : public LoadUnit {
   DwrfUnit(
       std::shared_ptr<ReaderBase> readerBase,
       const StrideIndexProvider& strideIndexProvider,
-      std::shared_ptr<dwio::common::ColumnReaderStatistics> columnReaderStats,
+      std::shared_ptr<dwio::common::SplitStats> splitStats,
       uint32_t stripeIndex,
       std::shared_ptr<dwio::common::ColumnSelector> columnSelector,
       std::shared_ptr<BitSet> projectedNodes,
@@ -50,7 +55,7 @@ class DwrfUnit : public LoadUnit {
       : stripeReaderBase_{readerBase},
         memoryPool_(readerBase->memoryPool().shared_from_this()),
         strideIndexProvider_{strideIndexProvider},
-        columnReaderStats_{std::move(columnReaderStats)},
+        splitStats_{std::move(splitStats)},
         stripeIndex_{stripeIndex},
         columnSelector_{std::move(columnSelector)},
         projectedNodes_{std::move(projectedNodes)},
@@ -99,8 +104,7 @@ class DwrfUnit : public LoadUnit {
   // ColumnReader::next(), where DwrfRowReader is guaranteed to be alive.
   const StrideIndexProvider& strideIndexProvider_;
 
-  const std::shared_ptr<dwio::common::ColumnReaderStatistics>
-      columnReaderStats_;
+  const std::shared_ptr<dwio::common::SplitStats> splitStats_;
   const uint32_t stripeIndex_;
   const std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
   const std::shared_ptr<BitSet> projectedNodes_;
@@ -166,7 +170,7 @@ void DwrfUnit::ensureDecoders() {
       stripeInfo_.numberOfRows(),
       strideIndexProvider_,
       stripeIndex_,
-      columnReaderStats_.get());
+      splitStats_.get());
 
   auto* scanSpec = options_.scanSpec().get();
   const auto& fileType = stripeReaderBase_.getReader().schemaWithId();
@@ -182,7 +186,7 @@ void DwrfUnit::ensureDecoders() {
         fileType,
         *stripeStreams_,
         streamLabels,
-        *columnReaderStats_,
+        *splitStats_,
         scanSpec,
         flatMapContext,
         /*isRoot=*/true);
@@ -265,11 +269,11 @@ DwrfRowReader::DwrfRowReader(
                     reader->schema()))},
       decodingTimeCallback_{options_.decodingTimeCallback()},
       strideIndex_{0},
-      columnReaderStats_(
-          std::make_shared<dwio::common::ColumnReaderStatistics>()),
+      splitStats_(
+          std::make_shared<dwio::common::SplitStats>(
+              dwio::common::FileFormat::DWRF)),
       currentUnit_{nullptr} {
-  columnReaderStats_->initColumnStatsCollection(
-      *getReader().schemaWithId(), options_);
+  splitStats_->initColumnStatsCollection(*getReader().schemaWithId(), options_);
   const auto& fileFooter = getReader().footer();
   const uint32_t numberOfStripes = fileFooter.stripesSize();
   currentStripe_ = numberOfStripes;
@@ -331,13 +335,14 @@ DwrfRowReader::DwrfRowReader(
     makeProjectedNodes(*getReader().schemaWithId(), *projectedNodes_);
   }
 
+  // Keep this before 'getUnitLoader()': it copies 'columnReaderOptions_' into
+  // every DwrfUnit, which then uses the copy to build its column readers.
+  columnReaderOptions_ = dwio::common::makeColumnReaderOptions(
+      readerBaseShared()->readerOptions());
   unitLoader_ = getUnitLoader();
   if (!emptyFile()) {
     getReader().loadCache();
   }
-
-  columnReaderOptions_ = dwio::common::makeColumnReaderOptions(
-      readerBaseShared()->readerOptions());
 }
 
 std::unique_ptr<ColumnReader>& DwrfRowReader::getColumnReader() {
@@ -359,7 +364,7 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
         std::make_unique<DwrfUnit>(
             /*readerBase=*/readerBaseShared(),
             /*strideIndexProvider=*/*this,
-            columnReaderStats_,
+            splitStats_,
             stripe,
             columnSelector_,
             projectedNodes_,
@@ -861,19 +866,54 @@ std::optional<size_t> DwrfRowReader::estimatedRowSize() const {
   return estimatedRowSize_;
 }
 
+namespace {
+// Returns true when every top-level field of the file's physical schema is a
+// Hive placeholder name (_col0, _col1, ...). Such files were written by old
+// Hive with no real column names in the footer, so they must be mapped to the
+// requested (table) schema by position rather than by name. An empty schema
+// returns false (nothing to map positionally).
+bool isAllHivePlaceholderNames(const std::shared_ptr<const RowType>& schema) {
+  if (schema == nullptr || schema->size() == 0) {
+    return false;
+  }
+  for (size_t i = 0; i < schema->size(); ++i) {
+    if (schema->nameOf(i).rfind("_col", 0) != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+} // namespace
+
 DwrfReader::DwrfReader(
     const ReaderOptions& options,
     std::unique_ptr<dwio::common::BufferedInput> input)
     : readerBase_(std::make_unique<ReaderBase>(options, std::move(input))) {
+  const auto mappingMode = readerBase_->readerOptions().columnMappingMode();
+  VELOX_CHECK_NE(
+      mappingMode,
+      dwio::common::ColumnMappingMode::kParquetFieldId,
+      "Parquet field ID column mapping is not supported by DWRF.");
+
   // If we are not using column names to map table columns to file columns,
   // then we use indices. In that case we need to ensure the names completely
   // match, because we are still mapping columns by names further down the
   // code. So we rename column names in the file schema to match table schema.
   // We test the options to have 'fileSchema' (actually table schema) as most
   // of the unit tests fail to provide it.
-  if ((!readerBase_->readerOptions().useColumnNamesForColumnMapping()) &&
-      (readerBase_->readerOptions().fileSchema() != nullptr)) {
-    updateColumnNamesFromTableSchema();
+  //
+  // Even in name-based mapping, a file must be mapped by position when its
+  // physical schema is made entirely of Hive placeholder names (_col0, _col1,
+  // ...) written by old Hive with no real field names, so name-based matching
+  // would find nothing.
+  if (readerBase_->readerOptions().fileSchema() != nullptr) {
+    if (mappingMode == dwio::common::ColumnMappingMode::kFieldId) {
+      updateColumnNamesFromFieldIds();
+    } else if (
+        mappingMode != dwio::common::ColumnMappingMode::kName ||
+        isAllHivePlaceholderNames(readerBase_->schema())) {
+      updateColumnNamesFromTableSchema();
+    }
   }
 }
 
@@ -883,6 +923,151 @@ void DwrfReader::updateColumnNamesFromTableSchema() {
   readerBase_->setSchema(
       std::dynamic_pointer_cast<const RowType>(
           updateColumnNames(fileSchema, tableSchema)));
+}
+
+namespace {
+
+constexpr std::string_view kIcebergFieldIdKey{"iceberg.id"};
+
+using AttributesByNode = std::
+    unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>;
+
+// Returns the Iceberg field id ("iceberg.id") attribute on the schema node with
+// the given pre-order id, if present and parseable.
+std::optional<int32_t> icebergFieldId(
+    const AttributesByNode& attributesByNode,
+    uint32_t nodeId) {
+  auto it = attributesByNode.find(nodeId);
+  if (it == attributesByNode.end()) {
+    return std::nullopt;
+  }
+  for (const auto& [key, value] : it->second) {
+    if (key == kIcebergFieldIdKey) {
+      int32_t parsed = 0;
+      const auto* begin = value.data();
+      const auto* end = begin + value.size();
+      const auto result = std::from_chars(begin, end, parsed);
+      if (result.ec == std::errc{} && result.ptr == end) {
+        return parsed;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+// Recursively rebuilds the file node's type, renaming file columns to the
+// requested (table) names that share their Iceberg field id. 'tableType' is the
+// matched requested node and 'tableChildFieldIds' holds its children's field id
+// trees. File columns without a matching requested field id are renamed to a
+// non-colliding sentinel so a downstream name match cannot bind them (this is
+// what makes drop + re-add of a column with the same name resolve correctly).
+TypePtr renameByFieldId(
+    const dwio::common::TypeWithId& fileNode,
+    const AttributesByNode& attributesByNode,
+    const TypePtr& tableType,
+    const std::vector<dwio::common::ParquetFieldId>& tableChildFieldIds) {
+  const auto& fileType = fileNode.type();
+  if (fileType->kind() != tableType->kind()) {
+    return fileType;
+  }
+
+  if (fileType->isRow()) {
+    const auto& tableRow = tableType->asRow();
+    const auto numTableChildren =
+        std::min<size_t>(tableRow.size(), tableChildFieldIds.size());
+    std::unordered_map<int32_t, size_t> tableChildByFieldId;
+    tableChildByFieldId.reserve(numTableChildren);
+    for (size_t j = 0; j < numTableChildren; ++j) {
+      tableChildByFieldId.emplace(tableChildFieldIds[j].fieldId, j);
+    }
+
+    std::vector<std::string> names;
+    std::vector<TypePtr> types;
+    names.reserve(fileNode.size());
+    types.reserve(fileNode.size());
+    for (size_t i = 0; i < fileNode.size(); ++i) {
+      const auto& fileChild = *fileNode.childAt(static_cast<uint32_t>(i));
+      const auto fieldId = icebergFieldId(attributesByNode, fileChild.id());
+      std::optional<size_t> tableChildIdx;
+      if (fieldId.has_value()) {
+        auto match = tableChildByFieldId.find(*fieldId);
+        if (match != tableChildByFieldId.end()) {
+          tableChildIdx = match->second;
+        }
+      }
+      if (tableChildIdx.has_value()) {
+        names.push_back(tableRow.nameOf(static_cast<uint32_t>(*tableChildIdx)));
+        types.push_back(renameByFieldId(
+            fileChild,
+            attributesByNode,
+            tableRow.childAt(static_cast<uint32_t>(*tableChildIdx)),
+            tableChildFieldIds[*tableChildIdx].children));
+      } else {
+        names.push_back(fmt::format("$dwrf_unmatched_{}", fileChild.id()));
+        types.push_back(fileChild.type());
+      }
+    }
+    return ROW(std::move(names), std::move(types));
+  }
+
+  if (fileType->isArray()) {
+    if (tableChildFieldIds.empty() || fileNode.size() == 0) {
+      return fileType;
+    }
+    return ARRAY(renameByFieldId(
+        *fileNode.childAt(0),
+        attributesByNode,
+        tableType->asArray().elementType(),
+        tableChildFieldIds[0].children));
+  }
+
+  if (fileType->isMap()) {
+    if (tableChildFieldIds.size() < 2 || fileNode.size() < 2) {
+      return fileType;
+    }
+    auto keyType = renameByFieldId(
+        *fileNode.childAt(0),
+        attributesByNode,
+        tableType->asMap().keyType(),
+        tableChildFieldIds[0].children);
+    auto valueType = renameByFieldId(
+        *fileNode.childAt(1),
+        attributesByNode,
+        tableType->asMap().valueType(),
+        tableChildFieldIds[1].children);
+    return MAP(std::move(keyType), std::move(valueType));
+  }
+
+  return fileType;
+}
+
+} // namespace
+
+void DwrfReader::updateColumnNamesFromFieldIds() {
+  const auto& options = readerBase_->readerOptions();
+  const auto& tableSchema = options.fileSchema();
+  const auto& fieldIds = options.fieldIds();
+  const auto& footer = readerBase_->footer();
+  // Field ids are carried as "iceberg.id" attributes on the footer types, in
+  // either the DWRF or ORC proto variant (Iceberg manifest-tags DWRF as ORC).
+  const auto attributesByNode = ProtoUtils::readAttributes(footer);
+  if (attributesByNode.empty()) {
+    // The file carries no Iceberg field-id attributes (written before field-id
+    // support, by a non-Iceberg writer, or a Hive-migrated table). Field-id
+    // resolution is impossible, so fall back to position-based name mapping
+    // (rename file columns to the requested table names by position), matching
+    // the behavior used for non-field-id column mapping. This keeps
+    // physically-present columns bound to the file instead of being treated as
+    // missing and wrongly filled with defaults/nulls.
+    updateColumnNamesFromTableSchema();
+    return;
+  }
+
+  const auto fileWithId =
+      dwio::common::TypeWithId::create(readerBase_->schema());
+  auto renamed =
+      renameByFieldId(*fileWithId, attributesByNode, tableSchema, fieldIds);
+  readerBase_->setSchema(std::dynamic_pointer_cast<const RowType>(renamed));
 }
 
 std::unique_ptr<StripeInformation> DwrfReader::getStripe(
@@ -1054,8 +1239,10 @@ uint64_t DwrfReader::getMemoryUse(
 
   // Do we need even more memory to read the footer or the metadata?
   const auto footerLength = readerBase.postScript().footerLength();
-  if (memoryBytes < footerLength + readerBase.footerSpeculativeIoSize()) {
-    memoryBytes = footerLength + readerBase.footerSpeculativeIoSize();
+  if (memoryBytes <
+      footerLength + readerBase.readerOptions().footerSpeculativeIoSize()) {
+    memoryBytes =
+        footerLength + readerBase.readerOptions().footerSpeculativeIoSize();
   }
 
   // Account for firstRowOfStripe.
@@ -1106,6 +1293,16 @@ std::unique_ptr<DwrfReader> DwrfReader::create(
     return nullptr;
   }
   return std::make_unique<DwrfReader>(options, std::move(input));
+}
+
+std::shared_ptr<dwio::common::FormatSpecificOptions>
+DwrfReaderFactory::createFormatOptions(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) const {
+  auto options = std::make_shared<DwrfOptions>();
+  options->setMaxCoalesceDistance(
+      Config::maxCoalesceDistance(connectorConfig, session));
+  return options;
 }
 
 void registerDwrfReaderFactory() {

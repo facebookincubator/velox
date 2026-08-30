@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/GetArrayStructFields.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/expression/EvalCtx.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -69,11 +70,13 @@ class GetArrayStructFieldsFunction : public exec::VectorFunction {
         arrayVec->sizes(),
         fieldResult);
 
+    VectorPtr localResult;
     if (decoded->isIdentityMapping()) {
-      result = arrayResult;
+      localResult = std::move(arrayResult);
     } else {
-      result = decoded->wrap(arrayResult, *args[0], decoded->size());
+      localResult = decoded->wrap(arrayResult, *args[0], decoded->size());
     }
+    context.moveOrCopyResult(localResult, rows, result);
   }
 
  private:
@@ -121,7 +124,7 @@ exec::ExprPtr GetArrayStructFieldsCallToSpecialForm::constructSpecialForm(
 
   auto ordinal = constantVector->valueAt(0);
 
-  VELOX_USER_CHECK_GE(
+  VELOX_CHECK_GE(
       ordinal, 0, "Invalid ordinal. Should be greater than or equal to 0.");
   auto numFields = args[0]->type()->asArray().elementType()->asRow().size();
   VELOX_USER_CHECK_LT(

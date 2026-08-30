@@ -39,7 +39,13 @@ if(VELOX_ENABLE_BENCHMARKS)
 endif()
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
-  add_executable(velox_hive_iceberg_test IcebergReadTest.cpp IcebergSplitReaderBenchmarkTest.cpp)
+  add_executable(
+    velox_hive_iceberg_test
+    IcebergPositionalDeleteTest.cpp
+    IcebergReadTest.cpp
+    IcebergSplitReaderBenchmarkTest.cpp
+    IcebergTestBase.cpp
+  )
   add_test(velox_hive_iceberg_test velox_hive_iceberg_test)
 
   target_link_libraries(
@@ -64,6 +70,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     IcebergConnectorTest.cpp
     IcebergInsertTest.cpp
     IcebergParquetStatsTest.cpp
+    IcebergSessionCredentialsE2ETest.cpp
     IcebergTestBase.cpp
     Main.cpp
     PartitionNameTest.cpp
@@ -99,8 +106,62 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest_main
   )
 
+  add_executable(velox_hive_iceberg_session_credentials_test IcebergSessionCredentialsTest.cpp)
+  add_test(velox_hive_iceberg_session_credentials_test velox_hive_iceberg_session_credentials_test)
+
+  target_link_libraries(
+    velox_hive_iceberg_session_credentials_test
+    velox_hive_iceberg_splitreader
+    velox_common_config
+    GTest::gmock
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(velox_hive_iceberg_merge_processor_test IcebergMergeProcessorTest.cpp)
+  add_test(velox_hive_iceberg_merge_processor_test velox_hive_iceberg_merge_processor_test)
+
+  target_link_libraries(
+    velox_hive_iceberg_merge_processor_test
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_vector_test_lib
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(
+    velox_hive_iceberg_merge_sink_test
+    IcebergMergeSinkTest.cpp
+    IcebergTestBase.cpp
+    Main.cpp
+  )
+  velox_add_test_headers(velox_hive_iceberg_merge_sink_test IcebergTestBase.h)
+  add_test(velox_hive_iceberg_merge_sink_test velox_hive_iceberg_merge_sink_test)
+
+  target_link_libraries(
+    velox_hive_iceberg_merge_sink_test
+    velox_exec_test_lib
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_vector_test_lib
+    velox_vector_fuzzer
+    GTest::gtest
+    GTest::gtest_main
+  )
+
   if(VELOX_ENABLE_PARQUET)
-    target_link_libraries(velox_hive_iceberg_test velox_dwio_parquet_reader)
+    target_link_libraries(
+      velox_hive_iceberg_merge_sink_test
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+    )
+
+    target_link_libraries(
+      velox_hive_iceberg_test
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+    )
 
     file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 
@@ -111,7 +172,13 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     )
   endif()
 
-  add_executable(velox_hive_iceberg_equality_delete_test EqualityDeleteFileReaderTest.cpp Main.cpp)
+  add_executable(
+    velox_hive_iceberg_equality_delete_test
+    EqualityDeleteFileReaderTest.cpp
+    IcebergTestBase.cpp
+    Main.cpp
+  )
+  velox_add_test_headers(velox_hive_iceberg_equality_delete_test IcebergTestBase.h)
   add_test(velox_hive_iceberg_equality_delete_test velox_hive_iceberg_equality_delete_test)
 
   target_link_libraries(
@@ -120,8 +187,18 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_iceberg_splitreader
     velox_exec_test_lib
     velox_dwio_common_test_utils
+    velox_vector_fuzzer
     GTest::gtest
+    GTest::gtest_main
   )
+
+  if(VELOX_ENABLE_PARQUET)
+    target_link_libraries(
+      velox_hive_iceberg_equality_delete_test
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+    )
+  endif()
 
   add_executable(velox_hive_iceberg_deletion_vector_writer_test DeletionVectorWriterTest.cpp)
   add_test(
@@ -135,28 +212,6 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_iceberg_splitreader
     velox_exec_test_lib
     velox_dwio_common_test_utils
-    GTest::gtest
-    GTest::gtest_main
-  )
-
-  add_executable(
-    velox_hive_iceberg_dwrf_insert_test
-    IcebergDwrfInsertTest.cpp
-    IcebergTestBase.cpp
-    Main.cpp
-  )
-  add_test(velox_hive_iceberg_dwrf_insert_test velox_hive_iceberg_dwrf_insert_test)
-
-  target_link_libraries(
-    velox_hive_iceberg_dwrf_insert_test
-    velox_hive_connector
-    velox_hive_iceberg_splitreader
-    velox_exec_test_lib
-    velox_dwio_common_test_utils
-    velox_dwio_dwrf_reader
-    velox_dwio_dwrf_writer
-    velox_dwio_parquet_reader
-    velox_dwio_parquet_writer
     GTest::gtest
     GTest::gtest_main
   )

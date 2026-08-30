@@ -21,6 +21,7 @@
 #include "velox/common/encode/Base64.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/FloatingPointUtil.h"
+#include "velox/type/HugeInt.h"
 
 namespace facebook::velox {
 namespace {
@@ -746,7 +747,9 @@ folly::dynamic Variant::serialize() const {
       break;
     }
     case TypeKind::HUGEINT: {
-      objValue = value<TypeKind::HUGEINT>();
+      // folly::dynamic has no 128-bit integer type. Serializing as a number
+      // would narrow the value to int64_t and silently drop the upper 64 bits.
+      objValue = std::to_string(value<TypeKind::HUGEINT>());
       break;
     }
     case TypeKind::BOOLEAN: {
@@ -852,7 +855,7 @@ Variant Variant::create(const folly::dynamic& variantobj) {
     case TypeKind::BIGINT:
       return Variant::create<TypeKind::BIGINT>(obj.asInt());
     case TypeKind::HUGEINT:
-      return Variant::create<TypeKind::HUGEINT>(obj.asInt());
+      return Variant::create<TypeKind::HUGEINT>(HugeInt::parse(obj.asString()));
     case TypeKind::BOOLEAN: {
       return Variant(obj.asBool());
     }

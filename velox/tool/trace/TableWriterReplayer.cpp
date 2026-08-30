@@ -52,7 +52,8 @@ makeHiveInsertTableHandle(
     LOG(INFO) << fmt::format("\t{}: {}", key, value);
   }
   LOG(INFO) << fmt::format(
-      "Storage format: {}", dwio::common::toString(storageFormat));
+      "Storage format: {}",
+      dwio::common::FileFormatName::toName(storageFormat));
   return std::make_shared<connector::hive::HiveInsertTableHandle>(
       inputColumns,
       std::make_shared<connector::hive::LocationHandle>(

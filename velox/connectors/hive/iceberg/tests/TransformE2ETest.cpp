@@ -209,8 +209,7 @@ class TransformE2ETest : public test::IcebergTestBase {
     auto splits = createSplitsForDirectory(outputPath);
 
     const auto plan = PlanBuilder()
-                          .startTableScan()
-                          .connectorId(test::kIcebergConnectorId)
+                          .startTableScan(test::kIcebergConnectorId)
                           .outputType(rowType)
                           .endTableScan()
                           .planNode();
@@ -228,8 +227,7 @@ class TransformE2ETest : public test::IcebergTestBase {
       const std::string& partitionFilter,
       const int32_t expectedRowCount) {
     auto scanPlan = PlanBuilder()
-                        .startTableScan()
-                        .connectorId(test::kIcebergConnectorId)
+                        .startTableScan(test::kIcebergConnectorId)
                         .outputType(rowType)
                         .endTableScan()
                         .planNode();
@@ -242,8 +240,7 @@ class TransformE2ETest : public test::IcebergTestBase {
     ASSERT_EQ(actualRowCount, expectedRowCount);
 
     const auto filterPlan = PlanBuilder()
-                                .startTableScan()
-                                .connectorId(test::kIcebergConnectorId)
+                                .startTableScan(test::kIcebergConnectorId)
                                 .outputType(rowType)
                                 .endTableScan()
                                 .filter(partitionFilter)
@@ -429,8 +426,7 @@ TEST_F(TransformE2ETest, bucket) {
   for (const auto& dir : partitionDirs) {
     auto splits = createSplitsForDirectory(dir);
     auto countPlan = PlanBuilder()
-                         .startTableScan()
-                         .connectorId(test::kIcebergConnectorId)
+                         .startTableScan(test::kIcebergConnectorId)
                          .outputType(rowType)
                          .endTableScan()
                          .planNode();
@@ -451,8 +447,7 @@ TEST_F(TransformE2ETest, bucket) {
     const int32_t expectedBucket = std::stoi(v);
 
     auto dataPlan = PlanBuilder()
-                        .startTableScan()
-                        .connectorId(test::kIcebergConnectorId)
+                        .startTableScan(test::kIcebergConnectorId)
                         .outputType(rowType)
                         .endTableScan()
                         .project({"c_varchar"})
@@ -531,8 +526,7 @@ TEST_F(TransformE2ETest, year) {
       if (name == expectedDirName) {
         foundPartition = true;
         auto datePlan = PlanBuilder()
-                            .startTableScan()
-                            .connectorId(test::kIcebergConnectorId)
+                            .startTableScan(test::kIcebergConnectorId)
                             .outputType(rowType)
                             .endTableScan()
                             .filter(yearFilter(year))
@@ -543,8 +537,7 @@ TEST_F(TransformE2ETest, year) {
                                      .countResults();
 
         auto countPlan = PlanBuilder()
-                             .startTableScan()
-                             .connectorId(test::kIcebergConnectorId)
+                             .startTableScan(test::kIcebergConnectorId)
                              .outputType(rowType)
                              .endTableScan()
                              .planNode();
@@ -700,8 +693,7 @@ TEST_F(TransformE2ETest, multipleTransformsOnSameColumn) {
         // Verify the partition has data.
         auto splits = createSplitsForDirectory(thirdDir);
         auto countPlan = PlanBuilder()
-                             .startTableScan()
-                             .connectorId(test::kIcebergConnectorId)
+                             .startTableScan(test::kIcebergConnectorId)
                              .outputType(rowType)
                              .endTableScan()
                              .planNode();
@@ -779,8 +771,7 @@ TEST_F(TransformE2ETest, dateIdentityPartitionWithFilter) {
   };
 
   auto filterPlan = PlanBuilder()
-                        .startTableScan()
-                        .connectorId(test::kIcebergConnectorId)
+                        .startTableScan(test::kIcebergConnectorId)
                         .outputType(rowType)
                         .assignments(assignments)
                         .remainingFilter("c_date = DATE '2025-02-28'")

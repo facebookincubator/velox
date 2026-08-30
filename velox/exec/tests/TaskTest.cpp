@@ -15,6 +15,8 @@
  */
 
 #include "velox/exec/Task.h"
+#include "folly/OperationCancelled.h"
+#include "folly/synchronization/Baton.h"
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
@@ -26,7 +28,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
-#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -512,10 +514,34 @@ class TestShouldYieldOperator : public exec::Operator {
   RowVectorPtr input_;
   bool shouldYieldResult_{false};
 };
+
 } // namespace
 
 class TaskTest : public HiveConnectorTestBase {
  protected:
+  std::shared_ptr<Task> createTaskWithSpillDirectory(
+      const std::string& spillDirectory) {
+    auto data = makeRowVector({makeFlatVector<int32_t>({1})});
+    return Task::create(
+        "spill-directory-lifecycle",
+        PlanBuilder().values({data}).planFragment(),
+        0,
+        core::QueryCtx::create(driverExecutor_.get()),
+        Task::ExecutionMode::kParallel,
+        [](RowVectorPtr, bool, ContinueFuture*) {
+          return BlockingReason::kNotBlocked;
+        },
+        0,
+        common::SpillDiskOptions{
+            .spillDirPath = spillDirectory,
+            .spillDirCreated = false,
+            .spillDirCreateCb = [spillDirectory]() {
+              auto fs = filesystems::getFileSystem(spillDirectory, nullptr);
+              fs->mkdir(spillDirectory);
+              return spillDirectory;
+            }});
+  }
+
   static std::pair<std::shared_ptr<exec::Task>, std::vector<RowVectorPtr>>
   executeSerial(
       core::PlanFragment plan,
@@ -623,6 +649,84 @@ TEST_F(TaskTest, createdCount) {
   task->noMoreSplits("0");
   waitForTaskCompletion(task.get());
   ASSERT_EQ(Task::numCreatedTasks(), createdCount + 1);
+}
+
+TEST_F(TaskTest, stateChangeFutureOnSplitQueueDrain) {
+  // Draining the scan split queue while more splits may still arrive resolves
+  // stateChangeFuture, so a coordinator's status poll can refill the queue
+  // before the task starves. Serial next() requires noMoreSplits up front,
+  // which would gate the notification, so exercise the consume path directly.
+  auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {data});
+  auto task = Task::create(
+      "task-1",
+      PlanBuilder().tableScan(asRowType(data->type())).planFragment(),
+      0,
+      core::QueryCtx::create(),
+      Task::ExecutionMode::kSerial,
+      exec::Consumer{});
+  task->addSplit("0", exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+  ASSERT_EQ(task->taskStats().numQueuedTableScanSplits, 1);
+
+  auto future = task->stateChangeFuture(0);
+  EXPECT_FALSE(future.isReady());
+
+  exec::Split split;
+  ContinueFuture splitFuture = ContinueFuture::makeEmpty();
+  EXPECT_EQ(
+      task->getSplitOrFuture(
+          /*driverId=*/0,
+          kUngroupedGroupId,
+          "0",
+          /*maxPreloadSplits=*/0,
+          /*preload=*/nullptr,
+          split,
+          splitFuture),
+      BlockingReason::kNotBlocked);
+  EXPECT_EQ(task->taskStats().numQueuedTableScanSplits, 0);
+  EXPECT_TRUE(future.isReady());
+
+  task->requestCancel().wait();
+}
+
+TEST_F(TaskTest, stateChangeFutureNotFiredWhenNoMoreSplits) {
+  // After noMoreSplits there is nothing left to refill, so draining the scan
+  // split queue carries no actionable signal and does not resolve
+  // stateChangeFuture.
+  auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {data});
+  auto task = Task::create(
+      "task-1",
+      PlanBuilder().tableScan(asRowType(data->type())).planFragment(),
+      0,
+      core::QueryCtx::create(),
+      Task::ExecutionMode::kSerial,
+      exec::Consumer{});
+  task->addSplit("0", exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+  task->noMoreSplits("0");
+  ASSERT_EQ(task->taskStats().numQueuedTableScanSplits, 1);
+
+  auto future = task->stateChangeFuture(0);
+  EXPECT_FALSE(future.isReady());
+
+  exec::Split split;
+  ContinueFuture splitFuture = ContinueFuture::makeEmpty();
+  EXPECT_EQ(
+      task->getSplitOrFuture(
+          /*driverId=*/0,
+          kUngroupedGroupId,
+          "0",
+          /*maxPreloadSplits=*/0,
+          /*preload=*/nullptr,
+          split,
+          splitFuture),
+      BlockingReason::kNotBlocked);
+  EXPECT_EQ(task->taskStats().numQueuedTableScanSplits, 0);
+  EXPECT_FALSE(future.isReady());
+
+  task->requestCancel().wait();
 }
 
 TEST_F(TaskTest, wrongPlanNodeForSplit) {
@@ -1061,6 +1165,43 @@ TEST_F(TaskTest, serialExecution) {
   VELOX_ASSERT_THROW(executeSerial(plan), "division by zero");
 }
 
+TEST_F(TaskTest, serialExecutionOutputPool) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(10, [](auto row) { return row; }),
+  });
+
+  auto outputPool =
+      memory::memoryManager()->addLeafPool("serialExecutionOutputPool");
+
+  CursorParameters params;
+  params.serialExecution = true;
+  params.outputPool = outputPool;
+  params.planNode = PlanBuilder().values({data}).planNode();
+
+  auto cursor = TaskCursor::create(params);
+  ASSERT_TRUE(cursor->moveNext());
+  EXPECT_EQ(cursor->current()->pool(), outputPool.get());
+}
+
+TEST_F(TaskTest, serialExecutionOutputPoolZeroCopy) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(10, [](auto row) { return row; }),
+  });
+
+  auto outputPool =
+      memory::memoryManager()->addLeafPool("serialExecutionOutputPoolZeroCopy");
+
+  CursorParameters params;
+  params.serialExecution = true;
+  params.outputPool = outputPool;
+  params.copyResult = false;
+  params.planNode = PlanBuilder().values({data}).planNode();
+
+  auto cursor = TaskCursor::create(params);
+  ASSERT_TRUE(cursor->moveNext());
+  EXPECT_NE(cursor->current()->pool(), outputPool.get());
+}
+
 // The purpose of the test is to check the running task list APIs.
 TEST_F(TaskTest, runningTaskList) {
   const auto data = makeRowVector({
@@ -1320,7 +1461,7 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
                   .project({"c0 % 10"})
                   .partitionedOutputBroadcast({})
                   .planFragment();
-  auto bufferManager = OutputBufferManager::getInstanceRef();
+  auto bufferManager = DefaultOutputBufferManager::getInstanceRef();
   {
     auto task = Task::create(
         "t0",
@@ -1360,6 +1501,39 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
     // ignored.
     ASSERT_FALSE(task->updateOutputBuffers(15, true));
   }
+}
+
+TEST_F(TaskTest, taskStatsPreserveFinalOutputBufferStats) {
+  constexpr int32_t numBatches = 10;
+  std::vector<RowVectorPtr> dataBatches;
+  dataBatches.reserve(numBatches);
+  const int numRows = numBatches * 3;
+  for (int32_t i = 0; i < numBatches; ++i) {
+    dataBatches.push_back(makeRowVector({makeFlatVector<int64_t>({0, 1, 10})}));
+  }
+
+  auto plan =
+      PlanBuilder().values(dataBatches).partitionedOutput({}, 1).planNode();
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = core::QueryCtx::create(executor_.get());
+  auto cursor = TaskCursor::create(params);
+  Task* task = cursor->task().get();
+  while (cursor->moveNext()) {
+  }
+
+  task->requestCancel();
+  waitForTaskCompletion(task);
+
+  const auto taskStats = task->taskStats();
+  ASSERT_TRUE(taskStats.outputBufferStats.has_value());
+  const auto& outputStats = taskStats.outputBufferStats.value();
+  EXPECT_EQ(outputStats.kind, core::PartitionedOutputNode::Kind::kPartitioned);
+  EXPECT_EQ(outputStats.totalRowsSent, numRows);
+  EXPECT_GT(outputStats.totalPagesSent, 0);
+  EXPECT_GT(outputStats.bufferedBytes, 0);
+  EXPECT_EQ(outputStats.bufferedPages, outputStats.totalPagesSent);
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
@@ -1758,7 +1932,11 @@ class TaskPauseTest : public TaskTest {
       try {
         while (cursor_->moveNext()) {
         };
-      } catch (VeloxRuntimeError&) {
+      } catch (const VeloxRuntimeError&) {
+        // Task errored.
+      } catch (const folly::OperationCancelled&) {
+        // Task cancelled: requestCancel() now surfaces cooperative
+        // cancellation.
       }
     });
 
@@ -2094,9 +2272,9 @@ TEST_F(TaskTest, spillDirectoryCallback) {
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
-TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
-  // Marks the spill directory as not already created and ensures that the Task
-  // handles creating it on first use and eventually deleting it on destruction.
+DEBUG_ONLY_TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
+  // Verifies that the Task creates the spill directory on first use and
+  // removes it after successful completion once all drivers close.
   auto data = makeRowVector({
       makeFlatVector<int64_t>(1'000, [](auto row) { return row % 300; }),
       makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
@@ -2121,6 +2299,11 @@ TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
 
   auto cursor = TaskCursor::create(params);
   std::shared_ptr<Task> task = cursor->task();
+  folly::Baton<> spillDirectoryRemoved;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::removeSpillDirectoryIfExists",
+      std::function<void(Task*)>(
+          [&](Task* /* unused */) { spillDirectoryRemoved.post(); }));
 
   TestScopedSpillInjection scopedSpillInjection(100);
   while (cursor->moveNext()) {
@@ -2130,8 +2313,26 @@ TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
   auto taskStats = exec::toPlanStats(task->taskStats());
   auto& stats = taskStats.at(aggrNodeId);
   ASSERT_GT(stats.spilledRows, 0);
+  const auto spillDirectory = task->spillDirectory();
+  auto fs = filesystems::getFileSystem(spillDirectory, nullptr);
+  ASSERT_TRUE(spillDirectoryRemoved.try_wait_for(std::chrono::seconds(5)));
+  EXPECT_FALSE(fs->exists(spillDirectory));
   cursor.reset(); // ensure 'task' has no other shared pointer.
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+}
+
+TEST_F(TaskTest, spillDirectoryCleanupOnTaskDestruction) {
+  const auto rootTempDir = TempDirectoryPath::create();
+  const auto spillDirectory = rootTempDir->getPath() + "/spill";
+  auto task = createTaskWithSpillDirectory(spillDirectory);
+  ASSERT_EQ(task->getOrCreateSpillDirectory(), spillDirectory);
+
+  task->requestCancel().wait();
+
+  auto fs = filesystems::getFileSystem(spillDirectory, nullptr);
+  EXPECT_TRUE(fs->exists(spillDirectory));
+  task.reset();
+  EXPECT_FALSE(fs->exists(spillDirectory));
 }
 
 TEST_F(TaskTest, spillDirNotCreated) {

@@ -47,12 +47,12 @@ class CudfBatchConcat : public CudfOperatorBase {
  protected:
   void doAddInput(RowVectorPtr input) override;
   RowVectorPtr doGetOutput() override;
+  void doClose() override;
 
  private:
   exec::DriverCtx* const driverCtx_;
   std::vector<CudfVectorPtr> buffer_;
-  std::queue<std::unique_ptr<cudf::table>> outputQueue_;
-  rmm::cuda_stream_view outputQueueStream_{rmm::cuda_stream_default};
+  std::queue<CudfVectorPtr> outputQueue_;
   size_t currentNumRows_{0};
   const size_t targetRows_{0};
 };

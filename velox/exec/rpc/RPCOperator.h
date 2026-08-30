@@ -104,17 +104,33 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcWaitWallNanos{"rpcWaitWallNanos"};
   static inline const std::string kRpcBackpressureWaitNanos{
       "rpcBackpressureWaitNanos"};
+  static inline const std::string kRpcCongestionWindowFinal{
+      "rpcCongestionWindowFinal"};
+  static inline const std::string kRpcCongestionShrinks{"rpcCongestionShrinks"};
+  static inline const std::string kRpcBaselineRttNanos{"rpcBaselineRttNanos"};
+  static inline const std::string kRpcPeakInFlight{"rpcPeakInFlight"};
+  static inline const std::string kRpcRttMinWallNanos{"rpcRttMinWallNanos"};
+  static inline const std::string kRpcRttMaxWallNanos{"rpcRttMaxWallNanos"};
+  static inline const std::string kRpcRttCount{"rpcRttCount"};
+  static inline const std::string kRpcStreamingMode{"rpcStreamingMode"};
+  static inline const std::string kRpcErrorKindRateLimited{
+      "rpcErrorKindRateLimited"};
+  static inline const std::string kRpcErrorKindTimeout{"rpcErrorKindTimeout"};
+  static inline const std::string kRpcErrorKindBackendError{
+      "rpcErrorKindBackendError"};
+  // Process-global per-tier RPCRateLimiter observability (adaptive cap
+  // trajectory), snapshotted at close(). The rpcCongestion* stats above are the
+  // per-DRIVER window; these are the shared rate-limiter cap.
+  static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};
+  static inline const std::string kRpcRateLimiterPeakPending{
+      "rpcRateLimiterPeakPending"};
+  static inline const std::string kRpcRateLimiterMinCap{"rpcRateLimiterMinCap"};
 
  private:
   /// Flush accumulated batch rows via function_->flushBatch().
   /// Called when threshold is reached or at noMoreInput/drain time.
   /// @param maxRows Maximum rows to flush. 0 means flush all.
   void flushBatchRequests(int32_t maxRows = 0);
-
-  /// Build output RowVector from ready rows (PER_ROW mode).
-  /// Supports multiple rows via batched drain for pipeline efficiency.
-  RowVectorPtr buildOutputFromReadyRows(
-      std::vector<RPCState::ReadyRow>& readyRows);
 
   /// Build output RowVector from a ready batch (BATCH mode).
   RowVectorPtr buildOutputFromReadyBatch(RPCState::ReadyBatch& readyBatch);
@@ -129,6 +145,20 @@ class RPCOperator : public exec::Operator {
   /// buildOutputVector().
   void initOutputProjections();
 
+  // Increment the per-error-kind counter for a single response.
+  void recordErrorKind(velox::rpc::RPCErrorKind kind);
+
+  // PER_ROW admission control: dispatch buffered rows up to the
+  // available headroom = min(per-driver window headroom, process-global
+  // rate-limiter headroom). Called from addInput()/getOutput()/isBlocked() so a
+  // whole input vector is dripped at the sustainable rate instead of blasted.
+  void dispatchPendingRows();
+
+  // Whether the PER_ROW dispatch buffer still has undispatched rows.
+  bool hasPendingRows() const {
+    return pendingCursor_ < pendingNumRows_;
+  }
+
   /// Record runtime stats into operator stats. Called from close().
   void recordRuntimeStats();
 
@@ -139,9 +169,20 @@ class RPCOperator : public exec::Operator {
   // Tier key for per-tier rate limiting (from function_->tierKey()).
   std::string tierKey_;
 
-  // Precomputed argument column indices for reading from input in addInput().
-  // Initialized in initialize() by looking up argumentColumns in source type.
-  std::vector<column_index_t> argumentColumnIndices_;
+  // Precomputed per-argument sources, in call()->inputs() order. Built once in
+  // initialize() by walking the RPC call's argument expressions. A
+  // FieldAccessTypedExpr argument resolves to a source column index
+  // (isConstant=false); a ConstantTypedExpr argument materializes a
+  // single-element constant vector (isConstant=true), which addInput() wraps to
+  // the batch row count so the function receives the same arg list as a column.
+  struct ArgumentSource {
+    bool isConstant;
+    // Valid when !isConstant: index of the argument column in the source type.
+    column_index_t sourceChannel{0};
+    // Valid when isConstant: single-element constant vector for the literal.
+    VectorPtr constantValue{};
+  };
+  std::vector<ArgumentSource> argumentSources_;
 
   // Collected row locations for current batch (BATCH mode).
   // Passed to addPendingBatch() when the batch is flushed.
@@ -152,16 +193,35 @@ class RPCOperator : public exec::Operator {
   std::vector<int64_t> batchRowIds_;
 
   int64_t numRequestsDispatched_{0};
-  int64_t numResponsesCollected_{0};
+  int64_t numResponsesReceived_{0};
   int64_t numErrors_{0};
+  // Per-error-kind breakdown of numErrors_, populated by recordErrorKind().
+  int64_t numErrorsRateLimited_{0};
+  int64_t numErrorsTimeout_{0};
+  int64_t numErrorsBackend_{0};
 
   // Global row ID counter for unique IDs across all input batches.
   int64_t globalRowIdCounter_{0};
+
+  // PER_ROW admission-controlled dispatch buffer. addInput() stores the
+  // input vector's args here (flattened, shared across its rows) and records
+  // the stored batch index; dispatchPendingRows() drips rows [pendingCursor_,
+  // pendingNumRows_) in headroom-sized chunks. Empty (pendingCursor_ ==
+  // pendingNumRows_ == 0) when nothing is pending.
+  std::vector<VectorPtr> pendingArgs_;
+  int32_t pendingBatchIndex_{-1};
+  vector_size_t pendingCursor_{0};
+  vector_size_t pendingNumRows_{0};
 
   // Dispatch batch size for pipelined BATCH mode.
   // 0 = collect all rows, fire once in noMoreInput().
   // > 0 = fire flushBatch() every N rows during addInput().
   int32_t dispatchBatchSize_{0};
+
+  // Max rows per output vector, from QueryConfig::preferredOutputBatchRows (set
+  // in initialize()). The kPerRow path drains at most this many ready rows per
+  // getOutput() call.
+  int32_t outputBatchRows_{1'024};
 
   // Claimed rows/batch from isBlocked() for use in getOutput().
   // State is derived from these: if non-empty, we have output ready.

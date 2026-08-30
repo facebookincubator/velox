@@ -38,7 +38,14 @@ class RowNumber : public Operator {
   RowVectorPtr getOutput() override;
 
   bool needsInput() const override {
-    return !noMoreInput_ && !finishedEarly_;
+    // Guard on 'input_ == nullptr': RowNumber buffers a single input batch in
+    // 'input_' and addInput() overwrites it. Without this guard, when a
+    // downstream operator applies backpressure (e.g. a BATCH-mode RPC operator
+    // returning needsInput()=false while async requests are in flight), the
+    // Driver keeps feeding this operator and addInput() silently overwrites the
+    // undrained batch, dropping its rows. Mirrors the single-buffer pattern in
+    // Expand/MarkDistinct/Unnest/AssignUniqueId.
+    return !noMoreInput_ && !finishedEarly_ && input_ == nullptr;
   }
 
   BlockingReason isBlocked(ContinueFuture* /* unused */) override {

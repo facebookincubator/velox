@@ -120,6 +120,10 @@ class Allocation {
     other.clear();
   }
 
+  /// Copies 'bytes' from 'source' to 'target'.
+  static void
+  copy(const Allocation& source, Allocation& target, uint64_t bytes);
+
   MachinePageCount numPages() const {
     return numPages_;
   }
@@ -194,6 +198,8 @@ class Allocation {
   VELOX_FRIEND_TEST(MemoryAllocatorTest, allocationClass2);
   VELOX_FRIEND_TEST(AllocationTest, append);
   VELOX_FRIEND_TEST(AllocationTest, appendMove);
+  VELOX_FRIEND_TEST(AllocationTest, copy);
+  VELOX_FRIEND_TEST(AllocationTest, copyOutOfRange);
   VELOX_FRIEND_TEST(AllocationTest, maxPageRunLimit);
 };
 

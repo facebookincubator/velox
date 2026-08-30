@@ -469,24 +469,27 @@ DEBUG_ONLY_TEST_F(AsyncSourceTest, concurrentMoveSteal) {
         secondMoveComplete.wait();
       }));
 
-  // Thread 1: First move() - will wait for making and then get blocked by
-  // TestValue.
+  // Thread 1: prepare() - starts making the item.
+  auto prepareThread = std::thread([&]() { asyncSource->prepare(); });
+
+  // Wait for making to start so state is kMaking.
+  ASSERT_TRUE(makingStarted.try_wait_for(1s));
+
+  // Thread 2: First move() - starts after prepare has set kMaking, so it will
+  // create a promise and enter makeWait (not take the kInit path).
   auto firstMoveThread = std::thread([&]() {
     firstMoveHolder = asyncSource->move();
     firstMoveResult = firstMoveHolder.get();
   });
 
-  // Thread 2: prepare() - starts making the item.
-  auto prepareThread = std::thread([&]() { asyncSource->prepare(); });
+  // Wait for first move to enter makeWait.
+  ASSERT_TRUE(firstMoveWaiting.try_wait_for(1s));
 
-  // Wait for making to start.
-  ASSERT_TRUE(makingStarted.try_wait_for(1s));
-
-  // Let making complete - this will signal the first move's promise.
+  // Now let making complete - this will signal the first move's promise.
   makingContinue.post();
 
-  // Wait for first move to be signaled and about to re-acquire lock.
-  ASSERT_TRUE(firstMoveWaiting.try_wait_for(1s));
+  // Wait for prepare to finish so state is kPrepared.
+  prepareThread.join();
 
   // Thread 3: Second move() - steals the item while first move is blocked.
   auto secondMoveThread = std::thread([&]() {
@@ -497,7 +500,6 @@ DEBUG_ONLY_TEST_F(AsyncSourceTest, concurrentMoveSteal) {
 
   firstMoveThread.join();
   secondMoveThread.join();
-  prepareThread.join();
 
   // Second move should have stolen the item.
   EXPECT_NE(secondMoveResult.load(), nullptr);
@@ -546,30 +548,33 @@ DEBUG_ONLY_TEST_F(AsyncSourceTest, concurrentMoveCloseRace) {
         closeComplete.wait();
       }));
 
-  // Thread 1: move() - will wait for making and then get blocked by TestValue.
+  // Thread 1: prepare() - starts making the item.
+  auto prepareThread = std::thread([&]() { asyncSource->prepare(); });
+
+  // Wait for making to start so state is kMaking.
+  ASSERT_TRUE(makingStarted.try_wait_for(1s));
+
+  // Thread 2: move() - starts after prepare has set kMaking, so it will
+  // create a promise and enter makeWait (not take the kInit path).
   auto moveThread = std::thread([&]() {
     moveHolder = asyncSource->move();
     moveResult = moveHolder.get();
   });
 
-  // Thread 2: prepare() - starts making the item.
-  auto prepareThread = std::thread([&]() { asyncSource->prepare(); });
+  // Wait for move to enter makeWait.
+  ASSERT_TRUE(moveWaiting.try_wait_for(1s));
 
-  // Wait for making to start.
-  ASSERT_TRUE(makingStarted.try_wait_for(1s));
-
-  // Let making complete - this will signal move's promise.
+  // Now let making complete - this will signal move's promise.
   makingContinue.post();
 
-  // Wait for move to be signaled and about to re-acquire lock.
-  ASSERT_TRUE(moveWaiting.try_wait_for(1s));
+  // Wait for prepare to finish so state is kPrepared before calling close.
+  prepareThread.join();
 
   // close() comes in and closes the item while move is blocked.
   asyncSource->close();
   closeComplete.post();
 
   moveThread.join();
-  prepareThread.join();
 
   // move() should get nothing because close() grabbed the item first.
   EXPECT_EQ(moveResult.load(), nullptr);
@@ -629,7 +634,8 @@ DEBUG_ONLY_TEST_F(AsyncSourceTest, concurrentCloseMoveRace) {
   // Let making complete - this will signal close's promise.
   makingContinue.post();
 
-  std::this_thread::sleep_for(std::chrono::seconds(1)); // NOLINT
+  // Wait for prepare to finish so state is kPrepared before calling move.
+  prepareThread.join();
 
   // move() comes in and takes the item while close is blocked.
   moveHolder = asyncSource->move();
@@ -637,7 +643,6 @@ DEBUG_ONLY_TEST_F(AsyncSourceTest, concurrentCloseMoveRace) {
   moveComplete.post();
 
   closeThread.join();
-  prepareThread.join();
 
   // move() should have taken the item.
   EXPECT_NE(moveResult.load(), nullptr);

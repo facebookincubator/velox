@@ -16,134 +16,195 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/common/file/FileSystems.h"
-#include "velox/common/testutil/TempDirectoryPath.h"
-#include "velox/connectors/ConnectorRegistry.h"
-#include "velox/connectors/hive/iceberg/IcebergConnector.h"
-#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
-#include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 
-namespace facebook::velox::connector::hive::iceberg {
+namespace facebook::velox::connector::hive::iceberg::test {
 
-using namespace facebook::velox::exec::test;
+using exec::test::assertEqualResults;
+using exec::test::AssertQueryBuilder;
 
-namespace {
+// ---------------------------------------------------------------------------
+// FileWriteMode — parameterizes file format and whether iceberg.id field IDs
+// are stamped in the written files.
+//
+// Valid combinations:
+//   {DWRF,    withFieldIds=false}  — plain DWRF, positional-fallback path
+//   {DWRF,    withFieldIds=true }  — DWRF with iceberg.id attrs, kFieldId path
+//   {PARQUET, withFieldIds=true }  — Parquet with field IDs (only valid mode)
+// ---------------------------------------------------------------------------
+struct FileWriteMode {
+  dwio::common::FileFormat format;
+  bool withFieldIds;
 
-const std::string kIcebergConnectorId = "test-iceberg-eq-delete";
+  std::string toString() const {
+    const std::string fmt =
+        format == dwio::common::FileFormat::PARQUET ? "Parquet" : "Dwrf";
+    return fmt + (withFieldIds ? "_FieldId" : "_Positional");
+  }
+};
 
-} // namespace
-
-/// End-to-end tests for equality deletes via the IcebergSplitReader.
-/// These tests write DWRF data files and delete files, then execute
-/// table scans verifying that matching rows are filtered out.
-class EqualityDeleteFileReaderTest : public HiveConnectorTestBase {
+// ---------------------------------------------------------------------------
+// EqualityDeleteFileReaderTest
+//
+// Non-parameterized base fixture.  Partition-column and evolved-schema tests
+// live here as TEST_F.  The parameterized class inherits this.
+// ---------------------------------------------------------------------------
+class EqualityDeleteFileReaderTest : public IcebergTestBase {
  protected:
-  void SetUp() override {
-    HiveConnectorTestBase::SetUp();
-    IcebergConnectorFactory icebergFactory;
-    auto icebergConnector = icebergFactory.newConnector(
-        kIcebergConnectorId,
-        std::make_shared<config::ConfigBase>(
-            std::unordered_map<std::string, std::string>()),
-        ioExecutor_.get());
-    connector::ConnectorRegistry::global().insert(
-        icebergConnector->connectorId(), icebergConnector);
+  /// Writes a file in the format described by 'mode'. When
+  /// Writes a file according to 'mode':
+  ///   DWRF  + withFieldIds=false  — plain DWRF, no iceberg.id attributes
+  ///                                  (positional fallback in DwrfReader)
+  ///   DWRF  + withFieldIds=true   — DWRF with iceberg.id footer attributes
+  ///                                  (kFieldId / renameByFieldId path)
+  ///   PARQUET + withFieldIds=true — Parquet with field_id metadata stamped
+  ///                                  (kParquetFieldId path)
+  ///   PARQUET + withFieldIds=false— Parquet without field_id metadata;
+  ///                                  buildFieldIds() returns empty so
+  ///                                  kParquetFieldId is not activated and the
+  ///                                  reader uses kPosition (ordinal binding).
+  std::shared_ptr<common::testutil::TempFilePath> writeFile(
+      const std::vector<RowVectorPtr>& data,
+      const std::vector<int32_t>& fieldIds,
+      const FileWriteMode& mode) {
+    if (mode.format == dwio::common::FileFormat::PARQUET) {
+#ifdef VELOX_ENABLE_PARQUET
+      // Pass fieldIds only when the mode wants them stamped; empty vector means
+      // no field_id metadata in the Parquet schema -> kPosition mode.
+      return writeParquetFile(
+          data, mode.withFieldIds ? fieldIds : std::vector<int32_t>{});
+#else
+      VELOX_FAIL("Parquet support is not enabled");
+#endif
+    }
+    return mode.withFieldIds ? writeDwrfFileWithFieldIds(data, fieldIds)
+                             : writeDataFile(data);
   }
 
-  void TearDown() override {
-    connector::ConnectorRegistry::global().erase(kIcebergConnectorId);
-    HiveConnectorTestBase::TearDown();
-  }
-
-  uint64_t getFileSize(const std::string& path) {
-    return filesystems::getFileSystem(path, nullptr)
-        ->openFileForRead(path)
-        ->size();
-  }
-
-  /// Writes a DWRF data file containing the given vectors.
-  std::shared_ptr<common::testutil::TempFilePath> writeDataFile(
-      const std::vector<RowVectorPtr>& data) {
-    auto file = common::testutil::TempFilePath::create();
-    writeToFile(file->getPath(), data);
-    return file;
-  }
-
-  /// Writes a DWRF delete file containing the equality delete rows.
-  std::shared_ptr<common::testutil::TempFilePath> writeEqDeleteFile(
-      const std::vector<RowVectorPtr>& deleteData) {
-    auto file = common::testutil::TempFilePath::create();
-    writeToFile(file->getPath(), deleteData);
-    return file;
-  }
-
-  /// Creates splits with equality delete files attached.
-  std::vector<std::shared_ptr<ConnectorSplit>> makeSplits(
-      const std::string& dataFilePath,
-      const std::vector<IcebergDeleteFile>& deleteFiles = {},
-      int64_t dataSequenceNumber = 0) {
-    return makeSplits(
-        dataFilePath,
-        /*partitionKeys=*/{},
-        deleteFiles,
-        dataSequenceNumber);
-  }
-
-  /// Creates splits with equality delete files and partition keys attached.
-  /// Use this overload to exercise the equality-delete augmentation for
-  /// partition columns missing from the user's projection.
+  /// Creates splits for the data file using the format in 'mode', attaching
+  /// delete files and (optionally) partition keys.
   std::vector<std::shared_ptr<ConnectorSplit>> makeSplits(
       const std::string& dataFilePath,
       const std::unordered_map<std::string, std::optional<std::string>>&
           partitionKeys,
-      const std::vector<IcebergDeleteFile>& deleteFiles,
-      int64_t dataSequenceNumber = 0) {
-    auto fileSize = getFileSize(dataFilePath);
-    return {std::make_shared<HiveIcebergSplit>(
-        kIcebergConnectorId,
+      const FileWriteMode& mode,
+      const std::vector<IcebergDeleteFile>& deleteFiles = {},
+      int64_t dataSequenceNumber = 0,
+      const std::unordered_map<int32_t, std::optional<std::string>>&
+          identityPartitionKeys = {}) {
+    fileFormat_ = mode.format; // makeIcebergSplits uses fileFormat_
+    return makeIcebergSplits(
         dataFilePath,
-        dwio::common::FileFormat::DWRF,
-        0,
-        fileSize,
-        partitionKeys,
-        std::nullopt,
-        std::unordered_map<std::string, std::string>{},
-        nullptr,
-        /*cacheable=*/true,
         deleteFiles,
-        std::unordered_map<std::string, std::string>{},
-        std::nullopt,
-        dataSequenceNumber)};
+        partitionKeys,
+        /*splitCount=*/1,
+        /*infoColumns=*/{},
+        dataSequenceNumber,
+        identityPartitionKeys);
   }
 
-  /// Builds a table scan plan node with the given schema.
-  core::PlanNodePtr makeTableScanPlan(const RowTypePtr& rowType) {
-    return makeTableScanPlan(rowType, rowType);
-  }
-
-  /// Builds a table scan plan node with separate output and table column
-  /// schemas. Use this when the user's projection ('outputType') does not
-  /// contain every column referenced by an equality delete file
-  /// ('dataColumns' must contain the full table schema so the equality
-  /// column resolution can map field IDs to names).
-  core::PlanNodePtr makeTableScanPlan(
-      const RowTypePtr& outputType,
-      const RowTypePtr& dataColumns) {
-    return PlanBuilder()
-        .startTableScan()
-        .connectorId(kIcebergConnectorId)
-        .outputType(outputType)
-        .dataColumns(dataColumns)
-        .endTableScan()
-        .planNode();
+  /// Builds an IcebergDeleteFile descriptor.
+  IcebergDeleteFile makeDeleteFile(
+      const std::string& path,
+      const std::vector<int32_t>& equalityFieldIds,
+      dwio::common::FileFormat format,
+      int64_t recordCount = 2,
+      int64_t deleteSeqNum = 0) {
+    return IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        path,
+        format,
+        recordCount,
+        getFileSize(path),
+        equalityFieldIds,
+        /*lowerBounds=*/{},
+        /*upperBounds=*/{},
+        deleteSeqNum);
   }
 };
 
+// ---------------------------------------------------------------------------
+// EqualityDeleteFileReaderTestP — parameterized over FileWriteMode.
+//
+// Every TEST_P runs three times:
+//   1. Dwrf_Positional — DWRF, no field IDs     (kPosition fallback)
+//   2. Dwrf_FieldId    — DWRF, iceberg.id attrs (kFieldId path)
+//   3. Parquet_FieldId — Parquet field_id       (kParquetFieldId path)
+// ---------------------------------------------------------------------------
+class EqualityDeleteFileReaderTestP
+    : public EqualityDeleteFileReaderTest,
+      public ::testing::WithParamInterface<FileWriteMode> {
+ protected:
+  void SetUp() override {
+#ifndef VELOX_ENABLE_PARQUET
+    if (GetParam().format == dwio::common::FileFormat::PARQUET) {
+      GTEST_SKIP() << "Parquet support not enabled";
+    }
+#endif
+    EqualityDeleteFileReaderTest::SetUp();
+    fileFormat_ = GetParam().format;
+  }
+
+  std::shared_ptr<common::testutil::TempFilePath> writeDataFileP(
+      const std::vector<RowVectorPtr>& data,
+      const std::vector<int32_t>& fieldIds) {
+    return writeFile(data, fieldIds, GetParam());
+  }
+
+  std::vector<std::shared_ptr<ConnectorSplit>> makeSplitsP(
+      const std::string& dataFilePath,
+      const std::vector<IcebergDeleteFile>& deleteFiles = {},
+      int64_t dataSequenceNumber = 0,
+      const std::unordered_map<std::string, std::optional<std::string>>&
+          partitionKeys = {}) {
+    return makeSplits(
+        dataFilePath,
+        partitionKeys,
+        GetParam(),
+        deleteFiles,
+        dataSequenceNumber,
+        {});
+  }
+};
+
+// Three FileWriteMode combinations:
+//
+//   Dwrf_Positional {DWRF, false}   — no iceberg.id attributes; DwrfReader
+//                                     falls back to positional name mapping.
+//
+//   Dwrf_FieldId    {DWRF, true}    — "iceberg.id" footer attributes;
+//                                     DwrfReader uses renameByFieldId.
+//
+//   Parquet_FieldId {PARQUET, true} — Parquet field_id metadata present;
+//                                     IcebergSplitReader activates
+//                                     kParquetFieldId mapping.
+//
+// {PARQUET, false} does not work end-to-end: without field IDs,
+// buildFieldIds() returns empty, IcebergSplitReader does not set a fileSchema
+// on baseReaderOpts_, and the Parquet reader has no requested-type to match
+// positions against — physical columns cannot be bound to the scan-spec names,
+// yielding all-null output.  All production Iceberg Parquet files carry field
+// IDs; this combination is therefore not a valid use case.
+INSTANTIATE_TEST_SUITE_P(
+    Formats,
+    EqualityDeleteFileReaderTestP,
+    ::testing::Values(
+        FileWriteMode{dwio::common::FileFormat::DWRF, /*withFieldIds=*/false},
+        FileWriteMode{dwio::common::FileFormat::DWRF, /*withFieldIds=*/true},
+        FileWriteMode{
+            dwio::common::FileFormat::PARQUET,
+            /*withFieldIds=*/true}),
+    [](const ::testing::TestParamInfo<FileWriteMode>& info) {
+      return info.param.toString();
+    });
+
+// ===========================================================================
+// Parameterized tests
+// ===========================================================================
+
 /// Verifies that base rows matching the equality delete file are removed.
-TEST_F(EqualityDeleteFileReaderTest, basicSingleColumnDelete) {
+TEST_P(EqualityDeleteFileReaderTestP, basicSingleColumnDelete) {
   auto rowType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
 
   auto baseData = makeRowVector(
@@ -153,26 +214,16 @@ TEST_F(EqualityDeleteFileReaderTest, basicSingleColumnDelete) {
           makeFlatVector<std::string>(
               {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}),
       });
-  auto dataFile = writeDataFile({baseData});
+  auto dataFile = writeDataFileP({baseData}, {1, 2});
 
-  // Delete rows where id == 3 or id == 7.
-  auto deleteData = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({3, 7}),
-      });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({3, 7})});
+  auto eqDeleteFile = writeDataFileP({deleteData}, {1});
 
-  IcebergDeleteFile icebergDeleteFile(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile->getPath(),
-      dwio::common::FileFormat::DWRF,
-      2,
-      getFileSize(eqDeleteFile->getPath()),
-      /*equalityFieldIds=*/{1}); // field ID 1 = column 0 = "id"
+  auto icebergDeleteFile =
+      makeDeleteFile(eqDeleteFile->getPath(), {1}, GetParam().format);
 
-  auto splits = makeSplits(dataFile->getPath(), {icebergDeleteFile});
-  auto plan = makeTableScanPlan(rowType);
+  auto splits = makeSplitsP(dataFile->getPath(), {icebergDeleteFile});
+  auto plan = makeIcebergTableScanPlan(rowType);
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   auto expected = makeRowVector(
@@ -181,65 +232,11 @@ TEST_F(EqualityDeleteFileReaderTest, basicSingleColumnDelete) {
           makeFlatVector<int64_t>({0, 1, 2, 4, 5, 6, 8, 9}),
           makeFlatVector<std::string>({"a", "b", "c", "e", "f", "g", "i", "j"}),
       });
-
   assertEqualResults({expected}, {result});
 }
 
-/// Regression test for the bug where IcebergSplitReader fails with
-/// "Column not found in row: <name>" when an equality-delete column is not
-/// part of the user's projection. The reader must augment its scan spec to
-/// physically read the equality-delete column, apply the delete, and then
-/// project the column away from the output before returning to the operator.
-TEST_F(EqualityDeleteFileReaderTest, equalityColumnNotInProjection) {
-  auto tableType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
-  // The user only selects 'value'. The equality delete is on 'id', which is
-  // NOT in the projection — this is the case that previously failed.
-  auto outputType = ROW({"value"}, {VARCHAR()});
-
-  auto baseData = makeRowVector(
-      {"id", "value"},
-      {
-          makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}),
-          makeFlatVector<std::string>(
-              {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}),
-      });
-  auto dataFile = writeDataFile({baseData});
-
-  // Delete rows where id == 3 or id == 7.
-  auto deleteData = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({3, 7}),
-      });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
-
-  IcebergDeleteFile icebergDeleteFile(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile->getPath(),
-      dwio::common::FileFormat::DWRF,
-      2,
-      getFileSize(eqDeleteFile->getPath()),
-      /*equalityFieldIds=*/{1}); // field ID 1 = column 0 = "id"
-
-  auto splits = makeSplits(dataFile->getPath(), {icebergDeleteFile});
-  auto plan = makeTableScanPlan(outputType, tableType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
-
-  // The 'id' column must not appear in the output; only 'value' is projected.
-  // Rows with id=3 ("d") and id=7 ("h") are removed by the equality delete.
-  auto expected = makeRowVector(
-      {"value"},
-      {
-          makeFlatVector<std::string>({"a", "b", "c", "e", "f", "g", "i", "j"}),
-      });
-
-  assertEqualResults({expected}, {result});
-}
-
-/// Verifies that two equality-delete files referencing the SAME column not in
-/// the user's projection only augment 'scanSpec_' once. Exercises the
-/// de-duplication branch in 'IcebergSplitReader::prepareSplit'.
-TEST_F(EqualityDeleteFileReaderTest, multipleDeleteFilesSameMissingColumn) {
+/// Regression test: equality-delete column absent from the user's projection.
+TEST_P(EqualityDeleteFileReaderTestP, equalityColumnNotInProjection) {
   auto tableType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
   auto outputType = ROW({"value"}, {VARCHAR()});
 
@@ -250,60 +247,61 @@ TEST_F(EqualityDeleteFileReaderTest, multipleDeleteFilesSameMissingColumn) {
           makeFlatVector<std::string>(
               {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}),
       });
-  auto dataFile = writeDataFile({baseData});
+  auto dataFile = writeDataFileP({baseData}, {1, 2});
 
-  // Two delete files, both targeting 'id' (which is NOT in the projection).
-  auto deleteData1 = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({2, 5}),
-      });
-  auto eqDeleteFile1 = writeEqDeleteFile({deleteData1});
-  IcebergDeleteFile icebergDeleteFile1(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile1->getPath(),
-      dwio::common::FileFormat::DWRF,
-      2,
-      getFileSize(eqDeleteFile1->getPath()),
-      /*equalityFieldIds=*/{1});
+  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({3, 7})});
+  auto eqDeleteFile = writeDataFileP({deleteData}, {1});
 
-  auto deleteData2 = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({0, 9}),
-      });
-  auto eqDeleteFile2 = writeEqDeleteFile({deleteData2});
-  IcebergDeleteFile icebergDeleteFile2(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile2->getPath(),
-      dwio::common::FileFormat::DWRF,
-      2,
-      getFileSize(eqDeleteFile2->getPath()),
-      /*equalityFieldIds=*/{1});
+  auto icebergDeleteFile =
+      makeDeleteFile(eqDeleteFile->getPath(), {1}, GetParam().format);
 
-  auto splits =
-      makeSplits(dataFile->getPath(), {icebergDeleteFile1, icebergDeleteFile2});
-  auto plan = makeTableScanPlan(outputType, tableType);
+  auto splits = makeSplitsP(dataFile->getPath(), {icebergDeleteFile});
+  auto plan = makeIcebergTableScanPlan(outputType, tableType);
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  // Rows with id=0, 2, 5, 9 are removed (across both delete files).
   auto expected = makeRowVector(
       {"value"},
-      {
-          makeFlatVector<std::string>({"b", "d", "e", "g", "h", "i"}),
-      });
-
+      {makeFlatVector<std::string>({"a", "b", "c", "e", "f", "g", "i", "j"})});
   assertEqualResults({expected}, {result});
 }
 
-/// Verifies a multi-column equality-delete file where some columns ARE in the
-/// user's projection and some are NOT. Both must end up in the read output for
-/// the equality probe to succeed, while only the projected columns appear in
-/// the operator-visible result.
-TEST_F(EqualityDeleteFileReaderTest, equalityMixedInAndOutOfProjection) {
+/// Two delete files targeting the same column not in the projection.
+TEST_P(EqualityDeleteFileReaderTestP, multipleDeleteFilesSameMissingColumn) {
+  auto tableType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
+  auto outputType = ROW({"value"}, {VARCHAR()});
+
+  auto baseData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}),
+          makeFlatVector<std::string>(
+              {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}),
+      });
+  auto dataFile = writeDataFileP({baseData}, {1, 2});
+
+  auto deleteData1 = makeRowVector({"id"}, {makeFlatVector<int64_t>({2, 5})});
+  auto eqDeleteFile1 = writeDataFileP({deleteData1}, {1});
+  auto icebergDeleteFile1 =
+      makeDeleteFile(eqDeleteFile1->getPath(), {1}, GetParam().format);
+
+  auto deleteData2 = makeRowVector({"id"}, {makeFlatVector<int64_t>({0, 9})});
+  auto eqDeleteFile2 = writeDataFileP({deleteData2}, {1});
+  auto icebergDeleteFile2 =
+      makeDeleteFile(eqDeleteFile2->getPath(), {1}, GetParam().format);
+
+  auto splits = makeSplitsP(
+      dataFile->getPath(), {icebergDeleteFile1, icebergDeleteFile2});
+  auto plan = makeIcebergTableScanPlan(outputType, tableType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"value"}, {makeFlatVector<std::string>({"b", "d", "e", "g", "h", "i"})});
+  assertEqualResults({expected}, {result});
+}
+
+/// Multi-column equality delete: some delete columns in projection, some not.
+TEST_P(EqualityDeleteFileReaderTestP, equalityMixedInAndOutOfProjection) {
   auto tableType = ROW({"a", "b", "c"}, {INTEGER(), VARCHAR(), BIGINT()});
-  // User selects only 'b' and 'c'. 'a' is referenced by the equality delete
-  // but not part of the projection.
   auto outputType = ROW({"b", "c"}, {VARCHAR(), BIGINT()});
 
   auto baseData = makeRowVector(
@@ -313,54 +311,508 @@ TEST_F(EqualityDeleteFileReaderTest, equalityMixedInAndOutOfProjection) {
           makeFlatVector<std::string>({"x", "y", "z", "x", "y"}),
           makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
       });
-  auto dataFile = writeDataFile({baseData});
+  auto dataFile = writeDataFileP({baseData}, {1, 2, 3});
 
-  // Delete rows where (a=2, b="y") -- removes row 1.
-  // Also (a=1, b="y") -- no match (row with a=1 has b="x").
+  // Delete (a=2, b="y") => row 1; (a=1, b="y") => no match.
   auto deleteData = makeRowVector(
       {"a", "b"},
       {
           makeFlatVector<int32_t>({2, 1}),
           makeFlatVector<std::string>({"y", "y"}),
       });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+  auto eqDeleteFile = writeDataFileP({deleteData}, {1, 2});
 
-  IcebergDeleteFile icebergDeleteFile(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile->getPath(),
-      dwio::common::FileFormat::DWRF,
-      3,
-      getFileSize(eqDeleteFile->getPath()),
-      /*equalityFieldIds=*/{1, 2}); // field IDs 1,2 = columns "a","b"
+  auto icebergDeleteFile = makeDeleteFile(
+      eqDeleteFile->getPath(), {1, 2}, GetParam().format, /*recordCount=*/3);
 
-  auto splits = makeSplits(dataFile->getPath(), {icebergDeleteFile});
-  auto plan = makeTableScanPlan(outputType, tableType);
+  auto splits = makeSplitsP(dataFile->getPath(), {icebergDeleteFile});
+  auto plan = makeIcebergTableScanPlan(outputType, tableType);
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  // Row 1 (a=2, b="y", c=20) is deleted. The remaining rows project to
-  // (b, c).
   auto expected = makeRowVector(
       {"b", "c"},
       {
           makeFlatVector<std::string>({"x", "z", "x", "y"}),
           makeFlatVector<int64_t>({10, 30, 40, 50}),
       });
-
   assertEqualResults({expected}, {result});
 }
 
-/// Verifies that an equality delete on a partition column that IS in the data
-/// file (Iceberg-style) but NOT in the user's projection works correctly. The
-/// augmentation should set the partition value as a constant; the file-read
-/// path should then leave the constant in place because the column is present
-/// in 'fileType'.
+/// Filter-only column upgrade: 'id' in WHERE but not SELECT, also the
+/// equality-delete column.
+TEST_P(EqualityDeleteFileReaderTestP, equalityFilterOnlyColumnNotInProjection) {
+  auto tableType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
+  auto outputType = ROW({"value"}, {VARCHAR()});
+
+  auto baseData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}),
+          makeFlatVector<std::string>(
+              {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}),
+      });
+  auto dataFile = writeDataFileP({baseData}, {1, 2});
+
+  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({4, 8})});
+  auto eqDeleteFile = writeDataFileP({deleteData}, {1});
+
+  auto icebergDeleteFile =
+      makeDeleteFile(eqDeleteFile->getPath(), {1}, GetParam().format);
+
+  auto splits = makeSplitsP(dataFile->getPath(), {icebergDeleteFile});
+  // WHERE id >= 3 => {3,4,5,6,7,8,9}; delete id=4,8 => {3,5,6,7,9}.
+  auto plan = makeIcebergTableScanPlan(
+      outputType, tableType, {}, /*subfieldFilters=*/{"id >= 3"});
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"value"}, {makeFlatVector<std::string>({"d", "f", "g", "h", "j"})});
+  assertEqualResults({expected}, {result});
+}
+
+/// Multi-column equality delete: both columns must match simultaneously.
+TEST_P(EqualityDeleteFileReaderTestP, multiColumnDelete) {
+  auto tableType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
+  auto outputType = ROW({"value"}, {VARCHAR()});
+
+  auto baseData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<std::string>({"a", "b", "c", "d", "e"}),
+      });
+  auto dataFile = writeDataFileP({baseData}, {1, 2});
+
+  auto deleteData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({3}),
+          makeFlatVector<std::string>({"c"}),
+      });
+  auto eqDeleteFile = writeDataFileP({deleteData}, {1, 2});
+
+  auto icebergDeleteFile = makeDeleteFile(
+      eqDeleteFile->getPath(), {1, 2}, GetParam().format, /*recordCount=*/1);
+
+  auto splits = makeSplitsP(dataFile->getPath(), {icebergDeleteFile});
+  auto plan = makeIcebergTableScanPlan(outputType, tableType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"value"}, {makeFlatVector<std::string>({"a", "b", "d", "e"})});
+  assertEqualResults({expected}, {result});
+}
+
+/// Two separate delete files both apply (multi-reader path).
+TEST_P(EqualityDeleteFileReaderTestP, twoDeleteFiles) {
+  auto tableType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
+  auto outputType = ROW({"value"}, {VARCHAR()});
+
+  auto baseData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}),
+          makeFlatVector<std::string>(
+              {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}),
+      });
+  auto dataFile = writeDataFileP({baseData}, {1, 2});
+
+  auto deleteData1 = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 5})});
+  auto eqDeleteFile1 = writeDataFileP({deleteData1}, {1});
+  auto icebergDelete1 =
+      makeDeleteFile(eqDeleteFile1->getPath(), {1}, GetParam().format);
+
+  auto deleteData2 = makeRowVector({"id"}, {makeFlatVector<int64_t>({3, 8})});
+  auto eqDeleteFile2 = writeDataFileP({deleteData2}, {1});
+  auto icebergDelete2 =
+      makeDeleteFile(eqDeleteFile2->getPath(), {1}, GetParam().format);
+
+  auto splits =
+      makeSplitsP(dataFile->getPath(), {icebergDelete1, icebergDelete2});
+  auto plan = makeIcebergTableScanPlan(outputType, tableType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  // Deleted: 1,3,5,8. Surviving: 0,2,4,6,7,9.
+  auto expected = makeRowVector(
+      {"value"}, {makeFlatVector<std::string>({"a", "c", "e", "g", "h", "j"})});
+  assertEqualResults({expected}, {result});
+}
+
+/// No rows match the delete — all rows survive.
+TEST_P(EqualityDeleteFileReaderTestP, noMatchingDeletes) {
+  auto rowType = ROW({"id"}, {BIGINT()});
+
+  auto baseData = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto dataFile = writeDataFileP({baseData}, {1});
+
+  auto deleteData =
+      makeRowVector({"id"}, {makeFlatVector<int64_t>({100, 200})});
+  auto eqDeleteFile = writeDataFileP({deleteData}, {1});
+
+  auto icebergDeleteFile =
+      makeDeleteFile(eqDeleteFile->getPath(), {1}, GetParam().format);
+
+  auto splits = makeSplitsP(dataFile->getPath(), {icebergDeleteFile});
+  auto plan = makeIcebergTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  assertEqualResults(
+      {makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})})}, {result});
+}
+
+/// Every row is deleted.
+TEST_P(EqualityDeleteFileReaderTestP, allRowsDeleted) {
+  auto rowType = ROW({"id"}, {BIGINT()});
+
+  auto baseData = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto dataFile = writeDataFileP({baseData}, {1});
+
+  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto eqDeleteFile = writeDataFileP({deleteData}, {1});
+
+  auto icebergDeleteFile = makeDeleteFile(
+      eqDeleteFile->getPath(), {1}, GetParam().format, /*recordCount=*/3);
+
+  auto splits = makeSplitsP(dataFile->getPath(), {icebergDeleteFile});
+  auto plan = makeIcebergTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  EXPECT_EQ(result->size(), 0);
+}
+
+/// VARCHAR column equality delete.
+TEST_P(EqualityDeleteFileReaderTestP, stringColumnDelete) {
+  auto rowType = ROW({"name", "age"}, {VARCHAR(), INTEGER()});
+
+  auto baseData = makeRowVector(
+      {"name", "age"},
+      {
+          makeFlatVector<std::string>({"alice", "bob", "charlie", "dave"}),
+          makeFlatVector<int32_t>({25, 30, 35, 40}),
+      });
+  auto dataFile = writeDataFileP({baseData}, {1, 2});
+
+  auto deleteData =
+      makeRowVector({"name"}, {makeFlatVector<std::string>({"bob", "dave"})});
+  auto eqDeleteFile = writeDataFileP({deleteData}, {1});
+
+  auto icebergDeleteFile =
+      makeDeleteFile(eqDeleteFile->getPath(), {1}, GetParam().format);
+
+  auto splits = makeSplitsP(dataFile->getPath(), {icebergDeleteFile});
+  auto plan = makeIcebergTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"name", "age"},
+      {
+          makeFlatVector<std::string>({"alice", "charlie"}),
+          makeFlatVector<int32_t>({25, 35}),
+      });
+  assertEqualResults({expected}, {result});
+}
+
+/// Verifies equality deletes after a field has been dropped, leaving sparse
+/// top-level field IDs.
+TEST_F(EqualityDeleteFileReaderTest, nonSequentialEqualityFieldId) {
+  auto tableType = ROW({"id", "category"}, {BIGINT(), VARCHAR()});
+  const std::vector<int32_t> fieldIds{1, 3};
+
+  auto baseData = makeRowVector(
+      {"id", "dropped", "category"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int32_t>({10, 20, 30, 40, 50}),
+          makeFlatVector<std::string>({"A", "B", "A", "C", "B"}),
+      });
+  auto dataFile = writeDwrfFileWithFieldIds({baseData}, {1, 2, 3});
+
+  auto deleteData = makeRowVector(
+      {"category"},
+      {
+          makeFlatVector<std::string>({"B"}),
+      });
+  auto eqDeleteFile = writeDataFile({deleteData});
+
+  IcebergDeleteFile icebergDeleteFile(
+      FileContent::kEqualityDeletes,
+      eqDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      1,
+      getFileSize(eqDeleteFile->getPath()),
+      /*equalityFieldIds=*/{3});
+
+  auto splits = makeSplits(
+      dataFile->getPath(),
+      {},
+      {dwio::common::FileFormat::DWRF, false},
+      {icebergDeleteFile});
+  auto plan = makeIcebergTableScanPlan(tableType, tableType, fieldIds);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"id", "category"},
+      {
+          makeFlatVector<int64_t>({1, 3, 4}),
+          makeFlatVector<std::string>({"A", "A", "C"}),
+      });
+  assertEqualResults({expected}, {result});
+}
+
+TEST_F(
+    EqualityDeleteFileReaderTest,
+    nonSequentialEqualityFieldIdNotInProjection) {
+  auto tableType = ROW({"id", "category"}, {BIGINT(), VARCHAR()});
+  auto outputType = ROW({"id"}, {BIGINT()});
+  const std::vector<int32_t> fieldIds{1, 3};
+
+  auto baseData = makeRowVector(
+      {"id", "dropped", "category"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int32_t>({10, 20, 30, 40, 50}),
+          makeFlatVector<std::string>({"A", "B", "A", "C", "B"}),
+      });
+  auto dataFile = writeDwrfFileWithFieldIds({baseData}, {1, 2, 3});
+
+  auto deleteData = makeRowVector(
+      {"category"},
+      {
+          makeFlatVector<std::string>({"B"}),
+      });
+  auto eqDeleteFile = writeDataFile({deleteData});
+
+  IcebergDeleteFile icebergDeleteFile(
+      FileContent::kEqualityDeletes,
+      eqDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      1,
+      getFileSize(eqDeleteFile->getPath()),
+      /*equalityFieldIds=*/{3});
+
+  auto splits = makeSplits(
+      dataFile->getPath(),
+      /*partitionKeys=*/{},
+      {dwio::common::FileFormat::DWRF, false},
+      {icebergDeleteFile});
+  auto plan = makeIcebergTableScanPlan(outputType, tableType, fieldIds);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"id"},
+      {
+          makeFlatVector<int64_t>({1, 3, 4}),
+      });
+  assertEqualResults({expected}, {result});
+}
+
+/// Verifies the ordinal fallback on a non-first column when full-schema field
+/// IDs are unavailable.
+TEST_P(EqualityDeleteFileReaderTestP, deleteOnSecondColumn) {
+  auto rowType = ROW({"id", "category"}, {BIGINT(), VARCHAR()});
+
+  auto baseData = makeRowVector(
+      {"id", "category"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<std::string>({"A", "B", "A", "C", "B"}),
+      });
+  auto dataFile = writeDataFileP({baseData}, {1, 2});
+
+  auto deleteData =
+      makeRowVector({"category"}, {makeFlatVector<std::string>({"B"})});
+  auto eqDeleteFile = writeDataFileP({deleteData}, {2});
+
+  auto icebergDeleteFile = makeDeleteFile(
+      eqDeleteFile->getPath(), {2}, GetParam().format, /*recordCount=*/1);
+
+  auto splits = makeSplitsP(dataFile->getPath(), {icebergDeleteFile});
+  auto plan = makeIcebergTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"id", "category"},
+      {
+          makeFlatVector<int64_t>({1, 3, 4}),
+          makeFlatVector<std::string>({"A", "A", "C"}),
+      });
+  assertEqualResults({expected}, {result});
+}
+
+/// Delete applies when deleteSeqNum > dataSeqNum.
+TEST_P(EqualityDeleteFileReaderTestP, sequenceNumberDeleteApplies) {
+  auto rowType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
+
+  auto baseData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<std::string>({"a", "b", "c", "d", "e"}),
+      });
+  auto dataFile = writeDataFileP({baseData}, {1, 2});
+
+  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({2, 4})});
+  auto eqDeleteFile = writeDataFileP({deleteData}, {1});
+
+  // deleteSeqNum=5 > dataSeqNum=3 => applies.
+  auto icebergDeleteFile = makeDeleteFile(
+      eqDeleteFile->getPath(), {1}, GetParam().format, 2, /*deleteSeqNum=*/5);
+
+  auto splits = makeSplitsP(
+      dataFile->getPath(), {icebergDeleteFile}, /*dataSequenceNumber=*/3);
+  auto plan = makeIcebergTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({1, 3, 5}),
+          makeFlatVector<std::string>({"a", "c", "e"}),
+      });
+  assertEqualResults({expected}, {result});
+}
+
+/// Delete skipped when deleteSeqNum <= dataSeqNum.
+TEST_P(EqualityDeleteFileReaderTestP, sequenceNumberDeleteSkipped) {
+  auto rowType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
+
+  auto baseData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<std::string>({"a", "b", "c"}),
+      });
+  auto dataFile = writeDataFileP({baseData}, {1, 2});
+
+  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto eqDeleteFile = writeDataFileP({deleteData}, {1});
+
+  // deleteSeqNum=2 <= dataSeqNum=5 => skipped.
+  auto icebergDeleteFile = makeDeleteFile(
+      eqDeleteFile->getPath(), {1}, GetParam().format, 3, /*deleteSeqNum=*/2);
+
+  auto splits = makeSplitsP(
+      dataFile->getPath(), {icebergDeleteFile}, /*dataSequenceNumber=*/5);
+  auto plan = makeIcebergTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<std::string>({"a", "b", "c"}),
+      });
+  assertEqualResults({expected}, {result});
+}
+
+/// Delete skipped when deleteSeqNum == dataSeqNum (edge case of <=).
+TEST_P(EqualityDeleteFileReaderTestP, sequenceNumberEqualSkipped) {
+  auto rowType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
+
+  auto baseData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<std::string>({"a", "b", "c"}),
+      });
+  auto dataFile = writeDataFileP({baseData}, {1, 2});
+
+  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto eqDeleteFile = writeDataFileP({deleteData}, {1});
+
+  // deleteSeqNum=5 == dataSeqNum=5 => skipped.
+  auto icebergDeleteFile = makeDeleteFile(
+      eqDeleteFile->getPath(), {1}, GetParam().format, 3, /*deleteSeqNum=*/5);
+
+  auto splits = makeSplitsP(
+      dataFile->getPath(), {icebergDeleteFile}, /*dataSequenceNumber=*/5);
+  auto plan = makeIcebergTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<std::string>({"a", "b", "c"}),
+      });
+  assertEqualResults({expected}, {result});
+}
+
+/// deleteSeqNum=0 disables filtering — delete always applies.
+TEST_P(EqualityDeleteFileReaderTestP, sequenceNumberZeroAlwaysApplies) {
+  auto rowType = ROW({"id"}, {BIGINT()});
+
+  auto baseData = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto dataFile = writeDataFileP({baseData}, {1});
+
+  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({2})});
+  auto eqDeleteFile = writeDataFileP({deleteData}, {1});
+
+  // deleteSeqNum=0 => filtering disabled, applies despite dataSeqNum=10.
+  auto icebergDeleteFile = makeDeleteFile(
+      eqDeleteFile->getPath(), {1}, GetParam().format, 1, /*deleteSeqNum=*/0);
+
+  auto splits = makeSplitsP(
+      dataFile->getPath(), {icebergDeleteFile}, /*dataSequenceNumber=*/10);
+  auto plan = makeIcebergTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  assertEqualResults(
+      {makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 3})})}, {result});
+}
+
+/// Only delete files with higher sequence numbers than the data file apply.
+TEST_P(EqualityDeleteFileReaderTestP, mixedSequenceNumbers) {
+  auto rowType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
+
+  auto baseData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<std::string>({"a", "b", "c", "d", "e"}),
+      });
+  auto dataFile = writeDataFileP({baseData}, {1, 2});
+
+  // seqNum=10 > dataSeqNum=5 => applied.
+  auto deleteData1 = makeRowVector({"id"}, {makeFlatVector<int64_t>({2})});
+  auto eqDeleteFile1 = writeDataFileP({deleteData1}, {1});
+  auto icebergDeleteFile1 = makeDeleteFile(
+      eqDeleteFile1->getPath(), {1}, GetParam().format, 1, /*deleteSeqNum=*/10);
+
+  // seqNum=3 <= dataSeqNum=5 => skipped.
+  auto deleteData2 = makeRowVector({"id"}, {makeFlatVector<int64_t>({4})});
+  auto eqDeleteFile2 = writeDataFileP({deleteData2}, {1});
+  auto icebergDeleteFile2 = makeDeleteFile(
+      eqDeleteFile2->getPath(), {1}, GetParam().format, 1, /*deleteSeqNum=*/3);
+
+  auto splits = makeSplitsP(
+      dataFile->getPath(),
+      {icebergDeleteFile1, icebergDeleteFile2},
+      /*dataSequenceNumber=*/5);
+  auto plan = makeIcebergTableScanPlan(rowType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  // id=2 deleted; id=4 survives.
+  auto expected = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({1, 3, 4, 5}),
+          makeFlatVector<std::string>({"a", "c", "d", "e"}),
+      });
+  assertEqualResults({expected}, {result});
+}
+
+// ===========================================================================
+// Non-parameterized tests -- partition columns and evolved schema (DWRF only).
+// ===========================================================================
+
+/// Equality delete on a partition column in the data file but not projected.
 TEST_F(
     EqualityDeleteFileReaderTest,
     equalityPartitionColumnInFileNotInProjection) {
   auto tableType = ROW({"part", "value"}, {INTEGER(), VARCHAR()});
   auto outputType = ROW({"value"}, {VARCHAR()});
 
-  // Data file contains both 'part' and 'value', all rows in partition 2.
   auto baseData = makeRowVector(
       {"part", "value"},
       {
@@ -375,7 +827,7 @@ TEST_F(
           makeFlatVector<int32_t>({2, 2}),
           makeFlatVector<std::string>({"b", "d"}),
       });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+  auto eqDeleteFile = writeDataFile({deleteData});
 
   IcebergDeleteFile icebergDeleteFile(
       FileContent::kEqualityDeletes,
@@ -387,29 +839,27 @@ TEST_F(
 
   auto splits = makeSplits(
       dataFile->getPath(),
-      /*partitionKeys=*/{{"part", std::optional<std::string>{"2"}}},
-      {icebergDeleteFile});
-  auto plan = makeTableScanPlan(outputType, tableType);
+      /*partitionKeys=*/{},
+      {dwio::common::FileFormat::DWRF, false},
+      {icebergDeleteFile},
+      /*dataSequenceNumber=*/0,
+      // Source field ID 1 ('part') is an explicit identity partition field.
+      /*identityPartitionKeys=*/{{1, std::optional<std::string>{"2"}}});
+  auto plan = makeIcebergTableScanPlan(outputType, tableType);
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  auto expected = makeRowVector(
-      {"value"},
-      {
-          makeFlatVector<std::string>({"a", "c"}),
-      });
-
-  assertEqualResults({expected}, {result});
+  assertEqualResults(
+      {makeRowVector({"value"}, {makeFlatVector<std::string>({"a", "c"})})},
+      {result});
 }
 
-/// Same as above but the partition value does NOT match the equality-delete
-/// value, so no rows should be removed.
+/// Same as above but partition value does not match -- no rows deleted.
 TEST_F(
     EqualityDeleteFileReaderTest,
     equalityPartitionColumnNonMatchingPartition) {
   auto tableType = ROW({"part", "value"}, {INTEGER(), VARCHAR()});
   auto outputType = ROW({"value"}, {VARCHAR()});
 
-  // Data file holds rows in partition 2.
   auto baseData = makeRowVector(
       {"part", "value"},
       {
@@ -418,14 +868,13 @@ TEST_F(
       });
   auto dataFile = writeDataFile({baseData});
 
-  // Delete (part=99, value="b"). No file row matches part=99.
   auto deleteData = makeRowVector(
       {"part", "value"},
       {
           makeFlatVector<int32_t>({99}),
           makeFlatVector<std::string>({"b"}),
       });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+  auto eqDeleteFile = writeDataFile({deleteData});
 
   IcebergDeleteFile icebergDeleteFile(
       FileContent::kEqualityDeletes,
@@ -437,24 +886,21 @@ TEST_F(
 
   auto splits = makeSplits(
       dataFile->getPath(),
-      /*partitionKeys=*/{{"part", std::optional<std::string>{"2"}}},
-      {icebergDeleteFile});
-  auto plan = makeTableScanPlan(outputType, tableType);
+      /*partitionKeys=*/{},
+      {dwio::common::FileFormat::DWRF, false},
+      {icebergDeleteFile},
+      /*dataSequenceNumber=*/0,
+      /*identityPartitionKeys=*/{{1, std::optional<std::string>{"2"}}});
+  auto plan = makeIcebergTableScanPlan(outputType, tableType);
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  auto expected = makeRowVector(
-      {"value"},
-      {
-          makeFlatVector<std::string>({"a", "b", "c"}),
-      });
-
-  assertEqualResults({expected}, {result});
+  assertEqualResults(
+      {makeRowVector(
+          {"value"}, {makeFlatVector<std::string>({"a", "b", "c"})})},
+      {result});
 }
 
-/// Multi-column equality delete where ONE column is a partition column not in
-/// the projection and ANOTHER is a regular data column not in the projection.
-/// Both must be augmented; the partition column gets a constant value, the
-/// regular column is read from the file.
+/// One partition column + one regular column, both absent from the projection.
 TEST_F(
     EqualityDeleteFileReaderTest,
     equalityMixedPartitionAndRegularNotInProjection) {
@@ -462,7 +908,6 @@ TEST_F(
       ROW({"part", "id", "value"}, {INTEGER(), BIGINT(), VARCHAR()});
   auto outputType = ROW({"value"}, {VARCHAR()});
 
-  // Data file contains all three columns, all rows in partition 7.
   auto baseData = makeRowVector(
       {"part", "id", "value"},
       {
@@ -472,14 +917,13 @@ TEST_F(
       });
   auto dataFile = writeDataFile({baseData});
 
-  // Delete (part=7, id=20) and (part=7, id=40). Should remove "b" and "d".
   auto deleteData = makeRowVector(
       {"part", "id"},
       {
           makeFlatVector<int32_t>({7, 7}),
           makeFlatVector<int64_t>({20, 40}),
       });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+  auto eqDeleteFile = writeDataFile({deleteData});
 
   IcebergDeleteFile icebergDeleteFile(
       FileContent::kEqualityDeletes,
@@ -487,38 +931,31 @@ TEST_F(
       dwio::common::FileFormat::DWRF,
       2,
       getFileSize(eqDeleteFile->getPath()),
-      /*equalityFieldIds=*/{1, 2}); // field IDs 1,2 = part, id
+      /*equalityFieldIds=*/{1, 2});
 
   auto splits = makeSplits(
       dataFile->getPath(),
-      /*partitionKeys=*/{{"part", std::optional<std::string>{"7"}}},
-      {icebergDeleteFile});
-  auto plan = makeTableScanPlan(outputType, tableType);
+      {},
+      {dwio::common::FileFormat::DWRF, false},
+      {icebergDeleteFile},
+      /*dataSequenceNumber=*/0,
+      /*identityPartitionKeys=*/{{1, std::optional<std::string>{"7"}}});
+  auto plan = makeIcebergTableScanPlan(outputType, tableType);
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  auto expected = makeRowVector(
-      {"value"},
-      {
-          makeFlatVector<std::string>({"a", "c"}),
-      });
-
-  assertEqualResults({expected}, {result});
+  assertEqualResults(
+      {makeRowVector({"value"}, {makeFlatVector<std::string>({"a", "c"})})},
+      {result});
 }
 
-/// Verifies equality delete on a DATE partition column not in projection.
-/// Iceberg encodes DATE partition values as days-since-epoch (e.g. "19345").
-/// This exercises the type-derived 'isDaysSinceEpoch' flag in
-/// 'configureEqualityDeleteColumns' — for DATE columns the partition string
-/// must be parsed as an integer day count, NOT as an ISO-8601 date string.
+/// DATE partition column not in projection (days-since-epoch encoding).
 TEST_F(
     EqualityDeleteFileReaderTest,
     equalityDatePartitionColumnNotInProjection) {
   auto tableType = ROW({"part_date", "value"}, {DATE(), VARCHAR()});
   auto outputType = ROW({"value"}, {VARCHAR()});
 
-  // 19345 days since 1970-01-01 == 2022-12-22. All file rows belong to that
-  // partition.
-  constexpr int32_t kPartitionDays = 19345;
+  constexpr int32_t kPartitionDays = 19345; // 2022-12-22
   auto baseData = makeRowVector(
       {"part_date", "value"},
       {
@@ -528,14 +965,13 @@ TEST_F(
       });
   auto dataFile = writeDataFile({baseData});
 
-  // Delete (part_date=19345, value="b").
   auto deleteData = makeRowVector(
       {"part_date", "value"},
       {
           makeFlatVector<int32_t>({kPartitionDays}, DATE()),
           makeFlatVector<std::string>({"b"}),
       });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+  auto eqDeleteFile = writeDataFile({deleteData});
 
   IcebergDeleteFile icebergDeleteFile(
       FileContent::kEqualityDeletes,
@@ -547,112 +983,147 @@ TEST_F(
 
   auto splits = makeSplits(
       dataFile->getPath(),
-      /*partitionKeys=*/
-      {{"part_date",
-        std::optional<std::string>{std::to_string(kPartitionDays)}}},
-      {icebergDeleteFile});
-  auto plan = makeTableScanPlan(outputType, tableType);
+      /*partitionKeys=*/{},
+      {dwio::common::FileFormat::DWRF, false},
+      {icebergDeleteFile},
+      /*dataSequenceNumber=*/0,
+      /*identityPartitionKeys=*/
+      {{1, std::optional<std::string>{std::to_string(kPartitionDays)}}});
+  auto plan = makeIcebergTableScanPlan(outputType, tableType);
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  auto expected = makeRowVector(
-      {"value"},
-      {
-          makeFlatVector<std::string>({"a", "c"}),
-      });
-
-  assertEqualResults({expected}, {result});
+  assertEqualResults(
+      {makeRowVector({"value"}, {makeFlatVector<std::string>({"a", "c"})})},
+      {result});
 }
 
-/// Exercises the filter-only column upgrade path in
-/// 'configureEqualityDeleteColumns'. The equality-delete column 'id' is
-/// referenced by a WHERE predicate (so the planner installs a scan-spec
-/// child with 'projectOut=false') but is NOT in the user's SELECT
-/// projection. The augmentation must upgrade the existing scan-spec child
-/// from filter-only to 'projectOut=true' and assign a non-conflicting
-/// channel so the equality-delete reader can probe by name.
-TEST_F(EqualityDeleteFileReaderTest, equalityFilterOnlyColumnNotInProjection) {
+/// Regression for transformed partition fields whose derived partition-field
+/// name collides with a real source column name.
+///
+/// A partition field may be named anything, so a 'bucket[4]' field on source
+/// column 'id' can itself be named "id". The split's name-keyed
+/// 'partitionKeys' then maps "id" to the *bucket ordinal*, not to any row's
+/// 'id'. Substituting that value for the source column would corrupt the
+/// equality-delete probe. Only a field the spec marks 'identity' may be
+/// substituted, and no identity metadata is supplied here, so the reader must
+/// read the physical 'id' column from the data file.
+TEST_F(
+    EqualityDeleteFileReaderTest,
+    equalityBucketPartitionNameCollisionNotInProjection) {
   auto tableType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
   auto outputType = ROW({"value"}, {VARCHAR()});
 
   auto baseData = makeRowVector(
       {"id", "value"},
       {
-          makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}),
-          makeFlatVector<std::string>(
-              {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}),
+          makeFlatVector<int64_t>({10, 20, 30, 40}),
+          makeFlatVector<std::string>({"a", "b", "c", "d"}),
       });
   auto dataFile = writeDataFile({baseData});
 
-  // Equality delete removes id == 4 and id == 8.
+  // Equality delete removes the row whose physical id is 20.
   auto deleteData = makeRowVector(
       {"id"},
       {
-          makeFlatVector<int64_t>({4, 8}),
+          makeFlatVector<int64_t>({20}),
       });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+  auto eqDeleteFile = writeDataFile({deleteData});
 
   IcebergDeleteFile icebergDeleteFile(
       FileContent::kEqualityDeletes,
       eqDeleteFile->getPath(),
       dwio::common::FileFormat::DWRF,
-      2,
+      1,
       getFileSize(eqDeleteFile->getPath()),
-      /*equalityFieldIds=*/{1}); // field ID 1 = "id"
+      /*equalityFieldIds=*/{1});
 
-  auto splits = makeSplits(dataFile->getPath(), {icebergDeleteFile});
-  // WHERE id >= 3 keeps rows {3,4,5,6,7,8,9} from the file; the equality
-  // delete then removes id=4 and id=8, leaving values {d->skipped} no, we
-  // expect surviving values for ids {3,5,6,7,9}, projected as 'value' only.
-  auto plan = PlanBuilder()
-                  .startTableScan()
-                  .connectorId(kIcebergConnectorId)
-                  .outputType(outputType)
-                  .dataColumns(tableType)
-                  .subfieldFilter("id >= 3")
-                  .endTableScan()
-                  .planNode();
+  auto splits = makeSplits(
+      dataFile->getPath(),
+      // The bucket ordinal, stored under a name that collides with the
+      // source column.
+      /*partitionKeys=*/{{"id", std::optional<std::string>{"2"}}},
+      {dwio::common::FileFormat::DWRF, false},
+      {icebergDeleteFile},
+      /*dataSequenceNumber=*/0,
+      // 'bucket[4]' is not identity, so nothing is substitutable.
+      /*identityPartitionKeys=*/{});
+  auto plan = makeIcebergTableScanPlan(outputType, tableType);
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
+  // Only the physically matching row is deleted. Substituting the bucket
+  // ordinal would make every row's id 2 and delete nothing.
   auto expected = makeRowVector(
       {"value"},
       {
-          makeFlatVector<std::string>({"d", "f", "g", "h", "j"}),
+          makeFlatVector<std::string>({"a", "c", "d"}),
       });
 
   assertEqualResults({expected}, {result});
 }
 
-/// Regression test for the schema-evolution +
-/// partition-column-not-in-projection scenario surfaced by the Presto Iceberg
-/// integration test 'testEqualityDeleteWithPartitionColumnMissingInSelect'.
-///
-/// Setup (mirrors the Presto test for the older data file):
-///   - Full table schema: (a, b, c, d) with a, c, d as partition columns.
-///   - The data file under test was written BEFORE 'd' was added, so it
-///     physically contains only (a, b, c).
-///   - User projection: (a, b, d). 'd' must be NULL-filled (not in file);
-///     'c' is NOT in the projection but IS referenced by the equality
-///     delete and IS the file's identity-partition column.
-///
-/// The equality delete (a=6, c=2, b=1006) targets the file row
-/// (6, '1006', 2). The augmentation must:
-///   1. Add 'c' to 'scanSpec_' / 'readerOutputType_' so the eq-delete
-///      probe can find it by name.
-///   2. Leave 'd' alone — 'd' is in the user projection and gets the
-///      standard schema-evolution NULL-fill from 'adaptColumns'.
-///   3. Honour the existing partition-key constant on 'c' regardless of
-///      whether the file physically contains 'c'.
+/// Regression for the 'void' transform, which always stores a null partition
+/// value and — unlike bucket/truncate/temporal — keeps the source column's
+/// name by default. A name-keyed lookup therefore finds an entry for "id"
+/// and would install a constant null over every row, making the null
+/// equality-delete key match everything. With identity metadata absent, the
+/// physical non-null 'id' values must survive instead.
+TEST_F(EqualityDeleteFileReaderTest, equalityVoidPartitionNotInProjection) {
+  auto tableType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
+  auto outputType = ROW({"value"}, {VARCHAR()});
+
+  auto baseData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeFlatVector<std::string>({"a", "b", "c"}),
+      });
+  auto dataFile = writeDataFile({baseData});
+
+  // The delete key is null, matching the null the void transform stores.
+  auto deleteData = makeRowVector(
+      {"id"},
+      {
+          makeNullableFlatVector<int64_t>({std::nullopt}),
+      });
+  auto eqDeleteFile = writeDataFile({deleteData});
+
+  IcebergDeleteFile icebergDeleteFile(
+      FileContent::kEqualityDeletes,
+      eqDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      1,
+      getFileSize(eqDeleteFile->getPath()),
+      /*equalityFieldIds=*/{1});
+
+  auto splits = makeSplits(
+      dataFile->getPath(),
+      /*partitionKeys=*/{{"id", std::nullopt}},
+      {dwio::common::FileFormat::DWRF, false},
+      {icebergDeleteFile},
+      /*dataSequenceNumber=*/0,
+      // 'void' is not identity, so its null is not substitutable.
+      /*identityPartitionKeys=*/{});
+  auto plan = makeIcebergTableScanPlan(outputType, tableType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"value"},
+      {
+          makeFlatVector<std::string>({"a", "b", "c"}),
+      });
+
+  assertEqualResults({expected}, {result});
+}
+
+/// Schema evolution + partition column not in projection (Presto regression).
 TEST_F(
     EqualityDeleteFileReaderTest,
     equalityPartitionColumnNotInProjectionWithEvolvedSchema) {
-  // Full evolved table schema (after 'ALTER TABLE ADD COLUMN d').
   auto tableType =
       ROW({"a", "b", "c", "d"}, {INTEGER(), VARCHAR(), INTEGER(), VARCHAR()});
-  // User selects 'a', 'b', 'd'. Note 'c' is NOT projected.
   auto outputType = ROW({"a", "b", "d"}, {INTEGER(), VARCHAR(), VARCHAR()});
 
-  // Data file contains only (a, b, c) — written before 'd' was added.
-  // Both rows are in the (a=6, c=2) partition.
+  // Data file was written before 'd' was added -- contains only (a, b, c).
   auto baseData = makeRowVector(
       {"a", "b", "c"},
       {
@@ -662,8 +1133,6 @@ TEST_F(
       });
   auto dataFile = writeDataFile({baseData});
 
-  // Equality delete on (a, b, c) with values (6, '1006', 2). Field IDs
-  // are in field-id order = [1, 2, 3].
   auto deleteData = makeRowVector(
       {"a", "b", "c"},
       {
@@ -671,7 +1140,7 @@ TEST_F(
           makeFlatVector<std::string>({"1006"}),
           makeFlatVector<int32_t>({2}),
       });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+  auto eqDeleteFile = writeDataFile({deleteData});
 
   IcebergDeleteFile icebergDeleteFile(
       FileContent::kEqualityDeletes,
@@ -683,16 +1152,15 @@ TEST_F(
 
   auto splits = makeSplits(
       dataFile->getPath(),
-      /*partitionKeys=*/
       {{"a", std::optional<std::string>{"6"}},
        {"c", std::optional<std::string>{"2"}}},
-      {icebergDeleteFile});
-  auto plan = makeTableScanPlan(outputType, tableType);
+      {dwio::common::FileFormat::DWRF, false},
+      {icebergDeleteFile},
+      0);
+  auto plan = makeIcebergTableScanPlan(outputType, tableType);
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  // Row (6, '1006', 2) is deleted by the equality delete; (6, '1009', 2)
-  // survives. 'd' is NULL because the data file was written before 'd'
-  // was added.
+  // (6,'1006',2) deleted; (6,'1009',2) survives. 'd' is NULL-filled.
   auto expected = makeRowVector(
       {"a", "b", "d"},
       {
@@ -700,489 +1168,7 @@ TEST_F(
           makeFlatVector<std::string>({"1009"}),
           makeNullableFlatVector<std::string>({std::nullopt}),
       });
-
   assertEqualResults({expected}, {result});
 }
 
-/// Verifies multi-column equality deletes (both columns must match).
-TEST_F(EqualityDeleteFileReaderTest, multiColumnDelete) {
-  auto rowType = ROW({"a", "b", "c"}, {INTEGER(), VARCHAR(), BIGINT()});
-
-  auto baseData = makeRowVector(
-      {"a", "b", "c"},
-      {
-          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
-          makeFlatVector<std::string>({"x", "y", "z", "x", "y"}),
-          makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
-      });
-  auto dataFile = writeDataFile({baseData});
-
-  // Delete rows where (a=2, b="y") — matches row index 1.
-  // Also (a=5, b="y") — matches row index 4.
-  // But (a=1, b="y") — no match (a=1 has b="x").
-  auto deleteData = makeRowVector(
-      {"a", "b"},
-      {
-          makeFlatVector<int32_t>({2, 5, 1}),
-          makeFlatVector<std::string>({"y", "y", "y"}),
-      });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
-
-  IcebergDeleteFile icebergDeleteFile(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile->getPath(),
-      dwio::common::FileFormat::DWRF,
-      3,
-      getFileSize(eqDeleteFile->getPath()),
-      /*equalityFieldIds=*/{1, 2}); // field IDs 1,2 = columns "a","b"
-
-  auto splits = makeSplits(dataFile->getPath(), {icebergDeleteFile});
-  auto plan = makeTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
-
-  // Rows 0, 2, 3 survive (rows 1 and 4 deleted).
-  auto expected = makeRowVector(
-      {"a", "b", "c"},
-      {
-          makeFlatVector<int32_t>({1, 3, 4}),
-          makeFlatVector<std::string>({"x", "z", "x"}),
-          makeFlatVector<int64_t>({10, 30, 40}),
-      });
-
-  assertEqualResults({expected}, {result});
-}
-
-/// Verifies that when no rows match, all rows survive.
-TEST_F(EqualityDeleteFileReaderTest, noMatchingDeletes) {
-  auto rowType = ROW({"id"}, {BIGINT()});
-
-  auto baseData = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3}),
-      });
-  auto dataFile = writeDataFile({baseData});
-
-  // Delete file has values not present in base data.
-  auto deleteData = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({100, 200}),
-      });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
-
-  IcebergDeleteFile icebergDeleteFile(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile->getPath(),
-      dwio::common::FileFormat::DWRF,
-      2,
-      getFileSize(eqDeleteFile->getPath()),
-      /*equalityFieldIds=*/{1});
-
-  auto splits = makeSplits(dataFile->getPath(), {icebergDeleteFile});
-  auto plan = makeTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
-
-  auto expected = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3}),
-      });
-
-  assertEqualResults({expected}, {result});
-}
-
-/// Verifies that all rows are deleted when every base row matches.
-TEST_F(EqualityDeleteFileReaderTest, allRowsDeleted) {
-  auto rowType = ROW({"id"}, {BIGINT()});
-
-  auto baseData = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3}),
-      });
-  auto dataFile = writeDataFile({baseData});
-
-  auto deleteData = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3}),
-      });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
-
-  IcebergDeleteFile icebergDeleteFile(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile->getPath(),
-      dwio::common::FileFormat::DWRF,
-      3,
-      getFileSize(eqDeleteFile->getPath()),
-      /*equalityFieldIds=*/{1});
-
-  auto splits = makeSplits(dataFile->getPath(), {icebergDeleteFile});
-  auto plan = makeTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
-
-  EXPECT_EQ(result->size(), 0);
-}
-
-/// Verifies equality deletes with VARCHAR columns.
-TEST_F(EqualityDeleteFileReaderTest, stringColumnDelete) {
-  auto rowType = ROW({"name", "age"}, {VARCHAR(), INTEGER()});
-
-  auto baseData = makeRowVector(
-      {"name", "age"},
-      {
-          makeFlatVector<std::string>({"alice", "bob", "charlie", "dave"}),
-          makeFlatVector<int32_t>({25, 30, 35, 40}),
-      });
-  auto dataFile = writeDataFile({baseData});
-
-  // Delete rows where name is "bob" or "dave".
-  auto deleteData = makeRowVector(
-      {"name"},
-      {
-          makeFlatVector<std::string>({"bob", "dave"}),
-      });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
-
-  IcebergDeleteFile icebergDeleteFile(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile->getPath(),
-      dwio::common::FileFormat::DWRF,
-      2,
-      getFileSize(eqDeleteFile->getPath()),
-      /*equalityFieldIds=*/{1}); // field ID 1 = "name"
-
-  auto splits = makeSplits(dataFile->getPath(), {icebergDeleteFile});
-  auto plan = makeTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
-
-  auto expected = makeRowVector(
-      {"name", "age"},
-      {
-          makeFlatVector<std::string>({"alice", "charlie"}),
-          makeFlatVector<int32_t>({25, 35}),
-      });
-
-  assertEqualResults({expected}, {result});
-}
-
-/// Verifies equality deletes on a non-first column (field ID 2).
-TEST_F(EqualityDeleteFileReaderTest, deleteOnSecondColumn) {
-  auto rowType = ROW({"id", "category"}, {BIGINT(), VARCHAR()});
-
-  auto baseData = makeRowVector(
-      {"id", "category"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
-          makeFlatVector<std::string>({"A", "B", "A", "C", "B"}),
-      });
-  auto dataFile = writeDataFile({baseData});
-
-  // Delete rows where category == "B".
-  auto deleteData = makeRowVector(
-      {"category"},
-      {
-          makeFlatVector<std::string>({"B"}),
-      });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
-
-  IcebergDeleteFile icebergDeleteFile(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile->getPath(),
-      dwio::common::FileFormat::DWRF,
-      1,
-      getFileSize(eqDeleteFile->getPath()),
-      /*equalityFieldIds=*/{2}); // field ID 2 = column 1 = "category"
-
-  auto splits = makeSplits(dataFile->getPath(), {icebergDeleteFile});
-  auto plan = makeTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
-
-  // Rows with category="B" (indices 1,4) deleted.
-  auto expected = makeRowVector(
-      {"id", "category"},
-      {
-          makeFlatVector<int64_t>({1, 3, 4}),
-          makeFlatVector<std::string>({"A", "A", "C"}),
-      });
-
-  assertEqualResults({expected}, {result});
-}
-
-/// Verifies that equality deletes apply when the delete file has a higher
-/// sequence number than the data file (per the Iceberg V2+ spec).
-TEST_F(EqualityDeleteFileReaderTest, sequenceNumberDeleteApplies) {
-  auto rowType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
-
-  auto baseData = makeRowVector(
-      {"id", "value"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
-          makeFlatVector<std::string>({"a", "b", "c", "d", "e"}),
-      });
-  auto dataFile = writeDataFile({baseData});
-
-  auto deleteData = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({2, 4}),
-      });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
-
-  // Delete file has sequence number 5, data file has sequence number 3.
-  // Since deleteSeq (5) > dataSeq (3), the delete should apply.
-  IcebergDeleteFile icebergDeleteFile(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile->getPath(),
-      dwio::common::FileFormat::DWRF,
-      2,
-      getFileSize(eqDeleteFile->getPath()),
-      /*equalityFieldIds=*/{1},
-      /*lowerBounds=*/{},
-      /*upperBounds=*/{},
-      /*dataSequenceNumber=*/5);
-
-  auto splits = makeSplits(
-      dataFile->getPath(),
-      {icebergDeleteFile},
-      /*dataSequenceNumber=*/3);
-  auto plan = makeTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
-
-  // Rows with id=2 and id=4 are deleted.
-  auto expected = makeRowVector(
-      {"id", "value"},
-      {
-          makeFlatVector<int64_t>({1, 3, 5}),
-          makeFlatVector<std::string>({"a", "c", "e"}),
-      });
-
-  assertEqualResults({expected}, {result});
-}
-
-/// Verifies that equality deletes are skipped when the delete file has a
-/// lower or equal sequence number compared to the data file.
-TEST_F(EqualityDeleteFileReaderTest, sequenceNumberDeleteSkipped) {
-  auto rowType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
-
-  auto baseData = makeRowVector(
-      {"id", "value"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3}),
-          makeFlatVector<std::string>({"a", "b", "c"}),
-      });
-  auto dataFile = writeDataFile({baseData});
-
-  auto deleteData = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3}),
-      });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
-
-  // Delete file has sequence number 2, data file has sequence number 5.
-  // Since deleteSeq (2) <= dataSeq (5), the delete should be skipped.
-  IcebergDeleteFile icebergDeleteFile(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile->getPath(),
-      dwio::common::FileFormat::DWRF,
-      3,
-      getFileSize(eqDeleteFile->getPath()),
-      /*equalityFieldIds=*/{1},
-      /*lowerBounds=*/{},
-      /*upperBounds=*/{},
-      /*dataSequenceNumber=*/2);
-
-  auto splits = makeSplits(
-      dataFile->getPath(),
-      {icebergDeleteFile},
-      /*dataSequenceNumber=*/5);
-  auto plan = makeTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
-
-  // All rows survive because the delete file is skipped.
-  auto expected = makeRowVector(
-      {"id", "value"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3}),
-          makeFlatVector<std::string>({"a", "b", "c"}),
-      });
-
-  assertEqualResults({expected}, {result});
-}
-
-/// Verifies that equality deletes are skipped when the delete file has the
-/// same sequence number as the data file (edge case of the <= check).
-TEST_F(EqualityDeleteFileReaderTest, sequenceNumberEqualSkipped) {
-  auto rowType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
-
-  auto baseData = makeRowVector(
-      {"id", "value"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3}),
-          makeFlatVector<std::string>({"a", "b", "c"}),
-      });
-  auto dataFile = writeDataFile({baseData});
-
-  auto deleteData = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3}),
-      });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
-
-  // Delete file and data file have the same sequence number (5).
-  // Since deleteSeq (5) <= dataSeq (5), the delete should be skipped.
-  IcebergDeleteFile icebergDeleteFile(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile->getPath(),
-      dwio::common::FileFormat::DWRF,
-      3,
-      getFileSize(eqDeleteFile->getPath()),
-      /*equalityFieldIds=*/{1},
-      /*lowerBounds=*/{},
-      /*upperBounds=*/{},
-      /*dataSequenceNumber=*/5);
-
-  auto splits = makeSplits(
-      dataFile->getPath(),
-      {icebergDeleteFile},
-      /*dataSequenceNumber=*/5);
-  auto plan = makeTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
-
-  // All rows survive because the delete file is skipped (equal seq#).
-  auto expected = makeRowVector(
-      {"id", "value"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3}),
-          makeFlatVector<std::string>({"a", "b", "c"}),
-      });
-
-  assertEqualResults({expected}, {result});
-}
-
-/// Verifies that when either sequence number is 0 (unassigned/legacy V1),
-/// the delete file is always applied (filtering is disabled).
-TEST_F(EqualityDeleteFileReaderTest, sequenceNumberZeroAlwaysApplies) {
-  auto rowType = ROW({"id"}, {BIGINT()});
-
-  auto baseData = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3}),
-      });
-  auto dataFile = writeDataFile({baseData});
-
-  auto deleteData = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({2}),
-      });
-  auto eqDeleteFile = writeEqDeleteFile({deleteData});
-
-  // Delete file has sequence number 0 (legacy), data file has sequence 10.
-  // Since deleteSeq is 0, filtering is disabled and the delete applies.
-  IcebergDeleteFile icebergDeleteFile(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile->getPath(),
-      dwio::common::FileFormat::DWRF,
-      1,
-      getFileSize(eqDeleteFile->getPath()),
-      /*equalityFieldIds=*/{1},
-      /*lowerBounds=*/{},
-      /*upperBounds=*/{},
-      /*dataSequenceNumber=*/0);
-
-  auto splits = makeSplits(
-      dataFile->getPath(),
-      {icebergDeleteFile},
-      /*dataSequenceNumber=*/10);
-  auto plan = makeTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
-
-  // Row id=2 is deleted because sequence number filtering is disabled.
-  auto expected = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({1, 3}),
-      });
-
-  assertEqualResults({expected}, {result});
-}
-
-/// Verifies that when multiple delete files have different sequence numbers,
-/// only those with higher sequence numbers than the data file are applied.
-TEST_F(EqualityDeleteFileReaderTest, mixedSequenceNumbers) {
-  auto rowType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
-
-  auto baseData = makeRowVector(
-      {"id", "value"},
-      {
-          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
-          makeFlatVector<std::string>({"a", "b", "c", "d", "e"}),
-      });
-  auto dataFile = writeDataFile({baseData});
-
-  // First delete file: seqNum=10 (higher than data seqNum=5) → applied.
-  auto deleteData1 = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({2}),
-      });
-  auto eqDeleteFile1 = writeEqDeleteFile({deleteData1});
-  IcebergDeleteFile icebergDeleteFile1(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile1->getPath(),
-      dwio::common::FileFormat::DWRF,
-      1,
-      getFileSize(eqDeleteFile1->getPath()),
-      /*equalityFieldIds=*/{1},
-      /*lowerBounds=*/{},
-      /*upperBounds=*/{},
-      /*dataSequenceNumber=*/10);
-
-  // Second delete file: seqNum=3 (lower than data seqNum=5) → skipped.
-  auto deleteData2 = makeRowVector(
-      {"id"},
-      {
-          makeFlatVector<int64_t>({4}),
-      });
-  auto eqDeleteFile2 = writeEqDeleteFile({deleteData2});
-  IcebergDeleteFile icebergDeleteFile2(
-      FileContent::kEqualityDeletes,
-      eqDeleteFile2->getPath(),
-      dwio::common::FileFormat::DWRF,
-      1,
-      getFileSize(eqDeleteFile2->getPath()),
-      /*equalityFieldIds=*/{1},
-      /*lowerBounds=*/{},
-      /*upperBounds=*/{},
-      /*dataSequenceNumber=*/3);
-
-  auto splits = makeSplits(
-      dataFile->getPath(),
-      {icebergDeleteFile1, icebergDeleteFile2},
-      /*dataSequenceNumber=*/5);
-  auto plan = makeTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
-
-  // Only id=2 is deleted (from delete file 1 with seqNum=10).
-  // id=4 survives because delete file 2 (seqNum=3) is skipped.
-  auto expected = makeRowVector(
-      {"id", "value"},
-      {
-          makeFlatVector<int64_t>({1, 3, 4, 5}),
-          makeFlatVector<std::string>({"a", "c", "d", "e"}),
-      });
-
-  assertEqualResults({expected}, {result});
-}
-
-// TODO: Add a Parquet-format equality delete test. Currently all equality
-// delete tests use DWRF because writeToFile() (from HiveConnectorTestBase)
-// only supports DWRF. Adding a Parquet test requires adding Parquet writer
-// dependencies to this test target's BUCK file and a Parquet write helper.
-
-} // namespace facebook::velox::connector::hive::iceberg
+} // namespace facebook::velox::connector::hive::iceberg::test

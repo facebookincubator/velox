@@ -25,12 +25,14 @@ struct ReduceAggregator {
   uint32_t inputIndex;
   VectorPtr constant;
   TypePtr resultType;
+  std::optional<uint32_t> maskIndex;
 
   virtual std::unique_ptr<cudf::column> doReduce(
       cudf::table_view const& input,
       TypePtr const& outputType,
+      vector_size_t inputRowCount,
       rmm::cuda_stream_view stream,
-      vector_size_t inputRowCount) = 0;
+      rmm::device_async_resource_ref mr) = 0;
 
   virtual ~ReduceAggregator() = default;
 
@@ -39,22 +41,28 @@ struct ReduceAggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       VectorPtr constant,
-      const TypePtr& resultType)
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex)
       : step(step),
         inputIndex(inputIndex),
         constant(constant),
-        resultType(resultType) {}
+        resultType(resultType),
+        maskIndex(maskIndex) {}
 };
 
+// 'maskChannels' carries the post-permutation mask column index per aggregate;
+// pass the raw-input mask channels for raw steps and an empty vector otherwise.
 std::vector<std::unique_ptr<ReduceAggregator>> toReduceAggregators(
     core::AggregationNode const& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
-    std::vector<VectorPtr> const& constants);
+    std::vector<VectorPtr> const& constants,
+    std::vector<std::optional<uint32_t>> const& maskChannels);
 
 bool canReduceBeEvaluatedByCudf(
     const core::AggregationNode& aggregationNode,
-    core::QueryCtx* queryCtx);
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
 
 bool canReduceAggregationBeEvaluatedByCudf(
     const core::CallTypedExpr& call,
@@ -88,10 +96,13 @@ class CudfReduce : public CudfOperatorBase {
 
   void doNoMoreInput() override;
 
+  void doClose() override;
+
  private:
   CudfVectorPtr doGlobalAggregation(
       cudf::table_view tableView,
-      rmm::cuda_stream_view stream);
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
 
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
   std::vector<std::unique_ptr<ReduceAggregator>> aggregators_;

@@ -26,6 +26,7 @@
 #include "velox/type/StringView.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
+#include "velox/type/Variant.h"
 
 namespace facebook::velox::common {
 
@@ -979,6 +980,8 @@ class HugeintRange final : public Filter {
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
   bool testingEquals(const Filter& other) const final;
 
  private:
@@ -1200,6 +1203,8 @@ class HugeintValuesUsingHashTable final : public Filter {
   }
 
   bool testInt128(const int128_t& value) const final;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   bool testingEquals(const Filter& other) const final;
 
@@ -1696,6 +1701,7 @@ class FloatingPointRange final : public AbstractRange {
       case FilterKind::kAlwaysTrue:
       case FilterKind::kAlwaysFalse:
       case FilterKind::kIsNull:
+      case FilterKind::kMultiRange:
         return other->mergeWith(this);
       case FilterKind::kIsNotNull:
         return std::make_unique<FloatingPointRange<T>>(
@@ -1725,7 +1731,8 @@ class FloatingPointRange final : public AbstractRange {
         auto upperExclusive = !bothUpperUnbounded &&
             (!testDouble(upper) || !other->testDouble(upper));
 
-        if (lower > upper || (lower == upper && lowerExclusive_)) {
+        if (lower > upper ||
+            (lower == upper && (lowerExclusive || upperExclusive))) {
           if (bothNullAllowed) {
             return std::make_unique<IsNull>();
           }
@@ -2451,6 +2458,11 @@ class MultiRange final : public Filter {
 
   bool testDoubleRange(double min, double max, bool hasNull) const final;
 
+  bool testTimestampRange(
+      const Timestamp& min,
+      const Timestamp& max,
+      bool hasNull) const final;
+
   const std::vector<std::unique_ptr<Filter>>& filters() const {
     return filters_;
   }
@@ -2498,6 +2510,21 @@ static inline bool applyFilter(TFilter& filter, std::string_view value) {
 template <typename TFilter>
 static inline bool applyFilter(TFilter& filter, StringView value) {
   return filter.testStringView(value);
+}
+
+namespace detail {
+template <TypeKind kind, typename TFilter>
+bool applyFilterToVariant(TFilter& filter, const Variant& value) {
+  return applyFilter(filter, value.value<kind>());
+}
+} // namespace detail
+
+/// 'value' must not be null.
+template <typename TFilter>
+static inline bool applyFilter(TFilter& filter, const Variant& value) {
+  VELOX_USER_CHECK(!value.isNull(), "Filter cannot be applied to a null value");
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      detail::applyFilterToVariant, value.kind(), filter, value);
 }
 
 /// Create a hash or bitmap based IN filter depending on value distribution.

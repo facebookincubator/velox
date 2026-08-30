@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/container/F14Set.h>
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/FileColumnHandle.h"
@@ -40,7 +41,7 @@ class ConnectorQueryCtx;
 } // namespace facebook::velox::connector
 
 namespace facebook::velox::dwio::common {
-struct RuntimeStatistics;
+struct RuntimeStats;
 } // namespace facebook::velox::dwio::common
 
 namespace facebook::velox::memory {
@@ -103,13 +104,15 @@ class FileSplitReader {
   void configureReaderOptions(
       std::shared_ptr<random::RandomSkipTracker> randomSkip);
 
+  void setRemainingFilterColumns(const folly::F14FastSet<std::string>& columns);
+
   /// This function is used by different table formats like Iceberg and Hudi to
   /// do additional preparations before reading the split, e.g. Open delete
   /// files or log files, and add column adapatations for metadata columns. It
   /// would be called only once per incoming split
   virtual void prepareSplit(
       std::shared_ptr<common::MetadataFilter> metadataFilter,
-      dwio::common::RuntimeStatistics& runtimeStats,
+      dwio::common::RuntimeStats& runtimeStats,
       const folly::F14FastMap<std::string, std::string>& fileReadOps = {});
 
   virtual uint64_t next(uint64_t size, VectorPtr& output);
@@ -122,7 +125,7 @@ class FileSplitReader {
 
   int64_t estimatedRowSize() const;
 
-  void updateRuntimeStats(dwio::common::RuntimeStatistics& stats) const;
+  void updateRuntimeStats(dwio::common::RuntimeStats& stats) const;
 
   bool allPrefetchIssued() const;
 
@@ -162,7 +165,7 @@ class FileSplitReader {
   // Check if the filters pass on the column statistics.  When delta update is
   // present, the corresonding filter should be disabled before calling this
   // function.
-  bool filterOnStats(dwio::common::RuntimeStatistics& runtimeStats) const;
+  bool filterOnStats(dwio::common::RuntimeStats& runtimeStats) const;
 
   /// Check if the fileSplit_ is empty. The split is considered empty when
   ///   1) The data file is missing but the user chooses to ignore it
@@ -170,7 +173,7 @@ class FileSplitReader {
   ///   3) The data in the file does not pass the filters. The test is based on
   ///      the file metadata and partition key values
   /// This function needs to be called after baseReader_ is created.
-  bool checkIfSplitIsEmpty(dwio::common::RuntimeStatistics& runtimeStats);
+  bool checkIfSplitIsEmpty(dwio::common::RuntimeStats& runtimeStats);
 
   /// Create the dwio::common::RowReader object baseRowReader_, which owns the
   /// ColumnReaders that will be used to read the data

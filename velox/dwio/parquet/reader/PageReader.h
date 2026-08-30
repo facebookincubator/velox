@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/lang/Bits.h>
+
 #include "velox/common/compression/Compression.h"
 #include "velox/dwio/common/BitConcatenation.h"
 #include "velox/dwio/common/DirectDecoder.h"
@@ -23,6 +25,7 @@
 #include "velox/dwio/common/compression/Compression.h"
 #include "velox/dwio/parquet/common/RleEncodingInternal.h"
 #include "velox/dwio/parquet/reader/BooleanDecoder.h"
+#include "velox/dwio/parquet/reader/ByteStreamSplitDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaByteArrayDecoder.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
@@ -36,13 +39,20 @@ namespace facebook::velox::parquet {
 /// continuous stream accessible via readWithVisitor().
 class PageReader {
  public:
+  /// Trailing readable bytes past readBytes()'s returned size. Sized
+  /// for bits::detail::loadBits<uint64_t>, which touches bytes
+  /// [offset, offset + 9) when the bit field straddles the 8-byte word
+  /// boundary. For any value within a miniblock 'offset < size', so the
+  /// furthest byte is at most 'size + 7' — 8 trailing bytes suffice.
+  static constexpr int kPageReadPadding = 8;
+
   PageReader(
       std::unique_ptr<dwio::common::SeekableInputStream> stream,
       memory::MemoryPool& pool,
       ParquetTypeWithIdPtr fileType,
       common::CompressionKind codec,
       int64_t chunkSize,
-      dwio::common::ColumnReaderStatistics& stats,
+      dwio::common::ColumnRuntimeStats& stats,
       const tz::TimeZone* sessionTimezone)
       : pool_(pool),
         inputStream_(std::move(stream)),
@@ -64,7 +74,7 @@ class PageReader {
       memory::MemoryPool& pool,
       common::CompressionKind codec,
       int64_t chunkSize,
-      dwio::common::ColumnReaderStatistics& stats,
+      dwio::common::ColumnRuntimeStats& stats,
       const tz::TimeZone* sessionTimezone = nullptr,
       int32_t maxRepeat = 0,
       int32_t maxDefine = 1)
@@ -216,9 +226,23 @@ class PageReader {
   // 'hasChunkRepDefs_' is false.
   void readPageDefLevels();
 
-  // Returns a pointer to contiguous space for the next 'size' bytes
-  // from current position. Copies data into 'copy' if the range
-  // straddles buffers. Allocates or resizes 'copy' as needed.
+  // Updates bufferStart_ and bufferEnd_ based on deserialization result.
+  // Handles both refiller and non-refiller cases.
+  void updateBufferPointersAfterDeserialization(
+      const thrift::DeserializeResult& result);
+
+  static inline const char* toCharPtr(const uint8_t* ptr) {
+    return reinterpret_cast<const char*>(ptr);
+  }
+
+  static inline const char* toCharPtr(const void* ptr) {
+    return static_cast<const char*>(ptr);
+  }
+
+  // Returns a pointer to contiguous space for the next 'size' bytes from
+  // current position, with at least 'kPageReadPadding' readable trailing
+  // bytes past 'size'. Copies into 'copy' if needed; allocates or resizes
+  // 'copy' as needed.
   const char* readBytes(int32_t size, BufferPtr& copy);
 
   // Decompresses data starting at 'pageData_', consuming 'compressedsize' and
@@ -231,7 +255,7 @@ class PageReader {
 
   template <typename T>
   T readField(const char* FOLLY_NONNULL& ptr) {
-    T data = *reinterpret_cast<const T*>(ptr);
+    T data = folly::loadUnaligned<T>(ptr);
     ptr += sizeof(T);
     return data;
   }
@@ -278,7 +302,9 @@ class PageReader {
     if (nulls) {
       nullsFromFastPath = dwio::common::useFastPath<Visitor, true>(visitor) &&
           (!this->type_->type()->isLongDecimal()) &&
-          (this->type_->type()->isShortDecimal() ? isDictionary() : true);
+          (this->type_->type()->isShortDecimal()
+               ? (isDictionary() || type_->parquetType_ == thrift::Type::INT64)
+               : true);
 
       if (isDictionary()) {
         auto dictVisitor = visitor.toDictionaryColumnVisitor();
@@ -298,7 +324,10 @@ class PageReader {
         deltaBpDecoder_->readWithVisitor<false>(nulls, visitor);
       } else {
         directDecoder_->readWithVisitor<false>(
-            nulls, visitor, !this->type_->type()->isShortDecimal());
+            nulls,
+            visitor,
+            !(this->type_->type()->isShortDecimal() &&
+              type_->parquetType_ != thrift::Type::INT64));
       }
     }
   }
@@ -395,6 +424,9 @@ class PageReader {
   const int64_t chunkSize_;
   const char* bufferStart_{nullptr};
   const char* bufferEnd_{nullptr};
+  // Holds the buffer from the last Thrift deserialization to keep
+  // deserialized data pointers valid
+  std::unique_ptr<folly::IOBuf> thriftBuffer_;
   BufferPtr tempNulls_;
   BufferPtr nullsInReadRange_;
   BufferPtr multiPageNulls_;
@@ -439,7 +471,7 @@ class PageReader {
   raw_vector<uint64_t> leafNulls_;
 
   // Encoding of current page.
-  thrift::Encoding::type encoding_;
+  thrift::Encoding encoding_;
 
   // Row number of first value in current page from start of ColumnChunk.
   int64_t rowOfPage_{0};
@@ -463,7 +495,7 @@ class PageReader {
 
   // Dictionary contents.
   dwio::common::DictionaryValues dictionary_;
-  thrift::Encoding::type dictionaryEncoding_;
+  thrift::Encoding dictionaryEncoding_;
 
   // Offset of current page's header from start of ColumnChunk.
   uint64_t pageStart_{0};
@@ -506,7 +538,7 @@ class PageReader {
   // Manages concatenating null flags read from multiple pages. If a
   // readWithVisitor is contined in one page, the visitor places the
   // nulls in the reader. If many pages are covered, some with and
-  // some without nulls, we must make a a concatenated null flags to
+  // some without nulls, we must make a concatenated null flags to
   // return to the caller.
   dwio::common::BitConcatenation nullConcatenation_;
 
@@ -516,7 +548,7 @@ class PageReader {
   // Base values of dictionary when reading a string dictionary.
   VectorPtr dictionaryValues_;
 
-  dwio::common::ColumnReaderStatistics& stats_;
+  dwio::common::ColumnRuntimeStats& stats_;
 
   const tz::TimeZone* sessionTimezone_{nullptr};
 
@@ -530,6 +562,11 @@ class PageReader {
   std::unique_ptr<DeltaLengthByteArrayDecoder> deltaLengthByteArrDecoder_;
   std::unique_ptr<RleBpDataDecoder> rleBooleanDecoder_;
   // Add decoders for other encodings here.
+
+  // Scratch buffer for BYTE_STREAM_SPLIT decoded data. Separate from
+  // decompressedData_ to avoid overwriting the source when the page is
+  // compressed.
+  BufferPtr bssDecodedData_;
 };
 
 FOLLY_ALWAYS_INLINE dwio::common::compression::CompressionOptions
@@ -541,7 +578,7 @@ getParquetDecompressionOptions(common::CompressionKind kind) {
     options.format.zlib.windowBits =
         dwio::common::compression::Compressor::PARQUET_ZLIB_WINDOW_BITS;
   } else if (
-      kind == common::CompressionKind_LZ4 ||
+      kind == common::CompressionKind_LZ4_HADOOP ||
       kind == common::CompressionKind_LZO) {
     options.format.lz4_lzo.isHadoopFrameFormat = true;
   }

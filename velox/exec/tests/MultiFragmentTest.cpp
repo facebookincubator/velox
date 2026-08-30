@@ -20,8 +20,8 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Exchange.h"
-#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
@@ -262,8 +262,8 @@ class MultiFragmentTest : public HiveConnectorTestBase,
   std::unordered_map<std::string, std::string> configSettings_;
   std::vector<std::shared_ptr<TempFilePath>> filePaths_;
   std::vector<RowVectorPtr> vectors_;
-  std::shared_ptr<OutputBufferManager> bufferManager_{
-      OutputBufferManager::getInstanceRef()};
+  std::shared_ptr<DefaultOutputBufferManager> bufferManager_{
+      DefaultOutputBufferManager::getInstanceRef()};
 };
 
 TEST_P(MultiFragmentTest, aggregationSingleKey) {
@@ -498,10 +498,10 @@ TEST_P(MultiFragmentTest, distributedTableScan) {
 // When the tasks correspond to a MergeExchange are aborted, we expect
 // gracefully exiting of the task itself, and all relevant resources are cleaned
 // up. What happens is that the tasks are aborted; however, the MergeExchange
-// operator's ExchangeClient's are never closed, so the Driver threads are stuck
-// in a tight request loop. This test ensures that after the Tasks have
-// successfully aborted, we're only left with the correct amount of references
-// to the Merge task.
+// operator's InMemoryExchangeClient's are never closed, so the Driver threads
+// are stuck in a tight request loop. This test ensures that after the Tasks
+// have successfully aborted, we're only left with the correct amount of
+// references to the Merge task.
 TEST_P(MultiFragmentTest, abortMergeExchange) {
   setupSources(20, 1000);
 
@@ -821,16 +821,20 @@ TEST_P(MultiFragmentTest, partitionedOutput) {
   // Test dropping all columns.
   {
     auto leafTaskId = makeTaskId("leaf", 0);
-    auto leafPlan =
-        PlanBuilder()
-            .values(vectors_)
-            .addNode(
-                [](std::string nodeId,
-                   core::PlanNodePtr source) -> core::PlanNodePtr {
-                  return core::PartitionedOutputNode::broadcast(
-                      nodeId, 1, ROW({}), GetParam().serdeKind, source);
-                })
-            .planNode();
+    auto leafPlan = PlanBuilder()
+                        .values(vectors_)
+                        .addNode(
+                            [](std::string nodeId,
+                               core::PlanNodePtr source) -> core::PlanNodePtr {
+                              return core::PartitionedOutputNode::broadcast(
+                                  nodeId,
+                                  1,
+                                  ROW({}),
+                                  GetParam().serdeKind,
+                                  std::string{core::TransportKind::kInMemory},
+                                  source);
+                            })
+                        .planNode();
     auto leafTask = makeTask(leafTaskId, leafPlan, 0);
     leafTask->start(4);
     leafTask->updateOutputBuffers(1, true);
@@ -2014,7 +2018,7 @@ class SlowOperatorTranslator : public Operator::PlanNodeTranslator {
 };
 
 TEST_P(MultiFragmentTest, exchangeDestruction) {
-  // This unit test tests the proper destruction of ExchangeClient upon
+  // This unit test tests the proper destruction of InMemoryExchangeClient upon
   // task destruction.
   Operator::registerOperator(std::make_unique<SlowOperatorTranslator>());
 
@@ -2139,7 +2143,7 @@ class TestCustomExchange : public exec::Exchange {
       int32_t operatorId,
       DriverCtx* ctx,
       const std::shared_ptr<const TestCustomExchangeNode>& customExchangeNode,
-      std::shared_ptr<ExchangeClient> exchangeClient)
+      std::shared_ptr<InMemoryExchangeClient> exchangeClient)
       : exec::Exchange(
             operatorId,
             ctx,
@@ -2161,7 +2165,7 @@ class TestCustomExchangeTranslator : public exec::Operator::PlanNodeTranslator {
       exec::DriverCtx* ctx,
       int32_t id,
       const core::PlanNodePtr& node,
-      std::shared_ptr<ExchangeClient> exchangeClient) override {
+      std::shared_ptr<InMemoryExchangeClient> exchangeClient) override {
     if (auto customExchangeNode =
             std::dynamic_pointer_cast<const TestCustomExchangeNode>(node)) {
       return std::make_unique<TestCustomExchange>(
@@ -2648,8 +2652,8 @@ class DataFetcher {
   /// Used to notify DataFetcher that one of the above bool flags has been set.
   folly::EventCount bufferFullOrDoneWait_;
 
-  std::shared_ptr<OutputBufferManager> bufferManager_{
-      OutputBufferManager::getInstanceRef()};
+  std::shared_ptr<DefaultOutputBufferManager> bufferManager_{
+      DefaultOutputBufferManager::getInstanceRef()};
 };
 
 /// Verify that POBM::getData() honors maxBytes parameter roughly at 1MB
@@ -2745,7 +2749,7 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, maxBytes) {
   test(40 * kMB);
 }
 
-// Verifies that ExchangeClient stats are populated even if task fails.
+// Verifies that InMemoryExchangeClient stats are populated even if task fails.
 DEBUG_ONLY_TEST_P(MultiFragmentTest, exchangeStatsOnFailure) {
   // Triggers a failure after fetching first 10 pages.
   std::atomic_uint64_t expectedReceivedPages{0};

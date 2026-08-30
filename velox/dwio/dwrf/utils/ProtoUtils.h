@@ -16,6 +16,12 @@
 
 #pragma once
 
+#include <functional>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/dwrf/common/FileMetadata.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
@@ -25,15 +31,31 @@ namespace facebook::velox::dwrf {
 
 class ProtoUtils final {
  public:
+  /// Provides the string-keyed attributes to stamp on the type whose pre-order
+  /// node id is passed in. Returns an empty list for nodes without attributes.
+  using AttributeProvider =
+      std::function<std::vector<std::pair<std::string, std::string>>(
+          uint32_t typeId)>;
+
   static void writeType(
       const Type& type,
       FooterWriteWrapper&,
-      TypeWriteWrapper* parent = nullptr);
+      TypeWriteWrapper* parent = nullptr,
+      const AttributeProvider& attributeProvider = {});
 
   static std::shared_ptr<const Type> fromFooter(
       const proto::Footer& footer,
       std::function<bool(uint32_t)> selector = [](uint32_t) { return true; },
       uint32_t index = 0);
+
+  /// Reads the per-type string attributes from 'footer', keyed by pre-order
+  /// node id (the index into footer.types(), which matches TypeWithId::id()).
+  /// Types without attributes are omitted, so legacy files yield an empty map.
+  /// Handles both DWRF and ORC footers via FooterWrapper, since Iceberg field
+  /// ids are carried as attributes in either proto variant.
+  static std::
+      unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>
+      readAttributes(const FooterWrapper& footer);
 
   // Deserialize proto from inputStream. Caller can optionally pass in the
   // object to serialize to.

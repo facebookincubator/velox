@@ -53,9 +53,7 @@ int main(int argc, char** argv) {
         "checked_multiply",
         "checked_negate",
         "checked_plus",
-        "in",
-        "modulus",
-        "not"};
+        "modulus"};
     functions::printVeloxFunctions(linkBlockList);
   }
 

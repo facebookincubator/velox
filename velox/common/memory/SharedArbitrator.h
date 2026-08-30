@@ -37,7 +37,7 @@ class SharedArbitratorTestHelper;
 /// memory pool exceeds its current memory capacity, the arbitrator tries to
 /// grow its capacity through memory arbitration. If the query memory pool
 /// exceeds its max memory capacity, then the arbitrator reclaims used memory
-/// from the the query itself which is the local arbitration. If not, the
+/// from the query itself which is the local arbitration. If not, the
 /// arbitrator tries to grow its capacity with the free unused capacity or
 /// reclaim the unused memory from other running queries. If there is still
 /// not enough free capacity, the arbitrator kicks off the global arbitration
@@ -387,19 +387,6 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // capacity limit by reclaiming used memory from the participant itself.
   bool ensureCapacity(ArbitrationOperation& op);
 
-  // Invoked to run local arbitration on the request memory pool. It first
-  // ensures the memory growth is within both memory pool and arbitrator
-  // capacity limits. This step might reclaim the used memory from the request
-  // memory pool itself. Then it tries to obtain free capacity from the
-  // arbitrator. At last, it tries to reclaim free memory from itself before it
-  // falls back to the global arbitration. The local arbitration run is
-  // protected by shared lock of 'arbitrationLock_' which can run in parallel
-  // for different query pools. The free memory reclamation is protected by
-  // arbitrator 'mutex_' which is an in-memory fast operation. The function
-  // returns false on failure. Otherwise, it needs to further check if
-  // 'needGlobalArbitration' is true or not. If true, needs to proceed with the
-  // global arbitration run.
-
   // Invoked to initialize the global arbitration on arbitrator start-up. It
   // starts the background threads to used memory from running queries
   // on-demand.
@@ -539,6 +526,13 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // Invoked to grow 'participant' capacity by 'growBytes' and commit used
   // reservation by 'reservationBytes'. The function throws if the growth fails.
   void checkedGrow(
+      const ScopedArbitrationParticipant& participant,
+      uint64_t growBytes,
+      uint64_t reservationBytes);
+
+  // Grows 'participant' capacity like checkedGrow(), but frees 'growBytes' back
+  // to the arbitrator before rethrowing if the growth fails.
+  void checkedGrowOrFree(
       const ScopedArbitrationParticipant& participant,
       uint64_t growBytes,
       uint64_t reservationBytes);

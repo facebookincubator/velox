@@ -21,11 +21,12 @@
 #include <string>
 
 #include "arrow/util/endian.h"
+#include "velox/dwio/parquet/writer/arrow/ColumnWriter.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 
 namespace facebook::velox::parquet::arrow {
 
-TEST(TestTypeToString, PhysicalTypes) {
+TEST(TestTypeToString, physicalTypes) {
   ASSERT_STREQ("BOOLEAN", typeToString(Type::kBoolean).c_str());
   ASSERT_STREQ("INT32", typeToString(Type::kInt32).c_str());
   ASSERT_STREQ("INT64", typeToString(Type::kInt64).c_str());
@@ -37,7 +38,7 @@ TEST(TestTypeToString, PhysicalTypes) {
       "FIXED_LEN_BYTE_ARRAY", typeToString(Type::kFixedLenByteArray).c_str());
 }
 
-TEST(TestConvertedTypeToString, ConvertedTypes) {
+TEST(TestConvertedTypeToString, convertedTypes) {
   ASSERT_STREQ("NONE", convertedTypeToString(ConvertedType::kNone).c_str());
   ASSERT_STREQ("UTF8", convertedTypeToString(ConvertedType::kUtf8).c_str());
   ASSERT_STREQ("MAP", convertedTypeToString(ConvertedType::kMap).c_str());
@@ -84,7 +85,7 @@ TEST(TestConvertedTypeToString, ConvertedTypes) {
 #pragma warning(disable : 4996)
 #endif
 
-TEST(TypePrinter, StatisticsTypes) {
+TEST(TypePrinter, statisticsTypes) {
   std::string smin;
   std::string smax;
   int32_t intMin = 1024;
@@ -145,7 +146,7 @@ TEST(TypePrinter, StatisticsTypes) {
       "ijklmnop", formatStatValue(Type::kFixedLenByteArray, smax).c_str());
 }
 
-TEST(TestInt96Timestamp, Decoding) {
+TEST(TestInt96Timestamp, decoding) {
   auto check = [](int32_t julianDay, uint64_t nanoseconds) {
 #if ARROW_LITTLE_ENDIAN
     Int96 i96{
@@ -180,6 +181,40 @@ TEST(TestInt96Timestamp, Decoding) {
   check(2547330, 0x123456789abcdefULL);
   check(2547330, 0xfedcba9876543210ULL);
   check(2547339, 0xffffffffffffffffULL);
+}
+
+TEST(TestInt96Timestamp, timestampConventions) {
+  auto testTimestamp =
+      [](int64_t seconds, int32_t dayDelta, uint64_t nanoseconds) {
+        Int96 actual;
+        internal::secondsToImpalaTimestamp(seconds, &actual);
+        auto julianDay = internal::kJulianEpochOffsetDays + dayDelta;
+#if ARROW_LITTLE_ENDIAN
+        Int96 expected = {
+            {static_cast<uint32_t>(nanoseconds),
+             static_cast<uint32_t>(nanoseconds >> 32),
+             static_cast<uint32_t>(julianDay)}};
+#else
+        Int96 expected = {
+            {static_cast<uint32_t>(nanoseconds >> 32),
+             static_cast<uint32_t>(nanoseconds),
+             static_cast<uint32_t>(julianDay)}};
+#endif
+        EXPECT_EQ(actual, expected);
+      };
+
+  // Positive timestamps.
+  testTimestamp(0, 0, 0);
+  testTimestamp(1, 0, 1'000'000'000);
+  testTimestamp(3600, 0, 3'600'000'000'000);
+  testTimestamp(86400, 1, 0);
+  testTimestamp(1767229259, 20454, 3'659'000'000'000);
+
+  // Negative timestamps.
+  testTimestamp(-1, -1, 86'399'000'000'000);
+  testTimestamp(-3600, -1, 23LL * 3600 * 1'000'000'000);
+  testTimestamp(-86400, -1, 0);
+  testTimestamp(-86401, -2, 86'399'000'000'000);
 }
 
 #if !(defined(_WIN32) || defined(__CYGWIN__))

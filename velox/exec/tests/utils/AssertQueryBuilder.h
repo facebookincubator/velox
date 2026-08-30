@@ -51,6 +51,20 @@ class AssertQueryBuilder {
   /// Default is false.
   AssertQueryBuilder& barrierExecution(bool barrier);
 
+  /// Sets the per-task unique id used by AssignUniqueId operators. Default
+  /// is 1. See core::PlanFragment::taskUniqueId.
+  AssertQueryBuilder& taskUniqueId(int32_t taskUniqueId) {
+    params_.taskUniqueId = taskUniqueId;
+    return *this;
+  }
+
+  /// Sets a callback invoked with the Task after it is created but before it is
+  /// started, allowing tests to tweak runtime task state.
+  AssertQueryBuilder& beforeTaskStart(std::function<void(Task&)> callback) {
+    params_.beforeTaskStart = std::move(callback);
+    return *this;
+  }
+
   /// Set configuration property. May be called multiple times to set multiple
   /// properties.
   AssertQueryBuilder& config(const std::string& key, const std::string& value);

@@ -74,6 +74,8 @@ struct HiveConnectorSplit : public FileConnectorSplit {
       std::optional<FileProperties> _properties = std::nullopt,
       std::optional<RowIdProperties> _rowIdProperties = std::nullopt,
       const std::optional<HiveBucketConversion>& _bucketConversion =
+          std::nullopt,
+      std::optional<dwio::common::ColumnMappingMode> _columnMappingMode =
           std::nullopt)
       : FileConnectorSplit(
             connectorId,
@@ -84,7 +86,8 @@ struct HiveConnectorSplit : public FileConnectorSplit {
             splitWeight,
             cacheable,
             std::move(_properties),
-            _partitionKeys),
+            _partitionKeys,
+            _columnMappingMode),
         infoColumns(_infoColumns),
         serdeParameters(_serdeParameters),
         tableBucketNumber(_tableBucketNumber),
@@ -196,8 +199,19 @@ class HiveConnectorSplitBuilder {
     return *this;
   }
 
+  HiveConnectorSplitBuilder& columnMappingMode(
+      dwio::common::ColumnMappingMode mode) {
+    columnMappingMode_ = mode;
+    return *this;
+  }
+
+  HiveConnectorSplitBuilder& batchSizeHint(int32_t hint) {
+    batchSizeHint_ = hint;
+    return *this;
+  }
+
   std::shared_ptr<connector::hive::HiveConnectorSplit> build() const {
-    return std::make_shared<connector::hive::HiveConnectorSplit>(
+    auto split = std::make_shared<connector::hive::HiveConnectorSplit>(
         connectorId_,
         filePath_,
         fileFormat_,
@@ -213,7 +227,10 @@ class HiveConnectorSplitBuilder {
         infoColumns_,
         fileProperties_,
         rowIdProperties_,
-        bucketConversion_);
+        bucketConversion_,
+        columnMappingMode_);
+    split->batchSizeHint = batchSizeHint_;
+    return split;
   }
 
  private:
@@ -233,6 +250,8 @@ class HiveConnectorSplitBuilder {
   bool cacheable_{true};
   std::optional<FileProperties> fileProperties_;
   std::optional<RowIdProperties> rowIdProperties_ = std::nullopt;
+  std::optional<dwio::common::ColumnMappingMode> columnMappingMode_;
+  int32_t batchSizeHint_{0};
 };
 
 } // namespace facebook::velox::connector::hive

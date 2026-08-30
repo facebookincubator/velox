@@ -19,7 +19,6 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/system/HardwareConcurrency.h>
 
-#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -837,7 +836,7 @@ class VectorTestBase {
     return pool_.get();
   }
 
-  // Create LazyVector that produces a flat vector and asserts that is is being
+  // Create LazyVector that produces a flat vector and asserts that is being
   // loaded for a specific set of rows.
   template <typename T>
   std::shared_ptr<LazyVector> makeLazyFlatVector(
@@ -888,21 +887,6 @@ class VectorTestBase {
   std::shared_ptr<folly::Executor> spillExecutor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
           folly::available_concurrency())};
-};
-
-class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
- public:
-  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
-      override {
-    stats_.emplace_back(std::string(name), value);
-  }
-
-  const std::vector<std::pair<std::string, RuntimeCounter>>& stats() const {
-    return stats_;
-  }
-
- private:
-  std::vector<std::pair<std::string, RuntimeCounter>> stats_;
 };
 
 } // namespace facebook::velox::test

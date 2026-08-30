@@ -38,8 +38,18 @@ class DwrfOptions : public dwio::common::FormatSpecificOptions {
     return columnReaderFactory_;
   }
 
+  void setMaxCoalesceDistance(int32_t distance) {
+    maxCoalesceDistance_ = distance;
+  }
+
+  int32_t maxCoalesceDistance() const {
+    return maxCoalesceDistance_;
+  }
+
  private:
   std::shared_ptr<ColumnReaderFactory> columnReaderFactory_;
+  int32_t maxCoalesceDistance_{
+      dwio::common::ReaderOptions::kDefaultCoalesceDistance};
 };
 
 class DwrfRowReader : public StrideIndexProvider,
@@ -85,7 +95,7 @@ class DwrfRowReader : public StrideIndexProvider,
 
   uint64_t skipRows(uint64_t numberOfRowsToSkip);
 
-  uint32_t currentStripe() const {
+  uint32_t currentStripe() const override {
     return currentStripe_;
   }
 
@@ -105,13 +115,12 @@ class DwrfRowReader : public StrideIndexProvider,
       VectorPtr& result,
       const dwio::common::Mutation* = nullptr) override;
 
-  void updateRuntimeStats(
-      dwio::common::RuntimeStatistics& stats) const override {
+  void updateRuntimeStats(dwio::common::RuntimeStats& stats) const override {
     stats.skippedStrides += skippedStrides_;
     stats.processedStrides += processedStrides_;
     stats.footerBufferOverread += getReader().footerBufferOverread();
     stats.numStripes += stripeCeiling_ - firstStripe_;
-    stats.columnReaderStats.mergeFrom(*columnReaderStats_);
+    stats.mergeFrom(*splitStats_);
     stats.unitLoaderStats.merge(unitLoadStats_);
   }
 
@@ -220,7 +229,7 @@ class DwrfRowReader : public StrideIndexProvider,
   // instead of next stripe.
   bool recomputeStridesToSkip_{false};
 
-  std::shared_ptr<dwio::common::ColumnReaderStatistics> columnReaderStats_;
+  std::shared_ptr<dwio::common::SplitStats> splitStats_;
 
   std::optional<int64_t> nextRowNumber_;
 
@@ -358,6 +367,12 @@ class DwrfReader : public dwio::common::Reader {
   // column indices.
   void updateColumnNamesFromTableSchema();
 
+  // Renames the file schema's columns to the requested (table) schema names
+  // that share their Iceberg field id ("iceberg.id" attribute), recursively.
+  // Used for ColumnMappingMode::kFieldId so a downstream name-based read
+  // resolves renames, reorders, deletions, and drop/re-add-with-same-name.
+  void updateColumnNamesFromFieldIds();
+
  private:
   std::shared_ptr<ReaderBase> readerBase_;
 };
@@ -371,6 +386,10 @@ class DwrfReaderFactory : public dwio::common::ReaderFactory {
       const dwio::common::ReaderOptions& options) override {
     return DwrfReader::create(std::move(input), options);
   }
+
+  std::shared_ptr<dwio::common::FormatSpecificOptions> createFormatOptions(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) const override;
 };
 
 } // namespace facebook::velox::dwrf

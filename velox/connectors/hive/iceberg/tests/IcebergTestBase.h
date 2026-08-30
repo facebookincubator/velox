@@ -18,17 +18,28 @@
 
 #include <gtest/gtest.h>
 #include <memory>
+#include <optional>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
+#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
+#include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/dwio/common/FileSink.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #ifdef VELOX_ENABLE_PARQUET
+#include "velox/common/file/LocalFile.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
+#include "velox/dwio/parquet/writer/Writer.h"
 #endif
 
 namespace facebook::velox::connector::hive::iceberg::test {
@@ -68,6 +79,72 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
 
   std::vector<std::shared_ptr<ConnectorSplit>> createSplitsForDirectory(
       const std::string& directory);
+
+  /// Returns the size of a test file.
+  static uint64_t getFileSize(const std::string& path);
+
+  /// Creates Iceberg connector splits for a data file. Tests can attach delete
+  /// files, partition keys, info columns, and a data sequence number to each
+  /// split.
+  std::vector<std::shared_ptr<ConnectorSplit>> makeIcebergSplits(
+      const std::string& dataFilePath,
+      const std::vector<IcebergDeleteFile>& deleteFiles = {},
+      const std::unordered_map<std::string, std::optional<std::string>>&
+          partitionKeys = {},
+      uint32_t splitCount = 1,
+      const std::unordered_map<std::string, std::string>& infoColumns = {},
+      int64_t dataSequenceNumber = 0,
+      const std::unordered_map<int32_t, std::optional<std::string>>&
+          identityPartitionKeys = {});
+
+  /// Creates one Iceberg connector split for a full data file with info
+  /// columns.
+  std::shared_ptr<ConnectorSplit> makeIcebergSplitWithInfoColumns(
+      const std::string& dataFilePath,
+      const std::unordered_map<std::string, std::string>& infoColumns,
+      const std::vector<IcebergDeleteFile>& deleteFiles = {},
+      int64_t dataSequenceNumber = 0);
+
+  /// Writes a DWRF data file with no iceberg.id footer attributes.
+  /// The DWRF reader falls back to positional name mapping for these files.
+  std::shared_ptr<common::testutil::TempFilePath> writeDataFile(
+      const std::vector<RowVectorPtr>& data);
+
+  /// Writes a DWRF file stamping "iceberg.id" footer attributes on each
+  /// top-level column. 'icebergFieldIds[i]' is the Iceberg field ID for the
+  /// i-th column; DWRF pre-order node IDs: 0=root, 1=first column, etc.
+  std::shared_ptr<common::testutil::TempFilePath> writeDwrfFileWithFieldIds(
+      const std::vector<RowVectorPtr>& data,
+      const std::vector<int32_t>& icebergFieldIds);
+
+#ifdef VELOX_ENABLE_PARQUET
+  /// Writes a Parquet file. 'icebergFieldIds[i]' is stamped as the Parquet
+  /// field ID for column i so the reader resolves columns by field ID under
+  /// kParquetFieldId mode. Pass an empty vector to omit field IDs.
+  std::shared_ptr<common::testutil::TempFilePath> writeParquetFile(
+      const std::vector<RowVectorPtr>& data,
+      const std::vector<int32_t>& icebergFieldIds = {});
+#endif
+
+  /// Builds an Iceberg table scan plan.
+  /// Field IDs are derived from each output column's 1-based position in
+  /// 'dataColumns' (the full table schema), which is the authoritative source
+  /// for Iceberg field IDs regardless of file format or projection.
+  core::PlanNodePtr makeIcebergTableScanPlan(
+      const RowTypePtr& outputType,
+      const RowTypePtr& dataColumns,
+      const std::vector<int32_t>& dataColumnFieldIds = {},
+      const std::vector<std::string>& subfieldFilters = {},
+      const std::string& remainingFilter = "");
+
+  /// Convenience overload: outputType == dataColumns (full-projection scan).
+  core::PlanNodePtr makeIcebergTableScanPlan(const RowTypePtr& rowType);
+
+  /// Creates Hive column handles for all columns in 'rowType', marking
+  /// specified columns as partition keys.
+  ColumnHandleMap makeColumnHandles(
+      const RowTypePtr& rowType,
+      const std::unordered_set<int>& partitionIndices = {});
 
   std::vector<std::string> listFiles(const std::string& dirPath);
 

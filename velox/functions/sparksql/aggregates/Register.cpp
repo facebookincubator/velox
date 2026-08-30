@@ -19,6 +19,8 @@
 #include "velox/functions/sparksql/aggregates/ApproxCountDistinctForIntervalsAggregate.h"
 #include "velox/functions/sparksql/aggregates/ApproxPercentileAggregate.h"
 #include "velox/functions/sparksql/aggregates/AverageAggregate.h"
+#include "velox/functions/sparksql/aggregates/BitmapConstructAggAggregate.h"
+#include "velox/functions/sparksql/aggregates/BitmapOrAggAggregate.h"
 #include "velox/functions/sparksql/aggregates/BitwiseXorAggregate.h"
 #include "velox/functions/sparksql/aggregates/BloomFilterAggAggregate.h"
 #include "velox/functions/sparksql/aggregates/CentralMomentsAggregate.h"
@@ -58,6 +60,10 @@ void registerAggregateFunctions(
   registerFirstLastAggregates(prefix, withCompanionFunctions, overwrite);
   registerMinMaxAggregates(prefix, withCompanionFunctions, overwrite);
   registerMinMaxByAggregates(prefix, withCompanionFunctions, overwrite);
+  registerBitmapConstructAggAggregate(
+      prefix + "bitmap_construct_agg", withCompanionFunctions, overwrite);
+  registerBitmapOrAggAggregate(
+      prefix + "bitmap_or_agg", withCompanionFunctions, overwrite);
   registerBitwiseXorAggregate(prefix, withCompanionFunctions, overwrite);
   registerBloomFilterAggAggregate(
       prefix + "bloom_filter_agg", withCompanionFunctions, overwrite);
@@ -65,7 +71,8 @@ void registerAggregateFunctions(
   registerSum(prefix + "sum", withCompanionFunctions, overwrite);
   registerCentralMomentsAggregate(prefix, withCompanionFunctions, overwrite);
   registerCollectSetAggAggregate(prefix, withCompanionFunctions, overwrite);
-  registerCollectListAggregate(prefix, withCompanionFunctions, overwrite);
+  registerCollectListAggregate(
+      {prefix + "collect_list"}, withCompanionFunctions, overwrite);
   registerApproxCountDistinctForIntervalsAggregate(
       prefix, withCompanionFunctions, overwrite);
   registerRegrReplacementAggregate(prefix, withCompanionFunctions, overwrite);

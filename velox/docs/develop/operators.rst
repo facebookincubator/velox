@@ -39,6 +39,7 @@ ProjectNode                 FilterProject
 AggregationNode             HashAggregation or StreamingAggregation
 GroupIdNode                 GroupId
 MarkDistinctNode            MarkDistinct
+MarkSortedNode              MarkSorted
 HashJoinNode                HashProbe and HashBuild
 MergeJoinNode               MergeJoin
 NestedLoopJoinNode          NestedLoopJoinProbe and NestedLoopJoinBuild
@@ -1017,13 +1018,44 @@ FilterNode(rank/row_number <= limit), but it uses less memory and CPU.
 MarkDistinctNode
 ~~~~~~~~~~~~~~~~
 
-The MarkDistinct operator is used to produce aggregate mask columns for aggregations over distinct values, e.g. agg(DISTINCT a).
-Mask is a boolean column set to true for a subset of input rows that collectively represent a set of unique values of 'distinctKeys'.
+The MarkDistinct operator produces boolean marker columns identifying the first occurrence of each distinct
+combination of 'distinctKeys'. It emits one no-mask marker (true on the first occurrence of each distinct key
+combination), followed by one marker per entry in 'masks' (true on the first occurrence of each distinct key
+combination for which the corresponding mask column is true). This allows MarkDistinct to produce aggregate
+mask columns for aggregation over distinct values, with and without filters.
 
 This operator supports spilling. The spill mechanism follows the same pattern as RowNumber: when memory pressure
 triggers spilling, the hash table contents and future input are partitioned and written to disk. During restore,
 each partition's hash table is rebuilt from the spilled data, preserving knowledge of which keys were already seen.
-Disabled by default; enable with `mark_distinct_spill_enabled` configuration property.
+When masks are present, the per-key bitmask tracking which masks have already fired is spilled alongside the hash
+table and restored together. Disabled by default; enable with `mark_distinct_spill_enabled` configuration property.
+
+.. list-table::
+  :widths: 10 30
+  :align: left
+  :header-rows: 1
+
+  * - Property
+    - Description
+  * - markerNames
+    - Names of the output marker columns. The first name is the no-mask marker; the remaining names correspond positionally to entries in 'masks'. Must have exactly one more entry than 'masks'.
+  * - distinctKeys
+    - Names of grouping keys.
+  * - masks
+    - List of boolean mask column references. Empty when only the no-mask marker is needed.
+
+MarkSortedNode
+~~~~~~~~~~~~~~
+
+The MarkSorted operator appends a boolean marker column, named 'markerName', at the end of
+the input columns. For each row, the marker indicates whether the row maintains sort order
+relative to the preceding row, based on 'sortingKeys' and 'sortingOrders'. Rows with equal
+sorting keys are considered sorted.
+
+The operator runs in streaming mode and preserves the order of its input. The comparison
+carries across batches, so only the first row of the entire input is unconditionally marked
+true; the first row of each later batch is compared against the last row of the previous
+batch.
 
 .. list-table::
   :widths: 10 30
@@ -1033,9 +1065,11 @@ Disabled by default; enable with `mark_distinct_spill_enabled` configuration pro
   * - Property
     - Description
   * - markerName
-    - Name of the output mask column.
-  * - distinctKeys
-    - Names of grouping keys.
+    - Name of the output boolean marker column, appended after all input columns.
+  * - sortingKeys
+    - Columns to check for sorted order. Must not be empty.
+  * - sortingOrders
+    - Sorting order for each sorting key above. The supported sort orders are asc nulls first, asc nulls last, desc nulls first and desc nulls last.
 
 MixedUnionNode
 ~~~~~~~~~~~~~~
@@ -1128,3 +1162,41 @@ ALL.
 .. image:: images/local-exchange.png
     :width: 400
     :align: center
+
+GPU Operators (cuDF)
+--------------------
+
+When cuDF is enabled, CPU operators are replaced with GPU equivalents at
+pipeline construction time via the ``OperatorAdapterRegistry``. For example,
+``FilterProject`` becomes ``CudfFilterProject``, ``Aggregation`` becomes
+``CudfGroupby`` or ``CudfReduce``, and ``HashJoin`` becomes
+``CudfHashJoinBuild``/``CudfHashJoinProbe``.
+
+Adapter operators are automatically inserted at GPU/CPU boundaries:
+
+* ``CudfFromVelox`` — inserted before a GPU operator when the preceding
+  operator produces CPU data (host-to-device conversion).
+* ``CudfToVelox`` — inserted after a GPU operator when the next operator
+  or the pipeline output requires CPU data (device-to-host conversion).
+
+Adapter operators use synthetic planNodeIds (e.g. ``4-to-velox``) at runtime,
+but redirect their stats to the parent plan node via ``setStatSplitter``.
+This means they appear in ``printPlanWithStats`` output as operator-type
+breakdown lines under their parent node (the same mechanism used by
+``HashBuild``/``HashProbe`` under ``HashJoinNode``).
+
+All cuDF operators extend ``CudfOperatorBase``, which provides:
+
+* Template method pattern (``doAddInput``/``doGetOutput``/``doClose``)
+* NVTX profiling ranges
+
+GPU operators are identified by their ``Cudf`` prefix in operator type names
+(e.g. ``CudfFilterProject``, ``CudfLocalPartition``, ``CudfReduceFINAL``).
+Operators without this prefix (e.g. ``LocalExchange``) run on CPU.
+``TableScan`` uses the cuDF GPU parquet reader via the connector layer but
+is not itself a ``CudfOperatorBase`` subclass.
+
+In stats output, "Cpu time" and "Wall time" for GPU operators reflect the
+host-side duration of ``addInput``/``getOutput`` calls, which includes
+enqueuing GPU work and synchronizing. These are not GPU hardware execution
+times.

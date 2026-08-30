@@ -15,8 +15,13 @@
  */
 #pragma once
 
+#include <fmt/format.h>
 #include <folly/Synchronized.h>
 #include <folly/container/EvictingCacheMap.h>
+
+#include <algorithm>
+#include <string_view>
+#include <vector>
 
 #include "velox/type/Type.h"
 
@@ -86,6 +91,36 @@ class EnumTypeBase : public TPhysical {
 
   /// Converts the flipped map to a string representation for toString() method.
   std::string flippedMapToString() const;
+
+  // Serializes the enum to its Presto type signature
+  // "name:Kind(name{"KEY": value, ...})", with keys sorted for deterministic
+  // output that round-trips through parseType. 'formatValue' renders a single
+  // value: a raw integer for bigint enums, a quoted base32 string for varchar
+  // enums.
+  template <typename FormatValue>
+  std::string toSqlImpl(std::string_view kind, FormatValue&& formatValue)
+      const {
+    const auto& valuesMap = forwardMap();
+    std::vector<const std::pair<const std::string, TValue>*> entries;
+    entries.reserve(valuesMap.size());
+    for (const auto& entry : valuesMap) {
+      entries.push_back(&entry);
+    }
+    std::sort(
+        entries.begin(), entries.end(), [](const auto* lhs, const auto* rhs) {
+          return lhs->first < rhs->first;
+        });
+
+    std::string body;
+    for (const auto* entry : entries) {
+      if (!body.empty()) {
+        body += ", ";
+      }
+      body +=
+          fmt::format("\"{}\": {}", entry->first, formatValue(entry->second));
+    }
+    return fmt::format("{0}:{1}({0}{{{2}}})", name_, kind, body);
+  }
 
   /// Returns cached instance of enum type or creates and returns a new enum
   /// type if the type has not already been instantiated with the given

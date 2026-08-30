@@ -16,8 +16,6 @@
 
 #include "velox/dwio/common/ColumnLoader.h"
 
-#include "velox/common/process/TraceContext.h"
-
 namespace facebook::velox::dwio::common {
 
 namespace {
@@ -54,6 +52,9 @@ RowSet read(
     effectiveRows = selectedRows;
   }
 
+  // Load any deferred input streams for this column before decoding. Done on
+  // the reader so it runs regardless of which loader subclass is used.
+  fieldReader->formatData().loadLazyInputStreams();
   structReader->advanceFieldReader(fieldReader, offset);
   fieldReader->scanSpec()->setValueHook(hook);
   fieldReader->readWithTiming(offset, effectiveRows, incomingNulls);
@@ -94,7 +95,6 @@ void ColumnLoader::loadInternal(
     ValueHook* hook,
     vector_size_t resultSize,
     VectorPtr* result) {
-  process::TraceContext trace("ColumnLoader::loadInternal");
   ExceptionContextSetter exceptionContext(
       {[](VeloxException::Type /*exceptionType*/, auto* reader) {
          return static_cast<SelectiveStructColumnReaderBase*>(reader)
@@ -121,7 +121,6 @@ void TransformColumnLoader::loadInternal(
     ValueHook* hook,
     vector_size_t resultSize,
     VectorPtr* result) {
-  process::TraceContext trace("TransformColumnLoader::loadInternal");
   VectorPtr fileResult;
   ColumnLoader::loadInternal(rows, hook, resultSize, &fileResult);
   if (fileResult) {
@@ -134,7 +133,6 @@ void DeltaUpdateColumnLoader::loadInternal(
     ValueHook* hook,
     vector_size_t resultSize,
     VectorPtr* result) {
-  process::TraceContext trace("DeltaUpdateColumnLoader::loadInternal");
   ExceptionContextSetter exceptionContext(
       {[](VeloxException::Type /*exceptionType*/, auto* reader) {
          return static_cast<SelectiveStructColumnReaderBase*>(reader)

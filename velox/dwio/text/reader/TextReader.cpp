@@ -317,7 +317,7 @@ int64_t TextRowReader::nextReadSize(uint64_t size) {
 }
 
 void TextRowReader::updateRuntimeStats(
-    dwio::common::RuntimeStatistics& /*stats*/) const {
+    dwio::common::RuntimeStats& /*stats*/) const {
   // No-op for non-selective reader.
 }
 
@@ -1432,6 +1432,7 @@ void TextRowReader::readElement(
       break;
 
     case TypeKind::TIMESTAMP: {
+      VELOX_DCHECK(t->equivalent(*TIMESTAMP()));
       const std::string& s = getString(*this, isNull, delim);
 
       // Early return if no data vector or at EOF

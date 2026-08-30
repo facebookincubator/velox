@@ -31,6 +31,7 @@ SelectiveStructColumnReader::SelectiveStructColumnReader(
     common::ScanSpec& scanSpec,
     bool isRoot)
     : SelectiveStructColumnReaderBase(
+          columnReaderOptions,
           requestedType,
           fileType,
           params,
@@ -81,7 +82,7 @@ SelectiveStructColumnReader::SelectiveStructColumnReader(
     auto childParams = DwrfParams(
         stripe,
         labels,
-        params.runtimeStatistics(),
+        params.splitStats(),
         FlatMapContext{
             .sequence = encodingKey.sequence(),
             .inMapDecoder = nullptr,

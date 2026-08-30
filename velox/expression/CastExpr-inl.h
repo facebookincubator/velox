@@ -15,11 +15,10 @@
  */
 #pragma once
 
-#include <string_view>
-
 #include "velox/common/base/CountBits.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
+#include "velox/expression/CastExpr.h"
 #include "velox/expression/StringWriter.h"
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/type/Type.h"
@@ -28,11 +27,36 @@
 namespace facebook::velox::exec {
 namespace {
 
+// Unscaled decimal values below this threshold can be cast to double and
+// divided by a power of ten without rounding the unscaled value, matching
+// Spark's BigDecimal-based conversion.
+// Reference:
+// https://github.com/openjdk/jdk8u-dev/blob/20e72d16f569e823a9ecdd9951a742b4397ca978/jdk/src/share/classes/java/math/BigDecimal.java#L3294
+constexpr int64_t kDoubleMaxExact = 1L << 52;
+
+// Powers of 10 which can be represented exactly in double. Only scales up to
+// this size can take the exact fast path; larger scales fall back to the
+// general conversion below.
+constexpr double kDoublePowersOfTen[] = {
+    1.0e0,  1.0e1,  1.0e2,  1.0e3,  1.0e4,  1.0e5,  1.0e6,  1.0e7,
+    1.0e8,  1.0e9,  1.0e10, 1.0e11, 1.0e12, 1.0e13, 1.0e14, 1.0e15,
+    1.0e16, 1.0e17, 1.0e18, 1.0e19, 1.0e20, 1.0e21, 1.0e22};
+
+constexpr size_t kDoublePowersOfTenSize =
+    sizeof(kDoublePowersOfTen) / sizeof(kDoublePowersOfTen[0]);
+
 inline std::string makeErrorMessage(
     const BaseVector& input,
     vector_size_t row,
     const TypePtr& toType,
-    std::string_view details = "") {
+    const std::string& details = "") {
+  if (details.empty()) {
+    return fmt::format(
+        "Cannot cast {} '{}' to {}.",
+        input.type()->toString(),
+        input.toString(row),
+        toType->toString());
+  }
   return fmt::format(
       "Cannot cast {} '{}' to {}. {}",
       input.type()->toString(),
@@ -134,32 +158,27 @@ void CastExpr::applyCastKernel(
     const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
     FlatVector<typename TypeTraits<ToKind>::NativeType>* result) {
   bool wrapException = true;
-  auto setError = [&](std::string_view details) INLINE_LAMBDA {
-    if (setNullInResultAtError()) {
-      result->setNull(row, true);
-    } else {
-      wrapException = false;
-      if (context.captureErrorDetails()) {
-        const auto errorDetails =
-            makeErrorMessage(*input, row, result->type(), details);
-        context.setStatus(row, Status::UserError("{}", errorDetails));
-      } else {
-        context.setStatus(row, Status::UserError());
-      }
-    }
+  auto setError = [&](const std::string& details) INLINE_LAMBDA {
+    setCastError(row, context, result, wrapException, [&] {
+      return makeErrorMessage(*input, row, result->type(), details);
+    });
   };
 
   // If castResult has an error, set the error in context. Otherwise, set the
   // value in castResult directly to result. This lambda should be called only
   // when ToKind is primitive and is not VARCHAR or VARBINARY.
-  auto setResultOrError = [&](const auto& castResult, vector_size_t row)
-                              INLINE_LAMBDA {
-                                if (castResult.hasError()) {
-                                  setError(castResult.error().message());
-                                } else {
-                                  result->set(row, castResult.value());
-                                }
-                              };
+  auto setResultOrStatus = [&](const auto& castResult,
+                               vector_size_t row) INLINE_LAMBDA {
+    setResultOrError(
+        row,
+        castResult,
+        [&](const std::string& details) INLINE_LAMBDA {
+          return makeErrorMessage(*input, row, result->type(), details);
+        },
+        context,
+        result,
+        wrapException);
+  };
 
   try {
     auto inputRowValue = input->valueAt(row);
@@ -170,14 +189,14 @@ void CastExpr::applyCastKernel(
         ToKind == TypeKind::TIMESTAMP) {
       const auto castResult =
           hooks_->castIntToTimestamp((int64_t)inputRowValue);
-      setResultOrError(castResult, row);
+      setResultOrStatus(castResult, row);
       return;
     }
 
     if constexpr (
         (FromKind == TypeKind::BOOLEAN) && ToKind == TypeKind::TIMESTAMP) {
       const auto castResult = hooks_->castBooleanToTimestamp(inputRowValue);
-      setResultOrError(castResult, row);
+      setResultOrStatus(castResult, row);
       return;
     }
 
@@ -185,8 +204,10 @@ void CastExpr::applyCastKernel(
         (ToKind == TypeKind::TINYINT || ToKind == TypeKind::SMALLINT ||
          ToKind == TypeKind::INTEGER || ToKind == TypeKind::BIGINT) &&
         FromKind == TypeKind::TIMESTAMP) {
-      const auto castResult = hooks_->castTimestampToInt(inputRowValue);
-      setResultOrError(castResult, row);
+      using To = typename TypeTraits<ToKind>::NativeType;
+      const auto castResult =
+          hooks_->template castTimestampToInt<To>(inputRowValue);
+      setResultOrStatus(castResult, row);
       return;
     }
 
@@ -219,18 +240,21 @@ void CastExpr::applyCastKernel(
         }
       }
       if constexpr (ToKind == TypeKind::TIMESTAMP) {
-        const auto castResult = hooks_->castStringToTimestamp(inputRowValue);
-        setResultOrError(castResult, row);
+        const bool adjustTimezone =
+            !result->type()->equivalent(*TIMESTAMP_UTC());
+        const auto castResult =
+            hooks_->castStringToTimestamp(inputRowValue, adjustTimezone);
+        setResultOrStatus(castResult, row);
         return;
       }
       if constexpr (ToKind == TypeKind::REAL) {
         const auto castResult = hooks_->castStringToReal(inputRowValue);
-        setResultOrError(castResult, row);
+        setResultOrStatus(castResult, row);
         return;
       }
       if constexpr (ToKind == TypeKind::DOUBLE) {
         const auto castResult = hooks_->castStringToDouble(inputRowValue);
-        setResultOrError(castResult, row);
+        setResultOrStatus(castResult, row);
         return;
       }
 
@@ -418,29 +442,69 @@ VectorPtr CastExpr::applyDecimalToFloatCast(
   auto resultBuffer = result->asUnchecked<FlatVector<To>>()->mutableRawValues();
   const auto precisionScale = getDecimalPrecisionScale(*fromType);
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
-  const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
-  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-    const auto unscaledValue = simpleInput->valueAt(row);
-    // Avoid precision loss: float has ~7 significant digits; casting unscaled
-    // int128 to float first loses precision for values with 8+ digits (e.g.
-    // 113751964). Divide in double then cast to float so result is correct.
-    To finalValue;
-    if constexpr (ToKind == TypeKind::REAL) {
-      const auto output =
-          util::Converter<TypeKind::DOUBLE>::tryCast(unscaledValue)
-              .thenOrThrow(folly::identity, [&](const Status& status) {
-                VELOX_USER_FAIL("{}", status.message());
-              });
-      finalValue = static_cast<To>(output / scaleFactor);
-    } else {
-      const auto output =
-          util::Converter<ToKind>::tryCast(unscaledValue)
-              .thenOrThrow(folly::identity, [&](const Status& status) {
-                VELOX_USER_FAIL("{}", status.message());
-              });
-      finalValue = output / scaleFactor;
+  const auto precision = precisionScale.first;
+  const auto scale = precisionScale.second;
+
+  const auto tryFastPath = [&](vector_size_t row,
+                               FromNativeType unscaledValue) {
+    if (scale == 0) {
+      resultBuffer[row] = static_cast<To>(unscaledValue);
+      return true;
     }
-    resultBuffer[row] = finalValue;
+    if (scale < kDoublePowersOfTenSize &&
+        DecimalUtil::absValue<FromNativeType>(unscaledValue) <
+            kDoubleMaxExact) {
+      const double output =
+          static_cast<double>(unscaledValue) / kDoublePowersOfTen[scale];
+      resultBuffer[row] = static_cast<To>(output);
+      return true;
+    }
+    return false;
+  };
+
+  const bool highPrecisionCastEnabled =
+      hooks_->decimalToFloatHighPrecisionCastEnabled();
+  if (highPrecisionCastEnabled) {
+    const auto rowSize = DecimalUtil::maxStringViewSize(precision, scale);
+    std::string buffer(rowSize, '\0');
+    applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+      auto unscaledValue = simpleInput->valueAt(row);
+
+      if (!tryFastPath(row, unscaledValue)) {
+        std::memset(buffer.data(), 0, rowSize);
+        const auto size = DecimalUtil::castToString<FromNativeType>(
+            unscaledValue, scale, rowSize, buffer.data());
+        resultBuffer[row] =
+            util::Converter<ToKind>::tryCast(StringView(buffer.data(), size))
+                .thenOrThrow(folly::identity, [&](const Status& status) {
+                  VELOX_USER_FAIL("{}", status.message());
+                });
+      }
+    });
+    return result;
+  }
+
+  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+    auto unscaledValue = simpleInput->valueAt(row);
+    if (!tryFastPath(row, unscaledValue)) {
+      const double scaleFactor =
+          static_cast<double>(DecimalUtil::kPowersOfTen[scale]);
+      if constexpr (ToKind == TypeKind::REAL) {
+        const double output =
+            util::Converter<TypeKind::DOUBLE>::tryCast(unscaledValue)
+                .thenOrThrow(folly::identity, [&](const Status& status) {
+                  VELOX_USER_FAIL("{}", status.message());
+                });
+        resultBuffer[row] = static_cast<To>(output / scaleFactor);
+      } else {
+        const auto output =
+            util::Converter<ToKind>::tryCast(unscaledValue)
+                .thenOrThrow(folly::identity, [&](const Status& status) {
+                  VELOX_USER_FAIL("{}", status.message());
+                });
+        resultBuffer[row] = output / scaleFactor;
+      }
+    }
   });
   return result;
 }
@@ -486,10 +550,7 @@ VectorPtr CastExpr::applyDecimalToIntegralCast(
           context.setVeloxExceptionError(
               row,
               makeBadCastException(
-                  result->type(),
-                  input,
-                  row,
-                  makeErrorMessage(input, row, toType) + "Out of bounds."));
+                  result->type(), input, row, "Out of bounds."));
         }
         return;
       }
@@ -711,6 +772,14 @@ void CastExpr::applyCastPrimitivesDispatch(
     const BaseVector& input,
     VectorPtr& result) {
   context.ensureWritable(rows, toType, result);
+
+  if (fromType->kind() == TypeKind::TIMESTAMP) {
+    VELOX_DCHECK(fromType->equivalent(*TIMESTAMP()));
+  }
+
+  if constexpr (ToKind == TypeKind::TIMESTAMP) {
+    verifyToTimestampCast(fromType, toType);
+  }
 
   if (isSupportedFastUpcast(fromType, toType)) {
     VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(

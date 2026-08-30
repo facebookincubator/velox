@@ -3814,7 +3814,7 @@ TEST_F(DateTimeFunctionsTest, dateDiffTimestampWithTimezone) {
           TimestampWithTimezone(1'598'373'010'123, "America/Los_Angeles")));
 
   // Test if calculations are being performed in correct zone. Presto behavior
-  // is to use the zone of the first parameter. Note that that this UTC interval
+  // is to use the zone of the first parameter. Note that this UTC interval
   // (a, b) crosses a daylight savings boundary in PST when PST loses one hour.
   // So whenever the calculation is performed in PST, the interval is
   // effectively smaller than 24h and returns zero.
@@ -4993,7 +4993,7 @@ TEST_F(DateTimeFunctionsTest, dateFormatTimestampWithTimezone) {
           "%y-%M-%e %T %p", TimestampWithTimezone(-20220915000, "-03:00")));
 }
 
-TEST_F(DateTimeFunctionsTest, test_week_year) {
+TEST_F(DateTimeFunctionsTest, testWeekYear) {
   const auto dateFormat = [&](std::optional<Timestamp> timestamp,
                               std::optional<std::string> format) {
     return evaluateOnce<std::string>("date_format(c0, c1)", timestamp, format);

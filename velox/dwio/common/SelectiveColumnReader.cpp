@@ -58,20 +58,18 @@ SelectiveColumnReader::SelectiveColumnReader(
       innerNonNullRows_(pool_) {
   scanState_.rowsCopy = raw_vector<vector_size_t>(pool_);
   scanState_.filterCache = raw_vector<uint8_t>(pool_);
-  // Initialize per-column metrics if collection is enabled.
-  if (params.runtimeStatistics().columnMetricsSet) {
-    columnMetrics_ = params.runtimeStatistics().columnMetricsSet->getOrCreate(
-        fileType_->id());
-  }
+  // Initialize per-column decoding statistics if collection is enabled.
+  auto& stats = params.columnStats(fileType_->id(), fileType_->type()->kind());
+  decodingStats_ = stats.decodingStats ? &*stats.decodingStats : nullptr;
 }
 
 void SelectiveColumnReader::readWithTiming(
     int64_t offset,
     const RowSet& rows,
     const uint64_t* incomingNulls) {
-  if (columnMetrics_ && fileType_->type()->isPrimitiveType()) {
+  if (decodingStats_ && fileType_->type()->isPrimitiveType()) {
     DeltaCpuWallTimer timer([this](const CpuWallTiming& timing) {
-      columnMetrics_->decodeCPUTimeNanos.increment(timing.cpuNanos);
+      decodingStats_->decodeCPUTimeNanos.increment(timing.cpuNanos);
     });
     read(offset, rows, incomingNulls);
   } else {
@@ -120,7 +118,7 @@ void SelectiveColumnReader::seekTo(int64_t offset, bool readsNullsOnly) {
   }
 }
 
-void SelectiveColumnReader::initReturnReaderNulls(const RowSet& rows) {
+void SelectiveColumnReader::setReturnNullsMode(const RowSet& rows) {
   if (useBulkPath() && !scanSpec_->hasFilter()) {
     anyNulls_ = nullsInReadRange_ != nullptr;
     const bool isDense = rows.back() == rows.size() - 1;
@@ -139,7 +137,7 @@ void SelectiveColumnReader::prepareNulls(
     return;
   }
 
-  initReturnReaderNulls(rows);
+  setReturnNullsMode(rows);
   if (returnReaderNulls_) {
     // No need for null flags if fast path.
     return;

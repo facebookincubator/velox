@@ -721,6 +721,49 @@ TEST_P(HashJoinTest, dynamicFilters) {
           })
           .run();
     }
+
+    // Right anti join.
+    op = PlanBuilder(planNodeIdGenerator, pool_.get())
+             .tableScan(probeType)
+             .capturePlanNodeId(probeScanId)
+             .hashJoin(
+                 {"c0"},
+                 {"u_c0"},
+                 buildSide,
+                 "",
+                 {"u_c0", "u_c1"},
+                 core::JoinType::kRightAnti)
+             .capturePlanNodeId(joinId)
+             .project({"u_c0", "u_c1 + 1"})
+             .planNode();
+    {
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(std::move(op))
+          .makeInputSplits(makeInputSplits(probeScanId))
+          .referenceQuery(
+              "SELECT u.c0, u.c1 + 1 FROM u WHERE NOT EXISTS (SELECT 1 FROM t WHERE t.c0 = u.c0)")
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+            auto planStats = toPlanStats(task->taskStats());
+            if (hasSpill) {
+              // Dynamic filtering should be disabled with spilling triggered.
+              ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+            } else {
+              ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
+              ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
+              ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
+              ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+              ASSERT_EQ(
+                  planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                  std::unordered_set<core::PlanNodeId>({joinId}));
+            }
+          })
+          .run();
+    }
   }
 
   // Basic push-down with column names projected out of the table scan
@@ -1878,6 +1921,86 @@ TEST_P(HashJoinTest, dynamicFiltersPushDownThroughAgg) {
       .run();
 }
 
+TEST_P(HashJoinTest, dynamicFiltersPushDownThroughStreamingAgg) {
+  const int32_t numRowsProbe = 300;
+  const int32_t numRowsBuild = 100;
+
+  // Probe c0 is strictly increasing (row - 10), so the input is already
+  // clustered on the grouping key required by StreamingAggregation.
+  std::vector<RowVectorPtr> probeVectors{makeRowVector({
+      makeFlatVector<int32_t>(numRowsProbe, [&](auto row) { return row - 10; }),
+      makeFlatVector<int64_t>(numRowsProbe, folly::identity),
+  })};
+  std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
+  writeToFile(probeFile->getPath(), probeVectors);
+
+  // Create build data
+  std::vector<RowVectorPtr> buildVectors{makeRowVector(
+      {"u0"}, {makeFlatVector<int32_t>(numRowsBuild, [&](auto row) {
+        return 35 + 2 * (row + numRowsBuild / 5);
+      })})};
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto probeType = ROW({"c0", "c1"}, {INTEGER(), BIGINT()});
+
+  // For sum() the partial accumulator equals the final value, so the same
+  // reference query and verifier apply to both single and partial streaming
+  // aggregation steps.
+  for (const auto step :
+       {core::AggregationNode::Step::kSingle,
+        core::AggregationNode::Step::kPartial}) {
+    SCOPED_TRACE(fmt::format("step {}", core::AggregationNode::toName(step)));
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto buildSide =
+        PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();
+
+    // Inner join.
+    core::PlanNodeId scanNodeId;
+    core::PlanNodeId joinNodeId;
+    core::PlanNodeId aggNodeId;
+    auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(probeType)
+                  .capturePlanNodeId(scanNodeId)
+                  .streamingAggregation({"c0"}, {"sum(c1)"}, {}, step, false)
+                  .capturePlanNodeId(aggNodeId)
+                  .hashJoin(
+                      {"c0"},
+                      {"u0"},
+                      buildSide,
+                      "",
+                      {"c0", "a0"},
+                      core::JoinType::kInner)
+                  .capturePlanNodeId(joinNodeId)
+                  .planNode();
+
+    SplitPath splitPaths = {{scanNodeId, {probeFile->getPath()}}};
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(std::move(op))
+        .inputSplits(splitPaths)
+        .injectSpill(false)
+        .checkSpillStats(false)
+        .referenceQuery(
+            "SELECT c0, sum(c1) FROM t, u WHERE c0 = u0 group by c0")
+        .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+          auto planStats = toPlanStats(task->taskStats());
+          auto dynamicFilterStats = planStats.at(scanNodeId).dynamicFilterStats;
+          ASSERT_EQ(
+              1, getFiltersProduced(task, getOperatorIndex(joinNodeId)).sum);
+          ASSERT_EQ(
+              1, getFiltersAccepted(task, getOperatorIndex(scanNodeId)).sum);
+          ASSERT_LT(
+              getInputPositions(task, getOperatorIndex(aggNodeId)),
+              numRowsProbe);
+          ASSERT_EQ(
+              dynamicFilterStats.producerNodeIds,
+              std::unordered_set({joinNodeId}));
+        })
+        .run();
+  }
+}
+
 TEST_P(HashJoinTest, noDynamicFiltersPushDownThroughRightJoin) {
   std::vector<RowVectorPtr> innerBuild = {makeRowVector(
       {"a"},
@@ -2064,13 +2187,17 @@ TEST_P(HashJoinTest, spillFileSize) {
 }
 
 TEST_P(HashJoinTest, spillPartitionBitsOverlap) {
+  // Use enough rows so the hash table exits array mode and sizeBits exceeds
+  // spillStartPartitionBit. checkHashBitsOverlap is skipped in array mode.
+  // folly::xoshiro256pp_32 produces different sequences on ARM64 vs x86,
+  // and narrower key distributions can keep the table in array mode.
   auto builder =
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .numDrivers(numDrivers_)
           .parallelizeJoinBuildRows(parallelBuildSideRowsEnabled_)
           .keyTypes({BIGINT(), BIGINT()})
-          .probeVectors(2'000, 3)
-          .buildVectors(2'000, 3)
+          .probeVectors(5'000, 3)
+          .buildVectors(5'000, 3)
           .referenceQuery(
               "SELECT t_k0, t_k1, t_data, u_k0, u_k1, u_data FROM t, u WHERE t_k0 = u_k0 and t_k1 = u_k1")
           .config(core::QueryConfig::kSpillStartPartitionBit, "8")

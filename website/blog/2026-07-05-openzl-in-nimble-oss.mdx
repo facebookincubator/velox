@@ -1,0 +1,92 @@
+---
+slug: openzl-in-nimble-oss
+title: "Making OpenZL Available in Nimble OSS"
+date: 2026-07-05
+authors: [Victor-C-Zhang, srsuryadev, zzhao]
+tags: [tech-blog, compression, nimble]
+description: "We are open-sourcing the OpenZL integration to use Nimble with its best efficiency configuration. "
+---
+
+## TL;DR
+
+[Nimble](https://github.com/facebookincubator/nimble) from Meta has been using
+[OpenZL](https://openzl.org/) as the backend compressor for many years. Today,
+[**we are open-sourcing our integration**](https://github.com/facebookincubator/nimble/pull/904),
+so external contributors (i.e. outside Meta) can use Nimble with OpenZL.
+
+<!-- truncate -->
+
+When the Nimble format was first being developed, we found that
+[generic compression engines](https://github.com/facebookincubator/nimble/blob/main/dwio/nimble/compression/ZstdCompressor.cpp)
+didn't quite offer the flexibility we needed, particularly when it came to
+navigating the ever-important balance between storage density and processing
+throughput. Addressing this gap required a fundamental shift in compression
+philosophy. Enter [OpenZL](https://openzl.org/).
+
+Today, we are proud to announce that a Nimble-OpenZL integration is fully
+available to the open-source community, representing an industry-first move from
+rigid, general-purpose algorithms to a programmable, format-aware framework.
+
+## How it Works: The Graph Model
+
+The "secret sauce" of OpenZL lies in its underlying theoretical model. For those
+interested in the complete details, please refer to the OpenZL
+[white paper](https://arxiv.org/abs/2510.03203). To briefly introduce the topic,
+we mention the main ideas here.
+
+Unlike traditional frameworks
+[[1](https://parquet.apache.org/docs/file-format/data-pages/compression/),
+[2](https://nightlies.apache.org/flink/flink-docs-stable/docs/ops/state/large_state_tuning/#compression),
+[3](https://zarr.readthedocs.io/en/v2.1.4/api/codecs.html)] or standard LZ77
+variants [[4](https://en.wikipedia.org/wiki/LZMA),
+[5](https://en.wikipedia.org/wiki/Brotli)], OpenZL treats compression as a
+directed acyclic graph (DAG) of modular codecs. In this model, nodes are
+specialized codecs designed to exploit specific data qualities—such as
+field-aware LZ for numerical series or semantic clustering for strings. By
+composing these modular units into a graph, OpenZL can "understand" the semantic
+structure of data, allowing for transformations that are both semantically
+precise and computationally efficient.
+
+Using the right graph for the data is the key to using OpenZL effectively.
+OpenZL ships with
+[graph training tools](https://openzl.org/getting-started/quick-start/#training)
+that make this possible at scale. This offline optimization component acts as
+the engine for continuous improvement, enabling developers to see results
+without manual graph-building.
+
+Beyond the raw performance gains, OpenZL provides significant operational
+advantages. The graph model enables a universal decoder that can decompress any
+output simply by reading the graph specification generated in the compressed
+frame, removing the need for expensive synchronization of library versions. This
+means the decompression logic remains static even as compression graphs evolve.
+This architecture enables fleet-wide updates from a single binary, and ensures
+backward compatibility for older data. By eliminating the need for expensive
+library version synchronization, we have reduced the maintenance burden and
+improved the reliability of our data infrastructure.
+
+## Why OpenZL OSS?
+
+To kickstart the conversation, we're open-sourcing the OpenZL graphs used by
+Nimble at Meta. Hence, external contributors to Nimble and Velox can leverage
+our file-format with best efficiency configuration or setup. You can find their
+definitions in
+[`OpenZLCompressor.cpp`](https://github.com/facebookincubator/nimble/blob/main/dwio/nimble/compression/OpenZLCompressor.cpp).
+We encourage everyone interested in compression to experiment with the new
+compressor and try the OpenZL training tools. In the coming months, we will be
+integrating OpenZL training and graph specification more deeply into the Nimble
+ecosystem. While OpenZL is not a silver bullet, we expect that many users will
+see meaningful gains compared to current database SotA solutions. We are very
+excited to see what the future of database compression holds!
+
+## Impact
+
+A better theoretical model translates into better empirical results. Based on
+production traffic at Meta, integrating OpenZL as the backend compressor for
+Nimble's columnar database is a step change that saves roughly 10% in compressed
+size compared to Zstandard (results from the
+[white paper](https://arxiv.org/abs/2510.03203), section 7). Much of this win
+came from OpenZL's ability to work on multi-byte fields (e.g. 32-bit, 64-bit
+integers). This superior performance profile—delivering better compression than
+Zstd with minimal difference in CPU load—makes OpenZL a key differentiator for
+the Nimble ecosystem and has helped Meta bend the curve on AI training
+workloads.

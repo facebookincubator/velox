@@ -26,6 +26,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/BackpressureTestNode.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/IndexLookupJoinTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -150,6 +151,149 @@ class IndexLookupJoinTest : public IndexLookupJoinTestBase,
   const std::unique_ptr<folly::CPUThreadPoolExecutor> connectorCpuExecutor_{
       std::make_unique<folly::CPUThreadPoolExecutor>(128)};
 };
+
+class LazyStaleAcrossBatchTest : public IndexLookupJoinTestBase {
+ protected:
+  void SetUp() override {
+    HiveConnectorTestBase::SetUp();
+    TestIndexConnectorFactory::registerConnector(connectorCpuExecutor_.get());
+    Operator::registerOperator(std::make_unique<BackpressureTranslator>());
+    keyType_ = ROW({"u0"}, {BIGINT()});
+    valueType_ = ROW({"u1"}, {BIGINT()});
+    tableType_ = concat(keyType_, valueType_);
+    probeType_ = ROW({"t0", "t1"}, {BIGINT(), BIGINT()});
+  }
+
+  void TearDown() override {
+    Operator::unregisterAllOperators();
+    connector::ConnectorRegistry::global().erase(kTestIndexConnectorName);
+    HiveConnectorTestBase::TearDown();
+  }
+
+  static std::shared_ptr<TestIndexTableHandle> makeIndexTableHandle(
+      const std::shared_ptr<TestIndexTable>& indexTable,
+      bool asyncLookup) {
+    return std::make_shared<TestIndexTableHandle>(
+        kTestIndexConnectorName, indexTable, asyncLookup, false);
+  }
+
+  static connector::ColumnHandleMap makeIndexColumnHandles(
+      const std::vector<std::string>& names) {
+    connector::ColumnHandleMap handles;
+    for (const auto& name : names) {
+      handles.emplace(name, std::make_shared<TestIndexColumnHandle>(name));
+    }
+    return handles;
+  }
+
+  const std::unique_ptr<folly::CPUThreadPoolExecutor> connectorCpuExecutor_{
+      std::make_unique<folly::CPUThreadPoolExecutor>(128)};
+};
+
+// Reproduces the Driver-level bug where the TableScan reader advances past a
+// passthrough LazyVector that the IndexLookupJoin still holds unloaded
+// downstream, surfacing as "Loading LazyVector after the enclosing reader has
+// moved". See BackpressureTestNode.h for how the back-pressuring sink forces
+// the driver to race the scan ahead while a probe batch is draining. The bug is
+// operator-neutral; NestedLoopJoinTest has the same regression with a
+// cross-product join. This test passes once the Driver fix is in place.
+TEST_F(LazyStaleAcrossBatchTest, lazyVectorStaleUnderBackpressure) {
+  IndexTableData tableData;
+  generateIndexTableData(/*keyCardinalities=*/{100}, tableData, pool_);
+
+  // One large probe input -> one file -> one split whose reader yields many
+  // (10k-row) batches (~9). The join drains each batch over multiple
+  // getOutput() calls, so while one batch is draining the driver advances the
+  // scan to read later batches -- this is what lets the reader move past a
+  // batch whose scan lazy is still unloaded downstream.
+  auto probeVectors = generateProbeInput(
+      /*numBatches=*/1,
+      /*batchSize=*/90'000,
+      /*numDuplicateProbeRows=*/1,
+      tableData,
+      pool_,
+      /*probeJoinKeys=*/{"t0"},
+      /*hasNullKeys=*/false,
+      /*inColumns=*/{},
+      /*betweenColumns=*/{},
+      /*equalMatchPct=*/100);
+  auto probeFiles = createProbeFiles(probeVectors);
+
+  auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/1,
+      tableData.keyVectors,
+      tableData.valueVectors,
+      *pool());
+  // Synchronous lookups: isBlocked never blocks the join, so the join drains
+  // each batch itself while the driver races the scan ahead.
+  auto indexTableHandle =
+      makeIndexTableHandle(indexTable, /*asyncLookup=*/false);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      makeScanOutputType({"u0", "u1"}),
+      makeIndexColumnHandles({"u0", "u1"}));
+
+  // Project[1] loads t1 and passes t0 through as an unloaded scan LazyVector;
+  // Project[2] loads t0 to form the join key.
+  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .startTableScan()
+                  .outputType(probeType_)
+                  .endTableScan()
+                  .captureScanNodeId(probeScanNodeId_)
+                  .project({"t1 + 0 AS t1", "t0"})
+                  .project({"t0 + 0 AS t0", "t1"})
+                  .startIndexLookupJoin()
+                  .leftKeys({"t0"})
+                  .rightKeys({"u0"})
+                  .indexSource(indexScanNode)
+                  .outputLayout({"t0", "t1", "u1"})
+                  .joinType(core::JoinType::kInner)
+                  .endIndexLookupJoin()
+                  .capturePlanNodeId(joinNodeId_)
+                  // Downstream projects: the join drains each probe batch into
+                  // them over multiple driver iterations, during which the
+                  // driver fills the scan + upstream projects ahead of
+                  // Project[2].
+                  .project({"t0 + 0 AS t0", "t1", "u1"})
+                  .project({"t0", "t1 + 0 AS t1", "u1"})
+                  .addNode([](const std::string& id, core::PlanNodePtr input) {
+                    return std::make_shared<BackpressureNode>(
+                        id, /*delayCycles=*/20, std::move(input));
+                  })
+                  .planNode();
+
+  // No prefetch (maxNumInputBatches_ == 1). The join holds a single probe batch
+  // and drains it into the downstream projects over many getOutput() calls
+  // because its output is chunked at outputBatchSize_ (1024) while a scan read
+  // is 10000 rows. Throughout that multi-call drain numInputBatches()==1==max
+  // so the join refuses input; the driver, unable to feed it, instead advances
+  // the scan->Project[1]->Project[2] chain via per-pair back-pressure:
+  // Project[1] forwards the next batch (with t0 still an unloaded scan lazy)
+  // into the empty Project[2], then the scan reads one more batch. When the
+  // join finishes the current batch and finally pulls Project[2], Project[2]
+  // loads that stranded t0 lazy against a reader that has already moved ->
+  // stale version crash. Parallel (non-serial) execution: the sink does not
+  // block the driver per output chunk. In serial cursor mode the driver returns
+  // kWaitForConsumer after every chunk and resumes from the sink, so it
+  // re-drains the join (which still holds the batch) without ever walking up to
+  // the scan -- the reader never advances during the drain and the bug is
+  // masked. With a non-blocking sink the driver continues the loop up to the
+  // scan between chunks, advancing the reader while Project[2] still holds an
+  // unloaded lazy.
+  auto result =
+      AssertQueryBuilder(plan)
+          .serialExecution(false)
+          .splits(probeScanNodeId_, makeHiveConnectorSplits(probeFiles))
+          .copyResults(pool_.get());
+  // With the bug, copyResults() above throws the lazy-vector "reader has moved"
+  // error before reaching here. After the fix, the inner join produces exactly
+  // one output row per probe row: equalMatchPct=100 so every probe key matches,
+  // and the index keys are unique (keyCardinalities={100}) so each match fans
+  // out to a single row.
+  ASSERT_EQ(result->size(), probeVectors[0]->size());
+}
 
 TEST_F(IndexLookupJoinTest, joinCondition) {
   const auto rowType =
@@ -492,6 +636,49 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
     testSerde(plan);
   }
 
+  // with splitOutput.
+  for (const auto splitOutput :
+       {std::optional<bool>(true),
+        std::optional<bool>(false),
+        std::optional<bool>(std::nullopt)}) {
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values({left})
+                    .startIndexLookupJoin()
+                    .leftKeys({"t0"})
+                    .rightKeys({"u0"})
+                    .indexSource(indexTableScan)
+                    .outputLayout({"t0", "u1", "t2", "t1"})
+                    .joinType(core::JoinType::kInner)
+                    .splitOutput(splitOutput)
+                    .endIndexLookupJoin()
+                    .planNode();
+    auto indexLookupJoinNode =
+        std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+    ASSERT_EQ(indexLookupJoinNode->splitOutput(), splitOutput);
+    testSerde(plan);
+  }
+
+  // with forwardedProbeColumns.
+  {
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values({left})
+                    .startIndexLookupJoin()
+                    .leftKeys({"t0"})
+                    .rightKeys({"u0"})
+                    .indexSource(indexTableScan)
+                    .outputLayout({"t0", "u1", "t2", "t1"})
+                    .joinType(core::JoinType::kInner)
+                    .forwardedProbeColumns({"t1", "t2"})
+                    .endIndexLookupJoin()
+                    .planNode();
+    auto indexLookupJoinNode =
+        std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+    ASSERT_EQ(indexLookupJoinNode->forwardedProbeColumns().size(), 2);
+    ASSERT_EQ(indexLookupJoinNode->forwardedProbeColumns()[0]->name(), "t1");
+    ASSERT_EQ(indexLookupJoinNode->forwardedProbeColumns()[1]->name(), "t2");
+    testSerde(plan);
+  }
+
   // bad join type.
   {
     VELOX_ASSERT_USER_THROW(
@@ -554,6 +741,116 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
             .planNode(),
         "The index lookup join node requires at least one join key");
   }
+
+  // Forwarded probe column not found in probe input.
+  {
+    VELOX_ASSERT_THROW(
+        PlanBuilder(planNodeIdGenerator)
+            .values({left})
+            .startIndexLookupJoin()
+            .leftKeys({"t0"})
+            .rightKeys({"u0"})
+            .indexSource(indexTableScan)
+            .outputLayout({"t0", "u1", "t2", "t1"})
+            .forwardedProbeColumns({"missing_column"})
+            .endIndexLookupJoin()
+            .planNode(),
+        "Field not found: missing_column");
+  }
+
+  // Forwarded probe column overlaps with a leftKey.
+  {
+    VELOX_ASSERT_THROW(
+        PlanBuilder(planNodeIdGenerator)
+            .values({left})
+            .startIndexLookupJoin()
+            .leftKeys({"t0"})
+            .rightKeys({"u0"})
+            .indexSource(indexTableScan)
+            .outputLayout({"t0", "u1", "t2", "t1"})
+            .forwardedProbeColumns({"t0"})
+            .endIndexLookupJoin()
+            .planNode(),
+        "Forwarded probe column t0 overlaps with a leftKey");
+  }
+
+  // Duplicate forwarded probe columns.
+  {
+    VELOX_ASSERT_THROW(
+        PlanBuilder(planNodeIdGenerator)
+            .values({left})
+            .startIndexLookupJoin()
+            .leftKeys({"t0"})
+            .rightKeys({"u0"})
+            .indexSource(indexTableScan)
+            .outputLayout({"t0", "u1", "t2", "t1"})
+            .forwardedProbeColumns({"t1", "t1"})
+            .endIndexLookupJoin()
+            .planNode(),
+        "Duplicate forwarded probe column: t1");
+  }
+}
+
+TEST_F(IndexLookupJoinTest, forwardedProbeColumnOverlapsWithCondition) {
+  // The plan-node ctor catches forwarded columns that overlap with leftKeys.
+  // The remaining case — overlap with a probe column referenced by a join
+  // condition (e.g. a BETWEEN bound) — is caught by the operator at runtime
+  // when it walks the join conditions and assembles the lookup input set.
+  // This test verifies that runtime check fires with the expected message.
+  TestIndexTableHandle::registerSerDe();
+  auto indexConnectorHandle = makeIndexTableHandle(nullptr, true);
+
+  auto left = makeRowVector(
+      {"t0", "t1", "t2", "t3", "t4"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<int64_t>({10, 20, 30}),
+       makeFlatVector<int64_t>({40, 50, 60}),
+       makeArrayVector<int64_t>(
+           3,
+           [](auto row) { return row; },
+           [](auto /*unused*/, auto index) { return index; }),
+       makeArrayVector<int64_t>(
+           3,
+           [](auto row) { return row; },
+           [](auto /*unused*/, auto index) { return index; })});
+  auto right = makeRowVector(
+      {"u0", "u1", "u2"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<int64_t>({10, 20, 30}),
+       makeFlatVector<int64_t>({10, 30, 20})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto planBuilder = PlanBuilder();
+  auto indexTableScan = std::dynamic_pointer_cast<const core::TableScanNode>(
+      PlanBuilder::TableScanBuilder(planBuilder)
+          .tableHandle(indexConnectorHandle)
+          .outputType(asRowType(right->type()))
+          .endTableScan()
+          .planNode());
+
+  // BETWEEN's lower bound is t1 (a probe column reference). The operator's
+  // join-condition walk will add t1 to its lookup input set. Then the
+  // forwardedProbeColumns walk attempts to add t1 again and throws.
+  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .values({left})
+                  .startIndexLookupJoin()
+                  .leftKeys({"t0"})
+                  .rightKeys({"u0"})
+                  .indexSource(indexTableScan)
+                  .joinConditions({"u1 between t1 AND t2"})
+                  .outputLayout({"t0", "u1", "t2", "t1"})
+                  .joinType(core::JoinType::kInner)
+                  .forwardedProbeColumns({"t1"})
+                  .endIndexLookupJoin()
+                  .planNode();
+
+  // The plan itself constructs fine — leftKeys is {t0}, forwarded is {t1};
+  // no leftKey overlap. The overlap with the BETWEEN bound is detected at
+  // operator initialize() time.
+  VELOX_ASSERT_THROW(
+      exec::test::AssertQueryBuilder(plan).copyResults(pool_.get()),
+      "Forwarded probe column t1 overlaps with a column already referenced "
+      "by a join condition");
 }
 
 TEST_P(IndexLookupJoinTest, DISABLED_equalJoin) {
@@ -2661,6 +2958,130 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
         probeScanNodeId_,
         probeFiles,
         GetParam().needsIndexSplit);
+  }
+}
+
+TEST_P(IndexLookupJoinTest, splitOutputNodeOverride) {
+  IndexTableData tableData;
+  generateIndexTableData({3'000, 1, 1}, tableData, pool_);
+
+  const int numProbeBatches = 10;
+  const int numRowsPerProbeBatch = 100;
+  const int maxBatchRows = 10;
+
+  const auto probeVectors = generateProbeInput(
+      numProbeBatches,
+      numRowsPerProbeBatch,
+      1,
+      tableData,
+      pool_,
+      {"t0", "t1", "t2"},
+      GetParam().hasNullKeys,
+      {},
+      {},
+      /*equalMatchPct=*/100);
+  std::vector<std::shared_ptr<TempFilePath>> probeFiles =
+      createProbeFiles(probeVectors);
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", {tableData.tableVectors});
+
+  const auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/3,
+      tableData.keyVectors,
+      tableData.valueVectors,
+      *pool());
+  const auto indexTableHandle = makeIndexTableHandle(
+      indexTable, GetParam().asyncLookup, GetParam().needsIndexSplit);
+
+  struct {
+    std::optional<bool> nodeSplitOutput;
+    bool configSplitOutput;
+    bool expectSplit;
+
+    std::string debugString() const {
+      return fmt::format(
+          "nodeSplitOutput: {}, configSplitOutput: {}, expectSplit: {}",
+          nodeSplitOutput.has_value()
+              ? (nodeSplitOutput.value() ? "true" : "false")
+              : "nullopt",
+          configSplitOutput,
+          expectSplit);
+    }
+  } testSettings[] = {
+      // Node splitOutput not set, use config.
+      {std::nullopt, true, true},
+      {std::nullopt, false, false},
+      // Node splitOutput=true overrides config.
+      {true, true, true},
+      {true, false, true},
+      // Node splitOutput=false overrides config.
+      {false, true, false},
+      {false, false, false},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+    const auto indexScanNode = makeIndexScanNode(
+        planNodeIdGenerator,
+        indexTableHandle,
+        makeScanOutputType({"u0", "u1", "u2", "u5"}),
+        makeIndexColumnHandles({"u0", "u1", "u2", "u5"}));
+
+    core::PlanNodeId joinNodeId;
+    auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                    .startTableScan()
+                    .outputType(probeType_)
+                    .endTableScan()
+                    .captureScanNodeId(probeScanNodeId_)
+                    .startIndexLookupJoin()
+                    .leftKeys({"t0", "t1", "t2"})
+                    .rightKeys({"u0", "u1", "u2"})
+                    .indexSource(indexScanNode)
+                    .outputLayout({"t4", "u5"})
+                    .joinType(core::JoinType::kInner)
+                    .splitOutput(testData.nodeSplitOutput)
+                    .endIndexLookupJoin()
+                    .capturePlanNodeId(joinNodeId)
+                    .planNode();
+
+    const int expectedNumOutputVectors = testData.expectSplit
+        ? ((numRowsPerProbeBatch + maxBatchRows - 1) / maxBatchRows) *
+            numProbeBatches
+        : numProbeBatches;
+
+    AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
+    queryBuilder.plan(plan)
+        .config(
+            core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
+            std::to_string(GetParam().numPrefetches))
+        .config(
+            core::QueryConfig::kPreferredOutputBatchRows,
+            std::to_string(maxBatchRows))
+        .config(
+            core::QueryConfig::kPreferredOutputBatchBytes,
+            std::to_string(1ULL << 30))
+        .config(
+            core::QueryConfig::kIndexLookupJoinSplitOutput,
+            testData.configSplitOutput ? "true" : "false")
+        .splits(probeScanNodeId_, makeHiveConnectorSplits(probeFiles))
+        .serialExecution(GetParam().serialExecution)
+        .barrierExecution(GetParam().serialExecution);
+    if (GetParam().needsIndexSplit) {
+      queryBuilder.split(
+          indexScanNodeId_,
+          Split(
+              std::make_shared<TestIndexConnectorSplit>(
+                  kTestIndexConnectorName)));
+    }
+    const auto task = queryBuilder.assertResults(
+        "SELECT t.c4, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
+    ASSERT_EQ(
+        toPlanStats(task->taskStats()).at(joinNodeId).outputVectors,
+        expectedNumOutputVectors);
   }
 }
 

@@ -142,20 +142,6 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     // Writer.
     VELOX_REGISTER_QUERY_CONFIG(kWriterFlushThresholdBytes);
 
-    // Presto-specific.
-    VELOX_REGISTER_QUERY_CONFIG(kPrestoArrayAggIgnoreNulls);
-
-    // Spark-specific.
-    VELOX_REGISTER_QUERY_CONFIG(kSparkAnsiEnabled);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkBloomFilterExpectedNumItems);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkBloomFilterNumBits);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkBloomFilterMaxNumBits);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkBloomFilterMaxNumItems);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkLegacyDateFormatter);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkLegacyStatisticalAggregate);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkJsonIgnoreNullFields);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkCollectListIgnoreNulls);
-
     // Task writer.
     VELOX_REGISTER_QUERY_CONFIG(kTaskWriterCount);
 
@@ -164,6 +150,8 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kHashProbeDynamicFilterPushdownEnabled);
     VELOX_REGISTER_QUERY_CONFIG(kHashProbeStringDynamicFilterPushdownEnabled);
     VELOX_REGISTER_QUERY_CONFIG(kHashProbeBloomFilterPushdownMaxSize);
+    VELOX_REGISTER_QUERY_CONFIG(kBypassHashProbeBloomFilterMinRows);
+    VELOX_REGISTER_QUERY_CONFIG(kBypassHashProbeBloomFilterMinPct);
     VELOX_REGISTER_QUERY_CONFIG(kMinTableRowsForParallelJoinBuild);
 
     // Debug and validation.
@@ -269,6 +257,17 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
 
     // Mark sorted.
     VELOX_REGISTER_QUERY_CONFIG(kMarkSortedZeroCopyThreshold);
+
+    // RPC congestion.
+    VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionMinWindow);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionStepCoef);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionMaxWindow);
+
+    // RPC adaptive rate limiter.
+    VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterAdaptiveEnabled);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMinLimit);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterDecreaseFactor);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMaxLimit);
 
 #undef VELOX_REGISTER_QUERY_CONFIG
 

@@ -95,6 +95,7 @@ velox_link_libraries(
   velox_presto_types
   velox_type
   velox_memory
+  velox_encode
   velox_expression
   velox_functions_util
   velox_functions_json

@@ -17,8 +17,10 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/exec/Operator.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/BackpressureTestNode.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -610,6 +612,46 @@ DEBUG_ONLY_TEST_F(RowNumberTest, rowNumberSpillFileCreateConfig) {
       .assertResults("SELECT *, row_number() over (partition by c0) FROM tmp");
 
   ASSERT_TRUE(rowNumberConfigVerified.load());
+}
+
+// Regression test: a window operator (RowNumber) feeding a backpressuring
+// downstream must not drop rows. Before the fix, RowNumber::needsInput() did
+// not check input_ == nullptr, so when the downstream returned
+// needsInput()=false the Driver re-fed RowNumber and addInput() overwrote the
+// undrained batch, silently dropping rows (seen in production with a BATCH-mode
+// RPC operator).
+TEST_F(RowNumberTest, noRowLossWithBackpressuringDownstream) {
+  Operator::registerOperator(std::make_unique<BackpressureTranslator>());
+
+  // Many small batches so the Driver repeatedly feeds RowNumber while the
+  // downstream refuses input.
+  const int32_t numBatches = 50;
+  const int32_t rowsPerBatch = 100;
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(numBatches);
+  for (int32_t i = 0; i < numBatches; ++i) {
+    batches.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(
+             rowsPerBatch,
+             [&](auto row) { return (i * rowsPerBatch + row) % 17; }),
+         makeFlatVector<int64_t>(
+             rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; })}));
+  }
+  const vector_size_t totalRows = numBatches * rowsPerBatch;
+
+  auto plan = PlanBuilder()
+                  .values(batches)
+                  .rowNumber({"c0"})
+                  .addNode([](const std::string& id, core::PlanNodePtr input) {
+                    return std::make_shared<BackpressureNode>(
+                        id, /*delayCycles=*/3, std::move(input));
+                  })
+                  .planNode();
+
+  // Single driver so RowNumber and the backpressuring downstream share a
+  // pipeline, as with a BATCH-mode RPC operator (maxDrivers=1).
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  EXPECT_EQ(result->size(), totalRows);
 }
 
 } // namespace facebook::velox::exec::test

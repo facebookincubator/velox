@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/ucx-exchange/UcxExchange.h"
 #include <cudf/column/column_factories.hpp>
 #include <cudf/contiguous_split.hpp>
 #include <cudf/copying.hpp>
@@ -58,6 +59,8 @@ struct ExchangeTestParams {
   int numRowsPerChunk;
   int numUpstreamTasks;
   TableType tableType = TableType::NARROW; // Default to narrow table
+
+  bool operator==(const ExchangeTestParams&) const = default;
 };
 
 // Helper function to generate test parameters with different numUpstreamTasks
@@ -824,6 +827,97 @@ TEST_P(UcxExchangeTest, realPartitionedOutputDataIntegrityTest) {
   queueManager_->removeTask(srcTaskId);
 
   VLOG(3) << "- UcxExchangeTest::realPartitionedOutputDataIntegrityTest";
+}
+
+// Focused regression test for shared UcxExchangeClient ownership. This
+// intentionally creates and seeds the client directly, bypassing the normal
+// task-split path, to isolate close behavior after the client is populated.
+// Closing one operator must not close the shared client while another operator
+// still needs to drain data.
+TEST_P(UcxExchangeTest, sharedClientSurvivesOneExchangeClose) {
+  // This test doesn't use parameters - run only for the first param set.
+  if (GetParam() != generateTestParams().front()) {
+    GTEST_SKIP() << "sharedClientSurvivesOneExchangeClose: runs only once";
+  }
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "sharedClientSrc";
+  const std::string sinkTaskId = taskPrefix + "sharedClientSink";
+  const int numPartitions = 1;
+  const int partitionId = 0;
+  const int numSourceDrivers = 1;
+  const int numSinkDrivers = 2;
+  const int numChunks = 5;
+  const int numRowsPerChunk = 1000;
+
+  auto rowType = UcxTestData::kTestRowType;
+  auto srcTask = createSourceTask(srcTaskId, pool_, rowType);
+  queueManager_->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      numPartitions,
+      numSourceDrivers);
+
+  auto sourceMock = std::make_shared<UcxPartitionedOutputMock>(
+      srcTaskId, numSourceDrivers, numPartitions, numChunks, numRowsPerChunk);
+  sourceMock->run();
+  sourceMock->joinThreads();
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask =
+      createExchangeTask(sinkTaskId, rowType, partitionId, exchangeNodeId);
+  auto exchangeClient = std::make_shared<UcxExchangeClient>(
+      sinkTask->taskId(), sinkTask->destination(), numSinkDrivers);
+
+  auto split = remoteSplit(srcTaskId, partitionId);
+  auto remoteConnectorSplit =
+      std::dynamic_pointer_cast<exec::RemoteConnectorSplit>(
+          split.connectorSplit);
+  ASSERT_NE(remoteConnectorSplit, nullptr);
+  exchangeClient->addRemoteTaskId(remoteConnectorSplit->taskId);
+  exchangeClient->noMoreRemoteTasks();
+
+  const uint32_t pipelineId = 0;
+  const uint32_t partition = 0;
+  auto planNode = sinkTask->planFragment().planNode;
+  auto closingDriverCtx = std::make_shared<DriverCtx>(
+      sinkTask, 0, pipelineId, kUngroupedGroupId, partition);
+  auto drainingDriverCtx = std::make_shared<DriverCtx>(
+      sinkTask, 1, pipelineId, kUngroupedGroupId, partition);
+
+  UcxExchange closingExchange(
+      0, closingDriverCtx.get(), planNode, exchangeClient);
+  UcxExchange drainingExchange(
+      1, drainingDriverCtx.get(), planNode, exchangeClient);
+
+  closingExchange.close();
+
+  uint64_t rowsReceived = 0;
+  while (true) {
+    ContinueFuture future;
+    auto blocked = drainingExchange.isBlocked(&future);
+    if (blocked != BlockingReason::kNotBlocked) {
+      future.wait();
+      continue;
+    }
+
+    RowVectorPtr result = drainingExchange.getOutput();
+    if (result) {
+      auto cudfResult =
+          std::dynamic_pointer_cast<cudf_velox::CudfVector>(result);
+      ASSERT_NE(cudfResult, nullptr);
+      rowsReceived += cudfResult->getTableView().num_rows();
+    }
+
+    if (drainingExchange.isFinished()) {
+      break;
+    }
+  }
+  drainingExchange.close();
+
+  EXPECT_EQ(rowsReceived, static_cast<uint64_t>(numChunks) * numRowsPerChunk);
+
+  queueManager_->removeTask(srcTaskId);
 }
 
 // Test that verifies intra-node exchange does not livelock when a producing

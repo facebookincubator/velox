@@ -31,6 +31,15 @@ class HashProbe : public Operator {
   /// Runtime stat keys for hash probe.
   /// Size of the bloom filter in bytes.
   static constexpr std::string_view kBloomFilterSize = "bloomFilterSize";
+  /// Number of probe rows tested by the build-side Bloom filter locally.
+  static constexpr std::string_view kBloomFilterTestedRows =
+      "bloomFilterTestedRows";
+  /// Number of local Bloom-filter tests that required a hash table lookup.
+  static constexpr std::string_view kBloomFilterAcceptedRows =
+      "bloomFilterAcceptedRows";
+  /// Number of times local Bloom filter probing was bypassed after sampling.
+  static constexpr std::string_view kBloomFilterBypassed =
+      "bloomFilterBypassed";
   /// Number of rows bypassed via dynamic filter replacement.
   static constexpr std::string_view kReplacedWithDynamicFilterRows =
       "replacedWithDynamicFilterRows";
@@ -139,6 +148,10 @@ class HashProbe : public Operator {
 
   void pushdownDynamicFilters();
 
+  // Uses build-side Bloom filters to remove rows from activeRows_ when a
+  // miss can be handled by the join's existing unmatched-row path.
+  void applyBloomFilterForJoinProbe();
+
   // Invoked to wait for the hash table to be built by the hash build operators
   // asynchronously. The function also sets up the internal state for
   // potentially spilling input or reading spilled input or recursively spill
@@ -157,6 +170,11 @@ class HashProbe : public Operator {
   // If 'toSpillOutput', the produced output is spilled to disk for memory
   // arbitration.
   RowVectorPtr getOutputInternal(bool toSpillOutput);
+
+  // Handles the right semi filter join fast path when there is no extra
+  // filter. Marks matching build rows as probed and consumes the current
+  // input batch.
+  void processRightSemiNoFilter(bool emptyBuildSide);
 
   // Check if output_ can be re-used and if not make a new one.
   void prepareOutput(vector_size_t size);
@@ -444,6 +462,13 @@ class HashProbe : public Operator {
   std::vector<column_index_t> keyChannels_;
 
   folly::F14FastSet<column_index_t> dynamicFiltersProducedOnChannels_;
+
+  // Build-side Bloom filter bypass configuration, state, and metrics.
+  const int32_t bypassBloomFilterMinRows_;
+  const int32_t bypassBloomFilterMinPct_;
+  bool bypassBloomFilter_;
+  uint64_t bloomFilterSampledRows_{0};
+  uint64_t bloomFilterSampleAcceptedRows_{0};
 
   // True if the join can become a no-op starting with the next batch of input.
   bool canReplaceWithDynamicFilter_{false};

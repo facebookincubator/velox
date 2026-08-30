@@ -17,6 +17,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/BackpressureTestNode.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
@@ -55,6 +56,62 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
 
   void setJoinTypes(std::vector<core::JoinType> joinTypes) {
     joinTypes_ = std::move(joinTypes);
+  }
+
+  RowVectorPtr makeOutputOrderProbeVector() {
+    return makeRowVector(
+        {"probe_ordinal", "l1", "l2"},
+        {
+            makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5}),
+            makeNullableFlatVector<int64_t>({1, 8, 6, std::nullopt, 7, 4}),
+            makeFlatVector<StringView>({"a", "b", "c", "d", "e", "f"}),
+        });
+  }
+
+  std::vector<RowVectorPtr> makeOutputOrderMultiVectorBuild() {
+    return {
+        makeRowVector(
+            {"build_ordinal", "r1", "r2"},
+            {
+                makeFlatVector<int64_t>({0, 1, 2}),
+                makeNullableFlatVector<int64_t>({4, 6, 1}),
+                makeFlatVector<StringView>({"z", "x", "y"}),
+            }),
+        makeRowVector(
+            {"build_ordinal", "r1", "r2"},
+            {
+                makeFlatVector<int64_t>({3, 4, 5}),
+                makeNullableFlatVector<int64_t>({10, std::nullopt, 6}),
+                makeFlatVector<StringView>({"z", "p", "u"}),
+            })};
+  }
+
+  RowVectorPtr makeOutputOrderSingleRowBuild() {
+    return makeRowVector(
+        {"build_ordinal", "r1", "r2"},
+        {
+            makeFlatVector<int64_t>({0}),
+            makeNullableFlatVector<int64_t>({8}),
+            makeFlatVector<StringView>({"c"}),
+        });
+  }
+
+  core::PlanNodePtr makeOutputOrderPlan(
+      const RowVectorPtr& probeVector,
+      const std::vector<RowVectorPtr>& buildVectors,
+      core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values({probeVector})
+        .nestedLoopJoin(
+            PlanBuilder(planNodeIdGenerator)
+                .values(buildVectors)
+                .project({"build_ordinal", "r1", "r2"})
+                .planNode(),
+            "l1 < r1",
+            {"probe_ordinal", "l1", "l2", "build_ordinal", "r1", "r2"},
+            joinType)
+        .planNode();
   }
 
   template <typename T>
@@ -509,70 +566,403 @@ TEST_F(NestedLoopJoinTest, allTypes) {
   runSingleAndMultiDriverTest(probeVectors, buildVectors);
 }
 
-// Ensures output order follows the probe input order for inner and left joins.
-TEST_F(NestedLoopJoinTest, outputOrder) {
-  auto probeVectors = makeRowVector(
+TEST_F(NestedLoopJoinTest, outputOrderWithSingleBuildVector) {
+  auto probeVector = makeOutputOrderProbeVector();
+  auto buildVectors = makeOutputOrderMultiVectorBuild();
+  const std::vector<uint32_t> sortingKeys = {0, 3};
+  createDuckDbTable("t", {probeVector});
+  createDuckDbTable("u_multi", buildVectors);
+
+  AssertQueryBuilder(
+      makeOutputOrderPlan(probeVector, buildVectors, core::JoinType::kInner),
+      duckDbQueryRunner_)
+      .assertResults(
+          "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
+          "FROM t JOIN u_multi ON l1 < r1 "
+          "ORDER BY probe_ordinal, build_ordinal",
+          sortingKeys);
+
+  AssertQueryBuilder(
+      makeOutputOrderPlan(probeVector, buildVectors, core::JoinType::kLeft),
+      duckDbQueryRunner_)
+      .assertResults(
+          "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
+          "FROM t LEFT JOIN u_multi ON l1 < r1 "
+          "ORDER BY probe_ordinal, build_ordinal NULLS LAST",
+          sortingKeys);
+}
+
+TEST_F(NestedLoopJoinTest, outputOrderWithSingleBuildRow) {
+  auto probeVector = makeOutputOrderProbeVector();
+  auto singleRowBuild = makeOutputOrderSingleRowBuild();
+  const std::vector<uint32_t> sortingKeys = {0, 3};
+  createDuckDbTable("t", {probeVector});
+  createDuckDbTable("u_single", {singleRowBuild});
+
+  AssertQueryBuilder(
+      makeOutputOrderPlan(
+          probeVector, {singleRowBuild}, core::JoinType::kInner),
+      duckDbQueryRunner_)
+      .assertResults(
+          "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
+          "FROM t JOIN u_single ON l1 < r1 "
+          "ORDER BY probe_ordinal, build_ordinal",
+          sortingKeys);
+
+  AssertQueryBuilder(
+      makeOutputOrderPlan(probeVector, {singleRowBuild}, core::JoinType::kLeft),
+      duckDbQueryRunner_)
+      .assertResults(
+          "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
+          "FROM t LEFT JOIN u_single ON l1 < r1 "
+          "ORDER BY probe_ordinal, build_ordinal NULLS LAST",
+          sortingKeys);
+}
+
+TEST_F(NestedLoopJoinTest, outputOrderWithMultipleBuildVectors) {
+  auto probeVector = makeOutputOrderProbeVector();
+  auto buildVectors = makeOutputOrderMultiVectorBuild();
+  const std::vector<uint32_t> sortingKeys = {0, 3};
+  createDuckDbTable("t", {probeVector});
+  createDuckDbTable("u_multi", buildVectors);
+
+  AssertQueryBuilder(
+      makeOutputOrderPlan(probeVector, buildVectors, core::JoinType::kInner),
+      duckDbQueryRunner_)
+      .config(core::QueryConfig::kMaxOutputBatchRows, "5")
+      .assertResults(
+          "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
+          "FROM t JOIN u_multi ON l1 < r1 "
+          "ORDER BY probe_ordinal, build_ordinal",
+          sortingKeys);
+
+  AssertQueryBuilder(
+      makeOutputOrderPlan(probeVector, buildVectors, core::JoinType::kLeft),
+      duckDbQueryRunner_)
+      .config(core::QueryConfig::kMaxOutputBatchRows, "5")
+      .assertResults(
+          "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
+          "FROM t LEFT JOIN u_multi ON l1 < r1 "
+          "ORDER BY probe_ordinal, build_ordinal NULLS LAST",
+          sortingKeys);
+}
+
+TEST_F(NestedLoopJoinTest, addOutputRowWithContinuesBuildRow) {
+  auto probeVector = makeRowVector(
+      {"l1", "l2"},
+      {
+          makeNullableFlatVector<int64_t>({1, 8, 0}),
+          makeFlatVector<StringView>({"a", "b", "c"}),
+      });
+  auto buildVector = makeRowVector(
+      {"r1", "r2"},
+      {
+          makeNullableFlatVector<int64_t>({1, 1, 0}),
+          makeFlatVector<StringView>({"z", "x", "y"}),
+      });
+
+  createDuckDbTable("t", {probeVector});
+  createDuckDbTable("u", {buildVector});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto op =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeVector})
+          .nestedLoopJoin(
+              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
+              "l1 = r1",
+              {"l1", "l2", "r1", "r2"},
+              core::JoinType::kLeft)
+          .planNode();
+
+  assertQuery(op, "SELECT l1, l2, r1, r2 FROM t LEFT JOIN u ON l1 = r1");
+}
+
+TEST_F(NestedLoopJoinTest, smallBuildSideJoins) {
+  auto probeVector = makeRowVector(
       {"l1", "l2"},
       {
           makeNullableFlatVector<int64_t>({1, 8, 6, std::nullopt, 7, 4}),
           makeFlatVector<StringView>({"a", "b", "c", "d", "e", "f"}),
       });
-  auto buildVector1 = makeRowVector(
+  auto singleVectorBuild = makeRowVector(
       {"r1", "r2"},
       {
           makeNullableFlatVector<int64_t>({4, 6, 1}),
           makeFlatVector<StringView>({"z", "x", "y"}),
       });
-
-  auto buildVector2 = makeRowVector(
+  auto singleRowBuild = makeRowVector(
       {"r1", "r2"},
       {
-          makeNullableFlatVector<int64_t>({10, std::nullopt, 6}),
-          makeFlatVector<StringView>({"z", "p", "u"}),
+          makeNullableFlatVector<int64_t>({8}),
+          makeFlatVector<StringView>({"c"}),
       });
 
-  const auto createPlan = [&](core::JoinType joinType) {
+  createDuckDbTable("t", {probeVector});
+  createDuckDbTable("u_single_vector", {singleVectorBuild});
+  createDuckDbTable("u_single_row", {singleRowBuild});
+
+  const auto createPlan = [&](const RowVectorPtr& buildVector,
+                              const std::string& condition,
+                              const std::vector<std::string>& outputLayout,
+                              core::JoinType joinType) {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     return PlanBuilder(planNodeIdGenerator)
-        .values({probeVectors})
+        .values({probeVector})
         .nestedLoopJoin(
             PlanBuilder(planNodeIdGenerator)
-                .values({buildVector1, buildVector2})
+                .values({buildVector})
                 .project({"r1", "r2"})
                 .planNode(),
-            "l1 < r1",
-            {"l1", "l2", "r1", "r2"},
+            condition,
+            outputLayout,
             joinType)
         .planNode();
   };
 
-  // Inner.
-  auto results = AssertQueryBuilder(createPlan(core::JoinType::kInner))
-                     .copyResults(pool());
-  auto expectedInner = makeRowVector({
-      makeNullableFlatVector<int64_t>({1, 1, 1, 1, 8, 6, 7, 4, 4, 4}),
-      makeFlatVector<StringView>(
-          {"a", "a", "a", "a", "b", "c", "e", "f", "f", "f"}),
-      makeNullableFlatVector<int64_t>({4, 6, 10, 6, 10, 10, 10, 6, 10, 6}),
-      makeFlatVector<StringView>(
-          {"z", "x", "z", "u", "z", "z", "z", "x", "z", "u"}),
-  });
-  assertEqualVectors(expectedInner, results);
+  const auto assertLeftSemiProject = [&](const RowVectorPtr& buildVector,
+                                         const std::string& tableName) {
+    AssertQueryBuilder(
+        createPlan(
+            buildVector,
+            "l1 = r1",
+            {"l1", "match"},
+            core::JoinType::kLeftSemiProject),
+        duckDbQueryRunner_)
+        .assertResults(
+            fmt::format(
+                "SELECT l1, EXISTS(SELECT 1 FROM {} WHERE l1 = r1) AS match "
+                "FROM t ORDER BY l1 NULLS LAST",
+                tableName));
+  };
 
-  // Left.
-  results =
-      AssertQueryBuilder(createPlan(core::JoinType::kLeft)).copyResults(pool());
-  auto expectedLeft = makeRowVector({
-      makeNullableFlatVector<int64_t>(
-          {1, 1, 1, 1, 8, 6, std::nullopt, 7, 4, 4, 4}),
-      makeNullableFlatVector<StringView>(
-          {"a", "a", "a", "a", "b", "c", "d", "e", "f", "f", "f"}),
-      makeNullableFlatVector<int64_t>(
-          {4, 6, 10, 6, 10, 10, std::nullopt, 10, 6, 10, 6}),
-      makeNullableFlatVector<StringView>(
-          {"z", "x", "z", "u", "z", "z", std::nullopt, "z", "x", "z", "u"}),
-  });
-  assertEqualVectors(expectedLeft, results);
+  assertQuery(
+      createPlan(
+          singleVectorBuild,
+          "l1 < r1",
+          {"l1", "l2", "r1", "r2"},
+          core::JoinType::kRight),
+      "SELECT l1, l2, r1, r2 FROM t RIGHT JOIN u_single_vector ON l1 < r1");
+  assertQuery(
+      createPlan(
+          singleVectorBuild,
+          "l1 < r1",
+          {"l1", "l2", "r1", "r2"},
+          core::JoinType::kFull),
+      "SELECT l1, l2, r1, r2 FROM t FULL JOIN u_single_vector ON l1 < r1");
+  assertQuery(
+      createPlan(
+          singleRowBuild,
+          "l1 < r1",
+          {"l1", "l2", "r1", "r2"},
+          core::JoinType::kRight),
+      "SELECT l1, l2, r1, r2 FROM t RIGHT JOIN u_single_row ON l1 < r1");
+  assertQuery(
+      createPlan(
+          singleRowBuild,
+          "l1 < r1",
+          {"l1", "l2", "r1", "r2"},
+          core::JoinType::kFull),
+      "SELECT l1, l2, r1, r2 FROM t FULL JOIN u_single_row ON l1 < r1");
+
+  assertLeftSemiProject(singleVectorBuild, "u_single_vector");
+  assertLeftSemiProject(singleRowBuild, "u_single_row");
+}
+
+TEST_F(NestedLoopJoinTest, antiAndLeftSemiFilter) {
+  // kAnti (NOT EXISTS) and kLeftSemiFilter (EXISTS) both output the probe
+  // columns only (no build columns, no match column). Cross-check the full
+  // correctness matrix against DuckDB across the {=, <, <=, <>} comparison set:
+  // matching / non-matching probe rows, NULLs in the join keys, empty build,
+  // empty probe and no join condition. Mirrors the createPlan /
+  // assertLeftSemiProject helpers in smallBuildSideJoins but parameterizes
+  // probe, build and condition so one pair of helpers drives the whole matrix.
+  const auto createProbeOnlyPlan = [&](const RowVectorPtr& probeVector,
+                                       const RowVectorPtr& buildVector,
+                                       const std::string& joinCondition,
+                                       core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values({probeVector})
+        .nestedLoopJoin(
+            PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
+            joinCondition,
+            {"t0", "t1"},
+            joinType)
+        .planNode();
+  };
+
+  // Left-semi-filter emits each probe row matching >= 1 build row. Oracle: the
+  // probe rows for which a satisfying build row EXISTS.
+  const auto assertLeftSemiFilter = [&](const RowVectorPtr& probeVector,
+                                        const RowVectorPtr& buildVector,
+                                        const std::string& comparison) {
+    createDuckDbTable("t", {probeVector});
+    createDuckDbTable("u", {buildVector});
+    AssertQueryBuilder(
+        createProbeOnlyPlan(
+            probeVector,
+            buildVector,
+            fmt::format("t0 {} u0", comparison),
+            core::JoinType::kLeftSemiFilter),
+        duckDbQueryRunner_)
+        .assertResults(
+            fmt::format(
+                "SELECT t0, t1 FROM t WHERE EXISTS "
+                "(SELECT 1 FROM u WHERE t0 {} u0)",
+                comparison));
+  };
+
+  // Anti emits each probe row matching no build row (a NULL condition is a
+  // non-match). Oracle: the probe rows for which no satisfying build row
+  // EXISTS.
+  const auto assertAnti = [&](const RowVectorPtr& probeVector,
+                              const RowVectorPtr& buildVector,
+                              const std::string& comparison) {
+    createDuckDbTable("t", {probeVector});
+    createDuckDbTable("u", {buildVector});
+    AssertQueryBuilder(
+        createProbeOnlyPlan(
+            probeVector,
+            buildVector,
+            fmt::format("t0 {} u0", comparison),
+            core::JoinType::kAnti),
+        duckDbQueryRunner_)
+        .assertResults(
+            fmt::format(
+                "SELECT t0, t1 FROM t WHERE NOT EXISTS "
+                "(SELECT 1 FROM u WHERE t0 {} u0)",
+                comparison));
+  };
+
+  // Probe rows with matches, non-matches and a NULL join key.
+  const auto probe = makeRowVector(
+      {"t0", "t1"},
+      {
+          makeNullableFlatVector<int64_t>({1, 8, 6, std::nullopt, 7, 4}),
+          makeFlatVector<StringView>({"a", "b", "c", "d", "e", "f"}),
+      });
+  // Build with matches for some probe rows and a NULL join key.
+  const auto build = makeRowVector(
+      {"u0", "u1"},
+      {
+          makeNullableFlatVector<int64_t>({4, 6, std::nullopt}),
+          makeFlatVector<StringView>({"z", "x", "y"}),
+      });
+  // Build whose keys are all NULL, so the condition is NULL for every build
+  // row.
+  const auto allNullBuild = makeRowVector(
+      {"u0", "u1"},
+      {
+          makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt}),
+          makeFlatVector<StringView>({"z", "x"}),
+      });
+  const auto emptyBuild = makeRowVector(
+      {"u0", "u1"},
+      {makeFlatVector<int64_t>({}), makeFlatVector<StringView>({})});
+  const auto emptyProbe = makeRowVector(
+      {"t0", "t1"},
+      {makeFlatVector<int64_t>({}), makeFlatVector<StringView>({})});
+
+  for (const auto& comparison : comparisons_) {
+    SCOPED_TRACE(fmt::format("comparison: {}", comparison));
+
+    // Probe rows that match / don't match, including a NULL probe key.
+    assertLeftSemiFilter(probe, build, comparison);
+    assertAnti(probe, build, comparison);
+
+    // Condition is NULL for every build row: left-semi-filter emits none, anti
+    // emits every probe row.
+    assertLeftSemiFilter(probe, allNullBuild, comparison);
+    assertAnti(probe, allNullBuild, comparison);
+
+    // Empty build: left-semi-filter emits none, anti emits all probe rows.
+    assertLeftSemiFilter(probe, emptyBuild, comparison);
+    assertAnti(probe, emptyBuild, comparison);
+
+    // Empty probe: both emit nothing.
+    assertLeftSemiFilter(emptyProbe, build, comparison);
+    assertAnti(emptyProbe, build, comparison);
+  }
+
+  // No join condition. With a non-empty build every probe row trivially
+  // matches, so left-semi-filter emits all probe rows and anti emits none; with
+  // an empty build the two are reversed.
+  const auto assertNoConditionLeftSemiFilter =
+      [&](const RowVectorPtr& buildVector) {
+        createDuckDbTable("t", {probe});
+        createDuckDbTable("u", {buildVector});
+        AssertQueryBuilder(
+            createProbeOnlyPlan(
+                probe, buildVector, "", core::JoinType::kLeftSemiFilter),
+            duckDbQueryRunner_)
+            .assertResults(
+                "SELECT t0, t1 FROM t WHERE EXISTS (SELECT 1 FROM u)");
+      };
+  const auto assertNoConditionAnti = [&](const RowVectorPtr& buildVector) {
+    createDuckDbTable("t", {probe});
+    createDuckDbTable("u", {buildVector});
+    AssertQueryBuilder(
+        createProbeOnlyPlan(probe, buildVector, "", core::JoinType::kAnti),
+        duckDbQueryRunner_)
+        .assertResults(
+            "SELECT t0, t1 FROM t WHERE NOT EXISTS (SELECT 1 FROM u)");
+  };
+
+  assertNoConditionLeftSemiFilter(build);
+  assertNoConditionAnti(build);
+  assertNoConditionLeftSemiFilter(emptyBuild);
+  assertNoConditionAnti(emptyBuild);
+}
+
+TEST_F(NestedLoopJoinTest, leftSemiFilterAndProjectEmitOnceOverflow) {
+  // C1 regression: with a single build row, probeRowCount_ equals the probe
+  // batch size, so a probe batch whose matching-row count exceeds the output
+  // batch size drives the emit-once short-circuit (kLeftSemiFilter /
+  // kLeftSemiProject) past the output-batch boundary. Guards against
+  // rawProbeOutputIndices_ overflowing its outputBatchSize_ capacity.
+  const vector_size_t numProbeRows = 2'048;
+  const auto probeVector = makeRowVector(
+      {"t0"},
+      {makeFlatVector<int64_t>(numProbeRows, [](auto row) { return row; })});
+  // Single build row for which every probe row matches (t0 < u0), so the whole
+  // probe batch is emitted in one short-circuited pass.
+  const auto buildVector =
+      makeRowVector({"u0"}, {makeFlatVector<int64_t>({numProbeRows})});
+
+  createDuckDbTable("t", {probeVector});
+  createDuckDbTable("u", {buildVector});
+
+  const auto assertEmitOnce = [&](const std::vector<std::string>& outputLayout,
+                                  core::JoinType joinType,
+                                  const std::string& duckDbSql) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values({probeVector})
+                    .nestedLoopJoin(
+                        PlanBuilder(planNodeIdGenerator)
+                            .values({buildVector})
+                            .planNode(),
+                        "t0 < u0",
+                        outputLayout,
+                        joinType)
+                    .planNode();
+    // Output batch far smaller than the probe batch forces the single
+    // short-circuited pass to span multiple output batches.
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .config(core::QueryConfig::kPreferredOutputBatchRows, "128")
+        .config(core::QueryConfig::kMaxOutputBatchRows, "128")
+        .assertResults(duckDbSql);
+  };
+
+  assertEmitOnce(
+      {"t0"},
+      core::JoinType::kLeftSemiFilter,
+      "SELECT t0 FROM t WHERE EXISTS (SELECT 1 FROM u WHERE t0 < u0)");
+  assertEmitOnce(
+      {"t0", "match"},
+      core::JoinType::kLeftSemiProject,
+      "SELECT t0, EXISTS(SELECT 1 FROM u WHERE t0 < u0) AS match FROM t");
 }
 
 TEST_F(NestedLoopJoinTest, mergeBuildVectors) {
@@ -811,6 +1201,67 @@ DEBUG_ONLY_TEST_F(NestedLoopJoinTest, longBatchDurationYield) {
   }
   ASSERT_LT(
       testSettings[0].numGetOutputCalls, testSettings[1].numGetOutputCalls);
+}
+
+// Reproduces the operator-neutral Driver-level bug where the TableScan reader
+// advances past a passthrough LazyVector that an intermediate operator still
+// holds unloaded, surfacing as "Loading LazyVector after the enclosing reader
+// has moved". Here the amplifying operator is a cross-product NestedLoopJoin:
+// it holds one probe batch and drains it over many chunked getOutput() calls
+// while needsInput() == false. A back-pressuring sink (see
+// BackpressureTestNode.h) forces the driver to race the scan ahead during that
+// drain, stranding the unloaded scan lazy that Project[1] forwarded. This test
+// passes once the Driver fix is in place.
+TEST_F(NestedLoopJoinTest, lazyVectorStaleUnderBackpressure) {
+  Operator::registerOperator(std::make_unique<BackpressureTranslator>());
+
+  // One large probe input -> one file -> one split whose reader yields many
+  // (10k-row) batches. t0 cycles through 100 distinct values; t1 is a unique
+  // row ordinal.
+  auto probeVector = makeRowVector(
+      {"t0", "t1"},
+      {makeFlatVector<int64_t>(90'000, [](auto i) { return i % 100; }),
+       makeFlatVector<int64_t>(90'000, [](auto i) { return i; })});
+  auto probeFile = TempFilePath::create();
+  writeToFile(probeFile->getPath(), {probeVector});
+
+  // Small build side: the cross product multiplies each 10k-row probe batch by
+  // these rows, so one probe batch yields many output chunks -> a long drain
+  // window during which the scan reader advances.
+  auto buildVector = makeRowVector(
+      {"u0"}, {makeFlatVector<int64_t>(std::vector<int64_t>{0, 1, 2, 3})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId scanNodeId;
+  // Project[1] loads t1 and forwards t0 as an unloaded scan LazyVector;
+  // Project[2] loads t0.
+  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(ROW({"t0", "t1"}, {BIGINT(), BIGINT()}))
+                  .captureScanNodeId(scanNodeId)
+                  .project({"t1 + 0 AS t1", "t0"})
+                  .project({"t0 + 0 AS t0", "t1"})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator, pool_.get())
+                          .values({buildVector})
+                          .planNode(),
+                      {"t0", "t1", "u0"},
+                      core::JoinType::kInner)
+                  .project({"t0 + 0 AS t0", "t1", "u0"})
+                  .project({"t0", "t1 + 0 AS t1", "u0"})
+                  .addNode([](const std::string& id, core::PlanNodePtr input) {
+                    return std::make_shared<BackpressureNode>(
+                        id, /*delayCycles=*/20, std::move(input));
+                  })
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan)
+                    .serialExecution(false)
+                    .splits(scanNodeId, makeHiveConnectorSplits({probeFile}))
+                    .copyResults(pool());
+  // Cross product of every probe row with every build row.
+  ASSERT_EQ(result->size(), probeVector->size() * buildVector->size());
+
+  Operator::unregisterAllOperators();
 }
 
 } // namespace

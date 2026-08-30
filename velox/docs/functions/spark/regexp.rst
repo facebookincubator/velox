@@ -5,10 +5,10 @@ Regular Expression Functions
 Regular expression functions use RE2 as the regex engine. RE2 is fast, but
 supports only a subset of PCRE syntax and in particular does not support
 backtracking and associated features (e.g. back references).
-Java and RE2 regex output can diverage and users should be cautious that
+Java and RE2 regex output can diverge and users should be cautious that
 the patterns they are using perform similarly between RE2 and Java.
 For example, character class unions, intersections, and differences
-``([a[b]], [a&&[b]], [a&&[^b]])`` are intepreted as a single character class
+``([a[b]], [a&&[b]], [a&&[^b]])`` are interpreted as a single character class
 that contain ``[, &, and ^`` rather than union, intersection, or
 difference of the character classes.
 
@@ -72,6 +72,20 @@ See https://github.com/google/re2/wiki/Syntax for more information.
     ``string`` and returns the capturing group number ``group``::
 
         SELECT regexp_extract_all('1a 2b 14m', '(\d+)([a-z]+)', 2); -- ['a', 'b', 'm']
+
+.. spark:function:: regexp_instr(string, pattern) -> integer
+
+    Returns the 1-based character position of the first substring in ``string``
+    that matches the regular expression ``pattern``. Returns 0 if no match is found.
+    If ``string`` is NULL, returns NULL.
+
+    Examples:
+
+    ::
+
+        SELECT regexp_instr('hello world', 'world'); -- 7
+        SELECT regexp_instr('abc123def', '[0-9]+'); -- 4
+        SELECT regexp_instr('hello', 'xyz'); -- 0
 
 .. spark:function:: rlike(string, pattern) -> boolean
 

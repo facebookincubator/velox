@@ -158,25 +158,51 @@ TEST_F(AssignUniqueIdTest, maxRowIdLimit) {
 
   auto plan = PlanBuilder().values(input).assignUniqueId().planNode();
 
-  // Increase the counter to kMaxRowId.
-  std::dynamic_pointer_cast<const core::AssignUniqueIdNode>(plan)
-      ->uniqueIdCounter()
-      ->fetch_add(1L << 40);
-
   VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
+      AssertQueryBuilder(plan)
+          .beforeTaskStart([](Task& task) {
+            // Advance the pool to the end of the 40-bit row id space so the
+            // next request overflows.
+            task.uniqueRowIdPool()->fetch_add(1L << 40);
+          })
+          .copyResults(pool()),
       "Ran out of unique IDs at 1099511627776");
+}
+
+TEST_F(AssignUniqueIdTest, sharedRowIdPool) {
+  const vector_size_t size = 100;
+  auto input = {
+      makeRowVector({makeFlatVector<int32_t>(size, folly::identity)})};
+
+  // The two nodes' generated ids are disjoint.
+  auto plan = PlanBuilder()
+                  .values(input)
+                  .assignUniqueId("a")
+                  .assignUniqueId("b")
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  ASSERT_EQ(result->size(), size);
+
+  auto* a = result->childAt(1)->asFlatVector<int64_t>();
+  auto* b = result->childAt(2)->asFlatVector<int64_t>();
+
+  std::set<int64_t> ids;
+  for (auto i = 0; i < size; ++i) {
+    ASSERT_TRUE(ids.insert(a->valueAt(i)).second);
+    ASSERT_TRUE(ids.insert(b->valueAt(i)).second);
+  }
+  ASSERT_EQ(ids.size(), 2 * size);
 }
 
 TEST_F(AssignUniqueIdTest, taskUniqueIdLimit) {
   auto input = {makeRowVector({makeFlatVector<int32_t>({1, 2, 3})})};
 
-  auto plan =
-      PlanBuilder().values(input).assignUniqueId("unique", 1L << 24).planNode();
+  auto plan = PlanBuilder().values(input).assignUniqueId().planNode();
 
   VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
-      "(16777216 vs. 16777216) Unique 24-bit ID specified for AssignUniqueId exceeds the limit");
+      AssertQueryBuilder(plan).taskUniqueId(1L << 24).copyResults(pool()),
+      "Unique 24-bit ID specified for AssignUniqueId exceeds the limit");
 }
 
 TEST_F(AssignUniqueIdTest, barrier) {

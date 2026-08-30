@@ -17,10 +17,15 @@
 #pragma once
 
 #include <exception>
+#include <memory>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include <folly/Exception.h>
 #include <folly/FixedString.h>
+#include <folly/ScopeGuard.h>
 #include <folly/String.h>
 #include <folly/synchronization/CallOnce.h>
 #include <gflags/gflags.h>
@@ -38,6 +43,28 @@ DECLARE_int32(velox_exception_system_stacktrace_rate_limit_ms);
 
 namespace facebook {
 namespace velox {
+
+/// Base class for typed, structured context attached to a VeloxException via
+/// ExceptionContext::propertiesFunc (see VeloxException::properties()).
+/// Consumers dynamic_cast to the concrete subtype they understand, so different
+/// producers can attach distinct typed context without the key collisions a
+/// shared string map would risk.
+class ExceptionContextProperties {
+ public:
+  virtual ~ExceptionContextProperties() = default;
+};
+
+/// Structured context for an error thrown while evaluating an expression: the
+/// function owner (empty when the function has no registered owner), the
+/// function name, and the expression string.
+struct ExpressionExceptionProperties : public ExceptionContextProperties {
+  /// The owner registered for the failing function; empty when none.
+  std::string owner;
+  /// The name of the failing function (Expr::name()), e.g. the UDF name.
+  std::string functionName;
+  /// The string form of the expression that threw (Expr::toString()).
+  std::string expression;
+};
 
 namespace error_source {
 using namespace folly::string_literals;
@@ -261,6 +288,15 @@ class VeloxException : public std::exception {
     return state_->additionalContext;
   }
 
+  /// Typed, structured context propagated onto the exception (e.g. an
+  /// ExpressionExceptionProperties for an expression-evaluation error),
+  /// collected from ExceptionContext::propertiesFunc. Consumers dynamic_cast to
+  /// the concrete type to read structured attribution without parsing the
+  /// formatted context string. Null when no context in the chain provided one.
+  const std::shared_ptr<const ExceptionContextProperties>& properties() const {
+    return state_->properties;
+  }
+
   const std::exception_ptr& wrappedException() const {
     return state_->wrappedException;
   }
@@ -285,6 +321,8 @@ class VeloxException : public std::exception {
     std::string context;
     // The top-level ancestor of the current exception context.
     std::string additionalContext;
+    // Typed, structured context collected from the exception context chain.
+    std::shared_ptr<const ExceptionContextProperties> properties;
     bool isRetriable;
     // The original std::exception.
     std::exception_ptr wrappedException;
@@ -471,6 +509,10 @@ class ScopedThreadSkipErrorDetails {
 struct ExceptionContext {
   using MessageFunction =
       std::string (*)(VeloxException::Type exceptionType, void* arg);
+  using PropertiesFunction =
+      std::shared_ptr<const ExceptionContextProperties> (*)(
+          VeloxException::Type exceptionType,
+          void* arg);
 
   /// Function to call in case of an exception to get additional context.
   MessageFunction messageFunc{nullptr};
@@ -481,6 +523,13 @@ struct ExceptionContext {
   /// If true, then the addition context in 'this' is always included when there
   /// are hierarchical exception contexts.
   bool isEssential{false};
+
+  /// Optional structured counterpart to `messageFunc`: returns typed context
+  /// (e.g. ExpressionExceptionProperties) collected onto
+  /// VeloxException::properties() at throw time. Called with the same `arg` as
+  /// `messageFunc`. Declared after the fields above to preserve positional
+  /// aggregate initialization of the leading members.
+  PropertiesFunction propertiesFunc{nullptr};
 
   /// Pointer to the parent context when there are hierarchical exception
   /// contexts.
@@ -493,18 +542,47 @@ struct ExceptionContext {
       return "";
     }
 
-    std::string theMessage;
+    // `suspended` gates re-entry: while messageFunc runs, a VeloxException it
+    // throws would re-invoke it via this same context. The guard restores the
+    // flag on every exit (normal or throw), so a failure never leaves the
+    // context stuck-suspended.
+    suspended = true;
+    auto guard = folly::makeGuard([this] { suspended = false; });
 
     try {
-      // Make sure not to call messageFunc again in case it throws.
-      suspended = true;
-      theMessage = messageFunc(exceptionType, arg);
-      suspended = false;
+      return messageFunc(exceptionType, arg);
     } catch (...) {
       return "Failed to produce additional context.";
     }
+  }
 
-    return theMessage;
+  /// Walks the context chain from this context outward and returns the
+  /// inner-most typed properties (the first context that provides them), or
+  /// null if none do. Structured counterpart to message() (which returns only
+  /// this context's string); the string chain is aggregated separately by
+  /// getAdditionalExceptionContextString().
+  std::shared_ptr<const ExceptionContextProperties> properties(
+      VeloxException::Type exceptionType) {
+    for (auto* context = this; context != nullptr; context = context->parent) {
+      if (context->propertiesFunc == nullptr || context->suspended) {
+        continue;
+      }
+      // `suspended` gates re-entry: while propertiesFunc runs, a VeloxException
+      // it throws would re-walk this chain; mark the context so the nested walk
+      // skips it. The guard restores the flag on every exit (normal or throw),
+      // mirroring message().
+      context->suspended = true;
+      auto guard = folly::makeGuard([context] { context->suspended = false; });
+      try {
+        if (auto properties =
+                context->propertiesFunc(exceptionType, context->arg)) {
+          return properties;
+        }
+      } catch (...) {
+        // Best effort; never mask the real error.
+      }
+    }
+    return nullptr;
   }
 
   bool suspended{false};

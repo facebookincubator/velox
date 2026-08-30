@@ -91,7 +91,7 @@ bool SpillerBase::fillSpillRuns(RowContainerIterator* iterator) {
   bool lastRun{false};
   uint64_t execTimeNs{0};
   {
-    NanosecondTimer timer(&execTimeNs);
+    NanosecondWallTimer timer(&execTimeNs);
 
     // Number of rows to hash and divide into spill partitions at a time.
     constexpr int32_t kHashBatchSize = 4096;
@@ -229,7 +229,7 @@ void SpillerBase::ensureSorted(SpillRun& run) {
 
   uint64_t sortTimeNs{0};
   {
-    NanosecondTimer timer(&sortTimeNs);
+    NanosecondWallTimer timer(&sortTimeNs);
 
     if (!state_.prefixSortConfig().has_value()) {
       gfx::timsort(
@@ -267,7 +267,7 @@ int64_t SpillerBase::extractSpillVector(
   int32_t numRows = 0;
   int64_t bytes = 0;
   {
-    NanosecondTimer timer(&extractNs);
+    NanosecondWallTimer timer(&extractNs);
     for (; numRows < limit; ++numRows) {
       bytes += container_->rowSize(rows[nextBatchIndex + numRows]);
       if (bytes > maxBytes) {
@@ -458,7 +458,7 @@ void SortOutputSpiller::spill(SpillRows& rows) {
   checkEmptySpillRuns();
   uint64_t execTimeNs{0};
   {
-    NanosecondTimer timer(&execTimeNs);
+    NanosecondWallTimer timer(&execTimeNs);
     auto& spillRun = createOrGetSpillRun(SpillPartitionId(0));
     spillRun.rows =
         SpillRows(rows.begin(), rows.end(), spillRun.rows.get_allocator());

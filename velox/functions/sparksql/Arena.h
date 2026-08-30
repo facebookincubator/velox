@@ -44,7 +44,7 @@ class Arena {
   }
 
   // Returns a pointer to a block of memory of size bytes that can be written
-  // to, and guarantees for the lifetime of *this that that region will remain
+  // to, and guarantees for the lifetime of *this that region will remain
   // valid. Does NOT guarantee that the region is initially 0'd.
   char* reserve(int64_t bytes) {
     if (reserveEnd_ + bytes <= chunkEnd_) {

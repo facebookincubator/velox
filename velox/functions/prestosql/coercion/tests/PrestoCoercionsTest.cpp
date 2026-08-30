@@ -29,9 +29,9 @@ namespace {
 TEST(PrestoCoercionsTest, bigintRow) {
   const auto& tc = typeCoercer();
 
-  auto toDecimal = tc.coerceTypeBase(BIGINT(), DECIMAL(19, 0));
-  auto toReal = tc.coerceTypeBase(BIGINT(), REAL());
-  auto toDouble = tc.coerceTypeBase(BIGINT(), DOUBLE());
+  auto toDecimal = tc.coerce(BIGINT(), DECIMAL(19, 0));
+  auto toReal = tc.coerce(BIGINT(), REAL());
+  auto toDouble = tc.coerce(BIGINT(), DOUBLE());
 
   ASSERT_TRUE(toDecimal.has_value());
   ASSERT_TRUE(toReal.has_value());
@@ -45,11 +45,11 @@ TEST(PrestoCoercionsTest, bigintRow) {
 TEST(PrestoCoercionsTest, sanity) {
   const auto& tc = typeCoercer();
 
-  EXPECT_TRUE(tc.coercible(INTEGER(), BIGINT()).has_value());
-  EXPECT_TRUE(tc.coercible(BIGINT(), DOUBLE()).has_value());
-  EXPECT_TRUE(tc.coercible(DATE(), TIMESTAMP()).has_value());
-  EXPECT_TRUE(tc.coercible(REAL(), DOUBLE()).has_value());
-  EXPECT_TRUE(tc.coercible(UNKNOWN(), VARCHAR()).has_value());
+  EXPECT_TRUE(tc.coerce(INTEGER(), BIGINT()).has_value());
+  EXPECT_TRUE(tc.coerce(BIGINT(), DOUBLE()).has_value());
+  EXPECT_TRUE(tc.coerce(DATE(), TIMESTAMP()).has_value());
+  EXPECT_TRUE(tc.coerce(REAL(), DOUBLE()).has_value());
+  EXPECT_TRUE(tc.coerce(UNKNOWN(), VARCHAR()).has_value());
 }
 
 } // namespace

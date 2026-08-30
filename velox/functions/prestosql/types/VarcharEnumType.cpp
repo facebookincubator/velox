@@ -16,6 +16,8 @@
 
 #include "velox/functions/prestosql/types/VarcharEnumType.h"
 
+#include "velox/common/encode/Base32.h"
+
 namespace facebook::velox {
 
 // Should only be called from get() to create a new instance.
@@ -24,7 +26,14 @@ VarcharEnumType::VarcharEnumType(const VarcharEnumParameter& parameters)
 }
 
 std::string VarcharEnumType::toString() const {
-  return fmt::format("{}:VarcharEnum({})", name_, flippedMapToString());
+  return fmt::format("{}:{}({})", name_, kKind, flippedMapToString());
+}
+
+std::string VarcharEnumType::toSql() const {
+  // Values are base32-encoded to match Presto's TypeSignature format.
+  return toSqlImpl(kKind, [](const std::string& value) {
+    return "\"" + encoding::Base32::encode(value) + "\"";
+  });
 }
 
 VarcharEnumTypePtr VarcharEnumType::get(const VarcharEnumParameter& parameter) {

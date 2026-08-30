@@ -148,6 +148,7 @@ resolveVectorFunctionWithMetadataWithCoercions(
           std::vector<Coercion> requiredCoercions;
           if (binder.tryBindWithCoercions(requiredCoercions)) {
             auto type = binder.tryResolveReturnType();
+            VELOX_CHECK_NOT_NULL(type);
             if (!hasCoercion(requiredCoercions)) {
               coercions.resize(argTypes.size(), nullptr);
               return {{type, entry.metadata}};
@@ -157,7 +158,15 @@ resolveVectorFunctionWithMetadataWithCoercions(
           }
         }
 
-        if (auto index = Coercion::pickLowestCost(candidates)) {
+        // All signatures share one metadata, so null behavior is uniform.
+        auto index = Coercion::pickLowestCost(
+            candidates, argTypes, [&](size_t candidateIndex) {
+              return Coercion::CandidateMetadata{
+                  .returnType = candidates[candidateIndex].second,
+                  .nullOnNull = entry.metadata.defaultNullBehavior};
+            });
+
+        if (index) {
           const auto& requiredCoercions = candidates[index.value()].first;
           coercions.reserve(requiredCoercions.size());
           for (const auto& coercion : requiredCoercions) {

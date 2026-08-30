@@ -81,7 +81,7 @@ void ReadFileInputStream::read(
   uint64_t readTimeUs{0};
   std::string_view readData;
   {
-    MicrosecondTimer timer(&readTimeUs);
+    MicrosecondWallTimer timer(&readTimeUs);
     readData = readFile_->pread(offset, length, buf, fileIoContext_);
   }
   if (stats_) {

@@ -19,8 +19,20 @@
 
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/XORShiftRandom.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
+
+namespace detail {
+// Combines the user seed with the Spark partition id using two's-complement
+// wraparound, matching Spark's Long + Int seeding and avoiding signed integer
+// overflow (undefined behavior) at extreme seed values such as INT64_MAX.
+FOLLY_ALWAYS_INLINE int64_t
+combineSeedWithPartitionId(int64_t seed, int32_t partitionId) {
+  return static_cast<int64_t>(
+      static_cast<uint64_t>(seed) + static_cast<uint64_t>(partitionId));
+}
+} // namespace detail
 
 /// Spark SQL rand([seed]) - Returns a random double in [0.0, 1.0).
 /// Uses XORShift algorithm for Spark-compatible reproducibility.
@@ -39,10 +51,10 @@ struct RandFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config) {
-    const auto partitionId = config.sparkPartitionId();
+    const auto partitionId = SparkQueryConfig{config}.partitionId();
     // Use folly::Random to generate a random seed for unseeded rand().
     int64_t seed = folly::Random::rand64();
-    generator_.setSeed(seed + partitionId);
+    generator_.setSeed(detail::combineSeedWithPartitionId(seed, partitionId));
   }
 
   /// Initialize for seeded variant: rand(seed).
@@ -51,9 +63,9 @@ struct RandFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const TInput* seedInput) {
-    const auto partitionId = config.sparkPartitionId();
+    const auto partitionId = SparkQueryConfig{config}.partitionId();
     int64_t seed = seedInput ? static_cast<int64_t>(*seedInput) : 0;
-    generator_.setSeed(seed + partitionId);
+    generator_.setSeed(detail::combineSeedWithPartitionId(seed, partitionId));
   }
 
   FOLLY_ALWAYS_INLINE void call(double& result) {
@@ -63,6 +75,53 @@ struct RandFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void callNullable(double& result, TInput /*seedInput*/) {
     result = generator_.nextDouble();
+  }
+
+ private:
+  functions::XORShiftRandom generator_;
+};
+
+/// Spark SQL randn([seed]) - Returns a random double from the standard normal
+/// (Gaussian) distribution with mean 0.0 and standard deviation 1.0. Seeds an
+/// XORShift generator per partition, then applies Java's Random.nextGaussian()
+/// so results match Spark's randn.
+///
+/// Note: Even with a constant seed, different rows produce different outputs
+/// as the generator advances, so is_deterministic is set to false.
+template <typename T>
+struct RandnFunction {
+  static constexpr bool is_deterministic = false;
+
+  /// Initialize for unseeded variant: randn().
+  /// Uses a random seed from folly::Random to match Spark's behavior where
+  /// unseeded randn() generates different values across executions.
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config) {
+    const auto partitionId = SparkQueryConfig{config}.partitionId();
+    // Use folly::Random to generate a random seed for unseeded randn().
+    int64_t seed = folly::Random::rand64();
+    generator_.setSeed(detail::combineSeedWithPartitionId(seed, partitionId));
+  }
+
+  /// Initialize for seeded variant: randn(seed).
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const TInput* seedInput) {
+    const auto partitionId = SparkQueryConfig{config}.partitionId();
+    int64_t seed = seedInput ? static_cast<int64_t>(*seedInput) : 0;
+    generator_.setSeed(detail::combineSeedWithPartitionId(seed, partitionId));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(double& result) {
+    result = generator_.nextGaussian();
+  }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void callNullable(double& result, TInput /*seedInput*/) {
+    result = generator_.nextGaussian();
   }
 
  private:

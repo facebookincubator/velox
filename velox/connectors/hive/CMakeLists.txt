@@ -15,6 +15,10 @@
 velox_add_library(velox_hive_config OBJECT FileConfig.cpp HiveConfig.cpp)
 velox_link_libraries(velox_hive_config velox_core velox_exception)
 
+if(VELOX_ENABLE_PARQUET)
+  velox_link_libraries(velox_hive_config velox_dwio_parquet_common)
+endif()
+
 add_subdirectory(iceberg)
 add_subdirectory(paimon)
 
@@ -39,9 +43,11 @@ velox_add_library(
   HiveDataSink.cpp
   HiveDataSource.cpp
   HiveIndexSource.cpp
+  HiveIndexSourceUtils.cpp
   HivePartitionName.cpp
   HiveSplitReader.cpp
   PartitionIdGenerator.cpp
+  PartitionValue.cpp
   TableHandle.cpp
   HEADERS
   BufferedInputBuilder.h
@@ -66,11 +72,13 @@ velox_add_library(
   HiveDataSink.h
   HiveDataSource.h
   HiveIndexSource.h
+  HiveIndexSourceUtils.h
   HivePartitionFunction.h
   HivePartitionName.h
   HiveSplitReader.h
   IndexReader.h
   PartitionIdGenerator.h
+  PartitionValue.h
   TableHandle.h
 )
 
@@ -85,9 +93,13 @@ velox_link_libraries(
     velox_key_encoder
 )
 
+if(VELOX_ENABLE_PARQUET)
+  velox_link_libraries(velox_hive_connector PRIVATE velox_dwio_parquet_common)
+endif()
+
 velox_add_library(velox_hive_partition_function HivePartitionFunction.cpp)
 
-velox_link_libraries(velox_hive_partition_function velox_core velox_exec)
+velox_link_libraries(velox_hive_partition_function velox_core velox_exec velox_hive_hash)
 
 add_subdirectory(storage_adapters)
 

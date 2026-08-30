@@ -91,15 +91,6 @@ class SimpleAggregateAdapter : public Aggregate {
     }
   }
 
-  template <typename T, typename = void>
-  struct SupportSetConstantInputs : std::false_type {};
-
-  template <typename T>
-  struct SupportSetConstantInputs<
-      T,
-      std::void_t<decltype(std::declval<T&>().setConstantInputs(
-          std::declval<const std::vector<VectorPtr>&>()))>> : std::true_type {};
-
   // Assume most aggregate functions have fixed-size accumulators. Functions
   // that
   // have non-fixed-size accumulators should overwrite `is_fixed_size_` in their
@@ -222,6 +213,19 @@ class SimpleAggregateAdapter : public Aggregate {
           std::declval<const TypePtr&>(),
           std::declval<const core::QueryConfig&>()))>> : std::true_type {};
 
+  // Whether the function defines setConstantInputs(). AggregateInfo discovers
+  // constant arguments after the aggregate is constructed and calls
+  // Aggregate::setConstantInputs() once before processing input rows. The
+  // adapter forwards that hook to simple aggregates that opt in.
+  template <typename T, typename = void>
+  struct support_set_constant_inputs : std::false_type {};
+
+  template <typename T>
+  struct support_set_constant_inputs<
+      T,
+      std::void_t<decltype(std::declval<T&>().setConstantInputs(
+          std::declval<const std::vector<VectorPtr>&>()))>> : std::true_type {};
+
   // Whether the accumulator requires aligned access. If it is defined,
   // SimpleAggregateAdapter::accumulatorAlignmentSize() returns
   // alignof(typename FUNC::AccumulatorType).
@@ -257,8 +261,8 @@ class SimpleAggregateAdapter : public Aggregate {
   static constexpr bool accumulator_is_aligned_ =
       accumulator_is_aligned<typename FUNC::AccumulatorType>::value;
 
-  static constexpr bool kSupportSetConstantInputs =
-      SupportSetConstantInputs<FUNC>::value;
+  static constexpr bool support_set_constant_inputs_ =
+      support_set_constant_inputs<FUNC>::value;
 
   bool isFixedSize() const override {
     return accumulator_is_fixed_size_;
@@ -281,8 +285,10 @@ class SimpleAggregateAdapter : public Aggregate {
 
   void setConstantInputs(
       const std::vector<VectorPtr>& constantInputs) override {
-    if constexpr (kSupportSetConstantInputs) {
+    if constexpr (support_set_constant_inputs_) {
       fn_->setConstantInputs(constantInputs);
+    } else {
+      Aggregate::setConstantInputs(constantInputs);
     }
   }
 

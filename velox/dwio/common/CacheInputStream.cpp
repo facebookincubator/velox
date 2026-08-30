@@ -16,7 +16,6 @@
 
 #include <folly/executors/QueuedImmediateExecutor.h>
 
-#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/CacheInputStream.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
@@ -177,7 +176,6 @@ void CacheInputStream::setRemainingBytes(uint64_t remainingBytes) {
 }
 
 void CacheInputStream::loadSync(const Region& region) {
-  process::TraceContext trace("loadSync");
   int64_t hitSize = region.length;
   if (window_.has_value()) {
     const int64_t regionEnd = region.offset + region.length;
@@ -208,7 +206,7 @@ void CacheInputStream::loadSync(const Region& region) {
       VELOX_CHECK(cacheLoadWait.valid());
       uint64_t waitUs{0};
       {
-        MicrosecondTimer timer(&waitUs);
+        MicrosecondWallTimer timer(&waitUs);
         std::move(cacheLoadWait)
             .via(&folly::QueuedImmediateExecutor::instance())
             .wait();
@@ -237,7 +235,7 @@ void CacheInputStream::loadSync(const Region& region) {
     const auto ranges = entry->dataRanges(region.length);
     uint64_t storageReadUs{0};
     {
-      MicrosecondTimer timer(&storageReadUs);
+      MicrosecondWallTimer timer(&storageReadUs);
       input_->read(ranges, region.offset, LogType::FILE);
     }
     ioStats_->read().increment(region.length);
@@ -288,11 +286,11 @@ bool CacheInputStream::loadFromSsd(
   std::vector<cache::CachePin> pins;
   pins.push_back(std::move(pin_));
   try {
-    MicrosecondTimer timer(&ssdLoadUs);
+    MicrosecondWallTimer timer(&ssdLoadUs);
     file.load(ssdPins, pins);
   } catch (const std::exception& e) {
     LOG(ERROR) << "IOERR: Failed SSD loadSync " << entry.toString() << ' '
-               << e.what() << process::TraceContext::statusLine()
+               << e.what()
                << fmt::format(
                       "stream region {} {}b, start of load {} file {}",
                       region_.offset,
@@ -333,7 +331,7 @@ void CacheInputStream::loadPosition() {
       folly::SemiFuture<bool> waitFuture(false);
       uint64_t loadUs{0};
       {
-        MicrosecondTimer timer(&loadUs);
+        MicrosecondWallTimer timer(&loadUs);
         try {
           if (!load->loadOrFuture(&waitFuture, cacheable_)) {
             waitFuture.wait();

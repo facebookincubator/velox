@@ -139,9 +139,8 @@ arrayShuffleWithCustomSeedSignatures() {
 }
 
 std::shared_ptr<exec::VectorFunction> makeArrayShuffleWithCustomSeed(
-    const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& config) {
+    int32_t seedOffset) {
   VELOX_USER_CHECK_EQ(inputArgs.size(), 2);
   VELOX_USER_CHECK_EQ(inputArgs[1].type->kind(), TypeKind::BIGINT);
   VELOX_USER_CHECK_NOT_NULL(inputArgs[1].constantValue);
@@ -150,7 +149,6 @@ std::shared_ptr<exec::VectorFunction> makeArrayShuffleWithCustomSeed(
   const auto seed = inputArgs[1]
                         .constantValue->template as<ConstantVector<int64_t>>()
                         ->valueAt(0);
-  return std::make_shared<ArrayShuffleFunction>(
-      seed + config.sparkPartitionId());
+  return std::make_shared<ArrayShuffleFunction>(seed + seedOffset);
 }
 } // namespace facebook::velox::functions

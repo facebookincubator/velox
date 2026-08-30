@@ -38,14 +38,18 @@ AssertQueryBuilder::AssertQueryBuilder(
     DuckDbQueryRunner& duckDbQueryRunner)
     : duckDbQueryRunner_{&duckDbQueryRunner} {
   params_.planNode = plan;
+  params_.taskUniqueId = 1;
 }
 
 AssertQueryBuilder::AssertQueryBuilder(DuckDbQueryRunner& duckDbQueryRunner)
-    : duckDbQueryRunner_{&duckDbQueryRunner} {}
+    : duckDbQueryRunner_{&duckDbQueryRunner} {
+  params_.taskUniqueId = 1;
+}
 
 AssertQueryBuilder::AssertQueryBuilder(const core::PlanNodePtr& plan)
     : duckDbQueryRunner_(nullptr) {
   params_.planNode = plan;
+  params_.taskUniqueId = 1;
 }
 
 AssertQueryBuilder& AssertQueryBuilder::plan(const core::PlanNodePtr& plan) {

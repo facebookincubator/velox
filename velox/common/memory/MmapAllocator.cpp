@@ -28,6 +28,7 @@ MmapAllocator::MmapAllocator(const Options& options)
     : MemoryAllocator(options.largestSizeClass),
       kind_(MemoryAllocator::Kind::kMmap),
       useMmapArena_(options.useMmapArena),
+      onMap_(options.onMap),
       maxMallocBytes_(options.maxMallocBytes),
       mallocReservedBytes_(
           maxMallocBytes_ == 0
@@ -41,13 +42,20 @@ MmapAllocator::MmapAllocator(const Options& options)
   for (const auto& size : sizeClassSizes_) {
     sizeClasses_.push_back(std::make_unique<SizeClass>(capacity_ / size, size));
   }
+  // Size-class pages are not faulted until allocation, so bind here.
+  if (onMap_) {
+    for (const auto& sizeClass : sizeClasses_) {
+      onMap_(sizeClass->address(), sizeClass->byteSize());
+    }
+  }
 
   if (useMmapArena_) {
     const auto arenaSizeBytes = bits::roundUp(
         AllocationTraits::pageBytes(capacity_) / options.mmapArenaCapacityRatio,
         AllocationTraits::kPageSize);
     managedArenas_ = std::make_unique<ManagedMmapArenas>(
-        std::max<uint64_t>(arenaSizeBytes, MmapArena::kMinCapacityBytes));
+        std::max<uint64_t>(arenaSizeBytes, MmapArena::kMinCapacityBytes),
+        onMap_);
   }
 }
 
@@ -355,6 +363,11 @@ bool MmapAllocator::allocateContiguousImpl(
     // be mapped.
     rollbackAllocation(numToMap);
     return false;
+  }
+  // Arena-backed allocations are already bound when their arena region is
+  // mapped; only direct mmap allocations bind here.
+  if (onMap_ && !useMmapArena_) {
+    onMap_(data, AllocationTraits::pageBytes(maxPages));
   }
   allocation.set(
       data,

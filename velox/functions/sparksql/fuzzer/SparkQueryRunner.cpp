@@ -53,12 +53,14 @@ void writeToFile(
     memory::MemoryPool* pool) {
   VELOX_CHECK_GT(data.size(), 0);
 
-  auto options = std::make_shared<parquet::WriterOptions>();
+  auto options = std::make_shared<dwio::common::WriterOptions>();
   options->schema = data[0]->type();
   options->memoryPool = pool;
   // Spark does not recognize int64-timestamp written as nano precision in
   // Parquet.
-  options->parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  auto parquetOptions = std::make_shared<parquet::ParquetWriterOptions>();
+  parquetOptions->parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  options->formatSpecificOptions = parquetOptions;
 
   auto writeFile = std::make_unique<LocalWriteFile>(path, true, false);
   auto sink =

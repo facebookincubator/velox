@@ -117,7 +117,7 @@ folly::dynamic PaimonConnectorSplit::serialize() const {
       ? folly::dynamic(tableBucketNumber_.value())
       : nullptr;
 
-  obj["fileFormat"] = dwio::common::toString(fileFormat_);
+  obj["fileFormat"] = dwio::common::FileFormatName::toName(fileFormat_);
 
   return obj;
 }

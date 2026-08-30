@@ -68,12 +68,6 @@ class MixedUnion : public SourceOperator {
   /// Process inputs in mixed mode (all at once)
   RowVectorPtr getOutputMixed();
 
-  /// Combine multiple row vectors into a single output vector
-  RowVectorPtr combineResults(std::vector<RowVectorPtr>& results);
-
-  /// Check if we have data from all active sources for mixed mode
-  bool hasDataFromAllSources() const;
-
   const std::shared_ptr<const core::MixedUnionNode> unionNode_;
 
   /// MergeSource objects representing each input pipeline

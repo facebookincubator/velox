@@ -169,19 +169,30 @@ class DecimalUtil {
     auto scaleDifference = toScale - fromScale;
     bool isOverflow = false;
     if (scaleDifference >= 0) {
+      VELOX_RETURN_IF(
+          scaleDifference > LongDecimalType::kMaxPrecision,
+          Status::UserError(
+              "Decimal scale difference is too large: {} vs max {}.",
+              scaleDifference,
+              LongDecimalType::kMaxPrecision));
       isOverflow = __builtin_mul_overflow(
           rescaledValue,
           DecimalUtil::kPowersOfTen[scaleDifference],
           &rescaledValue);
     } else {
       scaleDifference = -scaleDifference;
-      const auto scalingFactor = DecimalUtil::kPowersOfTen[scaleDifference];
-      rescaledValue /= scalingFactor;
-      int128_t remainder = inputValue % scalingFactor;
-      if (inputValue >= 0 && remainder >= scalingFactor / 2) {
-        ++rescaledValue;
-      } else if (remainder <= -scalingFactor / 2) {
-        --rescaledValue;
+      if (scaleDifference > LongDecimalType::kMaxPrecision) {
+        rescaledValue = 0;
+      } else {
+        VELOX_DCHECK_LT(scaleDifference, std::size(DecimalUtil::kPowersOfTen));
+        const auto scalingFactor = DecimalUtil::kPowersOfTen[scaleDifference];
+        rescaledValue /= scalingFactor;
+        int128_t remainder = inputValue % scalingFactor;
+        if (inputValue >= 0 && remainder >= scalingFactor / 2) {
+          ++rescaledValue;
+        } else if (remainder <= -scalingFactor / 2) {
+          --rescaledValue;
+        }
       }
     }
     // Check overflow.
@@ -600,6 +611,18 @@ class DecimalUtil {
   }
 
   static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
+
+  // Returns the abs value of input value.
+  template <class T, typename = std::enable_if_t<std::is_same_v<T, int64_t>>>
+  FOLLY_ALWAYS_INLINE static uint64_t absValue(int64_t a) {
+    return a < 0 ? static_cast<uint64_t>(-a) : static_cast<uint64_t>(a);
+  }
+
+  // Returns the abs value of input value.
+  template <class T, typename = std::enable_if_t<std::is_same_v<T, int128_t>>>
+  FOLLY_ALWAYS_INLINE static uint128_t absValue(int128_t a) {
+    return a < 0 ? static_cast<uint128_t>(-a) : static_cast<uint128_t>(a);
+  }
 
  private:
   // Parses the string view to decimal components, which contains the

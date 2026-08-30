@@ -196,10 +196,16 @@ class FileNameGenerator : public ISerializable {
  public:
   virtual ~FileNameGenerator() = default;
 
+  /// Generates the target and write file names for a single output file.
+  /// @param maxNumBuckets Upper bound on the number of buckets, used to
+  /// zero-pad the bucket id in bucketed file names to a fixed width. Resolved
+  /// from the configurable hive.max-bucket-count. Generators that do not
+  /// produce bucketed names may ignore it.
   virtual std::pair<std::string, std::string> gen(
       std::optional<uint32_t> bucketId,
       const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
       const ConnectorQueryCtx& connectorQueryCtx,
+      uint32_t maxNumBuckets,
       bool commitRequired) const = 0;
 
   virtual std::string toString() const = 0;
@@ -213,16 +219,8 @@ class HiveInsertFileNameGenerator : public FileNameGenerator {
       std::optional<uint32_t> bucketId,
       const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
       const ConnectorQueryCtx& connectorQueryCtx,
+      uint32_t maxNumBuckets,
       bool commitRequired) const override;
-
-  /// Version of file generation that takes hiveConfig into account when
-  /// generating file names
-  std::pair<std::string, std::string> gen(
-      std::optional<uint32_t> bucketId,
-      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
-      const ConnectorQueryCtx& connectorQueryCtx,
-      const std::shared_ptr<const HiveConfig>& hiveConfig,
-      bool commitRequired) const;
 
   static void registerSerDe();
 

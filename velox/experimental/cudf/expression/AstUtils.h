@@ -15,18 +15,24 @@
  */
 #pragma once
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 
-#include "velox/expression/ConstantExpr.h"
+#include "velox/core/Expressions.h"
+#include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/ConstantVector.h"
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
 #include <cudf/ast/expressions.hpp>
 #include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/scalar/scalar.hpp>
+#include <cudf/types.hpp>
 #include <cudf/utilities/default_stream.hpp>
+
+#include <optional>
 
 namespace facebook::velox::cudf_velox {
 
@@ -89,19 +95,47 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
     const TypePtr& type,
     T value,
     bool isNull,
-    std::optional<cudf::type_id> toType = std::nullopt) {
-  auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+    std::optional<cudf::type_id> toType = std::nullopt,
+    rmm::cuda_stream_view stream =
+        cudf::get_default_stream(cudf::allow_default_stream)) {
   auto mr = get_temp_mr();
 
-  // Scalars are constructed once at init time but later consumed on
-  // an arbitrary per-batch CUDA stream.  The underlying device_buffer
-  // is allocated with cudaMallocAsync on `stream`.  Without a sync
-  // the allocation may still be pending when a different stream reads
-  // the scalar, causing use-before-alloc.  Synchronising here is
-  // cheap (one-time cost per scalar) and guarantees the memory is
-  // available on every stream.
-
-  if constexpr (cudf::is_fixed_width<T>()) {
+  // Synchronize before returning as scalar construction can enqueue an
+  // asynchronous copy from the caller's host value.
+  if constexpr (std::is_same_v<T, Timestamp>) {
+    auto unit = CudfConfig::getInstance().timestampUnit;
+    if (unit == cudf::type_id::TIMESTAMP_MICROSECONDS) {
+      using CudfTimestampType = cudf::timestamp_us;
+      auto micros = isNull ? 0 : value.toMicros();
+      auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
+          CudfTimestampType{cudf::duration_us{micros}}, !isNull, stream, mr);
+      stream.synchronize();
+      return scalar;
+    } else if (unit == cudf::type_id::TIMESTAMP_NANOSECONDS) {
+      using CudfTimestampType = cudf::timestamp_ns;
+      auto nanos = isNull ? 0 : value.toNanos();
+      auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
+          CudfTimestampType{cudf::duration_ns{nanos}}, !isNull, stream, mr);
+      stream.synchronize();
+      return scalar;
+    } else if (unit == cudf::type_id::TIMESTAMP_MILLISECONDS) {
+      using CudfTimestampType = cudf::timestamp_ms;
+      auto millis = isNull ? 0 : value.toMillis();
+      auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
+          CudfTimestampType{cudf::duration_ms{millis}}, !isNull, stream, mr);
+      stream.synchronize();
+      return scalar;
+    } else if (unit == cudf::type_id::TIMESTAMP_SECONDS) {
+      using CudfTimestampType = cudf::timestamp_s;
+      auto seconds = isNull ? 0 : value.getSeconds();
+      auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
+          CudfTimestampType{cudf::duration_s{seconds}}, !isNull, stream, mr);
+      stream.synchronize();
+      return scalar;
+    } else {
+      VELOX_FAIL("Unsupported timestamp unit: {}", static_cast<int32_t>(unit));
+    }
+  } else if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isDecimal()) {
       // Velox DECIMAL scale is positive for fractional digits
       // cuDF scale is negative for fractional digits
@@ -176,22 +210,61 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
 
 template <TypeKind Kind>
 static std::unique_ptr<cudf::scalar> createCudfScalar(
-    const velox::VectorPtr& value,
-    std::optional<cudf::type_id> toType = std::nullopt) {
+    const core::ConstantTypedExpr& value,
+    memory::MemoryPool* pool,
+    std::optional<cudf::type_id> toType = std::nullopt,
+    rmm::cuda_stream_view stream =
+        cudf::get_default_stream(cudf::allow_default_stream)) {
   using T = typename TypeTraits<Kind>::NativeType;
-  auto vector = value->as<velox::ConstantVector<T>>();
+  const auto valueVector = value.hasValueVector()
+      ? value.valueVector()
+      : value.toConstantVector(pool);
+  auto vector = valueVector->as<velox::ConstantVector<T>>();
   return makeScalarFromValue<T>(
-      vector->type(), vector->value(), vector->isNullAt(0), toType);
+      vector->type(), vector->value(), vector->isNullAt(0), toType, stream);
 }
 
 inline std::unique_ptr<cudf::scalar> makeScalarFromConstantExpr(
-    const std::shared_ptr<velox::exec::Expr>& expr,
-    std::optional<cudf::type_id> toType = std::nullopt) {
-  auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr);
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool,
+    std::optional<cudf::type_id> toType = std::nullopt,
+    rmm::cuda_stream_view stream =
+        cudf::get_default_stream(cudf::allow_default_stream)) {
+  auto constExpr =
+      std::dynamic_pointer_cast<const core::ConstantTypedExpr>(expr);
   VELOX_CHECK_NOT_NULL(constExpr);
-  auto constValue = constExpr->value();
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      createCudfScalar, constValue->typeKind(), constValue, toType);
+      createCudfScalar,
+      constExpr->type()->kind(),
+      *constExpr,
+      pool,
+      toType,
+      stream);
+}
+
+// Returns the constant VARCHAR value of expr, or nullopt if expr is not a
+// non-null constant VARCHAR. The returned StringView points into storage owned
+// by expr (its value vector or Variant), so it is valid only while expr is
+// alive.
+inline std::optional<StringView> constantVarcharValue(
+    const core::TypedExprPtr& expr) {
+  if (expr == nullptr || !expr->isConstantKind() ||
+      !expr->type()->isVarchar()) {
+    return std::nullopt;
+  }
+  const auto* constExpr = expr->asUnchecked<core::ConstantTypedExpr>();
+  if (constExpr->hasValueVector()) {
+    const auto& vector = constExpr->valueVector();
+    if (vector->isNullAt(0)) {
+      return std::nullopt;
+    }
+    return vector->as<SimpleVector<StringView>>()->valueAt(0);
+  }
+  const auto& value = constExpr->value();
+  if (value.isNull()) {
+    return std::nullopt;
+  }
+  return StringView(value.value<TypeKind::VARCHAR>());
 }
 
 template <TypeKind kind>
@@ -221,6 +294,31 @@ cudf::ast::literal makeScalarAndLiteral(
     const variant& var,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
   return makeScalarAndLiteral<kind>(type, var, false, scalars);
+}
+
+/// Returns true if expr is non-null and its output type is one the AST/JIT
+/// evaluator does not support (currently TIMESTAMP and DECIMAL).
+inline bool isAstUnsupportedType(const core::TypedExprPtr& expr) {
+  return expr && expr->type() &&
+      (expr->type()->isTimestamp() || expr->type()->isDecimal());
+}
+
+/// Returns true if expr's own output type or any direct input type is one
+/// the AST/JIT evaluator does not support. Intentionally shallow: callers
+/// that recurse over subexpressions (e.g. pushExprToTree) re-check at every
+/// level, so a deep walk here would be wasted work.
+inline bool containsAstUnsupportedType(const core::TypedExprPtr& expr) {
+  if (isAstUnsupportedType(expr)) {
+    return true;
+  }
+  if (expr) {
+    for (const auto& input : expr->inputs()) {
+      if (isAstUnsupportedType(input)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 } // namespace facebook::velox::cudf_velox

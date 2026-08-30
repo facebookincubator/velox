@@ -24,6 +24,7 @@
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/MergeSource.h"
+#include "velox/exec/PartitionedOutputFactory.h"
 #include "velox/exec/ScaledScanController.h"
 #include "velox/exec/TaskStats.h"
 #include "velox/exec/TaskStructs.h"
@@ -138,6 +139,14 @@ class Task : public std::enable_shared_from_this<Task> {
     return destination_;
   }
 
+  /// Returns the pool of unique row ids shared by all AssignUniqueId operators
+  /// in this task. Each operator atomically claims disjoint ranges from it, so
+  /// the ids it generates never collide across operators or drivers of the same
+  /// task.
+  const std::shared_ptr<std::atomic_int64_t>& uniqueRowIdPool() const {
+    return uniqueRowIdPool_;
+  }
+
   /// Configured cpu slice time limit for drivers. 0 (meaning slicing/yield
   /// disabled) when task is under serial mode.
   uint64_t driverCpuTimeSliceLimitMs() const;
@@ -157,6 +166,11 @@ class Task : public std::enable_shared_from_this<Task> {
   const trace::TraceCtx* traceCtx() const {
     return traceCtx_.get();
   }
+
+  /// Returns the output buffer manager for the transport named on this task's
+  /// PartitionedOutputNode, or an empty weak_ptr if there is no partitioned
+  /// output. Lock() and null-check before use.
+  std::weak_ptr<OutputBufferManager> outputBufferManager() const;
 
   /// Returns ConsumerSupplier passed in the constructor.
   ConsumerSupplier consumerSupplier() const {
@@ -407,6 +421,38 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t driverId,
       const std::string& operatorType);
 
+  /// Returns the node-level aggregate pool under the custom root for 'tag'
+  /// and 'planNodeId', creating it if needed. Throws if 'tag' has no
+  /// registered custom root on this query's QueryCtx.
+  memory::MemoryPool* getOrAddCustomNodePool(
+      const std::string& tag,
+      const core::PlanNodeId& planNodeId);
+
+  /// Hash-join variant of getOrAddCustomNodePool. Mirrors
+  /// getOrAddJoinNodePool: keys the node pool by '<planNodeId>[<splitGroup>]'
+  /// for grouped execution.
+  memory::MemoryPool* getOrAddCustomJoinNodePool(
+      const std::string& tag,
+      const core::PlanNodeId& planNodeId,
+      uint32_t splitGroupId);
+
+  /// Returns a new leaf operator pool under the custom root for 'tag',
+  /// mirroring addOperatorPool. Selects the join or non-join node parent
+  /// based on 'operatorType'.
+  memory::MemoryPool* addCustomOperatorPool(
+      const std::string& tag,
+      const core::PlanNodeId& planNodeId,
+      uint32_t splitGroupId,
+      int pipelineId,
+      uint32_t driverId,
+      const std::string& operatorType);
+
+  /// Read-only accessor for the cached custom node pool under 'tag' and
+  /// 'planNodeId', or nullptr if absent.
+  memory::MemoryPool* customNodePool(
+      const std::string& tag,
+      const core::PlanNodeId& planNodeId) const;
+
   /// Creates new instance of MemoryPool with aggregate kind for the connector
   /// use, stores it in the task to ensure lifetime and returns a raw pointer.
   /// Not thread safe, e.g. must be called from the Operator's constructor.
@@ -498,8 +544,8 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  const std::shared_ptr<LocalExchangeMemoryManager>&
-  getLocalExchangeMemoryManager(
+  // Returns by copy because the copy must be made under the task lock.
+  std::shared_ptr<LocalExchangeMemoryManager> getLocalExchangeMemoryManager(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
@@ -566,10 +612,10 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const std::vector<core::PlanNodeId>& planNodeIds);
 
-  /// Adds custom join bridges for all the specified plan nodes.
+  /// Adds custom join bridges for the specified plan node IDs.
   void addCustomJoinBridgesLocked(
       uint32_t splitGroupId,
-      const std::vector<core::PlanNodePtr>& planNodes);
+      const std::vector<core::PlanNodeId>& planNodeIds);
 
   /// Returns a HashJoinBridge for 'planNodeId'. This is used for synchronizing
   /// start of probe with completion of build for a join that has a
@@ -762,7 +808,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// folder could not be created.
   const std::string& getOrCreateSpillDirectory();
 
-  /// True if produces output via OutputBufferManager.
+  /// True if this task has a partitioned-output pipeline.
   bool hasPartitionedOutput() const {
     return numDriversInPartitionedOutput_ > 0;
   }
@@ -891,6 +937,11 @@ class Task : public std::enable_shared_from_this<Task> {
   // Invoked to initialize the memory pool for this task on creation.
   void initTaskPool();
 
+  // Creates the per-tag 'task.<id>.<tag>' aggregate child under every
+  // custom root pool registered on the QueryCtx. Called from initTaskPool
+  // after the default task pool is created.
+  void initCustomTaskPools();
+
   // Creates a scaled scan controller for a given table scan node.
   void addScaledScanControllerLocked(
       uint32_t splitGroupId,
@@ -1004,8 +1055,9 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  /// Add remote split to ExchangeClient for the specified plan node. Used to
-  /// close remote sources that are added after the task completed early.
+  /// Add remote split to InMemoryExchangeClient for the specified plan node.
+  /// Used to close remote sources that are added after the task completed
+  /// early.
   void addRemoteSplit(
       const core::PlanNodeId& planNodeId,
       const exec::Split& split);
@@ -1130,19 +1182,19 @@ class Task : public std::enable_shared_from_this<Task> {
   // Get a shared reference to the exchange client with the specified exchange
   // plan node 'planNodeId'. The function returns null if there is no client
   // created for 'planNodeId' in 'exchangeClientByPlanNode_'.
-  std::shared_ptr<ExchangeClient> getExchangeClient(
+  std::shared_ptr<InMemoryExchangeClient> getExchangeClient(
       const core::PlanNodeId& planNodeId) const {
     std::lock_guard<std::timed_mutex> l(mutex_);
     return getExchangeClientLocked(planNodeId);
   }
 
-  std::shared_ptr<ExchangeClient> getExchangeClientLocked(
+  std::shared_ptr<InMemoryExchangeClient> getExchangeClientLocked(
       const core::PlanNodeId& planNodeId) const;
 
   // Get a shared reference to the exchange client with the specified
   // 'pipelineId'. The function returns null if there is no client created for
   // 'pipelineId' set in 'exchangeClients_'.
-  std::shared_ptr<ExchangeClient> getExchangeClientLocked(
+  std::shared_ptr<InMemoryExchangeClient> getExchangeClientLocked(
       int32_t pipelineId) const;
 
   // Builds the query trace config.
@@ -1214,7 +1266,24 @@ class Task : public std::enable_shared_from_this<Task> {
   // NOTE: 'childPools_' holds the ownerships of node memory pools.
   std::unordered_map<std::string, memory::MemoryPool*> nodePools_;
 
-  // Set to true by OutputBufferManager when all output is
+  // Aggregate child of each registered custom root pool. Keyed by resource
+  // tag. Lifetime is held in 'customChildPools_'.
+  std::unordered_map<std::string, memory::MemoryPool*> customTaskPools_;
+
+  // Node-level aggregate pools under each custom root, keyed first by
+  // resource tag, then by plan node id. Lifetime is held in
+  // 'customChildPools_'.
+  std::unordered_map<
+      std::string,
+      std::unordered_map<std::string, memory::MemoryPool*>>
+      customNodePools_;
+
+  // Owns the shared_ptrs to all custom task/node/operator pools mirrored
+  // under registered custom roots. Kept separate from 'childPools_' so the
+  // default hierarchy is unchanged.
+  std::vector<std::shared_ptr<memory::MemoryPool>> customChildPools_;
+
+  // Set to true by DefaultOutputBufferManager when all output is
   // acknowledged. If this happens before Drivers are at end, the last
   // Driver to finish will set state_ to kFinished. If Drivers have
   // finished then setting this to true will also set state_ to
@@ -1233,12 +1302,17 @@ class Task : public std::enable_shared_from_this<Task> {
   // the exchange clients are also referenced by 'exchangeClientByPlanNode_'.
   // Hence, exchange clients can be indexed either by pipeline ID or by plan
   // node ID.
-  std::vector<std::shared_ptr<ExchangeClient>> exchangeClients_;
+  std::vector<std::shared_ptr<InMemoryExchangeClient>> exchangeClients_;
 
   // Exchange clients keyed by the corresponding Exchange plan node ID. Used to
   // process remaining remote splits after the task has completed early.
-  std::unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>
+  std::unordered_map<core::PlanNodeId, std::shared_ptr<InMemoryExchangeClient>>
       exchangeClientByPlanNode_;
+
+  // Pool of unique row ids shared by all AssignUniqueId operators in this task.
+  // See uniqueRowIdPool().
+  const std::shared_ptr<std::atomic_int64_t> uniqueRowIdPool_{
+      std::make_shared<std::atomic_int64_t>(0)};
 
   ConsumerSupplier consumerSupplier_;
 
@@ -1403,7 +1477,18 @@ class Task : public std::enable_shared_from_this<Task> {
   // ungrouped execution we use the [0] entry in this vector.
   std::unordered_map<uint32_t, SplitGroupState> splitGroupStates_;
 
+  // Output buffer manager for this task's partitioned output -- the manager for
+  // the transport named on the PartitionedOutputNode. A weak_ptr to break the
+  // reference cycle through OutputBuffer::task_ (which holds a
+  // shared_ptr<Task>). Assigned once under mutex_ when the task starts; read
+  // directly by code already holding mutex_, or via outputBufferManager().
   std::weak_ptr<OutputBufferManager> bufferManager_;
+
+  // Factory that builds the output operator for the resolved transport, paired
+  // with 'bufferManager_' from the same registry entry. Assigned alongside
+  // 'bufferManager_' under mutex_ and passed to createDriver(); empty if the
+  // task has no partitioned output.
+  PartitionedOutputFactory outputOperatorFactory_;
 
   // Boolean indicating that we have already received no-more-output-buffers
   // message. Subsequent messages will be ignored.
@@ -1447,8 +1532,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // a path that will be into spillDirectory_
   std::function<std::string()> spillDirectoryCallback_;
 
-  // Mutex to ensure only the first caller thread of 'getOrCreateSpillDirectory'
-  // creates the directory.
+  // Serializes spill directory creation and removal.
   mutable std::mutex spillDirCreateMutex_;
 
   // Indicates whether the spill directory has been created.
@@ -1485,8 +1569,9 @@ class TaskListener {
       std::exception_ptr error,
       const TaskStats& stats,
       const core::PlanFragment& /*fragment*/,
-      const std::
-          unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>&
+      const std::unordered_map<
+          core::PlanNodeId,
+          std::shared_ptr<InMemoryExchangeClient>>&
       /*exchangeClientMap*/) {
     onTaskCompletion(taskUuid, taskId, state, error, stats);
   }

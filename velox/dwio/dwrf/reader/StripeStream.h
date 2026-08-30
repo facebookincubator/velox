@@ -231,7 +231,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
       int64_t stripeNumberOfRows,
       const StrideIndexProvider& provider,
       uint32_t stripeIndex,
-      dwio::common::ColumnReaderStatistics* columnReaderStats = nullptr)
+      dwio::common::SplitStats* splitStats = nullptr)
       : StripeStreamsBase{&readState->readerBase->memoryPool()},
         readState_(std::move(readState)),
         selector_{selector},
@@ -241,7 +241,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
         stripeNumberOfRows_{stripeNumberOfRows},
         provider_(provider),
         stripeIndex_{stripeIndex},
-        columnReaderStats_{columnReaderStats} {
+        splitStats_{splitStats} {
     loadStreams();
   }
 
@@ -366,11 +366,14 @@ class StripeStreamsImpl : public StripeStreamsBase {
   }
 
   io::IoCounter* getDecompressCounter(uint32_t nodeId) const {
-    if (!columnReaderStats_ || !columnReaderStats_->columnMetricsSet) {
+    if (!splitStats_) {
       return nullptr;
     }
-    auto* metrics = columnReaderStats_->columnMetricsSet->getOrCreate(nodeId);
-    return &metrics->decompressCPUTimeNanos;
+    auto* stats = splitStats_->decodingStats(nodeId);
+    if (!stats) {
+      return nullptr;
+    }
+    return &stats->decompressCPUTimeNanos;
   }
 
   void loadStreams();
@@ -385,7 +388,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
   const int64_t stripeNumberOfRows_;
   const StrideIndexProvider& provider_;
   const uint32_t stripeIndex_;
-  dwio::common::ColumnReaderStatistics* const columnReaderStats_{nullptr};
+  dwio::common::SplitStats* const splitStats_{nullptr};
 
   bool readPlanLoaded_{false};
 

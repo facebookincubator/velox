@@ -70,6 +70,19 @@ class TpchQueryBuilder {
   /// @param queryId TPC-H query number
   TpchPlan getQueryPlan(int queryId) const;
 
+  /// Get an alternate plan for a TPC-H query whose original predicate is not
+  /// estimable from column statistics (e.g. a substring `like`). A cost-based
+  /// optimizer mis-estimates such a predicate's selectivity and may pick a
+  /// non-optimal join order, so there is no single plan to assert against. The
+  /// alternate swaps in an estimable filter of similar selectivity, giving
+  /// optimizer tests a stable, optimal reference plan.
+  ///
+  /// Supported alterations:
+  ///   q9: part filter `p_name like '%green%'` -> `p_size <= 3` (~6%).
+  ///
+  /// @param queryId TPC-H query number
+  TpchPlan getAltPlan(int queryId) const;
+
   /// Returns a plan for select max(c1), max(c2), .. from lineitem where partkey
   /// between
   /// ... such that 'columnPct' columns are aggregated with max(c) for numbers
@@ -96,7 +109,10 @@ class TpchQueryBuilder {
   TpchPlan getQ6Plan() const;
   TpchPlan getQ7Plan() const;
   TpchPlan getQ8Plan() const;
-  TpchPlan getQ9Plan() const;
+  // 'partFilter' is the part-table remaining filter. The part scan reads
+  // 'p_name' and 'p_size' so either q9's 'like' filter or an estimable
+  // substitute (e.g. 'p_size <= 3', used by getAltPlan) resolves.
+  TpchPlan getQ9Plan(const std::string& partFilter) const;
   TpchPlan getQ10Plan() const;
   TpchPlan getQ11Plan() const;
   TpchPlan getQ12Plan() const;

@@ -16,10 +16,6 @@
 
 #include <iostream>
 
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-
 #include <folly/Random.h>
 #include <folly/Synchronized.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
@@ -263,7 +259,6 @@ class ReadBenchmark {
   static constexpr int32_t kWrite = -10000;
   // 0 means no op, kWrite means being written, other numbers are reader counts.
   std::string writeBatch_;
-  int32_t fd_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
   std::unique_ptr<ReadFile> readFile_;
   folly::Random::DefaultGenerator rng_;

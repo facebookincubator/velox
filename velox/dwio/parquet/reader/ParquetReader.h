@@ -16,8 +16,12 @@
 
 #pragma once
 
+#include <cstdint>
+
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/parquet/common/ParquetConfig.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
 
 namespace facebook::velox::dwio::common {
@@ -34,6 +38,39 @@ enum class ParquetMetricsType { HEADER, FILE_METADATA, FILE, BLOCK, TEST };
 class StructColumnReader;
 
 class ReaderBase;
+
+/// Carries Parquet-specific options through the common reader interface.
+class ParquetReaderOptions : public dwio::common::FormatSpecificOptions {
+ public:
+  /// Speculative tail-read size in bytes for reading Parquet footers.
+  uint64_t footerSpeculativeIoSize{
+      ParquetConfig::kFooterSpeculativeIoSizeSessionProperty::defaultValue};
+
+  void setAllowInt32Narrowing(bool allow) {
+    allowInt32Narrowing_ = allow;
+  }
+
+  bool allowInt32Narrowing() const {
+    return allowInt32Narrowing_;
+  }
+
+  void setFooterMemoryTrackingThreshold(uint64_t threshold) {
+    footerMemoryTrackingThreshold_ = threshold;
+  }
+
+  uint64_t footerMemoryTrackingThreshold() const {
+    return footerMemoryTrackingThreshold_;
+  }
+
+ private:
+  /// Allows reading INT32 physical columns as narrower integer types.
+  bool allowInt32Narrowing_{
+      ParquetConfig::kAllowInt32NarrowingSessionProperty::defaultValue};
+
+  /// Serialized footer size threshold above which heap tracking is enabled.
+  uint64_t footerMemoryTrackingThreshold_{
+      ParquetConfig::kDefaultFooterMemoryTrackingThreshold};
+};
 
 /// Implements the RowReader interface for Parquet.
 class ParquetRowReader : public dwio::common::RowReader {
@@ -52,8 +89,7 @@ class ParquetRowReader : public dwio::common::RowReader {
       velox::VectorPtr& result,
       const dwio::common::Mutation* = nullptr) override;
 
-  void updateRuntimeStats(
-      dwio::common::RuntimeStatistics& stats) const override;
+  void updateRuntimeStats(dwio::common::RuntimeStats& stats) const override;
 
   void resetFilterCaches() override;
 
@@ -116,6 +152,10 @@ class ParquetReaderFactory : public dwio::common::ReaderFactory {
       const dwio::common::ReaderOptions& options) override {
     return std::make_unique<ParquetReader>(std::move(input), options);
   }
+
+  std::shared_ptr<dwio::common::FormatSpecificOptions> createFormatOptions(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) const override;
 };
 
 void registerParquetReaderFactory();

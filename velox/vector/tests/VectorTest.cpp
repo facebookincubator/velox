@@ -4151,6 +4151,25 @@ TEST_F(VectorTest, pushDictionaryToRowVectorLeaves) {
     ASSERT_EQ(c0c1->encoding(), VectorEncoding::Simple::DICTIONARY);
   }
   {
+    SCOPED_TRACE("Struct with own nulls under null-free dictionary");
+    // A null-free dictionary (e.g. row selection during deletion) wraps a
+    // RowVector whose child struct carries its OWN nulls -- not wrapper nulls.
+    // The struct's nulls must be re-indexed through the dictionary so they
+    // align with the wrapped rows; otherwise they stay at the pre-dictionary
+    // row positions and the output is wrong.
+    input = wrapInDictionary(
+        makeIndicesInReverse(10),
+        makeRowVector({
+            makeRowVector({iota, iota}, nullEvery(4)),
+        }));
+    output = RowVector::pushDictionaryToRowVectorLeaves(input);
+    test::assertEqualVectors(input, output);
+    auto* c0 =
+        output->asChecked<RowVector>()->childAt(0)->asChecked<RowVector>();
+    ASSERT_EQ(c0->childAt(0)->encoding(), VectorEncoding::Simple::DICTIONARY);
+    ASSERT_EQ(c0->childAt(1)->encoding(), VectorEncoding::Simple::DICTIONARY);
+  }
+  {
     SCOPED_TRACE("Constant");
     input = makeRowVector({
         // c0: Constant primitive.

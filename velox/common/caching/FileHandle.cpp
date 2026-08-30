@@ -49,7 +49,7 @@ std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
   uint64_t elapsedTimeUs{0};
   std::unique_ptr<FileHandle> fileHandle;
   {
-    MicrosecondTimer timer(&elapsedTimeUs);
+    MicrosecondWallTimer timer(&elapsedTimeUs);
     fileHandle = std::make_unique<FileHandle>();
     filesystems::FileOptions options;
     options.stats = stats;
@@ -59,6 +59,7 @@ std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
       options.readRangeHint = properties->readRangeHint;
       options.extraFileInfo = properties->extraFileInfo;
       options.fileReadOps = properties->fileReadOps;
+      options.ioStatistics = properties->ioStatistics;
     }
     const auto& filename = key.filename;
     fileHandle->file = filesystems::getFileSystem(filename, properties_)

@@ -157,10 +157,6 @@ void treeMemoryUsageVisitor(
   });
 }
 
-std::string capacityToString(int64_t capacity) {
-  return capacity == kMaxMemory ? "UNLIMITED" : succinctBytes(capacity);
-}
-
 #define DEBUG_RECORD_ALLOC(pool, ...)         \
   if (FOLLY_UNLIKELY(pool->debugEnabled())) { \
     pool->recordAllocDbg(__VA_ARGS__);        \
@@ -177,7 +173,7 @@ std::string capacityToString(int64_t capacity) {
 
 std::string MemoryPool::Stats::toString() const {
   return fmt::format(
-      "usedBytes:{} reservedBytes:{} peakBytes:{} cumulativeBytes:{} numAllocs:{} numFrees:{} numReserves:{} numReleases:{} numShrinks:{} numReclaims:{} numCollisions:{} numCapacityGrowths:{}",
+      "usedBytes:{} reservedBytes:{} peakBytes:{} cumulativeBytes:{} numAllocs:{} numFrees:{} numReserves:{} numReleases:{} numShrinks:{} numReclaims:{} numCollisions:{} numCapacityGrowths:{} numExternalAllocs:{} numExternalFrees:{} cumulativeExternalBytes:{}",
       succinctBytes(usedBytes),
       succinctBytes(reservedBytes),
       succinctBytes(peakBytes),
@@ -189,7 +185,10 @@ std::string MemoryPool::Stats::toString() const {
       numShrinks,
       numReclaims,
       numCollisions,
-      numCapacityGrowths);
+      numCapacityGrowths,
+      numExternalAllocs,
+      numExternalFrees,
+      succinctBytes(cumulativeExternalBytes));
 }
 
 bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
@@ -203,7 +202,10 @@ bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
              numReserves,
              numReleases,
              numCollisions,
-             numCapacityGrowths) ==
+             numCapacityGrowths,
+             numExternalAllocs,
+             numExternalFrees,
+             cumulativeExternalBytes) ==
       std::tie(
              other.usedBytes,
              other.reservedBytes,
@@ -214,7 +216,10 @@ bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
              other.numReserves,
              other.numReleases,
              other.numCollisions,
-             other.numCapacityGrowths);
+             other.numCapacityGrowths,
+             other.numExternalAllocs,
+             other.numExternalFrees,
+             other.cumulativeExternalBytes);
 }
 
 std::ostream& operator<<(std::ostream& os, const MemoryPool::Stats& stats) {
@@ -448,13 +453,20 @@ MemoryPoolImpl::MemoryPoolImpl(
     const Options& options)
     : MemoryPool{name, kind, parent, options},
       manager_{memoryManager},
-      allocator_{manager_->allocator()},
-      arbitrator_{manager_->arbitrator()},
+      allocator_{
+          options.customAllocator != nullptr ? options.customAllocator
+                                             : manager_->allocator()},
+      arbitrator_{
+          options.customArbitrator != nullptr ? options.customArbitrator
+                                              : manager_->arbitrator()},
       reclaimer_(std::move(reclaimer)),
       // The memory manager sets the capacity through grow() according to the
       // actually used memory arbitration policy.
       capacity_(parent_ != nullptr ? kMaxMemory : 0) {
-  VELOX_CHECK(options.threadSafe || isLeaf());
+  VELOX_CHECK(
+      options.threadSafe || isLeaf(),
+      "Only a leaf memory pool can be non-thread-safe: {}",
+      name_);
 }
 
 MemoryPoolImpl::~MemoryPoolImpl() {
@@ -509,6 +521,9 @@ MemoryPool::Stats MemoryPoolImpl::statsLocked() const {
   stats.numReleases = numReleases_;
   stats.numCollisions = numCollisions_;
   stats.numCapacityGrowths = numCapacityGrowths_;
+  stats.numExternalAllocs = numExternalAllocs_;
+  stats.numExternalFrees = numExternalFrees_;
+  stats.cumulativeExternalBytes = cumulativeExternalBytes_;
   return stats;
 }
 
@@ -545,6 +560,13 @@ void* MemoryPoolImpl::allocate(
   }
   DEBUG_RECORD_ALLOC(this, buffer, size);
   return buffer;
+}
+
+void MemoryPoolImpl::reportExternalAllocation(int64_t size) {
+  VELOX_CHECK_GT(size, 0, "reportExternalAllocation requires positive size");
+  CHECK_AND_INC_MEM_OP_STATS(this, ExternalAllocs);
+  reserve(size);
+  cumulativeExternalBytes_ += size;
 }
 
 void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
@@ -631,6 +653,40 @@ void MemoryPoolImpl::free(void* p, int64_t size) {
   release(alignedSize);
 }
 
+void* MemoryPoolImpl::allocateAligned(int64_t size, uint32_t alignment) {
+  VELOX_CHECK_GT(size, 0);
+  VELOX_CHECK(
+      bits::isPowerOfTwo(alignment),
+      "Alignment {} must be power of two.",
+      alignment);
+  const auto alignedSize = sizeAlign(size, alignment);
+  CHECK_AND_INC_MEM_OP_STATS(this, Allocs);
+  reserve(alignedSize);
+  void* buffer = allocator_->allocateBytes(alignedSize, alignment);
+  if (FOLLY_UNLIKELY(buffer == nullptr)) {
+    release(alignedSize);
+    VELOX_MEM_ALLOC_ERROR(
+        fmt::format(
+            "allocateAligned failed with {} aligned to {} from {} {}",
+            succinctBytes(size),
+            alignment,
+            toString(),
+            allocator_->getAndClearFailureMessage()));
+  }
+  return buffer;
+}
+
+void MemoryPoolImpl::freeAligned(
+    void* buffer,
+    int64_t size,
+    uint32_t alignment) {
+  VELOX_CHECK_NOT_NULL(buffer);
+  CHECK_AND_INC_MEM_OP_STATS(this, Frees);
+  const auto alignedSize = sizeAlign(size, alignment);
+  allocator_->freeBytes(buffer, alignedSize);
+  release(alignedSize);
+}
+
 bool MemoryPoolImpl::transferTo(MemoryPool* dest, void* buffer, uint64_t size) {
   if (!isLeaf() || !dest->isLeaf()) {
     return false;
@@ -651,6 +707,12 @@ bool MemoryPoolImpl::transferTo(MemoryPool* dest, void* buffer, uint64_t size) {
   release(alignedSize);
 
   return true;
+}
+
+void MemoryPoolImpl::reportExternalFree(int64_t size) {
+  VELOX_CHECK_GT(size, 0, "reportExternalFree requires positive size");
+  CHECK_AND_INC_MEM_OP_STATS(this, ExternalFrees);
+  release(size);
 }
 
 void MemoryPoolImpl::allocateNonContiguous(
@@ -837,7 +899,9 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
           .threadSafe = threadSafe,
           .coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_,
           .getPreferredSize = getPreferredSize,
-          .debugOptions = debugOptions_});
+          .debugOptions = debugOptions_,
+          .customAllocator = allocator_,
+          .customArbitrator = arbitrator_});
 }
 
 bool MemoryPoolImpl::maybeReserve(uint64_t increment) {

@@ -85,6 +85,28 @@ inline void addIoLatencyMetric(
   }
 }
 
+void addOperationStatsToRuntimeStats(
+    io::IoStatistics& ioStats,
+    std::unordered_map<std::string, RuntimeMetric>& res) {
+  for (const auto& [operation, counters] : ioStats.operationStats()) {
+    const auto add = [&](std::string_view counter, uint64_t value) {
+      if (value == 0) {
+        return;
+      }
+      res[fmt::format("storage.{}.{}", operation, counter)] =
+          RuntimeMetric(value, RuntimeCounter::Unit::kNone);
+    };
+    add("requestCount", counters.requestCount);
+    add("localThrottleCount", counters.localThrottleCount);
+    add("globalThrottleCount", counters.globalThrottleCount);
+    add("resourceThrottleCount", counters.resourceThrottleCount);
+    add("retryCount", counters.retryCount);
+    // Cumulative across requests, so consumers must divide by requestCount to
+    // recover a per-request mean.
+    add("latencyInMs", counters.latencyInMs);
+  }
+}
+
 void addIoStatsToRuntimeStats(
     io::IoStatistics& ioStats,
     std::string_view prefix,
@@ -149,6 +171,11 @@ void addIoStatsToRuntimeStats(
   addIoStatsMetric(
       ioStats.ramHit(),
       key(FileDataSource::kRamReadBytes),
+      RuntimeCounter::Unit::kBytes,
+      res);
+  addIoStatsMetric(
+      ioStats.readGap(),
+      key(FileDataSource::kReadGapBytes),
       RuntimeCounter::Unit::kBytes,
       res);
 }
@@ -267,7 +294,12 @@ FileDataSource::FileDataSource(
     for (int i = 0; i < readColumnNames.size(); ++i) {
       columnNames[readColumnNames[i]] = i;
     }
+    // Capture top-level column names referenced by the remaining filter.
+    // These columns must be loaded eagerly (not lazily) so the filter
+    // can evaluate before lazy columns are accessed.
+    folly::F14FastSet<std::string> remainingFilterColumns;
     for (auto& input : remainingFilterExpr->distinctFields()) {
+      remainingFilterColumns.insert(input->field());
       auto it = columnNames.find(input->field());
       if (it != columnNames.end()) {
         if (shouldEagerlyMaterialize(*remainingFilterExpr, *input)) {
@@ -281,6 +313,7 @@ FileDataSource::FileDataSource(
       readColumnNames.push_back(input->field());
       readColumnTypes.push_back(input->type());
     }
+    remainingFilterColumns_ = std::move(remainingFilterColumns);
     remainingFilterSubfields_ = remainingFilterExpr->extractSubfields();
     if (VLOG_IS_ON(1)) {
       VLOG(1) << fmt::format(
@@ -512,6 +545,7 @@ void FileDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // Split reader subclasses may need to use the reader options in prepareSplit
   // so we initialize it beforehand.
   splitReader_->configureReaderOptions(randomSkip_);
+  splitReader_->setRemainingFilterColumns(remainingFilterColumns_);
   splitReader_->prepareSplit(metadataFilter_, runtimeStats_);
   readerOutputType_ = splitReader_->readerOutputType();
 }
@@ -617,17 +651,28 @@ void FileDataSource::addDynamicFilter(
 }
 
 void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
+  // Bytes are read when the reader loads a stripe, which for small files is
+  // entirely inside addSplit() and for large ones is spread across next()
+  // calls. Reporting the delta since the previous event captures them either
+  // way; a window around a single next() would not.
+  const uint64_t totalStorageReadBytes = dataIoStats_->read().sum();
+  const uint64_t storageReadBytesDelta =
+      totalStorageReadBytes - lastEventStorageReadBytes_;
+  lastEventStorageReadBytes_ = totalStorageReadBytes;
   if (!scanBatchCallback_) {
     return;
   }
   FileScanBatchEvent fileEvent;
   fileEvent.numRows = event.numRows;
   fileEvent.wallTimeMicros = event.wallTimeMicros;
+  fileEvent.storageReadBytes = storageReadBytesDelta;
   if (tableHandle_) {
     fileEvent.tableName = tableHandle_->name();
+    fileEvent.dbName = tableHandle_->dbName();
   }
   if (split_) {
     fileEvent.filePath = split_->filePath;
+    fileEvent.fileFormat = split_->fileFormat;
     if (!split_->partitionKeys.empty()) {
       fileEvent.partitionKeys = &split_->partitionKeys;
     }
@@ -661,6 +706,8 @@ FileDataSource::getRuntimeStats() {
       res.emplace(key, value);
     }
   }
+
+  addOperationStatsToRuntimeStats(*dataIoStats_, res);
   return res;
 }
 

@@ -36,6 +36,10 @@ class FormatData {
     return *static_cast<T*>(this);
   }
 
+  /// Loads any deferred input streams for this column before it is decoded.
+  /// The default is a no-op; formats that defer stream loading override it.
+  virtual void loadLazyInputStreams() {}
+
   /// Reads nulls if the format has nulls separate from the encoded
   /// data. If there are no nulls, 'nulls' is set to nullptr, else to
   /// a suitable sized and padded Buffer. 'incomingNulls' may be given
@@ -102,6 +106,13 @@ class FormatData {
   /// number is format-dependent. In ORC, these are row groups in the
   /// current stripe, in Parquet these are row group numbers in the
   /// file.
+  ///
+  /// 'result.filterResult' is treated as in/out: bits already set on entry
+  /// are honored as 'already excluded' and implementations may skip
+  /// evaluating column statistics for those row groups. This lets callers
+  /// pre-mark cheap exclusions (e.g. row groups outside the split range)
+  /// and lets multiple column readers short-circuit each other across the
+  /// tree walk.
   virtual void filterRowGroups(
       const velox::common::ScanSpec& scanSpec,
       uint64_t rowsPerRowGroup,
@@ -138,7 +149,7 @@ class FormatData {
 /// Base class for format-specific reader initialization arguments.
 class FormatParams {
  public:
-  FormatParams(memory::MemoryPool& pool, ColumnReaderStatistics& stats)
+  FormatParams(memory::MemoryPool& pool, SplitStats& stats)
       : pool_(&pool), stats_(&stats) {}
 
   virtual ~FormatParams() = default;
@@ -153,13 +164,21 @@ class FormatParams {
     return *pool_;
   }
 
-  ColumnReaderStatistics& runtimeStatistics() {
+  /// Returns the runtime statistics for a column, creating them if necessary.
+  /// @param id Schema node ID identifying the column.
+  /// @param typeKind Logical column type to record in the statistics.
+  ColumnRuntimeStats& columnStats(uint32_t id, TypeKind typeKind) {
+    return stats_->getOrCreateColumnStats(id, typeKind);
+  }
+
+  /// Returns the runtime statistics accumulator for the current split.
+  SplitStats& splitStats() {
     return *stats_;
   }
 
  private:
   memory::MemoryPool* const pool_;
-  ColumnReaderStatistics* const stats_;
+  SplitStats* const stats_;
 };
 
 } // namespace facebook::velox::dwio::common

@@ -16,6 +16,9 @@
 
 #include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 
+#include "velox/expression/SpecialFormRegistry.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
+
 namespace facebook::velox::functions::sparksql {
 namespace {
 
@@ -24,14 +27,97 @@ bool isIntegralType(const TypePtr& type) {
       type == BIGINT();
 }
 
+bool isFloatingPointType(const TypePtr& type) {
+  return type == REAL() || type == DOUBLE();
+}
+
+bool isNumericType(const TypePtr& type) {
+  return isIntegralType(type) || isFloatingPointType(type);
+}
+
+exec::ExprPtr makeSparkCastExpr(
+    const TypePtr& type,
+    exec::ExprPtr&& input,
+    bool trackCpuUsage,
+    bool isTryCast,
+    bool allowOverflow,
+    const core::QueryConfig& config) {
+  return std::make_shared<SparkCastExpr>(
+      type,
+      std::move(input),
+      trackCpuUsage,
+      isTryCast,
+      std::make_shared<SparkCastHooks>(config, allowOverflow));
+}
+
+// Per-expression ANSI cast special form. Spark cast support has four special
+// forms:
+// - `cast` uses ANSI behavior only when SparkQueryConfig::ansiEnabled() is
+//   true and the cast pair is supported; otherwise it uses legacy behavior.
+// - `try_cast` returns NULL on cast failures and disables overflow truncation.
+// - This form forces ANSI behavior for supported cast pairs regardless of the
+//   session ANSI setting. Unsupported cast pairs fall back to legacy behavior.
+class SparkAnsiCastCallToSpecialForm : public exec::CastCallToSpecialForm {
+ public:
+  exec::ExprPtr constructSpecialForm(
+      const TypePtr& type,
+      std::vector<exec::ExprPtr>&& compiledChildren,
+      bool trackCpuUsage,
+      const core::QueryConfig& config) override {
+    VELOX_CHECK_EQ(
+        compiledChildren.size(),
+        1,
+        "ANSI CAST statements expect exactly 1 argument, received {}.",
+        compiledChildren.size());
+
+    const auto& fromType = compiledChildren[0]->type();
+    const bool isTryCast =
+        !SparkCastCallToSpecialForm::isAnsiSupported(fromType, type);
+    return makeSparkCastExpr(
+        type,
+        std::move(compiledChildren[0]),
+        trackCpuUsage,
+        isTryCast,
+        isTryCast,
+        config);
+  }
+};
+
+// SparkLegacyCastCallToSpecialForm forces legacy behavior regardless of the
+// session ANSI setting.
+// Legacy behavior means cast failures return NULL and overflow truncation is
+// allowed where Spark permits it.
+class SparkLegacyCastCallToSpecialForm : public exec::CastCallToSpecialForm {
+ public:
+  exec::ExprPtr constructSpecialForm(
+      const TypePtr& type,
+      std::vector<exec::ExprPtr>&& compiledChildren,
+      bool trackCpuUsage,
+      const core::QueryConfig& config) override {
+    VELOX_CHECK_EQ(
+        compiledChildren.size(),
+        1,
+        "LEGACY CAST statements expect exactly 1 argument, received {}.",
+        compiledChildren.size());
+
+    return makeSparkCastExpr(
+        type,
+        std::move(compiledChildren[0]),
+        trackCpuUsage,
+        true,
+        true,
+        config);
+  }
+};
+
 } // namespace
 
 bool SparkCastCallToSpecialForm::isAnsiSupported(
     const TypePtr& fromType,
     const TypePtr& toType) {
-  // String to Boolean, Integer, or Date types support ANSI mode.
   if (fromType->isVarchar()) {
-    if (toType->isBoolean() || toType->isDate()) {
+    if (toType->isBoolean() || toType->isTimestamp() || toType->isDate() ||
+        toType->isDecimal() || toType->isTime()) {
       return true;
     }
     if (isIntegralType(toType)) {
@@ -39,6 +125,37 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
       // decimal points) instead of returning NULL.
       return true;
     }
+    if (isFloatingPointType(toType)) {
+      return true;
+    }
+  }
+  if (fromType->isTimestamp() && isIntegralType(toType)) {
+    return true;
+  }
+
+  if (toType->isDecimal()) {
+    if (fromType->isDecimal()) {
+      return true;
+    }
+    if (isIntegralType(fromType)) {
+      return true;
+    }
+    if (fromType->isReal() || fromType->isDouble()) {
+      return true;
+    }
+    if (fromType->isBoolean()) {
+      return true;
+    }
+  }
+
+  // Numeric types (integral + floating point) to integral types support ANSI
+  // mode.
+  if (isNumericType(fromType) && isIntegralType(toType)) {
+    return true;
+  }
+
+  if (toType->isTimestamp() && (fromType->isReal() || fromType->isDouble())) {
+    return true;
   }
 
   return false;
@@ -56,22 +173,19 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
       compiledChildren.size());
 
   const auto& fromType = compiledChildren[0]->type();
-
   // In Spark SQL (with ANSI mode off), both CAST and TRY_CAST behave like
   // Velox's try_cast, so we set 'isTryCast' to true when ANSI is disabled or
   // the specific cast operation doesn't support ANSI mode.
-  const bool isTryCast =
-      !config.sparkAnsiEnabled() || !isAnsiSupported(fromType, type);
+  const bool isTryCast = !SparkQueryConfig{config}.ansiEnabled() ||
+      !isAnsiSupported(fromType, type);
 
-  // For ANSI-supported casts, CAST mirrors TRY_CAST when ANSI is disabled.
-  // The distinction is controlled by the 'allowOverflow' flag in
-  // SparkCastHooks.
-  return std::make_shared<SparkCastExpr>(
+  return makeSparkCastExpr(
       type,
       std::move(compiledChildren[0]),
       trackCpuUsage,
       isTryCast,
-      std::make_shared<SparkCastHooks>(config, isTryCast));
+      isTryCast,
+      config);
 }
 
 exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
@@ -86,12 +200,16 @@ exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
       compiledChildren.size());
 
   // TRY_CAST always uses allowOverflow=false to return NULL on cast failures.
-  return std::make_shared<SparkCastExpr>(
-      type,
-      std::move(compiledChildren[0]),
-      trackCpuUsage,
-      true,
-      std::make_shared<SparkCastHooks>(config, false));
+  return makeSparkCastExpr(
+      type, std::move(compiledChildren[0]), trackCpuUsage, true, false, config);
+}
+
+void registerSparkCastModeSpecialForms() {
+  exec::registerFunctionCallToSpecialForm(
+      "spark_ansi_cast", std::make_unique<SparkAnsiCastCallToSpecialForm>());
+  exec::registerFunctionCallToSpecialForm(
+      "spark_legacy_cast",
+      std::make_unique<SparkLegacyCastCallToSpecialForm>());
 }
 
 } // namespace facebook::velox::functions::sparksql

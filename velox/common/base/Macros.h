@@ -43,6 +43,25 @@
 #define VELOX_UNSUPPRESS_DEPRECATED_WARNING _Pragma("GCC diagnostic pop")
 #endif
 
+// Disable missing-field-initializers for Clang and GCC
+#ifdef __clang__
+#if defined(__has_warning) && \
+    __has_warning("-Wmissing-designated-field-initializers")
+#define VELOX_SUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING \
+  _Pragma("clang diagnostic push");                                  \
+  _Pragma(                                                           \
+      "clang diagnostic ignored \"-Wmissing-designated-field-initializers\"")
+#define VELOX_UNSUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING \
+  _Pragma("clang diagnostic pop");
+#else
+#define VELOX_SUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING
+#define VELOX_UNSUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING
+#endif
+#else
+#define VELOX_SUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING
+#define VELOX_UNSUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING
+#endif
+
 #define VELOX_CONCAT(x, y) x##y
 // Need this extra layer to expand __COUNTER__.
 #define VELOX_VARNAME_IMPL(x, y) VELOX_CONCAT(x, y)
@@ -56,4 +75,29 @@
 #define VELOX_CONSTEXPR_SINGLETON static const
 #else
 #define VELOX_CONSTEXPR_SINGLETON static constexpr
+#endif
+
+// Marks a function as one that GPU execution is expected to be able to call.
+//
+// Under nvcc this expands to `__host__ __device__`, so the function is
+// compiled for the device as well as the host. Under any host-only compiler it
+// expands to nothing, leaving CPU builds unchanged.
+//
+// Two things it deliberately is not:
+//
+//   - It is not an inlining hint. A non-template function defined in a header
+//     still needs its own `inline`; write `VELOX_GPU_COMPATIBLE inline void
+//     f()`. Templates and in-class member functions are already implicitly
+//     inline and need nothing extra.
+//   - It is not a guarantee. nvcc reports a call from an annotated function
+//     into host-only code as a *warning*, then emits a kernel that silently
+//     computes the wrong answer. Anything carrying this macro therefore has to
+//     stay within what device code can reach: no exceptions, no allocation, no
+//     runtime indexing of a namespace- or class-scope constexpr table, and no
+//     compiler builtin lacking a device implementation. Build GPU targets with
+//     `--diag-error=20011` so the compiler enforces that rather than a reader.
+#ifdef __CUDACC__
+#define VELOX_GPU_COMPATIBLE __host__ __device__
+#else
+#define VELOX_GPU_COMPATIBLE
 #endif

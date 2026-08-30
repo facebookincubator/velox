@@ -681,6 +681,13 @@ TEST_P(EncodedVectorCopyTest, flatMapVector) {
   }
 }
 
+namespace {
+struct InMapViewReleaser {
+  void addRef() {}
+  void release() {}
+};
+} // namespace
+
 /// Tests copying into an existing FlatMapVector target.
 TEST_P(EncodedVectorCopyTest, flatMapVectorCopyInto) {
   {
@@ -835,6 +842,58 @@ TEST_P(EncodedVectorCopyTest, flatMapVectorCopyInto) {
     auto expected = makeMapVector<int64_t, int64_t>({
         {{1, 10}, {2, 20}},
         {{2, 200}, {3, 300}},
+    });
+    test::assertEqualVectors(expected, target);
+  }
+
+  {
+    SCOPED_TRACE("Copy into different keys with view inMaps buffers");
+    using InMapView = BufferView<InMapViewReleaser&>;
+    static InMapViewReleaser releaser;
+
+    auto mapType = MAP(BIGINT(), BIGINT());
+    auto distinctKeys = makeFlatVector<int64_t>({1, 2});
+    vector_size_t size = 3;
+
+    std::vector<BufferPtr> ownedInMaps;
+    std::vector<BufferPtr> viewInMaps;
+    for (int i = 0; i < 2; ++i) {
+      auto owned =
+          AlignedBuffer::allocate<bool>(size, pool(), /*initValue=*/true);
+      auto view = InMapView::create(owned, releaser);
+      ownedInMaps.push_back(std::move(owned));
+      viewInMaps.push_back(std::move(view));
+    }
+
+    std::vector<VectorPtr> targetValues;
+    targetValues.push_back(makeFlatVector<int64_t>({10, 20, 30}));
+    targetValues.push_back(makeFlatVector<int64_t>({40, 50, 60}));
+
+    VectorPtr target = std::make_shared<FlatMapVector>(
+        pool(),
+        mapType,
+        nullptr,
+        size,
+        distinctKeys,
+        std::move(targetValues),
+        std::move(viewInMaps));
+
+    auto* targetFlatMap = target->asChecked<FlatMapVector>();
+    ASSERT_TRUE(targetFlatMap->inMapsAt(0)->isView());
+    ASSERT_TRUE(targetFlatMap->inMapsAt(1)->isView());
+
+    auto source = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{3, 300}},
+        {{3, 400}},
+    });
+
+    BaseVector::CopyRange range = {0, 0, 2};
+    copy(source, folly::Range(&range, 1), target);
+
+    auto expected = makeMapVector<int64_t, int64_t>({
+        {{3, 300}},
+        {{3, 400}},
+        {{1, 30}, {2, 60}},
     });
     test::assertEqualVectors(expected, target);
   }

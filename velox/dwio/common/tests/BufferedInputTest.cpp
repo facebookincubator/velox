@@ -444,7 +444,7 @@ TEST_F(BufferedInputTest, readSorting) {
   }
 }
 
-TEST_F(BufferedInputTest, VreadSorting) {
+TEST_F(BufferedInputTest, vreadSorting) {
   std::string content = "aaabbbcccdddeeefffggghhhiiijjjkkklllmmmnnnooopppqqq";
   std::vector<Region> regions = {{6, 3}, {24, 3}, {3, 3}, {0, 3}, {29, 3}};
 
@@ -482,7 +482,7 @@ TEST_F(BufferedInputTest, VreadSorting) {
   }
 }
 
-TEST_F(BufferedInputTest, VreadSortingWithLabels) {
+TEST_F(BufferedInputTest, vreadSortingWithLabels) {
   std::string content = "aaabbbcccdddeeefffggghhhiiijjjkkklllmmmnnnooopppqqq";
   std::vector<std::string> l = {"a", "b", "c", "d", "e"};
   std::vector<Region> regions = {
@@ -795,4 +795,92 @@ TEST_F(CustomBufferedInputTest, basic) {
           ->create(
               fileHandle, readerOpts, nullptr, ioStatistics, ioStats, nullptr),
       "Not implemented in CustomBufferedInputBuilder");
+}
+
+TEST_F(BufferedInputTest, readGapTracking) {
+  constexpr int32_t kContentSize = 1 << 20; // 1MB
+  std::string content(kContentSize, 'x');
+  auto readFile = std::make_shared<facebook::velox::InMemoryReadFile>(content);
+
+  struct TestCase {
+    std::vector<Region> regions;
+    uint64_t expectedGapCount;
+    uint64_t expectedGapSum;
+    uint64_t expectedGapMin;
+    uint64_t expectedGapMax;
+    std::string debugString() const {
+      return fmt::format(
+          "regions {}, expectedGapCount {}", regions.size(), expectedGapCount);
+    }
+  };
+
+  std::vector<TestCase> testCases = {
+      // Scattered regions: gaps of 9'900 and 39'900 bytes.
+      {{{0, 100}, {10'000, 100}, {50'000, 100}}, 2, 49'800, 9'900, 39'900},
+      // Contiguous regions: no gaps.
+      {{{0, 100}, {100, 100}, {200, 100}},
+       0,
+       0,
+       std::numeric_limits<uint64_t>::max(),
+       0},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+
+    auto ioStats = std::make_shared<facebook::velox::io::IoStatistics>();
+    BufferedInput input(readFile, *pool_, MetricsLog::voidLog(), ioStats.get());
+
+    for (const auto& region : testCase.regions) {
+      input.enqueue(region);
+    }
+    input.load(LogType::TEST);
+
+    EXPECT_EQ(ioStats->readGap().count(), testCase.expectedGapCount);
+    EXPECT_EQ(ioStats->readGap().sum(), testCase.expectedGapSum);
+    EXPECT_EQ(ioStats->readGap().min(), testCase.expectedGapMin);
+    EXPECT_EQ(ioStats->readGap().max(), testCase.expectedGapMax);
+  }
+}
+
+namespace {
+// Exposes BufferedInput's protected static adjustedReadPct() for testing
+// (no friend declaration needed).
+class AdjustedReadPctAccessor : public BufferedInput {
+ public:
+  using BufferedInput::adjustedReadPct;
+};
+} // namespace
+
+// A flat map's per-key value streams all share one trackingId, so reading a
+// single stripe records many references under that id. adjustedReadPct() must
+// exclude the whole current (not-yet-read) stripe -- not just the last
+// reference -- so a fully-read column scores ~100% (and is eligible for
+// prefetch) instead of roughly half.
+TEST(BufferedInputAdjustedReadPctTest, excludesWholeCurrentStripe) {
+  cache::ScanTracker tracker(
+      "test", /*unregisterer=*/nullptr, /*loadQuantum=*/1 << 20);
+  const cache::TrackingId id(1);
+  constexpr uint64_t kStreamBytes = 100;
+  constexpr int kKeysPerStripe = 5;
+
+  // Stripe 1: reference every per-key value stream under the shared id, then
+  // read all.
+  for (int i = 0; i < kKeysPerStripe; ++i) {
+    tracker.recordReference(id, kStreamBytes, /*fileId=*/0, /*groupId=*/0);
+  }
+  tracker.recordRead(
+      id, kStreamBytes * kKeysPerStripe, /*fileId=*/0, /*groupId=*/0);
+
+  // Stripe 2: reference every per-key value stream again (recorded, not yet
+  // read).
+  for (int i = 0; i < kKeysPerStripe; ++i) {
+    tracker.recordReference(id, kStreamBytes, /*fileId=*/0, /*groupId=*/0);
+  }
+
+  // referencedBytes = 1000, readBytes = 500, current-stripe references = 500.
+  //   Correct: 500 / (1000 - 500) = 100%.
+  //   Buggy (subtracts only the last reference): 500 / (1000 - 100) = 55%.
+  EXPECT_EQ(
+      AdjustedReadPctAccessor::adjustedReadPct(tracker.trackingData(id)), 100);
 }

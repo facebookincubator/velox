@@ -16,13 +16,17 @@
 
 #include "velox/connectors/hive/iceberg/DeletionVectorWriter.h"
 
+#include "velox/connectors/hive/iceberg/DeletionVectorFormat.h"
+
 #include <algorithm>
-#include <fstream>
 
 #include <folly/json.h>
 #include <folly/lang/Bits.h>
+#include <zlib.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/dwio/common/DataBuffer.h"
+#include "velox/dwio/common/FileSink.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -35,16 +39,20 @@ constexpr uint32_t kMaxArrayContainerCardinality = 4'096;
 constexpr size_t kBitmapContainerBytes = 8'192;
 constexpr size_t kBitmapContainerWords = 1'024;
 
-// Puffin file format constants (per Iceberg spec).
-constexpr char kPuffinMagic[] = {'\x50', '\x55', '\x46', '\x31'};
-constexpr size_t kPuffinMagicSize = 4;
+// Puffin file format constants (per Iceberg spec). Magic is "PFA1".
 constexpr uint32_t kPuffinFooterFlags = 0;
 
 // Puffin blob metadata constants (per Iceberg V3 deletion vector spec).
-constexpr char kDeletionVectorBlobType[] = "deletion-vector-v1";
-constexpr char kCompressionCodecNone[] = "none";
-// Iceberg spec: source-field-id for whole-row deletes is INT_MAX - 1.
-constexpr int32_t kWholeRowDeleteFieldId = 2'147'483'646;
+// The blob's "fields" list names the row-position metadata column
+// (MetadataColumns.ROW_POSITION, INT_MAX - 2), matching Iceberg's own
+// BaseDVFileWriter. Note this is not the positional-delete file's "pos"
+// column (INT_MAX - 102), which IcebergMetadataColumns uses for a different
+// purpose.
+constexpr int32_t kRowPositionFieldId = 2'147'483'645;
+// A deletion vector is written before its snapshot is assigned, so Iceberg
+// records -1 for both. The fields are required by readers regardless.
+constexpr int64_t kUnassignedSnapshotId = -1;
+constexpr int64_t kUnassignedSequenceNumber = -1;
 
 void writeLittleEndian(std::string& out, uint16_t val) {
   val = folly::Endian::little(val);
@@ -59,6 +67,39 @@ void writeLittleEndian(std::string& out, uint32_t val) {
 void writeLittleEndian(std::string& out, uint64_t val) {
   val = folly::Endian::little(val);
   out.append(reinterpret_cast<const char*>(&val), sizeof(val));
+}
+
+void writeBigEndian(std::string& out, uint32_t val) {
+  val = folly::Endian::big(val);
+  out.append(reinterpret_cast<const char*>(&val), sizeof(val));
+}
+
+// Wraps the serialized roaring bitmap in the Iceberg deletion-vector-v1 blob
+// frame: [length: 4B BE][magic: D1 D3 39 64][bitmap][CRC-32: 4B BE], where
+// 'length' and the CRC-32 cover magic + bitmap. This is the on-disk layout
+// Iceberg's BitmapPositionDeleteIndex produces, so the blob is readable by
+// spec-compliant Iceberg engines and vice versa.
+std::string frameDeletionVector(const std::string& bitmap) {
+  std::string magicAndVector;
+  magicAndVector.reserve(kDeletionVectorMagicSize + bitmap.size());
+  magicAndVector.append(kDeletionVectorMagic, kDeletionVectorMagicSize);
+  magicAndVector.append(bitmap);
+
+  // Iceberg stores the standard CRC-32 (java.util.zip.CRC32) over magic +
+  // bitmap. zlib's crc32 is that same finalized IEEE 802.3 CRC-32.
+  uLong crcState = crc32(0L, Z_NULL, 0);
+  crcState = crc32(
+      crcState,
+      reinterpret_cast<const Bytef*>(magicAndVector.data()),
+      static_cast<uInt>(magicAndVector.size()));
+  const auto crc = static_cast<uint32_t>(crcState);
+
+  std::string framed;
+  framed.reserve(sizeof(uint32_t) + magicAndVector.size() + sizeof(uint32_t));
+  writeBigEndian(framed, static_cast<uint32_t>(magicAndVector.size()));
+  framed.append(magicAndVector);
+  writeBigEndian(framed, crc);
+  return framed;
 }
 
 // Serializes the key-cardinality header for a 32-bit Roaring Bitmap.
@@ -122,6 +163,12 @@ void serializeContainerData(
 
 void DeletionVectorWriter::addDeletedPosition(int64_t position) {
   VELOX_CHECK_GE(position, 0, "Deleted position must be non-negative.");
+  VELOX_CHECK_LE(
+      position,
+      kMaxPosition,
+      "Deleted position exceeds the maximum the Iceberg deletion-vector "
+      "format can represent: {}",
+      position);
   positions_.push_back(position);
 }
 
@@ -130,6 +177,13 @@ void DeletionVectorWriter::addDeletedPositions(
   for (auto pos : positions) {
     addDeletedPosition(pos);
   }
+}
+
+size_t DeletionVectorWriter::numDistinctPositions() const {
+  std::vector<int64_t> sorted = positions_;
+  std::sort(sorted.begin(), sorted.end());
+  return static_cast<size_t>(
+      std::unique(sorted.begin(), sorted.end()) - sorted.begin());
 }
 
 std::string DeletionVectorWriter::serialize32(
@@ -202,23 +256,34 @@ void DeletionVectorWriter::clear() {
 }
 
 std::pair<uint64_t, uint64_t> writePuffinFile(
-    const std::string& filePath,
+    dwio::common::FileSink& sink,
+    memory::MemoryPool& pool,
     const std::string& blobData,
-    const std::string& referencedDataFile) {
+    const std::string& referencedDataFile,
+    int64_t cardinality) {
+  // Wrap the raw roaring bitmap in the Iceberg deletion-vector-v1 frame so the
+  // blob is interoperable with spec-compliant Iceberg readers.
+  const std::string framedBlob = frameDeletionVector(blobData);
   uint64_t blobOffset = kPuffinMagicSize;
-  uint64_t blobLength = blobData.size();
+  uint64_t blobLength = framedBlob.size();
 
-  folly::dynamic blobMeta = folly::dynamic::object(
-      "type", kDeletionVectorBlobType)(
-      "fields",
-      folly::dynamic::array(
-          folly::dynamic::object("source-field-id", kWholeRowDeleteFieldId)));
+  folly::dynamic blobMeta =
+      folly::dynamic::object("type", kDeletionVectorBlobType)(
+          "fields", folly::dynamic::array(kRowPositionFieldId));
+  blobMeta["snapshot-id"] = kUnassignedSnapshotId;
+  blobMeta["sequence-number"] = kUnassignedSequenceNumber;
   blobMeta["offset"] = blobOffset;
   blobMeta["length"] = blobLength;
-  blobMeta["compression-codec"] = kCompressionCodecNone;
+  // Uncompressed blobs omit "compression-codec": Iceberg's FileMetadataParser
+  // writes the field only for a non-null codec, and PuffinCompressionCodec
+  // .forName() has no "none" entry, so emitting it literally would make a
+  // spec-compliant reader throw.
 
   folly::dynamic properties = folly::dynamic::object;
   properties["referenced-data-file"] = referencedDataFile;
+  // Iceberg V3 requires the deletion-vector-v1 blob to carry its cardinality
+  // (the number of deleted positions).
+  properties["cardinality"] = std::to_string(cardinality);
   blobMeta["properties"] = properties;
 
   folly::dynamic footer = folly::dynamic::object;
@@ -230,7 +295,9 @@ std::pair<uint64_t, uint64_t> writePuffinFile(
 
   std::string fileContent;
   fileContent.append(kPuffinMagic, kPuffinMagicSize);
-  fileContent.append(blobData);
+  fileContent.append(framedBlob);
+  // Footer = Magic FooterPayload FooterPayloadSize Flags Magic (Puffin spec).
+  fileContent.append(kPuffinMagic, kPuffinMagicSize);
   fileContent.append(footerJson);
   uint32_t littleEndianSize = folly::Endian::little(footerPayloadSize);
   fileContent.append(
@@ -242,13 +309,15 @@ std::pair<uint64_t, uint64_t> writePuffinFile(
       sizeof(littleEndianFlags));
   fileContent.append(kPuffinMagic, kPuffinMagicSize);
 
-  std::ofstream out(filePath, std::ios::binary | std::ios::trunc);
-  VELOX_CHECK(
-      out.good(), "Failed to open Puffin file for writing: {}", filePath);
-  out.write(
-      fileContent.data(), static_cast<std::streamsize>(fileContent.size()));
-  out.close();
-  VELOX_CHECK(!out.fail(), "Failed to write Puffin file: {}", filePath);
+  // Stage the serialized puffin bytes into a DataBuffer<char> and write
+  // them through the registered FileSink. Going through the sink lets the
+  // bytes land on whatever filesystem (local, warm storage, S3, ...) has a
+  // FileSink factory registered for the destination URI scheme.
+  // DataBuffer::append reserves and copies the bytes internally, so the
+  // staging copy stays inside the bounds-checked buffer API.
+  dwio::common::DataBuffer<char> buffer(pool);
+  buffer.append(0, fileContent.data(), fileContent.size());
+  sink.write(std::move(buffer));
 
   return {blobOffset, blobLength};
 }

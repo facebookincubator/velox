@@ -11,14 +11,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# tzdata is pinned to a known-good version so docker rebuilds (any time
-# scripts/docker/*.dockerfile or scripts/setup-*.sh changes) don't
+# tzdata is pinned to an exact version so docker rebuilds (any time
+# scripts/docker/*.dockerfile or scripts/setup-*.sh changes) do not
 # silently bump tzdata in the image. See issue #17522 for the bug class
-# this prevents — version mismatch between OS tzdata and consumers'
-# bundled tzdb code can produce silent 1-hour offsets in TIMESTAMP
-# WITH TIME ZONE values. To bump intentionally: change the default and
-# rebuild locally to confirm before merging.
-ARG UBUNTU_TZDATA_VERSION=2026a-0ubuntu0.22.04.1
+# this prevents: a version mismatch between OS tzdata and consumers'
+# bundled tzdb code can produce silent one hour offsets in TIMESTAMP
+# WITH TIME ZONE values.
+#
+# Ubuntu keeps only the latest build of tzdata in the jammy pockets, so an
+# exact pin is purged once Canonical publishes a newer build, which then
+# fails the image bake with "Version ... not found" (issue #18440). Track
+# the build currently published for 22.04. The Presto source of truth
+# fuzzers, the tz sensitive consumer from #17522, run on the centos9 and
+# presto-java images and are governed by CENTOS_TZDATA_VERSION, not this
+# pin, so this version can move independently. To bump: set it to the
+# current 22.04 build and rebuild to confirm before merging.
+ARG UBUNTU_TZDATA_VERSION=2026c-0ubuntu0.22.04.1
 
 ARG base=ubuntu:22.04
 FROM ${base}
@@ -37,8 +45,11 @@ RUN apt update && \
 
 COPY scripts /velox/scripts/
 COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
+COPY CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch /
+COPY CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch /
 
-ENV VELOX_ARROW_CMAKE_PATCH=/cmake-compatibility.patch \
+ENV VELOX_ARROW_CMAKE_PATCH="/cmake-compatibility.patch /arrow-testing-boost.patch" \
+    VELOX_OPENZL_CMAKE_PATCH="/openzl-cxx-standard.patch" \
     UV_TOOL_BIN_DIR=/usr/local/bin \
     UV_INSTALL_DIR=/usr/local/bin
 
@@ -63,7 +74,7 @@ RUN apt-get update && \
 
 # Pre-download gflags source for BUNDLED builds to avoid downloading at build time.
 RUN mkdir -p /velox/deps-sources && \
-    curl -fsSL -o /velox/deps-sources/gflags-v2.2.2.tar.gz \
-      https://github.com/gflags/gflags/archive/refs/tags/v2.2.2.tar.gz
+    curl -fsSL -o /velox/deps-sources/gflags-v2.3.0.tar.gz \
+      https://github.com/gflags/gflags/archive/refs/tags/v2.3.0.tar.gz
 
 WORKDIR /velox

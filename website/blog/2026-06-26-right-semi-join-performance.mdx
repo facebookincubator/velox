@@ -1,0 +1,184 @@
+---
+slug: right-semi-join-performance
+title: "Why RIGHT SEMI JOIN Can Be Slower Than LEFT SEMI JOIN in Velox"
+date: 2026-06-26
+authors: [rui-mo]
+tags: [tech-blog, performance, query-execution]
+description: "A deep dive into RIGHT SEMI JOIN performance in Velox, why probed-flag marking became a hotspot, and how a probe-time fast path removes redundant work."
+---
+
+## TL;DR
+
+A query rewrite from `A LEFT SEMI JOIN B` to `B RIGHT SEMI JOIN A` can be much
+slower in Velox, even though the two forms are semantically equivalent.
+
+At first glance, this rewrite looks attractive when `A` is much smaller than
+`B`: building on `A` should reduce build-side work and often helps regular hash
+joins. In one real query, we made exactly this change expecting a speedup, but
+instead observed roughly a **10x regression**.
+
+The root cause is execution asymmetry:
+
+- RIGHT SEMI needs to mark build-side rows as matched.
+- That marking (`setProbedFlag`) is random-memory-write heavy.
+- With duplicate or skewed keys, redundant marking work grows quickly.
+
+A targeted optimization for **RIGHT SEMI FILTER without extra filter** moves
+marking into probe-time hit traversal and adds early stop logic for duplicate
+chains, significantly reducing redundant work.
+
+<!-- truncate -->
+
+## The Symptom
+
+In profiling, a large fraction of CPU was concentrated in
+`RowContainer::setProbedFlag`, with additional time in join result listing and
+runtime plumbing.
+
+This aligned with prior intuition from the community:
+
+- setting probed flags is expensive due to random access in row storage,
+- and marking during probing may be more efficient than marking later from
+  expanded join results.
+
+## Why LEFT SEMI and RIGHT SEMI Differ in Cost
+
+`A LEFT SEMI JOIN B` and `B RIGHT SEMI JOIN A` are result-equivalent, but they
+are not implementation-equivalent.
+
+### LEFT SEMI (no extra filter)
+
+The operator mainly answers: does this probe row have at least one match?
+
+That keeps the path probe-centric and avoids right-side matched-row tracking
+machinery.
+
+### RIGHT SEMI FILTER
+
+The operator must output build-side rows that matched at least one probe row.
+That requires:
+
+1. a probed flag per relevant build row,
+2. setting the flag when matches are found,
+3. scanning build rows and outputting those with `probed = true`.
+
+This extra state tracking and scan are absent in the same form on LEFT SEMI.
+
+## Root Cause: Redundant Marking Under Duplicates
+
+Before the optimization, no-filter RIGHT SEMI still relied on generic join
+result listing before marking.
+
+Under duplicate/skewed keys:
+
+- many probe rows map to the same build key,
+- duplicate build chains are revisited repeatedly,
+- the same probed flag bytes are touched many times.
+
+Because row hits are pointer-based and scattered in arena memory, this becomes
+cache-unfriendly write traffic.
+
+## The Optimization
+
+The patch introduces a fast path for RIGHT SEMI FILTER with no extra filter.
+
+### 1) Probe-time direct marking
+
+In `HashProbe::getOutputInternal`, when join type is right semi filter and
+`filter_` is null, the code now:
+
+- iterates probe hits directly,
+- marks build rows immediately,
+- consumes the input batch without building intermediate output rows.
+
+RIGHT SEMI output remains unchanged: build-side rows are still returned later by
+probing-flag-based build scan.
+
+### 2) `testAndSetProbedFlag` API
+
+A new single-row API was added:
+
+- `bool RowContainer::testAndSetProbedFlag(char* row)`
+
+Semantics:
+
+- returns `true` when the flag transitions from 0 to 1,
+- returns `false` if it was already set.
+
+### 3) Duplicate-chain early stop
+
+Duplicate build rows are linked via `nextOffset`.
+
+For a hot key:
+
+- the first probe marks the chain,
+- subsequent probes detect an already-marked head and stop early.
+
+This prevents repeatedly walking and writing the full duplicate chain.
+
+### 4) Minor micro-optimization in batch flag set
+
+`setProbedFlag` was also simplified to precompute byte offset/mask and update
+flag bytes directly. This helps, but the primary gain comes from the new
+algorithmic path above.
+
+## Why This Is Correct
+
+RIGHT SEMI FILTER semantics are: output each build row that has at least one
+match.
+
+The fast path preserves this:
+
+1. Every probe row still follows its matching hit chain.
+2. Every matched build row gets marked.
+3. Marking is idempotent.
+4. Build-side output still comes from the existing `listProbedRows` scan.
+
+Early stop is valid because when the duplicate-chain head is already marked,
+that chain has already been fully marked by an earlier probe for the same key.
+
+## Benchmark Results
+
+The new benchmark in `velox/exec/benchmarks/HashJoinRightSemiBenchmark.cpp`
+shows clear wins on the no-filter RIGHT SEMI path.
+
+| Benchmark | Before (time/iter) | After (time/iter) | Speedup |
+|-----------|--------------------:|------------------:|--------:|
+| `right_semi_no_filter_dup8x8` | 23.66 ms | 9.50 ms | **2.49x** |
+| `right_semi_no_filter_dup32x32` | 190.89 ms | 19.37 ms | **9.86x** |
+| `right_semi_with_filter_dup32x32` | 272.42 ms | 251.30 ms | **1.08x** |
+
+Key takeaways:
+
+- The optimized no-filter path improves substantially under duplicates.
+- The high-duplicate case (`dup32x32`) shows the largest gain, consistent with
+  reduced duplicate-chain reprocessing.
+- The with-filter case changes only modestly, as expected, because the new fast
+  path targets RIGHT SEMI FILTER without an extra filter.
+
+## Scope and Next Steps
+
+Current fast path scope:
+
+- RIGHT SEMI FILTER,
+- no extra filter.
+
+Still open:
+
+- RIGHT SEMI PROJECT,
+- RIGHT/FULL joins on related probed-flag workflows,
+- potential redesign with a dedicated compact probed-bitmask array for better
+  locality.
+
+## Closing Thoughts
+
+This regression is a good reminder that SQL rewrites can preserve semantics but
+still shift execution into very different cost surfaces.
+
+In this case, moving probed-flag work to probe-time and avoiding redundant
+duplicate-chain passes provides a focused, low-risk way to unlock substantial
+speedups on skewed workloads.
+
+## Acknowledgements
+
+Thanks to <a href="https://github.com/Yuhta">Jimmy Lu</a> and <a href="https://github.com/mbasmanova">Masha Basmanova</a> for their early suggestions, which directly motivated this optimization.

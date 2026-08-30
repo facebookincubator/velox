@@ -72,12 +72,18 @@ class CudfHashJoinBridge : public exec::JoinBridge {
 
   std::optional<rmm::cuda_stream_view> getBuildStream();
 
+  void setBuildReadyEvent(std::shared_ptr<CudaEvent> buildReadyEvent);
+
+  std::shared_ptr<CudaEvent> getBuildReadyEvent();
+
  private:
   /** @brief Hash tables and join objects transferred from build to probe
    * operators */
   std::optional<hash_type> hashObject_;
   /** @brief CUDA stream used by build operator for proper synchronization */
   std::optional<rmm::cuda_stream_view> buildStream_;
+  /** @brief Event recorded after build-side CUDA work is ready for probes */
+  std::shared_ptr<CudaEvent> buildReadyEvent_;
 };
 
 /**
@@ -107,6 +113,7 @@ class CudfHashJoinBuild : public CudfOperatorBase {
   void doAddInput(RowVectorPtr input) override;
   RowVectorPtr doGetOutput() override;
   void doNoMoreInput() override;
+  void doClose() override;
 
  private:
   std::shared_ptr<const core::HashJoinNode> joinNode_;
@@ -170,6 +177,8 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   void doClose() override;
 
  private:
+  void waitForBuildReady(rmm::cuda_stream_view stream);
+
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   /** @brief Hash tables and join objects received from build operator */
   std::optional<hash_type> hashObject_;
@@ -229,6 +238,8 @@ class CudfHashJoinProbe : public CudfOperatorBase {
 
   /** @brief CUDA stream from build operator for synchronization */
   std::optional<rmm::cuda_stream_view> buildStream_;
+  /** @brief Event recorded after build-side CUDA work is ready for probes */
+  std::shared_ptr<CudaEvent> buildReadyEvent_;
   /** @brief CUDA event for coordinating stream synchronization */
   std::unique_ptr<CudaEvent> cudaEvent_;
 
@@ -259,13 +270,18 @@ class CudfHashJoinProbe : public CudfOperatorBase {
 
   static constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
 
+  struct JoinOutput {
+    std::unique_ptr<cudf::table> table;
+    vector_size_t numRows;
+  };
+
   /**
    * @brief Performs inner join between probe table and all build tables.
    * @param leftTable Probe-side table to join
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
-  std::vector<std::unique_ptr<cudf::table>> innerJoin(
+  std::vector<JoinOutput> innerJoin(
       cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
@@ -274,7 +290,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
-  std::vector<std::unique_ptr<cudf::table>> leftJoin(
+  std::vector<JoinOutput> leftJoin(
       cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
@@ -283,7 +299,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
-  std::vector<std::unique_ptr<cudf::table>> rightJoin(
+  std::vector<JoinOutput> rightJoin(
       cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
@@ -292,7 +308,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
-  std::vector<std::unique_ptr<cudf::table>> fullJoin(
+  std::vector<JoinOutput> fullJoin(
       cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
@@ -302,7 +318,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
-  std::vector<std::unique_ptr<cudf::table>> leftSemiFilterJoin(
+  std::vector<JoinOutput> leftSemiFilterJoin(
       cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
@@ -313,7 +329,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
-  std::vector<std::unique_ptr<cudf::table>> leftSemiProjectJoin(
+  std::vector<JoinOutput> leftSemiProjectJoin(
       cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
@@ -323,7 +339,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
-  std::vector<std::unique_ptr<cudf::table>> rightSemiFilterJoin(
+  std::vector<JoinOutput> rightSemiFilterJoin(
       cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
@@ -332,7 +348,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
-  std::vector<std::unique_ptr<cudf::table>> antiJoin(
+  std::vector<JoinOutput> antiJoin(
       cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
@@ -342,9 +358,9 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    * @param rightTableView Input build table view
    * @param rightIndicesCol Column of indices into right table
    * @param stream CUDA stream for operations
-   * @return Join result table with gathered columns from both sides
+   * @return Join result table with its logical row count
    */
-  std::unique_ptr<cudf::table> unfilteredOutput(
+  JoinOutput unfilteredOutput(
       cudf::table_view leftTableView,
       cudf::column_view leftIndicesCol,
       cudf::table_view rightTableView,
@@ -358,9 +374,9 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    * @param rightIndicesCol Column of indices into right table
    * @param func Filter function to apply to joined data
    * @param stream CUDA stream for operations
-   * @return Filtered join result table
+   * @return Filtered join result table with its logical row count
    */
-  std::unique_ptr<cudf::table> filteredOutput(
+  JoinOutput filteredOutput(
       cudf::table_view leftTableView,
       cudf::column_view leftIndicesCol,
       cudf::table_view rightTableView,
@@ -370,7 +386,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
           cudf::column_view)> func,
       rmm::cuda_stream_view stream);
 
-  std::unique_ptr<cudf::table> filteredOutputIndices(
+  JoinOutput filteredOutputIndices(
       cudf::table_view leftTableView,
       cudf::column_view leftIndicesCol,
       cudf::table_view rightTableView,

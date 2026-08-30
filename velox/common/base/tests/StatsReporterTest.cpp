@@ -251,6 +251,8 @@ class TestMemoryPool : public memory::MemoryPool {
     return nullptr;
   }
 
+  void reportExternalAllocation(int64_t /* unused */) override {}
+
   void* allocateZeroFilled(int64_t /* unused */, int64_t /* unused */)
       override {
     return nullptr;
@@ -264,6 +266,8 @@ class TestMemoryPool : public memory::MemoryPool {
   }
 
   void free(void* /* unused */, int64_t /* unused */) override {}
+
+  void reportExternalFree(int64_t /* unused */) override {}
 
   void allocateNonContiguous(
       memory::MachinePageCount /* unused */,
@@ -337,6 +341,10 @@ class TestMemoryPool : public memory::MemoryPool {
   void setReclaimer(
       std::unique_ptr<memory::MemoryReclaimer> /* unused */) override {}
   memory::MemoryReclaimer* reclaimer() const override {
+    return nullptr;
+  }
+
+  memory::MemoryArbitrator* arbitrator() const override {
     return nullptr;
   }
 
@@ -783,7 +791,7 @@ class DynamicQuantilePatternTest
     : public StatsReporterTest,
       public testing::WithParamInterface<DynamicQuantilePatternTestCase> {};
 
-TEST_P(DynamicQuantilePatternTest, PatternScenarios) {
+TEST_P(DynamicQuantilePatternTest, patternScenarios) {
   const auto& testCase = GetParam();
   testCase.testFunc(this);
 }

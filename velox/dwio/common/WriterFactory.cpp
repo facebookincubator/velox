@@ -37,7 +37,7 @@ bool registerWriterFactory(std::shared_ptr<WriterFactory> factory) {
   VELOX_CHECK(
       ok,
       "WriterFactory is already registered for format {}",
-      toString(factory->fileFormat()));
+      FileFormatName::toName(factory->fileFormat()));
 #endif
   return true;
 }
@@ -50,7 +50,8 @@ std::shared_ptr<WriterFactory> getWriterFactory(FileFormat format) {
   auto it = writerFactories().find(format);
   if (it == writerFactories().end()) {
     VELOX_UNSUPPORTED(
-        "WriterFactory is not registered for format {}", toString(format));
+        "WriterFactory is not registered for format {}",
+        FileFormatName::toName(format));
   }
   return it->second;
 }

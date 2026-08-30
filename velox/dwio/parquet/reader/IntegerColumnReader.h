@@ -20,6 +20,7 @@
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetData.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::parquet {
@@ -38,11 +39,23 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
             std::move(fileType)) {}
 
   bool hasBulkPath() const override {
-    return !formatData_->as<ParquetData>().isDeltaBinaryPacked() &&
-        !this->fileType().type()->isLongDecimal() &&
-        ((this->fileType().type()->isShortDecimal())
-             ? formatData_->as<ParquetData>().hasDictionary()
-             : true);
+    if (formatData_->as<ParquetData>().isDeltaBinaryPacked()) {
+      return false;
+    }
+    if (this->fileType().type()->isLongDecimal()) {
+      return false;
+    }
+    if (this->fileType().type()->isShortDecimal()) {
+      // Dictionary-encoded: always has bulk path (indices are integers).
+      if (formatData_->as<ParquetData>().hasDictionary()) {
+        return true;
+      }
+      // PLAIN INT64: data is 8-byte little-endian, directly bulk-readable.
+      auto& parquetFileType =
+          static_cast<const ParquetTypeWithId&>(this->fileType());
+      return parquetFileType.parquetType_ == thrift::Type::INT64;
+    }
+    return true;
   }
 
   void seekToRowGroup(int64_t index) override {
@@ -59,9 +72,10 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
 
   void getValues(const RowSet& rows, VectorPtr* result) override {
     auto& fileType = static_cast<const ParquetTypeWithId&>(*fileType_);
-    auto logicalType = fileType.logicalType_;
-    if (logicalType.has_value() && logicalType.value().__isset.INTEGER &&
-        !logicalType.value().INTEGER.isSigned) {
+    const auto& logicalType = fileType.logicalType_;
+    if (logicalType &&
+        logicalType->getType() == thrift::LogicalType::Type::INTEGER &&
+        !*logicalType->get_INTEGER().isSigned()) {
       getUnsignedIntValues(rows, requestedType_, result);
     } else {
       getIntValues(rows, requestedType_, result);

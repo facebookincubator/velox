@@ -28,6 +28,9 @@ namespace facebook::velox {
 namespace config {
 class ConfigBase;
 }
+namespace io {
+class IoStatistics;
+}
 class IoStats;
 class ReadFile;
 class WriteFile;
@@ -66,6 +69,10 @@ struct FileOptions {
   /// IO mode if set.
   bool bufferIo{true};
 
+  /// Whether to use io_uring for direct-I/O positioned read batches. Only
+  /// interpreted by the local filesystem and valid when bufferIo is false.
+  bool useIoUring{false};
+
   /// Property bag to set onto files/directories. Think something similar to
   /// ioctl(2). For other remote filesystems, this can be PutObjectTagging in
   /// S3.
@@ -73,6 +80,12 @@ struct FileOptions {
       std::nullopt};
 
   IoStats* stats{nullptr};
+
+  /// Per-operation counters, keyed by operation name, unlike 'stats' above
+  /// which has no operation dimension. Non-owning: a file system may retain
+  /// this and record into it on every read, so it must outlive any file opened
+  /// with these options.
+  io::IoStatistics* ioStatistics{nullptr};
 
   /// A raw string that client can encode as anything they want to describe the
   /// file. For example, extraFileInfo can contain serialized file descriptors

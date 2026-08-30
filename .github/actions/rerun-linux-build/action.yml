@@ -1,0 +1,147 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Rerun Linux Build on PR head SHA
+description: >
+  Find the most recent `Linux Build using GCC` run on the given PR head
+  SHA, force-cancel it if still in flight, then re-run it via
+  POST /actions/runs/{id}/rerun. The re-run preserves the original
+  pull_request event context, so check_runs land on the PR head SHA and
+  selective-build-plan.yml re-evaluates its force-full inputs (standing
+  approval + /full-build comment) on the way through.
+
+  Caller must have already checked out `.github/scripts` (for the
+  sourced gh-api-retry.sh helper) and pass a github_token with
+  `actions: write` scope.
+
+inputs:
+  repo:
+    description: GitHub repository in `owner/name` form.
+    required: true
+  head_sha:
+    description: PR head SHA whose latest Linux Build run should be re-run.
+    required: true
+  github_token:
+    description: 'GITHUB_TOKEN with `actions: write` scope.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Find latest Linux Build run on PR head
+      id: find_run
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPO: ${{ inputs.repo }}
+        SHA: ${{ inputs.head_sha }}
+      run: |
+        source .github/scripts/gh-api-retry.sh
+        # Find the workflow id by name (file path also works but name
+        # is what the API surfaces consistently across renames).
+        wf_id=$(gh_api "/repos/$REPO/actions/workflows" \
+          --jq '.workflows[] | select(.name == "Linux Build using GCC") | .id')
+        if [ -z "$wf_id" ]; then
+          echo "::error::could not resolve workflow id for 'Linux Build using GCC'"
+          exit 1
+        fi
+        # Most recent run on this PR head SHA.
+        run_json=$(gh_api "/repos/$REPO/actions/workflows/$wf_id/runs?head_sha=$SHA&per_page=1" \
+          --jq '.workflow_runs[0] // empty')
+        if [ -z "$run_json" ]; then
+          echo "no Linux Build run found for $SHA — nothing to re-run"
+          exit 0
+        fi
+        run_id=$(echo "$run_json" | jq -r '.id')
+        run_status=$(echo "$run_json" | jq -r '.status')
+        echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+        echo "run_status=$run_status" >> "$GITHUB_OUTPUT"
+
+        # The `Ubuntu debug with system dependencies` job in
+        # linux-build-base.yml is gated on `is-full-mode` and resolves
+        # to `completed:skipped` immediately when the workflow starts
+        # in selective mode. Any other state (in_progress, queued, or
+        # completed with a non-skipped conclusion) means the existing
+        # run is already in full mode — a rerun would produce identical
+        # output and waste CI. Treat absence (job not found in the API
+        # response) as "rerun anyway" to be conservative.
+        #
+        # NOTE: This heuristic relies on the contract that Ubuntu debug
+        # only runs in full mode. If selective mode ever starts running
+        # Ubuntu debug, this check will incorrectly skip valid reruns.
+        ubuntu_conclusion=$(gh_api "/repos/$REPO/actions/runs/$run_id/jobs" \
+          --jq '[.jobs[] | select(.name | test("^Build with GCC / Ubuntu debug"))][0].conclusion // ""')
+        if [ -n "$ubuntu_conclusion" ] && [ "$ubuntu_conclusion" != "skipped" ]; then
+          already_full="true"
+        else
+          already_full="false"
+        fi
+        echo "already_full=$already_full" >> "$GITHUB_OUTPUT"
+        echo "Found run $run_id (status=$run_status, ubuntu_debug=$ubuntu_conclusion, already_full=$already_full)"
+
+    - name: Cancel in-flight run if needed
+      if: |
+        steps.find_run.outputs.run_id
+        && steps.find_run.outputs.run_status != 'completed'
+        && steps.find_run.outputs.already_full != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPO: ${{ inputs.repo }}
+        RUN_ID: ${{ steps.find_run.outputs.run_id }}
+      run: |
+        source .github/scripts/gh-api-retry.sh
+        # Force-cancel skips graceful runner shutdown — terminates
+        # immediately, instead of waiting for in-flight cmake/link
+        # steps that can ignore SIGTERM until they finish. The
+        # ~5-min wait the regular cancel needed shrinks to seconds.
+        #
+        # Uses gh_api (with retry) instead of `gh run cancel --force`
+        # so transient GitHub 5xx responses are retried automatically.
+        if ! gh_api -X POST "/repos/$REPO/actions/runs/$RUN_ID/force-cancel" 2>/tmp/cancel_err; then
+          # Only swallow the expected race-with-completion case
+          # (run finished between find_run and cancel). Anything
+          # else — perms, network, 5xx — surfaces as a real error
+          # instead of silently absorbing into a polling-loop
+          # timeout that then fails the next step opaquely.
+          status=$(gh_api "/repos/$REPO/actions/runs/$RUN_ID" --jq '.status')
+          if [ "$status" != "completed" ]; then
+            echo "::error::force-cancel failed and run is still $status"
+            cat /tmp/cancel_err
+            exit 1
+          fi
+          echo "force-cancel raced with run completion; harmless"
+        fi
+        # Brief poll to wait for the status field to flip to
+        # 'completed' so the rerun step doesn't 422.
+        for _ in $(seq 1 12); do
+          status=$(gh_api "/repos/$REPO/actions/runs/$RUN_ID" --jq '.status')
+          echo "  poll: status=$status"
+          if [ "$status" = "completed" ]; then break; fi
+          sleep 5
+        done
+
+    - name: Rerun
+      if: |
+        steps.find_run.outputs.run_id
+        && steps.find_run.outputs.already_full != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPO: ${{ inputs.repo }}
+        RUN_ID: ${{ steps.find_run.outputs.run_id }}
+      run: |
+        source .github/scripts/gh-api-retry.sh
+        gh_api -X POST "/repos/$REPO/actions/runs/$RUN_ID/rerun"
+        echo "Re-ran $RUN_ID; check_runs will appear under the original PR head SHA."

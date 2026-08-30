@@ -37,6 +37,7 @@
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/memory/Allocation.h"
+#include "velox/common/memory/CustomMemoryResource.h"
 #include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/memory/MemoryPool.h"
 
@@ -65,7 +66,7 @@ class MemoryManager {
   struct Options {
     Options() {}
     /// Specifies the default memory allocation alignment.
-    uint16_t alignment{MemoryAllocator::kMaxAlignment};
+    uint16_t alignment{MemoryAllocator::kDefaultAlignment};
 
     /// If true, enable memory usage tracking in the default memory pool.
     bool trackDefaultUsage{
@@ -161,7 +162,7 @@ class MemoryManager {
     /// The string kind of memory arbitrator used in the memory manager.
     ///
     /// NOTE: the arbitrator will only be created if its kind is set explicitly.
-    /// Otherwise MemoryArbitrator::create returns a nullptr.
+    /// Otherwise MemoryArbitrator::create returns a NoopArbitrator.
     std::string arbitratorKind{};
 
     /// Provided by the query system to validate the state after a memory pool
@@ -223,11 +224,23 @@ class MemoryManager {
       const std::optional<MemoryPool::DebugOptions>& poolDebugOpts =
           std::nullopt);
 
+  /// Creates a root memory pool backed by 'resource'. The pool's capacity
+  /// comes from 'resource->maxCapacity'; its reclaimer comes from
+  /// 'resource->reclaimerFactory()'; its allocator and arbitrator are
+  /// borrowed from 'resource->allocator' and 'resource->arbitrator'. The
+  /// caller (typically via CustomMemoryResourceRegistry) is responsible
+  /// for keeping 'resource' alive while the pool exists.
+  std::shared_ptr<MemoryPool> addCustomRootPool(
+      const std::string& name,
+      std::shared_ptr<CustomMemoryResource> resource,
+      const std::optional<MemoryPool::DebugOptions>& poolDebugOpts =
+          std::nullopt);
+
   /// Creates a leaf memory pool for direct memory allocation use with specified
   /// 'name'. If 'name' is missing, the memory manager generates a default name
   /// internally to ensure uniqueness. The leaf memory pool is created as the
   /// child of the memory manager's default root memory pool. If 'threadSafe' is
-  /// true, then we track its memory usage in a non-thread-safe mode to reduce
+  /// false, then we track its memory usage in a non-thread-safe mode to reduce
   /// its cpu cost.
   std::shared_ptr<MemoryPool> addLeafPool(
       const std::string& name = "",
@@ -302,6 +315,16 @@ class MemoryManager {
       std::string poolName,
       std::unique_ptr<MemoryReclaimer>& reclaimer,
       MemoryPool::Options& options);
+
+  // 'customAllocator' and 'customArbitrator' are borrowed pointers; if both
+  // are null, the manager's default tier is used.
+  std::shared_ptr<MemoryPool> addRootPoolImpl(
+      const std::string& name,
+      int64_t maxCapacity,
+      std::unique_ptr<MemoryReclaimer> reclaimer,
+      const std::optional<MemoryPool::DebugOptions>& poolDebugOpts,
+      MemoryAllocator* customAllocator,
+      MemoryArbitrator* customArbitrator);
 
   void dropPool(MemoryPool* pool);
 

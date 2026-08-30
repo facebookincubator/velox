@@ -122,6 +122,25 @@ velox::memory::MemoryPool* DriverCtx::addOperatorPool(
       planNodeId, splitGroupId, pipelineId, driverId, operatorType);
 }
 
+std::unordered_map<std::string, velox::memory::MemoryPool*>
+DriverCtx::addCustomOperatorPools(
+    const core::PlanNodeId& planNodeId,
+    const std::string& operatorType) {
+  std::unordered_map<std::string, velox::memory::MemoryPool*> result;
+  const auto& customRoots = task->queryCtx()->customPools();
+  if (customRoots.empty()) {
+    return result;
+  }
+  result.reserve(customRoots.size());
+  for (const auto& [tag, _] : customRoots) {
+    result.emplace(
+        tag,
+        task->addCustomOperatorPool(
+            tag, planNodeId, splitGroupId, pipelineId, driverId, operatorType));
+  }
+  return result;
+}
+
 namespace {
 bool isHashJoinSpillOperator(std::string_view operatorType) {
   return operatorType == OperatorType::kHashBuild ||
@@ -763,6 +782,18 @@ StopReason Driver::runInternal(
                 break;
               }
             }
+          } else {
+            // Transitive back-pressure. 'nextOp' is full
+            // (needsInput()==false) and already confirmed kNotBlocked above, so
+            // nothing upstream can flow past it. Stop the upstream production
+            // walk instead of filling/advancing operators above this
+            // bottleneck: reading ahead strands an unloaded scan LazyVector in
+            // an intermediate operator while the source reader advances,
+            // tripping the "Loading LazyVector after the enclosing reader has
+            // moved" check on a later load. 'nextOp' drains at its own
+            // already-visited position; the outer loop re-descends to make
+            // progress.
+            break;
           }
         } else {
           // A sink (last) operator, after getting unblocked, gets
