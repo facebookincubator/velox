@@ -479,14 +479,21 @@ TEST_F(
     checkNdvs(ndvs, expected, 0.05);
   }
 
-  // Integer input with interval day to second endpoints.
+  // Integer input with interval day to second endpoints. Interval millis are
+  // evaluated as Spark microseconds, so the integer values are scaled to the
+  // endpoints' microsecond magnitudes.
   {
     std::vector<int64_t> endpointsDataInterval;
     endpointsDataInterval.reserve(endpointsData.size());
     for (auto value : endpointsData) {
       endpointsDataInterval.push_back(static_cast<int64_t>(value));
     }
-    auto values = makeFlatVector<int32_t>(valuesData);
+    std::vector<int32_t> valuesDataScaled;
+    valuesDataScaled.reserve(valuesData.size());
+    for (auto value : valuesData) {
+      valuesDataScaled.push_back(value * 1000);
+    }
+    auto values = makeFlatVector<int32_t>(valuesDataScaled);
     auto endpoints = makeEndpointsVector<int64_t>(
         values->size(), endpointsDataInterval, INTERVAL_DAY_TIME());
     auto data = makeRowVector({values, endpoints});
@@ -495,17 +502,24 @@ TEST_F(
     checkNdvs(ndvs, expected, 0.05);
   }
 
-  // Interval day to second input with integer endpoints.
+  // Interval day to second input with integer endpoints. Interval millis are
+  // evaluated as Spark microseconds, so the integer endpoints are scaled to
+  // the values' microsecond magnitudes.
   {
     std::vector<int64_t> valuesDataInterval;
     valuesDataInterval.reserve(valuesData.size());
     for (auto value : valuesData) {
       valuesDataInterval.push_back(static_cast<int64_t>(value));
     }
+    std::vector<int32_t> endpointsDataScaled;
+    endpointsDataScaled.reserve(endpointsData.size());
+    for (auto value : endpointsData) {
+      endpointsDataScaled.push_back(value * 1000);
+    }
     auto values =
         makeFlatVector<int64_t>(valuesDataInterval, INTERVAL_DAY_TIME());
     auto endpoints =
-        makeEndpointsVector<int32_t>(values->size(), endpointsData);
+        makeEndpointsVector<int32_t>(values->size(), endpointsDataScaled);
     auto data = makeRowVector({values, endpoints});
     auto ndvs = runGlobalAggregation(
         data, "approx_count_distinct_for_intervals(c0, c1, 0.05)", true);
