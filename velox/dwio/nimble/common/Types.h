@@ -399,11 +399,19 @@ constexpr bool isStringType() {
   return std::is_same_v<T, std::string_view> || std::is_same_v<T, std::string>;
 }
 
+/// Reports whether the physical type T can be stored in a shared dictionary.
+/// This is the compile-time form, for `if constexpr` branches and
+/// `static_assert`s inside the templated encoding and writer code. The
+/// `DataType` overload below answers the same question at run time, for call
+/// sites that only have a `DataType` value; the two are deliberate
+/// counterparts, not duplicates.
 template <typename T>
 constexpr bool isSharedDictionaryType() {
   return isIntegralType<T>() || std::is_same_v<T, std::string_view>;
 }
 
+/// Run-time counterpart of the templated overload above. Kept in sync with it:
+/// integral types plus strings.
 constexpr bool isSharedDictionaryType(DataType dataType) {
   switch (dataType) {
     case DataType::Int8:

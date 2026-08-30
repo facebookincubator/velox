@@ -865,6 +865,10 @@ std::string_view SharedDictionaryEncoding<T>::encodeMaterializedDictionarySlice(
       Statistics<physicalType>::create(
           std::span<const physicalType>{values.data(), values.size()}),
       std::move(policy)};
+  // TODO: Reuses the Dictionary nested-encoding identifiers. That is
+  // unambiguous today because the shared-dictionary streams are already
+  // distinguishable by their dictionary stream identifiers, but dedicated
+  // EncodingIdentifiers::SharedDictionary entries would be more future proof.
   const auto serializedAlphabet = selection.template encodeNested<physicalType>(
       EncodingIdentifiers::Dictionary::Alphabet,
       std::span<const physicalType>{values.data(), values.size()},

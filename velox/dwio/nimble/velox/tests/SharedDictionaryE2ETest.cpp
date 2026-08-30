@@ -287,7 +287,7 @@ class SharedDictionaryE2ETest : public testing::Test {
 
   static void useSharedDictionarySelectionPolicy(WriterOptions& options) {
     test::configureSharedDictionarySelectionPolicy(
-        options, {.forceDictionaryForSharedTypes = false});
+        options, {.forceDictionaryForEligibleTypes = false});
   }
 
   std::shared_ptr<const ExternalDictionaryResolver> makeExternalResolver(
