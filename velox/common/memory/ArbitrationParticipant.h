@@ -91,20 +91,26 @@ class ArbitrationParticipant
     uint64_t fastExponentialGrowthCapacityLimit;
     double slowCapacityGrowRatio;
 
-    /// When shrinking a memory pool capacity, the shrink bytes will be adjusted
-    /// in a way such that AFTER shrink, the stricter (whichever is smaller) of
-    /// the following conditions is met, in order to better fit the query memory
-    /// pool's current memory usage:
-    /// - Free capacity is greater or equal to capacity *
-    /// 'minFreeCapacityRatio'
-    /// - Free capacity is greater or equal to 'minFreeCapacity'
+    /// Limits how much free capacity memory arbitration can shrink from a query
+    /// memory pool, so that the pool keeps enough free capacity for its future
+    /// allocations without triggering another arbitration round.
+    /// A shrink never reduces free capacity below the smaller of the following:
+    /// - capacity * 'minFreeCapacityRatio'
+    /// - 'minFreeCapacity'
     ///
-    /// NOTE: in the conditions when original requested shrink bytes ends up
-    /// with more free capacity than above 2 conditions, the adjusted shrink
-    /// bytes is not respected.
+    /// If the free capacity is already at or below this minimum, nothing is
+    /// shrunk. The pool may also give up less because its capacity is never
+    /// shrunk below 'minCapacity', so it keeps more free capacity than the
+    /// minimum.
     ///
-    /// NOTE: capacity shrink adjustment is enabled when both
-    /// 'minFreeCapacityRatio' and 'minFreeCapacity' are set.
+    /// For example, with capacity 1GB, 'minFreeCapacityRatio' 0.25 and
+    /// 'minFreeCapacity' 128MB, the minimum is the smaller of 1GB * 0.25 =
+    /// 256MB and 128MB, which is 128MB. So a pool with 400MB of free capacity
+    /// gives up at most 272MB through shrink.
+    ///
+    /// NOTE: this limit applies only when both 'minFreeCapacity' and
+    /// 'minFreeCapacityRatio' are set. It is bypassed when 'shrink' is called
+    /// with 'reclaimAll' set and for inactive pools.
     uint64_t minFreeCapacity;
     double minFreeCapacityRatio;
 
