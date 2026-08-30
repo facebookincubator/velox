@@ -32,6 +32,7 @@
 #include <cudf/utilities/bit.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
+#include <cudf/utilities/traits.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
 
 #include <cuda_runtime.h>
@@ -723,6 +724,18 @@ void checkDecimalOutputPrecision(int32_t outPrecision) {
       "Decimal binop output precision must fit the output storage width");
 }
 
+// data<T>() reinterprets column memory without checking T against the runtime
+// type, so a kernel instantiated at the wrong width would stride over the
+// elements with no diagnostic. The dispatch derives these types from the same
+// columns and cannot disagree; this states the contract for callers that
+// instantiate the launch directly.
+template <typename Rep>
+void checkDecimalStorageWidth(cudf::data_type type) {
+  CUDF_EXPECTS(
+      cudf::size_of(type) == sizeof(Rep),
+      "Decimal binop storage width must match its kernel type");
+}
+
 template <typename LhsRep, typename RhsRep, typename OutRep>
 int32_t launchDecimalBinaryColColKernel(
     cudf::column_view const& lhs,
@@ -731,6 +744,9 @@ int32_t launchDecimalBinaryColColKernel(
     cudf::binary_operator op,
     int32_t outPrecision,
     rmm::cuda_stream_view stream) {
+  checkDecimalStorageWidth<LhsRep>(lhs.type());
+  checkDecimalStorageWidth<RhsRep>(rhs.type());
+  checkDecimalStorageWidth<OutRep>(out.type());
   checkDecimalOutputPrecision<OutRep>(outPrecision);
   auto const lhsScale = numeric::scale_type{lhs.type().scale()};
   auto const rhsScale = numeric::scale_type{rhs.type().scale()};
@@ -762,6 +778,9 @@ int32_t launchDecimalBinaryRhsScalarKernel(
     cudf::binary_operator op,
     int32_t outPrecision,
     rmm::cuda_stream_view stream) {
+  // rhsValue arrives already decoded at RhsRep, so it needs no width check.
+  checkDecimalStorageWidth<LhsRep>(lhs.type());
+  checkDecimalStorageWidth<OutRep>(out.type());
   checkDecimalOutputPrecision<OutRep>(outPrecision);
   auto const lhsScale = numeric::scale_type{lhs.type().scale()};
   auto const outScale = numeric::scale_type{out.type().scale()};
@@ -792,6 +811,9 @@ int32_t launchDecimalBinaryLhsScalarKernel(
     cudf::binary_operator op,
     int32_t outPrecision,
     rmm::cuda_stream_view stream) {
+  // lhsValue arrives already decoded at LhsRep, so it needs no width check.
+  checkDecimalStorageWidth<RhsRep>(rhs.type());
+  checkDecimalStorageWidth<OutRep>(out.type());
   checkDecimalOutputPrecision<OutRep>(outPrecision);
   auto const rhsScale = numeric::scale_type{rhs.type().scale()};
   auto const outScale = numeric::scale_type{out.type().scale()};
