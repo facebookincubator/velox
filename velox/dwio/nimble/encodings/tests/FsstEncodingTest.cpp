@@ -143,7 +143,7 @@ class FsstEncodingTest : public ::testing::Test {
       static_cast<void>(FsstEncoding::lengthsEncoding(malformed));
     });
     expectMalformed("constructor", [&] {
-      static_cast<void>(EncodingFactory({}).create(
+      static_cast<void>(EncodingFactory{}.create(
           *pool_, malformed, createStringBufferFactory()));
     });
     expectMalformed("slice", [&] {
@@ -862,7 +862,7 @@ TEST_F(FsstEncodingTest, resetReusesMultipleStringBufferPages) {
   std::vector<velox::BufferPtr> pages;
   uint64_t allocatedBytes{0};
   auto encoding =
-      EncodingFactory({}).create(*pool_, encoded, [&](uint32_t bytes) -> void* {
+      EncodingFactory{}.create(*pool_, encoded, [&](uint32_t bytes) -> void* {
         allocatedBytes += bytes;
         auto& page = pages.emplace_back(
             velox::AlignedBuffer::allocate<char>(bytes, pool_.get()));
