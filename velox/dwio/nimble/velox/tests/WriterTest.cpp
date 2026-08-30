@@ -4820,6 +4820,7 @@ TEST_F(WriterTest, runtimeStatsPublishesEveryCounter) {
           ::testing::Key("nimble.writeCpuNanos"),
           ::testing::Key("nimble.writeWallNanos"),
           ::testing::Key("nimble.ingestionCpuNanos"),
+          ::testing::Key("nimble.ingestionWallNanos"),
           ::testing::Key("nimble.encodingCpuNanos"),
           ::testing::Key("nimble.encodingWallNanos"),
           ::testing::Key("nimble.encodingSelectionCpuNanos"),
@@ -8993,13 +8994,13 @@ TEST_F(WriterTest, flatmapColumnsKeysImplicitFlatMapColumn) {
 
 struct ParallelEncodeParam {
   uint32_t maxEncodeParallelism;
-  uint32_t minStreamsPerEncodeUnit;
+  uint32_t minStreamsPerEncodingTask;
 
   std::string debugString() const {
     return fmt::format(
         "maxParallel_{}_minStreams_{}",
         maxEncodeParallelism,
-        minStreamsPerEncodeUnit);
+        minStreamsPerEncodingTask);
   }
 };
 
@@ -9012,7 +9013,7 @@ class ParallelEncodeWriterTest
     executor_ = std::make_shared<folly::CPUThreadPoolExecutor>(4);
     options.encodingExecutor = folly::getKeepAliveToken(*executor_);
     options.maxEncodeParallelism = GetParam().maxEncodeParallelism;
-    options.minStreamsPerEncodeUnit = GetParam().minStreamsPerEncodeUnit;
+    options.minStreamsPerEncodingTask = GetParam().minStreamsPerEncodingTask;
     return options;
   }
 
@@ -9156,7 +9157,7 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.debugString();
     });
 
-DEBUG_ONLY_TEST_F(WriterTest, parallelEncodeRowTaskCount) {
+DEBUG_ONLY_TEST_F(WriterTest, bufferingRemainsSequential) {
   velox::common::testutil::TestValue::enable();
 
   auto type = velox::ROW({
@@ -9175,17 +9176,14 @@ DEBUG_ONLY_TEST_F(WriterTest, parallelEncodeRowTaskCount) {
 
   struct TestCase {
     uint32_t maxEncodeParallelism;
-    uint32_t minStreamsPerEncodeUnit;
-    uint32_t expectedTaskCount;
+    uint32_t minStreamsPerEncodingTask;
   };
 
   const std::vector<TestCase> testCases = {
-      {2, 1, 2},
-      {4, 1, 4},
-      {8, 1, 8},
-      {4, 4, 2},
-      {8, 4, 2},
-      {100, 1, 8},
+      {4, 0},
+      {2, 1},
+      {4, 1},
+      {8, 4},
   };
 
   folly::CPUThreadPoolExecutor executor(4);
@@ -9193,24 +9191,21 @@ DEBUG_ONLY_TEST_F(WriterTest, parallelEncodeRowTaskCount) {
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(
         fmt::format(
-            "maxParallel={}, minStreams={}, expected={}",
+            "maxParallel={}, minStreams={}",
             testCase.maxEncodeParallelism,
-            testCase.minStreamsPerEncodeUnit,
-            testCase.expectedTaskCount));
+            testCase.minStreamsPerEncodingTask));
 
     nimble::WriterOptions writerOptions;
     writerOptions.encodingExecutor = folly::getKeepAliveToken(executor);
     writerOptions.maxEncodeParallelism = testCase.maxEncodeParallelism;
-    writerOptions.minStreamsPerEncodeUnit = testCase.minStreamsPerEncodeUnit;
+    writerOptions.minStreamsPerEncodingTask =
+        testCase.minStreamsPerEncodingTask;
 
-    uint32_t parallelWriteCount = 0;
-    std::vector<uint32_t> observedTaskCounts;
+    uint32_t parallelWriteCount{0};
     SCOPED_TESTVALUE_SET(
         "facebook::nimble::RowFieldWriter::co_write",
-        std::function<void(const uint32_t*)>([&](const uint32_t* taskCount) {
-          ++parallelWriteCount;
-          observedTaskCounts.emplace_back(*taskCount);
-        }));
+        std::function<void(const uint32_t*)>(
+            [&](const uint32_t*) { ++parallelWriteCount; }));
 
     std::string file;
     auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
@@ -9223,10 +9218,7 @@ DEBUG_ONLY_TEST_F(WriterTest, parallelEncodeRowTaskCount) {
     }
     writer.close();
 
-    EXPECT_EQ(parallelWriteCount, numBatches);
-    for (const auto taskCount : observedTaskCounts) {
-      EXPECT_EQ(taskCount, testCase.expectedTaskCount);
-    }
+    EXPECT_EQ(parallelWriteCount, 0);
 
     auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
     nimble::VeloxReader reader(readFile.get(), *leafPool_);
@@ -9236,7 +9228,73 @@ DEBUG_ONLY_TEST_F(WriterTest, parallelEncodeRowTaskCount) {
   }
 }
 
-DEBUG_ONLY_TEST_F(WriterTest, parallelEncodeFlatMapTaskCount) {
+DEBUG_ONLY_TEST_F(WriterTest, parallelEncodingTaskCount) {
+  velox::common::testutil::TestValue::enable();
+
+  auto type = velox::ROW({
+      {"a", velox::BIGINT()},
+      {"b", velox::BIGINT()},
+      {"c", velox::BIGINT()},
+      {"d", velox::BIGINT()},
+      {"e", velox::BIGINT()},
+      {"f", velox::BIGINT()},
+      {"g", velox::BIGINT()},
+      {"h", velox::BIGINT()},
+  });
+  velox::VectorFuzzer fuzzer(
+      {.vectorSize = 100, .nullRatio = 0}, leafPool_.get());
+  folly::CPUThreadPoolExecutor executor{8};
+
+  struct TestCase {
+    uint32_t maxEncodeParallelism;
+    uint32_t minStreamsPerEncodingTask;
+    uint32_t expectedTaskCount;
+  };
+  const std::vector<TestCase> testCases = {
+      {4, 0, 4},
+      {4, 1, 4},
+      {4, 3, 3},
+      {2, 3, 2},
+      {8, 32, 0},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(
+        fmt::format(
+            "maxParallel={}, minStreams={}, expected={}",
+            testCase.maxEncodeParallelism,
+            testCase.minStreamsPerEncodingTask,
+            testCase.expectedTaskCount));
+
+    std::atomic<uint32_t> taskCount{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::nimble::Writer::parallelEncodeTask",
+        std::function<void(const uint32_t*)>([&](const uint32_t*) {
+          taskCount.fetch_add(1, std::memory_order_relaxed);
+        }));
+
+    nimble::WriterOptions writerOptions;
+    writerOptions.enableChunking = false;
+    writerOptions.encodingExecutor = folly::getKeepAliveToken(executor);
+    writerOptions.maxEncodeParallelism = testCase.maxEncodeParallelism;
+    writerOptions.minStreamsPerEncodingTask =
+        testCase.minStreamsPerEncodingTask;
+
+    std::string file;
+    nimble::Writer writer(
+        type,
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        writerOptions);
+    writer.write(fuzzer.fuzzInputRow(type));
+    writer.close();
+
+    EXPECT_EQ(
+        taskCount.load(std::memory_order_relaxed), testCase.expectedTaskCount);
+  }
+}
+
+DEBUG_ONLY_TEST_F(WriterTest, flatMapBufferingRemainsSequential) {
   velox::common::testutil::TestValue::enable();
 
   auto type = velox::ROW({
@@ -9254,15 +9312,13 @@ DEBUG_ONLY_TEST_F(WriterTest, parallelEncodeFlatMapTaskCount) {
   writerOptions.flatMapColumns = {{"flatmap", {}}};
   writerOptions.encodingExecutor = folly::getKeepAliveToken(executor);
   writerOptions.maxEncodeParallelism = 4;
-  writerOptions.minStreamsPerEncodeUnit = 1;
+  writerOptions.minStreamsPerEncodingTask = 1;
 
-  uint32_t flatMapParallelCount = 0;
+  uint32_t flatMapParallelCount{0};
   SCOPED_TESTVALUE_SET(
       "facebook::nimble::FlatMapFieldWriter::co_writeMapValues",
-      std::function<void(const uint32_t*)>([&](const uint32_t* taskCount) {
-        ++flatMapParallelCount;
-        EXPECT_GT(*taskCount, 1);
-      }));
+      std::function<void(const uint32_t*)>(
+          [&](const uint32_t*) { ++flatMapParallelCount; }));
 
   std::string file;
   auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
@@ -9274,7 +9330,7 @@ DEBUG_ONLY_TEST_F(WriterTest, parallelEncodeFlatMapTaskCount) {
   }
   writer.close();
 
-  EXPECT_GT(flatMapParallelCount, 0);
+  EXPECT_EQ(flatMapParallelCount, 0);
 
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
   nimble::VeloxReader reader(readFile.get(), *leafPool_);
@@ -9372,7 +9428,7 @@ TEST_F(WriterTest, randomEncodingSelectionVariesByChunkContents) {
   auto parallelOptions = makeOptions();
   parallelOptions.encodingExecutor = folly::getKeepAliveToken(executor);
   parallelOptions.maxEncodeParallelism = 2;
-  parallelOptions.minStreamsPerEncodeUnit = 1;
+  parallelOptions.minStreamsPerEncodingTask = 1;
   const auto parallel = writeAndCaptureChunkLayouts(
       rowType, batches, std::move(parallelOptions), /*expectedStripeCount=*/1);
   ASSERT_THAT(parallel, ::testing::SizeIs(first.size()));
@@ -9425,7 +9481,7 @@ TEST_F(WriterTest, randomEncodingSelectionDeterministic) {
       makeRandomEncodingSelectionPolicyCreator(seed);
   parallelOptions.encodingExecutor = folly::getKeepAliveToken(executor);
   parallelOptions.maxEncodeParallelism = 4;
-  parallelOptions.minStreamsPerEncodeUnit = 1;
+  parallelOptions.minStreamsPerEncodingTask = 1;
   EXPECT_EQ(
       file,
       writeWithWriterOptions(*rootPool_, vector, std::move(parallelOptions)));
