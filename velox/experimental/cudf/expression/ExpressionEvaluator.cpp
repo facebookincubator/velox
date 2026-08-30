@@ -44,6 +44,7 @@
 #include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/hashing.hpp>
 #include <cudf/lists/count_elements.hpp>
+#include <cudf/null_mask.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/replace.hpp>
 #include <cudf/round.hpp>
@@ -2791,6 +2792,110 @@ std::unique_ptr<cudf::column> FunctionExpression::makeStructChildColumn(
       structColumn);
 }
 
+namespace {
+
+/// True for the special forms registered as SwitchFunction.
+bool isConditionalFunction(const core::TypedExprPtr& expr) {
+  if (expr->kind() != core::ExprKind::kCall) {
+    return false;
+  }
+  const auto& name = expr->asUnchecked<core::CallTypedExpr>()->name();
+  return name == "switch" || name == "if";
+}
+
+/// Maps each entry of subexpressions_ back to its expr_->inputs() index.
+/// create() drops constant children, so `if(c, x, 1)` yields {0, 1}.
+std::vector<size_t> conditionalOperandIndex(const core::TypedExprPtr& expr) {
+  std::vector<size_t> indices;
+  indices.reserve(expr->inputs().size());
+  for (size_t input = 0; input < expr->inputs().size(); ++input) {
+    const auto& child = expr->inputs()[input];
+    if (!child->isConstantKind() && !child->isInputKind()) {
+      indices.push_back(input);
+    }
+  }
+  return indices;
+}
+
+/// Rows where copy_if_else takes the branch chosen by \p takeWhenTrue. It
+/// selects `(valid(i) and condition[i]) ? then : else`, so a null condition row
+/// belongs to the else branch alone.
+rmm::device_buffer makeBranchRowMask(
+    const cudf::column_view& condition,
+    bool takeWhenTrue,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  // bools_to_mask clears false and null alike, already the then branch's set.
+  if (takeWhenTrue) {
+    auto [mask, unusedUnsetCount] = cudf::bools_to_mask(condition, stream, mr);
+    return std::move(*mask);
+  }
+  // The else branch also owns the null rows, and NOT maps null to null.
+  auto negated =
+      cudf::unary_operation(condition, cudf::unary_operator::NOT, stream, mr);
+  std::unique_ptr<cudf::column> elseCondition;
+  if (negated->view().has_nulls()) {
+    const cudf::numeric_scalar<bool> nullsTakeElse(true, true, stream, mr);
+    elseCondition =
+        cudf::replace_nulls(negated->view(), nullsTakeElse, stream, mr);
+  }
+  auto [mask, unusedUnsetCount] = cudf::bools_to_mask(
+      elseCondition ? elseCondition->view() : negated->view(), stream, mr);
+  return std::move(*mask);
+}
+
+/// Views over \p inputs' data with \p rowMask ANDed into every null mask, so a
+/// branch subtree sees the rows its conditional discards as null. The masks
+/// travel with the views because the views only borrow them, and a subtree
+/// result can itself be a view (e.g. a bare field reference).
+struct MaskedInputs {
+  std::vector<cudf::column_view> views;
+  std::vector<rmm::device_buffer> masks;
+};
+
+MaskedInputs maskInputRows(
+    const std::vector<cudf::column_view>& inputs,
+    const cudf::bitmask_type* rowMask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  MaskedInputs masked;
+  masked.views.reserve(inputs.size());
+  masked.masks.reserve(inputs.size());
+  for (const auto& input : inputs) {
+    // rowMask is indexed from row 0; a view with its own bit offset would read
+    // it out of step. Skipping one only forfeits the row skipping.
+    if (input.size() == 0 || input.offset() != 0) {
+      masked.views.push_back(input);
+      continue;
+    }
+    std::vector<const cudf::bitmask_type*> masks{rowMask};
+    std::vector<cudf::size_type> beginBits{0};
+    if (input.nullable()) {
+      masks.push_back(input.null_mask());
+      beginBits.push_back(0);
+    }
+    auto [combined, nullCount] =
+        cudf::bitmask_and(masks, beginBits, input.size(), stream, mr);
+    std::vector<cudf::column_view> children;
+    children.reserve(input.num_children());
+    for (cudf::size_type child = 0; child < input.num_children(); ++child) {
+      children.push_back(input.child(child));
+    }
+    masked.masks.push_back(std::move(combined));
+    masked.views.emplace_back(
+        input.type(),
+        input.size(),
+        input.head<void>(),
+        static_cast<const cudf::bitmask_type*>(masked.masks.back().data()),
+        nullCount,
+        0,
+        children);
+  }
+  return masked;
+}
+
+} // namespace
+
 ColumnOrView FunctionExpression::eval(
     std::vector<cudf::column_view> inputColumnViews,
     rmm::cuda_stream_view stream,
@@ -2838,8 +2943,51 @@ ColumnOrView FunctionExpression::eval(
     std::vector<ColumnOrView> subexprResults;
     subexprResults.reserve(subexpressions_.size());
 
-    for (const auto& subexpr : subexpressions_) {
-      subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
+    // Borrowed by the masked views until after function_->eval.
+    std::vector<MaskedInputs> branchInputs;
+    std::vector<rmm::device_buffer> branchRowMasks;
+
+    // Operand 0 is the condition, 1 and 2 the branches. Not positionally
+    // aligned with subexpressions_, which omits constant branches.
+    const auto operandIndex = isConditionalFunction(expr_)
+        ? conditionalOperandIndex(expr_)
+        : std::vector<size_t>{};
+
+    const bool maskBranches = operandIndex.size() == subexpressions_.size() &&
+        !operandIndex.empty() && operandIndex.front() == 0;
+
+    if (maskBranches) {
+      // Branches are materialized over every row before copy_if_else selects,
+      // so a fail-fast kernel in one would abort the batch over rows the
+      // conditional discards. Hand each branch inputs whose null mask excludes
+      // the rows it does not supply; the kernels already skip null rows. Velox
+      // CPU narrows a SelectivityVector per branch instead.
+      auto condition = subexpressions_[0]->eval(inputColumnViews, stream, mr);
+      const auto conditionView = asView(condition);
+      subexprResults.push_back(std::move(condition));
+
+      branchInputs.reserve(subexpressions_.size() - 1);
+      branchRowMasks.reserve(subexpressions_.size() - 1);
+      for (size_t branch = 1; branch < subexpressions_.size(); ++branch) {
+        branchRowMasks.push_back(makeBranchRowMask(
+            conditionView,
+            /*takeWhenTrue=*/operandIndex[branch] == 1,
+            stream,
+            mr));
+        branchInputs.push_back(maskInputRows(
+            inputColumnViews,
+            static_cast<const cudf::bitmask_type*>(
+                branchRowMasks.back().data()),
+            stream,
+            mr));
+        subexprResults.push_back(
+            subexpressions_[branch]->eval(
+                branchInputs.back().views, stream, mr));
+      }
+    } else {
+      for (const auto& subexpr : subexpressions_) {
+        subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
+      }
     }
 
     auto result = function_->eval(subexprResults, stream, mr);

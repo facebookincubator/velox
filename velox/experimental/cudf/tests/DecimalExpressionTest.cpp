@@ -59,6 +59,21 @@ class CudfDecimalTest : public exec::test::OperatorTestBase {
     unregisterCudf();
     exec::test::OperatorTestBase::TearDown();
   }
+
+  /// Runs \p plan with the cuDF operators unregistered and then registered, and
+  /// asserts the two results match. Prefer this over hardcoded expectations
+  /// where the point is GPU/CPU parity rather than a specific value.
+  void assertCpuAndGpuAgree(const core::PlanNodePtr& plan) {
+    unregisterCudf();
+    auto cpuResult =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
+    registerCudf();
+    auto gpuResult =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
+    facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+  }
 };
 
 TEST_F(CudfDecimalTest, decimal64And128ArithmeticAndComparison) {
@@ -1097,6 +1112,53 @@ TEST_F(CudfDecimalTest, decimalDivideByZero) {
           .project({"CAST('9.00' AS DECIMAL(10, 2)) / b AS div"})
           .planNode();
   assertCpuAndGpuDivideByZero(scalarColumnPlan);
+}
+
+// A conditional that excludes the zero-divisor rows must not fail the batch.
+// The GPU evaluator has no short-circuit: both branches are materialized over
+// every row before copy_if_else selects, so a fail-fast divide would abort over
+// rows the conditional discards. Velox CPU narrows a SelectivityVector instead.
+TEST_F(CudfDecimalTest, decimalDivideByZeroGuardedByConditional) {
+  // g excludes row 0 by being false and row 2 by being null, which
+  // copy_if_else also routes to the else branch; both rows have a zero divisor.
+  // q / d is DECIMAL(7, 2), so the else branch must match for the plan to bind.
+  auto input = makeRowVector(
+      {"g", "q", "d"},
+      {
+          makeNullableFlatVector<int32_t>({0, 1, std::nullopt}),
+          makeFlatVector<int64_t>({1000, 2000, 3000}, DECIMAL(5, 2)),
+          makeFlatVector<int64_t>({0, 500, 0}, DECIMAL(5, 2)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+
+  assertCpuAndGpuAgree(
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project(
+              {"if(g > 0, q / d, CAST('0.00' AS DECIMAL(7, 2))) AS guarded"})
+          .planNode());
+
+  // Nested conditionals compose because maskInputRows ANDs each branch mask
+  // into the null masks it was handed. Row 1 needs that AND: the outer
+  // condition excludes it, while the inner else branch holding the divide
+  // marks it active.
+  auto nestedInput = makeRowVector(
+      {"a", "g", "q", "d"},
+      {
+          makeFlatVector<int32_t>({1, 0}),
+          makeFlatVector<int32_t>({0, 0}),
+          makeFlatVector<int64_t>({2000, 3000}, DECIMAL(5, 2)),
+          makeFlatVector<int64_t>({500, 0}, DECIMAL(5, 2)),
+      });
+  std::vector<RowVectorPtr> nestedVectors = {nestedInput};
+
+  assertCpuAndGpuAgree(
+      exec::test::PlanBuilder()
+          .values(nestedVectors)
+          .project({"if(a > 0, "
+                    "if(g > 0, CAST('0.00' AS DECIMAL(7, 2)), q / d), "
+                    "CAST('0.00' AS DECIMAL(7, 2))) AS guarded"})
+          .planNode());
 }
 
 TEST_F(CudfDecimalTest, decimalModulo) {
