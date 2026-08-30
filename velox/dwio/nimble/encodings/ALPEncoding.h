@@ -243,10 +243,9 @@ class ALPEncoding final
       logicalValues[i] = detail::alp::toLogical<cppDataType>(values[i]);
     }
 
-    const auto [exponent, factor] = findBestExponentFactorBySize(
+    const auto [exponent, factor] = findBestExponentFactorByCount(
         std::span<const cppDataType>{
-            logicalValues.data(), logicalValues.size()},
-        options);
+            logicalValues.data(), logicalValues.size()});
 
     return encodeWithExponentFactor(
         selection,
@@ -583,8 +582,7 @@ class ALPEncoding final
     // saw when it chose (exponent, factor).  This eliminates the earlier
     // duplicate "encodedValues + Statistics<uint64_t>" scan that was subtly
     // inconsistent with the selector's min/max view.
-    const auto [exponent, factor] =
-        findBestExponentFactorBySize(logicalSpan, options);
+    const auto [exponent, factor] = findBestExponentFactorByCount(logicalSpan);
     const uint32_t scoreSampleSize =
         std::min<uint32_t>(static_cast<uint32_t>(sampleSize), kSampleSize);
     const auto winnerScore = scoreCombination(
@@ -813,15 +811,9 @@ class ALPEncoding final
   static constexpr uint32_t kSamplingChunks{32};
 
  private:
-  // Largest exponent and factor values considered during selection. These are
-  // per-type and follow DuckDB's caps: double keeps up to 18 decimal digits
-  // (10^18 is the largest power of ten that fits in int64), float keeps up to
-  // 10 (~7 significant decimal digits of precision). Capping float lower stops
-  // the size-based tie-break from drifting toward float's precision limit,
-  // where nearly every value becomes an exception. Both stay within
-  // kPow10Double's bounds (indices 0..23) and the 5-bit header field.
-  static constexpr int kMaxExponent{std::is_same_v<T, float> ? 10 : 18};
-  static constexpr int kMaxFactor{kMaxExponent};
+  // Largest exponent and factor values backed by kPow10Double.
+  static constexpr int kMaxExponent{23};
+  static constexpr int kMaxFactor{23};
   // ALP-specific control word following the standard Encoding prefix.
   static constexpr uint32_t kHeaderSize{3};
 
@@ -1077,7 +1069,9 @@ class ALPEncoding final
 
   // Selects the (exponent, factor) pair with the smallest estimated encoded
   // footprint. Ties prefer the larger exponent, then the larger factor
-  // (DuckDB's tie-break rule). This is the production selection strategy.
+  // (DuckDB's tie-break rule). Retained for tests, benchmarks, and A/B
+  // exploration; production paths use findBestExponentFactorByCount, which is
+  // cheaper and matches this on all datasets except sparse-exception ones.
   static std::pair<uint8_t, uint8_t> findBestExponentFactorBySize(
       std::span<const cppDataType> values,
       const Encoding::Options& options) {
@@ -1110,8 +1104,9 @@ class ALPEncoding final
   }
 
   // Selects the sampled (exponent, factor) pair that preserves the most values.
-  // Retained for A/B comparison against the size-based strategy; production
-  // paths use findBestExponentFactorBySize.
+  // Ties break toward the smaller pair, and iteration short-circuits when every
+  // sampled value is representable -- clean data (all integers, uniform 2dp)
+  // exits on the first candidate.
   static std::pair<uint8_t, uint8_t> findBestExponentFactorByCount(
       std::span<const cppDataType> values) {
     const uint32_t sampleSize =
