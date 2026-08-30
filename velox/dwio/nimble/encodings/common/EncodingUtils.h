@@ -25,6 +25,7 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/MainlyConstantV2Encoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
@@ -141,6 +142,13 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
       return f(static_cast<ConstantEncoding<T>&>(encoding));
     case EncodingType::MainlyConstant:
       return f(static_cast<MainlyConstantEncoding<T>&>(encoding));
+    case EncodingType::MainlyConstantV2:
+      if constexpr (isNumericType<T>() && !isBoolType<T>()) {
+        return f(static_cast<MainlyConstantV2Encoding<T>&>(encoding));
+      }
+      NIMBLE_UNREACHABLE(
+          "MainlyConstantV2 encoding only supports non-boolean numeric data types, got {}.",
+          encoding.dataType());
     case EncodingType::Delta:
       return f(static_cast<DeltaEncoding<T>&>(encoding));
     case EncodingType::DeltaBlock:

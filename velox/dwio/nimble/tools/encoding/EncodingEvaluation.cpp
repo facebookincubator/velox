@@ -51,6 +51,7 @@ uint8_t nestedChildrenCount(nimble::EncodingType encodingType) {
     case nimble::EncodingType::RLE:
     case nimble::EncodingType::Dictionary:
     case nimble::EncodingType::MainlyConstant:
+    case nimble::EncodingType::MainlyConstantV2:
     case nimble::EncodingType::PFOR:
       return 2;
     case nimble::EncodingType::SparseBool:

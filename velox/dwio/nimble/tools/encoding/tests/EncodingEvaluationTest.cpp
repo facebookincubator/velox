@@ -80,6 +80,28 @@ TEST_F(EncodingEvaluationTest, evaluateCandidatesReturnsResultsForCompatible) {
   EXPECT_GT(results[1]->encodedBytes, 0u);
 }
 
+TEST_F(EncodingEvaluationTest, evaluatesMainlyConstantV2WithNestedChildren) {
+  const std::vector<velox::VectorPtr> vectors{vectorMaker_->flatVector<int64_t>(
+      1'024,
+      [](velox::vector_size_t row) { return row % 100 == 0 ? row : 42; })};
+  const auto candidates = buildEncodingCandidates({
+      nimble::EncodingType::Trivial,
+      nimble::EncodingType::MainlyConstantV2,
+  });
+
+  EvaluationOptions options;
+  options.iterations = 1;
+
+  const auto results =
+      evaluateCandidates(vectors, candidates, options, pool_.get());
+
+  ASSERT_EQ(results.size(), 2u);
+  ASSERT_TRUE(results[0].has_value());
+  ASSERT_TRUE(results[1].has_value());
+  EXPECT_EQ(results[1]->type, nimble::EncodingType::MainlyConstantV2);
+  EXPECT_GT(results[1]->encodedBytes, 0u);
+}
+
 TEST_F(EncodingEvaluationTest, evaluateCandidatesReturnsNulloptOnIncompatible) {
   const std::vector<velox::VectorPtr> vectors{makeVariedColumn(1'024)};
   const auto candidates = buildEncodingCandidates({

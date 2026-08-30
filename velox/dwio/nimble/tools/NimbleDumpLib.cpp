@@ -1000,6 +1000,8 @@ std::string getEncodingLayoutLabel(
       identifierNames{
           {nimble::EncodingType::Dictionary, {"Alphabet", "Indices"}},
           {nimble::EncodingType::MainlyConstant, {"IsCommon", "OtherValues"}},
+          {nimble::EncodingType::MainlyConstantV2,
+           {"ExceptionPositions", "ExceptionValues"}},
           {nimble::EncodingType::Nullable, {"Data", "Nulls"}},
           {nimble::EncodingType::RLE, {"RunLengths", "RunValues"}},
           {nimble::EncodingType::SparseBool, {"Indices"}},

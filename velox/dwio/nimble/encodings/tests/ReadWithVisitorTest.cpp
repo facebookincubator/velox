@@ -1871,6 +1871,62 @@ TEST_P(ReadWithVisitorTest, encodingLevelMainlyConstantAlwaysTrueDense) {
   }
 }
 
+TEST_P(ReadWithVisitorTest, encodingLevelMainlyConstantV2RangeDense) {
+  constexpr int kRows = 200;
+  std::vector<int64_t> data(kRows, 42);
+  data[20] = 7;
+  data[80] = 13;
+  data[120] = 19;
+  data[180] = 53;
+
+  auto input = makeRowVector({makeFlatVector<int64_t>(data)});
+  auto rowType = asRowType(input->type());
+  auto context = makeFileContext(input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(10, 50, false));
+  auto root = buildReader(*context, rowType, *scanSpec);
+
+  auto* structReader =
+      dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(root.get());
+  auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+      dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+  ASSERT_NE(reader, nullptr);
+
+  std::vector<vector_size_t> rowNumbers(kRows);
+  std::iota(rowNumbers.begin(), rowNumbers.end(), 0);
+  RowSet rows(rowNumbers.data(), rowNumbers.size());
+  reader->doPrepareRead<int64_t>(0, rows, nullptr);
+
+  Buffer buffer(*pool());
+  const EncodingLayout layout{
+      EncodingType::MainlyConstantV2,
+      {},
+      CompressionType::Uncompressed,
+      {TrivialEnc{}, TrivialEnc{}}};
+  auto encoding =
+      createFromCustomLayout<int64_t>(layout, data, *pool(), buffer);
+
+  common::BigintRange filter(10, 50, false);
+  dwio::common::ExtractToReader extractValues(reader);
+  constexpr bool kIsDense = true;
+  DecoderVisitor<
+      int64_t,
+      common::BigintRange,
+      dwio::common::ExtractToReader,
+      kIsDense>
+      visitor(filter, reader, rows, extractValues);
+  auto params = makeReadWithVisitorParams(visitor, rows, pool());
+
+  dispatchCallReadWithVisitor(*encoding, visitor, params);
+
+  EXPECT_EQ(reader->numValues(), kRows - 2);
+  const auto values = getValues<int64_t>(reader);
+  EXPECT_EQ(values[79], 13);
+  EXPECT_EQ(values[119], 19);
+}
+
 // ---------------------------------------------------------------------------
 // 8. MainlyConstantEncoding
 // 8. MainlyConstantEncoding<int64_t> + AlwaysTrue + dense + SLOW PATH

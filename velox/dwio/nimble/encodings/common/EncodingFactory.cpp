@@ -30,6 +30,7 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/MainlyConstantV2Encoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
@@ -128,6 +129,9 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     }
     case EncodingType::MainlyConstant: {
       RETURN_ENCODING_BY_NON_BOOL_TYPE(MainlyConstantEncoding, dataType);
+    }
+    case EncodingType::MainlyConstantV2: {
+      RETURN_ENCODING_BY_NUMERIC_TYPE(MainlyConstantV2Encoding, dataType);
     }
     case EncodingType::Prefix: {
       NIMBLE_CHECK_EQ(
@@ -365,6 +369,14 @@ std::string_view EncodingFactory::encode(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "MainlyConstant encoding should not be selected for bool data types.");
+    }
+    case EncodingType::MainlyConstantV2: {
+      if constexpr (isNumericType<physicalType>() && !isBoolType<T>()) {
+        return MainlyConstantV2Encoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "MainlyConstantV2 encoding should not be selected for non-numeric or bool data types.");
     }
     case EncodingType::SparseBool: {
       if constexpr (std::is_same<T, bool>::value) {

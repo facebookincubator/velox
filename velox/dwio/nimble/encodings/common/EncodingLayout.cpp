@@ -307,6 +307,35 @@ EncodingLayout EncodingLayoutCapture::capture(
           EncodingLayoutCapture::capture({pos, otherValuesBytes}, options));
       break;
     }
+    case EncodingType::MainlyConstantV2: {
+      children.reserve(2);
+
+      NIMBLE_CHECK_FILE(
+          encoding.size() >= prefixSize, "Truncated MainlyConstantV2 prefix.");
+      const char* cursor = encoding.data() + prefixSize;
+      const char* const end = encoding.end();
+      const auto dataType =
+          encoding::peek<uint8_t, DataType>(encoding.data() + 1);
+      NIMBLE_CHECK_FILE(
+          static_cast<size_t>(end - cursor) >=
+              detail::dataTypeSize(dataType) + sizeof(uint32_t),
+          "Truncated MainlyConstantV2 layout header.");
+      cursor += detail::dataTypeSize(dataType);
+
+      const uint32_t exceptionPositionsBytes = encoding::readUint32(cursor);
+      NIMBLE_CHECK_FILE(
+          static_cast<size_t>(end - cursor) >=
+              static_cast<size_t>(exceptionPositionsBytes) + sizeof(uint32_t),
+          "Truncated MainlyConstantV2 positions child.");
+      captureChild(children, cursor, exceptionPositionsBytes, options);
+
+      const uint32_t exceptionValuesBytes = encoding::readUint32(cursor);
+      NIMBLE_CHECK_FILE(
+          static_cast<size_t>(end - cursor) == exceptionValuesBytes,
+          "Invalid MainlyConstantV2 values child size.");
+      captureChild(children, cursor, exceptionValuesBytes, options);
+      break;
+    }
     case EncodingType::Dictionary: {
       children.reserve(2);
       const char* pos = encoding.data() + prefixSize;

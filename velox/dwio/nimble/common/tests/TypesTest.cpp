@@ -40,6 +40,7 @@ TEST(TypesTest, encodingTypeStringConversion) {
       {EncodingType::Delta, "Delta"},
       {EncodingType::Constant, "Constant"},
       {EncodingType::MainlyConstant, "MainlyConstant"},
+      {EncodingType::MainlyConstantV2, "MainlyConstantV2"},
       {EncodingType::Prefix, "Prefix"},
       {EncodingType::ALP, "ALP"},
       {EncodingType::PFOR, "PFOR"},
