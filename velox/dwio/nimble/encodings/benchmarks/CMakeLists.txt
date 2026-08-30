@@ -236,6 +236,20 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_memory
     Folly::folly
   )
+
+  # Public-API-only ALP driver used to A/B the branch against a pre-branch main
+  # baseline. Uses only EncodingFactory::encode + ManualEncodingSelectionPolicy
+  # so the same source compiles on either tree.
+  add_executable(nimble_alp_baseline_vs_branch_benchmark ALPBaselineVsBranchBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_alp_baseline_vs_branch_benchmark
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    velox_memory
+    Folly::folly
+  )
 endif()
 
 if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
