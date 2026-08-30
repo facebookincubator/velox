@@ -189,6 +189,8 @@ int main(int argc, char** argv) {
           {"tdigest_agg", std::make_shared<TDigestAggregateResultVerifier>()},
           {"qdigest_agg", std::make_shared<QDigestAggResultVerifier>()},
           {"khyperloglog_agg", std::make_shared<KHyperLogLogResultVerifier>()},
+          {"khyperloglog_agg_java_compat",
+           std::make_shared<KHyperLogLogResultVerifier>()},
           {"merge", nullptr},
           // Semantically inconsistent functions
           {"skewness", nullptr},

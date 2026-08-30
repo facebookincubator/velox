@@ -708,3 +708,151 @@ TEST_F(KHyperLogLogTest, differentJoinKeyUIITypes) {
     EXPECT_EQ(outputBuffer, reserializeBuffer);
   }
 }
+
+// Presto's KHyperLogLog aggregation pre-hashes a varchar uii with XxHash64 and
+// adds the resulting long to the HLL. That makes these two equivalent on
+// Presto Java, which this test pins:
+//
+//   KHYPERLOGLOG_AGG(k, v)
+//     == KHYPERLOGLOG_AGG(k, FROM_BIG_ENDIAN_64(XXHASH64(CAST(v AS
+//     VARBINARY))))
+//
+// Adding the raw bytes to the HLL instead produces sketches that are binary
+// incompatible with Java.
+TEST_F(KHyperLogLogTest, varcharUiiMatchesXxHash64PreHash) {
+  const std::vector<std::string> uiis = {
+      "abc",
+      "",
+      "a much longer identifier value 1234567890",
+      // Non-ASCII, so the tail bytes exercise the >= 0x80 range as well.
+      "\xc3\xa9\xc3\xa8\xc3\xaa",
+  };
+
+  auto stringKhll =
+      std::make_unique<KHyperLogLog<StringView, HashStringAllocator>>(
+          allocator_, /*javaCompat=*/true);
+  auto longKhll = std::make_unique<KHyperLogLog<int64_t, HashStringAllocator>>(
+      allocator_, /*javaCompat=*/true);
+
+  for (size_t i = 0; i < uiis.size(); ++i) {
+    const auto key = static_cast<int64_t>(i);
+    stringKhll->add(key, StringView(uiis[i]));
+    longKhll->add(
+        key, static_cast<int64_t>(XXH64(uiis[i].data(), uiis[i].size(), 0)));
+  }
+
+  ASSERT_EQ(
+      stringKhll->estimatedSerializedSize(),
+      longKhll->estimatedSerializedSize());
+  std::string fromString(stringKhll->estimatedSerializedSize(), '\0');
+  std::string fromLong(longKhll->estimatedSerializedSize(), '\0');
+  stringKhll->serialize(fromString.data());
+  longKhll->serialize(fromLong.data());
+  EXPECT_EQ(fromString, fromLong);
+}
+
+// KHyperLogLog.add(Slice, long) hashes the varchar join key ONCE, whereas the
+// numeric overloads route their value through the dedicated long hash. Hashing
+// a varchar key twice silently changes the retained MinHash key set, which is
+// exactly what INTERSECTION_CARDINALITY and JACCARD_INDEX read.
+TEST_F(KHyperLogLogTest, varcharKeyIsHashedOnce) {
+  const std::vector<std::string> keys = {
+      "",
+      "abc",
+      "0123456789",
+      "a much longer join key value 1234567890",
+      "\xc3\xa9\xc3\xa8\xc3\xaa",
+  };
+
+  for (const auto& key : keys) {
+    const auto size = static_cast<int32_t>(key.size());
+    EXPECT_EQ(
+        common::hll::detail::hashKey(StringView(key), /*javaCompat=*/true),
+        Murmur3Hash128::hash64JavaCompat(key.data(), size, 0))
+        << "key: " << key;
+
+    const int64_t legacyInner = Murmur3Hash128::hash64(key.data(), size, 0);
+    EXPECT_EQ(
+        common::hll::detail::hashKey(StringView(key), /*javaCompat=*/false),
+        Murmur3Hash128::hash64(&legacyInner, sizeof(legacyInner), 0))
+        << "key: " << key;
+  }
+}
+
+TEST_F(KHyperLogLogTest, numericKeyUsesLongHash) {
+  for (const int64_t value :
+       {int64_t{0}, int64_t{1}, int64_t{-1}, int64_t{128}, int64_t{1} << 40}) {
+    EXPECT_EQ(
+        common::hll::detail::hashKey(value, /*javaCompat=*/true),
+        Murmur3Hash128::hash64ForLong(value, 0))
+        << "value: " << value;
+  }
+
+  const double dbl = 1.5;
+  int64_t bits;
+  std::memcpy(&bits, &dbl, sizeof(bits));
+  EXPECT_EQ(
+      common::hll::detail::hashKey(dbl, /*javaCompat=*/true),
+      Murmur3Hash128::hash64ForLong(bits, 0));
+}
+
+// Presto Java carries a REAL as its Float.floatToIntBits() pattern and feeds it
+// to the long overload sign extended -- it is NOT widened to DOUBLE. Widening
+// selects different MinHash keys, so a REAL-keyed sketch stops being byte
+// compatible with Java while every other type still matches. A cross-engine
+// type sweep caught this; these cases pin both hash paths.
+TEST_F(KHyperLogLogTest, realUsesFloatBitsNotDoubleBits) {
+  for (const float value : {0.0f, 1.0f, 2.0f, -1.0f, -2.0f, 1.5f, -3.25f}) {
+    int32_t floatBits;
+    std::memcpy(&floatBits, &value, sizeof(floatBits));
+    const int64_t expected = static_cast<int64_t>(floatBits);
+
+    EXPECT_EQ(
+        common::hll::detail::hashKey(value, /*javaCompat=*/true),
+        Murmur3Hash128::hash64ForLong(expected, 0))
+        << "value: " << value;
+
+    // The double-bits form is what the buggy version produced; assert we are
+    // not that, so a regression cannot pass silently on positive values alone.
+    const double widened = static_cast<double>(value);
+    int64_t doubleBits;
+    std::memcpy(&doubleBits, &widened, sizeof(doubleBits));
+    if (doubleBits != expected) {
+      EXPECT_NE(
+          common::hll::detail::hashKey(value, /*javaCompat=*/true),
+          Murmur3Hash128::hash64ForLong(doubleBits, 0))
+          << "value: " << value;
+    }
+  }
+}
+
+// The default (non javaCompat) accumulator must keep its historical hashing so
+// that sketches already persisted by khyperloglog_agg stay reproducible. Under
+// it the varchar-uii identity above does NOT hold.
+TEST_F(KHyperLogLogTest, legacyUiiHashingIsUnchanged) {
+  const std::string uii = "abc";
+
+  auto legacy = std::make_unique<KHyperLogLog<StringView, HashStringAllocator>>(
+      allocator_);
+  auto javaCompat =
+      std::make_unique<KHyperLogLog<StringView, HashStringAllocator>>(
+          allocator_, /*javaCompat=*/true);
+  legacy->add(int64_t{1}, StringView(uii));
+  javaCompat->add(int64_t{1}, StringView(uii));
+
+  std::string legacyBuf(legacy->estimatedSerializedSize(), '\0');
+  std::string javaCompatBuf(javaCompat->estimatedSerializedSize(), '\0');
+  legacy->serialize(legacyBuf.data());
+  javaCompat->serialize(javaCompatBuf.data());
+  EXPECT_NE(legacyBuf, javaCompatBuf);
+
+  // Two default-constructed accumulators fed the same input must still agree,
+  // i.e. the legacy path is deterministic and untouched.
+  auto legacyAgain =
+      std::make_unique<KHyperLogLog<StringView, HashStringAllocator>>(
+          allocator_);
+  legacyAgain->add(int64_t{1}, StringView(uii));
+  std::string legacyAgainBuf(legacyAgain->estimatedSerializedSize(), '\0');
+  legacyAgain->serialize(legacyAgainBuf.data());
+  EXPECT_EQ(legacyBuf, legacyAgainBuf);
+}
