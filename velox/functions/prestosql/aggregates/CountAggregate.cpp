@@ -42,6 +42,12 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       VectorPtr& result) const override {
+    if (rows.isAllSelected() && (args.empty() || !args[0]->mayHaveNulls())) {
+      result = BaseVector::createConstant(
+          BIGINT(), int64_t{1}, rows.size(), allocator_->pool());
+      return;
+    }
+
     auto* vector = result->asFlatVector<int64_t>();
     vector->clearAllNulls();
     auto* rawValues = vector->mutableRawValues();
