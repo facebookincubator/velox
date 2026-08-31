@@ -365,7 +365,7 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
   std::vector<RowVectorPtr> data;
   for (auto batch = 0; batch < 3; ++batch) {
     data.push_back(makeRowVector(
-        {"k", "i", "d", "m"},
+        {"k", "i", "d", "b", "v", "m"},
         {makeFlatVector<int64_t>(
              kBatchSize, [&](auto row) { return batch * kBatchSize + row; }),
          makeFlatVector<int32_t>(
@@ -376,6 +376,8 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
              kBatchSize,
              folly::identity,
              [](auto row) { return row % 7 == 0; }),
+         makeFlatVector<int64_t>(kBatchSize, folly::identity),
+         makeFlatVector<double>(kBatchSize, folly::identity),
          makeFlatVector<bool>(
              kBatchSize, [](auto row) { return row % 3 != 0; })}));
   }
@@ -407,6 +409,28 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
   EXPECT_GT(
       stats.at(partialNodeId).customStats.at("toIntermediateFastPathCalls").sum,
       0);
+
+  // Exercise the all-selected, non-null fast paths for different and matching
+  // input and accumulator types, respectively.
+  core::PlanNodeId fastPartialNodeId;
+  plan = PlanBuilder()
+             .values(data)
+             .partialAggregation({"k"}, {"spark_avg(b)", "spark_avg(v)"})
+             .capturePlanNodeId(fastPartialNodeId)
+             .finalAggregation()
+             .planNode();
+  task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+             .maxDrivers(1)
+             .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
+             .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+             .assertResults("SELECT k, avg(b), avg(v) FROM tmp GROUP BY k");
+
+  const auto fastStats = exec::toPlanStats(task->taskStats());
+  EXPECT_GE(
+      fastStats.at(fastPartialNodeId)
+          .customStats.at("toIntermediateFastPathCalls")
+          .sum,
+      2);
 }
 
 } // namespace
