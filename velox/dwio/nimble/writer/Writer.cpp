@@ -90,13 +90,6 @@ class WriterContext : public FieldWriterContext {
     ignoreTopLevelNulls_ = options_.ignoreTopLevelNulls;
     disableSharedStringBuffers_ = options_.disableSharedStringBuffers;
     maxFlatMapKeys_ = options_.maxFlatMapKeys;
-    if (this->options_.encodingExecutor &&
-        this->options_.maxEncodeParallelism > 0) {
-      setParallelEncoding(
-          this->options_.encodingExecutor.get(),
-          this->options_.maxEncodeParallelism,
-          this->options_.minStreamsPerEncodeUnit);
-    }
   }
 
   const WriterOptions& options() const {
@@ -2593,6 +2586,7 @@ void Writer::reportRuntimeStats() const {
   reportNanos(Keys::kWriteCpuNanos);
   reportNanos(Keys::kWriteWallNanos);
   reportNanos(Keys::kIngestionCpuNanos);
+  reportNanos(Keys::kIngestionWallNanos);
   reportNanos(Keys::kEncodingSelectionCpuNanos);
 
   // Distributions are published whole, so they replace rather than accumulate.
@@ -2642,15 +2636,19 @@ std::unique_ptr<EncodingBufferPool> Writer::makeEncodingBufferPool() const {
       encodingMemoryPool_.get(), maxCachedBuffers);
 }
 
-uint32_t Writer::encodingConcurrency(uint32_t taskCount) const {
-  if (taskCount == 0) {
+uint32_t Writer::encodingConcurrency(uint32_t streamCount) const {
+  if (streamCount == 0) {
     return 0;
   }
   const auto& options = context_->options();
   if (!options.encodingExecutor || options.maxEncodeParallelism == 0) {
     return 1;
   }
-  return std::min(taskCount, options.maxEncodeParallelism);
+  const auto minStreamsPerEncodingTask =
+      std::max(1u, options.minStreamsPerEncodingTask);
+  const auto maxByStreams =
+      std::max(1u, streamCount / minStreamsPerEncodingTask);
+  return std::min({streamCount, options.maxEncodeParallelism, maxByStreams});
 }
 
 void Writer::ensureEncodingScratchBufferPools(uint32_t poolCount) {
@@ -2741,37 +2739,43 @@ void Writer::writeStreams() {
       NIMBLE_CHECK(
           encodingExecutor,
           "Encoding executor is required for parallel encoding.");
-      for (uint32_t start = 0; start < streamCount; start += concurrency) {
-        velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
-        const auto batchSize = std::min(concurrency, streamCount - start);
-        for (uint32_t index = 0; index < batchSize; ++index) {
-          auto& [nodeId, streamData] = streams[start + index];
-          auto* encodingScratchBufferPool =
-              this->encodingScratchBufferPool(index);
-          auto* encodingBufferPool = this->encodingBufferPool(index);
-          barrier.add([&,
-                       statsCollector = context_->getStatsCollector(nodeId),
-                       _streamData = streamData.get(),
-                       encodingScratchBufferPool,
-                       encodingBufferPool]() {
-            uint64_t startCpuNs = velox::process::threadCpuNanos();
-            uint64_t streamSize{0};
-            processStream(
-                *_streamData,
-                encodingScratchBufferPool,
-                encodingBufferPool,
-                streamSize,
-                chunkSize);
-            if (statsCollector) {
-              statsCollector->addPhysicalSize(streamSize);
-            }
-            encodingCpuNanos.fetch_add(
-                velox::process::threadCpuNanos() - startCpuNs,
-                std::memory_order_relaxed);
-          });
-        }
-        barrier.waitAll();
+      std::atomic_uint32_t nextStream{0};
+      velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
+      for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
+        auto* encodingScratchBufferPool =
+            this->encodingScratchBufferPool(taskId);
+        auto* encodingBufferPool = this->encodingBufferPool(taskId);
+        barrier.add(
+            [&, taskId, encodingScratchBufferPool, encodingBufferPool]() {
+              velox::common::testutil::TestValue::adjust(
+                  "facebook::nimble::Writer::parallelEncodeTask",
+                  const_cast<uint32_t*>(&taskId));
+              const auto startCpuNanos = velox::process::threadCpuNanos();
+              while (true) {
+                const auto streamIndex =
+                    nextStream.fetch_add(1, std::memory_order_relaxed);
+                if (streamIndex >= streamCount) {
+                  break;
+                }
+                auto& [nodeId, streamData] = streams[streamIndex];
+                uint64_t streamSize{0};
+                processStream(
+                    *streamData,
+                    encodingScratchBufferPool,
+                    encodingBufferPool,
+                    streamSize,
+                    chunkSize);
+                auto* statsCollector = context_->getStatsCollector(nodeId);
+                if (statsCollector) {
+                  statsCollector->addPhysicalSize(streamSize);
+                }
+              }
+              encodingCpuNanos.fetch_add(
+                  velox::process::threadCpuNanos() - startCpuNanos,
+                  std::memory_order_relaxed);
+            });
       }
+      barrier.waitAll();
     } else {
       auto* encodingScratchBufferPool = this->encodingScratchBufferPool();
       auto* encodingBufferPool = this->encodingBufferPool();
@@ -2974,31 +2978,33 @@ bool Writer::writeChunks(
       NIMBLE_CHECK(
           encodingExecutor,
           "Encoding executor is required for parallel encoding.");
-      for (uint32_t start = 0; start < streamCount; start += concurrency) {
-        velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
-        const auto batchSize = std::min(concurrency, streamCount - start);
-        for (uint32_t index = 0; index < batchSize; ++index) {
-          const auto streamIndex = streamIndices[start + index];
-          auto& [nodeId, streamData] = streams[streamIndex];
-          const auto offset = streamData->descriptor().offset();
-          auto* encodedStream = &encodedStreams_[offset];
-          auto* encodingScratchBufferPool =
-              this->encodingScratchBufferPool(index);
-          auto* encodingBufferPool = this->encodingBufferPool(index);
-          barrier.add([&,
-                       streamDataPtr = streamData.get(),
-                       encodedStream,
-                       encodingScratchBufferPool,
-                       encodingBufferPool,
-                       statsCollector = context_->getStatsCollector(nodeId)] {
-            uint64_t startCpuNs = velox::process::threadCpuNanos();
-            uint64_t streamSize = 0;
+      std::atomic_uint32_t nextStream{0};
+      velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
+      for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
+        auto* encodingScratchBufferPool =
+            this->encodingScratchBufferPool(taskId);
+        auto* encodingBufferPool = this->encodingBufferPool(taskId);
+        barrier.add([&, taskId, encodingScratchBufferPool, encodingBufferPool] {
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTask",
+              const_cast<uint32_t*>(&taskId));
+          const auto startCpuNanos = velox::process::threadCpuNanos();
+          while (true) {
+            const auto inputIndex =
+                nextStream.fetch_add(1, std::memory_order_relaxed);
+            if (inputIndex >= streamCount) {
+              break;
+            }
+            const auto streamIndex = streamIndices[inputIndex];
+            auto& [nodeId, streamData] = streams[streamIndex];
+            const auto offset = streamData->descriptor().offset();
+            uint64_t streamSize{0};
             if (encodeStreamChunk(
-                    *streamDataPtr,
+                    *streamData,
                     minChunkSize,
                     maxChunkSize,
                     ensureFullChunks,
-                    *encodedStream,
+                    encodedStreams_[offset],
                     encodingScratchBufferPool,
                     encodingBufferPool,
                     streamSize,
@@ -3006,16 +3012,17 @@ bool Writer::writeChunks(
                     logicalBytes)) {
               writtenChunk = true;
             }
+            auto* statsCollector = context_->getStatsCollector(nodeId);
             if (statsCollector) {
               statsCollector->addPhysicalSize(streamSize);
             }
-            encodingCpuNanos.fetch_add(
-                velox::process::threadCpuNanos() - startCpuNs,
-                std::memory_order_relaxed);
-          });
-        }
-        barrier.waitAll();
+          }
+          encodingCpuNanos.fetch_add(
+              velox::process::threadCpuNanos() - startCpuNanos,
+              std::memory_order_relaxed);
+        });
       }
+      barrier.waitAll();
     } else {
       auto* encodingScratchBufferPool = this->encodingScratchBufferPool();
       auto* encodingBufferPool = this->encodingBufferPool();
@@ -3236,6 +3243,8 @@ folly::F14FastMap<std::string, velox::RuntimeMetric> Writer::runtimeStats()
        nanosMetric(context_->writeTiming().wallNanos)},
       {std::string{Keys::kIngestionCpuNanos},
        nanosMetric(context_->ingestionTiming().cpuNanos)},
+      {std::string{Keys::kIngestionWallNanos},
+       nanosMetric(context_->ingestionTiming().wallNanos)},
       {std::string{Keys::kEncodingCpuNanos},
        nanosMetric(context_->encodingTiming().cpuNanos)},
       {std::string{Keys::kEncodingWallNanos},
