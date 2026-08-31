@@ -240,6 +240,82 @@ non-bucketed partition table.</p></td>
 </tr>
 </tbody>
 </table>
+<section id="nimble-writer">
+<h3>Nimble Writer<a class="headerlink" href="#nimble-writer" title="Link to this heading">¶</a></h3>
+<p>These stats are reported by TableWriter when writing Nimble files. Encoding
+CPU time is summed across encoding worker threads and can exceed the
+corresponding wall time when parallel encoding is enabled.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 40.0%" />
+<col style="width: 20.0%" />
+<col style="width: 40.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Stats</p></th>
+<th class="head"><p>Unit</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>nimble.writtenBytes</p></td>
+<td><p>bytes</p></td>
+<td><p>Total number of bytes written to the Nimble file.</p></td>
+</tr>
+<tr class="row-odd"><td><p>nimble.inputBytes</p></td>
+<td><p>bytes</p></td>
+<td><p>Uncompressed size of the input written to the Nimble file.</p></td>
+</tr>
+<tr class="row-even"><td><p>nimble.writeCpuNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>CPU time spent writing encoded stripes through the tablet writer.</p></td>
+</tr>
+<tr class="row-odd"><td><p>nimble.writeWallNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>Wall time spent writing encoded stripes through the tablet writer.</p></td>
+</tr>
+<tr class="row-even"><td><p>nimble.ingestionCpuNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>CPU time spent ingesting input vectors into field-writer buffers.</p></td>
+</tr>
+<tr class="row-odd"><td><p>nimble.ingestionWallNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>Wall time spent ingesting input vectors into field-writer buffers.</p></td>
+</tr>
+<tr class="row-even"><td><p>nimble.encodingCpuNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>CPU time spent encoding and compressing streams, summed across all
+encoding worker threads.</p></td>
+</tr>
+<tr class="row-odd"><td><p>nimble.encodingWallNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>Wall time spent encoding and compressing streams.</p></td>
+</tr>
+<tr class="row-even"><td><p>nimble.encodingSelectionCpuNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>CPU time spent selecting encodings. This is a subset of
+<code class="docutils literal notranslate"><span class="pre">nimble.encodingCpuNanos</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p>nimble.rowsPerStripe</p></td>
+<td></td>
+<td><p>Distribution of row counts per stripe. The metric count is the number
+of stripes written.</p></td>
+</tr>
+<tr class="row-even"><td><p>nimble.chunkSizeBytes</p></td>
+<td><p>bytes</p></td>
+<td><p>Distribution of encoded chunk sizes.</p></td>
+</tr>
+<tr class="row-odd"><td><p>nimble.duplicateStreamCount</p></td>
+<td></td>
+<td><p>Number of streams deduplicated by the tablet writer.</p></td>
+</tr>
+<tr class="row-even"><td><p>nimble.duplicateStreamBytes</p></td>
+<td><p>bytes</p></td>
+<td><p>Number of encoded bytes deduplicated by the tablet writer.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
 </section>
 <section id="lookupindexjoin">
 <h2>LookupIndexJoin<a class="headerlink" href="#lookupindexjoin" title="Link to this heading">¶</a></h2>
@@ -827,7 +903,10 @@ and by column.</p></td>
 <li><a class="reference internal" href="#memory-arbitration">Memory Arbitration</a></li>
 <li><a class="reference internal" href="#hashbuild-hashaggregation">HashBuild, HashAggregation</a></li>
 <li><a class="reference internal" href="#tablescan">TableScan</a></li>
-<li><a class="reference internal" href="#tablewriter">TableWriter</a></li>
+<li><a class="reference internal" href="#tablewriter">TableWriter</a><ul>
+<li><a class="reference internal" href="#nimble-writer">Nimble Writer</a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#lookupindexjoin">LookupIndexJoin</a></li>
 <li><a class="reference internal" href="#merge">Merge</a></li>
 <li><a class="reference internal" href="#spilling">Spilling</a></li>
