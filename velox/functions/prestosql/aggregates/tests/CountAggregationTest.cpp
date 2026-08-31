@@ -393,7 +393,7 @@ TEST_F(CountAggregationTest, unknownType) {
       }));
 }
 
-DEBUG_ONLY_TEST_F(CountAggregationTest, toIntermediate) {
+TEST_F(CountAggregationTest, toIntermediate) {
   constexpr vector_size_t kBatchSize = 10;
   std::vector<RowVectorPtr> data;
   for (auto batch = 0; batch < 2; ++batch) {
@@ -405,11 +405,6 @@ DEBUG_ONLY_TEST_F(CountAggregationTest, toIntermediate) {
   }
   createDuckDbTable(data);
 
-  std::atomic_bool usedToIntermediateFastPath{false};
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::Aggregate::toIntermediate",
-      std::function<void(void*)>(
-          [&](void*) { usedToIntermediateFastPath = true; }));
   core::PlanNodeId partialNodeId;
   auto plan = PlanBuilder()
                   .values(data)
@@ -430,7 +425,9 @@ DEBUG_ONLY_TEST_F(CountAggregationTest, toIntermediate) {
       stats.at(partialNodeId)
           .customStats.at("abandonedPartialAggregationRows")
           .sum);
-  EXPECT_TRUE(usedToIntermediateFastPath);
+  EXPECT_GT(
+      stats.at(partialNodeId).customStats.at("toIntermediateFastPathCalls").sum,
+      0);
 }
 
 } // namespace
