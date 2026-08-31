@@ -15,6 +15,8 @@
  */
 
 #include "velox/exec/AggregateUtil.h"
+#include "velox/exec/HashAggregation.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -630,6 +632,66 @@ TEST_F(SumAggregationTest, sumFloat) {
       {},
       {"spark_sum(c0)"},
       "SELECT sum(c0) FROM tmp");
+}
+
+TEST_F(SumAggregationTest, abandonedPartialAggregation) {
+  std::vector<RowVectorPtr> batches;
+  constexpr int32_t numBatches = 20;
+  constexpr int32_t rowsPerBatch = 100;
+  batches.reserve(numBatches);
+  std::vector<int64_t> expectedKeys;
+  std::vector<int64_t> expectedBigintSums;
+  std::vector<double> expectedDoubleSums;
+  expectedKeys.reserve(numBatches * rowsPerBatch);
+  expectedBigintSums.reserve(numBatches * rowsPerBatch);
+  expectedDoubleSums.reserve(numBatches * rowsPerBatch);
+
+  for (int32_t batch = 0; batch < numBatches; ++batch) {
+    for (int32_t row = 0; row < rowsPerBatch; ++row) {
+      expectedKeys.push_back(batch * rowsPerBatch + row);
+      expectedBigintSums.push_back(row + 1);
+      expectedDoubleSums.push_back(row + 0.25);
+    }
+    batches.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(
+             rowsPerBatch,
+             [&](auto row) { return batch * rowsPerBatch + row; }),
+         makeFlatVector<int64_t>(
+             rowsPerBatch, [&](auto row) { return row + 1; }),
+         makeFlatVector<double>(
+             rowsPerBatch, [&](auto row) { return row + 0.25; })}));
+  }
+
+  core::PlanNodeId partialNodeId;
+  auto plan =
+      PlanBuilder()
+          .values(batches)
+          .partialAggregation({"c0"}, {"spark_sum(c1)", "spark_sum(c2)"})
+          .capturePlanNodeId(partialNodeId)
+          .planNode();
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int64_t>(expectedKeys),
+       makeFlatVector<int64_t>(expectedBigintSums),
+       makeFlatVector<double>(expectedDoubleSums)});
+
+  auto task =
+      AssertQueryBuilder(plan)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kMaxPartialAggregationMemory, 4096)
+          .config(
+              core::QueryConfig::kMaxExtendedPartialAggregationMemory, 4096)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
+          .assertResults(expected);
+
+  ASSERT_GT(
+      exec::toPlanStats(task->taskStats())
+          .at(partialNodeId)
+          .customStats
+          .at(std::string(exec::HashAggregation::kAbandonedPartialAggregationRows))
+          .sum,
+      0);
 }
 
 // Spark executes aggregates using a mix of partial, intermediate, and final

@@ -24,7 +24,23 @@ namespace facebook::velox::functions::aggregate::sparksql {
 
 namespace {
 template <typename TInput, typename TAccumulator, typename ResultType>
-using SumAggregate = SumAggregateBase<TInput, TAccumulator, ResultType, true>;
+class SumAggregate : public SumAggregateBase<TInput, TAccumulator, ResultType, true> {
+ public:
+  explicit SumAggregate(TypePtr resultType)
+      : SumAggregateBase<TInput, TAccumulator, ResultType, true>(
+            std::move(resultType)) {}
+
+  bool supportsToIntermediate() const override {
+    return true;
+  }
+
+  void toIntermediate(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      VectorPtr& result) const override {
+    this->singleInputAsIntermediate(rows, args, result);
+  }
+};
 
 TypePtr getDecimalSumType(const TypePtr& resultType) {
   if (resultType->isRow()) {
