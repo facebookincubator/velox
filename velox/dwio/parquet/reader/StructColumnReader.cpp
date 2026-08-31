@@ -115,14 +115,7 @@ void StructColumnReader::read(
     int64_t offset,
     const RowSet& rows,
     const uint64_t* /*incomingNulls*/) {
-  ensureRepDefs(*this, offset + rows.back() + 1 - readOffset_);
-  if (offset > readOffset_) {
-    // There is no page reader on this level so cannot call skipNullsOnly on it.
-    if (fileType().parent() && !fileType().parent()->parent()) {
-      skip(offset - readOffset_);
-    }
-    readOffset_ = offset;
-  }
+  prepareRepDefsAndOffset(*this, offset, rows);
   SelectiveStructColumnReader::read(offset, rows, nullptr);
 }
 
