@@ -525,8 +525,35 @@ TEST_F(DateTimeFunctionsTest, makeDate) {
 
   EXPECT_EQ(makeDate(kMax, 12, 15), std::nullopt);
 
+  // Day-count overflow always throws, not gated by ANSI.
   constexpr const int32_t kJodaMaxYear{292278994};
-  EXPECT_EQ(makeDate(kJodaMaxYear - 10, 12, 15), std::nullopt);
+  VELOX_ASSERT_USER_THROW(
+      makeDate(kJodaMaxYear - 10, 12, 15),
+      fmt::format("Date out of range: {}-12-15", kJodaMaxYear - 10));
+
+  // Year within +-999999999 but outside the supported date range:
+  // unconditional day-count overflow.
+  VELOX_ASSERT_USER_THROW(
+      makeDate(300'000'000, 1, 1), "Date out of range: 300000000-1-1");
+  VELOX_ASSERT_USER_THROW(
+      makeDate(-300'000'000, 1, 1), "Date out of range: -300000000-1-1");
+  // Leap year by the Gregorian rule, so Feb 29 is otherwise calendar-valid:
+  // still unconditional day-count overflow.
+  VELOX_ASSERT_USER_THROW(
+      makeDate(300'000'000, 2, 29), "Date out of range: 300000000-2-29");
+  // Year beyond +-999999999: ANSI-gated like invalid month/day.
+  EXPECT_EQ(makeDate(1'000'000'000, 1, 1), std::nullopt);
+  // Not a leap year, so Feb 29 is calendar-invalid: ANSI-gated even for a
+  // year this large.
+  EXPECT_EQ(makeDate(300'000'001, 2, 29), std::nullopt);
+
+  // INTEGER day-count boundary.
+  EXPECT_EQ(makeDate(5'881'580, 7, 11), kMax);
+  VELOX_ASSERT_USER_THROW(
+      makeDate(5'881'580, 7, 12), "Date out of range: 5881580-7-12");
+  EXPECT_EQ(makeDate(-5'877'641, 6, 23), kMin);
+  VELOX_ASSERT_USER_THROW(
+      makeDate(-5'877'641, 6, 22), "Date out of range: -5877641-6-22");
 
   EXPECT_EQ(makeDate(2021, 13, 1), std::nullopt);
   EXPECT_EQ(makeDate(2022, 3, 35), std::nullopt);
@@ -536,6 +563,46 @@ TEST_F(DateTimeFunctionsTest, makeDate) {
 
   EXPECT_EQ(makeDate(2023, 2, 29), std::nullopt);
   EXPECT_EQ(makeDate(2023, 3, 29), parseDate("2023-03-29"));
+
+  // Under ANSI mode, invalid inputs throw instead of returning NULL.
+  enableAnsiMode();
+  EXPECT_EQ(makeDate(2023, 3, 31), parseDate("2023-03-31"));
+  VELOX_ASSERT_USER_THROW(
+      makeDate(kMax, 12, 15), "Date out of range: 2147483647-12-15");
+  VELOX_ASSERT_USER_THROW(
+      makeDate(kJodaMaxYear - 10, 12, 15),
+      fmt::format("Date out of range: {}-12-15", kJodaMaxYear - 10));
+  VELOX_ASSERT_USER_THROW(
+      makeDate(2021, 13, 1), "Date out of range: 2021-13-1");
+  VELOX_ASSERT_USER_THROW(
+      makeDate(2022, 3, 35), "Date out of range: 2022-3-35");
+  VELOX_ASSERT_USER_THROW(
+      makeDate(2023, 4, 31), "Date out of range: 2023-4-31");
+  VELOX_ASSERT_USER_THROW(
+      makeDate(2023, 2, 29), "Date out of range: 2023-2-29");
+  VELOX_ASSERT_USER_THROW(
+      makeDate(300'000'001, 2, 29), "Date out of range: 300000001-2-29");
+}
+
+TEST_F(DateTimeFunctionsTest, tryMakeDateAnsi) {
+  enableAnsiMode();
+
+  // The generic TRY special form swallows the ANSI error and returns NULL,
+  // regardless of the ANSI setting.
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "try(make_date(c0, c1, c2))",
+          std::optional<int32_t>(2021),
+          std::optional<int32_t>(13),
+          std::optional<int32_t>(1)),
+      std::nullopt);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "try(make_date(c0, c1, c2))",
+          std::optional<int32_t>(2023),
+          std::optional<int32_t>(3),
+          std::optional<int32_t>(31)),
+      parseDate("2023-03-31"));
 }
 
 TEST_F(DateTimeFunctionsTest, lastDay) {
