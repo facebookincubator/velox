@@ -20,6 +20,7 @@
 
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
+#include "velox/functions/sparksql/AnsiMode.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/TimestampConversion.h"
@@ -163,14 +164,15 @@ struct UnixTimestampParseFunction {
     VELOX_CHECK(!formatter.hasError(), "Default format should always be valid");
     format_ = formatter.value();
     setTimezone(config);
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
 
   FOLLY_ALWAYS_INLINE bool call(
       int64_t& result,
       const arg_type<Varchar>& input) {
     auto dateTimeResult = format_->parse(std::string_view(input));
-    // Return null if could not parse.
     if (dateTimeResult.hasError()) {
+      ansiUserFail(ansiEnabled_, "{}", dateTimeResult.error().message());
       return false;
     }
     toGMTWithGapCorrection(
@@ -196,6 +198,7 @@ struct UnixTimestampParseFunction {
   constexpr static std::string_view kDefaultFormat_{"yyyy-MM-dd HH:mm:ss"};
   std::shared_ptr<DateTimeFormatter> format_;
   const tz::TimeZone* sessionTimeZone_{tz::locateZone(0)}; // fallback to GMT.
+  bool ansiEnabled_{false};
 };
 
 template <typename T>
@@ -212,18 +215,17 @@ struct UnixTimestampParseWithFormatFunction
       const arg_type<Varchar>* format) {
     legacyFormatter_ = SparkQueryConfig{config}.legacyDateFormatter();
     if (format != nullptr) {
-      auto formatter = detail::getDateTimeFormatter(
-          std::string_view(format->data(), format->size()),
-          legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
-                           : DateTimeFormatterType::JODA);
-      if (formatter.hasError()) {
-        invalidFormat_ = true;
+      auto formatter = detail::initializeFormatter(
+          std::string_view(format->data(), format->size()), legacyFormatter_);
+      if (formatter) {
+        this->format_ = formatter;
       } else {
-        this->format_ = formatter.value();
+        invalidFormat_ = true;
       }
       isConstFormat_ = true;
     }
     this->setTimezone(config);
+    this->ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
@@ -237,25 +239,26 @@ struct UnixTimestampParseWithFormatFunction
       int64_t& result,
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& format) {
+    // initializeFormatter() throws for an invalid pattern unless the legacy
+    // formatter is in use (then it returns nullptr) -- never ANSI-conditional.
     if (invalidFormat_) {
       return false;
     }
 
-    // Format error returns null.
     if (!isConstFormat_) {
-      auto formatter = detail::getDateTimeFormatter(
-          std::string_view(format.data(), format.size()),
-          legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
-                           : DateTimeFormatterType::JODA);
-      if (formatter.hasError()) {
+      auto formatter = detail::initializeFormatter(
+          std::string_view(format.data(), format.size()), legacyFormatter_);
+      if (formatter) {
+        this->format_ = formatter;
+      } else {
         return false;
       }
-      this->format_ = formatter.value();
     }
     auto dateTimeResult =
         this->format_->parse(std::string_view(input.data(), input.size()));
-    // parsing error returns null
     if (dateTimeResult.hasError()) {
+      ansiUserFail(
+          this->ansiEnabled_, "{}", dateTimeResult.error().message());
       return false;
     }
     toGMTWithGapCorrection(
