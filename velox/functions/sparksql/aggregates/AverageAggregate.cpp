@@ -40,12 +40,29 @@ class AverageAggregate
       VectorPtr& result) const override {
     VELOX_CHECK_EQ(args.size(), 1);
     auto* rowVector = result->as<RowVector>();
+    rowVector->clearAllNulls();
+
+    if (rows.isAllSelected() && !args[0]->mayHaveNulls()) {
+      rowVector->childAt(1) = BaseVector::createConstant(
+          BIGINT(), int64_t{1}, rows.size(), this->allocator_->pool());
+      if constexpr (std::is_same_v<TInput, TAccumulator>) {
+        rowVector->childAt(0) = args[0];
+      } else {
+        auto* sumVector = rowVector->childAt(0)->asFlatVector<TAccumulator>();
+        sumVector->clearAllNulls();
+        auto* rawSums = sumVector->mutableRawValues();
+        DecodedVector decoded(*args[0], rows);
+        for (vector_size_t row = 0; row < rows.size(); ++row) {
+          rawSums[row] = TAccumulator(decoded.valueAt<TInput>(row));
+        }
+      }
+      return;
+    }
+
     auto* sumVector = rowVector->childAt(0)->asFlatVector<TAccumulator>();
     auto* countVector = rowVector->childAt(1)->asFlatVector<int64_t>();
-    rowVector->clearAllNulls();
     sumVector->clearAllNulls();
     countVector->clearAllNulls();
-
     auto* rawSums = sumVector->mutableRawValues();
     auto* rawCounts = countVector->mutableRawValues();
     std::fill_n(rawSums, rows.size(), TAccumulator{0});
