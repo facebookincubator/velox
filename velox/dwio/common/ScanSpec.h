@@ -181,12 +181,17 @@ class ScanSpec {
     return children_;
   }
 
-  /// Returns 'children in a stable order. May be used for parallel
+  /// Snapshot handed to reader trees. Shares ownership of the specs it lists.
+  using StableChildren =
+      std::shared_ptr<const std::vector<std::shared_ptr<ScanSpec>>>;
+
+  /// Returns 'children' in a stable order. May be used for parallel
   /// construction and read-ahead of reader trees while the main user
   /// of 'this' is running. 'children_' may be reordered while running
   /// but the tree being constructed must see a single, unchanging
-  /// order.
-  const std::vector<ScanSpec*>& stableChildren();
+  /// order. A snapshot never changes; a child added later appears at the end
+  /// of a later one.
+  StableChildren stableChildren();
 
   /// Returns a read sequence number. This can b used for tagging
   /// lazy vectors with a generation number so that we can check that
@@ -200,6 +205,10 @@ class ScanSpec {
 
   /// Returns the ScanSpec corresponding to 'name'. Creates it if needed without
   /// any intermediate level.
+  ///
+  /// Locks only to keep an add from interleaving with 'stableChildren()'.
+  /// Building a spec tree is otherwise single threaded: 'addField' sets the
+  /// channel after the add, and readers walk 'children_' unlocked.
   ScanSpec* getOrCreateChild(const std::string& name);
 
   /// Returns the ScanSpec corresponding to 'subfield'. Creates it if
@@ -483,7 +492,8 @@ class ScanSpec {
 
   bool disableStatsBasedFilterReorder_{false};
 
-  // Serializes stableChildren().
+  // Serializes an add in 'getOrCreateChild' with the snapshot in
+  // 'stableChildren()'. Nothing else; 'reorder()' sorts 'children_' unlocked.
   std::mutex mutex_;
 
   // Number of times read is called on the corresponding reader. This
@@ -528,10 +538,14 @@ class ScanSpec {
 
   std::vector<std::shared_ptr<ScanSpec>> children_;
 
-  // Read-only copy of children, not subject to reordering. Used when
-  // asynchronously constructing reader trees for read-ahead, while
-  // 'children_' is reorderable by a running scan.
-  std::vector<ScanSpec*> stableChildren_;
+  // Children in the order they were added, never reordered. Append-only, so an
+  // earlier snapshot is a prefix of a later one. Not handed out;
+  // 'stableChildren_' publishes a copy.
+  std::vector<std::shared_ptr<ScanSpec>> stableOrder_;
+
+  // Snapshot of 'stableOrder_' handed to reader trees. Never mutated once
+  // published: an add drops it and the next 'stableChildren()' republishes.
+  StableChildren stableChildren_;
 
   folly::F14FastMap<std::string, ScanSpec*> childByFieldName_;
 

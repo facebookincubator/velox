@@ -37,14 +37,17 @@ std::string_view ScanSpec::columnTypeString(ScanSpec::ColumnType columnType) {
 }
 
 ScanSpec* ScanSpec::getOrCreateChild(const std::string& name) {
+  std::lock_guard<std::mutex> l(mutex_);
   if (auto it = this->childByFieldName_.find(name);
       it != this->childByFieldName_.end()) {
     return it->second;
   }
-  this->children_.push_back(std::make_unique<ScanSpec>(name));
-  auto* child = this->children_.back().get();
-  this->childByFieldName_[child->fieldName()] = child;
-  return child;
+  this->children_.push_back(std::make_shared<ScanSpec>(name));
+  const auto& child = this->children_.back();
+  this->childByFieldName_[child->fieldName()] = child.get();
+  stableOrder_.push_back(child);
+  stableChildren_.reset();
+  return child.get();
 }
 
 ScanSpec* ScanSpec::getOrCreateChild(const Subfield& subfield) {
@@ -120,8 +123,6 @@ void ScanSpec::reorder() {
   if (children_.empty()) {
     return;
   }
-  // Make sure 'stableChildren_' is initialized.
-  stableChildren();
   std::sort(
       children_.begin(),
       children_.end(),
@@ -139,13 +140,12 @@ void ScanSpec::enableFilterInSubTree(bool value) {
   }
 }
 
-const std::vector<ScanSpec*>& ScanSpec::stableChildren() {
+ScanSpec::StableChildren ScanSpec::stableChildren() {
   std::lock_guard<std::mutex> l(mutex_);
-  if (stableChildren_.empty()) {
-    stableChildren_.reserve(children_.size());
-    for (auto& child : children_) {
-      stableChildren_.push_back(child.get());
-    }
+  if (stableChildren_ == nullptr) {
+    stableChildren_ =
+        std::make_shared<const std::vector<std::shared_ptr<ScanSpec>>>(
+            stableOrder_);
   }
   return stableChildren_;
 }
