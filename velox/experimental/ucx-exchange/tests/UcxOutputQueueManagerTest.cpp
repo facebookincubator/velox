@@ -1041,6 +1041,7 @@ TEST_F(UcxOutputQueueManagerTest, arbitraryTerminateWithBufferedData) {
       0,
       [&callback0Fired, &callback0Nullptr](
           std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
           std::vector<int64_t> /*remainingBytes*/) {
         callback0Fired = true;
         callback0Nullptr = (data == nullptr);
@@ -1054,6 +1055,7 @@ TEST_F(UcxOutputQueueManagerTest, arbitraryTerminateWithBufferedData) {
       1,
       [&callback1Fired, &callback1Nullptr](
           std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
           std::vector<int64_t> /*remainingBytes*/) {
         callback1Fired = true;
         callback1Nullptr = (data == nullptr);
@@ -1070,6 +1072,7 @@ TEST_F(UcxOutputQueueManagerTest, arbitraryTerminateWithBufferedData) {
       0,
       [&callback0Fired, &callback0Nullptr](
           std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
           std::vector<int64_t> /*remainingBytes*/) {
         callback0Fired = true;
         callback0Nullptr = (data == nullptr);
@@ -1084,6 +1087,7 @@ TEST_F(UcxOutputQueueManagerTest, arbitraryTerminateWithBufferedData) {
       1,
       [&callback1Fired, &callback1Nullptr](
           std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
           std::vector<int64_t> /*remainingBytes*/) {
         callback1Fired = true;
         callback1Nullptr = (data == nullptr);
