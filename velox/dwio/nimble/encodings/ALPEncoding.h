@@ -1075,6 +1075,92 @@ class ALPEncoding final
         zigZagMax};
   }
 
+ private:
+  // Draws the grid-search sample from `values` using the same chunked-stride
+  // layout as estimateSize, so encode() and estimateSize() pick (exponent,
+  // factor) from the same rows. estimateSize hands the selector a sample it
+  // already drew, while encode hands it the whole column; without this the
+  // latter would score only the leading kSampleSize rows.
+  //
+  // Inputs at or below kSampleSize are scored whole and `buffer` is left
+  // untouched. Larger inputs are materialized into `buffer` once, so the grid
+  // loop scans a contiguous 8KB block instead of recomputing a strided index
+  // per value per candidate.
+  static std::span<const cppDataType> selectionSample(
+      std::span<const cppDataType> values,
+      std::array<cppDataType, kSampleSize>& buffer) {
+    if (values.size() <= kSampleSize) {
+      return values;
+    }
+    const uint64_t rowCount = values.size();
+    const uint32_t chunkSize = kSampleSize / kSamplingChunks;
+    uint32_t written = 0;
+    for (uint32_t chunk = 0; chunk < kSamplingChunks; ++chunk) {
+      const uint64_t chunkStart =
+          static_cast<uint64_t>(chunk) * rowCount / kSamplingChunks;
+      const uint64_t chunkLen =
+          std::min<uint64_t>(chunkSize, rowCount - chunkStart);
+      const cppDataType* chunkData = values.data() + chunkStart;
+      for (uint64_t j = 0; j < chunkLen; ++j) {
+        buffer[written++] = chunkData[j];
+      }
+    }
+    // Unreachable while kSampleSize divides evenly by kSamplingChunks, but
+    // mirrors estimateSize's top-up so the two stay in step if either
+    // constant changes.
+    while (written < kSampleSize) {
+      buffer[written] =
+          values[sampledValueIndex(written, rowCount, kSampleSize)];
+      ++written;
+    }
+    return {buffer.data(), kSampleSize};
+  }
+
+  // Counts the values exactly representable under (exponent, factor), routing
+  // through the same vectorized transform scoreCombination uses with a scalar
+  // tail. Out of line for the same reason as scoreCombination: the grid loop
+  // calls it ~300 times, so one shared body keeps the caller small.
+  FOLLY_NOINLINE static uint32_t countRepresentable(
+      std::span<const cppDataType> logicalValues,
+      const physicalType* physicals,
+      int exponent,
+      int factor) {
+    const double exponentMultiplier = kPow10Double[exponent];
+    const double factorMultiplier = kPow10Double[factor];
+    const uint64_t sampleSize = logicalValues.size();
+    uint32_t representableCount = 0;
+
+    alignas(64) uint64_t zigZagLanes[kBatchSize];
+    alignas(64) bool okLanes[kBatchSize];
+
+    uint64_t i = 0;
+    for (; i + kBatchSize <= sampleSize; i += kBatchSize) {
+      batchTransform(
+          logicalValues.data() + i,
+          physicals + i,
+          exponentMultiplier,
+          factorMultiplier,
+          zigZagLanes,
+          okLanes);
+      for (std::size_t k = 0; k < kBatchSize; ++k) {
+        representableCount += okLanes[k] ? 1 : 0;
+      }
+    }
+    for (; i < sampleSize; ++i) {
+      uint64_t zigZag = 0;
+      if (scalarTransformOne(
+              logicalValues[i],
+              physicals[i],
+              exponentMultiplier,
+              factorMultiplier,
+              zigZag)) {
+        ++representableCount;
+      }
+    }
+    return representableCount;
+  }
+
+ public:
   // Selects the (exponent, factor) pair with the smallest estimated encoded
   // footprint. Ties prefer the larger exponent, then the larger factor
   // (DuckDB's tie-break rule). Retained for tests, benchmarks, and A/B
@@ -1083,9 +1169,8 @@ class ALPEncoding final
   static std::pair<uint8_t, uint8_t> findBestExponentFactorBySize(
       std::span<const cppDataType> values,
       const Encoding::Options& options) {
-    const uint32_t sampleSize =
-        std::min(static_cast<uint32_t>(values.size()), kSampleSize);
-    const std::span<const cppDataType> sample{values.data(), sampleSize};
+    std::array<cppDataType, kSampleSize> sampleBuffer;
+    const auto sample = selectionSample(values, sampleBuffer);
 
     uint8_t bestExponent = 0;
     uint8_t bestFactor = 0;
@@ -1117,24 +1202,22 @@ class ALPEncoding final
   // exits on the first candidate.
   static std::pair<uint8_t, uint8_t> findBestExponentFactorByCount(
       std::span<const cppDataType> values) {
-    const uint32_t sampleSize =
-        std::min(static_cast<uint32_t>(values.size()), kSampleSize);
+    std::array<cppDataType, kSampleSize> sampleBuffer;
+    const auto sample = selectionSample(values, sampleBuffer);
+    const uint32_t sampleSize = static_cast<uint32_t>(sample.size());
+    // Free: physicalType is the same width as cppDataType and the cast is
+    // exactly what toPhysical does per value.
+    const physicalType* physicals =
+        EncodingPhysicalType<cppDataType>::asEncodingPhysicalTypeSpan(sample)
+            .data();
 
     uint8_t bestExponent = 0;
     uint8_t bestFactor = 0;
     uint32_t bestRepresentableCount = 0;
 
     for (int e = 0; e <= kMaxExponent; ++e) {
-      uint32_t countNoFactor = 0;
-      for (uint32_t i = 0; i < sampleSize; ++i) {
-        if (canRepresentExactly(
-                values[i],
-                detail::alp::toPhysical<cppDataType>(values[i]),
-                e,
-                /*factor=*/0)) {
-          ++countNoFactor;
-        }
-      }
+      const uint32_t countNoFactor =
+          countRepresentable(sample, physicals, e, /*factor=*/0);
       if (countNoFactor > bestRepresentableCount) {
         bestRepresentableCount = countNoFactor;
         bestExponent = static_cast<uint8_t>(e);
@@ -1145,16 +1228,8 @@ class ALPEncoding final
       }
 
       for (int f = 1; f <= std::min(e, kMaxFactor); ++f) {
-        uint32_t countWithFactor = 0;
-        for (uint32_t i = 0; i < sampleSize; ++i) {
-          if (canRepresentExactly(
-                  values[i],
-                  detail::alp::toPhysical<cppDataType>(values[i]),
-                  e,
-                  f)) {
-            ++countWithFactor;
-          }
-        }
+        const uint32_t countWithFactor =
+            countRepresentable(sample, physicals, e, f);
         if (countWithFactor > bestRepresentableCount) {
           bestRepresentableCount = countWithFactor;
           bestExponent = static_cast<uint8_t>(e);
