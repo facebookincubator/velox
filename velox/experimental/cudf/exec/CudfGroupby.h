@@ -21,25 +21,40 @@
 #include <cudf/groupby.hpp>
 
 #include <optional>
+#include <string_view>
 #include <utility>
 
 namespace facebook::velox::cudf_velox {
 
 class CudaEvent;
 
+inline constexpr std::string_view kStreamingGroupbyUsedStat{
+    "streamingGroupbyUsed"};
+inline constexpr std::string_view kStreamingGroupbyRebuildsStat{
+    "streamingGroupbyRebuilds"};
+
 // Type-specific adapter between Velox final-aggregation state and libcudf's
-// flattened streaming_groupby request/result interface.
+// flattened streaming_groupby request/result interface. prepareInput() must be
+// called before addStreamingRequest(). The prepared input and result indices
+// assigned by these methods must remain stable when requests are recreated for
+// a capacity rebuild.
 struct StreamingGroupbyAggregator {
+  // Index in the unpermuted operator input and the final Velox result type.
   column_index_t inputIndex;
   TypePtr resultType;
 
+  // Appends the input columns required by this aggregate and records their
+  // positions in the prepared streaming_groupby input table.
   virtual void prepareInput(
       cudf::table_view input,
       std::vector<cudf::column_view>& preparedColumns) = 0;
 
+  // Appends requests using the positions recorded by prepareInput() and records
+  // their result positions.
   virtual void addStreamingRequest(
       std::vector<cudf::groupby::streaming_aggregation_request>& requests) = 0;
 
+  // Consumes the result positions recorded by addStreamingRequest().
   virtual std::unique_ptr<cudf::column> makeOutputColumn(
       std::vector<cudf::groupby::aggregation_result>& results,
       rmm::cuda_stream_view stream,
@@ -54,17 +69,7 @@ struct StreamingGroupbyAggregator {
   column_index_t prepareColumn(
       cudf::table_view input,
       std::vector<cudf::column_view>& preparedColumns,
-      std::optional<column_index_t> childIndex = std::nullopt) const {
-    VELOX_CHECK_LT(inputIndex, input.num_columns());
-    auto column = input.column(inputIndex);
-    if (childIndex.has_value()) {
-      VELOX_CHECK_LT(*childIndex, column.num_children());
-      column = column.child(*childIndex);
-    }
-    VELOX_CHECK_EQ(column.size(), input.num_rows());
-    preparedColumns.push_back(column);
-    return static_cast<column_index_t>(preparedColumns.size() - 1);
-  }
+      std::optional<column_index_t> childIndex = std::nullopt) const;
 };
 
 struct GroupbyAggregator {
@@ -187,7 +192,7 @@ class CudfGroupby : public CudfOperatorBase {
 
   CudfVectorPtr releaseAndResetBufferedResult();
 
-  bool initializeStreamingGroupbyApi(
+  bool initializeStreamingGroupby(
       const RowTypePtr& inputRowSchema,
       const std::vector<VectorPtr>& constants,
       const std::vector<std::optional<uint32_t>>& maskChannels);
@@ -197,13 +202,13 @@ class CudfGroupby : public CudfOperatorBase {
   std::unique_ptr<cudf::groupby::streaming_groupby> createStreamingGroupby(
       size_t capacity);
 
-  void computeFinalGroupbyWithStreamingApi(CudfVectorPtr input);
+  void computeFinalGroupbyStreaming(CudfVectorPtr input);
 
   CudfVectorPtr finalizeStreamingGroupby();
 
-  void computePartialGroupbyStreaming(CudfVectorPtr tbl);
-  void computeFinalGroupbyStreaming(CudfVectorPtr tbl);
-  void computeSingleGroupbyStreaming(CudfVectorPtr tbl);
+  void computePartialGroupbyIncrementally(CudfVectorPtr tbl);
+  void computeFinalGroupbyIncrementally(CudfVectorPtr tbl);
+  void computeSingleGroupbyIncrementally(CudfVectorPtr tbl);
 
   std::vector<column_index_t> groupingKeyInputChannels_;
   std::vector<column_index_t> groupingKeyOutputChannels_;
@@ -219,9 +224,9 @@ class CudfGroupby : public CudfOperatorBase {
 
   const bool isPartialOutput_;
   const bool isSingleStep_;
-  // Streaming aggregation is disabled if companion aggregates are present.
-  bool streamingEnabled_{true};
-  bool nativeStreamingEnabled_{false};
+  // Incremental aggregation is disabled if companion aggregates are present.
+  bool incrementalAggregationEnabled_{true};
+  bool streamingGroupbyEnabled_{false};
   const int64_t maxPartialAggregationMemoryUsage_;
   int64_t numInputRows_ = 0;
 

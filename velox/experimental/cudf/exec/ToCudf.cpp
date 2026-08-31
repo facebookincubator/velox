@@ -397,9 +397,13 @@ void CudfConfig::initialize(
     concatOptimizationEnabled =
         folly::to<bool>(config[kCudfConcatOptimizationEnabled]);
   }
-  if (config.find(kCudfStreamingGroupbyApiEnabled) != config.end()) {
-    streamingGroupbyApiEnabled =
-        folly::to<bool>(config[kCudfStreamingGroupbyApiEnabled]);
+  if (config.find(kCudfStreamingGroupbyEnabled) != config.end()) {
+    streamingGroupbyEnabled =
+        folly::to<bool>(config[kCudfStreamingGroupbyEnabled]);
+  }
+  if (config.find(kCudfStreamingGroupbyCapacityMultiplier) != config.end()) {
+    streamingGroupbyCapacityMultiplier =
+        folly::to<double>(config[kCudfStreamingGroupbyCapacityMultiplier]);
   }
   if (config.find(kCudfFunctionNamePrefix) != config.end()) {
     functionNamePrefix = config[kCudfFunctionNamePrefix];
