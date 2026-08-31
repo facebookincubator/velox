@@ -90,13 +90,6 @@ class WriterContext : public FieldWriterContext {
     ignoreTopLevelNulls_ = options_.ignoreTopLevelNulls;
     disableSharedStringBuffers_ = options_.disableSharedStringBuffers;
     maxFlatMapKeys_ = options_.maxFlatMapKeys;
-    if (this->options_.encodingExecutor &&
-        this->options_.maxEncodeParallelism > 0) {
-      setParallelEncoding(
-          this->options_.encodingExecutor.get(),
-          this->options_.maxEncodeParallelism,
-          this->options_.minStreamsPerEncodeUnit);
-    }
   }
 
   const WriterOptions& options() const {
@@ -707,25 +700,23 @@ bool hasDictionaryConfig(const StreamData& streamData) {
       streamContext->sharedDictionaryConfig().has_value();
 }
 
-bool isSharedDictionaryValueType(DataType dataType) {
-  switch (dataType) {
-    case DataType::Int8:
-    case DataType::Uint8:
-    case DataType::Int16:
-    case DataType::Uint16:
-    case DataType::Int32:
-    case DataType::Uint32:
-    case DataType::Int64:
-    case DataType::Uint64:
+bool isSharedDictionaryScalarKind(ScalarKind scalarKind) {
+  return isIntegerScalarKind(scalarKind) || scalarKind == ScalarKind::String ||
+      scalarKind == ScalarKind::Binary;
+}
+
+bool isSharedDictionaryVeloxType(const velox::Type& type) {
+  switch (type.kind()) {
+    case velox::TypeKind::TINYINT:
+    case velox::TypeKind::SMALLINT:
+    case velox::TypeKind::INTEGER:
+    case velox::TypeKind::BIGINT:
+    case velox::TypeKind::VARCHAR:
+    case velox::TypeKind::VARBINARY:
       return true;
-    case DataType::Undefined:
-    case DataType::Float:
-    case DataType::Double:
-    case DataType::Bool:
-    case DataType::String:
+    default:
       return false;
   }
-  NIMBLE_UNREACHABLE("Unsupported data type {}.", dataType);
 }
 
 template <typename T>
@@ -789,11 +780,11 @@ std::unique_ptr<EncodingSelectionPolicy<T>> makeEncodingPolicy(
     const StreamData& streamData) {
   if (hasDictionaryConfig(streamData)) {
     NIMBLE_USER_CHECK(
-        isSharedDictionaryValueType(TypeTraits<T>::dataType),
-        "Shared dictionary encoding only supports non-bool integer streams, "
+        isSharedDictionaryType(TypeTraits<T>::dataType),
+        "Shared dictionary encoding only supports integer or string streams, "
         "got {}.",
         TypeTraits<T>::dataType);
-    if constexpr (isIntegralType<T>() && !std::is_same_v<T, bool>) {
+    if constexpr (isSharedDictionaryType<T>()) {
       auto* dictionaryWriter = sharedDictionaryWriter<T>(
           streamData,
           context,
@@ -829,8 +820,9 @@ void configureDictionary(
     case Kind::Scalar: {
       const auto& scalar = typeBuilder.asScalar();
       NIMBLE_USER_CHECK(
-          isIntegerScalarKind(scalar.scalarDescriptor().scalarKind()),
-          "Shared dictionary value must be an integer scalar, got {}.",
+          isSharedDictionaryScalarKind(scalar.scalarDescriptor().scalarKind()),
+          "Shared dictionary value must be an integer or string scalar, got "
+          "{}.",
           scalar.scalarDescriptor().scalarKind());
       if (config.scope == SharedDictionaryScope::Stripe) {
         NIMBLE_USER_CHECK_EQ(
@@ -868,8 +860,8 @@ void configureDictionary(
     case Kind::Row:
     case Kind::FlatMap:
       NIMBLE_USER_FAIL(
-          "Shared dictionary value must resolve to an integer scalar, array "
-          "element, or map value, got {}.",
+          "Shared dictionary value must resolve to an integer or string "
+          "scalar, array element, or map value, got {}.",
           typeBuilder.kind());
   }
 }
@@ -996,12 +988,12 @@ const TypeWithId& resolveDictionaryValueType(
     case velox::TypeKind::SMALLINT:
     case velox::TypeKind::INTEGER:
     case velox::TypeKind::BIGINT:
+    case velox::TypeKind::VARCHAR:
+    case velox::TypeKind::VARBINARY:
       return type;
     case velox::TypeKind::BOOLEAN:
     case velox::TypeKind::REAL:
     case velox::TypeKind::DOUBLE:
-    case velox::TypeKind::VARCHAR:
-    case velox::TypeKind::VARBINARY:
     case velox::TypeKind::TIMESTAMP:
     case velox::TypeKind::HUGEINT:
     case velox::TypeKind::ROW:
@@ -1010,8 +1002,8 @@ const TypeWithId& resolveDictionaryValueType(
     case velox::TypeKind::OPAQUE:
     case velox::TypeKind::INVALID:
       NIMBLE_USER_FAIL(
-          "Shared dictionary column '{}' must resolve to an integer scalar, "
-          "array element, or map value, got {}.",
+          "Shared dictionary column '{}' must resolve to an integer or string "
+          "scalar, array element, or map value, got {}.",
           fieldPath,
           type.type()->toString());
   }
@@ -1410,9 +1402,9 @@ DictionaryConfigs collectDictionaryConfigs(
         "node {}.",
         valueNodeId);
     NIMBLE_USER_CHECK(
-        valueType.type()->isInteger(),
-        "Shared dictionary column '{}' must resolve to an integer scalar, "
-        "array element, or map value, got {}.",
+        isSharedDictionaryVeloxType(*valueType.type()),
+        "Shared dictionary column '{}' must resolve to an integer or string "
+        "scalar, array element, or map value, got {}.",
         columnDictionary.fieldPath,
         valueType.type()->toString());
     maybeAddFileDictionaryId(columnDictionary.dictionary, fileDictionaryIds);
@@ -1945,6 +1937,10 @@ Writer::Writer(
               ? context_->options().bufferPolicyFactory()
               : nullptr} {
   NIMBLE_CHECK_NOT_NULL(file_);
+  NIMBLE_USER_CHECK(
+      !context_->options().enableChunkIndex ||
+          context_->options().enableChunking,
+      "Chunk stats require chunking to be enabled.");
 
   // Register handler for dynamically discovered FlatMap keys before creating
   // the writer tree, so that predefined keys also trigger the handler.
@@ -2159,7 +2155,7 @@ void Writer::writeStripeDictionaryStreams() {
   if (!context_->hasStripeDictionaryConfig()) {
     return;
   }
-  for (const auto& [_, streamData] : context_->streams()) {
+  for (const auto& [nodeId, streamData] : context_->streams()) {
     const auto* streamContext =
         streamData->descriptor().context<WriterStreamContext>();
     if (streamContext == nullptr) {
@@ -2181,6 +2177,16 @@ void Writer::writeStripeDictionaryStreams() {
     auto& dictionaryStream = encodedStreams_[streamId];
     NIMBLE_CHECK(dictionaryStream.chunks.empty());
     dictionaryStream.offset = streamId;
+    // The alphabet stream has no StreamData of its own, so it is not visited by
+    // the stream loops that do this accounting. Charge it to the value stream
+    // that owns the dictionary: with shared dictionary encoding most of the
+    // column's bytes live in the alphabet, so leaving it out understates the
+    // column and makes the encoding look cheaper than it is.
+    const auto alphabetBytes = alphabetChunk->contentSize();
+    if (auto statsCollector = context_->getStatsCollector(nodeId)) {
+      statsCollector->addPhysicalSize(alphabetBytes);
+    }
+    context_->updateStripeEncodedPhysicalSize(alphabetBytes);
     dictionaryStream.chunks.push_back(std::move(alphabetChunk.value()));
   }
 }
@@ -2580,6 +2586,7 @@ void Writer::reportRuntimeStats() const {
   reportNanos(Keys::kWriteCpuNanos);
   reportNanos(Keys::kWriteWallNanos);
   reportNanos(Keys::kIngestionCpuNanos);
+  reportNanos(Keys::kIngestionWallNanos);
   reportNanos(Keys::kEncodingSelectionCpuNanos);
 
   // Distributions are published whole, so they replace rather than accumulate.
@@ -2629,15 +2636,19 @@ std::unique_ptr<EncodingBufferPool> Writer::makeEncodingBufferPool() const {
       encodingMemoryPool_.get(), maxCachedBuffers);
 }
 
-uint32_t Writer::encodingConcurrency(uint32_t taskCount) const {
-  if (taskCount == 0) {
+uint32_t Writer::encodingConcurrency(uint32_t streamCount) const {
+  if (streamCount == 0) {
     return 0;
   }
   const auto& options = context_->options();
   if (!options.encodingExecutor || options.maxEncodeParallelism == 0) {
     return 1;
   }
-  return std::min(taskCount, options.maxEncodeParallelism);
+  const auto minStreamsPerEncodingTask =
+      std::max(1u, options.minStreamsPerEncodingTask);
+  const auto maxByStreams =
+      std::max(1u, streamCount / minStreamsPerEncodingTask);
+  return std::min({streamCount, options.maxEncodeParallelism, maxByStreams});
 }
 
 void Writer::ensureEncodingScratchBufferPools(uint32_t poolCount) {
@@ -2728,37 +2739,43 @@ void Writer::writeStreams() {
       NIMBLE_CHECK(
           encodingExecutor,
           "Encoding executor is required for parallel encoding.");
-      for (uint32_t start = 0; start < streamCount; start += concurrency) {
-        velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
-        const auto batchSize = std::min(concurrency, streamCount - start);
-        for (uint32_t index = 0; index < batchSize; ++index) {
-          auto& [nodeId, streamData] = streams[start + index];
-          auto* encodingScratchBufferPool =
-              this->encodingScratchBufferPool(index);
-          auto* encodingBufferPool = this->encodingBufferPool(index);
-          barrier.add([&,
-                       statsCollector = context_->getStatsCollector(nodeId),
-                       _streamData = streamData.get(),
-                       encodingScratchBufferPool,
-                       encodingBufferPool]() {
-            uint64_t startCpuNs = velox::process::threadCpuNanos();
-            uint64_t streamSize{0};
-            processStream(
-                *_streamData,
-                encodingScratchBufferPool,
-                encodingBufferPool,
-                streamSize,
-                chunkSize);
-            if (statsCollector) {
-              statsCollector->addPhysicalSize(streamSize);
-            }
-            encodingCpuNanos.fetch_add(
-                velox::process::threadCpuNanos() - startCpuNs,
-                std::memory_order_relaxed);
-          });
-        }
-        barrier.waitAll();
+      std::atomic_uint32_t nextStream{0};
+      velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
+      for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
+        auto* encodingScratchBufferPool =
+            this->encodingScratchBufferPool(taskId);
+        auto* encodingBufferPool = this->encodingBufferPool(taskId);
+        barrier.add(
+            [&, taskId, encodingScratchBufferPool, encodingBufferPool]() {
+              velox::common::testutil::TestValue::adjust(
+                  "facebook::nimble::Writer::parallelEncodeTask",
+                  const_cast<uint32_t*>(&taskId));
+              const auto startCpuNanos = velox::process::threadCpuNanos();
+              while (true) {
+                const auto streamIndex =
+                    nextStream.fetch_add(1, std::memory_order_relaxed);
+                if (streamIndex >= streamCount) {
+                  break;
+                }
+                auto& [nodeId, streamData] = streams[streamIndex];
+                uint64_t streamSize{0};
+                processStream(
+                    *streamData,
+                    encodingScratchBufferPool,
+                    encodingBufferPool,
+                    streamSize,
+                    chunkSize);
+                auto* statsCollector = context_->getStatsCollector(nodeId);
+                if (statsCollector) {
+                  statsCollector->addPhysicalSize(streamSize);
+                }
+              }
+              encodingCpuNanos.fetch_add(
+                  velox::process::threadCpuNanos() - startCpuNanos,
+                  std::memory_order_relaxed);
+            });
       }
+      barrier.waitAll();
     } else {
       auto* encodingScratchBufferPool = this->encodingScratchBufferPool();
       auto* encodingBufferPool = this->encodingBufferPool();
@@ -2961,31 +2978,33 @@ bool Writer::writeChunks(
       NIMBLE_CHECK(
           encodingExecutor,
           "Encoding executor is required for parallel encoding.");
-      for (uint32_t start = 0; start < streamCount; start += concurrency) {
-        velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
-        const auto batchSize = std::min(concurrency, streamCount - start);
-        for (uint32_t index = 0; index < batchSize; ++index) {
-          const auto streamIndex = streamIndices[start + index];
-          auto& [nodeId, streamData] = streams[streamIndex];
-          const auto offset = streamData->descriptor().offset();
-          auto* encodedStream = &encodedStreams_[offset];
-          auto* encodingScratchBufferPool =
-              this->encodingScratchBufferPool(index);
-          auto* encodingBufferPool = this->encodingBufferPool(index);
-          barrier.add([&,
-                       streamDataPtr = streamData.get(),
-                       encodedStream,
-                       encodingScratchBufferPool,
-                       encodingBufferPool,
-                       statsCollector = context_->getStatsCollector(nodeId)] {
-            uint64_t startCpuNs = velox::process::threadCpuNanos();
-            uint64_t streamSize = 0;
+      std::atomic_uint32_t nextStream{0};
+      velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
+      for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
+        auto* encodingScratchBufferPool =
+            this->encodingScratchBufferPool(taskId);
+        auto* encodingBufferPool = this->encodingBufferPool(taskId);
+        barrier.add([&, taskId, encodingScratchBufferPool, encodingBufferPool] {
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTask",
+              const_cast<uint32_t*>(&taskId));
+          const auto startCpuNanos = velox::process::threadCpuNanos();
+          while (true) {
+            const auto inputIndex =
+                nextStream.fetch_add(1, std::memory_order_relaxed);
+            if (inputIndex >= streamCount) {
+              break;
+            }
+            const auto streamIndex = streamIndices[inputIndex];
+            auto& [nodeId, streamData] = streams[streamIndex];
+            const auto offset = streamData->descriptor().offset();
+            uint64_t streamSize{0};
             if (encodeStreamChunk(
-                    *streamDataPtr,
+                    *streamData,
                     minChunkSize,
                     maxChunkSize,
                     ensureFullChunks,
-                    *encodedStream,
+                    encodedStreams_[offset],
                     encodingScratchBufferPool,
                     encodingBufferPool,
                     streamSize,
@@ -2993,16 +3012,17 @@ bool Writer::writeChunks(
                     logicalBytes)) {
               writtenChunk = true;
             }
+            auto* statsCollector = context_->getStatsCollector(nodeId);
             if (statsCollector) {
               statsCollector->addPhysicalSize(streamSize);
             }
-            encodingCpuNanos.fetch_add(
-                velox::process::threadCpuNanos() - startCpuNs,
-                std::memory_order_relaxed);
-          });
-        }
-        barrier.waitAll();
+          }
+          encodingCpuNanos.fetch_add(
+              velox::process::threadCpuNanos() - startCpuNanos,
+              std::memory_order_relaxed);
+        });
       }
+      barrier.waitAll();
     } else {
       auto* encodingScratchBufferPool = this->encodingScratchBufferPool();
       auto* encodingBufferPool = this->encodingBufferPool();
@@ -3223,6 +3243,8 @@ folly::F14FastMap<std::string, velox::RuntimeMetric> Writer::runtimeStats()
        nanosMetric(context_->writeTiming().wallNanos)},
       {std::string{Keys::kIngestionCpuNanos},
        nanosMetric(context_->ingestionTiming().cpuNanos)},
+      {std::string{Keys::kIngestionWallNanos},
+       nanosMetric(context_->ingestionTiming().wallNanos)},
       {std::string{Keys::kEncodingCpuNanos},
        nanosMetric(context_->encodingTiming().cpuNanos)},
       {std::string{Keys::kEncodingWallNanos},

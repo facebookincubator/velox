@@ -74,9 +74,11 @@ using ::facebook::velox::VectorPtr;
 using ::facebook::velox::fuzzer::FuzzerGenerator;
 
 // Writable encodings that this fuzzer target intentionally does not force.
-// This is not a global unsupported-encoding list.
+// The unfiltered random policy also omits these; this list keeps the repair
+// phase and coverage gate from adding them back. This is not a global
+// unsupported-encoding list.
 constexpr auto kExcludedFuzzerCandidateEncodings =
-    std::to_array({EncodingType::SubIntSplit});
+    std::to_array({EncodingType::Huffman, EncodingType::SubIntSplit});
 
 // Scalar types the Nimble writer round-trips with type identity.
 // FieldWriter::create dispatches on the physical TypeKind, so DATE, TIME,
@@ -1520,18 +1522,24 @@ void NimbleWriterFuzzer::verifyColumnStatistics(
             expectedCommon.get());
     if (actualDbl != nullptr && expectedDbl != nullptr &&
         expectedDbl->getMinimum().has_value()) {
-      NIMBLE_CHECK_EQ(
-          *actualDbl->getMinimum(),
-          *expectedDbl->getMinimum(),
-          "Node {} double min mismatch (seed {}).",
-          node,
-          options_.seed);
-      NIMBLE_CHECK_EQ(
-          *actualDbl->getMaximum(),
-          *expectedDbl->getMaximum(),
-          "Node {} double max mismatch (seed {}).",
-          node,
-          options_.seed);
+      // Both bounds are NaN whenever the column carries one, because the
+      // fuzzer generates NaN on purpose. Comparing with == would report those
+      // agreeing statistics as a mismatch, so reuse the round-trip
+      // comparison's NaN handling.
+      const auto checkBound = [&](std::string_view bound,
+                                  double actualValue,
+                                  double expectedValue) {
+        NIMBLE_CHECK(
+            decodedValueEquals(actualValue, expectedValue),
+            "Node {} double {} mismatch ({} vs. {}, seed {}).",
+            node,
+            bound,
+            actualValue,
+            expectedValue,
+            options_.seed);
+      };
+      checkBound("min", *actualDbl->getMinimum(), *expectedDbl->getMinimum());
+      checkBound("max", *actualDbl->getMaximum(), *expectedDbl->getMaximum());
     }
 
     auto* actualStr =
@@ -2149,7 +2157,7 @@ void NimbleWriterFuzzer::run() {
       missingEncodings.size(),
       fmt::join(missingEncodingNames, ", "));
 
-  // The default random policy omits the integral-only four because its
+  // The default random policy omits the integral-only candidates because its
   // write-side and read-side floating-point gates disagree (T283330065), so
   // they always reach this repair phase. gateFloatingPointStreams holds them
   // off float streams alone while still exercising integer streams in a mixed

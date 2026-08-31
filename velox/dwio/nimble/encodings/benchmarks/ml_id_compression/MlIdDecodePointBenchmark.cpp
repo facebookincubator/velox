@@ -28,9 +28,9 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/PointTraceGen.h"
 
@@ -69,8 +69,8 @@ int runBenchmark() {
   }
   const auto& context = *contextOrNull;
 
-  std::cout << "bench_decode_point: " << context.encoders.size() << " encoders x "
-            << context.datasets.size() << " datasets, N=" << n
+  std::cout << "bench_decode_point: " << context.encoders.size()
+            << " encoders x " << context.datasets.size() << " datasets, N=" << n
             << ", probes=" << probes << ", iters=" << iters
             << ", cache=" << cacheStateName(cacheState) << "\n  "
             << context.topology.describe() << "\n\n";
@@ -80,18 +80,37 @@ int runBenchmark() {
     for (const auto& e : context.encoders)
       std::cout << "  " << e.name << " [" << e.family << "]\n";
     std::cout << "\nDatasets:\n";
-    for (const auto& d : context.datasets) std::cout << "  " << d.name << "\n";
+    for (const auto& d : context.datasets)
+      std::cout << "  " << d.name << "\n";
     return 0;
   }
 
   std::vector<std::string> csvColumns = {
       "driver",
-      "dtype",          "dataset",         "encoding",        "family",
-      "variant",         "is_sequential",   "N",               "seed",
-      "cache_state",     "evict_method",    "payload_bytes",   "compression_ratio",
-      "iterations",      "warmup",          "probes",          "distinct_probes",
-      "distinct_fraction", "time_ns",       "time_p90_ns",     "time_min_ns",
-      "ns_per_probe",    "Mprobes_ps",      "clock_overhead_ns", "emulated_point_read",
+      "dtype",
+      "dataset",
+      "encoding",
+      "family",
+      "variant",
+      "is_sequential",
+      "N",
+      "seed",
+      "cache_state",
+      "evict_method",
+      "payload_bytes",
+      "compression_ratio",
+      "iterations",
+      "warmup",
+      "probes",
+      "distinct_probes",
+      "distinct_fraction",
+      "time_ns",
+      "time_p90_ns",
+      "time_min_ns",
+      "ns_per_probe",
+      "Mprobes_ps",
+      "clock_overhead_ns",
+      "emulated_point_read",
       "skipped"};
   std::string csvPath = FLAGS_mlidc_output_csv.empty()
       ? "bench_decode_point.csv"
@@ -129,7 +148,8 @@ int runBenchmark() {
       // Block codecs decompress everything per read; cap their iterations so
       // the sweep finishes in reasonable time.
       const MeasureSpec encSpec = specFor(
-          spec, enc.wholePayloadCodec,
+          spec,
+          enc.wholePayloadCodec,
           static_cast<size_t>(FLAGS_mlidc_block_codec_iters));
 
       const size_t payloadBytes = target->payloadSize();
@@ -143,7 +163,8 @@ int runBenchmark() {
         for (size_t idx : trace.indices) {
           target->materializeRange(static_cast<uint32_t>(idx), 1, &check);
           ok = check == data[idx];
-          if (!ok) break;
+          if (!ok)
+            break;
         }
         if (!ok) {
           std::cerr << "  [VALIDATE FAIL] " << enc.name << " / " << ds.name
@@ -155,7 +176,9 @@ int runBenchmark() {
       }
 
       auto cell = makeCellCache<Elem>(
-          context.cacheState, context.topology, *target,
+          context.cacheState,
+          context.topology,
+          *target,
           std::span<std::byte>(reinterpret_cast<std::byte*>(&sink), kElemSize));
 
       // Every probe against a whole-payload codec decompresses the entire
@@ -164,7 +187,8 @@ int runBenchmark() {
       const size_t encProbes = enc.wholePayloadCodec
           ? std::min<size_t>(
                 probes,
-                static_cast<size_t>(std::max(1, FLAGS_mlidc_block_codec_probes)))
+                static_cast<size_t>(
+                    std::max(1, FLAGS_mlidc_block_codec_probes)))
           : probes;
 
       auto result = measure(encSpec, cell.controller, cell.targets, [&]() {
@@ -176,18 +200,20 @@ int runBenchmark() {
       const double timeNs = static_cast<double>(result.time.median_ns);
       const double nsPerProbe =
           encProbes > 0 ? timeNs / static_cast<double>(encProbes) : 0.0;
-      const double mProbesPerSec = timeNs > 0.0
-          ? static_cast<double>(encProbes) / timeNs * 1e3
-          : 0.0;
+      const double mProbesPerSec =
+          timeNs > 0.0 ? static_cast<double>(encProbes) / timeNs * 1e3 : 0.0;
 
       csv.beginRow();
       setIdentityColumns<Elem>(csv, kDriver, ds.name, enc);
       csv.set("N", static_cast<int64_t>(n));
       csv.set("seed", static_cast<int64_t>(seed));
-      csv.set("cache_state",
+      csv.set(
+          "cache_state",
           std::string(cacheStateName(cell.controller.effectivePolicy().state)));
-      csv.set("evict_method", std::string(
-          evictMethodName(cell.controller.effectivePolicy().method)));
+      csv.set(
+          "evict_method",
+          std::string(
+              evictMethodName(cell.controller.effectivePolicy().method)));
       setPayloadColumns(csv, payloadBytes, context.rawBytes());
       setMeasureColumns(csv, encSpec);
       csv.set("probes", static_cast<int64_t>(encProbes));

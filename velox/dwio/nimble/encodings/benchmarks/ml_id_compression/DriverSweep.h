@@ -26,8 +26,8 @@
 #include <vector>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/OpenZLBenchTarget.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ResultWriter.h"
@@ -68,10 +68,8 @@ struct SweepContext {
 /// withOpenZL adds the block codec, which only the drivers that can host one
 /// pass true for.
 template <typename T>
-std::optional<SweepContext<T>> makeSweepContext(
-    bool withOpenZL,
-    CacheState cacheState,
-    uint32_t rows) {
+std::optional<SweepContext<T>>
+makeSweepContext(bool withOpenZL, CacheState cacheState, uint32_t rows) {
   SweepContext<T> context;
   context.cacheState = cacheState;
   context.rows = rows;
@@ -203,16 +201,14 @@ inline void setCacheColumns(
 }
 
 /// Sets the encoded size and its ratio against the raw column.
-inline void setPayloadColumns(
-    CsvResultWriter& csv,
-    size_t payloadBytes,
-    size_t rawBytes) {
+inline void
+setPayloadColumns(CsvResultWriter& csv, size_t payloadBytes, size_t rawBytes) {
   csv.set("payload_bytes", static_cast<int64_t>(payloadBytes));
   csv.set(
       "compression_ratio",
-      rawBytes > 0 ? static_cast<double>(payloadBytes) /
-              static_cast<double>(rawBytes)
-                   : 0.0);
+      rawBytes > 0
+          ? static_cast<double>(payloadBytes) / static_cast<double>(rawBytes)
+          : 0.0);
 }
 
 /// Sets the repetition counts a cell actually ran, which differ from the
@@ -223,7 +219,9 @@ inline void setMeasureColumns(CsvResultWriter& csv, const MeasureSpec& spec) {
 }
 
 /// Sets the timing columns every measured driver reports.
-inline void setTimingColumns(CsvResultWriter& csv, const MeasureResult& result) {
+inline void setTimingColumns(
+    CsvResultWriter& csv,
+    const MeasureResult& result) {
   csv.set("time_ns", result.time.median_ns);
   csv.set("time_p90_ns", result.time.p90_ns);
   csv.set("time_min_ns", result.time.min_ns);

@@ -14,25 +14,19 @@
  * limitations under the License.
  */
 
-// Regression test for a data race in the flat-map passthrough write path.
+// Regression coverage for the flat-map passthrough schema-creation path.
 //
 // FlatMapFieldWriter's passthrough new-field path
 // (createPassthroughValueFieldWriter) mints a value field for a new key, which
 // mutates shared FieldWriterContext state: FieldWriter::create appends to the
 // shared streams_ and schemaBuilder_, and handleFlatmapFieldAddEvent updates
-// shared context. The injected-key path (getValueFieldWriter) guards the
-// identical mutations with flatMapSchemaMutex_, but the passthrough path was
-// missing the lock. When flat-map columns are passed through with parallel
-// write enabled, the root RowFieldWriter writes multiple columns concurrently
-// (RowFieldWriter::co_write); if two of them mint a new passthrough key at the
-// same time they race the shared registration and corrupt the written file.
+// shared context. The passthrough and injected-key paths use the same critical
+// section for these mutations.
 //
 // The input is many flat-map columns with disjoint key sets, all keys present
-// in the first batch, so the first write() mints every passthrough value field
-// concurrently across columns -- exactly the racing shape. Reading back must
-// return every row; a corrupt stripe/stream index throws or short-counts.
-//
-// Run under ThreadSanitizer to catch the data race directly.
+// in the first batch, so the first write() mints every passthrough value field.
+// Reading back must return every row; a corrupt stripe/stream index throws or
+// short-counts.
 
 #include <folly/executors/GlobalExecutor.h>
 #include <glog/logging.h>
@@ -97,16 +91,15 @@ class NimbleWriterPassthroughFlatmapRaceTest
     for (int column = 0; column < kNumColumns; ++column) {
       options.flatMapColumns["c" + folly::to<std::string>(column)];
     }
-    // Parallel write/encode across the flat-map columns on the shared
-    // process-global executor.
+    // Encode streams on the shared process-global executor.
     options.encodingExecutor = folly::getGlobalCPUExecutor();
     options.maxEncodeParallelism = 8;
-    options.minStreamsPerEncodeUnit = 1;
+    options.minStreamsPerEncodingTask = 1;
     return options;
   }
 };
 
-TEST_F(NimbleWriterPassthroughFlatmapRaceTest, concurrentPassthroughNewKeys) {
+TEST_F(NimbleWriterPassthroughFlatmapRaceTest, passthroughNewKeysRoundTrip) {
   const auto schema = makeBatch()->type();
   uint32_t corrupt = 0;
 

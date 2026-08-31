@@ -24,8 +24,8 @@
 #include <cstdint>
 #include <fstream>
 #include <functional>
-#include <map>
 #include <limits>
+#include <map>
 #include <span>
 #include <sstream>
 #include <string>
@@ -40,12 +40,12 @@
 #include <glog/logging.h>
 
 #include "velox/dwio/nimble/common/Buffer.h"
-#include "velox/dwio/nimble/compression/Compression.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/compression/Compression.h"
+#include "velox/dwio/nimble/encodings/benchmarks/BenchmarkUtils.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ResultWriter.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/SubstreamCompression.h"
-#include "velox/dwio/nimble/encodings/benchmarks/BenchmarkUtils.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
@@ -53,7 +53,8 @@
 // CLI flags shared across benchmark binaries
 // ---------------------------------------------------------------------------
 
-// Defined in MlIdBenchmarkFlags.cpp; link nimble_ml_id_benchmark_common to get them.
+// Defined in MlIdBenchmarkFlags.cpp; link nimble_ml_id_benchmark_common to get
+// them.
 DECLARE_string(mlidc_output_csv);
 DECLARE_string(mlidc_output_manifest);
 DECLARE_int32(mlidc_rows);
@@ -83,8 +84,7 @@ class NimbleBenchTarget {
  public:
   using T = typename EncodingT::cppDataType;
 
-  NimbleBenchTarget()
-      : pool_(benchmarks::benchmarkPool()) {}
+  NimbleBenchTarget() : pool_(benchmarks::benchmarkPool()) {}
 
   // Encode data.  Destroys any previously encoded state.
   void encode(
@@ -106,10 +106,7 @@ class NimbleBenchTarget {
     // re-encoding via createEncoding(), which would silently drop
     // realNestedSelection and produce different encoded data.
     encoding_ = std::make_unique<EncodingT>(
-        *pool_,
-        std::string_view(encoded_),
-        benchmarks::nullFactory(),
-        options);
+        *pool_, std::string_view(encoded_), benchmarks::nullFactory(), options);
   }
 
   // reset + materialize all n rows into dst.
@@ -194,7 +191,8 @@ struct NimbleBenchTargetBase {
 };
 
 template <typename EncodingT>
-struct NimbleBenchTargetImpl : NimbleBenchTargetBase<typename EncodingT::cppDataType> {
+struct NimbleBenchTargetImpl
+    : NimbleBenchTargetBase<typename EncodingT::cppDataType> {
   using T = typename EncodingT::cppDataType;
 
   NimbleBenchTarget<EncodingT> target;
@@ -228,7 +226,7 @@ struct NimbleBenchTargetImpl : NimbleBenchTargetBase<typename EncodingT::cppData
 template <typename T>
 struct EncoderEntry {
   std::string name;
-  std::string family;   // "baseline", "sis-manual", "sis-auto", "fpe-index"
+  std::string family; // "baseline", "sis-manual", "sis-auto", "fpe-index"
   std::string variant;
   bool isSequential{true};
   bool fastSkip{false};
@@ -414,7 +412,6 @@ EncoderEntry<T> withOuterCompression(
   return entry;
 }
 
-
 // ---------------------------------------------------------------------------
 // DatasetEntry and the default dataset suites
 // ---------------------------------------------------------------------------
@@ -465,7 +462,8 @@ Vector<T> makeNarrowSeeded(int bitWidth, uint32_t n, uint64_t seed) {
   uint64_t state = seed ^ 0x9e3779b97f4a7c15ULL;
   for (uint32_t i = 0; i < n; ++i) {
     state = state * 6364136223846793005ULL + 1442695040888963407ULL;
-    data[i] = static_cast<T>(static_cast<U>(state >> (64 - sizeof(T) * 8)) & mask);
+    data[i] =
+        static_cast<T>(static_cast<U>(state >> (64 - sizeof(T) * 8)) & mask);
   }
   return data;
 }
@@ -486,10 +484,8 @@ Vector<T> makeIncreasingSeeded(uint32_t n, uint64_t seed) {
 }
 
 template <typename T>
-Vector<T> makeLowCardinalitySeeded(
-    uint32_t cardinality,
-    uint32_t n,
-    uint64_t seed) {
+Vector<T>
+makeLowCardinalitySeeded(uint32_t cardinality, uint32_t n, uint64_t seed) {
   auto& pool = benchmarks::benchmarkPool();
   Vector<T> data{pool.get()};
   data.resize(n);
@@ -523,7 +519,6 @@ Vector<T> makeRunLengthSeeded(uint32_t n, uint64_t seed) {
   }
   return data;
 }
-
 
 // ---------------------------------------------------------------------------
 // Float generators
@@ -592,10 +587,8 @@ Vector<T> makeFloatIncreasingSeeded(uint32_t n, uint64_t seed) {
 }
 
 template <typename T>
-Vector<T> makeFloatLowCardinalitySeeded(
-    uint32_t cardinality,
-    uint32_t n,
-    uint64_t seed) {
+Vector<T>
+makeFloatLowCardinalitySeeded(uint32_t cardinality, uint32_t n, uint64_t seed) {
   auto& pool = benchmarks::benchmarkPool();
   Vector<T> data{pool.get()};
   data.resize(n);
@@ -774,10 +767,9 @@ std::vector<DatasetEntry<T>> defaultDatasets() {
   // Real-data column supplied at run time. Unlike the synthetic generators
   // above this is not regenerated per seed, so the seed is ignored.
   if (!FLAGS_mlidc_file.empty()) {
-    out.push_back(
-        {FLAGS_mlidc_dataset_name, [](uint32_t n, uint64_t /*seed*/) {
-           return detail::loadColumnLines<T>(FLAGS_mlidc_file, n);
-         }});
+    out.push_back({FLAGS_mlidc_dataset_name, [](uint32_t n, uint64_t /*seed*/) {
+                     return detail::loadColumnLines<T>(FLAGS_mlidc_file, n);
+                   }});
   }
 
   // Applied last so a real-data dataset can be selected by name too.
@@ -812,14 +804,18 @@ template <typename T>
 std::vector<EncoderEntry<T>> buildDefaultEncoders() {
   std::vector<EncoderEntry<T>> encoders;
 
-  encoders.push_back(makeEncoderEntry<TrivialEncoding<T>>(
-      "Trivial", "Baseline", "trivial", true, true, false));
-  encoders.push_back(makeEncoderEntry<FixedBitWidthEncoding<T>>(
-      "FixedBitWidth", "Baseline", "fbw", true, true, false));
-  encoders.push_back(makeEncoderEntry<DictionaryEncoding<T>>(
-      "Dictionary", "Baseline", "dict", true, false, false));
-  encoders.push_back(makeEncoderEntry<RLEEncoding<T>>(
-      "RLE", "Baseline", "rle", true, true, false));
+  encoders.push_back(
+      makeEncoderEntry<TrivialEncoding<T>>(
+          "Trivial", "Baseline", "trivial", true, true, false));
+  encoders.push_back(
+      makeEncoderEntry<FixedBitWidthEncoding<T>>(
+          "FixedBitWidth", "Baseline", "fbw", true, true, false));
+  encoders.push_back(
+      makeEncoderEntry<DictionaryEncoding<T>>(
+          "Dictionary", "Baseline", "dict", true, false, false));
+  encoders.push_back(
+      makeEncoderEntry<RLEEncoding<T>>(
+          "RLE", "Baseline", "rle", true, true, false));
 
   const std::array<std::string, 4> fpeNames = {
       "fpe_noindex", "fpe_pertier", "fpe_tagtag", "fpe_elias"};
@@ -834,8 +830,8 @@ std::vector<EncoderEntry<T>> buildDefaultEncoders() {
     entry.isSequential = true;
     entry.fastSkip = fpeSkip[idx];
     entry.randomAccess = fpeRA[idx];
-    entry.factory = [idx](const Vector<T>& data,
-                          const Encoding::Options& opts) {
+    entry.factory = [idx](
+                        const Vector<T>& data, const Encoding::Options& opts) {
       auto impl = std::make_unique<
           NimbleBenchTargetImpl<FrequencyPartitionEncoding<T>>>();
       Encoding::Options o = opts;
@@ -854,8 +850,7 @@ std::vector<EncoderEntry<T>> buildDefaultEncoders() {
     entry.isSequential = false;
     entry.fastSkip = false;
     entry.randomAccess = false;
-    entry.factory = [](const Vector<T>& data,
-                       const Encoding::Options& opts) {
+    entry.factory = [](const Vector<T>& data, const Encoding::Options& opts) {
       auto impl =
           std::make_unique<NimbleBenchTargetImpl<SubIntSplitEncoding<T>>>();
       impl->target.encode(data, opts, /*realNestedSelection=*/true);

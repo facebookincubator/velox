@@ -54,6 +54,33 @@ FormatScopedConfigs makeFormatScopedConfigs(
           dwio::common::formatConfigPrefix(fileFormat, "_")))};
 }
 
+namespace {
+
+void validateColumnMappingMode(
+    dwio::common::ColumnMappingMode mode,
+    dwio::common::FileFormat fileFormat) {
+  // kParquetFieldId is format-specific: it matches requested columns against
+  // physical Parquet schema field_id metadata. Other readers don't have that
+  // metadata, so reject it at split setup time instead of letting a later
+  // reader path interpret it as a generic field-id or name/position mode.
+  VELOX_USER_CHECK(
+      mode != dwio::common::ColumnMappingMode::kParquetFieldId ||
+          fileFormat == dwio::common::FileFormat::PARQUET,
+      "Column mapping mode {} is not supported for file format {}",
+      mode,
+      dwio::common::FileFormatName::toName(fileFormat));
+}
+
+dwio::common::ColumnMappingMode sessionColumnMappingMode(
+    const FileConfig& fileConfig,
+    const config::ConfigBase* sessionProperties) {
+  return fileConfig.useColumnNames(sessionProperties)
+      ? dwio::common::ColumnMappingMode::kName
+      : dwio::common::ColumnMappingMode::kPosition;
+}
+
+} // namespace
+
 void configureReaderOptions(
     const std::shared_ptr<const FileConfig>& fileConfig,
     const ConnectorQueryCtx* connectorQueryCtx,
@@ -88,10 +115,10 @@ void configureReaderOptions(
   readerOptions.setFileColumnNamesReadAsLowerCase(
       fileConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
   readerOptions.setAllowEmptyFile(true);
-  readerOptions.setColumnMappingMode(
-      fileConfig->useColumnNames(sessionProperties)
-          ? dwio::common::ColumnMappingMode::kName
-          : dwio::common::ColumnMappingMode::kPosition);
+  const auto columnMappingMode = fileSplit->columnMappingMode.value_or(
+      sessionColumnMappingMode(*fileConfig, sessionProperties));
+  validateColumnMappingMode(columnMappingMode, fileSplit->fileFormat);
+  readerOptions.setColumnMappingMode(columnMappingMode);
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());

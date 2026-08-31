@@ -27,9 +27,9 @@
 #include <gflags/gflags.h>
 
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
-#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/CachePolicy.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/DriverSweep.h"
+#include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/MeasureLoop.h"
 
 DEFINE_int32(grid, 16, "Grid resolution per axis; ~grid^2/2 cells in triangle");
@@ -40,15 +40,20 @@ DEFINE_bool(dry_run, false, "Print sweep plan and exit");
 namespace facebook::nimble::mlidc {
 namespace {
 
-struct Cell { size_t a{}; size_t b{}; };
+struct Cell {
+  size_t a{};
+  size_t b{};
+};
 
 Cell resolveCell(double aFrac, double bFrac, size_t n) {
   Cell c;
   c.a = static_cast<size_t>(std::llround(aFrac * static_cast<double>(n)));
   c.b = std::max<size_t>(
       1, static_cast<size_t>(std::llround(bFrac * static_cast<double>(n))));
-  if (c.a >= n) c.a = n - 1;
-  if (c.a + c.b > n) c.b = n - c.a;
+  if (c.a >= n)
+    c.a = n - 1;
+  if (c.a + c.b > n)
+    c.b = n - c.a;
   return c;
 }
 
@@ -86,7 +91,8 @@ int runBenchmark() {
   size_t cellCount = 0;
   for (double a : aFracs)
     for (double b : bFracs)
-      if (a + b <= 1.0 + 1e-9) ++cellCount;
+      if (a + b <= 1.0 + 1e-9)
+        ++cellCount;
 
   auto contextOrNull =
       makeSweepContext<Elem>(/*withOpenZL=*/true, cacheState, n);
@@ -95,9 +101,10 @@ int runBenchmark() {
   }
   const auto& context = *contextOrNull;
 
-  std::cout << "bench_decode_range: " << context.encoders.size() << " encoders x "
-            << context.datasets.size() << " datasets, N=" << n << ", grid=" << grid
-            << " (" << cellCount << " cells), iters=" << iters
+  std::cout << "bench_decode_range: " << context.encoders.size()
+            << " encoders x " << context.datasets.size() << " datasets, N=" << n
+            << ", grid=" << grid << " (" << cellCount
+            << " cells), iters=" << iters
             << ", cache=" << cacheStateName(cacheState) << "\n  "
             << context.topology.describe() << "\n\n";
 
@@ -106,19 +113,40 @@ int runBenchmark() {
     for (const auto& e : context.encoders)
       std::cout << "  " << e.name << " [" << e.family << "]\n";
     std::cout << "\nDatasets:\n";
-    for (const auto& d : context.datasets) std::cout << "  " << d.name << "\n";
+    for (const auto& d : context.datasets)
+      std::cout << "  " << d.name << "\n";
     return 0;
   }
 
   std::vector<std::string> csvColumns = {
       "driver",
-      "dtype",      "dataset",     "encoding",       "family",
-      "variant",     "is_sequential", "fast_skip",    "random_access",
-      "N",           "seed",        "cache_state",    "evict_method",
-      "evict_ns",    "payload_bytes", "compression_ratio",
-      "iterations",  "warmup",      "contract",       "A_frac",
-      "B_frac",      "A",           "B",              "time_ns",
-      "time_p90_ns", "time_min_ns", "elem_Meps",      "input_MBps",
+      "dtype",
+      "dataset",
+      "encoding",
+      "family",
+      "variant",
+      "is_sequential",
+      "fast_skip",
+      "random_access",
+      "N",
+      "seed",
+      "cache_state",
+      "evict_method",
+      "evict_ns",
+      "payload_bytes",
+      "compression_ratio",
+      "iterations",
+      "warmup",
+      "contract",
+      "A_frac",
+      "B_frac",
+      "A",
+      "B",
+      "time_ns",
+      "time_p90_ns",
+      "time_min_ns",
+      "elem_Meps",
+      "input_MBps",
       "skipped"};
   std::string csvPath = FLAGS_mlidc_output_csv.empty()
       ? "bench_decode_range.csv"
@@ -147,7 +175,8 @@ int runBenchmark() {
       // Block codecs decompress everything per read; cap their iterations so
       // the sweep finishes in reasonable time.
       const MeasureSpec encSpec = specFor(
-          spec, enc.wholePayloadCodec,
+          spec,
+          enc.wholePayloadCodec,
           static_cast<size_t>(FLAGS_mlidc_block_codec_iters));
 
       const size_t payloadBytes = target->payloadSize();
@@ -162,11 +191,13 @@ int runBenchmark() {
           Cell c = resolveCell(aFrac, bFracs.front(), n);
           check.assign(c.b, Elem{});
           target->materializeRange(
-              static_cast<uint32_t>(c.a), static_cast<uint32_t>(c.b),
+              static_cast<uint32_t>(c.a),
+              static_cast<uint32_t>(c.b),
               check.data());
           for (size_t i = 0; i < c.b && ok; ++i)
             ok = check[i] == data[c.a + i];
-          if (!ok) break;
+          if (!ok)
+            break;
         }
         if (!ok) {
           std::cerr << "  [VALIDATE FAIL] " << enc.name << " / " << ds.name
@@ -178,19 +209,23 @@ int runBenchmark() {
       }
 
       auto cell = makeCellCache<Elem>(
-          context.cacheState, context.topology, *target,
+          context.cacheState,
+          context.topology,
+          *target,
           std::span<std::byte>(
               reinterpret_cast<std::byte*>(sink.data()),
               static_cast<size_t>(n) * kElemSize));
 
       for (double aFrac : aFracs) {
         for (double bFrac : bFracs) {
-          if (aFrac + bFrac > 1.0 + 1e-9) continue;
+          if (aFrac + bFrac > 1.0 + 1e-9)
+            continue;
           const Cell c = resolveCell(aFrac, bFrac, n);
 
           auto result = measure(encSpec, cell.controller, cell.targets, [&]() {
             target->materializeRange(
-                static_cast<uint32_t>(c.a), static_cast<uint32_t>(c.b),
+                static_cast<uint32_t>(c.a),
+                static_cast<uint32_t>(c.b),
                 sink.data());
           });
 
