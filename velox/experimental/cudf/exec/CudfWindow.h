@@ -62,6 +62,7 @@ namespace facebook::velox::cudf_velox {
 /// every ORDER BY key to cudf::grouped_range_rolling_window for peer matching.
 /// Full-partition AVG(DOUBLE) is computed once per partition and copied back to
 /// its rows.
+/// Full-partition DECIMAL AVG uses unbounded rolling SUM and non-null COUNT.
 class CudfWindow : public CudfOperatorBase {
  public:
   CudfWindow(
@@ -141,8 +142,18 @@ class CudfWindow : public CudfOperatorBase {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
-  // Dispatch ROWS window frames to grouped_rolling_window. RANGE frames are
-  // handled separately by the batched grouped_range_rolling_window path.
+  // Computes partition-wide DECIMAL AVG from fully unbounded DECIMAL128 SUM
+  // and non-null COUNT columns. cuDF expands partition results to input rows;
+  // the shared finalizer preserves Velox result type and rounding semantics.
+  std::unique_ptr<cudf::column> computeDecimalAverageColumn(
+      const cudf::table_view& partitionKeys,
+      cudf::column_view inputColumn,
+      const core::WindowNode::Function& function,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) const;
+
+  // Dispatches ROWS frames and full-partition RANGE frames to
+  // grouped_rolling_window. Other RANGE frames use the batched range path.
   std::unique_ptr<cudf::column> invokeGroupedRollingWindow(
       const cudf::table_view& partKeys,
       cudf::column_view inputCol,
