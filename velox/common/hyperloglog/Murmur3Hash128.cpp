@@ -24,8 +24,10 @@ int64_t getLong(const void* data, int32_t offset) {
   return folly::loadUnaligned<int64_t>(static_cast<const char*>(data) + offset);
 }
 
-char getByte(const void* data, int32_t offset) {
-  return *(static_cast<const char*>(data) + offset);
+// Tail bytes are folded into a 64-bit lane and must be zero extended. 'char' is
+// signed on x86-64 and would sign extend bytes >= 0x80 across the whole lane.
+uint8_t getByte(const void* data, int32_t offset) {
+  return *(static_cast<const uint8_t*>(data) + offset);
 }
 
 // static
