@@ -1470,25 +1470,24 @@ class UpperFunction : public CudfFunction {
 // target column is materialised); a column substring uses the column overload.
 class StrposFunction : public CudfFunction {
  public:
-  explicit StrposFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    using velox::exec::ConstantExpr;
+  StrposFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
     VELOX_CHECK_EQ(expr->inputs().size(), 2, "strpos expects exactly 2 inputs");
 
-    if (auto stringExpr =
-            std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0])) {
+    if (expr->inputs()[0]->isConstantKind()) {
       stringIsConstant_ = true;
-      stringIsNull_ = stringExpr->value()->isNullAt(0);
+      auto stringValue = toConstantVector(expr->inputs()[0], pool);
+      stringIsNull_ = stringValue->isNullAt(0);
       if (!stringIsNull_) {
-        string_ = stringExpr->value()->toString(0);
+        string_ = stringValue->toString(0);
       }
     }
 
-    if (auto targetExpr =
-            std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1])) {
+    if (expr->inputs()[1]->isConstantKind()) {
       targetIsConstant_ = true;
-      targetIsNull_ = targetExpr->value()->isNullAt(0);
+      auto targetValue = toConstantVector(expr->inputs()[1], pool);
+      targetIsNull_ = targetValue->isNullAt(0);
       if (!targetIsNull_) {
-        target_ = targetExpr->value()->toString(0);
+        target_ = targetValue->toString(0);
       }
     }
 
@@ -2524,8 +2523,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "strpos",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<StrposFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<StrposFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("bigint")
